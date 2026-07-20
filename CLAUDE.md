@@ -33,7 +33,7 @@
 - 依赖：保持精简；core 不依赖 tui/config/plugins。
 - 不引入 LangChain/LangGraph。
 
-`[plan]` 具体 build/test/lint 命令待脚手架就绪后填入（预期 `bun test` / `bun build` / `biome check` 或同等）。
+`[plan]` 具体 build/test/lint 命令待 `package.json` scripts 就绪后填入（预期 lint=Biome/ADR-013, test=`bun test`, build=`bun build`, 详见 §9）。
 
 ## 4. 工程规范
 
