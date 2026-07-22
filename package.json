@@ -1,0 +1,27 @@
+{
+  "name": "vessel",
+  "devDependencies": {
+    "@biomejs/biome": "1.9.4",
+    "tsx": "^4.23.1",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "private": true,
+  "scripts": {
+    "start": "bun run start.ts",
+    "demo": "bun run examples/demo.ts",
+    "test": "bun test",
+    "build": "bun run scripts/build.ts",
+    "build:binary": "bun build src/cli.ts --compile --outfile dist/vessel",
+    "lint": "bunx @biomejs/biome ci .",
+    "typecheck": "tsc --noEmit",
+    "format": "bunx @biomejs/biome format --write .",
+    "check": "bunx @biomejs/biome check ."
+  },
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ]
+}

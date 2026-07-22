@@ -1,0 +1,89 @@
+/**
+ * EventStream 实现
+ * @module @vessel/core/events
+ */
+
+import type { EventHandler, RunEvent, Unsubscribe } from '../types/event.js';
+
+/**
+ * 内存事件流实现
+ * 支持发布/订阅模式，用于 trace/replay/TUI 流式渲染
+ */
+export class MemoryEventStream implements EventStream {
+  private handlers: Set<EventHandler> = new Set();
+  private history: RunEvent[] = [];
+  private maxHistorySize: number;
+
+  constructor(maxHistorySize: number = 1000) {
+    this.maxHistorySize = maxHistorySize;
+  }
+
+  /**
+   * 订阅事件
+   * @param handler 事件处理器
+   * @returns 取消订阅函数
+   */
+  subscribe(handler: EventHandler): Unsubscribe {
+    this.handlers.add(handler);
+    return () => {
+      this.handlers.delete(handler);
+    };
+  }
+
+  /**
+   * 发布事件
+   * @param event 运行事件
+   */
+  publish(event: RunEvent): void {
+    // 保存到历史
+    this.history.push(event);
+    
+    // 限制历史大小
+    if (this.history.length > this.maxHistorySize) {
+      this.history = this.history.slice(-this.maxHistorySize);
+    }
+
+    // 通知所有订阅者
+    for (const handler of this.handlers) {
+      try {
+        const result = handler(event);
+        // 支持异步处理器
+        if (result instanceof Promise) {
+          result.catch((err) => {
+            console.error(`Event handler error: ${err}`);
+          });
+        }
+      } catch (err) {
+        console.error(`Event handler error: ${err}`);
+      }
+    }
+  }
+
+  /**
+   * 清空事件历史
+   */
+  clear(): void {
+    this.history = [];
+  }
+
+  /**
+   * 获取事件历史
+   * @param runId 可选的 run ID 过滤
+   * @returns 事件历史
+   */
+  getHistory(runId?: string): RunEvent[] {
+    if (runId) {
+      return this.history.filter((e) => e.run_id === runId);
+    }
+    return [...this.history];
+  }
+
+  /**
+   * 获取订阅者数量
+   */
+  get subscriberCount(): number {
+    return this.handlers.size;
+  }
+}
+
+export type { EventHandler, RunEvent, Unsubscribe };
