@@ -1,6 +1,6 @@
 # 路线图（ROADMAP）
 
-> 分期交付与 MVP 边界。范围依据见 [PRD.md](PRD.md) §3 与 [legacy/COMP-MAP.md](../legacy/COMP-MAP.md)；技术细节见 [SPEC.md](SPEC.md)。
+> 分期交付与 MVP 边界。范围依据见 [PRD.md](PRD.md) §3 与 [legacy/COMP-MAP.md](../../legacy/COMP-MAP.md)；技术细节见 [SPEC.md](SPEC.md)。
 > 原则：每期只做该期范围；延后项不提前实现（ADR-010）。
 > 插件 backlog 与 Tier 分级见 [PLUGINS.md](PLUGINS.md)；下文分期标注对应 Tier。
 
@@ -35,9 +35,9 @@
 
 - workflow/DAG 编排、multi-agent/team、durable execution、evaluation harness。
 - 各自独立插件包，不进 core。清单见 [PLUGINS.md](PLUGINS.md)。
-- **需改 core 的 loop 级项**（各需 ADR，ADR-012）：并行工具调用、流式工具结果、运行中打断/暂停/恢复。
+- 上述均为插件 / TUI 层能力，无需改 core（见 [ADR-015](ADR.md) 与 [PLUGINS.md §九](PLUGINS.md)）。
 - **前置条件**：Phase 1/2 稳定且有真实需求驱动；否则不做（避免 speculative generality）。
 
 ## 跨期红线（始终遵守）
 
-- core 不注入插件对象（ADR-003）；统一扩展心智（ADR-004）；事件枚举化（ADR-008）；不留 stub；不绑厂商 Key/价格；core 不依赖 tui/config。完整红线见 [CLAUDE.md §6](../CLAUDE.md)。
+- core 不注入插件对象（ADR-003）；统一扩展心智（ADR-004）；事件枚举化（ADR-008）；不留 stub；不绑厂商 Key/价格；core 不依赖 tui/config。完整红线见 [CLAUDE.md §6](../../CLAUDE.md)。

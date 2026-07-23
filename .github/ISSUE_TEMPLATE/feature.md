@@ -17,4 +17,4 @@ labels: enhancement
 - [ ] core（需 ADR，见 ADR-012；先确认无法插件化）
 
 ## 备注
-<!-- 参考竞品/已有插件？见 docs/PLUGINS.md -->
+<!-- 参考竞品/已有插件？见 docs/specs/PLUGINS.md -->

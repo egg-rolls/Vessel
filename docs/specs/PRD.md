@@ -6,7 +6,7 @@
 
 ## 1. 愿景
 
-让无基础/弱基础用户也能拥有、配置、扩展自己的 AI Agent——无需写代码，无需理解框架，填个 Key 就能跑，想深入时能平滑过渡到配置和插件。
+让无基础/弱基础用户也能拥有一个会自己长大的 AI Agent——填 Key 即跑，Agent 自己发现能力缺口、自己装工具/接 MCP/写 Skill。无需写代码，无需理解框架。开发者可嵌入、可扩展、不绑厂商。
 
 ## 2. 目标用户与任务（JTBD）
 
@@ -54,10 +54,10 @@
 
 ## 5. 竞品定位（摘要）
 
-对标 Claude Code（TUI 形态）、Cline（权限交互）、OpenCode（单二进制/Auto Compact）、OpenAI Agents SDK / Pydantic AI（控制面）。详细模块通用性见 [legacy/COMP-MAP.md](../legacy/COMP-MAP.md)。
+对标 Claude Code（TUI 形态）、Cline（权限交互）、OpenCode（单二进制/Auto Compact）、OpenAI Agents SDK / Pydantic AI（控制面）。详细模块通用性见 [legacy/COMP-MAP.md](../../legacy/COMP-MAP.md)。
 
 **Vessel 差异点**：面向无基础 + 应用形态（非框架）+ 极简 core + 单一扩展心智。
 
 ## 6. 非目标（继承自遗产）
 
-不内置垂直业务 agent；不内置重型领域工具链（OCR/PDF/向量库/浏览器自动化）；不绑定具体 Provider/Model/价格；不把插件当 core 承诺。完整非目标清单见 [legacy/DESIGN-PRINCIPLES.md](../legacy/DESIGN-PRINCIPLES.md)。
+不内置垂直业务 agent；不内置重型领域工具链（OCR/PDF/向量库/浏览器自动化）；不绑定具体 Provider/Model/价格；不把插件当 core 承诺。完整非目标清单见 [legacy/DESIGN-PRINCIPLES.md](../../legacy/DESIGN-PRINCIPLES.md)。
