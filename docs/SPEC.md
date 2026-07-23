@@ -61,6 +61,34 @@ Core 的 9 个接口全部服务于**维护语言空间**——不关心空间�
 
 **结论**：Harness Engineering、Loop Engineering、树搜索、甚至未来还没命名的 Agent 范式——只要还在语言空间里运算，9 个 core 接口不用长大。
 
+### 1.2 元资产与自组织
+
+Vessel 的真正价值不在 core 本身，而在于**启动态极简、运行态自生长**。Agent 起跑时只拿到高度互联的元资产：
+
+```
+启动态（Vessel 分发）              运行态（Agent 自生长）
+┌──────────────────────┐          ┌──────────────────────────────┐
+│  循环（while loop）   │          │  用户: "帮我做市场调研"       │
+│  元 Skill:           │          │  Agent:                       │
+│    asset-introspection│          │    → search_assets("调研")    │
+│    tool-discovery     │          │    → 缺口：没有 web-research  │
+│  元 Tools:            │          │    → add_skill(调研方法论)    │
+│    search_assets      │          │    → connect_mcp(brave-search)│
+│    add_tool           │          │    → 执行 → 完成             │
+│    add_skill          │          │    → 资产库积累：调研 Skill   │
+│    connect_mcp        │          │       + Brave MCP 连接       │
+│    inspect_asset      │          └──────────────────────────────┘
+│    patch_asset        │
+│    remove_asset       │
+└──────────────────────┘
+```
+
+**自组织**：Agent 按用户使用模式自动积累 Skill 库和工具集。
+**自闭环**：Agent 发现能力缺口 → 自己建工具/接 MCP/写 Skill，不需要人类跳出循环。
+**自修复**：工具坏了 → `inspect_asset` 诊断 → `patch_asset` 修 → 验证。人类不用进循环。
+
+Vessel 给 Agent 的不是 50 个工具——而是**一个知道自己有什么、缺什么、怎么补的认知结构**。元资产是 Harness 的真正资产。
+
 ## 2. 包结构
 
 ```
