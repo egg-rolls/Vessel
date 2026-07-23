@@ -396,12 +396,72 @@ const myPlugin: Plugin = {
 
 ## 6. 配置模型
 
-- **零配置起步**：仅填 `api_key` 即可对话；provider/model/limits/guardrail 全有安全默认（ADR-005）。
-- **渐进披露**：`vessel.yaml` 只在用户需要时出现，默认不生成几十个键（对应 legacy/LESSONS 教训4）。
-- 配置 schema 由 `@vessel/config` 定义并校验；**未知键报错**（而非静默忽略）。
-- 优先级：CLI flag > env (`VESSEL_*`) > `vessel.yaml` > 安全默认。
-- Key 永远用户自备，从 env 或向导读；不内置任何厂商 Key。
-- **工具默认可见**：`tools.default: [bash, web-search, grep, ...]` 配置项定义启动时自动列出的工具；Agent 可通过元工具修改此配置。其余工具通过 `search_assets` 发现。
+**格式**：YAML（`vessel.yaml`）。`@vessel/config` 以 JSON Schema 校验，未知键报错。**零配置起步**：文件不存在时全用安全默认，仅需 API Key。
+
+**优先级**：CLI flag > env (`VESSEL_*`) > `vessel.yaml` > 安全默认。
+
+### 6.1 完整 schema（渐进披露）
+
+```yaml
+# vessel.yaml — 仅供按需覆盖。空文件 = 全默认 + API Key 即可跑。
+
+# 模型（必填的唯一项：API Key 由 env/wizard 提供）
+model:
+  provider: openai       # 空值时首启向导引导选择
+  name: gpt-4.1
+  base_url: ""           # 空值 = 内置预设 URL
+
+# 工具（全部可选，不写 = 默认）
+tools:
+  default: [file-ops, grep, web-search, web-fetch, todo-list, ask-user]
+  timeout: 30            # 全局工具超时(秒)
+
+  shell:                 # 逐工具覆盖
+    timeout: 60
+    permission: require-approval
+  web-search:
+    api_key: ${TAVILY_API_KEY}
+    timeout: 15
+
+# 运行时控制
+agent:
+  max_iterations: 50
+  max_runtime_seconds: 300
+
+# 预算硬上限
+limits:
+  request_limit: 50
+  tool_calls_limit: 200
+  total_cost_limit: 5.0
+
+# 会话与观测
+sessions:
+  backend: sqlite
+  sqlite_path: .vessel/sessions.db
+
+observability:
+  event_stream: jsonl
+  jsonl_path: .vessel/events.jsonl
+
+# 插件
+plugins:
+  - memory-project
+  - mcp-client
+
+mcp:
+  servers:
+    - name: filesystem
+      command: npx
+      args: [-y, @anthropic/mcp-filesystem, /tmp]
+```
+
+### 6.2 核心设计原则
+
+- **零配置**：空 `vessel.yaml`（仅有 `VESSEL_API_KEY`）可跑。
+- **渐进披露**：默认不生成此文件。首启向导引导填 Key → 即可对话。高级用户手动创建文件覆盖。
+- **工具默认清单** (`tools.default`)：Agent 可通过元工具修改——它就是 `Config` 资产的 CRUD 操作。
+- **工具级覆盖** (`tools.<name>.*`)：少数需要特殊超时/权限/Key 的工具才写。
+- **显式校验**：未知键报错，防止 typo 导致的静默失效。
 
 ## 7. 数据流
 
