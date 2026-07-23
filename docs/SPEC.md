@@ -189,6 +189,39 @@ Agent 完成任务的两个充要条件（直接来源于 §1.1 的适配器模�
 
 **判断**：Vessel 目前的架构文档达到了专业软件架构的标准——有依据（ADR）、有契约（SPEC）、有边界（SCOPE 精神→PRD）、有风险意识（§1.4）。它不是认知惰性的产物。但它是一个**理论验证了的、代码未经检验的架构**。Phase 1 实现时，架构中标注为 ⚠️ 的条目是第一优先级的验证目标。
 
+### 1.6 Loop Engineering 适配验证
+
+Loop Engineering（Addy Osmani/Google，2026.06）的四层架构与六大要素，Vessel **全部承接，无需改 core**：
+
+| Loop Engineering 要素 | Vessel 承接 | 机制 |
+|----------------------|-----------|------|
+| **Prompt 层**（怎么问） | Skill（ADR-011） | skills-loader 插件 → BeforeLlm Hook 注入 |
+| **Context 层**（让 AI 看到什么） | ContextManager + memory/RAG/repo-map 插件 | 插件 |
+| **Harness 层**（AI 在什么环境工作） | core 的 9 个接口 | **core 已兜住** |
+| **Loop 层**（做完一步后怎么办） | AgentRuntime.run() while 循环 | **core 已兜住** |
+| **Automations**（cron/事件触发） | scheduler 工具 + GitHub Actions wrapper | 插件，Tier 3 |
+| **Worktrees**（并行隔离） | sub-agent 工具 spawn 子 runtime + git worktree | 工具，无 core 改动 |
+| **Skills**（经验复用） | Vessel Skill 轴，Markdown，skills-loader | 一等扩展轴 |
+| **Connectors**（MCP） | MCP client 插件，桥进 ToolRegistry | 插件，Tier 1 |
+| **Sub-agents**（实现+验证分离） | 工具 handler spawn 子 runtime | 工具，无 core 改动 |
+| **State**（外部状态，不从上下文记） | Run/Session 分离 + EventStream + SessionBackend + ContextManager(auto-compact) | **core 内置** |
+
+**五阶段循环映射**：
+```
+Discover  → search_assets / sub-agent 调研            （元工具）
+Plan      → Agent 推理 / make_plan 工具                 （Agent + 工具）
+Execute   → Vessel 工具调用循环                          （core while loop）
+Verify    → Guardrail(OUTPUT) + 独立 sub-agent 验证     （插件 + 工具）
+Iterate   → 循环继续 / scheduler 触发                    （core 循环 + scheduler 工具）
+```
+
+**Ralph Loop 等价**：`while :; do cat PROMPT.md | claude-code; done`。Vessel 的 while 循环每次读 ContextManager——等价但从 core 引擎内跑，无需重启进程、无需重新装 Skill。
+
+**Vessel 做 Loop Engineering 相比 Claude Code 的三个网络优势**：
+1. **Provider 无关**：高频迭代切便宜模型，不会像文章警告的"50-100 次 ¥500-1000"
+2. **UsageLimits 内置**：硬断跑飞（文章专门警告了成本管控）
+3. **外部状态是 core 设计**：不是靠 bash 绕过的 hack，是 Run/Session/EventStream 的原生含义
+
 ## 2. 包结构
 
 ```
