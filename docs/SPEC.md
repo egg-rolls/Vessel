@@ -178,6 +178,15 @@ const newProtocolPlugin: Plugin = {
 | 单进程插件隔离弱 | 同进程 crash 传播 | 未来考虑 worker 隔离 |
 | "两个插槽"模型未对真实实现摩擦做验证 | 理论已证，实践待测 | Phase 1 |
 
+#### 两个适配器 = Agent 的故障诊断框架
+
+Agent 完成任务的两个充要条件（直接来源于 §1.1 的适配器模型）：
+
+1. **入适配器（知识）**：是否有足够知识理解此任务？
+2. **出适配器（工具）**：是否有足够工具执行此任务？
+
+任一不满足 → Agent 不应猜、不应装。应走 asset-introspection Skill 的认知检查循环：知识缺 → `search_assets` / `web-search` / `ask_user`；工具缺 → `search_assets` / `connect_mcp` / `add_tool` / `ask_user`。完整认知模式见 [PLUGINS.md §8.1](PLUGINS.md)。
+
 **判断**：Vessel 目前的架构文档达到了专业软件架构的标准——有依据（ADR）、有契约（SPEC）、有边界（SCOPE 精神→PRD）、有风险意识（§1.4）。它不是认知惰性的产物。但它是一个**理论验证了的、代码未经检验的架构**。Phase 1 实现时，架构中标注为 ⚠️ 的条目是第一优先级的验证目标。
 
 ## 2. 包结构
