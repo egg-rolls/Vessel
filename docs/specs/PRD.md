@@ -54,10 +54,10 @@
 
 ## 5. 竞品定位（摘要）
 
-对标 Claude Code（TUI 形态）、Cline（权限交互）、OpenCode（单二进制/Auto Compact）、OpenAI Agents SDK / Pydantic AI（控制面）。详细模块通用性见 [legacy/COMP-MAP.md](../legacy/COMP-MAP.md)。
+对标 Claude Code（TUI 形态）、Cline（权限交互）、OpenCode（单二进制/Auto Compact）、OpenAI Agents SDK / Pydantic AI（控制面）。详细模块通用性见 [legacy/COMP-MAP.md](../../legacy/COMP-MAP.md)。
 
 **Vessel 差异点**：面向无基础 + 应用形态（非框架）+ 极简 core + 单一扩展心智。
 
 ## 6. 非目标（继承自遗产）
 
-不内置垂直业务 agent；不内置重型领域工具链（OCR/PDF/向量库/浏览器自动化）；不绑定具体 Provider/Model/价格；不把插件当 core 承诺。完整非目标清单见 [legacy/DESIGN-PRINCIPLES.md](../legacy/DESIGN-PRINCIPLES.md)。
+不内置垂直业务 agent；不内置重型领域工具链（OCR/PDF/向量库/浏览器自动化）；不绑定具体 Provider/Model/价格；不把插件当 core 承诺。完整非目标清单见 [legacy/DESIGN-PRINCIPLES.md](../../legacy/DESIGN-PRINCIPLES.md)。

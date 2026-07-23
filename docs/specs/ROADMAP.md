@@ -1,6 +1,6 @@
 # 路线图（ROADMAP）
 
-> 分期交付与 MVP 边界。范围依据见 [PRD.md](PRD.md) §3 与 [legacy/COMP-MAP.md](../legacy/COMP-MAP.md)；技术细节见 [SPEC.md](SPEC.md)。
+> 分期交付与 MVP 边界。范围依据见 [PRD.md](PRD.md) §3 与 [legacy/COMP-MAP.md](../../legacy/COMP-MAP.md)；技术细节见 [SPEC.md](SPEC.md)。
 > 原则：每期只做该期范围；延后项不提前实现（ADR-010）。
 > 插件 backlog 与 Tier 分级见 [PLUGINS.md](PLUGINS.md)；下文分期标注对应 Tier。
 
@@ -40,4 +40,4 @@
 
 ## 跨期红线（始终遵守）
 
-- core 不注入插件对象（ADR-003）；统一扩展心智（ADR-004）；事件枚举化（ADR-008）；不留 stub；不绑厂商 Key/价格；core 不依赖 tui/config。完整红线见 [CLAUDE.md §6](../CLAUDE.md)。
+- core 不注入插件对象（ADR-003）；统一扩展心智（ADR-004）；事件枚举化（ADR-008）；不留 stub；不绑厂商 Key/价格；core 不依赖 tui/config。完整红线见 [CLAUDE.md §6](../../CLAUDE.md)。

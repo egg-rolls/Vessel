@@ -1,6 +1,6 @@
 # 架构决策记录（ADR）
 
-> 记录 Vessel 的关键决策与**为什么**。设计本身见 [SPEC.md](SPEC.md)；旧项目教训见 [legacy/LESSONS.md](../legacy/LESSONS.md)。
+> 记录 Vessel 的关键决策与**为什么**。设计本身见 [SPEC.md](SPEC.md)；旧项目教训见 [legacy/LESSONS.md](../../legacy/LESSONS.md)。
 > ADR 一经决策不轻易推翻；如需变更，新增 ADR 标注 supersede 旧者。
 
 ---
@@ -95,7 +95,7 @@
   3. 每次 core 改动必须先写 ADR；拿不准先做插件，验证后再议是否提升进 core。
   4. 重依赖/垂直能力永不进 core。
 - **后果**：core 保持极小稳定；扩展可控；避免重蹈旧版 core 臃肿。代价：少数 loop 级能力需等 ADR + 排期。
-- **关联**：legacy/LESSONS 教训2/14；[PLUGINS.md](PLUGINS.md) §九；[CLAUDE.md](../CLAUDE.md) §6 红线。
+- **关联**：legacy/LESSONS 教训2/14；[PLUGINS.md](PLUGINS.md) §九；[CLAUDE.md](../../CLAUDE.md) §6 红线。
 
 ---
 
@@ -105,7 +105,7 @@
 - **决策**：用 Biome（lint+format 一体，Rust 实现，Bun 原生友好）。
 - **备选**：ESLint+Prettier（生态/规则更丰富，但双工具配置繁琐、慢，需 typescript-eslint）。
 - **后果**：速度快、配置极简、TS 原生；规则生态不如 ESLint，但推荐规则集足够 MVP。CI 跑 `bun run lint`（biome ci）。
-- **关联**：[CLAUDE.md](../CLAUDE.md) §9；`.github/workflows/ci.yml`。
+- **关联**：[CLAUDE.md](../../CLAUDE.md) §9；`.github/workflows/ci.yml`。
 
 ## ADR-014：CI 用 GitHub Actions，required checks = lint+typecheck+test+build
 

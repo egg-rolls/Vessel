@@ -15,12 +15,12 @@
 ## 2. 阅读顺序（动手前）
 
 1. [README.md](README.md)
-2. [docs/PRD.md](docs/PRD.md) - 做什么 / 为谁
-3. [docs/SPEC.md](docs/SPEC.md) - 怎么建 / 接口契约
-4. [docs/ADR.md](docs/ADR.md) - 为什么这么决策（勿轻易推翻）
-5. [docs/ROADMAP.md](docs/ROADMAP.md) - 当前分期 / MVP 边界
-6. [docs/GLOSSARY.md](docs/GLOSSARY.md) - 术语
-7. [docs/PLUGINS.md](docs/PLUGINS.md) - 插件 backlog 目录
+2. [docs/specs/PRD.md](docs/specs/PRD.md) - 做什么 / 为谁
+3. [docs/specs/SPEC.md](docs/specs/SPEC.md) - 怎么建 / 接口契约
+4. [docs/specs/ADR.md](docs/specs/ADR.md) - 为什么这么决策（勿轻易推翻）
+5. [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md) - 当前分期 / MVP 边界
+6. [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) - 术语
+7. [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) - 插件 backlog 目录
 8. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
 9. 相关 `packages/` 源码与测试
 10. [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献流程 / PR / commit 规范（人类贡献者入口）
@@ -41,7 +41,7 @@
 - 不可变优先；构造时注入全部状态，**不外部改私有字段**（教训7）。
 - 事件类型用枚举 + payload schema，**禁止散落字符串字面量**（教训8）。
 - 文件/命名：包内小写 kebab；接口 PascalCase；遵循各包既有风格。
-- 测试：每模块配单测；MVP 验收见 [ROADMAP.md](docs/ROADMAP.md) Phase 1。
+- 测试：每模块配单测；MVP 验收见 [ROADMAP.md](docs/specs/ROADMAP.md) Phase 1。
 - 提交格式：`<type>(<scope>): <subject>`（feat/fix/docs/refactor/test/chore）。
 - 依赖方向：tui -> config -> core；core 不反向引用。
 
@@ -62,7 +62,7 @@
 - **插件**：guardrail 规则、memory、MCP、corrections、resilience、evals、OCR/PDF/图片/向量/浏览器等。**不进 runtime 构造函数**，经 Plugin 注入（ADR-003）。
 - **应用层**：TUI、配置向导、业务 agent。
 
-用户面向的四种扩展类型（Plugin/MCP/Skill/Config）全经 PluginHost 投放，core 不为它们新增接口（ADR-011）；详见 [SPEC.md §5.1](docs/SPEC.md)。
+用户面向的四种扩展类型（Plugin/MCP/Skill/Config）全经 PluginHost 投放，core 不为它们新增接口（ADR-011）；详见 [SPEC.md §5.1](docs/specs/SPEC.md)。
 
 ## 6. 红线（Stop and reconsider if about to）
 

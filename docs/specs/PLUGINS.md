@@ -178,7 +178,7 @@ asset-introspection 是 Vessel 的 BIOS——Agent 启动时自动加载，定�
 
 ## 十、取舍原则
 
-- 拿不准是否进 core：选插件（ADR-012 + [CLAUDE.md](../CLAUDE.md) §5 决策树）。
+- 拿不准是否进 core：选插件（ADR-012 + [CLAUDE.md](../../CLAUDE.md) §5 决策树）。
 - 重依赖（浏览器/沙箱/向量库/OCR/图片）一律独立插件包，不进 core 依赖。
 - 垂直能力（RAG/代码审查/客服）永不进 core，只作插件/应用。
 - Tier 3 项无真实需求不动（避免 speculative generality，legacy/LESSONS 教训14）。
