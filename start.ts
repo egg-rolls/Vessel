@@ -6,7 +6,7 @@
 
 import {
   AgentRuntime,
-  MemoryLLMProvider,
+  AnthropicProvider,
   MemoryToolRegistry,
   MemoryContextManager,
   MemoryEventStream,
@@ -16,111 +16,30 @@ import {
 } from './packages/core/src/index';
 import * as readline from 'readline';
 
-// 创建 Provider
-const provider = new MemoryLLMProvider();
+// 从环境变量读取配置
+const apiKey = process.env.VESSEL_API_KEY;
+if (!apiKey) {
+  console.error('错误：请设置 VESSEL_API_KEY 环境变量');
+  process.exit(1);
+}
 
-// 预设响应：当用户提到特定关键词时触发工具调用
-provider.setResponse('weather', {
-  content: '',
-  finish_reason: 'tool_calls',
-  tool_calls: [{
-    id: 'call-weather',
-    type: 'function',
-    function: {
-      name: 'get_weather',
-      arguments: '{"city":"Beijing"}',
-    },
-  }],
-});
-
-provider.setResponse('calculate', {
-  content: '',
-  finish_reason: 'tool_calls',
-  tool_calls: [{
-    id: 'call-calc',
-    type: 'function',
-    function: {
-      name: 'calculate',
-      arguments: '{"expression":"2 + 2"}',
-    },
-  }],
-});
-
-// 使用特殊关键词触发 echo 工具
-provider.setResponse('say hello', {
-  content: '',
-  finish_reason: 'tool_calls',
-  tool_calls: [{
-    id: 'call-echo',
-    type: 'function',
-    function: {
-      name: 'echo',
-      arguments: '{"message":"Hello from Vessel!"}',
-    },
-  }],
+// 创建真实 Provider（Anthropic 格式）
+const provider = new AnthropicProvider({
+  api_key: apiKey,
+  base_url: process.env.VESSEL_BASE_URL || 'https://api.anthropic.com',
+  model: process.env.VESSEL_MODEL || 'claude-sonnet-4-20250514',
 });
 
 // 创建工具注册表
 const tools = new MemoryToolRegistry();
 
-// 注册一些示例工具
-tools.register({
-  name: 'get_weather',
-  description: 'Get weather information for a city',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      city: { type: 'string', description: 'City name' },
-    },
-    required: ['city'],
-  },
-  handler: async (args) => {
-    const { city } = args as { city: string };
-    const weatherData: Record<string, string> = {
-      'beijing': 'Sunny, 25°C',
-      'shanghai': 'Cloudy, 22°C',
-      'guangzhou': 'Rainy, 28°C',
-    };
-    return weatherData[city.toLowerCase()] ?? `Weather data not available for ${city}`;
-  },
-});
-
-tools.register({
-  name: 'calculate',
-  description: 'Calculate a mathematical expression',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      expression: { type: 'string', description: 'Mathematical expression' },
-    },
-    required: ['expression'],
-  },
-  handler: async (args) => {
-    const { expression } = args as { expression: string };
-    try {
-      const result = Function(`"use strict"; return (${expression})`)();
-      return `${expression} = ${result}`;
-    } catch (error) {
-      return `Error: ${error}`;
-    }
-  },
-});
-
-tools.register({
-  name: 'echo',
-  description: 'Echo back the input message',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      message: { type: 'string', description: 'Message to echo' },
-    },
-    required: ['message'],
-  },
-  handler: async (args) => {
-    const { message } = args as { message: string };
-    return message;
-  },
-});
+// 可以在这里注册自定义工具
+// tools.register({
+//   name: 'tool_name',
+//   description: 'Tool description',
+//   inputSchema: { /* ... */ },
+//   handler: async (args) => { /* ... */ },
+// });
 
 // 创建其他组件
 const context = new MemoryContextManager();
@@ -133,7 +52,7 @@ let currentSessionId = 'default';
 // 创建 Runtime
 const runtime = new AgentRuntime({
   provider,
-  model: 'gpt-4',
+  model: 'mimo-v2.5-pro',
   tools,
   context,
   events,
@@ -176,11 +95,6 @@ Available commands:
   /history           - Show conversation history
   /clear             - Clear the screen
   /exit              - Exit the application
-
-Special inputs:
-  weather            - Test weather tool
-  calculate          - Test calculator tool
-  say hello          - Test echo tool
   `);
 }
 
