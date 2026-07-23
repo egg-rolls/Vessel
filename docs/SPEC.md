@@ -144,6 +144,42 @@ const newProtocolPlugin: Plugin = {
 
 **核心结论**：架构的上限够高——高上限场景已有扩展路径（Phase 3 插件，不改 core）。架构的下限取决于 asset-introspection Skill 和 TUI 向导的工程质量，不是架构本身能保证的。
 
+### 1.5 认知惰性对抗
+
+**架构不能替代 Agent 思考，但能堵死它所有的偷懒借口。**
+
+| Agent 惰性表现 | 借什么口 | 架构怎么堵死 |
+|---------------|---------|------------|
+| 不查工具，自己猜 | "我不知道有没有这能力" | `asset-introspection` Skill：第一轮就知道怎么查 |
+| 给表面答案 | "没人教过我怎么做深" | Skill + tool-discovery：领域 know-how 随需加载 |
+| 面对复杂任务 dump 一句话 | "一个人搞不定" | 子 agent 工具：`delegate_task` spawn 专家 runtime |
+| 编造结果 | "反正没人检查" | Guardrail（OUTPUT）+ LLM-judge evaluator（Phase 3）|
+| 上下文满了就丢信息 | "我记不住了" | Auto Compact + ContextManager token 预算 |
+| 停在第一步就算完成 | "这就是全部我能做的" | `stop_on_no_tool_calls: false` + 任务分解 Skill |
+| 遇到未知就说不会 | "没办法" | `search_assets` 查 → `add_skill` 补 → 回头做 |
+
+**架构偷懒自查——Vessel 有没有犯常识性架构错误：**
+
+| 标准 | 符合？ | 证据 |
+|------|--------|------|
+| 决策有据（ADR） | ✅ | ADR-001~015，每条含 Context/Decision/Consequences |
+| 边界清晰（分层） | ✅ | core/config/tui 三层，依赖单向；core/插件/应用层 能力分层 |
+| 接口契约（API 先于实现） | ✅ | SPEC §4：9 个 core 接口 + PluginHost + ToolDefinition，全部 TS 类型声明 |
+| 扩展开放/修改关闭 | ✅ | PluginHost 统一扩展点；进 core 有决策树；改 core 需 ADR |
+| 单一职责（模块） | ✅ | 9 个 core 接口各管一面；God-object 被 ADR-003 明确禁止 |
+| 可观测（Event） | ✅ | EventStream 枚举化，trace/replay/TUI 共用 |
+| 风险自知 | ✅ | SPEC §1.4 诚实列出 6 个已知风险 + 缓解 |
+| 术语统一 | ✅ | GLOSSARY.md；跨文档交叉引用 |
+| 最小可行（MVP 明确） | ✅ | ROADMAP Phase 1 范围精确；延后项明标 |
+| 依赖方向受控 | ✅ | core 不依赖 tui/config/plugins；不引入 LangChain |
+| **尚未验证的弱点** | ⚠️ | |
+| asset-introspection 未在任何模型上测试 | BIOS 级风险 | 见 §1.4 |
+| 插件加载/卸载/重载语义未指定 | 运行时行为模糊 | Phase 1 实现时需细化 |
+| 单进程插件隔离弱 | 同进程 crash 传播 | 未来考虑 worker 隔离 |
+| "两个插槽"模型未对真实实现摩擦做验证 | 理论已证，实践待测 | Phase 1 |
+
+**判断**：Vessel 目前的架构文档达到了专业软件架构的标准——有依据（ADR）、有契约（SPEC）、有边界（SCOPE 精神→PRD）、有风险意识（§1.4）。它不是认知惰性的产物。但它是一个**理论验证了的、代码未经检验的架构**。Phase 1 实现时，架构中标注为 ⚠️ 的条目是第一优先级的验证目标。
+
 ## 2. 包结构
 
 ```
