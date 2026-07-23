@@ -6,11 +6,11 @@
 
 ## 1. 项目身份
 
-- **是什么**：面向无基础/弱基础用户的 AI Agent Harness **应用**（非框架）。三层：`@vessel/core`（运行时）+ `@vessel/config`（声明式配置）+ `@vessel/tui`（终端交互）。
+- **是什么**：自组织 Agent Harness——极简核心（9 个接口、2 个插槽、1 个通用循环），Agent 自己发现缺口、自己装配能力。三层：`@vessel/core`（运行时，可独立嵌入）+ `@vessel/config`（声明式配置）+ `@vessel/tui`（终端交互）。Provder 无关、范式无关、开源。
 - **语言/运行时**：TypeScript + Bun。
 - **分发**：`npx vessel` + `bun build --compile` 单二进制。
 - **状态**：pre-MVP。标注 `[plan]` 的为待实现。
-- **大目标**：极强扩展性、可维护性、轻便；无基础用户填 Key 即跑。
+- **大目标**：自组织、极轻便、极强扩展性、厂商中立。无基础用户填 Key 即跑；Agent 自己长大。
 
 ## 2. 阅读顺序（动手前）
 
