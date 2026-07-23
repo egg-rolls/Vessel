@@ -75,7 +75,7 @@
 - 给 core 加 OCR/PDF/图片/向量/浏览器/IAM/计费依赖。-> 违分层。
 - 在 core 里引用 tui/config/plugins。-> 违依赖方向。
 - 把 workflow/team/durable/evals 提前到 MVP。-> 违 ADR-010 / ROADMAP。
-- 改 core（loop 或扩展面）来实现本可做成 Plugin/MCP/Skill 的功能，且无 ADR。-> 违 ADR-012（功能优先插件；碰 core 需 ADR）。
+- 改 core（loop 或扩展面）来实现本可做成工具/Hook/Guardrail/事件的事，且无 ADR。-> 违 ADR-012/015（循环通用；A2A、树搜索、多 agent、流式全可用工具/Hook/事件表示；core 是所有方法都试过后的最后选项）。
 - 引入 LangChain/LangGraph。
 - 让 `vessel.yaml` 默认暴露 30+ 键。-> 违教训4（零配置起步）。
 - 文档吹未实现能力。-> 违反幻觉纪律。

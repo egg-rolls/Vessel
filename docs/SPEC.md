@@ -25,6 +25,42 @@
 - `@vessel/config`：解析/校验 YAML，产出 core 可消费的配置对象。
 - `@vessel/tui`：调用 core + config，提供终端交互。
 
+### 1.1 核心哲学：语言空间与两个适配器
+
+Vessel 的核心假设：**Agent 的一切能力都可以还原为两类适配器，不需要动核心循环。**
+
+```
+现实世界 ──→ [适配器 A] ──→ 语言 ──→ Agent ──→ 语言 ──→ [适配器 B] ──→ 现实世界
+             世界→语言                      语言→世界
+```
+
+- **适配器 A**（世界→语言）：文件、网页、数据库、MCP 返回值 → 变成 context 里的文本。= 工具。
+- **适配器 B**（语言→世界）：agent 输出 → 文件写入、shell 执行、API 调用。= 工具。
+
+Core 的 9 个接口全部服务于**维护语言空间**——不关心空间外面是什么世界：
+
+| 接口 | 语言空间中的角色 |
+|------|----------------|
+| `LLMProvider` | 进出语言空间的大脑 |
+| `ContextManager` | 语言空间当前的内容 |
+| `ToolRegistry` | 适配器注册目录 |
+| `EventStream` | 语言空间的运行轨迹（trace/replay/TUI 共用） |
+| `Guardrail`（四阶段） | 语言空间的进出边界 |
+| `UsageLimits` / `TerminationPolicy` | 语言空间的预算和止损 |
+| `Hook`（五阶段） | 语言空间的钩子点 |
+| `PluginHost` | 适配器挂载点 |
+
+**循环的通用性**（ADR-015）：工具调用循环不随 Agent 范式变化。所有"看起来不同"的范式都是**同一个 while 循环挂不同的工具/Hook/Guardrail**：
+
+| 范式 | 实际是什么 |
+|------|-----------|
+| A2A / 多 agent / 树搜索 | 工具（handler spawn 子 runtime） |
+| Self-correction | Guardrail 或 Hook 注入修正提示 |
+| Plan-then-execute | Agent 自身的推理 + 逐轮工具调用 |
+| 并行 / 流式 / 打断 | 工具内部优化 / EventStream / signal.aborted——循环骨架不变 |
+
+**结论**：Harness Engineering、Loop Engineering、树搜索、甚至未来还没命名的 Agent 范式——只要还在语言空间里运算，9 个 core 接口不用长大。
+
 ## 2. 包结构
 
 ```

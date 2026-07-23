@@ -110,18 +110,22 @@
 | skill 内容 | 领域剧本（编码/研究/写作…） | Markdown | 2–3 |
 | skill-library | 社区 skill 分发 | 仓库 | 3 |
 
-## 九、需改 core 的 loop 级项（各需 ADR，ADR-012）
+## 九、为什么 core 不需要长大
 
-| 功能 | 为什么必须动 core | 时机 |
-|------|------------------|------|
-| 并行工具调用 | loop 现为串行；并行需 `Promise.all`，插件改不了循环 | Phase 3 |
-| 流式工具结果 | tool 接口 `Promise<string>` -> `AsyncIterable<string>` + loop 增量注入 | Phase 3 |
-| 运行中打断/暂停/恢复 | loop 需轮询 abort 信号；+ TUI 发信号 | Phase 2–3 |
+§二至§八 的插件分类背后有一个更深的前提——以下看似"必须改 core"的能力，实际上**同一个循环换种用法**就解决了：
 
-**边缘项（先做插件，必要时才碰 core）**：
-- 结构化输出强保证：先 Output guardrail 插件；要 core 级硬保证再议。
-- 压缩策略钩子点：策略是插件；若要自定义策略接口，加小 core 扩展面（ADR）。
-- 实时成本计入 UsageLimits：限额检查在 core，费率/计算靠插件；尽量用事件 + 共享计数器，不扩 core。
+| 能力 | 插件解法 | 说明 |
+|------|---------|------|
+| 并行工具调用 | 工具 handler 内部 `Promise.all`；或循环中 `for each` → `Promise.all`（一行代码） | 循环骨架不变 |
+| 流式工具结果 | `EventStream.publish(tool.progress)` → TUI 订阅增量渲染 | 流的是观测层，循环仍等最终结果 |
+| 打断 / 暂停 / 恢复 | `options.signal?.aborted` → `break` | 循环加一行 abort 检查 |
+| 树搜索 | 子 agent 工具（继承母 agent 知识）→ 探索分支 → 母 agent 选择 → 切分支 | A2A 用工具表示 |
+| A2A / 多 agent 协作 | 工具 handler 内部 spawn 子 runtime | 一个工具的事 |
+| Self-correction | Guardrail 或 Hook 注入修正提示 → 循环自然继续 | Hook 的事 |
+| Plan-then-execute | Agent 自己按计划逐轮调工具 | Agent 自己的推理 |
+| Debate | 工具 handler 内部并行调多个 runtime，聚合返回 | 一个工具的事 |
+
+**结论**：Vessel 的工具调用循环是通用的。所有"看起来像新范式"的东西——Harness Engineering、Loop Engineering、树搜索、多 agent 协作——都是**同一个 while 循环挂不同的工具/Hook/Guardrail 组合**。core 不需要为它们长大。见 [SPEC.md §1.1](SPEC.md) 与 [ADR-015](ADR.md)。
 
 ## 十、取舍原则
 
@@ -129,3 +133,4 @@
 - 重依赖（浏览器/沙箱/向量库/OCR/图片）一律独立插件包，不进 core 依赖。
 - 垂直能力（RAG/代码审查/客服）永不进 core，只作插件/应用。
 - Tier 3 项无真实需求不动（避免 speculative generality，legacy/LESSONS 教训14）。
+- 能力优先用工具/Hook/Guardrail/事件实现；碰 core 是所有方法都用尽后的最后选项（ADR-012/015）。

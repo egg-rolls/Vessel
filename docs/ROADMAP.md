@@ -35,7 +35,7 @@
 
 - workflow/DAG 编排、multi-agent/team、durable execution、evaluation harness。
 - 各自独立插件包，不进 core。清单见 [PLUGINS.md](PLUGINS.md)。
-- **需改 core 的 loop 级项**（各需 ADR，ADR-012）：并行工具调用、流式工具结果、运行中打断/暂停/恢复。
+- 上述均为插件 / TUI 层能力，无需改 core（见 [ADR-015](ADR.md) 与 [PLUGINS.md §九](PLUGINS.md)）。
 - **前置条件**：Phase 1/2 稳定且有真实需求驱动；否则不做（避免 speculative generality）。
 
 ## 跨期红线（始终遵守）
