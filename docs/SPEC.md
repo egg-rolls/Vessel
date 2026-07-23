@@ -129,6 +129,21 @@ const newProtocolPlugin: Plugin = {
 ```
 来源可以无限增长。插槽只有两个。Agent 通过元工具 `connect_mcp`（或未来的 `connect_wcp`）在运行时自己添加新来源。
 
+### 1.4 已知风险与缓解
+
+极简核心把复杂性转移到外围。以下风险来源于架构取舍，供实现与测试时优先关注。
+
+| 风险 | 根因 | 严重性 | 缓解 |
+|------|------|--------|------|
+| Agent 不理解自身资产 | asset-introspection Skill 若写得不好，Agent 退化到 dump 全部工具进上下文 | **高（BIOS 级）** | asset-introspection 必须是测试最多、常 polish 的 Skill；需在多个模型上验证 |
+| Agent 把自己改坏 | `add_tool` / `add_skill` / `patch_asset` 注册了错误内容，破坏后续决策 | 中 | `registerTool` 时必须校验 schema + handler 签名；元工具禁止 raw eval；sandbox-fs 限制写入范围 |
+| 插件拖垮 runtime | 单进程模型：一个坏插件的 crash 影响同 runtime 的所有能力 | 中 | UsageLimits 硬断 + ToolTimeout + CircuitBreaker；未来考虑 worker 隔离 |
+| 无基础用户第一分钟劝退 | API Key 从哪来、provider 选谁——如果 TUI 向导不好，架构再对也没用 | 高 | 首启向导是 Phase 1 工程核心；权限弹窗的提示要面向无基础用户测试 |
+| 复杂企业工作流 | DAG + 人工审批 + SLA 当前循环单进程无法表达 | 低（Phase 3 前） | Phase 3 workflow + durable 插件解决；不进 core |
+| 长时间任务断电恢复 | 无持久化执行状态 | 低（Phase 3 前） | Phase 3 durable execution 插件解决 |
+
+**核心结论**：架构的上限够高——高上限场景已有扩展路径（Phase 3 插件，不改 core）。架构的下限取决于 asset-introspection Skill 和 TUI 向导的工程质量，不是架构本身能保证的。
+
 ## 2. 包结构
 
 ```
@@ -213,6 +228,7 @@ interface ToolDefinition {
   inputSchema: JSONSchema;
   handler: ToolHandler;
   timeout?: number;
+  default?: boolean;  // true = 在 system prompt 中自动列出; false = 通过 search_assets 发现
 }
 interface ToolRegistry {
   register(def: ToolDefinition): void;
@@ -221,6 +237,8 @@ interface ToolRegistry {
 }
 ```
 工具用**声明式注册**（见 §5），与 provider/hook/guardrail 同构。
+
+**默认工具体系**：常用基础工具（`file-ops`、`grep`、`web-search`、`web-fetch`）设 `default: true`，启动时在 system prompt 中简要列出。领域工具（`browser`、`rag`、`ocr`）设 `default: false`，由 Agent 通过 `search_assets` 按需发现。危险工具（`shell`）设 `default: false` 且必走 permission-prompt。Agent 可通过 Config CRUD 管理哪些工具默认可见。工具集清单见 [PLUGINS.md §一](PLUGINS.md)。
 
 ### 4.3 ContextManager
 ```ts
@@ -383,6 +401,7 @@ const myPlugin: Plugin = {
 - 配置 schema 由 `@vessel/config` 定义并校验；**未知键报错**（而非静默忽略）。
 - 优先级：CLI flag > env (`VESSEL_*`) > `vessel.yaml` > 安全默认。
 - Key 永远用户自备，从 env 或向导读；不内置任何厂商 Key。
+- **工具默认可见**：`tools.default: [bash, web-search, grep, ...]` 配置项定义启动时自动列出的工具；Agent 可通过元工具修改此配置。其余工具通过 `search_assets` 发现。
 
 ## 7. 数据流
 

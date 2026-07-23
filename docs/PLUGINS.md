@@ -13,15 +13,21 @@
 
 ## 一、能力工具
 
-| 插件 | 责任 | 重依赖 | Tier |
-|------|------|--------|------|
-| file-ops | 文件读写/搜索/列目录 | 无 | 1（内置参考） |
-| shell | 命令执行 | 无 | 1（内置参考） |
-| web-search | 网页搜索（Tavily/Brave/Serper） | API key | 1 |
-| web-fetch | 抓取 URL + 正文提取（readability） | 无 | 1 |
-| code-sandbox | 代码执行（Docker/E2B/Firecracker/本地 REPL） | 重 | 2 |
-| browser | 浏览器自动化（Playwright/Puppeteer） | 重 | 2 |
-| rag | 向量检索 + 注入（Chroma/Qdrant/pgvector/LanceDB） | 中 | 2 |
+> **默认工具**（`default: true` = 启动时自动在 system prompt 中列出）：`file-ops`、`grep`、`web-search`、`web-fetch`。
+> **按需工具**（`default: false` = 通过 `search_assets` 发现）：`shell`（危险，必走 permission-prompt）、`browser`、`rag` 及以下其余工具。详见 [SPEC §4.2/§6](SPEC.md)。
+
+| 插件 | 责任 | 重依赖 | Tier | 默认 |
+|------|------|--------|------|------|
+| file-ops | 文件读写/搜索/列目录 | 无 | 1（内置参考） | true |
+| grep | 文本搜索 | 无 | 1 | true |
+| web-search | 网页搜索（Tavily/Brave/Serper） | API key | 1 | true |
+| web-fetch | 抓取 URL + 正文提取（readability） | 无 | 1 | true |
+| shell | 命令执行（危险） | 无 | 1（内置参考） | false |
+| todo-list | 任务进度跟踪 | 无 | 1 | true |
+| ask-user | 向用户提问/确认选择 | 无 | 1 | true |
+| code-sandbox | 代码执行（Docker/E2B/Firecracker/本地 REPL） | 重 | 2 | false |
+| browser | 浏览器自动化（Playwright/Puppeteer） | 重 | 2 | false |
+| rag | 向量检索 + 注入（Chroma/Qdrant/pgvector/LanceDB） | 中 | 2 | false |
 | embeddings | 文本向量化 | API key | 2 |
 | rerank | 检索重排 | API key | 2 |
 | doc-parse | 文档解析（PDF/DOCX/PPTX/Excel） | 中 | 2 |
