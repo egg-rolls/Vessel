@@ -89,6 +89,46 @@ Vessel 的真正价值不在 core 本身，而在于**启动态极简、运行�
 
 Vessel 给 Agent 的不是 50 个工具——而是**一个知道自己有什么、缺什么、怎么补的认知结构**。元资产是 Harness 的真正资产。
 
+### 1.3 资产拓扑：来源 vs 插槽
+
+四种资产类型不是平坦关系。它们是**四种来源**，统一注入**两个插槽**：
+
+```
+        来源（资产怎么来的）                插槽（循环用什么）
+
+        Plugin (TS 包) ──→ tools ────→ ┌──────────────┐
+        MCP (远程进程) ──→ tools ────→ │ ToolRegistry  │ ← 循环只认这一个
+        用户手写        ──→ tools ────→ │              │
+        Agent 自建      ──→ tools ────→ └──────────────┘
+
+        Skill (Markdown) ──→ system ┌──────────────┐
+        记忆 (跨会话)    ──→ prompt │ ContextManager│ ← 循环只认这一个
+        对话历史                 ──→ │              │
+        MCP prompts/resources ──→   └──────────────┘
+
+        Config (YAML) ──→ agent 定义 → AgentRuntime 构造
+```
+
+| 插槽 | 注入什么 | 被循环怎么用 | 来源可无限扩展？ |
+|------|---------|------------|----------------|
+| `ToolRegistry` | 工具（世界↔语言适配器） | `invoke(toolCall)` → 执行 | 是。Plugin、MCP、Agent 自建——都是同一个 `registerTool()` |
+| `ContextManager` | 知识（语言空间内容） | `add(message)` → 下一轮 LLM 读取 | 是。Skill、记忆、MCP prompts——都是同一个 `add()` |
+
+**为什么 Plugin 和 MCP 不是"两种方向"**：二者都是工具的**来源**。一个工具 handler 可以同时是"世界→语言"（如 web_search）和"语言→世界"（如 write_file）。来源格式（本地 TS vs 远程进程）与适配器方向（A vs B）是正交的。循环不关心工具来自哪里。
+
+**为什么 Skill 不走工具**：Skill 的内容是给 LLM 的知识（"怎么用好系统"），不是给执行引擎的代码（"调这个 API"）。把 asset-introspection 做成工具让 LLM 自己调，就失去了"Agent 从第一轮就知道怎么了解自己"的认知启动效应——工具需要 Agent 意识到来调，Skill 是跑之前就已经在了。
+
+**新来源格式**：出现 WCP / ACP / 任何新协议时，只需一个新的 Bridge Plugin 将其翻译到两个已有插槽：
+```ts
+const newProtocolPlugin: Plugin = {
+  install(host) {
+    for (const tool of protocol.listTools()) host.registerTool(tool);
+    for (const doc of protocol.listDocs()) host.registerHook({...}); // inject into context
+  },
+};
+```
+来源可以无限增长。插槽只有两个。Agent 通过元工具 `connect_mcp`（或未来的 `connect_wcp`）在运行时自己添加新来源。
+
 ## 2. 包结构
 
 ```
