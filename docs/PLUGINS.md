@@ -176,6 +176,33 @@ asset-introspection 是 Vessel 的 BIOS——Agent 启动时自动加载，定�
 
 **结论**：Vessel 的工具调用循环是通用的。所有"看起来像新范式"的东西——Harness Engineering、Loop Engineering、树搜索、多 agent 协作——都是**同一个 while 循环挂不同的工具/Hook/Guardrail 组合**。core 不需要为它们长大。见 [SPEC.md §1.1](SPEC.md) 与 [ADR-015](ADR.md)。
 
+### 9.1 需求检验：Loop Engineering
+
+以 Loop Engineering 的最严苛需求——"用 MCTS 树搜索替代线性 while 循环"——检验 Vessel 是否支撑得起。
+
+**Loop-first 架构的做法**（LangGraph / LlamaIndex Workflows）：
+- 显式 `LoopStrategy` 接口 → `MCTSLoopStrategy` 实现
+- 引擎保证每步的 MCTS 语义（selection / expansion / simulation / backpropagation）
+
+**Vessel 的做法**（loop-agnostic，三种实现层）：
+- **工具层**：`mcts_search(problem)` → handler 内部做完整 MCTS → 返回最优解
+- **子 agent 层**：Agent spawn 多个分支子 agent → 自己做 selection + backpropagation → 切分支
+- **Hook 层**：AfterLlm Hook 生成多个 thought 分支 → 并行评估 → BeforeLlm 注入最优分支
+
+**对比**：
+
+| 维度 | loop-first | Vessel（loop-agnostic） |
+|------|-----------|------------------------|
+| MCTS 语义保证 | 引擎保证（不会跳步） | Agent 推理保证（asset-introspection 提示，不硬约束） |
+| 策略混合 | 需要显式"切换策略" | 无需切换——Agent 自然波动：先 MCTS 两轮找方向，切线性执行，再切子 agent 委派 |
+| 新拓扑 | 写新 `LoopStrategy` 代码 | Agent 发明新的工具组合方式 |
+| Agent 忘做 backpropagation | 不可能（引擎强制执行） | 可能（提示不是硬保证） |
+| core 复杂度 | 随拓扑数增长 | 不变（一个 while 循环） |
+
+**判定**：Vessel 支撑得起 Loop Engineering，但不是以 loop-first 的形式。Vessel 的循环是**最薄的可编程界面**——薄到 Agent 可以在上面用工具/Hook/Skill 建造任意执行语义。代价是 MCTS 的每步语义不是引擎保证的，而是 Agent 自觉的。
+
+这本身就是一个架构取舍——loop-first 用引擎复杂度换 Agent 可靠性，Vessel 用 Agent 灵活性换引擎极简。哪条路对取决于你对 "Agent 会不会忘做 backpropagation" 的判断。asset-introspection Skill 是这道判断的防线。
+
 ## 十、取舍原则
 
 - 拿不准是否进 core：选插件（ADR-012 + [CLAUDE.md](../CLAUDE.md) §5 决策树）。
