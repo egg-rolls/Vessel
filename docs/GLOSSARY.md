@@ -22,6 +22,7 @@
 | **Plugin** | 统一扩展单元，install 时向 PluginHost 注册 tool/provider/guardrail/hook。 |
 | **PluginHost** | 插件注册宿主，runtime 持有。 |
 | **Skill** | 行为 know-how 的可复用剧本（Markdown + 可选脚本）；由 skills-loader 插件承载，经 BeforeLlm 钩子注入、slash 命令触发。 |
+| **元认知 Skill** | Agent 用于了解自身资产的 Skill（如何查询工具、节俭上下文、何时委派子 agent）。随 Vessel 分发，启动时自动加载。详见 PLUGINS §八。 |
 | **TUI** | 终端交互界面（Terminal UI），Vessel 的主入口。 |
 | **ACI** | Agent-Computer Interface 设计原则：动作空间精简、反馈即时、错误可恢复。 |
 | **MCP** | Model Context Protocol，标准化工具/资源扩展协议；Vessel 中作插件。 |

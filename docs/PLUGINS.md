@@ -107,6 +107,8 @@
 | 项 | 责任 | 形态 | Tier |
 |----|------|------|------|
 | skills-loader | 加载/注入/触发 skill | 插件（TS） | 2 |
+| asset-introspection | Agent 认知启动：如何查询资产、节俭上下文、CRUD 自己的工具/Skill/MCP/Plugin | Skill（内置，启动自动加载） | 1 |
+| tool-discovery | 引导 Agent 用子 agent 查询工具而非 dump 全部 schema 进上下文 | Skill | 1 |
 | skill 内容 | 领域剧本（编码/研究/写作…） | Markdown | 2–3 |
 | skill-library | 社区 skill 分发 | 仓库 | 3 |
 

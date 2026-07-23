@@ -302,7 +302,7 @@ const myPlugin: Plugin = {
 | **Skill** | 行为 know-how（可复用剧本） | Markdown + 可选脚本 | 无基础用户也能写 |
 | **Config** | agent 声明（人设/工具集/限额） | YAML | 弱基础用户 |
 
-- **Skill** 由 skills-loader 插件承载：用 `BeforeLlm` 钩子按需注入 skill 内容，用 TUI slash 命令触发；skill 内容是 Markdown，非代码。
+- **Skill** 由 skills-loader 插件承载：用 `BeforeLlm` 钩子按需注入 skill 内容，用 TUI slash 命令触发；skill 内容是 Markdown，非代码。Skill 承载的不只领域 know-how，也包括 Agent 自身的元认知策略（如何查询资产、节俭上下文、何时委派子 agent、CRUD 自己的工具/Skill/MCP/Plugin）。元认知 Skill 随 Vessel 分发并在启动时自动加载。
 - **MCP** 由 MCP client 插件桥接外部 server 进 tool 注册表。
 - 三者共用 PluginHost，故"加功能 = 加 Plugin/MCP/Skill"字面成立且 core 零改动（ADR-011/012）。
 
