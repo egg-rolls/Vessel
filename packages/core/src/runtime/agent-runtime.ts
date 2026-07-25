@@ -34,6 +34,7 @@ export class AgentRuntime {
   private pluginHost: PluginHost;
   private limitChecker: MemoryLimitChecker;
   private stats: UsageStats;
+  private systemPrompt?: string;
 
   constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -44,6 +45,7 @@ export class AgentRuntime {
     this.limits = opts.limits;
     this.termination = opts.termination;
     this.session = opts.session;
+    this.systemPrompt = opts.systemPrompt;
     this.limitChecker = new MemoryLimitChecker();
 
     // 初始化使用量统计
@@ -103,21 +105,20 @@ export class AgentRuntime {
       start_time: startTime,
     };
 
-    // 切换到当前会话的 Context（而不是清空）
+    // 切换到当前会话的 Context
     if (this.context instanceof MemoryContextManager) {
       this.context.setSessionId(currentSessionId);
       
-      // 从数据库加载之前的消息到 Context
-      if (this.session) {
-        const saved = await this.session.load(currentSessionId);
-        if (saved && saved.messages.length > 0) {
-          // 清空当前 Context，然后加载数据库中的消息
-          this.context.clear();
-          for (const msg of saved.messages) {
-            this.context.add(msg);
-          }
-        }
-      }
+      // 重置上下文（每次 run 都是新的对话）
+      this.context.clear();
+    }
+
+    // 添加 system prompt
+    if (this.systemPrompt) {
+      this.context.add({
+        role: 'system',
+        content: this.systemPrompt,
+      });
     }
 
     // 准备用户消息
@@ -233,6 +234,9 @@ export class AgentRuntime {
     run_id: string,
     session_id: string
   ): Promise<string> {
+    const maxToolCalls = 5; // 最大工具调用次数
+    let toolCallCount = 0;
+
     while (true) {
       // 检查终止条件
       if (this.limitChecker.checkTermination(this.stats, this.termination)) {
@@ -244,13 +248,39 @@ export class AgentRuntime {
         throw new Error('Usage limits exceeded');
       }
 
+      // 检查工具调用次数限制
+      if (toolCallCount >= maxToolCalls) {
+        console.log(`[AgentRuntime] Max tool calls (${maxToolCalls}) reached, stopping`);
+        // 返回上下文中的最后一条助手消息
+        const messages = this.context.messages;
+        const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
+        return lastAssistant?.content ?? '工具调用次数已达上限';
+      }
+
       // 执行 BeforeLlm 钩子
       const hookCtx: HookContext = { run_id, session_id };
       await this.runHooks('before_llm', hookCtx);
 
       // 发布 LLM 请求事件
       const messages = this.context.messages;
-      const toolSchemas = this.tools.schemas();
+      
+      // 合并两种来源的工具：直接注册的 + 插件注册的
+      const directToolSchemas = this.tools.schemas();
+      const pluginToolSchemas = this.pluginHost.listTools().map(tool => ({
+        type: 'function' as const,
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      }));
+      const toolSchemas = [...directToolSchemas, ...pluginToolSchemas];
+      
+      // 调试：打印工具列表
+      console.log('[Debug] Direct tools:', directToolSchemas.map(t => t.function.name));
+      console.log('[Debug] Plugin tools:', pluginToolSchemas.map(t => t.function.name));
+      console.log('[Debug] Total tools:', toolSchemas.length);
+      
       this.publishEvent({
         type: EventType.LlmRequest,
         run_id,
@@ -268,6 +298,12 @@ export class AgentRuntime {
         tools: toolSchemas.length > 0 ? toolSchemas : undefined,
         session_id: session_id,  // 传递 session_id 给 Provider
       };
+
+      // 调试：打印发送给 AI 的消息
+      console.log('[Debug] Messages sent to AI:');
+      for (const msg of messages) {
+        console.log(`  [${msg.role}]: ${msg.content?.substring(0, 100)}...`);
+      }
 
       const response = await this.provider.chat(request);
 
@@ -331,6 +367,7 @@ export class AgentRuntime {
         for (const toolCall of response.tool_calls) {
           // 增加工具调用计数
           this.limitChecker.incrementToolCall(this.stats);
+          toolCallCount++;
 
           // 应用工具调用 Guardrail
           const toolCallResult = await this.applyGuardrails(
@@ -361,12 +398,37 @@ export class AgentRuntime {
           await this.runHooks('before_tool', hookCtx);
 
           try {
-            // 调用工具
-            const result = await this.tools.invoke(toolCall, {
-              run_id,
-              session_id,
-              messages: this.context.messages,
-            });
+            // 调用工具（先从直接注册的工具查找，再从插件注册的工具查找）
+            let result: string;
+            const toolName = toolCall.function.name;
+            
+            if (this.tools.has(toolName)) {
+              // 从直接注册的工具调用
+              result = await this.tools.invoke(toolCall, {
+                run_id,
+                session_id,
+                messages: this.context.messages,
+              });
+            } else {
+              // 从插件注册的工具调用
+              const pluginTool = this.pluginHost.getTool(toolName);
+              if (!pluginTool) {
+                throw new Error(`Tool "${toolName}" not found`);
+              }
+              
+              let args: unknown;
+              try {
+                args = JSON.parse(toolCall.function.arguments);
+              } catch {
+                args = {};
+              }
+              
+              result = await pluginTool.handler(args, {
+                run_id,
+                session_id,
+                messages: this.context.messages,
+              });
+            }
 
             // 应用工具结果 Guardrail
             const toolResultResult = await this.applyGuardrails(
@@ -401,6 +463,13 @@ export class AgentRuntime {
               role: 'tool',
               tool_call_id: toolCall.id,
               content: result,
+            });
+
+            // 添加助手消息，告诉 AI 工具返回了什么
+            // 这样 AI 就能更容易理解工具返回的内容
+            this.context.add({
+              role: 'assistant',
+              content: `工具 ${toolCall.function.name} 返回了结果：${result}`,
             });
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);

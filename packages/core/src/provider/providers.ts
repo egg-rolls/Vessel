@@ -125,9 +125,41 @@ export class OpenAICompatibleProvider implements LLMProvider {
   async chat(req: ChatRequest): Promise<LLMResponse> {
     const url = `${this.baseUrl}/chat/completions`;
 
+    // 转换消息格式（正确处理工具返回）
+    const messages = req.messages.map((msg) => {
+      if (msg.role === 'tool') {
+        // 工具返回：使用正确的格式
+        return {
+          role: 'tool',
+          tool_call_id: msg.tool_call_id ?? '',
+          content: msg.content,
+        };
+      }
+      if (msg.role === 'assistant' && msg.tool_calls) {
+        // 助手消息包含工具调用
+        return {
+          role: 'assistant',
+          content: msg.content,
+          tool_calls: msg.tool_calls.map((tc) => ({
+            id: tc.id,
+            type: 'function',
+            function: {
+              name: tc.function.name,
+              arguments: tc.function.arguments,
+            },
+          })),
+        };
+      }
+      // 普通消息
+      return {
+        role: msg.role,
+        content: msg.content,
+      };
+    });
+
     const body = {
       model: req.model ?? this.model,
-      messages: req.messages,
+      messages,
       tools: req.tools,
       temperature: req.temperature,
       max_tokens: req.max_tokens,
@@ -216,13 +248,68 @@ export class AnthropicProvider implements LLMProvider {
   async chat(req: ChatRequest): Promise<LLMResponse> {
     const url = `${this.baseUrl}/v1/messages`;
 
-    // 转换消息格式
-    const messages = req.messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+    // 转换消息格式（正确处理工具返回）
+    const messages: Array<{
+      role: 'user' | 'assistant';
+      content: string | Array<{
+        type: string;
+        [key: string]: unknown;
+      }>;
+    }> = [];
+
+    for (const msg of req.messages) {
+      if (msg.role === 'system') {
+        continue; // system 消息单独处理
+      }
+
+      if (msg.role === 'tool') {
+        // 工具返回：使用 tool_result 格式
+        // 将工具返回作为 user 消息发送，包含 tool_result 块
+        messages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: msg.tool_call_id ?? '',
+              content: msg.content,
+            },
+          ],
+        });
+      } else if (msg.role === 'assistant' && msg.tool_calls) {
+        // 助手消息包含工具调用
+        const content: Array<{
+          type: string;
+          [key: string]: unknown;
+        }> = [];
+
+        if (msg.content) {
+          content.push({
+            type: 'text',
+            text: msg.content,
+          });
+        }
+
+        for (const tc of msg.tool_calls) {
+          content.push({
+            type: 'tool_use',
+            id: tc.id,
+            name: tc.function.name,
+            input: JSON.parse(tc.function.arguments),
+          });
+        }
+
+        messages.push({
+          role: 'assistant',
+          content,
+        });
+      } else {
+        // 普通用户/助手消息
+        messages.push({
+          role: msg.role as 'user' | 'assistant',
+          content: msg.content,
+        });
+      }
+    }
 
     const systemMessage = req.messages.find((m) => m.role === 'system');
 
