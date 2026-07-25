@@ -41,4 +41,5 @@ export interface AgentRuntimeOptions {
   termination: import('./limits.js').TerminationPolicy;
   plugins?: Plugin[];
   session?: import('./session.js').SessionBackend;
+  systemPrompt?: string;  // 系统提示词
 }

@@ -6,15 +6,20 @@
 
 import {
   AgentRuntime,
-  AnthropicProvider,
+  OpenAICompatibleProvider,
   MemoryToolRegistry,
   MemoryContextManager,
   MemoryEventStream,
   SQLiteSessionBackend,
   EventType,
   type RunEvent,
+  type Plugin,
 } from './packages/core/src/index';
 import * as readline from 'readline';
+
+// 导入插件
+import { metaToolsPlugin } from './plugins/meta-tools/src/index';
+import { skillsLoaderPlugin } from './plugins/skills-loader/src/index';
 
 // 从环境变量读取配置
 const apiKey = process.env.VESSEL_API_KEY;
@@ -23,23 +28,15 @@ if (!apiKey) {
   process.exit(1);
 }
 
-// 创建真实 Provider（Anthropic 格式）
-const provider = new AnthropicProvider({
+// 创建真实 Provider（OpenAI 兼容格式）
+const provider = new OpenAICompatibleProvider({
   api_key: apiKey,
-  base_url: process.env.VESSEL_BASE_URL || 'https://api.anthropic.com',
-  model: process.env.VESSEL_MODEL || 'claude-sonnet-4-20250514',
+  base_url: process.env.VESSEL_BASE_URL || 'https://api.openai.com/v1',
+  model: process.env.VESSEL_MODEL || 'gpt-4',
 });
 
 // 创建工具注册表
 const tools = new MemoryToolRegistry();
-
-// 可以在这里注册自定义工具
-// tools.register({
-//   name: 'tool_name',
-//   description: 'Tool description',
-//   inputSchema: { /* ... */ },
-//   handler: async (args) => { /* ... */ },
-// });
 
 // 创建其他组件
 const context = new MemoryContextManager();
@@ -49,10 +46,52 @@ const session = new SQLiteSessionBackend('./vessel.db');  // SQLite 存储
 // 当前会话 ID
 let currentSessionId = 'default';
 
+// 插件列表
+const plugins: Plugin[] = [
+  metaToolsPlugin,
+  skillsLoaderPlugin,
+];
+
+// 系统提示词
+const systemPrompt = `你是一个有用的 AI 助手，可以通过工具来完成任务。
+
+## 工具使用规则
+
+1. 当用户询问你有什么技能或工具时，调用 list_skills 工具
+2. 工具会返回结果，你应该直接使用工具返回的结果来回答用户
+3. 不要重复调用同一个工具
+4. 如果工具返回了结果，就用那个结果来回答用户，不要说"我没有技能"或"我的技能库是空的"
+
+## 重要：工具返回格式
+
+当工具返回结果时，消息格式如下：
+- role: "tool" - 这表示这是工具返回的结果
+- content: "..." - 这是工具返回的内容
+
+你应该：
+1. 读取 role 为 "tool" 的消息
+2. 使用 content 中的内容来回答用户
+3. 不要说"我没有技能"或"我的技能库是空的"
+
+## 示例
+
+用户问：你有什么技能？
+你调用：list_skills 工具
+工具返回：role: "tool", content: "技能列表：asset-introspection, code-writing"
+你应该回答：我有以下技能：asset-introspection, code-writing
+
+## 回答规则
+
+- 当工具返回结果时，直接使用那个结果
+- 不要编造信息
+- 保持回答简洁
+- 如果工具返回"技能列表：xxx, yyy"，你就说"我有以下技能：xxx, yyy"
+`;
+
 // 创建 Runtime
 const runtime = new AgentRuntime({
   provider,
-  model: 'mimo-v2.5-pro',
+  model: process.env.VESSEL_MODEL || 'gpt-4',
   tools,
   context,
   events,
@@ -65,6 +104,8 @@ const runtime = new AgentRuntime({
     stop_on_no_tool_calls: true,
   },
   session,
+  plugins,  // 注入插件
+  systemPrompt,  // 添加系统提示词
 });
 
 // 订阅事件

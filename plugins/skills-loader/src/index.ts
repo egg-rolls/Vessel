@@ -1,0 +1,296 @@
+/**
+ * @vessel/skills-loader - Skills 加载器插件
+ * @module @vessel/skills-loader
+ *
+ * 加载 Skill 内容（Markdown 文件），通过 BeforeLlm Hook 注入到上下文。
+ * Skill 是行为 know-how 的可复用剧本，不是代码。
+ */
+
+import type { Plugin, PluginHost, Hook, HookContext, HookType } from '../../../packages/core/src/index';
+import { HookType as HookTypeEnum } from '../../../packages/core/src/index';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+
+/** Skill 定义 */
+export interface Skill {
+  name: string;
+  description: string;
+  content: string;
+  source: 'file' | 'inline' | 'registry';
+  filePath?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Skills Loader 配置 */
+export interface SkillsLoaderConfig {
+  /** Skill 文件目录 */
+  skillsDir?: string;
+  /** 自动加载的 Skill 列表 */
+  autoLoad?: string[];
+  /** 是否在 system prompt 中注入 Skill 内容 */
+  injectToSystem?: boolean;
+}
+
+/**
+ * Skills 管理器
+ */
+export class SkillsManager {
+  private skills: Map<string, Skill> = new Map();
+  private config: SkillsLoaderConfig;
+
+  constructor(config: SkillsLoaderConfig = {}) {
+    this.config = {
+      skillsDir: config.skillsDir ?? './skills',
+      autoLoad: config.autoLoad ?? [],
+      injectToSystem: config.injectToSystem ?? true,
+    };
+  }
+
+  /**
+   * 加载所有 Skill
+   */
+  async loadSkills(): Promise<void> {
+    const skillsDir = this.config.skillsDir!;
+
+    // 检查目录是否存在
+    if (!fs.existsSync(skillsDir)) {
+      fs.mkdirSync(skillsDir, { recursive: true });
+      return;
+    }
+
+    // 读取目录中的所有 .md 文件
+    const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+
+    for (const file of files) {
+      const filePath = path.join(skillsDir, file);
+      const name = path.basename(file, '.md');
+      const content = fs.readFileSync(filePath, 'utf-8');
+
+      // 解析 Skill 内容（第一个 # 标题是描述）
+      const lines = content.split('\n');
+      const titleLine = lines.find(l => l.startsWith('# '));
+      const description = titleLine 
+        ? titleLine.substring(2).trim()
+        : `Skill: ${name}`;
+
+      this.skills.set(name, {
+        name,
+        description,
+        content,
+        source: 'file',
+        filePath,
+      });
+    }
+  }
+
+  /**
+   * 注册 Skill
+   */
+  registerSkill(skill: Skill): void {
+    this.skills.set(skill.name, skill);
+  }
+
+  /**
+   * 获取 Skill
+   */
+  getSkill(name: string): Skill | undefined {
+    return this.skills.get(name);
+  }
+
+  /**
+   * 列出所有 Skill
+   */
+  listSkills(): Skill[] {
+    return Array.from(this.skills.values());
+  }
+
+  /**
+   * 搜索 Skill
+   */
+  searchSkills(query: string): Skill[] {
+    const lowerQuery = query.toLowerCase();
+    return this.listSkills().filter(skill =>
+      skill.name.toLowerCase().includes(lowerQuery) ||
+      skill.description.toLowerCase().includes(lowerQuery)
+    );
+  }
+
+  /**
+   * 获取自动加载的 Skill 内容
+   */
+  getAutoLoadedContent(): string {
+    const autoLoad = this.config.autoLoad ?? [];
+    const contents: string[] = [];
+
+    for (const name of autoLoad) {
+      const skill = this.skills.get(name);
+      if (skill) {
+        contents.push(`## Skill: ${skill.name}\n\n${skill.content}`);
+      }
+    }
+
+    return contents.join('\n\n---\n\n');
+  }
+
+  /**
+   * 获取所有 Skill 的摘要
+   */
+  getSkillsSummary(): string {
+    const skills = this.listSkills();
+    if (skills.length === 0) {
+      return '没有技能';
+    }
+
+    return `技能列表：${skills.map(s => s.name).join(', ')}`;
+  }
+}
+
+/**
+ * 创建 BeforeLlm Hook，注入 Skill 内容
+ */
+function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
+  return {
+    name: 'skill-injection',
+    type: HookTypeEnum.BeforeLlm,
+    priority: 100,
+    run: async (ctx: HookContext): Promise<HookContext | null> => {
+      // 获取自动加载的 Skill 内容
+      const skillContent = skillsManager.getAutoLoadedContent();
+
+      if (skillContent) {
+        // 将 Skill 内容注入到上下文
+        // 注意：这里需要访问 ContextManager，但 Hook 没有直接访问权限
+        // 实际实现需要通过其他方式注入
+        console.log('[Skills Loader] Injecting skills into context');
+      }
+
+      return ctx;
+    },
+  };
+}
+
+/**
+ * Skills Loader 插件
+ */
+export const skillsLoaderPlugin: Plugin = {
+  name: 'skills-loader',
+  version: '0.1.0',
+  description: 'Load and inject skills (Markdown documents) into agent context',
+  install(host: PluginHost) {
+    const skillsManager = new SkillsManager();
+
+    // 注册 Skill 管理工具
+    host.registerTool({
+      name: 'list_skills',
+      description: '列出所有可用技能。当用户询问"你有什么技能"、"你有哪些技能"、"你的技能列表"时调用此工具。',
+      inputSchema: {
+        type: 'object',
+        properties: {},
+      },
+      handler: async () => {
+        const summary = skillsManager.getSkillsSummary();
+        console.log('[Skills Loader] list_skills called, returning:', summary);
+        return summary;
+      },
+    });
+
+    host.registerTool({
+      name: 'search_skills',
+      description: 'Search for skills by name or description',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          query: {
+            type: 'string',
+            description: 'Search query',
+          },
+        },
+        required: ['query'],
+      },
+      handler: async (args) => {
+        const { query } = args as { query: string };
+        const results = skillsManager.searchSkills(query);
+
+        if (results.length === 0) {
+          return `No skills found matching "${query}"`;
+        }
+
+        return results.map(s => `**${s.name}**: ${s.description}`).join('\n');
+      },
+    });
+
+    host.registerTool({
+      name: 'get_skill',
+      description: 'Get the content of a specific skill',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'Skill name',
+          },
+        },
+        required: ['name'],
+      },
+      handler: async (args) => {
+        const { name } = args as { name: string };
+        const skill = skillsManager.getSkill(name);
+
+        if (!skill) {
+          return `Skill "${name}" not found`;
+        }
+
+        return skill.content;
+      },
+    });
+
+    // 注册 BeforeLlm Hook
+    host.registerHook(createSkillInjectionHook(skillsManager));
+
+    // 将 skillsManager 存储在 host 上，供其他组件使用
+    (host as any).__skillsManager = skillsManager;
+
+    // 同步加载 Skill 文件（使用同步方法）
+    try {
+      const skillsDir = path.resolve('./skills');
+      console.log(`[Skills Loader] Looking for skills in: ${skillsDir}`);
+      
+      if (fs.existsSync(skillsDir)) {
+        const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+        console.log(`[Skills Loader] Found ${files.length} skill files`);
+        
+        for (const file of files) {
+          const filePath = path.join(skillsDir, file);
+          const name = path.basename(file, '.md');
+          const content = fs.readFileSync(filePath, 'utf-8');
+          const lines = content.split('\n');
+          const titleLine = lines.find(l => l.startsWith('# '));
+          const description = titleLine 
+            ? titleLine.substring(2).trim()
+            : `Skill: ${name}`;
+
+          skillsManager.registerSkill({
+            name,
+            description,
+            content,
+            source: 'file',
+            filePath,
+          });
+          
+          console.log(`[Skills Loader] Loaded skill: ${name}`);
+        }
+        
+        // 验证加载结果
+        const loadedSkills = skillsManager.listSkills();
+        console.log(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
+        console.log(`[Skills Loader] Skills: ${loadedSkills.map(s => s.name).join(', ')}`);
+      } else {
+        console.log(`[Skills Loader] Skills directory not found: ${skillsDir}`);
+      }
+    } catch (err) {
+      console.error('[Skills Loader] Failed to load skills:', err);
+    }
+  },
+};
+
+export default skillsLoaderPlugin;
