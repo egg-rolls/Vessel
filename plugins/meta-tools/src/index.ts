@@ -13,6 +13,8 @@
  */
 
 import type { Plugin, PluginHost, ToolDefinition, ToolRegistry } from '../../../packages/core/src/index';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 /**
  * 元资产管理器
@@ -23,9 +25,68 @@ export class AssetManager {
   private skills: Map<string, SkillAsset> = new Map();
   private mcpConnections: Map<string, MCPConnection> = new Map();
   private pluginHost: PluginHost;
+  private toolsFilePath: string;
 
-  constructor(pluginHost: PluginHost) {
+  constructor(pluginHost: PluginHost, toolsFilePath: string = './tools/custom-tools.json') {
     this.pluginHost = pluginHost;
+    this.toolsFilePath = toolsFilePath;
+    this.loadPersistedTools();
+  }
+
+  /**
+   * 从文件加载已保存的工具
+   */
+  private loadPersistedTools(): void {
+    try {
+      if (fs.existsSync(this.toolsFilePath)) {
+        const data = fs.readFileSync(this.toolsFilePath, 'utf-8');
+        const toolsData = JSON.parse(data) as Array<{
+          name: string;
+          description: string;
+          handlerCode: string;
+        }>;
+
+        for (const toolData of toolsData) {
+          try {
+            const handler = new Function('args', toolData.handlerCode) as (args: unknown) => Promise<string>;
+            const tool: ToolDefinition = {
+              name: toolData.name,
+              description: toolData.description,
+              inputSchema: { type: 'object', properties: {} },
+              handler: async (args) => handler(args),
+            };
+            this.tools.set(tool.name, tool);
+            this.pluginHost.registerTool(tool);
+          } catch (error) {
+            console.error(`Failed to load persisted tool "${toolData.name}":`, error);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load persisted tools:', error);
+    }
+  }
+
+  /**
+   * 保存工具到文件
+   */
+  private persistTools(): void {
+    try {
+      const dir = path.dirname(this.toolsFilePath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+
+      const toolsData = Array.from(this.tools.entries()).map(([name, tool]) => ({
+        name,
+        description: tool.description,
+        handlerCode: tool.handler.toString(),
+      }));
+
+      fs.writeFileSync(this.toolsFilePath, JSON.stringify(toolsData, null, 2));
+    } catch (error) {
+      console.error('Failed to persist tools:', error);
+    }
   }
 
   /**
@@ -34,6 +95,7 @@ export class AssetManager {
   registerTool(tool: ToolDefinition): void {
     this.tools.set(tool.name, tool);
     this.pluginHost.registerTool(tool);
+    this.persistTools();
   }
 
   /**

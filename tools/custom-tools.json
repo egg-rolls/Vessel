@@ -1,0 +1,7 @@
+[
+  {
+    "name": "weather_query",
+    "description": "查询指定城市的天气信息",
+    "handlerCode": "async (args) => handler(args)"
+  }
+]
