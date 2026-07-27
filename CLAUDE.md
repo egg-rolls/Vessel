@@ -21,13 +21,16 @@
 5. [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md) - 当前分期 / MVP 边界
 6. [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) - 术语
 7. [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) - 插件 backlog 目录
-8. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
-9. 相关 `packages/` 源码与测试
-10. [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献流程 / PR / commit 规范（人类贡献者入口）
+8. [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) - Git 协作与合并门禁
+9. [processes/development-workflow.md](processes/development-workflow.md) - 标准开发流程
+10. [processes/task-assignment.md](processes/task-assignment.md) - 当前任务分工
+11. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
+12. 相关 `packages/` 源码与测试
+13. [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献流程 / PR / commit 规范（人类贡献者入口）
 
 ## 3. 项目事实（随实现更新）
 
-- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/` + `legacy/`。
+- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/{specs,guides,api,dev}` + `processes/` + `legacy/`。
 - monorepo：bun workspaces。
 - 公共入口：`@vessel/core` 的 `AgentRuntime`、`PluginHost`；`@vessel/tui` 的 REPL。
 - 依赖：保持精简；core 不依赖 tui/config/plugins。

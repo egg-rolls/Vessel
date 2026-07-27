@@ -1,6 +1,6 @@
-# Phase 1 后续分工计划
+# 当前任务分工
 
-> 基线：main（feature/phase-1 已合并，含已知问题见 [phase-1-review.md](phase-1-review.md)）
+> 基线：main（feature/phase-1 已合并，含已知问题见 [phase-1-review.md](../docs/dev/phase-1-review.md)）
 > 原则：一人做设计决策，一人做落地实现，交叉 Review；AI Agent 辅助编码执行
 > 更新：一项完成即更新文档、划线标记
 

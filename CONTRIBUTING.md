@@ -6,7 +6,7 @@
 
 - 运行时：Bun（`bun install` 装依赖）。
 - 仓库为 monorepo（bun workspaces）：`packages/{core,config,tui}` + `plugins/`。
-- 动手前按 [CLAUDE.md §2](CLAUDE.md) 阅读顺序通读 `docs/`。
+- 动手前按 [CLAUDE.md §2](CLAUDE.md) 阅读顺序通读 `docs/` 和 `processes/`。
 
 ## 分支与提交
 
