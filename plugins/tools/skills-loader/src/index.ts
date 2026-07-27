@@ -29,6 +29,10 @@ export interface SkillsLoaderConfig {
   autoLoad?: string[];
   /** 是否在 system prompt 中注入 Skill 内容 */
   injectToSystem?: boolean;
+  /** 是否递归扫描子目录 */
+  recursive?: boolean;
+  /** 是否启用文件监听（热加载） */
+  watch?: boolean;
 }
 
 /**
@@ -43,43 +47,146 @@ export class SkillsManager {
       skillsDir: config.skillsDir ?? './skills',
       autoLoad: config.autoLoad ?? [],
       injectToSystem: config.injectToSystem ?? true,
+      recursive: config.recursive ?? true,
+      watch: config.watch ?? false,
     };
   }
 
+  /** 获取配置 */
+  getConfig(): SkillsLoaderConfig {
+    return { ...this.config };
+  }
+
+  /** 获取 Skill 目录下的所有 .md 文件（支持递归） */
+  private findSkillFiles(dir: string): string[] {
+    const results: string[] = [];
+    if (!fs.existsSync(dir)) return results;
+
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory() && this.config.recursive) {
+          results.push(...this.findSkillFiles(fullPath));
+        } else if (entry.isFile() && entry.name.endsWith('.md')) {
+          results.push(fullPath);
+        }
+      }
+    } catch {
+      // 读取失败，返回空
+    }
+
+    return results;
+  }
+
+  /** 加载单个 Skill 文件 */
+  private loadSkillFile(filePath: string): void {
+    const name = path.basename(filePath, '.md');
+    const content = fs.readFileSync(filePath, 'utf-8');
+
+    const lines = content.split('\n');
+    const titleLine = lines.find(l => l.startsWith('# '));
+    const description = titleLine
+      ? titleLine.substring(2).trim()
+      : `Skill: ${name}`;
+
+    this.skills.set(name, {
+      name,
+      description,
+      content,
+      source: 'file',
+      filePath,
+    });
+  }
+
+  /** 移除已删除文件的 Skill */
+  private cleanupStaleSkills(knownFiles: Set<string>): void {
+    for (const [name, skill] of this.skills) {
+      if (skill.source === 'file' && skill.filePath && !knownFiles.has(skill.filePath)) {
+        this.skills.delete(name);
+      }
+    }
+  }
+
   /**
-   * 加载所有 Skill
+   * 加载所有 Skill（支持递归扫描）
    */
   async loadSkills(): Promise<void> {
     const skillsDir = this.config.skillsDir!;
 
-    // 检查目录是否存在
     if (!fs.existsSync(skillsDir)) {
       fs.mkdirSync(skillsDir, { recursive: true });
       return;
     }
 
-    // 读取目录中的所有 .md 文件
-    const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.md'));
+    const files = this.findSkillFiles(skillsDir);
+    const knownFiles = new Set(files);
 
-    for (const file of files) {
-      const filePath = path.join(skillsDir, file);
-      const name = path.basename(file, '.md');
-      const content = fs.readFileSync(filePath, 'utf-8');
+    for (const filePath of files) {
+      try {
+        this.loadSkillFile(filePath);
+      } catch {
+        // 单个文件加载失败，跳过
+      }
+    }
 
-      // 解析 Skill 内容（第一个 # 标题是描述）
-      const lines = content.split('\n');
-      const titleLine = lines.find(l => l.startsWith('# '));
-      const description = titleLine 
-        ? titleLine.substring(2).trim()
-        : `Skill: ${name}`;
+    // 清理已删除的 Skill
+    this.cleanupStaleSkills(knownFiles);
+  }
 
-      this.skills.set(name, {
-        name,
-        description,
-        content,
-        source: 'file',
-        filePath,
-      });
+  /**
+   * 启用文件监听（热加载）
+   * 当 skills 目录中的文件变化时自动重新加载
+   */
+  watchSkills(): void {
+    const skillsDir = path.resolve(this.config.skillsDir!);
+
+    if (!fs.existsSync(skillsDir)) {
+      fs.mkdirSync(skillsDir, { recursive: true });
+    }
+
+    try {
+      // 使用 fs.watch 监听目录变化
+      const watcher = fs.watch(
+        skillsDir,
+        { recursive: this.config.recursive },
+        (_eventType, filename) => {
+          if (!filename || !filename.endsWith('.md')) return;
+
+          const filePath = path.join(skillsDir, filename);
+
+          // 短暂延迟，等待文件写入完成
+          setTimeout(() => {
+            try {
+              if (fs.existsSync(filePath)) {
+                this.loadSkillFile(filePath);
+              } else {
+                // 文件被删除
+                const name = path.basename(filename, '.md');
+                this.skills.delete(name);
+              }
+            } catch {
+              // ignore
+            }
+          }, 200);
+        },
+      );
+
+      // 存储 watcher 引用以便后续清理
+      (this as Record<string, unknown>)._watcher = watcher;
+    } catch {
+      // 文件监听不可用，静默跳过
+    }
+  }
+
+  /** 停止文件监听 */
+  unwatchSkills(): void {
+    const watcher = (this as Record<string, unknown>)._watcher as
+      | fs.FSWatcher
+      | undefined;
+    if (watcher) {
+      watcher.close();
+      delete (this as Record<string, unknown>)._watcher;
     }
   }
 
@@ -146,7 +253,7 @@ export class SkillsManager {
 }
 
 /**
- * 创建 BeforeLlm Hook，注入 Skill 内容
+ * 创建 BeforeLlm Hook，将自动加载的 Skill 内容注入到 system prompt
  */
 function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
   return {
@@ -154,14 +261,14 @@ function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
     type: HookTypeEnum.BeforeLlm,
     priority: 100,
     run: async (ctx: HookContext): Promise<HookContext | null> => {
-      // 获取自动加载的 Skill 内容
       const skillContent = skillsManager.getAutoLoadedContent();
 
       if (skillContent) {
-        // 将 Skill 内容注入到上下文
-        // 注意：这里需要访问 ContextManager，但 Hook 没有直接访问权限
-        // 实际实现需要通过其他方式注入
-        console.log('[Skills Loader] Injecting skills into context');
+        const extended = ctx as HookContext & { system_prompt?: string };
+        const existingSystem = extended.system_prompt ?? '';
+        // 将 Skill 内容注入到 system prompt 前缀
+        extended.system_prompt =
+          `<!-- 自动加载的 Skills -->\n${skillContent}\n\n${existingSystem}`;
       }
 
       return ctx;
@@ -176,8 +283,9 @@ export const skillsLoaderPlugin: Plugin = {
   name: 'skills-loader',
   version: '0.1.0',
   description: 'Load and inject skills (Markdown documents) into agent context',
-  install(host: PluginHost) {
-    const skillsManager = new SkillsManager();
+  install(host: PluginHost, config?: unknown) {
+    const loaderConfig = (config as SkillsLoaderConfig) ?? {};
+    const skillsManager = new SkillsManager(loaderConfig);
 
     // 注册 Skill 管理工具
     host.registerTool({
@@ -244,51 +352,39 @@ export const skillsLoaderPlugin: Plugin = {
       },
     });
 
-    // 注册 BeforeLlm Hook
+    // 注册 BeforeLlm Hook（实际注入 Skill 内容到 system prompt）
     host.registerHook(createSkillInjectionHook(skillsManager));
 
     // 将 skillsManager 存储在 host 上，供其他组件使用
-    (host as any).__skillsManager = skillsManager;
+    (host as Record<string, unknown>).__skillsManager = skillsManager;
 
-    // 同步加载 Skill 文件（使用同步方法）
-    try {
-      const skillsDir = path.resolve('./skills');
-      console.log(`[Skills Loader] Looking for skills in: ${skillsDir}`);
-      
-      if (fs.existsSync(skillsDir)) {
-        const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.md'));
-        console.log(`[Skills Loader] Found ${files.length} skill files`);
-        
-        for (const file of files) {
-          const filePath = path.join(skillsDir, file);
-          const name = path.basename(file, '.md');
-          const content = fs.readFileSync(filePath, 'utf-8');
-          const lines = content.split('\n');
-          const titleLine = lines.find(l => l.startsWith('# '));
-          const description = titleLine 
-            ? titleLine.substring(2).trim()
-            : `Skill: ${name}`;
+    // 递归加载 Skill 文件
+    const skillsDir = path.resolve(loaderConfig.skillsDir ?? './skills');
+    console.log(`[Skills Loader] Looking for skills in: ${skillsDir}`);
 
-          skillsManager.registerSkill({
-            name,
-            description,
-            content,
-            source: 'file',
-            filePath,
-          });
-          
-          console.log(`[Skills Loader] Loaded skill: ${name}`);
+    if (fs.existsSync(skillsDir)) {
+      const files = skillsManager['findSkillFiles'](skillsDir);
+      console.log(`[Skills Loader] Found ${files.length} skill files (recursive)`);
+
+      for (const filePath of files) {
+        try {
+          skillsManager['loadSkillFile'](filePath);
+        } catch {
+          // skip
         }
-        
-        // 验证加载结果
-        const loadedSkills = skillsManager.listSkills();
-        console.log(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
-        console.log(`[Skills Loader] Skills: ${loadedSkills.map(s => s.name).join(', ')}`);
-      } else {
-        console.log(`[Skills Loader] Skills directory not found: ${skillsDir}`);
       }
-    } catch (err) {
-      console.error('[Skills Loader] Failed to load skills:', err);
+
+      const loadedSkills = skillsManager.listSkills();
+      console.log(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
+      console.log(`[Skills Loader] Skills: ${loadedSkills.map(s => s.name).join(', ')}`);
+    } else {
+      console.log(`[Skills Loader] Skills directory not found: ${skillsDir}`);
+    }
+
+    // 启用文件监听（热加载）
+    if (loaderConfig.watch) {
+      skillsManager.watchSkills();
+      console.log('[Skills Loader] File watching enabled');
     }
   },
 };
