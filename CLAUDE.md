@@ -50,6 +50,7 @@ AI 改 specs/guides/api 后自检：
 | 搭环境/写测试/构建/开发插件 | [docs/guides/](docs/guides/) |
 | 查 API 签名 | [docs/api/core.md](docs/api/core.md) |
 | 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
+| Commit/分支/Issue 命名规范 | [processes/conventions.md](processes/conventions.md) |
 | 查看当前任务 | [processes/task-assignment.md](processes/task-assignment.md) |
 | 避免旧错误 | [legacy/LESSONS.md](legacy/LESSONS.md) |
 | 人类贡献流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |

@@ -10,8 +10,7 @@
 
 ## 分支与提交
 
-- 从 `main` 切特性分支：`feat/<scope>-<short>`、`fix/<scope>-<short>`、`docs/<short>`。
-- 提交格式：`<type>(<scope>): <subject>`，type 用 feat/fix/docs/refactor/test/chore。
+- 分支与提交命名详见 [processes/conventions.md](processes/conventions.md)。
 - 一个分支一个关注点。
 
 ## 合并流程
