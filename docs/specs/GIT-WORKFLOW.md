@@ -20,7 +20,7 @@ docs/xxx      ──●                 纯文档分支
 | 规则 | 说明 |
 |------|------|
 | `main` 始终可部署 | 不允许 `main` 上有已知缺陷 |
-| 一个分支一个关注点 | 禁止一个 PR 混杂 feature + refactor + fix |
+| 一个分支一个关注点 | 禁止一个分支混杂 feature + refactor + fix |
 | 从 `main` 切分支 | 不从其他 feature 分支切 |
 | 合并前 rebase | 保持线性历史；解决冲突在 feature 分支上 |
 | 禁止 force push main | 永远禁止 |
@@ -129,13 +129,12 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 
 ---
 
-## 五、Pull Request 规范
+## 五、合并审查规范
 
-- PR 标题遵循 Commit 规范格式
-- PR 描述包含：变更说明、变更类型、关联 Issue
-- 必须填写 PR 模板检查清单全部项
-- 至少一名审阅者 approve（可以是 AI Agent 审查）
-- CI 全绿后方可 merge
+- 分支推送后通知李瑞审查
+- 审查对照 AI Agent 检查清单（CLAUDE.md §9.1）+ 安全检查（§2.3）
+- CI（lint/typecheck/test/build）四灯全绿后方可合并
+- 李瑞执行合并 → 删除远程分支
 
 ---
 
@@ -143,8 +142,8 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 
 | 模式 | 说明 | 为什么错 |
 |------|------|----------|
-| "先合后改" | 合并有已知问题的代码，承诺 follow-up PR | follow-up 永不来，main 积累债务 |
-| "太大了审查不了" | 一个 PR 几千行，审阅者放弃 | 拆成多个小 PR，逐一审查 |
+| "先合后改" | 合并有已知问题的代码，承诺 follow-up 分支 | follow-up 永不来，main 积累债务 |
+| "太大了审查不了" | 一个分支几千行，审查者放弃 | 拆成多个小分支，逐一审查 |
 | "就改一行" | 跳过 CI/审查，直接推 main | 一行也可能 break everything |
 | "CI 红了但我知道为什么" | 忽略 CI 失败，强行合并 | CI 反映的状态才是真相 |
 | "晚上合，没人看到" | 利用时差逃避审查 | lint 和 test 24/7 在线 |
@@ -158,8 +157,8 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 开发：正常 commit + push
 同步：git rebase main（解决冲突）
 推送：git push --force-with-lease（rebase 后）
-提 PR：GitHub PR + 填写检查清单
-审查：AI Agent 执行架构检查 + 人工 / AI review
-合并：通过所有门禁后 merge
-清理：删除远程 feature 分支
+通知：告诉李瑞分支已就绪
+审查：AI Agent 架构检查 + 李瑞最终审查
+合并：通过所有门禁后李瑞执行 merge
+清理：李瑞删除远程 feature 分支
 ```
