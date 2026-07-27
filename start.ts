@@ -21,11 +21,18 @@ import * as readline from 'readline';
 import { metaToolsPlugin } from './plugins/meta-tools/src/index';
 import { skillsLoaderPlugin } from './plugins/skills-loader/src/index';
 
+// 从环境变量读取 API Key
+const apiKey = process.env.VESSEL_API_KEY;
+if (!apiKey) {
+  console.error('错误：请设置 VESSEL_API_KEY 环境变量');
+  process.exit(1);
+}
+
 // 创建真实 Provider（OpenAI 兼容格式）
 const provider = new OpenAICompatibleProvider({
-  api_key: 'tp-cfn2ag2rg1b7q2sbl02wncyp50vu7noqogfbvx6ftiogxso4',
-  base_url: 'https://token-plan-cn.xiaomimimo.com/v1',
-  model: 'mimo-v2.5-pro',
+  api_key: apiKey,
+  base_url: process.env.VESSEL_BASE_URL || 'https://api.openai.com/v1',
+  model: process.env.VESSEL_MODEL || 'gpt-4',
 });
 
 // 创建工具注册表
