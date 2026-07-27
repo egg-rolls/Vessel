@@ -22,7 +22,7 @@
 6. [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) - 术语
 7. [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) - 插件 backlog 目录
 8. [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) - Git 协作与合并门禁
-9. [processes/development-workflow.md](processes/development-workflow.md) - 标准开发流程
+9. [processes/collaboration.md](processes/collaboration.md) - 协作契约
 10. [processes/task-assignment.md](processes/task-assignment.md) - 当前任务分工
 11. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
 12. 相关 `packages/` 源码与测试

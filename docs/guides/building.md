@@ -36,8 +36,6 @@ push/PR → Install → Lint → Typecheck → Test → Build
 
 ## 版本发布（pre-MVP 暂不启用）
 
-发布流程见 [processes/release-process.md](../../processes/release-process.md)。
-
 当前 pre-MVP 阶段：
 ```bash
 # 暂无正式发布
