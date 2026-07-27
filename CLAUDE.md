@@ -95,7 +95,7 @@
 
 ## 9. 合并审查规则（Git 门禁）
 
-合并任何分支到 `main` 前，必须执行以下检查并输出结论。**核心原则：合并前验证，不合并后修复。** 详见 [docs/dev/git-workflow.md](docs/dev/git-workflow.md)。
+合并任何分支到 `main` 前，必须执行以下检查并输出结论。**核心原则：合并前验证，不合并后修复。** 详见 [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)。
 
 ### 9.1 架构规范检查（对照全部 specs 文档）
 

@@ -20,7 +20,7 @@
 2. CI（lint+typecheck+test+build）须全绿；四项为 required check（ADR-014）。
 3. 改 core 必须先有 ADR（ADR-012）；新增能力按 [CLAUDE.md §5](CLAUDE.md) 决策树分类。
 4. 至少一名审阅者 approve（可以是 AI Agent 架构审查）。
-5. **合并门禁**：见 [docs/dev/git-workflow.md](docs/dev/git-workflow.md) —— AI Agent 合并前必须对照全部 `docs/specs/` 文档逐条检查架构合规性；禁止合并后修复。"
+5. **合并门禁**：见 [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) —— AI Agent 合并前必须对照全部 `docs/specs/` 文档逐条检查架构合规性；禁止合并后修复。"
 
 ## 工程规范
 
