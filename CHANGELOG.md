@@ -12,7 +12,7 @@
 - 完整单元测试套件（8 文件）
 
 ### Known Issues
-- 10 个已知问题，详见 [docs/dev/phase-1-review.md](docs/dev/phase-1-review.md)
+- 10 个已知问题，详见 [docs/dev/reviews/phase-1-review.md](docs/dev/reviews/phase-1-review.md)
 
 ---
 
