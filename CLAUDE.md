@@ -12,22 +12,51 @@
 - **状态**：pre-MVP。标注 `[plan]` 的为待实现。
 - **大目标**：自组织、极轻便、极强扩展性、厂商中立。无基础用户填 Key 即跑；Agent 自己长大。
 
-## 2. 阅读顺序（动手前）
+## 2. 文档加载策略
 
-1. [README.md](README.md)
-2. [docs/specs/PRD.md](docs/specs/PRD.md) - 做什么 / 为谁
-3. [docs/specs/SPEC.md](docs/specs/SPEC.md) - 怎么建 / 接口契约
-4. [docs/specs/ADR.md](docs/specs/ADR.md) - 为什么这么决策（勿轻易推翻）
-5. [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md) - 分期路线图
-6. [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md) - 文档书写规范（AI 必读）
-7. [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) - 术语
-8. [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) - 插件 backlog 目录
-9. [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) - Git 协作与合并门禁
-10. [processes/collaboration.md](processes/collaboration.md) - 协作契约
-11. [processes/task-assignment.md](processes/task-assignment.md) - 当前任务分工
-12. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
-13. 相关 `packages/` 源码与测试
-14. [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献流程 / PR / commit 规范（人类贡献者入口）
+### 宪法级（每次编码前必读）
+
+这三个文件是仓库的宪法。**不清楚其中内容 = 写出的代码大概率违规**。
+
+| 必读 | 为什么 |
+|------|--------|
+| [docs/specs/SPEC.md](docs/specs/SPEC.md) | 接口契约——不知道接口签名写不了代码 |
+| [docs/specs/ADR.md](docs/specs/ADR.md) | 架构决策——不知道历史决策会重蹈覆辙 |
+| [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md) | 文档规范——核心规则见下方摘要 |
+
+### DOC-STANDARD 核心规则（嵌入，不必跳转）
+
+```
+docs/specs/  guides/  api/  → 永久文档，禁止出现：
+  "pre-MVP" "当前" "目前" "现在" "暂不" "延后" "Phase N 实现时"
+  → 只描述设计是什么，不描述做到哪了
+  → 状态/进度/审查信息放 docs/dev/
+
+docs/dev/ → 临时产物，无限制
+
+AI 改 specs/guides/api 后自检：
+  grep -rn "当前|目前|现在|暂不|延后|pre-MVP|MVP 范围" docs/specs/ docs/guides/ docs/api/
+  命中即违规
+```
+
+### 按需加载
+
+| 场景 | 文档 |
+|------|------|
+| 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
+| 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
+| 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)（核心规则已在 §9） |
+| 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
+| 搭环境/写测试/构建/开发插件 | [docs/guides/](docs/guides/) |
+| 查 API 签名 | [docs/api/core.md](docs/api/core.md) |
+| 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
+| 查看当前任务 | [processes/task-assignment.md](processes/task-assignment.md) |
+| 避免旧错误 | [legacy/LESSONS.md](legacy/LESSONS.md) |
+| 人类贡献流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+### 入口概览
+
+[README.md](README.md) — 项目门面，给人类看的第一眼。
 
 ## 3. 项目事实（随实现更新）
 
@@ -90,6 +119,7 @@
 - 不吹 MCP/RAG/evals/workflow 等未实现能力。
 - 代码与文档不一致时，改其一，不留矛盾。
 - 不从记忆回答能查代码的问题；先查 `packages/`。
+- **修改 `docs/specs/`、`docs/guides/`、`docs/api/` 后必须执行 §2 中的自检 grep，命中禁用词立即修正。**
 
 ## 8. 任务响应规则
 
