@@ -181,3 +181,42 @@ export class CLI_REPL {
     };
   }
 }
+
+/**
+ * startRepl — 交互式 REPL 入口（emma 实现）
+ *
+ * 契约（与 egg-rolls 的接缝）：
+ * 壳（cli.ts）构造 ReplContext → 调 startRepl(ctx) → 阻塞至 /exit。
+ * REPL 从 ctx 拿 runtime/session/events/tools，实现所有交互。
+ *
+ * emma 负责：
+ * - readline/Ink REPL 循环 + 历史 + 行编辑 + 多行
+ * - CC 风格 slash 命令（/ 弹菜单 + 模糊过滤 + autocomplete）
+ * - StreamRenderer 订阅 ctx.events（token-by-token + 工具卡片 + spinner）
+ * - 首启向导 UX 打磨、工具权限弹窗 UI
+ * - 状态栏（banner / provider / model / session / plugins）
+ * - 保留 Hermes /resume 的 pending one-shot 模式
+ * - /help、/sessions、/new、/history、/clear、/setup、/exit
+ *
+ * egg-rolls 负责（壳，不在此函数内）：
+ * - CLI arg 解析、config 加载、provider 构造
+ * - runtime 组件（tools/context/events/session）构造 + 插件加载
+ * - 构造 ReplContext → 调本函数
+ * - Headless --run 路径（不经过本函数）
+ * - 工具权限 guardrail 注册（ToolPermissionChecker，弹窗 UI 由 emma 做）
+ *
+ * 调用示例（壳）：
+ *   const ctx = { runtime, tools, session, events,
+ *     currentSessionId,
+ *     onSessionChange: (id) => { currentSessionId = id; },
+ *     provider: { name, model, baseUrl },
+ *     plugins: plugins.map(p => p.name),
+ *     config, newSessionId,
+ *     onExit: () => { runtime.dispose(); process.exit(0); },
+ *   };
+ *   await startRepl(ctx);
+ */
+export async function startRepl(_ctx: import('../repl-context.js').ReplContext): Promise<void> {
+  // TODO: emma 实现 REPL 循环
+  throw new Error('startRepl: not implemented — emma owns this function');
+}

@@ -9,6 +9,9 @@
 export { CLI_REPL } from './repl/repl.js';
 export type { REPLConfig, REPLState } from './repl/repl.js';
 
+export { startRepl } from './repl/repl.js';
+export type { ReplContext } from './repl-context.js';
+
 export { CommandRegistry, createDefaultCommands } from './commands/commands.js';
 export type {
   CommandHandler,

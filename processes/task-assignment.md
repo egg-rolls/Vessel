@@ -24,8 +24,11 @@
 
 - **原则**:egg-rolls 负责核心模块与功能;emma 负责边缘体验与优化。对应 CLAUDE.md 三层分层与 ADR-002。
 - **接缝(两人必须先约定)**:把 `src/cli.ts` 拆成"壳"+"REPL"。壳归 egg-rolls(构造 runtime → 加载插件 → 分发);REPL/渲染归 emma。
-- **契约**:`src/cli.ts`(egg-rolls)构造 `ctx = { runtime, tools, session, events, config, currentSessionId }` → 调 `startRepl(ctx)`(emma 在 `@vessel/tui` 实现)。`startRepl` 签名与 `ctx` 类型由 emma 定义,egg-rolls 认可。
-- **事件 payload**:egg-rolls 在 core 发,emma 渲染。流式若需新增事件类型,是协调点(见 egg-rolls 任务 3)。
+- **契约(已草案)**:`ReplContext` 类型见 `packages/tui/src/repl-context.ts`；`startRepl(ctx)` 签名见 `packages/tui/src/repl/repl.ts` 底部。
+  壳调用：`import { startRepl } from '@vessel/tui'; await startRepl(ctx);`
+  ctx 含：`runtime, tools, session, events, currentSessionId, onSessionChange, provider{name,model,baseUrl}, plugins[], config, newSessionId, onExit`
+  壳持有 `currentSessionId`（可变），通过 `onSessionChange` 回调感知 REPL 切换会话。
+- **事件 payload**:egg-rolls 在 core 发,emma 渲染。LlmStreamChunk 事件已就绪(ADR-016)。
 
 ## 四、egg-rolls — 核心模块与功能
 
@@ -38,7 +41,7 @@
 
 ### 任务
 
-- [ ] 0. **拆接缝(与 emma 协作,前置)** -- `src/cli.ts` 的 `startChat`/`runInteractive`/slash 处理迁出到 `@vessel/tui`,壳改为调 `startRepl(ctx)`。先定 `ctx` 契约再动。
+- [ ] 0. **拆接缝(与 emma 协作,前置)** 🚧 -- 契约已草案(`packages/tui/src/repl-context.ts` + `repl.ts` 底部 `startRepl` 占位),待 emma 确认。确认后: egg-rolls 改壳→调 `startRepl(ctx)`,emma 实现 REPL 循环。
 - [ ] 1. **插件加载机制** -- `vessel.yaml` 的 `plugins: [...]` → 动态加载插件包 → 注入 runtime。把 file-ops / mcp-client / memory(project+auto) / security 接进来。当前 `src/cli.ts` 硬编码 `[metaToolsPlugin, skillsLoaderPlugin]`。
 - [ ] 2. **Provider 注册制** -- 接 `plugins/provider/*` 的 `registerProvider`,按 `config.provider.name` 选 provider。当前 `src/cli.ts` 硬编码 `OpenAICompatibleProvider`。顺带消掉 `Unknown provider "custom"` 警告(validator.ts:45,custom 不该是 warning)。
 - [x] 3. **流式核心(解锁 emma 的流式渲染)** ✅ -- `providers.ts` 三个 Provider(Memory/OpenAI/Anthropic)实现 `on_chunk` 回调流式;`ChatRequest` 增 `stream`+`on_chunk` 字段(向后兼容);新增 `EventType.LlmStreamChunk` + `LlmStreamChunkPayload`;runtime 接线发布增量事件;ADR-016 记录。Files: `packages/core/src/provider/providers.ts`、`types/provider.ts`、`types/event.ts`、`runtime/agent-runtime.ts`。
