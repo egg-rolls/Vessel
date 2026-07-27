@@ -131,10 +131,10 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 
 ## 五、合并审查规范
 
-- 分支推送后通知李瑞审查
+- 分支推送后通知egg-rolls审查
 - 审查对照 AI Agent 检查清单（CLAUDE.md §9.1）+ 安全检查（§2.3）
 - CI（lint/typecheck/test/build）四灯全绿后方可合并
-- 李瑞执行合并 → 删除远程分支
+- egg-rolls执行合并 → 删除远程分支
 
 ---
 
@@ -157,8 +157,8 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 开发：正常 commit + push
 同步：git rebase main（解决冲突）
 推送：git push --force-with-lease（rebase 后）
-通知：告诉李瑞分支已就绪
-审查：AI Agent 架构检查 + 李瑞最终审查
-合并：通过所有门禁后李瑞执行 merge
-清理：李瑞删除远程 feature 分支
+通知：告诉egg-rolls分支已就绪
+审查：AI Agent 架构检查 + egg-rolls最终审查
+合并：通过所有门禁后egg-rolls执行 merge
+清理：egg-rolls删除远程 feature 分支
 ```

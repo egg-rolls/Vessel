@@ -29,7 +29,7 @@ bun run format         # Biome format --write
 CI（`.github/workflows/ci.yml`）自动运行：
 
 ```
-push/PR → Install → Lint → Typecheck → Test → Build
+push → Install → Lint → Typecheck → Test → Build
 ```
 
 四项全部通过才算 CI 绿。
