@@ -1,0 +1,77 @@
+# 任务分工
+
+> 当前分工与任务清单。状态/进度信息允许在本文件(`processes/*`);永久文档(`docs/specs|guides|api`)不允许。
+> 协作流程见 [collaboration.md](collaboration.md);命名见 [conventions.md](conventions.md)。
+> 进度依据代码实际状态,非 ROADMAP 标注。任务完成请勾选并按 conventions 提交。
+
+## 一、当前进度
+
+| Phase | 状态 | 证据 |
+|-------|------|------|
+| 0 脚手架 | ✅ 完成 | monorepo;CI 四件套全绿(lint/typecheck/test/build);单二进制可出 |
+| 1 MVP-core | ✅ 基本完成 | runtime loop / provider / context+auto-compact / session(memory+file+sqlite) / EventStream 枚举 / limits / guardrail+hook 接口 / PluginHost;67 测试过 |
+| 1 MVP-tui | ⚠️ 组件都有但**没接进入口** | `src/cli.ts` 只用了 `rich-renderer` + `setup-wizard`;`CLI_REPL`/`CommandRegistry`/`StreamRenderer`/`ToolPermissionChecker` 全闲置 |
+| 2 增强 | 🚧 插件真实但**没接进 runtime** | mcp-client(真 JSON-RPC)、memory/project+auto(真持久化)、skills-loader 都实现了,但 `src/cli.ts` 只硬编码加载 metaTools + skills-loader |
+
+## 二、关键发现(决定分工)
+
+1. **`@vessel/tui` 大半是孤岛** -- `src/cli.ts` 自带一套内联 REPL + slash 命令,没用 tui 包的 `CLI_REPL`/`CommandRegistry`/`StreamRenderer`/`ToolPermissionChecker`。
+2. **绝大多数插件没加载** -- `src/cli.ts` 硬编码 `const plugins: Plugin[] = [metaToolsPlugin, skillsLoaderPlugin]`。file-ops / mcp-client / memory×2 / provider×6 / security×3 / observability 全在仓库里但没进 runtime。
+3. **CLI 不流式** -- `runtime.run()` 一次性返回后整段打印;`StreamRenderer` 闲置;`OpenAICompatibleProvider` 硬编码 `stream: false`。
+4. **两套 slash 命令并存** -- `src/cli.ts` 内联的 Hermes 风格(`/resume` 带 pending one-shot)与 `commands.ts` 的层次式(`/session list`),互不相同,也都不是 CC 风格。
+
+## 三、分工原则与接缝
+
+- **原则**:egg-rolls 负责核心模块与功能;emma 负责边缘体验与优化。对应 CLAUDE.md 三层分层与 ADR-002。
+- **接缝(两人必须先约定)**:把 `src/cli.ts` 拆成"壳"+"REPL"。壳归 egg-rolls(构造 runtime → 加载插件 → 分发);REPL/渲染归 emma。
+- **契约**:`src/cli.ts`(egg-rolls)构造 `ctx = { runtime, tools, session, events, config, currentSessionId }` → 调 `startRepl(ctx)`(emma 在 `@vessel/tui` 实现)。`startRepl` 签名与 `ctx` 类型由 emma 定义,egg-rolls 认可。
+- **事件 payload**:egg-rolls 在 core 发,emma 渲染。流式若需新增事件类型,是协调点(见 egg-rolls 任务 3)。
+
+## 四、egg-rolls — 核心模块与功能
+
+### owns
+
+- `packages/core/src/**`(runtime / provider / context / session / events / tools / limits / plugin-host / types)
+- `packages/config/src/**`(loader / validator / types / defaults)
+- `plugins/**`(所有插件的 install/handler/hook/guardrail 逻辑)
+- `src/cli.ts` 的**壳**:config 加载 → 构造 runtime → 加载插件 → headless 入口 → 交 tui
+
+### 任务
+
+- [ ] 0. **拆接缝(与 emma 协作,前置)** -- `src/cli.ts` 的 `startChat`/`runInteractive`/slash 处理迁出到 `@vessel/tui`,壳改为调 `startRepl(ctx)`。先定 `ctx` 契约再动。
+- [ ] 1. **插件加载机制** -- `vessel.yaml` 的 `plugins: [...]` → 动态加载插件包 → 注入 runtime。把 file-ops / mcp-client / memory(project+auto) / security 接进来。当前 `src/cli.ts` 硬编码 `[metaToolsPlugin, skillsLoaderPlugin]`。
+- [ ] 2. **Provider 注册制** -- 接 `plugins/provider/*` 的 `registerProvider`,按 `config.provider.name` 选 provider。当前 `src/cli.ts` 硬编码 `OpenAICompatibleProvider`。顺带消掉 `Unknown provider "custom"` 警告(validator.ts:45,custom 不该是 warning)。
+- [ ] 3. **流式核心(解锁 emma 的流式渲染)** -- `providers.ts` 改 `stream: true` + SSE 解析 + 增量发事件。ADR-007 流式=事件订阅;若加 `LlmStreamChunk` 事件类型(ADR-012 允许扩 EventType),留 ADR 记录。Files: `packages/core/src/provider/providers.ts`、`types/event.ts`、`runtime/agent-runtime.ts`。
+- [ ] 4. **工具权限 guardrail 注册** -- `tool-confirm.ts` 的 `createPermissionGuardrail` 注册为 `ToolCall` guardrail,`autoApprove` 走 config。弹窗 UI 由 emma 做。
+- [ ] 5. **core 测试加固** -- 维护既有 67 测试;补流式/插件加载/provider 注册的回归测试。
+
+## 五、emma — 边缘体验与优化
+
+### owns
+
+- `packages/tui/src/**`(repl / commands / renderer / tool-confirm 的 UI / wizard / rich-renderer / index)
+- `src/cli.ts` 的 REPL/渲染部分(迁出到 tui)
+
+### 任务
+
+- [ ] 0. **拆接缝(与 egg-rolls 协作,前置)** -- 实现 `startRepl(ctx)` 入口,接管 `src/cli.ts` 内联 REPL。
+- [ ] 1. **CC 风格 slash 命令** -- 合并两套(cli.ts Hermes 风 + `commands.ts` 层次式)成一套:`/` 弹菜单 + 模糊过滤 + 描述 + autocomplete + `/help` 富列表。**保留** Hermes `/resume` 的 pending one-shot(照搬 Hermes,egg-rolls 要求)。先选交互方案(Ink / `@inquirer/prompts` / 手搓 raw-mode)→ 写 ADR。
+- [ ] 2. **REPL 重建** -- readline/Ink + 历史 + 行编辑 + 多行。现有 `CLI_REPL` 用 `stdin.once('data')` 且访问 runtime 私有字段 `_events`/`_tools` -- **当草图看,重建**,别直接接。
+- [ ] 3. **流式渲染** -- 订阅 EventStream,token-by-token + 工具调用卡片 + spinner,替掉 "Thinking..." + 整段打印。**依赖 egg-rolls 任务 3**。
+- [ ] 4. **富渲染打磨** -- banner / status bar / session 表(`buildSessionTable` 已导出未用)/ 颜色 / markdown 渲染响应。`rich-renderer.ts`。
+- [ ] 5. **首启向导 UX 打磨** -- `setup-wizard.ts`(已能用,优化体验)。
+- [ ] 6. **工具权限弹窗 UI** -- `tool-confirm.ts` 的 `confirm()` 显示(配合 egg-rolls 任务 4 的 guardrail 注册)。
+
+## 六、依赖顺序
+
+```
+0. 拆接缝(cli.ts REPL → tui)          ← 前置,否则两人共改 cli.ts 冲突
+1. egg-rolls 流式核心  →  解锁 emma 流式渲染
+2. egg-rolls provider 注册制  →  emma 的 /model 类命令才有意义
+3. 插件加载 + 权限 guardrail  →  可并行
+```
+
+## 七、备注
+
+- 最大杠杆:**流式 + CC 式 slash + 插件接通** -- 这三件做完,Vessel 从"能跑"变"好用",也是两人分工的交汇点。
+- 本文件是活文档,任务完成勾选;新增任务追加到对应负责人段。分工变更需两人确认。
