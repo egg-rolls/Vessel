@@ -3,7 +3,7 @@
  * @module @vessel/core/events
  */
 
-import type { EventHandler, RunEvent, Unsubscribe } from '../types/event.js';
+import type { EventHandler, EventStream, RunEvent, Unsubscribe } from '../types/event.js';
 
 /**
  * 内存事件流实现
@@ -14,7 +14,7 @@ export class MemoryEventStream implements EventStream {
   private history: RunEvent[] = [];
   private maxHistorySize: number;
 
-  constructor(maxHistorySize: number = 1000) {
+  constructor(maxHistorySize = 1000) {
     this.maxHistorySize = maxHistorySize;
   }
 
@@ -37,7 +37,7 @@ export class MemoryEventStream implements EventStream {
   publish(event: RunEvent): void {
     // 保存到历史
     this.history.push(event);
-    
+
     // 限制历史大小
     if (this.history.length > this.maxHistorySize) {
       this.history = this.history.slice(-this.maxHistorySize);

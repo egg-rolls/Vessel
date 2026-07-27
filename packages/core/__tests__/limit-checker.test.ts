@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryLimitChecker } from '../src/limits/limit-checker';
-import type { UsageLimits, UsageStats, TerminationPolicy } from '../src/types/limits';
+import type { TerminationPolicy, UsageLimits, UsageStats } from '../src/types/limits';
 
 describe('MemoryLimitChecker', () => {
   let checker: MemoryLimitChecker;

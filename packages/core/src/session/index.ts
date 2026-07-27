@@ -3,5 +3,10 @@
  * @module @vessel/core/session
  */
 
-export { MemorySessionBackend, FileSessionBackend } from './session-backend.js';
-export type { RunState, SessionBackend } from './session-backend.js';
+export {
+  MemorySessionBackend,
+  FileSessionBackend,
+  deriveSessionMeta,
+  toSessionInfo,
+} from './session-backend.js';
+export type { RunState, SessionBackend, SessionInfo } from '../types/session.js';

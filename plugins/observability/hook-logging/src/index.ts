@@ -5,7 +5,7 @@
  * 记录 Agent 运行过程中的所有操作日志
  */
 
-import type { Plugin, PluginHost, Hook, HookContext } from '@vessel/core';
+import type { Hook, HookContext, Plugin, PluginHost } from '@vessel/core';
 import { HookType } from '@vessel/core';
 
 /** 日志级别 */
@@ -64,7 +64,7 @@ export class LoggingHook implements Hook {
   async run(ctx: HookContext): Promise<HookContext | null> {
     const entry: LogEntry = {
       level: 'info',
-      message: `LLM request initiated`,
+      message: 'LLM request initiated',
       timestamp: new Date(),
       run_id: ctx.run_id,
       session_id: ctx.session_id,
@@ -147,7 +147,7 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           run_id: ctx.run_id,
           session_id: ctx.session_id,
         };
-        hook['log'](entry);
+        hook.log(entry);
         return ctx;
       },
     },
@@ -163,7 +163,7 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           run_id: ctx.run_id,
           session_id: ctx.session_id,
         };
-        hook['log'](entry);
+        hook.log(entry);
         return ctx;
       },
     },
@@ -179,7 +179,7 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           run_id: ctx.run_id,
           session_id: ctx.session_id,
         };
-        hook['log'](entry);
+        hook.log(entry);
         return ctx;
       },
     },
@@ -195,7 +195,7 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           run_id: ctx.run_id,
           session_id: ctx.session_id,
         };
-        hook['log'](entry);
+        hook.log(entry);
         return ctx;
       },
     },
@@ -211,7 +211,7 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           run_id: ctx.run_id,
           session_id: ctx.session_id,
         };
-        hook['log'](entry);
+        hook.log(entry);
         return ctx;
       },
     },

@@ -3,9 +3,9 @@
  * @module @vessel/tui
  */
 
-import type { AgentRuntime } from '@vessel/core';
-import type { RunEvent } from '@vessel/core';
+import type { AgentRuntime, EventStream, RunEvent, ToolRegistry } from '@vessel/core';
 import { EventType } from '@vessel/core';
+import type { CommandRegistry } from '../commands/commands.js';
 
 /** REPL 配置 */
 export interface REPLConfig {
@@ -28,12 +28,15 @@ export class CLI_REPL {
   private runtime: AgentRuntime;
   private config: REPLConfig;
   private state: REPLState;
+  private commands: CommandRegistry;
 
-  constructor(runtime: AgentRuntime, config: REPLConfig = {}) {
+  constructor(runtime: AgentRuntime, commands: CommandRegistry, config: REPLConfig = {}) {
     this.runtime = runtime;
+    this.commands = commands;
     this.config = {
       prompt: config.prompt ?? 'vessel> ',
-      welcomeMessage: config.welcomeMessage ?? 'Welcome to Vessel! Type your message or /help for commands.',
+      welcomeMessage:
+        config.welcomeMessage ?? 'Welcome to Vessel! Type your message or /help for commands.',
       exitCommands: config.exitCommands ?? ['/exit', '/quit', 'exit', 'quit'],
     };
     this.state = {
@@ -50,7 +53,6 @@ export class CLI_REPL {
     this.state.running = true;
     console.log(this.config.welcomeMessage);
 
-    // 订阅事件流以显示进度
     const { events } = this.getRuntimeComponents();
     const unsubscribe = events.subscribe((event: RunEvent) => {
       this.handleEvent(event);
@@ -59,7 +61,7 @@ export class CLI_REPL {
     try {
       while (this.state.running) {
         const input = await this.prompt();
-        
+
         if (!input.trim()) {
           continue;
         }
@@ -71,9 +73,12 @@ export class CLI_REPL {
           break;
         }
 
-        // 检查斜杠命令
+        // 斜杠命令 → 委托给 CommandRegistry
         if (input.startsWith('/')) {
-          await this.handleCommand(input);
+          const handled = await this.commands.execute(input);
+          if (!handled) {
+            console.log('Unknown command. Type /help for available commands.');
+          }
           continue;
         }
 
@@ -97,7 +102,7 @@ export class CLI_REPL {
    */
   private async prompt(): Promise<string> {
     process.stdout.write(this.config.prompt ?? 'vessel> ');
-    
+
     return new Promise((resolve) => {
       process.stdin.setEncoding('utf-8');
       process.stdin.once('data', (data: string) => {
@@ -118,89 +123,6 @@ export class CLI_REPL {
       console.log(`\n${response}\n`);
     } catch (error) {
       console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  /**
-   * 处理斜杠命令
-   */
-  private async handleCommand(command: string): Promise<void> {
-    const [cmd, ...args] = command.split(' ');
-
-    switch (cmd) {
-      case '/help':
-        this.showHelp();
-        break;
-      case '/tools':
-        this.showTools();
-        break;
-      case '/session':
-        this.showSession();
-        break;
-      case '/clear':
-        console.clear();
-        break;
-      case '/history':
-        this.showHistory();
-        break;
-      default:
-        console.log(`Unknown command: ${cmd}. Type /help for available commands.`);
-    }
-  }
-
-  /**
-   * 显示帮助信息
-   */
-  private showHelp(): void {
-    console.log(`
-Available commands:
-  /help     - Show this help message
-  /tools    - List available tools
-  /session  - Show session information
-  /clear    - Clear the screen
-  /history  - Show command history
-  /exit     - Exit the REPL
-    `);
-  }
-
-  /**
-   * 显示可用工具
-   */
-  private showTools(): void {
-    const { tools } = this.getRuntimeComponents();
-    const toolList = tools.list();
-    
-    if (toolList.length === 0) {
-      console.log('No tools available.');
-      return;
-    }
-
-    console.log('Available tools:');
-    for (const tool of toolList) {
-      console.log(`  - ${tool.name}: ${tool.description}`);
-    }
-  }
-
-  /**
-   * 显示会话信息
-   */
-  private showSession(): void {
-    console.log(`Session ID: ${this.state.sessionId}`);
-    console.log(`History length: ${this.state.history.length}`);
-  }
-
-  /**
-   * 显示历史记录
-   */
-  private showHistory(): void {
-    if (this.state.history.length === 0) {
-      console.log('No history yet.');
-      return;
-    }
-
-    console.log('History:');
-    for (const [index, entry] of this.state.history.entries()) {
-      console.log(`  ${index + 1}. ${entry}`);
     }
   }
 
@@ -230,24 +152,32 @@ Available commands:
   /**
    * 获取运行时组件
    */
-  private getRuntimeComponents(): { events: import('@vessel/core').EventStream; tools: import('@vessel/core').ToolRegistry } {
-    // 这里需要从 runtime 中获取 events 和 tools
-    // 由于 AgentRuntime 没有暴露这些，我们需要修改实现
-    // 暂时返回模拟对象
+  private getRuntimeComponents(): {
+    events: EventStream;
+    tools: ToolRegistry;
+  } {
+    const rt = this.runtime as AgentRuntime & {
+      _events?: EventStream;
+      _tools?: ToolRegistry;
+    };
     return {
-      events: {
-        subscribe: () => () => {},
-        publish: () => {},
-        clear: () => {},
-      },
-      tools: {
-        register: () => {},
-        invoke: async () => '',
-        schemas: () => [],
-        get: () => undefined,
-        has: () => false,
-        list: () => [],
-      },
+      events:
+        rt._events ??
+        ({
+          subscribe: () => () => {},
+          publish: () => {},
+          clear: () => {},
+        } as unknown as EventStream),
+      tools:
+        rt._tools ??
+        ({
+          register: () => {},
+          invoke: async () => '',
+          schemas: () => [],
+          get: () => undefined,
+          has: () => false,
+          list: () => [],
+        } as unknown as ToolRegistry),
     };
   }
 }

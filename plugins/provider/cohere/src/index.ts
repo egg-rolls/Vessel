@@ -5,7 +5,14 @@
  * 支持 Cohere API。
  */
 
-import type { Plugin, PluginHost, LLMProvider, ChatRequest, LLMResponse, ToolCall } from '@vessel/core';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Plugin,
+  PluginHost,
+  ToolCall,
+} from '@vessel/core';
 
 export interface CohereProviderConfig {
   api_key: string;
@@ -45,20 +52,18 @@ export class CohereProvider implements LLMProvider {
         name: t.function.name,
         description: t.function.description,
         parameter_definitions: Object.entries(
-          (t.function.parameters as { properties?: Record<string, unknown> })
-            ?.properties ?? {}
-        ).reduce(
-          (acc, [key, val]) => ({
-            ...acc,
-            [key]: {
+          (t.function.parameters as { properties?: Record<string, unknown> })?.properties ?? {},
+        ).reduce<Record<string, { description: string; type: string; required: boolean }>>(
+          (acc, [key, val]) => {
+            acc[key] = {
               description: (val as Record<string, unknown>)?.description ?? '',
               type: (val as Record<string, unknown>)?.type ?? 'string',
               required: (
-                (t.function.parameters as { required?: string[] })
-                  ?.required ?? []
+                (t.function.parameters as { required?: string[] })?.required ?? []
               ).includes(key),
-            },
-          }),
+            };
+            return acc;
+          },
           {},
         ),
       })),
@@ -70,7 +75,7 @@ export class CohereProvider implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
     });
@@ -108,8 +113,7 @@ export class CohereProvider implements LLMProvider {
             prompt_tokens: data.meta.tokens.input_tokens ?? 0,
             completion_tokens: data.meta.tokens.output_tokens ?? 0,
             total_tokens:
-              (data.meta.tokens.input_tokens ?? 0) +
-              (data.meta.tokens.output_tokens ?? 0),
+              (data.meta.tokens.input_tokens ?? 0) + (data.meta.tokens.output_tokens ?? 0),
           }
         : undefined,
     };

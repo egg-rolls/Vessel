@@ -42,7 +42,7 @@ Core 的 9 个接口全部服务于**维护语言空间**——不关心空间�
 | 接口 | 语言空间中的角色 |
 |------|----------------|
 | `LLMProvider` | 进出语言空间的大脑 |
-| `ContextManager` | 语言空间当前的内容 |
+| `ContextManager` | 语言空间的活跃内容 |
 | `ToolRegistry` | 适配器注册目录 |
 | `EventStream` | 语言空间的运行轨迹（trace/replay/TUI 共用） |
 | `Guardrail`（四阶段） | 语言空间的进出边界 |
@@ -394,9 +394,17 @@ Hook 是**插件**。
 interface SessionBackend {
   load(session_id: string): Promise<RunState | null>;
   save(state: RunState): Promise<void>;
+  delete(session_id: string): Promise<void>;
+  list(): Promise<string[]>;
+  listRich(): Promise<SessionInfo[]>;   // 含 title/preview/updated_at/message_count，过滤空会话，按 recency 倒序
+  close?(): void;
+}
+interface SessionInfo {
+  session_id: string; title: string; preview: string;
+  status: string; started_at: number; updated_at: number; message_count: number;
 }
 ```
-提供 in-memory 和 file 两种参考实现。
+提供 in-memory、file、sqlite 三种参考实现。`RunState` 含 `title`/`preview`/`updated_at`（由首条用户消息派生，供 `/resume` 列表与按 recency 排序）。
 
 ### 4.9 PluginHost 与 AgentRuntime（统一扩展入口）
 ```ts
@@ -474,72 +482,117 @@ const myPlugin: Plugin = {
 
 ## 6. 配置模型
 
-**格式**：YAML（`vessel.yaml`）。`@vessel/config` 以 JSON Schema 校验，未知键报错。**零配置起步**：文件不存在时全用安全默认，仅需 API Key。
+**格式**：YAML。`@vessel/config` 以 JSON Schema 校验，未知键报错。
 
-**优先级**：CLI flag > env (`VESSEL_*`) > `vessel.yaml` > 安全默认。
+### 6.0 配置目录（`.vessel/`）
 
-### 6.1 完整 schema（渐进披露）
+Vessel 的所有持久化数据（配置、会话、事件、记忆、Skill）统一存储在两处：
+
+| 位置 | 作用域 | 内容 |
+|------|--------|------|
+| `~/.vessel/` | **用户级**（跨项目） | `config.yaml`（API Key、provider 偏好）、`sessions.db`、`events.jsonl`、`memory/`、`skills/` |
+| `./.vessel/` | **项目级** | `sessions.db`、`events.jsonl`、`memory/`、`skills/` |
+
+**分离原则**：
+- **密钥/身份** 属用户——存 `~/.vessel/config.yaml`。换项目不用重填 Key。
+- **项目行为** 属项目——存 `vessel.yaml`。跟仓库走，团队成员共享。
+- **运行时数据**（会话、事件、记忆、Skill）默认存项目 `.vessel/`，可通过配置改路径。
+
+首启向导引导用户填 Key → 写入 `~/.vessel/config.yaml` → 此后所有项目自动可用。
+
+### 6.1 配置加载链
+
+**优先级**（高到低）：
+
+```
+CLI flag (--api-key, --model, ...)
+  ↓ 覆盖
+VESSEL_* 环境变量
+  ↓ 覆盖
+./vessel.yaml          ← 项目级（跟着仓库走，不含 Key）
+  ↓ 覆盖
+~/.vessel/config.yaml  ← 用户级（Key + provider 偏好，跨项目复用）
+  ↓ 覆盖
+安全默认              ← built-in，无需任何文件即可跑
+```
+
+**为什么 `.env` 不在加载链中？**
+
+`.env` 是开发期的便利，不是 Vessel 的配置机制。无基础用户不应接触 `.env` 文件。`VESSEL_*` 环境变量保留是为了 CI/容器等自动化场景，手动使用场景走首启向导 + `~/.vessel/config.yaml`。
+
+### 6.2 三份配置文件
+
+#### 6.2.1 `~/.vessel/config.yaml` — 用户身份（首启向导产出）
 
 ```yaml
-# vessel.yaml — 仅供按需覆盖。空文件 = 全默认 + API Key 即可跑。
+# ~/.vessel/config.yaml — 跨项目复用的用户身份
+# 由首启向导生成，用户不应手动编辑
 
-# 模型（必填的唯一项：API Key 由 env/wizard 提供）
-model:
-  provider: openai       # 空值时首启向导引导选择
-  name: gpt-4.1
-  base_url: ""           # 空值 = 内置预设 URL
+api_key: "sk-..."              # 唯一必填项
+default_provider: openai       # 默认 provider
 
-# 工具（全部可选，不写 = 默认）
-tools:
-  default: [file-ops, grep, web-search, web-fetch, todo-list, ask-user]
-  timeout: 30            # 全局工具超时(秒)
+providers:                     # 多 provider Key（可选）
+  anthropic:
+    api_key: "sk-ant-..."
+  google:
+    api_key: "..."
+```
 
-  shell:                 # 逐工具覆盖
-    timeout: 60
-    permission: require-approval
+#### 6.2.2 `vessel.yaml` — 项目行为（跟着仓库走）
+
+```yaml
+# vessel.yaml — 项目级覆盖。所有键可选。
+# 不应包含 api_key（敏感信息存 ~/.vessel/）。
+
+provider:                      # 覆盖默认 provider/模型（对齐 ProviderConfig）
+  name: anthropic
+  model: claude-sonnet-5
+
+tools:                         # 调整工具集
+  default: [file-ops, grep, web-search]
+  timeout: 30
   web-search:
-    api_key: ${TAVILY_API_KEY}
-    timeout: 15
+    api_key: ${TAVILY_API_KEY}     # 工具 Key 可在此处
 
-# 运行时控制
-agent:
+agent:                          # Agent 行为
   max_iterations: 50
   max_runtime_seconds: 300
+  system_prompt: "你是一个 Rust 专家..."
 
-# 预算硬上限
-limits:
+limits:                         # 预算硬上限
   request_limit: 50
-  tool_calls_limit: 200
   total_cost_limit: 5.0
 
-# 会话与观测
-sessions:
+plugins:                        # 启用插件
+  - memory-project
+  - mcp-client
+
+mcp:                            # MCP 服务器
+  servers:
+    - name: filesystem
+      command: npx
+      args: [-y, @anthropic/mcp-filesystem, /tmp]
+
+sessions:                       # 数据存储
   backend: sqlite
   sqlite_path: .vessel/sessions.db
 
 observability:
   event_stream: jsonl
   jsonl_path: .vessel/events.jsonl
-
-# 插件
-plugins:
-  - memory-project
-  - mcp-client
-
-mcp:
-  servers:
-    - name: filesystem
-      command: npx
-      args: [-y, @anthropic/mcp-filesystem, /tmp]
 ```
 
-### 6.2 核心设计原则
+#### 6.2.3 安全默认 — 零文件即跑
 
-- **零配置**：空 `vessel.yaml`（仅有 `VESSEL_API_KEY`）可跑。
-- **渐进披露**：默认不生成此文件。首启向导引导填 Key → 即可对话。高级用户手动创建文件覆盖。
-- **工具默认清单** (`tools.default`)：Agent 可通过元工具修改——它就是 `Config` 资产的 CRUD 操作。
-- **工具级覆盖** (`tools.<name>.*`)：少数需要特殊超时/权限/Key 的工具才写。
+`@vessel/config` 内置 DEFAULT_CONFIG（provider=openai, model=gpt-4, max_iterations=20, …）。不创建任何文件即可跑（前提：`~/.vessel/config.yaml` 中有 API Key，或 `VESSEL_API_KEY` 环境变量已设置）。
+
+### 6.3 核心设计原则
+
+- **零配置起步**：仅需首启向导填一次 Key（写入 `~/.vessel/config.yaml`），之后所有项目自动可用。无需创建 `vessel.yaml`。
+- **密钥不进项目文件**：`api_key` 只存 `~/.vessel/config.yaml`，永不写入 `vessel.yaml`。`vessel.yaml` 可安全提交 git。
+- **渐进披露**：默认不生成 `vessel.yaml`。高级用户需要覆盖行为时手动创建。首启向导仅生成 `~/.vessel/config.yaml`。
 - **显式校验**：未知键报错，防止 typo 导致的静默失效。
+- **环境变量是 fallback**：`VESSEL_*` 环境变量用于 CI/容器/自动化，不是日常使用的主路径。日常路径是首启向导。
 
 ## 7. 数据流
 

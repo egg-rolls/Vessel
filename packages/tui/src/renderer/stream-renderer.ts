@@ -102,7 +102,7 @@ export class StreamRenderer {
    */
   private renderRunStarted(event: RunEvent): void {
     const data = event.data as { run_id: string; input: string };
-    console.log('\n' + this.colorize('cyan', '━━━ Run Started ━━━'));
+    console.log(`\n${this.colorize('cyan', '━━━ Run Started ━━━')}`);
     if (this.config.showEventType) {
       console.log(this.colorize('gray', `[${event.type}]`));
     }
@@ -125,7 +125,7 @@ export class StreamRenderer {
    */
   private renderLlmResponse(event: RunEvent): void {
     const data = event.data as { content?: string; tool_calls?: unknown[]; finish_reason: string };
-    
+
     if (data.finish_reason === 'tool_calls') {
       console.log(this.colorize('yellow', '🔧 LLM requested tool calls'));
     } else if (data.content) {
@@ -153,7 +153,9 @@ export class StreamRenderer {
   private renderToolCallCompleted(event: RunEvent): void {
     const data = event.data as { tool_name: string; result: string; duration_ms: number };
     if (this.config.showToolDetails) {
-      console.log(this.colorize('green', `   ✓ ${data.tool_name} completed in ${data.duration_ms}ms`));
+      console.log(
+        this.colorize('green', `   ✓ ${data.tool_name} completed in ${data.duration_ms}ms`),
+      );
     }
   }
 
@@ -177,9 +179,15 @@ export class StreamRenderer {
    * 渲染 Run 完成事件
    */
   private renderRunCompleted(event: RunEvent): void {
-    const data = event.data as { duration_ms: number; iterations: number; usage?: { total_tokens?: number } };
+    const data = event.data as {
+      duration_ms: number;
+      iterations: number;
+      usage?: { total_tokens?: number };
+    };
     console.log(this.colorize('cyan', '\n━━━ Run Completed ━━━'));
-    console.log(this.colorize('gray', `Duration: ${data.duration_ms}ms | Iterations: ${data.iterations}`));
+    console.log(
+      this.colorize('gray', `Duration: ${data.duration_ms}ms | Iterations: ${data.iterations}`),
+    );
     if (data.usage?.total_tokens) {
       console.log(this.colorize('gray', `Tokens used: ${data.usage.total_tokens}`));
     }
@@ -217,5 +225,3 @@ export class StreamRenderer {
     return `${colors[color] ?? ''}${text}${colors.reset}`;
   }
 }
-
-export type { StreamRendererConfig };

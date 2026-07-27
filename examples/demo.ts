@@ -1,17 +1,17 @@
 /**
  * Vessel 示例：演示当前功能
- * 
+ *
  * 运行方式：bun run examples/demo.ts
  */
 
 import {
   AgentRuntime,
-  MemoryLLMProvider,
-  MemoryToolRegistry,
+  EventType,
   MemoryContextManager,
   MemoryEventStream,
+  MemoryLLMProvider,
   MemorySessionBackend,
-  EventType,
+  MemoryToolRegistry,
   type RunEvent,
 } from '../packages/core/src/index';
 
@@ -68,10 +68,10 @@ async function main() {
   const unsubscribe = events.subscribe((event: RunEvent) => {
     switch (event.type) {
       case EventType.RunStarted:
-        console.log(`[Event] Run started`);
+        console.log('[Event] Run started');
         break;
       case EventType.RunCompleted:
-        console.log(`[Event] Run completed`);
+        console.log('[Event] Run completed');
         break;
     }
   });
@@ -79,14 +79,14 @@ async function main() {
   // 6. 演示基本对话
   console.log('--- Demo 1: Simple Text Response ---');
   const response1 = await runtime.run('Hello, how are you?');
-  console.log(`User: Hello, how are you?`);
+  console.log('User: Hello, how are you?');
   console.log(`Assistant: ${response1}\n`);
 
   console.log('--- Demo 2: Session Persistence ---');
   const sessionId = 'demo-session-1';
   await runtime.run('Remember my name is Alice', sessionId);
-  console.log(`User: Remember my name is Alice`);
-  
+  console.log('User: Remember my name is Alice');
+
   const savedState = await session.load(sessionId);
   console.log(`Session saved: ${savedState?.session_id}`);
   console.log(`Session status: ${savedState?.status}`);

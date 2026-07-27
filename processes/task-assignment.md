@@ -9,7 +9,7 @@
 | Phase | 状态 | 证据 |
 |-------|------|------|
 | 0 脚手架 | ✅ 完成 | monorepo;CI 四件套全绿(lint/typecheck/test/build);单二进制可出 |
-| 1 MVP-core | ✅ 基本完成 | runtime loop / provider / context+auto-compact / session(memory+file+sqlite) / EventStream 枚举 / limits / guardrail+hook 接口 / PluginHost;67 测试过 |
+| 1 MVP-core | ✅ 基本完成 | runtime loop / provider(含流式 SSE 解析) / context+auto-compact / session(memory+file+sqlite) / EventStream 枚举(含 LlmStreamChunk) / limits / guardrail+hook 接口 / PluginHost;73 测试过 |
 | 1 MVP-tui | ⚠️ 组件都有但**没接进入口** | `src/cli.ts` 只用了 `rich-renderer` + `setup-wizard`;`CLI_REPL`/`CommandRegistry`/`StreamRenderer`/`ToolPermissionChecker` 全闲置 |
 | 2 增强 | 🚧 插件真实但**没接进 runtime** | mcp-client(真 JSON-RPC)、memory/project+auto(真持久化)、skills-loader 都实现了,但 `src/cli.ts` 只硬编码加载 metaTools + skills-loader |
 
@@ -41,9 +41,9 @@
 - [ ] 0. **拆接缝(与 emma 协作,前置)** -- `src/cli.ts` 的 `startChat`/`runInteractive`/slash 处理迁出到 `@vessel/tui`,壳改为调 `startRepl(ctx)`。先定 `ctx` 契约再动。
 - [ ] 1. **插件加载机制** -- `vessel.yaml` 的 `plugins: [...]` → 动态加载插件包 → 注入 runtime。把 file-ops / mcp-client / memory(project+auto) / security 接进来。当前 `src/cli.ts` 硬编码 `[metaToolsPlugin, skillsLoaderPlugin]`。
 - [ ] 2. **Provider 注册制** -- 接 `plugins/provider/*` 的 `registerProvider`,按 `config.provider.name` 选 provider。当前 `src/cli.ts` 硬编码 `OpenAICompatibleProvider`。顺带消掉 `Unknown provider "custom"` 警告(validator.ts:45,custom 不该是 warning)。
-- [ ] 3. **流式核心(解锁 emma 的流式渲染)** -- `providers.ts` 改 `stream: true` + SSE 解析 + 增量发事件。ADR-007 流式=事件订阅;若加 `LlmStreamChunk` 事件类型(ADR-012 允许扩 EventType),留 ADR 记录。Files: `packages/core/src/provider/providers.ts`、`types/event.ts`、`runtime/agent-runtime.ts`。
+- [x] 3. **流式核心(解锁 emma 的流式渲染)** ✅ -- `providers.ts` 三个 Provider(Memory/OpenAI/Anthropic)实现 `on_chunk` 回调流式;`ChatRequest` 增 `stream`+`on_chunk` 字段(向后兼容);新增 `EventType.LlmStreamChunk` + `LlmStreamChunkPayload`;runtime 接线发布增量事件;ADR-016 记录。Files: `packages/core/src/provider/providers.ts`、`types/provider.ts`、`types/event.ts`、`runtime/agent-runtime.ts`。
 - [ ] 4. **工具权限 guardrail 注册** -- `tool-confirm.ts` 的 `createPermissionGuardrail` 注册为 `ToolCall` guardrail,`autoApprove` 走 config。弹窗 UI 由 emma 做。
-- [ ] 5. **core 测试加固** -- 维护既有 67 测试;补流式/插件加载/provider 注册的回归测试。
+- [x] 5. **core 测试加固** ✅ -- 维护 73 测试(原 67 + 6 新增——Memory/OpenAI 流式 + tool_call 累积 + 非流式回归 + agent-runtime LlmStreamChunk 断言)。后续任务 1/2/4 补对应回归。
 
 ## 五、emma — 边缘体验与优化
 

@@ -3,7 +3,7 @@
  * @module @vessel/tui
  */
 
-import * as readline from 'readline';
+import * as readline from 'node:readline';
 
 /** 权限确认配置 */
 export interface ToolPermissionConfig {
@@ -77,8 +77,8 @@ export class ToolPermissionChecker {
       return { approved: true };
     }
 
-    console.log('\n' + '='.repeat(50));
-    console.log(`🔧 Tool Execution Request`);
+    console.log(`\n${'='.repeat(50)}`);
+    console.log('🔧 Tool Execution Request');
     console.log('='.repeat(50));
     console.log(`Tool: ${toolName}`);
     console.log(`Arguments: ${JSON.stringify(args, null, 2)}`);
@@ -152,16 +152,14 @@ export function createPermissionGuardrail(checker: ToolPermissionChecker): {
       if (typeof value === 'object' && value !== null) {
         const toolCall = value as { function?: { name?: string; arguments?: string } };
         if (toolCall.function?.name) {
-          const args = toolCall.function.arguments 
-            ? JSON.parse(toolCall.function.arguments) 
-            : {};
-          
+          const args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+
           const result = await checker.confirm(toolCall.function.name, args);
-          
+
           if (!result.approved) {
             return {
               allowed: false,
-              reason: `Tool execution denied by user`,
+              reason: 'Tool execution denied by user',
             };
           }
         }
@@ -170,5 +168,3 @@ export function createPermissionGuardrail(checker: ToolPermissionChecker): {
     },
   };
 }
-
-export type { ToolPermissionConfig, PermissionResult };

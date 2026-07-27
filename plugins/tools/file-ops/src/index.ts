@@ -5,9 +5,9 @@
  * 提供文件读写、搜索、列目录等基本文件操作工具
  */
 
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
-import { readdir, readFile, writeFile, stat, mkdir } from 'node:fs/promises';
-import { join, basename, dirname } from 'node:path';
 
 /** 文件操作配置 */
 export interface FileOpsConfig {
@@ -31,7 +31,7 @@ const DEFAULT_CONFIG: FileOpsConfig = {
  */
 function isPathAllowed(filePath: string, config: FileOpsConfig): boolean {
   const normalizedPath = filePath.replace(/\\/g, '/');
-  
+
   // 检查禁止路径
   for (const denied of config.deniedPaths ?? []) {
     if (normalizedPath.includes(denied)) {
@@ -88,10 +88,14 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
       required: ['path', 'content'],
     },
     handler: async (args) => {
-      const { path, content, encoding = 'utf-8' } = args as { 
-        path: string; 
-        content: string; 
-        encoding?: string 
+      const {
+        path,
+        content,
+        encoding = 'utf-8',
+      } = args as {
+        path: string;
+        content: string;
+        encoding?: string;
       };
 
       if (!isPathAllowed(path, mergedConfig)) {
@@ -123,7 +127,11 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
       },
     },
     handler: async (args) => {
-      const { path = '.', recursive = false, pattern } = args as {
+      const {
+        path = '.',
+        recursive = false,
+        pattern,
+      } = args as {
         path?: string;
         recursive?: boolean;
         pattern?: string;
@@ -139,22 +147,22 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
 
         for (const entry of entries) {
           const fullPath = join(path, entry.name);
-          
+
           if (!isPathAllowed(fullPath, mergedConfig)) {
             continue;
           }
 
           if (entry.isDirectory()) {
             results.push(`📁 ${entry.name}/`);
-            
+
             if (recursive) {
-              const subEntries = await listDirTool.handler({ 
-                path: fullPath, 
-                recursive: true, 
-                pattern 
+              const subEntries = await listDirTool.handler({
+                path: fullPath,
+                recursive: true,
+                pattern,
               });
               if (typeof subEntries === 'string') {
-                const lines = subEntries.split('\n').filter(l => l.trim());
+                const lines = subEntries.split('\n').filter((l) => l.trim());
                 for (const line of lines) {
                   results.push(`  ${line}`);
                 }
@@ -167,7 +175,7 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
                 continue;
               }
             }
-            
+
             const stats = await stat(fullPath);
             const size = formatSize(stats.size);
             results.push(`📄 ${entry.name} (${size})`);
@@ -252,7 +260,7 @@ export const fileOpsPlugin: Plugin = {
   install(host: PluginHost, config?: unknown) {
     const fileConfig = config as FileOpsConfig;
     const tools = createFileTools(fileConfig);
-    
+
     for (const tool of tools) {
       host.registerTool(tool);
     }

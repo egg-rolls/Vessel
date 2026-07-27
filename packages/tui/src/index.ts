@@ -10,4 +10,18 @@ export { CLI_REPL } from './repl/repl.js';
 export type { REPLConfig, REPLState } from './repl/repl.js';
 
 export { CommandRegistry, createDefaultCommands } from './commands/commands.js';
-export type { CommandHandler } from './commands/commands.js';
+export type {
+  CommandHandler,
+  SubCommand,
+  CommandContext,
+} from './commands/commands.js';
+
+export { SetupWizard, runSetupWizard } from './wizard/setup-wizard.js';
+export type { SetupWizardConfig } from './wizard/setup-wizard.js';
+
+export {
+  buildBanner,
+  buildSessionTable,
+  infoPanel,
+  divider,
+} from './rich-renderer.js';

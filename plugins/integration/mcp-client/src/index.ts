@@ -8,10 +8,10 @@
  * Tier 1。
  */
 
-import type { Plugin, PluginHost, ToolDefinition, Hook, HookContext } from '@vessel/core';
-import { HookType } from '@vessel/core';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
+import type { Hook, HookContext, Plugin, PluginHost, ToolDefinition } from '@vessel/core';
+import { HookType } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -84,7 +84,7 @@ export interface McpClientConfig {
 // ── MCP 客户端实现 ────────────────────────────────
 
 /** JSON-RPC 错误码 */
-const JSONRPC_ERROR = {
+const _JSONRPC_ERROR = {
   PARSE_ERROR: -32700,
   INVALID_REQUEST: -32600,
   METHOD_NOT_FOUND: -32601,
@@ -101,18 +101,15 @@ class McpConnection {
   private config: McpServerConfig;
   private process: ChildProcess | null = null;
   private requestId = 0;
-  private pending: Map<
-    number,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
-  > = new Map();
+  private pending: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }> =
+    new Map();
   private tools: McpTool[] = [];
   private resources: McpResource[] = [];
   private prompts: McpPrompt[] = [];
   private pluginHost: PluginHost | null = null;
   private registeredToolNames: Set<string> = new Set();
   private buffer = '';
-  private _status: 'disconnected' | 'connecting' | 'connected' | 'error' =
-    'disconnected';
+  private _status: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
 
   constructor(config: McpServerConfig) {
     this.name = config.name;
@@ -151,7 +148,7 @@ class McpConnection {
 
       // 读取 stderr（日志）
       if (proc.stderr) {
-        proc.stderr.on('data', (data: Buffer) => {
+        proc.stderr.on('data', (_data: Buffer) => {
           // MCP server 日志，静默记录
         });
       }
@@ -159,9 +156,7 @@ class McpConnection {
       // 进程退出
       proc.on('close', (code) => {
         this._status = 'disconnected';
-        this.rejectAllPending(
-          new Error(`MCP server "${this.name}" exited with code ${code}`)
-        );
+        this.rejectAllPending(new Error(`MCP server "${this.name}" exited with code ${code}`));
       });
 
       proc.on('error', (err) => {
@@ -260,9 +255,7 @@ class McpConnection {
       const toolName = `mcp__${this.name}__${mcpTool.name}`;
       const toolDef: ToolDefinition = {
         name: toolName,
-        description:
-          mcpTool.description ??
-          `MCP tool from server "${this.name}"`,
+        description: mcpTool.description ?? `MCP tool from server "${this.name}"`,
         inputSchema: mcpTool.inputSchema ?? {
           type: 'object',
           properties: {},
@@ -284,10 +277,7 @@ class McpConnection {
   /**
    * 调用 MCP 工具
    */
-  async callTool(
-    toolName: string,
-    args: unknown,
-  ): Promise<string> {
+  async callTool(toolName: string, args: unknown): Promise<string> {
     try {
       const result = await this.sendRequest('tools/call', {
         name: toolName,
@@ -337,10 +327,7 @@ class McpConnection {
   /**
    * 获取 prompt 内容
    */
-  async getPrompt(
-    name: string,
-    args?: Record<string, string>,
-  ): Promise<string> {
+  async getPrompt(name: string, args?: Record<string, string>): Promise<string> {
     try {
       const result = (await this.sendRequest('prompts/get', {
         name,
@@ -354,10 +341,7 @@ class McpConnection {
       if (result.messages) {
         return result.messages
           .map((m) => {
-            const text =
-              typeof m.content === 'string'
-                ? m.content
-                : m.content?.text ?? '';
+            const text = typeof m.content === 'string' ? m.content : (m.content?.text ?? '');
             return `[${m.role}]: ${text}`;
           })
           .join('\n');
@@ -409,11 +393,7 @@ class McpConnection {
         this.pending.delete(msg.id);
 
         if (msg.error) {
-          reject(
-            new Error(
-              `MCP error ${msg.error.code}: ${msg.error.message}`
-            )
-          );
+          reject(new Error(`MCP error ${msg.error.code}: ${msg.error.message}`));
         } else {
           resolve(msg.result);
         }
@@ -423,10 +403,7 @@ class McpConnection {
     }
   }
 
-  private sendRequest(
-    method: string,
-    params: Record<string, unknown>,
-  ): Promise<unknown> {
+  private sendRequest(method: string, params: Record<string, unknown>): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const id = ++this.requestId;
       const request: JsonRpcRequest = {
@@ -438,21 +415,18 @@ class McpConnection {
 
       this.pending.set(id, { resolve, reject });
 
-      const line = JSON.stringify(request) + '\n';
+      const line = `${JSON.stringify(request)}\n`;
       this.process?.stdin?.write(line);
     });
   }
 
-  private sendNotification(
-    method: string,
-    params: Record<string, unknown>,
-  ): void {
+  private sendNotification(method: string, params: Record<string, unknown>): void {
     const notification = {
       jsonrpc: '2.0',
       method,
       params,
     };
-    const line = JSON.stringify(notification) + '\n';
+    const line = `${JSON.stringify(notification)}\n`;
     this.process?.stdin?.write(line);
   }
 
@@ -479,9 +453,7 @@ class McpClientManager {
    */
   async connect(config: McpServerConfig): Promise<void> {
     if (this.connections.has(config.name)) {
-      throw new Error(
-        `MCP server "${config.name}" is already connected`
-      );
+      throw new Error(`MCP server "${config.name}" is already connected`);
     }
 
     if (!this.pluginHost) {
@@ -508,7 +480,7 @@ class McpClientManager {
    * 断开所有连接
    */
   disconnectAll(): void {
-    for (const [name, conn] of this.connections) {
+    for (const [_name, conn] of this.connections) {
       conn.disconnect();
     }
     this.connections.clear();
@@ -618,8 +590,7 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
     },
     {
       name: 'mcp_list',
-      description:
-        '列出所有已连接的 MCP 服务器及其提供的工具',
+      description: '列出所有已连接的 MCP 服务器及其提供的工具',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -632,7 +603,7 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         const byServer = new Map<string, string[]>();
         for (const { server, tool } of tools) {
           if (!byServer.has(server)) byServer.set(server, []);
-          byServer.get(server)!.push(tool);
+          byServer.get(server)?.push(tool);
         }
         const lines: string[] = [];
         for (const [server, toolNames] of byServer) {
@@ -646,19 +617,17 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
 
 // ── Hook ──────────────────────────────────────────
 
-function createMcpContextHook(
-  manager: McpClientManager,
-): Hook {
+function createMcpContextHook(manager: McpClientManager): Hook {
   return {
     name: 'mcp-context-injection',
     type: HookType.BeforeLlm,
     priority: 80,
     run: async (ctx: HookContext): Promise<HookContext | null> => {
       // 将 MCP 提供的 resources/prompts 摘要注入上下文
-      const parts: string[] = [];
-      for (const conn of Array.from(
-        (manager as unknown as { connections: Map<string, McpConnection> })
-          .connections?.values() ?? []
+      const _parts: string[] = [];
+      for (const _conn of Array.from(
+        (manager as unknown as { connections: Map<string, McpConnection> }).connections?.values() ??
+          [],
       )) {
         // 这里不直接访问 private 字段，改用公开方法
       }
@@ -668,8 +637,7 @@ function createMcpContextHook(
       if (tools.length > 0) {
         const extended = ctx as HookContext & { system_prompt?: string };
         const mcpInfo = `\n<!-- MCP 已连接服务器 -->\n已连接 ${tools.length} 个 MCP 工具。使用 mcp_list 查看详情。`;
-        extended.system_prompt =
-          (extended.system_prompt ?? '') + mcpInfo;
+        extended.system_prompt = (extended.system_prompt ?? '') + mcpInfo;
       }
 
       return ctx;

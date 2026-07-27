@@ -7,10 +7,10 @@
  * Tier 1。
  */
 
-import type { Plugin, PluginHost, Hook, HookContext } from '@vessel/core';
-import { HookType } from '@vessel/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { Hook, HookContext, Plugin, PluginHost } from '@vessel/core';
+import { HookType } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -59,18 +59,14 @@ const DEFAULT_CONFIG: Required<MemoryAutoConfig> = {
  * - "别忘了 <key>: <value>"
  * - "/remember <key> <value>"
  */
-function extractExplicitMemories(
-  text: string,
-  runId: string,
-): AutoMemory[] {
+function extractExplicitMemories(text: string, runId: string): AutoMemory[] {
   const results: AutoMemory[] = [];
 
   // 模式 1: "remember X: Y" / "记住 X: Y" / "别忘了 X: Y"
-  const explicitPattern =
-    /(?:remember|记住|别忘了)\s+(.+?)\s*[:：]\s*(.+?)(?:\n|$)/gi;
+  const explicitPattern = /(?:remember|记住|别忘了)\s+(.+?)\s*[:：]\s*(.+?)(?:\n|$)/gi;
 
-  let match: RegExpExecArray | null;
-  while ((match = explicitPattern.exec(text)) !== null) {
+  let match: RegExpExecArray | null = explicitPattern.exec(text);
+  while (match !== null) {
     const key = match[1].trim();
     const value = match[2].trim();
     if (key && value) {
@@ -83,11 +79,13 @@ function extractExplicitMemories(
         runId,
       });
     }
+    match = explicitPattern.exec(text);
   }
 
   // 模式 2: "/remember <key> <value>"（slash 命令风格）
   const slashPattern = /\/remember\s+(.+?)\s+(.+?)(?:\n|$)/gi;
-  while ((match = slashPattern.exec(text)) !== null) {
+  match = slashPattern.exec(text);
+  while (match !== null) {
     const key = match[1].trim();
     const value = match[2].trim();
     if (key && value) {
@@ -100,6 +98,7 @@ function extractExplicitMemories(
         runId,
       });
     }
+    match = slashPattern.exec(text);
   }
 
   return results;
@@ -113,44 +112,39 @@ function extractExplicitMemories(
  * - "always use X" / "始终用 X"
  * - "never use X" / "不要用 X"
  */
-function extractPreferences(
-  text: string,
-  runId: string,
-): AutoMemory[] {
+function extractPreferences(text: string, runId: string): AutoMemory[] {
   const results: AutoMemory[] = [];
   const prefPatterns = [
     {
-      regex:
-        /(?:我(?:更)?喜欢|I prefer|我更习惯)\s+(.+?)(?:[，。,\.\n]|$)/gi,
+      regex: /(?:我(?:更)?喜欢|I prefer|我更习惯)\s+(.+?)(?:[，。,\.\n]|$)/gi,
       negate: false,
     },
     {
-      regex:
-        /(?:始终用|always use|一直用)\s+(.+?)(?:[，。,\.\n]|$)/gi,
+      regex: /(?:始终用|always use|一直用)\s+(.+?)(?:[，。,\.\n]|$)/gi,
       negate: false,
     },
     {
-      regex:
-        /(?:不要用|never use|别用)\s+(.+?)(?:[，。,\.\n]|$)/gi,
+      regex: /(?:不要用|never use|别用)\s+(.+?)(?:[，。,\.\n]|$)/gi,
       negate: true,
     },
   ];
 
   for (const { regex, negate } of prefPatterns) {
-    let match: RegExpExecArray | null;
-    while ((match = regex.exec(text)) !== null) {
+    let match: RegExpExecArray | null = regex.exec(text);
+    while (match !== null) {
       const pref = match[1].trim();
-      if (pref.length < 3 || pref.length > 200) continue;
-
-      const prefix = negate ? '避免使用: ' : '偏好: ';
-      results.push({
-        name: slugify(`pref-${pref}`),
-        description: `用户偏好${negate ? '（避免）' : ''}: ${pref}`,
-        type: 'user',
-        content: `${prefix}${pref}`,
-        createdAt: new Date().toISOString(),
-        runId,
-      });
+      if (pref.length >= 3 && pref.length <= 200) {
+        const prefix = negate ? '避免使用: ' : '偏好: ';
+        results.push({
+          name: slugify(`pref-${pref}`),
+          description: `用户偏好${negate ? '（避免）' : ''}: ${pref}`,
+          type: 'user',
+          content: `${prefix}${pref}`,
+          createdAt: new Date().toISOString(),
+          runId,
+        });
+      }
+      match = regex.exec(text);
     }
   }
 
@@ -173,10 +167,7 @@ function slugify(text: string): string {
 /**
  * 将记忆写入 .vessel/memory/ 目录
  */
-function persistMemory(
-  memory: AutoMemory,
-  memoryDir: string,
-): void {
+function persistMemory(memory: AutoMemory, memoryDir: string): void {
   const dir = path.resolve(memoryDir);
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -200,7 +191,7 @@ function persistMemory(
     `description: ${memory.description}`,
     'metadata:',
     `  type: ${memory.type}`,
-    `  auto: true`,
+    '  auto: true',
     `  createdAt: ${memory.createdAt}`,
     `  runId: ${memory.runId}`,
     '---',
@@ -219,10 +210,7 @@ function persistMemory(
 /**
  * 更新 MEMORY.md 索引文件
  */
-function updateMemoryIndex(
-  memory: AutoMemory,
-  memoryDir: string,
-): void {
+function updateMemoryIndex(memory: AutoMemory, memoryDir: string): void {
   const indexPath = path.join(path.resolve(memoryDir), 'MEMORY.md');
   let indexContent = '';
 
@@ -232,7 +220,7 @@ function updateMemoryIndex(
 
   const entryLine = `- [${memory.description}](${memory.name}.md) — ${memory.type}`;
   if (!indexContent.includes(entryLine)) {
-    indexContent = indexContent.trimEnd() + `\n${entryLine}\n`;
+    indexContent = `${indexContent.trimEnd()}\n${entryLine}\n`;
     fs.writeFileSync(indexPath, indexContent, 'utf-8');
   }
 }
@@ -252,10 +240,8 @@ function createMemoryExtractionHook(
       if (sessionCount.value >= config.maxPerSession) return ctx;
 
       // 从 LLM 响应和对话上下文中提取文本
-      const responseText = (ctx as HookContext & { response?: string })
-        .response;
-      const fullText = (ctx as HookContext & { messages?: string })
-        .messages;
+      const responseText = (ctx as HookContext & { response?: string }).response;
+      const fullText = (ctx as HookContext & { messages?: string }).messages;
 
       const textToAnalyze =
         typeof responseText === 'string'
@@ -267,14 +253,8 @@ function createMemoryExtractionHook(
       if (!textToAnalyze) return ctx;
 
       // 提取显式记忆和偏好
-      const explicitMemories = extractExplicitMemories(
-        textToAnalyze,
-        ctx.run_id,
-      );
-      const preferences = extractPreferences(
-        textToAnalyze,
-        ctx.run_id,
-      );
+      const explicitMemories = extractExplicitMemories(textToAnalyze, ctx.run_id);
+      const preferences = extractPreferences(textToAnalyze, ctx.run_id);
 
       const allMemories = [...explicitMemories, ...preferences];
 
@@ -343,9 +323,7 @@ export const memoryAutoPlugin: Plugin = {
     });
 
     // 注册 AfterLlm Hook 用于自动提取
-    host.registerHook(
-      createMemoryExtractionHook(mergedConfig, sessionCount),
-    );
+    host.registerHook(createMemoryExtractionHook(mergedConfig, sessionCount));
   },
 };
 

@@ -7,7 +7,13 @@
  * Tier 1。
  */
 
-import type { Plugin, PluginHost, Guardrail, GuardrailContext, GuardrailResult } from '@vessel/core';
+import type {
+  Guardrail,
+  GuardrailContext,
+  GuardrailResult,
+  Plugin,
+  PluginHost,
+} from '@vessel/core';
 import { GuardrailStage } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
@@ -42,17 +48,12 @@ const DEFAULT_CONFIG: Required<ToolPolicyConfig> = {
  * 检查工具名是否匹配策略规则
  * 支持通配符 `*`（匹配任意字符序列）
  */
-function matchesPolicy(
-  toolName: string,
-  patterns: string[],
-): boolean {
+function matchesPolicy(toolName: string, patterns: string[]): boolean {
   for (const pattern of patterns) {
     if (pattern === '*') return true;
 
     if (pattern.includes('*')) {
-      const regex = new RegExp(
-        '^' + pattern.replace(/\*/g, '.*') + '$'
-      );
+      const regex = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`);
       if (regex.test(toolName)) return true;
     }
 
@@ -63,21 +64,14 @@ function matchesPolicy(
 
 // ── Guardrail ─────────────────────────────────────
 
-function createToolPolicyGuardrail(
-  config: Required<ToolPolicyConfig>,
-): Guardrail {
+function createToolPolicyGuardrail(config: Required<ToolPolicyConfig>): Guardrail {
   return {
     stage: GuardrailStage.ToolCall,
     priority: 50,
-    check: async (
-      value: unknown,
-      ctx: GuardrailContext,
-    ): Promise<GuardrailResult> => {
-      const toolName = (
-        (value as { name?: string })?.name ??
+    check: async (value: unknown, ctx: GuardrailContext): Promise<GuardrailResult> => {
+      const toolName = ((value as { name?: string })?.name ??
         (ctx as Record<string, unknown>)?.tool_name ??
-        ''
-      ) as string;
+        '') as string;
 
       if (!toolName) {
         return { allowed: true };
@@ -113,8 +107,7 @@ function createToolPolicyGuardrail(
 export const toolPolicyPlugin: Plugin = {
   name: 'tool-policy',
   version: '0.1.0',
-  description:
-    'Tool allow/deny policy — intercepts tool calls via ToolCall guardrail',
+  description: 'Tool allow/deny policy — intercepts tool calls via ToolCall guardrail',
   install(host: PluginHost, config?: unknown) {
     const mergedConfig: Required<ToolPolicyConfig> = {
       ...DEFAULT_CONFIG,

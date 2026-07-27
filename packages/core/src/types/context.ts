@@ -12,6 +12,8 @@ export interface ContextManager {
   compact(): void;
   clear(): void;
   readonly tokenCount: number;
+  setSessionId(sessionId: string): void;
+  getSessionId(): string;
 }
 
 /** 上下文配置 */

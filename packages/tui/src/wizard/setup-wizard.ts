@@ -1,303 +1,251 @@
 /**
  * 首启配置向导
  * @module @vessel/tui
+ *
+ * 架构：TUI 层交互逻辑。
+ * - 不在 core（core 不知道"向导"）
+ * - 不在 config（config 只管文件读写）
+ * - start.ts 在 api_key 为空时自动调用
+ * - /setup 斜杠命令可重新配置
  */
 
-import * as readline from 'readline';
-import { loadConfig, mergeConfig, PROVIDER_PRESETS } from '@vessel/config';
-import type { VesselConfig } from '@vessel/config';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import * as readline from 'node:readline';
+import type { UserConfig } from '@vessel/config';
+import { getUserConfigPath } from '@vessel/config';
+import { parse as fromYaml, stringify as toYaml } from 'yaml';
 
-/** 向导配置 */
+// ── 类型 ──────────────────────────────────────────
+
 export interface SetupWizardConfig {
-  /** 配置文件路径 */
-  configPath?: string;
-  /** 是否跳过确认 */
-  skipConfirm?: boolean;
+  skipConnectivityTest?: boolean;
 }
 
-/** Provider 选项 */
-interface ProviderOption {
-  name: string;
-  label: string;
-  description: string;
+interface ModelEntry {
+  id: string;
+  owned_by?: string;
 }
 
-/** 可用的 Provider 列表 */
-const PROVIDER_OPTIONS: ProviderOption[] = [
-  { name: 'openai', label: 'OpenAI', description: 'GPT-4, GPT-3.5-turbo, etc.' },
-  { name: 'anthropic', label: 'Anthropic', description: 'Claude 3 Opus, Sonnet, Haiku' },
-  { name: 'google', label: 'Google', description: 'Gemini Pro, Gemini Pro Vision' },
-  { name: 'mistral', label: 'Mistral', description: 'Mistral Large, Medium, Small' },
-  { name: 'local', label: 'Local', description: 'Ollama, llama.cpp, MLX' },
-];
+// ── 工具函数 ──────────────────────────────────────
 
-/**
- * 首启配置向导
- */
+/** 获取用户配置目录 */
+function userConfigDir(): string {
+  return path.join(os.homedir(), '.vessel');
+}
+
+/** 读取用户配置文件 */
+function readUserConfig(): UserConfig {
+  try {
+    const p = getUserConfigPath();
+    if (!existsSync(p)) return {};
+    const text = readFileSync(p, 'utf-8');
+    return (fromYaml(text) ?? {}) as UserConfig;
+  } catch {
+    /* ignore */
+  }
+  return {};
+}
+
+/** 写入用户配置文件 */
+function writeUserConfig(cfg: UserConfig): void {
+  const dir = userConfigDir();
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  Bun.write(getUserConfigPath(), toYaml(cfg));
+}
+
+/** 测试连接：调用 /models 获取模型列表 */
+async function fetchModels(baseUrl: string, apiKey: string): Promise<ModelEntry[]> {
+  const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+  const res = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`HTTP ${res.status}${body ? `: ${body.slice(0, 200)}` : ''}`);
+  }
+
+  const data = (await res.json()) as { data?: ModelEntry[] };
+  return data.data ?? [];
+}
+
+// ── 向导类 ───────────────────────────────────────
+
 export class SetupWizard {
-  private config: SetupWizardConfig;
+  private cfg: SetupWizardConfig;
   private rl: readline.Interface;
 
   constructor(config: SetupWizardConfig = {}) {
-    this.config = config;
+    this.cfg = config;
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
     });
   }
 
-  /**
-   * 运行向导
-   */
-  async run(): Promise<VesselConfig> {
-    console.log('\n' + '='.repeat(50));
-    console.log('🚀 Welcome to Vessel Setup Wizard');
-    console.log('='.repeat(50) + '\n');
+  /** 运行向导，返回 UserConfig（供 start.ts 使用） */
+  async run(): Promise<UserConfig> {
+    console.log(`\n${'═'.repeat(54)}`);
+    console.log('  🔑  Vessel — 首次配置');
+    console.log('═'.repeat(54));
 
-    // 检查是否已有配置
-    const existingConfig = await loadConfig({
-      configPath: this.config.configPath,
-    });
-
-    if (existingConfig.config.api_key) {
-      console.log('Existing configuration detected.');
-      const useExisting = await this.prompt('Use existing configuration? (y/n): ');
-      if (useExisting.toLowerCase() === 'y') {
+    // 检查已有配置
+    const existing = readUserConfig();
+    if (existing.api_key) {
+      console.log('\n  已有配置:');
+      console.log(`    Provider: ${existing.default_provider ?? '(default)'}`);
+      console.log(`    API Key:  ****${existing.api_key.slice(-4)}`);
+      const reuse = await this.ask('\n  使用已有配置？(Y/n): ');
+      if (reuse.toLowerCase() !== 'n') {
         this.rl.close();
-        return existingConfig.config;
+        return existing;
       }
     }
 
-    // 选择 Provider
-    const provider = await this.selectProvider();
+    // 输入循环
+    let baseUrl = '';
+    let apiKey = '';
+    let models: ModelEntry[] = [];
+    let connected = false;
 
-    // 输入 API Key
-    const apiKey = await this.inputApiKey(provider);
+    while (!connected) {
+      console.log('\n  ── 连接配置 ──\n');
+
+      baseUrl = await this.ask('  BaseURL (例: https://api.openai.com/v1): ');
+      if (!baseUrl) baseUrl = 'https://api.openai.com/v1';
+
+      apiKey = await this.ask('  APIKey  (例: sk-proj-xxxxxxxxxxxxxxxxxxxxxxxx): ');
+
+      if (!apiKey) {
+        console.log('\n  ❌ API Key 不能为空');
+        continue;
+      }
+
+      // 测试连接
+      if (this.cfg.skipConnectivityTest) {
+        connected = true;
+        continue;
+      }
+      console.log('\n  ⏳ 正在测试连接...');
+      try {
+        models = await fetchModels(baseUrl, apiKey);
+        const chatModels = models.filter(
+          (m) =>
+            m.id.includes('gpt') ||
+            m.id.includes('claude') ||
+            m.id.includes('gemini') ||
+            m.id.includes('command') ||
+            m.id.includes('llama') ||
+            m.id.includes('mistral') ||
+            (!m.id.includes('embed') && !m.id.includes('moderation') && !m.id.includes('dall')),
+        );
+        // 如果过滤后没有 chat 模型，回退到全部
+        const displayModels = chatModels.length > 0 ? chatModels : models;
+
+        console.log(`\n  ✅ 连接成功！获取到 ${displayModels.length} 个模型:`);
+        for (let i = 0; i < Math.min(displayModels.length, 20); i++) {
+          console.log(`      ${i + 1}. ${displayModels[i]?.id}`);
+        }
+        if (displayModels.length > 20) {
+          console.log(`      ... 还有 ${displayModels.length - 20} 个`);
+        }
+
+        models = displayModels;
+        connected = true;
+      } catch (err) {
+        console.log(`\n  ❌ 连接失败: ${err instanceof Error ? err.message : err}`);
+        console.log('  请检查 BaseURL 和 APIKey 后重试。');
+      }
+    }
 
     // 选择模型
-    const model = await this.selectModel(provider);
+    const defaultModel = models.length > 0 ? (models[0]?.id ?? 'gpt-4') : 'gpt-4';
 
-    // 配置其他选项
-    const advanced = await this.prompt('\nConfigure advanced options? (y/n): ');
-    let advancedConfig: Partial<VesselConfig> = {};
-
-    if (advanced.toLowerCase() === 'y') {
-      advancedConfig = await this.configureAdvanced();
+    let selectedModel = defaultModel;
+    if (models.length > 0) {
+      const choice = await this.ask(
+        `\n  选择默认模型 (1-${Math.min(models.length, 20)}, 默认 1): `,
+      );
+      const idx = Number.parseInt(choice) - 1;
+      if (!Number.isNaN(idx) && idx >= 0 && idx < models.length) {
+        selectedModel = models[idx]?.id ?? defaultModel;
+      }
+    } else {
+      selectedModel = await this.ask('\n  输入模型名称 (默认 gpt-4): ');
+      if (!selectedModel) selectedModel = 'gpt-4';
     }
+
+    // 推断 provider 名称
+    const providerName = inferProvider(baseUrl);
 
     // 构建配置
-    const config: VesselConfig = mergeConfig(existingConfig.config, {
+    const config: UserConfig = {
       api_key: apiKey,
-      provider: {
-        name: provider,
-        api_key: apiKey,
-        model,
-        base_url: PROVIDER_PRESETS[provider]?.base_url,
+      default_provider: providerName,
+      default_model: selectedModel,
+      providers: {
+        [providerName]: {
+          api_key: apiKey,
+          base_url: baseUrl,
+          model: selectedModel,
+        },
       },
-      ...advancedConfig,
-    });
+    };
 
-    // 显示配置摘要
-    this.showSummary(config);
+    // 显示摘要
+    console.log('\n  ── 配置摘要 ──');
+    console.log(`  Provider:  ${providerName}`);
+    console.log(`  BaseURL:   ${baseUrl}`);
+    console.log(`  Model:     ${selectedModel}`);
+    console.log(`  API Key:   ****${apiKey.slice(-4)}`);
 
-    // 确认保存
-    if (!this.config.skipConfirm) {
-      const save = await this.prompt('\nSave configuration? (y/n): ');
-      if (save.toLowerCase() !== 'y') {
-        console.log('Configuration not saved.');
-        this.rl.close();
-        return {};
-      }
+    const save = await this.ask('\n  保存配置？(Y/n): ');
+    if (save.toLowerCase() === 'n') {
+      console.log('\n  未保存。');
+      this.rl.close();
+      return config;
     }
 
-    // 保存配置
-    await this.saveConfig(config);
-
-    console.log('\n✅ Configuration saved successfully!');
-    console.log('You can now start using Vessel.\n');
+    writeUserConfig(config);
+    console.log(`\n  ✅ 已保存到 ${getUserConfigPath()}`);
+    console.log('  修改配置: /setup');
+    console.log(`${'═'.repeat(54)}\n`);
 
     this.rl.close();
     return config;
   }
 
-  /**
-   * 选择 Provider
-   */
-  private async selectProvider(): Promise<string> {
-    console.log('Select a provider:\n');
-
-    for (let i = 0; i < PROVIDER_OPTIONS.length; i++) {
-      const option = PROVIDER_OPTIONS[i];
-      console.log(`  ${i + 1}. ${option.label} - ${option.description}`);
-    }
-
-    const answer = await this.prompt('\nEnter number (1-5): ');
-    const index = Number.parseInt(answer) - 1;
-
-    if (index >= 0 && index < PROVIDER_OPTIONS.length) {
-      return PROVIDER_OPTIONS[index].name;
-    }
-
-    console.log('Invalid selection, defaulting to OpenAI.');
-    return 'openai';
-  }
-
-  /**
-   * 输入 API Key
-   */
-  private async inputApiKey(provider: string): Promise<string> {
-    console.log(`\nEnter your ${provider.toUpperCase()} API Key:`);
-    console.log('(This will be saved securely in your local config file)\n');
-
-    const apiKey = await this.prompt('API Key: ');
-
-    if (!apiKey.trim()) {
-      console.log('Warning: No API Key provided. You will need to set it later.');
-      return '';
-    }
-
-    return apiKey.trim();
-  }
-
-  /**
-   * 选择模型
-   */
-  private async selectModel(provider: string): Promise<string> {
-    const preset = PROVIDER_PRESETS[provider];
-    
-    if (!preset || !preset.models || preset.models.length === 0) {
-      const model = await this.prompt('\nEnter model name: ');
-      return model || 'gpt-4';
-    }
-
-    console.log(`\nSelect a model for ${provider}:\n`);
-
-    for (let i = 0; i < preset.models.length; i++) {
-      console.log(`  ${i + 1}. ${preset.models[i]}`);
-    }
-
-    const answer = await this.prompt('\nEnter number: ');
-    const index = Number.parseInt(answer) - 1;
-
-    if (index >= 0 && index < preset.models.length) {
-      return preset.models[index];
-    }
-
-    console.log(`Invalid selection, defaulting to ${preset.models[0]}.`);
-    return preset.models[0];
-  }
-
-  /**
-   * 配置高级选项
-   */
-  private async configureAdvanced(): Promise<Partial<VesselConfig>> {
-    const config: Partial<VesselConfig> = {};
-
-    // Temperature
-    const temp = await this.prompt('\nTemperature (0-2, default 0.7): ');
-    if (temp) {
-      const tempNum = Number.parseFloat(temp);
-      if (!Number.isNaN(tempNum) && tempNum >= 0 && tempNum <= 2) {
-        config.provider = { ...config.provider, name: config.provider?.name ?? 'openai', temperature: tempNum };
-      }
-    }
-
-    // Max tokens
-    const maxTokens = await this.prompt('Max tokens (default 4096): ');
-    if (maxTokens) {
-      const tokensNum = Number.parseInt(maxTokens);
-      if (!Number.isNaN(tokensNum) && tokensNum > 0) {
-        config.provider = { ...config.provider, name: config.provider?.name ?? 'openai', max_tokens: tokensNum };
-      }
-    }
-
-    // Max iterations
-    const maxIter = await this.prompt('Max iterations (default 20): ');
-    if (maxIter) {
-      const iterNum = Number.parseInt(maxIter);
-      if (!Number.isNaN(iterNum) && iterNum > 0) {
-        config.termination = { max_iterations: iterNum, stop_on_no_tool_calls: true };
-      }
-    }
-
-    return config;
-  }
-
-  /**
-   * 显示配置摘要
-   */
-  private showSummary(config: VesselConfig): void {
-    console.log('\n' + '='.repeat(50));
-    console.log('📋 Configuration Summary');
-    console.log('='.repeat(50));
-    console.log(`Provider: ${config.provider?.name ?? 'openai'}`);
-    console.log(`Model: ${config.provider?.model ?? 'gpt-4'}`);
-    console.log(`API Key: ${config.api_key ? '****' + config.api_key.slice(-4) : 'Not set'}`);
-    
-    if (config.provider?.temperature) {
-      console.log(`Temperature: ${config.provider.temperature}`);
-    }
-    if (config.provider?.max_tokens) {
-      console.log(`Max Tokens: ${config.provider.max_tokens}`);
-    }
-    if (config.termination?.max_iterations) {
-      console.log(`Max Iterations: ${config.termination.max_iterations}`);
-    }
-    console.log('='.repeat(50));
-  }
-
-  /**
-   * 保存配置
-   */
-  private async saveConfig(config: VesselConfig): Promise<void> {
-    const configPath = this.config.configPath ?? 'vessel.yaml';
-    
-    // 转换为 YAML 格式（简单实现）
-    const yaml = this.toYaml(config);
-    
-    await Bun.write(configPath, yaml);
-    console.log(`\nConfiguration saved to: ${configPath}`);
-  }
-
-  /**
-   * 简单的 YAML 转换
-   */
-  private toYaml(obj: unknown, indent = 0): string {
-    const lines: string[] = [];
-    const prefix = '  '.repeat(indent);
-
-    if (typeof obj === 'object' && obj !== null) {
-      for (const [key, value] of Object.entries(obj)) {
-        if (typeof value === 'object' && value !== null) {
-          lines.push(`${prefix}${key}:`);
-          lines.push(this.toYaml(value, indent + 1));
-        } else {
-          lines.push(`${prefix}${key}: ${value}`);
-        }
-      }
-    }
-
-    return lines.join('\n');
-  }
-
-  /**
-   * 提示用户输入
-   */
-  private prompt(question: string): Promise<string> {
+  private ask(prompt: string): Promise<string> {
     return new Promise((resolve) => {
-      this.rl.question(question, (answer) => {
-        resolve(answer);
+      this.rl.question(prompt, (answer) => {
+        resolve(answer.trim());
       });
     });
   }
 }
 
-/**
- * 运行设置向导
- */
-export async function runSetupWizard(config?: SetupWizardConfig): Promise<VesselConfig> {
-  const wizard = new SetupWizard(config);
-  return wizard.run();
+/** 从 BaseURL 推断 provider 名称 */
+function inferProvider(baseUrl: string): string {
+  const u = baseUrl.toLowerCase();
+  if (u.includes('openai') || u.includes('api.openai')) return 'openai';
+  if (u.includes('anthropic') || u.includes('api.anthropic')) return 'anthropic';
+  if (u.includes('google') || u.includes('generativelanguage')) return 'google';
+  if (u.includes('mistral')) return 'mistral';
+  if (u.includes('cohere')) return 'cohere';
+  if (u.includes('localhost') || u.includes('127.0.0.1') || u.includes('ollama')) return 'ollama';
+  return 'custom';
 }
 
-export type { SetupWizardConfig };
+/** 便捷函数：运行向导 */
+export async function runSetupWizard(cfg?: SetupWizardConfig): Promise<UserConfig> {
+  const wizard = new SetupWizard(cfg);
+  return wizard.run();
+}

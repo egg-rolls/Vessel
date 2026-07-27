@@ -34,12 +34,19 @@
 - **后果**：单一心智；内置能力也走同机制（一致性）。表达力靠 Plugin 接口保证。
 - **关联**：legacy/LESSONS 教训3；[SPEC.md](SPEC.md) §5。
 
-## ADR-005：安全默认 + 可覆盖（放弃"无默认"教条）
+## ADR-005：双层配置——用户身份与项目行为分离
 
-- **上下文**：旧 Vessel 强制"不内置默认 provider/model/base_url/价格"，却给 temperature/iterations 等行为默认，教条自相矛盾；无基础用户既无默认 provider 便利，又被隐式默认困惑。
-- **决策**：内置安全默认（provider 预设列表 + 行为默认），用户填 Key 即跑；所有默认可被配置覆盖。**Key 永远用户自备，不内置任何厂商 Key/价格。**
-- **后果**：无基础用户零配置起步；仍保持厂商中立（不绑 Key/价格）。预设列表需维护。
-- **关联**：legacy/LESSONS 教训5。
+- **上下文**：旧 Vessel 强制"不内置默认 provider/model/base_url/价格"，却给 temperature/iterations 等行为默认，教条自相矛盾。同时 `.env` 和 `vessel.yaml` 混用，API Key 散落各处，无基础用户困惑。
+- **决策**：
+  1. 内置安全默认（provider 预设列表 + 行为默认），用户填 Key 即跑。
+  2. **Key 永远用户自备，不内置任何厂商 Key/价格。**
+  3. **配置分两层**：`~/.vessel/config.yaml`（用户身份：Key + provider 偏好，跨项目复用）+ `vessel.yaml`（项目行为：工具/限额/插件，跟着仓库走）。
+  4. `api_key` **只存** `~/.vessel/config.yaml`，**不进入** `vessel.yaml`（后者可安全 git commit）。
+  5. 加载优先级：CLI flag > `VESSEL_*` env > `vessel.yaml` > `~/.vessel/config.yaml` > 安全默认。
+  6. `.env` 不是 Vessel 的配置机制（保留 `VESSEL_*` 环境变量用于 CI/容器/自动化）。
+  7. 首启向导产出 `~/.vessel/config.yaml`，此后所有项目自动可用。
+- **后果**：无基础用户填一次 Key 即可在所有项目使用；项目配置不含密钥可安全共享；环境变量退居自动化场景。代价：需维护 `~/.vessel/` 目录的创建/读写逻辑。
+- **关联**：legacy/LESSONS 教训5；[SPEC.md](SPEC.md) §6。
 
 ## ADR-006：分发用 npx + Bun 单二进制
 
@@ -134,3 +141,32 @@
   4. 若未来出现**真正无法用现有机制表达**的循环语义——即无法通过新增工具/Hook/Guardrail/事件类型解决——此时再写新 ADR。当前判断：不存在此类场景。
 - **后果**：core 额外少一个接口（`LoopStrategy` 从 SPEC 移除）；所有范式统一用同一循环；新人不用学"选哪种策略"。代价：若未来确实需要新循环拓扑，需新 ADR。但按当前论证，那是很小概率的事件。
 - **关联**：[SPEC.md §1.1](SPEC.md)；[PLUGINS.md §九](PLUGINS.md)；legacy/LESSONS 教训14。
+
+---
+
+## ADR-016：LlmStreamChunk 事件类型——流式增量经事件流
+
+- **上下文**：ADR-007 确立"流式 = 订阅事件流，非独立方法"，要求 loop 在 LLM 流式响应时增量发事件。当前 `LLMProvider.chat()` 仅返回完整 `LLMResponse`，loop 阻塞等待整段响应后一次发布 `LlmResponse`——TUI 只能看到整段文本，无法 token-by-token 渲染。ADR-012(2a) 允许扩展 EventType（"插座"级别演化）。
+- **决策**：
+  1. 新增 `EventType.LlmStreamChunk = 'llm.stream.chunk'`，携带 `LlmStreamChunkPayload { run_id, chunk: StreamChunk }`。
+  2. `StreamChunk` 类型定义三层增量：`text_delta`（文本片段）、`tool_call_delta`（按 index 累积的 tool_call arguments 片段）、`finish`（完成原因 + usage）。
+  3. `ChatRequest` 增加可选字段 `stream?: boolean` + `on_chunk?: (chunk: StreamChunk) => void`。Provider 在 `chat()` 内部处理流式（单方法，不动接口签名）：当 `stream=true` 且有 `on_chunk` 时走 SSE 逐块回调，最终仍返回拼装好的 `LLMResponse`（loop 后续逻辑不变）。
+  4. Runtime 在 `toolCallingLoop` 始终传 `stream: true` + `on_chunk`（发布 `LlmStreamChunk` 事件）。支持流式的 Provider 走 SSE；不支持的 Provider 忽略字段，退化为整段返回（无 chunk 事件）。headless 无订阅者时 chunk 静默丢弃。
+  5. 三个 Provider 同步实现流式：`MemoryLLMProvider`（供测试）、`OpenAICompatibleProvider`（SSE `data:` 行解析，tool_calls 按 index 累积）、`AnthropicProvider`（SSE `content_block_delta` 解析，tool_use `input_json_delta` 累积）。
+- **备选**：(a) 新增 `chatStream()` 异步迭代器方法——被 SPEC §4.1 "非独立方法" 否决。(b) Provider 直接持 EventStream 引用 publish——耦合 provider 插件与 core 事件系统，且违 ADR-007"loop 增量发事件"。均不取。
+- **后果**：TUI 可 token-by-token 渲染（emma 的 StreamRenderer 订阅 `LlmStreamChunk`）。EventType 枚举扩 1 个成员——现有 switch 无 exhaustiveness 检查，不破坏已有代码。Provider 非流式路径完全不变。core 稳定——不改 loop 逻辑、不引厂商 SDK。
+- **关联**：[SPEC.md §4.1/§4.4](SPEC.md)；ADR-007、ADR-008、ADR-012(2a)。
+
+---
+
+## ADR-017：Core 正式冻结
+
+- **上下文**：ADR-012 确立了 core 稳定性策略——只改三类事（插座/bug/横切）。ADR-011 确立四种扩展类型全经 PluginHost 投放。ADR-015 论证循环通用性——不需要 LoopStrategy 抽象。经 ADR-016（流式）补完 EventType 扩展面，9 个 core 接口 + 1 个循环 + 2 个插槽（ToolRegistry、ContextManager）的 MVP 范围已完整实现且与 SPEC 对齐。对所有已知功能诉求，Plugin/MCP/Skill 提供了充分且不侵入 core 的扩展路径。
+- **决策**：
+  1. `@vessel/core` 的 9 个接口 + tool-calling loop + EventType 枚举 + PluginHost 接口 **正式冻结**。冻结范围：`packages/core/src/**`。
+  2. **只能因三种理由修改 core**（与 ADR-012(2a-c) 一致）：(a) 扩展"插座"（新增 EventType/HookType/GuardrailStage 成员，需写新 ADR）；(b) 修复 loop 级或安全级 bug；(c) 被证明无法用 Plugin/Hook/Guardrail/事件/工具解决的横切需求（需先写新 ADR 论证）。
+  3. **任何改 core 的 PR 必须带 ADR 且被两人 review 通过**。CLAUDE.md §5.1 包含 AI 自检清单——拿不准不进 core。
+  4. **解冻条件**（全部满足）：(a) 出现 Plugin/Hook/Guardrail/事件/工具均无法表示的架构级需求；(b) 经至少一个插件尝试证明不可行；(c) 新 ADR 论证 + 两人 review 通过。
+- **备选**：永冻（不可逆）——过于僵化，ADR-012 保留的三种修改路径是合理安全阀。不冻（继续按 ADR-012 判断）——缺少显式里程碑，人类与 AI 对"可以改"的边界认知不统一。当前决策取了冻结 + 有限解冻条件的中间路径。
+- **后果**：AI 合约明确——CLAUDE.md §5.1 让每次编码会话首条指令级阻断。人类合约明确——PR 审查引用本 ADR 即可拒绝越界改动。Core 真正"固定不动"。若未来出现需解冻的需求，按本 ADR 第 4 条执行。
+- **关联**：ADR-012、ADR-011、ADR-015；[CLAUDE.md §5.1](../../CLAUDE.md)。

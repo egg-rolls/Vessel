@@ -5,7 +5,14 @@
  * 支持 Mistral AI API（OpenAI 兼容模式）。
  */
 
-import type { Plugin, PluginHost, LLMProvider, ChatRequest, LLMResponse, ToolCall } from '@vessel/core';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Plugin,
+  PluginHost,
+  ToolCall,
+} from '@vessel/core';
 
 export interface MistralProviderConfig {
   api_key: string;
@@ -50,7 +57,7 @@ export class MistralProvider implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
     });
@@ -98,7 +105,10 @@ export const mistralPlugin: Plugin = {
   version: '0.1.0',
   description: 'Mistral AI provider plugin',
   install(host: PluginHost) {
-    host.registerProvider('mistral', (config) => new MistralProvider(config as MistralProviderConfig));
+    host.registerProvider(
+      'mistral',
+      (config) => new MistralProvider(config as MistralProviderConfig),
+    );
   },
 };
 

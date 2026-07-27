@@ -5,7 +5,13 @@
  * 检测并脱敏个人身份信息（PII），如邮箱、电话、身份证号等
  */
 
-import type { Plugin, PluginHost, Guardrail, GuardrailContext, GuardrailResult } from '@vessel/core';
+import type {
+  Guardrail,
+  GuardrailContext,
+  GuardrailResult,
+  Plugin,
+  PluginHost,
+} from '@vessel/core';
 import { GuardrailStage } from '@vessel/core';
 
 /** PII Guardrail 配置 */
@@ -34,7 +40,7 @@ const DEFAULT_CONFIG: PIIGuardrailConfig = {
 };
 
 /** PII 检测结果 */
-interface PIIDetection {
+interface PiiDetection {
   type: string;
   value: string;
   start: number;
@@ -44,7 +50,7 @@ interface PIIDetection {
 /**
  * PII 检测器
  */
-class PIIDetector {
+class PiiDetector {
   private config: PIIGuardrailConfig;
 
   constructor(config: PIIGuardrailConfig) {
@@ -54,72 +60,78 @@ class PIIDetector {
   /**
    * 检测文本中的 PII
    */
-  detect(text: string): PIIDetection[] {
-    const detections: PIIDetection[] = [];
+  detect(text: string): PiiDetection[] {
+    const detections: PiiDetection[] = [];
 
     if (this.config.detectEmail) {
       const pattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
+      let match = pattern.exec(text);
+      while (match !== null) {
         detections.push({
           type: 'email',
           value: match[0],
           start: match.index,
           end: match.index + match[0].length,
         });
+        match = pattern.exec(text);
       }
     }
 
     if (this.config.detectPhone) {
       const pattern = /(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}\b/g;
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
+      let match = pattern.exec(text);
+      while (match !== null) {
         detections.push({
           type: 'phone',
           value: match[0],
           start: match.index,
           end: match.index + match[0].length,
         });
+        match = pattern.exec(text);
       }
     }
 
     if (this.config.detectSSN) {
       const pattern = /\b[0-9]{3}[-\s]?[0-9]{2}[-\s]?[0-9]{4}\b/g;
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
+      let match = pattern.exec(text);
+      while (match !== null) {
         detections.push({
           type: 'ssn',
           value: match[0],
           start: match.index,
           end: match.index + match[0].length,
         });
+        match = pattern.exec(text);
       }
     }
 
     if (this.config.detectCreditCard) {
-      const pattern = /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/g;
-      let match;
-      while ((match = pattern.exec(text)) !== null) {
+      const pattern =
+        /\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b/g;
+      let match = pattern.exec(text);
+      while (match !== null) {
         detections.push({
           type: 'credit_card',
           value: match[0],
           start: match.index,
           end: match.index + match[0].length,
         });
+        match = pattern.exec(text);
       }
     }
 
     if (this.config.customPatterns) {
       for (const { name, pattern } of this.config.customPatterns) {
         const regex = new RegExp(pattern.source, pattern.flags);
-        let match;
-        while ((match = regex.exec(text)) !== null) {
+        let match = regex.exec(text);
+        while (match !== null) {
           detections.push({
             type: name,
             value: match[0],
             start: match.index,
             end: match.index + match[0].length,
           });
+          match = regex.exec(text);
         }
       }
     }
@@ -130,7 +142,7 @@ class PIIDetector {
   /**
    * 脱敏文本
    */
-  mask(text: string, detections: PIIDetection[]): string {
+  mask(text: string, detections: PiiDetection[]): string {
     if (detections.length === 0) return text;
 
     let result = text;
@@ -151,15 +163,18 @@ class PIIDetector {
     switch (this.config.maskingStrategy) {
       case 'full':
         return '*'.repeat(value.length);
-      case 'partial':
+      case 'partial': {
         if (type === 'email') {
           const [local, domain] = value.split('@');
           return `${local[0]}***@${domain}`;
         }
         if (type === 'phone') {
-          return value.replace(/[0-9]/g, (char, index) => index < 7 ? '*' : char);
+          return value.replace(/[0-9]/g, (char, index) => (index < 7 ? '*' : char));
         }
-        return value.substring(0, 2) + '*'.repeat(value.length - 4) + value.substring(value.length - 2);
+        return (
+          value.substring(0, 2) + '*'.repeat(value.length - 4) + value.substring(value.length - 2)
+        );
+      }
       case 'hash':
         return `[REDACTED_${type.toUpperCase()}]`;
       default:
@@ -176,13 +191,13 @@ export class PIIGuardrail implements Guardrail {
   stage = GuardrailStage.Output;
   priority = 100;
 
-  private detector: PIIDetector;
+  private detector: PiiDetector;
 
   constructor(config: PIIGuardrailConfig = {}) {
-    this.detector = new PIIDetector(config);
+    this.detector = new PiiDetector(config);
   }
 
-  async check(value: unknown, ctx: GuardrailContext): Promise<GuardrailResult> {
+  async check(value: unknown, _ctx: GuardrailContext): Promise<GuardrailResult> {
     if (typeof value !== 'string') {
       return { allowed: true };
     }

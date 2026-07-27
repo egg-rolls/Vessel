@@ -4,19 +4,24 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { LLMProvider, Message, ChatRequest } from '../types/provider.js';
-import type { ToolRegistry } from '../types/tool.js';
+import { MemoryLimitChecker } from '../limits/limit-checker.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
 import { EventType } from '../types/event.js';
-import type { UsageLimits, TerminationPolicy, UsageStats } from '../types/limits.js';
-import type { SessionBackend, RunState } from '../types/session.js';
-import type { Plugin, PluginHost, AgentRuntimeOptions } from '../types/plugin.js';
-import type { Guardrail, GuardrailContext, GuardrailStage } from '../types/guardrail.js';
-import type { Hook, HookType, HookContext } from '../types/hook.js';
+import { type GuardrailContext, GuardrailStage } from '../types/guardrail.js';
+import { type HookContext, HookType } from '../types/hook.js';
+import type { TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
+import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
+import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
+import type { RunState, SessionBackend } from '../types/session.js';
+import type { ToolRegistry } from '../types/tool.js';
 import { MemoryPluginHost } from './plugin-host.js';
-import { MemoryLimitChecker } from '../limits/limit-checker.js';
-import { MemoryContextManager } from '../context/context-manager.js';
+
+/** Run 选项 */
+export interface RunOptions {
+  /** AbortSignal——设置后可在外部中断 run()（Hermes/Claude Code 模式） */
+  signal?: AbortSignal;
+}
 
 /**
  * Agent Runtime
@@ -59,40 +64,56 @@ export class AgentRuntime {
       start_time: Date.now(),
     };
 
-    // 初始化 PluginHost
+    // 初始化 PluginHost，并将直接注册的工具同步到 PluginHost（统一入口）
     this.pluginHost = new MemoryPluginHost();
-
-    // 安装插件
-    if (opts.plugins) {
-      for (const plugin of opts.plugins) {
-        this.installPlugin(plugin);
+    for (const tool of this.tools.list()) {
+      try {
+        this.pluginHost.registerTool(tool);
+      } catch {
+        // 工具名冲突，跳过（插件工具优先已注册的情况下保留直接工具）
       }
+    }
+
+    // 安装插件（异步，await runtime.ready 确保完成）
+    this._readyPromise = this.installPlugins(opts.plugins ?? []);
+  }
+
+  private _readyPromise: Promise<void>;
+
+  /** 等待所有插件安装完成。应在首次 run() 前 await。 */
+  get ready(): Promise<void> {
+    return this._readyPromise;
+  }
+
+  private async installPlugins(plugins: Plugin[]): Promise<void> {
+    for (const plugin of plugins) {
+      await this.installPlugin(plugin);
     }
   }
 
   /**
-   * 安装插件
+   * 安装插件（fail-fast：安装失败则构造函数失败）
    * @param plugin 插件
    */
-  private installPlugin(plugin: Plugin): void {
+  private async installPlugin(plugin: Plugin): Promise<void> {
     const result = plugin.install(this.pluginHost);
     if (result instanceof Promise) {
-      result.catch((err) => {
-        console.error(`Failed to install plugin "${plugin.name}": ${err}`);
-      });
+      await result; // 如果失败，让 async 构造函数抛出
     }
   }
 
   /**
    * 执行一次 run
    * @param input 用户输入
-   * @param session_id 可选的会话 ID
+   * @param sessionId 会话 ID（默认 'default'）
+   * @param opts 可选的 Run 选项（signal 等）
    * @returns 最终响应文本
    */
-  async run(input: string | Message, session_id?: string): Promise<string> {
-    const run_id = randomUUID();
+  async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
+    const runId = randomUUID();
     const startTime = Date.now();
-    const currentSessionId = session_id || 'default';
+    const currentSessionId = sessionId || 'default';
+    const signal = opts?.signal;
 
     // 重置使用量统计（每次 run 都是新的对话）
     this.stats = {
@@ -106,29 +127,40 @@ export class AgentRuntime {
     };
 
     // 切换到当前会话的 Context
-    if (this.context instanceof MemoryContextManager) {
-      this.context.setSessionId(currentSessionId);
-      
-      // 重置上下文（每次 run 都是新的对话）
-      this.context.clear();
-    }
+    this.context.setSessionId(currentSessionId);
 
-    // 添加 system prompt
-    if (this.systemPrompt) {
-      this.context.add({
-        role: 'system',
-        content: this.systemPrompt,
-      });
+    // 仅当 context 为空时初始化：
+    //   - in-process 同会话续聊：context 已有历史，不重置（多轮记忆）
+    //   - cross-process resume / 新进程：context 空，从 SessionBackend 恢复该 session 历史
+    //   - 无 backend 或无历史：加 system prompt 起新对话
+    // 不再无条件 clear() -- 那会丢多轮历史（debug-notes 当年为修累积 bug 的过度修复）。
+    // 只在 context 为空时加载一次，不会累积。
+    if (this.context.messages.length === 0) {
+      let restored = false;
+      if (this.session) {
+        const saved = await this.session.load(currentSessionId);
+        if (saved?.messages?.length) {
+          for (const m of saved.messages) {
+            this.context.add(m);
+          }
+          restored = true;
+        }
+      }
+      if (!restored && this.systemPrompt) {
+        this.context.add({
+          role: 'system',
+          content: this.systemPrompt,
+        });
+      }
     }
 
     // 准备用户消息
-    const userMessage: Message = typeof input === 'string'
-      ? { role: 'user', content: input }
-      : input;
+    const userMessage: Message =
+      typeof input === 'string' ? { role: 'user', content: input } : input;
 
     // 创建 Run 状态
     const runState: RunState = {
-      run_id,
+      run_id: runId,
       session_id: currentSessionId,
       messages: [userMessage],
       started_at: startTime,
@@ -138,8 +170,8 @@ export class AgentRuntime {
     // 发布 Run 开始事件
     this.publishEvent({
       type: EventType.RunStarted,
-      run_id,
-      data: { run_id, session_id: currentSessionId, input: userMessage.content },
+      run_id: runId,
+      data: { run_id: runId, session_id: currentSessionId, input: userMessage.content },
       ts: Date.now(),
     });
 
@@ -155,16 +187,16 @@ export class AgentRuntime {
       // 应用输入 Guardrail
       const inputResult = await this.applyGuardrails(
         userMessage.content,
-        'input',
-        run_id,
-        currentSessionId
+        GuardrailStage.Input,
+        runId,
+        currentSessionId,
       );
       if (!inputResult.allowed) {
         throw new Error(`Input blocked by guardrail: ${inputResult.reason}`);
       }
 
       // 执行 tool-calling loop
-      const response = await this.toolCallingLoop(run_id, currentSessionId);
+      const response = await this.toolCallingLoop(runId, currentSessionId, signal);
 
       // 更新 Run 状态
       runState.status = 'completed';
@@ -185,9 +217,9 @@ export class AgentRuntime {
       // 发布 Run 完成事件
       this.publishEvent({
         type: EventType.RunCompleted,
-        run_id,
+        run_id: runId,
         data: {
-          run_id,
+          run_id: runId,
           session_id: currentSessionId,
           output: response,
           usage: runState.usage,
@@ -212,9 +244,9 @@ export class AgentRuntime {
       // 发布 Run 失败事件
       this.publishEvent({
         type: EventType.RunFailed,
-        run_id,
+        run_id: runId,
         data: {
-          run_id,
+          run_id: runId,
           session_id: currentSessionId,
           error: runState.error,
           duration_ms: Date.now() - startTime,
@@ -229,44 +261,41 @@ export class AgentRuntime {
   /**
    * Tool-calling loop
    * 核心循环：调用 LLM -> 解析 tool_calls -> 执行工具 -> 注入结果 -> 循环
+   * @param runId Run ID
+   * @param sessionId 会话 ID
+   * @param signal 可选的 AbortSignal（Hermes/Claude Code 模式——Esc 中断）
    */
-  private async toolCallingLoop(
-    run_id: string,
-    session_id: string
+  protected async toolCallingLoop(
+    runId: string,
+    sessionId: string,
+    signal?: AbortSignal,
   ): Promise<string> {
-    const maxToolCalls = 5; // 最大工具调用次数
-    let toolCallCount = 0;
-
     while (true) {
+      // AbortSignal 中断（Hermes/Claude Code 模式——外部 Esc）
+      if (signal?.aborted) {
+        throw new Error(signal.reason ?? 'Run cancelled');
+      }
+
       // 检查终止条件
       if (this.limitChecker.checkTermination(this.stats, this.termination)) {
         throw new Error('Termination policy triggered: max iterations or runtime exceeded');
       }
 
-      // 检查使用量限制
+      // 检查使用量限制（含 request_limit、tool_calls_limit、token/cost 预算）——硬上限
       if (!this.limitChecker.checkLimits(this.stats, this.limits)) {
         throw new Error('Usage limits exceeded');
       }
 
-      // 检查工具调用次数限制
-      if (toolCallCount >= maxToolCalls) {
-        console.log(`[AgentRuntime] Max tool calls (${maxToolCalls}) reached, stopping`);
-        // 返回上下文中的最后一条助手消息
-        const messages = this.context.messages;
-        const lastAssistant = messages.filter(m => m.role === 'assistant').pop();
-        return lastAssistant?.content ?? '工具调用次数已达上限';
-      }
-
       // 执行 BeforeLlm 钩子
-      const hookCtx: HookContext = { run_id, session_id };
-      await this.runHooks('before_llm', hookCtx);
+      const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
+      await this.runHooks(HookType.BeforeLlm, hookCtx);
 
       // 发布 LLM 请求事件
       const messages = this.context.messages;
-      
-      // 合并两种来源的工具：直接注册的 + 插件注册的
-      const directToolSchemas = this.tools.schemas();
-      const pluginToolSchemas = this.pluginHost.listTools().map(tool => ({
+
+      // 统一工具来源：PluginHost（直接注册的工具已在构造时同步进去）
+      const allTools = this.pluginHost.listTools();
+      const toolSchemas = allTools.map((tool) => ({
         type: 'function' as const,
         function: {
           name: tool.name,
@@ -274,17 +303,20 @@ export class AgentRuntime {
           parameters: tool.inputSchema,
         },
       }));
-      const toolSchemas = [...directToolSchemas, ...pluginToolSchemas];
-      
-      // 调试：打印工具列表
-      console.log('[Debug] Direct tools:', directToolSchemas.map(t => t.function.name));
-      console.log('[Debug] Plugin tools:', pluginToolSchemas.map(t => t.function.name));
-      console.log('[Debug] Total tools:', toolSchemas.length);
-      
+
+      // 调试日志（仅在 VESSEL_DEBUG 环境变量设置时输出）
+      if (process.env.VESSEL_DEBUG) {
+        console.log(
+          '[Debug] Total tools:',
+          toolSchemas.length,
+          toolSchemas.map((t) => t.function.name),
+        );
+      }
+
       this.publishEvent({
         type: EventType.LlmRequest,
-        run_id,
-        data: { run_id, messages, tools: toolSchemas },
+        run_id: runId,
+        data: { run_id: runId, messages, tools: toolSchemas },
         ts: Date.now(),
       });
 
@@ -296,13 +328,29 @@ export class AgentRuntime {
         messages,
         model: this.model,
         tools: toolSchemas.length > 0 ? toolSchemas : undefined,
-        session_id: session_id,  // 传递 session_id 给 Provider
+        session_id: sessionId,
+        // AbortSignal——Provider 透传给 fetch()，支持 Esc 中断（Hermes/Claude Code 模式）
+        signal,
+        // 流式（ADR-007）：始终提供 stream + on_chunk。支持流式的 Provider 边收边经回调吐增量，
+        // loop 在此发布 LlmStreamChunk 事件供 TUI 订阅渲染；不支持流式的 Provider 忽略字段、
+        // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
+        stream: true,
+        on_chunk: (chunk) => {
+          this.publishEvent({
+            type: EventType.LlmStreamChunk,
+            run_id: runId,
+            data: { run_id: runId, chunk },
+            ts: Date.now(),
+          });
+        },
       };
 
-      // 调试：打印发送给 AI 的消息
-      console.log('[Debug] Messages sent to AI:');
-      for (const msg of messages) {
-        console.log(`  [${msg.role}]: ${msg.content?.substring(0, 100)}...`);
+      // 调试日志（仅在 VESSEL_DEBUG 环境变量设置时输出）
+      if (process.env.VESSEL_DEBUG) {
+        console.log('[Debug] Messages sent to AI:');
+        for (const msg of messages) {
+          console.log(`  [${msg.role}]: ${msg.content?.substring(0, 100)}...`);
+        }
       }
 
       const response = await this.provider.chat(request);
@@ -312,16 +360,16 @@ export class AgentRuntime {
         this.limitChecker.addTokens(
           this.stats,
           response.usage.prompt_tokens ?? 0,
-          response.usage.completion_tokens ?? 0
+          response.usage.completion_tokens ?? 0,
         );
       }
 
       // 发布 LLM 响应事件
       this.publishEvent({
         type: EventType.LlmResponse,
-        run_id,
+        run_id: runId,
         data: {
-          run_id,
+          run_id: runId,
           content: response.content,
           tool_calls: response.tool_calls,
           finish_reason: response.finish_reason,
@@ -331,16 +379,16 @@ export class AgentRuntime {
       });
 
       // 执行 AfterLlm 钩子
-      await this.runHooks('after_llm', hookCtx);
+      await this.runHooks(HookType.AfterLlm, hookCtx);
 
       // 检查完成原因
       if (response.finish_reason === 'stop') {
         // 应用输出 Guardrail
         const outputResult = await this.applyGuardrails(
           response.content,
-          'output',
-          run_id,
-          session_id
+          GuardrailStage.Output,
+          runId,
+          sessionId,
         );
         if (!outputResult.allowed) {
           throw new Error(`Output blocked by guardrail: ${outputResult.reason}`);
@@ -367,14 +415,13 @@ export class AgentRuntime {
         for (const toolCall of response.tool_calls) {
           // 增加工具调用计数
           this.limitChecker.incrementToolCall(this.stats);
-          toolCallCount++;
 
           // 应用工具调用 Guardrail
           const toolCallResult = await this.applyGuardrails(
             toolCall,
-            'tool_call',
-            run_id,
-            session_id
+            GuardrailStage.ToolCall,
+            runId,
+            sessionId,
           );
           if (!toolCallResult.allowed) {
             throw new Error(`Tool call blocked by guardrail: ${toolCallResult.reason}`);
@@ -384,9 +431,9 @@ export class AgentRuntime {
           const toolStartTime = Date.now();
           this.publishEvent({
             type: EventType.ToolCallStarted,
-            run_id,
+            run_id: runId,
             data: {
-              run_id,
+              run_id: runId,
               tool_call_id: toolCall.id,
               tool_name: toolCall.function.name,
               arguments: JSON.parse(toolCall.function.arguments),
@@ -395,47 +442,36 @@ export class AgentRuntime {
           });
 
           // 执行 BeforeTool 钩子
-          await this.runHooks('before_tool', hookCtx);
+          await this.runHooks(HookType.BeforeTool, hookCtx);
 
           try {
-            // 调用工具（先从直接注册的工具查找，再从插件注册的工具查找）
-            let result: string;
+            // 统一工具调用：只从 PluginHost 查找
             const toolName = toolCall.function.name;
-            
-            if (this.tools.has(toolName)) {
-              // 从直接注册的工具调用
-              result = await this.tools.invoke(toolCall, {
-                run_id,
-                session_id,
-                messages: this.context.messages,
-              });
-            } else {
-              // 从插件注册的工具调用
-              const pluginTool = this.pluginHost.getTool(toolName);
-              if (!pluginTool) {
-                throw new Error(`Tool "${toolName}" not found`);
-              }
-              
-              let args: unknown;
-              try {
-                args = JSON.parse(toolCall.function.arguments);
-              } catch {
-                args = {};
-              }
-              
-              result = await pluginTool.handler(args, {
-                run_id,
-                session_id,
-                messages: this.context.messages,
-              });
+            const pluginTool = this.pluginHost.getTool(toolName);
+
+            if (!pluginTool) {
+              throw new Error(`Tool "${toolName}" not found`);
             }
+
+            let args: unknown;
+            try {
+              args = JSON.parse(toolCall.function.arguments);
+            } catch {
+              args = {};
+            }
+
+            const result = await pluginTool.handler(args, {
+              run_id: runId,
+              session_id: sessionId,
+              messages: this.context.messages,
+            });
 
             // 应用工具结果 Guardrail
             const toolResultResult = await this.applyGuardrails(
               result,
-              'tool_result',
-              run_id,
-              session_id
+              GuardrailStage.ToolResult,
+              runId,
+              sessionId,
             );
             if (!toolResultResult.allowed) {
               throw new Error(`Tool result blocked by guardrail: ${toolResultResult.reason}`);
@@ -444,9 +480,9 @@ export class AgentRuntime {
             // 发布工具调用完成事件
             this.publishEvent({
               type: EventType.ToolCallCompleted,
-              run_id,
+              run_id: runId,
               data: {
-                run_id,
+                run_id: runId,
                 tool_call_id: toolCall.id,
                 tool_name: toolCall.function.name,
                 result,
@@ -456,30 +492,25 @@ export class AgentRuntime {
             });
 
             // 执行 AfterTool 钩子
-            await this.runHooks('after_tool', hookCtx);
+            await this.runHooks(HookType.AfterTool, hookCtx);
 
-            // 添加工具结果到上下文
+            // 添加工具结果到上下文（标准 role: tool 消息）
             this.context.add({
               role: 'tool',
               tool_call_id: toolCall.id,
               content: result,
             });
-
-            // 添加助手消息，告诉 AI 工具返回了什么
-            // 这样 AI 就能更容易理解工具返回的内容
-            this.context.add({
-              role: 'assistant',
-              content: `工具 ${toolCall.function.name} 返回了结果：${result}`,
-            });
+            // 注：不再注入假 assistant 消息（见 ADR-005 / Phase 1 review #3）
+            // Provider 负责正确解释 role: tool 消息
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
 
             // 发布工具调用失败事件
             this.publishEvent({
               type: EventType.ToolCallFailed,
-              run_id,
+              run_id: runId,
               data: {
-                run_id,
+                run_id: runId,
                 tool_call_id: toolCall.id,
                 tool_name: toolCall.function.name,
                 error: errorMessage,
@@ -515,41 +546,50 @@ export class AgentRuntime {
    * @param session_id 会话 ID
    * @returns Guardrail 结果
    */
-  private async applyGuardrails(
+  protected async applyGuardrails(
     value: unknown,
     stage: GuardrailStage,
-    run_id: string,
-    session_id?: string
+    runId: string,
+    sessionId?: string,
   ): Promise<{ allowed: boolean; replacement?: unknown; reason?: string }> {
     const guardrails = this.pluginHost.getGuardrails().filter((g) => g.stage === stage);
-    const ctx: GuardrailContext = { run_id, session_id, stage };
+    const ctx: GuardrailContext = { run_id: runId, session_id: sessionId, stage };
 
     let currentValue = value;
-    let allowed = true;
-    let reason: string | undefined;
 
     for (const guardrail of guardrails) {
       const result = await guardrail.check(currentValue, ctx);
       if (!result.allowed) {
-        allowed = false;
-        reason = result.reason;
-        break;
+        this.publishEvent({
+          type: EventType.GuardrailBlocked,
+          run_id: runId,
+          data: {
+            run_id: runId,
+            guardrail_name: guardrail.name,
+            stage,
+            reason: result.reason ?? 'blocked',
+          },
+          ts: Date.now(),
+        });
+        return {
+          allowed: false,
+          replacement: currentValue,
+          reason: result.reason,
+        };
       }
       if (result.replacement !== undefined) {
         currentValue = result.replacement;
       }
     }
 
-    if (!allowed) {
-      this.publishEvent({
-        type: EventType.GuardrailBlocked,
-        run_id,
-        data: { run_id, guardrail_name: 'unknown', stage, reason: reason ?? 'blocked' },
-        ts: Date.now(),
-      });
-    }
+    return { allowed: true, replacement: currentValue };
+  }
 
-    return { allowed, replacement: currentValue, reason };
+  /**
+   * 释放资源（关闭连接、保存状态等）
+   */
+  dispose(): void {
+    this.session?.close?.();
   }
 
   /**
@@ -557,7 +597,7 @@ export class AgentRuntime {
    * @param type Hook 类型
    * @param ctx Hook 上下文
    */
-  private async runHooks(type: HookType, ctx: HookContext): Promise<void> {
+  protected async runHooks(type: HookType, ctx: HookContext): Promise<void> {
     const hooks = this.pluginHost.getHooks().filter((h) => h.type === type);
     for (const hook of hooks) {
       await hook.run(ctx);
@@ -568,7 +608,7 @@ export class AgentRuntime {
    * 发布事件
    * @param event 运行事件
    */
-  private publishEvent(event: RunEvent): void {
+  protected publishEvent(event: RunEvent): void {
     this.events.publish(event);
   }
 }

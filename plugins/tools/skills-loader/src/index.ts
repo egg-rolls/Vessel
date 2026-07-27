@@ -6,10 +6,10 @@
  * Skill 是行为 know-how 的可复用剧本，不是代码。
  */
 
-import type { Plugin, PluginHost, Hook, HookContext, HookType } from '../../../packages/core/src/index';
-import { HookType as HookTypeEnum } from '../../../packages/core/src/index';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { Hook, HookContext, Plugin, PluginHost } from '../../../../packages/core/src/index';
+import { HookType as HookTypeEnum } from '../../../../packages/core/src/index';
 
 /** Skill 定义 */
 export interface Skill {
@@ -58,7 +58,7 @@ export class SkillsManager {
   }
 
   /** 获取 Skill 目录下的所有 .md 文件（支持递归） */
-  private findSkillFiles(dir: string): string[] {
+  findSkillFiles(dir: string): string[] {
     const results: string[] = [];
     if (!fs.existsSync(dir)) return results;
 
@@ -80,15 +80,13 @@ export class SkillsManager {
   }
 
   /** 加载单个 Skill 文件 */
-  private loadSkillFile(filePath: string): void {
+  loadSkillFile(filePath: string): void {
     const name = path.basename(filePath, '.md');
     const content = fs.readFileSync(filePath, 'utf-8');
 
     const lines = content.split('\n');
-    const titleLine = lines.find(l => l.startsWith('# '));
-    const description = titleLine
-      ? titleLine.substring(2).trim()
-      : `Skill: ${name}`;
+    const titleLine = lines.find((l) => l.startsWith('# '));
+    const description = titleLine ? titleLine.substring(2).trim() : `Skill: ${name}`;
 
     this.skills.set(name, {
       name,
@@ -181,12 +179,10 @@ export class SkillsManager {
 
   /** 停止文件监听 */
   unwatchSkills(): void {
-    const watcher = (this as Record<string, unknown>)._watcher as
-      | fs.FSWatcher
-      | undefined;
+    const watcher = (this as Record<string, unknown>)._watcher as fs.FSWatcher | undefined;
     if (watcher) {
       watcher.close();
-      delete (this as Record<string, unknown>)._watcher;
+      (this as Record<string, unknown>)._watcher = undefined;
     }
   }
 
@@ -216,9 +212,10 @@ export class SkillsManager {
    */
   searchSkills(query: string): Skill[] {
     const lowerQuery = query.toLowerCase();
-    return this.listSkills().filter(skill =>
-      skill.name.toLowerCase().includes(lowerQuery) ||
-      skill.description.toLowerCase().includes(lowerQuery)
+    return this.listSkills().filter(
+      (skill) =>
+        skill.name.toLowerCase().includes(lowerQuery) ||
+        skill.description.toLowerCase().includes(lowerQuery),
     );
   }
 
@@ -248,7 +245,7 @@ export class SkillsManager {
       return '没有技能';
     }
 
-    return `技能列表：${skills.map(s => s.name).join(', ')}`;
+    return `技能列表：${skills.map((s) => s.name).join(', ')}`;
   }
 }
 
@@ -267,8 +264,7 @@ function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
         const extended = ctx as HookContext & { system_prompt?: string };
         const existingSystem = extended.system_prompt ?? '';
         // 将 Skill 内容注入到 system prompt 前缀
-        extended.system_prompt =
-          `<!-- 自动加载的 Skills -->\n${skillContent}\n\n${existingSystem}`;
+        extended.system_prompt = `<!-- 自动加载的 Skills -->\n${skillContent}\n\n${existingSystem}`;
       }
 
       return ctx;
@@ -290,14 +286,15 @@ export const skillsLoaderPlugin: Plugin = {
     // 注册 Skill 管理工具
     host.registerTool({
       name: 'list_skills',
-      description: '列出所有可用技能。当用户询问"你有什么技能"、"你有哪些技能"、"你的技能列表"时调用此工具。',
+      description:
+        '列出所有可用技能。当用户询问"你有什么技能"、"你有哪些技能"、"你的技能列表"时调用此工具。',
       inputSchema: {
         type: 'object',
         properties: {},
       },
       handler: async () => {
         const summary = skillsManager.getSkillsSummary();
-        console.log('[Skills Loader] list_skills called, returning:', summary);
+        console.error('[Skills Loader] list_skills called, returning:', summary);
         return summary;
       },
     });
@@ -323,7 +320,7 @@ export const skillsLoaderPlugin: Plugin = {
           return `No skills found matching "${query}"`;
         }
 
-        return results.map(s => `**${s.name}**: ${s.description}`).join('\n');
+        return results.map((s) => `**${s.name}**: ${s.description}`).join('\n');
       },
     });
 
@@ -356,35 +353,35 @@ export const skillsLoaderPlugin: Plugin = {
     host.registerHook(createSkillInjectionHook(skillsManager));
 
     // 将 skillsManager 存储在 host 上，供其他组件使用
-    (host as Record<string, unknown>).__skillsManager = skillsManager;
+    (host as unknown as Record<string, unknown>).__skillsManager = skillsManager;
 
     // 递归加载 Skill 文件
     const skillsDir = path.resolve(loaderConfig.skillsDir ?? './skills');
-    console.log(`[Skills Loader] Looking for skills in: ${skillsDir}`);
+    console.error(`[Skills Loader] Looking for skills in: ${skillsDir}`);
 
     if (fs.existsSync(skillsDir)) {
-      const files = skillsManager['findSkillFiles'](skillsDir);
-      console.log(`[Skills Loader] Found ${files.length} skill files (recursive)`);
+      const files = skillsManager.findSkillFiles(skillsDir);
+      console.error(`[Skills Loader] Found ${files.length} skill files (recursive)`);
 
       for (const filePath of files) {
         try {
-          skillsManager['loadSkillFile'](filePath);
+          skillsManager.loadSkillFile(filePath);
         } catch {
           // skip
         }
       }
 
       const loadedSkills = skillsManager.listSkills();
-      console.log(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
-      console.log(`[Skills Loader] Skills: ${loadedSkills.map(s => s.name).join(', ')}`);
+      console.error(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
+      console.error(`[Skills Loader] Skills: ${loadedSkills.map((s) => s.name).join(', ')}`);
     } else {
-      console.log(`[Skills Loader] Skills directory not found: ${skillsDir}`);
+      console.error(`[Skills Loader] Skills directory not found: ${skillsDir}`);
     }
 
     // 启用文件监听（热加载）
     if (loaderConfig.watch) {
       skillsManager.watchSkills();
-      console.log('[Skills Loader] File watching enabled');
+      console.error('[Skills Loader] File watching enabled');
     }
   },
 };

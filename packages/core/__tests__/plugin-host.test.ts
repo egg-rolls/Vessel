@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
-import type { ToolDefinition } from '../src/types/tool';
-import type { ProviderFactory } from '../src/types/provider';
 import type { Guardrail } from '../src/types/guardrail';
-import type { Hook } from '../src/types/hook';
 import { GuardrailStage } from '../src/types/guardrail';
+import type { Hook } from '../src/types/hook';
 import { HookType } from '../src/types/hook';
+import type { ProviderFactory } from '../src/types/provider';
+import type { ToolDefinition } from '../src/types/tool';
 
 describe('MemoryPluginHost', () => {
   let host: MemoryPluginHost;
@@ -94,7 +94,7 @@ describe('MemoryPluginHost', () => {
     host.registerProvider('test-provider', factory);
 
     expect(() => host.registerProvider('test-provider', factory)).toThrow(
-      'Provider "test-provider" is already registered'
+      'Provider "test-provider" is already registered',
     );
   });
 

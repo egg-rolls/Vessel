@@ -3,7 +3,7 @@
  * @module @vessel/core/limits
  */
 
-import type { LimitChecker, UsageLimits, UsageStats, TerminationPolicy } from '../types/limits.js';
+import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 
 /**
  * 限制检查器实现
@@ -19,13 +19,22 @@ export class MemoryLimitChecker implements LimitChecker {
     if (limits.request_limit !== undefined && stats.request_count >= limits.request_limit) {
       return false;
     }
-    if (limits.tool_calls_limit !== undefined && stats.tool_calls_count >= limits.tool_calls_limit) {
+    if (
+      limits.tool_calls_limit !== undefined &&
+      stats.tool_calls_count >= limits.tool_calls_limit
+    ) {
       return false;
     }
-    if (limits.input_tokens_limit !== undefined && stats.input_tokens >= limits.input_tokens_limit) {
+    if (
+      limits.input_tokens_limit !== undefined &&
+      stats.input_tokens >= limits.input_tokens_limit
+    ) {
       return false;
     }
-    if (limits.output_tokens_limit !== undefined && stats.output_tokens >= limits.output_tokens_limit) {
+    if (
+      limits.output_tokens_limit !== undefined &&
+      stats.output_tokens >= limits.output_tokens_limit
+    ) {
       return false;
     }
     if (limits.total_cost_limit !== undefined && stats.total_cost >= limits.total_cost_limit) {

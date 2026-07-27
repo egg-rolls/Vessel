@@ -6,7 +6,14 @@
  * Gemini 原生 API 可通过 base_url 配置兼容端点。
  */
 
-import type { Plugin, PluginHost, LLMProvider, ChatRequest, LLMResponse, ToolCall } from '@vessel/core';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Plugin,
+  PluginHost,
+  ToolCall,
+} from '@vessel/core';
 
 export interface GoogleProviderConfig {
   api_key: string;
@@ -51,7 +58,7 @@ export class GoogleProvider implements LLMProvider {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
+        Authorization: `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify(body),
     });

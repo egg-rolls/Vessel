@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import type { RunState } from '../src/types/session';
 

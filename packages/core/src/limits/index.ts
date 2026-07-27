@@ -4,4 +4,4 @@
  */
 
 export { MemoryLimitChecker } from './limit-checker.js';
-export type { LimitChecker, UsageLimits, UsageStats, TerminationPolicy } from './limit-checker.js';
+export type { LimitChecker, UsageLimits, UsageStats, TerminationPolicy } from '../types/limits.js';

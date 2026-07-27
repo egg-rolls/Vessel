@@ -3,8 +3,8 @@
  * @module @vessel/core/context
  */
 
-import type { Message } from '../types/provider.js';
 import type { ContextConfig, ContextManager } from '../types/context.js';
+import type { Message } from '../types/provider.js';
 
 /**
  * 内存上下文管理器实现
@@ -12,7 +12,7 @@ import type { ContextConfig, ContextManager } from '../types/context.js';
  */
 export class MemoryContextManager implements ContextManager {
   private sessionMessages: Map<string, Message[]> = new Map(); // 按 session_id 存储消息
-  private currentSessionId: string = 'default';
+  private currentSessionId = 'default';
   private config: ContextConfig;
 
   constructor(config: ContextConfig = {}) {
@@ -116,7 +116,11 @@ export class MemoryContextManager implements ContextManager {
         role: 'assistant',
         content: `[Context compacted: ${removedCount} messages removed to save space]`,
       };
-      this.sessionMessages.set(this.currentSessionId, [...systemMessages, summaryMessage, ...recentMessages]);
+      this.sessionMessages.set(this.currentSessionId, [
+        ...systemMessages,
+        summaryMessage,
+        ...recentMessages,
+      ]);
     }
   }
 

@@ -7,10 +7,10 @@
  * Tier 1，无重依赖。
  */
 
-import type { Plugin, PluginHost, Hook, HookContext } from '@vessel/core';
-import { HookType } from '@vessel/core';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { Hook, HookContext, Plugin, PluginHost } from '@vessel/core';
+import { HookType } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -64,20 +64,23 @@ function parseFrontmatter(raw: string, filePath: string): MemoryEntry | null {
     return {
       meta: {
         name: path.basename(filePath, '.md'),
-        description: lines.find(l => l.startsWith('# '))?.replace(/^# /, '') ?? '',
+        description: lines.find((l) => l.startsWith('# '))?.replace(/^# /, '') ?? '',
       },
       content: raw,
       filePath,
     };
   }
 
-  const endIndex = lines.slice(1).findIndex(l => l.trim() === '---');
+  const endIndex = lines.slice(1).findIndex((l) => l.trim() === '---');
   if (endIndex === -1) {
     return null; // 格式错误
   }
 
   const frontmatterLines = lines.slice(1, endIndex + 1);
-  const body = lines.slice(endIndex + 2).join('\n').trim();
+  const body = lines
+    .slice(endIndex + 2)
+    .join('\n')
+    .trim();
 
   const meta: MemoryMeta = { name: '', description: '' };
 
@@ -134,10 +137,7 @@ class ProjectMemoryManager {
    * 加载 CLAUDE.md
    */
   private loadClaudeMd(): void {
-    const claudePath = path.resolve(
-      this.config.projectRoot,
-      this.config.claudeMdPath
-    );
+    const claudePath = path.resolve(this.config.projectRoot, this.config.claudeMdPath);
 
     try {
       if (fs.existsSync(claudePath)) {
@@ -152,10 +152,7 @@ class ProjectMemoryManager {
    * 加载 .vessel/memory/ 目录
    */
   private loadMemoryDir(): void {
-    const memoryDir = path.resolve(
-      this.config.projectRoot,
-      this.config.memoryDir
-    );
+    const memoryDir = path.resolve(this.config.projectRoot, this.config.memoryDir);
 
     if (!fs.existsSync(memoryDir)) {
       return;
@@ -168,8 +165,8 @@ class ProjectMemoryManager {
         const indexContent = fs.readFileSync(indexPath, 'utf-8');
         this.memoryIndex = indexContent
           .split('\n')
-          .filter(l => l.trim().startsWith('- '))
-          .map(l => l.replace(/^-\s*/, '').trim());
+          .filter((l) => l.trim().startsWith('- '))
+          .map((l) => l.replace(/^-\s*/, '').trim());
       } catch {
         // ignore
       }
@@ -177,11 +174,7 @@ class ProjectMemoryManager {
 
     // 2. 读取所有 .md 记忆文件（跳过 MEMORY.md）
     try {
-      const files = fs
-        .readdirSync(memoryDir)
-        .filter(
-          f => f.endsWith('.md') && f !== 'MEMORY.md'
-        );
+      const files = fs.readdirSync(memoryDir).filter((f) => f.endsWith('.md') && f !== 'MEMORY.md');
 
       for (const file of files) {
         const filePath = path.join(memoryDir, file);
@@ -222,26 +215,19 @@ class ProjectMemoryManager {
 
     // CLAUDE.md 内容（如果存在）
     if (this.claudeMdContent.trim()) {
-      parts.push(
-        `<!-- 项目说明 (CLAUDE.md) -->\n${this.claudeMdContent}`
-      );
+      parts.push(`<!-- 项目说明 (CLAUDE.md) -->\n${this.claudeMdContent}`);
     }
 
     // 记忆索引
     if (this.memoryIndex.length > 0) {
-      parts.push(
-        `<!-- 记忆索引 -->\n${this.memoryIndex.join('\n')}`
-      );
+      parts.push(`<!-- 记忆索引 -->\n${this.memoryIndex.join('\n')}`);
     }
 
     // 各条记忆内容
     for (const [name, entry] of this.memories) {
-      const typeTag = entry.meta.metadata?.type
-        ? ` [${entry.meta.metadata.type}]`
-        : '';
+      const typeTag = entry.meta.metadata?.type ? ` [${entry.meta.metadata.type}]` : '';
       parts.push(
-        `<!-- 记忆: ${name}${typeTag} -->\n` +
-        `**${entry.meta.description}**\n\n${entry.content}`
+        `<!-- 记忆: ${name}${typeTag} -->\n` + `**${entry.meta.description}**\n\n${entry.content}`,
       );
     }
 
@@ -255,9 +241,7 @@ class ProjectMemoryManager {
 
 // ── Hook 工厂 ────────────────────────────────────
 
-function createMemoryInjectionHook(
-  manager: ProjectMemoryManager
-): Hook {
+function createMemoryInjectionHook(manager: ProjectMemoryManager): Hook {
   return {
     name: 'memory-project-injection',
     type: HookType.BeforeLlm,
@@ -280,8 +264,7 @@ function createMemoryInjectionHook(
 export const memoryProjectPlugin: Plugin = {
   name: 'memory-project',
   version: '0.1.0',
-  description:
-    'Project memory plugin — reads CLAUDE.md and .vessel/memory/ into agent context',
+  description: 'Project memory plugin — reads CLAUDE.md and .vessel/memory/ into agent context',
   install(host: PluginHost, config?: unknown) {
     const memoryConfig = (config as MemoryProjectConfig) ?? {};
     const manager = new ProjectMemoryManager(memoryConfig);
@@ -290,8 +273,7 @@ export const memoryProjectPlugin: Plugin = {
     // 注册工具：列出记忆
     host.registerTool({
       name: 'list_memories',
-      description:
-        '列出所有项目记忆。当用户询问"你记得什么"、"有哪些记忆"时调用此工具。',
+      description: '列出所有项目记忆。当用户询问"你记得什么"、"有哪些记忆"时调用此工具。',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -301,7 +283,7 @@ export const memoryProjectPlugin: Plugin = {
         if (names.length === 0) {
           return '没有项目记忆。';
         }
-        return `项目记忆 (${names.length} 条):\n${names.map(n => `- ${n}`).join('\n')}`;
+        return `项目记忆 (${names.length} 条):\n${names.map((n) => `- ${n}`).join('\n')}`;
       },
     });
 

@@ -8,7 +8,13 @@
  * Tier 1。
  */
 
-import type { Plugin, PluginHost, Guardrail, GuardrailContext, GuardrailResult } from '@vessel/core';
+import type {
+  Guardrail,
+  GuardrailContext,
+  GuardrailResult,
+  Plugin,
+  PluginHost,
+} from '@vessel/core';
 import { GuardrailStage } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
@@ -101,7 +107,8 @@ const BUILTIN_RULES: RedactRule[] = [
   // Private key header
   {
     name: 'private-key',
-    pattern: /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g,
+    pattern:
+      /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g,
     replacement: '***PRIVATE-KEY-REDACTED***',
   },
   // Connection strings with credentials
@@ -128,10 +135,7 @@ function applyRule(text: string, rule: RedactRule): string {
   });
 }
 
-function redactText(
-  text: string,
-  rules: RedactRule[],
-): { redacted: string; found: string[] } {
+function redactText(text: string, rules: RedactRule[]): { redacted: string; found: string[] } {
   let result = text;
   const found: string[] = [];
 
@@ -148,17 +152,11 @@ function redactText(
 
 // ── Guardrail ─────────────────────────────────────
 
-function createRedactGuardrail(
-  rules: RedactRule[],
-  stage: GuardrailStage,
-): Guardrail {
+function createRedactGuardrail(rules: RedactRule[], stage: GuardrailStage): Guardrail {
   return {
     stage,
     priority: 10, // 高优先级，在其他 guardrail 之前执行
-    check: async (
-      value: unknown,
-      _ctx: GuardrailContext,
-    ): Promise<GuardrailResult> => {
+    check: async (value: unknown, _ctx: GuardrailContext): Promise<GuardrailResult> => {
       if (typeof value !== 'string') {
         // 尝试序列化非字符串值
         const str = JSON.stringify(value);
@@ -204,9 +202,7 @@ export const redactSecretsPlugin: Plugin = {
     const enableBuiltin = pluginConfig.enableBuiltin ?? true;
 
     // 组装规则
-    const rules: RedactRule[] = enableBuiltin
-      ? [...BUILTIN_RULES]
-      : [];
+    const rules: RedactRule[] = enableBuiltin ? [...BUILTIN_RULES] : [];
 
     if (pluginConfig.extraPatterns) {
       for (const extra of pluginConfig.extraPatterns) {
@@ -219,14 +215,10 @@ export const redactSecretsPlugin: Plugin = {
     }
 
     // 注册 ToolResult 阶段脱敏（工具返回值中的密钥）
-    host.registerGuardrail(
-      createRedactGuardrail(rules, GuardrailStage.ToolResult),
-    );
+    host.registerGuardrail(createRedactGuardrail(rules, GuardrailStage.ToolResult));
 
     // 注册 Output 阶段脱敏（LLM 输出中的密钥）
-    host.registerGuardrail(
-      createRedactGuardrail(rules, GuardrailStage.Output),
-    );
+    host.registerGuardrail(createRedactGuardrail(rules, GuardrailStage.Output));
   },
 };
 

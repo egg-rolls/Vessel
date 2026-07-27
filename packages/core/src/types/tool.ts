@@ -22,7 +22,7 @@ export interface ToolDefinition {
   inputSchema: Record<string, unknown>;
   handler: ToolHandler;
   timeout?: number;
-  default?: boolean;  // true = 在 system prompt 中自动列出; false = 通过 search_assets 发现
+  default?: boolean; // true = 在 system prompt 中自动列出; false = 通过 search_assets 发现
 }
 
 /** 工具 Schema（用于 LLM） */

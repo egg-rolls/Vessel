@@ -20,13 +20,23 @@ export interface RunState {
     total_cost?: number;
   };
   error?: string;
+  /** 会话标题（默认从首条用户消息派生，可由 /title 覆盖） */
+  title?: string;
+  /** 首条用户消息摘要（前 60 字符），用于 /resume 列表 */
+  preview?: string;
+  /** 最后活动时间戳（ms），用于 /resume 按 recency 排序 */
+  updated_at?: number;
 }
 
-/** Run 配置 */
-export interface RunConfig {
-  max_iterations?: number;
-  max_runtime_seconds?: number;
-  stop_on_no_tool_calls?: boolean;
+/** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */
+export interface SessionInfo {
+  session_id: string;
+  title: string;
+  preview: string;
+  status: string;
+  started_at: number;
+  updated_at: number;
+  message_count: number;
 }
 
 /** Session 信息 */
@@ -40,8 +50,11 @@ export interface Session {
 
 /** Session Backend 接口 */
 export interface SessionBackend {
-  load(session_id: string): Promise<RunState | null>;
+  load(sessionId: string): Promise<RunState | null>;
   save(state: RunState): Promise<void>;
-  delete(session_id: string): Promise<void>;
+  delete(sessionId: string): Promise<void>;
   list(): Promise<string[]>;
+  /** 列出会话摘要（含 title/preview/updated_at/message_count），按 recency 倒序，过滤空会话 */
+  listRich(): Promise<SessionInfo[]>;
+  close?(): void;
 }

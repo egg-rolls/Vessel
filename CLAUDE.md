@@ -98,6 +98,29 @@ AI 改 specs/guides/api 后自检：
 
 用户面向的四种扩展类型（Plugin/MCP/Skill/Config）全经 PluginHost 投放，core 不为它们新增接口（ADR-011）；详见 [SPEC.md §5.1](docs/specs/SPEC.md)。
 
+### 5.1 Core 冻结（ADR-017）
+
+**`@vessel/core` 的 9 个接口 + tool-calling loop 已冻结。** 功能增长一律走 Plugin/MCP/Skill，不动 core。
+
+冻结范围：`packages/core/src/**` 中所有定义了接口契约、循环逻辑、事件类型的文件。
+
+**只能因三种原因改 core**（ADR-012(2a-c)，需 ADR-017 解冻条件）：
+1. 扩"插座"——EventType / HookType / GuardrailStage 枚举成员（需写新 ADR）
+2. 修 loop 级 bug（竞态、泄漏、安全）
+3. 横切需求——**先证明**无法用 Plugin/Hook/Guardrail/事件/工具表示（ADR-015：尚无已知的此类需求）
+
+**你以为需要改 core？走这个 checklist：**
+```
+[ ] 我能用 Plugin + PluginHost.registerTool/registerHook 实现吗？
+[ ] 我能用 MCP server + bridge plugin 实现吗？
+[ ] 我能用 Skill（Markdown + BeforeLlm Hook）实现吗？
+[ ] 我能用 Guardrail（四阶段）实现吗？
+[ ] 我能用事件（新增或现有 EventType）实现吗？
+→ 任一为"是" → 不进 core。全"否" → 写 ADR，两人 Review。
+```
+
+**AI 编码前自查**：如果你要改 `packages/core/src/` 下的文件，先读本段。拿不准 = 不在 core 做。
+
 ## 6. 红线（Stop and reconsider if about to）
 
 - 把插件对象塞进 runtime 构造函数（guardrail/memory/mcp/corrections/resilience/evals）。-> 违 ADR-003。

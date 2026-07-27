@@ -3,13 +3,13 @@
  * @module @vessel/config
  */
 
-import type {
-  VesselConfig,
-  ConfigValidationResult,
-  ConfigValidationError,
-  ConfigValidationWarning,
-} from './types.js';
 import { PROVIDER_PRESETS } from './defaults.js';
+import type {
+  ConfigValidationError,
+  ConfigValidationResult,
+  ConfigValidationWarning,
+  VesselConfig,
+} from './types.js';
 
 /**
  * 校验 Vessel 配置
@@ -80,6 +80,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 校验：配置了 provider（有 api_key）但未指定 model。
+  // openai 有安全默认 gpt-4（SPEC §6.2.3）；其它 provider 缺 model 几乎必错，fail-fast。
+  if (config.api_key && config.provider && !config.provider.model) {
+    errors.push({
+      path: 'provider.model',
+      message: `Provider "${config.provider.name ?? 'unknown'}" has no model configured. Set "default_model" in ~/.vessel/config.yaml or run /setup.`,
+    });
+  }
+
   // 校验 agent
   if (config.agent) {
     const { name, system_prompt, temperature, max_tokens } = config.agent;
@@ -144,7 +153,13 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 limits
   if (config.limits) {
-    const { request_limit, tool_calls_limit, input_tokens_limit, output_tokens_limit, total_cost_limit } = config.limits;
+    const {
+      request_limit,
+      tool_calls_limit,
+      input_tokens_limit,
+      output_tokens_limit,
+      total_cost_limit,
+    } = config.limits;
 
     const validateLimit = (path: string, value: unknown, name: string) => {
       if (value !== undefined) {

@@ -27,7 +27,12 @@ export { SQLiteSessionBackend } from './session/sqlite-backend.js';
 export { MemoryLimitChecker } from './limits/index.js';
 
 // Provider
-export { MemoryLLMProvider, OpenAICompatibleProvider, AnthropicProvider } from './provider/index.js';
+export {
+  MemoryLLMProvider,
+  OpenAICompatibleProvider,
+  AnthropicProvider,
+} from './provider/index.js';
 
 // 运行时
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
+export type { RunOptions } from './runtime/agent-runtime.js';

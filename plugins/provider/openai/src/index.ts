@@ -5,7 +5,14 @@
  * 支持 OpenAI API 及兼容的 API（如 Azure OpenAI、本地模型等）
  */
 
-import type { Plugin, PluginHost, LLMProvider, ChatRequest, LLMResponse, ToolCall } from '@vessel/core';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Plugin,
+  PluginHost,
+  ToolCall,
+} from '@vessel/core';
 
 /** OpenAI Provider 配置 */
 export interface OpenAIProviderConfig {
@@ -56,7 +63,7 @@ export class OpenAIProvider implements LLMProvider {
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${this.apiKey}`,
+      Authorization: `Bearer ${this.apiKey}`,
     };
 
     if (this.organization) {
@@ -74,7 +81,7 @@ export class OpenAIProvider implements LLMProvider {
       throw new Error(`OpenAI API error: ${response.status} - ${error}`);
     }
 
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       choices: Array<{
         message: {
           content: string | null;

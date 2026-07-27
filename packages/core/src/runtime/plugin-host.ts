@@ -3,11 +3,11 @@
  * @module @vessel/core/runtime
  */
 
-import type { ToolDefinition } from '../types/tool.js';
-import type { ProviderFactory } from '../types/provider.js';
 import type { Guardrail } from '../types/guardrail.js';
 import type { Hook } from '../types/hook.js';
 import type { PluginHost } from '../types/plugin.js';
+import type { ProviderFactory } from '../types/provider.js';
+import type { ToolDefinition } from '../types/tool.js';
 
 /**
  * 内存 PluginHost 实现
@@ -50,7 +50,7 @@ export class MemoryPluginHost implements PluginHost {
   registerGuardrail(guardrail: Guardrail): void {
     // 按优先级排序（数字越小优先级越高）
     const index = this.guardrails.findIndex(
-      (g) => (g.priority ?? 100) > (guardrail.priority ?? 100)
+      (g) => (g.priority ?? 100) > (guardrail.priority ?? 100),
     );
     if (index === -1) {
       this.guardrails.push(guardrail);
@@ -65,9 +65,7 @@ export class MemoryPluginHost implements PluginHost {
    */
   registerHook(hook: Hook): void {
     // 按优先级排序（数字越小优先级越高）
-    const index = this.hooks.findIndex(
-      (h) => (h.priority ?? 100) > (hook.priority ?? 100)
-    );
+    const index = this.hooks.findIndex((h) => (h.priority ?? 100) > (hook.priority ?? 100));
     if (index === -1) {
       this.hooks.push(hook);
     } else {

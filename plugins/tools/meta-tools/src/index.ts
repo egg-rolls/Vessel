@@ -12,9 +12,28 @@
  * - remove_asset: 删除资产
  */
 
-import type { Plugin, PluginHost, ToolDefinition, ToolRegistry } from '../../../packages/core/src/index';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import type { Plugin, PluginHost, ToolDefinition } from '../../../../packages/core/src/index';
+
+/** 持久化工具模板（安全，不使用 eval/new Function） */
+interface PersistedToolTemplate {
+  name: string;
+  description: string;
+  type: 'shell' | 'http';
+  command?: string; // shell 模板，用 {{key}} 占位
+  url?: string; // http 模板，用 {{key}} 占位
+  method?: string; // GET / POST
+  headers?: Record<string, string>;
+  inputSchema?: Record<string, unknown>;
+}
+
+/** 替换模板中的 {{ key }} 占位符 */
+function substituteArgs(template: string, args: Record<string, string>): string {
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
+    return args[key] ?? `{{${key}}}`;
+  });
+}
 
 /**
  * 元资产管理器
@@ -27,43 +46,95 @@ export class AssetManager {
   private pluginHost: PluginHost;
   private toolsFilePath: string;
 
-  constructor(pluginHost: PluginHost, toolsFilePath: string = './tools/custom-tools.json') {
+  constructor(pluginHost: PluginHost, toolsFilePath = './tools/custom-tools.json') {
     this.pluginHost = pluginHost;
     this.toolsFilePath = toolsFilePath;
     this.loadPersistedTools();
   }
 
   /**
-   * 从文件加载已保存的工具
+   * 从文件加载已保存的工具（模板化，不使用 eval/new Function）
    */
   private loadPersistedTools(): void {
     try {
       if (fs.existsSync(this.toolsFilePath)) {
         const data = fs.readFileSync(this.toolsFilePath, 'utf-8');
-        const toolsData = JSON.parse(data) as Array<{
-          name: string;
-          description: string;
-          handlerCode: string;
-        }>;
+        const raw = JSON.parse(data) as Array<Record<string, unknown>>;
 
-        for (const toolData of toolsData) {
+        for (const item of raw) {
+          // 向后兼容：旧格式（handlerCode）静默跳过
+          if (!item.type || (item.type !== 'shell' && item.type !== 'http')) {
+            // 旧格式工具，跳过（不再支持 eval/new Function）
+            continue;
+          }
+
+          const tpl = item as unknown as PersistedToolTemplate;
           try {
-            const handler = new Function('args', toolData.handlerCode) as (args: unknown) => Promise<string>;
-            const tool: ToolDefinition = {
-              name: toolData.name,
-              description: toolData.description,
-              inputSchema: { type: 'object', properties: {} },
-              handler: async (args) => handler(args),
-            };
+            const tool = this.buildToolFromTemplate(tpl);
             this.tools.set(tool.name, tool);
             this.pluginHost.registerTool(tool);
           } catch (error) {
-            console.error(`Failed to load persisted tool "${toolData.name}":`, error);
+            console.error(`Failed to load persisted tool "${tpl.name}":`, error);
           }
         }
       }
     } catch (error) {
       console.error('Failed to load persisted tools:', error);
+    }
+  }
+
+  /**
+   * 从模板构建工具 handler（安全，无 eval）
+   */
+  buildToolFromTemplate(tpl: PersistedToolTemplate): ToolDefinition {
+    switch (tpl.type) {
+      case 'shell':
+        return {
+          name: tpl.name,
+          description: tpl.description,
+          inputSchema: tpl.inputSchema ?? {
+            type: 'object',
+            properties: {},
+          },
+          handler: async (args: unknown) => {
+            const cmd = substituteArgs(tpl.command ?? '', args as Record<string, string>);
+            try {
+              const proc = Bun.spawnSync({
+                cmd: ['sh', '-c', cmd],
+                stdout: 'pipe',
+                stderr: 'pipe',
+              });
+              return proc.stdout.toString() || proc.stderr.toString() || 'ok';
+            } catch (e) {
+              return `Error: ${e}`;
+            }
+          },
+        };
+
+      case 'http':
+        return {
+          name: tpl.name,
+          description: tpl.description,
+          inputSchema: tpl.inputSchema ?? {
+            type: 'object',
+            properties: {},
+          },
+          handler: async (args: unknown) => {
+            const url = substituteArgs(tpl.url ?? '', args as Record<string, string>);
+            try {
+              const res = await fetch(url, {
+                method: tpl.method ?? 'GET',
+                headers: tpl.headers ?? {},
+              });
+              return await res.text();
+            } catch (e) {
+              return `Error: ${e}`;
+            }
+          },
+        };
+
+      default:
+        throw new Error(`Unknown template type: ${tpl.type}. Supported: shell, http`);
     }
   }
 
@@ -77,11 +148,14 @@ export class AssetManager {
         fs.mkdirSync(dir, { recursive: true });
       }
 
-      const toolsData = Array.from(this.tools.entries()).map(([name, tool]) => ({
-        name,
-        description: tool.description,
-        handlerCode: tool.handler.toString(),
-      }));
+      const toolsData: PersistedToolTemplate[] = [];
+      for (const [name] of this.tools) {
+        // 只持久化模板类型的工具
+        const tpl = this._toolTemplates.get(name);
+        if (tpl) {
+          toolsData.push(tpl);
+        }
+      }
 
       fs.writeFileSync(this.toolsFilePath, JSON.stringify(toolsData, null, 2));
     } catch (error) {
@@ -89,12 +163,18 @@ export class AssetManager {
     }
   }
 
+  /** 存储工具模板（用于持久化） */
+  private _toolTemplates: Map<string, PersistedToolTemplate> = new Map();
+
   /**
-   * 注册工具资产
+   * 注册工具资产（同时记录模板以便持久化）
    */
-  registerTool(tool: ToolDefinition): void {
+  registerTool(tool: ToolDefinition, tpl?: PersistedToolTemplate): void {
     this.tools.set(tool.name, tool);
     this.pluginHost.registerTool(tool);
+    if (tpl) {
+      this._toolTemplates.set(tool.name, tpl);
+    }
     this.persistTools();
   }
 
@@ -121,8 +201,10 @@ export class AssetManager {
 
     // 搜索工具
     for (const [name, tool] of this.tools) {
-      if (name.toLowerCase().includes(lowerQuery) || 
-          tool.description.toLowerCase().includes(lowerQuery)) {
+      if (
+        name.toLowerCase().includes(lowerQuery) ||
+        tool.description.toLowerCase().includes(lowerQuery)
+      ) {
         results.push({
           type: 'tool',
           name,
@@ -134,8 +216,10 @@ export class AssetManager {
 
     // 搜索 Skill
     for (const [name, skill] of this.skills) {
-      if (name.toLowerCase().includes(lowerQuery) || 
-          skill.description.toLowerCase().includes(lowerQuery)) {
+      if (
+        name.toLowerCase().includes(lowerQuery) ||
+        skill.description.toLowerCase().includes(lowerQuery)
+      ) {
         results.push({
           type: 'skill',
           name,
@@ -327,10 +411,8 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
     handler: async (args) => {
       const { query, type = 'all' } = args as { query: string; type?: string };
       const results = assetManager.searchAssets(query);
-      
-      const filtered = type === 'all' 
-        ? results 
-        : results.filter(r => r.type === type);
+
+      const filtered = type === 'all' ? results : results.filter((r) => r.type === type);
 
       if (filtered.length === 0) {
         return `No assets found matching "${query}"`;
@@ -342,48 +424,70 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
 
   const addToolTool: ToolDefinition = {
     name: 'add_tool',
-    description: 'Add a new tool to the asset registry',
+    description:
+      'Add a new tool using a safe template (shell command or HTTP request). ' +
+      'Use {{ key }} placeholders for parameters.',
     inputSchema: {
       type: 'object',
       properties: {
-        name: {
+        name: { type: 'string', description: 'Tool name' },
+        description: { type: 'string', description: 'Tool description' },
+        type: {
           type: 'string',
-          description: 'Tool name',
+          enum: ['shell', 'http'],
+          description: 'Template type: "shell" or "http"',
         },
-        description: {
+        command: {
           type: 'string',
-          description: 'Tool description',
+          description: 'Shell template, e.g. "curl -s https://api.example.com/{{query}}"',
         },
-        handler_code: {
+        url: {
           type: 'string',
-          description: 'Tool handler function code (JavaScript)',
+          description: 'HTTP URL template, e.g. "https://api.example.com/{{endpoint}}"',
+        },
+        method: {
+          type: 'string',
+          description: 'HTTP method (default: GET)',
+        },
+        input_schema: {
+          type: 'object',
+          description: 'JSON Schema for tool parameters',
         },
       },
-      required: ['name', 'description', 'handler_code'],
+      required: ['name', 'description', 'type'],
     },
     handler: async (args) => {
-      const { name, description, handler_code } = args as {
+      const a = args as {
         name: string;
         description: string;
-        handler_code: string;
+        type: 'shell' | 'http';
+        command?: string;
+        url?: string;
+        method?: string;
+        input_schema?: Record<string, unknown>;
       };
 
+      const tpl: PersistedToolTemplate = {
+        name: a.name,
+        description: a.description,
+        type: a.type,
+        command: a.command,
+        url: a.url,
+        method: a.method,
+        inputSchema: a.input_schema,
+      };
+
+      if (a.type === 'shell' && !a.command) {
+        return 'Error: shell type requires "command"';
+      }
+      if (a.type === 'http' && !a.url) {
+        return 'Error: http type requires "url"';
+      }
+
       try {
-        // 创建工具处理器
-        const handler = new Function('args', handler_code) as (args: unknown) => Promise<string>;
-
-        const tool: ToolDefinition = {
-          name,
-          description,
-          inputSchema: {
-            type: 'object',
-            properties: {},
-          },
-          handler: async (args) => handler(args),
-        };
-
-        assetManager.registerTool(tool);
-        return `Tool "${name}" added successfully`;
+        const tool = assetManager.buildToolFromTemplate(tpl);
+        assetManager.registerTool(tool, tpl);
+        return `Tool "${a.name}" added (type: ${a.type})`;
       } catch (error) {
         return `Failed to add tool: ${error}`;
       }
@@ -430,7 +534,7 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
     },
   };
 
-  const connectMCPTool: ToolDefinition = {
+  const connectMcpTool: ToolDefinition = {
     name: 'connect_mcp',
     description: 'Connect to an MCP (Model Context Protocol) server',
     inputSchema: {
@@ -440,29 +544,29 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
           type: 'string',
           description: 'Connection name',
         },
-        server_url: {
+        serverUrl: {
           type: 'string',
           description: 'MCP server URL',
         },
       },
-      required: ['name', 'server_url'],
+      required: ['name', 'serverUrl'],
     },
     handler: async (args) => {
-      const { name, server_url } = args as {
+      const { name, serverUrl } = args as {
         name: string;
-        server_url: string;
+        serverUrl: string;
       };
 
       // 创建 MCP 连接（简化实现）
       const connection: MCPConnection = {
         name,
-        serverUrl: server_url,
+        serverUrl: serverUrl,
         status: 'connected',
         tools: [],
       };
 
       assetManager.registerMCPConnection(connection);
-      return `Connected to MCP server "${name}" at ${server_url}`;
+      return `Connected to MCP server "${name}" at ${serverUrl}`;
     },
   };
 
@@ -536,7 +640,7 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
           name: (updates.name as string) ?? name,
           description: (updates.description as string) ?? existing.description,
           inputSchema: (updates.schema as Record<string, unknown>) ?? existing.schema ?? {},
-          handler: async (args) => `Tool "${name}" executed`,
+          handler: async () => `Tool "${name}" executed`,
         };
 
         assetManager.registerTool(tool);
@@ -597,7 +701,7 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
     searchAssetsTool,
     addToolTool,
     addSkillTool,
-    connectMCPTool,
+    connectMcpTool,
     inspectAssetTool,
     patchAssetTool,
     removeAssetTool,

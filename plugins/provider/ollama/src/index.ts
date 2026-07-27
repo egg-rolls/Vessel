@@ -6,7 +6,14 @@
  * 默认 base_url: http://localhost:11434/v1
  */
 
-import type { Plugin, PluginHost, LLMProvider, ChatRequest, LLMResponse, ToolCall } from '@vessel/core';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Plugin,
+  PluginHost,
+  ToolCall,
+} from '@vessel/core';
 
 export interface OllamaProviderConfig {
   base_url?: string;

@@ -5,7 +5,14 @@
  * 支持 Anthropic Claude API
  */
 
-import type { Plugin, PluginHost, LLMProvider, ChatRequest, LLMResponse, ToolCall } from '@vessel/core';
+import type {
+  ChatRequest,
+  LLMProvider,
+  LLMResponse,
+  Plugin,
+  PluginHost,
+  ToolCall,
+} from '@vessel/core';
 
 /** Anthropic Provider 配置 */
 export interface AnthropicProviderConfig {
@@ -75,7 +82,7 @@ export class AnthropicProvider implements LLMProvider {
       throw new Error(`Anthropic API error: ${response.status} - ${error}`);
     }
 
-    const data = await response.json() as {
+    const data = (await response.json()) as {
       content: Array<{
         type: 'text' | 'tool_use';
         text?: string;

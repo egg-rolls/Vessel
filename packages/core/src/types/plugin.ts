@@ -3,10 +3,10 @@
  * @module @vessel/core/plugin
  */
 
-import type { ToolDefinition } from './tool.js';
-import type { ProviderFactory } from './provider.js';
 import type { Guardrail } from './guardrail.js';
 import type { Hook } from './hook.js';
+import type { ProviderFactory } from './provider.js';
+import type { ToolDefinition } from './tool.js';
 
 /** Plugin 接口 */
 export interface Plugin {
@@ -41,5 +41,5 @@ export interface AgentRuntimeOptions {
   termination: import('./limits.js').TerminationPolicy;
   plugins?: Plugin[];
   session?: import('./session.js').SessionBackend;
-  systemPrompt?: string;  // 系统提示词
+  systemPrompt?: string; // 系统提示词
 }

@@ -3,37 +3,65 @@
  * @module @vessel/config
  */
 
-import type { VesselConfig, ConfigLoadOptions } from './types.js';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG } from './defaults.js';
-import { validateConfig, findUnknownKeys, KNOWN_CONFIG_KEYS } from './validator.js';
+import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
+import { KNOWN_CONFIG_KEYS, findUnknownKeys, validateConfig } from './validator.js';
 
 /**
- * 从 YAML 文件加载配置
+ * 获取用户配置目录
+ * - Windows: %USERPROFILE%/.vessel/
+ * - macOS/Linux: ~/.vessel/
+ */
+export function getUserConfigDir(): string {
+  return path.join(os.homedir(), '.vessel');
+}
+
+/**
+ * 获取用户配置文件路径
+ */
+export function getUserConfigPath(): string {
+  return path.join(getUserConfigDir(), 'config.yaml');
+}
+
+/**
+ * 从 YAML 文件加载配置（使用完整的 yaml 解析库）
  * @param filePath 配置文件路径
  * @returns 配置对象
  */
 export async function loadConfigFromFile(filePath: string): Promise<VesselConfig> {
+  const file = Bun.file(filePath);
+  const exists = await file.exists();
+
+  if (!exists) {
+    return {};
+  }
+
+  const content = await file.text();
+  return parseYaml(content) as VesselConfig;
+}
+
+/**
+ * 从用户配置目录加载 API Key 和 provider 偏好
+ * (~/.vessel/config.yaml)
+ */
+export async function loadUserConfig(userConfigPath?: string): Promise<UserConfig> {
+  const filePath = userConfigPath ?? getUserConfigPath();
+
   try {
     const file = Bun.file(filePath);
     const exists = await file.exists();
-    
+
     if (!exists) {
       return {};
     }
 
     const content = await file.text();
-    
-    // 使用 Bun 内置的 YAML 解析（如果可用）或简单解析
-    // 这里使用简单的 JSON 解析作为示例
-    // 实际实现应该使用 YAML 解析库
-    try {
-      return JSON.parse(content);
-    } catch {
-      // 如果不是 JSON，尝试简单解析 YAML
-      return parseSimpleYaml(content);
-    }
-  } catch (error) {
-    throw new Error(`Failed to load config from ${filePath}: ${error}`);
+    return parseYaml(content) as UserConfig;
+  } catch {
+    return {};
   }
 }
 
@@ -42,7 +70,7 @@ export async function loadConfigFromFile(filePath: string): Promise<VesselConfig
  * @param prefix 环境变量前缀
  * @returns 配置对象
  */
-export function loadConfigFromEnv(prefix: string = 'VESSEL_'): Partial<VesselConfig> {
+export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
   const config: Partial<VesselConfig> = {};
 
   // API Key
@@ -165,7 +193,7 @@ export function mergeConfig(base: VesselConfig, override: Partial<VesselConfig>)
 
 /**
  * 加载配置（综合加载）
- * 优先级：CLI flag > env > file > defaults
+ * 优先级：CLI flag > env (VESSEL_*) > vessel.yaml > ~/.vessel/config.yaml > 安全默认
  * @param options 加载选项
  * @returns 配置对象和校验结果
  */
@@ -176,7 +204,39 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
   // 1. 加载默认配置
   let config: VesselConfig = { ...DEFAULT_CONFIG };
 
-  // 2. 加载文件配置
+  // 2. 加载用户配置 (~/.vessel/config.yaml)
+  try {
+    const userConfig = await loadUserConfig(options.userConfigPath);
+    if (userConfig.api_key) {
+      config.api_key = userConfig.api_key;
+    }
+
+    // 应用 provider 配置（base_url、model、api_key）
+    const providerName =
+      userConfig.default_provider ??
+      (userConfig.providers ? Object.keys(userConfig.providers)[0] : undefined);
+    if (providerName && userConfig.providers?.[providerName]) {
+      const p = userConfig.providers[providerName];
+      const resolvedName = userConfig.default_provider ?? providerName;
+      const userModel = userConfig.default_model ?? p.model;
+      config.provider = {
+        ...config.provider,
+        // 用用户声明的 provider 名，而非 openai 默认（修：default_provider: custom 时错显 openai）
+        name: resolvedName,
+        api_key: config.provider?.api_key ?? p.api_key,
+        base_url: p.base_url ?? config.provider?.base_url,
+        // model：用户指定则用；否则仅 openai 回退到安全默认 gpt-4（SPEC §6.2.3）。
+        // 非 openai provider 不继承 gpt-4——那几乎必错，交由 validateConfig 报错。
+        model: userModel ?? (resolvedName === 'openai' ? config.provider?.model : undefined),
+      };
+    } else if (userConfig.default_provider) {
+      config.provider = { ...config.provider, name: userConfig.default_provider };
+    }
+  } catch {
+    // 用户配置不存在或解析失败，忽略
+  }
+
+  // 3. 加载项目文件配置 (./vessel.yaml)
   const filePath = options.configPath ?? 'vessel.yaml';
   try {
     const fileConfig = await loadConfigFromFile(filePath);
@@ -185,28 +245,32 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
     // 文件不存在或解析失败，忽略
   }
 
-  // 3. 加载环境变量配置
+  // 4. 加载环境变量配置 (VESSEL_*)
   const envPrefix = options.envPrefix ?? 'VESSEL_';
   const envConfig = loadConfigFromEnv(envPrefix);
   config = mergeConfig(config, envConfig);
 
-  // 4. 应用默认值
+  // 5. 应用 CLI 覆盖
   if (options.defaults) {
     config = mergeConfig(config, options.defaults);
   }
 
-  // 5. 校验配置
+  // 6. 校验配置
   const validation = validateConfig(config);
 
-  // 6. 检查未知键
-  const fileConfig = await loadConfigFromFile(filePath).catch(() => ({}));
-  const unknownKeys = findUnknownKeys(fileConfig as Record<string, unknown>, KNOWN_CONFIG_KEYS);
-  if (unknownKeys.length > 0) {
-    validation.warnings.push({
-      path: 'root',
-      message: `Unknown configuration keys: ${unknownKeys.join(', ')}`,
-      value: unknownKeys,
-    });
+  // 7. 检查项目配置文件中的未知键
+  try {
+    const fileConfig = await loadConfigFromFile(filePath);
+    const unknownKeys = findUnknownKeys(fileConfig as Record<string, unknown>, KNOWN_CONFIG_KEYS);
+    if (unknownKeys.length > 0) {
+      validation.warnings.push({
+        path: 'root',
+        message: `Unknown configuration keys: ${unknownKeys.join(', ')}`,
+        value: unknownKeys,
+      });
+    }
+  } catch {
+    // 文件不存在，跳过
   }
 
   return { config, validation };
@@ -219,43 +283,4 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
  */
 function getEnvVar(name: string): string | undefined {
   return process.env[name];
-}
-
-/**
- * 简单的 YAML 解析（仅支持基本语法）
- * 注意：生产环境应使用完整的 YAML 解析库
- * @param content YAML 内容
- * @returns 解析后的对象
- */
-function parseSimpleYaml(content: string): VesselConfig {
-  const config: Record<string, unknown> = {};
-  const lines = content.split('\n');
-
-  for (const line of lines) {
-    // 跳过空行和注释
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-
-    // 解析 key: value
-    const colonIndex = trimmed.indexOf(':');
-    if (colonIndex > 0) {
-      const key = trimmed.substring(0, colonIndex).trim();
-      const value = trimmed.substring(colonIndex + 1).trim();
-
-      // 尝试解析值
-      if (value === 'true') {
-        config[key] = true;
-      } else if (value === 'false') {
-        config[key] = false;
-      } else if (!Number.isNaN(Number(value))) {
-        config[key] = Number(value);
-      } else {
-        config[key] = value;
-      }
-    }
-  }
-
-  return config as VesselConfig;
 }

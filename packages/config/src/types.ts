@@ -98,9 +98,26 @@ export interface VesselConfig {
 
 /** 配置加载选项 */
 export interface ConfigLoadOptions {
+  /** 项目配置文件路径（默认 ./vessel.yaml） */
   configPath?: string;
+  /** 用户配置文件路径（默认 ~/.vessel/config.yaml） */
+  userConfigPath?: string;
+  /** 环境变量前缀（默认 VESSEL_） */
   envPrefix?: string;
+  /** CLI 覆盖 */
   defaults?: Partial<VesselConfig>;
+}
+
+/** 用户级配置（~/.vessel/config.yaml） */
+export interface UserConfig {
+  /** API Key（唯一必填项） */
+  api_key?: string;
+  /** 默认 provider */
+  default_provider?: string;
+  /** 默认模型 */
+  default_model?: string;
+  /** 多 provider Key */
+  providers?: Record<string, { api_key: string; base_url?: string; model?: string }>;
 }
 
 /** 配置校验结果 */

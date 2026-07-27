@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '../src/events/event-stream';
 import { EventType } from '../src/types/event';
 
