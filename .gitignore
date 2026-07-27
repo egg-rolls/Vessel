@@ -8,7 +8,7 @@
 # ----------------------------------------------------------
 node_modules/
 .bun/
-bun.lockb                     # Bun 二进制锁文件（用 bun.lock 文本版即可）
+bun.lockb
 
 # ----------------------------------------------------------
 # 2. Build output
@@ -23,14 +23,13 @@ out/
 *.mjs.map
 
 # Bun compile output
-vessel                         # bun build --compile 产物
+vessel
 
 # ----------------------------------------------------------
 # 3. Runtime data (Vessel)
 # ----------------------------------------------------------
-.vessel/                       # Vessel 运行时数据目录
-.vessel/sessions.db
-*.db                           # SQLite 数据库（运行时生成）
+.vessel/
+*.db
 *.sqlite
 *.sqlite3
 
@@ -72,7 +71,7 @@ coverage/
 coverage.lcov
 test-results/
 reports/
-*.snap                       # snapshot 过大或变更频繁时忽略
+*.snap
 
 # ----------------------------------------------------------
 # 7. IDE / Editor
