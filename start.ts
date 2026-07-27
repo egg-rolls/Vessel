@@ -21,7 +21,7 @@ import * as readline from 'readline';
 import { metaToolsPlugin } from './plugins/meta-tools/src/index';
 import { skillsLoaderPlugin } from './plugins/skills-loader/src/index';
 
-// 从环境变量读取 API Key
+// 从环境变量读取配置
 const apiKey = process.env.VESSEL_API_KEY;
 if (!apiKey) {
   console.error('错误：请设置 VESSEL_API_KEY 环境变量');
@@ -91,7 +91,7 @@ const systemPrompt = `你是一个有用的 AI 助手，可以通过工具来完
 // 创建 Runtime
 const runtime = new AgentRuntime({
   provider,
-  model: 'mimo-v2.5-pro',
+  model: process.env.VESSEL_MODEL || 'gpt-4',
   tools,
   context,
   events,
