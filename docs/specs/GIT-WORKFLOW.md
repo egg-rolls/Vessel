@@ -40,7 +40,7 @@ docs/xxx      ──●                 纯文档分支
 |------|----------|
 | `docs/specs/SPEC.md` | 新代码是否违反接口契约、模块边界 |
 | `docs/specs/ADR.md` | 是否违反已有架构决策 |
-| `docs/specs/ROADMAP.md` | 是否超出当前 Phase 范围 |
+| `docs/specs/ROADMAP.md` | 是否超出 ROADMAP 定义的范围 |
 | `CLAUDE.md` | §4 工程规范、§5 能力分层、§6 红线 |
 
 **检查清单**（由 AI Agent 执行并输出结论）：
@@ -95,7 +95,7 @@ grep -rE "(sk-[a-zA-Z0-9]{20,}|api_key\s*[:=]\s*['\"][^'\"\s]{20,})" packages/ p
 3. 对照 CLAUDE.md §4-6 检查规范+红线
 4. 检查硬编码密钥
 5. 确认 CI 状态（lint/typecheck/test/build）
-6. 输出审查报告（发现问题 → 阻止合并 → 给出修复建议）
+6. 输出审查结论（通过/阻断 + 原因；发现问题时给出修复建议）
 7. 全部通过 → 执行合并
 8. 合并后删除远程 feature 分支
 ```

@@ -34,11 +34,9 @@ push/PR → Install → Lint → Typecheck → Test → Build
 
 四项全部通过才算 CI 绿。
 
-## 版本发布（pre-MVP 暂不启用）
+## 运行
 
-当前 pre-MVP 阶段：
 ```bash
-# 暂无正式发布
-# 开发用 bun run start.ts
-# 测试用 bun test
+bun run start.ts       # 开发 REPL
+bun test               # 运行测试
 ```

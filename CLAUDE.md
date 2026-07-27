@@ -18,15 +18,16 @@
 2. [docs/specs/PRD.md](docs/specs/PRD.md) - 做什么 / 为谁
 3. [docs/specs/SPEC.md](docs/specs/SPEC.md) - 怎么建 / 接口契约
 4. [docs/specs/ADR.md](docs/specs/ADR.md) - 为什么这么决策（勿轻易推翻）
-5. [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md) - 当前分期 / MVP 边界
-6. [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) - 术语
-7. [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) - 插件 backlog 目录
-8. [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) - Git 协作与合并门禁
-9. [processes/collaboration.md](processes/collaboration.md) - 协作契约
-10. [processes/task-assignment.md](processes/task-assignment.md) - 当前任务分工
-11. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
-12. 相关 `packages/` 源码与测试
-13. [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献流程 / PR / commit 规范（人类贡献者入口）
+5. [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md) - 分期路线图
+6. [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md) - 文档书写规范（AI 必读）
+7. [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) - 术语
+8. [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) - 插件 backlog 目录
+9. [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) - Git 协作与合并门禁
+10. [processes/collaboration.md](processes/collaboration.md) - 协作契约
+11. [processes/task-assignment.md](processes/task-assignment.md) - 当前任务分工
+12. [legacy/LESSONS.md](legacy/LESSONS.md) - 旧项目教训（避免重蹈）
+13. 相关 `packages/` 源码与测试
+14. [CONTRIBUTING.md](CONTRIBUTING.md) - 贡献流程 / PR / commit 规范（人类贡献者入口）
 
 ## 3. 项目事实（随实现更新）
 

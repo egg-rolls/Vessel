@@ -2,7 +2,7 @@
 
 > 本文档定义 Vessel **怎么建**：架构、模块、接口契约、执行模型、扩展与配置模型。
 > 决策的"为什么"见 [ADR.md](ADR.md)；产品"做什么"见 [PRD.md](PRD.md)；分期见 [ROADMAP.md](ROADMAP.md)；术语见 [GLOSSARY.md](GLOSSARY.md)。
-> 状态：pre-MVP。标注 `[plan]` 的为待实现契约。下列 TS 接口为草图，供实现锚定。
+> 标注 `[plan]` 的接口为未实现契约（设计已锚定，实现按 ROADMAP 分期交付）。
 
 ## 1. 系统架构
 
@@ -138,8 +138,8 @@ const newProtocolPlugin: Plugin = {
 | Agent 不理解自身资产 | asset-introspection Skill 若写得不好，Agent 退化到 dump 全部工具进上下文 | **高（BIOS 级）** | asset-introspection 必须是测试最多、常 polish 的 Skill；需在多个模型上验证 |
 | Agent 把自己改坏 | `add_tool` / `add_skill` / `patch_asset` 注册了错误内容，破坏后续决策 | 中 | `registerTool` 时必须校验 schema + handler 签名；元工具禁止 raw eval；sandbox-fs 限制写入范围 |
 | 插件拖垮 runtime | 单进程模型：一个坏插件的 crash 影响同 runtime 的所有能力 | 中 | UsageLimits 硬断 + ToolTimeout + CircuitBreaker；未来考虑 worker 隔离 |
-| 无基础用户第一分钟劝退 | API Key 从哪来、provider 选谁——如果 TUI 向导不好，架构再对也没用 | 高 | 首启向导是 Phase 1 工程核心；权限弹窗的提示要面向无基础用户测试 |
-| 复杂企业工作流 | DAG + 人工审批 + SLA 当前循环单进程无法表达 | 低（Phase 3 前） | Phase 3 workflow + durable 插件解决；不进 core |
+| 无基础用户第一分钟劝退 | API Key 从哪来、provider 选谁——如果 TUI 向导不好，架构再对也没用 | 高 | 首启向导 + 权限弹窗须面向无基础用户设计 |
+| 复杂企业工作流 | DAG + 人工审批 + SLA 循环单进程模型无法表达 | 低 | workflow + durable 插件解决；不进 core |
 | 长时间任务断电恢复 | 无持久化执行状态 | 低（Phase 3 前） | Phase 3 durable execution 插件解决 |
 
 **核心结论**：架构的上限够高——高上限场景已有扩展路径（Phase 3 插件，不改 core）。架构的下限取决于 asset-introspection Skill 和 TUI 向导的工程质量，不是架构本身能保证的。
@@ -170,13 +170,13 @@ const newProtocolPlugin: Plugin = {
 | 可观测（Event） | ✅ | EventStream 枚举化，trace/replay/TUI 共用 |
 | 风险自知 | ✅ | SPEC §1.4 诚实列出 6 个已知风险 + 缓解 |
 | 术语统一 | ✅ | GLOSSARY.md；跨文档交叉引用 |
-| 最小可行（MVP 明确） | ✅ | ROADMAP Phase 1 范围精确；延后项明标 |
+| 最小可行 | ✅ | ROADMAP 分期明确；超出范围项标记为 Phase 2/3 |
 | 依赖方向受控 | ✅ | core 不依赖 tui/config/plugins；不引入 LangChain |
 | **尚未验证的弱点** | ⚠️ | |
 | asset-introspection 未在任何模型上测试 | BIOS 级风险 | 见 §1.4 |
-| 插件加载/卸载/重载语义未指定 | 运行时行为模糊 | Phase 1 实现时需细化 |
-| 单进程插件隔离弱 | 同进程 crash 传播 | 未来考虑 worker 隔离 |
-| "两个插槽"模型未对真实实现摩擦做验证 | 理论已证，实践待测 | Phase 1 |
+| 插件加载/卸载/重载语义未指定 | 运行时行为模糊 | 需在实现时细化 |
+| 单进程插件隔离弱 | 同进程 crash 传播 | 考虑 worker 隔离方案 |
+| "两个插槽"模型未对真实实现摩擦做验证 | 理论已证，实践待测 | 需实现验证 |
 
 #### 两个适配器 = Agent 的故障诊断框架
 
@@ -187,7 +187,7 @@ Agent 完成任务的两个充要条件（直接来源于 §1.1 的适配器模�
 
 任一不满足 → Agent 不应猜、不应装。应走 asset-introspection Skill 的认知检查循环：知识缺 → `search_assets` / `web-search` / `ask_user`；工具缺 → `search_assets` / `connect_mcp` / `add_tool` / `ask_user`。完整认知模式见 [PLUGINS.md §8.1](PLUGINS.md)。
 
-**判断**：Vessel 目前的架构文档达到了专业软件架构的标准——有依据（ADR）、有契约（SPEC）、有边界（SCOPE 精神→PRD）、有风险意识（§1.4）。它不是认知惰性的产物。但它是一个**理论验证了的、代码未经检验的架构**。Phase 1 实现时，架构中标注为 ⚠️ 的条目是第一优先级的验证目标。
+架构验证优先级：标注 ⚠️ 的条目为高风险未验证项，实现时优先验证。架构设计的完整论证见 [SCIENTIFIC-DESIGN.md](SCIENTIFIC-DESIGN.md)。
 
 ### 1.6 Loop Engineering 适配验证
 
@@ -396,7 +396,7 @@ interface SessionBackend {
   save(state: RunState): Promise<void>;
 }
 ```
-MVP 提供 in-memory + file 参考 backend。
+提供 in-memory 和 file 两种参考实现。
 
 ### 4.9 PluginHost 与 AgentRuntime（统一扩展入口）
 ```ts

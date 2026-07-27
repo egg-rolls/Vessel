@@ -2,7 +2,7 @@
 
 > 本文档定义 Vessel **做什么、为谁做、为什么**，不涉及技术实现（见 [SPEC.md](SPEC.md)）。
 > 决策理由见 [ADR.md](ADR.md)；分期见 [ROADMAP.md](ROADMAP.md)。
-> 状态：pre-MVP。
+> 标注 `[plan]` 的功能按 ROADMAP 分期交付。
 
 ## 1. 愿景
 
@@ -27,7 +27,7 @@
 
 ## 3. 范围
 
-### 3.1 MVP 范围内（IN）
+### 3.1 核心范围（IN）
 - 三层结构：core 运行时 + TUI 控制层 + 声明式配置层。
 - core 必备件：tool-calling loop、LLM provider 抽象、上下文管理、Run/Session、结构化事件流、工具注册、UsageLimits/TerminationPolicy、Guardrails（四阶段）、Hooks 接口。
 - TUI 必备件：交互 REPL、流式渲染、slash 命令、工具执行前权限确认、首启配置向导。
@@ -35,7 +35,7 @@
 - 分发：`npx vessel` 零安装 + Bun 单二进制。
 
 ### 3.2 明确不做（OUT）
-- workflow/DAG 编排、multi-agent/team、durable execution、evaluation harness（延后到 Phase 3，见 ROADMAP）。
+- workflow/DAG 编排、multi-agent/team、durable execution、evaluation harness（范围外，详见 ROADMAP Phase 3）。
 - 垂直应用：RAG、代码审查、文档问答、客服、图片工作流等（永不进 core，可作插件/独立应用）。
 - Web/桌面 GUI（TUI 即主界面）。
 - 企业 IAM/SSO/多租户/计费。
@@ -43,7 +43,7 @@
 
 ## 4. 成功指标
 
-| 指标 | MVP 目标 |
+| 指标 | 目标 |
 |------|----------|
 | 首次跑通时间（无基础用户：安装→第一次工具调用成功） | ≤ 5 分钟 |
 | 零配置起步 | 仅填 API Key 即可对话，其余全默认 |

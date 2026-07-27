@@ -20,7 +20,7 @@
 - **tui**：流式渲染、slash 命令（`/help` `/tools` `/session` `/config`）、工具执行前权限确认弹窗、首启配置向导（填 Key/选 provider）、Auto Compact 提示。
 - **config**：`vessel.yaml` 全 schema；零配置起步；未知键报错。
 - **插件示例**：1 个官方插件骨架（如 file-ops 工具集），证明 Plugin 机制。
-- 发布流水线：GitHub Actions release（tag 触发，出 Bun 单二进制 + GitHub Release）；npm 发包延后。
+- 发布流水线：GitHub Actions release（tag 触发，出 Bun 单二进制 + GitHub Release）；npm 发包：Phase 2。
 - **验收**：无基础用户 ≤5 分钟跑通；弱基础用户 ≤20 行 YAML 定义带自定义工具的 agent；core 可独立嵌入无 UI 依赖；新增 tool/provider/hook/guardrail 走同一注册。
 
 ## Phase 2 — 增强
@@ -31,7 +31,7 @@
 - provider 预设列表扩充。
 - **验收**：跨会话记忆生效；MCP 工具可加载调用；回放可重现一次 run。
 
-## Phase 3 — 延后能力（按需，非承诺；Tier 3）
+## Phase 3 — 按需能力（非承诺；Tier 3）
 
 - workflow/DAG 编排、multi-agent/team、durable execution、evaluation harness。
 - 各自独立插件包，不进 core。清单见 [PLUGINS.md](PLUGINS.md)。
