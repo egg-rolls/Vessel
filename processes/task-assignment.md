@@ -41,7 +41,7 @@
 
 ### 任务
 
-- [ ] 0. **拆接缝(与 emma 协作,前置)** 🚧 -- 契约已草案(`packages/tui/src/repl-context.ts` + `repl.ts` 底部 `startRepl` 占位),待 emma 确认。确认后: egg-rolls 改壳→调 `startRepl(ctx)`,emma 实现 REPL 循环。
+- [x] 0. **拆接缝(与 emma 协作,前置)** ✅ -- 壳重构完成: cli.ts 切掉全部 REPL 代码→调 `startRepl(ctx)`;保留 argv 解析/config/provider/runtime/headless;`ReplContext` 契约草案在 `packages/tui/src/repl-context.ts`;emma 实现 `startRepl`。
 - [ ] 1. **插件加载机制** -- `vessel.yaml` 的 `plugins: [...]` → 动态加载插件包 → 注入 runtime。把 file-ops / mcp-client / memory(project+auto) / security 接进来。当前 `src/cli.ts` 硬编码 `[metaToolsPlugin, skillsLoaderPlugin]`。
 - [ ] 2. **Provider 注册制** -- 接 `plugins/provider/*` 的 `registerProvider`,按 `config.provider.name` 选 provider。当前 `src/cli.ts` 硬编码 `OpenAICompatibleProvider`。顺带消掉 `Unknown provider "custom"` 警告(validator.ts:45,custom 不该是 warning)。
 - [x] 3. **流式核心(解锁 emma 的流式渲染)** ✅ -- `providers.ts` 三个 Provider(Memory/OpenAI/Anthropic)实现 `on_chunk` 回调流式;`ChatRequest` 增 `stream`+`on_chunk` 字段(向后兼容);新增 `EventType.LlmStreamChunk` + `LlmStreamChunkPayload`;runtime 接线发布增量事件;ADR-016 记录。Files: `packages/core/src/provider/providers.ts`、`types/provider.ts`、`types/event.ts`、`runtime/agent-runtime.ts`。
