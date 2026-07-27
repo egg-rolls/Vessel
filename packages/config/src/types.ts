@@ -47,7 +47,6 @@ export interface UsageLimitsConfig {
 export interface TerminationConfig {
   max_iterations?: number;
   max_runtime_seconds?: number;
-  stop_on_no_tool_calls?: boolean;
 }
 
 /** Agent 配置 */

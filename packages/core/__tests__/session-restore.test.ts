@@ -43,7 +43,7 @@ function makeRuntime(
     context,
     events: new MemoryEventStream(),
     limits: { request_limit: 10, tool_calls_limit: 5 },
-    termination: { max_iterations: 5, stop_on_no_tool_calls: true },
+    termination: { max_iterations: 5 },
     session,
     systemPrompt: 'sys',
   });

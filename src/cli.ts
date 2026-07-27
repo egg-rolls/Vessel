@@ -52,7 +52,12 @@ for (let i = 0; i < argv.length; i++) {
   } else if (a === '--pipe') {
     pipeMode = true;
   } else if (a === '--session' || a === '-s') {
-    sessionArg = argv[++i] ?? '';
+    const next = argv[i + 1];
+    if (next !== undefined && !next.startsWith('-')) {
+      sessionArg = next;
+      i++;
+    }
+    // 无值或下一个是 flag → sessionArg 保持 null，shell 会用 newSessionId()
   } else if (a === '--help' || a === '-h') {
     console.log(`Vessel CLI
 
@@ -245,7 +250,6 @@ const runtime = new AgentRuntime({
   termination: {
     max_iterations: config.termination?.max_iterations ?? 50,
     max_runtime_seconds: config.termination?.max_runtime_seconds,
-    stop_on_no_tool_calls: config.termination?.stop_on_no_tool_calls ?? true,
   },
   session,
   plugins,

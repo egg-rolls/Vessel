@@ -177,7 +177,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 termination
   if (config.termination) {
-    const { max_iterations, max_runtime_seconds, stop_on_no_tool_calls } = config.termination;
+    const { max_iterations, max_runtime_seconds } = config.termination;
 
     if (max_iterations !== undefined) {
       if (typeof max_iterations !== 'number' || max_iterations <= 0) {
@@ -197,14 +197,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
           value: max_runtime_seconds,
         });
       }
-    }
-
-    if (stop_on_no_tool_calls !== undefined && typeof stop_on_no_tool_calls !== 'boolean') {
-      errors.push({
-        path: 'termination.stop_on_no_tool_calls',
-        message: 'Stop on no tool calls must be a boolean',
-        value: stop_on_no_tool_calls,
-      });
     }
   }
 

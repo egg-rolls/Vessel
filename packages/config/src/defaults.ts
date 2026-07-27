@@ -27,7 +27,6 @@ export const DEFAULT_CONFIG: VesselConfig = {
   termination: {
     max_iterations: 20,
     max_runtime_seconds: 300,
-    stop_on_no_tool_calls: true,
   },
   session: {
     backend: 'memory',
@@ -58,5 +57,13 @@ export const PROVIDER_PRESETS: Record<string, { base_url: string; models: string
   mistral: {
     base_url: 'https://api.mistral.ai/v1',
     models: ['mistral-large-latest', 'mistral-medium-latest', 'mistral-small-latest'],
+  },
+  cohere: {
+    base_url: 'https://api.cohere.ai/v1',
+    models: ['command-r-plus', 'command-r', 'command'],
+  },
+  ollama: {
+    base_url: 'http://localhost:11434/v1',
+    models: ['llama3', 'mistral', 'gemma2'],
   },
 };

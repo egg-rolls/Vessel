@@ -16,7 +16,6 @@ export interface UsageLimits {
 export interface TerminationPolicy {
   max_iterations: number;
   max_runtime_seconds?: number;
-  stop_on_no_tool_calls: boolean;
 }
 
 /** 使用量统计 */

@@ -70,7 +70,6 @@ describe('MemoryLimitChecker', () => {
     it('should return true when max iterations reached', () => {
       const policy: TerminationPolicy = {
         max_iterations: 10,
-        stop_on_no_tool_calls: true,
       };
 
       stats.request_count = 10;
@@ -80,7 +79,6 @@ describe('MemoryLimitChecker', () => {
     it('should return false when within limits', () => {
       const policy: TerminationPolicy = {
         max_iterations: 10,
-        stop_on_no_tool_calls: true,
       };
 
       stats.request_count = 5;
@@ -91,7 +89,6 @@ describe('MemoryLimitChecker', () => {
       const policy: TerminationPolicy = {
         max_iterations: 100,
         max_runtime_seconds: 1,
-        stop_on_no_tool_calls: true,
       };
 
       stats.start_time = Date.now() - 2000; // 2 seconds ago

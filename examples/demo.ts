@@ -59,7 +59,6 @@ async function main() {
     },
     termination: {
       max_iterations: 10,
-      stop_on_no_tool_calls: true,
     },
     session,
   });

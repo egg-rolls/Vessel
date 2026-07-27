@@ -48,6 +48,7 @@ async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEv
       if (evt) yield evt;
     }
   } finally {
+    reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
