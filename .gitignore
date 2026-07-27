@@ -1,36 +1,144 @@
-# Dependencies
-node_modules/
+# ============================================================
+# Vessel — .gitignore
+# ============================================================
+# TypeScript + Bun monorepo，三层架构（core / config / tui）+ plugins/
 
-# Build output
+# ----------------------------------------------------------
+# 1. Dependencies
+# ----------------------------------------------------------
+node_modules/
+.bun/
+bun.lockb                     # Bun 二进制锁文件（用 bun.lock 文本版即可）
+
+# ----------------------------------------------------------
+# 2. Build output
+# ----------------------------------------------------------
 dist/
 build/
+out/
 *.tsbuildinfo
+*.js.map
+*.d.ts.map
+*.cjs.map
+*.mjs.map
 
-# Bun
-.bun/
+# Bun compile output
+vessel                         # bun build --compile 产物
 
-# Runtime data (vessel)
-.vessel/
+# ----------------------------------------------------------
+# 3. Runtime data (Vessel)
+# ----------------------------------------------------------
+.vessel/                       # Vessel 运行时数据目录
+.vessel/sessions.db
+*.db                           # SQLite 数据库（运行时生成）
+*.sqlite
+*.sqlite3
 
-# Env / secrets
+# ----------------------------------------------------------
+# 4. Environment & Secrets
+# ----------------------------------------------------------
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+secrets/
+credentials.json
+service-account.json
+*.credentials.json
 
-# OS / Editor
-.DS_Store
-Thumbs.db
+# ----------------------------------------------------------
+# 5. Logs
+# ----------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+bun-debug.log*
+
+# ----------------------------------------------------------
+# 6. Test & Coverage
+# ----------------------------------------------------------
+coverage/
+.nyc_output/
+.c8_output/
+.lcov/
+coverage.lcov
+test-results/
+reports/
+*.snap                       # snapshot 过大或变更频繁时忽略
+
+# ----------------------------------------------------------
+# 7. IDE / Editor
+# ----------------------------------------------------------
 .idea/
 .vscode/
 *.swp
 *.swo
+*~
+\#*\#
+.#*
+.project
+.classpath
+.settings/
+*.sublime-*
+*.code-workspace
+.history/
 
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# ----------------------------------------------------------
+# 8. OS
+# ----------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Test / coverage
-coverage/
-.nyc_output/
+# ----------------------------------------------------------
+# 9. Debug / Temp
+# ----------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.cache
+.cache/
+tmp/
+temp/
+*.dmp
+
+# ----------------------------------------------------------
+# 10. Archives
+# ----------------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+
+# ----------------------------------------------------------
+# 11. Docker / Containers
+# ----------------------------------------------------------
+.docker/
+docker-compose.override.yml
+
+# ----------------------------------------------------------
+# 12. Misc tooling
+# ----------------------------------------------------------
+.eslintcache
+.parcel-cache/
+.turbo/
+.next/
+.nuxt/
+.sst/
+.wrangler/
