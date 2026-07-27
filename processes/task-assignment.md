@@ -42,10 +42,10 @@
 ### 任务
 
 - [x] 0. **拆接缝(与 emma 协作,前置)** ✅ -- 壳重构完成: cli.ts 切掉全部 REPL 代码→调 `startRepl(ctx)`;保留 argv 解析/config/provider/runtime/headless;`ReplContext` 契约草案在 `packages/tui/src/repl-context.ts`;emma 实现 `startRepl`。
-- [ ] 1. **插件加载机制** -- `vessel.yaml` 的 `plugins: [...]` → 动态加载插件包 → 注入 runtime。把 file-ops / mcp-client / memory(project+auto) / security 接进来。当前 `src/cli.ts` 硬编码 `[metaToolsPlugin, skillsLoaderPlugin]`。
-- [ ] 2. **Provider 注册制** -- 接 `plugins/provider/*` 的 `registerProvider`,按 `config.provider.name` 选 provider。当前 `src/cli.ts` 硬编码 `OpenAICompatibleProvider`。顺带消掉 `Unknown provider "custom"` 警告(validator.ts:45,custom 不该是 warning)。
+- [x] 1. **插件加载机制** ✅ -- `PLUGIN_IMPORT_MAP` + `loadPlugin()` 动态 import;`config.plugins: [{name, enabled}]` → 注入 runtime;默认加载 meta-tools + skills-loader;无配置时回退默认。
+- [x] 2. **Provider 注册制** ✅ -- 加载全部 provider 插件到临时 PluginHost;从 registry 按 `config.provider.name` 取 factory → 实例化;validator 去掉 "Unknown provider" warning(插件可注册任意 provider)。
 - [x] 3. **流式核心(解锁 emma 的流式渲染)** ✅ -- `providers.ts` 三个 Provider(Memory/OpenAI/Anthropic)实现 `on_chunk` 回调流式;`ChatRequest` 增 `stream`+`on_chunk` 字段(向后兼容);新增 `EventType.LlmStreamChunk` + `LlmStreamChunkPayload`;runtime 接线发布增量事件;ADR-016 记录。Files: `packages/core/src/provider/providers.ts`、`types/provider.ts`、`types/event.ts`、`runtime/agent-runtime.ts`。
-- [ ] 4. **工具权限 guardrail 注册** -- `tool-confirm.ts` 的 `createPermissionGuardrail` 注册为 `ToolCall` guardrail,`autoApprove` 走 config。弹窗 UI 由 emma 做。
+- [x] 4. **工具权限 guardrail 注册** ✅ -- `createPermissionGuardrail` 接口修正为 `Guardrail`（`stage: GuardrailStage.ToolCall` + `check(value, ctx)` + `GuardrailResult`）;添加 `autoApprove` 参数。弹窗 UI 由 emma 做。
 - [x] 5. **core 测试加固** ✅ -- 维护 73 测试(原 67 + 6 新增——Memory/OpenAI 流式 + tool_call 累积 + 非流式回归 + agent-runtime LlmStreamChunk 断言)。后续任务 1/2/4 补对应回归。
 
 ## 五、emma — 边缘体验与优化

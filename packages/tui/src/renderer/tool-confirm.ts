@@ -4,6 +4,8 @@
  */
 
 import * as readline from 'node:readline';
+import { GuardrailStage } from '@vessel/core';
+import type { Guardrail, GuardrailContext, GuardrailResult } from '@vessel/core';
 
 /** 权限确认配置 */
 export interface ToolPermissionConfig {
@@ -138,23 +140,32 @@ export class ToolPermissionChecker {
 
 /**
  * 创建权限确认 Guardrail
- * 用于在工具执行前进行权限确认
+ * 用于在工具执行前进行权限确认。
+ * 返回符合 core Guardrail 接口的对象——可由 PluginHost.registerGuardrail 注册。
  */
-export function createPermissionGuardrail(checker: ToolPermissionChecker): {
-  name: string;
-  stage: string;
-  check: (value: unknown) => Promise<{ allowed: boolean; reason?: string }>;
-} {
+export function createPermissionGuardrail(
+  checker: ToolPermissionChecker,
+  autoApprove: string[] = [],
+): Guardrail {
   return {
     name: 'tool-permission',
-    stage: 'tool_call',
-    check: async (value: unknown) => {
+    stage: GuardrailStage.ToolCall,
+    priority: 10, // 其他 ToolCall guardrail 之前执行
+    check: async (value: unknown, _ctx: GuardrailContext): Promise<GuardrailResult> => {
       if (typeof value === 'object' && value !== null) {
         const toolCall = value as { function?: { name?: string; arguments?: string } };
-        if (toolCall.function?.name) {
-          const args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+        const toolName = toolCall.function?.name;
+        if (toolName) {
+          // autoApprove 列表中的工具跳过确认
+          if (autoApprove.includes(toolName)) {
+            return { allowed: true };
+          }
 
-          const result = await checker.confirm(toolCall.function.name, args);
+          const args = toolCall.function?.arguments
+            ? JSON.parse(toolCall.function.arguments)
+            : {};
+
+          const result = await checker.confirm(toolName, args);
 
           if (!result.approved) {
             return {

@@ -16,23 +16,21 @@
  */
 
 import { loadConfig } from '../packages/config/src/index';
+import { PROVIDER_PRESETS } from '../packages/config/src/defaults';
 import {
   AgentRuntime,
   type LLMProvider,
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
+  MemoryPluginHost,
   MemoryToolRegistry,
   type Message,
-  OpenAICompatibleProvider,
   type Plugin,
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { startRepl, type ReplContext } from '../packages/tui/src/index';
-
-import { metaToolsPlugin } from '../plugins/tools/meta-tools/src/index';
-import { skillsLoaderPlugin } from '../plugins/tools/skills-loader/src/index';
 
 // ── argv 解析 ────────────────────────────────────
 
@@ -111,10 +109,60 @@ if (!useMock && !headless && !config.api_key) {
   }
 }
 
-// ── Provider ────────────────────────────────────
+// ── 插件加载 ────────────────────────────────────
 
-// TODO(task 2): Provider 注册制——接 plugins/provider/* 的 registerProvider，
-// 按 config.provider.name 选 provider，消掉硬编码。
+/** Plugin name → module path 映射（约定：插件放在 plugins/{category}/{name}/src/index.ts） */
+const PLUGIN_IMPORT_MAP: Record<string, string> = {
+  'meta-tools': '../plugins/tools/meta-tools/src/index',
+  'skills-loader': '../plugins/tools/skills-loader/src/index',
+  'file-ops': '../plugins/tools/file-ops/src/index',
+  'provider-openai': '../plugins/provider/openai/src/index',
+  'provider-anthropic': '../plugins/provider/anthropic/src/index',
+  'provider-google': '../plugins/provider/google/src/index',
+  'provider-cohere': '../plugins/provider/cohere/src/index',
+  'provider-mistral': '../plugins/provider/mistral/src/index',
+  'provider-ollama': '../plugins/provider/ollama/src/index',
+  'memory-project': '../plugins/memory/project/src/index',
+  'memory-auto': '../plugins/memory/auto/src/index',
+  'guardrail-pii': '../plugins/security/guardrail-pii/src/index',
+  'redact-secrets': '../plugins/security/redact-secrets/src/index',
+  'tool-policy': '../plugins/security/tool-policy/src/index',
+  'mcp-client': '../plugins/integration/mcp-client/src/index',
+  'hook-logging': '../plugins/observability/hook-logging/src/index',
+};
+
+async function loadPlugin(name: string): Promise<Plugin | null> {
+  const importPath = PLUGIN_IMPORT_MAP[name];
+  if (!importPath) {
+    console.warn(`Unknown plugin "${name}" — not in import map. Skipping.`);
+    return null;
+  }
+  try {
+    const mod = (await import(importPath)) as { default?: Plugin };
+    const plugin = mod.default;
+    if (!plugin || typeof plugin.install !== 'function') {
+      console.warn(`Plugin "${name}" has no default export with install().`);
+      return null;
+    }
+    return plugin;
+  } catch (e) {
+    console.warn(`Failed to load plugin "${name}": ${e instanceof Error ? e.message : e}`);
+    return null;
+  }
+}
+
+// ── Provider（注册制——task 2）──────────────────
+
+// 先加载所有 provider 插件，安装到临时 host 以构建 provider registry
+const providerHost = new MemoryPluginHost();
+const providerPluginNames = Object.keys(PLUGIN_IMPORT_MAP).filter((k) =>
+  k.startsWith('provider-'),
+);
+for (const name of providerPluginNames) {
+  const p = await loadPlugin(name);
+  if (p) p.install(providerHost);
+}
+
 let provider: LLMProvider;
 let providerName: string;
 let providerModel: string;
@@ -128,8 +176,17 @@ if (useMock) {
 } else {
   providerName = config.provider?.name ?? 'openai';
   providerModel = config.provider?.model ?? 'gpt-4';
-  providerBaseUrl = config.provider?.base_url ?? 'https://api.openai.com/v1';
-  provider = new OpenAICompatibleProvider({
+  providerBaseUrl =
+    config.provider?.base_url ?? PROVIDER_PRESETS[providerName]?.base_url ?? '';
+
+  const factory = providerHost.getProvider(providerName);
+  if (!factory) {
+    console.error(
+      `Provider "${providerName}" not found. Available: ${providerHost.listProviders().join(', ')}`,
+    );
+    process.exit(1);
+  }
+  provider = factory({
     api_key: config.api_key ?? '',
     base_url: providerBaseUrl,
     model: providerModel,
@@ -162,10 +219,19 @@ function newSessionId(): string {
 
 let currentSessionId = sessionArg ?? newSessionId();
 
-// ── 插件 ────────────────────────────────────────
+// ── 业务插件（task 1）───────────────────────────
 
-// TODO(task 1): 插件加载机制——vessel.yaml plugins: [...] → 动态 import → inject runtime。
-const plugins: Plugin[] = [metaToolsPlugin, skillsLoaderPlugin];
+// config.plugins 未配时加载默认插件；provider 插件已在前一步加载，此处跳过
+const configuredPlugins = config.plugins?.filter((p) => p.enabled !== false) ?? [];
+const defaultPluginNames = configuredPlugins.length > 0
+  ? configuredPlugins.map((p) => p.name)
+  : ['meta-tools', 'skills-loader'];
+const plugins: Plugin[] = [];
+for (const name of defaultPluginNames) {
+  if (name.startsWith('provider-')) continue; // provider 已在临时 host 中加载
+  const p = await loadPlugin(name);
+  if (p) plugins.push(p);
+}
 
 // ── Runtime ─────────────────────────────────────
 

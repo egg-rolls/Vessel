@@ -3,7 +3,6 @@
  * @module @vessel/config
  */
 
-import { PROVIDER_PRESETS } from './defaults.js';
 import type {
   ConfigValidationError,
   ConfigValidationResult,
@@ -42,13 +41,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
           message: 'Provider name must be a string',
           value: name,
         });
-      } else if (!PROVIDER_PRESETS[name]) {
-        warnings.push({
-          path: 'provider.name',
-          message: `Unknown provider "${name}". Known providers: ${Object.keys(PROVIDER_PRESETS).join(', ')}`,
-          value: name,
-        });
       }
+      // 不再因 PROVIDER_PRESETS 中无名而发 warning——provider 由插件注册，
+      // 任何名字都可能有效。运行时 providerHost.getProvider(name) 会给出准确的错误。
     }
 
     if (model !== undefined && typeof model !== 'string') {
