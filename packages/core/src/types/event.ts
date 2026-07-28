@@ -3,11 +3,14 @@
  * @module @vessel/core/events
  */
 
+import type { StreamChunk } from './provider.js';
+
 /** 事件类型枚举 */
 export enum EventType {
   RunStarted = 'run.started',
   LlmRequest = 'llm.request',
   LlmResponse = 'llm.response',
+  LlmStreamChunk = 'llm.stream.chunk',
   ToolCallStarted = 'tool.call.started',
   ToolCallCompleted = 'tool.call.completed',
   ToolCallFailed = 'tool.call.failed',
@@ -50,6 +53,12 @@ export interface LlmResponsePayload extends BaseEventPayload {
     completion_tokens?: number;
     total_tokens?: number;
   };
+}
+
+/** LLM 流式 chunk 事件 payload（ADR-007：流式=事件订阅；ADR-016） */
+export interface LlmStreamChunkPayload extends BaseEventPayload {
+  run_id: string;
+  chunk: StreamChunk;
 }
 
 /** 工具调用开始事件 payload */
@@ -130,6 +139,7 @@ export type EventPayload =
   | RunStartedPayload
   | LlmRequestPayload
   | LlmResponsePayload
+  | LlmStreamChunkPayload
   | ToolCallStartedPayload
   | ToolCallCompletedPayload
   | ToolCallFailedPayload

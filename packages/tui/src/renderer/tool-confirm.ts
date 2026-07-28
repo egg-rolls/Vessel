@@ -3,7 +3,9 @@
  * @module @vessel/tui
  */
 
-import * as readline from 'readline';
+import * as readline from 'node:readline';
+import { GuardrailStage } from '@vessel/core';
+import type { Guardrail, GuardrailContext, GuardrailResult } from '@vessel/core';
 
 /** 权限确认配置 */
 export interface ToolPermissionConfig {
@@ -37,6 +39,11 @@ const DEFAULT_CONFIG: ToolPermissionConfig = {
 export class ToolPermissionChecker {
   private config: ToolPermissionConfig;
   private approvedTools: Set<string> = new Set();
+  /**
+   * 自定义 prompt 函数。REPL 注入以复用其 readline--避免 confirm 自建第二个
+   * readline 抢 stdin 导致用户的 y/n 泄漏进对话上下文。未注入时退回自建 readline。
+   */
+  promptFn?: (question: string) => Promise<string>;
 
   constructor(config: ToolPermissionConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -77,8 +84,8 @@ export class ToolPermissionChecker {
       return { approved: true };
     }
 
-    console.log('\n' + '='.repeat(50));
-    console.log(`🔧 Tool Execution Request`);
+    console.log(`\n${'='.repeat(50)}`);
+    console.log('🔧 Tool Execution Request');
     console.log('='.repeat(50));
     console.log(`Tool: ${toolName}`);
     console.log(`Arguments: ${JSON.stringify(args, null, 2)}`);
@@ -96,9 +103,12 @@ export class ToolPermissionChecker {
   }
 
   /**
-   * 提示用户输入
+   * 提示用户输入。注入了 promptFn（REPL 复用其 readline）时用之；否则自建 readline。
    */
   private prompt(question: string): Promise<string> {
+    if (this.promptFn) {
+      return this.promptFn(question);
+    }
     return new Promise((resolve) => {
       const rl = readline.createInterface({
         input: process.stdin,
@@ -138,30 +148,35 @@ export class ToolPermissionChecker {
 
 /**
  * 创建权限确认 Guardrail
- * 用于在工具执行前进行权限确认
+ * 用于在工具执行前进行权限确认。
+ * 返回符合 core Guardrail 接口的对象——可由 PluginHost.registerGuardrail 注册。
  */
-export function createPermissionGuardrail(checker: ToolPermissionChecker): {
-  name: string;
-  stage: string;
-  check: (value: unknown) => Promise<{ allowed: boolean; reason?: string }>;
-} {
+export function createPermissionGuardrail(
+  checker: ToolPermissionChecker,
+  autoApprove: string[] = [],
+): Guardrail {
   return {
     name: 'tool-permission',
-    stage: 'tool_call',
-    check: async (value: unknown) => {
+    stage: GuardrailStage.ToolCall,
+    priority: 10, // 其他 ToolCall guardrail 之前执行
+    check: async (value: unknown, _ctx: GuardrailContext): Promise<GuardrailResult> => {
       if (typeof value === 'object' && value !== null) {
         const toolCall = value as { function?: { name?: string; arguments?: string } };
-        if (toolCall.function?.name) {
-          const args = toolCall.function.arguments 
-            ? JSON.parse(toolCall.function.arguments) 
-            : {};
-          
-          const result = await checker.confirm(toolCall.function.name, args);
-          
+        const toolName = toolCall.function?.name;
+        if (toolName) {
+          // autoApprove 列表中的工具跳过确认
+          if (autoApprove.includes(toolName)) {
+            return { allowed: true };
+          }
+
+          const args = toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {};
+
+          const result = await checker.confirm(toolName, args);
+
           if (!result.approved) {
             return {
               allowed: false,
-              reason: `Tool execution denied by user`,
+              reason: 'Tool execution denied by user',
             };
           }
         }
@@ -170,5 +185,3 @@ export function createPermissionGuardrail(checker: ToolPermissionChecker): {
     },
   };
 }
-
-export type { ToolPermissionConfig, PermissionResult };

@@ -2,7 +2,7 @@
 
 /**
  * Vessel 构建脚本
- * 
+ *
  * 使用方式：bun run scripts/build.ts
  */
 
@@ -25,7 +25,7 @@ console.log('1️⃣ Running type check...');
 try {
   execSync('bun run typecheck', { stdio: 'inherit' });
   console.log('✅ Type check passed\n');
-} catch (error) {
+} catch (_error) {
   console.error('❌ Type check failed');
   process.exit(1);
 }
@@ -35,7 +35,7 @@ console.log('2️⃣ Running lint...');
 try {
   execSync('bun run lint', { stdio: 'inherit' });
   console.log('✅ Lint passed\n');
-} catch (error) {
+} catch (_error) {
   console.error('❌ Lint failed');
   process.exit(1);
 }
@@ -45,7 +45,7 @@ console.log('3️⃣ Running tests...');
 try {
   execSync('bun test', { stdio: 'inherit' });
   console.log('✅ Tests passed\n');
-} catch (error) {
+} catch (_error) {
   console.error('❌ Tests failed');
   process.exit(1);
 }
@@ -53,12 +53,9 @@ try {
 // 4. 构建单二进制
 console.log('4️⃣ Building binary...');
 try {
-  execSync(
-    `bun build src/cli.ts --compile --outfile dist/vessel`,
-    { stdio: 'inherit' }
-  );
+  execSync('bun build src/cli.ts --compile --outfile dist/vessel', { stdio: 'inherit' });
   console.log('✅ Binary built successfully\n');
-} catch (error) {
+} catch (_error) {
   console.error('❌ Binary build failed');
   process.exit(1);
 }

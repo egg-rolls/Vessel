@@ -1,193 +1,406 @@
 /**
- * 斜杠命令处理
+ * 斜杠命令（二层分层：`/<domain> <action> [args]`）
  * @module @vessel/tui
+ *
+ * domain：/session（list|resume|new|history）、/tool（list）
+ * 顶层：/help /clear /setup /exit
+ * 全部从 ReplContext 取数；切会话经 ctx.context.clear() + ctx.onSessionChange()。
+ * /session resume 照搬 Hermes pending one-shot：无参->编号列表 + 置 pending；下一行裸数字->恢复。
  */
 
-import type { AgentRuntime, ToolRegistry, SessionBackend } from '@vessel/core';
+import type { ReplContext } from '../repl-context.js';
 
-/** 命令处理器 */
-export interface CommandHandler {
+// ── 类型 ──────────────────────────────────────────
+
+/** REPL 运行态--命令读写，REPL 主循环持有 */
+export interface ReplState {
+  /** 当前会话 ID--/session new、/session resume 会改；chat 传它给 runtime.run() */
+  currentSessionId: string;
+  /** /session resume 无参后置位；下一行裸数字触发按编号恢复 */
+  pendingResume: boolean;
+  /** 主循环运行标志--/exit 置 false 退出 */
+  running: boolean;
+}
+
+/** 命令执行结果 */
+export interface CommandResult {
+  /** 是否已识别并处理（false = 未知命令，由调用方提示） */
+  handled: boolean;
+}
+
+/** 子命令执行函数签名 */
+type Run = (
+  args: string[],
+  ctx: ReplContext,
+  state: ReplState,
+) => Promise<CommandResult> | CommandResult;
+
+/** 子命令（domain 下的 action） */
+export interface SubCommand {
   name: string;
   description: string;
   usage?: string;
-  execute: (args: string[]) => Promise<void> | void;
+  run: Run;
 }
 
-/** 命令注册表 */
-export class CommandRegistry {
-  private commands: Map<string, CommandHandler> = new Map();
-
-  /**
-   * 注册命令
-   * @param handler 命令处理器
-   */
-  register(handler: CommandHandler): void {
-    this.commands.set(handler.name, handler);
-  }
-
-  /**
-   * 执行命令
-   * @param command 命令字符串（以 / 开头）
-   * @returns 是否找到并执行了命令
-   */
-  async execute(command: string): Promise<boolean> {
-    const [name, ...args] = command.split(' ');
-    
-    // 移除开头的 /
-    const cmdName = name.startsWith('/') ? name.substring(1) : name;
-    
-    const handler = this.commands.get(cmdName);
-    if (!handler) {
-      return false;
-    }
-
-    await handler.execute(args);
-    return true;
-  }
-
-  /**
-   * 获取所有命令
-   * @returns 命令处理器数组
-   */
-  list(): CommandHandler[] {
-    return Array.from(this.commands.values());
-  }
-
-  /**
-   * 检查命令是否存在
-   * @param name 命令名称
-   * @returns 是否存在
-   */
-  has(name: string): boolean {
-    return this.commands.has(name);
-  }
+/** 顶层命令 或 域 */
+export interface CommandEntry {
+  name: string;
+  description: string;
+  usage?: string;
+  /** 顶层命令的执行（无子命令时） */
+  run?: Run;
+  /** 域的子命令 */
+  subcommands?: Map<string, SubCommand>;
 }
+
+// ── 命令注册表 ────────────────────────────────────
 
 /**
- * 创建默认命令
+ * 二层分层命令注册表。execute 解析 `/<domain> <action> <args...>`：
+ * - domain 有子命令且 action 命中 -> 跑子命令
+ * - domain 无 action 或 action 未命中 -> 显示域帮助
+ * - 顶层命令（有 run） -> 跑 run
+ * - 未注册 -> { handled: false }
  */
-export function createDefaultCommands(context: {
-  runtime?: AgentRuntime;
-  tools?: ToolRegistry;
-  session?: SessionBackend;
-  sessionId?: string;
-}): CommandHandler[] {
-  return [
-    {
-      name: 'help',
-      description: 'Show available commands',
-      usage: '/help [command]',
-      execute: (args) => {
-        if (args.length > 0) {
-          console.log(`Help for command: ${args[0]}`);
-          // TODO: 显示特定命令的帮助
-        } else {
-          console.log('\nAvailable commands:');
-          console.log('  /help     - Show this help message');
-          console.log('  /tools    - List available tools');
-          console.log('  /session  - Show session information');
-          console.log('  /clear    - Clear the screen');
-          console.log('  /history  - Show conversation history');
-          console.log('  /reset    - Reset current session');
-          console.log('  /exit     - Exit the application');
-          console.log('\nType /help <command> for more info on a specific command.');
-        }
-      },
-    },
-    {
-      name: 'tools',
-      description: 'List available tools',
-      execute: () => {
-        if (!context.tools) {
-          console.log('No tools available.');
-          return;
-        }
+export class CommandRegistry {
+  private entries = new Map<string, CommandEntry>();
 
-        const toolList = context.tools.list();
-        if (toolList.length === 0) {
-          console.log('No tools registered.');
-          return;
-        }
+  register(entry: CommandEntry): void {
+    this.entries.set(entry.name, entry);
+  }
 
-        console.log('\nAvailable tools:');
-        for (const tool of toolList) {
-          console.log(`  - ${tool.name}: ${tool.description}`);
+  has(name: string): boolean {
+    return this.entries.has(name);
+  }
+
+  list(): CommandEntry[] {
+    return [...this.entries.values()];
+  }
+
+  async execute(input: string, ctx: ReplContext, state: ReplState): Promise<CommandResult> {
+    const tokens = input.trim().split(/\s+/).filter(Boolean);
+    const domain = tokens[0];
+    if (!domain) return { handled: false };
+
+    const entry = this.entries.get(domain);
+    if (!entry) return { handled: false };
+
+    const action = tokens[1];
+    if (action && entry.subcommands?.has(action)) {
+      const sub = entry.subcommands.get(action);
+      if (!sub) return { handled: false };
+      await sub.run(tokens.slice(2), ctx, state);
+      return { handled: true };
+    }
+
+    // 顶层命令
+    if (entry.run) {
+      await entry.run(tokens.slice(1), ctx, state);
+      return { handled: true };
+    }
+
+    // 域无（有效）action -> 显示域帮助
+    renderDomainHelp(entry);
+    return { handled: true };
+  }
+}
+
+/** 创建并填充命令注册表。ctx 在 execute 时传入，注册表本身无状态。 */
+export function createCommands(): CommandRegistry {
+  const reg = new CommandRegistry();
+  reg.register(sessionDomain());
+  reg.register(toolDomain());
+  reg.register(helpCommand());
+  reg.register(clearCommand());
+  reg.register(setupCommand());
+  reg.register(exitCommand());
+  return reg;
+}
+
+// ── 帮助渲染 ──────────────────────────────────────
+
+function renderDomainHelp(entry: CommandEntry): void {
+  console.log(`\n/${entry.name}  - ${entry.description}`);
+  if (entry.subcommands && entry.subcommands.size > 0) {
+    console.log('Subcommands:');
+    for (const sub of entry.subcommands.values()) {
+      console.log(`  /${entry.name} ${sub.name.padEnd(8)} - ${sub.description}`);
+    }
+  }
+  console.log('');
+}
+
+// ── /session ──────────────────────────────────────
+
+function sessionDomain(): CommandEntry {
+  const subcommands = new Map<string, SubCommand>();
+
+  subcommands.set('list', {
+    name: 'list',
+    description: '列出会话（编号，可用于 resume）',
+    usage: '/session list',
+    run: async (_args, ctx, state) => {
+      const sessions = await ctx.session.listRich();
+      if (sessions.length === 0) {
+        console.log('\nNo sessions.\n');
+        return { handled: true };
+      }
+      console.log('\nRecent sessions:');
+      renderNumberedSessions(sessions, state.currentSessionId);
+      console.log('');
+      return { handled: true };
+    },
+  });
+
+  subcommands.set('resume', {
+    name: 'resume',
+    description: '恢复会话：无参=列表+pending，N/id=直接恢复',
+    usage: '/session resume [number|id]',
+    run: async (args, ctx, state) => {
+      if (args.length === 0) {
+        const sessions = await ctx.session.listRich();
+        if (sessions.length === 0) {
+          console.log('\nNo sessions to resume.\n');
+          return { handled: true };
         }
-        console.log(`\nTotal: ${toolList.length} tool(s)`);
-      },
+        console.log('\nResume which session? Enter its number:');
+        renderNumberedSessions(sessions, state.currentSessionId);
+        console.log('');
+        state.pendingResume = true;
+        return { handled: true };
+      }
+      const resolved = await resolveResumeTarget(args[0] ?? '', ctx);
+      if (!resolved.ok) {
+        console.log(`\n${resolved.message}\n`);
+        return { handled: true };
+      }
+      await doResume(ctx, state, resolved.sessionId);
+      return { handled: true };
     },
-    {
-      name: 'session',
-      description: 'Show session information',
-      execute: async () => {
-        const sessionId = context.sessionId ?? 'default';
-        console.log(`\nSession: ${sessionId}`);
-        
-        if (context.session) {
-          const state = await context.session.load(sessionId);
-          if (state) {
-            console.log(`Status: ${state.status}`);
-            console.log(`Messages: ${state.messages.length}`);
-            console.log(`Started: ${new Date(state.started_at).toLocaleString()}`);
-            if (state.completed_at) {
-              console.log(`Completed: ${new Date(state.completed_at).toLocaleString()}`);
-            }
-            if (state.usage) {
-              console.log(`Tokens: ${state.usage.total_tokens}`);
-            }
-          } else {
-            console.log('No session data found.');
-          }
+  });
+
+  subcommands.set('new', {
+    name: 'new',
+    description: '开启新会话（丢弃当前空会话）',
+    usage: '/session new',
+    run: async (_args, ctx, state) => {
+      const oldId = state.currentSessionId;
+      try {
+        const old = await ctx.session.load(oldId);
+        if (old && old.messages.length === 0) {
+          await ctx.session.delete(oldId);
         }
-      },
+      } catch {
+        // 丢弃失败不阻塞开新会话
+      }
+      ctx.context.clear();
+      const newId = ctx.newSessionId();
+      state.currentSessionId = newId;
+      ctx.onSessionChange(newId);
+      console.log(`\nNew session started: ${newId}\n`);
+      return { handled: true };
     },
-    {
-      name: 'clear',
-      description: 'Clear the screen',
-      execute: () => {
-        console.clear();
-      },
+  });
+
+  subcommands.set('history', {
+    name: 'history',
+    description: '显示当前会话的对话历史',
+    usage: '/session history',
+    run: async (_args, ctx, state) => {
+      const loaded = await ctx.session.load(state.currentSessionId);
+      if (!loaded || loaded.messages.length === 0) {
+        console.log('\nNo conversation history.\n');
+        return { handled: true };
+      }
+      console.log(`\nHistory (${loaded.messages.length} messages):`);
+      for (const msg of loaded.messages) {
+        const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
+        console.log(`\n[${role}]`);
+        console.log(msg.content);
+      }
+      console.log('');
+      return { handled: true };
     },
-    {
-      name: 'history',
-      description: 'Show conversation history',
-      execute: async () => {
-        const sessionId = context.sessionId ?? 'default';
-        
-        if (context.session) {
-          const state = await context.session.load(sessionId);
-          if (state && state.messages.length > 0) {
-            console.log('\nConversation history:');
-            for (const msg of state.messages) {
-              const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
-              console.log(`\n[${role}]:`);
-              console.log(msg.content);
-            }
-          } else {
-            console.log('No conversation history.');
-          }
-        }
-      },
+  });
+
+  return {
+    name: 'session',
+    description: '会话管理：list / resume / new / history',
+    usage: '/session [list|resume|new|history]',
+    subcommands,
+  };
+}
+
+/** /session resume 的裸数字 one-shot--由 REPL 主循环在 pendingResume 时调入 */
+export async function consumePendingResume(
+  input: string,
+  ctx: ReplContext,
+  state: ReplState,
+): Promise<CommandResult> {
+  state.pendingResume = false;
+  const num = Number.parseInt(input.trim(), 10);
+  if (Number.isNaN(num) || num < 1) {
+    console.log('\nCancelled resume (not a number).\n');
+    return { handled: true };
+  }
+  const sessions = await ctx.session.listRich();
+  const target = sessions[num - 1];
+  if (!target) {
+    console.log(`\nNo session #${num}. Cancelled.\n`);
+    return { handled: true };
+  }
+  await doResume(ctx, state, target.session_id);
+  return { handled: true };
+}
+
+/** 解析 resume 参数：纯数字=按编号，否则按精确 session_id */
+async function resolveResumeTarget(
+  arg: string,
+  ctx: ReplContext,
+): Promise<{ ok: true; sessionId: string } | { ok: false; message: string }> {
+  const num = Number.parseInt(arg, 10);
+  if (!Number.isNaN(num) && num >= 1) {
+    const sessions = await ctx.session.listRich();
+    const target = sessions[num - 1];
+    if (!target) return { ok: false, message: `No session #${num}.` };
+    return { ok: true, sessionId: target.session_id };
+  }
+  const loaded = await ctx.session.load(arg);
+  if (!loaded) return { ok: false, message: `Session "${arg}" not found.` };
+  return { ok: true, sessionId: arg };
+}
+
+/** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史 */
+async function doResume(ctx: ReplContext, state: ReplState, sessionId: string): Promise<void> {
+  ctx.context.clear();
+  state.currentSessionId = sessionId;
+  ctx.onSessionChange(sessionId);
+  const loaded = await ctx.session.load(sessionId);
+  const msgCount = loaded?.messages.length ?? 0;
+  console.log(`\nResumed session "${sessionId}" (${msgCount} messages).\n`);
+}
+
+/** 编号渲染会话列表（resume 选择用） */
+function renderNumberedSessions(
+  sessions: { session_id: string; preview?: string; title?: string; message_count: number }[],
+  currentId: string,
+): void {
+  for (let i = 0; i < sessions.length; i++) {
+    const s = sessions[i];
+    if (!s) continue;
+    const cur = s.session_id === currentId ? ' *' : '';
+    const preview = s.preview || s.title || '(no preview)';
+    console.log(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+    console.log(`     id: ${s.session_id}`);
+  }
+}
+
+// ── /tool ─────────────────────────────────────────
+
+function toolDomain(): CommandEntry {
+  const subcommands = new Map<string, SubCommand>();
+
+  subcommands.set('list', {
+    name: 'list',
+    description: '列出已注册工具',
+    usage: '/tool list',
+    run: (_args, ctx, _state) => {
+      const list = ctx.tools.list();
+      if (list.length === 0) {
+        console.log('\nNo tools registered.\n');
+        return { handled: true };
+      }
+      console.log(`\nAvailable tools (${list.length}):`);
+      for (const t of list) console.log(`  - ${t.name}: ${t.description}`);
+      console.log('');
+      return { handled: true };
     },
-    {
-      name: 'reset',
-      description: 'Reset current session',
-      execute: async () => {
-        const sessionId = context.sessionId ?? 'default';
-        
-        if (context.session) {
-          await context.session.delete(sessionId);
-          console.log(`Session ${sessionId} has been reset.`);
-        }
-      },
+  });
+
+  return {
+    name: 'tool',
+    description: '工具：list',
+    usage: '/tool [list]',
+    subcommands,
+  };
+}
+
+// ── /help ─────────────────────────────────────────
+
+function helpCommand(): CommandEntry {
+  return {
+    name: 'help',
+    description: '显示可用命令',
+    usage: '/help [domain]',
+    run: (args, _ctx, _state) => {
+      // 由 REPL 注入完整注册表引用以列全部命令--此处用静态文案保证可用
+      console.log('');
+      console.log('Available commands:');
+      console.log('  /session list              列出会话（编号）');
+      console.log('  /session resume [N|id]     恢复会话（无参=列表后按编号选）');
+      console.log('  /session new               开启新会话（丢弃当前空会话）');
+      console.log('  /session history           当前会话的对话历史');
+      console.log('  /tool list                 列出已注册工具');
+      console.log('  /help [domain]             显示帮助');
+      console.log('  /clear                     清屏');
+      console.log('  /setup                     重新运行首启配置向导');
+      console.log('  /exit                      退出');
+      console.log('');
+      if (args.length > 0) console.log(`(detailed help for "${args[0]}" - see /${args[0]})`);
+      return { handled: true };
     },
-    {
-      name: 'exit',
-      description: 'Exit the application',
-      execute: () => {
-        console.log('Goodbye!');
-        process.exit(0);
-      },
+  };
+}
+
+// ── /clear ────────────────────────────────────────
+
+function clearCommand(): CommandEntry {
+  return {
+    name: 'clear',
+    description: '清屏',
+    usage: '/clear',
+    run: () => {
+      console.clear();
+      return { handled: true };
     },
-  ];
+  };
+}
+
+// ── /setup ────────────────────────────────────────
+
+function setupCommand(): CommandEntry {
+  return {
+    name: 'setup',
+    description: '重新运行首启配置向导',
+    usage: '/setup',
+    run: async () => {
+      const { runSetupWizard } = await import('../wizard/setup-wizard.js');
+      console.log('\nRunning setup wizard...');
+      const userConfig = await runSetupWizard();
+      if (userConfig.apiKey) {
+        console.log(
+          'Configuration saved. Restart Vessel for the new provider/key to take effect.\n',
+        );
+      } else {
+        console.log('Setup cancelled.\n');
+      }
+      return { handled: true };
+    },
+  };
+}
+
+// ── /exit ─────────────────────────────────────────
+
+function exitCommand(): CommandEntry {
+  return {
+    name: 'exit',
+    description: '退出',
+    usage: '/exit',
+    run: (_args, ctx, state) => {
+      state.running = false;
+      ctx.onExit();
+      return { handled: true };
+    },
+  };
 }

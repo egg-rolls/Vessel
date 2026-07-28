@@ -2,120 +2,95 @@
 
 ## 插件模型
 
-Vessel 的能力全部通过 Plugin 注入（ADR-004）。一个插件就是一个 `Plugin` 接口的实现。
+Vessel 的能力全部通过 Plugin 注入（ADR-004）。`Plugin.install(host)` 用 `host` 的统一 `register*` 方法注册。
+
+已注册 12 个插件（`src/cli.ts` 的 `PLUGIN_IMPORT_MAP`），默认加载 10 个。
 
 ## 快速开始
 
 ### 最小插件
 
-```typescript
+```ts
 import type { Plugin, PluginHost } from '@vessel/core';
 
 const myPlugin: Plugin = {
   name: 'my-plugin',
   version: '1.0.0',
-  description: '我的第一个插件',
-
   install(host: PluginHost): void {
-    // 注册工具
     host.registerTool({
       name: 'hello',
       description: 'Say hello',
-      inputSchema: {
-        type: 'object',
-        properties: { name: { type: 'string' } },
-        required: ['name'],
-      },
-      handler: async (args) => {
-        const { name } = args as { name: string };
-        return `Hello, ${name}!`;
-      },
+      inputSchema: { type: 'object', properties: { name: { type: 'string' } } },
+      handler: async (args) => `Hello, ${(args as { name: string }).name}!`,
     });
+  },
+};
+
+export default myPlugin;
+```
+
+### 所有可用上下文
+
+插件可以调用：
+
+| 方法 | 用途 | 受支持的上下文 |
+|------|------|---------------|
+| `host.registerTool(def)` | 注册新工具 | ✅ |
+| `host.registerProvider(name, factory)` | 注册 Provider 工厂 | ✅ |
+| `host.registerGuardrail(guardrail)` | 注册安全守卫 | ✅ |
+| `host.registerHook(hook)` | 注册生命周期钩子 | ✅ |
+
+### Provider 插件
+
+**Provider 插件现在是薄工厂**（ADR-019，P1）：从 `@vessel/core` 导入核心 provider 类，并使用 provider 预设注册工厂。
+
+```ts
+import { OpenAICompatibleProvider } from '@vessel/core';
+
+const plugin: Plugin = {
+  name: 'provider-openai',
+  install(host: PluginHost) {
+    host.registerProvider('openai', (config) =>
+      new OpenAICompatibleProvider({
+        api_key: config.api_key as string,
+        base_url: config.base_url as string ?? 'https://api.openai.com/v1',
+        model: config.model as string ?? 'gpt-4',
+      })
+    );
+    // 也可以注册更多名称
+    host.registerProvider('google', (config) =>
+      new OpenAICompatibleProvider({
+        api_key: config.api_key as string,
+        base_url: config.base_url as string ?? 'https://generativelanguage.googleapis.com/v1beta/openai',
+        model: config.model as string ?? 'gemini-pro',
+      })
+    );
   },
 };
 ```
 
-### 添加到项目
+**规则**：
+- OpenAI 兼容的 provider 全部用一个插件注册多个名称。
+- Anthropic 用 `AnthropicProvider`（核心版本，不是插件版本）。
+- **不要写自己的 LLMProvider 类**——核心版本拥有完整的流式传输、工具调用和 `on_chunk` 支持，而插件版本不具备这些。
 
-1. 在 `plugins/` 下建目录：
-   ```
-   plugins/my-plugin/
-   ├── package.json
-   └── src/
-       └── index.ts
-   ```
+### 配置约定
 
-2. `package.json`：
-   ```json
-   {
-     "name": "@vessel/my-plugin",
-     "version": "1.0.0",
-     "main": "src/index.ts",
-     "dependencies": { "@vessel/core": "workspace:*" }
-   }
-   ```
+- 插件从 `host` 获取配置：`host.registerProvider('name', (config: Record<string, unknown>) => ...)`。
+- 使用可选的 `config?: unknown` 参数传递配置：`install(host, config)`。
+- 插件需要支持零配置启动——没有外部依赖的情况也能工作。
 
-3. 在 `start.ts` 或 `cli.ts` 中加载：
-   ```typescript
-   import { myPlugin } from './plugins/my-plugin/src/index';
-   const plugins = [myPlugin];
-   ```
+### 目录结构
 
-## 四种扩展能力
-
-通过 `PluginHost` 可注册四种能力：
-
-| 能力 | 方法 | 用途 |
-|------|------|------|
-| Tool | `host.registerTool(def)` | 给 Agent 增加工具能力 |
-| Provider | `host.registerProvider(name, factory)` | 增加 LLM Provider |
-| Guardrail | `host.registerGuardrail(g)` | 增加安全检查 |
-| Hook | `host.registerHook(h)` | 在 LLM/tool 调用前后注入逻辑 |
-
-### 注册 Guardrail
-
-```typescript
-host.registerGuardrail({
-  name: 'pii-detector',
-  stage: GuardrailStage.Output,
-  priority: 10,
-  check: async (value, ctx) => {
-    if (containsPII(value as string)) {
-      return { allowed: false, reason: '输出包含 PII' };
-    }
-    return { allowed: true };
-  },
-});
+```
+plugins/{category}/{name}/
+├── package.json
+├── src/
+│   └── index.ts          # Plugin default export
+└── __tests__/
+    └── {name}.test.ts    # 安装验证 + 功能测试
 ```
 
-### 注册 Hook
+### 插件加载
 
-```typescript
-host.registerHook({
-  name: 'logging',
-  type: HookType.AfterLlm,
-  priority: 100,
-  run: async (ctx) => {
-    console.log(`[Hook] LLM 调用完成: run_id=${ctx.run_id}`);
-    return ctx;
-  },
-});
-```
-
-## 参考实现
-
-| 插件 | 说明 | 路径 |
-|------|------|------|
-| provider-openai | OpenAI 兼容 Provider | `plugins/provider-openai/src/index.ts` |
-| file-ops | 文件操作工具 | `plugins/file-ops/src/index.ts` |
-| guardrail-pii | PII 检测 | `plugins/guardrail-pii/src/index.ts` |
-| meta-tools | 自管理工具 | `plugins/meta-tools/src/index.ts` |
-| skills-loader | Skill 加载器 | `plugins/skills-loader/src/index.ts` |
-
-## 规则
-
-- 插件包放在 `plugins/` 目录下
-- 包名以 `@vessel/` 为前缀
-- 不直接调用 LLM API（用 Provider 接口）
-- 测试不依赖外部服务
-- 参考 [docs/specs/PLUGINS.md](../specs/PLUGINS.md) 查看已有和规划的插件
+在 `src/cli.ts` 的 `PLUGIN_IMPORT_MAP` 中添加插件后即可加载。用户可以在 `vessel.yaml` 中通过 `plugins[].name` 按需加载。

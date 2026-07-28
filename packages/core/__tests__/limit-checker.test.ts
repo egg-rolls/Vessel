@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryLimitChecker } from '../src/limits/limit-checker';
-import type { UsageLimits, UsageStats, TerminationPolicy } from '../src/types/limits';
+import type { TerminationPolicy, UsageLimits, UsageStats } from '../src/types/limits';
 
 describe('MemoryLimitChecker', () => {
   let checker: MemoryLimitChecker;
@@ -9,21 +9,21 @@ describe('MemoryLimitChecker', () => {
   beforeEach(() => {
     checker = new MemoryLimitChecker();
     stats = {
-      request_count: 0,
-      tool_calls_count: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      total_cost: 0,
-      start_time: Date.now(),
+      requestCount: 0,
+      toolCallsCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      startTime: Date.now(),
     };
   });
 
   describe('checkLimits', () => {
     it('should return true when within limits', () => {
       const limits: UsageLimits = {
-        request_limit: 10,
-        tool_calls_limit: 5,
+        requestLimit: 10,
+        toolCallsLimit: 5,
       };
 
       expect(checker.checkLimits(stats, limits)).toBe(true);
@@ -31,37 +31,37 @@ describe('MemoryLimitChecker', () => {
 
     it('should return false when request limit exceeded', () => {
       const limits: UsageLimits = {
-        request_limit: 10,
+        requestLimit: 10,
       };
 
-      stats.request_count = 10;
+      stats.requestCount = 10;
       expect(checker.checkLimits(stats, limits)).toBe(false);
     });
 
     it('should return false when tool calls limit exceeded', () => {
       const limits: UsageLimits = {
-        tool_calls_limit: 5,
+        toolCallsLimit: 5,
       };
 
-      stats.tool_calls_count = 5;
+      stats.toolCallsCount = 5;
       expect(checker.checkLimits(stats, limits)).toBe(false);
     });
 
     it('should return false when token limit exceeded', () => {
       const limits: UsageLimits = {
-        input_tokens_limit: 1000,
+        inputTokensLimit: 1000,
       };
 
-      stats.input_tokens = 1000;
+      stats.inputTokens = 1000;
       expect(checker.checkLimits(stats, limits)).toBe(false);
     });
 
     it('should return false when cost limit exceeded', () => {
       const limits: UsageLimits = {
-        total_cost_limit: 10.0,
+        totalCostLimit: 10.0,
       };
 
-      stats.total_cost = 10.0;
+      stats.totalCost = 10.0;
       expect(checker.checkLimits(stats, limits)).toBe(false);
     });
   });
@@ -69,32 +69,29 @@ describe('MemoryLimitChecker', () => {
   describe('checkTermination', () => {
     it('should return true when max iterations reached', () => {
       const policy: TerminationPolicy = {
-        max_iterations: 10,
-        stop_on_no_tool_calls: true,
+        maxIterations: 10,
       };
 
-      stats.request_count = 10;
+      stats.requestCount = 10;
       expect(checker.checkTermination(stats, policy)).toBe(true);
     });
 
     it('should return false when within limits', () => {
       const policy: TerminationPolicy = {
-        max_iterations: 10,
-        stop_on_no_tool_calls: true,
+        maxIterations: 10,
       };
 
-      stats.request_count = 5;
+      stats.requestCount = 5;
       expect(checker.checkTermination(stats, policy)).toBe(false);
     });
 
     it('should return true when max runtime exceeded', () => {
       const policy: TerminationPolicy = {
-        max_iterations: 100,
-        max_runtime_seconds: 1,
-        stop_on_no_tool_calls: true,
+        maxIterations: 100,
+        maxRuntimeSeconds: 1,
       };
 
-      stats.start_time = Date.now() - 2000; // 2 seconds ago
+      stats.startTime = Date.now() - 2000; // 2 seconds ago
       expect(checker.checkTermination(stats, policy)).toBe(true);
     });
   });
@@ -102,34 +99,34 @@ describe('MemoryLimitChecker', () => {
   describe('increment and add methods', () => {
     it('should increment request count', () => {
       checker.incrementRequest(stats);
-      expect(stats.request_count).toBe(1);
+      expect(stats.requestCount).toBe(1);
 
       checker.incrementRequest(stats);
-      expect(stats.request_count).toBe(2);
+      expect(stats.requestCount).toBe(2);
     });
 
     it('should increment tool call count', () => {
       checker.incrementToolCall(stats);
-      expect(stats.tool_calls_count).toBe(1);
+      expect(stats.toolCallsCount).toBe(1);
 
       checker.incrementToolCall(stats);
-      expect(stats.tool_calls_count).toBe(2);
+      expect(stats.toolCallsCount).toBe(2);
     });
 
     it('should add tokens', () => {
       checker.addTokens(stats, 100, 50);
 
-      expect(stats.input_tokens).toBe(100);
-      expect(stats.output_tokens).toBe(50);
-      expect(stats.total_tokens).toBe(150);
+      expect(stats.inputTokens).toBe(100);
+      expect(stats.outputTokens).toBe(50);
+      expect(stats.totalTokens).toBe(150);
     });
 
     it('should add cost', () => {
       checker.addCost(stats, 0.5);
-      expect(stats.total_cost).toBe(0.5);
+      expect(stats.totalCost).toBe(0.5);
 
       checker.addCost(stats, 0.3);
-      expect(stats.total_cost).toBe(0.8);
+      expect(stats.totalCost).toBe(0.8);
     });
   });
 });

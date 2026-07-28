@@ -3,8 +3,13 @@
  * @module @vessel/core/tools
  */
 
-import type { ToolContext, ToolDefinition, ToolRegistry, ToolSchema } from '../types/tool.js';
-import type { ToolCall } from '../types/provider.js';
+import type {
+  ToolCall,
+  ToolContext,
+  ToolDefinition,
+  ToolRegistry,
+  ToolSchema,
+} from '../types/tool.js';
 
 /**
  * 内存工具注册表实现
@@ -41,13 +46,18 @@ export class MemoryToolRegistry implements ToolRegistry {
     try {
       args = JSON.parse(call.function.arguments);
     } catch {
-      throw new Error(`Invalid arguments for tool "${call.function.name}": ${call.function.arguments}`);
+      throw new Error(
+        `Invalid arguments for tool "${call.function.name}": ${call.function.arguments}`,
+      );
     }
 
     // 如果设置了超时，使用 Promise.race 实现超时
     if (tool.timeout && tool.timeout > 0) {
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error(`Tool "${call.function.name}" timed out after ${tool.timeout}ms`)), tool.timeout);
+        setTimeout(
+          () => reject(new Error(`Tool "${call.function.name}" timed out after ${tool.timeout}ms`)),
+          tool.timeout,
+        );
       });
       return Promise.race([tool.handler(args, ctx), timeoutPromise]);
     }

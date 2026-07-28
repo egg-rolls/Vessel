@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
 import type { ToolDefinition } from '../src/types/tool';
 
@@ -69,7 +69,7 @@ describe('MemoryToolRegistry', () => {
       {
         run_id: 'run-1',
         messages: [],
-      }
+      },
     );
 
     expect(result).toBe('Result from test-tool');
@@ -96,8 +96,8 @@ describe('MemoryToolRegistry', () => {
         {
           run_id: 'run-1',
           messages: [],
-        }
-      )
+        },
+      ),
     ).rejects.toThrow('Tool "missing-tool" not found');
   });
 

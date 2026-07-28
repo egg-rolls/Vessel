@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'bun:test';
+import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryContextManager } from '../src/context/context-manager';
 
 describe('MemoryContextManager', () => {
@@ -37,7 +37,7 @@ describe('MemoryContextManager', () => {
 
   it('should compact when threshold exceeded', () => {
     const config = {
-      maxTokens: 20,  // 更小的 maxTokens
+      maxTokens: 20, // 更小的 maxTokens
       autoCompact: true,
       compactThreshold: 0.5,
     };

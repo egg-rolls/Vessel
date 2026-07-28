@@ -3,7 +3,7 @@
  * @module @vessel/core/limits
  */
 
-import type { LimitChecker, UsageLimits, UsageStats, TerminationPolicy } from '../types/limits.js';
+import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 
 /**
  * 限制检查器实现
@@ -16,19 +16,19 @@ export class MemoryLimitChecker implements LimitChecker {
    * @returns 是否超出限制
    */
   checkLimits(stats: UsageStats, limits: UsageLimits): boolean {
-    if (limits.request_limit !== undefined && stats.request_count >= limits.request_limit) {
+    if (limits.requestLimit !== undefined && stats.requestCount >= limits.requestLimit) {
       return false;
     }
-    if (limits.tool_calls_limit !== undefined && stats.tool_calls_count >= limits.tool_calls_limit) {
+    if (limits.toolCallsLimit !== undefined && stats.toolCallsCount >= limits.toolCallsLimit) {
       return false;
     }
-    if (limits.input_tokens_limit !== undefined && stats.input_tokens >= limits.input_tokens_limit) {
+    if (limits.inputTokensLimit !== undefined && stats.inputTokens >= limits.inputTokensLimit) {
       return false;
     }
-    if (limits.output_tokens_limit !== undefined && stats.output_tokens >= limits.output_tokens_limit) {
+    if (limits.outputTokensLimit !== undefined && stats.outputTokens >= limits.outputTokensLimit) {
       return false;
     }
-    if (limits.total_cost_limit !== undefined && stats.total_cost >= limits.total_cost_limit) {
+    if (limits.totalCostLimit !== undefined && stats.totalCost >= limits.totalCostLimit) {
       return false;
     }
     return true;
@@ -42,14 +42,14 @@ export class MemoryLimitChecker implements LimitChecker {
    */
   checkTermination(stats: UsageStats, policy: TerminationPolicy): boolean {
     // 检查最大迭代次数
-    if (stats.request_count >= policy.max_iterations) {
+    if (stats.requestCount >= policy.maxIterations) {
       return true;
     }
 
     // 检查最大运行时间
-    if (policy.max_runtime_seconds !== undefined) {
-      const elapsed = (Date.now() - stats.start_time) / 1000;
-      if (elapsed >= policy.max_runtime_seconds) {
+    if (policy.maxRuntimeSeconds !== undefined) {
+      const elapsed = (Date.now() - stats.startTime) / 1000;
+      if (elapsed >= policy.maxRuntimeSeconds) {
         return true;
       }
     }
@@ -62,7 +62,7 @@ export class MemoryLimitChecker implements LimitChecker {
    * @param stats 使用量统计
    */
   incrementRequest(stats: UsageStats): void {
-    stats.request_count++;
+    stats.requestCount++;
   }
 
   /**
@@ -70,7 +70,7 @@ export class MemoryLimitChecker implements LimitChecker {
    * @param stats 使用量统计
    */
   incrementToolCall(stats: UsageStats): void {
-    stats.tool_calls_count++;
+    stats.toolCallsCount++;
   }
 
   /**
@@ -80,9 +80,9 @@ export class MemoryLimitChecker implements LimitChecker {
    * @param output 输出 token 数
    */
   addTokens(stats: UsageStats, input: number, output: number): void {
-    stats.input_tokens += input;
-    stats.output_tokens += output;
-    stats.total_tokens += input + output;
+    stats.inputTokens += input;
+    stats.outputTokens += output;
+    stats.totalTokens += input + output;
   }
 
   /**
@@ -91,7 +91,7 @@ export class MemoryLimitChecker implements LimitChecker {
    * @param cost 成本金额
    */
   addCost(stats: UsageStats, cost: number): void {
-    stats.total_cost += cost;
+    stats.totalCost += cost;
   }
 }
 

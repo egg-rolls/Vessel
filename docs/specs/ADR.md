@@ -34,12 +34,19 @@
 - **后果**：单一心智；内置能力也走同机制（一致性）。表达力靠 Plugin 接口保证。
 - **关联**：legacy/LESSONS 教训3；[SPEC.md](SPEC.md) §5。
 
-## ADR-005：安全默认 + 可覆盖（放弃"无默认"教条）
+## ADR-005：双层配置——用户身份与项目行为分离
 
-- **上下文**：旧 Vessel 强制"不内置默认 provider/model/base_url/价格"，却给 temperature/iterations 等行为默认，教条自相矛盾；无基础用户既无默认 provider 便利，又被隐式默认困惑。
-- **决策**：内置安全默认（provider 预设列表 + 行为默认），用户填 Key 即跑；所有默认可被配置覆盖。**Key 永远用户自备，不内置任何厂商 Key/价格。**
-- **后果**：无基础用户零配置起步；仍保持厂商中立（不绑 Key/价格）。预设列表需维护。
-- **关联**：legacy/LESSONS 教训5。
+- **上下文**：旧 Vessel 强制"不内置默认 provider/model/base_url/价格"，却给 temperature/iterations 等行为默认，教条自相矛盾。同时 `.env` 和 `vessel.yaml` 混用，API Key 散落各处，无基础用户困惑。
+- **决策**：
+  1. 内置安全默认（provider 预设列表 + 行为默认），用户填 Key 即跑。
+  2. **Key 永远用户自备，不内置任何厂商 Key/价格。**
+  3. **配置分两层**：`~/.vessel/config.yaml`（用户身份：Key + provider 偏好，跨项目复用）+ `vessel.yaml`（项目行为：工具/限额/插件，跟着仓库走）。
+  4. `api_key` **只存** `~/.vessel/config.yaml`，**不进入** `vessel.yaml`（后者可安全 git commit）。
+  5. 加载优先级：CLI flag > `VESSEL_*` env > `vessel.yaml` > `~/.vessel/config.yaml` > 安全默认。
+  6. `.env` 不是 Vessel 的配置机制（保留 `VESSEL_*` 环境变量用于 CI/容器/自动化）。
+  7. 首启向导产出 `~/.vessel/config.yaml`，此后所有项目自动可用。
+- **后果**：无基础用户填一次 Key 即可在所有项目使用；项目配置不含密钥可安全共享；环境变量退居自动化场景。代价：需维护 `~/.vessel/` 目录的创建/读写逻辑。
+- **关联**：legacy/LESSONS 教训5；[SPEC.md](SPEC.md) §6。
 
 ## ADR-006：分发用 npx + Bun 单二进制
 
@@ -134,3 +141,57 @@
   4. 若未来出现**真正无法用现有机制表达**的循环语义——即无法通过新增工具/Hook/Guardrail/事件类型解决——此时再写新 ADR。当前判断：不存在此类场景。
 - **后果**：core 额外少一个接口（`LoopStrategy` 从 SPEC 移除）；所有范式统一用同一循环；新人不用学"选哪种策略"。代价：若未来确实需要新循环拓扑，需新 ADR。但按当前论证，那是很小概率的事件。
 - **关联**：[SPEC.md §1.1](SPEC.md)；[PLUGINS.md §九](PLUGINS.md)；legacy/LESSONS 教训14。
+
+---
+
+## ADR-016：LlmStreamChunk 事件类型——流式增量经事件流
+
+- **上下文**：ADR-007 确立"流式 = 订阅事件流，非独立方法"，要求 loop 在 LLM 流式响应时增量发事件。当前 `LLMProvider.chat()` 仅返回完整 `LLMResponse`，loop 阻塞等待整段响应后一次发布 `LlmResponse`——TUI 只能看到整段文本，无法 token-by-token 渲染。ADR-012(2a) 允许扩展 EventType（"插座"级别演化）。
+- **决策**：
+  1. 新增 `EventType.LlmStreamChunk = 'llm.stream.chunk'`，携带 `LlmStreamChunkPayload { run_id, chunk: StreamChunk }`。
+  2. `StreamChunk` 类型定义三层增量：`text_delta`（文本片段）、`tool_call_delta`（按 index 累积的 tool_call arguments 片段）、`finish`（完成原因 + usage）。
+  3. `ChatRequest` 增加可选字段 `stream?: boolean` + `on_chunk?: (chunk: StreamChunk) => void`。Provider 在 `chat()` 内部处理流式（单方法，不动接口签名）：当 `stream=true` 且有 `on_chunk` 时走 SSE 逐块回调，最终仍返回拼装好的 `LLMResponse`（loop 后续逻辑不变）。
+  4. Runtime 在 `toolCallingLoop` 始终传 `stream: true` + `on_chunk`（发布 `LlmStreamChunk` 事件）。支持流式的 Provider 走 SSE；不支持的 Provider 忽略字段，退化为整段返回（无 chunk 事件）。headless 无订阅者时 chunk 静默丢弃。
+  5. 三个 Provider 同步实现流式：`MemoryLLMProvider`（供测试）、`OpenAICompatibleProvider`（SSE `data:` 行解析，tool_calls 按 index 累积）、`AnthropicProvider`（SSE `content_block_delta` 解析，tool_use `input_json_delta` 累积）。
+- **备选**：(a) 新增 `chatStream()` 异步迭代器方法——被 SPEC §4.1 "非独立方法" 否决。(b) Provider 直接持 EventStream 引用 publish——耦合 provider 插件与 core 事件系统，且违 ADR-007"loop 增量发事件"。均不取。
+- **后果**：TUI 可 token-by-token 渲染（emma 的 StreamRenderer 订阅 `LlmStreamChunk`）。EventType 枚举扩 1 个成员——现有 switch 无 exhaustiveness 检查，不破坏已有代码。Provider 非流式路径完全不变。core 稳定——不改 loop 逻辑、不引厂商 SDK。
+- **关联**：[SPEC.md §4.1/§4.4](SPEC.md)；ADR-007、ADR-008、ADR-012(2a)。
+
+---
+
+## ADR-017：Core 正式冻结
+
+- **上下文**：ADR-012 确立了 core 稳定性策略——只改三类事（插座/bug/横切）。ADR-011 确立四种扩展类型全经 PluginHost 投放。ADR-015 论证循环通用性——不需要 LoopStrategy 抽象。经 ADR-016（流式）补完 EventType 扩展面，9 个 core 接口 + 1 个循环 + 2 个插槽（ToolRegistry、ContextManager）的 MVP 范围已完整实现且与 SPEC 对齐。对所有已知功能诉求，Plugin/MCP/Skill 提供了充分且不侵入 core 的扩展路径。
+- **决策**：
+  1. `@vessel/core` 的 9 个接口 + tool-calling loop + EventType 枚举 + PluginHost 接口 **正式冻结**。冻结范围：`packages/core/src/**`。
+  2. **只能因三种理由修改 core**（与 ADR-012(2a-c) 一致）：(a) 扩展"插座"（新增 EventType/HookType/GuardrailStage 成员，需写新 ADR）；(b) 修复 loop 级或安全级 bug；(c) 被证明无法用 Plugin/Hook/Guardrail/事件/工具解决的横切需求（需先写新 ADR 论证）。
+  3. **任何改 core 的 PR 必须带 ADR 且被两人 review 通过**。CLAUDE.md §5.1 包含 AI 自检清单——拿不准不进 core。
+  4. **解冻条件**（全部满足）：(a) 出现 Plugin/Hook/Guardrail/事件/工具均无法表示的架构级需求；(b) 经至少一个插件尝试证明不可行；(c) 新 ADR 论证 + 两人 review 通过。
+- **备选**：永冻（不可逆）——过于僵化，ADR-012 保留的三种修改路径是合理安全阀。不冻（继续按 ADR-012 判断）——缺少显式里程碑，人类与 AI 对"可以改"的边界认知不统一。当前决策取了冻结 + 有限解冻条件的中间路径。
+- **后果**：AI 合约明确——CLAUDE.md §5.1 让每次编码会话首条指令级阻断。人类合约明确——PR 审查引用本 ADR 即可拒绝越界改动。Core 真正"固定不动"。若未来出现需解冻的需求，按本 ADR 第 4 条执行。
+- **关联**：ADR-012、ADR-011、ADR-015；[CLAUDE.md §5.1](../../CLAUDE.md)。
+
+---
+
+## ADR-018：BeforeLlm hook 注入消费--修复 loop 不消费 ctx.system_prompt 的 bug
+
+- **上下文**：SPEC §4.7 规定 `Hook.run(ctx)` 返回 `HookContext | null`（`null = 拦截`）。ADR-011 确立 Skills 经 `BeforeLlm` 钩子注入 system prompt；memory-project 同机制注入 CLAUDE.md / 项目记忆。两个插件都往 `ctx.system_prompt` 写注入内容。但 `AgentRuntime.toolCallingLoop` 的 `runHooks` 忽略 hook 返回值，且 `BeforeLlm` 之后从不读 `ctx.system_prompt`--注入内容从未进入 LLM 请求。结果：AI 不会自动看到 Skills / CLAUDE.md，只能经工具（`list_skills`/`get_memory`）手动取。这是 loop 与 hook 契约不一致的 bug。
+- **决策**：属 ADR-017(2b)「修复 loop 级 bug」，无需解冻。在 `toolCallingLoop` 的 `BeforeLlm` 前，用 `this.systemPrompt` 种子化 `ctx.system_prompt`（hook 链在此基础上 prepend 注入）；`BeforeLlm` 后，把 `ctx.system_prompt` 作为**本次请求**的 system 消息内容（替换已有 system 消息，或无则前置一条）。**不改动 `ContextManager` 持久化的消息**--注入只影响单次 LLM 请求，session 持久化保持干净。
+- **未涉及**：(1) `runHooks` 的返回值 `null = 拦截` 语义仍未实现（无插件使用，属单独 concern，本 ADR 不处理）。(2) hook `priority` 字段仍未排序--注入顺序按注册序，非 priority（`applyGuardrails` 同样未排 priority，统一留待另议）。
+- **后果**：skills-loader 与 memory-project 的自动注入生效；AI 第一轮即带 Skills / CLAUDE.md 上下文。ContextManager 不被 hook 污染（持久化干净、可 replay）。限制：注入顺序非 priority；hook 拦截未实现。二者均不影响当前功能，后续按需另立 ADR。
+- **关联**：ADR-017(2b)、ADR-011；[SPEC.md §4.7](SPEC.md)。
+
+---
+
+## ADR-019：代码命名规范--TS 全驼峰，YAML 配置保持 snake_case，loader 做映射
+
+- **上下文**：Biome（ADR-013）的 `useNamingConvention` 规则要求 TS 对象属性用 `camelCase`。但 Vessel 的配置类型（`VesselConfig`、`ProviderConfig`、`UsageLimits` 等）全部用了 `snake_case`（如 `api_key`、`base_url`、`request_limit`），因为它们在 YAML 文件中面向用户。YAML 中 `snake_case` 更可读，不应该改动。但 TS 代码中的 `snake_case` 属性导致 CI lint 持续报警（506 条 warning + 部分 error），且与 Biome 规则对立，每次修改文件都需 biome-ignore。
+- **决策**：
+  1. **TS 代码层禁用 `snake_case`**：所有 TS 接口、类、变量使用 `camelCase`。`packages/config/src/types.ts` 的 `VesselConfig` 等类型字段全部改为 `camelCase`（如 `api_key` → `apiKey`，`base_url` → `baseUrl`，`max_tokens` → `maxTokens`）。
+  2. **YAML 用户层保持 `snake_case`**：`vessel.yaml`、`~/.vessel/config.yaml` 中的键名不变（仍为 `api_key`、`base_url`）。用户面向的 YAML 采用 snake_case 更符合 YAML/YAML 惯例，不牺牲可读性。
+  3. **config loader 做映射**：`@vessel/config` 的 `loadConfig()` 在解析 YAML 后，自动将 `snake_case` 键映射为 `camelCase` 字段（`api_key` → `apiKey`，`tool_calls_limit` → `toolCallsLimit`，以此类推）。**嵌套对象递归映射**。配置 validated 之后任意下游代码（core、tui、cli、plugins）看到的是全 camelCase 的 `VesselConfig`，不再需要处理 snake_case。
+  4. **biome.json 移除 `useNamingConvention: "warn"`**：当前 `warn` 级别被 Biome 1.9 部分误报为 `error`（见 defaults.ts DEFAULT_CONFIG 的 `max_tokens`/`max_history` 等字段）。修完 snake_case 后改为**推荐规则默认级别或移除显式 warn**——因为全部 camelCase 之后自然合规，不需要手动压制。
+  5. **Core 类型例外**：`@vessel/core` 中与 LLM API 协议直接对应的字段（如 `ChatRequest` 的 `max_tokens`、`ToolCall` 的 `tool_call_id`）保持 `snake_case`，因为这些字段名由 OpenAI/Anthropic API 规范定义，**不能改**。对这类字段，在文件中使用 `// biome-ignore-file lint/style/useNamingConvention: LLM API protocol fields` 压制整个文件的规则。这是 Biome 规则与外部 API 协议的合法冲突，不是 Vessel 自身的设计问题。
+- **备选**：(a) 放弃 Biome 的 naming convention 规则——退回到无规则状态，代价是没有统一的 TS 命名约束。(b) 在 `biome.json` 中全局关闭 `useNamingConvention`——简单但失去 lint 保护，且其他 `snake_case` 滥用不会被检测。(c) 不改 TS 类型，对每个字段加 biome-ignore 行级注释——维护成本高、代码丑。均不取。
+- **后果**：下游代码（cli、tui、core、plugins）需要使用 `config.provider.baseUrl` 而非 `config.provider.base_url`。YAML 文件语法不变，用户无感知。Core API 协议相关文件需要少量 biome-ignore 压制。`@vessel/config` 增加 `snakeToCamel` 映射函数，配置加载逻辑稍增但不影响运行时性能（只在加载时执行一次）。
+- **关联**：ADR-005（双层配置）、ADR-013（Biome）；[DOC-STANDARD.md](DOC-STANDARD.md) §四；[SPEC.md §6](SPEC.md)。

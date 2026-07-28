@@ -5,4 +5,4 @@
 
 export { AgentRuntime } from './agent-runtime.js';
 export { MemoryPluginHost } from './plugin-host.js';
-export type { AgentRuntimeOptions, Plugin, PluginHost } from './agent-runtime.js';
+export type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';

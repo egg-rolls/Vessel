@@ -33,6 +33,8 @@
 | `docs` | `docs/` |
 | `ci` | `.github/` |
 | `processes` | `processes/` |
+| `src` | `src/` |
+| `cross` | 改动涉及多个 scope（跨包） |
 
 ### subject
 

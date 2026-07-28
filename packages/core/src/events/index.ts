@@ -4,4 +4,4 @@
  */
 
 export { MemoryEventStream } from './event-stream.js';
-export type { EventHandler, RunEvent, Unsubscribe } from './event-stream.js';
+export type { EventHandler, EventStream, RunEvent, Unsubscribe } from '../types/event.js';

@@ -4,4 +4,4 @@
  */
 
 export { MemoryLLMProvider, OpenAICompatibleProvider, AnthropicProvider } from './providers.js';
-export type { ChatRequest, LLMProvider, LLMResponse, ProviderFactory } from './providers.js';
+export type { ChatRequest, LLMProvider, LLMResponse, ProviderFactory } from '../types/provider.js';

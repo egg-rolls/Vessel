@@ -1,16 +1,18 @@
 /**
  * Vessel 配置类型定义
  * @module @vessel/config
+ *
+ * 所有字段使用 camelCase（ADR-019）。config loader 自动将 YAML 的 snake_case 映射过来。
  */
 
 /** Provider 配置 */
 export interface ProviderConfig {
   name: string;
-  api_key?: string;
-  base_url?: string;
+  apiKey?: string;
+  baseUrl?: string;
   model?: string;
   temperature?: number;
-  max_tokens?: number;
+  maxTokens?: number;
 }
 
 /** 工具配置 */
@@ -36,42 +38,41 @@ export interface HookConfig {
 
 /** 使用量限制配置 */
 export interface UsageLimitsConfig {
-  request_limit?: number;
-  tool_calls_limit?: number;
-  input_tokens_limit?: number;
-  output_tokens_limit?: number;
-  total_cost_limit?: number;
+  requestLimit?: number;
+  toolCallsLimit?: number;
+  inputTokensLimit?: number;
+  outputTokensLimit?: number;
+  totalCostLimit?: number;
 }
 
 /** 终止策略配置 */
 export interface TerminationConfig {
-  max_iterations?: number;
-  max_runtime_seconds?: number;
-  stop_on_no_tool_calls?: boolean;
+  maxIterations?: number;
+  maxRuntimeSeconds?: number;
 }
 
 /** Agent 配置 */
 export interface AgentConfig {
   name?: string;
-  system_prompt?: string;
+  systemPrompt?: string;
   model?: string;
   temperature?: number;
-  max_tokens?: number;
+  maxTokens?: number;
 }
 
 /** 会话配置 */
 export interface SessionConfig {
   backend?: 'memory' | 'file';
-  storage_path?: string;
-  max_history?: number;
+  storagePath?: string;
+  maxHistory?: number;
 }
 
 /** 上下文配置 */
 export interface ContextConfig {
-  max_tokens?: number;
-  max_messages?: number;
-  auto_compact?: boolean;
-  compact_threshold?: number;
+  maxTokens?: number;
+  maxMessages?: number;
+  autoCompact?: boolean;
+  compactThreshold?: number;
 }
 
 /** 插件配置 */
@@ -83,7 +84,7 @@ export interface PluginConfig {
 
 /** Vessel 配置 */
 export interface VesselConfig {
-  api_key?: string;
+  apiKey?: string;
   provider?: ProviderConfig;
   agent?: AgentConfig;
   tools?: ToolConfig[];
@@ -98,9 +99,26 @@ export interface VesselConfig {
 
 /** 配置加载选项 */
 export interface ConfigLoadOptions {
+  /** 项目配置文件路径（默认 ./vessel.yaml） */
   configPath?: string;
+  /** 用户配置文件路径（默认 ~/.vessel/config.yaml） */
+  userConfigPath?: string;
+  /** 环境变量前缀（默认 VESSEL_） */
   envPrefix?: string;
+  /** CLI 覆盖 */
   defaults?: Partial<VesselConfig>;
+}
+
+/** 用户级配置（~/.vessel/config.yaml） */
+export interface UserConfig {
+  /** API Key（唯一必填项） */
+  apiKey?: string;
+  /** 默认 provider */
+  defaultProvider?: string;
+  /** 默认模型 */
+  defaultModel?: string;
+  /** 多 provider Key */
+  providers?: Record<string, { apiKey: string; baseUrl?: string; model?: string }>;
 }
 
 /** 配置校验结果 */

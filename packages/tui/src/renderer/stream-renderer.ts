@@ -1,221 +1,147 @@
 /**
- * 流式渲染器
+ * 流式渲染器（egg-rolls 基础版）
  * @module @vessel/tui
+ *
+ * 订阅 EventStream，token-by-token 打印 LlmStreamChunk.text_delta；
+ * 打印工具调用卡片；RunCompleted 收尾换行。
+ * REPL 用 didStreamLastRun() 判断是否需要兜底打印 run() 返回值（非流式 provider）。
+ * emma 后续替换为 token 动画 + spinner + 富文本，订阅同一事件流。
  */
 
-import type { EventStream, RunEvent } from '@vessel/core';
 import { EventType } from '@vessel/core';
+import type { EventStream, RunEvent } from '@vessel/core';
+import type { StreamChunk } from '@vessel/core';
 
 /** 渲染器配置 */
 export interface StreamRendererConfig {
-  /** 是否显示时间戳 */
-  showTimestamp?: boolean;
-  /** 是否显示事件类型 */
-  showEventType?: boolean;
-  /** 是否显示工具调用详情 */
-  showToolDetails?: boolean;
   /** 是否启用颜色 */
   enableColors?: boolean;
+  /** 是否显示工具调用详情（参数） */
+  showToolDetails?: boolean;
 }
 
-/** 默认配置 */
 const DEFAULT_CONFIG: StreamRendererConfig = {
-  showTimestamp: false,
-  showEventType: false,
-  showToolDetails: true,
   enableColors: true,
+  showToolDetails: true,
 };
 
-/**
- * 流式渲染器
- * 订阅事件流并实时渲染到控制台
- */
+const C = {
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  gray: '\x1b[90m',
+  reset: '\x1b[0m',
+};
+
 export class StreamRenderer {
-  private config: StreamRendererConfig;
+  private cfg: StreamRendererConfig;
   private unsubscribe?: () => void;
-  private isRendering = false;
+  private streamedAny = false;
+  private lastRunStreamed = false;
 
   constructor(config: StreamRendererConfig = {}) {
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.cfg = { ...DEFAULT_CONFIG, ...config };
   }
 
-  /**
-   * 开始渲染事件流
-   */
+  /** 开始订阅事件流 */
   start(eventStream: EventStream): void {
-    if (this.isRendering) {
-      return;
-    }
-
-    this.isRendering = true;
-    this.unsubscribe = eventStream.subscribe((event) => this.handleEvent(event));
+    if (this.unsubscribe) return;
+    this.unsubscribe = eventStream.subscribe((e) => this.handleEvent(e));
   }
 
-  /**
-   * 停止渲染
-   */
+  /** 停止订阅 */
   stop(): void {
     if (this.unsubscribe) {
       this.unsubscribe();
       this.unsubscribe = undefined;
     }
-    this.isRendering = false;
   }
 
-  /**
-   * 处理事件
-   */
+  /** 上一个 run 是否流式输出了文本--供 REPL 决定是否兜底打印 run() 返回值 */
+  didStreamLastRun(): boolean {
+    return this.lastRunStreamed;
+  }
+
   private handleEvent(event: RunEvent): void {
     switch (event.type) {
-      case EventType.RunStarted:
-        this.renderRunStarted(event);
+      case EventType.RunStarted: {
+        this.streamedAny = false;
         break;
-      case EventType.LlmRequest:
-        this.renderLlmRequest(event);
+      }
+      case EventType.LlmStreamChunk: {
+        const data = event.data as { chunk: StreamChunk };
+        this.handleChunk(data.chunk);
         break;
-      case EventType.LlmResponse:
-        this.renderLlmResponse(event);
-        break;
-      case EventType.ToolCallStarted:
+      }
+      case EventType.ToolCallStarted: {
         this.renderToolCallStarted(event);
         break;
-      case EventType.ToolCallCompleted:
+      }
+      case EventType.ToolCallCompleted: {
         this.renderToolCallCompleted(event);
         break;
-      case EventType.ToolCallFailed:
+      }
+      case EventType.ToolCallFailed: {
         this.renderToolCallFailed(event);
         break;
-      case EventType.GuardrailBlocked:
-        this.renderGuardrailBlocked(event);
+      }
+      case EventType.GuardrailBlocked: {
+        const data = event.data as { reason: string };
+        process.stdout.write(`${this.color('red', `\n🚫 Blocked: ${data.reason}\n`)}`);
         break;
-      case EventType.RunCompleted:
-        this.renderRunCompleted(event);
+      }
+      case EventType.RunCompleted: {
+        this.lastRunStreamed = this.streamedAny;
+        if (this.streamedAny) process.stdout.write('\n');
         break;
-      case EventType.RunFailed:
-        this.renderRunFailed(event);
+      }
+      case EventType.RunFailed: {
+        this.lastRunStreamed = this.streamedAny;
+        const data = event.data as { error: string };
+        if (!this.streamedAny) process.stdout.write('\n');
+        process.stdout.write(this.color('red', `✗ Run failed: ${data.error}\n`));
+        break;
+      }
+      default:
         break;
     }
   }
 
-  /**
-   * 渲染 Run 开始事件
-   */
-  private renderRunStarted(event: RunEvent): void {
-    const data = event.data as { run_id: string; input: string };
-    console.log('\n' + this.colorize('cyan', '━━━ Run Started ━━━'));
-    if (this.config.showEventType) {
-      console.log(this.colorize('gray', `[${event.type}]`));
+  private handleChunk(chunk: StreamChunk): void {
+    if (chunk.type === 'text_delta' && chunk.delta) {
+      process.stdout.write(chunk.delta);
+      this.streamedAny = true;
     }
-    console.log(this.colorize('white', `Input: ${data.input}`));
+    // tool_call_delta / finish 不直接打印--工具卡片由 ToolCallStarted 渲染
   }
 
-  /**
-   * 渲染 LLM 请求事件
-   */
-  private renderLlmRequest(event: RunEvent): void {
-    if (this.config.showEventType) {
-      console.log(this.colorize('gray', `[${event.type}] Sending request to LLM...`));
-    } else {
-      console.log(this.colorize('yellow', '⏳ Sending request to LLM...'));
-    }
-  }
-
-  /**
-   * 渲染 LLM 响应事件
-   */
-  private renderLlmResponse(event: RunEvent): void {
-    const data = event.data as { content?: string; tool_calls?: unknown[]; finish_reason: string };
-    
-    if (data.finish_reason === 'tool_calls') {
-      console.log(this.colorize('yellow', '🔧 LLM requested tool calls'));
-    } else if (data.content) {
-      console.log(this.colorize('green', '\nAssistant:'));
-      console.log(this.colorize('white', data.content));
-    }
-  }
-
-  /**
-   * 渲染工具调用开始事件
-   */
   private renderToolCallStarted(event: RunEvent): void {
     const data = event.data as { tool_name: string; arguments: unknown };
-    if (this.config.showToolDetails) {
-      console.log(this.colorize('blue', `\n🔧 Calling tool: ${data.tool_name}`));
-      console.log(this.colorize('gray', `   Arguments: ${JSON.stringify(data.arguments)}`));
+    if (this.cfg.showToolDetails) {
+      const args = JSON.stringify(data.arguments);
+      process.stdout.write(this.color('blue', `\n🔧 ${data.tool_name}`));
+      process.stdout.write(
+        this.color('gray', ` ${args.length > 120 ? `${args.slice(0, 120)}…` : args}`),
+      );
     } else {
-      console.log(this.colorize('blue', `🔧 ${data.tool_name}...`));
+      process.stdout.write(this.color('blue', `\n🔧 ${data.tool_name}…`));
     }
   }
 
-  /**
-   * 渲染工具调用完成事件
-   */
   private renderToolCallCompleted(event: RunEvent): void {
-    const data = event.data as { tool_name: string; result: string; duration_ms: number };
-    if (this.config.showToolDetails) {
-      console.log(this.colorize('green', `   ✓ ${data.tool_name} completed in ${data.duration_ms}ms`));
-    }
+    const data = event.data as { tool_name: string; duration_ms: number };
+    process.stdout.write(this.color('green', ` ✓ ${data.duration_ms}ms\n`));
   }
 
-  /**
-   * 渲染工具调用失败事件
-   */
   private renderToolCallFailed(event: RunEvent): void {
     const data = event.data as { tool_name: string; error: string };
-    console.log(this.colorize('red', `   ✗ ${data.tool_name} failed: ${data.error}`));
+    process.stdout.write(this.color('red', ` ✗ ${data.error}\n`));
   }
 
-  /**
-   * 渲染 Guardrail 阻止事件
-   */
-  private renderGuardrailBlocked(event: RunEvent): void {
-    const data = event.data as { guardrail_name: string; reason: string };
-    console.log(this.colorize('red', `🚫 Guardrail blocked: ${data.reason}`));
-  }
-
-  /**
-   * 渲染 Run 完成事件
-   */
-  private renderRunCompleted(event: RunEvent): void {
-    const data = event.data as { duration_ms: number; iterations: number; usage?: { total_tokens?: number } };
-    console.log(this.colorize('cyan', '\n━━━ Run Completed ━━━'));
-    console.log(this.colorize('gray', `Duration: ${data.duration_ms}ms | Iterations: ${data.iterations}`));
-    if (data.usage?.total_tokens) {
-      console.log(this.colorize('gray', `Tokens used: ${data.usage.total_tokens}`));
-    }
-  }
-
-  /**
-   * 渲染 Run 失败事件
-   */
-  private renderRunFailed(event: RunEvent): void {
-    const data = event.data as { error: string; duration_ms: number };
-    console.log(this.colorize('red', '\n━━━ Run Failed ━━━'));
-    console.log(this.colorize('red', `Error: ${data.error}`));
-    console.log(this.colorize('gray', `Duration: ${data.duration_ms}ms`));
-  }
-
-  /**
-   * 应用颜色
-   */
-  private colorize(color: string, text: string): string {
-    if (!this.config.enableColors) {
-      return text;
-    }
-
-    const colors: Record<string, string> = {
-      red: '\x1b[31m',
-      green: '\x1b[32m',
-      yellow: '\x1b[33m',
-      blue: '\x1b[34m',
-      cyan: '\x1b[36m',
-      white: '\x1b[37m',
-      gray: '\x1b[90m',
-      reset: '\x1b[0m',
-    };
-
-    return `${colors[color] ?? ''}${text}${colors.reset}`;
+  private color(color: keyof typeof C, text: string): string {
+    if (!this.cfg.enableColors) return text;
+    return `${C[color]}${text}${C.reset}`;
   }
 }
-
-export type { StreamRendererConfig };

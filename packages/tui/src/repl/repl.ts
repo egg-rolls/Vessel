@@ -1,253 +1,218 @@
 /**
- * REPL 实现
+ * REPL 实现（egg-rolls 基础版：readline 对话循环 + 二层 slash 命令 + 流式 + 错误分类）
  * @module @vessel/tui
+ *
+ * 契约（与 egg-rolls 壳的接缝）：壳构造 ReplContext -> 调 startRepl(ctx) -> 阻塞至 /exit。
+ * emma 后续替换为 Ink 框架 + token 动画 + 弹窗，函数签名与 ReplContext 不变。
  */
 
-import type { AgentRuntime } from '@vessel/core';
-import type { RunEvent } from '@vessel/core';
-import { EventType } from '@vessel/core';
+import { stdin as input, stdout as output } from 'node:process';
+import * as readline from 'node:readline/promises';
+import { type ReplState, consumePendingResume, createCommands } from '../commands/commands.js';
+import { StreamRenderer } from '../renderer/stream-renderer.js';
+import type { ReplContext } from '../repl-context.js';
 
-/** REPL 配置 */
-export interface REPLConfig {
-  prompt?: string;
-  welcomeMessage?: string;
-  exitCommands?: string[];
-}
+// ── 错误分类（REPL-7）──────────────────────────────
 
-/** REPL 状态 */
-export interface REPLState {
-  running: boolean;
-  sessionId: string;
-  history: string[];
+export type ErrorCategory = 'network' | 'auth' | 'quota' | 'api' | 'unknown';
+
+export interface ClassifiedError {
+  category: ErrorCategory;
+  message: string;
+  hint?: string;
 }
 
 /**
- * 命令行 REPL 实现
+ * 把 run() 抛出的错误分类（网络 / API / 限额 / 鉴权 / 其他）。
+ * 纯函数，可单测。
  */
-export class CLI_REPL {
-  private runtime: AgentRuntime;
-  private config: REPLConfig;
-  private state: REPLState;
+export function classifyError(error: unknown): ClassifiedError {
+  const msg = error instanceof Error ? error.message : String(error);
+  const lower = msg.toLowerCase();
 
-  constructor(runtime: AgentRuntime, config: REPLConfig = {}) {
-    this.runtime = runtime;
-    this.config = {
-      prompt: config.prompt ?? 'vessel> ',
-      welcomeMessage: config.welcomeMessage ?? 'Welcome to Vessel! Type your message or /help for commands.',
-      exitCommands: config.exitCommands ?? ['/exit', '/quit', 'exit', 'quit'],
-    };
-    this.state = {
-      running: false,
-      sessionId: crypto.randomUUID(),
-      history: [],
-    };
-  }
-
-  /**
-   * 启动 REPL
-   */
-  async start(): Promise<void> {
-    this.state.running = true;
-    console.log(this.config.welcomeMessage);
-
-    // 订阅事件流以显示进度
-    const { events } = this.getRuntimeComponents();
-    const unsubscribe = events.subscribe((event: RunEvent) => {
-      this.handleEvent(event);
-    });
-
-    try {
-      while (this.state.running) {
-        const input = await this.prompt();
-        
-        if (!input.trim()) {
-          continue;
-        }
-
-        // 检查退出命令
-        if (this.config.exitCommands?.includes(input.toLowerCase())) {
-          this.state.running = false;
-          console.log('Goodbye!');
-          break;
-        }
-
-        // 检查斜杠命令
-        if (input.startsWith('/')) {
-          await this.handleCommand(input);
-          continue;
-        }
-
-        // 处理普通消息
-        await this.handleMessage(input);
-      }
-    } finally {
-      unsubscribe();
-    }
-  }
-
-  /**
-   * 停止 REPL
-   */
-  stop(): void {
-    this.state.running = false;
-  }
-
-  /**
-   * 显示提示符并获取输入
-   */
-  private async prompt(): Promise<string> {
-    process.stdout.write(this.config.prompt ?? 'vessel> ');
-    
-    return new Promise((resolve) => {
-      process.stdin.setEncoding('utf-8');
-      process.stdin.once('data', (data: string) => {
-        resolve(data.trim());
-      });
-    });
-  }
-
-  /**
-   * 处理普通消息
-   */
-  private async handleMessage(input: string): Promise<void> {
-    this.state.history.push(input);
-
-    try {
-      console.log('Thinking...');
-      const response = await this.runtime.run(input, this.state.sessionId);
-      console.log(`\n${response}\n`);
-    } catch (error) {
-      console.error(`Error: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  /**
-   * 处理斜杠命令
-   */
-  private async handleCommand(command: string): Promise<void> {
-    const [cmd, ...args] = command.split(' ');
-
-    switch (cmd) {
-      case '/help':
-        this.showHelp();
-        break;
-      case '/tools':
-        this.showTools();
-        break;
-      case '/session':
-        this.showSession();
-        break;
-      case '/clear':
-        console.clear();
-        break;
-      case '/history':
-        this.showHistory();
-        break;
-      default:
-        console.log(`Unknown command: ${cmd}. Type /help for available commands.`);
-    }
-  }
-
-  /**
-   * 显示帮助信息
-   */
-  private showHelp(): void {
-    console.log(`
-Available commands:
-  /help     - Show this help message
-  /tools    - List available tools
-  /session  - Show session information
-  /clear    - Clear the screen
-  /history  - Show command history
-  /exit     - Exit the REPL
-    `);
-  }
-
-  /**
-   * 显示可用工具
-   */
-  private showTools(): void {
-    const { tools } = this.getRuntimeComponents();
-    const toolList = tools.list();
-    
-    if (toolList.length === 0) {
-      console.log('No tools available.');
-      return;
-    }
-
-    console.log('Available tools:');
-    for (const tool of toolList) {
-      console.log(`  - ${tool.name}: ${tool.description}`);
-    }
-  }
-
-  /**
-   * 显示会话信息
-   */
-  private showSession(): void {
-    console.log(`Session ID: ${this.state.sessionId}`);
-    console.log(`History length: ${this.state.history.length}`);
-  }
-
-  /**
-   * 显示历史记录
-   */
-  private showHistory(): void {
-    if (this.state.history.length === 0) {
-      console.log('No history yet.');
-      return;
-    }
-
-    console.log('History:');
-    for (const [index, entry] of this.state.history.entries()) {
-      console.log(`  ${index + 1}. ${entry}`);
-    }
-  }
-
-  /**
-   * 处理事件
-   */
-  private handleEvent(event: RunEvent): void {
-    switch (event.type) {
-      case EventType.LlmRequest:
-        console.log('Sending request to LLM...');
-        break;
-      case EventType.LlmResponse:
-        console.log('Received response from LLM.');
-        break;
-      case EventType.ToolCallStarted:
-        console.log(`Calling tool: ${(event.data as { tool_name: string }).tool_name}...`);
-        break;
-      case EventType.ToolCallCompleted:
-        console.log(`Tool completed: ${(event.data as { tool_name: string }).tool_name}`);
-        break;
-      case EventType.ToolCallFailed:
-        console.log(`Tool failed: ${(event.data as { tool_name: string }).tool_name}`);
-        break;
-    }
-  }
-
-  /**
-   * 获取运行时组件
-   */
-  private getRuntimeComponents(): { events: import('@vessel/core').EventStream; tools: import('@vessel/core').ToolRegistry } {
-    // 这里需要从 runtime 中获取 events 和 tools
-    // 由于 AgentRuntime 没有暴露这些，我们需要修改实现
-    // 暂时返回模拟对象
+  if (/usage limits exceeded|termination policy|max iterations|max_runtime/.test(lower)) {
     return {
-      events: {
-        subscribe: () => () => {},
-        publish: () => {},
-        clear: () => {},
-      },
-      tools: {
-        register: () => {},
-        invoke: async () => '',
-        schemas: () => [],
-        get: () => undefined,
-        has: () => false,
-        list: () => [],
-      },
+      category: 'quota',
+      message: msg,
+      hint: '用量/限额触发，调大 limits 或 /session new 开新会话。',
     };
+  }
+  if (/429|rate limit|rate_limit|quota/.test(lower)) {
+    return { category: 'quota', message: msg, hint: '请求过频或额度不足，稍后重试。' };
+  }
+  if (/401|unauthorized|invalid api key|invalid_api_key|authentication/.test(lower)) {
+    return { category: 'auth', message: msg, hint: 'API Key 无效，运行 /setup 重新配置。' };
+  }
+  if (
+    /fetch failed|econnrefused|enotfound|etimedout|connect_timeout|network|socket hang up|aborted/.test(
+      lower,
+    )
+  ) {
+    return { category: 'network', message: msg, hint: '网络不可达，检查 BaseURL/网络后重试。' };
+  }
+  if (/api error|http \d{3}|bad request|400|403|404|500|502|503/.test(lower)) {
+    return { category: 'api', message: msg, hint: 'Provider 返回错误，检查模型名/参数。' };
+  }
+  return { category: 'unknown', message: msg };
+}
+
+// ── startRepl ─────────────────────────────────────
+
+/**
+ * 交互式 REPL 入口。
+ * 壳（cli.ts）构造 ReplContext -> 调本函数 -> 阻塞至 /exit。
+ *
+ * egg-rolls 在此实现：
+ * - readline 对话循环 + 历史 + 行编辑
+ * - 二层 slash 命令分发（/session <action>、/tool list、/help /clear /setup /exit）
+ * - StreamRenderer 订阅 ctx.events，token-by-token 流式输出
+ * - /session resume 的 Hermes pending one-shot（裸数字恢复）
+ * - 错误分类展示（网络/API/限额/鉴权）
+ * - Ctrl+C：运行中->中断当前 run；空闲->退出
+ */
+export async function startRepl(ctx: ReplContext): Promise<void> {
+  const rl = readline.createInterface({
+    input,
+    output,
+    // 真终端开启行编辑；管道/非 TTY 用简单行模式（避免 Bun readline 缓冲怪癖）
+    terminal: process.stdin.isTTY ?? false,
+  });
+  const commands = createCommands();
+  const renderer = new StreamRenderer();
+  renderer.start(ctx.events);
+
+  const state: ReplState = {
+    currentSessionId: ctx.currentSessionId,
+    pendingResume: false,
+    running: true,
+  };
+
+  // 当前 run 的 AbortController--SIGINT 用
+  let currentController: AbortController | null = null;
+  rl.on('SIGINT', () => {
+    if (currentController) {
+      currentController.abort(); // run() 抛 'Run cancelled' -> classifyError 兜底
+    } else {
+      console.log('\nGoodbye!');
+      state.running = false;
+      ctx.onExit();
+    }
+  });
+
+  // 权限确认期间置位：行处理器丢弃此期间的行，避免用户的 y/n 被队列吞掉再当消息发给 AI。
+  // confirm 复用本 rl（经 promptFn），不再自建第二个 readline 抢 stdin。
+  let pausedForConfirm = false;
+  if (ctx.permissionChecker) {
+    ctx.permissionChecker.promptFn = (question: string) => {
+      pausedForConfirm = true;
+      return rl.question(question).finally(() => {
+        pausedForConfirm = false;
+      });
+    };
+  }
+
+  // 状态栏 / banner
+  console.log(`\nVessel  ·  ${ctx.provider.name} | ${ctx.provider.model}`);
+  if (ctx.plugins.length > 0) console.log(`plugins: ${ctx.plugins.join(', ')}`);
+  console.log(`session: ${state.currentSessionId}`);
+  console.log('Type your message, or /help for commands.\n');
+
+  // 行队列：处理期间到达的行（粘贴/管道）排队不丢失，避免 question() 丢行
+  const lineQueue: string[] = [];
+  let lineResolver: ((line: string | null) => void) | null = null;
+  rl.on('line', (line: string) => {
+    if (pausedForConfirm) return; // 权限确认期间的输入由 confirm 的 question 消费，不进队列
+    if (lineResolver) {
+      const r = lineResolver;
+      lineResolver = null;
+      r(line);
+    } else {
+      lineQueue.push(line);
+    }
+  });
+  rl.on('close', () => {
+    if (lineResolver) {
+      const r = lineResolver;
+      lineResolver = null;
+      r(null);
+    }
+  });
+  const nextLine = (): Promise<string | null> => {
+    if (lineQueue.length > 0) return Promise.resolve(lineQueue.shift() ?? null);
+    return new Promise((resolve) => {
+      lineResolver = resolve;
+    });
+  };
+
+  try {
+    while (state.running) {
+      process.stdout.write('vessel> ');
+      const line = await nextLine();
+      if (line === null) break; // EOF / rl 关闭
+      const trimmed = line.trim();
+
+      // /session resume 的 pending one-shot：下一行裸数字 -> 恢复
+      if (state.pendingResume) {
+        if (/^\d+$/.test(trimmed)) {
+          await consumePendingResume(trimmed, ctx, state);
+          continue;
+        }
+        // 非数字 -> 取消 pending，继续正常处理本行
+        state.pendingResume = false;
+      }
+
+      if (trimmed === '') continue;
+
+      if (trimmed.startsWith('/')) {
+        const result = await commands.execute(trimmed.slice(1), ctx, state);
+        if (!result.handled) {
+          const name = trimmed.split(/\s+/)[0] ?? trimmed;
+          console.log(`Unknown command: ${name}. Type /help for available commands.`);
+        }
+        continue;
+      }
+
+      await handleMessage(trimmed, ctx, state, renderer, (c) => {
+        currentController = c;
+      });
+    }
+  } finally {
+    renderer.stop();
+    rl.close();
+  }
+}
+
+/** 处理普通对话消息：调 runtime.run，流式渲染，错误分类 */
+async function handleMessage(
+  msg: string,
+  ctx: ReplContext,
+  state: ReplState,
+  renderer: StreamRenderer,
+  setController: (c: AbortController | null) => void,
+): Promise<void> {
+  const controller = new AbortController();
+  setController(controller);
+  try {
+    const response = await ctx.runtime.run(msg, state.currentSessionId, {
+      signal: controller.signal,
+    });
+    if (renderer.didStreamLastRun()) {
+      // 流式已逐 token 打印，RunCompleted 已换行 -> 再空一行分隔
+      process.stdout.write('\n');
+    } else {
+      // 非流式 provider 兜底：打印完整响应
+      process.stdout.write(`${response}\n\n`);
+    }
+  } catch (error) {
+    const c = classifyError(error);
+    process.stdout.write('\n');
+    if (c.hint) {
+      console.error(`✗ [${c.category}] ${c.message}\n  ${c.hint}`);
+    } else {
+      console.error(`✗ [${c.category}] ${c.message}`);
+    }
+    console.log('');
+  } finally {
+    setController(null);
   }
 }
