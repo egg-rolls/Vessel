@@ -144,34 +144,42 @@ export class SetupWizard {
       }
       const probe = inferProvider(baseUrl);
       console.log(`\n  ⏳ 正在测试连接 (${probe})...`);
-      try {
-        models = await fetchModels(baseUrl, apiKey, probe);
-        const chatModels = models.filter(
-          (m) =>
-            m.id.includes('gpt') ||
-            m.id.includes('claude') ||
-            m.id.includes('gemini') ||
-            m.id.includes('command') ||
-            m.id.includes('llama') ||
-            m.id.includes('mistral') ||
-            (!m.id.includes('embed') && !m.id.includes('moderation') && !m.id.includes('dall')),
-        );
-        // 如果过滤后没有 chat 模型，回退到全部
-        const displayModels = chatModels.length > 0 ? chatModels : models;
 
-        console.log(`\n  ✅ 连接成功！获取到 ${displayModels.length} 个模型:`);
-        for (let i = 0; i < Math.min(displayModels.length, 20); i++) {
-          console.log(`      ${i + 1}. ${displayModels[i]?.id}`);
-        }
-        if (displayModels.length > 20) {
-          console.log(`      ... 还有 ${displayModels.length - 20} 个`);
-        }
-
-        models = displayModels;
+      // Anthropic 等非 OpenAI-compat provider 无 /models 端点，跳过模型列表
+      if (probe !== 'openai' && probe !== 'custom') {
+        console.log(`  ℹ️  ${probe} 不支持自动获取模型列表，请手动输入`);
+        models = [];
         connected = true;
-      } catch (err) {
-        console.log(`\n  ❌ 连接失败: ${err instanceof Error ? err.message : err}`);
-        console.log('  请检查 BaseURL 和 APIKey 后重试。');
+      } else {
+        try {
+          models = await fetchModels(baseUrl, apiKey, probe);
+          const chatModels = models.filter(
+            (m) =>
+              m.id.includes('gpt') ||
+              m.id.includes('claude') ||
+              m.id.includes('gemini') ||
+              m.id.includes('command') ||
+              m.id.includes('llama') ||
+              m.id.includes('mistral') ||
+              (!m.id.includes('embed') && !m.id.includes('moderation') && !m.id.includes('dall')),
+          );
+          // 如果过滤后没有 chat 模型，回退到全部
+          const displayModels = chatModels.length > 0 ? chatModels : models;
+
+          console.log(`\n  ✅ 连接成功！获取到 ${displayModels.length} 个模型:`);
+          for (let i = 0; i < Math.min(displayModels.length, 20); i++) {
+            console.log(`      ${i + 1}. ${displayModels[i]?.id}`);
+          }
+          if (displayModels.length > 20) {
+            console.log(`      ... 还有 ${displayModels.length - 20} 个`);
+          }
+
+          models = displayModels;
+          connected = true;
+        } catch (err) {
+          console.log(`\n  ❌ 连接失败: ${err instanceof Error ? err.message : err}`);
+          console.log('  请检查 BaseURL 和 APIKey 后重试。');
+        }
       }
     }
 
