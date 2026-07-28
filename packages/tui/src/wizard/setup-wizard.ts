@@ -56,13 +56,23 @@ async function writeUserConfig(cfg: UserConfig): Promise<void> {
 }
 
 /** 测试连接：调用 /models 获取模型列表 */
-async function fetchModels(baseUrl: string, apiKey: string): Promise<ModelEntry[]> {
+async function fetchModels(
+  baseUrl: string,
+  apiKey: string,
+  providerName: string,
+): Promise<ModelEntry[]> {
   const url = `${baseUrl.replace(/\/+$/, '')}/models`;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (providerName === 'anthropic') {
+    headers['x-api-key'] = apiKey;
+    headers['anthropic-version'] = '2023-06-01';
+  } else {
+    headers['Authorization'] = `Bearer ${apiKey}`;
+  }
   const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
+    headers,
     signal: AbortSignal.timeout(15000),
   });
 
@@ -132,9 +142,10 @@ export class SetupWizard {
         connected = true;
         continue;
       }
-      console.log('\n  ⏳ 正在测试连接...');
+      const probe = inferProvider(baseUrl);
+      console.log(`\n  ⏳ 正在测试连接 (${probe})...`);
       try {
-        models = await fetchModels(baseUrl, apiKey);
+        models = await fetchModels(baseUrl, apiKey, probe);
         const chatModels = models.filter(
           (m) =>
             m.id.includes('gpt') ||
