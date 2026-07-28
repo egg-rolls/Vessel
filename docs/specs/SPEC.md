@@ -388,6 +388,8 @@ interface Hook {
 ```
 Hook 是**插件**。
 
+**BeforeLlm 注入契约**（ADR-018）：`BeforeLlm` hook 可往 `ctx.system_prompt` 写入内容（Skills / 项目记忆等）。tool-calling loop 在调用 LLM 前，以 runtime 的 `systemPrompt` 为基底种子化 `ctx.system_prompt`，hook 链在其上 prepend；最终 `ctx.system_prompt` 作为**本次请求**的 system 消息（替换已有 system 消息，或无则前置）。**不改动 `ContextManager` 持久化的消息**--注入只影响单次 LLM 请求，session 持久化保持干净、可 replay。`HookContext` 带索引签名 `[key: string]: unknown`，故 `system_prompt` 等扩展字段合法。
+
 ### 4.8 SessionBackend
 ```ts
 interface SessionBackend {

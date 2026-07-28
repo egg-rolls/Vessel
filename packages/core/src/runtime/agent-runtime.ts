@@ -286,12 +286,27 @@ export class AgentRuntime {
         throw new Error('Usage limits exceeded');
       }
 
-      // 执行 BeforeLlm 钩子
+      // 执行 BeforeLlm 钩子（hook 可往 ctx.system_prompt 注入内容：skills / memory）
+      // 用 this.systemPrompt 种子化，hook 链 prepend 注入；之后把结果作为本次请求的 system 消息
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
+      if (this.systemPrompt) {
+        (hookCtx as HookContext & { system_prompt?: string }).system_prompt = this.systemPrompt;
+      }
       await this.runHooks(HookType.BeforeLlm, hookCtx);
+      const injectedSystem = (hookCtx as { system_prompt?: string }).system_prompt;
 
       // 发布 LLM 请求事件
-      const messages = this.context.messages;
+      // 应用 BeforeLlm 注入的 system prompt（仅影响本次请求，不改动 ContextManager 持久化的消息）
+      let messages = this.context.messages;
+      if (injectedSystem && injectedSystem !== this.systemPrompt) {
+        const hasSystem = messages.some((m) => m.role === 'system');
+        messages = messages.map((m) =>
+          m.role === 'system' ? { ...m, content: injectedSystem } : m,
+        );
+        if (!hasSystem) {
+          messages = [{ role: 'system', content: injectedSystem } as Message, ...messages];
+        }
+      }
 
       // 统一工具来源：PluginHost（直接注册的工具已在构造时同步进去）
       const allTools = this.pluginHost.listTools();

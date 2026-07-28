@@ -85,7 +85,7 @@ egg-rolls 的每个节点产出**可跑的功能**，emma 在节点上挂 **UI/U
 ### 第二梯队：机制打磨
 
 - [x] MECH-1：hook-logging 插件接入（事件日志）-- VESSEL_DEBUG 时加载 + 3 测试
-- [x] MECH-2：memory-project 插件接入（项目记忆）-- 已随 REPL-5 进默认；验证工具+注入逻辑+4 测试。**注**：BeforeLlm hook 写 `ctx.system_prompt` 但 runtime 的 `runHooks` 不消费返回值/不读 system_prompt，故 skills-loader + memory-project 的自动注入当前不生效（AI 仍可经 list_memories/get_memory 工具手动取）。修复需动 core（ADR-017 loop-bug 类），另列。
+- [x] MECH-2：memory-project 插件接入（项目记忆）-- 已随 REPL-5 进默认；验证工具+注入逻辑+4 测试。**注入 gap 已修（ADR-018）**：runtime 现消费 BeforeLlm hook 的 `ctx.system_prompt`，skills-loader + memory-project 自动注入生效（AI 第一轮即带 Skills/CLAUDE.md）。
 - [x] MECH-3：Anthropic provider SSE 流式测试 -- 新增 anthropic-streaming.test.ts（text_delta / input_json_delta / max_tokens / 非流式 4 例）
 
 ### 第三梯队：emma 接口文档
