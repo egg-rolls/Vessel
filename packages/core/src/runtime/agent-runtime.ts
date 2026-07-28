@@ -55,13 +55,13 @@ export class AgentRuntime {
 
     // 初始化使用量统计
     this.stats = {
-      request_count: 0,
-      tool_calls_count: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      total_cost: 0,
-      start_time: Date.now(),
+      requestCount: 0,
+      toolCallsCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      startTime: Date.now(),
     };
 
     // 初始化 PluginHost，并将直接注册的工具同步到 PluginHost（统一入口）
@@ -117,13 +117,13 @@ export class AgentRuntime {
 
     // 重置使用量统计（每次 run 都是新的对话）
     this.stats = {
-      request_count: 0,
-      tool_calls_count: 0,
-      input_tokens: 0,
-      output_tokens: 0,
-      total_tokens: 0,
-      total_cost: 0,
-      start_time: startTime,
+      requestCount: 0,
+      toolCallsCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      startTime: startTime,
     };
 
     // 切换到当前会话的 Context
@@ -202,10 +202,10 @@ export class AgentRuntime {
       runState.status = 'completed';
       runState.completed_at = Date.now();
       runState.usage = {
-        prompt_tokens: this.stats.input_tokens,
-        completion_tokens: this.stats.output_tokens,
-        total_tokens: this.stats.total_tokens,
-        total_cost: this.stats.total_cost,
+        prompt_tokens: this.stats.inputTokens,
+        completion_tokens: this.stats.outputTokens,
+        total_tokens: this.stats.totalTokens,
+        total_cost: this.stats.totalCost,
       };
       runState.messages = this.context.messages;
 
@@ -224,7 +224,7 @@ export class AgentRuntime {
           output: response,
           usage: runState.usage,
           duration_ms: Date.now() - startTime,
-          iterations: this.stats.request_count,
+          iterations: this.stats.requestCount,
         },
         ts: Date.now(),
       });

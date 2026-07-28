@@ -3,6 +3,8 @@
  * @module @vessel/core/provider
  */
 
+// biome-ignore lint/style/useNamingConvention: LLM API protocol fields (OpenAI/Anthropic)
+
 import type {
   ChatRequest,
   FinishReason,
@@ -14,7 +16,7 @@ import type {
 import type { ToolCall } from '../types/tool.js';
 
 /** SSE 事件（解析自 HTTP 流） */
-interface SSEEvent {
+interface SseEvent {
   event?: string;
   data: string;
 }
@@ -24,7 +26,7 @@ interface SSEEvent {
  * 事件以空行（\n\n）分隔；`data:` 多行拼接；`event:` 行可选（Anthropic 用，OpenAI 不用）。
  * 参照 Claude Code / Hermes 的逐行 SSE 解析模式。
  */
-async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEvent> {
+async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -38,13 +40,13 @@ async function* parseSSE(body: ReadableStream<Uint8Array>): AsyncGenerator<SSEEv
       while (sep) {
         const raw = buffer.slice(0, sep.start);
         buffer = buffer.slice(sep.end);
-        const evt = parseSSEBlock(raw);
+        const evt = parseSseBlock(raw);
         if (evt) yield evt;
         sep = indexOfBlankLine(buffer);
       }
     }
     if (buffer.trim()) {
-      const evt = parseSSEBlock(buffer);
+      const evt = parseSseBlock(buffer);
       if (evt) yield evt;
     }
   } finally {
@@ -63,7 +65,7 @@ function indexOfBlankLine(buf: string): { start: number; end: number } | null {
 }
 
 /** 解析单个 SSE 事件块为 {event?, data} */
-function parseSSEBlock(raw: string): SSEEvent | null {
+function parseSseBlock(raw: string): SseEvent | null {
   let event: string | undefined;
   const dataLines: string[] = [];
   for (const line of raw.split('\n')) {
@@ -79,7 +81,7 @@ function parseSSEBlock(raw: string): SSEEvent | null {
 }
 
 /** OpenAI 流式 chunk 形状（仅取用到的字段） */
-type OpenAIStreamChunk = {
+type OpenAiStreamChunk = {
   choices?: Array<{
     delta?: {
       content?: string;
@@ -296,12 +298,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
       stream: false,
     };
 
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
+      headers,
       signal: req.signal,
       body: JSON.stringify(body),
     });
@@ -380,12 +382,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
       stream_options: { include_usage: true },
     };
 
+    const streamHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (this.apiKey) streamHeaders['Authorization'] = `Bearer ${this.apiKey}`;
+
     const response = await fetch(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.apiKey}`,
-      },
+      headers: streamHeaders,
       signal: req.signal,
       body: JSON.stringify(streamBody),
     });
@@ -403,11 +405,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
     let finishReason: FinishReason = 'stop';
     let usage: Usage | undefined;
 
-    for await (const evt of parseSSE(response.body)) {
+    for await (const evt of parseSse(response.body)) {
       if (evt.data === '[DONE]') break;
-      let parsed: OpenAIStreamChunk;
+      let parsed: OpenAiStreamChunk;
       try {
-        parsed = JSON.parse(evt.data) as OpenAIStreamChunk;
+        parsed = JSON.parse(evt.data) as OpenAiStreamChunk;
       } catch {
         continue; // 跳过非 JSON 行（心跳等）
       }
@@ -451,7 +453,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       }
     }
 
-    const tool_calls: ToolCall[] | undefined =
+    const toolCalls: ToolCall[] | undefined =
       toolCallsMap.size > 0
         ? Array.from(toolCallsMap.entries())
             .sort((a, b) => a[0] - b[0])
@@ -464,7 +466,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     onChunk({ type: 'finish', finish_reason: finishReason, usage });
 
-    return { content, tool_calls, finish_reason: finishReason, usage };
+    return { content, tool_calls: toolCalls, finish_reason: finishReason, usage };
   }
 }
 
@@ -695,7 +697,7 @@ export class AnthropicProvider implements LLMProvider {
     let promptTokens = 0;
     let completionTokens = 0;
 
-    for await (const evt of parseSSE(response.body)) {
+    for await (const evt of parseSse(response.body)) {
       let parsed: AnthropicStreamEvent;
       try {
         parsed = JSON.parse(evt.data) as AnthropicStreamEvent;
@@ -759,7 +761,7 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
-    const tool_calls: ToolCall[] | undefined =
+    const toolCalls: ToolCall[] | undefined =
       toolBlocks.size > 0
         ? Array.from(toolBlocks.entries())
             .sort((a, b) => a[0] - b[0])
@@ -778,6 +780,6 @@ export class AnthropicProvider implements LLMProvider {
 
     onChunk({ type: 'finish', finish_reason: finishReason, usage });
 
-    return { content, tool_calls, finish_reason: finishReason, usage };
+    return { content, tool_calls: toolCalls, finish_reason: finishReason, usage };
   }
 }

@@ -1,6 +1,9 @@
 /**
  * Vessel 配置加载器
  * @module @vessel/config
+ *
+ * YAML 文件使用用户友好的 snake_case（api_key, base_url），TS 代码使用 camelCase（ADR-019）。
+ * 加载器自动将 YAML 的 snake_case 键递归映射为 camelCase。
  */
 
 import * as os from 'node:os';
@@ -9,6 +12,21 @@ import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG } from './defaults.js';
 import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
 import { KNOWN_CONFIG_KEYS, findUnknownKeys, validateConfig } from './validator.js';
+
+/**
+ * 将对象的所有键从 snake_case 递归转为 camelCase。
+ * 用于加载 YAML 配置后、合并前调用。
+ */
+export function snakeToCamel(obj: unknown): unknown {
+  if (Array.isArray(obj)) return obj.map(snakeToCamel);
+  if (obj === null || typeof obj !== 'object') return obj;
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+    const camelKey = key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
+    result[camelKey] = snakeToCamel(value);
+  }
+  return result;
+}
 
 /**
  * 获取用户配置目录
@@ -27,7 +45,7 @@ export function getUserConfigPath(): string {
 }
 
 /**
- * 从 YAML 文件加载配置（使用完整的 yaml 解析库）
+ * 从 YAML 文件加载配置（使用完整的 yaml 解析库），并做 snake→camel 映射。
  * @param filePath 配置文件路径
  * @returns 配置对象
  */
@@ -40,7 +58,7 @@ export async function loadConfigFromFile(filePath: string): Promise<VesselConfig
   }
 
   const content = await file.text();
-  return parseYaml(content) as VesselConfig;
+  return snakeToCamel(parseYaml(content)) as VesselConfig;
 }
 
 /**
@@ -59,7 +77,7 @@ export async function loadUserConfig(userConfigPath?: string): Promise<UserConfi
     }
 
     const content = await file.text();
-    return parseYaml(content) as UserConfig;
+    return snakeToCamel(parseYaml(content)) as UserConfig;
   } catch {
     return {};
   }
@@ -76,7 +94,7 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
   // API Key
   const apiKey = getEnvVar(`${prefix}API_KEY`);
   if (apiKey) {
-    config.api_key = apiKey;
+    config.apiKey = apiKey;
   }
 
   // Provider
@@ -89,8 +107,8 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
     config.provider = {
       name: providerName ?? 'openai',
       model: providerModel,
-      base_url: providerBaseUrl,
-      api_key: providerApiKey ?? apiKey,
+      baseUrl: providerBaseUrl,
+      apiKey: providerApiKey ?? apiKey,
     };
   }
 
@@ -110,7 +128,7 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
     const tokens = Number.parseInt(maxTokens, 10);
     if (!Number.isNaN(tokens)) {
       if (!config.provider) config.provider = { name: 'openai' };
-      config.provider.max_tokens = tokens;
+      config.provider.maxTokens = tokens;
     }
   }
 
@@ -126,8 +144,8 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
 export function mergeConfig(base: VesselConfig, override: Partial<VesselConfig>): VesselConfig {
   const result: VesselConfig = { ...base };
 
-  if (override.api_key !== undefined) {
-    result.api_key = override.api_key;
+  if (override.apiKey !== undefined) {
+    result.apiKey = override.apiKey;
   }
 
   if (override.provider) {
@@ -207,30 +225,27 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
   // 2. 加载用户配置 (~/.vessel/config.yaml)
   try {
     const userConfig = await loadUserConfig(options.userConfigPath);
-    if (userConfig.api_key) {
-      config.api_key = userConfig.api_key;
+    if (userConfig.apiKey) {
+      config.apiKey = userConfig.apiKey;
     }
 
-    // 应用 provider 配置（base_url、model、api_key）
+    // 应用 provider 配置
     const providerName =
-      userConfig.default_provider ??
+      userConfig.defaultProvider ??
       (userConfig.providers ? Object.keys(userConfig.providers)[0] : undefined);
     if (providerName && userConfig.providers?.[providerName]) {
       const p = userConfig.providers[providerName];
-      const resolvedName = userConfig.default_provider ?? providerName;
-      const userModel = userConfig.default_model ?? p.model;
+      const resolvedName = userConfig.defaultProvider ?? providerName;
+      const userModel = userConfig.defaultModel ?? p.model;
       config.provider = {
         ...config.provider,
-        // 用用户声明的 provider 名，而非 openai 默认（修：default_provider: custom 时错显 openai）
         name: resolvedName,
-        api_key: config.provider?.api_key ?? p.api_key,
-        base_url: p.base_url ?? config.provider?.base_url,
-        // model：用户指定则用；否则仅 openai 回退到安全默认 gpt-4（SPEC §6.2.3）。
-        // 非 openai provider 不继承 gpt-4——那几乎必错，交由 validateConfig 报错。
+        apiKey: config.provider?.apiKey ?? p.apiKey,
+        baseUrl: p.baseUrl ?? config.provider?.baseUrl,
         model: userModel ?? (resolvedName === 'openai' ? config.provider?.model : undefined),
       };
-    } else if (userConfig.default_provider) {
-      config.provider = { ...config.provider, name: userConfig.default_provider };
+    } else if (userConfig.defaultProvider) {
+      config.provider = { ...config.provider, name: userConfig.defaultProvider };
     }
   } catch {
     // 用户配置不存在或解析失败，忽略

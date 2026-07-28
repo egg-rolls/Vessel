@@ -122,7 +122,7 @@ describe('MemoryLLMProvider streaming', () => {
 });
 
 /** 用 ReadableStream 构造 OpenAI SSE 响应，mock globalThis.fetch */
-function mockFetchSSE(sseChunks: string[]): void {
+function mockFetchSse(sseChunks: string[]): void {
   const encoder = new TextEncoder();
   globalThis.fetch = (async () => {
     const stream = new ReadableStream<Uint8Array>({
@@ -148,7 +148,7 @@ describe('OpenAICompatibleProvider streaming', () => {
   });
 
   it('should stream text deltas and assemble full response', async () => {
-    mockFetchSSE([
+    mockFetchSse([
       `data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n`,
       `data: {"choices":[{"delta":{"content":" world"}}]}\n\n`,
       `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n`,
@@ -183,7 +183,7 @@ describe('OpenAICompatibleProvider streaming', () => {
   });
 
   it('should accumulate streamed tool_calls by index into complete arguments', async () => {
-    mockFetchSSE([
+    mockFetchSse([
       `data: {"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}\n\n`,
       `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"city\\""}}]}}]}\n\n`,
       `data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"Beijing\\"}"}}]}}]}\n\n`,

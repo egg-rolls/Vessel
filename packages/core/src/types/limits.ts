@@ -1,32 +1,32 @@
 /**
- * Limits 类型定义
+ * Limits 类型定义（camelCase，ADR-019）
  * @module @vessel/core/limits
  */
 
 /** 使用量限制 */
 export interface UsageLimits {
-  request_limit?: number;
-  tool_calls_limit?: number;
-  input_tokens_limit?: number;
-  output_tokens_limit?: number;
-  total_cost_limit?: number;
+  requestLimit?: number;
+  toolCallsLimit?: number;
+  inputTokensLimit?: number;
+  outputTokensLimit?: number;
+  totalCostLimit?: number;
 }
 
 /** 终止策略 */
 export interface TerminationPolicy {
-  max_iterations: number;
-  max_runtime_seconds?: number;
+  maxIterations: number;
+  maxRuntimeSeconds?: number;
 }
 
 /** 使用量统计 */
 export interface UsageStats {
-  request_count: number;
-  tool_calls_count: number;
-  input_tokens: number;
-  output_tokens: number;
-  total_tokens: number;
-  total_cost: number;
-  start_time: number;
+  requestCount: number;
+  toolCallsCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  totalCost: number;
+  startTime: number;
 }
 
 /** 限制检查器接口 */

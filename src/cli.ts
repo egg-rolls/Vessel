@@ -15,7 +15,6 @@
  * REPL 在 @vessel/tui startRepl(ctx) 内实现。
  */
 
-import { PROVIDER_PRESETS } from '../packages/config/src/defaults';
 import { loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
@@ -92,24 +91,24 @@ if (validation.warnings.length > 0) {
   for (const w of validation.warnings) console.warn(`⚠ ${w.message}`);
 }
 
-if (headless && !useMock && !config.api_key) {
+if (headless && !useMock && !config.apiKey) {
   console.error('No API key configured. Run `vessel` interactively first to set up.');
   process.exit(1);
 }
 
-if (!useMock && !headless && !config.api_key) {
+if (!useMock && !headless && !config.apiKey) {
   console.log('\n🔑 首次使用需要配置 API 连接\n');
   const userConfig = await runSetupWizard();
-  if (userConfig.api_key) {
-    config.api_key = userConfig.api_key;
+  if (userConfig.apiKey) {
+    config.apiKey = userConfig.apiKey;
     if (userConfig.providers) {
       const p = Object.values(userConfig.providers)[0];
       if (p) {
         config.provider = {
-          name: userConfig.default_provider ?? 'openai',
-          api_key: p.api_key,
-          base_url: p.base_url ?? config.provider?.base_url,
-          model: userConfig.default_model ?? p.model ?? config.provider?.model,
+          name: userConfig.defaultProvider ?? 'openai',
+          apiKey: p.apiKey,
+          baseUrl: p.baseUrl ?? config.provider?.baseUrl,
+          model: userConfig.defaultModel ?? p.model ?? config.provider?.model,
         };
       }
     }
@@ -184,16 +183,16 @@ if (useMock) {
 } else {
   providerName = config.provider?.name ?? 'openai';
   providerModel = config.provider?.model ?? 'gpt-4';
-  providerBaseUrl = config.provider?.base_url ?? PROVIDER_PRESETS[providerName]?.base_url ?? '';
+  providerBaseUrl = config.provider?.baseUrl ?? '';
 
   const factory = providerHost.getProvider(providerName);
   if (factory) {
     provider = factory({
-      api_key: config.api_key ?? '',
+      api_key: config.apiKey ?? '',
       base_url: providerBaseUrl,
       model: providerModel,
       temperature: config.provider?.temperature,
-      max_tokens: config.provider?.max_tokens,
+      max_tokens: config.provider?.maxTokens,
     });
   } else {
     // 未注册的 provider（如首启向导对未知 BaseURL 产出的 "custom"）
@@ -203,11 +202,11 @@ if (useMock) {
         ` (base_url: ${providerBaseUrl || 'default'}, model: ${providerModel}).`,
     );
     provider = new OpenAICompatibleProvider({
-      api_key: config.api_key ?? '',
+      api_key: config.apiKey ?? '',
       base_url: providerBaseUrl,
       model: providerModel,
       temperature: config.provider?.temperature,
-      max_tokens: config.provider?.max_tokens,
+      max_tokens: config.provider?.maxTokens,
     });
   }
 }
@@ -216,13 +215,13 @@ if (useMock) {
 
 const tools = new MemoryToolRegistry();
 const context = new MemoryContextManager({
-  maxTokens: config.context?.max_tokens,
-  maxMessages: config.context?.max_messages,
-  autoCompact: config.context?.auto_compact,
-  compactThreshold: config.context?.compact_threshold,
+  maxTokens: config.context?.maxTokens,
+  maxMessages: config.context?.maxMessages,
+  autoCompact: config.context?.autoCompact,
+  compactThreshold: config.context?.compactThreshold,
 });
 const events = new MemoryEventStream();
-const session = new SQLiteSessionBackend(config.session?.storage_path ?? './vessel.db');
+const session = new SQLiteSessionBackend(config.session?.storagePath ?? './vessel.db');
 
 // ── 会话 ────────────────────────────────────────
 
@@ -243,7 +242,17 @@ const configuredPlugins = config.plugins?.filter((p) => p.enabled !== false) ?? 
 const defaultPluginNames =
   configuredPlugins.length > 0
     ? configuredPlugins.map((p) => p.name)
-    : ['meta-tools', 'skills-loader', 'file-ops', 'memory-project'];
+    : [
+        'meta-tools',
+        'skills-loader',
+        'file-ops',
+        'memory-project',
+        'memory-auto',
+        'guardrail-pii',
+        'redact-secrets',
+        'tool-policy',
+        'mcp-client',
+      ];
 // VESSEL_DEBUG 时加 hook-logging（事件日志，便于调试；默认不开避免污染输出）
 if (process.env.VESSEL_DEBUG) defaultPluginNames.push('hook-logging');
 const plugins: Plugin[] = [];
@@ -276,14 +285,14 @@ const runtime = new AgentRuntime({
   tools,
   context,
   events,
-  limits: config.limits ?? { request_limit: 100, tool_calls_limit: 50 },
+  limits: config.limits ?? { requestLimit: 100, toolCallsLimit: 50 },
   termination: {
-    max_iterations: config.termination?.max_iterations ?? 50,
-    max_runtime_seconds: config.termination?.max_runtime_seconds,
+    maxIterations: config.termination?.maxIterations ?? 50,
+    maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
   },
   session,
   plugins,
-  systemPrompt: config.agent?.system_prompt ?? '你是一个有用的 AI 助手。',
+  systemPrompt: config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。',
 });
 
 await runtime.ready;

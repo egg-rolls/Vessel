@@ -9,7 +9,7 @@
  * - /setup 斜杠命令可重新配置
  */
 
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
@@ -36,11 +36,11 @@ function userConfigDir(): string {
 }
 
 /** 读取用户配置文件 */
-function readUserConfig(): UserConfig {
+async function readUserConfig(): Promise<UserConfig> {
   try {
     const p = getUserConfigPath();
-    if (!existsSync(p)) return {};
-    const text = readFileSync(p, 'utf-8');
+    if (!(await Bun.file(p).exists())) return {};
+    const text = await Bun.file(p).text();
     return (fromYaml(text) ?? {}) as UserConfig;
   } catch {
     /* ignore */
@@ -49,12 +49,10 @@ function readUserConfig(): UserConfig {
 }
 
 /** 写入用户配置文件 */
-function writeUserConfig(cfg: UserConfig): void {
+async function writeUserConfig(cfg: UserConfig): Promise<void> {
   const dir = userConfigDir();
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
-  }
-  Bun.write(getUserConfigPath(), toYaml(cfg));
+  await mkdir(dir, { recursive: true });
+  await Bun.write(getUserConfigPath(), toYaml(cfg));
 }
 
 /** 测试连接：调用 /models 获取模型列表 */
@@ -98,11 +96,11 @@ export class SetupWizard {
     console.log('═'.repeat(54));
 
     // 检查已有配置
-    const existing = readUserConfig();
-    if (existing.api_key) {
+    const existing = await readUserConfig();
+    if (existing.apiKey) {
       console.log('\n  已有配置:');
-      console.log(`    Provider: ${existing.default_provider ?? '(default)'}`);
-      console.log(`    API Key:  ****${existing.api_key.slice(-4)}`);
+      console.log(`    Provider: ${existing.defaultProvider ?? '(default)'}`);
+      console.log(`    API Key:  ****${existing.apiKey.slice(-4)}`);
       const reuse = await this.ask('\n  使用已有配置？(Y/n): ');
       if (reuse.toLowerCase() !== 'n') {
         this.rl.close();
@@ -188,13 +186,13 @@ export class SetupWizard {
 
     // 构建配置
     const config: UserConfig = {
-      api_key: apiKey,
-      default_provider: providerName,
-      default_model: selectedModel,
+      apiKey,
+      defaultProvider: providerName,
+      defaultModel: selectedModel,
       providers: {
         [providerName]: {
-          api_key: apiKey,
-          base_url: baseUrl,
+          apiKey,
+          baseUrl,
           model: selectedModel,
         },
       },
@@ -214,7 +212,7 @@ export class SetupWizard {
       return config;
     }
 
-    writeUserConfig(config);
+    await writeUserConfig(config);
     console.log(`\n  ✅ 已保存到 ${getUserConfigPath()}`);
     console.log('  修改配置: /setup');
     console.log(`${'═'.repeat(54)}\n`);

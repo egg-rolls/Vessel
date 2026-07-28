@@ -7,7 +7,7 @@
  */
 
 export * from './types.js';
-export { DEFAULT_CONFIG, PROVIDER_PRESETS } from './defaults.js';
+export { DEFAULT_CONFIG } from './defaults.js';
 export { validateConfig, findUnknownKeys, KNOWN_CONFIG_KEYS } from './validator.js';
 export {
   loadConfig,

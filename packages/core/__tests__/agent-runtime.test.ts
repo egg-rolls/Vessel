@@ -30,11 +30,11 @@ describe('AgentRuntime Integration', () => {
       context,
       events: eventStream,
       limits: {
-        request_limit: 10,
-        tool_calls_limit: 5,
+        requestLimit: 10,
+        toolCallsLimit: 5,
       },
       termination: {
-        max_iterations: 10,
+        maxIterations: 10,
       },
       session,
     });
@@ -153,11 +153,11 @@ describe('AgentRuntime Integration', () => {
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: {
-        request_limit: 10,
-        tool_calls_limit: 5,
+        requestLimit: 10,
+        toolCallsLimit: 5,
       },
       termination: {
-        max_iterations: 10,
+        maxIterations: 10,
       },
     });
 

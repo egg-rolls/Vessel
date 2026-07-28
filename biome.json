@@ -40,6 +40,9 @@
         "useValidForDirection": "error",
         "useYield": "error"
       },
+      "complexity": {
+        "useLiteralKeys": "off"
+      },
       "style": {
         "noNonNullAssertion": "warn",
         "useAsConstAssertion": "warn",
@@ -49,7 +52,7 @@
         "useExponentiationOperator": "warn",
         "useImportType": "warn",
         "useLiteralEnumMembers": "warn",
-        "useNamingConvention": "warn",
+        "useNamingConvention": "off",
         "useNumericLiterals": "warn",
         "useShorthandAssign": "warn",
         "useShorthandFunctionType": "warn",

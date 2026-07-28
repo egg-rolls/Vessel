@@ -378,7 +378,7 @@ function setupCommand(): CommandEntry {
       const { runSetupWizard } = await import('../wizard/setup-wizard.js');
       console.log('\nRunning setup wizard...');
       const userConfig = await runSetupWizard();
-      if (userConfig.api_key) {
+      if (userConfig.apiKey) {
         console.log(
           'Configuration saved. Restart Vessel for the new provider/key to take effect.\n',
         );
