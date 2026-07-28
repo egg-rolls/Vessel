@@ -161,9 +161,7 @@ export function createPermissionGuardrail(
             return { allowed: true };
           }
 
-          const args = toolCall.function?.arguments
-            ? JSON.parse(toolCall.function.arguments)
-            : {};
+          const args = toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {};
 
           const result = await checker.confirm(toolName, args);
 

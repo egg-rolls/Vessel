@@ -9,7 +9,7 @@
 |-------|------|------|
 | 0 脚手架 | ✅ 完成 | monorepo;CI 四件套全绿(lint/typecheck/test/build);单二进制可出 |
 | 1 MVP-core | ✅ 完成 | runtime loop / provider(流式 SSE + 注册制) / context+auto-compact / session(memory+file+sqlite) / EventStream(含 LlmStreamChunk) / limits(含 AbortSignal) / guardrail+hook 接口 / PluginHost / 动态插件加载 / **Core 冻结(ADR-017)**;73 测试过 |
-| 1 MVP-tui | 🚧 egg-rolls 实现中 | 壳已重构→调 `startRepl(ctx)`;`ReplContext` 契约在 `packages/tui/src/repl-context.ts`;`createPermissionGuardrail` 已修正 |
+| 1 MVP-tui | 🚧 egg-rolls 实现中 | REPL-1~7 完成：`startRepl(ctx)` readline 循环 + 二层 slash 命令(`/session list\|resume\|new\|history`、`/tool list`、`/help /clear /setup /exit`)+ StreamRenderer 流式 token + Hermes `/session resume` pending one-shot + 权限 guardrail(Plugin 注入)+ 默认插件(file-ops/memory-project)+ 错误分类;99 测试过;CI 四件套全绿 |
 
 ## 二、新分工（emma 速度慢，egg-rolls 平推全部核心逻辑）
 
@@ -74,13 +74,13 @@ egg-rolls 的每个节点产出**可跑的功能**，emma 在节点上挂 **UI/U
 
 ### 第一梯队：让 App 完整跑起来
 
-- [ ] REPL-1：实现 `startRepl(ctx)`——readline 对话循环 + 全部 9 个 slash 命令
-- [ ] REPL-2：StreamRenderer 实际订阅 `ctx.events`——流式 token 输出
-- [ ] REPL-3：Session 管理——/resume pending one-shot、/new、/history、空会话丢弃
-- [ ] REPL-4：Guardrail 注册——`createPermissionGuardrail` 注入 runtime PluginHost
-- [ ] REPL-5：默认插件扩展——file-ops / mcp-client / memory / security 进默认加载列表
-- [ ] REPL-6：首启向导接入 REPL——Shell 无 Key 时走向导再进 REPL
-- [ ] REPL-7：错误分类展示——网络错误 vs API 错误 vs 限额超限
+- [x] REPL-1：实现 `startRepl(ctx)`——readline 对话循环 + 全部 9 个 slash 命令
+- [x] REPL-2：StreamRenderer 实际订阅 `ctx.events`——流式 token 输出
+- [x] REPL-3：Session 管理——/resume pending one-shot、/new、/history、空会话丢弃
+- [x] REPL-4：Guardrail 注册——`createPermissionGuardrail` 注入 runtime PluginHost
+- [x] REPL-5：默认插件扩展——file-ops / mcp-client / memory / security 进默认加载列表
+- [x] REPL-6：首启向导接入 REPL——Shell 无 Key 时走向导再进 REPL
+- [x] REPL-7：错误分类展示——网络错误 vs API 错误 vs 限额超限
 
 ### 第二梯队：机制打磨
 

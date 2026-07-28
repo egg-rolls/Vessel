@@ -15,8 +15,8 @@
  * REPL 在 @vessel/tui startRepl(ctx) 内实现。
  */
 
-import { loadConfig } from '../packages/config/src/index';
 import { PROVIDER_PRESETS } from '../packages/config/src/defaults';
+import { loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
   type LLMProvider,
@@ -26,11 +26,16 @@ import {
   MemoryPluginHost,
   MemoryToolRegistry,
   type Message,
+  OpenAICompatibleProvider,
   type Plugin,
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
+import { type ReplContext, startRepl } from '../packages/tui/src/index';
+import {
+  ToolPermissionChecker,
+  createPermissionGuardrail,
+} from '../packages/tui/src/renderer/tool-confirm';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
-import { startRepl, type ReplContext } from '../packages/tui/src/index';
 
 // ── argv 解析 ────────────────────────────────────
 
@@ -160,9 +165,7 @@ async function loadPlugin(name: string): Promise<Plugin | null> {
 
 // 先加载所有 provider 插件，安装到临时 host 以构建 provider registry
 const providerHost = new MemoryPluginHost();
-const providerPluginNames = Object.keys(PLUGIN_IMPORT_MAP).filter((k) =>
-  k.startsWith('provider-'),
-);
+const providerPluginNames = Object.keys(PLUGIN_IMPORT_MAP).filter((k) => k.startsWith('provider-'));
 for (const name of providerPluginNames) {
   const p = await loadPlugin(name);
   if (p) p.install(providerHost);
@@ -181,23 +184,32 @@ if (useMock) {
 } else {
   providerName = config.provider?.name ?? 'openai';
   providerModel = config.provider?.model ?? 'gpt-4';
-  providerBaseUrl =
-    config.provider?.base_url ?? PROVIDER_PRESETS[providerName]?.base_url ?? '';
+  providerBaseUrl = config.provider?.base_url ?? PROVIDER_PRESETS[providerName]?.base_url ?? '';
 
   const factory = providerHost.getProvider(providerName);
-  if (!factory) {
-    console.error(
-      `Provider "${providerName}" not found. Available: ${providerHost.listProviders().join(', ')}`,
+  if (factory) {
+    provider = factory({
+      api_key: config.api_key ?? '',
+      base_url: providerBaseUrl,
+      model: providerModel,
+      temperature: config.provider?.temperature,
+      max_tokens: config.provider?.max_tokens,
+    });
+  } else {
+    // 未注册的 provider（如首启向导对未知 BaseURL 产出的 "custom"）
+    // -> 按 OpenAI 兼容处理（恢复 provider 注册制之前的默认行为），warn 不 exit
+    console.warn(
+      `Provider "${providerName}" not registered; treating as OpenAI-compatible` +
+        ` (base_url: ${providerBaseUrl || 'default'}, model: ${providerModel}).`,
     );
-    process.exit(1);
+    provider = new OpenAICompatibleProvider({
+      api_key: config.api_key ?? '',
+      base_url: providerBaseUrl,
+      model: providerModel,
+      temperature: config.provider?.temperature,
+      max_tokens: config.provider?.max_tokens,
+    });
   }
-  provider = factory({
-    api_key: config.api_key ?? '',
-    base_url: providerBaseUrl,
-    model: providerModel,
-    temperature: config.provider?.temperature,
-    max_tokens: config.provider?.max_tokens,
-  });
 }
 
 // ── 组件 ────────────────────────────────────────
@@ -228,14 +240,28 @@ let currentSessionId = sessionArg ?? newSessionId();
 
 // config.plugins 未配时加载默认插件；provider 插件已在前一步加载，此处跳过
 const configuredPlugins = config.plugins?.filter((p) => p.enabled !== false) ?? [];
-const defaultPluginNames = configuredPlugins.length > 0
-  ? configuredPlugins.map((p) => p.name)
-  : ['meta-tools', 'skills-loader'];
+const defaultPluginNames =
+  configuredPlugins.length > 0
+    ? configuredPlugins.map((p) => p.name)
+    : ['meta-tools', 'skills-loader', 'file-ops', 'memory-project'];
 const plugins: Plugin[] = [];
 for (const name of defaultPluginNames) {
   if (name.startsWith('provider-')) continue; // provider 已在临时 host 中加载
   const p = await loadPlugin(name);
   if (p) plugins.push(p);
+}
+
+// 工具权限确认 guardrail（仅交互模式--headless 不弹 readline confirm）
+// 走 ADR-003/004 正路：包成 Plugin 注入 PluginHost，不塞 runtime 构造函数
+if (!headless) {
+  const checker = new ToolPermissionChecker({ enabled: true });
+  const guardrail = createPermissionGuardrail(checker);
+  plugins.push({
+    name: 'tool-permission',
+    install: (host) => {
+      host.registerGuardrail(guardrail);
+    },
+  });
 }
 
 // ── Runtime ─────────────────────────────────────
@@ -258,6 +284,37 @@ const runtime = new AgentRuntime({
 
 await runtime.ready;
 
+// 采集插件注册的工具定义到 tools 注册表，供 /tool list 显示。
+// 原因：runtime 内部 pluginHost 不对外暴露（core 冻结），插件工具只进 pluginHost；
+// 必须在 runtime 构造之后做--构造时会把 tools.list() 复制进 pluginHost，若预先放入
+// 插件工具会与插件 install 的同名工具冲突抛错。仅交互模式需要（headless 无 /tool list）。
+if (!headless) {
+  const displayHost = new MemoryPluginHost();
+  const origLog = console.log;
+  const origErr = console.error;
+  console.log = () => {}; // 抑制采集遍历的副作用日志（runtime 构造时已打印过）
+  console.error = () => {};
+  try {
+    for (const p of plugins) {
+      try {
+        await p.install(displayHost);
+      } catch {
+        // 采集失败不阻塞--runtime 已安装
+      }
+    }
+  } finally {
+    console.log = origLog;
+    console.error = origErr;
+  }
+  for (const t of displayHost.listTools()) {
+    try {
+      tools.register(t);
+    } catch {
+      // 重名工具跳过
+    }
+  }
+}
+
 // ── 构造 ReplContext（接缝契约）──────────────────
 
 function buildReplContext(): ReplContext {
@@ -266,6 +323,7 @@ function buildReplContext(): ReplContext {
     tools,
     session,
     events,
+    context,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;

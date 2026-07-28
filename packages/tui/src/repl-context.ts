@@ -11,8 +11,14 @@
  * ReplContext 类型由 emma 定义，egg-rolls 认可。本文件是 draft proposal。
  */
 
-import type { AgentRuntime, EventStream, SessionBackend, ToolRegistry } from '@vessel/core';
 import type { VesselConfig } from '@vessel/config';
+import type {
+  AgentRuntime,
+  ContextManager,
+  EventStream,
+  SessionBackend,
+  ToolRegistry,
+} from '@vessel/core';
 
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
 export interface ReplContext {
@@ -29,6 +35,9 @@ export interface ReplContext {
 
   /** 事件流——StreamRenderer 订阅，获取 LlmStreamChunk + 工具调用事件 */
   events: EventStream;
+
+  /** 上下文管理器--/new、/resume 切会话时 clear()，让 runtime.run() 重新从 SessionBackend 载入历史 */
+  context: ContextManager;
 
   // ── 可变状态（REPL 读写，壳感知变化）────────────────
 

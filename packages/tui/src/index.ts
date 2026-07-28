@@ -6,17 +6,15 @@
  * 无基础用户入口。
  */
 
-export { CLI_REPL } from './repl/repl.js';
-export type { REPLConfig, REPLState } from './repl/repl.js';
-
 export { startRepl } from './repl/repl.js';
 export type { ReplContext } from './repl-context.js';
 
-export { CommandRegistry, createDefaultCommands } from './commands/commands.js';
+export { createCommands, consumePendingResume, CommandRegistry } from './commands/commands.js';
 export type {
-  CommandHandler,
+  ReplState,
+  CommandEntry,
   SubCommand,
-  CommandContext,
+  CommandResult,
 } from './commands/commands.js';
 
 export { SetupWizard, runSetupWizard } from './wizard/setup-wizard.js';

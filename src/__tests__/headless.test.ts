@@ -125,3 +125,31 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 兼容，warn 不 exit 1', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-custom-'));
+  try {
+    fs.mkdirSync(path.join(tmpDir, '.vessel'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.vessel', 'config.yaml'),
+      [
+        'api_key: fake-key',
+        'default_provider: custom',
+        'default_model: test-model',
+        'providers:',
+        '  custom:',
+        '    api_key: fake-key',
+        '    base_url: http://127.0.0.1:1',
+        '    model: test-model',
+        '',
+      ].join('\n'),
+    );
+    // 交互模式 + /exit：provider 构造是同步的，不触网；仅验证降级 warn + 正常进 REPL
+    const { stdout, stderr, exitCode } = await runCli([], {}, '/exit\n', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain('treating as OpenAI-compatible');
+    expect(stdout).toContain('custom | test-model');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
