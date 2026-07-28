@@ -23,12 +23,12 @@ export function makeCtx(overrides: Partial<ReplContext> = {}): ReplContext {
     events,
     context,
     currentSessionId: '20260101_120000_abc123',
-    onSessionChange: () => {},
+    onSessionChange: () => undefined,
     provider: { name: 'mock', model: 'mock-model', baseUrl: 'memory' },
     plugins: [],
     config: {} as ReplContext['config'],
     newSessionId: () => '20260101_120001_def456',
-    onExit: () => {},
+    onExit: () => undefined,
     ...overrides,
   };
 }

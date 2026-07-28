@@ -19,7 +19,8 @@ describe('memory-auto 插件（P2）', () => {
     try {
       // 用 tmp dir 隔离，避开 repo .vessel/memory
       memoryAutoPlugin.install(host, { memoryDir: path.join(tmpDir, '.vessel', 'memory') });
-      const hook = host.getHooks().find((h) => h.type === HookType.AfterLlm)!;
+      const hook = host.getHooks().find((h) => h.type === HookType.AfterLlm);
+      if (!hook) throw new Error('AfterLlm hook not registered');
       const result = await hook.run({ run_id: 'r1', session_id: 's1' });
       expect(result).not.toBeNull();
     } finally {

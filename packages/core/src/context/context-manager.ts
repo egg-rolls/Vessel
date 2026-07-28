@@ -61,7 +61,7 @@ export class MemoryContextManager implements ContextManager {
 
     // 如果超过最大消息数，移除最旧的消息
     if (messages.length > (this.config.maxMessages ?? 100)) {
-      const trimmedMessages = messages.slice(-this.config.maxMessages!);
+      const trimmedMessages = messages.slice(-(this.config.maxMessages ?? 100));
       this.sessionMessages.set(this.currentSessionId, trimmedMessages);
     }
   }

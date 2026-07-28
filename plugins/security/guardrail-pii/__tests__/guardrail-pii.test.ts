@@ -14,7 +14,8 @@ describe('guardrail-pii 插件（P2）', () => {
   it('PII guardrail 放行正常文本', async () => {
     const host = new MemoryPluginHost();
     piiPlugin.install(host);
-    const g = host.getGuardrails()[0]!;
+    const g = host.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
     const r = await g.check('这是一段正常的回复文本，没有敏感信息。', {
       run_id: 'r1',
       stage: GuardrailStage.Output,

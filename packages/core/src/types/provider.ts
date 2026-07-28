@@ -3,8 +3,6 @@
  * @module @vessel/core/provider
  */
 
-// biome-ignore lint/style/useNamingConvention: LLM API protocol fields (OpenAI/Anthropic API)
-
 import type { ToolCall, ToolSchema } from './tool.js';
 
 /** 消息角色 */

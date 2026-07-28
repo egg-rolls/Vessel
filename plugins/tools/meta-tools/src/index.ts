@@ -724,7 +724,7 @@ export const metaToolsPlugin: Plugin = {
     }
 
     // 将 assetManager 存储在 host 上，供其他插件使用
-    (host as any).__assetManager = assetManager;
+    (host as Record<string, unknown>).__assetManager = assetManager;
   },
 };
 

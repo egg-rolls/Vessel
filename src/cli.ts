@@ -301,8 +301,9 @@ if (!headless) {
   const displayHost = new MemoryPluginHost();
   const origLog = console.log;
   const origErr = console.error;
-  console.log = () => {}; // 抑制采集遍历的副作用日志（runtime 构造时已打印过）
-  console.error = () => {};
+  // 抑制采集遍历的副作用日志（runtime 构造时已打印过）
+  console.log = () => undefined;
+  console.error = () => undefined;
   try {
     for (const p of plugins) {
       try {

@@ -7,6 +7,32 @@ import { Database } from 'bun:sqlite';
 import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
 import { deriveSessionMeta } from './session-backend.js';
 
+/** sessions 表完整行（SELECT * 的形状） */
+interface SessionRow {
+  session_id: string;
+  run_id: string;
+  messages: string;
+  started_at: number;
+  completed_at: number | null;
+  status: RunState['status'];
+  usage: string | null;
+  error: string | null;
+  title: string | null;
+  preview: string | null;
+  updated_at: number | null;
+}
+
+/** listRich 查询行形状（含派生列 message_count） */
+interface SessionListRow {
+  session_id: string;
+  title: string;
+  preview: string;
+  status: string;
+  started_at: number;
+  updated_at: number;
+  message_count: number;
+}
+
 /**
  * SQLite Session Backend 实现
  * 将 Run 状态保存到 SQLite 数据库
@@ -61,7 +87,7 @@ export class SQLiteSessionBackend implements SessionBackend {
    */
   async load(sessionId: string): Promise<RunState | null> {
     const stmt = this.db.prepare('SELECT * FROM sessions WHERE session_id = ?');
-    const row = stmt.get(sessionId) as any;
+    const row = stmt.get(sessionId) as SessionRow | null;
 
     if (!row) {
       return null;
@@ -128,7 +154,7 @@ export class SQLiteSessionBackend implements SessionBackend {
    */
   async list(): Promise<string[]> {
     const stmt = this.db.prepare('SELECT session_id FROM sessions');
-    const rows = stmt.all() as any[];
+    const rows = stmt.all() as Array<{ session_id: string }>;
     return rows.map((row) => row.session_id);
   }
 
@@ -150,7 +176,7 @@ export class SQLiteSessionBackend implements SessionBackend {
       WHERE json_array_length(messages) > 0
       ORDER BY updated_at DESC
     `);
-    const rows = stmt.all() as any[];
+    const rows = stmt.all() as SessionListRow[];
     return rows.map((row) => ({
       session_id: row.session_id,
       title: row.title,

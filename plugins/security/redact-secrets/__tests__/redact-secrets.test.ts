@@ -16,7 +16,8 @@ describe('redact-secrets 插件（P2）', () => {
   it('Output guardrail 编辑 API key', async () => {
     const host = new MemoryPluginHost();
     redactPlugin.install(host);
-    const g = host.getGuardrails().find((g) => g.stage === GuardrailStage.Output)!;
+    const g = host.getGuardrails().find((g) => g.stage === GuardrailStage.Output);
+    if (!g) throw new Error('Output guardrail not registered');
     const r = await g.check('我的 key 是 sk-abcdefghijklmnopqrstuv 请保密', {
       run_id: 'r1',
       stage: GuardrailStage.Output,
@@ -30,7 +31,8 @@ describe('redact-secrets 插件（P2）', () => {
   it('正常文本不受影响', async () => {
     const host = new MemoryPluginHost();
     redactPlugin.install(host);
-    const g = host.getGuardrails().find((g) => g.stage === GuardrailStage.Output)!;
+    const g = host.getGuardrails().find((g) => g.stage === GuardrailStage.Output);
+    if (!g) throw new Error('Output guardrail not registered');
     const r = await g.check('普通回复，没有密钥', {
       run_id: 'r1',
       stage: GuardrailStage.Output,

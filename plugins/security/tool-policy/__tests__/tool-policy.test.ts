@@ -14,7 +14,8 @@ describe('tool-policy 插件（P2）', () => {
   it('默认 denylist 为空 → 不拦截任何工具', async () => {
     const host = new MemoryPluginHost();
     toolPolicyPlugin.install(host);
-    const g = host.getGuardrails()[0]!;
+    const g = host.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
     const r = await g.check('write_file', {
       run_id: 'r1',
       stage: GuardrailStage.ToolCall,

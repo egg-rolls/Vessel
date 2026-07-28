@@ -20,13 +20,13 @@ describe('hook-logging 插件（MECH-1）', () => {
     const host = new MemoryPluginHost();
     loggingHookPlugin.install(host);
     const beforeLlm = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
-    expect(beforeLlm).toBeDefined();
+    if (!beforeLlm) throw new Error('BeforeLlm hook not registered');
 
     const logs: string[] = [];
     const origLog = console.log;
     console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
     try {
-      const result = await beforeLlm!.run({ run_id: 'run-12345678', session_id: 's1' });
+      const result = await beforeLlm.run({ run_id: 'run-12345678', session_id: 's1' });
       expect(result).not.toBeNull(); // 不拦截
     } finally {
       console.log = origLog;
@@ -39,13 +39,13 @@ describe('hook-logging 插件（MECH-1）', () => {
     const host = new MemoryPluginHost();
     loggingHookPlugin.install(host);
     const onError = host.getHooks().find((h) => h.type === HookType.OnError);
-    expect(onError).toBeDefined();
+    if (!onError) throw new Error('OnError hook not registered');
 
     const logs: string[] = [];
     const origLog = console.log;
     console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
     try {
-      await onError!.run({ run_id: 'r1', error: 'something broke' });
+      await onError.run({ run_id: 'r1', error: 'something broke' });
     } finally {
       console.log = origLog;
     }

@@ -109,7 +109,7 @@ describe('MemoryLLMProvider streaming', () => {
       messages: [{ role: 'user', content: 'Hi' }],
       model: 'test',
       stream: true,
-      on_chunk: () => {},
+      on_chunk: () => undefined,
     });
     const plainResp = await provider.chat({
       messages: [{ role: 'user', content: 'Hi' }],

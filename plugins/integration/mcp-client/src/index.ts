@@ -141,7 +141,11 @@ class McpConnection {
       this.buffer = '';
 
       // 读取 stdout（JSON-RPC 响应）
-      const rl = createInterface({ input: proc.stdout! });
+      if (!proc.stdout) {
+        reject(new Error(`MCP server "${this.name}" has no stdout`));
+        return;
+      }
+      const rl = createInterface({ input: proc.stdout });
       rl.on('line', (line: string) => {
         this.handleLine(line);
       });
@@ -291,8 +295,7 @@ class McpConnection {
       // 提取文本内容
       if (typedResult.content) {
         return typedResult.content
-          .filter((c) => c.type === 'text' && c.text)
-          .map((c) => c.text!)
+          .flatMap((c) => (c.type === 'text' && c.text ? [c.text] : []))
           .join('\n');
       }
 
@@ -313,10 +316,7 @@ class McpConnection {
         contents?: Array<{ uri: string; text?: string; mimeType?: string }>;
       };
       if (result.contents) {
-        return result.contents
-          .filter((c) => c.text)
-          .map((c) => c.text!)
-          .join('\n');
+        return result.contents.flatMap((c) => (c.text ? [c.text] : [])).join('\n');
       }
       return JSON.stringify(result);
     } catch (err) {
@@ -388,14 +388,17 @@ class McpConnection {
   private handleLine(line: string): void {
     try {
       const msg = JSON.parse(line) as JsonRpcResponse;
-      if (msg.id !== undefined && this.pending.has(msg.id)) {
-        const { resolve, reject } = this.pending.get(msg.id)!;
-        this.pending.delete(msg.id);
+      if (msg.id !== undefined) {
+        const pending = this.pending.get(msg.id);
+        if (pending) {
+          const { resolve, reject } = pending;
+          this.pending.delete(msg.id);
 
-        if (msg.error) {
-          reject(new Error(`MCP error ${msg.error.code}: ${msg.error.message}`));
-        } else {
-          resolve(msg.result);
+          if (msg.error) {
+            reject(new Error(`MCP error ${msg.error.code}: ${msg.error.message}`));
+          } else {
+            resolve(msg.result);
+          }
         }
       }
     } catch {
@@ -553,7 +556,10 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         };
         try {
           await manager.connect({ name, command, args: args ?? [] });
-          const conn = manager.get(name)!;
+          const conn = manager.get(name);
+          if (!conn) {
+            return `连接失败: 服务器 "${name}" 连接后未找到`;
+          }
           const tools = conn.getTools();
           const resources = conn.getResources();
           const prompts = conn.getPrompts();

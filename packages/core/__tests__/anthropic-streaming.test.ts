@@ -118,7 +118,7 @@ describe('AnthropicProvider streaming', () => {
       messages: [{ role: 'user', content: 'x' }],
       model: 'claude-test',
       stream: true,
-      on_chunk: () => {},
+      on_chunk: () => undefined,
     } as ChatRequest);
 
     expect(response.finish_reason).toBe('length');

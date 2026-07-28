@@ -110,7 +110,7 @@ export class SkillsManager {
    * 加载所有 Skill（支持递归扫描）
    */
   async loadSkills(): Promise<void> {
-    const skillsDir = this.config.skillsDir!;
+    const skillsDir = this.config.skillsDir ?? './skills';
 
     if (!fs.existsSync(skillsDir)) {
       fs.mkdirSync(skillsDir, { recursive: true });
@@ -137,7 +137,7 @@ export class SkillsManager {
    * 当 skills 目录中的文件变化时自动重新加载
    */
   watchSkills(): void {
-    const skillsDir = path.resolve(this.config.skillsDir!);
+    const skillsDir = path.resolve(this.config.skillsDir ?? './skills');
 
     if (!fs.existsSync(skillsDir)) {
       fs.mkdirSync(skillsDir, { recursive: true });

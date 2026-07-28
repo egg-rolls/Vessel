@@ -23,10 +23,10 @@ describe('memory-project 插件（MECH-2）', () => {
       const host = new MemoryPluginHost();
       memoryProjectPlugin.install(host, { projectRoot: tmpDir });
       const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
-      expect(hook).toBeDefined();
+      if (!hook) throw new Error('BeforeLlm hook not registered');
 
       const ctx = { run_id: 'r1', session_id: 's1' };
-      await hook!.run(ctx);
+      await hook.run(ctx);
       const sp = (ctx as { system_prompt?: string }).system_prompt ?? '';
       expect(sp).toContain('Use Bun');
       expect(sp).toContain('项目说明 (CLAUDE.md)');
@@ -40,7 +40,8 @@ describe('memory-project 插件（MECH-2）', () => {
     try {
       const host = new MemoryPluginHost();
       memoryProjectPlugin.install(host, { projectRoot: tmpDir });
-      const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm)!;
+      const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
+      if (!hook) throw new Error('BeforeLlm hook not registered');
       const ctx = { run_id: 'r1' };
       await hook.run(ctx);
       expect((ctx as { system_prompt?: string }).system_prompt).toBeUndefined();
@@ -64,8 +65,8 @@ describe('memory-project 插件（MECH-2）', () => {
       const host = new MemoryPluginHost();
       memoryProjectPlugin.install(host, { projectRoot: tmpDir });
       const tool = host.getTool('list_memories');
-      expect(tool).toBeDefined();
-      const result = await tool!.handler({}, { run_id: 'r1', messages: [] } as ToolContext);
+      if (!tool) throw new Error('list_memories tool not registered');
+      const result = await tool.handler({}, { run_id: 'r1', messages: [] } as ToolContext);
       expect(result).toContain('test');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

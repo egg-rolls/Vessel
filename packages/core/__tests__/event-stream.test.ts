@@ -106,10 +106,10 @@ describe('MemoryEventStream', () => {
   it('should report subscriber count', () => {
     expect(eventStream.subscriberCount).toBe(0);
 
-    const unsubscribe1 = eventStream.subscribe(() => {});
+    const unsubscribe1 = eventStream.subscribe(() => undefined);
     expect(eventStream.subscriberCount).toBe(1);
 
-    const unsubscribe2 = eventStream.subscribe(() => {});
+    const unsubscribe2 = eventStream.subscribe(() => undefined);
     expect(eventStream.subscriberCount).toBe(2);
 
     unsubscribe1();

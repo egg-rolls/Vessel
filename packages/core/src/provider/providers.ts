@@ -3,8 +3,6 @@
  * @module @vessel/core/provider
  */
 
-// biome-ignore lint/style/useNamingConvention: LLM API protocol fields (OpenAI/Anthropic)
-
 import type {
   ChatRequest,
   FinishReason,
@@ -50,7 +48,9 @@ async function* parseSse(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEv
       if (evt) yield evt;
     }
   } finally {
-    reader.cancel().catch(() => {});
+    reader.cancel().catch(() => {
+      /* ignore cancel errors */
+    });
     reader.releaseLock();
   }
 }
