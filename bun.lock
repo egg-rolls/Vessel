@@ -93,46 +93,6 @@
         "typescript": "^5.7.0",
       },
     },
-    "plugins/provider/cohere": {
-      "name": "@vessel/provider-cohere",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^5.7.0",
-      },
-    },
-    "plugins/provider/google": {
-      "name": "@vessel/provider-google",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^5.7.0",
-      },
-    },
-    "plugins/provider/mistral": {
-      "name": "@vessel/provider-mistral",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^5.7.0",
-      },
-    },
-    "plugins/provider/ollama": {
-      "name": "@vessel/provider-ollama",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^5.7.0",
-      },
-    },
     "plugins/provider/openai": {
       "name": "@vessel/provider-openai",
       "version": "0.1.0",
@@ -304,14 +264,6 @@
     "@vessel/meta-tools": ["@vessel/meta-tools@workspace:plugins/tools/meta-tools"],
 
     "@vessel/provider-anthropic": ["@vessel/provider-anthropic@workspace:plugins/provider/anthropic"],
-
-    "@vessel/provider-cohere": ["@vessel/provider-cohere@workspace:plugins/provider/cohere"],
-
-    "@vessel/provider-google": ["@vessel/provider-google@workspace:plugins/provider/google"],
-
-    "@vessel/provider-mistral": ["@vessel/provider-mistral@workspace:plugins/provider/mistral"],
-
-    "@vessel/provider-ollama": ["@vessel/provider-ollama@workspace:plugins/provider/ollama"],
 
     "@vessel/provider-openai": ["@vessel/provider-openai@workspace:plugins/provider/openai"],
 

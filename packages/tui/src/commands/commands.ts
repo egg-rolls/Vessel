@@ -111,9 +111,10 @@ export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
   reg.register(sessionDomain());
   reg.register(toolDomain());
-  reg.register(helpCommand());
+  reg.register(helpCommand(reg));
   reg.register(clearCommand());
   reg.register(setupCommand());
+  reg.register(reloadCommand());
   reg.register(exitCommand());
   return reg;
 }
@@ -328,26 +329,39 @@ function toolDomain(): CommandEntry {
 
 // ── /help ─────────────────────────────────────────
 
-function helpCommand(): CommandEntry {
+function helpCommand(reg: CommandRegistry): CommandEntry {
   return {
     name: 'help',
     description: '显示可用命令',
     usage: '/help [domain]',
     run: (args, _ctx, _state) => {
-      // 由 REPL 注入完整注册表引用以列全部命令--此处用静态文案保证可用
       console.log('');
       console.log('Available commands:');
-      console.log('  /session list              列出会话（编号）');
-      console.log('  /session resume [N|id]     恢复会话（无参=列表后按编号选）');
-      console.log('  /session new               开启新会话（丢弃当前空会话）');
-      console.log('  /session history           当前会话的对话历史');
-      console.log('  /tool list                 列出已注册工具');
-      console.log('  /help [domain]             显示帮助');
-      console.log('  /clear                     清屏');
-      console.log('  /setup                     重新运行首启配置向导');
-      console.log('  /exit                      退出');
+
+      // 动态生成帮助文本
+      for (const entry of reg.list()) {
+        if (entry.subcommands && entry.subcommands.size > 0) {
+          // 有子命令的域
+          for (const sub of entry.subcommands.values()) {
+            const usage = sub.usage || `/${entry.name} ${sub.name}`;
+            console.log(`  ${usage.padEnd(26)} ${sub.description}`);
+          }
+        } else {
+          // 顶层命令
+          const usage = entry.usage || `/${entry.name}`;
+          console.log(`  ${usage.padEnd(26)} ${entry.description}`);
+        }
+      }
+
       console.log('');
-      if (args.length > 0) console.log(`(detailed help for "${args[0]}" - see /${args[0]})`);
+      if (args.length > 0) {
+        const domain = reg.list().find((e) => e.name === args[0]);
+        if (domain) {
+          renderDomainHelp(domain);
+        } else {
+          console.log(`Unknown command: ${args[0]}`);
+        }
+      }
       return { handled: true };
     },
   };
@@ -374,7 +388,7 @@ function setupCommand(): CommandEntry {
     name: 'setup',
     description: '重新运行首启配置向导',
     usage: '/setup',
-    run: async () => {
+    run: async (_args, _ctx, _state) => {
       const { runSetupWizard } = await import('../wizard/setup-wizard.js');
       console.log('\nRunning setup wizard...');
       const userConfig = await runSetupWizard();
@@ -382,8 +396,51 @@ function setupCommand(): CommandEntry {
         console.log(
           'Configuration saved. Restart Vessel for the new provider/key to take effect.\n',
         );
+        console.log('Tip: Use /reload to reload configuration without restarting.\n');
       } else {
         console.log('Setup cancelled.\n');
+      }
+      return { handled: true };
+    },
+  };
+}
+
+// ── /reload ───────────────────────────────────────
+
+function reloadCommand(): CommandEntry {
+  return {
+    name: 'reload',
+    description: '重新加载配置（不重启）',
+    usage: '/reload',
+    run: async (_args, ctx, _state) => {
+      try {
+        const { loadConfig } = await import('../../../config/src/index.js');
+        const { config: newConfig, validation } = await loadConfig();
+
+        if (validation.errors.length > 0) {
+          console.log('\n✗ Configuration errors:');
+          for (const e of validation.errors) console.log(`  - ${e.message}`);
+          console.log('');
+          return { handled: true };
+        }
+
+        if (validation.warnings.length > 0) {
+          console.log('\n⚠ Configuration warnings:');
+          for (const w of validation.warnings) console.log(`  - ${w.message}`);
+        }
+
+        // 更新 provider 信息
+        if (newConfig.provider) {
+          ctx.provider.name = newConfig.provider.name ?? ctx.provider.name;
+          ctx.provider.model = newConfig.provider.model ?? ctx.provider.model;
+          ctx.provider.baseUrl = newConfig.provider.baseUrl ?? ctx.provider.baseUrl;
+        }
+
+        console.log('\n✓ Configuration reloaded.\n');
+        console.log(`Provider: ${ctx.provider.name} | ${ctx.provider.model}`);
+        console.log('');
+      } catch (e) {
+        console.log(`\n✗ Failed to reload: ${e instanceof Error ? e.message : e}\n`);
       }
       return { handled: true };
     },

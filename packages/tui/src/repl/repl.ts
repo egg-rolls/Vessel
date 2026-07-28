@@ -99,14 +99,28 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
     }
   });
 
-  // 权限确认期间置位：行处理器丢弃此期间的行，避免用户的 y/n 被队列吞掉再当消息发给 AI。
+  // 权限确认期间置位：行处理器缓冲此期间的行，避免用户的 y/n 被队列吞掉再当消息发给 AI。
   // confirm 复用本 rl（经 promptFn），不再自建第二个 readline 抢 stdin。
   let pausedForConfirm = false;
+  const confirmBuffer: string[] = []; // 确认期间缓冲的输入
   if (ctx.permissionChecker) {
     ctx.permissionChecker.promptFn = (question: string) => {
       pausedForConfirm = true;
       return rl.question(question).finally(() => {
         pausedForConfirm = false;
+        // 确认结束后，将缓冲的输入重新加入队列
+        while (confirmBuffer.length > 0) {
+          const bufferedLine = confirmBuffer.shift();
+          if (bufferedLine !== undefined) {
+            if (lineResolver) {
+              const r = lineResolver;
+              lineResolver = null;
+              r(bufferedLine);
+            } else {
+              lineQueue.push(bufferedLine);
+            }
+          }
+        }
       });
     };
   }
@@ -121,7 +135,11 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
   const lineQueue: string[] = [];
   let lineResolver: ((line: string | null) => void) | null = null;
   rl.on('line', (line: string) => {
-    if (pausedForConfirm) return; // 权限确认期间的输入由 confirm 的 question 消费，不进队列
+    if (pausedForConfirm) {
+      // 权限确认期间的输入缓冲到 confirmBuffer，确认结束后重新加入队列
+      confirmBuffer.push(line);
+      return;
+    }
     if (lineResolver) {
       const r = lineResolver;
       lineResolver = null;

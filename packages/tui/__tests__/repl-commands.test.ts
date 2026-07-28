@@ -21,7 +21,7 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 二层分发', () => {
-  it('createCommands 注册 6 个顶层条目', () => {
+  it('createCommands 注册 7 个顶层条目', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('session');
@@ -29,6 +29,7 @@ describe('CommandRegistry 二层分发', () => {
     expect(names).toContain('help');
     expect(names).toContain('clear');
     expect(names).toContain('setup');
+    expect(names).toContain('reload');
     expect(names).toContain('exit');
   });
 

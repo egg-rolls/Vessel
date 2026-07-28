@@ -63,7 +63,7 @@ vessel/
 
 | 命令 | 说明 |
 |------|------|
-| `bun test` | 运行全部测试（130+） |
+| `bun test` | 运行全部测试（152+） |
 | `bun run typecheck` | TypeScript 类型检查 |
 | `bun run lint` | Biome lint+format 检查 |
 | `bun run build` | 构建所有包 + 单二进制 |
