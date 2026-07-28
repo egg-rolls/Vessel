@@ -88,6 +88,15 @@ egg-rolls 的每个节点产出**可跑的功能**，emma 在节点上挂 **UI/U
 - [x] MECH-2：memory-project 插件接入（项目记忆）-- 已随 REPL-5 进默认；验证工具+注入逻辑+4 测试。**注入 gap 已修（ADR-018）**：runtime 现消费 BeforeLlm hook 的 `ctx.system_prompt`，skills-loader + memory-project 自动注入生效（AI 第一轮即带 Skills/CLAUDE.md）。
 - [x] MECH-3：Anthropic provider SSE 流式测试 -- 新增 anthropic-streaming.test.ts（text_delta / input_json_delta / max_tokens / 非流式 4 例）
 
+### emma UI/UX 打磨（P3 — 委托 emma）
+
+egg-rolls 已交付完整可跑的 readline REPL。emma 拿到接口文档（DOC-1）后**只改 UI 层**——不写任何功能逻辑。以下 4 项全部在 `packages/tui/src/` 内，core/config/shell 不动。
+
+- [ ] P3-1：**StreamRenderer 单元测试**——`stream-renderer.ts` 的 `handleEvent` switch、`handleChunk` 解析、`didStreamLastRun` 状态、颜色开关、工具卡片渲染。当前仅有集成测试间接覆盖，渲染回归会漏。
+- [ ] P3-2：**`/help` 动态化**——`commands.ts` 当前 `/help` 为硬编码文本。改为读取 `CommandRegistry.list()` 和子命令动态生成帮助文本，加命令即生效。
+- [ ] P3-3：**确认期间缓冲输入**——`repl.ts` 的 `pausedForConfirm` 标志当前**静默丢弃**权限确认期间打字的行。改为推迟到确认结束后重新输入。（不应丢失用户打字内容。）
+- [ ] P3-4：**`/setup` 热替换 provider**（或带 `/reload` 命令）——`/setup` 向导保存 ~/.vessel/config.yaml 后提示「重启生效」。改为进程内重建 provider/runtime，若太复杂则至少加 `/reload` 显式命令。
+
 ### 第三梯队：emma 接口文档
 
 - [ ] DOC-1：`docs/api/tui.md`——接口文档 + 替换指南 + 注意事项
