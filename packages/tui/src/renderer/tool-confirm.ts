@@ -39,6 +39,11 @@ const DEFAULT_CONFIG: ToolPermissionConfig = {
 export class ToolPermissionChecker {
   private config: ToolPermissionConfig;
   private approvedTools: Set<string> = new Set();
+  /**
+   * 自定义 prompt 函数。REPL 注入以复用其 readline--避免 confirm 自建第二个
+   * readline 抢 stdin 导致用户的 y/n 泄漏进对话上下文。未注入时退回自建 readline。
+   */
+  promptFn?: (question: string) => Promise<string>;
 
   constructor(config: ToolPermissionConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -98,9 +103,12 @@ export class ToolPermissionChecker {
   }
 
   /**
-   * 提示用户输入
+   * 提示用户输入。注入了 promptFn（REPL 复用其 readline）时用之；否则自建 readline。
    */
   private prompt(question: string): Promise<string> {
+    if (this.promptFn) {
+      return this.promptFn(question);
+    }
     return new Promise((resolve) => {
       const rl = readline.createInterface({
         input: process.stdin,

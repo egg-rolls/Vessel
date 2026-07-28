@@ -99,6 +99,18 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
     }
   });
 
+  // 权限确认期间置位：行处理器丢弃此期间的行，避免用户的 y/n 被队列吞掉再当消息发给 AI。
+  // confirm 复用本 rl（经 promptFn），不再自建第二个 readline 抢 stdin。
+  let pausedForConfirm = false;
+  if (ctx.permissionChecker) {
+    ctx.permissionChecker.promptFn = (question: string) => {
+      pausedForConfirm = true;
+      return rl.question(question).finally(() => {
+        pausedForConfirm = false;
+      });
+    };
+  }
+
   // 状态栏 / banner
   console.log(`\nVessel  ·  ${ctx.provider.name} | ${ctx.provider.model}`);
   if (ctx.plugins.length > 0) console.log(`plugins: ${ctx.plugins.join(', ')}`);
@@ -109,6 +121,7 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
   const lineQueue: string[] = [];
   let lineResolver: ((line: string | null) => void) | null = null;
   rl.on('line', (line: string) => {
+    if (pausedForConfirm) return; // 权限确认期间的输入由 confirm 的 question 消费，不进队列
     if (lineResolver) {
       const r = lineResolver;
       lineResolver = null;
@@ -159,7 +172,7 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
         continue;
       }
 
-      await handleMessage(trimmed, ctx, state, renderer, rl, (c) => {
+      await handleMessage(trimmed, ctx, state, renderer, (c) => {
         currentController = c;
       });
     }
@@ -175,13 +188,10 @@ async function handleMessage(
   ctx: ReplContext,
   state: ReplState,
   renderer: StreamRenderer,
-  rl: readline.Interface,
   setController: (c: AbortController | null) => void,
 ): Promise<void> {
   const controller = new AbortController();
   setController(controller);
-  // 暂停 REPL 的 readline，让出 stdin 给工具权限确认弹窗（ToolPermissionChecker 自建 readline）
-  rl.pause();
   try {
     const response = await ctx.runtime.run(msg, state.currentSessionId, {
       signal: controller.signal,
@@ -204,6 +214,5 @@ async function handleMessage(
     console.log('');
   } finally {
     setController(null);
-    rl.resume();
   }
 }

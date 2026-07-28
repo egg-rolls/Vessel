@@ -253,9 +253,11 @@ for (const name of defaultPluginNames) {
 
 // 工具权限确认 guardrail（仅交互模式--headless 不弹 readline confirm）
 // 走 ADR-003/004 正路：包成 Plugin 注入 PluginHost，不塞 runtime 构造函数
+// checker 提升到外层，传入 ReplContext 供 REPL 注入 promptFn（复用其 readline）
+let permissionChecker: ToolPermissionChecker | undefined;
 if (!headless) {
-  const checker = new ToolPermissionChecker({ enabled: true });
-  const guardrail = createPermissionGuardrail(checker);
+  permissionChecker = new ToolPermissionChecker({ enabled: true });
+  const guardrail = createPermissionGuardrail(permissionChecker);
   plugins.push({
     name: 'tool-permission',
     install: (host) => {
@@ -324,6 +326,7 @@ function buildReplContext(): ReplContext {
     session,
     events,
     context,
+    permissionChecker,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;
