@@ -244,6 +244,8 @@ const defaultPluginNames =
   configuredPlugins.length > 0
     ? configuredPlugins.map((p) => p.name)
     : ['meta-tools', 'skills-loader', 'file-ops', 'memory-project'];
+// VESSEL_DEBUG 时加 hook-logging（事件日志，便于调试；默认不开避免污染输出）
+if (process.env.VESSEL_DEBUG) defaultPluginNames.push('hook-logging');
 const plugins: Plugin[] = [];
 for (const name of defaultPluginNames) {
   if (name.startsWith('provider-')) continue; // provider 已在临时 host 中加载
