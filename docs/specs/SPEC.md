@@ -155,7 +155,7 @@ const newProtocolPlugin: Plugin = {
 | 面对复杂任务 dump 一句话 | "一个人搞不定" | 子 agent 工具：`delegate_task` spawn 专家 runtime |
 | 编造结果 | "反正没人检查" | Guardrail（OUTPUT）+ LLM-judge evaluator（Phase 3）|
 | 上下文满了就丢信息 | "我记不住了" | Auto Compact + ContextManager token 预算 |
-| 停在第一步就算完成 | "这就是全部我能做的" | `stop_on_no_tool_calls: false` + 任务分解 Skill |
+| 停在第一步就算完成 | "这就是全部我能做的" | 任务分解 Skill + `max_iterations` 宽松设置 |
 | 遇到未知就说不会 | "没办法" | `search_assets` 查 → `add_skill` 补 → 回头做 |
 
 **架构偷懒自查——Vessel 有没有犯常识性架构错误：**
@@ -374,7 +374,6 @@ interface UsageLimits {
 interface TerminationPolicy {
   max_iterations: number;
   max_runtime_seconds?: number;
-  stop_on_no_tool_calls: boolean;
 }
 ```
 作为 runtime 骨架前置（控制面优先，继承 legacy/GAPS 精神）。

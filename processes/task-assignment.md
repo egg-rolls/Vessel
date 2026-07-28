@@ -9,8 +9,8 @@
 | Phase | 状态 | 证据 |
 |-------|------|------|
 | 0 脚手架 | ✅ 完成 | monorepo;CI 四件套全绿(lint/typecheck/test/build);单二进制可出 |
-| 1 MVP-core | ✅ 基本完成 | runtime loop / provider(含流式 SSE 解析) / context+auto-compact / session(memory+file+sqlite) / EventStream 枚举(含 LlmStreamChunk) / limits / guardrail+hook 接口 / PluginHost;73 测试过 |
-| 1 MVP-tui | ⚠️ 组件都有但**没接进入口** | `src/cli.ts` 只用了 `rich-renderer` + `setup-wizard`;`CLI_REPL`/`CommandRegistry`/`StreamRenderer`/`ToolPermissionChecker` 全闲置 |
+| 1 MVP-core | ✅ 完成 | runtime loop / provider(流式 SSE + 注册制) / context+auto-compact / session(memory+file+sqlite) / EventStream 枚举(含 LlmStreamChunk) / limits(含 AbortSignal) / guardrail+hook 接口 / PluginHost / **Core 冻结(ADR-017)**;73 测试过 |
+| 1 MVP-tui | 🚧 startRepl 待 emma | `src/cli.ts` 壳已重构→调 `startRepl(ctx)`;`ReplContext` 契约已在 `packages/tui/src/repl-context.ts`;`createPermissionGuardrail` 接口已修正 |
 | 2 增强 | 🚧 插件真实但**没接进 runtime** | mcp-client(真 JSON-RPC)、memory/project+auto(真持久化)、skills-loader 都实现了,但 `src/cli.ts` 只硬编码加载 metaTools + skills-loader |
 
 ## 二、关键发现(决定分工)
