@@ -26,6 +26,8 @@ export interface ReplState {
 export interface CommandResult {
   /** 是否已识别并处理（false = 未知命令，由调用方提示） */
   handled: boolean;
+  /** 命令输出文本（可选，Ink 版本用于显示） */
+  output?: string;
 }
 
 /** 子命令执行函数签名 */
@@ -335,8 +337,7 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
     description: '显示可用命令',
     usage: '/help [domain]',
     run: (args, _ctx, _state) => {
-      console.log('');
-      console.log('Available commands:');
+      const lines: string[] = ['', 'Available commands:'];
 
       // 动态生成帮助文本
       for (const entry of reg.list()) {
@@ -344,25 +345,38 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
           // 有子命令的域
           for (const sub of entry.subcommands.values()) {
             const usage = sub.usage || `/${entry.name} ${sub.name}`;
-            console.log(`  ${usage.padEnd(26)} ${sub.description}`);
+            lines.push(`  ${usage.padEnd(26)} ${sub.description}`);
           }
         } else {
           // 顶层命令
           const usage = entry.usage || `/${entry.name}`;
-          console.log(`  ${usage.padEnd(26)} ${entry.description}`);
+          lines.push(`  ${usage.padEnd(26)} ${entry.description}`);
         }
       }
 
-      console.log('');
+      lines.push('');
       if (args.length > 0) {
         const domain = reg.list().find((e) => e.name === args[0]);
         if (domain) {
-          renderDomainHelp(domain);
+          if (domain.subcommands && domain.subcommands.size > 0) {
+            lines.push(`/${domain.name}  - ${domain.description}`);
+            lines.push('Subcommands:');
+            for (const sub of domain.subcommands.values()) {
+              lines.push(`  /${domain.name} ${sub.name.padEnd(8)} - ${sub.description}`);
+            }
+          }
         } else {
-          console.log(`Unknown command: ${args[0]}`);
+          lines.push(`Unknown command: ${args[0]}`);
         }
       }
-      return { handled: true };
+
+      // 输出到控制台（readline 版本）
+      for (const line of lines) {
+        console.log(line);
+      }
+
+      // 返回帮助文本（Ink 版本可以使用）
+      return { handled: true, output: lines.join('\n') };
     },
   };
 }

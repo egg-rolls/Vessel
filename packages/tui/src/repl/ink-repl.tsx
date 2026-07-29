@@ -75,6 +75,10 @@ function InkRepl({ ctx }: InkReplProps) {
       if (value.startsWith('/')) {
         const result = await commands.execute(value, ctx, state);
         if (result.handled) {
+          // 如果命令有输出，添加到历史记录
+          if (result.output) {
+            setHistory((prev) => [...prev, result.output!]);
+          }
           setState((prev) => ({ ...prev, pendingResume: false }));
           return;
         }
@@ -93,8 +97,13 @@ function InkRepl({ ctx }: InkReplProps) {
     [ctx, state, commands],
   );
 
-  // 键盘输入处理
+  // 键盘输入处理 - 只在没有其他交互组件时生效
   useInput((inputChar, key) => {
+    // 如果有其他交互组件显示，不处理输入
+    if (showCommandMenu || showSessionTable || confirmQuestion) {
+      return;
+    }
+
     if (key.ctrl && inputChar === 'c') {
       exit();
       return;
@@ -105,6 +114,7 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
+    // 当输入为空时，按 / 显示命令菜单
     if (inputChar === '/' && !input) {
       setShowCommandMenu(true);
       return;
@@ -171,11 +181,13 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 确认对话框 */}
       {confirmQuestion && <ConfirmDialog question={confirmQuestion} onConfirm={handleConfirm} />}
 
-      {/* 输入框 */}
-      <Box>
-        <Text color="cyan">vessel&gt; </Text>
-        <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
-      </Box>
+      {/* 输入框 - 只在没有其他交互组件时显示 */}
+      {!showCommandMenu && !showSessionTable && !confirmQuestion && (
+        <Box>
+          <Text color="cyan">vessel&gt; </Text>
+          <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
+        </Box>
+      )}
     </Box>
   );
 }
