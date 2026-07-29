@@ -3,7 +3,12 @@
  * @module @vessel/tui
  *
  * 契约（与 egg-rolls 壳的接缝）：壳构造 ReplContext -> 调 startRepl(ctx) -> 阻塞至 /exit。
- * emma 后续替换为 Ink 框架 + token 动画 + 弹窗，函数签名与 ReplContext 不变。
+ * 支持两种模式：
+ * - readline 版本（默认）：传统终端 UI
+ * - Ink 版本（VESSEL_USE_INK=1）：React 组件式终端 UI + token 动画 + 弹窗
+ *
+ * 两个版本保持相同的函数签名：startRepl(ctx: ReplContext): Promise<void>
+ * 壳（cli.ts）不感知替换。
  */
 
 import { stdin as input, stdout as output } from 'node:process';
@@ -11,6 +16,7 @@ import * as readline from 'node:readline/promises';
 import { type ReplState, consumePendingResume, createCommands } from '../commands/commands.js';
 import { StreamRenderer } from '../renderer/stream-renderer.js';
 import type { ReplContext } from '../repl-context.js';
+import { startInkRepl } from './ink-repl.js';
 
 // ── 错误分类（REPL-7）──────────────────────────────
 
@@ -70,7 +76,26 @@ export function classifyError(error: unknown): ClassifiedError {
  * - 错误分类展示（网络/API/限额/鉴权）
  * - Ctrl+C：运行中->中断当前 run；空闲->退出
  */
+/**
+ * REPL 入口 - 根据环境变量选择 readline 或 Ink 版本
+ *
+ * 环境变量：
+ * - VESSEL_USE_INK=1：使用 Ink 版本（React 组件式 UI）
+ * - 默认：使用 readline 版本（传统终端 UI）
+ *
+ * 两个版本保持相同的函数签名：startRepl(ctx: ReplContext): Promise<void>
+ * 壳（cli.ts）不感知替换。
+ */
 export async function startRepl(ctx: ReplContext): Promise<void> {
+  const useInk = process.env.VESSEL_USE_INK === '1' || process.env.VESSEL_USE_INK === 'true';
+
+  if (useInk) {
+    // Ink 版本：React 组件式终端 UI
+    await startInkRepl(ctx);
+    return;
+  }
+
+  // readline 版本：传统终端 UI
   const rl = readline.createInterface({
     input,
     output,
