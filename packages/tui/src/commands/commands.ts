@@ -149,13 +149,23 @@ function sessionDomain(): CommandEntry {
     run: async (_args, ctx, state) => {
       const sessions = await ctx.session.listRich();
       if (sessions.length === 0) {
-        console.log('\nNo sessions.\n');
-        return { handled: true };
+        const output = '\nNo sessions.\n';
+        console.log(output);
+        return { handled: true, output };
       }
-      console.log('\nRecent sessions:');
-      renderNumberedSessions(sessions, state.currentSessionId);
-      console.log('');
-      return { handled: true };
+      const lines = ['', 'Recent sessions:'];
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
+        if (!s) continue;
+        const cur = s.session_id === state.currentSessionId ? ' *' : '';
+        const preview = s.preview || s.title || '(no preview)';
+        lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+        lines.push(`     id: ${s.session_id}`);
+      }
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -167,19 +177,30 @@ function sessionDomain(): CommandEntry {
       if (args.length === 0) {
         const sessions = await ctx.session.listRich();
         if (sessions.length === 0) {
-          console.log('\nNo sessions to resume.\n');
-          return { handled: true };
+          const output = '\nNo sessions to resume.\n';
+          console.log(output);
+          return { handled: true, output };
         }
-        console.log('\nResume which session? Enter its number:');
-        renderNumberedSessions(sessions, state.currentSessionId);
-        console.log('');
+        const lines = ['', 'Resume which session? Enter its number:'];
+        for (let i = 0; i < sessions.length; i++) {
+          const s = sessions[i];
+          if (!s) continue;
+          const cur = s.session_id === state.currentSessionId ? ' *' : '';
+          const preview = s.preview || s.title || '(no preview)';
+          lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+          lines.push(`     id: ${s.session_id}`);
+        }
+        lines.push('');
         state.pendingResume = true;
-        return { handled: true };
+        const output = lines.join('\n');
+        console.log(output);
+        return { handled: true, output };
       }
       const resolved = await resolveResumeTarget(args[0] ?? '', ctx);
       if (!resolved.ok) {
-        console.log(`\n${resolved.message}\n`);
-        return { handled: true };
+        const output = `\n${resolved.message}\n`;
+        console.log(output);
+        return { handled: true, output };
       }
       await doResume(ctx, state, resolved.sessionId);
       return { handled: true };
@@ -204,8 +225,9 @@ function sessionDomain(): CommandEntry {
       const newId = ctx.newSessionId();
       state.currentSessionId = newId;
       ctx.onSessionChange(newId);
-      console.log(`\nNew session started: ${newId}\n`);
-      return { handled: true };
+      const output = `\nNew session started: ${newId}\n`;
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -216,17 +238,21 @@ function sessionDomain(): CommandEntry {
     run: async (_args, ctx, state) => {
       const loaded = await ctx.session.load(state.currentSessionId);
       if (!loaded || loaded.messages.length === 0) {
-        console.log('\nNo conversation history.\n');
-        return { handled: true };
+        const output = '\nNo conversation history.\n';
+        console.log(output);
+        return { handled: true, output };
       }
-      console.log(`\nHistory (${loaded.messages.length} messages):`);
+      const lines = ['', `History (${loaded.messages.length} messages):`];
       for (const msg of loaded.messages) {
         const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
-        console.log(`\n[${role}]`);
-        console.log(msg.content);
+        lines.push('');
+        lines.push(`[${role}]`);
+        lines.push(msg.content);
       }
-      console.log('');
-      return { handled: true };
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -287,20 +313,20 @@ async function doResume(ctx: ReplContext, state: ReplState, sessionId: string): 
   console.log(`\nResumed session "${sessionId}" (${msgCount} messages).\n`);
 }
 
-/** 编号渲染会话列表（resume 选择用） */
-function renderNumberedSessions(
-  sessions: { session_id: string; preview?: string; title?: string; message_count: number }[],
-  currentId: string,
-): void {
-  for (let i = 0; i < sessions.length; i++) {
-    const s = sessions[i];
-    if (!s) continue;
-    const cur = s.session_id === currentId ? ' *' : '';
-    const preview = s.preview || s.title || '(no preview)';
-    console.log(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
-    console.log(`     id: ${s.session_id}`);
-  }
-}
+/** 编号渲染会话列表（resume 选择用） - 已废弃，改用内联渲染 */
+// function renderNumberedSessions(
+//   sessions: { session_id: string; preview?: string; title?: string; message_count: number }[],
+//   currentId: string,
+// ): void {
+//   for (let i = 0; i < sessions.length; i++) {
+//     const s = sessions[i];
+//     if (!s) continue;
+//     const cur = s.session_id === currentId ? ' *' : '';
+//     const preview = s.preview || s.title || '(no preview)';
+//     console.log(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+//     console.log(`     id: ${s.session_id}`);
+//   }
+// }
 
 // ── /tool ─────────────────────────────────────────
 
@@ -314,13 +340,16 @@ function toolDomain(): CommandEntry {
     run: (_args, ctx, _state) => {
       const list = ctx.tools.list();
       if (list.length === 0) {
-        console.log('\nNo tools registered.\n');
-        return { handled: true };
+        const output = '\nNo tools registered.\n';
+        console.log(output);
+        return { handled: true, output };
       }
-      console.log(`\nAvailable tools (${list.length}):`);
-      for (const t of list) console.log(`  - ${t.name}: ${t.description}`);
-      console.log('');
-      return { handled: true };
+      const lines = ['', `Available tools (${list.length}):`];
+      for (const t of list) lines.push(`  - ${t.name}: ${t.description}`);
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -393,7 +422,7 @@ function clearCommand(): CommandEntry {
     usage: '/clear',
     run: () => {
       console.clear();
-      return { handled: true };
+      return { handled: true, output: '' };
     },
   };
 }
@@ -407,17 +436,19 @@ function setupCommand(): CommandEntry {
     usage: '/setup',
     run: async (_args, _ctx, _state) => {
       const { runSetupWizard } = await import('../wizard/setup-wizard.js');
-      console.log('\nRunning setup wizard...');
+      const lines = ['', 'Running setup wizard...'];
       const userConfig = await runSetupWizard();
       if (userConfig.apiKey) {
-        console.log(
-          'Configuration saved. Restart Vessel for the new provider/key to take effect.\n',
-        );
-        console.log('Tip: Use /reload to reload configuration without restarting.\n');
+        lines.push('Configuration saved. Restart Vessel for the new provider/key to take effect.');
+        lines.push('');
+        lines.push('Tip: Use /reload to reload configuration without restarting.');
       } else {
-        console.log('Setup cancelled.\n');
+        lines.push('Setup cancelled.');
       }
-      return { handled: true };
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   };
 }
@@ -433,17 +464,20 @@ function reloadCommand(): CommandEntry {
       try {
         const { loadConfig } = await import('../../../config/src/index.js');
         const { config: newConfig, validation } = await loadConfig();
+        const lines = [''];
 
         if (validation.errors.length > 0) {
-          console.log('\n✗ Configuration errors:');
-          for (const e of validation.errors) console.log(`  - ${e.message}`);
-          console.log('');
-          return { handled: true };
+          lines.push('✗ Configuration errors:');
+          for (const e of validation.errors) lines.push(`  - ${e.message}`);
+          lines.push('');
+          const output = lines.join('\n');
+          console.log(output);
+          return { handled: true, output };
         }
 
         if (validation.warnings.length > 0) {
-          console.log('\n⚠ Configuration warnings:');
-          for (const w of validation.warnings) console.log(`  - ${w.message}`);
+          lines.push('⚠ Configuration warnings:');
+          for (const w of validation.warnings) lines.push(`  - ${w.message}`);
         }
 
         // 更新 provider 信息
@@ -453,13 +487,18 @@ function reloadCommand(): CommandEntry {
           ctx.provider.baseUrl = newConfig.provider.baseUrl ?? ctx.provider.baseUrl;
         }
 
-        console.log('\n✓ Configuration reloaded.\n');
-        console.log(`Provider: ${ctx.provider.name} | ${ctx.provider.model}`);
-        console.log('');
+        lines.push('✓ Configuration reloaded.');
+        lines.push('');
+        lines.push(`Provider: ${ctx.provider.name} | ${ctx.provider.model}`);
+        lines.push('');
+        const output = lines.join('\n');
+        console.log(output);
+        return { handled: true, output };
       } catch (e) {
-        console.log(`\n✗ Failed to reload: ${e instanceof Error ? e.message : e}\n`);
+        const output = `\n✗ Failed to reload: ${e instanceof Error ? e.message : e}\n`;
+        console.log(output);
+        return { handled: true, output };
       }
-      return { handled: true };
     },
   };
 }
@@ -474,7 +513,7 @@ function exitCommand(): CommandEntry {
     run: (_args, ctx, state) => {
       state.running = false;
       ctx.onExit();
-      return { handled: true };
+      return { handled: true, output: '\nGoodbye!\n' };
     },
   };
 }
