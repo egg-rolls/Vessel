@@ -82,8 +82,11 @@ export class CommandRegistry {
 
   async execute(input: string, ctx: ReplContext, state: ReplState): Promise<CommandResult> {
     const tokens = input.trim().split(/\s+/).filter(Boolean);
-    const domain = tokens[0];
-    if (!domain) return { handled: false };
+    const rawDomain = tokens[0];
+    if (!rawDomain) return { handled: false };
+
+    // 去掉开头的斜杠（如果用户输入了 /help，domain 应该是 help）
+    const domain = rawDomain.startsWith('/') ? rawDomain.slice(1) : rawDomain;
 
     const entry = this.entries.get(domain);
     if (!entry) return { handled: false };
