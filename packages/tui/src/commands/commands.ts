@@ -95,8 +95,8 @@ export class CommandRegistry {
     if (action && entry.subcommands?.has(action)) {
       const sub = entry.subcommands.get(action);
       if (!sub) return { handled: false };
-      await sub.run(tokens.slice(2), ctx, state);
-      return { handled: true };
+      const result = await sub.run(tokens.slice(2), ctx, state);
+      return result || { handled: true };
     }
 
     // 顶层命令
