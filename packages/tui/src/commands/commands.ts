@@ -101,8 +101,8 @@ export class CommandRegistry {
 
     // 顶层命令
     if (entry.run) {
-      await entry.run(tokens.slice(1), ctx, state);
-      return { handled: true };
+      const result = await entry.run(tokens.slice(1), ctx, state);
+      return result || { handled: true };
     }
 
     // 域无（有效）action -> 显示域帮助
