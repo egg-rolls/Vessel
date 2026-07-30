@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 
 interface StreamOutputProps {
   events: EventStream;
+  clearSignal?: number; // /clear 命令信号
 }
 
 interface ToolCall {
@@ -22,11 +23,21 @@ interface ToolCall {
   error?: string;
 }
 
-export function StreamOutput({ events }: StreamOutputProps) {
+export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
   const [tokens, setTokens] = useState<string[]>([]);
   const [toolCalls, setToolCalls] = useState<Map<string, ToolCall>>(new Map());
   const [isStreaming, setIsStreaming] = useState(false);
   const tokensRef = useRef<string[]>([]);
+
+  // 监听 clearSignal 变化，清空状态
+  useEffect(() => {
+    if (clearSignal !== undefined && clearSignal > 0) {
+      tokensRef.current = [];
+      setTokens([]);
+      setToolCalls(new Map());
+      setIsStreaming(false);
+    }
+  }, [clearSignal]);
 
   useEffect(() => {
     const unsubscribe = events.subscribe((event: RunEvent) => {
