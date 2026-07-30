@@ -14,11 +14,15 @@ export { startInkRepl } from './repl/ink-repl.js';
 
 export type { ReplContext } from './repl-context.js';
 
-export { createCommands, consumePendingResume, CommandRegistry } from './commands/commands.js';
+export {
+  createCommands,
+  consumePendingResume,
+  consumePendingDelete,
+  CommandRegistry,
+} from './commands/commands.js';
 export type {
   ReplState,
   CommandEntry,
-  SubCommand,
   CommandResult,
 } from './commands/commands.js';
 

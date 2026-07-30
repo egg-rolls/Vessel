@@ -20,12 +20,16 @@ function runState(sessionId: string, messages: Message[]): RunState {
   };
 }
 
-describe('CommandRegistry 二层分发', () => {
-  it('createCommands 注册 7 个顶层条目', () => {
+describe('CommandRegistry 扁平命令', () => {
+  it('createCommands 注册 11 个顶层命令', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
-    expect(names).toContain('session');
-    expect(names).toContain('tool');
+    expect(names).toContain('sessions');
+    expect(names).toContain('resume');
+    expect(names).toContain('new');
+    expect(names).toContain('history');
+    expect(names).toContain('delete');
+    expect(names).toContain('tools');
     expect(names).toContain('help');
     expect(names).toContain('clear');
     expect(names).toContain('setup');
@@ -41,68 +45,71 @@ describe('CommandRegistry 二层分发', () => {
     expect(result.handled).toBe(false);
   });
 
-  it('/tool list 打印已注册工具', async () => {
+  it('/tools 打印已注册工具', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     ctx.tools.register(sampleTool);
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('tool list', ctx, state);
+    await reg.execute('tools', ctx, state);
     cap.restore();
     expect(cap.logs.join('\n')).toContain('echo');
     expect(cap.logs.join('\n')).toContain('回显输入');
   });
 
-  it('/tool list 无工具时提示', async () => {
+  it('/tools 无工具时提示', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('tool list', ctx, state);
+    await reg.execute('tools', ctx, state);
     cap.restore();
     expect(cap.logs.join('\n')).toContain('No tools registered');
   });
 
-  it('/session 无 action -> 显示域帮助，handled:true', async () => {
+  it('/help 显示所有命令', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    const result = await reg.execute('session', ctx, state);
+    const result = await reg.execute('help', ctx, state);
     cap.restore();
     expect(result.handled).toBe(true);
-    expect(cap.logs.join('\n')).toContain('list');
-    expect(cap.logs.join('\n')).toContain('resume');
+    expect(cap.logs.join('\n')).toContain('/sessions');
+    expect(cap.logs.join('\n')).toContain('/resume');
+    expect(cap.logs.join('\n')).toContain('/new');
   });
 });
 
-describe('/session 命令', () => {
-  it('/session list 空时提示 No sessions', async () => {
+describe('/sessions 命令', () => {
+  it('/sessions 空时提示 No sessions', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('session list', ctx, state);
+    await reg.execute('sessions', ctx, state);
     cap.restore();
     expect(cap.logs.join('\n')).toContain('No sessions');
   });
 
-  it('/session list 列出编号会话', async () => {
+  it('/sessions 列出编号会话', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     await ctx.session.save(runState('s1', [{ role: 'user', content: '第一个问题' }]));
     await ctx.session.save(runState('s2', [{ role: 'user', content: '第二个问题' }]));
     const state = makeState('s1');
     const cap = captureConsole();
-    await reg.execute('session list', ctx, state);
+    await reg.execute('sessions', ctx, state);
     cap.restore();
     const out = cap.logs.join('\n');
     expect(out).toContain('1.');
     expect(out).toContain('2.');
     expect(out).toContain('第一个问题');
   });
+});
 
-  it('/session resume <id> 清 context + 切会话', async () => {
+describe('/resume 命令', () => {
+  it('/resume <id> 清 context + 切会话', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     await ctx.session.save(runState('target-sess', [{ role: 'user', content: '历史问题' }]));
@@ -113,24 +120,38 @@ describe('/session 命令', () => {
     ctx.context.add({ role: 'user', content: '当前会话已有内容' });
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('session resume target-sess', ctx, state);
+    await reg.execute('resume target-sess', ctx, state);
     cap.restore();
     expect(state.currentSessionId).toBe('target-sess');
     expect(changedTo).toBe('target-sess');
     expect(ctx.context.messages.length).toBe(0); // 已 clear
   });
 
-  it('/session resume 不存在 id -> 提示 not found', async () => {
+  it('/resume 不存在 id -> 提示 not found', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('session resume nope', ctx, state);
+    await reg.execute('resume nope', ctx, state);
     cap.restore();
     expect(cap.logs.join('\n')).toContain('not found');
   });
 
-  it('/session new 清 context + 新 id + 丢弃空当前会话', async () => {
+  it('/resume 无参 -> 设置 pendingResume', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(runState('s1', [{ role: 'user', content: '历史' }]));
+    const state = makeState(ctx.currentSessionId);
+    const cap = captureConsole();
+    await reg.execute('resume', ctx, state);
+    cap.restore();
+    expect(state.pendingResume).toBe(true);
+    expect(cap.logs.join('\n')).toContain('Resume which session');
+  });
+});
+
+describe('/new 命令', () => {
+  it('/new 清 context + 新 id + 丢弃空当前会话', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     // 当前会话存在但为空 -> 应被丢弃
@@ -142,15 +163,17 @@ describe('/session 命令', () => {
     ctx.context.add({ role: 'user', content: '旧内容' });
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('session new', ctx, state);
+    await reg.execute('new', ctx, state);
     cap.restore();
     expect(state.currentSessionId).toBe(newId);
     expect(ctx.context.messages.length).toBe(0);
     // 旧空会话被丢弃
     expect(await ctx.session.load(ctx.currentSessionId)).toBeNull(); // 注意：currentSessionId 已变，这里用原值
   });
+});
 
-  it('/session history 打印当前会话消息', async () => {
+describe('/history 命令', () => {
+  it('/history 打印当前会话消息', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     await ctx.session.save(
@@ -161,7 +184,7 @@ describe('/session 命令', () => {
     );
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('session history', ctx, state);
+    await reg.execute('history', ctx, state);
     cap.restore();
     const out = cap.logs.join('\n');
     expect(out).toContain('[User]');
@@ -170,16 +193,73 @@ describe('/session 命令', () => {
     expect(out).toContain('答');
   });
 
-  it('/session history 无历史时提示', async () => {
+  it('/history 无历史时提示', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const cap = captureConsole();
-    await reg.execute('session history', ctx, state);
+    await reg.execute('history', ctx, state);
     cap.restore();
     expect(cap.logs.join('\n')).toContain('No conversation history');
   });
+});
 
+describe('/delete 命令', () => {
+  it('/delete <id> 删除指定会话', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(runState('del-target', [{ role: 'user', content: '要删的' }]));
+    const state = makeState(ctx.currentSessionId);
+    const cap = captureConsole();
+    await reg.execute('delete del-target', ctx, state);
+    cap.restore();
+    expect(cap.logs.join('\n')).toContain('Deleted');
+    expect(await ctx.session.load('del-target')).toBeNull();
+  });
+
+  it('/delete 不存在 id -> 提示 not found', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+    const cap = captureConsole();
+    await reg.execute('delete nope', ctx, state);
+    cap.restore();
+    expect(cap.logs.join('\n')).toContain('not found');
+  });
+
+  it('/delete 无参 -> 设置 pendingDelete', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(runState('s1', [{ role: 'user', content: '历史' }]));
+    const state = makeState(ctx.currentSessionId);
+    const cap = captureConsole();
+    await reg.execute('delete', ctx, state);
+    cap.restore();
+    expect(state.pendingDelete).toBe(true);
+    expect(cap.logs.join('\n')).toContain('Delete which session');
+  });
+
+  it('/delete 当前会话 -> 自动开新会话', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const currentId = ctx.currentSessionId;
+    await ctx.session.save(runState(currentId, [{ role: 'user', content: '当前' }]));
+    const newSessionId = 'new-session-after-delete';
+    ctx.newSessionId = () => newSessionId;
+    let changedTo = '';
+    ctx.onSessionChange = (id) => {
+      changedTo = id;
+    };
+    const state = makeState(currentId);
+    const cap = captureConsole();
+    await reg.execute(`delete ${currentId}`, ctx, state);
+    cap.restore();
+    expect(state.currentSessionId).toBe(newSessionId);
+    expect(changedTo).toBe(newSessionId);
+  });
+});
+
+describe('系统命令', () => {
   it('/exit 置 running=false 并调 onExit', async () => {
     const reg = createCommands();
     let exited = false;

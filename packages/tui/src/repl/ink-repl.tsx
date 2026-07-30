@@ -30,6 +30,7 @@ function InkRepl({ ctx }: InkReplProps) {
   const [state, setState] = useState<ReplState>({
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
+    pendingDelete: false,
     running: true,
   });
   const [input, setInput] = useState('');
@@ -72,6 +73,16 @@ function InkRepl({ ctx }: InkReplProps) {
         }
       }
 
+      // 处理 /delete pending one-shot
+      if (state.pendingDelete) {
+        const num = Number.parseInt(value, 10);
+        if (!Number.isNaN(num)) {
+          // consumePendingDelete 逻辑
+          setState((prev) => ({ ...prev, pendingDelete: false }));
+          return;
+        }
+      }
+
       // 处理命令
       if (value.startsWith('/')) {
         const result = await commands.execute(value, ctx, state);
@@ -85,7 +96,7 @@ function InkRepl({ ctx }: InkReplProps) {
             const output = result.output;
             setHistory((prev) => [...prev, output]);
           }
-          setState((prev) => ({ ...prev, pendingResume: false }));
+          setState((prev) => ({ ...prev, pendingResume: false, pendingDelete: false }));
           return;
         }
       }

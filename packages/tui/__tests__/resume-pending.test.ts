@@ -13,7 +13,7 @@ function runState(sessionId: string, preview: string, startedAt: number): RunSta
   };
 }
 
-describe('consumePendingResume（/session resume 裸数字 one-shot）', () => {
+describe('consumePendingResume（/resume 裸数字 one-shot）', () => {
   it('裸数字 -> 按编号恢复对应会话', async () => {
     const ctx = makeCtx();
     // 两条历史会话，按 updated_at 倒序：s2 在前（更晚）

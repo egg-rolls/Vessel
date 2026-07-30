@@ -13,7 +13,12 @@
 
 import { stdin as input, stdout as output } from 'node:process';
 import * as readline from 'node:readline/promises';
-import { type ReplState, consumePendingResume, createCommands } from '../commands/commands.js';
+import {
+  type ReplState,
+  consumePendingDelete,
+  consumePendingResume,
+  createCommands,
+} from '../commands/commands.js';
 import { StreamRenderer } from '../renderer/stream-renderer.js';
 import type { ReplContext } from '../repl-context.js';
 import { startInkRepl } from './ink-repl.js';
@@ -109,6 +114,7 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
   const state: ReplState = {
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
+    pendingDelete: false,
     running: true,
   };
 
@@ -194,7 +200,7 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
       if (line === null) break; // EOF / rl 关闭
       const trimmed = line.trim();
 
-      // /session resume 的 pending one-shot：下一行裸数字 -> 恢复
+      // /resume 的 pending one-shot：下一行裸数字 -> 恢复
       if (state.pendingResume) {
         if (/^\d+$/.test(trimmed)) {
           await consumePendingResume(trimmed, ctx, state);
@@ -202,6 +208,16 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
         }
         // 非数字 -> 取消 pending，继续正常处理本行
         state.pendingResume = false;
+      }
+
+      // /delete 的 pending one-shot：下一行裸数字 -> 删除
+      if (state.pendingDelete) {
+        if (/^\d+$/.test(trimmed)) {
+          await consumePendingDelete(trimmed, ctx, state);
+          continue;
+        }
+        // 非数字 -> 取消 pending，继续正常处理本行
+        state.pendingDelete = false;
       }
 
       if (trimmed === '') continue;

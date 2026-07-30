@@ -16,6 +16,7 @@ export function useRuntimeState({ ctx, onStateChange }: UseRuntimeStateOptions) 
   const [state, setState] = useState<ReplState>({
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
+    pendingDelete: false,
     running: true,
   });
 
@@ -47,6 +48,10 @@ export function useRuntimeState({ ctx, onStateChange }: UseRuntimeStateOptions) 
     setState((prev) => ({ ...prev, pendingResume: pending }));
   }, []);
 
+  const setPendingDelete = useCallback((pending: boolean) => {
+    setState((prev) => ({ ...prev, pendingDelete: pending }));
+  }, []);
+
   const setCurrentSession = useCallback(
     (id: string) => {
       setState((prev) => ({ ...prev, currentSessionId: id }));
@@ -66,6 +71,7 @@ export function useRuntimeState({ ctx, onStateChange }: UseRuntimeStateOptions) 
     clearHistory,
     updateState,
     setPendingResume,
+    setPendingDelete,
     setCurrentSession,
     stopRunning,
   };

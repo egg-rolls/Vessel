@@ -20,13 +20,13 @@ emma 的版只需要实现**同一个函数签名**——用 Ink 框架替换内
 interface ReplContext {
   // ── 核心能力（壳注入，只读）───────────────
   runtime: AgentRuntime;          // 调 runtime.run(input, sessionId) 执行对话
-  tools: ToolRegistry;            // /tool list 用 tools.list() 列工具
-  session: SessionBackend;        // /session * 增删改查；有 listRich() 返回 SessionInfo[]
+  tools: ToolRegistry;            // /tools 用 tools.list() 列工具
+  session: SessionBackend;        // /sessions /resume /new /history /delete 增删改查；有 listRich() 返回 SessionInfo[]
   events: EventStream;            // 订阅 LlmStreamChunk + 工具调用 + RunCompleted
-  context: ContextManager;        // /session new/resume 用 context.clear() 清上下文
+  context: ContextManager;        // /new /resume 用 context.clear() 清上下文
 
   // ── 可变状态 ─────────────────────────────
-  currentSessionId: string;       // 当前会话 ID；/session resume/new 会改
+  currentSessionId: string;       // 当前会话 ID；/resume /new 会改
   onSessionChange: (id) => void;  // 切换会话后回调（壳更新 currentSessionId）
 
   // ── 显示信息（只读）───────────────────────
@@ -53,7 +53,7 @@ interface ReplContext {
 - `rl.on('line', ...)` 行队列 → Ink `useInput()` 或 TextInput 组件
 - `process.stdout.write('vessel> ')` 提示符 → Ink status bar
 - `rl.on('SIGINT', ...)` Ctrl+C → Ink 键盘事件
-- 行处理逻辑（pendingResume 裸数字 → resume、`/` 开头的命令分发、普通消息 → runtime.run）不改
+- 行处理逻辑（pendingResume/pendingDelete 裸数字 → resume/delete、`/` 开头的命令分发、普通消息 → runtime.run）不改
 
 **不动的接口**：`startRepl(ctx)` 函数签名、`ReplContext` 类型。
 
@@ -138,7 +138,7 @@ if (ctx.permissionChecker) {
 
 **readline 版（egg-rolls 交付）**：命令输出、错误提示、会话表格均用 `console.log` + ANSI 颜色码。
 
-**替换**：emma 用 Ink 组件渲染富文本：错误提示用颜色标签、`/session list` 用表格组件、对话输出支持 Markdown。
+**替换**：emma 用 Ink 组件渲染富文本：错误提示用颜色标签、`/sessions` 用表格组件、对话输出支持 Markdown。
 
 **不动的逻辑**：`repl.ts` 中 `classifyError()` 的分类逻辑、`commands.ts` 中各命令的数据获取逻辑（调 `ctx.session.listRich()` 等）。
 
@@ -146,7 +146,7 @@ if (ctx.permissionChecker) {
 
 **readline 版（egg-rolls 交付）**：`commands/commands.ts` 中 `CommandRegistry.execute()` 做精确 `/domain action` 匹配，无弹窗。
 
-**替换**：emma 在 Ink 中实现 `/` 触发弹菜单——读取 `CommandRegistry.list()` 获取所有域和子命令，做 autocomplete + 模糊过滤。**CommandRegistry 的 `execute()` 逻辑不动**——emma 只做触发层的 UI。
+**替换**：emma 在 Ink 中实现 `/` 触发弹菜单——读取 `CommandRegistry.list()` 获取所有命令，做 autocomplete + 模糊过滤。**CommandRegistry 的 `execute()` 逻辑不动**——emma 只做触发层的 UI。
 
 ## 4. 不动的边界
 
@@ -157,11 +157,11 @@ if (ctx.permissionChecker) {
 | **core** | `packages/core/src/**` | ADR-017 冻结 |
 | **config** | `packages/config/src/**` | 配置加载/校验/映射 |
 | **壳** | `src/cli.ts` | argv 解析、config 加载、provider 构造、runtime 构造、插件加载、ReplContext 构造、headless 路径 |
-| **命令逻辑** | `packages/tui/src/commands/commands.ts` | CommandRegistry、所有 `/session` `/tool` `/help` 等命令的业务逻辑 |
+| **命令逻辑** | `packages/tui/src/commands/commands.ts` | CommandRegistry、所有 `/sessions` `/resume` `/new` `/history` `/delete` `/tools` `/help` 等命令的业务逻辑 |
 | **权限确认** | `packages/tui/src/renderer/tool-confirm.ts` | `ToolPermissionChecker` 判断逻辑、`createPermissionGuardrail` |
 | **向导** | `packages/tui/src/wizard/setup-wizard.ts` | `runSetupWizard()` 流程——emma 只打磨 `/setup` 命令中调用后的 UI 提示 |
 | **Rich 渲染** | `packages/tui/src/rich-renderer.ts` | `buildBanner/buildSessionTable/infoPanel/divider` —— emma 可替换其实现但保持签名 |
-| **会话逻辑** | `packages/tui/src/repl/repl.ts` 中的 session/id 管理 | `currentSessionId`、`pendingResume`、会话切换逻辑不变 |
+| **会话逻辑** | `packages/tui/src/repl/repl.ts` 中的 session/id 管理 | `currentSessionId`、`pendingResume`、`pendingDelete`、会话切换逻辑不变 |
 
 ## 5. 调用示例（壳视角——emma 参考但不改）
 
