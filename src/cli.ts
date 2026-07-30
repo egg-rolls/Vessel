@@ -34,6 +34,7 @@ import {
   ToolPermissionChecker,
   createPermissionGuardrail,
 } from '../packages/tui/src/renderer/tool-confirm';
+import { startInkRepl } from '../packages/tui/src/repl/ink-repl';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 
 // ── argv 解析 ────────────────────────────────────
@@ -355,7 +356,14 @@ function buildReplContext(): ReplContext {
 if (headless) {
   await runHeadless();
 } else {
-  await startRepl(buildReplContext());
+  const ctx = buildReplContext();
+  // TTY 环境优先使用 Ink REPL（React 组件式 UI）
+  // 非 TTY 环境降级到 readline REPL
+  if (process.stdout.isTTY && !process.env.VESSEL_USE_READLINE) {
+    await startInkRepl(ctx);
+  } else {
+    await startRepl(ctx);
+  }
   // startRepl 返回 = /exit 触发 onExit——不走到此处
 }
 

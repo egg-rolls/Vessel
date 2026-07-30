@@ -77,7 +77,8 @@ function InkRepl({ ctx }: InkReplProps) {
         if (result.handled) {
           // 如果命令有输出，添加到历史记录
           if (result.output) {
-            setHistory((prev) => [...prev, result.output!]);
+            const output = result.output;
+            setHistory((prev) => [...prev, output]);
           }
           setState((prev) => ({ ...prev, pendingResume: false }));
           return;
