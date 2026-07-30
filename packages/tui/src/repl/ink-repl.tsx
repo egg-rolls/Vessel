@@ -75,8 +75,11 @@ function InkRepl({ ctx }: InkReplProps) {
       if (value.startsWith('/')) {
         const result = await commands.execute(value, ctx, state);
         if (result.handled) {
-          // 如果命令有输出，添加到历史记录
-          if (result.output) {
+          // 特殊处理 /clear 命令 - 清空历史记录
+          if (value.trim() === '/clear' || value.trim().startsWith('/clear ')) {
+            setHistory([]);
+          } else if (result.output) {
+            // 如果命令有输出，添加到历史记录
             const output = result.output;
             setHistory((prev) => [...prev, output]);
           }
