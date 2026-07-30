@@ -91,13 +91,13 @@ function InkRepl({ ctx }: InkReplProps) {
       }
 
       // 处理普通消息 - 调用 runtime.run
+      // StreamOutput 组件已通过事件流显示 token-by-token 输出，
+      // 这里只处理错误情况，不重复添加成功输出到 history
       try {
-        setHistory((prev) => [...prev, 'Thinking...']);
-        const output = await ctx.runtime.run(value, state.currentSessionId);
-        setHistory((prev) => [...prev.slice(0, -1), output]);
+        await ctx.runtime.run(value, state.currentSessionId);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        setHistory((prev) => [...prev.slice(0, -1), `Error: ${errorMsg}`]);
+        setHistory((prev) => [...prev, `Error: ${errorMsg}`]);
       }
     },
     [ctx, state, commands],
