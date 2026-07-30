@@ -6,7 +6,12 @@
  * 无基础用户入口。
  */
 
+// readline 版本（默认）
 export { startRepl } from './repl/repl.js';
+
+// Ink 版本（React 组件式 UI）
+export { startInkRepl } from './repl/ink-repl.js';
+
 export type { ReplContext } from './repl-context.js';
 
 export { createCommands, consumePendingResume, CommandRegistry } from './commands/commands.js';
@@ -26,3 +31,10 @@ export {
   infoPanel,
   divider,
 } from './rich-renderer.js';
+
+// Ink 组件
+export { StatusBar } from './components/StatusBar.js';
+export { StreamOutput } from './components/StreamOutput.js';
+export { CommandMenu } from './components/CommandMenu.js';
+export { ConfirmDialog } from './components/ConfirmDialog.js';
+export { SessionTable } from './components/SessionTable.js';

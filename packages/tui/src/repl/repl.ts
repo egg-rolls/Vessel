@@ -3,7 +3,12 @@
  * @module @vessel/tui
  *
  * 契约（与 egg-rolls 壳的接缝）：壳构造 ReplContext -> 调 startRepl(ctx) -> 阻塞至 /exit。
- * emma 后续替换为 Ink 框架 + token 动画 + 弹窗，函数签名与 ReplContext 不变。
+ * 支持两种模式：
+ * - readline 版本（默认）：传统终端 UI
+ * - Ink 版本（VESSEL_USE_INK=1）：React 组件式终端 UI + token 动画 + 弹窗
+ *
+ * 两个版本保持相同的函数签名：startRepl(ctx: ReplContext): Promise<void>
+ * 壳（cli.ts）不感知替换。
  */
 
 import { stdin as input, stdout as output } from 'node:process';
@@ -11,6 +16,7 @@ import * as readline from 'node:readline/promises';
 import { type ReplState, consumePendingResume, createCommands } from '../commands/commands.js';
 import { StreamRenderer } from '../renderer/stream-renderer.js';
 import type { ReplContext } from '../repl-context.js';
+import { startInkRepl } from './ink-repl.js';
 
 // ── 错误分类（REPL-7）──────────────────────────────
 
@@ -70,7 +76,26 @@ export function classifyError(error: unknown): ClassifiedError {
  * - 错误分类展示（网络/API/限额/鉴权）
  * - Ctrl+C：运行中->中断当前 run；空闲->退出
  */
+/**
+ * REPL 入口 - 根据环境变量选择 readline 或 Ink 版本
+ *
+ * 环境变量：
+ * - VESSEL_USE_INK=1：使用 Ink 版本（React 组件式 UI）
+ * - 默认：使用 readline 版本（传统终端 UI）
+ *
+ * 两个版本保持相同的函数签名：startRepl(ctx: ReplContext): Promise<void>
+ * 壳（cli.ts）不感知替换。
+ */
 export async function startRepl(ctx: ReplContext): Promise<void> {
+  const useInk = process.env.VESSEL_USE_INK === '1' || process.env.VESSEL_USE_INK === 'true';
+
+  if (useInk) {
+    // Ink 版本：React 组件式终端 UI
+    await startInkRepl(ctx);
+    return;
+  }
+
+  // readline 版本：传统终端 UI
   const rl = readline.createInterface({
     input,
     output,
@@ -99,14 +124,28 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
     }
   });
 
-  // 权限确认期间置位：行处理器丢弃此期间的行，避免用户的 y/n 被队列吞掉再当消息发给 AI。
+  // 权限确认期间置位：行处理器缓冲此期间的行，避免用户的 y/n 被队列吞掉再当消息发给 AI。
   // confirm 复用本 rl（经 promptFn），不再自建第二个 readline 抢 stdin。
   let pausedForConfirm = false;
+  const confirmBuffer: string[] = []; // 确认期间缓冲的输入
   if (ctx.permissionChecker) {
     ctx.permissionChecker.promptFn = (question: string) => {
       pausedForConfirm = true;
       return rl.question(question).finally(() => {
         pausedForConfirm = false;
+        // 确认结束后，将缓冲的输入重新加入队列
+        while (confirmBuffer.length > 0) {
+          const bufferedLine = confirmBuffer.shift();
+          if (bufferedLine !== undefined) {
+            if (lineResolver) {
+              const r = lineResolver;
+              lineResolver = null;
+              r(bufferedLine);
+            } else {
+              lineQueue.push(bufferedLine);
+            }
+          }
+        }
       });
     };
   }
@@ -121,7 +160,11 @@ export async function startRepl(ctx: ReplContext): Promise<void> {
   const lineQueue: string[] = [];
   let lineResolver: ((line: string | null) => void) | null = null;
   rl.on('line', (line: string) => {
-    if (pausedForConfirm) return; // 权限确认期间的输入由 confirm 的 question 消费，不进队列
+    if (pausedForConfirm) {
+      // 权限确认期间的输入缓冲到 confirmBuffer，确认结束后重新加入队列
+      confirmBuffer.push(line);
+      return;
+    }
     if (lineResolver) {
       const r = lineResolver;
       lineResolver = null;

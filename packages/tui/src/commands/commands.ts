@@ -26,6 +26,8 @@ export interface ReplState {
 export interface CommandResult {
   /** 是否已识别并处理（false = 未知命令，由调用方提示） */
   handled: boolean;
+  /** 命令输出文本（可选，Ink 版本用于显示） */
+  output?: string;
 }
 
 /** 子命令执行函数签名 */
@@ -80,8 +82,11 @@ export class CommandRegistry {
 
   async execute(input: string, ctx: ReplContext, state: ReplState): Promise<CommandResult> {
     const tokens = input.trim().split(/\s+/).filter(Boolean);
-    const domain = tokens[0];
-    if (!domain) return { handled: false };
+    const rawDomain = tokens[0];
+    if (!rawDomain) return { handled: false };
+
+    // 去掉开头的斜杠（如果用户输入了 /help，domain 应该是 help）
+    const domain = rawDomain.startsWith('/') ? rawDomain.slice(1) : rawDomain;
 
     const entry = this.entries.get(domain);
     if (!entry) return { handled: false };
@@ -90,14 +95,14 @@ export class CommandRegistry {
     if (action && entry.subcommands?.has(action)) {
       const sub = entry.subcommands.get(action);
       if (!sub) return { handled: false };
-      await sub.run(tokens.slice(2), ctx, state);
-      return { handled: true };
+      const result = await sub.run(tokens.slice(2), ctx, state);
+      return result || { handled: true };
     }
 
     // 顶层命令
     if (entry.run) {
-      await entry.run(tokens.slice(1), ctx, state);
-      return { handled: true };
+      const result = await entry.run(tokens.slice(1), ctx, state);
+      return result || { handled: true };
     }
 
     // 域无（有效）action -> 显示域帮助
@@ -111,9 +116,10 @@ export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
   reg.register(sessionDomain());
   reg.register(toolDomain());
-  reg.register(helpCommand());
+  reg.register(helpCommand(reg));
   reg.register(clearCommand());
   reg.register(setupCommand());
+  reg.register(reloadCommand());
   reg.register(exitCommand());
   return reg;
 }
@@ -143,13 +149,23 @@ function sessionDomain(): CommandEntry {
     run: async (_args, ctx, state) => {
       const sessions = await ctx.session.listRich();
       if (sessions.length === 0) {
-        console.log('\nNo sessions.\n');
-        return { handled: true };
+        const output = '\nNo sessions.\n';
+        console.log(output);
+        return { handled: true, output };
       }
-      console.log('\nRecent sessions:');
-      renderNumberedSessions(sessions, state.currentSessionId);
-      console.log('');
-      return { handled: true };
+      const lines = ['', 'Recent sessions:'];
+      for (let i = 0; i < sessions.length; i++) {
+        const s = sessions[i];
+        if (!s) continue;
+        const cur = s.session_id === state.currentSessionId ? ' *' : '';
+        const preview = s.preview || s.title || '(no preview)';
+        lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+        lines.push(`     id: ${s.session_id}`);
+      }
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -161,19 +177,30 @@ function sessionDomain(): CommandEntry {
       if (args.length === 0) {
         const sessions = await ctx.session.listRich();
         if (sessions.length === 0) {
-          console.log('\nNo sessions to resume.\n');
-          return { handled: true };
+          const output = '\nNo sessions to resume.\n';
+          console.log(output);
+          return { handled: true, output };
         }
-        console.log('\nResume which session? Enter its number:');
-        renderNumberedSessions(sessions, state.currentSessionId);
-        console.log('');
+        const lines = ['', 'Resume which session? Enter its number:'];
+        for (let i = 0; i < sessions.length; i++) {
+          const s = sessions[i];
+          if (!s) continue;
+          const cur = s.session_id === state.currentSessionId ? ' *' : '';
+          const preview = s.preview || s.title || '(no preview)';
+          lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+          lines.push(`     id: ${s.session_id}`);
+        }
+        lines.push('');
         state.pendingResume = true;
-        return { handled: true };
+        const output = lines.join('\n');
+        console.log(output);
+        return { handled: true, output };
       }
       const resolved = await resolveResumeTarget(args[0] ?? '', ctx);
       if (!resolved.ok) {
-        console.log(`\n${resolved.message}\n`);
-        return { handled: true };
+        const output = `\n${resolved.message}\n`;
+        console.log(output);
+        return { handled: true, output };
       }
       await doResume(ctx, state, resolved.sessionId);
       return { handled: true };
@@ -198,8 +225,9 @@ function sessionDomain(): CommandEntry {
       const newId = ctx.newSessionId();
       state.currentSessionId = newId;
       ctx.onSessionChange(newId);
-      console.log(`\nNew session started: ${newId}\n`);
-      return { handled: true };
+      const output = `\nNew session started: ${newId}\n`;
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -210,17 +238,21 @@ function sessionDomain(): CommandEntry {
     run: async (_args, ctx, state) => {
       const loaded = await ctx.session.load(state.currentSessionId);
       if (!loaded || loaded.messages.length === 0) {
-        console.log('\nNo conversation history.\n');
-        return { handled: true };
+        const output = '\nNo conversation history.\n';
+        console.log(output);
+        return { handled: true, output };
       }
-      console.log(`\nHistory (${loaded.messages.length} messages):`);
+      const lines = ['', `History (${loaded.messages.length} messages):`];
       for (const msg of loaded.messages) {
         const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
-        console.log(`\n[${role}]`);
-        console.log(msg.content);
+        lines.push('');
+        lines.push(`[${role}]`);
+        lines.push(msg.content);
       }
-      console.log('');
-      return { handled: true };
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -281,20 +313,20 @@ async function doResume(ctx: ReplContext, state: ReplState, sessionId: string): 
   console.log(`\nResumed session "${sessionId}" (${msgCount} messages).\n`);
 }
 
-/** 编号渲染会话列表（resume 选择用） */
-function renderNumberedSessions(
-  sessions: { session_id: string; preview?: string; title?: string; message_count: number }[],
-  currentId: string,
-): void {
-  for (let i = 0; i < sessions.length; i++) {
-    const s = sessions[i];
-    if (!s) continue;
-    const cur = s.session_id === currentId ? ' *' : '';
-    const preview = s.preview || s.title || '(no preview)';
-    console.log(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
-    console.log(`     id: ${s.session_id}`);
-  }
-}
+/** 编号渲染会话列表（resume 选择用） - 已废弃，改用内联渲染 */
+// function renderNumberedSessions(
+//   sessions: { session_id: string; preview?: string; title?: string; message_count: number }[],
+//   currentId: string,
+// ): void {
+//   for (let i = 0; i < sessions.length; i++) {
+//     const s = sessions[i];
+//     if (!s) continue;
+//     const cur = s.session_id === currentId ? ' *' : '';
+//     const preview = s.preview || s.title || '(no preview)';
+//     console.log(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
+//     console.log(`     id: ${s.session_id}`);
+//   }
+// }
 
 // ── /tool ─────────────────────────────────────────
 
@@ -308,13 +340,16 @@ function toolDomain(): CommandEntry {
     run: (_args, ctx, _state) => {
       const list = ctx.tools.list();
       if (list.length === 0) {
-        console.log('\nNo tools registered.\n');
-        return { handled: true };
+        const output = '\nNo tools registered.\n';
+        console.log(output);
+        return { handled: true, output };
       }
-      console.log(`\nAvailable tools (${list.length}):`);
-      for (const t of list) console.log(`  - ${t.name}: ${t.description}`);
-      console.log('');
-      return { handled: true };
+      const lines = ['', `Available tools (${list.length}):`];
+      for (const t of list) lines.push(`  - ${t.name}: ${t.description}`);
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
     },
   });
 
@@ -328,27 +363,52 @@ function toolDomain(): CommandEntry {
 
 // ── /help ─────────────────────────────────────────
 
-function helpCommand(): CommandEntry {
+function helpCommand(reg: CommandRegistry): CommandEntry {
   return {
     name: 'help',
     description: '显示可用命令',
     usage: '/help [domain]',
     run: (args, _ctx, _state) => {
-      // 由 REPL 注入完整注册表引用以列全部命令--此处用静态文案保证可用
-      console.log('');
-      console.log('Available commands:');
-      console.log('  /session list              列出会话（编号）');
-      console.log('  /session resume [N|id]     恢复会话（无参=列表后按编号选）');
-      console.log('  /session new               开启新会话（丢弃当前空会话）');
-      console.log('  /session history           当前会话的对话历史');
-      console.log('  /tool list                 列出已注册工具');
-      console.log('  /help [domain]             显示帮助');
-      console.log('  /clear                     清屏');
-      console.log('  /setup                     重新运行首启配置向导');
-      console.log('  /exit                      退出');
-      console.log('');
-      if (args.length > 0) console.log(`(detailed help for "${args[0]}" - see /${args[0]})`);
-      return { handled: true };
+      const lines: string[] = ['', 'Available commands:'];
+
+      // 动态生成帮助文本
+      for (const entry of reg.list()) {
+        if (entry.subcommands && entry.subcommands.size > 0) {
+          // 有子命令的域
+          for (const sub of entry.subcommands.values()) {
+            const usage = sub.usage || `/${entry.name} ${sub.name}`;
+            lines.push(`  ${usage.padEnd(26)} ${sub.description}`);
+          }
+        } else {
+          // 顶层命令
+          const usage = entry.usage || `/${entry.name}`;
+          lines.push(`  ${usage.padEnd(26)} ${entry.description}`);
+        }
+      }
+
+      lines.push('');
+      if (args.length > 0) {
+        const domain = reg.list().find((e) => e.name === args[0]);
+        if (domain) {
+          if (domain.subcommands && domain.subcommands.size > 0) {
+            lines.push(`/${domain.name}  - ${domain.description}`);
+            lines.push('Subcommands:');
+            for (const sub of domain.subcommands.values()) {
+              lines.push(`  /${domain.name} ${sub.name.padEnd(8)} - ${sub.description}`);
+            }
+          }
+        } else {
+          lines.push(`Unknown command: ${args[0]}`);
+        }
+      }
+
+      // 输出到控制台（readline 版本）
+      for (const line of lines) {
+        console.log(line);
+      }
+
+      // 返回帮助文本（Ink 版本可以使用）
+      return { handled: true, output: lines.join('\n') };
     },
   };
 }
@@ -362,7 +422,7 @@ function clearCommand(): CommandEntry {
     usage: '/clear',
     run: () => {
       console.clear();
-      return { handled: true };
+      return { handled: true, output: '' };
     },
   };
 }
@@ -374,18 +434,71 @@ function setupCommand(): CommandEntry {
     name: 'setup',
     description: '重新运行首启配置向导',
     usage: '/setup',
-    run: async () => {
+    run: async (_args, _ctx, _state) => {
       const { runSetupWizard } = await import('../wizard/setup-wizard.js');
-      console.log('\nRunning setup wizard...');
+      const lines = ['', 'Running setup wizard...'];
       const userConfig = await runSetupWizard();
       if (userConfig.apiKey) {
-        console.log(
-          'Configuration saved. Restart Vessel for the new provider/key to take effect.\n',
-        );
+        lines.push('Configuration saved. Restart Vessel for the new provider/key to take effect.');
+        lines.push('');
+        lines.push('Tip: Use /reload to reload configuration without restarting.');
       } else {
-        console.log('Setup cancelled.\n');
+        lines.push('Setup cancelled.');
       }
-      return { handled: true };
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
+    },
+  };
+}
+
+// ── /reload ───────────────────────────────────────
+
+function reloadCommand(): CommandEntry {
+  return {
+    name: 'reload',
+    description: '重新加载配置（不重启）',
+    usage: '/reload',
+    run: async (_args, ctx, _state) => {
+      try {
+        const { loadConfig } = await import('../../../config/src/index.js');
+        const { config: newConfig, validation } = await loadConfig();
+        const lines = [''];
+
+        if (validation.errors.length > 0) {
+          lines.push('✗ Configuration errors:');
+          for (const e of validation.errors) lines.push(`  - ${e.message}`);
+          lines.push('');
+          const output = lines.join('\n');
+          console.log(output);
+          return { handled: true, output };
+        }
+
+        if (validation.warnings.length > 0) {
+          lines.push('⚠ Configuration warnings:');
+          for (const w of validation.warnings) lines.push(`  - ${w.message}`);
+        }
+
+        // 更新 provider 信息
+        if (newConfig.provider) {
+          ctx.provider.name = newConfig.provider.name ?? ctx.provider.name;
+          ctx.provider.model = newConfig.provider.model ?? ctx.provider.model;
+          ctx.provider.baseUrl = newConfig.provider.baseUrl ?? ctx.provider.baseUrl;
+        }
+
+        lines.push('✓ Configuration reloaded.');
+        lines.push('');
+        lines.push(`Provider: ${ctx.provider.name} | ${ctx.provider.model}`);
+        lines.push('');
+        const output = lines.join('\n');
+        console.log(output);
+        return { handled: true, output };
+      } catch (e) {
+        const output = `\n✗ Failed to reload: ${e instanceof Error ? e.message : e}\n`;
+        console.log(output);
+        return { handled: true, output };
+      }
     },
   };
 }
@@ -400,7 +513,7 @@ function exitCommand(): CommandEntry {
     run: (_args, ctx, state) => {
       state.running = false;
       ctx.onExit();
-      return { handled: true };
+      return { handled: true, output: '\nGoodbye!\n' };
     },
   };
 }

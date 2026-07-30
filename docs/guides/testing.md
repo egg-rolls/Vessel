@@ -21,13 +21,25 @@ bun test --coverage               # 覆盖率
 ```
 packages/core/__tests__/
 ├── agent-runtime.test.ts    # AgentRuntime 集成
+├── anthropic-streaming.test.ts # Anthropic 流式
 ├── context-manager.test.ts  # 上下文管理
 ├── event-stream.test.ts     # 事件流
+├── hook-injection.test.ts   # Hook 注入
 ├── limit-checker.test.ts    # 限制检查
 ├── plugin-host.test.ts      # 插件宿主
 ├── provider.test.ts         # LLM Provider
 ├── session-backend.test.ts  # 会话后端
+├── session-restore.test.ts  # 会话恢复
 └── tool-registry.test.ts    # 工具注册表
+
+packages/tui/__tests__/
+├── error-classify.test.ts   # 错误分类
+├── repl-commands.test.ts    # REPL 命令
+├── resume-pending.test.ts   # 会话恢复
+├── stream-renderer.test.ts  # 流式渲染器
+└── tool-confirm.test.ts     # 工具确认
+
+plugins/*/__tests__/         # 插件测试
 ```
 
 ## 写测试的规则
