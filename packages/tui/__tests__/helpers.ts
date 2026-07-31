@@ -35,7 +35,7 @@ export function makeCtx(overrides: Partial<ReplContext> = {}): ReplContext {
 }
 
 export function makeState(sessionId: string): ReplState {
-  return { currentSessionId: sessionId, pendingResume: false, running: true };
+  return { currentSessionId: sessionId, pendingResume: false, showResumePicker: false, running: true };
 }
 
 export function registerSampleTool(ctx: ReplContext, def: ToolDefinition): void {

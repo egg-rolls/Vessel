@@ -15,6 +15,7 @@ import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
 import type { ToolRegistry } from '../types/tool.js';
+import { getCurrentGitBranch } from '../utils/git.js';
 import { MemoryPluginHost } from './plugin-host.js';
 
 /** Run 选项 */
@@ -165,6 +166,7 @@ export class AgentRuntime {
       messages: [userMessage],
       started_at: startTime,
       status: 'running',
+      branch: await getCurrentGitBranch(),
     };
 
     // 发布 Run 开始事件

@@ -26,6 +26,8 @@ export interface RunState {
   preview?: string;
   /** 最后活动时间戳（ms），用于 /resume 按 recency 排序 */
   updated_at?: number;
+  /** 会话创建时的 git branch（用于 /resume 列表展示） */
+  branch?: string;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */
@@ -37,6 +39,8 @@ export interface SessionInfo {
   started_at: number;
   updated_at: number;
   message_count: number;
+  /** 会话创建时的 git branch */
+  branch?: string;
 }
 
 /** Session 信息 */

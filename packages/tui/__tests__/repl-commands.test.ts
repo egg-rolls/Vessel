@@ -130,6 +130,30 @@ describe('/session 命令', () => {
     expect(cap.logs.join('\n')).toContain('not found');
   });
 
+  it('/session resume 无参 -> 设置 showResumePicker + pendingResume', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(runState('s1', [{ role: 'user', content: '问题' }]));
+    const state = makeState(ctx.currentSessionId);
+    expect(state.showResumePicker).toBe(false);
+    const cap = captureConsole();
+    await reg.execute('session resume', ctx, state);
+    cap.restore();
+    expect(state.showResumePicker).toBe(true);
+    expect(state.pendingResume).toBe(true);
+  });
+
+  it('/session resume 无参 + 无会话 -> 不设置 picker', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+    const cap = captureConsole();
+    await reg.execute('session resume', ctx, state);
+    cap.restore();
+    expect(state.showResumePicker).toBe(false);
+    expect(cap.logs.join('\n')).toContain('No sessions');
+  });
+
   it('/session new 清 context + 新 id + 丢弃空当前会话', async () => {
     const reg = createCommands();
     const ctx = makeCtx();

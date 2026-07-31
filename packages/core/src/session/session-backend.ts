@@ -27,6 +27,7 @@ export function toSessionInfo(state: RunState): SessionInfo {
     started_at: state.started_at,
     updated_at: state.updated_at ?? state.completed_at ?? state.started_at,
     message_count: state.messages.length,
+    branch: state.branch,
   };
 }
 

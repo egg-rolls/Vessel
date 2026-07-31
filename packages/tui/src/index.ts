@@ -13,7 +13,7 @@ export type {
   ReplState,
   SubCommand,
 } from './commands/commands.js';
-export { CommandRegistry, consumePendingResume, createCommands } from './commands/commands.js';
+export { CommandRegistry, consumePendingResume, createCommands, doResume } from './commands/commands.js';
 export { CommandMenu } from './components/CommandMenu.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export { SessionTable } from './components/SessionTable.js';
