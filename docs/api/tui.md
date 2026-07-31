@@ -195,3 +195,325 @@ await startRepl(ctx);
 | `CommandRegistry` | `@vessel/tui` | `list() → CommandEntry[]`, `execute(input, ctx, state) → Promise<CommandResult>` |
 | `StreamRenderer` | `@vessel/tui` | `start(eventStream)`, `stop()`, `didStreamLastRun() → boolean` |
 | `classifyError` | `@vessel/tui` | `classifyError(error) → ClassifiedError {category, message, hint}` |
+
+## 7. 斜杠命令交互界面规范
+
+> 决策详见 [ADR-020](../specs/ADR-020-command-design.md)
+
+### 7.1 设计原则
+
+- **扁平结构**：`/<command>`，不使用 `/domain action` 复合形式
+- **好记易用**：名词为主，直观明了
+- **交互界面**：进入 TUI 交互界面进行选择、控制，而非直接执行
+- **AI 不可调用**：斜杠命令仅在 REPL 内使用，AI 调不到
+
+### 7.2 命令清单
+
+| 命令 | 说明 | 交互界面 |
+|------|------|---------|
+| `/sessions` | 会话浏览器 | 列表、恢复、删除、历史 |
+| `/tools` | 工具浏览器 | 列表、详情、测试 |
+| `/plugins` | 插件浏览器 | 列表、状态、配置 |
+| `/mcp` | MCP 浏览器 | 列表、连接状态、重连、测试 |
+| `/skills` | Skills 浏览器 | 列表、详情 |
+| `/assets` | 资产总览仪表盘 | ASCII art + 系统信息 |
+| `/setup` | 配置向导 | 交互式配置 |
+| `/reload` | 重载配置 | 确认+结果 |
+| `/clear` | 清屏 | - |
+| `/help` | 帮助 | 命令列表 |
+| `/exit` | 退出 | 确认 |
+
+### 7.3 交互界面模式
+
+所有浏览器界面遵循统一模式：
+
+```
+┌─ [Title] ─────────────────────────────────────────────┐
+│                                                        │
+│  [列表内容]                                            │
+│                                                        │
+│  [↑↓] Navigate  [Enter] Details  [快捷键...]          │
+└────────────────────────────────────────────────────────┘
+```
+
+**标准快捷键**：
+- `↑↓`：上下导航
+- `Enter`：进入详情/执行
+- `Esc`：返回/退出
+- `R`：刷新
+- `?`：帮助
+
+### 7.4 示例：MCP 浏览器
+
+```
+> /mcp
+
+┌─ MCP Servers ─────────────────────────────────────────┐
+│                                                        │
+│  🟢 filesystem    connected   tools: 8    latency: 2ms │
+│  🟢 github        connected   tools: 5    latency: 45ms│
+│  🔴 database      disconnected                         │
+│                                                        │
+│  [↑↓] Navigate  [Enter] Details  [R] Reconnect        │
+│  [T] Test  [D] Disconnect  [Esc] Back                  │
+└────────────────────────────────────────────────────────┘
+```
+
+**进入详情后**：
+```
+┌─ MCP: filesystem ─────────────────────────────────────┐
+│                                                        │
+│  Status      🟢 Connected                              │
+│  Server      @anthropic/mcp-filesystem                 │
+│  Uptime      2h 34m                                    │
+│  Tools       8 registered                              │
+│  Latency     2ms                                       │
+│                                                        │
+│  Tools:                                                │
+│    - read_file     Read file contents                  │
+│    - write_file    Write file contents                 │
+│    - list_dir      List directory                      │
+│    - ...                                               │
+│                                                        │
+│  [R] Reconnect  [T] Test  [D] Disconnect  [Esc] Back  │
+└────────────────────────────────────────────────────────┘
+```
+
+### 7.5 实现建议
+
+1. **组件化**：每个浏览器是独立的 Ink 组件
+2. **状态管理**：使用 React state 管理选择、过滤、详情展开
+3. **数据获取**：从 ReplContext 获取资产数据
+4. **操作确认**：危险操作（断开、删除）需要用户确认
+
+### 7.6 与控制台命令的关系
+
+斜杠命令（人类）和控制台命令（AI）是两套独立体系：
+
+| 维度 | 斜杠命令 | 控制台命令 |
+|------|---------|-----------|
+| **目标用户** | 人类 | AI / 脚本 |
+| **交互方式** | TUI 交互界面 | 命令行输出 |
+| **命令结构** | 扁平 `/xxx` | 复合 `vessel xxx yyy` |
+| **输出格式** | 图形化、彩色 | 结构化（JSON/表格） |
+| **AI 可调用** | ❌ | ✅ |
+
+控制台命令的完整规范见 `docs/guides/cli-commands.md`（待创建）。
+
+## 8. 工具显示接口
+
+> 决策详见 [ADR-021](../specs/ADR.md)
+
+### 8.1 设计原则
+
+- **不改 Core**：`@vessel/core` 的 `ToolDefinition` 保持不变，显示接口在 TUI 层定义
+- **TUI 层定义**：`ToolDisplayDefinition` 接口定义工具的显示行为
+- **注册机制**：工具可以注册自定义显示定义，未注册的使用默认渲染器
+- **简化设计**：移除折叠显示、点击展开等辅助功能，用默认行为替代
+
+### 8.2 接口定义
+
+```typescript
+// packages/tui/src/types/tool-display.ts
+
+interface ToolDisplayDefinition {
+  // 名称显示
+  userFacingName(input: unknown): string
+  userFacingColor?(input: unknown): string
+
+  // 调用时显示
+  renderToolUseMessage(input: unknown, options: DisplayOptions): React.ReactNode
+
+  // 进度显示
+  getActivityDescription?(input: unknown): string | null
+
+  // 结果显示
+  renderToolResultMessage?(result: string, options: DisplayOptions): React.ReactNode
+
+  // 错误显示
+  renderToolUseErrorMessage?(error: string, options: DisplayOptions): React.ReactNode
+}
+```
+
+### 8.3 显示效果
+
+**工具调用时**：
+```
+📖 Reading src/foo.ts...
+```
+
+**工具执行中**：
+```
+📖 Reading src/foo.ts... (2.3s)
+```
+
+**工具完成**：
+```
+📖 Read src/foo.ts ✓ (45ms)
+```
+
+**工具错误**：
+```
+📖 Read src/foo.ts ✗ File not found
+```
+
+### 8.4 注册机制
+
+```typescript
+// packages/tui/src/renderer/tool-display-registry.ts
+
+class ToolDisplayRegistry {
+  register(toolName: string, display: ToolDisplayDefinition): void
+  get(toolName: string): ToolDisplayDefinition | undefined
+}
+
+// 使用
+registry.register('read_file', {
+  userFacingName: () => 'Read',
+  userFacingColor: () => 'blue',
+  renderToolUseMessage: (input) => <Text>📖 Reading {input.path}...</Text>,
+  getActivityDescription: (input) => `Reading ${input.path}`,
+  renderToolResultMessage: (result) => <Text>✓ Read complete</Text>,
+})
+```
+
+### 8.5 默认渲染器
+
+未注册自定义显示的工具使用默认渲染器：
+
+```typescript
+// packages/tui/src/renderer/default-tool-renderer.ts
+
+const defaultToolRenderer: ToolDisplayDefinition = {
+  userFacingName: (input) => input.toolName,
+  userFacingColor: () => 'gray',
+  renderToolUseMessage: (input) => <Text>🔧 {input.toolName}</Text>,
+  getActivityDescription: (input) => `Executing ${input.toolName}`,
+  renderToolResultMessage: (result) => <Text>✓ Done</Text>,
+  renderToolUseErrorMessage: (error) => <Text>✗ {error}</Text>,
+}
+```
+
+## 9. Spinner 状态显示
+
+> 决策详见 [ADR-022](../specs/ADR.md)
+
+### 9.1 设计原则
+
+- **三种模式**：`thinking`（思考中）、`tool`（工具执行中）、`idle`（空闲）
+- **状态追踪**：TUI 层订阅事件流计算状态，不改 Core
+- **最小显示时间**：思考状态最少显示 2 秒，避免 UI 闪烁
+- **附加信息**：可显示活动描述、Token 计数、努力程度等
+
+### 9.2 组件接口
+
+```typescript
+// packages/tui/src/components/Spinner.tsx
+
+type SpinnerMode = 'thinking' | 'tool' | 'idle'
+
+interface SpinnerProps {
+  mode: SpinnerMode
+  toolName?: string
+  activityDescription?: string
+  elapsed: number
+  tokenCount?: number
+  effortSuffix?: string
+  nextTask?: string
+  budgetText?: string
+}
+```
+
+### 9.3 显示效果
+
+**思考中**：
+```
+✻ Thinking...                            2.3s
+```
+
+**思考完成**：
+```
+✻ Thought for 2.3s                       2.5s
+```
+
+**工具执行中**：
+```
+✻ Reading src/foo.ts...                  5.1s
+```
+
+**工具完成**：
+```
+✻ Completed                              8.2s
+```
+
+**有下一个任务**：
+```
+✻ Thinking...                            1.2s
+  Next: Implement error handling
+```
+
+**Token 预算**：
+```
+✻ Writing code...                        3.4s
+  Target: 1,234 / 5,000 (25%) · ~2m remaining
+```
+
+### 9.4 状态追踪
+
+```typescript
+// packages/tui/src/hooks/useStateTracker.ts
+
+class StateTracker {
+  private thinkingStartTime?: number
+  private toolStartTime?: number
+
+  handleEvent(event: RunEvent): StateUpdate | null {
+    switch (event.type) {
+      case EventType.LlmRequest:
+        this.thinkingStartTime = Date.now()
+        return { state: 'thinking', elapsed: 0 }
+
+      case EventType.LlmStreamChunk:
+        if (this.thinkingStartTime) {
+          const elapsed = Date.now() - this.thinkingStartTime
+          this.thinkingStartTime = undefined
+          return { state: 'thinking_done', elapsed }
+        }
+        break
+
+      case EventType.ToolCallStarted:
+        this.toolStartTime = Date.now()
+        return { state: 'tool_running', tool: event.data.tool_name }
+
+      case EventType.ToolCallCompleted:
+        const elapsed = Date.now() - (this.toolStartTime || 0)
+        this.toolStartTime = undefined
+        return { state: 'tool_done', elapsed }
+    }
+    return null
+  }
+}
+```
+
+### 9.5 替换 StreamRenderer
+
+Spinner 组件替代 `StreamRenderer` 的以下方法：
+
+| StreamRenderer 方法 | 替换为 |
+|---------|--------|
+| `renderToolCallStarted()` | `<Spinner mode="tool" toolName={name} />` |
+| `renderToolCallCompleted()` | 显示完成状态 |
+| `renderToolCallFailed()` | 显示错误状态 |
+| (新增) | `<Spinner mode="thinking" />` |
+
+### 9.6 需要修改的文件
+
+| 文件 | 改动 | 说明 |
+|------|------|------|
+| `packages/tui/src/renderer/stream-renderer.ts` | 替换为 Ink 组件 | 或保留作为 fallback |
+| `packages/tui/src/components/Spinner.tsx` | **新增** | Spinner 组件 |
+| `packages/tui/src/components/ToolCallCard.tsx` | **新增** | 工具调用卡片 |
+| `packages/tui/src/components/ThinkingIndicator.tsx` | **新增** | 思考状态指示器 |
+| `packages/tui/src/components/ToolRenderers.tsx` | **新增** | 默认工具渲染器 |
+| `packages/tui/src/repl/ink-repl.tsx` | 修改 | 使用新组件 |
+| `packages/tui/src/hooks/useStateTracker.ts` | **新增** | 状态追踪 hook |
