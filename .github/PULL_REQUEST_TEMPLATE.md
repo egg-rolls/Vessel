@@ -1,3 +1,6 @@
+<!-- PR 标题格式：<type>(<scope>): <简短描述> #<issue-number> -->
+<!-- 示例：fix(core): AgentRuntime 改用静态工厂方法 #17 -->
+
 ## 变更说明
 <!-- 这个 PR 做了什么、为什么 -->
 

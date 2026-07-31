@@ -83,16 +83,46 @@ refactor/merge-tool-paths
 ## 三、Issue 命名
 
 ```
-<type>: <简短描述>
+<type>(<scope>): <简短描述>
 ```
 
-- `<type>`：`Bug` / `Feature` / `Docs` / `Refactor`
+- `<type>`：与 Commit type 一致（`feat` / `fix` / `docs` / `refactor` / `test` / `chore`）
+- `<scope>`：可选，与 Commit scope 一致（`core` / `config` / `tui` / `plugins` / `docs` / `ci`）
 - 标题一句话说清——不要让人点进去才知道是什么
+
+### 优先级 Label
+
+| Label | 含义 |
+|-------|------|
+| `P0` | 严重——影响核心功能或存在潜在 bug，优先修复 |
+| `P1` | 高——影响开发效率或质量，尽快处理 |
+| `P2` | 中——维护性/健壮性改进，排期处理 |
+| `P3` | 低——锦上添花，有空再做 |
 
 ### 示例
 
 ```
-Bug: ContextManager.clear() 不清除同一会话的多轮消息
-Feature: 支持 Anthropic Provider 插件
-Docs: 补充插件开发指南
+fix(core): ContextManager.clear() 不清除同一会话的多轮消息
+feat(plugins): 支持 Anthropic Provider 插件
+docs(plugins): 补充插件开发指南
+refactor(config): mergeConfig 改用通用深合并
+test(plugins): 补充 mcp-client 单元测试
+```
+
+## 四、PR 命名
+
+```
+<type>(<scope>): <简短描述> #<issue-number>
+```
+
+- `<type>` / `<scope>`：与 Commit、Issue 一致
+- 关联 Issue：标题末尾加 `#<issue-number>`（GitHub 自动建立链接）
+- 无关联 Issue 时可省略编号（但建议先建 Issue 再提 PR）
+
+### 示例
+
+```
+fix(core): AgentRuntime 改用静态工厂方法 #17
+refactor(src): 拆分 cli.ts Bootstrap 模块 #16
+docs(processes): 统一 Issue/PR 命名规范
 ```
