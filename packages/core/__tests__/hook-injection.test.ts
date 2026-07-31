@@ -45,10 +45,10 @@ function injectPlugin(prefix: string): Plugin {
   };
 }
 
-function buildRuntime(opts: { systemPrompt?: string; plugins: Plugin[] }) {
+async function buildRuntime(opts: { systemPrompt?: string; plugins: Plugin[] }) {
   const provider = new CapturingProvider();
   const context = new MemoryContextManager();
-  const runtime = new AgentRuntime({
+  const runtime = await AgentRuntime.create({
     provider,
     model: 'test',
     tools: new MemoryToolRegistry(),
@@ -65,11 +65,10 @@ function buildRuntime(opts: { systemPrompt?: string; plugins: Plugin[] }) {
 
 describe('BeforeLlm hook 注入消费（ADR-018）', () => {
   it('hook 注入内容进入 LLM 请求的 system 消息，含基底 systemPrompt', async () => {
-    const { runtime, provider } = buildRuntime({
+    const { runtime, provider } = await buildRuntime({
       systemPrompt: 'BASE-SYSTEM',
       plugins: [injectPlugin('INJECTED')],
     });
-    await runtime.ready;
     await runtime.run('hi');
 
     const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');
@@ -79,10 +78,9 @@ describe('BeforeLlm hook 注入消费（ADR-018）', () => {
   });
 
   it('无基底 systemPrompt 时，hook 注入前置一条 system 消息', async () => {
-    const { runtime, provider } = buildRuntime({
+    const { runtime, provider } = await buildRuntime({
       plugins: [injectPlugin('INJECTED')],
     });
-    await runtime.ready;
     await runtime.run('hi');
 
     const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');
@@ -91,11 +89,10 @@ describe('BeforeLlm hook 注入消费（ADR-018）', () => {
   });
 
   it('注入不污染 ContextManager 持久化的消息', async () => {
-    const { runtime, provider, context } = buildRuntime({
+    const { runtime, provider, context } = await buildRuntime({
       systemPrompt: 'BASE-SYSTEM',
       plugins: [injectPlugin('INJECTED')],
     });
-    await runtime.ready;
     await runtime.run('hi');
 
     // 请求侧有注入
@@ -109,11 +106,10 @@ describe('BeforeLlm hook 注入消费（ADR-018）', () => {
   });
 
   it('多个 hook 链式 prepend，都进入请求', async () => {
-    const { runtime, provider } = buildRuntime({
+    const { runtime, provider } = await buildRuntime({
       systemPrompt: 'BASE',
       plugins: [injectPlugin('FIRST'), injectPlugin('SECOND')],
     });
-    await runtime.ready;
     await runtime.run('hi');
 
     const sys = provider.receivedMessages.find((m) => m.role === 'system')?.content ?? '';
@@ -123,11 +119,10 @@ describe('BeforeLlm hook 注入消费（ADR-018）', () => {
   });
 
   it('无注入 hook 时，system 消息仍是基底（回归）', async () => {
-    const { runtime, provider } = buildRuntime({
+    const { runtime, provider } = await buildRuntime({
       systemPrompt: 'BASE-SYSTEM',
       plugins: [],
     });
-    await runtime.ready;
     await runtime.run('hi');
 
     const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');

@@ -67,7 +67,7 @@ describe('AgentRuntime', () => {
 
   beforeEach(() => {
     // 每个 test 独立的干净状态
-    runtime = new AgentRuntime({ ... });
+    runtime = await AgentRuntime.create({ ... });
   });
 
   it('should handle simple text response', async () => {

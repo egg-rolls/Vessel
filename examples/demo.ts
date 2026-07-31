@@ -47,7 +47,7 @@ async function main() {
   const session = new MemorySessionBackend();
 
   // 4. 创建 Runtime
-  const runtime = new AgentRuntime({
+  const runtime = await AgentRuntime.create({
     provider,
     model: 'gpt-4',
     tools,
