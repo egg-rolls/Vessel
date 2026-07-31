@@ -30,5 +30,3 @@ export { SQLiteSessionBackend } from './session/sqlite-backend.js';
 export { MemoryToolRegistry } from './tools/index.js';
 // 类型定义
 export * from './types/index.js';
-// 工具函数
-export { getCurrentGitBranch } from './utils/git.js';

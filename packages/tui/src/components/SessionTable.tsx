@@ -51,14 +51,14 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
     const lower = filterText.toLowerCase();
     return sessions.filter(
       (s) =>
-        (s.title && s.title.toLowerCase().includes(lower)) ||
-        (s.preview && s.preview.toLowerCase().includes(lower)) ||
-        (s.branch && s.branch.toLowerCase().includes(lower)) ||
+        s.title?.toLowerCase().includes(lower) ||
+        s.preview?.toLowerCase().includes(lower) ||
+        s.branch?.toLowerCase().includes(lower) ||
         s.session_id.toLowerCase().includes(lower),
     );
   }, [sessions, filterText]);
 
-  // Reset selection when filter changes
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filter changes
   useEffect(() => {
     setSelectedIndex(0);
   }, [filterText]);
@@ -158,12 +158,7 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
             <Text color="gray">_</Text>
           </Text>
         )}
-        {filterText && !filterMode && (
-          <Text color="yellow">
-            {' '}
-            | Filtered: "{filterText}"
-          </Text>
-        )}
+        {filterText && !filterMode && <Text color="yellow"> | Filtered: "{filterText}"</Text>}
       </Box>
 
       {/* Header */}
@@ -206,12 +201,8 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
               {' '}
               {truncate(s.session_id, maxIdWidth).padEnd(maxIdWidth, ' ')}
             </Text>
-            <Text color={timeColor}>
-              {String(s.message_count).padStart(4, ' ')}{' '}
-            </Text>
-            <Text color={timeColor}>
-              {formatRelativeTime(s.updated_at).padEnd(12, ' ')}
-            </Text>
+            <Text color={timeColor}>{String(s.message_count).padStart(4, ' ')} </Text>
+            <Text color={timeColor}>{formatRelativeTime(s.updated_at).padEnd(12, ' ')}</Text>
             <Text color={branchColor}>
               {truncate(s.branch || '-', maxBranchWidth).padEnd(maxBranchWidth, ' ')}
             </Text>

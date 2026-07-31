@@ -6,6 +6,7 @@
  */
 
 import type { AgentRuntime, Message, SessionBackend } from '../packages/core/src/index';
+import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
 
 export interface HeadlessOptions {
   /** 运行参数 */
@@ -53,7 +54,8 @@ export async function runHeadless(
   console.error(`[vessel] ${provider.name} | ${provider.model} | session ${sessionId}`);
 
   try {
-    const resp = await runtime.run(input, sessionId);
+    const branch = await getCurrentGitBranch();
+    const resp = await runtime.run(input, sessionId, { branch });
     console.log(resp);
     runtime.dispose?.();
     process.exit(0);

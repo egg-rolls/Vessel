@@ -18,6 +18,7 @@ import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import type { ReplContext } from '../repl-context.js';
+import { getCurrentGitBranch } from '../utils/git.js';
 
 interface InkReplProps {
   ctx: ReplContext;
@@ -111,7 +112,8 @@ function InkRepl({ ctx }: InkReplProps) {
       // StreamOutput 组件已通过事件流显示 token-by-token 输出，
       // 这里只处理错误情况，不重复添加成功输出到 history
       try {
-        await ctx.runtime.run(value, state.currentSessionId);
+        const branch = await getCurrentGitBranch();
+        await ctx.runtime.run(value, state.currentSessionId, { branch });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         setHistory((prev) => [...prev, `Error: ${errorMsg}`]);
@@ -302,7 +304,8 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
 
     // 处理普通消息
     try {
-      const response = await ctx.runtime.run(trimmed, state.currentSessionId);
+      const branch = await getCurrentGitBranch();
+      const response = await ctx.runtime.run(trimmed, state.currentSessionId, { branch });
       console.log(response);
     } catch (error) {
       const c = classifyError(error);
