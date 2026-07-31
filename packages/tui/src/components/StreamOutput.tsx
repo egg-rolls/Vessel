@@ -153,6 +153,11 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
               },
             ]);
           }
+          // 清空当前轮，避免与归档重复显示
+          tokensRef.current = [];
+          toolCallsRef.current = new Map();
+          setTokens([]);
+          setToolCalls(new Map());
           setIsStreaming(false);
           break;
         }
