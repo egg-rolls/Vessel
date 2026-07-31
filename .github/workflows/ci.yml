@@ -1,12 +1,13 @@
 name: CI
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
+  push:
+    branches: [main]
 
 jobs:
+  # ── 常规质量检查（PR + main push 都跑）─────────
   quality:
     name: Quality Checks
     runs-on: ubuntu-latest
@@ -35,3 +36,35 @@ jobs:
 
       - name: Build packages
         run: bun run build
+
+  # ── 冒烟测试（仅 main push 后跑，PR 不跑）─────
+  smoke:
+    name: Smoke Tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: quality
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: headless mock 模式
+        run: VESSEL_MOCK=1 bun run src/cli.ts --run "hello"
+
+      - name: headless 管道模式
+        run: echo "hello" | VESSEL_MOCK=1 bun run src/cli.ts --run
+
+      - name: 交互模式 /exit
+        run: echo "/exit" | VESSEL_MOCK=1 bun run src/cli.ts
+
+      - name: /help 命令
+        run: echo "/help" | VESSEL_MOCK=1 bun run src/cli.ts
