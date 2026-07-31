@@ -2,6 +2,7 @@
 
 > 本文档定义 Vessel **怎么建**：架构、模块、接口契约、执行模型、扩展与配置模型。
 > 决策的"为什么"见 [ADR.md](ADR.md)；产品"做什么"见 [PRD.md](PRD.md)；分期见 [ROADMAP.md](ROADMAP.md)；术语见 [GLOSSARY.md](GLOSSARY.md)。
+> **Core 接口快速参考**：见 [CORE.md](CORE.md)。
 > 标注 `[plan]` 的接口为未实现契约（设计已锚定，实现按 ROADMAP 分期交付）。
 
 ## 1. 系统架构
