@@ -45,7 +45,7 @@ export function startSseBridge(events: EventStream, port = 3333): SseBridge {
 
   const server = Bun.serve({
     port,
-    fetch(req, srv) {
+    fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === '/events') {
         let controller: ReadableStreamDefaultController;
@@ -86,7 +86,7 @@ export function startSseBridge(events: EventStream, port = 3333): SseBridge {
   });
 
   return {
-    port: server.port,
+    port: server.port ?? port,
     get clientCount() {
       return clients.size;
     },
