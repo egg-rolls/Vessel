@@ -183,7 +183,11 @@ function InkRepl({ ctx }: InkReplProps) {
       ))}
 
       {/* 流式输出（当前轮） */}
-      <StreamOutput events={ctx.events} clearSignal={clearSignal} onComplete={handleStreamComplete} />
+      <StreamOutput
+        events={ctx.events}
+        clearSignal={clearSignal}
+        onComplete={handleStreamComplete}
+      />
 
       {/* 命令菜单 */}
       {showCommandMenu && (

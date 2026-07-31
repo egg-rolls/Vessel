@@ -298,7 +298,11 @@ async function resolveResumeTarget(
 }
 
 /** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史 */
-export async function doResume(ctx: ReplContext, state: ReplState, sessionId: string): Promise<void> {
+export async function doResume(
+  ctx: ReplContext,
+  state: ReplState,
+  sessionId: string,
+): Promise<void> {
   ctx.context.clear();
   state.currentSessionId = sessionId;
   ctx.onSessionChange(sessionId);
