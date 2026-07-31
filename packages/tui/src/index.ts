@@ -39,3 +39,7 @@ export { StreamOutput } from './components/StreamOutput.js';
 export { CommandMenu } from './components/CommandMenu.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export { SessionTable } from './components/SessionTable.js';
+
+// SSE Bridge
+export { startSseBridge } from './sse-bridge.js';
+export type { SseBridge } from './sse-bridge.js';
