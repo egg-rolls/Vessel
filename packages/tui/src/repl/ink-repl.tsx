@@ -109,8 +109,8 @@ function InkRepl({ ctx }: InkReplProps) {
       }
 
       // 处理普通消息 - 调用 runtime.run
-      // StreamOutput 组件已通过事件流显示 token-by-token 输出，
-      // 这里只处理错误情况，不重复添加成功输出到 history
+      // StreamOutput 组件通过事件流显示 token-by-token 输出，
+      // run 完成后通过 onComplete 回调将响应归档到 history
       try {
         const branch = await getCurrentGitBranch();
         await ctx.runtime.run(value, state.currentSessionId, { branch });
@@ -158,6 +158,11 @@ function InkRepl({ ctx }: InkReplProps) {
     [confirmResolve],
   );
 
+  // StreamOutput 完成回调：将 AI 响应归档到 history
+  const handleStreamComplete = useCallback((responseText: string) => {
+    setHistory((prev) => [...prev, responseText]);
+  }, []);
+
   // 退出处理
   useEffect(() => {
     if (!state.running) {
@@ -177,8 +182,8 @@ function InkRepl({ ctx }: InkReplProps) {
         <Text key={i}>{line}</Text>
       ))}
 
-      {/* 流式输出 */}
-      <StreamOutput events={ctx.events} clearSignal={clearSignal} />
+      {/* 流式输出（当前轮） */}
+      <StreamOutput events={ctx.events} clearSignal={clearSignal} onComplete={handleStreamComplete} />
 
       {/* 命令菜单 */}
       {showCommandMenu && (

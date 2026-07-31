@@ -2,7 +2,7 @@
  * 流式输出组件
  * 订阅 EventStream，实现 token-by-token 打字机动画 + 工具调用 spinner
  *
- * 已完成的 run 输出会归档到 completedOutputs，不会被下一轮 run 清除。
+ * 只负责当前轮的实时流式显示。run 完成后通过 onComplete 回调通知父组件归档。
  */
 
 import type { EventStream, RunEvent } from '@vessel/core';
@@ -10,11 +10,6 @@ import { EventType } from '@vessel/core';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { useEffect, useRef, useState } from 'react';
-
-interface StreamOutputProps {
-  events: EventStream;
-  clearSignal?: number; // /clear 命令信号
-}
 
 interface ToolCall {
   id: string;
@@ -25,28 +20,29 @@ interface ToolCall {
   error?: string;
 }
 
-/** 单次 run 的归档输出 */
-interface CompletedOutput {
-  tokens: string[];
-  toolCalls: Map<string, ToolCall>;
+interface StreamOutputProps {
+  events: EventStream;
+  clearSignal?: number;
+  /** 当前轮 run 完成时回调，传回响应文本 */
+  onComplete?: (responseText: string) => void;
 }
 
-export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
+export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputProps) {
   const [tokens, setTokens] = useState<string[]>([]);
   const [toolCalls, setToolCalls] = useState<Map<string, ToolCall>>(new Map());
   const [isStreaming, setIsStreaming] = useState(false);
-  const [completedOutputs, setCompletedOutputs] = useState<CompletedOutput[]>([]);
   const tokensRef = useRef<string[]>([]);
   const toolCallsRef = useRef<Map<string, ToolCall>>(new Map());
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
-  // 监听 clearSignal 变化，清空所有状态（含归档）
+  // 监听 clearSignal 变化，清空状态
   useEffect(() => {
     if (clearSignal !== undefined && clearSignal > 0) {
       tokensRef.current = [];
       toolCallsRef.current = new Map();
       setTokens([]);
       setToolCalls(new Map());
-      setCompletedOutputs([]);
       setIsStreaming(false);
     }
   }, [clearSignal]);
@@ -55,7 +51,6 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
     const unsubscribe = events.subscribe((event: RunEvent) => {
       switch (event.type) {
         case EventType.RunStarted: {
-          // 只清空当前轮的 tokens 和 toolCalls，保留已完成的归档
           tokensRef.current = [];
           toolCallsRef.current = new Map();
           setTokens([]);
@@ -141,19 +136,12 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
 
         case EventType.RunCompleted:
         case EventType.RunFailed: {
-          // 将当前轮输出归档，使其不被下一轮 RunStarted 清除
-          const currentTokens = tokensRef.current;
-          const currentToolCalls = toolCallsRef.current;
-          if (currentTokens.length > 0 || currentToolCalls.size > 0) {
-            setCompletedOutputs((prev) => [
-              ...prev,
-              {
-                tokens: [...currentTokens],
-                toolCalls: new Map(currentToolCalls),
-              },
-            ]);
+          // 通知父组件归档当前轮输出
+          const responseText = tokensRef.current.join('');
+          if (responseText) {
+            onCompleteRef.current?.(responseText);
           }
-          // 清空当前轮，避免与归档重复显示
+          // 清空当前轮
           tokensRef.current = [];
           toolCallsRef.current = new Map();
           setTokens([]);
@@ -169,34 +157,6 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
 
   return (
     <Box flexDirection="column">
-      {/* 已归档的历史输出 */}
-      {completedOutputs.map((output, idx) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: completed outputs are append-only
-        <Box key={idx} flexDirection="column">
-          {output.tokens.length > 0 && (
-            <Box>
-              <Text>{output.tokens.join('')}</Text>
-            </Box>
-          )}
-          {Array.from(output.toolCalls.values()).map((call) => (
-            <Box key={call.id} marginY={1}>
-              {call.status === 'completed' && (
-                <Box>
-                  <Text color="green">✓ {call.name}</Text>
-                  <Text color="gray"> {call.duration}ms</Text>
-                </Box>
-              )}
-              {call.status === 'failed' && (
-                <Box>
-                  <Text color="red">✗ {call.name}</Text>
-                  <Text color="red"> {call.error}</Text>
-                </Box>
-              )}
-            </Box>
-          ))}
-        </Box>
-      ))}
-
       {/* 当前轮流式 token 输出 */}
       {tokens.length > 0 && (
         <Box>
