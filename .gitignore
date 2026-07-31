@@ -142,3 +142,4 @@ docker-compose.override.yml
 .nuxt/
 .sst/
 .wrangler/
+.codegraph/
