@@ -20,7 +20,7 @@
 
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
-import { bootstrap, type BootstrapResult } from './bootstrap';
+import { type BootstrapResult, bootstrap } from './bootstrap';
 import { runHeadless } from './headless-runner';
 
 // ── argv 解析 ────────────────────────────────────

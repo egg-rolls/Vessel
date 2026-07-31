@@ -34,3 +34,48 @@ git push -u origin fix/xxx                        # 2. 推送
 - 合并后修复（先修再合）
 - Force push main
 - 一个分支塞不相关的改动
+
+## 五、创建 Issue 和 PR 的技巧
+
+### 1. 创建 Issue
+
+```bash
+# ✅ 使用 --body-file + 绝对路径 + .txt 文件
+gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file "D:/Application/APP/Vessel/issue-body.txt"
+```
+
+### 2. 创建 PR
+
+**问题**：中文内容和特殊字符会导致 shell 解析出错。
+
+**解决方案**：分两步创建。
+
+```bash
+# 步骤1：先用英文创建 PR（简单 body）
+gh pr create --title "feat(tui): new feature" --body "Closes #13" --base main --head feat/my-feature
+
+# 步骤2：再用 gh pr edit 更新中文内容
+gh pr edit 13 --body "$(cat D:/Application/APP/Vessel/pr-body.txt)"
+```
+
+### 3. 技巧总结
+
+| 技巧 | 说明 |
+|------|------|
+| 使用绝对路径 | `"D:/Application/APP/Vessel/pr-body.txt"` 而不是 `pr-body.txt` |
+| 使用 `.txt` 文件 | `.md` 文件可能有特殊字符 |
+| 分两步创建 | 先英文创建，再 `gh pr edit` 更新中文内容 |
+| 使用 `$(cat file)` | `--body "$(cat file.txt)"` 比 `--body-file` 更稳定 |
+
+### 4. 示例
+
+```bash
+# 创建 Issue
+echo "功能描述..." > issue-body.txt
+gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file "D:/Application/APP/Vessel/issue-body.txt"
+
+# 创建 PR
+echo "PR 描述..." > pr-body.txt
+gh pr create --title "feat(tui): new feature" --body "Closes #13" --base main --head feat/my-feature
+gh pr edit 13 --body "$(cat D:/Application/APP/Vessel/pr-body.txt)"
+```
