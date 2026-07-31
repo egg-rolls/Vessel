@@ -377,6 +377,8 @@ export class AgentRuntime {
           response.usage.prompt_tokens ?? 0,
           response.usage.completion_tokens ?? 0,
         );
+        // Auto Compact：用 LLM 真实 token 数替代字符估算
+        this.context.updateRealTokens(this.stats.totalTokens);
       }
 
       // 发布 LLM 响应事件
