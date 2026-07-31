@@ -195,3 +195,68 @@
 - **备选**：(a) 放弃 Biome 的 naming convention 规则——退回到无规则状态，代价是没有统一的 TS 命名约束。(b) 在 `biome.json` 中全局关闭 `useNamingConvention`——简单但失去 lint 保护，且其他 `snake_case` 滥用不会被检测。(c) 不改 TS 类型，对每个字段加 biome-ignore 行级注释——维护成本高、代码丑。均不取。
 - **后果**：下游代码（cli、tui、core、plugins）需要使用 `config.provider.baseUrl` 而非 `config.provider.base_url`。YAML 文件语法不变，用户无感知。Core API 协议相关文件需要少量 biome-ignore 压制。`@vessel/config` 增加 `snakeToCamel` 映射函数，配置加载逻辑稍增但不影响运行时性能（只在加载时执行一次）。
 - **关联**：ADR-005（双层配置）、ADR-013（Biome）；[DOC-STANDARD.md](DOC-STANDARD.md) §四；[SPEC.md §6](SPEC.md)。
+
+---
+
+## ADR-020：双轨命令体系——斜杠命令（人类）与控制台命令（AI）
+
+- **上下文**：Vessel 需要两类命令接口：(1) 人类用户在 REPL 中使用的斜杠命令（`/xxx`）；(2) AI/脚本通过 CLI 调用的控制台命令（`vessel xxx`）。当前实现（commands.ts）注释明确："斜杠命令（扁平结构：`/<command> [args]`）"，所有命令均为顶层。
+- **决策**：
+  1. **斜杠命令（`/xxx`）——人类用户**：扁平结构、好记易用、进入 TUI 交互界面、AI 不可调用。命令清单：`/sessions`、`/tools`、`/plugins`、`/mcp`、`/skills`、`/assets`、`/setup`、`/reload`、`/clear`、`/help`、`/exit`。
+  2. **控制台命令（`vessel xxx`）——AI/脚本**：复合结构（`vessel <domain> <action>`）、可脚本化、输出结构化（JSON/表格）、有完整 CLI 文档。
+  3. **交互界面模式**：所有浏览器界面遵循统一模式（`┌─ [Title] ─┐` + 列表 + 快捷键提示），标准快捷键：`↑↓` 导航、`Enter` 详情、`Esc` 返回、`R` 刷新。
+  4. **与元资产工具的关系**：SPEC.md §1.2 的元资产工具（`search_assets`、`add_tool` 等）是 AI 通过 tool-calling 调用的；控制台命令是人类/AI 通过 CLI 调用的接口，两者互补。
+- **备选**：(a) 单轨体系——斜杠命令和控制台命令共用同一套——但人类需要图形化交互，AI 需要结构化输出，需求冲突。(b) 斜杠命令直接执行操作——但失去交互界面的选择、确认能力。
+- **后果**：职责清晰（人类用斜杠命令，AI 用控制台命令）、体验优化（人类获图形化界面，AI 获结构化输出）、扩展性好。代价：需维护两套命令体系、需编写控制台命令文档。
+- **关联**：ADR-011、SPEC.md §5.1；[tui.md](../api/tui.md) §7。
+
+---
+
+## ADR-021：工具显示接口——TUI 层定义，不改 Core
+
+- **上下文**：当前工具调用显示（`🔧 tool_name args ✓ duration_ms`）过于简单，需要支持更丰富的显示：工具活动描述、进度状态、结果渲染、错误显示等。Claude Code 的工具显示接口设计值得参考。
+- **决策**：
+  1. **不改 Core**：`@vessel/core` 的 `ToolDefinition` 保持不变（`name`, `description`, `inputSchema`, `handler`）。显示接口在 TUI 层单独定义。
+  2. **TUI 层定义 `ToolDisplayDefinition`**：
+     ```typescript
+     interface ToolDisplayDefinition {
+       userFacingName(input: unknown): string
+       userFacingColor?(input: unknown): string
+       renderToolUseMessage(input: unknown, options: DisplayOptions): React.ReactNode
+       getActivityDescription?(input: unknown): string | null
+       renderToolResultMessage?(result: string, options: DisplayOptions): React.ReactNode
+       renderToolUseErrorMessage?(error: string, options: DisplayOptions): React.ReactNode
+     }
+     ```
+  3. **注册机制**：TUI 层维护 `ToolDisplayRegistry`，工具可以注册自定义显示定义，未注册的工具使用默认渲染器。
+  4. **简化设计**：移除 `isSearchOrReadCommand`（折叠显示）和 `isResultTruncated`（点击展开）等辅助功能，用默认行为替代。
+- **备选**：(a) 扩展 Core 的 `ToolDefinition` 加 `display` 字段——违反 ADR-017 Core 冻结。(b) 不定义接口，每个工具硬编码渲染逻辑——难以维护。
+- **后果**：Core 不改动，显示逻辑集中在 TUI 层，可独立演化。内置工具可以注册自定义显示，第三方工具使用默认渲染器。
+- **关联**：ADR-017（Core 冻结）、ADR-020（命令设计）；Claude Code `Tool.ts` 参考。
+
+---
+
+## ADR-022：Spinner 状态显示——追踪思考/工具执行状态
+
+- **上下文**：当前 REPL 没有"思考中"状态显示，用户不知道 AI 是否在思考、思考了多久、是否在等待响应。Claude Code 的 Spinner 组件设计值得参考。
+- **决策**：
+  1. **Spinner 组件**：实现 `<SpinnerWithVerb>` 组件，支持三种模式：
+     - `thinking`：思考中，显示 `🤔 Thinking...`
+     - `tool`：工具执行中，显示活动描述（如 `📖 Reading src/foo.ts`）
+     - `idle`：空闲，显示 `✻ Idle`
+  2. **状态追踪**：TUI 层实现 `StateTracker`，订阅事件流计算状态：
+     - `LlmRequest` → `thinking` 开始
+     - `LlmStreamChunk` → `thinking` 结束，计算时长
+     - `ToolCallStarted` → `tool` 开始
+     - `ToolCallCompleted` → `tool` 结束
+  3. **最小显示时间**：思考状态最少显示 2 秒，避免 UI 闪烁。
+  4. **附加信息**：Spinner 可显示：
+     - 活动描述（`getActivityDescription()`）
+     - Token 计数
+     - 努力程度（effort suffix）
+     - 下一个任务（如果有）
+     - Token 预算（如果配置）
+  5. **替代当前实现**：Spinner 组件替代 `StreamRenderer` 的 `renderToolCallStarted/Completed/Failed` 方法，提供更丰富的显示。
+- **备选**：(a) 保持当前简单文本输出——用户体验差。(b) 在 Core 层追踪状态——违反 ADR-017。
+- **后果**：用户获得更好的状态反馈，知道 AI 是否在思考、思考了多久、执行了什么工具。需要修改 TUI 层的 StreamRenderer 和 REPL 组件。
+- **关联**：ADR-017（Core 冻结）、ADR-021（工具显示）；Claude Code `Spinner.tsx` 参考。

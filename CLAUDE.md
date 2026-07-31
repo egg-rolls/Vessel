@@ -48,6 +48,7 @@ AI 改 specs/guides/api 后自检：
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)（核心规则已在 §9） |
 | 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
 | 搭环境/写测试/构建/开发插件 | [docs/guides/](docs/guides/) |
+| 查 Core 接口 | [docs/specs/CORE.md](docs/specs/CORE.md)（快速参考） |
 | 查 API 签名 | [docs/api/core.md](docs/api/core.md) |
 | 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
 | Commit/分支/Issue 命名规范 | [processes/conventions.md](processes/conventions.md) |
