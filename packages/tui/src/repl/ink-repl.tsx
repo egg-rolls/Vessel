@@ -201,8 +201,95 @@ function InkRepl({ ctx }: InkReplProps) {
 /**
  * Ink 版本的 startRepl
  * 保持与 readline 版本相同的函数签名
+ *
+ * 支持 TTY 和非 TTY 环境：
+ * - TTY：使用完整的 Ink UI
+ * - 非 TTY：使用简单的行模式（兼容管道输入）
  */
 export async function startInkRepl(ctx: ReplContext): Promise<void> {
+  // 非 TTY 环境（如管道输入）使用简单的行模式
+  if (!process.stdin.isTTY) {
+    await runSimpleMode(ctx);
+    return;
+  }
+
+  // TTY 环境使用完整的 Ink UI
   const { waitUntilExit } = render(<InkRepl ctx={ctx} />);
   await waitUntilExit();
+}
+
+/**
+ * 简单行模式（非 TTY 环境）
+ *
+ * 当 stdin 不是 TTY 时（如管道输入），使用简单的行模式
+ * 避免 Ink 的 raw mode 错误
+ */
+async function runSimpleMode(ctx: ReplContext): Promise<void> {
+  const { createCommands, consumePendingResume } = await import('../commands/commands.js');
+  const { classifyError } = await import('../error-classifier.js');
+
+  const commands = createCommands();
+  const state = {
+    currentSessionId: ctx.currentSessionId,
+    pendingResume: false,
+    running: true,
+  };
+
+  console.log(`Vessel  ·  ${ctx.provider.name} | ${ctx.provider.model}`);
+  console.log(`session: ${state.currentSessionId}`);
+  console.log('Type your message, or /help for commands.\n');
+
+  const lines: string[] = [];
+  let lineIndex = 0;
+
+  // 从 stdin 读取所有行
+  const stdinText = await Bun.stdin.text();
+  lines.push(...stdinText.split('\n').filter((l) => l.trim()));
+
+  const nextLine = (): string | null => {
+    if (lineIndex >= lines.length) return null;
+    return lines[lineIndex++] ?? null;
+  };
+
+  while (state.running) {
+    const line = nextLine();
+    if (line === null) break;
+
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // 处理 /session resume 的 pending one-shot
+    if (state.pendingResume) {
+      if (/^\d+$/.test(trimmed)) {
+        await consumePendingResume(trimmed, ctx, state);
+        continue;
+      }
+      state.pendingResume = false;
+    }
+
+    // 处理命令
+    if (trimmed.startsWith('/')) {
+      const result = await commands.execute(trimmed.slice(1), ctx, state);
+      if (!result.handled) {
+        const name = trimmed.split(/\s+/)[0] ?? trimmed;
+        console.log(`Unknown command: ${name}. Type /help for available commands.`);
+      }
+      continue;
+    }
+
+    // 处理普通消息
+    try {
+      const response = await ctx.runtime.run(trimmed, state.currentSessionId);
+      console.log(response);
+    } catch (error) {
+      const c = classifyError(error);
+      if (c.hint) {
+        console.error(`✗ [${c.category}] ${c.message}\n  ${c.hint}`);
+      } else {
+        console.error(`✗ [${c.category}] ${c.message}`);
+      }
+    }
+  }
+
+  ctx.onExit();
 }

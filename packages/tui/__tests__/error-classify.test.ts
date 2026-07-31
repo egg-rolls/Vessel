@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { classifyError } from '../src/repl/repl.js';
+import { classifyError } from '../src/error-classifier.js';
 
 describe('classifyError', () => {
   it('分类网络错误', () => {
