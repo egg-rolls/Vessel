@@ -154,7 +154,8 @@ function InkRepl({ ctx }: InkReplProps) {
 
       {/* 历史记录 */}
       {history.map((line, i) => (
-        <Text key={`line-${line.substring(0, 20)}-${i}`}>{line}</Text>
+        // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
+        <Text key={i}>{line}</Text>
       ))}
 
       {/* 流式输出 */}
