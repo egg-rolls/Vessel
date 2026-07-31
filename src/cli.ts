@@ -18,7 +18,7 @@
  * - Ink REPL：React 组件式终端 UI
  */
 
-import { startInkRepl } from '../packages/tui/src/index';
+import { startInkRepl, startSseBridge } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { runHeadless } from './headless-runner';
@@ -30,6 +30,7 @@ const argv = process.argv.slice(2);
 let runArg: string | null = null;
 let pipeMode = false; // --pipe 隐藏别名，等价 --run 无参（读 stdin）
 let sessionArg: string | null = null;
+let ssePort = 0; // --sse-port <port> 启动 SSE bridge（0=关闭）
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--run' || a === '-r') {
@@ -48,7 +49,12 @@ for (let i = 0; i < argv.length; i++) {
       sessionArg = next;
       i++;
     }
-    // 无值或下一个是 flag → sessionArg 保持 null，shell 会用 newSessionId()
+  } else if (a === '--sse-port') {
+    const next = argv[i + 1];
+    if (next !== undefined && !next.startsWith('-')) {
+      ssePort = Number.parseInt(next, 10);
+      i++;
+    }
   } else if (a === '--help' || a === '-h') {
     console.log(`Vessel CLI
 
@@ -57,6 +63,7 @@ for (let i = 0; i < argv.length; i++) {
   bun run src/cli.ts --run @path                    headless：.json=多轮 seeding，其它=文本 prompt
   echo "..." | bun run src/cli.ts --run             headless 单轮（stdin）
   bun run src/cli.ts --session <id> --run "..."     续接会话
+  bun run src/cli.ts --sse-port 3333                启动 SSE bridge（浏览器 GUI）
   VESSEL_MOCK=1 bun run src/cli.ts --run "x"        mock 模式（不调 API）`);
     process.exit(0);
   }
@@ -73,6 +80,12 @@ const { runtime, ctx, config, cleanup } = await bootstrap({
   sessionId: sessionArg ?? undefined,
   headless,
 });
+
+// SSE bridge（--sse-port 启用）
+const sseBridge = ssePort > 0 ? startSseBridge(ctx.events, ssePort) : null;
+if (sseBridge) {
+  console.log(`SSE bridge: http://localhost:${sseBridge.port}/events`);
+}
 
 // 首启向导（仅交互模式）
 if (!useMock && !headless && !config.apiKey) {
@@ -123,5 +136,6 @@ async function runWithConfig(result: BootstrapResult) {
     await startInkRepl(ctx);
   }
 
+  sseBridge?.stop();
   cleanup();
 }
