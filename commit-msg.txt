@@ -1,0 +1,1 @@
+chore: 添加 .codegraph 到 .gitignore

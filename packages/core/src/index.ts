@@ -7,32 +7,26 @@
  * tool registry、limits、guardrail、hooks、PluginHost。
  */
 
-// 类型定义
-export * from './types/index.js';
-
-// 事件流
-export { MemoryEventStream } from './events/index.js';
-
-// 工具注册表
-export { MemoryToolRegistry } from './tools/index.js';
-
 // 上下文管理器
 export { MemoryContextManager } from './context/index.js';
 
-// 会话后端
-export { MemorySessionBackend, FileSessionBackend } from './session/index.js';
-export { SQLiteSessionBackend } from './session/sqlite-backend.js';
-
+// 事件流
+export { MemoryEventStream } from './events/index.js';
 // 限制检查器
 export { MemoryLimitChecker } from './limits/index.js';
-
 // Provider
 export {
+  AnthropicProvider,
   MemoryLLMProvider,
   OpenAICompatibleProvider,
-  AnthropicProvider,
 } from './provider/index.js';
-
+export type { RunOptions } from './runtime/agent-runtime.js';
 // 运行时
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
-export type { RunOptions } from './runtime/agent-runtime.js';
+// 会话后端
+export { FileSessionBackend, MemorySessionBackend } from './session/index.js';
+export { SQLiteSessionBackend } from './session/sqlite-backend.js';
+// 工具注册表
+export { MemoryToolRegistry } from './tools/index.js';
+// 类型定义
+export * from './types/index.js';

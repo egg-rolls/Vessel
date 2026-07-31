@@ -6,15 +6,15 @@
  * 零配置起步 + 渐进披露。
  */
 
-export * from './types.js';
 export { DEFAULT_CONFIG } from './defaults.js';
-export { validateConfig, findUnknownKeys, KNOWN_CONFIG_KEYS } from './validator.js';
 export {
-  loadConfig,
-  loadConfigFromFile,
-  loadConfigFromEnv,
-  loadUserConfig,
   getUserConfigDir,
   getUserConfigPath,
+  loadConfig,
+  loadConfigFromEnv,
+  loadConfigFromFile,
+  loadUserConfig,
   mergeConfig,
 } from './loader.js';
+export * from './types.js';
+export { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';

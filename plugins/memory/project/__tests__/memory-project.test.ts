@@ -2,8 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { HookType, MemoryPluginHost } from '@vessel/core';
 import type { ToolContext } from '@vessel/core';
+import { HookType, MemoryPluginHost } from '@vessel/core';
 import memoryProjectPlugin from '../src/index';
 
 describe('memory-project 插件（MECH-2）', () => {

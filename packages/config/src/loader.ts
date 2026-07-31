@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG } from './defaults.js';
 import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
-import { KNOWN_CONFIG_KEYS, findUnknownKeys, validateConfig } from './validator.js';
+import { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
 
 /**
  * 将对象的所有键从 snake_case 递归转为 camelCase。

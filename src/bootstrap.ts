@@ -20,8 +20,8 @@ import {
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import {
-  ToolPermissionChecker,
   createPermissionGuardrail,
+  ToolPermissionChecker,
 } from '../packages/tui/src/renderer/tool-confirm';
 import { PluginRegistry } from './plugin-registry';
 

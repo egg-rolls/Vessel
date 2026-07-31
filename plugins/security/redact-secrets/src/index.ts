@@ -71,7 +71,7 @@ const BUILTIN_RULES: RedactRule[] = [
   // Bearer token
   {
     name: 'bearer-token',
-    pattern: /bearer\s+[A-Za-z0-9_\-\.=]{16,}/gi,
+    pattern: /bearer\s+[A-Za-z0-9_\-.=]{16,}/gi,
     replacement: 'Bearer ***REDACTED***',
   },
   // JWT token
@@ -89,7 +89,7 @@ const BUILTIN_RULES: RedactRule[] = [
   // AWS Secret Key (heuristic)
   {
     name: 'aws-secret-key',
-    pattern: /(?:aws[_-]?secret|secret[_-]?key)\s*[:=]\s*['"]?([A-Za-z0-9\/+=]{30,})['"]?/gi,
+    pattern: /(?:aws[_-]?secret|secret[_-]?key)\s*[:=]\s*['"]?([A-Za-z0-9/+=]{30,})['"]?/gi,
     replacement: '***AWS-SECRET-REDACTED***',
   },
   // GitHub Personal Access Token

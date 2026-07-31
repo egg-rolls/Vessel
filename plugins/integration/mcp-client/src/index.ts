@@ -687,8 +687,8 @@ export const mcpClientPlugin: Plugin = {
   },
 };
 
+export type { McpPrompt, McpResource, McpTool };
 // 导出类型和类供外部使用
-export { McpConnection, McpClientManager };
-export type { McpTool, McpResource, McpPrompt };
+export { McpClientManager, McpConnection };
 
 export default mcpClientPlugin;

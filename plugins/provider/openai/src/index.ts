@@ -4,8 +4,9 @@
  * 注册所有 OpenAI 兼容的 provider（openai / google / mistral / ollama / cohere），
  * 全部走核心 OpenAICompatibleProvider，仅 base_url 与默认 model 不同。
  */
-import { OpenAICompatibleProvider } from '@vessel/core';
+
 import type { Plugin, PluginHost } from '@vessel/core';
+import { OpenAICompatibleProvider } from '@vessel/core';
 
 /** Provider 注册项：名字 + 默认 base_url + 默认 model */
 const PROVIDERS: Array<{ name: string; baseUrl: string; model: string }> = [

@@ -7,39 +7,32 @@
  * 使用 Ink 框架实现 React 组件式终端 UI。
  */
 
-// Ink 版本（React 组件式 UI）
-export { startInkRepl } from './repl/ink-repl.js';
-
-// 错误分类器
-export { classifyError, type ErrorCategory, type ClassifiedError } from './error-classifier.js';
-
-export type { ReplContext } from './repl-context.js';
-
-export { createCommands, consumePendingResume, CommandRegistry } from './commands/commands.js';
 export type {
-  ReplState,
   CommandEntry,
-  SubCommand,
   CommandResult,
+  ReplState,
+  SubCommand,
 } from './commands/commands.js';
-
-export { SetupWizard, runSetupWizard } from './wizard/setup-wizard.js';
-export type { SetupWizardConfig } from './wizard/setup-wizard.js';
-
-export {
-  buildBanner,
-  buildSessionTable,
-  infoPanel,
-  divider,
-} from './rich-renderer.js';
-
-// Ink 组件
-export { StatusBar } from './components/StatusBar.js';
-export { StreamOutput } from './components/StreamOutput.js';
+export { CommandRegistry, consumePendingResume, createCommands } from './commands/commands.js';
 export { CommandMenu } from './components/CommandMenu.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export { SessionTable } from './components/SessionTable.js';
-
+// Ink 组件
+export { StatusBar } from './components/StatusBar.js';
+export { StreamOutput } from './components/StreamOutput.js';
+// 错误分类器
+export { type ClassifiedError, classifyError, type ErrorCategory } from './error-classifier.js';
+// Ink 版本（React 组件式 UI）
+export { startInkRepl } from './repl/ink-repl.js';
+export type { ReplContext } from './repl-context.js';
+export {
+  buildBanner,
+  buildSessionTable,
+  divider,
+  infoPanel,
+} from './rich-renderer.js';
+export type { SseBridge } from './sse-bridge.js';
 // SSE Bridge
 export { startSseBridge } from './sse-bridge.js';
-export type { SseBridge } from './sse-bridge.js';
+export type { SetupWizardConfig } from './wizard/setup-wizard.js';
+export { runSetupWizard, SetupWizard } from './wizard/setup-wizard.js';

@@ -6,7 +6,7 @@
  * 保持 startRepl(ctx) 函数签名不变，壳不感知替换。
  */
 
-import { Box, Text, render, useApp, useInput } from 'ink';
+import { Box, render, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
