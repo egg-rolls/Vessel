@@ -299,7 +299,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
 
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
     const response = await fetch(url, {
       method: 'POST',
@@ -383,7 +383,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     };
 
     const streamHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (this.apiKey) streamHeaders['Authorization'] = `Bearer ${this.apiKey}`;
+    if (this.apiKey) streamHeaders.Authorization = `Bearer ${this.apiKey}`;
 
     const response = await fetch(url, {
       method: 'POST',

@@ -69,7 +69,7 @@ async function fetchModels(
     headers['x-api-key'] = apiKey;
     headers['anthropic-version'] = '2023-06-01';
   } else {
-    headers['Authorization'] = `Bearer ${apiKey}`;
+    headers.Authorization = `Bearer ${apiKey}`;
   }
   const res = await fetch(url, {
     headers,
@@ -191,7 +191,7 @@ export class SetupWizard {
       const choice = await this.ask(
         `\n  选择默认模型 (1-${Math.min(models.length, 20)}, 默认 1): `,
       );
-      const idx = Number.parseInt(choice) - 1;
+      const idx = Number.parseInt(choice, 10) - 1;
       if (!Number.isNaN(idx) && idx >= 0 && idx < models.length) {
         selectedModel = models[idx]?.id ?? defaultModel;
       }

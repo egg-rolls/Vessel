@@ -2,8 +2,9 @@
  * @vessel/provider-anthropic — Anthropic Claude Provider 插件
  * 薄工厂：实例化核心 AnthropicProvider。
  */
-import { AnthropicProvider } from '@vessel/core';
+
 import type { Plugin, PluginHost } from '@vessel/core';
+import { AnthropicProvider } from '@vessel/core';
 
 const plugin: Plugin = {
   name: 'provider-anthropic',

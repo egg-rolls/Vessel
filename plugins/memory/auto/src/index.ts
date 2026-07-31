@@ -116,15 +116,15 @@ function extractPreferences(text: string, runId: string): AutoMemory[] {
   const results: AutoMemory[] = [];
   const prefPatterns = [
     {
-      regex: /(?:我(?:更)?喜欢|I prefer|我更习惯)\s+(.+?)(?:[，。,\.\n]|$)/gi,
+      regex: /(?:我(?:更)?喜欢|I prefer|我更习惯)\s+(.+?)(?:[，。,.\n]|$)/gi,
       negate: false,
     },
     {
-      regex: /(?:始终用|always use|一直用)\s+(.+?)(?:[，。,\.\n]|$)/gi,
+      regex: /(?:始终用|always use|一直用)\s+(.+?)(?:[，。,.\n]|$)/gi,
       negate: false,
     },
     {
-      regex: /(?:不要用|never use|别用)\s+(.+?)(?:[，。,\.\n]|$)/gi,
+      regex: /(?:不要用|never use|别用)\s+(.+?)(?:[，。,.\n]|$)/gi,
       negate: true,
     },
   ];

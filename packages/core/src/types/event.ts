@@ -169,4 +169,6 @@ export interface EventStream {
   subscribe(handler: EventHandler): Unsubscribe;
   publish(event: RunEvent): void;
   clear(): void;
+  /** 获取事件历史（按 run_id 过滤，不传返回全部） */
+  getHistory(runId?: string): RunEvent[];
 }

@@ -8,9 +8,8 @@
  * emma 后续替换为 token 动画 + spinner + 富文本，订阅同一事件流。
  */
 
+import type { EventStream, RunEvent, StreamChunk } from '@vessel/core';
 import { EventType } from '@vessel/core';
-import type { EventStream, RunEvent } from '@vessel/core';
-import type { StreamChunk } from '@vessel/core';
 
 /** 渲染器配置 */
 export interface StreamRendererConfig {

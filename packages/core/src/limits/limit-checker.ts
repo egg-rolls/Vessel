@@ -95,4 +95,4 @@ export class MemoryLimitChecker implements LimitChecker {
   }
 }
 
-export type { LimitChecker, UsageLimits, UsageStats, TerminationPolicy };
+export type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats };

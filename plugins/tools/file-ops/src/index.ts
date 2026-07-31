@@ -5,7 +5,7 @@
  * 提供文件读写、搜索、列目录等基本文件操作工具
  */
 
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
 

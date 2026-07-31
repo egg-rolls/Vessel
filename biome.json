@@ -1,5 +1,4 @@
 {
-  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -15,89 +14,10 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true,
-      "correctness": {
-        "noUnusedImports": "warn",
-        "noUnusedVariables": "warn",
-        "noConstAssign": "error",
-        "noInnerDeclarations": "error",
-        "noInvalidConstructorSuper": "error",
-        "noInvalidUseBeforeDeclaration": "error",
-        "noNewSymbol": "error",
-        "noNonoctalDecimalEscape": "error",
-        "noSelfAssign": "error",
-        "noSetterReturn": "error",
-        "noSwitchDeclarations": "error",
-        "noUndeclaredVariables": "error",
-        "noUnreachable": "error",
-        "noUnreachableSuper": "error",
-        "noUnsafeFinally": "error",
-        "noUnsafeOptionalChaining": "error",
-        "useArrayLiterals": "warn",
-        "useExhaustiveDependencies": "warn",
-        "useHookAtTopLevel": "warn",
-        "useIsNan": "error",
-        "useValidForDirection": "error",
-        "useYield": "error"
-      },
-      "complexity": {
-        "useLiteralKeys": "off"
-      },
-      "style": {
-        "noNonNullAssertion": "warn",
-        "useAsConstAssertion": "warn",
-        "useConst": "warn",
-        "useDefaultParameterLast": "warn",
-        "useEnumInitializers": "warn",
-        "useExponentiationOperator": "warn",
-        "useImportType": "warn",
-        "useLiteralEnumMembers": "warn",
-        "useNamingConvention": "off",
-        "useNumericLiterals": "warn",
-        "useShorthandAssign": "warn",
-        "useShorthandFunctionType": "warn",
-        "useSingleCaseStatement": "warn",
-        "useTemplate": "warn"
-      },
-      "suspicious": {
-        "noAsyncPromiseExecutor": "error",
-        "noCatchAssign": "error",
-        "noClassAssign": "error",
-        "noCompareNegZero": "error",
-        "noConfusingLabels": "error",
-        "noControlCharactersInRegex": "error",
-        "noDebugger": "warn",
-        "noDoubleEquals": "error",
-        "noDuplicateCase": "error",
-        "noDuplicateClassMembers": "error",
-        "noDuplicateJsxProps": "error",
-        "noDuplicateObjectKeys": "error",
-        "noDuplicateParameters": "error",
-        "noEmptyBlockStatements": "warn",
-        "noExplicitAny": "warn",
-        "noExtraNonNullAssertion": "error",
-        "noFallthroughSwitchClause": "error",
-        "noFunctionAssign": "error",
-        "noGlobalAssign": "error",
-        "noImportAssign": "error",
-        "noLabelVar": "error",
-        "noPrototypeBuiltins": "error",
-        "noRedeclare": "error",
-        "noSelfCompare": "error",
-        "noShadowRestrictedNames": "error",
-        "noThenProperty": "error",
-        "noUnsafeDeclarationMerging": "error",
-        "noUnsafeNegation": "error",
-        "useDefaultSwitchClauseLast": "warn",
-        "useGetterReturn": "error",
-        "useIsArray": "error",
-        "useNamespaceKeyword": "warn",
-        "useValidTypeof": "error"
-      }
+      "preset": "recommended"
     }
   },
   "javascript": {
-    "globals": ["Bun", "BufferEncoding"],
     "formatter": {
       "quoteStyle": "single",
       "trailingCommas": "all",

@@ -4,8 +4,8 @@
  */
 
 import * as readline from 'node:readline';
-import { GuardrailStage } from '@vessel/core';
 import type { Guardrail, GuardrailContext, GuardrailResult } from '@vessel/core';
+import { GuardrailStage } from '@vessel/core';
 
 /** 权限确认配置 */
 export interface ToolPermissionConfig {

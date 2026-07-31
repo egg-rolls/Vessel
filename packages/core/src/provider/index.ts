@@ -3,5 +3,5 @@
  * @module @vessel/core/provider
  */
 
-export { MemoryLLMProvider, OpenAICompatibleProvider, AnthropicProvider } from './providers.js';
 export type { ChatRequest, LLMProvider, LLMResponse, ProviderFactory } from '../types/provider.js';
+export { AnthropicProvider, MemoryLLMProvider, OpenAICompatibleProvider } from './providers.js';

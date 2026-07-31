@@ -108,7 +108,6 @@ class McpConnection {
   private prompts: McpPrompt[] = [];
   private pluginHost: PluginHost | null = null;
   private registeredToolNames: Set<string> = new Set();
-  private buffer = '';
   private _status: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
 
   constructor(config: McpServerConfig) {
@@ -138,7 +137,6 @@ class McpConnection {
       });
 
       this.process = proc;
-      this.buffer = '';
 
       // 读取 stdout（JSON-RPC 响应）
       if (!proc.stdout) {
@@ -687,8 +685,8 @@ export const mcpClientPlugin: Plugin = {
   },
 };
 
+export type { McpPrompt, McpResource, McpTool };
 // 导出类型和类供外部使用
-export { McpConnection, McpClientManager };
-export type { McpTool, McpResource, McpPrompt };
+export { McpClientManager, McpConnection };
 
 export default mcpClientPlugin;

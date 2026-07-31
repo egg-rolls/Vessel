@@ -149,7 +149,7 @@ export class SkillsManager {
         skillsDir,
         { recursive: this.config.recursive },
         (_eventType, filename) => {
-          if (!filename || !filename.endsWith('.md')) return;
+          if (!filename?.endsWith('.md')) return;
 
           const filePath = path.join(skillsDir, filename);
 

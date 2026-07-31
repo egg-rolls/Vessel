@@ -6,9 +6,9 @@
  * 对标 Hermes 的 rich_output 模块。
  */
 
-import { HEAVY, Panel, ROUNDED, Rule, Table, renderToString } from '@promptctl/rich-js';
+import { HEAVY, Panel, ROUNDED, Rule, renderToString, Table } from '@promptctl/rich-js';
 
-export { Panel, Table, Rule, renderToString, HEAVY, ROUNDED };
+export { HEAVY, Panel, ROUNDED, Rule, renderToString, Table };
 
 /** Vessel Banner */
 export function buildBanner(): string {

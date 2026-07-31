@@ -3,5 +3,5 @@
  * @module @vessel/core/context
  */
 
-export { MemoryContextManager } from './context-manager.js';
 export type { ContextConfig, ContextManager } from '../types/context.js';
+export { MemoryContextManager } from './context-manager.js';
