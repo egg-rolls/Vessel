@@ -16,6 +16,7 @@ export function useRuntimeState({ ctx, onStateChange }: UseRuntimeStateOptions) 
   const [state, setState] = useState<ReplState>({
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
+    showResumePicker: false,
     running: true,
   });
 

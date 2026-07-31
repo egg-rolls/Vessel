@@ -1,6 +1,8 @@
 /**
  * 流式输出组件
  * 订阅 EventStream，实现 token-by-token 打字机动画 + 工具调用 spinner
+ *
+ * 只负责当前轮的实时流式显示。run 完成后通过 onComplete 回调通知父组件归档。
  */
 
 import type { EventStream, RunEvent } from '@vessel/core';
@@ -8,11 +10,6 @@ import { EventType } from '@vessel/core';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { useEffect, useRef, useState } from 'react';
-
-interface StreamOutputProps {
-  events: EventStream;
-  clearSignal?: number; // /clear 命令信号
-}
 
 interface ToolCall {
   id: string;
@@ -23,16 +20,27 @@ interface ToolCall {
   error?: string;
 }
 
-export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
+interface StreamOutputProps {
+  events: EventStream;
+  clearSignal?: number;
+  /** 当前轮 run 完成时回调，传回响应文本 */
+  onComplete?: (responseText: string) => void;
+}
+
+export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputProps) {
   const [tokens, setTokens] = useState<string[]>([]);
   const [toolCalls, setToolCalls] = useState<Map<string, ToolCall>>(new Map());
   const [isStreaming, setIsStreaming] = useState(false);
   const tokensRef = useRef<string[]>([]);
+  const toolCallsRef = useRef<Map<string, ToolCall>>(new Map());
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
 
   // 监听 clearSignal 变化，清空状态
   useEffect(() => {
     if (clearSignal !== undefined && clearSignal > 0) {
       tokensRef.current = [];
+      toolCallsRef.current = new Map();
       setTokens([]);
       setToolCalls(new Map());
       setIsStreaming(false);
@@ -44,6 +52,7 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
       switch (event.type) {
         case EventType.RunStarted: {
           tokensRef.current = [];
+          toolCallsRef.current = new Map();
           setTokens([]);
           setToolCalls(new Map());
           setIsStreaming(true);
@@ -73,6 +82,7 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
               arguments: data.arguments,
               status: 'running',
             });
+            toolCallsRef.current = next;
             return next;
           });
           break;
@@ -94,6 +104,7 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
                 duration: data.duration_ms,
               });
             }
+            toolCallsRef.current = next;
             return next;
           });
           break;
@@ -117,15 +128,27 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
                 duration: data.duration_ms,
               });
             }
+            toolCallsRef.current = next;
             return next;
           });
           break;
         }
 
         case EventType.RunCompleted:
-        case EventType.RunFailed:
+        case EventType.RunFailed: {
+          // 通知父组件归档当前轮输出
+          const responseText = tokensRef.current.join('');
+          if (responseText) {
+            onCompleteRef.current?.(responseText);
+          }
+          // 清空当前轮
+          tokensRef.current = [];
+          toolCallsRef.current = new Map();
+          setTokens([]);
+          setToolCalls(new Map());
           setIsStreaming(false);
           break;
+        }
       }
     });
 
@@ -134,14 +157,14 @@ export function StreamOutput({ events, clearSignal }: StreamOutputProps) {
 
   return (
     <Box flexDirection="column">
-      {/* 流式 token 输出 */}
+      {/* 当前轮流式 token 输出 */}
       {tokens.length > 0 && (
         <Box>
           <Text>{tokens.join('')}</Text>
         </Box>
       )}
 
-      {/* 工具调用卡片 */}
+      {/* 当前轮工具调用卡片 */}
       {Array.from(toolCalls.values()).map((call) => (
         <Box key={call.id} marginY={1}>
           {call.status === 'running' && (

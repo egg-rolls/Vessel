@@ -18,6 +18,8 @@ export interface ReplState {
   currentSessionId: string;
   /** /session resume 无参后置位；下一行裸数字触发按编号恢复 */
   pendingResume: boolean;
+  /** /session resume 无参时显示交互式选择器（Ink 模式） */
+  showResumePicker: boolean;
   /** 主循环运行标志--/exit 置 false 退出 */
   running: boolean;
 }
@@ -171,7 +173,7 @@ function sessionDomain(): CommandEntry {
 
   subcommands.set('resume', {
     name: 'resume',
-    description: '恢复会话：无参=列表+pending，N/id=直接恢复',
+    description: '恢复会话：无参=交互式选择器，N/id=直接恢复',
     usage: '/session resume [number|id]',
     run: async (args, ctx, state) => {
       if (args.length === 0) {
@@ -181,18 +183,10 @@ function sessionDomain(): CommandEntry {
           console.log(output);
           return { handled: true, output };
         }
-        const lines = ['', 'Resume which session? Enter its number:'];
-        for (let i = 0; i < sessions.length; i++) {
-          const s = sessions[i];
-          if (!s) continue;
-          const cur = s.session_id === state.currentSessionId ? ' *' : '';
-          const preview = s.preview || s.title || '(no preview)';
-          lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
-          lines.push(`     id: ${s.session_id}`);
-        }
-        lines.push('');
+        // Ink 模式由 showResumePicker 触发交互式选择器；simple 模式 fallback 到 pendingResume
+        state.showResumePicker = true;
         state.pendingResume = true;
-        const output = lines.join('\n');
+        const output = '\nResume which session? Enter its number:\n';
         console.log(output);
         return { handled: true, output };
       }
@@ -304,7 +298,11 @@ async function resolveResumeTarget(
 }
 
 /** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史 */
-async function doResume(ctx: ReplContext, state: ReplState, sessionId: string): Promise<void> {
+export async function doResume(
+  ctx: ReplContext,
+  state: ReplState,
+  sessionId: string,
+): Promise<void> {
   ctx.context.clear();
   state.currentSessionId = sessionId;
   ctx.onSessionChange(sessionId);

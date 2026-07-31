@@ -21,6 +21,8 @@ import { MemoryPluginHost } from './plugin-host.js';
 export interface RunOptions {
   /** AbortSignal——设置后可在外部中断 run()（Hermes/Claude Code 模式） */
   signal?: AbortSignal;
+  /** 当前 git branch——app 层采集，core 透传存入 RunState.branch */
+  branch?: string;
 }
 
 /**
@@ -165,6 +167,7 @@ export class AgentRuntime {
       messages: [userMessage],
       started_at: startTime,
       status: 'running',
+      branch: opts?.branch,
     };
 
     // 发布 Run 开始事件

@@ -150,4 +150,43 @@ describe('listRich', () => {
     expect(rich[0]?.session_id).toBe('a');
     expect(rich[0]?.preview).toBe('hello');
   });
+
+  it('branch 字段持久化并出现在 listRich 中', async () => {
+    const backend = new SQLiteSessionBackend(':memory:');
+    await backend.save({
+      run_id: 'r1',
+      session_id: 'with-branch',
+      messages: [{ role: 'user', content: 'test' }],
+      started_at: 1000,
+      status: 'completed',
+      branch: 'feat/my-feature',
+    });
+    await backend.save({
+      run_id: 'r2',
+      session_id: 'no-branch',
+      messages: [{ role: 'user', content: 'test2' }],
+      started_at: 1000,
+      status: 'completed',
+    });
+
+    const rich = await backend.listRich();
+    const withBranch = rich.find((s) => s.session_id === 'with-branch');
+    const noBranch = rich.find((s) => s.session_id === 'no-branch');
+    expect(withBranch?.branch).toBe('feat/my-feature');
+    expect(noBranch?.branch).toBeUndefined();
+  });
+
+  it('MemorySessionBackend branch 字段通过 toSessionInfo 传递', async () => {
+    const backend = new MemorySessionBackend();
+    await backend.save({
+      run_id: 'r1',
+      session_id: 's1',
+      messages: [{ role: 'user', content: 'hello' }],
+      started_at: 1000,
+      status: 'completed',
+      branch: 'main',
+    });
+    const rich = await backend.listRich();
+    expect(rich[0]?.branch).toBe('main');
+  });
 });
