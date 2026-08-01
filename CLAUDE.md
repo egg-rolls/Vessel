@@ -193,7 +193,7 @@ bun run build      → 必须通过
 
 ### 9.4 合并后
 
-- 删除远程 feature 分支
+- GitHub PR "Squash and merge" 勾选 "Delete branch" 自动删除远程分支
 - 确认 main push 成功
 - 更新本地 main
 
