@@ -7,6 +7,7 @@
 > **场景调度**：
 > - 写/改代码 → 先读 [§4 工程规范](#4-工程规范)（含 §4.1 设计纪律）
 > - 审查 PR / 合并 → 先读 [§9 合并审查规则](#9-合并审查规则git-门禁) + [`GIT-WORKFLOW.md` §六](docs/specs/GIT-WORKFLOW.md) 反面模式
+> - 修改文档 → 先读 [`DOC-STANDARD.md` §七](docs/specs/DOC-STANDARD.md) 文档设计方法 + 走对应链路（§7.2）
 > - 涉及 core 包 → 先读 [§5.1 Core 冻结](#51-core-冻结adr-017)
 > - 不确定能力放哪层 → 先读 [§5 能力分层](#5-能力分层与准入决策树)
 
@@ -52,6 +53,7 @@ AI 改 specs/guides/api 后自检：
 | 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
 | 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)（核心规则已在 §9） |
+| 修改文档 | [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md)（§七 设计方法——修改文档前必读） |
 | 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
 | 搭环境/写测试/构建/开发插件 | [docs/guides/](docs/guides/) |
 | 查 Core 接口 | [docs/specs/CORE.md](docs/specs/CORE.md)（快速参考） |
@@ -201,6 +203,7 @@ AI 的默认模式是"最短路径完成当前任务"。这是局部最优，但
 
 **改代码时**：先扫 §4.1 自问 → 查相关包 → 按决策树分类 → 最小正确改动 → 补测试 → 更新文档/本文件 → 跑校验。
 **审查/合并时**：读 `GIT-WORKFLOW.md` §六 反面模式 + 本文件 §9 门禁清单 → 输出审查结论。
+**修改文档时**：读 `DOC-STANDARD.md` §七 设计方法 → 走对应知识链路（编码/审查/测试/架构）→ 再动笔。
 **解释时**：引实际文件/类/函数；标 pre-MVP/`[plan]`；区分已实现 vs 规划；不虚构 API。
 **不确定时**：搜代码 → 读测试 → 仍不清则短问。
 
