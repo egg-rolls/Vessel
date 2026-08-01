@@ -11,7 +11,6 @@ export type {
   CommandEntry,
   CommandResult,
   ReplState,
-  SubCommand,
 } from './commands/commands.js';
 export {
   CommandRegistry,

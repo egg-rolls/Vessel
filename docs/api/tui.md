@@ -217,6 +217,9 @@ await startRepl(ctx);
 | `/mcp` | MCP 浏览器 | 列表、连接状态、重连、测试 |
 | `/skills` | Skills 浏览器 | 列表、详情 |
 | `/assets` | 资产总览仪表盘 | ASCII art + 系统信息 |
+| `/resume` | 恢复会话 | 交互式选择器 |
+| `/new` | 新建会话 | 确认 |
+| `/history` | 显示历史 | 列表 |
 | `/setup` | 配置向导 | 交互式配置 |
 | `/reload` | 重载配置 | 确认+结果 |
 | `/clear` | 清屏 | - |
