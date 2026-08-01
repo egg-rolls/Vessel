@@ -14,9 +14,12 @@ git checkout -b fix/xxx main
 bun run lint && bun run typecheck && bun test    # 1. 自查
 git push -u origin fix/xxx                        # 2. 推送
 gh pr create --base main --head fix/xxx           # 3. 创建 PR（CODEOWNERS 自动请求 egg-rolls 审查）
+gh pr view --head fix/xxx                         # 4. 确认 PR 已创建成功（防止推送后忘记 PR）
 ```
 
 > 人类贡献者可直接通过 GitHub Web UI + PR 模板创建 PR。
+
+⚠️ **AI Agent 注意**：推送分支后如果跳过第 4 步（或第 3 步），分支会滞留——有代码、有分支、但没有 PR。未经 PR 的分支不会被审查、不会被合并。开始新工作前，用 `gh pr list --state open` 确认没有遗留的孤儿分支。
 
 ## 三、Reviewer 的审查（对照 CLAUDE.md §9）
 
