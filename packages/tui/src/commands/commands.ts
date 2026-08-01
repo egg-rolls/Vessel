@@ -1,11 +1,25 @@
 /**
- * 斜杠命令（二层分层：`/<domain> <action> [args]`）
+ * 斜杠命令（扁平结构：`/<command> [args]`）
  * @module @vessel/tui
  *
- * domain：/session（list|resume|new|history）、/tool（list）
- * 顶层：/help /clear /setup /exit
+ * 命令清单（ADR-020）：
+ * /sessions - 会话浏览器
+ * /tools - 工具浏览器
+ * /plugins - 插件浏览器
+ * /mcp - MCP 浏览器
+ * /skills - Skills 浏览器
+ * /assets - 资产总览仪表盘
+ * /resume - 恢复会话
+ * /new - 新建会话
+ * /history - 显示历史
+ * /setup - 配置向导
+ * /reload - 重载配置
+ * /clear - 清屏
+ * /help - 帮助
+ * /exit - 退出
+ *
  * 全部从 ReplContext 取数；切会话经 ctx.context.clear() + ctx.onSessionChange()。
- * /session resume 照搬 Hermes pending one-shot：无参->编号列表 + 置 pending；下一行裸数字->恢复。
+ * /resume 照搬 Hermes pending one-shot：无参->编号列表 + 置 pending；下一行裸数字->恢复。
  */
 
 import type { ReplContext } from '../repl-context.js';
@@ -14,11 +28,11 @@ import type { ReplContext } from '../repl-context.js';
 
 /** REPL 运行态--命令读写，REPL 主循环持有 */
 export interface ReplState {
-  /** 当前会话 ID--/session new、/session resume 会改；chat 传它给 runtime.run() */
+  /** 当前会话 ID--/new、/resume 会改；chat 传它给 runtime.run() */
   currentSessionId: string;
-  /** /session resume 无参后置位；下一行裸数字触发按编号恢复 */
+  /** /resume 无参后置位；下一行裸数字触发按编号恢复 */
   pendingResume: boolean;
-  /** /session resume 无参时显示交互式选择器（Ink 模式） */
+  /** /resume 无参时显示交互式选择器（Ink 模式） */
   showResumePicker: boolean;
   /** 主循环运行标志--/exit 置 false 退出 */
   running: boolean;
@@ -32,39 +46,27 @@ export interface CommandResult {
   output?: string;
 }
 
-/** 子命令执行函数签名 */
+/** 命令执行函数签名 */
 type Run = (
   args: string[],
   ctx: ReplContext,
   state: ReplState,
 ) => Promise<CommandResult> | CommandResult;
 
-/** 子命令（domain 下的 action） */
-export interface SubCommand {
-  name: string;
-  description: string;
-  usage?: string;
-  run: Run;
-}
-
-/** 顶层命令 或 域 */
+/** 命令条目 */
 export interface CommandEntry {
   name: string;
   description: string;
   usage?: string;
-  /** 顶层命令的执行（无子命令时） */
-  run?: Run;
-  /** 域的子命令 */
-  subcommands?: Map<string, SubCommand>;
+  /** 命令执行函数 */
+  run: Run;
 }
 
 // ── 命令注册表 ────────────────────────────────────
 
 /**
- * 二层分层命令注册表。execute 解析 `/<domain> <action> <args...>`：
- * - domain 有子命令且 action 命中 -> 跑子命令
- * - domain 无 action 或 action 未命中 -> 显示域帮助
- * - 顶层命令（有 run） -> 跑 run
+ * 扁平命令注册表。execute 解析 `/<command> <args...>`：
+ * - 命令已注册 -> 跑 run
  * - 未注册 -> { handled: false }
  */
 export class CommandRegistry {
@@ -84,40 +86,32 @@ export class CommandRegistry {
 
   async execute(input: string, ctx: ReplContext, state: ReplState): Promise<CommandResult> {
     const tokens = input.trim().split(/\s+/).filter(Boolean);
-    const rawDomain = tokens[0];
-    if (!rawDomain) return { handled: false };
+    const rawCommand = tokens[0];
+    if (!rawCommand) return { handled: false };
 
-    // 去掉开头的斜杠（如果用户输入了 /help，domain 应该是 help）
-    const domain = rawDomain.startsWith('/') ? rawDomain.slice(1) : rawDomain;
+    // 去掉开头的斜杠（如果用户输入了 /help，command 应该是 help）
+    const command = rawCommand.startsWith('/') ? rawCommand.slice(1) : rawCommand;
 
-    const entry = this.entries.get(domain);
+    const entry = this.entries.get(command);
     if (!entry) return { handled: false };
 
-    const action = tokens[1];
-    if (action && entry.subcommands?.has(action)) {
-      const sub = entry.subcommands.get(action);
-      if (!sub) return { handled: false };
-      const result = await sub.run(tokens.slice(2), ctx, state);
-      return result || { handled: true };
-    }
-
-    // 顶层命令
-    if (entry.run) {
-      const result = await entry.run(tokens.slice(1), ctx, state);
-      return result || { handled: true };
-    }
-
-    // 域无（有效）action -> 显示域帮助
-    renderDomainHelp(entry);
-    return { handled: true };
+    const result = await entry.run(tokens.slice(1), ctx, state);
+    return result || { handled: true };
   }
 }
 
 /** 创建并填充命令注册表。ctx 在 execute 时传入，注册表本身无状态。 */
 export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
-  reg.register(sessionDomain());
-  reg.register(toolDomain());
+  reg.register(sessionsCommand());
+  reg.register(toolsCommand());
+  reg.register(pluginsCommand());
+  reg.register(mcpCommand());
+  reg.register(skillsCommand());
+  reg.register(assetsCommand());
+  reg.register(resumeCommand());
+  reg.register(newCommand());
+  reg.register(historyCommand());
   reg.register(helpCommand(reg));
   reg.register(clearCommand());
   reg.register(setupCommand());
@@ -128,26 +122,25 @@ export function createCommands(): CommandRegistry {
 
 // ── 帮助渲染 ──────────────────────────────────────
 
-function renderDomainHelp(entry: CommandEntry): void {
-  console.log(`\n/${entry.name}  - ${entry.description}`);
-  if (entry.subcommands && entry.subcommands.size > 0) {
-    console.log('Subcommands:');
-    for (const sub of entry.subcommands.values()) {
-      console.log(`  /${entry.name} ${sub.name.padEnd(8)} - ${sub.description}`);
-    }
+function renderHelp(reg: CommandRegistry): string {
+  const lines: string[] = ['', 'Available commands:'];
+
+  for (const entry of reg.list()) {
+    const usage = entry.usage || `/${entry.name}`;
+    lines.push(`  ${usage.padEnd(26)} ${entry.description}`);
   }
-  console.log('');
+
+  lines.push('');
+  return lines.join('\n');
 }
 
-// ── /session ──────────────────────────────────────
+// ── /sessions ─────────────────────────────────────
 
-function sessionDomain(): CommandEntry {
-  const subcommands = new Map<string, SubCommand>();
-
-  subcommands.set('list', {
-    name: 'list',
+function sessionsCommand(): CommandEntry {
+  return {
+    name: 'sessions',
     description: '列出会话（编号，可用于 resume）',
-    usage: '/session list',
+    usage: '/sessions',
     run: async (_args, ctx, state) => {
       const sessions = await ctx.session.listRich();
       if (sessions.length === 0) {
@@ -169,12 +162,16 @@ function sessionDomain(): CommandEntry {
       console.log(output);
       return { handled: true, output };
     },
-  });
+  };
+}
 
-  subcommands.set('resume', {
+// ── /resume ──────────────────────────────────────
+
+function resumeCommand(): CommandEntry {
+  return {
     name: 'resume',
     description: '恢复会话：无参=交互式选择器，N/id=直接恢复',
-    usage: '/session resume [number|id]',
+    usage: '/resume [number|id]',
     run: async (args, ctx, state) => {
       if (args.length === 0) {
         const sessions = await ctx.session.listRich();
@@ -199,66 +196,10 @@ function sessionDomain(): CommandEntry {
       await doResume(ctx, state, resolved.sessionId);
       return { handled: true };
     },
-  });
-
-  subcommands.set('new', {
-    name: 'new',
-    description: '开启新会话（丢弃当前空会话）',
-    usage: '/session new',
-    run: async (_args, ctx, state) => {
-      const oldId = state.currentSessionId;
-      try {
-        const old = await ctx.session.load(oldId);
-        if (old && old.messages.length === 0) {
-          await ctx.session.delete(oldId);
-        }
-      } catch {
-        // 丢弃失败不阻塞开新会话
-      }
-      ctx.context.clear();
-      const newId = ctx.newSessionId();
-      state.currentSessionId = newId;
-      ctx.onSessionChange(newId);
-      const output = `\nNew session started: ${newId}\n`;
-      console.log(output);
-      return { handled: true, output };
-    },
-  });
-
-  subcommands.set('history', {
-    name: 'history',
-    description: '显示当前会话的对话历史',
-    usage: '/session history',
-    run: async (_args, ctx, state) => {
-      const loaded = await ctx.session.load(state.currentSessionId);
-      if (!loaded || loaded.messages.length === 0) {
-        const output = '\nNo conversation history.\n';
-        console.log(output);
-        return { handled: true, output };
-      }
-      const lines = ['', `History (${loaded.messages.length} messages):`];
-      for (const msg of loaded.messages) {
-        const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
-        lines.push('');
-        lines.push(`[${role}]`);
-        lines.push(msg.content);
-      }
-      lines.push('');
-      const output = lines.join('\n');
-      console.log(output);
-      return { handled: true, output };
-    },
-  });
-
-  return {
-    name: 'session',
-    description: '会话管理：list / resume / new / history',
-    usage: '/session [list|resume|new|history]',
-    subcommands,
   };
 }
 
-/** /session resume 的裸数字 one-shot--由 REPL 主循环在 pendingResume 时调入 */
+/** /resume 的裸数字 one-shot--由 REPL 主循环在 pendingResume 时调入 */
 export async function consumePendingResume(
   input: string,
   ctx: ReplContext,
@@ -311,30 +252,70 @@ export async function doResume(
   console.log(`\nResumed session "${sessionId}" (${msgCount} messages).\n`);
 }
 
-/** 编号渲染会话列表（resume 选择用） - 已废弃，改用内联渲染 */
-// function renderNumberedSessions(
-//   sessions: { session_id: string; preview?: string; title?: string; message_count: number }[],
-//   currentId: string,
-// ): void {
-//   for (let i = 0; i < sessions.length; i++) {
-//     const s = sessions[i];
-//     if (!s) continue;
-//     const cur = s.session_id === currentId ? ' *' : '';
-//     const preview = s.preview || s.title || '(no preview)';
-//     console.log(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
-//     console.log(`     id: ${s.session_id}`);
-//   }
-// }
+// ── /new ─────────────────────────────────────────
 
-// ── /tool ─────────────────────────────────────────
+function newCommand(): CommandEntry {
+  return {
+    name: 'new',
+    description: '开启新会话（丢弃当前空会话）',
+    usage: '/new',
+    run: async (_args, ctx, state) => {
+      const oldId = state.currentSessionId;
+      try {
+        const old = await ctx.session.load(oldId);
+        if (old && old.messages.length === 0) {
+          await ctx.session.delete(oldId);
+        }
+      } catch {
+        // 丢弃失败不阻塞开新会话
+      }
+      ctx.context.clear();
+      const newId = ctx.newSessionId();
+      state.currentSessionId = newId;
+      ctx.onSessionChange(newId);
+      const output = `\nNew session started: ${newId}\n`;
+      console.log(output);
+      return { handled: true, output };
+    },
+  };
+}
 
-function toolDomain(): CommandEntry {
-  const subcommands = new Map<string, SubCommand>();
+// ── /history ─────────────────────────────────────
 
-  subcommands.set('list', {
-    name: 'list',
+function historyCommand(): CommandEntry {
+  return {
+    name: 'history',
+    description: '显示当前会话的对话历史',
+    usage: '/history',
+    run: async (_args, ctx, state) => {
+      const loaded = await ctx.session.load(state.currentSessionId);
+      if (!loaded || loaded.messages.length === 0) {
+        const output = '\nNo conversation history.\n';
+        console.log(output);
+        return { handled: true, output };
+      }
+      const lines = ['', `History (${loaded.messages.length} messages):`];
+      for (const msg of loaded.messages) {
+        const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
+        lines.push('');
+        lines.push(`[${role}]`);
+        lines.push(msg.content);
+      }
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
+    },
+  };
+}
+
+// ── /tools ───────────────────────────────────────
+
+function toolsCommand(): CommandEntry {
+  return {
+    name: 'tools',
     description: '列出已注册工具',
-    usage: '/tool list',
+    usage: '/tools',
     run: (_args, ctx, _state) => {
       const list = ctx.tools.list();
       if (list.length === 0) {
@@ -349,13 +330,75 @@ function toolDomain(): CommandEntry {
       console.log(output);
       return { handled: true, output };
     },
-  });
+  };
+}
 
+// ── /plugins ─────────────────────────────────────
+
+function pluginsCommand(): CommandEntry {
   return {
-    name: 'tool',
-    description: '工具：list',
-    usage: '/tool [list]',
-    subcommands,
+    name: 'plugins',
+    description: '列出已加载插件',
+    usage: '/plugins',
+    run: (_args, ctx, _state) => {
+      const plugins = ctx.plugins;
+      if (plugins.length === 0) {
+        const output = '\nNo plugins loaded.\n';
+        console.log(output);
+        return { handled: true, output };
+      }
+      const lines = ['', `Loaded plugins (${plugins.length}):`];
+      for (const p of plugins) lines.push(`  - ${p}`);
+      lines.push('');
+      const output = lines.join('\n');
+      console.log(output);
+      return { handled: true, output };
+    },
+  };
+}
+
+// ── /mcp ─────────────────────────────────────────
+
+function mcpCommand(): CommandEntry {
+  return {
+    name: 'mcp',
+    description: '列出 MCP 服务器状态',
+    usage: '/mcp',
+    run: (_args, _ctx, _state) => {
+      const output = '\nMCP browser not yet implemented.\n';
+      console.log(output);
+      return { handled: true, output };
+    },
+  };
+}
+
+// ── /skills ──────────────────────────────────────
+
+function skillsCommand(): CommandEntry {
+  return {
+    name: 'skills',
+    description: '列出可用 Skills',
+    usage: '/skills',
+    run: (_args, _ctx, _state) => {
+      const output = '\nSkills browser not yet implemented.\n';
+      console.log(output);
+      return { handled: true, output };
+    },
+  };
+}
+
+// ── /assets ──────────────────────────────────────
+
+function assetsCommand(): CommandEntry {
+  return {
+    name: 'assets',
+    description: '资产总览仪表盘',
+    usage: '/assets',
+    run: (_args, _ctx, _state) => {
+      const output = '\nAssets dashboard not yet implemented.\n';
+      console.log(output);
+      return { handled: true, output };
+    },
   };
 }
 
@@ -365,48 +408,11 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
   return {
     name: 'help',
     description: '显示可用命令',
-    usage: '/help [domain]',
-    run: (args, _ctx, _state) => {
-      const lines: string[] = ['', 'Available commands:'];
-
-      // 动态生成帮助文本
-      for (const entry of reg.list()) {
-        if (entry.subcommands && entry.subcommands.size > 0) {
-          // 有子命令的域
-          for (const sub of entry.subcommands.values()) {
-            const usage = sub.usage || `/${entry.name} ${sub.name}`;
-            lines.push(`  ${usage.padEnd(26)} ${sub.description}`);
-          }
-        } else {
-          // 顶层命令
-          const usage = entry.usage || `/${entry.name}`;
-          lines.push(`  ${usage.padEnd(26)} ${entry.description}`);
-        }
-      }
-
-      lines.push('');
-      if (args.length > 0) {
-        const domain = reg.list().find((e) => e.name === args[0]);
-        if (domain) {
-          if (domain.subcommands && domain.subcommands.size > 0) {
-            lines.push(`/${domain.name}  - ${domain.description}`);
-            lines.push('Subcommands:');
-            for (const sub of domain.subcommands.values()) {
-              lines.push(`  /${domain.name} ${sub.name.padEnd(8)} - ${sub.description}`);
-            }
-          }
-        } else {
-          lines.push(`Unknown command: ${args[0]}`);
-        }
-      }
-
-      // 输出到控制台（readline 版本）
-      for (const line of lines) {
-        console.log(line);
-      }
-
-      // 返回帮助文本（Ink 版本可以使用）
-      return { handled: true, output: lines.join('\n') };
+    usage: '/help',
+    run: (_args, _ctx, _state) => {
+      const output = renderHelp(reg);
+      console.log(output);
+      return { handled: true, output };
     },
   };
 }

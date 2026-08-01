@@ -26,7 +26,7 @@ export function classifyError(error: unknown): ClassifiedError {
     return {
       category: 'quota',
       message: msg,
-      hint: '用量/限额触发，调大 limits 或 /session new 开新会话。',
+      hint: '用量/限额触发，调大 limits 或 /new 开新会话。',
     };
   }
   if (/429|rate limit|rate_limit|quota/.test(lower)) {
