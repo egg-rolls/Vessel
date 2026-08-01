@@ -6,115 +6,106 @@
  * - 文本 → 工具调用 → 文本：按时间顺序交替
  * - 多个工具调用：各自独立段落
  * - RunStarted 清空分段
- * - clearSignal 清空分段
+ * - 工具调用失败保留位置
+ * - getResponseText 提取文本
+ * - makeToolCallSegment 工厂
  */
 
 import { describe, expect, it } from 'bun:test';
+import { EventType } from '@vessel/core';
+import {
+  getResponseText,
+  makeToolCallSegment,
+  reduceSegments,
+  type Segment,
+} from '../src/components/StreamOutput.js';
 
-/** 复制 StreamOutput 的 Segment 类型和 reduce 逻辑用于纯函数测试 */
-type Segment =
-  | { type: 'text'; id: string; text: string }
-  | {
-      type: 'tool_call';
-      id: string;
-      name: string;
-      arguments: unknown;
-      status: 'running' | 'completed' | 'failed';
-      duration?: number;
-      error?: string;
-    };
-
-type SegmentAction =
-  | { type: 'reset' }
-  | { type: 'text_delta'; delta: string }
-  | { type: 'tool_call_started'; tool_call_id: string; tool_name: string; arguments: unknown }
-  | { type: 'tool_call_completed'; tool_call_id: string; duration_ms: number }
-  | { type: 'tool_call_failed'; tool_call_id: string; error: string; duration_ms: number };
-
-let seq = 0;
-function nextId(): string {
-  seq += 1;
-  return `seg_${seq}`;
+/** 模拟 ID 生成器 */
+function makeNextId(): () => string {
+  let n = 0;
+  return () => {
+    n += 1;
+    return `t${n}`;
+  };
 }
 
-/** 纯函数版 segment reducer，与 StreamOutput 组件内逻辑等价 */
-function segmentReducer(prev: Segment[], action: SegmentAction): Segment[] {
-  switch (action.type) {
-    case 'reset':
-      return [];
+/** 构造精简的 RunEvent，只需要 reduceSegments 实际读取的字段 */
+function textDelta(delta: string) {
+  return {
+    type: EventType.LlmStreamChunk,
+    run_id: 'r',
+    data: { chunk: { type: 'text_delta', delta } },
+    ts: 0,
+  };
+}
 
-    case 'text_delta': {
-      const last = prev.at(-1);
-      if (last?.type === 'text') {
-        return [...prev.slice(0, -1), { ...last, text: last.text + action.delta }];
-      }
-      return [...prev, { type: 'text', id: nextId(), text: action.delta }];
-    }
+function toolStarted(id: string, name: string, args: unknown = {}) {
+  return {
+    type: EventType.ToolCallStarted,
+    run_id: 'r',
+    data: { tool_call_id: id, tool_name: name, arguments: args },
+    ts: 0,
+  };
+}
 
-    case 'tool_call_started':
-      return [
-        ...prev,
-        {
-          type: 'tool_call',
-          id: action.tool_call_id,
-          name: action.tool_name,
-          arguments: action.arguments,
-          status: 'running',
-        },
-      ];
+function toolCompleted(id: string, durationMs = 42) {
+  return {
+    type: EventType.ToolCallCompleted,
+    run_id: 'r',
+    data: { tool_call_id: id, duration_ms: durationMs },
+    ts: 0,
+  };
+}
 
-    case 'tool_call_completed':
-      return prev.map((seg) =>
-        seg.type === 'tool_call' && seg.id === action.tool_call_id
-          ? { ...seg, status: 'completed' as const, duration: action.duration_ms }
-          : seg,
-      );
+function toolFailed(id: string, error: string, durationMs = 100) {
+  return {
+    type: EventType.ToolCallFailed,
+    run_id: 'r',
+    data: { tool_call_id: id, error, duration_ms: durationMs },
+    ts: 0,
+  };
+}
 
-    case 'tool_call_failed':
-      return prev.map((seg) =>
-        seg.type === 'tool_call' && seg.id === action.tool_call_id
-          ? { ...seg, status: 'failed' as const, error: action.error, duration: action.duration_ms }
-          : seg,
-      );
-  }
+function runStarted() {
+  return {
+    type: EventType.RunStarted,
+    run_id: 'r',
+    data: { run_id: 'r', input: 'test' },
+    ts: 0,
+  };
 }
 
 describe('StreamOutput segment ordering', () => {
   describe('纯文本流', () => {
     it('连续 text_delta 追加到同一文本段落', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Hello' });
-      segs = segmentReducer(segs, { type: 'text_delta', delta: ' ' });
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'World' });
+      segs = reduceSegments(segs, textDelta('Hello'), nextId);
+      segs = reduceSegments(segs, textDelta(' '), nextId);
+      segs = reduceSegments(segs, textDelta('World'), nextId);
 
       expect(segs).toHaveLength(1);
       expect(segs[0]).toMatchObject({ type: 'text', text: 'Hello World' });
     });
 
     it('无输入时 segments 为空', () => {
+      const nextId = makeNextId();
       const segs: Segment[] = [];
-      expect(segs).toHaveLength(0);
+      // 空 delta 不产生 segment
+      const result = reduceSegments(segs, textDelta(''), nextId);
+      expect(result).toHaveLength(0);
     });
   });
 
   describe('工具调用交替', () => {
     it('文本 → 工具调用 → 文本按时间顺序交替', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      // 模拟：AI 先说一段话，然后调用工具，再说一段话
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Let me read the file.' });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc1',
-        tool_name: 'read_file',
-        arguments: { path: '/test.txt' },
-      });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_completed',
-        tool_call_id: 'tc1',
-        duration_ms: 42,
-      });
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'File contents: hello' });
+      segs = reduceSegments(segs, textDelta('Let me read the file.'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read_file', { path: '/test.txt' }), nextId);
+      segs = reduceSegments(segs, toolCompleted('tc1', 42), nextId);
+      segs = reduceSegments(segs, textDelta('File contents: hello'), nextId);
 
       expect(segs).toHaveLength(3); // text, tool_call, text
       expect(segs[0]).toMatchObject({ type: 'text' });
@@ -123,18 +114,13 @@ describe('StreamOutput segment ordering', () => {
     });
 
     it('工具调用在文本之间产生独立文本段落（非合并）', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'First.' });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc1',
-        tool_name: 'search',
-        arguments: {},
-      });
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Second.' });
+      segs = reduceSegments(segs, textDelta('First.'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'search'), nextId);
+      segs = reduceSegments(segs, textDelta('Second.'), nextId);
 
-      // 两个文本段落应该是独立的，不会跨工具调用合并
       expect(segs).toHaveLength(3);
       expect(segs[0]).toMatchObject({ type: 'text', text: 'First.' });
       expect(segs[1]).toMatchObject({ type: 'tool_call' });
@@ -144,24 +130,15 @@ describe('StreamOutput segment ordering', () => {
 
   describe('多工具调用', () => {
     it('多个工具调用各自独立段落', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Doing work...' });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc1',
-        tool_name: 'read_file',
-        arguments: {},
-      });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc2',
-        tool_name: 'write_file',
-        arguments: {},
-      });
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Done.' });
+      segs = reduceSegments(segs, textDelta('Doing work...'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc2', 'write_file'), nextId);
+      segs = reduceSegments(segs, textDelta('Done.'), nextId);
 
-      expect(segs).toHaveLength(4); // text, tc1, tc2, text
+      expect(segs).toHaveLength(4);
       expect(segs[0]).toMatchObject({ type: 'text' });
       expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read_file' });
       expect(segs[2]).toMatchObject({ type: 'tool_call', name: 'write_file' });
@@ -169,51 +146,30 @@ describe('StreamOutput segment ordering', () => {
     });
 
     it('并行工具调用的 running → completed 状态转换不影响顺序', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc1',
-        tool_name: 'read_file',
-        arguments: {},
-      });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc2',
-        tool_name: 'search',
-        arguments: {},
-      });
+      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc2', 'search'), nextId);
       // tc2 先完成
-      segs = segmentReducer(segs, {
-        type: 'tool_call_completed',
-        tool_call_id: 'tc2',
-        duration_ms: 10,
-      });
+      segs = reduceSegments(segs, toolCompleted('tc2', 10), nextId);
       // tc1 后完成
-      segs = segmentReducer(segs, {
-        type: 'tool_call_completed',
-        tool_call_id: 'tc1',
-        duration_ms: 50,
-      });
+      segs = reduceSegments(segs, toolCompleted('tc1', 50), nextId);
 
       expect(segs).toHaveLength(2);
-      // 顺序保持不变
       expect(segs[0]).toMatchObject({ id: 'tc1', name: 'read_file', status: 'completed' });
       expect(segs[1]).toMatchObject({ id: 'tc2', name: 'search', status: 'completed' });
     });
   });
 
   describe('状态重置', () => {
-    it('reset 清空所有分段', () => {
+    it('RunStarted 清空所有分段', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Hello' });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc1',
-        tool_name: 'read',
-        arguments: {},
-      });
-      segs = segmentReducer(segs, { type: 'reset' });
+
+      segs = reduceSegments(segs, textDelta('Hello'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
+      segs = reduceSegments(segs, runStarted(), nextId);
 
       expect(segs).toHaveLength(0);
     });
@@ -221,22 +177,13 @@ describe('StreamOutput segment ordering', () => {
 
   describe('工具调用失败', () => {
     it('失败的工具调用保留位置并显示错误', () => {
+      const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Trying...' });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_started',
-        tool_call_id: 'tc1',
-        tool_name: 'read_file',
-        arguments: {},
-      });
-      segs = segmentReducer(segs, {
-        type: 'tool_call_failed',
-        tool_call_id: 'tc1',
-        error: 'File not found',
-        duration_ms: 100,
-      });
-      segs = segmentReducer(segs, { type: 'text_delta', delta: 'Sorry, failed.' });
+      segs = reduceSegments(segs, textDelta('Trying...'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolFailed('tc1', 'File not found', 100), nextId);
+      segs = reduceSegments(segs, textDelta('Sorry, failed.'), nextId);
 
       expect(segs).toHaveLength(3);
       expect(segs[1]).toMatchObject({
@@ -245,6 +192,40 @@ describe('StreamOutput segment ordering', () => {
         status: 'failed',
         error: 'File not found',
       });
+    });
+  });
+
+  describe('工厂函数', () => {
+    it('makeToolCallSegment 创建正确的 running 状态 segment', () => {
+      const seg = makeToolCallSegment('t1', 'search', { query: 'hello' });
+      expect(seg).toMatchObject({
+        type: 'tool_call',
+        id: 't1',
+        name: 'search',
+        arguments: { query: 'hello' },
+        status: 'running',
+      });
+    });
+  });
+
+  describe('getResponseText', () => {
+    it('提取所有 text segment 的拼接文本', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, textDelta('Hello '), nextId);
+      segs = reduceSegments(segs, toolStarted('t1', 'search'), nextId);
+      segs = reduceSegments(segs, textDelta('World'), nextId);
+
+      expect(getResponseText(segs)).toBe('Hello World');
+    });
+
+    it('无 text segment 时返回空字符串', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, toolStarted('t1', 'search'), nextId);
+      segs = reduceSegments(segs, toolCompleted('t1'), nextId);
+
+      expect(getResponseText(segs)).toBe('');
     });
   });
 });

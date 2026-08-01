@@ -11,8 +11,10 @@ import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+// ── 类型 & 工厂 & 纯 reducer（导出供测试） ──
+
 /** 一个按时间顺序排列的输出片段：文本段落或工具调用卡片 */
-type Segment =
+export type Segment =
   | { type: 'text'; id: string; text: string }
   | {
       type: 'tool_call';
@@ -24,11 +26,92 @@ type Segment =
       error?: string;
     };
 
-let segmentSeq = 0;
-function nextSegId(): string {
-  segmentSeq += 1;
-  return `seg_${segmentSeq}`;
+/** 创建 tool_call segment 的工厂函数，避免 as 类型断言 */
+export function makeToolCallSegment(id: string, name: string, args: unknown): Segment {
+  return { type: 'tool_call', id, name, arguments: args, status: 'running' };
 }
+
+/** 从 segments 中提取所有文本段落的拼接结果 */
+export function getResponseText(segs: Segment[]): string {
+  return segs
+    .filter((seg): seg is { type: 'text'; id: string; text: string } => seg.type === 'text')
+    .map((seg) => seg.text)
+    .join('');
+}
+
+/**
+ * 纯函数：根据 RunEvent 计算新的 segments 数组。
+ *
+ * - `RunStarted` → 返回空数组（重置）
+ * - `LlmStreamChunk` → 追加/合并 text segment
+ * - `ToolCallStarted/Completed/Failed` → 追加/更新 tool_call segment
+ * - 其他事件 → 返回原数组
+ *
+ * `nextId` 用于为新 text segment 生成唯一 key。
+ */
+export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => string): Segment[] {
+  switch (event.type) {
+    case EventType.RunStarted:
+      return [];
+
+    case EventType.LlmStreamChunk: {
+      const data = event.data as { chunk: { type: string; delta?: string } };
+      const delta = data.chunk.delta;
+      if (data.chunk.type === 'text_delta' && delta) {
+        const last = prev.at(-1);
+        if (last?.type === 'text') {
+          return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
+        }
+        return [...prev, { type: 'text', id: nextId(), text: delta }];
+      }
+      return prev;
+    }
+
+    case EventType.ToolCallStarted: {
+      const d = event.data as {
+        tool_call_id: string;
+        tool_name: string;
+        arguments: unknown;
+      };
+      return [...prev, makeToolCallSegment(d.tool_call_id, d.tool_name, d.arguments)];
+    }
+
+    case EventType.ToolCallCompleted: {
+      const d = event.data as {
+        tool_call_id: string;
+        duration_ms: number;
+      };
+      return prev.map((seg) =>
+        seg.type === 'tool_call' && seg.id === d.tool_call_id
+          ? { ...seg, status: 'completed' as const, duration: d.duration_ms }
+          : seg,
+      );
+    }
+
+    case EventType.ToolCallFailed: {
+      const d = event.data as {
+        tool_call_id: string;
+        error: string;
+        duration_ms: number;
+      };
+      return prev.map((seg) =>
+        seg.type === 'tool_call' && seg.id === d.tool_call_id
+          ? {
+              ...seg,
+              status: 'failed' as const,
+              error: d.error,
+              duration: d.duration_ms,
+            }
+          : seg,
+      );
+    }
+
+    default:
+      return prev;
+  }
+}
+
+// ── 组件 ──
 
 interface StreamOutputProps {
   events: EventStream;
@@ -41,121 +124,56 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
   const [segments, setSegments] = useState<Segment[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const segmentsRef = useRef<Segment[]>([]);
+  const seqRef = useRef(0);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
 
-  // 追加/更新 segments 的辅助函数：保持 ref 与 state 同步
-  const updateSegments = useCallback((fn: (prev: Segment[]) => Segment[]) => {
-    segmentsRef.current = fn(segmentsRef.current);
-    setSegments([...segmentsRef.current]);
+  /** 组件实例级 ID 生成器，替代模块级可变计数器 */
+  const nextId = useCallback(() => {
+    seqRef.current += 1;
+    return `seg_${seqRef.current}`;
+  }, []);
+
+  /** 统一的 segments 清空操作，所有重置路径走此处 */
+  const resetSegments = useCallback(() => {
+    segmentsRef.current = [];
+    setSegments([]);
   }, []);
 
   // 监听 clearSignal 变化，清空状态
   useEffect(() => {
     if (clearSignal !== undefined && clearSignal > 0) {
-      segmentsRef.current = [];
-      setSegments([]);
+      resetSegments();
       setIsStreaming(false);
     }
-  }, [clearSignal]);
+  }, [clearSignal, resetSegments]);
 
   useEffect(() => {
     const unsubscribe = events.subscribe((event: RunEvent) => {
       switch (event.type) {
-        case EventType.RunStarted: {
-          segmentsRef.current = [];
-          setSegments([]);
+        case EventType.RunStarted:
+          resetSegments();
           setIsStreaming(true);
           break;
-        }
 
-        case EventType.LlmStreamChunk: {
-          const data = event.data as { chunk: { type: string; delta?: string } };
-          const delta = data.chunk.delta;
-          if (data.chunk.type === 'text_delta' && delta) {
-            updateSegments((prev) => {
-              const last = prev.at(-1);
-              if (last?.type === 'text') {
-                // 追加到最后一个文本段落
-                return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
-              }
-              // 创建新的文本段落
-              return [...prev, { type: 'text', id: nextSegId(), text: delta }];
-            });
-          }
-          break;
-        }
-
-        case EventType.ToolCallStarted: {
-          const d = event.data as {
-            tool_call_id: string;
-            tool_name: string;
-            arguments: unknown;
-          };
-          updateSegments((prev) => [
-            ...prev,
-            {
-              type: 'tool_call',
-              id: d.tool_call_id,
-              name: d.tool_name,
-              arguments: d.arguments,
-              status: 'running',
-            } as Segment,
-          ]);
-          break;
-        }
-
-        case EventType.ToolCallCompleted: {
-          const d = event.data as {
-            tool_call_id: string;
-            tool_name: string;
-            duration_ms: number;
-          };
-          updateSegments((prev) =>
-            prev.map((seg) =>
-              seg.type === 'tool_call' && seg.id === d.tool_call_id
-                ? { ...seg, status: 'completed' as const, duration: d.duration_ms }
-                : seg,
-            ),
-          );
-          break;
-        }
-
+        case EventType.LlmStreamChunk:
+        case EventType.ToolCallStarted:
+        case EventType.ToolCallCompleted:
         case EventType.ToolCallFailed: {
-          const d = event.data as {
-            tool_call_id: string;
-            tool_name: string;
-            error: string;
-            duration_ms: number;
-          };
-          updateSegments((prev) =>
-            prev.map((seg) =>
-              seg.type === 'tool_call' && seg.id === d.tool_call_id
-                ? {
-                    ...seg,
-                    status: 'failed' as const,
-                    error: d.error,
-                    duration: d.duration_ms,
-                  }
-                : seg,
-            ),
-          );
+          const next = reduceSegments(segmentsRef.current, event, nextId);
+          segmentsRef.current = next;
+          setSegments([...next]);
           break;
         }
 
         case EventType.RunCompleted:
         case EventType.RunFailed: {
-          // 通知父组件归档当前轮输出（合并所有文本段落）
-          const responseText = segmentsRef.current
-            .filter((seg) => seg.type === 'text')
-            .map((seg) => (seg as { type: 'text'; text: string }).text)
-            .join('');
+          // 通知父组件归档当前轮输出
+          const responseText = getResponseText(segmentsRef.current);
           if (responseText) {
             onCompleteRef.current?.(responseText);
           }
-          // 清空当前轮
-          segmentsRef.current = [];
-          setSegments([]);
+          resetSegments();
           setIsStreaming(false);
           break;
         }
@@ -163,7 +181,7 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
     });
 
     return unsubscribe;
-  }, [events, updateSegments]);
+  }, [events, resetSegments, nextId]);
 
   const hasContent = segments.length > 0;
 
