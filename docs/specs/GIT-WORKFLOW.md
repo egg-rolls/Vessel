@@ -189,3 +189,16 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 合并：通过所有门禁后，在 PR 页面点击 "Squash and merge"
 清理：合并时勾选 "Delete branch" 自动删除远程分支
 ```
+
+### 7.1 Rebase 最佳实践——避免"一直 rebase"
+
+**核心原则：rebase 的痛和分支的生命周期成正比。分支活得越久、改动越大，rebase 越痛。治本之道不是"更频繁地 rebase"，而是"让分支更短命"。**
+
+| 做法 | 为什么 |
+|------|--------|
+| **分支保持小而短** | 一个分支一个关注点，几百行以内，1-2 天合入。小分支的 rebase 通常零冲突 |
+| **只在需要时 rebase** | 不是 main 每前进一个 commit 就要 rebase。只在以下时机 rebase：(1) 创建 PR 前；(2) 已知 main 有你需要的修复；(3) PR 审查通过、合并前最后同步 |
+| **rebase 前先拉最新 main** | `git checkout main && git pull && git checkout -` 再 `git rebase main`。不要用本地的旧 main |
+| **冲突太多 → 分支太大了** | 一次 rebase 超过 5 个冲突？说明这个分支塞了太多东西。考虑拆成多个小 PR |
+| **协作分支用 merge 不用 rebase** | 多人共用一个 feature 分支时，用 `git merge main` 而非 `git rebase main`。rebase 会改写历史，协作场景下是灾难 |
+| **rebase 后 force-with-lease** | 永远用 `--force-with-lease`，不用 `--force`。前者会在远程有他人提交时拒绝推送，保护协作者的工作 |
