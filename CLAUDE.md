@@ -207,6 +207,76 @@ AI 的默认模式是"最短路径完成当前任务"。这是局部最优，但
 **解释时**：引实际文件/类/函数；标 pre-MVP/`[plan]`；区分已实现 vs 规划；不虚构 API。
 **不确定时**：搜代码 → 读测试 → 仍不清则短问。
 
+### 8.1 Issue 管理流程
+
+**扫描与认领**：
+```bash
+gh issue list --state open --json number,title,labels,assignees,comments
+```
+1. 筛选 `assignees` 为空 + `comments` 中无认领声明的 issue
+2. 按优先级排序：P0 > P1 > P2 > P3（无标签最低）
+3. 认领：`gh issue comment <N> --body "我来处理这个。"`
+
+**拆分任务**：复杂 issue 创建 sub issue 拆分，主 issue 用 checklist 追踪进度。
+
+**关联关闭**：PR body 中写 `Closes #N` 或 `Fixes #N`，合并后自动关闭 issue。
+
+### 8.2 CI 失败处理流程
+
+**监控 CI 状态**：
+```bash
+gh pr checks <PR号>           # 查看状态
+gh run view <run-id> --log-failed  # 查看失败日志
+```
+
+**常见失败及修复**：
+
+| 失败类型 | 修复方法 |
+|----------|----------|
+| lint | `bun run format` 自动修复，手动调整未修复项 |
+| typecheck | 读错误信息，修复类型断言/导入/可选链 |
+| test | `bun test` 本地复现，定位失败用例 |
+| build | 检查导入路径、依赖缺失 |
+
+**修复后**：提交推送，等待 CI 重跑，确认全绿。
+
+### 8.3 工具使用指南
+
+| 场景 | 工具 | 示例 |
+|------|------|------|
+| Git/GitHub 操作 | Bash | `git status`、`gh pr create` |
+| 构建/测试/lint | Bash | `bun test`、`bun run lint` |
+| 读取文件 | Read | 查看代码、配置 |
+| 写入/编辑文件 | Write/Edit | 修改代码 |
+| 搜索文件名 | Glob | `**/*.ts`、`**/index.ts` |
+| 搜索代码内容 | Grep | `export class AgentRuntime` |
+| 复杂多步任务 | Task | 并行探索、批量修改 |
+
+**原则**：能用专用工具（Read/Grep）不用 Bash；能并行不串行。
+
+### 8.4 PR 创建规范
+
+**分支命名**：`fix/`、`feat/`、`docs/`、`refactor/`、`test/`、`chore/`
+
+**Commit 格式**：`<type>(<scope>): <subject>`
+- type：feat/fix/docs/refactor/test/chore
+- scope：core/tui/config/plugins/docs 等
+- subject：祈使句，首字母小写，无句号
+
+**PR body 模板**：
+```markdown
+## 变更内容
+- 简述修改了什么
+
+## 验证
+- bun run typecheck ✅
+- bun run lint ✅
+- bun test ✅
+
+## 关联 Issue
+Closes #N
+```
+
 ## 9. 合并审查规则（Git 门禁）
 
 合并任何分支到 `main` 前，必须执行以下检查并输出结论。**核心原则：合并前验证，不合并后修复。** 详见 [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)。
