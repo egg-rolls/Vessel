@@ -10,7 +10,7 @@ import { MemoryEventStream } from '../src/events/event-stream';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
-import { HookType, type HookContext } from '../src/types/hook';
+import { type HookContext, HookType } from '../src/types/hook';
 import type { Plugin } from '../src/types/plugin';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../src/types/provider';
 
