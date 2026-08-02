@@ -5,6 +5,10 @@ on:
   pull_request:
     types: [opened, edited, reopened]
 
+permissions:
+  issues: write
+  pull-requests: read
+
 jobs:
   sync-labels:
     name: Copy labels from linked issue
