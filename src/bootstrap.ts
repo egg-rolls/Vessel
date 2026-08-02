@@ -175,7 +175,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Runtime ─────────────────────────────────────
-  const runtime = new AgentRuntime({
+  const runtime = await AgentRuntime.create({
     provider,
     model: providerModel,
     tools,
@@ -190,8 +190,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     plugins,
     systemPrompt: config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。',
   });
-
-  await runtime.ready;
 
   // 采集插件注册的工具定义（仅交互模式）
   if (!headless) {

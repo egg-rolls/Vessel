@@ -10,7 +10,7 @@
 ```typescript
 import { AgentRuntime } from '@vessel/core';
 
-const runtime = new AgentRuntime({
+const runtime = await AgentRuntime.create({
   provider,      // LLMProvider — LLM 提供者
   model,         // string — 模型名
   tools,         // ToolRegistry — 工具注册表

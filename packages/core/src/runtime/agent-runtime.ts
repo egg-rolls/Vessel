@@ -43,7 +43,7 @@ export class AgentRuntime {
   private stats: UsageStats;
   private systemPrompt?: string;
 
-  constructor(opts: AgentRuntimeOptions) {
+  private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
     this.model = opts.model;
     this.tools = opts.tools;
@@ -75,16 +75,13 @@ export class AgentRuntime {
         // 工具名冲突，跳过（插件工具优先已注册的情况下保留直接工具）
       }
     }
-
-    // 安装插件（异步，await runtime.ready 确保完成）
-    this._readyPromise = this.installPlugins(opts.plugins ?? []);
   }
 
-  private _readyPromise: Promise<void>;
-
-  /** 等待所有插件安装完成。应在首次 run() 前 await。 */
-  get ready(): Promise<void> {
-    return this._readyPromise;
+  /** 创建并异步初始化 AgentRuntime。用此替代 new AgentRuntime()。 */
+  static async create(opts: AgentRuntimeOptions): Promise<AgentRuntime> {
+    const runtime = new AgentRuntime(opts);
+    await runtime.installPlugins(opts.plugins ?? []);
+    return runtime;
   }
 
   private async installPlugins(plugins: Plugin[]): Promise<void> {

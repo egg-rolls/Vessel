@@ -54,7 +54,7 @@ egg-rolls 的每个节点产出**可跑的功能**，emma 在节点上挂 **UI/U
 | ② Config | 加载链（env→vessel.yaml→~/.vessel→默认）、首启向导流程 | `/setup` 向导 UX | `runSetupWizard()` |
 | ③ Provider | 6 个 provider 插件全量加载、`config.provider.name` 选 provider | `/model` 切换 UI | `ReplContext.provider` |
 | ④ Plugins | `PLUGIN_IMPORT_MAP` 16 插件、`config.plugins` 驱动加载 | `/plugins` 管理面板 | `ReplContext.plugins` |
-| ⑤ Runtime | `AgentRuntime` 构造、`await runtime.ready`、guardrail 注册 | 状态栏（provider/model/session/plugins）| `ReplContext.{provider,plugins}` |
+| ⑤ Runtime | `AgentRuntime` 构造、`AgentRuntime.create()`、guardrail 注册 | 状态栏（provider/model/session/plugins）| `ReplContext.{provider,plugins}` |
 | ⑥ REPL | readline 对话循环、9 个 slash 命令、session 管理 | Ink 框架替换、`/` 弹菜单 | `startRepl(ctx)` |
 | ⑦ LLM | `runtime.run()` 调 provider、`LlmStreamChunk` 事件流 | token-by-token 流式动画 | `EventStream.subscribe(LlmStreamChunk)` |
 | ⑧ Tool | `ToolPermissionChecker.confirm()` readline 弹窗 | 图形确认弹窗 | `createPermissionGuardrain()` |

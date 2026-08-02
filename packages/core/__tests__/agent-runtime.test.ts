@@ -16,14 +16,14 @@ describe('AgentRuntime Integration', () => {
   let eventStream: MemoryEventStream;
   let session: MemorySessionBackend;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     provider = new MemoryLLMProvider();
     tools = new MemoryToolRegistry();
     context = new MemoryContextManager();
     eventStream = new MemoryEventStream();
     session = new MemorySessionBackend();
 
-    runtime = new AgentRuntime({
+    runtime = await AgentRuntime.create({
       provider,
       model: 'test-model',
       tools,
@@ -146,7 +146,7 @@ describe('AgentRuntime Integration', () => {
       },
     };
 
-    const toolCallRuntime = new AgentRuntime({
+    const toolCallRuntime = await AgentRuntime.create({
       provider: customProvider,
       model: 'test-model',
       tools,

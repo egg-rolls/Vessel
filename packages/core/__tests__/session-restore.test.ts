@@ -36,7 +36,7 @@ function makeRuntime(
   session: MemorySessionBackend,
   context = new MemoryContextManager(),
 ) {
-  return new AgentRuntime({
+  return AgentRuntime.create({
     provider,
     model: 'test',
     tools: new MemoryToolRegistry(),
@@ -53,8 +53,7 @@ describe('session 多轮与恢复', () => {
   it('同会话多轮：第二次 run 看到第一次的交换（context 不再被 clear）', async () => {
     const provider = new RecordingProvider();
     const session = new MemorySessionBackend();
-    const rt = makeRuntime(provider, session);
-    await rt.ready;
+    const rt = await makeRuntime(provider, session);
     await rt.run('first message', 'sess1');
     await rt.run('second message', 'sess1');
 
@@ -66,14 +65,12 @@ describe('session 多轮与恢复', () => {
 
   it('跨进程 resume：新 runtime 从 backend 加载历史', async () => {
     const session = new MemorySessionBackend();
-    const rt1 = makeRuntime(new RecordingProvider(), session);
-    await rt1.ready;
+    const rt1 = await makeRuntime(new RecordingProvider(), session);
     await rt1.run('remember this', 'sessX');
 
     // 新进程：新 runtime + 新 context（空），同一 backend
     const rec2 = new RecordingProvider();
-    const rt2 = makeRuntime(rec2, session);
-    await rt2.ready;
+    const rt2 = await makeRuntime(rec2, session);
     await rt2.run('continue', 'sessX');
 
     const first = rec2.received[0];
@@ -83,8 +80,7 @@ describe('session 多轮与恢复', () => {
   it('不同会话隔离：sessA 的历史不泄漏到 sessB', async () => {
     const provider = new RecordingProvider();
     const session = new MemorySessionBackend();
-    const rt = makeRuntime(provider, session);
-    await rt.ready;
+    const rt = await makeRuntime(provider, session);
     await rt.run('secret A', 'sessA');
     await rt.run('query B', 'sessB');
 
