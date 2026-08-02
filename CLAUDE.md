@@ -4,12 +4,15 @@
 > Vessel 已从旧 Python 项目重构为面向无基础/弱基础用户的 **TypeScript Harness 应用**。
 > 旧项目遗产见 [legacy/](legacy/)。本文件与代码冲突时，以代码为准并更新本文件；不靠记忆猜测。
 
-> **场景调度**：
-> - 写/改代码 → 先读 [§4 工程规范](#4-工程规范)（含 §4.1 设计纪律）
-> - 审查 PR / 合并 → 先读 [§9 合并审查规则](#9-合并审查规则git-门禁) + [`GIT-WORKFLOW.md` §六](docs/specs/GIT-WORKFLOW.md) 反面模式
-> - 修改文档 → 先读 [`DOC-STANDARD.md` §七](docs/specs/DOC-STANDARD.md) 文档设计方法 + 走对应链路（§7.2）
-> - 涉及 core 包 → 先读 [§5.1 Core 冻结](#51-core-冻结adr-017)
-> - 不确定能力放哪层 → 先读 [§5 能力分层](#5-能力分层与准入决策树)
+> **场景调度**：每一步工作的第一步——先读对应角色入口文件，再开始干活。
+> 
+> | 你的任务 | 第一步 |
+> |---------|--------|
+> | 写/改代码 | 先读 [`docs/guides/DEVELOPER.md`](docs/guides/DEVELOPER.md)（开发者须知） |
+> | 审查 PR / 合并 | 先读 [`docs/guides/REVIEWER.md`](docs/guides/REVIEWER.md)（审查者须知） |
+> | 修改文档 | 先读 [`docs/guides/DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md)（文档管理者须知） |
+> 
+> 每个须知文件包含该角色的必读清单（按顺序）、自检问题和自检命令。读完再干活——跳过任何一项 = 违规概率大增。
 
 ## 1. 项目身份
 
@@ -50,6 +53,7 @@ AI 改 specs/guides/api 后自检：
 
 | 场景 | 文档 |
 |------|------|
+| **角色入口（开始任何工作前）** | [`docs/guides/DEVELOPER.md`](docs/guides/DEVELOPER.md) / [`REVIEWER.md`](docs/guides/REVIEWER.md) / [`DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md) |
 | 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
 | 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)（核心规则已在 §9） |
