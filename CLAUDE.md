@@ -277,6 +277,25 @@ gh run view <run-id> --log-failed  # 查看失败日志
 Closes #N
 ```
 
+### 8.5 PR 审批与合并流程
+
+**审批要求**：
+- **至少 1 位其他合作者审批**（不能自己批准自己的 PR）
+- 仓库所有者或有 write 权限的协作者可以批准
+- AI 代理创建的 PR 必须等待人类合作者审批
+
+**合并方式**：
+```bash
+# 等待审批后，由有权限的用户执行：
+gh pr merge <PR号> --squash --delete-branch
+```
+
+**AI 代理职责**：
+1. 创建 PR 后请求审批：`gh pr edit <PR号> --add-reviewer <用户名>`
+2. 监控 CI 状态：`gh pr checks <PR号>`
+3. **禁止**：自己批准自己的 PR、跳过审批要求、使用 `--admin` 标志
+4. 等待人类合作者审批后，由人类执行合并
+
 ## 9. 合并审查规则（Git 门禁）
 
 合并任何分支到 `main` 前，必须执行以下检查并输出结论。**核心原则：合并前验证，不合并后修复。** 详见 [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md)。
