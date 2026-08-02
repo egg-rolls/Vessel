@@ -221,12 +221,17 @@ gh issue list --state open --json number,title,labels,assignees,comments
 
 **关联关闭**：PR body 中写 `Closes #N` 或 `Fixes #N`，合并后自动关闭 issue。
 
+**命名规范**：Issue 标题格式见 [processes/conventions.md §三](processes/conventions.md)。
+
+**创建模板**：使用 [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/) 中的模板（功能请求 / Bug 报告）。
+
 ### 8.2 CI 失败处理流程
 
 **监控 CI 状态**：
 ```bash
 gh pr checks <PR号>           # 查看状态
 gh run view <run-id> --log-failed  # 查看失败日志
+gh run view <run-id> --log-failed --job <job-id>  # 查看单个 job 日志（多 job workflow 时更实用）
 ```
 
 **常见失败及修复**：
@@ -240,21 +245,7 @@ gh run view <run-id> --log-failed  # 查看失败日志
 
 **修复后**：提交推送，等待 CI 重跑，确认全绿。
 
-### 8.3 工具使用指南
-
-| 场景 | 工具 | 示例 |
-|------|------|------|
-| Git/GitHub 操作 | Bash | `git status`、`gh pr create` |
-| 构建/测试/lint | Bash | `bun test`、`bun run lint` |
-| 读取文件 | Read | 查看代码、配置 |
-| 写入/编辑文件 | Write/Edit | 修改代码 |
-| 搜索文件名 | Glob | `**/*.ts`、`**/index.ts` |
-| 搜索代码内容 | Grep | `export class AgentRuntime` |
-| 复杂多步任务 | Task | 并行探索、批量修改 |
-
-**原则**：能用专用工具（Read/Grep）不用 Bash；能并行不串行。
-
-### 8.4 PR 创建规范
+### 8.3 PR 创建规范
 
 **分支命名**：`fix/`、`feat/`、`docs/`、`refactor/`、`test/`、`chore/`
 
@@ -263,21 +254,11 @@ gh run view <run-id> --log-failed  # 查看失败日志
 - scope：core/tui/config/plugins/docs 等
 - subject：祈使句，首字母小写，无句号
 
-**PR body 模板**：
-```markdown
-## 变更内容
-- 简述修改了什么
+**命名规范**：分支、Commit、PR 命名格式见 [processes/conventions.md](processes/conventions.md)。
 
-## 验证
-- bun run typecheck ✅
-- bun run lint ✅
-- bun test ✅
+**PR body 模板**：使用 [.github/PULL_REQUEST_TEMPLATE.md](.github/PULL_REQUEST_TEMPLATE.md) 中的模板。
 
-## 关联 Issue
-Closes #N
-```
-
-### 8.5 PR 审批与合并流程
+### 8.4 PR 审批与合并流程
 
 **审批要求**：
 - **至少 1 位其他合作者审批**（不能自己批准自己的 PR）
