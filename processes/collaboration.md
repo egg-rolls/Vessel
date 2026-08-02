@@ -52,7 +52,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 ```
 1. Coder 创建 PR（Draft → Ready for review）
         ↓
-2. Reviewer 审查（对照 CLAUDE.md §9）
+2. Reviewer 审查（对照 docs/guides/REVIEWER.md）
         ↓
 3. 审查通过 → Reviewer 在 GitHub 上点击 "Squash and merge"
         ↓
@@ -67,7 +67,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 - ✅ 无未解决的合并冲突
 - ✅ 所有对话已解决
 
-## 五、Reviewer 的审查（对照 CLAUDE.md §9）
+## 五、Reviewer 的审查（对照 docs/guides/REVIEWER.md）
 
 在 GitHub PR 页面进行，检查清单：
 
@@ -75,7 +75,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 [ ] CI 全绿？lint + typecheck + test + build？
 [ ] 依赖方向正确？core 没引用 tui/config？
 [ ] 没有硬编码 Key / console.log / NotImplementedError？
-[ ] 没有违反 CLAUDE.md §6 红线？
+[ ] 没有违反 CLAUDE.md §3 红线？
 [ ] 文档同步更新了没？
 → 通过 → GitHub 上点击 "Squash and merge"
 → 不通过 → 在 PR 中标注原因 → Coder 修复后重新请求审查

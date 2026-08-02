@@ -607,7 +607,7 @@ observability:
 
 ## 8. 实现红线
 
-实现必须遵守的约束清单（含理由）见 [CLAUDE.md §6 红线](../../CLAUDE.md)。核心几条：
+实现必须遵守的约束清单（含理由）见 [CLAUDE.md §3 红线](../../CLAUDE.md)。核心几条：
 - core 极小：runtime 只管 loop+事件+状态；guardrail/memory/mcp/corrections/resilience/evals 是插件。
 - runtime 构造函数只收核心必需项，不注入插件对象。
 - 事件类型枚举化 + payload schema；全异步无 sync-in-async；不可变优先；不留 stub。

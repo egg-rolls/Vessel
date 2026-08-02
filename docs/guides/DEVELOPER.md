@@ -1,6 +1,6 @@
 # 开发者须知
 
-> **写/改代码前，必须先读完本文件列出的所有文档。按顺序读，读完一项自检一项。**
+> **写/改代码前，必须先读完本文件。按顺序读，读完一项自检一项。**
 > 跳过任何一项 = 写出的代码大概率违规，审查时会被打回。
 
 ## 为什么必须先读这些
@@ -9,19 +9,11 @@ Vessel 有严格的架构约束（core 冻结、能力分层、依赖方向）�
 
 ## 必读清单（按此顺序）
 
-读完每一项后，用自检问题确认你真的理解了。
-
 ### 1. CLAUDE.md（全篇）
 
-这是仓库的操作手册。特别关注：
-- §1 项目身份（知道这是什么项目）
-- §4 工程规范（知道怎么写代码）
-- §4.1 代码设计纪律（知道怎么设计好代码）
-- §5 能力分层与准入决策树（知道新代码放哪层）
-- §5.1 Core 冻结（知道什么不能改）
-- §6 红线（知道什么绝对不能做）
+仓库公共操作手册（~100 行，简短）。所有人必读。重点关注 §4 红线、§5 反幻觉纪律。
 
-**自检**：新加一个能力，你能判断它该进 core / 插件 / 应用层吗？你能说出 core 冻结的三种例外吗？
+**自检**：Vessel 的三层是什么？红线有哪些？
 
 ### 2. docs/specs/SPEC.md
 
@@ -39,9 +31,27 @@ Vessel 有严格的架构约束（core 冻结、能力分层、依赖方向）�
 
 Core 接口快速参考——写代码时随时查阅。
 
-**自检**：你要改的文件在 core 里吗？如果在，先走 CLAUDE.md §5.1 的 checklist。
+**自检**：你要改的文件在 core 里吗？如果在，先读下方 §Core 冻结的 checklist。
 
-### 5. 按场景补充
+### 5. processes/conventions.md
+
+分支命名、Commit message 格式、Issue/PR 命名规范。**写第一行代码前就该知道这些。**
+
+**自检**：Commit message 的格式是什么？分支命名规则是什么？
+
+### 6. processes/collaboration.md
+
+Issue 认领、Draft PR 创建、gh CLI 操作技巧。**推送代码前必读。**
+
+**自检**：创建 PR 的正确步骤是什么？为什么中文内容要用 `--body-file`？
+
+### 7. docs/specs/GIT-WORKFLOW.md
+
+分支模型、合并门禁（架构检查 + CI + 安全 + 回归确认）、反面模式。**知道什么会阻断你的 PR。**
+
+**自检**：合并前必须通过哪四类检查？"先合后改"为什么是反面模式？
+
+### 8. 按场景补充
 
 | 场景 | 补充阅读 |
 |------|---------|
@@ -51,13 +61,126 @@ Core 接口快速参考——写代码时随时查阅。
 | 写测试 | `docs/guides/testing.md` |
 | 改文档 | 停止——先读 `docs/guides/DOC-MANAGER.md`（你不是开发者角色了） |
 
-## 提交前自检
+---
 
-```bash
-bun run lint       # 必须通过
-bun run typecheck  # 必须通过
-bun test           # 必须通过
-bun run build      # 必须通过
+## 工程规范
+
+- TS strict；async/await 全异步，**禁止 sync-in-async**（旧项目教训6）。
+- 不可变优先；构造时注入全部状态，**不外部改私有字段**（教训7）。
+- 事件类型用枚举 + payload schema，**禁止散落字符串字面量**（教训8）。
+- 文件/命名：包内小写 kebab；接口 PascalCase；遵循各包既有风格。
+- 测试：每模块配单测；MVP 验收见 [ROADMAP.md](docs/specs/ROADMAP.md) Phase 1。
+- 提交格式：`<type>(<scope>): <subject>`（feat/fix/docs/refactor/test/chore）。
+- 依赖方向：tui -> config -> core；core 不反向引用。
+
+### 代码设计纪律（前期投入换长期回报）
+
+#### 概念
+
+代码被阅读的次数远多于被编写的次数。每一行提交的代码首先是一笔**负债**——未来改它、测它、理解它的成本。
+
+AI 的默认模式是"最短路径完成当前任务"。这是局部最优，但在时间维度上是全局最劣。
+每次为"快点写完"而跳过的抽象、提取、边界划分，都会在未来某次修改时连本带利索回。
+
+"长期快乐"不是多写代码——是在正确的地方画出正确的边界，让每块逻辑可以**独立理解、独立测试、独立修改**。
+
+#### 正面例子
+
+以下不是规定，是方向示例——激活你自己的设计判断：
+
+- 80 行 inline 逻辑 → 提取为模块级纯函数 → **可以单测**。3 个月后改它时，测试告诉你有没有踩断东西。
+- `switch(event.type) { case A: ... case B: ... }` → 纯函数 `reduce(prev, event)` → **输入输出类型化**。加一个 case 不改调用方代码。
+- 三个组件里相似的 format/parse 逻辑 → 共享工具函数 → **bug 修一次，三处受益**。不追着每个副本改。
+- `as Segment` 类型断言 → 工厂函数 `makeSegment(...)` → **类型在构造时保证**。重构时编译器抓住所有断裂点，而不是运行时崩。
+- 多个 useState 各自为政 → useReducer 或统一状态对象 → **状态转换可追踪**。不会出现"改了 A 忘了更新 B"的隐式 bug。
+
+共同特征：**写完当下多花了 10 分钟，但未来每次改动省下数小时**。
+
+#### 反面例子
+
+反面不是"写错了"，而是"写得太快了"——缺少设计停顿：
+
+- **"能跑就行"** → 测试只验证当前路径，不验证结构。下次改代码时，测试也改不动。
+- **"这太简单了，不需要抽象"** → 简单 × 重复 N 次 = 复杂。每个重复副本都是未来 bug 的独立温床。
+- **"以后再重构"** → 软件工程中回报率最低的一句话。今天不做的重构，明天的你也不会做。
+- **"就加个 else if，不碍事"** → 每个分支单独看都合理，但 20 个之后就是没人敢改、测不了的巨型分发。
+
+共同特征：**当即省了 10 分钟，但未来每次改动都要付出额外代价，直到没人愿意碰**。
+
+#### 提交前自问（30 秒设计停顿）
+
+这些不是 checklist——是你自己判断方向的提示：
+
+- 3 个月后我要在这个模块里加新功能，我会感谢现在的自己吗？
+- 这段逻辑能**不启动整个应用**单独测试吗？
+- 新增一个 case / tool / event 需要**改几处代码**？能不能做成"只加不改"？
+- 类型签名本身能**说清楚这段代码做什么**，还是必须读实现？
+
+你有所有具体场景的信息，比任何 checklist 更了解你的代码。**10 分钟的设计停顿，换未来 10 小时的维护时间——每一笔都值得。**
+
+---
+
+## 能力分层与准入决策树
+
+新增能力前必须分类：**内置(core) / 插件 / 应用层**。
+
+进 **core** 前必须全部满足：
+1. 大多数 harness 都需要？
+2. 领域无关（不涉文档/代码审查/客服/OCR/PDF/图片/向量/浏览器/IAM/计费/租户/dashboard）？
+3. 可接口化（不绑具体后端/厂商 SDK/重依赖）？
+4. 不绑定 Provider/Model/API Key/Base URL/价格？
+5. 能被多个应用复用？
+
+全"是" -> core；否则 -> 插件或应用层。**拿不准选插件，不选 core。**
+
+- **内置(core)**：runtime loop、provider 抽象、context、session、events、tools、limits、termination、guardrail 接口、hook 接口、PluginHost。
+- **插件**：guardrail 规则、memory、MCP、corrections、resilience、evals、OCR/PDF/图片/向量/浏览器等。**不进 runtime 构造函数**，经 Plugin 注入（ADR-003）。
+- **应用层**：TUI、配置向导、业务 agent。
+
+用户面向的四种扩展类型（Plugin/MCP/Skill/Config）全经 PluginHost 投放，core 不为它们新增接口（ADR-011）；详见 [SPEC.md §5.1](docs/specs/SPEC.md)。
+
+### Core 冻结（ADR-017）
+
+**`@vessel/core` 的 9 个接口 + tool-calling loop 已冻结。** 功能增长一律走 Plugin/MCP/Skill，不动 core。
+
+冻结范围：`packages/core/src/**` 中所有定义了接口契约、循环逻辑、事件类型的文件。
+
+**只能因三种原因改 core**（ADR-012(2a-c)，需 ADR-017 解冻条件）：
+1. 扩"插座"——EventType / HookType / GuardrailStage 枚举成员（需写新 ADR）
+2. 修 loop 级 bug（竞态、泄漏、安全）
+3. 横切需求——**先证明**无法用 Plugin/Hook/Guardrail/事件/工具表示（ADR-015：尚无已知的此类需求）
+
+**你以为需要改 core？走这个 checklist：**
+```
+[ ] 我能用 Plugin + PluginHost.registerTool/registerHook 实现吗？
+[ ] 我能用 MCP server + bridge plugin 实现吗？
+[ ] 我能用 Skill（Markdown + BeforeLlm Hook）实现吗？
+[ ] 我能用 Guardrail（四阶段）实现吗？
+[ ] 我能用事件（新增或现有 EventType）实现吗？
+→ 任一为"是" → 不进 core。全"否" → 写 ADR，两人 Review。
 ```
 
-四项全绿再推送。
+**AI 编码前自查**：如果你要改 `packages/core/src/` 下的文件，先读本段。拿不准 = 不在 core 做。
+
+---
+
+## 项目事实（随实现更新）
+
+- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/{specs,guides,api,dev}` + `processes/` + `legacy/`。
+- monorepo：bun workspaces。
+- 公共入口：`@vessel/core` 的 `AgentRuntime`、`PluginHost`；`@vessel/tui` 的 REPL。
+- 依赖：保持精简；core 不依赖 tui/config/plugins。
+- 不引入 LangChain/LangGraph。
+
+---
+
+## 校验命令
+
+```bash
+bun run lint       # biome lint+format 检查（ADR-013）
+bun run typecheck  # tsc --noEmit 类型检查
+bun test           # 测试
+bun run build      # 构建
+```
+
+提交前四项全绿。docs-only 改动至少跑 lint。
