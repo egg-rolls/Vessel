@@ -23,6 +23,14 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "packages/*/src/**/*.ts", "packages/*/src/**/*.tsx"],
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "packages/*/src/**/*.ts",
+    "packages/*/src/**/*.tsx",
+    "plugins/**/*.ts",
+    "packages/*/__tests__/**/*.ts",
+    "src/__tests__/**/*.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

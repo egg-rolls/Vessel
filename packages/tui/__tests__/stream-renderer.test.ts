@@ -304,7 +304,7 @@ describe('StreamRenderer', () => {
       });
 
       const call = stdoutWriteSpy.mock.calls[0];
-      expect(call[0]).not.toContain('\x1b[');
+      expect(call?.[0]).not.toContain('\x1b[');
     });
 
     it('enableColors=true 添加 ANSI 转义码', () => {
@@ -319,7 +319,7 @@ describe('StreamRenderer', () => {
       });
 
       const call = stdoutWriteSpy.mock.calls[0];
-      expect(call[0]).toContain('\x1b[');
+      expect(call?.[0]).toContain('\x1b[');
     });
   });
 

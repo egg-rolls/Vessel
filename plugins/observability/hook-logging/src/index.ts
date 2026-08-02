@@ -78,7 +78,7 @@ export class LoggingHook implements Hook {
   /**
    * 记录日志
    */
-  private log(entry: LogEntry): void {
+  log(entry: LogEntry): void {
     if (LOG_LEVEL_PRIORITY[entry.level] < LOG_LEVEL_PRIORITY[this.config.level ?? 'info']) {
       return;
     }

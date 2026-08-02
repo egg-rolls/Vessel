@@ -84,13 +84,15 @@ export interface McpClientConfig {
 // ── MCP 客户端实现 ────────────────────────────────
 
 /** JSON-RPC 错误码 */
-const _JSONRPC_ERROR = {
+const JSONRPC_ERROR = {
   PARSE_ERROR: -32700,
   INVALID_REQUEST: -32600,
   METHOD_NOT_FOUND: -32601,
   INVALID_PARAMS: -32602,
   INTERNAL_ERROR: -32603,
 } as const;
+
+export { JSONRPC_ERROR };
 
 /**
  * 单个 MCP Server 连接
@@ -628,13 +630,8 @@ function createMcpContextHook(manager: McpClientManager): Hook {
     priority: 80,
     run: async (ctx: HookContext): Promise<HookContext | null> => {
       // 将 MCP 提供的 resources/prompts 摘要注入上下文
-      const _parts: string[] = [];
-      for (const _conn of Array.from(
-        (manager as unknown as { connections: Map<string, McpConnection> }).connections?.values() ??
-          [],
-      )) {
-        // 这里不直接访问 private 字段，改用公开方法
-      }
+      // 使用公开接口获取信息
+      void manager;
 
       // 使用公开接口获取信息
       const tools = manager.listAllTools();
@@ -681,7 +678,7 @@ export const mcpClientPlugin: Plugin = {
     }
 
     // 暴露 manager 供其他插件使用
-    (host as Record<string, unknown>).__mcpManager = manager;
+    (host as unknown as Record<string, unknown>).__mcpManager = manager;
   },
 };
 

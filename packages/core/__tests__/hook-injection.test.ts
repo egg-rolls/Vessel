@@ -10,8 +10,8 @@ import { MemoryEventStream } from '../src/events/event-stream';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
-import { HookType } from '../src/types/hook';
-import type { HookContext, Plugin } from '../src/types/plugin';
+import { HookType, type HookContext } from '../src/types/hook';
+import type { Plugin } from '../src/types/plugin';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../src/types/provider';
 
 /** 捕获 req.messages 的 Provider */
@@ -54,8 +54,8 @@ async function buildRuntime(opts: { systemPrompt?: string; plugins: Plugin[] }) 
     tools: new MemoryToolRegistry(),
     context,
     events: new MemoryEventStream(),
-    limits: { request_limit: 10, tool_calls_limit: 5 },
-    termination: { max_iterations: 10 },
+    limits: { requestLimit: 10, toolCallsLimit: 5 },
+    termination: { maxIterations: 10 },
     session: new MemorySessionBackend(),
     plugins: opts.plugins,
     systemPrompt: opts.systemPrompt,

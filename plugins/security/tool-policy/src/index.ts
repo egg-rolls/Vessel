@@ -66,11 +66,12 @@ function matchesPolicy(toolName: string, patterns: string[]): boolean {
 
 function createToolPolicyGuardrail(config: Required<ToolPolicyConfig>): Guardrail {
   return {
+    name: 'tool-policy',
     stage: GuardrailStage.ToolCall,
     priority: 50,
     check: async (value: unknown, ctx: GuardrailContext): Promise<GuardrailResult> => {
       const toolName = ((value as { name?: string })?.name ??
-        (ctx as Record<string, unknown>)?.tool_name ??
+        (ctx as unknown as Record<string, unknown>)?.tool_name ??
         '') as string;
 
       if (!toolName) {

@@ -13,8 +13,8 @@ describe('MemoryContextManager', () => {
     context.add({ role: 'assistant', content: 'Hi there!' });
 
     expect(context.messages).toHaveLength(2);
-    expect(context.messages[0].content).toBe('Hello');
-    expect(context.messages[1].content).toBe('Hi there!');
+    expect(context.messages[0]?.content).toBe('Hello');
+    expect(context.messages[1]?.content).toBe('Hi there!');
   });
 
   it('should estimate token count', () => {
@@ -72,7 +72,7 @@ describe('MemoryContextManager', () => {
 
     expect(contextWithLimit.messages).toHaveLength(5);
     // 应该保留最后5条
-    expect(contextWithLimit.messages[0].content).toBe('Message 5');
-    expect(contextWithLimit.messages[4].content).toBe('Message 9');
+    expect(contextWithLimit.messages[0]?.content).toBe('Message 5');
+    expect(contextWithLimit.messages[4]?.content).toBe('Message 9');
   });
 });

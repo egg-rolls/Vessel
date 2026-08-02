@@ -67,8 +67,8 @@ function extractExplicitMemories(text: string, runId: string): AutoMemory[] {
 
   let match: RegExpExecArray | null = explicitPattern.exec(text);
   while (match !== null) {
-    const key = match[1].trim();
-    const value = match[2].trim();
+    const key = match[1]?.trim() ?? '';
+    const value = match[2]?.trim() ?? '';
     if (key && value) {
       results.push({
         name: slugify(key),
@@ -86,8 +86,8 @@ function extractExplicitMemories(text: string, runId: string): AutoMemory[] {
   const slashPattern = /\/remember\s+(.+?)\s+(.+?)(?:\n|$)/gi;
   match = slashPattern.exec(text);
   while (match !== null) {
-    const key = match[1].trim();
-    const value = match[2].trim();
+    const key = match[1]?.trim() ?? '';
+    const value = match[2]?.trim() ?? '';
     if (key && value) {
       results.push({
         name: slugify(key),
@@ -132,7 +132,7 @@ function extractPreferences(text: string, runId: string): AutoMemory[] {
   for (const { regex, negate } of prefPatterns) {
     let match: RegExpExecArray | null = regex.exec(text);
     while (match !== null) {
-      const pref = match[1].trim();
+      const pref = match[1]?.trim() ?? '';
       if (pref.length >= 3 && pref.length <= 200) {
         const prefix = negate ? '避免使用: ' : '偏好: ';
         results.push({

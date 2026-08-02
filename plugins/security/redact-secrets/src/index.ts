@@ -154,6 +154,7 @@ function redactText(text: string, rules: RedactRule[]): { redacted: string; foun
 
 function createRedactGuardrail(rules: RedactRule[], stage: GuardrailStage): Guardrail {
   return {
+    name: 'redact-secrets',
     stage,
     priority: 10, // 高优先级，在其他 guardrail 之前执行
     check: async (value: unknown, _ctx: GuardrailContext): Promise<GuardrailResult> => {

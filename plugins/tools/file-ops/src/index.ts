@@ -156,11 +156,14 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
             results.push(`📁 ${entry.name}/`);
 
             if (recursive) {
-              const subEntries = await listDirTool.handler({
-                path: fullPath,
-                recursive: true,
-                pattern,
-              });
+              const subEntries = await listDirTool.handler(
+                {
+                  path: fullPath,
+                  recursive: true,
+                  pattern,
+                },
+                { run_id: '', messages: [] },
+              );
               if (typeof subEntries === 'string') {
                 const lines = subEntries.split('\n').filter((l) => l.trim());
                 for (const line of lines) {

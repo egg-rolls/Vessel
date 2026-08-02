@@ -24,7 +24,7 @@ function mockFetchSse(sseChunks: string[]): void {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 const realFetch = globalThis.fetch;
@@ -134,7 +134,7 @@ describe('AnthropicProvider streaming', () => {
           usage: { input_tokens: 1, output_tokens: 2 },
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )) as typeof fetch;
+      )) as unknown as typeof fetch;
 
     const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
     const response = await provider.chat({
