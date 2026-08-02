@@ -104,7 +104,7 @@ AI 改 specs/guides/api 后自检：
 
 ## 5. 任务响应规则
 
-**改代码时**：先读 `docs/guides/DEVELOPER.md` → 按决策树分类 → 最小正确改动 → 补测试 → 更新文档 → 跑校验。
+**改代码时**：先确认自己在哪个分支（`git branch --show-current`）→ 不是自己的分支立刻切走 → 从 `main` 开新分支 → 读 `docs/guides/DEVELOPER.md` → 按决策树分类 → 最小正确改动 → 补测试 → 更新文档 → 跑校验。
 **审查/合并时**：先读 `docs/guides/REVIEWER.md` → 对照门禁清单检查 → 输出审查结论。
 **修改文档时**：先读 `docs/guides/DOC-MANAGER.md` → 走对应知识链路 → 再动笔。
 **解释时**：引实际文件/类/函数；标 pre-MVP/`[plan]`；区分已实现 vs 规划；不虚构 API。
