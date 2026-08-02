@@ -136,10 +136,20 @@ export type RunEvent =
   | { type: EventType.LlmResponse; run_id: string; data: LlmResponsePayload; ts: number }
   | { type: EventType.LlmStreamChunk; run_id: string; data: LlmStreamChunkPayload; ts: number }
   | { type: EventType.ToolCallStarted; run_id: string; data: ToolCallStartedPayload; ts: number }
-  | { type: EventType.ToolCallCompleted; run_id: string; data: ToolCallCompletedPayload; ts: number }
+  | {
+      type: EventType.ToolCallCompleted;
+      run_id: string;
+      data: ToolCallCompletedPayload;
+      ts: number;
+    }
   | { type: EventType.ToolCallFailed; run_id: string; data: ToolCallFailedPayload; ts: number }
   | { type: EventType.GuardrailBlocked; run_id: string; data: GuardrailBlockedPayload; ts: number }
-  | { type: EventType.GuardrailModified; run_id: string; data: GuardrailModifiedPayload; ts: number }
+  | {
+      type: EventType.GuardrailModified;
+      run_id: string;
+      data: GuardrailModifiedPayload;
+      ts: number;
+    }
   | { type: EventType.RunCompleted; run_id: string; data: RunCompletedPayload; ts: number }
   | { type: EventType.RunFailed; run_id: string; data: RunFailedPayload; ts: number }
   | { type: EventType.SessionCreated; run_id: string; data: Record<string, never>; ts: number }
