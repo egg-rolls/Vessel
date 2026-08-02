@@ -22,21 +22,11 @@ export function CommandMenu({ commands, onSelect, onClose }: CommandMenuProps) {
     const items: { name: string; description: string; usage?: string }[] = [];
 
     for (const entry of entries) {
-      if (entry.subcommands && entry.subcommands.size > 0) {
-        for (const sub of entry.subcommands.values()) {
-          items.push({
-            name: `/${entry.name} ${sub.name}`,
-            description: sub.description,
-            usage: sub.usage,
-          });
-        }
-      } else {
-        items.push({
-          name: `/${entry.name}`,
-          description: entry.description,
-          usage: entry.usage,
-        });
-      }
+      items.push({
+        name: `/${entry.name}`,
+        description: entry.description,
+        usage: entry.usage,
+      });
     }
 
     return items;

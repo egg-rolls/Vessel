@@ -17,7 +17,7 @@
 
 1. 自查：CI（lint+typecheck+test+build）须全绿；四项为 required check（ADR-014）。
 2. 改 core 必须先有 ADR（ADR-012）；新增能力按 [CLAUDE.md §5](CLAUDE.md) 决策树分类。
-3. egg-rolls审查合并（对照 CLAUDE.md §9 检查清单）。
+3. 创建 PR，CODEOWNERS 自动请求 Reviewer 审查合并（对照 CLAUDE.md §9 检查清单）。
 4. 外部贡献者可参考 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) 提交 Pull Request。
 5. **合并门禁**：见 [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) —— AI Agent 合并前必须对照全部 `docs/specs/` 文档逐条检查架构合规性；禁止合并后修复。
 

@@ -6,17 +6,19 @@
  * 保持 startRepl(ctx) 函数签名不变，壳不感知替换。
  */
 
+import type { SessionInfo } from '@vessel/core';
 import { Box, render, Text, useApp, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
-import { createCommands } from '../commands/commands.js';
+import { createCommands, doResume } from '../commands/commands.js';
 import { CommandMenu } from '../components/CommandMenu.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import type { ReplContext } from '../repl-context.js';
+import { getCurrentGitBranch } from '../utils/git.js';
 
 interface InkReplProps {
   ctx: ReplContext;
@@ -30,12 +32,13 @@ function InkRepl({ ctx }: InkReplProps) {
   const [state, setState] = useState<ReplState>({
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
+    showResumePicker: false,
     running: true,
   });
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<string[]>([]);
   const [showCommandMenu, setShowCommandMenu] = useState(false);
-  const [showSessionTable, setShowSessionTable] = useState(false);
+  const [resumeSessions, setResumeSessions] = useState<SessionInfo[]>([]);
   const [confirmQuestion, setConfirmQuestion] = useState<string | null>(null);
   const [confirmResolve, setConfirmResolve] = useState<((value: string) => void) | null>(null);
   const [clearSignal, setClearSignal] = useState(0); // /clear 命令信号
@@ -54,6 +57,15 @@ function InkRepl({ ctx }: InkReplProps) {
     }
   }, [ctx.permissionChecker]);
 
+  // 当 showResumePicker 变为 true 时加载会话列表
+  useEffect(() => {
+    if (state.showResumePicker) {
+      ctx.session.listRich().then((list) => {
+        setResumeSessions(list);
+      });
+    }
+  }, [state.showResumePicker, ctx.session]);
+
   // 处理输入
   const handleSubmit = useCallback(
     async (value: string) => {
@@ -62,12 +74,18 @@ function InkRepl({ ctx }: InkReplProps) {
       setHistory((prev) => [...prev, `> ${value}`]);
       setInput('');
 
-      // 处理 /resume pending one-shot
-      if (state.pendingResume) {
+      // 处理 /resume pending one-shot (simple mode fallback)
+      if (state.pendingResume && !state.showResumePicker) {
         const num = Number.parseInt(value, 10);
         if (!Number.isNaN(num)) {
-          // consumePendingResume 逻辑
           setState((prev) => ({ ...prev, pendingResume: false }));
+          // Resolve the session by number and resume
+          const sessions = await ctx.session.listRich();
+          const target = sessions[num - 1];
+          if (target) {
+            await doResume(ctx, state, target.session_id);
+            setState((prev) => ({ ...prev, currentSessionId: target.session_id }));
+          }
           return;
         }
       }
@@ -91,10 +109,11 @@ function InkRepl({ ctx }: InkReplProps) {
       }
 
       // 处理普通消息 - 调用 runtime.run
-      // StreamOutput 组件已通过事件流显示 token-by-token 输出，
-      // 这里只处理错误情况，不重复添加成功输出到 history
+      // StreamOutput 组件通过事件流显示 token-by-token 输出，
+      // run 完成后通过 onComplete 回调将响应归档到 history
       try {
-        await ctx.runtime.run(value, state.currentSessionId);
+        const branch = await getCurrentGitBranch();
+        await ctx.runtime.run(value, state.currentSessionId, { branch });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         setHistory((prev) => [...prev, `Error: ${errorMsg}`]);
@@ -106,7 +125,7 @@ function InkRepl({ ctx }: InkReplProps) {
   // 键盘输入处理 - 只在没有其他交互组件时生效
   useInput((inputChar, key) => {
     // 如果有其他交互组件显示，不处理输入
-    if (showCommandMenu || showSessionTable || confirmQuestion) {
+    if (showCommandMenu || state.showResumePicker || confirmQuestion) {
       return;
     }
 
@@ -139,6 +158,11 @@ function InkRepl({ ctx }: InkReplProps) {
     [confirmResolve],
   );
 
+  // StreamOutput 完成回调：将 AI 响应归档到 history
+  const handleStreamComplete = useCallback((responseText: string) => {
+    setHistory((prev) => [...prev, responseText]);
+  }, []);
+
   // 退出处理
   useEffect(() => {
     if (!state.running) {
@@ -158,8 +182,12 @@ function InkRepl({ ctx }: InkReplProps) {
         <Text key={i}>{line}</Text>
       ))}
 
-      {/* 流式输出 */}
-      <StreamOutput events={ctx.events} clearSignal={clearSignal} />
+      {/* 流式输出（当前轮） */}
+      <StreamOutput
+        events={ctx.events}
+        clearSignal={clearSignal}
+        onComplete={handleStreamComplete}
+      />
 
       {/* 命令菜单 */}
       {showCommandMenu && (
@@ -173,15 +201,19 @@ function InkRepl({ ctx }: InkReplProps) {
         />
       )}
 
-      {/* 会话表格 */}
-      {showSessionTable && (
+      {/* 交互式会话选择器（/resume 无参时） */}
+      {state.showResumePicker && (
         <SessionTable
-          session={ctx.session}
-          onSelect={(id) => {
-            setShowSessionTable(false);
+          sessions={resumeSessions}
+          currentSessionId={state.currentSessionId}
+          onSelect={async (id) => {
+            setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
+            await doResume(ctx, state, id);
             setState((prev) => ({ ...prev, currentSessionId: id }));
           }}
-          onClose={() => setShowSessionTable(false)}
+          onClose={() => {
+            setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
+          }}
         />
       )}
 
@@ -189,7 +221,7 @@ function InkRepl({ ctx }: InkReplProps) {
       {confirmQuestion && <ConfirmDialog question={confirmQuestion} onConfirm={handleConfirm} />}
 
       {/* 输入框 - 只在没有其他交互组件时显示 */}
-      {!showCommandMenu && !showSessionTable && !confirmQuestion && (
+      {!showCommandMenu && !state.showResumePicker && !confirmQuestion && (
         <Box>
           <Text color="cyan">vessel&gt; </Text>
           <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
@@ -233,6 +265,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
   const state = {
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
+    showResumePicker: false,
     running: true,
   };
 
@@ -280,7 +313,8 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
 
     // 处理普通消息
     try {
-      const response = await ctx.runtime.run(trimmed, state.currentSessionId);
+      const branch = await getCurrentGitBranch();
+      const response = await ctx.runtime.run(trimmed, state.currentSessionId, { branch });
       console.log(response);
     } catch (error) {
       const c = classifyError(error);

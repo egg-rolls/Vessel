@@ -11,9 +11,13 @@ export type {
   CommandEntry,
   CommandResult,
   ReplState,
-  SubCommand,
 } from './commands/commands.js';
-export { CommandRegistry, consumePendingResume, createCommands } from './commands/commands.js';
+export {
+  CommandRegistry,
+  consumePendingResume,
+  createCommands,
+  doResume,
+} from './commands/commands.js';
 export { CommandMenu } from './components/CommandMenu.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export { SessionTable } from './components/SessionTable.js';
@@ -34,5 +38,7 @@ export {
 export type { SseBridge } from './sse-bridge.js';
 // SSE Bridge
 export { startSseBridge } from './sse-bridge.js';
+// Git 工具
+export { getCurrentGitBranch } from './utils/git.js';
 export type { SetupWizardConfig } from './wizard/setup-wizard.js';
 export { runSetupWizard, SetupWizard } from './wizard/setup-wizard.js';
