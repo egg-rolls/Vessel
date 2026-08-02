@@ -1,6 +1,7 @@
 # 任务分工
 
-> 当前分工与任务清单。状态/进度信息允许在本文件(`processes/*`);永久文档(`docs/specs|guides|api`)不允许。
+> **注意**：任务追踪已迁移至 [GitHub Issues](https://github.com/egg-rolls/Vessel/issues)。
+> 新任务请创建 GitHub Issue（配合 P0-P3 Label + Milestone）。本文件保留架构说明和历史记录。
 > 协作流程见 [collaboration.md](collaboration.md);命名见 [conventions.md](conventions.md)。
 
 ## 一、当前进度

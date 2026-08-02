@@ -1,0 +1,67 @@
+name: Sync Issue Labels to PR
+
+# PR 创建或更新时，从关联 Issue 复制 labels
+on:
+  pull_request:
+    types: [opened, edited, reopened]
+
+jobs:
+  sync-labels:
+    name: Copy labels from linked issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+
+    steps:
+      - name: Sync labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const prBody = context.payload.pull_request.body || '';
+            const prNodeId = context.payload.pull_request.node_id;
+
+            // 从 PR body 提取关联 Issue 编号（Closes #N / Fixes #N / Resolves #N）
+            const match = prBody.match(/(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)\s+#(\d+)/i);
+            if (!match) {
+              console.log('No linked issue found in PR body');
+              return;
+            }
+
+            const issueNumber = parseInt(match[1], 10);
+            console.log(`Found linked issue: #${issueNumber}`);
+
+            // 获取 Issue 的 labels
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+            });
+
+            const issueLabels = issue.data.labels.map(l => l.name);
+            console.log(`Issue labels: ${issueLabels.join(', ') || '(none)'}`);
+
+            if (issueLabels.length === 0) return;
+
+            // 获取 PR 已有的 labels
+            const pr = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+
+            const prLabels = pr.data.labels.map(l => l.name);
+            const newLabels = issueLabels.filter(l => !prLabels.includes(l));
+
+            if (newLabels.length === 0) {
+              console.log('PR already has all issue labels');
+              return;
+            }
+
+            // 添加缺失的 labels
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: newLabels,
+            });
+
+            console.log(`Added labels to PR: ${newLabels.join(', ')}`);

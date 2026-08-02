@@ -39,9 +39,13 @@ git checkout -b <type>/<slug> main
 # 编码...
 bun run lint && bun run typecheck && bun test    # 1. 自查
 git push -u origin <type>/<slug>                  # 2. 推送
-gh pr create ...                                   # 3. 创建 PR
-# 请求 Reviewer 审查                                # 4. 通知审查
+gh pr create --base main --head <type>/<slug>     # 3. 创建 PR（CODEOWNERS 自动请求 Reviewer）
+gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功（防止推送后忘记 PR）
 ```
+
+> 人类贡献者可直接通过 GitHub Web UI + PR 模板创建 PR。
+
+⚠️ **AI Agent 注意**：推送分支后如果跳过第 3-4 步，分支会滞留——有代码、有分支、但没有 PR。未经 PR 的分支不会被审查、不会被合并。开始新工作前，用 `gh pr list --state open` 确认没有遗留的孤儿分支。
 
 ## 四、PR 合并流程（main 分支保护已开启）
 
@@ -50,14 +54,11 @@ gh pr create ...                                   # 3. 创建 PR
         ↓
 2. Reviewer 审查（对照 CLAUDE.md §9）
         ↓
-3. 审查通过 → Reviewer 在 GitHub 上点击 "Merge pull request"
+3. 审查通过 → Reviewer 在 GitHub 上点击 "Squash and merge"
         ↓
-4. 合并方式：选择 "Squash and merge" 或 "Rebase and merge"
-   （不选 "Create a merge commit"——保持 history 线性）
+4. 合并时勾选 "Delete branch" 自动删除远程分支
         ↓
-5. 合并后自动删除远程分支（GitHub 设置中启用）
-        ↓
-6. Coder 本地清理：git checkout main && git pull && git branch -d <分支名>
+5. Coder 本地清理：git checkout main && git pull && git branch -d <分支名>
 ```
 
 **合并必须满足（GitHub 自动检查）：**
@@ -68,14 +69,16 @@ gh pr create ...                                   # 3. 创建 PR
 
 ## 五、Reviewer 的审查（对照 CLAUDE.md §9）
 
+在 GitHub PR 页面进行，检查清单：
+
 ```
-[ ] 自查通过了吗？lint + typecheck + test 全绿？
+[ ] CI 全绿？lint + typecheck + test + build？
 [ ] 依赖方向正确？core 没引用 tui/config？
 [ ] 没有硬编码 Key / console.log / NotImplementedError？
 [ ] 没有违反 CLAUDE.md §6 红线？
 [ ] 文档同步更新了没？
-→ 通过 → GitHub 上点 "Merge pull request"
-→ 不通过 → 标注原因 → Coder 修复后重推
+→ 通过 → GitHub 上点击 "Squash and merge"
+→ 不通过 → 在 PR 中标注原因 → Coder 修复后重新请求审查
 ```
 
 ## 六、禁止
@@ -86,18 +89,22 @@ gh pr create ...                                   # 3. 创建 PR
 - 一个分支塞不相关的改动
 - 不留言直接抢 Issue（先看 Issue 有没有人认领）
 
-## 五、创建 Issue 和 PR 的技巧
+## 七、AI Agent 通过 CLI 创建 Issue 和 PR
+
+> AI Agent 无法使用 GitHub Web UI，必须通过 `gh` CLI 操作。
+> 人类贡献者建议直接使用 GitHub Web UI + Issue/PR 模板。
+> 以下为实践中验证过的 CLI 操作方式。
 
 ### 1. 创建 Issue
 
 ```bash
-# ✅ 使用 --body-file + 绝对路径 + .txt 文件
-gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file "D:/Application/APP/Vessel/issue-body.txt"
+# 使用 --body-file（避免 shell 解析中文/特殊字符）
+gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file issue-body.txt
 ```
 
 ### 2. 创建 PR
 
-**问题**：中文内容和特殊字符会导致 shell 解析出错。
+**问题**：`gh pr create --body` 中的中文和 Markdown 特殊字符会导致 shell 解析出错。
 
 **解决方案**：分两步创建。
 
@@ -105,28 +112,27 @@ gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file
 # 步骤1：先用英文创建 PR（简单 body）
 gh pr create --title "feat(tui): new feature" --body "Closes #13" --base main --head feat/my-feature
 
-# 步骤2：再用 gh pr edit 更新中文内容
-gh pr edit 13 --body "$(cat D:/Application/APP/Vessel/pr-body.txt)"
+# 步骤2：再用 gh pr edit 更新中文内容（不支持 --body-file，用 $(cat) 替代）
+gh pr edit --body "$(cat pr-body.txt)"
 ```
 
 ### 3. 技巧总结
 
 | 技巧 | 说明 |
 |------|------|
-| 使用绝对路径 | `"D:/Application/APP/Vessel/pr-body.txt"` 而不是 `pr-body.txt` |
-| 使用 `.txt` 文件 | `.md` 文件可能有特殊字符 |
-| 分两步创建 | 先英文创建，再 `gh pr edit` 更新中文内容 |
-| 使用 `$(cat file)` | `--body "$(cat file.txt)"` 比 `--body-file` 更稳定 |
+| 分两步创建 PR | 先英文创建，再 `gh pr edit` 更新中文内容 |
+| 使用 `$(cat file)` | `gh pr edit` 不支持 `--body-file`，用 `$(cat)` 替代 |
+| 人类用 Web UI | GitHub Issue/PR 模板已配置，Web UI 对中文和 Markdown 无兼容问题 |
 
 ### 4. 示例
 
 ```bash
 # 创建 Issue
 echo "功能描述..." > issue-body.txt
-gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file "D:/Application/APP/Vessel/issue-body.txt"
+gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file issue-body.txt
 
 # 创建 PR
 echo "PR 描述..." > pr-body.txt
 gh pr create --title "feat(tui): new feature" --body "Closes #13" --base main --head feat/my-feature
-gh pr edit 13 --body "$(cat D:/Application/APP/Vessel/pr-body.txt)"
+gh pr edit --body "$(cat pr-body.txt)"
 ```
