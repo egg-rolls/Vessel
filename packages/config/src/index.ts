@@ -17,4 +17,5 @@ export {
   mergeConfig,
 } from './loader.js';
 export * from './types.js';
+export { deepMerge } from './utils.js';
 export { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
