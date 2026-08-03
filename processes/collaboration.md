@@ -52,7 +52,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 ```
 1. Coder 创建 PR（Draft → Ready for review）
         ↓
-2. Reviewer 审查（对照 CLAUDE.md §9）
+2. Reviewer 审查（对照 docs/guides/REVIEWER.md）
         ↓
 3. 审查通过 → Reviewer 在 GitHub 上点击 "Squash and merge"
         ↓
@@ -67,7 +67,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 - ✅ 无未解决的合并冲突
 - ✅ 所有对话已解决
 
-## 五、Reviewer 的审查（对照 CLAUDE.md §9）
+## 五、Reviewer 的审查（对照 docs/guides/REVIEWER.md）
 
 在 GitHub PR 页面进行，检查清单：
 
@@ -75,7 +75,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 [ ] CI 全绿？lint + typecheck + test + build？
 [ ] 依赖方向正确？core 没引用 tui/config？
 [ ] 没有硬编码 Key / console.log / NotImplementedError？
-[ ] 没有违反 CLAUDE.md §6 红线？
+[ ] 没有违反 CLAUDE.md §3 红线？
 [ ] 文档同步更新了没？
 → 通过 → GitHub 上点击 "Squash and merge"
 → 不通过 → 在 PR 中标注原因 → Coder 修复后重新请求审查
@@ -95,44 +95,58 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 > 人类贡献者建议直接使用 GitHub Web UI + Issue/PR 模板。
 > 以下为实践中验证过的 CLI 操作方式。
 
+### 核心原则
+
+**中文内容不要放进 `--title` 和 `--body` 命令行参数**——shell 解析中文/特殊字符会出错（exit 127）。
+始终用 `--body-file` 传正文，用变量传中文标题。
+
 ### 1. 创建 Issue
 
 ```bash
-# 使用 --body-file（避免 shell 解析中文/特殊字符）
-gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file issue-body.txt
+# 步骤1：英文标题创建
+gh issue create --title "docs(cross): short English title" --label "P1" --label "documentation" --body "Placeholder"
+
+# 步骤2：用 --body-file 更新中文正文（可靠）
+gh issue edit <number> --body-file issue-body.txt
+
+# 步骤3：用变量更新中文标题
+TITLE=$(cat issue-title.txt) && gh issue edit <number> --title "$TITLE"
 ```
 
 ### 2. 创建 PR
 
-**问题**：`gh pr create --body` 中的中文和 Markdown 特殊字符会导致 shell 解析出错。
-
-**解决方案**：分两步创建。
-
 ```bash
-# 步骤1：先用英文创建 PR（简单 body）
-gh pr create --title "feat(tui): new feature" --body "Closes #13" --base main --head feat/my-feature
+# 步骤1：先用英文创建 PR
+gh pr create --title "docs(guides): short English title" --body "Closes #<number>" --base main --head <branch>
 
-# 步骤2：再用 gh pr edit 更新中文内容（不支持 --body-file，用 $(cat) 替代）
-gh pr edit --body "$(cat pr-body.txt)"
+# 步骤2：用 --body-file 更新中文正文（gh pr edit 支持 --body-file）
+gh pr edit <number> --body-file pr-body.txt
+
+# 步骤3：用变量更新中文标题
+TITLE=$(cat pr-title.txt) && gh pr edit <number> --title "$TITLE"
 ```
 
 ### 3. 技巧总结
 
 | 技巧 | 说明 |
 |------|------|
-| 分两步创建 PR | 先英文创建，再 `gh pr edit` 更新中文内容 |
-| 使用 `$(cat file)` | `gh pr edit` 不支持 `--body-file`，用 `$(cat)` 替代 |
+| 分步创建 | Issue/PR 一律先英文创建，再更新中文内容 |
+| `--body-file` 最可靠 | `gh issue create`、`gh issue edit`、`gh pr edit` 都支持 `--body-file`，用文件传中文正文最稳定 |
+| 变量传标题 | `TITLE=$(cat file) && gh ... --title "$TITLE"` 处理中文标题 |
 | 人类用 Web UI | GitHub Issue/PR 模板已配置，Web UI 对中文和 Markdown 无兼容问题 |
 
-### 4. 示例
+### 4. 实际验证过的命令（本 PR #50 创建过程）
 
 ```bash
-# 创建 Issue
+# 创建 Issue #49
 echo "功能描述..." > issue-body.txt
-gh issue create --title "feat(tui): 新功能" --label "enhancement" --body-file issue-body.txt
+gh issue create --title "docs(cross): missing role entry points - AI agents skip required reading" --label "P1" --label "documentation" --body "Placeholder"
+gh issue edit 49 --body-file issue-body.txt
+TITLE=$(cat issue-title.txt) && gh issue edit 49 --title "$TITLE"
 
-# 创建 PR
+# 创建 PR #50
 echo "PR 描述..." > pr-body.txt
-gh pr create --title "feat(tui): new feature" --body "Closes #13" --base main --head feat/my-feature
-gh pr edit --body "$(cat pr-body.txt)"
+gh pr create --title "docs(guides): add role entry points - DEVELOPER, REVIEWER, DOC-MANAGER" --body "Closes #49" --base main --head docs/role-entry-points
+gh pr edit 50 --body-file pr-body.txt
+TITLE=$(cat pr-title.txt) && gh pr edit 50 --title "$TITLE"
 ```

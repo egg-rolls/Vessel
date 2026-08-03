@@ -41,14 +41,14 @@ docs/xxx      ──●                 纯文档分支
 | `docs/specs/SPEC.md` | 新代码是否违反接口契约、模块边界 |
 | `docs/specs/ADR.md` | 是否违反已有架构决策 |
 | `docs/specs/ROADMAP.md` | 是否超出 ROADMAP 定义的范围 |
-| `CLAUDE.md` | §4 工程规范、§5 能力分层、§6 红线 |
+| `CLAUDE.md` + `docs/guides/DEVELOPER.md` | 工程规范、能力分层、红线 |
 
 **检查清单**（由 AI Agent 执行并输出结论）：
 
 ```
 [ ] 依赖方向：core 未引用 tui/config/plugins
 [ ] 能力分层：新代码按决策树正确分类（core/插件/应用层）
-[ ] 红线：未触碰 CLAUDE.md §6 的 10 条红线
+[ ] 红线：未触碰 CLAUDE.md §3 红线
 [ ] 扩展机制：未新增第二套扩展路径（ADR-004）
 [ ] 事件类型：未使用散落字符串发事件（ADR-008）
 [ ] 同步调用：未在异步路径中混入同步阻塞调用
@@ -92,7 +92,7 @@ grep -rE "(sk-[a-zA-Z0-9]{20,}|api_key\s*[:=]\s*['\"][^'\"\s]{20,})" packages/ p
 ```
 1. 获取分支 diff
 2. 对照 docs/specs/ 全部文档检查架构合规
-3. 对照 CLAUDE.md §4-6 检查规范+红线
+3. 对照 docs/guides/DEVELOPER.md（工程规范+能力分层）+ CLAUDE.md §3 红线 检查规范
 4. 检查硬编码密钥
 5. 确认 CI 状态（lint/typecheck/test/build）
 6. 输出审查结论（通过/阻断 + 原因；发现问题时给出修复建议）
@@ -132,7 +132,7 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 ## 五、合并审查规范
 
 - 推送分支后创建 PR，CODEOWNERS 自动请求 Reviewer 审查
-- 审查对照 AI Agent 检查清单（CLAUDE.md §9.1）+ 安全检查（§2.3）
+- 审查对照 AI Agent 检查清单（docs/guides/REVIEWER.md）+ 安全检查（§2.3）
 - CI（lint/typecheck/test/build）四灯全绿后方可合并
 - Reviewer 在 PR 页面点击 "Squash and merge" 执行合并
 
@@ -189,3 +189,16 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 合并：通过所有门禁后，在 PR 页面点击 "Squash and merge"
 清理：合并时勾选 "Delete branch" 自动删除远程分支
 ```
+
+### 7.1 Rebase 最佳实践——避免"一直 rebase"
+
+**核心原则：rebase 的痛和分支的生命周期成正比。分支活得越久、改动越大，rebase 越痛。治本之道不是"更频繁地 rebase"，而是"让分支更短命"。**
+
+| 做法 | 为什么 |
+|------|--------|
+| **分支保持小而短** | 一个分支一个关注点，几百行以内，1-2 天合入。小分支的 rebase 通常零冲突 |
+| **只在需要时 rebase** | 不是 main 每前进一个 commit 就要 rebase。只在以下时机 rebase：(1) 创建 PR 前；(2) 已知 main 有你需要的修复；(3) PR 审查通过、合并前最后同步 |
+| **rebase 前先拉最新 main** | `git checkout main && git pull && git checkout -` 再 `git rebase main`。不要用本地的旧 main |
+| **冲突太多 → 分支太大了** | 一次 rebase 超过 5 个冲突？说明这个分支塞了太多东西。考虑拆成多个小 PR |
+| **协作分支用 merge 不用 rebase** | 多人共用一个 feature 分支时，用 `git merge main` 而非 `git rebase main`。rebase 会改写历史，协作场景下是灾难 |
+| **rebase 后 force-with-lease** | 永远用 `--force-with-lease`，不用 `--force`。前者会在远程有他人提交时拒绝推送，保护协作者的工作 |
