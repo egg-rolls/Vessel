@@ -16,10 +16,14 @@ describe('memory-project 插件（MECH-2）', () => {
     expect(host.getHooks().some((h) => h.type === HookType.BeforeLlm)).toBe(true);
   });
 
-  it('BeforeLlm hook 把 CLAUDE.md 内容注入 ctx.system_prompt', async () => {
+  it('BeforeLlm hook 把 CLAUDE.md 和 AGENTS.md 内容注入 ctx.system_prompt', async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-mem-'));
     try {
-      fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), '# Project Rules\nUse Bun. Do not use npm.');
+      fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), '# Task Launcher\nSTOP. Build TodoList.');
+      fs.writeFileSync(
+        path.join(tmpDir, 'AGENTS.md'),
+        '# Project Concepts\nUse Bun. Do not use npm.',
+      );
       const host = new MemoryPluginHost();
       memoryProjectPlugin.install(host, { projectRoot: tmpDir });
       const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
@@ -28,8 +32,16 @@ describe('memory-project 插件（MECH-2）', () => {
       const ctx = { run_id: 'r1', session_id: 's1' };
       await hook.run(ctx);
       const sp = (ctx as { system_prompt?: string }).system_prompt ?? '';
+      // CLAUDE.md 注入（启动器）
+      expect(sp).toContain('Task Launcher');
+      expect(sp).toContain('任务启动器 (CLAUDE.md)');
+      // AGENTS.md 注入（概念）
       expect(sp).toContain('Use Bun');
-      expect(sp).toContain('项目说明 (CLAUDE.md)');
+      expect(sp).toContain('项目概念 (AGENTS.md)');
+      // CLAUDE.md 在 AGENTS.md 之前（启动器优先级）
+      const claudeIdx = sp.indexOf('任务启动器 (CLAUDE.md)');
+      const agentsIdx = sp.indexOf('项目概念 (AGENTS.md)');
+      expect(claudeIdx).toBeLessThan(agentsIdx);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }

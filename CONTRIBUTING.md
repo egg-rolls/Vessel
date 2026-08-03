@@ -6,7 +6,7 @@
 
 - 运行时：Bun（`bun install` 装依赖）。
 - 仓库为 monorepo（bun workspaces）：`packages/{core,config,tui}` + `plugins/`。
-- 动手前按 [CLAUDE.md §2](CLAUDE.md) 阅读顺序通读 `docs/` 和 `processes/`。
+- 动手前按 [AGENTS.md §3](AGENTS.md) 阅读顺序通读 `docs/` 和 `processes/`。
 
 ## 分支与提交
 
@@ -27,7 +27,7 @@
 - 类型：TS strict，`bun run typecheck`。
 - 测试：`bun test`，每模块配单测。
 - 依赖：core 不依赖 tui/config/plugins；不引入 LangChain；重依赖只进插件包。
-- 详见 [docs/guides/DEVELOPER.md §工程规范](docs/guides/DEVELOPER.md) 与 [CLAUDE.md §3 红线](CLAUDE.md)。
+- 详见 [docs/guides/DEVELOPER.md §工程规范](docs/guides/DEVELOPER.md) 与 [AGENTS.md §4 红线](AGENTS.md)。
 
 ## 文档同步
 

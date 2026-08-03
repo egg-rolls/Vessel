@@ -2,28 +2,30 @@
 
 > **写/改代码前，必须先读完本文件。按顺序读，读完一项自检一项。**
 > 跳过任何一项 = 写出的代码大概率违规，审查时会被打回。
+> **开始前确认你已读过 [AGENTS.md](../../AGENTS.md)**——那是所有角色的通用基础。
 
-## 动手前先做（30 秒，跳过必出事）
+## 动手前先做（60 秒，跳过必出事）
 
 ```
+0. 读 Issue 完整内容             # gh issue view <number>，不知道 Issue 讲什么就开干 = 盲写
 1. git branch --show-current    # 我在哪个分支？
 2. git status --short            # 有别人的改动吗？
 3. 确认：这是我的分支吗？        # 不是 → git checkout main，从 main 重开
 ```
 
-**铁律**：永远不在别人的分支上干活。永远不从别人的分支切新分支。永远不 `git stash` 别人分支上的改动。每次动手前 30 秒确认——省下的是别人几小时的找回时间。
+**铁律**：永远不在别人的分支上干活。永远不从别人的分支切新分支。永远不 `git stash` 别人分支上的改动。每次动手前 60 秒确认——省下的是别人几小时的找回时间。
 
 ## 为什么必须先读这些
 
-Vessel 有严格的架构约束（core 冻结、能力分层、依赖方向）和工程规范（事件枚举化、不可变优先、sync-in-async 禁止）。这些不是"建议"——是硬性门禁。不读就写 = 浪费自己时间 + 浪费审查者时间。
+Vessel 有严格的架构约束（[AGENTS.md](../../AGENTS.md) §5 Core 冻结、§6 能力分层、§4 红线）和工程规范（事件枚举化、不可变优先、sync-in-async 禁止）。这些不是"建议"——是硬性门禁。不读就写 = 浪费自己时间 + 浪费审查者时间。
 
 ## 必读清单（按此顺序）
 
-### 1. CLAUDE.md（全篇）
+### 1. AGENTS.md（全篇）
 
-仓库公共操作手册（~100 行，简短）。所有人必读。重点关注 §4 红线、§5 反幻觉纪律。
+通用概念手册——项目身份、文档索引、红线、反幻觉纪律、能力分层、Core 冻结。**所有角色基础。**
 
-**自检**：Vessel 的三层是什么？红线有哪些？
+**自检**：Vessel 的三层是什么？红线有哪些？Core 只能因哪三种原因改？
 
 ### 2. docs/specs/SPEC.md
 
@@ -41,7 +43,7 @@ Vessel 有严格的架构约束（core 冻结、能力分层、依赖方向）�
 
 Core 接口快速参考——写代码时随时查阅。
 
-**自检**：你要改的文件在 core 里吗？如果在，先读下方 §Core 冻结的 checklist。
+**自检**：你要改的文件在 core 里吗？如果在，先读 AGENTS.md §5 Core 冻结的 checklist。
 
 ### 5. processes/conventions.md
 
@@ -127,60 +129,6 @@ AI 的默认模式是"最短路径完成当前任务"。这是局部最优，但
 - 类型签名本身能**说清楚这段代码做什么**，还是必须读实现？
 
 你有所有具体场景的信息，比任何 checklist 更了解你的代码。**10 分钟的设计停顿，换未来 10 小时的维护时间——每一笔都值得。**
-
----
-
-## 能力分层与准入决策树
-
-新增能力前必须分类：**内置(core) / 插件 / 应用层**。
-
-进 **core** 前必须全部满足：
-1. 大多数 harness 都需要？
-2. 领域无关（不涉文档/代码审查/客服/OCR/PDF/图片/向量/浏览器/IAM/计费/租户/dashboard）？
-3. 可接口化（不绑具体后端/厂商 SDK/重依赖）？
-4. 不绑定 Provider/Model/API Key/Base URL/价格？
-5. 能被多个应用复用？
-
-全"是" -> core；否则 -> 插件或应用层。**拿不准选插件，不选 core。**
-
-- **内置(core)**：runtime loop、provider 抽象、context、session、events、tools、limits、termination、guardrail 接口、hook 接口、PluginHost。
-- **插件**：guardrail 规则、memory、MCP、corrections、resilience、evals、OCR/PDF/图片/向量/浏览器等。**不进 runtime 构造函数**，经 Plugin 注入（ADR-003）。
-- **应用层**：TUI、配置向导、业务 agent。
-
-用户面向的四种扩展类型（Plugin/MCP/Skill/Config）全经 PluginHost 投放，core 不为它们新增接口（ADR-011）；详见 [SPEC.md §5.1](docs/specs/SPEC.md)。
-
-### Core 冻结（ADR-017）
-
-**`@vessel/core` 的 9 个接口 + tool-calling loop 已冻结。** 功能增长一律走 Plugin/MCP/Skill，不动 core。
-
-冻结范围：`packages/core/src/**` 中所有定义了接口契约、循环逻辑、事件类型的文件。
-
-**只能因三种原因改 core**（ADR-012(2a-c)，需 ADR-017 解冻条件）：
-1. 扩"插座"——EventType / HookType / GuardrailStage 枚举成员（需写新 ADR）
-2. 修 loop 级 bug（竞态、泄漏、安全）
-3. 横切需求——**先证明**无法用 Plugin/Hook/Guardrail/事件/工具表示（ADR-015：尚无已知的此类需求）
-
-**你以为需要改 core？走这个 checklist：**
-```
-[ ] 我能用 Plugin + PluginHost.registerTool/registerHook 实现吗？
-[ ] 我能用 MCP server + bridge plugin 实现吗？
-[ ] 我能用 Skill（Markdown + BeforeLlm Hook）实现吗？
-[ ] 我能用 Guardrail（四阶段）实现吗？
-[ ] 我能用事件（新增或现有 EventType）实现吗？
-→ 任一为"是" → 不进 core。全"否" → 写 ADR，两人 Review。
-```
-
-**AI 编码前自查**：如果你要改 `packages/core/src/` 下的文件，先读本段。拿不准 = 不在 core 做。
-
----
-
-## 项目事实（随实现更新）
-
-- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/{specs,guides,api,dev}` + `processes/` + `legacy/`。
-- monorepo：bun workspaces。
-- 公共入口：`@vessel/core` 的 `AgentRuntime`、`PluginHost`；`@vessel/tui` 的 REPL。
-- 依赖：保持精简；core 不依赖 tui/config/plugins。
-- 不引入 LangChain/LangGraph。
 
 ---
 
