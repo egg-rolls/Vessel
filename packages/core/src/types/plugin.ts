@@ -13,7 +13,7 @@ export interface Plugin {
   name: string;
   version?: string;
   description?: string;
-  install(host: PluginHost, config?: unknown): void | Promise<void>;
+  install(host: PluginHost): void | Promise<void>;
 }
 
 /** PluginHost 接口 */

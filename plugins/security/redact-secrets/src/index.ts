@@ -193,34 +193,41 @@ function createRedactGuardrail(rules: RedactRule[], stage: GuardrailStage): Guar
 
 // ── 插件导出 ──────────────────────────────────────
 
-export const redactSecretsPlugin: Plugin = {
-  name: 'redact-secrets',
-  version: '0.1.0',
-  description:
-    'Secret redaction plugin — detects and redacts API keys, tokens, and passwords in tool results and outputs',
-  install(host: PluginHost, config?: unknown) {
-    const pluginConfig = (config as RedactSecretsConfig) ?? {};
-    const enableBuiltin = pluginConfig.enableBuiltin ?? true;
+/**
+ * 创建 Redact Secrets 插件
+ */
+export function createRedactSecretsPlugin(config?: RedactSecretsConfig): Plugin {
+  return {
+    name: 'redact-secrets',
+    version: '0.1.0',
+    description:
+      'Secret redaction plugin — detects and redacts API keys, tokens, and passwords in tool results and outputs',
+    install(host: PluginHost) {
+      const enableBuiltin = config?.enableBuiltin ?? true;
 
-    // 组装规则
-    const rules: RedactRule[] = enableBuiltin ? [...BUILTIN_RULES] : [];
+      // 组装规则
+      const rules: RedactRule[] = enableBuiltin ? [...BUILTIN_RULES] : [];
 
-    if (pluginConfig.extraPatterns) {
-      for (const extra of pluginConfig.extraPatterns) {
-        rules.push({
-          name: extra.name,
-          pattern: new RegExp(extra.pattern, 'g'),
-          replacement: extra.replacement ?? '***REDACTED***',
-        });
+      if (config?.extraPatterns) {
+        for (const extra of config.extraPatterns) {
+          rules.push({
+            name: extra.name,
+            pattern: new RegExp(extra.pattern, 'g'),
+            replacement: extra.replacement ?? '***REDACTED***',
+          });
+        }
       }
-    }
 
-    // 注册 ToolResult 阶段脱敏（工具返回值中的密钥）
-    host.registerGuardrail(createRedactGuardrail(rules, GuardrailStage.ToolResult));
+      // 注册 ToolResult 阶段脱敏（工具返回值中的密钥）
+      host.registerGuardrail(createRedactGuardrail(rules, GuardrailStage.ToolResult));
 
-    // 注册 Output 阶段脱敏（LLM 输出中的密钥）
-    host.registerGuardrail(createRedactGuardrail(rules, GuardrailStage.Output));
-  },
-};
+      // 注册 Output 阶段脱敏（LLM 输出中的密钥）
+      host.registerGuardrail(createRedactGuardrail(rules, GuardrailStage.Output));
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const redactSecretsPlugin = createRedactSecretsPlugin();
 
 export default redactSecretsPlugin;

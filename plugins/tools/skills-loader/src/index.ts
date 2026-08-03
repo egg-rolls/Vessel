@@ -273,117 +273,122 @@ function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
 }
 
 /**
- * Skills Loader 插件
+ * 创建 Skills Loader 插件
  */
-export const skillsLoaderPlugin: Plugin = {
-  name: 'skills-loader',
-  version: '0.1.0',
-  description: 'Load and inject skills (Markdown documents) into agent context',
-  install(host: PluginHost, config?: unknown) {
-    const loaderConfig = (config as SkillsLoaderConfig) ?? {};
-    const skillsManager = new SkillsManager(loaderConfig);
+export function createSkillsLoaderPlugin(config?: SkillsLoaderConfig): Plugin {
+  return {
+    name: 'skills-loader',
+    version: '0.1.0',
+    description: 'Load and inject skills (Markdown documents) into agent context',
+    install(host: PluginHost) {
+      const loaderConfig = config ?? {};
+      const skillsManager = new SkillsManager(loaderConfig);
 
-    // 注册 Skill 管理工具
-    host.registerTool({
-      name: 'list_skills',
-      description:
-        '列出所有可用技能。当用户询问"你有什么技能"、"你有哪些技能"、"你的技能列表"时调用此工具。',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-      handler: async () => {
-        const summary = skillsManager.getSkillsSummary();
-        console.error('[Skills Loader] list_skills called, returning:', summary);
-        return summary;
-      },
-    });
-
-    host.registerTool({
-      name: 'search_skills',
-      description: 'Search for skills by name or description',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          query: {
-            type: 'string',
-            description: 'Search query',
-          },
+      // 注册 Skill 管理工具
+      host.registerTool({
+        name: 'list_skills',
+        description:
+          '列出所有可用技能。当用户询问"你有什么技能"、"你有哪些技能"、"你的技能列表"时调用此工具。',
+        inputSchema: {
+          type: 'object',
+          properties: {},
         },
-        required: ['query'],
-      },
-      handler: async (args) => {
-        const { query } = args as { query: string };
-        const results = skillsManager.searchSkills(query);
-
-        if (results.length === 0) {
-          return `No skills found matching "${query}"`;
-        }
-
-        return results.map((s) => `**${s.name}**: ${s.description}`).join('\n');
-      },
-    });
-
-    host.registerTool({
-      name: 'get_skill',
-      description: 'Get the content of a specific skill',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: 'Skill name',
-          },
+        handler: async () => {
+          const summary = skillsManager.getSkillsSummary();
+          console.error('[Skills Loader] list_skills called, returning:', summary);
+          return summary;
         },
-        required: ['name'],
-      },
-      handler: async (args) => {
-        const { name } = args as { name: string };
-        const skill = skillsManager.getSkill(name);
+      });
 
-        if (!skill) {
-          return `Skill "${name}" not found`;
+      host.registerTool({
+        name: 'search_skills',
+        description: 'Search for skills by name or description',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            query: {
+              type: 'string',
+              description: 'Search query',
+            },
+          },
+          required: ['query'],
+        },
+        handler: async (args) => {
+          const { query } = args as { query: string };
+          const results = skillsManager.searchSkills(query);
+
+          if (results.length === 0) {
+            return `No skills found matching "${query}"`;
+          }
+
+          return results.map((s) => `**${s.name}**: ${s.description}`).join('\n');
+        },
+      });
+
+      host.registerTool({
+        name: 'get_skill',
+        description: 'Get the content of a specific skill',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: 'Skill name',
+            },
+          },
+          required: ['name'],
+        },
+        handler: async (args) => {
+          const { name } = args as { name: string };
+          const skill = skillsManager.getSkill(name);
+
+          if (!skill) {
+            return `Skill "${name}" not found`;
+          }
+
+          return skill.content;
+        },
+      });
+
+      // 注册 BeforeLlm Hook（实际注入 Skill 内容到 system prompt）
+      host.registerHook(createSkillInjectionHook(skillsManager));
+
+      // 将 skillsManager 存储在 host 上，供其他组件使用
+      (host as unknown as Record<string, unknown>).__skillsManager = skillsManager;
+
+      // 递归加载 Skill 文件
+      const skillsDir = path.resolve(loaderConfig.skillsDir ?? './skills');
+      console.error(`[Skills Loader] Looking for skills in: ${skillsDir}`);
+
+      if (fs.existsSync(skillsDir)) {
+        const files = skillsManager.findSkillFiles(skillsDir);
+        console.error(`[Skills Loader] Found ${files.length} skill files (recursive)`);
+
+        for (const filePath of files) {
+          try {
+            skillsManager.loadSkillFile(filePath);
+          } catch {
+            // skip
+          }
         }
 
-        return skill.content;
-      },
-    });
-
-    // 注册 BeforeLlm Hook（实际注入 Skill 内容到 system prompt）
-    host.registerHook(createSkillInjectionHook(skillsManager));
-
-    // 将 skillsManager 存储在 host 上，供其他组件使用
-    (host as unknown as Record<string, unknown>).__skillsManager = skillsManager;
-
-    // 递归加载 Skill 文件
-    const skillsDir = path.resolve(loaderConfig.skillsDir ?? './skills');
-    console.error(`[Skills Loader] Looking for skills in: ${skillsDir}`);
-
-    if (fs.existsSync(skillsDir)) {
-      const files = skillsManager.findSkillFiles(skillsDir);
-      console.error(`[Skills Loader] Found ${files.length} skill files (recursive)`);
-
-      for (const filePath of files) {
-        try {
-          skillsManager.loadSkillFile(filePath);
-        } catch {
-          // skip
-        }
+        const loadedSkills = skillsManager.listSkills();
+        console.error(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
+        console.error(`[Skills Loader] Skills: ${loadedSkills.map((s) => s.name).join(', ')}`);
+      } else {
+        console.error(`[Skills Loader] Skills directory not found: ${skillsDir}`);
       }
 
-      const loadedSkills = skillsManager.listSkills();
-      console.error(`[Skills Loader] Total skills loaded: ${loadedSkills.length}`);
-      console.error(`[Skills Loader] Skills: ${loadedSkills.map((s) => s.name).join(', ')}`);
-    } else {
-      console.error(`[Skills Loader] Skills directory not found: ${skillsDir}`);
-    }
+      // 启用文件监听（热加载）
+      if (loaderConfig.watch) {
+        skillsManager.watchSkills();
+        console.error('[Skills Loader] File watching enabled');
+      }
+    },
+  };
+}
 
-    // 启用文件监听（热加载）
-    if (loaderConfig.watch) {
-      skillsManager.watchSkills();
-      console.error('[Skills Loader] File watching enabled');
-    }
-  },
-};
+/** 默认实例——现有调用方无需改动 */
+export const skillsLoaderPlugin = createSkillsLoaderPlugin();
 
 export default skillsLoaderPlugin;

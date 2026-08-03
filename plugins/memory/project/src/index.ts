@@ -286,59 +286,66 @@ function createMemoryInjectionHook(manager: ProjectMemoryManager): Hook {
 
 // ── 插件导出 ──────────────────────────────────────
 
-export const memoryProjectPlugin: Plugin = {
-  name: 'memory-project',
-  version: '0.1.0',
-  description: 'Project memory plugin — reads CLAUDE.md and .vessel/memory/ into agent context',
-  install(host: PluginHost, config?: unknown) {
-    const memoryConfig = (config as MemoryProjectConfig) ?? {};
-    const manager = new ProjectMemoryManager(memoryConfig);
-    manager.loadAll();
+/**
+ * 创建 Memory Project 插件
+ */
+export function createMemoryProjectPlugin(config?: MemoryProjectConfig): Plugin {
+  return {
+    name: 'memory-project',
+    version: '0.1.0',
+    description: 'Project memory plugin — reads CLAUDE.md and .vessel/memory/ into agent context',
+    install(host: PluginHost) {
+      const manager = new ProjectMemoryManager(config);
+      manager.loadAll();
 
-    // 注册工具：列出记忆
-    host.registerTool({
-      name: 'list_memories',
-      description: '列出所有项目记忆。当用户询问"你记得什么"、"有哪些记忆"时调用此工具。',
-      inputSchema: {
-        type: 'object',
-        properties: {},
-      },
-      handler: async () => {
-        const names = manager.listNames();
-        if (names.length === 0) {
-          return '没有项目记忆。';
-        }
-        return `项目记忆 (${names.length} 条):\n${names.map((n) => `- ${n}`).join('\n')}`;
-      },
-    });
-
-    // 注册工具：查看记忆
-    host.registerTool({
-      name: 'get_memory',
-      description: '获取指定项目记忆的完整内容',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          name: {
-            type: 'string',
-            description: '记忆名称',
-          },
+      // 注册工具：列出记忆
+      host.registerTool({
+        name: 'list_memories',
+        description: '列出所有项目记忆。当用户询问"你记得什么"、"有哪些记忆"时调用此工具。',
+        inputSchema: {
+          type: 'object',
+          properties: {},
         },
-        required: ['name'],
-      },
-      handler: async (args) => {
-        const { name } = args as { name: string };
-        const entry = manager.get(name);
-        if (!entry) {
-          return `未找到记忆 "${name}"。`;
-        }
-        return `## ${entry.meta.description}\n\n${entry.content}`;
-      },
-    });
+        handler: async () => {
+          const names = manager.listNames();
+          if (names.length === 0) {
+            return '没有项目记忆。';
+          }
+          return `项目记忆 (${names.length} 条):\n${names.map((n) => `- ${n}`).join('\n')}`;
+        },
+      });
 
-    // 注册 BeforeLlm Hook
-    host.registerHook(createMemoryInjectionHook(manager));
-  },
-};
+      // 注册工具：查看记忆
+      host.registerTool({
+        name: 'get_memory',
+        description: '获取指定项目记忆的完整内容',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: '记忆名称',
+            },
+          },
+          required: ['name'],
+        },
+        handler: async (args) => {
+          const { name } = args as { name: string };
+          const entry = manager.get(name);
+          if (!entry) {
+            return `未找到记忆 "${name}"。`;
+          }
+          return `## ${entry.meta.description}\n\n${entry.content}`;
+        },
+      });
+
+      // 注册 BeforeLlm Hook
+      host.registerHook(createMemoryInjectionHook(manager));
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const memoryProjectPlugin = createMemoryProjectPlugin();
 
 export default memoryProjectPlugin;

@@ -4,12 +4,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ToolContext } from '@vessel/core';
 import { HookType, MemoryPluginHost } from '@vessel/core';
-import memoryProjectPlugin from '../src/index';
+import { createMemoryProjectPlugin } from '../src/index';
 
 describe('memory-project 插件（MECH-2）', () => {
   it('install 注册 list_memories/get_memory 工具 + BeforeLlm hook', () => {
     const host = new MemoryPluginHost();
-    memoryProjectPlugin.install(host, { projectRoot: os.tmpdir() });
+    const plugin = createMemoryProjectPlugin({ projectRoot: os.tmpdir() });
+    plugin.install(host);
     const tools = host.listTools().map((t) => t.name);
     expect(tools).toContain('list_memories');
     expect(tools).toContain('get_memory');
@@ -25,7 +26,8 @@ describe('memory-project 插件（MECH-2）', () => {
         '# Project Concepts\nUse Bun. Do not use npm.',
       );
       const host = new MemoryPluginHost();
-      memoryProjectPlugin.install(host, { projectRoot: tmpDir });
+      const plugin = createMemoryProjectPlugin({ projectRoot: tmpDir });
+      plugin.install(host);
       const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
       if (!hook) throw new Error('BeforeLlm hook not registered');
 
@@ -51,7 +53,8 @@ describe('memory-project 插件（MECH-2）', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-mem-'));
     try {
       const host = new MemoryPluginHost();
-      memoryProjectPlugin.install(host, { projectRoot: tmpDir });
+      const plugin = createMemoryProjectPlugin({ projectRoot: tmpDir });
+      plugin.install(host);
       const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
       if (!hook) throw new Error('BeforeLlm hook not registered');
       const ctx = { run_id: 'r1' };
@@ -75,7 +78,8 @@ describe('memory-project 插件（MECH-2）', () => {
         '---\nname: test\ndescription: a test memory\n---\nTest content',
       );
       const host = new MemoryPluginHost();
-      memoryProjectPlugin.install(host, { projectRoot: tmpDir });
+      const plugin = createMemoryProjectPlugin({ projectRoot: tmpDir });
+      plugin.install(host);
       const tool = host.getTool('list_memories');
       if (!tool) throw new Error('list_memories tool not registered');
       const result = await tool.handler({}, { run_id: 'r1', messages: [] } as ToolContext);

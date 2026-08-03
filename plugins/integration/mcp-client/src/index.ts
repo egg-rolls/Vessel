@@ -648,39 +648,46 @@ function createMcpContextHook(manager: McpClientManager): Hook {
 
 // ── 插件导出 ──────────────────────────────────────
 
-export const mcpClientPlugin: Plugin = {
-  name: 'mcp-client',
-  version: '0.1.0',
-  description:
-    'MCP client plugin — connects to MCP servers via JSON-RPC over stdio and bridges tools/resources/prompts',
-  install(host: PluginHost, config?: unknown) {
-    const pluginConfig = (config as McpClientConfig) ?? {};
-    const manager = new McpClientManager();
-    manager.setHost(host);
+/**
+ * 创建 MCP Client 插件
+ */
+export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
+  return {
+    name: 'mcp-client',
+    version: '0.1.0',
+    description:
+      'MCP client plugin — connects to MCP servers via JSON-RPC over stdio and bridges tools/resources/prompts',
+    install(host: PluginHost) {
+      const manager = new McpClientManager();
+      manager.setHost(host);
 
-    // 注册 MCP 管理工具
-    for (const tool of createMcpTools(manager)) {
-      host.registerTool(tool);
-    }
+      // 注册 MCP 管理工具
+      for (const tool of createMcpTools(manager)) {
+        host.registerTool(tool);
+      }
 
-    // 注册 BeforeLlm Hook
-    host.registerHook(createMcpContextHook(manager));
+      // 注册 BeforeLlm Hook
+      host.registerHook(createMcpContextHook(manager));
 
-    // 自动连接预配置的 MCP Server
-    const servers = pluginConfig.servers ?? [];
-    for (const serverConfig of servers) {
-      manager.connect(serverConfig).catch((err) => {
-        console.error(
-          `[mcp-client] Failed to auto-connect "${serverConfig.name}":`,
-          (err as Error).message,
-        );
-      });
-    }
+      // 自动连接预配置的 MCP Server
+      const servers = config?.servers ?? [];
+      for (const serverConfig of servers) {
+        manager.connect(serverConfig).catch((err) => {
+          console.error(
+            `[mcp-client] Failed to auto-connect "${serverConfig.name}":`,
+            (err as Error).message,
+          );
+        });
+      }
 
-    // 暴露 manager 供其他插件使用
-    (host as unknown as Record<string, unknown>).__mcpManager = manager;
-  },
-};
+      // 暴露 manager 供其他插件使用
+      (host as unknown as Record<string, unknown>).__mcpManager = manager;
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const mcpClientPlugin = createMcpClientPlugin();
 
 export type { McpPrompt, McpResource, McpTool };
 // 导出类型和类供外部使用
