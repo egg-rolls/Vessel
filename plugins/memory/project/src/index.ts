@@ -36,6 +36,8 @@ export interface MemoryProjectConfig {
   projectRoot?: string;
   /** CLAUDE.md 文件路径（相对于 projectRoot） */
   claudeMdPath?: string;
+  /** AGENTS.md 文件路径（相对于 projectRoot） */
+  agentsMdPath?: string;
   /** 记忆目录路径（相对于 projectRoot） */
   memoryDir?: string;
   /** 是否自动注入到 system prompt 前缀 */
@@ -47,6 +49,7 @@ export interface MemoryProjectConfig {
 const DEFAULT_CONFIG: Required<MemoryProjectConfig> = {
   projectRoot: process.cwd(),
   claudeMdPath: 'CLAUDE.md',
+  agentsMdPath: 'AGENTS.md',
   memoryDir: '.vessel/memory',
   injectToSystem: true,
 };
@@ -118,6 +121,7 @@ function parseFrontmatter(raw: string, filePath: string): MemoryEntry | null {
 class ProjectMemoryManager {
   private config: Required<MemoryProjectConfig>;
   private claudeMdContent = '';
+  private agentsMdContent = '';
   private memoryIndex: string[] = [];
   private memories: Map<string, MemoryEntry> = new Map();
 
@@ -130,6 +134,7 @@ class ProjectMemoryManager {
    */
   loadAll(): void {
     this.loadClaudeMd();
+    this.loadAgentsMd();
     this.loadMemoryDir();
   }
 
@@ -145,6 +150,21 @@ class ProjectMemoryManager {
       }
     } catch {
       // CLAUDE.md 不存在，静默跳过
+    }
+  }
+
+  /**
+   * 加载 AGENTS.md
+   */
+  private loadAgentsMd(): void {
+    const agentsPath = path.resolve(this.config.projectRoot, this.config.agentsMdPath);
+
+    try {
+      if (fs.existsSync(agentsPath)) {
+        this.agentsMdContent = fs.readFileSync(agentsPath, 'utf-8');
+      }
+    } catch {
+      // AGENTS.md 不存在，静默跳过
     }
   }
 
@@ -213,9 +233,14 @@ class ProjectMemoryManager {
   buildContextInjection(): string | null {
     const parts: string[] = [];
 
-    // CLAUDE.md 内容（如果存在）
+    // CLAUDE.md 启动器（必须最先，让 AI 先看到 TodoList 指令）
     if (this.claudeMdContent.trim()) {
-      parts.push(`<!-- 项目说明 (CLAUDE.md) -->\n${this.claudeMdContent}`);
+      parts.push(`<!-- 任务启动器 (CLAUDE.md) -->\n${this.claudeMdContent}`);
+    }
+
+    // AGENTS.md 通用概念
+    if (this.agentsMdContent.trim()) {
+      parts.push(`<!-- 项目概念 (AGENTS.md) -->\n${this.agentsMdContent}`);
     }
 
     // 记忆索引

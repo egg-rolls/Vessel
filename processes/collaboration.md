@@ -75,7 +75,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 [ ] CI 全绿？lint + typecheck + test + build？
 [ ] 依赖方向正确？core 没引用 tui/config？
 [ ] 没有硬编码 Key / console.log / NotImplementedError？
-[ ] 没有违反 CLAUDE.md §3 红线？
+[ ] 没有违反 AGENTS.md §4 红线？
 [ ] 文档同步更新了没？
 → 通过 → GitHub 上点击 "Squash and merge"
 → 不通过 → 在 PR 中标注原因 → Coder 修复后重新请求审查

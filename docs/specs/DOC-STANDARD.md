@@ -70,7 +70,8 @@ docs/
 | `CHANGELOG.md` | 天生是时间文档，可使用版本号和日期 |
 | `docs/dev/*` | 无限制——可自由使用时间/状态/进度描述 |
 | `processes/*` | 可描述当前团队、当前流程、当前任务 |
-| `CLAUDE.md` | 可引用 `docs/specs/` 中的 Phase 信息作为组织上下文，但本身不应在 §1-§8 中添加新时间标签 |
+| `CLAUDE.md` | 根级 AI 启动器，指示 AI 构建 TodoList。可引用 `docs/specs/` 中的 Phase 信息作为组织上下文，但本身不应添加新时间标签 |
+| `AGENTS.md` | 根级通用概念文件，所有角色必读。可引用 `docs/specs/` 中的 Phase 信息作为组织上下文，但本身不应添加新时间标签 |
 
 ---
 
