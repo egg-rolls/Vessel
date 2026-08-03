@@ -180,6 +180,7 @@
 - **未涉及**：(1) `runHooks` 的返回值 `null = 拦截` 语义仍未实现（无插件使用，属单独 concern，本 ADR 不处理）。(2) hook `priority` 字段仍未排序--注入顺序按注册序，非 priority（`applyGuardrails` 同样未排 priority，统一留待另议）。
 - **后果**：skills-loader 与 memory-project 的自动注入生效；AI 第一轮即带 Skills / CLAUDE.md 上下文。ContextManager 不被 hook 污染（持久化干净、可 replay）。限制：注入顺序非 priority；hook 拦截未实现。二者均不影响当前功能，后续按需另立 ADR。
 - **关联**：ADR-017(2b)、ADR-011；[SPEC.md §4.7](SPEC.md)。
+- **更新**：hook/guardrail priority 排序已在 `plugin-host.ts` 的 `registerHook`/`registerGuardrail` 中实现（按 priority 升序插入）。
 
 ---
 
