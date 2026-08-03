@@ -67,7 +67,10 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
     }
 
     case EventType.ToolCallStarted: {
-      return [...prev, makeToolCallSegment(event.data.tool_call_id, event.data.tool_name, event.data.arguments)];
+      return [
+        ...prev,
+        makeToolCallSegment(event.data.tool_call_id, event.data.tool_name, event.data.arguments),
+      ];
     }
 
     case EventType.ToolCallCompleted: {
