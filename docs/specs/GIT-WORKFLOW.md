@@ -48,7 +48,7 @@ docs/xxx      ──●                 纯文档分支
 ```
 [ ] 依赖方向：core 未引用 tui/config/plugins
 [ ] 能力分层：新代码按决策树正确分类（core/插件/应用层）
-[ ] 红线：未触碰 CLAUDE.md §3 红线
+[ ] 红线：未触碰 AGENTS.md §4 红线
 [ ] 扩展机制：未新增第二套扩展路径（ADR-004）
 [ ] 事件类型：未使用散落字符串发事件（ADR-008）
 [ ] 同步调用：未在异步路径中混入同步阻塞调用
@@ -92,7 +92,7 @@ grep -rE "(sk-[a-zA-Z0-9]{20,}|api_key\s*[:=]\s*['\"][^'\"\s]{20,})" packages/ p
 ```
 1. 获取分支 diff
 2. 对照 docs/specs/ 全部文档检查架构合规
-3. 对照 docs/guides/DEVELOPER.md（工程规范+能力分层）+ CLAUDE.md §3 红线 检查规范
+3. 对照 docs/guides/DEVELOPER.md（工程规范+能力分层）+ AGENTS.md §4 红线 检查规范
 4. 检查硬编码密钥
 5. 确认 CI 状态（lint/typecheck/test/build）
 6. 输出审查结论（通过/阻断 + 原因；发现问题时给出修复建议）
