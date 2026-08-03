@@ -20,7 +20,10 @@ describe('memory-project 插件（MECH-2）', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-mem-'));
     try {
       fs.writeFileSync(path.join(tmpDir, 'CLAUDE.md'), '# Task Launcher\nSTOP. Build TodoList.');
-      fs.writeFileSync(path.join(tmpDir, 'AGENTS.md'), '# Project Concepts\nUse Bun. Do not use npm.');
+      fs.writeFileSync(
+        path.join(tmpDir, 'AGENTS.md'),
+        '# Project Concepts\nUse Bun. Do not use npm.',
+      );
       const host = new MemoryPluginHost();
       memoryProjectPlugin.install(host, { projectRoot: tmpDir });
       const hook = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
