@@ -7,8 +7,6 @@
 ```
 docs/dev/
 ├── README.md              ← 你正在看的文件
-├── reviews/               # 审查报告
-│   └── <phase>-review.md  #   命名：阶段-审查.md
 ├── debug-notes/           # 调试/故障记录
 │   └── <主题>.md          #   命名：自由，描述性即可
 ```
@@ -17,7 +15,6 @@ docs/dev/
 
 | 子目录 | 内容 | 例子 |
 |--------|------|------|
-| `reviews/` | 代码审查报告、架构审计、质量评估 | `phase-1-review.md` |
 | `debug-notes/` | Bug 修复记录、踩坑笔记、故障复盘 | `bug-fix-experience.md` |
 
 新增文件时直接放入对应子目录，不需要审批和模板。
