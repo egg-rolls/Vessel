@@ -12,6 +12,7 @@ import type {
   Usage,
 } from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
+import { StreamAccumulator } from './stream-accumulator.js';
 
 /** SSE 事件（解析自 HTTP 流） */
 interface SseEvent {
@@ -400,10 +401,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       throw new Error('OpenAI API returned no stream body');
     }
 
-    let content = '';
-    const toolCallsMap = new Map<number, { id: string; name: string; arguments: string }>();
-    let finishReason: FinishReason = 'stop';
-    let usage: Usage | undefined;
+    const acc = new StreamAccumulator(onChunk);
 
     for await (const evt of parseSse(response.body)) {
       if (evt.data === '[DONE]') break;
@@ -418,55 +416,24 @@ export class OpenAICompatibleProvider implements LLMProvider {
       const delta = choice?.delta;
 
       if (delta?.content) {
-        content += delta.content;
-        onChunk({ type: 'text_delta', delta: delta.content });
+        acc.appendText(delta.content);
       }
 
       if (delta?.tool_calls) {
         for (const tc of delta.tool_calls) {
-          const idx = tc.index ?? 0;
-          let entry = toolCallsMap.get(idx);
-          if (!entry) {
-            entry = { id: tc.id ?? '', name: tc.function?.name ?? '', arguments: '' };
-            toolCallsMap.set(idx, entry);
-          } else {
-            if (tc.id) entry.id = tc.id;
-            if (tc.function?.name) entry.name = tc.function.name;
-          }
-          const argsDelta = tc.function?.arguments ?? '';
-          if (argsDelta) entry.arguments += argsDelta;
-          onChunk({
-            type: 'tool_call_delta',
-            tool_call_index: idx,
-            tool_call_id: tc.id,
-            tool_call_name: tc.function?.name,
-            arguments_delta: argsDelta,
-          });
+          acc.appendToolCall(tc.index ?? 0, tc.id, tc.function?.name, tc.function?.arguments ?? '');
         }
       }
 
       if (choice?.finish_reason) {
-        finishReason = choice.finish_reason as FinishReason;
+        acc.setFinishReason(choice.finish_reason as FinishReason);
       }
       if (parsed.usage) {
-        usage = parsed.usage;
+        acc.setUsage(parsed.usage);
       }
     }
 
-    const toolCalls: ToolCall[] | undefined =
-      toolCallsMap.size > 0
-        ? Array.from(toolCallsMap.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([, e]) => ({
-              id: e.id,
-              type: 'function' as const,
-              function: { name: e.name, arguments: e.arguments },
-            }))
-        : undefined;
-
-    onChunk({ type: 'finish', finish_reason: finishReason, usage });
-
-    return { content, tool_calls: toolCalls, finish_reason: finishReason, usage };
+    return acc.finalize();
   }
 }
 
@@ -691,11 +658,7 @@ export class AnthropicProvider implements LLMProvider {
       throw new Error('Anthropic API returned no stream body');
     }
 
-    let content = '';
-    const toolBlocks = new Map<number, { id: string; name: string; inputJson: string }>();
-    let finishReason: FinishReason = 'stop';
-    let promptTokens = 0;
-    let completionTokens = 0;
+    const acc = new StreamAccumulator(onChunk, /* incrementalUsage */ true);
 
     for await (const evt of parseSse(response.body)) {
       let parsed: AnthropicStreamEvent;
@@ -708,19 +671,13 @@ export class AnthropicProvider implements LLMProvider {
       switch (parsed.type) {
         case 'message_start': {
           const u = parsed.message?.usage;
-          if (u) promptTokens = u.input_tokens ?? 0;
+          if (u) acc.addPromptTokens(u.input_tokens ?? 0);
           break;
         }
         case 'content_block_start': {
           const block = parsed.content_block;
           if (block?.type === 'tool_use' && block.id && block.name && parsed.index !== undefined) {
-            toolBlocks.set(parsed.index, { id: block.id, name: block.name, inputJson: '' });
-            onChunk({
-              type: 'tool_call_delta',
-              tool_call_index: parsed.index,
-              tool_call_id: block.id,
-              tool_call_name: block.name,
-            });
+            acc.appendToolCall(parsed.index, block.id, block.name);
           }
           break;
         }
@@ -728,30 +685,20 @@ export class AnthropicProvider implements LLMProvider {
           const delta = parsed.delta;
           if (!delta) break;
           if (delta.type === 'text_delta' && delta.text) {
-            content += delta.text;
-            onChunk({ type: 'text_delta', delta: delta.text });
+            acc.appendText(delta.text);
           } else if (delta.type === 'input_json_delta' && delta.partial_json) {
-            const idx = parsed.index ?? 0;
-            const entry = toolBlocks.get(idx);
-            if (entry) {
-              entry.inputJson += delta.partial_json;
-              onChunk({
-                type: 'tool_call_delta',
-                tool_call_index: idx,
-                arguments_delta: delta.partial_json,
-              });
-            }
+            acc.appendToolCall(parsed.index ?? 0, undefined, undefined, delta.partial_json);
           }
           break;
         }
         case 'message_delta': {
           if (parsed.delta?.stop_reason === 'tool_use') {
-            finishReason = 'tool_calls';
+            acc.setFinishReason('tool_calls');
           } else if (parsed.delta?.stop_reason === 'max_tokens') {
-            finishReason = 'length';
+            acc.setFinishReason('length');
           }
           const u = parsed.usage;
-          if (u) completionTokens = u.output_tokens ?? completionTokens;
+          if (u) acc.addCompletionTokens(u.output_tokens ?? 0);
           break;
         }
         case 'message_stop':
@@ -761,25 +708,6 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
-    const toolCalls: ToolCall[] | undefined =
-      toolBlocks.size > 0
-        ? Array.from(toolBlocks.entries())
-            .sort((a, b) => a[0] - b[0])
-            .map(([, e]) => ({
-              id: e.id,
-              type: 'function' as const,
-              function: { name: e.name, arguments: e.inputJson || '{}' },
-            }))
-        : undefined;
-
-    const usage: Usage = {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
-    };
-
-    onChunk({ type: 'finish', finish_reason: finishReason, usage });
-
-    return { content, tool_calls: toolCalls, finish_reason: finishReason, usage };
+    return acc.finalize();
   }
 }
