@@ -20,7 +20,7 @@ CLAUDE.md（TODO）  场景调度
   ├── REQ-TODO.md  →  需求分析师
   ├── ARCH-TODO.md →  架构师
   ├── DEV-TODO.md  →  开发者
-  ├── REVIEWER.md  →  审查者（待拆分为 TODO+说明）
+  ├── REVIEWER.md  →  审查者 `[plan]`
   └── DOC-TODO.md  →  文档管理者
 ```
 
