@@ -58,7 +58,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
         ↓
 4. 合并时勾选 "Delete branch" 自动删除远程分支
         ↓
-5. Coder 本地清理：git checkout main && git pull && git branch -d <分支名>
+5. Coder 本地清理：git checkout main && git pull --ff-only && git branch -d <分支名>
 ```
 
 **合并必须满足（GitHub 自动检查）：**

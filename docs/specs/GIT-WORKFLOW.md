@@ -198,7 +198,19 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 |------|--------|
 | **分支保持小而短** | 一个分支一个关注点，几百行以内，1-2 天合入。小分支的 rebase 通常零冲突 |
 | **只在需要时 rebase** | 不是 main 每前进一个 commit 就要 rebase。只在以下时机 rebase：(1) 创建 PR 前；(2) 已知 main 有你需要的修复；(3) PR 审查通过、合并前最后同步 |
-| **rebase 前先拉最新 main** | `git checkout main && git pull && git checkout -` 再 `git rebase main`。不要用本地的旧 main |
+| **rebase 前先拉最新 main** | `git checkout main && git pull --ff-only && git checkout -` 再 `git rebase main`。不要用本地的旧 main |
 | **冲突太多 → 分支太大了** | 一次 rebase 超过 5 个冲突？说明这个分支塞了太多东西。考虑拆成多个小 PR |
 | **协作分支用 merge 不用 rebase** | 多人共用一个 feature 分支时，用 `git merge main` 而非 `git rebase main`。rebase 会改写历史，协作场景下是灾难 |
 | **rebase 后 force-with-lease** | 永远用 `--force-with-lease`，不用 `--force`。前者会在远程有他人提交时拒绝推送，保护协作者的工作 |
+
+### 7.2 分支同步策略速查
+
+| 场景 | 命令 | 理由 |
+|------|------|------|
+| main 拉取 | `git pull --ff-only` | main 上不应有本地提交；有则报错暴露问题，而非静默生成 merge 提交 |
+| feature 同步 main | `git rebase main` | 保持线性历史；PR 最终 Squash merge 为一个 commit，中途不必制造分叉形状 |
+| 多人共用分支 | `git merge main` | rebase 改写历史会导致协作者本地与远程不一致，是协作灾难 |
+
+> **为什么是 Squash merge？** 每个 PR 合入 main 时压缩为一个 commit，保证 `git log --oneline main` 每个 ● 对应一个 PR。好处：git bisect 不会落在半成品 commit 上；revert 只需一条命令；blame 指向有意义的 PR 而非 "fix typo"。
+
+**设置**：每个贡献者在本地执行 `git config pull.ff only`，确保 main 拉取走 fast-forward-only 策略。
