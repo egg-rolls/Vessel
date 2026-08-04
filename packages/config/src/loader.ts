@@ -11,6 +11,7 @@ import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG } from './defaults.js';
 import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
+import { deepMerge } from './utils.js';
 import { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
 
 /**
@@ -142,71 +143,10 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
  * @returns 合并后的配置
  */
 export function mergeConfig(base: VesselConfig, override: Partial<VesselConfig>): VesselConfig {
-  const result: VesselConfig = { ...base };
-
-  if (override.apiKey !== undefined) {
-    result.apiKey = override.apiKey;
-  }
-
-  if (override.provider) {
-    result.provider = {
-      ...result.provider,
-      ...override.provider,
-    };
-  }
-
-  if (override.agent) {
-    result.agent = {
-      ...result.agent,
-      ...override.agent,
-    };
-  }
-
-  if (override.tools) {
-    result.tools = override.tools;
-  }
-
-  if (override.guardrails) {
-    result.guardrails = override.guardrails;
-  }
-
-  if (override.hooks) {
-    result.hooks = override.hooks;
-  }
-
-  if (override.limits) {
-    result.limits = {
-      ...result.limits,
-      ...override.limits,
-    };
-  }
-
-  if (override.termination) {
-    result.termination = {
-      ...result.termination,
-      ...override.termination,
-    };
-  }
-
-  if (override.session) {
-    result.session = {
-      ...result.session,
-      ...override.session,
-    };
-  }
-
-  if (override.context) {
-    result.context = {
-      ...result.context,
-      ...override.context,
-    };
-  }
-
-  if (override.plugins) {
-    result.plugins = override.plugins;
-  }
-
-  return result;
+  return deepMerge(
+    base as Record<string, unknown>,
+    override as Record<string, unknown>,
+  ) as VesselConfig;
 }
 
 /**
