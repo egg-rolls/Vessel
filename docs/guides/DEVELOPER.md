@@ -67,6 +67,7 @@ Issue 认领、Draft PR 创建、gh CLI 操作技巧。**推送代码前必读�
 
 | 场景 | 补充阅读 |
 |------|---------|
+| 大模块开发（新 UI 层 / Desktop / 大重构） | `processes/large-module.md` |
 | 加插件 | `docs/specs/PLUGINS.md` + `docs/guides/plugin-dev.md` |
 | 改 TUI | `docs/api/tui.md` |
 | 改配置 | `docs/specs/SPEC.md` §6 |
