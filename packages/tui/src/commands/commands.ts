@@ -209,18 +209,21 @@ async function resolveResumeTarget(
   return { ok: true, sessionId: arg };
 }
 
-/** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史 */
+/** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史。
+ *  返回确认消息（调用方可入历史/打印）。 */
 export async function doResume(
   ctx: ReplContext,
   state: ReplState,
   sessionId: string,
-): Promise<void> {
+): Promise<string> {
   ctx.context.clear();
   state.currentSessionId = sessionId;
   ctx.onSessionChange(sessionId);
   const loaded = await ctx.session.load(sessionId);
   const msgCount = loaded?.messages.length ?? 0;
-  console.log(`\nResumed session "${sessionId}" (${msgCount} messages).\n`);
+  const msg = `Resumed session "${sessionId}" (${msgCount} messages).`;
+  console.log(`\n${msg}\n`);
+  return msg;
 }
 
 // ── /new ─────────────────────────────────────────

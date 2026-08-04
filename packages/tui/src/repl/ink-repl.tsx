@@ -9,12 +9,13 @@
 import type { SessionInfo } from '@vessel/core';
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
   type CommandItem,
+  decideCommandEnter,
   filterCommands,
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
@@ -67,7 +68,12 @@ function InkRepl({ ctx }: InkReplProps) {
     () => filterCommands(allCommands, commandFilter),
     [allCommands, commandFilter],
   );
-  const showAutocomplete = input.startsWith('/') && filteredCommands.length > 0;
+  // 补全只在命令名阶段（/ 开头、尚未输入空格、非精确匹配）显示：
+  // - 一旦输入空格进入参数输入即隐藏，避免 Tab/Enter 把已输入参数覆盖成命令名
+  // - 精确匹配某命令名时隐藏补全框，改由 argHint 显示参数提示
+  const isExactCommand = input.startsWith('/') && allCommands.some((cmd) => cmd.name === input);
+  const showAutocomplete =
+    input.startsWith('/') && !input.includes(' ') && !isExactCommand && filteredCommands.length > 0;
 
   // 参数占位提示：当输入精确匹配某命令名时，显示灰色参数提示（如 " [number|id]"）
   const argHint = useMemo(() => {
@@ -79,16 +85,16 @@ function InkRepl({ ctx }: InkReplProps) {
     return hint || null;
   }, [input, allCommands]);
 
-  // Ref：桥接 useInput（Enter 补全）→ handleSubmit（执行命令）
-  const selectedCommandRef = useRef<string | null>(null);
-  // Ref：阻止 TextInput 的 onSubmit 在"仅补全不执行"时触发 handleSubmit
-  const preventSubmitRef = useRef(false);
-
   // 过滤词变化时重置选择索引
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filteredCommands reference changes
   useEffect(() => {
     setAutocompleteIndex(0);
   }, [filteredCommands]);
+
+  // 同步 currentSessionId 到 ctx（壳 / SSE bridge 等读 ctx.currentSessionId）
+  useEffect(() => {
+    ctx.currentSessionId = state.currentSessionId;
+  }, [state.currentSessionId, ctx]);
 
   // 注入权限确认器的 promptFn
   useEffect(() => {
@@ -111,13 +117,18 @@ function InkRepl({ ctx }: InkReplProps) {
     }
   }, [state.showResumePicker, ctx.session]);
 
-  // 处理输入
+  // 处理输入（TextInput 的 onSubmit —— Enter 的唯一入口）
+  // 注意：Ink 的 useInput 子组件先于父组件触发，且无法 stopPropagation，
+  // 所以 Enter 的"补全 vs 执行"决策必须在此处（onSubmit）做，不能在 useInput 里做。
   const handleSubmit = useCallback(
     async (value: string) => {
-      // 补全模式下 Enter 仅用于补全命令名（不执行），阻止 TextInput 的 stale onSubmit
-      if (preventSubmitRef.current) {
-        preventSubmitRef.current = false;
-        return;
+      // 补全 case：输入是未完成的命令名 -> 补全到当前选中命令，不执行。
+      // 用户再按一次 Enter 才执行。（决策逻辑见 decideCommandEnter，已单测覆盖）
+      const decision = decideCommandEnter(value, allCommands, filteredCommands, autocompleteIndex);
+      if (decision.action === 'complete') {
+        setInput(decision.commandName);
+        setInputCaretKey((prev) => prev + 1);
+        return; // 仅补全，不执行
       }
 
       if (!value.trim()) return;
@@ -125,7 +136,7 @@ function InkRepl({ ctx }: InkReplProps) {
       setHistory((prev) => [...prev, `> ${value}`]);
       setInput('');
 
-      // 处理 /resume pending one-shot (simple mode fallback)
+      // 处理 /resume pending one-shot（simple 模式 fallback；Ink 模式由 picker 接管）
       if (state.pendingResume && !state.showResumePicker) {
         const num = Number.parseInt(value, 10);
         if (!Number.isNaN(num)) {
@@ -134,8 +145,9 @@ function InkRepl({ ctx }: InkReplProps) {
           const sessions = await ctx.session.listRich();
           const target = sessions[num - 1];
           if (target) {
-            await doResume(ctx, state, target.session_id);
+            const msg = await doResume(ctx, state, target.session_id);
             setState((prev) => ({ ...prev, currentSessionId: target.session_id }));
+            setHistory((prev) => [...prev, msg]);
           }
           return;
         }
@@ -143,14 +155,10 @@ function InkRepl({ ctx }: InkReplProps) {
 
       // 处理命令
       if (value.startsWith('/')) {
-        // 如果补全菜单选中了命令，使用选中的命令（而非用户原始输入）
-        const effectiveValue = selectedCommandRef.current ?? value;
-        selectedCommandRef.current = null;
-
-        const result = await commands.execute(effectiveValue, ctx, state);
+        const result = await commands.execute(value, ctx, state);
         if (result.handled) {
           // 特殊处理 /clear 命令 - 清空历史记录和流式输出
-          if (effectiveValue.trim() === '/clear' || effectiveValue.trim().startsWith('/clear ')) {
+          if (value.trim() === '/clear' || value.trim().startsWith('/clear ')) {
             setHistory([]);
             setClearSignal((prev) => prev + 1); // 触发 StreamOutput 清空
           } else if (result.output) {
@@ -158,12 +166,14 @@ function InkRepl({ ctx }: InkReplProps) {
             const output = result.output;
             setHistory((prev) => [...prev, output]);
           }
-          setState((prev) => ({ ...prev, pendingResume: false }));
+          // 命令可能直接改了 state（showResumePicker/currentSessionId/running），
+          // flush 到 React 触发重渲染（不可变更新）
+          setState((prev) => ({ ...prev }));
           return;
         }
 
         // 未知命令：显示提示，不发 AI
-        const cmdName = effectiveValue.trim().split(/\s+/)[0] ?? effectiveValue;
+        const cmdName = value.trim().split(/\s+/)[0] ?? value;
         setHistory((prev) => [
           ...prev,
           `Unknown command: ${cmdName}. Type /help for available commands.`,
@@ -182,34 +192,14 @@ function InkRepl({ ctx }: InkReplProps) {
         setHistory((prev) => [...prev, `Error: ${errorMsg}`]);
       }
     },
-    [ctx, state, commands],
+    [ctx, state, commands, allCommands, filteredCommands, autocompleteIndex],
   );
 
-  // 键盘输入处理
+  // 键盘输入处理（Tab/↑↓/Esc 在补全可见时拦截）
+  // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
+  // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
-    // 内联补全键盘处理 — Enter/Tab/↑↓/Esc 在补全可见时拦截
     if (showAutocomplete) {
-      if (key.return) {
-        const selected = filteredCommands[autocompleteIndex];
-        if (selected) {
-          const inputCmd = input.trim().split(/\s+/)[0] ?? '';
-          const isCompleted = `/${inputCmd}` === selected.name;
-
-          if (selected.argNames?.length && !isCompleted) {
-            // 有参数且命令名未补全 → 仅补全，不执行
-            setInput(selected.name);
-            setInputCaretKey((prev) => prev + 1);
-            setAutocompleteIndex(0);
-            preventSubmitRef.current = true;
-          } else {
-            // 无参数 或 命令名已补全 → 直接执行
-            selectedCommandRef.current = selected.name;
-            setAutocompleteIndex(0);
-            // 不 return，让 Enter 传递到 TextInput 触发 handleSubmit
-          }
-        }
-        return;
-      }
       if (key.tab) {
         const selected = filteredCommands[autocompleteIndex];
         if (selected) {
@@ -232,6 +222,7 @@ function InkRepl({ ctx }: InkReplProps) {
         setAutocompleteIndex(0);
         return;
       }
+      // Enter 不拦截：落到 TextInput.onSubmit -> handleSubmit
     }
 
     // 如果有其他独占交互组件显示，不处理其余输入
@@ -300,8 +291,10 @@ function InkRepl({ ctx }: InkReplProps) {
           currentSessionId={state.currentSessionId}
           onSelect={async (id) => {
             setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
-            await doResume(ctx, state, id);
+            setInput('');
+            const msg = await doResume(ctx, state, id);
             setState((prev) => ({ ...prev, currentSessionId: id }));
+            setHistory((prev) => [...prev, msg]);
           }}
           onClose={() => {
             setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));

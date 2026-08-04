@@ -20,7 +20,9 @@ export {
 } from './commands/commands.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export {
+  type CommandEnterDecision,
   type CommandItem,
+  decideCommandEnter,
   filterCommands,
   InlineAutocomplete,
 } from './components/InlineAutocomplete.js';

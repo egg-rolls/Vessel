@@ -43,6 +43,39 @@ export function filterCommands(commands: CommandItem[], filter: string): Command
   });
 }
 
+/** Enter 键的"补全 vs 执行"决策结果 */
+export type CommandEnterDecision =
+  | { readonly action: 'complete'; readonly commandName: string }
+  | { readonly action: 'execute' };
+
+/**
+ * 纯函数：决定 Enter 应补全命令名还是执行。
+ *
+ * 规则（仅在命令名阶段--`/` 开头且无空格--考虑补全）：
+ * - 输入精确匹配某命令名 -> 执行（如 `/resume`）
+ * - 输入未完成、且补全列表有选中项 -> 补全到选中命令名，不执行（如 `/res` -> `/resume`）
+ * - 其它（带参数、无匹配、非命令）-> 执行
+ *
+ * 抽成纯函数便于单测；历史上 `isCompleted` 的双斜杠 bug 即此处逻辑出错。
+ */
+export function decideCommandEnter(
+  value: string,
+  allCommands: CommandItem[],
+  filteredCommands: CommandItem[],
+  autocompleteIndex: number,
+): CommandEnterDecision {
+  if (value.startsWith('/') && !value.includes(' ')) {
+    const isExact = allCommands.some((cmd) => cmd.name === value);
+    if (!isExact) {
+      const selected = filteredCommands[autocompleteIndex];
+      if (selected && selected.name !== value) {
+        return { action: 'complete', commandName: selected.name };
+      }
+    }
+  }
+  return { action: 'execute' };
+}
+
 export function InlineAutocomplete({ commands, filter, selectedIndex }: InlineAutocompleteProps) {
   const filtered = useMemo(() => filterCommands(commands, filter), [commands, filter]);
 
