@@ -36,7 +36,7 @@
 
 **自检**：PR 标题格式是什么？Commit type 有哪些？
 
-### 5. docs/guides/DEVELOPER.md §代码设计纪律
+### 5. DEVELOPER.md §代码设计纪律
 
 审查时不仅看"功能对不对"，还要看"结构能不能扛住未来的变化"。读 DEVELOPER.md 中代码设计纪律一节，理解设计判断的视角。
 

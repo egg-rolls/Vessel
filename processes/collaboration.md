@@ -118,7 +118,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 ```
 1. Coder 创建 PR（Draft → Ready for review）
         ↓
-2. Reviewer 审查（对照 docs/guides/REVIEWER.md）
+2. Reviewer 审查（对照 ../docs/role/REVIEWER.md）
         ↓
 3. 审查通过 → Reviewer 在 GitHub 上点击 "Squash and merge"
         ↓
@@ -133,7 +133,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 - ✅ 无未解决的合并冲突
 - ✅ 所有对话已解决
 
-## 六、Reviewer 的审查（对照 docs/guides/REVIEWER.md）
+## 六、Reviewer 的审查（对照 ../docs/role/REVIEWER.md）
 
 在 GitHub PR 页面进行，检查清单：
 

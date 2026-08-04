@@ -11,7 +11,7 @@
   ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 阶段 1：需求 → PRD                                            │
-│ 角色：   需求分析师（docs/guides/REQUIREMENTS-ANALYST.md）    │
+│ 角色：   需求分析师（docs/role/REQUIREMENTS-ANALYST.md）    │
 │ 输入：   用户模糊需求                                          │
 │ 输出：   docs/dev/<module>/prd.md（12 章，含 Problem           │
 │         Statement、MoSCoW 优先级、NFR 五维、开放问题）          │
@@ -22,7 +22,7 @@
                      ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 阶段 2：PRD → SPEC + Epic + Issues                            │
-│ 角色：   架构师（docs/guides/ARCHITECT.md）                     │
+│ 角色：   架构师（docs/role/ARCHITECT.md）                     │
 │ 输入：   docs/dev/<module>/prd.md（阶段 1 产出）               │
 │ 输出：   docs/dev/<module>/spec.md（含备选方案与权衡、          │
 │         Goals/Non-Goals、横切关注点、m1 架构验证切片）          │
@@ -44,7 +44,7 @@
                      ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 阶段 3：Issues → PR                                           │
-│ 角色：   开发者（docs/guides/DEVELOPER.md                      │
+│ 角色：   开发者（docs/role/DEVELOPER.md                      │
 │         + processes/collaboration.md）                        │
 │ 输入：   子 Issues（阶段 2 产出，含接口契约 + 涉及文件 + 完成标准）│
 │ 输出：   合并的 PR（≤ 500 行 diff，含 PR 描述模板四段 + DoD 7 条）│
@@ -115,9 +115,9 @@ PRD、SPEC、Epic 引用都依赖一致的文件夹名。中途改名的代价�
 
 | 阶段 | 角色 | 入口文档 |
 |------|------|---------|
-| 1 | 需求分析师 | [docs/guides/REQUIREMENTS-ANALYST.md](../docs/guides/REQUIREMENTS-ANALYST.md) |
-| 2 | 架构师 | [docs/guides/ARCHITECT.md](../docs/guides/ARCHITECT.md) |
-| 3 | 开发者 | [docs/guides/DEVELOPER.md](../docs/guides/DEVELOPER.md) + [collaboration.md](collaboration.md) |
+| 1 | 需求分析师 | [REQUIREMENTS-ANALYST.md](../docs/role/REQUIREMENTS-ANALYST.md) |
+| 2 | 架构师 | [ARCHITECT.md](../docs/role/ARCHITECT.md) |
+| 3 | 开发者 | [DEVELOPER.md](../docs/role/DEVELOPER.md) + [collaboration.md](collaboration.md) |
 
 ## 单点修复的快速通道
 

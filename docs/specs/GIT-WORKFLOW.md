@@ -41,7 +41,7 @@ docs/xxx      ──●                 纯文档分支
 | `docs/specs/SPEC.md` | 新代码是否违反接口契约、模块边界 |
 | `docs/specs/ADR.md` | 是否违反已有架构决策 |
 | `docs/specs/ROADMAP.md` | 是否超出 ROADMAP 定义的范围 |
-| `CLAUDE.md` + `docs/guides/DEVELOPER.md` | 工程规范、能力分层、红线 |
+| `CLAUDE.md` + `../role/DEVELOPER.md` | 工程规范、能力分层、红线 |
 
 **检查清单**（由 AI Agent 执行并输出结论）：
 
@@ -92,7 +92,7 @@ grep -rE "(sk-[a-zA-Z0-9]{20,}|api_key\s*[:=]\s*['\"][^'\"\s]{20,})" packages/ p
 ```
 1. 获取分支 diff
 2. 对照 docs/specs/ 全部文档检查架构合规
-3. 对照 docs/guides/DEVELOPER.md（工程规范+能力分层）+ AGENTS.md §4 红线 检查规范
+3. 对照 ../role/DEVELOPER.md（工程规范+能力分层）+ AGENTS.md §4 红线 检查规范
 4. 检查硬编码密钥
 5. 确认 CI 状态（lint/typecheck/test/build）
 6. 输出审查结论（通过/阻断 + 原因；发现问题时给出修复建议）
@@ -132,7 +132,7 @@ chore(ci): 添加 Biome lint 到 CI 流水线
 ## 五、合并审查规范
 
 - 推送分支后创建 PR，CODEOWNERS 自动请求 Reviewer 审查
-- 审查对照 AI Agent 检查清单（docs/guides/REVIEWER.md）+ 安全检查（§2.3）
+- 审查对照 AI Agent 检查清单（../role/REVIEWER.md）+ 安全检查（§2.3）
 - CI（lint/typecheck/test/build）四灯全绿后方可合并
 - Reviewer 在 PR 页面点击 "Squash and merge" 执行合并
 

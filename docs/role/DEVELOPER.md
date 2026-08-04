@@ -74,7 +74,7 @@ Issue 认领、Draft PR 创建、gh CLI 操作技巧。**推送代码前必读�
 | 改 TUI | `docs/api/tui.md` |
 | 改配置 | `docs/specs/SPEC.md` §6 |
 | 写测试 | `docs/guides/testing.md` |
-| 改文档 | 停止——先读 `docs/guides/DOC-MANAGER.md`（你不是开发者角色了） |
+| 改文档 | 停止——先读 `DOC-MANAGER.md`（你不是开发者角色了） |
 
 ---
 

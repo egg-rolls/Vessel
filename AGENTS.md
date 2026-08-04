@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > 本文件是 Vessel 仓库的通用概念手册。**所有 AI Agent 角色必读。**
-> 角色专属规则见 `docs/guides/REQUIREMENTS-ANALYST.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`。
+> 角色专属规则见 `docs/role/REQUIREMENTS-ANALYST.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`。
 > 本文件与代码冲突时，以代码为准并更新本文件；不靠记忆猜测。
 
 ---
@@ -16,7 +16,7 @@
 
 ## 2. 项目事实
 
-- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/{specs,guides,api,dev}` + `processes/` + `legacy/`。
+- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/{specs,guides,role,api,dev}` + `processes/` + `legacy/`。
 - monorepo：bun workspaces。
 - 公共入口：`@vessel/core` 的 `AgentRuntime`、`PluginHost`；`@vessel/tui` 的 REPL。
 - 依赖：保持精简；core 不依赖 tui/config/plugins。
@@ -38,7 +38,7 @@
 
 | 场景 | 文档 |
 |------|------|
-| **角色入口（开始任何工作前）** | [`docs/guides/REQUIREMENTS-ANALYST.md`](docs/guides/REQUIREMENTS-ANALYST.md) / [`ARCHITECT.md`](docs/guides/ARCHITECT.md) / [`DEVELOPER.md`](docs/guides/DEVELOPER.md) / [`REVIEWER.md`](docs/guides/REVIEWER.md) / [`DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md) |
+| **角色入口（开始任何工作前）** | [`docs/role/REQUIREMENTS-ANALYST.md`](docs/role/REQUIREMENTS-ANALYST.md) / [`ARCHITECT.md`](docs/role/ARCHITECT.md) / [`DEVELOPER.md`](docs/role/DEVELOPER.md) / [`REVIEWER.md`](docs/role/REVIEWER.md) / [`DOC-MANAGER.md`](docs/role/DOC-MANAGER.md) |
 | 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
 | 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) |
@@ -55,7 +55,7 @@
 ### 文档分区规则
 
 ```
-docs/specs/  guides/  api/  → 永久文档，禁止出现：
+docs/specs/  guides/  role/  api/  → 永久文档，禁止出现：
   "pre-MVP" "当前" "目前" "现在" "暂不" "延后" "Phase N 实现时"
   → 只描述设计是什么，不描述做到哪了
   → 状态/进度/审查信息放 docs/dev/
@@ -87,9 +87,9 @@ docs/dev/ → 临时产物，无限制
 - 不吹 MCP/RAG/evals/workflow 等未实现能力。
 - 代码与文档不一致时，改其一，不留矛盾。
 - 不从记忆回答能查代码的问题；先查 `packages/`。
-- **修改 `docs/specs/`、`docs/guides/`、`docs/api/` 后必须执行自检 grep**：
+- **修改 `docs/specs/`、`docs/guides/`、`docs/role/`、`docs/api/` 后必须执行自检 grep**：
   ```
-  grep -rn "当前|目前|现在|暂不|延后|pre-MVP|MVP 范围" docs/specs/ docs/guides/ docs/api/
+  grep -rn "当前|目前|现在|暂不|延后|pre-MVP|MVP 范围" docs/specs/ docs/guides/ docs/role/ docs/api/
   ```
   命中即违规，修改后方可提交。
 

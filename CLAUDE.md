@@ -12,11 +12,11 @@
 1. 读 [AGENTS.md](AGENTS.md) — 了解 Vessel 是什么、架构约束、红线
 2. 判断角色：用户的请求属于哪种场景？
 3. 读角色文档：
-   - 需求分析/写PRD → [docs/guides/REQ-TODO.md](docs/guides/REQ-TODO.md)
-   - 架构设计/写SPEC → [docs/guides/ARCH-TODO.md](docs/guides/ARCH-TODO.md)
-   - 写/改代码 → [docs/guides/DEV-TODO.md](docs/guides/DEV-TODO.md)
-   - 审查/合并 → [docs/guides/REVIEWER.md](docs/guides/REVIEWER.md)
-   - 修改文档 → [docs/guides/DOC-MANAGER.md](docs/guides/DOC-MANAGER.md)
+   - 需求分析/写PRD → [docs/role/REQ-TODO.md](docs/role/REQ-TODO.md)
+   - 架构设计/写SPEC → [docs/role/ARCH-TODO.md](docs/role/ARCH-TODO.md)
+   - 写/改代码 → [docs/role/DEV-TODO.md](docs/role/DEV-TODO.md)
+   - 审查/合并 → [docs/role/REVIEWER.md](docs/role/REVIEWER.md)
+   - 修改文档 → [docs/role/DOC-MANAGER.md](docs/role/DOC-MANAGER.md)
 4. 检查分支：`git branch --show-current`
 5. 按角色文档的必读清单读取场景相关文档
 6. 执行用户任务
@@ -28,11 +28,11 @@
 
 | 你的任务 | 第一步 |
 |---------|--------|
-| 需求分析 / 写 PRD | 先读 [`docs/guides/REQ-TODO.md`](docs/guides/REQ-TODO.md) |
-| 架构设计 / 写 SPEC | 先读 [`docs/guides/ARCH-TODO.md`](docs/guides/ARCH-TODO.md) |
-| 写/改代码 | 先读 [`docs/guides/DEV-TODO.md`](docs/guides/DEV-TODO.md) |
-| 审查 PR / 合并 | 先读 [`docs/guides/REVIEWER.md`](docs/guides/REVIEWER.md) |
-| 修改文档 | 先读 [`docs/guides/DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md) |
+| 需求分析 / 写 PRD | 先读 [`docs/role/REQ-TODO.md`](docs/role/REQ-TODO.md) |
+| 架构设计 / 写 SPEC | 先读 [`docs/role/ARCH-TODO.md`](docs/role/ARCH-TODO.md) |
+| 写/改代码 | 先读 [`docs/role/DEV-TODO.md`](docs/role/DEV-TODO.md) |
+| 审查 PR / 合并 | 先读 [`docs/role/REVIEWER.md`](docs/role/REVIEWER.md) |
+| 修改文档 | 先读 [`docs/role/DOC-MANAGER.md`](docs/role/DOC-MANAGER.md) |
 | 涉及 core 包 | 先读 [AGENTS.md](AGENTS.md) §5 Core 冻结 |
 | 不确定能力放哪层 | 先读 [AGENTS.md](AGENTS.md) §6 能力分层 |
 
