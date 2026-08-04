@@ -1,6 +1,6 @@
 # 标准开发流程
 
-> 三段闭环，带反馈回路：**解决方案工程师**（PRD）→ **架构师**（SPEC + Epic + Issues）→ **开发者**（认领 + PR）。
+> 三段闭环，带反馈回路：**需求分析师**（PRD）→ **架构师**（SPEC + Epic + Issues）→ **开发者**（认领 + PR）。
 > 单点修复（修 bug、加参数、小调 UI）跳过前两段，直接走 [collaboration.md](collaboration.md) 快速通道。
 
 ## 全貌
@@ -11,7 +11,7 @@
   ▼
 ┌──────────────────────────────────────────────────────────────┐
 │ 阶段 1：需求 → PRD                                            │
-│ 角色：   解决方案工程师（docs/guides/SOLUTION-ARCHITECT.md）    │
+│ 角色：   需求分析师（docs/guides/REQUIREMENTS-ANALYST.md）    │
 │ 输入：   用户模糊需求                                          │
 │ 输出：   docs/dev/<module>/prd.md（12 章，含 Problem           │
 │         Statement、MoSCoW 优先级、NFR 五维、开放问题）          │
@@ -107,7 +107,7 @@ PRD、SPEC、Epic 引用都依赖一致的文件夹名。中途改名的代价�
 
 ### 4. 单点修复不走流程
 
-修一个 bug、加一个参数、小调 UI——不需要解决方案工程师和架构师。直接走 Issue → PR。
+修一个 bug、加一个参数、小调 UI——不需要需求分析师和架构师。直接走 Issue → PR。
 
 **判断线**：这个改动涉及的代码，一个人能在一小时内独立完成吗？能 → 跳过阶段 1 和 2。
 
@@ -115,7 +115,7 @@ PRD、SPEC、Epic 引用都依赖一致的文件夹名。中途改名的代价�
 
 | 阶段 | 角色 | 入口文档 |
 |------|------|---------|
-| 1 | 解决方案工程师 | [docs/guides/SOLUTION-ARCHITECT.md](../docs/guides/SOLUTION-ARCHITECT.md) |
+| 1 | 需求分析师 | [docs/guides/REQUIREMENTS-ANALYST.md](../docs/guides/REQUIREMENTS-ANALYST.md) |
 | 2 | 架构师 | [docs/guides/ARCHITECT.md](../docs/guides/ARCHITECT.md) |
 | 3 | 开发者 | [docs/guides/DEVELOPER.md](../docs/guides/DEVELOPER.md) + [collaboration.md](collaboration.md) |
 

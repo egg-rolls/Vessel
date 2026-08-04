@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > 本文件是 Vessel 仓库的通用概念手册。**所有 AI Agent 角色必读。**
-> 角色专属规则见 `docs/guides/SOLUTION-ARCHITECT.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`。
+> 角色专属规则见 `docs/guides/REQUIREMENTS-ANALYST.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`。
 > 本文件与代码冲突时，以代码为准并更新本文件；不靠记忆猜测。
 
 ---
@@ -38,7 +38,7 @@
 
 | 场景 | 文档 |
 |------|------|
-| **角色入口（开始任何工作前）** | [`docs/guides/SOLUTION-ARCHITECT.md`](docs/guides/SOLUTION-ARCHITECT.md) / [`ARCHITECT.md`](docs/guides/ARCHITECT.md) / [`DEVELOPER.md`](docs/guides/DEVELOPER.md) / [`REVIEWER.md`](docs/guides/REVIEWER.md) / [`DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md) |
+| **角色入口（开始任何工作前）** | [`docs/guides/REQUIREMENTS-ANALYST.md`](docs/guides/REQUIREMENTS-ANALYST.md) / [`ARCHITECT.md`](docs/guides/ARCHITECT.md) / [`DEVELOPER.md`](docs/guides/DEVELOPER.md) / [`REVIEWER.md`](docs/guides/REVIEWER.md) / [`DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md) |
 | 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
 | 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) |
