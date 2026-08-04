@@ -89,7 +89,7 @@ docs/dev/ → 临时产物，无限制
 - 不从记忆回答能查代码的问题；先查 `packages/`。
 - **修改 `docs/specs/`、`docs/guides/`、`docs/role/`、`docs/api/` 后必须执行自检 grep**：
   ```
-  grep -rn "当前|目前|现在|暂不|延后|pre-MVP|MVP 范围" docs/specs/ docs/guides/ docs/role/ docs/api/
+  grep -rn "当前\|目前\|现在\|暂时\|暂不\|延后\|近期\|以后\|pre-MVP\|MVP 范围\|Phase.*实现时" docs/specs/ docs/guides/ docs/role/ docs/api/
   ```
   命中即违规，修改后方可提交。
 

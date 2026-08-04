@@ -20,7 +20,7 @@ CLAUDE.md（TODO）  场景调度
   ├── REQ-TODO.md  →  需求分析师
   ├── ARCH-TODO.md →  架构师
   ├── DEV-TODO.md  →  开发者
-  ├── REVIEWER.md  →  审查者 `[plan]`
+  ├── REVIEW-TODO.md →  审查者
   └── DOC-TODO.md  →  文档管理者
 ```
 
@@ -34,7 +34,7 @@ CLAUDE.md（TODO）  场景调度
 | **架构师** | Software Architect / Tech Lead | "设计=权衡"——每个决策都有一个被否决的替代方案 | 拆解优先于实现：接口契约先行，正交拆分，假正交即退回 |
 | **开发者** | Software Engineer | "代码=负债"——前期投入换长期回报，10 分钟设计停顿换 10 小时维护时间 | 规则优先于直觉：硬规则触发即纠正，不靠"感觉这样写更好" |
 | **文档管理者** | Technical Writer / Documentation Engineer | "文档≠装饰"——不一致的文档是负资产，过期的文档是错误 | 规范优先于写作：先走链路再写，写完必自检 |
-| **审查者** | Code Reviewer | "审查≠找碴"——查找将在未来引发事故的系统性风险 | 检查清单优先于主观判断：CI、红线、依赖方向、文档同步 |
+| **审查者** | Code Reviewer | "审查≠找碴"——查找将在未来引发事故的系统性风险 | 硬性门禁优先于设计判断，10 条逐项过，CI 不可跳 |
 
 ## 如何工作
 

@@ -25,7 +25,7 @@
 | 需求分析 / 写 PRD | 先读 [`docs/role/REQ-TODO.md`](docs/role/REQ-TODO.md) |
 | 架构设计 / 写 SPEC | 先读 [`docs/role/ARCH-TODO.md`](docs/role/ARCH-TODO.md) |
 | 写/改代码 | 先读 [`docs/role/DEV-TODO.md`](docs/role/DEV-TODO.md) |
-| 审查 PR / 合并 | 先读 [`docs/role/REVIEWER.md`](docs/role/REVIEWER.md) |
+| 审查 PR / 合并 | 先读 [`docs/role/REVIEW-TODO.md`](docs/role/REVIEW-TODO.md) |
 | 修改文档 | 先读 [`docs/role/DOC-TODO.md`](docs/role/DOC-TODO.md) |
 | 涉及 core 包 | 先读 [AGENTS.md](AGENTS.md) §5 Core 冻结 |
 | 不确定能力放哪层 | 先读 [AGENTS.md](AGENTS.md) §6 能力分层 |
