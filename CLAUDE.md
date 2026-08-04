@@ -12,6 +12,8 @@
 1. 读 [AGENTS.md](AGENTS.md) — 了解 Vessel 是什么、架构约束、红线
 2. 判断角色：用户的请求属于哪种场景？
 3. 读角色文档：
+   - 需求分析/写PRD → [docs/guides/SOLUTION-ARCHITECT.md](docs/guides/SOLUTION-ARCHITECT.md)
+   - 架构设计/写SPEC → [docs/guides/ARCHITECT.md](docs/guides/ARCHITECT.md)
    - 写/改代码 → [docs/guides/DEVELOPER.md](docs/guides/DEVELOPER.md)
    - 审查/合并 → [docs/guides/REVIEWER.md](docs/guides/REVIEWER.md)
    - 修改文档 → [docs/guides/DOC-MANAGER.md](docs/guides/DOC-MANAGER.md)
@@ -26,6 +28,8 @@
 
 | 你的任务 | 第一步 |
 |---------|--------|
+| 需求分析 / 写 PRD | 先读 [`docs/guides/SOLUTION-ARCHITECT.md`](docs/guides/SOLUTION-ARCHITECT.md) |
+| 架构设计 / 写 SPEC | 先读 [`docs/guides/ARCHITECT.md`](docs/guides/ARCHITECT.md) |
 | 写/改代码 | 先读 [`docs/guides/DEVELOPER.md`](docs/guides/DEVELOPER.md) |
 | 审查 PR / 合并 | 先读 [`docs/guides/REVIEWER.md`](docs/guides/REVIEWER.md) |
 | 修改文档 | 先读 [`docs/guides/DOC-MANAGER.md`](docs/guides/DOC-MANAGER.md) |

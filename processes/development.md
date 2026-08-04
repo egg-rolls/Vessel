@@ -1,77 +1,91 @@
 # 标准开发流程
 
-> 适用于功能开发和模块重构。单点修复（修 bug、加参数、小调 UI）可直接走 [collaboration.md](collaboration.md) 的快速通道——单 Issue → PR，跳过蓝图和编排层。
+> 三段闭环：**解决方案工程师**（PRD）→ **架构师**（SPEC + Epic + Issues）→ **开发者**（认领 + PR）。
+> 单点修复（修 bug、加参数、小调 UI）跳过前两段，直接走 [collaboration.md](collaboration.md) 快速通道。
 
-## 为什么需要三层
-
-Issue + PR 是**原子交付单元**——它假设"一个改动能独立理解、独立合并"。这对小改动成立。但当改动涉及多个子任务、多条依赖线时，默认会退化成流水线（A 合了才能做 B，B 合了才能做 C），变成纯线性推进。
-
-加两层：先想清楚做什么（蓝图）、再切成可并行的子任务（编排），然后每个子任务仍走 Issue→PR。
+## 全貌
 
 ```
-蓝图层   ADR + Design Doc     定方向 + 接口契约        不写代码
-编排层   Epic Tracker Issue    子任务清单 + 依赖图      统筹全局
-交付层   Issue → PR           原子可合并切片           保持小（见 collaboration.md）
+用户需求
+  │
+  ▼
+┌─────────────────────────────────────────────────────────┐
+│ 阶段 1：需求 → PRD                                       │
+│ 角色：   解决方案工程师（docs/guides/SOLUTION-ARCHITECT.md） │
+│ 输入：   用户模糊需求                                     │
+│ 输出：   docs/dev/<module>/prd.md                         │
+│ 动作：   追问边界 → 确定 IN/OUT → 写验收标准               │
+│ 门禁：   用户确认 PRD 后才进入阶段 2                       │
+└────────────────────┬────────────────────────────────────┘
+                     │ PRD 确认
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│ 阶段 2：PRD → SPEC + Epic + Issues                       │
+│ 角色：   架构师（docs/guides/ARCHITECT.md）                │
+│ 输入：   docs/dev/<module>/prd.md（阶段 1 产出）          │
+│ 输出：   docs/dev/<module>/spec.md                        │
+│         + Epic Issue（依赖图）                            │
+│         + 子 Issues（每线一个，可独立认领）                 │
+│ 动作：   拆模块 → 定接口契约 → 画依赖图 → 生成 Issues      │
+│ 门禁：   用户确认 SPEC + 依赖图后才开放认领                 │
+└────────────────────┬────────────────────────────────────┘
+                     │ SPEC 确认 + Issues 就位
+                     ▼
+┌─────────────────────────────────────────────────────────┐
+│ 阶段 3：Issues → PR                                      │
+│ 角色：   开发者（docs/guides/DEVELOPER.md                 │
+│         + processes/collaboration.md）                   │
+│ 输入：   子 Issues（阶段 2 产出）                          │
+│ 输出：   合并的 PR（原子可审查）                           │
+│ 动作：   认领 Issue → worktree 并行 → PR → 审查 → 合并    │
+│ 门禁：   所有子 Issue 的 PR 合并后，模块可以稳定运行        │
+└─────────────────────────────────────────────────────────┘
 ```
 
-- **蓝图层**：选型 / 边界决策走 [ADR](../docs/specs/ADR.md)；接口契约 + 拆分方案写 Design Doc，放 `docs/dev/`。
-- **编排层**：开一个 Epic Issue，body 用 GitHub task list + 子 Issue 引用画依赖图。Epic 只追踪状态，不写代码。
-- **交付层**：每个子任务仍是一个 Issue + PR，完全复用 [collaboration.md](collaboration.md)。
+## 模块产物路径
 
-## 三个杠杆
+每个模块在 `docs/dev/<module-name>/` 下统一管理：
 
-### 1. 接口先行，而非实现先行
+```
+docs/dev/<module-name>/
+  ├── prd.md     ← 阶段 1 产出（解决方案工程师）
+  └── spec.md    ← 阶段 2 产出（架构师）
+```
 
-**概念**：子任务 B 依赖子任务 A → 必然等 A 合并，线性。把依赖从"等实现"改成"等接口契约" → 解锁并行：先开一个只定义类型 / 签名的接口 PR，合并后各线基于 mock 独立推进。
+`<module-name>` 在阶段 1 确定后全程不变，所有角色用同一文件夹名。Epic 和子 Issues 在 GitHub 上追踪，不放在文件夹内。
 
-**正面**：定好跨模块接口之后，上下游、前后端、不同开发者可以同时开工——上游变 API 不影响下游的开发节奏，只需对齐契约。
+## 三条不可跳过的规则
 
-**反面**：先写实现再抽接口。下游全部卡在上游，一条线推到底。上游返工一次，下游全部重来。
+### 1. 每个阶段的产出必须经用户确认
 
-**自问**：这个任务的 blocker 是"接口没定"还是"实现没写"？如果是后者，先抽接口 PR。
+PRD 未经用户审阅 → 不进阶段 2。SPEC 未经用户审阅 → 不开放 Issue 认领。
 
-### 2. 正交拆分，而非流水线拆分
+**反面**：写完 PRD 就自己开始拆 SPEC、写代码。用户回头看 PRD，发现 IN/OUT 全理解错了——但代码已经写了。返工成本翻三倍。
 
-**概念**：按"步骤"拆（A→B→C）必然串行。正交拆法：找最小耦合点，定共享接口，各线从接口辐射出去并发。
+**自问**：这个阶段的产出，用户看过并点头了吗？
 
-**正面**：把一个功能拆成多条**独立推进**的子任务线——壳层 / 核心逻辑 / UI / 配置各自独立，共享接口契约。一条线卡住不阻塞其他线。
+### 2. 模块文件夹在阶段 1 确定，全程不改名
 
-**反面**：按阶段拆——先搭框架、再写逻辑、再做 UI、最后打包。每一步都是下一步的前置。
+PRD、SPEC、Epic 引用都依赖一致的文件夹名。中途改名的代价是所有引用断裂。
 
-**自问**：有没有两个子任务能同时开工、互不需要对方代码？一个都没有 → 拆的是流水线，重新找正交维度。
+**反面**：阶段 1 取名 `plugin-hot-reload`，阶段 2 觉得 `dynamic-plugin` 更好——改了文件夹名，PRD 和 SPEC 的路径引用全断。
 
-### 3. worktree 物理并行
+**自问**：这个模块名在三个阶段都用同一个吗？
 
-**概念**："并行"不只是在纸上——多个无依赖子任务开多个 git worktree 同时推进，互不干扰。每个子任务独立工作目录，一个分支的改动不污染另一个。
+### 3. 单点修复不走流程
 
-**正面**：接口契约合并后，各子任务分到独立 worktree 并发。一个卡住不阻塞其他。
+修一个 bug、加一个参数、小调 UI——不需要解决方案工程师和架构师。直接走 Issue → PR。
 
-**反面**：在一个分支里串行做多件事——即使逻辑能并行，物理仍然是线性的。
+**判断线**：这个改动涉及的代码，一个人能在一小时内独立完成吗？能 → 跳过阶段 1 和 2。
 
-**自问**：是在一个分支里串行做多件事，还是在多个 worktree 里并发做？逻辑可并行但物理串行 = 浪费。
+## 各阶段角色文档
 
-## 操作流程
+| 阶段 | 角色 | 入口文档 |
+|------|------|---------|
+| 1 | 解决方案工程师 | [docs/guides/SOLUTION-ARCHITECT.md](../docs/guides/SOLUTION-ARCHITECT.md) |
+| 2 | 架构师 | [docs/guides/ARCHITECT.md](../docs/guides/ARCHITECT.md) |
+| 3 | 开发者 | [docs/guides/DEVELOPER.md](../docs/guides/DEVELOPER.md) + [collaboration.md](collaboration.md) |
 
-1. **判断规模**：这个改动能一个 Issue → PR 搞定吗？能 → 走 [collaboration.md](collaboration.md) 快速通道。
-2. **蓝图**：写 ADR（选型 / 边界决策）+ Design Doc（接口契约 + 拆分方案，放 `docs/dev/`）。Design Doc 必须含接口契约。
-3. **编排**：开 Epic Issue，body 用 GitHub task list + 子 Issue 引用画依赖图：
+## 单点修复的快速通道
 
-   ```
-   epic-0  接口契约 PR              ← 阻塞一切
-     ├── 线A  子 Issue #xx
-     ├── 线B  子 Issue #xx
-     └── 线C  子 Issue #xx
-   ```
-
-4. **拆分**：刻意找正交线，接口先行。用杠杆 2 的自问检验。
-5. **执行**：每条线仍走 [collaboration.md](collaboration.md) 的 Issue → PR。无依赖的线开 worktree 并发。
-6. **收口**：Epic Issue 跟踪各线进度，全部合并后关闭 Epic。
-
-## 与 collaboration.md 的关系
-
-- **本文件**是标准开发流程——蓝图层（想清楚）+ 编排层（拆开）+ 交付层（Issue→PR）。
-- **[collaboration.md](collaboration.md)** 是快速通道——单点修复 / 小改动直接从 Issue 到 PR，跳过蓝图和编排。
-- **交付层完全复用** collaboration.md：分支命名、PR 创建、审查、合并门禁不变。
-- **命名仍走** [conventions.md](conventions.md)。
-- **蓝图层的 ADR** 走 [ADR.md](../docs/specs/ADR.md)；Design Doc 放 `docs/dev/`。
-- **[task-assignment.md](task-assignment.md)** 是手工编排层的实例（梯队 / 节点 / 依赖图）；本文件是其方法论。
+单点修复仍走 [collaboration.md](collaboration.md)：Issue → 认领 → PR → 审查 → 合并。分支命名、Commit 格式、审查门禁不变。
