@@ -55,6 +55,7 @@ function InkRepl({ ctx }: InkReplProps) {
       name: `/${entry.name}`,
       description: entry.description,
       usage: entry.usage,
+      argNames: entry.argNames,
     }));
   }, [commands]);
 
@@ -181,11 +182,18 @@ function InkRepl({ ctx }: InkReplProps) {
       if (key.return) {
         const selected = filteredCommands[autocompleteIndex];
         if (selected) {
-          // 通过 ref 告诉 handleSubmit 使用选中的命令
-          selectedCommandRef.current = selected.name;
+          if (selected.argNames && selected.argNames.length > 0) {
+            // 有参数：只补全不执行，让用户继续输入参数
+            setInput(selected.name);
+            setAutocompleteIndex(0);
+          } else {
+            // 无参数：直接执行
+            selectedCommandRef.current = selected.name;
+            setAutocompleteIndex(0);
+            // 不 return，让 Enter 传递到 TextInput 触发 handleSubmit
+          }
         }
-        setAutocompleteIndex(0);
-        // 不 return — 让 Enter 传递到 TextInput 触发 handleSubmit
+        return;
       }
       if (key.tab) {
         const selected = filteredCommands[autocompleteIndex];

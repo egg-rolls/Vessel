@@ -58,6 +58,8 @@ export interface CommandEntry {
   name: string;
   description: string;
   usage?: string;
+  /** 参数名列表（声明式）。有 argNames → Enter 只补全不执行；无 → Enter 直接执行 */
+  argNames?: string[];
   /** 命令执行函数 */
   run: Run;
 }
@@ -172,6 +174,7 @@ function resumeCommand(): CommandEntry {
     name: 'resume',
     description: '恢复会话：无参=交互式选择器，N/id=直接恢复',
     usage: '/resume [number|id]',
+    argNames: ['target'],
     run: async (args, ctx, state) => {
       if (args.length === 0) {
         const sessions = await ctx.session.listRich();
