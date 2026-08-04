@@ -117,8 +117,8 @@ describe('MemoryPluginHost', () => {
     host.registerGuardrail(guardrail2);
 
     const guardrails = host.getGuardrails();
-    expect(guardrails[0].name).toBe('high-priority');
-    expect(guardrails[1].name).toBe('low-priority');
+    expect(guardrails[0]?.name).toBe('high-priority');
+    expect(guardrails[1]?.name).toBe('low-priority');
   });
 
   it('should sort hooks by priority', () => {
@@ -140,7 +140,7 @@ describe('MemoryPluginHost', () => {
     host.registerHook(hook2);
 
     const hooks = host.getHooks();
-    expect(hooks[0].name).toBe('high-priority');
-    expect(hooks[1].name).toBe('low-priority');
+    expect(hooks[0]?.name).toBe('high-priority');
+    expect(hooks[1]?.name).toBe('low-priority');
   });
 });

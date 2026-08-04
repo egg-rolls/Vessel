@@ -42,8 +42,8 @@ function makeRuntime(
     tools: new MemoryToolRegistry(),
     context,
     events: new MemoryEventStream(),
-    limits: { request_limit: 10, tool_calls_limit: 5 },
-    termination: { max_iterations: 5 },
+    limits: { requestLimit: 10, toolCallsLimit: 5 },
+    termination: { maxIterations: 5 },
     session,
     systemPrompt: 'sys',
   });

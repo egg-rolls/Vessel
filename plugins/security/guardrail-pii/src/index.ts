@@ -149,6 +149,7 @@ class PiiDetector {
     // 从后往前替换，避免索引偏移
     for (let i = detections.length - 1; i >= 0; i--) {
       const detection = detections[i];
+      if (!detection) continue;
       const masked = this.maskValue(detection.value, detection.type);
       result = result.substring(0, detection.start) + masked + result.substring(detection.end);
     }
@@ -166,7 +167,7 @@ class PiiDetector {
       case 'partial': {
         if (type === 'email') {
           const [local, domain] = value.split('@');
-          return `${local[0]}***@${domain}`;
+          return `${(local ?? '')[0] ?? ''}***@${domain ?? ''}`;
         }
         if (type === 'phone') {
           return value.replace(/[0-9]/g, (char, index) => (index < 7 ? '*' : char));

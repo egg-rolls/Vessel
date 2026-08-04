@@ -66,11 +66,12 @@ function matchesPolicy(toolName: string, patterns: string[]): boolean {
 
 function createToolPolicyGuardrail(config: Required<ToolPolicyConfig>): Guardrail {
   return {
+    name: 'tool-policy',
     stage: GuardrailStage.ToolCall,
     priority: 50,
     check: async (value: unknown, ctx: GuardrailContext): Promise<GuardrailResult> => {
       const toolName = ((value as { name?: string })?.name ??
-        (ctx as Record<string, unknown>)?.tool_name ??
+        (ctx as unknown as Record<string, unknown>)?.tool_name ??
         '') as string;
 
       if (!toolName) {
@@ -104,18 +105,26 @@ function createToolPolicyGuardrail(config: Required<ToolPolicyConfig>): Guardrai
 
 // ── 插件导出 ──────────────────────────────────────
 
-export const toolPolicyPlugin: Plugin = {
-  name: 'tool-policy',
-  version: '0.1.0',
-  description: 'Tool allow/deny policy — intercepts tool calls via ToolCall guardrail',
-  install(host: PluginHost, config?: unknown) {
-    const mergedConfig: Required<ToolPolicyConfig> = {
-      ...DEFAULT_CONFIG,
-      ...((config as ToolPolicyConfig) ?? {}),
-    };
+/**
+ * 创建 Tool Policy 插件
+ */
+export function createToolPolicyPlugin(config?: ToolPolicyConfig): Plugin {
+  return {
+    name: 'tool-policy',
+    version: '0.1.0',
+    description: 'Tool allow/deny policy — intercepts tool calls via ToolCall guardrail',
+    install(host: PluginHost) {
+      const mergedConfig: Required<ToolPolicyConfig> = {
+        ...DEFAULT_CONFIG,
+        ...(config ?? {}),
+      };
 
-    host.registerGuardrail(createToolPolicyGuardrail(mergedConfig));
-  },
-};
+      host.registerGuardrail(createToolPolicyGuardrail(mergedConfig));
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const toolPolicyPlugin = createToolPolicyPlugin();
 
 export default toolPolicyPlugin;

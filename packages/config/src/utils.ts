@@ -14,11 +14,14 @@
  * @param override 覆盖对象
  * @returns 合并后的新对象
  */
-export function deepMerge<T extends Record<string, unknown>>(base: T, override: Partial<T>): T {
-  const result = { ...base };
+export function deepMerge<T extends Record<string, unknown>, U extends Record<string, unknown>>(
+  base: T,
+  override: U,
+): T & U {
+  const result = { ...base } as T & U;
 
   for (const key of Object.keys(override)) {
-    const overrideValue = override[key as keyof T];
+    const overrideValue = override[key as keyof U];
 
     // 跳过 undefined 值
     if (overrideValue === undefined) {
@@ -29,13 +32,13 @@ export function deepMerge<T extends Record<string, unknown>>(base: T, override: 
 
     // 如果两个值都是对象（非数组），递归合并
     if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
-      result[key as keyof T] = deepMerge(
+      (result as Record<string, unknown>)[key] = deepMerge(
         baseValue as Record<string, unknown>,
         overrideValue as Record<string, unknown>,
-      ) as T[keyof T];
+      );
     } else {
       // 否则直接替换（包括数组、基本类型、null 等）
-      result[key as keyof T] = overrideValue as T[keyof T];
+      (result as Record<string, unknown>)[key] = overrideValue;
     }
   }
 

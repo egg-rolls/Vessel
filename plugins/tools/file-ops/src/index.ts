@@ -156,11 +156,14 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
             results.push(`📁 ${entry.name}/`);
 
             if (recursive) {
-              const subEntries = await listDirTool.handler({
-                path: fullPath,
-                recursive: true,
-                pattern,
-              });
+              const subEntries = await listDirTool.handler(
+                {
+                  path: fullPath,
+                  recursive: true,
+                  pattern,
+                },
+                { run_id: '', messages: [] },
+              );
               if (typeof subEntries === 'string') {
                 const lines = subEntries.split('\n').filter((l) => l.trim());
                 for (const line of lines) {
@@ -251,20 +254,24 @@ function formatSize(bytes: number): string {
 }
 
 /**
- * File Ops 插件
+ * 创建 File Ops 插件
  */
-export const fileOpsPlugin: Plugin = {
-  name: 'file-ops',
-  version: '0.1.0',
-  description: 'File operations tools (read, write, list, etc.)',
-  install(host: PluginHost, config?: unknown) {
-    const fileConfig = config as FileOpsConfig;
-    const tools = createFileTools(fileConfig);
+export function createFileOpsPlugin(config?: FileOpsConfig): Plugin {
+  return {
+    name: 'file-ops',
+    version: '0.1.0',
+    description: 'File operations tools (read, write, list, etc.)',
+    install(host: PluginHost) {
+      const tools = createFileTools(config);
 
-    for (const tool of tools) {
-      host.registerTool(tool);
-    }
-  },
-};
+      for (const tool of tools) {
+        host.registerTool(tool);
+      }
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const fileOpsPlugin = createFileOpsPlugin();
 
 export default fileOpsPlugin;

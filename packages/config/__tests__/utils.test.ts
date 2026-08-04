@@ -20,7 +20,7 @@ describe('deepMerge', () => {
     const base = { a: 1, b: 2 };
     const override = { a: undefined, b: 3 };
     const result = deepMerge(base, override);
-    expect(result).toEqual({ a: 1, b: 3 });
+    expect(result).toEqual({ a: 1, b: 3 } as typeof result);
   });
 
   it('should recursively merge nested objects', () => {
@@ -58,7 +58,7 @@ describe('deepMerge', () => {
     const base = { a: 1, b: { c: 2 } };
     const override = { a: null, b: null };
     const result = deepMerge(base, override);
-    expect(result).toEqual({ a: null, b: null });
+    expect(result).toEqual({ a: null, b: null } as typeof result);
   });
 
   it('should handle nested objects with different depths', () => {

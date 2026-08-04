@@ -57,7 +57,7 @@ describe('AgentRuntime Integration', () => {
     expect(receivedEvents.length).toBeGreaterThan(0);
 
     // 应该有 RunStarted 和 RunCompleted 事件
-    const eventTypes = receivedEvents.map((e: { type: string }) => e.type);
+    const eventTypes = receivedEvents.map((e) => (e as { type: string }).type);
     expect(eventTypes).toContain(EventType.RunStarted);
     expect(eventTypes).toContain(EventType.RunCompleted);
     expect(eventTypes).toContain(EventType.LlmRequest);
@@ -118,6 +118,9 @@ describe('AgentRuntime Integration', () => {
     const customProvider = {
       chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
         const lastMessage = req.messages[req.messages.length - 1];
+        if (!lastMessage) {
+          return { content: '', finish_reason: 'stop' as const };
+        }
         callLog.push(lastMessage.content);
 
         // 第一次调用（用户消息）返回工具调用

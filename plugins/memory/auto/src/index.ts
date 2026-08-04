@@ -67,8 +67,8 @@ function extractExplicitMemories(text: string, runId: string): AutoMemory[] {
 
   let match: RegExpExecArray | null = explicitPattern.exec(text);
   while (match !== null) {
-    const key = match[1].trim();
-    const value = match[2].trim();
+    const key = match[1]?.trim() ?? '';
+    const value = match[2]?.trim() ?? '';
     if (key && value) {
       results.push({
         name: slugify(key),
@@ -86,8 +86,8 @@ function extractExplicitMemories(text: string, runId: string): AutoMemory[] {
   const slashPattern = /\/remember\s+(.+?)\s+(.+?)(?:\n|$)/gi;
   match = slashPattern.exec(text);
   while (match !== null) {
-    const key = match[1].trim();
-    const value = match[2].trim();
+    const key = match[1]?.trim() ?? '';
+    const value = match[2]?.trim() ?? '';
     if (key && value) {
       results.push({
         name: slugify(key),
@@ -132,7 +132,7 @@ function extractPreferences(text: string, runId: string): AutoMemory[] {
   for (const { regex, negate } of prefPatterns) {
     let match: RegExpExecArray | null = regex.exec(text);
     while (match !== null) {
-      const pref = match[1].trim();
+      const pref = match[1]?.trim() ?? '';
       if (pref.length >= 3 && pref.length <= 200) {
         const prefix = negate ? '避免使用: ' : '偏好: ';
         results.push({
@@ -271,60 +271,68 @@ function createMemoryExtractionHook(
 
 // ── 插件导出 ──────────────────────────────────────
 
-export const memoryAutoPlugin: Plugin = {
-  name: 'memory-auto',
-  version: '0.1.0',
-  description:
-    'Auto memory plugin — extracts decisions/preferences from conversations and persists across sessions',
-  install(host: PluginHost, config?: unknown) {
-    const mergedConfig: Required<MemoryAutoConfig> = {
-      ...DEFAULT_CONFIG,
-      ...((config as MemoryAutoConfig) ?? {}),
-    };
+/**
+ * 创建 Memory Auto 插件
+ */
+export function createMemoryAutoPlugin(config?: MemoryAutoConfig): Plugin {
+  return {
+    name: 'memory-auto',
+    version: '0.1.0',
+    description:
+      'Auto memory plugin — extracts decisions/preferences from conversations and persists across sessions',
+    install(host: PluginHost) {
+      const mergedConfig: Required<MemoryAutoConfig> = {
+        ...DEFAULT_CONFIG,
+        ...(config ?? {}),
+      };
 
-    const sessionCount = { value: 0 };
+      const sessionCount = { value: 0 };
 
-    // 注册工具：手动记录记忆
-    host.registerTool({
-      name: 'remember',
-      description:
-        '记录一条持久化记忆，供后续会话使用。用法: remember(key, value)。' +
-        '例如: remember("用户喜欢用 TypeScript", "在后续回答中优先使用 TS")',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          key: {
-            type: 'string',
-            description: '记忆的简短名称/标题',
+      // 注册工具：手动记录记忆
+      host.registerTool({
+        name: 'remember',
+        description:
+          '记录一条持久化记忆，供后续会话使用。用法: remember(key, value)。' +
+          '例如: remember("用户喜欢用 TypeScript", "在后续回答中优先使用 TS")',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            key: {
+              type: 'string',
+              description: '记忆的简短名称/标题',
+            },
+            value: {
+              type: 'string',
+              description: '记忆内容',
+            },
           },
-          value: {
-            type: 'string',
-            description: '记忆内容',
-          },
+          required: ['key', 'value'],
         },
-        required: ['key', 'value'],
-      },
-      handler: async (args) => {
-        const { key, value } = args as {
-          key: string;
-          value: string;
-        };
-        const memory: AutoMemory = {
-          name: slugify(key),
-          description: key,
-          type: 'user',
-          content: value,
-          createdAt: new Date().toISOString(),
-          runId: 'manual',
-        };
-        persistMemory(memory, mergedConfig.memoryDir);
-        return `已记录: "${key}"`;
-      },
-    });
+        handler: async (args) => {
+          const { key, value } = args as {
+            key: string;
+            value: string;
+          };
+          const memory: AutoMemory = {
+            name: slugify(key),
+            description: key,
+            type: 'user',
+            content: value,
+            createdAt: new Date().toISOString(),
+            runId: 'manual',
+          };
+          persistMemory(memory, mergedConfig.memoryDir);
+          return `已记录: "${key}"`;
+        },
+      });
 
-    // 注册 AfterLlm Hook 用于自动提取
-    host.registerHook(createMemoryExtractionHook(mergedConfig, sessionCount));
-  },
-};
+      // 注册 AfterLlm Hook 用于自动提取
+      host.registerHook(createMemoryExtractionHook(mergedConfig, sessionCount));
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const memoryAutoPlugin = createMemoryAutoPlugin();
 
 export default memoryAutoPlugin;

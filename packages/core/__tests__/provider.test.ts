@@ -137,7 +137,7 @@ function mockFetchSse(sseChunks: string[]): void {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
     });
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 describe('OpenAICompatibleProvider streaming', () => {
@@ -235,7 +235,7 @@ describe('OpenAICompatibleProvider streaming', () => {
           usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
         }),
         { status: 200, headers: { 'Content-Type': 'application/json' } },
-      )) as typeof fetch;
+      )) as unknown as typeof fetch;
 
     const provider = new OpenAICompatibleProvider({ api_key: 'sk-test', model: 'gpt-4' });
     const response = await provider.chat({
