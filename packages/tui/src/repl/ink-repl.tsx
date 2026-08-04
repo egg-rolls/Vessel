@@ -7,7 +7,7 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
-import { Box, render, Text, useApp, useInput } from 'ink';
+import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
@@ -33,6 +33,7 @@ interface InkReplProps {
  */
 function InkRepl({ ctx }: InkReplProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [state, setState] = useState<ReplState>({
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
@@ -275,33 +276,24 @@ function InkRepl({ ctx }: InkReplProps) {
   }, [state.running, ctx, exit]);
 
   return (
-    <Box flexDirection="column">
-      {/* 状态栏 */}
+    <Box flexDirection="column" height={stdout.rows}>
+      {/* 状态栏（固定顶部） */}
       <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
 
-      {/* 历史记录 */}
-      {history.map((line, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
-        <Text key={i}>{line}</Text>
-      ))}
-
-      {/* 流式输出（当前轮） */}
-      <StreamOutput
-        events={ctx.events}
-        clearSignal={clearSignal}
-        onComplete={handleStreamComplete}
-      />
-
-      {/* 内联命令补全 */}
-      {showAutocomplete && (
-        <InlineAutocomplete
-          commands={allCommands}
-          filter={commandFilter}
-          selectedIndex={autocompleteIndex}
+      {/* 滚动区域：历史 + 流式输出，flexGrow 撑满剩余空间 */}
+      <Box flexDirection="column" flexGrow={1}>
+        {history.map((line, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
+          <Text key={i}>{line}</Text>
+        ))}
+        <StreamOutput
+          events={ctx.events}
+          clearSignal={clearSignal}
+          onComplete={handleStreamComplete}
         />
-      )}
+      </Box>
 
-      {/* 交互式会话选择器（/resume 无参时） */}
+      {/* 底部固定区域：overlays + 输入框 + 补全框 */}
       {state.showResumePicker && (
         <SessionTable
           sessions={resumeSessions}
@@ -332,6 +324,15 @@ function InkRepl({ ctx }: InkReplProps) {
           />
           {argHint && <Text color="gray">{argHint}</Text>}
         </Box>
+      )}
+
+      {/* 内联命令补全（输入框下方） */}
+      {showAutocomplete && (
+        <InlineAutocomplete
+          commands={allCommands}
+          filter={commandFilter}
+          selectedIndex={autocompleteIndex}
+        />
       )}
     </Box>
   );
