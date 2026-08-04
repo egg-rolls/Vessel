@@ -21,10 +21,9 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 14 个扁平命令', () => {
+  it('createCommands 注册 13 个扁平命令', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
-    expect(names).toContain('sessions');
     expect(names).toContain('tools');
     expect(names).toContain('plugins');
     expect(names).toContain('mcp');
@@ -69,44 +68,9 @@ describe('CommandRegistry 扁平命令', () => {
     cap.restore();
     expect(cap.logs.join('\n')).toContain('No tools registered');
   });
-
-  it('/sessions 无会话时提示', async () => {
-    const reg = createCommands();
-    const ctx = makeCtx();
-    const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('sessions', ctx, state);
-    cap.restore();
-    expect(cap.logs.join('\n')).toContain('No sessions');
-  });
 });
 
 describe('扁平会话命令', () => {
-  it('/sessions 空时提示 No sessions', async () => {
-    const reg = createCommands();
-    const ctx = makeCtx();
-    const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('sessions', ctx, state);
-    cap.restore();
-    expect(cap.logs.join('\n')).toContain('No sessions');
-  });
-
-  it('/sessions 列出编号会话', async () => {
-    const reg = createCommands();
-    const ctx = makeCtx();
-    await ctx.session.save(runState('s1', [{ role: 'user', content: '第一个问题' }]));
-    await ctx.session.save(runState('s2', [{ role: 'user', content: '第二个问题' }]));
-    const state = makeState('s1');
-    const cap = captureConsole();
-    await reg.execute('sessions', ctx, state);
-    cap.restore();
-    const out = cap.logs.join('\n');
-    expect(out).toContain('1.');
-    expect(out).toContain('2.');
-    expect(out).toContain('第一个问题');
-  });
-
   it('/resume <id> 清 context + 切会话', async () => {
     const reg = createCommands();
     const ctx = makeCtx();

@@ -46,6 +46,7 @@ function InkRepl({ ctx }: InkReplProps) {
   const [confirmQuestion, setConfirmQuestion] = useState<string | null>(null);
   const [confirmResolve, setConfirmResolve] = useState<((value: string) => void) | null>(null);
   const [clearSignal, setClearSignal] = useState(0); // /clear 命令信号
+  const [inputCaretKey, setInputCaretKey] = useState(0); // 递增以强制 TextInput remount（光标复位到末尾）
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -79,6 +80,8 @@ function InkRepl({ ctx }: InkReplProps) {
 
   // Ref：桥接 useInput（Enter 补全）→ handleSubmit（执行命令）
   const selectedCommandRef = useRef<string | null>(null);
+  // Ref：阻止 TextInput 的 onSubmit 在"仅补全不执行"时触发 handleSubmit
+  const preventSubmitRef = useRef(false);
 
   // 过滤词变化时重置选择索引
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filteredCommands reference changes
@@ -110,6 +113,12 @@ function InkRepl({ ctx }: InkReplProps) {
   // 处理输入
   const handleSubmit = useCallback(
     async (value: string) => {
+      // 补全模式下 Enter 仅用于补全命令名（不执行），阻止 TextInput 的 stale onSubmit
+      if (preventSubmitRef.current) {
+        preventSubmitRef.current = false;
+        return;
+      }
+
       if (!value.trim()) return;
 
       setHistory((prev) => [...prev, `> ${value}`]);
@@ -182,12 +191,17 @@ function InkRepl({ ctx }: InkReplProps) {
       if (key.return) {
         const selected = filteredCommands[autocompleteIndex];
         if (selected) {
-          if (selected.argNames && selected.argNames.length > 0) {
-            // 有参数：只补全不执行，让用户继续输入参数
+          const inputCmd = input.trim().split(/\s+/)[0] ?? '';
+          const isCompleted = `/${inputCmd}` === selected.name;
+
+          if (selected.argNames?.length && !isCompleted) {
+            // 有参数且命令名未补全 → 仅补全，不执行
             setInput(selected.name);
+            setInputCaretKey((prev) => prev + 1);
             setAutocompleteIndex(0);
+            preventSubmitRef.current = true;
           } else {
-            // 无参数：直接执行
+            // 无参数 或 命令名已补全 → 直接执行
             selectedCommandRef.current = selected.name;
             setAutocompleteIndex(0);
             // 不 return，让 Enter 传递到 TextInput 触发 handleSubmit
@@ -199,6 +213,7 @@ function InkRepl({ ctx }: InkReplProps) {
         const selected = filteredCommands[autocompleteIndex];
         if (selected) {
           setInput(selected.name);
+          setInputCaretKey((prev) => prev + 1);
         }
         setAutocompleteIndex(0);
         return;
@@ -309,7 +324,12 @@ function InkRepl({ ctx }: InkReplProps) {
       {!state.showResumePicker && !confirmQuestion && (
         <Box>
           <Text color="cyan">vessel&gt; </Text>
-          <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
+          <TextInput
+            key={inputCaretKey}
+            value={input}
+            onChange={setInput}
+            onSubmit={handleSubmit}
+          />
           {argHint && <Text color="gray">{argHint}</Text>}
         </Box>
       )}

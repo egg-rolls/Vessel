@@ -25,14 +25,22 @@ interface InlineAutocompleteProps {
   selectedIndex: number;
 }
 
-/** 纯函数：按 filter 模糊匹配命令（substring，大小写不敏感） */
+/** 纯函数：按 filter 模糊匹配命令（substring，大小写不敏感）。命令名匹配排在前，描述匹配排在后。 */
 export function filterCommands(commands: CommandItem[], filter: string): CommandItem[] {
   if (!filter) return commands;
   const lower = filter.toLowerCase();
-  return commands.filter(
+  const filtered = commands.filter(
     (cmd) =>
       cmd.name.toLowerCase().includes(lower) || cmd.description.toLowerCase().includes(lower),
   );
+  // 命令名匹配优先于描述匹配
+  return filtered.sort((a, b) => {
+    const aName = a.name.toLowerCase().includes(lower);
+    const bName = b.name.toLowerCase().includes(lower);
+    if (aName && !bName) return -1;
+    if (!aName && bName) return 1;
+    return 0;
+  });
 }
 
 export function InlineAutocomplete({ commands, filter, selectedIndex }: InlineAutocompleteProps) {

@@ -105,7 +105,6 @@ export class CommandRegistry {
 /** 创建并填充命令注册表。ctx 在 execute 时传入，注册表本身无状态。 */
 export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
-  reg.register(sessionsCommand());
   reg.register(toolsCommand());
   reg.register(pluginsCommand());
   reg.register(mcpCommand());
@@ -134,37 +133,6 @@ function renderHelp(reg: CommandRegistry): string {
 
   lines.push('');
   return lines.join('\n');
-}
-
-// ── /sessions ─────────────────────────────────────
-
-function sessionsCommand(): CommandEntry {
-  return {
-    name: 'sessions',
-    description: '列出会话（编号，可用于 resume）',
-    usage: '/sessions',
-    run: async (_args, ctx, state) => {
-      const sessions = await ctx.session.listRich();
-      if (sessions.length === 0) {
-        const output = '\nNo sessions.\n';
-        console.log(output);
-        return { handled: true, output };
-      }
-      const lines = ['', 'Recent sessions:'];
-      for (let i = 0; i < sessions.length; i++) {
-        const s = sessions[i];
-        if (!s) continue;
-        const cur = s.session_id === state.currentSessionId ? ' *' : '';
-        const preview = s.preview || s.title || '(no preview)';
-        lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
-        lines.push(`     id: ${s.session_id}`);
-      }
-      lines.push('');
-      const output = lines.join('\n');
-      console.log(output);
-      return { handled: true, output };
-    },
-  };
 }
 
 // ── /resume ──────────────────────────────────────
