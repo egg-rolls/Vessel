@@ -4,25 +4,19 @@
 
 ## 你需要做的事情
 
-看到这份文件后，你的第一个动作是用 TodoList 工具构建任务清单。最后一项才是用户请求。
+看到这份文件后，你的第一个动作是用 TodoList 工具构建任务清单。**你只做调度——判断角色、加载子角色 TODO。用户需求留给子角色 TODO 处理。**
 
 ### TodoList 模板
 
 ```
 1. 读 [AGENTS.md](AGENTS.md) — 了解 Vessel 是什么、架构约束、红线
 2. 判断角色：用户的请求属于哪种场景？
-3. 读角色文档：
-   - 需求分析/写PRD → [docs/role/REQ-TODO.md](docs/role/REQ-TODO.md)
-   - 架构设计/写SPEC → [docs/role/ARCH-TODO.md](docs/role/ARCH-TODO.md)
-   - 写/改代码 → [docs/role/DEV-TODO.md](docs/role/DEV-TODO.md)
-   - 审查/合并 → [docs/role/REVIEWER.md](docs/role/REVIEWER.md)
-   - 修改文档 → [docs/role/DOC-TODO.md](docs/role/DOC-TODO.md)
+3. 读对应的子角色 TODO 文件 — 加载第二套 TodoList，将用户原始需求插入到子 TODO 的 `[用户需求]` 占位符处
 4. 检查分支：`git branch --show-current`
-5. 按角色文档的必读清单读取场景相关文档
-6. 执行用户任务
+5. 按子角色 TODO 逐步执行 — 过程中按需查阅对应的角色详细说明文档
 ```
 
-**用户的任务**放在最后一项。完成前 5 项后才开始处理用户请求。
+**子角色 TODO 加载后，用户需求被插入到子流程的正确位置——CLAUDE 层不持有用户需求。**
 
 ## 场景调度
 
