@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { GuardrailStage, MemoryPluginHost } from '@vessel/core';
-import toolPolicyPlugin from '../src/index';
+import { createToolPolicyPlugin, toolPolicyPlugin } from '../src/index';
 
 describe('tool-policy 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -28,10 +28,10 @@ describe('tool-policy 插件（P2）', () => {
 
   it('denylist 模式拦截指定工具', async () => {
     const denyHost = new MemoryPluginHost();
-    toolPolicyPlugin.install(denyHost, {
+    createToolPolicyPlugin({
       mode: 'denylist',
       tools: ['dangerous_tool', 'delete_file'],
-    });
+    }).install(denyHost);
     const g = denyHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
@@ -57,7 +57,9 @@ describe('tool-policy 插件（P2）', () => {
 
   it('allowlist 模式只允许指定工具', async () => {
     const allowHost = new MemoryPluginHost();
-    toolPolicyPlugin.install(allowHost, { mode: 'allowlist', tools: ['read_file', 'list_files'] });
+    createToolPolicyPlugin({ mode: 'allowlist', tools: ['read_file', 'list_files'] }).install(
+      allowHost,
+    );
     const g = allowHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
@@ -83,11 +85,11 @@ describe('tool-policy 插件（P2）', () => {
 
   it('通配符匹配功能', async () => {
     const wildcardHost = new MemoryPluginHost();
-    toolPolicyPlugin.install(wildcardHost, {
+    createToolPolicyPlugin({
       mode: 'denylist',
       tools: ['mcp__*'],
       enableWildcards: true,
-    });
+    }).install(wildcardHost);
     const g = wildcardHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
@@ -112,11 +114,11 @@ describe('tool-policy 插件（P2）', () => {
 
   it('enableWildcards 参数不影响匹配行为（当前实现）', async () => {
     const noWildcardHost = new MemoryPluginHost();
-    toolPolicyPlugin.install(noWildcardHost, {
+    createToolPolicyPlugin({
       mode: 'denylist',
       tools: ['mcp__*'],
       enableWildcards: false,
-    });
+    }).install(noWildcardHost);
     const g = noWildcardHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
@@ -145,11 +147,11 @@ describe('tool-policy 插件（P2）', () => {
 
   it('自定义阻断消息', async () => {
     const customMsgHost = new MemoryPluginHost();
-    toolPolicyPlugin.install(customMsgHost, {
+    createToolPolicyPlugin({
       mode: 'denylist',
       tools: ['blocked_tool'],
       blockMessage: '安全策略拦截：',
-    });
+    }).install(customMsgHost);
     const g = customMsgHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
@@ -167,14 +169,11 @@ describe('tool-policy 插件（P2）', () => {
   it('工具名从上下文中获取', async () => {
     const g = host.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
-    const r = await g.check(
-      {},
-      {
-        run_id: 'r1',
-        stage: GuardrailStage.ToolCall,
-        tool_name: 'test_tool',
-      },
-    );
+    const r = await g.check({}, {
+      run_id: 'r1',
+      stage: GuardrailStage.ToolCall,
+      ...{ tool_name: 'test_tool' },
+    } as Parameters<typeof g.check>[1]);
     expect(r.allowed).toBe(true);
   });
 
@@ -193,10 +192,10 @@ describe('tool-policy 插件（P2）', () => {
 
   it('多个工具在黑名单中', async () => {
     const multiDenyHost = new MemoryPluginHost();
-    toolPolicyPlugin.install(multiDenyHost, {
+    createToolPolicyPlugin({
       mode: 'denylist',
       tools: ['tool_a', 'tool_b', 'tool_c'],
-    });
+    }).install(multiDenyHost);
     const g = multiDenyHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
