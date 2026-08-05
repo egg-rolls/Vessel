@@ -25,7 +25,18 @@ Vessel 的文档分两层——永久文档（specs/guides/role/api）和临时�
 
 **自检**：你能说出"checklist 式"和"心智模型式"文档的区别吗？§7.2 的写前走链路——你要改的文档属于哪类，走哪条链路？
 
-### 3. 走对应链路（DOC-STANDARD §7.2）
+### 3. docs/specs/META-GOVERNANCE.md（全篇）
+
+**规范的规范**——决定一份文档该不该存在、做到什么深度、属于哪一类。
+
+核心问题：你要新增/修改的这条规则——
+- 解决的是已发生的真实痛点，还是想象中的问题？（§二 三条准入）
+- 应该做到 L0-L3 哪一层？（§三 四层梯度）
+- 是强制规则、指导建议、还是背景学习？（§四 三类分离）
+
+**自检**：这条规则满足三条准入标准吗？如果删掉它，最坏会发生什么？
+
+### 4. 走对应链路（DOC-STANDARD §7.2）
 
 改什么文档，先实际走一遍那个流程：
 
@@ -39,13 +50,13 @@ Vessel 的文档分两层——永久文档（specs/guides/role/api）和临时�
 
 **自检**：你实际走过对应流程了吗？还是只读了 DOC-STANDARD 的规则就开始写了？
 
-### 4. processes/conventions.md
+### 5. processes/conventions.md
 
 Commit message 格式、分支命名。**改文档也要提交——知道怎么写 commit message。**
 
 **自检**：docs 变更的 commit type 是什么？scope 用什么？
 
-### 5. processes/collaboration.md
+### 6. processes/collaboration.md
 
 gh CLI 操作技巧（创建 Issue/PR 的中文处理）。**写出文档后要提 PR——知道怎么操作。**
 

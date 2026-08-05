@@ -42,7 +42,8 @@
 | 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
 | 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) |
-| 修改文档 | [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md)（§七 设计方法——修改文档前必读） |
+| 修改文档 | [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md)（§七 设计方法——修改文档前必读）、[docs/specs/META-GOVERNANCE.md](docs/specs/META-GOVERNANCE.md)（规范的规范——判断该不该写） |
+| 新增/修改治理规则 | [docs/specs/META-GOVERNANCE.md](docs/specs/META-GOVERNANCE.md)（三条准入 + 四层梯度 + 三类分离） |
 | 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
 | 查 Core 接口 | [docs/specs/CORE.md](docs/specs/CORE.md)（快速参考） |
 | 查 API 签名 | [docs/api/core.md](docs/api/core.md) |
