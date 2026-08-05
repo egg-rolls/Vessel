@@ -272,3 +272,14 @@
 - **备选**：(a) 保持 async-in-constructor + `ready`——已证明反模式，P0 issue (#17)。(b) 让构造函数接受临时 Promise 并在外部等待——不改变现状。均不取。
 - **后果**：用户拿到 runtime 时插件已就绪，无需额外 await。构造函数私有化防止直接 `new`。静态工厂方法成为标准实例化路径。Core 冻结不变——本 ADR 属 bug 修复不冲击冻结状态。
 - **关联**：ADR-017(2b)、ADR-018；[issue #17](https://github.com/egg-rolls/Vessel/issues/17)。
+
+---
+
+## ADR-024：RunEvent 改为 discriminated union，提升类型安全
+
+- **上下文**：`RunEvent` 原为普通接口，`data` 字段类型为 `EventPayload`（含 `[key: string]: unknown` 索引签名），导致联合类型退化为 any-object。消费方用 `as` 强转绕过类型检查，TypeScript 无法根据 `type` 字段自动 narrow `data` 类型。
+- **决策**：属 ADR-017(2b)「纯类型安全强化」。移除 `BaseEventPayload` 接口，为所有 payload 接口移除 `extends BaseEventPayload`；将 `RunEvent` 从普通接口改为 discriminated union 类型，TypeScript 根据 `type` 字段自动 narrow `data` 类型。消费方删除所有 `as` 强转，直接访问 `event.data.chunk` / `event.data.tool_name` 等字段。
+- **论证为何无法用 Plugin/Hook/Guardrail/事件表示**：类型定义是 TypeScript 编译时约束，无法通过运行时扩展改变。Discriminated union 是 TypeScript 原生类型系统特性，无运行时开销。
+- **备选**：(a) 保持 `as` 强转——类型安全收益停留在定义层，未落地到消费方。(b) 用泛型替代 union——增加复杂度，且不解决索引签名退化问题。均不取。
+- **后果**：TypeScript 编译器在 `switch (event.type)` 分支内自动 narrow `event.data` 类型，消费方代码更安全、更简洁。Core 冻结不变——本 ADR 属类型强化不冲击冻结状态。
+- **关联**：ADR-017(2b)、ADR-008（事件类型枚举化）；[issue #47](https://github.com/egg-rolls/Vessel/issues/47)。
