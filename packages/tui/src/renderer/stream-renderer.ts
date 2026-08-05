@@ -70,8 +70,7 @@ export class StreamRenderer {
         break;
       }
       case EventType.LlmStreamChunk: {
-        const data = event.data as { chunk: StreamChunk };
-        this.handleChunk(data.chunk);
+        this.handleChunk(event.data.chunk);
         break;
       }
       case EventType.ToolCallStarted: {
@@ -87,8 +86,7 @@ export class StreamRenderer {
         break;
       }
       case EventType.GuardrailBlocked: {
-        const data = event.data as { reason: string };
-        process.stdout.write(`${this.color('red', `\n🚫 Blocked: ${data.reason}\n`)}`);
+        process.stdout.write(`${this.color('red', `\n🚫 Blocked: ${event.data.reason}\n`)}`);
         break;
       }
       case EventType.RunCompleted: {
@@ -98,9 +96,8 @@ export class StreamRenderer {
       }
       case EventType.RunFailed: {
         this.lastRunStreamed = this.streamedAny;
-        const data = event.data as { error: string };
         if (!this.streamedAny) process.stdout.write('\n');
-        process.stdout.write(this.color('red', `✗ Run failed: ${data.error}\n`));
+        process.stdout.write(this.color('red', `✗ Run failed: ${event.data.error}\n`));
         break;
       }
       default:
@@ -117,26 +114,26 @@ export class StreamRenderer {
   }
 
   private renderToolCallStarted(event: RunEvent): void {
-    const data = event.data as { tool_name: string; arguments: unknown };
+    if (event.type !== EventType.ToolCallStarted) return;
     if (this.cfg.showToolDetails) {
-      const args = JSON.stringify(data.arguments);
-      process.stdout.write(this.color('blue', `\n🔧 ${data.tool_name}`));
+      const args = JSON.stringify(event.data.arguments);
+      process.stdout.write(this.color('blue', `\n🔧 ${event.data.tool_name}`));
       process.stdout.write(
         this.color('gray', ` ${args.length > 120 ? `${args.slice(0, 120)}…` : args}`),
       );
     } else {
-      process.stdout.write(this.color('blue', `\n🔧 ${data.tool_name}…`));
+      process.stdout.write(this.color('blue', `\n🔧 ${event.data.tool_name}…`));
     }
   }
 
   private renderToolCallCompleted(event: RunEvent): void {
-    const data = event.data as { tool_name: string; duration_ms: number };
-    process.stdout.write(this.color('green', ` ✓ ${data.duration_ms}ms\n`));
+    if (event.type !== EventType.ToolCallCompleted) return;
+    process.stdout.write(this.color('green', ` ✓ ${event.data.duration_ms}ms\n`));
   }
 
   private renderToolCallFailed(event: RunEvent): void {
-    const data = event.data as { tool_name: string; error: string };
-    process.stdout.write(this.color('red', ` ✗ ${data.error}\n`));
+    if (event.type !== EventType.ToolCallFailed) return;
+    process.stdout.write(this.color('red', ` ✗ ${event.data.error}\n`));
   }
 
   private color(color: keyof typeof C, text: string): string {

@@ -12,7 +12,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { EventType } from '@vessel/core';
+import { EventType, type RunEvent } from '@vessel/core';
 import {
   getResponseText,
   makeToolCallSegment,
@@ -30,43 +30,43 @@ function makeNextId(): () => string {
 }
 
 /** 构造精简的 RunEvent，只需要 reduceSegments 实际读取的字段 */
-function textDelta(delta: string) {
+function textDelta(delta: string): RunEvent {
   return {
     type: EventType.LlmStreamChunk,
     run_id: 'r',
-    data: { chunk: { type: 'text_delta', delta } },
+    data: { run_id: 'r', chunk: { type: 'text_delta', delta } },
     ts: 0,
   };
 }
 
-function toolStarted(id: string, name: string, args: unknown = {}) {
+function toolStarted(id: string, name: string, args: unknown = {}): RunEvent {
   return {
     type: EventType.ToolCallStarted,
     run_id: 'r',
-    data: { tool_call_id: id, tool_name: name, arguments: args },
+    data: { run_id: 'r', tool_call_id: id, tool_name: name, arguments: args },
     ts: 0,
   };
 }
 
-function toolCompleted(id: string, durationMs = 42) {
+function toolCompleted(id: string, durationMs = 42): RunEvent {
   return {
     type: EventType.ToolCallCompleted,
     run_id: 'r',
-    data: { tool_call_id: id, duration_ms: durationMs },
+    data: { run_id: 'r', tool_call_id: id, tool_name: 'mock', result: '', duration_ms: durationMs },
     ts: 0,
   };
 }
 
-function toolFailed(id: string, error: string, durationMs = 100) {
+function toolFailed(id: string, error: string, durationMs = 100): RunEvent {
   return {
     type: EventType.ToolCallFailed,
     run_id: 'r',
-    data: { tool_call_id: id, error, duration_ms: durationMs },
+    data: { run_id: 'r', tool_call_id: id, tool_name: 'mock', error, duration_ms: durationMs },
     ts: 0,
   };
 }
 
-function runStarted() {
+function runStarted(): RunEvent {
   return {
     type: EventType.RunStarted,
     run_id: 'r',

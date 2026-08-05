@@ -55,9 +55,8 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
       return [];
 
     case EventType.LlmStreamChunk: {
-      const data = event.data as { chunk: { type: string; delta?: string } };
-      const delta = data.chunk.delta;
-      if (data.chunk.type === 'text_delta' && delta) {
+      const delta = event.data.chunk.delta;
+      if (event.data.chunk.type === 'text_delta' && delta) {
         const last = prev.at(-1);
         if (last?.type === 'text') {
           return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
@@ -68,39 +67,28 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
     }
 
     case EventType.ToolCallStarted: {
-      const d = event.data as {
-        tool_call_id: string;
-        tool_name: string;
-        arguments: unknown;
-      };
-      return [...prev, makeToolCallSegment(d.tool_call_id, d.tool_name, d.arguments)];
+      return [
+        ...prev,
+        makeToolCallSegment(event.data.tool_call_id, event.data.tool_name, event.data.arguments),
+      ];
     }
 
     case EventType.ToolCallCompleted: {
-      const d = event.data as {
-        tool_call_id: string;
-        duration_ms: number;
-      };
       return prev.map((seg) =>
-        seg.type === 'tool_call' && seg.id === d.tool_call_id
-          ? { ...seg, status: 'completed' as const, duration: d.duration_ms }
+        seg.type === 'tool_call' && seg.id === event.data.tool_call_id
+          ? { ...seg, status: 'completed' as const, duration: event.data.duration_ms }
           : seg,
       );
     }
 
     case EventType.ToolCallFailed: {
-      const d = event.data as {
-        tool_call_id: string;
-        error: string;
-        duration_ms: number;
-      };
       return prev.map((seg) =>
-        seg.type === 'tool_call' && seg.id === d.tool_call_id
+        seg.type === 'tool_call' && seg.id === event.data.tool_call_id
           ? {
               ...seg,
               status: 'failed' as const,
-              error: d.error,
-              duration: d.duration_ms,
+              error: event.data.error,
+              duration: event.data.duration_ms,
             }
           : seg,
       );

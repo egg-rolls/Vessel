@@ -23,27 +23,22 @@ export enum EventType {
   Error = 'error',
 }
 
-/** 基础事件 payload */
-interface BaseEventPayload {
-  [key: string]: unknown;
-}
-
 /** Run 开始事件 payload */
-export interface RunStartedPayload extends BaseEventPayload {
+export interface RunStartedPayload {
   run_id: string;
   session_id?: string;
   input: string;
 }
 
 /** LLM 请求事件 payload */
-export interface LlmRequestPayload extends BaseEventPayload {
+export interface LlmRequestPayload {
   run_id: string;
   messages: unknown[];
   tools?: unknown[];
 }
 
 /** LLM 响应事件 payload */
-export interface LlmResponsePayload extends BaseEventPayload {
+export interface LlmResponsePayload {
   run_id: string;
   content?: string;
   tool_calls?: unknown[];
@@ -56,13 +51,13 @@ export interface LlmResponsePayload extends BaseEventPayload {
 }
 
 /** LLM 流式 chunk 事件 payload（ADR-007：流式=事件订阅；ADR-016） */
-export interface LlmStreamChunkPayload extends BaseEventPayload {
+export interface LlmStreamChunkPayload {
   run_id: string;
   chunk: StreamChunk;
 }
 
 /** 工具调用开始事件 payload */
-export interface ToolCallStartedPayload extends BaseEventPayload {
+export interface ToolCallStartedPayload {
   run_id: string;
   tool_call_id: string;
   tool_name: string;
@@ -70,7 +65,7 @@ export interface ToolCallStartedPayload extends BaseEventPayload {
 }
 
 /** 工具调用完成事件 payload */
-export interface ToolCallCompletedPayload extends BaseEventPayload {
+export interface ToolCallCompletedPayload {
   run_id: string;
   tool_call_id: string;
   tool_name: string;
@@ -79,7 +74,7 @@ export interface ToolCallCompletedPayload extends BaseEventPayload {
 }
 
 /** 工具调用失败事件 payload */
-export interface ToolCallFailedPayload extends BaseEventPayload {
+export interface ToolCallFailedPayload {
   run_id: string;
   tool_call_id: string;
   tool_name: string;
@@ -88,7 +83,7 @@ export interface ToolCallFailedPayload extends BaseEventPayload {
 }
 
 /** Guardrail 阻止事件 payload */
-export interface GuardrailBlockedPayload extends BaseEventPayload {
+export interface GuardrailBlockedPayload {
   run_id: string;
   guardrail_name: string;
   stage: string;
@@ -96,7 +91,7 @@ export interface GuardrailBlockedPayload extends BaseEventPayload {
 }
 
 /** Guardrail 修改事件 payload */
-export interface GuardrailModifiedPayload extends BaseEventPayload {
+export interface GuardrailModifiedPayload {
   run_id: string;
   guardrail_name: string;
   stage: string;
@@ -105,7 +100,7 @@ export interface GuardrailModifiedPayload extends BaseEventPayload {
 }
 
 /** Run 完成事件 payload */
-export interface RunCompletedPayload extends BaseEventPayload {
+export interface RunCompletedPayload {
   run_id: string;
   session_id?: string;
   output: string;
@@ -120,7 +115,7 @@ export interface RunCompletedPayload extends BaseEventPayload {
 }
 
 /** Run 失败事件 payload */
-export interface RunFailedPayload extends BaseEventPayload {
+export interface RunFailedPayload {
   run_id: string;
   session_id?: string;
   error: string;
@@ -128,35 +123,38 @@ export interface RunFailedPayload extends BaseEventPayload {
 }
 
 /** 错误事件 payload */
-export interface ErrorPayload extends BaseEventPayload {
+export interface ErrorPayload {
   run_id?: string;
   error: string;
   code?: string;
 }
 
-/** 事件 payload 联合类型 */
-export type EventPayload =
-  | RunStartedPayload
-  | LlmRequestPayload
-  | LlmResponsePayload
-  | LlmStreamChunkPayload
-  | ToolCallStartedPayload
-  | ToolCallCompletedPayload
-  | ToolCallFailedPayload
-  | GuardrailBlockedPayload
-  | GuardrailModifiedPayload
-  | RunCompletedPayload
-  | RunFailedPayload
-  | ErrorPayload
-  | BaseEventPayload;
-
-/** Run 事件 */
-export interface RunEvent {
-  type: EventType;
-  run_id: string;
-  data: EventPayload;
-  ts: number;
-}
+/** Run 事件 - discriminated union，TypeScript 可根据 type 自动 narrow data 类型 */
+export type RunEvent =
+  | { type: EventType.RunStarted; run_id: string; data: RunStartedPayload; ts: number }
+  | { type: EventType.LlmRequest; run_id: string; data: LlmRequestPayload; ts: number }
+  | { type: EventType.LlmResponse; run_id: string; data: LlmResponsePayload; ts: number }
+  | { type: EventType.LlmStreamChunk; run_id: string; data: LlmStreamChunkPayload; ts: number }
+  | { type: EventType.ToolCallStarted; run_id: string; data: ToolCallStartedPayload; ts: number }
+  | {
+      type: EventType.ToolCallCompleted;
+      run_id: string;
+      data: ToolCallCompletedPayload;
+      ts: number;
+    }
+  | { type: EventType.ToolCallFailed; run_id: string; data: ToolCallFailedPayload; ts: number }
+  | { type: EventType.GuardrailBlocked; run_id: string; data: GuardrailBlockedPayload; ts: number }
+  | {
+      type: EventType.GuardrailModified;
+      run_id: string;
+      data: GuardrailModifiedPayload;
+      ts: number;
+    }
+  | { type: EventType.RunCompleted; run_id: string; data: RunCompletedPayload; ts: number }
+  | { type: EventType.RunFailed; run_id: string; data: RunFailedPayload; ts: number }
+  | { type: EventType.SessionCreated; run_id: string; data: Record<string, never>; ts: number }
+  | { type: EventType.SessionLoaded; run_id: string; data: Record<string, never>; ts: number }
+  | { type: EventType.Error; run_id: string; data: ErrorPayload; ts: number };
 
 /** 事件处理器 */
 export type EventHandler = (event: RunEvent) => void | Promise<void>;
