@@ -19,19 +19,23 @@
 - CI：lint + typecheck + test + build 四灯
 - 插件：file-ops、meta-tools、skills-loader、mcp-client、memory（auto + project）、guardrail-pii、redact-secrets、tool-policy、hook-logging
 
-### 阻塞 MVP 的缺口（按优先级排序）
+### 阻塞 MVP 的缺口
 
-1. headless 模式（`--run` 入口）——无头运行是嵌入场景的基础
-2. provider 适配完整性——Anthropic 流式 + OpenAI 兼容
-3. session 持久化与恢复——SQLite backend 完整性
-4. 首启配置向导——无基础用户填 Key 即跑的关键入口
-5. 工具执行前权限确认弹窗——安全底线
+当前仅剩一个缺口阻塞 Phase 0→1 切换：
+
+1. **headless `--run` 入口**（`feat/headless-single-run` 分支未合并，main 无 CLI 入口）——无头运行是嵌入场景和非交互部署的基础
+
+以下已在 main 实现，不再阻塞：
+- provider 适配：Anthropic + OpenAI 兼容 SSE 流式（`packages/core/src/provider/providers.ts`）
+- session SQLite 持久化（`packages/core/src/session/sqlite-backend.ts`）
+- 首启配置向导（`packages/tui/src/wizard/setup-wizard.ts`，`/setup` 命令 + start.ts 自动触发）
+- 工具执行前权限确认弹窗（`packages/tui/src/renderer/tool-confirm.ts`）
 
 ## 二、各阶段开发优先级
 
 ```
 Phase 0（脚手架 → MVP）：
-  新功能/新模块 > Bug 修复 > 代码质量 > 体验细节
+  P0 Bug（立即处理） > 新功能/新模块 > 代码质量 > 体验细节
 
 Phase 1（MVP）：
   Bug 修复 > 核心功能补全 > 性能 > 体验 > 文档
@@ -46,7 +50,7 @@ Phase 2+（增强）：
 |--------|-----------|------------|-----------------|
 | 1 | Bug fixes（崩溃/数据丢失） | `fix` + `security`（P0） | 随时处理，不排队 |
 | 2 | Cross-platform | `feat(cross)` | 不主动做，有人报再说 |
-| 3 | Security hardening | `security`（P1） | 每个 phase 结束前审计一次 |
+| 3 | Security hardening | `security`（注入/提权/密钥泄漏 → P0；一般安全加固 → P1） | 每个 phase 结束前审计一次 |
 | 4 | Perf & robustness | `perf` + `test`（P2） | MVP 功能稳定后再优化 |
 | 5 | New skills | `feat(plugins)`（P2/P3） | 有真实需求驱动才做 |
 | 6 | Documentation | `docs`（P3） | 功能稳定后补文档 |
@@ -58,11 +62,11 @@ Phase 2+（增强）：
 
 | 模块 | 目标 Phase | 当前状态 | `docs/dev/` 目录 | 优先级 |
 |------|-----------|---------|-----------------|--------|
-| headless `--run` | Phase 1 MVP | 待启动 | `docs/dev/headless/` | P1 |
-| provider 完整性 | Phase 1 MVP | 已有代码，缺 PRD | `docs/dev/provider-completeness/` | P1 |
-| session SQLite | Phase 1 MVP | 已有原型 | — | P1 |
-| 首启配置向导 | Phase 1 MVP | 待启动 | — | P2 |
-| 权限确认弹窗 | Phase 1 MVP | 待启动 | — | P2 |
+| headless `--run` | Phase 1 MVP | 分支开发中（`feat/headless-single-run`） | `docs/dev/headless/` | P1 |
+| provider 完整性 | Phase 1 MVP | 已实现（Anthropic + OpenAI SSE 流式） | `docs/dev/provider-completeness/` | P1 |
+| session SQLite | Phase 1 MVP | 已实现（`packages/core/src/session/sqlite-backend.ts`） | — | P1 |
+| 首启配置向导 | Phase 1 MVP | 已实现（`packages/tui/src/wizard/setup-wizard.ts`） | — | P2 |
+| 权限确认弹窗 | Phase 1 MVP | 已实现（`packages/tui/src/renderer/tool-confirm.ts`） | — | P2 |
 | skills-loader 完善 | Phase 2 | 已有原型 | `docs/dev/skills-loader/` | P2 |
 | mcp-client 产品化 | Phase 2 | 已有原型 | `docs/dev/mcp-client/` | P2 |
 | a2a-bridge | Phase 3 | 未启动 | — | P3 |

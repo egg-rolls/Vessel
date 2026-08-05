@@ -64,8 +64,8 @@ Reviewer 可根据实际情况上下调整一档。
 |-----------|------|------|------------|
 | **P0** | `fix`（数据丢失/崩溃/CI中断）、`security`（注入/提权/密钥泄漏） | 阻断性，立即修复 | Bug fixes / Security hardening |
 | **P1** | `fix`（行为错误但不阻断）、`feat(core)` | 影响正确性或核心功能 | Bug fixes |
-| **P2** | `test`、`perf`、`feat(plugins)`、`feat(tui)`（核心交互） | 质量加固与核心能力 | Performance and robustness |
-| **P3** | `refactor`、`design`、`docs`、`feat(tui)`（体验细节）、`feat(cross)`、`chore` | 锦上添花，不阻塞发布 | Documentation / New skills |
+| **P2** | `test`、`perf`、`feat(plugins)`、`feat(tui)`（核心交互）、`feat(config)`、`feat`（无 scope 或 scope 未单独列出时默认 P2） | 质量加固与核心能力 | Performance and robustness |
+| **P3** | `refactor`、`design`、`docs`、`feat(tui)`（体验细节）、`feat(cross)`、`feat(docs)`、`chore` | 锦上添花，不阻塞发布 | Documentation / New skills |
 
 ### 2.3 核心判断标准
 
