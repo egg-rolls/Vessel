@@ -2,7 +2,7 @@
 
 ## 哲学
 
-- 每模块配单测（docs/guides/DEVELOPER.md §工程规范）
+- 每模块配单测（../role/DEVELOPER.md §工程规范）
 - 测试不依赖真实 LLM API（用 `MemoryLLMProvider`）
 - 不依赖外部服务（数据库用 SQLite in-memory）
 - 快速、可并行、确定性

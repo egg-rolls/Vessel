@@ -2,6 +2,8 @@
 
 > main 分支已启用保护：**所有改动必须通过 PR + 审批才能合并**。禁止直接 push main。
 
+> **适用范围**：本文件管快速修复 / 单点改动的协作（单 Issue → PR）。功能开发和模块重构的标准流程见 [development.md](development.md)——在它之上加蓝图和编排层，交付层仍走本文件。
+
 ## 一、任务认领（开始工作前必做）
 
 看到想做的 Issue，**先留言宣告，再建分支开 Draft PR**——防止多人同时改同一 Issue。
@@ -26,13 +28,71 @@ gh pr ready <pr-number>
 | **Issue 留言** | "宣告主权"——别人搜 Issue 就能看到谁在处理 | 开始工作前，立即留言 |
 | **Draft PR** | "展示进度"——代码可见，自动关联 Issue，但不触发合并 | 有代码可看时创建 |
 
+### WIP 限制
+
+**同时活跃（Draft PR 或 In Progress）的 Issue 不超过 2 个。** 认领第 3 个前必须先完成或放弃至少 1 个。
+
+违反后果：reviewer 有权拒绝审查超过 2 个并行任务中新增的 PR，直到之前任一个 PR 合并或关闭。
+
 ## 二、分支与提交
 
 ```
 命名规范见 [conventions.md](conventions.md)
 ```
 
-## 三、开发到合并（每次必经）
+## 三、并行开发（worktree 隔离）
+
+多个 Issue 需并行处理时，禁止用 `git stash` 切换分支——stash 丢失上下文，stash pop 在冲突时不可恢复。
+
+### 创建 worktree
+
+```bash
+# 为 Issue #123 创建隔离 worktree（从 main 切出新分支）
+git worktree add ../vessel-issue-123 -b feat/issue-123-slug
+
+# 进入 worktree 目录
+cd ../vessel-issue-123
+
+# 每个 worktree 独立安装依赖（不共享 node_modules）
+bun install
+```
+
+### 开发与提交
+
+```bash
+# 在 worktree 内正常开发、测试、提交
+# 注意：worktree 之间 node_modules 不共享——每个 worktree 独立运行 bun install
+
+bun run lint && bun run typecheck && bun test
+git add -A && git commit -m "feat(scope): 描述"
+git push -u origin feat/issue-123-slug
+```
+
+### 从 worktree 创建 PR
+
+```bash
+gh pr create --title "feat(scope): 描述 #123" --base main --head feat/issue-123-slug --body-file pr-body.txt
+```
+
+### 清理
+
+```bash
+# 合并后删除 worktree 和分支
+cd <主仓库目录>
+git worktree remove ../vessel-issue-123     # 同时删除 worktree 目录
+git branch -d feat/issue-123-slug            # 删除本地分支（如果 PR 未自动清理）
+
+# 定期清理残留
+git worktree prune
+```
+
+### 硬约束
+
+- 禁止两个 worktree 同时修改同一个文件 → 100% 产生合并冲突且无法自动解决。
+- worktree 目录命名：`../vessel-issue-<编号>` —— 前缀 `vessel-issue-` 是强制约定，用于区分普通克隆。
+- 每个 worktree 独立执行 `bun install` —— 不共享 `node_modules`，不互相污染。
+
+## 四、开发到合并（每次必经）
 
 ```
 git checkout -b <type>/<slug> main
@@ -47,12 +107,18 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 
 ⚠️ **AI Agent 注意**：推送分支后如果跳过第 3-4 步，分支会滞留——有代码、有分支、但没有 PR。未经 PR 的分支不会被审查、不会被合并。开始新工作前，用 `gh pr list --state open` 确认没有遗留的孤儿分支。
 
-## 四、PR 合并流程（main 分支保护已开启）
+### PR 大小约束
+
+**PR diff 超过 500 行（不含测试文件）时，reviewer 必须要求拆分。** 超过 500 行的 PR 审查质量急剧下降——reviewer 从"找问题"退化为"看起来没问题"。
+
+纠正动作：将原 PR 拆为 2 个以上独立分支，每个 ≤ 500 行，通过依赖 PR（stacked PR）或顺序合并方式逐一合入。拆分方法——(1) 提取纯重构/格式化提交作为独立 PR；(2) 按模块/文件边界拆分功能变更；(3) 核心逻辑和集成适配分开。
+
+## 五、PR 合并流程（main 分支保护已开启）
 
 ```
 1. Coder 创建 PR（Draft → Ready for review）
         ↓
-2. Reviewer 审查（对照 docs/guides/REVIEWER.md）
+2. Reviewer 审查（对照 ../docs/role/REVIEWER.md）
         ↓
 3. 审查通过 → Reviewer 在 GitHub 上点击 "Squash and merge"
         ↓
@@ -67,7 +133,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 - ✅ 无未解决的合并冲突
 - ✅ 所有对话已解决
 
-## 五、Reviewer 的审查（对照 docs/guides/REVIEWER.md）
+## 六、Reviewer 的审查（对照 ../docs/role/REVIEWER.md）
 
 在 GitHub PR 页面进行，检查清单：
 
@@ -81,7 +147,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 → 不通过 → 在 PR 中标注原因 → Coder 修复后重新请求审查
 ```
 
-## 六、禁止
+## 七、禁止
 
 - 直接 push main（已由分支保护强制阻止）
 - 合并后修复（先修再合）
@@ -89,7 +155,7 @@ gh pr view --head <type>/<slug>                   # 4. 确认 PR 已创建成功
 - 一个分支塞不相关的改动
 - 不留言直接抢 Issue（先看 Issue 有没有人认领）
 
-## 七、AI Agent 通过 CLI 创建 Issue 和 PR
+## 八、AI Agent 通过 CLI 创建 Issue 和 PR
 
 > AI Agent 无法使用 GitHub Web UI，必须通过 `gh` CLI 操作。
 > 人类贡献者建议直接使用 GitHub Web UI + Issue/PR 模板。

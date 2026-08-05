@@ -11,18 +11,20 @@
 docs/
 ├── specs/      ← 永久规格：不出现时间/状态/进度信息
 ├── guides/     ← 永久指南：只写可用的，不写"暂未实现"
+├── role/       ← 永久角色定义：执行清单 + 角色说明，受同级别约束
 ├── api/        ← 永久参考：只写已实现的接口
 └── dev/        ← 临时产物：可以有时间/状态/进度信息
 ```
 
 ### 核心原则
 
-> **specs/guides/api 是仓库的宪法——讲设计是什么，不讲做到哪了。**
+> **specs/guides/role/api 是仓库的宪法——讲设计是什么，不讲做到哪了。**
 
 | 区域 | 允许 | 禁止 |
 |------|------|------|
 | `specs/` | 接口定义、架构描述、设计决策、`[plan]` 标记 | 时间标签、进度描述、"当前/暂/延后"等状态词 |
 | `guides/` | 可执行的命令、可用的流程、已验证的步骤 | "暂不实现"、"待后续"、未实现功能的占位 |
+| `role/` | 角色定义、执行清单、模板、反面模式、`[plan]` 标记 | 时间标签、进度描述、状态词（同 specs/） |
 | `api/` | 已实现的公开接口 | 未实现的接口声明、"coming soon" |
 | `dev/` | 审查报告、调试记录、阶段总结 | —（无限制，这里是临时产物的家） |
 
@@ -30,7 +32,7 @@ docs/
 
 ## 二、禁用词与替换
 
-### 2.1 状态标签（绝对禁止在 specs/guides/api 中出现）
+### 2.1 状态标签（绝对禁止在 specs/guides/role/api 中出现）
 
 | 禁用 | 原因 | 替换 |
 |------|------|------|
@@ -40,7 +42,7 @@ docs/
 | `暂不启用` | 读者不知道"暂"到何时 | 删除；或移到 `dev/` 做记录 |
 | `延后到 Phase N` | 决策动作词 | ROADMAP 中用声明式：`Phase N 范围`；不允许在其他文档出现 |
 
-### 2.2 时间词（禁止在 specs/guides/api 中出现）
+### 2.2 时间词（禁止在 specs/guides/role/api 中出现）
 
 | 禁用 | 替换 |
 |------|------|
@@ -77,7 +79,7 @@ docs/
 
 ## 四、`[plan]` 标记规范
 
-`[plan]` 是唯一允许在 specs/guides/api 中表示"尚未实现"的标记。
+`[plan]` 是唯一允许在 specs/guides/role/api 中表示"尚未实现"的标记。
 
 ### 正确用法
 
@@ -105,19 +107,19 @@ interface SessionBackend {
 ## 五、交叉引用规范
 
 - 所有文档间引用使用相对路径
-- specs/guides/api 之间的引用不受限制
-- specs/guides/api **不得引用** `docs/dev/` 中的文档
-- `docs/dev/` 可以引用 specs/guides/api
+- specs/guides/role/api 之间的引用不受限制
+- specs/guides/role/api **不得引用** `docs/dev/` 中的文档
+- `docs/dev/` 可以引用 specs/guides/role/api
 - `processes/` 可以引用 `docs/` 下所有文档
 
 ---
 
 ## 六、AI Agent 提交前自检
 
-修改任何 `docs/specs/`、`docs/guides/`、`docs/api/` 下的文件后，AI Agent 必须执行：
+修改任何 `docs/specs/`、`docs/guides/`、`docs/role/`、`docs/api/` 下的文件后，AI Agent 必须执行：
 
 ```
-grep -rn "当前\|目前\|现在\|暂时\|暂不\|延后\|近期\|以后\|pre-MVP\|MVP 范围\|Phase.*实现时" docs/specs/ docs/guides/ docs/api/
+grep -rn "当前\|目前\|现在\|暂时\|暂不\|延后\|近期\|以后\|pre-MVP\|MVP 范围\|Phase.*实现时" docs/specs/ docs/guides/ docs/role/ docs/api/
 ```
 
 命中任一即违规，修改后方可提交。

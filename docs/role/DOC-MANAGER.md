@@ -5,7 +5,9 @@
 
 ## 为什么必须先读这些
 
-Vessel 的文档分两层——永久文档（specs/guides/api）和临时文档（dev/）。永久文档是仓库的宪法：只讲设计是什么，不讲做到哪了。混入"当前""暂不""延后"等状态词 = 文档过期、歧义、误导。
+Vessel 的文档分两层——永久文档（specs/guides/role/api）和临时文档（dev/）。永久文档是仓库的宪法：只讲设计是什么，不讲做到哪了。混入"当前""暂不""延后"等状态词 = 文档过期、歧义、误导。
+
+角色文档体系说明见 [docs/role/README.md](README.md)。
 
 更重要的是，**文档是写给 AI 读的**。DOC-STANDARD §7.1 定义了什么是好文档：不是给 AI 一个禁止清单，而是激活 AI 的判断力。你不先理解这个方法，写出来的文档不是在帮 AI——是在误导它。
 
@@ -53,14 +55,14 @@ gh CLI 操作技巧（创建 Issue/PR 的中文处理）。**写出文档后要�
 
 ## 改完后自检命令
 
-永久文档（specs/guides/api）修改后必须执行：
+永久文档（specs/guides/role/api）修改后必须执行：
 
 ```bash
-grep -rn "当前\|目前\|现在\|暂时\|暂不\|延后\|近期\|以后\|pre-MVP\|MVP 范围\|Phase.*实现时" docs/specs/ docs/guides/ docs/api/
+grep -rn "当前\|目前\|现在\|暂时\|暂不\|延后\|近期\|以后\|pre-MVP\|MVP 范围\|Phase.*实现时" docs/specs/ docs/guides/ docs/role/ docs/api/
 ```
 
 命中任一即违规，修改后方可提交。
 
 ---
 
-> **提示**：如果你正在修改 `docs/guides/` 下的文件，读完本须知后，你可能还需要读 `docs/guides/DEVELOPER.md`（如果你要修改的是开发指南）或 `docs/guides/REVIEWER.md`（如果你要修改的是审查指南）来理解该角色的完整阅读路径。
+> **提示**：如果你正在修改 `docs/guides/` 下的文件，读完本须知后，你可能还需要读 `DEVELOPER.md`（如果你要修改的是开发指南）或 `REVIEWER.md`（如果你要修改的是审查指南）来理解该角色的完整阅读路径。
