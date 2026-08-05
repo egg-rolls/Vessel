@@ -48,6 +48,9 @@
 | 查 API 签名 | [docs/api/core.md](docs/api/core.md) |
 | 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
 | Commit/分支/Issue 命名规范 | [processes/conventions.md](processes/conventions.md) |
+| Issue 类型与优先级体系 | [docs/specs/ISSUE-SPEC.md](docs/specs/ISSUE-SPEC.md) |
+| 需求治理模型（五层存储/外部贡献） | [docs/specs/GOVERNANCE.md](docs/specs/GOVERNANCE.md) |
+| 开发阶段计划（当前阶段/候选模块） | [docs/dev/DEVELOPMENT-PLAN.md](docs/dev/DEVELOPMENT-PLAN.md) |
 | 查看当前任务 | [processes/task-assignment.md](processes/task-assignment.md) |
 | 避免旧错误 | [legacy/LESSONS.md](legacy/LESSONS.md) |
 | 人类贡献流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |
