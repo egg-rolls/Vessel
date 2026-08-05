@@ -12,7 +12,6 @@ function sampleCommands(): CommandItem[] {
       name: '/resume',
       description: '恢复会话',
       usage: '/resume [number|id]',
-      argNames: ['target'],
     },
     { name: '/reload', description: '重载配置', usage: '/reload' },
     { name: '/help', description: '显示帮助 resume', usage: '/help' },
@@ -59,7 +58,9 @@ describe('decideCommandEnter', () => {
     const filtered = filterCommands(all, 're'); // /resume, /reload
     expect(filtered.length).toBeGreaterThanOrEqual(2);
     const d = decideCommandEnter('/re', all, filtered, 1);
-    expect(d).toEqual({ action: 'complete', commandName: filtered[1]?.name });
+    const selected = filtered[1];
+    if (!selected) throw new Error('expected filtered[1] to exist');
+    expect(d).toEqual({ action: 'complete', commandName: selected.name });
   });
 
   it('带参数的输入（含空格）-> 执行，绝不覆盖参数', () => {
@@ -86,6 +87,8 @@ describe('decideCommandEnter', () => {
 
   it('仅 / -> 补全到第一项', () => {
     const d = decideCommandEnter('/', all, all, 0);
-    expect(d).toEqual({ action: 'complete', commandName: all[0]?.name });
+    const first = all[0];
+    if (!first) throw new Error('expected all[0] to exist');
+    expect(d).toEqual({ action: 'complete', commandName: first.name });
   });
 });

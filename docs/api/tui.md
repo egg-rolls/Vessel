@@ -21,7 +21,7 @@ interface ReplContext {
   // ── 核心能力（壳注入，只读）───────────────
   runtime: AgentRuntime;          // 调 runtime.run(input, sessionId) 执行对话
   tools: ToolRegistry;            // /tools 用 tools.list() 列工具
-  session: SessionBackend;        // /sessions /resume /new /history /delete 增删改查；有 listRich() 返回 SessionInfo[]
+  session: SessionBackend;        // /resume /new /history 增删改查；有 listRich() 返回 SessionInfo[]
   events: EventStream;            // 订阅 LlmStreamChunk + 工具调用 + RunCompleted
   context: ContextManager;        // /new /resume 用 context.clear() 清上下文
 
@@ -138,7 +138,7 @@ if (ctx.permissionChecker) {
 
 **readline 版（egg-rolls 交付）**：命令输出、错误提示、会话表格均用 `console.log` + ANSI 颜色码。
 
-**替换**：emma 用 Ink 组件渲染富文本：错误提示用颜色标签、`/sessions` 用表格组件、对话输出支持 Markdown。
+**替换**：emma 用 Ink 组件渲染富文本：错误提示用颜色标签、`/resume` 无参选择器用交互式列表、对话输出支持 Markdown。
 
 **不动的逻辑**：`repl.ts` 中 `classifyError()` 的分类逻辑、`commands.ts` 中各命令的数据获取逻辑（调 `ctx.session.listRich()` 等）。
 
@@ -157,7 +157,7 @@ if (ctx.permissionChecker) {
 | **core** | `packages/core/src/**` | ADR-017 冻结 |
 | **config** | `packages/config/src/**` | 配置加载/校验/映射 |
 | **壳** | `src/cli.ts` | argv 解析、config 加载、provider 构造、runtime 构造、插件加载、ReplContext 构造、headless 路径 |
-| **命令逻辑** | `packages/tui/src/commands/commands.ts` | CommandRegistry、所有 `/sessions` `/resume` `/new` `/history` `/delete` `/tools` `/help` 等命令的业务逻辑 |
+| **命令逻辑** | `packages/tui/src/commands/commands.ts` | CommandRegistry、所有 `/resume` `/new` `/history` `/tools` `/help` 等命令的业务逻辑 |
 | **权限确认** | `packages/tui/src/renderer/tool-confirm.ts` | `ToolPermissionChecker` 判断逻辑、`createPermissionGuardrail` |
 | **向导** | `packages/tui/src/wizard/setup-wizard.ts` | `runSetupWizard()` 流程——emma 只打磨 `/setup` 命令中调用后的 UI 提示 |
 | **Rich 渲染** | `packages/tui/src/rich-renderer.ts` | `buildBanner/buildSessionTable/infoPanel/divider` —— emma 可替换其实现但保持签名 |
@@ -211,7 +211,6 @@ await startRepl(ctx);
 
 | 命令 | 说明 | 交互界面 |
 |------|------|---------|
-| `/sessions` | 会话浏览器 | 列表、恢复、删除、历史 |
 | `/tools` | 工具浏览器 | 列表、详情、测试 |
 | `/plugins` | 插件浏览器 | 列表、状态、配置 |
 | `/mcp` | MCP 浏览器 | 列表、连接状态、重连、测试 |
@@ -301,7 +300,7 @@ await startRepl(ctx);
 | **输出格式** | 图形化、彩色 | 结构化（JSON/表格） |
 | **AI 可调用** | ❌ | ✅ |
 
-控制台命令的完整规范见 `docs/guides/cli-commands.md`（待创建）。
+控制台命令的完整规范见 [ROADMAP.md](../specs/ROADMAP.md) Phase 2+（控制台命令为后续阶段能力）。
 
 ## 8. 工具显示接口
 

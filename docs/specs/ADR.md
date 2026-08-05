@@ -203,7 +203,7 @@
 
 - **上下文**：Vessel 需要两类命令接口：(1) 人类用户在 REPL 中使用的斜杠命令（`/xxx`）；(2) AI/脚本通过 CLI 调用的控制台命令（`vessel xxx`）。当前实现（commands.ts）注释明确："斜杠命令（扁平结构：`/<command> [args]`）"，所有命令均为顶层。
 - **决策**：
-  1. **斜杠命令（`/xxx`）——人类用户**：扁平结构、好记易用、进入 TUI 交互界面、AI 不可调用。命令清单：`/sessions`、`/tools`、`/plugins`、`/mcp`、`/skills`、`/assets`、`/setup`、`/reload`、`/clear`、`/help`、`/exit`。
+  1. **斜杠命令（`/xxx`）——人类用户**：扁平结构、好记易用、进入 TUI 交互界面、AI 不可调用。命令清单：`/resume`、`/new`、`/history`、`/tools`、`/plugins`、`/mcp`、`/skills`、`/assets`、`/setup`、`/reload`、`/clear`、`/help`、`/exit`。
   2. **控制台命令（`vessel xxx`）——AI/脚本**：复合结构（`vessel <domain> <action>`）、可脚本化、输出结构化（JSON/表格）、有完整 CLI 文档。
   3. **交互界面模式**：所有浏览器界面遵循统一模式（`┌─ [Title] ─┐` + 列表 + 快捷键提示），标准快捷键：`↑↓` 导航、`Enter` 详情、`Esc` 返回、`R` 刷新。
   4. **与元资产工具的关系**：SPEC.md §1.2 的元资产工具（`search_assets`、`add_tool` 等）是 AI 通过 tool-calling 调用的；控制台命令是人类/AI 通过 CLI 调用的接口，两者互补。

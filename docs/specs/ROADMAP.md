@@ -17,7 +17,7 @@
 ## Phase 1 — MVP（见 PRD 成功指标；含 Tier 1 基础）
 
 - **core**：provider 适配（≥1 个 OpenAI 兼容 + 1 个 Anthropic 兼容，作参考插件）、ToolRegistry、ContextManager（含 auto-compact）、Run/Session、EventStream（枚举化）、UsageLimits/TerminationPolicy、Guardrail 四阶段接口 + 1–2 个参考 guardrail、Hook 接口、SessionBackend（memory+file）、PluginHost。
-- **tui**：流式渲染、slash 命令（`/help` `/tools` `/sessions` `/resume` `/new` `/history` `/config`）、工具执行前权限确认弹窗、首启配置向导（填 Key/选 provider）、Auto Compact 提示。
+- **tui**：流式渲染、slash 命令（`/help` `/tools` `/resume` `/new` `/history` `/reload` `/clear` `/setup` `/exit`）、工具执行前权限确认弹窗、首启配置向导（填 Key/选 provider）、Auto Compact 提示。
 - **config**：`vessel.yaml` 全 schema；零配置起步；未知键报错。
 - **插件示例**：1 个官方插件骨架（如 file-ops 工具集），证明 Plugin 机制。
 - 发布流水线：GitHub Actions release（tag 触发，出 Bun 单二进制 + GitHub Release）；npm 发包：Phase 2。

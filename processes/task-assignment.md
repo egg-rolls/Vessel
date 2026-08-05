@@ -105,7 +105,7 @@ emma 已完成 Ink REPL 框架实现，包括：
 - [x] Ink REPL 主组件（`packages/tui/src/repl/ink-repl.tsx`）
 - [x] StatusBar 组件（`packages/tui/src/components/StatusBar.tsx`）
 - [x] StreamOutput 组件（`packages/tui/src/components/StreamOutput.tsx`）
-- [x] CommandMenu 组件（`packages/tui/src/components/CommandMenu.tsx`）
+- [x] InlineAutocomplete 组件（`packages/tui/src/components/InlineAutocomplete.tsx`）— 内联命令补全，替代原 CommandMenu 弹窗
 - [x] ConfirmDialog 组件（`packages/tui/src/components/ConfirmDialog.tsx`）
 - [x] SessionTable 组件（`packages/tui/src/components/SessionTable.tsx`）
 - [x] 环境变量切换（`VESSEL_USE_INK=1` 启用 Ink 版本）

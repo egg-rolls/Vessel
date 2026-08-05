@@ -13,7 +13,6 @@ export interface CommandItem {
   name: string;
   description: string;
   usage?: string;
-  argNames?: string[];
 }
 
 interface InlineAutocompleteProps {

@@ -58,7 +58,6 @@ function InkRepl({ ctx }: InkReplProps) {
       name: `/${entry.name}`,
       description: entry.description,
       usage: entry.usage,
-      argNames: entry.argNames,
     }));
   }, [commands]);
 
