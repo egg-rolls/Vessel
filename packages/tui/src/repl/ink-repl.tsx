@@ -172,7 +172,7 @@ function InkRepl({ ctx }: InkReplProps) {
         }
 
         // 未知命令：显示提示，不发 AI
-        const cmdName = value.trim().split(/\s+/)[0] ?? value;
+        const [cmdName = value] = value.trim().split(/\s+/);
         setHistory((prev) => [
           ...prev,
           `Unknown command: ${cmdName}. Type /help for available commands.`,

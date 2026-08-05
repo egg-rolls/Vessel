@@ -3,7 +3,6 @@
  * @module @vessel/tui
  *
  * 命令清单（ADR-020）：
- * /sessions - 会话浏览器
  * /tools - 工具浏览器
  * /plugins - 插件浏览器
  * /mcp - MCP 浏览器
@@ -161,8 +160,8 @@ function resumeCommand(): CommandEntry {
         console.log(output);
         return { handled: true, output };
       }
-      await doResume(ctx, state, resolved.sessionId);
-      return { handled: true };
+      const msg = await doResume(ctx, state, resolved.sessionId);
+      return { handled: true, output: msg };
     },
   };
 }

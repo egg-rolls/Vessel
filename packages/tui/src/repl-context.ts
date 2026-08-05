@@ -31,7 +31,7 @@ export interface ReplContext {
   /** 工具注册表——/tools 命令列出 tool.name + tool.description */
   tools: ToolRegistry;
 
-  /** 会话后端——/sessions、/resume、/history 的增删改查 */
+  /** 会话后端——/resume、/history 的增删改查 */
   session: SessionBackend;
 
   /** 事件流——StreamRenderer 订阅，获取 LlmStreamChunk + 工具调用事件 */

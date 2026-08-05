@@ -300,7 +300,7 @@ await startRepl(ctx);
 | **输出格式** | 图形化、彩色 | 结构化（JSON/表格） |
 | **AI 可调用** | ❌ | ✅ |
 
-控制台命令的完整规范见 [ROADMAP.md](../specs/ROADMAP.md) Phase 2+（控制台命令为后续阶段能力）。
+控制台命令规范见 [ROADMAP.md](../specs/ROADMAP.md)。
 
 ## 8. 工具显示接口
 
