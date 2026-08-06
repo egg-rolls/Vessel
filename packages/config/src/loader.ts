@@ -46,39 +46,39 @@ export function getUserConfigPath(): string {
 }
 
 /**
- * 从 YAML 文件加载配置（使用完整的 yaml 解析库），并做 snake→camel 映射。
- * @param filePath 配置文件路径
- * @returns 配置对象
+ * 从 YAML 文件加载并解析配置，做 snake→camel 映射。
+ * 文件不存在时返回 fallback；解析失败时向上抛出。
  */
-export async function loadConfigFromFile(filePath: string): Promise<VesselConfig> {
+async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
   const file = Bun.file(filePath);
   const exists = await file.exists();
 
   if (!exists) {
-    return {};
+    return fallback;
   }
 
   const content = await file.text();
-  return snakeToCamel(parseYaml(content)) as VesselConfig;
+  return snakeToCamel(parseYaml(content)) as T;
+}
+
+/**
+ * 从项目配置文件（如 ./vessel.yaml）加载配置。
+ * @param filePath 配置文件路径
+ * @returns 配置对象，文件不存在时返回 {}
+ */
+export async function loadConfigFromFile(filePath: string): Promise<VesselConfig> {
+  return loadYamlConfig<VesselConfig>(filePath, {} as VesselConfig);
 }
 
 /**
  * 从用户配置目录加载 API Key 和 provider 偏好
- * (~/.vessel/config.yaml)
+ * (~/.vessel/config.yaml)。解析失败时静默降级为 {}。
  */
 export async function loadUserConfig(userConfigPath?: string): Promise<UserConfig> {
   const filePath = userConfigPath ?? getUserConfigPath();
 
   try {
-    const file = Bun.file(filePath);
-    const exists = await file.exists();
-
-    if (!exists) {
-      return {};
-    }
-
-    const content = await file.text();
-    return snakeToCamel(parseYaml(content)) as UserConfig;
+    return await loadYamlConfig<UserConfig>(filePath, {} as UserConfig);
   } catch {
     return {};
   }
