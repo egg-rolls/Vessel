@@ -309,8 +309,10 @@ export class AgentRuntime {
       }
 
       // 统一工具来源：PluginHost（直接注册的工具已在构造时同步进去）
+      // SPEC §4.2: default !== false 的工具自动列出；default: false 通过 search_assets 发现
       const allTools = this.pluginHost.listTools();
-      const toolSchemas = allTools.map((tool) => ({
+      const visibleTools = allTools.filter((t) => t.default !== false);
+      const toolSchemas = visibleTools.map((tool) => ({
         type: 'function' as const,
         function: {
           name: tool.name,
@@ -322,8 +324,10 @@ export class AgentRuntime {
       // 调试日志（仅在 VESSEL_DEBUG 环境变量设置时输出）
       if (process.env.VESSEL_DEBUG) {
         console.log(
-          '[Debug] Total tools:',
+          '[Debug] Visible tools:',
           toolSchemas.length,
+          '/',
+          allTools.length,
           toolSchemas.map((t) => t.function.name),
         );
       }
