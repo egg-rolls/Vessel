@@ -185,7 +185,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
  * @param knownKeys 已知键列表
  * @returns 未知键列表
  */
-export function findUnknownKeys(config: Record<string, unknown>, knownKeys: string[]): string[] {
+export function findUnknownKeys(config: object, knownKeys: string[]): string[] {
   return Object.keys(config).filter((key) => !knownKeys.includes(key));
 }
 
