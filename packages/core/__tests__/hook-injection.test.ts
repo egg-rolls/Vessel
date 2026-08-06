@@ -10,6 +10,7 @@ import { MemoryEventStream } from '../src/events/event-stream';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
+import { GuardrailStage } from '../src/types/guardrail';
 import { type HookContext, HookType } from '../src/types/hook';
 import type { Plugin } from '../src/types/plugin';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../src/types/provider';
@@ -127,5 +128,123 @@ describe('BeforeLlm hook 注入消费（ADR-018）', () => {
 
     const sysMsg = provider.receivedMessages.find((m) => m.role === 'system');
     expect(sysMsg?.content).toBe('BASE-SYSTEM');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OnError hook 集成测试（Issue #70）
+// ---------------------------------------------------------------------------
+
+/** 注册 OnError hook 并记录调用 */
+function onErrorSpyPlugin(calls: Array<{ error: string; phase: string }>): Plugin {
+  return {
+    name: 'onerror-spy',
+    install: (host) => {
+      host.registerHook({
+        name: 'spy-onerror',
+        type: HookType.OnError,
+        run: async (ctx: HookContext) => {
+          calls.push({
+            error: String(ctx.error ?? ''),
+            phase: String(ctx.phase ?? ''),
+          });
+          return ctx;
+        },
+      });
+    },
+  };
+}
+
+describe('OnError hook 触发（Issue #70）', () => {
+  it('工具抛出异常时触发 OnError hook', async () => {
+    const calls: Array<{ error: string; phase: string }> = [];
+    const tools = new MemoryToolRegistry();
+    tools.register({
+      name: 'broken_tool',
+      description: 'always throws',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        throw new Error('tool exploded');
+      },
+    });
+
+    let callCount = 0;
+    const provider: LLMProvider = {
+      async chat(_req: ChatRequest): Promise<LLMResponse> {
+        callCount++;
+        if (callCount === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'broken_tool', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        return { content: 'done after error', finish_reason: 'stop' };
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test',
+      tools,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      session: new MemorySessionBackend(),
+      plugins: [onErrorSpyPlugin(calls)],
+    });
+
+    await runtime.run('use broken tool');
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.error).toContain('tool exploded');
+    expect(calls[0]?.phase).toBe('tool_execution');
+  });
+
+  it('Guardrail 阻断输入时触发 OnError hook', async () => {
+    const calls: Array<{ error: string; phase: string }> = [];
+
+    const provider: LLMProvider = {
+      async chat(_req: ChatRequest): Promise<LLMResponse> {
+        return { content: 'ok', finish_reason: 'stop' };
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test',
+      tools: new MemoryToolRegistry(),
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      session: new MemorySessionBackend(),
+      plugins: [
+        onErrorSpyPlugin(calls),
+        {
+          name: 'blocker',
+          install: (host) => {
+            host.registerGuardrail({
+              name: 'block-all',
+              stage: GuardrailStage.Input,
+              check: async () => ({ allowed: false, reason: 'blocked by test' }),
+            });
+          },
+        } as Plugin,
+      ],
+    });
+
+    await expect(runtime.run('bad input')).rejects.toThrow('blocked by test');
+
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.error).toContain('blocked by test');
+    expect(calls[0]?.phase).toBe('run');
   });
 });

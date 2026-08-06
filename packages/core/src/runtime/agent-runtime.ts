@@ -236,6 +236,14 @@ export class AgentRuntime {
       runState.completed_at = Date.now();
       runState.error = error instanceof Error ? error.message : String(error);
 
+      // 触发 OnError Hook（LLM 错误、Guardrail 阻断、限制超限、Abort 等）
+      await this.runHooks(HookType.OnError, {
+        run_id: runId,
+        session_id: currentSessionId,
+        error: runState.error,
+        phase: 'run',
+      });
+
       // 保存失败状态
       if (this.session) {
         await this.session.save(runState);
@@ -521,6 +529,15 @@ export class AgentRuntime {
             // Provider 负责正确解释 role: tool 消息
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
+
+            // 触发 OnError Hook（工具执行失败）
+            await this.runHooks(HookType.OnError, {
+              run_id: runId,
+              session_id: sessionId,
+              error: errorMessage,
+              phase: 'tool_execution',
+              tool_name: toolCall.function.name,
+            });
 
             // 发布工具调用失败事件
             this.publishEvent({
