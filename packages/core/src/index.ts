@@ -11,7 +11,7 @@
 export { MemoryContextManager } from './context/index.js';
 
 // 事件流
-export { MemoryEventStream } from './events/index.js';
+export { FileEventStore, MemoryEventStream, replayRun } from './events/index.js';
 // 限制检查器
 export { MemoryLimitChecker } from './limits/index.js';
 // Provider

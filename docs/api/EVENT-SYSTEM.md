@@ -57,6 +57,8 @@ interface RunEvent {
 | `'guardrail.blocked'` | GuardrailBlockedPayload | agent-runtime |
 | `'run.completed'` | RunCompletedPayload | agent-runtime |
 | `'run.failed'` | RunFailedPayload | agent-runtime |
+| `'replay.started'` | `{ run_id, event_count }` | replayRun |
+| `'replay.completed'` | `{ run_id, event_count, duration_ms }` | replayRun |
 
 **特性事件名（约定）**：`tool.permission.request` / `tool.permission.response`（权限）、`ask.user.requested` / `ask.user.answered`（ask-user）。插件可自定义任意 `<domain>.*` 事件名，无需改 core。
 
