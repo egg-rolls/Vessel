@@ -14,15 +14,21 @@ import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
 import { deepMerge } from './utils.js';
 import { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
 
+/** 类型守卫：判断值是否为纯对象（非 null、非数组） */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /**
  * 将对象的所有键从 snake_case 递归转为 camelCase。
  * 用于加载 YAML 配置后、合并前调用。
  */
+export function snakeToCamel<T = unknown>(obj: unknown): T;
 export function snakeToCamel(obj: unknown): unknown {
   if (Array.isArray(obj)) return obj.map(snakeToCamel);
-  if (obj === null || typeof obj !== 'object') return obj;
+  if (!isRecord(obj)) return obj;
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(obj)) {
     const camelKey = key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
     result[camelKey] = snakeToCamel(value);
   }
@@ -58,7 +64,7 @@ async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
   }
 
   const content = await file.text();
-  return snakeToCamel(parseYaml(content)) as T;
+  return snakeToCamel<T>(parseYaml(content));
 }
 
 /**
@@ -216,7 +222,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
   // 7. 检查项目配置文件中的未知键
   try {
     const fileConfig = await loadConfigFromFile(filePath);
-    const unknownKeys = findUnknownKeys(fileConfig as Record<string, unknown>, KNOWN_CONFIG_KEYS);
+    const unknownKeys = findUnknownKeys(fileConfig, KNOWN_CONFIG_KEYS);
     if (unknownKeys.length > 0) {
       validation.warnings.push({
         path: 'root',

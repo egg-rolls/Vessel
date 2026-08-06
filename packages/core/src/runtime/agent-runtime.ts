@@ -298,10 +298,11 @@ export class AgentRuntime {
       // 用 this.systemPrompt 种子化，hook 链 prepend 注入；之后把结果作为本次请求的 system 消息
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
       if (this.systemPrompt) {
-        (hookCtx as HookContext & { system_prompt?: string }).system_prompt = this.systemPrompt;
+        hookCtx.system_prompt = this.systemPrompt;
       }
       await this.runHooks(HookType.BeforeLlm, hookCtx);
-      const injectedSystem = (hookCtx as { system_prompt?: string }).system_prompt;
+      const injectedSystem: string | undefined =
+        typeof hookCtx.system_prompt === 'string' ? hookCtx.system_prompt : undefined;
 
       // 发布 LLM 请求事件
       // 应用 BeforeLlm 注入的 system prompt（仅影响本次请求，不改动 ContextManager 持久化的消息）
@@ -312,7 +313,8 @@ export class AgentRuntime {
           m.role === 'system' ? { ...m, content: injectedSystem } : m,
         );
         if (!hasSystem) {
-          messages = [{ role: 'system', content: injectedSystem } as Message, ...messages];
+          const systemMsg: Message = { role: 'system', content: injectedSystem };
+          messages = [systemMsg, ...messages];
         }
       }
 

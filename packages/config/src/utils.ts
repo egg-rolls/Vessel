@@ -18,31 +18,28 @@ export function deepMerge<T extends Record<string, unknown>, U extends Record<st
   base: T,
   override: U,
 ): T & U {
-  const result = { ...base } as T & U;
+  const result: Record<string, unknown> = { ...base };
 
   for (const key of Object.keys(override)) {
-    const overrideValue = override[key as keyof U];
+    const overrideValue: unknown = override[key];
 
     // 跳过 undefined 值
     if (overrideValue === undefined) {
       continue;
     }
 
-    const baseValue = base[key as keyof T];
+    const baseValue: unknown = base[key];
 
     // 如果两个值都是对象（非数组），递归合并
     if (isPlainObject(baseValue) && isPlainObject(overrideValue)) {
-      (result as Record<string, unknown>)[key] = deepMerge(
-        baseValue as Record<string, unknown>,
-        overrideValue as Record<string, unknown>,
-      );
+      result[key] = deepMerge(baseValue, overrideValue);
     } else {
       // 否则直接替换（包括数组、基本类型、null 等）
-      (result as Record<string, unknown>)[key] = overrideValue;
+      result[key] = overrideValue;
     }
   }
 
-  return result;
+  return result as T & U;
 }
 
 /**

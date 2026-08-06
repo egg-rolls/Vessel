@@ -92,7 +92,7 @@ type OpenAiStreamChunk = {
         function?: { name?: string; arguments?: string };
       }>;
     };
-    finish_reason?: string;
+    finish_reason?: FinishReason;
   }>;
   usage?: Usage;
 };
@@ -327,7 +327,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
             };
           }>;
         };
-        finish_reason: string;
+        finish_reason: FinishReason;
       }>;
       usage?: {
         prompt_tokens: number;
@@ -353,7 +353,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
     return {
       content: choice.message.content ?? '',
       tool_calls: toolCalls,
-      finish_reason: choice.finish_reason as 'stop' | 'tool_calls' | 'length',
+      finish_reason: choice.finish_reason,
       usage: data.usage,
     };
   }
@@ -407,7 +407,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       if (evt.data === '[DONE]') break;
       let parsed: OpenAiStreamChunk;
       try {
-        parsed = JSON.parse(evt.data) as OpenAiStreamChunk;
+        parsed = JSON.parse(evt.data);
       } catch {
         continue; // 跳过非 JSON 行（心跳等）
       }
@@ -426,7 +426,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
       }
 
       if (choice?.finish_reason) {
-        acc.setFinishReason(choice.finish_reason as FinishReason);
+        acc.setFinishReason(choice.finish_reason);
       }
       if (parsed.usage) {
         acc.setUsage(parsed.usage);
@@ -663,7 +663,7 @@ export class AnthropicProvider implements LLMProvider {
     for await (const evt of parseSse(response.body)) {
       let parsed: AnthropicStreamEvent;
       try {
-        parsed = JSON.parse(evt.data) as AnthropicStreamEvent;
+        parsed = JSON.parse(evt.data);
       } catch {
         continue; // 跳过非 JSON 行（ping 等）
       }
