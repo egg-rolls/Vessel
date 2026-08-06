@@ -4,9 +4,9 @@
  */
 
 export type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
+export { FileSessionBackend } from './file-backend.js';
 export {
   deriveSessionMeta,
-  FileSessionBackend,
   MemorySessionBackend,
   toSessionInfo,
 } from './session-backend.js';
