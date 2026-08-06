@@ -7,7 +7,7 @@
  * @module @vessel/core/session
  */
 
-import { mkdirSync } from 'node:fs';
+import { mkdir } from 'node:fs/promises';
 import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
 import { deriveSessionMeta, toSessionInfo } from './session-backend.js';
 
@@ -30,9 +30,9 @@ export class FileSessionBackend implements SessionBackend {
   /**
    * 确保存储目录存在（惰性创建，首次读写时触发）
    */
-  private ensureDir(): void {
+  private async ensureDir(): Promise<void> {
     try {
-      mkdirSync(this.basePath, { recursive: true });
+      await mkdir(this.basePath, { recursive: true });
     } catch {
       // Directory may already exist — that's fine
     }
@@ -68,7 +68,7 @@ export class FileSessionBackend implements SessionBackend {
    * @param state Run 状态
    */
   async save(state: RunState): Promise<void> {
-    this.ensureDir();
+    await this.ensureDir();
 
     const meta = deriveSessionMeta(state.messages);
     const title = state.title ?? meta.title;
@@ -102,7 +102,7 @@ export class FileSessionBackend implements SessionBackend {
    * @returns 会话 ID 数组（去后缀 .json）
    */
   async list(): Promise<string[]> {
-    this.ensureDir();
+    await this.ensureDir();
 
     try {
       const glob = new Bun.Glob('*.json');
