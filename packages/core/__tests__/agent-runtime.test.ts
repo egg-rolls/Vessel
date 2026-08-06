@@ -178,4 +178,65 @@ describe('AgentRuntime Integration', () => {
     expect(savedState?.session_id).toBe('test-session');
     expect(savedState?.status).toBe('completed');
   });
+
+  it('should only send default tools to LLM (SPEC §4.2)', async () => {
+    // 注册两个工具：一个默认可见，一个默认不可见
+    const visibleTool: ToolDefinition = {
+      name: 'visible_tool',
+      description: 'Always visible',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'visible result',
+      default: true,
+    };
+
+    const hiddenTool: ToolDefinition = {
+      name: 'hidden_tool',
+      description: 'Hidden by default',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'hidden result',
+      default: false,
+    };
+
+    // 未设置 default 的工具应视为默认可见
+    const implicitTool: ToolDefinition = {
+      name: 'implicit_tool',
+      description: 'Implicitly visible',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'implicit result',
+    };
+
+    const filterTools = new MemoryToolRegistry();
+    filterTools.register(visibleTool);
+    filterTools.register(hiddenTool);
+    filterTools.register(implicitTool);
+
+    let capturedTools: string[] = [];
+
+    const customProvider = {
+      chat: async (req: { tools?: Array<{ function: { name: string } }> }) => {
+        capturedTools = (req.tools ?? []).map((t) => t.function.name);
+        return { content: 'ok', finish_reason: 'stop' as const };
+      },
+    };
+
+    const filterRuntime = await AgentRuntime.create({
+      provider: customProvider,
+      model: 'test-model',
+      tools: filterTools,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    await filterRuntime.run('Test');
+
+    // visible_tool (default: true) 和 implicit_tool (default 未设置) 应该被发送
+    expect(capturedTools).toContain('visible_tool');
+    expect(capturedTools).toContain('implicit_tool');
+    // hidden_tool (default: false) 不应该被发送
+    expect(capturedTools).not.toContain('hidden_tool');
+    // 总共应发送 2 个工具
+    expect(capturedTools).toHaveLength(2);
+  });
 });
