@@ -7,13 +7,18 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
-import { Box, render, Text, useApp, useInput } from 'ink';
+import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
-import { CommandMenu } from '../components/CommandMenu.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import {
+  type CommandItem,
+  decideCommandEnter,
+  filterCommands,
+  InlineAutocomplete,
+} from '../components/InlineAutocomplete.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
@@ -29,6 +34,7 @@ interface InkReplProps {
  */
 function InkRepl({ ctx }: InkReplProps) {
   const { exit } = useApp();
+  const { stdout } = useStdout();
   const [state, setState] = useState<ReplState>({
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
@@ -37,13 +43,57 @@ function InkRepl({ ctx }: InkReplProps) {
   });
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<string[]>([]);
-  const [showCommandMenu, setShowCommandMenu] = useState(false);
+  const [autocompleteIndex, setAutocompleteIndex] = useState(0);
   const [resumeSessions, setResumeSessions] = useState<SessionInfo[]>([]);
   const [confirmQuestion, setConfirmQuestion] = useState<string | null>(null);
   const [confirmResolve, setConfirmResolve] = useState<((value: string) => void) | null>(null);
   const [clearSignal, setClearSignal] = useState(0); // /clear 命令信号
+  const [inputCaretKey, setInputCaretKey] = useState(0); // 递增以强制 TextInput remount（光标复位到末尾）
 
-  const commands = createCommands();
+  const commands = useMemo(() => createCommands(), []);
+
+  // 预计算的命令列表（用于内联补全）
+  const allCommands = useMemo<CommandItem[]>(() => {
+    return commands.list().map((entry) => ({
+      name: `/${entry.name}`,
+      description: entry.description,
+      usage: entry.usage,
+    }));
+  }, [commands]);
+
+  // 从当前输入中提取命令过滤词（"/" 之后、第一个空格之前的命令名部分）
+  const commandFilter = input.startsWith('/') ? (input.slice(1).split(/\s+/)[0] ?? '') : '';
+  const filteredCommands = useMemo(
+    () => filterCommands(allCommands, commandFilter),
+    [allCommands, commandFilter],
+  );
+  // 补全只在命令名阶段（/ 开头、尚未输入空格、非精确匹配）显示：
+  // - 一旦输入空格进入参数输入即隐藏，避免 Tab/Enter 把已输入参数覆盖成命令名
+  // - 精确匹配某命令名时隐藏补全框，改由 argHint 显示参数提示
+  const isExactCommand = input.startsWith('/') && allCommands.some((cmd) => cmd.name === input);
+  const showAutocomplete =
+    input.startsWith('/') && !input.includes(' ') && !isExactCommand && filteredCommands.length > 0;
+
+  // 参数占位提示：当输入精确匹配某命令名时，显示灰色参数提示（如 " [number|id]"）
+  const argHint = useMemo(() => {
+    const trimmed = input.trim();
+    if (!trimmed.startsWith('/')) return null;
+    const matched = allCommands.find((cmd) => cmd.name === trimmed);
+    if (!matched?.usage) return null;
+    const hint = matched.usage.slice(matched.name.length);
+    return hint || null;
+  }, [input, allCommands]);
+
+  // 过滤词变化时重置选择索引
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filteredCommands reference changes
+  useEffect(() => {
+    setAutocompleteIndex(0);
+  }, [filteredCommands]);
+
+  // 同步 currentSessionId 到 ctx（壳 / SSE bridge 等读 ctx.currentSessionId）
+  useEffect(() => {
+    ctx.currentSessionId = state.currentSessionId;
+  }, [state.currentSessionId, ctx]);
 
   // 注入权限确认器的 promptFn
   useEffect(() => {
@@ -66,15 +116,26 @@ function InkRepl({ ctx }: InkReplProps) {
     }
   }, [state.showResumePicker, ctx.session]);
 
-  // 处理输入
+  // 处理输入（TextInput 的 onSubmit —— Enter 的唯一入口）
+  // 注意：Ink 的 useInput 子组件先于父组件触发，且无法 stopPropagation，
+  // 所以 Enter 的"补全 vs 执行"决策必须在此处（onSubmit）做，不能在 useInput 里做。
   const handleSubmit = useCallback(
     async (value: string) => {
+      // 补全 case：输入是未完成的命令名 -> 补全到当前选中命令，不执行。
+      // 用户再按一次 Enter 才执行。（决策逻辑见 decideCommandEnter，已单测覆盖）
+      const decision = decideCommandEnter(value, allCommands, filteredCommands, autocompleteIndex);
+      if (decision.action === 'complete') {
+        setInput(decision.commandName);
+        setInputCaretKey((prev) => prev + 1);
+        return; // 仅补全，不执行
+      }
+
       if (!value.trim()) return;
 
       setHistory((prev) => [...prev, `> ${value}`]);
       setInput('');
 
-      // 处理 /resume pending one-shot (simple mode fallback)
+      // 处理 /resume pending one-shot（simple 模式 fallback；Ink 模式由 picker 接管）
       if (state.pendingResume && !state.showResumePicker) {
         const num = Number.parseInt(value, 10);
         if (!Number.isNaN(num)) {
@@ -83,8 +144,9 @@ function InkRepl({ ctx }: InkReplProps) {
           const sessions = await ctx.session.listRich();
           const target = sessions[num - 1];
           if (target) {
-            await doResume(ctx, state, target.session_id);
+            const msg = await doResume(ctx, state, target.session_id);
             setState((prev) => ({ ...prev, currentSessionId: target.session_id }));
+            setHistory((prev) => [...prev, msg]);
           }
           return;
         }
@@ -103,9 +165,19 @@ function InkRepl({ ctx }: InkReplProps) {
             const output = result.output;
             setHistory((prev) => [...prev, output]);
           }
-          setState((prev) => ({ ...prev, pendingResume: false }));
+          // 命令可能直接改了 state（showResumePicker/currentSessionId/running），
+          // flush 到 React 触发重渲染（不可变更新）
+          setState((prev) => ({ ...prev }));
           return;
         }
+
+        // 未知命令：显示提示，不发 AI
+        const [cmdName = value] = value.trim().split(/\s+/);
+        setHistory((prev) => [
+          ...prev,
+          `Unknown command: ${cmdName}. Type /help for available commands.`,
+        ]);
+        return;
       }
 
       // 处理普通消息 - 调用 runtime.run
@@ -119,13 +191,41 @@ function InkRepl({ ctx }: InkReplProps) {
         setHistory((prev) => [...prev, `Error: ${errorMsg}`]);
       }
     },
-    [ctx, state, commands],
+    [ctx, state, commands, allCommands, filteredCommands, autocompleteIndex],
   );
 
-  // 键盘输入处理 - 只在没有其他交互组件时生效
+  // 键盘输入处理（Tab/↑↓/Esc 在补全可见时拦截）
+  // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
+  // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
-    // 如果有其他交互组件显示，不处理输入
-    if (showCommandMenu || state.showResumePicker || confirmQuestion) {
+    if (showAutocomplete) {
+      if (key.tab) {
+        const selected = filteredCommands[autocompleteIndex];
+        if (selected) {
+          setInput(selected.name);
+          setInputCaretKey((prev) => prev + 1);
+        }
+        setAutocompleteIndex(0);
+        return;
+      }
+      if (key.upArrow) {
+        setAutocompleteIndex((prev) => Math.max(0, prev - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setAutocompleteIndex((prev) => Math.min(filteredCommands.length - 1, prev + 1));
+        return;
+      }
+      if (key.escape) {
+        setInput('');
+        setAutocompleteIndex(0);
+        return;
+      }
+      // Enter 不拦截：落到 TextInput.onSubmit -> handleSubmit
+    }
+
+    // 如果有其他独占交互组件显示，不处理其余输入
+    if (state.showResumePicker || confirmQuestion) {
       return;
     }
 
@@ -136,12 +236,6 @@ function InkRepl({ ctx }: InkReplProps) {
 
     if (key.ctrl && inputChar === 'l') {
       setHistory([]);
-      return;
-    }
-
-    // 当输入为空时，按 / 显示命令菜单
-    if (inputChar === '/' && !input) {
-      setShowCommandMenu(true);
       return;
     }
   });
@@ -172,44 +266,34 @@ function InkRepl({ ctx }: InkReplProps) {
   }, [state.running, ctx, exit]);
 
   return (
-    <Box flexDirection="column">
-      {/* 状态栏 */}
+    <Box flexDirection="column" height={stdout.rows}>
+      {/* 状态栏（固定顶部） */}
       <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
 
-      {/* 历史记录 */}
-      {history.map((line, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
-        <Text key={i}>{line}</Text>
-      ))}
-
-      {/* 流式输出（当前轮） */}
-      <StreamOutput
-        events={ctx.events}
-        clearSignal={clearSignal}
-        onComplete={handleStreamComplete}
-      />
-
-      {/* 命令菜单 */}
-      {showCommandMenu && (
-        <CommandMenu
-          commands={commands}
-          onSelect={(cmd) => {
-            setShowCommandMenu(false);
-            setInput(`${cmd} `);
-          }}
-          onClose={() => setShowCommandMenu(false)}
+      {/* 滚动区域：历史 + 流式输出，flexGrow 撑满剩余空间 */}
+      <Box flexDirection="column" flexGrow={1}>
+        {history.map((line, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
+          <Text key={i}>{line}</Text>
+        ))}
+        <StreamOutput
+          events={ctx.events}
+          clearSignal={clearSignal}
+          onComplete={handleStreamComplete}
         />
-      )}
+      </Box>
 
-      {/* 交互式会话选择器（/resume 无参时） */}
+      {/* 底部固定区域：overlays + 输入框 + 补全框 */}
       {state.showResumePicker && (
         <SessionTable
           sessions={resumeSessions}
           currentSessionId={state.currentSessionId}
           onSelect={async (id) => {
             setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
-            await doResume(ctx, state, id);
+            setInput('');
+            const msg = await doResume(ctx, state, id);
             setState((prev) => ({ ...prev, currentSessionId: id }));
+            setHistory((prev) => [...prev, msg]);
           }}
           onClose={() => {
             setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
@@ -220,12 +304,27 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 确认对话框 */}
       {confirmQuestion && <ConfirmDialog question={confirmQuestion} onConfirm={handleConfirm} />}
 
-      {/* 输入框 - 只在没有其他交互组件时显示 */}
-      {!showCommandMenu && !state.showResumePicker && !confirmQuestion && (
+      {/* 输入框 - 只在没有独占交互组件时显示 */}
+      {!state.showResumePicker && !confirmQuestion && (
         <Box>
           <Text color="cyan">vessel&gt; </Text>
-          <TextInput value={input} onChange={setInput} onSubmit={handleSubmit} />
+          <TextInput
+            key={inputCaretKey}
+            value={input}
+            onChange={setInput}
+            onSubmit={handleSubmit}
+          />
+          {argHint && <Text color="gray">{argHint}</Text>}
         </Box>
+      )}
+
+      {/* 内联命令补全（输入框下方） */}
+      {showAutocomplete && (
+        <InlineAutocomplete
+          commands={allCommands}
+          filter={commandFilter}
+          selectedIndex={autocompleteIndex}
+        />
       )}
     </Box>
   );

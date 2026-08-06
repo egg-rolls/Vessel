@@ -22,7 +22,7 @@
 | **Config** | ✅ 已冻结 | 不改 |
 | **Shell (cli.ts)** | ✅ 已重构 | 不改 |
 | **REPL 循环** | readline 对话循环 + 全部 slash 命令逻辑 | 换 Ink 框架 |
-| **Slash 命令** | `/help /tools /sessions /resume /new /history /clear /setup /exit` 全部功能 | `/` 弹菜单 UI + autocomplete + 模糊过滤 |
+| **Slash 命令** | `/help /tools /resume /new /history /clear /setup /exit` 全部功能 | `/` 弹菜单 UI + autocomplete + 模糊过滤 |
 | **流式输出** | StreamRenderer 订阅 events → `console.log` token | token-by-token 动画 + 工具卡片 + spinner |
 | **会话管理** | /resume pending one-shot / 空会话丢弃 / session 列表 | session 表美化（已有 `buildSessionTable`） |
 | **权限确认** | `ToolPermissionChecker` + readline `confirm()` | 图形弹窗替换 readline |
@@ -105,7 +105,7 @@ emma 已完成 Ink REPL 框架实现，包括：
 - [x] Ink REPL 主组件（`packages/tui/src/repl/ink-repl.tsx`）
 - [x] StatusBar 组件（`packages/tui/src/components/StatusBar.tsx`）
 - [x] StreamOutput 组件（`packages/tui/src/components/StreamOutput.tsx`）
-- [x] CommandMenu 组件（`packages/tui/src/components/CommandMenu.tsx`）
+- [x] InlineAutocomplete 组件（`packages/tui/src/components/InlineAutocomplete.tsx`）— 内联命令补全，替代原 CommandMenu 弹窗
 - [x] ConfirmDialog 组件（`packages/tui/src/components/ConfirmDialog.tsx`）
 - [x] SessionTable 组件（`packages/tui/src/components/SessionTable.tsx`）
 - [x] 环境变量切换（`VESSEL_USE_INK=1` 启用 Ink 版本）

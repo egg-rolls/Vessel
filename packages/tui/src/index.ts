@@ -18,8 +18,14 @@ export {
   createCommands,
   doResume,
 } from './commands/commands.js';
-export { CommandMenu } from './components/CommandMenu.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
+export {
+  type CommandEnterDecision,
+  type CommandItem,
+  decideCommandEnter,
+  filterCommands,
+  InlineAutocomplete,
+} from './components/InlineAutocomplete.js';
 export { SessionTable } from './components/SessionTable.js';
 // Ink 组件
 export { StatusBar } from './components/StatusBar.js';

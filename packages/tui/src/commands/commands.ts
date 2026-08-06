@@ -3,7 +3,6 @@
  * @module @vessel/tui
  *
  * 命令清单（ADR-020）：
- * /sessions - 会话浏览器
  * /tools - 工具浏览器
  * /plugins - 插件浏览器
  * /mcp - MCP 浏览器
@@ -103,7 +102,6 @@ export class CommandRegistry {
 /** 创建并填充命令注册表。ctx 在 execute 时传入，注册表本身无状态。 */
 export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
-  reg.register(sessionsCommand());
   reg.register(toolsCommand());
   reg.register(pluginsCommand());
   reg.register(mcpCommand());
@@ -134,37 +132,6 @@ function renderHelp(reg: CommandRegistry): string {
   return lines.join('\n');
 }
 
-// ── /sessions ─────────────────────────────────────
-
-function sessionsCommand(): CommandEntry {
-  return {
-    name: 'sessions',
-    description: '列出会话（编号，可用于 resume）',
-    usage: '/sessions',
-    run: async (_args, ctx, state) => {
-      const sessions = await ctx.session.listRich();
-      if (sessions.length === 0) {
-        const output = '\nNo sessions.\n';
-        console.log(output);
-        return { handled: true, output };
-      }
-      const lines = ['', 'Recent sessions:'];
-      for (let i = 0; i < sessions.length; i++) {
-        const s = sessions[i];
-        if (!s) continue;
-        const cur = s.session_id === state.currentSessionId ? ' *' : '';
-        const preview = s.preview || s.title || '(no preview)';
-        lines.push(`  ${i + 1}. ${preview}  [${s.message_count} msgs]${cur}`);
-        lines.push(`     id: ${s.session_id}`);
-      }
-      lines.push('');
-      const output = lines.join('\n');
-      console.log(output);
-      return { handled: true, output };
-    },
-  };
-}
-
 // ── /resume ──────────────────────────────────────
 
 function resumeCommand(): CommandEntry {
@@ -193,8 +160,8 @@ function resumeCommand(): CommandEntry {
         console.log(output);
         return { handled: true, output };
       }
-      await doResume(ctx, state, resolved.sessionId);
-      return { handled: true };
+      const msg = await doResume(ctx, state, resolved.sessionId);
+      return { handled: true, output: msg };
     },
   };
 }
@@ -238,18 +205,21 @@ async function resolveResumeTarget(
   return { ok: true, sessionId: arg };
 }
 
-/** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史 */
+/** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史。
+ *  返回确认消息（调用方可入历史/打印）。 */
 export async function doResume(
   ctx: ReplContext,
   state: ReplState,
   sessionId: string,
-): Promise<void> {
+): Promise<string> {
   ctx.context.clear();
   state.currentSessionId = sessionId;
   ctx.onSessionChange(sessionId);
   const loaded = await ctx.session.load(sessionId);
   const msgCount = loaded?.messages.length ?? 0;
-  console.log(`\nResumed session "${sessionId}" (${msgCount} messages).\n`);
+  const msg = `Resumed session "${sessionId}" (${msgCount} messages).`;
+  console.log(`\n${msg}\n`);
+  return msg;
 }
 
 // ── /new ─────────────────────────────────────────
