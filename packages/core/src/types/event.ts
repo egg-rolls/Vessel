@@ -21,6 +21,8 @@ export enum EventType {
   SessionCreated = 'session.created',
   SessionLoaded = 'session.loaded',
   Error = 'error',
+  ReplayStarted = 'replay.started',
+  ReplayCompleted = 'replay.completed',
 }
 
 /** 基础事件 payload */
@@ -134,6 +136,19 @@ export interface ErrorPayload extends BaseEventPayload {
   code?: string;
 }
 
+/** 回放开始事件 payload */
+export interface ReplayStartedPayload extends BaseEventPayload {
+  run_id: string;
+  event_count: number;
+}
+
+/** 回放完成事件 payload */
+export interface ReplayCompletedPayload extends BaseEventPayload {
+  run_id: string;
+  event_count: number;
+  duration_ms: number;
+}
+
 /** 事件 payload 联合类型 */
 export type EventPayload =
   | RunStartedPayload
@@ -148,6 +163,8 @@ export type EventPayload =
   | RunCompletedPayload
   | RunFailedPayload
   | ErrorPayload
+  | ReplayStartedPayload
+  | ReplayCompletedPayload
   | BaseEventPayload;
 
 /** Run 事件 */
