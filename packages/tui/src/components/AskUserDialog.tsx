@@ -346,6 +346,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
               {displayOptions.map((opt, i) => {
                 const focused = i === selectIndex;
                 const selected = currentAnswer.selected.has(opt);
+                const isCustom = opt === CUSTOM_OPTION;
                 const prefix = question.multi_select
                   ? selected
                     ? '[✓]'
@@ -353,6 +354,37 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
                   : focused
                     ? '▶'
                     : ' ';
+
+                // 自定义输入项：聚焦时在该行内联渲染输入框
+                if (isCustom && customFocus) {
+                  return (
+                    <Box key={opt} flexDirection="row">
+                      <Text
+                        backgroundColor={focused ? 'cyan' : undefined}
+                        color={focused ? 'black' : selected ? 'green' : undefined}
+                        bold={focused || selected}
+                      >
+                        {` ${prefix} ✏️ 输入你自己的答案`}
+                      </Text>
+                      <TextInput
+                        placeholder="输入你的答案..."
+                        value={currentAnswer.custom}
+                        onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+                        onSubmit={handleCustomSubmit}
+                      />
+                    </Box>
+                  );
+                }
+
+                // 自定义输入项：已填内容时在同一行展示答案
+                if (isCustom && (selected || currentAnswer.custom.trim())) {
+                  return (
+                    <Text key={opt} color="green" bold>
+                      {` ✏️ 你的答案: ${currentAnswer.custom.trim() || '(按 ↑↓ 重新输入)'}`}
+                    </Text>
+                  );
+                }
+
                 return (
                   <Text
                     key={opt}
@@ -364,28 +396,6 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
                   </Text>
                 );
               })}
-
-              {/* 已选自定义输入（未聚焦时静态展示） */}
-              {(currentAnswer.selected.has(CUSTOM_OPTION) || currentAnswer.custom.trim()) &&
-                !customFocus && (
-                  <Box marginTop={1}>
-                    <Text color="green">
-                      ✏️ 你的答案: {currentAnswer.custom.trim() || '(按 Enter 编辑)'}
-                    </Text>
-                  </Box>
-                )}
-
-              {/* 自定义输入（聚焦时） */}
-              {customFocus && (
-                <Box>
-                  <Text color="cyan">{'> '}</Text>
-                  <TextInput
-                    value={currentAnswer.custom}
-                    onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
-                    onSubmit={handleCustomSubmit}
-                  />
-                </Box>
-              )}
             </Box>
           )}
 
