@@ -24,7 +24,7 @@ export interface AskUserDialogProps {
 }
 
 /** 每个选择题末尾默认追加的自定义输入选项 */
-const CUSTOM_OPTION = '✏️ 输入你自己的答案';
+const CUSTOM_OPTION = '输入你自己的答案';
 
 interface AnswerState {
   selected: Set<string>;
@@ -355,7 +355,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
                     ? '▶'
                     : ' ';
 
-                // 自定义输入项：聚焦时在该行内联渲染输入框
+                // 自定义输入项：聚焦时该行本身就是输入框（placeholder 暗灰提示）
                 if (isCustom && customFocus) {
                   return (
                     <Box key={opt} flexDirection="row">
@@ -364,10 +364,10 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
                         color={focused ? 'black' : selected ? 'green' : undefined}
                         bold={focused || selected}
                       >
-                        {` ${prefix} ✏️ 输入你自己的答案`}
+                        {` ${prefix}`}
                       </Text>
                       <TextInput
-                        placeholder="输入你的答案..."
+                        placeholder="输入你自己的答案"
                         value={currentAnswer.custom}
                         onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
                         onSubmit={handleCustomSubmit}
@@ -377,10 +377,10 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
                 }
 
                 // 自定义输入项：已填内容时在同一行展示答案
-                if (isCustom && (selected || currentAnswer.custom.trim())) {
+                if (isCustom && currentAnswer.custom.trim()) {
                   return (
                     <Text key={opt} color="green" bold>
-                      {` ✏️ 你的答案: ${currentAnswer.custom.trim() || '(按 ↑↓ 重新输入)'}`}
+                      {` ${prefix} 你的答案: ${currentAnswer.custom.trim()}`}
                     </Text>
                   );
                 }
