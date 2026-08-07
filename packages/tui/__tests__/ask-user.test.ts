@@ -71,7 +71,8 @@ describe('AskUserBridge', () => {
 
   it('cancelAll() rejects all pending prompts', async () => {
     const bridge = new AskUserBridge();
-    // 不设置 onPrompt，保持 pending
+    // 注入 onPrompt 但保持 pending（不 respond），验证 cancelAll 能清理全部
+    bridge.onPrompt = () => {};
     const p1 = bridge.prompt(sampleQuestions());
     const p2 = bridge.prompt(sampleQuestions());
     p1.catch(() => {});
@@ -81,6 +82,12 @@ describe('AskUserBridge', () => {
 
     await expect(p1).rejects.toThrow('Shutdown');
     await expect(p2).rejects.toThrow('Shutdown');
+  });
+
+  it('prompt() throws immediately when no frontend injected onPrompt (no hang)', async () => {
+    const bridge = new AskUserBridge();
+    // 不设置 onPrompt，模拟非 TTY 简单模式等无前端场景
+    await expect(bridge.prompt(sampleQuestions())).rejects.toThrow('no interactive frontend');
   });
 });
 

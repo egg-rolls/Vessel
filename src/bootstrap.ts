@@ -163,10 +163,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // 工具权限确认 guardrail（仅交互模式）
+  // ask_user 自身就是用户交互，不再额外弹 y/n 确认，避免双重交互
   let permissionChecker: ToolPermissionChecker | undefined;
   if (!headless) {
     permissionChecker = new ToolPermissionChecker({ enabled: true });
-    const guardrail = createPermissionGuardrail(permissionChecker);
+    const guardrail = createPermissionGuardrail(permissionChecker, ['ask_user']);
     plugins.push({
       name: 'tool-permission',
       install: (host) => {

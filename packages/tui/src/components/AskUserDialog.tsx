@@ -7,6 +7,9 @@
  * - 选择题（↑↓ 选择）+ 多选（Space）+ 默认"输入你自己的答案"选项
  * - 顶部 tab 显示每个问题的已答状态（✓/○）与进度
  * - 提交前确认页（Enter 确认 / Esc 返回）
+ *
+ * 结构：主组件持有状态与键盘分发，纯展示部分拆为 QuestionTabs /
+ * ReviewPage / ChoiceOptions 子组件。
  */
 
 import { Box, type Key, Text, useInput } from 'ink';
@@ -27,6 +30,160 @@ interface AnswerState {
   selected: Set<string>;
   custom: string;
 }
+
+// ── 子组件：顶部 Tab 行 ──────────────────────────
+
+function QuestionTabs({
+  questions,
+  currentIndex,
+  isReview,
+  isAnswered,
+}: {
+  questions: AskUserQuestion[];
+  currentIndex: number;
+  isReview: boolean;
+  isAnswered: (i: number) => boolean;
+}) {
+  return (
+    <Box marginBottom={1}>
+      {questions.map((q, i) => {
+        const isCurrent = i === currentIndex && !isReview;
+        const done = isAnswered(i);
+        return (
+          <Text
+            key={q.header}
+            backgroundColor={isCurrent ? 'cyan' : undefined}
+            color={done ? 'green' : isCurrent ? 'black' : 'gray'}
+            bold={isCurrent}
+          >
+            {` ${done ? '✓' : '○'} ${q.header} `}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+}
+
+// ── 子组件：确认页 ───────────────────────────────
+
+function ReviewPage({
+  questions,
+  resolveAnswer,
+  isAnswered,
+  unansweredCount,
+  notice,
+}: {
+  questions: AskUserQuestion[];
+  resolveAnswer: (i: number) => string;
+  isAnswered: (i: number) => boolean;
+  unansweredCount: number;
+  notice: string;
+}) {
+  return (
+    <Box flexDirection="column">
+      <Box marginBottom={1}>
+        <Text bold color="cyan">
+          📋 Review Your Answers
+        </Text>
+      </Box>
+      {questions.map((q, i) => {
+        const done = isAnswered(i);
+        return (
+          <Box key={q.header}>
+            <Text>
+              {i + 1}. <Text bold>{q.header}</Text>
+              {done ? `: ${resolveAnswer(i)}` : ''}
+            </Text>
+            {!done && <Text color="yellow"> (未回答)</Text>}
+          </Box>
+        );
+      })}
+      <Box marginTop={1}>
+        {unansweredCount > 0 ? (
+          <Text color="yellow">⚠ {notice || `还有 ${unansweredCount} 个问题未回答`}</Text>
+        ) : (
+          <Text color="gray">[Enter] 确认提交 · [Esc] 返回修改</Text>
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+// ── 子组件：选择题选项（含自定义输入行）────────────
+
+function ChoiceOptions({
+  options,
+  selected,
+  custom,
+  multiSelect,
+  selectIndex,
+  customFocus,
+  onCustomChange,
+  onCustomSubmit,
+}: {
+  options: string[];
+  selected: Set<string>;
+  custom: string;
+  multiSelect: boolean;
+  selectIndex: number;
+  customFocus: boolean;
+  onCustomChange: (v: string) => void;
+  onCustomSubmit: (v: string) => void;
+}) {
+  return (
+    <Box flexDirection="column" marginBottom={1}>
+      {options.map((opt, i) => {
+        const focused = i === selectIndex;
+        const isSelected = selected.has(opt);
+        const isCustom = opt === CUSTOM_OPTION;
+        const prefix = multiSelect ? (isSelected ? '[✓]' : '[ ]') : focused ? '▶' : ' ';
+
+        // 自定义输入项：聚焦时该行本身就是输入框（placeholder 暗灰提示）
+        if (isCustom && customFocus) {
+          return (
+            <Box key={opt} flexDirection="row">
+              <Text
+                backgroundColor={focused ? 'cyan' : undefined}
+                color={focused ? 'black' : isSelected ? 'green' : undefined}
+                bold={focused || isSelected}
+              >
+                {` ${prefix}`}
+              </Text>
+              <TextInput
+                placeholder="输入你自己的答案"
+                value={custom}
+                onChange={onCustomChange}
+                onSubmit={onCustomSubmit}
+              />
+            </Box>
+          );
+        }
+
+        // 自定义输入项：已填内容时在同一行展示答案
+        if (isCustom && custom.trim()) {
+          return (
+            <Text key={opt} color="green" bold>
+              {` ${prefix} 你的答案: ${custom.trim()}`}
+            </Text>
+          );
+        }
+
+        return (
+          <Text
+            key={opt}
+            backgroundColor={focused ? 'cyan' : undefined}
+            color={focused ? 'black' : isSelected ? 'green' : undefined}
+            bold={focused || isSelected}
+          >
+            {` ${prefix} ${opt}`}
+          </Text>
+        );
+      })}
+    </Box>
+  );
+}
+
+// ── 主组件 ───────────────────────────────────────
 
 export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -161,7 +318,11 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
       if (key.upArrow) {
         setSelectIndex((i) => Math.max(0, i - 1));
         // 离开自定义输入项时退出输入模式（用户可回到选项导航）
-        if (selectIndex === customIndex) setCustomFocus(false);
+        if (selectIndex === customIndex) {
+          setCustomFocus(false);
+          // 未输入内容则清除自定义选中残留，避免视觉上误标已答
+          if (!answers[currentIndex]?.custom.trim()) handleSelect(currentIndex, CUSTOM_OPTION);
+        }
         return;
       }
       if (key.downArrow) {
@@ -202,7 +363,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
         }
       }
     },
-    [displayOptions, selectIndex, currentIndex, questions, handleSelect, commitAndAdvance],
+    [displayOptions, selectIndex, currentIndex, answers, questions, handleSelect, commitAndAdvance],
   );
 
   // ── 键盘：问题页（导航 + 分派）──────────────────
@@ -221,7 +382,8 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
         gotoNext();
         return;
       }
-      if ((key.ctrl && inputChar === 's') || inputChar === 'r') {
+      // 前往确认页：仅选项导航模式（文本输入时字母 'r' 会落入输入框，不能当快捷键）
+      if (!inTextInput && ((key.ctrl && inputChar === 's') || inputChar === 'r')) {
         setView('review');
         setNotice('');
         return;
@@ -284,120 +446,41 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
         </Text>
       </Box>
 
-      {/* Tab 行：每个问题的已答状态 */}
-      <Box marginBottom={1}>
-        {questions.map((q, i) => {
-          const isCurrent = i === currentIndex && view === 'question';
-          const done = isAnswered(i);
-          return (
-            <Text
-              key={q.header}
-              backgroundColor={isCurrent ? 'cyan' : undefined}
-              color={done ? 'green' : isCurrent ? 'black' : 'gray'}
-              bold={isCurrent}
-            >
-              {` ${done ? '✓' : '○'} ${q.header} `}
-            </Text>
-          );
-        })}
-      </Box>
+      <QuestionTabs
+        questions={questions}
+        currentIndex={currentIndex}
+        isReview={view === 'review'}
+        isAnswered={isAnswered}
+      />
 
-      {/* 确认页 */}
       {view === 'review' ? (
-        <Box flexDirection="column">
-          <Box marginBottom={1}>
-            <Text bold color="cyan">
-              📋 Review Your Answers
-            </Text>
-          </Box>
-          {questions.map((q, i) => {
-            const done = isAnswered(i);
-            return (
-              <Box key={q.header}>
-                <Text>
-                  {i + 1}. <Text bold>{q.header}</Text>
-                  {done ? `: ${resolveAnswer(i)}` : ''}
-                </Text>
-                {!done && <Text color="yellow"> (未回答)</Text>}
-              </Box>
-            );
-          })}
-          <Box marginTop={1}>
-            {unansweredCount > 0 ? (
-              <Text color="yellow">⚠ {notice || `还有 ${unansweredCount} 个问题未回答`}</Text>
-            ) : (
-              <Text color="gray">[Enter] 确认提交 · [Esc] 返回修改</Text>
-            )}
-          </Box>
-        </Box>
+        <ReviewPage
+          questions={questions}
+          resolveAnswer={resolveAnswer}
+          isAnswered={isAnswered}
+          unansweredCount={unansweredCount}
+          notice={notice}
+        />
       ) : (
-        /* 问题页 */
         <Box flexDirection="column">
           <Box marginBottom={1}>
             <Text>{question.question}</Text>
           </Box>
 
           {/* 选择题 */}
-          {isChoice && displayOptions && (
-            <Box flexDirection="column" marginBottom={1}>
-              {displayOptions.map((opt, i) => {
-                const focused = i === selectIndex;
-                const selected = currentAnswer.selected.has(opt);
-                const isCustom = opt === CUSTOM_OPTION;
-                const prefix = question.multi_select
-                  ? selected
-                    ? '[✓]'
-                    : '[ ]'
-                  : focused
-                    ? '▶'
-                    : ' ';
-
-                // 自定义输入项：聚焦时该行本身就是输入框（placeholder 暗灰提示）
-                if (isCustom && customFocus) {
-                  return (
-                    <Box key={opt} flexDirection="row">
-                      <Text
-                        backgroundColor={focused ? 'cyan' : undefined}
-                        color={focused ? 'black' : selected ? 'green' : undefined}
-                        bold={focused || selected}
-                      >
-                        {` ${prefix}`}
-                      </Text>
-                      <TextInput
-                        placeholder="输入你自己的答案"
-                        value={currentAnswer.custom}
-                        onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
-                        onSubmit={handleCustomSubmit}
-                      />
-                    </Box>
-                  );
-                }
-
-                // 自定义输入项：已填内容时在同一行展示答案
-                if (isCustom && currentAnswer.custom.trim()) {
-                  return (
-                    <Text key={opt} color="green" bold>
-                      {` ${prefix} 你的答案: ${currentAnswer.custom.trim()}`}
-                    </Text>
-                  );
-                }
-
-                return (
-                  <Text
-                    key={opt}
-                    backgroundColor={focused ? 'cyan' : undefined}
-                    color={focused ? 'black' : selected ? 'green' : undefined}
-                    bold={focused || selected}
-                  >
-                    {` ${prefix} ${opt}`}
-                  </Text>
-                );
-              })}
-            </Box>
-          )}
-
-          {/* 开放式输入 */}
-          {!isChoice && (
+          {isChoice && displayOptions ? (
+            <ChoiceOptions
+              options={displayOptions}
+              selected={currentAnswer.selected}
+              custom={currentAnswer.custom}
+              multiSelect={question.multi_select ?? false}
+              selectIndex={selectIndex}
+              customFocus={customFocus}
+              onCustomChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+              onCustomSubmit={handleCustomSubmit}
+            />
+          ) : (
+            /* 开放式输入 */
             <Box>
               <Text color="cyan">{'> '}</Text>
               <TextInput

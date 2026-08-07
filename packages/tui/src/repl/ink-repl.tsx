@@ -75,7 +75,11 @@ function InkRepl({ ctx }: InkReplProps) {
   // - 精确匹配某命令名时隐藏补全框，改由 argHint 显示参数提示
   const isExactCommand = input.startsWith('/') && allCommands.some((cmd) => cmd.name === input);
   const showAutocomplete =
-    input.startsWith('/') && !input.includes(' ') && !isExactCommand && filteredCommands.length > 0;
+    input.startsWith('/') &&
+    !input.includes(' ') &&
+    !isExactCommand &&
+    filteredCommands.length > 0 &&
+    !askUserOverlay;
 
   // 参数占位提示：当输入精确匹配某命令名时，显示灰色参数提示（如 " [number|id]"）
   const argHint = useMemo(() => {

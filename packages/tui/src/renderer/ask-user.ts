@@ -72,6 +72,11 @@ export class AskUserBridge {
    * @returns Promise，resolve 时携带每个问题的回答
    */
   async prompt(input: AskUserInput): Promise<AskUserAnswer[]> {
+    // 兜底：没有任何前端注入 onPrompt（如非 TTY 简单模式）时立即报错，
+    // 避免 pending Promise 永不 resolve 导致 Agent 永久挂起。
+    if (!this.onPrompt) {
+      throw new Error('ask_user: no interactive frontend is connected to handle the prompt');
+    }
     const id = randomUUID();
     return new Promise<AskUserAnswer[]>((resolve, reject) => {
       this.pending.set(id, { input, resolve, reject });
