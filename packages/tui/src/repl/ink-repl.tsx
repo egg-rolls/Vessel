@@ -20,13 +20,10 @@ import {
   filterCommands,
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
-import type {
-  AskUserAnswer,
-  AskUserPromptEvent,
-} from '../../../../plugins/tools/ask-user/src/index.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
+import type { AskUserAnswer, AskUserPromptEvent } from '../renderer/ask-user.js';
 import type { ReplContext } from '../repl-context.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 

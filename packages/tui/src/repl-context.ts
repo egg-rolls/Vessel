@@ -19,7 +19,7 @@ import type {
   SessionBackend,
   ToolRegistry,
 } from '@vessel/core';
-import type { AskUserBridge } from '../../../plugins/tools/ask-user/src/index.js';
+import type { AskUserBridge } from './renderer/ask-user.js';
 import type { ToolPermissionChecker } from './renderer/tool-confirm.js';
 
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */

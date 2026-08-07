@@ -141,16 +141,6 @@
         "typescript": "^7.0.2",
       },
     },
-    "plugins/tools/ask-user": {
-      "name": "@vessel/ask-user",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
     "plugins/tools/file-ops": {
       "name": "@vessel/file-ops",
       "version": "0.1.0",
@@ -312,8 +302,6 @@
     "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
-
-    "@vessel/ask-user": ["@vessel/ask-user@workspace:plugins/tools/ask-user"],
 
     "@vessel/config": ["@vessel/config@workspace:packages/config"],
 

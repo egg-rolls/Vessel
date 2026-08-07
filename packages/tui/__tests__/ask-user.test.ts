@@ -1,11 +1,10 @@
 /**
- * ask-user 插件测试
- * @module @vessel/ask-user/__tests__
+ * ask-user 交互能力测试
+ * @module @vessel/tui/__tests__
  */
 
 import { describe, expect, it } from 'bun:test';
-import { MemoryPluginHost } from '@vessel/core';
-import { AskUserBridge, createAskUserPlugin } from '../src/index';
+import { AskUserBridge, createAskUserTool } from '../src/renderer/ask-user';
 
 /** 便捷构建测试输入 */
 function sampleQuestions() {
@@ -24,13 +23,6 @@ function sampleAnswers(answers: string[]) {
     question: sampleQuestions().questions[i]?.question ?? `question${i}`,
     answer,
   }));
-}
-
-/** 取 ask_user 工具，未注册则抛错（避免非空断言） */
-function getAskUserTool(host: MemoryPluginHost) {
-  const tool = host.getTool('ask_user');
-  if (!tool) throw new Error('ask_user tool not registered');
-  return tool;
 }
 
 describe('AskUserBridge', () => {
@@ -92,33 +84,23 @@ describe('AskUserBridge', () => {
   });
 });
 
-describe('createAskUserPlugin', () => {
-  it('registers ask_user tool with default:true', () => {
+describe('createAskUserTool', () => {
+  it('creates ask_user tool with default:true', () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
+    const tool = createAskUserTool(bridge);
 
-    plugin.install(host);
-
-    const tool = host.getTool('ask_user');
-    expect(tool).toBeDefined();
-    expect(tool?.name).toBe('ask_user');
-    expect(tool?.default).toBe(true);
-    expect(tool?.inputSchema.required).toContain('questions');
-    expect(host.toolCount).toBe(1);
+    expect(tool.name).toBe('ask_user');
+    expect(tool.default).toBe(true);
+    expect(tool.inputSchema.required).toContain('questions');
   });
 
   it('handler invokes bridge.prompt() and returns formatted answers', async () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-
     bridge.onPrompt = (event) => {
       bridge.respond(event.id, sampleAnswers(['ESM', '生产']));
     };
 
-    const tool = getAskUserTool(host);
+    const tool = createAskUserTool(bridge);
     const result = await tool.handler(sampleQuestions(), { run_id: 'r1', messages: [] });
 
     expect(result).toContain('1. 格式: ESM');
@@ -127,17 +109,13 @@ describe('createAskUserPlugin', () => {
 
   it('handler normalizes missing header with a fallback', async () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-
     bridge.onPrompt = (event) => {
       // 断言归一化后的 header 已回退
       expect(event.questions[0]?.header).toBe('问题 1');
       bridge.respond(event.id, [{ header: '问题 1', question: '没有任何 header', answer: 'ESM' }]);
     };
 
-    const tool = getAskUserTool(host);
+    const tool = createAskUserTool(bridge);
     const result = await tool.handler(
       { questions: [{ question: '没有任何 header' }] },
       { run_id: 'r1', messages: [] },
@@ -148,11 +126,7 @@ describe('createAskUserPlugin', () => {
 
   it('handler returns error when questions is empty', async () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-
-    const tool = getAskUserTool(host);
+    const tool = createAskUserTool(bridge);
     const result = await tool.handler({ questions: [] }, { run_id: 'r1', messages: [] });
 
     expect(result).toContain('Error');
@@ -161,15 +135,12 @@ describe('createAskUserPlugin', () => {
 
   it('handler returns error when too many questions', async () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
-    plugin.install(host);
+    const tool = createAskUserTool(bridge);
 
     const five = Array.from({ length: 5 }, (_, i) => ({
       header: `q${i}`,
       question: `question ${i}`,
     }));
-    const tool = getAskUserTool(host);
     const result = await tool.handler({ questions: five }, { run_id: 'r1', messages: [] });
 
     expect(result).toContain('Error');
@@ -178,11 +149,7 @@ describe('createAskUserPlugin', () => {
 
   it('handler returns error when a question has invalid options', async () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-
-    const tool = getAskUserTool(host);
+    const tool = createAskUserTool(bridge);
     const result = await tool.handler(
       { questions: [{ header: 'h', question: 'q', options: ['only one'] }] },
       { run_id: 'r1', messages: [] },
@@ -194,11 +161,7 @@ describe('createAskUserPlugin', () => {
 
   it('handler returns error when question text is missing', async () => {
     const bridge = new AskUserBridge();
-    const plugin = createAskUserPlugin(bridge);
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-
-    const tool = getAskUserTool(host);
+    const tool = createAskUserTool(bridge);
     const result = await tool.handler(
       { questions: [{ header: 'h', question: '   ' }] },
       { run_id: 'r1', messages: [] },
@@ -208,15 +171,11 @@ describe('createAskUserPlugin', () => {
     expect(result).toContain('question is required');
   });
 
-  it('without bridge (headless mode), handler returns error', async () => {
-    const plugin = createAskUserPlugin(); // no bridge
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-
-    const tool = getAskUserTool(host);
+  it('without bridge (headless), handler returns error', async () => {
+    const tool = createAskUserTool(); // no bridge
     const result = await tool.handler(sampleQuestions(), { run_id: 'r1', messages: [] });
 
     expect(result).toContain('Error');
-    expect(result).toContain('headless');
+    expect(result).toContain('no interactive frontend');
   });
 });

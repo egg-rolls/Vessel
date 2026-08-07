@@ -19,11 +19,11 @@ import {
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { AskUserBridge, createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import {
   createPermissionGuardrail,
   ToolPermissionChecker,
 } from '../packages/tui/src/renderer/tool-confirm';
-import { AskUserBridge, createAskUserPlugin } from '../plugins/tools/ask-user/src/index';
 import { PluginRegistry } from './plugin-registry';
 
 export interface BootstrapOptions {
@@ -175,11 +175,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
-  // ask-user 交互工具（仅交互模式）
+  // ask-user 交互工具（仅交互模式）——与 tool-permission 同构：合成插件 + bridge 注入
   let askUserBridge: AskUserBridge | undefined;
   if (!headless) {
     askUserBridge = new AskUserBridge();
-    plugins.push(createAskUserPlugin(askUserBridge));
+    const askUserTool = createAskUserTool(askUserBridge);
+    plugins.push({
+      name: 'ask-user',
+      install: (host) => {
+        host.registerTool(askUserTool);
+      },
+    });
   }
 
   // ── Runtime ─────────────────────────────────────

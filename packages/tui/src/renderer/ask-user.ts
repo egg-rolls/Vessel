@@ -1,15 +1,17 @@
 /**
- * @vessel/ask-user — 用户交互工具插件
- * @module @vessel/ask-user
+ * ask-user 交互能力 — Agent 向用户提问
+ * @module @vessel/tui
  *
- * 让 Agent 在执行过程中向用户提问或请求确认。
- * 采用 Hermes 的回调注入模式：bridge.prompt() 暂停 → TUI 注入 onPrompt → 用户回答 → resolve。
+ * 与 tool-permission（renderer/tool-confirm.ts）同构：交互类定义在 TUI 层，
+ * bootstrap 创建 bridge 实例并以合成插件注册工具，TUI 注入 onPrompt 回调。
  *
- * 支持一次问 1-4 个问题（slide 式切换）、选择题、多选、自定义输入。
+ * 采用 Hermes 的回调注入模式：Agent 线程调 bridge.prompt() 返回 Promise（阻塞），
+ * 前端线程通过 onPrompt 接收问题，用户回答后调 respond()/cancel() 解除阻塞。
+ * 未来 desktop/web 前端只需各自实现 onPrompt 注入，机制不变。
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
+import type { ToolDefinition } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -37,26 +39,23 @@ export interface AskUserAnswer {
   answer: string;
 }
 
-/** bridge 触发 TUI 时的事件载荷 */
+/** bridge 触发前端时的事件载荷 */
 export interface AskUserPromptEvent {
   id: string;
   questions: AskUserQuestion[];
 }
 
-/** ask-user 插件配置 */
-export interface AskUserConfig {
-  /** headless 模式：工具直接返回错误，不等待用户输入 */
-  headless?: boolean;
-}
-
 // ── Bridge ────────────────────────────────────────
 
 /**
- * AskUserBridge — Agent 线程和 TUI 之间的 Promise 桥接
+ * AskUserBridge — Agent 线程和前端之间的 Promise 桥接
  *
  * 对应 Hermes 的 _block() / _respond() 模式。
  * Agent 线程调 prompt() 返回 Promise（在此"阻塞"），
- * TUI 线程通过 onPrompt 接收问题，用户回答后调 respond() 解除阻塞。
+ * 前端线程通过 onPrompt 接收问题，用户回答后调 respond() 解除阻塞。
+ *
+ * 本类不依赖任何终端细节（Ink/readline）——渲染与输入交给前端注入的
+ * onPrompt/respond。这样 desktop/web 等新前端只需各自实现注入。
  */
 export class AskUserBridge {
   private pending = new Map<
@@ -83,7 +82,7 @@ export class AskUserBridge {
     });
   }
 
-  /** TUI 调用——用户已回答全部问题，解除阻塞 */
+  /** 前端调用——用户已回答全部问题，解除阻塞 */
   respond(id: string, answers: AskUserAnswer[]): void {
     const entry = this.pending.get(id);
     if (entry) {
@@ -92,7 +91,7 @@ export class AskUserBridge {
     }
   }
 
-  /** TUI 调用——用户取消或超时 */
+  /** 前端调用——用户取消或超时 */
   cancel(id: string, reason = 'User cancelled'): void {
     const entry = this.pending.get(id);
     if (entry) {
@@ -109,7 +108,7 @@ export class AskUserBridge {
     }
   }
 
-  /** TUI 设置此回调以接收 prompt 事件 */
+  /** 前端设置此回调以接收 prompt 事件 */
   onPrompt?: (event: AskUserPromptEvent) => void;
 }
 
@@ -174,81 +173,71 @@ function createAskUserHandler(bridge: AskUserBridge): ToolDefinition['handler'] 
   };
 }
 
-/** headless 模式：无用户可交互，直接返回错误 */
+/** 无 bridge（headless 等无前端场景）时直接返回错误 */
 function createHeadlessHandler(): ToolDefinition['handler'] {
   return async () => {
-    return 'Error: ask_user is not available in headless mode — no user to interact with.';
+    return 'Error: ask_user is not available — no interactive frontend is connected.';
   };
 }
 
-// ── Plugin 工厂 ───────────────────────────────────
+// ── 工具定义工厂 ──────────────────────────────────
 
 /**
- * 创建 ask-user 插件
+ * 创建 ask_user 工具定义
  *
- * @param bridge - AskUserBridge 实例（headless 时传 undefined，工具会返回错误）
+ * @param bridge - AskUserBridge 实例。无前端（headless）时传 undefined，工具返回错误。
+ *                 正常由 bootstrap 创建 bridge 实例传入，前端注入 onPrompt。
  */
-export function createAskUserPlugin(bridge?: AskUserBridge): Plugin {
+export function createAskUserTool(bridge?: AskUserBridge): ToolDefinition {
   const handler = bridge ? createAskUserHandler(bridge) : createHeadlessHandler();
 
   return {
-    name: 'ask-user',
-    version: '0.1.0',
-    description: 'User interaction tool — allows Agent to ask questions during execution',
-    install(host: PluginHost) {
-      host.registerTool({
-        name: 'ask_user',
-        description: `Ask the user up to 4 questions during execution, with optional multiple-choice options and multi-select.
+    name: 'ask_user',
+    description: `Ask the user up to 4 questions during execution, with optional multiple-choice options and multi-select.
 Each question can have up to 4 options; the user may pick one, select multiple (multi_select: true), or type their own answer.
 This tool pauses the run and waits for the user to answer all questions, then returns the answers.
 Use when you need clarification, confirmation, or to gather information only the user can provide.
 Do NOT use for trivial questions you can resolve yourself.`,
-        inputSchema: {
-          type: 'object',
-          properties: {
-            questions: {
-              type: 'array',
-              minItems: 1,
-              maxItems: 4,
-              items: {
-                type: 'object',
-                properties: {
-                  header: {
-                    type: 'string',
-                    description: 'Short label (≤ 12 chars) shown as a tab in the CLI.',
-                    maxLength: 12,
-                  },
-                  question: {
-                    type: 'string',
-                    description: 'The complete question to display.',
-                  },
-                  options: {
-                    type: 'array',
-                    minItems: 2,
-                    maxItems: 4,
-                    items: { type: 'string' },
-                    description:
-                      'Multiple-choice options (2-4). Omit for open-ended input. An "input your own answer" option is always appended automatically.',
-                  },
-                  multi_select: {
-                    type: 'boolean',
-                    description: 'Allow selecting multiple options. Default: false.',
-                    default: false,
-                  },
-                },
-                required: ['header', 'question'],
+    inputSchema: {
+      type: 'object',
+      properties: {
+        questions: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 4,
+          items: {
+            type: 'object',
+            properties: {
+              header: {
+                type: 'string',
+                description: 'Short label (≤ 12 chars) shown as a tab.',
+                maxLength: 12,
+              },
+              question: {
+                type: 'string',
+                description: 'The complete question to display.',
+              },
+              options: {
+                type: 'array',
+                minItems: 2,
+                maxItems: 4,
+                items: { type: 'string' },
+                description:
+                  'Multiple-choice options (2-4). Omit for open-ended input. An "input your own answer" option is always appended automatically.',
+              },
+              multi_select: {
+                type: 'boolean',
+                description: 'Allow selecting multiple options. Default: false.',
+                default: false,
               },
             },
+            required: ['header', 'question'],
           },
-          required: ['questions'],
         },
-        handler,
-        default: true,
-      });
+      },
+      required: ['questions'],
     },
+    handler,
+    default: true,
   };
 }
-
-/** headless 默认实例——工具直接返回错误 */
-export const askUserPlugin = createAskUserPlugin();
-export default askUserPlugin;

@@ -12,10 +12,7 @@
 import { Box, type Key, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useState } from 'react';
-import type {
-  AskUserAnswer,
-  AskUserQuestion,
-} from '../../../../plugins/tools/ask-user/src/index.js';
+import type { AskUserAnswer, AskUserQuestion } from '../renderer/ask-user.js';
 
 export interface AskUserDialogProps {
   questions: AskUserQuestion[];
