@@ -144,3 +144,9 @@ docker-compose.override.yml
 .sst/
 .wrangler/
 .codegraph/
+
+# ----------------------------------------------------------
+# 13. Temp text files (commit-message drafts, etc.)
+# Repo docs use .md; .txt is only transient/local, never tracked.
+# ----------------------------------------------------------
+*.txt
