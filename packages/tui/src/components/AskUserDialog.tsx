@@ -60,7 +60,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
       if (!s || !q) return false;
       if (!q.options) return s.custom.trim().length > 0;
       const normalSelected = [...s.selected].filter((o) => o !== CUSTOM_OPTION);
-      const customFilled = s.selected.has(CUSTOM_OPTION) && s.custom.trim().length > 0;
+      const customFilled = s.custom.trim().length > 0;
       return normalSelected.length > 0 || customFilled;
     },
     [answers, questions],
@@ -74,7 +74,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
       if (!q.options) return s.custom.trim();
       const normalSelected = [...s.selected].filter((o) => o !== CUSTOM_OPTION);
       const parts = [...normalSelected];
-      if (s.selected.has(CUSTOM_OPTION) && s.custom.trim()) parts.push(s.custom.trim());
+      if (s.custom.trim()) parts.push(s.custom.trim());
       return parts.join(', ');
     },
     [answers, questions],
@@ -159,20 +159,30 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
   const handleChoiceKey = useCallback(
     (inputChar: string, key: Key) => {
       if (!displayOptions) return;
+      const customIndex = displayOptions.length - 1;
 
       if (key.upArrow) {
         setSelectIndex((i) => Math.max(0, i - 1));
+        // 离开自定义输入项时退出输入模式（用户可回到选项导航）
+        if (selectIndex === customIndex) setCustomFocus(false);
         return;
       }
       if (key.downArrow) {
-        setSelectIndex((i) => Math.min(displayOptions.length - 1, i + 1));
+        const next = Math.min(customIndex, selectIndex + 1);
+        setSelectIndex(next);
+        // 高亮到"输入你自己的答案"即自动进入输入，无需再按 Enter
+        if (next === customIndex) {
+          handleSelect(currentIndex, CUSTOM_OPTION);
+          setCustomFocus(true);
+        }
         return;
       }
       if (inputChar === ' ') {
         const option = displayOptions[selectIndex];
         if (option !== undefined) {
           handleSelect(currentIndex, option);
-          if (option === CUSTOM_OPTION) setCustomFocus(true);
+          // 多选：Space 勾选/取消，自定义选项切换输入框开关
+          if (option === CUSTOM_OPTION) setCustomFocus((f) => !f);
         }
         return;
       }
@@ -185,6 +195,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
         const option = displayOptions[selectIndex];
         if (option !== undefined) {
           if (option === CUSTOM_OPTION) {
+            // 单选下高亮自定义即已聚焦，此分支为 fallback
             handleSelect(currentIndex, option);
             setCustomFocus(true);
           } else {
@@ -216,6 +227,15 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
       if ((key.ctrl && inputChar === 's') || inputChar === 'r') {
         setView('review');
         setNotice('');
+        return;
+      }
+      // 左右箭头切换问题（文本输入模式下留给 TextInput 移动光标）
+      if (!inTextInput && key.leftArrow) {
+        gotoPrev();
+        return;
+      }
+      if (!inTextInput && key.rightArrow) {
+        gotoNext();
         return;
       }
       // 文本输入模式下其余按键交给 TextInput
@@ -346,13 +366,14 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
               })}
 
               {/* 已选自定义输入（未聚焦时静态展示） */}
-              {currentAnswer.selected.has(CUSTOM_OPTION) && !customFocus && (
-                <Box marginTop={1}>
-                  <Text color="green">
-                    ✏️ 你的答案: {currentAnswer.custom.trim() || '(按 Enter 编辑)'}
-                  </Text>
-                </Box>
-              )}
+              {(currentAnswer.selected.has(CUSTOM_OPTION) || currentAnswer.custom.trim()) &&
+                !customFocus && (
+                  <Box marginTop={1}>
+                    <Text color="green">
+                      ✏️ 你的答案: {currentAnswer.custom.trim() || '(按 Enter 编辑)'}
+                    </Text>
+                  </Box>
+                )}
 
               {/* 自定义输入（聚焦时） */}
               {customFocus && (
@@ -387,7 +408,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
             ) : (
               <Text color="gray">
                 {question.multi_select
-                  ? 'Space 切换 · Enter 提交 · Tab/←→ 切换问题 · Esc 取消'
+                  ? 'Space 勾选/取消 · Enter 提交 · Tab/←→ 切换问题 · Esc 取消'
                   : '↑↓ 选择 · Enter 确认 · Tab/←→ 切换问题 · Esc 取消'}
               </Text>
             )}
