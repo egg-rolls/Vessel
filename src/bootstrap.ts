@@ -23,6 +23,7 @@ import {
   createPermissionGuardrail,
   ToolPermissionChecker,
 } from '../packages/tui/src/renderer/tool-confirm';
+import { AskUserBridge, createAskUserPlugin } from '../plugins/tools/ask-user/src/index';
 import { PluginRegistry } from './plugin-registry';
 
 export interface BootstrapOptions {
@@ -174,6 +175,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
+  // ask-user 交互工具（仅交互模式）
+  let askUserBridge: AskUserBridge | undefined;
+  if (!headless) {
+    askUserBridge = new AskUserBridge();
+    plugins.push(createAskUserPlugin(askUserBridge));
+  }
+
   // ── Runtime ─────────────────────────────────────
   const runtime = await AgentRuntime.create({
     provider,
@@ -227,6 +235,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     events,
     context,
     permissionChecker,
+    askUserBridge,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;
