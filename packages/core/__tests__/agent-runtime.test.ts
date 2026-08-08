@@ -5,7 +5,7 @@ import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
-import { EventType } from '../src/types/event';
+import { EventType, PermissionEvent } from '../src/types/event';
 import type { ToolDefinition } from '../src/types/tool';
 
 describe('AgentRuntime Integration', () => {
@@ -238,5 +238,187 @@ describe('AgentRuntime Integration', () => {
     expect(capturedTools).not.toContain('hidden_tool');
     // 总共应发送 2 个工具
     expect(capturedTools).toHaveLength(2);
+  });
+
+  it('checkPermission ask -> 发布 tool.permission.request，用户 allow 后放行工具（ADR-029）', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = false;
+    let requestedCount = 0;
+    const guardedTool: ToolDefinition = {
+      name: 'guarded',
+      description: 'Guarded tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan = true;
+        return 'guarded result';
+      },
+      checkPermission: async () => 'ask',
+    };
+    tools.register(guardedTool);
+
+    const events = new MemoryEventStream();
+    events.subscribe((event) => {
+      if (event.type === PermissionEvent.Requested) {
+        requestedCount++;
+        const data = event.data as unknown as { requestId: string };
+        events.publish({
+          type: PermissionEvent.Decided,
+          run_id: event.run_id,
+          data: { requestId: data.requestId, decision: 'allow' },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const customProvider = {
+      chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
+        const lastMessage = req.messages[req.messages.length - 1];
+        if (lastMessage?.role === 'user') {
+          return {
+            content: '',
+            finish_reason: 'tool_calls' as const,
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function' as const,
+                function: { name: 'guarded', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        return { content: 'done', finish_reason: 'stop' as const };
+      },
+    };
+
+    const permRuntime = await AgentRuntime.create({
+      provider: customProvider,
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await permRuntime.run('use guarded');
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(true); // 用户允许后工具执行
+    expect(requestedCount).toBe(1); // 发过 1 次权限请求
+  });
+
+  it('checkPermission ask -> 用户 deny 后工具被阻止（不执行 handler）', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = false;
+    const guardedTool: ToolDefinition = {
+      name: 'guarded',
+      description: 'Guarded tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan = true;
+        return 'guarded result';
+      },
+      checkPermission: async () => 'ask',
+    };
+    tools.register(guardedTool);
+
+    const events = new MemoryEventStream();
+    events.subscribe((event) => {
+      if (event.type === PermissionEvent.Requested) {
+        const data = event.data as unknown as { requestId: string };
+        events.publish({
+          type: PermissionEvent.Decided,
+          run_id: event.run_id,
+          data: { requestId: data.requestId, decision: 'deny' },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const customProvider = {
+      chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
+        const lastMessage = req.messages[req.messages.length - 1];
+        if (lastMessage?.role === 'user') {
+          return {
+            content: '',
+            finish_reason: 'tool_calls' as const,
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function' as const,
+                function: { name: 'guarded', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        return { content: 'done', finish_reason: 'stop' as const };
+      },
+    };
+
+    const denyRuntime = await AgentRuntime.create({
+      provider: customProvider,
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await denyRuntime.run('use guarded');
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(false); // 用户拒绝，handler 未执行
+  });
+
+  it('checkPermission deny -> 策略拒绝，工具被阻止（不执行 handler）', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = false;
+    const guardedTool: ToolDefinition = {
+      name: 'guarded',
+      description: 'Guarded tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan = true;
+        return 'guarded result';
+      },
+      checkPermission: async () => 'deny',
+    };
+    tools.register(guardedTool);
+
+    const customProvider = {
+      chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
+        const lastMessage = req.messages[req.messages.length - 1];
+        if (lastMessage?.role === 'user') {
+          return {
+            content: '',
+            finish_reason: 'tool_calls' as const,
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function' as const,
+                function: { name: 'guarded', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        return { content: 'done', finish_reason: 'stop' as const };
+      },
+    };
+
+    const denyRuntime = await AgentRuntime.create({
+      provider: customProvider,
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await denyRuntime.run('use guarded');
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(false); // 策略拒绝，handler 未执行
   });
 });

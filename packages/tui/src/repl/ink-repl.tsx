@@ -7,6 +7,7 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
+import { PermissionEvent } from '@vessel/core';
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -23,7 +24,7 @@ import {
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
-import type { AskUserAnswer, AskUserPromptEvent } from '../renderer/ask-user.js';
+import type { ToolPermissionRequestedData } from '../renderer/tool-confirm.js';
 import type { ReplContext } from '../repl-context.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 
@@ -47,11 +48,14 @@ function InkRepl({ ctx }: InkReplProps) {
   const [history, setHistory] = useState<string[]>([]);
   const [autocompleteIndex, setAutocompleteIndex] = useState(0);
   const [resumeSessions, setResumeSessions] = useState<SessionInfo[]>([]);
-  const [confirmQuestion, setConfirmQuestion] = useState<string | null>(null);
-  const [confirmResolve, setConfirmResolve] = useState<((value: string) => void) | null>(null);
   const [clearSignal, setClearSignal] = useState(0); // /clear 命令信号
   const [inputCaretKey, setInputCaretKey] = useState(0); // 递增以强制 TextInput remount（光标复位到末尾）
-  const [askUserOverlay, setAskUserOverlay] = useState<AskUserPromptEvent | null>(null);
+  const [askUserActive, setAskUserActive] = useState(false); // ask-user 弹窗是否激活（AskUserDialog 汇报）
+  const [permissionOverlay, setPermissionOverlay] = useState<{
+    requestId: string;
+    run_id: string;
+    toolName: string;
+  } | null>(null);
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -79,7 +83,7 @@ function InkRepl({ ctx }: InkReplProps) {
     !input.includes(' ') &&
     !isExactCommand &&
     filteredCommands.length > 0 &&
-    !askUserOverlay;
+    !askUserActive;
 
   // 参数占位提示：当输入精确匹配某命令名时，显示灰色参数提示（如 " [number|id]"）
   const argHint = useMemo(() => {
@@ -102,26 +106,19 @@ function InkRepl({ ctx }: InkReplProps) {
     ctx.currentSessionId = state.currentSessionId;
   }, [state.currentSessionId, ctx]);
 
-  // 注入权限确认器的 promptFn
+  // 订阅权限确认请求（ADR-029：工具自带 checkPermission 或 runtime 'ask' 分支都发此事件）
   useEffect(() => {
-    if (ctx.permissionChecker) {
-      ctx.permissionChecker.promptFn = (question: string) => {
-        return new Promise<string>((resolve) => {
-          setConfirmQuestion(question);
-          setConfirmResolve(() => resolve);
-        });
-      };
-    }
-  }, [ctx.permissionChecker]);
-
-  // 注入 ask-user bridge 的 onPrompt 回调
-  useEffect(() => {
-    if (ctx.askUserBridge) {
-      ctx.askUserBridge.onPrompt = (event: AskUserPromptEvent) => {
-        setAskUserOverlay(event);
-      };
-    }
-  }, [ctx.askUserBridge]);
+    const unsubscribe = ctx.events.subscribe((event) => {
+      if (event.type !== PermissionEvent.Requested) return;
+      const data = event.data as unknown as ToolPermissionRequestedData;
+      setPermissionOverlay({
+        requestId: data.requestId,
+        run_id: event.run_id,
+        toolName: data.tool,
+      });
+    });
+    return unsubscribe;
+  }, [ctx.events]);
 
   // 当 showResumePicker 变为 true 时加载会话列表
   useEffect(() => {
@@ -214,8 +211,8 @@ function InkRepl({ ctx }: InkReplProps) {
   // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
   // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
-    // ask-user 弹窗显示时，键盘交给 AskUserDialog 自己的 useInput
-    if (askUserOverlay) return;
+    // ask-user / 权限弹窗显示时，键盘交给弹窗组件自己的 useInput
+    if (askUserActive || permissionOverlay) return;
 
     if (showAutocomplete) {
       if (key.tab) {
@@ -244,7 +241,7 @@ function InkRepl({ ctx }: InkReplProps) {
     }
 
     // 如果有其他独占交互组件显示，不处理其余输入
-    if (state.showResumePicker || confirmQuestion) {
+    if (state.showResumePicker) {
       return;
     }
 
@@ -259,35 +256,24 @@ function InkRepl({ ctx }: InkReplProps) {
     }
   });
 
-  // 确认对话框回调
-  const handleConfirm = useCallback(
+  // 权限确认回调（ADR-029：发布 tool.permission.response，decision=allow/deny）
+  const handlePermission = useCallback(
     (answer: string) => {
-      setConfirmQuestion(null);
-      if (confirmResolve) {
-        confirmResolve(answer);
-        setConfirmResolve(null);
+      if (permissionOverlay) {
+        ctx.events.publish({
+          type: PermissionEvent.Decided,
+          run_id: permissionOverlay.run_id,
+          data: {
+            requestId: permissionOverlay.requestId,
+            decision: answer === 'y' || answer === 'always' ? 'allow' : 'deny',
+          },
+          ts: Date.now(),
+        });
+        setPermissionOverlay(null);
       }
     },
-    [confirmResolve],
+    [permissionOverlay, ctx.events],
   );
-
-  // ask-user 对话框回调
-  const handleAskUserSubmit = useCallback(
-    (answers: AskUserAnswer[]) => {
-      if (askUserOverlay) {
-        ctx.askUserBridge?.respond(askUserOverlay.id, answers);
-        setAskUserOverlay(null);
-      }
-    },
-    [askUserOverlay, ctx.askUserBridge],
-  );
-
-  const handleAskUserCancel = useCallback(() => {
-    if (askUserOverlay) {
-      ctx.askUserBridge?.cancel(askUserOverlay.id);
-      setAskUserOverlay(null);
-    }
-  }, [askUserOverlay, ctx.askUserBridge]);
 
   // StreamOutput 完成回调：将 AI 响应归档到 history
   const handleStreamComplete = useCallback((responseText: string) => {
@@ -338,20 +324,19 @@ function InkRepl({ ctx }: InkReplProps) {
         />
       )}
 
-      {/* 确认对话框 */}
-      {confirmQuestion && <ConfirmDialog question={confirmQuestion} onConfirm={handleConfirm} />}
-
-      {/* ask-user 问答弹窗 */}
-      {askUserOverlay && (
-        <AskUserDialog
-          questions={askUserOverlay.questions}
-          onSubmit={handleAskUserSubmit}
-          onCancel={handleAskUserCancel}
+      {/* 权限确认对话框（ADR-029：订阅 tool.permission.request，发布 response） */}
+      {permissionOverlay && (
+        <ConfirmDialog
+          question={`Allow tool "${permissionOverlay.toolName}" to run?`}
+          onConfirm={handlePermission}
         />
       )}
 
+      {/* ask-user 问答弹窗（自身订阅 ask.user.requested / 发布 answered） */}
+      <AskUserDialog events={ctx.events} onActiveChange={setAskUserActive} />
+
       {/* 输入框 - 只在没有独占交互组件时显示 */}
-      {!state.showResumePicker && !confirmQuestion && !askUserOverlay && (
+      {!state.showResumePicker && !permissionOverlay && !askUserActive && (
         <Box>
           <Text color="cyan">vessel&gt; </Text>
           <TextInput

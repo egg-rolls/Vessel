@@ -154,6 +154,28 @@ describe('MemoryEventStream', () => {
     await expect(pending).resolves.toEqual({ requestId: 'req-2', answer: 'right' });
   });
 
+  it('waitFor replays a matching event already in history (synchronous responder)', async () => {
+    // 订阅者同步应答时，回答事件在 waitFor 之前已入历史——waitFor 应回放而非超时
+    eventStream.publish({
+      type: 'ask.user.requested',
+      run_id: 'run-1',
+      data: { requestId: 'req-1', questions: [] },
+      ts: Date.now(),
+    });
+    eventStream.publish({
+      type: 'ask.user.answered',
+      run_id: 'run-1',
+      data: { requestId: 'req-1', answers: [{ header: 'h', question: 'q', answer: 'a' }] },
+      ts: Date.now(),
+    });
+
+    await expect(
+      eventStream.waitFor('ask.user.answered', { requestId: 'req-1' }),
+    ).resolves.toMatchObject({
+      requestId: 'req-1',
+    });
+  });
+
   it('waitFor rejects on timeout', async () => {
     await expect(eventStream.waitFor('never.event', { timeout: 50 })).rejects.toThrow('Timed out');
   });

@@ -19,11 +19,8 @@ import {
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
-import { AskUserBridge, createAskUserTool } from '../packages/tui/src/renderer/ask-user';
-import {
-  createPermissionGuardrail,
-  ToolPermissionChecker,
-} from '../packages/tui/src/renderer/tool-confirm';
+import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
+import { ToolPermissionChecker } from '../packages/tui/src/renderer/tool-confirm';
 import { type PluginProvider, StaticRegistry } from './plugin-registry';
 
 export interface BootstrapOptions {
@@ -154,31 +151,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     if (p) plugins.push(p);
   }
 
-  // 工具权限确认 guardrail（仅交互模式）
-  // ask_user 自身就是用户交互，不再额外弹 y/n 确认，避免双重交互
-  let permissionChecker: ToolPermissionChecker | undefined;
+  // ask-user 交互工具——普通工具对象（ADR-029，不再合成注册 + bridge）。
+  // 仅交互模式注册；headless 无 TUI 订阅者，注册只会 waitFor 超时挂起。
   if (!headless) {
-    permissionChecker = new ToolPermissionChecker({ enabled: true });
-    const guardrail = createPermissionGuardrail(permissionChecker, ['ask_user']);
-    plugins.push({
-      name: 'tool-permission',
-      install: (host) => {
-        host.registerGuardrail(guardrail);
-      },
-    });
-  }
-
-  // ask-user 交互工具（仅交互模式）——与 tool-permission 同构：合成插件 + bridge 注入
-  let askUserBridge: AskUserBridge | undefined;
-  if (!headless) {
-    askUserBridge = new AskUserBridge();
-    const askUserTool = createAskUserTool(askUserBridge);
-    plugins.push({
-      name: 'ask-user',
-      install: (host) => {
-        host.registerTool(askUserTool);
-      },
-    });
+    tools.register(createAskUserTool());
   }
 
   // ── Runtime ─────────────────────────────────────
@@ -199,6 +175,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
 
   // 采集插件注册的工具定义（仅交互模式）
+  // 同时给工具挂 checkPermission（ADR-029：权限下沉到工具节点，'ask' 由 runtime 事件流等用户）
   if (!headless) {
     const displayHost = new MemoryPluginHost();
     const origLog = console.log;
@@ -217,11 +194,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       console.log = origLog;
       console.error = origErr;
     }
+    // 复用同一检查器；displayHost 与 runtime pluginHost 持有同一批工具对象引用，改它即改 runtime
+    const permissionChecker = new ToolPermissionChecker({
+      enabled: true,
+      autoApprove: ['ask_user'],
+    });
     for (const t of displayHost.listTools()) {
       try {
         tools.register(t);
       } catch {
         // 重名工具跳过
+      }
+      if (!t.checkPermission) {
+        t.checkPermission = permissionChecker.forTool(t.name);
       }
     }
   }
@@ -233,8 +218,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     session,
     events,
     context,
-    permissionChecker,
-    askUserBridge,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;

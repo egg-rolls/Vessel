@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { MemoryLimitChecker } from '../limits/limit-checker.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
-import { EventType } from '../types/event.js';
+import { EventType, PermissionEvent } from '../types/event.js';
 import { type GuardrailContext, GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
@@ -16,6 +16,9 @@ import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
 import type { ToolRegistry } from '../types/tool.js';
 import { MemoryPluginHost } from './plugin-host.js';
+
+/** checkPermission 返回 'ask' 时，等待用户 allow/deny 决定的事件超时（毫秒） */
+const PERMISSION_TIMEOUT_MS = 120_000;
 
 /** Run 选项 */
 export interface RunOptions {
@@ -34,7 +37,8 @@ export class AgentRuntime {
   private model: string;
   private tools: ToolRegistry;
   private context: ContextManager;
-  private events: EventStream;
+  /** 事件流（公开只读——headless/外部可订阅事件，实现应答策略，ADR-029） */
+  readonly events: EventStream;
   private limits: UsageLimits;
   private termination: TerminationPolicy;
   private session?: SessionBackend;
@@ -489,6 +493,38 @@ export class AgentRuntime {
               args = JSON.parse(toolCall.function.arguments);
             } catch {
               args = {};
+            }
+
+            // 权限判定（ADR-026/029：工具自带 checkPermission；'ask' 时用事件流等用户 allow/deny）
+            if (pluginTool.checkPermission) {
+              const toolCtx = {
+                run_id: runId,
+                session_id: sessionId,
+                messages: this.context.messages,
+                events: this.events,
+              };
+              const decision = await pluginTool.checkPermission(args, toolCtx);
+              if (decision === 'deny') {
+                throw new Error(`Tool "${toolName}" execution denied by permission policy`);
+              }
+              if (decision === 'ask') {
+                const requestId = randomUUID();
+                this.publishEvent({
+                  type: PermissionEvent.Requested,
+                  run_id: runId,
+                  data: { requestId, tool: toolName, input: args },
+                  ts: Date.now(),
+                });
+                const decided = (await this.events.waitFor(PermissionEvent.Decided, {
+                  requestId,
+                  timeout: PERMISSION_TIMEOUT_MS,
+                })) as { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean } | undefined;
+                const userDecision =
+                  decided?.decision ?? (decided?.allowed === false ? 'deny' : 'allow');
+                if (userDecision !== 'allow') {
+                  throw new Error(`Tool "${toolName}" execution denied by user`);
+                }
+              }
             }
 
             const result = await pluginTool.handler(args, {
