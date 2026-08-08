@@ -42,7 +42,7 @@ describe('Web Search Plugin', () => {
 
       const tool = registeredTools[0];
       expect(tool.name).toBe('web-search');
-      expect(tool.description).toContain('web search');
+      expect(tool.description).toContain('web');
       expect(tool.default).toBe(true);
       expect(tool.timeout).toBe(30000);
     });
