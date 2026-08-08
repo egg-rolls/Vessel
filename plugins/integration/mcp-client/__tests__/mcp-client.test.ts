@@ -81,4 +81,38 @@ describe('mcp-client 插件（P2）', () => {
     );
     expect(result).toContain('连接失败');
   });
+
+  it('mcp_connect 声明 checkPermission（危险工具需授权）', () => {
+    const mcpConnectTool = host.listTools().find((t) => t.name === 'mcp_connect');
+    expect(mcpConnectTool).toBeDefined();
+    expect(mcpConnectTool?.interactive).toBe(true);
+    expect(typeof mcpConnectTool?.checkPermission).toBe('function');
+  });
+
+  it('mcp_connect checkPermission 通过事件流等待授权（allow）', async () => {
+    const mcpConnectTool = host.listTools().find((t) => t.name === 'mcp_connect');
+    expect(mcpConnectTool).toBeDefined();
+    const stream = new MemoryEventStream();
+    // 模拟前端订阅授权请求并异步回复
+    stream.subscribe((event) => {
+      if (event.type === 'tool.permission.request') {
+        setTimeout(() => {
+          stream.publish({
+            type: 'tool.permission.response',
+            run_id: event.run_id,
+            data: {
+              requestId: (event.data as { requestId: string }).requestId,
+              decision: 'allow',
+            },
+            ts: Date.now(),
+          });
+        }, 0);
+      }
+    });
+    const decision = await mcpConnectTool?.checkPermission?.(
+      { name: 'srv', command: 'npx' },
+      { run_id: 'r1', messages: [], events: stream },
+    );
+    expect(decision).toBe('allow');
+  });
 });
