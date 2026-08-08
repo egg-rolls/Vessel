@@ -1,9 +1,5 @@
-/**
- * Web Search Plugin Tests
- */
-
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { PluginHost, ToolDefinition } from '@vessel/core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createWebSearchPlugin } from '../index.js';
 
 describe('Web Search Plugin', () => {
@@ -13,23 +9,23 @@ describe('Web Search Plugin', () => {
   beforeEach(() => {
     registeredTools = [];
     mockHost = {
-      registerTool: vi.fn((tool: ToolDefinition) => {
+      registerTool: mock((tool: ToolDefinition) => {
         registeredTools.push(tool);
       }),
-      registerProvider: vi.fn(),
-      registerGuardrail: vi.fn(),
-      registerHook: vi.fn(),
-      getTool: vi.fn(),
-      getProvider: vi.fn(),
-      getGuardrails: vi.fn().mockReturnValue([]),
-      getHooks: vi.fn().mockReturnValue([]),
-      listTools: vi.fn().mockReturnValue([]),
-      listProviders: vi.fn().mockReturnValue([]),
+      registerProvider: mock(() => {}),
+      registerGuardrail: mock(() => {}),
+      registerHook: mock(() => {}),
+      getTool: mock(() => undefined),
+      getProvider: mock(() => undefined),
+      getGuardrails: mock(() => []),
+      getHooks: mock(() => []),
+      listTools: mock(() => []),
+      listProviders: mock(() => []),
     };
   });
 
   afterEach(() => {
-    vi.restoreAllMocks();
+    registeredTools = [];
   });
 
   describe('Plugin Registration', () => {
@@ -130,20 +126,23 @@ describe('Web Search Plugin', () => {
     });
 
     it('should call Tavily API with correct parameters', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: vi.fn().mockResolvedValue({
-          results: [
-            {
-              title: 'Test Result',
-              url: 'https://example.com',
-              content: 'Test content',
-              score: 0.95,
-            },
-          ],
-          query: 'test query',
+      const mockFetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              results: [
+                {
+                  title: 'Test Result',
+                  url: 'https://example.com',
+                  content: 'Test content',
+                  score: 0.95,
+                },
+              ],
+              query: 'test query',
+            }),
         }),
-      });
+      );
 
       globalThis.fetch = mockFetch;
 
@@ -167,21 +166,24 @@ describe('Web Search Plugin', () => {
     });
 
     it('should format search results correctly', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: vi.fn().mockResolvedValue({
-          results: [
-            {
-              title: 'Test Result',
-              url: 'https://example.com',
-              content: 'Test content',
-              score: 0.95,
-            },
-          ],
-          answer: 'Test answer',
-          query: 'test query',
+      const mockFetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              results: [
+                {
+                  title: 'Test Result',
+                  url: 'https://example.com',
+                  content: 'Test content',
+                  score: 0.95,
+                },
+              ],
+              answer: 'Test answer',
+              query: 'test query',
+            }),
         }),
-      });
+      );
 
       globalThis.fetch = mockFetch;
 
@@ -202,11 +204,13 @@ describe('Web Search Plugin', () => {
     });
 
     it('should handle API errors gracefully', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 401,
-        text: vi.fn().mockResolvedValue('Unauthorized'),
-      });
+      const mockFetch = mock(() =>
+        Promise.resolve({
+          ok: false,
+          status: 401,
+          text: () => Promise.resolve('Unauthorized'),
+        }),
+      );
 
       globalThis.fetch = mockFetch;
 
@@ -221,7 +225,7 @@ describe('Web Search Plugin', () => {
     });
 
     it('should handle network errors gracefully', async () => {
-      const mockFetch = vi.fn().mockRejectedValue(new Error('Network error'));
+      const mockFetch = mock(() => Promise.reject(new Error('Network error')));
 
       globalThis.fetch = mockFetch;
 
@@ -236,13 +240,16 @@ describe('Web Search Plugin', () => {
     });
 
     it('should use custom baseUrl when provided', async () => {
-      const mockFetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: vi.fn().mockResolvedValue({
-          results: [],
-          query: 'test',
+      const mockFetch = mock(() =>
+        Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              results: [],
+              query: 'test',
+            }),
         }),
-      });
+      );
 
       globalThis.fetch = mockFetch;
 
