@@ -8,6 +8,7 @@
 import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
+import { MemoryEventStream } from '@vessel/core';
 
 /** 文件操作配置 */
 export interface FileOpsConfig {
@@ -162,7 +163,7 @@ function createFileTools(config: FileOpsConfig = {}): ToolDefinition[] {
                   recursive: true,
                   pattern,
                 },
-                { run_id: '', messages: [] },
+                { run_id: '', messages: [], events: new MemoryEventStream() },
               );
               if (typeof subEntries === 'string') {
                 const lines = subEntries.split('\n').filter((l) => l.trim());

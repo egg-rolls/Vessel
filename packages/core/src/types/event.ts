@@ -5,23 +5,34 @@
 
 import type { StreamChunk } from './provider.js';
 
-/** 事件类型枚举 */
-export enum EventType {
-  RunStarted = 'run.started',
-  LlmRequest = 'llm.request',
-  LlmResponse = 'llm.response',
-  LlmStreamChunk = 'llm.stream.chunk',
-  ToolCallStarted = 'tool.call.started',
-  ToolCallCompleted = 'tool.call.completed',
-  ToolCallFailed = 'tool.call.failed',
-  GuardrailBlocked = 'guardrail.blocked',
-  GuardrailModified = 'guardrail.modified',
-  RunCompleted = 'run.completed',
-  RunFailed = 'run.failed',
-  SessionCreated = 'session.created',
-  SessionLoaded = 'session.loaded',
-  Error = 'error',
-}
+/** 核心事件名常量（ADR-027：事件名+payload 开放，核心事件保留常量保证拼写稳定） */
+export const EventType = {
+  RunStarted: 'run.started',
+  LlmRequest: 'llm.request',
+  LlmResponse: 'llm.response',
+  LlmStreamChunk: 'llm.stream.chunk',
+  ToolCallStarted: 'tool.call.started',
+  ToolCallCompleted: 'tool.call.completed',
+  ToolCallFailed: 'tool.call.failed',
+  GuardrailBlocked: 'guardrail.blocked',
+  GuardrailModified: 'guardrail.modified',
+  RunCompleted: 'run.completed',
+  RunFailed: 'run.failed',
+  SessionCreated: 'session.created',
+  SessionLoaded: 'session.loaded',
+  Error: 'error',
+} as const;
+
+/** 核心事件名类型（值联合；RunEvent.type 已放宽为 string，扩展事件用任意字符串，无需改 core） */
+export type EventType = (typeof EventType)[keyof typeof EventType];
+
+/** 权限确认事件名（ADR-029：checkPermission 返回 'ask' 时，runtime 发请求事件、事件流等用户 allow/deny）
+ *  沿用插件既有约定 `tool.permission.request` / `tool.permission.response`（见 plugins/* requestPermission），
+ *  避免两套协议并存导致工具自带 checkPermission 的 30s 等待后再走 runtime 兜底。 */
+export const PermissionEvent = {
+  Requested: 'tool.permission.request',
+  Decided: 'tool.permission.response',
+} as const;
 
 /** 基础事件 payload */
 interface BaseEventPayload {
@@ -150,11 +161,11 @@ export type EventPayload =
   | ErrorPayload
   | BaseEventPayload;
 
-/** Run 事件 */
+/** Run 事件（ADR-027：type 放宽为 string，插件可发布自定义事件名；核心事件名见 EventType 常量） */
 export interface RunEvent {
-  type: EventType;
+  type: string;
   run_id: string;
-  data: EventPayload;
+  data: EventPayload | Record<string, unknown>;
   ts: number;
 }
 
@@ -171,4 +182,12 @@ export interface EventStream {
   clear(): void;
   /** 获取事件历史（按 run_id 过滤，不传返回全部） */
   getHistory(runId?: string): RunEvent[];
+  /**
+   * 等待一次匹配事件（ADR-027）。工具用它实现交互暂停：发请求事件 → 等回复事件。
+   * @param name 事件名
+   * @param opts.requestId 匹配 payload 中的 requestId（防多实例串台）
+   * @param opts.timeout 超时毫秒（默认 30000），超时 reject
+   * @returns 匹配事件的 data
+   */
+  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown>;
 }

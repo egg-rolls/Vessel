@@ -11,6 +11,17 @@
 
 ---
 
+## 〇、用户工具扩展层（#95）
+
+用户加工具**运行时生效**，不碰源码、不跑构建（ADR-028）。两种注册 Provider，与 MCP（mcp-client）并列：
+
+- **DirScanner**：扫描 `~/.vessel/tools/`（用户级）与 `./tools/`（项目级），运行时加载自描述工具文件（#91）。放一个 `.ts`/`.js` 文件即被识别。
+- **ConfigDeclared**：读 `vessel.yaml` 的 `tools` 声明（命令/url），启动即连接注册。
+
+bootstrap 用 `CompositeProvider` 组合内置 StaticRegistry + 用户 DirScanner/ConfigDeclared，三类来源并存。详见 [SPEC §6.2.4](SPEC.md)。
+
+---
+
 ## 一、能力工具
 
 > **默认工具**（`default: true` = 启动时自动在 system prompt 中列出）：`file-ops`、`grep`、`web-search`、`web-fetch`。

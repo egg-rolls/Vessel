@@ -79,6 +79,48 @@ export class MemoryEventStream implements EventStream {
   }
 
   /**
+   * 等待一次匹配事件（ADR-027：工具交互暂停原语）。
+   * 订阅事件流，收到 name 匹配（且 requestId 匹配）的事件时 resolve 其 data；
+   * 超时 reject。收到匹配事件后自动取消订阅。
+   */
+  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown> {
+    const timeoutMs = opts?.timeout ?? 30000;
+
+    // 先查历史：发布请求事件时若订阅者同步应答（如 headless 自动允许 / 测试自动应答），
+    // 回答事件已入历史，直接 resolve，避免「先 publish 后 waitFor」的竞态丢事件。
+    // 仅带 requestId 时回放历史——交互暂停事件必带 requestId（UUID，不会撞旧事件）。
+    if (opts?.requestId !== undefined) {
+      const existing = this.history.find(
+        (e) =>
+          e.type === name &&
+          (e.data as Record<string, unknown> | undefined)?.requestId === opts.requestId,
+      );
+      if (existing) {
+        return Promise.resolve(existing.data);
+      }
+    }
+
+    return new Promise((resolve, reject) => {
+      let unsubscribe: Unsubscribe | undefined;
+      const timer = setTimeout(() => {
+        unsubscribe?.();
+        reject(new Error(`Timed out after ${timeoutMs}ms waiting for event "${name}"`));
+      }, timeoutMs);
+
+      unsubscribe = this.subscribe((event) => {
+        if (event.type !== name) return;
+        const data = event.data as Record<string, unknown>;
+        if (opts?.requestId !== undefined && data?.requestId !== opts.requestId) {
+          return;
+        }
+        unsubscribe?.();
+        clearTimeout(timer);
+        resolve(event.data);
+      });
+    });
+  }
+
+  /**
    * 获取订阅者数量
    */
   get subscriberCount(): number {

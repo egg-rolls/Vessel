@@ -2,16 +2,34 @@
  * ask-user 交互能力 — Agent 向用户提问
  * @module @vessel/tui
  *
- * 与 tool-permission（renderer/tool-confirm.ts）同构：交互类定义在 TUI 层，
- * bootstrap 创建 bridge 实例并以合成插件注册工具，TUI 注入 onPrompt 回调。
- *
- * 采用 Hermes 的回调注入模式：Agent 线程调 bridge.prompt() 返回 Promise（阻塞），
- * 前端线程通过 onPrompt 接收问题，用户回答后调 respond()/cancel() 解除阻塞。
- * 未来 desktop/web 前端只需各自实现 onPrompt 注入，机制不变。
+ * ADR-029：暂停型工具事件流化——ask-user 回归普通工具对象，
+ * handler 发 `ask.user.requested` 事件 → 事件流等 `ask.user.answered` →
+ * 返回回答。TUI 订阅请求事件展示弹窗，用户作答后发布回答事件。
+ * 不同组件交流全走事件流，无直接回调（AskUserBridge 已退役）。
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ToolDefinition } from '@vessel/core';
+import type { EventStream, ToolDefinition } from '@vessel/core';
+
+// ── 事件名与载荷 ──────────────────────────────────
+
+/** ask-user 事件名（ADR-029） */
+export const AskUserEvent = {
+  Requested: 'ask.user.requested',
+  Answered: 'ask.user.answered',
+} as const;
+
+/** ask.user.requested 事件载荷（TUI 订阅展示） */
+export interface AskUserRequestedData {
+  requestId: string;
+  questions: AskUserQuestion[];
+}
+
+/** ask.user.answered 事件载荷（TUI 发布回答；answers 为空 = 用户取消） */
+export interface AskUserAnsweredData {
+  requestId: string;
+  answers: AskUserAnswer[];
+}
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -37,84 +55,6 @@ export interface AskUserAnswer {
   header: string;
   question: string;
   answer: string;
-}
-
-/** bridge 触发前端时的事件载荷 */
-export interface AskUserPromptEvent {
-  id: string;
-  questions: AskUserQuestion[];
-}
-
-// ── Bridge ────────────────────────────────────────
-
-/**
- * AskUserBridge — Agent 线程和前端之间的 Promise 桥接
- *
- * 对应 Hermes 的 _block() / _respond() 模式。
- * Agent 线程调 prompt() 返回 Promise（在此"阻塞"），
- * 前端线程通过 onPrompt 接收问题，用户回答后调 respond() 解除阻塞。
- *
- * 本类不依赖任何终端细节（Ink/readline）——渲染与输入交给前端注入的
- * onPrompt/respond。这样 desktop/web 等新前端只需各自实现注入。
- */
-export class AskUserBridge {
-  private pending = new Map<
-    string,
-    {
-      input: AskUserInput;
-      resolve: (answers: AskUserAnswer[]) => void;
-      reject: (err: Error) => void;
-    }
-  >();
-
-  /**
-   * Agent 线程调用——暂停并等待用户输入
-   * @returns Promise，resolve 时携带每个问题的回答
-   */
-  async prompt(input: AskUserInput): Promise<AskUserAnswer[]> {
-    // 兜底：没有任何前端注入 onPrompt（如非 TTY 简单模式）时立即报错，
-    // 避免 pending Promise 永不 resolve 导致 Agent 永久挂起。
-    if (!this.onPrompt) {
-      throw new Error('ask_user: no interactive frontend is connected to handle the prompt');
-    }
-    const id = randomUUID();
-    return new Promise<AskUserAnswer[]>((resolve, reject) => {
-      this.pending.set(id, { input, resolve, reject });
-      this.onPrompt?.({
-        id,
-        questions: input.questions,
-      });
-    });
-  }
-
-  /** 前端调用——用户已回答全部问题，解除阻塞 */
-  respond(id: string, answers: AskUserAnswer[]): void {
-    const entry = this.pending.get(id);
-    if (entry) {
-      entry.resolve(answers);
-      this.pending.delete(id);
-    }
-  }
-
-  /** 前端调用——用户取消或超时 */
-  cancel(id: string, reason = 'User cancelled'): void {
-    const entry = this.pending.get(id);
-    if (entry) {
-      entry.reject(new Error(reason));
-      this.pending.delete(id);
-    }
-  }
-
-  /** 取消所有待处理请求（cleanup 用） */
-  cancelAll(reason = 'Session ended'): void {
-    for (const [id, entry] of this.pending) {
-      entry.reject(new Error(reason));
-      this.pending.delete(id);
-    }
-  }
-
-  /** 前端设置此回调以接收 prompt 事件 */
-  onPrompt?: (event: AskUserPromptEvent) => void;
 }
 
 // ── 校验与格式化 ──────────────────────────────────
@@ -160,41 +100,51 @@ function formatAnswers(answers: AskUserAnswer[]): string {
   return answers.map((a, i) => `${i + 1}. ${a.header}: ${a.answer}`).join('\n');
 }
 
-// ── 工具 handler ──────────────────────────────────
+/** 发请求事件 + 事件流等回答；无 TUI 订阅者时 waitFor 超时返回错误（headless 兜底） */
+async function promptFromEvents(
+  events: EventStream,
+  runId: string,
+  questions: AskUserQuestion[],
+  timeoutMs: number,
+): Promise<string> {
+  const requestId = randomUUID();
+  events.publish({
+    type: AskUserEvent.Requested,
+    run_id: runId,
+    data: { requestId, questions } satisfies AskUserRequestedData,
+    ts: Date.now(),
+  });
 
-function createAskUserHandler(bridge: AskUserBridge): ToolDefinition['handler'] {
-  return async (args: unknown) => {
-    const input = args as AskUserInput;
-
-    const normalized = normalizeQuestions(input);
-    if (typeof normalized === 'string') return normalized;
-
-    try {
-      const answers = await bridge.prompt({ questions: normalized });
-      return formatAnswers(answers);
-    } catch (error) {
-      return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  try {
+    const data = (await events.waitFor(AskUserEvent.Answered, {
+      requestId,
+      timeout: timeoutMs,
+    })) as AskUserAnsweredData | undefined;
+    const answers = data?.answers ?? [];
+    if (answers.length === 0) {
+      return 'Error: ask_user was cancelled or received no answers.';
     }
-  };
-}
-
-/** 无 bridge（headless 等无前端场景）时直接返回错误 */
-function createHeadlessHandler(): ToolDefinition['handler'] {
-  return async () => {
-    return 'Error: ask_user is not available — no interactive frontend is connected.';
-  };
+    return formatAnswers(answers);
+  } catch (error) {
+    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }
 
 // ── 工具定义工厂 ──────────────────────────────────
 
+export interface CreateAskUserToolOptions {
+  /** 等待用户回答的超时（毫秒），默认 120s */
+  timeout?: number;
+}
+
 /**
- * 创建 ask_user 工具定义
+ * 创建 ask_user 工具定义（普通工具对象，ADR-029）
  *
- * @param bridge - AskUserBridge 实例。无前端（headless）时传 undefined，工具返回错误。
- *                 正常由 bootstrap 创建 bridge 实例传入，前端注入 onPrompt。
+ * handler 通过事件流交互：发布 `ask.user.requested` → 等 `ask.user.answered` →
+ * 返回回答。无前端订阅者时 waitFor 超时返回错误。
  */
-export function createAskUserTool(bridge?: AskUserBridge): ToolDefinition {
-  const handler = bridge ? createAskUserHandler(bridge) : createHeadlessHandler();
+export function createAskUserTool(opts: CreateAskUserToolOptions = {}): ToolDefinition {
+  const timeoutMs = opts.timeout ?? 120_000;
 
   return {
     name: 'ask_user',
@@ -242,7 +192,13 @@ Do NOT use for trivial questions you can resolve yourself.`,
       },
       required: ['questions'],
     },
-    handler,
+    handler: async (args, ctx) => {
+      const input = args as AskUserInput;
+      const normalized = normalizeQuestions(input);
+      if (typeof normalized === 'string') return normalized;
+      return promptFromEvents(ctx.events, ctx.run_id, normalized, timeoutMs);
+    },
     default: true,
+    interactive: true,
   };
 }

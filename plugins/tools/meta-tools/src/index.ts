@@ -12,9 +12,15 @@
  * - remove_asset: 删除资产
  */
 
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Plugin, PluginHost, ToolDefinition } from '../../../../packages/core/src/index';
+import type {
+  Plugin,
+  PluginHost,
+  ToolContext,
+  ToolDefinition,
+} from '../../../../packages/core/src/index';
 
 /** 持久化工具模板（安全，不使用 eval/new Function） */
 interface PersistedToolTemplate {
@@ -387,6 +393,35 @@ export interface AssetSummary {
 }
 
 /**
+ * 用事件流等待用户授权（ADR-029）。
+ * 发 `tool.permission.request` 事件 → `waitFor('tool.permission.response', { requestId })`。
+ * 无订阅者/超时时兜底返回 'ask'，交由运行时决定。
+ */
+async function requestPermission(
+  ctx: ToolContext,
+  tool: string,
+  input: unknown,
+  timeout = 30000,
+): Promise<'allow' | 'deny' | 'ask'> {
+  const requestId = randomUUID();
+  ctx.events.publish({
+    type: 'tool.permission.request',
+    run_id: ctx.run_id,
+    data: { requestId, tool, input },
+    ts: Date.now(),
+  });
+  try {
+    const data = (await ctx.events.waitFor('tool.permission.response', {
+      requestId,
+      timeout,
+    })) as { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean };
+    return data.decision ?? (data.allowed === false ? 'deny' : 'allow');
+  } catch {
+    return 'ask';
+  }
+}
+
+/**
  * 创建元工具
  */
 export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
@@ -427,6 +462,9 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
     description:
       'Add a new tool using a safe template (shell command or HTTP request). ' +
       'Use {{ key }} placeholders for parameters.',
+    // 自描述：add_tool 会注册可执行 shell/http 的新工具，属于危险操作，需用户授权
+    interactive: true,
+    checkPermission: async (input, ctx) => requestPermission(ctx, 'add_tool', input),
     inputSchema: {
       type: 'object',
       properties: {
@@ -603,6 +641,9 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
   const patchAssetTool: ToolDefinition = {
     name: 'patch_asset',
     description: 'Update or fix an existing asset',
+    // 自描述：patch_asset 可替换工具 handler/描述，属于危险操作，需用户授权
+    interactive: true,
+    checkPermission: async (input, ctx) => requestPermission(ctx, 'patch_asset', input),
     inputSchema: {
       type: 'object',
       properties: {
@@ -671,6 +712,9 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
   const removeAssetTool: ToolDefinition = {
     name: 'remove_asset',
     description: 'Remove an asset from the registry',
+    // 自描述：remove_asset 删除资产不可恢复，属破坏性操作，需用户授权
+    interactive: true,
+    checkPermission: async (input, ctx) => requestPermission(ctx, 'remove_asset', input),
     inputSchema: {
       type: 'object',
       properties: {

@@ -20,6 +20,22 @@ export interface ToolConfig {
   name: string;
   enabled?: boolean;
   config?: Record<string, unknown>;
+  // ── 声明式工具（ADR-028 ConfigDeclared：vessel.yaml 声明，启动即注册）──
+  description?: string;
+  /** 模板类型：shell（命令）或 http（url）。缺省按 command/url 自动推断 */
+  type?: 'shell' | 'http';
+  /** shell 命令模板，用 {{key}} 占位 */
+  command?: string;
+  /** 命令参数（保留，供后续声明式连接扩展） */
+  args?: string[];
+  /** HTTP URL 模板，用 {{key}} 占位 */
+  url?: string;
+  /** HTTP 方法（默认 GET） */
+  method?: string;
+  /** HTTP 请求头 */
+  headers?: Record<string, string>;
+  /** 工具参数 JSON Schema */
+  inputSchema?: Record<string, unknown>;
 }
 
 /** Guardrail 配置 */
