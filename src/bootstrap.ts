@@ -19,11 +19,7 @@ import {
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
-import { AskUserBridge, createAskUserTool } from '../packages/tui/src/renderer/ask-user';
-import {
-  createPermissionGuardrail,
-  ToolPermissionChecker,
-} from '../packages/tui/src/renderer/tool-confirm';
+import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { ConfigDeclared } from './config-declared';
 import { DirScanner } from './dir-scanner';
 import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
@@ -161,31 +157,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     if (p) plugins.push(p);
   }
 
-  // 工具权限确认 guardrail（仅交互模式）
-  // ask_user 自身就是用户交互，不再额外弹 y/n 确认，避免双重交互
-  let permissionChecker: ToolPermissionChecker | undefined;
+  // ask-user 交互工具——普通工具对象（ADR-029，不再合成注册 + bridge）。
+  // 仅交互模式注册；headless 无 TUI 订阅者，注册只会 waitFor 超时挂起。
   if (!headless) {
-    permissionChecker = new ToolPermissionChecker({ enabled: true });
-    const guardrail = createPermissionGuardrail(permissionChecker, ['ask_user']);
-    plugins.push({
-      name: 'tool-permission',
-      install: (host) => {
-        host.registerGuardrail(guardrail);
-      },
-    });
-  }
-
-  // ask-user 交互工具（仅交互模式）——与 tool-permission 同构：合成插件 + bridge 注入
-  let askUserBridge: AskUserBridge | undefined;
-  if (!headless) {
-    askUserBridge = new AskUserBridge();
-    const askUserTool = createAskUserTool(askUserBridge);
-    plugins.push({
-      name: 'ask-user',
-      install: (host) => {
-        host.registerTool(askUserTool);
-      },
-    });
+    tools.register(createAskUserTool());
   }
 
   // ── Runtime ─────────────────────────────────────
@@ -203,9 +178,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     session,
     plugins,
     systemPrompt: config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。',
+    // 默认权限策略（ADR-029）：交互模式 'ask'（未声明 checkPermission 的工具经事件流确认），
+    // headless 'allow'（无 TUI 订阅者，工具自带 checkPermission 的 'ask' 由 headless-runner 自动允许）。
+    permission: {
+      default: headless ? 'allow' : 'ask',
+      autoApprove: ['ask_user'],
+    },
   });
 
-  // 采集插件注册的工具定义（仅交互模式）
+  // 采集插件注册的工具定义（仅交互模式，供 /tools 展示）。
+  // 注意：displayHost 与 runtime pluginHost 是各自 install 出的不同工具对象，这里只用于展示，
+  // 不在此挂 checkPermission——默认权限策略由 runtime 统一判定（ADR-029，见 AgentRuntime.permission）。
   if (!headless) {
     const displayHost = new MemoryPluginHost();
     const origLog = console.log;
@@ -240,8 +223,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     session,
     events,
     context,
-    permissionChecker,
-    askUserBridge,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;

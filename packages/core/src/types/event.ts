@@ -26,6 +26,14 @@ export const EventType = {
 /** 核心事件名类型（值联合；RunEvent.type 已放宽为 string，扩展事件用任意字符串，无需改 core） */
 export type EventType = (typeof EventType)[keyof typeof EventType];
 
+/** 权限确认事件名（ADR-029：checkPermission 返回 'ask' 时，runtime 发请求事件、事件流等用户 allow/deny）
+ *  沿用插件既有约定 `tool.permission.request` / `tool.permission.response`（见 plugins/* requestPermission），
+ *  避免两套协议并存导致工具自带 checkPermission 的 30s 等待后再走 runtime 兜底。 */
+export const PermissionEvent = {
+  Requested: 'tool.permission.request',
+  Decided: 'tool.permission.response',
+} as const;
+
 /** 基础事件 payload */
 interface BaseEventPayload {
   [key: string]: unknown;

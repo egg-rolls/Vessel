@@ -1,11 +1,10 @@
 /**
- * ask-user 交互能力测试
- * @module @vessel/tui/__tests__
+ * ask-user 交互能力测试（ADR-029：事件流交互）
  */
 
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel/core';
-import { AskUserBridge, createAskUserTool } from '../src/renderer/ask-user';
+import { AskUserEvent, createAskUserTool } from '../src/renderer/ask-user';
 
 /** 便捷构建测试输入 */
 function sampleQuestions() {
@@ -26,119 +25,103 @@ function sampleAnswers(answers: string[]) {
   }));
 }
 
-describe('AskUserBridge', () => {
-  it('prompt() returns answers after respond()', async () => {
-    const bridge = new AskUserBridge();
-    const expected = sampleAnswers(['ESM', '生产']);
-
-    bridge.onPrompt = (event) => {
-      bridge.respond(event.id, expected);
-    };
-
-    const result = await bridge.prompt(sampleQuestions());
-    expect(result).toEqual(expected);
+/** 订阅 ask.user.requested 并自动应答 */
+function autoAnswer(events: MemoryEventStream, answers: ReturnType<typeof sampleAnswers>) {
+  events.subscribe((event) => {
+    if (event.type === AskUserEvent.Requested) {
+      const data = event.data as unknown as { requestId: string };
+      events.publish({
+        type: AskUserEvent.Answered,
+        run_id: event.run_id,
+        data: { requestId: data.requestId, answers },
+        ts: Date.now(),
+      });
+    }
   });
+}
 
-  it('prompt() passes questions in the event', async () => {
-    const bridge = new AskUserBridge();
-    let capturedEvent: unknown;
-
-    bridge.onPrompt = (event) => {
-      capturedEvent = event;
-      bridge.respond(event.id, sampleAnswers(['ESM', '开发']));
-    };
-
-    await bridge.prompt(sampleQuestions());
-
-    const evt = capturedEvent as { id: string; questions: unknown[] };
-    expect(evt.questions).toHaveLength(2);
-    expect(evt.questions[0]).toMatchObject({ header: '格式', question: '用哪种模块格式？' });
-  });
-
-  it('prompt() rejects on cancel()', async () => {
-    const bridge = new AskUserBridge();
-
-    bridge.onPrompt = (event) => {
-      bridge.cancel(event.id, 'Changed my mind');
-    };
-
-    await expect(bridge.prompt(sampleQuestions())).rejects.toThrow('Changed my mind');
-  });
-
-  it('respond() on non-existent id is a no-op', () => {
-    const bridge = new AskUserBridge();
-    bridge.respond('non-existent', sampleAnswers(['x']));
-  });
-
-  it('cancelAll() rejects all pending prompts', async () => {
-    const bridge = new AskUserBridge();
-    // 注入 onPrompt 但保持 pending（不 respond），验证 cancelAll 能清理全部
-    bridge.onPrompt = () => {};
-    const p1 = bridge.prompt(sampleQuestions());
-    const p2 = bridge.prompt(sampleQuestions());
-    p1.catch(() => {});
-    p2.catch(() => {});
-
-    bridge.cancelAll('Shutdown');
-
-    await expect(p1).rejects.toThrow('Shutdown');
-    await expect(p2).rejects.toThrow('Shutdown');
-  });
-
-  it('prompt() throws immediately when no frontend injected onPrompt (no hang)', async () => {
-    const bridge = new AskUserBridge();
-    // 不设置 onPrompt，模拟非 TTY 简单模式等无前端场景
-    await expect(bridge.prompt(sampleQuestions())).rejects.toThrow('no interactive frontend');
-  });
-});
-
-describe('createAskUserTool', () => {
-  it('creates ask_user tool with default:true', () => {
-    const bridge = new AskUserBridge();
-    const tool = createAskUserTool(bridge);
+describe('createAskUserTool（事件流交互）', () => {
+  it('creates ask_user tool with default:true and interactive:true', () => {
+    const tool = createAskUserTool();
 
     expect(tool.name).toBe('ask_user');
     expect(tool.default).toBe(true);
+    expect(tool.interactive).toBe(true);
     expect(tool.inputSchema.required).toContain('questions');
   });
 
-  it('handler invokes bridge.prompt() and returns formatted answers', async () => {
-    const bridge = new AskUserBridge();
-    bridge.onPrompt = (event) => {
-      bridge.respond(event.id, sampleAnswers(['ESM', '生产']));
-    };
+  it('handler publishes ask.user.requested and returns formatted answers', async () => {
+    const events = new MemoryEventStream();
+    autoAnswer(events, sampleAnswers(['ESM', '生产']));
 
-    const tool = createAskUserTool(bridge);
+    const tool = createAskUserTool();
     const result = await tool.handler(sampleQuestions(), {
       run_id: 'r1',
       messages: [],
-      events: new MemoryEventStream(),
+      events,
     });
 
     expect(result).toContain('1. 格式: ESM');
     expect(result).toContain('2. 环境: 生产');
   });
 
-  it('handler normalizes missing header with a fallback', async () => {
-    const bridge = new AskUserBridge();
-    bridge.onPrompt = (event) => {
-      // 断言归一化后的 header 已回退
-      expect(event.questions[0]?.header).toBe('问题 1');
-      bridge.respond(event.id, [{ header: '问题 1', question: '没有任何 header', answer: 'ESM' }]);
-    };
+  it('request event carries the normalized questions', async () => {
+    const events = new MemoryEventStream();
+    let captured:
+      | { requestId: string; questions: Array<{ header: string; question: string }> }
+      | undefined;
 
-    const tool = createAskUserTool(bridge);
+    events.subscribe((event) => {
+      if (event.type === AskUserEvent.Requested) {
+        captured = event.data as unknown as typeof captured;
+        events.publish({
+          type: AskUserEvent.Answered,
+          run_id: event.run_id,
+          data: { requestId: captured?.requestId ?? '', answers: sampleAnswers(['ESM', '开发']) },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const tool = createAskUserTool();
+    await tool.handler(sampleQuestions(), { run_id: 'r1', messages: [], events });
+
+    expect(captured?.questions).toHaveLength(2);
+    expect(captured?.questions[0]).toMatchObject({ header: '格式', question: '用哪种模块格式？' });
+  });
+
+  it('handler normalizes missing header with a fallback', async () => {
+    const events = new MemoryEventStream();
+    events.subscribe((event) => {
+      if (event.type === AskUserEvent.Requested) {
+        const data = event.data as unknown as {
+          requestId: string;
+          questions: Array<{ header: string }>;
+        };
+        expect(data.questions[0]?.header).toBe('问题 1');
+        events.publish({
+          type: AskUserEvent.Answered,
+          run_id: event.run_id,
+          data: {
+            requestId: data.requestId,
+            answers: [{ header: '问题 1', question: '没有任何 header', answer: 'ESM' }],
+          },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const tool = createAskUserTool();
     const result = await tool.handler(
       { questions: [{ question: '没有任何 header' }] },
-      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+      { run_id: 'r1', messages: [], events },
     );
 
     expect(result).toContain('问题 1');
   });
 
   it('handler returns error when questions is empty', async () => {
-    const bridge = new AskUserBridge();
-    const tool = createAskUserTool(bridge);
+    const tool = createAskUserTool();
     const result = await tool.handler(
       { questions: [] },
       { run_id: 'r1', messages: [], events: new MemoryEventStream() },
@@ -149,9 +132,7 @@ describe('createAskUserTool', () => {
   });
 
   it('handler returns error when too many questions', async () => {
-    const bridge = new AskUserBridge();
-    const tool = createAskUserTool(bridge);
-
+    const tool = createAskUserTool();
     const five = Array.from({ length: 5 }, (_, i) => ({
       header: `q${i}`,
       question: `question ${i}`,
@@ -166,8 +147,7 @@ describe('createAskUserTool', () => {
   });
 
   it('handler returns error when a question has invalid options', async () => {
-    const bridge = new AskUserBridge();
-    const tool = createAskUserTool(bridge);
+    const tool = createAskUserTool();
     const result = await tool.handler(
       { questions: [{ header: 'h', question: 'q', options: ['only one'] }] },
       { run_id: 'r1', messages: [], events: new MemoryEventStream() },
@@ -178,8 +158,7 @@ describe('createAskUserTool', () => {
   });
 
   it('handler returns error when question text is missing', async () => {
-    const bridge = new AskUserBridge();
-    const tool = createAskUserTool(bridge);
+    const tool = createAskUserTool();
     const result = await tool.handler(
       { questions: [{ header: 'h', question: '   ' }] },
       { run_id: 'r1', messages: [], events: new MemoryEventStream() },
@@ -189,15 +168,40 @@ describe('createAskUserTool', () => {
     expect(result).toContain('question is required');
   });
 
-  it('without bridge (headless), handler returns error', async () => {
-    const tool = createAskUserTool(); // no bridge
+  it('empty answers (user cancel) returns an error', async () => {
+    const events = new MemoryEventStream();
+    events.subscribe((event) => {
+      if (event.type === AskUserEvent.Requested) {
+        const data = event.data as unknown as { requestId: string };
+        events.publish({
+          type: AskUserEvent.Answered,
+          run_id: event.run_id,
+          data: { requestId: data.requestId, answers: [] },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const tool = createAskUserTool();
     const result = await tool.handler(sampleQuestions(), {
       run_id: 'r1',
       messages: [],
-      events: new MemoryEventStream(),
+      events,
     });
 
     expect(result).toContain('Error');
-    expect(result).toContain('no interactive frontend');
+  });
+
+  it('times out with error when no subscriber answers (headless fallback)', async () => {
+    const events = new MemoryEventStream();
+    const tool = createAskUserTool({ timeout: 50 });
+    const result = await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events,
+    });
+
+    expect(result).toContain('Error');
+    expect(result).toContain('Timed out');
   });
 });

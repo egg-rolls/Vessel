@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { MemoryLimitChecker } from '../limits/limit-checker.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
-import { EventType } from '../types/event.js';
+import { EventType, PermissionEvent } from '../types/event.js';
 import { type GuardrailContext, GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
@@ -16,6 +16,9 @@ import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
 import type { ToolRegistry } from '../types/tool.js';
 import { MemoryPluginHost } from './plugin-host.js';
+
+/** checkPermission 返回 'ask' 时，等待用户 allow/deny 决定的事件超时（毫秒） */
+const PERMISSION_TIMEOUT_MS = 120_000;
 
 /** Run 选项 */
 export interface RunOptions {
@@ -34,7 +37,8 @@ export class AgentRuntime {
   private model: string;
   private tools: ToolRegistry;
   private context: ContextManager;
-  private events: EventStream;
+  /** 事件流（公开只读——headless/外部可订阅事件，实现应答策略，ADR-029） */
+  readonly events: EventStream;
   private limits: UsageLimits;
   private termination: TerminationPolicy;
   private session?: SessionBackend;
@@ -42,6 +46,11 @@ export class AgentRuntime {
   private limitChecker: MemoryLimitChecker;
   private stats: UsageStats;
   private systemPrompt?: string;
+  // ── 默认权限策略（ADR-029：未声明 checkPermission 的工具用此判定）──
+  private permissionDefault: 'allow' | 'ask';
+  private permissionAutoApprove: Set<string>;
+  /** remember-always 持久化（本次 run 内记住，后续同工具免确认） */
+  private permissionApproved: Set<string>;
 
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -54,6 +63,10 @@ export class AgentRuntime {
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
     this.limitChecker = new MemoryLimitChecker();
+    // 默认权限策略：库默认 'allow'（不确认），由 app 层显式开启 'ask'（交互确认）
+    this.permissionDefault = opts.permission?.default ?? 'allow';
+    this.permissionAutoApprove = new Set(opts.permission?.autoApprove ?? []);
+    this.permissionApproved = new Set();
 
     // 初始化使用量统计
     this.stats = {
@@ -489,6 +502,60 @@ export class AgentRuntime {
               args = JSON.parse(toolCall.function.arguments);
             } catch {
               args = {};
+            }
+
+            // 权限判定（ADR-026/029）：
+            // - 工具自带 checkPermission → 用工具的判定；
+            // - 未声明 → 默认策略：permissionDefault 'ask'（且非 autoApprove/已记住）则走事件流确认。
+            //   库默认 'allow'（不确认），交互模式由 app 层传 permission.default='ask' 开启。
+            const toolCtx = {
+              run_id: runId,
+              session_id: sessionId,
+              messages: this.context.messages,
+              events: this.events,
+            };
+            let decision: 'allow' | 'deny' | 'ask';
+            if (pluginTool.checkPermission) {
+              decision = await pluginTool.checkPermission(args, toolCtx);
+            } else if (
+              this.permissionDefault === 'allow' ||
+              this.permissionAutoApprove.has(toolName) ||
+              this.permissionApproved.has(toolName)
+            ) {
+              decision = 'allow';
+            } else {
+              decision = 'ask';
+            }
+            if (decision === 'deny') {
+              throw new Error(`Tool "${toolName}" execution denied by permission policy`);
+            }
+            if (decision === 'ask') {
+              const requestId = randomUUID();
+              this.publishEvent({
+                type: PermissionEvent.Requested,
+                run_id: runId,
+                data: { requestId, tool: toolName, input: args },
+                ts: Date.now(),
+              });
+              const decided = (await this.events.waitFor(PermissionEvent.Decided, {
+                requestId,
+                timeout: PERMISSION_TIMEOUT_MS,
+              })) as
+                | {
+                    decision?: 'allow' | 'deny' | 'ask';
+                    allowed?: boolean;
+                    remember?: boolean;
+                  }
+                | undefined;
+              const userDecision =
+                decided?.decision ?? (decided?.allowed === false ? 'deny' : 'allow');
+              if (userDecision !== 'allow') {
+                throw new Error(`Tool "${toolName}" execution denied by user`);
+              }
+              // 用户选 "always" → 记住，后续同工具不再确认
+              if (decided?.remember) {
+                this.permissionApproved.add(toolName);
+              }
             }
 
             const result = await pluginTool.handler(args, {

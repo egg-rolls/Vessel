@@ -85,6 +85,21 @@ export class MemoryEventStream implements EventStream {
    */
   waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown> {
     const timeoutMs = opts?.timeout ?? 30000;
+
+    // 先查历史：发布请求事件时若订阅者同步应答（如 headless 自动允许 / 测试自动应答），
+    // 回答事件已入历史，直接 resolve，避免「先 publish 后 waitFor」的竞态丢事件。
+    // 仅带 requestId 时回放历史——交互暂停事件必带 requestId（UUID，不会撞旧事件）。
+    if (opts?.requestId !== undefined) {
+      const existing = this.history.find(
+        (e) =>
+          e.type === name &&
+          (e.data as Record<string, unknown> | undefined)?.requestId === opts.requestId,
+      );
+      if (existing) {
+        return Promise.resolve(existing.data);
+      }
+    }
+
     return new Promise((resolve, reject) => {
       let unsubscribe: Unsubscribe | undefined;
       const timer = setTimeout(() => {

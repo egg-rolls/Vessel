@@ -2,6 +2,9 @@
  * AskUserDialog — Agent 多问题问答弹窗（slide 式）
  * @module @vessel/tui
  *
+ * ADR-029：组件间交流全走事件流——本组件订阅 `ask.user.requested` 展示问题，
+ * 用户作答后发布 `ask.user.answered`（answers 为空 = 用户取消）。
+ *
  * 支持：
  * - 一次问 1-4 个问题，Tab/←→ 切换（slide）
  * - 选择题（↑↓ 选择）+ 多选（Space）+ 默认"输入你自己的答案"选项
@@ -12,15 +15,22 @@
  * ReviewPage / ChoiceOptions 子组件。
  */
 
+import type { EventStream } from '@vessel/core';
 import { Box, type Key, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useState } from 'react';
-import type { AskUserAnswer, AskUserQuestion } from '../renderer/ask-user.js';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  type AskUserAnswer,
+  AskUserEvent,
+  type AskUserQuestion,
+  type AskUserRequestedData,
+} from '../renderer/ask-user.js';
 
 export interface AskUserDialogProps {
-  questions: AskUserQuestion[];
-  onSubmit: (answers: AskUserAnswer[]) => void;
-  onCancel: () => void;
+  /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
+  events: EventStream;
+  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键） */
+  onActiveChange?: (active: boolean) => void;
 }
 
 /** 每个选择题末尾默认追加的自定义输入选项 */
@@ -29,6 +39,11 @@ const CUSTOM_OPTION = '输入你自己的答案';
 interface AnswerState {
   selected: Set<string>;
   custom: string;
+}
+
+/** 活跃请求状态 */
+interface ActivePrompt extends AskUserRequestedData {
+  run_id: string;
 }
 
 // ── 子组件：顶部 Tab 行 ──────────────────────────
@@ -185,16 +200,37 @@ function ChoiceOptions({
 
 // ── 主组件 ───────────────────────────────────────
 
-export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogProps) {
+export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
+  const [prompt, setPrompt] = useState<ActivePrompt | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [view, setView] = useState<'question' | 'review'>('question');
   const [selectIndex, setSelectIndex] = useState(0);
   const [customFocus, setCustomFocus] = useState(false);
   const [notice, setNotice] = useState('');
-  const [answers, setAnswers] = useState<AnswerState[]>(() =>
-    questions.map(() => ({ selected: new Set<string>(), custom: '' })),
-  );
+  const [answers, setAnswers] = useState<AnswerState[]>([]);
 
+  // 订阅 ask.user.requested：收到即展示问题（事件流取代回调注入，ADR-029）
+  useEffect(() => {
+    const unsubscribe = events.subscribe((event) => {
+      if (event.type !== AskUserEvent.Requested) return;
+      const data = event.data as unknown as AskUserRequestedData;
+      setPrompt({ ...data, run_id: event.run_id });
+      setCurrentIndex(0);
+      setView('question');
+      setSelectIndex(0);
+      setCustomFocus(false);
+      setNotice('');
+      setAnswers(data.questions.map(() => ({ selected: new Set<string>(), custom: '' })));
+    });
+    return unsubscribe;
+  }, [events]);
+
+  // 通知父组件激活状态（隐藏输入框、拦截按键）
+  useEffect(() => {
+    onActiveChange?.(prompt !== null);
+  }, [prompt, onActiveChange]);
+
+  const questions = prompt?.questions ?? [];
   const total = questions.length;
   const displayOptions =
     questions[currentIndex]?.options && questions[currentIndex].options.length > 0
@@ -285,15 +321,35 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
     }
   }, [currentIndex, total, gotoNext]);
 
+  /** 发布 ask.user.answered（answers 为空 = 取消，工具 handler 返回错误） */
+  const publishAnswers = useCallback(
+    (promptRef: ActivePrompt, payload: AskUserAnswer[]) => {
+      events.publish({
+        type: AskUserEvent.Answered,
+        run_id: promptRef.run_id,
+        data: { requestId: promptRef.requestId, answers: payload },
+        ts: Date.now(),
+      });
+      setPrompt(null);
+    },
+    [events],
+  );
+
   const submit = useCallback(() => {
-    onSubmit(
+    if (!prompt) return;
+    publishAnswers(
+      prompt,
       questions.map((q, i) => ({
         header: q.header,
         question: q.question,
         answer: resolveAnswer(i),
       })),
     );
-  }, [questions, resolveAnswer, onSubmit]);
+  }, [prompt, questions, resolveAnswer, publishAnswers]);
+
+  const cancel = useCallback(() => {
+    if (prompt) publishAnswers(prompt, []);
+  }, [prompt, publishAnswers]);
 
   // ── 键盘：确认页 ────────────────────────────────
   const handleReviewKey = useCallback(
@@ -371,7 +427,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
     (inputChar: string, key: Key) => {
       if (key.escape) {
         if (customFocus) setCustomFocus(false);
-        else onCancel();
+        else cancel();
         return;
       }
       if (key.tab && key.shift) {
@@ -401,16 +457,20 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
       if (inTextInput) return;
       handleChoiceKey(inputChar, key);
     },
-    [customFocus, onCancel, gotoNext, gotoPrev, inTextInput, handleChoiceKey],
+    [customFocus, cancel, gotoNext, gotoPrev, inTextInput, handleChoiceKey],
   );
 
-  useInput((inputChar, key) => {
-    if (view === 'review') {
-      handleReviewKey(key);
-      return;
-    }
-    handleQuestionKey(inputChar, key);
-  });
+  // 仅在活跃时接管键盘（isActive：prompt 非空才注册）
+  useInput(
+    (inputChar, key) => {
+      if (view === 'review') {
+        handleReviewKey(key);
+        return;
+      }
+      handleQuestionKey(inputChar, key);
+    },
+    { isActive: prompt !== null },
+  );
 
   // ── 自定义输入 / 开放式输入提交 ──────────────────
   const handleCustomSubmit = useCallback(
@@ -430,6 +490,7 @@ export function AskUserDialog({ questions, onSubmit, onCancel }: AskUserDialogPr
     [currentIndex, updateAnswer, commitAndAdvance],
   );
 
+  if (!prompt) return null;
   const question = questions[currentIndex];
   if (!question) return null;
   const currentAnswer = answers[currentIndex] ?? { selected: new Set<string>(), custom: '' };
