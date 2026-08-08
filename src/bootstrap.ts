@@ -20,7 +20,6 @@ import {
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
-import { ToolPermissionChecker } from '../packages/tui/src/renderer/tool-confirm';
 import { type PluginProvider, StaticRegistry } from './plugin-registry';
 
 export interface BootstrapOptions {
@@ -172,10 +171,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     session,
     plugins,
     systemPrompt: config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。',
+    // 默认权限策略（ADR-029）：交互模式 'ask'（未声明 checkPermission 的工具经事件流确认），
+    // headless 'allow'（无 TUI 订阅者，工具自带 checkPermission 的 'ask' 由 headless-runner 自动允许）。
+    permission: {
+      default: headless ? 'allow' : 'ask',
+      autoApprove: ['ask_user'],
+    },
   });
 
-  // 采集插件注册的工具定义（仅交互模式）
-  // 同时给工具挂 checkPermission（ADR-029：权限下沉到工具节点，'ask' 由 runtime 事件流等用户）
+  // 采集插件注册的工具定义（仅交互模式，供 /tools 展示）。
+  // 注意：displayHost 与 runtime pluginHost 是各自 install 出的不同工具对象，这里只用于展示，
+  // 不在此挂 checkPermission——默认权限策略由 runtime 统一判定（ADR-029，见 AgentRuntime.permission）。
   if (!headless) {
     const displayHost = new MemoryPluginHost();
     const origLog = console.log;
@@ -194,19 +200,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       console.log = origLog;
       console.error = origErr;
     }
-    // 复用同一检查器；displayHost 与 runtime pluginHost 持有同一批工具对象引用，改它即改 runtime
-    const permissionChecker = new ToolPermissionChecker({
-      enabled: true,
-      autoApprove: ['ask_user'],
-    });
     for (const t of displayHost.listTools()) {
       try {
         tools.register(t);
       } catch {
         // 重名工具跳过
-      }
-      if (!t.checkPermission) {
-        t.checkPermission = permissionChecker.forTool(t.name);
       }
     }
   }

@@ -33,7 +33,6 @@ interface ReplContext {
   provider: { name: string; model: string; baseUrl: string };
   plugins: string[];              // 已加载插件名列表
   config: VesselConfig;           // VesselConfig（全 camelCase，ADR-019）
-  permissionChecker?: ToolPermissionChecker; // 注入 promptFn 用（§3.3）
 
   // ── 工具函数 ─────────────────────────────
   newSessionId: () => string;     // 格式 YYYYMMDD_HHMMSS_{6hex}（照搬 Hermes）
@@ -115,21 +114,32 @@ type StreamChunk =
 
 **防退化**：`StreamRenderer.didStreamLastRun()` 用于判断是否流式输出了文本。若某次 run 没有流式 chunk（非流式 provider），退回打印 `runtime.run()` 返回值。emma 版的 StreamRenderer 需保持此兜底逻辑。
 
-### 3.3 权限确认弹窗（readline confirm → 图形弹窗）
+### 3.3 权限确认弹窗（readline confirm → 事件流）
 
-**readline 版（egg-rolls 交付）**：`renderer/tool-confirm.ts` 中 `ToolPermissionChecker.confirm()` 创建 readline 询问 `y/n/always`。
+**旧版（已退役）**：`renderer/tool-confirm.ts` 中 `ToolPermissionChecker.confirm()` 用 readline 询问 `y/n/always`；REPL 注入 `promptFn` 复用其 readline。
 
-REPL 已通过 `ToolPermissionChecker.promptFn` 注入自定义提示函数，复用 REPL 的 readline 并阻止 `y/n` 泄漏进对话。
+**现行（ADR-029）**：权限判定由 runtime 统一处理（`AgentRuntime` 的 `permission.default='ask'` + `autoApprove`），工具也可自带 `checkPermission` 自描述。'ask' 分支统一走事件流——runtime/工具发布 `tool.permission.request`，TUI 订阅展示确认弹窗，用户作答后发布 `tool.permission.response`（`decision: 'allow'|'deny'`，`remember: true` 表示"始终允许"）。
 
-**替换**：emma 在 `startRepl` 中重设 `promptFn` 为 Ink 弹窗组件（如图形确认对话框），不再用 readline：
+**替换**：emma 在 Ink 组件中订阅事件流，收到 `tool.permission.request` 渲染确认弹窗，发布 `tool.permission.response`：
 
 ```ts
-if (ctx.permissionChecker) {
-  ctx.permissionChecker.promptFn = async (question: string) => {
-    // → 渲染 Ink 确认弹窗，返回 'y' | 'n' | 'always'
-    return await showConfirmDialog(question);
-  };
-}
+useEffect(() => {
+  const unsubscribe = ctx.events.subscribe((event) => {
+    if (event.type === 'tool.permission.request') {
+      // event.data = { requestId: string, tool: string, input: unknown }
+      setPendingPermission({ requestId: event.data.requestId, tool: event.data.tool, run_id: event.run_id });
+    }
+  });
+  return unsubscribe;
+}, [ctx.events]);
+
+// 用户作答后：
+ctx.events.publish({
+  type: 'tool.permission.response',
+  run_id: pendingPermission.run_id,
+  data: { requestId: pendingPermission.requestId, decision: 'allow' | 'deny', remember?: boolean },
+  ts: Date.now(),
+});
 ```
 
 `pausedForConfirm` 标志（`repl.ts` 中）在确认期间静默丢弃输入——emma 版本应改为缓存输入、确认结束后恢复的机制。
@@ -158,7 +168,7 @@ if (ctx.permissionChecker) {
 | **config** | `packages/config/src/**` | 配置加载/校验/映射 |
 | **壳** | `src/cli.ts` | argv 解析、config 加载、provider 构造、runtime 构造、插件加载、ReplContext 构造、headless 路径 |
 | **命令逻辑** | `packages/tui/src/commands/commands.ts` | CommandRegistry、所有 `/resume` `/new` `/history` `/tools` `/help` 等命令的业务逻辑 |
-| **权限确认** | `packages/tui/src/renderer/tool-confirm.ts` | `ToolPermissionChecker` 判断逻辑、`createPermissionGuardrail` |
+| **权限确认** | `packages/tui/src/renderer/tool-confirm.ts` | `ToolPermissionRequestedData` / `ToolPermissionDecidedData` 事件载荷类型（订阅 `tool.permission.request`、发布 `tool.permission.response`） |
 | **向导** | `packages/tui/src/wizard/setup-wizard.ts` | `runSetupWizard()` 流程——emma 只打磨 `/setup` 命令中调用后的 UI 提示 |
 | **Rich 渲染** | `packages/tui/src/rich-renderer.ts` | `buildBanner/buildSessionTable/infoPanel/divider` —— emma 可替换其实现但保持签名 |
 | **会话逻辑** | `packages/tui/src/repl/repl.ts` 中的 session/id 管理 | `currentSessionId`、`pendingResume`、`pendingDelete`、会话切换逻辑不变 |
@@ -174,7 +184,6 @@ const ctx: ReplContext = {
   provider: { name: 'openai', model: 'gpt-4', baseUrl: 'https://api.openai.com/v1' },
   plugins: ['meta-tools', 'skills-loader', 'file-ops', 'memory-project', ...],
   config,
-  permissionChecker, // ToolPermissionChecker 实例，REPL 可设其 promptFn
   newSessionId: () => generateSessionId(),
   onExit: () => { runtime.dispose(); process.exit(0); },
 };
@@ -191,7 +200,7 @@ await startRepl(ctx);
 | `SessionBackend` | `@vessel/core` | `load(sessionId)`, `save(RunState)`, `delete(id)`, `listRich() → SessionInfo[]` |
 | `ToolRegistry` | `@vessel/core` | `list() → ToolDefinition[]` |
 | `ContextManager` | `@vessel/core` | `clear()`, `messages`, `add(msg)` |
-| `ToolPermissionChecker` | `@vessel/tui` | `promptFn?: (q: string) → Promise<string>`, `confirm(toolName, args) → Promise<PermissionResult>` |
+| `tool.permission.request/response` | 事件流 | 权限确认事件（ADR-029）：TUI 订阅 `tool.permission.request` → 展示确认框 → 发布 `tool.permission.response` |
 | `CommandRegistry` | `@vessel/tui` | `list() → CommandEntry[]`, `execute(input, ctx, state) → Promise<CommandResult>` |
 | `StreamRenderer` | `@vessel/tui` | `start(eventStream)`, `stop()`, `didStreamLastRun() → boolean` |
 | `classifyError` | `@vessel/tui` | `classifyError(error) → ClassifiedError {category, message, hint}` |

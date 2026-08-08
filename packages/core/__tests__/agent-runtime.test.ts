@@ -8,6 +8,29 @@ import { MemoryToolRegistry } from '../src/tools/tool-registry';
 import { EventType, PermissionEvent } from '../src/types/event';
 import type { ToolDefinition } from '../src/types/tool';
 
+/** 构造"第一次 user 消息返回 tool_calls，之后返回 stop"的 provider */
+function toolCallThenStopProvider(toolName: string) {
+  return {
+    chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
+      const lastMessage = req.messages[req.messages.length - 1];
+      if (lastMessage?.role === 'user') {
+        return {
+          content: '',
+          finish_reason: 'tool_calls' as const,
+          tool_calls: [
+            {
+              id: 'call-1',
+              type: 'function' as const,
+              function: { name: toolName, arguments: '{}' },
+            },
+          ],
+        };
+      }
+      return { content: 'done', finish_reason: 'stop' as const };
+    },
+  };
+}
+
 describe('AgentRuntime Integration', () => {
   let runtime: AgentRuntime;
   let provider: MemoryLLMProvider;
@@ -420,5 +443,172 @@ describe('AgentRuntime Integration', () => {
 
     expect(response).toBe('done');
     expect(toolRan).toBe(false); // 策略拒绝，handler 未执行
+  });
+
+  it('默认权限策略 default=ask：未声明 checkPermission 的工具也经事件流确认（ADR-029）', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = 0;
+    tools.register({
+      name: 'plain',
+      description: 'Plain tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan++;
+        return 'plain result';
+      },
+    });
+
+    const events = new MemoryEventStream();
+    let requested = 0;
+    events.subscribe((event) => {
+      if (event.type === PermissionEvent.Requested) {
+        requested++;
+        const data = event.data as unknown as { requestId: string };
+        events.publish({
+          type: PermissionEvent.Decided,
+          run_id: event.run_id,
+          data: { requestId: data.requestId, decision: 'allow' },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStopProvider('plain'),
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      permission: { default: 'ask' },
+    });
+
+    const response = await runtime.run('use plain');
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(1);
+    expect(requested).toBe(1); // 未声明 checkPermission 也走了权限确认
+  });
+
+  it('默认权限策略 autoApprove：免确认工具直接执行，不发权限请求', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = 0;
+    tools.register({
+      name: 'plain',
+      description: 'Plain tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan++;
+        return 'plain result';
+      },
+    });
+
+    const events = new MemoryEventStream();
+    let requested = 0;
+    events.subscribe((event) => {
+      if (event.type === PermissionEvent.Requested) requested++;
+    });
+
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStopProvider('plain'),
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      permission: { default: 'ask', autoApprove: ['plain'] },
+    });
+
+    const response = await runtime.run('use plain');
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(1);
+    expect(requested).toBe(0); // autoApprove 免确认
+  });
+
+  it('库默认 permission=allow：未配置时工具直接执行，不发权限请求', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = 0;
+    tools.register({
+      name: 'plain',
+      description: 'Plain tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan++;
+        return 'plain result';
+      },
+    });
+
+    const events = new MemoryEventStream();
+    let requested = 0;
+    events.subscribe((event) => {
+      if (event.type === PermissionEvent.Requested) requested++;
+    });
+
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStopProvider('plain'),
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      // 不传 permission → 默认 'allow'
+    });
+
+    const response = await runtime.run('use plain');
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(1);
+    expect(requested).toBe(0);
+  });
+
+  it('默认权限策略 remember（always）：记住批准，后续同工具免确认', async () => {
+    const tools = new MemoryToolRegistry();
+    let toolRan = 0;
+    tools.register({
+      name: 'plain',
+      description: 'Plain tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan++;
+        return 'plain result';
+      },
+    });
+
+    const events = new MemoryEventStream();
+    let requested = 0;
+    events.subscribe((event) => {
+      if (event.type === PermissionEvent.Requested) {
+        requested++;
+        const data = event.data as unknown as { requestId: string };
+        events.publish({
+          type: PermissionEvent.Decided,
+          run_id: event.run_id,
+          data: { requestId: data.requestId, decision: 'allow', remember: true },
+          ts: Date.now(),
+        });
+      }
+    });
+
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStopProvider('plain'),
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      permission: { default: 'ask' },
+    });
+
+    await runtime.run('use plain'); // 第一次：请求 + remember
+    const response = await runtime.run('use plain again'); // 第二次：已记住，免确认
+
+    expect(response).toBe('done');
+    expect(toolRan).toBe(2);
+    expect(requested).toBe(1); // 第二次不再发权限请求
   });
 });

@@ -30,6 +30,14 @@ export interface PluginHost {
   listProviders(): string[];
 }
 
+/** 默认权限策略（ADR-029：未声明 checkPermission 的工具用此默认判定） */
+export interface RuntimePermissionConfig {
+  /** 默认判定：'ask'（交互确认）或 'allow'（放行）。默认 'allow'——库默认不确认，由 app 层显式开启 */
+  default?: 'allow' | 'ask';
+  /** 免确认工具名列表 */
+  autoApprove?: string[];
+}
+
 /** AgentRuntime 配置 */
 export interface AgentRuntimeOptions {
   provider: import('./provider.js').LLMProvider;
@@ -42,4 +50,6 @@ export interface AgentRuntimeOptions {
   plugins?: Plugin[];
   session?: import('./session.js').SessionBackend;
   systemPrompt?: string; // 系统提示词
+  /** 默认权限策略——未声明 checkPermission 的工具用 default/autoApprove 判定（ADR-029） */
+  permission?: RuntimePermissionConfig;
 }

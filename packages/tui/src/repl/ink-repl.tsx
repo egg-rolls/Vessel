@@ -260,12 +260,15 @@ function InkRepl({ ctx }: InkReplProps) {
   const handlePermission = useCallback(
     (answer: string) => {
       if (permissionOverlay) {
+        const always = answer === 'always';
         ctx.events.publish({
           type: PermissionEvent.Decided,
           run_id: permissionOverlay.run_id,
           data: {
             requestId: permissionOverlay.requestId,
-            decision: answer === 'y' || answer === 'always' ? 'allow' : 'deny',
+            decision: answer === 'y' || always ? 'allow' : 'deny',
+            // "always" → 记住批准（runtime 维护 approvedTools，后续同工具免确认）
+            remember: always,
           },
           ts: Date.now(),
         });
