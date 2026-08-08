@@ -171,6 +171,16 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugins/tools/web-fetch": {
+      "name": "@vessel/web-fetch",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vessel/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
   },
   "packages": {
     "@alcalzone/ansi-tokenize": ["@alcalzone/ansi-tokenize@0.3.0", "", { "dependencies": { "ansi-styles": "^6.2.1", "is-fullwidth-code-point": "^5.0.0" } }, "sha512-p+CMKJ93HFmLkjXKlXiVGlMQEuRb6H0MokBSwUsX+S6BRX8eV5naFZpQJFfJHjRZY0Hmnqy1/r6UWl3x+19zYA=="],
@@ -332,6 +342,8 @@
     "@vessel/tool-policy": ["@vessel/tool-policy@workspace:plugins/security/tool-policy"],
 
     "@vessel/tui": ["@vessel/tui@workspace:packages/tui"],
+
+    "@vessel/web-fetch": ["@vessel/web-fetch@workspace:plugins/tools/web-fetch"],
 
     "ansi-escapes": ["ansi-escapes@7.3.0", "", { "dependencies": { "environment": "^1.0.0" } }, "sha512-BvU8nYgGQBxcmMuEeUEmNTvrMVjJNSH7RgW24vXexN4Ven6qCvy4TntnvlnwnMLTVlcRQQdbRY8NKnaIoeWDNg=="],
 
