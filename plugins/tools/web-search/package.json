@@ -1,0 +1,22 @@
+{
+  "name": "@vessel/plugin-web-search",
+  "version": "0.1.0",
+  "description": "Web search tool plugin for Vessel using Tavily API",
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "keywords": [
+    "vessel",
+    "plugin",
+    "web-search",
+    "tavily"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@vessel/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
