@@ -20,7 +20,9 @@ import {
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
-import { type PluginProvider, StaticRegistry } from './plugin-registry';
+import { ConfigDeclared } from './config-declared';
+import { DirScanner } from './dir-scanner';
+import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -73,7 +75,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Provider ────────────────────────────────────
-  const pluginRegistry: PluginProvider = new StaticRegistry();
+  // 组合多个注册 Provider（ADR-028）：内置 StaticRegistry + 用户 DirScanner/ConfigDeclared
+  const pluginRegistry: PluginProvider = new CompositeProvider([
+    new StaticRegistry(),
+    new DirScanner(),
+    new ConfigDeclared(config),
+  ]);
   const providerHost = new MemoryPluginHost();
   for (const name of pluginRegistry.getProviders()) {
     const p = await pluginRegistry.loadPlugin(name);
