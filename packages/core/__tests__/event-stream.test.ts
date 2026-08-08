@@ -155,8 +155,6 @@ describe('MemoryEventStream', () => {
   });
 
   it('waitFor rejects on timeout', async () => {
-    await expect(eventStream.waitFor('never.event', { timeout: 50 })).rejects.toThrow(
-      'Timed out',
-    );
+    await expect(eventStream.waitFor('never.event', { timeout: 50 })).rejects.toThrow('Timed out');
   });
 });
