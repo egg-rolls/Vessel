@@ -3,10 +3,12 @@
  *
  * 装配机制接口化：registry 只负责「发现插件对象」，不做权限/暂停/显示/条件启用等业务决策
  * （已下沉到工具对象，见 ADR-026）。实现可插拔：StaticRegistry（既有映射表，迁移期保留）/
- * BuildTimeScanner（构建时扫描生成注册表）/ DirScanner / ConfigDeclared（后续实现）。
+ * BuildTimeScanner（构建时扫描生成注册表）/ DirScanner（用户目录运行时扫描）/
+ * ConfigDeclared（vessel.yaml 声明连接）。
  *
  * 内置插件改构建时扫描 plugins 目录生成 src/plugin-registry.generated.ts（静态 import 字面量，
- * 可被 Bun 打包），StaticRegistry 以此为数据源。
+ * 可被 Bun 打包），StaticRegistry 以此为数据源。bootstrap 用 CompositeProvider 组合
+ * 内置 + 用户 Provider（DirScanner/ConfigDeclared），构成完整用户扩展路径。
  */
 
 import type { Plugin } from '../packages/core/src/index';
@@ -109,5 +111,37 @@ export class StaticRegistry implements PluginProvider {
   private isProvider(name: string): boolean {
     const byCategory = PLUGIN_DESCRIPTORS.some((d) => d.name === name && d.category === 'provider');
     return byCategory || name.startsWith('provider-');
+  }
+}
+
+/**
+ * 组合 Provider——将多个 PluginProvider 组合为一个。
+ * bootstrap 用它组合内置 StaticRegistry + 用户 DirScanner/ConfigDeclared。
+ * loadPlugin 按 provider 顺序依次尝试；provider 声称拥有该名字（available/providers）
+ * 才尝试加载，避免命中后仍落入其他 provider 的「未知插件」告警。
+ */
+export class CompositeProvider implements PluginProvider {
+  private readonly providers: PluginProvider[];
+
+  constructor(providers: PluginProvider[]) {
+    this.providers = providers;
+  }
+
+  getAvailablePlugins(): string[] {
+    return Array.from(new Set(this.providers.flatMap((p) => p.getAvailablePlugins())));
+  }
+
+  getProviders(): string[] {
+    return Array.from(new Set(this.providers.flatMap((p) => p.getProviders())));
+  }
+
+  async loadPlugin(name: string): Promise<Plugin | null> {
+    for (const provider of this.providers) {
+      if (provider.getAvailablePlugins().includes(name) || provider.getProviders().includes(name)) {
+        const plugin = await provider.loadPlugin(name);
+        if (plugin) return plugin;
+      }
+    }
+    return null;
   }
 }
