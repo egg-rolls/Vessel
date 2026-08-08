@@ -588,6 +588,53 @@ observability:
 
 `@vessel/config` 内置 DEFAULT_CONFIG（provider=openai, model=gpt-4, max_iterations=20, …）。不创建任何文件即可跑（前提：`~/.vessel/config.yaml` 中有 API Key，或 `VESSEL_API_KEY` 环境变量已设置）。
 
+#### 6.2.4 用户工具扩展层（#95）
+
+用户加工具**运行时生效**，不碰源码、不跑构建（ADR-028）。两条机制，与 MCP（mcp-client）并列：
+
+**1. 目录扫描（DirScanner）**——放文件即注册：
+
+```
+~/.vessel/tools/my-tool.ts    # 用户级，跨项目
+./tools/my-tool.ts            # 项目级，跟仓库走
+```
+
+文件是自描述工具对象（#91），`default export` 支持：单个 `ToolDefinition`（name/description/inputSchema/handler）、`Plugin`、工具数组或 `{ tools: [...] }`：
+
+```ts
+// ~/.vessel/tools/my-tool.ts
+export default {
+  name: 'my-tool',
+  description: '查天气',
+  inputSchema: {
+    type: 'object',
+    properties: { city: { type: 'string' } },
+    required: ['city'],
+  },
+  handler: async (args) => `城市：${args.city}`,  // 可访问 ctx.events 做事件流交互
+};
+```
+
+**2. 配置声明（ConfigDeclared）**——在 `vessel.yaml` 的 `tools` 中声明命令/url，启动即连接注册：
+
+```yaml
+tools:
+  - name: shell
+    enabled: false                 # 内置工具开关（无 command/url，ConfigDeclared 忽略）
+  - name: my-weather               # 声明式 shell 工具
+    description: 查询天气
+    command: "curl -s https://api.weather.com/?city={{city}}"
+    input_schema:
+      type: object
+      properties:
+        city: { type: string }
+  - name: my-api                   # 声明式 http 工具
+    url: "https://api.example.com/{{endpoint}}"
+    method: GET
+```
+
+两种 Provider 与内置 StaticRegistry 由 bootstrap 经 `CompositeProvider` 组合加载，三类来源（内置 / 目录扫描 / 配置声明）并存。工具 handler 用安全模板构建（占位符替换 + fetch/spawn），不使用 eval。
+
 ### 6.3 核心设计原则
 
 - **零配置起步**：仅需首启向导填一次 Key（写入 `~/.vessel/config.yaml`），之后所有项目自动可用。无需创建 `vessel.yaml`。
