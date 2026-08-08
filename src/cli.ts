@@ -13,7 +13,7 @@
  *
  * 架构：
  * - bootstrap.ts：config→provider→plugins→runtime→ReplContext
- * - plugin-registry.ts：插件注册表
+ * - plugin-registry.ts：PluginProvider 接口 + StaticRegistry（构建时扫描，见 ADR-028）
  * - headless-runner.ts：headless 模式运行器
  * - Ink REPL：React 组件式终端 UI
  */

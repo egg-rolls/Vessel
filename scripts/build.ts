@@ -20,6 +20,16 @@ if (!existsSync(DIST_DIR)) {
 
 console.log('🔨 Building Vessel...\n');
 
+// 0. 重新生成插件注册表（构建时扫描，放文件夹即注册）
+console.log('0️⃣ Discovering plugins...');
+try {
+  execSync('bun run scripts/discover-plugins.ts', { stdio: 'inherit' });
+  console.log('✅ Plugin registry generated\n');
+} catch (_error) {
+  console.error('❌ Plugin discovery failed');
+  process.exit(1);
+}
+
 // 1. 运行类型检查
 console.log('1️⃣ Running type check...');
 try {
