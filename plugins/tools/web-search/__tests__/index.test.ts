@@ -2,6 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import type { PluginHost, ToolDefinition } from '@vessel/core';
 import { createWebSearchPlugin } from '../index.js';
 
+function getTool(registeredTools: ToolDefinition[]): ToolDefinition {
+  const tool = registeredTools[0];
+  if (!tool) throw new Error('No tool registered');
+  return tool;
+}
+
 describe('Web Search Plugin', () => {
   let mockHost: PluginHost;
   let registeredTools: ToolDefinition[];
@@ -36,7 +42,7 @@ describe('Web Search Plugin', () => {
       expect(mockHost.registerTool).toHaveBeenCalledTimes(1);
       expect(registeredTools).toHaveLength(1);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       expect(tool.name).toBe('web-search');
       expect(tool.description).toContain('web');
       expect(tool.default).toBe(true);
@@ -47,7 +53,7 @@ describe('Web Search Plugin', () => {
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       expect(tool.inputSchema).toEqual({
         type: 'object',
         properties: {
@@ -99,7 +105,7 @@ describe('Web Search Plugin', () => {
       const plugin = createWebSearchPlugin();
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       const result = await tool.handler({ query: 'test' }, { run_id: 'test-run', messages: [] });
 
       expect(result).toContain('No API key configured');
@@ -109,7 +115,7 @@ describe('Web Search Plugin', () => {
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       const result = await tool.handler({ query: '' }, { run_id: 'test-run', messages: [] });
 
       expect(result).toContain('Query cannot be empty');
@@ -119,7 +125,7 @@ describe('Web Search Plugin', () => {
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       const result = await tool.handler({ query: '   ' }, { run_id: 'test-run', messages: [] });
 
       expect(result).toContain('Query cannot be empty');
@@ -144,12 +150,12 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch;
+      globalThis.fetch = mockFetch as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       await tool.handler(
         { query: 'test query', max_results: 3 },
         { run_id: 'test-run', messages: [] },
@@ -185,12 +191,12 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch;
+      globalThis.fetch = mockFetch as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       const result = await tool.handler(
         { query: 'test query' },
         { run_id: 'test-run', messages: [] },
@@ -212,12 +218,12 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch;
+      globalThis.fetch = mockFetch as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'invalid-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       const result = await tool.handler({ query: 'test' }, { run_id: 'test-run', messages: [] });
 
       expect(result).toContain('Error performing web search');
@@ -227,12 +233,12 @@ describe('Web Search Plugin', () => {
     it('should handle network errors gracefully', async () => {
       const mockFetch = mock(() => Promise.reject(new Error('Network error')));
 
-      globalThis.fetch = mockFetch;
+      globalThis.fetch = mockFetch as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       const result = await tool.handler({ query: 'test' }, { run_id: 'test-run', messages: [] });
 
       expect(result).toContain('Error performing web search');
@@ -251,7 +257,7 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch;
+      globalThis.fetch = mockFetch as typeof fetch;
 
       const plugin = createWebSearchPlugin({
         apiKey: 'test-key',
@@ -259,7 +265,7 @@ describe('Web Search Plugin', () => {
       });
       plugin.install(mockHost);
 
-      const tool = registeredTools[0];
+      const tool = getTool(registeredTools);
       await tool.handler({ query: 'test' }, { run_id: 'test-run', messages: [] });
 
       expect(mockFetch).toHaveBeenCalledWith(
