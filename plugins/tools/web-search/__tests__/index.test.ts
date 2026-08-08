@@ -150,7 +150,7 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
@@ -191,7 +191,7 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
@@ -218,7 +218,7 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'invalid-key' });
       plugin.install(mockHost);
@@ -233,7 +233,7 @@ describe('Web Search Plugin', () => {
     it('should handle network errors gracefully', async () => {
       const mockFetch = mock(() => Promise.reject(new Error('Network error')));
 
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
 
       const plugin = createWebSearchPlugin({ apiKey: 'test-key' });
       plugin.install(mockHost);
@@ -257,7 +257,7 @@ describe('Web Search Plugin', () => {
         }),
       );
 
-      globalThis.fetch = mockFetch as typeof fetch;
+      globalThis.fetch = mockFetch as unknown as typeof fetch;
 
       const plugin = createWebSearchPlugin({
         apiKey: 'test-key',
