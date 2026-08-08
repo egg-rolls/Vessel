@@ -18,6 +18,7 @@ export {
   createCommands,
   doResume,
 } from './commands/commands.js';
+export { AskUserDialog } from './components/AskUserDialog.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export {
   type CommandEnterDecision,

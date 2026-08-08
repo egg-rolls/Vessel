@@ -19,6 +19,7 @@ import {
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { AskUserBridge, createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import {
   createPermissionGuardrail,
   ToolPermissionChecker,
@@ -162,14 +163,28 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // 工具权限确认 guardrail（仅交互模式）
+  // ask_user 自身就是用户交互，不再额外弹 y/n 确认，避免双重交互
   let permissionChecker: ToolPermissionChecker | undefined;
   if (!headless) {
     permissionChecker = new ToolPermissionChecker({ enabled: true });
-    const guardrail = createPermissionGuardrail(permissionChecker);
+    const guardrail = createPermissionGuardrail(permissionChecker, ['ask_user']);
     plugins.push({
       name: 'tool-permission',
       install: (host) => {
         host.registerGuardrail(guardrail);
+      },
+    });
+  }
+
+  // ask-user 交互工具（仅交互模式）——与 tool-permission 同构：合成插件 + bridge 注入
+  let askUserBridge: AskUserBridge | undefined;
+  if (!headless) {
+    askUserBridge = new AskUserBridge();
+    const askUserTool = createAskUserTool(askUserBridge);
+    plugins.push({
+      name: 'ask-user',
+      install: (host) => {
+        host.registerTool(askUserTool);
       },
     });
   }
@@ -227,6 +242,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     events,
     context,
     permissionChecker,
+    askUserBridge,
     currentSessionId,
     onSessionChange: (id) => {
       currentSessionId = id;
