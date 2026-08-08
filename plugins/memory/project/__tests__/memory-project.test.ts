@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ToolContext } from '@vessel/core';
-import { HookType, MemoryPluginHost } from '@vessel/core';
+import { HookType, MemoryEventStream, MemoryPluginHost } from '@vessel/core';
 import { createMemoryProjectPlugin } from '../src/index';
 
 describe('memory-project 插件（MECH-2）', () => {
@@ -82,7 +82,11 @@ describe('memory-project 插件（MECH-2）', () => {
       plugin.install(host);
       const tool = host.getTool('list_memories');
       if (!tool) throw new Error('list_memories tool not registered');
-      const result = await tool.handler({}, { run_id: 'r1', messages: [] } as ToolContext);
+      const result = await tool.handler({}, {
+        run_id: 'r1',
+        messages: [],
+        events: new MemoryEventStream(),
+      } as ToolContext);
       expect(result).toContain('test');
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });

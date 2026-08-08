@@ -4,6 +4,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { MemoryEventStream } from '@vessel/core';
 import { AskUserBridge, createAskUserTool } from '../src/renderer/ask-user';
 
 /** 便捷构建测试输入 */
@@ -108,7 +109,11 @@ describe('createAskUserTool', () => {
     };
 
     const tool = createAskUserTool(bridge);
-    const result = await tool.handler(sampleQuestions(), { run_id: 'r1', messages: [] });
+    const result = await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events: new MemoryEventStream(),
+    });
 
     expect(result).toContain('1. 格式: ESM');
     expect(result).toContain('2. 环境: 生产');
@@ -125,7 +130,7 @@ describe('createAskUserTool', () => {
     const tool = createAskUserTool(bridge);
     const result = await tool.handler(
       { questions: [{ question: '没有任何 header' }] },
-      { run_id: 'r1', messages: [] },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
 
     expect(result).toContain('问题 1');
@@ -134,7 +139,10 @@ describe('createAskUserTool', () => {
   it('handler returns error when questions is empty', async () => {
     const bridge = new AskUserBridge();
     const tool = createAskUserTool(bridge);
-    const result = await tool.handler({ questions: [] }, { run_id: 'r1', messages: [] });
+    const result = await tool.handler(
+      { questions: [] },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
 
     expect(result).toContain('Error');
     expect(result).toContain('non-empty');
@@ -148,7 +156,10 @@ describe('createAskUserTool', () => {
       header: `q${i}`,
       question: `question ${i}`,
     }));
-    const result = await tool.handler({ questions: five }, { run_id: 'r1', messages: [] });
+    const result = await tool.handler(
+      { questions: five },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
 
     expect(result).toContain('Error');
     expect(result).toContain('too many');
@@ -159,7 +170,7 @@ describe('createAskUserTool', () => {
     const tool = createAskUserTool(bridge);
     const result = await tool.handler(
       { questions: [{ header: 'h', question: 'q', options: ['only one'] }] },
-      { run_id: 'r1', messages: [] },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
 
     expect(result).toContain('Error');
@@ -171,7 +182,7 @@ describe('createAskUserTool', () => {
     const tool = createAskUserTool(bridge);
     const result = await tool.handler(
       { questions: [{ header: 'h', question: '   ' }] },
-      { run_id: 'r1', messages: [] },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
 
     expect(result).toContain('Error');
@@ -180,7 +191,11 @@ describe('createAskUserTool', () => {
 
   it('without bridge (headless), handler returns error', async () => {
     const tool = createAskUserTool(); // no bridge
-    const result = await tool.handler(sampleQuestions(), { run_id: 'r1', messages: [] });
+    const result = await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events: new MemoryEventStream(),
+    });
 
     expect(result).toContain('Error');
     expect(result).toContain('no interactive frontend');

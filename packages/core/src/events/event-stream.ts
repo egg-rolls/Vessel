@@ -79,6 +79,33 @@ export class MemoryEventStream implements EventStream {
   }
 
   /**
+   * 等待一次匹配事件（ADR-027：工具交互暂停原语）。
+   * 订阅事件流，收到 name 匹配（且 requestId 匹配）的事件时 resolve 其 data；
+   * 超时 reject。收到匹配事件后自动取消订阅。
+   */
+  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown> {
+    const timeoutMs = opts?.timeout ?? 30000;
+    return new Promise((resolve, reject) => {
+      let unsubscribe: Unsubscribe | undefined;
+      const timer = setTimeout(() => {
+        unsubscribe?.();
+        reject(new Error(`Timed out after ${timeoutMs}ms waiting for event "${name}"`));
+      }, timeoutMs);
+
+      unsubscribe = this.subscribe((event) => {
+        if (event.type !== name) return;
+        const data = event.data as Record<string, unknown>;
+        if (opts?.requestId !== undefined && data?.requestId !== opts.requestId) {
+          return;
+        }
+        unsubscribe?.();
+        clearTimeout(timer);
+        resolve(event.data);
+      });
+    });
+  }
+
+  /**
    * 获取订阅者数量
    */
   get subscriberCount(): number {
