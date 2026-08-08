@@ -9,8 +9,16 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import type { Hook, HookContext, Plugin, PluginHost, ToolDefinition } from '@vessel/core';
+import type {
+  Hook,
+  HookContext,
+  Plugin,
+  PluginHost,
+  ToolContext,
+  ToolDefinition,
+} from '@vessel/core';
 import { HookType } from '@vessel/core';
 
 // ── 类型 ──────────────────────────────────────────
@@ -522,6 +530,35 @@ class McpClientManager {
 
 // ── 工具定义 ──────────────────────────────────────
 
+/**
+ * 用事件流等待用户授权（ADR-029）。
+ * 发 `tool.permission.request` 事件 → `waitFor('tool.permission.response', { requestId })`。
+ * 无订阅者/超时时兜底返回 'ask'，交由运行时决定。
+ */
+async function requestPermission(
+  ctx: ToolContext,
+  tool: string,
+  input: unknown,
+  timeout = 30000,
+): Promise<'allow' | 'deny' | 'ask'> {
+  const requestId = randomUUID();
+  ctx.events.publish({
+    type: 'tool.permission.request',
+    run_id: ctx.run_id,
+    data: { requestId, tool, input },
+    ts: Date.now(),
+  });
+  try {
+    const data = (await ctx.events.waitFor('tool.permission.response', {
+      requestId,
+      timeout,
+    })) as { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean };
+    return data.decision ?? (data.allowed === false ? 'deny' : 'allow');
+  } catch {
+    return 'ask';
+  }
+}
+
 function createMcpTools(manager: McpClientManager): ToolDefinition[] {
   return [
     {
@@ -529,6 +566,9 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
       description:
         '连接到 MCP (Model Context Protocol) 服务器。' +
         '提供 command（可执行文件路径）和可选的 args（参数数组）。',
+      // 自描述：mcp_connect 会 spawn 任意命令，属于危险操作，需用户授权
+      interactive: true,
+      checkPermission: async (input, ctx) => requestPermission(ctx, 'mcp_connect', input),
       inputSchema: {
         type: 'object',
         properties: {
