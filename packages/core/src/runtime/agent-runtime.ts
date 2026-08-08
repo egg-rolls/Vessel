@@ -495,6 +495,7 @@ export class AgentRuntime {
               run_id: runId,
               session_id: sessionId,
               messages: this.context.messages,
+              events: this.events,
             });
 
             // 应用工具结果 Guardrail

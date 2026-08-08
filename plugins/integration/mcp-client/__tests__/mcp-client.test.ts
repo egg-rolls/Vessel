@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { HookType, MemoryPluginHost } from '@vessel/core';
+import { HookType, MemoryEventStream, MemoryPluginHost } from '@vessel/core';
 import mcpClientPlugin, { McpClientManager } from '../src/index';
 
 describe('mcp-client 插件（P2）', () => {
@@ -26,7 +26,10 @@ describe('mcp-client 插件（P2）', () => {
   it('mcp_list 工具在没有连接时返回提示信息', async () => {
     const mcpListTool = host.listTools().find((t) => t.name === 'mcp_list');
     expect(mcpListTool).toBeDefined();
-    const result = await mcpListTool?.handler({}, { run_id: 'r1', messages: [] });
+    const result = await mcpListTool?.handler(
+      {},
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
     expect(result).toContain('没有已连接的 MCP 服务器');
   });
 
@@ -35,7 +38,7 @@ describe('mcp-client 插件（P2）', () => {
     expect(mcpDisconnectTool).toBeDefined();
     const result = await mcpDisconnectTool?.handler(
       { name: 'nonexistent' },
-      { run_id: 'r1', messages: [] },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
     expect(result).toContain('已断开 MCP 服务器');
   });
@@ -44,7 +47,10 @@ describe('mcp-client 插件（P2）', () => {
     const mcpConnectTool = host.listTools().find((t) => t.name === 'mcp_connect');
     expect(mcpConnectTool).toBeDefined();
     // 测试缺少必需参数
-    const result = await mcpConnectTool?.handler({}, { run_id: 'r1', messages: [] });
+    const result = await mcpConnectTool?.handler(
+      {},
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
     expect(result).toContain('连接失败');
   });
 
@@ -71,7 +77,7 @@ describe('mcp-client 插件（P2）', () => {
         name: 'test-server',
         command: 'nonexistent-command-that-should-fail',
       },
-      { run_id: 'r1', messages: [] },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
     expect(result).toContain('连接失败');
   });

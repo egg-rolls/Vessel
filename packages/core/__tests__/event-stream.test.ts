@@ -118,4 +118,43 @@ describe('MemoryEventStream', () => {
     unsubscribe2();
     expect(eventStream.subscriberCount).toBe(0);
   });
+
+  // ── waitFor（ADR-027：工具交互暂停原语）──
+
+  it('waitFor resolves when a matching event is published', async () => {
+    const pending = eventStream.waitFor('custom.event');
+
+    eventStream.publish({
+      type: 'custom.event',
+      run_id: 'run-1',
+      data: { answer: 'hello' },
+      ts: Date.now(),
+    });
+
+    await expect(pending).resolves.toEqual({ answer: 'hello' });
+  });
+
+  it('waitFor filters by requestId to avoid cross-talk', async () => {
+    const pending = eventStream.waitFor('custom.event', { requestId: 'req-2' });
+
+    // 别的 requestId 的事件不应触发 resolve
+    eventStream.publish({
+      type: 'custom.event',
+      run_id: 'run-1',
+      data: { requestId: 'req-1', answer: 'wrong' },
+      ts: Date.now(),
+    });
+    eventStream.publish({
+      type: 'custom.event',
+      run_id: 'run-1',
+      data: { requestId: 'req-2', answer: 'right' },
+      ts: Date.now(),
+    });
+
+    await expect(pending).resolves.toEqual({ requestId: 'req-2', answer: 'right' });
+  });
+
+  it('waitFor rejects on timeout', async () => {
+    await expect(eventStream.waitFor('never.event', { timeout: 50 })).rejects.toThrow('Timed out');
+  });
 });

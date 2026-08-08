@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
+import { MemoryEventStream } from '../src/events/event-stream';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
 import type { ToolDefinition } from '../src/types/tool';
 
@@ -69,6 +70,7 @@ describe('MemoryToolRegistry', () => {
       {
         run_id: 'run-1',
         messages: [],
+        events: new MemoryEventStream(),
       },
     );
 
@@ -96,6 +98,7 @@ describe('MemoryToolRegistry', () => {
         {
           run_id: 'run-1',
           messages: [],
+          events: new MemoryEventStream(),
         },
       ),
     ).rejects.toThrow('Tool "missing-tool" not found');

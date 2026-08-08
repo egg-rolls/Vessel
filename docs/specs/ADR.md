@@ -293,3 +293,55 @@
 - **备选**：(a) 将 FileSessionBackend 做成插件——增加不必要的复杂度：SessionBackend 实现在 core 中是与 runtime/session 模块紧耦合的基础设施，打成插件增加加载顺序、类型引用等无谓摩擦。(b) 不补全、留 stub——SPEC 明确要求三种实现，stub 质量不可用于生产。均不取。
 - **后果**：三种 SessionBackend 全部就位：in-memory（测试/开发）、file（单机轻量部署）、sqlite（生产/查询）。Core 冻结范围不变——接口、循环、事件系统均未改动。
 - **关联**：ADR-017、[SPEC §4.8](SPEC.md)、[#78](https://github.com/egg-rolls/Vessel/issues/78)。
+
+---
+
+## ADR-026：工具自描述对象——权限/暂停/显示/条件启用下沉到工具节点
+
+- **上下文**：Vessel 的架构哲学是「接口极简、复杂度外推」——core 只保留接口和循环，把决策和实现推到边缘。但既有的 `ToolDefinition` 只含 `name/description/inputSchema/handler/default`，权限靠外部 guardrail 挂接、暂停靠 bootstrap 合成注册（ask-user/permission）、显示靠 TUI 的 `ToolDisplayRegistry`（ADR-021）、条件启用仅一个 `default` 布尔。结果是：每个新交互工具都要改 bootstrap、每次新事件都要动 core——**复杂度被收在中心，边缘无法自由生长**。复杂度外推为什么好：(1) 核心稳定——复杂度留在中心则每次演化动冻结区，冻结失去意义；(2) 可扩展——工具自包含，加能力不改核心；(3) 认知负荷——理解 core = 理解接口，不需理解全部实现；(4) 独立演化与测试——每个工具独立改、独立测；(5) 自由度——实现可替换。
+- **决策**：
+  1. `ToolDefinition` 扩展为自描述对象，新增**全可选**字段（向后兼容，现有工具零改动编译）：
+     - `interactive?: boolean`——需要暂停等用户输入
+     - `checkPermission?(input, ctx)`——执行时权限判定
+     - `render?(input)`——自定义显示（与 ADR-021 调和：默认 TUI 模板，工具可选声明渲染数据）
+     - `isEnabled?(): boolean`——条件启用
+     - `shouldDefer?: boolean`——延迟加载（tool_reference，预留）
+  2. `ToolContext` 注入 `events: EventStream`（配合 ADR-027），工具可发事件、等事件。
+  3. ask-user / permission 从 bootstrap 合成注册改为普通工具对象（ADR-029）。
+- **备选**：(a) 保持现状——暂停/权限继续死代码在 bootstrap，新交互工具要改装配层；(b) 在 core 加暂停/权限接口——把复杂度推回 core，违背 ADR-017 冻结。均不取。
+- **后果**：工具自描述，注册系统只做「发现」，不做业务决策；新增交互工具只加一个工具文件，bootstrap 的暂停特例消失；`default` 布尔被 `shouldDefer`/`isEnabled` 取代。本 ADR **supersede ADR-024**（default 字段过滤）、**调和 ADR-021**（工具显示，TUI 模板为主 + 工具可选定制）。
+- **关联**：ADR-027、ADR-028、ADR-029、ADR-017 解冻流程；[#91](https://github.com/egg-rolls/Vessel/issues/91)。
+
+## ADR-027：事件流拓展——事件名+payload 开放 + waitFor 原语
+
+- **上下文**：事件流是 runtime 的核心机制——loop 的每个节点都在发事件。ADR-008 为防散落字符串拼错而枚举化，但副作用是 core 僵化：**每次新事件都要改冻结的 `EventType` 枚举、写 ADR**——这本身就是把扩展复杂度往 core 推。Claude Code 与 hermes 均验证过开放机制：事件名是字符串常量 + 任意 payload，无枚举、无注册表 schema 校验，是行业主流。复杂度外推：事件类型的扩展能力应属于插件层，而非 core。
+- **决策**：
+  1. `RunEvent.type` 从 `EventType` 枚举放宽为 `string`。核心事件保留为字符串常量导出（`export const EventType = { RunStarted: 'run.started', ... } as const`），保持拼写稳定与 payload 文档。
+  2. `EventStream` 新增 `waitFor(name, { requestId?, timeout }): Promise<unknown>`——等待一次匹配事件；内部维护 pending map，收到匹配事件（含 requestId）时 resolve，超时 reject。工具可发事件、等事件。
+  3. `ToolContext` 注入 `events`（ADR-026）。新增事件**不需要改 core**，插件直接 `publish` 自定义字符串事件名。
+- **备选**：(a) 全枚举（现状）——每次新事件动冻结区，core 僵化；(b) 注册表 `registerEventType(name, schema)`——core 加接口，且两个成熟项目均未做，非必需。均不取。
+- **后果**：事件系统开放，插件自由发布/订阅事件；核心事件仍强类型（常量 + payload 文档）。本 ADR **supersede ADR-008 的枚举封闭部分**、**ADR-015 的「暂停 = `signal.aborted` 一行」条款**（交互暂停由 `waitFor` 承载，见 ADR-029）。
+- **关联**：ADR-026、ADR-029；[#91](https://github.com/egg-rolls/Vessel/issues/91)。
+
+## ADR-028：注册系统外推——registry 接口化 + 构建时扫描
+
+- **上下文**：core 冻结，但 core 边缘的装配机制同样应作为接口，否则自由度在装配层被卡死。既有 `src/plugin-registry.ts` 是具体类（`DEFAULT_PLUGIN_IMPORT_MAP` 路径写死）：加一个工具要手改注册表，违背开闭原则；「扫描式 / 配置声明式」的注册实现全被堵死。复杂度外推：装配机制也应接口化，实现可插拔。
+- **决策**：
+  1. 定义 `PluginProvider` 接口：`getAvailablePlugins()` / `loadPlugin(name)` / `getProviders()`——只承诺「发现」，不做权限/暂停/显示等业务决策（已下沉到工具对象，ADR-026）。
+  2. 实现可插拔：`StaticRegistry`（既有映射表，迁移期保留）/ `BuildTimeScanner`（构建时扫描生成注册表）/ `DirScanner`（用户目录运行时扫描）/ `ConfigDeclared`（vessel.yaml 声明连接）。
+  3. 内置工具改构建时扫描 `plugins/*/*/package.json`，生成 `src/plugin-registry.generated.ts`（静态 import 字面量，可被 Bun 打包——顺带修复变量 import 的打包隐患）。
+- **备选**：(a) 保持路径写死——加工具要改代码，违背「只加不改」；(b) 运行时扫描——单二进制分发下无运行时目录可扫。均不取（构建时扫描是「放文件夹即注册」开发体验与单二进制打包的平衡点）。
+- **后果**：注册系统只做「发现」，实现可替换；开发者放文件夹即注册，构建自动进表；bootstrap 不再硬编码插件名数组。
+- **关联**：ADR-026；[#92](https://github.com/egg-rolls/Vessel/issues/92)。
+
+## ADR-029：交互暂停事件流化——ask-user/permission 用事件流实现
+
+- **上下文**：暂停型工具（ask-user / permission）既在 bootstrap 合成注册，靠 `AskUserBridge` + 回调注入与 CLI/TUI 交互——这是「死代码」：每个交互工具都要在装配层写一遍回调桥。ADR-027 提供 `waitFor` 后，暂停可由工具自己用事件流实现，组件间交流全走事件流，无直接回调。
+- **决策**：
+  1. ask-user 改为普通工具：handler 里 `events.publish('ask.user.requested', { requestId, question })` → `await events.waitFor('ask.user.answered', { requestId, timeout })` → 返回回答。
+  2. TUI 订阅 `ask.user.requested` → 展示选择框 → 用户作答 → `publish('ask.user.answered', { requestId, answer })`。
+  3. permission 改为工具自带 `checkPermission`：同样用事件流等用户 allow/deny/ask 决定。
+  4. 删除 `src/bootstrap.ts` 的 tool-permission / ask-user 合成注册；`AskUserBridge` 退役。
+- **备选**：(a) 保持 bridge——回调式，工具与 TUI 耦合，新交互工具要重复装配；(b) core 暂停接口——把暂停逻辑推回 core，违背 ADR-027 的事件流外推。均不取。
+- **后果**：暂停 = 工具发事件 + 等事件，loop 不改（handler 天然 await）；新交互工具只写一个 handler，不再碰 bootstrap；headless 无订阅者时靠 `waitFor` 超时/注入策略兜底。本 ADR **supersede ADR-015 的暂停条款**。
+- **关联**：ADR-026、ADR-027；[#94](https://github.com/egg-rolls/Vessel/issues/94)。
