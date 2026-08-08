@@ -24,7 +24,7 @@ import {
   createPermissionGuardrail,
   ToolPermissionChecker,
 } from '../packages/tui/src/renderer/tool-confirm';
-import { PluginRegistry } from './plugin-registry';
+import { type PluginProvider, StaticRegistry } from './plugin-registry';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -77,10 +77,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Provider ────────────────────────────────────
-  const pluginRegistry = new PluginRegistry();
+  const pluginRegistry: PluginProvider = new StaticRegistry();
   const providerHost = new MemoryPluginHost();
-  const providerPluginNames = pluginRegistry.getNames().filter((k) => k.startsWith('provider-'));
-  for (const name of providerPluginNames) {
+  for (const name of pluginRegistry.getProviders()) {
     const p = await pluginRegistry.loadPlugin(name);
     if (p) p.install(providerHost);
   }
@@ -142,18 +141,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const defaultPluginNames =
     configuredPlugins.length > 0
       ? configuredPlugins.map((p) => p.name)
-      : [
-          'meta-tools',
-          'skills-loader',
-          'file-ops',
-          'memory-project',
-          'memory-auto',
-          'guardrail-pii',
-          'redact-secrets',
-          'tool-policy',
-          'mcp-client',
-        ];
-  if (process.env.VESSEL_DEBUG) defaultPluginNames.push('hook-logging');
+      : pluginRegistry.getAvailablePlugins().filter((name) => name !== 'hook-logging');
+  // hook-logging 默认关闭，仅调试时启用
+  if (process.env.VESSEL_DEBUG && !defaultPluginNames.includes('hook-logging')) {
+    defaultPluginNames.push('hook-logging');
+  }
 
   const plugins: Plugin[] = [];
   for (const name of defaultPluginNames) {
