@@ -1,8 +1,7 @@
 # 开发者须知
 
-> **写/改代码前，必须先读完本文件。按顺序读，读完一项自检一项。**
-> 跳过任何一项 = 写出的代码大概率违规，审查时会被打回。
-> **开始前确认你已读过 [AGENTS.md](../../AGENTS.md)**——那是所有角色的通用基础。
+> **写/改代码前，先按 [DEV-TODO.md](DEV-TODO.md) 完成全部必读（含 AGENTS.md），再读本文件。**
+> 本文件是知识库——工程规范、代码设计硬规则、PR 模板、DoD。执行中遇到决策点回来查。
 
 ## 动手前先做（60 秒，跳过必出事）
 
@@ -18,63 +17,23 @@
 
 ## 为什么必须先读这些
 
-Vessel 有严格的架构约束（[AGENTS.md](../../AGENTS.md) §5 Core 冻结、§6 能力分层、§4 红线）和工程规范（事件枚举化、不可变优先、sync-in-async 禁止）。这些不是"建议"——是硬性门禁。不读就写 = 浪费自己时间 + 浪费审查者时间。
+Vessel 有严格的架构约束（[AGENTS.md](../../AGENTS.md) §5 Core 冻结、§6 能力分层、§4 红线）和工程规范（事件名开放字符串 ADR-030、不可变优先、sync-in-async 禁止）。这些不是"建议"——是硬性门禁。不读就写 = 浪费自己时间 + 浪费审查者时间。
 
-## 必读清单（按此顺序）
+## 按需参考（选读）
 
-### 1. AGENTS.md（全篇）
+必读项已并入 [DEV-TODO.md](DEV-TODO.md) 执行清单。以下文档在写代码遇到具体场景时按需查阅：
 
-通用概念手册——项目身份、文档索引、红线、反幻觉纪律、能力分层、Core 冻结。**所有角色基础。**
-
-**自检**：Vessel 的三层是什么？红线有哪些？Core 只能因哪三种原因改？
-
-### 2. docs/specs/SPEC.md
-
-接口契约——所有模块的边界和接口定义。
-
-**自检**：Core 的 9 个接口分别是什么？三层依赖方向是什么？
-
-### 3. docs/specs/ADR.md
-
-架构决策记录——知道历史决策，才不会重蹈覆辙。
-
-**自检**：ADR-003（runtime 构造函数不注入插件）的理由是什么？ADR-004（统一扩展机制）解决了什么问题？
-
-### 4. docs/api/
-
-Core 接口契约与 API 参考——写代码时随时查阅。
-
-**自检**：你要改的文件在 core 里吗？如果在，先读 AGENTS.md §5 Core 冻结的 checklist。
-
-### 5. processes/conventions.md
-
-分支命名、Commit message 格式、Issue/PR 命名规范。**写第一行代码前就该知道这些。**
-
-**自检**：Commit message 的格式是什么？分支命名规则是什么？
-
-### 6. processes/collaboration.md
-
-Issue 认领、Draft PR 创建、gh CLI 操作技巧。**推送代码前必读。**
-
-**自检**：创建 PR 的正确步骤是什么？为什么中文内容要用 `--body-file`？
-
-### 7. docs/specs/GIT-WORKFLOW.md
-
-分支模型、合并门禁（架构检查 + CI + 安全 + 回归确认）、反面模式、**§7.1 Rebase 最佳实践**。**知道什么会阻断你的 PR，以及如何避免 rebase 地狱。**
-
-**自检**：合并前必须通过哪四类检查？"先合后改"为什么是反面模式？
-
-### 8. 按场景补充
-
-| 场景 | 补充阅读 |
-|------|---------|
-| 功能 / 模块开发 | `processes/development.md` |
-| 单点修复（修 bug、加参数） | `processes/collaboration.md` |
-| 加插件 | `docs/specs/PLUGINS.md` + `docs/guides/plugin-dev.md` |
-| 改 TUI | `docs/api/tui.md` |
-| 改配置 | `docs/specs/SPEC.md` §6 |
-| 写测试 | `docs/guides/testing.md` |
-| 改文档 | 停止——先读 `DOC-MANAGER.md`（你不是开发者角色了） |
+| 需要什么 | 参考 |
+|---------|------|
+| 接口契约 / 现有模块边界 | [docs/specs/SPEC.md](../specs/SPEC.md) |
+| 历史架构决策（避免重蹈覆辙） | [docs/specs/ADR.md](../specs/ADR.md) |
+| 分支模型 / 合并门禁 / §7.1 Rebase 最佳实践 | [docs/specs/GIT-WORKFLOW.md](../specs/GIT-WORKFLOW.md) |
+| 功能 / 模块开发流程 | [processes/development.md](../../processes/development.md) |
+| 加插件 | [docs/specs/PLUGINS.md](../specs/PLUGINS.md) + [docs/guides/plugin-dev.md](../guides/plugin-dev.md) |
+| 改 TUI | 重点看 [docs/api/tui.md](../api/tui.md) |
+| 改配置 | [docs/specs/SPEC.md](../specs/SPEC.md) §6 |
+| 写测试 | [docs/guides/testing.md](../guides/testing.md) |
+| 改文档 | 停止——先读 [DOC-MANAGER.md](DOC-MANAGER.md)（你不是开发者角色了） |
 
 ---
 
@@ -82,9 +41,9 @@ Issue 认领、Draft PR 创建、gh CLI 操作技巧。**推送代码前必读�
 
 - TS strict；async/await 全异步，**禁止 sync-in-async**（旧项目教训6）。
 - 不可变优先；构造时注入全部状态，**不外部改私有字段**（教训7）。
-- 事件类型用枚举 + payload schema，**禁止散落字符串字面量**（教训8）。
+- 事件名一律开放字符串字面量（ADR-030，禁止枚举/常量）。
 - 文件/命名：包内小写 kebab；接口 PascalCase；遵循各包既有风格。
-- 测试：每模块配单测；MVP 验收见 [ROADMAP.md](docs/specs/ROADMAP.md) Phase 1。
+- 测试：每模块配单测；MVP 验收见 [ROADMAP.md](../specs/ROADMAP.md) Phase 1。
 - 提交格式：`<type>(<scope>): <subject>`（feat/fix/docs/refactor/test/chore）。
 - 依赖方向：tui -> config -> core；core 不反向引用。
 

@@ -40,4 +40,4 @@
 
 ## 跨期红线（始终遵守）
 
-- core 不注入插件对象（ADR-003）；统一扩展心智（ADR-004）；事件枚举化（ADR-008）；不留 stub；不绑厂商 Key/价格；core 不依赖 tui/config。完整红线见 [AGENTS.md §4 红线](../../AGENTS.md)。
+- core 不注入插件对象（ADR-003）；统一扩展心智（ADR-004）；事件名开放字符串（ADR-030，禁枚举/常量）；不留 stub；不绑厂商 Key/价格；core 不依赖 tui/config。完整红线见 [AGENTS.md §4 红线](../../AGENTS.md)。

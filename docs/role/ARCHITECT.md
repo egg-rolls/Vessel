@@ -1,6 +1,6 @@
 # 架构师须知
 
-> **收到 PRD 后，读本文件。你的职责：从 PRD 拆出接口契约、生成 Epic + 子 Issues、交接到开发者。**
+> **收到 PRD 后，先按 [ARCH-TODO.md](ARCH-TODO.md) 完成必读，再读本文件。你的职责：从 PRD 拆出接口契约、生成 Epic + 子 Issues、交接到开发者。**
 > 本角色是 [标准开发流程](../../processes/development.md) 的阶段 2。
 
 ## 角色定位
@@ -17,33 +17,15 @@
 | **可行性验证者** | 在动手写 SPEC 之前，逐条确认方案不违反 AGENTS.md 红线、Core 冻结、已有 ADR。方案必须在现有架构约束下可实现。发现违反 → 立刻停止，退回 PRD。 |
 | **拆解者** | 从已确认可行的方案中提取接口契约、画依赖图、生成可独立认领的子 Issues。 |
 
-## 必读清单
+## 按需参考（选读）
 
-### 1. AGENTS.md（全篇）
+必读项已并入 [ARCH-TODO.md](ARCH-TODO.md) 执行清单。以下文档在拆接口 / 写 SPEC 时按需查阅：
 
-红线、能力分层、Core 冻结。SPEC 里定的接口不能违规。
-
-**自检**：新增接口要经过 Core 冻结的 checklist 吗？是 → 走 ADR-017 解冻判断。
-
-### 2. docs/specs/SPEC.md
-
-现有接口契约全集。你定的新接口不能与现有接口冲突或重复。
-
-**自检**：Core 的 9 个接口分别是什么？你要加的东西能走 Plugin/MCP/Skill 吗？
-
-### 3. docs/specs/ADR.md
-
-历史架构决策。避免设计出已被否决的方案。
-
-**自检**：你要加的扩展机制是不是已有的 4 种之一？如果不是 → 违 ADR-004。
-
-### 4. processes/development.md
-
-标准开发流程全貌。看清楚你的 SPEC 和 Issues 如何流入开发者。
-
-### 5. processes/conventions.md
-
-Issue 命名规范。你生成的子 Issue 标题必须合规。
+| 需要什么 | 参考 |
+|---------|------|
+| Core 具体 API 签名与事件 | [docs/api/CORE.md](../api/CORE.md)、[docs/api/EVENT-SYSTEM.md](../api/EVENT-SYSTEM.md) |
+| 扩展机制细节（插件 / MCP / Skill） | [docs/specs/PLUGINS.md](../specs/PLUGINS.md)、[docs/guides/plugin-dev.md](../guides/plugin-dev.md) |
+| 合并门禁与 PR 流程（Issue 交付后） | [docs/specs/GIT-WORKFLOW.md](../specs/GIT-WORKFLOW.md) |
 
 ## 工作流程
 

@@ -2,7 +2,7 @@
 
 > 本文档定义 Vessel 项目中**治理文档自身的准入标准、深度梯度、内容分类、修剪机制**。
 > 永久规范：描述治理体系的设计原则，不描述当前在治理什么。
-> 具体规范清单见 `docs/role/DOC-MANAGER.md` 必读清单。
+> 具体规范清单见 `docs/role/DOC-TODO.md`（必读清单）与 `docs/role/DOC-MANAGER.md`（知识库）。
 
 ---
 
@@ -151,6 +151,6 @@
 ## 七、关联规范
 
 - 文档书写规范（怎么写）：`docs/specs/DOC-STANDARD.md`
-- 文档管理者必读清单：`docs/role/DOC-MANAGER.md`
+- 文档管理者必读清单：`docs/role/DOC-TODO.md`（执行清单）；知识库：`docs/role/DOC-MANAGER.md`
 - Issue 类型与优先级：`docs/specs/ISSUE-SPEC.md`
 - 需求治理模型：`docs/specs/GOVERNANCE.md`
