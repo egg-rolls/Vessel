@@ -730,10 +730,6 @@ export class AgentRuntime {
   }
 
   /**
-   * 发布事件
-   * @param event 运行事件
-   */
-  /**
    * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
    */
   private addContext(msg: Message, runId: string): void {
@@ -751,6 +747,10 @@ export class AgentRuntime {
     });
   }
 
+  /**
+   * 发布事件
+   * @param event 运行事件
+   */
   protected publishEvent(event: RunEvent): void {
     this.events.publish(event);
   }

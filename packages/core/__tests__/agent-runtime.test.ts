@@ -101,7 +101,10 @@ describe('AgentRuntime Integration', () => {
 
     // 至少发布 user/assistant 消息的 context.changed
     expect(changedEvents.length).toBeGreaterThan(0);
-    const last = changedEvents[changedEvents.length - 1]!;
+    const last = changedEvents[changedEvents.length - 1] as {
+      type: string;
+      data: Record<string, unknown>;
+    };
     expect((last.data as { message_count: number }).message_count).toBeGreaterThan(0);
     unsubscribe();
   });
