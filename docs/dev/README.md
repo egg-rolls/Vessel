@@ -26,3 +26,19 @@ docs/dev/
 - 可以引用 `docs/specs/`、`docs/guides/`、`docs/api/`
 - 反过来不行：永久文档不能引用本目录
 - 不再需要时删除（或移入 `archive/`）
+
+## 开发指引（后续 AI 必读）
+
+**对接接口前先看接口文档**，不要凭记忆写代码：
+
+| 文档 | 内容 |
+|------|------|
+| [CORE.md](../specs/CORE.md) | **Core 接口契约**（工具/事件/权限/上下文，已按重构更新） |
+| [SPEC.md](../specs/SPEC.md) | 完整技术规范 |
+| [ADR.md](../specs/ADR.md) | 架构决策历史（026-029 是新架构） |
+| [plugin-dev.md](../guides/plugin-dev.md) | **怎么写工具/插件**（自描述 + 事件流 + 权限） |
+| [api/core.md](../api/core.md) | API 参考 |
+
+**架构重构状态**（#91-95，2026-08 已全部落地）：事件流开放 + `waitFor` 原语、工具自描述对象、registry 接口化 + 构建时扫描、交互暂停事件流化（ask-user/permission）、用户工具层（`~/.vessel/tools/`）。
+
+**核心原则**：core 冻结（ADR-017）——加能力走工具/插件/MCP/Skill；工具是自描述对象（ADR-026）；组件交流走事件流（ADR-027）；新事件类型用开放字符串，不改 core。

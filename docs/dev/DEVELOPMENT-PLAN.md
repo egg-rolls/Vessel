@@ -66,7 +66,7 @@ Phase 2+（增强）：
 | provider 完整性 | Phase 1 MVP | 已实现（Anthropic + OpenAI SSE 流式） | `docs/dev/provider-completeness/` | P1 |
 | session SQLite | Phase 1 MVP | 已实现（`packages/core/src/session/sqlite-backend.ts`） | — | P1 |
 | 首启配置向导 | Phase 1 MVP | 已实现（`packages/tui/src/wizard/setup-wizard.ts`） | — | P2 |
-| 权限确认弹窗 | Phase 1 MVP | 已实现（`packages/tui/src/renderer/tool-confirm.ts`） | — | P2 |
+| 权限确认弹窗 | Phase 1 MVP | 已实现并重构为 runtime 默认策略（ADR-029，事件流确认） | — | P2 |
 | skills-loader 完善 | Phase 2 | 已有原型 | `docs/dev/skills-loader/` | P2 |
 | mcp-client 产品化 | Phase 2 | 已有原型 | `docs/dev/mcp-client/` | P2 |
 | a2a-bridge | Phase 3 | 未启动 | — | P3 |

@@ -43,8 +43,12 @@ interface ToolRegistry {
   register(def: ToolDefinition): void
   invoke(call: ToolCall, ctx: ToolContext): Promise<string>
   schemas(): ToolSchema[]
+  get(name: string): ToolDefinition | undefined
+  has(name: string): boolean
+  list(): ToolDefinition[]
 }
 
+// ADR-026：工具是自描述对象——权限/暂停/显示/条件启用下沉到工具节点
 interface ToolDefinition {
   name: string
   description: string
@@ -52,13 +56,26 @@ interface ToolDefinition {
   handler: ToolHandler
   timeout?: number
   default?: boolean
+  // ── 自描述字段（全可选，向后兼容）──
+  interactive?: boolean                 // 需要暂停等用户输入（用 ctx.events.waitFor 等回复事件）
+  checkPermission?(input, ctx): Promise<'allow' | 'deny' | 'ask'>  // 执行时权限判定
+  render?(input): unknown               // 自定义显示数据（默认 TUI 模板，与 ADR-021 调和）
+  isEnabled?(): boolean                 // 条件启用
+  shouldDefer?: boolean                 // 延迟加载（tool_reference，预留）
 }
 
 type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<string>
+
+interface ToolContext {
+  run_id: string
+  session_id?: string
+  messages: Message[]
+  events: EventStream    // ADR-026/027：工具可发事件、等事件，实现交互暂停
+}
 ```
 
 **职责**：适配器注册目录（世界↔语言）。
-**实现**：Core 内置注册表。
+**实现**：Core 内置注册表；装配层（`src/plugin-registry.ts`）负责发现插件/工具，注册后 runtime 统一从 `pluginHost` 取工具。
 
 ### 1.3 ContextManager（上下文管理）
 
@@ -76,39 +93,43 @@ interface ContextManager {
 ### 1.4 EventStream（事件流）
 
 ```typescript
+// ADR-027：事件名 + payload 开放——插件可发布任意字符串事件名，无需改 core
 interface EventStream {
   subscribe(handler: (e: RunEvent) => void): Unsubscribe
   publish(e: RunEvent): void
   clear(): void
+  getHistory(runId?: string): RunEvent[]
+  // ADR-027：等待一次匹配事件（工具交互暂停原语）
+  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown>
 }
 
 interface RunEvent {
-  type: EventType
+  type: string                       // 开放字符串；核心事件名见 EventType 常量
   run_id: string
-  data: EventPayload
+  data: EventPayload | Record<string, unknown>
   ts: number
 }
 
-enum EventType {
-  RunStarted = 'run.started',
-  LlmRequest = 'llm.request',
-  LlmResponse = 'llm.response',
-  LlmStreamChunk = 'llm.stream.chunk',
-  ToolCallStarted = 'tool.call.started',
-  ToolCallCompleted = 'tool.call.completed',
-  ToolCallFailed = 'tool.call.failed',
-  GuardrailBlocked = 'guardrail.blocked',
-  GuardrailModified = 'guardrail.modified',
-  RunCompleted = 'run.completed',
-  RunFailed = 'run.failed',
-  SessionCreated = 'session.created',
-  SessionLoaded = 'session.loaded',
-  Error = 'error',
-}
+// EventType 是常量对象（非枚举）——核心事件名，保证拼写稳定与 payload 文档
+const EventType = {
+  RunStarted: 'run.started',
+  LlmRequest: 'llm.request',
+  LlmResponse: 'llm.response',
+  LlmStreamChunk: 'llm.stream.chunk',
+  ToolCallStarted: 'tool.call.started',
+  ToolCallCompleted: 'tool.call.completed',
+  ToolCallFailed: 'tool.call.failed',
+  GuardrailBlocked: 'guardrail.blocked',
+  RunCompleted: 'run.completed',
+  RunFailed: 'run.failed',
+  SessionCreated: 'session.created',
+  SessionLoaded: 'session.loaded',
+  Error: 'error',
+} as const
 ```
 
-**职责**：语言空间的运行轨迹（trace/replay/TUI 共用）。
-**实现**：Core 内置。
+**职责**：语言空间的运行轨迹（trace/replay/TUI 共用）；组件间交流总线（工具 ↔ TUI 事件流交互）。
+**实现**：Core 内置（`MemoryEventStream`）。
 
 ### 1.5 Guardrail（护栏）
 
@@ -208,6 +229,26 @@ interface SessionInfo {
 **职责**：会话持久化。
 **实现**：插件（in-memory/file/sqlite）。
 
+### 1.10 Permission（工具权限）
+
+```typescript
+// ADR-029：未声明 checkPermission 的工具由 runtime 默认策略判定
+interface RuntimePermissionConfig {
+  default?: 'allow' | 'ask'   // 默认 'allow'；app 层显式开启 'ask'（交互确认）
+  autoApprove?: string[]       // 免确认工具名列表
+}
+// AgentRuntimeOptions.permission?: RuntimePermissionConfig
+```
+
+**职责**：工具执行的权限判定（core 统一判定，不依赖 TUI）。
+**规则**（agent-runtime tool-calling loop 内）：
+- 工具自带 `checkPermission` → 用其判定
+- 未声明 → 默认策略：`default === 'ask'`（且非 autoApprove / 未记住）→ 发 `tool.permission.request` 事件 → `waitFor('tool.permission.response')` 等用户 allow/deny；否则放行
+- `'allow'` → 执行；`'deny'` → 阻止；`'ask'` → 事件流确认
+- 用户选"Always"（`remember: true`）→ 记入 `permissionApproved`，后续跳过确认
+
+**实现**：Core 内置（`agent-runtime.ts` tool-calling loop）。
+
 ---
 
 ## 2. Core 的循环
@@ -232,8 +273,9 @@ run(userInput):
       context.add(assistant with tool_calls)
       for each tool_call:
         apply TOOL_CALL guardrail
+        resolve permission       # tool.checkPermission 或默认策略；'ask' → 事件流等用户（ADR-029）
         emit tool.call.started
-        result = pluginHost.invoke(tool_call)
+        result = pluginHost.invoke(tool_call)   # handler 内可用 ctx.events 发/等事件
         apply TOOL_RESULT guardrail
         emit tool.call.completed
         context.add(tool result)
@@ -276,11 +318,8 @@ MCP prompts/resources ──→   └──────────────�
 ### 4.1 扩"插座"（新增枚举成员）
 
 ```typescript
-// 可以：新增 EventType 成员
-enum EventType {
-  // ... 现有成员
-  LlmThinking = 'llm.thinking',  // ← 新增
-}
+// 事件类型已开放（ADR-027）：插件可发布任意字符串事件名，无需改 core、无需 ADR。
+// 只能扩以下两个枚举：
 
 // 可以：新增 HookType 成员
 enum HookType {
@@ -374,14 +413,17 @@ enum GuardrailStage {
 
 | 需求 | 用什么 | 改 Core？ |
 |------|--------|----------|
-| 新工具 | Plugin + registerTool | ❌ |
+| 新工具（内置） | 放 `plugins/{category}/{name}/`（构建时扫描自动注册）| ❌ |
+| 新工具（用户） | 放 `~/.vessel/tools/` 或 `vessel.yaml` 声明（#95）| ❌ |
+| 交互暂停工具 | 工具 `interactive` + `ctx.events.publish`/`waitFor` | ❌ |
+| 工具权限 | 工具 `checkPermission` 或 runtime 默认策略 | ❌ |
 | 新 Provider | Plugin + registerProvider | ❌ |
 | 新护栏 | Plugin + registerGuardrail | ❌ |
 | 新钩子 | Plugin + registerHook | ❌ |
-| 新事件类型 | 新增 EventType 成员 | ⚠️ 需 ADR |
+| 新事件类型 | 开放字符串事件名（ADR-027）| ❌ |
 | 新 Skill | Markdown + skills-loader | ❌ |
 | 新 MCP | MCP server + bridge plugin | ❌ |
-| 工具显示 | TUI 层 ToolDisplayDefinition | ❌ |
+| 工具显示 | 工具自带 render（默认 TUI 模板）| ❌ |
 | Spinner 状态 | TUI 层 StateTracker | ❌ |
 | 新配置项 | Config 层 | ❌ |
 | 新 CLI 命令 | CLI 层 | ❌ |

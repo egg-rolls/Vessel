@@ -21,6 +21,7 @@ const runtime = await AgentRuntime.create({
   plugins,       // Plugin[] — 插件列表（可选）
   session,       // SessionBackend — 会话后端（可选）
   systemPrompt,  // string — 系统提示词（可选）
+  permission,    // RuntimePermissionConfig — 默认权限策略（可选，ADR-029）
 });
 
 // 执行一次对话
@@ -106,6 +107,7 @@ interface LLMProvider {
 ### ToolDefinition
 
 ```typescript
+// ADR-026：工具是自描述对象——权限/暂停/显示/条件启用下沉到工具节点
 interface ToolDefinition {
   name: string;
   description: string;
@@ -113,19 +115,39 @@ interface ToolDefinition {
   handler: (args: unknown, ctx: ToolContext) => Promise<string>;
   timeout?: number;
   default?: boolean;
+  // ── 自描述字段（全可选，向后兼容）──
+  interactive?: boolean;                                    // 需要暂停等用户输入
+  checkPermission?(input: unknown, ctx: ToolContext): Promise<'allow' | 'deny' | 'ask'>;
+  render?(input: unknown): unknown;                         // 自定义显示数据
+  isEnabled?(): boolean;                                    // 条件启用
+  shouldDefer?: boolean;                                    // 延迟加载（预留）
+}
+
+interface ToolContext {
+  run_id: string;
+  session_id?: string;
+  messages: Message[];
+  events: EventStream;   // ADR-026/027：工具可发事件、等事件（waitFor）
 }
 ```
 
-### EventType（枚举）
+### EventType（常量，开放事件名 ADR-027）
 
 ```typescript
-enum EventType {
-  RunStarted, LlmRequest, LlmResponse,
-  ToolCallStarted, ToolCallCompleted, ToolCallFailed,
-  GuardrailBlocked, GuardrailModified,
-  RunCompleted, RunFailed,
-  SessionCreated, SessionLoaded, Error,
-}
+// 核心事件名常量——保证拼写稳定；RunEvent.type 是 string，
+// 插件可发布任意字符串事件名，无需改 core。
+const EventType = {
+  RunStarted: 'run.started',
+  LlmRequest: 'llm.request',
+  LlmResponse: 'llm.response',
+  LlmStreamChunk: 'llm.stream.chunk',
+  ToolCallStarted: 'tool.call.started',
+  ToolCallCompleted: 'tool.call.completed',
+  ToolCallFailed: 'tool.call.failed',
+  GuardrailBlocked: 'guardrail.blocked',
+  RunCompleted: 'run.completed',
+  RunFailed: 'run.failed',
+} as const;
 ```
 
 ### Guardrail
