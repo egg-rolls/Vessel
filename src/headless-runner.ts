@@ -6,7 +6,6 @@
  */
 
 import type { AgentRuntime, Message, SessionBackend } from '../packages/core/src/index';
-import { PermissionEvent } from '../packages/core/src/index';
 import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
 
 export interface HeadlessOptions {
@@ -33,10 +32,10 @@ export async function runHeadless(
   // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
   // 避免 waitFor 超时挂起；ask_user 仅交互模式注册（见 bootstrap），靠超时返回错误兜底。
   runtime.events.subscribe((event) => {
-    if (event.type === PermissionEvent.Requested) {
+    if (event.type === 'tool.permission.request') {
       const { requestId } = event.data as { requestId: string };
       runtime.events.publish({
-        type: PermissionEvent.Decided,
+        type: 'tool.permission.response',
         run_id: event.run_id,
         data: { requestId, decision: 'allow' },
         ts: Date.now(),

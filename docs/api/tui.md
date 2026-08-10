@@ -68,33 +68,33 @@ interface ReplContext {
 // 订阅事件流 —— emma 在 Ink 组件 useEffect 中 subscribe
 const unsubscribe = ctx.events.subscribe((event: RunEvent) => {
   switch (event.type) {
-    case EventType.LlmStreamChunk: {
+    case 'llm.stream.chunk': {
       // event.data = { chunk: StreamChunk }
       const { delta } = event.data.chunk; // 文本增量，逐 token
       // → 追加到 Ink 组件 state，打字机动画渲染
       break;
     }
-    case EventType.ToolCallStarted: {
+    case 'tool.call.started': {
       // event.data = { tool_name: string, arguments: unknown, tool_call_id: string }
       // → 显示工具调用卡片（名称 + 参数）+ spinner
       break;
     }
-    case EventType.ToolCallCompleted: {
+    case 'tool.call.completed': {
       // event.data = { tool_name: string, result: string, duration_ms: number }
       // → 卡片从 spinner 变为 ✓ 完成
       break;
     }
-    case EventType.ToolCallFailed: {
+    case 'tool.call.failed': {
       // event.data = { tool_name: string, error: string, duration_ms: number }
       // → 卡片标记 ✗ 失败
       break;
     }
-    case EventType.RunCompleted: {
+    case 'run.completed': {
       // event.data = { output: string, duration_ms: number, iterations: number, usage }
       // → 这次 run 结束，刷新 UI
       break;
     }
-    case EventType.GuardrailBlocked: {
+    case 'guardrail.blocked': {
       // event.data = { guardrail_name: string, reason: string, stage: string }
       // → 显示拦截提示
       break;
@@ -196,7 +196,7 @@ await startRepl(ctx);
 |------|------|----------|
 | `AgentRuntime` | `@vessel/core` | `run(input, sessionId?, opts?) → Promise<string>`, `ready`, `dispose()` |
 | `EventStream` | `@vessel/core` | `subscribe(handler) → unsubscribe`, `clear()` |
-| `EventType` | `@vessel/core` | 枚举：`RunStarted`, `LlmStreamChunk`, `ToolCallStarted/Completed/Failed`, `RunCompleted/Failed`, `GuardrailBlocked` |
+| 事件名（开放字符串，ADR-030） | 事件流 | `'run.started'`、`'llm.stream.chunk'`、`'tool.call.started/completed/failed'`、`'run.completed/failed'`、`'guardrail.blocked'`（无常量） |
 | `SessionBackend` | `@vessel/core` | `load(sessionId)`, `save(RunState)`, `delete(id)`, `listRich() → SessionInfo[]` |
 | `ToolRegistry` | `@vessel/core` | `list() → ToolDefinition[]` |
 | `ContextManager` | `@vessel/core` | `clear()`, `messages`, `add(msg)` |
@@ -480,11 +480,11 @@ class StateTracker {
 
   handleEvent(event: RunEvent): StateUpdate | null {
     switch (event.type) {
-      case EventType.LlmRequest:
+      case 'llm.request':
         this.thinkingStartTime = Date.now()
         return { state: 'thinking', elapsed: 0 }
 
-      case EventType.LlmStreamChunk:
+      case 'llm.stream.chunk':
         if (this.thinkingStartTime) {
           const elapsed = Date.now() - this.thinkingStartTime
           this.thinkingStartTime = undefined
@@ -492,11 +492,11 @@ class StateTracker {
         }
         break
 
-      case EventType.ToolCallStarted:
+      case 'tool.call.started':
         this.toolStartTime = Date.now()
         return { state: 'tool_running', tool: event.data.tool_name }
 
-      case EventType.ToolCallCompleted:
+      case 'tool.call.completed':
         const elapsed = Date.now() - (this.toolStartTime || 0)
         this.toolStartTime = undefined
         return { state: 'tool_done', elapsed }

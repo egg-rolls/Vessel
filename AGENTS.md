@@ -73,7 +73,7 @@ docs/dev/ → 临时产物，无限制
 
 - 把插件对象塞进 runtime 构造函数（guardrail/memory/mcp/corrections/resilience/evals）。→ 违 ADR-003。
 - 新增第 2 套扩展机制（不走 Plugin + PluginHost）。→ 违 ADR-004。
-- 用散落字符串发事件，而非 EventType 枚举。→ 违 ADR-008。
+- 新增事件名常量/枚举（EventType / PermissionEvent 已废；ADR-030：事件名一律用开放字符串字面量）。→ 违 ADR-030。
 - 写 sync-in-async（阻塞调用混进异步路径）。→ 违旧项目教训6。
 - 留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。→ 违旧项目教训11。
 - 给 core 加默认厂商 API Key/Base URL/价格。→ 违 ADR-005（Key 永远用户自备）。
@@ -123,7 +123,7 @@ docs/dev/ → 临时产物，无限制
 冻结范围：`packages/core/src/**` 中所有定义了接口契约、循环逻辑、事件类型的文件。
 
 **只能因三种原因改 core**（ADR-012(2a-c)，需 ADR-017 解冻条件）：
-1. 扩"插座"——EventType / HookType / GuardrailStage 枚举成员（需写新 ADR）
+1. 扩"插座"——HookType / GuardrailStage 枚举成员（需写新 ADR）
 2. 修 loop 级 bug（竞态、泄漏、安全）
 3. 横切需求——**先证明**无法用 Plugin/Hook/Guardrail/事件/工具表示（ADR-015：尚无已知的此类需求）
 
@@ -133,6 +133,6 @@ docs/dev/ → 临时产物，无限制
 [ ] 我能用 MCP server + bridge plugin 实现吗？
 [ ] 我能用 Skill（Markdown + BeforeLlm Hook）实现吗？
 [ ] 我能用 Guardrail（四阶段）实现吗？
-[ ] 我能用事件（新增或现有 EventType）实现吗？
+[ ] 我能用事件（开放字符串协议，ADR-030）实现吗？
 → 任一为"是" → 不进 core。全"否" → 写 ADR，两人 Review。
 ```

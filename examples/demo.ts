@@ -6,7 +6,6 @@
 
 import {
   AgentRuntime,
-  EventType,
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
@@ -66,10 +65,10 @@ async function main() {
   // 5. 订阅事件流
   const unsubscribe = events.subscribe((event: RunEvent) => {
     switch (event.type) {
-      case EventType.RunStarted:
+      case 'run.started':
         console.log('[Event] Run started');
         break;
-      case EventType.RunCompleted:
+      case 'run.completed':
         console.log('[Event] Run completed');
         break;
     }

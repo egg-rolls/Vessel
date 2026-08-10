@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '../src/events/event-stream';
-import { EventType } from '../src/types/event';
 
 describe('MemoryEventStream', () => {
   let eventStream: MemoryEventStream;
@@ -16,7 +15,7 @@ describe('MemoryEventStream', () => {
     });
 
     const testEvent = {
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: 'test-run',
       data: { run_id: 'test-run', input: 'test' },
       ts: Date.now(),
@@ -39,7 +38,7 @@ describe('MemoryEventStream', () => {
     unsubscribe();
 
     const testEvent = {
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: 'test-run',
       data: { run_id: 'test-run', input: 'test' },
       ts: Date.now(),
@@ -52,7 +51,7 @@ describe('MemoryEventStream', () => {
 
   it('should store history', () => {
     const testEvent = {
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: 'test-run',
       data: { run_id: 'test-run', input: 'test' },
       ts: Date.now(),
@@ -67,14 +66,14 @@ describe('MemoryEventStream', () => {
 
   it('should filter history by run_id', () => {
     const event1 = {
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: 'run-1',
       data: { run_id: 'run-1', input: 'test1' },
       ts: Date.now(),
     };
 
     const event2 = {
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: 'run-2',
       data: { run_id: 'run-2', input: 'test2' },
       ts: Date.now(),
@@ -90,7 +89,7 @@ describe('MemoryEventStream', () => {
 
   it('should clear history', () => {
     const testEvent = {
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: 'test-run',
       data: { run_id: 'test-run', input: 'test' },
       ts: Date.now(),

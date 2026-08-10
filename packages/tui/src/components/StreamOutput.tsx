@@ -6,7 +6,6 @@
  */
 
 import type { EventStream, RunEvent } from '@vessel/core';
-import { EventType } from '@vessel/core';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -51,10 +50,10 @@ export function getResponseText(segs: Segment[]): string {
  */
 export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => string): Segment[] {
   switch (event.type) {
-    case EventType.RunStarted:
+    case 'run.started':
       return [];
 
-    case EventType.LlmStreamChunk: {
+    case 'llm.stream.chunk': {
       const data = event.data as { chunk: { type: string; delta?: string } };
       const delta = data.chunk.delta;
       if (data.chunk.type === 'text_delta' && delta) {
@@ -67,7 +66,7 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
       return prev;
     }
 
-    case EventType.ToolCallStarted: {
+    case 'tool.call.started': {
       const d = event.data as {
         tool_call_id: string;
         tool_name: string;
@@ -76,7 +75,7 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
       return [...prev, makeToolCallSegment(d.tool_call_id, d.tool_name, d.arguments)];
     }
 
-    case EventType.ToolCallCompleted: {
+    case 'tool.call.completed': {
       const d = event.data as {
         tool_call_id: string;
         duration_ms: number;
@@ -88,7 +87,7 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
       );
     }
 
-    case EventType.ToolCallFailed: {
+    case 'tool.call.failed': {
       const d = event.data as {
         tool_call_id: string;
         error: string;
@@ -151,23 +150,23 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
   useEffect(() => {
     const unsubscribe = events.subscribe((event: RunEvent) => {
       switch (event.type) {
-        case EventType.RunStarted:
+        case 'run.started':
           resetSegments();
           setIsStreaming(true);
           break;
 
-        case EventType.LlmStreamChunk:
-        case EventType.ToolCallStarted:
-        case EventType.ToolCallCompleted:
-        case EventType.ToolCallFailed: {
+        case 'llm.stream.chunk':
+        case 'tool.call.started':
+        case 'tool.call.completed':
+        case 'tool.call.failed': {
           const next = reduceSegments(segmentsRef.current, event, nextId);
           segmentsRef.current = next;
           setSegments([...next]);
           break;
         }
 
-        case EventType.RunCompleted:
-        case EventType.RunFailed: {
+        case 'run.completed':
+        case 'run.failed': {
           // 通知父组件归档当前轮输出
           const responseText = getResponseText(segmentsRef.current);
           if (responseText) {

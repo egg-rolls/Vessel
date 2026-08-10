@@ -19,12 +19,7 @@ import type { EventStream } from '@vessel/core';
 import { Box, type Key, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
-import {
-  type AskUserAnswer,
-  AskUserEvent,
-  type AskUserQuestion,
-  type AskUserRequestedData,
-} from '../renderer/ask-user.js';
+import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
 
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
@@ -212,7 +207,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   // 订阅 ask.user.requested：收到即展示问题（事件流取代回调注入，ADR-029）
   useEffect(() => {
     const unsubscribe = events.subscribe((event) => {
-      if (event.type !== AskUserEvent.Requested) return;
+      if (event.type !== 'ask.user.requested') return;
       const data = event.data as unknown as AskUserRequestedData;
       setPrompt({ ...data, run_id: event.run_id });
       setCurrentIndex(0);
@@ -325,7 +320,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   const publishAnswers = useCallback(
     (promptRef: ActivePrompt, payload: AskUserAnswer[]) => {
       events.publish({
-        type: AskUserEvent.Answered,
+        type: 'ask.user.answered',
         run_id: promptRef.run_id,
         data: { requestId: promptRef.requestId, answers: payload },
         ts: Date.now(),

@@ -5,7 +5,6 @@ import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import { MemoryToolRegistry } from '../src/tools/tool-registry';
-import { EventType, PermissionEvent } from '../src/types/event';
 import type { ToolDefinition } from '../src/types/tool';
 
 /** 构造"第一次 user 消息返回 tool_calls，之后返回 stop"的 provider */
@@ -81,12 +80,12 @@ describe('AgentRuntime Integration', () => {
 
     // 应该有 RunStarted 和 RunCompleted 事件
     const eventTypes = receivedEvents.map((e) => (e as { type: string }).type);
-    expect(eventTypes).toContain(EventType.RunStarted);
-    expect(eventTypes).toContain(EventType.RunCompleted);
-    expect(eventTypes).toContain(EventType.LlmRequest);
-    expect(eventTypes).toContain(EventType.LlmResponse);
+    expect(eventTypes).toContain('run.started');
+    expect(eventTypes).toContain('run.completed');
+    expect(eventTypes).toContain('llm.request');
+    expect(eventTypes).toContain('llm.response');
     // 流式（ADR-007/016）：MemoryLLMProvider 经 on_chunk 吐增量，runtime 发 LlmStreamChunk
-    expect(eventTypes).toContain(EventType.LlmStreamChunk);
+    expect(eventTypes).toContain('llm.stream.chunk');
 
     unsubscribe();
   });
@@ -94,7 +93,7 @@ describe('AgentRuntime Integration', () => {
   it('should emit LlmStreamChunk events whose text deltas reassemble into the response', async () => {
     const streamChunks: unknown[] = [];
     const unsubscribe = eventStream.subscribe((event) => {
-      if (event.type === EventType.LlmStreamChunk) {
+      if (event.type === 'llm.stream.chunk') {
         const payload = event as { data: { chunk: { type: string; delta?: string } } };
         streamChunks.push(payload.data.chunk);
       }
@@ -281,11 +280,11 @@ describe('AgentRuntime Integration', () => {
 
     const events = new MemoryEventStream();
     events.subscribe((event) => {
-      if (event.type === PermissionEvent.Requested) {
+      if (event.type === 'tool.permission.request') {
         requestedCount++;
         const data = event.data as unknown as { requestId: string };
         events.publish({
-          type: PermissionEvent.Decided,
+          type: 'tool.permission.response',
           run_id: event.run_id,
           data: { requestId: data.requestId, decision: 'allow' },
           ts: Date.now(),
@@ -347,10 +346,10 @@ describe('AgentRuntime Integration', () => {
 
     const events = new MemoryEventStream();
     events.subscribe((event) => {
-      if (event.type === PermissionEvent.Requested) {
+      if (event.type === 'tool.permission.request') {
         const data = event.data as unknown as { requestId: string };
         events.publish({
-          type: PermissionEvent.Decided,
+          type: 'tool.permission.response',
           run_id: event.run_id,
           data: { requestId: data.requestId, decision: 'deny' },
           ts: Date.now(),
@@ -461,11 +460,11 @@ describe('AgentRuntime Integration', () => {
     const events = new MemoryEventStream();
     let requested = 0;
     events.subscribe((event) => {
-      if (event.type === PermissionEvent.Requested) {
+      if (event.type === 'tool.permission.request') {
         requested++;
         const data = event.data as unknown as { requestId: string };
         events.publish({
-          type: PermissionEvent.Decided,
+          type: 'tool.permission.response',
           run_id: event.run_id,
           data: { requestId: data.requestId, decision: 'allow' },
           ts: Date.now(),
@@ -507,7 +506,7 @@ describe('AgentRuntime Integration', () => {
     const events = new MemoryEventStream();
     let requested = 0;
     events.subscribe((event) => {
-      if (event.type === PermissionEvent.Requested) requested++;
+      if (event.type === 'tool.permission.request') requested++;
     });
 
     const runtime = await AgentRuntime.create({
@@ -544,7 +543,7 @@ describe('AgentRuntime Integration', () => {
     const events = new MemoryEventStream();
     let requested = 0;
     events.subscribe((event) => {
-      if (event.type === PermissionEvent.Requested) requested++;
+      if (event.type === 'tool.permission.request') requested++;
     });
 
     const runtime = await AgentRuntime.create({
@@ -581,11 +580,11 @@ describe('AgentRuntime Integration', () => {
     const events = new MemoryEventStream();
     let requested = 0;
     events.subscribe((event) => {
-      if (event.type === PermissionEvent.Requested) {
+      if (event.type === 'tool.permission.request') {
         requested++;
         const data = event.data as unknown as { requestId: string };
         events.publish({
-          type: PermissionEvent.Decided,
+          type: 'tool.permission.response',
           run_id: event.run_id,
           data: { requestId: data.requestId, decision: 'allow', remember: true },
           ts: Date.now(),

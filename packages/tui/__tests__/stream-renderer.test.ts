@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { EventType, MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel/core';
 import { StreamRenderer } from '../src/renderer/stream-renderer.js';
 
 describe('StreamRenderer', () => {
@@ -40,7 +40,7 @@ describe('StreamRenderer', () => {
 
       // 先触发一个 text_delta 设置 streamedAny
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'hello' } },
         ts: Date.now(),
@@ -48,7 +48,7 @@ describe('StreamRenderer', () => {
 
       // 触发 RunStarted 应该重置
       eventStream.publish({
-        type: EventType.RunStarted,
+        type: 'run.started',
         run_id: 'r2',
         data: { run_id: 'r2', input: 'test' },
         ts: Date.now(),
@@ -62,7 +62,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'Hello' } },
         ts: Date.now(),
@@ -76,7 +76,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallStarted,
+        type: 'tool.call.started',
         run_id: 'r1',
         data: { tool_name: 'file_read', arguments: { path: '/test' } },
         ts: Date.now(),
@@ -90,7 +90,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallCompleted,
+        type: 'tool.call.completed',
         run_id: 'r1',
         data: { tool_name: 'file_read', duration_ms: 42 },
         ts: Date.now(),
@@ -104,7 +104,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallFailed,
+        type: 'tool.call.failed',
         run_id: 'r1',
         data: { tool_name: 'file_read', error: 'File not found', duration_ms: 10 },
         ts: Date.now(),
@@ -118,7 +118,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.GuardrailBlocked,
+        type: 'guardrail.blocked',
         run_id: 'r1',
         data: { guardrail_name: 'pii', stage: 'output', reason: 'PII detected' },
         ts: Date.now(),
@@ -133,7 +133,7 @@ describe('StreamRenderer', () => {
 
       // 先发送 text_delta
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'hello' } },
         ts: Date.now(),
@@ -141,7 +141,7 @@ describe('StreamRenderer', () => {
 
       // 发送 RunCompleted
       eventStream.publish({
-        type: EventType.RunCompleted,
+        type: 'run.completed',
         run_id: 'r1',
         data: { run_id: 'r1', output: 'hello', duration_ms: 100, iterations: 1 },
         ts: Date.now(),
@@ -155,7 +155,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.RunFailed,
+        type: 'run.failed',
         run_id: 'r1',
         data: { run_id: 'r1', error: 'API rate limit', duration_ms: 50 },
         ts: Date.now(),
@@ -173,7 +173,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'Hello World' } },
         ts: Date.now(),
@@ -187,7 +187,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'tool_call_delta', index: 0, delta: { arguments: '{"' } } },
         ts: Date.now(),
@@ -202,7 +202,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: '' } },
         ts: Date.now(),
@@ -223,13 +223,13 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'hi' } },
         ts: Date.now(),
       });
       eventStream.publish({
-        type: EventType.RunCompleted,
+        type: 'run.completed',
         run_id: 'r1',
         data: { run_id: 'r1', output: 'hi', duration_ms: 10, iterations: 1 },
         ts: Date.now(),
@@ -243,7 +243,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.RunCompleted,
+        type: 'run.completed',
         run_id: 'r1',
         data: { run_id: 'r1', output: '', duration_ms: 10, iterations: 1 },
         ts: Date.now(),
@@ -258,13 +258,13 @@ describe('StreamRenderer', () => {
 
       // 第一个 run 有流式输出
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'hi' } },
         ts: Date.now(),
       });
       eventStream.publish({
-        type: EventType.RunCompleted,
+        type: 'run.completed',
         run_id: 'r1',
         data: { run_id: 'r1', output: 'hi', duration_ms: 10, iterations: 1 },
         ts: Date.now(),
@@ -274,13 +274,13 @@ describe('StreamRenderer', () => {
 
       // 第二个 run 开始（重置 streamedAny）+ 完成（无流式输出）
       eventStream.publish({
-        type: EventType.RunStarted,
+        type: 'run.started',
         run_id: 'r2',
         data: { run_id: 'r2', input: 'test' },
         ts: Date.now(),
       });
       eventStream.publish({
-        type: EventType.RunCompleted,
+        type: 'run.completed',
         run_id: 'r2',
         data: { run_id: 'r2', output: 'no stream', duration_ms: 10, iterations: 1 },
         ts: Date.now(),
@@ -297,7 +297,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallStarted,
+        type: 'tool.call.started',
         run_id: 'r1',
         data: { tool_name: 'test', arguments: {} },
         ts: Date.now(),
@@ -312,7 +312,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallStarted,
+        type: 'tool.call.started',
         run_id: 'r1',
         data: { tool_name: 'test', arguments: {} },
         ts: Date.now(),
@@ -329,7 +329,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallStarted,
+        type: 'tool.call.started',
         run_id: 'r1',
         data: { tool_name: 'file_read', arguments: { path: '/test.txt' } },
         ts: Date.now(),
@@ -343,7 +343,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream);
 
       eventStream.publish({
-        type: EventType.ToolCallStarted,
+        type: 'tool.call.started',
         run_id: 'r1',
         data: { tool_name: 'file_read', arguments: { path: '/test.txt' } },
         ts: Date.now(),
@@ -361,7 +361,7 @@ describe('StreamRenderer', () => {
 
       const longArgs = { content: 'a'.repeat(200) };
       eventStream.publish({
-        type: EventType.ToolCallStarted,
+        type: 'tool.call.started',
         run_id: 'r1',
         data: { tool_name: 'write_file', arguments: longArgs },
         ts: Date.now(),
@@ -379,7 +379,7 @@ describe('StreamRenderer', () => {
       renderer.start(eventStream); // 第二次应该忽略
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'test' } },
         ts: Date.now(),
@@ -395,7 +395,7 @@ describe('StreamRenderer', () => {
       renderer.stop();
 
       eventStream.publish({
-        type: EventType.LlmStreamChunk,
+        type: 'llm.stream.chunk',
         run_id: 'r1',
         data: { chunk: { type: 'text_delta', delta: 'test' } },
         ts: Date.now(),

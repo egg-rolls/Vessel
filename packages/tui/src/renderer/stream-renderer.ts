@@ -9,7 +9,6 @@
  */
 
 import type { EventStream, RunEvent, StreamChunk } from '@vessel/core';
-import { EventType } from '@vessel/core';
 
 /** 渲染器配置 */
 export interface StreamRendererConfig {
@@ -65,38 +64,38 @@ export class StreamRenderer {
 
   private handleEvent(event: RunEvent): void {
     switch (event.type) {
-      case EventType.RunStarted: {
+      case 'run.started': {
         this.streamedAny = false;
         break;
       }
-      case EventType.LlmStreamChunk: {
+      case 'llm.stream.chunk': {
         const data = event.data as { chunk: StreamChunk };
         this.handleChunk(data.chunk);
         break;
       }
-      case EventType.ToolCallStarted: {
+      case 'tool.call.started': {
         this.renderToolCallStarted(event);
         break;
       }
-      case EventType.ToolCallCompleted: {
+      case 'tool.call.completed': {
         this.renderToolCallCompleted(event);
         break;
       }
-      case EventType.ToolCallFailed: {
+      case 'tool.call.failed': {
         this.renderToolCallFailed(event);
         break;
       }
-      case EventType.GuardrailBlocked: {
+      case 'guardrail.blocked': {
         const data = event.data as { reason: string };
         process.stdout.write(`${this.color('red', `\n🚫 Blocked: ${data.reason}\n`)}`);
         break;
       }
-      case EventType.RunCompleted: {
+      case 'run.completed': {
         this.lastRunStreamed = this.streamedAny;
         if (this.streamedAny) process.stdout.write('\n');
         break;
       }
-      case EventType.RunFailed: {
+      case 'run.failed': {
         this.lastRunStreamed = this.streamedAny;
         const data = event.data as { error: string };
         if (!this.streamedAny) process.stdout.write('\n');
