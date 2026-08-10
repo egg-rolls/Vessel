@@ -77,7 +77,6 @@ describe('AgentRuntime Integration', () => {
     await runtime.run('Test');
 
     expect(receivedEvents.length).toBeGreaterThan(0);
-
     // 应该有 RunStarted 和 RunCompleted 事件
     const eventTypes = receivedEvents.map((e) => (e as { type: string }).type);
     expect(eventTypes).toContain('run.started');
@@ -87,6 +86,26 @@ describe('AgentRuntime Integration', () => {
     // 流式（ADR-007/016）：MemoryLLMProvider 经 on_chunk 吐增量，runtime 发 LlmStreamChunk
     expect(eventTypes).toContain('llm.stream.chunk');
 
+    unsubscribe();
+  });
+
+  it('should publish context.changed events during run (ADR-031)', async () => {
+    const changedEvents: Array<{ type: string; data: Record<string, unknown> }> = [];
+    const unsubscribe = eventStream.subscribe((event) => {
+      if (event.type === 'context.changed') {
+        changedEvents.push(event as { type: string; data: Record<string, unknown> });
+      }
+    });
+
+    await runtime.run('Hello');
+
+    // 至少发布 user/assistant 消息的 context.changed
+    expect(changedEvents.length).toBeGreaterThan(0);
+    const last = changedEvents[changedEvents.length - 1] as {
+      type: string;
+      data: Record<string, unknown>;
+    };
+    expect((last.data as { message_count: number }).message_count).toBeGreaterThan(0);
     unsubscribe();
   });
 

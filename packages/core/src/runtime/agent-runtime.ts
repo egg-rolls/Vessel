@@ -152,16 +152,19 @@ export class AgentRuntime {
         const saved = await this.session.load(currentSessionId);
         if (saved?.messages?.length) {
           for (const m of saved.messages) {
-            this.context.add(m);
+            this.addContext(m, runId);
           }
           restored = true;
         }
       }
       if (!restored && this.systemPrompt) {
-        this.context.add({
-          role: 'system',
-          content: this.systemPrompt,
-        });
+        this.addContext(
+          {
+            role: 'system',
+            content: this.systemPrompt,
+          },
+          runId,
+        );
       }
     }
 
@@ -194,7 +197,7 @@ export class AgentRuntime {
 
     try {
       // 添加用户消息到上下文
-      this.context.add(userMessage);
+      this.addContext(userMessage, runId);
 
       // 应用输入 Guardrail
       const inputResult = await this.applyGuardrails(
@@ -438,21 +441,27 @@ export class AgentRuntime {
         }
 
         // 添加助手消息到上下文
-        this.context.add({
-          role: 'assistant',
-          content: response.content,
-        });
+        this.addContext(
+          {
+            role: 'assistant',
+            content: response.content,
+          },
+          runId,
+        );
 
         return response.content;
       }
 
       if (response.finish_reason === 'tool_calls' && response.tool_calls) {
         // 添加助手消息（包含 tool_calls）到上下文
-        this.context.add({
-          role: 'assistant',
-          content: response.content ?? '',
-          tool_calls: response.tool_calls,
-        });
+        this.addContext(
+          {
+            role: 'assistant',
+            content: response.content ?? '',
+            tool_calls: response.tool_calls,
+          },
+          runId,
+        );
 
         // 执行每个工具调用
         for (const toolCall of response.tool_calls) {
@@ -593,11 +602,14 @@ export class AgentRuntime {
             await this.runHooks(HookType.AfterTool, hookCtx);
 
             // 添加工具结果到上下文（标准 role: tool 消息）
-            this.context.add({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: result,
-            });
+            this.addContext(
+              {
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: result,
+              },
+              runId,
+            );
             // 注：不再注入假 assistant 消息（见 ADR-005 / Phase 1 review #3）
             // Provider 负责正确解释 role: tool 消息
           } catch (error) {
@@ -627,19 +639,25 @@ export class AgentRuntime {
             });
 
             // 添加错误结果到上下文
-            this.context.add({
-              role: 'tool',
-              tool_call_id: toolCall.id,
-              content: `Error: ${errorMessage}`,
-            });
+            this.addContext(
+              {
+                role: 'tool',
+                tool_call_id: toolCall.id,
+                content: `Error: ${errorMessage}`,
+              },
+              runId,
+            );
           }
         }
       } else {
         // 其他完成原因（如 length），直接返回当前内容
-        this.context.add({
-          role: 'assistant',
-          content: response.content,
-        });
+        this.addContext(
+          {
+            role: 'assistant',
+            content: response.content,
+          },
+          runId,
+        );
         return response.content;
       }
     }
@@ -709,6 +727,24 @@ export class AgentRuntime {
     for (const hook of hooks) {
       await hook.run(ctx);
     }
+  }
+
+  /**
+   * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
+   */
+  private addContext(msg: Message, runId: string): void {
+    this.context.add(msg);
+    this.publishEvent({
+      type: 'context.changed',
+      run_id: runId,
+      data: {
+        run_id: runId,
+        message: msg,
+        message_count: this.context.messages.length,
+        token_count: this.context.tokenCount,
+      },
+      ts: Date.now(),
+    });
   }
 
   /**
