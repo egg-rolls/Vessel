@@ -54,11 +54,11 @@ async function main() {
     context,
     events,
     limits: {
-      request_limit: 100,
-      tool_calls_limit: 50,
+      requestLimit: 100,
+      toolCallsLimit: 50,
     },
     termination: {
-      max_iterations: 10,
+      maxIterations: 10,
     },
     session,
   });

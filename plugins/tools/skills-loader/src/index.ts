@@ -11,6 +11,11 @@ import * as path from 'node:path';
 import type { Hook, HookContext, Plugin, PluginHost } from '../../../../packages/core/src/index';
 import { HookType as HookTypeEnum } from '../../../../packages/core/src/index';
 
+/** 调试输出门控（VESSEL_DEBUG 开启才打印，避免每次启动刷屏 stderr） */
+const debug = (...args: unknown[]): void => {
+  if (process.env.VESSEL_DEBUG) console.error(...args);
+};
+
 /** Skill 定义 */
 export interface Skill {
   name: string;
@@ -295,7 +300,7 @@ export function createSkillsLoaderPlugin(config?: SkillsLoaderConfig): Plugin {
         },
         handler: async () => {
           const summary = skillsManager.getSkillsSummary();
-          console.error('[Skills Loader] list_skills called, returning:', summary);
+          debug('[Skills Loader] list_skills called, returning:', summary);
           return summary;
         },
       });
@@ -382,7 +387,7 @@ export function createSkillsLoaderPlugin(config?: SkillsLoaderConfig): Plugin {
       // 启用文件监听（热加载）
       if (loaderConfig.watch) {
         skillsManager.watchSkills();
-        console.error('[Skills Loader] File watching enabled');
+        debug('[Skills Loader] File watching enabled');
       }
     },
   };

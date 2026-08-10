@@ -296,6 +296,13 @@ export class AssetManager {
   }
 
   /**
+   * 获取工具定义（直接拿 ToolDefinition——patch_asset 更新时保留原 handler 用）
+   */
+  getTool(name: string): ToolDefinition | undefined {
+    return this.tools.get(name);
+  }
+
+  /**
    * 删除资产
    */
   removeAsset(type: string, name: string): boolean {
@@ -595,16 +602,23 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
         serverUrl: string;
       };
 
-      // 创建 MCP 连接（简化实现）
+      // 校验 URL 格式
+      try {
+        new URL(serverUrl);
+      } catch {
+        return `Error: Invalid server URL: ${serverUrl}`;
+      }
+
+      // 真实接口：登记连接，但默认未建立实际连接——meta-tools 不持 MCP client，
+      // 真实连接走 mcp-client 插件。诚实反映"无连接"，而非假报 connected。
       const connection: MCPConnection = {
         name,
-        serverUrl: serverUrl,
-        status: 'connected',
-        tools: [],
+        serverUrl,
+        status: 'error',
       };
 
       assetManager.registerMCPConnection(connection);
-      return `Connected to MCP server "${name}" at ${serverUrl}`;
+      return `Failed to connect to MCP server "${name}" at ${serverUrl}: no MCP client available (use mcp-client plugin)`;
     },
   };
 
@@ -671,17 +685,17 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
       };
 
       if (type === 'tool') {
-        const existing = assetManager.getAsset('tool', name);
-        if (!existing) {
+        const existingTool = assetManager.getTool(name);
+        if (!existingTool) {
           return `Tool "${name}" not found`;
         }
 
-        // 重新创建工具
+        // 真实更新：保留原 handler，只更新名称/描述/schema
         const tool: ToolDefinition = {
-          name: (updates.name as string) ?? name,
-          description: (updates.description as string) ?? existing.description,
-          inputSchema: (updates.schema as Record<string, unknown>) ?? existing.schema ?? {},
-          handler: async () => `Tool "${name}" executed`,
+          ...existingTool,
+          name: (updates.name as string) ?? existingTool.name,
+          description: (updates.description as string) ?? existingTool.description,
+          inputSchema: (updates.schema as Record<string, unknown>) ?? existingTool.inputSchema,
         };
 
         assetManager.registerTool(tool);
