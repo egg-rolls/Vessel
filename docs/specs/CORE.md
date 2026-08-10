@@ -104,28 +104,11 @@ interface EventStream {
 }
 
 interface RunEvent {
-  type: string                       // 开放字符串；核心事件名见 EventType 常量
+  type: string                       // 事件名即开放字符串协议（ADR-027/030），无事件常量
   run_id: string
   data: EventPayload | Record<string, unknown>
   ts: number
 }
-
-// EventType 是常量对象（非枚举）——核心事件名，保证拼写稳定与 payload 文档
-const EventType = {
-  RunStarted: 'run.started',
-  LlmRequest: 'llm.request',
-  LlmResponse: 'llm.response',
-  LlmStreamChunk: 'llm.stream.chunk',
-  ToolCallStarted: 'tool.call.started',
-  ToolCallCompleted: 'tool.call.completed',
-  ToolCallFailed: 'tool.call.failed',
-  GuardrailBlocked: 'guardrail.blocked',
-  RunCompleted: 'run.completed',
-  RunFailed: 'run.failed',
-  SessionCreated: 'session.created',
-  SessionLoaded: 'session.loaded',
-  Error: 'error',
-} as const
 ```
 
 **职责**：语言空间的运行轨迹（trace/replay/TUI 共用）；组件间交流总线（工具 ↔ TUI 事件流交互）。
