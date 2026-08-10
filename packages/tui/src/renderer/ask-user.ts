@@ -13,12 +13,6 @@ import type { EventStream, ToolDefinition } from '@vessel/core';
 
 // ── 事件名与载荷 ──────────────────────────────────
 
-/** ask-user 事件名（ADR-029） */
-export const AskUserEvent = {
-  Requested: 'ask.user.requested',
-  Answered: 'ask.user.answered',
-} as const;
-
 /** ask.user.requested 事件载荷（TUI 订阅展示） */
 export interface AskUserRequestedData {
   requestId: string;
@@ -109,14 +103,14 @@ async function promptFromEvents(
 ): Promise<string> {
   const requestId = randomUUID();
   events.publish({
-    type: AskUserEvent.Requested,
+    type: 'ask.user.requested',
     run_id: runId,
     data: { requestId, questions } satisfies AskUserRequestedData,
     ts: Date.now(),
   });
 
   try {
-    const data = (await events.waitFor(AskUserEvent.Answered, {
+    const data = (await events.waitFor('ask.user.answered', {
       requestId,
       timeout: timeoutMs,
     })) as AskUserAnsweredData | undefined;

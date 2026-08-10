@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto';
 import { MemoryLimitChecker } from '../limits/limit-checker.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
-import { EventType, PermissionEvent } from '../types/event.js';
 import { type GuardrailContext, GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
@@ -182,7 +181,7 @@ export class AgentRuntime {
 
     // 发布 Run 开始事件
     this.publishEvent({
-      type: EventType.RunStarted,
+      type: 'run.started',
       run_id: runId,
       data: { run_id: runId, session_id: currentSessionId, input: userMessage.content },
       ts: Date.now(),
@@ -229,7 +228,7 @@ export class AgentRuntime {
 
       // 发布 Run 完成事件
       this.publishEvent({
-        type: EventType.RunCompleted,
+        type: 'run.completed',
         run_id: runId,
         data: {
           run_id: runId,
@@ -264,7 +263,7 @@ export class AgentRuntime {
 
       // 发布 Run 失败事件
       this.publishEvent({
-        type: EventType.RunFailed,
+        type: 'run.failed',
         run_id: runId,
         data: {
           run_id: runId,
@@ -356,7 +355,7 @@ export class AgentRuntime {
       }
 
       this.publishEvent({
-        type: EventType.LlmRequest,
+        type: 'llm.request',
         run_id: runId,
         data: { run_id: runId, messages, tools: toolSchemas },
         ts: Date.now(),
@@ -379,7 +378,7 @@ export class AgentRuntime {
         stream: true,
         on_chunk: (chunk) => {
           this.publishEvent({
-            type: EventType.LlmStreamChunk,
+            type: 'llm.stream.chunk',
             run_id: runId,
             data: { run_id: runId, chunk },
             ts: Date.now(),
@@ -410,7 +409,7 @@ export class AgentRuntime {
 
       // 发布 LLM 响应事件
       this.publishEvent({
-        type: EventType.LlmResponse,
+        type: 'llm.response',
         run_id: runId,
         data: {
           run_id: runId,
@@ -474,7 +473,7 @@ export class AgentRuntime {
           // 发布工具调用开始事件
           const toolStartTime = Date.now();
           this.publishEvent({
-            type: EventType.ToolCallStarted,
+            type: 'tool.call.started',
             run_id: runId,
             data: {
               run_id: runId,
@@ -532,12 +531,12 @@ export class AgentRuntime {
             if (decision === 'ask') {
               const requestId = randomUUID();
               this.publishEvent({
-                type: PermissionEvent.Requested,
+                type: 'tool.permission.request',
                 run_id: runId,
                 data: { requestId, tool: toolName, input: args },
                 ts: Date.now(),
               });
-              const decided = (await this.events.waitFor(PermissionEvent.Decided, {
+              const decided = (await this.events.waitFor('tool.permission.response', {
                 requestId,
                 timeout: PERMISSION_TIMEOUT_MS,
               })) as
@@ -578,7 +577,7 @@ export class AgentRuntime {
 
             // 发布工具调用完成事件
             this.publishEvent({
-              type: EventType.ToolCallCompleted,
+              type: 'tool.call.completed',
               run_id: runId,
               data: {
                 run_id: runId,
@@ -615,7 +614,7 @@ export class AgentRuntime {
 
             // 发布工具调用失败事件
             this.publishEvent({
-              type: EventType.ToolCallFailed,
+              type: 'tool.call.failed',
               run_id: runId,
               data: {
                 run_id: runId,
@@ -669,7 +668,7 @@ export class AgentRuntime {
       const result = await guardrail.check(currentValue, ctx);
       if (!result.allowed) {
         this.publishEvent({
-          type: EventType.GuardrailBlocked,
+          type: 'guardrail.blocked',
           run_id: runId,
           data: {
             run_id: runId,

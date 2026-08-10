@@ -131,23 +131,24 @@ interface ToolContext {
 }
 ```
 
-### EventType（常量，开放事件名 ADR-027）
+### 事件名（开放字符串协议，ADR-030）
 
 ```typescript
-// 核心事件名常量——保证拼写稳定；RunEvent.type 是 string，
-// 插件可发布任意字符串事件名，无需改 core。
-const EventType = {
-  RunStarted: 'run.started',
-  LlmRequest: 'llm.request',
-  LlmResponse: 'llm.response',
-  LlmStreamChunk: 'llm.stream.chunk',
-  ToolCallStarted: 'tool.call.started',
-  ToolCallCompleted: 'tool.call.completed',
-  ToolCallFailed: 'tool.call.failed',
-  GuardrailBlocked: 'guardrail.blocked',
-  RunCompleted: 'run.completed',
-  RunFailed: 'run.failed',
-} as const;
+// ADR-030：事件名一律为开放字符串字面量，无常量/枚举。
+// 核心事件名（供参考）：
+//   'run.started'            RunStartedPayload
+//   'llm.request'            LlmRequestPayload
+//   'llm.response'           LlmResponsePayload
+//   'llm.stream.chunk'       LlmStreamChunkPayload
+//   'tool.call.started'      ToolCallStartedPayload
+//   'tool.call.completed'    ToolCallCompletedPayload
+//   'tool.call.failed'       ToolCallFailedPayload
+//   'guardrail.blocked'      GuardrailBlockedPayload
+//   'guardrail.modified'     GuardrailModifiedPayload
+//   'run.completed'          RunCompletedPayload
+//   'run.failed'             RunFailedPayload
+//   'session.created' / 'session.loaded' / 'error'
+// 插件可发布任意自定义字符串事件名，无需改 core。
 ```
 
 ### Guardrail

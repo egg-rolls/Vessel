@@ -12,7 +12,6 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { EventType } from '@vessel/core';
 import {
   getResponseText,
   makeToolCallSegment,
@@ -32,7 +31,7 @@ function makeNextId(): () => string {
 /** 构造精简的 RunEvent，只需要 reduceSegments 实际读取的字段 */
 function textDelta(delta: string) {
   return {
-    type: EventType.LlmStreamChunk,
+    type: 'llm.stream.chunk',
     run_id: 'r',
     data: { chunk: { type: 'text_delta', delta } },
     ts: 0,
@@ -41,7 +40,7 @@ function textDelta(delta: string) {
 
 function toolStarted(id: string, name: string, args: unknown = {}) {
   return {
-    type: EventType.ToolCallStarted,
+    type: 'tool.call.started',
     run_id: 'r',
     data: { tool_call_id: id, tool_name: name, arguments: args },
     ts: 0,
@@ -50,7 +49,7 @@ function toolStarted(id: string, name: string, args: unknown = {}) {
 
 function toolCompleted(id: string, durationMs = 42) {
   return {
-    type: EventType.ToolCallCompleted,
+    type: 'tool.call.completed',
     run_id: 'r',
     data: { tool_call_id: id, duration_ms: durationMs },
     ts: 0,
@@ -59,7 +58,7 @@ function toolCompleted(id: string, durationMs = 42) {
 
 function toolFailed(id: string, error: string, durationMs = 100) {
   return {
-    type: EventType.ToolCallFailed,
+    type: 'tool.call.failed',
     run_id: 'r',
     data: { tool_call_id: id, error, duration_ms: durationMs },
     ts: 0,
@@ -68,7 +67,7 @@ function toolFailed(id: string, error: string, durationMs = 100) {
 
 function runStarted() {
   return {
-    type: EventType.RunStarted,
+    type: 'run.started',
     run_id: 'r',
     data: { run_id: 'r', input: 'test' },
     ts: 0,

@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel/core';
-import { AskUserEvent, createAskUserTool } from '../src/renderer/ask-user';
+import { createAskUserTool } from '../src/renderer/ask-user';
 
 /** 便捷构建测试输入 */
 function sampleQuestions() {
@@ -28,10 +28,10 @@ function sampleAnswers(answers: string[]) {
 /** 订阅 ask.user.requested 并自动应答 */
 function autoAnswer(events: MemoryEventStream, answers: ReturnType<typeof sampleAnswers>) {
   events.subscribe((event) => {
-    if (event.type === AskUserEvent.Requested) {
+    if (event.type === 'ask.user.requested') {
       const data = event.data as unknown as { requestId: string };
       events.publish({
-        type: AskUserEvent.Answered,
+        type: 'ask.user.answered',
         run_id: event.run_id,
         data: { requestId: data.requestId, answers },
         ts: Date.now(),
@@ -72,10 +72,10 @@ describe('createAskUserTool（事件流交互）', () => {
       | undefined;
 
     events.subscribe((event) => {
-      if (event.type === AskUserEvent.Requested) {
+      if (event.type === 'ask.user.requested') {
         captured = event.data as unknown as typeof captured;
         events.publish({
-          type: AskUserEvent.Answered,
+          type: 'ask.user.answered',
           run_id: event.run_id,
           data: { requestId: captured?.requestId ?? '', answers: sampleAnswers(['ESM', '开发']) },
           ts: Date.now(),
@@ -93,14 +93,14 @@ describe('createAskUserTool（事件流交互）', () => {
   it('handler normalizes missing header with a fallback', async () => {
     const events = new MemoryEventStream();
     events.subscribe((event) => {
-      if (event.type === AskUserEvent.Requested) {
+      if (event.type === 'ask.user.requested') {
         const data = event.data as unknown as {
           requestId: string;
           questions: Array<{ header: string }>;
         };
         expect(data.questions[0]?.header).toBe('问题 1');
         events.publish({
-          type: AskUserEvent.Answered,
+          type: 'ask.user.answered',
           run_id: event.run_id,
           data: {
             requestId: data.requestId,
@@ -171,10 +171,10 @@ describe('createAskUserTool（事件流交互）', () => {
   it('empty answers (user cancel) returns an error', async () => {
     const events = new MemoryEventStream();
     events.subscribe((event) => {
-      if (event.type === AskUserEvent.Requested) {
+      if (event.type === 'ask.user.requested') {
         const data = event.data as unknown as { requestId: string };
         events.publish({
-          type: AskUserEvent.Answered,
+          type: 'ask.user.answered',
           run_id: event.run_id,
           data: { requestId: data.requestId, answers: [] },
           ts: Date.now(),

@@ -7,7 +7,6 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
-import { PermissionEvent } from '@vessel/core';
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -109,7 +108,7 @@ function InkRepl({ ctx }: InkReplProps) {
   // 订阅权限确认请求（ADR-029：工具自带 checkPermission 或 runtime 'ask' 分支都发此事件）
   useEffect(() => {
     const unsubscribe = ctx.events.subscribe((event) => {
-      if (event.type !== PermissionEvent.Requested) return;
+      if (event.type !== 'tool.permission.request') return;
       const data = event.data as unknown as ToolPermissionRequestedData;
       setPermissionOverlay({
         requestId: data.requestId,
@@ -262,7 +261,7 @@ function InkRepl({ ctx }: InkReplProps) {
       if (permissionOverlay) {
         const always = answer === 'always';
         ctx.events.publish({
-          type: PermissionEvent.Decided,
+          type: 'tool.permission.response',
           run_id: permissionOverlay.run_id,
           data: {
             requestId: permissionOverlay.requestId,

@@ -385,7 +385,7 @@ enum GuardrailStage {
 [ ] 我能用 MCP server + bridge plugin 实现吗？
 [ ] 我能用 Skill（Markdown + BeforeLlm Hook）实现吗？
 [ ] 我能用 Guardrail（四阶段）实现吗？
-[ ] 我能用事件（新增或现有 EventType）实现吗？
+[ ] 我能用事件（开放字符串协议，ADR-030）实现吗？
 → 任一为"是" → 不进 core。
 → 全"否" → 写 ADR，两人 Review。
 ```
@@ -421,7 +421,7 @@ packages/core/src/
 │   ├── provider.ts        # LLMProvider, ChatRequest, LLMResponse
 │   ├── tool.ts            # ToolRegistry, ToolDefinition, ToolHandler
 │   ├── context.ts         # ContextManager
-│   ├── event.ts           # EventStream, EventType, RunEvent
+│   ├── event.ts           # EventStream, RunEvent, payload 接口
 │   ├── guardrail.ts       # Guardrail, GuardrailStage
 │   ├── hook.ts            # Hook, HookType
 │   ├── session.ts         # SessionBackend, SessionInfo
