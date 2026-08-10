@@ -41,7 +41,7 @@ docs/xxx      ──●                 纯文档分支
 | `docs/specs/SPEC.md` | 新代码是否违反接口契约、模块边界 |
 | `docs/specs/ADR.md` | 是否违反已有架构决策 |
 | `docs/specs/ROADMAP.md` | 是否超出 ROADMAP 定义的范围 |
-| `CLAUDE.md` + `../role/DEVELOPER.md` | 工程规范、能力分层、红线 |
+| `CLAUDE.md` + `../role/DEVELOPER.md` + `../../AGENTS.md` | 工程规范(DEVELOPER)、能力分层+红线(AGENTS §4/§6) |
 
 **检查清单**（由 AI Agent 执行并输出结论）：
 
@@ -50,7 +50,7 @@ docs/xxx      ──●                 纯文档分支
 [ ] 能力分层：新代码按决策树正确分类（core/插件/应用层）
 [ ] 红线：未触碰 AGENTS.md §4 红线
 [ ] 扩展机制：未新增第二套扩展路径（ADR-004）
-[ ] 事件类型：未使用散落字符串发事件（ADR-008）
+[ ] 事件名：开放字符串字面量，未定义事件常量/枚举（ADR-030，取代 ADR-008）
 [ ] 同步调用：未在异步路径中混入同步阻塞调用
 [ ] 半成品：无 NotImplementedError / 空实现进 core
 [ ] 文档诚实：未在文档中声称未实现功能
@@ -92,7 +92,7 @@ grep -rE "(sk-[a-zA-Z0-9]{20,}|api_key\s*[:=]\s*['\"][^'\"\s]{20,})" packages/ p
 ```
 1. 获取分支 diff
 2. 对照 docs/specs/ 全部文档检查架构合规
-3. 对照 ../role/DEVELOPER.md（工程规范+能力分层）+ AGENTS.md §4 红线 检查规范
+3. 对照 ../role/DEVELOPER.md（工程规范）+ AGENTS.md §4 红线/§6 能力分层 检查规范
 4. 检查硬编码密钥
 5. 确认 CI 状态（lint/typecheck/test/build）
 6. 输出审查结论（通过/阻断 + 原因；发现问题时给出修复建议）

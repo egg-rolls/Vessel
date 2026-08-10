@@ -1,7 +1,7 @@
 # AGENTS.md
 
 > 本文件是 Vessel 仓库的通用概念手册。**所有 AI Agent 角色必读。**
-> 角色专属规则见 `docs/role/REQUIREMENTS-ANALYST.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`。
+> 角色专属规则：入口 `docs/role/*-TODO.md`（执行清单，必读），角色细节见 `docs/role/REQUIREMENTS-ANALYST.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`（选读）。
 > 本文件与代码冲突时，以代码为准并更新本文件；不靠记忆猜测。
 
 ---
@@ -24,21 +24,39 @@
 
 ## 3. 文档加载策略
 
+按树形加载，不一次全读。入口永远先到角色 TODO，再按需下钻：
+
+```
+CLAUDE.md（入口：场景调度表）
+  └─ 每场景 → role/XXX-TODO.md   ← 必读（执行清单）
+       └─ role/XXX.md            ← 选读（角色文档）
+            └─ 按需 → docs/specs · docs/api · docs/guides
+```
+
 ### 宪法级
 
 这三个文件是仓库的宪法。**不清楚其中内容 = 写出的代码大概率违规**。
 
 | 必读 | 为什么 |
 |------|--------|
-| [docs/specs/SPEC.md](docs/specs/SPEC.md) | 接口契约——不知道接口签名写不了代码 |
+| [docs/specs/SPEC.md](docs/specs/SPEC.md) | 架构/模块/执行模型——不知道系统怎么建写不了代码 |
 | [docs/specs/ADR.md](docs/specs/ADR.md) | 架构决策——不知道历史决策会重蹈覆辙 |
 | [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md) | 文档规范——修改永久文档前必读 |
+
+### 角色入口（开始任何工作前）
+
+| 角色 | 必读（执行清单） | 选读（角色文档） |
+|------|-----------------|-----------------|
+| 需求分析师 | [REQ-TODO.md](docs/role/REQ-TODO.md) | [REQUIREMENTS-ANALYST.md](docs/role/REQUIREMENTS-ANALYST.md) |
+| 架构师 | [ARCH-TODO.md](docs/role/ARCH-TODO.md) | [ARCHITECT.md](docs/role/ARCHITECT.md) |
+| 开发者 | [DEV-TODO.md](docs/role/DEV-TODO.md) | [DEVELOPER.md](docs/role/DEVELOPER.md) |
+| 审查者 | [REVIEW-TODO.md](docs/role/REVIEW-TODO.md) | [REVIEWER.md](docs/role/REVIEWER.md) |
+| 文档管理者 | [DOC-TODO.md](docs/role/DOC-TODO.md) | [DOC-MANAGER.md](docs/role/DOC-MANAGER.md) |
 
 ### 按需加载
 
 | 场景 | 文档 |
 |------|------|
-| **角色入口（开始任何工作前）** | [`docs/role/REQUIREMENTS-ANALYST.md`](docs/role/REQUIREMENTS-ANALYST.md) / [`ARCHITECT.md`](docs/role/ARCHITECT.md) / [`DEVELOPER.md`](docs/role/DEVELOPER.md) / [`REVIEWER.md`](docs/role/REVIEWER.md) / [`DOC-MANAGER.md`](docs/role/DOC-MANAGER.md) |
 | 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
 | 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
 | 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) |
@@ -47,6 +65,7 @@
 | 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
 | 查 Core 接口 | [docs/api/CORE.md](docs/api/CORE.md)（接口契约） |
 | 查 API 签名 | [docs/api/](docs/api/)（API 文档） |
+| 开发指南（上手/构建/测试/插件开发） | [docs/guides/](docs/guides/) |
 | 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
 | Commit/分支/Issue 命名规范 | [processes/conventions.md](processes/conventions.md) |
 | Issue 类型与优先级体系 | [docs/specs/ISSUE-SPEC.md](docs/specs/ISSUE-SPEC.md) |

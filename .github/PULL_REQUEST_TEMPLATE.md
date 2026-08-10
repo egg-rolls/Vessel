@@ -13,7 +13,7 @@
 - [ ] chore
 
 ## 检查清单
-- [ ] 已读 [CLAUDE.md](../CLAUDE.md) §5 能力分层决策树，新能力分类正确（core / 插件 / 应用层）
+- [ ] 已读 [AGENTS.md](../AGENTS.md) §6 能力分层决策树，新能力分类正确（core / 插件 / 应用层）
 - [ ] 未触碰 core 红线（AGENTS.md §4）；若改 core 已附 ADR（ADR-012）
 - [ ] 未引入 LangChain 或重依赖进 core
 - [ ] 补了测试，`bun test` 通过
