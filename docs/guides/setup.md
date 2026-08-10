@@ -66,7 +66,7 @@ vessel/
 | `bun test` | 运行全部测试（152+） |
 | `bun run typecheck` | TypeScript 类型检查 |
 | `bun run lint` | Biome lint+format 检查 |
-| `bun run build` | 构建所有包 + 单二进制 |
+| `bun run build` | 构建所有包（npm 包产物，供 npm publish） |
 | `VESSEL_MOCK=1 bun run start` | Mock 模式 REPL（不调 API） |
 | `bun run start` | 真实 API REPL |
 | `VESSEL_MOCK=1 bun run src/cli.ts --run "..."` | Headless 单轮（mock） |

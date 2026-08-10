@@ -10,9 +10,9 @@
 - `@vessel/core`：最小 tool-calling loop（构造函数仅核心项）+ provider 抽象 + in-memory context/events + PluginHost 骨架。
 - `@vessel/config`：YAML 读取 + schema 校验 + 安全默认。
 - `@vessel/tui`：Ink REPL 桩，能调 `core.run()` 打印结果。
-- Bun 单二进制可出。
+- npm 包可发布（`npx vessel` 可运行，弃单二进制，见 ADR-006）。
 - CI：`.github/workflows/ci.yml` 跑 lint+typecheck+test+build，设为 GitHub required check（ADR-014）。
-- **验收**：`bun test` 通过；单二进制能起 REPL；填 Key 后能完成一次"调一个内置工具"的对话。
+- **验收**：`bun test` 通过；`npx vessel` 能起 REPL；填 Key 后能完成一次"调一个内置工具"的对话。
 
 ## Phase 1 — MVP（见 PRD 成功指标；含 Tier 1 基础）
 
@@ -20,7 +20,7 @@
 - **tui**：流式渲染、slash 命令（`/help` `/tools` `/resume` `/new` `/history` `/reload` `/clear` `/setup` `/exit`）、工具执行前权限确认弹窗、首启配置向导（填 Key/选 provider）、Auto Compact 提示。
 - **config**：`vessel.yaml` 全 schema；零配置起步；未知键报错。
 - **插件示例**：1 个官方插件骨架（如 file-ops 工具集），证明 Plugin 机制。
-- 发布流水线：GitHub Actions release（tag 触发，出 Bun 单二进制 + GitHub Release）；npm 发包：Phase 2。
+- 发布流水线：GitHub Actions release（tag 触发，npm publish 发布包 + GitHub Release）。分发走 npx（弃单二进制，见 ADR-006）。
 - **验收**：无基础用户 ≤5 分钟跑通；弱基础用户 ≤20 行 YAML 定义带自定义工具的 agent；core 可独立嵌入无 UI 依赖；新增 tool/provider/hook/guardrail 走同一注册。
 
 ## Phase 2 — 增强

@@ -3,13 +3,13 @@
 ## 构建
 
 ```bash
-bun run build          # 构建所有包
-bun run build:binary   # 编译为单二进制（Bun --compile）
+bun run build          # 构建所有包（npm 包产物，供 npm publish）
 ```
 
 构建输出：
-- `dist/` — 各包的编译产物
-- `dist/vessel` — 单二进制可执行文件
+- `dist/` — 各包的编译产物（npm 包发布内容）
+
+> 分发走 npx（弃单二进制，见 ADR-006）：不再编译 `bun build --compile` 单二进制；发布 npm 包后用户 `npx vessel` 即用。
 
 ## 类型检查
 

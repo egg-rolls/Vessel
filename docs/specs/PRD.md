@@ -32,7 +32,7 @@
 - core 必备件：tool-calling loop、LLM provider 抽象、上下文管理、Run/Session、结构化事件流、工具注册、UsageLimits/TerminationPolicy、Guardrails（四阶段）、Hooks 接口。
 - TUI 必备件：交互 REPL、流式渲染、slash 命令、工具执行前权限确认、首启配置向导。
 - 配置层：YAML 定义 agent/工具/guardrail；零配置起步 + 渐进披露。
-- 分发：`npx vessel` 零安装 + Bun 单二进制。
+- 分发：`npx vessel` 零安装（弃单二进制，见 ADR-006）。
 
 ### 3.2 明确不做（OUT）
 - workflow/DAG 编排、multi-agent/team、durable execution、evaluation harness（范围外，详见 ROADMAP Phase 3）。
@@ -50,7 +50,7 @@
 | 弱基础定制 | 一份 ≤ 20 行 YAML 能定义一个带自定义工具的 agent |
 | 开发者嵌入 | `@vessel/core` 无 UI 依赖，构造函数 ≤ 核心必需项 |
 | 扩展一致性 | 新增 tool/provider/hook/guardrail 用同一种注册方式 |
-| 分发 | 单二进制 < 30MB，冷启动 < 1s |
+| 分发 | `npx vessel` 零安装（有 Node/Bun 即可），冷启动 < 1s |
 
 ## 5. 竞品定位（摘要）
 

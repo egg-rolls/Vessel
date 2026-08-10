@@ -10,7 +10,7 @@
 
 - **是什么**：自组织 Agent Harness——极简核心（9 个接口、2 个插槽、1 个通用循环），Agent 自己发现缺口、自己装配能力。三层：`@vessel/core`（运行时，可独立嵌入）+ `@vessel/config`（声明式配置）+ `@vessel/tui`（终端交互）。Provider 无关、范式无关、开源。
 - **语言/运行时**：TypeScript + Bun。
-- **分发**：`npx vessel` + `bun build --compile` 单二进制。
+- **分发**：`npx vessel`（弃单二进制，见 ADR-006）。
 - **状态**：pre-MVP。标注 `[plan]` 的为待实现。
 - **大目标**：自组织、极轻便、极强扩展性、厂商中立。无基础用户填 Key 即跑；Agent 自己长大。
 
@@ -45,8 +45,8 @@
 | 修改文档 | [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md)（§七 设计方法——修改文档前必读）、[docs/specs/META-GOVERNANCE.md](docs/specs/META-GOVERNANCE.md)（规范的规范——判断该不该写） |
 | 新增/修改治理规则 | [docs/specs/META-GOVERNANCE.md](docs/specs/META-GOVERNANCE.md)（三条准入 + 四层梯度 + 三类分离） |
 | 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
-| 查 Core 接口 | [docs/specs/CORE.md](docs/specs/CORE.md)（快速参考） |
-| 查 API 签名 | [docs/api/core.md](docs/api/core.md) |
+| 查 Core 接口 | [docs/api/CORE.md](docs/api/CORE.md)（接口契约） |
+| 查 API 签名 | [docs/api/](docs/api/)（API 文档） |
 | 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
 | Commit/分支/Issue 命名规范 | [processes/conventions.md](processes/conventions.md) |
 | Issue 类型与优先级体系 | [docs/specs/ISSUE-SPEC.md](docs/specs/ISSUE-SPEC.md) |

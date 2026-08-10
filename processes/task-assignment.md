@@ -8,7 +8,7 @@
 
 | Phase | 状态 | 证据 |
 |-------|------|------|
-| 0 脚手架 | ✅ 完成 | monorepo;CI 四件套全绿(lint/typecheck/test/build);单二进制可出 |
+| 0 脚手架 | ✅ 完成 | monorepo;CI 四件套全绿(lint/typecheck/test/build);npm 包可出（`npx vessel` 可运行，弃单二进制，见 ADR-006） |
 | 1 MVP-core | ✅ 完成 | runtime loop / provider(流式 SSE + 注册制) / context+auto-compact / session(memory+file+sqlite) / EventStream(含 LlmStreamChunk) / limits(含 AbortSignal) / guardrail+hook 接口 / PluginHost / 动态插件加载 / **Core 冻结(ADR-017)**;73 测试过 |
 | 1 MVP-tui | 🚧 egg-rolls 实现中 | REPL-1~7 完成：`startRepl(ctx)` readline 循环 + 二层 slash 命令(`/session list\|resume\|new\|history`、`/tool list`、`/help /clear /setup /exit`)+ StreamRenderer 流式 token + Hermes `/session resume` pending one-shot + 权限 guardrail(Plugin 注入)+ 默认插件(file-ops/memory-project)+ 错误分类;99 测试过;CI 四件套全绿 |
 

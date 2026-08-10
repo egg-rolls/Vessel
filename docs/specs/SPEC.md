@@ -2,7 +2,7 @@
 
 > 本文档定义 Vessel **怎么建**：架构、模块、接口契约、执行模型、扩展与配置模型。
 > 决策的"为什么"见 [ADR.md](ADR.md)；产品"做什么"见 [PRD.md](PRD.md)；分期见 [ROADMAP.md](ROADMAP.md)；术语见 [GLOSSARY.md](GLOSSARY.md)。
-> **Core 接口快速参考**：见 [CORE.md](CORE.md)。
+> **Core 接口快速参考**：见 [CORE.md](../api/CORE.md)。
 > 标注 `[plan]` 的接口为未实现契约（设计已锚定，实现按 ROADMAP 分期交付）。
 
 ## 1. 系统架构
@@ -330,21 +330,18 @@ interface ContextManager {
 
 ### 4.4 EventStream / RunEvent
 ```ts
-enum EventType {
-  RunStarted, LlmRequest, LlmResponse,
-  ToolCallStarted, ToolCallCompleted, ToolCallFailed,
-  GuardrailBlocked, GuardrailModified,
-  RunCompleted,
-}
+// ADR-030：事件名一律为开放字符串字面量，无常量/枚举
 interface RunEvent {
-  type: EventType;
+  type: string;                       // 事件名即开放字符串协议（ADR-027/030）
   run_id: string;
-  data: EventPayload;   // 按 type 对应 schema（ADR-008）
+  data: EventPayload | Record<string, unknown>;   // 核心事件按 type 对应 schema（ADR-008）
   ts: number;
 }
 interface EventStream {
   subscribe(handler: (e: RunEvent) => void): Unsubscribe;
   publish(e: RunEvent): void;
+  getHistory(runId?: string): RunEvent[];
+  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown>;  // ADR-027
 }
 ```
 

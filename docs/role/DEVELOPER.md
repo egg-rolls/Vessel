@@ -40,9 +40,9 @@ Vessel 有严格的架构约束（[AGENTS.md](../../AGENTS.md) §5 Core 冻结�
 
 **自检**：ADR-003（runtime 构造函数不注入插件）的理由是什么？ADR-004（统一扩展机制）解决了什么问题？
 
-### 4. docs/specs/CORE.md
+### 4. docs/api/
 
-Core 接口快速参考——写代码时随时查阅。
+Core 接口契约与 API 参考——写代码时随时查阅。
 
 **自检**：你要改的文件在 core 里吗？如果在，先读 AGENTS.md §5 Core 冻结的 checklist。
 
