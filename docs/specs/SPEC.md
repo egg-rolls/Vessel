@@ -188,7 +188,7 @@ Agent 完成任务的两个充要条件（直接来源于 §1.1 的适配器模�
 
 任一不满足 → Agent 不应猜、不应装。应走 asset-introspection Skill 的认知检查循环：知识缺 → `search_assets` / `web-search` / `ask_user`；工具缺 → `search_assets` / `connect_mcp` / `add_tool` / `ask_user`。完整认知模式见 [PLUGINS.md §8.1](PLUGINS.md)。
 
-架构验证优先级：标注 ⚠️ 的条目为高风险未验证项，实现时优先验证。架构设计的完整论证见 [SCIENTIFIC-DESIGN.md](SCIENTIFIC-DESIGN.md)。
+架构验证优先级：标注 ⚠️ 的条目为高风险未验证项，实现时优先验证。架构设计的完整论证见 [ADR.md](ADR.md)。
 
 ### 1.6 Loop Engineering 适配验证
 
