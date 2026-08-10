@@ -58,7 +58,7 @@ npx vessel                      # 零安装运行（需 Node/Bun）
 
 ## 贡献
 
-见 [CONTRIBUTING.md](CONTRIBUTING.md)。提交前请读 [CLAUDE.md](CLAUDE.md) 红线与能力分层决策树。
+见 [CONTRIBUTING.md](CONTRIBUTING.md)。提交前请读 [AGENTS.md](AGENTS.md) 红线（§4）与能力分层决策树（§6）。
 
 ## 许可证
 

@@ -168,7 +168,7 @@ const newProtocolPlugin: Plugin = {
 | 接口契约（API 先于实现） | ✅ | SPEC §4：9 个 core 接口 + PluginHost + ToolDefinition，全部 TS 类型声明 |
 | 扩展开放/修改关闭 | ✅ | PluginHost 统一扩展点；进 core 有决策树；改 core 需 ADR |
 | 单一职责（模块） | ✅ | 9 个 core 接口各管一面；God-object 被 ADR-003 明确禁止 |
-| 可观测（Event） | ✅ | EventStream 枚举化，trace/replay/TUI 共用 |
+| 可观测（Event） | ✅ | EventStream 开放字符串事件名（ADR-030），trace/replay/TUI 共用 |
 | 风险自知 | ✅ | SPEC §1.4 诚实列出 6 个已知风险 + 缓解 |
 | 术语统一 | ✅ | GLOSSARY.md；跨文档交叉引用 |
 | 最小可行 | ✅ | ROADMAP 分期明确；超出范围项标记为 Phase 2/3 |
@@ -278,7 +278,7 @@ run(userInput):
 ### 3.3 统一事件流
 - 所有中间过程发 `RunEvent`；trace / replay / TUI 流式渲染订阅同一流。
 - **流式 = 订阅事件流**，不是另一个 runtime（ADR-007）。
-- 事件类型枚举化，payload 按 type 有 schema（ADR-008）。
+- 事件名开放字符串字面量（ADR-030，取代 ADR-008），payload 按 type 有 schema。
 
 ## 4. 模块契约（`@vessel/core`）
 
@@ -334,7 +334,7 @@ interface ContextManager {
 interface RunEvent {
   type: string;                       // 事件名即开放字符串协议（ADR-027/030）
   run_id: string;
-  data: EventPayload | Record<string, unknown>;   // 核心事件按 type 对应 schema（ADR-008）
+  data: EventPayload | Record<string, unknown>;   // 事件名开放字符串（ADR-030），核心事件按 type 对应 schema
   ts: number;
 }
 interface EventStream {
@@ -654,5 +654,5 @@ tools:
 实现必须遵守的约束清单（含理由）见 [AGENTS.md §4 红线](../../AGENTS.md)。核心几条：
 - core 极小：runtime 只管 loop+事件+状态；guardrail/memory/mcp/corrections/resilience/evals 是插件。
 - runtime 构造函数只收核心必需项，不注入插件对象。
-- 事件类型枚举化 + payload schema；全异步无 sync-in-async；不可变优先；不留 stub。
+- 事件名开放字符串（ADR-030）+ payload schema；全异步无 sync-in-async；不可变优先；不留 stub。
 - core 不依赖 tui/config/plugins；不绑厂商/价格；不引入 LangChain。
