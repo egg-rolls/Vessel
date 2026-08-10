@@ -8,7 +8,7 @@
 ## ADR-001：实现语言用 TypeScript
 
 - **上下文**：旧项目用 Python，对无基础用户分发门槛高（装解释器/venv/PyInstaller 打包大且慢）。同类 CLI agent（Claude Code/Cline/Continue）多为 TS。
-- **决策**：用 TypeScript；运行时 Bun；分发 `npx vessel` + `bun build --compile` 单二进制。
+- **决策**：用 TypeScript；运行时 Bun；分发 `npx vessel`（弃单二进制，见 ADR-006）。
 - **备选**：Python（分发痛点未解；遗产非代码故无迁移优势）、Go（单二进制最优但 AI/TUI 生态弱）、Rust（曲线陡、小团队不划算）。
 - **后果**：团队需学 TS；但 TUI(Ink)/MCP/插件生态最佳，前后端同构。代价可接受。
 - **关联**：legacy/LESSONS 教训13。
@@ -48,12 +48,12 @@
 - **后果**：无基础用户填一次 Key 即可在所有项目使用；项目配置不含密钥可安全共享；环境变量退居自动化场景。代价：需维护 `~/.vessel/` 目录的创建/读写逻辑。
 - **关联**：legacy/LESSONS 教训5；[SPEC.md](SPEC.md) §6。
 
-## ADR-006：分发用 npx + Bun 单二进制
+## ADR-006：分发走 npx，弃单二进制
 
-- **上下文**：无基础用户跑 Python 应用门槛高。
-- **决策**：`npx vessel` 零安装（有 Node 者）+ `bun build --compile` 单二进制（无 Node 者）。
-- **后果**：分发门槛最低。需维护两路分发。
-- **关联**：legacy/LESSONS 教训13；ADR-001。
+- **上下文**：无基础用户跑 Python 应用门槛高；单二进制分发限制多——插件/工具被编译进二进制，无法运行时加载用户工具与外部扩展，违背"用户加工具运行时发现"的开放模型（对比 Claude Code / hermes 的 npx/包分发路线）。
+- **决策**：分发走 `npx vessel`（有 Node/Bun 者）。**抛弃 `bun build --compile` 单二进制**——单二进制把能力锁进内核，限制插件生态与运行时工具发现（ADR-028/030 的开放模型）。
+- **后果**：分发依赖 Node/Bun 环境；插件/工具可运行时加载（用户放 `~/.vessel/tools/` 即注册）；需维护 npm 发布流水线。单二进制不再作为分发形态。
+- **关联**：legacy/LESSONS 教训13；ADR-001、ADR-028。
 
 ## ADR-007：流式 = 事件订阅，非独立 runtime
 
@@ -65,9 +65,9 @@
 ## ADR-008：事件类型枚举化 + payload schema
 
 - **上下文**：旧 Vessel 事件类型是散落字符串字面量，手写 dict 发布，易拼写错、无校验。
-- **决策**：EventType 枚举 + 每类对应 payload schema；发布走 `EventStream.publish(RunEvent)`。
-- **后果**：类型安全、可校验、可文档化。新增事件需扩枚举。
-- **关联**：legacy/LESSONS 教训8；[SPEC.md](SPEC.md) §4.4。
+- **决策**：EventType 枚举 + 每类对应 payload schema；发布走 `EventStream.publish(RunEvent)`。**已被 ADR-027/030 取代**——事件名一律开放字符串字面量，payload schema 保留。
+- **后果**：类型安全、可校验、可文档化。新增事件需扩枚举。→ 开放后新增事件零 core 变更（ADR-030）。
+- **关联**：legacy/LESSONS 教训8；[SPEC.md](SPEC.md) §4.4；[EVENT-SYSTEM.md](../api/EVENT-SYSTEM.md)。
 
 ## ADR-009：全自研，不依赖 LangChain/LangGraph
 
@@ -98,7 +98,7 @@
 - **上下文**：旧 Vessel core 不断膨胀（教训2/14），因"加插件"滑成"给 core 加钩子给我的插件用"。需明确何时可改 core。
 - **决策**：
   1. tool-calling loop 对功能开发冻结；功能增长一律走 Plugin/MCP/Skill（ADR-011）。
-  2. core 仅在三种情况可改：(a) 新增/演化扩展面（HookType/EventType/GuardrailStage 等"插座"）；(b) 修复 loop 级缺陷；(c) 支持证明无法被工具/Hook/Guardrail/事件解决的横切需求（经 ADR-015 论证，尚无已知的此类需求）。
+  2. core 仅在三种情况可改：(a) 新增/演化扩展面（HookType/GuardrailStage 等"插座"；事件名已开放，无需扩 EventType，见 ADR-030）；(b) 修复 loop 级缺陷；(c) 支持证明无法被工具/Hook/Guardrail/事件解决的横切需求（经 ADR-015 论证，尚无已知的此类需求）。
   3. 每次 core 改动必须先写 ADR；拿不准先做插件，验证后再议是否提升进 core。
   4. 重依赖/垂直能力永不进 core。
 - **后果**：core 保持极小稳定；扩展可控；避免重蹈旧版 core 臃肿。代价：少数 loop 级能力需等 ADR + 排期。
@@ -148,13 +148,13 @@
 
 - **上下文**：ADR-007 确立"流式 = 订阅事件流，非独立方法"，要求 loop 在 LLM 流式响应时增量发事件。当前 `LLMProvider.chat()` 仅返回完整 `LLMResponse`，loop 阻塞等待整段响应后一次发布 `LlmResponse`——TUI 只能看到整段文本，无法 token-by-token 渲染。ADR-012(2a) 允许扩展 EventType（"插座"级别演化）。
 - **决策**：
-  1. 新增 `EventType.LlmStreamChunk = 'llm.stream.chunk'`，携带 `LlmStreamChunkPayload { run_id, chunk: StreamChunk }`。
+  1. 新增 `llm.stream.chunk` 事件（携带 `LlmStreamChunkPayload { run_id, chunk: StreamChunk }`）；事件名现为开放字符串字面量（ADR-030，无 EventType 枚举）。
   2. `StreamChunk` 类型定义三层增量：`text_delta`（文本片段）、`tool_call_delta`（按 index 累积的 tool_call arguments 片段）、`finish`（完成原因 + usage）。
   3. `ChatRequest` 增加可选字段 `stream?: boolean` + `on_chunk?: (chunk: StreamChunk) => void`。Provider 在 `chat()` 内部处理流式（单方法，不动接口签名）：当 `stream=true` 且有 `on_chunk` 时走 SSE 逐块回调，最终仍返回拼装好的 `LLMResponse`（loop 后续逻辑不变）。
   4. Runtime 在 `toolCallingLoop` 始终传 `stream: true` + `on_chunk`（发布 `LlmStreamChunk` 事件）。支持流式的 Provider 走 SSE；不支持的 Provider 忽略字段，退化为整段返回（无 chunk 事件）。headless 无订阅者时 chunk 静默丢弃。
   5. 三个 Provider 同步实现流式：`MemoryLLMProvider`（供测试）、`OpenAICompatibleProvider`（SSE `data:` 行解析，tool_calls 按 index 累积）、`AnthropicProvider`（SSE `content_block_delta` 解析，tool_use `input_json_delta` 累积）。
 - **备选**：(a) 新增 `chatStream()` 异步迭代器方法——被 SPEC §4.1 "非独立方法" 否决。(b) Provider 直接持 EventStream 引用 publish——耦合 provider 插件与 core 事件系统，且违 ADR-007"loop 增量发事件"。均不取。
-- **后果**：TUI 可 token-by-token 渲染（emma 的 StreamRenderer 订阅 `LlmStreamChunk`）。EventType 枚举扩 1 个成员——现有 switch 无 exhaustiveness 检查，不破坏已有代码。Provider 非流式路径完全不变。core 稳定——不改 loop 逻辑、不引厂商 SDK。
+- **后果**：TUI 可 token-by-token 渲染（emma 的 StreamRenderer 订阅 `llm.stream.chunk`）。事件名开放字符串字面量（ADR-030），新增无需扩枚举。Provider 非流式路径完全不变。core 稳定——不改 loop 逻辑、不引厂商 SDK。
 - **关联**：[SPEC.md §4.1/§4.4](SPEC.md)；ADR-007、ADR-008、ADR-012(2a)。
 
 ---
@@ -163,8 +163,8 @@
 
 - **上下文**：ADR-012 确立了 core 稳定性策略——只改三类事（插座/bug/横切）。ADR-011 确立四种扩展类型全经 PluginHost 投放。ADR-015 论证循环通用性——不需要 LoopStrategy 抽象。经 ADR-016（流式）补完 EventType 扩展面，9 个 core 接口 + 1 个循环 + 2 个插槽（ToolRegistry、ContextManager）的 MVP 范围已完整实现且与 SPEC 对齐。对所有已知功能诉求，Plugin/MCP/Skill 提供了充分且不侵入 core 的扩展路径。
 - **决策**：
-  1. `@vessel/core` 的 9 个接口 + tool-calling loop + EventType 枚举 + PluginHost 接口 **正式冻结**。冻结范围：`packages/core/src/**`。
-  2. **只能因三种理由修改 core**（与 ADR-012(2a-c) 一致）：(a) 扩展"插座"（新增 EventType/HookType/GuardrailStage 成员，需写新 ADR）；(b) 修复 loop 级或安全级 bug；(c) 被证明无法用 Plugin/Hook/Guardrail/事件/工具解决的横切需求（需先写新 ADR 论证）。
+  1. `@vessel/core` 的 9 个接口 + tool-calling loop + HookType/GuardrailStage 枚举 + PluginHost 接口 **正式冻结**（事件名已开放，`EventType` 枚举已废弃，见 ADR-030）。冻结范围：`packages/core/src/**`。
+  2. **只能因三种理由修改 core**（与 ADR-012(2a-c) 一致）：(a) 扩展"插座"（新增 HookType/GuardrailStage 成员，需写新 ADR；事件名开放，无需扩 EventType，见 ADR-030）；(b) 修复 loop 级或安全级 bug；(c) 被证明无法用 Plugin/Hook/Guardrail/事件/工具解决的横切需求（需先写新 ADR 论证）。
   3. **任何改 core 的 PR 必须带 ADR 且被两人 review 通过**。../role/DEVELOPER.md §Core 冻结 包含 AI 自检清单——拿不准不进 core。
   4. **解冻条件**（全部满足）：(a) 出现 Plugin/Hook/Guardrail/事件/工具均无法表示的架构级需求；(b) 经至少一个插件尝试证明不可行；(c) 新 ADR 论证 + 两人 review 通过。
 - **备选**：永冻（不可逆）——过于僵化，ADR-012 保留的三种修改路径是合理安全阀。不冻（继续按 ADR-012 判断）——缺少显式里程碑，人类与 AI 对"可以改"的边界认知不统一。当前决策取了冻结 + 有限解冻条件的中间路径。
@@ -316,12 +316,12 @@
 
 - **上下文**：事件流是 runtime 的核心机制——loop 的每个节点都在发事件。ADR-008 为防散落字符串拼错而枚举化，但副作用是 core 僵化：**每次新事件都要改冻结的 `EventType` 枚举、写 ADR**——这本身就是把扩展复杂度往 core 推。Claude Code 与 hermes 均验证过开放机制：事件名是字符串常量 + 任意 payload，无枚举、无注册表 schema 校验，是行业主流。复杂度外推：事件类型的扩展能力应属于插件层，而非 core。
 - **决策**：
-  1. `RunEvent.type` 从 `EventType` 枚举放宽为 `string`。核心事件保留为字符串常量导出（`export const EventType = { RunStarted: 'run.started', ... } as const`），保持拼写稳定与 payload 文档。
+  1. `RunEvent.type` 从 `EventType` 枚举放宽为 `string`。事件名一律开放字符串字面量，不定义 `EventType` 常量（ADR-030 修正：舍弃常量，杜绝二义）。
   2. `EventStream` 新增 `waitFor(name, { requestId?, timeout }): Promise<unknown>`——等待一次匹配事件；内部维护 pending map，收到匹配事件（含 requestId）时 resolve，超时 reject。工具可发事件、等事件。
   3. `ToolContext` 注入 `events`（ADR-026）。新增事件**不需要改 core**，插件直接 `publish` 自定义字符串事件名。
 - **备选**：(a) 全枚举（现状）——每次新事件动冻结区，core 僵化；(b) 注册表 `registerEventType(name, schema)`——core 加接口，且两个成熟项目均未做，非必需。均不取。
 - **后果**：事件系统开放，插件自由发布/订阅事件；核心事件仍强类型（常量 + payload 文档）。本 ADR **supersede ADR-008 的枚举封闭部分**、**ADR-015 的「暂停 = `signal.aborted` 一行」条款**（交互暂停由 `waitFor` 承载，见 ADR-029）。
-- **关联**：ADR-026、ADR-029；[#91](https://github.com/egg-rolls/Vessel/issues/91)。
+- **关联**：ADR-026、ADR-029；[EVENT-SYSTEM.md](../api/EVENT-SYSTEM.md)；[#91](https://github.com/egg-rolls/Vessel/issues/91)。
 
 ## ADR-028：注册系统外推——registry 接口化 + 构建时扫描
 
@@ -329,9 +329,9 @@
 - **决策**：
   1. 定义 `PluginProvider` 接口：`getAvailablePlugins()` / `loadPlugin(name)` / `getProviders()`——只承诺「发现」，不做权限/暂停/显示等业务决策（已下沉到工具对象，ADR-026）。
   2. 实现可插拔：`StaticRegistry`（既有映射表，迁移期保留）/ `BuildTimeScanner`（构建时扫描生成注册表）/ `DirScanner`（用户目录运行时扫描）/ `ConfigDeclared`（vessel.yaml 声明连接）。
-  3. 内置工具改构建时扫描 `plugins/*/*/package.json`，生成 `src/plugin-registry.generated.ts`（静态 import 字面量，可被 Bun 打包——顺带修复变量 import 的打包隐患）。
-- **备选**：(a) 保持路径写死——加工具要改代码，违背「只加不改」；(b) 运行时扫描——单二进制分发下无运行时目录可扫。均不取（构建时扫描是「放文件夹即注册」开发体验与单二进制打包的平衡点）。
-- **后果**：注册系统只做「发现」，实现可替换；开发者放文件夹即注册，构建自动进表；bootstrap 不再硬编码插件名数组。
+  3. 内置工具**运行时扫描** `plugins/*/*/`（ADR-006 弃单二进制后，分发带插件目录，运行时动态发现；构建时扫描是单二进制时代的打包折中，不再必要）。
+- **备选**：(a) 保持路径写死——加工具要改代码，违背「只加不改」；(b) 构建时扫描——单二进制时代的打包折中，ADR-006 弃单二进制后不再必要。取运行时扫描。
+- **后果**：注册系统只做「发现」，实现可替换；开发者放文件夹即注册，**运行时自动发现**（无需构建生成注册表）；bootstrap 不再硬编码插件名数组。
 - **关联**：ADR-026；[#92](https://github.com/egg-rolls/Vessel/issues/92)。
 
 ## ADR-029：交互暂停事件流化——ask-user/permission 用事件流实现
@@ -344,7 +344,7 @@
   4. 删除 `src/bootstrap.ts` 的 tool-permission / ask-user 合成注册；`AskUserBridge` 退役。
 - **备选**：(a) 保持 bridge——回调式，工具与 TUI 耦合，新交互工具要重复装配；(b) core 暂停接口——把暂停逻辑推回 core，违背 ADR-027 的事件流外推。均不取。
 - **后果**：暂停 = 工具发事件 + 等事件，loop 不改（handler 天然 await）；新交互工具只写一个 handler，不再碰 bootstrap；headless 无订阅者时靠 `waitFor` 超时/注入策略兜底。本 ADR **supersede ADR-015 的暂停条款**。
-- **关联**：ADR-026、ADR-027；[#94](https://github.com/egg-rolls/Vessel/issues/94)。
+- **关联**：ADR-026、ADR-027；[EVENT-SYSTEM.md](../api/EVENT-SYSTEM.md)；[#94](https://github.com/egg-rolls/Vessel/issues/94)。
 
 ---
 
@@ -358,4 +358,16 @@
   4. **拼写错误靠集成测试缓解**，不靠常量挡——测试断言"发布 X 后订阅者收到"。
 - **备选**：(a) 常量 + 字符串并存（二分）——两种写法混乱，后续 AI 不知选哪个，正是本 ADR 要消除的；(b) 纯字符串无任何约定——拼错风险无缓解。均不取。
 - **后果**：事件系统完全统一为字符串协议——加新事件 = 写字面量，零 import、零 core 变更；无"该用常量还是字符串"的二义，后续 AI 只有一条路。代价：无编译期拼写检查，靠命名空间约定 + 集成测试兜底。
-- **关联**：ADR-027、ADR-008、ADR-029；[CORE.md §1.4.1](CORE.md)。
+- **关联**：ADR-027、ADR-008、ADR-029；[CORE.md §1.4](../api/CORE.md)、[EVENT-SYSTEM.md](../api/EVENT-SYSTEM.md)。
+
+## ADR-031：上下文变化事件化——同步写入 + ContextChanged 观测
+
+- **上下文**：`ContextManager` 是模型的输入源（关键路径），写入必须可靠、有序、及时。但上下文变化是"静默"的——模型下一轮读到，TUI/调试/回放/审计却无法观察到上下文如何演变。分层事件驱动原则（EVENT-SYSTEM §5）：内聚核心（上下文/工具反馈）用直接调用保证及时性，同时发布事件提供可观测性。
+- **决策**：
+  1. `ContextManager.add(msg)` **保持同步直接写**——可靠、有序、及时（模型下一轮必读，关键路径不走事件流）。
+  2. 每次上下文变化发布 `context.changed` 事件（payload：新增消息 / token 数 / 消息数），TUI/调试/回放/审计订阅——**代码加入 + 消息发布**双轨。
+  3. 事件名 `context.changed`（开放字符串协议，ADR-030）。
+  4. 实现方式：首选由 runtime 在 `add()` 后统一发布（不改 `ContextManager` 冻结接口）；或 `ContextManager` 注入 `EventStream` 自发布（需 ADR-017 解冻）。
+- **备选**：(a) 完全事件化（读写走事件流）——关键路径异步，模型可能读到不完整/乱序上下文，违背及时性；(b) 不发布事件——上下文变化静默，无法 trace/回放。均不取。
+- **后果**：上下文写入仍可靠及时（关键路径），同时变化可观测/可回放/可调试；与工具反馈（`context.add` + `tool.call.completed` 事件）同构——**内聚核心 = 直接调用 + 事件观测**。
+- **关联**：ADR-017（解冻说明）、ADR-027、ADR-030；[EVENT-SYSTEM.md §5](../api/EVENT-SYSTEM.md)。

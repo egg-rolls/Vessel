@@ -1,8 +1,62 @@
-# @vessel/core 接口参考
+# @vessel/core 接口契约（CORE）
 
-> **目标**：快速了解 Core 有什么、什么能改、什么不能改。
-> **详细设计**：见 [SPEC.md](SPEC.md)；**决策历史**：见 [ADR.md](ADR.md)。
+> **目标**：快速了解 Core 有什么、什么能改、什么不能改——**接口契约**。
+> **详细设计**：见 [SPEC.md](../specs/SPEC.md)；**决策历史**：见 [ADR.md](../specs/ADR.md)；**事件系统**：见 [EVENT-SYSTEM.md](EVENT-SYSTEM.md)。
 > **核心原则**：Core 冻结（ADR-017），功能增长走 Plugin/MCP/Skill。
+> **本文件只定义接口/能力**；写工具/插件的开发者指南见 [plugin-dev.md](../guides/plugin-dev.md)。
+
+---
+
+## 快速使用
+
+### AgentRuntime.create
+
+```typescript
+import { AgentRuntime } from '@vessel/core';
+
+const runtime = await AgentRuntime.create({
+  provider,      // LLMProvider — LLM 提供者
+  model,         // string — 模型名
+  tools,         // ToolRegistry — 工具注册表
+  context,       // ContextManager — 上下文管理器
+  events,        // EventStream — 事件流
+  limits,        // UsageLimits — 使用量限制
+  termination,   // TerminationPolicy — 终止策略
+  plugins,       // Plugin[] — 插件列表（可选）
+  session,       // SessionBackend — 会话后端（可选）
+  systemPrompt,  // string — 系统提示词（可选）
+  permission,    // RuntimePermissionConfig — 默认权限策略（可选，ADR-029）
+});
+
+// 执行一次对话
+const response = await runtime.run('你好');
+```
+
+### 内置实现（MemoryXxx 系列）
+
+| 类 | 用途 |
+|----|------|
+| `MemoryLLMProvider` | 测试用 LLM Provider |
+| `MemoryToolRegistry` | 内存工具注册表 |
+| `MemoryContextManager` | 内存上下文管理 |
+| `MemoryEventStream` | 内存事件流 |
+| `MemorySessionBackend` | 内存会话存储 |
+| `MemoryPluginHost` | 内存插件宿主 |
+| `MemoryLimitChecker` | 内存限制检查 |
+
+### 持久化实现
+
+| 类 | 用途 |
+|----|------|
+| `SQLiteSessionBackend` | SQLite 会话存储 |
+| `FileSessionBackend` | 文件会话存储 |
+
+### Provider 实现
+
+| 类 | 用途 |
+|----|------|
+| `OpenAICompatibleProvider` | OpenAI 兼容 API |
+| `AnthropicProvider` | Anthropic API |
 
 ---
 
@@ -113,6 +167,7 @@ interface RunEvent {
 
 **职责**：语言空间的运行轨迹（trace/replay/TUI 共用）；组件间交流总线（工具 ↔ TUI 事件流交互）。
 **实现**：Core 内置（`MemoryEventStream`）。
+**详细**：事件声明规范、事件名约定与协作模式见 [EVENT-SYSTEM.md](EVENT-SYSTEM.md)。
 
 ### 1.5 Guardrail（护栏）
 
@@ -392,51 +447,10 @@ enum GuardrailStage {
 
 ---
 
-## 7. 扩展路径速查
+## 相关文档
 
-| 需求 | 用什么 | 改 Core？ |
-|------|--------|----------|
-| 新工具（内置） | 放 `plugins/{category}/{name}/`（构建时扫描自动注册）| ❌ |
-| 新工具（用户） | 放 `~/.vessel/tools/` 或 `vessel.yaml` 声明（#95）| ❌ |
-| 交互暂停工具 | 工具 `interactive` + `ctx.events.publish`/`waitFor` | ❌ |
-| 工具权限 | 工具 `checkPermission` 或 runtime 默认策略 | ❌ |
-| 新 Provider | Plugin + registerProvider | ❌ |
-| 新护栏 | Plugin + registerGuardrail | ❌ |
-| 新钩子 | Plugin + registerHook | ❌ |
-| 新事件类型 | 开放字符串事件名（ADR-027）| ❌ |
-| 新 Skill | Markdown + skills-loader | ❌ |
-| 新 MCP | MCP server + bridge plugin | ❌ |
-| 工具显示 | 工具自带 render（默认 TUI 模板）| ❌ |
-| Spinner 状态 | TUI 层 StateTracker | ❌ |
-| 新配置项 | Config 层 | ❌ |
-| 新 CLI 命令 | CLI 层 | ❌ |
-
----
-
-## 8. 文件位置
-
-```
-packages/core/src/
-├── types/
-│   ├── provider.ts        # LLMProvider, ChatRequest, LLMResponse
-│   ├── tool.ts            # ToolRegistry, ToolDefinition, ToolHandler
-│   ├── context.ts         # ContextManager
-│   ├── event.ts           # EventStream, RunEvent, payload 接口
-│   ├── guardrail.ts       # Guardrail, GuardrailStage
-│   ├── hook.ts            # Hook, HookType
-│   ├── session.ts         # SessionBackend, SessionInfo
-│   ├── limits.ts          # UsageLimits, TerminationPolicy
-│   └── index.ts           # 导出所有类型
-├── runtime/
-│   └── agent-runtime.ts   # AgentRuntime, tool-calling loop
-└── index.ts               # 包入口
-```
-
----
-
-## 9. 相关文档
-
-- [SPEC.md](SPEC.md) - 完整技术规范
-- [ADR.md](ADR.md) - 架构决策记录
-- [CLAUDE.md](../../CLAUDE.md) - AI 编码指南
-- [tui.md](../api/tui.md) - TUI 接口文档
+- [SPEC.md](../specs/SPEC.md) - 完整技术规范
+- [ADR.md](../specs/ADR.md) - 架构决策记录
+- [EVENT-SYSTEM.md](EVENT-SYSTEM.md) - 事件流系统接口
+- [tui.md](tui.md) - TUI 接口文档
+- [plugin-dev.md](../guides/plugin-dev.md) - 工具/插件开发指南

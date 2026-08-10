@@ -38,8 +38,8 @@ git push origin v1.0.0       # 推送 tag → 触发 Release workflow
 
 # 3. CI 自动执行
 # → 质量检查（lint + typecheck + test）
-# → 构建二进制（bun build --compile）
-# → 创建 GitHub Release（附二进制文件）
+# → npm publish 发布 npm 包（npx vessel 分发，弃单二进制，见 ADR-006）
+# → 创建 GitHub Release（附发布说明）
 ```
 
 ### 版本号规范（语义化版本）
@@ -57,7 +57,7 @@ git push origin v1.0.0       # 推送 tag → 触发 Release workflow
 |------|---------|--------|
 | PR CI | PR → main | lint + typecheck + test + build |
 | Main CI | merge → main | 上面 + 冒烟测试（headless mock） |
-| Release CI | git tag v* | 上面 + 构建二进制 + GitHub Release |
+| Release CI | git tag v* | 上面 + npm publish + GitHub Release |
 
 ### 参考
 

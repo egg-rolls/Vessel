@@ -33,11 +33,11 @@ docs/dev/
 
 | 文档 | 内容 |
 |------|------|
-| [CORE.md](../specs/CORE.md) | **Core 接口契约**（工具/事件/权限/上下文，已按重构更新） |
+| [CORE.md](../api/CORE.md) | **Core 接口契约**（工具/事件/权限/上下文，已按重构更新） |
 | [SPEC.md](../specs/SPEC.md) | 完整技术规范 |
-| [ADR.md](../specs/ADR.md) | 架构决策历史（026-029 是新架构） |
+| [ADR.md](../specs/ADR.md) | 架构决策历史（026-030 是新架构） |
 | [plugin-dev.md](../guides/plugin-dev.md) | **怎么写工具/插件**（自描述 + 事件流 + 权限） |
-| [api/core.md](../api/core.md) | API 参考 |
+| [api/](../api/) | API 参考（接口契约/事件/TUI） |
 
 **架构重构状态**（#91-95，2026-08 已全部落地）：事件流开放 + `waitFor` 原语、工具自描述对象、registry 接口化 + 构建时扫描、交互暂停事件流化（ask-user/permission）、用户工具层（`~/.vessel/tools/`）。
 

@@ -80,7 +80,7 @@ Phase 2+（增强）：
 以下全部满足时，打 tag 发 `v0.1.0`（Phase 0 结束），进入 Phase 1：
 
 - [ ] `bun test` 全绿
-- [ ] `bun run build` 通过，单二进制可运行
+- [ ] `bun run build` 通过，npm 包可发布（`npx vessel` 可运行，弃单二进制，见 ADR-006）
 - [ ] headless `--run` 可完成一次完整 tool-calling 对话
 - [ ] 至少一个 OpenAI 兼容 provider + 一个 Anthropic 兼容 provider 可正常工作
 - [ ] 首启配置向导可引导用户完成 Key 填写

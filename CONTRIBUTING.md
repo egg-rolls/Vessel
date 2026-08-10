@@ -35,8 +35,8 @@
 
 ## 发布
 
-- Release 工作流延后到 Phase 1（有可发布物时）：tag 触发，出 Bun 单二进制 + GitHub Release。
-- npm 包发布延后。
+- Release 工作流延后到 Phase 1（有可发布物时）：tag 触发，npm publish 发布 npm 包 + GitHub Release。
+- 分发走 npx（弃单二进制，见 ADR-006）。
 
 ## 安全
 

@@ -1,18 +1,18 @@
 # @vessel/tui API —— emma UI/UX 替换接口文档
 
-> **受众**：emma，仅做 UI 替换，不写功能逻辑。
-> **状态**：egg-rolls 已交付完整可跑的 readline REPL。本文件描述接缝契约与可替换清单。
+> **受众**：emma，仅做 UI 打磨，不写功能逻辑。
+> **入口**：`startInkRepl(ctx)`（Ink 版 REPL，readline 版已删除）。本文件描述接缝契约与可替换清单。
 
-## 1. 入口：`startRepl(ctx)`
+## 1. 入口：`startInkRepl(ctx)`
 
 ```ts
-import { startRepl, type ReplContext } from '@vessel/tui';
+import { startInkRepl, type ReplContext } from '@vessel/tui';
 
 const ctx: ReplContext = { /* 见 §2 */ };
-await startRepl(ctx); // 阻塞至 /exit
+await startInkRepl(ctx); // 阻塞至 /exit
 ```
 
-emma 的版只需要实现**同一个函数签名**——用 Ink 框架替换内部实现，函数名和参数不变。壳（`src/cli.ts`）不感知替换。
+Ink 版 REPL（`repl/ink-repl.tsx`）是 REPL 的 Ink 实现。emma 只改 Ink 组件内部实现，函数名和参数不变。壳（`src/cli.ts`）不感知替换。
 
 ## 2. ReplContext 字段
 
@@ -22,11 +22,11 @@ interface ReplContext {
   runtime: AgentRuntime;          // 调 runtime.run(input, sessionId) 执行对话
   tools: ToolRegistry;            // /tools 用 tools.list() 列工具
   session: SessionBackend;        // /resume /new /history 增删改查；有 listRich() 返回 SessionInfo[]
-  events: EventStream;            // 订阅 LlmStreamChunk + 工具调用 + RunCompleted
+  events: EventStream;            // 订阅 `llm.stream.chunk` + 工具调用 + `run.completed` 事件
   context: ContextManager;        // /new /resume 用 context.clear() 清上下文
 
   // ── 可变状态 ─────────────────────────────
-  currentSessionId: string;       // 当前会话 ID；/resume /new 会改
+  currentSessionId: string;       // 活动会话 ID；/resume /new 会改
   onSessionChange: (id) => void;  // 切换会话后回调（壳更新 currentSessionId）
 
   // ── 显示信息（只读）───────────────────────
@@ -44,23 +44,23 @@ interface ReplContext {
 
 ## 3. 替换清单（逐个模块可换）
 
-### 3.1 REPL 循环（readline → Ink）
+### 3.1 REPL 循环（Ink 版，readline 已删除）
 
-**readline 版（egg-rolls 交付）**：`repl/repl.ts` 中 `startRepl()` 用 `node:readline/promises` + 行队列 + `process.stdout.write` 输出。
+**Ink 版（现行）**：`repl/ink-repl.tsx` 中 `startInkRepl(ctx)` 是 REPL 的 Ink 实现（React 组件式终端 UI）。readline 版 REPL（`repl/repl.ts` / `startRepl`）已删除。
 
-**替换**：emma 用 Ink 框架重写 `startRepl` 函数体——React 组件式终端 UI，保持以下行为：
-- `rl.on('line', ...)` 行队列 → Ink `useInput()` 或 TextInput 组件
-- `process.stdout.write('vessel> ')` 提示符 → Ink status bar
-- `rl.on('SIGINT', ...)` Ctrl+C → Ink 键盘事件
+**打磨**：emma 直接打磨 Ink 组件实现，保持以下行为：
+- 行输入 → Ink `useInput()` 或 TextInput 组件
+- 提示符 → Ink status bar
+- Ctrl+C → Ink 键盘事件
 - 行处理逻辑（pendingResume/pendingDelete 裸数字 → resume/delete、`/` 开头的命令分发、普通消息 → runtime.run）不改
 
-**不动的接口**：`startRepl(ctx)` 函数签名、`ReplContext` 类型。
+**不动的接口**：`startInkRepl(ctx)` 函数签名、`ReplContext` 类型。
 
 ### 3.2 流式渲染（console.log token → token 动画 + spinner）
 
-**readline 版（egg-rolls 交付）**：`renderer/stream-renderer.ts` 中 `StreamRenderer` 订阅 `ctx.events`，用 `process.stdout.write(chunk.delta)` 逐 token 打印。
+**现有实现**：`renderer/stream-renderer.ts` 中 `StreamRenderer` 订阅 `ctx.events`，用 `process.stdout.write(chunk.delta)` 逐 token 打印。
 
-**替换**：emma 把 `StreamRenderer` 换成 Ink 组件——订阅同一 `EventStream`，token 做打字机动画，工具调用做 spinner 卡片。
+**打磨**：emma 把 `StreamRenderer` 换成 Ink 组件——订阅同一 `EventStream`，token 做打字机动画，工具调用做 spinner 卡片。
 
 **事件订阅示例**：
 
@@ -114,13 +114,15 @@ type StreamChunk =
 
 **防退化**：`StreamRenderer.didStreamLastRun()` 用于判断是否流式输出了文本。若某次 run 没有流式 chunk（非流式 provider），退回打印 `runtime.run()` 返回值。emma 版的 StreamRenderer 需保持此兜底逻辑。
 
-### 3.3 权限确认弹窗（readline confirm → 事件流）
+### 3.3 交互确认弹窗（权限 + ask-user，事件流，ADR-029/030）
 
-**旧版（已退役）**：`renderer/tool-confirm.ts` 中 `ToolPermissionChecker.confirm()` 用 readline 询问 `y/n/always`；REPL 注入 `promptFn` 复用其 readline。
+**现行（ADR-029）**：交互暂停统一走事件流——组件间交流无直接回调（readline 弹窗已退役）。事件名一律开放字符串字面量（ADR-030，无常量/枚举）。
 
-**现行（ADR-029）**：权限判定由 runtime 统一处理（`AgentRuntime` 的 `permission.default='ask'` + `autoApprove`），工具也可自带 `checkPermission` 自描述。'ask' 分支统一走事件流——runtime/工具发布 `tool.permission.request`，TUI 订阅展示确认弹窗，用户作答后发布 `tool.permission.response`（`decision: 'allow'|'deny'`，`remember: true` 表示"始终允许"）。
+**权限确认**：权限判定由 runtime 统一处理（`AgentRuntime` 的 `permission.default='ask'` + `autoApprove`），工具也可自带 `checkPermission` 自描述。'ask' 分支发布 `tool.permission.request`，TUI 订阅展示确认弹窗，用户作答后发布 `tool.permission.response`（`decision: 'allow'|'deny'`，`remember: true` 表示"始终允许"）。事件载荷类型见 `packages/tui/src/renderer/tool-confirm.ts`。
 
-**替换**：emma 在 Ink 组件中订阅事件流，收到 `tool.permission.request` 渲染确认弹窗，发布 `tool.permission.response`：
+**ask-user（#94）**：`ask_user` 工具（`packages/tui/src/renderer/ask-user.ts` 的 `createAskUserTool()`）同样事件流化——handler 发布 `ask.user.requested`（`{ requestId, questions }`）→ `waitFor('ask.user.answered', { requestId, timeout })`。TUI 订阅请求事件展示问题弹窗，用户作答后发布 `ask.user.answered`（`{ requestId, answers }`）。
+
+**实现**：emma 在 Ink 组件中订阅事件流，收到请求事件渲染确认/问题弹窗，发布对应回复事件：
 
 ```ts
 useEffect(() => {
@@ -128,6 +130,10 @@ useEffect(() => {
     if (event.type === 'tool.permission.request') {
       // event.data = { requestId: string, tool: string, input: unknown }
       setPendingPermission({ requestId: event.data.requestId, tool: event.data.tool, run_id: event.run_id });
+    }
+    if (event.type === 'ask.user.requested') {
+      // event.data = { requestId: string, questions: AskUserQuestion[] }
+      setPendingAsk({ requestId: event.data.requestId, questions: event.data.questions, run_id: event.run_id });
     }
   });
   return unsubscribe;
@@ -140,23 +146,30 @@ ctx.events.publish({
   data: { requestId: pendingPermission.requestId, decision: 'allow' | 'deny', remember?: boolean },
   ts: Date.now(),
 });
+
+ctx.events.publish({
+  type: 'ask.user.answered',
+  run_id: pendingAsk.run_id,
+  data: { requestId: pendingAsk.requestId, answers },
+  ts: Date.now(),
+});
 ```
 
-`pausedForConfirm` 标志（`repl.ts` 中）在确认期间静默丢弃输入——emma 版本应改为缓存输入、确认结束后恢复的机制。
+交互暂停期间输入应缓存、确认结束后恢复（readline 版的 `pausedForConfirm` 静默丢弃已不适用）。
 
 ### 3.4 响应输出（console.log → Markdown + 颜色主题）
 
-**readline 版（egg-rolls 交付）**：命令输出、错误提示、会话表格均用 `console.log` + ANSI 颜色码。
+**现有实现**：命令输出、错误提示、会话表格用 `console.log` + ANSI 颜色码。
 
-**替换**：emma 用 Ink 组件渲染富文本：错误提示用颜色标签、`/resume` 无参选择器用交互式列表、对话输出支持 Markdown。
+**打磨**：emma 用 Ink 组件渲染富文本：错误提示用颜色标签、`/resume` 无参选择器用交互式列表、对话输出支持 Markdown。
 
-**不动的逻辑**：`repl.ts` 中 `classifyError()` 的分类逻辑、`commands.ts` 中各命令的数据获取逻辑（调 `ctx.session.listRich()` 等）。
+**不动的逻辑**：`error-classifier.ts` 中 `classifyError()` 的分类逻辑、`commands.ts` 中各命令的数据获取逻辑（调 `ctx.session.listRich()` 等）。
 
 ### 3.5 Slash 命令 `/` 弹菜单 + autocomplete + 模糊过滤
 
-**readline 版（egg-rolls 交付）**：`commands/commands.ts` 中 `CommandRegistry.execute()` 做精确 `/domain action` 匹配，无弹窗。
+**现有实现**：`commands/commands.ts` 中 `CommandRegistry.execute()` 做精确 `/domain action` 匹配，无弹窗。
 
-**替换**：emma 在 Ink 中实现 `/` 触发弹菜单——读取 `CommandRegistry.list()` 获取所有命令，做 autocomplete + 模糊过滤。**CommandRegistry 的 `execute()` 逻辑不动**——emma 只做触发层的 UI。
+**打磨**：emma 在 Ink 中实现 `/` 触发弹菜单——读取 `CommandRegistry.list()` 获取所有命令，做 autocomplete + 模糊过滤。**CommandRegistry 的 `execute()` 逻辑不动**——emma 只做触发层的 UI。
 
 ## 4. 不动的边界
 
@@ -171,12 +184,12 @@ ctx.events.publish({
 | **权限确认** | `packages/tui/src/renderer/tool-confirm.ts` | `ToolPermissionRequestedData` / `ToolPermissionDecidedData` 事件载荷类型（订阅 `tool.permission.request`、发布 `tool.permission.response`） |
 | **向导** | `packages/tui/src/wizard/setup-wizard.ts` | `runSetupWizard()` 流程——emma 只打磨 `/setup` 命令中调用后的 UI 提示 |
 | **Rich 渲染** | `packages/tui/src/rich-renderer.ts` | `buildBanner/buildSessionTable/infoPanel/divider` —— emma 可替换其实现但保持签名 |
-| **会话逻辑** | `packages/tui/src/repl/repl.ts` 中的 session/id 管理 | `currentSessionId`、`pendingResume`、`pendingDelete`、会话切换逻辑不变 |
+| **会话逻辑** | `packages/tui/src/repl/ink-repl.tsx` 中的 session/id 管理 | `currentSessionId`、`pendingResume`、`pendingDelete`、会话切换逻辑不变 |
 
 ## 5. 调用示例（壳视角——emma 参考但不改）
 
 ```ts
-// src/cli.ts — 壳构造 ctx，调 startRepl（egg-rolls 已实现）
+// src/cli.ts — 壳构造 ctx，调 startInkRepl（ink-repl 已实现）
 const ctx: ReplContext = {
   runtime, tools, session, events, context,
   currentSessionId,
@@ -187,7 +200,7 @@ const ctx: ReplContext = {
   newSessionId: () => generateSessionId(),
   onExit: () => { runtime.dispose(); process.exit(0); },
 };
-await startRepl(ctx);
+await startInkRepl(ctx);
 ```
 
 ## 6. 关键接口速查
@@ -201,6 +214,7 @@ await startRepl(ctx);
 | `ToolRegistry` | `@vessel/core` | `list() → ToolDefinition[]` |
 | `ContextManager` | `@vessel/core` | `clear()`, `messages`, `add(msg)` |
 | `tool.permission.request/response` | 事件流 | 权限确认事件（ADR-029）：TUI 订阅 `tool.permission.request` → 展示确认框 → 发布 `tool.permission.response` |
+| `ask.user.requested/answered` | 事件流 | ask-user 交互事件（ADR-029/#94）：TUI 订阅 `ask.user.requested` → 展示问题弹窗 → 发布 `ask.user.answered` |
 | `CommandRegistry` | `@vessel/tui` | `list() → CommandEntry[]`, `execute(input, ctx, state) → Promise<CommandResult>` |
 | `StreamRenderer` | `@vessel/tui` | `start(eventStream)`, `stop()`, `didStreamLastRun() → boolean` |
 | `classifyError` | `@vessel/tui` | `classifyError(error) → ClassifiedError {category, message, hint}` |

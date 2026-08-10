@@ -1,6 +1,6 @@
 # 插件 / 工具开发指南
 
-> 面向开发 Vessel 工具和插件的开发者。**接口契约见 [CORE.md](../specs/CORE.md)；决策历史见 [ADR.md](../specs/ADR.md)。**
+> 面向开发 Vessel 工具和插件的开发者。**接口契约见 [CORE.md](../api/CORE.md)；决策历史见 [ADR.md](../specs/ADR.md)。**
 
 ## 插件模型
 
@@ -96,7 +96,7 @@ const askTool: ToolDefinition = {
 ## 权限（ADR-029）
 
 - **危险工具**：自带 `checkPermission`，返回 `'allow' | 'deny' | 'ask'`。
-- **普通工具**：不声明，由 **runtime 默认策略**统一判定（app 层交互模式 `'ask'` / headless `'allow'`，见 [CORE.md §1.10](../specs/CORE.md)）。
+- **普通工具**：不声明，由 **runtime 默认策略**统一判定（app 层交互模式 `'ask'` / headless `'allow'`，见 [CORE.md §1.10](../api/CORE.md)）。
 - `'ask'` 时 runtime 发 `tool.permission.request` → 等 `tool.permission.response`；用户选 Always 则记住跳过。
 
 ```ts

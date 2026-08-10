@@ -49,9 +49,10 @@ pre-MVP / 脚手架阶段。架构与边界已锚定（见下文档），代码�
 `[plan]` 待脚手架就绪后补充。预期：
 
 ```bash
-npx vessel                      # 零安装运行（需 Node）
-# 或下载单二进制                 # 无需 Node
+npx vessel                      # 零安装运行（需 Node/Bun）
 ```
+
+分发走 npx（弃单二进制，见 ADR-006）：不再提供单二进制下载。
 
 首启向导引导填 API Key → REPL 对话 → 让 agent 调工具干活。
 
