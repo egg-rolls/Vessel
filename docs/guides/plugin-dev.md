@@ -84,6 +84,15 @@ const askTool: ToolDefinition = {
 
 **事件名约定**：`<domain>.<action>.<event>`，如 `ask.city.requested` / `ask.city.answered`。事件名开放（ADR-027），无需改 core。
 
+### 事件声明规范（ADR-030）
+
+**全部事件用开放字符串协议，不定义事件常量**——直接写字符串字面量，零 import、零耦合。
+
+- 发布 / 订阅都用字符串：`publish('replay.started', data)` / `subscribe('replay.started', handler)`
+- **不要定义 `EventType` / `PermissionEvent` 等常量**——那是已废弃写法（ADR-030 舍弃，杜绝二义）
+- 命名空间约定 `<domain>.<action>.<event>` 防撞名
+- 拼写错误靠**集成测试**兜底（断言"发布 X 后订阅者收到"），不靠常量挡
+
 ## 权限（ADR-029）
 
 - **危险工具**：自带 `checkPermission`，返回 `'allow' | 'deny' | 'ask'`。
