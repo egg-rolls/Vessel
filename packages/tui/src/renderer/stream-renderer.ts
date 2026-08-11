@@ -8,7 +8,14 @@
  * emma 后续替换为 token 动画 + spinner + 富文本，订阅同一事件流。
  */
 
-import type { EventStream, RunEvent, StreamChunk } from '@vessel/core';
+import type {
+  EventStream,
+  StreamChunk,
+  ToolCallCompletedPayload,
+  ToolCallFailedPayload,
+  ToolCallStartedPayload,
+} from '@vessel/core';
+import { asTuiEvent, type TuiEvent } from '../types/events.js';
 
 /** 渲染器配置 */
 export interface StreamRendererConfig {
@@ -46,7 +53,7 @@ export class StreamRenderer {
   /** 开始订阅事件流 */
   start(eventStream: EventStream): void {
     if (this.unsubscribe) return;
-    this.unsubscribe = eventStream.subscribe((e) => this.handleEvent(e));
+    this.unsubscribe = eventStream.subscribe((e) => this.handleEvent(asTuiEvent(e)));
   }
 
   /** 停止订阅 */
@@ -62,32 +69,30 @@ export class StreamRenderer {
     return this.lastRunStreamed;
   }
 
-  private handleEvent(event: RunEvent): void {
+  private handleEvent(event: TuiEvent): void {
     switch (event.type) {
       case 'run.started': {
         this.streamedAny = false;
         break;
       }
       case 'llm.stream.chunk': {
-        const data = event.data as { chunk: StreamChunk };
-        this.handleChunk(data.chunk);
+        this.handleChunk(event.data.chunk);
         break;
       }
       case 'tool.call.started': {
-        this.renderToolCallStarted(event);
+        this.renderToolCallStarted(event.data);
         break;
       }
       case 'tool.call.completed': {
-        this.renderToolCallCompleted(event);
+        this.renderToolCallCompleted(event.data);
         break;
       }
       case 'tool.call.failed': {
-        this.renderToolCallFailed(event);
+        this.renderToolCallFailed(event.data);
         break;
       }
       case 'guardrail.blocked': {
-        const data = event.data as { reason: string };
-        process.stdout.write(`${this.color('red', `\n🚫 Blocked: ${data.reason}\n`)}`);
+        process.stdout.write(`${this.color('red', `\n🚫 Blocked: ${event.data.reason}\n`)}`);
         break;
       }
       case 'run.completed': {
@@ -97,9 +102,8 @@ export class StreamRenderer {
       }
       case 'run.failed': {
         this.lastRunStreamed = this.streamedAny;
-        const data = event.data as { error: string };
         if (!this.streamedAny) process.stdout.write('\n');
-        process.stdout.write(this.color('red', `✗ Run failed: ${data.error}\n`));
+        process.stdout.write(this.color('red', `✗ Run failed: ${event.data.error}\n`));
         break;
       }
       default:
@@ -115,8 +119,7 @@ export class StreamRenderer {
     // tool_call_delta / finish 不直接打印--工具卡片由 ToolCallStarted 渲染
   }
 
-  private renderToolCallStarted(event: RunEvent): void {
-    const data = event.data as { tool_name: string; arguments: unknown };
+  private renderToolCallStarted(data: ToolCallStartedPayload): void {
     if (this.cfg.showToolDetails) {
       const args = JSON.stringify(data.arguments);
       process.stdout.write(this.color('blue', `\n🔧 ${data.tool_name}`));
@@ -128,13 +131,11 @@ export class StreamRenderer {
     }
   }
 
-  private renderToolCallCompleted(event: RunEvent): void {
-    const data = event.data as { tool_name: string; duration_ms: number };
+  private renderToolCallCompleted(data: ToolCallCompletedPayload): void {
     process.stdout.write(this.color('green', ` ✓ ${data.duration_ms}ms\n`));
   }
 
-  private renderToolCallFailed(event: RunEvent): void {
-    const data = event.data as { tool_name: string; error: string };
+  private renderToolCallFailed(data: ToolCallFailedPayload): void {
     process.stdout.write(this.color('red', ` ✗ ${data.error}\n`));
   }
 

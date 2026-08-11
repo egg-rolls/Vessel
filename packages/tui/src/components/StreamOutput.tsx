@@ -5,10 +5,11 @@
  * 只负责当前轮的实时流式显示。run 完成后通过 onComplete 回调通知父组件归档。
  */
 
-import type { EventStream, RunEvent } from '@vessel/core';
+import type { EventStream } from '@vessel/core';
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { asTuiEvent, type TuiEvent } from '../types/events.js';
 
 // ── 类型 & 工厂 & 纯 reducer（导出供测试） ──
 
@@ -48,15 +49,15 @@ export function getResponseText(segs: Segment[]): string {
  *
  * `nextId` 用于为新 text segment 生成唯一 key。
  */
-export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => string): Segment[] {
+export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => string): Segment[] {
   switch (event.type) {
     case 'run.started':
       return [];
 
     case 'llm.stream.chunk': {
-      const data = event.data as { chunk: { type: string; delta?: string } };
-      const delta = data.chunk.delta;
-      if (data.chunk.type === 'text_delta' && delta) {
+      const chunk = event.data.chunk;
+      const delta = chunk.delta;
+      if (chunk.type === 'text_delta' && delta) {
         const last = prev.at(-1);
         if (last?.type === 'text') {
           return [...prev.slice(0, -1), { ...last, text: last.text + delta }];
@@ -67,19 +68,12 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
     }
 
     case 'tool.call.started': {
-      const d = event.data as {
-        tool_call_id: string;
-        tool_name: string;
-        arguments: unknown;
-      };
+      const d = event.data;
       return [...prev, makeToolCallSegment(d.tool_call_id, d.tool_name, d.arguments)];
     }
 
     case 'tool.call.completed': {
-      const d = event.data as {
-        tool_call_id: string;
-        duration_ms: number;
-      };
+      const d = event.data;
       return prev.map((seg) =>
         seg.type === 'tool_call' && seg.id === d.tool_call_id
           ? { ...seg, status: 'completed' as const, duration: d.duration_ms }
@@ -88,11 +82,7 @@ export function reduceSegments(prev: Segment[], event: RunEvent, nextId: () => s
     }
 
     case 'tool.call.failed': {
-      const d = event.data as {
-        tool_call_id: string;
-        error: string;
-        duration_ms: number;
-      };
+      const d = event.data;
       return prev.map((seg) =>
         seg.type === 'tool_call' && seg.id === d.tool_call_id
           ? {
@@ -148,7 +138,8 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
   }, [clearSignal, resetSegments]);
 
   useEffect(() => {
-    const unsubscribe = events.subscribe((event: RunEvent) => {
+    const unsubscribe = events.subscribe((rawEvent) => {
+      const event = asTuiEvent(rawEvent);
       switch (event.type) {
         case 'run.started':
           resetSegments();

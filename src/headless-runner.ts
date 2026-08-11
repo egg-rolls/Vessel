@@ -6,6 +6,7 @@
  */
 
 import type { AgentRuntime, Message, SessionBackend } from '../packages/core/src/index';
+import { asTuiEvent } from '../packages/tui/src/types/events.js';
 import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
 
 export interface HeadlessOptions {
@@ -31,13 +32,13 @@ export async function runHeadless(
 
   // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
   // 避免 waitFor 超时挂起；ask_user 仅交互模式注册（见 bootstrap），靠超时返回错误兜底。
-  runtime.events.subscribe((event) => {
+  runtime.events.subscribe((rawEvent) => {
+    const event = asTuiEvent(rawEvent);
     if (event.type === 'tool.permission.request') {
-      const { requestId } = event.data as { requestId: string };
       runtime.events.publish({
         type: 'tool.permission.response',
         run_id: event.run_id,
-        data: { requestId, decision: 'allow' },
+        data: { requestId: event.data.requestId, decision: 'allow' },
         ts: Date.now(),
       });
     }

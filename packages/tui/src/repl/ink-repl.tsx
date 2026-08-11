@@ -23,8 +23,8 @@ import {
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
-import type { ToolPermissionRequestedData } from '../renderer/tool-confirm.js';
 import type { ReplContext } from '../repl-context.js';
+import { asTuiEvent } from '../types/events.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 
 interface InkReplProps {
@@ -107,13 +107,13 @@ function InkRepl({ ctx }: InkReplProps) {
 
   // 订阅权限确认请求（ADR-029：工具自带 checkPermission 或 runtime 'ask' 分支都发此事件）
   useEffect(() => {
-    const unsubscribe = ctx.events.subscribe((event) => {
+    const unsubscribe = ctx.events.subscribe((rawEvent) => {
+      const event = asTuiEvent(rawEvent);
       if (event.type !== 'tool.permission.request') return;
-      const data = event.data as unknown as ToolPermissionRequestedData;
       setPermissionOverlay({
-        requestId: data.requestId,
+        requestId: event.data.requestId,
         run_id: event.run_id,
-        toolName: data.tool,
+        toolName: event.data.tool,
       });
     });
     return unsubscribe;
