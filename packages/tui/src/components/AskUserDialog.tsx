@@ -20,6 +20,7 @@ import { Box, type Key, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
+import { asTuiEvent } from '../types/events.js';
 
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
@@ -206,16 +207,16 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
 
   // 订阅 ask.user.requested：收到即展示问题（事件流取代回调注入，ADR-029）
   useEffect(() => {
-    const unsubscribe = events.subscribe((event) => {
+    const unsubscribe = events.subscribe((rawEvent) => {
+      const event = asTuiEvent(rawEvent);
       if (event.type !== 'ask.user.requested') return;
-      const data = event.data as unknown as AskUserRequestedData;
-      setPrompt({ ...data, run_id: event.run_id });
+      setPrompt({ ...event.data, run_id: event.run_id });
       setCurrentIndex(0);
       setView('question');
       setSelectIndex(0);
       setCustomFocus(false);
       setNotice('');
-      setAnswers(data.questions.map(() => ({ selected: new Set<string>(), custom: '' })));
+      setAnswers(event.data.questions.map(() => ({ selected: new Set<string>(), custom: '' })));
     });
     return unsubscribe;
   }, [events]);
