@@ -20,6 +20,14 @@ export interface HeadlessOptions {
   provider: { name: string; model: string };
 }
 
+/** 输入校验/读取错误--runHeadless 顶层捕获后以 exit 1 退出 */
+class CliError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CliError';
+  }
+}
+
 /**
  * 运行 headless 模式
  */
@@ -28,7 +36,7 @@ export async function runHeadless(
   session: SessionBackend,
   options: HeadlessOptions,
 ): Promise<void> {
-  const { runArg, pipeMode, sessionId, provider } = options;
+  const { sessionId, provider } = options;
 
   // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
   // 避免 waitFor 超时挂起；ask_user 仅交互模式注册（见 bootstrap），靠超时返回错误兜底。
@@ -44,45 +52,49 @@ export async function runHeadless(
     }
   });
 
-  const readStdin = runArg === '' || (runArg === null && pipeMode);
-  let input: string;
-
-  if (readStdin) {
-    input = await Bun.stdin.text();
-  } else if (runArg?.startsWith('@')) {
-    const filePath = runArg.slice(1);
-    if (filePath.endsWith('.json')) {
-      input = await seedFromMessagesFile(filePath, sessionId, session);
-    } else {
-      input = await Bun.file(filePath).text();
-    }
-  } else {
-    input = runArg ?? '';
-  }
-
-  input = input.trim();
-  if (!input) {
-    console.error('No input.');
-    process.exit(1);
-  }
-
-  console.error(`[vessel] ${provider.name} | ${provider.model} | session ${sessionId}`);
-
   try {
+    const input = (await readInput(options, session)).trim();
+    if (!input) {
+      throw new CliError('No input.');
+    }
+
+    console.error(`[vessel] ${provider.name} | ${provider.model} | session ${sessionId}`);
+
     const branch = await getCurrentGitBranch();
     const resp = await runtime.run(input, sessionId, { branch });
     console.log(resp);
     runtime.dispose?.();
     process.exit(0);
   } catch (e) {
-    console.error(`Error: ${e instanceof Error ? e.message : e}`);
+    const msg = e instanceof CliError ? e.message : `Error: ${e instanceof Error ? e.message : e}`;
+    console.error(msg);
     runtime.dispose?.();
     process.exit(1);
   }
 }
 
 /**
- * 从 JSON 文件加载历史消息
+ * 读取 headless 输入：无参=stdin，@file=文件内容（.json=多轮 seeding），其余=文本 prompt
+ */
+async function readInput(options: HeadlessOptions, session: SessionBackend): Promise<string> {
+  const { runArg, pipeMode, sessionId } = options;
+  const readStdin = runArg === '' || (runArg === null && pipeMode);
+
+  if (readStdin) {
+    return Bun.stdin.text();
+  }
+  if (runArg?.startsWith('@')) {
+    const filePath = runArg.slice(1);
+    if (filePath.endsWith('.json')) {
+      return seedFromMessagesFile(filePath, sessionId, session);
+    }
+    return Bun.file(filePath).text();
+  }
+  return runArg ?? '';
+}
+
+/**
+ * 从 JSON 文件加载历史消息，返回末条 user 消息作为本次输入
  */
 async function seedFromMessagesFile(
   filePath: string,
@@ -93,40 +105,38 @@ async function seedFromMessagesFile(
   try {
     raw = await Bun.file(filePath).text();
   } catch {
-    console.error(`Error: cannot read file "${filePath}".`);
-    process.exit(1);
+    throw new CliError(`Error: cannot read file "${filePath}".`);
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    console.error(`Error: "${filePath}" is not valid JSON.`);
-    process.exit(1);
+    throw new CliError(`Error: "${filePath}" is not valid JSON.`);
   }
 
   if (!Array.isArray(parsed) || parsed.length === 0) {
-    console.error(`Error: "${filePath}" must contain a non-empty JSON array of messages.`);
-    process.exit(1);
+    throw new CliError(`Error: "${filePath}" must contain a non-empty JSON array of messages.`);
   }
 
   const msgs = parsed as Message[];
   for (const m of msgs) {
     if (!m || typeof m.role !== 'string' || typeof m.content !== 'string') {
-      console.error(`Error: each message in "${filePath}" needs {role, content} (both strings).`);
-      process.exit(1);
+      throw new CliError(
+        `Error: each message in "${filePath}" needs {role, content} (both strings).`,
+      );
     }
   }
 
   const last = msgs[msgs.length - 1];
   if (!last) {
-    console.error(`Error: "${filePath}" contains no messages.`);
-    process.exit(1);
+    throw new CliError(`Error: "${filePath}" contains no messages.`);
   }
 
   if (last.role !== 'user') {
-    console.error(`Error: last message in "${filePath}" must be role "user" (got "${last.role}").`);
-    process.exit(1);
+    throw new CliError(
+      `Error: last message in "${filePath}" must be role "user" (got "${last.role}").`,
+    );
   }
 
   const history = msgs.slice(0, -1);
