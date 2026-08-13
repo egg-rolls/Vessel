@@ -66,6 +66,9 @@ for (let i = 0; i < argv.length; i++) {
   bun run src/cli.ts --sse-port 3333                启动 SSE bridge（浏览器 GUI）
   VESSEL_MOCK=1 bun run src/cli.ts --run "x"        mock 模式（不调 API）`);
     process.exit(0);
+  } else {
+    console.error(`Unknown argument: ${a}\nRun with --help for usage.`);
+    process.exit(1);
   }
 }
 const headless = runArg !== null || pipeMode;

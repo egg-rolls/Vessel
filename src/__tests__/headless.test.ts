@@ -153,3 +153,26 @@ it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+it('未知参数报错并 exit 1（不静默忽略）', async () => {
+  const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain('Unknown argument');
+});
+
+it('headless --run @bad.json：非法 JSON 报错 exit 1', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-bad-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'bad.json'), '{not json');
+    const { exitCode, stderr } = await runCli(
+      ['--run', '@bad.json'],
+      { VESSEL_MOCK: '1' },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('not valid JSON');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
