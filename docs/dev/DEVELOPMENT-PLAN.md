@@ -1,6 +1,6 @@
 # 开发阶段计划（DEVELOPMENT-PLAN）
 
-> 状态：2026-08-05 启用。记录当前开发阶段、候选模块、周常操作。
+> 状态：2026-08-05 启用，2026-08-13 同步到 main 实际。记录当前开发阶段、候选模块、周常操作。
 > 本文件属于 `docs/dev/`——可以有状态、进度、时间描述。
 > 阶段定义（WHAT）见 `docs/specs/ROADMAP.md`。
 > 优先级体系（HOW to decide）见 `docs/specs/ISSUE-SPEC.md`。
@@ -8,7 +8,7 @@
 
 ## 一、当前阶段
 
-**Phase 0（脚手架）→ 向 Phase 1（MVP）过渡。**
+**Phase 0（脚手架）-> 向 Phase 1（MVP）过渡。** 6 项切换条件中 5 项已满足（2026-08-13 验证），仅剩 npx 分发路径（ADR-006）未落地。
 
 ### 已完成
 
@@ -19,17 +19,18 @@
 - CI：lint + typecheck + test + build 四灯
 - 插件：file-ops、meta-tools、skills-loader、mcp-client、memory（auto + project）、guardrail-pii、redact-secrets、tool-policy、hook-logging
 
-### 阻塞 MVP 的缺口
+### Phase 0->1 切换状态
 
-当前仅剩一个缺口阻塞 Phase 0→1 切换：
+headless `--run` 入口已合并到 main（`src/cli.ts` + `src/headless-runner.ts`），原阻塞缺口已清除。Phase 0->1 的 6 项切换条件中 5 项已满足（2026-08-13 验证，见 §四 checklist），仅剩 **npx 分发路径未落地**（ADR-006 决定弃单二进制走 npx，但 `build.ts` 仍产二进制、`release.yml` 的 npm publish 段注释掉、`package.json` 为 `private:true`）。
 
-1. **headless `--run` 入口**（`feat/headless-single-run` 分支未合并，main 无 CLI 入口）——无头运行是嵌入场景和非交互部署的基础
-
-以下已在 main 实现，不再阻塞：
+main 上已实现的能力：
+- CLI 入口：交互 REPL + headless `--run`（文本/@file/stdin）+ `--session` 续接 + `--sse-port` SSE bridge（`src/cli.ts`）
 - provider 适配：Anthropic + OpenAI 兼容 SSE 流式（`packages/core/src/provider/providers.ts`）
 - session SQLite 持久化（`packages/core/src/session/sqlite-backend.ts`）
-- 首启配置向导（`packages/tui/src/wizard/setup-wizard.ts`，`/setup` 命令 + start.ts 自动触发）
-- 工具执行前权限确认弹窗（`packages/tui/src/renderer/tool-confirm.ts`）
+- 首启配置向导（`packages/tui/src/wizard/setup-wizard.ts`，`/setup` 命令 + 首启自动触发）
+- 工具执行前权限确认弹窗（ADR-029 事件流确认，`packages/tui/src/renderer/tool-confirm.ts`）
+- 事件回放：FileEventStore + replayRun（`packages/core/src/events/`，PR #86）
+- Auto Compact 自动触发 + 真实 token 追踪（PR #91）
 
 ## 二、各阶段开发优先级
 
@@ -62,11 +63,12 @@ Phase 2+（增强）：
 
 | 模块 | 目标 Phase | 当前状态 | `docs/dev/` 目录 | 优先级 |
 |------|-----------|---------|-----------------|--------|
-| headless `--run` | Phase 1 MVP | 分支开发中（`feat/headless-single-run`） | `docs/dev/headless/` | P1 |
+| headless `--run` | Phase 1 MVP | 已合并到 main（`src/cli.ts` + `src/headless-runner.ts`） | `docs/dev/headless/` | P1 |
 | provider 完整性 | Phase 1 MVP | 已实现（Anthropic + OpenAI SSE 流式） | `docs/dev/provider-completeness/` | P1 |
 | session SQLite | Phase 1 MVP | 已实现（`packages/core/src/session/sqlite-backend.ts`） | — | P1 |
 | 首启配置向导 | Phase 1 MVP | 已实现（`packages/tui/src/wizard/setup-wizard.ts`） | — | P2 |
 | 权限确认弹窗 | Phase 1 MVP | 已实现并重构为 runtime 默认策略（ADR-029，事件流确认） | — | P2 |
+| npx 分发（ADR-006） | Phase 1 MVP | 未落地：build.ts 仍产二进制、release.yml npm publish 注释、package.json private | - | P1 |
 | skills-loader 完善 | Phase 2 | 已有原型 | `docs/dev/skills-loader/` | P2 |
 | mcp-client 产品化 | Phase 2 | 已有原型 | `docs/dev/mcp-client/` | P2 |
 | a2a-bridge | Phase 3 | 未启动 | — | P3 |
@@ -79,12 +81,14 @@ Phase 2+（增强）：
 
 以下全部满足时，打 tag 发 `v0.1.0`（Phase 0 结束），进入 Phase 1：
 
-- [ ] `bun test` 全绿
+- [x] `bun test` 全绿（2026-08-13 验证：303 pass / 0 fail，34 文件）
 - [ ] `bun run build` 通过，npm 包可发布（`npx vessel` 可运行，弃单二进制，见 ADR-006）
-- [ ] headless `--run` 可完成一次完整 tool-calling 对话
-- [ ] 至少一个 OpenAI 兼容 provider + 一个 Anthropic 兼容 provider 可正常工作
-- [ ] 首启配置向导可引导用户完成 Key 填写
-- [ ] 工具执行前权限确认弹窗生效
+  - 现状（2026-08-13）：build 通过，但 `build.ts` 仍 `bun build --compile` 产单二进制，与 ADR-006 不一致；`release.yml` 的 npm publish 段注释掉、`package.json` 为 `private:true`，npx 分发路径未启用
+  - 待办：落实 ADR-006（`build.ts` 停止产二进制、启用 `release.yml` npm publish、`package.json` 改 `private:false` 并配 `bin` 入口）
+- [x] headless `--run` 可完成一次完整 tool-calling 对话（2026-08-13 mock 模式端到端退出码 0；真实 API 路径由 anthropic-streaming.test.ts / provider.test.ts 覆盖）
+- [x] 至少一个 OpenAI 兼容 provider + 一个 Anthropic 兼容 provider 可正常工作
+- [x] 首启配置向导可引导用户完成 Key 填写
+- [x] 工具执行前权限确认弹窗生效
 
 ### Phase 1（MVP）完成条件
 
