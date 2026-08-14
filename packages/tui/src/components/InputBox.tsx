@@ -13,13 +13,14 @@ interface InputBoxProps {
   placeholder?: string;
   argHint?: string | null;
   inputKey?: string | number;
+  width?: number;
 }
 
-export function InputBox({ value, onChange, onSubmit, placeholder, argHint, inputKey }: InputBoxProps) {
+export function InputBox({ value, onChange, onSubmit, placeholder, argHint, inputKey, width = 80 }: InputBoxProps) {
   return (
     <Box flexDirection="column">
       {/* 上边框 */}
-      <Text color="blue">{'─'.repeat(80)}</Text>
+      <Text color="blue">{'─'.repeat(width)}</Text>
 
       {/* 输入行 */}
       <Box>
@@ -35,7 +36,7 @@ export function InputBox({ value, onChange, onSubmit, placeholder, argHint, inpu
       </Box>
 
       {/* 下边框 */}
-      <Text color="blue">{'─'.repeat(80)}</Text>
+      <Text color="blue">{'─'.repeat(width)}</Text>
     </Box>
   );
 }

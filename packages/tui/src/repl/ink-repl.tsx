@@ -388,6 +388,7 @@ function InkRepl({ ctx }: InkReplProps) {
           onChange={setInput}
           onSubmit={handleSubmit}
           argHint={argHint}
+          width={stdout.columns}
         />
       )}
 
