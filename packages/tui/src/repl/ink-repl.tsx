@@ -9,6 +9,7 @@
 import type { SessionInfo } from '@vessel/core';
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
+import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
@@ -23,6 +24,11 @@ import {
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
+import { DashboardManager } from '../dashboard/dashboard-manager.js';
+import { DashboardService } from '../dashboard/dashboard-service.js';
+import { AssetManagerPlugin } from '../dashboard/plugins/assets/index.js';
+import { ToolDisplayPlugin } from '../dashboard/plugins/tools/index.js';
+import { WelcomePlugin } from '../dashboard/plugins/welcome/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { asTuiEvent } from '../types/events.js';
 import { getCurrentGitBranch } from '../utils/git.js';
@@ -55,8 +61,39 @@ function InkRepl({ ctx }: InkReplProps) {
     run_id: string;
     toolName: string;
   } | null>(null);
+  const [showDashboard, setShowDashboard] = useState(true); // 启动时显示 Dashboard
+  const [dashboardContent, setDashboardContent] = useState<React.ReactNode[]>([]); // Dashboard 渲染内容
 
   const commands = useMemo(() => createCommands(), []);
+
+  // Dashboard 初始化
+  useEffect(() => {
+    const initDashboard = async () => {
+      try {
+        const service = new DashboardService(ctx);
+        const manager = new DashboardManager(service);
+
+        // 注册插件
+        manager.registerPlugin(new WelcomePlugin());
+        manager.registerPlugin(new AssetManagerPlugin());
+        manager.registerPlugin(new ToolDisplayPlugin());
+
+        // 渲染 Dashboard
+        const content = await manager.renderDashboard();
+        if (content) {
+          // 确保 content 是数组
+          const elements = Array.isArray(content) ? content : [content];
+          if (elements.length > 0) {
+            setDashboardContent(elements);
+          }
+        }
+      } catch (error) {
+        console.error('Dashboard initialization failed:', error);
+      }
+    };
+
+    initDashboard();
+  }, [ctx]);
 
   // 预计算的命令列表（用于内联补全）
   const allCommands = useMemo<CommandItem[]>(() => {
@@ -210,6 +247,11 @@ function InkRepl({ ctx }: InkReplProps) {
   // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
   // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
+    // 隐藏 Dashboard 当用户开始输入
+    if (showDashboard && !key.escape) {
+      setShowDashboard(false);
+    }
+
     // ask-user / 权限弹窗显示时，键盘交给弹窗组件自己的 useInput
     if (askUserActive || permissionOverlay) return;
 
@@ -294,6 +336,19 @@ function InkRepl({ ctx }: InkReplProps) {
     <Box flexDirection="column" height={stdout.rows}>
       {/* 状态栏（固定顶部） */}
       <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
+
+      {/* Dashboard 显示区域 */}
+      {showDashboard && dashboardContent.length > 0 && (
+        <Box flexDirection="column" marginBottom={1}>
+          {dashboardContent.map((line, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: Dashboard content is static
+            <Text key={i}>{line}</Text>
+          ))}
+          <Text color="gray" dimColor>
+            Press any key to start chatting...
+          </Text>
+        </Box>
+      )}
 
       {/* 滚动区域：历史 + 流式输出，flexGrow 撑满剩余空间 */}
       <Box flexDirection="column" flexGrow={1}>
