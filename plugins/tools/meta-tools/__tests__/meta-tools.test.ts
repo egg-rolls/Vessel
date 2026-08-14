@@ -125,10 +125,7 @@ describe('meta-tools 插件（asset-decentralization 线A 瘦身）', () => {
   it('add_tool 缺参返回「参数缺失」', async () => {
     const tool = host.getTool('add_tool');
     expect(tool).toBeDefined();
-    const result = await tool?.handler(
-      { name: 'x', description: 'd', type: 'shell' },
-      toolCtx(),
-    );
+    const result = await tool?.handler({ name: 'x', description: 'd', type: 'shell' }, toolCtx());
     expect(result).toContain('参数缺失');
     // 未注册、未持久化
     expect(host.getTool('x')).toBeUndefined();

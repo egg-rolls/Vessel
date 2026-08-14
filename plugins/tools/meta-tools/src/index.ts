@@ -69,10 +69,7 @@ function readPersistedTemplates(toolsFilePath: string): PersistedToolTemplate[] 
 }
 
 /** 将工具模板写入持久化文件 */
-function writePersistedTemplates(
-  toolsFilePath: string,
-  templates: PersistedToolTemplate[],
-): void {
+function writePersistedTemplates(toolsFilePath: string, templates: PersistedToolTemplate[]): void {
   try {
     const dir = path.dirname(toolsFilePath);
     if (!fs.existsSync(dir)) {
