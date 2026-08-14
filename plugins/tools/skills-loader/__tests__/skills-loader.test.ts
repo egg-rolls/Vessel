@@ -3,13 +3,16 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { HookType, MemoryEventStream, MemoryPluginHost } from '@vessel/core';
-import { SkillsManager, createSkillsLoaderPlugin } from '../src/index';
+import { createSkillsLoaderPlugin, SkillsManager } from '../src/index';
 
 /** 调用工具 handler 的便捷封装 */
 function callTool(host: MemoryPluginHost, name: string, args: unknown): Promise<string> {
   const tool = host.getTool(name);
   expect(tool, `tool ${name} should exist`).toBeDefined();
-  return tool!.handler(args, {
+  if (!tool) {
+    throw new Error(`tool ${name} should exist`);
+  }
+  return tool.handler(args, {
     run_id: 'r1',
     messages: [],
     events: new MemoryEventStream(),

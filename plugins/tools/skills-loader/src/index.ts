@@ -270,7 +270,7 @@ export class SkillsManager {
    * 添加 Skill：写入文件并加载进内存。
    * 默认写入 skillsDir 下的 `<name>.md`；重名时抛「Skill 已存在」。
    */
-  addSkill(name: string, content: string, filePath?: string): Skill {
+  addSkill(name: string, content: string, filePath?: string): Skill | undefined {
     if (!isSafeSkillName(name)) {
       throw new Error('非法 skill 名');
     }
@@ -313,7 +313,7 @@ export class SkillsManager {
       }
     }
 
-    return this.skills.get(name)!;
+    return this.skills.get(name);
   }
 
   /**
