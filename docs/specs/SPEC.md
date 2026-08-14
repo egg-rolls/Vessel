@@ -228,16 +228,19 @@ Iterate   → 循环继续 / scheduler 触发                    （core 循环 
 ```
 vessel/
 ├── packages/
-│   ├── core/       # @vessel/core
-│   ├── config/     # @vessel/config
-│   └── tui/        # @vessel/tui
-├── plugins/        # 官方插件（memory/mcp/...），各自独立包
-├── docs/           # 本文档集
-├── legacy/         # 旧项目遗产（背景）
+│   ├── core/        # @vessel/core（运行时，冻结）
+│   ├── config/      # @vessel/config（声明式配置）
+│   ├── tui/         # @vessel/tui（终端 REPL）
+│   ├── serve/       # @vessel/serve（本地 HTTP/WS gateway，应用层）
+│   └── permission/  # @vessel/permission（权限事件流原语，共享库）
+├── plugins/         # 官方插件（memory/mcp/...），各自独立包
+├── apps/web/        # 本地 Web 控制台（Vite+React，独立 npm 生态）
+├── docs/            # 本文档集
+├── legacy/          # 旧项目遗产（背景）
 └── CLAUDE.md
 ```
 
-monorepo（bun workspaces）。core 不引用 plugins/tui/config。
+monorepo（bun workspaces；apps/web 除外，独立 npm）。core 不引用 plugins/tui/config。
 
 ## 3. 核心执行模型
 
