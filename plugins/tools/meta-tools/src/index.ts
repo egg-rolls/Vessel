@@ -12,7 +12,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
-import { requestPermission } from './permission';
+import { requestPermission } from '@vessel/permission';
 
 /** 持久化工具模板（安全，不使用 eval/new Function） */
 interface PersistedToolTemplate {

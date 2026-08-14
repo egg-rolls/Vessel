@@ -1,12 +1,14 @@
 /**
- * 共享权限工具工厂（ADR-026 / ADR-029）。
+ * @vessel/permission — 共享权限原语
+ * @module @vessel/permission
  *
- * 自描述工具对象的 `checkPermission` 复用本函数：发 `tool.permission.request`
- * 事件 → `waitFor('tool.permission.response', { requestId })` 等用户授权。
+ * 自描述工具对象（ADR-026）的 `checkPermission` 复用本函数：发 `tool.permission.request`
+ * 事件 → `waitFor('tool.permission.response', { requestId })` 等用户授权（ADR-029）。
  * 无订阅者/超时时兜底返回 'ask'，交由运行时决定。
  *
  * 事件名为开放字符串协议（ADR-030），不定义常量。
  */
+
 import { randomUUID } from 'node:crypto';
 import type { ToolContext } from '@vessel/core';
 

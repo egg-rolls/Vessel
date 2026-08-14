@@ -32,6 +32,16 @@
         "typescript": "^7.0.2",
       },
     },
+    "packages/permission": {
+      "name": "@vessel/permission",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vessel/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "packages/serve": {
       "name": "@vessel/serve",
       "version": "0.1.0",
@@ -66,6 +76,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@vessel/core": "workspace:*",
+        "@vessel/permission": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -176,6 +187,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@vessel/core": "workspace:*",
+        "@vessel/permission": "workspace:*",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
@@ -342,6 +354,8 @@
     "@vessel/memory-project": ["@vessel/memory-project@workspace:plugins/memory/project"],
 
     "@vessel/meta-tools": ["@vessel/meta-tools@workspace:plugins/tools/meta-tools"],
+
+    "@vessel/permission": ["@vessel/permission@workspace:packages/permission"],
 
     "@vessel/provider-anthropic": ["@vessel/provider-anthropic@workspace:plugins/provider/anthropic"],
 

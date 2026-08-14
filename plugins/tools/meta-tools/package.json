@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel/core": "workspace:*"
+    "@vessel/core": "workspace:*",
+    "@vessel/permission": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

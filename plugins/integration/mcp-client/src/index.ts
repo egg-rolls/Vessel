@@ -12,7 +12,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import type { Hook, HookContext, Plugin, PluginHost, ToolDefinition } from '@vessel/core';
 import { HookType } from '@vessel/core';
-import { requestPermission } from '../../../tools/meta-tools/src/permission';
+import { requestPermission } from '@vessel/permission';
 
 // ── 类型 ──────────────────────────────────────────
 

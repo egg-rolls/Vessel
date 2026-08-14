@@ -1,5 +1,5 @@
 {
-  "name": "@vessel/mcp-client",
+  "name": "@vessel/permission",
   "version": "0.1.0",
   "type": "module",
   "main": "src/index.ts",
@@ -12,8 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel/core": "workspace:*",
-    "@vessel/permission": "workspace:*"
+    "@vessel/core": "workspace:*"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
