@@ -83,14 +83,29 @@ export class DashboardService implements IDashboardService {
       enabled: true,
     }));
 
-    // TODO: Get MCP servers from plugin host
-    const mcpServers: AssetInfo['mcpServers'] = [];
+    // Infer MCP servers from tool names (format: mcp__<server>__<tool>)
+    const toolList = this.ctx.tools.list();
+    const mcpServerMap = new Map<string, number>();
+    for (const tool of toolList) {
+      if (tool.name.startsWith('mcp__')) {
+        const parts = tool.name.split('__');
+        const serverName = parts[1];
+        if (serverName) {
+          mcpServerMap.set(serverName, (mcpServerMap.get(serverName) ?? 0) + 1);
+        }
+      }
+    }
+    const mcpServers: AssetInfo['mcpServers'] = Array.from(mcpServerMap.entries()).map(
+      ([name, toolCount]) => ({
+        name,
+        status: 'connected' as const,
+        tools: toolCount,
+      }),
+    );
 
-    // TODO: Get skills from skills-loader
+    // Skills: no data source available in ReplContext
     const skills: AssetInfo['skills'] = [];
 
-    // Get tools from tool registry
-    const toolList = this.ctx.tools.list();
     const tools = toolList.map((tool) => ({
       name: tool.name,
       description: tool.description,

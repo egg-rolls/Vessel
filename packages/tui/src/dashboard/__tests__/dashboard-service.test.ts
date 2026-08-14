@@ -74,6 +74,58 @@ describe('DashboardService', () => {
     expect(assets.plugins).toHaveLength(2);
     expect(assets.tools).toHaveLength(1);
     expect(assets.tools[0]?.name).toBe('test-tool');
+    expect(assets.mcpServers).toHaveLength(0);
+  });
+
+  it('should infer MCP servers from tool names', async () => {
+    // Mock tools with MCP naming convention
+    mockCtx.tools = {
+      list: () => [
+        {
+          name: 'mcp__filesystem__read_file',
+          description: 'Read file',
+          inputSchema: {},
+          // biome-ignore lint/suspicious/noExplicitAny: mock object for testing
+          handler: (() => {}) as any,
+        },
+        {
+          name: 'mcp__filesystem__write_file',
+          description: 'Write file',
+          inputSchema: {},
+          // biome-ignore lint/suspicious/noExplicitAny: mock object for testing
+          handler: (() => {}) as any,
+        },
+        {
+          name: 'mcp__github__create_issue',
+          description: 'Create issue',
+          inputSchema: {},
+          // biome-ignore lint/suspicious/noExplicitAny: mock object for testing
+          handler: (() => {}) as any,
+        },
+        {
+          name: 'test-tool',
+          description: 'Regular tool',
+          inputSchema: {},
+          // biome-ignore lint/suspicious/noExplicitAny: mock object for testing
+          handler: (() => {}) as any,
+        },
+      ],
+      // biome-ignore lint/suspicious/noExplicitAny: mock object for testing
+      register: (() => {}) as any,
+      // biome-ignore lint/suspicious/noExplicitAny: mock object for testing
+      invoke: (() => {}) as any,
+      schemas: () => [],
+      get: () => undefined,
+      has: () => false,
+    };
+    const service = new DashboardService(mockCtx);
+    const assets = await service.getAssets();
+    expect(assets.mcpServers).toHaveLength(2);
+    expect(assets.mcpServers.map((s) => s.name)).toContain('filesystem');
+    expect(assets.mcpServers.map((s) => s.name)).toContain('github');
+    expect(assets.mcpServers.find((s) => s.name === 'filesystem')?.tools).toBe(2);
+    expect(assets.mcpServers.find((s) => s.name === 'github')?.tools).toBe(1);
+    expect(assets.tools).toHaveLength(4);
   });
 
   it('should get tool info', async () => {
