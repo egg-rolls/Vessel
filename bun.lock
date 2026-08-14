@@ -32,6 +32,16 @@
         "typescript": "^7.0.2",
       },
     },
+    "packages/serve": {
+      "name": "@vessel/serve",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vessel/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "packages/tui": {
       "name": "@vessel/tui",
       "version": "0.1.0",
@@ -326,6 +336,8 @@
     "@vessel/provider-openai": ["@vessel/provider-openai@workspace:plugins/provider/openai"],
 
     "@vessel/redact-secrets": ["@vessel/redact-secrets@workspace:plugins/security/redact-secrets"],
+
+    "@vessel/serve": ["@vessel/serve@workspace:packages/serve"],
 
     "@vessel/skills-loader": ["@vessel/skills-loader@workspace:plugins/tools/skills-loader"],
 

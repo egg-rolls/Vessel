@@ -18,6 +18,7 @@
  * - Ink REPL：React 组件式终端 UI
  */
 
+import { startGateway } from '../packages/serve/src/index';
 import { startInkRepl, startSseBridge } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
@@ -31,6 +32,7 @@ let runArg: string | null = null;
 let pipeMode = false; // --pipe 隐藏别名，等价 --run 无参（读 stdin）
 let sessionArg: string | null = null;
 let ssePort = 0; // --sse-port <port> 启动 SSE bridge（0=关闭）
+let servePort = 0; // --serve [port] 启动 HTTP/WS gateway（0=关闭，默认 8642）
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
   if (a === '--run' || a === '-r') {
@@ -55,6 +57,10 @@ for (let i = 0; i < argv.length; i++) {
       ssePort = Number.parseInt(next, 10);
       i++;
     }
+  } else if (a === '--serve') {
+    const next = argv[i + 1];
+    servePort = next !== undefined && !next.startsWith('-') ? Number.parseInt(next, 10) : 8642;
+    if (next !== undefined && !next.startsWith('-')) i++;
   } else if (a === '--help' || a === '-h') {
     console.log(`Vessel CLI
 
@@ -64,6 +70,7 @@ for (let i = 0; i < argv.length; i++) {
   echo "..." | bun run src/cli.ts --run             headless 单轮（stdin）
   bun run src/cli.ts --session <id> --run "..."     续接会话
   bun run src/cli.ts --sse-port 3333                启动 SSE bridge（浏览器 GUI）
+  bun run src/cli.ts --serve 8642                   启动 HTTP/WS gateway（Web 控制台后端）
   VESSEL_MOCK=1 bun run src/cli.ts --run "x"        mock 模式（不调 API）`);
     process.exit(0);
   } else {
@@ -128,6 +135,17 @@ if (!useMock && !headless && !config.apiKey) {
 async function runWithConfig(result: BootstrapResult) {
   const { runtime, ctx, cleanup } = result;
 
+  // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
+  const gateway =
+    servePort > 0
+      ? startGateway({ events: ctx.events, session: ctx.session, runtime, port: servePort })
+      : null;
+  if (gateway) {
+    console.log(`\n🌐 Gateway: ${gateway.url}  token=${gateway.token}`);
+    console.log(`   SSE: ${gateway.url}/events?token=${gateway.token}`);
+    console.log(`   WS:  ${gateway.url}/ws?token=${gateway.token}\n`);
+  }
+
   if (headless) {
     await runHeadless(runtime, ctx.session, {
       runArg,
@@ -139,6 +157,7 @@ async function runWithConfig(result: BootstrapResult) {
     await startInkRepl(ctx);
   }
 
+  gateway?.stop();
   sseBridge?.stop();
   cleanup();
 }
