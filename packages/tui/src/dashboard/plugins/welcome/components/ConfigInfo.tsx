@@ -11,10 +11,11 @@ interface ConfigInfoProps {
  */
 export const ConfigInfo: React.FC<ConfigInfoProps> = ({ config }) => {
   return (
-    <Box marginTop={1}>
+    <Box flexDirection="column" marginTop={1}>
       <Text color="gray" bold>
         {config.provider} | {config.model}
       </Text>
+      <Text color="gray">{config.workspace}</Text>
     </Box>
   );
 };
