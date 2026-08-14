@@ -7,17 +7,17 @@ import { randomUUID } from 'node:crypto';
 import { MemoryLimitChecker } from '../limits/limit-checker.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
-import { type GuardrailContext, GuardrailStage } from '../types/guardrail.js';
+import { GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
-import type { TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
+import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
 import type { ToolContext, ToolDefinition, ToolRegistry } from '../types/tool.js';
+import { GuardrailRunner } from './guardrail-runner.js';
+import { HookRunner } from './hook-runner.js';
+import { PermissionPolicy } from './permission-policy.js';
 import { MemoryPluginHost } from './plugin-host.js';
-
-/** checkPermission 返回 'ask' 时，等待用户 allow/deny 决定的事件超时（毫秒） */
-const PERMISSION_TIMEOUT_MS = 120_000;
 
 /** Run 选项 */
 export interface RunOptions {
@@ -29,7 +29,9 @@ export interface RunOptions {
 
 /**
  * Agent Runtime
- * 核心运行时，实现 tool-calling loop
+ * 核心运行时，实现 tool-calling loop。
+ * 协调 provider/context/events/limits/termination/session + 三个编排器（权限/guardrail/hook），
+ * 自身不再内联编排逻辑（ADR-033）。
  */
 export class AgentRuntime {
   private provider: LLMProvider;
@@ -42,14 +44,12 @@ export class AgentRuntime {
   private termination: TerminationPolicy;
   private session?: SessionBackend;
   private pluginHost: PluginHost;
-  private limitChecker: MemoryLimitChecker;
+  private limitChecker: LimitChecker;
   private stats: UsageStats;
   private systemPrompt?: string;
-  // ── 默认权限策略（ADR-029：未声明 checkPermission 的工具用此判定）──
-  private permissionDefault: 'allow' | 'ask';
-  private permissionAutoApprove: Set<string>;
-  /** remember-always 持久化（本次 run 内记住，后续同工具免确认） */
-  private permissionApproved: Set<string>;
+  private permissionPolicy: PermissionPolicy;
+  private guardrails: GuardrailRunner;
+  private hooks: HookRunner;
 
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -61,11 +61,8 @@ export class AgentRuntime {
     this.termination = opts.termination;
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
-    this.limitChecker = new MemoryLimitChecker();
-    // 默认权限策略：库默认 'allow'（不确认），由 app 层显式开启 'ask'（交互确认）
-    this.permissionDefault = opts.permission?.default ?? 'allow';
-    this.permissionAutoApprove = new Set(opts.permission?.autoApprove ?? []);
-    this.permissionApproved = new Set();
+    // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
+    this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
 
     // 初始化使用量统计
     this.stats = {
@@ -81,7 +78,7 @@ export class AgentRuntime {
     // 初始化 PluginHost（loop 的单一工具来源），并将构造参数里的 ToolRegistry 工具
     // 作为「种子」同步进来。此后 loop 只认 PluginHost——ToolRegistry 仍是 9 接口之一，
     // 供只想用简单注册表、不引入插件系统的嵌入方单独使用；其 invoke/schemas 不参与 runtime loop。
-    this.pluginHost = new MemoryPluginHost();
+    this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
     for (const tool of this.tools.list()) {
       try {
         this.pluginHost.registerTool(tool);
@@ -89,6 +86,11 @@ export class AgentRuntime {
         // 工具名冲突，跳过（插件工具优先已注册的情况下保留直接工具）
       }
     }
+
+    // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
+    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission);
+    this.guardrails = new GuardrailRunner(this.pluginHost, this.events);
+    this.hooks = new HookRunner(this.pluginHost);
   }
 
   /** 创建并异步初始化 AgentRuntime。用此替代 new AgentRuntime()。 */
@@ -202,7 +204,7 @@ export class AgentRuntime {
       this.addContext(userMessage, runId);
 
       // 应用输入 Guardrail
-      const inputResult = await this.applyGuardrails(
+      const inputResult = await this.guardrails.apply(
         userMessage.content,
         GuardrailStage.Input,
         runId,
@@ -254,7 +256,7 @@ export class AgentRuntime {
       runState.error = error instanceof Error ? error.message : String(error);
 
       // 触发 OnError Hook（LLM 错误、Guardrail 阻断、限制超限、Abort 等）
-      await this.runHooks(HookType.OnError, {
+      await this.hooks.run(HookType.OnError, {
         run_id: runId,
         session_id: currentSessionId,
         error: runState.error,
@@ -317,7 +319,7 @@ export class AgentRuntime {
       if (this.systemPrompt) {
         hookCtx.system_prompt = this.systemPrompt;
       }
-      await this.runHooks(HookType.BeforeLlm, hookCtx);
+      await this.hooks.run(HookType.BeforeLlm, hookCtx);
       const injectedSystem: string | undefined =
         typeof hookCtx.system_prompt === 'string' ? hookCtx.system_prompt : undefined;
 
@@ -427,12 +429,12 @@ export class AgentRuntime {
       });
 
       // 执行 AfterLlm 钩子
-      await this.runHooks(HookType.AfterLlm, hookCtx);
+      await this.hooks.run(HookType.AfterLlm, hookCtx);
 
       // 检查完成原因
       if (response.finish_reason === 'stop') {
         // 应用输出 Guardrail
-        const outputResult = await this.applyGuardrails(
+        const outputResult = await this.guardrails.apply(
           response.content,
           GuardrailStage.Output,
           runId,
@@ -471,7 +473,7 @@ export class AgentRuntime {
           this.limitChecker.incrementToolCall(this.stats);
 
           // 应用工具调用 Guardrail
-          const toolCallResult = await this.applyGuardrails(
+          const toolCallResult = await this.guardrails.apply(
             toolCall,
             GuardrailStage.ToolCall,
             runId,
@@ -496,7 +498,7 @@ export class AgentRuntime {
           });
 
           // 执行 BeforeTool 钩子
-          await this.runHooks(HookType.BeforeTool, hookCtx);
+          await this.hooks.run(HookType.BeforeTool, hookCtx);
 
           try {
             // 统一工具调用：只从 PluginHost 查找
@@ -514,64 +516,20 @@ export class AgentRuntime {
               args = {};
             }
 
-            // 权限判定（ADR-026/029）：
-            // - 工具自带 checkPermission → 用工具的判定；
-            // - 未声明 → 默认策略：permissionDefault 'ask'（且非 autoApprove/已记住）则走事件流确认。
-            //   库默认 'allow'（不确认），交互模式由 app 层传 permission.default='ask' 开启。
-            const toolCtx = {
+            const toolCtx: ToolContext = {
               run_id: runId,
               session_id: sessionId,
               messages: this.context.messages,
               events: this.events,
             };
-            let decision: 'allow' | 'deny' | 'ask';
-            if (pluginTool.checkPermission) {
-              decision = await pluginTool.checkPermission(args, toolCtx);
-            } else if (
-              this.permissionDefault === 'allow' ||
-              this.permissionAutoApprove.has(toolName) ||
-              this.permissionApproved.has(toolName)
-            ) {
-              decision = 'allow';
-            } else {
-              decision = 'ask';
-            }
-            if (decision === 'deny') {
-              throw new Error(`Tool "${toolName}" execution denied by permission policy`);
-            }
-            if (decision === 'ask') {
-              const requestId = randomUUID();
-              this.publishEvent({
-                type: 'tool.permission.request',
-                run_id: runId,
-                data: { requestId, tool: toolName, input: args },
-                ts: Date.now(),
-              });
-              const decided = (await this.events.waitFor('tool.permission.response', {
-                requestId,
-                timeout: PERMISSION_TIMEOUT_MS,
-              })) as
-                | {
-                    decision?: 'allow' | 'deny' | 'ask';
-                    allowed?: boolean;
-                    remember?: boolean;
-                  }
-                | undefined;
-              const userDecision =
-                decided?.decision ?? (decided?.allowed === false ? 'deny' : 'allow');
-              if (userDecision !== 'allow') {
-                throw new Error(`Tool "${toolName}" execution denied by user`);
-              }
-              // 用户选 "always" → 记住，后续同工具不再确认
-              if (decided?.remember) {
-                this.permissionApproved.add(toolName);
-              }
-            }
+
+            // 权限判定（ADR-026/029，逻辑在 PermissionPolicy，ADR-033）
+            await this.permissionPolicy.authorize(pluginTool, args, toolCtx);
 
             const result = await this.invokeTool(pluginTool, args, toolCtx);
 
             // 应用工具结果 Guardrail
-            const toolResultResult = await this.applyGuardrails(
+            const toolResultResult = await this.guardrails.apply(
               result,
               GuardrailStage.ToolResult,
               runId,
@@ -596,7 +554,7 @@ export class AgentRuntime {
             });
 
             // 执行 AfterTool 钩子
-            await this.runHooks(HookType.AfterTool, hookCtx);
+            await this.hooks.run(HookType.AfterTool, hookCtx);
 
             // 添加工具结果到上下文（标准 role: tool 消息）
             this.addContext(
@@ -613,7 +571,7 @@ export class AgentRuntime {
             const errorMessage = error instanceof Error ? error.message : String(error);
 
             // 触发 OnError Hook（工具执行失败）
-            await this.runHooks(HookType.OnError, {
+            await this.hooks.run(HookType.OnError, {
               run_id: runId,
               session_id: sessionId,
               error: errorMessage,
@@ -661,69 +619,10 @@ export class AgentRuntime {
   }
 
   /**
-   * 应用 Guardrails
-   * @param value 要检查的值
-   * @param stage Guardrail 阶段
-   * @param run_id Run ID
-   * @param session_id 会话 ID
-   * @returns Guardrail 结果
-   */
-  protected async applyGuardrails(
-    value: unknown,
-    stage: GuardrailStage,
-    runId: string,
-    sessionId?: string,
-  ): Promise<{ allowed: boolean; replacement?: unknown; reason?: string }> {
-    const guardrails = this.pluginHost.getGuardrails().filter((g) => g.stage === stage);
-    const ctx: GuardrailContext = { run_id: runId, session_id: sessionId, stage };
-
-    let currentValue = value;
-
-    for (const guardrail of guardrails) {
-      const result = await guardrail.check(currentValue, ctx);
-      if (!result.allowed) {
-        this.publishEvent({
-          type: 'guardrail.blocked',
-          run_id: runId,
-          data: {
-            run_id: runId,
-            guardrail_name: guardrail.name,
-            stage,
-            reason: result.reason ?? 'blocked',
-          },
-          ts: Date.now(),
-        });
-        return {
-          allowed: false,
-          replacement: currentValue,
-          reason: result.reason,
-        };
-      }
-      if (result.replacement !== undefined) {
-        currentValue = result.replacement;
-      }
-    }
-
-    return { allowed: true, replacement: currentValue };
-  }
-
-  /**
    * 释放资源（关闭连接、保存状态等）
    */
   dispose(): void {
     this.session?.close?.();
-  }
-
-  /**
-   * 运行 Hooks
-   * @param type Hook 类型
-   * @param ctx Hook 上下文
-   */
-  protected async runHooks(type: HookType, ctx: HookContext): Promise<void> {
-    const hooks = this.pluginHost.getHooks().filter((h) => h.type === type);
-    for (const hook of hooks) {
-      await hook.run(ctx);
-    }
   }
 
   /**

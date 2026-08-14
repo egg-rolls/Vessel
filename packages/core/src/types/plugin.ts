@@ -52,4 +52,8 @@ export interface AgentRuntimeOptions {
   systemPrompt?: string; // 系统提示词
   /** 默认权限策略——未声明 checkPermission 的工具用 default/autoApprove 判定（ADR-029） */
   permission?: RuntimePermissionConfig;
+  /** 可注入的 PluginHost（默认 MemoryPluginHost）——依赖倒置（ADR-033） */
+  pluginHost?: PluginHost;
+  /** 可注入的限制检查器（默认 MemoryLimitChecker）——依赖倒置（ADR-033） */
+  limitChecker?: import('./limits.js').LimitChecker;
 }
