@@ -32,14 +32,25 @@ export const AsciiArt: React.FC = () => {
   const useSmallIcon = terminalWidth < 100;
   const displayLines = useSmallIcon ? smallLines : lines;
 
+  // 垂直三段渐变：浅蓝 → 中蓝 → 深蓝
+  const gradientColors = ['#87CEFA', '#4169E1', '#00008B'];
+  const segSize = Math.ceil(displayLines.length / 3);
+  const segments = [
+    displayLines.slice(0, segSize),
+    displayLines.slice(segSize, segSize * 2),
+    displayLines.slice(segSize * 2),
+  ];
+
   return (
     <Box flexDirection="column">
-      {displayLines.map((line, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: static logo
-        <Text key={i} color="blue" bold>
-          {line}
-        </Text>
-      ))}
+      {segments.map((seg, segIndex) =>
+        seg.map((line, lineIndex) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: static logo
+          <Text key={`${segIndex}-${lineIndex}`} color={gradientColors[segIndex]} bold>
+            {line}
+          </Text>
+        )),
+      )}
     </Box>
   );
 };
