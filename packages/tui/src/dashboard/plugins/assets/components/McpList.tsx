@@ -7,29 +7,22 @@ interface McpListProps {
 }
 
 /**
- * MCP server list display component
+ * MCP server list display component (compact version)
  */
 export const McpList: React.FC<McpListProps> = ({ mcpServers }) => {
+  // 没有 MCP 服务器时不显示任何内容
   if (mcpServers.length === 0) {
-    return (
-      <Box flexDirection="column">
-        <Text color="gray">No MCP servers connected</Text>
-      </Box>
-    );
+    return null;
   }
+
+  const serverNames = mcpServers.map((s) => s.name).join(', ');
 
   return (
     <Box flexDirection="column">
       <Text color="blue" bold>
-        MCP Servers ({mcpServers.length})
+        MCP ({mcpServers.length})
       </Text>
-      {mcpServers.map((server) => (
-        <Text key={server.name} color="white">
-          {server.status === 'connected' ? '🟢' : '🔴'} {server.name} {server.status} (tools:{' '}
-          {server.tools}
-          {server.latency ? `, latency: ${server.latency}ms` : ''})
-        </Text>
-      ))}
+      <Text color="white">{serverNames}</Text>
     </Box>
   );
 };

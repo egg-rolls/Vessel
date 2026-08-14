@@ -7,7 +7,7 @@ interface PluginListProps {
 }
 
 /**
- * Plugin list display component
+ * Plugin list display component (compact version)
  */
 export const PluginList: React.FC<PluginListProps> = ({ plugins }) => {
   if (plugins.length === 0) {
@@ -18,16 +18,15 @@ export const PluginList: React.FC<PluginListProps> = ({ plugins }) => {
     );
   }
 
+  // 只显示插件名称，用逗号分隔
+  const pluginNames = plugins.map((p) => p.name).join(', ');
+
   return (
     <Box flexDirection="column">
       <Text color="blue" bold>
         Plugins ({plugins.length})
       </Text>
-      {plugins.map((plugin) => (
-        <Text key={plugin.name} color="white">
-          {plugin.enabled ? '🟢' : '🔴'} {plugin.name} v{plugin.version}
-        </Text>
-      ))}
+      <Text color="white">{pluginNames}</Text>
     </Box>
   );
 };

@@ -7,7 +7,7 @@ interface ToolsListProps {
 }
 
 /**
- * Tools list display component
+ * Tools list display component (compact version)
  */
 export const ToolsList: React.FC<ToolsListProps> = ({ tools }) => {
   if (tools.length === 0) {
@@ -18,16 +18,15 @@ export const ToolsList: React.FC<ToolsListProps> = ({ tools }) => {
     );
   }
 
+  // 只显示工具名称，用逗号分隔
+  const toolNames = tools.map((t) => t.name).join(', ');
+
   return (
     <Box flexDirection="column">
       <Text color="blue" bold>
         Tools ({tools.length})
       </Text>
-      {tools.map((tool) => (
-        <Text key={tool.name} color="white">
-          🔧 {tool.name}: {tool.description}
-        </Text>
-      ))}
+      <Text color="white">{toolNames}</Text>
     </Box>
   );
 };

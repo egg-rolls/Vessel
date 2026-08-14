@@ -26,6 +26,8 @@ import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import { DashboardManager } from '../dashboard/dashboard-manager.js';
 import { DashboardService } from '../dashboard/dashboard-service.js';
+import { AssetManagerPlugin } from '../dashboard/plugins/assets/index.js';
+import { ToolDisplayPlugin } from '../dashboard/plugins/tools/index.js';
 import { WelcomePlugin } from '../dashboard/plugins/welcome/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { asTuiEvent } from '../types/events.js';
@@ -73,9 +75,8 @@ function InkRepl({ ctx }: InkReplProps) {
 
         // 注册插件
         manager.registerPlugin(new WelcomePlugin());
-        // AssetManager 和 ToolDisplay 暂时默认不启用，减少启动画面内容
-        // manager.registerPlugin(new AssetManagerPlugin());
-        // manager.registerPlugin(new ToolDisplayPlugin());
+        manager.registerPlugin(new AssetManagerPlugin());
+        manager.registerPlugin(new ToolDisplayPlugin());
 
         // 渲染 Dashboard
         const content = await manager.renderDashboard();
