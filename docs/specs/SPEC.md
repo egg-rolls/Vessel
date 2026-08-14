@@ -262,7 +262,8 @@ run(userInput):
       for each tool_call:
         apply TOOL_CALL guardrail
         emit tool.call.started
-        result = pluginHost.invoke(tool_call)   # 内置与插件工具统一入口
+        tool = pluginHost.getTool(tool_call.function.name)   # 内置与插件工具统一入口
+        result = await runtime.invokeTool(tool, args, ctx)    # 统一执行：权限判定 + tool.timeout + handler
         apply TOOL_RESULT guardrail
         emit tool.call.completed
         context.add(tool result)
@@ -313,9 +314,12 @@ interface ToolRegistry {
   register(def: ToolDefinition): void;
   invoke(call: ToolCall, ctx: ToolContext): Promise<string>;
   schemas(): ToolSchema[];
+  get(name: string): ToolDefinition | undefined;
+  has(name: string): boolean;
+  list(): ToolDefinition[];
 }
 ```
-工具用**声明式注册**（见 §5），与 provider/hook/guardrail 同构。
+工具用**声明式注册**（见 §5），与 provider/hook/guardrail 同构。`ToolRegistry` 是独立的简单注册表（供只想用注册表、不引入插件系统的嵌入方使用）；runtime loop 以 `PluginHost` 为唯一工具来源（构造时把 ToolRegistry 的工具作为「种子」同步进去），`ToolRegistry.invoke/schemas` 不参与 runtime loop。
 
 **默认工具体系**：常用基础工具（`file-ops`、`grep`、`web-search`、`web-fetch`）设 `default: true`，启动时在 system prompt 中简要列出。领域工具（`browser`、`rag`、`ocr`）设 `default: false`，由 Agent 通过 `search_assets` 按需发现。危险工具（`shell`）设 `default: false` 且必走 permission-prompt。Agent 可通过 Config CRUD 管理哪些工具默认可见。工具集清单见 [PLUGINS.md §一](PLUGINS.md)。
 
@@ -324,7 +328,7 @@ interface ToolRegistry {
 interface ContextManager {
   add(msg: Message): void;
   readonly messages: Message[];
-  compact(): void;   // auto-compact 可作插件增强
+  compact(): number;   // 返回被压缩的消息数；auto-compact 可作插件增强
 }
 ```
 
@@ -349,6 +353,8 @@ interface EventStream {
 ```ts
 enum GuardrailStage { Input, Output, ToolCall, ToolResult }
 interface Guardrail {
+  name: string;
+  priority?: number;   // 越小越先执行（ADR-018）
   stage: GuardrailStage;
   check(value: unknown, ctx: GuardrailContext): Promise<GuardrailResult>;
 }
@@ -363,11 +369,11 @@ Guardrail 实例是**插件**，经 PluginHost 挂载，不进 runtime 构造函
 ### 4.6 UsageLimits / TerminationPolicy
 ```ts
 interface UsageLimits {
-  request_limit: number;
-  tool_calls_limit: number;
-  input_tokens_limit?: number;
-  output_tokens_limit?: number;
-  total_cost_limit?: number;
+  requestLimit: number;
+  toolCallsLimit: number;
+  inputTokensLimit?: number;
+  outputTokensLimit?: number;
+  totalCostLimit?: number;
 }
 interface TerminationPolicy {
   max_iterations: number;
@@ -380,6 +386,8 @@ interface TerminationPolicy {
 ```ts
 enum HookType { BeforeLlm, AfterLlm, BeforeTool, AfterTool, OnError }
 interface Hook {
+  name: string;
+  priority?: number;   // 越小越先执行（ADR-018）
   type: HookType;
   run(ctx: HookContext): Promise<HookContext | null>;   // null = 拦截
 }
@@ -416,6 +424,12 @@ interface PluginHost {
   registerProvider(name: string, factory: ProviderFactory): void;
   registerGuardrail(g: Guardrail): void;
   registerHook(h: Hook): void;
+  getTool(name: string): ToolDefinition | undefined;
+  getProvider(name: string): ProviderFactory | undefined;
+  getGuardrails(): Guardrail[];
+  getHooks(): Hook[];
+  listTools(): ToolDefinition[];
+  listProviders(): string[];
   // tool/provider/guardrail/hook 走同一注册心智（ADR-004）
 }
 interface AgentRuntimeOptions {
@@ -428,9 +442,12 @@ interface AgentRuntimeOptions {
   termination: TerminationPolicy;
   plugins?: Plugin[];          // guardrail/memory/mcp/... 经此注入
   session?: SessionBackend;
+  systemPrompt?: string;       // 系统提示词（ADR-018：BeforeLlm hook 以此为种子注入）
+  permission?: RuntimePermissionConfig;  // 默认权限策略（ADR-029：default/autoApprove）
 }
 class AgentRuntime {
-  constructor(opts: AgentRuntimeOptions);
+  private constructor(opts: AgentRuntimeOptions);   // 私有（ADR-023）
+  static create(opts: AgentRuntimeOptions): Promise<AgentRuntime>;  // 异步工厂，await 完插件安装
   run(input: string | Message, session_id?: string): Promise<string>;
 }
 ```
