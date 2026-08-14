@@ -13,7 +13,7 @@ import type { TerminationPolicy, UsageLimits, UsageStats } from '../types/limits
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
-import type { ToolRegistry } from '../types/tool.js';
+import type { ToolContext, ToolDefinition, ToolRegistry } from '../types/tool.js';
 import { MemoryPluginHost } from './plugin-host.js';
 
 /** checkPermission 返回 'ask' 时，等待用户 allow/deny 决定的事件超时（毫秒） */
@@ -78,7 +78,9 @@ export class AgentRuntime {
       startTime: Date.now(),
     };
 
-    // 初始化 PluginHost，并将直接注册的工具同步到 PluginHost（统一入口）
+    // 初始化 PluginHost（loop 的单一工具来源），并将构造参数里的 ToolRegistry 工具
+    // 作为「种子」同步进来。此后 loop 只认 PluginHost——ToolRegistry 仍是 9 接口之一，
+    // 供只想用简单注册表、不引入插件系统的嵌入方单独使用；其 invoke/schemas 不参与 runtime loop。
     this.pluginHost = new MemoryPluginHost();
     for (const tool of this.tools.list()) {
       try {
@@ -566,12 +568,7 @@ export class AgentRuntime {
               }
             }
 
-            const result = await pluginTool.handler(args, {
-              run_id: runId,
-              session_id: sessionId,
-              messages: this.context.messages,
-              events: this.events,
-            });
+            const result = await this.invokeTool(pluginTool, args, toolCtx);
 
             // 应用工具结果 Guardrail
             const toolResultResult = await this.applyGuardrails(
@@ -726,6 +723,29 @@ export class AgentRuntime {
     const hooks = this.pluginHost.getHooks().filter((h) => h.type === type);
     for (const hook of hooks) {
       await hook.run(ctx);
+    }
+  }
+
+  /**
+   * 调用工具并应用超时。
+   * ADR-017(2b)：loop 必须经统一入口执行工具并套 timeout——此前 loop 直调 handler，
+   * `ToolDefinition.timeout` 从未在真实执行路径生效（仅 ToolRegistry.invoke 单测覆盖）。
+   */
+  private async invokeTool(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<string> {
+    if (!tool.timeout || tool.timeout <= 0) {
+      return tool.handler(args, ctx);
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`Tool "${tool.name}" timed out after ${tool.timeout}ms`)),
+        tool.timeout,
+      );
+    });
+    try {
+      return await Promise.race([tool.handler(args, ctx), timeout]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
     }
   }
 

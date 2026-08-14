@@ -211,6 +211,43 @@ describe('AgentRuntime Integration', () => {
     expect(callLog.length).toBe(2); // 应该调用了2次 LLM
   });
 
+  it('tool.timeout 在 loop 生效：超时工具发 tool.call.failed（ADR-017 2b 回归）', async () => {
+    const tools = new MemoryToolRegistry();
+    tools.register({
+      name: 'hanging',
+      description: 'Hangs forever',
+      inputSchema: { type: 'object', properties: {} },
+      timeout: 50,
+      handler: () => new Promise<string>(() => {}), // 永不 resolve，只能靠 timeout 中断
+    });
+
+    const events = new MemoryEventStream();
+    const failed: Array<{ tool_name: string; error: string }> = [];
+    events.subscribe((event) => {
+      if (event.type === 'tool.call.failed') {
+        const data = event.data as unknown as { tool_name: string; error: string };
+        failed.push({ tool_name: data.tool_name, error: data.error });
+      }
+    });
+
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStopProvider('hanging'),
+      model: 'test-model',
+      tools,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await runtime.run('use hanging');
+
+    expect(response).toBe('done');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]?.tool_name).toBe('hanging');
+    expect(failed[0]?.error).toContain('timed out after 50ms');
+  });
+
   it('should save session state', async () => {
     await runtime.run('Test message', 'test-session');
 
