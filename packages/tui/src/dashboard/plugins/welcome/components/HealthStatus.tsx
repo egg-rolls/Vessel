@@ -7,7 +7,7 @@ interface HealthStatusProps {
 }
 
 /**
- * Health status display component
+ * Health status display component with border
  */
 export const HealthStatus: React.FC<HealthStatusProps> = ({ health }) => {
   const formatUptime = (ms: number): string => {
@@ -29,12 +29,29 @@ export const HealthStatus: React.FC<HealthStatusProps> = ({ health }) => {
     return `${mb} MB`;
   };
 
-  const statusIcon = health.status === 'healthy' ? '✅' : health.status === 'warning' ? '⚠️' : '❌';
+  const statusColor =
+    health.status === 'healthy' ? 'green' : health.status === 'warning' ? 'yellow' : 'red';
+  const statusText = health.status.charAt(0).toUpperCase() + health.status.slice(1);
 
   return (
-    <Box marginTop={1}>
-      <Text color="gray">
-        {`${statusIcon} ${health.status} · ${formatUptime(health.uptime)} · ${formatMemory(health.memoryUsage)}`}
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor="blue"
+      borderTitle="Health"
+      paddingX={1}
+    >
+      <Text color="white">
+        {'Status     │ '}
+        <Text color={statusColor}>{statusText}</Text>
+      </Text>
+      <Text color="white">
+        {'Uptime     │ '}
+        <Text color="cyan">{formatUptime(health.uptime)}</Text>
+      </Text>
+      <Text color="white">
+        {'Memory     │ '}
+        <Text color="cyan">{formatMemory(health.memoryUsage)}</Text>
       </Text>
     </Box>
   );

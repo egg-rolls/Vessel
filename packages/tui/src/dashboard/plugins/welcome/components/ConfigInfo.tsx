@@ -7,15 +7,29 @@ interface ConfigInfoProps {
 }
 
 /**
- * Configuration info display component
+ * Configuration info display component with border
  */
 export const ConfigInfo: React.FC<ConfigInfoProps> = ({ config }) => {
   return (
-    <Box flexDirection="column" marginTop={1}>
-      <Text color="gray" bold>
-        {config.provider} | {config.model}
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor="blue"
+      borderTitle="Configuration"
+      paddingX={1}
+    >
+      <Text color="white">
+        {'Model      │ '}
+        <Text color="cyan">{config.model}</Text>
       </Text>
-      <Text color="gray">{config.workspace}</Text>
+      <Text color="white">
+        {'Provider   │ '}
+        <Text color="cyan">{config.provider}</Text>
+      </Text>
+      <Text color="white">
+        {'Workspace  │ '}
+        <Text color="cyan">{config.workspace}</Text>
+      </Text>
     </Box>
   );
 };
