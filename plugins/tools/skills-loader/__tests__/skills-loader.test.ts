@@ -6,11 +6,7 @@ import { HookType, MemoryEventStream, MemoryPluginHost } from '@vessel/core';
 import { SkillsManager, createSkillsLoaderPlugin } from '../src/index';
 
 /** 调用工具 handler 的便捷封装 */
-function callTool(
-  host: MemoryPluginHost,
-  name: string,
-  args: unknown,
-): Promise<string> {
+function callTool(host: MemoryPluginHost, name: string, args: unknown): Promise<string> {
   const tool = host.getTool(name);
   expect(tool, `tool ${name} should exist`).toBeDefined();
   return tool!.handler(args, {
@@ -94,6 +90,65 @@ describe('skills-loader 插件（#115 去 monkey-patch + CRUD + frontmatter）',
     expect(result).toBe('Skill 不存在');
   });
 
+  it('add_skill name 含 ../ 或 / 返回非法且 skillsDir 外无文件被写', async () => {
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-skills-parent-'));
+    const skillsDir = path.join(parentDir, 'skills');
+    const localHost = new MemoryPluginHost();
+    createSkillsLoaderPlugin({ skillsDir, watch: false }).install(localHost);
+
+    try {
+      const traversal = await callTool(localHost, 'add_skill', {
+        name: '../evil',
+        content: 'pwned',
+      });
+      expect(traversal).toContain('非法');
+
+      const slash = await callTool(localHost, 'add_skill', { name: 'a/b', content: 'pwned' });
+      expect(slash).toContain('非法');
+
+      // skillsDir 外无文件被写（../evil 会逃逸到 parentDir）
+      expect(fs.existsSync(path.join(parentDir, 'evil.md'))).toBe(false);
+      expect(fs.existsSync(path.join(skillsDir, 'a'))).toBe(false);
+    } finally {
+      fs.rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('add_skill filePath 越界返回非法且不写文件', async () => {
+    const parentDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-skills-parent-'));
+    const skillsDir = path.join(parentDir, 'skills');
+    const localHost = new MemoryPluginHost();
+    createSkillsLoaderPlugin({ skillsDir, watch: false }).install(localHost);
+
+    const outside = path.join(parentDir, 'outside.md');
+    try {
+      const result = await callTool(localHost, 'add_skill', {
+        name: 'a',
+        content: 'x',
+        filePath: outside,
+      });
+      expect(result).toContain('非法');
+      expect(fs.existsSync(outside)).toBe(false);
+    } finally {
+      fs.rmSync(parentDir, { recursive: true, force: true });
+    }
+  });
+
+  it('add_skill filePath 已存在返回「Skill 文件已存在」且不覆盖', async () => {
+    const existing = path.join(tmpDir, 'existing.md');
+    fs.writeFileSync(existing, '# Original\nkeep me');
+
+    const result = await callTool(host, 'add_skill', {
+      name: 'a',
+      content: '# New\noverwrite',
+      filePath: existing,
+    });
+    expect(result).toContain('已存在');
+
+    // 磁盘内容不被覆盖
+    expect(fs.readFileSync(existing, 'utf-8')).toContain('keep me');
+  });
+
   it('frontmatter 的 description 用于 list/search 展示', async () => {
     await callTool(host, 'add_skill', {
       name: 'git',
@@ -128,7 +183,14 @@ describe('skills-loader 插件（#115 去 monkey-patch + CRUD + frontmatter）',
     const file = path.join(tmpDir, 'fm.md');
     fs.writeFileSync(
       file,
-      ['---', 'description: "A parsed description"', "when_to_use: 'when doing X'", '---', '# Title', 'body'].join('\n'),
+      [
+        '---',
+        'description: "A parsed description"',
+        "when_to_use: 'when doing X'",
+        '---',
+        '# Title',
+        'body',
+      ].join('\n'),
     );
     manager.loadSkillFile(file);
 
@@ -150,7 +212,9 @@ describe('skills-loader 插件（#115 去 monkey-patch + CRUD + frontmatter）',
     const weird = path.join(tmpDir, 'weird.md');
     fs.writeFileSync(
       weird,
-      ['---', 'this is not a yaml line', 'description: real desc', '---', '# Title', 'body'].join('\n'),
+      ['---', 'this is not a yaml line', 'description: real desc', '---', '# Title', 'body'].join(
+        '\n',
+      ),
     );
     manager.loadSkillFile(weird);
     expect(manager.getSkill('weird')?.description).toBe('real desc');

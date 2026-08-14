@@ -17,6 +17,19 @@ const debug = (...args: unknown[]): void => {
 };
 
 /**
+ * 校验 skill 名是安全文件名，防止路径穿越：
+ * - 非空字符串、非 `.`/`..`
+ * - 不含路径分隔符 `/`、`\`
+ * - `path.basename(name) === name`（name 不能解析出父级目录）
+ */
+function isSafeSkillName(name: unknown): boolean {
+  if (typeof name !== 'string' || name.length === 0) return false;
+  if (name === '.' || name === '..') return false;
+  if (name.includes('/') || name.includes('\\')) return false;
+  return path.basename(name) === name;
+}
+
+/**
  * 解析 SKILL.md 开头的 YAML frontmatter（`---\n...\n---` 包裹）。
  * 用简单字符串解析，不引入 yaml 依赖。非法行/非法 frontmatter 跳过，不中断加载。
  */
@@ -134,7 +147,9 @@ export class SkillsManager {
     // frontmatter 优先；无 frontmatter 或字段缺失时回退到标题
     const fields = parseFrontmatter(content);
     const description =
-      fields.description && fields.description.trim() !== '' ? fields.description : titleDescription;
+      fields.description && fields.description.trim() !== ''
+        ? fields.description
+        : titleDescription;
 
     const metadata: Record<string, unknown> = {};
     if (fields.when_to_use && fields.when_to_use.trim() !== '') {
@@ -256,12 +271,32 @@ export class SkillsManager {
    * 默认写入 skillsDir 下的 `<name>.md`；重名时抛「Skill 已存在」。
    */
   addSkill(name: string, content: string, filePath?: string): Skill {
+    if (!isSafeSkillName(name)) {
+      throw new Error('非法 skill 名');
+    }
+
     if (this.skills.has(name)) {
       throw new Error('Skill 已存在');
     }
 
     const skillsDir = path.resolve(this.config.skillsDir ?? './skills');
-    const targetPath = filePath ?? path.join(skillsDir, `${name}.md`);
+
+    let targetPath: string;
+    if (filePath !== undefined && filePath !== '') {
+      // 自定义 filePath 必须解析后落在 skillsDir 内，否则拒绝（路径穿越防护）
+      const resolvedFile = path.resolve(filePath);
+      if (!resolvedFile.startsWith(skillsDir + path.sep)) {
+        throw new Error('非法 skill 文件路径');
+      }
+      targetPath = resolvedFile;
+    } else {
+      targetPath = path.join(skillsDir, `${name}.md`);
+    }
+
+    // 写入前检查磁盘目标是否已存在，避免静默覆盖已有文件
+    if (fs.existsSync(targetPath)) {
+      throw new Error('Skill 文件已存在');
+    }
 
     fs.mkdirSync(path.dirname(targetPath), { recursive: true });
     fs.writeFileSync(targetPath, content, 'utf-8');
@@ -292,6 +327,12 @@ export class SkillsManager {
     }
 
     if (skill.filePath && fs.existsSync(skill.filePath)) {
+      // 防御性校验：文件必须落在 skillsDir 内，防止越界删除
+      const skillsDir = path.resolve(this.config.skillsDir ?? './skills');
+      const resolvedFile = path.resolve(skill.filePath);
+      if (!resolvedFile.startsWith(skillsDir + path.sep)) {
+        throw new Error('非法 skill 文件路径');
+      }
       fs.unlinkSync(skill.filePath);
     }
     this.skills.delete(name);
