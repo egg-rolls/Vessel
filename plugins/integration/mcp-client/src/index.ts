@@ -658,6 +658,61 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         return lines.join('\n');
       },
     },
+    {
+      name: 'list_resources',
+      description: '列出指定已连接 MCP 服务器的资源',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: '连接名称',
+          },
+        },
+        required: ['name'],
+      },
+      handler: async (input) => {
+        const { name } = input as { name: string };
+        const conn = manager.get(name);
+        if (!conn) {
+          return '服务器未连接';
+        }
+        const resources = conn.getResources();
+        if (resources.length === 0) {
+          return '无资源';
+        }
+        return resources.map((r) => `${r.name}: ${r.uri}`).join('\n');
+      },
+    },
+    {
+      name: 'read_resource',
+      description: '读取指定已连接 MCP 服务器资源的文本内容',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: '连接名称',
+          },
+          uri: {
+            type: 'string',
+            description: '资源 URI',
+          },
+        },
+        required: ['name', 'uri'],
+      },
+      handler: async (input) => {
+        const { name, uri } = input as { name: string; uri: string };
+        const conn = manager.get(name);
+        if (!conn) {
+          return '服务器未连接';
+        }
+        if (!conn.getResources().some((r) => r.uri === uri)) {
+          return '资源不存在';
+        }
+        return conn.readResource(uri);
+      },
+    },
   ];
 }
 
@@ -719,9 +774,6 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
           );
         });
       }
-
-      // 暴露 manager 供其他插件使用
-      (host as unknown as Record<string, unknown>).__mcpManager = manager;
     },
   };
 }

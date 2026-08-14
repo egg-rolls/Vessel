@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { HookType, MemoryEventStream, MemoryPluginHost } from '@vessel/core';
-import mcpClientPlugin, { McpClientManager } from '../src/index';
+import mcpClientPlugin from '../src/index';
 
 describe('mcp-client 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -52,12 +52,6 @@ describe('mcp-client 插件（P2）', () => {
       { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
     expect(result).toContain('连接失败');
-  });
-
-  it('install 暴露 __mcpManager 到 host', () => {
-    const manager = (host as unknown as Record<string, unknown>).__mcpManager;
-    expect(manager).toBeDefined();
-    expect(manager).toBeInstanceOf(McpClientManager);
   });
 
   it('工具定义包含正确的 inputSchema', () => {
@@ -114,5 +108,37 @@ describe('mcp-client 插件（P2）', () => {
       { run_id: 'r1', messages: [], events: stream },
     );
     expect(decision).toBe('allow');
+  });
+
+  it('install 注册 list_resources / read_resource 工具', () => {
+    const toolNames = host.listTools().map((t) => t.name);
+    expect(toolNames).toContain('list_resources');
+    expect(toolNames).toContain('read_resource');
+  });
+
+  it('list_resources / read_resource 工具声明正确的 inputSchema', () => {
+    const listResources = host.listTools().find((t) => t.name === 'list_resources');
+    const readResource = host.listTools().find((t) => t.name === 'read_resource');
+    expect(listResources?.inputSchema.required).toContain('name');
+    expect(readResource?.inputSchema.required).toContain('name');
+    expect(readResource?.inputSchema.required).toContain('uri');
+  });
+
+  it('list_resources 在服务器未连接时返回提示信息', async () => {
+    const tool = host.listTools().find((t) => t.name === 'list_resources');
+    const result = await tool?.handler(
+      { name: 'not-connected' },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
+    expect(result).toBe('服务器未连接');
+  });
+
+  it('read_resource 在服务器未连接时返回提示信息', async () => {
+    const tool = host.listTools().find((t) => t.name === 'read_resource');
+    const result = await tool?.handler(
+      { name: 'not-connected', uri: 'file:///x' },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
+    expect(result).toBe('服务器未连接');
   });
 });
