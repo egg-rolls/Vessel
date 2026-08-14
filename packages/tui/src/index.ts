@@ -10,7 +10,9 @@
 export type {
   CommandEntry,
   CommandResult,
+  ExecuteOptions,
   ReplState,
+  ResumeResult,
 } from './commands/commands.js';
 export {
   CommandRegistry,
@@ -28,9 +30,27 @@ export {
   InlineAutocomplete,
 } from './components/InlineAutocomplete.js';
 export { SessionTable } from './components/SessionTable.js';
+export {
+  minVerbDelayMs,
+  SpinnerWithVerb,
+  type SpinnerWithVerbProps,
+} from './components/SpinnerWithVerb.js';
+export {
+  reduceSpinnerState,
+  type SpinnerState,
+  type SpinnerVerb,
+  useSpinnerState,
+} from './components/StateTracker.js';
 // Ink 组件
 export { StatusBar } from './components/StatusBar.js';
 export { StreamOutput } from './components/StreamOutput.js';
+export {
+  DEFAULT_TOOL_DISPLAY,
+  type DisplayOptions,
+  type ToolDisplayDefinition,
+  ToolDisplayRegistry,
+  toolDisplayRegistry,
+} from './components/ToolDisplay.js';
 // 错误分类器
 export { type ClassifiedError, classifyError, type ErrorCategory } from './error-classifier.js';
 // Ink 版本（React 组件式 UI）

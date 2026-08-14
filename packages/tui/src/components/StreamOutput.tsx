@@ -3,13 +3,18 @@
  * 订阅 EventStream，实现 token-by-token 打字机动画 + 工具调用 spinner
  *
  * 只负责当前轮的实时流式显示。run 完成后通过 onComplete 回调通知父组件归档。
+ *
+ * ADR-021/022：工具显示经 ToolDisplayRegistry（userFacingName / getActivityDescription），
+ * spinner 状态经 StateTracker 折叠，SpinnerWithVerb 三态渲染。
  */
 
 import type { EventStream } from '@vessel/core';
 import { Box, Text } from 'ink';
-import Spinner from 'ink-spinner';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
+import { SpinnerWithVerb } from './SpinnerWithVerb.js';
+import { useSpinnerState } from './StateTracker.js';
+import { toolDisplayRegistry } from './ToolDisplay.js';
 
 // ── 类型 & 工厂 & 纯 reducer（导出供测试） ──
 
@@ -111,11 +116,11 @@ interface StreamOutputProps {
 
 export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputProps) {
   const [segments, setSegments] = useState<Segment[]>([]);
-  const [isStreaming, setIsStreaming] = useState(false);
   const segmentsRef = useRef<Segment[]>([]);
   const seqRef = useRef(0);
   const onCompleteRef = useRef(onComplete);
   onCompleteRef.current = onComplete;
+  const spinnerState = useSpinnerState(events);
 
   /** 组件实例级 ID 生成器，替代模块级可变计数器 */
   const nextId = useCallback(() => {
@@ -133,7 +138,6 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
   useEffect(() => {
     if (clearSignal !== undefined && clearSignal > 0) {
       resetSegments();
-      setIsStreaming(false);
     }
   }, [clearSignal, resetSegments]);
 
@@ -143,7 +147,6 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
       switch (event.type) {
         case 'run.started':
           resetSegments();
-          setIsStreaming(true);
           break;
 
         case 'llm.stream.chunk':
@@ -164,7 +167,6 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
             onCompleteRef.current?.(responseText);
           }
           resetSegments();
-          setIsStreaming(false);
           break;
         }
       }
@@ -174,6 +176,7 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
   }, [events, resetSegments, nextId]);
 
   const hasContent = segments.length > 0;
+  const isActive = spinnerState.verb !== 'idle';
 
   return (
     <Box flexDirection="column">
@@ -187,27 +190,27 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
           );
         }
 
-        // tool_call segment
+        // tool_call segment（ADR-021：经 ToolDisplayRegistry 取显示名/活动描述）
+        const display = toolDisplayRegistry.get(seg.name);
+        const displayName = display.userFacingName(seg.arguments) || seg.name;
+        const activity = display.getActivityDescription?.(seg.arguments) ?? null;
+
         return (
           <Box key={seg.id} marginY={1}>
             {seg.status === 'running' && (
-              <Box>
-                <Spinner type="dots" />
-                <Text color="blue"> {seg.name}</Text>
-                <Text color="gray"> ...</Text>
-              </Box>
+              <SpinnerWithVerb verb="tool" description={activity ?? displayName} />
             )}
 
             {seg.status === 'completed' && (
               <Box>
-                <Text color="green">✓ {seg.name}</Text>
+                <Text color="green">✓ {displayName}</Text>
                 <Text color="gray"> {seg.duration}ms</Text>
               </Box>
             )}
 
             {seg.status === 'failed' && (
               <Box>
-                <Text color="red">✗ {seg.name}</Text>
+                <Text color="red">✗ {displayName}</Text>
                 <Text color="red"> {seg.error}</Text>
               </Box>
             )}
@@ -215,12 +218,9 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
         );
       })}
 
-      {/* 流式状态指示 */}
-      {isStreaming && !hasContent && (
-        <Box>
-          <Spinner type="dots" />
-          <Text color="gray"> Thinking...</Text>
-        </Box>
+      {/* 流式状态指示（ADR-022：StateTracker + SpinnerWithVerb 三态） */}
+      {isActive && !hasContent && (
+        <SpinnerWithVerb verb={spinnerState.verb} description={spinnerState.description} />
       )}
     </Box>
   );

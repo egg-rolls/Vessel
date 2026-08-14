@@ -4,13 +4,14 @@
  *
  * 用 Ink 框架替换 readline，实现 React 组件式终端 UI。
  * 保持 startRepl(ctx) 函数签名不变，壳不感知替换。
+ *
+ * 架构（审计后收敛）：全部 UI 状态收敛进 useReplState（useReducer），
+ * 命令为纯函数（返回 output/nextState），Ink 层以不可变合并消费 nextState。
  */
 
-import type { SessionInfo } from '@vessel/core';
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import type { ReplState } from '../commands/commands.js';
+import { useCallback, useEffect, useMemo } from 'react';
 import { createCommands, doResume } from '../commands/commands.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -26,6 +27,7 @@ import { StreamOutput } from '../components/StreamOutput.js';
 import type { ReplContext } from '../repl-context.js';
 import { asTuiEvent } from '../types/events.js';
 import { getCurrentGitBranch } from '../utils/git.js';
+import { useReplState } from './use-repl-state.js';
 
 interface InkReplProps {
   ctx: ReplContext;
@@ -37,24 +39,8 @@ interface InkReplProps {
 function InkRepl({ ctx }: InkReplProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
-  const [state, setState] = useState<ReplState>({
-    currentSessionId: ctx.currentSessionId,
-    pendingResume: false,
-    showResumePicker: false,
-    running: true,
-  });
-  const [input, setInput] = useState('');
-  const [history, setHistory] = useState<string[]>([]);
-  const [autocompleteIndex, setAutocompleteIndex] = useState(0);
-  const [resumeSessions, setResumeSessions] = useState<SessionInfo[]>([]);
-  const [clearSignal, setClearSignal] = useState(0); // /clear 命令信号
-  const [inputCaretKey, setInputCaretKey] = useState(0); // 递增以强制 TextInput remount（光标复位到末尾）
-  const [askUserActive, setAskUserActive] = useState(false); // ask-user 弹窗是否激活（AskUserDialog 汇报）
-  const [permissionOverlay, setPermissionOverlay] = useState<{
-    requestId: string;
-    run_id: string;
-    toolName: string;
-  } | null>(null);
+  const [ui, dispatch] = useReplState(ctx);
+  const state = ui.repl;
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -68,7 +54,7 @@ function InkRepl({ ctx }: InkReplProps) {
   }, [commands]);
 
   // 从当前输入中提取命令过滤词（"/" 之后、第一个空格之前的命令名部分）
-  const commandFilter = input.startsWith('/') ? (input.slice(1).split(/\s+/)[0] ?? '') : '';
+  const commandFilter = ui.input.startsWith('/') ? (ui.input.slice(1).split(/\s+/)[0] ?? '') : '';
   const filteredCommands = useMemo(
     () => filterCommands(allCommands, commandFilter),
     [allCommands, commandFilter],
@@ -76,28 +62,29 @@ function InkRepl({ ctx }: InkReplProps) {
   // 补全只在命令名阶段（/ 开头、尚未输入空格、非精确匹配）显示：
   // - 一旦输入空格进入参数输入即隐藏，避免 Tab/Enter 把已输入参数覆盖成命令名
   // - 精确匹配某命令名时隐藏补全框，改由 argHint 显示参数提示
-  const isExactCommand = input.startsWith('/') && allCommands.some((cmd) => cmd.name === input);
+  const isExactCommand =
+    ui.input.startsWith('/') && allCommands.some((cmd) => cmd.name === ui.input);
   const showAutocomplete =
-    input.startsWith('/') &&
-    !input.includes(' ') &&
+    ui.input.startsWith('/') &&
+    !ui.input.includes(' ') &&
     !isExactCommand &&
     filteredCommands.length > 0 &&
-    !askUserActive;
+    !ui.askUserActive;
 
   // 参数占位提示：当输入精确匹配某命令名时，显示灰色参数提示（如 " [number|id]"）
   const argHint = useMemo(() => {
-    const trimmed = input.trim();
+    const trimmed = ui.input.trim();
     if (!trimmed.startsWith('/')) return null;
     const matched = allCommands.find((cmd) => cmd.name === trimmed);
     if (!matched?.usage) return null;
     const hint = matched.usage.slice(matched.name.length);
     return hint || null;
-  }, [input, allCommands]);
+  }, [ui.input, allCommands]);
 
   // 过滤词变化时重置选择索引
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filteredCommands reference changes
   useEffect(() => {
-    setAutocompleteIndex(0);
+    dispatch({ type: 'setAutocompleteIndex', index: 0 });
   }, [filteredCommands]);
 
   // 同步 currentSessionId 到 ctx（壳 / SSE bridge 等读 ctx.currentSessionId）
@@ -110,23 +97,26 @@ function InkRepl({ ctx }: InkReplProps) {
     const unsubscribe = ctx.events.subscribe((rawEvent) => {
       const event = asTuiEvent(rawEvent);
       if (event.type !== 'tool.permission.request') return;
-      setPermissionOverlay({
-        requestId: event.data.requestId,
-        run_id: event.run_id,
-        toolName: event.data.tool,
+      dispatch({
+        type: 'setPermissionOverlay',
+        overlay: {
+          requestId: event.data.requestId,
+          run_id: event.run_id,
+          toolName: event.data.tool,
+        },
       });
     });
     return unsubscribe;
-  }, [ctx.events]);
+  }, [ctx.events, dispatch]);
 
   // 当 showResumePicker 变为 true 时加载会话列表
   useEffect(() => {
     if (state.showResumePicker) {
       ctx.session.listRich().then((list) => {
-        setResumeSessions(list);
+        dispatch({ type: 'setResumeSessions', sessions: list });
       });
     }
-  }, [state.showResumePicker, ctx.session]);
+  }, [state.showResumePicker, ctx.session, dispatch]);
 
   // 处理输入（TextInput 的 onSubmit —— Enter 的唯一入口）
   // 注意：Ink 的 useInput 子组件先于父组件触发，且无法 stopPropagation，
@@ -135,60 +125,48 @@ function InkRepl({ ctx }: InkReplProps) {
     async (value: string) => {
       // 补全 case：输入是未完成的命令名 -> 补全到当前选中命令，不执行。
       // 用户再按一次 Enter 才执行。（决策逻辑见 decideCommandEnter，已单测覆盖）
-      const decision = decideCommandEnter(value, allCommands, filteredCommands, autocompleteIndex);
+      const decision = decideCommandEnter(
+        value,
+        allCommands,
+        filteredCommands,
+        ui.autocompleteIndex,
+      );
       if (decision.action === 'complete') {
-        setInput(decision.commandName);
-        setInputCaretKey((prev) => prev + 1);
+        dispatch({ type: 'setInput', input: decision.commandName });
+        dispatch({ type: 'bumpCaret' });
         return; // 仅补全，不执行
       }
 
       if (!value.trim()) return;
 
-      setHistory((prev) => [...prev, `> ${value}`]);
-      setInput('');
+      dispatch({ type: 'appendHistory', line: `> ${value}` });
+      dispatch({ type: 'setInput', input: '' });
 
-      // 处理 /resume pending one-shot（simple 模式 fallback；Ink 模式由 picker 接管）
-      if (state.pendingResume && !state.showResumePicker) {
-        const num = Number.parseInt(value, 10);
-        if (!Number.isNaN(num)) {
-          setState((prev) => ({ ...prev, pendingResume: false }));
-          // Resolve the session by number and resume
-          const sessions = await ctx.session.listRich();
-          const target = sessions[num - 1];
-          if (target) {
-            const msg = await doResume(ctx, state, target.session_id);
-            setState((prev) => ({ ...prev, currentSessionId: target.session_id }));
-            setHistory((prev) => [...prev, msg]);
-          }
-          return;
-        }
-      }
-
-      // 处理命令
+      // 处理命令。命令是纯函数：execute 应用 nextState 到传入的 working 副本，
+      // Ink 层再用 result.nextState 做不可变合并（不直接改 React state 对象）。
       if (value.startsWith('/')) {
-        const result = await commands.execute(value, ctx, state);
+        const result = await commands.execute(value, ctx, { ...state }, { print: false });
         if (result.handled) {
-          // 特殊处理 /clear 命令 - 清空历史记录和流式输出
-          if (value.trim() === '/clear' || value.trim().startsWith('/clear ')) {
-            setHistory([]);
-            setClearSignal((prev) => prev + 1); // 触发 StreamOutput 清空
+          // 特殊处理 /clear - 清空历史记录和流式输出（由命令的 clearScreen 标记驱动）
+          if (result.clearScreen) {
+            dispatch({ type: 'clearHistory' });
+            dispatch({ type: 'bumpClearSignal' }); // 触发 StreamOutput 清空
           } else if (result.output) {
             // 如果命令有输出，添加到历史记录
-            const output = result.output;
-            setHistory((prev) => [...prev, output]);
+            dispatch({ type: 'appendHistory', line: result.output });
           }
-          // 命令可能直接改了 state（showResumePicker/currentSessionId/running），
-          // flush 到 React 触发重渲染（不可变更新）
-          setState((prev) => ({ ...prev }));
+          if (result.nextState) {
+            dispatch({ type: 'patchRepl', patch: result.nextState });
+          }
           return;
         }
 
         // 未知命令：显示提示，不发 AI
         const [cmdName = value] = value.trim().split(/\s+/);
-        setHistory((prev) => [
-          ...prev,
-          `Unknown command: ${cmdName}. Type /help for available commands.`,
-        ]);
+        dispatch({
+          type: 'appendHistory',
+          line: `Unknown command: ${cmdName}. Type /help for available commands.`,
+        });
         return;
       }
 
@@ -200,10 +178,10 @@ function InkRepl({ ctx }: InkReplProps) {
         await ctx.runtime.run(value, state.currentSessionId, { branch });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        setHistory((prev) => [...prev, `Error: ${errorMsg}`]);
+        dispatch({ type: 'appendHistory', line: `Error: ${errorMsg}` });
       }
     },
-    [ctx, state, commands, allCommands, filteredCommands, autocompleteIndex],
+    [ctx, state, commands, allCommands, filteredCommands, ui.autocompleteIndex, dispatch],
   );
 
   // 键盘输入处理（Tab/↑↓/Esc 在补全可见时拦截）
@@ -211,29 +189,32 @@ function InkRepl({ ctx }: InkReplProps) {
   // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
     // ask-user / 权限弹窗显示时，键盘交给弹窗组件自己的 useInput
-    if (askUserActive || permissionOverlay) return;
+    if (ui.askUserActive || ui.permissionOverlay) return;
 
     if (showAutocomplete) {
       if (key.tab) {
-        const selected = filteredCommands[autocompleteIndex];
+        const selected = filteredCommands[ui.autocompleteIndex];
         if (selected) {
-          setInput(selected.name);
-          setInputCaretKey((prev) => prev + 1);
+          dispatch({ type: 'setInput', input: selected.name });
+          dispatch({ type: 'bumpCaret' });
         }
-        setAutocompleteIndex(0);
+        dispatch({ type: 'setAutocompleteIndex', index: 0 });
         return;
       }
       if (key.upArrow) {
-        setAutocompleteIndex((prev) => Math.max(0, prev - 1));
+        dispatch({ type: 'setAutocompleteIndex', index: Math.max(0, ui.autocompleteIndex - 1) });
         return;
       }
       if (key.downArrow) {
-        setAutocompleteIndex((prev) => Math.min(filteredCommands.length - 1, prev + 1));
+        dispatch({
+          type: 'setAutocompleteIndex',
+          index: Math.min(filteredCommands.length - 1, ui.autocompleteIndex + 1),
+        });
         return;
       }
       if (key.escape) {
-        setInput('');
-        setAutocompleteIndex(0);
+        dispatch({ type: 'setInput', input: '' });
+        dispatch({ type: 'setAutocompleteIndex', index: 0 });
         return;
       }
       // Enter 不拦截：落到 TextInput.onSubmit -> handleSubmit
@@ -250,7 +231,7 @@ function InkRepl({ ctx }: InkReplProps) {
     }
 
     if (key.ctrl && inputChar === 'l') {
-      setHistory([]);
+      dispatch({ type: 'clearHistory' });
       return;
     }
   });
@@ -258,29 +239,40 @@ function InkRepl({ ctx }: InkReplProps) {
   // 权限确认回调（ADR-029：发布 tool.permission.response，decision=allow/deny）
   const handlePermission = useCallback(
     (answer: string) => {
-      if (permissionOverlay) {
-        const always = answer === 'always';
-        ctx.events.publish({
-          type: 'tool.permission.response',
-          run_id: permissionOverlay.run_id,
-          data: {
-            requestId: permissionOverlay.requestId,
-            decision: answer === 'y' || always ? 'allow' : 'deny',
-            // "always" → 记住批准（runtime 维护 approvedTools，后续同工具免确认）
-            remember: always,
-          },
-          ts: Date.now(),
-        });
-        setPermissionOverlay(null);
-      }
+      const overlay = ui.permissionOverlay;
+      if (!overlay) return;
+      const always = answer === 'always';
+      ctx.events.publish({
+        type: 'tool.permission.response',
+        run_id: overlay.run_id,
+        data: {
+          requestId: overlay.requestId,
+          decision: answer === 'y' || always ? 'allow' : 'deny',
+          // "always" → 记住批准（runtime 维护 approvedTools，后续同工具免确认）
+          remember: always,
+        },
+        ts: Date.now(),
+      });
+      dispatch({ type: 'setPermissionOverlay', overlay: null });
     },
-    [permissionOverlay, ctx.events],
+    [ui.permissionOverlay, ctx.events, dispatch],
+  );
+
+  // ask-user 弹窗激活状态回调（子组件汇报；稳定引用避免无谓 effect 重跑）
+  const handleAskUserActive = useCallback(
+    (active: boolean) => {
+      dispatch({ type: 'setAskUserActive', active });
+    },
+    [dispatch],
   );
 
   // StreamOutput 完成回调：将 AI 响应归档到 history
-  const handleStreamComplete = useCallback((responseText: string) => {
-    setHistory((prev) => [...prev, responseText]);
-  }, []);
+  const handleStreamComplete = useCallback(
+    (responseText: string) => {
+      dispatch({ type: 'appendHistory', line: responseText });
+    },
+    [dispatch],
+  );
 
   // 退出处理
   useEffect(() => {
@@ -297,13 +289,13 @@ function InkRepl({ ctx }: InkReplProps) {
 
       {/* 滚动区域：历史 + 流式输出，flexGrow 撑满剩余空间 */}
       <Box flexDirection="column" flexGrow={1}>
-        {history.map((line, i) => (
+        {ui.history.map((line, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
           <Text key={i}>{line}</Text>
         ))}
         <StreamOutput
           events={ctx.events}
-          clearSignal={clearSignal}
+          clearSignal={ui.clearSignal}
           onComplete={handleStreamComplete}
         />
       </Box>
@@ -311,40 +303,46 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 底部固定区域：overlays + 输入框 + 补全框 */}
       {state.showResumePicker && (
         <SessionTable
-          sessions={resumeSessions}
+          sessions={ui.resumeSessions}
           currentSessionId={state.currentSessionId}
           onSelect={async (id) => {
-            setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
-            setInput('');
-            const msg = await doResume(ctx, state, id);
-            setState((prev) => ({ ...prev, currentSessionId: id }));
-            setHistory((prev) => [...prev, msg]);
+            dispatch({
+              type: 'patchRepl',
+              patch: { showResumePicker: false, pendingResume: false },
+            });
+            dispatch({ type: 'setInput', input: '' });
+            const { message, nextState } = await doResume(ctx, id);
+            dispatch({ type: 'patchRepl', patch: nextState });
+            dispatch({ type: 'appendHistory', line: message });
           }}
           onClose={() => {
-            setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
+            dispatch({
+              type: 'patchRepl',
+              patch: { showResumePicker: false, pendingResume: false },
+            });
           }}
         />
       )}
 
       {/* 权限确认对话框（ADR-029：订阅 tool.permission.request，发布 response） */}
-      {permissionOverlay && (
+      {ui.permissionOverlay && (
         <ConfirmDialog
-          question={`Allow tool "${permissionOverlay.toolName}" to run?`}
+          question={`Allow tool "${ui.permissionOverlay.toolName}" to run?`}
           onConfirm={handlePermission}
         />
       )}
 
       {/* ask-user 问答弹窗（自身订阅 ask.user.requested / 发布 answered） */}
-      <AskUserDialog events={ctx.events} onActiveChange={setAskUserActive} />
+      <AskUserDialog events={ctx.events} onActiveChange={handleAskUserActive} />
 
       {/* 输入框 - 只在没有独占交互组件时显示 */}
-      {!state.showResumePicker && !permissionOverlay && !askUserActive && (
+      {!state.showResumePicker && !ui.permissionOverlay && !ui.askUserActive && (
         <Box>
           <Text color="cyan">vessel&gt; </Text>
           <TextInput
-            key={inputCaretKey}
-            value={input}
-            onChange={setInput}
+            key={ui.inputCaretKey}
+            value={ui.input}
+            onChange={(value) => dispatch({ type: 'setInput', input: value })}
             onSubmit={handleSubmit}
           />
           {argHint && <Text color="gray">{argHint}</Text>}
@@ -356,7 +354,7 @@ function InkRepl({ ctx }: InkReplProps) {
         <InlineAutocomplete
           commands={allCommands}
           filter={commandFilter}
-          selectedIndex={autocompleteIndex}
+          selectedIndex={ui.autocompleteIndex}
         />
       )}
     </Box>
@@ -436,6 +434,9 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     // 处理命令
     if (trimmed.startsWith('/')) {
       const result = await commands.execute(trimmed.slice(1), ctx, state);
+      if (result.clearScreen) {
+        console.clear();
+      }
       if (!result.handled) {
         const name = trimmed.split(/\s+/)[0] ?? trimmed;
         console.log(`Unknown command: ${name}. Type /help for available commands.`);

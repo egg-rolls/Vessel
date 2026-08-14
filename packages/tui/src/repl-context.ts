@@ -33,7 +33,7 @@ export interface ReplContext {
   /** 会话后端——/resume、/history 的增删改查 */
   session: SessionBackend;
 
-  /** 事件流——StreamRenderer 订阅，获取 LlmStreamChunk + 工具调用事件 */
+  /** 事件流——StreamOutput / StateTracker 订阅，获取 LlmStreamChunk + 工具调用事件 */
   events: EventStream;
 
   /** 上下文管理器--/new、/resume 切会话时 clear()，让 runtime.run() 重新从 SessionBackend 载入历史 */
