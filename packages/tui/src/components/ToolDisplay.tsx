@@ -44,8 +44,20 @@ function summarizeArguments(input: unknown, max: number): string {
   return `${json.slice(0, max)}…`;
 }
 
-/** 默认渲染器：未注册自定义显示的工具统一走这里 */
-export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition = {
+/** 把字符串摘要为单行文本（超长截断） */
+function truncateString(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}…`;
+}
+
+/**
+ * 默认渲染器：未注册自定义显示的工具统一走这里。
+ * 结果/错误渲染函数为必选（与可选接口区分），保证 StreamOutput 回退始终可用。
+ */
+export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition & {
+  renderToolResultMessage: NonNullable<ToolDisplayDefinition['renderToolResultMessage']>;
+  renderToolUseErrorMessage: NonNullable<ToolDisplayDefinition['renderToolUseErrorMessage']>;
+} = {
   userFacingName: () => '',
   renderToolUseMessage: (input, options) => {
     const showArguments = options.showArguments !== false;
@@ -53,6 +65,11 @@ export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition = {
     return <Text color="gray">{showArguments ? ` ${summarizeArguments(input, max)}` : ' …'}</Text>;
   },
   getActivityDescription: () => null,
+  renderToolResultMessage: (result, options) => {
+    const max = options.maxArgumentLength ?? DEFAULT_MAX_ARGUMENT_LENGTH;
+    return <Text color="gray">{truncateString(result, max)}</Text>;
+  },
+  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
 };
 
 /** 工具显示注册表（ADR-021 §3）：注册自定义显示，未注册走默认渲染器 */

@@ -21,7 +21,7 @@
  * /resume 照搬 Hermes pending one-shot：无参->编号列表 + 置 pending；下一行裸数字->恢复。
  *
  * 命令是纯函数：只返回 `{ handled, output, nextState }`，不直接改 state、不直接打印。
- * state 应用与 output 打印集中在 CommandRegistry.execute()（兼容既有 test / simple-mode 契约）。
+ * state 应用集中在 CommandRegistry.execute()；output 由调用方消费（simple 模式打印、Ink 模式入历史）。
  */
 
 import type { ReplContext } from '../repl-context.js';
@@ -44,7 +44,7 @@ export interface ReplState {
 export interface CommandResult {
   /** 是否已识别并处理（false = 未知命令，由调用方提示） */
   handled: boolean;
-  /** 命令输出文本（调用方显示；simple 模式由 execute 打印） */
+  /** 命令输出文本（调用方显示） */
   output?: string;
   /** 命令请求的 state 变更（execute 统一应用到 state） */
   nextState?: Partial<ReplState>;
@@ -68,12 +68,6 @@ export interface CommandEntry {
   run: Run;
 }
 
-/** execute 选项：Ink 模式传 print:false，改由调用方消费 result.output */
-export interface ExecuteOptions {
-  /** 是否在执行层打印 output（simple 模式/测试默认 true） */
-  print?: boolean;
-}
-
 /** 恢复会话结果（doResume 纯函数返回） */
 export interface ResumeResult {
   message: string;
@@ -89,7 +83,7 @@ function applyNextState(state: ReplState, nextState: Partial<ReplState>): void {
 
 /**
  * 扁平命令注册表。execute 解析 `/<command> <args...>`：
- * - 命令已注册 -> 跑 run -> 应用 nextState -> 按需打印 output
+ * - 命令已注册 -> 跑 run -> 应用 nextState -> 返回 output（调用方消费）
  * - 未注册 -> { handled: false }
  */
 export class CommandRegistry {
@@ -107,12 +101,7 @@ export class CommandRegistry {
     return [...this.entries.values()];
   }
 
-  async execute(
-    input: string,
-    ctx: ReplContext,
-    state: ReplState,
-    options: ExecuteOptions = {},
-  ): Promise<CommandResult> {
+  async execute(input: string, ctx: ReplContext, state: ReplState): Promise<CommandResult> {
     const tokens = input.trim().split(/\s+/).filter(Boolean);
     const rawCommand = tokens[0];
     if (!rawCommand) return { handled: false };
@@ -124,9 +113,6 @@ export class CommandRegistry {
     if (!entry) return { handled: false };
 
     const result = (await entry.run(tokens.slice(1), ctx, state)) || { handled: true };
-    if (options.print !== false && result.output) {
-      console.log(result.output);
-    }
     if (result.nextState) {
       applyNextState(state, result.nextState);
     }
@@ -206,7 +192,6 @@ export async function consumePendingResume(
   const num = Number.parseInt(input.trim(), 10);
   if (Number.isNaN(num) || num < 1) {
     const output = '\nCancelled resume (not a number).\n';
-    console.log(output);
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
@@ -214,12 +199,10 @@ export async function consumePendingResume(
   const target = sessions[num - 1];
   if (!target) {
     const output = `\nNo session #${num}. Cancelled.\n`;
-    console.log(output);
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
   const { message, nextState } = await doResume(ctx, target.session_id);
-  console.log(`\n${message}\n`);
   applyNextState(state, { ...nextState, pendingResume: false });
   return { handled: true, output: message };
 }

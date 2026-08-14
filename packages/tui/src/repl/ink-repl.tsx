@@ -145,7 +145,7 @@ function InkRepl({ ctx }: InkReplProps) {
       // 处理命令。命令是纯函数：execute 应用 nextState 到传入的 working 副本，
       // Ink 层再用 result.nextState 做不可变合并（不直接改 React state 对象）。
       if (value.startsWith('/')) {
-        const result = await commands.execute(value, ctx, { ...state }, { print: false });
+        const result = await commands.execute(value, ctx, { ...state });
         if (result.handled) {
           // 特殊处理 /clear - 清空历史记录和流式输出（由命令的 clearScreen 标记驱动）
           if (result.clearScreen) {
@@ -425,7 +425,10 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     // 处理 /session resume 的 pending one-shot
     if (state.pendingResume) {
       if (/^\d+$/.test(trimmed)) {
-        await consumePendingResume(trimmed, ctx, state);
+        const resumeResult = await consumePendingResume(trimmed, ctx, state);
+        if (resumeResult.output) {
+          console.log(resumeResult.output);
+        }
         continue;
       }
       state.pendingResume = false;
@@ -436,6 +439,9 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       const result = await commands.execute(trimmed.slice(1), ctx, state);
       if (result.clearScreen) {
         console.clear();
+      }
+      if (result.output) {
+        console.log(result.output);
       }
       if (!result.handled) {
         const name = trimmed.split(/\s+/)[0] ?? trimmed;

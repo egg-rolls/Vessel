@@ -10,7 +10,6 @@
 export type {
   CommandEntry,
   CommandResult,
-  ExecuteOptions,
   ReplState,
   ResumeResult,
 } from './commands/commands.js';

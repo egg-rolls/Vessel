@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { Message, RunState, ToolDefinition } from '@vessel/core';
 import { createCommands } from '../src/commands/commands.js';
-import { captureConsole, makeCtx, makeState } from './helpers.js';
+import { makeCtx, makeState } from './helpers.js';
 
 const sampleTool: ToolDefinition = {
   name: 'echo',
@@ -47,26 +47,22 @@ describe('CommandRegistry 扁平命令', () => {
     expect(result.handled).toBe(false);
   });
 
-  it('/tools 打印已注册工具', async () => {
+  it('/tools 返回已注册工具', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     ctx.tools.register(sampleTool);
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('tools', ctx, state);
-    cap.restore();
-    expect(cap.logs.join('\n')).toContain('echo');
-    expect(cap.logs.join('\n')).toContain('回显输入');
+    const result = await reg.execute('tools', ctx, state);
+    expect(result.output ?? '').toContain('echo');
+    expect(result.output ?? '').toContain('回显输入');
   });
 
   it('/tools 无工具时提示', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('tools', ctx, state);
-    cap.restore();
-    expect(cap.logs.join('\n')).toContain('No tools registered');
+    const result = await reg.execute('tools', ctx, state);
+    expect(result.output ?? '').toContain('No tools registered');
   });
 });
 
@@ -81,9 +77,7 @@ describe('扁平会话命令', () => {
     };
     ctx.context.add({ role: 'user', content: '当前会话已有内容' });
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
     await reg.execute('resume target-sess', ctx, state);
-    cap.restore();
     expect(state.currentSessionId).toBe('target-sess');
     expect(changedTo).toBe('target-sess');
     expect(ctx.context.messages.length).toBe(0); // 已 clear
@@ -93,10 +87,8 @@ describe('扁平会话命令', () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('resume nope', ctx, state);
-    cap.restore();
-    expect(cap.logs.join('\n')).toContain('not found');
+    const result = await reg.execute('resume nope', ctx, state);
+    expect(result.output ?? '').toContain('not found');
   });
 
   it('/resume 无参 -> 设置 showResumePicker + pendingResume', async () => {
@@ -105,9 +97,7 @@ describe('扁平会话命令', () => {
     await ctx.session.save(runState('s1', [{ role: 'user', content: '问题' }]));
     const state = makeState(ctx.currentSessionId);
     expect(state.showResumePicker).toBe(false);
-    const cap = captureConsole();
     await reg.execute('resume', ctx, state);
-    cap.restore();
     expect(state.showResumePicker).toBe(true);
     expect(state.pendingResume).toBe(true);
   });
@@ -116,11 +106,9 @@ describe('扁平会话命令', () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('resume', ctx, state);
-    cap.restore();
+    const result = await reg.execute('resume', ctx, state);
     expect(state.showResumePicker).toBe(false);
-    expect(cap.logs.join('\n')).toContain('No sessions');
+    expect(result.output ?? '').toContain('No sessions');
   });
 
   it('/new 清 context + 新 id + 丢弃空当前会话', async () => {
@@ -134,16 +122,14 @@ describe('扁平会话命令', () => {
     };
     ctx.context.add({ role: 'user', content: '旧内容' });
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
     await reg.execute('new', ctx, state);
-    cap.restore();
     expect(state.currentSessionId).toBe(newId);
     expect(ctx.context.messages.length).toBe(0);
     // 旧空会话被丢弃
     expect(await ctx.session.load(ctx.currentSessionId)).toBeNull(); // 注意：currentSessionId 已变，这里用原值
   });
 
-  it('/history 打印当前会话消息', async () => {
+  it('/history 返回当前会话消息', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     await ctx.session.save(
@@ -153,10 +139,8 @@ describe('扁平会话命令', () => {
       ]),
     );
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('history', ctx, state);
-    cap.restore();
-    const out = cap.logs.join('\n');
+    const result = await reg.execute('history', ctx, state);
+    const out = result.output ?? '';
     expect(out).toContain('[User]');
     expect(out).toContain('问');
     expect(out).toContain('[Assistant]');
@@ -167,10 +151,8 @@ describe('扁平会话命令', () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
-    const cap = captureConsole();
-    await reg.execute('history', ctx, state);
-    cap.restore();
-    expect(cap.logs.join('\n')).toContain('No conversation history');
+    const result = await reg.execute('history', ctx, state);
+    expect(result.output ?? '').toContain('No conversation history');
   });
 
   it('/exit 置 running=false 并调 onExit', async () => {
@@ -187,11 +169,12 @@ describe('扁平会话命令', () => {
     expect(exited).toBe(true);
   });
 
-  it('/clear 调 console.clear（不抛错）', async () => {
+  it('/clear 返回 clearScreen 标记（不抛错）', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const result = await reg.execute('clear', ctx, state);
     expect(result.handled).toBe(true);
+    expect(result.clearScreen).toBe(true);
   });
 });

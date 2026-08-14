@@ -10,11 +10,12 @@
 
 import type { EventStream } from '@vessel/core';
 import { Box, Text } from 'ink';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { SpinnerWithVerb } from './SpinnerWithVerb.js';
 import { useSpinnerState } from './StateTracker.js';
-import { toolDisplayRegistry } from './ToolDisplay.js';
+import { DEFAULT_TOOL_DISPLAY, toolDisplayRegistry } from './ToolDisplay.js';
 
 // ── 类型 & 工厂 & 纯 reducer（导出供测试） ──
 
@@ -28,6 +29,7 @@ export type Segment =
       arguments: unknown;
       status: 'running' | 'completed' | 'failed';
       duration?: number;
+      result?: string;
       error?: string;
     };
 
@@ -81,7 +83,7 @@ export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => s
       const d = event.data;
       return prev.map((seg) =>
         seg.type === 'tool_call' && seg.id === d.tool_call_id
-          ? { ...seg, status: 'completed' as const, duration: d.duration_ms }
+          ? { ...seg, status: 'completed' as const, result: d.result, duration: d.duration_ms }
           : seg,
       );
     }
@@ -106,6 +108,45 @@ export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => s
 }
 
 // ── 组件 ──
+
+type ToolCallSegment = Extract<Segment, { type: 'tool_call' }>;
+
+/** 渲染 tool_call 片段：running=spinner；completed/failed 经 ToolDisplayRegistry 渲染结果/错误 */
+function renderToolCall(seg: ToolCallSegment): ReactNode {
+  const display = toolDisplayRegistry.get(seg.name);
+  const displayName = display.userFacingName(seg.arguments) || seg.name;
+  const activity = display.getActivityDescription?.(seg.arguments) ?? null;
+
+  if (seg.status === 'running') {
+    return <SpinnerWithVerb verb="tool" description={activity ?? displayName} />;
+  }
+
+  const renderResult =
+    display.renderToolResultMessage ?? DEFAULT_TOOL_DISPLAY.renderToolResultMessage;
+  const renderError =
+    display.renderToolUseErrorMessage ?? DEFAULT_TOOL_DISPLAY.renderToolUseErrorMessage;
+
+  if (seg.status === 'completed') {
+    return (
+      <Box flexDirection="column">
+        <Box>
+          <Text color="green">✓ {displayName}</Text>
+          <Text color="gray"> {seg.duration}ms</Text>
+        </Box>
+        {renderResult(seg.result ?? '', {})}
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      <Box>
+        <Text color="red">✗ {displayName}</Text>
+      </Box>
+      {renderError(seg.error ?? '', {})}
+    </Box>
+  );
+}
 
 interface StreamOutputProps {
   events: EventStream;
@@ -190,30 +231,10 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
           );
         }
 
-        // tool_call segment（ADR-021：经 ToolDisplayRegistry 取显示名/活动描述）
-        const display = toolDisplayRegistry.get(seg.name);
-        const displayName = display.userFacingName(seg.arguments) || seg.name;
-        const activity = display.getActivityDescription?.(seg.arguments) ?? null;
-
+        // tool_call segment（ADR-021：经 ToolDisplayRegistry 渲染）
         return (
           <Box key={seg.id} marginY={1}>
-            {seg.status === 'running' && (
-              <SpinnerWithVerb verb="tool" description={activity ?? displayName} />
-            )}
-
-            {seg.status === 'completed' && (
-              <Box>
-                <Text color="green">✓ {displayName}</Text>
-                <Text color="gray"> {seg.duration}ms</Text>
-              </Box>
-            )}
-
-            {seg.status === 'failed' && (
-              <Box>
-                <Text color="red">✗ {displayName}</Text>
-                <Text color="red"> {seg.error}</Text>
-              </Box>
-            )}
+            {renderToolCall(seg)}
           </Box>
         );
       })}

@@ -48,11 +48,11 @@ function toolStarted(id: string, name: string, args: unknown = {}) {
   });
 }
 
-function toolCompleted(id: string, durationMs = 42) {
+function toolCompleted(id: string, durationMs = 42, result = 'ok') {
   return asTuiEvent({
     type: 'tool.call.completed',
     run_id: 'r',
-    data: { tool_call_id: id, duration_ms: durationMs },
+    data: { tool_call_id: id, tool_name: 'read_file', duration_ms: durationMs, result },
     ts: 0,
   });
 }
@@ -191,6 +191,24 @@ describe('StreamOutput segment ordering', () => {
         name: 'read_file',
         status: 'failed',
         error: 'File not found',
+      });
+    });
+  });
+
+  describe('工具结果', () => {
+    it('completed 携带 result 字符串供 StreamOutput 渲染', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolCompleted('tc1', 42, 'file contents'), nextId);
+
+      expect(segs).toHaveLength(1);
+      expect(segs[0]).toMatchObject({
+        type: 'tool_call',
+        id: 'tc1',
+        status: 'completed',
+        result: 'file contents',
+        duration: 42,
       });
     });
   });

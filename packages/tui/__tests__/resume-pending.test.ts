@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { Message, RunState } from '@vessel/core';
 import { consumePendingResume } from '../src/commands/commands.js';
-import { captureConsole, makeCtx, makeState } from './helpers.js';
+import { makeCtx, makeState } from './helpers.js';
 
 function runState(sessionId: string, preview: string, startedAt: number): RunState {
   return {
@@ -26,26 +26,22 @@ describe('consumePendingResume（/resume 裸数字 one-shot）', () => {
     const state = makeState(ctx.currentSessionId);
     state.pendingResume = true;
 
-    const cap = captureConsole();
-    await consumePendingResume('1', ctx, state);
-    cap.restore();
+    const result = await consumePendingResume('1', ctx, state);
 
     // listRich 倒序：#1 = s2
     expect(state.currentSessionId).toBe('s2');
     expect(changedTo).toBe('s2');
     expect(state.pendingResume).toBe(false);
-    expect(cap.logs.join('\n')).toContain('Resumed');
+    expect(result.output ?? '').toContain('Resumed');
   });
 
   it('非数字 -> 取消恢复', async () => {
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     state.pendingResume = true;
-    const cap = captureConsole();
-    await consumePendingResume('hello', ctx, state);
-    cap.restore();
+    const result = await consumePendingResume('hello', ctx, state);
     expect(state.pendingResume).toBe(false);
-    expect(cap.logs.join('\n')).toContain('Cancelled');
+    expect(result.output ?? '').toContain('Cancelled');
     expect(state.currentSessionId).toBe(ctx.currentSessionId); // 未切换
   });
 
@@ -54,11 +50,9 @@ describe('consumePendingResume（/resume 裸数字 one-shot）', () => {
     await ctx.session.save(runState('s1', '唯一', 1000));
     const state = makeState(ctx.currentSessionId);
     state.pendingResume = true;
-    const cap = captureConsole();
-    await consumePendingResume('9', ctx, state);
-    cap.restore();
+    const result = await consumePendingResume('9', ctx, state);
     expect(state.pendingResume).toBe(false);
-    expect(cap.logs.join('\n')).toContain('No session #9');
+    expect(result.output ?? '').toContain('No session #9');
     expect(state.currentSessionId).toBe(ctx.currentSessionId);
   });
 
@@ -68,9 +62,7 @@ describe('consumePendingResume（/resume 裸数字 one-shot）', () => {
     ctx.context.add({ role: 'user', content: '旧上下文' });
     const state = makeState(ctx.currentSessionId);
     state.pendingResume = true;
-    const cap = captureConsole();
     await consumePendingResume('1', ctx, state);
-    cap.restore();
     expect(ctx.context.messages.length).toBe(0);
   });
 });
