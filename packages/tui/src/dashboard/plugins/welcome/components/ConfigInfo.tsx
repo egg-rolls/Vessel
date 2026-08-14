@@ -11,12 +11,7 @@ interface ConfigInfoProps {
  */
 export const ConfigInfo: React.FC<ConfigInfoProps> = ({ config }) => {
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor="blue"
-      paddingX={1}
-    >
+    <Box flexDirection="column" borderStyle="single" borderColor="blue" paddingX={1}>
       <Text color="blue" bold>
         Configuration
       </Text>

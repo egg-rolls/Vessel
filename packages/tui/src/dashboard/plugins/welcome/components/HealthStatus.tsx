@@ -34,12 +34,7 @@ export const HealthStatus: React.FC<HealthStatusProps> = ({ health }) => {
   const statusText = health.status.charAt(0).toUpperCase() + health.status.slice(1);
 
   return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor="blue"
-      paddingX={1}
-    >
+    <Box flexDirection="column" borderStyle="single" borderColor="blue" paddingX={1}>
       <Text color="blue" bold>
         Health
       </Text>
