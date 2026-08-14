@@ -15,9 +15,11 @@ export const ConfigInfo: React.FC<ConfigInfoProps> = ({ config }) => {
       flexDirection="column"
       borderStyle="single"
       borderColor="blue"
-      borderTitle="Configuration"
       paddingX={1}
     >
+      <Text color="blue" bold>
+        Configuration
+      </Text>
       <Text color="white">
         {'Model      │ '}
         <Text color="cyan">{config.model}</Text>

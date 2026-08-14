@@ -38,9 +38,11 @@ export const HealthStatus: React.FC<HealthStatusProps> = ({ health }) => {
       flexDirection="column"
       borderStyle="single"
       borderColor="blue"
-      borderTitle="Health"
       paddingX={1}
     >
+      <Text color="blue" bold>
+        Health
+      </Text>
       <Text color="white">
         {'Status     │ '}
         <Text color={statusColor}>{statusText}</Text>
