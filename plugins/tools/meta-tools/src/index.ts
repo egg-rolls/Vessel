@@ -1,15 +1,12 @@
 /**
- * @vessel/meta-tools - 元资产工具插件
+ * @vessel/meta-tools - 元工具插件
  * @module @vessel/meta-tools
  *
- * 提供元工具，让 Agent 能够自我管理自己的能力：
- * - search_assets: 搜索已有资产
- * - add_tool: 添加新工具
- * - add_skill: 添加新 Skill
- * - connect_mcp: 连接 MCP 服务器
- * - inspect_asset: 检查资产状态
- * - patch_asset: 修复资产
- * - remove_asset: 删除资产
+ * 提供元工具，让 Agent 自我管理工具模板（asset-decentralization 线A 瘦身后）：
+ * - add_tool: 注册工具模板（shell/http），直接 registerTool + 持久化
+ * - remove_tool: 从持久化文件移除工具模板（当前会话无法真撤，重启后生效）
+ *
+ * 工具真相源 = PluginHost；本插件不再持有 tools/skills/mcpConnections 台账副本。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -34,6 +31,9 @@ interface PersistedToolTemplate {
   inputSchema?: Record<string, unknown>;
 }
 
+/** 默认持久化路径（保持历史 ./tools/custom-tools.json 不变，spec §5 向后兼容） */
+const DEFAULT_TOOLS_FILE = './tools/custom-tools.json';
+
 /** 替换模板中的 {{ key }} 占位符 */
 function substituteArgs(template: string, args: Record<string, string>): string {
   return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key) => {
@@ -42,361 +42,98 @@ function substituteArgs(template: string, args: Record<string, string>): string 
 }
 
 /**
- * 元资产管理器
- * 管理 Agent 的所有资产（工具、Skill、MCP 连接等）
+ * 从文件读取已保存的工具模板。
+ * 向后兼容：旧格式（handlerCode）静默跳过，不再支持 eval/new Function。
  */
-export class AssetManager {
-  private tools: Map<string, ToolDefinition> = new Map();
-  private skills: Map<string, SkillAsset> = new Map();
-  private mcpConnections: Map<string, MCPConnection> = new Map();
-  private pluginHost: PluginHost;
-  private toolsFilePath: string;
+function readPersistedTemplates(toolsFilePath: string): PersistedToolTemplate[] {
+  try {
+    if (!fs.existsSync(toolsFilePath)) {
+      return [];
+    }
+    const data = fs.readFileSync(toolsFilePath, 'utf-8');
+    const raw = JSON.parse(data) as Array<Record<string, unknown>>;
 
-  constructor(pluginHost: PluginHost, toolsFilePath = './tools/custom-tools.json') {
-    this.pluginHost = pluginHost;
-    this.toolsFilePath = toolsFilePath;
-    this.loadPersistedTools();
+    const templates: PersistedToolTemplate[] = [];
+    for (const item of raw) {
+      // 向后兼容：旧格式（handlerCode）静默跳过
+      if (!item.type || (item.type !== 'shell' && item.type !== 'http')) {
+        continue;
+      }
+      templates.push(item as unknown as PersistedToolTemplate);
+    }
+    return templates;
+  } catch (error) {
+    console.error('Failed to read persisted tools:', error);
+    return [];
   }
+}
 
-  /**
-   * 从文件加载已保存的工具（模板化，不使用 eval/new Function）
-   */
-  private loadPersistedTools(): void {
-    try {
-      if (fs.existsSync(this.toolsFilePath)) {
-        const data = fs.readFileSync(this.toolsFilePath, 'utf-8');
-        const raw = JSON.parse(data) as Array<Record<string, unknown>>;
+/** 将工具模板写入持久化文件 */
+function writePersistedTemplates(toolsFilePath: string, templates: PersistedToolTemplate[]): void {
+  try {
+    const dir = path.dirname(toolsFilePath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(toolsFilePath, JSON.stringify(templates, null, 2));
+  } catch (error) {
+    console.error('Failed to persist tools:', error);
+  }
+}
 
-        for (const item of raw) {
-          // 向后兼容：旧格式（handlerCode）静默跳过
-          if (!item.type || (item.type !== 'shell' && item.type !== 'http')) {
-            // 旧格式工具，跳过（不再支持 eval/new Function）
-            continue;
-          }
-
-          const tpl = item as unknown as PersistedToolTemplate;
+/**
+ * 从模板构建工具 handler（安全，无 eval）
+ */
+function buildToolFromTemplate(tpl: PersistedToolTemplate): ToolDefinition {
+  switch (tpl.type) {
+    case 'shell':
+      return {
+        name: tpl.name,
+        description: tpl.description,
+        inputSchema: tpl.inputSchema ?? {
+          type: 'object',
+          properties: {},
+        },
+        handler: async (args: unknown) => {
+          const cmd = substituteArgs(tpl.command ?? '', args as Record<string, string>);
           try {
-            const tool = this.buildToolFromTemplate(tpl);
-            this.tools.set(tool.name, tool);
-            this.pluginHost.registerTool(tool);
-          } catch (error) {
-            console.error(`Failed to load persisted tool "${tpl.name}":`, error);
+            const proc = Bun.spawnSync({
+              cmd: ['sh', '-c', cmd],
+              stdout: 'pipe',
+              stderr: 'pipe',
+            });
+            return proc.stdout.toString() || proc.stderr.toString() || 'ok';
+          } catch (e) {
+            return `Error: ${e}`;
           }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load persisted tools:', error);
-    }
+        },
+      };
+
+    case 'http':
+      return {
+        name: tpl.name,
+        description: tpl.description,
+        inputSchema: tpl.inputSchema ?? {
+          type: 'object',
+          properties: {},
+        },
+        handler: async (args: unknown) => {
+          const url = substituteArgs(tpl.url ?? '', args as Record<string, string>);
+          try {
+            const res = await fetch(url, {
+              method: tpl.method ?? 'GET',
+              headers: tpl.headers ?? {},
+            });
+            return await res.text();
+          } catch (e) {
+            return `Error: ${e}`;
+          }
+        },
+      };
+
+    default:
+      throw new Error(`Unknown template type: ${tpl.type}. Supported: shell, http`);
   }
-
-  /**
-   * 从模板构建工具 handler（安全，无 eval）
-   */
-  buildToolFromTemplate(tpl: PersistedToolTemplate): ToolDefinition {
-    switch (tpl.type) {
-      case 'shell':
-        return {
-          name: tpl.name,
-          description: tpl.description,
-          inputSchema: tpl.inputSchema ?? {
-            type: 'object',
-            properties: {},
-          },
-          handler: async (args: unknown) => {
-            const cmd = substituteArgs(tpl.command ?? '', args as Record<string, string>);
-            try {
-              const proc = Bun.spawnSync({
-                cmd: ['sh', '-c', cmd],
-                stdout: 'pipe',
-                stderr: 'pipe',
-              });
-              return proc.stdout.toString() || proc.stderr.toString() || 'ok';
-            } catch (e) {
-              return `Error: ${e}`;
-            }
-          },
-        };
-
-      case 'http':
-        return {
-          name: tpl.name,
-          description: tpl.description,
-          inputSchema: tpl.inputSchema ?? {
-            type: 'object',
-            properties: {},
-          },
-          handler: async (args: unknown) => {
-            const url = substituteArgs(tpl.url ?? '', args as Record<string, string>);
-            try {
-              const res = await fetch(url, {
-                method: tpl.method ?? 'GET',
-                headers: tpl.headers ?? {},
-              });
-              return await res.text();
-            } catch (e) {
-              return `Error: ${e}`;
-            }
-          },
-        };
-
-      default:
-        throw new Error(`Unknown template type: ${tpl.type}. Supported: shell, http`);
-    }
-  }
-
-  /**
-   * 保存工具到文件
-   */
-  private persistTools(): void {
-    try {
-      const dir = path.dirname(this.toolsFilePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      const toolsData: PersistedToolTemplate[] = [];
-      for (const [name] of this.tools) {
-        // 只持久化模板类型的工具
-        const tpl = this._toolTemplates.get(name);
-        if (tpl) {
-          toolsData.push(tpl);
-        }
-      }
-
-      fs.writeFileSync(this.toolsFilePath, JSON.stringify(toolsData, null, 2));
-    } catch (error) {
-      console.error('Failed to persist tools:', error);
-    }
-  }
-
-  /** 存储工具模板（用于持久化） */
-  private _toolTemplates: Map<string, PersistedToolTemplate> = new Map();
-
-  /**
-   * 注册工具资产（同时记录模板以便持久化）
-   */
-  registerTool(tool: ToolDefinition, tpl?: PersistedToolTemplate): void {
-    this.tools.set(tool.name, tool);
-    this.pluginHost.registerTool(tool);
-    if (tpl) {
-      this._toolTemplates.set(tool.name, tpl);
-    }
-    this.persistTools();
-  }
-
-  /**
-   * 注册 Skill 资产
-   */
-  registerSkill(skill: SkillAsset): void {
-    this.skills.set(skill.name, skill);
-  }
-
-  /**
-   * 注册 MCP 连接
-   */
-  registerMCPConnection(connection: MCPConnection): void {
-    this.mcpConnections.set(connection.name, connection);
-  }
-
-  /**
-   * 搜索资产
-   */
-  searchAssets(query: string): AssetSearchResult[] {
-    const results: AssetSearchResult[] = [];
-    const lowerQuery = query.toLowerCase();
-
-    // 搜索工具
-    for (const [name, tool] of this.tools) {
-      if (
-        name.toLowerCase().includes(lowerQuery) ||
-        tool.description.toLowerCase().includes(lowerQuery)
-      ) {
-        results.push({
-          type: 'tool',
-          name,
-          description: tool.description,
-          source: 'registered',
-        });
-      }
-    }
-
-    // 搜索 Skill
-    for (const [name, skill] of this.skills) {
-      if (
-        name.toLowerCase().includes(lowerQuery) ||
-        skill.description.toLowerCase().includes(lowerQuery)
-      ) {
-        results.push({
-          type: 'skill',
-          name,
-          description: skill.description,
-          source: skill.source,
-        });
-      }
-    }
-
-    // 搜索 MCP 连接
-    for (const [name, conn] of this.mcpConnections) {
-      if (name.toLowerCase().includes(lowerQuery)) {
-        results.push({
-          type: 'mcp',
-          name,
-          description: `MCP server: ${conn.serverUrl}`,
-          source: 'mcp',
-        });
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * 获取资产详情
-   */
-  getAsset(type: string, name: string): AssetDetail | null {
-    switch (type) {
-      case 'tool': {
-        const tool = this.tools.get(name);
-        if (!tool) return null;
-        return {
-          type: 'tool',
-          name,
-          description: tool.description,
-          schema: tool.inputSchema,
-          source: 'registered',
-          status: 'active',
-        };
-      }
-      case 'skill': {
-        const skill = this.skills.get(name);
-        if (!skill) return null;
-        return {
-          type: 'skill',
-          name,
-          description: skill.description,
-          content: skill.content,
-          source: skill.source,
-          status: 'active',
-        };
-      }
-      case 'mcp': {
-        const conn = this.mcpConnections.get(name);
-        if (!conn) return null;
-        return {
-          type: 'mcp',
-          name,
-          description: `MCP server: ${conn.serverUrl}`,
-          source: 'mcp',
-          status: conn.status,
-        };
-      }
-      default:
-        return null;
-    }
-  }
-
-  /**
-   * 获取工具定义（直接拿 ToolDefinition——patch_asset 更新时保留原 handler 用）
-   */
-  getTool(name: string): ToolDefinition | undefined {
-    return this.tools.get(name);
-  }
-
-  /**
-   * 删除资产
-   */
-  removeAsset(type: string, name: string): boolean {
-    switch (type) {
-      case 'tool':
-        return this.tools.delete(name);
-      case 'skill':
-        return this.skills.delete(name);
-      case 'mcp':
-        return this.mcpConnections.delete(name);
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * 获取所有资产列表
-   */
-  listAssets(): AssetSummary[] {
-    const assets: AssetSummary[] = [];
-
-    for (const [name, tool] of this.tools) {
-      assets.push({
-        type: 'tool',
-        name,
-        description: tool.description,
-        source: 'registered',
-      });
-    }
-
-    for (const [name, skill] of this.skills) {
-      assets.push({
-        type: 'skill',
-        name,
-        description: skill.description,
-        source: skill.source,
-      });
-    }
-
-    for (const [name, conn] of this.mcpConnections) {
-      assets.push({
-        type: 'mcp',
-        name,
-        description: `MCP server: ${conn.serverUrl}`,
-        source: 'mcp',
-      });
-    }
-
-    return assets;
-  }
-}
-
-/** Skill 资产 */
-export interface SkillAsset {
-  name: string;
-  description: string;
-  content: string;
-  source: string;
-  metadata?: Record<string, unknown>;
-}
-
-/** MCP 连接 */
-export interface MCPConnection {
-  name: string;
-  serverUrl: string;
-  status: 'connected' | 'disconnected' | 'error';
-  tools?: ToolDefinition[];
-}
-
-/** 资产搜索结果 */
-export interface AssetSearchResult {
-  type: 'tool' | 'skill' | 'mcp';
-  name: string;
-  description: string;
-  source: string;
-}
-
-/** 资产详情 */
-export interface AssetDetail {
-  type: 'tool' | 'skill' | 'mcp';
-  name: string;
-  description: string;
-  schema?: Record<string, unknown>;
-  content?: string;
-  source: string;
-  status: string;
-}
-
-/** 资产摘要 */
-export interface AssetSummary {
-  type: 'tool' | 'skill' | 'mcp';
-  name: string;
-  description: string;
-  source: string;
 }
 
 /**
@@ -431,39 +168,10 @@ async function requestPermission(
 /**
  * 创建元工具
  */
-export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
-  const searchAssetsTool: ToolDefinition = {
-    name: 'search_assets',
-    description: 'Search for available assets (tools, skills, MCP connections)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        query: {
-          type: 'string',
-          description: 'Search query (name or description)',
-        },
-        type: {
-          type: 'string',
-          enum: ['tool', 'skill', 'mcp', 'all'],
-          description: 'Filter by asset type (default: all)',
-        },
-      },
-      required: ['query'],
-    },
-    handler: async (args) => {
-      const { query, type = 'all' } = args as { query: string; type?: string };
-      const results = assetManager.searchAssets(query);
-
-      const filtered = type === 'all' ? results : results.filter((r) => r.type === type);
-
-      if (filtered.length === 0) {
-        return `No assets found matching "${query}"`;
-      }
-
-      return JSON.stringify(filtered, null, 2);
-    },
-  };
-
+export function createMetaTools(
+  pluginHost: PluginHost,
+  toolsFilePath = DEFAULT_TOOLS_FILE,
+): ToolDefinition[] {
   const addToolTool: ToolDefinition = {
     name: 'add_tool',
     description:
@@ -494,7 +202,7 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
           type: 'string',
           description: 'HTTP method (default: GET)',
         },
-        input_schema: {
+        inputSchema: {
           type: 'object',
           description: 'JSON Schema for tool parameters',
         },
@@ -509,8 +217,21 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
         command?: string;
         url?: string;
         method?: string;
-        input_schema?: Record<string, unknown>;
+        inputSchema?: Record<string, unknown>;
       };
+
+      // 异常 2（缺参）：shell 缺 command、http 缺 url
+      if (a.type === 'shell' && !a.command) {
+        return '参数缺失：type=shell 需要 command';
+      }
+      if (a.type === 'http' && !a.url) {
+        return '参数缺失：type=http 需要 url';
+      }
+
+      // 异常 1（重名）：PluginHost 是工具唯一真相源
+      if (pluginHost.getTool(a.name)) {
+        return '工具名已存在';
+      }
 
       const tpl: PersistedToolTemplate = {
         name: a.name,
@@ -519,251 +240,60 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
         command: a.command,
         url: a.url,
         method: a.method,
-        inputSchema: a.input_schema,
+        inputSchema: a.inputSchema,
       };
 
-      if (a.type === 'shell' && !a.command) {
-        return 'Error: shell type requires "command"';
-      }
-      if (a.type === 'http' && !a.url) {
-        return 'Error: http type requires "url"';
-      }
-
       try {
-        const tool = assetManager.buildToolFromTemplate(tpl);
-        assetManager.registerTool(tool, tpl);
-        return `Tool "${a.name}" added (type: ${a.type})`;
+        const tool = buildToolFromTemplate(tpl);
+        pluginHost.registerTool(tool);
+
+        const templates = readPersistedTemplates(toolsFilePath);
+        templates.push(tpl);
+        writePersistedTemplates(toolsFilePath, templates);
+
+        return `工具「${a.name}」已注册`;
       } catch (error) {
         return `Failed to add tool: ${error}`;
       }
     },
   };
 
-  const addSkillTool: ToolDefinition = {
-    name: 'add_skill',
-    description: 'Add a new skill (Markdown document) to the asset registry',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: {
-          type: 'string',
-          description: 'Skill name',
-        },
-        description: {
-          type: 'string',
-          description: 'Skill description',
-        },
-        content: {
-          type: 'string',
-          description: 'Skill content (Markdown)',
-        },
-      },
-      required: ['name', 'description', 'content'],
-    },
-    handler: async (args) => {
-      const { name, description, content } = args as {
-        name: string;
-        description: string;
-        content: string;
-      };
-
-      const skill: SkillAsset = {
-        name,
-        description,
-        content,
-        source: 'user-created',
-      };
-
-      assetManager.registerSkill(skill);
-      return `Skill "${name}" added successfully`;
-    },
-  };
-
-  const connectMcpTool: ToolDefinition = {
-    name: 'connect_mcp',
-    description: 'Connect to an MCP (Model Context Protocol) server',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: {
-          type: 'string',
-          description: 'Connection name',
-        },
-        serverUrl: {
-          type: 'string',
-          description: 'MCP server URL',
-        },
-      },
-      required: ['name', 'serverUrl'],
-    },
-    handler: async (args) => {
-      const { name, serverUrl } = args as {
-        name: string;
-        serverUrl: string;
-      };
-
-      // 校验 URL 格式
-      try {
-        new URL(serverUrl);
-      } catch {
-        return `Error: Invalid server URL: ${serverUrl}`;
-      }
-
-      // 真实接口：登记连接，但默认未建立实际连接——meta-tools 不持 MCP client，
-      // 真实连接走 mcp-client 插件。诚实反映"无连接"，而非假报 connected。
-      const connection: MCPConnection = {
-        name,
-        serverUrl,
-        status: 'error',
-      };
-
-      assetManager.registerMCPConnection(connection);
-      return `Failed to connect to MCP server "${name}" at ${serverUrl}: no MCP client available (use mcp-client plugin)`;
-    },
-  };
-
-  const inspectAssetTool: ToolDefinition = {
-    name: 'inspect_asset',
-    description: 'Inspect an asset (tool, skill, or MCP connection)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['tool', 'skill', 'mcp'],
-          description: 'Asset type',
-        },
-        name: {
-          type: 'string',
-          description: 'Asset name',
-        },
-      },
-      required: ['type', 'name'],
-    },
-    handler: async (args) => {
-      const { type, name } = args as { type: string; name: string };
-      const asset = assetManager.getAsset(type, name);
-
-      if (!asset) {
-        return `Asset not found: ${type}/${name}`;
-      }
-
-      return JSON.stringify(asset, null, 2);
-    },
-  };
-
-  const patchAssetTool: ToolDefinition = {
-    name: 'patch_asset',
-    description: 'Update or fix an existing asset',
-    // 自描述：patch_asset 可替换工具 handler/描述，属于危险操作，需用户授权
+  const removeToolTool: ToolDefinition = {
+    name: 'remove_tool',
+    description: 'Remove a custom tool template (takes effect after restart)',
+    // 自描述：remove_tool 删除工具模板不可恢复，属破坏性操作，需用户授权
     interactive: true,
-    checkPermission: async (input, ctx) => requestPermission(ctx, 'patch_asset', input),
+    checkPermission: async (input, ctx) => requestPermission(ctx, 'remove_tool', input),
     inputSchema: {
       type: 'object',
       properties: {
-        type: {
-          type: 'string',
-          enum: ['tool', 'skill'],
-          description: 'Asset type',
-        },
         name: {
           type: 'string',
-          description: 'Asset name',
-        },
-        updates: {
-          type: 'object',
-          description: 'Fields to update',
+          description: 'Tool name',
         },
       },
-      required: ['type', 'name', 'updates'],
+      required: ['name'],
     },
     handler: async (args) => {
-      const { type, name, updates } = args as {
-        type: string;
-        name: string;
-        updates: Record<string, unknown>;
-      };
+      const { name } = args as { name: string };
 
-      if (type === 'tool') {
-        const existingTool = assetManager.getTool(name);
-        if (!existingTool) {
-          return `Tool "${name}" not found`;
-        }
-
-        // 真实更新：保留原 handler，只更新名称/描述/schema
-        const tool: ToolDefinition = {
-          ...existingTool,
-          name: (updates.name as string) ?? existingTool.name,
-          description: (updates.description as string) ?? existingTool.description,
-          inputSchema: (updates.schema as Record<string, unknown>) ?? existingTool.inputSchema,
-        };
-
-        assetManager.registerTool(tool);
-        return `Tool "${name}" updated`;
+      const templates = readPersistedTemplates(toolsFilePath);
+      const index = templates.findIndex((t) => t.name === name);
+      if (index !== -1) {
+        templates.splice(index, 1);
+        writePersistedTemplates(toolsFilePath, templates);
+        return '已删除，重启后不再加载';
       }
 
-      if (type === 'skill') {
-        const existing = assetManager.getAsset('skill', name);
-        if (!existing) {
-          return `Skill "${name}" not found`;
-        }
-
-        const skill: SkillAsset = {
-          name: (updates.name as string) ?? name,
-          description: (updates.description as string) ?? existing.description,
-          content: (updates.content as string) ?? existing.content ?? '',
-          source: existing.source,
-        };
-
-        assetManager.registerSkill(skill);
-        return `Skill "${name}" updated`;
+      // 不在持久化列表：区分内置/插件工具（拒绝）与不存在
+      if (pluginHost.getTool(name)) {
+        return '无法删除内置工具';
       }
-
-      return `Unsupported asset type: ${type}`;
+      return '工具不存在';
     },
   };
 
-  const removeAssetTool: ToolDefinition = {
-    name: 'remove_asset',
-    description: 'Remove an asset from the registry',
-    // 自描述：remove_asset 删除资产不可恢复，属破坏性操作，需用户授权
-    interactive: true,
-    checkPermission: async (input, ctx) => requestPermission(ctx, 'remove_asset', input),
-    inputSchema: {
-      type: 'object',
-      properties: {
-        type: {
-          type: 'string',
-          enum: ['tool', 'skill', 'mcp'],
-          description: 'Asset type',
-        },
-        name: {
-          type: 'string',
-          description: 'Asset name',
-        },
-      },
-      required: ['type', 'name'],
-    },
-    handler: async (args) => {
-      const { type, name } = args as { type: string; name: string };
-      const removed = assetManager.removeAsset(type, name);
-
-      if (removed) {
-        return `Asset ${type}/${name} removed`;
-      }
-      return `Asset ${type}/${name} not found`;
-    },
-  };
-
-  return [
-    searchAssetsTool,
-    addToolTool,
-    addSkillTool,
-    connectMcpTool,
-    inspectAssetTool,
-    patchAssetTool,
-    removeAssetTool,
-  ];
+  return [addToolTool, removeToolTool];
 }
 
 /**
@@ -772,17 +302,20 @@ export function createMetaTools(assetManager: AssetManager): ToolDefinition[] {
 export const metaToolsPlugin: Plugin = {
   name: 'meta-tools',
   version: '0.1.0',
-  description: 'Meta-tools for asset management (search, add, modify, remove tools/skills/MCP)',
+  description: 'Meta-tools for tool template management (add/remove custom tools)',
   install(host: PluginHost) {
-    const assetManager = new AssetManager(host);
-    const metaTools = createMetaTools(assetManager);
-
-    for (const tool of metaTools) {
-      host.registerTool(tool);
+    // 加载持久化工具模板到 PluginHost（工具真相源），本插件不持有本地副本
+    for (const tpl of readPersistedTemplates(DEFAULT_TOOLS_FILE)) {
+      try {
+        host.registerTool(buildToolFromTemplate(tpl));
+      } catch (error) {
+        console.error(`Failed to load persisted tool "${tpl.name}":`, error);
+      }
     }
 
-    // 将 assetManager 存储在 host 上，供其他插件使用
-    (host as unknown as Record<string, unknown>).__assetManager = assetManager;
+    for (const tool of createMetaTools(host, DEFAULT_TOOLS_FILE)) {
+      host.registerTool(tool);
+    }
   },
 };
 
