@@ -20,6 +20,7 @@ import {
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
+import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { ConfigDeclared } from './config-declared';
 import { DirScanner } from './dir-scanner';
 import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
@@ -156,6 +157,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     const p = await pluginRegistry.loadPlugin(name);
     if (p) plugins.push(p);
   }
+
+  // 子 agent 分派（delegate_task）：工厂式插件，需注入 provider 工厂 + model，
+  // 不走通用注册表（其 default export 是 createDelegateTaskPlugin 工厂而非 Plugin 实例）。
+  plugins.push(
+    createDelegateTaskPlugin({
+      providerFactory: () => provider,
+      model: providerModel,
+    }),
+  );
 
   // ask-user 交互工具——普通工具对象（ADR-029，不再合成注册 + bridge）。
   // 仅交互模式注册；headless 无 TUI 订阅者，注册只会 waitFor 超时挂起。

@@ -151,6 +151,16 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugins/tools/delegate-task": {
+      "name": "@vessel/delegate-task",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vessel/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "plugins/tools/file-ops": {
       "name": "@vessel/file-ops",
       "version": "0.1.0",
@@ -316,6 +326,8 @@
     "@vessel/config": ["@vessel/config@workspace:packages/config"],
 
     "@vessel/core": ["@vessel/core@workspace:packages/core"],
+
+    "@vessel/delegate-task": ["@vessel/delegate-task@workspace:plugins/tools/delegate-task"],
 
     "@vessel/file-ops": ["@vessel/file-ops@workspace:plugins/tools/file-ops"],
 
