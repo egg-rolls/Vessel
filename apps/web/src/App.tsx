@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type ConnectionState, GatewayClient } from './gatewayClient';
-import type { RunEvent, SessionInfo, StreamChunk } from './types';
+import type { RunEvent, SessionInfo, StreamChunk, ToolSchema } from './types';
 
 const GATEWAY_URL =
   (import.meta.env.VITE_GATEWAY_URL as string | undefined) ?? 'http://localhost:8642';
@@ -95,102 +95,133 @@ function formatTime(ts?: number): string {
   return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
 }
 
-// ── 单条事件渲染 ──
+/** 行内时间戳（带毫秒，便于区分同一秒内的多条事件） */
+function formatRowTime(ts: number): string {
+  const d = new Date(ts);
+  const base = d.toLocaleTimeString('zh-CN', { hour12: false });
+  return `${base}.${String(d.getMilliseconds()).padStart(3, '0')}`;
+}
+
+/** 从 llm.request.data.tools 提取工具 schema（宽松解析，过滤非法项） */
+function extractToolSchemas(raw: unknown[]): ToolSchema[] {
+  const out: ToolSchema[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const fn = (item as { function?: unknown }).function;
+    if (!fn || typeof fn !== 'object') continue;
+    const f = fn as { name?: unknown; description?: unknown; parameters?: unknown };
+    if (typeof f.name !== 'string') continue;
+    out.push({
+      type: 'function',
+      function: {
+        name: f.name,
+        description: typeof f.description === 'string' ? f.description : undefined,
+        parameters:
+          f.parameters && typeof f.parameters === 'object'
+            ? (f.parameters as Record<string, unknown>)
+            : undefined,
+      },
+    });
+  }
+  return out;
+}
+
+// ── 事件类型标签（时间线色块）──
+function eventTag(type: string): { label: string; cls: string } {
+  if (type.startsWith('tool.call.')) {
+    if (type.endsWith('.failed')) return { label: 'tool.fail', cls: 'tag-tool-fail' };
+    if (type.endsWith('.completed')) return { label: 'tool.ok', cls: 'tag-tool-done' };
+    return { label: 'tool', cls: 'tag-tool-start' };
+  }
+  if (type.startsWith('guardrail.')) return { label: type, cls: 'tag-guard' };
+  if (type.startsWith('llm.')) return { label: type, cls: 'tag-llm' };
+  if (type === 'error') return { label: 'error', cls: 'tag-error' };
+  return { label: type, cls: 'tag-raw' };
+}
+
+// ── 单条事件渲染：时间戳 + 类型色块 + 内容 ──
 function EventRow({ event }: { event: RunEvent }) {
+  const tag = eventTag(event.type);
+  return (
+    <div className={`row ${tag.cls}`}>
+      <span className="ts dim">{formatRowTime(event.ts)}</span>
+      <span className={`type-tag ${tag.cls}`}>{tag.label}</span>
+      {renderEventBody(event)}
+    </div>
+  );
+}
+
+function renderEventBody(event: RunEvent) {
   switch (event.type) {
     case 'tool.call.started': {
       const d = event.data as { tool_name?: string; arguments?: unknown };
       const args = d.arguments == null ? '' : JSON.stringify(d.arguments);
       return (
-        <div className="row tool-started">
-          <span className="kind">🔧</span>
+        <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
           {args && <span className="dim">{truncate(args, 160)}</span>}
-        </div>
+        </>
       );
     }
     case 'tool.call.completed': {
       const d = event.data as { tool_name?: string; duration_ms?: number };
       return (
-        <div className="row tool-completed">
-          <span className="kind">✓</span>
+        <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
           {d.duration_ms != null && <span className="dim">{d.duration_ms}ms</span>}
-        </div>
+        </>
       );
     }
     case 'tool.call.failed': {
       const d = event.data as { tool_name?: string; error?: string };
       return (
-        <div className="row tool-failed">
-          <span className="kind">✗</span>
+        <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
           <span className="err">{truncate(d.error ?? '', 160)}</span>
-        </div>
+        </>
       );
     }
     case 'guardrail.blocked': {
       const d = event.data as { guardrail_name?: string; reason?: string };
       return (
-        <div className="row guardrail">
-          <span className="kind">🚫</span>
+        <>
           <span className="mono">{d.guardrail_name ?? 'guardrail'}</span>
           <span className="dim">{truncate(d.reason ?? '', 160)}</span>
-        </div>
+        </>
       );
     }
     case 'guardrail.modified': {
       const d = event.data as { guardrail_name?: string; stage?: string };
       return (
-        <div className="row guardrail">
-          <span className="kind">✎</span>
+        <>
           <span className="mono">{d.guardrail_name ?? 'guardrail'}</span>
           <span className="dim">{d.stage ?? ''}</span>
-        </div>
+        </>
       );
     }
     case 'llm.request': {
       const d = event.data as { messages?: unknown[]; tools?: unknown[] };
       return (
-        <div className="row llm">
-          <span className="kind">↗</span>
-          <span>llm.request</span>
-          <span className="dim">
-            {d.messages?.length ?? 0} msgs{d.tools?.length ? ` · ${d.tools.length} tools` : ''}
-          </span>
-        </div>
+        <span className="dim">
+          {d.messages?.length ?? 0} msgs{d.tools?.length ? ` · ${d.tools.length} tools` : ''}
+        </span>
       );
     }
     case 'llm.response': {
       const d = event.data as { finish_reason?: string; usage?: { total_tokens?: number } };
       return (
-        <div className="row llm">
-          <span className="kind">↙</span>
-          <span>llm.response</span>
-          <span className="dim">
-            {d.finish_reason ?? ''}
-            {d.usage?.total_tokens != null ? ` · ${d.usage.total_tokens} tok` : ''}
-          </span>
-        </div>
+        <span className="dim">
+          {d.finish_reason ?? ''}
+          {d.usage?.total_tokens != null ? ` · ${d.usage.total_tokens} tok` : ''}
+        </span>
       );
     }
     case 'error': {
       const d = event.data as { error?: string };
-      return (
-        <div className="row raw-error">
-          <span className="kind">⚠</span>
-          <span className="err">{truncate(d.error ?? 'error', 240)}</span>
-        </div>
-      );
+      return <span className="err">{truncate(d.error ?? 'error', 240)}</span>;
     }
     default:
-      return (
-        <div className="row raw">
-          <span className="kind">•</span>
-          <span className="mono">{event.type}</span>
-          <span className="dim">{truncate(JSON.stringify(event.data), 200)}</span>
-        </div>
-      );
+      return <span className="dim">{truncate(JSON.stringify(event.data), 200)}</span>;
   }
 }
 
@@ -295,8 +326,8 @@ export default function App() {
     let reconnectTimer: number | undefined;
     const offEvent = client.onEvent((ev) => setEvents((prev) => [...prev, ev]));
     const offState = client.onState((s) => {
-      setConnState(s);
       if (s === 'closed' || s === 'error') {
+        setConnState('reconnecting');
         window.clearTimeout(reconnectTimer);
         reconnectTimer = window.setTimeout(() => {
           setEvents([]);
@@ -304,6 +335,8 @@ export default function App() {
             .connect(tk)
             .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
         }, 1500);
+      } else {
+        setConnState(s);
       }
     });
     client.connect(tk).catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)));
@@ -358,13 +391,24 @@ export default function App() {
     return groups.filter((g) => g.sessionId === selectedId);
   }, [groups, selectedId]);
 
+  // 最近一次 llm.request 携带的工具 schema（gateway 无工具列表端点，从事件流提取）
+  const toolSchemas = useMemo<ToolSchema[] | null>(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev.type !== 'llm.request') continue;
+      const tools = ev.data.tools;
+      if (Array.isArray(tools)) return extractToolSchemas(tools);
+    }
+    return null;
+  }, [events]);
+
   return (
     <div className="app">
       <header className="topbar">
         <span className="brand">Vessel</span>
         <span className={`conn conn-${connState}`} title="gateway 连接状态">
           <span className="conn-dot" />
-          {connState}
+          {connState === 'reconnecting' ? '重连中…' : connState}
         </span>
         <input
           className="token-input"
@@ -422,6 +466,33 @@ export default function App() {
                 </div>
               </button>
             ))}
+          </div>
+
+          <div className="sidebar-title">
+            工具 <span className="dim">({toolSchemas?.length ?? 0})</span>
+          </div>
+          <div className="tools">
+            {toolSchemas === null ? (
+              <div className="tools-empty dim">运行一次后显示工具</div>
+            ) : toolSchemas.length === 0 ? (
+              <div className="tools-empty dim">本次 run 未携带工具</div>
+            ) : (
+              toolSchemas.map((t) => (
+                <div
+                  className="tool-item"
+                  key={t.function.name}
+                  title={t.function.description ?? t.function.name}
+                >
+                  <div className="tool-name">
+                    <span className="tool-dot" />
+                    <span className="mono">{t.function.name}</span>
+                  </div>
+                  {t.function.description && (
+                    <div className="tool-desc">{truncate(t.function.description, 90)}</div>
+                  )}
+                </div>
+              ))
+            )}
           </div>
         </aside>
 

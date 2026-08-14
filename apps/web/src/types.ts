@@ -33,6 +33,16 @@ export interface Usage {
   total_cost?: number;
 }
 
+/** LLM 工具 Schema（对应 core 的 ToolSchema，见 `llm.request.data.tools`） */
+export interface ToolSchema {
+  type: 'function';
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+}
+
 /** 会话摘要（对应 /sessions 返回的 SessionInfo） */
 export interface SessionInfo {
   session_id: string;

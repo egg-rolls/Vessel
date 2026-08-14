@@ -10,7 +10,7 @@
 
 import type { RunEvent, SessionInfo } from './types';
 
-export type ConnectionState = 'idle' | 'connecting' | 'open' | 'closed' | 'error';
+export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
 
 export class GatewayClient {
   private readonly baseUrl: string;
@@ -89,7 +89,7 @@ export class GatewayClient {
       const onError = () => {
         ws.removeEventListener('open', onOpen);
         this.setState('error');
-        reject(new Error(`WebSocket 连接失败：${this.wsUrl()}`));
+        reject(new Error(`WebSocket 连接失败（gateway 未启动或 token 无效）：${this.wsUrl()}`));
       };
       ws.addEventListener('open', onOpen, { once: true });
       ws.addEventListener('error', onError, { once: true });
@@ -104,14 +104,24 @@ export class GatewayClient {
   }
 
   private async request<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-    const res = await fetch(`${this.baseUrl}${path}`, {
-      ...init,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        ...(init.headers ?? {}),
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${this.baseUrl}${path}`, {
+        ...init,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          ...(init.headers ?? {}),
+        },
+      });
+    } catch {
+      // 网络层失败（连接被拒 / DNS / CORS）——通常是 gateway 未启动
+      throw new Error(`无法连接 gateway（${this.baseUrl}）——请确认 gateway 已启动且地址正确`);
+    }
+
+    if (res.status === 401) {
+      throw new Error('鉴权失败（401）——token 错误或已失效');
+    }
     if (!res.ok) {
       const text = await res.text().catch(() => '');
       throw new Error(`${path} ${res.status}：${text.slice(0, 200)}`);

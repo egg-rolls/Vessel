@@ -3,13 +3,17 @@
   --bg: #0d1117;
   --bg-soft: #161b22;
   --bg-hover: #1c2129;
+  --bg-elevated: #21262d;
   --border: #21262d;
+  --border-strong: #30363d;
   --text: #e6edf3;
   --dim: #8b949e;
   --accent: #58a6ff;
   --green: #3fb950;
   --yellow: #d29922;
+  --orange: #f0883e;
   --red: #f85149;
+  --purple: #bc8cff;
   --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
 }
 
@@ -88,11 +92,19 @@ body {
 
 .conn-open .conn-dot {
   background: var(--green);
+  box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5);
+  animation: ping 2s ease-out infinite;
 }
 
-.conn-connecting .conn-dot {
-  background: var(--yellow);
+.conn-connecting .conn-dot,
+.conn-reconnecting .conn-dot {
+  background: var(--orange);
   animation: pulse 1s ease-in-out infinite;
+}
+
+.conn-reconnecting {
+  color: var(--orange);
+  border-color: rgba(240, 136, 62, 0.4);
 }
 
 .conn-error .conn-dot,
@@ -103,6 +115,18 @@ body {
 @keyframes pulse {
   50% {
     opacity: 0.3;
+  }
+}
+
+@keyframes ping {
+  0% {
+    box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.5);
+  }
+  70% {
+    box-shadow: 0 0 0 5px rgba(63, 185, 80, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(63, 185, 80, 0);
   }
 }
 
@@ -117,6 +141,7 @@ body {
   color: var(--text);
   font-family: var(--mono);
   font-size: 13px;
+  transition: border-color 0.15s ease;
 }
 
 .token-input:focus,
@@ -160,6 +185,7 @@ body {
 .sidebar-title {
   position: sticky;
   top: 0;
+  z-index: 1;
   padding: 12px 16px;
   font-size: 12px;
   text-transform: uppercase;
@@ -183,17 +209,22 @@ body {
   background: transparent;
   border: none;
   border-bottom: 1px solid var(--border);
+  border-left: 3px solid transparent;
   color: var(--text);
   cursor: pointer;
+  transition:
+    background 0.12s ease,
+    border-color 0.12s ease;
 }
 
 .session-item:hover {
   background: var(--bg-hover);
+  border-left-color: var(--border-strong);
 }
 
 .session-item.active {
   background: rgba(88, 166, 255, 0.1);
-  box-shadow: inset 3px 0 0 var(--accent);
+  border-left-color: var(--accent);
 }
 
 .session-title {
@@ -243,6 +274,54 @@ body {
   border-color: rgba(248, 81, 73, 0.4);
 }
 
+/* ── 侧栏工具区块 ── */
+.tools {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 0;
+}
+
+.tools-empty {
+  padding: 10px 16px;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.tool-item {
+  padding: 8px 16px;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s ease;
+}
+
+.tool-item:hover {
+  background: var(--bg-hover);
+  border-left-color: var(--purple);
+}
+
+.tool-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+
+.tool-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--purple);
+}
+
+.tool-desc {
+  margin-top: 3px;
+  padding-left: 14px;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.4;
+}
+
 /* ── 时间线 ── */
 .timeline {
   min-height: 0;
@@ -264,6 +343,11 @@ body {
   border-radius: 8px;
   background: var(--bg-soft);
   overflow: hidden;
+  transition: border-color 0.12s ease;
+}
+
+.run-card:hover {
+  border-color: var(--border-strong);
 }
 
 .run-card.running {
@@ -335,45 +419,91 @@ body {
   padding: 4px 0;
 }
 
+/* ── 事件行：时间戳 + 类型色块 + 内容 ── */
 .row {
   display: flex;
   align-items: baseline;
   gap: 8px;
   padding: 3px 0;
   font-size: 13px;
+  line-height: 1.5;
 }
 
-.row .kind {
+.row .ts {
   flex: none;
-  width: 18px;
-  text-align: center;
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
-.tool-started .kind,
-.tool-completed .kind {
-  color: var(--accent);
-}
-
-.tool-completed .kind {
-  color: var(--green);
-}
-
-.tool-failed .kind,
-.raw-error .kind {
-  color: var(--red);
-}
-
-.guardrail {
-  color: var(--yellow);
-}
-
-.row.llm,
-.row.raw {
+.type-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 18px;
   color: var(--dim);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  white-space: nowrap;
 }
 
-.row.raw .mono {
-  color: var(--text);
+.type-tag.tag-tool-start {
+  color: var(--accent);
+  border-color: rgba(88, 166, 255, 0.4);
+  background: rgba(88, 166, 255, 0.08);
+}
+
+.type-tag.tag-tool-done {
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.4);
+  background: rgba(63, 185, 80, 0.08);
+}
+
+.type-tag.tag-tool-fail {
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.4);
+  background: rgba(248, 81, 73, 0.08);
+}
+
+.type-tag.tag-guard {
+  color: var(--yellow);
+  border-color: rgba(210, 153, 34, 0.4);
+  background: rgba(210, 153, 34, 0.08);
+}
+
+.type-tag.tag-llm {
+  color: var(--purple);
+  border-color: rgba(188, 140, 255, 0.4);
+  background: rgba(188, 140, 255, 0.08);
+}
+
+.type-tag.tag-error {
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.5);
+  background: rgba(248, 81, 73, 0.1);
+}
+
+/* 工具调用行缩进 + 左边框，形成嵌套层次 */
+.row.tag-tool-start,
+.row.tag-tool-done,
+.row.tag-tool-fail {
+  margin-left: 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--border);
+}
+
+.row.tag-tool-start {
+  border-left-color: rgba(88, 166, 255, 0.35);
+}
+
+.row.tag-tool-done {
+  border-left-color: rgba(63, 185, 80, 0.35);
+}
+
+.row.tag-tool-fail {
+  border-left-color: rgba(248, 81, 73, 0.35);
 }
 
 .run-footer {
@@ -400,9 +530,10 @@ body {
 
 .run-output {
   margin: 8px 0 0;
-  padding: 8px;
+  padding: 10px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
   border-radius: 6px;
   font-family: var(--mono);
   font-size: 12px;
@@ -441,6 +572,7 @@ body {
   border-radius: 6px;
   color: var(--text);
   font-size: 14px;
+  transition: border-color 0.15s ease;
 }
 
 .control-input:disabled {
@@ -460,6 +592,11 @@ button {
   border-radius: 6px;
   font-weight: 600;
   cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.send-btn:hover:not(:disabled) {
+  background: #6cb6ff;
 }
 
 .send-btn:disabled {
@@ -475,6 +612,7 @@ button {
   border-radius: 6px;
   color: var(--text);
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 
 .ghost-btn:disabled {
