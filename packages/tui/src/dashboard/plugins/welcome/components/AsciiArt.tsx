@@ -1,4 +1,4 @@
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 import type React from 'react';
 
 /**
@@ -6,27 +6,40 @@ import type React from 'react';
  * Hermes-style elegant design
  */
 export const AsciiArt: React.FC = () => {
-  const logo = [
-    '██╗   ██╗███████╗███████╗███████╗███████╗██╗',
-    '██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██║',
-    '██║   ██║█████╗  ███████╗███████╗█████╗  ██║',
-    '╚██╗ ██╔╝██╔══╝  ╚════██║╚════██║██╔══╝  ██║',
-    ' ╚████╔╝ ███████╗███████║███████║███████╗███████╗',
-    '  ╚═══╝  ╚══════╝╚══════╝╚══════╝╚══════╝╚══════╝',
+  const { stdout } = useStdout();
+  const terminalWidth = stdout?.columns || 80;
+
+  const lines = [
+    '██╗   ██╗███████╗███████╗███████╗███████╗██╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗',
+    '██║   ██║██╔════╝██╔════╝██╔════╝██╔════╝██║      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝',
+    '██║   ██║█████╗  ███████╗███████╗█████╗  ██║█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║   ',
+    '╚██╗ ██╔╝██╔══╝  ╚════██║╚════██║██╔══╝  ██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║   ',
+    ' ╚████╔╝ ███████╗███████║███████║███████╗███████╗ ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║   ',
+    '  ╚═══╝  ╚══════╝╚══════╝╚══════╝╚══════╝╚══════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝   ',
   ];
 
-  const tagline = '🚀 Self-organizing Agent Harness';
+  // 小图标版本（终端宽度 < 100 时使用）
+  const smallLines = [
+    '██╗   ██╗███████╗██████╗',
+    '██║   ██║██╔════╝██╔══██╗',
+    '██║   ██║█████╗  ██████╔╝',
+    '╚██╗ ██╔╝██╔══╝  ██╔══██╗',
+    ' ╚████╔╝ ███████╗██║  ██║',
+    '  ╚═══╝  ╚══════╝╚═╝  ╚═╝',
+  ];
+
+  // 根据终端宽度选择图标版本
+  const useSmallIcon = terminalWidth < 100;
+  const displayLines = useSmallIcon ? smallLines : lines;
 
   return (
-    <Box flexDirection="column" alignItems="center">
-      {logo.map((line) => (
-        <Text key={line} color="blue" bold>
+    <Box flexDirection="column">
+      {displayLines.map((line, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: static logo
+        <Text key={i} color="blue" bold>
           {line}
         </Text>
       ))}
-      <Box marginTop={1}>
-        <Text color="gray">{tagline}</Text>
-      </Box>
     </Box>
   );
 };

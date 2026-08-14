@@ -32,17 +32,9 @@ export const HealthStatus: React.FC<HealthStatusProps> = ({ health }) => {
   const statusIcon = health.status === 'healthy' ? '✅' : health.status === 'warning' ? '⚠️' : '❌';
 
   return (
-    <Box flexDirection="column">
-      <Text color="blue" bold>
-        ┌─ Health ──────────────────────────────────────────────┐
-      </Text>
-      <Text color="white">
-        │ Status │ {statusIcon} {health.status.padEnd(33)}│
-      </Text>
-      <Text color="white">│ Uptime │ {formatUptime(health.uptime).padEnd(35)}│</Text>
-      <Text color="white">│ Memory │ {formatMemory(health.memoryUsage).padEnd(35)}│</Text>
-      <Text color="blue" bold>
-        └───────────────────────────────────────────────────────┘
+    <Box marginTop={1}>
+      <Text color="gray">
+        {`${statusIcon} ${health.status} · ${formatUptime(health.uptime)} · ${formatMemory(health.memoryUsage)}`}
       </Text>
     </Box>
   );

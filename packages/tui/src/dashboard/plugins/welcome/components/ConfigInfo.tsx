@@ -11,16 +11,9 @@ interface ConfigInfoProps {
  */
 export const ConfigInfo: React.FC<ConfigInfoProps> = ({ config }) => {
   return (
-    <Box flexDirection="column">
-      <Text color="blue" bold>
-        ┌─ Configuration ──────────────────────────────────────┐
-      </Text>
-      <Text color="white">│ Model │ {config.model.padEnd(35)}│</Text>
-      <Text color="white">│ Provider │ {config.provider.padEnd(35)}│</Text>
-      <Text color="white">│ Session │ {config.baseUrl.padEnd(35)}│</Text>
-      <Text color="white">│ Workspace │ {config.workspace.padEnd(35)}│</Text>
-      <Text color="blue" bold>
-        └───────────────────────────────────────────────────────┘
+    <Box marginTop={1}>
+      <Text color="gray" bold>
+        {config.provider} | {config.model}
       </Text>
     </Box>
   );
