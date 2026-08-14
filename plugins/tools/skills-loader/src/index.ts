@@ -16,6 +16,43 @@ const debug = (...args: unknown[]): void => {
   if (process.env.VESSEL_DEBUG) console.error(...args);
 };
 
+/**
+ * 解析 SKILL.md 开头的 YAML frontmatter（`---\n...\n---` 包裹）。
+ * 用简单字符串解析，不引入 yaml 依赖。非法行/非法 frontmatter 跳过，不中断加载。
+ */
+function parseFrontmatter(content: string): Record<string, string> {
+  const fields: Record<string, string> = {};
+  const lines = content.split('\n');
+
+  const firstLine = lines[0];
+  // 首行必须是 `---`，否则视为无 frontmatter
+  if (firstLine === undefined || firstLine.trim() !== '---') return fields;
+
+  // 找闭合的 `---`
+  let endIndex = -1;
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line !== undefined && line.trim() === '---') {
+      endIndex = i;
+      break;
+    }
+  }
+  if (endIndex === -1) return fields;
+
+  for (let i = 1; i < endIndex; i++) {
+    const line = lines[i];
+    if (line === undefined) continue;
+    const match = /^([A-Za-z0-9_-]+)\s*:\s*(.*)$/.exec(line);
+    const key = match?.[1];
+    const rawValue = match?.[2];
+    if (key === undefined) continue;
+    const value = (rawValue ?? '').trim().replace(/^['"]|['"]$/g, '');
+    fields[key] = value;
+  }
+
+  return fields;
+}
+
 /** Skill 定义 */
 export interface Skill {
   name: string;
@@ -89,17 +126,33 @@ export class SkillsManager {
     const name = path.basename(filePath, '.md');
     const content = fs.readFileSync(filePath, 'utf-8');
 
+    // 回退描述：第一个 `# ` 标题
     const lines = content.split('\n');
     const titleLine = lines.find((l) => l.startsWith('# '));
-    const description = titleLine ? titleLine.substring(2).trim() : `Skill: ${name}`;
+    const titleDescription = titleLine ? titleLine.substring(2).trim() : `Skill: ${name}`;
 
-    this.skills.set(name, {
+    // frontmatter 优先；无 frontmatter 或字段缺失时回退到标题
+    const fields = parseFrontmatter(content);
+    const description =
+      fields.description && fields.description.trim() !== '' ? fields.description : titleDescription;
+
+    const metadata: Record<string, unknown> = {};
+    if (fields.when_to_use && fields.when_to_use.trim() !== '') {
+      metadata.when_to_use = fields.when_to_use;
+    }
+
+    const skill: Skill = {
       name,
       description,
       content,
       source: 'file',
       filePath,
-    });
+    };
+    if (Object.keys(metadata).length > 0) {
+      skill.metadata = metadata;
+    }
+
+    this.skills.set(name, skill);
   }
 
   /** 移除已删除文件的 Skill */
@@ -196,6 +249,52 @@ export class SkillsManager {
    */
   registerSkill(skill: Skill): void {
     this.skills.set(skill.name, skill);
+  }
+
+  /**
+   * 添加 Skill：写入文件并加载进内存。
+   * 默认写入 skillsDir 下的 `<name>.md`；重名时抛「Skill 已存在」。
+   */
+  addSkill(name: string, content: string, filePath?: string): Skill {
+    if (this.skills.has(name)) {
+      throw new Error('Skill 已存在');
+    }
+
+    const skillsDir = path.resolve(this.config.skillsDir ?? './skills');
+    const targetPath = filePath ?? path.join(skillsDir, `${name}.md`);
+
+    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+    fs.writeFileSync(targetPath, content, 'utf-8');
+
+    this.loadSkillFile(targetPath);
+
+    // 若自定义 filePath 的 basename 与 name 不一致，仍以 name 为键
+    const loadedName = path.basename(targetPath, '.md');
+    if (loadedName !== name) {
+      const loaded = this.skills.get(loadedName);
+      this.skills.delete(loadedName);
+      if (loaded) {
+        this.skills.set(name, { ...loaded, name });
+      }
+    }
+
+    return this.skills.get(name)!;
+  }
+
+  /**
+   * 移除 Skill：删除文件与内存记录。
+   * 不存在时抛「Skill 不存在」。
+   */
+  removeSkill(name: string): void {
+    const skill = this.skills.get(name);
+    if (!skill) {
+      throw new Error('Skill 不存在');
+    }
+
+    if (skill.filePath && fs.existsSync(skill.filePath)) {
+      fs.unlinkSync(skill.filePath);
+    }
+    this.skills.delete(name);
   }
 
   /**
@@ -355,11 +454,68 @@ export function createSkillsLoaderPlugin(config?: SkillsLoaderConfig): Plugin {
         },
       });
 
+      host.registerTool({
+        name: 'add_skill',
+        description: '添加一个新技能。将 Markdown 内容写入技能文件并加载进技能管理器。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: 'Skill 名称（将作为文件名 `<name>.md`）',
+            },
+            content: {
+              type: 'string',
+              description: 'Skill 内容（Markdown，可选 frontmatter）',
+            },
+            filePath: {
+              type: 'string',
+              description: '可选，自定义文件路径；缺省写入 skillsDir 下的 `<name>.md`',
+            },
+          },
+          required: ['name', 'content'],
+        },
+        handler: async (args) => {
+          const { name, content, filePath } = args as {
+            name: string;
+            content: string;
+            filePath?: string;
+          };
+          try {
+            skillsManager.addSkill(name, content, filePath);
+            return '已添加';
+          } catch (err) {
+            return (err as Error).message;
+          }
+        },
+      });
+
+      host.registerTool({
+        name: 'remove_skill',
+        description: '移除一个技能（删除文件与内存记录）。',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            name: {
+              type: 'string',
+              description: '要移除的 Skill 名称',
+            },
+          },
+          required: ['name'],
+        },
+        handler: async (args) => {
+          const { name } = args as { name: string };
+          try {
+            skillsManager.removeSkill(name);
+            return '已移除';
+          } catch (err) {
+            return (err as Error).message;
+          }
+        },
+      });
+
       // 注册 BeforeLlm Hook（实际注入 Skill 内容到 system prompt）
       host.registerHook(createSkillInjectionHook(skillsManager));
-
-      // 将 skillsManager 存储在 host 上，供其他组件使用
-      (host as unknown as Record<string, unknown>).__skillsManager = skillsManager;
 
       // 递归加载 Skill 文件
       const skillsDir = path.resolve(loaderConfig.skillsDir ?? './skills');
