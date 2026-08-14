@@ -61,7 +61,6 @@ function InkRepl({ ctx }: InkReplProps) {
     run_id: string;
     toolName: string;
   } | null>(null);
-  const [showDashboard, setShowDashboard] = useState(true); // 启动时显示 Dashboard
   const [dashboardContent, setDashboardContent] = useState<React.ReactNode[]>([]); // Dashboard 渲染内容
 
   const commands = useMemo(() => createCommands(), []);
@@ -247,11 +246,6 @@ function InkRepl({ ctx }: InkReplProps) {
   // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
   // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
-    // 隐藏 Dashboard 当用户开始输入
-    if (showDashboard && !key.escape) {
-      setShowDashboard(false);
-    }
-
     // ask-user / 权限弹窗显示时，键盘交给弹窗组件自己的 useInput
     if (askUserActive || permissionOverlay) return;
 
@@ -338,12 +332,9 @@ function InkRepl({ ctx }: InkReplProps) {
       <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
 
       {/* Dashboard 显示区域 */}
-      {showDashboard && dashboardContent.length > 0 && (
+      {dashboardContent.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
           {dashboardContent}
-          <Text color="gray" dimColor>
-            Press any key to start chatting...
-          </Text>
         </Box>
       )}
 
