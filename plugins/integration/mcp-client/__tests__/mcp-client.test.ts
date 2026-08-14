@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { HookType, MemoryEventStream, MemoryPluginHost } from '@vessel/core';
-import mcpClientPlugin from '../src/index';
+import type { McpClientManager } from '../src/index';
+import mcpClientPlugin, { createMcpTools } from '../src/index';
 
 describe('mcp-client 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -140,5 +141,42 @@ describe('mcp-client 插件（P2）', () => {
       { run_id: 'r1', messages: [], events: new MemoryEventStream() },
     );
     expect(result).toBe('服务器未连接');
+  });
+});
+
+describe('read_resource 工具（已连接状态）', () => {
+  // 通过 createMcpTools 注入 stub manager，模拟「已连接 + 已发现资源」的状态，
+  // 覆盖 SPEC §2.2 的「资源不存在」与「返回资源内容」两条分支。
+  function createStubTools() {
+    const resources = [{ uri: 'file:///known.txt', name: 'known' }];
+    const manager = {
+      get: (_name: string) => ({
+        getResources: () => resources,
+        readResource: (uri: string) => Promise.resolve(`content of ${uri}`),
+      }),
+    } as unknown as McpClientManager;
+    return createMcpTools(manager);
+  }
+
+  it('已连接 + 不存在 uri → 返回「资源不存在」', async () => {
+    const tools = createStubTools();
+    const readResource = tools.find((t) => t.name === 'read_resource');
+    expect(readResource).toBeDefined();
+    const result = await readResource?.handler(
+      { name: 'srv', uri: 'file:///missing.txt' },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
+    expect(result).toBe('资源不存在');
+  });
+
+  it('已连接 + 合法 uri → 返回资源内容', async () => {
+    const tools = createStubTools();
+    const readResource = tools.find((t) => t.name === 'read_resource');
+    expect(readResource).toBeDefined();
+    const result = await readResource?.handler(
+      { name: 'srv', uri: 'file:///known.txt' },
+      { run_id: 'r1', messages: [], events: new MemoryEventStream() },
+    );
+    expect(result).toBe('content of file:///known.txt');
   });
 });
