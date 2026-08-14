@@ -216,7 +216,15 @@ async function runWithConfig(result: BootstrapResult) {
     console.log(`\n${renderGatewayBanner(gateway)}\n`);
   }
 
-  if (headless) {
+  // 纯 serve 模式（--serve 且无 --run）：gateway 常驻，不进 REPL，直到 SIGINT/SIGTERM。
+  if (gateway && !headless) {
+    console.log('Gateway 运行中… 按 Ctrl+C 停止。\n');
+    await new Promise<void>((resolve) => {
+      const stop = () => resolve();
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
+    });
+  } else if (headless) {
     await runHeadless(runtime, ctx.session, {
       runArg,
       pipeMode,
