@@ -9,15 +9,10 @@
  * 工具真相源 = PluginHost；本插件不再持有 tools/skills/mcpConnections 台账副本。
  */
 
-import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type {
-  Plugin,
-  PluginHost,
-  ToolContext,
-  ToolDefinition,
-} from '../../../../packages/core/src/index';
+import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
+import { requestPermission } from './permission';
 
 /** 持久化工具模板（安全，不使用 eval/new Function） */
 interface PersistedToolTemplate {
@@ -133,35 +128,6 @@ function buildToolFromTemplate(tpl: PersistedToolTemplate): ToolDefinition {
 
     default:
       throw new Error(`Unknown template type: ${tpl.type}. Supported: shell, http`);
-  }
-}
-
-/**
- * 用事件流等待用户授权（ADR-029）。
- * 发 `tool.permission.request` 事件 → `waitFor('tool.permission.response', { requestId })`。
- * 无订阅者/超时时兜底返回 'ask'，交由运行时决定。
- */
-async function requestPermission(
-  ctx: ToolContext,
-  tool: string,
-  input: unknown,
-  timeout = 30000,
-): Promise<'allow' | 'deny' | 'ask'> {
-  const requestId = randomUUID();
-  ctx.events.publish({
-    type: 'tool.permission.request',
-    run_id: ctx.run_id,
-    data: { requestId, tool, input },
-    ts: Date.now(),
-  });
-  try {
-    const data = (await ctx.events.waitFor('tool.permission.response', {
-      requestId,
-      timeout,
-    })) as { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean };
-    return data.decision ?? (data.allowed === false ? 'deny' : 'allow');
-  } catch {
-    return 'ask';
   }
 }
 

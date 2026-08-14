@@ -9,17 +9,10 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline';
-import type {
-  Hook,
-  HookContext,
-  Plugin,
-  PluginHost,
-  ToolContext,
-  ToolDefinition,
-} from '@vessel/core';
+import type { Hook, HookContext, Plugin, PluginHost, ToolDefinition } from '@vessel/core';
 import { HookType } from '@vessel/core';
+import { requestPermission } from '../../../tools/meta-tools/src/permission';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -127,6 +120,11 @@ class McpConnection {
 
   get status(): string {
     return this._status;
+  }
+
+  /** 获取连接配置（供管理器 list() 还原完整配置，避免丢 command/args/env） */
+  getConfig(): McpServerConfig {
+    return { ...this.config };
   }
 
   /**
@@ -508,10 +506,7 @@ class McpClientManager {
    * 列出所有连接
    */
   list(): McpServerConfig[] {
-    return Array.from(this.connections.values()).map((c) => ({
-      name: c.name,
-      command: '',
-    }));
+    return Array.from(this.connections.values()).map((c) => c.getConfig());
   }
 
   /**
@@ -529,35 +524,6 @@ class McpClientManager {
 }
 
 // ── 工具定义 ──────────────────────────────────────
-
-/**
- * 用事件流等待用户授权（ADR-029）。
- * 发 `tool.permission.request` 事件 → `waitFor('tool.permission.response', { requestId })`。
- * 无订阅者/超时时兜底返回 'ask'，交由运行时决定。
- */
-async function requestPermission(
-  ctx: ToolContext,
-  tool: string,
-  input: unknown,
-  timeout = 30000,
-): Promise<'allow' | 'deny' | 'ask'> {
-  const requestId = randomUUID();
-  ctx.events.publish({
-    type: 'tool.permission.request',
-    run_id: ctx.run_id,
-    data: { requestId, tool, input },
-    ts: Date.now(),
-  });
-  try {
-    const data = (await ctx.events.waitFor('tool.permission.response', {
-      requestId,
-      timeout,
-    })) as { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean };
-    return data.decision ?? (data.allowed === false ? 'deny' : 'allow');
-  } catch {
-    return 'ask';
-  }
-}
 
 function createMcpTools(manager: McpClientManager): ToolDefinition[] {
   return [
@@ -611,7 +577,8 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
             `Prompts: ${prompts.map((p) => p.name).join(', ') || '无'}`,
           ].join('\n');
         } catch (err) {
-          return `连接失败: ${err}`;
+          const message = err instanceof Error ? err.message : String(err);
+          return `连接失败: ${message}`;
         }
       },
     },
@@ -718,6 +685,16 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
 
 // ── Hook ──────────────────────────────────────────
 
+/**
+ * ADR-018 约定：BeforeLlm hook 通过写入 `ctx.system_prompt` 注入内容，
+ * loop 在 BeforeLlm 之后把 `ctx.system_prompt` 作为本次 LLM 请求的 system 消息。
+ * core 的 `HookContext` 未声明该字段（ADR-017 Core 冻结，不扩展其类型），
+ * 插件以本地类型显式约定该注入契约。
+ */
+interface BeforeLlmCtx extends HookContext {
+  system_prompt?: string;
+}
+
 function createMcpContextHook(manager: McpClientManager): Hook {
   return {
     name: 'mcp-context-injection',
@@ -725,13 +702,9 @@ function createMcpContextHook(manager: McpClientManager): Hook {
     priority: 80,
     run: async (ctx: HookContext): Promise<HookContext | null> => {
       // 将 MCP 提供的 resources/prompts 摘要注入上下文
-      // 使用公开接口获取信息
-      void manager;
-
-      // 使用公开接口获取信息
       const tools = manager.listAllTools();
       if (tools.length > 0) {
-        const extended = ctx as HookContext & { system_prompt?: string };
+        const extended = ctx as BeforeLlmCtx;
         const mcpInfo = `\n<!-- MCP 已连接服务器 -->\n已连接 ${tools.length} 个 MCP 工具。使用 mcp_list 查看详情。`;
         extended.system_prompt = (extended.system_prompt ?? '') + mcpInfo;
       }

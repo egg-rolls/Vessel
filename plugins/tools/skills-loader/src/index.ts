@@ -8,8 +8,8 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import type { Hook, HookContext, Plugin, PluginHost } from '../../../../packages/core/src/index';
-import { HookType as HookTypeEnum } from '../../../../packages/core/src/index';
+import type { Hook, HookContext, Plugin, PluginHost } from '@vessel/core';
+import { HookType as HookTypeEnum } from '@vessel/core';
 
 /** 调试输出门控（VESSEL_DEBUG 开启才打印，避免每次启动刷屏 stderr） */
 const debug = (...args: unknown[]): void => {
@@ -395,6 +395,16 @@ export class SkillsManager {
 }
 
 /**
+ * ADR-018 约定：BeforeLlm hook 通过写入 `ctx.system_prompt` 注入内容，
+ * loop 在 BeforeLlm 之后把 `ctx.system_prompt` 作为本次 LLM 请求的 system 消息。
+ * core 的 `HookContext` 未声明该字段（ADR-017 Core 冻结，不扩展其类型），
+ * 插件以本地类型显式约定该注入契约。
+ */
+interface BeforeLlmCtx extends HookContext {
+  system_prompt?: string;
+}
+
+/**
  * 创建 BeforeLlm Hook，将自动加载的 Skill 内容注入到 system prompt
  */
 function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
@@ -406,7 +416,7 @@ function createSkillInjectionHook(skillsManager: SkillsManager): Hook {
       const skillContent = skillsManager.getAutoLoadedContent();
 
       if (skillContent) {
-        const extended = ctx as HookContext & { system_prompt?: string };
+        const extended = ctx as BeforeLlmCtx;
         const existingSystem = extended.system_prompt ?? '';
         // 将 Skill 内容注入到 system prompt 前缀
         extended.system_prompt = `<!-- 自动加载的 Skills -->\n${skillContent}\n\n${existingSystem}`;
