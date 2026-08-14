@@ -16,7 +16,15 @@ interface InputBoxProps {
   width?: number;
 }
 
-export function InputBox({ value, onChange, onSubmit, placeholder, argHint, inputKey, width = 80 }: InputBoxProps) {
+export function InputBox({
+  value,
+  onChange,
+  onSubmit,
+  placeholder,
+  argHint,
+  inputKey,
+  width = 80,
+}: InputBoxProps) {
   return (
     <Box flexDirection="column">
       {/* 上边框 */}
@@ -24,7 +32,9 @@ export function InputBox({ value, onChange, onSubmit, placeholder, argHint, inpu
 
       {/* 输入行 */}
       <Box>
-        <Text color="blue" bold>{'>'} </Text>
+        <Text color="blue" bold>
+          {'>'}{' '}
+        </Text>
         <TextInput
           key={inputKey}
           value={value}
