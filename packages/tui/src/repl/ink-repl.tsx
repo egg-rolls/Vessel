@@ -8,7 +8,6 @@
 
 import type { SessionInfo } from '@vessel/core';
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
-import TextInput from 'ink-text-input';
 import type React from 'react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
@@ -21,6 +20,7 @@ import {
   filterCommands,
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
+import { InputBox } from '../components/InputBox.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
@@ -382,16 +382,13 @@ function InkRepl({ ctx }: InkReplProps) {
 
       {/* 输入框 - 只在没有独占交互组件时显示 */}
       {!state.showResumePicker && !permissionOverlay && !askUserActive && (
-        <Box>
-          <Text color="cyan">vessel&gt; </Text>
-          <TextInput
-            key={inputCaretKey}
-            value={input}
-            onChange={setInput}
-            onSubmit={handleSubmit}
-          />
-          {argHint && <Text color="gray">{argHint}</Text>}
-        </Box>
+        <InputBox
+          inputKey={inputCaretKey}
+          value={input}
+          onChange={setInput}
+          onSubmit={handleSubmit}
+          argHint={argHint}
+        />
       )}
 
       {/* 内联命令补全（输入框下方） */}
