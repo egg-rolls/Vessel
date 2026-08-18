@@ -1,6 +1,6 @@
-import type { ReplContext } from '../repl-context';
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import type { ReplContext } from '../repl-context';
 import type {
   AssetInfo,
   ConfigInfo,
@@ -142,11 +142,13 @@ async function discoverSkills(config: ReplContext['config']): Promise<AssetInfo[
 
 async function collectMarkdownFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
-  const nested = await Promise.all(entries.map(async (entry) => {
-    const fullPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return collectMarkdownFiles(fullPath);
-    return entry.isFile() && entry.name.endsWith('.md') ? [fullPath] : [];
-  }));
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return collectMarkdownFiles(fullPath);
+      return entry.isFile() && entry.name.endsWith('.md') ? [fullPath] : [];
+    }),
+  );
   return nested.flat();
 }
 

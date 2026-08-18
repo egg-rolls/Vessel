@@ -87,6 +87,13 @@ export interface McpServerConfig {
 export interface McpClientConfig {
   /** 预配置的 MCP Server 列表 */
   servers?: McpServerConfig[];
+  /** 应用层状态同步回调 */
+  onStatusChange?: (status: {
+    name: string;
+    status: 'connecting' | 'connected' | 'error' | 'disconnected';
+    tools: number;
+    error?: string;
+  }) => void;
 }
 
 // ── MCP 客户端实现 ────────────────────────────────
@@ -119,6 +126,7 @@ class McpConnection {
   private pluginHost: PluginHost | null = null;
   private registeredToolNames: Set<string> = new Set();
   private _status: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
+  private stderr = '';
 
   constructor(config: McpServerConfig) {
     this.name = config.name;
@@ -143,7 +151,6 @@ class McpConnection {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...this.config.env },
         cwd: this.config.cwd,
-        shell: true,
       });
 
       this.process = proc;
@@ -160,15 +167,17 @@ class McpConnection {
 
       // 读取 stderr（日志）
       if (proc.stderr) {
-        proc.stderr.on('data', (_data: Buffer) => {
-          // MCP server 日志，静默记录
+        proc.stderr.on('data', (data: Buffer) => {
+          this.stderr += data.toString();
         });
       }
 
       // 进程退出
       proc.on('close', (code) => {
+        const details = this.stderr.trim();
+        const message = `MCP server "${this.name}" exited with code ${code}${details ? `: ${details}` : ''}`;
         this._status = 'disconnected';
-        this.rejectAllPending(new Error(`MCP server "${this.name}" exited with code ${code}`));
+        this.rejectAllPending(new Error(message));
       });
 
       proc.on('error', (err) => {
@@ -209,7 +218,8 @@ class McpConnection {
         })
         .catch((err) => {
           this._status = 'error';
-          reject(err);
+          const message = err instanceof Error ? err.message : String(err);
+          reject(new Error(`${message}${this.stderr.trim() ? `: ${this.stderr.trim()}` : ''}`));
         });
     });
   }
@@ -765,7 +775,7 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
     version: '0.1.0',
     description:
       'MCP client plugin — connects to MCP servers via JSON-RPC over stdio and bridges tools/resources/prompts',
-    install(host: PluginHost) {
+    async install(host: PluginHost) {
       const manager = new McpClientManager();
       manager.setHost(host);
 
@@ -779,14 +789,32 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
 
       // 自动连接预配置的 MCP Server
       const servers = config?.servers ?? [];
-      for (const serverConfig of servers) {
-        manager.connect(serverConfig).catch((err) => {
-          console.error(
-            `[mcp-client] Failed to auto-connect "${serverConfig.name}":`,
-            (err as Error).message,
-          );
-        });
-      }
+      await Promise.all(
+        servers.map(async (serverConfig) => {
+          config?.onStatusChange?.({
+            name: serverConfig.name,
+            status: 'connecting',
+            tools: 0,
+          });
+          try {
+            await manager.connect(serverConfig);
+            config?.onStatusChange?.({
+              name: serverConfig.name,
+              status: 'connected',
+              tools: manager.get(serverConfig.name)?.getTools().length ?? 0,
+            });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            config?.onStatusChange?.({
+              name: serverConfig.name,
+              status: 'error',
+              tools: 0,
+              error,
+            });
+            console.error(`[mcp-client] Failed to auto-connect "${serverConfig.name}":`, error);
+          }
+        }),
+      );
     },
   };
 }

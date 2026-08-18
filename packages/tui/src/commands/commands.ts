@@ -21,9 +21,9 @@
  * /resume 照搬 Hermes pending one-shot：无参->编号列表 + 置 pending；下一行裸数字->恢复。
  */
 
-import type { ReplContext } from '../repl-context.js';
 import type { AssetBrowserKind } from '../components/AssetBrowser.js';
 import { DashboardService } from '../dashboard/dashboard-service.js';
+import type { ReplContext } from '../repl-context.js';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -393,11 +393,19 @@ function sessionsCommand(): CommandEntry {
   };
 }
 
-async function renderAssetFallback(kind: AssetBrowserKind, ctx: ReplContext): Promise<CommandResult> {
+async function renderAssetFallback(
+  kind: AssetBrowserKind,
+  ctx: ReplContext,
+): Promise<CommandResult> {
   const assets = await new DashboardService(ctx).getAssets();
   const lines = [`\n${kind.toUpperCase()}:`];
   if (kind === 'assets') {
-    lines.push(`  Plugins: ${assets.plugins.length}`, `  MCP Servers: ${assets.mcpServers.length}`, `  Skills: ${assets.skills.length}`, `  Tools: ${assets.tools.length}`);
+    lines.push(
+      `  Plugins: ${assets.plugins.length}`,
+      `  MCP Servers: ${assets.mcpServers.length}`,
+      `  Skills: ${assets.skills.length}`,
+      `  Tools: ${assets.tools.length}`,
+    );
   } else {
     const items = getAssetFallbackItems(kind, assets);
     lines.push(...(items.length > 0 ? items.map((item) => `  - ${item}`) : ['  None available.']));
@@ -407,9 +415,14 @@ async function renderAssetFallback(kind: AssetBrowserKind, ctx: ReplContext): Pr
   return { handled: true, output };
 }
 
-function getAssetFallbackItems(kind: Exclude<AssetBrowserKind, 'assets'>, assets: Awaited<ReturnType<DashboardService['getAssets']>>): string[] {
-  if (kind === 'plugins') return assets.plugins.map((item) => `${item.name} (${item.enabled ? 'enabled' : 'disabled'})`);
-  if (kind === 'mcp') return assets.mcpServers.map((item) => `${item.name} (${item.status}, tools: ${item.tools})`);
+function getAssetFallbackItems(
+  kind: Exclude<AssetBrowserKind, 'assets'>,
+  assets: Awaited<ReturnType<DashboardService['getAssets']>>,
+): string[] {
+  if (kind === 'plugins')
+    return assets.plugins.map((item) => `${item.name} (${item.enabled ? 'enabled' : 'disabled'})`);
+  if (kind === 'mcp')
+    return assets.mcpServers.map((item) => `${item.name} (${item.status}, tools: ${item.tools})`);
   if (kind === 'skills') return assets.skills.map((item) => `${item.name}: ${item.description}`);
   return assets.tools.map((item) => `${item.name}: ${item.description}`);
 }

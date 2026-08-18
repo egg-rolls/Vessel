@@ -19,11 +19,15 @@ import {
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import type { McpAsset } from '../packages/tui/src/dashboard/types';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
+import {
+  createMcpClientPlugin,
+  type McpClientConfig,
+} from '../plugins/integration/mcp-client/src/index';
 import { ConfigDeclared } from './config-declared';
 import { DirScanner } from './dir-scanner';
 import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
-import { createMcpClientPlugin, type McpClientConfig } from '../plugins/integration/mcp-client/src/index';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -152,11 +156,26 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   const plugins: Plugin[] = [];
+  const mcpServers: McpAsset[] | undefined = getMcpConfig(configuredPlugins, 'mcp-client').servers?.map((server) => ({
+    name: server.name,
+    status: 'connecting' as const,
+    tools: 0,
+  }));
+  const mcpConfig = getMcpConfig(configuredPlugins, 'mcp-client');
+  mcpConfig.onStatusChange = (status) => {
+    const asset = mcpServers?.find((server) => server.name === status.name);
+    if (asset) {
+      asset.status = status.status;
+      asset.tools = status.tools;
+      if (status.error) asset.error = status.error;
+    }
+  };
   for (const name of defaultPluginNames) {
     if (name.startsWith('provider-')) continue;
-    const p = name === 'mcp-client'
-      ? createMcpClientPlugin(getMcpConfig(configuredPlugins, name))
-      : await pluginRegistry.loadPlugin(name);
+    const p =
+      name === 'mcp-client'
+        ? createMcpClientPlugin(mcpConfig)
+        : await pluginRegistry.loadPlugin(name);
     if (p) plugins.push(p);
   }
 
@@ -232,11 +251,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
-    mcpServers: getMcpConfig(configuredPlugins, 'mcp-client').servers?.map((server) => ({
-      name: server.name,
-      status: 'connected' as const,
-      tools: 0,
-    })),
+    mcpServers,
     config,
     newSessionId,
     onExit: () => {

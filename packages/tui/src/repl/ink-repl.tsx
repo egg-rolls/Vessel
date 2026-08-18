@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
+import { AssetBrowser } from '../components/AssetBrowser.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
   type CommandItem,
@@ -21,7 +22,6 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InputBox } from '../components/InputBox.js';
-import { AssetBrowser } from '../components/AssetBrowser.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
@@ -161,15 +161,25 @@ function InkRepl({ ctx }: InkReplProps) {
   useEffect(() => {
     const unsubscribe = ctx.events.subscribe((event) => {
       if (event.type !== 'mcp.server.connected' && event.type !== 'mcp.server.disconnected') return;
-      const data = event.data as { name?: string; status?: 'connected' | 'disconnected'; tools?: number };
+      const data = event.data as {
+        name?: string;
+        status?: 'connected' | 'disconnected';
+        tools?: number;
+      };
       if (!data.name) return;
       const current = ctx.mcpServers ?? [];
       const next = current.filter((server) => server.name !== data.name);
-      ctx.mcpServers = event.type === 'mcp.server.disconnected' ? next : [...next, {
-          name: data.name,
-          status: data.status ?? 'connected',
-          tools: data.tools ?? 0,
-        }];
+      ctx.mcpServers =
+        event.type === 'mcp.server.disconnected'
+          ? next
+          : [
+              ...next,
+              {
+                name: data.name,
+                status: data.status ?? 'connected',
+                tools: data.tools ?? 0,
+              },
+            ];
       setAssetVersion((version) => version + 1);
     });
     return unsubscribe;

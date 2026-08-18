@@ -49,7 +49,12 @@ function handle(request: Request): void {
   if (request.method === 'tools/call') {
     const name = request.params?.name;
     const args = request.params?.arguments as { message?: string } | undefined;
-    const text = name === 'echo' ? (args?.message ?? '') : name === 'now' ? new Date().toISOString() : `Unknown tool: ${String(name)}`;
+    const text =
+      name === 'echo'
+        ? (args?.message ?? '')
+        : name === 'now'
+          ? new Date().toISOString()
+          : `Unknown tool: ${String(name)}`;
     reply(request.id, { content: [{ type: 'text', text }] });
     return;
   }
