@@ -4,7 +4,7 @@ plugins:
     config:
       servers:
         - name: echo
-          command: "C:/Users/LI Dan/AppData/Roaming/npm/bun.cmd"
+          command: C:/Users/LI Dan/AppData/Roaming/npm/bun.cmd
           args:
             - run
             - examples/mcp-echo-server.ts

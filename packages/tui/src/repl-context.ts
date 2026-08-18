@@ -71,6 +71,10 @@ export interface ReplContext {
     test: (name: string) => Promise<{ status: string; tools: number }>;
   };
   testTool?: (name: string, input: unknown) => Promise<string>;
+  pluginController?: {
+    setEnabled: (name: string, enabled: boolean) => Promise<void>;
+    getConfig: (name: string) => Record<string, unknown>;
+  };
 
   /** 当前配置（只读）——状态栏/system prompt 引用 */
   config: VesselConfig;

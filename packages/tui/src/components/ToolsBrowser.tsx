@@ -5,7 +5,7 @@ import { DashboardService } from '../dashboard/dashboard-service.js';
 import type { ToolAsset } from '../dashboard/types.js';
 import type { ReplContext } from '../repl-context.js';
 
-function buildTestInput(schemaText: string | undefined): Record<string, unknown> {
+export function buildTestInput(schemaText: string | undefined): Record<string, unknown> {
   const schema = parseSchema(schemaText);
   const properties = isRecord(schema.properties) ? schema.properties : {};
   const required = Array.isArray(schema.required) ? schema.required : Object.keys(properties);
