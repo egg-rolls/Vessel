@@ -28,6 +28,7 @@ import {
 import { ConfigDeclared } from './config-declared';
 import { DirScanner } from './dir-scanner';
 import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
+import { randomUUID } from 'node:crypto';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -257,6 +258,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     plugins: plugins.map((p) => p.name),
     mcpServers,
     mcpController,
+    testTool: async (name, input) =>
+      tools.invoke(
+        { id: randomUUID(), type: 'function', function: { name, arguments: JSON.stringify(input) } },
+        { run_id: randomUUID(), session_id: currentSessionId, messages: [], events },
+      ),
     config,
     newSessionId,
     onExit: () => {

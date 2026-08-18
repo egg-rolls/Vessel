@@ -22,7 +22,7 @@ export const PluginsBrowser: React.FC<{ ctx: ReplContext; onClose: () => void }>
     {items.map((plugin, index) => <Text key={plugin.name} color={index === selected ? 'cyan' : undefined}>
       {index === selected ? '❯ ' : '  '}{plugin.name}  {plugin.enabled ? 'enabled' : 'disabled'}
     </Text>)}
-    {details && item && <Box flexDirection="column" marginTop={1}><Text color="blue">Plugin: {item.name}</Text><Text color="gray">Status │ {item.enabled ? 'enabled' : 'disabled'}</Text><Text color="gray">Version │ {item.version}</Text></Box>}
+    {details && item && <Box flexDirection="column" marginTop={1}><Text color="blue">Plugin: {item.name}</Text><Text color="gray">Status │ {item.enabled ? 'enabled' : 'disabled'}</Text><Text color="gray">Version │ {item.version}</Text><Text color="gray">Configuration │ managed by vessel.yaml</Text></Box>}
     <Text color="gray">↑↓ Navigate · Enter Details · R Refresh · Esc Back</Text>
   </Box>;
 };

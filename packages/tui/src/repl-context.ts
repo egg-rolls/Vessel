@@ -70,6 +70,7 @@ export interface ReplContext {
     reconnect: (name: string) => Promise<void>;
     test: (name: string) => Promise<{ status: string; tools: number }>;
   };
+  testTool?: (name: string, input: unknown) => Promise<string>;
 
   /** 当前配置（只读）——状态栏/system prompt 引用 */
   config: VesselConfig;
