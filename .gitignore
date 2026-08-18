@@ -150,3 +150,6 @@ docker-compose.override.yml
 # Repo docs use .md; .txt is only transient/local, never tracked.
 # ----------------------------------------------------------
 *.txt
+
+# Local reference repository
+claude-code代码参考示例/
