@@ -1,0 +1,10 @@
+plugins:
+  - name: mcp-client
+    enabled: true
+    config:
+      servers:
+        - name: echo
+          command: "C:/Users/LI Dan/AppData/Roaming/npm/bun.cmd"
+          args:
+            - run
+            - examples/mcp-echo-server.ts

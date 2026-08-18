@@ -588,7 +588,7 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         },
         required: ['name', 'command'],
       },
-      handler: async (input) => {
+      handler: async (input, ctx) => {
         const { name, command, args } = input as {
           name: string;
           command: string;
@@ -603,6 +603,13 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
           const tools = conn.getTools();
           const resources = conn.getResources();
           const prompts = conn.getPrompts();
+
+          ctx.events.publish({
+            type: 'mcp.server.connected',
+            run_id: ctx.run_id,
+            data: { name, status: 'connected', tools: tools.length },
+            ts: Date.now(),
+          });
 
           return [
             `已连接到 MCP 服务器 "${name}"`,
@@ -628,9 +635,15 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         },
         required: ['name'],
       },
-      handler: async (input) => {
+      handler: async (input, ctx) => {
         const { name } = input as { name: string };
         manager.disconnect(name);
+        ctx.events.publish({
+          type: 'mcp.server.disconnected',
+          run_id: ctx.run_id,
+          data: { name, status: 'disconnected', tools: 0 },
+          ts: Date.now(),
+        });
         return `已断开 MCP 服务器 "${name}"`;
       },
     },

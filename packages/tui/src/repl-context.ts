@@ -19,6 +19,7 @@ import type {
   SessionBackend,
   ToolRegistry,
 } from '@vessel/core';
+import type { McpAsset, SkillAsset } from './dashboard/types.js';
 
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
 export interface ReplContext {
@@ -58,6 +59,12 @@ export interface ReplContext {
 
   /** 已加载插件名——状态栏显示 "meta-tools, skills-loader" */
   plugins: string[];
+
+  /** 已加载 Skills 摘要；由壳或 skills-loader bridge 注入 */
+  skills?: SkillAsset[];
+
+  /** 当前运行时动态发现的 MCP Server */
+  mcpServers?: McpAsset[];
 
   /** 当前配置（只读）——状态栏/system prompt 引用 */
   config: VesselConfig;

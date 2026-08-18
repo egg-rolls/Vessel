@@ -131,6 +131,27 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  if (config.plugins) {
+    config.plugins.forEach((plugin, index) => {
+      if (plugin.name !== 'mcp-client') return;
+      const servers = plugin.config?.servers;
+      if (servers === undefined) return;
+      if (!Array.isArray(servers)) {
+        errors.push({ path: `plugins[${index}].config.servers`, message: 'MCP servers must be an array', value: servers });
+        return;
+      }
+      servers.forEach((server, serverIndex) => {
+        if (!server || typeof server !== 'object') {
+          errors.push({ path: `plugins[${index}].config.servers[${serverIndex}]`, message: 'MCP server must be an object', value: server });
+          return;
+        }
+        const entry = server as Record<string, unknown>;
+        if (typeof entry.name !== 'string' || entry.name.trim() === '') errors.push({ path: `plugins[${index}].config.servers[${serverIndex}].name`, message: 'MCP server name must be a non-empty string', value: entry.name });
+        if (typeof entry.command !== 'string' || entry.command.trim() === '') errors.push({ path: `plugins[${index}].config.servers[${serverIndex}].command`, message: 'MCP server command must be a non-empty string', value: entry.command });
+      });
+    });
+  }
+
   // 校验 limits
   if (config.limits) {
     const { requestLimit, toolCallsLimit, inputTokensLimit, outputTokensLimit, totalCostLimit } =

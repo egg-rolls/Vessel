@@ -23,6 +23,7 @@ import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { ConfigDeclared } from './config-declared';
 import { DirScanner } from './dir-scanner';
 import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
+import { createMcpClientPlugin, type McpClientConfig } from '../plugins/integration/mcp-client/src/index';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -153,7 +154,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const plugins: Plugin[] = [];
   for (const name of defaultPluginNames) {
     if (name.startsWith('provider-')) continue;
-    const p = await pluginRegistry.loadPlugin(name);
+    const p = name === 'mcp-client'
+      ? createMcpClientPlugin(getMcpConfig(configuredPlugins, name))
+      : await pluginRegistry.loadPlugin(name);
     if (p) plugins.push(p);
   }
 
@@ -229,6 +232,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
+    mcpServers: getMcpConfig(configuredPlugins, 'mcp-client').servers?.map((server) => ({
+      name: server.name,
+      status: 'connected' as const,
+      tools: 0,
+    })),
     config,
     newSessionId,
     onExit: () => {
@@ -243,4 +251,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     cleanup: () => runtime.dispose(),
   };
+}
+
+function getMcpConfig(
+  pluginConfigs: NonNullable<Awaited<ReturnType<typeof loadConfig>>['config']['plugins']>,
+  name: string,
+): McpClientConfig {
+  const config = pluginConfigs.find((plugin) => plugin.name === name)?.config;
+  if (!config || typeof config !== 'object') return {};
+  const servers = (config as { servers?: unknown }).servers;
+  if (!Array.isArray(servers)) return {};
+  return { servers: servers as McpClientConfig['servers'] };
 }

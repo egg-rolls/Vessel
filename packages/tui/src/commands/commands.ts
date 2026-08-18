@@ -22,6 +22,8 @@
  */
 
 import type { ReplContext } from '../repl-context.js';
+import type { AssetBrowserKind } from '../components/AssetBrowser.js';
+import { DashboardService } from '../dashboard/dashboard-service.js';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -35,6 +37,7 @@ export interface ReplState {
   showResumePicker: boolean;
   /** 主循环运行标志--/exit 置 false 退出 */
   running: boolean;
+  assetBrowser?: AssetBrowserKind;
 }
 
 /** 命令执行结果 */
@@ -107,6 +110,7 @@ export function createCommands(): CommandRegistry {
   reg.register(mcpCommand());
   reg.register(skillsCommand());
   reg.register(assetsCommand());
+  reg.register(sessionsCommand());
   reg.register(resumeCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
@@ -286,7 +290,11 @@ function toolsCommand(): CommandEntry {
     name: 'tools',
     description: '列出已注册工具',
     usage: '/tools',
-    run: (_args, ctx, _state) => {
+    run: (_args, ctx, state) => {
+      if (process.stdin.isTTY) {
+        state.assetBrowser = 'tools';
+        return { handled: true };
+      }
       const list = ctx.tools.list();
       if (list.length === 0) {
         const output = '\nNo tools registered.\n';
@@ -310,7 +318,11 @@ function pluginsCommand(): CommandEntry {
     name: 'plugins',
     description: '列出已加载插件',
     usage: '/plugins',
-    run: (_args, ctx, _state) => {
+    run: (_args, ctx, state) => {
+      if (process.stdin.isTTY) {
+        state.assetBrowser = 'plugins';
+        return { handled: true };
+      }
       const plugins = ctx.plugins;
       if (plugins.length === 0) {
         const output = '\nNo plugins loaded.\n';
@@ -334,10 +346,10 @@ function mcpCommand(): CommandEntry {
     name: 'mcp',
     description: '列出 MCP 服务器状态',
     usage: '/mcp',
-    run: (_args, _ctx, _state) => {
-      const output = '\nMCP browser not yet implemented.\n';
-      console.log(output);
-      return { handled: true, output };
+    run: async (_args, ctx, state) => {
+      if (!process.stdin.isTTY) return renderAssetFallback('mcp', ctx);
+      state.assetBrowser = 'mcp';
+      return { handled: true };
     },
   };
 }
@@ -349,10 +361,10 @@ function skillsCommand(): CommandEntry {
     name: 'skills',
     description: '列出可用 Skills',
     usage: '/skills',
-    run: (_args, _ctx, _state) => {
-      const output = '\nSkills browser not yet implemented.\n';
-      console.log(output);
-      return { handled: true, output };
+    run: async (_args, ctx, state) => {
+      if (!process.stdin.isTTY) return renderAssetFallback('skills', ctx);
+      state.assetBrowser = 'skills';
+      return { handled: true };
     },
   };
 }
@@ -364,12 +376,42 @@ function assetsCommand(): CommandEntry {
     name: 'assets',
     description: '资产总览仪表盘',
     usage: '/assets',
-    run: (_args, _ctx, _state) => {
-      const output = '\nAssets dashboard not yet implemented.\n';
-      console.log(output);
-      return { handled: true, output };
+    run: async (_args, ctx, state) => {
+      if (!process.stdin.isTTY) return renderAssetFallback('assets', ctx);
+      state.assetBrowser = 'assets';
+      return { handled: true };
     },
   };
+}
+
+function sessionsCommand(): CommandEntry {
+  return {
+    name: 'sessions',
+    description: '会话浏览器（恢复、历史）',
+    usage: '/sessions',
+    run: (args, ctx, state) => resumeCommand().run(args, ctx, state),
+  };
+}
+
+async function renderAssetFallback(kind: AssetBrowserKind, ctx: ReplContext): Promise<CommandResult> {
+  const assets = await new DashboardService(ctx).getAssets();
+  const lines = [`\n${kind.toUpperCase()}:`];
+  if (kind === 'assets') {
+    lines.push(`  Plugins: ${assets.plugins.length}`, `  MCP Servers: ${assets.mcpServers.length}`, `  Skills: ${assets.skills.length}`, `  Tools: ${assets.tools.length}`);
+  } else {
+    const items = getAssetFallbackItems(kind, assets);
+    lines.push(...(items.length > 0 ? items.map((item) => `  - ${item}`) : ['  None available.']));
+  }
+  const output = `${lines.join('\n')}\n`;
+  console.log(output);
+  return { handled: true, output };
+}
+
+function getAssetFallbackItems(kind: Exclude<AssetBrowserKind, 'assets'>, assets: Awaited<ReturnType<DashboardService['getAssets']>>): string[] {
+  if (kind === 'plugins') return assets.plugins.map((item) => `${item.name} (${item.enabled ? 'enabled' : 'disabled'})`);
+  if (kind === 'mcp') return assets.mcpServers.map((item) => `${item.name} (${item.status}, tools: ${item.tools})`);
+  if (kind === 'skills') return assets.skills.map((item) => `${item.name}: ${item.description}`);
+  return assets.tools.map((item) => `${item.name}: ${item.description}`);
 }
 
 // ── /help ─────────────────────────────────────────
