@@ -55,6 +55,7 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
   const [selected, setSelected] = useState(0);
   const [detail, setDetail] = useState(false);
   const [filter, setFilter] = useState('');
+  const [showHelp, setShowHelp] = useState(false);
   const refresh = useCallback(async () => {
     const service = new DashboardService(ctx);
     if (kind === 'assets') setDashboard(await service.getFullData());
@@ -71,6 +72,7 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
   const items = assets ? getRows(kind, assets) : [];
   useInput((input, key) => {
     if (key.escape) return onClose();
+    if (input === '?') return setShowHelp((value) => !value);
     if (key.backspace || key.delete) return setFilter((value) => value.slice(0, -1));
     if (key.return) return setDetail((value) => !value);
     if (input.toLowerCase() === 'r') return void refresh();
@@ -80,6 +82,10 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
     }
     if (kind === 'mcp' && selectedItem && input.toLowerCase() === 'c') {
       void ctx.mcpController?.reconnect(selectedItem.name).then(refresh);
+      return;
+    }
+    if (kind === 'mcp' && selectedItem && input.toLowerCase() === 't') {
+      void ctx.mcpController?.test(selectedItem.name).then(refresh);
       return;
     }
     if (!key.ctrl && !key.meta && input.length === 1 && /[\w- ]/.test(input)) {
@@ -112,7 +118,10 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
         <Text color="gray">
           Memory │ {Math.round(dashboard.health.memoryUsage / 1024 / 1024)} MB
         </Text>
-        <Text color="gray">R Refresh Esc Back</Text>
+        <Text color="gray">R Refresh ? Help Esc Back</Text>
+        {showHelp && (
+          <Text color="yellow">R Refresh · ? Help · Esc Back</Text>
+        )}
       </Box>
     );
   return (
@@ -131,8 +140,14 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
         </Text>
       ))}
       <Text color="gray">
-        Type to filter ↑↓ Navigate Enter Details R Refresh C Reconnect D Disconnect Esc Back
+        Type to filter ↑↓ Navigate Enter Details R Refresh C Reconnect T Test D Disconnect Esc Back
       </Text>
+      {showHelp && (
+        <Text color="yellow">
+          ↑↓ Navigate · Enter Details · R Refresh · ? Help · Esc Back
+          {kind === 'mcp' ? ' · C Reconnect · T Test · D Disconnect' : ''}
+        </Text>
+      )}
       {detail && selectedItem && <Text color="gray">{selectedItem.detail}</Text>}
     </Box>
   );

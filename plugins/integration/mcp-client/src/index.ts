@@ -97,6 +97,7 @@ export interface McpClientConfig {
   onControllerReady?: (controller: {
     disconnect: (name: string) => void;
     reconnect: (name: string) => Promise<void>;
+    test: (name: string) => Promise<{ status: string; tools: number }>;
   }) => void;
 }
 
@@ -394,6 +395,10 @@ class McpConnection {
     return [...this.tools];
   }
 
+  async test(): Promise<void> {
+    await this.discoverTools();
+  }
+
   /**
    * 断开连接
    */
@@ -493,6 +498,13 @@ class McpClientManager {
   async reconnect(config: McpServerConfig): Promise<void> {
     this.disconnect(config.name);
     await this.connect(config);
+  }
+
+  async test(name: string): Promise<{ status: string; tools: number }> {
+    const connection = this.connections.get(name);
+    if (!connection) throw new Error(`MCP server "${name}" is not connected`);
+    await connection.test();
+    return { status: connection.status, tools: connection.getTools().length };
   }
 
   /**
@@ -804,6 +816,7 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
             tools: manager.get(name)?.getTools().length ?? 0,
           });
         },
+        test: async (name) => manager.test(name),
       });
 
       // 注册 MCP 管理工具

@@ -68,6 +68,7 @@ export interface ReplContext {
   mcpController?: {
     disconnect: (name: string) => void;
     reconnect: (name: string) => Promise<void>;
+    test: (name: string) => Promise<{ status: string; tools: number }>;
   };
 
   /** 当前配置（只读）——状态栏/system prompt 引用 */
