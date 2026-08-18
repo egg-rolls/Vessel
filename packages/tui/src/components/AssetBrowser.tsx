@@ -3,6 +3,7 @@ import type React from 'react';
 import { useEffect, useState } from 'react';
 import { DashboardService } from '../dashboard/dashboard-service.js';
 import type { AssetInfo } from '../dashboard/types.js';
+import type { DashboardData } from '../dashboard/types.js';
 import type { ReplContext } from '../repl-context.js';
 
 export type AssetBrowserKind = 'assets' | 'plugins' | 'mcp' | 'skills' | 'tools';
@@ -25,25 +26,52 @@ function getRows(kind: AssetBrowserKind, assets: AssetInfo): Array<{ name: strin
 
 export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }) => {
   const [assets, setAssets] = useState<AssetInfo | null>(null);
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [selected, setSelected] = useState(0);
   const [detail, setDetail] = useState(false);
-  const refresh = () => new DashboardService(ctx).getAssets().then(setAssets);
+  const [filter, setFilter] = useState('');
+  const refresh = async () => {
+    const service = new DashboardService(ctx);
+    if (kind === 'assets') setDashboard(await service.getFullData());
+    setAssets(await service.getAssets());
+  };
   useEffect(() => { void refresh(); }, [ctx, ctx.mcpServers]);
   const items = assets ? getRows(kind, assets) : [];
   useInput((input, key) => {
     if (key.escape) return onClose();
+    if (key.backspace || key.delete) return setFilter((value) => value.slice(0, -1));
     if (key.return) return setDetail((value) => !value);
     if (input.toLowerCase() === 'r') return void refresh();
+    if (!key.ctrl && !key.meta && input.length === 1 && /[\w- ]/.test(input)) {
+      setFilter((value) => `${value}${input}`);
+      setSelected(0);
+      return;
+    }
     if (key.upArrow) return setSelected((value) => Math.max(0, value - 1));
-    if (key.downArrow) return setSelected((value) => Math.min(Math.max(0, items.length - 1), value + 1));
+    if (key.downArrow) return setSelected((value) => Math.min(Math.max(0, filteredItems.length - 1), value + 1));
   });
-  const selectedItem = items[selected];
+  const filteredItems = items.filter((item) => `${item.name} ${item.detail}`.toLowerCase().includes(filter.toLowerCase()));
+  const selectedItem = filteredItems[selected];
+  if (kind === 'assets' && dashboard) return <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1}>
+    <Text bold color="blue">Vessel Assets</Text>
+    <Text color="gray">Provider  │ {dashboard.config.provider}</Text>
+    <Text color="gray">Model     │ {dashboard.config.model}</Text>
+    <Text color="gray">Workspace │ {dashboard.config.workspace}</Text>
+    <Text color="gray">Plugins   │ {dashboard.assets.plugins.length}</Text>
+    <Text color="gray">MCP       │ {dashboard.assets.mcpServers.length}</Text>
+    <Text color="gray">Skills    │ {dashboard.assets.skills.length}</Text>
+    <Text color="gray">Tools     │ {dashboard.assets.tools.length}</Text>
+    <Text color="gray">Health    │ {dashboard.health.status}</Text>
+    <Text color="gray">Memory    │ {Math.round(dashboard.health.memoryUsage / 1024 / 1024)} MB</Text>
+    <Text color="gray">R Refresh  Esc Back</Text>
+  </Box>;
   return <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1}>
     <Text bold color="blue">{titles[kind]}</Text>
+    {filter && <Text color="gray">Filter: {filter}</Text>}
     {!assets && <Text color="gray">Loading...</Text>}
-    {assets && items.length === 0 && <Text color="gray">No assets available.</Text>}
-    {items.map((item, index) => <Text key={item.name} color={index === selected ? 'cyan' : undefined}>{index === selected ? '❯ ' : '  '}{item.name}{detail && index === selected ? ` — ${item.detail}` : ''}</Text>)}
-    <Text color="gray">↑↓ Navigate  Enter Details  R Refresh  Esc Back</Text>
+    {assets && filteredItems.length === 0 && <Text color="gray">No matching assets.</Text>}
+    {filteredItems.map((item, index) => <Text key={item.name} color={index === selected ? 'cyan' : undefined}>{index === selected ? '❯ ' : '  '}{item.name}{detail && index === selected ? ` — ${item.detail}` : ''}</Text>)}
+    <Text color="gray">Type to filter  ↑↓ Navigate  Enter Details  R Refresh  Esc Back</Text>
     {detail && selectedItem && <Text color="gray">{selectedItem.detail}</Text>}
   </Box>;
 };
