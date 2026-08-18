@@ -43,7 +43,10 @@ function getRows(
     }));
   if (kind === 'skills')
     return assets.skills.map((item) => ({ name: item.name, detail: item.description }));
-  return assets.tools.map((item) => ({ name: item.name, detail: item.description }));
+  return assets.tools.map((item) => ({
+    name: item.name,
+    detail: item.inputSchema ? `${item.description} · input: ${item.inputSchema}` : item.description,
+  }));
 }
 
 export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }) => {

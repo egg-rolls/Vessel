@@ -120,6 +120,7 @@ export interface ToolAsset {
   name: string;
   description: string;
   type: string;
+  inputSchema?: string;
 }
 
 /**

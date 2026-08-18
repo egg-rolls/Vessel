@@ -408,6 +408,22 @@ function InkRepl({ ctx }: InkReplProps) {
           onClose={() => {
             setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
           }}
+          onDelete={async (id) => {
+            if (id === state.currentSessionId) return;
+            await ctx.session.delete(id);
+            setResumeSessions(await ctx.session.listRich());
+          }}
+          onHistory={async (id) => {
+            const loaded = await ctx.session.load(id);
+            if (!loaded) return;
+            const lines = loaded.messages.flatMap((message) => [
+              `[${message.role}]`,
+              message.content,
+              '',
+            ]);
+            setHistory((prev) => [...prev, `History: ${id}`, ...lines]);
+            setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
+          }}
         />
       )}
 

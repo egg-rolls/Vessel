@@ -112,6 +112,7 @@ export class DashboardService implements IDashboardService {
       name: tool.name,
       description: tool.description,
       type: 'tool',
+      inputSchema: JSON.stringify(tool.inputSchema),
     }));
 
     return { plugins, mcpServers, skills, tools };
