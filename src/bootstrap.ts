@@ -162,6 +162,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tools: 0,
   }));
   const mcpConfig = getMcpConfig(configuredPlugins, 'mcp-client');
+  let mcpController: ReplContext['mcpController'];
+  mcpConfig.onControllerReady = (controller) => {
+    if (!mcpController) mcpController = controller;
+  };
   mcpConfig.onStatusChange = (status) => {
     const asset = mcpServers?.find((server) => server.name === status.name);
     if (asset) {
@@ -252,6 +256,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
     mcpServers,
+    mcpController,
     config,
     newSessionId,
     onExit: () => {

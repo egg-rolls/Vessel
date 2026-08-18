@@ -65,6 +65,10 @@ export interface ReplContext {
 
   /** 当前运行时动态发现的 MCP Server */
   mcpServers?: McpAsset[];
+  mcpController?: {
+    disconnect: (name: string) => void;
+    reconnect: (name: string) => Promise<void>;
+  };
 
   /** 当前配置（只读）——状态栏/system prompt 引用 */
   config: VesselConfig;

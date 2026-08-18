@@ -94,6 +94,10 @@ export interface McpClientConfig {
     tools: number;
     error?: string;
   }) => void;
+  onControllerReady?: (controller: {
+    disconnect: (name: string) => void;
+    reconnect: (name: string) => Promise<void>;
+  }) => void;
 }
 
 // ── MCP 客户端实现 ────────────────────────────────
@@ -486,6 +490,11 @@ class McpClientManager {
     this.connections.set(config.name, conn);
   }
 
+  async reconnect(config: McpServerConfig): Promise<void> {
+    this.disconnect(config.name);
+    await this.connect(config);
+  }
+
   /**
    * 断开 MCP Server
    */
@@ -778,6 +787,24 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
     async install(host: PluginHost) {
       const manager = new McpClientManager();
       manager.setHost(host);
+      const serversByName = new Map((config?.servers ?? []).map((server) => [server.name, server]));
+      config?.onControllerReady?.({
+        disconnect: (name) => {
+          manager.disconnect(name);
+          config?.onStatusChange?.({ name, status: 'disconnected', tools: 0 });
+        },
+        reconnect: async (name) => {
+          const server = serversByName.get(name);
+          if (!server) throw new Error(`MCP server "${name}" is not configured`);
+          config?.onStatusChange?.({ name, status: 'connecting', tools: 0 });
+          await manager.reconnect(server);
+          config?.onStatusChange?.({
+            name,
+            status: 'connected',
+            tools: manager.get(name)?.getTools().length ?? 0,
+          });
+        },
+      });
 
       // 注册 MCP 管理工具
       for (const tool of createMcpTools(manager)) {

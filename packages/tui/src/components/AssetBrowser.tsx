@@ -71,6 +71,14 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
     if (key.backspace || key.delete) return setFilter((value) => value.slice(0, -1));
     if (key.return) return setDetail((value) => !value);
     if (input.toLowerCase() === 'r') return void refresh();
+    if (kind === 'mcp' && selectedItem && input.toLowerCase() === 'd') {
+      ctx.mcpController?.disconnect(selectedItem.name);
+      return void refresh();
+    }
+    if (kind === 'mcp' && selectedItem && input.toLowerCase() === 'c') {
+      void ctx.mcpController?.reconnect(selectedItem.name).then(refresh);
+      return;
+    }
     if (!key.ctrl && !key.meta && input.length === 1 && /[\w- ]/.test(input)) {
       setFilter((value) => `${value}${input}`);
       setSelected(0);
@@ -119,7 +127,9 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
           {detail && index === selected ? ` — ${item.detail}` : ''}
         </Text>
       ))}
-      <Text color="gray">Type to filter ↑↓ Navigate Enter Details R Refresh Esc Back</Text>
+      <Text color="gray">
+        Type to filter ↑↓ Navigate Enter Details R Refresh C Reconnect D Disconnect Esc Back
+      </Text>
       {detail && selectedItem && <Text color="gray">{selectedItem.detail}</Text>}
     </Box>
   );
