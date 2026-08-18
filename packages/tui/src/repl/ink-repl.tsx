@@ -13,7 +13,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
-import { AssetBrowser } from '../components/AssetBrowser.js';
+import { AssetsBrowser } from '../components/AssetsBrowser.js';
+import { McpBrowser } from '../components/McpBrowser.js';
+import { PluginsBrowser } from '../components/PluginsBrowser.js';
+import { SkillsBrowser } from '../components/SkillsBrowser.js';
+import { ToolsBrowser } from '../components/ToolsBrowser.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
   type CommandItem,
@@ -373,11 +377,11 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 主内容区：资产浏览器独占全屏，否则显示聊天历史 */}
       {state.assetBrowser ? (
         <Box flexDirection="column" flexGrow={1}>
-          <AssetBrowser
-            kind={state.assetBrowser}
-            ctx={ctx}
-            onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
-          />
+          {state.assetBrowser === 'assets' && <AssetsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
+          {state.assetBrowser === 'mcp' && <McpBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
+          {state.assetBrowser === 'tools' && <ToolsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
+          {state.assetBrowser === 'plugins' && <PluginsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
+          {state.assetBrowser === 'skills' && <SkillsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
         </Box>
       ) : (
         <Box flexDirection="column" flexGrow={1}>
