@@ -99,9 +99,10 @@ export interface PluginAsset {
  */
 export interface McpAsset {
   name: string;
-  status: 'connected' | 'disconnected';
+  status: 'connecting' | 'connected' | 'disconnected' | 'error';
   tools: number;
   latency?: number;
+  error?: string;
 }
 
 /**
@@ -119,6 +120,7 @@ export interface ToolAsset {
   name: string;
   description: string;
   type: string;
+  inputSchema?: string;
 }
 
 /**

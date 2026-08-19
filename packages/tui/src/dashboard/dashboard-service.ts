@@ -1,3 +1,5 @@
+import { readdir, readFile } from 'node:fs/promises';
+import path from 'node:path';
 import type { ReplContext } from '../repl-context';
 import type {
   AssetInfo,
@@ -95,21 +97,22 @@ export class DashboardService implements IDashboardService {
         }
       }
     }
-    const mcpServers: AssetInfo['mcpServers'] = Array.from(mcpServerMap.entries()).map(
+    const inferredMcpServers: AssetInfo['mcpServers'] = Array.from(mcpServerMap.entries()).map(
       ([name, toolCount]) => ({
         name,
         status: 'connected' as const,
         tools: toolCount,
       }),
     );
+    const mcpServers = this.ctx.mcpServers ?? inferredMcpServers;
 
-    // Skills: no data source available in ReplContext
-    const skills: AssetInfo['skills'] = [];
+    const skills = this.ctx.skills ?? (await discoverSkills(this.ctx.config));
 
     const tools = toolList.map((tool) => ({
       name: tool.name,
       description: tool.description,
       type: 'tool',
+      inputSchema: JSON.stringify(tool.inputSchema),
     }));
 
     return { plugins, mcpServers, skills, tools };
@@ -125,4 +128,34 @@ export class DashboardService implements IDashboardService {
       active: 0,
     };
   }
+}
+
+async function discoverSkills(config: ReplContext['config']): Promise<AssetInfo['skills']> {
+  const configured = (config as { skills?: { dir?: string } }).skills?.dir;
+  const root = path.resolve(configured ?? './skills');
+  try {
+    const files = await collectMarkdownFiles(root);
+    return await Promise.all(files.map((filePath) => readSkillAsset(filePath)));
+  } catch {
+    return [];
+  }
+}
+
+async function collectMarkdownFiles(directory: string): Promise<string[]> {
+  const entries = await readdir(directory, { withFileTypes: true });
+  const nested = await Promise.all(
+    entries.map(async (entry) => {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) return collectMarkdownFiles(fullPath);
+      return entry.isFile() && entry.name.endsWith('.md') ? [fullPath] : [];
+    }),
+  );
+  return nested.flat();
+}
+
+async function readSkillAsset(filePath: string): Promise<AssetInfo['skills'][number]> {
+  const content = await readFile(filePath, 'utf8');
+  const name = path.basename(filePath, '.md');
+  const title = content.split('\n').find((line) => line.startsWith('# '));
+  return { name, description: title?.slice(2).trim() ?? `Skill: ${name}` };
 }

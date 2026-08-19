@@ -12,6 +12,8 @@ interface SessionTableProps {
   currentSessionId?: string;
   onSelect: (id: string) => void;
   onClose: () => void;
+  onDelete: (id: string) => Promise<void>;
+  onHistory: (id: string) => Promise<void>;
 }
 
 /** 相对时间格式化（如 "2h ago", "3d ago"） */
@@ -41,10 +43,18 @@ function truncate(str: string, max: number): string {
   return `${str.slice(0, max - 3)}...`;
 }
 
-export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: SessionTableProps) {
+export function SessionTable({
+  sessions,
+  currentSessionId,
+  onSelect,
+  onClose,
+  onDelete,
+  onHistory,
+}: SessionTableProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filterMode, setFilterMode] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const filteredSessions = useMemo(() => {
     if (!filterText) return sessions;
@@ -99,6 +109,21 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
           onSelect(selected.session_id);
         }
       }
+      return;
+    }
+
+    const selected = filteredSessions[selectedIndex];
+    if (selected && inputChar.toLowerCase() === 'd') {
+      if (deleteTarget === selected.session_id) {
+        void onDelete(selected.session_id);
+        setDeleteTarget(null);
+      } else {
+        setDeleteTarget(selected.session_id);
+      }
+      return;
+    }
+    if (selected && inputChar.toLowerCase() === 'h') {
+      void onHistory(selected.session_id);
       return;
     }
 
@@ -220,9 +245,12 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
         <Text color="gray">
           {filterMode
             ? 'Type to filter · Enter confirm · Esc clear filter'
-            : '↑↓ Navigate · Enter Resume · / or f Filter · 1-9 Quick Select · Esc Cancel'}
+            : '↑↓ Navigate · Enter Resume · D Delete · H History · / Filter · Esc Cancel'}
         </Text>
       </Box>
+      {deleteTarget && (
+        <Text color="yellow">Press D again to permanently delete the selected session.</Text>
+      )}
     </Box>
   );
 }

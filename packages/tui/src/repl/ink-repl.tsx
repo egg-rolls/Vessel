@@ -13,6 +13,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
+import { AssetsBrowser } from '../components/AssetsBrowser.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
   type CommandItem,
@@ -21,9 +22,13 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InputBox } from '../components/InputBox.js';
+import { McpBrowser } from '../components/McpBrowser.js';
+import { PluginsBrowser } from '../components/PluginsBrowser.js';
 import { SessionTable } from '../components/SessionTable.js';
+import { SkillsBrowser } from '../components/SkillsBrowser.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
+import { ToolsBrowser } from '../components/ToolsBrowser.js';
 import { DashboardManager } from '../dashboard/dashboard-manager.js';
 import { DashboardService } from '../dashboard/dashboard-service.js';
 import { AssetManagerPlugin } from '../dashboard/plugins/assets/index.js';
@@ -48,6 +53,7 @@ function InkRepl({ ctx }: InkReplProps) {
     pendingResume: false,
     showResumePicker: false,
     running: true,
+    assetBrowser: undefined,
   });
   const [input, setInput] = useState('');
   const [history, setHistory] = useState<string[]>([]);
@@ -62,6 +68,7 @@ function InkRepl({ ctx }: InkReplProps) {
     toolName: string;
   } | null>(null);
   const [dashboardContent, setDashboardContent] = useState<React.ReactNode[]>([]); // Dashboard 渲染内容
+  const [, setAssetVersion] = useState(0);
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -154,6 +161,33 @@ function InkRepl({ ctx }: InkReplProps) {
     });
     return unsubscribe;
   }, [ctx.events]);
+
+  useEffect(() => {
+    const unsubscribe = ctx.events.subscribe((event) => {
+      if (event.type !== 'mcp.server.connected' && event.type !== 'mcp.server.disconnected') return;
+      const data = event.data as {
+        name?: string;
+        status?: 'connected' | 'disconnected';
+        tools?: number;
+      };
+      if (!data.name) return;
+      const current = ctx.mcpServers ?? [];
+      const next = current.filter((server) => server.name !== data.name);
+      ctx.mcpServers =
+        event.type === 'mcp.server.disconnected'
+          ? next
+          : [
+              ...next,
+              {
+                name: data.name,
+                status: data.status ?? 'connected',
+                tools: data.tools ?? 0,
+              },
+            ];
+      setAssetVersion((version) => version + 1);
+    });
+    return unsubscribe;
+  }, [ctx]);
 
   // 当 showResumePicker 变为 true 时加载会话列表
   useEffect(() => {
@@ -280,6 +314,8 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
+    if (state.assetBrowser) return;
+
     if (key.ctrl && inputChar === 'c') {
       exit();
       return;
@@ -332,24 +368,59 @@ function InkRepl({ ctx }: InkReplProps) {
       <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
 
       {/* Dashboard 显示区域 */}
-      {dashboardContent.length > 0 && (
+      {!state.assetBrowser && dashboardContent.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
           {dashboardContent}
         </Box>
       )}
 
-      {/* 滚动区域：历史 + 流式输出，flexGrow 撑满剩余空间 */}
-      <Box flexDirection="column" flexGrow={1}>
-        {history.map((line, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
-          <Text key={i}>{line}</Text>
-        ))}
-        <StreamOutput
-          events={ctx.events}
-          clearSignal={clearSignal}
-          onComplete={handleStreamComplete}
-        />
-      </Box>
+      {/* 主内容区：资产浏览器独占全屏，否则显示聊天历史 */}
+      {state.assetBrowser ? (
+        <Box flexDirection="column" flexGrow={1}>
+          {state.assetBrowser === 'assets' && (
+            <AssetsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'mcp' && (
+            <McpBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'tools' && (
+            <ToolsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'plugins' && (
+            <PluginsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'skills' && (
+            <SkillsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+        </Box>
+      ) : (
+        <Box flexDirection="column" flexGrow={1}>
+          {history.map((line, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
+            <Text key={i}>{line}</Text>
+          ))}
+          <StreamOutput
+            events={ctx.events}
+            clearSignal={clearSignal}
+            onComplete={handleStreamComplete}
+          />
+        </Box>
+      )}
 
       {/* 底部固定区域：overlays + 输入框 + 补全框 */}
       {state.showResumePicker && (
@@ -364,6 +435,22 @@ function InkRepl({ ctx }: InkReplProps) {
             setHistory((prev) => [...prev, msg]);
           }}
           onClose={() => {
+            setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
+          }}
+          onDelete={async (id) => {
+            if (id === state.currentSessionId) return;
+            await ctx.session.delete(id);
+            setResumeSessions(await ctx.session.listRich());
+          }}
+          onHistory={async (id) => {
+            const loaded = await ctx.session.load(id);
+            if (!loaded) return;
+            const lines = loaded.messages.flatMap((message) => [
+              `[${message.role}]`,
+              message.content,
+              '',
+            ]);
+            setHistory((prev) => [...prev, `History: ${id}`, ...lines]);
             setState((prev) => ({ ...prev, showResumePicker: false, pendingResume: false }));
           }}
         />
@@ -381,7 +468,7 @@ function InkRepl({ ctx }: InkReplProps) {
       <AskUserDialog events={ctx.events} onActiveChange={setAskUserActive} />
 
       {/* 输入框 - 只在没有独占交互组件时显示 */}
-      {!state.showResumePicker && !permissionOverlay && !askUserActive && (
+      {!state.showResumePicker && !permissionOverlay && !askUserActive && !state.assetBrowser && (
         <InputBox
           inputKey={inputCaretKey}
           value={input}
@@ -440,6 +527,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     pendingResume: false,
     showResumePicker: false,
     running: true,
+    assetBrowser: undefined,
   };
 
   console.log(`Vessel  ·  ${ctx.provider.name} | ${ctx.provider.model}`);

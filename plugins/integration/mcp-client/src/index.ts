@@ -87,6 +87,18 @@ export interface McpServerConfig {
 export interface McpClientConfig {
   /** 预配置的 MCP Server 列表 */
   servers?: McpServerConfig[];
+  /** 应用层状态同步回调 */
+  onStatusChange?: (status: {
+    name: string;
+    status: 'connecting' | 'connected' | 'error' | 'disconnected';
+    tools: number;
+    error?: string;
+  }) => void;
+  onControllerReady?: (controller: {
+    disconnect: (name: string) => void;
+    reconnect: (name: string) => Promise<void>;
+    test: (name: string) => Promise<{ status: string; tools: number }>;
+  }) => void;
 }
 
 // ── MCP 客户端实现 ────────────────────────────────
@@ -119,6 +131,7 @@ class McpConnection {
   private pluginHost: PluginHost | null = null;
   private registeredToolNames: Set<string> = new Set();
   private _status: 'disconnected' | 'connecting' | 'connected' | 'error' = 'disconnected';
+  private stderr = '';
 
   constructor(config: McpServerConfig) {
     this.name = config.name;
@@ -143,7 +156,6 @@ class McpConnection {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, ...this.config.env },
         cwd: this.config.cwd,
-        shell: true,
       });
 
       this.process = proc;
@@ -160,15 +172,17 @@ class McpConnection {
 
       // 读取 stderr（日志）
       if (proc.stderr) {
-        proc.stderr.on('data', (_data: Buffer) => {
-          // MCP server 日志，静默记录
+        proc.stderr.on('data', (data: Buffer) => {
+          this.stderr += data.toString();
         });
       }
 
       // 进程退出
       proc.on('close', (code) => {
+        const details = this.stderr.trim();
+        const message = `MCP server "${this.name}" exited with code ${code}${details ? `: ${details}` : ''}`;
         this._status = 'disconnected';
-        this.rejectAllPending(new Error(`MCP server "${this.name}" exited with code ${code}`));
+        this.rejectAllPending(new Error(message));
       });
 
       proc.on('error', (err) => {
@@ -209,7 +223,8 @@ class McpConnection {
         })
         .catch((err) => {
           this._status = 'error';
-          reject(err);
+          const message = err instanceof Error ? err.message : String(err);
+          reject(new Error(`${message}${this.stderr.trim() ? `: ${this.stderr.trim()}` : ''}`));
         });
     });
   }
@@ -380,6 +395,10 @@ class McpConnection {
     return [...this.tools];
   }
 
+  async test(): Promise<void> {
+    await this.discoverTools();
+  }
+
   /**
    * 断开连接
    */
@@ -474,6 +493,18 @@ class McpClientManager {
     const conn = new McpConnection(config);
     await conn.connect(this.pluginHost);
     this.connections.set(config.name, conn);
+  }
+
+  async reconnect(config: McpServerConfig): Promise<void> {
+    this.disconnect(config.name);
+    await this.connect(config);
+  }
+
+  async test(name: string): Promise<{ status: string; tools: number }> {
+    const connection = this.connections.get(name);
+    if (!connection) throw new Error(`MCP server "${name}" is not connected`);
+    await connection.test();
+    return { status: connection.status, tools: connection.getTools().length };
   }
 
   /**
@@ -588,7 +619,7 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         },
         required: ['name', 'command'],
       },
-      handler: async (input) => {
+      handler: async (input, ctx) => {
         const { name, command, args } = input as {
           name: string;
           command: string;
@@ -603,6 +634,13 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
           const tools = conn.getTools();
           const resources = conn.getResources();
           const prompts = conn.getPrompts();
+
+          ctx.events.publish({
+            type: 'mcp.server.connected',
+            run_id: ctx.run_id,
+            data: { name, status: 'connected', tools: tools.length },
+            ts: Date.now(),
+          });
 
           return [
             `已连接到 MCP 服务器 "${name}"`,
@@ -628,9 +666,15 @@ function createMcpTools(manager: McpClientManager): ToolDefinition[] {
         },
         required: ['name'],
       },
-      handler: async (input) => {
+      handler: async (input, ctx) => {
         const { name } = input as { name: string };
         manager.disconnect(name);
+        ctx.events.publish({
+          type: 'mcp.server.disconnected',
+          run_id: ctx.run_id,
+          data: { name, status: 'disconnected', tools: 0 },
+          ts: Date.now(),
+        });
         return `已断开 MCP 服务器 "${name}"`;
       },
     },
@@ -752,9 +796,28 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
     version: '0.1.0',
     description:
       'MCP client plugin — connects to MCP servers via JSON-RPC over stdio and bridges tools/resources/prompts',
-    install(host: PluginHost) {
+    async install(host: PluginHost) {
       const manager = new McpClientManager();
       manager.setHost(host);
+      const serversByName = new Map((config?.servers ?? []).map((server) => [server.name, server]));
+      config?.onControllerReady?.({
+        disconnect: (name) => {
+          manager.disconnect(name);
+          config?.onStatusChange?.({ name, status: 'disconnected', tools: 0 });
+        },
+        reconnect: async (name) => {
+          const server = serversByName.get(name);
+          if (!server) throw new Error(`MCP server "${name}" is not configured`);
+          config?.onStatusChange?.({ name, status: 'connecting', tools: 0 });
+          await manager.reconnect(server);
+          config?.onStatusChange?.({
+            name,
+            status: 'connected',
+            tools: manager.get(name)?.getTools().length ?? 0,
+          });
+        },
+        test: async (name) => manager.test(name),
+      });
 
       // 注册 MCP 管理工具
       for (const tool of createMcpTools(manager)) {
@@ -766,14 +829,32 @@ export function createMcpClientPlugin(config?: McpClientConfig): Plugin {
 
       // 自动连接预配置的 MCP Server
       const servers = config?.servers ?? [];
-      for (const serverConfig of servers) {
-        manager.connect(serverConfig).catch((err) => {
-          console.error(
-            `[mcp-client] Failed to auto-connect "${serverConfig.name}":`,
-            (err as Error).message,
-          );
-        });
-      }
+      await Promise.all(
+        servers.map(async (serverConfig) => {
+          config?.onStatusChange?.({
+            name: serverConfig.name,
+            status: 'connecting',
+            tools: 0,
+          });
+          try {
+            await manager.connect(serverConfig);
+            config?.onStatusChange?.({
+              name: serverConfig.name,
+              status: 'connected',
+              tools: manager.get(serverConfig.name)?.getTools().length ?? 0,
+            });
+          } catch (err) {
+            const error = err instanceof Error ? err.message : String(err);
+            config?.onStatusChange?.({
+              name: serverConfig.name,
+              status: 'error',
+              tools: 0,
+              error,
+            });
+            console.error(`[mcp-client] Failed to auto-connect "${serverConfig.name}":`, error);
+          }
+        }),
+      );
     },
   };
 }

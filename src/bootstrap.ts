@@ -5,6 +5,8 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
+import { randomUUID } from 'node:crypto';
+import { parse as parseYaml, stringify } from 'yaml';
 import { loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
@@ -18,8 +20,13 @@ import {
   type Plugin,
   SQLiteSessionBackend,
 } from '../packages/core/src/index';
+import type { McpAsset } from '../packages/tui/src/dashboard/types';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
+import {
+  createMcpClientPlugin,
+  type McpClientConfig,
+} from '../plugins/integration/mcp-client/src/index';
 import { ConfigDeclared } from './config-declared';
 import { DirScanner } from './dir-scanner';
 import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
@@ -49,6 +56,10 @@ export function newSessionId(): string {
   const ts = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
   const hex = crypto.randomUUID().replace(/-/g, '').slice(0, 6);
   return `${ts}_${hex}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -151,9 +162,53 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   const plugins: Plugin[] = [];
+  const mcpServers: McpAsset[] | undefined = getMcpConfig(
+    configuredPlugins,
+    'mcp-client',
+  ).servers?.map((server) => ({
+    name: server.name,
+    status: 'connecting' as const,
+    tools: 0,
+  }));
+  const mcpConfig = getMcpConfig(configuredPlugins, 'mcp-client');
+  let mcpController: ReplContext['mcpController'];
+  const pluginController: ReplContext['pluginController'] = {
+    setEnabled: async (name, enabled) => {
+      const file = Bun.file('vessel.yaml');
+      const source = (await file.exists()) ? await file.text() : '';
+      const raw = parseYaml(source);
+      const document = isRecord(raw) ? raw : {};
+      const plugins = Array.isArray(document.plugins) ? document.plugins : [];
+      const plugin = plugins.find(
+        (item): item is Record<string, unknown> => isRecord(item) && item.name === name,
+      );
+      if (plugin) plugin.enabled = enabled;
+      else plugins.push({ name, enabled });
+      document.plugins = plugins;
+      await Bun.write('vessel.yaml', stringify(document));
+    },
+    getConfig: (name) => {
+      const plugin = config.plugins?.find((item) => item.name === name);
+      return plugin?.config ?? {};
+    },
+  };
+  mcpConfig.onControllerReady = (controller) => {
+    if (!mcpController) mcpController = controller;
+  };
+  mcpConfig.onStatusChange = (status) => {
+    const asset = mcpServers?.find((server) => server.name === status.name);
+    if (asset) {
+      asset.status = status.status;
+      asset.tools = status.tools;
+      if (status.error) asset.error = status.error;
+    }
+  };
   for (const name of defaultPluginNames) {
     if (name.startsWith('provider-')) continue;
-    const p = await pluginRegistry.loadPlugin(name);
+    const p =
+      name === 'mcp-client'
+        ? createMcpClientPlugin(mcpConfig)
+        : await pluginRegistry.loadPlugin(name);
     if (p) plugins.push(p);
   }
 
@@ -229,6 +284,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
+    mcpServers,
+    mcpController,
+    testTool: async (name, input) =>
+      tools.invoke(
+        {
+          id: randomUUID(),
+          type: 'function',
+          function: { name, arguments: JSON.stringify(input) },
+        },
+        { run_id: randomUUID(), session_id: currentSessionId, messages: [], events },
+      ),
+    pluginController,
     config,
     newSessionId,
     onExit: () => {
@@ -243,4 +310,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     cleanup: () => runtime.dispose(),
   };
+}
+
+function getMcpConfig(
+  pluginConfigs: NonNullable<Awaited<ReturnType<typeof loadConfig>>['config']['plugins']>,
+  name: string,
+): McpClientConfig {
+  const config = pluginConfigs.find((plugin) => plugin.name === name)?.config;
+  if (!config || typeof config !== 'object') return {};
+  const servers = (config as { servers?: unknown }).servers;
+  if (!Array.isArray(servers)) return {};
+  return { servers: servers as McpClientConfig['servers'] };
 }
