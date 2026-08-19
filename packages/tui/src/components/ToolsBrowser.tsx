@@ -48,12 +48,17 @@ function isUnsafeTool(name: string): boolean {
   return ['mcp_connect', 'mcp_disconnect'].includes(name);
 }
 
-export const ToolsBrowser: React.FC<{ ctx: ReplContext; onClose: () => void }> = ({ ctx, onClose }) => {
+export const ToolsBrowser: React.FC<{ ctx: ReplContext; onClose: () => void }> = ({
+  ctx,
+  onClose,
+}) => {
   const [items, setItems] = useState<ToolAsset[]>([]);
   const [selected, setSelected] = useState(0);
   const [details, setDetails] = useState(false);
   const [testResult, setTestResult] = useState<string>();
-  useEffect(() => { void new DashboardService(ctx).getAssets().then((data) => setItems(data.tools)); }, [ctx]);
+  useEffect(() => {
+    void new DashboardService(ctx).getAssets().then((data) => setItems(data.tools));
+  }, [ctx]);
   useInput((input, key) => {
     if (key.escape) return details ? setDetails(false) : onClose();
     if (key.upArrow) return setSelected((value) => Math.max(0, value - 1));
@@ -70,17 +75,35 @@ export const ToolsBrowser: React.FC<{ ctx: ReplContext; onClose: () => void }> =
     }
   });
   const item = items[selected];
-  return <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} flexGrow={1}>
-    <Text bold color="blue">Tools</Text>
-    {items.map((tool, index) => <Text key={tool.name} color={index === selected ? 'cyan' : undefined}>
-      {index === selected ? '❯ ' : '  '}{tool.name}
-    </Text>)}
-    {details && item && <Box flexDirection="column" marginTop={1}>
-      <Text color="blue">Tool: {item.name}</Text><Text color="gray">{item.description}</Text>
-      <Text color="gray" wrap="truncate">Input schema │ {item.inputSchema ?? '{}'}</Text>
-      <Text color="gray">Tool testing requires an input payload and permission confirmation.</Text>
-      {testResult && <Text color="yellow" wrap="truncate">Test result │ {testResult}</Text>}
-    </Box>}
-    <Text color="gray">↑↓ Navigate · Enter Details · T Test · R Refresh · Esc Back</Text>
-  </Box>;
+  return (
+    <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} flexGrow={1}>
+      <Text bold color="blue">
+        Tools
+      </Text>
+      {items.map((tool, index) => (
+        <Text key={tool.name} color={index === selected ? 'cyan' : undefined}>
+          {index === selected ? '❯ ' : '  '}
+          {tool.name}
+        </Text>
+      ))}
+      {details && item && (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color="blue">Tool: {item.name}</Text>
+          <Text color="gray">{item.description}</Text>
+          <Text color="gray" wrap="truncate">
+            Input schema │ {item.inputSchema ?? '{}'}
+          </Text>
+          <Text color="gray">
+            Tool testing requires an input payload and permission confirmation.
+          </Text>
+          {testResult && (
+            <Text color="yellow" wrap="truncate">
+              Test result │ {testResult}
+            </Text>
+          )}
+        </Box>
+      )}
+      <Text color="gray">↑↓ Navigate · Enter Details · T Test · R Refresh · Esc Back</Text>
+    </Box>
+  );
 };

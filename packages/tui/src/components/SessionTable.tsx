@@ -43,7 +43,14 @@ function truncate(str: string, max: number): string {
   return `${str.slice(0, max - 3)}...`;
 }
 
-export function SessionTable({ sessions, currentSessionId, onSelect, onClose, onDelete, onHistory }: SessionTableProps) {
+export function SessionTable({
+  sessions,
+  currentSessionId,
+  onSelect,
+  onClose,
+  onDelete,
+  onHistory,
+}: SessionTableProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filterMode, setFilterMode] = useState(false);
   const [filterText, setFilterText] = useState('');

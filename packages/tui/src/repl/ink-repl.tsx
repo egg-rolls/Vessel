@@ -14,10 +14,6 @@ import type { ReplState } from '../commands/commands.js';
 import { createCommands, doResume } from '../commands/commands.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { AssetsBrowser } from '../components/AssetsBrowser.js';
-import { McpBrowser } from '../components/McpBrowser.js';
-import { PluginsBrowser } from '../components/PluginsBrowser.js';
-import { SkillsBrowser } from '../components/SkillsBrowser.js';
-import { ToolsBrowser } from '../components/ToolsBrowser.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
   type CommandItem,
@@ -26,9 +22,13 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InputBox } from '../components/InputBox.js';
+import { McpBrowser } from '../components/McpBrowser.js';
+import { PluginsBrowser } from '../components/PluginsBrowser.js';
 import { SessionTable } from '../components/SessionTable.js';
+import { SkillsBrowser } from '../components/SkillsBrowser.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
+import { ToolsBrowser } from '../components/ToolsBrowser.js';
 import { DashboardManager } from '../dashboard/dashboard-manager.js';
 import { DashboardService } from '../dashboard/dashboard-service.js';
 import { AssetManagerPlugin } from '../dashboard/plugins/assets/index.js';
@@ -377,11 +377,36 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 主内容区：资产浏览器独占全屏，否则显示聊天历史 */}
       {state.assetBrowser ? (
         <Box flexDirection="column" flexGrow={1}>
-          {state.assetBrowser === 'assets' && <AssetsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
-          {state.assetBrowser === 'mcp' && <McpBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
-          {state.assetBrowser === 'tools' && <ToolsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
-          {state.assetBrowser === 'plugins' && <PluginsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
-          {state.assetBrowser === 'skills' && <SkillsBrowser ctx={ctx} onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))} />}
+          {state.assetBrowser === 'assets' && (
+            <AssetsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'mcp' && (
+            <McpBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'tools' && (
+            <ToolsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'plugins' && (
+            <PluginsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
+          {state.assetBrowser === 'skills' && (
+            <SkillsBrowser
+              ctx={ctx}
+              onClose={() => setState((prev) => ({ ...prev, assetBrowser: undefined }))}
+            />
+          )}
         </Box>
       ) : (
         <Box flexDirection="column" flexGrow={1}>

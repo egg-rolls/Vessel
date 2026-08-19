@@ -45,7 +45,9 @@ function getRows(
     return assets.skills.map((item) => ({ name: item.name, detail: item.description }));
   return assets.tools.map((item) => ({
     name: item.name,
-    detail: item.inputSchema ? `${item.description} · input: ${item.inputSchema}` : item.description,
+    detail: item.inputSchema
+      ? `${item.description} · input: ${item.inputSchema}`
+      : item.description,
   }));
 }
 
@@ -68,7 +70,7 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
       void refresh();
     }, 500);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, kind]);
   const items = assets ? getRows(kind, assets) : [];
   useInput((input, key) => {
     if (key.escape) return onClose();
@@ -119,9 +121,7 @@ export const AssetBrowser: React.FC<AssetBrowserProps> = ({ kind, ctx, onClose }
           Memory │ {Math.round(dashboard.health.memoryUsage / 1024 / 1024)} MB
         </Text>
         <Text color="gray">R Refresh ? Help Esc Back</Text>
-        {showHelp && (
-          <Text color="yellow">R Refresh · ? Help · Esc Back</Text>
-        )}
+        {showHelp && <Text color="yellow">R Refresh · ? Help · Esc Back</Text>}
       </Box>
     );
   return (

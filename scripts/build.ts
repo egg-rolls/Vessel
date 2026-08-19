@@ -53,7 +53,7 @@ try {
 // 3. 运行测试
 console.log('3️⃣ Running tests...');
 try {
-  execSync('bun test', { stdio: 'inherit' });
+  execSync('bun run test', { stdio: 'inherit' });
   console.log('✅ Tests passed\n');
 } catch (_error) {
   console.error('❌ Tests failed');

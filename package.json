@@ -13,7 +13,7 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "demo": "bun run examples/demo.ts",
-    "test": "bun test",
+    "test": "bun test --path-ignore-patterns='claude-code代码参考示例/**' src/ packages/ plugins/",
     "discover": "bun run scripts/discover-plugins.ts",
     "build": "bun run scripts/build.ts",
     "build:binary": "bun run scripts/discover-plugins.ts && bun build src/cli.ts --compile --outfile dist/vessel",
