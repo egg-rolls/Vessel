@@ -27,7 +27,7 @@
     "plugins/*/*"
   ],
   "dependencies": {
-    "@promptctl/rich-js": "^0.6.0",
+    "@promptctl/rich-js": "^0.7.0",
     "yaml": "^2.9.0"
   }
 }
