@@ -1,6 +1,12 @@
 # 架构决策记录（ADR）
 
-> 记录 Vessel 的关键决策与**为什么**。设计本身见 [SPEC.md](SPEC.md)；旧项目教训见 [legacy/LESSONS.md](../../legacy/LESSONS.md)。
+> 记录 Vessel 的关键决策与**为什么**。架构事实见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+>
+> **本文档是历史存档：只追加、不修改。** ADR-001 ~ ADR-033 写于当时的架构，其中引用的
+> `SPEC.md` / `PLUGINS.md` / `ROADMAP.md` / `PRD.md` / `GLOSSARY.md` / `DOC-STANDARD.md` /
+> `GIT-WORKFLOW.md` / `legacy/LESSONS.md` / `docs/api/*` / `docs/role/*` 等文件，已在
+> [ADR-034](#adr-034极简化重构解冻-core三工具集skills-即消息拆治理) 的重构中删除，这些链接不再有效。
+> 保留原文以存真——**其中的架构描述不代表当前实现**，以代码与 ARCHITECTURE.md 为准。
 > ADR 一经决策不轻易推翻；如需变更，新增 ADR 标注 supersede 旧者。
 
 ---
@@ -407,7 +413,7 @@
 - **决策**：
   1. **工具集收敛为三个**：`bash` + `read` + `edit`。`bash` 承担 grep / cat / ls / python / mkdir / curl / git 等一切命令行操作。判据只有一条——**能被其他工具替代的工具就不该存在**。三个是原语，其余都是它们的特化。装配层另注册 `ask_user`（交互）与 `delegate_task`（子 agent 派发）。
   2. **删除 plugin 包**（共 1,862 行）：`file-ops` / `meta-tools` / `skills-loader` / `mcp-client` / `memory/project` / `memory/auto`。默认工具从 8 组降为 5 个，插件包从 12 降为 8。
-  3. **skills 就是文件，不是一条加载通道**：harness 不扫描、不解析、不注入 skills。core 新增通用注入位 `RunOptions.messages`——调用方把**任何要进语言空间的文本**（skill 内容、附件、引用文件、项目约定）拼成消息传进来，core 不解释其来源与语义。REPL 侧由前端展开 `@路径`；约定技能放 `.vessel/skills/`（纯约定，代码里零硬编码）。memory 同理：项目约定写在 `AGENTS.md`，模型自己读；跨会话笔记是 markdown，模型自己读写。
+  3. **skills 就是文件，不是一条加载通道**：harness 不扫描、不解析、不注入 skills。core 新增通用注入位 `RunOptions.messages`——调用方把**任何要进语言空间的文本**（skill 内容、附件、引用文件、项目约定）拼成消息传进来，core 不解释其来源与语义。REPL 侧由前端展开 `@路径`；技能就是 markdown 文件，约定放仓库 `skills/`（项目级，随仓库提交、团队共享）与 `~/.vessel/skills/`（用户级，跨项目复用）——纯约定，代码里零硬编码。memory 同理：项目约定写在 `AGENTS.md`，模型自己读；跨会话笔记是 markdown，模型自己读写。
   4. **插件发现收敛为一套**：只保留 `src/plugin-loader.ts` 的运行时扫描（`plugins/<category>/<name>/package.json` + `src/index.ts`，放文件夹即注册、无需构建步骤）。删掉 `plugin-registry.generated.ts` / `DEFAULT_PLUGIN_IMPORT_MAP` / `CompositeProvider` / `PluginProvider` 接口 / `dir-scanner.ts` / `config-declared.ts` / `scripts/discover-plugins.ts`。连带删除 `vessel.yaml` 的 `tools:` 声明段与 `ToolConfig` 类型——有了 bash 之后，「用户声明式加工具」的三条路都多余。
   5. **core 解冻 + 针对性简化**（不重写 loop）：删除全仓库零读零写的死字段 `ToolDefinition.default` / `interactive` / `render` / `isEnabled` / `shouldDefer`；删除 `ToolRegistry` 接口与 `packages/core/src/tools/`——**唯一的工具注册表是 `PluginHost` / `MemoryPluginHost`**；`AgentRuntime` 直接接 `PluginHost`（删掉构造期从 `ToolRegistry` 播种工具的双轨步骤），并暴露 `readonly pluginHost`；`Hook.run` 返回类型收窄为 `Promise<void>`；`HookContext` 加显式 `systemPrompt` 字段；抽 `buildRequestMessages()` 把持久化上下文 + `RunOptions.messages` 注入消息 + `BeforeLlm` 写入的 system 收敛到一处；删从不发布的 `GuardrailModifiedPayload`。
   6. **拆掉角色/流程治理**：删除 `docs/role/`（11 份）、`processes/`（4 份）、`legacy/`、`.github/ISSUE_TEMPLATE/` 与任务启动器 CLAUDE.md。开发流程只留 git 约定：**分支 → PR → squash merge**。

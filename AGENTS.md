@@ -9,7 +9,7 @@ Vessel 是一个**自组织 Agent Harness**：极简核心（9 个接口 + 1 个
 - **语言/运行时**：TypeScript + Bun。
 - **monorepo**：bun workspaces。`packages/{core,config,tui,serve,permission}` + `plugins/` + `apps/web`。
 - **形态**：`@vessel/core` 是库（零 UI 依赖，可嵌入）；TUI / serve / web 是应用层外壳。
-- **工具集**：只有 `bash` / `read` / `edit` 三个，其余由模型组合。别急着加第四个。
+- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个，装配层另注册 `ask_user`（仅交互）与 `delegate_task`，运行期 `/tools` 共 5 个。别急着加第四个能力工具。
 - **状态**：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 
 ## 代码风格与硬规矩

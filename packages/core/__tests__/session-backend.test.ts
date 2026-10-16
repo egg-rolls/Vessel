@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { FileSessionBackend } from '../src/session/file-backend';
 import { MemorySessionBackend } from '../src/session/session-backend';
+import { SQLiteSessionBackend } from '../src/session/sqlite-backend';
 import type { RunState } from '../src/types/session';
 
 const createRunState = (sessionId: string, overrides?: Partial<RunState>): RunState => ({
@@ -64,6 +67,42 @@ describe('MemorySessionBackend', () => {
 
     await backend.save(createRunState('session-2'));
     expect(backend.size).toBe(2);
+  });
+});
+
+describe('SQLiteSessionBackend', () => {
+  let tmpDir: string;
+  let backend: SQLiteSessionBackend | undefined;
+
+  beforeEach(() => {
+    // 隔离到系统临时目录，避免污染真实 .vessel/（同 headless.test.ts 的做法）
+    tmpDir = mkdtempSync(join(tmpdir(), 'vessel-sqlite-'));
+  });
+
+  afterEach(() => {
+    backend?.close();
+    backend = undefined;
+    try {
+      rmSync(tmpDir, { recursive: true, force: true });
+    } catch {
+      // Windows 下文件锁可能未及时释放，残留只在系统临时目录
+    }
+  });
+
+  it('父目录不存在时自动创建（首次运行不因缺目录失败）', async () => {
+    backend = new SQLiteSessionBackend(join(tmpDir, 'deep', 'nested', 'sessions.db'));
+
+    await backend.save(createRunState('session-1'));
+
+    const loaded = await backend.load('session-1');
+    expect(loaded?.session_id).toBe('session-1');
+  });
+
+  it(':memory: 走内存库（测试用，不建目录）', async () => {
+    backend = new SQLiteSessionBackend(':memory:');
+
+    await backend.save(createRunState('session-1'));
+    expect((await backend.load('session-1'))?.session_id).toBe('session-1');
   });
 });
 

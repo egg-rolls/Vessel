@@ -4,6 +4,8 @@
  */
 
 import { Database } from 'bun:sqlite';
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
 import { deriveSessionMeta } from './session-backend.js';
 
@@ -42,7 +44,19 @@ interface SessionListRow {
 export class SQLiteSessionBackend implements SessionBackend {
   private db: Database;
 
-  constructor(dbPath = './vessel.db') {
+  /**
+   * @param dbPath SQLite 数据库文件路径，默认 `.vessel/sessions.db`（与 FileSessionBackend 的
+   *   `.vessel/sessions` 同级）；传 `:memory:` 走内存库（测试用），不建目录。
+   */
+  constructor(dbPath = '.vessel/sessions.db') {
+    // SQLite 只创建文件、不创建父目录——首次运行前先补目录（对标 FileSessionBackend 的惰性 mkdir）
+    if (dbPath !== ':memory:') {
+      try {
+        mkdirSync(dirname(dbPath), { recursive: true });
+      } catch {
+        // 目录已存在或不可创建——交给 new Database 抛出明确错误
+      }
+    }
     this.db = new Database(dbPath);
     this.init();
   }

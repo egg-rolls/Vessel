@@ -56,6 +56,49 @@ describe('collectFileReferences', () => {
     expect(messages[0]?.content).toContain(`path="${beta}"`);
   });
 
+  it('路径尾部的中文标点被剥掉（`@a.md，请继续`）', () => {
+    const { messages, warnings } = collectFileReferences(`@${alpha}，请继续`);
+    expect(warnings).toEqual([]);
+    expect(messages.length).toBe(1);
+    expect(messages[0]?.content).toBe(`<file path="${alpha}">\nhello\nworld\n</file>`);
+  });
+
+  it('半角标点与连续标点都被剥掉', () => {
+    const half = collectFileReferences(`see @${beta}, okay`);
+    expect(half.warnings).toEqual([]);
+    expect(half.messages[0]?.content).toContain(`path="${beta}"`);
+
+    const many = collectFileReferences(`见 @${alpha}。）】」』、`);
+    expect(many.warnings).toEqual([]);
+    expect(many.messages.length).toBe(1);
+    expect(many.messages[0]?.content).toContain(`path="${alpha}"`);
+  });
+
+  it('token 全是标点 -> 当普通文本跳过', () => {
+    // 半角：剥尾后为空
+    const half = collectFileReferences('只是 @... 而已');
+    expect(half.messages).toEqual([]);
+    expect(half.warnings).toEqual([]);
+
+    // 全角：截断后为空
+    const full = collectFileReferences('只是 @。 而已');
+    expect(full.messages).toEqual([]);
+    expect(full.warnings).toEqual([]);
+  });
+
+  it('路径中间的半角点/连字符不被截断（只截全角标点）', () => {
+    const nestedDir = join(dir, 'nested.d');
+    const nested = join(nestedDir, 'code-writing.md');
+    mkdirSync(nestedDir, { recursive: true });
+    writeFileSync(nested, 'skill body');
+
+    const { messages, warnings } = collectFileReferences(`@${nested}，请按这个来`);
+    expect(warnings).toEqual([]);
+    expect(messages.length).toBe(1);
+    expect(messages[0]?.content).toContain(`path="${nested}"`);
+    expect(messages[0]?.content).toContain('skill body');
+  });
+
   it('不匹配 email 里的 @', () => {
     const { messages, warnings } = collectFileReferences('mail me at a@b.com or c@d.org');
     expect(messages).toEqual([]);

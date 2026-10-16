@@ -181,7 +181,14 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 - **顺序**：注入消息在前，用户输入在后。
 - **持久化**：注入消息与用户输入一样进 `ContextManager`（是本轮真实对话历史的一部分，不是一次性遮罩）。
 - **core 不解释语义**：core 不知道哪条是 skill、哪条是附件。它只按序 `addContext`。
-- **谁负责组装**：前端。REPL 扫描输入里的 `@路径`（`@skills/code-writing.md`）→ 读文件 → 转成一条 `<file path="...">...</file>` 的 user 消息 → 经 `RunOptions.messages` 传入。文件不存在则跳过并警告；单文件超 100KB 截断。**用户原文保持不变**（`@路径` token 不删）。headless 侧的对应入口是 `--run @file`。
+- **谁负责组装**：前端。REPL 发送前扫描输入里的 `@<路径>`：
+  1. `@` 必须位于**行首或空白之后**（`a@b.com` 不触发）；
+  2. 取其后**连续非空白字符**作为 token；
+  3. 在该段**第一个全角标点处截断**，再**剥掉尾部的半角/全角标点**，得到路径。
+
+  每个命中文件读为一条 user 注入消息（`<file path="...">内容</file>`，>100KB 截断并在末尾标注），读取失败则跳过并给一条 warning，**用户原文一字不改**。经 `RunOptions.messages` 传给 `run()`。headless 侧的对应入口是 `--run @file`。
+
+  > **为什么要有「全角标点截断」这一步**：中文里路径与标点之间没有空白——`@skills/x.md，请按这个来` 的 token 尾字符是汉字，只剥尾部标点剥不掉 `，` 及其后面的句子；而半角标点**不能**当截断符（会把 `@skills/code-writing.md` 在第一个 `.` 处打断）。所以规则是：**全角标点截断，半角标点只剥尾部**。
 - **skills 不是一条加载通道**：harness 不扫描、不解析、不注入 skills 目录。技能就是 markdown 文件，放两个位置——仓库 `skills/`（项目级，随仓库提交、团队共享）与 `~/.vessel/skills/`（用户级，跨项目复用）。这是纯约定，代码里零硬编码。前端负责查找与引用，core 只收消息。
 
 `BeforeLlm` 的 system 注入是**另一件事**：它只影响本次请求的 system 消息，不改 `ContextManager` 的持久化内容。两者都由 `buildRequestMessages(...)` 在一处组装，避免散落的字符串 diff。
@@ -556,9 +563,9 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 
 `MemoryEventStream` 之外，core 提供 `FileEventStore`（JSONL 一行一事件：`append` / `readRun` / `listRunIds` / `deleteRun`）与 `replayRun(store, runId, eventStream, { delayMs })`。回放经同一个 `publish()` 重新发布历史事件（保留原始 `ts`），订阅者用同一个 `subscribe()` 接收 live 与 replay，靠 `replay.started` / `replay.completed` 区分边界。
 
-## 11. 工具集为什么只有三个
+## 11. 工具集：三个能力工具，为什么这么少
 
-默认工具：**`bash` / `read` / `edit`**。装配层另外注册 `ask_user`（仅交互模式）与 `delegate_task`。
+运行期共 **5 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**；装配层另注册 `ask_user`（仅交互模式，headless 不注册）与 `delegate_task` 两个**接缝工具**。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
