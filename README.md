@@ -2,7 +2,7 @@
 
 > 自组织 Agent Harness。极简核心。两个插槽。一个通用循环。填 Key 即跑，自己会长大。
 
-[![Status: pre-MVP](https://img.shields.io/badge/status-pre--MVP-orange)](docs/specs/ROADMAP.md)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](docs/specs/ROADMAP.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#许可证)
 
 ## 这是什么
@@ -27,7 +27,25 @@ Vessel 是一个**自组织 Agent Harness**——它不是一个装了 50 个工
 
 ## 状态
 
-pre-MVP / 脚手架阶段。架构与边界已锚定（见下文档），代码待建。
+**Phase 0 / Phase 1 实现中**（分期定义见 [ROADMAP](docs/specs/ROADMAP.md)）。
+
+**已落地的包**（`bun workspaces` monorepo）：
+
+| 包 | 版本 | 作用 |
+|---|---|---|
+| **`@vessel/core`** | 0.1.0 | Agent 运行时：tool-calling loop、provider 抽象、context / session、事件流、guardrails、hooks。**不依赖 TUI，可独立嵌入** |
+| **`@vessel/tui`** | 0.1.0 | 终端界面：Ink REPL、流式渲染、slash 命令、工具执行前权限确认 |
+| **`@vessel/config`** | 0.1.0 | 声明式 YAML 配置与 schema 校验（未知键报错） |
+| **`@vessel/permission`** | 0.1.0 | 权限与授权 |
+| **`@vessel/serve`** | 0.1.0 | 常驻服务（gateway，`--serve` 模式） |
+| `apps/web` | — | 网页控制台 |
+
+**工程状态**
+
+- 测试：**175 个测试文件**（`bun test`）
+- CI：`.github/workflows/ci.yml`（lint + typecheck + test + build）+ release 流水线 + 标签同步
+- **MVP 验收表**：[docs/dev/ACCEPTANCE.md](docs/dev/ACCEPTANCE.md) —— 从**用户视角**列出 7 个模块约 50 项验收项（每项含操作方式与通过标准），**尚未逐项验收**（状态列仍为空）
+- ⚠️ **尚未发布到 npm**：`@vessel/*` 各包为 `0.1.0` 且已具备发布条件，**当前请从源码运行**（见下节）
 
 ## 文档索引
 
@@ -46,15 +64,42 @@ pre-MVP / 脚手架阶段。架构与边界已锚定（见下文档），代码�
 
 ## 快速开始
 
-`[plan]` 待脚手架就绪后补充。预期：
+前置：[Bun](https://bun.sh)（`bun --version` 确认可用）。
 
 ```bash
-npx vessel                      # 零安装运行（需 Node/Bun）
+git clone https://github.com/egg-rolls/Vessel.git
+cd Vessel
+bun install
 ```
 
-分发走 npx（弃单二进制，见 ADR-006）：不再提供单二进制下载。
+### ① 先跑起来看看（**不需要 API Key**）
 
-首启向导引导填 API Key → REPL 对话 → 让 agent 调工具干活。
+```bash
+VESSEL_MOCK=1 bun run src/cli.ts
+```
+
+`VESSEL_MOCK=1` 是**模拟模式**：不调真实模型，用本地模拟响应把整条链路跑通 ——
+**没有 Key 也能完整体验对话、工具调用、流式渲染与会话管理。**
+
+### ② 接入真实模型
+
+```bash
+bun run src/cli.ts
+```
+
+首次启动走**引导向导**，引导你填 API 地址、Key、选模型，保存到 `~/.vessel/config.yaml`，之后无需重填。
+
+### ③ 其它常用命令
+
+```bash
+bun run src/cli.ts --run "帮我写个冒泡排序"      # 一次性执行后退出（适合脚本）
+echo "翻译这句话" | bun run src/cli.ts --run     # 从管道读输入
+bun run src/cli.ts --serve                       # 纯 serve 常驻模式（不进 REPL）
+bun test                                         # 跑测试
+```
+
+> 📌 **分发方式**：计划走 `npx vessel` 与 GitHub Release（见 [ROADMAP](docs/specs/ROADMAP.md) Phase 1 与 ADR-006，弃单二进制）。
+> **当前尚未发布到 npm**，请按上面的源码方式运行。
 
 ## 贡献
 
