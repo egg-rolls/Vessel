@@ -61,7 +61,7 @@ describe('MemoryPluginHost', () => {
     const hook: Hook = {
       name: 'test-hook',
       type: HookType.BeforeLlm,
-      run: async () => null,
+      run: async () => {},
     };
 
     host.registerHook(hook);
@@ -126,14 +126,14 @@ describe('MemoryPluginHost', () => {
       name: 'low-priority',
       type: HookType.BeforeLlm,
       priority: 100,
-      run: async () => null,
+      run: async () => {},
     };
 
     const hook2: Hook = {
       name: 'high-priority',
       type: HookType.BeforeLlm,
       priority: 10,
-      run: async () => null,
+      run: async () => {},
     };
 
     host.registerHook(hook1);

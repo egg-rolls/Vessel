@@ -13,7 +13,7 @@ import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '.
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
-import type { ToolContext, ToolDefinition, ToolRegistry } from '../types/tool.js';
+import type { ToolContext, ToolDefinition } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
 import { PermissionPolicy } from './permission-policy.js';
@@ -25,6 +25,12 @@ export interface RunOptions {
   signal?: AbortSignal;
   /** 当前 git branch——app 层采集，core 透传存入 RunState.branch */
   branch?: string;
+  /**
+   * 本轮请求前置注入的消息。core 不解释其来源与语义——
+   * skill 内容、附件、引用文件、项目约定，任何要进语言空间的文本都走这里。
+   * 写入顺序：注入消息在前，用户输入在后；两者都持久化进 ContextManager。
+   */
+  messages?: Message[];
 }
 
 /**
@@ -36,14 +42,14 @@ export interface RunOptions {
 export class AgentRuntime {
   private provider: LLMProvider;
   private model: string;
-  private tools: ToolRegistry;
   private context: ContextManager;
   /** 事件流（公开只读——headless/外部可订阅事件，实现应答策略，ADR-029） */
   readonly events: EventStream;
+  /** 插件宿主（公开只读——app/TUI 从这里读工具与插件，工具的唯一来源） */
+  readonly pluginHost: PluginHost;
   private limits: UsageLimits;
   private termination: TerminationPolicy;
   private session?: SessionBackend;
-  private pluginHost: PluginHost;
   private limitChecker: LimitChecker;
   private stats: UsageStats;
   private systemPrompt?: string;
@@ -54,7 +60,6 @@ export class AgentRuntime {
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
     this.model = opts.model;
-    this.tools = opts.tools;
     this.context = opts.context;
     this.events = opts.events;
     this.limits = opts.limits;
@@ -75,17 +80,8 @@ export class AgentRuntime {
       startTime: Date.now(),
     };
 
-    // 初始化 PluginHost（loop 的单一工具来源），并将构造参数里的 ToolRegistry 工具
-    // 作为「种子」同步进来。此后 loop 只认 PluginHost——ToolRegistry 仍是 9 接口之一，
-    // 供只想用简单注册表、不引入插件系统的嵌入方单独使用；其 invoke/schemas 不参与 runtime loop。
+    // 初始化 PluginHost（唯一工具来源与注册表）——插件在 install() 里 registerTool
     this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
-    for (const tool of this.tools.list()) {
-      try {
-        this.pluginHost.registerTool(tool);
-      } catch {
-        // 工具名冲突，跳过（插件工具优先已注册的情况下保留直接工具）
-      }
-    }
 
     // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
     this.permissionPolicy = new PermissionPolicy(this.events, opts.permission);
@@ -200,6 +196,11 @@ export class AgentRuntime {
     }
 
     try {
+      // 注入消息（C5）：core 不解释其语义（skill / 附件 / 引用文件……），先于用户输入写入并持久化
+      for (const injected of opts?.messages ?? []) {
+        this.addContext(injected, runId);
+      }
+
       // 添加用户消息到上下文
       this.addContext(userMessage, runId);
 
@@ -313,35 +314,20 @@ export class AgentRuntime {
         throw new Error('Usage limits exceeded');
       }
 
-      // 执行 BeforeLlm 钩子（hook 可往 ctx.system_prompt 注入内容：skills / memory）
-      // 用 this.systemPrompt 种子化，hook 链 prepend 注入；之后把结果作为本次请求的 system 消息
+      // 执行 BeforeLlm 钩子（hook 可往 ctx.systemPrompt 注入内容：skills / memory）
+      // 用 this.systemPrompt 作基底，hook 链 prepend 注入
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
       if (this.systemPrompt) {
-        hookCtx.system_prompt = this.systemPrompt;
+        hookCtx.systemPrompt = this.systemPrompt;
       }
       await this.hooks.run(HookType.BeforeLlm, hookCtx);
-      const injectedSystem: string | undefined =
-        typeof hookCtx.system_prompt === 'string' ? hookCtx.system_prompt : undefined;
 
-      // 发布 LLM 请求事件
-      // 应用 BeforeLlm 注入的 system prompt（仅影响本次请求，不改动 ContextManager 持久化的消息）
-      let messages = this.context.messages;
-      if (injectedSystem && injectedSystem !== this.systemPrompt) {
-        const hasSystem = messages.some((m) => m.role === 'system');
-        messages = messages.map((m) =>
-          m.role === 'system' ? { ...m, content: injectedSystem } : m,
-        );
-        if (!hasSystem) {
-          const systemMsg: Message = { role: 'system', content: injectedSystem };
-          messages = [systemMsg, ...messages];
-        }
-      }
+      // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）
+      const messages = this.buildRequestMessages(hookCtx.systemPrompt);
 
-      // 统一工具来源：PluginHost（直接注册的工具已在构造时同步进去）
-      // SPEC §4.2: default !== false 的工具自动列出；default: false 通过 search_assets 发现
+      // 统一工具来源：PluginHost（插件在 install() 里 registerTool）
       const allTools = this.pluginHost.listTools();
-      const visibleTools = allTools.filter((t) => t.default !== false);
-      const toolSchemas = visibleTools.map((tool) => ({
+      const toolSchemas = allTools.map((tool) => ({
         type: 'function' as const,
         function: {
           name: tool.name,
@@ -353,14 +339,13 @@ export class AgentRuntime {
       // 调试日志（仅在 VESSEL_DEBUG 环境变量设置时输出）
       if (process.env.VESSEL_DEBUG) {
         console.log(
-          '[Debug] Visible tools:',
+          '[Debug] Tools:',
           toolSchemas.length,
-          '/',
-          allTools.length,
           toolSchemas.map((t) => t.function.name),
         );
       }
 
+      // 发布 LLM 请求事件
       this.publishEvent({
         type: 'llm.request',
         run_id: runId,
@@ -628,7 +613,7 @@ export class AgentRuntime {
   /**
    * 调用工具并应用超时。
    * ADR-017(2b)：loop 必须经统一入口执行工具并套 timeout——此前 loop 直调 handler，
-   * `ToolDefinition.timeout` 从未在真实执行路径生效（仅 ToolRegistry.invoke 单测覆盖）。
+   * `ToolDefinition.timeout` 从未在真实执行路径生效。
    */
   private async invokeTool(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<string> {
     if (!tool.timeout || tool.timeout <= 0) {
@@ -646,6 +631,29 @@ export class AgentRuntime {
     } finally {
       if (timer !== undefined) clearTimeout(timer);
     }
+  }
+
+  /**
+   * 组装本次请求的消息数组（ADR-018）。
+   * 「持久化上下文 + BeforeLlm hook 写入的 systemPrompt」在此一处收敛：
+   * hook 未改写（或改写为空）时直接用持久化消息；改写时以注入内容替换首条 system
+   * 消息（无 system 则前置一条）。注入只影响本次请求，不改动 ContextManager 持久化的消息。
+   */
+  private buildRequestMessages(injectedSystem: unknown): Message[] {
+    const messages = this.context.messages;
+    // 非字符串 / 空串视为「未注入」——hook 没写就保持持久化消息原样
+    if (
+      typeof injectedSystem !== 'string' ||
+      !injectedSystem ||
+      injectedSystem === this.systemPrompt
+    ) {
+      return messages;
+    }
+    const hasSystem = messages.some((m) => m.role === 'system');
+    if (!hasSystem) {
+      return [{ role: 'system', content: injectedSystem }, ...messages];
+    }
+    return messages.map((m) => (m.role === 'system' ? { ...m, content: injectedSystem } : m));
   }
 
   /**

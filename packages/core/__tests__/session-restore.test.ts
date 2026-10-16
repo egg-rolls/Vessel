@@ -13,7 +13,6 @@ import {
   MemoryContextManager,
   MemoryEventStream,
   MemorySessionBackend,
-  MemoryToolRegistry,
   type Message,
   SQLiteSessionBackend,
 } from '../src/index';
@@ -39,7 +38,6 @@ function makeRuntime(
   return AgentRuntime.create({
     provider,
     model: 'test',
-    tools: new MemoryToolRegistry(),
     context,
     events: new MemoryEventStream(),
     limits: { requestLimit: 10, toolCallsLimit: 5 },

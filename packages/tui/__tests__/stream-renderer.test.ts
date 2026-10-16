@@ -363,7 +363,7 @@ describe('StreamRenderer', () => {
       eventStream.publish({
         type: 'tool.call.started',
         run_id: 'r1',
-        data: { tool_name: 'write_file', arguments: longArgs },
+        data: { tool_name: 'edit', arguments: longArgs },
         ts: Date.now(),
       });
 

@@ -42,7 +42,6 @@ export interface RuntimePermissionConfig {
 export interface AgentRuntimeOptions {
   provider: import('./provider.js').LLMProvider;
   model: string;
-  tools: import('./tool.js').ToolRegistry;
   context: import('./context.js').ContextManager;
   events: import('./event.js').EventStream;
   limits: import('./limits.js').UsageLimits;

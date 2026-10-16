@@ -77,15 +77,6 @@ export interface GuardrailBlockedPayload extends BaseEventPayload {
   reason: string;
 }
 
-/** Guardrail 修改事件 payload */
-export interface GuardrailModifiedPayload extends BaseEventPayload {
-  run_id: string;
-  guardrail_name: string;
-  stage: string;
-  original: unknown;
-  modified: unknown;
-}
-
 /** Run 完成事件 payload */
 export interface RunCompletedPayload extends BaseEventPayload {
   run_id: string;
@@ -126,13 +117,12 @@ export type EventPayload =
   | ToolCallCompletedPayload
   | ToolCallFailedPayload
   | GuardrailBlockedPayload
-  | GuardrailModifiedPayload
   | RunCompletedPayload
   | RunFailedPayload
   | ErrorPayload
   | BaseEventPayload;
 
-/** Run 事件（ADR-030：type 为开放字符串协议，无事件名常量；核心事件名见 docs/specs/ADR.md ADR-027） */
+/** Run 事件（ADR-030：type 为开放字符串协议，无事件名常量；核心事件名见 docs/ADR.md ADR-027） */
 export interface RunEvent {
   type: string;
   run_id: string;

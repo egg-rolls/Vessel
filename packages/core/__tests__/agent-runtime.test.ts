@@ -3,8 +3,8 @@ import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
 import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
+import { MemoryPluginHost } from '../src/runtime/plugin-host';
 import { MemorySessionBackend } from '../src/session/session-backend';
-import { MemoryToolRegistry } from '../src/tools/tool-registry';
 import type { ToolDefinition } from '../src/types/tool';
 
 /** 构造"第一次 user 消息返回 tool_calls，之后返回 stop"的 provider */
@@ -33,14 +33,14 @@ function toolCallThenStopProvider(toolName: string) {
 describe('AgentRuntime Integration', () => {
   let runtime: AgentRuntime;
   let provider: MemoryLLMProvider;
-  let tools: MemoryToolRegistry;
+  let pluginHost: MemoryPluginHost;
   let context: MemoryContextManager;
   let eventStream: MemoryEventStream;
   let session: MemorySessionBackend;
 
   beforeEach(async () => {
     provider = new MemoryLLMProvider();
-    tools = new MemoryToolRegistry();
+    pluginHost = new MemoryPluginHost();
     context = new MemoryContextManager();
     eventStream = new MemoryEventStream();
     session = new MemorySessionBackend();
@@ -48,7 +48,7 @@ describe('AgentRuntime Integration', () => {
     runtime = await AgentRuntime.create({
       provider,
       model: 'test-model',
-      tools,
+      pluginHost,
       context,
       events: eventStream,
       limits: {
@@ -152,7 +152,7 @@ describe('AgentRuntime Integration', () => {
       },
     };
 
-    tools.register(weatherTool);
+    pluginHost.registerTool(weatherTool);
 
     // 创建一个新的 provider 来跟踪调用
     const callLog: string[] = [];
@@ -193,7 +193,7 @@ describe('AgentRuntime Integration', () => {
     const toolCallRuntime = await AgentRuntime.create({
       provider: customProvider,
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: {
@@ -212,8 +212,8 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('tool.timeout 在 loop 生效：超时工具发 tool.call.failed（ADR-017 2b 回归）', async () => {
-    const tools = new MemoryToolRegistry();
-    tools.register({
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
       name: 'hanging',
       description: 'Hangs forever',
       inputSchema: { type: 'object', properties: {} },
@@ -233,7 +233,7 @@ describe('AgentRuntime Integration', () => {
     const runtime = await AgentRuntime.create({
       provider: toolCallThenStopProvider('hanging'),
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -257,36 +257,24 @@ describe('AgentRuntime Integration', () => {
     expect(savedState?.status).toBe('completed');
   });
 
-  it('should only send default tools to LLM (SPEC §4.2)', async () => {
-    // 注册两个工具：一个默认可见，一个默认不可见
-    const visibleTool: ToolDefinition = {
-      name: 'visible_tool',
-      description: 'Always visible',
+  it('发送全部已注册工具（不再有 default 过滤）', async () => {
+    const firstTool: ToolDefinition = {
+      name: 'first_tool',
+      description: 'First tool',
       inputSchema: { type: 'object', properties: {} },
-      handler: async () => 'visible result',
-      default: true,
+      handler: async () => 'first result',
     };
 
-    const hiddenTool: ToolDefinition = {
-      name: 'hidden_tool',
-      description: 'Hidden by default',
+    const secondTool: ToolDefinition = {
+      name: 'second_tool',
+      description: 'Second tool',
       inputSchema: { type: 'object', properties: {} },
-      handler: async () => 'hidden result',
-      default: false,
+      handler: async () => 'second result',
     };
 
-    // 未设置 default 的工具应视为默认可见
-    const implicitTool: ToolDefinition = {
-      name: 'implicit_tool',
-      description: 'Implicitly visible',
-      inputSchema: { type: 'object', properties: {} },
-      handler: async () => 'implicit result',
-    };
-
-    const filterTools = new MemoryToolRegistry();
-    filterTools.register(visibleTool);
-    filterTools.register(hiddenTool);
-    filterTools.register(implicitTool);
+    const host = new MemoryPluginHost();
+    host.registerTool(firstTool);
+    host.registerTool(secondTool);
 
     let capturedTools: string[] = [];
 
@@ -300,7 +288,7 @@ describe('AgentRuntime Integration', () => {
     const filterRuntime = await AgentRuntime.create({
       provider: customProvider,
       model: 'test-model',
-      tools: filterTools,
+      pluginHost: host,
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -309,17 +297,48 @@ describe('AgentRuntime Integration', () => {
 
     await filterRuntime.run('Test');
 
-    // visible_tool (default: true) 和 implicit_tool (default 未设置) 应该被发送
-    expect(capturedTools).toContain('visible_tool');
-    expect(capturedTools).toContain('implicit_tool');
-    // hidden_tool (default: false) 不应该被发送
-    expect(capturedTools).not.toContain('hidden_tool');
-    // 总共应发送 2 个工具
+    expect(capturedTools).toContain('first_tool');
+    expect(capturedTools).toContain('second_tool');
     expect(capturedTools).toHaveLength(2);
   });
 
+  it('runtime.pluginHost 公开只读：可读到插件注册的工具', async () => {
+    pluginHost.registerTool({
+      name: 'public_tool',
+      description: 'Visible via runtime.pluginHost',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    });
+
+    expect(runtime.pluginHost.listTools().map((t) => t.name)).toContain('public_tool');
+  });
+
+  it('RunOptions.messages 注入消息先于用户输入持久化（C5）', async () => {
+    const context = new MemoryContextManager();
+    const runtime = await AgentRuntime.create({
+      provider: new MemoryLLMProvider(),
+      model: 'test-model',
+      context,
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    await runtime.run('user input', 'inj-session', {
+      messages: [
+        { role: 'user', content: '<file path="a.md">AAA</file>' },
+        { role: 'user', content: 'BBB' },
+      ],
+    });
+
+    // 注入消息在前，用户输入在后，全部持久化
+    expect(context.messages[0]?.content).toContain('AAA');
+    expect(context.messages[1]?.content).toBe('BBB');
+    expect(context.messages[2]?.content).toBe('user input');
+  });
+
   it('checkPermission ask -> 发布 tool.permission.request，用户 allow 后放行工具（ADR-029）', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = false;
     let requestedCount = 0;
     const guardedTool: ToolDefinition = {
@@ -332,7 +351,7 @@ describe('AgentRuntime Integration', () => {
       },
       checkPermission: async () => 'ask',
     };
-    tools.register(guardedTool);
+    pluginHost.registerTool(guardedTool);
 
     const events = new MemoryEventStream();
     events.subscribe((event) => {
@@ -371,7 +390,7 @@ describe('AgentRuntime Integration', () => {
     const permRuntime = await AgentRuntime.create({
       provider: customProvider,
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -386,7 +405,7 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('checkPermission ask -> 用户 deny 后工具被阻止（不执行 handler）', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = false;
     const guardedTool: ToolDefinition = {
       name: 'guarded',
@@ -398,7 +417,7 @@ describe('AgentRuntime Integration', () => {
       },
       checkPermission: async () => 'ask',
     };
-    tools.register(guardedTool);
+    pluginHost.registerTool(guardedTool);
 
     const events = new MemoryEventStream();
     events.subscribe((event) => {
@@ -436,7 +455,7 @@ describe('AgentRuntime Integration', () => {
     const denyRuntime = await AgentRuntime.create({
       provider: customProvider,
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -450,7 +469,7 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('checkPermission deny -> 策略拒绝，工具被阻止（不执行 handler）', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = false;
     const guardedTool: ToolDefinition = {
       name: 'guarded',
@@ -462,7 +481,7 @@ describe('AgentRuntime Integration', () => {
       },
       checkPermission: async () => 'deny',
     };
-    tools.register(guardedTool);
+    pluginHost.registerTool(guardedTool);
 
     const customProvider = {
       chat: async (req: { messages: Array<{ role: string; content: string }> }) => {
@@ -487,7 +506,7 @@ describe('AgentRuntime Integration', () => {
     const denyRuntime = await AgentRuntime.create({
       provider: customProvider,
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -501,9 +520,9 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('默认权限策略 default=ask：未声明 checkPermission 的工具也经事件流确认（ADR-029）', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = 0;
-    tools.register({
+    pluginHost.registerTool({
       name: 'plain',
       description: 'Plain tool',
       inputSchema: { type: 'object', properties: {} },
@@ -531,7 +550,7 @@ describe('AgentRuntime Integration', () => {
     const runtime = await AgentRuntime.create({
       provider: toolCallThenStopProvider('plain'),
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -547,9 +566,9 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('默认权限策略 autoApprove：免确认工具直接执行，不发权限请求', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = 0;
-    tools.register({
+    pluginHost.registerTool({
       name: 'plain',
       description: 'Plain tool',
       inputSchema: { type: 'object', properties: {} },
@@ -568,7 +587,7 @@ describe('AgentRuntime Integration', () => {
     const runtime = await AgentRuntime.create({
       provider: toolCallThenStopProvider('plain'),
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -584,9 +603,9 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('库默认 permission=allow：未配置时工具直接执行，不发权限请求', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = 0;
-    tools.register({
+    pluginHost.registerTool({
       name: 'plain',
       description: 'Plain tool',
       inputSchema: { type: 'object', properties: {} },
@@ -605,7 +624,7 @@ describe('AgentRuntime Integration', () => {
     const runtime = await AgentRuntime.create({
       provider: toolCallThenStopProvider('plain'),
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -621,9 +640,9 @@ describe('AgentRuntime Integration', () => {
   });
 
   it('默认权限策略 remember（always）：记住批准，后续同工具免确认', async () => {
-    const tools = new MemoryToolRegistry();
+    const pluginHost = new MemoryPluginHost();
     let toolRan = 0;
-    tools.register({
+    pluginHost.registerTool({
       name: 'plain',
       description: 'Plain tool',
       inputSchema: { type: 'object', properties: {} },
@@ -651,7 +670,7 @@ describe('AgentRuntime Integration', () => {
     const runtime = await AgentRuntime.create({
       provider: toolCallThenStopProvider('plain'),
       model: 'test-model',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },

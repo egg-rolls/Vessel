@@ -71,37 +71,6 @@
         "typescript": "^7.0.2",
       },
     },
-    "plugins/integration/mcp-client": {
-      "name": "@vessel/mcp-client",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-        "@vessel/permission": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
-    "plugins/memory/auto": {
-      "name": "@vessel/memory-auto",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
-    "plugins/memory/project": {
-      "name": "@vessel/memory-project",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
     "plugins/observability/hook-logging": {
       "name": "@vessel/hook-logging",
       "version": "0.1.0",
@@ -162,28 +131,8 @@
         "typescript": "^7.0.2",
       },
     },
-    "plugins/tools/delegate-task": {
-      "name": "@vessel/delegate-task",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
-    "plugins/tools/file-ops": {
-      "name": "@vessel/file-ops",
-      "version": "0.1.0",
-      "dependencies": {
-        "@vessel/core": "workspace:*",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
-    "plugins/tools/meta-tools": {
-      "name": "@vessel/meta-tools",
+    "plugins/tools/basic-tools": {
+      "name": "@vessel/basic-tools",
       "version": "0.1.0",
       "dependencies": {
         "@vessel/core": "workspace:*",
@@ -193,8 +142,8 @@
         "typescript": "^7.0.2",
       },
     },
-    "plugins/tools/skills-loader": {
-      "name": "@vessel/skills-loader",
+    "plugins/tools/delegate-task": {
+      "name": "@vessel/delegate-task",
       "version": "0.1.0",
       "dependencies": {
         "@vessel/core": "workspace:*",
@@ -335,25 +284,17 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
+    "@vessel/basic-tools": ["@vessel/basic-tools@workspace:plugins/tools/basic-tools"],
+
     "@vessel/config": ["@vessel/config@workspace:packages/config"],
 
     "@vessel/core": ["@vessel/core@workspace:packages/core"],
 
     "@vessel/delegate-task": ["@vessel/delegate-task@workspace:plugins/tools/delegate-task"],
 
-    "@vessel/file-ops": ["@vessel/file-ops@workspace:plugins/tools/file-ops"],
-
     "@vessel/guardrail-pii": ["@vessel/guardrail-pii@workspace:plugins/security/guardrail-pii"],
 
     "@vessel/hook-logging": ["@vessel/hook-logging@workspace:plugins/observability/hook-logging"],
-
-    "@vessel/mcp-client": ["@vessel/mcp-client@workspace:plugins/integration/mcp-client"],
-
-    "@vessel/memory-auto": ["@vessel/memory-auto@workspace:plugins/memory/auto"],
-
-    "@vessel/memory-project": ["@vessel/memory-project@workspace:plugins/memory/project"],
-
-    "@vessel/meta-tools": ["@vessel/meta-tools@workspace:plugins/tools/meta-tools"],
 
     "@vessel/permission": ["@vessel/permission@workspace:packages/permission"],
 
@@ -364,8 +305,6 @@
     "@vessel/redact-secrets": ["@vessel/redact-secrets@workspace:plugins/security/redact-secrets"],
 
     "@vessel/serve": ["@vessel/serve@workspace:packages/serve"],
-
-    "@vessel/skills-loader": ["@vessel/skills-loader@workspace:plugins/tools/skills-loader"],
 
     "@vessel/tool-policy": ["@vessel/tool-policy@workspace:plugins/security/tool-policy"],
 

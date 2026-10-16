@@ -21,14 +21,11 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 13 个扁平命令', () => {
+  it('createCommands 注册 10 个扁平命令', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('tools');
     expect(names).toContain('plugins');
-    expect(names).toContain('mcp');
-    expect(names).toContain('skills');
-    expect(names).toContain('assets');
     expect(names).toContain('resume');
     expect(names).toContain('new');
     expect(names).toContain('history');
@@ -37,6 +34,11 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).toContain('setup');
     expect(names).toContain('reload');
     expect(names).toContain('exit');
+    // 已删命令（/mcp、/skills、/assets）不再注册
+    expect(names).not.toContain('mcp');
+    expect(names).not.toContain('skills');
+    expect(names).not.toContain('assets');
+    expect(names.length).toBe(10);
   });
 
   it('未知命令 -> handled:false', async () => {
@@ -50,7 +52,7 @@ describe('CommandRegistry 扁平命令', () => {
   it('/tools 返回已注册工具', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
-    ctx.tools.register(sampleTool);
+    ctx.pluginHost.registerTool(sampleTool);
     const state = makeState(ctx.currentSessionId);
     const result = await reg.execute('tools', ctx, state);
     expect(result.output ?? '').toContain('echo');

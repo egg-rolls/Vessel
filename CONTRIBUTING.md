@@ -1,43 +1,11 @@
-# 贡献指南（CONTRIBUTING）
+# 贡献指南
 
-> 面向人类贡献者。AI 代理请先读 [CLAUDE.md](CLAUDE.md)。
+1. 从 `main` 切分支，一个分支一个关注点。
+2. 提交信息用 [Conventional Commits](https://www.conventionalcommits.org/)：`feat(core): ...` / `fix(tui): ...` / `docs: ...`。
+3. 提交前跑：`bun test`、`bun run typecheck`、`bunx @biomejs/biome ci .` —— 三者必须全过（CI 同样跑这三项 + `bun run build`）。
+4. 开 PR，填模板，等审查。
+5. 合并用 **squash merge**，不直接 push `main`。
 
-## 开发环境
-
-- 运行时：Bun（`bun install` 装依赖）。
-- 仓库为 monorepo（bun workspaces）：`packages/{core,config,tui}` + `plugins/`。
-- 动手前按 [AGENTS.md §3](AGENTS.md) 阅读顺序通读 `docs/` 和 `processes/`。
-
-## 分支与提交
-
-- 分支与提交命名详见 [processes/conventions.md](processes/conventions.md)。
-- 一个分支一个关注点。
-
-## 合并流程
-
-1. 自查：CI（lint+typecheck+test+build）须全绿；四项为 required check（ADR-014）。
-2. 改 core 必须先有 ADR（ADR-012）；新增能力按 [AGENTS.md §6 能力分层](AGENTS.md) 决策树分类。
-3. 创建 PR，CODEOWNERS 自动请求 Reviewer 审查合并（对照 [docs/role/REVIEWER.md](docs/role/REVIEWER.md) 检查清单）。
-4. 外部贡献者可参考 [PR 模板](.github/PULL_REQUEST_TEMPLATE.md) 提交 Pull Request。
-5. **合并门禁**：见 [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) —— AI Agent 合并前必须对照全部 `docs/specs/` 文档逐条检查架构合规性；禁止合并后修复。
-
-## 工程规范
-
-- Lint/Format：Biome（ADR-013），`bun run lint`。
-- 类型：TS strict，`bun run typecheck`。
-- 测试：`bun test`，每模块配单测。
-- 依赖：core 不依赖 tui/config/plugins；不引入 LangChain；重依赖只进插件包。
-- 详见 [docs/role/DEVELOPER.md §工程规范](docs/role/DEVELOPER.md) 与 [AGENTS.md §4 红线](AGENTS.md)。
-
-## 文档同步
-
-公开行为或边界变化时，同步更新 `docs/`（SPEC/ADR/ROADMAP/PLUGINS）与 `CLAUDE.md`。文档只写已实现；规划项标 `[plan]`（反幻觉纪律）。
-
-## 发布
-
-- Release 工作流延后到 Phase 1（有可发布物时）：tag 触发，npm publish 发布 npm 包 + GitHub Release。
-- 分发走 npx（弃单二进制，见 ADR-006）。
-
-## 安全
+写代码前先读 [AGENTS.md](AGENTS.md)（红线与分层准入）与 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（架构事实）。
 
 发现安全漏洞见 [SECURITY.md](SECURITY.md)，勿开公开 issue。

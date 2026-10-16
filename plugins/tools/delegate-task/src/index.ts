@@ -26,7 +26,7 @@ import {
   AgentRuntime,
   MemoryContextManager,
   MemoryEventStream,
-  MemoryToolRegistry,
+  MemoryPluginHost,
 } from '@vessel/core';
 
 /** delegate 深度（每 spawn 一层 +1），AsyncLocalStorage 隔离并行分派，防无限递归 */
@@ -72,14 +72,14 @@ function readString(record: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value : '';
 }
 
-/** 构建子 agent 工具注册表：复制父 host 的「安全工具」，排除 disallowed 名单 */
-function buildChildTools(host: PluginHost, disallowed: string[]): MemoryToolRegistry {
-  const registry = new MemoryToolRegistry();
+/** 构建子 agent 的插件宿主：复制父 host 的「安全工具」，排除 disallowed 名单 */
+function buildChildTools(host: PluginHost, disallowed: string[]): MemoryPluginHost {
+  const childHost = new MemoryPluginHost();
   for (const tool of host.listTools()) {
-    if (disallowed.includes(tool.name) || registry.has(tool.name)) continue;
-    registry.register(tool);
+    if (disallowed.includes(tool.name) || childHost.getTool(tool.name)) continue;
+    childHost.registerTool(tool);
   }
-  return registry;
+  return childHost;
 }
 
 /** 订阅子 runtime 事件，转发到父 ctx.events（带 subagent.* 前缀，便于观测）；返回退订函数 */
@@ -100,7 +100,7 @@ async function runChildTask(config: {
   model: string;
   task: string;
   context: string;
-  tools: MemoryToolRegistry;
+  pluginHost: MemoryPluginHost;
   parentEvents: EventStream;
   limits: UsageLimits;
   termination: TerminationPolicy;
@@ -111,7 +111,7 @@ async function runChildTask(config: {
   const runtime = await AgentRuntime.create({
     provider: config.providerFactory(),
     model: config.model,
-    tools: config.tools,
+    pluginHost: config.pluginHost,
     context: new MemoryContextManager(),
     events: childEvents,
     limits: config.limits,
@@ -167,7 +167,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
           model: config.model,
           task,
           context,
-          tools: childTools,
+          pluginHost: childTools,
           parentEvents: ctx.events,
           limits: config.limits,
           termination: config.termination,

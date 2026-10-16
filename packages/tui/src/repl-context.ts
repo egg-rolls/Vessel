@@ -16,8 +16,8 @@ import type {
   AgentRuntime,
   ContextManager,
   EventStream,
+  PluginHost,
   SessionBackend,
-  ToolRegistry,
 } from '@vessel/core';
 
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
@@ -27,8 +27,11 @@ export interface ReplContext {
   /** Agent 运行时——REPL 调 runtime.run(input, sessionId) 执行对话 */
   runtime: AgentRuntime;
 
-  /** 工具注册表——/tools 命令列出 tool.name + tool.description */
-  tools: ToolRegistry;
+  /**
+   * 插件宿主——工具与插件的唯一来源（C9）。
+   * /tools 读 pluginHost.listTools()；/plugins 读壳注入的 plugins 名单。
+   */
+  pluginHost: PluginHost;
 
   /** 会话后端——/resume、/history 的增删改查 */
   session: SessionBackend;
@@ -56,7 +59,7 @@ export interface ReplContext {
     baseUrl: string;
   };
 
-  /** 已加载插件名——状态栏显示 "meta-tools, skills-loader" */
+  /** 已加载插件名——状态栏显示（如 "basic-tools, hook-logging"） */
   plugins: string[];
 
   /** 当前配置（只读）——状态栏/system prompt 引用 */

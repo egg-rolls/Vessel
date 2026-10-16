@@ -52,7 +52,7 @@ function toolCompleted(id: string, durationMs = 42, result = 'ok') {
   return asTuiEvent({
     type: 'tool.call.completed',
     run_id: 'r',
-    data: { tool_call_id: id, tool_name: 'read_file', duration_ms: durationMs, result },
+    data: { tool_call_id: id, tool_name: 'read', duration_ms: durationMs, result },
     ts: 0,
   });
 }
@@ -103,13 +103,13 @@ describe('StreamOutput segment ordering', () => {
       let segs: Segment[] = [];
 
       segs = reduceSegments(segs, textDelta('Let me read the file.'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file', { path: '/test.txt' }), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read', { path: '/test.txt' }), nextId);
       segs = reduceSegments(segs, toolCompleted('tc1', 42), nextId);
       segs = reduceSegments(segs, textDelta('File contents: hello'), nextId);
 
       expect(segs).toHaveLength(3); // text, tool_call, text
       expect(segs[0]).toMatchObject({ type: 'text' });
-      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read_file' });
+      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read' });
       expect(segs[2]).toMatchObject({ type: 'text', text: 'File contents: hello' });
     });
 
@@ -134,14 +134,14 @@ describe('StreamOutput segment ordering', () => {
       let segs: Segment[] = [];
 
       segs = reduceSegments(segs, textDelta('Doing work...'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc2', 'write_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc2', 'edit'), nextId);
       segs = reduceSegments(segs, textDelta('Done.'), nextId);
 
       expect(segs).toHaveLength(4);
       expect(segs[0]).toMatchObject({ type: 'text' });
-      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read_file' });
-      expect(segs[2]).toMatchObject({ type: 'tool_call', name: 'write_file' });
+      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read' });
+      expect(segs[2]).toMatchObject({ type: 'tool_call', name: 'edit' });
       expect(segs[3]).toMatchObject({ type: 'text', text: 'Done.' });
     });
 
@@ -149,7 +149,7 @@ describe('StreamOutput segment ordering', () => {
       const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
       segs = reduceSegments(segs, toolStarted('tc2', 'search'), nextId);
       // tc2 先完成
       segs = reduceSegments(segs, toolCompleted('tc2', 10), nextId);
@@ -157,7 +157,7 @@ describe('StreamOutput segment ordering', () => {
       segs = reduceSegments(segs, toolCompleted('tc1', 50), nextId);
 
       expect(segs).toHaveLength(2);
-      expect(segs[0]).toMatchObject({ id: 'tc1', name: 'read_file', status: 'completed' });
+      expect(segs[0]).toMatchObject({ id: 'tc1', name: 'read', status: 'completed' });
       expect(segs[1]).toMatchObject({ id: 'tc2', name: 'search', status: 'completed' });
     });
   });
@@ -181,14 +181,14 @@ describe('StreamOutput segment ordering', () => {
       let segs: Segment[] = [];
 
       segs = reduceSegments(segs, textDelta('Trying...'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
       segs = reduceSegments(segs, toolFailed('tc1', 'File not found', 100), nextId);
       segs = reduceSegments(segs, textDelta('Sorry, failed.'), nextId);
 
       expect(segs).toHaveLength(3);
       expect(segs[1]).toMatchObject({
         type: 'tool_call',
-        name: 'read_file',
+        name: 'read',
         status: 'failed',
         error: 'File not found',
       });
@@ -199,7 +199,7 @@ describe('StreamOutput segment ordering', () => {
     it('completed 携带 result 字符串供 StreamOutput 渲染', () => {
       const nextId = makeNextId();
       let segs: Segment[] = [];
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
       segs = reduceSegments(segs, toolCompleted('tc1', 42, 'file contents'), nextId);
 
       expect(segs).toHaveLength(1);

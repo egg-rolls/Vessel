@@ -29,6 +29,5 @@ This skill teaches the agent how to write good code.
 If you're not sure how to do something:
 
 1. Search for similar code in the project
-2. Check documentation
+2. Check documentation — project conventions live in `AGENTS.md` at the repo root
 3. Ask the user for clarification
-4. Use `search_assets` to find relevant tools or skills

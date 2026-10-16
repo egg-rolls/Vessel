@@ -5,6 +5,8 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
@@ -13,7 +15,6 @@ import {
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
-  MemoryToolRegistry,
   OpenAICompatibleProvider,
   type Plugin,
   SQLiteSessionBackend,
@@ -21,9 +22,7 @@ import {
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
-import { ConfigDeclared } from './config-declared';
-import { DirScanner } from './dir-scanner';
-import { CompositeProvider, type PluginProvider, StaticRegistry } from './plugin-registry';
+import { PluginLoader } from './plugin-loader';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -75,16 +74,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     process.exit(1);
   }
 
+  // ── 插件发现 ────────────────────────────────────
+  // 唯一的发现机制：运行时扫描 plugins/<category>/<name>/（PluginLoader，ADR-028）。
+  const loader = new PluginLoader();
+
   // ── Provider ────────────────────────────────────
-  // 组合多个注册 Provider（ADR-028）：内置 StaticRegistry + 用户 DirScanner/ConfigDeclared
-  const pluginRegistry: PluginProvider = new CompositeProvider([
-    new StaticRegistry(),
-    new DirScanner(),
-    new ConfigDeclared(config),
-  ]);
+  // provider 类插件单独装配（不进 plugins 列表）：它们只 registerProvider，贡献工厂。
   const providerHost = new MemoryPluginHost();
-  for (const name of pluginRegistry.getProviders()) {
-    const p = await pluginRegistry.loadPlugin(name);
+  for (const name of loader.getProviders()) {
+    const p = await loader.load(name);
     if (p) p.install(providerHost);
   }
 
@@ -128,7 +126,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── 组件 ────────────────────────────────────────
-  const tools = new MemoryToolRegistry();
   const context = new MemoryContextManager({
     maxTokens: config.context?.maxTokens,
     maxMessages: config.context?.maxMessages,
@@ -136,7 +133,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     compactThreshold: config.context?.compactThreshold,
   });
   const events = new MemoryEventStream();
-  const session = new SQLiteSessionBackend(config.session?.storagePath ?? './vessel.db');
+  const sessionPath = config.session?.storagePath ?? '.vessel/sessions.db';
+  mkdirSync(dirname(sessionPath), { recursive: true });
+  const session = new SQLiteSessionBackend(sessionPath);
 
   let currentSessionId = sessionId ?? newSessionId();
 
@@ -145,7 +144,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const defaultPluginNames =
     configuredPlugins.length > 0
       ? configuredPlugins.map((p) => p.name)
-      : pluginRegistry.getAvailablePlugins().filter((name) => name !== 'hook-logging');
+      : loader.getAvailablePlugins().filter((name) => name !== 'hook-logging');
   // hook-logging 默认关闭，仅调试时启用
   if (process.env.VESSEL_DEBUG && !defaultPluginNames.includes('hook-logging')) {
     defaultPluginNames.push('hook-logging');
@@ -153,8 +152,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   const plugins: Plugin[] = [];
   for (const name of defaultPluginNames) {
-    if (name.startsWith('provider-')) continue;
-    const p = await pluginRegistry.loadPlugin(name);
+    const p = await loader.load(name);
     if (p) plugins.push(p);
   }
 
@@ -167,17 +165,23 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }),
   );
 
-  // ask-user 交互工具——普通工具对象（ADR-029，不再合成注册 + bridge）。
+  // ask-user 交互工具——以插件形式注册（唯一工具入口是 PluginHost）。
   // 仅交互模式注册；headless 无 TUI 订阅者，注册只会 waitFor 超时挂起。
   if (!headless) {
-    tools.register(createAskUserTool());
+    plugins.push({
+      name: 'ask-user',
+      version: '0.1.0',
+      description: 'Ask-user interactive tool (ADR-029)',
+      install(host) {
+        host.registerTool(createAskUserTool());
+      },
+    });
   }
 
   // ── Runtime ─────────────────────────────────────
   const runtime = await AgentRuntime.create({
     provider,
     model: providerModel,
-    tools,
     context,
     events,
     limits: config.limits ?? { requestLimit: 100, toolCallsLimit: 50 },
@@ -196,40 +200,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
   });
 
-  // 采集插件注册的工具定义（仅交互模式，供 /tools 展示）。
-  // 注意：displayHost 与 runtime pluginHost 是各自 install 出的不同工具对象，这里只用于展示，
-  // 不在此挂 checkPermission——默认权限策略由 runtime 统一判定（ADR-029，见 AgentRuntime.permission）。
-  if (!headless) {
-    const displayHost = new MemoryPluginHost();
-    const origLog = console.log;
-    const origErr = console.error;
-    console.log = () => undefined;
-    console.error = () => undefined;
-    try {
-      for (const p of plugins) {
-        try {
-          await p.install(displayHost);
-        } catch {
-          // 采集失败不阻塞
-        }
-      }
-    } finally {
-      console.log = origLog;
-      console.error = origErr;
-    }
-    for (const t of displayHost.listTools()) {
-      try {
-        tools.register(t);
-      } catch {
-        // 重名工具跳过
-      }
-    }
-  }
-
   // ── ReplContext ─────────────────────────────────
+  // 工具/插件的唯一来源是 runtime.pluginHost（插件在 install() 里注册，
+  // 与 runtime 用的是同一个 host）——/tools、/plugins 直接读它，不再二次 install。
   const ctx: ReplContext = {
     runtime,
-    tools,
+    pluginHost: runtime.pluginHost,
     session,
     events,
     context,

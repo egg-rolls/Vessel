@@ -19,26 +19,18 @@ export interface ToolContext {
 export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<string>;
 
 /**
- * 工具定义（ADR-026：自描述对象——权限/暂停/显示/条件启用下沉到工具节点）
+ * 工具定义（ADR-026：自描述对象——权限判定下沉到工具节点）
+ * 工具的唯一注册入口是 PluginHost（插件在 install 里 registerTool）。
  */
 export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
   handler: ToolHandler;
+  /** 超时毫秒数；缺省或 0 = 不限时 */
   timeout?: number;
-  default?: boolean; // true = 在 system prompt 中自动列出; false = 通过 search_assets 发现
-  // ── 自描述字段（全可选，向后兼容）──
-  /** 需要暂停等用户输入（工具用 ctx.events.waitFor 等回复事件） */
-  interactive?: boolean;
-  /** 执行时权限判定（allow/deny/ask） */
+  /** 执行时权限判定（allow/deny/ask）；缺省走 runtime 默认策略 */
   checkPermission?(input: unknown, ctx: ToolContext): Promise<'allow' | 'deny' | 'ask'>;
-  /** 自定义显示数据（默认 TUI 模板渲染，工具可选声明渲染数据，与 ADR-021 调和） */
-  render?(input: unknown): unknown;
-  /** 条件启用 */
-  isEnabled?(): boolean;
-  /** 延迟加载（tool_reference，预留） */
-  shouldDefer?: boolean;
 }
 
 /** 工具 Schema（用于 LLM） */
@@ -59,22 +51,4 @@ export interface ToolCall {
     name: string;
     arguments: string;
   };
-}
-
-/** 工具调用结果 */
-export interface ToolResult {
-  tool_call_id: string;
-  name: string;
-  content: string;
-  error?: string;
-}
-
-/** 工具注册表接口 */
-export interface ToolRegistry {
-  register(def: ToolDefinition): void;
-  invoke(call: ToolCall, ctx: ToolContext): Promise<string>;
-  schemas(): ToolSchema[];
-  get(name: string): ToolDefinition | undefined;
-  has(name: string): boolean;
-  list(): ToolDefinition[];
 }

@@ -5,7 +5,6 @@ import {
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
-  MemoryToolRegistry,
   type RunEvent,
   type ToolDefinition,
 } from '@vessel/core';
@@ -83,8 +82,8 @@ describe('delegate-task 插件（子 agent 分派）', () => {
       }),
     );
 
-    const tools = new MemoryToolRegistry();
-    tools.register(echoTool());
+    const host = new MemoryPluginHost();
+    host.registerTool(echoTool());
     const events = new MemoryEventStream();
     const plugin = createDelegateTaskPlugin({
       providerFactory: () => provider,
@@ -93,7 +92,7 @@ describe('delegate-task 插件（子 agent 分派）', () => {
     const runtime = await AgentRuntime.create({
       provider,
       model: 'test-model',
-      tools,
+      pluginHost: host,
       context: new MemoryContextManager(),
       events,
       limits: {},
@@ -129,7 +128,7 @@ describe('delegate-task 插件（子 agent 分派）', () => {
       }),
     );
 
-    const tools = new MemoryToolRegistry();
+    const host = new MemoryPluginHost();
     const plugin = createDelegateTaskPlugin({
       providerFactory: () => provider,
       model: 'test-model',
@@ -139,7 +138,7 @@ describe('delegate-task 插件（子 agent 分派）', () => {
     const runtime = await AgentRuntime.create({
       provider,
       model: 'test-model',
-      tools,
+      pluginHost: host,
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: {},
@@ -166,7 +165,7 @@ describe('delegate-task 插件（子 agent 分派）', () => {
       }),
     );
 
-    const tools = new MemoryToolRegistry();
+    const host = new MemoryPluginHost();
     const plugin = createDelegateTaskPlugin({
       providerFactory: () => provider,
       model: 'test-model',
@@ -174,7 +173,7 @@ describe('delegate-task 插件（子 agent 分派）', () => {
     const runtime = await AgentRuntime.create({
       provider,
       model: 'test-model',
-      tools,
+      pluginHost: host,
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: {},

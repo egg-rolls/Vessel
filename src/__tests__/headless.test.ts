@@ -3,7 +3,7 @@ import { Database } from 'bun:sqlite';
  * Headless 模式集成测试（bash 管道驱动 = loop engineering 入口）
  *
  * 用 Bun.spawn 跑真实 CLI 子进程，VESSEL_MOCK=1 用内存 Provider 保证确定性。
- * 隔离：cwd 用临时目录，避免污染真实 vessel.db。
+ * 隔离：cwd 用临时目录，避免污染真实 .vessel/sessions.db。
  */
 import { expect, it } from 'bun:test';
 import * as fs from 'node:fs';
@@ -111,7 +111,7 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
     expect(stdout.trim()).toBe('Echo: follow up');
     expect(stderr).toContain('[vessel]');
     // 验证 seeding：session DB 含完整历史（seed 的前两条 + 本次 user + 响应）
-    const db = new Database(path.join(tmpDir, 'vessel.db'), { readonly: true });
+    const db = new Database(path.join(tmpDir, '.vessel', 'sessions.db'), { readonly: true });
     const row = db.query('SELECT messages FROM sessions').get() as { messages: string } | null;
     db.close();
     if (!row) throw new Error('no session saved');

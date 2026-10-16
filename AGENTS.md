@@ -1,157 +1,67 @@
 # AGENTS.md
 
-> 本文件是 Vessel 仓库的通用概念手册。**所有 AI Agent 角色必读。**
-> 角色专属规则：入口 `docs/role/*-TODO.md`（执行清单，必读），角色细节见 `docs/role/REQUIREMENTS-ANALYST.md` / `ARCHITECT.md` / `DEVELOPER.md` / `REVIEWER.md` / `DOC-MANAGER.md`（选读）。
-> 本文件与代码冲突时，以代码为准并更新本文件；不靠记忆猜测。
+> Vessel 仓库的 AI 行为约定。与代码冲突时以代码为准，并顺手改掉本文档。
 
----
+## 项目是什么
 
-## 1. 项目身份
+Vessel 是一个**自组织 Agent Harness**：极简核心（9 个接口 + 1 个通用 tool-calling loop + 2 个插槽）、Provider 无关、可独立嵌入。
 
-- **是什么**：自组织 Agent Harness——极简核心（9 个接口、2 个插槽、1 个通用循环），Agent 自己发现缺口、自己装配能力。三层：`@vessel/core`（运行时，可独立嵌入）+ `@vessel/config`（声明式配置）+ `@vessel/tui`（终端交互）。Provider 无关、范式无关、开源。
 - **语言/运行时**：TypeScript + Bun。
-- **分发**：`npx vessel`（弃单二进制，见 ADR-006）。
-- **状态**：pre-MVP。标注 `[plan]` 的为待实现。
-- **大目标**：自组织、极轻便、极强扩展性、厂商中立。无基础用户填 Key 即跑；Agent 自己长大。
+- **monorepo**：bun workspaces。`packages/{core,config,tui,serve,permission}` + `plugins/` + `apps/web`。
+- **形态**：`@vessel/core` 是库（零 UI 依赖，可嵌入）；TUI / serve / web 是应用层外壳。
+- **工具集**：只有 `bash` / `read` / `edit` 三个，其余由模型组合。别急着加第四个。
+- **状态**：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 
-## 2. 项目事实
+## 代码风格与硬规矩
 
-- 仓库结构：`packages/{core,config,tui}` + `plugins/` + `docs/{specs,guides,role,api,dev}` + `processes/` + `legacy/`。
-- monorepo：bun workspaces。
-- 公共入口：`@vessel/core` 的 `AgentRuntime`、`PluginHost`；`@vessel/tui` 的 REPL。
-- 依赖：保持精简；core 不依赖 tui/config/plugins。
-- 不引入 LangChain/LangGraph。
+- 不引入 LangChain / LangGraph。
+- 不加重依赖。core 的 `dependencies` 保持为空；重依赖只能进插件包。
+- **core 保持小**。core 里不出现业务概念（skills、记忆、资产、文档、代码审查、OCR、PDF、图片、向量、浏览器、IAM、计费）。
+- 不新增第二套扩展机制——一切走 `Plugin` + `PluginHost`。
+- 不新增事件名常量/枚举。事件名一律是开放字符串字面量，命名空间 `<domain>.<action>.<event>`。
+- 全异步。不写 sync-in-async（阻塞调用混进异步路径）。
+- 不留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。
+- 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
+- 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
+- 文档只写已实现；规划项明确标注。不吹未实现的能力。
 
-## 3. 文档加载策略
+## 怎么跑
 
-按树形加载，不一次全读。入口永远先到角色 TODO，再按需下钻：
-
-```
-CLAUDE.md（入口：场景调度表）
-  └─ 每场景 → role/XXX-TODO.md   ← 必读（执行清单）
-       └─ role/XXX.md            ← 选读（角色文档）
-            └─ 按需 → docs/specs · docs/api · docs/guides
-```
-
-### 宪法级
-
-这三个文件是仓库的宪法。**不清楚其中内容 = 写出的代码大概率违规**。
-
-| 必读 | 为什么 |
-|------|--------|
-| [docs/specs/SPEC.md](docs/specs/SPEC.md) | 架构/模块/执行模型——不知道系统怎么建写不了代码 |
-| [docs/specs/ADR.md](docs/specs/ADR.md) | 架构决策——不知道历史决策会重蹈覆辙 |
-| [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md) | 文档规范——修改永久文档前必读 |
-
-### 角色入口（开始任何工作前）
-
-| 角色 | 必读（执行清单） | 选读（角色文档） |
-|------|-----------------|-----------------|
-| 需求分析师 | [REQ-TODO.md](docs/role/REQ-TODO.md) | [REQUIREMENTS-ANALYST.md](docs/role/REQUIREMENTS-ANALYST.md) |
-| 架构师 | [ARCH-TODO.md](docs/role/ARCH-TODO.md) | [ARCHITECT.md](docs/role/ARCHITECT.md) |
-| 开发者 | [DEV-TODO.md](docs/role/DEV-TODO.md) | [DEVELOPER.md](docs/role/DEVELOPER.md) |
-| 审查者 | [REVIEW-TODO.md](docs/role/REVIEW-TODO.md) | [REVIEWER.md](docs/role/REVIEWER.md) |
-| 文档管理者 | [DOC-TODO.md](docs/role/DOC-TODO.md) | [DOC-MANAGER.md](docs/role/DOC-MANAGER.md) |
-
-### 按需加载
-
-| 场景 | 文档 |
-|------|------|
-| 规划新功能 | [docs/specs/ROADMAP.md](docs/specs/ROADMAP.md)、[docs/specs/PRD.md](docs/specs/PRD.md) |
-| 添加插件 | [docs/specs/PLUGINS.md](docs/specs/PLUGINS.md) |
-| 合并审查 | [docs/specs/GIT-WORKFLOW.md](docs/specs/GIT-WORKFLOW.md) |
-| 修改文档 | [docs/specs/DOC-STANDARD.md](docs/specs/DOC-STANDARD.md)（§七 设计方法——修改文档前必读）、[docs/specs/META-GOVERNANCE.md](docs/specs/META-GOVERNANCE.md)（规范的规范——判断该不该写） |
-| 新增/修改治理规则 | [docs/specs/META-GOVERNANCE.md](docs/specs/META-GOVERNANCE.md)（三条准入 + 四层梯度 + 三类分离） |
-| 查术语 | [docs/specs/GLOSSARY.md](docs/specs/GLOSSARY.md) |
-| 查 Core 接口 | [docs/api/CORE.md](docs/api/CORE.md)（接口契约） |
-| 查 API 签名 | [docs/api/](docs/api/)（API 文档） |
-| 开发指南（上手/构建/测试/插件开发） | [docs/guides/](docs/guides/) |
-| 了解协作流程 | [processes/collaboration.md](processes/collaboration.md) |
-| Commit/分支/Issue 命名规范 | [processes/conventions.md](processes/conventions.md) |
-| Issue 类型与优先级体系 | [docs/specs/ISSUE-SPEC.md](docs/specs/ISSUE-SPEC.md) |
-| 需求治理模型（五层存储/外部贡献） | [docs/specs/GOVERNANCE.md](docs/specs/GOVERNANCE.md) |
-| 开发阶段计划（当前阶段/候选模块） | [docs/dev/DEVELOPMENT-PLAN.md](docs/dev/DEVELOPMENT-PLAN.md) |
-| 查看当前任务 | [processes/task-assignment.md](processes/task-assignment.md) |
-| 避免旧错误 | [legacy/LESSONS.md](legacy/LESSONS.md) |
-| 人类贡献流程 | [CONTRIBUTING.md](CONTRIBUTING.md) |
-
-### 文档分区规则
-
-```
-docs/specs/  guides/  role/  api/  → 永久文档，禁止出现：
-  "pre-MVP" "当前" "目前" "现在" "暂不" "延后" "Phase N 实现时"
-  → 只描述设计是什么，不描述做到哪了
-  → 状态/进度/审查信息放 docs/dev/
-
-docs/dev/ → 临时产物，无限制
+```bash
+bun test                                        # 测试
+bun run typecheck                               # tsc --noEmit
+bunx @biomejs/biome ci .                        # lint + format 检查
+VESSEL_MOCK=1 bun run src/cli.ts                # 模拟模式起 REPL（不需要 API Key）
+VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # headless 冒烟
 ```
 
-## 4. 红线
+改完代码，这三个必须过：`bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .`。
 
-以下任一触发，**立即停止，重新考虑**：
+## 分层与能力准入
 
-- 把插件对象塞进 runtime 构造函数（guardrail/memory/mcp/corrections/resilience/evals）。→ 违 ADR-003。
-- 新增第 2 套扩展机制（不走 Plugin + PluginHost）。→ 违 ADR-004。
-- 新增事件名常量/枚举（EventType / PermissionEvent 已废；ADR-030：事件名一律用开放字符串字面量）。→ 违 ADR-030。
-- 写 sync-in-async（阻塞调用混进异步路径）。→ 违旧项目教训6。
-- 留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。→ 违旧项目教训11。
-- 给 core 加默认厂商 API Key/Base URL/价格。→ 违 ADR-005（Key 永远用户自备）。
-- 给 core 加 OCR/PDF/图片/向量/浏览器/IAM/计费依赖。→ 违分层。
-- 在 core 里引用 tui/config/plugins。→ 违依赖方向。
-- 把 workflow/team/durable/evals 提前到 MVP。→ 违 ADR-010 / ROADMAP。
-- 改 core（loop 或扩展面）来实现本可做成工具/Hook/Guardrail/事件的事，且无 ADR。→ 违 ADR-012/015。
-- 引入 LangChain/LangGraph。
-- 让 `vessel.yaml` 默认暴露 30+ 键。→ 违旧项目教训4（零配置起步）。
-- 文档吹未实现能力。→ 违反反幻觉纪律。
+新增能力前先分类：**进 core / 做成插件 / 放应用层**。
 
-## 5. 反幻觉纪律
+进 core 必须全部满足：大多数 harness 都需要、领域无关、可接口化、不绑 Provider 或厂商 SDK、能被多个应用复用。
 
-- 文档只写已实现；规划项标 `[plan]`。
-- 不吹 MCP/RAG/evals/workflow 等未实现能力。
-- 代码与文档不一致时，改其一，不留矛盾。
-- 不从记忆回答能查代码的问题；先查 `packages/`。
-- **修改 `docs/specs/`、`docs/guides/`、`docs/role/`、`docs/api/` 后必须执行自检 grep**：
-  ```
-  grep -rn "当前\|目前\|现在\|暂时\|暂不\|延后\|近期\|以后\|pre-MVP\|MVP 范围\|Phase.*实现时" docs/specs/ docs/guides/ docs/role/ docs/api/
-  ```
-  命中即违规，修改后方可提交。
+**拿不准就选插件，不选 core。** core 只放领域无关的运行时；其余一律做成 `plugins/<category>/<name>/` 下的插件（放文件夹即注册，无需改代码、无需构建步骤——但插件目录在**进程启动时扫描一次**，新增插件要重启进程才生效）。应用层外壳（TUI、配置向导、gateway、web）不往 core 反推需求。
 
-## 6. 能力分层与准入决策树
+判断"要不要动 core"时的自检：
 
-新增能力前必须分类：**内置(core) / 插件 / 应用层**。
-
-进 **core** 前必须全部满足：
-1. 大多数 harness 都需要？
-2. 领域无关（不涉文档/代码审查/客服/OCR/PDF/图片/向量/浏览器/IAM/计费/租户/dashboard）？
-3. 可接口化（不绑具体后端/厂商 SDK/重依赖）？
-4. 不绑定 Provider/Model/API Key/Base URL/价格？
-5. 能被多个应用复用？
-
-全"是" → core；否则 → 插件或应用层。**拿不准选插件，不选 core。**
-
-- **内置(core)**：runtime loop、provider 抽象、context、session、events、tools、limits、termination、guardrail 接口、hook 接口、PluginHost。
-- **插件**：guardrail 规则、memory、MCP、corrections、resilience、evals、OCR/PDF/图片/向量/浏览器等。**不进 runtime 构造函数**，经 Plugin 注入（ADR-003）。
-- **应用层**：TUI、配置向导、业务 agent。
-
-用户面向的四种扩展类型（Plugin/MCP/Skill/Config）全经 PluginHost 投放，core 不为它们新增接口（ADR-011）。
-
-### Core 冻结（ADR-017）
-
-**`@vessel/core` 的 9 个接口 + tool-calling loop 已冻结。** 功能增长一律走 Plugin/MCP/Skill，不动 core。
-
-冻结范围：`packages/core/src/**` 中所有定义了接口契约、循环逻辑、事件类型的文件。
-
-**只能因三种原因改 core**（ADR-012(2a-c)，需 ADR-017 解冻条件）：
-1. 扩"插座"——HookType / GuardrailStage 枚举成员（需写新 ADR）
-2. 修 loop 级 bug（竞态、泄漏、安全）
-3. 横切需求——**先证明**无法用 Plugin/Hook/Guardrail/事件/工具表示（ADR-015：尚无已知的此类需求）
-
-**你以为需要改 core？走这个 checklist：**
 ```
-[ ] 我能用 Plugin + PluginHost.registerTool/registerHook 实现吗？
-[ ] 我能用 MCP server + bridge plugin 实现吗？
-[ ] 我能用 Skill（Markdown + BeforeLlm Hook）实现吗？
-[ ] 我能用 Guardrail（四阶段）实现吗？
-[ ] 我能用事件（开放字符串协议，ADR-030）实现吗？
-→ 任一为"是" → 不进 core。全"否" → 写 ADR，两人 Review。
+[ ] 能做成 Tool（Plugin 里 registerTool）吗？
+[ ] 能做成 Hook / Guardrail 吗？
+[ ] 能做成事件（开放字符串）吗？
+[ ] 能由 bash + 模型自己组合出来吗？
+→ 任一为"是" → 不进 core。
 ```
+
+## 别做什么
+
+- 别把插件对象塞进 runtime 构造函数（走 `plugins` 或 `pluginHost` 注入）。
+- 别在 core 里引用 `tui` / `config` / `plugins`（依赖方向是单向的）。
+- 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
+- 别给模型再加一个能干的、能与 bash 等价的事的工具。
+- 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
+- 别把 workflow / team / durable / evals / MCP 提前实现。
+- 别在文档里描述一个不存在的架构。
+- 别绕过 PR 直接 push main。

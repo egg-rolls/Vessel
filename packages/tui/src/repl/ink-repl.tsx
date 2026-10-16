@@ -26,6 +26,7 @@ import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import type { ReplContext } from '../repl-context.js';
 import { asTuiEvent } from '../types/events.js';
+import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { useReplState } from './use-repl-state.js';
 
@@ -175,7 +176,12 @@ function InkRepl({ ctx }: InkReplProps) {
       // run 完成后通过 onComplete 回调将响应归档到 history
       try {
         const branch = await getCurrentGitBranch();
-        await ctx.runtime.run(value, state.currentSessionId, { branch });
+        // `@path` 引用展开（C10）：扫到的文件读为注入消息，用户原文不变
+        const { messages, warnings } = collectFileReferences(value);
+        for (const warning of warnings) {
+          dispatch({ type: 'appendHistory', line: warning });
+        }
+        await ctx.runtime.run(value, state.currentSessionId, { branch, messages });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         dispatch({ type: 'appendHistory', line: `Error: ${errorMsg}` });
@@ -453,7 +459,12 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     // 处理普通消息
     try {
       const branch = await getCurrentGitBranch();
-      const response = await ctx.runtime.run(trimmed, state.currentSessionId, { branch });
+      // `@path` 引用展开（C10）：与 TTY 路径同源，告警走 console
+      const { messages, warnings } = collectFileReferences(trimmed);
+      for (const warning of warnings) {
+        console.log(warning);
+      }
+      const response = await ctx.runtime.run(trimmed, state.currentSessionId, { branch, messages });
       console.log(response);
     } catch (error) {
       const c = classifyError(error);

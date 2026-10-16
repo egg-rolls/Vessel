@@ -61,7 +61,7 @@ export class LoggingHook implements Hook {
     };
   }
 
-  async run(ctx: HookContext): Promise<HookContext | null> {
+  async run(ctx: HookContext): Promise<void> {
     const entry: LogEntry = {
       level: 'info',
       message: 'LLM request initiated',
@@ -72,7 +72,6 @@ export class LoggingHook implements Hook {
     };
 
     this.log(entry);
-    return ctx;
   }
 
   /**
@@ -139,7 +138,7 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
       ...hook,
       type: HookType.BeforeLlm,
       name: 'logging-before-llm',
-      run: async (ctx: HookContext) => {
+      run: async (ctx: HookContext): Promise<void> => {
         const entry: LogEntry = {
           level: 'info',
           message: 'Before LLM request',
@@ -148,14 +147,13 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           session_id: ctx.session_id,
         };
         hook.log(entry);
-        return ctx;
       },
     },
     {
       ...hook,
       type: HookType.AfterLlm,
       name: 'logging-after-llm',
-      run: async (ctx: HookContext) => {
+      run: async (ctx: HookContext): Promise<void> => {
         const entry: LogEntry = {
           level: 'info',
           message: 'After LLM response',
@@ -164,14 +162,13 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           session_id: ctx.session_id,
         };
         hook.log(entry);
-        return ctx;
       },
     },
     {
       ...hook,
       type: HookType.BeforeTool,
       name: 'logging-before-tool',
-      run: async (ctx: HookContext) => {
+      run: async (ctx: HookContext): Promise<void> => {
         const entry: LogEntry = {
           level: 'debug',
           message: `Before tool execution: ${(ctx as { tool_name?: string }).tool_name ?? 'unknown'}`,
@@ -180,14 +177,13 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           session_id: ctx.session_id,
         };
         hook.log(entry);
-        return ctx;
       },
     },
     {
       ...hook,
       type: HookType.AfterTool,
       name: 'logging-after-tool',
-      run: async (ctx: HookContext) => {
+      run: async (ctx: HookContext): Promise<void> => {
         const entry: LogEntry = {
           level: 'debug',
           message: `After tool execution: ${(ctx as { tool_name?: string }).tool_name ?? 'unknown'}`,
@@ -196,14 +192,13 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           session_id: ctx.session_id,
         };
         hook.log(entry);
-        return ctx;
       },
     },
     {
       ...hook,
       type: HookType.OnError,
       name: 'logging-on-error',
-      run: async (ctx: HookContext) => {
+      run: async (ctx: HookContext): Promise<void> => {
         const entry: LogEntry = {
           level: 'error',
           message: `Error: ${(ctx as { error?: string }).error ?? 'unknown error'}`,
@@ -212,7 +207,6 @@ export function createLoggingHooks(config: LoggingHookConfig = {}): Hook[] {
           session_id: ctx.session_id,
         };
         hook.log(entry);
-        return ctx;
       },
     },
   ];

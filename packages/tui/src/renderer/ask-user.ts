@@ -192,7 +192,5 @@ Do NOT use for trivial questions you can resolve yourself.`,
       if (typeof normalized === 'string') return normalized;
       return promptFromEvents(ctx.events, ctx.run_id, normalized, timeoutMs);
     },
-    default: true,
-    interactive: true,
   };
 }

@@ -114,23 +114,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 tools
-  if (config.tools) {
-    if (!Array.isArray(config.tools)) {
-      errors.push({ path: 'tools', message: 'Tools must be an array', value: config.tools });
-    } else {
-      config.tools.forEach((tool, index) => {
-        if (!tool.name || typeof tool.name !== 'string') {
-          errors.push({
-            path: `tools[${index}].name`,
-            message: 'Tool name must be a non-empty string',
-            value: tool.name,
-          });
-        }
-      });
-    }
-  }
-
   // 校验 limits
   if (config.limits) {
     const { requestLimit, toolCallsLimit, inputTokensLimit, outputTokensLimit, totalCostLimit } =
@@ -194,7 +177,6 @@ export const KNOWN_CONFIG_KEYS = [
   'apiKey',
   'provider',
   'agent',
-  'tools',
   'guardrails',
   'hooks',
   'limits',

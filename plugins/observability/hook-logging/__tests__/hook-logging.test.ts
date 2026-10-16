@@ -21,7 +21,7 @@ describe('hook-logging 插件（MECH-1）', () => {
     expect(types).toContain(HookType.OnError);
   });
 
-  it('BeforeLlm hook 输出日志并返回 ctx（不拦截）', async () => {
+  it('BeforeLlm hook 输出日志（不拦截，返回 void）', async () => {
     const beforeLlm = host.getHooks().find((h) => h.type === HookType.BeforeLlm);
     if (!beforeLlm) throw new Error('BeforeLlm hook not registered');
 
@@ -30,7 +30,7 @@ describe('hook-logging 插件（MECH-1）', () => {
     console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
     try {
       const result = await beforeLlm.run({ run_id: 'run-12345678', session_id: 's1' });
-      expect(result).not.toBeNull(); // 不拦截
+      expect(result).toBeUndefined(); // 不拦截、无返回值
     } finally {
       console.log = origLog;
     }
@@ -62,8 +62,7 @@ describe('hook-logging 插件（MECH-1）', () => {
     const origLog = console.log;
     console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
     try {
-      const result = await afterLlm.run({ run_id: 'r1', session_id: 's1' });
-      expect(result).not.toBeNull();
+      await afterLlm.run({ run_id: 'r1', session_id: 's1' });
     } finally {
       console.log = origLog;
     }
@@ -78,9 +77,8 @@ describe('hook-logging 插件（MECH-1）', () => {
     if (!beforeTool) throw new Error('BeforeTool hook not registered');
 
     // 注意：默认日志级别是 info，debug 级别日志不会输出
-    // 但 hook 仍然会返回 ctx
-    const result = await beforeTool.run({ run_id: 'r1', tool_name: 'test_tool' });
-    expect(result).not.toBeNull();
+    // 但 hook 仍可正常运行（无返回值、不抛错）
+    await beforeTool.run({ run_id: 'r1', tool_name: 'test_tool' });
   });
 
   it('AfterTool hook 记录工具名（debug 级别）', async () => {
@@ -88,16 +86,15 @@ describe('hook-logging 插件（MECH-1）', () => {
     if (!afterTool) throw new Error('AfterTool hook not registered');
 
     // 注意：默认日志级别是 info，debug 级别日志不会输出
-    // 但 hook 仍然会返回 ctx
-    const result = await afterTool.run({ run_id: 'r1', tool_name: 'test_tool' });
-    expect(result).not.toBeNull();
+    // 但 hook 仍可正常运行（无返回值、不抛错）
+    await afterTool.run({ run_id: 'r1', tool_name: 'test_tool' });
   });
 
-  it('所有 hook 都返回 ctx（不拦截）', async () => {
+  it('所有 hook 都可正常运行且不返回 ctx（不拦截）', async () => {
     const hooks = host.getHooks();
     for (const hook of hooks) {
       const result = await hook.run({ run_id: 'r1', session_id: 's1' });
-      expect(result).not.toBeNull();
+      expect(result).toBeUndefined();
     }
   });
 

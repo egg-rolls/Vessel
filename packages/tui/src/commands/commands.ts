@@ -3,11 +3,8 @@
  * @module @vessel/tui
  *
  * 命令清单（ADR-020）：
- * /tools - 工具浏览器
+ * /tools - 工具浏览器（读 ctx.pluginHost）
  * /plugins - 插件浏览器
- * /mcp - MCP 浏览器
- * /skills - Skills 浏览器
- * /assets - 资产总览仪表盘
  * /resume - 恢复会话
  * /new - 新建会话
  * /history - 显示历史
@@ -125,9 +122,6 @@ export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
   reg.register(toolsCommand());
   reg.register(pluginsCommand());
-  reg.register(mcpCommand());
-  reg.register(skillsCommand());
-  reg.register(assetsCommand());
   reg.register(resumeCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
@@ -299,7 +293,7 @@ function toolsCommand(): CommandEntry {
     description: '列出已注册工具',
     usage: '/tools',
     run: (_args, ctx, _state) => {
-      const list = ctx.tools.list();
+      const list = ctx.pluginHost.listTools();
       if (list.length === 0) {
         return { handled: true, output: '\nNo tools registered.\n' };
       }
@@ -326,72 +320,6 @@ function pluginsCommand(): CommandEntry {
       const lines = ['', `Loaded plugins (${plugins.length}):`];
       for (const p of plugins) lines.push(`  - ${p}`);
       lines.push('');
-      return { handled: true, output: lines.join('\n') };
-    },
-  };
-}
-
-// ── /mcp ─────────────────────────────────────────
-
-function mcpCommand(): CommandEntry {
-  return {
-    name: 'mcp',
-    description: '列出 MCP 服务器状态',
-    usage: '/mcp',
-    run: (_args, ctx, _state) => {
-      const mcpTools = ctx.tools.list().filter((t) => t.name.startsWith('mcp_'));
-      const clientPlugins = ctx.plugins.filter((p) => p.toLowerCase().includes('mcp'));
-      if (mcpTools.length === 0) {
-        const via = clientPlugins.length > 0 ? '' : '（mcp-client 插件未加载）';
-        return { handled: true, output: `\nNo MCP tools loaded${via}.\n` };
-      }
-      const via = clientPlugins.length > 0 ? ` via ${clientPlugins.join(', ')}` : '';
-      const lines = ['', `MCP (${mcpTools.length} tools${via}):`];
-      for (const t of mcpTools) lines.push(`  - ${t.name}: ${t.description}`);
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
-    },
-  };
-}
-
-// ── /skills ──────────────────────────────────────
-
-function skillsCommand(): CommandEntry {
-  return {
-    name: 'skills',
-    description: '列出可用 Skills',
-    usage: '/skills',
-    run: (_args, ctx, _state) => {
-      const skillTools = ctx.tools.list().filter((t) => t.name.includes('skill'));
-      const loaderPlugins = ctx.plugins.filter((p) => p.toLowerCase().includes('skill'));
-      if (skillTools.length === 0) {
-        const via = loaderPlugins.length > 0 ? '' : '（skills-loader 插件未加载）';
-        return { handled: true, output: `\nNo skills loaded${via}.\n` };
-      }
-      const via = loaderPlugins.length > 0 ? ` via ${loaderPlugins.join(', ')}` : '';
-      const lines = ['', `Skills (${skillTools.length} tools${via}):`];
-      for (const t of skillTools) lines.push(`  - ${t.name}: ${t.description}`);
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
-    },
-  };
-}
-
-// ── /assets ──────────────────────────────────────
-
-function assetsCommand(): CommandEntry {
-  return {
-    name: 'assets',
-    description: '资产总览仪表盘',
-    usage: '/assets',
-    run: (_args, ctx, _state) => {
-      const assetTools = ctx.tools.list().filter((t) => t.name.includes('asset'));
-      const lines = [
-        '',
-        `Assets (${assetTools.length} asset tools registered):`,
-        ...assetTools.map((t) => `  - ${t.name}: ${t.description}`),
-        '',
-      ];
       return { handled: true, output: lines.join('\n') };
     },
   };

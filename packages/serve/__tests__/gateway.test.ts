@@ -4,8 +4,8 @@ import {
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
+  MemoryPluginHost,
   MemorySessionBackend,
-  MemoryToolRegistry,
 } from '@vessel/core';
 import { type Gateway, startGateway } from '../src/gateway';
 
@@ -14,7 +14,7 @@ function makeRuntime(events: MemoryEventStream): Promise<AgentRuntime> {
   return AgentRuntime.create({
     provider: new MemoryLLMProvider(),
     model: 'test-model',
-    tools: new MemoryToolRegistry(),
+    pluginHost: new MemoryPluginHost(),
     context: new MemoryContextManager(),
     events,
     limits: { requestLimit: 10, toolCallsLimit: 5 },
