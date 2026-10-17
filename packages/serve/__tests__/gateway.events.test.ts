@@ -57,6 +57,28 @@ describe('gateway events / protocol', () => {
     expect(await client.closed()).toBe(4401);
   });
 
+  it('reports from_seq=0 and latest_seq=0 on an empty buffer', async () => {
+    const gw = track(createGateway({ events: new MemoryEventStream() }));
+    const client = await connect(gw);
+    const hello = await client.next((frame) => frame.kind === 'hello');
+    if (hello.kind !== 'hello') throw new Error('expected hello');
+    expect(hello.from_seq).toBe(0);
+    expect(hello.latest_seq).toBe(0);
+  });
+
+  it('reports the next expected seq when the client is caught up', async () => {
+    const events = new MemoryEventStream();
+    const gw = track(createGateway({ events, maxHistory: 10 }));
+    for (let i = 1; i <= 3; i++) {
+      events.publish({ type: 'demo.event', run_id: 'r1', data: { n: i }, ts: Date.now() });
+    }
+    const client = await connect(gw, { since: 3 });
+    const hello = await client.next((frame) => frame.kind === 'hello');
+    if (hello.kind !== 'hello') throw new Error('expected hello');
+    expect(hello.from_seq).toBe(4);
+    expect(hello.latest_seq).toBe(3);
+  });
+
   it('replays only events after since', async () => {
     const events = new MemoryEventStream();
     const gw = track(createGateway({ events, maxHistory: 10 }));
@@ -194,6 +216,36 @@ describe('gateway events / protocol', () => {
     expect(text).toContain('demo.event');
     expect(text).toContain('"seq":1');
   });
+
+  it('keeps SSE alive past the idle timeout and emits pings', async () => {
+    // idleTimeout=1s：若 `: ping` 不能刷新 idle timer，连接会在 1s 左右被掐断。
+    const gw = track(
+      createGateway({
+        events: new MemoryEventStream(),
+        idleTimeout: 1,
+        heartbeatMs: 100,
+      }),
+    );
+    const res = await fetch(`${gw.url}/v1/events?token=${gw.token}`);
+    expect(res.status).toBe(200);
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error('no body');
+    const decoder = new TextDecoder();
+    let text = '';
+    let closed = false;
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        closed = true;
+        break;
+      }
+      text += decoder.decode(chunk.value);
+    }
+    await reader.cancel();
+    expect(closed).toBe(false);
+    expect(text).toContain(': ping');
+  }, 10_000);
 
   it('marks frames with job_id after run.started', async () => {
     const events = new MemoryEventStream();
