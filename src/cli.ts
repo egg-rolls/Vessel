@@ -22,7 +22,10 @@ import { type Gateway, startGateway } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
+import { parseArgs } from './cli-args';
 import { runHeadless } from './headless-runner';
+import { listTools } from './tools-list';
+import { readPackageVersion } from './version';
 
 // ── 终端排版辅助 ─────────────────────────────────
 
@@ -84,7 +87,14 @@ function printHelp(): void {
   const debug: Array<[string, string]> = [
     ['VESSEL_MOCK=1 bun run src/cli.ts --run "x"', 'mock 模式（不调 API）'],
   ];
-  const width = Math.max(...[...usage, ...headless, ...serve, ...debug].map(([cmd]) => cmd.length));
+  const meta: Array<[string, string]> = [
+    ['bun run src/cli.ts --version', '显示版本'],
+    ['bun run src/cli.ts --tools', '列出已注册工具（不需要 API Key）'],
+    ['bun run src/cli.ts --help', '显示本帮助'],
+  ];
+  const width = Math.max(
+    ...[...usage, ...headless, ...serve, ...debug, ...meta].map(([cmd]) => cmd.length),
+  );
 
   console.log(
     [
@@ -101,8 +111,20 @@ function printHelp(): void {
       '',
       '  调试',
       align(debug, width),
+      '',
+      '  其它',
+      align(meta, width),
     ].join('\n'),
   );
+}
+
+/** `--tools`：列出当前配置下的工具（headless 口径，不需要 Key） */
+async function printTools(): Promise<void> {
+  const { tools, warnings } = await listTools();
+  for (const w of warnings) console.warn(`⚠ ${w}`);
+  console.log(`Tools (${tools.length}):`);
+  for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
+  console.log('ask_user (interactive only)');
 }
 
 /** --serve 启动 banner：对齐 box，含 gateway/token/SSE/WS + 控制台提示 */
@@ -121,43 +143,33 @@ function renderGatewayBanner(gateway: Gateway): string {
 
 // ── argv 解析 ────────────────────────────────────
 
-const argv = process.argv.slice(2);
-// runArg: null=非 headless；''=无参（读 stdin）；非空=文本 prompt 或 @file
-let runArg: string | null = null;
-let pipeMode = false; // --pipe 隐藏别名，等价 --run 无参（读 stdin）
-let sessionArg: string | null = null;
-let servePort = 0; // --serve [port] 启动 HTTP/WS gateway（0=关闭，默认 8642）
-for (let i = 0; i < argv.length; i++) {
-  const a = argv[i];
-  if (a === '--run' || a === '-r') {
-    const next = argv[i + 1];
-    if (next !== undefined && !next.startsWith('-')) {
-      runArg = next;
-      i++;
-    } else {
-      runArg = '';
-    }
-  } else if (a === '--pipe') {
-    pipeMode = true;
-  } else if (a === '--session' || a === '-s') {
-    const next = argv[i + 1];
-    if (next !== undefined && !next.startsWith('-')) {
-      sessionArg = next;
-      i++;
-    }
-  } else if (a === '--serve') {
-    const next = argv[i + 1];
-    servePort = next !== undefined && !next.startsWith('-') ? Number.parseInt(next, 10) : 8642;
-    if (next !== undefined && !next.startsWith('-')) i++;
-  } else if (a === '--help' || a === '-h') {
-    printHelp();
-    process.exit(0);
-  } else {
-    console.error(`Unknown argument: ${a}\nRun with --help for usage.`);
-    process.exit(1);
-  }
+const parsed = parseArgs(process.argv.slice(2));
+if (!parsed.ok) {
+  console.error(`${parsed.error}\nRun with --help for usage.`);
+  process.exit(1);
 }
+const args = parsed.args;
+
+// 一次性命令在 bootstrap 之前短路：不加载 config / provider / gateway。
+if (args.help) {
+  printHelp();
+  process.exit(0);
+}
+if (args.version) {
+  console.log(readPackageVersion());
+  process.exit(0);
+}
+if (args.tools) {
+  await printTools();
+  process.exit(0);
+}
+
+const { runArg, pipeMode, sessionArg, servePort } = args;
 const headless = runArg !== null || pipeMode;
+// 只有真正进入 Ink REPL 且 stdin 是 TTY 才算交互：
+// serve-only（--serve 无 --run）与管道输入都不算，避免无 TTY 时进首启向导。
+const entersRepl = !headless && servePort === 0;
+const interactive = entersRepl && process.stdin.isTTY === true;
 
 // ── 主流程 ──────────────────────────────────────
 
@@ -168,10 +180,12 @@ const { runtime, ctx, config, cleanup } = await bootstrap({
   useMock,
   sessionId: sessionArg ?? undefined,
   headless,
+  interactive,
+  registerAskUser: interactive,
 });
 
-// 首启向导（仅交互模式）
-if (!useMock && !headless && !config.apiKey) {
+// 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
+if (!useMock && interactive && !config.apiKey) {
   const userConfig = await runSetupWizard();
   if (userConfig.apiKey) {
     config.apiKey = userConfig.apiKey;
@@ -192,6 +206,8 @@ if (!useMock && !headless && !config.apiKey) {
       useMock,
       sessionId: sessionArg ?? undefined,
       headless,
+      interactive,
+      registerAskUser: interactive,
     });
     await runWithConfig(result);
   } else {

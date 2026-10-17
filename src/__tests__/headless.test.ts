@@ -154,6 +154,36 @@ it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 
   }
 });
 
+it('--version 打印根 package.json 版本，exit 0', async () => {
+  const { stdout, exitCode } = await runCli(['--version'], {});
+  expect(exitCode).toBe(0);
+  expect(stdout.trim()).toBe('0.1.0');
+});
+
+it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => {
+  const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' });
+  expect(exitCode).toBe(0);
+  expect(stdout).toContain('Tools (4):');
+  for (const name of ['bash', 'read', 'edit', 'delegate_task']) {
+    expect(stdout).toContain(`- ${name}:`);
+  }
+  expect(stdout).toContain('ask_user (interactive only)');
+});
+
+it('--run @missing.txt 报错 exit 1', async () => {
+  const { exitCode, stderr } = await runCli(['--run', '@definitely-missing.txt'], {
+    VESSEL_MOCK: '1',
+  });
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain('cannot read file');
+});
+
+it('--serve 非 TTY 且无 Key 时快速失败，不进首启向导', async () => {
+  const { exitCode, stderr } = await runCli(['--serve', '18643'], { VESSEL_MOCK: '' }, ' ');
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain('No API key configured');
+});
+
 it('未知参数报错并 exit 1（不静默忽略）', async () => {
   const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
   expect(exitCode).toBe(1);
