@@ -25,6 +25,14 @@ Vessel 是一个**自组织 Agent Harness**：极简核心（9 个接口 + 1 个
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
 - 文档只写已实现；规划项明确标注。不吹未实现的能力。
 
+## 文件与目录
+
+共享侧与个人侧的分工、目录结构、角色独占路径、分支与发布规则，见 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)。简版：
+
+- 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
+- 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
+- 版本线：`main` → `release/0.1` → `0.1.0-<role>`；发布由 tag `v*` 触发，不由分支名触发。
+
 ## 怎么跑
 
 ```bash
