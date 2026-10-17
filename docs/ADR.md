@@ -475,7 +475,7 @@
 
 ## ADR-038：thinking 模式 `reasoning_content` 回传
 
-> 编号说明：ADR-035 = core loop 修复，ADR-036 = gateway 协议，ADR-037 预留给 0.2 runtime 方向；本条使用 038。
+> 编号说明：ADR-035 = 0.1 core loop 修复，ADR-036 = gateway 协议，**ADR-037 = 0.2 runtime（见下）**，ADR-038 = reasoning_content（本条）。
 
 - **上下文**：OpenAI 兼容的 thinking 模型（如 DeepSeek reasoning）在响应里返回 `reasoning_content`。当响应包含工具调用时，下一轮请求必须把该字段原样回传，否则 API 会拒绝（`reasoning_content required`）。同时，思维链属于模型内部推理，不应出现在 TUI / 事件流 / 观测里，但会话恢复后仍需保留以支持后续轮次。
 - **决策**：
