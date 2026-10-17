@@ -730,9 +730,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 0.1.0 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
 - **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2 与静态托管在 `--serve` 下生效。
 
-## 14. 0.2 目标架构（planned，未实现）
+## 14. 0.2 目标架构（planned，未发布）
 
-> **状态：规划（planned）。** 本节描述 0.2 的方向与边界，**代码尚未实现**；当前实际行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
+> **状态：planned（0.2，未发布）。** 本节描述 0.2 的方向与边界；0.2 分支已有 Kernel / Modules 实现，但**尚未随正式版本发布**，对 0.1 用户能力面仍是未实现。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
 > 0.2 不重写 loop、不删除公开 API；新能力默认 off / opt-in。
 
 ### 14.1 定位与分层（planned）
@@ -767,7 +767,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | observability | `EventStore`（新增）+ `EventStream` | `@vessel/core/observability` |
 | kernel | Host / Scheduler / Handles | `@vessel/core/kernel` |
 
-0.2 **只在 `@vessel/core` 内做 ports & adapters + subpath exports，不拆包**；根入口继续 re-export 全部现有符号。依赖规则：`types/**` 不 import 实现；模块之间只经 port 交互；`kernel` 只依赖 port 类型；模块不得反向依赖 `src/**` / `packages/serve` / `plugins/**`。
+0.2 **只在 `@vessel/core` 内做 ports & adapters + subpath exports，不拆包**；根入口继续 re-export 全部现有符号。依赖规则：`types/**` 不 import 实现；模块之间只经 port 交互；`kernel` 只依赖 port 类型（默认实现允许 F5 白名单：`AgentRuntime` + `MemoryContextManager` / `MemoryEventStream` / `MemoryPluginHost`，且必须可经 options 覆盖）；模块不得反向依赖 `src/**` / `packages/serve` / `plugins/**`。
 
 ### 14.4 Transport（planned）
 
