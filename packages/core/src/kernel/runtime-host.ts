@@ -417,6 +417,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     try {
       const text = await record.runtime.run(input, run.sessionId, {
         ...opts,
+        runId: run.id,
         signal: run.signal,
       });
 

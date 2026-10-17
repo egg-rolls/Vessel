@@ -121,7 +121,8 @@ export class AgentRuntime {
    * @returns 最终响应文本
    */
   async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
-    const runId = randomUUID();
+    // F6：Host 可指定 runId，使 RunHandle.id 与事件流 run_id 一致；普通调用方缺省生成
+    const runId = opts?.runId ?? randomUUID();
     const startTime = Date.now();
     const currentSessionId = sessionId || 'default';
     const signal = opts?.signal;

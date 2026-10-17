@@ -213,6 +213,29 @@ describe('InProcessRuntimeHost 生命周期', () => {
     await host.close();
   });
 
+  it('RunHandle.id 与成员事件流 run_id 一致（F6）', async () => {
+    const host = new InProcessRuntimeHost();
+    const agent = await host.spawn({
+      id: 'aligned',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+    });
+
+    const run = await agent.run('hi');
+    await run.result;
+
+    const started = host.events
+      .getHistory()
+      .find(
+        (event) =>
+          event.type === 'run.started' &&
+          (event.data as { agentId?: string }).agentId === 'aligned',
+      );
+    expect(started?.run_id).toBe(run.id);
+
+    await host.close();
+  });
+
   it('RunHandle.usage 返回本次 run 用量（A9）', async () => {
     const provider = new ControlledProvider();
     const host = new InProcessRuntimeHost();

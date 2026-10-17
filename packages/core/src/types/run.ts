@@ -7,6 +7,12 @@ import type { Message } from './provider.js';
 
 /** Run 选项 */
 export interface RunOptions {
+  /**
+   * @internal 仅供 Kernel/Host 使用：指定本次 run 的 run_id，
+   * 使 `RunHandle.id` 与事件流里的 `run_id` 一致（F6）。
+   * 普通调用方不要设置；缺省由 AgentRuntime 生成。
+   */
+  runId?: string;
   /** AbortSignal——设置后可在外部中断 run()（Hermes/Claude Code 模式） */
   signal?: AbortSignal;
   /** 当前 git branch——app 层采集，core 透传存入 RunState.branch */
