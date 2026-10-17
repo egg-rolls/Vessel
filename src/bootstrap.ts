@@ -26,6 +26,7 @@ import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/ind
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { DeferredTransport } from './deferred-transport';
 import { planFactoryPlugins } from './factory-plugins';
+import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
@@ -67,6 +68,13 @@ export interface BootstrapResult {
    * cli 在 gateway 启动、真实 loopback 构造后调用 resolve/fail。
    */
   transport?: DeferredTransport;
+  /** 0.3：MCP 控制面（未配置 mcp_servers 时为 undefined） */
+  mcp?: McpControl;
+  /**
+   * 幂等关闭：MCP close → Host/runtime dispose → RunStore close。
+   * 新代码应 await 本函数；`cleanup()` 仅供旧调用点兼容。
+   */
+  shutdown: () => Promise<void>;
   cleanup: () => void;
 }
 
@@ -392,12 +400,59 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const activeRuntime = runtime;
   // host 模式下事件总线由 Host 提供；legacy 模式沿用原来的 EventStream。
   const runtimeEvents = host?.events ?? events;
+  const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
+
+  // ── MCP（0.3）───────────────────────────────────
+  // 在 runtime 就绪后安装：host 模式下 host.events 只有这时才存在；
+  // PluginHost 是可变注册表，工具在每轮 loop 重新读取，后装对 owner/子 agent 立即生效。
+  let mcpPlugin: McpPluginLike | undefined;
+  let mcpControl: McpControl | undefined;
+  if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+    try {
+      const wiring = await installMcp({ config, events: runtimeEvents, loader }, finalPluginHost);
+      if (wiring) {
+        mcpPlugin = wiring.plugin;
+        mcpControl = wiring.control;
+      }
+    } catch (e) {
+      // 配置了 mcp_servers 但插件不可用属配置错误：启动即失败，不静默。
+      console.error(`✗ ${e instanceof Error ? e.message : e}`);
+      process.exit(1);
+    }
+  }
+
+  // ── 关闭 ────────────────────────────────────────
+  let shuttingDown = false;
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    if (mcpPlugin) {
+      try {
+        await mcpPlugin.close();
+      } catch (e) {
+        console.warn(`⚠ Failed to close MCP client: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    try {
+      if (host) await host.close();
+    } catch (e) {
+      console.warn(`⚠ Failed to close runtime host: ${e instanceof Error ? e.message : e}`);
+    }
+
+    try {
+      activeRuntime.dispose();
+    } catch {
+      // dispose 是同步契约；失败不阻断退出
+    }
+  };
 
   // ── ReplContext ─────────────────────────────────
   // 工具/插件的唯一来源是同一个 PluginHost（插件在 install() 里注册）。
   const ctx: ReplContext = {
     runtime: activeRuntime,
-    pluginHost: selectedPluginHost ?? activeRuntime.pluginHost,
+    pluginHost: finalPluginHost,
     session,
     events: runtimeEvents,
     context,
@@ -410,8 +465,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     newSessionId,
     onExit: () => {
-      activeRuntime.dispose();
-      process.exit(0);
+      void shutdown().finally(() => process.exit(0));
     },
   };
 
@@ -423,6 +477,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     nodeId,
     spawnAgent,
     transport: deferredTransport,
-    cleanup: () => activeRuntime.dispose(),
+    mcp: mcpControl,
+    shutdown,
+    cleanup: () => {
+      void shutdown();
+    },
   };
 }
