@@ -15,11 +15,12 @@
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { extname, resolve, sep } from 'node:path';
 import type {
-  AgentRuntime,
+  AgentMessage,
   ContextManager,
   EventStream,
   PluginHost,
   RunEvent,
+  RunnableAgent,
   SessionBackend,
   ToolDefinition,
 } from '@vessel/core';
@@ -35,6 +36,19 @@ import {
   type ServerFrame,
   type ToolInfo,
 } from './protocol.js';
+import {
+  fromWireMessage,
+  isRemoteAddress,
+  isTeamEvent,
+  normalizeLocalAddress,
+  parseAddress,
+  type TeamGatewayOptions,
+  TeamProtocolError,
+  toWireAgentStatus,
+  toWireEvent,
+  toWireMessage,
+  toWirePeer,
+} from './team.js';
 
 /** 网关启动选项 */
 export interface GatewayOptions {
@@ -42,8 +56,8 @@ export interface GatewayOptions {
   events: EventStream;
   /** 会话后端（可选）——/v1/sessions 数据源 */
   session?: SessionBackend;
-  /** 运行时（可选）——运行控制端点 */
-  runtime?: AgentRuntime;
+  /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 AgentRuntime */
+  runtime?: RunnableAgent;
   /** 上下文管理器（可选）——会话切换时 clear，修跨会话串历史 */
   context?: ContextManager;
   /** 工具宿主（可选）——缺省读 runtime.pluginHost */
@@ -56,6 +70,8 @@ export interface GatewayOptions {
   token?: string;
   /** 节点名（可选，展示用） */
   nodeName?: string;
+  /** 节点 id；缺省 team.nodeId 或随机。team/transport 必须使用同一个值（U3） */
+  nodeId?: string;
   /** 静态 web 目录（可选，托管 apps/web/dist） */
   staticDir?: string;
   /** 事件环形缓冲容量（默认 10000） */
@@ -75,6 +91,8 @@ export interface GatewayOptions {
    * 事件流是长连接，不能用 Bun 的 10s 默认值；SSE 心跳 `: ping` 仍用于穿透代理。
    */
   idleTimeout?: number;
+  /** R3 team 端点配置；缺省 = team 关闭（`/v1/team/*` 返回 404） */
+  team?: TeamGatewayOptions;
 }
 
 /** 网关实例 */
@@ -84,6 +102,11 @@ export interface Gateway {
   token: string;
   nodeId: string;
   protocol: ProtocolInfo;
+  /**
+   * 启动 gateway 后再接入 team（asm 需先拿到实际端口构造 LoopbackTransport）。
+   * 只设置一次；重复调用会替换 team 配置。
+   */
+  attachTeam(team: TeamGatewayOptions): void;
   stop(): void;
 }
 
@@ -267,7 +290,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const { session, runtime, context } = opts;
   const hostname = opts.hostname ?? DEFAULT_HOSTNAME;
   const token = opts.token ?? generateToken();
-  const nodeId = randomUUID();
+  const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
   const startedAt = Date.now();
   const buffer = new SeqEventBuffer(opts.maxHistory ?? DEFAULT_MAX_HISTORY);
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
@@ -286,6 +309,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
     { run_id: string; tool: string; input: unknown; ts: number }
   >();
   const pendingAsks = new Map<string, { run_id: string; ts: number }>();
+
+  /** R3 team 状态（默认关闭） */
+  let team: TeamGatewayOptions | undefined = opts.team;
+  const teamClients = new Map<SseController, { agentId?: string }>();
+  let teamPollTimer: ReturnType<typeof setInterval> | undefined;
+  let knownPeers = new Set<string>();
+  let inboundCursor = 0;
+  /** 入站去重（transport.deliver 之外的兜底，防止注入 deliver 时绕过） */
+  const seenInbound = new Map<string, true>();
 
   let active: RunRecord | null = null;
   let activeSessionId = 'default';
@@ -327,7 +359,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ts: Date.now(),
       seq: item.seq,
       ...(jobId ? { job_id: jobId } : {}),
-      event: item.event,
+      // A7：agent.* / team.* 的 data 在 gateway 边界映射为 snake_case
+      event: toWireEvent(item.event),
     };
   }
 
@@ -466,6 +499,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
     const seq = buffer.append(event);
     broadcast(eventFrame({ seq, event }));
+
+    // R3：team 事件流（agent.* / team.*），可选按 agent_id 过滤
+    if (isTeamEvent(event) && teamClients.size > 0) {
+      const wire = toWireEvent(event);
+      const frame = `data: ${JSON.stringify({
+        protocol: 1,
+        node_id: nodeId,
+        seq,
+        kind: 'team.event',
+        event: wire,
+      })}\n\n`;
+      for (const [ctrl, filter] of [...teamClients]) {
+        const agentId = (wire.data as Record<string, unknown>).agent_id;
+        if (filter.agentId !== undefined && agentId !== filter.agentId) continue;
+        try {
+          ctrl.enqueue(frame);
+        } catch {
+          teamClients.delete(ctrl);
+        }
+      }
+    }
   });
 
   // ── 运行队列 ───────────────────────────────────
@@ -801,6 +855,415 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return new Response(file, { headers });
   }
 
+  // ── R3 team 端点 ───────────────────────────────
+
+  /** 发布 team/agent 事件（core 内部 camelCase；gateway 边界统一转 snake_case） */
+  function publishTeamEvent(type: string, data: Record<string, unknown>): void {
+    events.publish({ type, run_id: 'team', data, ts: Date.now() });
+  }
+
+  function publishTeamError(error: unknown): void {
+    publishTeamEvent('team.transport.error', {
+      code: (error as { code?: string }).code ?? 'internal',
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  /** TeamProtocolError / PeerTransportError → HTTP */
+  function teamErrorResponse(error: unknown, extra: Record<string, string>): Response {
+    if (error instanceof TeamProtocolError) {
+      const status = error.code === 'not_found' || error.code === 'agent_not_found' ? 404 : 400;
+      return errorJson(error.code as ProtocolError['code'], error.message, status, extra);
+    }
+    const code = (error as { code?: string }).code;
+    if (code) {
+      const status =
+        code === 'unauthorized'
+          ? 401
+          : code === 'unsupported_protocol'
+            ? 426
+            : code === 'peer_not_found'
+              ? 404
+              : code === 'transport_closed'
+                ? 409
+                : code === 'timeout'
+                  ? 504
+                  : code === 'peer_unreachable' || code === 'peer_error'
+                    ? 502
+                    : 400;
+      return errorJson(
+        code as ProtocolError['code'],
+        error instanceof Error ? error.message : String(error),
+        status,
+        extra,
+      );
+    }
+    return errorJson(
+      'internal',
+      error instanceof Error ? error.message : String(error),
+      500,
+      extra,
+    );
+  }
+
+  /** 入站投递：deliver 注入优先 → transport.deliver → host.send */
+  async function deliverInbound(message: AgentMessage): Promise<boolean> {
+    const t = team;
+    if (!t) throw new TeamProtocolError('team_disabled', 'Team is not enabled');
+    if (isRemoteAddress(message.to, t.nodeId)) {
+      throw new TeamProtocolError('agent_not_found', `Cannot relay to another node: ${message.to}`);
+    }
+    if (seenInbound.has(message.id)) return false;
+    seenInbound.set(message.id, true);
+    while (seenInbound.size > 1000) {
+      const first = seenInbound.keys().next();
+      if (first.done) break;
+      seenInbound.delete(first.value);
+    }
+    const local = normalizeLocalAddress(message, t.nodeId);
+    if (t.deliver) {
+      await t.deliver(local);
+      return true;
+    }
+    const withDeliver = t.transport as unknown as {
+      deliver?: (msg: AgentMessage) => boolean | Promise<boolean>;
+    };
+    if (typeof withDeliver?.deliver === 'function') {
+      const result = await withDeliver.deliver(local);
+      return result !== false;
+    }
+    if (t.host?.send) {
+      await t.host.send(local);
+      return true;
+    }
+    throw new TeamProtocolError('no_host', 'No team delivery handler configured');
+  }
+
+  /** team 事件 SSE */
+  function openTeamStream(url: URL, extra: Record<string, string>): Response {
+    const agentId = url.searchParams.get('agent_id') ?? undefined;
+    const since = parseSince(url.searchParams.get('since'));
+    let controller: SseController | undefined;
+    const stream = new ReadableStream<unknown>({
+      start(ctrl) {
+        controller = ctrl;
+        teamClients.set(ctrl, { ...(agentId !== undefined ? { agentId } : {}) });
+        ctrl.enqueue('retry: 3000\n\n');
+        const latest = buffer.latestSeq;
+        ctrl.enqueue(
+          `data: ${JSON.stringify({
+            protocol: 1,
+            node_id: nodeId,
+            kind: 'team.hello',
+            from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
+            latest_seq: latest,
+          })}\n\n`,
+        );
+        const gap = buffer.gapFor(since);
+        if (gap) {
+          ctrl.enqueue(
+            `data: ${JSON.stringify({
+              protocol: 1,
+              node_id: nodeId,
+              kind: 'gap',
+              from_seq: gap.from_seq,
+              to_seq: gap.to_seq,
+            })}\n\n`,
+          );
+        }
+        for (const item of buffer.since(since)) {
+          if (!isTeamEvent(item.event)) continue;
+          const wire = toWireEvent(item.event);
+          const eventAgentId = (wire.data as Record<string, unknown>).agent_id;
+          if (agentId !== undefined && eventAgentId !== agentId) continue;
+          ctrl.enqueue(
+            `data: ${JSON.stringify({
+              protocol: 1,
+              node_id: nodeId,
+              seq: item.seq,
+              kind: 'team.event',
+              event: wire,
+            })}\n\n`,
+          );
+        }
+      },
+      cancel() {
+        if (controller) teamClients.delete(controller);
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        ...extra,
+      },
+    });
+  }
+
+  /** `/v1/team/*` 路由；未启用 team 返回 404 */
+  async function handleTeam(
+    req: Request,
+    url: URL,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/team' && !path.startsWith('/v1/team/')) return null;
+    const t = team;
+    if (!t) return errorJson('not_found', `Not found: ${path}`, 404, extra);
+
+    if (path === '/v1/team/peers' && req.method === 'GET') {
+      let peers = t.transport ? await t.transport.peers().catch(() => []) : [];
+      if (peers.length === 0) {
+        peers = [
+          {
+            nodeId: t.nodeId,
+            agents: t.host?.list() ?? [],
+            protocol: 1,
+          },
+        ];
+      }
+      return json({ protocol: 1, node_id: t.nodeId, peers: peers.map(toWirePeer) }, 200, extra);
+    }
+
+    if (path === '/v1/team/messages' && req.method === 'POST') {
+      const body = await readJsonBody(req, maxBodyBytes);
+      if (body instanceof Response) return body;
+      if (body.protocol !== 1) {
+        return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
+      }
+      let message: AgentMessage;
+      try {
+        message = fromWireMessage(body.message);
+      } catch (error) {
+        return teamErrorResponse(error, extra);
+      }
+      // F9：入站 HTTP 不接受跨节点广播；本地 /v1/team/send 的 '*' 仍然允许。
+      if (message.to === '*') {
+        return errorJson(
+          'broadcast_not_supported',
+          'Inbound broadcast is not supported; use a concrete recipient',
+          400,
+          extra,
+        );
+      }
+      // F11：有 node 前缀的 from 必须与 envelope node_id 一致（防伪）；本机简写放行。
+      const fromNode = parseAddress(message.from).nodeId;
+      if (fromNode !== undefined && body.node_id !== fromNode) {
+        return errorJson('invalid_request', 'body.node_id must match message.from', 400, extra);
+      }
+      try {
+        const accepted = await deliverInbound(message);
+        const target = message.to === '*' ? undefined : parseAddress(message.to).agentId;
+        publishTeamEvent('team.message.received', {
+          messageId: message.id,
+          from: message.from,
+          to: message.to,
+          kind: message.kind,
+          ...(target ? { agentId: target } : {}),
+        });
+        return json(
+          {
+            protocol: 1,
+            ok: true,
+            message_id: message.id,
+            ...(accepted ? {} : { deduplicated: true }),
+            cursor: String(++inboundCursor),
+          },
+          accepted ? 202 : 200,
+          extra,
+        );
+      } catch (error) {
+        return teamErrorResponse(error, extra);
+      }
+    }
+
+    if (path === '/v1/team/send' && req.method === 'POST') {
+      if (!t.transport) {
+        return errorJson('team_disabled', 'No loopback transport configured', 404, extra);
+      }
+      const body = await readJsonBody(req, maxBodyBytes);
+      if (body instanceof Response) return body;
+      if (body.protocol !== 1) {
+        return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
+      }
+      let message: AgentMessage;
+      try {
+        message = fromWireMessage(body.message);
+      } catch (error) {
+        return teamErrorResponse(error, extra);
+      }
+      try {
+        await t.transport.send(message);
+        publishTeamEvent('team.message.sent', {
+          messageId: message.id,
+          from: message.from,
+          to: message.to,
+          kind: message.kind,
+        });
+        return json({ protocol: 1, ok: true, message_id: message.id }, 202, extra);
+      } catch (error) {
+        publishTeamError(error);
+        return teamErrorResponse(error, extra);
+      }
+    }
+
+    if (path === '/v1/team/inbox' && req.method === 'GET') {
+      if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
+      const agentId = url.searchParams.get('agent_id');
+      if (!agentId || agentId.includes(':')) {
+        return errorJson('invalid_request', 'agent_id must be a local agent id', 400, extra);
+      }
+      const cursor = url.searchParams.get('cursor') ?? undefined;
+      try {
+        const page = await t.host.inbox(agentId, cursor);
+        return json(
+          {
+            protocol: 1,
+            agent_id: agentId,
+            messages: page.messages.map(toWireMessage),
+            cursor: page.cursor,
+          },
+          200,
+          extra,
+        );
+      } catch (error) {
+        return teamErrorResponse(error, extra);
+      }
+    }
+
+    if (path === '/v1/team/stream' && req.method === 'GET') {
+      return openTeamStream(url, extra);
+    }
+
+    if (path === '/v1/team/agents') {
+      if (req.method === 'GET') {
+        if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
+        return json({ protocol: 1, agents: t.host.list().map(toWireAgentStatus) }, 200, extra);
+      }
+      if (req.method === 'POST') {
+        if (!t.spawn) return errorJson('no_spawn', 'No spawn handler configured', 400, extra);
+        const body = await readJsonBody(req, maxBodyBytes);
+        if (body instanceof Response) return body;
+        const name = body.name;
+        const model = body.model;
+        const systemPrompt = body.system_prompt;
+        if (name !== undefined && typeof name !== 'string') {
+          return errorJson('invalid_request', 'name must be a string', 400, extra);
+        }
+        if (model !== undefined && typeof model !== 'string') {
+          return errorJson('invalid_request', 'model must be a string', 400, extra);
+        }
+        if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
+          return errorJson('invalid_request', 'system_prompt must be a string', 400, extra);
+        }
+        try {
+          const status = await t.spawn({
+            ...(name !== undefined ? { name } : {}),
+            ...(model !== undefined ? { model } : {}),
+            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+          });
+          return json({ protocol: 1, agent: toWireAgentStatus(status) }, 201, extra);
+        } catch (error) {
+          return teamErrorResponse(error, extra);
+        }
+      }
+    }
+
+    const agentMatch = path.match(/^\/v1\/team\/agents\/([^/]+)(?:\/(cancel|close))?$/);
+    if (agentMatch) {
+      const id = decodeURIComponent(agentMatch[1] ?? '');
+      const action = agentMatch[2];
+      if (id.includes(':')) {
+        if (action === 'cancel') {
+          return errorJson(
+            'remote_cancel_not_supported',
+            'Remote agents are addressed by messages; HTTP endpoints are local-only',
+            400,
+            extra,
+          );
+        }
+        return errorJson('agent_not_found', `Remote agent is not local: ${id}`, 404, extra);
+      }
+      if (action === 'cancel' && req.method === 'POST') {
+        if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
+        // F10：未知 agent 返回 404，不让 host.cancel 抛成 500。
+        if (!t.host.get(id)) {
+          return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
+        }
+        try {
+          t.host.cancel(id);
+        } catch (error) {
+          return errorJson(
+            'agent_not_found',
+            error instanceof Error ? error.message : `Unknown agent: ${id}`,
+            404,
+            extra,
+          );
+        }
+        return json({ protocol: 1, cancelled: true }, 200, extra);
+      }
+      if (action === 'close' && req.method === 'POST') {
+        const handle = t.host?.get(id);
+        if (!handle) return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
+        await handle.close();
+        return json({ protocol: 1, closed: true }, 200, extra);
+      }
+      if (!action && req.method === 'GET') {
+        if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
+        const status = t.host.get(id)?.status() ?? t.host.list().find((item) => item.id === id);
+        if (!status) return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
+        return json({ protocol: 1, agent: toWireAgentStatus(status) }, 200, extra);
+      }
+    }
+
+    return errorJson('not_found', `Not found: ${path}`, 404, extra);
+  }
+
+  /** 轮询 peer 表，发布 join/left（失败只记录，不影响 v1） */
+  function startTeamPolling(): void {
+    if (teamPollTimer) clearInterval(teamPollTimer);
+    teamPollTimer = undefined;
+    if (!team?.transport) return;
+    const poll = async (): Promise<void> => {
+      const t = team;
+      if (!t?.transport) return;
+      try {
+        const peers = await t.transport.peers();
+        const current = new Set(peers.map((peer) => peer.nodeId));
+        for (const id of current) {
+          if (id !== nodeId && !knownPeers.has(id)) {
+            publishTeamEvent('team.peer.joined', { nodeId: id });
+          }
+        }
+        for (const id of knownPeers) {
+          if (id !== nodeId && !current.has(id)) {
+            publishTeamEvent('team.peer.left', { nodeId: id });
+          }
+        }
+        knownPeers = current;
+      } catch (error) {
+        publishTeamError(error);
+      }
+    };
+    void poll();
+    teamPollTimer = setInterval(() => {
+      void poll();
+    }, team?.peerPollMs ?? 5_000);
+    (teamPollTimer as { unref?: () => void }).unref?.();
+  }
+
+  /** 启动后接入 team（asm 先拿端口构造 transport） */
+  function attachTeam(next: TeamGatewayOptions): void {
+    if (next.nodeId !== nodeId) {
+      throw new Error(`team.nodeId "${next.nodeId}" must match gateway nodeId "${nodeId}"`);
+    }
+    team = next;
+    knownPeers = new Set();
+    startTeamPolling();
+  }
+
   const server = Bun.serve<WsData>({
     port: opts.port ?? DEFAULT_PORT,
     hostname,
@@ -845,8 +1308,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
           latest_seq: buffer.latestSeq,
         };
         if (path === '/health') return json(base, 200, extra);
+        const teamInfo = team
+          ? {
+              enabled: true,
+              node_id: team.nodeId,
+              transport: team.transport?.kind ?? 'in-process',
+            }
+          : { enabled: false };
         return json(
-          { ...base, protocol: PROTOCOL, node: nodeInfo(), started_at: startedAt },
+          {
+            ...base,
+            protocol: PROTOCOL,
+            node: nodeInfo(),
+            started_at: startedAt,
+            team: teamInfo,
+          },
           200,
           extra,
         );
@@ -890,6 +1366,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!authorized(req, url)) {
         return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
       }
+
+      // R3：team 端点（默认关闭 → 404）
+      const teamResponse = await handleTeam(req, url, path, extra);
+      if (teamResponse) return teamResponse;
 
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
@@ -1085,6 +1565,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const actualPort = server.port ?? opts.port ?? DEFAULT_PORT;
 
+  if (team) startTeamPolling();
+
   // 心跳：WS 发 ping（客户端回 pong 或 {kind:'pong'}），SSE 发注释行
   const heartbeat = setInterval(() => {
     for (const ws of [...wsClients]) {
@@ -1101,6 +1583,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
         ctrl.enqueue(': ping\n\n');
       } catch {
         sseClients.delete(ctrl);
+      }
+    }
+    for (const ctrl of [...teamClients.keys()]) {
+      try {
+        ctrl.enqueue(': ping\n\n');
+      } catch {
+        teamClients.delete(ctrl);
       }
     }
   }, heartbeatMs);
@@ -1124,9 +1613,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     token,
     nodeId,
     protocol: PROTOCOL,
+    attachTeam,
     stop() {
       clearInterval(heartbeat);
       clearInterval(permissionSweeper);
+      if (teamPollTimer) clearInterval(teamPollTimer);
+      teamPollTimer = undefined;
       unsubscribe();
       active?.controller.abort();
       for (const record of queue.splice(0)) {
@@ -1150,6 +1642,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       }
       sseClients.clear();
+      for (const ctrl of teamClients.keys()) {
+        try {
+          ctrl.close();
+        } catch {
+          // 已关闭
+        }
+      }
+      teamClients.clear();
+      knownPeers.clear();
       void server.stop(true);
     },
   };

@@ -58,7 +58,20 @@ export type ProtocolErrorCode =
   | 'depth_exceeded'
   | 'task_not_found'
   | 'cancelled'
-  | 'internal';
+  | 'internal'
+  // R3 team
+  | 'team_disabled'
+  | 'no_host'
+  | 'no_spawn'
+  | 'peer_not_found'
+  | 'peer_unreachable'
+  | 'peer_error'
+  | 'timeout'
+  | 'agent_not_found'
+  | 'broadcast_not_supported'
+  | 'remote_cancel_not_supported'
+  | 'transport_closed'
+  | 'inbox_overflow';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -145,52 +158,10 @@ export interface ToolInfo {
   has_permission_check: boolean;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 0.2 草案：Agent team / 跨节点任务协议（0.1.0 不实现服务端）
-// ─────────────────────────────────────────────────────────────
-
-/** 0.2 草案：节点注册表文件内容 */
-export interface PeerRecord {
-  v: 1;
-  node_id: string;
-  name?: string;
-  pid: number;
-  endpoint: string;
-  peer_token: string;
-  started_at: number;
-  heartbeat_at: number;
-  protocol: 1;
-  capabilities: NodeInfo['capabilities'];
-  status: NodeInfo['status'];
-}
-
-/** 0.2 草案：跨节点任务请求 */
-export interface TaskRequest {
-  task_id: string;
-  input: string;
-  context?: string;
-  session_id?: string;
-  deadline_at?: number;
-  limits?: { max_runtime_ms?: number; max_iterations?: number };
-  depth: number;
-  parent?: { node_id: string; run_id?: string; task_id?: string };
-  reply?: { mode: 'poll' | 'push' };
-}
-
-/** 0.2 草案：跨节点任务状态 */
-export interface TaskStatus {
-  task_id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'rejected';
-  node_id: string;
-  run_id?: string;
-  session_id?: string;
-  output?: string;
-  error?: { code: string; message: string };
-  usage?: RunStatus['usage'];
-  duration_ms?: number;
-  queue_position?: number;
-  updated_at: number;
-}
+// 0.2 team/transport 类型已迁移：
+// - Transport/AgentMessage/PeerInfo 以 core R1 冻结为准；
+// - gateway 边界见 ./team.ts；loopback 实现见 ./transport/；
+// - task 语义（task/result/cancel）归 ext，web 不定义。
 
 /** 构造协议错误载荷 */
 export function protocolError(code: ProtocolErrorCode, message: string): ProtocolError {

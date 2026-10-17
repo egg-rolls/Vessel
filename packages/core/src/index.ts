@@ -25,7 +25,12 @@ export {
 // 运行时
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 // 会话后端
-export { FileSessionBackend, MemorySessionBackend } from './session/index.js';
-export { SQLiteSessionBackend } from './session/sqlite-backend.js';
+export {
+  FileSessionBackend,
+  MemorySessionBackend,
+  SQLiteSessionBackend,
+} from './session/index.js';
+// Transport（0.2 R3a-core：进程内实现）
+export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';
 // 类型定义
 export * from './types/index.js';

@@ -14,9 +14,13 @@ import type { AgentHandle, RunHandle, Scheduler } from './types.js';
 /** AgentHandle 的直执行入口（Host 实现） */
 export const kExecuteAgentRun = Symbol('vessel.kernel.executeAgentRun');
 
-/** Host 的 AgentHandle 额外能力 */
+/** Host 的 AgentHandle 额外能力（sessionId 由 ScheduledTask 透传，F9） */
 export interface InternalAgentHandle extends AgentHandle {
-  [kExecuteAgentRun](input: string | Message, opts?: RunOptions): Promise<RunHandle>;
+  [kExecuteAgentRun](
+    input: string | Message,
+    opts?: RunOptions,
+    sessionId?: string,
+  ): Promise<RunHandle>;
 }
 
 /** Scheduler 的按成员取消入口（Host.closeMember 使用） */

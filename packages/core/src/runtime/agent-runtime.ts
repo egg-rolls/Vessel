@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { MemoryLimitChecker } from '../limits/limit-checker.js';
+import { MemoryLimitChecker } from '../limits/index.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
@@ -554,6 +554,8 @@ export class AgentRuntime {
               session_id: sessionId,
               messages: this.context.messages,
               events: this.events,
+              // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
+              ...(signal ? { signal } : {}),
             };
 
             // 权限判定（ADR-026/029，逻辑在 PermissionPolicy，ADR-033）

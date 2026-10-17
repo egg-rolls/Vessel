@@ -1003,4 +1003,68 @@ describe('中断与限额（C-09）', () => {
 
     await expect(runtime.run('loop')).rejects.toThrow('Usage limits exceeded');
   });
+
+  it('ToolContext.signal 注入并可响应取消（F10）', async () => {
+    const pluginHost = new MemoryPluginHost();
+    let toolSignal: AbortSignal | undefined;
+    let toolAborted = false;
+    let markStarted!: () => void;
+    const toolStarted = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+
+    pluginHost.registerTool({
+      name: 'waiter',
+      description: 'waits for abort',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async (_args, ctx) => {
+        toolSignal = ctx.signal;
+        markStarted();
+        return await new Promise<string>((_resolve, reject) => {
+          ctx.signal?.addEventListener(
+            'abort',
+            () => {
+              toolAborted = true;
+              reject(new Error('tool aborted'));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+
+    const provider = {
+      chat: async () => ({
+        content: '',
+        finish_reason: 'tool_calls' as const,
+        tool_calls: [
+          {
+            id: 'c1',
+            type: 'function' as const,
+            function: { name: 'waiter', arguments: '{}' },
+          },
+        ],
+      }),
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const controller = new AbortController();
+    const runPromise = runtime.run('go', undefined, { signal: controller.signal });
+    await toolStarted;
+
+    expect(toolSignal).toBe(controller.signal);
+    controller.abort('stop');
+
+    await expect(runPromise).rejects.toThrow('stop');
+    expect(toolAborted).toBe(true);
+  });
 });

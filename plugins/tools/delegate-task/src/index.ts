@@ -2,59 +2,59 @@
  * @vessel/delegate-task - 子 agent 分派工具插件
  * @module @vessel/delegate-task
  *
- * 注册 delegate_task 工具：主 agent 在 handler 内 spawn 子 runtime 处理子任务，
- * 只回收最终文本，不污染父上下文。多 agent = 工具 handler 内 spawn 子 runtime（ADR-015），
- * 零 core 改动。
+ * 注册 delegate_task 工具：一次调用 = core Host 上的一个**临时成员**（ephemeral），
+ * 只回收最终文本，不污染父上下文；完成后立即 close。
  *
- * 递归防护双保险：
- * - AsyncLocalStorage 深度计数（每 spawn 一层 +1，超 maxDepth 直接返回错误）；
- * - 子 agent 工具白名单（默认排除 delegate_task 自身，子 agent 无法再分派）。
+ * 递归防护：
+ * - 深度来自 `AgentSpec.metadata.depth` + 子 run 的 `run.started` 映射（不再用 ALS）；
+ * - 子 agent 工具白名单（默认排除 delegate_task 自身）。
  *
  * 安全继承：
- * - 子 host 复制父 host 的 guardrail / hook（否则子 agent 绕过 tool-policy、脱敏与审计）；
- * - 权限默认 `bridge`：子 agent 的权限请求转发到父事件流等用户应答；
+ * - 子 host 复制父 host 的 guardrail / hook；
+ * - 权限默认 `bridge`：子 agent 的权限请求经 Host 聚合流转发到父事件流，
+ *   父级应答回灌 Host 聚合流后由 core 路由回成员；
  *   `allow` 仅 headless 显式使用，`deny` 只保留只读工具。
  *
- * 已知限制（0.1.0）：父 run 取消不会中断子 agent——`ToolContext` 还没有 signal，
- * 等 core 0.1.1 加法引入 `ToolContext.signal` 后再透传。
+ * 取消：父 run 的 `ToolContext.signal` 直接传给临时成员 `RunHandle`（F10）。
  */
 
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type {
+  AgentHandle,
+  RuntimeHost as CoreRuntimeHost,
   EventStream,
   LLMProvider,
   Plugin,
   PluginHost,
-  RunEvent,
+  RunOptions,
   TerminationPolicy,
   ToolContext,
   ToolDefinition,
   Usage,
   UsageLimits,
 } from '@vessel/core';
-import {
-  AgentRuntime,
-  MemoryContextManager,
-  MemoryEventStream,
-  MemoryPluginHost,
-} from '@vessel/core';
-
-/** delegate 深度（每 spawn 一层 +1），AsyncLocalStorage 隔离并行分派，防无限递归 */
-const delegateDepth = new AsyncLocalStorage<number>();
+import { InProcessRuntimeHost as CoreInProcessRuntimeHost, MemoryPluginHost } from '@vessel/core';
 
 /** 子 agent 工具白名单：默认排除 delegate_task 自身，阻断递归 */
 const DEFAULT_DISALLOWED = ['delegate_task'];
 
-/** bridge 模式下等待父级用户应答的上限（与 PermissionPolicy 一致） */
-const PERMISSION_BRIDGE_TIMEOUT_MS = 120_000;
+/** 专用 Host 的默认成员上限 */
+const DEFAULT_MAX_CONCURRENT_DELEGATES = 8;
+
+/** 空 usage（保持 completed 事件字段稳定） */
+function zeroUsage(): Usage {
+  return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+}
+
+/** run_id → 递归深度；由临时成员 run.started 事件填充，供嵌套 delegate 读取 */
+const depthByRunId = new Map<string, number>();
 
 /** 子 agent 权限模式 */
 export type DelegatePermissionMode = 'bridge' | 'allow' | 'deny';
 
 /** 插件配置（上层 bootstrap/插件构造时注入 provider 工厂 + model） */
 export interface DelegateTaskOptions {
-  /** 子 provider 工厂：每次 spawn 子 runtime 时调用（复用父 provider 或新建） */
+  /** 子 provider 工厂：每次 spawn 临时成员时调用 */
   providerFactory: () => LLMProvider;
   /** 子 agent 使用的模型名 */
   model: string;
@@ -70,9 +70,13 @@ export interface DelegateTaskOptions {
   permissionMode?: DelegatePermissionMode;
   /** deny 模式下保留的只读工具（默认 ['read']） */
   readOnlyTools?: string[];
+  /** 注入的 core Host（asm A5）；缺省时插件实例内懒创建一个专用 Host 并复用 */
+  runtimeHost?: CoreRuntimeHost;
+  /** 专用 Host 的成员上限（默认 8）；注入 runtimeHost 时忽略 */
+  maxConcurrentDelegates?: number;
 }
 
-/** 解析后的插件配置（内部使用，全字段定值） */
+/** 解析后的插件配置（内部使用） */
 interface ResolvedConfig {
   providerFactory: () => LLMProvider;
   model: string;
@@ -82,6 +86,10 @@ interface ResolvedConfig {
   termination: TerminationPolicy;
   permissionMode: DelegatePermissionMode;
   readOnlyTools: string[];
+  runtimeHost?: CoreRuntimeHost;
+  maxConcurrentDelegates: number;
+  /** 懒创建的专用 Host（插件实例内复用） */
+  host?: CoreRuntimeHost;
 }
 
 /** 类型守卫：值是否为对象记录 */
@@ -130,120 +138,140 @@ function withDelegateId(delegateId: string, data: unknown): Record<string, unkno
   return { value: data, delegateId };
 }
 
-/** 订阅子 runtime 事件，转发到父 ctx.events（subagent.* 前缀）；返回退订函数 */
-function forwardEvents(parent: EventStream, child: EventStream, delegateId: string): () => void {
-  return child.subscribe((event) => {
-    parent.publish({
-      type: `subagent.${event.type}`,
-      run_id: event.run_id,
-      data: withDelegateId(delegateId, event.data),
-      ts: event.ts,
-    });
+/** 取插件实例的 Host：注入优先，否则懒创建专用 Host 并复用 */
+function resolveHost(config: ResolvedConfig): CoreRuntimeHost {
+  if (config.runtimeHost) return config.runtimeHost;
+  config.host ??= new CoreInProcessRuntimeHost({
+    maxMembers: config.maxConcurrentDelegates,
   });
+  return config.host;
 }
 
-/**
- * 权限桥：把子 agent 的 permission request 用原事件名转发到父事件流，
- * 再把父级应答回灌子事件流。父级（TUI）不需要知道子 runtime 的存在。
- */
-function bridgePermissions(childEvents: EventStream, parentEvents: EventStream): () => void {
-  return childEvents.subscribe((event) => {
-    if (event.type !== 'tool.permission.request') return;
-    if (!isRecord(event.data)) return;
-    const requestId = event.data.requestId;
-    if (typeof requestId !== 'string') return;
-
-    parentEvents.publish({
-      type: 'tool.permission.request',
-      run_id: event.run_id,
-      data: event.data,
-      ts: event.ts,
-    });
-
-    parentEvents
-      .waitFor('tool.permission.response', {
-        requestId,
-        timeout: PERMISSION_BRIDGE_TIMEOUT_MS,
-      })
-      .then((response) => {
-        childEvents.publish({
-          type: 'tool.permission.response',
-          run_id: event.run_id,
-          data: isRecord(response) ? response : { value: response },
-          ts: Date.now(),
-        });
-      })
-      .catch(() => {
-        // 父级无人应答：保持子 runtime 自己的超时/拒绝路径
-      });
-  });
-}
-
-/** 从 llm.response 事件累计子 agent 用量 */
-function accumulateUsage(event: RunEvent, usage: Usage): void {
-  if (event.type !== 'llm.response' || !isRecord(event.data)) return;
-  const raw = event.data.usage;
-  if (!isRecord(raw)) return;
-  const prompt = typeof raw.prompt_tokens === 'number' ? raw.prompt_tokens : 0;
-  const completion = typeof raw.completion_tokens === 'number' ? raw.completion_tokens : 0;
-  const total = typeof raw.total_tokens === 'number' ? raw.total_tokens : prompt + completion;
-  usage.prompt_tokens = (usage.prompt_tokens ?? 0) + prompt;
-  usage.completion_tokens = (usage.completion_tokens ?? 0) + completion;
-  usage.total_tokens = (usage.total_tokens ?? 0) + total;
-}
-
-/** spawn 子 runtime 并回收最终文本 + 用量 */
-async function runChildTask(config: {
+interface ChildTaskConfig {
+  host: CoreRuntimeHost;
   providerFactory: () => LLMProvider;
   model: string;
   task: string;
   context: string;
-  pluginHost: MemoryPluginHost;
+  pluginHost: PluginHost;
   parentEvents: EventStream;
   limits: UsageLimits;
   termination: TerminationPolicy;
   permissionMode: DelegatePermissionMode;
   delegateId: string;
-}): Promise<{ text: string; usage: Usage }> {
-  const childEvents = new MemoryEventStream();
-  const usage: Usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-  const unsubscribers = [
-    forwardEvents(config.parentEvents, childEvents, config.delegateId),
-    childEvents.subscribe((event) => accumulateUsage(event, usage)),
-  ];
-  if (config.permissionMode === 'bridge') {
-    unsubscribers.push(bridgePermissions(childEvents, config.parentEvents));
+  depth: number;
+  signal?: AbortSignal;
+}
+
+/**
+ * 在 Host 上 spawn 一个临时成员并跑完一次任务。
+ * 事件转发 / 权限桥 / 深度映射都通过 Host 聚合流完成。
+ */
+async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; usage: Usage }> {
+  const sameStream = config.parentEvents === config.host.events;
+  const unsubscribers: Array<() => void> = [];
+  let childRunId: string | undefined;
+
+  // Host 聚合流：转发运行事件、生命周期事件、交互请求；同时记录嵌套深度
+  unsubscribers.push(
+    config.host.events.subscribe((event) => {
+      // 防回环：sameStream 时我们也会把 subagent.* 写回同一流
+      if (event.type.startsWith('subagent.')) return;
+
+      const data = isRecord(event.data) ? event.data : {};
+      if (data.agentId !== config.delegateId) return;
+
+      if (event.type === 'run.started' && typeof data.run_id === 'string') {
+        childRunId = data.run_id;
+        depthByRunId.set(data.run_id, config.depth + 1);
+      }
+
+      // P12：dedicated Host 时把生命周期事件原样转发；sameStream 时已存在
+      if (event.type === 'agent.spawned' || event.type === 'agent.closed') {
+        if (!sameStream) {
+          config.parentEvents.publish({
+            type: event.type,
+            run_id: event.run_id,
+            data,
+            ts: event.ts,
+          });
+        }
+        return;
+      }
+      // Host 自身的 agent.* 事件不重复转发；成员 runtime 事件走 subagent.*
+      if (event.type.startsWith('agent.')) return;
+
+      // A6：无论是否同一个流，都保证父流能看到 subagent.* + delegateId
+      config.parentEvents.publish({
+        type: `subagent.${event.type}`,
+        run_id: event.run_id,
+        data: withDelegateId(config.delegateId, event.data),
+        ts: event.ts,
+      });
+
+      // 交互桥：dedicated Host 时用原名再送一份；sameStream 时原名已在流里
+      if (sameStream || config.permissionMode !== 'bridge') return;
+      if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
+        config.parentEvents.publish({
+          type: event.type,
+          run_id: event.run_id,
+          data,
+          ts: event.ts,
+        });
+      }
+    }),
+  );
+
+  // 交互桥：父级应答回灌 Host 聚合流，由 core 路由到发起请求的成员。
+  // sameStream 时应答本来就在同一条流上，不需要订阅。
+  if (!sameStream && config.permissionMode === 'bridge') {
+    unsubscribers.push(
+      config.parentEvents.subscribe((event) => {
+        if (event.type !== 'tool.permission.response' && event.type !== 'ask.user.answered') {
+          return;
+        }
+        config.host.events.publish(event);
+      }),
+    );
   }
 
   const input = config.context ? `${config.task}\n\n附加背景：\n${config.context}` : config.task;
-  const runtime = await AgentRuntime.create({
-    provider: config.providerFactory(),
-    model: config.model,
-    pluginHost: config.pluginHost,
-    context: new MemoryContextManager(),
-    events: childEvents,
-    limits: config.limits,
-    termination: config.termination,
-    // deny 模式已在 buildChildHost 里过滤掉非只读工具；这里统一 allow 避免无应答挂起
-    permission: { default: 'allow' },
-  });
+  let handle: AgentHandle | undefined;
   try {
-    const text = await runtime.run(input);
-    return { text, usage };
+    handle = await config.host.spawn({
+      id: config.delegateId,
+      name: `delegate-${config.depth + 1}`,
+      provider: config.providerFactory(),
+      model: config.model,
+      pluginHost: config.pluginHost,
+      limits: { run: config.limits },
+      termination: config.termination,
+      // deny 模式已过滤工具；bridge 由 Host 转发权限请求
+      permission: { default: 'allow' },
+      metadata: { ephemeral: true, depth: config.depth + 1 },
+    });
+
+    const runOptions: RunOptions | undefined =
+      config.signal !== undefined ? { signal: config.signal } : undefined;
+    const run = await handle.run(input, runOptions);
+    const text = await run.result;
+    return { text, usage: run.usage() ?? zeroUsage() };
   } finally {
+    await handle?.close().catch(() => {});
     for (const unsubscribe of unsubscribers) unsubscribe();
-    runtime.dispose();
+    // 只清理本次 run 的深度映射，避免并发 delegate 互删
+    if (childRunId !== undefined) depthByRunId.delete(childRunId);
   }
 }
 
-/** 构造 delegate_task 工具定义（闭包持有 host，运行时从 host 取安全工具） */
+/** 构造 delegate_task 工具定义（闭包持有父 host，运行时取安全工具） */
 function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinition {
   return {
     name: 'delegate_task',
     description:
-      'Delegate a subtask to an in-process child agent and return only its final text. ' +
-      'Use for isolated or parallelizable sub-work; the child runs with a safe tool ' +
-      'whitelist (no recursive delegate_task) and inherits guardrails/hooks.',
+      'Delegate a subtask to an ephemeral child agent on the runtime host and return only ' +
+      'its final text. The child runs with a safe tool whitelist (no recursive delegate_task) ' +
+      'and inherits guardrails/hooks.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -253,7 +281,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
       required: ['task'],
     },
     handler: async (args: unknown, ctx: ToolContext) => {
-      const depth = delegateDepth.getStore() ?? 0;
+      const depth = depthByRunId.get(ctx.run_id) ?? 0;
       if (depth >= config.maxDepth) {
         return `Error: delegate depth exceeded (max ${config.maxDepth})`;
       }
@@ -277,20 +305,21 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
 
       const childHost = buildChildHost(host, config);
       try {
-        const outcome = await delegateDepth.run(depth + 1, () =>
-          runChildTask({
-            providerFactory: config.providerFactory,
-            model: config.model,
-            task,
-            context,
-            pluginHost: childHost,
-            parentEvents: ctx.events,
-            limits: config.limits,
-            termination: config.termination,
-            permissionMode: config.permissionMode,
-            delegateId,
-          }),
-        );
+        const outcome = await runChildTask({
+          host: resolveHost(config),
+          providerFactory: config.providerFactory,
+          model: config.model,
+          task,
+          context,
+          pluginHost: childHost,
+          parentEvents: ctx.events,
+          limits: config.limits,
+          termination: config.termination,
+          permissionMode: config.permissionMode,
+          delegateId,
+          depth,
+          signal: ctx.signal,
+        });
         ctx.events.publish({
           type: 'subagent.delegate.completed',
           run_id: ctx.run_id,
@@ -333,11 +362,13 @@ export function createDelegateTaskPlugin(options: DelegateTaskOptions): Plugin {
     termination: options.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 },
     permissionMode: options.permissionMode ?? 'bridge',
     readOnlyTools: options.readOnlyTools ?? ['read'],
+    maxConcurrentDelegates: options.maxConcurrentDelegates ?? DEFAULT_MAX_CONCURRENT_DELEGATES,
+    ...(options.runtimeHost !== undefined ? { runtimeHost: options.runtimeHost } : {}),
   };
   return {
     name: 'delegate-task',
-    version: '0.1.0',
-    description: 'delegate_task tool: spawn an in-process child agent for a subtask',
+    version: '0.2.0',
+    description: 'delegate_task tool: spawn an ephemeral child agent on the runtime host',
     install(host: PluginHost) {
       host.registerTool(makeDelegateTool(host, config));
     },
