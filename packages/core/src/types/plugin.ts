@@ -6,6 +6,7 @@
 import type { Guardrail } from './guardrail.js';
 import type { Hook } from './hook.js';
 import type { ProviderFactory } from './provider.js';
+import type { RunStore } from './run-store.js';
 import type { ToolDefinition } from './tool.js';
 
 /** Plugin 接口 */
@@ -55,4 +56,8 @@ export interface AgentRuntimeOptions {
   pluginHost?: PluginHost;
   /** 可注入的限制检查器（默认 MemoryLimitChecker）——依赖倒置（ADR-033） */
   limitChecker?: import('./limits.js').LimitChecker;
+  /** 可选：durable run 检查点存储；缺省不写 checkpoint（零开销） */
+  runStore?: RunStore;
+  /** 可选：写入 checkpoint.agent_id（Host 注入成员 id；单 agent 可缺省） */
+  agentId?: string;
 }
