@@ -60,6 +60,42 @@ describe('PeerRegistry', () => {
     await waitUntil(() => !a.peers().some((peer) => peer.nodeId === 'B'));
   });
 
+  it('waits for an in-flight write and leaves no record after stop', async () => {
+    const dir = await makeTempDir();
+    dirs.push(dir);
+    let releaseWrite: () => void = () => {};
+    let signalEntered: () => void = () => {};
+    const writeGate = new Promise<void>((resolve) => {
+      releaseWrite = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+
+    const registry = await PeerRegistry.create({
+      nodeId: 'A',
+      endpoint: 'http://127.0.0.1:1234',
+      peersDir: dir,
+      heartbeatMs: 60_000,
+      agents: () => [],
+      beforeWrite: async () => {
+        signalEntered();
+        await writeGate;
+      },
+    });
+    registries.push(registry);
+
+    const starting = registry.start();
+    await entered;
+    // 此时 tick 已通过 writeSelf 的 closed 检查、正卡在落盘前。
+    const stopping = registry.stop();
+    releaseWrite();
+    await stopping;
+    await starting;
+
+    expect(await fileExists(join(dir, 'A.json'))).toBe(false);
+  });
+
   it('ignores and cleans stale records', async () => {
     const dir = await makeTempDir();
     dirs.push(dir);
