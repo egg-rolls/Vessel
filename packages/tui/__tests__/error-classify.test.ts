@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { classifyError } from '../src/error-classifier.js';
+import { classifyError, formatClassifiedError } from '../src/error-classifier.js';
 
 describe('classifyError', () => {
   it('分类网络错误', () => {
@@ -43,5 +43,41 @@ describe('classifyError', () => {
     const c = classifyError('plain string error');
     expect(c.category).toBe('unknown');
     expect(c.message).toBe('plain string error');
+  });
+
+  it('取消：AbortError / Run cancelled 不落入 network', () => {
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    expect(classifyError(abortError).category).toBe('cancelled');
+    expect(classifyError(new Error('Run cancelled')).category).toBe('cancelled');
+    expect(classifyError(new Error('Request aborted')).category).toBe('cancelled');
+  });
+
+  it('超时：TimeoutError 与 timed out 优先于取消', () => {
+    const timeoutError = new Error('The operation was aborted due to timeout');
+    timeoutError.name = 'TimeoutError';
+    expect(classifyError(timeoutError).category).toBe('timeout');
+    expect(
+      classifyError(
+        new Error('Timed out after 120000ms waiting for event "tool.permission.response"'),
+      ).category,
+    ).toBe('timeout');
+    expect(classifyError(new Error('The operation timed out')).category).toBe('timeout');
+  });
+
+  it('权限拒绝单独分类', () => {
+    expect(classifyError(new Error('Tool "bash" execution denied by user')).category).toBe(
+      'permission',
+    );
+    expect(
+      classifyError(new Error('Tool "bash" execution denied by permission policy')).category,
+    ).toBe('permission');
+  });
+
+  it('formatClassifiedError：取消不显示为错误，其它带分类与 hint', () => {
+    expect(formatClassifiedError(classifyError(new Error('Run cancelled')))).toBe('⏹ Cancelled.');
+    const formatted = formatClassifiedError(classifyError(new Error('fetch failed: ECONNRESET')));
+    expect(formatted.startsWith('✗ [network]')).toBe(true);
+    expect(formatted).toContain('网络不可达');
   });
 });

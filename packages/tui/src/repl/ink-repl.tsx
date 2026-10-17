@@ -11,7 +11,7 @@
 
 import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createCommands, doResume } from '../commands/commands.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -24,11 +24,22 @@ import {
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
+import { SubagentActivity } from '../components/SubagentActivity.js';
+import { UpdateBanner } from '../components/UpdateBanner.js';
+import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import type { ReplContext } from '../repl-context.js';
 import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
+import { summarizeToolInput } from '../utils/tool-input-summary.js';
+import { executeTurn } from './run-turn.js';
 import { useReplState } from './use-repl-state.js';
+
+/** 与 core PermissionPolicy 一致的等待时限（ms） */
+const PERMISSION_TIMEOUT_MS = 120_000;
+
+/** 终端清屏：清可视区 + scrollback，并把光标移回左上 */
+const CLEAR_SCREEN_SEQUENCE = '\x1b[2J\x1b[3J\x1b[H';
 
 interface InkReplProps {
   ctx: ReplContext;
@@ -42,6 +53,11 @@ function InkRepl({ ctx }: InkReplProps) {
   const { stdout } = useStdout();
   const [ui, dispatch] = useReplState(ctx);
   const state = ui.repl;
+
+  /** 权限弹窗超时计时器（与 core 的 120s 对齐） */
+  const permissionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** 运行中重复提交提示的节流时间戳 */
+  const lastBusyNoticeRef = useRef(0);
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -66,6 +82,7 @@ function InkRepl({ ctx }: InkReplProps) {
   const isExactCommand =
     ui.input.startsWith('/') && allCommands.some((cmd) => cmd.name === ui.input);
   const showAutocomplete =
+    ui.run.phase === 'idle' &&
     ui.input.startsWith('/') &&
     !ui.input.includes(' ') &&
     !isExactCommand &&
@@ -93,21 +110,55 @@ function InkRepl({ ctx }: InkReplProps) {
     ctx.currentSessionId = state.currentSessionId;
   }, [state.currentSessionId, ctx]);
 
-  // 订阅权限确认请求（ADR-029：工具自带 checkPermission 或 runtime 'ask' 分支都发此事件）
+  // 权限确认请求（ADR-029）：展示弹窗 + 120s 超时兜底 + run 结束/工具失败清理。
+  // core 的 waitFor 超时后只发 tool.call.failed，不会发 response；不清理会留下永久弹窗。
   useEffect(() => {
     const unsubscribe = ctx.events.subscribe((rawEvent) => {
       const event = asTuiEvent(rawEvent);
-      if (event.type !== 'tool.permission.request') return;
-      dispatch({
-        type: 'setPermissionOverlay',
-        overlay: {
-          requestId: event.data.requestId,
-          run_id: event.run_id,
-          toolName: event.data.tool,
-        },
-      });
+      switch (event.type) {
+        case 'tool.permission.request': {
+          if (permissionTimerRef.current) clearTimeout(permissionTimerRef.current);
+          const expiresAt = Date.now() + PERMISSION_TIMEOUT_MS;
+          permissionTimerRef.current = setTimeout(() => {
+            permissionTimerRef.current = null;
+            dispatch({ type: 'clearPermissionForRequest', requestId: event.data.requestId });
+            dispatch({
+              type: 'appendHistory',
+              line: '⚠ Permission request timed out (120s); tool call was cancelled.',
+            });
+          }, PERMISSION_TIMEOUT_MS);
+          dispatch({
+            type: 'setPermissionOverlay',
+            overlay: {
+              requestId: event.data.requestId,
+              run_id: event.run_id,
+              toolName: event.data.tool,
+              input: event.data.input,
+              expiresAt,
+            },
+          });
+          break;
+        }
+        case 'tool.call.failed':
+          dispatch({
+            type: 'clearPermissionForTool',
+            runId: event.run_id,
+            toolName: event.data.tool_name,
+          });
+          break;
+        case 'run.completed':
+        case 'run.failed':
+          dispatch({ type: 'clearPermissionForRun', runId: event.run_id });
+          break;
+        default:
+          break;
+      }
     });
-    return unsubscribe;
+    return () => {
+      if (permissionTimerRef.current) clearTimeout(permissionTimerRef.current);
+      permissionTimerRef.current = null;
+      unsubscribe();
+    };
   }, [ctx.events, dispatch]);
 
   // 当 showResumePicker 变为 true 时加载会话列表
@@ -140,6 +191,21 @@ function InkRepl({ ctx }: InkReplProps) {
 
       if (!value.trim()) return;
 
+      // 运行中禁止第二次提交：AgentRuntime.run 会重置 stats 并共享 context，
+      // 并发 run 会互相污染。只放行 /exit（它本来就要结束进程）。
+      const isExitCommand = value.trim() === '/exit';
+      if (ui.run.phase !== 'idle' && !isExitCommand) {
+        const now = Date.now();
+        if (now - lastBusyNoticeRef.current > 1500) {
+          lastBusyNoticeRef.current = now;
+          dispatch({
+            type: 'appendHistory',
+            line: '⏳ A run is in progress; press Esc to cancel before sending again.',
+          });
+        }
+        return;
+      }
+
       dispatch({ type: 'appendHistory', line: `> ${value}` });
       dispatch({ type: 'setInput', input: '' });
 
@@ -148,8 +214,9 @@ function InkRepl({ ctx }: InkReplProps) {
       if (value.startsWith('/')) {
         const result = await commands.execute(value, ctx, { ...state });
         if (result.handled) {
-          // 特殊处理 /clear - 清空历史记录和流式输出（由命令的 clearScreen 标记驱动）
+          // 特殊处理 /clear - 清终端（含 scrollback）+ 历史记录 + 流式输出
           if (result.clearScreen) {
+            stdout.write(CLEAR_SCREEN_SEQUENCE);
             dispatch({ type: 'clearHistory' });
             dispatch({ type: 'bumpClearSignal' }); // 触发 StreamOutput 清空
           } else if (result.output) {
@@ -173,28 +240,119 @@ function InkRepl({ ctx }: InkReplProps) {
 
       // 处理普通消息 - 调用 runtime.run
       // StreamOutput 组件通过事件流显示 token-by-token 输出，
-      // run 完成后通过 onComplete 回调将响应归档到 history
+      // run 完成后通过 onComplete 回调将响应归档到 history。
+      // signal 来自本轮 AbortController：Esc / 运行中 Ctrl+C 会中断它。
+      const abort = new AbortController();
+      dispatch({ type: 'runStart', abort });
       try {
         const branch = await getCurrentGitBranch();
         // `@path` 引用展开（C10）：扫到的文件读为注入消息，用户原文不变
-        const { messages, warnings } = collectFileReferences(value);
+        const { messages, warnings, references } = collectFileReferences(value);
         for (const warning of warnings) {
           dispatch({ type: 'appendHistory', line: warning });
         }
-        await ctx.runtime.run(value, state.currentSessionId, { branch, messages });
+        for (const ref of references) {
+          dispatch({
+            type: 'appendHistory',
+            line: `📎 @${ref.path} (${ref.bytes} bytes${ref.truncated ? ', truncated' : ''})`,
+          });
+        }
+        const outcome = await executeTurn({
+          abort,
+          run: (signal) =>
+            ctx.runtime.run(value, state.currentSessionId, { branch, messages, signal }),
+        });
+        if (outcome.status === 'cancelled') {
+          dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+        } else if (outcome.status === 'failed') {
+          dispatch({
+            type: 'appendHistory',
+            line: formatClassifiedError(classifyError(outcome.error)),
+          });
+        }
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : String(error);
-        dispatch({ type: 'appendHistory', line: `Error: ${errorMsg}` });
+        // 只可能是 run 之前的准备工作（git 分支、文件扫描）失败
+        dispatch({
+          type: 'appendHistory',
+          line: formatClassifiedError(classifyError(error)),
+        });
+      } finally {
+        dispatch({ type: 'runEnd' });
       }
     },
-    [ctx, state, commands, allCommands, filteredCommands, ui.autocompleteIndex, dispatch],
+    [
+      ctx,
+      state,
+      commands,
+      allCommands,
+      filteredCommands,
+      ui.autocompleteIndex,
+      ui.run.phase,
+      stdout,
+      dispatch,
+    ],
   );
+
+  /** 只取消当前 run（不退出进程） */
+  const cancelRun = useCallback(() => {
+    if (ui.run.phase !== 'running') return;
+    dispatch({ type: 'runCancelRequested' });
+    ui.run.abort?.abort(new Error('Run cancelled by user'));
+  }, [ui.run, dispatch]);
+
+  /**
+   * Ctrl+C 的统一语义：
+   * - idle → 退出；
+   * - 运行中 → 先解除可能阻塞 run 的交互（权限 waitFor / ask_user waitFor），
+   *   再 abort；否则 waitFor 会让 run 卡到 120s 超时才结束。
+   */
+  const cancelOrExit = useCallback(() => {
+    // idle -> 退出；cancelling 时再次 Ctrl+C -> 强制退出（工具可能还在跑）
+    if (ui.run.phase === 'idle' || ui.run.phase === 'cancelling') {
+      exit();
+      return;
+    }
+    if (ui.permissionOverlay) {
+      ctx.events.publish({
+        type: 'tool.permission.response',
+        run_id: ui.permissionOverlay.run_id,
+        data: { requestId: ui.permissionOverlay.requestId, decision: 'deny' },
+        ts: Date.now(),
+      });
+      dispatch({ type: 'clearPermissionForRequest', requestId: ui.permissionOverlay.requestId });
+    }
+    if (ui.askUserActive && ui.askUserRequestId) {
+      ctx.events.publish({
+        type: 'ask.user.answered',
+        run_id: ui.askUserRunId ?? '',
+        data: { requestId: ui.askUserRequestId, answers: [] },
+        ts: Date.now(),
+      });
+    }
+    cancelRun();
+  }, [ui, ctx.events, dispatch, exit, cancelRun]);
 
   // 键盘输入处理（Tab/↑↓/Esc 在补全可见时拦截）
   // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
   // 故 Enter 统一交给 TextInput.onSubmit -> handleSubmit 决策（补全 or 执行）。
   useInput((inputChar, key) => {
-    // ask-user / 权限弹窗显示时，键盘交给弹窗组件自己的 useInput
+    // 全局键：即使弹窗显示也必须生效，否则 Ctrl+C 会被弹窗吞掉、界面卡死
+    if (key.ctrl && inputChar === 'c') {
+      cancelOrExit();
+      return;
+    }
+
+    if (key.ctrl && inputChar === 'l') {
+      stdout.write(CLEAR_SCREEN_SEQUENCE);
+      // TextInput 不忽略 Ctrl+L，会先把 'l' 插进输入；用当前值覆盖并重置光标
+      dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      dispatch({ type: 'clearHistory' });
+      dispatch({ type: 'bumpClearSignal' });
+      return;
+    }
+
+    // ask-user / 权限弹窗显示时，其余键盘交给弹窗组件自己的 useInput
     if (ui.askUserActive || ui.permissionOverlay) return;
 
     if (showAutocomplete) {
@@ -231,13 +389,12 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
-    if (key.ctrl && inputChar === 'c') {
-      exit();
-      return;
-    }
-
-    if (key.ctrl && inputChar === 'l') {
-      dispatch({ type: 'clearHistory' });
+    if (key.escape) {
+      // TextInput 不忽略 Esc，会把 ESC 序列插进输入；用当前值覆盖回去（并重置光标）
+      dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      // 运行中 Esc = 取消本轮 run
+      if (ui.run.phase === 'running') cancelRun();
       return;
     }
   });
@@ -264,10 +421,10 @@ function InkRepl({ ctx }: InkReplProps) {
     [ui.permissionOverlay, ctx.events, dispatch],
   );
 
-  // ask-user 弹窗激活状态回调（子组件汇报；稳定引用避免无谓 effect 重跑）
+  // ask-user 弹窗激活状态回调（子组件汇报 requestId/runId，供 Ctrl+C 主动解除 waitFor）
   const handleAskUserActive = useCallback(
-    (active: boolean) => {
-      dispatch({ type: 'setAskUserActive', active });
+    (active: boolean, requestId?: string, runId?: string) => {
+      dispatch({ type: 'setAskUserActive', active, requestId, runId });
     },
     [dispatch],
   );
@@ -290,10 +447,11 @@ function InkRepl({ ctx }: InkReplProps) {
 
   return (
     <Box flexDirection="column" height={stdout.rows}>
-      {/* 状态栏（固定顶部） */}
+      {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
       <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
+      <UpdateBanner events={ctx.events} />
 
-      {/* 滚动区域：历史 + 流式输出，flexGrow 撑满剩余空间 */}
+      {/* 滚动区域：历史 + 流式输出 + 子 agent 活动，flexGrow 撑满剩余空间 */}
       <Box flexDirection="column" flexGrow={1}>
         {ui.history.map((line, i) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
@@ -304,6 +462,7 @@ function InkRepl({ ctx }: InkReplProps) {
           clearSignal={ui.clearSignal}
           onComplete={handleStreamComplete}
         />
+        <SubagentActivity events={ctx.events} />
       </Box>
 
       {/* 底部固定区域：overlays + 输入框 + 补全框 */}
@@ -334,6 +493,9 @@ function InkRepl({ ctx }: InkReplProps) {
       {ui.permissionOverlay && (
         <ConfirmDialog
           question={`Allow tool "${ui.permissionOverlay.toolName}" to run?`}
+          details={summarizeToolInput(ui.permissionOverlay.toolName, ui.permissionOverlay.input)}
+          defaultChoice="n"
+          expiresAt={ui.permissionOverlay.expiresAt}
           onConfirm={handlePermission}
         />
       )}
@@ -354,6 +516,16 @@ function InkRepl({ ctx }: InkReplProps) {
           {argHint && <Text color="gray">{argHint}</Text>}
         </Box>
       )}
+
+      {/* 运行态提示：输入框保持可用（可先打字），但 Enter 不会并发提交 */}
+      {ui.run.phase !== 'idle' &&
+        !state.showResumePicker &&
+        !ui.permissionOverlay &&
+        !ui.askUserActive && (
+          <Text color="yellow">
+            {ui.run.phase === 'cancelling' ? '⏳ cancelling…' : '⏳ running… Esc to cancel'}
+          </Text>
+        )}
 
       {/* 内联命令补全（输入框下方） */}
       {showAutocomplete && (
@@ -395,7 +567,7 @@ export async function startInkRepl(ctx: ReplContext): Promise<void> {
  */
 async function runSimpleMode(ctx: ReplContext): Promise<void> {
   const { createCommands, consumePendingResume } = await import('../commands/commands.js');
-  const { classifyError } = await import('../error-classifier.js');
+  const { classifyError, formatClassifiedError } = await import('../error-classifier.js');
 
   const commands = createCommands();
   const state = {
@@ -467,12 +639,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       const response = await ctx.runtime.run(trimmed, state.currentSessionId, { branch, messages });
       console.log(response);
     } catch (error) {
-      const c = classifyError(error);
-      if (c.hint) {
-        console.error(`✗ [${c.category}] ${c.message}\n  ${c.hint}`);
-      } else {
-        console.error(`✗ [${c.category}] ${c.message}`);
-      }
+      console.error(formatClassifiedError(classifyError(error)));
     }
   }
 

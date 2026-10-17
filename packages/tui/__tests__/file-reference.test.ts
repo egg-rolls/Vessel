@@ -4,9 +4,14 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { collectFileReferences, MAX_FILE_BYTES } from '../src/utils/file-reference.js';
+import {
+  collectFileReferences,
+  expandHome,
+  MAX_FILE_BYTES,
+  resolveReferencePath,
+} from '../src/utils/file-reference.js';
 
 let dir: string;
 let alpha: string;
@@ -141,5 +146,81 @@ describe('collectFileReferences', () => {
     expect(messages).toEqual([]);
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain(sub);
+  });
+});
+
+describe('@path 边界与解析（0.1.0）', () => {
+  it('开括号 / 引号后的 @ 也匹配', () => {
+    const cases = [
+      `(@${alpha})`,
+      `[@${beta}]`,
+      `（@${alpha}）`,
+      `"@${beta}"`,
+      `'@${alpha}'`,
+      `{@${beta}}`,
+      `《@${alpha}》`,
+    ];
+    for (const input of cases) {
+      const { messages, warnings } = collectFileReferences(input);
+      expect(warnings).toEqual([]);
+      expect(messages.length).toBe(1);
+    }
+  });
+
+  it('扩展的全角收尾标点被剥掉', () => {
+    for (const punct of ['”', '’', '》', '〉', '］', '｝', '】', '…', '～']) {
+      const { messages, warnings } = collectFileReferences(` @${alpha}${punct}`);
+      expect(warnings).toEqual([]);
+      expect(messages.length).toBe(1);
+      expect(messages[0]?.content).toContain(`path="${alpha}"`);
+    }
+  });
+
+  it(':行[:列] 后缀被解析为文件', () => {
+    const { messages, warnings } = collectFileReferences(` @${alpha}:12`);
+    expect(warnings).toEqual([]);
+    expect(messages[0]?.content).toContain(`path="${alpha}"`);
+    const withCol = collectFileReferences(` @${alpha}:12:3`);
+    expect(withCol.messages[0]?.content).toContain(`path="${alpha}"`);
+  });
+
+  it('#anchor 后缀被解析为文件；文件本身含 # 时优先原样', () => {
+    const anchored = collectFileReferences(` @${alpha}#section`);
+    expect(anchored.warnings).toEqual([]);
+    expect(anchored.messages[0]?.content).toContain(`path="${alpha}"`);
+
+    const hashFile = join(dir, 'hash#1.md');
+    writeFileSync(hashFile, 'hash name');
+    const realHash = collectFileReferences(` @${hashFile}`);
+    expect(realHash.warnings).toEqual([]);
+    expect(realHash.messages[0]?.content).toContain(`path="${hashFile}"`);
+  });
+
+  it('resolveReferencePath 同时去掉 :line 与 #anchor', () => {
+    expect(resolveReferencePath(`${alpha}:12`)).toBe(alpha);
+    expect(resolveReferencePath(`${alpha}#x`)).toBe(alpha);
+    expect(resolveReferencePath(`${alpha}:12#x`)).toBe(alpha);
+    expect(resolveReferencePath(alpha)).toBe(alpha);
+  });
+
+  it('~ 展开为 home 目录', () => {
+    expect(expandHome('~')).toBe(homedir());
+    expect(expandHome('~/notes.md')).toBe(join(homedir(), 'notes.md'));
+    expect(expandHome('~\\notes.md')).toBe(join(homedir(), 'notes.md'));
+    expect(expandHome('/abs/path')).toBe('/abs/path');
+  });
+
+  it('二进制文件被跳过并 warning', () => {
+    const bin = join(dir, 'binary.dat');
+    writeFileSync(bin, Buffer.from([1, 0, 2, 3]));
+    const { messages, warnings } = collectFileReferences(` @${bin}`);
+    expect(messages).toEqual([]);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('binary');
+  });
+
+  it('references 返回成功注入的文件信息', () => {
+    const { references } = collectFileReferences(` @${alpha}`);
+    expect(references).toEqual([{ path: alpha, bytes: 11, truncated: false }]);
   });
 });

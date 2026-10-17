@@ -118,7 +118,12 @@ function renderToolCall(seg: ToolCallSegment): ReactNode {
   const activity = display.getActivityDescription?.(seg.arguments) ?? null;
 
   if (seg.status === 'running') {
-    return <SpinnerWithVerb verb="tool" description={activity ?? displayName} />;
+    return (
+      <Box flexDirection="column">
+        <SpinnerWithVerb verb="tool" description={activity ?? displayName} />
+        {display.renderToolUseMessage(seg.arguments, { maxArgumentLength: 120 })}
+      </Box>
+    );
   }
 
   const renderResult =
@@ -131,6 +136,7 @@ function renderToolCall(seg: ToolCallSegment): ReactNode {
       <Box flexDirection="column">
         <Box>
           <Text color="green">✓ {displayName}</Text>
+          {display.renderToolUseMessage(seg.arguments, { maxArgumentLength: 100 })}
           <Text color="gray"> {seg.duration}ms</Text>
         </Box>
         {renderResult(seg.result ?? '', {})}

@@ -1,40 +1,80 @@
 /**
  * 确认弹窗组件
  * 图形弹窗替换 readline confirm()
+ *
+ * 权限确认的关键约束：
+ * - 默认选中 **No**（Enter 不盲批准）；
+ * - 展示工具入参摘要（例如 bash 的 command），否则用户不知道自己批准了什么；
+ * - Esc = 拒绝；
+ * - 显示与 core 一致的 120s 超时倒计时。
  */
 
 import { Box, Text, useInput } from 'ink';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+
+export type ConfirmChoice = 'y' | 'n' | 'always';
 
 interface ConfirmDialogProps {
   question: string;
-  onConfirm: (answer: string) => void;
+  /** 工具入参摘要（每行一条） */
+  details?: string[];
+  /** 初始选中项，默认 'n' */
+  defaultChoice?: ConfirmChoice;
+  /** 超时时间点（epoch ms）；传入则显示倒计时 */
+  expiresAt?: number;
+  onConfirm: (answer: ConfirmChoice) => void;
 }
 
-export function ConfirmDialog({ question, onConfirm }: ConfirmDialogProps) {
-  const [selected, setSelected] = useState<'y' | 'n' | 'always'>('y');
+/** 纯函数：左右切换选中项（测试用） */
+export function moveConfirmSelection(
+  current: ConfirmChoice,
+  direction: 'left' | 'right',
+): ConfirmChoice {
+  const order: ConfirmChoice[] = ['y', 'n', 'always'];
+  const index = order.indexOf(current);
+  const next = direction === 'left' ? index - 1 : index + 1;
+  if (next < 0 || next >= order.length) return current;
+  return order[next] ?? current;
+}
+
+export function ConfirmDialog({
+  question,
+  details = [],
+  defaultChoice = 'n',
+  expiresAt,
+  onConfirm,
+}: ConfirmDialogProps) {
+  const [selected, setSelected] = useState<ConfirmChoice>(defaultChoice);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (expiresAt === undefined) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [expiresAt]);
+
+  const remainingSeconds =
+    expiresAt !== undefined ? Math.max(0, Math.ceil((expiresAt - now) / 1000)) : null;
 
   useInput((inputChar, key) => {
     if (key.leftArrow) {
-      setSelected((prev) => {
-        if (prev === 'n') return 'y';
-        if (prev === 'always') return 'n';
-        return prev;
-      });
+      setSelected((prev) => moveConfirmSelection(prev, 'left'));
       return;
     }
 
     if (key.rightArrow) {
-      setSelected((prev) => {
-        if (prev === 'y') return 'n';
-        if (prev === 'n') return 'always';
-        return prev;
-      });
+      setSelected((prev) => moveConfirmSelection(prev, 'right'));
       return;
     }
 
     if (key.return) {
       onConfirm(selected);
+      return;
+    }
+
+    // Esc = 拒绝（不批准任何东西）
+    if (key.escape) {
+      onConfirm('n');
       return;
     }
 
@@ -53,7 +93,6 @@ export function ConfirmDialog({ question, onConfirm }: ConfirmDialogProps) {
     if (inputChar === 'a' || inputChar === 'A') {
       setSelected('always');
       onConfirm('always');
-      return;
     }
   });
 
@@ -68,6 +107,18 @@ export function ConfirmDialog({ question, onConfirm }: ConfirmDialogProps) {
       <Box marginBottom={1}>
         <Text>{question}</Text>
       </Box>
+
+      {details.length > 0 && (
+        <Box flexDirection="column" marginBottom={1}>
+          {details.map((line, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: details are a short immutable list
+            <Text key={index} color="gray">
+              {'  '}
+              {line}
+            </Text>
+          ))}
+        </Box>
+      )}
 
       <Box>
         <Text
@@ -94,7 +145,10 @@ export function ConfirmDialog({ question, onConfirm }: ConfirmDialogProps) {
       </Box>
 
       <Box marginTop={1}>
-        <Text color="gray">←→ Select · Enter Confirm · y/n/a Quick Select</Text>
+        <Text color="gray">
+          ←→ Select · Enter Confirm · y/n/a Quick Select · Esc Deny
+          {remainingSeconds !== null ? ` · Times out in ${remainingSeconds}s` : ''}
+        </Text>
       </Box>
     </Box>
   );
