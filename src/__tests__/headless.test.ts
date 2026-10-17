@@ -155,9 +155,14 @@ it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 
 });
 
 it('--version 打印根 package.json 版本，exit 0', async () => {
+  const rootVersion = (
+    JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8')) as {
+      version: string;
+    }
+  ).version;
   const { stdout, exitCode } = await runCli(['--version'], {});
   expect(exitCode).toBe(0);
-  expect(stdout.trim()).toBe('0.1.0');
+  expect(stdout.trim()).toBe(rootVersion);
 });
 
 it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => {
@@ -283,10 +288,15 @@ it('update --check --json 走清单源并输出机器可读结果', async () => 
   const server = Bun.serve({
     port: 0,
     fetch() {
-      return Response.json({ version: '0.2.0', channel: 'latest' });
+      return Response.json({ version: '9.9.9', channel: 'latest' });
     },
   });
   try {
+    const rootVersion = (
+      JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8')) as {
+        version: string;
+      }
+    ).version;
     const source = `http://127.0.0.1:${server.port}/latest.json`;
     const { stdout, exitCode } = await runCli(['update', '--check', '--json'], {
       VESSEL_UPDATE_SOURCE: source,
@@ -294,12 +304,12 @@ it('update --check --json 走清单源并输出机器可读结果', async () => 
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
     expect(parsed).toMatchObject({
-      current: '0.1.0',
-      latest: '0.2.0',
+      current: rootVersion,
+      latest: '9.9.9',
       channel: 'latest',
       up_to_date: false,
     });
-    expect(String(parsed.install_hint)).toContain('vessel@0.2.0');
+    expect(String(parsed.install_hint)).toContain('vessel@9.9.9');
   } finally {
     server.stop();
   }
