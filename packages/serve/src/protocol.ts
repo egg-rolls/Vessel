@@ -75,7 +75,9 @@ export type ServerFrame =
       ts: number;
       protocol: ProtocolInfo;
       node: NodeInfo;
+      /** 本次回放的第一条 seq；无事件时为 0 */
       from_seq: number;
+      /** 服务端当前最新 seq；无事件时为 0 */
       latest_seq: number;
     }
   | {

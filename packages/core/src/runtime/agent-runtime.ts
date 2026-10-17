@@ -363,11 +363,15 @@ export class AgentRuntime {
         );
       }
 
-      // 发布 LLM 请求事件
+      // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）
       this.publishEvent({
         type: 'llm.request',
         run_id: runId,
-        data: { run_id: runId, messages, tools: toolSchemas },
+        data: {
+          run_id: runId,
+          messages: this.stripReasoning(messages),
+          tools: toolSchemas,
+        },
         ts: Date.now(),
       });
 
@@ -455,11 +459,14 @@ export class AgentRuntime {
             ? outputResult.replacement
             : response.content;
 
-        // 添加助手消息到上下文
+        // 添加助手消息到上下文（thinking 模式需保存 reasoning_content 供下一轮回传）
         this.addContext(
           {
             role: 'assistant',
             content: finalContent,
+            ...(response.reasoning_content
+              ? { reasoning_content: response.reasoning_content }
+              : {}),
           },
           runId,
         );
@@ -487,12 +494,16 @@ export class AgentRuntime {
           );
         }
 
-        // 添加助手消息（包含实际执行的 tool_calls）到上下文
+        // 添加助手消息（包含实际执行的 tool_calls）到上下文；
+        // thinking 模式必须带上 reasoning_content，下一次请求要原样回传
         this.addContext(
           {
             role: 'assistant',
             content: response.content ?? '',
             tool_calls: effectiveCalls,
+            ...(response.reasoning_content
+              ? { reasoning_content: response.reasoning_content }
+              : {}),
           },
           runId,
         );
@@ -619,6 +630,9 @@ export class AgentRuntime {
           {
             role: 'assistant',
             content: response.content,
+            ...(response.reasoning_content
+              ? { reasoning_content: response.reasoning_content }
+              : {}),
           },
           runId,
         );
@@ -745,9 +759,15 @@ export class AgentRuntime {
         normalized.push(assistant, ...toolMessages);
         return;
       }
-      // 有 tool_call 没拿到结果：不发送非法序列；保留 assistant 文本（若有）
-      if (assistant.content) {
-        normalized.push({ role: 'assistant', content: assistant.content });
+      // 有 tool_call 没拿到结果：不发送非法序列；保留 assistant 文本与 reasoning（若有）
+      if (assistant.content || assistant.reasoning_content) {
+        normalized.push({
+          role: 'assistant',
+          content: assistant.content,
+          ...(assistant.reasoning_content
+            ? { reasoning_content: assistant.reasoning_content }
+            : {}),
+        });
       }
     };
 
@@ -789,12 +809,25 @@ export class AgentRuntime {
       run_id: runId,
       data: {
         run_id: runId,
-        message: msg,
+        // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
+        message: this.stripReasoningFromMessage(msg),
         message_count: this.context.messages.length,
         token_count: this.context.tokenCount,
       },
       ts: Date.now(),
     });
+  }
+
+  /** 事件流/观测载荷里不暴露思维链（reasoning_content 只用于 Provider 回传与持久化） */
+  private stripReasoningFromMessage(msg: Message): Message {
+    if (msg.reasoning_content === undefined) return msg;
+    const copy = { ...msg };
+    delete copy.reasoning_content;
+    return copy;
+  }
+
+  private stripReasoning(messages: Message[]): Message[] {
+    return messages.map((msg) => this.stripReasoningFromMessage(msg));
   }
 
   /**
