@@ -5,6 +5,7 @@
  *
  * 只做质量门禁（typecheck / lint / test）——插件由运行时扫描发现（src/plugin-loader.ts），
  * 无需构建期注册表；单二进制分发形态已废弃（ADR-006）。
+ * `bun run typecheck` 现在同时覆盖 `examples/**`（examples/tsconfig.json）。
  *
  * 使用方式：bun run scripts/build.ts
  */

@@ -17,7 +17,8 @@
     "test": "bun test",
     "build": "bun run scripts/build.ts",
     "lint": "bunx @biomejs/biome ci .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p examples --noEmit",
+    "typecheck:examples": "tsc -p examples --noEmit",
     "format": "bunx @biomejs/biome format --write .",
     "check": "bunx @biomejs/biome check ."
   },
