@@ -12,26 +12,16 @@ import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
+import type { RunOptions } from '../types/run.js';
 import type { RunState, SessionBackend } from '../types/session.js';
+
+export type { RunOptions } from '../types/run.js';
+
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
 import { PermissionPolicy } from './permission-policy.js';
 import { MemoryPluginHost } from './plugin-host.js';
-
-/** Run 选项 */
-export interface RunOptions {
-  /** AbortSignal——设置后可在外部中断 run()（Hermes/Claude Code 模式） */
-  signal?: AbortSignal;
-  /** 当前 git branch——app 层采集，core 透传存入 RunState.branch */
-  branch?: string;
-  /**
-   * 本轮请求前置注入的消息。core 不解释其来源与语义——
-   * skill 内容、附件、引用文件、项目约定，任何要进语言空间的文本都走这里。
-   * 写入顺序：注入消息在前，用户输入在后；两者都持久化进 ContextManager。
-   */
-  messages?: Message[];
-}
 
 /** 类型守卫：Guardrail replacement 是否是合法的 ToolCall（C-05） */
 function isToolCall(value: unknown): value is ToolCall {

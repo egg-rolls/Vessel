@@ -12,6 +12,8 @@ export { MemoryContextManager } from './context/index.js';
 
 // 事件流
 export { FileEventStore, MemoryEventStream, replayRun } from './events/index.js';
+// Kernel（0.2 R1：Host / Handles / Cancellation / EventBus / Transport port）
+export * from './kernel/index.js';
 // 限制检查器
 export { MemoryLimitChecker } from './limits/index.js';
 // Provider
@@ -20,7 +22,6 @@ export {
   MemoryLLMProvider,
   OpenAICompatibleProvider,
 } from './provider/index.js';
-export type { RunOptions } from './runtime/agent-runtime.js';
 // 运行时
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 // 会话后端
