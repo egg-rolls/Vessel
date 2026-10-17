@@ -1,12 +1,12 @@
 /**
- * InProcessRuntimeHost —— 0.2 R1
+ * InProcessRuntimeHost —— 0.2 R1/R2
  *
  * 单进程多 agent 宿主：成员注册、生命周期、消息投递与 run 句柄。
  * - `AgentRuntime` 仍是单 agent loop；Host 只负责包在外面（不重写 loop）。
  * - 成员 context 独占；共享 SessionBackend 按 agentId 命名空间隔离（D3）。
  * - 每成员独立 EventStream，Host 聚合转发并补 `agentId`（D4/A7）。
- * - R1 同一成员同时只允许一个 run；队列/并发由 R2 Scheduler 接管。
- * - Transport 只留注入点与本地优先投递；实现归 R3。
+ * - run 统一经 Scheduler（并发/队列/同成员串行在 R2 Scheduler）。
+ * - Transport 只保留注入点；实现归 R3a-core。
  *
  * @module @vessel/core/kernel
  */
@@ -14,15 +14,22 @@
 import { randomUUID } from 'node:crypto';
 import { MemoryContextManager } from '../context/context-manager.js';
 import { MemoryEventStream } from '../events/event-stream.js';
-import { AgentRuntime, type RunOptions } from '../runtime/agent-runtime.js';
+import { AgentRuntime } from '../runtime/agent-runtime.js';
 import { MemoryPluginHost } from '../runtime/plugin-host.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
-import type { AgentRuntimeOptions, PluginHost } from '../types/plugin.js';
+import type { AgentRuntimeOptions, PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message, Usage } from '../types/provider.js';
+import type { RunOptions } from '../types/run.js';
 import type { SessionBackend } from '../types/session.js';
 import { MemoryEventBus } from './event-bus.js';
-import { SerialScheduler } from './scheduler.js';
+import {
+  type InternalAgentHandle,
+  type InternalScheduler,
+  kCancelAgentRuns,
+  kExecuteAgentRun,
+} from './internal.js';
+import { InProcessScheduler } from './scheduler.js';
 import { AgentSessionScope } from './session-scope.js';
 import type {
   AgentHandle,
@@ -38,6 +45,8 @@ import type {
   RunStatus,
   RuntimeHost,
   Scheduler,
+  SchedulerOptions,
+  Transport,
 } from './types.js';
 
 /** Host 构造选项 */
@@ -52,8 +61,16 @@ export interface InProcessRuntimeHostOptions {
   events?: EventBus;
   /** 默认限额；成员 spec.limits 优先 */
   limits?: Limits;
-  /** 调度器；缺省 R1 受限 SerialScheduler（R2 替换） */
+  /** 调度器；缺省 InProcessScheduler */
   scheduler?: Scheduler;
+  /** 缺省调度器的选项（自定义 scheduler 注入时忽略） */
+  schedulerOptions?: SchedulerOptions;
+  /** 成员缺省规格（id 不继承）；spec 优先 */
+  defaults?: Partial<AgentSpec>;
+  /** 成员缺省权限策略；spec.permission 优先 */
+  permission?: RuntimePermissionConfig;
+  /** R3a 注入点：Transport 实例；R2 只保存，不消费 */
+  transport?: Transport;
   /** F5：覆盖默认 AgentRuntime（默认 AgentRuntime.create） */
   runtimeFactory?: (options: AgentRuntimeOptions) => Promise<RunnableAgent>;
   /** F5：覆盖成员事件流实现（默认 MemoryEventStream） */
@@ -131,10 +148,14 @@ export class InProcessRuntimeHost implements RuntimeHost {
   private readonly contextFactory?: () => ContextManager;
   private readonly session?: SessionBackend;
   private readonly limits?: Limits;
+  private readonly defaults?: Partial<AgentSpec>;
+  private readonly permission?: RuntimePermissionConfig;
   private readonly runtimeFactory: (options: AgentRuntimeOptions) => Promise<RunnableAgent>;
   private readonly eventStreamFactory: () => EventStream;
   private readonly maxMembers: number;
   readonly scheduler: Scheduler;
+  /** R3a 注入点：当前只保存，不参与消息路由 */
+  readonly transport?: Transport;
   private closed = false;
 
   constructor(options: InProcessRuntimeHostOptions = {}) {
@@ -143,10 +164,13 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.contextFactory = options.contextFactory;
     this.session = options.session;
     this.limits = options.limits;
+    this.defaults = options.defaults;
+    this.permission = options.permission;
+    this.transport = options.transport;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
-    this.scheduler = options.scheduler ?? new SerialScheduler();
+    this.scheduler = options.scheduler ?? new InProcessScheduler(options.schedulerOptions);
     this.maxMembers = Math.max(1, options.maxMembers ?? 8);
 
     // B4：Host 聚合子成员事件（含 tool.permission.request / ask.user.requested），
@@ -161,7 +185,14 @@ export class InProcessRuntimeHost implements RuntimeHost {
   async spawn(spec: AgentSpec): Promise<AgentHandle> {
     if (this.closed) throw new Error('runtime host is closed');
 
-    const id = spec.id ?? randomUUID();
+    // 成员缺省规格继承（id 不继承，避免多个成员拿到同一个默认 id）
+    const resolved = { ...(this.defaults ?? {}), ...spec } as AgentSpec;
+    resolved.id = spec.id;
+
+    if (!resolved.provider) throw new Error('AgentSpec.provider is required');
+    if (!resolved.model) throw new Error('AgentSpec.model is required');
+
+    const id = resolved.id ?? randomUUID();
     if (!AGENT_ID_PATTERN.test(id)) {
       throw new Error(`invalid agent id "${id}": must match [A-Za-z0-9_-]{1,64}`);
     }
@@ -171,32 +202,33 @@ export class InProcessRuntimeHost implements RuntimeHost {
     }
 
     const memberEvents = this.eventStreamFactory();
-    const context = spec.context ?? this.contextFactory?.() ?? new MemoryContextManager();
+    const context = resolved.context ?? this.contextFactory?.() ?? new MemoryContextManager();
     const session =
-      spec.session ?? (this.session ? new AgentSessionScope(this.session, id) : undefined);
-    const limits = spec.limits ?? this.limits ?? {};
-    // 0.2 R1：run/agent 同源；host 预算与更细作用域由 R2 接
+      resolved.session ?? (this.session ? new AgentSessionScope(this.session, id) : undefined);
+    const limits = resolved.limits ?? this.limits ?? {};
+    // 0.2 R1/R2：run/agent 同源；host 预算与更细作用域后续接
     const runLimits = limits.run ?? limits.agent ?? {};
     const termination = limits.termination ??
-      spec.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 };
+      resolved.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 };
+    const permission = resolved.permission ?? this.permission;
 
     const runtime = await this.runtimeFactory({
-      provider: spec.provider,
-      model: spec.model,
+      provider: resolved.provider,
+      model: resolved.model,
       context,
       events: memberEvents,
-      pluginHost: spec.pluginHost ?? this.pluginHost ?? new MemoryPluginHost(),
+      pluginHost: resolved.pluginHost ?? this.pluginHost ?? new MemoryPluginHost(),
       ...(session ? { session } : {}),
       limits: runLimits,
       termination,
-      ...(spec.systemPrompt !== undefined ? { systemPrompt: spec.systemPrompt } : {}),
-      ...(spec.permission !== undefined ? { permission: spec.permission } : {}),
+      ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}),
+      ...(permission !== undefined ? { permission } : {}),
     });
 
     const record: MemberRecord = {
       id,
-      ...(spec.name !== undefined ? { name: spec.name } : {}),
-      spec,
+      ...(resolved.name !== undefined ? { name: resolved.name } : {}),
+      spec: resolved,
       runtime,
       events: memberEvents,
       state: 'idle',
@@ -233,7 +265,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.handles.set(id, handle);
     this.publish('agent.spawned', {
       agentId: id,
-      ...(spec.name !== undefined ? { name: spec.name } : {}),
+      ...(resolved.name !== undefined ? { name: resolved.name } : {}),
     });
 
     return handle;
@@ -298,8 +330,24 @@ export class InProcessRuntimeHost implements RuntimeHost {
     return this.toStatus(record);
   }
 
-  /** @internal 由 AgentHandle.run() 调用；R1 直接执行，R2 换成 Scheduler */
-  async startRun(
+  /** @internal AgentHandle.run 的调度入口：进入 Scheduler 队列 */
+  enqueueRun(record: MemberRecord, input: string | Message, opts?: RunOptions): Promise<RunHandle> {
+    if (record.closed) return Promise.reject(new Error(`agent is closed: ${record.id}`));
+    const handle = this.handles.get(record.id);
+    if (!handle) return Promise.reject(new Error(`unknown agent: ${record.id}`));
+
+    return this.scheduler.submit({
+      agent: handle,
+      sessionId: defaultSessionId(record.spec),
+      input,
+      opts,
+      // 内部 executor：避免 Scheduler.submit → AgentHandle.run 递归
+      executor: (runId) => this.startRunInternal(record, input, { ...opts, runId }),
+    });
+  }
+
+  /** @internal Scheduler 直执行入口（不经过队列） */
+  async startRunInternal(
     record: MemberRecord,
     input: string | Message,
     opts?: RunOptions,
@@ -309,7 +357,12 @@ export class InProcessRuntimeHost implements RuntimeHost {
       throw new Error(`agent "${record.id}" already has a running run`);
     }
 
-    const run = new InProcessRunHandle(randomUUID(), record.id, defaultSessionId(record.spec));
+    // F6：Scheduler 传入 runId；缺省由 Host 生成
+    const run = new InProcessRunHandle(
+      opts?.runId ?? randomUUID(),
+      record.id,
+      defaultSessionId(record.spec),
+    );
     record.active = run;
     record.state = 'running';
     record.lastError = undefined;
@@ -337,18 +390,35 @@ export class InProcessRuntimeHost implements RuntimeHost {
 
   /** @internal 由 AgentHandle.cancel() / Host.cancel() 调用 */
   cancelRun(record: MemberRecord, runId?: string): void {
-    const active = record.active;
-    if (!active) return;
-    if (runId !== undefined && runId !== active.id) {
+    if (runId !== undefined) {
+      if (record.active?.id === runId) {
+        record.active.cancel();
+        return;
+      }
+      // 排队中的 run 由 Scheduler 持有
+      if (this.scheduler.cancel(runId)) return;
       throw new Error(`run "${runId}" is not active for agent "${record.id}"`);
     }
-    active.cancel();
+
+    // 未指定 runId：取消该成员排队 + 运行中的 run
+    const internal = this.scheduler as Partial<InternalScheduler>;
+    const cancelAgent = internal[kCancelAgentRuns];
+    if (typeof cancelAgent === 'function') {
+      cancelAgent.call(this.scheduler, record.id, 'agent cancelled');
+    }
+    record.active?.cancel();
   }
 
   /** @internal 由 AgentHandle.close() 调用 */
   async closeMember(record: MemberRecord): Promise<void> {
     if (record.closed) return;
     record.closed = true;
+
+    const internal = this.scheduler as Partial<InternalScheduler>;
+    const cancelAgent = internal[kCancelAgentRuns];
+    if (typeof cancelAgent === 'function') {
+      cancelAgent.call(this.scheduler, record.id, 'agent closed');
+    }
     record.active?.cancel('agent closed');
     record.unsubscribeEvents();
     record.runtime.dispose();
@@ -495,7 +565,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
 }
 
 /** AgentHandle 实现 */
-class InProcessAgentHandle implements AgentHandle {
+class InProcessAgentHandle implements InternalAgentHandle {
   constructor(
     private readonly host: InProcessRuntimeHost,
     private readonly record: MemberRecord,
@@ -514,7 +584,13 @@ class InProcessAgentHandle implements AgentHandle {
   }
 
   run(input: string | Message, opts?: RunOptions): Promise<RunHandle> {
-    return this.host.startRun(this.record, input, opts);
+    // 统一经 Scheduler；内部 executor 防止递归
+    return this.host.enqueueRun(this.record, input, opts);
+  }
+
+  /** @internal Scheduler 直执行入口 */
+  [kExecuteAgentRun](input: string | Message, opts?: RunOptions): Promise<RunHandle> {
+    return this.host.startRunInternal(this.record, input, opts);
   }
 
   send(message: AgentMessage): Promise<void> {
