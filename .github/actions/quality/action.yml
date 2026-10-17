@@ -1,0 +1,38 @@
+name: Quality Checks
+description: Install dependencies and run lint, typecheck, tests, and build.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.9
+
+    - name: Cache Bun install
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-bun-
+
+    - name: Install dependencies
+      shell: bash
+      run: bun install --frozen-lockfile
+
+    - name: Lint
+      shell: bash
+      run: bun run lint
+
+    - name: Typecheck
+      shell: bash
+      run: bun run typecheck
+
+    - name: Test
+      shell: bash
+      run: bun test
+
+    - name: Build
+      shell: bash
+      run: bun run build
