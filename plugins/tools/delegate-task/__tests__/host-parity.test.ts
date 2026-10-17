@@ -11,11 +11,13 @@ import { describe, expect, it } from 'bun:test';
 import {
   AgentRuntime,
   type ChatRequest,
+  InProcessRuntimeHost as CoreInProcessRuntimeHost,
   GuardrailStage,
   HookType,
   type LLMProvider,
   type LLMResponse,
   MemoryContextManager,
+  MemoryEventBus,
   MemoryEventStream,
   MemoryPluginHost,
   type Message,
@@ -424,11 +426,155 @@ describe('R5 parity：delegate_task 外部语义', () => {
     expect(closed).toBe(spawned);
   });
 
-  it.todo(
-    'P11 父取消传播：当前 ToolContext 无 signal，旧 delegate 路径无法中断子 agent；' +
-      'core R5 切换 Host 后应改为真实用例（父 run abort → RunHandle.cancel）',
-    () => {
-      // 占位：等 R5 落地后替换为真实断言
-    },
-  );
+  it('P11 父取消传播：父 run abort 会取消子 RunHandle', async () => {
+    let markChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => {
+      markChildStarted = resolve;
+    });
+
+    const provider: LLMProvider = {
+      async chat(req: ChatRequest): Promise<LLMResponse> {
+        const user = [...req.messages].reverse().find((message) => message.role === 'user');
+        if ((user?.content ?? '').includes('PARENT_CANCEL')) {
+          return delegate('p1', 'CHILD_CANCEL');
+        }
+        markChildStarted();
+        return new Promise((_resolve, reject) => {
+          if (req.signal?.aborted) {
+            reject(new Error('child aborted'));
+            return;
+          }
+          req.signal?.addEventListener('abort', () => reject(new Error('child aborted')), {
+            once: true,
+          });
+        });
+      },
+    };
+
+    const events = new MemoryEventStream();
+    const host = new MemoryPluginHost();
+    const runtimeHost = new CoreInProcessRuntimeHost();
+    const plugin = createDelegateTaskPlugin({
+      providerFactory: () => provider,
+      model: 'test-model',
+      runtimeHost,
+    });
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost: host,
+      context: new MemoryContextManager(),
+      events,
+      limits: {},
+      termination: { maxIterations: 10 },
+      plugins: [plugin],
+    });
+
+    const controller = new AbortController();
+    const runPromise = runtime.run('PARENT_CANCEL', undefined, { signal: controller.signal });
+    await childStarted;
+    controller.abort();
+
+    await expect(runPromise).rejects.toThrow();
+    expect(events.getHistory().some((event) => event.type === 'subagent.delegate.failed')).toBe(
+      true,
+    );
+
+    // 临时成员完成后不残留
+    expect(runtimeHost.list()).toEqual([]);
+    const history = events.getHistory();
+    expect(history.filter((event) => event.type === 'agent.closed').length).toBe(
+      history.filter((event) => event.type === 'agent.spawned').length,
+    );
+  });
+
+  it('F12 注入共享 Host（sameStream）时子事件仍有 subagent. 前缀与 delegateId', async () => {
+    const bus = new MemoryEventBus();
+    const runtimeHost = new CoreInProcessRuntimeHost({ events: bus });
+    const provider = new RecordingProvider([
+      delegate('p1', 'CHILD_SHARED'),
+      final('child done'),
+      final('parent done'),
+    ]);
+    const host = new MemoryPluginHost();
+    const plugin = createDelegateTaskPlugin({
+      providerFactory: () => provider,
+      model: 'test-model',
+      runtimeHost,
+    });
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost: host,
+      context: new MemoryContextManager(),
+      events: bus,
+      limits: {},
+      termination: { maxIterations: 10 },
+      plugins: [plugin],
+    });
+
+    await runtime.run('PARENT_SHARED');
+
+    const history = bus.getHistory();
+    const forwarded = history.find((event) => event.type === 'subagent.run.started');
+    if (!forwarded) throw new Error('subagent.run.started not forwarded');
+    expect((forwarded.data as Record<string, unknown>).delegateId).toBeDefined();
+
+    // 不应出现 subagent.subagent.* 回环
+    expect(history.some((event) => event.type.startsWith('subagent.subagent.'))).toBe(false);
+    // 生命周期事件已在共享流里，不应重复
+    expect(history.filter((event) => event.type === 'agent.spawned')).toHaveLength(1);
+  });
+
+  it('F13 ask_user 桥：子 ask.user.requested 到父流，应答回灌', async () => {
+    const events = new MemoryEventStream();
+    events.subscribe((event) => {
+      if (event.type !== 'ask.user.requested') return;
+      if (typeof event.data !== 'object' || event.data === null) return;
+      events.publish({
+        type: 'ask.user.answered',
+        run_id: event.run_id,
+        data: {
+          requestId: (event.data as Record<string, unknown>).requestId,
+          answers: [{ question_id: 'q1', answer: 'yes' }],
+        },
+        ts: Date.now(),
+      });
+    });
+
+    const scenario = await runScenario({
+      events,
+      input: 'PARENT_ASK',
+      setupHost(host) {
+        host.registerTool({
+          name: 'asks_user',
+          description: 'asks user',
+          inputSchema: { type: 'object', properties: {} },
+          handler: async (_args: unknown, ctx: ToolContext) => {
+            const requestId = 'ask-1';
+            ctx.events.publish({
+              type: 'ask.user.requested',
+              run_id: ctx.run_id,
+              data: { requestId, questions: [{ id: 'q1', text: 'ok?' }] },
+              ts: Date.now(),
+            });
+            const answer = await ctx.events.waitFor('ask.user.answered', {
+              requestId,
+              timeout: 5000,
+            });
+            return `answered:${JSON.stringify(answer)}`;
+          },
+        });
+      },
+      responses: [
+        delegate('p1', 'CHILD_ASK'),
+        call('c1', 'asks_user', {}),
+        final('child done'),
+        final('parent done'),
+      ],
+    });
+
+    const childSecond = scenario.provider.requests[2] ?? [];
+    expect(lastToolContent(childSecond)).toContain('answered:');
+  });
 });
