@@ -13,6 +13,8 @@ import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '.
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunOptions } from '../types/run.js';
+import type { RunCheckpoint, RunStore } from '../types/run-store.js';
+import { RUN_INTERRUPT_REASONS, RunResumeError } from '../types/run-store.js';
 import type { RunState, SessionBackend } from '../types/session.js';
 
 export type { RunOptions } from '../types/run.js';
@@ -56,6 +58,14 @@ export class AgentRuntime {
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
   private hooks: HookRunner;
+  /** durable run 检查点（0.3）；缺省不写、零开销 */
+  private readonly runStore?: RunStore;
+  private readonly agentId?: string;
+  /** 同一 run 的并发 resume 锁（进程内；DECISION-008 Addendum A-2） */
+  private readonly resuming = new Set<string>();
+  /** 当前执行的 checkpoint 元数据（run() 或 resume() 时设置） */
+  private runCreatedAt = 0;
+  private runBranch?: string;
 
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -66,6 +76,8 @@ export class AgentRuntime {
     this.termination = opts.termination;
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
+    this.runStore = opts.runStore;
+    this.agentId = opts.agentId;
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
     this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
 
@@ -126,6 +138,9 @@ export class AgentRuntime {
     const startTime = Date.now();
     const currentSessionId = sessionId || 'default';
     const signal = opts?.signal;
+    // checkpoint 元数据：created_at 在 run 内固定，branch 透传
+    this.runCreatedAt = startTime;
+    this.runBranch = opts?.branch;
 
     // 重置使用量统计（每次 run 都是新的对话）
     this.stats = {
@@ -222,6 +237,9 @@ export class AgentRuntime {
         await this.session.save(runState);
       }
 
+      // durable checkpoint：run 开始（用户消息已写入上下文）
+      await this.writeCheckpoint(runId, currentSessionId, 'running');
+
       // 执行 tool-calling loop
       const response = await this.toolCallingLoop(runId, currentSessionId, signal);
 
@@ -240,6 +258,9 @@ export class AgentRuntime {
       if (this.session) {
         await this.session.save(runState);
       }
+
+      // durable checkpoint：完成
+      await this.writeCheckpoint(runId, currentSessionId, 'completed');
 
       // 发布 Run 完成事件
       this.publishEvent({
@@ -278,6 +299,15 @@ export class AgentRuntime {
         await this.session.save(runState);
       }
 
+      // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
+      await this.writeCheckpoint(
+        runId,
+        currentSessionId,
+        this.failureCheckpointStatus(signal),
+        runState.error,
+        true,
+      );
+
       // 发布 Run 失败事件
       this.publishEvent({
         type: 'run.failed',
@@ -292,6 +322,152 @@ export class AgentRuntime {
       });
 
       throw error;
+    }
+  }
+
+  /**
+   * 从 RunStore 恢复并继续一次 run（0.3 durable）。
+   *
+   * - 会话历史 / usage / iteration 来自 checkpoint；
+   * - 不注入新的用户消息；
+   * - run id 保持不变，返回值语义与 run() 一致。
+   */
+  async resume(runId: string, opts?: RunOptions): Promise<string> {
+    const signal = opts?.signal;
+    if (!this.runStore) throw new RunResumeError('run_store_required', runId);
+    if (this.resuming.has(runId)) throw new RunResumeError('run_already_running', runId);
+
+    this.resuming.add(runId);
+    const startTime = Date.now();
+    try {
+      const checkpoint = await this.runStore.load(runId);
+      if (!checkpoint) throw new RunResumeError('run_not_found', runId);
+      if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
+        throw new RunResumeError('run_not_resumable', runId, checkpoint.status);
+      }
+      if (checkpoint.messages.length === 0) {
+        throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
+      }
+
+      const sessionId = checkpoint.session_id;
+      this.runCreatedAt = checkpoint.created_at;
+      this.runBranch =
+        typeof checkpoint.metadata?.branch === 'string' ? checkpoint.metadata.branch : undefined;
+
+      // 恢复统计，保持 limits / termination 连续
+      this.stats = {
+        requestCount: checkpoint.iteration ?? 0,
+        toolCallsCount:
+          typeof checkpoint.metadata?.tool_calls_count === 'number'
+            ? checkpoint.metadata.tool_calls_count
+            : 0,
+        inputTokens: checkpoint.usage?.prompt_tokens ?? 0,
+        outputTokens: checkpoint.usage?.completion_tokens ?? 0,
+        totalTokens: checkpoint.usage?.total_tokens ?? 0,
+        totalCost: checkpoint.usage?.total_cost ?? 0,
+        startTime,
+      };
+
+      // checkpoint 的历史是恢复的唯一权威来源
+      this.context.clear();
+      this.context.setSessionId(sessionId);
+      for (const message of checkpoint.messages) {
+        this.addContext(message, runId);
+      }
+
+      const runState: RunState = {
+        run_id: runId,
+        session_id: sessionId,
+        messages: this.context.messages,
+        started_at: this.runCreatedAt,
+        status: 'running',
+        ...(this.runBranch !== undefined ? { branch: this.runBranch } : {}),
+      };
+      if (this.session) await this.session.save(runState);
+
+      // 标记已被接管（唯一写者：AgentRuntime）
+      await this.writeCheckpoint(runId, sessionId, 'running');
+
+      this.publishEvent({
+        type: 'run.resumed',
+        run_id: runId,
+        data: {
+          run_id: runId,
+          session_id: sessionId,
+          from_status: checkpoint.status,
+          iteration: this.stats.requestCount,
+        },
+        ts: Date.now(),
+      });
+
+      try {
+        const response = await this.toolCallingLoop(runId, sessionId, signal);
+
+        runState.status = 'completed';
+        runState.completed_at = Date.now();
+        runState.usage = {
+          prompt_tokens: this.stats.inputTokens,
+          completion_tokens: this.stats.outputTokens,
+          total_tokens: this.stats.totalTokens,
+          total_cost: this.stats.totalCost,
+        };
+        runState.messages = this.context.messages;
+        if (this.session) await this.session.save(runState);
+        await this.writeCheckpoint(runId, sessionId, 'completed');
+
+        this.publishEvent({
+          type: 'run.completed',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: sessionId,
+            output: response,
+            usage: runState.usage,
+            duration_ms: Date.now() - startTime,
+            iterations: this.stats.requestCount,
+          },
+          ts: Date.now(),
+        });
+
+        return response;
+      } catch (error) {
+        runState.status = 'failed';
+        runState.completed_at = Date.now();
+        runState.error = error instanceof Error ? error.message : String(error);
+        runState.messages = this.context.messages;
+
+        await this.hooks.run(HookType.OnError, {
+          run_id: runId,
+          session_id: sessionId,
+          error: runState.error,
+          phase: 'run',
+        });
+
+        if (this.session) await this.session.save(runState);
+        await this.writeCheckpoint(
+          runId,
+          sessionId,
+          this.failureCheckpointStatus(signal),
+          runState.error,
+          true,
+        );
+
+        this.publishEvent({
+          type: 'run.failed',
+          run_id: runId,
+          data: {
+            run_id: runId,
+            session_id: sessionId,
+            error: runState.error,
+            duration_ms: Date.now() - startTime,
+          },
+          ts: Date.now(),
+        });
+
+        throw error;
+      }
+    } finally {
+      this.resuming.delete(runId);
     }
   }
 
@@ -617,6 +793,9 @@ export class AgentRuntime {
             });
           }
         }
+
+        // durable checkpoint：本轮 tool-call 结果已全部写入上下文
+        await this.writeCheckpoint(runId, sessionId, 'running');
       } else {
         // 其他完成原因（如 length），直接返回当前内容
         this.addContext(
@@ -821,6 +1000,73 @@ export class AgentRuntime {
 
   private stripReasoning(messages: Message[]): Message[] {
     return messages.map((msg) => this.stripReasoningFromMessage(msg));
+  }
+
+  /**
+   * 写 checkpoint 并发布开放事件 `run.checkpoint`；未配置 store 时 no-op。
+   * 写入失败默认让 run 失败（durable 已开启就不能静默降级）；
+   * `bestEffort` 用于失败路径上的最终写入，避免覆盖原始错误。
+   */
+  private async writeCheckpoint(
+    runId: string,
+    sessionId: string,
+    status: RunCheckpoint['status'],
+    error?: string,
+    bestEffort = false,
+  ): Promise<void> {
+    if (!this.runStore) return;
+
+    const checkpoint: RunCheckpoint = {
+      run_id: runId,
+      session_id: sessionId,
+      status,
+      messages: structuredClone(this.context.messages),
+      usage: {
+        prompt_tokens: this.stats.inputTokens,
+        completion_tokens: this.stats.outputTokens,
+        total_tokens: this.stats.totalTokens,
+        total_cost: this.stats.totalCost,
+      },
+      iteration: this.stats.requestCount,
+      created_at: this.runCreatedAt || Date.now(),
+      updated_at: Date.now(),
+      metadata: {
+        tool_calls_count: this.stats.toolCallsCount,
+        ...(this.runBranch !== undefined ? { branch: this.runBranch } : {}),
+      },
+      ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
+      ...(error !== undefined ? { error } : {}),
+    };
+
+    try {
+      await this.runStore.save(checkpoint);
+    } catch (saveError) {
+      if (bestEffort) return;
+      const detail = saveError instanceof Error ? saveError.message : String(saveError);
+      throw new Error(`run_checkpoint_failed: ${detail}`);
+    }
+
+    this.publishEvent({
+      type: 'run.checkpoint',
+      run_id: runId,
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        status,
+        iteration: checkpoint.iteration,
+        message_count: checkpoint.messages.length,
+      },
+      ts: Date.now(),
+    });
+  }
+
+  /** AbortSignal 的 checkpoint 终态：Host 关闭 → interrupted，用户取消 → cancelled */
+  private failureCheckpointStatus(signal?: AbortSignal): 'failed' | 'cancelled' | 'interrupted' {
+    if (!signal?.aborted) return 'failed';
+    const reason = signal.reason;
+    return typeof reason === 'string' && RUN_INTERRUPT_REASONS.has(reason)
+      ? 'interrupted'
+      : 'cancelled';
   }
 
   /**

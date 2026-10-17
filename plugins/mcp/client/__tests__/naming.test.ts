@@ -47,12 +47,12 @@ describe('exposedToolName', () => {
     expect(exposedToolName('s', 'x'.repeat(56), true)).toBe(raw);
   });
 
-  it('truncates longer names to 64 + underscore + 8-char hash', () => {
+  it('truncates longer names to 55 + underscore + 8-char hash = 64', () => {
     const tool = 'x'.repeat(100);
     const raw = `mcp__s__${tool}`;
     const name = exposedToolName('s', tool, true);
-    expect(name).toBe(`${raw.slice(0, 64)}_${hashSuffix(raw)}`);
-    expect(name.length).toBe(64 + 1 + 8);
+    expect(name).toBe(`${raw.slice(0, 55)}_${hashSuffix(raw)}`);
+    expect(name.length).toBe(64);
     expect(hashSuffix(raw)).toHaveLength(8);
   });
 
