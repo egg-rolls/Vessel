@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type {
+  RuntimeHost as CoreRuntimeHost,
   EventStream,
   LLMProvider,
   Plugin,
@@ -17,13 +18,9 @@ import type {
   ToolDefinition,
   UsageLimits,
 } from '@vessel/core';
-import { MemoryPluginHost } from '@vessel/core';
-import {
-  type AgentStatus,
-  InProcessRuntimeHost,
-  type RuntimeHost,
-  type TeamMessageKind,
-} from './host.js';
+import { InProcessRuntimeHost as CoreInProcessRuntimeHost, MemoryPluginHost } from '@vessel/core';
+import { CoreHostAdapter, LegacyHostAdapter, type TeamHostPort } from './core-adapter.js';
+import type { AgentStatus, RuntimeHost, TeamMessageKind } from './host.js';
 
 export * from './host.js';
 
@@ -36,9 +33,14 @@ export interface TeamPluginOptions {
   providerFactory: () => LLMProvider;
   /** 成员默认模型 */
   model: string;
-  /** 注入 host（测试或 0.2 的正式实现）；缺省用进程内实现 */
+  /** 注入 core Host（0.2 首选） */
+  host?: CoreRuntimeHost;
+  /**
+   * 注入 0.1 插件私有 Host（兼容路径）。
+   * @deprecated 使用 `host`；0.3 移除。
+   */
   runtimeHost?: RuntimeHost;
-  /** 观测事件流（创建进程内 host 时使用） */
+  /** 观测事件流（team.* 事件发布到这里） */
   events?: EventStream;
   /** owner（主 agent）成员 ID（默认 'owner'） */
   ownerId?: string;
@@ -54,7 +56,7 @@ export interface TeamPluginOptions {
 interface ResolvedConfig {
   providerFactory: () => LLMProvider;
   model: string;
-  runtimeHost: RuntimeHost;
+  port: TeamHostPort;
   ownerId: string;
   memberLimits?: UsageLimits;
   memberTermination?: TerminationPolicy;
@@ -104,7 +106,7 @@ function makeSpawnTool(host: PluginHost, config: ResolvedConfig): ToolDefinition
     handler: async (args: unknown) => {
       const record = isRecord(args) ? args : {};
       try {
-        const status = await config.runtimeHost.spawn({
+        const status = await config.port.spawn({
           name: readString(record, 'name') || undefined,
           provider: config.providerFactory(),
           model: readString(record, 'model') || config.model,
@@ -151,7 +153,7 @@ function makeSendTool(config: ResolvedConfig): ToolDefinition {
       if (!content) return 'Error: team_send requires a non-empty content';
 
       try {
-        await config.runtimeHost.send({
+        await config.port.send({
           id: randomUUID(),
           from: config.ownerId,
           to,
@@ -186,7 +188,7 @@ function makeInboxTool(config: ResolvedConfig): ToolDefinition {
       const record = isRecord(args) ? args : {};
       const member = readString(record, 'member') || config.ownerId;
       try {
-        const page = await config.runtimeHost.inbox(member, readString(record, 'cursor'));
+        const page = await config.port.inbox(member, readString(record, 'cursor'));
         return JSON.stringify(page);
       } catch (error) {
         return `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -211,9 +213,7 @@ function makeStatusTool(config: ResolvedConfig): ToolDefinition {
       const record = isRecord(args) ? args : {};
       const member = readString(record, 'member');
       try {
-        const status: AgentStatus | AgentStatus[] = await config.runtimeHost.status(
-          member || undefined,
-        );
+        const status: AgentStatus | AgentStatus[] = await config.port.status(member || undefined);
         return JSON.stringify(status);
       } catch (error) {
         return `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -239,7 +239,7 @@ function makeCancelTool(config: ResolvedConfig): ToolDefinition {
       const member = readString(args, 'member');
       if (!member) return 'Error: team_cancel requires a non-empty member';
       try {
-        await config.runtimeHost.cancel(member);
+        await config.port.cancel(member);
         return JSON.stringify({ ok: true, member, state: 'cancelled' });
       } catch (error) {
         return `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -253,12 +253,14 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
   const config: ResolvedConfig = {
     providerFactory: options.providerFactory,
     model: options.model,
-    runtimeHost:
-      options.runtimeHost ??
-      new InProcessRuntimeHost({
-        events: options.events,
-        maxMembers: options.maxMembers,
-      }),
+    port: options.host
+      ? new CoreHostAdapter(options.host, { events: options.events, ownsHost: false })
+      : options.runtimeHost
+        ? new LegacyHostAdapter(options.runtimeHost)
+        : new CoreHostAdapter(new CoreInProcessRuntimeHost({ maxMembers: options.maxMembers }), {
+            events: options.events,
+            ownsHost: true,
+          }),
     ownerId: options.ownerId ?? 'owner',
     memberLimits: options.memberLimits,
     memberTermination: options.memberTermination,

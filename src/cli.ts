@@ -242,6 +242,8 @@ if (!useMock && interactive && !config.apiKey) {
 
 async function runWithConfig(result: BootstrapResult) {
   const { runtime, ctx, config, cleanup } = result;
+  // 过渡：web R3 放宽 GatewayOptions.runtime 前，gateway 只能接 AgentRuntime。
+  const gatewayRuntime = result.agentRuntime;
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   const gateway =
@@ -249,7 +251,7 @@ async function runWithConfig(result: BootstrapResult) {
       ? startGateway({
           events: ctx.events,
           session: ctx.session,
-          runtime,
+          runtime: gatewayRuntime,
           // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
           context: ctx.context,
           pluginHost: ctx.pluginHost,
@@ -258,6 +260,11 @@ async function runWithConfig(result: BootstrapResult) {
         })
       : null;
   if (gateway) {
+    if (result.host && !gatewayRuntime) {
+      console.warn(
+        '⚠ --serve in host mode: /v1/runs is unavailable until the gateway accepts RunnableAgent (web R3).',
+      );
+    }
     console.log(`\n${renderGatewayBanner(gateway)}\n`);
   }
 

@@ -2,7 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
-import type { AgentMessage, EventBus, RunnableAgent } from '../src/kernel/index';
+import type {
+  AgentMessage,
+  EventBus,
+  RunHandle,
+  RunnableAgent,
+  ScheduledTask,
+  Scheduler,
+  SchedulerStats,
+} from '../src/kernel/index';
 import { createCancellationScope, InProcessRuntimeHost, MemoryEventBus } from '../src/kernel/index';
 import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
@@ -258,19 +266,31 @@ describe('InProcessRuntimeHost 生命周期', () => {
     await host.close();
   });
 
-  it('同一成员 R1 同时只允许一个 run', async () => {
+  it('同一成员 run 经 Scheduler 串行排队', async () => {
     const provider = new ControlledProvider();
     const host = new InProcessRuntimeHost();
     const agent = await host.spawn({ id: 'worker', provider, model: 'm' });
 
-    const started = provider.waitForRequest();
-    const run = await agent.run('first');
-    await started;
+    const firstStarted = provider.waitForRequest();
+    const first = await agent.run('first');
+    await firstStarted;
+    expect(first.status()).toBe('running');
+    expect(host.scheduler.stats().running).toBe(1);
 
-    await expect(agent.run('second')).rejects.toThrow('already has a running run');
+    const second = await agent.run('second');
+    expect(second.status()).toBe('queued');
+    expect(host.scheduler.stats().queued).toBe(1);
 
+    const secondStarted = provider.waitForRequest();
     provider.respond('first-done');
-    await expect(run.result).resolves.toBe('first-done');
+    await expect(first.result).resolves.toBe('first-done');
+    await secondStarted;
+    expect(second.status()).toBe('running');
+
+    provider.respond('second-done');
+    await expect(second.result).resolves.toBe('second-done');
+    await Promise.resolve();
+    expect(host.scheduler.stats().completed).toBe(2);
 
     await host.close();
   });
@@ -381,6 +401,46 @@ describe('取消与关闭', () => {
 });
 
 describe('Session 命名空间（D3）', () => {
+  it('自定义 Scheduler 传入的 sessionId 生效（F9）', async () => {
+    class SessionOverrideScheduler implements Scheduler {
+      async submit(task: ScheduledTask): Promise<RunHandle> {
+        task.sessionId = 'custom-session';
+        if (!task.executor) throw new Error('executor required');
+        return task.executor('custom-run');
+      }
+
+      cancel(): boolean {
+        return false;
+      }
+
+      stats(): SchedulerStats {
+        return { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+      }
+
+      async close(): Promise<void> {
+        // no-op
+      }
+    }
+
+    const backend = new MemorySessionBackend();
+    const host = new InProcessRuntimeHost({
+      session: backend,
+      scheduler: new SessionOverrideScheduler(),
+    });
+    const agent = await host.spawn({
+      id: 'a',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+    });
+
+    const run = await agent.run('hi');
+    expect(run.sessionId).toBe('custom-session');
+    await run.result;
+
+    expect(await backend.list()).toContain('a/custom-session');
+    await host.close();
+  });
+
   it('共享后端按 agentId 隔离 session', async () => {
     const backend = new MemorySessionBackend();
     const host = new InProcessRuntimeHost({ session: backend });
@@ -542,27 +602,33 @@ describe('RunnableAgent（A10）', () => {
 });
 
 describe('Scheduler（F2）', () => {
-  it('submit/cancel/stats/close 的 R1 受限行为', async () => {
+  it('submit 排队、排队取消、运行取消与 stats', async () => {
     const provider = new ControlledProvider();
     const host = new InProcessRuntimeHost();
     const agent = await host.spawn({ id: 'worker', provider, model: 'm' });
 
     const started = provider.waitForRequest();
-    const run = await host.scheduler.submit({ agent, input: 'first' });
+    const first = await host.scheduler.submit({ agent, input: 'first' });
     await started;
-
     expect(host.scheduler.stats().queued).toBe(0);
     expect(host.scheduler.stats().running).toBe(1);
-    await expect(host.scheduler.submit({ agent, input: 'second' })).rejects.toThrow(
-      'already has a running run',
-    );
 
-    expect(host.scheduler.cancel(run.id, 'stop')).toBe(true);
-    await expect(run.result).rejects.toThrow();
-    await Promise.resolve();
+    const second = await host.scheduler.submit({ agent, input: 'second' });
+    expect(second.status()).toBe('queued');
+    expect(host.scheduler.stats().queued).toBe(1);
 
-    expect(host.scheduler.stats().running).toBe(0);
+    // 排队取消
+    expect(host.scheduler.cancel(second.id, 'drop')).toBe(true);
+    await expect(second.result).rejects.toThrow();
+    expect(host.scheduler.stats().queued).toBe(0);
     expect(host.scheduler.stats().cancelled).toBe(1);
+
+    // 运行取消
+    expect(host.scheduler.cancel(first.id, 'stop')).toBe(true);
+    await expect(first.result).rejects.toThrow();
+    await Promise.resolve();
+    expect(host.scheduler.stats().running).toBe(0);
+    expect(host.scheduler.stats().cancelled).toBe(2);
 
     await host.scheduler.close();
     await host.close();

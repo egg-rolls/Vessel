@@ -185,6 +185,24 @@ it('--tools 在 team.enabled 时额外列出 5 个 team_* 工具', async () => {
   }
 });
 
+it('host.enabled=true 时 headless mock 走 Host 路径且不触发回退', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-host-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'host:\n  enabled: true\n');
+    const { stdout, stderr, exitCode } = await runCli(
+      ['--run', 'hello'],
+      { VESSEL_MOCK: '1' },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe('Echo: hello');
+    expect(stderr).not.toContain('Host runtime unavailable');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 it('--run @missing.txt 报错 exit 1', async () => {
   const { exitCode, stderr } = await runCli(['--run', '@definitely-missing.txt'], {
     VESSEL_MOCK: '1',
