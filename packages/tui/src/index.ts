@@ -67,9 +67,24 @@ export {
   type ErrorCategory,
   formatClassifiedError,
 } from './error-classifier.js';
+export { formatPermissionQuestion, type ToolOrigin } from './renderer/tool-confirm.js';
 // Ink 版本（React 组件式 UI）
 export { startInkRepl } from './repl/ink-repl.js';
-export type { ReplContext } from './repl-context.js';
+export { executeResume, executeTurn, type TurnOutcome } from './repl/run-turn.js';
+export {
+  buildStartupNotice,
+  loadStartupNotice,
+  type StartupNoticeInput,
+} from './repl/startup-notice.js';
+export type {
+  DurableRunHandle,
+  DurableRunOutcome,
+  DurableRunSummary,
+  DurableRunsControl,
+  McpControl,
+  McpServerSummary,
+  ReplContext,
+} from './repl-context.js';
 export {
   buildBanner,
   buildSessionTable,
