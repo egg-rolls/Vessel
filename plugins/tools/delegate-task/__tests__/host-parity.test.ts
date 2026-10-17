@@ -11,6 +11,7 @@ import { describe, expect, it } from 'bun:test';
 import {
   AgentRuntime,
   type ChatRequest,
+  InProcessRuntimeHost as CoreInProcessRuntimeHost,
   GuardrailStage,
   HookType,
   type LLMProvider,
@@ -424,11 +425,65 @@ describe('R5 parity：delegate_task 外部语义', () => {
     expect(closed).toBe(spawned);
   });
 
-  it.todo(
-    'P11 父取消传播：当前 ToolContext 无 signal，旧 delegate 路径无法中断子 agent；' +
-      'core R5 切换 Host 后应改为真实用例（父 run abort → RunHandle.cancel）',
-    () => {
-      // 占位：等 R5 落地后替换为真实断言
-    },
-  );
+  it('P11 父取消传播：父 run abort 会取消子 RunHandle', async () => {
+    let markChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => {
+      markChildStarted = resolve;
+    });
+
+    const provider: LLMProvider = {
+      async chat(req: ChatRequest): Promise<LLMResponse> {
+        const user = [...req.messages].reverse().find((message) => message.role === 'user');
+        if ((user?.content ?? '').includes('PARENT_CANCEL')) {
+          return delegate('p1', 'CHILD_CANCEL');
+        }
+        markChildStarted();
+        return new Promise((_resolve, reject) => {
+          if (req.signal?.aborted) {
+            reject(new Error('child aborted'));
+            return;
+          }
+          req.signal?.addEventListener('abort', () => reject(new Error('child aborted')), {
+            once: true,
+          });
+        });
+      },
+    };
+
+    const events = new MemoryEventStream();
+    const host = new MemoryPluginHost();
+    const runtimeHost = new CoreInProcessRuntimeHost();
+    const plugin = createDelegateTaskPlugin({
+      providerFactory: () => provider,
+      model: 'test-model',
+      runtimeHost,
+    });
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost: host,
+      context: new MemoryContextManager(),
+      events,
+      limits: {},
+      termination: { maxIterations: 10 },
+      plugins: [plugin],
+    });
+
+    const controller = new AbortController();
+    const runPromise = runtime.run('PARENT_CANCEL', undefined, { signal: controller.signal });
+    await childStarted;
+    controller.abort();
+
+    await expect(runPromise).rejects.toThrow();
+    expect(events.getHistory().some((event) => event.type === 'subagent.delegate.failed')).toBe(
+      true,
+    );
+
+    // 临时成员完成后不残留
+    expect(runtimeHost.list()).toEqual([]);
+    const history = events.getHistory();
+    expect(history.filter((event) => event.type === 'agent.closed').length).toBe(
+      history.filter((event) => event.type === 'agent.spawned').length,
+    );
+  });
 });
