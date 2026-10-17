@@ -29,12 +29,14 @@ describe('gateway /v1/team auth & validation', () => {
     return node.gateway;
   }
 
-  const postMessage = (gw: Gateway, body: unknown) =>
-    fetch(`${gw.url}/v1/team/messages`, {
+  const postMessage = (gw: Gateway, body: unknown) => {
+    const payload = body && typeof body === 'object' ? { node_id: 'B', ...(body as object) } : body;
+    return fetch(`${gw.url}/v1/team/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${gw.token}` },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
+  };
 
   it('requires a token and enforces Origin/Host', async () => {
     const gw = await makeTeam();
@@ -106,6 +108,77 @@ describe('gateway /v1/team auth & validation', () => {
     expect(relay.status).toBe(404);
     const relayBody = (await relay.json()) as { error: { code: string } };
     expect(relayBody.error.code).toBe('agent_not_found');
+  });
+
+  it('rejects inbound broadcast messages (F9)', async () => {
+    const gw = await makeTeam();
+    const res = await postMessage(gw, {
+      protocol: 1,
+      message: {
+        id: 'broadcast-1',
+        from: 'B:owner',
+        to: '*',
+        kind: 'message',
+        content: 'hi all',
+        ts: Date.now(),
+      },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('broadcast_not_supported');
+  });
+
+  it('rejects spoofed envelope node_id when from has a node prefix (F11)', async () => {
+    const gw = await makeTeam();
+    const res = await postMessage(gw, {
+      node_id: 'C',
+      protocol: 1,
+      message: {
+        id: 'spoof-1',
+        from: 'B:owner',
+        to: 'A:worker',
+        kind: 'message',
+        content: 'spoof',
+        ts: Date.now(),
+      },
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe('invalid_request');
+  });
+
+  it('requires envelope node_id when from has a node prefix (F11)', async () => {
+    const gw = await makeTeam();
+    const res = await postMessage(gw, {
+      node_id: undefined,
+      protocol: 1,
+      message: {
+        id: 'no-node-1',
+        from: 'B:owner',
+        to: 'A:worker',
+        kind: 'message',
+        content: 'no envelope node',
+        ts: Date.now(),
+      },
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('allows local shorthand from without a node prefix (F11)', async () => {
+    const gw = await makeTeam();
+    const res = await postMessage(gw, {
+      node_id: 'ignored-for-local',
+      protocol: 1,
+      message: {
+        id: 'local-from-1',
+        from: 'owner',
+        to: 'A:worker',
+        kind: 'message',
+        content: 'local from',
+        ts: Date.now(),
+      },
+    });
+    expect(res.status).toBe(202);
   });
 
   it('accepts a valid inbound message for this node', async () => {

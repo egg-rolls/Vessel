@@ -1039,6 +1039,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
       } catch (error) {
         return teamErrorResponse(error, extra);
       }
+      // F9：入站 HTTP 不接受跨节点广播；本地 /v1/team/send 的 '*' 仍然允许。
+      if (message.to === '*') {
+        return errorJson(
+          'broadcast_not_supported',
+          'Inbound broadcast is not supported; use a concrete recipient',
+          400,
+          extra,
+        );
+      }
+      // F11：有 node 前缀的 from 必须与 envelope node_id 一致（防伪）；本机简写放行。
+      const fromNode = parseAddress(message.from).nodeId;
+      if (fromNode !== undefined && body.node_id !== fromNode) {
+        return errorJson('invalid_request', 'body.node_id must match message.from', 400, extra);
+      }
       try {
         const accepted = await deliverInbound(message);
         const target = message.to === '*' ? undefined : parseAddress(message.to).agentId;
@@ -1174,7 +1188,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       if (action === 'cancel' && req.method === 'POST') {
         if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
-        t.host.cancel(id);
+        // F10：未知 agent 返回 404，不让 host.cancel 抛成 500。
+        if (!t.host.get(id)) {
+          return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
+        }
+        try {
+          t.host.cancel(id);
+        } catch (error) {
+          return errorJson(
+            'agent_not_found',
+            error instanceof Error ? error.message : `Unknown agent: ${id}`,
+            404,
+            extra,
+          );
+        }
         return json({ protocol: 1, cancelled: true }, 200, extra);
       }
       if (action === 'close' && req.method === 'POST') {

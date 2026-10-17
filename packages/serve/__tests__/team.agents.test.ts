@@ -111,6 +111,14 @@ describe('gateway /v1/team agents & inbox', () => {
     const remoteBody = (await remoteCancel.json()) as { error: { code: string } };
     expect(remoteBody.error.code).toBe('remote_cancel_not_supported');
 
+    const unknownCancel = await fetch(`${gw.url}/v1/team/agents/ghost/cancel`, {
+      method: 'POST',
+      headers: auth(gw),
+    });
+    expect(unknownCancel.status).toBe(404);
+    const unknownBody = (await unknownCancel.json()) as { error: { code: string } };
+    expect(unknownBody.error.code).toBe('agent_not_found');
+
     const closed = await fetch(`${gw.url}/v1/team/agents/worker/close`, {
       method: 'POST',
       headers: auth(gw),
