@@ -2,6 +2,9 @@
  * gateway 测试基建：runtime 构造、脚本化 provider、WS 测试客户端。
  */
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   AgentRuntime,
   type ChatRequest,
@@ -19,6 +22,8 @@ import {
 } from '@vessel/core';
 import { type Gateway, type GatewayOptions, startGateway } from '../src/gateway';
 import type { ServerFrame } from '../src/protocol';
+import type { TeamGatewayOptions } from '../src/team';
+import { createLoopbackTransport, type LoopbackTransport } from '../src/transport/index';
 
 /** 创建一个 echo 式 runtime（MemoryLLMProvider 回显输入） */
 export async function createRuntime(opts: {
@@ -263,4 +268,56 @@ export async function waitUntil(
 /** 共享 MemoryEventStream 的快捷构造 */
 export function newEvents(): MemoryEventStream {
   return new MemoryEventStream();
+}
+
+/** 创建临时目录（调用方负责 rm） */
+export function makeTempDir(prefix = 'vessel-serve-test-'): Promise<string> {
+  return mkdtemp(join(tmpdir(), prefix));
+}
+
+/** 清理临时目录 */
+export function removeTempDir(path: string): Promise<void> {
+  return rm(path, { recursive: true, force: true });
+}
+
+export interface TeamNodeOptions {
+  nodeId: string;
+  peersDir: string;
+  token?: string;
+  heartbeatMs?: number;
+  peerTtlMs?: number;
+  host?: TeamGatewayOptions['host'];
+  spawn?: TeamGatewayOptions['spawn'];
+  deliver?: TeamGatewayOptions['deliver'];
+}
+
+/** 启动一个带 LoopbackTransport 的 gateway 节点 */
+export async function createTeamNode(options: TeamNodeOptions): Promise<{
+  gateway: Gateway;
+  transport: LoopbackTransport;
+  events: MemoryEventStream;
+}> {
+  const events = new MemoryEventStream();
+  const gateway = startGateway({
+    events,
+    port: 0,
+    nodeId: options.nodeId,
+    ...(options.token ? { token: options.token } : {}),
+  });
+  const transport = await createLoopbackTransport({
+    nodeId: options.nodeId,
+    endpoint: gateway.url,
+    token: gateway.token,
+    peersDir: options.peersDir,
+    heartbeatMs: options.heartbeatMs ?? 100,
+    peerTtlMs: options.peerTtlMs ?? 500,
+  });
+  gateway.attachTeam({
+    nodeId: options.nodeId,
+    transport,
+    ...(options.host ? { host: options.host } : {}),
+    ...(options.spawn ? { spawn: options.spawn } : {}),
+    ...(options.deliver ? { deliver: options.deliver } : {}),
+  });
+  return { gateway, transport, events };
 }
