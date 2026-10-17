@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AgentRuntime,
+  type AgentStatus,
   type ChatRequest,
   type ContextManager,
   type EventStream,
@@ -289,6 +290,8 @@ export interface TeamNodeOptions {
   host?: TeamGatewayOptions['host'];
   spawn?: TeamGatewayOptions['spawn'];
   deliver?: TeamGatewayOptions['deliver'];
+  /** 本节点成员快照（写入注册表） */
+  agents?: () => AgentStatus[];
 }
 
 /** 启动一个带 LoopbackTransport 的 gateway 节点 */
@@ -311,6 +314,7 @@ export async function createTeamNode(options: TeamNodeOptions): Promise<{
     peersDir: options.peersDir,
     heartbeatMs: options.heartbeatMs ?? 100,
     peerTtlMs: options.peerTtlMs ?? 500,
+    ...(options.agents ? { agents: options.agents } : {}),
   });
   gateway.attachTeam({
     nodeId: options.nodeId,

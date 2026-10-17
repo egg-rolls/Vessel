@@ -9,7 +9,7 @@
  * @module @vessel/serve/transport
  */
 
-import type { AgentMessage, PeerInfo, Transport, Unsubscribe } from '@vessel/core';
+import type { AgentMessage, AgentStatus, PeerInfo, Transport, Unsubscribe } from '@vessel/core';
 import { fromWireMessage, parseAddress, TeamProtocolError, toWireMessage } from '../team.js';
 import { PeerRegistry } from './registry.js';
 
@@ -27,6 +27,11 @@ export interface LoopbackTransportOptions {
   requestTimeoutMs?: number;
   /** 入站去重窗口（默认 1000） */
   maxInbox?: number;
+  /**
+   * 本节点成员快照；写入注册表并用于 peers()/短 id 解析。
+   * 缺省返回空数组（P1-1）。
+   */
+  agents?: () => AgentStatus[];
 }
 
 /** 传输层错误码（稳定字符串，供 ext 折回语言空间） */
@@ -55,6 +60,14 @@ const DEFAULT_HEARTBEAT_MS = 5_000;
 const DEFAULT_PEER_TTL_MS = 15_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_INBOX = 1_000;
+
+/** 短等待（毫秒） */
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+}
 
 /** query wrapper：把 team 协议错误转成传输层错误 */
 function normalizeMessage(message: AgentMessage): AgentMessage {
@@ -102,6 +115,7 @@ export class LoopbackTransport implements Transport {
       peersDir: options.peersDir,
       heartbeatMs,
       peerTtlMs,
+      ...(options.agents ? { agents: options.agents } : {}),
     });
     await registry.start();
     return new LoopbackTransport(
@@ -143,7 +157,18 @@ export class LoopbackTransport implements Transport {
       return;
     }
 
-    const peer = this.registry.get(target.nodeId);
+    // P1-2：缓存未命中时立即重扫一次 + 75ms 后再试一次，覆盖启动期单向发现竞态。
+    // 重试只发生在投递前；peer_not_found 表示未投递，保持 at-most-once。
+    let peer = this.registry.get(target.nodeId);
+    if (!peer?.endpoint) {
+      await this.registry.refresh();
+      peer = this.registry.get(target.nodeId);
+    }
+    if (!peer?.endpoint) {
+      await sleep(75);
+      await this.registry.refresh();
+      peer = this.registry.get(target.nodeId);
+    }
     if (!peer?.endpoint) {
       throw new PeerTransportError(
         'peer_not_found',

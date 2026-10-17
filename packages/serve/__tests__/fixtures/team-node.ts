@@ -22,6 +22,15 @@ if (!nodeId || !peersDir || !token) {
 
 const events = new MemoryEventStream();
 const gateway = startGateway({ events, port: 0, nodeId, token, nodeName: nodeId });
+
+const ownerId = 'owner';
+const workerId = 'worker';
+const inboxes = new Map<string, AgentMessage[]>();
+const statuses = new Map<string, AgentStatus>([
+  [ownerId, { id: ownerId, state: 'idle', toolNames: [] }],
+  [workerId, { id: workerId, state: 'idle', toolNames: [] }],
+]);
+
 const transport = await createLoopbackTransport({
   nodeId,
   endpoint: gateway.url,
@@ -29,13 +38,8 @@ const transport = await createLoopbackTransport({
   peersDir,
   heartbeatMs: 100,
   peerTtlMs: 500,
+  agents: () => [...statuses.values()],
 });
-
-const ownerId = 'owner';
-const inboxes = new Map<string, AgentMessage[]>();
-const statuses = new Map<string, AgentStatus>([
-  [ownerId, { id: ownerId, state: 'idle', toolNames: [] }],
-]);
 
 const host: TeamHostLike = {
   list: () => [...statuses.values()],

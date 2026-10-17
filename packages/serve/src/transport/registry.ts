@@ -176,6 +176,20 @@ export class PeerRegistry {
     return this.remote.get(nodeId);
   }
 
+  /**
+   * 立即重扫注册表（P1-2）。
+   * 发送前缓存未命中时调用，避免「对方文件已存在但本地还没扫到」的启动竞态。
+   * 失败只记录，不抛；调用方仍按正常路径处理 peer_not_found。
+   */
+  async refresh(): Promise<void> {
+    if (this.closed || this._degraded) return;
+    try {
+      await this.scan();
+    } catch (error) {
+      this._lastError = this.errorMessage(error);
+    }
+  }
+
   private selfPeerInfo(): PeerInfo {
     return {
       nodeId: this.options.nodeId,

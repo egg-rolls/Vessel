@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AgentMessage } from '@vessel/core';
+import { type AgentMessage, MemoryEventStream } from '@vessel/core';
+import { startGateway } from '../src/gateway';
 import { createLoopbackTransport } from '../src/transport/index';
 import { createTeamNode, makeTempDir, removeTempDir, waitUntil } from './helpers';
 
@@ -37,6 +38,7 @@ describe('LoopbackTransport', () => {
       token,
       heartbeatMs: 50,
       peerTtlMs: 500,
+      agents: () => [{ id: 'worker', state: 'idle', toolNames: ['read'] }],
     });
     b.transport.receive((msg) => {
       bReceived.push(msg);
@@ -47,6 +49,7 @@ describe('LoopbackTransport', () => {
       token,
       heartbeatMs: 50,
       peerTtlMs: 500,
+      agents: () => [{ id: 'owner', state: 'idle', toolNames: ['read'] }],
     });
     a.transport.receive((msg) => {
       aReceived.push(msg);
@@ -69,6 +72,73 @@ describe('LoopbackTransport', () => {
     expect(bReceived[0]?.from).toBe('A:owner');
     expect(bReceived[0]?.to).toBe('worker');
     expect(bReceived[0]?.content).toBe('ping');
+  });
+
+  it('exposes member agents for short-id discovery (P1-1)', async () => {
+    const { a } = await makeNodes();
+    await waitUntil(async () => {
+      const peers = await a.transport.peers();
+      const b = peers.find((peer) => peer.nodeId === 'B');
+      return (
+        b?.agents.some((agent) => agent.id === 'worker' && agent.toolNames.includes('read')) ??
+        false
+      );
+    });
+    const peers = await a.transport.peers();
+    expect(peers.find((peer) => peer.nodeId === 'A')?.agents[0]?.id).toBe('owner');
+    expect(peers.find((peer) => peer.nodeId === 'B')?.agents[0]?.id).toBe('worker');
+  });
+
+  it('refreshes the registry when a peer appears after startup (P1-2)', async () => {
+    const dir = await makeTempDir();
+    dirs.push(dir);
+    const token = 'refresh-token';
+    const received: AgentMessage[] = [];
+
+    const bGateway = startGateway({
+      events: new MemoryEventStream(),
+      port: 0,
+      nodeId: 'B',
+      token,
+      team: {
+        nodeId: 'B',
+        deliver: (message) => {
+          received.push(message);
+        },
+      },
+    });
+    closers.push(() => bGateway.stop());
+
+    // 长心跳：A 启动时的初始 scan 之后不会再自动扫描。
+    const a = await createTeamNode({
+      nodeId: 'A',
+      peersDir: dir,
+      token,
+      heartbeatMs: 10_000,
+      peerTtlMs: 30_000,
+    });
+    closers.push(async () => {
+      await a.transport.close();
+      a.gateway.stop();
+    });
+
+    // A 启动后才出现 B 的注册文件，模拟单向发现竞态。
+    await writeFile(
+      join(dir, 'B.json'),
+      JSON.stringify({
+        protocol: 1,
+        node_id: 'B',
+        pid: process.pid,
+        endpoint: bGateway.url,
+        started_at: Date.now(),
+        heartbeat_at: Date.now(),
+        agents: [{ id: 'worker', state: 'idle', tool_names: [] }],
+      }),
+    );
+
+    await a.transport.send(message({ id: 'refresh-1', to: 'B:worker', content: 'after-start' }));
+    await waitUntil(() => received.length === 1);
+    expect(received[0]?.content).toBe('after-start');
   });
 
   it('delivers local addresses without HTTP', async () => {

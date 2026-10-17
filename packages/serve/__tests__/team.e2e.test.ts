@@ -101,13 +101,33 @@ describe('two-process loopback E2E', () => {
 
     const headers = { Authorization: `Bearer ${token}` };
 
-    // 互相发现
+    // 双向发现（P1-2：避免只有 A 看到 B 就发送）
     await waitUntil(async () => {
       const res = await fetch(`${readyA.endpoint}/v1/team/peers`, { headers });
       if (!res.ok) return false;
-      const body = (await res.json()) as { peers: Array<{ node_id: string }> };
+      const body = (await res.json()) as {
+        peers: Array<{ node_id: string; agents: Array<{ id: string }> }>;
+      };
       return body.peers.some((peer) => peer.node_id === 'B');
     }, 10_000);
+    await waitUntil(async () => {
+      const res = await fetch(`${readyB.endpoint}/v1/team/peers`, { headers });
+      if (!res.ok) return false;
+      const body = (await res.json()) as { peers: Array<{ node_id: string }> };
+      return body.peers.some((peer) => peer.node_id === 'A');
+    }, 10_000);
+
+    // P1-1：peer 列表应带成员，支持短 id 解析
+    const peersA = (await (
+      await fetch(`${readyA.endpoint}/v1/team/peers`, { headers })
+    ).json()) as {
+      peers: Array<{ node_id: string; agents: Array<{ id: string }> }>;
+    };
+    expect(
+      peersA.peers
+        .find((peer) => peer.node_id === 'B')
+        ?.agents.some((agent) => agent.id === 'worker'),
+    ).toBe(true);
 
     // A -> B task
     const send = await fetch(`${readyA.endpoint}/v1/team/send`, {
