@@ -44,6 +44,7 @@ import type {
   RunnableAgent,
   RunStatus,
   RuntimeHost,
+  ScheduledTask,
   Scheduler,
   SchedulerOptions,
   Transport,
@@ -336,14 +337,17 @@ export class InProcessRuntimeHost implements RuntimeHost {
     const handle = this.handles.get(record.id);
     if (!handle) return Promise.reject(new Error(`unknown agent: ${record.id}`));
 
-    return this.scheduler.submit({
+    const task: ScheduledTask = {
       agent: handle,
       sessionId: defaultSessionId(record.spec),
       input,
       opts,
-      // 内部 executor：避免 Scheduler.submit → AgentHandle.run 递归
-      executor: (runId) => this.startRunInternal(record, input, { ...opts, runId }),
-    });
+    };
+    // F9：执行时读取 task.sessionId（自定义 Scheduler 可改写），而不是捕获默认值
+    task.executor = (runId) =>
+      this.startRunInternal(record, input, { ...opts, runId }, task.sessionId);
+
+    return this.scheduler.submit(task);
   }
 
   /** @internal Scheduler 直执行入口（不经过队列） */
@@ -351,17 +355,18 @@ export class InProcessRuntimeHost implements RuntimeHost {
     record: MemberRecord,
     input: string | Message,
     opts?: RunOptions,
+    sessionId?: string,
   ): Promise<RunHandle> {
     if (record.closed) throw new Error(`agent is closed: ${record.id}`);
     if (record.active) {
       throw new Error(`agent "${record.id}" already has a running run`);
     }
 
-    // F6：Scheduler 传入 runId；缺省由 Host 生成
+    // F6：Scheduler 传入 runId；F9：Scheduler 传入 sessionId
     const run = new InProcessRunHandle(
       opts?.runId ?? randomUUID(),
       record.id,
-      defaultSessionId(record.spec),
+      sessionId ?? defaultSessionId(record.spec),
     );
     record.active = run;
     record.state = 'running';
@@ -589,8 +594,12 @@ class InProcessAgentHandle implements InternalAgentHandle {
   }
 
   /** @internal Scheduler 直执行入口 */
-  [kExecuteAgentRun](input: string | Message, opts?: RunOptions): Promise<RunHandle> {
-    return this.host.startRunInternal(this.record, input, opts);
+  [kExecuteAgentRun](
+    input: string | Message,
+    opts?: RunOptions,
+    sessionId?: string,
+  ): Promise<RunHandle> {
+    return this.host.startRunInternal(this.record, input, opts, sessionId);
   }
 
   send(message: AgentMessage): Promise<void> {

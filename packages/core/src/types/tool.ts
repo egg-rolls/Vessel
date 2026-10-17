@@ -13,6 +13,8 @@ export interface ToolContext {
   messages: Message[];
   /** 事件流（ADR-026/027：工具可发事件、等事件，实现交互暂停） */
   events: EventStream;
+  /** 当前 run 的 AbortSignal（F10）；工具可用它响应取消 */
+  signal?: AbortSignal;
 }
 
 /** 工具处理函数 */

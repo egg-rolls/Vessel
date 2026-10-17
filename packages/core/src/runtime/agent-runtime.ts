@@ -554,6 +554,8 @@ export class AgentRuntime {
               session_id: sessionId,
               messages: this.context.messages,
               events: this.events,
+              // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
+              ...(signal ? { signal } : {}),
             };
 
             // 权限判定（ADR-026/029，逻辑在 PermissionPolicy，ADR-033）
