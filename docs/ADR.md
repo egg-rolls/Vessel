@@ -549,6 +549,7 @@
   12. **事件**：`run.checkpoint` / `run.resumed`，开放字符串，不建常量。
 - **备选**：(a) 扩展 `SessionBackend` 承载 run——键语义冲突（session vs run）；(b) 从事件日志重建 run——事件不携带完整模型状态；(c) 直接做 workflow / 跨机器 durable——非目标。均不取。
 - **后果**：本机崩溃后可恢复；每次 checkpoint 有 IO 成本；`MemoryRunStore` 进程退出即丢。resume 绕过 Scheduler 是刻意取舍：恢复保持原 run_id、不受全局并发上限约束，调用方需自行避免与调度器的并发争用。
+- **已知限制（qa C1-09b / DECISION-008 §8 A-2）**：resume 并发守卫仅为 **per-Host / per-store-instance**；多 Host 共享同一 `FileRunStore`、或跨进程同时恢复同一 run，不在 0.3 的协调范围，属部署错误。
 - **关联**：ADR-025（参考实现先例）、ADR-032（事件回放）、ADR-037、DECISION-008 §4.1 / §8 Addendum A / §9.2。
 
 ## ADR-041：远程监听与 TLS（显式 opt-in）

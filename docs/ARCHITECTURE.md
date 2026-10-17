@@ -9,21 +9,23 @@
 > 本节描述**当前已实现**的结构；0.2 的 Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 §14（已实现，未随版本发布），二者不混写。
 
 ```
-apps/web                 网页控制台（v1）
+apps/web                 网页控制台（v1；durable / MCP 面板）
     │
-packages/serve           常驻服务 gateway（--serve）
-packages/tui             终端界面：Ink REPL、流式渲染、slash 命令、权限确认
+packages/serve           常驻服务 gateway（--serve；loopback / 远程 + TLS）
+packages/tui             终端界面：Ink REPL、流式渲染、slash 命令、/mcp、/runs
     │
 packages/config          声明式 YAML 配置：加载、校验（未知键报错）、snake_case→camelCase 映射
     │
 packages/core            运行时：tool-calling loop、provider 抽象、context、session、事件流、
-                         权限策略、guardrail/hook 编排、PluginHost      ← 零 UI 依赖，可独立嵌入
+                         权限策略、guardrail/hook 编排、PluginHost、Kernel、RunStore
+                         ← 零 UI 依赖，可独立嵌入
 packages/permission      共享权限原语（工具经事件流等用户授权）
+plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost 注册工具
 ```
 
 **依赖方向单向**：`core` 不引用 `config` / `tui` / `serve` / `plugins`，也直接不引用任何厂商 SDK。`core` 的 `dependencies` 为空。
 
-`plugins/` 与 `core` 的关系是**注入**而非依赖：插件在 `install(host)` 里往 `PluginHost` 注册工具 / provider / guardrail / hook。
+`plugins/` 与 `core` 的关系是**注入**而非依赖：插件在 `install(host)` 里往 `PluginHost` 注册工具 / provider / guardrail / hook。MCP 是插件，不是 core 模块（ADR-039）。
 
 `src/` 是装配层（`bootstrap.ts` 把 config → provider → plugins → runtime → ReplContext 串起来），不属于任何包。
 
@@ -90,10 +92,12 @@ run(input, sessionId?, opts?):
         # 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不丢历史
         runState.messages = context.messages
         session.save(runState)
+        writeCheckpoint(runState, 'running')      # durable 开启时；发 run.checkpoint
 
         output = toolCallingLoop(runId, sessionId, opts.signal)
         runState.status = 'completed'; runState.messages = context.messages
         session.save(runState)
+        writeCheckpoint(runState, 'completed')    # durable 开启时；发 run.checkpoint
         发 run.completed
         return output
     catch error:
@@ -101,6 +105,7 @@ run(input, sessionId?, opts?):
         runState.status = 'failed'
         runState.messages = context.messages   # 失败也保存真实上下文，不覆盖历史
         session.save(runState)
+        writeCheckpoint(runState, 'failed')    # durable 开启时；发 run.checkpoint
         发 run.failed
         throw
 ```
@@ -167,6 +172,9 @@ loop:
                 addContext({ role: 'tool', tool_call_id, content: `Error: ${msg}` })
                 # 工具失败不中断循环——错误文本折回语言空间，模型自行决定下一步
 
+        # 一轮 tool-call 全部处理完：写 checkpoint（durable 开启时；发 run.checkpoint）
+        writeCheckpoint(context.messages, 'running')
+
     else:  # 例如 finish_reason == 'length'
         addContext(assistant 消息，带上 response.reasoning_content)
         return response.content
@@ -182,6 +190,7 @@ loop:
 - **thinking 模型的 `reasoning_content`**：Provider 返回后保存在 assistant 消息并随下一轮请求回传（含 `tool_calls` 轮次）；`llm.request` / `context.changed` 事件在发布前剥离该字段，TUI / 观测 / 回放看不到思维链，会话持久化保留（ADR-038）。
 - **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，120s 超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
 - **`HookRunner` 丢弃 hook 返回值**（`Hook.run` 收窄为 `Promise<void>`）。跨 hook 通信的唯一通道是 `HookContext` 的字段（例如 `BeforeLlm` 的 `systemPrompt`）。
+- **durable checkpoint 只由 `AgentRuntime` 写**（唯一写者）。Host 模式把 Host 的 `runStore` 注入成员 runtime；同时给 Host 与 runtime 两个 store 时 Host 优先，禁止双写（ADR-040）。
 
 ## 4. 消息组装：`RunOptions.messages`
 
@@ -451,6 +460,34 @@ interface PluginHost {
 
 这是**唯一的扩展机制**。`AgentRuntimeOptions` 里的 `plugins?: Plugin[]` 在 `AgentRuntime.create()` 时逐个 `install`（install 失败即构造失败，fail-fast）；也可直接注入 `pluginHost?: PluginHost` 替换实现。
 
+### 5.10 `RunStore`（`types/run-store.ts`，module port）
+
+```ts
+interface RunCheckpoint {
+  run_id: string;
+  session_id: string;
+  agent_id?: string;
+  status: 'running' | 'interrupted' | 'completed' | 'failed' | 'cancelled';
+  messages: Message[];
+  usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number; total_cost?: number };
+  iteration?: number;
+  created_at: number;
+  updated_at: number;
+  error?: string;
+  metadata?: Record<string, unknown>;
+}
+
+interface RunStore {
+  save(checkpoint: RunCheckpoint): Promise<void>;
+  load(runId: string): Promise<RunCheckpoint | null>;
+  list(opts?: { status?: RunCheckpoint['status']; session_id?: string; limit?: number }): Promise<RunCheckpoint[]>;
+  delete(runId: string): Promise<void>;
+  close?(): Promise<void>;
+}
+```
+
+实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
+
 ## 6. `AgentRuntime` 公开面
 
 ```ts
@@ -463,6 +500,8 @@ class AgentRuntime {
   readonly pluginHost: PluginHost;
 
   run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
+  /** durable：从 checkpoint 恢复并继续；未配置 runStore 抛 run_store_required */
+  resume(runId: string, opts?: RunOptions): Promise<string>;
   dispose(): void;
 }
 
@@ -477,12 +516,16 @@ interface AgentRuntimeOptions {
   pluginHost?: PluginHost;      // 可选注入；缺省 new MemoryPluginHost()
   limitChecker?: LimitChecker;  // 可选注入；缺省 new MemoryLimitChecker()
   session?: SessionBackend;
+  runStore?: RunStore;          // 可选注入；缺省不写 checkpoint
+  agentId?: string;             // Host 模式用于 checkpoint.agent_id
   systemPrompt?: string;
   permission?: RuntimePermissionConfig;
 }
 ```
 
 `create()` 是异步静态工厂（构造函数私有）——插件安装是异步的，且要求 fail-fast（ADR-023）。
+
+Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`；`RuntimeHost.resume?(runId)` 同样恢复，但**不经 Scheduler**（保持 run_id 不变）。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040）。
 
 ## 7. 扩展模型
 
@@ -496,7 +539,7 @@ interface AgentRuntimeOptions {
 
 插件能注册什么：**工具**（`registerTool`）、**Provider**（`registerProvider`）、**Guardrail**（`registerGuardrail`）、**Hook**（`registerHook`）。
 
-**MCP 延后**：本期 core 与默认插件集里都没有 MCP 客户端。需要接外部系统时，先用 `bash`（`curl` / 厂商 CLI）顶；MCP 若回归，形态也是"一个插件"，不会给 core 加接口。
+**MCP（0.3）**：`@vessel/mcp-client` 是**插件**，不是 core 模块。配置 `mcp_servers` 后由 asm 装配层构造；工具经 `PluginHost.registerTool` 进入语言空间。stdio 与 HTTP（Streamable HTTP）两种传输；工具名默认 `mcp__<server>__<tool>`；权限默认 `ask`；单 server 失败不影响其他 server（ADR-039）。
 
 ## 8. 插件发现
 
@@ -507,6 +550,7 @@ plugins/
 ├── tools/basic-tools/       package.json + src/index.ts   → bash / read / edit
 ├── tools/delegate-task/     → delegate_task（工厂式）
 ├── tools/team/              → team_* 5 个（工厂式；默认不加载，team.enabled 才构造）
+├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
 ├── security/guardrail-pii/  → 输入输出 PII 脱敏
 ├── security/redact-secrets/ → 工具结果与输出里的密钥脱敏
 ├── security/tool-policy/    → ToolCall 阶段 allowlist / denylist
@@ -514,7 +558,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-共 **9 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task` 与 `team`。`team` 还要求 `team.enabled: true` 显式 opt-in；`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它。
+共 **10 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team` 与 `mcp-client`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
 
 `PluginLoader` 的接口：
 
@@ -553,9 +597,38 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
 | `delegate.enabled` / `maxDepth` / `disallowed` / `model` / `limits` / `termination` | `delegate_task` 接线；`enabled: false` 时默认工具变为 3 |
 | `delegate.permission_mode` | `bridge`（交互默认）/ `allow`（headless 默认）/ `deny`；`deny` 时保留 `read_only_tools`（默认 `["read"]`） |
-| `team.enabled` / `maxMembers` / `ownerId` / `model` / `memberLimits` / `memberTermination` | 进程内 team 原型；默认 false，必须显式开启 |
+| `team.enabled` / `ownerId` / `model` / `memberLimits` / `memberTermination` | 进程内 team 原型；默认 false，必须显式开启；0.3 删除 `maxMembers`（Host 必填后无效果） |
+| `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
+| `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`，`path` 默认 `~/.vessel/runs`，0.3 只接受 `checkpoint_every: iteration` |
+| `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true` 且 token 非空；cert/key 必须成对 |
 
-- **顶层未知键是 error**（带编辑距离拼写建议），不是 warning——启动即失败，避免配置悄悄无效。
+0.3 配置示例：
+
+```yaml
+mcp_servers:
+  echo:
+    transport: stdio
+    command: bun
+    args: ["run", "examples/mcp-echo-server.ts"]
+    tool_prefix: true
+    auto_approve_tools: []
+
+durable:
+  enabled: true
+  backend: file
+  path: ~/.vessel/runs
+  checkpoint_every: iteration
+
+serve:
+  hostname: 127.0.0.1
+  port: 8642
+  allow_remote: false
+  # tls:
+  #   cert_file: /path/to/cert.pem
+  #   key_file: /path/to/key.pem
+```
+
+- **顶层未知键是 error**（带编辑距离拼写建议），不是 warning——启动即失败，避免配置悄悄无效；`mcp_servers` 内未知名与 `serve.tls` 未知名同样报错。
 - 已知但 0.1.0 未消费的字段（`agent.name/temperature/maxTokens`、`session.maxHistory`、`guardrails`、`hooks`）给显式 warning，不静默。
 - provider 默认 model 是 provider-aware：只有已登记 provider（当前 `openai`）有默认；未知 provider 必须显式配 `model`。
 - `VESSEL_PROVIDER_API_KEY` 可回填顶层 `apiKey`。
@@ -590,6 +663,8 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `run.failed` | `RunFailedPayload` | agent-runtime |
 | `replay.started` | `{ run_id, event_count }` | replayRun |
 | `replay.completed` | `{ run_id, event_count, duration_ms }` | replayRun |
+| `run.checkpoint` | `{ run_id, session_id, status, iteration? }` | agent-runtime |
+| `run.resumed` | `{ run_id, session_id, from_status, iteration }` | agent-runtime |
 
 **约定事件名**（不在 `EventPayload` 联合类型里，按开放字符串协议使用）：
 
@@ -597,6 +672,8 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 |---|---|---|
 | `tool.permission.request` / `tool.permission.response` | 工具 → TUI → 工具 | 执行期权限确认（120s 超时） |
 | `ask.user.requested` / `ask.user.answered` | 工具 → TUI → 工具 | ask_user 交互暂停 |
+| `mcp.server.connected` / `mcp.server.failed` / `mcp.server.disconnected` | MCP 插件 → 观测 | server 生命周期（失败隔离） |
+| `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
 
 插件可自定义任意 `<domain>.*` 事件名，无需改 core。
 
@@ -624,9 +701,10 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 |---|---|
 | `delegate_task` | 默认注册；`delegate.enabled: false` 时关闭（工具变为 3 个）。权限模式：交互 `bridge`、headless `allow`、可配 `deny`（保留 `read_only_tools`） |
 | `ask_user` | 仅「实际进入 REPL 且 stdin 是 TTY」；serve / headless / 管道不注册 |
-| `team_*`（spawn / send / inbox / status / cancel） | 仅 `team.enabled: true`（默认关闭）。进程内原型，跨进程在 0.2 |
+| `team_*`（spawn / send / inbox / status / cancel） | 仅 `team.enabled: true`（默认关闭）。进程内原型；0.2 起共用 core Host |
+| `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：**默认 4 / 交互 REPL 5 / 启用 team 9**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`。
+口径：**默认 4 / 交互 REPL 5 / 启用 team 9**；配置 MCP 后为 **4 + N 个 MCP 工具**（N 由 server 提供，0.3 不写死总数）。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；MCP 工具需要实际连接 server，`--tools` 不代连。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -642,8 +720,9 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | file-ops（`write_file` / `create_dir` / `path_exists` / …） | `edit` 写、`bash` 建目录与判定存在 |
 | meta-tools（`register_tool` / `search_assets` / `inspect_asset` / …） | 写文件即等于建工具：模型用 `bash` 落一个插件目录，下次启动被 `PluginLoader` 扫到 |
 | skills-loader（scanner + CRUD + 文件监听） | skills 就是文件；前端引用、core 只收消息 |
-| MCP 客户端 | 本期不做 |
 | memory 插件 | 项目约定写在 `AGENTS.md`，模型自己读；跨会话笔记是 markdown 文件，模型自己读写 |
+
+> MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变「三个能力工具」的判据。
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 
@@ -651,27 +730,37 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 
 | 文件 | 职责 |
 |---|---|
-| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--version` / `--tools` / `update`；非交互且无 Key 时快速失败，不进首启向导 |
-| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642 |
+| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update`；非交互且无 Key 时快速失败，不进首启向导 |
+| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥 |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
-| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team，装配 session backend |
+| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore |
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
+| `src/factory-plugins.ts` | 工厂式插件（delegate / team / mcp-client）的接线决策；0.3 删除 `delegate.viaHost` |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
+| `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null |
+| `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
+| `src/mcp-wiring.ts` | 读取 `mcp_servers` → `createMcpPlugin`；构造 TUI / gateway 需要的状态适配器 |
+| `src/serve-config.ts` | `serve.*` 与 CLI flag 合并、远程/TLS 校验、证书文件检查 |
+| `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key） |
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
 
-**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
+**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 0.3 的 `mcp` / `runs` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
 
-**用户可见行为（0.1.0）**：
+**用户可见行为（0.3.0）**：
 
 - `/clear` 只清屏，不清空 `ContextManager`；需要新会话用 `/new`。
 - `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
 - `/reload` 只重载配置文件并刷新 provider 信息，**不重扫插件目录**；新增插件需重启进程。
+- `/mcp` 列出 server（name / status / 工具数）；`/mcp reconnect <name>` 显式重连。未配置 `mcp_servers` 时给明确提示。
+- `/runs` 列出 running + interrupted（running 标注 live），按 `updated_at` 倒序、同值 `run_id` 升序，最多 20 条；`/runs resume <runId>` 恢复并继续 REPL。`durable.enabled: false` 时给明确提示。
+- 启动横幅：仅当存在 MCP server 或 interrupted run 时追加一行提示；headless / serve 不输出。
+- `--resume-run`：无参列出 interrupted run；有参恢复（headless 与 REPL 均支持）。与 `--run` / `--serve` / `--tools` / 位置式输入互斥。
 - 自动更新：`vessel update [--check] [--channel latest|beta]` 读取 Release 的 `latest.json`，只提示版本与安装命令，不下载/不自替换。交互 REPL 启动时后台检查（24h 节流、失败静默、可关闭），有新版本时发布 `update.available`，由 TUI 渲染 banner。契约见 [operations/CI-CD.md](operations/CI-CD.md)。
 
-## 13. Gateway 协议与 Web 控制台（0.1.0）
+## 13. Gateway 协议与 Web 控制台（0.1.0 起；0.3 扩展）
 
 `packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。`apps/web` 是配套的浏览器控制台。
 
@@ -698,9 +787,14 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `POST /v1/runs/:id/cancel` | 取消（AbortController） |
 | `POST /v1/permissions/:id` | `{decision:'allow'|'deny', remember?}` → 发布 `tool.permission.response` |
 | `POST /v1/ask/:id` | `{answers:[]}` → 发布 `ask.user.answered`（空数组表示取消） |
+| `GET /v1/durable/runs?status=&session_id=&limit=` | durable run 摘要列表；`status` 支持逗号分隔，缺省全部；默认 50、最大 200（0.3） |
+| `POST /v1/durable/runs/:runId/resume` | 202 `{run_id, status:'queued'}`；未启用/不支持 resume → `durable_disabled`（0.3） |
+| `GET /v1/mcp/servers` | `{servers:[{name,status,tools,error?}]}`；未注入 → `mcp_disabled`（0.3） |
 | `POST /run` | 0.1.0 兼容的阻塞式入口 |
 
 WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 在 0.1.0 返回 `method_not_allowed`（0.2 草案见 `protocol.ts`）。
+
+0.3 新增稳定错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `durable_disabled` / `mcp_disabled`；`hello.features` 按实际启用增加 `durable-resume` / `mcp-status` / `tls`。
 
 ### 13.3 G1：权限与 ask_user 桥
 
@@ -721,18 +815,28 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 事件流是长连接：`Bun.serve` 的 `idleTimeout` 默认 `0`（禁用，可用 `GatewayOptions.idleTimeout` 覆盖）；heartbeat 默认 15s，SSE 发 `: ping` 注释、WS 发 `ping` 帧，用于穿透代理与检测死客户端。
 - 请求体上限 1 MiB；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）；HTML 带 CSP；无 `*` CORS。
 
+### 13.5.1 远程监听与 TLS（0.3）
+
+- **默认不变**：`127.0.0.1:8642`、明文、token 来源优先级不变。
+- **远程 opt-in**：`serve.allow_remote: true` 或 `--allow-remote`；非回环 hostname 未显式允许时启动失败。
+- **远程必须 token**：非回环必须有非空 gateway token（配置 / `VESSEL_GATEWAY_TOKEN` / 自动生成）；不得匿名。
+- **TLS 独立于 allow_remote**：loopback 也可以启 TLS；`serve.tls.cert_file` + `key_file`（或 `--tls-cert` / `--tls-key`）必须成对且文件非空，否则启动失败。
+- **只做 HTTP/1.1**：不做 HTTP/2 / ALPN / mTLS / ACME；HTTPS 与 WSS 共用同一 server、token、Host/Origin 规则。
+- `hello.features` 在启用 TLS 时增加 `tls`；不新增 `remote` feature。细节见 ADR-041。
+
 ### 13.6 Web 控制台（`apps/web`）
 
 - React + Vite；`GatewayClient` 用 WS 收事件，`seq` 去重、断线重连（`?since=`）、gap 提示。
 - token 存 URL fragment，再转 `sessionStorage`。
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
+- 0.3：按 `hello.features` 显示 **MCP server 面板**（`mcp-status`）与 **interrupted run 面板**（`durable-resume`），可触发 durable resume；未启用的 feature 不显示面板。面板 10s 刷新。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
-- 0.1.0 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
-- **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2 与静态托管在 `--serve` 下生效。
+- 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
+- **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir` / `durable` / `mcp`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2、静态托管、durable/MCP 面板在 `--serve` 下生效。
 
 ## 14. 0.2 Kernel 与模块边界（已实现，未发布）
 
-> **状态：已实现（0.2 分支起），未随版本发布。** 本节描述 Kernel / Modules / Transport 的事实；0.3 的 durable / MCP / 远程 TLS 尚未写入本节，待合入 `release/0.3` 后由正文收口。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
+> **状态：已实现（0.2 分支起），未随版本发布。** 本节描述 Kernel / Modules / Transport 的事实；0.3 的能力见 §14.6 与正文 §5/§8/§9/§13。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
 > 0.2 不重写 loop、不删除公开 API；新能力默认 off / opt-in。
 
 ### 14.1 定位与分层（已实现）
@@ -740,7 +844,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **定位**：Vessel 是可嵌入的**多 agent 平台 runtime**；TUI / CLI / Web / Gateway 是参考 harness 外壳，只消费 runtime 的 SDK 与事件。
 - **分层**：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。依赖方向单向，并由 CI 自动检查。
 - **Module ≠ Plugin**：Module 是编译期/构造期边界（一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制。**不引入 `ModuleHost` / `ModuleRegistry` / 第二套扩展机制。**
-- **非目标**：durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。
+- **0.2 非目标（0.3 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；workflow / evals / 多租户 / 跨机器 / 单二进制仍非目标。
 
 ### 14.2 Kernel（已实现）
 
@@ -779,6 +883,15 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 - **冻结**：9 接口、`AgentRuntime` 公开面、`RunOptions` / `RunEvent`、事件名、插件机制、根导出面；0.2 只做加法与内部替换，不删除公开 API。
 - `delegate_task` 改为 Host 上的**一次性临时成员**（工具名与语义不变）；`@vessel/team` 改为**持久成员**；二者共用 `RuntimeHost`。
-- `@vessel/team` 的 `InProcessRuntimeHost` 在 0.2 标 `@deprecated` 并适配到 core Host，0.3 才移除。
+- `@vessel/team` 的 `InProcessRuntimeHost` 在 0.2 标 `@deprecated` 并适配到 core Host；**0.3 已移除**该兼容路径与 `LegacyHostAdapter`。
 - 事件：core TS 内部用 camelCase（`agentId`），gateway JSON 用 snake_case（`agent_id`），映射只在 gateway 边界做一次；事件名仍是开放字符串。
-- 依赖方向由 CI 自动检查（biome `noRestrictedImports` 或等价脚本），不只写在文档里。
+- 依赖方向由 CI 自动检查（`scripts/check-deps.ts`），不只写在文档里。
+
+### 14.6 0.3 平台能力（已实现）
+
+| 能力 | 落地位置 | 边界 |
+|---|---|---|
+| Durable run | `packages/core/src/types/run-store.ts` + `session/run-store.ts`；`AgentRuntime.resume` / `RuntimeHost.resume` | 本机 file/memory；resume 并发守卫 per-Host / per-store-instance（ADR-040） |
+| MCP client | `plugins/mcp/client/`（`@vessel/mcp-client`） | 插件，不是 core 模块；stdio + HTTP；默认 ask（ADR-039） |
+| 远程 / TLS | `packages/serve/src/gateway.ts` + `src/serve-config.ts` | 显式 opt-in；非回环必须 token；HTTP/1.1（ADR-041） |
+| 控制面 | `packages/serve/src/{durable,mcp}.ts`；TUI `/mcp` `/runs`；CLI `--resume-run` | 0.3 新增端点见 §13.2；命令见 §12 |

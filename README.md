@@ -30,21 +30,22 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 **0.2 状态：** 多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，**未随版本发布**）；`AgentRuntime` 仍是单 agent loop，Host 只包在它外面，不重写循环。边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 与 [docs/ADR.md](docs/ADR.md) ADR-037。
 
-**0.3 状态：** durable run、MCP 插件、远程监听 / TLS 在 0.2 之上**开发中**；合入 `release/0.3` 前不写入下方能力表。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-039 / 040 / 041。
+**0.3 状态：** durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，**未随版本发布**）；默认行为与 0.2 一致，新能力全部 opt-in 或默认关闭。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-039 / 040 / 041。0.1.0 / 0.2 / 0.3.0 均未发布。
 
 **已落地的包**（bun workspaces monorepo）：
 
 | 包 | 版本 | 作用 |
 |---|---|---|
-| **`@vessel/core`** | 0.1.0 | Agent 运行时：tool-calling loop、provider 抽象、context / session、事件流、guardrails、hooks。**不依赖 TUI，可独立嵌入** |
-| **`@vessel/tui`** | 0.1.0 | 终端界面：Ink REPL、流式渲染、slash 命令、工具执行前权限确认 |
-| **`@vessel/config`** | 0.1.0 | 声明式 YAML 配置与 schema 校验（未知键报错） |
-| **`@vessel/permission`** | 0.1.0 | 共享权限原语：工具经事件流等用户授权 |
-| **`@vessel/serve`** | 0.1.0 | 常驻服务（gateway，`--serve` 模式） |
-| `apps/web` | 0.1.0 | 浏览器控制台：时间线、运行取消、权限弹窗、ask_user（`vessel.gateway/1`） |
+| **`@vessel/core`** | 0.3.0 | Agent 运行时：tool-calling loop、provider 抽象、context / session、事件流、guardrails、hooks、Kernel、durable `RunStore`。**不依赖 TUI，可独立嵌入** |
+| **`@vessel/tui`** | 0.3.0 | 终端界面：Ink REPL、流式渲染、slash 命令、工具执行前权限确认、`/mcp`、`/runs` |
+| **`@vessel/config`** | 0.3.0 | 声明式 YAML 配置与 schema 校验（未知键报错） |
+| **`@vessel/permission`** | 0.3.0 | 共享权限原语：工具经事件流等用户授权 |
+| **`@vessel/serve`** | 0.3.0 | 常驻服务（gateway，`--serve` 模式；loopback / 远程 / TLS） |
+| **`@vessel/mcp-client`** | 0.3.0 | MCP client 插件：stdio + HTTP，工具经 `PluginHost` 注册 |
+| `apps/web` | 0.3.0 | 浏览器控制台：时间线、运行取消、权限弹窗、ask_user、MCP / interrupted run 面板（`vessel.gateway/1`） |
 
-- CI：`.github/workflows/ci.yml`（质量门禁、跨平台矩阵、web 构建、examples 类型检查、mock 冒烟）。
-- ⚠️ **0.1.0 尚未发布**：库包版本为 `0.1.0`，发布流程已就绪；当前请从源码运行。
+- CI：`.github/workflows/ci.yml`（质量门禁、跨平台矩阵、web 构建、examples 类型检查、MCP/TLS 离线集成、mock 冒烟）。
+- ⚠️ **0.1.0 / 0.2 / 0.3.0 均未发布**：库包版本为 `0.3.0`，发布流程已就绪；当前请从源码运行。
 
 ## 快速开始
 
@@ -82,13 +83,17 @@ bun run src/cli.ts --run @prompt.md            # 从文件读 prompt（.json = �
 echo "翻译这句话" | bun run src/cli.ts --run    # 从管道读输入
 bun run src/cli.ts --session <id> --run "..."   # 续接指定会话
 bun run src/cli.ts --serve                      # 纯 serve 常驻模式（不进 REPL）
+bun run src/cli.ts --serve 8642 --serve-host 0.0.0.0 --allow-remote \
+  --tls-cert cert.pem --tls-key key.pem         # 显式远程 + TLS（非回环必须 token）
+bun run src/cli.ts --resume-run                 # 列出 interrupted durable run
+bun run src/cli.ts --resume-run <runId>         # 恢复并继续
 bun run src/cli.ts --version                    # 显示版本（读根 package.json）
 bun run src/cli.ts --tools                      # 列出当前配置下的工具（不需要 Key）
 bun run src/cli.ts update --check               # 检查新版本（只提示，不自替换）
 bun test                                        # 跑测试
 ```
 
-REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/setup` `/reload` `/clear` `/exit`）。
+REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/setup` `/reload` `/clear` `/exit`）。
 
 - `/clear` 清屏，**不清空会话上下文**；需要新会话用 `/new`。
 - `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
@@ -123,11 +128,12 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 |---|---|---|
 | `delegate_task` | 默认（`delegate.enabled: false` 时关闭） | 派发子 agent 处理子任务，只回收最终文本 |
 | `ask_user` | 仅 REPL + TTY（serve/headless 不注册） | 向用户提问，经事件流暂停等待回答 |
-| `team_*`（5 个） | 仅 `team.enabled: true`（默认关闭） | 进程内 agent team 原型：spawn / send / inbox / status / cancel |
+| `team_*`（5 个） | 仅 `team.enabled: true`（默认关闭） | agent team：spawn / send / inbox / status / cancel |
+| `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功 | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化 |
 
-口径：默认 **4**；交互 REPL 为 **5**；启用 team 后为 **9**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`。
+口径：默认 **4**；交互 REPL 为 **5**；启用 team 后为 **9**；配置 MCP 后为 **4 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；MCP 工具需要实际连接 server，`--tools` 不代连。
 
-**为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops、没有 MCP 客户端——**能被 bash 组合出来的能力，就不再单开一个工具**。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
+**为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops——**能被 bash 组合出来的能力，就不再单开一个工具**。MCP 不是能力工具，而是把外部工具接进 `PluginHost` 的插件（ADR-039）。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
 
 ## Skills 怎么用
 
@@ -138,6 +144,52 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 - 引用方式：`@skills/code-writing.md`。
 
 同一机制可用于引用任何文件：附件、项目约定、上下文材料。**前端负责查找与引用，core 只收消息。**
+
+## MCP 怎么用
+
+MCP 是**插件**（`@vessel/mcp-client`），不是 core 模块。在 `vessel.yaml` 里配置 `mcp_servers`，server 的工具会经 `PluginHost` 注册给模型：
+
+```yaml
+mcp_servers:
+  echo:
+    transport: stdio
+    command: bun
+    args: ["run", "examples/mcp-echo-server.ts"]
+    tool_prefix: true
+    auto_approve_tools: []
+```
+
+```yaml
+mcp_servers:
+  remote:
+    transport: http
+    url: https://example.com/mcp
+    headers:
+      Authorization: "Bearer ${TOKEN}"
+```
+
+- 工具名默认 `mcp__<server>__<tool>`；`tool_prefix: false` 用原名，与既有工具冲突时跳过并告警。
+- 权限默认 `ask`；`auto_approve_tools` 只接受 server 返回的**原始工具名**（大小写敏感）。
+- 单个 server 连不上不会导致进程启动失败；REPL 用 `/mcp` 看状态、`/mcp reconnect <name>` 重连。
+- HTTP 只做 POST JSON-RPC（支持 JSON 与 SSE 响应）；不做 GET 长连接、session 恢复、OAuth。
+
+## Durable run 怎么用
+
+默认关闭。开启后每次 run 在开始、每轮 tool-call 后、结束时写 checkpoint：
+
+```yaml
+durable:
+  enabled: true
+  backend: file          # file | memory
+  path: ~/.vessel/runs
+  checkpoint_every: iteration
+```
+
+- 进程崩溃或中断后：`--resume-run` 列出 interrupted run，`--resume-run <runId>` 恢复；
+  REPL 内用 `/runs` 与 `/runs resume <runId>`。
+- 只支持本机 file / memory；不做跨机器恢复、分布式锁、跨进程并发写协调。
+- resume 并发守卫是 per-Host / per-store-instance；多 Host 共享同一 `FileRunStore` 或跨进程同时恢复同一 run 属部署错误。
+- 已知错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `run_store_required` / `agent_not_found`。
 
 ## Web 控制台
 
@@ -151,17 +203,18 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 - 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`。
 - 可用 `VESSEL_GATEWAY_TOKEN` 固定 token；优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。未设置时每次启动自动生成。
-- 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单。
-- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
+- 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单；按 `hello.features` 显示 MCP server 面板与 interrupted run 面板（可触发 resume）。
+- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
+- 远程 / TLS（显式 opt-in）：`--serve-host` + `--allow-remote` + `--tls-cert`/`--tls-key`，或 `serve.*` 配置；非回环必须 token，cert/key 必须成对。只做 HTTP/1.1。
 - 生产同源托管：CLI 会自动传 `staticDir`（`VESSEL_STATIC_DIR` 优先，否则 `apps/web/dist` 存在时使用）；开发时用 Vite proxy。
-- 0.1.0 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存；team 协议为 0.2 草案。
+- 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存，重启丢失。
 
 ## 发布与更新
 
 - 发布由 tag `v*` 触发，流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
-- 0.1.0 发布 `@vessel/*` 库包与插件包；**根 CLI 暂不发布到 npm，`npx vessel` 不可用**。
-- **0.1.0 不提供独立二进制**（ADR-006 继续有效）。
+- 0.3.0 发布 `@vessel/*` 库包与插件包（含 `@vessel/mcp-client`）；**根 CLI 暂不发布到 npm，`npx vessel` 不可用**。
+- **不提供独立二进制**（ADR-006 继续有效）。
 - 发布流程会生成 `latest.json`（`version` / `channel` / `assets: {}`）。
 - `vessel update --check` 已实现：读取 Release 的 `latest.json`，只提示版本与安装命令；**不下载、不自替换**。
 - 后台检查：交互 REPL 启动时每天最多一次；`update.autoCheck: false` 或 `VESSEL_NO_UPDATE_CHECK=1` 可关闭，失败静默。
@@ -171,13 +224,11 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 以下能力**尚未实现**，明确不在本期范围：
 
-- **多 agent Kernel（Host / Scheduler / Transport）** —— **0.2 已实现、未随版本发布**；边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 / [docs/ADR.md](docs/ADR.md) ADR-037。
-- **模块 subpath exports** —— **0.2 已实现、未随版本发布**；0.2 只做包内模块，不拆包。
-- **MCP** —— 本期不做。工具集里没有 MCP 客户端；接外部系统先用 `bash`（`curl` / CLI）顶。
-- **workflow / durable execution / evals** —— 未开始。
-- **Agent team 跨进程 / 跨节点** —— 0.1.0 只有进程内原型（`team.enabled: true` 显式开启）；gateway 的 `team.*` 为 0.2 草案，返回 `method_not_allowed`。
-- **npm CLI** —— 0.1.0 只发库包与插件包，根 CLI 未发布，`npx vessel` 不可用。
-- **独立二进制 / 自替换更新** —— 0.1.0 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
+- **workflow / evals / 多租户** —— 未开始。
+- **跨机器调度 / 跨节点 team** —— 未实现；0.3 的 durable 只做本机，team 的跨进程仍限本机 loopback。
+- **npm CLI** —— 只发库包与插件包，根 CLI 未发布，`npx vessel` 不可用。
+- **独立二进制 / 自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
+- **0.1.0 / 0.2 / 0.3.0 发布** —— 均未发布；发布决定在 1。
 
 ## 文档索引
 

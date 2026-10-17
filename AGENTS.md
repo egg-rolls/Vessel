@@ -9,10 +9,10 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个�
 - **语言/运行时**：TypeScript + Bun。
 - **monorepo**：bun workspaces。`packages/{core,config,tui,serve,permission}` + `plugins/` + `apps/web`。
 - **形态**：`@vessel/core` 是库（零 UI 依赖，可嵌入）；TUI / serve / web 是应用层外壳。
-- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个。默认运行期 4 个（+ `delegate_task`）；`ask_user` 仅 REPL+TTY（交互 REPL 为 5）；`team_*` 5 个仅在 `team.enabled: true` 时注册（共 9）。别急着加第四个能力工具。
+- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个。默认运行期 4 个（+ `delegate_task`）；`ask_user` 仅 REPL+TTY（交互 REPL 为 5）；`team_*` 5 个仅在 `team.enabled: true` 时注册（共 9）；配置 `mcp_servers` 后额外注册 `mcp__<server>__<tool>`（数量动态，4 + N）。别急着加第四个能力工具。
 - **状态**：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/ADR.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
-- **0.3 状态**：durable run、MCP 插件、远程监听 / TLS 在 0.2 之上开发中；合入 `release/0.3` 前不得写成已实现。决策边界见 ADR-039 / 040 / 041。
+- **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
 
 ## 代码风格与硬规矩
 
@@ -80,7 +80,9 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把 MCP 塞进 core（它是插件）；durable 只做 core 的 `RunStore` port，不引入 workflow 引擎；workflow / evals 仍是非目标；team 仍默认 off、显式 opt-in。
-- 别默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token。
+- 别把 MCP 塞进 core（它是插件，工具只经 `PluginHost`）；durable 只做 core 的 `RunStore` port，不引入 workflow 引擎；workflow / evals / 多租户仍是非目标；team 仍默认 off、显式 opt-in。
+- 别默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环不得匿名。
+- 别给 MCP 工具设默认 `allow`；除非在 `auto_approve_tools` 里按原始工具名精确列出。
+- 别让 Host 与成员 runtime 同时写同一个 run 的 checkpoint（唯一写者是 `AgentRuntime`，Host store 优先）。
 - 别在文档里描述一个不存在的架构。
 - 别绕过 PR 直接 push main。
