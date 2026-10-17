@@ -9,7 +9,7 @@ Vessel 是一个**自组织 Agent Harness**：极简核心（9 个接口 + 1 个
 - **语言/运行时**：TypeScript + Bun。
 - **monorepo**：bun workspaces。`packages/{core,config,tui,serve,permission}` + `plugins/` + `apps/web`。
 - **形态**：`@vessel/core` 是库（零 UI 依赖，可嵌入）；TUI / serve / web 是应用层外壳。
-- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个，装配层另注册 `ask_user`（仅交互）与 `delegate_task`，运行期 `/tools` 共 5 个。别急着加第四个能力工具。
+- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个。默认运行期 4 个（+ `delegate_task`）；`ask_user` 仅 REPL+TTY（交互 REPL 为 5）；`team_*` 5 个仅在 `team.enabled: true` 时注册（共 9）。别急着加第四个能力工具。
 - **状态**：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 
 ## 代码风格与硬规矩
@@ -41,6 +41,9 @@ bun run typecheck                               # tsc --noEmit
 bunx @biomejs/biome ci .                        # lint + format 检查
 VESSEL_MOCK=1 bun run src/cli.ts                # 模拟模式起 REPL（不需要 API Key）
 VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # headless 冒烟
+bun run src/cli.ts --version                    # 版本（根 package.json）
+bun run src/cli.ts --tools                      # 当前配置下的工具（无 Key）
+bun run src/cli.ts update --check               # 检查新版本（只提示）
 bun run demo                                    # 无 Key 跑核心示例
 bun run scripts/version.ts --check              # 版本一致性 + CHANGELOG 校验
 ```

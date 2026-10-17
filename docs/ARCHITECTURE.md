@@ -495,7 +495,8 @@ interface AgentRuntimeOptions {
 ```
 plugins/
 ├── tools/basic-tools/       package.json + src/index.ts   → bash / read / edit
-├── tools/delegate-task/     → delegate_task
+├── tools/delegate-task/     → delegate_task（工厂式）
+├── tools/team/              → team_* 5 个（工厂式；默认不加载，team.enabled 才构造）
 ├── security/guardrail-pii/  → 输入输出 PII 脱敏
 ├── security/redact-secrets/ → 工具结果与输出里的密钥脱敏
 ├── security/tool-policy/    → ToolCall 阶段 allowlist / denylist
@@ -503,7 +504,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前只有 `delegate-task`。
+共 **9 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task` 与 `team`。`team` 还要求 `team.enabled: true` 显式 opt-in；`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它。
 
 `PluginLoader` 的接口：
 
@@ -532,6 +533,22 @@ class PluginLoader {
 优先级：**CLI flag > 环境变量（`VESSEL_*`）> `vessel.yaml` > `~/.vessel/config.yaml` > 安全默认**。
 
 loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验器对未知键报错——配置写错要立刻知道，不静默忽略。
+
+### 9.1 配置块（0.1.0）
+
+| 键 | 说明 |
+|---|---|
+| `provider.timeout_ms` | LLM 请求超时（毫秒）；`<=0` 关闭。仅插件式 provider（openai / anthropic）生效 |
+| `session.backend` | `sqlite`（默认）/ `file` / `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
+| `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
+| `delegate.enabled` / `maxDepth` / `disallowed` / `model` / `limits` / `termination` | `delegate_task` 接线；`enabled: false` 时默认工具变为 3 |
+| `delegate.permission_mode` | `bridge`（交互默认）/ `allow`（headless 默认）/ `deny`；`deny` 时保留 `read_only_tools`（默认 `["read"]`） |
+| `team.enabled` / `maxMembers` / `ownerId` / `model` / `memberLimits` / `memberTermination` | 进程内 team 原型；默认 false，必须显式开启 |
+
+- **顶层未知键是 error**（带编辑距离拼写建议），不是 warning——启动即失败，避免配置悄悄无效。
+- 已知但 0.1.0 未消费的字段（`agent.name/temperature/maxTokens`、`session.maxHistory`、`guardrails`、`hooks`）给显式 warning，不静默。
+- provider 默认 model 是 provider-aware：只有已登记 provider（当前 `openai`）有默认；未知 provider 必须显式配 `model`。
+- `VESSEL_PROVIDER_API_KEY` 可回填顶层 `apiKey`。
 
 **注意**：`vessel.yaml` 的 `tools:` 声明段已删除（连同 `ToolConfig` 类型）。从前"用户在配置里声明一个 shell/http 工具"这条路径没有了——有了 `bash` 之后，加能力就是写文件 + 跑命令。
 
@@ -589,7 +606,15 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 
 ## 11. 工具集：三个能力工具，为什么这么少
 
-运行期共 **5 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**；装配层另注册 `ask_user`（仅交互模式，headless 不注册）与 `delegate_task` 两个**接缝工具**。
+默认运行期 **4 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**，装配层注册 `delegate_task` 一个**接缝工具**。
+
+| 接缝 / 可选工具 | 注册条件 |
+|---|---|
+| `delegate_task` | 默认注册；`delegate.enabled: false` 时关闭（工具变为 3 个）。权限模式：交互 `bridge`、headless `allow`、可配 `deny`（保留 `read_only_tools`） |
+| `ask_user` | 仅「实际进入 REPL 且 stdin 是 TTY」；serve / headless / 管道不注册 |
+| `team_*`（spawn / send / inbox / status / cancel） | 仅 `team.enabled: true`（默认关闭）。进程内原型，跨进程在 0.2 |
+
+口径：**默认 4 / 交互 REPL 5 / 启用 team 9**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -614,9 +639,15 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 
 | 文件 | 职责 |
 |---|---|
-| `src/cli.ts` | 入口与参数解析：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` |
-| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext` |
+| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--version` / `--tools` / `update`；非交互且无 Key 时快速失败，不进首启向导 |
+| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642 |
+| `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
+| `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
+| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team，装配 session backend |
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
+| `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
+| `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
+| `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
 
 **REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
@@ -626,7 +657,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 - `/clear` 只清屏，不清空 `ContextManager`；需要新会话用 `/new`。
 - `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
 - `/reload` 只重载配置文件并刷新 provider 信息，**不重扫插件目录**；新增插件需重启进程。
-- 自动更新：契约与 `latest.json` 见 [operations/CI-CD.md](operations/CI-CD.md)；`vessel update` 客户端尚未实现。
+- 自动更新：`vessel update [--check] [--channel latest|beta]` 读取 Release 的 `latest.json`，只提示版本与安装命令，不下载/不自替换。交互 REPL 启动时后台检查（24h 节流、失败静默、可关闭），有新版本时发布 `update.available`，由 TUI 渲染 banner。契约见 [operations/CI-CD.md](operations/CI-CD.md)。
 
 ## 13. Gateway 协议与 Web 控制台（0.1.0）
 
@@ -683,4 +714,4 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
 - 0.1.0 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
-- **接线状态**：`startGateway` 的 `context` / `pluginHost` / `staticDir` 由装配层传入；当前 CLI 仅传 `events` / `session` / `runtime` / `port`，G2 与静态托管需 asm 最后一轮接入后生效。
+- **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2 与静态托管在 `--serve` 下生效。

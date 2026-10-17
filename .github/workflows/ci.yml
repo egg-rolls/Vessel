@@ -150,6 +150,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: CLI --version
+        run: bun run src/cli.ts --version
+
+      - name: CLI --tools
+        run: VESSEL_MOCK=1 bun run src/cli.ts --tools
+
       - name: headless mock 模式
         run: VESSEL_MOCK=1 bun run src/cli.ts --run "hello"
 

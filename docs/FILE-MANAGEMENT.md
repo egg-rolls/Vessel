@@ -275,7 +275,7 @@ N 在自己的分支提交（只含共享侧成品）
 | `quality`（ubuntu） | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
 | `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
 | `web` | `apps/web`：`npm ci` → `npm run build` |
-| `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（配置由 `asm` 提供） |
+| `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供） |
 | `smoke` | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock） |
 
 - 同一 ref 的旧 run 自动取消；缓存 Bun / npm。
@@ -294,8 +294,8 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 9.3 用户侧 CD / 自动更新
 
-- `vessel update --check`：对比 GitHub Release 的 `latest.json` 与当前版本。**客户端尚未实现**。
-- REPL 启动时后台检查（每天最多一次，可配置关闭），只提示、不打断。
+- `vessel update [--check] [--channel latest|beta]`：读取 GitHub Release 的 `latest.json` 对比当前版本，只提示版本与安装命令（check-only）。
+- REPL 启动时后台检查（24h 节流、失败静默、可配置关闭），只提示、不打断。
 - npm 安装：`vessel update` 提示升级命令，不自动替换。
 - **0.1.0 不提供独立二进制，也不做二进制自更新**；0.2 再评估。
 - 预发布通道：`--channel beta` 或 `VESSEL_CHANNEL=beta`。
