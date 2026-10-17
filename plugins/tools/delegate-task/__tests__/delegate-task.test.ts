@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 import {
   AgentRuntime,
+  type ChatRequest,
   GuardrailStage,
   HookType,
+  type LLMProvider,
+  type LLMResponse,
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
+  type Message,
   type Plugin,
   type RunEvent,
   type ToolContext,
@@ -222,7 +226,7 @@ function registerTool(host: MemoryPluginHost, name: string, result = `${name}-re
 
 /** 构造一个父 runtime（plugin 安装到同一个 host） */
 async function makeRuntime(
-  provider: MemoryLLMProvider,
+  provider: LLMProvider,
   host: MemoryPluginHost,
   events: MemoryEventStream,
   plugin: Plugin,
@@ -471,5 +475,91 @@ describe('delegate-task 事件与并发', () => {
     expect(dataA?.depth).toBe(0);
     expect(dataB?.depth).toBe(0);
     expect(dataA?.delegateId).not.toBe(dataB?.delegateId);
+  });
+});
+
+/** 记录每次请求消息的 mock provider（用于断言 thinking 字段是否回传） */
+class RecordingProvider implements LLMProvider {
+  readonly requests: Message[][] = [];
+  private index = 0;
+
+  constructor(private readonly responses: LLMResponse[]) {}
+
+  async chat(req: ChatRequest): Promise<LLMResponse> {
+    this.requests.push(structuredClone(req.messages));
+    const response = this.responses[this.index];
+    this.index += 1;
+    if (!response) throw new Error(`no preset response for call ${this.index}`);
+    return response;
+  }
+}
+
+describe('delegate-task thinking 模式（reasoning_content）', () => {
+  it('子 agent 多轮 tool call 时回传 reasoning，且父/子事件不暴露', async () => {
+    const provider = new RecordingProvider([
+      // 父第一次：委派子任务
+      {
+        content: '',
+        finish_reason: 'tool_calls',
+        reasoning_content: 'PARENT-THINK-1',
+        tool_calls: [
+          {
+            id: 'p1',
+            type: 'function',
+            function: { name: 'delegate_task', arguments: JSON.stringify({ task: 'CHILD_TASK' }) },
+          },
+        ],
+      },
+      // 子第一次：调用 echo
+      {
+        content: '',
+        finish_reason: 'tool_calls',
+        reasoning_content: 'CHILD-THINK-1',
+        tool_calls: [{ id: 'c1', type: 'function', function: { name: 'echo', arguments: '{}' } }],
+      },
+      // 子第二次：看到 tool 结果后收尾
+      { content: 'child done', finish_reason: 'stop', reasoning_content: 'CHILD-THINK-2' },
+      // 父第二次：看到 delegate 结果后收尾
+      { content: 'parent done', finish_reason: 'stop', reasoning_content: 'PARENT-THINK-2' },
+    ]);
+
+    const host = new MemoryPluginHost();
+    registerTool(host, 'echo', 'echo-ok');
+    const plugin = createDelegateTaskPlugin({
+      providerFactory: () => provider,
+      model: 'test-model',
+    });
+    const events = new MemoryEventStream();
+    const runtime = await makeRuntime(provider, host, events, plugin);
+
+    const result = await runtime.run('PARENT_TASK');
+
+    expect(result).toBe('parent done');
+    expect(provider.requests).toHaveLength(4);
+
+    // 子 agent 第二次请求：assistant(tool_calls) 必须原样带上第一轮的 reasoning_content
+    const childSecond = provider.requests[2] ?? [];
+    const childAssistant = childSecond.find(
+      (msg) =>
+        msg.role === 'assistant' &&
+        msg.tool_calls?.some((call) => call.function.name === 'echo') === true,
+    );
+    expect(childAssistant?.reasoning_content).toBe('CHILD-THINK-1');
+
+    // 父 agent 第二次请求：带自己的 reasoning；且子 agent 的思维链不进入父上下文
+    const parentSecond = provider.requests[3] ?? [];
+    const parentAssistant = parentSecond.find(
+      (msg) =>
+        msg.role === 'assistant' &&
+        msg.tool_calls?.some((call) => call.function.name === 'delegate_task') === true,
+    );
+    expect(parentAssistant?.reasoning_content).toBe('PARENT-THINK-1');
+    expect(parentSecond.some((msg) => msg.reasoning_content?.includes('CHILD-THINK'))).toBe(false);
+
+    // 事件流（含 subagent.* 转发）不暴露任何思维链；UI 只消费事件
+    const serializedEvents = JSON.stringify(events.getHistory());
+    expect(serializedEvents).not.toContain('PARENT-THINK');
+    expect(serializedEvents).not.toContain('CHILD-THINK');
+    expect(result).not.toContain('THINK');
   });
 });
