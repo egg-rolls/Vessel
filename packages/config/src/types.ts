@@ -129,6 +129,62 @@ export interface SchedulerConfig {
   perAgentSerial?: boolean;
 }
 
+/** MCP server 配置（0.3；`mcp_servers` map 的值，键为 server 名） */
+export interface McpServerConfig {
+  /** 传输方式；stdio 必填 command，http 必填 url */
+  transport: 'stdio' | 'http';
+  /** stdio：启动命令 */
+  command?: string;
+  /** stdio：命令参数 */
+  args?: string[];
+  /** stdio：子进程环境变量 */
+  env?: Record<string, string>;
+  /** http：MCP Streamable HTTP 端点 */
+  url?: string;
+  /** http：请求头 */
+  headers?: Record<string, string>;
+  /** 是否启用（默认 true）；false 时仍出现在 MCP 状态快照中 */
+  enabled?: boolean;
+  /** 建连超时毫秒（默认 10000） */
+  connectTimeoutMs?: number;
+  /** 单次工具调用超时毫秒（默认 60000） */
+  toolTimeoutMs?: number;
+  /** 工具名加 `mcp__<server>__` 前缀（默认 true） */
+  toolPrefix?: boolean;
+  /** 自动允许的工具原始名（前缀前、大小写敏感） */
+  autoApproveTools?: string[];
+}
+
+/** Durable run 配置（0.3；默认关闭） */
+export interface DurableConfig {
+  /** true 才创建 RunStore 并写 checkpoint（默认 false） */
+  enabled?: boolean;
+  /** 后端（默认 file） */
+  backend?: 'file' | 'memory';
+  /** file 后端目录（默认 ~/.vessel/runs） */
+  path?: string;
+  /** checkpoint 时机；0.3 仅支持 iteration（每轮 tool-call 后） */
+  checkpointEvery?: 'iteration';
+}
+
+/** serve TLS 配置；cert/key 必须成对 */
+export interface ServeTlsConfig {
+  certFile?: string;
+  keyFile?: string;
+}
+
+/** serve 配置（0.3；默认回环 + 明文） */
+export interface ServeConfig {
+  /** 监听地址（默认 127.0.0.1） */
+  hostname?: string;
+  /** 监听端口（默认 8642；0 = 系统分配） */
+  port?: number;
+  /** 显式允许非回环监听（默认 false） */
+  allowRemote?: boolean;
+  /** TLS 证书对 */
+  tls?: ServeTlsConfig;
+}
+
 /** Transport 配置（0.2；默认 in-process） */
 export interface TransportConfig {
   kind?: 'in-process' | 'loopback';
@@ -176,6 +232,12 @@ export interface VesselConfig {
   host?: HostConfig;
   scheduler?: SchedulerConfig;
   transport?: TransportConfig;
+  /** 0.3：MCP servers，键为 server 名 */
+  mcpServers?: Record<string, McpServerConfig>;
+  /** 0.3：durable run（checkpoint / resume） */
+  durable?: DurableConfig;
+  /** 0.3：gateway 监听与 TLS */
+  serve?: ServeConfig;
 }
 
 /** 配置加载选项 */
