@@ -166,7 +166,8 @@ function renderGatewayBanner(gateway: Gateway): string {
 const parsed = parseArgs(process.argv.slice(2));
 if (!parsed.ok) {
   console.error(`${parsed.error}\nRun with --help for usage.`);
-  process.exit(1);
+  // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分。
+  process.exit(2);
 }
 const args = parsed.args;
 

@@ -305,9 +305,9 @@ it('update --check --json 走清单源并输出机器可读结果', async () => 
   }
 });
 
-it('未知参数报错并 exit 1（不静默忽略）', async () => {
+it('未知参数报错并 exit 2（用法错误）', async () => {
   const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
-  expect(exitCode).toBe(1);
+  expect(exitCode).toBe(2);
   expect(stderr).toContain('Unknown argument');
 });
 
