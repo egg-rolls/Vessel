@@ -627,3 +627,60 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 - `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
 - `/reload` 只重载配置文件并刷新 provider 信息，**不重扫插件目录**；新增插件需重启进程。
 - 自动更新：契约与 `latest.json` 见 [operations/CI-CD.md](operations/CI-CD.md)；`vessel update` 客户端尚未实现。
+
+## 13. Gateway 协议与 Web 控制台（0.1.0）
+
+`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。`apps/web` 是配套的浏览器控制台。
+
+### 13.1 协议 `vessel.gateway/1`
+
+- 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`）、`event`（带 `seq`、可选 `job_id`）、`gap`（历史被截断）、`res`（方法应答）、`ping`。
+- 客户端帧：`auth`（首帧）、`req`（`id` + `method` + `params`）、`pong`。
+- `seq` 由 gateway 分配；环形缓冲默认保留 10000 条。客户端记录 `lastSeq`，重连用 `?since=` 续订；超出缓冲发 `gap`。
+- `RunStatus.run_id` 是网关级 id；`core_run_id` 在 `run.started` 后可知；事件帧的 `job_id` 用于把 core run 与网关 run 对齐。
+
+### 13.2 端点
+
+| 方法 / 路径 | 说明 |
+|---|---|
+| `GET /v1/health`（`/health` 兼容） | 开放探针；返回 clients / latest_seq / protocol / node |
+| `GET /v1/events`（WS，`/ws` 兼容） | 事件流；query token 兼容，推荐首帧 `auth` |
+| `GET /v1/events`（SSE，`/events` 兼容） | 只读事件流；`?token=` |
+| `GET /v1/sessions`（`/sessions` 兼容） | 会话列表（`listRich`） |
+| `GET /v1/tools` | 工具列表（不含 handler） |
+| `GET /v1/runs?session_id=` | 当前进程运行列表 |
+| `POST /v1/runs` | `{input, session_id?}` → 202 `{run_id, status, queue_position?}`；队列满 429 `busy` |
+| `GET /v1/runs/:id` | 运行状态 |
+| `POST /v1/runs/:id/cancel` | 取消（AbortController） |
+| `POST /v1/permissions/:id` | `{decision:'allow'|'deny', remember?}` → 发布 `tool.permission.response` |
+| `POST /v1/ask/:id` | `{answers:[]}` → 发布 `ask.user.answered`（空数组表示取消） |
+| `POST /run` | 0.1.0 兼容的阻塞式入口 |
+
+WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 在 0.1.0 返回 `method_not_allowed`（0.2 草案见 `protocol.ts`）。
+
+### 13.3 G1：权限与 ask_user 桥
+
+- gateway 订阅 `tool.permission.request` 建立待答表；`POST /v1/permissions/:id` 或 WS `permission.respond` 发布 `tool.permission.response`。Web 弹窗支持 allow / deny / always（remember）。
+- `ask.user.requested` 同理：`POST /v1/ask/:id` 或 `ask.respond` 发布 `ask.user.answered`。
+- 不引入直接回调：工具与 UI 仍只通过事件流沟通（ADR-029）。
+
+### 13.4 G2：会话切换
+
+`GatewayOptions.context` 存在且目标 session 与当前不同时：先 `context.setSessionId(target)` 再 `context.clear()`，随后 `runtime.run` 从 `SessionBackend` 重载目标会话历史。没有 `context` 时无法保证隔离（需装配层传入）。
+
+### 13.5 静态托管与安全
+
+- `staticDir` 存在时，GET/HEAD 的非 API 路径托管 `apps/web/dist`；无扩展名路径回落 `index.html`（SPA）；路径解析后校验 root 前缀，防穿越；API 路径永不托管。
+- 默认绑定 `127.0.0.1`；Host 只接受 `127.0.0.1` / `localhost` / `[::1]` 或显式 `hostname`。
+- Origin：无 Origin 放行（curl / peer）；浏览器必须同源或在 `allowedOrigins`。默认不返回 CORS 头。
+- token 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
+- 请求体上限 1 MiB；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）；HTML 带 CSP；无 `*` CORS。
+
+### 13.6 Web 控制台（`apps/web`）
+
+- React + Vite；`GatewayClient` 用 WS 收事件，`seq` 去重、断线重连（`?since=`）、gap 提示。
+- token 存 URL fragment，再转 `sessionStorage`。
+- 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
+- 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
+- 0.1.0 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
+- **接线状态**：`startGateway` 的 `context` / `pluginHost` / `staticDir` 由装配层传入；当前 CLI 仅传 `events` / `session` / `runtime` / `port`，G2 与静态托管需 asm 最后一轮接入后生效。
