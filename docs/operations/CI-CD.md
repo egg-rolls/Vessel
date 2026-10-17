@@ -1,7 +1,7 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前版本线：0.1.x。**0.1.0 不发布独立二进制**（ADR-006 继续有效）。
+> 当前版本线：0.3.x（开发中；0.1.0 与 0.2 均未发布）。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -20,6 +20,8 @@
 | `quality` | ubuntu-latest | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
 | `cross-platform` | matrix：ubuntu / windows / macos | `bun install --frozen-lockfile` → `bun run typecheck` → `bun test`；**PR 只跑 ubuntu**，`main` / `release/**` 跑全矩阵 |
 | `web` | ubuntu-latest | `apps/web`：`npm ci` → `npm run build`（Node 22，npm cache） |
+| `architecture` | ubuntu-latest | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/version.ts --check` |
+| `offline-integration` | ubuntu-latest | `bun test plugins/mcp/client` → `bun test packages/serve`；MCP 用本地 mock server，TLS 用本地自签证书，**不依赖外网** |
 | `examples` | ubuntu-latest | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（关闭上轮 typecheck 盲区） |
 | `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：`--version`、`--tools`、headless 文本、stdin、`@file`、`/help`、`/exit`（除 `--version` 外均带 `VESSEL_MOCK=1`） |
 
@@ -28,7 +30,7 @@
 - Bun 安装缓存：`actions/cache` + `~/.bun/install/cache`，key 取 `bun.lock` 哈希。
 - 三件套任一红 → 禁止合并。
 - 不在 CI 中写入任何真实 API Key；mock 模式覆盖全部冒烟路径。
-- 分支保护 required checks：`Quality Checks`、`Web Build`、`Examples`、`Cross Platform (ubuntu-latest)`。
+- 分支保护 required checks：`Quality Checks`、`Web Build`、`Examples`、`Cross Platform (ubuntu-latest)`；0.3 建议把 `Architecture` 与 `Offline Integration` 也设为 required（由 1 / 仓库管理员在 GitHub 设置）。
 
 ## 2. Release（`.github/workflows/release.yml`）
 
@@ -45,7 +47,7 @@
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
-   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 9 个插件包（含 `@vessel/team`）。
+   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 10 个插件包（含 `@vessel/team` 与 `@vessel/mcp-client`）。
    - **不发布根 CLI**（`private: true`，无 `bin`）。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。
    - `npm publish --provenance --access public`（OIDC provenance）。
