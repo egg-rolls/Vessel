@@ -1,0 +1,675 @@
+/**
+ * InProcessRuntimeHost —— 0.2 R1/R2
+ *
+ * 单进程多 agent 宿主：成员注册、生命周期、消息投递与 run 句柄。
+ * - `AgentRuntime` 仍是单 agent loop；Host 只负责包在外面（不重写 loop）。
+ * - 成员 context 独占；共享 SessionBackend 按 agentId 命名空间隔离（D3）。
+ * - 每成员独立 EventStream，Host 聚合转发并补 `agentId`（D4/A7）。
+ * - run 统一经 Scheduler（并发/队列/同成员串行在 R2 Scheduler）。
+ * - Transport 只保留注入点；实现归 R3a-core。
+ *
+ * @module @vessel/core/kernel
+ */
+
+import { randomUUID } from 'node:crypto';
+import { MemoryContextManager } from '../context/context-manager.js';
+import { MemoryEventStream } from '../events/event-stream.js';
+import { AgentRuntime } from '../runtime/agent-runtime.js';
+import { MemoryPluginHost } from '../runtime/plugin-host.js';
+import type { ContextManager } from '../types/context.js';
+import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
+import type { AgentRuntimeOptions, PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
+import type { Message, Usage } from '../types/provider.js';
+import type { RunOptions } from '../types/run.js';
+import type { SessionBackend } from '../types/session.js';
+import { MemoryEventBus } from './event-bus.js';
+import {
+  type InternalAgentHandle,
+  type InternalScheduler,
+  kCancelAgentRuns,
+  kExecuteAgentRun,
+} from './internal.js';
+import { InProcessScheduler } from './scheduler.js';
+import { AgentSessionScope } from './session-scope.js';
+import type {
+  AgentHandle,
+  AgentMessage,
+  AgentSpec,
+  AgentState,
+  AgentStatus,
+  EventBus,
+  InboxPage,
+  Limits,
+  RunHandle,
+  RunnableAgent,
+  RunStatus,
+  RuntimeHost,
+  Scheduler,
+  SchedulerOptions,
+  Transport,
+} from './types.js';
+
+/** Host 构造选项 */
+export interface InProcessRuntimeHostOptions {
+  /** 成员默认能力集；spec.pluginHost 优先 */
+  pluginHost?: PluginHost;
+  /** 成员独占上下文工厂；缺省 MemoryContextManager */
+  contextFactory?: () => ContextManager;
+  /** 共享 session 后端；成员按 agentId 命名空间隔离 */
+  session?: SessionBackend;
+  /** 聚合事件总线；缺省新建 MemoryEventBus */
+  events?: EventBus;
+  /** 默认限额；成员 spec.limits 优先 */
+  limits?: Limits;
+  /** 调度器；缺省 InProcessScheduler */
+  scheduler?: Scheduler;
+  /** 缺省调度器的选项（自定义 scheduler 注入时忽略） */
+  schedulerOptions?: SchedulerOptions;
+  /** 成员缺省规格（id 不继承）；spec 优先 */
+  defaults?: Partial<AgentSpec>;
+  /** 成员缺省权限策略；spec.permission 优先 */
+  permission?: RuntimePermissionConfig;
+  /** R3a 注入点：Transport 实例；R2 只保存，不消费 */
+  transport?: Transport;
+  /** F5：覆盖默认 AgentRuntime（默认 AgentRuntime.create） */
+  runtimeFactory?: (options: AgentRuntimeOptions) => Promise<RunnableAgent>;
+  /** F5：覆盖成员事件流实现（默认 MemoryEventStream） */
+  eventStreamFactory?: () => EventStream;
+  /** 成员上限，默认 8 */
+  maxMembers?: number;
+}
+
+/** Agent id 合法字符集（A11） */
+const AGENT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+interface MemberRecord {
+  id: string;
+  name?: string;
+  spec: AgentSpec;
+  runtime: RunnableAgent;
+  events: EventStream;
+  state: AgentState;
+  inbox: AgentMessage[];
+  active?: InProcessRunHandle;
+  unsubscribeEvents: Unsubscribe;
+  lastError?: string;
+  closed: boolean;
+}
+
+/** 成员默认 session id（空串按 default） */
+function defaultSessionId(spec: AgentSpec): string {
+  return spec.sessionId || 'default';
+}
+
+/** 把 agentId 合入事件 data（不修改原对象） */
+function withAgentId(data: unknown, agentId: string): Record<string, unknown> {
+  if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+    return { ...(data as Record<string, unknown>), agentId };
+  }
+  return { value: data, agentId };
+}
+
+/** 解析收件箱游标；非法值按 0 */
+function parseCursor(cursor?: string): number {
+  const value = Number.parseInt(cursor ?? '0', 10);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** 从事件 data 读取 requestId（交互暂停事件约定字段） */
+function readRequestId(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const value = (data as Record<string, unknown>).requestId;
+  return typeof value === 'string' ? value : undefined;
+}
+
+/** 从 run.completed 事件读取 usage（A9） */
+function readUsage(data: unknown): Usage | undefined {
+  if (typeof data !== 'object' || data === null) return undefined;
+  const value = (data as Record<string, unknown>).usage;
+  if (typeof value !== 'object' || value === null) return undefined;
+  return value as Usage;
+}
+
+/** 进程内多 agent 宿主 */
+export class InProcessRuntimeHost implements RuntimeHost {
+  readonly events: EventBus;
+
+  private readonly members = new Map<string, MemberRecord>();
+  private readonly handles = new Map<string, AgentHandle>();
+  /** 非成员邮箱（owner / 外部地址）；send 时按需创建（Q2） */
+  private readonly extraInboxes = new Map<string, AgentMessage[]>();
+  /** 子成员交互请求 → 其事件流；用于把 owner 的应答路由回去（B4） */
+  private readonly pendingInteractions = new Map<
+    string,
+    { memberId: string; events: EventStream }
+  >();
+  private readonly responseUnsubscribe: Unsubscribe;
+  private readonly pluginHost?: PluginHost;
+  private readonly contextFactory?: () => ContextManager;
+  private readonly session?: SessionBackend;
+  private readonly limits?: Limits;
+  private readonly defaults?: Partial<AgentSpec>;
+  private readonly permission?: RuntimePermissionConfig;
+  private readonly runtimeFactory: (options: AgentRuntimeOptions) => Promise<RunnableAgent>;
+  private readonly eventStreamFactory: () => EventStream;
+  private readonly maxMembers: number;
+  readonly scheduler: Scheduler;
+  /** R3a 注入点：当前只保存，不参与消息路由 */
+  readonly transport?: Transport;
+  private closed = false;
+
+  constructor(options: InProcessRuntimeHostOptions = {}) {
+    this.events = options.events ?? new MemoryEventBus();
+    this.pluginHost = options.pluginHost;
+    this.contextFactory = options.contextFactory;
+    this.session = options.session;
+    this.limits = options.limits;
+    this.defaults = options.defaults;
+    this.permission = options.permission;
+    this.transport = options.transport;
+    this.runtimeFactory =
+      options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
+    this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
+    this.scheduler = options.scheduler ?? new InProcessScheduler(options.schedulerOptions);
+    this.maxMembers = Math.max(1, options.maxMembers ?? 8);
+
+    // B4：Host 聚合子成员事件（含 tool.permission.request / ask.user.requested），
+    // owner 在聚合流上应答；这里把应答路由回发起请求的成员事件流。
+    this.responseUnsubscribe = this.events.subscribe((event) => {
+      if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
+        this.routeInteractionResponse(event);
+      }
+    });
+  }
+
+  async spawn(spec: AgentSpec): Promise<AgentHandle> {
+    if (this.closed) throw new Error('runtime host is closed');
+
+    // 成员缺省规格继承（id 不继承，避免多个成员拿到同一个默认 id）
+    const resolved = { ...(this.defaults ?? {}), ...spec } as AgentSpec;
+    resolved.id = spec.id;
+
+    if (!resolved.provider) throw new Error('AgentSpec.provider is required');
+    if (!resolved.model) throw new Error('AgentSpec.model is required');
+
+    const id = resolved.id ?? randomUUID();
+    if (!AGENT_ID_PATTERN.test(id)) {
+      throw new Error(`invalid agent id "${id}": must match [A-Za-z0-9_-]{1,64}`);
+    }
+    if (this.members.has(id)) throw new Error(`agent already exists: ${id}`);
+    if (this.members.size >= this.maxMembers) {
+      throw new Error(`agent limit reached (max ${this.maxMembers})`);
+    }
+
+    const memberEvents = this.eventStreamFactory();
+    const context = resolved.context ?? this.contextFactory?.() ?? new MemoryContextManager();
+    const session =
+      resolved.session ?? (this.session ? new AgentSessionScope(this.session, id) : undefined);
+    const limits = resolved.limits ?? this.limits ?? {};
+    // 0.2 R1/R2：run/agent 同源；host 预算与更细作用域后续接
+    const runLimits = limits.run ?? limits.agent ?? {};
+    const termination = limits.termination ??
+      resolved.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 };
+    const permission = resolved.permission ?? this.permission;
+
+    const runtime = await this.runtimeFactory({
+      provider: resolved.provider,
+      model: resolved.model,
+      context,
+      events: memberEvents,
+      pluginHost: resolved.pluginHost ?? this.pluginHost ?? new MemoryPluginHost(),
+      ...(session ? { session } : {}),
+      limits: runLimits,
+      termination,
+      ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}),
+      ...(permission !== undefined ? { permission } : {}),
+    });
+
+    const record: MemberRecord = {
+      id,
+      ...(resolved.name !== undefined ? { name: resolved.name } : {}),
+      spec: resolved,
+      runtime,
+      events: memberEvents,
+      state: 'idle',
+      inbox: [],
+      unsubscribeEvents: () => {},
+      closed: false,
+    };
+
+    record.unsubscribeEvents = memberEvents.subscribe((event) => {
+      // B4：记录交互请求的归属；请求本身继续转发到 Host 聚合流（owner 可见）
+      if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
+        const requestId = readRequestId(event.data);
+        if (requestId) {
+          this.pendingInteractions.set(requestId, { memberId: id, events: memberEvents });
+        }
+      }
+      // Host 路由回来的应答不再转发，避免 host.events ↔ member.events 回环
+      if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
+        return;
+      }
+      // A9：从 run.completed 捕获本次 run 的 usage
+      if (event.type === 'run.completed') {
+        const usage = readUsage(event.data);
+        if (usage) record.active?.setUsage(usage);
+      }
+      this.events.publish({
+        ...event,
+        data: withAgentId(event.data, id),
+      });
+    });
+
+    const handle = new InProcessAgentHandle(this, record);
+    this.members.set(id, record);
+    this.handles.set(id, handle);
+    this.publish('agent.spawned', {
+      agentId: id,
+      ...(resolved.name !== undefined ? { name: resolved.name } : {}),
+    });
+
+    return handle;
+  }
+
+  get(id: string): AgentHandle | undefined {
+    return this.handles.get(id);
+  }
+
+  list(): AgentStatus[] {
+    return [...this.members.values()].map((record) => this.toStatus(record));
+  }
+
+  async send(message: AgentMessage): Promise<void> {
+    if (this.closed) throw new Error('runtime host is closed');
+    if (!message.to) throw new Error('message.to is required');
+
+    if (message.to === '*') {
+      for (const record of this.members.values()) {
+        if (record.id !== message.from) this.deliverLocal(record, message);
+      }
+      return;
+    }
+
+    const target = this.members.get(message.to);
+    if (target) {
+      this.deliverLocal(target, message);
+      return;
+    }
+
+    // 非成员邮箱（owner / 外部地址）：按需创建；core 不解析地址（Q2/A12）
+    this.deliverExternal(message);
+  }
+
+  async inbox(id: string, cursor?: string): Promise<InboxPage> {
+    const record = this.members.get(id);
+    if (record) return this.readPage(record.inbox, cursor);
+    // 非成员邮箱：可读任意 mailbox（Q2）；未创建时返回空页
+    return this.readPage(this.extraInboxes.get(id) ?? [], cursor);
+  }
+
+  cancel(id: string, runId?: string): void {
+    const handle = this.handles.get(id);
+    if (!handle) throw new Error(`unknown agent: ${id}`);
+    handle.cancel(runId);
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    for (const record of [...this.members.values()]) {
+      await this.closeMember(record);
+    }
+    this.responseUnsubscribe();
+    await this.scheduler.close();
+    this.pendingInteractions.clear();
+    this.extraInboxes.clear();
+  }
+
+  /** @internal 由 AgentHandle.status() 调用 */
+  statusOf(record: MemberRecord): AgentStatus {
+    return this.toStatus(record);
+  }
+
+  /** @internal AgentHandle.run 的调度入口：进入 Scheduler 队列 */
+  enqueueRun(record: MemberRecord, input: string | Message, opts?: RunOptions): Promise<RunHandle> {
+    if (record.closed) return Promise.reject(new Error(`agent is closed: ${record.id}`));
+    const handle = this.handles.get(record.id);
+    if (!handle) return Promise.reject(new Error(`unknown agent: ${record.id}`));
+
+    return this.scheduler.submit({
+      agent: handle,
+      sessionId: defaultSessionId(record.spec),
+      input,
+      opts,
+      // 内部 executor：避免 Scheduler.submit → AgentHandle.run 递归
+      executor: (runId) => this.startRunInternal(record, input, { ...opts, runId }),
+    });
+  }
+
+  /** @internal Scheduler 直执行入口（不经过队列） */
+  async startRunInternal(
+    record: MemberRecord,
+    input: string | Message,
+    opts?: RunOptions,
+  ): Promise<RunHandle> {
+    if (record.closed) throw new Error(`agent is closed: ${record.id}`);
+    if (record.active) {
+      throw new Error(`agent "${record.id}" already has a running run`);
+    }
+
+    // F6：Scheduler 传入 runId；缺省由 Host 生成
+    const run = new InProcessRunHandle(
+      opts?.runId ?? randomUUID(),
+      record.id,
+      defaultSessionId(record.spec),
+    );
+    record.active = run;
+    record.state = 'running';
+    record.lastError = undefined;
+
+    const externalSignal = opts?.signal;
+    if (externalSignal) {
+      if (externalSignal.aborted) {
+        run.cancel(externalSignal.reason);
+      } else {
+        externalSignal.addEventListener('abort', () => run.cancel(externalSignal.reason), {
+          once: true,
+        });
+      }
+    }
+
+    this.publish('agent.run.started', {
+      agentId: record.id,
+      runId: run.id,
+      sessionId: run.sessionId,
+    });
+
+    void this.executeRun(record, run, input, opts);
+    return run;
+  }
+
+  /** @internal 由 AgentHandle.cancel() / Host.cancel() 调用 */
+  cancelRun(record: MemberRecord, runId?: string): void {
+    if (runId !== undefined) {
+      if (record.active?.id === runId) {
+        record.active.cancel();
+        return;
+      }
+      // 排队中的 run 由 Scheduler 持有
+      if (this.scheduler.cancel(runId)) return;
+      throw new Error(`run "${runId}" is not active for agent "${record.id}"`);
+    }
+
+    // 未指定 runId：取消该成员排队 + 运行中的 run
+    const internal = this.scheduler as Partial<InternalScheduler>;
+    const cancelAgent = internal[kCancelAgentRuns];
+    if (typeof cancelAgent === 'function') {
+      cancelAgent.call(this.scheduler, record.id, 'agent cancelled');
+    }
+    record.active?.cancel();
+  }
+
+  /** @internal 由 AgentHandle.close() 调用 */
+  async closeMember(record: MemberRecord): Promise<void> {
+    if (record.closed) return;
+    record.closed = true;
+
+    const internal = this.scheduler as Partial<InternalScheduler>;
+    const cancelAgent = internal[kCancelAgentRuns];
+    if (typeof cancelAgent === 'function') {
+      cancelAgent.call(this.scheduler, record.id, 'agent closed');
+    }
+    record.active?.cancel('agent closed');
+    record.unsubscribeEvents();
+    record.runtime.dispose();
+    record.state = 'closed';
+    this.members.delete(record.id);
+    this.handles.delete(record.id);
+    for (const [requestId, pending] of this.pendingInteractions) {
+      if (pending.memberId === record.id) this.pendingInteractions.delete(requestId);
+    }
+    this.publish('agent.closed', { agentId: record.id });
+  }
+
+  /** 本地投递：写收件箱 + 发布 message 事件 */
+  private deliverLocal(
+    record: MemberRecord,
+    message: AgentMessage,
+    eventType = 'agent.message.sent',
+  ): void {
+    record.inbox.push(message);
+    this.publish(eventType, {
+      agentId: record.id,
+      messageId: message.id,
+      from: message.from,
+      to: record.id,
+      kind: message.kind,
+    });
+  }
+
+  /** 非成员邮箱投递：owner / 外部地址（Q2） */
+  private deliverExternal(message: AgentMessage): void {
+    const inbox = this.extraInboxes.get(message.to) ?? [];
+    inbox.push(message);
+    this.extraInboxes.set(message.to, inbox);
+    this.publish('agent.message.sent', {
+      agentId: message.to,
+      messageId: message.id,
+      from: message.from,
+      to: message.to,
+      kind: message.kind,
+    });
+  }
+
+  /** 读取收件箱分页（游标为不透明字符串） */
+  private readPage(inbox: AgentMessage[], cursor?: string): InboxPage {
+    const start = Math.min(parseCursor(cursor), inbox.length);
+    return { messages: inbox.slice(start), cursor: String(inbox.length) };
+  }
+
+  /** B4：把 owner 在聚合流上的应答路由回发起请求的成员 */
+  private routeInteractionResponse(event: RunEvent): void {
+    const requestId = readRequestId(event.data);
+    if (!requestId) return;
+    const pending = this.pendingInteractions.get(requestId);
+    if (!pending) return;
+    this.pendingInteractions.delete(requestId);
+    pending.events.publish(event);
+  }
+
+  /** 执行一次 run（R1 无队列；R2 Scheduler 接管并发/排队） */
+  private async executeRun(
+    record: MemberRecord,
+    run: InProcessRunHandle,
+    input: string | Message,
+    opts?: RunOptions,
+  ): Promise<void> {
+    try {
+      const text = await record.runtime.run(input, run.sessionId, {
+        ...opts,
+        runId: run.id,
+        signal: run.signal,
+      });
+
+      // 成员在 run 期间被关闭：保持 closed 状态，不把结果算作正常完成
+      if (record.closed) {
+        run.setStatus('cancelled');
+        run.reject(new Error('agent closed'));
+        return;
+      }
+
+      if (run.signal.aborted) {
+        run.setStatus('cancelled');
+        record.state = 'cancelled';
+        this.publish('agent.run.cancelled', {
+          agentId: record.id,
+          runId: run.id,
+          sessionId: run.sessionId,
+        });
+        run.reject(new Error('run cancelled'));
+        return;
+      }
+
+      run.setStatus('completed');
+      record.state = 'idle';
+      this.publish('agent.run.completed', {
+        agentId: record.id,
+        runId: run.id,
+        sessionId: run.sessionId,
+        output: text,
+      });
+      run.resolve(text);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const cancelled = run.signal.aborted;
+      run.setStatus(cancelled ? 'cancelled' : 'failed');
+      if (!record.closed) {
+        record.state = cancelled ? 'cancelled' : 'error';
+        if (!cancelled) record.lastError = errorMessage;
+      }
+      this.publish(cancelled ? 'agent.run.cancelled' : 'agent.run.failed', {
+        agentId: record.id,
+        runId: run.id,
+        sessionId: run.sessionId,
+        ...(cancelled ? {} : { error: errorMessage }),
+      });
+      run.reject(error instanceof Error ? error : new Error(errorMessage));
+    } finally {
+      record.active = undefined;
+    }
+  }
+
+  /** 状态视图 */
+  private toStatus(record: MemberRecord): AgentStatus {
+    const status: AgentStatus = {
+      id: record.id,
+      state: record.state,
+      toolNames: record.runtime.pluginHost.listTools().map((tool) => tool.name),
+    };
+    if (record.name !== undefined) status.name = record.name;
+    if (record.active) status.currentRunId = record.active.id;
+    if (record.lastError !== undefined) status.lastError = record.lastError;
+    return status;
+  }
+
+  /** 发布 Host 级事件（开放字符串） */
+  private publish(type: string, data: Record<string, unknown>): void {
+    const runId =
+      typeof data.runId === 'string'
+        ? data.runId
+        : typeof data.agentId === 'string'
+          ? data.agentId
+          : 'host';
+    this.events.publish({ type, run_id: runId, data, ts: Date.now() });
+  }
+}
+
+/** AgentHandle 实现 */
+class InProcessAgentHandle implements InternalAgentHandle {
+  constructor(
+    private readonly host: InProcessRuntimeHost,
+    private readonly record: MemberRecord,
+  ) {}
+
+  get id(): string {
+    return this.record.id;
+  }
+
+  get name(): string | undefined {
+    return this.record.name;
+  }
+
+  status(): AgentStatus {
+    return this.host.statusOf(this.record);
+  }
+
+  run(input: string | Message, opts?: RunOptions): Promise<RunHandle> {
+    // 统一经 Scheduler；内部 executor 防止递归
+    return this.host.enqueueRun(this.record, input, opts);
+  }
+
+  /** @internal Scheduler 直执行入口 */
+  [kExecuteAgentRun](input: string | Message, opts?: RunOptions): Promise<RunHandle> {
+    return this.host.startRunInternal(this.record, input, opts);
+  }
+
+  send(message: AgentMessage): Promise<void> {
+    return this.host.send(message);
+  }
+
+  inbox(cursor?: string): Promise<InboxPage> {
+    return this.host.inbox(this.record.id, cursor);
+  }
+
+  cancel(runId?: string): void {
+    this.host.cancelRun(this.record, runId);
+  }
+
+  close(): Promise<void> {
+    return this.host.closeMember(this.record);
+  }
+}
+
+/** RunHandle 实现 */
+class InProcessRunHandle implements RunHandle {
+  readonly result: Promise<string>;
+
+  private current: RunStatus = 'running';
+  private usageValue?: Usage;
+  private readonly controller = new AbortController();
+  private resolveResult!: (value: string) => void;
+  private rejectResult!: (reason?: unknown) => void;
+
+  constructor(
+    readonly id: string,
+    readonly agentId: string,
+    readonly sessionId: string,
+  ) {
+    this.result = new Promise<string>((resolve, reject) => {
+      this.resolveResult = resolve;
+      this.rejectResult = reject;
+    });
+    // 调用方可以不 await result；避免未处理拒绝告警
+    void this.result.catch(() => {});
+  }
+
+  status(): RunStatus {
+    return this.current;
+  }
+
+  usage(): Usage | undefined {
+    return this.usageValue;
+  }
+
+  /** @internal A9：从 run.completed 事件捕获 */
+  setUsage(usage: Usage): void {
+    this.usageValue = usage;
+  }
+
+  get signal(): AbortSignal {
+    return this.controller.signal;
+  }
+
+  cancel(reason?: string): void {
+    if (this.current === 'completed' || this.current === 'failed') return;
+    if (!this.controller.signal.aborted) {
+      this.controller.abort(reason ?? 'run cancelled');
+    }
+    if (this.current !== 'cancelled') this.current = 'cancelled';
+  }
+
+  /** @internal */
+  setStatus(status: RunStatus): void {
+    this.current = status;
+  }
+
+  /** @internal */
+  resolve(value: string): void {
+    this.resolveResult(value);
+  }
+
+  /** @internal */
+  reject(reason?: unknown): void {
+    this.rejectResult(reason);
+  }
+}

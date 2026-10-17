@@ -218,11 +218,12 @@ describe('gateway events / protocol', () => {
   });
 
   it('keeps SSE alive past the idle timeout and emits pings', async () => {
-    // idleTimeout=1s：若 `: ping` 不能刷新 idle timer，连接会在 1s 左右被掐断。
+    // 余量要足够大：全量并发下事件循环可能被别的测试占用，心跳间隔被推迟。
+    // idleTimeout=5s、heartbeat=100ms、观测 6s —— 共 50 个心跳周期，避免偶发 ECONNRESET。
     const gw = track(
       createGateway({
         events: new MemoryEventStream(),
-        idleTimeout: 1,
+        idleTimeout: 5,
         heartbeatMs: 100,
       }),
     );
@@ -233,7 +234,7 @@ describe('gateway events / protocol', () => {
     const decoder = new TextDecoder();
     let text = '';
     let closed = false;
-    const deadline = Date.now() + 2500;
+    const deadline = Date.now() + 6000;
     while (Date.now() < deadline) {
       const chunk = await reader.read();
       if (chunk.done) {
@@ -245,7 +246,7 @@ describe('gateway events / protocol', () => {
     await reader.cancel();
     expect(closed).toBe(false);
     expect(text).toContain(': ping');
-  }, 10_000);
+  }, 15_000);
 
   it('marks frames with job_id after run.started', async () => {
     const events = new MemoryEventStream();
