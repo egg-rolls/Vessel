@@ -16,7 +16,7 @@ import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
 import { MemorySessionBackend } from '../src/session/session-backend';
-import type { RunEvent } from '../src/types/event';
+import type { EventStream, RunEvent } from '../src/types/event';
 import type { ChatRequest, LLMProvider, LLMResponse, Message, Usage } from '../src/types/provider';
 import type { ToolDefinition } from '../src/types/tool';
 
@@ -727,6 +727,61 @@ describe('上下文工厂', () => {
     });
     await host.spawn({ id: 'a', provider: new MemoryLLMProvider(), model: 'm' });
     expect(created).toBe(1);
+    await host.close();
+  });
+});
+
+/** 只发交互请求的假 runtime：使用 Host 传入的 events，便于 Host 订阅 */
+class FakeInteractionRuntime implements RunnableAgent {
+  readonly pluginHost = new MemoryPluginHost();
+  readonly events: EventStream;
+
+  constructor(events: EventStream) {
+    this.events = events;
+  }
+
+  async run(): Promise<string> {
+    this.events.publish({
+      type: 'tool.permission.request',
+      run_id: 'run-clean',
+      data: { requestId: 'req-clean', tool: 'x' },
+      ts: Date.now(),
+    });
+    return 'ok';
+  }
+
+  finishRun(): void {
+    this.events.publish({
+      type: 'run.completed',
+      run_id: 'run-clean',
+      data: {},
+      ts: Date.now(),
+    });
+  }
+
+  dispose(): void {}
+}
+
+describe('未应答交互清理（0.3 加固）', () => {
+  it('run 进入终态时清理该 run 的 pendingInteractions', async () => {
+    let fake!: FakeInteractionRuntime;
+    const host = new InProcessRuntimeHost({
+      runtimeFactory: async (options) => {
+        fake = new FakeInteractionRuntime(options.events);
+        return fake;
+      },
+    });
+    const agent = await host.spawn({ id: 'worker', provider: new MemoryLLMProvider(), model: 'm' });
+    const pending = (host as unknown as { pendingInteractions: Map<string, { memberId: string }> })
+      .pendingInteractions;
+
+    const run = await agent.run('hi');
+    await run.result;
+    expect(pending.size).toBe(1);
+
+    fake.finishRun();
+    expect(pending.size).toBe(0);
+
     await host.close();
   });
 });

@@ -149,7 +149,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
   /** 子成员交互请求 → 其事件流；用于把 owner 的应答路由回去（B4） */
   private readonly pendingInteractions = new Map<
     string,
-    { memberId: string; events: EventStream }
+    { memberId: string; runId: string; events: EventStream }
   >();
   private readonly responseUnsubscribe: Unsubscribe;
   private readonly pluginHost?: PluginHost;
@@ -257,8 +257,20 @@ export class InProcessRuntimeHost implements RuntimeHost {
       if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
         const requestId = readRequestId(event.data);
         if (requestId) {
-          this.pendingInteractions.set(requestId, { memberId: id, events: memberEvents });
+          this.pendingInteractions.set(requestId, {
+            memberId: id,
+            runId: event.run_id,
+            events: memberEvents,
+          });
         }
+      }
+      // 0.3 加固：run 结束后清理未应答的交互请求，避免长生命周期进程泄漏
+      if (
+        event.type === 'run.completed' ||
+        event.type === 'run.failed' ||
+        event.type === 'run.cancelled'
+      ) {
+        this.clearRunInteractions(id, event.run_id);
       }
       // Host 路由回来的应答不再转发，避免 host.events ↔ member.events 回环
       if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
@@ -537,6 +549,15 @@ export class InProcessRuntimeHost implements RuntimeHost {
   private readPage(inbox: AgentMessage[], cursor?: string): InboxPage {
     const start = Math.min(parseCursor(cursor), inbox.length);
     return { messages: inbox.slice(start), cursor: String(inbox.length) };
+  }
+
+  /** 清理某成员某 run 的未应答交互请求（run 进入终态时） */
+  private clearRunInteractions(memberId: string, runId: string): void {
+    for (const [requestId, pending] of this.pendingInteractions) {
+      if (pending.memberId === memberId && pending.runId === runId) {
+        this.pendingInteractions.delete(requestId);
+      }
+    }
   }
 
   /** B4：把 owner 在聚合流上的应答路由回发起请求的成员 */
