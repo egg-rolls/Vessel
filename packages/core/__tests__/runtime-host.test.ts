@@ -2,7 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
-import type { AgentMessage, EventBus, RunnableAgent } from '../src/kernel/index';
+import type {
+  AgentMessage,
+  EventBus,
+  RunHandle,
+  RunnableAgent,
+  ScheduledTask,
+  Scheduler,
+  SchedulerStats,
+} from '../src/kernel/index';
 import { createCancellationScope, InProcessRuntimeHost, MemoryEventBus } from '../src/kernel/index';
 import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
@@ -393,6 +401,46 @@ describe('取消与关闭', () => {
 });
 
 describe('Session 命名空间（D3）', () => {
+  it('自定义 Scheduler 传入的 sessionId 生效（F9）', async () => {
+    class SessionOverrideScheduler implements Scheduler {
+      async submit(task: ScheduledTask): Promise<RunHandle> {
+        task.sessionId = 'custom-session';
+        if (!task.executor) throw new Error('executor required');
+        return task.executor('custom-run');
+      }
+
+      cancel(): boolean {
+        return false;
+      }
+
+      stats(): SchedulerStats {
+        return { queued: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+      }
+
+      async close(): Promise<void> {
+        // no-op
+      }
+    }
+
+    const backend = new MemorySessionBackend();
+    const host = new InProcessRuntimeHost({
+      session: backend,
+      scheduler: new SessionOverrideScheduler(),
+    });
+    const agent = await host.spawn({
+      id: 'a',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+    });
+
+    const run = await agent.run('hi');
+    expect(run.sessionId).toBe('custom-session');
+    await run.result;
+
+    expect(await backend.list()).toContain('a/custom-session');
+    await host.close();
+  });
+
   it('共享后端按 agentId 隔离 session', async () => {
     const backend = new MemorySessionBackend();
     const host = new InProcessRuntimeHost({ session: backend });

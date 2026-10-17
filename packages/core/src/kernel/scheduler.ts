@@ -36,9 +36,9 @@ interface QueueEntry {
 class QueuedRunHandle implements RunHandle {
   readonly id: string;
   readonly agentId: string;
-  readonly sessionId: string;
   readonly result: Promise<string>;
 
+  private sessionIdValue: string;
   private state: RunStatus = 'queued';
   private real?: RunHandle;
   private resolveResult!: (value: string) => void;
@@ -47,13 +47,22 @@ class QueuedRunHandle implements RunHandle {
   constructor(id: string, agentId: string, sessionId: string) {
     this.id = id;
     this.agentId = agentId;
-    this.sessionId = sessionId;
+    this.sessionIdValue = sessionId;
     this.result = new Promise<string>((resolve, reject) => {
       this.resolveResult = resolve;
       this.rejectResult = reject;
     });
     // 调用方可以不 await result；避免未处理拒绝告警
     void this.result.catch(() => {});
+  }
+
+  get sessionId(): string {
+    return this.sessionIdValue;
+  }
+
+  /** @internal 采用 Scheduler 最终传入的 sessionId（F9） */
+  setSessionId(sessionId: string): void {
+    this.sessionIdValue = sessionId;
   }
 
   status(): RunStatus {
@@ -219,6 +228,8 @@ export class InProcessScheduler implements InternalScheduler {
     const agentId = entry.task.agent.id;
     this.active.set(entry.run.id, entry);
     this.agentRunning.add(agentId);
+    // F9：采用 task 上最终确定的 sessionId（自定义 Scheduler 可能改写）
+    entry.run.setSessionId(entry.task.sessionId ?? 'default');
     entry.run.setRunning();
 
     try {
@@ -241,7 +252,7 @@ export class InProcessScheduler implements InternalScheduler {
     const internal = task.agent as Partial<InternalAgentHandle>;
     const execute = internal[kExecuteAgentRun];
     if (typeof execute === 'function') {
-      return execute.call(task.agent, task.input, { ...task.opts, runId });
+      return execute.call(task.agent, task.input, { ...task.opts, runId }, task.sessionId);
     }
 
     return task.agent.run(task.input, { ...task.opts, runId });
