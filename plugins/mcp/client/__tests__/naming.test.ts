@@ -27,14 +27,18 @@ describe('sanitizeSegment', () => {
     expect(sanitizeSegment('a.b/c:d')).toBe('a_b_c_d');
   });
 
-  it('keeps letters, digits, underscore and dash', () => {
-    expect(sanitizeSegment('Read_File-2')).toBe('Read_File-2');
+  it('keeps letters, digits and underscore; replaces dashes', () => {
+    expect(sanitizeSegment('Read_File-2')).toBe('Read_File_2');
   });
 });
 
 describe('exposedToolName', () => {
   it('prefixes with mcp__<server>__<tool> by default', () => {
     expect(exposedToolName('my server', 'read file', true)).toBe('mcp__my_server__read_file');
+  });
+
+  it('replaces dashes in both server and tool names (DECISION-008 4.2)', () => {
+    expect(exposedToolName('mock-srv_v2', 'echo-tool', true)).toBe('mcp__mock_srv_v2__echo_tool');
   });
 
   it('uses the sanitized raw name when toolPrefix is false', () => {
@@ -54,6 +58,11 @@ describe('exposedToolName', () => {
     expect(name).toBe(`${raw.slice(0, 55)}_${hashSuffix(raw)}`);
     expect(name.length).toBe(64);
     expect(hashSuffix(raw)).toHaveLength(8);
+  });
+
+  it('stays within 64 characters after sanitizing dashes', () => {
+    const name = exposedToolName('mock-srv', 'a-'.repeat(60), true);
+    expect(name.length).toBe(64);
   });
 
   it('is deterministic', () => {

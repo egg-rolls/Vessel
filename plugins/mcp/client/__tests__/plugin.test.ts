@@ -2,7 +2,7 @@
  * 插件级行为：多 server 隔离、生命周期、控制面、命名冲突。
  */
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import { fileURLToPath } from 'node:url';
 import { MemoryEventStream, MemoryPluginHost, type ToolContext } from '@vessel/core';
 import { createMcpPlugin } from '../src/plugin';
@@ -181,6 +181,46 @@ describe('createMcpPlugin', () => {
       expect(plugin.getServer('two')?.tools).toHaveLength(0);
     } finally {
       await plugin.close();
+    }
+  });
+
+  it('replaces hyphens in the server name when exposing tools', async () => {
+    const plugin = createMcpPlugin({ servers: [stdioServer({ name: 'mock-srv_v2' })] });
+    const host = new MemoryPluginHost();
+    try {
+      await plugin.install(host);
+      expect(host.getTool('mcp__mock_srv_v2__echo')).toBeDefined();
+      expect(host.getTool('mcp__mock-srv_v2__echo')).toBeUndefined();
+    } finally {
+      await plugin.close();
+    }
+  });
+
+  it('warns and keeps the existing tool on a prefixed collision', async () => {
+    const host = new MemoryPluginHost();
+    host.registerTool({
+      name: 'mcp__mock__echo',
+      description: 'pre-existing tool',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'original',
+    });
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    const plugin = createMcpPlugin({ servers: [stdioServer()] });
+    try {
+      await plugin.install(host);
+
+      const collisions = warn.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes('mcp__mock__echo'));
+      expect(collisions).toHaveLength(1);
+      expect(collisions[0]).toContain('server "mock"');
+      expect(collisions[0]).toContain('existing tool is kept');
+
+      expect(await host.getTool('mcp__mock__echo')?.handler({}, makeContext())).toBe('original');
+      expect(host.getTool('mcp__mock__add')).toBeDefined();
+    } finally {
+      await plugin.close();
+      warn.mockRestore();
     }
   });
 });
