@@ -13,7 +13,7 @@ import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '.
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
 import type { RunState, SessionBackend } from '../types/session.js';
-import type { ToolContext, ToolDefinition } from '../types/tool.js';
+import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
 import { PermissionPolicy } from './permission-policy.js';
@@ -31,6 +31,16 @@ export interface RunOptions {
    * 写入顺序：注入消息在前，用户输入在后；两者都持久化进 ContextManager。
    */
   messages?: Message[];
+}
+
+/** 类型守卫：Guardrail replacement 是否是合法的 ToolCall（C-05） */
+function isToolCall(value: unknown): value is ToolCall {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  const fn = record.function;
+  if (typeof record.id !== 'string' || typeof fn !== 'object' || fn === null) return false;
+  const fnRecord = fn as Record<string, unknown>;
+  return typeof fnRecord.name === 'string' && typeof fnRecord.arguments === 'string';
 }
 
 /**
@@ -190,21 +200,13 @@ export class AgentRuntime {
       ts: Date.now(),
     });
 
-    // 保存初始状态
-    if (this.session) {
-      await this.session.save(runState);
-    }
-
     try {
       // 注入消息（C5）：core 不解释其语义（skill / 附件 / 引用文件……），先于用户输入写入并持久化
       for (const injected of opts?.messages ?? []) {
         this.addContext(injected, runId);
       }
 
-      // 添加用户消息到上下文
-      this.addContext(userMessage, runId);
-
-      // 应用输入 Guardrail
+      // 应用输入 Guardrail（先于写上下文：replacement 要成为持久化的用户消息，C-05）
       const inputResult = await this.guardrails.apply(
         userMessage.content,
         GuardrailStage.Input,
@@ -213,6 +215,20 @@ export class AgentRuntime {
       );
       if (!inputResult.allowed) {
         throw new Error(`Input blocked by guardrail: ${inputResult.reason}`);
+      }
+      const effectiveUser =
+        typeof inputResult.replacement === 'string' &&
+        inputResult.replacement !== userMessage.content
+          ? { ...userMessage, content: inputResult.replacement }
+          : userMessage;
+
+      // 添加（可能被 guardrail 改写后的）用户消息到上下文
+      this.addContext(effectiveUser, runId);
+
+      // 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不再丢历史（C-02）
+      runState.messages = this.context.messages;
+      if (this.session) {
+        await this.session.save(runState);
       }
 
       // 执行 tool-calling loop
@@ -255,6 +271,8 @@ export class AgentRuntime {
       runState.status = 'failed';
       runState.completed_at = Date.now();
       runState.error = error instanceof Error ? error.message : String(error);
+      // 失败也保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）
+      runState.messages = this.context.messages;
 
       // 触发 OnError Hook（LLM 错误、Guardrail 阻断、限制超限、Abort 等）
       await this.hooks.run(HookType.OnError, {
@@ -395,8 +413,11 @@ export class AgentRuntime {
           response.usage.prompt_tokens ?? 0,
           response.usage.completion_tokens ?? 0,
         );
-        // Auto Compact：用 LLM 真实 token 数替代字符估算
-        this.context.updateRealTokens(this.stats.totalTokens);
+        // Auto Compact：用**本次请求**的真实 token 数替代字符估算。
+        // 不能用累计 stats.totalTokens——多轮会线性放大，第二轮就误触发 compact（C-04）。
+        this.context.updateRealTokens(
+          (response.usage.prompt_tokens ?? 0) + (response.usage.completion_tokens ?? 0),
+        );
       }
 
       // 发布 LLM 响应事件
@@ -428,36 +449,30 @@ export class AgentRuntime {
         if (!outputResult.allowed) {
           throw new Error(`Output blocked by guardrail: ${outputResult.reason}`);
         }
+        // replacement 生效：改写返回给调用方并持久化的助手文本（C-05）
+        const finalContent =
+          typeof outputResult.replacement === 'string'
+            ? outputResult.replacement
+            : response.content;
 
         // 添加助手消息到上下文
         this.addContext(
           {
             role: 'assistant',
-            content: response.content,
+            content: finalContent,
           },
           runId,
         );
 
-        return response.content;
+        return finalContent;
       }
 
       if (response.finish_reason === 'tool_calls' && response.tool_calls) {
-        // 添加助手消息（包含 tool_calls）到上下文
-        this.addContext(
-          {
-            role: 'assistant',
-            content: response.content ?? '',
-            tool_calls: response.tool_calls,
-          },
-          runId,
-        );
-
-        // 执行每个工具调用
+        // 先对全部 tool_call 过 Guardrail，得到实际要执行的调用（replacement 可改写，C-05）。
+        // 放在写 assistant 消息之前，保证上下文里的 tool_calls 与后续 role:tool 结果严格配对。
+        const effectiveCalls: ToolCall[] = [];
         for (const toolCall of response.tool_calls) {
-          // 增加工具调用计数
           this.limitChecker.incrementToolCall(this.stats);
-
-          // 应用工具调用 Guardrail
           const toolCallResult = await this.guardrails.apply(
             toolCall,
             GuardrailStage.ToolCall,
@@ -467,38 +482,69 @@ export class AgentRuntime {
           if (!toolCallResult.allowed) {
             throw new Error(`Tool call blocked by guardrail: ${toolCallResult.reason}`);
           }
+          effectiveCalls.push(
+            isToolCall(toolCallResult.replacement) ? toolCallResult.replacement : toolCall,
+          );
+        }
+
+        // 添加助手消息（包含实际执行的 tool_calls）到上下文
+        this.addContext(
+          {
+            role: 'assistant',
+            content: response.content ?? '',
+            tool_calls: effectiveCalls,
+          },
+          runId,
+        );
+
+        // 执行每个工具调用
+        for (const toolCall of effectiveCalls) {
+          const toolName = toolCall.function.name;
+          const toolStartTime = Date.now();
+
+          // 参数只解析一次（C-01）：失败按工具失败折回上下文，不终止 run
+          let args: unknown = {};
+          let argsError: string | undefined;
+          try {
+            args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+          } catch (error) {
+            argsError = error instanceof Error ? error.message : String(error);
+          }
 
           // 发布工具调用开始事件
-          const toolStartTime = Date.now();
           this.publishEvent({
             type: 'tool.call.started',
             run_id: runId,
             data: {
               run_id: runId,
               tool_call_id: toolCall.id,
-              tool_name: toolCall.function.name,
-              arguments: JSON.parse(toolCall.function.arguments),
+              tool_name: toolName,
+              arguments: argsError ? toolCall.function.arguments : args,
             },
             ts: Date.now(),
           });
+
+          if (argsError) {
+            await this.recordToolFailure({
+              runId,
+              sessionId,
+              toolCallId: toolCall.id,
+              toolName,
+              startTime: toolStartTime,
+              errorMessage: `Invalid JSON in tool arguments: ${argsError}`,
+            });
+            continue;
+          }
 
           // 执行 BeforeTool 钩子
           await this.hooks.run(HookType.BeforeTool, hookCtx);
 
           try {
             // 统一工具调用：只从 PluginHost 查找
-            const toolName = toolCall.function.name;
             const pluginTool = this.pluginHost.getTool(toolName);
 
             if (!pluginTool) {
               throw new Error(`Tool "${toolName}" not found`);
-            }
-
-            let args: unknown;
-            try {
-              args = JSON.parse(toolCall.function.arguments);
-            } catch {
-              args = {};
             }
 
             const toolCtx: ToolContext = {
@@ -513,7 +559,7 @@ export class AgentRuntime {
 
             const result = await this.invokeTool(pluginTool, args, toolCtx);
 
-            // 应用工具结果 Guardrail
+            // 应用工具结果 Guardrail（replacement 可改写结果，C-05）
             const toolResultResult = await this.guardrails.apply(
               result,
               GuardrailStage.ToolResult,
@@ -523,6 +569,10 @@ export class AgentRuntime {
             if (!toolResultResult.allowed) {
               throw new Error(`Tool result blocked by guardrail: ${toolResultResult.reason}`);
             }
+            const finalResult =
+              typeof toolResultResult.replacement === 'string'
+                ? toolResultResult.replacement
+                : result;
 
             // 发布工具调用完成事件
             this.publishEvent({
@@ -531,8 +581,8 @@ export class AgentRuntime {
               data: {
                 run_id: runId,
                 tool_call_id: toolCall.id,
-                tool_name: toolCall.function.name,
-                result,
+                tool_name: toolName,
+                result: finalResult,
                 duration_ms: Date.now() - toolStartTime,
               },
               ts: Date.now(),
@@ -546,47 +596,21 @@ export class AgentRuntime {
               {
                 role: 'tool',
                 tool_call_id: toolCall.id,
-                content: result,
+                content: finalResult,
               },
               runId,
             );
             // 注：不再注入假 assistant 消息（见 ADR-005 / Phase 1 review #3）
             // Provider 负责正确解释 role: tool 消息
           } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-
-            // 触发 OnError Hook（工具执行失败）
-            await this.hooks.run(HookType.OnError, {
-              run_id: runId,
-              session_id: sessionId,
-              error: errorMessage,
-              phase: 'tool_execution',
-              tool_name: toolCall.function.name,
-            });
-
-            // 发布工具调用失败事件
-            this.publishEvent({
-              type: 'tool.call.failed',
-              run_id: runId,
-              data: {
-                run_id: runId,
-                tool_call_id: toolCall.id,
-                tool_name: toolCall.function.name,
-                error: errorMessage,
-                duration_ms: Date.now() - toolStartTime,
-              },
-              ts: Date.now(),
-            });
-
-            // 添加错误结果到上下文
-            this.addContext(
-              {
-                role: 'tool',
-                tool_call_id: toolCall.id,
-                content: `Error: ${errorMessage}`,
-              },
+            await this.recordToolFailure({
               runId,
-            );
+              sessionId,
+              toolCallId: toolCall.id,
+              toolName,
+              startTime: toolStartTime,
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
           }
         }
       } else {
@@ -608,6 +632,47 @@ export class AgentRuntime {
    */
   dispose(): void {
     this.session?.close?.();
+  }
+
+  /**
+   * 记录一次工具失败：OnError hook → tool.call.failed 事件 → 错误文本折回上下文（C-01）。
+   * 工具失败不终止 run，模型可自行纠错。
+   */
+  private async recordToolFailure(opts: {
+    runId: string;
+    sessionId: string;
+    toolCallId: string;
+    toolName: string;
+    startTime: number;
+    errorMessage: string;
+  }): Promise<void> {
+    await this.hooks.run(HookType.OnError, {
+      run_id: opts.runId,
+      session_id: opts.sessionId,
+      error: opts.errorMessage,
+      phase: 'tool_execution',
+      tool_name: opts.toolName,
+    });
+    this.publishEvent({
+      type: 'tool.call.failed',
+      run_id: opts.runId,
+      data: {
+        run_id: opts.runId,
+        tool_call_id: opts.toolCallId,
+        tool_name: opts.toolName,
+        error: opts.errorMessage,
+        duration_ms: Date.now() - opts.startTime,
+      },
+      ts: Date.now(),
+    });
+    this.addContext(
+      {
+        role: 'tool',
+        tool_call_id: opts.toolCallId,
+        content: `Error: ${opts.errorMessage}`,
+      },
+      opts.runId,
+    );
   }
 
   /**
@@ -634,26 +699,84 @@ export class AgentRuntime {
   }
 
   /**
-   * 组装本次请求的消息数组（ADR-018）。
+   * 组装本次请求的消息数组（ADR-018 / C-03）。
    * 「持久化上下文 + BeforeLlm hook 写入的 systemPrompt」在此一处收敛：
-   * hook 未改写（或改写为空）时直接用持久化消息；改写时以注入内容替换首条 system
-   * 消息（无 system 则前置一条）。注入只影响本次请求，不改动 ContextManager 持久化的消息。
+   * 1) 先归一化成 Provider 可接受的序列（丢掉孤儿 tool 消息、降级不完整的 tool_calls 轮次）；
+   * 2) 再处理 system：hook 改写时替换；上下文缺 system 时补回基底 systemPrompt。
+   * 注入只影响本次请求，不改动 ContextManager 持久化的消息。
    */
   private buildRequestMessages(injectedSystem: unknown): Message[] {
-    const messages = this.context.messages;
-    // 非字符串 / 空串视为「未注入」——hook 没写就保持持久化消息原样
-    if (
-      typeof injectedSystem !== 'string' ||
-      !injectedSystem ||
-      injectedSystem === this.systemPrompt
-    ) {
+    const messages = this.normalizeMessages(this.context.messages);
+    const systemOverride =
+      typeof injectedSystem === 'string' && injectedSystem ? injectedSystem : undefined;
+    const hasSystem = messages.some((m) => m.role === 'system');
+
+    // 上下文缺 system（trim / 恢复 / 失败会话）时，补回基底的或 hook 改写后的 system
+    if (!hasSystem) {
+      return systemOverride ? [{ role: 'system', content: systemOverride }, ...messages] : messages;
+    }
+    // hook 未改写（或改写为空）时保持持久化 system 原样
+    if (!systemOverride || systemOverride === this.systemPrompt) {
       return messages;
     }
-    const hasSystem = messages.some((m) => m.role === 'system');
-    if (!hasSystem) {
-      return [{ role: 'system', content: injectedSystem }, ...messages];
+    return messages.map((m) => (m.role === 'system' ? { ...m, content: systemOverride } : m));
+  }
+
+  /**
+   * 把持久化上下文整理成 Provider 可接受的序列（C-03）：
+   * - 丢弃没有对应 assistant(tool_calls) 的 role:tool 消息（trim / compact 可能切断配对）；
+   * - assistant(tool_calls) 缺少某些 tool 结果时，整轮降级为普通 assistant 文本
+   *   （空文本则丢弃），同时丢弃该轮已出现的部分 tool 结果；
+   * - 其余消息保持原顺序与对象引用。
+   */
+  private normalizeMessages(messages: Message[]): Message[] {
+    const normalized: Message[] = [];
+    let pending: {
+      assistant: Message;
+      ids: Set<string>;
+      toolMessages: Message[];
+    } | null = null;
+
+    const flushPending = (): void => {
+      if (!pending) return;
+      const { assistant, ids, toolMessages } = pending;
+      pending = null;
+      if (ids.size === 0) {
+        normalized.push(assistant, ...toolMessages);
+        return;
+      }
+      // 有 tool_call 没拿到结果：不发送非法序列；保留 assistant 文本（若有）
+      if (assistant.content) {
+        normalized.push({ role: 'assistant', content: assistant.content });
+      }
+    };
+
+    for (const msg of messages) {
+      if (msg.role === 'tool') {
+        const id = msg.tool_call_id ?? '';
+        if (pending?.ids.has(id)) {
+          pending.ids.delete(id);
+          pending.toolMessages.push(msg);
+        }
+        // 孤儿 tool 消息直接丢弃
+        continue;
+      }
+
+      flushPending();
+
+      if (msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0) {
+        pending = {
+          assistant: msg,
+          ids: new Set(msg.tool_calls.map((tc) => tc.id)),
+          toolMessages: [],
+        };
+      } else {
+        normalized.push(msg);
+      }
     }
-    return messages.map((m) => (m.role === 'system' ? { ...m, content: injectedSystem } : m));
+
+    flushPending();
+    return normalized;
   }
 
   /**
