@@ -172,9 +172,12 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
   const unsubscribers: Array<() => void> = [];
   let childRunId: string | undefined;
 
-  // Host 聚合流：转发运行事件、生命周期事件、权限请求；同时记录嵌套深度
+  // Host 聚合流：转发运行事件、生命周期事件、交互请求；同时记录嵌套深度
   unsubscribers.push(
     config.host.events.subscribe((event) => {
+      // 防回环：sameStream 时我们也会把 subagent.* 写回同一流
+      if (event.type.startsWith('subagent.')) return;
+
       const data = isRecord(event.data) ? event.data : {};
       if (data.agentId !== config.delegateId) return;
 
@@ -182,21 +185,23 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
         childRunId = data.run_id;
         depthByRunId.set(data.run_id, config.depth + 1);
       }
-      if (sameStream) return;
 
-      // P12：临时成员生命周期事件直接转发（不添加 subagent. 前缀）
+      // P12：dedicated Host 时把生命周期事件原样转发；sameStream 时已存在
       if (event.type === 'agent.spawned' || event.type === 'agent.closed') {
-        config.parentEvents.publish({
-          type: event.type,
-          run_id: event.run_id,
-          data,
-          ts: event.ts,
-        });
+        if (!sameStream) {
+          config.parentEvents.publish({
+            type: event.type,
+            run_id: event.run_id,
+            data,
+            ts: event.ts,
+          });
+        }
         return;
       }
       // Host 自身的 agent.* 事件不重复转发；成员 runtime 事件走 subagent.*
       if (event.type.startsWith('agent.')) return;
 
+      // A6：无论是否同一个流，都保证父流能看到 subagent.* + delegateId
       config.parentEvents.publish({
         type: `subagent.${event.type}`,
         run_id: event.run_id,
@@ -204,10 +209,11 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
         ts: event.ts,
       });
 
-      // 权限桥：把子成员请求用原事件名送给父级（TUI）
-      if (config.permissionMode === 'bridge' && event.type === 'tool.permission.request') {
+      // 交互桥：dedicated Host 时用原名再送一份；sameStream 时原名已在流里
+      if (sameStream || config.permissionMode !== 'bridge') return;
+      if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
         config.parentEvents.publish({
-          type: 'tool.permission.request',
+          type: event.type,
           run_id: event.run_id,
           data,
           ts: event.ts,
@@ -216,11 +222,14 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
     }),
   );
 
-  // 权限桥：父级应答回灌 Host 聚合流，由 core 路由到发起请求的成员
+  // 交互桥：父级应答回灌 Host 聚合流，由 core 路由到发起请求的成员。
+  // sameStream 时应答本来就在同一条流上，不需要订阅。
   if (!sameStream && config.permissionMode === 'bridge') {
     unsubscribers.push(
       config.parentEvents.subscribe((event) => {
-        if (event.type !== 'tool.permission.response') return;
+        if (event.type !== 'tool.permission.response' && event.type !== 'ask.user.answered') {
+          return;
+        }
         config.host.events.publish(event);
       }),
     );

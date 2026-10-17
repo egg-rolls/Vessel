@@ -17,6 +17,7 @@ import {
   type LLMProvider,
   type LLMResponse,
   MemoryContextManager,
+  MemoryEventBus,
   MemoryEventStream,
   MemoryPluginHost,
   type Message,
@@ -485,5 +486,95 @@ describe('R5 parity：delegate_task 外部语义', () => {
     expect(history.filter((event) => event.type === 'agent.closed').length).toBe(
       history.filter((event) => event.type === 'agent.spawned').length,
     );
+  });
+
+  it('F12 注入共享 Host（sameStream）时子事件仍有 subagent. 前缀与 delegateId', async () => {
+    const bus = new MemoryEventBus();
+    const runtimeHost = new CoreInProcessRuntimeHost({ events: bus });
+    const provider = new RecordingProvider([
+      delegate('p1', 'CHILD_SHARED'),
+      final('child done'),
+      final('parent done'),
+    ]);
+    const host = new MemoryPluginHost();
+    const plugin = createDelegateTaskPlugin({
+      providerFactory: () => provider,
+      model: 'test-model',
+      runtimeHost,
+    });
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost: host,
+      context: new MemoryContextManager(),
+      events: bus,
+      limits: {},
+      termination: { maxIterations: 10 },
+      plugins: [plugin],
+    });
+
+    await runtime.run('PARENT_SHARED');
+
+    const history = bus.getHistory();
+    const forwarded = history.find((event) => event.type === 'subagent.run.started');
+    if (!forwarded) throw new Error('subagent.run.started not forwarded');
+    expect((forwarded.data as Record<string, unknown>).delegateId).toBeDefined();
+
+    // 不应出现 subagent.subagent.* 回环
+    expect(history.some((event) => event.type.startsWith('subagent.subagent.'))).toBe(false);
+    // 生命周期事件已在共享流里，不应重复
+    expect(history.filter((event) => event.type === 'agent.spawned')).toHaveLength(1);
+  });
+
+  it('F13 ask_user 桥：子 ask.user.requested 到父流，应答回灌', async () => {
+    const events = new MemoryEventStream();
+    events.subscribe((event) => {
+      if (event.type !== 'ask.user.requested') return;
+      if (typeof event.data !== 'object' || event.data === null) return;
+      events.publish({
+        type: 'ask.user.answered',
+        run_id: event.run_id,
+        data: {
+          requestId: (event.data as Record<string, unknown>).requestId,
+          answers: [{ question_id: 'q1', answer: 'yes' }],
+        },
+        ts: Date.now(),
+      });
+    });
+
+    const scenario = await runScenario({
+      events,
+      input: 'PARENT_ASK',
+      setupHost(host) {
+        host.registerTool({
+          name: 'asks_user',
+          description: 'asks user',
+          inputSchema: { type: 'object', properties: {} },
+          handler: async (_args: unknown, ctx: ToolContext) => {
+            const requestId = 'ask-1';
+            ctx.events.publish({
+              type: 'ask.user.requested',
+              run_id: ctx.run_id,
+              data: { requestId, questions: [{ id: 'q1', text: 'ok?' }] },
+              ts: Date.now(),
+            });
+            const answer = await ctx.events.waitFor('ask.user.answered', {
+              requestId,
+              timeout: 5000,
+            });
+            return `answered:${JSON.stringify(answer)}`;
+          },
+        });
+      },
+      responses: [
+        delegate('p1', 'CHILD_ASK'),
+        call('c1', 'asks_user', {}),
+        final('child done'),
+        final('parent done'),
+      ],
+    });
+
+    const childSecond = scenario.provider.requests[2] ?? [];
+    expect(lastToolContent(childSecond)).toContain('answered:');
   });
 });
