@@ -272,18 +272,28 @@ describe('gateway durable endpoints', () => {
     expect(resumed).toEqual(['run-a']);
   });
 
-  it('returns run_already_running for concurrent resumes', async () => {
+  it('reserves the run before awaiting store.load (concurrent race)', async () => {
     const store = makeStore([checkpoint('run-a')]);
-    let release: () => void = () => {};
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
+    const originalLoad = store.load.bind(store);
+    let releaseLoad: () => void = () => {};
+    const loadGate = new Promise<void>((resolve) => {
+      releaseLoad = resolve;
     });
-    const gw = start(store, () => gate);
+    store.load = async (runId) => {
+      await loadGate;
+      return originalLoad(runId);
+    };
+
+    let adapterCalls = 0;
+    const gw = start(store, () => {
+      adapterCalls += 1;
+    });
 
     const first = fetch(`${gw.url}/v1/durable/runs/run-a/resume`, {
       method: 'POST',
       headers: auth(gw),
     });
+    // 第一个请求已占位、正在 await store.load；此时第二个请求必须被拒绝。
     await sleep(20);
     const second = await fetch(`${gw.url}/v1/durable/runs/run-a/resume`, {
       method: 'POST',
@@ -294,8 +304,60 @@ describe('gateway durable endpoints', () => {
       'run_already_running',
     );
 
-    release();
+    releaseLoad();
     expect((await first).status).toBe(202);
+    expect(adapterCalls).toBe(1);
+  });
+
+  it('releases the reservation when the run is unknown so a retry can succeed', async () => {
+    const store = makeStore();
+    let adapterCalls = 0;
+    const gw = start(store, () => {
+      adapterCalls += 1;
+    });
+
+    const missing = await fetch(`${gw.url}/v1/durable/runs/run-a/resume`, {
+      method: 'POST',
+      headers: auth(gw),
+    });
+    expect(missing.status).toBe(404);
+
+    store.checkpoints.set('run-a', checkpoint('run-a'));
+    const retry = await fetch(`${gw.url}/v1/durable/runs/run-a/resume`, {
+      method: 'POST',
+      headers: auth(gw),
+    });
+    expect(retry.status).toBe(202);
+    expect(adapterCalls).toBe(1);
+  });
+
+  it('releases the reservation when the adapter fails so a retry can succeed', async () => {
+    const store = makeStore([checkpoint('run-a')]);
+    let fail = true;
+    let adapterCalls = 0;
+    const gw = start(store, () => {
+      if (fail) {
+        throw Object.assign(new Error('run is busy'), { code: 'run_already_running' });
+      }
+      adapterCalls += 1;
+    });
+
+    const first = await fetch(`${gw.url}/v1/durable/runs/run-a/resume`, {
+      method: 'POST',
+      headers: auth(gw),
+    });
+    expect(first.status).toBe(409);
+    expect(((await first.json()) as { error: { code: string } }).error.code).toBe(
+      'run_already_running',
+    );
+
+    fail = false;
+    const retry = await fetch(`${gw.url}/v1/durable/runs/run-a/resume`, {
+      method: 'POST',
+      headers: auth(gw),
+    });
+    expect(retry.status).toBe(202);
+    expect(adapterCalls).toBe(1);
   });
 
   it('maps core RunResumeError codes', async () => {
