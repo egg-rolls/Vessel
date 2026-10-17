@@ -112,6 +112,10 @@ export class InProcessRuntimeHost implements RuntimeHost {
     return this.port.send(message);
   }
 
+  deliver(message: TeamMessage): Promise<void> {
+    return this.port.deliver(message);
+  }
+
   inbox(id: string, cursor?: string): Promise<InboxPage> {
     return this.port.inbox(id, cursor);
   }

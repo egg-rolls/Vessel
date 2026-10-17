@@ -1,13 +1,13 @@
 # Vessel
 
-> 自组织 Agent Harness。极简核心。两个插槽。一个通用循环。填 Key 即跑。
+> 可嵌入的多 agent 平台 runtime + 参考 harness 外壳。极简核心。两个插槽。一个通用循环。填 Key 即跑。
 
 [![Status: alpha](https://img.shields.io/badge/status-alpha-orange)](#状态)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](#许可证)
 
 ## 这是什么
 
-Vessel 是一个**自组织 Agent Harness**——不是给你 50 个工具的 Agent，而是一个**只给最必要工具、其余能力由模型自己组合出来**的 Agent。
+Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（单 agent loop + 9 接口 + 2 插槽），TUI / CLI / Web / Gateway 是参考 harness 外壳。它不是给你 50 个工具的 Agent，而是一个**只给最必要工具、其余能力由模型自己组合出来**的 Agent。
 
 | | 传统 Agent 工具 | Vessel |
 |---|---------------|--------|
@@ -27,6 +27,8 @@ Vessel 是一个**自组织 Agent Harness**——不是给你 50 个工具的 Ag
 ## 状态
 
 **alpha。Phase 0 / Phase 1 实现中。**
+
+**0.2 方向（planned）：** 多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports 是 0.2 规划，**尚未发布**；`AgentRuntime` 仍是单 agent loop，Host 只包在它外面，不重写循环。当前运行与发布行为仍是 0.1 的单 agent runtime。边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 与 [docs/ADR.md](docs/ADR.md) ADR-037。
 
 **已落地的包**（bun workspaces monorepo）：
 
@@ -94,6 +96,8 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 **语言空间是唯一的执行面。** Vessel 做两件事：把世界折成语言（system prompt + 消息 + 工具 schema），把语言折回世界（解析 tool_calls → 执行 → 结果折回消息）。
 
+> 0.2 的 planned 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14；本小节只描述**当前已实现**的 0.1 行为。
+
 - **9 个接口 + 1 个循环 + 2 个插槽**：`LLMProvider` / `ContextManager` / `EventStream` / `ToolDefinition` / `SessionBackend` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` + `PluginHost`。两个插槽是**工具**（`PluginHost` 是唯一的工具注册表）与**知识**（`ContextManager`）。
 - **core 不认识业务概念**：不认 skills、不认记忆、不认资产。任何要进语言空间的文本都经 `RunOptions.messages` 注入，core 只负责按序放进消息数组。
 
@@ -144,6 +148,7 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 ```
 
 - 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`。
+- 可用 `VESSEL_GATEWAY_TOKEN` 固定 token；优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。未设置时每次启动自动生成。
 - 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单。
 - 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
@@ -164,6 +169,8 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 以下能力**尚未实现**，明确不在本期范围：
 
+- **多 agent Kernel（Host / Scheduler / Transport）** —— `planned（0.2，未实现）`；边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 / [docs/ADR.md](docs/ADR.md) ADR-037。
+- **模块 subpath exports** —— `planned（0.2，未实现）`；0.2 只做包内模块，不拆包。
 - **MCP** —— 本期不做。工具集里没有 MCP 客户端；接外部系统先用 `bash`（`curl` / CLI）顶。
 - **workflow / durable execution / evals** —— 未开始。
 - **Agent team 跨进程 / 跨节点** —— 0.1.0 只有进程内原型（`team.enabled: true` 显式开启）；gateway 的 `team.*` 为 0.2 草案，返回 `method_not_allowed`。

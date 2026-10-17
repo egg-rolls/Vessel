@@ -32,6 +32,8 @@ import type {
 export interface TeamHostPort {
   spawn(spec: AgentSpec): Promise<AgentStatus>;
   send(message: TeamMessage): Promise<void>;
+  /** 直接投递到邮箱（不做成员校验；用于结果/外部消息） */
+  deliver(message: TeamMessage): Promise<void>;
   inbox(id: string, cursor?: string): Promise<InboxPage>;
   cancel(id: string): Promise<void>;
   status(id?: string): Promise<AgentStatus | AgentStatus[]>;
@@ -64,7 +66,7 @@ function toLegacyStatus(status: CoreAgentStatus): AgentStatus {
 }
 
 /** 旧 TeamMessage → core AgentMessage（reply_to → replyTo） */
-function toCoreMessage(message: TeamMessage): CoreAgentMessage {
+export function toCoreMessage(message: TeamMessage): CoreAgentMessage {
   return {
     id: message.id,
     from: message.from,
@@ -77,7 +79,7 @@ function toCoreMessage(message: TeamMessage): CoreAgentMessage {
 }
 
 /** core AgentMessage → 旧 TeamMessage（replyTo → reply_to，对外 JSON 不变） */
-function toLegacyMessage(message: CoreAgentMessage): TeamMessage {
+export function toLegacyMessage(message: CoreAgentMessage): TeamMessage {
   return {
     id: message.id,
     from: message.from,
@@ -103,13 +105,20 @@ export class CoreHostAdapter implements TeamHostPort {
   private readonly legacyEvents?: EventStream;
   /** 是否拥有 host 的生命周期：注入的共享 Host 不能被插件关闭 */
   private readonly ownsHost: boolean;
+  /** 结果投递钩子：跨进程路由时替换默认的本地 Host.send */
+  private readonly deliverResultHook?: (message: TeamMessage) => Promise<void>;
 
   constructor(
     private readonly host: CoreRuntimeHost,
-    options: { events?: EventStream; ownsHost?: boolean } = {},
+    options: {
+      events?: EventStream;
+      ownsHost?: boolean;
+      deliverResult?: (message: TeamMessage) => Promise<void>;
+    } = {},
   ) {
     this.legacyEvents = options.events;
     this.ownsHost = options.ownsHost ?? false;
+    this.deliverResultHook = options.deliverResult;
   }
 
   async spawn(spec: AgentSpec): Promise<AgentStatus> {
@@ -153,6 +162,11 @@ export class CoreHostAdapter implements TeamHostPort {
       kind: message.kind,
     });
     if (message.kind === 'task') void this.processTask(target, message);
+  }
+
+  /** 直接投递到任意邮箱（含 owner 等非成员），不触发 task 执行 */
+  async deliver(message: TeamMessage): Promise<void> {
+    await this.host.send(toCoreMessage(message));
   }
 
   async inbox(id: string, cursor?: string): Promise<InboxPage> {
@@ -233,18 +247,23 @@ export class CoreHostAdapter implements TeamHostPort {
     content: string,
     failed: boolean,
   ): Promise<void> {
+    const result: TeamMessage = {
+      id: randomUUID(),
+      from: fromId,
+      to: request.from,
+      kind: 'result',
+      content,
+      reply_to: request.id,
+      ts: Date.now(),
+    };
     try {
-      await this.host.send({
-        id: randomUUID(),
-        from: fromId,
-        to: request.from,
-        kind: 'result',
-        content,
-        replyTo: request.id,
-        ts: Date.now(),
-      });
+      if (this.deliverResultHook) {
+        await this.deliverResultHook(result);
+      } else {
+        await this.host.send(toCoreMessage(result));
+      }
     } catch {
-      // 发送者地址不可达（例如跨进程未注入 transport）：结果丢弃，不影响成员状态
+      // 发送者地址不可达（例如跨进程 transport 失败）：结果丢弃，不影响成员状态
     }
     this.publish('team.message.received', {
       messageId: request.id,
@@ -282,6 +301,10 @@ export class LegacyHostAdapter implements TeamHostPort {
   }
 
   send(message: TeamMessage): Promise<void> {
+    return this.host.send(message);
+  }
+
+  deliver(message: TeamMessage): Promise<void> {
     return this.host.send(message);
   }
 

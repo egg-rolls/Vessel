@@ -57,6 +57,12 @@ jobs:
       - name: Check dependency direction
         run: bun run scripts/check-deps.ts
 
+      - name: Smoke subpath exports
+        run: bun run scripts/smoke-subpaths.ts
+
+      - name: Check docs consistency
+        run: bun run scripts/check-docs.ts
+
   # ── 跨平台（PR 只跑 ubuntu，main/release 跑全矩阵）──
   cross-platform:
     name: Cross Platform (${{ matrix.os }})

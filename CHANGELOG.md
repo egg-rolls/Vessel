@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+### Added
+
+- 0.2（未发布）：`@vessel/core` Kernel——`RuntimeHost` / `AgentHandle` / `RunHandle` / `Scheduler` / `EventBus` / `Cancellation` / `Limits`，以及 `createRuntime()`。
+- 0.2（未发布）：`@vessel/core` subpath exports——`context` / `observability` / `kernel` / `policy` / `provider` / `session` / `transport` / `types`；根入口保持兼容。
+- 0.2（未发布）：in-process `Transport`；gateway loopback transport 与 `team.*` 协议。
+- 0.2（未发布）：`team` / `delegate_task` 共用 Host；team 仍默认 off、显式 opt-in。
+
+### Changed
+
+- 0.2（未发布）：定位调整为「可嵌入的多 agent 平台 runtime + 参考 harness 外壳」（ADR-037）。
+- 0.2（未发布）：`AgentRuntime` 仍是单 agent loop；Host 包在它外面，不重写 loop。
+
 ## [0.1.0] - 2026-10-17
 
 ### Added

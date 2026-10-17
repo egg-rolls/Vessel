@@ -510,4 +510,4 @@
   - 代价：Host / Scheduler / Transport 带来生命周期、并发、背压与测试复杂度；0.2 仍为 pre-1.0，本机 / loopback 之外不做承诺。
   - `delegate_task` 改为 Host 上的临时成员，工具名与语义保持不变；`@vessel/team` 的 `InProcessRuntimeHost` 降级为兼容适配层并在 0.3 移除。
 - **对 ADR-015 的关系（局部 supersede）**：ADR-015 的决策 3 中有一条「A2A / 多 agent / 树搜索 → 工具（handler 内部 spawn 子 runtime）」。本 ADR **只取代这一条中「多 agent 只能/应当在工具 handler 内 spawn」作为唯一实现方式的表述**；该 bullet 作为 0.1 的过渡解释仍成立。**ADR-015 的主结论——「不需要 `LoopStrategy` 抽象，工具调用循环保持通用」——继续有效，本 ADR 不废止 ADR-015。**
-- **关联**：局部 supersede ADR-015 的上述单条；保持 ADR-003（插件不进构造函数）、ADR-004（唯一扩展机制）、ADR-012/017（core 小）、ADR-030（事件名开放）、ADR-034（极简核心）、ADR-036（gateway 传输边界）、ADR-038（reasoning 不回传事件）。架构事实见 `ARCHITECTURE.md`；0.2 规划见其「0.2 目标架构（planned）」小节。
+- **关联**：局部 supersede ADR-015 的上述单条；保持 ADR-003（插件不进构造函数）、ADR-004（唯一扩展机制）、ADR-012/017（core 小）、ADR-030（事件名开放）、ADR-034（极简核心）、ADR-036（gateway 传输边界）、ADR-038（reasoning 不回传事件）。架构事实见 `ARCHITECTURE.md`；0.2 规划见其「0.2 目标架构（planned，未发布）」小节。
