@@ -70,7 +70,6 @@ export async function listTools(): Promise<ToolsListing> {
       providerFactory: () => new MemoryLLMProvider(),
       model: config.team.model ?? config.provider?.model ?? 'mock-model',
       events: new MemoryEventStream(),
-      maxMembers: config.team.maxMembers,
       ownerId: config.team.ownerId,
       memberLimits: config.team.memberLimits,
       memberTermination: config.team.memberTermination

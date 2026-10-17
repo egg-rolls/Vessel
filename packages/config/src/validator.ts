@@ -536,7 +536,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       limits,
       permissionMode,
       readOnlyTools,
-      viaHost,
     } = config.delegate;
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
@@ -588,13 +587,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
           value: readOnlyTools,
         });
       }
-    }
-    if (viaHost !== undefined && typeof viaHost !== 'boolean') {
-      errors.push({
-        path: 'delegate.viaHost',
-        message: 'delegate.viaHost must be a boolean',
-        value: viaHost,
-      });
     }
     if (limits) validateLimits('delegate.limits', limits, errors);
     if (termination) validateTermination('delegate.termination', termination, errors);
@@ -719,19 +711,12 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 team（0.1.0 显式 opt-in，默认关闭）
   if (config.team) {
-    const { enabled, maxMembers, ownerId, model, memberLimits, memberTermination } = config.team;
+    const { enabled, ownerId, model, memberLimits, memberTermination } = config.team;
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
         path: 'team.enabled',
         message: 'team.enabled must be a boolean',
         value: enabled,
-      });
-    }
-    if (maxMembers !== undefined && (!Number.isInteger(maxMembers) || maxMembers <= 0)) {
-      errors.push({
-        path: 'team.maxMembers',
-        message: 'team.maxMembers must be a positive integer',
-        value: maxMembers,
       });
     }
     if (ownerId !== undefined && typeof ownerId !== 'string') {
@@ -845,12 +830,11 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'limits',
     'permissionMode',
     'readOnlyTools',
-    'viaHost',
   ],
   host: ['enabled', 'nodeId', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
   transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs'],
-  team: ['enabled', 'maxMembers', 'ownerId', 'model', 'memberLimits', 'memberTermination'],
+  team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: ['hostname', 'port', 'allowRemote', 'tls'],
 };

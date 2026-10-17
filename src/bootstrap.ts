@@ -217,7 +217,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   /**
    * 工厂式插件（delegate_task / team）：
-   * - host 开启：装到共享 Host（delegate 仅在 viaHost=true 时共享；team 总是共享）；
+   * - host 开启：都装到共享 Host；
    * - host 关闭：delegate 用专用 Host、team 用内嵌 Host，并告警。
    */
   const buildFactoryPlugins = (
@@ -266,7 +266,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
                 ownerRef: `${nodeId}:${config.team?.ownerId ?? 'owner'}`,
               }
             : {}),
-          maxMembers: config.team?.maxMembers,
           ownerId: config.team?.ownerId,
           memberLimits: config.team?.memberLimits,
           memberTermination: config.team?.memberTermination

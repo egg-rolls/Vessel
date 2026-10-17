@@ -193,15 +193,6 @@ describe('transport', () => {
   });
 });
 
-describe('delegate.viaHost', () => {
-  it('只接受 boolean', () => {
-    expect(errorsOf({ delegate: { viaHost: true } })).toHaveLength(0);
-    expect(
-      errorsOf({ delegate: { viaHost: 'yes' as unknown as boolean } }).map((e) => e.path),
-    ).toContain('delegate.viaHost');
-  });
-});
-
 describe('YAML 映射与未知键', () => {
   it('snake_case 映射到 camelCase', async () => {
     const configPath = tmpYaml(`
@@ -218,8 +209,6 @@ transport:
   peers_dir: /tmp/peers
   heartbeat_ms: 1000
   peer_ttl_ms: 3000
-delegate:
-  via_host: true
 `);
     const { config, validation } = await loadConfig({
       configPath,
@@ -239,7 +228,6 @@ delegate:
       heartbeatMs: 1000,
       peerTtlMs: 3000,
     });
-    expect(config.delegate?.viaHost).toBe(true);
   });
 
   it('未知顶层键报错并给建议', async () => {

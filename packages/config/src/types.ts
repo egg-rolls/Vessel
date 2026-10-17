@@ -106,8 +106,6 @@ export interface DelegateConfig {
   permissionMode?: 'bridge' | 'allow' | 'deny';
   /** deny 模式下保留的只读工具（默认 ['read']） */
   readOnlyTools?: string[];
-  /** 0.2 过渡开关：true 时 delegate_task 走 RuntimeHost 临时成员（0.3 移除） */
-  viaHost?: boolean;
 }
 
 /** Host 配置（0.2；默认关闭，关闭时走 0.1 单 agent 路径） */
@@ -204,8 +202,6 @@ export interface TransportConfig {
 export interface TeamConfig {
   /** true 才构造 createTeamPlugin（默认 false；进程内原型） */
   enabled?: boolean;
-  /** 成员上限（默认 8） */
-  maxMembers?: number;
   /** owner（主 agent）成员 ID（默认 'owner'） */
   ownerId?: string;
   /** 成员默认模型；缺省沿用主 model */
