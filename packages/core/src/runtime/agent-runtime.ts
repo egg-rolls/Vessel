@@ -4,7 +4,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { MemoryLimitChecker } from '../limits/limit-checker.js';
+import { MemoryLimitChecker } from '../limits/index.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
