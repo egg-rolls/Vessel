@@ -1,30 +1,70 @@
 /**
- * Browser gateway client —— 连接 Vessel gateway（`@vessel/serve`）。
+ * Browser gateway client —— 连接 Vessel gateway（vessel.gateway/1）。
  *
- * gateway 协议（见 packages/serve/src/gateway.ts）：
- *   - WS    `/ws?token=`     newline-delimited RunEvent JSON，连接时服务端先回放历史
- *   - REST  `GET /sessions`  → { sessions: SessionInfo[] }
- *   - REST  `POST /run` body { input, session_id? } → { output }
- *   鉴权：`?token=` 或 `Authorization: Bearer <token>`（浏览器 WS 无法带 header，故 WS 用 ?token=）
+ * 协议（见 packages/serve/src/gateway.ts）：
+ *   - WS    `/v1/events?since=<seq>`，首帧 `{kind:'auth', token}`；服务端回 `hello`
+ *   - 帧    `event` / `gap` / `res` / `ping`（见 packages/serve/src/protocol.ts）
+ *   - REST  `/v1/sessions` / `/v1/tools`（Bearer 头，仅在 WS 不可用时兜底）
+ *
+ * 浏览器默认同源（gateway 托管 dist，或 Vite proxy）；VITE_GATEWAY_URL 可覆盖。
  */
 
-import type { RunEvent, SessionInfo } from './types';
+import type {
+  AskUserAnswer,
+  GapFrame,
+  HelloInfo,
+  RunEvent,
+  RunStatus,
+  ServerFrame,
+  SessionInfo,
+  ToolInfo,
+} from './types';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
+
+export interface EventMeta {
+  seq: number;
+  jobId?: string;
+}
+
+/** 请求超时（毫秒） */
+const REQUEST_TIMEOUT_MS = 30_000;
 
 export class GatewayClient {
   private readonly baseUrl: string;
   private ws: WebSocket | null = null;
   private state: ConnectionState = 'idle';
-  private eventListeners = new Set<(e: RunEvent) => void>();
-  private stateListeners = new Set<(s: ConnectionState) => void>();
+  private helloInfo: HelloInfo | null = null;
+  private lastCloseCode: number | null = null;
 
-  constructor(baseUrl = 'http://localhost:8642') {
+  private readonly eventListeners = new Set<(event: RunEvent, meta: EventMeta) => void>();
+  private readonly stateListeners = new Set<(state: ConnectionState) => void>();
+  private readonly helloListeners = new Set<(info: HelloInfo) => void>();
+  private readonly gapListeners = new Set<(gap: GapFrame) => void>();
+  private readonly closeListeners = new Set<(code: number) => void>();
+
+  private readonly pending = new Map<
+    string,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: number }
+  >();
+
+  private connectResolve: (() => void) | null = null;
+  private connectReject: ((error: Error) => void) | null = null;
+
+  constructor(baseUrl = '') {
     this.baseUrl = baseUrl.replace(/\/+$/, '');
   }
 
   get connectionState(): ConnectionState {
     return this.state;
+  }
+
+  get protocol(): HelloInfo | null {
+    return this.helloInfo;
+  }
+
+  get closedWithCode(): number | null {
+    return this.lastCloseCode;
   }
 
   private setState(next: ConnectionState): void {
@@ -33,112 +73,273 @@ export class GatewayClient {
     for (const cb of [...this.stateListeners]) cb(next);
   }
 
-  /** 订阅连接状态变化，返回取消订阅函数 */
-  onState(cb: (s: ConnectionState) => void): () => void {
+  onState(cb: (state: ConnectionState) => void): () => void {
     this.stateListeners.add(cb);
     cb(this.state);
     return () => this.stateListeners.delete(cb);
   }
 
-  /** 订阅 RunEvent，返回取消订阅函数 */
-  onEvent(cb: (e: RunEvent) => void): () => void {
+  onEvent(cb: (event: RunEvent, meta: EventMeta) => void): () => void {
     this.eventListeners.add(cb);
     return () => this.eventListeners.delete(cb);
   }
 
-  private wsUrl(): string {
-    return `${this.baseUrl.replace(/^http/, 'ws')}/ws`;
+  onHello(cb: (info: HelloInfo) => void): () => void {
+    this.helloListeners.add(cb);
+    return () => this.helloListeners.delete(cb);
   }
 
-  connect(token: string): Promise<void> {
+  onGap(cb: (gap: GapFrame) => void): () => void {
+    this.gapListeners.add(cb);
+    return () => this.gapListeners.delete(cb);
+  }
+
+  onClose(cb: (code: number) => void): () => void {
+    this.closeListeners.add(cb);
+    return () => this.closeListeners.delete(cb);
+  }
+
+  private httpBase(): string {
+    return this.baseUrl || window.location.origin;
+  }
+
+  private wsUrl(since: number): string {
+    const http = this.httpBase();
+    const ws = http.replace(/^http/, 'ws');
+    return `${ws}/v1/events?since=${since}`;
+  }
+
+  /** 建立 WS 并完成首帧鉴权；resolve 时机是收到 hello */
+  connect(token: string, since = 0): Promise<void> {
     const tk = token.trim();
     if (!tk) return Promise.reject(new Error('token 不能为空'));
-    if (this.state === 'open' || this.state === 'connecting') return Promise.resolve();
+    if (this.state === 'open') return Promise.resolve();
+    if (this.state === 'connecting' && this.connectResolve) {
+      return new Promise<void>((resolve, reject) => {
+        const previousResolve = this.connectResolve;
+        const previousReject = this.connectReject;
+        this.connectResolve = () => {
+          previousResolve?.();
+          resolve();
+        };
+        this.connectReject = (error) => {
+          previousReject?.(error);
+          reject(error);
+        };
+      });
+    }
 
-    this.setState('connecting');
-    const ws = new WebSocket(`${this.wsUrl()}?token=${encodeURIComponent(tk)}`);
-    this.ws = ws;
-
-    // 服务端按 newline 逐条推送 JSON，单帧可能包含多条
-    ws.addEventListener('message', (ev) => {
-      const frames = String(ev.data)
-        .split('\n')
-        .filter((f) => f.trim());
-      for (const frame of frames) {
-        try {
-          const event = JSON.parse(frame) as RunEvent;
-          for (const cb of [...this.eventListeners]) cb(event);
-        } catch {
-          // 忽略非法帧
-        }
-      }
-    });
-
-    ws.addEventListener('close', () => {
-      if (this.ws !== ws) return; // 忽略过期 socket 的关闭
-      this.ws = null;
-      this.setState('closed');
-    });
+    this.close();
 
     return new Promise<void>((resolve, reject) => {
-      const onOpen = () => {
-        ws.removeEventListener('error', onError);
+      this.connectResolve = resolve;
+      this.connectReject = reject;
+      this.setState('connecting');
+      this.lastCloseCode = null;
+
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(this.wsUrl(since));
+      } catch (error) {
+        this.failConnect(error instanceof Error ? error.message : String(error));
+        return;
+      }
+      this.ws = ws;
+
+      ws.addEventListener('open', () => {
+        ws.send(JSON.stringify({ v: 1, kind: 'auth', token: tk, since }));
+      });
+
+      ws.addEventListener('message', (event) => {
+        this.handleFrame(String(event.data));
+      });
+
+      ws.addEventListener('error', () => {
+        // close 事件会带 code；这里只保证 connect 不会永远挂起。
+        if (this.state === 'connecting') this.failConnect('WebSocket 连接失败');
+      });
+
+      ws.addEventListener('close', (event) => {
+        if (this.ws !== ws) return;
+        this.ws = null;
+        this.lastCloseCode = event.code;
+        this.rejectPending(new Error(`连接已关闭（${event.code}）`));
+        const message = closeMessage(event.code);
+        if (this.state === 'connecting') {
+          this.failConnect(message);
+        } else {
+          this.setState(event.code === 1000 ? 'closed' : 'error');
+        }
+        for (const cb of [...this.closeListeners]) cb(event.code);
+      });
+    });
+  }
+
+  private failConnect(message: string): void {
+    const reject = this.connectReject;
+    this.connectResolve = null;
+    this.connectReject = null;
+    this.setState('error');
+    reject?.(new Error(message));
+  }
+
+  private handleFrame(raw: string): void {
+    let frame: ServerFrame;
+    try {
+      frame = JSON.parse(raw) as ServerFrame;
+    } catch {
+      return;
+    }
+
+    switch (frame.kind) {
+      case 'hello': {
+        this.helloInfo = {
+          protocol: frame.protocol,
+          node: frame.node,
+          from_seq: frame.from_seq,
+          latest_seq: frame.latest_seq,
+        };
         this.setState('open');
-        resolve();
-      };
-      const onError = () => {
-        ws.removeEventListener('open', onOpen);
-        this.setState('error');
-        reject(new Error(`WebSocket 连接失败（gateway 未启动或 token 无效）：${this.wsUrl()}`));
-      };
-      ws.addEventListener('open', onOpen, { once: true });
-      ws.addEventListener('error', onError, { once: true });
+        const resolve = this.connectResolve;
+        this.connectResolve = null;
+        this.connectReject = null;
+        resolve?.();
+        for (const cb of [...this.helloListeners]) cb(this.helloInfo);
+        return;
+      }
+      case 'event': {
+        for (const cb of [...this.eventListeners]) {
+          cb(frame.event, {
+            seq: frame.seq,
+            ...(frame.job_id ? { jobId: frame.job_id } : {}),
+          });
+        }
+        return;
+      }
+      case 'gap': {
+        for (const cb of [...this.gapListeners]) cb(frame);
+        return;
+      }
+      case 'res': {
+        const pending = this.pending.get(frame.id);
+        if (!pending) return;
+        this.pending.delete(frame.id);
+        window.clearTimeout(pending.timer);
+        if (frame.ok) pending.resolve(frame.result);
+        else pending.reject(new Error(`${frame.error.code}: ${frame.error.message}`));
+        return;
+      }
+      case 'ping': {
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          this.ws.send(JSON.stringify({ v: 1, kind: 'pong' }));
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  private rejectPending(error: Error): void {
+    for (const [, pending] of this.pending) {
+      window.clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+
+  /** WS 请求/响应；超时拒绝 */
+  request<T>(method: string, params?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !this.helloInfo) {
+      return Promise.reject(new Error('gateway 尚未连接'));
+    }
+    const id = crypto.randomUUID();
+    return new Promise<T>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`请求超时：${method}`));
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        timer,
+      });
+      ws.send(JSON.stringify({ v: 1, kind: 'req', id, method, params }));
     });
   }
 
   close(): void {
     const ws = this.ws;
     this.ws = null;
-    ws?.close();
-    this.setState('closed');
+    this.helloInfo = null;
+    this.rejectPending(new Error('连接已关闭'));
+    if (ws) {
+      ws.close();
+    }
+    if (this.state !== 'idle') this.setState('closed');
   }
 
-  private async request<T>(path: string, token: string, init: RequestInit = {}): Promise<T> {
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        ...init,
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-          ...(init.headers ?? {}),
-        },
-      });
-    } catch {
-      // 网络层失败（连接被拒 / DNS / CORS）——通常是 gateway 未启动
-      throw new Error(`无法连接 gateway（${this.baseUrl}）——请确认 gateway 已启动且地址正确`);
-    }
+  // ── 语义方法 ──────────────────────────────────
 
-    if (res.status === 401) {
-      throw new Error('鉴权失败（401）——token 错误或已失效');
-    }
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`${path} ${res.status}：${text.slice(0, 200)}`);
-    }
-    return (await res.json()) as T;
+  submitRun(
+    input: string,
+    sessionId?: string,
+  ): Promise<{ run_id: string; status: RunStatus['status']; queue_position?: number }> {
+    return this.request('run.submit', {
+      input,
+      ...(sessionId ? { session_id: sessionId } : {}),
+    });
   }
 
-  async fetchSessions(token: string): Promise<SessionInfo[]> {
-    const body = await this.request<{ sessions?: SessionInfo[] }>('/sessions', token);
+  cancelRun(runId: string): Promise<{ cancelled: boolean }> {
+    return this.request('run.cancel', { run_id: runId });
+  }
+
+  getRun(runId: string): Promise<RunStatus> {
+    return this.request('run.get', { run_id: runId });
+  }
+
+  async listSessions(): Promise<SessionInfo[]> {
+    const body = await this.request<{ sessions?: SessionInfo[] }>('sessions.list');
     return body.sessions ?? [];
   }
 
-  async run(token: string, input: string, sessionId?: string): Promise<string> {
-    const body = await this.request<{ output?: string }>('/run', token, {
-      method: 'POST',
-      body: JSON.stringify({ input, ...(sessionId ? { session_id: sessionId } : {}) }),
+  async listTools(): Promise<ToolInfo[]> {
+    const body = await this.request<{ tools?: ToolInfo[] }>('tools.list');
+    return body.tools ?? [];
+  }
+
+  async respondPermission(
+    requestId: string,
+    decision: 'allow' | 'deny',
+    remember = false,
+  ): Promise<void> {
+    await this.request('permission.respond', {
+      request_id: requestId,
+      decision,
+      ...(remember ? { remember: true } : {}),
     });
-    return body.output ?? '';
+  }
+
+  /** 回答 ask_user；answers=[] 表示取消 */
+  async respondAsk(requestId: string, answers: AskUserAnswer[]): Promise<void> {
+    await this.request('ask.respond', { request_id: requestId, answers });
+  }
+}
+
+/** WS close code → 用户可读信息 */
+function closeMessage(code: number): string {
+  switch (code) {
+    case 4400:
+      return '协议版本不兼容（需要 vessel.gateway/1）';
+    case 4401:
+      return '鉴权失败（token 错误或已失效）';
+    case 1001:
+      return 'gateway 已停止';
+    case 1006:
+      return '无法连接 gateway（未启动或地址错误）';
+    default:
+      return `连接已关闭（${code}）`;
   }
 }
