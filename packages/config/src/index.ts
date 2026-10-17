@@ -8,7 +8,10 @@
 
 export {
   DEFAULT_CONFIG,
+  DEFAULT_DURABLE_OPTIONS,
+  DEFAULT_MCP_SERVER_OPTIONS,
   DEFAULT_SCHEDULER_OPTIONS,
+  DEFAULT_SERVE_OPTIONS,
   DEFAULT_TRANSPORT_OPTIONS,
   defaultModelForProvider,
   PROVIDER_DEFAULT_MODELS,
@@ -21,7 +24,19 @@ export {
   loadConfigFromFile,
   loadUserConfig,
   mergeConfig,
+  preserveMcpMapKeys,
+  type SnakeToCamelOptions,
+  snakeToCamel,
 } from './loader.js';
 export * from './types.js';
 export { deepMerge } from './utils.js';
-export { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
+export {
+  findUnknownKeys,
+  findUnknownNestedKeys,
+  isLoopbackHostname,
+  KNOWN_BLOCK_KEYS,
+  KNOWN_CONFIG_KEYS,
+  type UnknownNestedKey,
+  validateConfig,
+  validateServeSettings,
+} from './validator.js';

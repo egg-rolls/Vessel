@@ -3,7 +3,14 @@
  * @module @vessel/config
  */
 
-import type { SchedulerConfig, TransportConfig, VesselConfig } from './types.js';
+import type {
+  DurableConfig,
+  McpServerConfig,
+  SchedulerConfig,
+  ServeConfig,
+  TransportConfig,
+  VesselConfig,
+} from './types.js';
 
 /**
  * provider-aware 默认 model：只给已知 provider 设默认。
@@ -41,6 +48,44 @@ export const DEFAULT_TRANSPORT_OPTIONS: Required<
   peersDir: '~/.vessel/peers',
   heartbeatMs: 5000,
   peerTtlMs: 15000,
+};
+
+/**
+ * 0.3 MCP server 默认值。
+ * 不写入 DEFAULT_CONFIG：未配置 `mcp_servers` 时不加载 MCP 插件。
+ */
+export const DEFAULT_MCP_SERVER_OPTIONS: Required<
+  Pick<McpServerConfig, 'enabled' | 'connectTimeoutMs' | 'toolTimeoutMs' | 'toolPrefix'>
+> = {
+  enabled: true,
+  connectTimeoutMs: 10000,
+  toolTimeoutMs: 60000,
+  toolPrefix: true,
+};
+
+/**
+ * 0.3 durable 默认值。
+ * 不写入 DEFAULT_CONFIG：默认关闭，关闭时不创建 RunStore、0.2 行为不变。
+ */
+export const DEFAULT_DURABLE_OPTIONS: Required<
+  Pick<DurableConfig, 'enabled' | 'backend' | 'path' | 'checkpointEvery'>
+> = {
+  enabled: false,
+  backend: 'file',
+  path: '~/.vessel/runs',
+  checkpointEvery: 'iteration',
+};
+
+/**
+ * 0.3 serve 默认值（仅监听回环、明文）。
+ * 不写入 DEFAULT_CONFIG：未配置时 gateway 仍走原有默认常量。
+ */
+export const DEFAULT_SERVE_OPTIONS: Required<
+  Pick<ServeConfig, 'hostname' | 'port' | 'allowRemote'>
+> = {
+  hostname: '127.0.0.1',
+  port: 8642,
+  allowRemote: false,
 };
 
 /** 安全默认值 */

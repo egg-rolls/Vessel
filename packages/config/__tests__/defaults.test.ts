@@ -187,12 +187,13 @@ describe('未知键与新增 schema', () => {
 
   it('team 块校验（enabled 显式 opt-in）', async () => {
     const ok = await loadConfig({
-      configPath: tmpYaml('team:\n  enabled: true\n  max_members: 4\n  owner_id: lead\n'),
+      configPath: tmpYaml('team:\n  enabled: true\n  owner_id: lead\n'),
       userConfigPath: missingPath(),
     });
     expect(ok.validation.errors).toHaveLength(0);
     expect(ok.config.team?.enabled).toBe(true);
 
+    // 0.3 删除 max_members：旧配置按未知键报错。
     const bad = await loadConfig({
       configPath: tmpYaml('team:\n  max_members: 0\n'),
       userConfigPath: missingPath(),

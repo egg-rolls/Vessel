@@ -22,6 +22,12 @@ describe('parseArgs - 默认与 REPL', () => {
       pipeMode: false,
       sessionArg: null,
       servePort: null,
+      servePortExplicit: false,
+      serveHost: null,
+      allowRemote: false,
+      tlsCert: null,
+      tlsKey: null,
+      resumeRunArg: null,
       help: false,
       version: false,
       tools: false,
@@ -66,20 +72,82 @@ describe('parseArgs - headless', () => {
 
 describe('parseArgs - serve', () => {
   it('--serve 省略端口用默认 8642', () => {
-    expect(ok(['--serve']).servePort).toBe(DEFAULT_SERVE_PORT);
+    const args = ok(['--serve']);
+    expect(args.servePort).toBe(DEFAULT_SERVE_PORT);
+    expect(args.servePortExplicit).toBe(false);
   });
 
   it('--serve 接受显式端口', () => {
-    expect(ok(['--serve', '9000']).servePort).toBe(9000);
+    const args = ok(['--serve', '9000']);
+    expect(args.servePort).toBe(9000);
+    expect(args.servePortExplicit).toBe(true);
   });
 
   it('--serve 0 表示系统分配端口', () => {
-    expect(ok(['--serve', '0']).servePort).toBe(0);
+    const args = ok(['--serve', '0']);
+    expect(args.servePort).toBe(0);
+    expect(args.servePortExplicit).toBe(true);
   });
 
   it('--serve 端口非法时报错', () => {
     expect(err(['--serve', 'abc'])).toContain('Invalid port');
     expect(err(['--serve', '70000'])).toContain('Invalid port');
+  });
+
+  it('--serve-host / --allow-remote / --tls-* 只在 --serve 下合法', () => {
+    const args = ok([
+      '--serve',
+      '--serve-host',
+      '0.0.0.0',
+      '--allow-remote',
+      '--tls-cert',
+      'cert.pem',
+      '--tls-key',
+      'key.pem',
+    ]);
+    expect(args.serveHost).toBe('0.0.0.0');
+    expect(args.allowRemote).toBe(true);
+    expect(args.tlsCert).toBe('cert.pem');
+    expect(args.tlsKey).toBe('key.pem');
+
+    expect(err(['--serve-host', '0.0.0.0'])).toContain('requires --serve');
+    expect(err(['--allow-remote'])).toContain('requires --serve');
+    expect(err(['--tls-cert', 'cert.pem'])).toContain('--tls-cert and --tls-key');
+  });
+
+  it('--serve-host / --tls-* 缺少值时报错', () => {
+    expect(err(['--serve', '--serve-host'])).toContain('Missing value for --serve-host');
+    expect(err(['--serve', '--tls-cert'])).toContain('Missing value for --tls-cert');
+    expect(err(['--serve', '--tls-cert', 'a', '--tls-key'])).toContain(
+      'Missing value for --tls-key',
+    );
+  });
+});
+
+describe('parseArgs - resume-run', () => {
+  it('无参 = 列出可恢复 run', () => {
+    expect(ok(['--resume-run']).resumeRunArg).toBe('');
+  });
+
+  it('有参 = 恢复指定 run', () => {
+    expect(ok(['--resume-run', 'run-1']).resumeRunArg).toBe('run-1');
+  });
+
+  it('与 --run/--pipe/--serve/--session/--tools 互斥', () => {
+    for (const argv of [
+      ['--resume-run', 'run-1', '--run', 'hi'],
+      ['--resume-run', '--pipe'],
+      ['--resume-run', '--serve'],
+      ['--resume-run', 'run-1', '--session', 's'],
+      ['--resume-run', '--tools'],
+    ]) {
+      expect(err(argv)).toContain('--resume-run cannot be combined with');
+    }
+  });
+
+  it('--help / --version 仍可组合（帮助优先）', () => {
+    expect(ok(['--resume-run', '--help']).help).toBe(true);
+    expect(ok(['--resume-run', '--version']).version).toBe(true);
   });
 });
 

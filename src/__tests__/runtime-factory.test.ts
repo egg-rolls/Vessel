@@ -15,6 +15,7 @@ import type {
   SessionBackend,
   Transport,
 } from '../../packages/core/src/index';
+import { MemoryRunStore } from '../../packages/core/src/index';
 import {
   buildOwnerSpec,
   type HostModule,
@@ -181,6 +182,30 @@ describe('tryCreateHostRuntime', () => {
       maxQueueSize: DEFAULT_SCHEDULER_OPTIONS.maxQueueSize,
       perAgentSerial: false,
     });
+  });
+
+  it('durable：runStore 透传给 createRuntime；未提供时不出现', async () => {
+    const store = new MemoryRunStore();
+    const host = fakeHost();
+    const captured: { options?: RuntimeOptions } = {};
+    await tryCreateHostRuntime({
+      config: {},
+      owner,
+      sessionId: 's1',
+      runStore: store,
+      loadHostModule: async () => loaderFor(host, captured),
+    });
+    expect(captured.options?.runStore).toBe(store);
+
+    const host2 = fakeHost();
+    const captured2: { options?: RuntimeOptions } = {};
+    await tryCreateHostRuntime({
+      config: {},
+      owner,
+      sessionId: 's1',
+      loadHostModule: async () => loaderFor(host2, captured2),
+    });
+    expect(captured2.options?.runStore).toBeUndefined();
   });
 
   it('limits：run/agent 同源，host.limits 缺省关闭', async () => {

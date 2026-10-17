@@ -19,7 +19,11 @@ const PLUGINS_DIR = fileURLToPath(new URL('../plugins', import.meta.url));
  * 默认导出是**工厂函数**而非 Plugin 实例的插件——它们需要装配层注入运行时依赖
  * （如 delegate-task 需要 provider 工厂与 model），由 bootstrap 自行构造。
  */
-export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['delegate-task', 'team']);
+export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
+  'delegate-task',
+  'team',
+  'mcp-client',
+]);
 
 export interface PluginDescriptor {
   /** 短名（package.json name 去掉 scope），即调用 `load()` 时用的 key */
@@ -73,6 +77,23 @@ export class PluginLoader {
     return this.list()
       .filter((d) => d.category !== 'provider' && !FACTORY_PLUGINS.has(d.name))
       .map((d) => d.name);
+  }
+
+  /**
+   * 原样加载插件模块（不要求 default 是 Plugin）。
+   * 工厂式插件（如 `@vessel/mcp-client` 的 `createMcpPlugin`）由装配层自行构造。
+   * 未知插件或 import 失败返回 null。
+   */
+  async loadModule(name: string): Promise<unknown | null> {
+    const descriptor = this.list().find((d) => d.name === name);
+    if (!descriptor) return null;
+
+    try {
+      return await import(pathToFileURL(descriptor.entry).href);
+    } catch (e) {
+      console.warn(`Failed to load plugin module "${name}": ${e instanceof Error ? e.message : e}`);
+      return null;
+    }
   }
 
   /** 加载插件；未知插件、或默认导出不是 Plugin 时返回 null */
