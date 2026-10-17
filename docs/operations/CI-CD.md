@@ -21,7 +21,7 @@
 | `cross-platform` | matrix：ubuntu / windows / macos | `bun install --frozen-lockfile` → `bun run typecheck` → `bun test`；**PR 只跑 ubuntu**，`main` / `release/**` 跑全矩阵 |
 | `web` | ubuntu-latest | `apps/web`：`npm ci` → `npm run build`（Node 22，npm cache） |
 | `examples` | ubuntu-latest | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（关闭上轮 typecheck 盲区） |
-| `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（全部 `VESSEL_MOCK=1`） |
+| `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：`--version`、`--tools`、headless 文本、stdin、`@file`、`/help`、`/exit`（除 `--version` 外均带 `VESSEL_MOCK=1`） |
 
 ### 通用规则
 
@@ -45,7 +45,7 @@
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
-   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 7 个插件包。
+   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 9 个插件包（含 `@vessel/team`）。
    - **不发布根 CLI**（`private: true`，无 `bin`）。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。
    - `npm publish --provenance --access public`（OIDC provenance）。
@@ -83,22 +83,25 @@
 
 ## 3. 用户侧 CD / 自动更新
 
-> 契约已定；**客户端（`vessel update`）尚未实现**。实现前 README 明确标注。
+> 0.1.0 已实现 **check-only** 客户端：`vessel update [--check] [--channel latest|beta] [--json] [--force]`。
+> **不下载、不校验、不自替换**。版本源是根 `package.json`（`--version` 同源）。
 
 | 安装方式 | 更新方式 |
 |---|---|
-| npm / bun 全局安装 | `vessel update` 提示升级命令；用户执行 `npm i -g <pkg>@latest` |
+| npm / bun 全局安装 | `vessel update` 提示 `bun add -g vessel@<v>`（或 `npm i -g vessel@<v>`）；由用户执行 |
 | 独立二进制 | **0.1.0 不提供**（ADR-006 继续有效）；0.2 再评估 |
 | 源码运行 | `vessel update --check` 只提示新版本，不自动改 git 工作区 |
 
 行为：
 
-- REPL 启动后台检查（每天最多一次，可配置关闭），只提示、不打断。
-- 稳定通道：GitHub `releases/latest` 的 `latest.json`。
-- 预发布通道：GitHub API 取最新 prerelease 的 `latest.json`；`--channel beta` 或 `VESSEL_CHANNEL=beta`。
-- 断网、404、JSON 解析失败、版本不合法：静默跳过，不影响启动。
-- 不自动执行破坏性更新。
-- 版本比较使用 CLI 自身版本（`asm` 需提供 `--version` 或从 `package.json` 读取）。
+- 退出码：`0` 成功（含已最新）；`1` 网络/清单失败；`2` 通道或参数错误。
+- 稳定通道：`<source>/releases/latest/download/latest.json`。
+- 预发布通道：GitHub releases API 选最新 `prerelease` 的 `latest.json` 资产；`--channel beta` 或 `VESSEL_CHANNEL=beta`。
+- 清单源：默认 `https://github.com/egg-rolls/Vessel`；可用 `VESSEL_UPDATE_SOURCE` 或 `update.source` 覆盖（直连 `.json` 或仓库基址，便于测试/镜像）。
+- 后台检查：仅交互 TTY、非 mock、`update.autoCheck !== false`、未设 `VESSEL_NO_UPDATE_CHECK`；24h 节流，缓存 `~/.vessel/update-check.json`；1.5s 超时；失败静默，不影响启动。
+- 有新版本时发布开放事件 `update.available`：`{ current, latest, channel, installHint }`，`run_id: 'system'`；发布前延迟 300ms 给 Ink 订阅者挂载；TUI 只渲染一行提示。
+- 断网、404、JSON 解析失败、版本不合法：静默跳过。
+- **不自动执行破坏性更新**；0.1.0 无下载/校验/自替换代码。
 
 ## 4. 分支保护与权限
 

@@ -16,7 +16,7 @@
 - [ ] `bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿。
 - [ ] `cd apps/web && npm ci && npm run build` 成功。
 - [ ] `CHANGELOG.md` 已更新（Unreleased → `## [<version>] - YYYY-MM-DD`）。
-- [ ] 所有可发布 workspace `package.json` 版本一致（`@vessel/*` 与插件包）。
+- [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致（`@vessel/*` 与 9 个插件包）。
 - [ ] `release/*` 已合并到 `main`，且 `main` CI 绿。
 - [ ] 仓库 Secrets 已配置 `NPM_TOKEN`。
 
@@ -36,7 +36,7 @@ bun run scripts/version.ts 0.1.0 --dry-run
 规则：
 
 - `--check` 同时校验所有可发布包版本一致，以及 `CHANGELOG.md` 含 `## [<version>]`。
-- 根 `package.json` 是 private 包，`version` 字段归 `asm` 维护；缺失时脚本告警并跳过。补上后自动纳入校验。
+- 根 `package.json` 的 `version`（0.1.0 已加入）与所有 workspace 包一起校验；`--version` 也从这里读取。
 - 写模式会机械改写各包 `package.json`，**只由 1 在发布收口执行**；日常开发不运行写模式。
 - 脚本不做 git 操作（commit / tag 仍手工执行）。
 
@@ -71,6 +71,8 @@ git push origin v0.1.0
 5. **不构建二进制、不产出 sha256**。
 
 发布顺序：`verify → quality → publish-npm → github-release`。
+
+发布后用户侧：`vessel update --check` 读取 `latest.json`，只提示版本与安装命令；0.1.0 不做下载/自替换。
 
 ## 5. 预发布
 

@@ -37,7 +37,7 @@ Vessel 是一个**自组织 Agent Harness**——不是给你 50 个工具的 Ag
 | **`@vessel/config`** | 0.1.0 | 声明式 YAML 配置与 schema 校验（未知键报错） |
 | **`@vessel/permission`** | 0.1.0 | 共享权限原语：工具经事件流等用户授权 |
 | **`@vessel/serve`** | 0.1.0 | 常驻服务（gateway，`--serve` 模式） |
-| `apps/web` | — | 网页控制台（实验性） |
+| `apps/web` | 0.1.0 | 浏览器控制台：时间线、运行取消、权限弹窗、ask_user（`vessel.gateway/1`） |
 
 - CI：`.github/workflows/ci.yml`（质量门禁、跨平台矩阵、web 构建、examples 类型检查、mock 冒烟）。
 - ⚠️ **0.1.0 尚未发布**：库包版本为 `0.1.0`，发布流程已就绪；当前请从源码运行。
@@ -76,6 +76,9 @@ bun run src/cli.ts --run @prompt.md            # 从文件读 prompt（.json = �
 echo "翻译这句话" | bun run src/cli.ts --run    # 从管道读输入
 bun run src/cli.ts --session <id> --run "..."   # 续接指定会话
 bun run src/cli.ts --serve                      # 纯 serve 常驻模式（不进 REPL）
+bun run src/cli.ts --version                    # 显示版本（读根 package.json）
+bun run src/cli.ts --tools                      # 列出当前配置下的工具（不需要 Key）
+bun run src/cli.ts update --check               # 检查新版本（只提示，不自替换）
 bun test                                        # 跑测试
 ```
 
@@ -96,7 +99,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 ## 工具集
 
-运行期 `/tools` 列出 **5 个**：三个来自 `plugins/tools/basic-tools` 的**能力工具**，加两个由装配层注册的**接缝工具**。
+默认运行期 **4 个**工具：三个来自 `plugins/tools/basic-tools` 的**能力工具**，加装配层注册的 `delegate_task`。`ask_user` 只在「实际进入 REPL 且 stdin 是 TTY」时注册；`team_*`（5 个）只在 `team.enabled: true` 时注册。
 
 **能力工具（3）—— 模型干活就靠这三个：**
 
@@ -106,14 +109,15 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 | `read` | 读文件，带行号，支持 `offset` / `limit` |
 | `edit` | 精确字符串替换写文件，`old_string` 必须唯一匹配 |
 
-**接缝工具（2）—— 装配层注册，不是能力：**
+**接缝工具 / 可选工具——装配层注册，不是能力：**
 
-| 工具 | 干什么 |
-|---|---|
-| `ask_user` | 交互模式下向用户提问。**仅 REPL 注册** |
-| `delegate_task` | 派发子 agent 处理子任务，只回收最终文本 |
+| 工具 | 何时注册 | 干什么 |
+|---|---|---|
+| `delegate_task` | 默认（`delegate.enabled: false` 时关闭） | 派发子 agent 处理子任务，只回收最终文本 |
+| `ask_user` | 仅 REPL + TTY（serve/headless 不注册） | 向用户提问，经事件流暂停等待回答 |
+| `team_*`（5 个） | 仅 `team.enabled: true`（默认关闭） | 进程内 agent team 原型：spawn / send / inbox / status / cancel |
 
-headless 模式没有 TUI 订阅者，`ask_user` 不注册——所以那里是 **4 个**。
+口径：默认 **4**；交互 REPL 为 **5**；启用 team 后为 **9**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`。
 
 **为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops、没有 MCP 客户端——**能被 bash 组合出来的能力，就不再单开一个工具**。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
 
@@ -127,23 +131,42 @@ headless 模式没有 TUI 订阅者，`ask_user` 不注册——所以那里是 
 
 同一机制可用于引用任何文件：附件、项目约定、上下文材料。**前端负责查找与引用，core 只收消息。**
 
+## Web 控制台
+
+`--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。
+
+```bash
+VESSEL_MOCK=1 bun run src/cli.ts --serve 8642   # 终端打印 token
+cd apps/web && npm run dev                       # 开发：http://127.0.0.1:5173
+cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管 dist
+```
+
+- 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`。
+- 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单。
+- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
+- 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
+- 生产同源托管：CLI 会自动传 `staticDir`（`VESSEL_STATIC_DIR` 优先，否则 `apps/web/dist` 存在时使用）；开发时用 Vite proxy。
+- 0.1.0 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存；team 协议为 0.2 草案。
+
 ## 发布与更新
 
 - 发布由 tag `v*` 触发，流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
 - 0.1.0 发布 `@vessel/*` 库包与插件包；**根 CLI 暂不发布到 npm，`npx vessel` 不可用**。
 - **0.1.0 不提供独立二进制**（ADR-006 继续有效）。
-- 发布流程会生成 `latest.json`（`version` / `channel` / `assets: {}`），供未来的 `vessel update --check` 使用；**更新客户端尚未实现**。
-- 通道：稳定版 `latest`，预发布 `beta`。
+- 发布流程会生成 `latest.json`（`version` / `channel` / `assets: {}`）。
+- `vessel update --check` 已实现：读取 Release 的 `latest.json`，只提示版本与安装命令；**不下载、不自替换**。
+- 后台检查：交互 REPL 启动时每天最多一次；`update.autoCheck: false` 或 `VESSEL_NO_UPDATE_CHECK=1` 可关闭，失败静默。
+- 通道：稳定版 `latest`，预发布 `beta`（`--channel` 或 `VESSEL_CHANNEL`）。
 
 ## 延后项
 
 以下能力**尚未实现**，明确不在本期范围：
 
 - **MCP** —— 本期不做。工具集里没有 MCP 客户端；接外部系统先用 `bash`（`curl` / CLI）顶。
-- **workflow / team / durable execution / evals** —— 未开始。
-- **web 控制台的能力面** —— `apps/web` 仅为实验性骨架，前端注入接口已留但未接。
+- **workflow / durable execution / evals** —— 未开始。
+- **Agent team 跨进程 / 跨节点** —— 0.1.0 只有进程内原型（`team.enabled: true` 显式开启）；gateway 的 `team.*` 为 0.2 草案，返回 `method_not_allowed`。
 - **npm CLI** —— 0.1.0 只发库包与插件包，根 CLI 未发布，`npx vessel` 不可用。
-- **独立二进制 / 自动更新客户端** —— 0.1.0 不做；`latest.json` 已生成，但 `vessel update` 尚未实现。
+- **独立二进制 / 自替换更新** —— 0.1.0 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
 
 ## 文档索引
 

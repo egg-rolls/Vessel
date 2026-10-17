@@ -120,6 +120,7 @@ jobs:
             packages/tui
             plugins/tools/basic-tools
             plugins/tools/delegate-task
+            plugins/tools/team
             plugins/provider/openai
             plugins/provider/anthropic
             plugins/security/guardrail-pii
