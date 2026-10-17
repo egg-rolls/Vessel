@@ -3,7 +3,7 @@
  * @module @vessel/config
  */
 
-import type { VesselConfig } from './types.js';
+import type { SchedulerConfig, TransportConfig, VesselConfig } from './types.js';
 
 /**
  * provider-aware 默认 model：只给已知 provider 设默认。
@@ -17,6 +17,32 @@ export const PROVIDER_DEFAULT_MODELS: Readonly<Record<string, string>> = {
 export function defaultModelForProvider(name: string | undefined): string | undefined {
   return name ? PROVIDER_DEFAULT_MODELS[name] : undefined;
 }
+
+/**
+ * 0.2 Scheduler 默认值。
+ * 不写入 DEFAULT_CONFIG：只有 host.enabled=true 时才被消费，
+ * 未配置时保持 0.1 行为（不创建 Scheduler）。
+ */
+export const DEFAULT_SCHEDULER_OPTIONS: Required<SchedulerConfig> = {
+  maxConcurrency: 1,
+  maxQueueSize: 100,
+  perAgentSerial: true,
+};
+
+/**
+ * 0.2 Transport 默认值。
+ * 同样不写入 DEFAULT_CONFIG；host 关闭时不创建 transport。
+ */
+export const DEFAULT_TRANSPORT_OPTIONS: Pick<
+  TransportConfig,
+  'kind' | 'hostname' | 'peersDir' | 'heartbeatMs' | 'peerTtlMs'
+> = {
+  kind: 'in-process',
+  hostname: '127.0.0.1',
+  peersDir: '~/.vessel/peers',
+  heartbeatMs: 5000,
+  peerTtlMs: 15000,
+};
 
 /** 安全默认值 */
 export const DEFAULT_CONFIG: VesselConfig = {

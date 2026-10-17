@@ -186,12 +186,17 @@ export interface RunnableAgent {
 /** Scheduler 提交项（R1 冻结；R2 实现队列/并发） */
 export interface ScheduledTask {
   agent: AgentHandle;
-  /** 预留：R1 忽略，成员 session 由 AgentSpec 固定；R2 使用 */
+  /** 成员默认 session；R2 用于 RunHandle.sessionId */
   sessionId?: string;
   input: string | Message;
   opts?: RunOptions;
   /** 预留：0.2 只做 FIFO，不实现优先级 */
   priority?: number;
+  /**
+   * @internal Host 使用：直接执行入口（收到 runId 后创建 RunHandle）。
+   * 自定义 Scheduler 必须优先调用它，否则会和 `AgentHandle.run` 形成递归。
+   */
+  executor?: (runId: string) => Promise<RunHandle>;
 }
 
 export interface SchedulerOptions {

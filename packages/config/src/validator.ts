@@ -3,6 +3,7 @@
  * @module @vessel/config
  */
 
+import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';
 import type {
   ConfigValidationError,
   ConfigValidationResult,
@@ -11,6 +12,12 @@ import type {
   UsageLimitsConfig,
   VesselConfig,
 } from './types.js';
+
+/** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
+const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 允许的 loopback 主机名 */
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
 /** 校验 limits 块（顶层与 delegate 子块共用） */
 function validateLimits(
@@ -262,6 +269,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       limits,
       permissionMode,
       readOnlyTools,
+      viaHost,
     } = config.delegate;
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
@@ -314,8 +322,132 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         });
       }
     }
+    if (viaHost !== undefined && typeof viaHost !== 'boolean') {
+      errors.push({
+        path: 'delegate.viaHost',
+        message: 'delegate.viaHost must be a boolean',
+        value: viaHost,
+      });
+    }
     if (limits) validateLimits('delegate.limits', limits, errors);
     if (termination) validateTermination('delegate.termination', termination, errors);
+  }
+
+  // 校验 host（0.2；默认关闭）
+  if (config.host) {
+    const { enabled, nodeId, limits } = config.host;
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      errors.push({
+        path: 'host.enabled',
+        message: 'host.enabled must be a boolean',
+        value: enabled,
+      });
+    }
+    if (nodeId !== undefined && (typeof nodeId !== 'string' || !NODE_ID_RE.test(nodeId))) {
+      errors.push({
+        path: 'host.nodeId',
+        message: 'host.nodeId must be 1-64 chars of [A-Za-z0-9_-]',
+        value: nodeId,
+      });
+    }
+    if (limits) validateLimits('host.limits', limits, errors);
+  }
+
+  // 校验 scheduler（schema 层始终校验；host 关闭时由 bootstrap 告警忽略）
+  if (config.scheduler) {
+    const { maxConcurrency, maxQueueSize, perAgentSerial } = config.scheduler;
+    if (
+      maxConcurrency !== undefined &&
+      (!Number.isInteger(maxConcurrency) || maxConcurrency <= 0)
+    ) {
+      errors.push({
+        path: 'scheduler.maxConcurrency',
+        message: 'scheduler.maxConcurrency must be a positive integer',
+        value: maxConcurrency,
+      });
+    }
+    if (maxQueueSize !== undefined && (!Number.isInteger(maxQueueSize) || maxQueueSize <= 0)) {
+      errors.push({
+        path: 'scheduler.maxQueueSize',
+        message: 'scheduler.maxQueueSize must be a positive integer',
+        value: maxQueueSize,
+      });
+    }
+    if (perAgentSerial !== undefined && typeof perAgentSerial !== 'boolean') {
+      errors.push({
+        path: 'scheduler.perAgentSerial',
+        message: 'scheduler.perAgentSerial must be a boolean',
+        value: perAgentSerial,
+      });
+    }
+  }
+
+  // 校验 transport（0.2；默认 in-process）
+  if (config.transport) {
+    const { kind, hostname, token, peersDir, heartbeatMs, peerTtlMs } = config.transport;
+
+    if (kind !== undefined && kind !== 'in-process' && kind !== 'loopback') {
+      errors.push({
+        path: 'transport.kind',
+        message: 'transport.kind must be "in-process" or "loopback"',
+        value: kind,
+      });
+    }
+    if (hostname !== undefined && !LOOPBACK_HOSTNAMES.has(hostname)) {
+      errors.push({
+        path: 'transport.hostname',
+        message: 'transport.hostname must be a loopback address (127.0.0.1, localhost, ::1)',
+        value: hostname,
+      });
+    }
+    if (token !== undefined && (typeof token !== 'string' || token.trim() === '')) {
+      errors.push({
+        path: 'transport.token',
+        message: 'transport.token must be a non-empty string',
+        value: token,
+      });
+    }
+    if (peersDir !== undefined && (typeof peersDir !== 'string' || peersDir.trim() === '')) {
+      errors.push({
+        path: 'transport.peersDir',
+        message: 'transport.peersDir must be a non-empty string',
+        value: peersDir,
+      });
+    }
+
+    const heartbeatValid =
+      heartbeatMs === undefined ||
+      (typeof heartbeatMs === 'number' && Number.isInteger(heartbeatMs) && heartbeatMs > 0);
+    if (!heartbeatValid) {
+      errors.push({
+        path: 'transport.heartbeatMs',
+        message: 'transport.heartbeatMs must be a positive integer',
+        value: heartbeatMs,
+      });
+    }
+    const ttlValid =
+      peerTtlMs === undefined ||
+      (typeof peerTtlMs === 'number' && Number.isInteger(peerTtlMs) && peerTtlMs > 0);
+    if (!ttlValid) {
+      errors.push({
+        path: 'transport.peerTtlMs',
+        message: 'transport.peerTtlMs must be a positive integer',
+        value: peerTtlMs,
+      });
+    }
+
+    // DECISION-006 R6：peerTtlMs > heartbeatMs > 0，在 config 层早失败。
+    if (heartbeatValid && ttlValid) {
+      const effectiveHeartbeat = heartbeatMs ?? DEFAULT_TRANSPORT_OPTIONS.heartbeatMs ?? 0;
+      const effectiveTtl = peerTtlMs ?? DEFAULT_TRANSPORT_OPTIONS.peerTtlMs ?? 0;
+      if (effectiveTtl <= effectiveHeartbeat) {
+        errors.push({
+          path: 'transport.peerTtlMs',
+          message: 'transport.peerTtlMs must be greater than transport.heartbeatMs',
+          value: peerTtlMs,
+        });
+      }
+    }
   }
 
   // 校验 team（0.1.0 显式 opt-in，默认关闭）
@@ -393,4 +525,7 @@ export const KNOWN_CONFIG_KEYS = [
   'update',
   'delegate',
   'team',
+  'host',
+  'scheduler',
+  'transport',
 ];

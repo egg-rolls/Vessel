@@ -106,6 +106,42 @@ export interface DelegateConfig {
   permissionMode?: 'bridge' | 'allow' | 'deny';
   /** deny 模式下保留的只读工具（默认 ['read']） */
   readOnlyTools?: string[];
+  /** 0.2 过渡开关：true 时 delegate_task 走 RuntimeHost 临时成员（0.3 移除） */
+  viaHost?: boolean;
+}
+
+/** Host 配置（0.2；默认关闭，关闭时走 0.1 单 agent 路径） */
+export interface HostConfig {
+  enabled?: boolean;
+  /** nodeId 唯一来源；缺省进程内生成 */
+  nodeId?: string;
+  /** Host 全局预算；缺省关闭 */
+  limits?: UsageLimitsConfig;
+}
+
+/** Scheduler 配置（仅 host.enabled=true 时生效） */
+export interface SchedulerConfig {
+  /** 全局 FIFO 并发上限（默认 1） */
+  maxConcurrency?: number;
+  /** 队列上限（默认 100） */
+  maxQueueSize?: number;
+  /** 同一成员串行（默认 true） */
+  perAgentSerial?: boolean;
+}
+
+/** Transport 配置（0.2；默认 in-process） */
+export interface TransportConfig {
+  kind?: 'in-process' | 'loopback';
+  /** 仅 loopback；只允许回环地址 */
+  hostname?: string;
+  /** 缺省复用 VESSEL_GATEWAY_TOKEN / gateway token */
+  token?: string;
+  /** loopback 注册表目录（默认 ~/.vessel/peers） */
+  peersDir?: string;
+  /** 注册表心跳毫秒（默认 5000） */
+  heartbeatMs?: number;
+  /** peer 失效毫秒（默认 15000；必须 > heartbeatMs） */
+  peerTtlMs?: number;
 }
 
 /** agent team 原型配置（0.1.0 显式 opt-in；默认关闭） */
@@ -137,6 +173,9 @@ export interface VesselConfig {
   update?: UpdateConfig;
   delegate?: DelegateConfig;
   team?: TeamConfig;
+  host?: HostConfig;
+  scheduler?: SchedulerConfig;
+  transport?: TransportConfig;
 }
 
 /** 配置加载选项 */
