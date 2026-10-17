@@ -704,7 +704,7 @@ serve:
 | `team_*`（spawn / send / inbox / status / cancel） | 仅 `team.enabled: true`（默认关闭）。进程内原型；0.2 起共用 core Host |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：**默认 4 / 交互 REPL 5 / 启用 team 9**；配置 MCP 后为 **4 + N 个 MCP 工具**（N 由 server 提供，0.3 不写死总数）。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；MCP 工具需要实际连接 server，`--tools` 不代连。
+口径：**默认 4 / 交互 REPL 5 / 启用 team 9**；配置 MCP 后为 **4 + N 个 MCP 工具**（N 由 server 提供，0.3 不写死总数）。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -823,6 +823,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **TLS 独立于 allow_remote**：loopback 也可以启 TLS；`serve.tls.cert_file` + `key_file`（或 `--tls-cert` / `--tls-key`）必须成对且文件非空，否则启动失败。
 - **只做 HTTP/1.1**：不做 HTTP/2 / ALPN / mTLS / ACME；HTTPS 与 WSS 共用同一 server、token、Host/Origin 规则。
 - `hello.features` 在启用 TLS 时增加 `tls`；不新增 `remote` feature。细节见 ADR-041。
+- **已知行为**：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问需替换为实际 IP。这是显示层行为，不改变监听/鉴权。
 
 ### 13.6 Web 控制台（`apps/web`）
 

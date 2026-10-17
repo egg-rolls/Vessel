@@ -131,7 +131,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 | `team_*`（5 个） | 仅 `team.enabled: true`（默认关闭） | agent team：spawn / send / inbox / status / cancel |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功 | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化 |
 
-口径：默认 **4**；交互 REPL 为 **5**；启用 team 后为 **9**；配置 MCP 后为 **4 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；MCP 工具需要实际连接 server，`--tools` 不代连。
+口径：默认 **4**；交互 REPL 为 **5**；启用 team 后为 **9**；配置 MCP 后为 **4 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
 
 **为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops——**能被 bash 组合出来的能力，就不再单开一个工具**。MCP 不是能力工具，而是把外部工具接进 `PluginHost` 的插件（ADR-039）。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
 
@@ -207,6 +207,7 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 - 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
 - 远程 / TLS（显式 opt-in）：`--serve-host` + `--allow-remote` + `--tls-cert`/`--tls-key`，或 `serve.*` 配置；非回环必须 token，cert/key 必须成对。只做 HTTP/1.1。
+- 已知行为：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问时需替换为该机器的实际 IP（例如 `http://192.168.1.10:8642`）。
 - 生产同源托管：CLI 会自动传 `staticDir`（`VESSEL_STATIC_DIR` 优先，否则 `apps/web/dist` 存在时使用）；开发时用 Vite proxy。
 - 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存，重启丢失。
 
