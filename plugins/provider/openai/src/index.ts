@@ -7,6 +7,7 @@
 
 import type { Plugin, PluginHost } from '@vessel/core';
 import { OpenAICompatibleProvider } from '@vessel/core';
+import { withTimeout } from './timeout.js';
 
 /** Provider 注册项：名字 + 默认 base_url + 默认 model */
 const PROVIDERS: Array<{ name: string; baseUrl: string; model: string }> = [
@@ -18,8 +19,14 @@ const PROVIDERS: Array<{ name: string; baseUrl: string; model: string }> = [
   },
   { name: 'mistral', baseUrl: 'https://api.mistral.ai/v1', model: 'mistral-large-latest' },
   { name: 'ollama', baseUrl: 'http://localhost:11434/v1', model: 'llama3' },
-  { name: 'cohere', baseUrl: 'https://api.cohere.ai/v1', model: 'command-r-plus' },
+  // Cohere 的 OpenAI 兼容端点在 /compatibility/v1；/v1 不是兼容端点
+  { name: 'cohere', baseUrl: 'https://api.cohere.ai/compatibility/v1', model: 'command-r-plus' },
 ];
+
+/** 去掉尾斜杠，避免拼出 `//chat/completions` */
+function normalizeBaseUrl(url: string): string {
+  return url.replace(/\/+$/, '');
+}
 
 const plugin: Plugin = {
   name: 'provider-openai',
@@ -27,13 +34,17 @@ const plugin: Plugin = {
     for (const p of PROVIDERS) {
       host.registerProvider(p.name, (config) => {
         const c = config as Record<string, unknown>;
-        return new OpenAICompatibleProvider({
+        // 注意 `||` 而非 `??`：bootstrap 未配置时会传空字符串
+        const baseUrl = normalizeBaseUrl((c.base_url as string) || p.baseUrl);
+        const model = (c.model as string) || p.model;
+        const provider = new OpenAICompatibleProvider({
           api_key: c.api_key as string,
-          base_url: (c.base_url as string) ?? p.baseUrl,
-          model: (c.model as string) ?? p.model,
+          base_url: baseUrl,
+          model,
           temperature: c.temperature as number | undefined,
           max_tokens: c.max_tokens as number | undefined,
         });
+        return withTimeout(provider, c.timeout_ms as number | undefined);
       });
     }
   },
