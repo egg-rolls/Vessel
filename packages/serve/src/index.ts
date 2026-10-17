@@ -7,9 +7,33 @@
  * 是 EventStream 的消费者（与 TUI 的 StreamRenderer 同构），不经过 PluginHost、不修改 core。
  */
 
+export {
+  DEFAULT_DURABLE_LIMIT,
+  DURABLE_RUN_STATUSES,
+  type DurableCheckpointLike,
+  type DurableGatewayOptions,
+  type DurableRunStatus,
+  type DurableRunSummary,
+  type DurableStoreLike,
+  dedupeCheckpoints,
+  isResumableStatus,
+  MAX_DURABLE_LIMIT,
+  parseLimit,
+  parseStatusFilter,
+  sortCheckpoints,
+  toRunSummary,
+} from './durable.js';
 export { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
 export type { Gateway, GatewayOptions } from './gateway.js';
-export { startGateway } from './gateway.js';
+export { isLoopbackHostname, startGateway } from './gateway.js';
+export {
+  MCP_SERVER_STATES,
+  type McpGatewayOptions,
+  type McpServerState,
+  type McpServerStatus,
+  normalizeMcpServers,
+  type WireMcpServerStatus,
+} from './mcp.js';
 export {
   type ClientFrame,
   type NodeInfo,

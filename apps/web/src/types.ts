@@ -99,6 +99,40 @@ export interface RunStatus {
   queue_position?: number;
 }
 
+/** durable run 摘要（GET /v1/durable/runs） */
+export interface DurableRunSummary {
+  run_id: string;
+  session_id: string;
+  agent_id?: string;
+  status: 'running' | 'interrupted' | 'completed' | 'failed' | 'cancelled';
+  iteration?: number;
+  updated_at: number;
+  preview?: string;
+}
+
+export interface DurableRunsResponse {
+  runs: DurableRunSummary[];
+}
+
+/** MCP server 状态（GET /v1/mcp/servers） */
+export type McpServerState = 'connected' | 'failed' | 'disabled';
+
+export interface McpServerStatus {
+  name: string;
+  status: McpServerState;
+  tools: string[];
+  error?: string;
+}
+
+export interface McpServersResponse {
+  servers: McpServerStatus[];
+}
+
+/** 网关错误信封 */
+export interface GatewayErrorBody {
+  error: { code: string; message: string };
+}
+
 /** 协议信息 */
 export interface ProtocolInfo {
   name: 'vessel.gateway';

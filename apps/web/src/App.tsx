@@ -4,7 +4,9 @@ import type {
   AskUserAnswer,
   AskUserQuestion,
   AskUserRequest,
+  DurableRunSummary,
   HelloInfo,
+  McpServerStatus,
   RunEvent,
   SessionInfo,
   StreamChunk,
@@ -122,6 +124,10 @@ function truncate(s: string, n: number): string {
 function formatTime(ts?: number): string {
   if (ts == null) return '';
   return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** 行内时间戳（带毫秒，便于区分同一秒内的多条事件） */
@@ -506,6 +512,11 @@ export default function App() {
   const [lastOutput, setLastOutput] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
+  const [durableRuns, setDurableRuns] = useState<DurableRunSummary[]>([]);
+  const [resuming, setResuming] = useState<Set<string>>(new Set());
+  const [resumed, setResumed] = useState<Set<string>>(new Set());
+  const [panelErrors, setPanelErrors] = useState<{ mcp?: string; durable?: string }>({});
   const [now, setNow] = useState(() => Date.now());
 
   const client = useMemo(() => new GatewayClient(GATEWAY_URL), []);
@@ -517,6 +528,40 @@ export default function App() {
     if (value) sessionStorage.setItem('vessel.token', value);
     else sessionStorage.removeItem('vessel.token');
   };
+
+  /** 按 hello.features 拉取 durable / MCP 面板数据 */
+  const loadPanels = useCallback(() => {
+    if (client.connectionState !== 'open') return;
+    const features = client.protocol?.protocol.features ?? [];
+
+    if (features.includes('mcp-status')) {
+      client
+        .listMcpServers()
+        .then((servers) => {
+          setMcpServers(servers);
+          setPanelErrors((prev) => ({ ...prev, mcp: undefined }));
+        })
+        .catch((e: unknown) => {
+          setPanelErrors((prev) => ({ ...prev, mcp: errorMessage(e) }));
+        });
+    } else {
+      setMcpServers([]);
+    }
+
+    if (features.includes('durable-resume')) {
+      client
+        .listDurableRuns({ status: 'interrupted', limit: 20 })
+        .then((runs) => {
+          setDurableRuns(runs);
+          setPanelErrors((prev) => ({ ...prev, durable: undefined }));
+        })
+        .catch((e: unknown) => {
+          setPanelErrors((prev) => ({ ...prev, durable: errorMessage(e) }));
+        });
+    } else {
+      setDurableRuns([]);
+    }
+  }, [client]);
 
   const refreshNow = useCallback(() => {
     if (client.connectionState !== 'open') return;
@@ -530,7 +575,8 @@ export default function App() {
       .catch(() => {
         // 工具列表失败不阻塞主流程
       });
-  }, [client]);
+    loadPanels();
+  }, [client, loadPanels]);
 
   // WS 连接 + 事件订阅（token 变化时重连；断线指数退避，用 since 续订）
   useEffect(() => {
@@ -553,6 +599,11 @@ export default function App() {
     setPermissions([]);
     setAsks([]);
     setTools([]);
+    setMcpServers([]);
+    setDurableRuns([]);
+    setPanelErrors({});
+    setResuming(new Set());
+    setResumed(new Set());
     setGapNotice(null);
     setHello(null);
 
@@ -614,6 +665,9 @@ export default function App() {
         setPermissions((prev) => prev.filter((item) => item.runId !== event.run_id));
         setAsks((prev) => prev.filter((item) => item.runId !== event.run_id));
       }
+      if (event.type === 'run.resumed' || event.type === 'run.checkpoint') {
+        window.setTimeout(loadPanels, 200);
+      }
     });
 
     const offHello = client.onHello((info) => {
@@ -621,6 +675,7 @@ export default function App() {
       setHello(info);
       setError(null);
       setGapNotice(null);
+      loadPanels();
       client
         .listSessions()
         .then(setSessions)
@@ -683,7 +738,7 @@ export default function App() {
       window.clearTimeout(retryTimer);
       client.close();
     };
-  }, [token, client]);
+  }, [token, client, loadPanels]);
 
   // 会话列表定期刷新（仅连接可用时）
   useEffect(() => {
@@ -703,6 +758,13 @@ export default function App() {
     }, 8000);
     return () => window.clearInterval(id);
   }, [token, client]);
+
+  // durable / MCP 面板定期刷新（10s；未启用的 feature 会被 loadPanels 清空）
+  useEffect(() => {
+    if (!token.trim()) return;
+    const id = window.setInterval(loadPanels, 10_000);
+    return () => window.clearInterval(id);
+  }, [token, loadPanels]);
 
   // 交互请求倒计时
   useEffect(() => {
@@ -767,6 +829,29 @@ export default function App() {
     }
   };
 
+  const handleResume = async (runId: string) => {
+    if (resuming.has(runId) || resumed.has(runId)) return;
+    setResuming((prev) => new Set(prev).add(runId));
+    try {
+      await client.resumeDurableRun(runId);
+      setResumed((prev) => new Set(prev).add(runId));
+      loadPanels();
+    } catch (e: unknown) {
+      const code = (e as { code?: string }).code;
+      if (code === 'run_already_running') {
+        setResumed((prev) => new Set(prev).add(runId));
+      } else {
+        setError(errorMessage(e));
+      }
+    } finally {
+      setResuming((prev) => {
+        const next = new Set(prev);
+        next.delete(runId);
+        return next;
+      });
+    }
+  };
+
   const decidePermission = async (decision: 'allow' | 'deny', remember: boolean) => {
     const current = permissions[0];
     if (!current) return;
@@ -797,6 +882,9 @@ export default function App() {
 
   const pendingPermission = permissions[0];
   const pendingAsk = asks[0];
+  const featureList = hello?.protocol.features ?? [];
+  const showMcp = featureList.includes('mcp-status');
+  const showDurable = featureList.includes('durable-resume');
   const nodeLabel = hello?.node.name ?? hello?.node.node_id?.slice(0, 12) ?? '';
 
   return (
@@ -903,6 +991,87 @@ export default function App() {
               ))
             )}
           </div>
+
+          {showMcp && (
+            <>
+              <div className="sidebar-title">
+                MCP servers <span className="dim">({mcpServers.length})</span>
+              </div>
+              <div className="mcp-list">
+                {panelErrors.mcp ? (
+                  <div className="panel-empty err">{panelErrors.mcp}</div>
+                ) : mcpServers.length === 0 ? (
+                  <div className="panel-empty dim">无 MCP server</div>
+                ) : (
+                  mcpServers.map((server) => (
+                    <div className="mcp-item" key={server.name} title={server.error ?? server.name}>
+                      <div className="mcp-head">
+                        <span className={`mcp-status ${server.status}`}>{server.status}</span>
+                        <span className="mono">{server.name}</span>
+                        <span className="dim">{server.tools.length} tools</span>
+                      </div>
+                      {server.tools.length > 0 && (
+                        <div className="mcp-tools dim">
+                          {truncate(server.tools.join(', '), 100)}
+                        </div>
+                      )}
+                      {server.error && (
+                        <div className="mcp-error err">{truncate(server.error, 120)}</div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+
+          {showDurable && (
+            <>
+              <div className="sidebar-title">
+                Interrupted runs <span className="dim">({durableRuns.length})</span>
+              </div>
+              <div className="durable-list">
+                {panelErrors.durable ? (
+                  <div className="panel-empty err">{panelErrors.durable}</div>
+                ) : durableRuns.length === 0 ? (
+                  <div className="panel-empty dim">没有未完成的 run</div>
+                ) : (
+                  durableRuns.map((run) => (
+                    <div className="durable-item" key={run.run_id}>
+                      <div className="durable-head">
+                        <span className={`status-chip ${run.status}`}>{run.status}</span>
+                        <span className="mono run-id" title={run.run_id}>
+                          {truncate(run.run_id, 18)}
+                        </span>
+                        <span className="dim">{formatTime(run.updated_at)}</span>
+                      </div>
+                      <div className="durable-meta dim">
+                        {run.agent_id ? `agent ${run.agent_id}` : ''}
+                        {run.session_id
+                          ? `${run.agent_id ? ' · ' : ''}session ${truncate(run.session_id, 12)}`
+                          : ''}
+                      </div>
+                      {run.preview && (
+                        <div className="durable-preview">{truncate(run.preview, 90)}</div>
+                      )}
+                      <button
+                        type="button"
+                        className="resume-btn"
+                        disabled={resuming.has(run.run_id) || resumed.has(run.run_id)}
+                        onClick={() => void handleResume(run.run_id)}
+                      >
+                        {resumed.has(run.run_id)
+                          ? '已排队'
+                          : resuming.has(run.run_id)
+                            ? '恢复中…'
+                            : '恢复'}
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </aside>
 
         <main className="timeline">

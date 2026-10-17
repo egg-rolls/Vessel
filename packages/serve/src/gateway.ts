@@ -13,6 +13,8 @@
  */
 
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { isIP } from 'node:net';
 import { extname, resolve, sep } from 'node:path';
 import type {
   AgentMessage,
@@ -24,7 +26,18 @@ import type {
   SessionBackend,
   ToolDefinition,
 } from '@vessel/core';
+import {
+  type DurableGatewayOptions,
+  dedupeCheckpoints,
+  isResumableStatus,
+  MAX_DURABLE_LIMIT,
+  parseLimit,
+  parseStatusFilter,
+  sortCheckpoints,
+  toRunSummary,
+} from './durable.js';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+import { type McpGatewayOptions, normalizeMcpServers } from './mcp.js';
 import {
   type ClientFrame,
   type NodeInfo,
@@ -93,15 +106,29 @@ export interface GatewayOptions {
   idleTimeout?: number;
   /** R3 team 端点配置；缺省 = team 关闭（`/v1/team/*` 返回 404） */
   team?: TeamGatewayOptions;
+  /**
+   * 显式允许非回环监听（默认 false）。
+   * 非回环 hostname 必须同时给出 allowRemote=true 与非空 token。
+   */
+  allowRemote?: boolean;
+  /** TLS 证书对；必须成对提供，缺一即启动失败 */
+  tls?: { certFile: string; keyFile: string };
+  /** durable run 查询/恢复注入；缺省 = durable 端点关闭 */
+  durable?: DurableGatewayOptions;
+  /** MCP server 状态注入；缺省 = MCP 端点关闭 */
+  mcp?: McpGatewayOptions;
 }
 
 /** 网关实例 */
 export interface Gateway {
   port: number;
+  /** 实际可访问的基址（TLS 时为 https://） */
   url: string;
   token: string;
   nodeId: string;
   protocol: ProtocolInfo;
+  /** 是否启用了 TLS */
+  tls: boolean;
   /**
    * 启动 gateway 后再接入 team（asm 需先拿到实际端口构造 LoopbackTransport）。
    * 只设置一次；重复调用会替换 team 配置。
@@ -143,12 +170,46 @@ const DEFAULT_HOSTNAME = '127.0.0.1';
 const DEFAULT_MAX_HISTORY = 10_000;
 const DEFAULT_MAX_BODY = 1024 * 1024;
 
-const PROTOCOL: ProtocolInfo = {
-  name: 'vessel.gateway',
-  version: PROTOCOL_VERSION,
-  min: PROTOCOL_VERSION,
-  features: ['events.replay', 'permissions', 'tools', 'static', 'runs.async'],
-};
+const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
+
+/** 回环判定：localhost / 127.0.0.0/8 / ::1（可带方括号） */
+export function isLoopbackHostname(hostname: string): boolean {
+  const host =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  const lower = host.toLowerCase();
+  if (lower === 'localhost' || lower === '::1') return true;
+  return isIP(lower) === 4 && lower.startsWith('127.');
+}
+
+/** 通配绑定：0.0.0.0 / ::（可带方括号） */
+function isWildcardHostname(hostname: string): boolean {
+  const host =
+    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
+  return host === '0.0.0.0' || host === '::';
+}
+
+/** 读取 TLS 证书/私钥；空文件与不可读都给出明确错误 */
+function loadTlsMaterial(tls: { certFile: string; keyFile: string }): {
+  cert: string;
+  key: string;
+} {
+  if (!tls.certFile || !tls.keyFile) {
+    throw new Error('serve.tls requires both cert_file and key_file.');
+  }
+  const read = (path: string, label: 'cert_file' | 'key_file'): string => {
+    try {
+      const content = readFileSync(path, 'utf8');
+      if (content.trim().length === 0) throw new Error('file is empty');
+      return content;
+    } catch (error) {
+      const detail =
+        (error as NodeJS.ErrnoException).code ??
+        (error instanceof Error ? error.message : String(error));
+      throw new Error(`Failed to read TLS ${label} "${path}": ${detail}`);
+    }
+  };
+  return { cert: read(tls.certFile, 'cert_file'), key: read(tls.keyFile, 'key_file') };
+}
 
 const CSP =
   "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
@@ -196,7 +257,9 @@ function hostAllowed(req: Request, listenHost: string): boolean {
   } catch {
     return false;
   }
-  if (hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]') return true;
+  if (isLoopbackHostname(hostname)) return true;
+  // 通配绑定无法与 Host 精确比较；远程模式仍要求 token，浏览器 Origin 仍须同源。
+  if (isWildcardHostname(listenHost)) return true;
   return hostname === listenHost.toLowerCase();
 }
 
@@ -289,7 +352,53 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const events = opts.events;
   const { session, runtime, context } = opts;
   const hostname = opts.hostname ?? DEFAULT_HOSTNAME;
-  const token = opts.token ?? generateToken();
+  if (hostname.includes('/')) {
+    throw new Error(`Invalid gateway hostname "${hostname}": must be a bare host or IP address.`);
+  }
+
+  const allowRemote = opts.allowRemote === true;
+  if (!isLoopbackHostname(hostname) && !allowRemote) {
+    throw new Error(
+      `Refusing to listen on non-loopback hostname "${hostname}": ` +
+        'set serve.allow_remote=true (and a gateway token) to expose the gateway.',
+    );
+  }
+  if (allowRemote && opts.token !== undefined && opts.token.trim().length === 0) {
+    throw new Error(
+      'Remote mode requires a non-empty gateway token ' +
+        '(serve token, VESSEL_GATEWAY_TOKEN, or gateway-generated).',
+    );
+  }
+  const token =
+    opts.token !== undefined && opts.token.trim().length > 0 ? opts.token : generateToken();
+
+  const tlsMaterial = opts.tls ? loadTlsMaterial(opts.tls) : undefined;
+
+  if (opts.durable !== undefined) {
+    const store = opts.durable.store as { load?: unknown; list?: unknown } | undefined;
+    if (!store || typeof store.load !== 'function' || typeof store.list !== 'function') {
+      throw new Error('durable.store must provide load() and list().');
+    }
+    if (opts.durable.resume !== undefined && typeof opts.durable.resume !== 'function') {
+      throw new Error('durable.resume must be a function.');
+    }
+  }
+  if (opts.mcp !== undefined && typeof opts.mcp.listServers !== 'function') {
+    throw new Error('mcp.listServers must be a function.');
+  }
+
+  const features = [...BASE_FEATURES];
+  if (opts.durable?.store && opts.durable.resume) features.push('durable-resume');
+  if (opts.mcp) features.push('mcp-status');
+  if (tlsMaterial) features.push('tls');
+  const protocolInfo: ProtocolInfo = {
+    name: 'vessel.gateway',
+    version: PROTOCOL_VERSION,
+    min: PROTOCOL_VERSION,
+    features,
+  };
+  const scheme = tlsMaterial ? 'https' : 'http';
+
   const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
   const startedAt = Date.now();
   const buffer = new SeqEventBuffer(opts.maxHistory ?? DEFAULT_MAX_HISTORY);
@@ -309,6 +418,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     { run_id: string; tool: string; input: unknown; ts: number }
   >();
   const pendingAsks = new Map<string, { run_id: string; ts: number }>();
+  /**
+   * 本进程已受理的 durable resume（快速 409，不替代 core 校验）。
+   * Addendum A §2：首个调用成功，后续（含重复）一律 run_already_running。
+   */
+  const resumedRuns = new Set<string>();
 
   /** R3 team 状态（默认关闭） */
   let team: TeamGatewayOptions | undefined = opts.team;
@@ -337,7 +451,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...(opts.nodeName ? { name: opts.nodeName } : {}),
     pid: process.pid,
     started_at: startedAt,
-    endpoint: `http://${hostname}:${actualPort}`,
+    endpoint: `${scheme}://${hostname}:${actualPort}`,
     role: 'standalone',
     status: active ? 'busy' : 'idle',
     ...(active ? { current_run_id: active.run_id, current_session_id: active.session_id } : {}),
@@ -373,7 +487,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       kind: 'hello',
       node_id: nodeId,
       ts: Date.now(),
-      protocol: PROTOCOL,
+      protocol: protocolInfo,
       node: nodeInfo(),
       from_seq: latest === 0 ? 0 : Math.max(fromSeq + 1, buffer.oldestSeq),
       latest_seq: latest,
@@ -1221,6 +1335,173 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return errorJson('not_found', `Not found: ${path}`, 404, extra);
   }
 
+  // ── 0.3 durable / MCP 端点 ─────────────────────
+
+  /** core RunResumeError / 注入错误 → HTTP；未知 code 一律 500 */
+  function resumeErrorResponse(error: unknown, extra: Record<string, string>): Response {
+    const code = (error as { code?: unknown }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    switch (code) {
+      case 'run_not_found':
+        return errorJson('run_not_found', message, 404, extra);
+      case 'run_not_resumable':
+        return errorJson('run_not_resumable', message, 409, extra);
+      case 'run_already_running':
+        return errorJson('run_already_running', message, 409, extra);
+      case 'run_store_required':
+        return errorJson('durable_disabled', message, 503, extra);
+      case 'agent_not_found':
+        return errorJson('agent_not_found', message, 404, extra);
+      default:
+        return errorJson('internal', 'Failed to resume run', 500, extra);
+    }
+  }
+
+  /** 记住已受理的 resume；上限 1000，防 Set 无界增长 */
+  function rememberResumed(runId: string): void {
+    resumedRuns.add(runId);
+    while (resumedRuns.size > 1000) {
+      const first = resumedRuns.keys().next();
+      if (first.done) break;
+      resumedRuns.delete(first.value);
+    }
+  }
+
+  /** `/v1/durable/*`：只读 store，不写盘、不创建 run */
+  async function handleDurable(
+    req: Request,
+    url: URL,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/durable' && !path.startsWith('/v1/durable/')) return null;
+    const durable = opts.durable;
+
+    if (path === '/v1/durable/runs') {
+      if (req.method !== 'GET') {
+        return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
+      }
+      if (!durable) {
+        return errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
+      }
+      const statuses = parseStatusFilter(url.searchParams.get('status'));
+      if (statuses === null) {
+        return errorJson('invalid_request', 'Invalid status filter', 400, extra);
+      }
+      const limit = parseLimit(url.searchParams.get('limit'));
+      if (limit === null) {
+        return errorJson(
+          'invalid_request',
+          `limit must be an integer between 1 and ${MAX_DURABLE_LIMIT}`,
+          400,
+          extra,
+        );
+      }
+      const sessionId = url.searchParams.get('session_id');
+      if (sessionId !== null && sessionId.length === 0) {
+        return errorJson('invalid_request', 'session_id must be a non-empty string', 400, extra);
+      }
+      try {
+        const base = { limit, ...(sessionId !== null ? { session_id: sessionId } : {}) };
+        const checkpoints =
+          statuses.length === 0
+            ? await durable.store.list(base)
+            : (
+                await Promise.all(statuses.map((status) => durable.store.list({ ...base, status })))
+              ).flat();
+        const runs = sortCheckpoints(dedupeCheckpoints(checkpoints))
+          .slice(0, limit)
+          .map(toRunSummary);
+        return json({ runs }, 200, extra);
+      } catch {
+        return errorJson('internal', 'Failed to list durable runs', 500, extra);
+      }
+    }
+
+    const resumeMatch = path.match(/^\/v1\/durable\/runs\/([^/]+)\/resume$/);
+    if (resumeMatch) {
+      if (req.method !== 'POST') {
+        return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
+      }
+      if (!durable) {
+        return errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
+      }
+      if (!durable.resume) {
+        return errorJson(
+          'durable_disabled',
+          'Durable resume is not available in this mode',
+          503,
+          extra,
+        );
+      }
+      let runId: string;
+      try {
+        runId = decodeURIComponent(resumeMatch[1] ?? '');
+      } catch {
+        return errorJson('invalid_request', 'Invalid run id', 400, extra);
+      }
+      if (runId.length === 0 || runId.length > 256) {
+        return errorJson('invalid_request', 'run id must be 1..256 characters', 400, extra);
+      }
+      if (resumedRuns.has(runId)) {
+        return errorJson(
+          'run_already_running',
+          `Run is already being resumed: ${runId}`,
+          409,
+          extra,
+        );
+      }
+
+      let checkpoint: Awaited<ReturnType<typeof durable.store.load>>;
+      try {
+        checkpoint = await durable.store.load(runId);
+      } catch (error) {
+        return resumeErrorResponse(error, extra);
+      }
+      if (!checkpoint) {
+        return errorJson('run_not_found', `Run not found: ${runId}`, 404, extra);
+      }
+      if (!isResumableStatus(checkpoint.status)) {
+        return errorJson('run_not_resumable', `Run is not resumable: ${runId}`, 409, extra);
+      }
+
+      rememberResumed(runId);
+      try {
+        await durable.resume(runId);
+      } catch (error) {
+        resumedRuns.delete(runId);
+        return resumeErrorResponse(error, extra);
+      }
+      return json({ run_id: runId, status: 'queued' }, 202, extra);
+    }
+
+    return errorJson('not_found', `Not found: ${path}`, 404, extra);
+  }
+
+  /** `/v1/mcp/*`：只读状态，未注入返回稳定 mcp_disabled */
+  async function handleMcp(
+    req: Request,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/mcp' && !path.startsWith('/v1/mcp/')) return null;
+    if (path !== '/v1/mcp/servers') {
+      return errorJson('not_found', `Not found: ${path}`, 404, extra);
+    }
+    if (req.method !== 'GET') {
+      return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
+    }
+    if (!opts.mcp) {
+      return errorJson('mcp_disabled', 'MCP status is not enabled', 503, extra);
+    }
+    try {
+      const servers = normalizeMcpServers(await opts.mcp.listServers());
+      return json({ servers }, 200, extra);
+    } catch {
+      return errorJson('internal', 'Failed to read MCP server status', 500, extra);
+    }
+  }
+
   /** 轮询 peer 表，发布 join/left（失败只记录，不影响 v1） */
   function startTeamPolling(): void {
     if (teamPollTimer) clearInterval(teamPollTimer);
@@ -1264,12 +1545,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     startTeamPolling();
   }
 
-  const server = Bun.serve<WsData>({
+  const serveOptions: Bun.Serve.Options<WsData> = {
     port: opts.port ?? DEFAULT_PORT,
     hostname,
     // 0 = 禁用空闲超时（已用 Bun 1.3.9 实测：SSE 12s 不中断）。
     // 事件流/WS 都是长连接；心跳仍负责穿透代理与检测死客户端。
     idleTimeout: opts.idleTimeout ?? 0,
+    ...(tlsMaterial ? { tls: tlsMaterial } : {}),
     fetch: async (req, srv) => {
       const url = new URL(req.url);
       const path = url.pathname;
@@ -1300,8 +1582,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
         );
       }
 
-      // 健康检查（开放，供探针/浏览器直连验证）
+      // 健康检查：/health 始终开放；远程模式下 /v1/health 也要求 token
       if (path === '/health' || path === '/v1/health') {
+        if (path === '/v1/health' && allowRemote && !authorized(req, url)) {
+          return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
+        }
         const base = {
           status: 'ok',
           clients: sseClients.size + wsClients.size,
@@ -1318,7 +1603,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return json(
           {
             ...base,
-            protocol: PROTOCOL,
+            protocol: protocolInfo,
             node: nodeInfo(),
             started_at: startedAt,
             team: teamInfo,
@@ -1370,6 +1655,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // R3：team 端点（默认关闭 → 404）
       const teamResponse = await handleTeam(req, url, path, extra);
       if (teamResponse) return teamResponse;
+
+      // 0.3：durable / MCP（未注入 → 503 *_disabled）
+      const durableResponse = await handleDurable(req, url, path, extra);
+      if (durableResponse) return durableResponse;
+      const mcpResponse = await handleMcp(req, path, extra);
+      if (mcpResponse) return mcpResponse;
 
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
@@ -1561,7 +1852,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
         ws.data.alive = true;
       },
     },
-  });
+  };
+
+  let server: Bun.Server<WsData>;
+  try {
+    server = Bun.serve<WsData>(serveOptions);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to start gateway on ${hostname}:${opts.port ?? DEFAULT_PORT}: ${detail}`,
+      { cause: error },
+    );
+  }
 
   const actualPort = server.port ?? opts.port ?? DEFAULT_PORT;
 
@@ -1609,10 +1911,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   return {
     port: actualPort,
-    url: `http://${hostname}:${actualPort}`,
+    url: `${scheme}://${hostname}:${actualPort}`,
     token,
     nodeId,
-    protocol: PROTOCOL,
+    protocol: protocolInfo,
+    tls: tlsMaterial !== undefined,
     attachTeam,
     stop() {
       clearInterval(heartbeat);
