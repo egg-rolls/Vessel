@@ -1,11 +1,12 @@
 /**
  * @vessel/core/kernel 模块（0.2 R1）
  * @module @vessel/core/kernel
- *
- * 类型冻结阶段只导出契约；实现（InProcessRuntimeHost / Scheduler 等）
- * 在 host implementation 提交中追加。
  */
 
+export { createCancellationScope } from './cancellation.js';
+export { MemoryEventBus } from './event-bus.js';
+export { InProcessRuntimeHost, type InProcessRuntimeHostOptions } from './runtime-host.js';
+export { SerialScheduler } from './scheduler.js';
 export type {
   AgentHandle,
   AgentMessage,
