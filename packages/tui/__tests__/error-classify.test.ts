@@ -81,3 +81,30 @@ describe('classifyError', () => {
     expect(formatted).toContain('网络不可达');
   });
 });
+
+describe('0.3 durable / MCP 稳定错误码', () => {
+  it('Error.code 优先于 message', () => {
+    const error = Object.assign(new Error('resume failed'), { code: 'run_not_found' });
+    expect(classifyError(error).category).toBe('not_found');
+  });
+
+  it('message 里的稳定 code 也能识别', () => {
+    expect(classifyError(new Error('run_not_resumable: completed')).category).toBe('not_resumable');
+    expect(classifyError(new Error('run_already_running')).category).toBe('conflict');
+    expect(classifyError(new Error('durable_disabled')).category).toBe('disabled');
+    expect(classifyError(new Error('run_store_required')).category).toBe('disabled');
+    expect(classifyError(new Error('mcp_server_not_found')).category).toBe('not_found');
+    expect(classifyError(new Error('mcp_server_disabled')).category).toBe('disabled');
+  });
+
+  it('formatClassifiedError 使用新分类标签', () => {
+    expect(formatClassifiedError(classifyError(new Error('run_already_running')))).toContain(
+      '[conflict]',
+    );
+  });
+
+  it('既有网络/超时/取消分类不被稳定 code 影响', () => {
+    expect(classifyError(new Error('fetch failed: ECONNREFUSED')).category).toBe('network');
+    expect(classifyError(new Error('Request aborted')).category).toBe('cancelled');
+  });
+});

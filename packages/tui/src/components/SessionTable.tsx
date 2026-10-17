@@ -6,34 +6,13 @@
 import type { SessionInfo } from '@vessel/core';
 import { Box, Text, useInput } from 'ink';
 import { useEffect, useMemo, useState } from 'react';
+import { formatRelativeTime } from '../utils/time.js';
 
 interface SessionTableProps {
   sessions: SessionInfo[];
   currentSessionId?: string;
   onSelect: (id: string) => void;
   onClose: () => void;
-}
-
-/** 相对时间格式化（如 "2h ago", "3d ago"） */
-function formatRelativeTime(ts: number): string {
-  const now = Date.now();
-  const diff = now - ts;
-  if (diff < 0) return 'just now';
-
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-
-  const date = new Date(ts);
-  return date.toLocaleDateString();
 }
 
 function truncate(str: string, max: number): string {

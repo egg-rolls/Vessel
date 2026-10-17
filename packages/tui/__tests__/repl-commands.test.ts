@@ -21,12 +21,14 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 10 个扁平命令', () => {
+  it('createCommands 注册 12 个扁平命令（含 0.3 的 /mcp、/runs）', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('tools');
     expect(names).toContain('plugins');
     expect(names).toContain('resume');
+    expect(names).toContain('mcp');
+    expect(names).toContain('runs');
     expect(names).toContain('new');
     expect(names).toContain('history');
     expect(names).toContain('help');
@@ -34,11 +36,21 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).toContain('setup');
     expect(names).toContain('reload');
     expect(names).toContain('exit');
-    // 已删命令（/mcp、/skills、/assets）不再注册
-    expect(names).not.toContain('mcp');
+    // 已删命令（/skills、/assets）仍不注册
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
-    expect(names.length).toBe(10);
+    expect(names.length).toBe(12);
+    // /resume 仍是会话恢复，usage 不被 /runs 影响
+    expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe('/resume [number|id]');
+  });
+
+  it('/help 列出 mcp 与 runs', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+    const output = (await reg.execute('help', ctx, state)).output ?? '';
+    expect(output).toContain('/mcp [reconnect <name>]');
+    expect(output).toContain('/runs [resume <runId>]');
   });
 
   it('未知命令 -> handled:false', async () => {

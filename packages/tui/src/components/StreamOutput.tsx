@@ -59,6 +59,7 @@ export function getResponseText(segs: Segment[]): string {
 export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => string): Segment[] {
   switch (event.type) {
     case 'run.started':
+    case 'run.resumed':
       return [];
 
     case 'llm.stream.chunk': {
@@ -196,6 +197,7 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
           resetSegments();
           break;
 
+        case 'run.resumed':
         case 'llm.stream.chunk':
         case 'tool.call.started':
         case 'tool.call.completed':

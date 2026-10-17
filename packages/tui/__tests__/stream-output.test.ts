@@ -173,6 +173,20 @@ describe('StreamOutput segment ordering', () => {
 
       expect(segs).toHaveLength(0);
     });
+
+    it('RunResumed 清空所有分段（0.3 durable resume）', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+
+      segs = reduceSegments(segs, textDelta('Before resume'), nextId);
+      segs = reduceSegments(
+        segs,
+        asTuiEvent({ type: 'run.resumed', run_id: 'r', data: {}, ts: 0 }),
+        nextId,
+      );
+
+      expect(segs).toHaveLength(0);
+    });
   });
 
   describe('工具调用失败', () => {
