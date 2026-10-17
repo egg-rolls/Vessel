@@ -13,10 +13,10 @@
 
 import type { VesselConfig } from '@vessel/config';
 import type {
-  AgentRuntime,
   ContextManager,
   EventStream,
   PluginHost,
+  RunnableAgent,
   SessionBackend,
 } from '@vessel/core';
 
@@ -24,8 +24,8 @@ import type {
 export interface ReplContext {
   // ── 核心能力（egg-rolls 构造并注入）──────────────────
 
-  /** Agent 运行时——REPL 调 runtime.run(input, sessionId) 执行对话 */
-  runtime: AgentRuntime;
+  /** 可运行 agent——REPL 只依赖 A10 的最小结构类型（不绑定 AgentRuntime） */
+  runtime: RunnableAgent;
 
   /**
    * 插件宿主——工具与插件的唯一来源（C9）。
