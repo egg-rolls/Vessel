@@ -11,5 +11,6 @@ export * from './limits.js';
 export * from './plugin.js';
 export * from './provider.js';
 export * from './run.js';
+export * from './run-store.js';
 export * from './session.js';
 export * from './tool.js';
