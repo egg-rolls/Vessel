@@ -144,6 +144,12 @@ function renderHelp(reg: CommandRegistry): string {
   }
 
   lines.push('');
+  lines.push('Tips:');
+  lines.push('  Ctrl+J   insert a newline (multi-line input)');
+  lines.push('  Esc      cancel the running turn (or clear the command list)');
+  lines.push('  Ctrl+C   cancel the running turn; press again / when idle to exit');
+  lines.push('  Ctrl+L   clear the screen');
+  lines.push('');
   return lines.join('\n');
 }
 

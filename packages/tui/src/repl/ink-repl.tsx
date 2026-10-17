@@ -307,7 +307,8 @@ function InkRepl({ ctx }: InkReplProps) {
    *   再 abort；否则 waitFor 会让 run 卡到 120s 超时才结束。
    */
   const cancelOrExit = useCallback(() => {
-    if (ui.run.phase === 'idle') {
+    // idle -> 退出；cancelling 时再次 Ctrl+C -> 强制退出（工具可能还在跑）
+    if (ui.run.phase === 'idle' || ui.run.phase === 'cancelling') {
       exit();
       return;
     }
