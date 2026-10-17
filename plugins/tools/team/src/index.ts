@@ -19,9 +19,9 @@ import type {
   Transport,
   UsageLimits,
 } from '@vessel/core';
-import { InProcessRuntimeHost as CoreInProcessRuntimeHost, MemoryPluginHost } from '@vessel/core';
-import { CoreHostAdapter, LegacyHostAdapter, type TeamHostPort } from './core-adapter.js';
-import type { AgentStatus, RuntimeHost, TeamMessage, TeamMessageKind } from './host.js';
+import { MemoryPluginHost } from '@vessel/core';
+import { CoreHostAdapter, type TeamHostPort } from './core-adapter.js';
+import type { AgentStatus, TeamMessage, TeamMessageKind } from './host.js';
 import { RoutingTeamHost } from './routing.js';
 
 export * from './host.js';
@@ -35,13 +35,8 @@ export interface TeamPluginOptions {
   providerFactory: () => LLMProvider;
   /** 成员默认模型 */
   model: string;
-  /** 注入 core Host（0.2 首选） */
-  host?: CoreRuntimeHost;
-  /**
-   * 注入 0.1 插件私有 Host（兼容路径）。
-   * @deprecated 使用 `host`；0.3 移除。
-   */
-  runtimeHost?: RuntimeHost;
+  /** core Host（必需；由 asm 构造并注入） */
+  host: CoreRuntimeHost;
   /** 观测事件流（team.* 事件发布到这里） */
   events?: EventStream;
   /** owner（主 agent）成员 ID（默认 'owner'） */
@@ -52,8 +47,6 @@ export interface TeamPluginOptions {
   nodeId?: string;
   /** owner 的 canonical 地址；缺省 `${nodeId}:${ownerId}` */
   ownerRef?: string;
-  /** 成员上限（默认 8） */
-  maxMembers?: number;
   /** 成员用量限制 */
   memberLimits?: UsageLimits;
   /** 成员终止策略 */
@@ -258,13 +251,11 @@ function makeCancelTool(config: ResolvedConfig): ToolDefinition {
 
 /** 创建 team 插件（必须显式构造；不随默认插件集启用） */
 export function createTeamPlugin(options: TeamPluginOptions): Plugin {
-  if (options.transport) {
-    if (!options.nodeId) {
-      throw new Error('nodeId is required when transport is enabled');
-    }
-    if (options.runtimeHost && !options.host) {
-      throw new Error('transport requires a core host; legacy runtimeHost is not supported');
-    }
+  if (!options.host) {
+    throw new Error('team plugin requires a core RuntimeHost (host)');
+  }
+  if (options.transport && !options.nodeId) {
+    throw new Error('nodeId is required when transport is enabled');
   }
 
   const ownerId = options.ownerId ?? 'owner';
@@ -274,19 +265,11 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
     ? (message: TeamMessage) => holder.routing?.deliverResult(message) ?? Promise.resolve()
     : undefined;
 
-  const localPort: TeamHostPort = options.host
-    ? new CoreHostAdapter(options.host, {
-        events: options.events,
-        ownsHost: false,
-        ...(deliverResult ? { deliverResult } : {}),
-      })
-    : options.runtimeHost
-      ? new LegacyHostAdapter(options.runtimeHost)
-      : new CoreHostAdapter(new CoreInProcessRuntimeHost({ maxMembers: options.maxMembers }), {
-          events: options.events,
-          ownsHost: true,
-          ...(deliverResult ? { deliverResult } : {}),
-        });
+  const localPort: TeamHostPort = new CoreHostAdapter(options.host, {
+    events: options.events,
+    ownsHost: false,
+    ...(deliverResult ? { deliverResult } : {}),
+  });
 
   let port: TeamHostPort = localPort;
   if (options.transport) {

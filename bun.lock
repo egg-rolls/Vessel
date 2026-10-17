@@ -71,6 +71,16 @@
         "typescript": "^7.0.2",
       },
     },
+    "plugins/mcp/client": {
+      "name": "@vessel/mcp-client",
+      "version": "0.3.0",
+      "dependencies": {
+        "@vessel/core": "workspace:*",
+      },
+      "devDependencies": {
+        "typescript": "^7.0.2",
+      },
+    },
     "plugins/observability/hook-logging": {
       "name": "@vessel/hook-logging",
       "version": "0.1.0",
@@ -305,6 +315,8 @@
     "@vessel/guardrail-pii": ["@vessel/guardrail-pii@workspace:plugins/security/guardrail-pii"],
 
     "@vessel/hook-logging": ["@vessel/hook-logging@workspace:plugins/observability/hook-logging"],
+
+    "@vessel/mcp-client": ["@vessel/mcp-client@workspace:plugins/mcp/client"],
 
     "@vessel/permission": ["@vessel/permission@workspace:packages/permission"],
 

@@ -13,8 +13,8 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from '@vessel/core';
-import { CoreHostAdapter, LegacyHostAdapter, type TeamHostPort } from '../src/core-adapter';
-import { InProcessRuntimeHost, type TeamMessage } from '../src/host';
+import { CoreHostAdapter, type TeamHostPort } from '../src/core-adapter';
+import type { TeamMessage } from '../src/host';
 import { createTeamPlugin } from '../src/index';
 
 /** 轮询等待条件成立 */
@@ -119,21 +119,6 @@ describe('R4 适配层 parity', () => {
     const events = new MemoryEventStream();
     const host = new CoreInProcessRuntimeHost();
     const port = new CoreHostAdapter(host, { events });
-    await exercisePort(port, events);
-    await port.close();
-  });
-
-  it('InProcessRuntimeHost（兼容壳）与 CoreHostAdapter 行为一致', async () => {
-    const events = new MemoryEventStream();
-    const port = new InProcessRuntimeHost({ events });
-    await exercisePort(port, events);
-    await port.close();
-  });
-
-  it('LegacyHostAdapter 包装兼容壳后行为一致', async () => {
-    const events = new MemoryEventStream();
-    const legacy = new InProcessRuntimeHost({ events });
-    const port = new LegacyHostAdapter(legacy);
     await exercisePort(port, events);
     await port.close();
   });
@@ -354,6 +339,7 @@ describe('R4 工具面快照', () => {
     createTeamPlugin({
       providerFactory: () => new MemoryLLMProvider(),
       model: 'm',
+      host: new CoreInProcessRuntimeHost(),
     }).install(host);
 
     const snapshot = host.listTools().map((tool) => ({
@@ -375,6 +361,7 @@ describe('R4 工具面快照', () => {
     createTeamPlugin({
       providerFactory: () => new MemoryLLMProvider(),
       model: 'm',
+      host: new CoreInProcessRuntimeHost(),
     }).install(host);
 
     const spawnRaw = await toolOf(host, 'team_spawn').handler({ name: 'w' }, makeContext());
