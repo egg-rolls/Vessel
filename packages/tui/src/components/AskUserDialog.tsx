@@ -32,12 +32,15 @@ export interface AskUserDialogProps {
 /** 每个选择题末尾默认追加的自定义输入选项 */
 const CUSTOM_OPTION = '输入你自己的答案';
 
+/** ESC 控制字符（不用正则：避免 lint/suspicious/noControlCharactersInRegex） */
+const ESC_CHAR = String.fromCharCode(0x1b);
+
 /**
  * ink-text-input 不忽略 Esc，会把 ESC 序列插进值里；弹窗自己用 Esc 取消/退出输入，
  * 因此在这里统一剥掉控制字符（同样适用于 Ctrl+L 之类的残留）。
  */
 function sanitizeTypedValue(value: string): string {
-  return value.replace(/\x1b/g, '');
+  return value.split(ESC_CHAR).join('');
 }
 
 interface AnswerState {
