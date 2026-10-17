@@ -5,7 +5,7 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import type { AgentRuntime, Message, SessionBackend } from '../packages/core/src/index';
+import type { Message, RunnableAgent, SessionBackend } from '../packages/core/src/index';
 import { asTuiEvent } from '../packages/tui/src/types/events.js';
 import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
 
@@ -32,7 +32,7 @@ class CliError extends Error {
  * 运行 headless 模式
  */
 export async function runHeadless(
-  runtime: AgentRuntime,
+  runtime: RunnableAgent,
   session: SessionBackend,
   options: HeadlessOptions,
 ): Promise<void> {
@@ -63,12 +63,12 @@ export async function runHeadless(
     const branch = await getCurrentGitBranch();
     const resp = await runtime.run(input, sessionId, { branch });
     console.log(resp);
-    runtime.dispose?.();
+    runtime.dispose();
     process.exit(0);
   } catch (e) {
     const msg = e instanceof CliError ? e.message : `Error: ${e instanceof Error ? e.message : e}`;
     console.error(msg);
-    runtime.dispose?.();
+    runtime.dispose();
     process.exit(1);
   }
 }

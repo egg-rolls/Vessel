@@ -15,6 +15,9 @@ import {
   MemoryPluginHost,
   OpenAICompatibleProvider,
   type Plugin,
+  type PluginHost,
+  type RunnableAgent,
+  type RuntimeHost,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
@@ -22,6 +25,7 @@ import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/ind
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
+import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionBackend } from './session-factory';
 
 export interface BootstrapOptions {
@@ -41,9 +45,18 @@ export interface BootstrapOptions {
 }
 
 export interface BootstrapResult {
-  runtime: AgentRuntime;
+  /** 外壳消费面：legacy 时是 AgentRuntime，host 时是 OwnerRuntimeFacade */
+  runtime: RunnableAgent;
   ctx: ReplContext;
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
+  /** host.enabled=true 且构造成功时存在 */
+  host?: RuntimeHost;
+  /**
+   * 仅 legacy 路径存在。
+   * 过渡：web R3 放宽 GatewayOptions.runtime 之前，gateway 只能接 AgentRuntime；
+   * host 模式下该字段为 undefined，/v1/runs 暂不可用。
+   */
+  agentRuntime?: AgentRuntime;
   cleanup: () => void;
 }
 
@@ -234,38 +247,95 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   // ── Runtime ─────────────────────────────────────
-  const runtime = await AgentRuntime.create({
-    provider,
-    model: providerModel,
-    context,
-    events,
-    // 默认值只在 DEFAULT_CONFIG 一处定义，这里不再写第二份数字。
-    limits: config.limits ?? DEFAULT_CONFIG.limits ?? {},
-    termination: {
-      maxIterations:
-        config.termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20,
-      maxRuntimeSeconds:
-        config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
-    },
-    session,
-    plugins,
-    systemPrompt: config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。',
-    // 默认权限策略（ADR-029）：交互模式 'ask'（未声明 checkPermission 的工具经事件流确认），
-    // headless 'allow'（无 TUI 订阅者，工具自带 checkPermission 的 'ask' 由 headless-runner 自动允许）。
-    permission: {
-      default: headless ? 'allow' : 'ask',
-      autoApprove: ['ask_user'],
-    },
-  });
+  // 默认值只在 DEFAULT_CONFIG 一处定义，这里不再写第二份数字。
+  const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
+  const termination = {
+    maxIterations:
+      config.termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20,
+    maxRuntimeSeconds:
+      config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
+  };
+  const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
+  // 默认权限策略（ADR-029）：交互模式 'ask'，headless 'allow'。
+  const permission = {
+    default: headless ? ('allow' as const) : ('ask' as const),
+    autoApprove: ['ask_user'],
+  };
+
+  let runtime: RunnableAgent | undefined;
+  let host: RuntimeHost | undefined;
+  let agentRuntime: AgentRuntime | undefined;
+  let selectedPluginHost: PluginHost | undefined;
+
+  // 0.2 host 路径：opt-in。只有 host.enabled=true 才动态加载 kernel/createRuntime。
+  if (isHostEnabled(config)) {
+    const hostPluginHost = new MemoryPluginHost();
+    for (const plugin of plugins) await plugin.install(hostPluginHost);
+
+    const hostResult = await tryCreateHostRuntime({
+      config,
+      owner: {
+        id: config.team?.ownerId ?? 'owner',
+        provider,
+        model: providerModel,
+        pluginHost: hostPluginHost,
+        context,
+        session,
+        systemPrompt,
+        limits,
+        termination,
+        permission,
+      },
+      sessionId: currentSessionId,
+      contextFactory: () =>
+        new MemoryContextManager({
+          maxTokens: config.context?.maxTokens,
+          maxMessages: config.context?.maxMessages,
+          autoCompact: config.context?.autoCompact,
+          compactThreshold: config.context?.compactThreshold,
+        }),
+    });
+
+    if (hostResult.ok) {
+      runtime = hostResult.runtime;
+      host = hostResult.host;
+      selectedPluginHost = hostPluginHost;
+    } else {
+      console.warn(
+        `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
+      );
+    }
+  }
+
+  // 0.1 单 agent 路径（默认；也是 host 构造失败的回退）。
+  if (!runtime) {
+    agentRuntime = await AgentRuntime.create({
+      provider,
+      model: providerModel,
+      context,
+      events,
+      limits,
+      termination,
+      session,
+      plugins,
+      systemPrompt,
+      permission,
+    });
+    runtime = agentRuntime;
+    selectedPluginHost = agentRuntime.pluginHost;
+  }
+
+  const activeRuntime = runtime;
+  // host 模式下事件总线由 Host 提供；legacy 模式沿用原来的 EventStream。
+  const runtimeEvents = host?.events ?? events;
 
   // ── ReplContext ─────────────────────────────────
-  // 工具/插件的唯一来源是 runtime.pluginHost（插件在 install() 里注册，
-  // 与 runtime 用的是同一个 host）——/tools、/plugins 直接读它，不再二次 install。
+  // 工具/插件的唯一来源是同一个 PluginHost（插件在 install() 里注册）。
   const ctx: ReplContext = {
-    runtime,
-    pluginHost: runtime.pluginHost,
+    runtime: activeRuntime,
+    pluginHost: selectedPluginHost ?? activeRuntime.pluginHost,
     session,
-    events,
+    events: runtimeEvents,
     context,
     currentSessionId,
     onSessionChange: (id) => {
@@ -276,15 +346,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     newSessionId,
     onExit: () => {
-      runtime.dispose();
+      activeRuntime.dispose();
       process.exit(0);
     },
   };
 
   return {
-    runtime,
+    runtime: activeRuntime,
     ctx,
     config,
-    cleanup: () => runtime.dispose(),
+    host,
+    agentRuntime,
+    cleanup: () => activeRuntime.dispose(),
   };
 }
