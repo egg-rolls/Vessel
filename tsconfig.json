@@ -30,6 +30,7 @@
     "packages/*/src/**/*.tsx",
     "plugins/**/*.ts",
     "packages/*/__tests__/**/*.ts",
+    "scripts/**/*.ts",
     "src/__tests__/**/*.ts"
   ],
   "exclude": ["node_modules", "dist"]

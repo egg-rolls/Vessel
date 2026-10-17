@@ -73,15 +73,22 @@ run(input, sessionId?, opts?):
 
     runState = { run_id, session_id, messages: [userMessage], status: 'running', branch }
     发 run.started
-    session.save(runState)
 
     try:
         # 本轮前置注入（见 §4）：core 不解释语义，先于用户输入写入并持久化
         for msg of opts.messages ?? []:
             addContext(msg)              # 注入在前
-        addContext(userMessage)          # 用户输入在后
 
-        应用 Input guardrail，被阻止 → 抛错
+        # Input guardrail 先于写用户消息：replacement 要成为持久化的用户消息（ADR-035）
+        inputResult = 应用 Input guardrail
+        被阻止 → 抛错（已写入的注入消息保留）
+        effectiveUser = replacement 是字符串 ? 改写后的 userMessage : userMessage
+        addContext(effectiveUser)        # 用户输入在后
+
+        # 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不丢历史
+        runState.messages = context.messages
+        session.save(runState)
+
         output = toolCallingLoop(runId, sessionId, opts.signal)
         runState.status = 'completed'; runState.messages = context.messages
         session.save(runState)
@@ -90,6 +97,7 @@ run(input, sessionId?, opts?):
     catch error:
         run OnError hooks
         runState.status = 'failed'
+        runState.messages = context.messages   # 失败也保存真实上下文，不覆盖历史
         session.save(runState)
         发 run.failed
         throw
@@ -107,37 +115,49 @@ loop:
     hookCtx = { run_id, session_id, systemPrompt: this.systemPrompt }
     await hooks.run(BeforeLlm, hookCtx)
 
-    messages = buildRequestMessages(hookCtx.systemPrompt)   # 持久化上下文 + system 覆盖，只影响本次请求
+    messages = buildRequestMessages(hookCtx.systemPrompt)
+    # 归一化只影响本次请求：丢弃孤儿 role:tool；不完整 tool_calls 轮次降级为普通 assistant 文本；
+    # 上下文缺 system 时补回基底 systemPrompt（ADR-035）
     发 llm.request
     response = provider.chat({ messages, tools: PluginHost 里全部工具, stream: true, on_chunk → 发 llm.stream.chunk })
 
-    累计 token 用量；context.updateRealTokens()
+    累计 token 用量；context.updateRealTokens(本次 prompt_tokens + completion_tokens)
     发 llm.response
     await hooks.run(AfterLlm, hookCtx)
 
     if finish_reason == 'stop':
         应用 Output guardrail，被阻止 → 抛错
-        addContext(assistant 消息)
-        return response.content
+        finalContent = replacement 是字符串 ? replacement : response.content
+        addContext(assistant 消息，内容为 finalContent)
+        return finalContent
 
     if finish_reason == 'tool_calls':
-        addContext(assistant 消息，含 tool_calls)
+        # 先对全部调用过 ToolCall guardrail（replacement 可改写），再写 assistant 消息，
+        # 保证上下文里的 tool_calls 与后续 role:tool 结果严格配对
+        effectiveCalls = []
         for toolCall of response.tool_calls:
             incrementToolCall()
             应用 ToolCall guardrail，被阻止 → 抛错
+            effectiveCalls.push(replacement 是合法 ToolCall ? replacement : toolCall)
+        addContext(assistant 消息，含 effectiveCalls)
+
+        for toolCall of effectiveCalls:
             发 tool.call.started
+            # 参数只解析一次；失败按工具失败折回，不终止 run（ADR-035）
+            try: args = JSON.parse(toolCall.function.arguments)
+            catch: 发 tool.call.failed; addContext(role:tool, `Error: Invalid JSON...`); continue
             await hooks.run(BeforeTool, hookCtx)
             try:
                 tool = PluginHost.getTool(toolCall.function.name)   # 唯一工具来源
                 未找到 → 抛错
-                args = JSON.parse(toolCall.function.arguments)
                 toolCtx = { run_id, session_id, messages: context.messages, events }
                 await permissionPolicy.authorize(tool, args, toolCtx)   # allow / deny / ask
                 result = invokeTool(tool, args, toolCtx)                # 统一入口，套 tool.timeout
                 应用 ToolResult guardrail，被阻止 → 抛错
+                finalResult = replacement 是字符串 ? replacement : result
                 发 tool.call.completed
                 await hooks.run(AfterTool, hookCtx)
-                addContext({ role: 'tool', tool_call_id, content: result })
+                addContext({ role: 'tool', tool_call_id, content: finalResult })
             catch error:
                 run OnError hooks
                 发 tool.call.failed
@@ -153,7 +173,9 @@ loop:
 
 - **工具只能从 `PluginHost` 拿。** 循环里没有第二张表。装配层要么在 `plugins` 里传 Plugin（插件 `install` 时 `registerTool`），要么直接注入 `pluginHost`。
 - **工具调用统一走 `invokeTool()`**，由它套 `tool.timeout`——handler 直调会让 `timeout` 失效。
-- **工具失败不终止 run**。错误变成 `role: tool` 消息回到上下文，模型自己纠。
+- **工具失败不终止 run**。错误变成 `role: tool` 消息回到上下文，模型自己纠。非法 tool arguments JSON 也走这条路径（解析一次、发 `tool.call.failed`、折回错误文本）。
+- **发给 Provider 的消息始终是合法序列**：`buildRequestMessages` 在输出前丢弃孤儿 `role: tool`、把不完整 `tool_calls` 轮次降级为普通 assistant 文本，并在上下文缺 system 时补回基底 `systemPrompt`。归一化只影响本次请求，不改 `ContextManager` 的持久化记录。
+- **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
 - **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，120s 超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
 - **`HookRunner` 丢弃 hook 返回值**（`Hook.run` 收窄为 `Promise<void>`）。跨 hook 通信的唯一通道是 `HookContext` 的字段（例如 `BeforeLlm` 的 `systemPrompt`）。
 
@@ -180,6 +202,8 @@ run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<str
 
 - **顺序**：注入消息在前，用户输入在后。
 - **持久化**：注入消息与用户输入一样进 `ContextManager`（是本轮真实对话历史的一部分，不是一次性遮罩）。
+- **Input guardrail 先于写用户消息**：注入消息写入后、用户消息写入前执行；被阻断的输入不进入上下文（已写入的注入消息保留）。`replacement` 是字符串时，改写后的内容才是持久化的用户消息（PII 脱敏语义）。
+- **会话标题**：取首轮最后一条 `user` 消息；注入消息在前，不抢标题。
 - **core 不解释语义**：core 不知道哪条是 skill、哪条是附件。它只按序 `addContext`。
 - **谁负责组装**：前端。REPL 发送前扫描输入里的 `@<路径>`：
   1. `@` 必须位于**行首或空白之后**（`a@b.com` 不触发）；
@@ -360,7 +384,7 @@ interface GuardrailResult {
 }
 ```
 
-四个阶段任一 `allowed: false` 即短路并抛错（并发 `guardrail.blocked`）。`replacement` 可改写流经的值。
+四个阶段任一 `allowed: false` 即短路并抛错（并发 `guardrail.blocked`）。`replacement` **真实生效**（ADR-035）：Input 改写持久化的用户消息；Output 改写返回值与持久化 assistant 消息；ToolCall 改写实际执行的调用（先于 assistant 消息写入）；ToolResult 改写事件、上下文与返回值。类型不符的 replacement 按未改写处理（Input/Output/ToolResult 只接受字符串，ToolCall 只接受合法 `ToolCall`）。
 
 ### 5.8 `Hook`（`types/hook.ts`）
 
@@ -596,3 +620,10 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `src/headless-runner.ts` | headless 运行器 |
 
 **REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
+
+**用户可见行为（0.1.0）**：
+
+- `/clear` 只清屏，不清空 `ContextManager`；需要新会话用 `/new`。
+- `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
+- `/reload` 只重载配置文件并刷新 provider 信息，**不重扫插件目录**；新增插件需重启进程。
+- 自动更新：契约与 `latest.json` 见 [operations/CI-CD.md](operations/CI-CD.md)；`vessel update` 客户端尚未实现。
