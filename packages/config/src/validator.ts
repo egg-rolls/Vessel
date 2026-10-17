@@ -7,8 +7,61 @@ import type {
   ConfigValidationError,
   ConfigValidationResult,
   ConfigValidationWarning,
+  TerminationConfig,
+  UsageLimitsConfig,
   VesselConfig,
 } from './types.js';
+
+/** 校验 limits 块（顶层与 delegate 子块共用） */
+function validateLimits(
+  prefix: string,
+  limits: UsageLimitsConfig,
+  errors: ConfigValidationError[],
+): void {
+  const fields: Array<[string, number | undefined, string]> = [
+    ['requestLimit', limits.requestLimit, 'Request limit'],
+    ['toolCallsLimit', limits.toolCallsLimit, 'Tool calls limit'],
+    ['inputTokensLimit', limits.inputTokensLimit, 'Input tokens limit'],
+    ['outputTokensLimit', limits.outputTokensLimit, 'Output tokens limit'],
+    ['totalCostLimit', limits.totalCostLimit, 'Total cost limit'],
+  ];
+  for (const [key, value, label] of fields) {
+    if (value !== undefined && (typeof value !== 'number' || value < 0)) {
+      errors.push({
+        path: `${prefix}.${key}`,
+        message: `${label} must be a non-negative number`,
+        value,
+      });
+    }
+  }
+}
+
+/** 校验 termination 块（顶层与 delegate 子块共用） */
+function validateTermination(
+  prefix: string,
+  termination: TerminationConfig,
+  errors: ConfigValidationError[],
+): void {
+  const { maxIterations, maxRuntimeSeconds } = termination;
+  if (maxIterations !== undefined) {
+    if (typeof maxIterations !== 'number' || maxIterations <= 0) {
+      errors.push({
+        path: `${prefix}.maxIterations`,
+        message: 'Max iterations must be a positive number',
+        value: maxIterations,
+      });
+    }
+  }
+  if (maxRuntimeSeconds !== undefined) {
+    if (typeof maxRuntimeSeconds !== 'number' || maxRuntimeSeconds <= 0) {
+      errors.push({
+        path: `${prefix}.maxRuntimeSeconds`,
+        message: 'Max runtime seconds must be a positive number',
+        value: maxRuntimeSeconds,
+      });
+    }
+  }
+}
 
 /**
  * 校验 Vessel 配置。所有字段为 camelCase（ADR-019）。
@@ -112,51 +165,134 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         });
       }
     }
+
+    // 0.1.0 只有 systemPrompt 被消费——其余字段明确警告，不静默忽略。
+    for (const key of ['name', 'temperature', 'maxTokens'] as const) {
+      if (config.agent[key] !== undefined) {
+        warnings.push({
+          path: `agent.${key}`,
+          message: `agent.${key} is declared but not applied in 0.1.0 (use provider.* instead).`,
+          value: config.agent[key],
+        });
+      }
+    }
   }
 
   // 校验 limits
   if (config.limits) {
-    const { requestLimit, toolCallsLimit, inputTokensLimit, outputTokensLimit, totalCostLimit } =
-      config.limits;
-
-    const validateLimit = (path: string, value: unknown, name: string) => {
-      if (value !== undefined) {
-        if (typeof value !== 'number' || value < 0) {
-          errors.push({ path, message: `${name} must be a non-negative number`, value });
-        }
-      }
-    };
-
-    validateLimit('limits.requestLimit', requestLimit, 'Request limit');
-    validateLimit('limits.toolCallsLimit', toolCallsLimit, 'Tool calls limit');
-    validateLimit('limits.inputTokensLimit', inputTokensLimit, 'Input tokens limit');
-    validateLimit('limits.outputTokensLimit', outputTokensLimit, 'Output tokens limit');
-    validateLimit('limits.totalCostLimit', totalCostLimit, 'Total cost limit');
+    validateLimits('limits', config.limits, errors);
   }
 
   // 校验 termination
   if (config.termination) {
-    const { maxIterations, maxRuntimeSeconds } = config.termination;
+    validateTermination('termination', config.termination, errors);
+  }
 
-    if (maxIterations !== undefined) {
-      if (typeof maxIterations !== 'number' || maxIterations <= 0) {
+  // 校验 session
+  if (config.session) {
+    const { backend, storagePath } = config.session;
+    if (backend !== undefined && !['sqlite', 'file', 'memory'].includes(backend)) {
+      errors.push({
+        path: 'session.backend',
+        message: 'session.backend must be one of "sqlite", "file", "memory"',
+        value: backend,
+      });
+    }
+    if (storagePath !== undefined && typeof storagePath !== 'string') {
+      errors.push({
+        path: 'session.storagePath',
+        message: 'session.storagePath must be a string',
+        value: storagePath,
+      });
+    }
+    if (config.session.maxHistory !== undefined) {
+      warnings.push({
+        path: 'session.maxHistory',
+        message: 'session.maxHistory is declared but not applied in 0.1.0.',
+        value: config.session.maxHistory,
+      });
+    }
+  }
+
+  // 校验 update
+  if (config.update) {
+    const { autoCheck, channel, source } = config.update;
+    if (autoCheck !== undefined && typeof autoCheck !== 'boolean') {
+      errors.push({
+        path: 'update.autoCheck',
+        message: 'update.autoCheck must be a boolean',
+        value: autoCheck,
+      });
+    }
+    if (channel !== undefined && channel !== 'latest' && channel !== 'beta') {
+      errors.push({
+        path: 'update.channel',
+        message: 'update.channel must be "latest" or "beta"',
+        value: channel,
+      });
+    }
+    if (source !== undefined) {
+      if (typeof source !== 'string' || !/^https?:\/\//.test(source)) {
         errors.push({
-          path: 'termination.maxIterations',
-          message: 'Max iterations must be a positive number',
-          value: maxIterations,
+          path: 'update.source',
+          message: 'update.source must be an http(s) URL',
+          value: source,
         });
       }
     }
+  }
 
-    if (maxRuntimeSeconds !== undefined) {
-      if (typeof maxRuntimeSeconds !== 'number' || maxRuntimeSeconds <= 0) {
+  // 校验 delegate
+  if (config.delegate) {
+    const { enabled, maxDepth, disallowed, model, termination, limits } = config.delegate;
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      errors.push({
+        path: 'delegate.enabled',
+        message: 'delegate.enabled must be a boolean',
+        value: enabled,
+      });
+    }
+    if (maxDepth !== undefined && (!Number.isInteger(maxDepth) || maxDepth <= 0)) {
+      errors.push({
+        path: 'delegate.maxDepth',
+        message: 'delegate.maxDepth must be a positive integer',
+        value: maxDepth,
+      });
+    }
+    if (disallowed !== undefined) {
+      if (!Array.isArray(disallowed) || disallowed.some((v) => typeof v !== 'string')) {
         errors.push({
-          path: 'termination.maxRuntimeSeconds',
-          message: 'Max runtime seconds must be a positive number',
-          value: maxRuntimeSeconds,
+          path: 'delegate.disallowed',
+          message: 'delegate.disallowed must be an array of strings',
+          value: disallowed,
         });
       }
     }
+    if (model !== undefined && typeof model !== 'string') {
+      errors.push({
+        path: 'delegate.model',
+        message: 'delegate.model must be a string',
+        value: model,
+      });
+    }
+    if (limits) validateLimits('delegate.limits', limits, errors);
+    if (termination) validateTermination('delegate.termination', termination, errors);
+  }
+
+  // guardrails / hooks 在 0.1.0 尚未由装配层消费——明确警告，不静默忽略。
+  if (config.guardrails && config.guardrails.length > 0) {
+    warnings.push({
+      path: 'guardrails',
+      message: 'guardrails are declared but not applied in 0.1.0.',
+      value: config.guardrails.length,
+    });
+  }
+  if (config.hooks && config.hooks.length > 0) {
+    warnings.push({
+      path: 'hooks',
+      message: 'hooks are declared but not applied in 0.1.0.',
+      value: config.hooks.length,
+    });
   }
 
   return { valid: errors.length === 0, errors, warnings };
@@ -184,4 +320,6 @@ export const KNOWN_CONFIG_KEYS = [
   'session',
   'context',
   'plugins',
+  'update',
+  'delegate',
 ];

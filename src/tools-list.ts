@@ -41,16 +41,29 @@ export async function listTools(): Promise<ToolsListing> {
   }
 
   // delegate_task 是工厂式插件，需装配层注入 provider 工厂；列工具不会调用它。
-  const delegate = createDelegateTaskPlugin({
-    providerFactory: () => new MemoryLLMProvider(),
-    model: config.provider?.model ?? 'mock-model',
-  });
-  await delegate.install(host);
+  const pluginNamesWithFactories = [...pluginNames];
+  if (config.delegate?.enabled !== false) {
+    const delegate = createDelegateTaskPlugin({
+      providerFactory: () => new MemoryLLMProvider(),
+      model: config.delegate?.model ?? config.provider?.model ?? 'mock-model',
+      maxDepth: config.delegate?.maxDepth,
+      disallowed: config.delegate?.disallowed,
+      limits: config.delegate?.limits,
+      termination: config.delegate?.termination
+        ? {
+            maxIterations: config.delegate.termination.maxIterations ?? 10,
+            maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
+          }
+        : undefined,
+    });
+    await delegate.install(host);
+    pluginNamesWithFactories.push(delegate.name);
+  }
 
   const tools = host
     .listTools()
     .map((t) => ({ name: t.name, description: t.description }))
     .sort((a, b) => a.name.localeCompare(b.name));
 
-  return { tools, plugins: [...pluginNames, delegate.name], warnings };
+  return { tools, plugins: pluginNamesWithFactories, warnings };
 }

@@ -55,8 +55,11 @@ export interface AgentConfig {
 
 /** 会话配置 */
 export interface SessionConfig {
-  backend?: 'memory' | 'file';
+  /** 存储后端：sqlite（默认）/ file / memory */
+  backend?: 'sqlite' | 'file' | 'memory';
+  /** sqlite = 数据库文件路径；file = 目录；memory 忽略 */
   storagePath?: string;
+  /** @deprecated 0.1.0 未消费；保留仅为兼容旧配置 */
   maxHistory?: number;
 }
 
@@ -75,6 +78,30 @@ export interface PluginConfig {
   config?: Record<string, unknown>;
 }
 
+/** 自动更新配置 */
+export interface UpdateConfig {
+  /** REPL 启动后台检查（默认 true） */
+  autoCheck?: boolean;
+  /** 更新通道（默认 latest） */
+  channel?: 'latest' | 'beta';
+  /** 自定义清单源；缺省用 GitHub Release */
+  source?: string;
+}
+
+/** 子 agent 分派配置（delegate_task） */
+export interface DelegateConfig {
+  /** false = 不注册 delegate_task（运行期工具变为 3 个） */
+  enabled?: boolean;
+  /** 最大 delegate 深度 */
+  maxDepth?: number;
+  /** 子 agent 禁用的工具名 */
+  disallowed?: string[];
+  /** 子 agent 模型；缺省沿用主 model */
+  model?: string;
+  termination?: TerminationConfig;
+  limits?: UsageLimitsConfig;
+}
+
 /** Vessel 配置 */
 export interface VesselConfig {
   apiKey?: string;
@@ -87,6 +114,8 @@ export interface VesselConfig {
   session?: SessionConfig;
   context?: ContextConfig;
   plugins?: PluginConfig[];
+  update?: UpdateConfig;
+  delegate?: DelegateConfig;
 }
 
 /** 配置加载选项 */
