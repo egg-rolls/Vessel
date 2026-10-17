@@ -8,6 +8,7 @@
 import { DEFAULT_CONFIG, defaultModelForProvider, loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
+  type AgentStatus,
   type LLMProvider,
   MemoryContextManager,
   MemoryEventStream,
@@ -51,12 +52,14 @@ export interface BootstrapResult {
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
   /** host.enabled=true 且构造成功时存在 */
   host?: RuntimeHost;
-  /**
-   * 仅 legacy 路径存在。
-   * 过渡：web R3 放宽 GatewayOptions.runtime 之前，gateway 只能接 AgentRuntime；
-   * host 模式下该字段为 undefined，/v1/runs 暂不可用。
-   */
-  agentRuntime?: AgentRuntime;
+  /** nodeId 唯一来源：config.host.nodeId，缺省进程内生成 */
+  nodeId: string;
+  /** gateway /v1/team/agents 的 spawn 注入（仅 host 模式） */
+  spawnAgent?: (request: {
+    name?: string;
+    model?: string;
+    systemPrompt?: string;
+  }) => Promise<AgentStatus>;
   cleanup: () => void;
 }
 
@@ -85,6 +88,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── 加载配置 ────────────────────────────────────
   const { config, validation } = await loadConfig();
+
+  // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
+  const nodeId =
+    config.host?.nodeId ?? `vessel-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
 
   if (!useMock && validation.errors.length > 0) {
     for (const e of validation.errors) console.error(`✗ ${e.message}`);
@@ -266,6 +273,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let host: RuntimeHost | undefined;
   let agentRuntime: AgentRuntime | undefined;
   let selectedPluginHost: PluginHost | undefined;
+  let spawnAgent: BootstrapResult['spawnAgent'];
 
   // 0.2 host 路径：opt-in。只有 host.enabled=true 才动态加载 kernel/createRuntime。
   if (isHostEnabled(config)) {
@@ -300,6 +308,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       runtime = hostResult.runtime;
       host = hostResult.host;
       selectedPluginHost = hostPluginHost;
+      const selectedHost = hostResult.host;
+      spawnAgent = async (request) => {
+        const handle = await selectedHost.spawn({
+          provider,
+          model: request.model ?? providerModel,
+          pluginHost: hostPluginHost,
+          ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+          ...(request.name !== undefined ? { name: request.name } : {}),
+        });
+        return handle.status();
+      };
     } else {
       console.warn(
         `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
@@ -356,7 +375,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ctx,
     config,
     host,
-    agentRuntime,
+    nodeId,
+    spawnAgent,
     cleanup: () => activeRuntime.dispose(),
   };
 }

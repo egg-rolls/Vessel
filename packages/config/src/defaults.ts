@@ -33,9 +33,8 @@ export const DEFAULT_SCHEDULER_OPTIONS: Required<SchedulerConfig> = {
  * 0.2 Transport 默认值。
  * 同样不写入 DEFAULT_CONFIG；host 关闭时不创建 transport。
  */
-export const DEFAULT_TRANSPORT_OPTIONS: Pick<
-  TransportConfig,
-  'kind' | 'hostname' | 'peersDir' | 'heartbeatMs' | 'peerTtlMs'
+export const DEFAULT_TRANSPORT_OPTIONS: Required<
+  Pick<TransportConfig, 'kind' | 'hostname' | 'peersDir' | 'heartbeatMs' | 'peerTtlMs'>
 > = {
   kind: 'in-process',
   hostname: '127.0.0.1',
