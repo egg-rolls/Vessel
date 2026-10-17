@@ -25,6 +25,11 @@ out/
 # Bun compile output
 vessel
 
+# Release artifacts generated locally
+latest.json
+latest-beta.json
+SHA256SUMS
+
 # ----------------------------------------------------------
 # 3. Runtime data (Vessel)
 # ----------------------------------------------------------
