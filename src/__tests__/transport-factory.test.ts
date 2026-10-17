@@ -102,6 +102,44 @@ describe('tryCreateLoopbackTransport', () => {
     });
   });
 
+  it('透传 agents 回调（P1-1 短 id 远端发现）', async () => {
+    let captured: LoopbackTransportOptionsLike | undefined;
+    const agents = () => [{ id: 'worker', state: 'idle' as const, toolNames: [] }];
+    const result = await tryCreateLoopbackTransport({
+      config: baseConfig,
+      nodeId: 'node-a',
+      endpoint: 'http://127.0.0.1:1',
+      gatewayToken: 't',
+      agents,
+      loadModule: async () => ({
+        createLoopbackTransport: async (options) => {
+          captured = options;
+          return fakeTransport();
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(captured?.agents).toBe(agents);
+  });
+
+  it('未提供 agents 时不下发该键', async () => {
+    let captured: LoopbackTransportOptionsLike | undefined;
+    await tryCreateLoopbackTransport({
+      config: baseConfig,
+      nodeId: 'node-a',
+      endpoint: 'http://127.0.0.1:1',
+      gatewayToken: 't',
+      loadModule: async () => ({
+        createLoopbackTransport: async (options) => {
+          captured = options;
+          return fakeTransport();
+        },
+      }),
+    });
+    expect(captured && 'agents' in captured).toBe(false);
+  });
+
   it('config token 优先于 gateway token', async () => {
     let captured: LoopbackTransportOptionsLike | undefined;
     await tryCreateLoopbackTransport({

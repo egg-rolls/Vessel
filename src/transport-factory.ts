@@ -11,7 +11,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_TRANSPORT_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import type { Transport } from '../packages/core/src/index';
+import type { AgentStatus, Transport } from '../packages/core/src/index';
 
 export interface LoopbackTransportOptionsLike {
   nodeId: string;
@@ -20,6 +20,8 @@ export interface LoopbackTransportOptionsLike {
   peersDir: string;
   heartbeatMs?: number;
   peerTtlMs?: number;
+  /** 本节点成员快照；写入注册表供远端短 id 解析（web P1-1） */
+  agents?: () => AgentStatus[];
 }
 
 /** 动态加载的 web loopback 入口形状（测试可注入 fake） */
@@ -34,6 +36,8 @@ export interface CreateLoopbackOptions {
   endpoint: string;
   /** gateway 已生成/已解析的 token；作为 config/env 之后最后回退 */
   gatewayToken?: string;
+  /** 本节点成员快照（短 id 远端发现）；缺省不发布成员 */
+  agents?: () => AgentStatus[];
   loadModule?: () => Promise<LoopbackTransportModule>;
 }
 
@@ -89,6 +93,7 @@ export async function tryCreateLoopbackTransport(
       peersDir: resolvePeersDir(options.config.transport?.peersDir),
       heartbeatMs: options.config.transport?.heartbeatMs,
       peerTtlMs: options.config.transport?.peerTtlMs,
+      ...(options.agents ? { agents: options.agents } : {}),
     });
     return { ok: true, transport };
   } catch (error) {

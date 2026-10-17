@@ -282,6 +282,8 @@ async function runWithConfig(result: BootstrapResult) {
         nodeId: result.nodeId,
         endpoint: gateway.url,
         gatewayToken: gateway.token,
+        // 发布本节点成员，远端才能用短 id 发现（qa P1-1）
+        agents: () => result.host?.list() ?? [],
       });
       if (loopback.ok) {
         teamTransport = loopback.transport;

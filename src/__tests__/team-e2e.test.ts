@@ -11,6 +11,10 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { InProcessRuntimeHost } from '../../packages/core/src/index';
+import { createLoopbackTransport } from '../../packages/serve/src/transport/loopback';
+import { CoreHostAdapter } from '../../plugins/tools/team/src/core-adapter';
+import { RoutingTeamHost } from '../../plugins/tools/team/src/routing';
 
 const cliPath = path.resolve(import.meta.dir, '..', 'cli.ts');
 
@@ -149,6 +153,18 @@ describe('two-process loopback smoke', () => {
     const spawnedBody = (await spawned.json()) as { agent: { id: string } };
     const workerId = spawnedBody.agent.id;
 
+    // P1-1：A 的 peer 列表应带 B 的成员，短 id 才能解析到 B
+    await waitUntil(async () => {
+      const res = await fetch(`${bannerA.endpoint}/v1/team/peers`, { headers });
+      if (!res.ok) return false;
+      const body = (await res.json()) as {
+        peers: Array<{ node_id: string; agents: Array<{ id: string }> }>;
+      };
+      return body.peers.some(
+        (peer) => peer.node_id === 'B' && peer.agents.some((agent) => agent.id === workerId),
+      );
+    }, 10_000);
+
     // 跨节点 task：A → B:worker，B 执行后 result 回到 A:owner
     const task = await fetch(`${bannerA.endpoint}/v1/team/send`, {
       method: 'POST',
@@ -222,4 +238,100 @@ describe('two-process loopback smoke', () => {
     expect(matches[0]?.content).toBe('ping');
     expect((await fetch(`${bannerB.endpoint}/v1/health`)).status).toBe(200);
   }, 40_000);
+
+  it('resolves a remote member by short id through the real registry (P1-1)', async () => {
+    const root = makeDir('vessel-e2e-root-');
+    dirs.push(root);
+    const peersDir = path.join(root, 'peers');
+    const token = 'e2e-token';
+
+    const nodeB = spawnNode('B', peersDir, token);
+    procs.push(nodeB.proc);
+    dirs.push(nodeB.dir);
+
+    const bannerB = await readBanner(nodeB.proc);
+    pids.push(await readPid(peersDir, 'B'));
+    const headers = { Authorization: `Bearer ${token}` };
+
+    // B 上有一个 worker；成员状态必须写进注册表，远端才能按短 id 找到它。
+    const spawned = await fetch(`${bannerB.endpoint}/v1/team/agents`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'worker' }),
+    });
+    expect(spawned.status).toBe(201);
+    const workerId = ((await spawned.json()) as { agent: { id: string } }).agent.id;
+
+    // A 在测试进程里用真实 loopback + RoutingTeamHost 扮演另一节点。
+    // 这就是 team_send 的投递路径：本机找不到 → transport.peers() → 远端短 id。
+    const transport = await createLoopbackTransport({
+      nodeId: 'A',
+      endpoint: 'http://127.0.0.1:1',
+      token,
+      peersDir,
+      heartbeatMs: 200,
+      peerTtlMs: 3000,
+      agents: () => [{ id: 'sender', state: 'idle', toolNames: [] }],
+    });
+    const coreHost = new InProcessRuntimeHost();
+    const local = new CoreHostAdapter(coreHost, {
+      deliverResult: async () => {},
+    });
+    const routing = new RoutingTeamHost({ local, transport, nodeId: 'A', ownerId: 'owner' });
+    try {
+      // B 的注册表条目带上 worker 后，短 id 才可解析。
+      await waitUntil(async () => {
+        const peers = await transport.peers();
+        return peers.some(
+          (peer) => peer.nodeId === 'B' && peer.agents.some((agent) => agent.id === workerId),
+        );
+      }, 15_000);
+
+      // 反向也成立：B 能看到 A 发布的成员。
+      await waitUntil(async () => {
+        const res = await fetch(`${bannerB.endpoint}/v1/team/peers`, { headers });
+        if (!res.ok) return false;
+        const body = (await res.json()) as {
+          peers: Array<{ node_id: string; agents: Array<{ id: string }> }>;
+        };
+        return body.peers.some(
+          (peer) => peer.node_id === 'A' && peer.agents.some((agent) => agent.id === 'sender'),
+        );
+      }, 15_000);
+
+      const id = 'asm-e2e-short-id-1';
+      await routing.send({
+        id,
+        from: 'owner',
+        to: workerId,
+        kind: 'message',
+        content: 'short-id-probe',
+        ts: Date.now(),
+      });
+
+      await waitUntil(async () => {
+        const res = await fetch(
+          `${bannerB.endpoint}/v1/team/inbox?agent_id=${encodeURIComponent(workerId)}`,
+          { headers },
+        );
+        if (!res.ok) return false;
+        const body = (await res.json()) as { messages: Array<{ id: string }> };
+        return body.messages.some((message) => message.id === id);
+      }, 10_000);
+
+      const inbox = await fetch(
+        `${bannerB.endpoint}/v1/team/inbox?agent_id=${encodeURIComponent(workerId)}`,
+        { headers },
+      );
+      const inboxBody = (await inbox.json()) as {
+        messages: Array<{ id: string; content: string }>;
+      };
+      const matches = inboxBody.messages.filter((message) => message.id === id);
+      expect(matches).toHaveLength(1);
+      expect(matches[0]?.content).toBe('short-id-probe');
+    } finally {
+      await routing.close();
+      await transport.close();
+    }
+  }, 45_000);
 });
