@@ -71,7 +71,13 @@ export type ProtocolErrorCode =
   | 'broadcast_not_supported'
   | 'remote_cancel_not_supported'
   | 'transport_closed'
-  | 'inbox_overflow';
+  | 'inbox_overflow'
+  // 0.3 durable / MCP（DECISION-008 §4.4 + Addendum A/B）
+  | 'run_not_found'
+  | 'run_not_resumable'
+  | 'run_already_running'
+  | 'durable_disabled'
+  | 'mcp_disabled';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;
