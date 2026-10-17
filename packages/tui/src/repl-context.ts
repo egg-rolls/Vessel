@@ -20,6 +20,67 @@ import type {
   SessionBackend,
 } from '@vessel/core';
 
+// ── 0.3 T1：注入控制面（tui 定义结构，asm 实现；tui 不 import 任何实现） ──
+
+/** MCP server 展示态（与 gateway /v1/mcp/servers 同形状，Addendum B §9.1） */
+export interface McpServerSummary {
+  name: string;
+  status: 'connected' | 'failed' | 'disabled';
+  /** 注册到 PluginHost 的完整工具名 */
+  tools: string[];
+  error?: string;
+}
+
+/** MCP 控制面（asm 注入；未配置 mcp_servers 时不注入） */
+export interface McpControl {
+  list(): Promise<McpServerSummary[]>;
+  /** 重连单个 server；未知 name 抛 Error & { code: 'mcp_server_not_found' } */
+  reconnect(name: string): Promise<McpServerSummary>;
+  /** 权限弹窗用：完整工具名 -> 来源 server + 原始工具名；非 MCP/无法判定返回 null */
+  toolSource(toolName: string): { server: string; tool: string } | null;
+}
+
+/** 单条 durable run（asm 注入；`updated_at` 倒序、同值 `run_id` 升序由数据层保证） */
+export interface DurableRunSummary {
+  run_id: string;
+  session_id: string;
+  agent_id?: string;
+  status: 'running' | 'interrupted';
+  updated_at: number;
+  iteration?: number;
+  preview?: string;
+}
+
+/** 恢复后的 run 结局（约定 `done` 不 reject） */
+export type DurableRunOutcome =
+  | { status: 'completed'; message?: string }
+  | { status: 'failed'; error: unknown }
+  | { status: 'cancelled' };
+
+/** `/runs resume` 返回的句柄；REPL 层据此接管运行态与取消 */
+export interface DurableRunHandle {
+  runId: string;
+  sessionId: string;
+  /** 恰好 resolve 一次；失败走 status:'failed'，不 reject */
+  done: Promise<DurableRunOutcome>;
+  /** 幂等；映射到 core RunHandle.cancel() */
+  cancel(): void;
+}
+
+/** durable run 控制面（asm 注入；durable 未启用或不支持恢复时不注入） */
+export interface DurableRunsControl {
+  list(opts?: {
+    status?: 'running' | 'interrupted';
+    session_id?: string;
+    limit?: number;
+  }): Promise<DurableRunSummary[]>;
+  /**
+   * 返回时 run 已启动。稳定 code：
+   * run_not_found / run_not_resumable / run_already_running / durable_disabled
+   */
+  resume(runId: string): Promise<DurableRunHandle>;
+}
+
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
 export interface ReplContext {
   // ── 核心能力（egg-rolls 构造并注入）──────────────────
@@ -74,4 +135,12 @@ export interface ReplContext {
 
   /** 退出回调——/exit 时调，壳负责 runtime.dispose() + process.exit() */
   onExit: () => void;
+
+  // ── 0.3 能力控制面（asm 注入；未启用时保持 undefined） ──
+
+  /** MCP 状态与重连；未配置 mcp_servers 时不注入 */
+  mcp?: McpControl;
+
+  /** durable run 列表与恢复；durable 未启用或不支持恢复时不注入 */
+  runs?: DurableRunsControl;
 }
