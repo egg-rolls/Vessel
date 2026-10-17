@@ -139,6 +139,57 @@ describe('two-process loopback smoke', () => {
       return body.peers.some((peer) => peer.node_id === 'B');
     }, 10_000);
 
+    // 在 B 上 spawn 一个 worker，供跨节点 task 执行
+    const spawned = await fetch(`${bannerB.endpoint}/v1/team/agents`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'worker' }),
+    });
+    expect(spawned.status).toBe(201);
+    const spawnedBody = (await spawned.json()) as { agent: { id: string } };
+    const workerId = spawnedBody.agent.id;
+
+    // 跨节点 task：A → B:worker，B 执行后 result 回到 A:owner
+    const task = await fetch(`${bannerA.endpoint}/v1/team/send`, {
+      method: 'POST',
+      headers: { ...headers, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        protocol: 1,
+        message: {
+          id: 'asm-e2e-task-1',
+          from: 'A:owner',
+          to: `B:${workerId}`,
+          kind: 'task',
+          content: 'ping',
+          ts: Date.now(),
+        },
+      }),
+    });
+    expect(task.status).toBe(202);
+
+    await waitUntil(async () => {
+      const res = await fetch(`${bannerA.endpoint}/v1/team/inbox?agent_id=owner`, { headers });
+      if (!res.ok) return false;
+      const body = (await res.json()) as {
+        messages: Array<{ kind: string; content: string }>;
+      };
+      return body.messages.some(
+        (message) => message.kind === 'result' && message.content === 'Echo: ping',
+      );
+    }, 10_000);
+
+    const ownerInbox = await fetch(`${bannerA.endpoint}/v1/team/inbox?agent_id=owner`, {
+      headers,
+    });
+    const ownerBody = (await ownerInbox.json()) as {
+      messages: Array<{ kind: string; content: string }>;
+    };
+    expect(
+      ownerBody.messages.filter(
+        (message) => message.kind === 'result' && message.content === 'Echo: ping',
+      ),
+    ).toHaveLength(1);
+
     // /v1/team/send 走 transport.send（跨节点 POST）；/v1/team/messages 只接受本机入站。
     const send = await fetch(`${bannerA.endpoint}/v1/team/send`, {
       method: 'POST',

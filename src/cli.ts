@@ -285,11 +285,12 @@ async function runWithConfig(result: BootstrapResult) {
       });
       if (loopback.ok) {
         teamTransport = loopback.transport;
-        // 入站消息（含本机 transport.send）统一交给 Host 路由
-        teamTransport.receive(async (message) => {
-          await result.host?.send(message);
-        });
+        // team 插件已持有 DeferredTransport：这里绑定真实实现。
+        // 入站由 ext 的 RoutingTeamHost 单点处理（task 执行 / inbox / result / cancel），
+        // asm 不再注册 receive(host.send)，避免与 routing 双投递。
+        result.transport?.resolve(teamTransport);
       } else {
+        result.transport?.fail(new Error(loopback.error));
         console.warn(
           `⚠ Loopback transport unavailable (${loopback.error}); team is in-process only.`,
         );
@@ -338,7 +339,13 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   gateway?.stop();
-  if (teamTransport) {
+  if (result.transport) {
+    try {
+      await result.transport.close();
+    } catch {
+      // 关闭注册表失败不阻断退出
+    }
+  } else if (teamTransport) {
     try {
       await teamTransport.close();
     } catch {

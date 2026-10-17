@@ -24,6 +24,7 @@ import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import { DeferredTransport } from './deferred-transport';
 import { planFactoryPlugins } from './factory-plugins';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
@@ -61,6 +62,11 @@ export interface BootstrapResult {
     model?: string;
     systemPrompt?: string;
   }) => Promise<AgentStatus>;
+  /**
+   * team loopback 的晚绑定 transport（仅 host + team + loopback）。
+   * cli 在 gateway 启动、真实 loopback 构造后调用 resolve/fail。
+   */
+  transport?: DeferredTransport;
   cleanup: () => void;
 }
 
@@ -214,7 +220,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
    * - host 开启：装到共享 Host（delegate 仅在 viaHost=true 时共享；team 总是共享）；
    * - host 关闭：delegate 用专用 Host、team 用内嵌 Host，并告警。
    */
-  const buildFactoryPlugins = (runtimeHost?: RuntimeHost): Plugin[] => {
+  const buildFactoryPlugins = (
+    runtimeHost?: RuntimeHost,
+    transport?: DeferredTransport,
+  ): Plugin[] => {
     const plan = planFactoryPlugins(config, runtimeHost !== undefined);
     for (const warning of plan.warnings) console.warn(`⚠ ${warning}`);
 
@@ -250,6 +259,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           model: config.team?.model ?? providerModel,
           events: runtimeHost?.events ?? events,
           ...(plan.team.useHost && runtimeHost ? { host: runtimeHost } : {}),
+          ...(transport
+            ? {
+                transport,
+                nodeId,
+                ownerRef: `${nodeId}:${config.team?.ownerId ?? 'owner'}`,
+              }
+            : {}),
           maxMembers: config.team?.maxMembers,
           ownerId: config.team?.ownerId,
           memberLimits: config.team?.memberLimits,
@@ -287,11 +303,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let agentRuntime: AgentRuntime | undefined;
   let selectedPluginHost: PluginHost | undefined;
   let spawnAgent: BootstrapResult['spawnAgent'];
+  let deferredTransport: DeferredTransport | undefined;
 
   // 0.2 host 路径：opt-in。只有 host.enabled=true 才动态加载 kernel/createRuntime。
   if (isHostEnabled(config)) {
     const hostPluginHost = new MemoryPluginHost();
     for (const plugin of plugins) await plugin.install(hostPluginHost);
+
+    // team + loopback：transport 要等 gateway 启动后才能构造，用 DeferredTransport 占位。
+    if (config.team?.enabled === true && config.transport?.kind === 'loopback') {
+      deferredTransport = new DeferredTransport();
+    }
 
     const hostResult = await tryCreateHostRuntime({
       config,
@@ -317,7 +339,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }),
       // Host 创建后、owner spawn 前，把 delegate/team 装到同一个 Host/PluginHost。
       beforeSpawn: async (createdHost) => {
-        const factoryPlugins = buildFactoryPlugins(createdHost);
+        const factoryPlugins = buildFactoryPlugins(createdHost, deferredTransport);
         for (const plugin of factoryPlugins) await plugin.install(hostPluginHost);
         plugins.push(...factoryPlugins);
       },
@@ -341,6 +363,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     } else {
       // beforeSpawn 可能已把工厂插件推进数组（但 Host 最终没建成）——回退前清掉
       plugins.length = staticPluginCount;
+      deferredTransport = undefined;
       console.warn(
         `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
       );
@@ -400,6 +423,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     host,
     nodeId,
     spawnAgent,
+    transport: deferredTransport,
     cleanup: () => activeRuntime.dispose(),
   };
 }
