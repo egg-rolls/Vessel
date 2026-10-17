@@ -259,7 +259,7 @@ it('host 关闭 + team.enabled：告警并使用内嵌 Host', async () => {
     fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
     const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stderr).toContain('embedded in-process host');
+    expect(stderr).toContain('internal in-process host');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

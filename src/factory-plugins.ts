@@ -33,7 +33,7 @@ export function planFactoryPlugins(config: VesselConfig, hasHost: boolean): Fact
   if (config.team?.enabled === true) {
     if (!hasHost) {
       warnings.push(
-        'team.enabled with host.enabled=false: team uses its embedded in-process host.',
+        'team.enabled with host.enabled=false: team uses an internal in-process host created by the assembler.',
       );
     }
     team = { enabled: true, useHost: hasHost };

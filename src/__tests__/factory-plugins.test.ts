@@ -35,6 +35,6 @@ describe('planFactoryPlugins', () => {
   it('team 开启 + host 关闭：告警并使用内嵌 Host', () => {
     const plan = planFactoryPlugins({ team: { enabled: true } }, false);
     expect(plan.team).toEqual({ enabled: true, useHost: false });
-    expect(plan.warnings[0]).toContain('embedded in-process host');
+    expect(plan.warnings[0]).toContain('internal in-process host');
   });
 });

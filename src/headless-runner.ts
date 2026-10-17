@@ -29,13 +29,14 @@ class CliError extends Error {
 }
 
 /**
- * 运行 headless 模式
+ * 运行 headless 模式。
+ * @returns 退出码（0 成功 / 1 失败）；清理与 process.exit 由 cli 统一处理。
  */
 export async function runHeadless(
   runtime: RunnableAgent,
   session: SessionBackend,
   options: HeadlessOptions,
-): Promise<void> {
+): Promise<number> {
   const { sessionId, provider } = options;
 
   // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
@@ -63,13 +64,11 @@ export async function runHeadless(
     const branch = await getCurrentGitBranch();
     const resp = await runtime.run(input, sessionId, { branch });
     console.log(resp);
-    runtime.dispose();
-    process.exit(0);
+    return 0;
   } catch (e) {
     const msg = e instanceof CliError ? e.message : `Error: ${e instanceof Error ? e.message : e}`;
     console.error(msg);
-    runtime.dispose();
-    process.exit(1);
+    return 1;
   }
 }
 

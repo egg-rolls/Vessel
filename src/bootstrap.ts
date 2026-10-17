@@ -18,6 +18,8 @@ import {
   type Plugin,
   type PluginHost,
   type RunnableAgent,
+  type RunOptions,
+  type RunStore,
   type RuntimeHost,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
@@ -25,10 +27,19 @@ import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { DeferredTransport } from './deferred-transport';
+import {
+  type DurableRunHandleLike,
+  type DurableRunsControlLike,
+  listRunSummaries,
+  loadResumableCheckpoint,
+  resumeError,
+  routeResume,
+} from './durable-wiring';
 import { planFactoryPlugins } from './factory-plugins';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
+import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionBackend } from './session-factory';
 
@@ -46,6 +57,12 @@ export interface BootstrapOptions {
   interactive?: boolean;
   /** 是否注册 ask_user（默认 = interactive；headless 下注册只会让 waitFor 超时） */
   registerAskUser?: boolean;
+  /** 项目配置文件路径（默认 ./vessel.yaml）；嵌入/测试用 */
+  configPath?: string;
+  /** 用户配置文件路径（默认 ~/.vessel/config.yaml）；嵌入/测试用 */
+  userConfigPath?: string;
+  /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
+  loadMcpModule?: () => Promise<unknown | null>;
 }
 
 export interface BootstrapResult {
@@ -70,6 +87,23 @@ export interface BootstrapResult {
   transport?: DeferredTransport;
   /** 0.3：MCP 控制面（未配置 mcp_servers 时为 undefined） */
   mcp?: McpControl;
+  /** 0.3 durable：checkpoint store（durable 关闭时为 undefined） */
+  runStore?: RunStore;
+  /** 0.3 durable：TUI `/runs` 控制面（durable 关闭时为 undefined） */
+  runs?: DurableRunsControlLike;
+  /**
+   * 恢复一次 run 并等待完成（CLI `--resume-run` 使用）。
+   * 失败抛带稳定 code 的错误：run_not_found / run_not_resumable /
+   * run_already_running / durable_disabled / agent_not_found。
+   */
+  resumeRun(
+    runId: string,
+    opts?: RunOptions,
+  ): Promise<{
+    sessionId: string;
+    result: string;
+    mode: 'host' | 'single-agent';
+  }>;
   /**
    * 幂等关闭：MCP close → Host/runtime dispose → RunStore close。
    * 新代码应 await 本函数；`cleanup()` 仅供旧调用点兼容。
@@ -102,7 +136,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   } = options;
 
   // ── 加载配置 ────────────────────────────────────
-  const { config, validation } = await loadConfig();
+  const { config, validation } = await loadConfig({
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+    ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
+  });
 
   // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
   const nodeId =
@@ -121,6 +158,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     console.error('No API key configured. Run `vessel` interactively first to set up.');
     process.exit(1);
   }
+
+  // ── Durable store（0.3）─────────────────────────
+  // durable.enabled=false（默认）时不创建 store，checkpoint 路径完全不存在。
+  const runStore = createRunStore(config);
 
   // ── 插件发现 ────────────────────────────────────
   // 唯一的发现机制：运行时扫描 plugins/<category>/<name>/（PluginLoader，ADR-028）。
@@ -226,12 +267,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   /**
    * 工厂式插件（delegate_task / team）：
    * - host 开启：都装到共享 Host；
-   * - host 关闭：delegate 用专用 Host、team 用内嵌 Host，并告警。
+   * - host 关闭：delegate 用专用 Host；team 需要 core Host（ext 0.3 移除了插件内嵌 Host），
+   *   由 bootstrap 按需创建一个内部 Host，并告警。
    */
-  const buildFactoryPlugins = (
+  let internalTeamHost: RuntimeHost | undefined;
+  const buildFactoryPlugins = async (
     runtimeHost?: RuntimeHost,
     transport?: DeferredTransport,
-  ): Plugin[] => {
+  ): Promise<Plugin[]> => {
     const plan = planFactoryPlugins(config, runtimeHost !== undefined);
     for (const warning of plan.warnings) console.warn(`⚠ ${warning}`);
 
@@ -261,12 +304,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
 
     if (plan.team) {
+      let teamHost = plan.team.useHost ? runtimeHost : undefined;
+      if (!teamHost) {
+        const { createRuntime } = await import('../packages/core/src/kernel/create-runtime.js');
+        internalTeamHost ??= await createRuntime({ session });
+        teamHost = internalTeamHost;
+      }
+
       factory.push(
         createTeamPlugin({
           providerFactory: () => provider,
           model: config.team?.model ?? providerModel,
           events: runtimeHost?.events ?? events,
-          ...(plan.team.useHost && runtimeHost ? { host: runtimeHost } : {}),
+          host: teamHost,
           ...(transport
             ? {
                 transport,
@@ -337,6 +387,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         permission,
       },
       sessionId: currentSessionId,
+      ...(runStore ? { runStore } : {}),
       contextFactory: () =>
         new MemoryContextManager({
           maxTokens: config.context?.maxTokens,
@@ -346,7 +397,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }),
       // Host 创建后、owner spawn 前，把 delegate/team 装到同一个 Host/PluginHost。
       beforeSpawn: async (createdHost) => {
-        const factoryPlugins = buildFactoryPlugins(createdHost, deferredTransport);
+        const factoryPlugins = await buildFactoryPlugins(createdHost, deferredTransport);
         for (const plugin of factoryPlugins) await plugin.install(hostPluginHost);
         plugins.push(...factoryPlugins);
       },
@@ -380,7 +431,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.1 单 agent 路径（默认；也是 host 构造失败的回退）。
   if (!runtime) {
     // host 关闭/回退：delegate 用专用 Host、team 用内嵌 Host；必要时告警。
-    plugins.push(...buildFactoryPlugins());
+    plugins.push(...(await buildFactoryPlugins()));
     agentRuntime = await AgentRuntime.create({
       provider,
       model: providerModel,
@@ -392,6 +443,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       plugins,
       systemPrompt,
       permission,
+      ...(runStore ? { runStore } : {}),
     });
     runtime = agentRuntime;
     selectedPluginHost = agentRuntime.pluginHost;
@@ -409,7 +461,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let mcpControl: McpControl | undefined;
   if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
     try {
-      const wiring = await installMcp({ config, events: runtimeEvents, loader }, finalPluginHost);
+      const wiring = await installMcp(
+        {
+          config,
+          events: runtimeEvents,
+          loader,
+          ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
+        },
+        finalPluginHost,
+      );
       if (wiring) {
         mcpPlugin = wiring.plugin;
         mcpControl = wiring.control;
@@ -420,6 +480,112 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       process.exit(1);
     }
   }
+
+  // ── Durable resume（0.3）─────────────────────────
+  // 路由按 checkpoint.agent_id：缺失/owner/宿主成员 → host.resume；
+  // 非宿主成员 → 单 agent AgentRuntime.resume（不注入合成消息）。
+  const ownerId = config.team?.ownerId ?? 'owner';
+  let fallbackRuntime: AgentRuntime | undefined;
+
+  const getSingleAgentRuntime = async (): Promise<RunnableAgent> => {
+    if (!host) return activeRuntime;
+    // host 模式下的非成员恢复：按需构造一个共享 port 的单 agent runtime。
+    fallbackRuntime ??= await AgentRuntime.create({
+      provider,
+      model: providerModel,
+      context,
+      events: runtimeEvents,
+      limits,
+      termination,
+      session,
+      pluginHost: finalPluginHost,
+      systemPrompt,
+      permission,
+      ...(runStore ? { runStore } : {}),
+    });
+    return fallbackRuntime;
+  };
+
+  const startResume = async (
+    runId: string,
+    opts?: RunOptions,
+  ): Promise<DurableRunHandleLike & { mode: 'host' | 'single-agent' }> => {
+    if (!runStore) {
+      throw resumeError('durable_disabled', runId, 'durable.enabled is false');
+    }
+
+    const checkpoint = await loadResumableCheckpoint(runStore, runId);
+    const route = routeResume(checkpoint, host, ownerId);
+
+    if (route === 'host' && host?.resume) {
+      // agent_not_found 等错误原样上报，不回退（避免与 Host 内的 run 双跑）。
+      const handle = await host.resume(runId);
+      let cancelled = false;
+      const done = handle.result.then(
+        (message) => ({ status: 'completed' as const, message }),
+        (error) =>
+          cancelled ? { status: 'cancelled' as const } : { status: 'failed' as const, error },
+      );
+      return {
+        runId,
+        sessionId: handle.sessionId ?? checkpoint.session_id,
+        done,
+        cancel: () => {
+          cancelled = true;
+          handle.cancel('resume cancelled');
+        },
+        mode: 'host',
+      };
+    }
+
+    const resumeRuntime = await getSingleAgentRuntime();
+    if (typeof resumeRuntime.resume !== 'function') {
+      throw resumeError('resume_unavailable', runId, 'runtime does not support resume');
+    }
+
+    const controller = new AbortController();
+    const promise = resumeRuntime.resume(runId, { ...opts, signal: controller.signal });
+    const done = promise.then(
+      (message) => ({ status: 'completed' as const, message }),
+      (error) =>
+        controller.signal.aborted
+          ? { status: 'cancelled' as const }
+          : { status: 'failed' as const, error },
+    );
+
+    return {
+      runId,
+      sessionId: checkpoint.session_id,
+      done,
+      cancel: () => controller.abort(),
+      mode: 'single-agent',
+    };
+  };
+
+  const runs: DurableRunsControlLike | undefined = runStore
+    ? {
+        list: (listOptions) => listRunSummaries(runStore, listOptions),
+        resume: (runId) => startResume(runId),
+      }
+    : undefined;
+
+  const resumeRun: BootstrapResult['resumeRun'] = async (runId, opts) => {
+    const started = await startResume(runId, opts);
+    const outcome = await started.done;
+    if (outcome.status === 'cancelled') {
+      throw resumeError('resume_cancelled', runId);
+    }
+    if (outcome.status === 'failed') {
+      throw outcome.error instanceof Error
+        ? outcome.error
+        : resumeError('resume_failed', runId, String(outcome.error));
+    }
+    return {
+      sessionId: started.sessionId,
+      result: outcome.message ?? '',
+      mode: started.mode,
+    };
+  };
 
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
@@ -446,6 +612,21 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     } catch {
       // dispose 是同步契约；失败不阻断退出
     }
+
+    try {
+      fallbackRuntime?.dispose();
+    } catch {
+      // 单 agent 回退 runtime 的清理同样是 best-effort
+    }
+
+    try {
+      if (internalTeamHost && internalTeamHost !== host) await internalTeamHost.close();
+    } catch {
+      // 内部 team host 的清理是 best-effort
+    }
+
+    // store 最后关闭：确保所有 checkpoint 写入已落盘。
+    await closeRunStore(runStore);
   };
 
   // ── ReplContext ─────────────────────────────────
@@ -463,6 +644,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
     config,
+    // 0.3 注入面：未启用时保持 undefined，既有行为不变。
+    ...(mcpControl ? { mcp: mcpControl } : {}),
+    ...(runs ? { runs } : {}),
     newSessionId,
     onExit: () => {
       void shutdown().finally(() => process.exit(0));
@@ -478,6 +662,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     spawnAgent,
     transport: deferredTransport,
     mcp: mcpControl,
+    runStore,
+    runs,
+    resumeRun,
     shutdown,
     cleanup: () => {
       void shutdown();
