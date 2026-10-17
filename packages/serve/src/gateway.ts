@@ -1357,14 +1357,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  /** 记住已受理的 resume；上限 1000，防 Set 无界增长 */
-  function rememberResumed(runId: string): void {
+  /**
+   * 原子占位（在第一个 await 之前调用）：同一 run 只允许一个在途 resume。
+   * 返回 false 表示已被占用 → 409 run_already_running。
+   * 上限 1000，防 Set 无界增长。
+   */
+  function reserveResume(runId: string): boolean {
+    if (resumedRuns.has(runId)) return false;
     resumedRuns.add(runId);
     while (resumedRuns.size > 1000) {
       const first = resumedRuns.keys().next();
       if (first.done) break;
+      // 刚占位的在尾部，淘汰最旧的条目（极小概率淘汰到另一个在途 run）
+      if (first.value === runId) break;
       resumedRuns.delete(first.value);
     }
+    return true;
   }
 
   /** `/v1/durable/*`：只读 store，不写盘、不创建 run */
@@ -1443,7 +1451,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (runId.length === 0 || runId.length > 256) {
         return errorJson('invalid_request', 'run id must be 1..256 characters', 400, extra);
       }
-      if (resumedRuns.has(runId)) {
+      // 原子占位必须在任何 await 之前：否则两个并发请求会同时通过检查。
+      if (!reserveResume(runId)) {
         return errorJson(
           'run_already_running',
           `Run is already being resumed: ${runId}`,
@@ -1456,19 +1465,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
       try {
         checkpoint = await durable.store.load(runId);
       } catch (error) {
+        // 预检失败必须释放占位，允许后续重试
+        resumedRuns.delete(runId);
         return resumeErrorResponse(error, extra);
       }
       if (!checkpoint) {
+        resumedRuns.delete(runId);
         return errorJson('run_not_found', `Run not found: ${runId}`, 404, extra);
       }
       if (!isResumableStatus(checkpoint.status)) {
+        resumedRuns.delete(runId);
         return errorJson('run_not_resumable', `Run is not resumable: ${runId}`, 409, extra);
       }
 
-      rememberResumed(runId);
       try {
         await durable.resume(runId);
       } catch (error) {
+        // 适配器失败释放占位，允许重试
         resumedRuns.delete(runId);
         return resumeErrorResponse(error, extra);
       }
