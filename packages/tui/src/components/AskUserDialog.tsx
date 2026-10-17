@@ -32,6 +32,14 @@ export interface AskUserDialogProps {
 /** 每个选择题末尾默认追加的自定义输入选项 */
 const CUSTOM_OPTION = '输入你自己的答案';
 
+/**
+ * ink-text-input 不忽略 Esc，会把 ESC 序列插进值里；弹窗自己用 Esc 取消/退出输入，
+ * 因此在这里统一剥掉控制字符（同样适用于 Ctrl+L 之类的残留）。
+ */
+function sanitizeTypedValue(value: string): string {
+  return value.replace(/\x1b/g, '');
+}
+
 interface AnswerState {
   selected: Set<string>;
   custom: string;
@@ -486,7 +494,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   // ── 自定义输入 / 开放式输入提交 ──────────────────
   const handleCustomSubmit = useCallback(
     (value: string) => {
-      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: value }));
+      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: sanitizeTypedValue(value) }));
       setCustomFocus(false);
       commitAndAdvance();
     },
@@ -495,7 +503,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
 
   const handleFreeSubmit = useCallback(
     (value: string) => {
-      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: value }));
+      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: sanitizeTypedValue(value) }));
       commitAndAdvance();
     },
     [currentIndex, updateAnswer, commitAndAdvance],
@@ -548,7 +556,9 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
               multiSelect={question.multi_select ?? false}
               selectIndex={selectIndex}
               customFocus={customFocus}
-              onCustomChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+              onCustomChange={(v) =>
+                updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
+              }
               onCustomSubmit={handleCustomSubmit}
             />
           ) : (
@@ -557,7 +567,9 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
               <Text color="cyan">{'> '}</Text>
               <TextInput
                 value={currentAnswer.custom}
-                onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+                onChange={(v) =>
+                  updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
+                }
                 onSubmit={handleFreeSubmit}
               />
             </Box>
