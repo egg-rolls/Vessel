@@ -13,6 +13,8 @@ export interface ProviderConfig {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  /** 请求超时毫秒；<=0 关闭。缺省由 provider 插件决定（当前 120s） */
+  timeoutMs?: number;
 }
 
 /** Guardrail 配置 */
@@ -100,6 +102,24 @@ export interface DelegateConfig {
   model?: string;
   termination?: TerminationConfig;
   limits?: UsageLimitsConfig;
+  /** 子 agent 权限模式；缺省交互 bridge、headless allow */
+  permissionMode?: 'bridge' | 'allow' | 'deny';
+  /** deny 模式下保留的只读工具（默认 ['read']） */
+  readOnlyTools?: string[];
+}
+
+/** agent team 原型配置（0.1.0 显式 opt-in；默认关闭） */
+export interface TeamConfig {
+  /** true 才构造 createTeamPlugin（默认 false；进程内原型） */
+  enabled?: boolean;
+  /** 成员上限（默认 8） */
+  maxMembers?: number;
+  /** owner（主 agent）成员 ID（默认 'owner'） */
+  ownerId?: string;
+  /** 成员默认模型；缺省沿用主 model */
+  model?: string;
+  memberLimits?: UsageLimitsConfig;
+  memberTermination?: TerminationConfig;
 }
 
 /** Vessel 配置 */
@@ -116,6 +136,7 @@ export interface VesselConfig {
   plugins?: PluginConfig[];
   update?: UpdateConfig;
   delegate?: DelegateConfig;
+  team?: TeamConfig;
 }
 
 /** 配置加载选项 */

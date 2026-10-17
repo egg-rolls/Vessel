@@ -19,6 +19,7 @@ import {
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
+import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { createSessionBackend } from './session-factory';
@@ -129,6 +130,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         model: providerModel,
         temperature: config.provider?.temperature,
         max_tokens: config.provider?.maxTokens,
+        timeout_ms: config.provider?.timeoutMs,
       });
     } else {
       console.warn(
@@ -186,6 +188,31 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           ? {
               maxIterations: config.delegate.termination.maxIterations ?? 10,
               maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
+            }
+          : undefined,
+        // 交互模式（TUI / web gateway）把子 agent 的权限请求桥到父事件流；
+        // headless 无应答者，直接 allow，避免 120s 挂起。
+        permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
+        readOnlyTools: config.delegate?.readOnlyTools,
+      }),
+    );
+  }
+
+  // agent team 原型：0.1.0 必须显式 opt-in（`team.enabled: true`），默认不注册。
+  // 传输层/跨进程成员留给 0.2（web）。未启用时 `team` 插件的默认导出是空插件。
+  if (config.team?.enabled === true) {
+    plugins.push(
+      createTeamPlugin({
+        providerFactory: () => provider,
+        model: config.team.model ?? providerModel,
+        events,
+        maxMembers: config.team.maxMembers,
+        ownerId: config.team.ownerId,
+        memberLimits: config.team.memberLimits,
+        memberTermination: config.team.memberTermination
+          ? {
+              maxIterations: config.team.memberTermination.maxIterations ?? 10,
+              maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
             }
           : undefined,
       }),

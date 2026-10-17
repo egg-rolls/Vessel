@@ -153,6 +153,52 @@ describe('未知键与新增 schema', () => {
     });
     expect(validation.errors.some((e) => e.path === 'session.backend')).toBe(true);
   });
+
+  it('provider.timeout_ms 允许 <=0（关闭），拒绝非数字', async () => {
+    const ok = await loadConfig({
+      configPath: tmpYaml('provider:\n  timeout_ms: 0\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(ok.validation.errors.some((e) => e.path === 'provider.timeoutMs')).toBe(false);
+    expect(ok.config.provider?.timeoutMs).toBe(0);
+
+    const bad = await loadConfig({
+      configPath: tmpYaml('provider:\n  timeout_ms: fast\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(bad.validation.errors.some((e) => e.path === 'provider.timeoutMs')).toBe(true);
+  });
+
+  it('delegate.permission_mode / read_only_tools 校验', async () => {
+    const ok = await loadConfig({
+      configPath: tmpYaml('delegate:\n  permission_mode: deny\n  read_only_tools: [read, bash]\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(ok.validation.errors).toHaveLength(0);
+    expect(ok.config.delegate?.permissionMode).toBe('deny');
+    expect(ok.config.delegate?.readOnlyTools).toEqual(['read', 'bash']);
+
+    const bad = await loadConfig({
+      configPath: tmpYaml('delegate:\n  permission_mode: ask\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(bad.validation.errors.some((e) => e.path === 'delegate.permissionMode')).toBe(true);
+  });
+
+  it('team 块校验（enabled 显式 opt-in）', async () => {
+    const ok = await loadConfig({
+      configPath: tmpYaml('team:\n  enabled: true\n  max_members: 4\n  owner_id: lead\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(ok.validation.errors).toHaveLength(0);
+    expect(ok.config.team?.enabled).toBe(true);
+
+    const bad = await loadConfig({
+      configPath: tmpYaml('team:\n  max_members: 0\n'),
+      userConfigPath: missingPath(),
+    });
+    expect(bad.validation.errors.some((e) => e.path === 'team.maxMembers')).toBe(true);
+  });
 });
 
 describe('未消费字段显式 warning', () => {
