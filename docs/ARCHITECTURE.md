@@ -727,3 +727,56 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
 - 0.1.0 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
 - **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2 与静态托管在 `--serve` 下生效。
+
+## 14. 0.2 目标架构（planned，未实现）
+
+> **状态：规划（planned）。** 本节描述 0.2 的方向与边界，**代码尚未实现**；当前实际行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
+> 0.2 不重写 loop、不删除公开 API；新能力默认 off / opt-in。
+
+### 14.1 定位与分层（planned）
+
+- **定位**：Vessel 是可嵌入的**多 agent 平台 runtime**；TUI / CLI / Web / Gateway 是参考 harness 外壳，只消费 runtime 的 SDK 与事件。
+- **分层**：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。依赖方向单向，并由 CI 自动检查。
+- **Module ≠ Plugin**：Module 是编译期/构造期边界（一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制。**不引入 `ModuleHost` / `ModuleRegistry` / 第二套扩展机制。**
+- **非目标**：durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。
+
+### 14.2 Kernel（planned）
+
+| 类型 | 职责 | 0.2 状态 |
+|---|---|---|
+| `RuntimeHost` | 成员注册、生命周期、发现；替换插件内 `InProcessRuntimeHost` | 计划新增 |
+| `AgentHandle` | 成员句柄：`status()` / `run()` / `send()` / `inbox()` / `cancel()` / `close()` | 计划新增 |
+| `RunHandle` | 一次 run 的句柄：`id` / `agentId` / `status()` / `result` / `cancel()` | 计划新增 |
+| `Scheduler` | 全局 FIFO、并发上限（默认 1）、同成员串行、排队/运行取消、限额 | 计划新增 |
+| `EventBus` | Host 级事件总线；实现 `EventStream`，增加按 agent/run/前缀过滤 | 计划新增 |
+| `Cancellation` / `Limits` | 父子取消传播；run + agent 两级限额（host 预算接口预留） | 计划新增 |
+
+`AgentRuntime` 继续是**单 agent loop**；Host 包在它外面，负责注册、生命周期、调度与消息，**不重写循环**。
+
+### 14.3 模块与 subpath exports（planned）
+
+| 模块 | Port | 计划入口 |
+|---|---|---|
+| provider | `LLMProvider` | `@vessel/core/provider` |
+| context | `ContextManager` | `@vessel/core/context` |
+| session | `SessionBackend` | `@vessel/core/session` |
+| policy | `PermissionPolicy` / `GuardrailRunner` / `HookRunner` | `@vessel/core/policy` |
+| transport | `Transport`（新增） | `@vessel/core/transport` |
+| observability | `EventStore`（新增）+ `EventStream` | `@vessel/core/observability` |
+| kernel | Host / Scheduler / Handles | `@vessel/core/kernel` |
+
+0.2 **只在 `@vessel/core` 内做 ports & adapters + subpath exports，不拆包**；根入口继续 re-export 全部现有符号。依赖规则：`types/**` 不 import 实现；模块之间只经 port 交互；`kernel` 只依赖 port 类型；模块不得反向依赖 `src/**` / `packages/serve` / `plugins/**`。
+
+### 14.4 Transport（planned）
+
+- 0.2 只做 **in-process** 与 **loopback HTTP** 两种实现；loopback 只绑 `127.0.0.1`，复用 gateway v1 的 token 鉴权，禁止 `0.0.0.0`。
+- 消息带 `protocol: 1`；in-process 失败不得影响本机路径；loopback 失败只降级该传输。
+- 远程监听 / TLS / 跨机器发现 / 消息持久化不在 0.2。
+
+### 14.5 兼容与迁移（planned）
+
+- **冻结**：9 接口、`AgentRuntime` 公开面、`RunOptions` / `RunEvent`、事件名、插件机制、根导出面；0.2 只做加法与内部替换，不删除公开 API。
+- `delegate_task` 改为 Host 上的**一次性临时成员**（工具名与语义不变）；`@vessel/team` 改为**持久成员**；二者共用 `RuntimeHost`。
+- `@vessel/team` 的 `InProcessRuntimeHost` 在 0.2 标 `@deprecated` 并适配到 core Host，0.3 才移除。
+- 事件：core TS 内部用 camelCase（`agentId`），gateway JSON 用 snake_case（`agent_id`），映射只在 gateway 边界做一次；事件名仍是开放字符串。
+- 依赖方向由 CI 自动检查（biome `noRestrictedImports` 或等价脚本），不只写在文档里。
