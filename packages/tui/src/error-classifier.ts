@@ -13,7 +13,40 @@ export type ErrorCategory =
   | 'auth'
   | 'quota'
   | 'api'
+  // 0.3：durable / MCP 稳定错误码（DECISION-008 §4.4 + Addendum A §1 + Addendum B §9.2）
+  | 'not_found'
+  | 'not_resumable'
+  | 'conflict'
+  | 'disabled'
   | 'unknown';
+
+/** 跨层稳定的错误 code（core RunResumeError / MCP 控制面约定） */
+const STABLE_ERROR_CODES = [
+  'run_not_found',
+  'run_not_resumable',
+  'run_already_running',
+  'run_store_required',
+  'agent_not_found',
+  'durable_disabled',
+  'mcp_disabled',
+  'mcp_server_not_found',
+  'mcp_server_disabled',
+] as const;
+
+type StableErrorCode = (typeof STABLE_ERROR_CODES)[number];
+
+/** 先读 Error.code，再回退到 message；两者都可能来自不同装配层 */
+function readStableCode(error: unknown, lowerMessage: string): StableErrorCode | undefined {
+  const rawCode =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  if (typeof rawCode === 'string') {
+    const matched = STABLE_ERROR_CODES.find((code) => rawCode.includes(code));
+    if (matched) return matched;
+  }
+  return STABLE_ERROR_CODES.find((code) => lowerMessage.includes(code));
+}
 
 export interface ClassifiedError {
   category: ErrorCategory;
@@ -33,6 +66,47 @@ export function classifyError(error: unknown): ClassifiedError {
   const msg = error instanceof Error ? error.message : String(error);
   const name = error instanceof Error ? error.name : '';
   const lower = msg.toLowerCase();
+
+  // 0.3 稳定错误码优先：它们是跨层协议，不能被 message 里的泛化词误判
+  const stableCode = readStableCode(error, lower);
+  if (stableCode) {
+    switch (stableCode) {
+      case 'run_not_found':
+      case 'agent_not_found':
+      case 'mcp_server_not_found':
+        return {
+          category: 'not_found',
+          message: msg,
+          hint: '目标不存在；用 /runs 或 /mcp 查看当前可用项。',
+        };
+      case 'run_not_resumable':
+        return {
+          category: 'not_resumable',
+          message: msg,
+          hint: '该 run 已结束（completed/failed/cancelled），不能恢复。',
+        };
+      case 'run_already_running':
+        return {
+          category: 'conflict',
+          message: msg,
+          hint: '该 run 已有恢复在进行中；等它结束或先用 /runs 查看状态。',
+        };
+      case 'run_store_required':
+      case 'durable_disabled':
+        return {
+          category: 'disabled',
+          message: msg,
+          hint: 'durable.enabled 未开启；检查配置后重启。',
+        };
+      case 'mcp_disabled':
+      case 'mcp_server_disabled':
+        return {
+          category: 'disabled',
+          message: msg,
+          hint: 'mcp_servers 未配置或该 server 已禁用；检查配置后重启。',
+        };
+    }
+  }
 
   // 超时（含 AbortSignal.timeout 的 TimeoutError）
   if (
