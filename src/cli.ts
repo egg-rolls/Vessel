@@ -18,6 +18,8 @@
  * - Ink REPL：React 组件式终端 UI
  */
 
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { type Gateway, startGateway } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
@@ -131,6 +133,17 @@ async function printTools(): Promise<void> {
   console.log('ask_user (interactive only)');
 }
 
+/**
+ * Web 控制台静态目录：`VESSEL_STATIC_DIR` 覆盖；否则用仓库内 `apps/web/dist`。
+ * 目录不存在时不传（gateway 不托管静态站点）。
+ */
+function resolveStaticDir(): string | undefined {
+  const fromEnv = process.env.VESSEL_STATIC_DIR;
+  if (fromEnv) return fromEnv;
+  const dist = fileURLToPath(new URL('../apps/web/dist', import.meta.url));
+  return existsSync(dist) ? dist : undefined;
+}
+
 /** --serve 启动 banner：对齐 box，含 gateway/token/SSE/WS + 控制台提示 */
 function renderGatewayBanner(gateway: Gateway): string {
   const rows: Array<[string, string]> = [
@@ -233,7 +246,16 @@ async function runWithConfig(result: BootstrapResult) {
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   const gateway =
     servePort > 0
-      ? startGateway({ events: ctx.events, session: ctx.session, runtime, port: servePort })
+      ? startGateway({
+          events: ctx.events,
+          session: ctx.session,
+          runtime,
+          // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
+          context: ctx.context,
+          pluginHost: ctx.pluginHost,
+          staticDir: resolveStaticDir(),
+          port: servePort,
+        })
       : null;
   if (gateway) {
     console.log(`\n${renderGatewayBanner(gateway)}\n`);

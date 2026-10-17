@@ -3,7 +3,7 @@
  */
 
 import type { PluginConfig } from '../packages/config/src/index';
-import type { PluginLoader } from './plugin-loader';
+import { FACTORY_PLUGINS, type PluginLoader } from './plugin-loader';
 
 /**
  * 解析要加载的插件名：
@@ -16,10 +16,14 @@ export function resolvePluginNames(
   debug: boolean,
 ): string[] {
   const enabled = configured?.filter((p) => p.enabled !== false) ?? [];
+  // 工厂式插件（delegate-task / team）由 bootstrap 按专用配置显式构造，
+  // 不能经 PluginLoader 加载（delegate-task 的 default 是工厂函数，team 的 default 是空插件）。
   const names =
     enabled.length > 0
-      ? enabled.map((p) => p.name)
-      : loader.getAvailablePlugins().filter((name) => name !== 'hook-logging');
+      ? enabled.map((p) => p.name).filter((name) => !FACTORY_PLUGINS.has(name))
+      : loader
+          .getAvailablePlugins()
+          .filter((name) => name !== 'hook-logging' && !FACTORY_PLUGINS.has(name));
 
   if (debug && !names.includes('hook-logging')) {
     names.push('hook-logging');
