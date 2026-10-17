@@ -30,7 +30,7 @@ interface FakeHandle extends AgentHandle {
   readonly calls: { runs: string[]; closed: number };
 }
 
-function fakeHandle(id: string, sessionId: string): FakeHandle {
+function fakeHandle(id: string, sessionId: string, gate?: Promise<void>): FakeHandle {
   const calls = { runs: [] as string[], closed: 0 };
   return {
     id,
@@ -38,12 +38,16 @@ function fakeHandle(id: string, sessionId: string): FakeHandle {
     run: async (input: string | { content: string }, _opts?: RunOptions): Promise<RunHandle> => {
       const text = typeof input === 'string' ? input : input.content;
       calls.runs.push(text);
+      const result = (async () => {
+        if (gate) await gate;
+        return `echo:${text}`;
+      })();
       return {
         id: `run-${calls.runs.length}`,
         agentId: id,
         sessionId,
         status: () => 'completed' as const,
-        result: Promise.resolve(`echo:${text}`),
+        result,
         usage: () => undefined,
         cancel: () => {},
       };
@@ -84,6 +88,15 @@ function fakeHost(events: EventBus): RuntimeHost & { readonly closed: number[] }
 }
 
 const pluginHost = { listTools: () => [] } as unknown as PluginHost;
+
+/** 轮询等待条件成立（用于断言「第一个 run 已开始、第二个仍在排队」） */
+async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor timeout');
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+}
 
 describe('OwnerRuntimeFacade', () => {
   it('透传 run 到 owner handle，并暴露 host 的 events/pluginHost', async () => {
@@ -181,6 +194,77 @@ describe('OwnerRuntimeFacade', () => {
     expect(bySession.get('s1')?.calls.runs).toEqual(['a']);
     expect(bySession.get('s2')?.calls.runs).toEqual(['b']);
     expect(facade.sessionId).toBe('s2');
+  });
+
+  it('整个 run 串行化：慢 run 期间第二个不同 session 不会跑错或触碰 closed handle', async () => {
+    const events = fakeEvents();
+    const host = fakeHost(events);
+    const initial = fakeHandle('owner', 's0');
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const s1 = fakeHandle('owner', 's1', firstGate);
+    const s2 = fakeHandle('owner', 's2');
+    const spawnOrder: string[] = [];
+
+    const facade = new OwnerRuntimeFacade({
+      host,
+      handle: initial,
+      pluginHost,
+      initialSessionId: 's0',
+      spawnOwner: async (sessionId) => {
+        spawnOrder.push(sessionId);
+        return sessionId === 's1' ? s1 : s2;
+      },
+    });
+
+    const first = facade.run('a', 's1');
+    await waitFor(() => s1.calls.runs.length === 1);
+
+    // 第二个 run 必须排在第一个之后：此时不应 spawn s2，也不应在 s2 上运行
+    const second = facade.run('b', 's2');
+    expect(spawnOrder).toEqual(['s1']);
+    expect(s2.calls.runs).toHaveLength(0);
+
+    releaseFirst();
+    await expect(first).resolves.toBe('echo:a');
+    await expect(second).resolves.toBe('echo:b');
+
+    expect(s1.calls.runs).toEqual(['a']);
+    expect(s2.calls.runs).toEqual(['b']);
+    expect(s1.calls.closed).toBe(1);
+    expect(spawnOrder).toEqual(['s1', 's2']);
+    expect(facade.sessionId).toBe('s2');
+  });
+
+  it('dispose 后排队中的 run 直接抛 disposed', async () => {
+    const events = fakeEvents();
+    const host = fakeHost(events);
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const s1 = fakeHandle('owner', 's1', firstGate);
+    const s2 = fakeHandle('owner', 's2');
+
+    const facade = new OwnerRuntimeFacade({
+      host,
+      handle: fakeHandle('owner', 's0'),
+      pluginHost,
+      initialSessionId: 's0',
+      spawnOwner: async (sessionId) => (sessionId === 's1' ? s1 : s2),
+    });
+
+    const first = facade.run('a', 's1');
+    await waitFor(() => s1.calls.runs.length === 1);
+    const queued = facade.run('b', 's2');
+
+    facade.dispose();
+    releaseFirst();
+
+    await expect(first).resolves.toBe('echo:a');
+    await expect(queued).rejects.toThrow('disposed');
   });
 
   it('dispose 只关闭 host 一次，之后 run 拒绝', async () => {

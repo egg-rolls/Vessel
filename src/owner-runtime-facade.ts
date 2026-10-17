@@ -37,6 +37,12 @@ export class OwnerRuntimeFacade implements RunnableAgent {
   private currentSessionId: string;
   private disposed = false;
   private switching: Promise<void> | null = null;
+  /**
+   * 串行化整个 run（不只是 session switch）。
+   * owner 本来就是单 agent，core 的 perAgentSerial 也是这个语义；
+   * 否则 A 切到 X 后，B 可能切到 Y 并关闭 X 的 handle，A 再 run 就跑错 session。
+   */
+  private runChain: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly options: OwnerRuntimeFacadeOptions) {
     this.events = options.host.events;
@@ -50,7 +56,18 @@ export class OwnerRuntimeFacade implements RunnableAgent {
     return this.currentSessionId;
   }
 
-  async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
+  run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
+    const task = this.runChain.then(() => this.runInternal(input, sessionId, opts));
+    // 失败不能断裂后续 run；调用方拿到的仍是原始 task
+    this.runChain = task.catch(() => {});
+    return task;
+  }
+
+  private async runInternal(
+    input: string | Message,
+    sessionId?: string,
+    opts?: RunOptions,
+  ): Promise<string> {
     this.assertAlive();
 
     const targetSessionId = sessionId ?? this.currentSessionId;
@@ -59,7 +76,9 @@ export class OwnerRuntimeFacade implements RunnableAgent {
       this.assertAlive();
     }
 
-    const run = await this.handle.run(input, opts);
+    // 在切换完成后捕获 handle，避免排队期间被别的切换替换
+    const handle = this.handle;
+    const run = await handle.run(input, opts);
     return run.result;
   }
 
