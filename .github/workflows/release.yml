@@ -1,18 +1,157 @@
 name: Release
 
-# 只在推送 tag 时触发（v*），不自动发布每次 commit
-# 发布由人决定时机：git tag v0.1.0 && git push --tags
+# 只在推送 tag 时触发（v*），不自动发布每次 commit。
+# 0.1.0 不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
+
 on:
   push:
     tags:
       - 'v*'
 
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
-  # ── 质量检查（发布前最后一道防线）─────────────
-  quality:
-    name: Quality Checks
+  # ── 发布前置校验 ─────────────────────────────────
+  verify:
+    name: Verify Release
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      dist_tag: ${{ steps.meta.outputs.dist_tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag is on main
+        shell: bash
+        run: |
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - name: Extract version
+        id: meta
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "$VERSION" == *-* ]]; then
+            DIST_TAG="beta"
+          else
+            DIST_TAG="latest"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$DIST_TAG" >> "$GITHUB_OUTPUT"
+          echo "Releasing $VERSION (npm dist-tag: $DIST_TAG)"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Check versions and changelog
+        run: bun run scripts/version.ts --check "${{ steps.meta.outputs.version }}"
+
+  # ── 质量检查（发布前最后一道防线）───────────────
+  quality:
+    name: Quality Checks
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run quality checks
+        uses: ./.github/actions/quality
+
+  # ── npm 发布（库包 + 插件包；不含根 CLI）────────
+  publish-npm:
+    name: Publish to npm
+    needs: [verify, quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      DIST_TAG: ${{ needs.verify.outputs.dist_tag }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Publish public packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(
+            packages/core
+            packages/permission
+            packages/config
+            packages/serve
+            packages/tui
+            plugins/tools/basic-tools
+            plugins/tools/delegate-task
+            plugins/provider/openai
+            plugins/provider/anthropic
+            plugins/security/guardrail-pii
+            plugins/security/redact-secrets
+            plugins/security/tool-policy
+            plugins/observability/hook-logging
+          )
+
+          for dir in "${packages[@]}"; do
+            name=$(node -p "require('./$dir/package.json').name")
+            if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+              echo "skip $name@$VERSION (already published)"
+              continue
+            fi
+
+            echo "publishing $name@$VERSION"
+            (
+              cd "$dir"
+              npm pkg set repository.type=git
+              npm pkg set repository.url="git+https://github.com/${GITHUB_REPOSITORY}.git"
+              npm publish --provenance --access public --tag "$DIST_TAG"
+            )
+          done
+
+  # ── GitHub Release（notes + latest.json）─────────
+  github-release:
+    name: Create GitHub Release
+    needs: [verify, publish-npm]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout code
@@ -21,59 +160,21 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.9
 
-      - name: Install dependencies
-        run: bun install
-
-      - name: Run linting
-        run: bun run lint
-
-      - name: Run type checking
-        run: bun run typecheck
-
-      - name: Run tests
-        run: bun test
-
-  # ── 创建 GitHub Release ──────────────────────
-  release:
-    name: Create GitHub Release
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: quality
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Generate latest.json
+        run: >
+          bun run scripts/latest-json.ts
+          --version "${{ needs.verify.outputs.version }}"
+          --channel "${{ needs.verify.outputs.dist_tag }}"
+          --out latest.json
 
       - name: Create Release
         uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  # ── npm 发布（未来启用，需要先改 private:false）─
-  # publish-npm:
-  #   name: Publish to npm
-  #   runs-on: ubuntu-latest
-  #   timeout-minutes: 5
-  #   needs: quality
-  #
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #
-  #     - name: Setup Bun
-  #       uses: oven-sh/setup-bun@v2
-  #       with:
-  #         bun-version: latest
-  #
-  #     - name: Install dependencies
-  #       run: bun install
-  #
-  #     - name: Publish
-  #       run: bun publish
-  #       env:
-  #         NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
