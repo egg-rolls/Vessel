@@ -47,9 +47,12 @@ export const ROOT_0_2_SYMBOLS = [
   'MemoryEventBus',
 ] as const;
 
+/** 0.3 durable run 新增的根导出。 */
+export const ROOT_0_3_SYMBOLS = ['FileRunStore', 'MemoryRunStore', 'RunResumeError'] as const;
+
 /** 每个 subpath 必须存在的运行时符号；`./types` 允许为空。 */
 export const SMOKE_TARGETS: Readonly<Record<string, readonly string[]>> = {
-  '.': [...ROOT_COMPAT_SYMBOLS, ...ROOT_0_2_SYMBOLS],
+  '.': [...ROOT_COMPAT_SYMBOLS, ...ROOT_0_2_SYMBOLS, ...ROOT_0_3_SYMBOLS],
   './context': ['MemoryContextManager'],
   './kernel': [
     'createCancellationScope',
@@ -63,7 +66,10 @@ export const SMOKE_TARGETS: Readonly<Record<string, readonly string[]>> = {
   './provider': ['AnthropicProvider', 'MemoryLLMProvider', 'OpenAICompatibleProvider'],
   './session': [
     'FileSessionBackend',
+    'FileRunStore',
+    'MemoryRunStore',
     'MemorySessionBackend',
+    'RunResumeError',
     'SQLiteSessionBackend',
     'deriveSessionMeta',
   ],

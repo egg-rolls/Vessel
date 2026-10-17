@@ -121,6 +121,7 @@ jobs:
             plugins/tools/basic-tools
             plugins/tools/delegate-task
             plugins/tools/team
+            plugins/mcp/client
             plugins/provider/openai
             plugins/provider/anthropic
             plugins/security/guardrail-pii

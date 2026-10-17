@@ -511,3 +511,59 @@
   - `delegate_task` 改为 Host 上的临时成员，工具名与语义保持不变；`@vessel/team` 的 `InProcessRuntimeHost` 降级为兼容适配层并在 0.3 移除。
 - **对 ADR-015 的关系（局部 supersede）**：ADR-015 的决策 3 中有一条「A2A / 多 agent / 树搜索 → 工具（handler 内部 spawn 子 runtime）」。本 ADR **只取代这一条中「多 agent 只能/应当在工具 handler 内 spawn」作为唯一实现方式的表述**；该 bullet 作为 0.1 的过渡解释仍成立。**ADR-015 的主结论——「不需要 `LoopStrategy` 抽象，工具调用循环保持通用」——继续有效，本 ADR 不废止 ADR-015。**
 - **关联**：局部 supersede ADR-015 的上述单条；保持 ADR-003（插件不进构造函数）、ADR-004（唯一扩展机制）、ADR-012/017（core 小）、ADR-030（事件名开放）、ADR-034（极简核心）、ADR-036（gateway 传输边界）、ADR-038（reasoning 不回传事件）。架构事实见 `ARCHITECTURE.md`；0.2 规划见其「0.2 目标架构（planned，未发布）」小节。
+
+## ADR-039：MCP client 作为插件接入
+
+- **上下文**：0.1 曾删除旧 MCP 客户端，并留下边界「MCP 若回归，形态也是一个插件，不给 core 加接口」（ADR-034 第 8 条）。0.3 需要接外部工具生态；MCP 是协议桥，不是领域无关的 runtime 能力。若把它放进 core，既违背能力准入，也会让 loop 与接口面为一种协议扩张。
+- **决策**：
+  1. **形态**：工厂式插件 `plugins/mcp/client/`，包名 `@vessel/mcp-client`；`createMcpPlugin(options)` 返回 `McpClientPlugin`。由 asm 装配层在 `FACTORY_PLUGINS` 中构造。
+  2. **边界**：**不是 core 模块**；不新增 core 接口、不新增扩展机制；工具只经 `PluginHost.registerTool` 注册；core 的 9 个扩展接口与 loop 拓扑不变。
+  3. **传输**：stdio（JSON-RPC over child process stdin/stdout）与 HTTP（MCP Streamable HTTP）。HTTP 最小范围：POST JSON-RPC；请求头 `Accept: application/json, text/event-stream`；响应支持纯 JSON 与 SSE 帧解析；不做 GET 长连接、session 恢复、OAuth。
+  4. **工具名**：`toolPrefix !== false` 时为 `mcp__<server>__<tool>`，非法字符替换为 `_`；完整工具名超过 64 字符时截断到 64 并在末尾追加 `_` + 8 位 hash，避免碰撞。`toolPrefix === false` 时用原名；与既有工具冲突则**跳过并告警，不覆盖**。
+  5. **权限**：`checkPermission` 一律 `'ask'`；仅 `autoApproveTools` 中的工具返回 `'allow'`。名单使用 server 返回的**原始工具名**（加前缀前），大小写敏感、精确匹配。禁止默认放行。
+  6. **失败隔离**：单 server 连接失败或中途断开不得导致进程启动失败；告警并发 `mcp.server.failed` / `mcp.server.disconnected`，其余 server 继续。工具调用失败发 `mcp.tool.failed`，作为普通工具错误折回语言空间。
+  7. **生命周期与控制面**：`install()` 建连；`close()` 关闭所有子进程/连接；asm 在进程退出时调用。控制面冻结为 `McpPluginControls`：`listServers()`（同步快照）、`getServer(name)`、`reconnect(name)`；`enabled:false` 的 server 也出现在列表中，status 为 `disabled`。`reconnect` 未知名字抛 `mcp_server_not_found`，禁用 server 抛 `mcp_server_disabled`。
+  8. **状态类型**：`McpServerStatus { name, status: 'connected' | 'failed' | 'disabled', transport, tools, error?, protocolVersion?, serverInfo? }`。asm 负责把它适配成 TUI 的 `McpControl` 与 gateway 的状态源；tui / web 不直接 import 插件实现。
+  9. **事件**（开放字符串，ADR-030）：`mcp.server.connected` / `mcp.server.failed` / `mcp.server.disconnected` / `mcp.tool.called` / `mcp.tool.failed`。
+  10. **依赖**：core 依赖保持为空；插件默认自实现 JSON-RPC。若需引入 MCP SDK，需 1 单独批准；新 workspace 包首次安装由 ext 在自己 worktree 执行并提交 `bun.lock`（Addendum B §9.3 Q3），且同期 asm 不得改依赖。
+  11. **安全**：`command` / `args` 以数组形式 spawn，不经 shell 拼接；`env` 只来自配置；远程 server 的 TLS 校验不得默认关闭。
+- **备选**：(a) 进 core 做成 MCP 模块——违反能力准入与 ADR-034 / ADR-037；(b) 每个 MCP 工具静态生成插件——无法按配置动态增删 server；(c) 另起工具注册机制——违反单一扩展机制。均不取。
+- **后果**：外部工具与内置工具走同一 `PluginHost`；core 零改动；工具总数变为动态（文档写「4 个基础 + N 个 MCP」）。代价：插件承担子进程 / 连接生命周期、超时、重连与状态维护；默认 ask 带来首次确认摩擦（刻意）。
+- **关联**：ADR-034（MCP 延后条款）、ADR-037（Module ≠ Plugin）、ADR-030（开放事件名）、DECISION-008 §4.2 / §8 Addendum A / §9.1 / §9.3。
+
+## ADR-040：Durable run——RunStore port、checkpoint 与 resume
+
+- **上下文**：`SessionBackend` 以 session 为键保存最后一份 `RunState`；进程崩溃后无法按 run 恢复。0.2 的 Host run 状态在内存，重启即丢。需求是「本机可恢复」，不是 workflow / 跨机器调度。
+- **决策**：
+  1. **port 与类型位置**：`RunCheckpoint` / `RunStore` 定义在 `packages/core/src/types/run-store.ts`，`packages/core/src/session/run-store.ts` 实现并 re-export；公开导入路径与名字仍为 `@vessel/core/session` 与根入口。签名严格按 DECISION-008 §4.1。
+  2. **定位**：`RunStore` 是 module port，不是第 10 个核心扩展接口；9 个扩展接口与 loop 拓扑不变。
+  3. **后端**：`MemoryRunStore` 与 `FileRunStore({ dir })`。File 后端一个 run 一个 JSON 文件；同一 run 的写入串行化；临时文件 + rename 原子替换；Windows 下 rename 失败重试 3 次，仍失败则整文件直写（绝不写半截 JSON）——文档标注 **best-effort**，不做跨进程写协调。
+  4. **list**：按 `updated_at` 倒序、同值按 `run_id` 升序；支持 `status` / `session_id` / `limit`；默认 `limit=50`、最大 `200`；gateway 与 CLI 同规则。
+  5. **checkpoint 时机**：run 开始、每完成一轮 tool-call 后、run 结束（completed / failed / cancelled）；每次写入发 `run.checkpoint`。
+  6. **写者**：**只有一个写者 `AgentRuntime`**。Host 模式把 Host 的 `runStore` 注入成员 runtime；同时给 Host 与 runtime 两个 store 时 **Host 优先，禁止双写**。单 agent 模式使用 `AgentRuntimeOptions.runStore`。
+  7. **接线（additive）**：`RuntimeOptions.runStore?`、`AgentRuntimeOptions.runStore?` / `agentId?`、`InProcessRuntimeHostOptions.runStore?`；`AgentRuntime.resume(runId, opts?): Promise<string>`；`RunnableAgent.resume?(runId, opts?): Promise<RunHandle>`；`RuntimeHost.resume?(runId): Promise<RunHandle>`。
+  8. **resume 语义**：恢复消息 / usage / iteration 到上下文，发 `run.resumed`，继续 loop；`RunHandle.id` 与原 `run_id` 相同。Host resume **不经 Scheduler**（保持 run_id 不变）；若该成员已有 active run → `run_already_running`。resume 不受全局并发上限约束（已知行为）。同一 run 同时只允许一个恢复，首个成功，后续（含重复 resume）→ `run_already_running`。
+  9. **错误**：`RunResumeError extends Error`，字段 `code: 'run_not_found' | 'run_not_resumable' | 'run_already_running' | 'run_store_required' | 'agent_not_found'` 与 `runId`。terminal 状态一律 `run_not_resumable`；未知 id `run_not_found`；未配置 store `run_store_required`；Host 模式未知成员 `agent_not_found`。gateway 映射：`run_store_required → durable_disabled`，`agent_not_found → agent_not_found`，其余同名。
+  10. **范围**：只做本机 file / memory；不做跨机器恢复、分布式锁、多进程并发写协调；File 后端假定单进程写入。无保留 / 清理策略（list 可能增长），写为已知限制。
+  11. **与 SessionBackend 正交**：Session 是会话对话持久化，RunStore 是 run 执行检查点；resume 不重放事件（事件回放仍归 `FileEventStore` / `replayRun`）。
+  12. **事件**：`run.checkpoint` / `run.resumed`，开放字符串，不建常量。
+- **备选**：(a) 扩展 `SessionBackend` 承载 run——键语义冲突（session vs run）；(b) 从事件日志重建 run——事件不携带完整模型状态；(c) 直接做 workflow / 跨机器 durable——非目标。均不取。
+- **后果**：本机崩溃后可恢复；每次 checkpoint 有 IO 成本；`MemoryRunStore` 进程退出即丢。resume 绕过 Scheduler 是刻意取舍：恢复保持原 run_id、不受全局并发上限约束，调用方需自行避免与调度器的并发争用。
+- **已知限制（qa C1-09b / DECISION-008 §8 A-2）**：resume 并发守卫仅为 **per-Host / per-store-instance**；多 Host 共享同一 `FileRunStore`、或跨进程同时恢复同一 run，不在 0.3 的协调范围，属部署错误。
+- **关联**：ADR-025（参考实现先例）、ADR-032（事件回放）、ADR-037、DECISION-008 §4.1 / §8 Addendum A / §9.2。
+
+## ADR-041：远程监听与 TLS（显式 opt-in）
+
+- **上下文**：0.1 / 0.2 gateway 只绑 `127.0.0.1`；ADR-037 把远程监听与 TLS 列为 0.2 非目标。0.3 要支持可信网络 / VM 访问，但默认行为必须与 0.2 一致。
+- **决策**：
+  1. **显式 opt-in**：`serve.allow_remote: true` 且 hostname 非回环才进入远程模式；默认 `127.0.0.1` + `allow_remote: false`，行为与 0.2 字节级一致。
+  2. **远程必须有 token**：沿用 `config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`；非回环必须 `allow_remote=true` 且 token 非空，不得匿名；token 为空或被显式关闭时启动失败并给出明确错误。
+  3. **TLS 与 `allow_remote` 相互独立**：loopback + TLS 允许（`allow_remote=false` 也可启 TLS）；非回环才要求 `allow_remote=true`。`serve.tls.cert_file` 与 `serve.tls.key_file` 必须成对提供，否则启动失败。
+  4. **只做 HTTP/1.1**：不做 HTTP/2 / ALPN / mTLS / 客户端证书管理 / ACME / 证书自动续期。HTTPS 与 WSS 共用同一 server、token 与 Origin 规则。
+  5. **`hello.features`** 按实际启用增加 `tls`（以及既定的 `durable-resume` / `mcp-status`）；不新增 `remote` feature。
+  6. **安全不变量不因远程放宽**：Host / Origin 校验、WS 首帧鉴权、1 MiB 请求体上限、无 `*` CORS、HTML CSP 全部保留。
+  7. **非目标**：反向代理信任头、跨机器 team 语义变化、远程 `/v1/team/*` 扩展。
+- **备选**：(a) 默认监听 `0.0.0.0`——扩大攻击面且破坏兼容；(b) 只支持反向代理 TLS——不满足内置 opt-in 需求；(c) 自动生成自签证书——信任警告与隐性风险；(d) HTTP/2——超出范围。均不取。
+- **后果**：多一条显式配置路径；证书生命周期由用户负责；文档必须提示暴露 gateway 的风险；默认路径零变化，回归以默认配置对照 0.2。远程 / TLS 测试离线（本地自签证书 + 回环端口）。
+- **已知行为**：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问需把 host 换成实际 IP。这是显示层行为，不改变监听地址、token 鉴权或 Host/Origin 校验。
+- **关联**：ADR-036（gateway 协议）、ADR-037（0.2 非目标）、DECISION-008 §4.3 / §4.4 / §8 Addendum A §8.9。
