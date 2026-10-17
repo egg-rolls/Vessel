@@ -247,3 +247,46 @@ describe('OpenAICompatibleProvider streaming', () => {
     expect(response.finish_reason).toBe('stop');
   });
 });
+
+describe('OpenAICompatibleProvider 错误与取消（C-09）', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('非 2xx 响应抛错并带状态码', async () => {
+    globalThis.fetch = (async () =>
+      new Response('unauthorized', { status: 401 })) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleProvider({ api_key: 'k', model: 'gpt-4' });
+
+    await expect(
+      provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4' }),
+    ).rejects.toThrow('401');
+  });
+
+  it('把 req.signal 透传给 fetch', async () => {
+    const controller = new AbortController();
+    let received: AbortSignal | undefined;
+
+    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+      received = init?.signal ?? undefined;
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }],
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleProvider({ api_key: 'k', model: 'gpt-4' });
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'gpt-4',
+      signal: controller.signal,
+    });
+
+    expect(received).toBe(controller.signal);
+  });
+});

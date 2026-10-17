@@ -9,12 +9,14 @@
  * 同一文件可能数据竞争。pre-MVP 单进程使用即可。
  */
 
-import { appendFile } from 'node:fs/promises';
+import { appendFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import type { RunEvent } from '../types/event.js';
 
 /** JSONL 事件持久化存储 */
 export class FileEventStore {
   private filePath: string;
+  private dirReady?: Promise<void>;
 
   constructor(filePath: string) {
     this.filePath = filePath;
@@ -22,7 +24,14 @@ export class FileEventStore {
 
   /** 追加一条事件到 JSONL（一行 JSON，末尾换行）。append 模式 O(1)，避免整文件重写 */
   async append(event: RunEvent): Promise<void> {
+    await this.ensureDir();
     await appendFile(this.filePath, `${JSON.stringify(event)}\n`, 'utf8');
+  }
+
+  /** 确保父目录存在（惰性、只执行一次；对标 FileSessionBackend，C-08） */
+  private ensureDir(): Promise<void> {
+    this.dirReady ??= mkdir(dirname(this.filePath), { recursive: true }).then(() => undefined);
+    return this.dirReady;
   }
 
   /** 列出所有 run_id（去重） */

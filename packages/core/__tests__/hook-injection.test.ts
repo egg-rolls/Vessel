@@ -243,3 +243,76 @@ describe('OnError hook 触发（Issue #70）', () => {
     expect(calls[0]?.phase).toBe('run');
   });
 });
+
+describe('Hook 阶段触发顺序（C-09）', () => {
+  it('BeforeLlm / AfterLlm / BeforeTool / AfterTool 按顺序触发', async () => {
+    const order: string[] = [];
+
+    const provider: LLMProvider = {
+      async chat(_req: ChatRequest): Promise<LLMResponse> {
+        if (order.filter((label) => label === 'before_llm').length === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'noop', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        return { content: 'done', finish_reason: 'stop' };
+      },
+    };
+
+    const hookPlugin: Plugin = {
+      name: 'stage-order',
+      install: (host) => {
+        const stages: Array<[HookType, string]> = [
+          [HookType.BeforeLlm, 'before_llm'],
+          [HookType.AfterLlm, 'after_llm'],
+          [HookType.BeforeTool, 'before_tool'],
+          [HookType.AfterTool, 'after_tool'],
+        ];
+        for (const [type, label] of stages) {
+          host.registerHook({
+            name: label,
+            type,
+            run: async () => {
+              order.push(label);
+            },
+          });
+        }
+        host.registerTool({
+          name: 'noop',
+          description: 'noop',
+          inputSchema: { type: 'object', properties: {} },
+          handler: async () => 'ok',
+        });
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test',
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      plugins: [hookPlugin],
+    });
+
+    await runtime.run('hi');
+
+    expect(order).toEqual([
+      'before_llm',
+      'after_llm',
+      'before_tool',
+      'after_tool',
+      'before_llm',
+      'after_llm',
+    ]);
+  });
+});
