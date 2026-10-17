@@ -100,7 +100,7 @@ Vessel\                                    # 共享侧（git）
 
 ### 3.1 根目录
 
-只允许以下文件：`README.md`、`AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`CHANGELOG.md`、`LICENSE`、构建/工具配置（`package.json`、`bun.lock`、`tsconfig.json`、`biome.json`）。
+只允许以下文件：`README.md`、`AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore`、`.env.example`、构建/工具配置（`package.json`、`bun.lock`、`tsconfig.json`、`biome.json`）。
 
 **禁止**：`HANDOFF-*.md`、`PLAN-*.md`、`REPORT-*.md`、`TODO.md`、`NOTES.md`、草稿文件、个人目录。
 
@@ -145,7 +145,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | `asm` | D3 装配与配置 | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json` |
 | `tui` | D4 终端产品 | `packages/tui/**` |
 | `web` | D5 远程控制面 | `packages/serve/**`、`apps/web/**` |
-| `gov` | D6 工程治理 | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**` |
+| `gov` | D6 工程治理 | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`build.ts` 除外）、`.gitignore` |
 | `qa` | 质量与交叉验证（staff，不是事业部） | 无独占写路径；只读审查、跑测试、写个人侧报告 |
 
 ### 4.2 版本、分支、worktree
@@ -186,12 +186,13 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | `asm` | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json` | 所有上游包的公开导出 |
 | `tui` | `packages/tui/**` | `packages/core`、`packages/config` 的公开接口 |
 | `web` | `packages/serve/**`、`apps/web/**` | `packages/core` 的公开接口 |
-| `gov` | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**` | 全部（只读审查，不改业务代码） |
+| `gov` | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`scripts/build.ts` 除外）、`.gitignore` | 全部（只读审查，不改业务代码） |
 | `qa` | 无（只读） | 全部；输出到个人侧 reports / decisions |
 
 规则：
 
 - **跨路径改动只能提 PR 或消息协商，不能直接改。**
+- `scripts/version.ts` 的写模式**只在发布收口由 1 执行**，机械改写各包 `package.json`；不属于日常跨路径改动，N 不运行写模式。
 - `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + `docs/ADR.md`，并通知全部 N。
 - 依赖方向单向：`core` ← 其它。`core` 的 `dependencies` 永远为空。
 - 并行开发必须 worktree 隔离，禁止共享工作目录。
@@ -246,23 +247,22 @@ N 在自己的分支提交（只含共享侧成品）
 - **触发**：push tag `v*`（稳定版）或 `v*-beta.*`（预发布）。不用分支名触发发布——分支管开发，tag 管发布。
 - **发布前检查**：tag 在 `main` 上；tag 与所有 package 版本一致；CI 全绿；`CHANGELOG.md` 已更新。
 - **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。
-- **GitHub Release**：自动生成 notes，附独立二进制、sha256、`latest.json` 更新清单。
+- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.1.0 无二进制与 sha256。
 - **回滚**：不删 tag、不 force-push；发新 patch，或用 revert commit 回退 `main`。
 - **共享侧工作树**：除当前任务改动外，`git status` 必须干净，无未跟踪垃圾。
 
-## 8. 已知迁移项（本守则落地时执行）
+## 8. 迁移记录（已完成）
 
-| 项 | 现状 | 目标 |
-|---|---|---|
-| `HANDOFF-MAIN.md` | 在共享侧且已跟踪 | 移到个人侧 `docs/handoff/HANDOFF-main.md`，从 git 移除 |
-| `.claude/plans/streaming-core.md` | 被强制跟踪 | 从 git 移除（`.claude/` 本身已忽略） |
-| `.codegraph/` | 位于外层且被进程占用 | 移入 `Vessel/.codegraph/`（保持被忽略） |
-| `.vessel/sessions.db` | 已忽略 | 保持忽略，只属个人运行数据 |
-| `.env.example` | 已跟踪 | 保留（模板，不含密钥） |
-| 版本基线 | 当前在 `refactor/minimal-core` 分支 | 清理后创建 `release/0.1`；`v0.1.0` tag 留到发布时 |
-| 角色分支 | 无 | 从 `release/0.1` 拉出 6 条 `0.1.0-<role>`，各配 worktree |
-
-迁移执行顺序：清理 → `release/0.1` 基线 → 6 个 worktree → 个人侧骨架 → 写 handoff → 派发。
+| 项 | 结果 |
+|---|---|
+| `HANDOFF-MAIN.md` | 已移到个人侧 `docs/handoff/HANDOFF-main.md`，从 git 移除 |
+| `.claude/plans/streaming-core.md` | 已从 git 移除（`.claude/` 本身被忽略） |
+| `.codegraph/` | 已移入 `Vessel/.codegraph/`，保持被忽略 |
+| `.vessel/sessions.db` | 保持忽略，只属个人运行数据 |
+| `.env.example` | 保留（模板，不含密钥） |
+| 版本基线 | `release/0.1` 已建立（基线 `81970bf`）；`v0.1.0` tag 留到发布时 |
+| 角色分支 | 6 条 `0.1.0-<role>` 分支与 worktree 已建立 |
+| 个人产物 | `git ls-files` 未发现 handoff / plan / report / `.claude` / `.vessel` 残留 |
 
 ## 9. CI / CD 与发布
 
@@ -272,10 +272,11 @@ N 在自己的分支提交（只含共享侧成品）
 
 | Job | 内容 |
 |---|---|
-| `quality`（ubuntu） | `bun install --frozen-lockfile` → `bun test` → `bun run typecheck` → `biome ci` → `bun run build` |
-| `cross-platform`（matrix：ubuntu / windows / macos） | `bun test` + typecheck；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
-| `web` | `cd apps/web && npm ci && npm run build` |
-| `examples` | 确保 `examples/**` 在 tsconfig 覆盖范围内并参与 typecheck（上轮盲区） |
+| `quality`（ubuntu） | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
+| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
+| `web` | `apps/web`：`npm ci` → `npm run build` |
+| `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（配置由 `asm` 提供） |
+| `smoke` | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock） |
 
 - 同一 ref 的旧 run 自动取消；缓存 Bun / npm。
 - 三件套任何一项红，禁止合并。
@@ -284,20 +285,21 @@ N 在自己的分支提交（只含共享侧成品）
 
 触发：push tag `v*`（含预发布）。
 
-1. 校验 tag 在 `main` 上，且与根及所有 workspace `package.json` 版本一致。
+1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本。
 2. 复跑 quality（发布前再验一次）。
-3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta` / `next`；`--provenance --access public`。
-4. `bun build --compile` 产出 win / linux / mac 独立二进制。
-5. 创建 GitHub Release：自动 notes、sha256、`latest.json` 更新清单。
+3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。**不发布根 CLI**。
+4. 创建 GitHub Release：自动 notes + `latest.json`（0.1.0 的 `assets` 为空）。
+5. **0.1.0 不构建二进制**（ADR-006 继续有效）；0.2 再评估。
 6. 发布失败不自动重试；修版本后重新打 tag（旧 tag 保留，不覆盖）。
 
 ### 9.3 用户侧 CD / 自动更新
 
-- `vessel update --check`：对比 GitHub Release / npm registry 最新版本。
+- `vessel update --check`：对比 GitHub Release 的 `latest.json` 与当前版本。**客户端尚未实现**。
 - REPL 启动时后台检查（每天最多一次，可配置关闭），只提示、不打断。
-- `vessel update`：独立安装自替换二进制并校验 sha256；npm 安装则提示升级命令。
+- npm 安装：`vessel update` 提示升级命令，不自动替换。
+- **0.1.0 不提供独立二进制，也不做二进制自更新**；0.2 再评估。
 - 预发布通道：`--channel beta` 或 `VESSEL_CHANNEL=beta`。
-- `latest.json` 由 release workflow 生成，含 version / url / sha256 / notes。
+- `latest.json` 由 release workflow 生成，0.1.0 只含 `version` / `channel` / `released_at` / `assets: {}`。
 
 ### 9.4 版本与变更日志
 

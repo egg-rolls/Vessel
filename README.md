@@ -39,8 +39,8 @@ Vessel 是一个**自组织 Agent Harness**——不是给你 50 个工具的 Ag
 | **`@vessel/serve`** | 0.1.0 | 常驻服务（gateway，`--serve` 模式） |
 | `apps/web` | — | 网页控制台（实验性） |
 
-- CI：`.github/workflows/ci.yml`（lint + typecheck + test + build）。
-- ⚠️ **尚未发布到 npm**：各包为 `0.1.0`，**当前请从源码运行**。
+- CI：`.github/workflows/ci.yml`（质量门禁、跨平台矩阵、web 构建、examples 类型检查、mock 冒烟）。
+- ⚠️ **0.1.0 尚未发布**：库包版本为 `0.1.0`，发布流程已就绪；当前请从源码运行。
 
 ## 快速开始
 
@@ -80,6 +80,10 @@ bun test                                        # 跑测试
 ```
 
 REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/setup` `/reload` `/clear` `/exit`）。
+
+- `/clear` 清屏，**不清空会话上下文**；需要新会话用 `/new`。
+- `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
+- 输入里的 `@路径` 会在发送前展开为注入消息，界面上以引用块显示，用户原文保持不变。
 
 ## 架构
 
@@ -123,6 +127,14 @@ headless 模式没有 TUI 订阅者，`ask_user` 不注册——所以那里是 
 
 同一机制可用于引用任何文件：附件、项目约定、上下文材料。**前端负责查找与引用，core 只收消息。**
 
+## 发布与更新
+
+- 发布由 tag `v*` 触发，流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
+- 0.1.0 发布 `@vessel/*` 库包与插件包；**根 CLI 暂不发布到 npm，`npx vessel` 不可用**。
+- **0.1.0 不提供独立二进制**（ADR-006 继续有效）。
+- 发布流程会生成 `latest.json`（`version` / `channel` / `assets: {}`），供未来的 `vessel update --check` 使用；**更新客户端尚未实现**。
+- 通道：稳定版 `latest`，预发布 `beta`。
+
 ## 延后项
 
 以下能力**尚未实现**，明确不在本期范围：
@@ -130,7 +142,8 @@ headless 模式没有 TUI 订阅者，`ask_user` 不注册——所以那里是 
 - **MCP** —— 本期不做。工具集里没有 MCP 客户端；接外部系统先用 `bash`（`curl` / CLI）顶。
 - **workflow / team / durable execution / evals** —— 未开始。
 - **web 控制台的能力面** —— `apps/web` 仅为实验性骨架，前端注入接口已留但未接。
-- **npm 发布** —— 见「状态」。
+- **npm CLI** —— 0.1.0 只发库包与插件包，根 CLI 未发布，`npx vessel` 不可用。
+- **独立二进制 / 自动更新客户端** —— 0.1.0 不做；`latest.json` 已生成，但 `vessel update` 尚未实现。
 
 ## 文档索引
 
@@ -139,6 +152,9 @@ headless 模式没有 TUI 订阅者，`ask_user` 不注册——所以那里是 
 | [README.md](README.md) | 是什么 / 怎么跑 / 延后项 | 所有人，先看 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术架构：分层、循环、两个插槽、扩展模型、接口签名、事件名 | 开发者 / AI |
 | [docs/ADR.md](docs/ADR.md) | 架构决策记录：每个关键选择的「为什么」（只追加存档） | 开发者 / AI |
+| [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md) | 文件放哪里、路径归属、分支与发布规则 | 贡献者 / AI |
+| [docs/operations/RELEASE.md](docs/operations/RELEASE.md) | 怎么发版 | 维护者 |
+| [docs/operations/CI-CD.md](docs/operations/CI-CD.md) | CI / CD / 自动更新怎么跑 | 维护者 |
 | [AGENTS.md](AGENTS.md) | AI 行为约定：风格、硬规矩、怎么跑、红线 | AI 代理必读 |
 
 ## 贡献

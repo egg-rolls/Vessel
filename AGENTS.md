@@ -41,9 +41,12 @@ bun run typecheck                               # tsc --noEmit
 bunx @biomejs/biome ci .                        # lint + format 检查
 VESSEL_MOCK=1 bun run src/cli.ts                # 模拟模式起 REPL（不需要 API Key）
 VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # headless 冒烟
+bun run demo                                    # 无 Key 跑核心示例
+bun run scripts/version.ts --check              # 版本一致性 + CHANGELOG 校验
 ```
 
 改完代码，这三个必须过：`bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .`。
+CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[docs/operations/RELEASE.md](docs/operations/RELEASE.md)。发布由 tag `v*` 触发，只有 1 打 tag；N 不发布、不合并。
 
 ## 分层与能力准入
 
