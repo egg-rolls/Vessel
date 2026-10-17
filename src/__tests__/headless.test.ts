@@ -184,6 +184,32 @@ it('--serve 非 TTY 且无 Key 时快速失败，不进首启向导', async () =
   expect(stderr).toContain('No API key configured');
 });
 
+it('update --check --json 走清单源并输出机器可读结果', async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({ version: '0.2.0', channel: 'latest' });
+    },
+  });
+  try {
+    const source = `http://127.0.0.1:${server.port}/latest.json`;
+    const { stdout, exitCode } = await runCli(['update', '--check', '--json'], {
+      VESSEL_UPDATE_SOURCE: source,
+    });
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      current: '0.1.0',
+      latest: '0.2.0',
+      channel: 'latest',
+      up_to_date: false,
+    });
+    expect(String(parsed.install_hint)).toContain('vessel@0.2.0');
+  } finally {
+    server.stop();
+  }
+});
+
 it('未知参数报错并 exit 1（不静默忽略）', async () => {
   const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
   expect(exitCode).toBe(1);

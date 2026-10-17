@@ -25,6 +25,7 @@ describe('parseArgs - 默认与 REPL', () => {
       help: false,
       version: false,
       tools: false,
+      update: null,
     });
   });
 });
@@ -96,6 +97,46 @@ describe('parseArgs - 一次性命令', () => {
   it('一次性命令不能与 --run/--serve 组合', () => {
     expect(err(['--tools', '--run', 'x'])).toContain('cannot be combined');
     expect(err(['--version', '--serve'])).toContain('cannot be combined');
+  });
+});
+
+describe('parseArgs - update 子命令', () => {
+  it('update 默认选项', () => {
+    expect(ok(['update']).update).toEqual({ check: false, json: false, force: false });
+  });
+
+  it('update --check --channel beta --json', () => {
+    expect(ok(['update', '--check', '--channel', 'beta', '--json']).update).toEqual({
+      check: true,
+      channel: 'beta',
+      json: true,
+      force: false,
+    });
+  });
+
+  it('update --force 被解析（0.1.0 无额外效果）', () => {
+    expect(ok(['update', '--force']).update).toEqual({
+      check: false,
+      json: false,
+      force: true,
+    });
+  });
+
+  it('--channel 缺值或非法时报错', () => {
+    expect(err(['update', '--channel'])).toContain('Missing value');
+    expect(err(['update', '--channel', 'nightly'])).toContain('Invalid channel');
+  });
+
+  it('update 必须在第一个参数位置', () => {
+    expect(err(['--run', 'x', 'update'])).toContain('Unknown argument: update');
+  });
+
+  it('update 的未知参数报错', () => {
+    expect(err(['update', '--bogus'])).toContain('Unknown argument: --bogus');
+  });
+
+  it('update --help 走主帮助', () => {
+    expect(ok(['update', '--help']).help).toBe(true);
   });
 });
 

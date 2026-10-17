@@ -8,6 +8,13 @@
 /** `--serve` 省略端口时的默认值 */
 export const DEFAULT_SERVE_PORT = 8642;
 
+export interface UpdateArgs {
+  check: boolean;
+  channel?: 'latest' | 'beta';
+  json: boolean;
+  force: boolean;
+}
+
 export interface CliArgs {
   /** null = 非 headless；'' = 从 stdin 读；非空 = 文本 prompt 或 @file */
   runArg: string | null;
@@ -19,6 +26,8 @@ export interface CliArgs {
   help: boolean;
   version: boolean;
   tools: boolean;
+  /** `vessel update ...` 子命令 */
+  update: UpdateArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -47,10 +56,17 @@ export function parseArgs(argv: string[]): ParseResult {
     help: false,
     version: false,
     tools: false,
+    update: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
+
+    // `update` 只允许作为第一个参数（子命令），其余位置按未知参数处理。
+    if (a === 'update' && i === 0) {
+      return parseUpdateArgs(argv.slice(1), args);
+    }
+
     switch (a) {
       case '--run':
       case '-r': {
@@ -119,5 +135,46 @@ export function parseArgs(argv: string[]): ParseResult {
     return { ok: false, error: `${oneShot[0]} cannot be combined with --run/--serve` };
   }
 
+  return { ok: true, args };
+}
+
+/** 解析 `update` 子命令的剩余参数 */
+function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
+  const update: UpdateArgs = { check: false, json: false, force: false };
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    switch (a) {
+      case '--check':
+        update.check = true;
+        break;
+      case '--channel': {
+        const next = rest[i + 1];
+        if (next === undefined || next.startsWith('-')) {
+          return { ok: false, error: 'Missing value for --channel' };
+        }
+        if (next !== 'latest' && next !== 'beta') {
+          return { ok: false, error: `Invalid channel: ${next} (expected "latest" or "beta")` };
+        }
+        update.channel = next;
+        i++;
+        break;
+      }
+      case '--json':
+        update.json = true;
+        break;
+      case '--force':
+        update.force = true;
+        break;
+      case '--help':
+      case '-h':
+        args.help = true;
+        break;
+      default:
+        return { ok: false, error: `Unknown argument: ${a}` };
+    }
+  }
+
+  args.update = update;
   return { ok: true, args };
 }

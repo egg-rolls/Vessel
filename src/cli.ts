@@ -23,8 +23,10 @@ import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
+import { runUpdateCommand } from './cli-update';
 import { runHeadless } from './headless-runner';
 import { listTools } from './tools-list';
+import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
 
 // ── 终端排版辅助 ─────────────────────────────────
@@ -88,6 +90,8 @@ function printHelp(): void {
     ['VESSEL_MOCK=1 bun run src/cli.ts --run "x"', 'mock 模式（不调 API）'],
   ];
   const meta: Array<[string, string]> = [
+    ['bun run src/cli.ts update --check', '检查新版本（只提示，不自替换）'],
+    ['bun run src/cli.ts update --channel beta', '检查预发布通道'],
     ['bun run src/cli.ts --version', '显示版本'],
     ['bun run src/cli.ts --tools', '列出已注册工具（不需要 API Key）'],
     ['bun run src/cli.ts --help', '显示本帮助'],
@@ -163,6 +167,9 @@ if (args.tools) {
   await printTools();
   process.exit(0);
 }
+if (args.update) {
+  process.exit(await runUpdateCommand(args.update));
+}
 
 const { runArg, pipeMode, sessionArg, servePort } = args;
 const headless = runArg !== null || pipeMode;
@@ -221,7 +228,7 @@ if (!useMock && interactive && !config.apiKey) {
 // ── 入口分发 ────────────────────────────────────
 
 async function runWithConfig(result: BootstrapResult) {
-  const { runtime, ctx, cleanup } = result;
+  const { runtime, ctx, config, cleanup } = result;
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   const gateway =
@@ -248,6 +255,17 @@ async function runWithConfig(result: BootstrapResult) {
       provider: ctx.provider,
     });
   } else {
+    // REPL 启动后台检查：只提示、每天最多一次、失败静默。
+    // 有新版本时发布 `update.available` 事件，由 TUI 消费。
+    if (
+      interactive &&
+      !useMock &&
+      process.stdout.isTTY === true &&
+      config.update?.autoCheck !== false &&
+      !process.env.VESSEL_NO_UPDATE_CHECK
+    ) {
+      void scheduleUpdateCheck(ctx, config);
+    }
     await startInkRepl(ctx);
   }
 
