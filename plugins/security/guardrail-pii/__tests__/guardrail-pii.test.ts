@@ -148,4 +148,63 @@ describe('guardrail-pii 插件（P2）', () => {
     // full 策略应该用 * 替换所有字符
     expect(r.replacement).toContain('****');
   });
+
+  it('多种 PII 顺序颠倒时仍正确遮罩（索引不互相破坏）', async () => {
+    const g = host.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+    const r = await g.check('电话 555-123-4567，邮箱 test@example.com', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(r.allowed).toBe(true);
+    expect(String(r.replacement)).not.toContain('555-123-4567');
+    expect(String(r.replacement)).not.toContain('test@example.com');
+    // 未被遮罩的普通文本保持原位
+    expect(String(r.replacement)).toContain('电话');
+    expect(String(r.replacement)).toContain('邮箱');
+  });
+
+  it('日期不会被误判为电话', async () => {
+    const g = host.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+    const r = await g.check('日期：2026-10-17', { run_id: 'r1', stage: GuardrailStage.Output });
+    expect(r.allowed).toBe(true);
+    expect(r.replacement).toBeUndefined();
+  });
+
+  it('已知误报：10 位纯数字（订单号）会按电话遮罩', async () => {
+    const g = host.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+    const r = await g.check('订单号 1234567890', { run_id: 'r1', stage: GuardrailStage.Output });
+    expect(r.allowed).toBe(true);
+    expect(r.replacement).toBeDefined();
+    expect(r.reason).toContain('phone');
+  });
+
+  it('中国大陆 11 位手机号可识别', async () => {
+    const g = host.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+    const r = await g.check('手机 13800138000', { run_id: 'r1', stage: GuardrailStage.Output });
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toContain('phone');
+    expect(String(r.replacement)).not.toContain('13800138000');
+  });
+
+  it('自定义规则参与检测与遮罩', async () => {
+    const custom = new PIIGuardrail({
+      detectEmail: false,
+      detectPhone: false,
+      detectSSN: false,
+      detectCreditCard: false,
+      customPatterns: [{ name: 'employee-id', pattern: /EMP-\d{4}/g }],
+      maskingStrategy: 'hash',
+    });
+    const r = await custom.check('员工 EMP-1234 入职', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(r.allowed).toBe(true);
+    expect(r.reason).toContain('employee-id');
+    expect(String(r.replacement)).toContain('[REDACTED_EMPLOYEE-ID]');
+  });
 });
