@@ -5,9 +5,7 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { loadConfig } from '../packages/config/src/index';
+import { DEFAULT_CONFIG, defaultModelForProvider, loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
   type LLMProvider,
@@ -17,12 +15,13 @@ import {
   MemoryPluginHost,
   OpenAICompatibleProvider,
   type Plugin,
-  SQLiteSessionBackend,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { PluginLoader } from './plugin-loader';
+import { resolvePluginNames } from './plugin-selection';
+import { createSessionBackend } from './session-factory';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -31,6 +30,13 @@ export interface BootstrapOptions {
   sessionId?: string;
   /** 是否为 headless 模式 */
   headless?: boolean;
+  /**
+   * 是否实际进入交互式 REPL 且 stdin 是 TTY。
+   * 非交互（headless / serve-only / 管道）时无 Key 必须快速失败，不能进首启向导。
+   */
+  interactive?: boolean;
+  /** 是否注册 ask_user（默认 = interactive；headless 下注册只会让 waitFor 超时） */
+  registerAskUser?: boolean;
 }
 
 export interface BootstrapResult {
@@ -55,7 +61,13 @@ export function newSessionId(): string {
  * 引导应用启动
  */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
-  const { useMock = false, sessionId, headless = false } = options;
+  const {
+    useMock = false,
+    sessionId,
+    headless = false,
+    interactive = !headless,
+    registerAskUser = interactive,
+  } = options;
 
   // ── 加载配置 ────────────────────────────────────
   const { config, validation } = await loadConfig();
@@ -69,7 +81,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     for (const w of validation.warnings) console.warn(`⚠ ${w.message}`);
   }
 
-  if (headless && !useMock && !config.apiKey) {
+  if (!useMock && !interactive && !config.apiKey) {
     console.error('No API key configured. Run `vessel` interactively first to set up.');
     process.exit(1);
   }
@@ -98,7 +110,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     provider = new MemoryLLMProvider();
   } else {
     providerName = config.provider?.name ?? 'openai';
-    providerModel = config.provider?.model ?? 'gpt-4';
+    const configuredModel = config.provider?.model ?? defaultModelForProvider(providerName);
+    if (!configuredModel) {
+      console.error(
+        `Provider "${providerName}" has no model configured. ` +
+          'Set provider.model in vessel.yaml or ~/.vessel/config.yaml.',
+      );
+      process.exit(1);
+    }
+    providerModel = configuredModel;
     providerBaseUrl = config.provider?.baseUrl ?? '';
 
     const factory = providerHost.getProvider(providerName);
@@ -133,22 +153,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     compactThreshold: config.context?.compactThreshold,
   });
   const events = new MemoryEventStream();
-  const sessionPath = config.session?.storagePath ?? '.vessel/sessions.db';
-  mkdirSync(dirname(sessionPath), { recursive: true });
-  const session = new SQLiteSessionBackend(sessionPath);
+  const session = createSessionBackend(config.session);
 
   let currentSessionId = sessionId ?? newSessionId();
 
   // ── 插件 ────────────────────────────────────────
-  const configuredPlugins = config.plugins?.filter((p) => p.enabled !== false) ?? [];
-  const defaultPluginNames =
-    configuredPlugins.length > 0
-      ? configuredPlugins.map((p) => p.name)
-      : loader.getAvailablePlugins().filter((name) => name !== 'hook-logging');
-  // hook-logging 默认关闭，仅调试时启用
-  if (process.env.VESSEL_DEBUG && !defaultPluginNames.includes('hook-logging')) {
-    defaultPluginNames.push('hook-logging');
-  }
+  // 插件选择与 `--tools` 共用同一策略，避免默认集漂移。
+  const defaultPluginNames = resolvePluginNames(
+    loader,
+    config.plugins,
+    Boolean(process.env.VESSEL_DEBUG),
+  );
 
   const plugins: Plugin[] = [];
   for (const name of defaultPluginNames) {
@@ -158,16 +173,29 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // 子 agent 分派（delegate_task）：工厂式插件，需注入 provider 工厂 + model，
   // 不走通用注册表（其 default export 是 createDelegateTaskPlugin 工厂而非 Plugin 实例）。
-  plugins.push(
-    createDelegateTaskPlugin({
-      providerFactory: () => provider,
-      model: providerModel,
-    }),
-  );
+  // `delegate.enabled: false` 时不注册，运行期工具从 4 个变为 3 个。
+  if (config.delegate?.enabled !== false) {
+    plugins.push(
+      createDelegateTaskPlugin({
+        providerFactory: () => provider,
+        model: config.delegate?.model ?? providerModel,
+        maxDepth: config.delegate?.maxDepth,
+        disallowed: config.delegate?.disallowed,
+        limits: config.delegate?.limits,
+        termination: config.delegate?.termination
+          ? {
+              maxIterations: config.delegate.termination.maxIterations ?? 10,
+              maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
+            }
+          : undefined,
+      }),
+    );
+  }
 
   // ask-user 交互工具——以插件形式注册（唯一工具入口是 PluginHost）。
-  // 仅交互模式注册；headless 无 TUI 订阅者，注册只会 waitFor 超时挂起。
-  if (!headless) {
+  // 只有"实际进入 REPL 且 stdin 是 TTY"才注册；headless / serve-only / 管道
+  // 都没有 TUI 订阅者，注册只会让 waitFor 超时挂起。
+  if (registerAskUser) {
     plugins.push({
       name: 'ask-user',
       version: '0.1.0',
@@ -184,10 +212,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     model: providerModel,
     context,
     events,
-    limits: config.limits ?? { requestLimit: 100, toolCallsLimit: 50 },
+    // 默认值只在 DEFAULT_CONFIG 一处定义，这里不再写第二份数字。
+    limits: config.limits ?? DEFAULT_CONFIG.limits ?? {},
     termination: {
-      maxIterations: config.termination?.maxIterations ?? 50,
-      maxRuntimeSeconds: config.termination?.maxRuntimeSeconds,
+      maxIterations:
+        config.termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20,
+      maxRuntimeSeconds:
+        config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
     },
     session,
     plugins,

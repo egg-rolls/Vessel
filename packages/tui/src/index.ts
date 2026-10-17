@@ -44,14 +44,29 @@ export {
 export { StatusBar } from './components/StatusBar.js';
 export { StreamOutput } from './components/StreamOutput.js';
 export {
+  reduceSubagentState,
+  SubagentActivity,
+  type SubagentState,
+} from './components/SubagentActivity.js';
+export {
   DEFAULT_TOOL_DISPLAY,
   type DisplayOptions,
   type ToolDisplayDefinition,
   ToolDisplayRegistry,
   toolDisplayRegistry,
 } from './components/ToolDisplay.js';
+export {
+  reduceUpdateState,
+  UpdateBanner,
+  type UpdateBannerState,
+} from './components/UpdateBanner.js';
 // 错误分类器
-export { type ClassifiedError, classifyError, type ErrorCategory } from './error-classifier.js';
+export {
+  type ClassifiedError,
+  classifyError,
+  type ErrorCategory,
+  formatClassifiedError,
+} from './error-classifier.js';
 // Ink 版本（React 组件式 UI）
 export { startInkRepl } from './repl/ink-repl.js';
 export type { ReplContext } from './repl-context.js';

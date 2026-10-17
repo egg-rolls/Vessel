@@ -6,7 +6,7 @@
  * 零配置起步 + 渐进披露。
  */
 
-export { DEFAULT_CONFIG } from './defaults.js';
+export { DEFAULT_CONFIG, defaultModelForProvider, PROVIDER_DEFAULT_MODELS } from './defaults.js';
 export {
   getUserConfigDir,
   getUserConfigPath,

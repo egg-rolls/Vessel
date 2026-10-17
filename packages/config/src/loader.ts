@@ -9,7 +9,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { DEFAULT_CONFIG } from './defaults.js';
+import { DEFAULT_CONFIG, defaultModelForProvider } from './defaults.js';
 import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
 import { deepMerge } from './utils.js';
 import { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
@@ -110,6 +110,12 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
   const providerBaseUrl = getEnvVar(`${prefix}BASE_URL`);
   const providerApiKey = getEnvVar(`${prefix}PROVIDER_API_KEY`);
 
+  // PROVIDER_API_KEY 只配置了 provider 级 Key 时，同时回填顶层 apiKey——
+  // bootstrap 只从顶层读 Key，否则这个变量会被静默忽略。
+  if (providerApiKey && !config.apiKey) {
+    config.apiKey = providerApiKey;
+  }
+
   if (providerName || providerModel || providerBaseUrl || providerApiKey) {
     config.provider = {
       name: providerName ?? 'openai',
@@ -165,8 +171,8 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
   config: VesselConfig;
   validation: ReturnType<typeof validateConfig>;
 }> {
-  // 1. 加载默认配置
-  let config: VesselConfig = { ...DEFAULT_CONFIG };
+  // 1. 加载默认配置（深拷贝：嵌套对象不能跨调用共享，否则消费方改写会污染后续加载）
+  let config: VesselConfig = structuredClone(DEFAULT_CONFIG);
 
   // 2. 加载用户配置 (~/.vessel/config.yaml)
   try {
@@ -216,25 +222,66 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
     config = mergeConfig(config, options.defaults);
   }
 
-  // 6. 校验配置
+  // 6. provider-aware 默认 model：只给已知 provider 补默认。
+  //    未知 provider 保持 undefined，由 validator fail-fast，不再全局回退 gpt-4。
+  if (config.provider && !config.provider.model) {
+    const fallback = defaultModelForProvider(config.provider.name ?? 'openai');
+    if (fallback) config.provider.model = fallback;
+  }
+
+  // 7. 校验配置
   const validation = validateConfig(config);
 
-  // 7. 检查项目配置文件中的未知键
+  // 8. 检查项目配置文件中的未知键（顶层未知键是配置写错，按 error 处理）
   try {
     const fileConfig = await loadConfigFromFile(filePath);
     const unknownKeys = findUnknownKeys(fileConfig, KNOWN_CONFIG_KEYS);
-    if (unknownKeys.length > 0) {
-      validation.warnings.push({
-        path: 'root',
-        message: `Unknown configuration keys: ${unknownKeys.join(', ')}`,
-        value: unknownKeys,
+    for (const key of unknownKeys) {
+      const suggestion = closestKey(key, KNOWN_CONFIG_KEYS);
+      validation.errors.push({
+        path: key,
+        message: suggestion
+          ? `Unknown configuration key "${key}". Did you mean "${suggestion}"?`
+          : `Unknown configuration key "${key}".`,
+        value: key,
       });
     }
+    validation.valid = validation.errors.length === 0;
   } catch {
     // 文件不存在，跳过
   }
 
   return { config, validation };
+}
+
+/** 简单编辑距离（用于未知键的拼写建议） */
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = prev[0] ?? 0;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = prev[j] ?? 0;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      prev[j] = Math.min(above + 1, (prev[j - 1] ?? 0) + 1, diagonal + cost);
+      diagonal = above;
+    }
+  }
+  return prev[b.length] ?? 0;
+}
+
+/** 取编辑距离最近的已知键（距离 <= 3 才建议） */
+function closestKey(key: string, candidates: string[]): string | undefined {
+  let best: string | undefined;
+  let bestDistance = 4;
+  for (const candidate of candidates) {
+    const distance = editDistance(key.toLowerCase(), candidate.toLowerCase());
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
 }
 
 /**

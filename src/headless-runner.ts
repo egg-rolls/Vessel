@@ -88,7 +88,11 @@ async function readInput(options: HeadlessOptions, session: SessionBackend): Pro
     if (filePath.endsWith('.json')) {
       return seedFromMessagesFile(filePath, sessionId, session);
     }
-    return Bun.file(filePath).text();
+    try {
+      return await Bun.file(filePath).text();
+    } catch {
+      throw new CliError(`Error: cannot read file "${filePath}".`);
+    }
   }
   return runArg ?? '';
 }

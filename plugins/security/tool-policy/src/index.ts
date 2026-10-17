@@ -44,22 +44,42 @@ const DEFAULT_CONFIG: Required<ToolPolicyConfig> = {
 
 // ── 工具匹配 ──────────────────────────────────────
 
+/** 转义正则元字符（通配符之外的部分按字面量匹配） */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 /**
- * 检查工具名是否匹配策略规则
- * 支持通配符 `*`（匹配任意字符序列）
+ * 检查工具名是否匹配策略规则。
+ * 支持通配符 `*`（匹配任意字符序列）；`enableWildcards: false` 时按字面量匹配。
  */
-function matchesPolicy(toolName: string, patterns: string[]): boolean {
+function matchesPolicy(toolName: string, patterns: string[], enableWildcards: boolean): boolean {
   for (const pattern of patterns) {
-    if (pattern === '*') return true;
-
-    if (pattern.includes('*')) {
-      const regex = new RegExp(`^${pattern.replace(/\*/g, '.*')}$`);
-      if (regex.test(toolName)) return true;
-    }
-
     if (toolName === pattern) return true;
+    if (!enableWildcards) continue;
+
+    if (pattern === '*') return true;
+    if (pattern.includes('*')) {
+      const source = pattern.split('*').map(escapeRegExp).join('.*');
+      if (new RegExp(`^${source}$`).test(toolName)) return true;
+    }
   }
   return false;
+}
+
+/** 从 ToolCall / 工具定义 / 上下文中取工具名（runtime 传的是 ToolCall） */
+function readToolName(value: unknown, ctx: GuardrailContext): string {
+  if (typeof value === 'object' && value !== null) {
+    const record = value as Record<string, unknown>;
+    const fn = record.function;
+    if (typeof fn === 'object' && fn !== null) {
+      const name = (fn as Record<string, unknown>).name;
+      if (typeof name === 'string' && name !== '') return name;
+    }
+    if (typeof record.name === 'string' && record.name !== '') return record.name;
+  }
+  const contextName = (ctx as unknown as Record<string, unknown>).tool_name;
+  return typeof contextName === 'string' ? contextName : '';
 }
 
 // ── Guardrail ─────────────────────────────────────
@@ -70,15 +90,13 @@ function createToolPolicyGuardrail(config: Required<ToolPolicyConfig>): Guardrai
     stage: GuardrailStage.ToolCall,
     priority: 50,
     check: async (value: unknown, ctx: GuardrailContext): Promise<GuardrailResult> => {
-      const toolName = ((value as { name?: string })?.name ??
-        (ctx as unknown as Record<string, unknown>)?.tool_name ??
-        '') as string;
+      const toolName = readToolName(value, ctx);
 
       if (!toolName) {
         return { allowed: true };
       }
 
-      const matched = matchesPolicy(toolName, config.tools);
+      const matched = matchesPolicy(toolName, config.tools, config.enableWildcards);
 
       if (config.mode === 'allowlist') {
         // 白名单模式：不在列表中的工具被拦截

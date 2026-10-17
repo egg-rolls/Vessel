@@ -48,19 +48,19 @@ export interface RedactSecretsConfig {
 // ── 内置规则 ──────────────────────────────────────
 
 const BUILTIN_RULES: RedactRule[] = [
+  // Anthropic API Key 必须先于 OpenAI 规则：`sk-ant-...` 也会被 sk- 通配命中
+  {
+    name: 'anthropic-api-key',
+    pattern: /sk-ant-(?:api\d{2}-)?[A-Za-z0-9_-]{20,}/g,
+    replacement: '***REDACTED***',
+    keepPrefix: 7,
+  },
   // OpenAI API Key: sk-...
   {
     name: 'openai-api-key',
     pattern: /sk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
     replacement: '***REDACTED***',
     keepPrefix: 3,
-  },
-  // Anthropic API Key: sk-ant-...
-  {
-    name: 'anthropic-api-key',
-    pattern: /sk-ant-(?:api\d{2}-)?[A-Za-z0-9_-]{20,}/g,
-    replacement: '***REDACTED***',
-    keepPrefix: 7,
   },
   // Generic API Key pattern: key=xxxxx
   {

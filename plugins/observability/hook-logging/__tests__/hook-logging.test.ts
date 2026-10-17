@@ -166,4 +166,57 @@ describe('hook-logging 插件（MECH-1）', () => {
     customHook.clearLogs();
     expect(customHook.getLogs()).toHaveLength(0);
   });
+
+  it('不把整个 HookContext 写入日志（systemPrompt 不泄漏）', async () => {
+    const customHook = new LoggingHook();
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+    try {
+      await customHook.run({
+        run_id: 'r1',
+        session_id: 's1',
+        systemPrompt: 'TOP_SECRET_PROMPT',
+      });
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.join('\n')).not.toContain('TOP_SECRET_PROMPT');
+    expect(customHook.getLogs()[0]?.data).toBeUndefined();
+  });
+
+  it('错误日志中的密钥在写日志前脱敏', async () => {
+    const onError = host.getHooks().find((h) => h.type === HookType.OnError);
+    if (!onError) throw new Error('OnError hook not registered');
+    const logs: string[] = [];
+    const origLog = console.log;
+    console.log = (...args: unknown[]) => logs.push(args.map(String).join(' '));
+    try {
+      await onError.run({
+        run_id: 'r1',
+        error: 'auth failed with sk-abcdefghijklmnopqrstuv',
+      });
+    } finally {
+      console.log = origLog;
+    }
+    expect(logs.join('\n')).not.toContain('abcdefghijklmnopqrstuv');
+    expect(logs.join('\n')).toContain('***REDACTED***');
+  });
+
+  it('maxEntries 限制内存保留条数（丢最旧）', async () => {
+    const customHook = new LoggingHook({ maxEntries: 2 });
+    const origLog = console.log;
+    console.log = () => {};
+    try {
+      await customHook.run({ run_id: 'r1' });
+      await customHook.run({ run_id: 'r2' });
+      await customHook.run({ run_id: 'r3' });
+    } finally {
+      console.log = origLog;
+    }
+    const logs = customHook.getLogs();
+    expect(logs).toHaveLength(2);
+    expect(logs[0]?.run_id).toBe('r2');
+    expect(logs[1]?.run_id).toBe('r3');
+  });
 });

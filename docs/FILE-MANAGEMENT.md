@@ -13,7 +13,7 @@
 
 | | 个人侧（personal） | 共享侧（shared） |
 |---|---|---|
-| 物理路径 | `D:\Application\APP\Vessel\` | `D:\Application\APP\Vessel\Vessel\` |
+| 物理路径 | 工作区根（本仓库的上一级，非 git） | 本仓库根（`Vessel/`） |
 | 是否 git 仓库 | 否 | 是 |
 | 放什么 | handoff / plan / report / decision / worktree / 临时文件 / 私有笔记 | 源码 / 测试 / 公开文档 / CI / 发布配置 |
 | 谁能写 | 1 与各 N 均可 | 各 N 只能写自己独占路径，经 1 合并 |
@@ -25,7 +25,7 @@
 ## 2. 个人侧目录结构
 
 ```text
-D:\Application\APP\Vessel\                 # 个人侧根（非 git）
+<workspace>\                               # 个人侧根（本仓库的上一级，非 git）
 ├── CLAUDE.md                              # 个人侧工作区说明（Claude 会话入口）
 ├── docs\
 │   ├── roles\

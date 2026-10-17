@@ -25,12 +25,23 @@ import { asTuiEvent } from '../types/events.js';
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
   events: EventStream;
-  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键） */
-  onActiveChange?: (active: boolean) => void;
+  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键、Ctrl+C 主动解除 waitFor） */
+  onActiveChange?: (active: boolean, requestId?: string, runId?: string) => void;
 }
 
 /** 每个选择题末尾默认追加的自定义输入选项 */
 const CUSTOM_OPTION = '输入你自己的答案';
+
+/** ESC 控制字符（不用正则：避免 lint/suspicious/noControlCharactersInRegex） */
+const ESC_CHAR = String.fromCharCode(0x1b);
+
+/**
+ * ink-text-input 不忽略 Esc，会把 ESC 序列插进值里；弹窗自己用 Esc 取消/退出输入，
+ * 因此在这里统一剥掉控制字符（同样适用于 Ctrl+L 之类的残留）。
+ */
+function sanitizeTypedValue(value: string): string {
+  return value.split(ESC_CHAR).join('');
+}
 
 interface AnswerState {
   selected: Set<string>;
@@ -221,9 +232,24 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
     return unsubscribe;
   }, [events]);
 
-  // 通知父组件激活状态（隐藏输入框、拦截按键）
+  // run 结束 / ask_user 工具失败时清空弹窗，避免 run 已结束但界面残留
   useEffect(() => {
-    onActiveChange?.(prompt !== null);
+    const unsubscribe = events.subscribe((rawEvent) => {
+      const event = asTuiEvent(rawEvent);
+      if (event.type === 'run.completed' || event.type === 'run.failed') {
+        setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
+        return;
+      }
+      if (event.type === 'tool.call.failed' && event.data.tool_name === 'ask_user') {
+        setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
+      }
+    });
+    return unsubscribe;
+  }, [events]);
+
+  // 通知父组件激活状态（隐藏输入框、拦截按键、Ctrl+C 解除 waitFor）
+  useEffect(() => {
+    onActiveChange?.(prompt !== null, prompt?.requestId, prompt?.run_id);
   }, [prompt, onActiveChange]);
 
   const questions = prompt?.questions ?? [];
@@ -471,7 +497,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   // ── 自定义输入 / 开放式输入提交 ──────────────────
   const handleCustomSubmit = useCallback(
     (value: string) => {
-      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: value }));
+      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: sanitizeTypedValue(value) }));
       setCustomFocus(false);
       commitAndAdvance();
     },
@@ -480,7 +506,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
 
   const handleFreeSubmit = useCallback(
     (value: string) => {
-      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: value }));
+      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: sanitizeTypedValue(value) }));
       commitAndAdvance();
     },
     [currentIndex, updateAnswer, commitAndAdvance],
@@ -533,7 +559,9 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
               multiSelect={question.multi_select ?? false}
               selectIndex={selectIndex}
               customFocus={customFocus}
-              onCustomChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+              onCustomChange={(v) =>
+                updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
+              }
               onCustomSubmit={handleCustomSubmit}
             />
           ) : (
@@ -542,7 +570,9 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
               <Text color="cyan">{'> '}</Text>
               <TextInput
                 value={currentAnswer.custom}
-                onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+                onChange={(v) =>
+                  updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
+                }
                 onSubmit={handleFreeSubmit}
               />
             </Box>
