@@ -253,7 +253,7 @@ describe('D6: subpath exports only expose index.ts', () => {
 });
 
 describe('known exceptions', () => {
-  it('separates the pre-R6 AgentRuntime import from real violations', () => {
+  it('separates exact exceptions from real violations', () => {
     const known: Violation = {
       rule: 'D2',
       file: 'packages/core/src/runtime/agent-runtime.ts',
@@ -268,8 +268,16 @@ describe('known exceptions', () => {
       specifier: '../session/sqlite-backend.js',
       message: 'x',
     };
+    const exceptions = [
+      {
+        rule: 'D2' as const,
+        file: 'packages/core/src/runtime/agent-runtime.ts',
+        specifier: '../limits/limit-checker.js',
+        reason: 'fixture',
+      },
+    ];
 
-    const result = splitKnownExceptions([known, unknown]);
+    const result = splitKnownExceptions([known, unknown], exceptions);
     expect(result.known).toHaveLength(1);
     expect(result.unknown).toEqual([unknown]);
   });

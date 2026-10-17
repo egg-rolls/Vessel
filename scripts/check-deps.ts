@@ -73,12 +73,7 @@ export interface KnownException {
 }
 
 export const KNOWN_EXCEPTIONS: ReadonlyArray<KnownException> = [
-  {
-    rule: 'D2',
-    file: 'packages/core/src/runtime/agent-runtime.ts',
-    specifier: '../limits/limit-checker.js',
-    reason: 'R6 前置：AgentRuntime 直接 new MemoryLimitChecker；模块边界落地时改为经 port 注入',
-  },
+  // R6b 后基线无已知例外。新增例外必须是精确匹配，且附带移除条件。
 ];
 
 const STATIC_IMPORT =
@@ -367,7 +362,10 @@ function exportTargets(value: unknown): string[] {
   return [];
 }
 
-export function splitKnownExceptions(violations: Violation[]): {
+export function splitKnownExceptions(
+  violations: Violation[],
+  exceptions: ReadonlyArray<KnownException> = KNOWN_EXCEPTIONS,
+): {
   known: Array<{ violation: Violation; reason: string }>;
   unknown: Violation[];
 } {
@@ -375,7 +373,7 @@ export function splitKnownExceptions(violations: Violation[]): {
   const unknown: Violation[] = [];
 
   for (const violation of violations) {
-    const match = KNOWN_EXCEPTIONS.find(
+    const match = exceptions.find(
       (exception) =>
         exception.rule === violation.rule &&
         exception.file === violation.file &&
