@@ -55,6 +55,8 @@ export type TuiEvent =
   | { type: 'guardrail.blocked'; run_id: string; data: GuardrailBlockedPayload; ts: number }
   | { type: 'run.completed'; run_id: string; data: RunCompletedPayload; ts: number }
   | { type: 'run.failed'; run_id: string; data: RunFailedPayload; ts: number }
+  /** durable resume 开始（core 开放事件；TUI 当作一次新的运行开始处理） */
+  | { type: 'run.resumed'; run_id: string; data: Record<string, unknown>; ts: number }
   | {
       type: 'tool.permission.request';
       run_id: string;

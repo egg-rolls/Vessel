@@ -22,3 +22,20 @@ export interface ToolPermissionDecidedData {
   decision: 'allow' | 'deny';
   remember?: boolean;
 }
+
+/** MCP 工具来源（由注入的 McpControl.toolSource 提供） */
+export interface ToolOrigin {
+  server: string;
+  tool: string;
+}
+
+/**
+ * 权限弹窗文案：MCP 工具必须能看出是哪个 server 提供的。
+ * origin 为 null（非 MCP / toolPrefix:false 无法判定）时保持原文案。
+ */
+export function formatPermissionQuestion(toolName: string, origin: ToolOrigin | null): string {
+  if (origin) {
+    return `Allow tool "${origin.tool}" from MCP server "${origin.server}" to run?`;
+  }
+  return `Allow tool "${toolName}" to run?`;
+}

@@ -34,6 +34,7 @@ export interface SpinnerState {
 export function reduceSpinnerState(prev: SpinnerState, event: TuiEvent, now: number): SpinnerState {
   switch (event.type) {
     case 'run.started':
+    case 'run.resumed':
       return { verb: 'thinking', startedAt: now };
 
     case 'llm.stream.chunk':

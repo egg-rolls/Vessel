@@ -27,12 +27,14 @@ import { StreamOutput } from '../components/StreamOutput.js';
 import { SubagentActivity } from '../components/SubagentActivity.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
+import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
 import type { ReplContext } from '../repl-context.js';
 import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
-import { executeTurn } from './run-turn.js';
+import { executeResume, executeTurn } from './run-turn.js';
+import { loadStartupNotice } from './startup-notice.js';
 import { useReplState } from './use-repl-state.js';
 
 /** 与 core PermissionPolicy 一致的等待时限（ms） */
@@ -109,6 +111,18 @@ function InkRepl({ ctx }: InkReplProps) {
   useEffect(() => {
     ctx.currentSessionId = state.currentSessionId;
   }, [state.currentSessionId, ctx]);
+
+  // 启动横幅（0.3）：仅在配置了 MCP server 或存在 interrupted run 时追加一行。
+  // 查询失败静默，不阻塞启动。
+  useEffect(() => {
+    let disposed = false;
+    void loadStartupNotice(ctx).then((line) => {
+      if (!disposed && line) dispatch({ type: 'appendHistory', line });
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [ctx, dispatch]);
 
   // 权限确认请求（ADR-029）：展示弹窗 + 120s 超时兜底 + run 结束/工具失败清理。
   // core 的 waitFor 超时后只发 tool.call.failed，不会发 response；不清理会留下永久弹窗。
@@ -225,6 +239,22 @@ function InkRepl({ ctx }: InkReplProps) {
           }
           if (result.nextState) {
             dispatch({ type: 'patchRepl', patch: result.nextState });
+          }
+          // /runs resume：复用既有运行态（runStart/runEnd），Esc / Ctrl+C 走同一取消路径。
+          if (result.resumeRun) {
+            const handle = result.resumeRun;
+            const abort = new AbortController();
+            dispatch({ type: 'runStart', abort });
+            const outcome = await executeResume(handle, abort);
+            if (outcome.status === 'cancelled') {
+              dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+            } else if (outcome.status === 'failed') {
+              dispatch({
+                type: 'appendHistory',
+                line: formatClassifiedError(classifyError(outcome.error)),
+              });
+            }
+            dispatch({ type: 'runEnd' });
           }
           return;
         }
@@ -492,7 +522,10 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 权限确认对话框（ADR-029：订阅 tool.permission.request，发布 response） */}
       {ui.permissionOverlay && (
         <ConfirmDialog
-          question={`Allow tool "${ui.permissionOverlay.toolName}" to run?`}
+          question={formatPermissionQuestion(
+            ui.permissionOverlay.toolName,
+            ctx.mcp?.toolSource(ui.permissionOverlay.toolName) ?? null,
+          )}
           details={summarizeToolInput(ui.permissionOverlay.toolName, ui.permissionOverlay.input)}
           defaultChoice="n"
           expiresAt={ui.permissionOverlay.expiresAt}
@@ -581,6 +614,10 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
   console.log(`session: ${state.currentSessionId}`);
   console.log('Type your message, or /help for commands.\n');
 
+  // 启动横幅（simple mode 同样适用；headless / serve 不经过这里）
+  const startupNotice = await loadStartupNotice(ctx);
+  if (startupNotice) console.log(startupNotice);
+
   const lines: string[] = [];
   let lineIndex = 0;
 
@@ -620,6 +657,15 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       }
       if (result.output) {
         console.log(result.output);
+      }
+      if (result.resumeRun) {
+        const abort = new AbortController();
+        const outcome = await executeResume(result.resumeRun, abort);
+        if (outcome.status === 'cancelled') {
+          console.log('⏹ Cancelled.');
+        } else if (outcome.status === 'failed') {
+          console.error(formatClassifiedError(classifyError(outcome.error)));
+        }
       }
       if (!result.handled) {
         const name = trimmed.split(/\s+/)[0] ?? trimmed;
