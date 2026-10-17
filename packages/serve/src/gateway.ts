@@ -280,6 +280,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     string,
     { run_id: string; tool: string; input: unknown; ts: number }
   >();
+  const pendingAsks = new Map<string, { run_id: string; ts: number }>();
 
   let active: RunRecord | null = null;
   let activeSessionId = 'default';
@@ -438,14 +439,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
         });
       }
     }
-    if (
-      (event.type === 'run.completed' || event.type === 'run.failed') &&
-      active &&
-      active.core_run_id === event.run_id
-    ) {
+    if (event.type === 'ask.user.requested') {
       const data = event.data as Record<string, unknown>;
-      if (data.usage && typeof data.usage === 'object') {
-        active.usage = data.usage as RunStatus['usage'];
+      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+      if (requestId) pendingAsks.set(requestId, { run_id: event.run_id, ts: Date.now() });
+    }
+    if (event.type === 'run.completed' || event.type === 'run.failed') {
+      if (active && active.core_run_id === event.run_id) {
+        const data = event.data as Record<string, unknown>;
+        if (data.usage && typeof data.usage === 'object') {
+          active.usage = data.usage as RunStatus['usage'];
+        }
+      }
+      // 运行结束后清理该 run 的待答询问，避免陈旧弹窗
+      for (const [id, pending] of pendingAsks) {
+        if (pending.run_id === event.run_id) pendingAsks.delete(id);
       }
     }
     const seq = buffer.append(event);
@@ -618,6 +626,19 @@ export function startGateway(opts: GatewayOptions): Gateway {
     pendingPermissions.delete(requestId);
   }
 
+  /** 回答 ask_user：发布 ask.user.answered；answers 为空数组表示取消 */
+  function respondAsk(requestId: string, answers: unknown[]): void {
+    const pending = pendingAsks.get(requestId);
+    if (!pending) throw new MethodError('not_found', `Ask request not found: ${requestId}`);
+    events.publish({
+      type: 'ask.user.answered',
+      run_id: pending.run_id,
+      data: { requestId, answers },
+      ts: Date.now(),
+    });
+    pendingAsks.delete(requestId);
+  }
+
   async function dispatchMethod(method: string, rawParams: unknown): Promise<unknown> {
     const params =
       rawParams && typeof rawParams === 'object' && !Array.isArray(rawParams)
@@ -652,6 +673,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
           throw new MethodError('invalid_request', "decision must be 'allow' or 'deny'");
         }
         respondPermission(requestId, decision, params.remember === true);
+        return { ok: true };
+      }
+      case 'ask.respond': {
+        const requestId = params.request_id;
+        if (typeof requestId !== 'string') {
+          throw new MethodError('invalid_request', 'request_id is required');
+        }
+        const answers = params.answers;
+        if (!Array.isArray(answers)) {
+          throw new MethodError('invalid_request', 'answers must be an array');
+        }
+        respondAsk(requestId, answers);
         return { ok: true };
       }
       case 'team.nodes':
@@ -961,6 +994,26 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       }
 
+      // ask_user 应答（answers=[] 表示取消）
+      const askMatch = path.match(/^\/v1\/ask\/([^/]+)$/);
+      if (askMatch && req.method === 'POST') {
+        const requestId = decodeURIComponent(askMatch[1] ?? '');
+        const body = await readJsonBody(req, maxBodyBytes);
+        if (body instanceof Response) return body;
+        if (!Array.isArray(body.answers)) {
+          return errorJson('invalid_request', 'answers must be an array', 400, extra);
+        }
+        try {
+          respondAsk(requestId, body.answers);
+          return json({ ok: true }, 200, extra);
+        } catch (error) {
+          if (error instanceof MethodError) {
+            return errorJson(error.code, error.message, 404, extra);
+          }
+          return errorJson('internal', 'Failed to respond to ask request', 500, extra);
+        }
+      }
+
       // 0.1.0 兼容：阻塞式 /run（旧 web 客户端 / 脚本）
       if (path === '/run' && req.method === 'POST') {
         const body = await readJsonBody(req, maxBodyBytes);
@@ -1047,6 +1100,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const now = Date.now();
     for (const [id, pending] of pendingPermissions) {
       if (now - pending.ts > PERMISSION_TTL_MS) pendingPermissions.delete(id);
+    }
+    for (const [id, pending] of pendingAsks) {
+      if (now - pending.ts > PERMISSION_TTL_MS) pendingAsks.delete(id);
     }
   }, 30_000);
   (permissionSweeper as { unref?: () => void }).unref?.();
