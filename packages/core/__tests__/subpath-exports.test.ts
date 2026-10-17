@@ -5,6 +5,7 @@ import {
   InProcessRuntimeHost,
   InProcessScheduler,
   InProcessTransport,
+  MemoryRunStore as RootMemoryRunStore,
 } from '@vessel/core';
 import { MemoryContextManager } from '@vessel/core/context';
 import type { AgentSpec } from '@vessel/core/kernel';
@@ -28,8 +29,11 @@ import {
   OpenAICompatibleProvider,
 } from '@vessel/core/provider';
 import {
+  FileRunStore,
   FileSessionBackend,
+  MemoryRunStore,
   MemorySessionBackend,
+  RunResumeError,
   SQLiteSessionBackend,
 } from '@vessel/core/session';
 import { InProcessTransport as SubpathTransport } from '@vessel/core/transport';
@@ -47,6 +51,24 @@ describe('subpath exports (R6a/R6b)', () => {
     expect(typeof FileSessionBackend).toBe('function');
     expect(typeof MemorySessionBackend).toBe('function');
     expect(typeof SQLiteSessionBackend).toBe('function');
+
+    // durable run store（0.3 C1）
+    expect(typeof FileRunStore).toBe('function');
+    expect(typeof MemoryRunStore).toBe('function');
+    expect(RootMemoryRunStore).toBe(MemoryRunStore);
+    const runStore = new MemoryRunStore();
+    await runStore.save({
+      run_id: 'subpath-run',
+      session_id: 'subpath-session',
+      status: 'running',
+      messages: [],
+      created_at: 1,
+      updated_at: 1,
+    });
+    expect((await runStore.load('subpath-run'))?.run_id).toBe('subpath-run');
+    const resumeError = new RunResumeError('run_not_found', 'missing');
+    expect(resumeError.code).toBe('run_not_found');
+    expect(resumeError.runId).toBe('missing');
 
     expect(typeof FileEventStore).toBe('function');
     expect(typeof MemoryEventStream).toBe('function');

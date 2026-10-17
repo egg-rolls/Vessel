@@ -26,7 +26,9 @@ export {
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 // 会话后端
 export {
+  FileRunStore,
   FileSessionBackend,
+  MemoryRunStore,
   MemorySessionBackend,
   SQLiteSessionBackend,
 } from './session/index.js';
