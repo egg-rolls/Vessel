@@ -20,6 +20,7 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { isLoopbackHostname } from '../packages/config/src/index';
 import type { Transport } from '../packages/core/src/index';
 import { type Gateway, startGateway } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
@@ -28,6 +29,8 @@ import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { runUpdateCommand } from './cli-update';
 import { runHeadless } from './headless-runner';
+import { runResumeList } from './resume-command';
+import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { planTeamWiring } from './team-wiring';
 import { listTools } from './tools-list';
 import { resolveGatewayToken, tryCreateLoopbackTransport } from './transport-factory';
@@ -87,6 +90,7 @@ function printHelp(): void {
     ['bun run src/cli.ts --run @path', 'headless：.json=多轮 seeding，其它=文本 prompt'],
     ['echo "..." | bun run src/cli.ts --run', 'headless 单轮（stdin）'],
     ['bun run src/cli.ts --session <id> --run "..."', '续接会话'],
+    ['bun run src/cli.ts --resume-run <runId>', '恢复中断的 durable run'],
   ];
   const serve: Array<[string, string]> = [
     ['bun run src/cli.ts --serve 8642', '启动 HTTP/WS gateway（Web 控制台后端）'],
@@ -95,6 +99,7 @@ function printHelp(): void {
     ['VESSEL_MOCK=1 bun run src/cli.ts --run "x"', 'mock 模式（不调 API）'],
   ];
   const meta: Array<[string, string]> = [
+    ['bun run src/cli.ts --resume-run', '列出可恢复的 interrupted run'],
     ['bun run src/cli.ts update --check', '检查新版本（只提示，不自替换）'],
     ['bun run src/cli.ts update --channel beta', '检查预发布通道'],
     ['bun run src/cli.ts --version', '显示版本'],
@@ -155,6 +160,10 @@ function renderGatewayBanner(gateway: Gateway): string {
     ['SSE', `${gateway.url}/events?token=${gateway.token}`],
     ['WS', `${gateway.url}/ws?token=${gateway.token}`],
   ];
+  if (gateway.tls) rows.push(['TLS', 'on']);
+  if (!isLoopbackHostname(new URL(gateway.url).hostname)) {
+    rows.push(['Remote', 'listening beyond loopback (allow_remote)']);
+  }
   const labelWidth = Math.max(...rows.map(([label]) => label.length));
   const lines = rows.map(([label, value]) => `${label.padEnd(labelWidth)}  ${value}`);
   lines.push('', '👉 启动 Web 控制台：打开 Gateway 地址并粘贴 Token');
@@ -166,7 +175,8 @@ function renderGatewayBanner(gateway: Gateway): string {
 const parsed = parseArgs(process.argv.slice(2));
 if (!parsed.ok) {
   console.error(`${parsed.error}\nRun with --help for usage.`);
-  process.exit(1);
+  // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分。
+  process.exit(2);
 }
 const args = parsed.args;
 
@@ -186,9 +196,16 @@ if (args.tools) {
 if (args.update) {
   process.exit(await runUpdateCommand(args.update));
 }
+// 无参 --resume-run 是一次性列表命令：不构造 runtime、不需要 API Key。
+if (args.resumeRunArg === '') {
+  process.exit(await runResumeList());
+}
 
-const { runArg, pipeMode, sessionArg, servePort } = args;
-const headless = runArg !== null || pipeMode;
+const { runArg, pipeMode, sessionArg, servePort, resumeRunArg } = args;
+const resumeRunId = resumeRunArg !== null && resumeRunArg !== '' ? resumeRunArg : null;
+// 恢复模式：TTY 下恢复完进 REPL；非 TTY 下恢复完打印结果退出。
+const headless =
+  runArg !== null || pipeMode || (resumeRunId !== null && process.stdin.isTTY !== true);
 // 只有真正进入 Ink REPL 且 stdin 是 TTY 才算交互：
 // serve-only（--serve 无 --run）与管道输入都不算，避免无 TTY 时进首启向导。
 const serveRequested = servePort !== null;
@@ -207,7 +224,7 @@ const initialResult = await bootstrap({
   interactive,
   registerAskUser: interactive,
 });
-const { config, cleanup } = initialResult;
+const { config } = initialResult;
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
 if (!useMock && interactive && !config.apiKey) {
@@ -226,7 +243,7 @@ if (!useMock && interactive && !config.apiKey) {
       }
     }
     // 重新引导以使用新配置
-    cleanup();
+    await initialResult.shutdown();
     const result = await bootstrap({
       useMock,
       sessionId: sessionArg ?? undefined,
@@ -245,25 +262,108 @@ if (!useMock && interactive && !config.apiKey) {
 
 // ── 入口分发 ────────────────────────────────────
 
+/** resume 错误：保留稳定 code，便于脚本判定 */
+function formatResumeError(error: unknown): string {
+  if (
+    error &&
+    typeof error === 'object' &&
+    typeof (error as { code?: unknown }).code === 'string'
+  ) {
+    const coded = error as { code: string; message?: string };
+    const message = coded.message ?? '';
+    return message.startsWith(coded.code) ? message : `${coded.code}: ${message}`;
+  }
+  return `resume_failed: ${error instanceof Error ? error.message : String(error)}`;
+}
+
 async function runWithConfig(result: BootstrapResult) {
-  const { runtime, ctx, config, cleanup } = result;
+  const { runtime, ctx, config } = result;
+
+  // ── Durable resume（0.3）────────────────────────
+  // --resume-run 与 --serve/--run 互斥（cli-args 已保证），这里直接恢复后分流。
+  if (resumeRunId !== null) {
+    let exitCode = 0;
+    try {
+      const outcome = await result.resumeRun(resumeRunId);
+      console.log(outcome.result);
+      ctx.currentSessionId = outcome.sessionId;
+      ctx.onSessionChange(outcome.sessionId);
+      if (entersRepl) await startInkRepl(ctx);
+    } catch (error) {
+      console.error(formatResumeError(error));
+      exitCode = 1;
+    } finally {
+      await result.shutdown();
+    }
+    process.exit(exitCode);
+  }
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
-  const gateway =
-    servePort !== null
-      ? startGateway({
-          events: ctx.events,
-          session: ctx.session,
-          runtime,
-          // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
-          context: ctx.context,
-          pluginHost: ctx.pluginHost,
-          staticDir: resolveStaticDir(),
-          nodeId: result.nodeId,
-          token: resolveGatewayToken(config),
-          port: servePort,
-        })
-      : null;
+  let gateway: Gateway | null = null;
+  if (servePort !== null) {
+    const resolved = resolveServeOptions(config, {
+      port: servePort,
+      portExplicit: args.servePortExplicit,
+      hostname: args.serveHost,
+      allowRemote: args.allowRemote,
+      tlsCert: args.tlsCert,
+      tlsKey: args.tlsKey,
+    });
+    if (!resolved.ok) {
+      console.error(resolved.error);
+      await result.shutdown();
+      process.exit(1);
+    }
+
+    const tlsError = checkTlsFiles(resolved.options.tls);
+    if (tlsError) {
+      console.error(tlsError);
+      await result.shutdown();
+      process.exit(1);
+    }
+
+    // 远程 + 无显式 token：gateway 会生成 token（仍强制鉴权），但重启即变——醒目提示。
+    const remote = !isLoopbackHostname(resolved.options.hostname);
+    if (remote && resolved.options.allowRemote && resolveGatewayToken(config) === undefined) {
+      console.warn(
+        '⚠ Remote listening with an auto-generated gateway token; ' +
+          'set VESSEL_GATEWAY_TOKEN for stable authentication.',
+      );
+    }
+
+    gateway = startGateway({
+      events: ctx.events,
+      session: ctx.session,
+      runtime,
+      // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
+      context: ctx.context,
+      pluginHost: ctx.pluginHost,
+      staticDir: resolveStaticDir(),
+      nodeId: result.nodeId,
+      token: resolveGatewayToken(config),
+      hostname: resolved.options.hostname,
+      port: resolved.options.port,
+      allowRemote: resolved.options.allowRemote,
+      ...(resolved.options.tls ? { tls: resolved.options.tls } : {}),
+      ...(result.runStore
+        ? {
+            durable: {
+              store: result.runStore,
+              ...(result.runs
+                ? {
+                    resume: async (runId: string) => {
+                      // 受理即 resolve；不等待 run 完成（gateway 202 语义）。
+                      const handle = await result.runs?.resume(runId);
+                      void handle?.done;
+                    },
+                  }
+                : {}),
+            },
+          }
+        : {}),
+      ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
+    });
+  }
 
   // ── Team / loopback 接线（A4）────────────────────
   // gateway 必须先启动：loopback 的 endpoint/token 来自实际监听端口。
@@ -319,12 +419,14 @@ async function runWithConfig(result: BootstrapResult) {
       process.once('SIGTERM', stop);
     });
   } else if (headless) {
-    await runHeadless(runtime, ctx.session, {
+    const exitCode = await runHeadless(runtime, ctx.session, {
       runArg,
       pipeMode,
       sessionId: ctx.currentSessionId,
       provider: ctx.provider,
     });
+    await result.shutdown();
+    process.exit(exitCode);
   } else {
     // REPL 启动后台检查：只提示、每天最多一次、失败静默。
     // 有新版本时发布 `update.available` 事件，由 TUI 消费。
@@ -354,5 +456,5 @@ async function runWithConfig(result: BootstrapResult) {
       // 关闭注册表失败不阻断退出
     }
   }
-  cleanup();
+  await result.shutdown();
 }

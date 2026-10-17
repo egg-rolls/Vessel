@@ -7,7 +7,12 @@
  */
 
 import { loadConfig } from '../packages/config/src/index';
-import { MemoryEventStream, MemoryLLMProvider, MemoryPluginHost } from '../packages/core/src/index';
+import {
+  createRuntime,
+  MemoryEventStream,
+  MemoryLLMProvider,
+  MemoryPluginHost,
+} from '../packages/core/src/index';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { PluginLoader } from './plugin-loader';
@@ -66,22 +71,28 @@ export async function listTools(): Promise<ToolsListing> {
 
   // team 原型同样必须显式 opt-in；启用后 `--tools` 会多出 5 个 team_* 工具。
   if (config.team?.enabled === true) {
-    const team = createTeamPlugin({
-      providerFactory: () => new MemoryLLMProvider(),
-      model: config.team.model ?? config.provider?.model ?? 'mock-model',
-      events: new MemoryEventStream(),
-      maxMembers: config.team.maxMembers,
-      ownerId: config.team.ownerId,
-      memberLimits: config.team.memberLimits,
-      memberTermination: config.team.memberTermination
-        ? {
-            maxIterations: config.team.memberTermination.maxIterations ?? 10,
-            maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
-          }
-        : undefined,
-    });
-    await team.install(host);
-    pluginNamesWithFactories.push(team.name);
+    // ext 0.3：team 必须注入 core RuntimeHost（插件不再自带内嵌 Host）。
+    const teamHost = await createRuntime({ pluginHost: host });
+    try {
+      const team = createTeamPlugin({
+        providerFactory: () => new MemoryLLMProvider(),
+        model: config.team.model ?? config.provider?.model ?? 'mock-model',
+        events: new MemoryEventStream(),
+        host: teamHost,
+        ownerId: config.team.ownerId,
+        memberLimits: config.team.memberLimits,
+        memberTermination: config.team.memberTermination
+          ? {
+              maxIterations: config.team.memberTermination.maxIterations ?? 10,
+              maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+            }
+          : undefined,
+      });
+      await team.install(host);
+      pluginNamesWithFactories.push(team.name);
+    } finally {
+      await teamHost.close();
+    }
   }
 
   const tools = host

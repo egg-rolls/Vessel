@@ -21,6 +21,8 @@ import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
 import type { AgentRuntimeOptions, PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message, Usage } from '../types/provider.js';
 import type { RunOptions } from '../types/run.js';
+import type { RunStore } from '../types/run-store.js';
+import { RunResumeError } from '../types/run-store.js';
 import type { SessionBackend } from '../types/session.js';
 import { MemoryEventBus } from './event-bus.js';
 import {
@@ -78,6 +80,11 @@ export interface InProcessRuntimeHostOptions {
   eventStreamFactory?: () => EventStream;
   /** 成员上限，默认 8 */
   maxMembers?: number;
+  /**
+   * 可选：durable run store。Host 把它注入每个成员 runtime（Host 优先），
+   * `Host.resume` 也用它加载 checkpoint。Host 自身不写 checkpoint。
+   */
+  runStore?: RunStore;
 }
 
 /** Agent id 合法字符集（A11） */
@@ -142,7 +149,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
   /** 子成员交互请求 → 其事件流；用于把 owner 的应答路由回去（B4） */
   private readonly pendingInteractions = new Map<
     string,
-    { memberId: string; events: EventStream }
+    { memberId: string; runId: string; events: EventStream }
   >();
   private readonly responseUnsubscribe: Unsubscribe;
   private readonly pluginHost?: PluginHost;
@@ -157,6 +164,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
   readonly scheduler: Scheduler;
   /** R3a 注入点：当前只保存，不参与消息路由 */
   readonly transport?: Transport;
+  private readonly runStore?: RunStore;
+  /** 同一 run 的并发 resume 锁（进程内） */
+  private readonly resuming = new Set<string>();
   private closed = false;
 
   constructor(options: InProcessRuntimeHostOptions = {}) {
@@ -168,6 +178,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.defaults = options.defaults;
     this.permission = options.permission;
     this.transport = options.transport;
+    this.runStore = options.runStore;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
@@ -224,6 +235,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
       termination,
       ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}),
       ...(permission !== undefined ? { permission } : {}),
+      // 0.3：Host 的 store 优先；checkpoint 单写者是成员 runtime
+      ...(this.runStore ? { runStore: this.runStore } : {}),
+      agentId: id,
     });
 
     const record: MemberRecord = {
@@ -243,8 +257,20 @@ export class InProcessRuntimeHost implements RuntimeHost {
       if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
         const requestId = readRequestId(event.data);
         if (requestId) {
-          this.pendingInteractions.set(requestId, { memberId: id, events: memberEvents });
+          this.pendingInteractions.set(requestId, {
+            memberId: id,
+            runId: event.run_id,
+            events: memberEvents,
+          });
         }
+      }
+      // 0.3 加固：run 结束后清理未应答的交互请求，避免长生命周期进程泄漏
+      if (
+        event.type === 'run.completed' ||
+        event.type === 'run.failed' ||
+        event.type === 'run.cancelled'
+      ) {
+        this.clearRunInteractions(id, event.run_id);
       }
       // Host 路由回来的应答不再转发，避免 host.events ↔ member.events 回环
       if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
@@ -314,6 +340,58 @@ export class InProcessRuntimeHost implements RuntimeHost {
     handle.cancel(runId);
   }
 
+  /**
+   * 从 durable checkpoint 恢复一次 run。
+   * - 不经 Scheduler（保持 run id 不变，DECISION-008 Addendum B §9.2 C）；
+   * - 成员必须先已 spawn，且当前没有 active run；
+   * - checkpoint 由成员 runtime 继续写，Host 自身不写。
+   */
+  async resume(runId: string): Promise<RunHandle> {
+    if (this.closed) throw new Error('runtime host is closed');
+    if (!this.runStore) throw new RunResumeError('run_store_required', runId);
+    if (this.resuming.has(runId)) throw new RunResumeError('run_already_running', runId);
+
+    // 同步占锁，保证并发调用只有一个能通过校验
+    this.resuming.add(runId);
+    try {
+      const checkpoint = await this.runStore.load(runId);
+      if (!checkpoint) throw new RunResumeError('run_not_found', runId);
+      if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
+        throw new RunResumeError('run_not_resumable', runId, checkpoint.status);
+      }
+      if (checkpoint.messages.length === 0) {
+        throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
+      }
+      if (!checkpoint.agent_id) {
+        throw new RunResumeError('agent_not_found', runId, 'checkpoint has no agent_id');
+      }
+
+      const record = this.members.get(checkpoint.agent_id);
+      if (!record || record.closed) {
+        throw new RunResumeError('agent_not_found', runId, checkpoint.agent_id);
+      }
+      if (record.active) {
+        throw new RunResumeError('run_already_running', runId, 'agent busy');
+      }
+
+      const resume = record.runtime.resume?.bind(record.runtime);
+      if (!resume) {
+        throw new RunResumeError('run_not_resumable', runId, 'runtime does not support resume');
+      }
+
+      const run = new InProcessRunHandle(runId, record.id, checkpoint.session_id);
+      record.active = run;
+      record.state = 'running';
+      record.lastError = undefined;
+
+      void this.executeResume(record, run, resume);
+      return run;
+    } catch (error) {
+      this.resuming.delete(runId);
+      throw error;
+    }
+  }
+
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
@@ -324,6 +402,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     await this.scheduler.close();
     this.pendingInteractions.clear();
     this.extraInboxes.clear();
+    this.resuming.clear();
   }
 
   /** @internal 由 AgentHandle.status() 调用 */
@@ -472,6 +551,15 @@ export class InProcessRuntimeHost implements RuntimeHost {
     return { messages: inbox.slice(start), cursor: String(inbox.length) };
   }
 
+  /** 清理某成员某 run 的未应答交互请求（run 进入终态时） */
+  private clearRunInteractions(memberId: string, runId: string): void {
+    for (const [requestId, pending] of this.pendingInteractions) {
+      if (pending.memberId === memberId && pending.runId === runId) {
+        this.pendingInteractions.delete(requestId);
+      }
+    }
+  }
+
   /** B4：把 owner 在聚合流上的应答路由回发起请求的成员 */
   private routeInteractionResponse(event: RunEvent): void {
     const requestId = readRequestId(event.data);
@@ -480,6 +568,63 @@ export class InProcessRuntimeHost implements RuntimeHost {
     if (!pending) return;
     this.pendingInteractions.delete(requestId);
     pending.events.publish(event);
+  }
+
+  /** 执行一次 resume（与 executeRun 相同的终态处理；不重新入队） */
+  private async executeResume(
+    record: MemberRecord,
+    run: InProcessRunHandle,
+    resume: (runId: string, opts?: RunOptions) => Promise<string>,
+  ): Promise<void> {
+    try {
+      const text = await resume(run.id, { signal: run.signal });
+
+      if (record.closed) {
+        run.setStatus('cancelled');
+        run.reject(new Error('agent closed'));
+        return;
+      }
+
+      if (run.signal.aborted) {
+        run.setStatus('cancelled');
+        record.state = 'cancelled';
+        this.publish('agent.run.cancelled', {
+          agentId: record.id,
+          runId: run.id,
+          sessionId: run.sessionId,
+        });
+        run.reject(new Error('run cancelled'));
+        return;
+      }
+
+      run.setStatus('completed');
+      record.state = 'idle';
+      this.publish('agent.run.completed', {
+        agentId: record.id,
+        runId: run.id,
+        sessionId: run.sessionId,
+        output: text,
+      });
+      run.resolve(text);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const cancelled = run.signal.aborted;
+      run.setStatus(cancelled ? 'cancelled' : 'failed');
+      if (!record.closed) {
+        record.state = cancelled ? 'cancelled' : 'error';
+        if (!cancelled) record.lastError = errorMessage;
+      }
+      this.publish(cancelled ? 'agent.run.cancelled' : 'agent.run.failed', {
+        agentId: record.id,
+        runId: run.id,
+        sessionId: run.sessionId,
+        ...(cancelled ? {} : { error: errorMessage }),
+      });
+      run.reject(error instanceof Error ? error : new Error(errorMessage));
+    } finally {
+      record.active = undefined;
+      this.resuming.delete(run.id);
+    }
   }
 
   /** 执行一次 run（R1 无队列；R2 Scheduler 接管并发/排队） */

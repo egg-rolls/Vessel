@@ -6,6 +6,8 @@
  * - abort 后的错误优先判为 cancelled，不再走错误分类（避免把取消显示成网络错误）。
  */
 
+import type { DurableRunHandle } from '../repl-context.js';
+
 export type TurnOutcome =
   | { status: 'completed' }
   | { status: 'cancelled' }
@@ -26,5 +28,33 @@ export async function executeTurn({ run, abort }: ExecuteTurnOptions): Promise<T
   } catch (error) {
     if (abort.signal.aborted) return { status: 'cancelled' };
     return { status: 'failed', error };
+  }
+}
+
+/**
+ * 等待 /runs resume 启动的 run 结束，并归一化结果。
+ * Esc / Ctrl+C 会 abort -> handle.cancel()（幂等）；done 意外 reject 也按失败处理。
+ */
+export async function executeResume(
+  handle: DurableRunHandle,
+  abort: AbortController,
+): Promise<TurnOutcome> {
+  const onAbort = () => handle.cancel();
+  if (abort.signal.aborted) {
+    handle.cancel();
+  } else {
+    abort.signal.addEventListener('abort', onAbort, { once: true });
+  }
+
+  try {
+    const outcome = await handle.done;
+    if (abort.signal.aborted || outcome.status === 'cancelled') return { status: 'cancelled' };
+    if (outcome.status === 'failed') return { status: 'failed', error: outcome.error };
+    return { status: 'completed' };
+  } catch (error) {
+    if (abort.signal.aborted) return { status: 'cancelled' };
+    return { status: 'failed', error };
+  } finally {
+    abort.signal.removeEventListener('abort', onAbort);
   }
 }

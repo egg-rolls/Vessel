@@ -6,6 +6,8 @@
  * /tools - 工具浏览器（读 ctx.pluginHost）
  * /plugins - 插件浏览器
  * /resume - 恢复会话
+ * /mcp - MCP server 状态 / 重连
+ * /runs - durable run 列表 / 恢复
  * /new - 新建会话
  * /history - 显示历史
  * /setup - 配置向导
@@ -21,7 +23,9 @@
  * state 应用集中在 CommandRegistry.execute()；output 由调用方消费（simple 模式打印、Ink 模式入历史）。
  */
 
-import type { ReplContext } from '../repl-context.js';
+import type { DurableRunHandle, ReplContext } from '../repl-context.js';
+import { mcpCommand } from './mcp-command.js';
+import { runsCommand } from './runs-command.js';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -47,6 +51,8 @@ export interface CommandResult {
   nextState?: Partial<ReplState>;
   /** /clear 等需要 REPL 层清屏的命令置 true（替代硬编码字符串匹配） */
   clearScreen?: boolean;
+  /** /runs resume：命令已启动恢复，REPL 层接管运行态（runStart/runEnd、取消、流式） */
+  resumeRun?: DurableRunHandle;
 }
 
 /** 命令执行函数签名 */
@@ -123,6 +129,8 @@ export function createCommands(): CommandRegistry {
   reg.register(toolsCommand());
   reg.register(pluginsCommand());
   reg.register(resumeCommand());
+  reg.register(mcpCommand());
+  reg.register(runsCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));

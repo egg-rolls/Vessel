@@ -155,9 +155,14 @@ it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 
 });
 
 it('--version 打印根 package.json 版本，exit 0', async () => {
+  const rootVersion = (
+    JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8')) as {
+      version: string;
+    }
+  ).version;
   const { stdout, exitCode } = await runCli(['--version'], {});
   expect(exitCode).toBe(0);
-  expect(stdout.trim()).toBe('0.1.0');
+  expect(stdout.trim()).toBe(rootVersion);
 });
 
 it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => {
@@ -203,12 +208,12 @@ it('host.enabled=true 时 headless mock 走 Host 路径且不触发回退', asyn
   }
 });
 
-it('host + team + delegate.viaHost 共用 Host 且无回退告警', async () => {
+it('host + team + delegate 共用 Host 且无回退告警', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-host-team-'));
   try {
     fs.writeFileSync(
       path.join(tmpDir, 'vessel.yaml'),
-      'host:\n  enabled: true\nteam:\n  enabled: true\ndelegate:\n  via_host: true\n',
+      'host:\n  enabled: true\nteam:\n  enabled: true\n',
     );
     const { stdout, stderr, exitCode } = await runCli(
       ['--run', 'hello'],
@@ -219,20 +224,35 @@ it('host + team + delegate.viaHost 共用 Host 且无回退告警', async () => 
     expect(exitCode).toBe(0);
     expect(stdout.trim()).toBe('Echo: hello');
     expect(stderr).not.toContain('Host runtime unavailable');
-    expect(stderr).not.toContain('viaHost is ignored');
     expect(stderr).not.toContain('embedded in-process host');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
-it('host 关闭 + delegate.viaHost：告警并回落专用 Host', async () => {
+it('delegate.via_host 旧配置报未知键错误', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-viahost-'));
   try {
     fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'delegate:\n  via_host: true\n');
-    const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
-    expect(exitCode).toBe(0);
-    expect(stderr).toContain('delegate.viaHost is ignored');
+    // 不启用 mock：走真实校验路径（无 Key 也会先因配置错误退出）。
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], {}, '', tmpDir);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Unknown configuration key "delegate.viaHost"');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('team.max_members 旧配置报未知键错误', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-teammax-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'vessel.yaml'),
+      'team:\n  enabled: true\n  max_members: 4\n',
+    );
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], {}, '', tmpDir);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Unknown configuration key "team.maxMembers"');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -244,7 +264,7 @@ it('host 关闭 + team.enabled：告警并使用内嵌 Host', async () => {
     fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
     const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stderr).toContain('embedded in-process host');
+    expect(stderr).toContain('internal in-process host');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -268,10 +288,15 @@ it('update --check --json 走清单源并输出机器可读结果', async () => 
   const server = Bun.serve({
     port: 0,
     fetch() {
-      return Response.json({ version: '0.2.0', channel: 'latest' });
+      return Response.json({ version: '9.9.9', channel: 'latest' });
     },
   });
   try {
+    const rootVersion = (
+      JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8')) as {
+        version: string;
+      }
+    ).version;
     const source = `http://127.0.0.1:${server.port}/latest.json`;
     const { stdout, exitCode } = await runCli(['update', '--check', '--json'], {
       VESSEL_UPDATE_SOURCE: source,
@@ -279,20 +304,20 @@ it('update --check --json 走清单源并输出机器可读结果', async () => 
     expect(exitCode).toBe(0);
     const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
     expect(parsed).toMatchObject({
-      current: '0.1.0',
-      latest: '0.2.0',
+      current: rootVersion,
+      latest: '9.9.9',
       channel: 'latest',
       up_to_date: false,
     });
-    expect(String(parsed.install_hint)).toContain('vessel@0.2.0');
+    expect(String(parsed.install_hint)).toContain('vessel@9.9.9');
   } finally {
     server.stop();
   }
 });
 
-it('未知参数报错并 exit 1（不静默忽略）', async () => {
+it('未知参数报错并 exit 2（用法错误）', async () => {
   const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
-  expect(exitCode).toBe(1);
+  expect(exitCode).toBe(2);
   expect(stderr).toContain('Unknown argument');
 });
 

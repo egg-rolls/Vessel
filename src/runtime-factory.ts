@@ -20,6 +20,7 @@ import type {
   LLMProvider,
   PluginHost,
   RunnableAgent,
+  RunStore,
   RuntimeHost,
   RuntimeOptions,
   RuntimePermissionConfig,
@@ -60,6 +61,8 @@ export interface CreateHostRuntimeOptions {
   contextFactory?: () => ContextManager;
   /** R3 注入点；A4 接线 */
   transport?: Transport;
+  /** 0.3 durable：Host 成员的 checkpoint store（Host 优先，单写者为成员 runtime） */
+  runStore?: RunStore;
   /**
    * createRuntime 之后、spawn owner 之前调用。
    * A5 用它把 delegate/team 工厂插件装到同一个 Host/PluginHost 上。
@@ -97,6 +100,7 @@ export async function tryCreateHostRuntime(
       ...(options.contextFactory ? { contextFactory: options.contextFactory } : {}),
       ...(owner.permission ? { permission: owner.permission } : {}),
       ...(options.transport ? { transport: options.transport } : {}),
+      ...(options.runStore ? { runStore: options.runStore } : {}),
       scheduler: resolveScheduler(config),
       limits: resolveLimits(config, owner),
       defaults: {

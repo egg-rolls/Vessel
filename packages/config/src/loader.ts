@@ -12,7 +12,13 @@ import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, defaultModelForProvider } from './defaults.js';
 import type { ConfigLoadOptions, UserConfig, VesselConfig } from './types.js';
 import { deepMerge } from './utils.js';
-import { findUnknownKeys, KNOWN_CONFIG_KEYS, validateConfig } from './validator.js';
+import {
+  findUnknownKeys,
+  findUnknownNestedKeys,
+  KNOWN_BLOCK_KEYS,
+  KNOWN_CONFIG_KEYS,
+  validateConfig,
+} from './validator.js';
 
 /** 类型守卫：判断值是否为纯对象（非 null、非数组） */
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -20,19 +26,52 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * snake→camel 映射选项。
+ * `preserveKey` 返回 true 时保留原键（用于用户自定义 map 键，如 mcp_servers 的
+ * server 名、env/headers 的变量名）。
+ */
+export interface SnakeToCamelOptions {
+  /** @param path 从根到当前对象的路径（已按 camelCase 转换） */
+  preserveKey?: (path: string[], key: string) => boolean;
+}
+
+/**
  * 将对象的所有键从 snake_case 递归转为 camelCase。
  * 用于加载 YAML 配置后、合并前调用。
  */
-export function snakeToCamel<T = unknown>(obj: unknown): T;
-export function snakeToCamel(obj: unknown): unknown {
-  if (Array.isArray(obj)) return obj.map(snakeToCamel);
+export function snakeToCamel<T = unknown>(obj: unknown, options?: SnakeToCamelOptions): T;
+export function snakeToCamel(obj: unknown, options?: SnakeToCamelOptions): unknown {
+  return convertKeys(obj, [], options);
+}
+
+function convertKeys(
+  obj: unknown,
+  path: string[],
+  options: SnakeToCamelOptions | undefined,
+): unknown {
+  if (Array.isArray(obj)) return obj.map((item) => convertKeys(item, path, options));
   if (!isRecord(obj)) return obj;
   const result: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(obj)) {
-    const camelKey = key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
-    result[camelKey] = snakeToCamel(value);
+    const camelKey =
+      options?.preserveKey?.(path, key) === true
+        ? key
+        : key.replace(/_([a-z])/g, (_: string, c: string) => c.toUpperCase());
+    result[camelKey] = convertKeys(value, [...path, camelKey], options);
   }
   return result;
+}
+
+/**
+ * mcp_servers 是用户自定义的 map：
+ * - 第一层键是 server 名（`my_server` 不能被改写，否则工具前缀变化）；
+ * - `env` / `headers` 的键是环境变量/HTTP 头名，同样保留原样。
+ * 其余配置键（transport、connect_timeout_ms 等）照常转 camelCase。
+ */
+export function preserveMcpMapKeys(path: string[], _key: string): boolean {
+  if (path[0] !== 'mcpServers') return false;
+  if (path.length === 1) return true;
+  return path.length === 3 && (path[2] === 'env' || path[2] === 'headers');
 }
 
 /**
@@ -64,7 +103,7 @@ async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
   }
 
   const content = await file.text();
-  return snakeToCamel<T>(parseYaml(content));
+  return snakeToCamel<T>(parseYaml(content), { preserveKey: preserveMcpMapKeys });
 }
 
 /**
@@ -243,6 +282,20 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<{
         message: suggestion
           ? `Unknown configuration key "${key}". Did you mean "${suggestion}"?`
           : `Unknown configuration key "${key}".`,
+        value: key,
+      });
+    }
+
+    // 已知块内的未知键（0.3）：delegate.via_host、durable.*、serve.tls.*、mcpServers.<name>.* 等。
+    const unknownNested = findUnknownNestedKeys(fileConfig as unknown as Record<string, unknown>);
+    for (const { path, key, block } of unknownNested) {
+      const candidates = KNOWN_BLOCK_KEYS[block] ?? [];
+      const suggestion = closestKey(key, [...candidates]);
+      validation.errors.push({
+        path,
+        message: suggestion
+          ? `Unknown configuration key "${path}". Did you mean "${suggestion}"?`
+          : `Unknown configuration key "${path}".`,
         value: key,
       });
     }

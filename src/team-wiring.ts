@@ -45,7 +45,7 @@ export function planTeamWiring(input: TeamWiringInput): TeamWiringPlan {
 
   if (!input.hasHost) {
     warnings.push(
-      'team.enabled with host.enabled=false: gateway /v1/team/* needs a Host; team tools use the plugin embedded in-process host.',
+      'team.enabled with host.enabled=false: gateway /v1/team/* needs a Host; team tools use an internal in-process host.',
     );
     return { attachToGateway: false, useLoopback: false, warnings };
   }

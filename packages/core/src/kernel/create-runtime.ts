@@ -27,5 +27,6 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     ...(options.limits ? { limits: options.limits } : {}),
     ...(options.defaults ? { defaults: options.defaults } : {}),
     ...(options.transport ? { transport: options.transport } : {}),
+    ...(options.runStore ? { runStore: options.runStore } : {}),
   });
 }

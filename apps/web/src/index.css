@@ -849,3 +849,100 @@ button {
   outline: none;
   border-color: var(--accent);
 }
+
+/* ── 0.3 durable / MCP 面板 ── */
+.status-chip.interrupted {
+  color: var(--orange);
+  border-color: rgba(240, 136, 62, 0.4);
+}
+
+.panel-empty {
+  padding: 10px 16px;
+  font-size: 12px;
+  font-style: italic;
+}
+
+.mcp-list,
+.durable-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.mcp-item,
+.durable-item {
+  padding: 8px 16px;
+  border-left: 3px solid transparent;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s ease;
+}
+
+.mcp-item:hover,
+.durable-item:hover {
+  background: var(--bg-hover);
+}
+
+.mcp-head,
+.durable-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-status {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+}
+
+.mcp-status.connected {
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.4);
+}
+
+.mcp-status.failed {
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+.mcp-status.disabled {
+  color: var(--dim);
+}
+
+.mcp-tools,
+.mcp-error,
+.durable-meta,
+.durable-preview {
+  margin-top: 3px;
+  padding-left: 2px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.durable-preview {
+  color: var(--text);
+  opacity: 0.85;
+}
+
+.resume-btn {
+  margin-top: 6px;
+  padding: 3px 10px;
+  font-size: 12px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.resume-btn:hover:not(:disabled) {
+  background: var(--bg-elevated);
+  border-color: var(--accent);
+}
+
+.resume-btn:disabled {
+  color: var(--dim);
+  cursor: default;
+}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { InProcessRuntimeHost } from '../src/kernel/index';
+import type { AgentHandle, RunHandle, RunStatus, ScheduledTask } from '../src/kernel/index';
+import { InProcessRuntimeHost, InProcessScheduler } from '../src/kernel/index';
 import type { ChatRequest, LLMProvider, LLMResponse } from '../src/types/provider';
 
 /** 可控 Provider：保持挂起，直到测试 respond / 取消 */
@@ -205,5 +206,80 @@ describe('Scheduler 并发与队列（R2）', () => {
     expect(host.scheduler.stats()).toMatchObject({ queued: 0, running: 0, cancelled: 2 });
 
     await host.close();
+  });
+});
+
+/** 真实 RunHandle 的替身：记录 cancel 次数 */
+class FakeRunHandle implements RunHandle {
+  readonly result: Promise<string>;
+  private state: RunStatus = 'running';
+  cancelCalls = 0;
+  private resolveResult!: (value: string) => void;
+  private rejectResult!: (reason?: unknown) => void;
+
+  constructor(
+    readonly id: string,
+    readonly agentId = 'a',
+    readonly sessionId = 's',
+  ) {
+    this.result = new Promise<string>((resolve, reject) => {
+      this.resolveResult = resolve;
+      this.rejectResult = reject;
+    });
+    void this.result.catch(() => {});
+  }
+
+  status(): RunStatus {
+    return this.state;
+  }
+
+  usage(): undefined {
+    return undefined;
+  }
+
+  cancel(): void {
+    this.cancelCalls += 1;
+    this.state = 'cancelled';
+    this.rejectResult(new Error('cancelled'));
+  }
+
+  finish(value = 'done'): void {
+    this.state = 'completed';
+    this.resolveResult(value);
+  }
+}
+
+describe('Scheduler 取消竞态（0.3 回归）', () => {
+  it('executor 尚未 attach 时 cancel：真实 handle 补发取消且只结算一次', async () => {
+    const scheduler = new InProcessScheduler();
+    let releaseExecutor!: (handle: RunHandle) => void;
+    const task: ScheduledTask = {
+      agent: { id: 'a' } as AgentHandle,
+      input: 'x',
+      executor: () =>
+        new Promise<RunHandle>((resolve) => {
+          releaseExecutor = resolve;
+        }),
+    };
+
+    const run = await scheduler.submit(task);
+    expect(run.status()).toBe('running');
+    expect(scheduler.cancel(run.id, 'stop')).toBe(true);
+
+    const real = new FakeRunHandle(run.id);
+    releaseExecutor(real);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(real.cancelCalls).toBe(1);
+    await expect(run.result).rejects.toThrow();
+    expect(scheduler.stats()).toMatchObject({
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 1,
+    });
+
+    await scheduler.close();
   });
 });

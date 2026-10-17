@@ -11,8 +11,13 @@
 
 import type {
   AskUserAnswer,
+  DurableRunSummary,
+  DurableRunsResponse,
   GapFrame,
+  GatewayErrorBody,
   HelloInfo,
+  McpServerStatus,
+  McpServersResponse,
   RunEvent,
   RunStatus,
   ServerFrame,
@@ -21,6 +26,18 @@ import type {
 } from './types';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
+
+/** REST 错误（携带 gateway 稳定 code） */
+export class GatewayHttpError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly status?: number,
+  ) {
+    super(message);
+    this.name = 'GatewayHttpError';
+  }
+}
 
 export interface EventMeta {
   seq: number;
@@ -32,6 +49,7 @@ const REQUEST_TIMEOUT_MS = 30_000;
 
 export class GatewayClient {
   private readonly baseUrl: string;
+  private token: string | null = null;
   private ws: WebSocket | null = null;
   private state: ConnectionState = 'idle';
   private helloInfo: HelloInfo | null = null;
@@ -130,6 +148,7 @@ export class GatewayClient {
     }
 
     this.close();
+    this.token = tk;
 
     return new Promise<void>((resolve, reject) => {
       this.connectResolve = resolve;
@@ -272,6 +291,7 @@ export class GatewayClient {
   close(): void {
     const ws = this.ws;
     this.ws = null;
+    this.token = null;
     this.helloInfo = null;
     this.rejectPending(new Error('连接已关闭'));
     if (ws) {
@@ -325,6 +345,65 @@ export class GatewayClient {
   /** 回答 ask_user；answers=[] 表示取消 */
   async respondAsk(requestId: string, answers: AskUserAnswer[]): Promise<void> {
     await this.request('ask.respond', { request_id: requestId, answers });
+  }
+
+  // ── 0.3 REST（durable / MCP）──────────────────
+
+  private async httpJson<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const token = this.token;
+    if (!token) throw new GatewayHttpError('unauthorized', '缺少 gateway token');
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${token}`);
+
+    let res: Response;
+    try {
+      res = await fetch(`${this.httpBase()}${path}`, { ...init, headers });
+    } catch (error) {
+      throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
+    }
+    if (!res.ok) {
+      let code = 'internal';
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as GatewayErrorBody;
+        if (body?.error?.code) {
+          code = body.error.code;
+          message = body.error.message || message;
+        }
+      } catch {
+        // 非 JSON 错误体：保留 HTTP 状态
+      }
+      throw new GatewayHttpError(code, message, res.status);
+    }
+    return (await res.json()) as T;
+  }
+
+  /** interrupted/其它状态的 durable run 摘要 */
+  async listDurableRuns(
+    params: { status?: string; session_id?: string; limit?: number } = {},
+  ): Promise<DurableRunSummary[]> {
+    const query = new URLSearchParams();
+    if (params.status) query.set('status', params.status);
+    if (params.session_id) query.set('session_id', params.session_id);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    const suffix = query.toString();
+    const body = await this.httpJson<DurableRunsResponse>(
+      `/v1/durable/runs${suffix ? `?${suffix}` : ''}`,
+    );
+    return body.runs ?? [];
+  }
+
+  /** 恢复一个 durable run；gateway 受理后返回 queued */
+  resumeDurableRun(runId: string): Promise<{ run_id: string; status: 'queued' }> {
+    return this.httpJson(`/v1/durable/runs/${encodeURIComponent(runId)}/resume`, {
+      method: 'POST',
+    });
+  }
+
+  /** MCP server 连接状态快照 */
+  async listMcpServers(): Promise<McpServerStatus[]> {
+    const body = await this.httpJson<McpServersResponse>('/v1/mcp/servers');
+    return body.servers ?? [];
   }
 }
 

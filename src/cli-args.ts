@@ -23,6 +23,17 @@ export interface CliArgs {
   sessionArg: string | null;
   /** null = 不启动 gateway；0 = 由系统分配端口 */
   servePort: number | null;
+  /** 端口是否由用户显式给出（用于 config serve.port 回退） */
+  servePortExplicit: boolean;
+  /** --serve-host <host>；null = 未指定 */
+  serveHost: string | null;
+  /** --allow-remote：显式允许非回环监听 */
+  allowRemote: boolean;
+  /** --tls-cert <path> / --tls-key <path>：必须成对 */
+  tlsCert: string | null;
+  tlsKey: string | null;
+  /** null = 未使用；'' = 列出可恢复 run；非空 = 恢复该 run */
+  resumeRunArg: string | null;
   help: boolean;
   version: boolean;
   tools: boolean;
@@ -54,6 +65,12 @@ export function parseArgs(argv: string[]): ParseResult {
     pipeMode: false,
     sessionArg: null,
     servePort: null,
+    servePortExplicit: false,
+    serveHost: null,
+    allowRemote: false,
+    tlsCert: null,
+    tlsKey: null,
+    resumeRunArg: null,
     help: false,
     version: false,
     tools: false,
@@ -101,9 +118,45 @@ export function parseArgs(argv: string[]): ParseResult {
             return { ok: false, error: `Invalid port for --serve: ${next}` };
           }
           args.servePort = port;
+          args.servePortExplicit = true;
           i++;
         } else {
           args.servePort = DEFAULT_SERVE_PORT;
+          args.servePortExplicit = false;
+        }
+        break;
+      }
+      case '--serve-host': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --serve-host' };
+        }
+        args.serveHost = next;
+        i++;
+        break;
+      }
+      case '--allow-remote':
+        args.allowRemote = true;
+        break;
+      case '--tls-cert':
+      case '--tls-key': {
+        const next = argv[i + 1];
+        const flag = a;
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: `Missing value for ${flag}` };
+        }
+        if (flag === '--tls-cert') args.tlsCert = next;
+        else args.tlsKey = next;
+        i++;
+        break;
+      }
+      case '--resume-run': {
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          args.resumeRunArg = next;
+          i++;
+        } else {
+          args.resumeRunArg = '';
         }
         break;
       }
@@ -121,6 +174,35 @@ export function parseArgs(argv: string[]): ParseResult {
       default:
         return { ok: false, error: `Unknown argument: ${a}` };
     }
+  }
+
+  // --resume-run 是独立模式：不能与其它输入/服务/一次性命令组合（Addendum A §6）。
+  if (args.resumeRunArg !== null) {
+    const conflicts = [
+      args.runArg !== null ? '--run' : null,
+      args.pipeMode ? '--pipe' : null,
+      args.servePort !== null ? '--serve' : null,
+      args.sessionArg !== null ? '--session' : null,
+      args.tools ? '--tools' : null,
+    ].filter((v): v is string => v !== null);
+    if (conflicts.length > 0) {
+      return { ok: false, error: `--resume-run cannot be combined with ${conflicts.join('/')}` };
+    }
+  }
+
+  // TLS 必须成对；serve 专属参数必须有 --serve。
+  if ((args.tlsCert !== null) !== (args.tlsKey !== null)) {
+    return { ok: false, error: '--tls-cert and --tls-key must be provided together' };
+  }
+
+  const serveOnly = [
+    args.serveHost !== null ? '--serve-host' : null,
+    args.allowRemote ? '--allow-remote' : null,
+    args.tlsCert !== null ? '--tls-cert' : null,
+    args.tlsKey !== null ? '--tls-key' : null,
+  ].filter((v): v is string => v !== null);
+  if (serveOnly.length > 0 && args.servePort === null) {
+    return { ok: false, error: `${serveOnly[0]} requires --serve` };
   }
 
   const oneShot = [

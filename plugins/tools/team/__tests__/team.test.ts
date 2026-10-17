@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  InProcessRuntimeHost as CoreInProcessRuntimeHost,
   type LLMProvider,
   MemoryEventStream,
   MemoryLLMProvider,
@@ -12,7 +13,8 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from '@vessel/core';
-import { InProcessRuntimeHost, type TeamMessage } from '../src/host';
+import { CoreHostAdapter } from '../src/core-adapter';
+import type { TeamMessage } from '../src/host';
 import { createTeamPlugin, disabledTeamPlugin } from '../src/index';
 
 /** 轮询等待条件成立 */
@@ -61,10 +63,10 @@ function toolOf(host: MemoryPluginHost, name: string): ToolDefinition {
   return tool;
 }
 
-/** 创建装了 team 插件的 host */
-function teamHost(options: Parameters<typeof createTeamPlugin>[0]): MemoryPluginHost {
+/** 创建装了 team 插件的 host（team 必须注入 core Host） */
+function teamHost(options: Omit<Parameters<typeof createTeamPlugin>[0], 'host'>): MemoryPluginHost {
   const host = new MemoryPluginHost();
-  createTeamPlugin(options).install(host);
+  createTeamPlugin({ ...options, host: new CoreInProcessRuntimeHost() }).install(host);
   return host;
 }
 
@@ -89,10 +91,10 @@ describe('team 插件注册面', () => {
   });
 });
 
-describe('InProcessRuntimeHost', () => {
+describe('core Host 端口', () => {
   it('spawn / send task / inbox 结果回收 / status', async () => {
     const events = new MemoryEventStream();
-    const host = new InProcessRuntimeHost({ events });
+    const host = new CoreHostAdapter(new CoreInProcessRuntimeHost(), { events });
     const provider = new MemoryLLMProvider();
     const workerHost = new MemoryPluginHost();
 
@@ -117,7 +119,7 @@ describe('InProcessRuntimeHost', () => {
   });
 
   it('inbox cursor 只返回新消息', async () => {
-    const host = new InProcessRuntimeHost();
+    const host = new CoreHostAdapter(new CoreInProcessRuntimeHost());
     await host.spawn({
       id: 'worker',
       provider: new MemoryLLMProvider(),
@@ -133,7 +135,7 @@ describe('InProcessRuntimeHost', () => {
   });
 
   it('cancel 中断正在运行的任务', async () => {
-    const host = new InProcessRuntimeHost();
+    const host = new CoreHostAdapter(new CoreInProcessRuntimeHost());
     await host.spawn({
       id: 'slow',
       provider: abortableProvider,
@@ -156,7 +158,7 @@ describe('InProcessRuntimeHost', () => {
   });
 
   it('成员上限与未知成员报错', async () => {
-    const host = new InProcessRuntimeHost({ maxMembers: 1 });
+    const host = new CoreHostAdapter(new CoreInProcessRuntimeHost({ maxMembers: 1 }));
     await host.spawn({
       id: 'one',
       provider: new MemoryLLMProvider(),
