@@ -5,6 +5,7 @@ import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
 import { MemorySessionBackend } from '../src/session/session-backend';
+import { HookType } from '../src/types/hook';
 import type { ToolDefinition } from '../src/types/tool';
 
 /** 构造"第一次 user 消息返回 tool_calls，之后返回 stop"的 provider */
@@ -684,5 +685,322 @@ describe('AgentRuntime Integration', () => {
     expect(response).toBe('done');
     expect(toolRan).toBe(2);
     expect(requested).toBe(1); // 第二次不再发权限请求
+  });
+});
+
+describe('工具失败与上下文持久化（C-01/C-02）', () => {
+  it('非法 tool arguments JSON 不终止 run，折回 role:tool 错误（C-01）', async () => {
+    const pluginHost = new MemoryPluginHost();
+    let toolRan = 0;
+    pluginHost.registerTool({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        toolRan++;
+        return 'ok';
+      },
+    });
+
+    const events = new MemoryEventStream();
+    const failures: Array<{ tool_name: string; error: string }> = [];
+    events.subscribe((event) => {
+      if (event.type === 'tool.call.failed') {
+        failures.push(event.data as unknown as { tool_name: string; error: string });
+      }
+    });
+
+    let calls = 0;
+    const provider = {
+      chat: async () => {
+        calls++;
+        if (calls === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls' as const,
+            tool_calls: [
+              {
+                id: 'bad-args',
+                type: 'function' as const,
+                function: { name: 'noop', arguments: '{bad' },
+              },
+            ],
+          };
+        }
+        return { content: 'recovered', finish_reason: 'stop' as const };
+      },
+    };
+
+    const context = new MemoryContextManager();
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context,
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await runtime.run('bad args');
+
+    expect(response).toBe('recovered');
+    expect(toolRan).toBe(0); // 参数解析失败，handler 不应执行
+    expect(failures).toHaveLength(1);
+    expect(failures[0]?.error).toContain('Invalid JSON');
+    const toolMessage = context.messages.find((m) => m.role === 'tool');
+    expect(toolMessage?.content).toContain('Invalid JSON');
+  });
+
+  it('run 失败时持久化真实上下文（user/assistant/tool 都保留，C-02）', async () => {
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'tool-result',
+    });
+
+    let calls = 0;
+    const provider = {
+      chat: async () => {
+        calls++;
+        if (calls === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls' as const,
+            tool_calls: [
+              {
+                id: 'c1',
+                type: 'function' as const,
+                function: { name: 'noop', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        throw new Error('boom');
+      },
+    };
+
+    const session = new MemorySessionBackend();
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      session,
+    });
+
+    await expect(runtime.run('hello', 's-fail')).rejects.toThrow('boom');
+
+    const saved = await session.load('s-fail');
+    expect(saved?.status).toBe('failed');
+    expect(saved?.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect(saved?.messages[2]?.content).toBe('tool-result');
+  });
+
+  it('第二轮失败时保留第一轮历史（C-02 回归）', async () => {
+    let calls = 0;
+    const provider = {
+      chat: async () => {
+        calls++;
+        if (calls === 1) {
+          return { content: 'first reply', finish_reason: 'stop' as const };
+        }
+        throw new Error('second boom');
+      },
+    };
+
+    const session = new MemorySessionBackend();
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      session,
+    });
+
+    await runtime.run('first', 's2');
+    await expect(runtime.run('second', 's2')).rejects.toThrow('second boom');
+
+    const saved = await session.load('s2');
+    expect(saved?.messages.length).toBeGreaterThanOrEqual(3);
+    expect(saved?.messages[0]?.content).toBe('first');
+  });
+});
+
+describe('真实 token 语义（C-04）', () => {
+  it('使用本次请求 token 而非累计值，不误触发 compact', async () => {
+    let compacted = 0;
+    const context = new MemoryContextManager({
+      onCompact: () => {
+        compacted++;
+      },
+    });
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'r',
+    });
+
+    let calls = 0;
+    const provider = {
+      chat: async () => {
+        calls++;
+        if (calls === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls' as const,
+            tool_calls: [
+              {
+                id: 'c1',
+                type: 'function' as const,
+                function: { name: 'noop', arguments: '{}' },
+              },
+            ],
+            usage: { prompt_tokens: 3000, completion_tokens: 100, total_tokens: 3100 },
+          };
+        }
+        return {
+          content: 'done',
+          finish_reason: 'stop' as const,
+          usage: { prompt_tokens: 3100, completion_tokens: 50, total_tokens: 3150 },
+        };
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context,
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    await runtime.run('hi');
+
+    // 修复前：第二轮累计 3100 + 3150 = 6250 > 4096*0.8，会误触发 compact
+    expect(compacted).toBe(0);
+    expect(context.tokenCount).toBe(3150);
+  });
+});
+
+describe('中断与限额（C-09）', () => {
+  it('AbortSignal 已中止：run 失败、发 run.failed、触发 OnError', async () => {
+    const events = new MemoryEventStream();
+    let onError = 0;
+    const runtime = await AgentRuntime.create({
+      provider: {
+        chat: async () => ({ content: 'never', finish_reason: 'stop' as const }),
+      },
+      model: 'test-model',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      plugins: [
+        {
+          name: 'on-error',
+          install(host) {
+            host.registerHook({
+              name: 'err',
+              type: HookType.OnError,
+              run: async () => {
+                onError++;
+              },
+            });
+          },
+        },
+      ],
+    });
+
+    const controller = new AbortController();
+    controller.abort('cancelled by test');
+
+    await expect(runtime.run('hi', undefined, { signal: controller.signal })).rejects.toThrow(
+      'cancelled by test',
+    );
+    expect(events.getHistory().some((e) => e.type === 'run.failed')).toBe(true);
+    expect(onError).toBe(1);
+  });
+
+  it('maxIterations 到达后终止（C-09）', async () => {
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    });
+
+    let calls = 0;
+    const provider = {
+      chat: async () => {
+        calls++;
+        return {
+          content: '',
+          finish_reason: 'tool_calls' as const,
+          tool_calls: [
+            { id: 'c1', type: 'function' as const, function: { name: 'noop', arguments: '{}' } },
+          ],
+        };
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 1 },
+    });
+
+    await expect(runtime.run('loop')).rejects.toThrow('Termination policy');
+    expect(calls).toBe(1);
+  });
+
+  it('requestLimit 到达后终止（C-09）', async () => {
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    });
+
+    const provider = {
+      chat: async () => ({
+        content: '',
+        finish_reason: 'tool_calls' as const,
+        tool_calls: [
+          { id: 'c1', type: 'function' as const, function: { name: 'noop', arguments: '{}' } },
+        ],
+      }),
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 1, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    await expect(runtime.run('loop')).rejects.toThrow('Usage limits exceeded');
   });
 });

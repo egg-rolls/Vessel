@@ -104,6 +104,38 @@ describe('SQLiteSessionBackend', () => {
     await backend.save(createRunState('session-1'));
     expect((await backend.load('session-1'))?.session_id).toBe('session-1');
   });
+
+  it('全量 CRUD + listRich（过滤空会话、按 updated_at 倒序、branch）', async () => {
+    backend = new SQLiteSessionBackend(':memory:');
+
+    await backend.save(
+      createRunState('a', {
+        status: 'completed',
+        updated_at: 100,
+        branch: 'main',
+        messages: [{ role: 'user', content: 'first' }],
+      }),
+    );
+    await backend.save(
+      createRunState('b', {
+        status: 'completed',
+        updated_at: 200,
+        messages: [{ role: 'user', content: 'second' }],
+      }),
+    );
+    await backend.save(createRunState('empty', { messages: [], updated_at: 300 }));
+
+    expect((await backend.list()).sort()).toEqual(['a', 'b', 'empty']);
+    expect((await backend.load('a'))?.branch).toBe('main');
+
+    const rich = await backend.listRich();
+    expect(rich.map((r) => r.session_id)).toEqual(['b', 'a']);
+    expect(rich[0]?.message_count).toBe(1);
+
+    await backend.delete('a');
+    expect((await backend.list()).sort()).toEqual(['b', 'empty']);
+    expect(await backend.load('a')).toBeNull();
+  });
 });
 
 describe('FileSessionBackend', () => {
@@ -181,6 +213,22 @@ describe('FileSessionBackend', () => {
     const loaded = await backend.load('with-title');
     expect(loaded?.title).toBe('What is the weather today in Tokyo?');
     expect(loaded?.preview).toBe('What is the weather today in Tokyo?');
+  });
+
+  it('派生 title 时跳过注入消息，取首轮真实用户输入（C-07）', async () => {
+    const state = createRunState('injected', {
+      messages: [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: '<file path="skills/x.md">技能正文</file>' },
+        { role: 'user', content: '请按这个来' },
+        { role: 'assistant', content: '好的' },
+      ],
+    });
+    await backend.save(state);
+
+    const loaded = await backend.load('injected');
+    expect(loaded?.title).toBe('请按这个来');
+    expect(loaded?.preview).toBe('请按这个来');
   });
 
   it('should preserve explicit title and preview on save', async () => {
