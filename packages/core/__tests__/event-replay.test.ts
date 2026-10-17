@@ -69,6 +69,15 @@ describe('FileEventStore', () => {
     expect(read[0]?.run_id).toBe('run-1');
   });
 
+  it('append 时自动创建父目录（C-08）', async () => {
+    const nested = new FileEventStore(path.join(tmpDir, 'deep', 'nested', 'events.jsonl'));
+
+    await nested.append(makeEvent('run.started', 'run-nested'));
+
+    const read = await nested.readRun('run-nested');
+    expect(read).toHaveLength(1);
+  });
+
   it('should return empty array for non-existent run', async () => {
     const event = makeEvent('run.started', 'run-1');
     await store.append(event);

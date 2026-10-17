@@ -604,7 +604,13 @@ export class AnthropicProvider implements LLMProvider {
     return {
       content,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-      finish_reason: data.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
+      // 与流式分支保持一致：max_tokens 是截断（length），不是正常结束（C-06）
+      finish_reason:
+        data.stop_reason === 'tool_use'
+          ? 'tool_calls'
+          : data.stop_reason === 'max_tokens'
+            ? 'length'
+            : 'stop',
       usage: {
         prompt_tokens: data.usage.input_tokens,
         completion_tokens: data.usage.output_tokens,
