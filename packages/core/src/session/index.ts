@@ -10,3 +10,4 @@ export {
   MemorySessionBackend,
   toSessionInfo,
 } from './session-backend.js';
+export { SQLiteSessionBackend } from './sqlite-backend.js';
