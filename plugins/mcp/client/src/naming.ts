@@ -1,14 +1,14 @@
 /**
  * MCP 工具名规则（DECISION-008 §4.2 + Addendum B §9.3 Q4）。
  *
- * - 非法字符（非 `[A-Za-z0-9_-]`）替换为 `_`；
+ * - 非法字符（非 `[A-Za-z0-9_]`，连字符也算非法）替换为 `_`；
  * - 默认加前缀 `mcp__<server>__<tool>`；`toolPrefix === false` 时用原名；
  * - 超过 64 字符：取前 55 + `_` + 原始名的 8 位 SHA-1 十六进制 = 64（总长上限）。
  */
 
 import { createHash } from 'node:crypto';
 
-const INVALID_SEGMENT = /[^A-Za-z0-9_-]/g;
+const INVALID_SEGMENT = /[^A-Za-z0-9_]/g;
 /** 工具名总长上限 */
 export const MAX_TOOL_NAME_LENGTH = 64;
 /** hash 后缀长度 */

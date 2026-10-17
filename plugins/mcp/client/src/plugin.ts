@@ -74,9 +74,11 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     for (const tool of connection.tools) {
       const exposed = exposedToolName(entry.config.name, tool.name, toolPrefix);
       if (pluginHost.getTool(exposed) !== undefined) {
+        // 同一插件的重复重连不算冲突；与既有工具（含其它 server）碰撞才告警
         if (!entry.registered.includes(exposed)) {
           console.warn(
-            `Skipping MCP tool "${exposed}" from server "${entry.config.name}": name already registered`,
+            `Skipping MCP tool "${exposed}" from server "${entry.config.name}": ` +
+              'a tool with this name is already registered; the existing tool is kept',
           );
         }
         continue;
