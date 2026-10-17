@@ -203,6 +203,53 @@ it('host.enabled=true 时 headless mock 走 Host 路径且不触发回退', asyn
   }
 });
 
+it('host + team + delegate.viaHost 共用 Host 且无回退告警', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-host-team-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'vessel.yaml'),
+      'host:\n  enabled: true\nteam:\n  enabled: true\ndelegate:\n  via_host: true\n',
+    );
+    const { stdout, stderr, exitCode } = await runCli(
+      ['--run', 'hello'],
+      { VESSEL_MOCK: '1' },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe('Echo: hello');
+    expect(stderr).not.toContain('Host runtime unavailable');
+    expect(stderr).not.toContain('viaHost is ignored');
+    expect(stderr).not.toContain('embedded in-process host');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('host 关闭 + delegate.viaHost：告警并回落专用 Host', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-viahost-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'delegate:\n  via_host: true\n');
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain('delegate.viaHost is ignored');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('host 关闭 + team.enabled：告警并使用内嵌 Host', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-embed-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain('embedded in-process host');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 it('--run @missing.txt 报错 exit 1', async () => {
   const { exitCode, stderr } = await runCli(['--run', '@definitely-missing.txt'], {
     VESSEL_MOCK: '1',
