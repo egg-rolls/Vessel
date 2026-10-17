@@ -48,6 +48,21 @@ interface PiiDetection {
 }
 
 /**
+ * 按位置排序并消除重叠：后出现的重叠片段直接丢弃。
+ * 重叠区间若同时替换会互相破坏索引，宁少遮一个也不能遮错位置。
+ */
+function resolveOverlaps(detections: PiiDetection[]): PiiDetection[] {
+  const sorted = [...detections].sort((a, b) => a.start - b.start || b.end - a.end);
+  const result: PiiDetection[] = [];
+  for (const detection of sorted) {
+    const previous = result[result.length - 1];
+    if (previous && detection.start < previous.end) continue;
+    result.push(detection);
+  }
+  return result;
+}
+
+/**
  * PII 检测器
  */
 class PiiDetector {
@@ -64,7 +79,7 @@ class PiiDetector {
     const detections: PiiDetection[] = [];
 
     if (this.config.detectEmail) {
-      const pattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+      const pattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
       let match = pattern.exec(text);
       while (match !== null) {
         detections.push({
@@ -136,7 +151,7 @@ class PiiDetector {
       }
     }
 
-    return detections;
+    return resolveOverlaps(detections);
   }
 
   /**

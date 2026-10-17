@@ -19,8 +19,40 @@ export interface LoggingHookConfig {
   timestamp?: boolean;
   /** 是否记录 run_id */
   includeRunId?: boolean;
+  /** 内存中最多保留的日志条数（默认 1000，超出丢最旧） */
+  maxEntries?: number;
   /** 自定义日志格式器 */
   formatter?: (entry: LogEntry) => string;
+}
+
+/** 默认保留条数 */
+const DEFAULT_MAX_ENTRIES = 1000;
+
+/**
+ * 日志文本脱敏：hook 不经过 guardrail，密钥必须在写日志前处理。
+ * 只覆盖最常见的高置信模式，宁可少遮也不破坏正常文本。
+ */
+const LOG_REDACTION_RULES: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /sk-ant-[A-Za-z0-9_-]{20,}/g, replacement: 'sk-ant-***REDACTED***' },
+  { pattern: /sk-[A-Za-z0-9_-]{20,}/g, replacement: 'sk-***REDACTED***' },
+  { pattern: /bearer\s+[A-Za-z0-9._=~+/-]{16,}/gi, replacement: 'Bearer ***REDACTED***' },
+  {
+    pattern: /(api[_-]?key|password|secret)\s*[:=]\s*['"]?[^\s'"]{8,}/gi,
+    replacement: '$1=***REDACTED***',
+  },
+  { pattern: /gh[pousr]_[A-Za-z0-9]{36,}/g, replacement: '***REDACTED***' },
+  {
+    pattern: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+    replacement: '***JWT-REDACTED***',
+  },
+];
+
+/** 对日志文本做最小脱敏 */
+function redactForLog(text: string): string {
+  return LOG_REDACTION_RULES.reduce(
+    (current, rule) => current.replace(rule.pattern, rule.replacement),
+    text,
+  );
 }
 
 /** 日志条目 */
@@ -57,36 +89,47 @@ export class LoggingHook implements Hook {
       level: config.level ?? 'info',
       timestamp: config.timestamp ?? true,
       includeRunId: config.includeRunId ?? true,
+      maxEntries: config.maxEntries ?? DEFAULT_MAX_ENTRIES,
       formatter: config.formatter,
     };
   }
 
   async run(ctx: HookContext): Promise<void> {
+    // 不记录整个 ctx：HookContext 是开放字段，可能含 systemPrompt / 工具参数等敏感内容
     const entry: LogEntry = {
       level: 'info',
       message: 'LLM request initiated',
       timestamp: new Date(),
       run_id: ctx.run_id,
       session_id: ctx.session_id,
-      data: ctx,
     };
 
     this.log(entry);
   }
 
   /**
-   * 记录日志
+   * 记录日志（写前脱敏；内存保留最近 maxEntries 条）
    */
   log(entry: LogEntry): void {
     if (LOG_LEVEL_PRIORITY[entry.level] < LOG_LEVEL_PRIORITY[this.config.level ?? 'info']) {
       return;
     }
 
-    this.logs.push(entry);
+    const safeEntry: LogEntry = {
+      ...entry,
+      message: redactForLog(entry.message),
+      data: undefined,
+    };
+    this.logs.push(safeEntry);
+
+    const maxEntries = this.config.maxEntries ?? DEFAULT_MAX_ENTRIES;
+    if (this.logs.length > maxEntries) {
+      this.logs.splice(0, this.logs.length - maxEntries);
+    }
 
     const formatted = this.config.formatter
-      ? this.config.formatter(entry)
-      : this.formatEntry(entry);
+      ? this.config.formatter(safeEntry)
+      : this.formatEntry(safeEntry);
 
     console.log(formatted);
   }
