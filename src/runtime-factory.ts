@@ -60,6 +60,11 @@ export interface CreateHostRuntimeOptions {
   contextFactory?: () => ContextManager;
   /** R3 注入点；A4 接线 */
   transport?: Transport;
+  /**
+   * createRuntime 之后、spawn owner 之前调用。
+   * A5 用它把 delegate/team 工厂插件装到同一个 Host/PluginHost 上。
+   */
+  beforeSpawn?: (host: RuntimeHost) => void | Promise<void>;
   /** 测试注入口；缺省动态 import kernel */
   loadHostModule?: () => Promise<HostModule>;
 }
@@ -103,6 +108,8 @@ export async function tryCreateHostRuntime(
         ...(owner.permission ? { permission: owner.permission } : {}),
       },
     });
+
+    if (options.beforeSpawn) await options.beforeSpawn(host);
 
     const spawnOwner = (sessionId: string): Promise<AgentHandle> =>
       host.spawn(buildOwnerSpec(owner, sessionId));

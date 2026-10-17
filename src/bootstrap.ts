@@ -8,6 +8,7 @@
 import { DEFAULT_CONFIG, defaultModelForProvider, loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
+  type AgentStatus,
   type LLMProvider,
   MemoryContextManager,
   MemoryEventStream,
@@ -23,6 +24,8 @@ import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import { DeferredTransport } from './deferred-transport';
+import { planFactoryPlugins } from './factory-plugins';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
@@ -51,12 +54,19 @@ export interface BootstrapResult {
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
   /** host.enabled=true 且构造成功时存在 */
   host?: RuntimeHost;
+  /** nodeId 唯一来源：config.host.nodeId，缺省进程内生成 */
+  nodeId: string;
+  /** gateway /v1/team/agents 的 spawn 注入（仅 host 模式） */
+  spawnAgent?: (request: {
+    name?: string;
+    model?: string;
+    systemPrompt?: string;
+  }) => Promise<AgentStatus>;
   /**
-   * 仅 legacy 路径存在。
-   * 过渡：web R3 放宽 GatewayOptions.runtime 之前，gateway 只能接 AgentRuntime；
-   * host 模式下该字段为 undefined，/v1/runs 暂不可用。
+   * team loopback 的晚绑定 transport（仅 host + team + loopback）。
+   * cli 在 gateway 启动、真实 loopback 构造后调用 resolve/fail。
    */
-  agentRuntime?: AgentRuntime;
+  transport?: DeferredTransport;
   cleanup: () => void;
 }
 
@@ -85,6 +95,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── 加载配置 ────────────────────────────────────
   const { config, validation } = await loadConfig();
+
+  // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
+  const nodeId =
+    config.host?.nodeId ?? `vessel-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
 
   if (!useMock && validation.errors.length > 0) {
     for (const e of validation.errors) console.error(`✗ ${e.message}`);
@@ -186,52 +200,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     if (p) plugins.push(p);
   }
 
-  // 子 agent 分派（delegate_task）：工厂式插件，需注入 provider 工厂 + model，
-  // 不走通用注册表（其 default export 是 createDelegateTaskPlugin 工厂而非 Plugin 实例）。
-  // `delegate.enabled: false` 时不注册，运行期工具从 4 个变为 3 个。
-  if (config.delegate?.enabled !== false) {
-    plugins.push(
-      createDelegateTaskPlugin({
-        providerFactory: () => provider,
-        model: config.delegate?.model ?? providerModel,
-        maxDepth: config.delegate?.maxDepth,
-        disallowed: config.delegate?.disallowed,
-        limits: config.delegate?.limits,
-        termination: config.delegate?.termination
-          ? {
-              maxIterations: config.delegate.termination.maxIterations ?? 10,
-              maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
-            }
-          : undefined,
-        // 交互模式（TUI / web gateway）把子 agent 的权限请求桥到父事件流；
-        // headless 无应答者，直接 allow，避免 120s 挂起。
-        permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
-        readOnlyTools: config.delegate?.readOnlyTools,
-      }),
-    );
-  }
-
-  // agent team 原型：0.1.0 必须显式 opt-in（`team.enabled: true`），默认不注册。
-  // 传输层/跨进程成员留给 0.2（web）。未启用时 `team` 插件的默认导出是空插件。
-  if (config.team?.enabled === true) {
-    plugins.push(
-      createTeamPlugin({
-        providerFactory: () => provider,
-        model: config.team.model ?? providerModel,
-        events,
-        maxMembers: config.team.maxMembers,
-        ownerId: config.team.ownerId,
-        memberLimits: config.team.memberLimits,
-        memberTermination: config.team.memberTermination
-          ? {
-              maxIterations: config.team.memberTermination.maxIterations ?? 10,
-              maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
-            }
-          : undefined,
-      }),
-    );
-  }
-
   // ask-user 交互工具——以插件形式注册（唯一工具入口是 PluginHost）。
   // 只有"实际进入 REPL 且 stdin 是 TTY"才注册；headless / serve-only / 管道
   // 都没有 TUI 订阅者，注册只会让 waitFor 超时挂起。
@@ -245,6 +213,74 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       },
     });
   }
+  const staticPluginCount = plugins.length;
+
+  /**
+   * 工厂式插件（delegate_task / team）：
+   * - host 开启：装到共享 Host（delegate 仅在 viaHost=true 时共享；team 总是共享）；
+   * - host 关闭：delegate 用专用 Host、team 用内嵌 Host，并告警。
+   */
+  const buildFactoryPlugins = (
+    runtimeHost?: RuntimeHost,
+    transport?: DeferredTransport,
+  ): Plugin[] => {
+    const plan = planFactoryPlugins(config, runtimeHost !== undefined);
+    for (const warning of plan.warnings) console.warn(`⚠ ${warning}`);
+
+    const factory: Plugin[] = [];
+
+    if (plan.delegate) {
+      factory.push(
+        createDelegateTaskPlugin({
+          providerFactory: () => provider,
+          model: config.delegate?.model ?? providerModel,
+          maxDepth: config.delegate?.maxDepth,
+          disallowed: config.delegate?.disallowed,
+          limits: config.delegate?.limits,
+          termination: config.delegate?.termination
+            ? {
+                maxIterations: config.delegate.termination.maxIterations ?? 10,
+                maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
+              }
+            : undefined,
+          // 交互模式（TUI / web gateway）把子 agent 的权限请求桥到父事件流；
+          // headless 无应答者，直接 allow，避免 120s 挂起。
+          permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
+          readOnlyTools: config.delegate?.readOnlyTools,
+          ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
+        }),
+      );
+    }
+
+    if (plan.team) {
+      factory.push(
+        createTeamPlugin({
+          providerFactory: () => provider,
+          model: config.team?.model ?? providerModel,
+          events: runtimeHost?.events ?? events,
+          ...(plan.team.useHost && runtimeHost ? { host: runtimeHost } : {}),
+          ...(transport
+            ? {
+                transport,
+                nodeId,
+                ownerRef: `${nodeId}:${config.team?.ownerId ?? 'owner'}`,
+              }
+            : {}),
+          maxMembers: config.team?.maxMembers,
+          ownerId: config.team?.ownerId,
+          memberLimits: config.team?.memberLimits,
+          memberTermination: config.team?.memberTermination
+            ? {
+                maxIterations: config.team.memberTermination.maxIterations ?? 10,
+                maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+              }
+            : undefined,
+        }),
+      );
+    }
+
+    return factory;
+  };
 
   // ── Runtime ─────────────────────────────────────
   // 默认值只在 DEFAULT_CONFIG 一处定义，这里不再写第二份数字。
@@ -266,11 +302,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let host: RuntimeHost | undefined;
   let agentRuntime: AgentRuntime | undefined;
   let selectedPluginHost: PluginHost | undefined;
+  let spawnAgent: BootstrapResult['spawnAgent'];
+  let deferredTransport: DeferredTransport | undefined;
 
   // 0.2 host 路径：opt-in。只有 host.enabled=true 才动态加载 kernel/createRuntime。
   if (isHostEnabled(config)) {
     const hostPluginHost = new MemoryPluginHost();
     for (const plugin of plugins) await plugin.install(hostPluginHost);
+
+    // team + loopback：transport 要等 gateway 启动后才能构造，用 DeferredTransport 占位。
+    if (config.team?.enabled === true && config.transport?.kind === 'loopback') {
+      deferredTransport = new DeferredTransport();
+    }
 
     const hostResult = await tryCreateHostRuntime({
       config,
@@ -294,13 +337,33 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           autoCompact: config.context?.autoCompact,
           compactThreshold: config.context?.compactThreshold,
         }),
+      // Host 创建后、owner spawn 前，把 delegate/team 装到同一个 Host/PluginHost。
+      beforeSpawn: async (createdHost) => {
+        const factoryPlugins = buildFactoryPlugins(createdHost, deferredTransport);
+        for (const plugin of factoryPlugins) await plugin.install(hostPluginHost);
+        plugins.push(...factoryPlugins);
+      },
     });
 
     if (hostResult.ok) {
       runtime = hostResult.runtime;
       host = hostResult.host;
       selectedPluginHost = hostPluginHost;
+      const selectedHost = hostResult.host;
+      spawnAgent = async (request) => {
+        const handle = await selectedHost.spawn({
+          provider,
+          model: request.model ?? providerModel,
+          pluginHost: hostPluginHost,
+          ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+          ...(request.name !== undefined ? { name: request.name } : {}),
+        });
+        return handle.status();
+      };
     } else {
+      // beforeSpawn 可能已把工厂插件推进数组（但 Host 最终没建成）——回退前清掉
+      plugins.length = staticPluginCount;
+      deferredTransport = undefined;
       console.warn(
         `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
       );
@@ -309,6 +372,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // 0.1 单 agent 路径（默认；也是 host 构造失败的回退）。
   if (!runtime) {
+    // host 关闭/回退：delegate 用专用 Host、team 用内嵌 Host；必要时告警。
+    plugins.push(...buildFactoryPlugins());
     agentRuntime = await AgentRuntime.create({
       provider,
       model: providerModel,
@@ -356,7 +421,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ctx,
     config,
     host,
-    agentRuntime,
+    nodeId,
+    spawnAgent,
+    transport: deferredTransport,
     cleanup: () => activeRuntime.dispose(),
   };
 }

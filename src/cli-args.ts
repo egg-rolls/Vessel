@@ -21,8 +21,8 @@ export interface CliArgs {
   /** `--pipe` 隐藏别名，等价 `--run` 无参 */
   pipeMode: boolean;
   sessionArg: string | null;
-  /** 0 = 不启动 gateway */
-  servePort: number;
+  /** null = 不启动 gateway；0 = 由系统分配端口 */
+  servePort: number | null;
   help: boolean;
   version: boolean;
   tools: boolean;
@@ -32,7 +32,8 @@ export interface CliArgs {
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
 
-const MIN_PORT = 1;
+// 0 是合法值：由系统分配（team loopback 节点推荐）
+const MIN_PORT = 0;
 const MAX_PORT = 65535;
 
 /** 解析十进制端口；非法返回 null */
@@ -52,7 +53,7 @@ export function parseArgs(argv: string[]): ParseResult {
     runArg: null,
     pipeMode: false,
     sessionArg: null,
-    servePort: 0,
+    servePort: null,
     help: false,
     version: false,
     tools: false,
@@ -131,7 +132,7 @@ export function parseArgs(argv: string[]): ParseResult {
   if (oneShot.length > 1) {
     return { ok: false, error: `Cannot combine ${oneShot.join(' and ')}` };
   }
-  if (oneShot.length === 1 && (args.runArg !== null || args.pipeMode || args.servePort > 0)) {
+  if (oneShot.length === 1 && (args.runArg !== null || args.pipeMode || args.servePort !== null)) {
     return { ok: false, error: `${oneShot[0]} cannot be combined with --run/--serve` };
   }
 

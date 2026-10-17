@@ -20,6 +20,7 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import type { Transport } from '../packages/core/src/index';
 import { type Gateway, startGateway } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
@@ -27,7 +28,9 @@ import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { runUpdateCommand } from './cli-update';
 import { runHeadless } from './headless-runner';
+import { planTeamWiring } from './team-wiring';
 import { listTools } from './tools-list';
+import { resolveGatewayToken, tryCreateLoopbackTransport } from './transport-factory';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
 
@@ -188,7 +191,8 @@ const { runArg, pipeMode, sessionArg, servePort } = args;
 const headless = runArg !== null || pipeMode;
 // 只有真正进入 Ink REPL 且 stdin 是 TTY 才算交互：
 // serve-only（--serve 无 --run）与管道输入都不算，避免无 TTY 时进首启向导。
-const entersRepl = !headless && servePort === 0;
+const serveRequested = servePort !== null;
+const entersRepl = !headless && !serveRequested;
 const interactive = entersRepl && process.stdin.isTTY === true;
 
 // ── 主流程 ──────────────────────────────────────
@@ -196,13 +200,14 @@ const interactive = entersRepl && process.stdin.isTTY === true;
 const useMock = process.env.VESSEL_MOCK === '1' || process.env.VESSEL_MOCK === 'true';
 
 // 引导应用启动
-const { runtime, ctx, config, cleanup } = await bootstrap({
+const initialResult = await bootstrap({
   useMock,
   sessionId: sessionArg ?? undefined,
   headless,
   interactive,
   registerAskUser: interactive,
 });
+const { config, cleanup } = initialResult;
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
 if (!useMock && interactive && !config.apiKey) {
@@ -235,36 +240,71 @@ if (!useMock && interactive && !config.apiKey) {
     process.exit(1);
   }
 } else {
-  await runWithConfig({ runtime, ctx, config, cleanup });
+  await runWithConfig(initialResult);
 }
 
 // ── 入口分发 ────────────────────────────────────
 
 async function runWithConfig(result: BootstrapResult) {
   const { runtime, ctx, config, cleanup } = result;
-  // 过渡：web R3 放宽 GatewayOptions.runtime 前，gateway 只能接 AgentRuntime。
-  const gatewayRuntime = result.agentRuntime;
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   const gateway =
-    servePort > 0
+    servePort !== null
       ? startGateway({
           events: ctx.events,
           session: ctx.session,
-          runtime: gatewayRuntime,
+          runtime,
           // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
           context: ctx.context,
           pluginHost: ctx.pluginHost,
           staticDir: resolveStaticDir(),
+          nodeId: result.nodeId,
+          token: resolveGatewayToken(config),
           port: servePort,
         })
       : null;
-  if (gateway) {
-    if (result.host && !gatewayRuntime) {
-      console.warn(
-        '⚠ --serve in host mode: /v1/runs is unavailable until the gateway accepts RunnableAgent (web R3).',
-      );
+
+  // ── Team / loopback 接线（A4）────────────────────
+  // gateway 必须先启动：loopback 的 endpoint/token 来自实际监听端口。
+  const teamPlan = planTeamWiring({
+    config,
+    hasGateway: gateway !== null,
+    hasHost: Boolean(result.host),
+  });
+  for (const warning of teamPlan.warnings) console.warn(`⚠ ${warning}`);
+
+  let teamTransport: Transport | undefined;
+  if (gateway && teamPlan.attachToGateway && result.host) {
+    if (teamPlan.useLoopback) {
+      const loopback = await tryCreateLoopbackTransport({
+        config,
+        nodeId: result.nodeId,
+        endpoint: gateway.url,
+        gatewayToken: gateway.token,
+      });
+      if (loopback.ok) {
+        teamTransport = loopback.transport;
+        // team 插件已持有 DeferredTransport：这里绑定真实实现。
+        // 入站由 ext 的 RoutingTeamHost 单点处理（task 执行 / inbox / result / cancel），
+        // asm 不再注册 receive(host.send)，避免与 routing 双投递。
+        result.transport?.resolve(teamTransport);
+      } else {
+        result.transport?.fail(new Error(loopback.error));
+        console.warn(
+          `⚠ Loopback transport unavailable (${loopback.error}); team is in-process only.`,
+        );
+      }
     }
+    gateway.attachTeam({
+      nodeId: result.nodeId,
+      ...(teamTransport ? { transport: teamTransport } : {}),
+      host: result.host,
+      ...(result.spawnAgent ? { spawn: result.spawnAgent } : {}),
+    });
+  }
+
+  if (gateway) {
     console.log(`\n${renderGatewayBanner(gateway)}\n`);
   }
 
@@ -299,5 +339,18 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   gateway?.stop();
+  if (result.transport) {
+    try {
+      await result.transport.close();
+    } catch {
+      // 关闭注册表失败不阻断退出
+    }
+  } else if (teamTransport) {
+    try {
+      await teamTransport.close();
+    } catch {
+      // 关闭注册表失败不阻断退出
+    }
+  }
   cleanup();
 }

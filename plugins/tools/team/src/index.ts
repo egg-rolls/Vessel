@@ -16,11 +16,13 @@ import type {
   PluginHost,
   TerminationPolicy,
   ToolDefinition,
+  Transport,
   UsageLimits,
 } from '@vessel/core';
 import { InProcessRuntimeHost as CoreInProcessRuntimeHost, MemoryPluginHost } from '@vessel/core';
 import { CoreHostAdapter, LegacyHostAdapter, type TeamHostPort } from './core-adapter.js';
-import type { AgentStatus, RuntimeHost, TeamMessageKind } from './host.js';
+import type { AgentStatus, RuntimeHost, TeamMessage, TeamMessageKind } from './host.js';
+import { RoutingTeamHost } from './routing.js';
 
 export * from './host.js';
 
@@ -44,6 +46,12 @@ export interface TeamPluginOptions {
   events?: EventStream;
   /** owner（主 agent）成员 ID（默认 'owner'） */
   ownerId?: string;
+  /** 跨进程传输（asm A5 注入）；提供时必须同时给 nodeId */
+  transport?: Transport;
+  /** 本机 nodeId，由 asm 从 host.node_id 解析后注入（不是 team 配置键） */
+  nodeId?: string;
+  /** owner 的 canonical 地址；缺省 `${nodeId}:${ownerId}` */
+  ownerRef?: string;
   /** 成员上限（默认 8） */
   maxMembers?: number;
   /** 成员用量限制 */
@@ -250,18 +258,54 @@ function makeCancelTool(config: ResolvedConfig): ToolDefinition {
 
 /** 创建 team 插件（必须显式构造；不随默认插件集启用） */
 export function createTeamPlugin(options: TeamPluginOptions): Plugin {
+  if (options.transport) {
+    if (!options.nodeId) {
+      throw new Error('nodeId is required when transport is enabled');
+    }
+    if (options.runtimeHost && !options.host) {
+      throw new Error('transport requires a core host; legacy runtimeHost is not supported');
+    }
+  }
+
+  const ownerId = options.ownerId ?? 'owner';
+  // 跨进程时本地成员的结果需要经 routing 投递（远端用 transport，本机用 local）
+  const holder: { routing?: RoutingTeamHost } = {};
+  const deliverResult = options.transport
+    ? (message: TeamMessage) => holder.routing?.deliverResult(message) ?? Promise.resolve()
+    : undefined;
+
+  const localPort: TeamHostPort = options.host
+    ? new CoreHostAdapter(options.host, {
+        events: options.events,
+        ownsHost: false,
+        ...(deliverResult ? { deliverResult } : {}),
+      })
+    : options.runtimeHost
+      ? new LegacyHostAdapter(options.runtimeHost)
+      : new CoreHostAdapter(new CoreInProcessRuntimeHost({ maxMembers: options.maxMembers }), {
+          events: options.events,
+          ownsHost: true,
+          ...(deliverResult ? { deliverResult } : {}),
+        });
+
+  let port: TeamHostPort = localPort;
+  if (options.transport) {
+    const routing = new RoutingTeamHost({
+      local: localPort,
+      transport: options.transport,
+      nodeId: options.nodeId ?? '',
+      ownerId,
+      ...(options.ownerRef !== undefined ? { ownerRef: options.ownerRef } : {}),
+    });
+    holder.routing = routing;
+    port = routing;
+  }
+
   const config: ResolvedConfig = {
     providerFactory: options.providerFactory,
     model: options.model,
-    port: options.host
-      ? new CoreHostAdapter(options.host, { events: options.events, ownsHost: false })
-      : options.runtimeHost
-        ? new LegacyHostAdapter(options.runtimeHost)
-        : new CoreHostAdapter(new CoreInProcessRuntimeHost({ maxMembers: options.maxMembers }), {
-            events: options.events,
-            ownsHost: true,
-          }),
-    ownerId: options.ownerId ?? 'owner',
+    port,
+    ownerId,
     memberLimits: options.memberLimits,
     memberTermination: options.memberTermination,
   };

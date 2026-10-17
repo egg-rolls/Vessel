@@ -21,7 +21,7 @@ describe('parseArgs - 默认与 REPL', () => {
       runArg: null,
       pipeMode: false,
       sessionArg: null,
-      servePort: 0,
+      servePort: null,
       help: false,
       version: false,
       tools: false,
@@ -73,9 +73,12 @@ describe('parseArgs - serve', () => {
     expect(ok(['--serve', '9000']).servePort).toBe(9000);
   });
 
+  it('--serve 0 表示系统分配端口', () => {
+    expect(ok(['--serve', '0']).servePort).toBe(0);
+  });
+
   it('--serve 端口非法时报错', () => {
     expect(err(['--serve', 'abc'])).toContain('Invalid port');
-    expect(err(['--serve', '0'])).toContain('Invalid port');
     expect(err(['--serve', '70000'])).toContain('Invalid port');
   });
 });
