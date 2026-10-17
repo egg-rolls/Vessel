@@ -193,9 +193,8 @@ export class CoreHostAdapter implements TeamHostPort {
     try {
       run = await handle.run(request.content);
     } catch (error) {
+      // R2：busy 由 Scheduler 排队；这里只处理真正的提交失败（如 queue full）
       const text = errorText(error);
-      // R1 单成员串行：已有 run 时与 0.1 一致——不排队、不投递（R2 队列接管）
-      if (text.includes('already has a running run')) return;
       this.deliverResult(handle.id, request, `Error: ${text}`, true);
       this.publish('team.run.failed', {
         memberId: handle.id,

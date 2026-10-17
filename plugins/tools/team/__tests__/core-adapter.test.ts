@@ -199,6 +199,78 @@ describe('R4 适配层 parity', () => {
   });
 });
 
+/** 延迟返回的 provider：用于制造 running/queued 状态 */
+function delayedProvider(delayMs: number): LLMProvider {
+  return {
+    async chat(req) {
+      const user = [...req.messages].reverse().find((item) => item.role === 'user');
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return { content: `done:${user?.content ?? ''}`, finish_reason: 'stop' };
+    },
+  };
+}
+
+describe('R2 Scheduler 队列语义', () => {
+  it('同一成员第二个 task 排队，并按 FIFO 在首个完成后执行', async () => {
+    const port = new CoreHostAdapter(
+      new CoreInProcessRuntimeHost({
+        schedulerOptions: { maxConcurrency: 1, maxQueueSize: 10 },
+      }),
+    );
+    await port.spawn({
+      id: 'worker',
+      provider: delayedProvider(30),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+
+    const first = message('owner', 'worker', 'task', 'first');
+    const second = message('owner', 'worker', 'task', 'second');
+    await port.send(first);
+    await port.send(second);
+
+    const inbox = await waitFor(async () => {
+      const page = await port.inbox('owner');
+      return page.messages.length >= 2 ? page : undefined;
+    });
+    expect(inbox.messages.map((item) => item.content)).toEqual(['done:first', 'done:second']);
+    expect(inbox.messages[0]?.reply_to).toBe(first.id);
+    expect(inbox.messages[1]?.reply_to).toBe(second.id);
+
+    const idle = await waitFor(async () => {
+      const status = (await port.status('worker')) as { state: string };
+      return status.state === 'idle' ? status : undefined;
+    });
+    expect(idle.state).toBe('idle');
+    await port.close();
+  });
+
+  it('队列满时 task 返回 Error 结果，不静默丢弃', async () => {
+    const port = new CoreHostAdapter(
+      new CoreInProcessRuntimeHost({
+        schedulerOptions: { maxConcurrency: 1, maxQueueSize: 1 },
+      }),
+    );
+    await port.spawn({
+      id: 'worker',
+      provider: delayedProvider(80),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+
+    await port.send(message('owner', 'worker', 'task', 'one'));
+    await port.send(message('owner', 'worker', 'task', 'two'));
+    await port.send(message('owner', 'worker', 'task', 'three'));
+
+    const inbox = await waitFor(async () => {
+      const page = await port.inbox('owner');
+      return page.messages.length >= 3 ? page : undefined;
+    }, 5000);
+    expect(inbox.messages.some((item) => item.content.includes('queue is full'))).toBe(true);
+    await port.close();
+  });
+});
+
 describe('R4 生命周期与事件（F7/F8）', () => {
   it('F7 注入的共享 Host 不会被 close；只关闭本适配器的成员', async () => {
     const shared = new CoreInProcessRuntimeHost();
