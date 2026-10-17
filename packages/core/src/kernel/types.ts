@@ -13,6 +13,7 @@ import type { TerminationPolicy, UsageLimits } from '../types/limits.js';
 import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { LLMProvider, Message, Usage } from '../types/provider.js';
 import type { RunOptions } from '../types/run.js';
+import type { RunStore } from '../types/run-store.js';
 import type { SessionBackend } from '../types/session.js';
 
 /** Agent 生命周期状态 */
@@ -180,6 +181,8 @@ export interface RunnableAgent {
   readonly events: EventStream;
   readonly pluginHost: PluginHost;
   run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
+  /** 可选：从 durable checkpoint 恢复（AgentRuntime 已实现） */
+  resume?(runId: string, opts?: RunOptions): Promise<string>;
   dispose(): void;
 }
 
@@ -241,6 +244,11 @@ export interface RuntimeHost {
   /** 生命周期便捷入口；委托给 AgentHandle.cancel */
   cancel(id: string, runId?: string): void;
   close(): Promise<void>;
+  /**
+   * 从 durable checkpoint 恢复一次 run（additive）。
+   * 恢复后 `RunHandle.id` 与原 `run_id` 相同；未配置 RunStore 的实现可不提供。
+   */
+  resume?(runId: string): Promise<RunHandle>;
 }
 
 /**
@@ -258,4 +266,6 @@ export interface RuntimeOptions {
   events?: EventBus;
   /** R3 接；R1 只冻结类型，不实现 */
   transport?: Transport;
+  /** 0.3：durable run 检查点存储（additive） */
+  runStore?: RunStore;
 }
