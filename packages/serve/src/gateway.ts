@@ -70,6 +70,11 @@ export interface GatewayOptions {
   heartbeatMs?: number;
   /** WS 首帧鉴权超时（毫秒，默认 5000） */
   authTimeoutMs?: number;
+  /**
+   * Bun.serve 的空闲超时（秒）。默认 0 = 不超时。
+   * 事件流是长连接，不能用 Bun 的 10s 默认值；SSE 心跳 `: ping` 仍用于穿透代理。
+   */
+  idleTimeout?: number;
 }
 
 /** 网关实例 */
@@ -327,6 +332,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function helloFrame(fromSeq: number): ServerFrame {
+    const latest = buffer.latestSeq;
+    // from_seq = 本次回放的第一条 seq；空缓冲时为 0（此时 latest_seq 也是 0）。
+    // 已追平时为 since + 1（= latest + 1），表示「下一条期望序号」。
     return {
       v: 1,
       kind: 'hello',
@@ -334,8 +342,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       ts: Date.now(),
       protocol: PROTOCOL,
       node: nodeInfo(),
-      from_seq: Math.max(fromSeq + 1, buffer.oldestSeq),
-      latest_seq: buffer.latestSeq,
+      from_seq: latest === 0 ? 0 : Math.max(fromSeq + 1, buffer.oldestSeq),
+      latest_seq: latest,
     };
   }
 
@@ -796,6 +804,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const server = Bun.serve<WsData>({
     port: opts.port ?? DEFAULT_PORT,
     hostname,
+    // 0 = 禁用空闲超时（已用 Bun 1.3.9 实测：SSE 12s 不中断）。
+    // 事件流/WS 都是长连接；心跳仍负责穿透代理与检测死客户端。
+    idleTimeout: opts.idleTimeout ?? 0,
     fetch: async (req, srv) => {
       const url = new URL(req.url);
       const path = url.pathname;
