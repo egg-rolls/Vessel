@@ -1,9 +1,8 @@
 /**
  * TeamHostPort —— team 工具依赖的插件内端口。
  *
- * 两个实现：
- * - CoreHostAdapter：包装 core `RuntimeHost` / `AgentHandle`（0.2 首选）
- * - LegacyHostAdapter：包装插件旧 `RuntimeHost`（0.1 兼容，@deprecated）
+ * 唯一实现：CoreHostAdapter，包装 core `RuntimeHost` / `AgentHandle`。
+ * 0.1 的 LegacyHostAdapter 已在 0.3 移除（ADR-037）。
  *
  * 端口只服务于插件内部，**不是**平台扩展机制；对外工具面保持不变。
  */
@@ -20,13 +19,7 @@ import type {
   EventStream,
   Usage,
 } from '@vessel/core';
-import type {
-  AgentSpec,
-  AgentStatus,
-  InboxPage,
-  RuntimeHost as LegacyRuntimeHost,
-  TeamMessage,
-} from './host.js';
+import type { AgentSpec, AgentStatus, InboxPage, TeamMessage } from './host.js';
 
 /** team 工具依赖的端口（与 0.1 插件 RuntimeHost 同形） */
 export interface TeamHostPort {
@@ -289,38 +282,5 @@ export class CoreHostAdapter implements TeamHostPort {
     if (this.legacyEvents !== undefined && this.legacyEvents !== this.host.events) {
       this.legacyEvents.publish(event);
     }
-  }
-}
-
-/** 旧 RuntimeHost → TeamHostPort（0.1 兼容路径，@deprecated） */
-export class LegacyHostAdapter implements TeamHostPort {
-  constructor(private readonly host: LegacyRuntimeHost) {}
-
-  spawn(spec: AgentSpec): Promise<AgentStatus> {
-    return this.host.spawn(spec);
-  }
-
-  send(message: TeamMessage): Promise<void> {
-    return this.host.send(message);
-  }
-
-  deliver(message: TeamMessage): Promise<void> {
-    return this.host.send(message);
-  }
-
-  inbox(id: string, cursor?: string): Promise<InboxPage> {
-    return this.host.inbox(id, cursor);
-  }
-
-  cancel(id: string): Promise<void> {
-    return this.host.cancel(id);
-  }
-
-  status(id?: string): Promise<AgentStatus | AgentStatus[]> {
-    return this.host.status(id);
-  }
-
-  close(): Promise<void> {
-    return this.host.close();
   }
 }
