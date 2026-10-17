@@ -85,7 +85,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 provider
   if (config.provider) {
-    const { name, model, temperature, maxTokens } = config.provider;
+    const { name, model, temperature, maxTokens, timeoutMs } = config.provider;
 
     if (name !== undefined) {
       if (typeof name !== 'string') {
@@ -119,6 +119,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
           value: maxTokens,
         });
       }
+    }
+
+    // <=0 是合法值（显式关闭超时），只拒绝非数字/NaN。
+    if (timeoutMs !== undefined && (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs))) {
+      errors.push({
+        path: 'provider.timeoutMs',
+        message: 'provider.timeoutMs must be a finite number (<=0 disables the timeout)',
+        value: timeoutMs,
+      });
     }
   }
 
@@ -244,7 +253,16 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 delegate
   if (config.delegate) {
-    const { enabled, maxDepth, disallowed, model, termination, limits } = config.delegate;
+    const {
+      enabled,
+      maxDepth,
+      disallowed,
+      model,
+      termination,
+      limits,
+      permissionMode,
+      readOnlyTools,
+    } = config.delegate;
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
         path: 'delegate.enabled',
@@ -275,8 +293,60 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
         value: model,
       });
     }
+    if (
+      permissionMode !== undefined &&
+      permissionMode !== 'bridge' &&
+      permissionMode !== 'allow' &&
+      permissionMode !== 'deny'
+    ) {
+      errors.push({
+        path: 'delegate.permissionMode',
+        message: 'delegate.permissionMode must be "bridge", "allow" or "deny"',
+        value: permissionMode,
+      });
+    }
+    if (readOnlyTools !== undefined) {
+      if (!Array.isArray(readOnlyTools) || readOnlyTools.some((v) => typeof v !== 'string')) {
+        errors.push({
+          path: 'delegate.readOnlyTools',
+          message: 'delegate.readOnlyTools must be an array of strings',
+          value: readOnlyTools,
+        });
+      }
+    }
     if (limits) validateLimits('delegate.limits', limits, errors);
     if (termination) validateTermination('delegate.termination', termination, errors);
+  }
+
+  // 校验 team（0.1.0 显式 opt-in，默认关闭）
+  if (config.team) {
+    const { enabled, maxMembers, ownerId, model, memberLimits, memberTermination } = config.team;
+    if (enabled !== undefined && typeof enabled !== 'boolean') {
+      errors.push({
+        path: 'team.enabled',
+        message: 'team.enabled must be a boolean',
+        value: enabled,
+      });
+    }
+    if (maxMembers !== undefined && (!Number.isInteger(maxMembers) || maxMembers <= 0)) {
+      errors.push({
+        path: 'team.maxMembers',
+        message: 'team.maxMembers must be a positive integer',
+        value: maxMembers,
+      });
+    }
+    if (ownerId !== undefined && typeof ownerId !== 'string') {
+      errors.push({
+        path: 'team.ownerId',
+        message: 'team.ownerId must be a string',
+        value: ownerId,
+      });
+    }
+    if (model !== undefined && typeof model !== 'string') {
+      errors.push({ path: 'team.model', message: 'team.model must be a string', value: model });
+    }
+    if (memberLimits) validateLimits('team.memberLimits', memberLimits, errors);
+    if (memberTermination) validateTermination('team.memberTermination', memberTermination, errors);
   }
 
   // guardrails / hooks 在 0.1.0 尚未由装配层消费——明确警告，不静默忽略。
@@ -322,4 +392,5 @@ export const KNOWN_CONFIG_KEYS = [
   'plugins',
   'update',
   'delegate',
+  'team',
 ];

@@ -7,8 +7,9 @@
  */
 
 import { loadConfig } from '../packages/config/src/index';
-import { MemoryLLMProvider, MemoryPluginHost } from '../packages/core/src/index';
+import { MemoryEventStream, MemoryLLMProvider, MemoryPluginHost } from '../packages/core/src/index';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
+import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 
@@ -55,9 +56,32 @@ export async function listTools(): Promise<ToolsListing> {
             maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
           }
         : undefined,
+      // `--tools` 是一次性命令，无 TUI 应答者：按 headless 口径 allow。
+      permissionMode: config.delegate?.permissionMode ?? 'allow',
+      readOnlyTools: config.delegate?.readOnlyTools,
     });
     await delegate.install(host);
     pluginNamesWithFactories.push(delegate.name);
+  }
+
+  // team 原型同样必须显式 opt-in；启用后 `--tools` 会多出 5 个 team_* 工具。
+  if (config.team?.enabled === true) {
+    const team = createTeamPlugin({
+      providerFactory: () => new MemoryLLMProvider(),
+      model: config.team.model ?? config.provider?.model ?? 'mock-model',
+      events: new MemoryEventStream(),
+      maxMembers: config.team.maxMembers,
+      ownerId: config.team.ownerId,
+      memberLimits: config.team.memberLimits,
+      memberTermination: config.team.memberTermination
+        ? {
+            maxIterations: config.team.memberTermination.maxIterations ?? 10,
+            maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+          }
+        : undefined,
+    });
+    await team.install(host);
+    pluginNamesWithFactories.push(team.name);
   }
 
   const tools = host
