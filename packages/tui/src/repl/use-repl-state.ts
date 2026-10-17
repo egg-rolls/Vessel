@@ -17,6 +17,18 @@ export interface PermissionOverlay {
   requestId: string;
   run_id: string;
   toolName: string;
+  /** 工具入参（弹窗展示用；可能是任意 JSON） */
+  input: unknown;
+  /** 与 core 一致的 120s 超时时间点 */
+  expiresAt?: number;
+}
+
+/** 单轮 run 的 UI 阶段 */
+export type RunPhase = 'idle' | 'running' | 'cancelling';
+
+export interface RunUiState {
+  phase: RunPhase;
+  abort: AbortController | null;
 }
 
 /** InkRepl 的完整 UI 状态 */
@@ -30,7 +42,10 @@ export interface ReplUiState {
   clearSignal: number;
   inputCaretKey: number;
   askUserActive: boolean;
+  askUserRequestId: string | null;
+  askUserRunId: string | null;
   permissionOverlay: PermissionOverlay | null;
+  run: RunUiState;
 }
 
 export type ReplUiAction =
@@ -41,8 +56,14 @@ export type ReplUiAction =
   | { type: 'setResumeSessions'; sessions: SessionInfo[] }
   | { type: 'bumpClearSignal' }
   | { type: 'bumpCaret' }
-  | { type: 'setAskUserActive'; active: boolean }
+  | { type: 'setAskUserActive'; active: boolean; requestId?: string; runId?: string }
   | { type: 'setPermissionOverlay'; overlay: PermissionOverlay | null }
+  | { type: 'clearPermissionForRequest'; requestId: string }
+  | { type: 'clearPermissionForRun'; runId: string }
+  | { type: 'clearPermissionForTool'; runId: string; toolName: string }
+  | { type: 'runStart'; abort: AbortController }
+  | { type: 'runCancelRequested' }
+  | { type: 'runEnd' }
   | { type: 'patchRepl'; patch: Partial<ReplState> };
 
 /** 纯 reducer：不可变推进 UI 状态 */
@@ -63,9 +84,35 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
     case 'bumpCaret':
       return { ...state, inputCaretKey: state.inputCaretKey + 1 };
     case 'setAskUserActive':
-      return { ...state, askUserActive: action.active };
+      return {
+        ...state,
+        askUserActive: action.active,
+        askUserRequestId: action.active ? (action.requestId ?? state.askUserRequestId) : null,
+        askUserRunId: action.active ? (action.runId ?? state.askUserRunId) : null,
+      };
     case 'setPermissionOverlay':
       return { ...state, permissionOverlay: action.overlay };
+    case 'clearPermissionForRequest':
+      return state.permissionOverlay?.requestId === action.requestId
+        ? { ...state, permissionOverlay: null }
+        : state;
+    case 'clearPermissionForRun':
+      return state.permissionOverlay?.run_id === action.runId
+        ? { ...state, permissionOverlay: null }
+        : state;
+    case 'clearPermissionForTool':
+      return state.permissionOverlay?.run_id === action.runId &&
+        state.permissionOverlay.toolName === action.toolName
+        ? { ...state, permissionOverlay: null }
+        : state;
+    case 'runStart':
+      return { ...state, run: { phase: 'running', abort: action.abort } };
+    case 'runCancelRequested':
+      return state.run.phase === 'running'
+        ? { ...state, run: { ...state.run, phase: 'cancelling' } }
+        : state;
+    case 'runEnd':
+      return { ...state, run: { phase: 'idle', abort: null } };
     case 'patchRepl':
       return { ...state, repl: { ...state.repl, ...action.patch } };
   }
@@ -87,7 +134,10 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     clearSignal: 0,
     inputCaretKey: 0,
     askUserActive: false,
+    askUserRequestId: null,
+    askUserRunId: null,
     permissionOverlay: null,
+    run: { phase: 'idle', abort: null },
   };
 }
 

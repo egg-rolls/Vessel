@@ -91,3 +91,93 @@ export class ToolDisplayRegistry {
 
 /** 默认单例：内置工具/第三方插件经它注册自定义显示 */
 export const toolDisplayRegistry = new ToolDisplayRegistry();
+
+// ── 内置工具显示（bash / read / edit / 接缝工具）──────────────
+
+function asRecord(input: unknown): Record<string, unknown> {
+  return typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+}
+
+function inputString(input: unknown, key: string): string {
+  const value = asRecord(input)[key];
+  return typeof value === 'string' ? value : '';
+}
+
+/** 单行化并截断（活动描述用） */
+function compact(text: string, max: number): string {
+  return truncateString(text.replace(/\s+/g, ' ').trim(), max);
+}
+
+toolDisplayRegistry.register('bash', {
+  userFacingName: () => 'bash',
+  getActivityDescription: (input) => {
+    const command = inputString(input, 'command');
+    return command ? `Running: ${compact(command, 80)}` : 'Running shell command';
+  },
+  renderToolUseMessage: (input) => {
+    const command = inputString(input, 'command');
+    return <Text color="gray">{command ? ` $ ${compact(command, 160)}` : ''}</Text>;
+  },
+  renderToolResultMessage: (result, options) => (
+    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 300)}</Text>
+  ),
+  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+});
+
+toolDisplayRegistry.register('read', {
+  userFacingName: () => 'read',
+  getActivityDescription: (input) => {
+    const path = inputString(input, 'path');
+    return path ? `Reading ${path}` : 'Reading file';
+  },
+  renderToolUseMessage: (input) => {
+    const path = inputString(input, 'path');
+    return <Text color="gray">{path ? ` ${path}` : ''}</Text>;
+  },
+  renderToolResultMessage: (result) => (
+    <Text color="gray">{`Read ${result.split('\n').length} lines`}</Text>
+  ),
+  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+});
+
+toolDisplayRegistry.register('edit', {
+  userFacingName: () => 'edit',
+  getActivityDescription: (input) => {
+    const path = inputString(input, 'path');
+    return path ? `Editing ${path}` : 'Editing file';
+  },
+  renderToolUseMessage: (input) => {
+    const path = inputString(input, 'path');
+    return <Text color="gray">{path ? ` ${path}` : ''}</Text>;
+  },
+  renderToolResultMessage: (result, options) => (
+    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
+  ),
+  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+});
+
+toolDisplayRegistry.register('delegate_task', {
+  userFacingName: () => 'delegate_task',
+  getActivityDescription: (input) => {
+    const task = inputString(input, 'task');
+    return task ? `Delegating: ${compact(task, 80)}` : 'Delegating subtask';
+  },
+  renderToolUseMessage: (input) => {
+    const task = inputString(input, 'task');
+    return <Text color="gray">{task ? ` ${compact(task, 160)}` : ''}</Text>;
+  },
+  renderToolResultMessage: (result, options) => (
+    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 300)}</Text>
+  ),
+  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+});
+
+toolDisplayRegistry.register('ask_user', {
+  userFacingName: () => 'ask_user',
+  getActivityDescription: () => 'Asking user',
+  renderToolUseMessage: () => <Text color="gray" />,
+  renderToolResultMessage: (result, options) => (
+    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 120)}</Text>
+  ),
+  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+});

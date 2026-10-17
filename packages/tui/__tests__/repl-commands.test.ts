@@ -157,6 +157,21 @@ describe('扁平会话命令', () => {
     expect(result.output ?? '').toContain('No conversation history');
   });
 
+  it('/history 截断超长消息，注入文件只显示路径', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(
+      runState(ctx.currentSessionId, [
+        { role: 'user', content: '<file path="a.md">\nbody\n</file>' },
+        { role: 'assistant', content: 'x'.repeat(2000) },
+      ]),
+    );
+    const state = makeState(ctx.currentSessionId);
+    const out = (await reg.execute('history', ctx, state)).output ?? '';
+    expect(out).toContain('[User · file] a.md');
+    expect(out).toContain('(+800 chars)');
+  });
+
   it('/exit 置 running=false 并调 onExit', async () => {
     const reg = createCommands();
     let exited = false;
@@ -178,5 +193,15 @@ describe('扁平会话命令', () => {
     const result = await reg.execute('clear', ctx, state);
     expect(result.handled).toBe(true);
     expect(result.clearScreen).toBe(true);
+  });
+
+  it('/setup 不在 REPL 内启动 readline 向导，给出退出后路径', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+    const result = await reg.execute('setup', ctx, state);
+    const out = result.output ?? '';
+    expect(out).toContain('cannot run inside the REPL');
+    expect(out).toContain('Exit Vessel');
   });
 });

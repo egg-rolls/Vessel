@@ -25,8 +25,8 @@ import { asTuiEvent } from '../types/events.js';
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
   events: EventStream;
-  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键） */
-  onActiveChange?: (active: boolean) => void;
+  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键、Ctrl+C 主动解除 waitFor） */
+  onActiveChange?: (active: boolean, requestId?: string, runId?: string) => void;
 }
 
 /** 每个选择题末尾默认追加的自定义输入选项 */
@@ -221,9 +221,24 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
     return unsubscribe;
   }, [events]);
 
-  // 通知父组件激活状态（隐藏输入框、拦截按键）
+  // run 结束 / ask_user 工具失败时清空弹窗，避免 run 已结束但界面残留
   useEffect(() => {
-    onActiveChange?.(prompt !== null);
+    const unsubscribe = events.subscribe((rawEvent) => {
+      const event = asTuiEvent(rawEvent);
+      if (event.type === 'run.completed' || event.type === 'run.failed') {
+        setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
+        return;
+      }
+      if (event.type === 'tool.call.failed' && event.data.tool_name === 'ask_user') {
+        setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
+      }
+    });
+    return unsubscribe;
+  }, [events]);
+
+  // 通知父组件激活状态（隐藏输入框、拦截按键、Ctrl+C 解除 waitFor）
+  useEffect(() => {
+    onActiveChange?.(prompt !== null, prompt?.requestId, prompt?.run_id);
   }, [prompt, onActiveChange]);
 
   const questions = prompt?.questions ?? [];

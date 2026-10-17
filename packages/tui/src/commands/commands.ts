@@ -262,6 +262,22 @@ function newCommand(): CommandEntry {
 
 // ── /history ─────────────────────────────────────
 
+/** 单条历史消息的展示上限（字符）；注入的整文件消息很容易上万字 */
+const MAX_HISTORY_MESSAGE_CHARS = 1200;
+
+/** 把一条历史消息格式化为若干展示行（注入文件只显示路径与大小） */
+function formatHistoryMessage(msg: { role: string; content: string }): string[] {
+  if (msg.role === 'user') {
+    const fileMatch = msg.content.match(/^<file path="([^"]+)">/);
+    if (fileMatch?.[1]) {
+      return [`[User · file] ${fileMatch[1]}`, `(attached file, ${msg.content.length} chars)`];
+    }
+  }
+  if (msg.content.length <= MAX_HISTORY_MESSAGE_CHARS) return [msg.content];
+  const omitted = msg.content.length - MAX_HISTORY_MESSAGE_CHARS;
+  return [`${msg.content.slice(0, MAX_HISTORY_MESSAGE_CHARS)}\n… (+${omitted} chars)`];
+}
+
 function historyCommand(): CommandEntry {
   return {
     name: 'history',
@@ -277,7 +293,7 @@ function historyCommand(): CommandEntry {
         const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
         lines.push('');
         lines.push(`[${role}]`);
-        lines.push(msg.content);
+        lines.push(...formatHistoryMessage(msg));
       }
       lines.push('');
       return { handled: true, output: lines.join('\n') };
@@ -341,7 +357,7 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
 function clearCommand(): CommandEntry {
   return {
     name: 'clear',
-    description: '清屏',
+    description: '清屏（含 scrollback）',
     usage: '/clear',
     run: () => ({ handled: true, clearScreen: true }),
   };
@@ -352,21 +368,25 @@ function clearCommand(): CommandEntry {
 function setupCommand(): CommandEntry {
   return {
     name: 'setup',
-    description: '重新运行首启配置向导',
+    description: '配置向导入口（需退出 REPL 后运行）',
     usage: '/setup',
     run: async (_args, _ctx, _state) => {
-      const { runSetupWizard } = await import('../wizard/setup-wizard.js');
-      const lines = ['', 'Running setup wizard...'];
-      const userConfig = await runSetupWizard();
-      if (userConfig.apiKey) {
-        lines.push('Configuration saved. Restart Vessel for the new provider/key to take effect.');
-        lines.push('');
-        lines.push('Tip: Use /reload to reload configuration without restarting.');
-      } else {
-        lines.push('Setup cancelled.');
-      }
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
+      // P0：向导用 readline 独占 stdin，与已挂载的 Ink 抢 raw mode 会串屏/失效。
+      // 因此不在 REPL 内直接启动；给出准确的手动路径。
+      const { getUserConfigPath } = await import('@vessel/config');
+      return {
+        handled: true,
+        output: [
+          '',
+          'The setup wizard needs exclusive terminal access and cannot run inside the REPL.',
+          `Config file: ${getUserConfigPath()}`,
+          '',
+          'To reconfigure:',
+          '  1. Exit Vessel (Ctrl+C).',
+          '  2. Edit the config file above, or remove its apiKey and restart to re-run first-run setup.',
+          '',
+        ].join('\n'),
+      };
     },
   };
 }
@@ -376,7 +396,7 @@ function setupCommand(): CommandEntry {
 function reloadCommand(): CommandEntry {
   return {
     name: 'reload',
-    description: '重新加载配置（不重启）',
+    description: '重新校验配置（provider/model、插件、权限需重启生效）',
     usage: '/reload',
     run: async (_args, ctx, _state) => {
       try {
@@ -396,16 +416,17 @@ function reloadCommand(): CommandEntry {
           for (const w of validation.warnings) lines.push(`  - ${w.message}`);
         }
 
-        // 更新 provider 信息
-        if (newConfig.provider) {
-          ctx.provider.name = newConfig.provider.name ?? ctx.provider.name;
-          ctx.provider.model = newConfig.provider.model ?? ctx.provider.model;
-          ctx.provider.baseUrl = newConfig.provider.baseUrl ?? ctx.provider.baseUrl;
-        }
-
-        lines.push('✓ Configuration reloaded.');
+        // 不修改 ctx.provider：runtime 仍持有旧 provider/model，改了展示字段只会让状态栏说谎。
+        const configuredName = newConfig.provider?.name ?? ctx.provider.name;
+        const configuredModel = newConfig.provider?.model ?? ctx.provider.model;
+        lines.push('✓ Configuration validated.');
         lines.push('');
-        lines.push(`Provider: ${ctx.provider.name} | ${ctx.provider.model}`);
+        lines.push(`Runtime (unchanged): ${ctx.provider.name} | ${ctx.provider.model}`);
+        lines.push(`Configured:          ${configuredName} | ${configuredModel}`);
+        lines.push('');
+        lines.push(
+          'Note: provider/model, plugins and permission policy are NOT reloaded. Restart Vessel to apply.',
+        );
         lines.push('');
         return { handled: true, output: lines.join('\n') };
       } catch (e) {
