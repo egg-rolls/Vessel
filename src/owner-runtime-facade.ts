@@ -75,12 +75,19 @@ export class OwnerRuntimeFacade implements RunnableAgent {
     if (this.disposed) throw new Error('owner runtime is disposed');
   }
 
-  /** 串行化会话切换，避免并发 run 各自 spawn 同一个 owner id */
+  /**
+   * 串行化会话切换，避免并发 run 各自 spawn 同一个 owner id。
+   * 等待别人的切换完成后必须**重查目标**：并发 A→X、B→Y 时，
+   * B 不能在 A 切到 X 后直接在 X 上运行。
+   */
   private async switchSession(sessionId: string): Promise<void> {
-    this.switching ??= this.doSwitch(sessionId).finally(() => {
-      this.switching = null;
-    });
-    await this.switching;
+    while (this.currentSessionId !== sessionId) {
+      this.switching ??= this.doSwitch(sessionId).finally(() => {
+        this.switching = null;
+      });
+      await this.switching;
+      if (this.disposed) return;
+    }
   }
 
   private async doSwitch(sessionId: string): Promise<void> {

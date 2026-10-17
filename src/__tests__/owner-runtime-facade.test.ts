@@ -155,6 +155,34 @@ describe('OwnerRuntimeFacade', () => {
     await expect(facade.run('y')).resolves.toBe('echo:y');
   });
 
+  it('并发 run 请求不同 session 时各自使用请求的 session', async () => {
+    const events = fakeEvents();
+    const host = fakeHost(events);
+    const initial = fakeHandle('owner', 's0');
+    const bySession = new Map<string, FakeHandle>();
+
+    const facade = new OwnerRuntimeFacade({
+      host,
+      handle: initial,
+      pluginHost,
+      initialSessionId: 's0',
+      spawnOwner: async (sessionId) => {
+        const handle = fakeHandle('owner', sessionId);
+        bySession.set(sessionId, handle);
+        return handle;
+      },
+    });
+
+    // Promise.all 按顺序启动：A→s1 先注册切换，B→s2 等待后必须再切到 s2
+    const [a, b] = await Promise.all([facade.run('a', 's1'), facade.run('b', 's2')]);
+
+    expect(a).toBe('echo:a');
+    expect(b).toBe('echo:b');
+    expect(bySession.get('s1')?.calls.runs).toEqual(['a']);
+    expect(bySession.get('s2')?.calls.runs).toEqual(['b']);
+    expect(facade.sessionId).toBe('s2');
+  });
+
   it('dispose 只关闭 host 一次，之后 run 拒绝', async () => {
     const events = fakeEvents();
     const host = fakeHost(events);
