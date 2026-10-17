@@ -34,6 +34,8 @@ export interface PeerRegistryOptions {
   peerTtlMs?: number;
   /** 本节点成员快照（写入注册表） */
   agents?: () => AgentStatus[];
+  /** @internal 测试注入：真正落盘前等待；生产不使用 */
+  beforeWrite?: () => void | Promise<void>;
 }
 
 const NODE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
@@ -102,7 +104,8 @@ export class PeerRegistry {
   private readonly ownPath: string;
   private remote = new Map<string, PeerInfo>();
   private timer: ReturnType<typeof setInterval> | undefined;
-  private syncing = false;
+  /** 正在执行的 tick；stop() 必须等它结束再删自己的记录 */
+  private inFlight: Promise<void> | undefined;
   private closed = false;
   private _degraded = false;
   private _lastError: string | undefined;
@@ -149,19 +152,24 @@ export class PeerRegistry {
   /** 写自己的记录、开始心跳与扫描 */
   async start(): Promise<void> {
     if (this.closed || this._degraded) return;
-    await this.tick();
+    await this.runTick();
     if (this.closed || this._degraded) return;
     this.timer = setInterval(() => {
-      void this.tick();
+      void this.runTick();
     }, this.heartbeatMs);
     (this.timer as { unref?: () => void }).unref?.();
   }
 
-  /** 停止心跳并删除自己的注册文件；不抛 */
+  /**
+   * 停止心跳并删除自己的注册文件；不抛。
+   * 先等 in-flight tick 结束，避免已进入 writeSelf 的 tick 在 unlink 之后把文件写回来。
+   */
   async stop(): Promise<void> {
     this.closed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    const pending = this.inFlight;
+    if (pending) await pending.catch(() => {});
     await unlink(this.ownPath).catch(() => {});
   }
 
@@ -207,21 +215,32 @@ export class PeerRegistry {
     }
   }
 
+  /** 同一时刻只允许一个 tick；返回的 promise 在 tick 与清理都完成后才 resolve */
+  private runTick(): Promise<void> {
+    if (this.inFlight) return this.inFlight;
+    let tracked: Promise<void>;
+    const base = this.tick();
+    tracked = base.finally(() => {
+      if (this.inFlight === tracked) this.inFlight = undefined;
+    });
+    this.inFlight = tracked;
+    return tracked;
+  }
+
   private async tick(): Promise<void> {
-    if (this.closed || this._degraded || this.syncing) return;
-    this.syncing = true;
+    if (this.closed || this._degraded) return;
     try {
       await this.writeSelf();
       await this.scan();
     } catch (error) {
       // 单次心跳失败不终止；连续失败由 degraded 标记（写失败时写入）。
       this._lastError = this.errorMessage(error);
-    } finally {
-      this.syncing = false;
     }
   }
 
   private async writeSelf(): Promise<void> {
+    // 写前二次检查：tick 排队后 stop() 可能已经执行。
+    if (this.closed) return;
     const record: PeerFileRecord = {
       protocol: 1,
       node_id: this.options.nodeId,
@@ -232,6 +251,7 @@ export class PeerRegistry {
       agents: this.safeAgents().map(toWireAgentStatus),
     };
     try {
+      await this.options.beforeWrite?.();
       await atomicWrite(this.ownPath, `${JSON.stringify(record)}\n`);
       await chmod(this.ownPath, 0o600).catch(() => {});
     } catch (error) {
