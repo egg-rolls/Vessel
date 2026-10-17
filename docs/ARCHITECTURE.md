@@ -6,8 +6,10 @@
 
 ## 1. 三层结构与依赖方向
 
+> 本节描述**当前已实现**的结构；0.2 的 planned 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 §14，二者不混写。
+
 ```
-apps/web                 网页控制台（实验性）
+apps/web                 网页控制台（v1）
     │
 packages/serve           常驻服务 gateway（--serve）
 packages/tui             终端界面：Ink REPL、流式渲染、slash 命令、权限确认
@@ -715,7 +717,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - `staticDir` 存在时，GET/HEAD 的非 API 路径托管 `apps/web/dist`；无扩展名路径回落 `index.html`（SPA）；路径解析后校验 root 前缀，防穿越；API 路径永不托管。
 - 默认绑定 `127.0.0.1`；Host 只接受 `127.0.0.1` / `localhost` / `[::1]` 或显式 `hostname`。
 - Origin：无 Origin 放行（curl / peer）；浏览器必须同源或在 `allowedOrigins`。默认不返回 CORS 头。
-- token 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
+- token 来源优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。生成值 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
 - 事件流是长连接：`Bun.serve` 的 `idleTimeout` 默认 `0`（禁用，可用 `GatewayOptions.idleTimeout` 覆盖）；heartbeat 默认 15s，SSE 发 `: ping` 注释、WS 发 `ping` 帧，用于穿透代理与检测死客户端。
 - 请求体上限 1 MiB；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）；HTML 带 CSP；无 `*` CORS。
 
