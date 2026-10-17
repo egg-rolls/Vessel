@@ -11,7 +11,7 @@
  * 三个工具都不做沙箱/白名单/路径穿越防护——权限判定是唯一关口。
  */
 
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import * as path from 'node:path';
 import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
 import { requestPermission } from '@vessel/permission';
@@ -32,6 +32,12 @@ const KEEP_TAIL_LINES = 1000;
 
 /** read 缺省读取行数 */
 const DEFAULT_READ_LIMIT = 2000;
+
+/** 单方向输出最多保留的字节数（超出即丢弃并标注，避免无换行输出撑爆内存） */
+const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+
+/** read 允许的最大文件字节数（超过直接拒绝，提示用 bash 分块） */
+const MAX_READ_BYTES = 8 * 1024 * 1024;
 
 /**
  * 进程已退出后，最多再等管道排空多久（毫秒）。
@@ -60,14 +66,19 @@ function readNumber(record: Record<string, unknown>, key: string): number | unde
 }
 
 /**
- * 按 `\n` 切分文本，并丢掉末尾换行产生的空元素。
- * 「a\nb\nc\n」= 3 行、「」= 0 行——行数与编辑器显示一致。
+ * 按 `\n` 切分文本，去掉每行尾部的 `\r`（CRLF 显示归一），
+ * 并丢掉末尾换行产生的空元素。「a\nb\nc\n」= 3 行、「」= 0 行。
  */
 function splitLines(text: string): string[] {
   if (text === '') return [];
-  const lines = text.split('\n');
+  const lines = text.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line));
   if (lines[lines.length - 1] === '') lines.pop();
   return lines;
+}
+
+/** 把 CRLF 归一为 LF（显示用；edit 仍按原始字节匹配） */
+function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n/g, '\n');
 }
 
 /** 单方向输出超限时保留头尾，中间标注省略行数 */
@@ -119,8 +130,20 @@ interface Pump {
   cancel: () => void;
 }
 
-/** 把子进程管道泵成文本 */
-function pumpStream(stream: ReadableStream<Uint8Array>, sink: string[]): Pump {
+/** 单方向输出缓冲：字节上限之外的 chunk 只读不存 */
+interface OutputSink {
+  chunks: string[];
+  bytes: number;
+  truncated: boolean;
+}
+
+/** 新建输出缓冲 */
+function createSink(): OutputSink {
+  return { chunks: [], bytes: 0, truncated: false };
+}
+
+/** 把子进程管道泵成文本（超过 MAX_OUTPUT_BYTES 的部分丢弃并标记截断） */
+function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   const done = (async () => {
@@ -128,9 +151,17 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: string[]): Pump {
       for (;;) {
         const chunk = await reader.read();
         if (chunk.done) break;
-        if (chunk.value) sink.push(decoder.decode(chunk.value, { stream: true }));
+        if (!chunk.value) continue;
+        if (sink.bytes >= MAX_OUTPUT_BYTES) {
+          sink.truncated = true;
+          continue;
+        }
+        sink.chunks.push(decoder.decode(chunk.value, { stream: true }));
+        sink.bytes += chunk.value.byteLength;
+        if (sink.bytes >= MAX_OUTPUT_BYTES) sink.truncated = true;
       }
-      sink.push(decoder.decode());
+      const tail = decoder.decode();
+      if (tail && sink.bytes < MAX_OUTPUT_BYTES) sink.chunks.push(tail);
     } catch {
       // 管道被强制关闭——已读到的内容仍然可用
     }
@@ -145,11 +176,13 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: string[]): Pump {
 
 // ── bash ─────────────────────────────────────────
 
-/** 组装 bash 返回文本：退出码 + 非空输出段（任一方向超 2000 行时截断） */
+/** 组装 bash 返回文本：退出码 + 非空输出段（行数或字节超限时截断并标注） */
 function formatBashResult(result: {
   exitCode: number | null;
   stdout: string;
   stderr: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
   timedOut: boolean;
   timeoutMs: number;
 }): string {
@@ -158,11 +191,17 @@ function formatBashResult(result: {
     parts.push(`错误：命令执行超时（已超过 ${result.timeoutMs}ms），进程已被终止。`);
   }
   parts.push(`退出码: ${result.exitCode ?? 'null（进程被信号终止）'}`);
+
+  const stdout = truncateLines(normalizeNewlines(result.stdout));
   if (result.stdout.trim() !== '') {
-    parts.push(`stdout:\n${truncateLines(result.stdout)}`);
+    const marker = result.stdoutTruncated ? '\n...（输出超过 2MB，已截断）...' : '';
+    parts.push(`stdout:\n${stdout}${marker}`);
   }
+
+  const stderr = truncateLines(normalizeNewlines(result.stderr));
   if (result.stderr.trim() !== '') {
-    parts.push(`stderr:\n${truncateLines(result.stderr)}`);
+    const marker = result.stderrTruncated ? '\n...（输出超过 2MB，已截断）...' : '';
+    parts.push(`stderr:\n${stderr}${marker}`);
   }
   return parts.join('\n');
 }
@@ -198,8 +237,8 @@ async function runBash(args: unknown): Promise<string> {
   }
 
   // 先挂上读取再等退出，否则大输出会把子进程写管道堵死
-  const stdoutSink: string[] = [];
-  const stderrSink: string[] = [];
+  const stdoutSink = createSink();
+  const stderrSink = createSink();
   const stdoutPump = pumpStream(proc.stdout, stdoutSink);
   const stderrPump = pumpStream(proc.stderr, stderrSink);
 
@@ -222,8 +261,10 @@ async function runBash(args: unknown): Promise<string> {
 
   return formatBashResult({
     exitCode: proc.exitCode,
-    stdout: stdoutSink.join(''),
-    stderr: stderrSink.join(''),
+    stdout: stdoutSink.chunks.join(''),
+    stderr: stderrSink.chunks.join(''),
+    stdoutTruncated: stdoutSink.truncated,
+    stderrTruncated: stderrSink.truncated,
     timedOut,
     timeoutMs,
   });
@@ -270,12 +311,18 @@ function readFileSlice(args: unknown): string {
   }
   if (stat.isDirectory()) return `错误：${inputPath} 是目录，不是文件（用 bash 列出目录）`;
   if (!stat.isFile()) return `错误：${inputPath} 不是普通文件`;
+  if (stat.size > MAX_READ_BYTES) {
+    return `错误：文件过大（${stat.size} 字节，上限 ${MAX_READ_BYTES} 字节）。请用 bash 分块读取（如 sed -n '1,2000p'）。`;
+  }
 
   let text: string;
   try {
     text = readFileSync(absolute, 'utf-8');
   } catch (error) {
     return `错误：读取失败：${String(error)}`;
+  }
+  if (text.includes('\0')) {
+    return `错误：${inputPath} 看起来是二进制文件（含 NUL 字节），read 只处理文本。`;
   }
 
   const lines = splitLines(text);
@@ -329,6 +376,25 @@ const readTool: ToolDefinition = {
 
 // ── edit ─────────────────────────────────────────
 
+/**
+ * 原子写：先写同目录临时文件再 rename，避免写一半崩溃把原文件截断。
+ * 失败时清理临时文件并把错误留给调用方格式化。
+ */
+function writeFileAtomic(absolutePath: string, content: string): void {
+  const tempPath = `${absolutePath}.vessel-tmp-${process.pid}-${Date.now()}`;
+  try {
+    writeFileSync(tempPath, content, 'utf-8');
+    renameSync(tempPath, absolutePath);
+  } catch (error) {
+    try {
+      unlinkSync(tempPath);
+    } catch {
+      // 临时文件可能未创建，忽略
+    }
+    throw error;
+  }
+}
+
 /** 精确且唯一匹配的字符串替换；多处替换必须显式 replace_all */
 function editFile(args: unknown): string {
   if (!isRecord(args)) return '错误：edit 需要 { path, old_string, new_string }';
@@ -359,7 +425,11 @@ function editFile(args: unknown): string {
 
   const count = countOccurrences(original, oldString);
   if (count === 0) {
-    return '错误：未找到匹配（匹配 0 处），未做任何修改。old_string 必须与文件内容逐字符一致（含缩进与换行）。';
+    const crlfHint =
+      original.includes('\r\n') && oldString.includes('\n') && !oldString.includes('\r\n')
+        ? ' 该文件使用 CRLF 换行：old_string 里的换行需要写成 \\r\\n，或先用 bash 归一换行。'
+        : '';
+    return `错误：未找到匹配（匹配 0 处），未做任何修改。old_string 必须与文件内容逐字符一致（含缩进与换行）。${crlfHint}`;
   }
 
   const replaceAll = args.replace_all === true;
@@ -372,7 +442,7 @@ function editFile(args: unknown): string {
     : replaceFirst(original, oldString, newString);
 
   try {
-    writeFileSync(absolute, updated, 'utf-8');
+    writeFileAtomic(absolute, updated);
   } catch (error) {
     return `错误：写入失败：${String(error)}`;
   }

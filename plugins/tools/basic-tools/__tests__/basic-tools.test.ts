@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
@@ -138,6 +138,41 @@ describe('bash', () => {
       await tool.handler({ command: 'echo x', cwd: path.join(workDir, 'nope') }, makeContext()),
     ).toContain('cwd 不存在');
   });
+
+  it('2000 行不截断，2001 行截断并标注 1 行', async () => {
+    const tool = toolOf('bash');
+    const exact = await tool.handler({ command: 'seq 1 2000' }, makeContext());
+    expect(exact).not.toContain('已省略');
+
+    const over = await tool.handler({ command: 'seq 1 2001' }, makeContext());
+    expect(over).toContain('已省略 1 行');
+  });
+
+  it('输出超过 2MB 时丢弃其余部分并标注', async () => {
+    const tool = toolOf('bash');
+    const command = `bun -e "process.stdout.write('x'.repeat(3000000))"`;
+    const result = await tool.handler({ command }, makeContext());
+    expect(result).toContain('输出超过 2MB');
+    expect(result.length).toBeLessThan(2_200_000);
+  });
+
+  it('timeout_ms 为 0 或负数时明确报错', async () => {
+    const tool = toolOf('bash');
+    expect(await tool.handler({ command: 'echo x', timeout_ms: 0 }, makeContext())).toContain(
+      '必须为正数',
+    );
+    expect(await tool.handler({ command: 'echo x', timeout_ms: -5 }, makeContext())).toContain(
+      '必须为正数',
+    );
+  });
+
+  it('CRLF 输出在返回文本中被归一（不残留 \\r）', async () => {
+    const tool = toolOf('bash');
+    const result = await tool.handler({ command: "printf 'a\\r\\nb\\r\\n'" }, makeContext());
+    expect(result).toContain('a');
+    expect(result).toContain('b');
+    expect(result).not.toContain('\r');
+  });
 });
 
 describe('read', () => {
@@ -186,6 +221,44 @@ describe('read', () => {
     const filePath = writeTemp('read-short.txt', 'only-one\n');
     const result = await toolOf('read').handler({ path: filePath, offset: 99 }, makeContext());
     expect(result).toContain('超过文件总行数');
+  });
+
+  it('offset / limit 必须为正整数', async () => {
+    const filePath = writeTemp('read-int.txt', 'a\nb\n');
+    const tool = toolOf('read');
+    expect(await tool.handler({ path: filePath, offset: 0 }, makeContext())).toContain(
+      'offset 必须是不小于 1 的整数',
+    );
+    expect(await tool.handler({ path: filePath, offset: 1.5 }, makeContext())).toContain(
+      'offset 必须是不小于 1 的整数',
+    );
+    expect(await tool.handler({ path: filePath, limit: 0 }, makeContext())).toContain(
+      'limit 必须是不小于 1 的整数',
+    );
+    expect(await tool.handler({ path: filePath, limit: 2.5 }, makeContext())).toContain(
+      'limit 必须是不小于 1 的整数',
+    );
+  });
+
+  it('CRLF 文件按行归一显示', async () => {
+    const filePath = writeTemp('read-crlf.txt', 'a\r\nb\r\n');
+    const result = await toolOf('read').handler({ path: filePath }, makeContext());
+    expect(result).toBe('1\ta\n2\tb');
+  });
+
+  it('二进制文件（含 NUL）拒绝读取', async () => {
+    const filePath = path.join(workDir, 'read-binary.bin');
+    writeFileSync(filePath, Buffer.from([0x61, 0x00, 0x62]));
+    const result = await toolOf('read').handler({ path: filePath }, makeContext());
+    expect(result).toContain('二进制文件');
+  });
+
+  it('超过 8MB 的文件拒绝整读并提示分块', async () => {
+    const filePath = path.join(workDir, 'read-huge.txt');
+    writeFileSync(filePath, 'x'.repeat(9 * 1024 * 1024));
+    const result = await toolOf('read').handler({ path: filePath }, makeContext());
+    expect(result).toContain('文件过大');
+    expect(result).toContain('bash');
   });
 });
 
@@ -239,6 +312,47 @@ describe('edit', () => {
       makeContext(),
     );
     expect(readFileSync(filePath, 'utf-8')).toBe('$&literal\n');
+  });
+
+  it('CRLF 文件用 LF old_string 不匹配时给出换行提示', async () => {
+    const filePath = writeTemp('edit-crlf.txt', 'a\r\nb\r\nc\r\n');
+    const result = await toolOf('edit').handler(
+      { path: filePath, old_string: 'b\nc', new_string: 'x' },
+      makeContext(),
+    );
+    expect(result).toContain('未找到匹配');
+    expect(result).toContain('CRLF');
+    expect(readFileSync(filePath, 'utf-8')).toBe('a\r\nb\r\nc\r\n');
+  });
+
+  it('替换成功后不残留临时文件', async () => {
+    const filePath = writeTemp('edit-atomic.txt', 'hello\n');
+    await toolOf('edit').handler(
+      { path: filePath, old_string: 'hello', new_string: 'world' },
+      makeContext(),
+    );
+    const entries = readdirSync(workDir);
+    expect(entries.some((name) => name.includes('.vessel-tmp'))).toBe(false);
+    expect(readFileSync(filePath, 'utf-8')).toBe('world\n');
+  });
+
+  it('replace_all 只认布尔 true', async () => {
+    const filePath = writeTemp('edit-nonbool.txt', 'dup\ndup\n');
+    const result = await toolOf('edit').handler(
+      { path: filePath, old_string: 'dup', new_string: 'x', replace_all: 'true' },
+      makeContext(),
+    );
+    expect(result).toContain('不唯一');
+  });
+
+  it('重叠出现按非重叠计数（aaa 中的 aa 算 1 处）', async () => {
+    const filePath = writeTemp('edit-overlap.txt', 'aaa');
+    const result = await toolOf('edit').handler(
+      { path: filePath, old_string: 'aa', new_string: 'x' },
+      makeContext(),
+    );
+    expect(result).toContain('已替换 1 处');
+    expect(readFileSync(filePath, 'utf-8')).toBe('xa');
   });
 
   it('文件不存在 / old_string 为空 / path 为空时返回明确错误', async () => {
