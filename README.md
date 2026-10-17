@@ -68,6 +68,8 @@ bun run src/cli.ts
 
 首次启动走**引导向导**，填 API 地址、Key、选模型，保存到 `~/.vessel/config.yaml`，之后无需重填。
 
+> **thinking 模型**（DeepSeek 等）：`reasoning_content` 会随 assistant 消息保存并在下一轮请求回传（工具调用轮次也保留）；TUI / 事件流不展示思维链。详见 [docs/ADR.md](docs/ADR.md) ADR-038。
+
 ### ③ 其它常用命令
 
 ```bash

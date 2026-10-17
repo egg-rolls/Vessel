@@ -118,8 +118,9 @@ loop:
     messages = buildRequestMessages(hookCtx.systemPrompt)
     # 归一化只影响本次请求：丢弃孤儿 role:tool；不完整 tool_calls 轮次降级为普通 assistant 文本；
     # 上下文缺 system 时补回基底 systemPrompt（ADR-035）
-    发 llm.request
+    发 llm.request（messages 在发布前剥离 reasoning_content，ADR-038）
     response = provider.chat({ messages, tools: PluginHost 里全部工具, stream: true, on_chunk → 发 llm.stream.chunk })
+    # response.reasoning_content（thinking 模型）由 Provider 累积；不进 on_chunk / 事件流
 
     累计 token 用量；context.updateRealTokens(本次 prompt_tokens + completion_tokens)
     发 llm.response
@@ -128,7 +129,7 @@ loop:
     if finish_reason == 'stop':
         应用 Output guardrail，被阻止 → 抛错
         finalContent = replacement 是字符串 ? replacement : response.content
-        addContext(assistant 消息，内容为 finalContent)
+        addContext(assistant 消息，内容为 finalContent，带上 response.reasoning_content)
         return finalContent
 
     if finish_reason == 'tool_calls':
@@ -139,7 +140,7 @@ loop:
             incrementToolCall()
             应用 ToolCall guardrail，被阻止 → 抛错
             effectiveCalls.push(replacement 是合法 ToolCall ? replacement : toolCall)
-        addContext(assistant 消息，含 effectiveCalls)
+        addContext(assistant 消息，含 effectiveCalls 与 response.reasoning_content)
 
         for toolCall of effectiveCalls:
             发 tool.call.started
@@ -165,7 +166,7 @@ loop:
                 # 工具失败不中断循环——错误文本折回语言空间，模型自行决定下一步
 
     else:  # 例如 finish_reason == 'length'
-        addContext(assistant 消息)
+        addContext(assistant 消息，带上 response.reasoning_content)
         return response.content
 ```
 
@@ -176,6 +177,7 @@ loop:
 - **工具失败不终止 run**。错误变成 `role: tool` 消息回到上下文，模型自己纠。非法 tool arguments JSON 也走这条路径（解析一次、发 `tool.call.failed`、折回错误文本）。
 - **发给 Provider 的消息始终是合法序列**：`buildRequestMessages` 在输出前丢弃孤儿 `role: tool`、把不完整 `tool_calls` 轮次降级为普通 assistant 文本，并在上下文缺 system 时补回基底 `systemPrompt`。归一化只影响本次请求，不改 `ContextManager` 的持久化记录。
 - **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
+- **thinking 模型的 `reasoning_content`**：Provider 返回后保存在 assistant 消息并随下一轮请求回传（含 `tool_calls` 轮次）；`llm.request` / `context.changed` 事件在发布前剥离该字段，TUI / 观测 / 回放看不到思维链，会话持久化保留（ADR-038）。
 - **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，120s 超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
 - **`HookRunner` 丢弃 hook 返回值**（`Hook.run` 收窄为 `Promise<void>`）。跨 hook 通信的唯一通道是 `HookContext` 的字段（例如 `BeforeLlm` 的 `systemPrompt`）。
 
@@ -245,6 +247,8 @@ interface LLMResponse {
   tool_calls?: ToolCall[];
   finish_reason: FinishReason; // 'stop' | 'tool_calls' | 'length'
   usage?: Usage;
+  /** thinking 模式思维链（可选；ADR-038） */
+  reasoning_content?: string;
 }
 
 interface Message {
@@ -253,10 +257,14 @@ interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** thinking 模式思维链（仅 assistant；保存并随下一轮请求回传，ADR-038） */
+  reasoning_content?: string;
 }
 ```
 
 流式不是独立方法：`stream: true` + `on_chunk` 回调，loop 把增量发成 `llm.stream.chunk` 事件（ADR-007）。不支持的 Provider 忽略 `on_chunk` 即退化为整段返回。
+
+`reasoning_content` 是 OpenAI 兼容 thinking 模型的可选扩展（DeepSeek 等）：Provider 返回后由 runtime 保存在 assistant 消息里，下一轮请求原样回传（含 `tool_calls` 轮次），否则 API 会拒绝。它**不进** `llm.request` / `context.changed` 事件，也不进 TUI；会话持久化保留。Anthropic 路径不使用该字段。
 
 ### 5.2 `ContextManager`（`types/context.ts`）
 
@@ -590,6 +598,8 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 
 插件可自定义任意 `<domain>.*` 事件名，无需改 core。
 
+**思维链不进入事件流**：`llm.request` 的 messages 与 `context.changed` 的 message 在发布前剔除 `reasoning_content`（ADR-038）；`ContextManager` 的持久化记录仍保留该字段，供下一轮请求回传。
+
 ### 10.3 三种机制的边界（防混用）
 
 | 机制 | 职责 | 例子 | 混用的后果 |
@@ -666,6 +676,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 ### 13.1 协议 `vessel.gateway/1`
 
 - 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`）、`event`（带 `seq`、可选 `job_id`）、`gap`（历史被截断）、`res`（方法应答）、`ping`。
+- `hello.from_seq` 是本次回放的**第一条** seq：空缓冲为 `0`；已追平时为 `since + 1`（下一条期望序号）。`latest_seq` 是当前最新 seq（空缓冲为 `0`）。
 - 客户端帧：`auth`（首帧）、`req`（`id` + `method` + `params`）、`pong`。
 - `seq` 由 gateway 分配；环形缓冲默认保留 10000 条。客户端记录 `lastSeq`，重连用 `?since=` 续订；超出缓冲发 `gap`。
 - `RunStatus.run_id` 是网关级 id；`core_run_id` 在 `run.started` 后可知；事件帧的 `job_id` 用于把 core run 与网关 run 对齐。
@@ -705,6 +716,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 默认绑定 `127.0.0.1`；Host 只接受 `127.0.0.1` / `localhost` / `[::1]` 或显式 `hostname`。
 - Origin：无 Origin 放行（curl / peer）；浏览器必须同源或在 `allowedOrigins`。默认不返回 CORS 头。
 - token 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
+- 事件流是长连接：`Bun.serve` 的 `idleTimeout` 默认 `0`（禁用，可用 `GatewayOptions.idleTimeout` 覆盖）；heartbeat 默认 15s，SSE 发 `: ping` 注释、WS 发 `ping` 帧，用于穿透代理与检测死客户端。
 - 请求体上限 1 MiB；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）；HTML 带 CSP；无 `*` CORS。
 
 ### 13.6 Web 控制台（`apps/web`）
