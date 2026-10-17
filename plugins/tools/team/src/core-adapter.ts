@@ -101,12 +101,15 @@ function errorText(error: unknown): string {
 export class CoreHostAdapter implements TeamHostPort {
   private readonly handles = new Map<string, CoreAgentHandle>();
   private readonly legacyEvents?: EventStream;
+  /** 是否拥有 host 的生命周期：注入的共享 Host 不能被插件关闭 */
+  private readonly ownsHost: boolean;
 
   constructor(
     private readonly host: CoreRuntimeHost,
-    options: { events?: EventStream } = {},
+    options: { events?: EventStream; ownsHost?: boolean } = {},
   ) {
     this.legacyEvents = options.events;
+    this.ownsHost = options.ownsHost ?? false;
   }
 
   async spawn(spec: AgentSpec): Promise<AgentStatus> {
@@ -173,8 +176,15 @@ export class CoreHostAdapter implements TeamHostPort {
   }
 
   async close(): Promise<void> {
+    if (this.ownsHost) {
+      this.handles.clear();
+      await this.host.close();
+      return;
+    }
+    // 共享 Host（asm 注入的 owner Host）：只关闭本适配器创建的成员，不关闭整个 Host
+    const handles = [...this.handles.values()];
     this.handles.clear();
-    await this.host.close();
+    await Promise.allSettled(handles.map((handle) => handle.close()));
   }
 
   /** 异步执行一条 task，并把结果投回发送者 */
@@ -245,7 +255,10 @@ export class CoreHostAdapter implements TeamHostPort {
     });
   }
 
-  /** 发布 team.* 事件：优先发到旧事件流，否则进 Host 聚合流 */
+  /**
+   * 发布 team.* 事件：始终进 core Host 聚合流（gateway/owner 观察），
+   * 另给的 legacy 事件流不是同一对象时再镜像一份，避免重复。
+   */
   private publish(type: string, data: Record<string, unknown>): void {
     const runId =
       typeof data.runId === 'string'
@@ -254,10 +267,9 @@ export class CoreHostAdapter implements TeamHostPort {
           ? data.memberId
           : 'team';
     const event = { type, run_id: runId, data, ts: Date.now() };
-    if (this.legacyEvents) {
+    this.host.events.publish(event);
+    if (this.legacyEvents !== undefined && this.legacyEvents !== this.host.events) {
       this.legacyEvents.publish(event);
-    } else {
-      this.host.events.publish(event);
     }
   }
 }

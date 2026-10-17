@@ -254,11 +254,12 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
     providerFactory: options.providerFactory,
     model: options.model,
     port: options.host
-      ? new CoreHostAdapter(options.host, { events: options.events })
+      ? new CoreHostAdapter(options.host, { events: options.events, ownsHost: false })
       : options.runtimeHost
         ? new LegacyHostAdapter(options.runtimeHost)
         : new CoreHostAdapter(new CoreInProcessRuntimeHost({ maxMembers: options.maxMembers }), {
             events: options.events,
+            ownsHost: true,
           }),
     ownerId: options.ownerId ?? 'owner',
     memberLimits: options.memberLimits,

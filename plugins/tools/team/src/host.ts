@@ -95,12 +95,13 @@ export class InProcessRuntimeHost implements RuntimeHost {
   private readonly port: TeamHostPort;
 
   constructor(options: InProcessRuntimeHostOptions = {}) {
+    const ownsHost = options.host === undefined;
     const host =
       options.host ??
       new CoreInProcessRuntimeHost({
         maxMembers: options.maxMembers,
       });
-    this.port = new CoreHostAdapter(host, { events: options.events });
+    this.port = new CoreHostAdapter(host, { events: options.events, ownsHost });
   }
 
   spawn(spec: AgentSpec): Promise<AgentStatus> {

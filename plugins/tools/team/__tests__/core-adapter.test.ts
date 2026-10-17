@@ -199,6 +199,83 @@ describe('R4 适配层 parity', () => {
   });
 });
 
+describe('R4 生命周期与事件（F7/F8）', () => {
+  it('F7 注入的共享 Host 不会被 close；只关闭本适配器的成员', async () => {
+    const shared = new CoreInProcessRuntimeHost();
+    const port = new CoreHostAdapter(shared, { ownsHost: false });
+    await port.spawn({
+      id: 'member',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+
+    expect(shared.get('member')).toBeDefined();
+    await port.close();
+    // 成员被关闭，但 Host 仍可用
+    expect(shared.get('member')).toBeUndefined();
+    const owner = await shared.spawn({
+      id: 'owner2',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+    expect(owner.id).toBe('owner2');
+    await shared.close();
+  });
+
+  it('F7 自己创建的 Host 在 close 时关闭', async () => {
+    const own = new CoreInProcessRuntimeHost();
+    const port = new CoreHostAdapter(own, { ownsHost: true });
+    await port.close();
+    await expect(
+      own.spawn({
+        id: 'late',
+        provider: new MemoryLLMProvider(),
+        model: 'm',
+        pluginHost: new MemoryPluginHost(),
+      }),
+    ).rejects.toThrow(/closed/);
+  });
+
+  it('F8 team.* 同时进入 Host 聚合流与 legacy 事件流', async () => {
+    const legacy = new MemoryEventStream();
+    const coreHost = new CoreInProcessRuntimeHost();
+    const port = new CoreHostAdapter(coreHost, { events: legacy, ownsHost: true });
+    await port.spawn({
+      id: 'worker',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+
+    const inLegacy = legacy.getHistory().some((event) => event.type === 'team.member.spawned');
+    const inHost = coreHost.events
+      .getHistory()
+      .some((event) => event.type === 'team.member.spawned');
+    expect(inLegacy).toBe(true);
+    expect(inHost).toBe(true);
+    await port.close();
+  });
+
+  it('F8 legacy 事件流就是 Host 聚合流时不重复发布', async () => {
+    const coreHost = new CoreInProcessRuntimeHost();
+    const port = new CoreHostAdapter(coreHost, { events: coreHost.events, ownsHost: true });
+    await port.spawn({
+      id: 'worker',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+
+    const count = coreHost.events
+      .getHistory()
+      .filter((event) => event.type === 'team.member.spawned').length;
+    expect(count).toBe(1);
+    await port.close();
+  });
+});
+
 describe('R4 工具面快照', () => {
   it('5 个工具名/必填项/属性保持不变', () => {
     const host = new MemoryPluginHost();
