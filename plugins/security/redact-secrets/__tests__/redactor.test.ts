@@ -41,6 +41,31 @@ describe('createTraceRedactor', () => {
     });
   });
 
+  it('redacts app id regardless of key casing and separator style', () => {
+    const redactor = createTraceRedactor();
+    const result = redactor.redact(
+      event({
+        app_id: 'cli_123456',
+        appId: 'cli_abcdef',
+        APP_ID: 'cli_ZZZZZZ',
+        APPID: 'cli_999999',
+      }),
+    );
+
+    expect(result.data).toEqual({
+      app_id: 'cli_***',
+      appId: 'cli_***',
+      APP_ID: 'cli_***',
+      APPID: 'cli_***',
+    });
+  });
+
+  it('leaves non-string app id values unchanged', () => {
+    const redactor = createTraceRedactor();
+    const result = redactor.redact(event({ appId: 42, APP_ID: false }));
+    expect(result.data).toEqual({ appId: 42, APP_ID: false });
+  });
+
   it('redacts secret-shaped strings and nested arrays', () => {
     const redactor = createTraceRedactor();
     const result = redactor.redact(

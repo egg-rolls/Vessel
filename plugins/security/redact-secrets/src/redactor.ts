@@ -15,6 +15,11 @@ import { BUILTIN_RULES, type RedactRule, type RedactSecretsConfig, redactText } 
 const SENSITIVE_KEY = /api[_-]?key|token|secret|password|authorization|app_secret/i;
 const MAX_DEPTH = 8;
 
+/** `app_id` / `appId` / `APP_ID` / `APPID` 统一识别。 */
+function isAppIdKey(key: string): boolean {
+  return key.toLowerCase().replace(/_/g, '') === 'appid';
+}
+
 function buildRules(config?: RedactSecretsConfig): RedactRule[] {
   const rules: RedactRule[] = config?.enableBuiltin === false ? [] : [...BUILTIN_RULES];
   for (const extra of config?.extraPatterns ?? []) {
@@ -51,7 +56,7 @@ function redactValue(
       result[key] = typeof entry === 'number' || typeof entry === 'boolean' ? entry : '***';
       continue;
     }
-    if (key.toLowerCase() === 'app_id' && typeof entry === 'string') {
+    if (isAppIdKey(key) && typeof entry === 'string') {
       result[key] = `${entry.slice(0, 4)}***`;
       continue;
     }
