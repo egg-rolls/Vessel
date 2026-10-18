@@ -45,6 +45,11 @@ export {
 export type { Gateway, GatewayOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
 export {
+  createLocalRpcDispatcher,
+  type LocalRpcDispatcher,
+  type LocalRpcOptions,
+} from './local.js';
+export {
   MCP_SERVER_STATES,
   type McpGatewayOptions,
   type McpServerState,

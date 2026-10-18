@@ -51,7 +51,6 @@ import {
   type ProtocolError,
   type ProtocolInfo,
   protocolError,
-  type RunStatus,
   type ServerFrame,
   type ToolInfo,
 } from './protocol.js';
@@ -66,6 +65,7 @@ import {
   type RpcRequest,
   type RpcResponse,
 } from './rpc.js';
+import { createRunEngine } from './run-engine.js';
 import {
   fromWireMessage,
   isRemoteAddress,
@@ -210,6 +210,12 @@ export interface GatewayOptions {
   pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;
+  /**
+   * 内部：只构建方法表/引擎，不调用 `Bun.serve`。
+   * 由 `createLocalRpcDispatcher` 使用；外部不要设置。
+   * @internal
+   */
+  localOnly?: boolean;
 }
 
 /** 网关实例 */
@@ -286,22 +292,10 @@ interface WsData {
 type Ws = import('bun').ServerWebSocket<WsData>;
 type SseController = ReadableStreamDefaultController<unknown>;
 
-/** 网关级运行记录 */
-interface RunRecord extends RunStatus {
-  input: string;
-  controller: AbortController;
-  done: Promise<void>;
-  resolveDone: () => void;
-  /** 0.5：run 归属 tenant；缺省 default */
-  tenant_id: string;
-}
-
 /** 运行队列上限（防止无界堆积） */
 const MAX_QUEUE = 100;
 /** 保留的运行记录数 */
 const MAX_RUNS = 200;
-/** 权限请求记录的清理阈值（与 core 的 120s 超时对齐） */
-const PERMISSION_TTL_MS = 120_000;
 /** WS 慢客户端硬关闭阈值（最终安全网） */
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 /** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
@@ -517,9 +511,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const defaultTenantId = opts.defaultTenantId ?? DEFAULT_TENANT_ID;
   const redactor: TraceRedactor = opts.redactor ?? createDefaultTraceRedactor();
   const localPrincipal: TenantPrincipal = resolveLocalPrincipal(opts.auth, token);
-  /** 每 tenant 的并发 run 计数（quota max_concurrent_runs 的同步检查） */
-  const activeByTenant = new Map<string, number>();
-
   if (opts.version !== undefined && typeof opts.version !== 'string') {
     throw new Error('version must be a string.');
   }
@@ -619,14 +610,26 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
-  const runs = new Map<string, RunRecord>();
-  const queue: RunRecord[] = [];
-  const coreToJob = new Map<string, string>();
-  const pendingPermissions = new Map<
-    string,
-    { run_id: string; tool: string; input: unknown; ts: number }
-  >();
-  const pendingAsks = new Map<string, { run_id: string; ts: number }>();
+
+  // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）
+  const engine = createRunEngine({
+    events,
+    ...(runtime ? { runtime } : {}),
+    ...(context ? { context } : {}),
+    ...(opts.runtimeFor ? { runtimeFor: opts.runtimeFor } : {}),
+    ...(opts.contextFor ? { contextFor: opts.contextFor } : {}),
+    defaultTenantId,
+    maxQueue,
+    maxRuns: MAX_RUNS,
+  });
+  const runs = engine.runs;
+  const queue = engine.queue;
+  const coreToJob = engine.coreToJob;
+  const publicStatus = engine.publicStatus;
+  const submitRun = engine.submitRun;
+  const cancelRun = engine.cancelRun;
+  const respondPermission = engine.respondPermission;
+  const respondAsk = engine.respondAsk;
   /**
    * 本进程已受理的 durable resume（快速 409，不替代 core 校验）。
    * Addendum A §2：首个调用成功，后续（含重复）一律 run_already_running。
@@ -643,9 +646,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   let inboundCursor = 0;
   /** 入站去重（transport.deliver 之外的兜底，防止注入 deliver 时绕过） */
   const seenInbound = new Map<string, true>();
-
-  let active: RunRecord | null = null;
-  let activeSessionId = 'default';
 
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
@@ -664,8 +664,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     started_at: startedAt,
     endpoint: `${scheme}://${hostname}:${actualPort}`,
     role: 'standalone',
-    status: active ? 'busy' : 'idle',
-    ...(active ? { current_run_id: active.run_id, current_session_id: active.session_id } : {}),
+    status: engine.active ? 'busy' : 'idle',
+    ...(engine.active
+      ? { current_run_id: engine.active.run_id, current_session_id: engine.active.session_id }
+      : {}),
     capabilities: {
       tools: listTools().map((tool) => tool.name),
       max_concurrency: 1,
@@ -866,39 +868,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   /** 订阅 core 事件流：分配 seq、记录 run 映射与权限请求、广播 */
   const unsubscribe = events.subscribe((event: RunEvent) => {
-    if (event.type === 'run.started' && active && !active.core_run_id) {
-      active.core_run_id = event.run_id;
-      coreToJob.set(event.run_id, active.run_id);
-    }
-    if (event.type === 'tool.permission.request') {
-      const data = event.data as Record<string, unknown>;
-      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
-      if (requestId) {
-        pendingPermissions.set(requestId, {
-          run_id: event.run_id,
-          tool: typeof data.tool === 'string' ? data.tool : 'tool',
-          input: data.input,
-          ts: Date.now(),
-        });
-      }
-    }
-    if (event.type === 'ask.user.requested') {
-      const data = event.data as Record<string, unknown>;
-      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
-      if (requestId) pendingAsks.set(requestId, { run_id: event.run_id, ts: Date.now() });
-    }
-    if (event.type === 'run.completed' || event.type === 'run.failed') {
-      if (active && active.core_run_id === event.run_id) {
-        const data = event.data as Record<string, unknown>;
-        if (data.usage && typeof data.usage === 'object') {
-          active.usage = data.usage as RunStatus['usage'];
-        }
-      }
-      // 运行结束后清理该 run 的待答询问，避免陈旧弹窗
-      for (const [id, pending] of pendingAsks) {
-        if (pending.run_id === event.run_id) pendingAsks.delete(id);
-      }
-    }
+    engine.handleEvent(event);
     // 0.5：出站前统一脱敏（实时与回放都是脱敏后的副本；A-3 §10.3）
     const safeEvent = redactor.redact(event);
     const seq = buffer.append(safeEvent);
@@ -925,166 +895,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   // ── 运行队列 ───────────────────────────────────
 
-  function releaseTenantSlot(tenantId: string): void {
-    const current = activeByTenant.get(tenantId) ?? 0;
-    if (current <= 1) activeByTenant.delete(tenantId);
-    else activeByTenant.set(tenantId, current - 1);
-  }
-
-  function createRun(input: string, sessionId: string, tenantId: string): RunRecord {
-    let resolveDone: () => void = () => {};
-    const done = new Promise<void>((resolveDoneFn) => {
-      resolveDone = resolveDoneFn;
-    });
-    const record: RunRecord = {
-      run_id: randomUUID(),
-      session_id: sessionId,
-      input,
-      status: 'queued',
-      controller: new AbortController(),
-      done,
-      resolveDone,
-      tenant_id: tenantId,
-    };
-    runs.set(record.run_id, record);
-    queue.push(record);
-    return record;
-  }
-
-  function queuePosition(record: RunRecord): number | undefined {
-    if (record.status !== 'queued') return undefined;
-    const index = queue.indexOf(record);
-    return index >= 0 ? index + 1 : undefined;
-  }
-
-  function publicStatus(record: RunRecord): RunStatus {
-    return {
-      run_id: record.run_id,
-      ...(record.core_run_id ? { core_run_id: record.core_run_id } : {}),
-      session_id: record.session_id,
-      status: record.status,
-      ...(record.output !== undefined ? { output: record.output } : {}),
-      ...(record.error !== undefined ? { error: record.error } : {}),
-      ...(record.usage ? { usage: record.usage } : {}),
-      ...(record.started_at !== undefined ? { started_at: record.started_at } : {}),
-      ...(record.completed_at !== undefined ? { completed_at: record.completed_at } : {}),
-      ...(queuePosition(record) !== undefined ? { queue_position: queuePosition(record) } : {}),
-    };
-  }
-
-  async function execute(record: RunRecord): Promise<void> {
-    record.status = 'running';
-    record.started_at = Date.now();
-    active = record;
-
-    const tenantRuntime = runtimeFor(record.tenant_id);
-    const tenantContext = contextFor(record.tenant_id);
-
-    // G2：切换会话时清空共享 Context，让 runtime 从 SessionBackend 重新加载目标会话历史。
-    if (tenantContext && tenantContext.getSessionId() !== record.session_id) {
-      tenantContext.setSessionId(record.session_id);
-      tenantContext.clear();
-    }
-
-    try {
-      if (!tenantRuntime) throw new MethodError('no_runtime', 'No runtime configured');
-      const output = await tenantRuntime.run(record.input, record.session_id, {
-        signal: record.controller.signal,
-      });
-      record.output = output;
-      record.status = record.controller.signal.aborted ? 'cancelled' : 'completed';
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      record.status = record.controller.signal.aborted ? 'cancelled' : 'failed';
-      record.error = message;
-    } finally {
-      record.completed_at = Date.now();
-      active = null;
-      record.resolveDone();
-      releaseTenantSlot(record.tenant_id);
-      trimRuns();
-      pump();
-    }
-  }
-
-  function pump(): void {
-    if (active || queue.length === 0) return;
-    const next = queue.shift();
-    if (!next) return;
-    void execute(next);
-  }
-
-  function trimRuns(): void {
-    if (runs.size <= MAX_RUNS) return;
-    for (const [id, record] of runs) {
-      if (runs.size <= MAX_RUNS) break;
-      if (record.status !== 'running' && record.status !== 'queued') runs.delete(id);
-    }
-  }
-
-  function cancelRun(id: string, tenantId?: string): boolean {
-    const record = runs.get(id);
-    if (!record || (tenantId !== undefined && record.tenant_id !== tenantId)) {
-      throw new MethodError('not_found', `Run not found: ${id}`);
-    }
-    if (record.status === 'queued') {
-      const index = queue.indexOf(record);
-      if (index >= 0) queue.splice(index, 1);
-      record.status = 'cancelled';
-      record.completed_at = Date.now();
-      record.resolveDone();
-      return true;
-    }
-    if (record.status === 'running') {
-      record.controller.abort();
-      return true;
-    }
-    return false;
-  }
-
-  function submitRun(
-    params: Record<string, unknown>,
-    tenantId: string = defaultTenantId,
-  ): {
-    run_id: string;
-    status: RunStatus['status'];
-    queue_position?: number;
-  } {
-    if (!runtimeFor(tenantId)) {
-      throw new RpcError('forbidden', 'No runtime configured', {
-        legacy_code: 'no_runtime',
-      });
-    }
-    const input = params.input;
-    if (typeof input !== 'string' || input.length === 0) {
-      throw new RpcError('invalid_params', 'input is required', {
-        legacy_code: 'invalid_request',
-      });
-    }
-    if (queue.length + (active ? 1 : 0) >= maxQueue) {
-      throw new RpcError('conflict', 'Run queue is full', { legacy_code: 'busy' });
-    }
-    const requestedSession = params.session_id;
-    const sessionId =
-      typeof requestedSession === 'string' && requestedSession.length > 0
-        ? requestedSession
-        : activeSessionId;
-    activeSessionId = sessionId;
-    activeByTenant.set(tenantId, (activeByTenant.get(tenantId) ?? 0) + 1);
-    try {
-      const record = createRun(input, sessionId, tenantId);
-      pump();
-      return {
-        run_id: record.run_id,
-        status: record.status,
-        ...(queuePosition(record) !== undefined ? { queue_position: queuePosition(record) } : {}),
-      };
-    } catch (error) {
-      releaseTenantSlot(tenantId);
-      throw error;
-    }
-  }
-
   async function listSessions(
     tenantId: string = defaultTenantId,
   ): Promise<{ sessions: unknown[] }> {
@@ -1107,35 +917,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         has_permission_check: typeof tool.checkPermission === 'function',
       })),
     };
-  }
-
-  function respondPermission(
-    requestId: string,
-    decision: 'allow' | 'deny',
-    remember: boolean,
-  ): void {
-    const pending = pendingPermissions.get(requestId);
-    if (!pending) throw new MethodError('not_found', `Permission request not found: ${requestId}`);
-    events.publish({
-      type: 'tool.permission.response',
-      run_id: pending.run_id,
-      data: { requestId, decision, ...(remember ? { remember: true } : {}) },
-      ts: Date.now(),
-    });
-    pendingPermissions.delete(requestId);
-  }
-
-  /** 回答 ask_user：发布 ask.user.answered；answers 为空数组表示取消 */
-  function respondAsk(requestId: string, answers: unknown[]): void {
-    const pending = pendingAsks.get(requestId);
-    if (!pending) throw new MethodError('not_found', `Ask request not found: ${requestId}`);
-    events.publish({
-      type: 'ask.user.answered',
-      run_id: pending.run_id,
-      data: { requestId, answers },
-      ts: Date.now(),
-    });
-    pendingAsks.delete(requestId);
   }
 
   // ── 0.5 RPC 方法表（E10/E11；A-3 §10.1 v1.1） ──
@@ -1168,7 +949,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     } catch (error) {
       mapTenantError(error);
     }
-    if (limit !== undefined && (activeByTenant.get(tenantId) ?? 0) >= limit) {
+    if (limit !== undefined && engine.activeCount(tenantId) >= limit) {
       throw new RpcError('quota_exceeded', `max_concurrent_runs exceeded for tenant ${tenantId}`, {
         tenant_id: tenantId,
         limit,
@@ -1249,6 +1030,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return {
           schema_version: snapshot.schema_version,
           config: snapshot.config,
+          // A-5 §12.2：TUI 需要展示 user/project 路径
+          paths: snapshot.paths ?? { user: '', project: '' },
           tenant_id: snapshot.tenant_id ?? ctx.tenantId,
           ...(snapshot.tenant_overlay_keys
             ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
@@ -1400,19 +1183,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
         required: ['run_id'],
         properties: { run_id: { type: 'string', minLength: 1 } },
       },
-      handler: (params, ctx) => {
-        try {
-          return { cancelled: cancelRun(stringParam(params, 'run_id'), ctx.tenantId) };
-        } catch (error) {
-          if (error instanceof MethodError) {
-            throw new RpcError(
-              error.code === 'not_found' ? 'not_found' : 'internal',
-              error.message,
-            );
-          }
-          throw error;
-        }
-      },
+      handler: (params, ctx) => ({
+        cancelled: cancelRun(stringParam(params, 'run_id'), ctx.tenantId),
+      }),
     },
     {
       name: 'runs.resume',
@@ -2242,11 +2015,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function sessionFor(tenantId: string): SessionBackend | undefined {
     if (tenantId === defaultTenantId) return session;
     return opts.sessionFor?.(tenantId);
-  }
-
-  function contextFor(tenantId: string): ContextManager | undefined {
-    if (tenantId === defaultTenantId) return context;
-    return opts.contextFor?.(tenantId);
   }
 
   function pluginHostFor(tenantId: string): PluginHost | undefined {
@@ -3806,54 +3574,54 @@ export function startGateway(opts: GatewayOptions): Gateway {
     },
   };
 
-  let server: Bun.Server<WsData>;
-  try {
-    server = Bun.serve<WsData>(serveOptions);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `Failed to start gateway on ${hostname}:${opts.port ?? DEFAULT_PORT}: ${detail}`,
-      { cause: error },
-    );
+  const localOnly = opts.localOnly === true;
+  let server: Bun.Server<WsData> | undefined;
+  if (!localOnly) {
+    try {
+      server = Bun.serve<WsData>(serveOptions);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to start gateway on ${hostname}:${opts.port ?? DEFAULT_PORT}: ${detail}`,
+        { cause: error },
+      );
+    }
   }
 
-  const actualPort = server.port ?? opts.port ?? DEFAULT_PORT;
+  const actualPort = server?.port ?? (localOnly ? 0 : (opts.port ?? DEFAULT_PORT));
 
-  if (team) startTeamPolling();
+  if (team && !localOnly) startTeamPolling();
 
-  // 心跳：WS 发 ping（客户端回 pong 或 {kind:'pong'}），SSE 发注释行
-  const heartbeat = setInterval(() => {
-    for (const ws of [...wsClients]) {
-      if (!ws.data.alive) {
-        ws.close(1001, 'heartbeat timeout');
-        wsClients.delete(ws);
-        continue;
-      }
-      ws.data.alive = false;
-      sendFrame(ws, { v: 1, kind: 'ping', node_id: nodeId, ts: Date.now() });
-      // 客户端已排空但没有新事件时，心跳负责补发 pending gap。
-      flushWsGap(ws);
-    }
-    for (const [ctrl, state] of [...sseClients]) {
-      if (!flushSseGap(ctrl, state)) continue;
-      writeSse(ctrl, state, ': ping\n\n');
-    }
-    for (const [ctrl, state] of [...teamClients]) {
-      if (!flushSseGap(ctrl, state)) continue;
-      writeSse(ctrl, state, ': ping\n\n');
-    }
-  }, heartbeatMs);
-  (heartbeat as { unref?: () => void }).unref?.();
+  // 心跳：WS 发 ping（客户端回 pong 或 {kind:'pong'}），SSE 发注释行。
+  // 本地 dispatcher 无连接，不启动心跳。
+  const heartbeat = localOnly
+    ? undefined
+    : setInterval(() => {
+        for (const ws of [...wsClients]) {
+          if (!ws.data.alive) {
+            ws.close(1001, 'heartbeat timeout');
+            wsClients.delete(ws);
+            continue;
+          }
+          ws.data.alive = false;
+          sendFrame(ws, { v: 1, kind: 'ping', node_id: nodeId, ts: Date.now() });
+          // 客户端已排空但没有新事件时，心跳负责补发 pending gap。
+          flushWsGap(ws);
+        }
+        for (const [ctrl, state] of [...sseClients]) {
+          if (!flushSseGap(ctrl, state)) continue;
+          writeSse(ctrl, state, ': ping\n\n');
+        }
+        for (const [ctrl, state] of [...teamClients]) {
+          if (!flushSseGap(ctrl, state)) continue;
+          writeSse(ctrl, state, ': ping\n\n');
+        }
+      }, heartbeatMs);
+  (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
   // 清理过期的权限请求记录
   const permissionSweeper = setInterval(() => {
-    const now = Date.now();
-    for (const [id, pending] of pendingPermissions) {
-      if (now - pending.ts > PERMISSION_TTL_MS) pendingPermissions.delete(id);
-    }
-    for (const [id, pending] of pendingAsks) {
-      if (now - pending.ts > PERMISSION_TTL_MS) pendingAsks.delete(id);
-    }
+    engine.sweep();
   }, 30_000);
   (permissionSweeper as { unref?: () => void }).unref?.();
 
@@ -3868,12 +3636,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
     rpc: dispatcher.dispatch,
     manifest,
     stop() {
-      clearInterval(heartbeat);
+      if (heartbeat !== undefined) clearInterval(heartbeat);
       clearInterval(permissionSweeper);
       if (teamPollTimer) clearInterval(teamPollTimer);
       teamPollTimer = undefined;
       unsubscribe();
-      active?.controller.abort();
+      engine.active?.controller.abort();
       for (const record of queue.splice(0)) {
         record.status = 'cancelled';
         record.completed_at = Date.now();
@@ -3904,7 +3672,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       teamClients.clear();
       knownPeers.clear();
-      void server.stop(true);
+      void server?.stop(true);
     },
   };
 }
