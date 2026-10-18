@@ -9,6 +9,8 @@
 export interface ProviderConfig {
   name: string;
   apiKey?: string;
+  /** 从该环境变量读取 apiKey（同层显式 apiKey 优先） */
+  apiKeyEnv?: string;
   baseUrl?: string;
   model?: string;
   temperature?: number;
@@ -57,7 +59,7 @@ export interface AgentConfig {
 
 /** 会话配置 */
 export interface SessionConfig {
-  /** 存储后端：sqlite（默认）/ file / memory */
+  /** 存储后端：file（0.5 默认）/ sqlite / memory */
   backend?: 'sqlite' | 'file' | 'memory';
   /** sqlite = 数据库文件路径；file = 目录；memory 忽略 */
   storagePath?: string;
@@ -198,6 +200,8 @@ export interface FeishuConfig {
   appId?: string;
   /** 环境变量 VESSEL_FEISHU_APP_SECRET 优先；永不打印 */
   appSecret?: string;
+  /** 从该环境变量读取 appSecret（同层显式 appSecret 优先） */
+  appSecretEnv?: string;
   /** 仅切换域名，不改变语义（默认 feishu） */
   domain?: 'feishu' | 'lark';
   /** 空 = 机器人所在全部会话 */
@@ -226,6 +230,53 @@ export interface ServeTlsConfig {
   keyFile?: string;
 }
 
+/** gateway principal 角色 */
+export type PrincipalRole = 'read' | 'write' | 'admin';
+
+/** 由 token 解析出的 principal */
+export interface Principal {
+  tenantId: string;
+  role: PrincipalRole;
+}
+
+/** serve token 条目（A-3 §10.4；键为原始 token，永不打印） */
+export interface ServeTokenEntry {
+  tenantId?: string;
+  role?: PrincipalRole;
+}
+
+/** 可观测性 trace 配置（0.5；缺省不写入 config，消费 DEFAULT_TRACE_OPTIONS） */
+export interface TraceConfig {
+  enabled?: boolean;
+  level?: 'full' | 'metadata' | 'off';
+  retentionDays?: number;
+  maxRuns?: number;
+  /** 0 = 不限 */
+  maxBytes?: number;
+}
+
+/** tenant 级设置 */
+export interface TenantSettings {
+  name?: string;
+  status?: 'active' | 'disabled';
+  quota?: {
+    maxSessions?: number;
+    maxRunsPerDay?: number;
+    maxConcurrentRuns?: number;
+    maxStorageBytes?: number;
+  };
+  tools?: { allow?: string[]; deny?: string[] };
+  /** tenant 覆盖层；白名单见 DECISION-010 §11.4 */
+  config?: Partial<VesselConfig>;
+}
+
+/** tenant 配置块 */
+export interface TenantConfig {
+  default?: string;
+  /** 键必须匹配 ^[a-z0-9][a-z0-9_-]{0,63}$ */
+  tenants?: Record<string, TenantSettings>;
+}
+
 /** serve 配置（0.3；默认回环 + 明文） */
 export interface ServeConfig {
   /** 监听地址（默认 127.0.0.1） */
@@ -234,6 +285,16 @@ export interface ServeConfig {
   port?: number;
   /** 显式允许非回环监听（默认 false） */
   allowRemote?: boolean;
+  /** 旧单 token（0.4）：principal = default/admin */
+  token?: string;
+  /** 从该环境变量读取 token */
+  tokenEnv?: string;
+  /** A-3：token → { tenantId, role }；键为原始 token，必须原样保留 */
+  tokens?: Record<string, ServeTokenEntry>;
+  /** A-3：跨 tenant admin；tenantId = '*' */
+  adminToken?: string;
+  /** 从该环境变量读取 adminToken */
+  adminTokenEnv?: string;
   /** TLS 证书对 */
   tls?: ServeTlsConfig;
 }
@@ -265,9 +326,36 @@ export interface TeamConfig {
   memberTermination?: TerminationConfig;
 }
 
+/** 配置来源（叶子级追踪） */
+export type ConfigSource = 'cli' | 'env' | 'project' | 'user' | 'default';
+
+/** 叶子键（camelCase 点路径）→ 来源 */
+export type ConfigSources = Record<string, ConfigSource>;
+
+/** 配置快照（A-3 §10.6；web 使用结构镜像或注入，不 import 本包） */
+export interface ConfigSnapshot {
+  schema_version: 1;
+  /** 已脱敏 */
+  config: VesselConfig;
+  /** 基础层来源 */
+  sources: ConfigSources;
+  paths: { user: string; project: string };
+  tenant_id?: string;
+  /** tenant overlay 命中的叶子键；不伪造第 6 种 source */
+  tenant_overlay_keys?: string[];
+}
+
 /** Vessel 配置 */
 export interface VesselConfig {
   apiKey?: string;
+  /** 从该环境变量读取 apiKey（同层显式 apiKey 优先） */
+  apiKeyEnv?: string;
+  /** 全局数据根；tenant overlay 不得覆盖 */
+  dataDir?: string;
+  /** 多租户配置 */
+  tenant?: TenantConfig;
+  /** trace 配置；缺省消费 DEFAULT_TRACE_OPTIONS */
+  trace?: TraceConfig;
   provider?: ProviderConfig;
   agent?: AgentConfig;
   guardrails?: GuardrailConfig[];
@@ -307,6 +395,10 @@ export interface ConfigLoadOptions {
   userConfigPath?: string;
   /** 环境变量前缀（默认 VESSEL_） */
   envPrefix?: string;
+  /** CLI/调用方显式 tenant id（高于 VESSEL_TENANT 与 config.tenant.default） */
+  tenantId?: string;
+  /** 环境变量来源；缺省 process.env（便于测试注入） */
+  env?: Record<string, string | undefined>;
   /** CLI 覆盖 */
   defaults?: Partial<VesselConfig>;
 }

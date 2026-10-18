@@ -38,9 +38,9 @@ function missingPath(): string {
 }
 
 describe('DEFAULT_CONFIG', () => {
-  it('不再全局写死 model；session.backend 默认 sqlite', () => {
+  it('不再全局写死 model；session.backend 默认 file', () => {
     expect(DEFAULT_CONFIG.provider?.model).toBeUndefined();
-    expect(DEFAULT_CONFIG.session?.backend).toBe('sqlite');
+    expect(DEFAULT_CONFIG.session?.backend).toBe('file');
     expect(DEFAULT_CONFIG.session?.maxHistory).toBeUndefined();
   });
 

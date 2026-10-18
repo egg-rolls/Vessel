@@ -73,6 +73,7 @@ describe('0.4 defaults', () => {
       enabled: false,
       appId: '',
       appSecret: '',
+      appSecretEnv: '',
       domain: 'feishu',
       allowedChatIds: [],
       sessionPrefix: 'feishu',
@@ -351,13 +352,13 @@ describe('0.4 feishu env credentials', () => {
 feishu:
   enabled: true
   app_id: file-id
-  app_secret: file-secret
+  app_secret_env: FEISHU_FILE_SECRET
 `);
-    process.env.VESSEL_FEISHU_APP_ID = 'env-id';
 
     const { config, validation } = await loadConfig({
       configPath,
       userConfigPath: missingPath(),
+      env: { VESSEL_FEISHU_APP_ID: 'env-id', FEISHU_FILE_SECRET: 'file-secret' },
     });
 
     expect(config.feishu?.appId).toBe('env-id');
@@ -365,16 +366,17 @@ feishu:
     expect(validation.errors).toEqual([]);
   });
 
-  it('file credentials allow enabled=true without env', async () => {
+  it('project _env secret allows enabled=true without VESSEL_* env', async () => {
     const configPath = tmpYaml(`
 feishu:
   enabled: true
   app_id: file-id
-  app_secret: file-secret
+  app_secret_env: FEISHU_FILE_SECRET
 `);
     const { config, validation } = await loadConfig({
       configPath,
       userConfigPath: missingPath(),
+      env: { FEISHU_FILE_SECRET: 'file-secret' },
     });
 
     expect(config.feishu?.enabled).toBe(true);
@@ -388,6 +390,7 @@ describe('0.4 FeishuConfig type has no agentId', () => {
       enabled: false,
       appId: '',
       appSecret: '',
+      appSecretEnv: '',
       domain: 'feishu',
       allowedChatIds: [],
       sessionPrefix: 'feishu',
