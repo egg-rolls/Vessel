@@ -9,3 +9,9 @@
 
 export * from '../events/index.js';
 export * from './metrics.js';
+export {
+  FileTraceRecorder,
+  type FileTraceRecorderOptions,
+  type TraceRecorderStats,
+} from './trace-recorder.js';
+export { createDefaultTraceRedactor } from './trace-redactor.js';

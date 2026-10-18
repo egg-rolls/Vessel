@@ -21,8 +21,15 @@ export {
 export * from './kernel/index.js';
 // 限制检查器
 export { MemoryLimitChecker } from './limits/index.js';
-// Observability（0.4 C2：只读事件聚合）
-export { MetricsCollector, type MetricsSnapshot } from './observability/index.js';
+// Observability（0.4 C2 聚合 + 0.5 F2 trace）
+export {
+  createDefaultTraceRedactor,
+  FileTraceRecorder,
+  type FileTraceRecorderOptions,
+  MetricsCollector,
+  type MetricsSnapshot,
+  type TraceRecorderStats,
+} from './observability/index.js';
 // Provider
 export {
   AnthropicProvider,
