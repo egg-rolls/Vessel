@@ -88,6 +88,10 @@ export interface BuildTenantRuntimeOptions {
   tenantPaths: TenantPaths;
   /** config.loaded 事件的来源（缺省空） */
   configSources?: ConfigSources;
+  /** 用户/项目配置路径（config.get.paths） */
+  configPaths?: { user: string; project: string };
+  /** tenant overlay 命中的叶子键（config snapshot） */
+  tenantOverlayKeys?: string[];
   /** 已持有的锁；缺省且 acquireLock=true 时由本函数获取并负责释放 */
   lock?: TenantLock;
   acquireLock?: boolean;
@@ -128,6 +132,9 @@ export interface TenantRuntimeBundle {
   tenantId: string;
   config: VesselConfig;
   tenantPaths: TenantPaths;
+  configSources: ConfigSources;
+  configPaths?: { user: string; project: string };
+  tenantOverlayKeys: string[];
   provider: LLMProvider;
   providerName: string;
   providerModel: string;
@@ -661,6 +668,9 @@ export async function buildTenantRuntime(
       tenantId,
       config,
       tenantPaths,
+      configSources: options.configSources ?? {},
+      ...(options.configPaths ? { configPaths: options.configPaths } : {}),
+      tenantOverlayKeys: options.tenantOverlayKeys ?? [],
       provider,
       providerName,
       providerModel,
@@ -785,7 +795,13 @@ export function listActiveTenantIds(config: VesselConfig): string[] {
 export async function loadTenantRuntimeConfig(
   tenantId: string,
   options: Pick<TenantRuntimeFactoryOptions, 'configPath' | 'userConfigPath' | 'dataDir'>,
-): Promise<{ config: VesselConfig; sources: ConfigSources; tenantPaths: TenantPaths } | null> {
+): Promise<{
+  config: VesselConfig;
+  sources: ConfigSources;
+  tenantPaths: TenantPaths;
+  paths: { user: string; project: string };
+  tenantOverlayKeys: string[];
+} | null> {
   const loaded = await loadConfig({
     tenantId,
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
@@ -803,7 +819,13 @@ export async function loadTenantRuntimeConfig(
     options.dataDir ?? resolveDataDir(loaded.config),
     tenantId,
   );
-  return { config: loaded.config, sources: loaded.sources, tenantPaths };
+  return {
+    config: loaded.config,
+    sources: loaded.sources,
+    tenantPaths,
+    paths: loaded.paths,
+    tenantOverlayKeys: loaded.tenantOverlayKeys,
+  };
 }
 
 /**
@@ -826,10 +848,28 @@ export async function createTenantRuntimeFactory(
     const activeIds = listActiveTenantIds(options.config);
     const loadedTenants = new Map<
       string,
-      { config: VesselConfig; sources: ConfigSources; tenantPaths: TenantPaths }
+      {
+        config: VesselConfig;
+        sources: ConfigSources;
+        tenantPaths: TenantPaths;
+        paths: { user: string; project: string };
+        tenantOverlayKeys: string[];
+      }
     >();
 
     for (const tenantId of activeIds) {
+      const seeded = bundles.get(tenantId);
+      if (seeded) {
+        // 不重新加载：bootstrap 可能已合并首启向导写入的内存配置。
+        loadedTenants.set(tenantId, {
+          config: seeded.config,
+          sources: seeded.configSources,
+          tenantPaths: seeded.tenantPaths,
+          paths: seeded.configPaths ?? { user: '', project: 'vessel.yaml' },
+          tenantOverlayKeys: seeded.tenantOverlayKeys,
+        });
+        continue;
+      }
       const loaded = await loadTenantRuntimeConfig(tenantId, options);
       if (!loaded) continue;
       loadedTenants.set(tenantId, loaded);
@@ -850,6 +890,8 @@ export async function createTenantRuntimeFactory(
         config: loaded.config,
         tenantPaths: loaded.tenantPaths,
         configSources: loaded.sources,
+        configPaths: loaded.paths,
+        tenantOverlayKeys: loaded.tenantOverlayKeys,
         acquireLock: acquireLocks,
         writeTrace,
         pruneTrace: writeTrace,
@@ -881,7 +923,15 @@ export async function createTenantRuntimeFactory(
       pluginsFor: (tenantId) => {
         const bundle = bundles.get(tenantId);
         if (!bundle) return undefined;
-        return bundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+        const loaded = new Set(bundle.plugins.map((plugin) => plugin.name));
+        const listed = bundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+        // 配置里显式 disabled 的插件不加载，但仍要出现在 plugins.list 中。
+        for (const configured of bundle.config.plugins ?? []) {
+          if (configured.enabled === false && !loaded.has(configured.name)) {
+            listed.push({ name: configured.name, enabled: false });
+          }
+        }
+        return listed;
       },
       bundleFor: (tenantId) => bundles.get(tenantId),
       closeAll: async () => {

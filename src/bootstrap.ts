@@ -461,6 +461,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     tenantPaths,
     configSources: loaded.sources,
+    configPaths: loaded.paths,
+    tenantOverlayKeys: loaded.tenantOverlayKeys,
     ...(tenantLock ? { lock: tenantLock } : {}),
     useMock,
     headless,
@@ -684,8 +686,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         rebuildMetrics(resolveTenantPaths(dataDir, requestedTenant).events_dir),
     },
     trace: {
-      readEvents: (filter: Record<string, unknown>) =>
-        readTraceEvents(tenantPaths.events_dir, filter as ReadTraceOptions),
+      // A-6 §13.3：web 传 ctx.tenantId；本地 dispatcher 按 tenant 路由。
+      readEvents: (filter: Record<string, unknown>, requestedTenant?: string) => {
+        const eventsDir =
+          requestedTenant === undefined || requestedTenant === tenantId
+            ? tenantPaths.events_dir
+            : resolveTenantPaths(dataDir, requestedTenant).events_dir;
+        return readTraceEvents(eventsDir, filter as ReadTraceOptions);
+      },
       prune: (params: Record<string, unknown>) => {
         const requestedTenant =
           typeof params.tenant_id === 'string' && params.tenant_id !== ''
@@ -705,10 +713,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       },
     },
     sessionData: {
-      deleteSessionData: (sessionId: string) =>
-        withTenantLock({ tenantDir: tenantPaths.root, tenantId }, () =>
+      // A-6 §13.3：本地模式只有当前 tenant 的 session backend。
+      deleteSessionData: (sessionId: string, requestedTenant?: string) => {
+        if (requestedTenant !== undefined && requestedTenant !== tenantId) {
+          return Promise.reject(
+            Object.assign(
+              new Error(`forbidden: tenant "${requestedTenant}" is not available in local mode`),
+              { code: 'forbidden' },
+            ),
+          );
+        }
+        return withTenantLock({ tenantDir: tenantPaths.root, tenantId }, () =>
           sessionControl.delete(sessionId),
-        ),
+        );
+      },
     },
     redactor: bundle.redactor,
     runtimeFor: (requestedTenant: string) =>

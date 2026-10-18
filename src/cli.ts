@@ -20,9 +20,23 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { isLoopbackHostname, loadConfig } from '../packages/config/src/index';
-import type { Transport } from '../packages/core/src/index';
-import { type Gateway, type GatewayOptions, startGateway } from '../packages/serve/src/index';
+import { buildConfigSnapshot, isLoopbackHostname, loadConfig } from '../packages/config/src/index';
+import {
+  type EventStream,
+  pruneTrace,
+  type ReadTraceOptions,
+  readTraceEvents,
+  rebuildMetrics,
+  resolveTenantPaths,
+  type Transport,
+} from '../packages/core/src/index';
+import {
+  type ConfigSnapshotLike,
+  type Gateway,
+  type GatewayOptions,
+  type MetricsProvider,
+  startGateway,
+} from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
@@ -36,6 +50,7 @@ import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-com
 import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { migrateCommand } from './migrate-command';
+import { createEventStream } from './observability-wiring';
 import { runResumeList } from './resume-command';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
@@ -46,6 +61,7 @@ import {
   tenantListCommand,
   tenantUpdateCommand,
 } from './tenant-command';
+import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
 import { listTools } from './tools-list';
 import { tracePruneCommand } from './trace-command';
 import { resolveGatewayToken, tryCreateLoopbackTransport } from './transport-factory';
@@ -493,6 +509,11 @@ async function runWithConfig(result: BootstrapResult) {
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   let gateway: Gateway | null = null;
+  /** A-6：--serve 时除 bootstrap 默认 tenant 外的执行面 */
+  let tenantFactory: TenantRuntimeFactory | undefined;
+  /** gateway 共享事件流：与任何 tenant 流分离，避免 trace 串租户 */
+  let sharedEvents: EventStream | undefined;
+  let unsubSharedBridge: (() => void) | undefined;
   if (servePort !== null) {
     const resolved = resolveServeOptions(config, {
       port: servePort,
@@ -535,8 +556,42 @@ async function runWithConfig(result: BootstrapResult) {
       );
     }
 
+    // A-6 §13.2：为每个 active tenant 构建独立执行面；默认 tenant 复用 bootstrap bundle。
+    // 每个 tenant 持有自己的 writer lock；任一失败由工厂回滚并让进程退出。
+    try {
+      // 共享流必须独立：若直接复用 ctx.events（默认 tenant 流），
+      // 其它 tenant 的事件桥接进来会污染默认 tenant 的 trace。
+      sharedEvents = createEventStream(config);
+      const seedEvents = result.bundle?.events;
+      if (seedEvents) {
+        unsubSharedBridge = seedEvents.subscribe((event) => {
+          const withTenant =
+            event.tenant_id === undefined ? { ...event, tenant_id: result.tenantId } : event;
+          try {
+            sharedEvents?.publish(withTenant);
+          } catch {
+            // 共享流订阅者异常不影响 tenant 执行
+          }
+        });
+      }
+
+      tenantFactory = await createTenantRuntimeFactory({
+        config,
+        ...(result.bundle ? { seededTenants: [result.bundle] } : {}),
+        useMock,
+        headless,
+        nodeId: result.nodeId,
+        sharedEvents,
+      });
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      await result.shutdown();
+      process.exit(1);
+    }
+
+    const dataDir = resolveDataDir(config);
     const gatewayOptions: GatewayOptions = {
-      events: ctx.events,
+      events: sharedEvents ?? ctx.events,
       session: ctx.session,
       runtime,
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
@@ -567,6 +622,81 @@ async function runWithConfig(result: BootstrapResult) {
           }
         : {}),
       ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
+      // A-6 §13.3：per-tenant 执行面 / 插件 / trace / session 数据 / 配置。
+      ...(tenantFactory
+        ? {
+            defaultTenantId: result.tenantId,
+            runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
+            sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
+            contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
+            pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
+            pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
+            plugins: () => tenantFactory?.pluginsFor(result.tenantId) ?? [],
+            // 无 metrics 的 tenant 返回 undefined；gateway 已按 undefined 处理。
+            metricsFor: ((tenantId: string) => {
+              const metrics = tenantFactory?.metricsFor(tenantId);
+              return metrics ? () => metrics.snapshot() : undefined;
+            }) as unknown as (tenantId: string) => MetricsProvider,
+            config: {
+              snapshot: (tenantId: string) => {
+                const bundle = tenantFactory?.bundleFor(tenantId) ?? result.bundle;
+                if (!bundle) {
+                  throw Object.assign(
+                    new Error(`forbidden: tenant "${tenantId}" is not configured`),
+                    { code: 'forbidden' },
+                  );
+                }
+                return buildConfigSnapshot({
+                  config: bundle.config,
+                  sources: bundle.configSources,
+                  paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
+                  tenantId,
+                  tenantOverlayKeys: bundle.tenantOverlayKeys,
+                }) as unknown as ConfigSnapshotLike;
+              },
+            },
+            trace: {
+              readEvents: (filter: Record<string, unknown>, tenantId?: string) =>
+                readTraceEvents(
+                  resolveTenantPaths(dataDir, tenantId ?? result.tenantId).events_dir,
+                  filter as ReadTraceOptions,
+                ),
+              prune: (params: Record<string, unknown>) => {
+                const requestedTenant =
+                  typeof params.tenant_id === 'string' && params.tenant_id !== ''
+                    ? params.tenant_id
+                    : result.tenantId;
+                // 工厂已持有该 tenant 的写锁，不能再嵌套获取。
+                return pruneTrace(resolveTenantPaths(dataDir, requestedTenant).events_dir, {
+                  ...(typeof params.older_than_days === 'number'
+                    ? { retentionDays: params.older_than_days }
+                    : {}),
+                  ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
+                  ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
+                });
+              },
+            },
+            sessionData: {
+              deleteSessionData: async (sessionId: string, tenantId?: string) => {
+                const resolvedTenant = tenantId ?? result.tenantId;
+                const bundle =
+                  tenantFactory?.bundleFor(resolvedTenant) ??
+                  (resolvedTenant === result.tenantId ? result.bundle : undefined);
+                if (!bundle) {
+                  throw Object.assign(
+                    new Error(`forbidden: tenant "${resolvedTenant}" is not configured`),
+                    { code: 'forbidden' },
+                  );
+                }
+                return bundle.sessionControl.delete(sessionId);
+              },
+            },
+            metricsControl: {
+              rebuild: (tenantId: string) =>
+                rebuildMetrics(resolveTenantPaths(dataDir, tenantId).events_dir),
+            },
+          }
+        : {}),
     };
 
     // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
@@ -675,6 +805,8 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   gateway?.stop();
+  unsubSharedBridge?.();
+  unsubSharedBridge = undefined;
   if (result.transport) {
     try {
       await result.transport.close();
@@ -693,9 +825,11 @@ async function runWithConfig(result: BootstrapResult) {
   // 纯 0.3 serve 保持原来的自然退出（0）。
   if (shutdownSignal && (result.workflows || args.feishu)) {
     if (result.workflows) await result.interruptWorkflows();
+    await tenantFactory?.closeAll();
     await result.shutdown();
     process.exit(signalExitCode(shutdownSignal));
   }
+  await tenantFactory?.closeAll();
 
   await result.shutdown();
 }
