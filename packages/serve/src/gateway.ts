@@ -12,7 +12,7 @@
  * - `/v1/team/*` 属于 0.2，0.1.0 只保留协议草案（见 protocol.ts）。
  */
 
-import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { isIP } from 'node:net';
 import { extname, resolve, sep } from 'node:path';
@@ -25,7 +25,9 @@ import type {
   RunnableAgent,
   SessionBackend,
   ToolDefinition,
+  TraceRedactor,
 } from '@vessel/core';
+import { createDefaultTraceRedactor } from '@vessel/core';
 import { ClientBackpressure } from './backpressure.js';
 import {
   type DurableGatewayOptions,
@@ -41,7 +43,7 @@ import { type EvalsGatewayOptions, normalizeEvalReport } from './evals.js';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
 import { type FeishuGatewayOptions, normalizeFeishuStatus } from './feishu.js';
 import { type McpGatewayOptions, normalizeMcpServers } from './mcp.js';
-import { type MetricsProvider, normalizeMetricsSnapshot } from './metrics.js';
+import { type MetricsProvider, type MetricsSnapshot, normalizeMetricsSnapshot } from './metrics.js';
 import {
   type ClientFrame,
   type NodeInfo,
@@ -53,6 +55,17 @@ import {
   type ServerFrame,
   type ToolInfo,
 } from './protocol.js';
+import {
+  type CapabilityManifest,
+  createRpcDispatcher,
+  defineMethods,
+  type RpcDispatcher,
+  RpcError,
+  type RpcMethodContext,
+  type RpcMethodDefinition,
+  type RpcRequest,
+  type RpcResponse,
+} from './rpc.js';
 import {
   fromWireMessage,
   isRemoteAddress,
@@ -66,6 +79,22 @@ import {
   toWireMessage,
   toWirePeer,
 } from './team.js';
+import {
+  type ConfigGatewayOptionsLike,
+  DEFAULT_TENANT_ID,
+  eventVisible,
+  extractToken,
+  type GatewayAuthLike,
+  mapTenantError,
+  normalizeTenantInfo,
+  resolveLocalPrincipal,
+  resolvePrincipal,
+  resolveTenantScope,
+  type TenantControlLike,
+  type TenantInfo,
+  type TenantPrincipal,
+  type TenantQuota,
+} from './tenant.js';
 import {
   dedupeWorkflowSummaries,
   isSafeWorkflowName,
@@ -141,6 +170,46 @@ export interface GatewayOptions {
   feishu?: FeishuGatewayOptions;
   /** evals 最近报告注入；缺省 = `/v1/evals/latest` 返回 eval_not_found */
   evals?: EvalsGatewayOptions;
+  // ── 0.5 RPC / 多租户（全部可选；0.4 调用方不传即旧行为） ──
+  /** token → principal（asm `GatewayAuth`）；缺省 = 旧单 token */
+  auth?: GatewayAuthLike;
+  /** Vessel 版本（capabilities.list） */
+  version?: string;
+  /** 已脱敏配置快照（asm ConfigSnapshot） */
+  config?: ConfigGatewayOptionsLike;
+  /** tenant registry / quota（asm 注入） */
+  tenants?: TenantControlLike;
+  /** plugins.list 数据源 */
+  plugins?: () => Array<{ name: string; enabled: boolean }>;
+  /** metrics.reset / trace 重建 */
+  metricsControl?: {
+    reset?(tenantId?: string): void;
+    rebuild?(tenantId: string): Promise<MetricsSnapshot>;
+  };
+  /** 可选 per-tenant live metrics；缺省 default tenant 用 `metrics` */
+  metricsFor?: (tenantId: string) => MetricsProvider;
+  /** trace 读取 / prune（core readTraceEvents / pruneTrace，由 asm 注入） */
+  trace?: {
+    prune?(options: Record<string, unknown>): Promise<unknown>;
+    readEvents?(filter: Record<string, unknown>): Promise<RunEvent[]>;
+  };
+  /** core deleteSessionData，由 asm 注入 */
+  sessionData?: {
+    deleteSessionData(sessionId: string): Promise<{
+      sessions_deleted: number;
+      runs_deleted: number;
+      events_deleted: number;
+    }>;
+  };
+  /** 出站事件脱敏；缺省 core 默认 redactor */
+  redactor?: TraceRedactor;
+  /** per-tenant 执行面（A-3 §10.4） */
+  runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
+  sessionFor?: (tenantId: string) => SessionBackend | undefined;
+  contextFor?: (tenantId: string) => ContextManager | undefined;
+  pluginHostFor?: (tenantId: string) => PluginHost | undefined;
+  /** 缺省 tenant（wildcard admin 未指定时使用） */
+  defaultTenantId?: string;
 }
 
 /** 网关实例 */
@@ -158,6 +227,13 @@ export interface Gateway {
    * 只设置一次；重复调用会替换 team 配置。
    */
   attachTeam(team: TeamGatewayOptions): void;
+  /**
+   * 进程内 dispatcher（与 asm `RpcDispatcher` 结构一致）。
+   * asm 用它构造 `LocalRpcClient`；principal 缺省为本地 default/admin。
+   */
+  rpc: RpcDispatcher;
+  /** 当前 capability manifest（capabilities.list 同源） */
+  manifest(): CapabilityManifest;
   stop(): void;
 }
 
@@ -179,6 +255,11 @@ interface SseClientState {
   encodeGap: (gap: EventGap) => string;
   replay?: SseReplayState;
   onClose?: () => void;
+  /** 0.5 tenant 过滤；undefined = 不过滤（team/MCP legacy 流） */
+  tenantId?: string;
+  allTenants?: boolean;
+  /** 可选事件过滤（events.subscribe run_id / types） */
+  accepts?: (event: RunEvent) => boolean;
 }
 
 /** team SSE 连接状态 */
@@ -193,6 +274,13 @@ interface WsData {
   alive: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
   backpressure: ClientBackpressure;
+  /** 0.5：token 解析出的 principal；未鉴权时为 undefined */
+  principal?: TenantPrincipal;
+  tenantId: string;
+  allTenants: boolean;
+  /** events.subscribe 过滤 */
+  runId?: string;
+  types?: string[];
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
@@ -204,6 +292,8 @@ interface RunRecord extends RunStatus {
   controller: AbortController;
   done: Promise<void>;
   resolveDone: () => void;
+  /** 0.5：run 归属 tenant；缺省 default */
+  tenant_id: string;
 }
 
 /** 运行队列上限（防止无界堆积） */
@@ -283,14 +373,6 @@ class MethodError extends Error {
     super(message);
     this.name = 'MethodError';
   }
-}
-
-/** 恒定时间字符串比较 */
-function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  if (left.length !== right.length) return false;
-  return timingSafeEqual(left, right);
 }
 
 /** 生成 32 字节随机令牌（base64url） */
@@ -432,6 +514,37 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const tlsMaterial = opts.tls ? loadTlsMaterial(opts.tls) : undefined;
 
+  const defaultTenantId = opts.defaultTenantId ?? DEFAULT_TENANT_ID;
+  const redactor: TraceRedactor = opts.redactor ?? createDefaultTraceRedactor();
+  const localPrincipal: TenantPrincipal = resolveLocalPrincipal(opts.auth, token);
+  /** 每 tenant 的并发 run 计数（quota max_concurrent_runs 的同步检查） */
+  const activeByTenant = new Map<string, number>();
+
+  if (opts.version !== undefined && typeof opts.version !== 'string') {
+    throw new Error('version must be a string.');
+  }
+  if (opts.auth !== undefined && typeof opts.auth.authenticate !== 'function') {
+    throw new Error('auth.authenticate must be a function.');
+  }
+  if (opts.config !== undefined && typeof opts.config.snapshot !== 'function') {
+    throw new Error('config.snapshot must be a function.');
+  }
+  if (opts.metricsControl?.reset !== undefined && typeof opts.metricsControl.reset !== 'function') {
+    throw new Error('metricsControl.reset must be a function.');
+  }
+  if (
+    opts.metricsControl?.rebuild !== undefined &&
+    typeof opts.metricsControl.rebuild !== 'function'
+  ) {
+    throw new Error('metricsControl.rebuild must be a function.');
+  }
+  if (opts.trace?.readEvents !== undefined && typeof opts.trace.readEvents !== 'function') {
+    throw new Error('trace.readEvents must be a function.');
+  }
+  if (opts.trace?.prune !== undefined && typeof opts.trace.prune !== 'function') {
+    throw new Error('trace.prune must be a function.');
+  }
+
   if (opts.durable !== undefined) {
     const store = opts.durable.store as { load?: unknown; list?: unknown } | undefined;
     if (!store || typeof store.load !== 'function' || typeof store.list !== 'function') {
@@ -477,6 +590,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.evals) features.push('evals');
   if (opts.feishu) features.push('feishu');
   if (opts.metrics) features.push('metrics');
+  if (opts.config) features.push('config');
+  if (opts.tenants) features.push('tenants');
   const protocolInfo: ProtocolInfo = {
     name: 'vessel.gateway',
     version: PROTOCOL_VERSION,
@@ -574,7 +689,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     };
   }
 
-  function helloFrame(fromSeq: number): ServerFrame {
+  function helloFrame(fromSeq: number, tenantId?: string): ServerFrame {
     const latest = buffer.latestSeq;
     // from_seq = 本次回放的第一条 seq；空缓冲时为 0（此时 latest_seq 也是 0）。
     // 已追平时为 since + 1（= latest + 1），表示「下一条期望序号」。
@@ -587,6 +702,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       node: nodeInfo(),
       from_seq: latest === 0 ? 0 : Math.max(fromSeq + 1, buffer.oldestSeq),
       latest_seq: latest,
+      ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
     };
   }
 
@@ -636,7 +752,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
+  function wsAccepts(ws: Ws, event: RunEvent): boolean {
+    if (!eventVisible(event, ws.data.tenantId, ws.data.allTenants)) return false;
+    if (ws.data.runId !== undefined && event.run_id !== ws.data.runId) return false;
+    if (ws.data.types !== undefined && !ws.data.types.includes(event.type)) return false;
+    return true;
+  }
+
   function sendEventToWs(ws: Ws, item: SeqEvent): void {
+    if (!wsAccepts(ws, item.event)) return;
     const inflight = ws.getBufferedAmount();
     if (!ws.data.backpressure.admit(item.seq, inflight)) return;
     const gap = ws.data.backpressure.takeGap(inflight);
@@ -717,16 +841,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
     for (const [ctrl, state] of [...sseClients]) {
       // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
       if (state.replay) continue;
+      if (
+        state.tenantId !== undefined &&
+        !eventVisible(item.event, state.tenantId, state.allTenants === true)
+      ) {
+        continue;
+      }
+      if (state.accepts && !state.accepts(item.event)) continue;
       sendGatedSse(ctrl, state, item.seq, sseFrame);
     }
   }
 
-  function replayTo(ws: Ws): void {
-    wsClients.add(ws);
-    sendFrame(ws, helloFrame(ws.data.since));
+  function replayEventsTo(ws: Ws): void {
     const gap = buffer.gapFor(ws.data.since);
     if (gap) sendFrame(ws, gapFrame(gap));
     for (const item of buffer.since(ws.data.since)) sendEventToWs(ws, item);
+  }
+
+  function replayTo(ws: Ws): void {
+    wsClients.add(ws);
+    sendFrame(ws, helloFrame(ws.data.since, ws.data.tenantId));
+    replayEventsTo(ws);
   }
 
   /** 订阅 core 事件流：分配 seq、记录 run 映射与权限请求、广播 */
@@ -764,12 +899,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (pending.run_id === event.run_id) pendingAsks.delete(id);
       }
     }
-    const seq = buffer.append(event);
-    broadcastEvent({ seq, event });
+    // 0.5：出站前统一脱敏（实时与回放都是脱敏后的副本；A-3 §10.3）
+    const safeEvent = redactor.redact(event);
+    const seq = buffer.append(safeEvent);
+    broadcastEvent({ seq, event: safeEvent });
 
     // R3：team 事件流（agent.* / team.*），可选按 agent_id 过滤
-    if (isTeamEvent(event) && teamClients.size > 0) {
-      const wire = toWireEvent(event);
+    if (isTeamEvent(safeEvent) && teamClients.size > 0) {
+      const wire = toWireEvent(safeEvent);
       const frame = `data: ${JSON.stringify({
         protocol: 1,
         node_id: nodeId,
@@ -788,7 +925,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   // ── 运行队列 ───────────────────────────────────
 
-  function createRun(input: string, sessionId: string): RunRecord {
+  function releaseTenantSlot(tenantId: string): void {
+    const current = activeByTenant.get(tenantId) ?? 0;
+    if (current <= 1) activeByTenant.delete(tenantId);
+    else activeByTenant.set(tenantId, current - 1);
+  }
+
+  function createRun(input: string, sessionId: string, tenantId: string): RunRecord {
     let resolveDone: () => void = () => {};
     const done = new Promise<void>((resolveDoneFn) => {
       resolveDone = resolveDoneFn;
@@ -801,6 +944,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       controller: new AbortController(),
       done,
       resolveDone,
+      tenant_id: tenantId,
     };
     runs.set(record.run_id, record);
     queue.push(record);
@@ -833,15 +977,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
     record.started_at = Date.now();
     active = record;
 
+    const tenantRuntime = runtimeFor(record.tenant_id);
+    const tenantContext = contextFor(record.tenant_id);
+
     // G2：切换会话时清空共享 Context，让 runtime 从 SessionBackend 重新加载目标会话历史。
-    if (context && context.getSessionId() !== record.session_id) {
-      context.setSessionId(record.session_id);
-      context.clear();
+    if (tenantContext && tenantContext.getSessionId() !== record.session_id) {
+      tenantContext.setSessionId(record.session_id);
+      tenantContext.clear();
     }
 
     try {
-      if (!runtime) throw new MethodError('no_runtime', 'No runtime configured');
-      const output = await runtime.run(record.input, record.session_id, {
+      if (!tenantRuntime) throw new MethodError('no_runtime', 'No runtime configured');
+      const output = await tenantRuntime.run(record.input, record.session_id, {
         signal: record.controller.signal,
       });
       record.output = output;
@@ -854,6 +1001,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       record.completed_at = Date.now();
       active = null;
       record.resolveDone();
+      releaseTenantSlot(record.tenant_id);
       trimRuns();
       pump();
     }
@@ -874,9 +1022,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  function cancelRun(id: string): boolean {
+  function cancelRun(id: string, tenantId?: string): boolean {
     const record = runs.get(id);
-    if (!record) throw new MethodError('not_found', `Run not found: ${id}`);
+    if (!record || (tenantId !== undefined && record.tenant_id !== tenantId)) {
+      throw new MethodError('not_found', `Run not found: ${id}`);
+    }
     if (record.status === 'queued') {
       const index = queue.indexOf(record);
       if (index >= 0) queue.splice(index, 1);
@@ -892,18 +1042,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return false;
   }
 
-  function submitRun(params: Record<string, unknown>): {
+  function submitRun(
+    params: Record<string, unknown>,
+    tenantId: string = defaultTenantId,
+  ): {
     run_id: string;
     status: RunStatus['status'];
     queue_position?: number;
   } {
-    if (!runtime) throw new MethodError('no_runtime', 'No runtime configured');
+    if (!runtimeFor(tenantId)) {
+      throw new RpcError('forbidden', 'No runtime configured', {
+        legacy_code: 'no_runtime',
+      });
+    }
     const input = params.input;
     if (typeof input !== 'string' || input.length === 0) {
-      throw new MethodError('invalid_request', 'input is required');
+      throw new RpcError('invalid_params', 'input is required', {
+        legacy_code: 'invalid_request',
+      });
     }
     if (queue.length + (active ? 1 : 0) >= maxQueue) {
-      throw new MethodError('busy', 'Run queue is full');
+      throw new RpcError('conflict', 'Run queue is full', { legacy_code: 'busy' });
     }
     const requestedSession = params.session_id;
     const sessionId =
@@ -911,23 +1070,37 @@ export function startGateway(opts: GatewayOptions): Gateway {
         ? requestedSession
         : activeSessionId;
     activeSessionId = sessionId;
-    const record = createRun(input, sessionId);
-    pump();
-    return {
-      run_id: record.run_id,
-      status: record.status,
-      ...(queuePosition(record) !== undefined ? { queue_position: queuePosition(record) } : {}),
-    };
+    activeByTenant.set(tenantId, (activeByTenant.get(tenantId) ?? 0) + 1);
+    try {
+      const record = createRun(input, sessionId, tenantId);
+      pump();
+      return {
+        run_id: record.run_id,
+        status: record.status,
+        ...(queuePosition(record) !== undefined ? { queue_position: queuePosition(record) } : {}),
+      };
+    } catch (error) {
+      releaseTenantSlot(tenantId);
+      throw error;
+    }
   }
 
-  async function listSessions(): Promise<{ sessions: unknown[] }> {
-    if (!session) throw new MethodError('no_session', 'No session backend configured');
-    return { sessions: await session.listRich() };
+  async function listSessions(
+    tenantId: string = defaultTenantId,
+  ): Promise<{ sessions: unknown[] }> {
+    const backend = sessionFor(tenantId);
+    if (!backend) throw new MethodError('no_session', 'No session backend configured');
+    return { sessions: await backend.listRich() };
   }
 
-  function toolsPayload(): { tools: ToolInfo[] } {
+  function toolsPayload(tenantId: string = defaultTenantId): { tools: ToolInfo[] } {
+    const host = pluginHostFor(tenantId);
+    if (tenantId !== defaultTenantId && !host) {
+      throw new RpcError('forbidden', `Tenant plugin host is not configured: ${tenantId}`);
+    }
+    const tools = host?.listTools() ?? [];
     return {
-      tools: listTools().map((tool) => ({
+      tools: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
         input_schema: tool.inputSchema,
@@ -964,6 +1137,881 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
     pendingAsks.delete(requestId);
   }
+
+  // ── 0.5 RPC 方法表（E10/E11；A-3 §10.1 v1.1） ──
+
+  const tenantParamSchema = {
+    type: 'object',
+    properties: { tenant_id: { type: 'string' } },
+  } as const;
+
+  function configControl(): ConfigGatewayOptionsLike {
+    if (!opts.config) throw new RpcError('not_found', 'Config view is not available');
+    return opts.config;
+  }
+
+  async function checkQuota(
+    tenantId: string,
+    operation: 'runs.start' | 'sessions.create',
+  ): Promise<void> {
+    try {
+      await opts.tenants?.checkQuota?.(tenantId, operation);
+    } catch (error) {
+      mapTenantError(error);
+    }
+  }
+
+  async function enforceConcurrentQuota(tenantId: string): Promise<void> {
+    let limit: number | undefined;
+    try {
+      limit = (await opts.tenants?.get(tenantId))?.quota?.max_concurrent_runs;
+    } catch (error) {
+      mapTenantError(error);
+    }
+    if (limit !== undefined && (activeByTenant.get(tenantId) ?? 0) >= limit) {
+      throw new RpcError('quota_exceeded', `max_concurrent_runs exceeded for tenant ${tenantId}`, {
+        tenant_id: tenantId,
+        limit,
+      });
+    }
+  }
+
+  function throwWorkflowError(error: unknown): never {
+    const code = (error as { code?: unknown }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    switch (code) {
+      case 'workflow_not_found':
+        throw new RpcError('not_found', message);
+      case 'workflow_invalid':
+        throw new RpcError('invalid_params', message);
+      case 'workflow_already_running':
+        throw new RpcError('conflict', message, { legacy_code: 'workflow_already_running' });
+      case 'workflow_not_resumable':
+        throw new RpcError('conflict', message, { legacy_code: 'workflow_not_resumable' });
+      case 'workflow_cancelled':
+        throw new RpcError('conflict', message, { legacy_code: 'workflow_invalid' });
+      case 'workflow_disabled':
+        throw new RpcError('not_found', message);
+      default:
+        throw new RpcError('internal', 'Workflow operation failed');
+    }
+  }
+
+  function metricsProvider(tenantId: string): MetricsProvider | undefined {
+    if (tenantId === defaultTenantId) return opts.metrics;
+    return opts.metricsFor?.(tenantId);
+  }
+
+  function tenantInfoOrThrow(info: unknown): TenantInfo {
+    const normalized = normalizeTenantInfo(info);
+    if (!normalized) throw new RpcError('internal', 'Invalid tenant metadata');
+    return normalized;
+  }
+
+  function stringParam(params: Record<string, unknown>, key: string): string {
+    const value = params[key];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new RpcError('invalid_params', `${key} is required`);
+    }
+    return value;
+  }
+
+  const rpcMethods: RpcMethodDefinition[] = [
+    {
+      name: 'health.get',
+      permission: 'read',
+      params_schema: { type: 'object' },
+      handler: (_params, ctx) => ({
+        status: 'ok',
+        clients: sseClients.size + wsClients.size,
+        latest_seq: buffer.latestSeq,
+        protocol: protocolInfo,
+        node: nodeInfo(),
+        started_at: startedAt,
+        tenant_id: ctx.tenantId,
+        team: team
+          ? { enabled: true, node_id: team.nodeId, transport: team.transport?.kind ?? 'in-process' }
+          : { enabled: false },
+      }),
+    },
+    {
+      name: 'capabilities.list',
+      permission: 'read',
+      params_schema: { type: 'object' },
+      handler: () => manifest(),
+    },
+    {
+      name: 'config.get',
+      permission: 'read',
+      params_schema: tenantParamSchema,
+      handler: async (_params, ctx) => {
+        const snapshot = await configControl().snapshot(ctx.tenantId);
+        return {
+          schema_version: snapshot.schema_version,
+          config: snapshot.config,
+          tenant_id: snapshot.tenant_id ?? ctx.tenantId,
+          ...(snapshot.tenant_overlay_keys
+            ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
+            : {}),
+        };
+      },
+    },
+    {
+      name: 'config.sources',
+      permission: 'read',
+      params_schema: tenantParamSchema,
+      handler: async (_params, ctx) => {
+        const snapshot = await configControl().snapshot(ctx.tenantId);
+        return {
+          sources: snapshot.sources,
+          tenant_id: snapshot.tenant_id ?? ctx.tenantId,
+          ...(snapshot.tenant_overlay_keys
+            ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
+            : {}),
+        };
+      },
+    },
+    {
+      name: 'sessions.list',
+      permission: 'read',
+      params_schema: tenantParamSchema,
+      handler: (_params, ctx) => listSessions(ctx.tenantId),
+    },
+    {
+      name: 'sessions.get',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: { session_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params, ctx) => {
+        const backend = requireSession(ctx.tenantId);
+        const state = await backend.load(stringParam(params, 'session_id'));
+        if (!state) throw new RpcError('not_found', 'Session not found');
+        return { session: state };
+      },
+    },
+    {
+      name: 'sessions.delete',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id'],
+        properties: { session_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        if (!opts.sessionData) {
+          throw new RpcError('internal', 'deleteSessionData is not configured');
+        }
+        try {
+          return await opts.sessionData.deleteSessionData(stringParam(params, 'session_id'));
+        } catch (error) {
+          mapTenantError(error);
+        }
+      },
+    },
+    {
+      name: 'sessions.rename',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['session_id', 'title'],
+        properties: {
+          session_id: { type: 'string', minLength: 1 },
+          title: { type: 'string', maxLength: 512 },
+        },
+      },
+      handler: async (params, ctx) => {
+        const backend = requireSession(ctx.tenantId);
+        const sessionId = stringParam(params, 'session_id');
+        const title = stringParam(params, 'title');
+        const state = await backend.load(sessionId);
+        if (!state) throw new RpcError('not_found', 'Session not found');
+        await backend.save({ ...state, title, updated_at: Date.now() });
+        return { session_id: sessionId, title };
+      },
+    },
+    {
+      name: 'runs.list',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        properties: {
+          session_id: { type: 'string' },
+          status: { type: 'string' },
+        },
+      },
+      handler: (params, ctx) => {
+        const sessionFilter = typeof params.session_id === 'string' ? params.session_id : undefined;
+        const statusFilter = typeof params.status === 'string' ? params.status : undefined;
+        return {
+          runs: [...runs.values()]
+            .filter((record) => record.tenant_id === ctx.tenantId)
+            .filter((record) => !sessionFilter || record.session_id === sessionFilter)
+            .filter((record) => !statusFilter || record.status === statusFilter)
+            .map(publicStatus),
+        };
+      },
+    },
+    {
+      name: 'runs.get',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['run_id'],
+        properties: { run_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params, ctx) => {
+        const runId = stringParam(params, 'run_id');
+        const record = runs.get(runId);
+        if (record && record.tenant_id === ctx.tenantId) return { run: publicStatus(record) };
+        const store = opts.durable?.store;
+        if (!store) throw new RpcError('not_found', `Run not found: ${runId}`);
+        const checkpoint = await store.load(runId);
+        if (!checkpoint) throw new RpcError('not_found', `Run not found: ${runId}`);
+        return { run: checkpoint };
+      },
+    },
+    {
+      name: 'runs.start',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['input'],
+        properties: {
+          input: { type: 'string', minLength: 1 },
+          session_id: { type: 'string' },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: async (params, ctx) => {
+        requireRuntime(ctx.tenantId);
+        await enforceConcurrentQuota(ctx.tenantId);
+        await checkQuota(ctx.tenantId, 'runs.start');
+        return submitRun(params, ctx.tenantId);
+      },
+    },
+    {
+      name: 'runs.cancel',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['run_id'],
+        properties: { run_id: { type: 'string', minLength: 1 } },
+      },
+      handler: (params, ctx) => {
+        try {
+          return { cancelled: cancelRun(stringParam(params, 'run_id'), ctx.tenantId) };
+        } catch (error) {
+          if (error instanceof MethodError) {
+            throw new RpcError(
+              error.code === 'not_found' ? 'not_found' : 'internal',
+              error.message,
+            );
+          }
+          throw error;
+        }
+      },
+    },
+    {
+      name: 'runs.resume',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['run_id'],
+        properties: { run_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        const durable = opts.durable;
+        if (!durable?.store || !durable.resume) {
+          throw new RpcError('not_found', 'Durable resume is not available');
+        }
+        const runId = stringParam(params, 'run_id');
+        if (!reserveResume(runId)) {
+          throw new RpcError('conflict', `Run is already being resumed: ${runId}`, {
+            legacy_code: 'run_already_running',
+          });
+        }
+        let checkpoint: Awaited<ReturnType<typeof durable.store.load>>;
+        try {
+          checkpoint = await durable.store.load(runId);
+        } catch (error) {
+          resumedRuns.delete(runId);
+          mapTenantError(error);
+        }
+        if (!checkpoint) {
+          resumedRuns.delete(runId);
+          throw new RpcError('not_found', `Run not found: ${runId}`);
+        }
+        if (!isResumableStatus(checkpoint.status)) {
+          resumedRuns.delete(runId);
+          throw new RpcError('conflict', `Run is not resumable: ${runId}`, {
+            legacy_code: 'run_not_resumable',
+          });
+        }
+        try {
+          await durable.resume(runId);
+        } catch (error) {
+          resumedRuns.delete(runId);
+          const code = (error as { code?: unknown }).code;
+          if (code === 'run_not_found' || code === 'run_store_required') {
+            throw new RpcError(
+              'not_found',
+              error instanceof Error ? error.message : 'Run not found',
+            );
+          }
+          throw new RpcError('conflict', error instanceof Error ? error.message : 'Resume failed');
+        }
+        return { run_id: runId, status: 'queued' };
+      },
+    },
+    {
+      name: 'events.list',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        properties: {
+          run_id: { type: 'string' },
+          since_seq: { type: 'integer', minimum: 0 },
+          since_ts: { type: 'integer', minimum: 0 },
+          types: { type: 'array', items: { type: 'string' } },
+          type_prefix: { type: 'string' },
+          limit: { type: 'integer', minimum: 0, maximum: 500 },
+          all_tenants: { type: 'boolean' },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: async (params, ctx) => {
+        if (!opts.trace?.readEvents)
+          throw new RpcError('not_found', 'Trace reader is not available');
+        if (params.types !== undefined && params.type_prefix !== undefined) {
+          throw new RpcError('invalid_params', 'types and type_prefix are mutually exclusive');
+        }
+        const filter: Record<string, unknown> = {};
+        for (const key of [
+          'run_id',
+          'since_seq',
+          'since_ts',
+          'types',
+          'type_prefix',
+          'limit',
+        ] as const) {
+          if (params[key] !== undefined) filter[key] = params[key];
+        }
+        try {
+          const events = await opts.trace.readEvents(filter);
+          return {
+            events: events.filter((event) => eventVisible(event, ctx.tenantId, ctx.allTenants)),
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('invalid_params')) {
+            throw new RpcError('invalid_params', message);
+          }
+          throw new RpcError('internal', 'Failed to read trace');
+        }
+      },
+    },
+    {
+      name: 'events.subscribe',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        properties: {
+          since: { type: 'integer', minimum: 0 },
+          since_ts: { type: 'integer', minimum: 0 },
+          run_id: { type: 'string' },
+          types: { type: 'array', items: { type: 'string' } },
+          all_tenants: { type: 'boolean' },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: (params, ctx) => {
+        const since = typeof params.since === 'number' ? params.since : 0;
+        const mode = ctx.connection === 'ws' ? 'ws' : 'stream';
+        return {
+          subscribed: true,
+          from_seq: since + 1,
+          latest_seq: buffer.latestSeq,
+          mode,
+          ...(ctx.connection === 'http'
+            ? { stream_url: `/v1/events?since=${since}${ctx.allTenants ? '&all_tenants=1' : ''}` }
+            : {}),
+        };
+      },
+    },
+    {
+      name: 'tools.list',
+      permission: 'read',
+      params_schema: tenantParamSchema,
+      handler: (_params, ctx) => toolsPayload(ctx.tenantId),
+    },
+    {
+      name: 'plugins.list',
+      permission: 'read',
+      params_schema: { type: 'object' },
+      handler: () => ({ plugins: opts.plugins?.() ?? [] }),
+    },
+    {
+      name: 'metrics.get',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        properties: {
+          source: { type: 'string', enum: ['live', 'trace'] },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: async (params, ctx) => {
+        const source = params.source === 'trace' ? 'trace' : 'live';
+        if (source === 'trace') {
+          if (!opts.metricsControl?.rebuild) {
+            throw new RpcError('not_found', 'Trace metrics rebuild is not available');
+          }
+          const snapshot = await opts.metricsControl.rebuild(ctx.tenantId);
+          return { metrics: normalizeMetricsSnapshot(snapshot), source };
+        }
+        const provider = metricsProvider(ctx.tenantId);
+        if (!provider) throw new RpcError('not_found', 'Metrics are not available');
+        return { metrics: normalizeMetricsSnapshot(provider()), source };
+      },
+    },
+    {
+      name: 'metrics.reset',
+      permission: 'write',
+      params_schema: tenantParamSchema,
+      handler: (_params, ctx) => {
+        if (!opts.metricsControl?.reset) {
+          throw new RpcError('not_found', 'Metrics reset is not available');
+        }
+        opts.metricsControl.reset(ctx.tenantId);
+        return { ok: true };
+      },
+    },
+    {
+      name: 'mcp.list',
+      permission: 'read',
+      params_schema: { type: 'object' },
+      handler: async () => {
+        if (!opts.mcp) throw new RpcError('not_found', 'MCP is not enabled');
+        try {
+          return { servers: normalizeMcpServers(await opts.mcp.listServers()) };
+        } catch {
+          throw new RpcError('internal', 'Failed to read MCP server status');
+        }
+      },
+    },
+    {
+      name: 'mcp.reconnect',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['name'],
+        properties: { name: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params, ctx) => {
+        if (!opts.mcp?.reconnect) {
+          throw new RpcError('not_found', 'MCP reconnect is not available');
+        }
+        await opts.mcp.reconnect(stringParam(params, 'name'));
+        return { ok: true, tenant_id: ctx.tenantId };
+      },
+    },
+    {
+      name: 'trace.prune',
+      permission: 'admin',
+      params_schema: {
+        type: 'object',
+        properties: {
+          older_than_days: { type: 'integer', minimum: 0 },
+          max_runs: { type: 'integer', minimum: 0 },
+          max_bytes: { type: 'integer', minimum: 0 },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: async (params, ctx) => {
+        if (!opts.trace?.prune) throw new RpcError('not_found', 'Trace prune is not available');
+        return opts.trace.prune({ ...params, tenant_id: ctx.tenantId });
+      },
+    },
+    {
+      name: 'tenants.list',
+      permission: 'admin',
+      params_schema: { type: 'object' },
+      handler: async () => {
+        if (!opts.tenants) throw new RpcError('not_found', 'Tenant registry is not available');
+        return { tenants: (await opts.tenants.list()).map(tenantInfoOrThrow) };
+      },
+    },
+    {
+      name: 'tenants.get',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['tenant_id'],
+        properties: { tenant_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params, ctx) => {
+        if (!opts.tenants) throw new RpcError('not_found', 'Tenant registry is not available');
+        const tenantId = stringParam(params, 'tenant_id');
+        if (!ctx.isAdmin && tenantId !== ctx.principal.tenant_id) {
+          throw new RpcError('forbidden', 'Cross-tenant access is not allowed');
+        }
+        const info = await opts.tenants.get(tenantId);
+        if (!info) throw new RpcError('not_found', `Tenant not found: ${tenantId}`);
+        return { tenant: tenantInfoOrThrow(info) };
+      },
+    },
+    {
+      name: 'tenants.create',
+      permission: 'admin',
+      params_schema: {
+        type: 'object',
+        required: ['tenant_id'],
+        properties: {
+          tenant_id: { type: 'string', minLength: 1 },
+          name: { type: 'string' },
+          quota: { type: 'object' },
+        },
+      },
+      handler: async (params) => {
+        if (!opts.tenants?.create) {
+          throw new RpcError('not_found', 'Tenant create is not available');
+        }
+        const info = await opts.tenants.create(stringParam(params, 'tenant_id'), {
+          ...(typeof params.name === 'string' ? { name: params.name } : {}),
+          ...(typeof params.quota === 'object' && params.quota !== null
+            ? { quota: params.quota as TenantQuota }
+            : {}),
+        });
+        return { tenant: tenantInfoOrThrow(info) };
+      },
+    },
+    {
+      name: 'tenants.update',
+      permission: 'admin',
+      params_schema: {
+        type: 'object',
+        required: ['tenant_id'],
+        properties: {
+          tenant_id: { type: 'string', minLength: 1 },
+          name: { type: 'string' },
+          status: { type: 'string', enum: ['active', 'disabled'] },
+          quota: { type: 'object' },
+        },
+      },
+      handler: async (params) => {
+        if (!opts.tenants?.update) {
+          throw new RpcError('not_found', 'Tenant update is not available');
+        }
+        const info = await opts.tenants.update(stringParam(params, 'tenant_id'), {
+          ...(typeof params.name === 'string' ? { name: params.name } : {}),
+          ...(params.status === 'active' || params.status === 'disabled'
+            ? { status: params.status }
+            : {}),
+          ...(typeof params.quota === 'object' && params.quota !== null
+            ? { quota: params.quota as TenantQuota }
+            : {}),
+        });
+        return { tenant: tenantInfoOrThrow(info) };
+      },
+    },
+    {
+      name: 'permission.respond',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['request_id', 'decision'],
+        properties: {
+          request_id: { type: 'string', minLength: 1 },
+          decision: { type: 'string', enum: ['allow', 'deny'] },
+          remember: { type: 'boolean' },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: (params) => {
+        const requestId = stringParam(params, 'request_id');
+        const decision = params.decision;
+        if (decision !== 'allow' && decision !== 'deny') {
+          throw new RpcError('invalid_params', "decision must be 'allow' or 'deny'");
+        }
+        respondPermission(requestId, decision, params.remember === true);
+        return { ok: true };
+      },
+    },
+    {
+      name: 'ask.respond',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['request_id', 'answers'],
+        properties: {
+          request_id: { type: 'string', minLength: 1 },
+          answers: { type: 'array' },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: (params) => {
+        const answers = params.answers;
+        if (!Array.isArray(answers)) {
+          throw new RpcError('invalid_params', 'answers must be an array');
+        }
+        respondAsk(stringParam(params, 'request_id'), answers);
+        return { ok: true };
+      },
+    },
+    {
+      name: 'workflow.list',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        properties: {
+          status: { type: 'string' },
+          limit: { type: 'integer', minimum: 1, maximum: 200 },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: async (params) => {
+        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+        const rawStatus = typeof params.status === 'string' ? params.status : null;
+        const status = parseWorkflowStatus(rawStatus);
+        if (rawStatus !== null && status === null) {
+          throw new RpcError('invalid_params', 'Invalid workflow status filter');
+        }
+        const limit = parseWorkflowLimit(
+          typeof params.limit === 'number' ? String(params.limit) : null,
+        );
+        if (limit === null) throw new RpcError('invalid_params', 'Invalid workflow limit');
+        try {
+          const list = await opts.workflows.listRuns({
+            ...(status !== null ? { status } : {}),
+            limit,
+          });
+          const summaries = list
+            .map((run) => toWireWorkflowSummary(run))
+            .filter((run): run is NonNullable<typeof run> => run !== null);
+          return {
+            workflows: sortWorkflowSummaries(dedupeWorkflowSummaries(summaries)).slice(0, limit),
+          };
+        } catch (error) {
+          throwWorkflowError(error);
+        }
+      },
+    },
+    {
+      name: 'workflow.get',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['workflow_run_id'],
+        properties: { workflow_run_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+        const id = stringParam(params, 'workflow_run_id');
+        try {
+          const run = await opts.workflows.getRun(id);
+          if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
+          const detail = toWireWorkflowDetail(run);
+          if (!detail) throw new RpcError('internal', 'Invalid workflow run payload');
+          return { workflow: detail };
+        } catch (error) {
+          if (error instanceof RpcError) throw error;
+          throwWorkflowError(error);
+        }
+      },
+    },
+    {
+      name: 'workflow.start',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['name'],
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 64 },
+          inputs: { type: 'object' },
+          tenant_id: { type: 'string' },
+        },
+      },
+      handler: async (params) => {
+        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+        const name = stringParam(params, 'name').trim();
+        if (!isSafeWorkflowName(name)) {
+          throw new RpcError('invalid_params', 'Invalid workflow name');
+        }
+        const inputs = parseWorkflowInputs(params.inputs);
+        if (inputs === null) {
+          throw new RpcError('invalid_params', 'inputs must be a flat string map (max 64 entries)');
+        }
+        let definitionPath: string | undefined;
+        try {
+          definitionPath = opts.workflows.resolveDefinition(name);
+        } catch {
+          throw new RpcError('internal', 'Failed to resolve workflow definition');
+        }
+        if (definitionPath === undefined) {
+          throw new RpcError('not_found', `Workflow not found: ${name}`);
+        }
+        try {
+          const started = await opts.workflows.start(definitionPath, {
+            ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+          });
+          return { workflow_run_id: started.workflowRunId, status: 'queued' };
+        } catch (error) {
+          throwWorkflowError(error);
+        }
+      },
+    },
+    {
+      name: 'workflow.resume',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['workflow_run_id'],
+        properties: { workflow_run_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+        const id = stringParam(params, 'workflow_run_id');
+        if (!reserveWorkflowResume(id)) {
+          throw new RpcError('conflict', `Workflow run is already resuming: ${id}`, {
+            legacy_code: 'workflow_already_running',
+          });
+        }
+        try {
+          const run = await opts.workflows.getRun(id);
+          if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
+          const summary = toWireWorkflowSummary(run);
+          if (!summary) throw new RpcError('internal', 'Invalid workflow run payload');
+          if (summary.status === 'running') {
+            throw new RpcError('conflict', `Workflow run is already running: ${id}`, {
+              legacy_code: 'workflow_already_running',
+            });
+          }
+          if (summary.status === 'completed' || summary.status === 'cancelled') {
+            throw new RpcError('conflict', `Workflow run is not resumable: ${id}`, {
+              legacy_code: 'workflow_not_resumable',
+            });
+          }
+          const resumed = await opts.workflows.resume(id);
+          void resumed.done.finally(() => releaseWorkflowResume(id)).catch(() => undefined);
+          return { workflow_run_id: resumed.workflowRunId, status: 'queued' };
+        } catch (error) {
+          releaseWorkflowResume(id);
+          if (error instanceof RpcError) throw error;
+          throwWorkflowError(error);
+        }
+      },
+    },
+    {
+      name: 'workflow.cancel',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['workflow_run_id'],
+        properties: { workflow_run_id: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+        const id = stringParam(params, 'workflow_run_id');
+        try {
+          const run = await opts.workflows.getRun(id);
+          if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
+          const summary = toWireWorkflowSummary(run);
+          if (!summary) throw new RpcError('internal', 'Invalid workflow run payload');
+          if (summary.status === 'cancelled') {
+            return { workflow_run_id: id, status: 'cancelled' };
+          }
+          if (summary.status === 'completed' || summary.status === 'failed') {
+            throw new RpcError('invalid_params', 'Run is not cancellable');
+          }
+          await opts.workflows.cancel(id);
+          return { workflow_run_id: id, status: 'cancelled' };
+        } catch (error) {
+          if (error instanceof RpcError) throw error;
+          throwWorkflowError(error);
+        }
+      },
+    },
+    {
+      name: 'evals.latest',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['suite'],
+        properties: { suite: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        const suite = stringParam(params, 'suite').trim();
+        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(suite) || suite.includes('..')) {
+          throw new RpcError('invalid_params', 'Invalid suite name');
+        }
+        if (!opts.evals) throw new RpcError('not_found', 'Eval report not found');
+        try {
+          const report = await opts.evals.latest(suite);
+          const normalized = report ? normalizeEvalReport(report) : null;
+          if (!normalized) throw new RpcError('not_found', `Eval report not found: ${suite}`);
+          return { report: normalized };
+        } catch (error) {
+          if (error instanceof RpcError) throw error;
+          const code = (error as { code?: unknown }).code;
+          if (code === 'eval_not_found') throw new RpcError('not_found', String(error));
+          if (code === 'eval_invalid') throw new RpcError('invalid_params', String(error));
+          throw new RpcError('internal', 'Failed to read eval report');
+        }
+      },
+    },
+    {
+      name: 'evals.run',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['suite'],
+        properties: { suite: { type: 'string', minLength: 1 } },
+      },
+      handler: async (params) => {
+        if (!opts.evals?.run) throw new RpcError('not_found', 'Evals runner is not available');
+        const suite = stringParam(params, 'suite');
+        return { report: normalizeEvalReport(await opts.evals.run(suite)) };
+      },
+    },
+    {
+      name: 'feishu.status',
+      permission: 'read',
+      params_schema: { type: 'object' },
+      handler: () => {
+        if (!opts.feishu) throw new RpcError('not_found', 'Feishu channel is not enabled');
+        return { channel: normalizeFeishuStatus(opts.feishu.status()) };
+      },
+    },
+  ];
+
+  const methodTable = defineMethods(rpcMethods);
+  const dispatcher = createRpcDispatcher({
+    table: methodTable,
+    localPrincipal,
+    makeContext: makeMethodContext,
+    version: opts.version,
+    describe: () => ({
+      tools: (() => {
+        try {
+          return listTools().map((tool) => ({
+            name: tool.name,
+            ...(tool.description ? { description: tool.description } : {}),
+          }));
+        } catch {
+          return [];
+        }
+      })(),
+      plugins: opts.plugins?.() ?? [],
+    }),
+  });
+  let capabilityManifest: CapabilityManifest = dispatcher.manifest();
+  const manifest = (): CapabilityManifest => {
+    capabilityManifest = dispatcher.manifest();
+    return capabilityManifest;
+  };
 
   async function dispatchMethod(method: string, rawParams: unknown): Promise<unknown> {
     const params =
@@ -1044,11 +2092,18 @@ export function startGateway(opts: GatewayOptions): Gateway {
         ws.close(4400, 'unsupported protocol');
         return;
       }
-      if (!safeEqual(frame.token, token)) {
+      const principal = resolvePrincipal(
+        opts.auth,
+        typeof frame.token === 'string' ? frame.token : null,
+        token,
+      );
+      if (!principal) {
         ws.close(4401, 'unauthorized');
         return;
       }
       ws.data.authed = true;
+      ws.data.principal = principal;
+      ws.data.tenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
       if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
       if (typeof frame.since === 'number' && frame.since > 0) ws.data.since = frame.since;
       replayTo(ws);
@@ -1061,25 +2116,158 @@ export function startGateway(opts: GatewayOptions): Gateway {
       sendResult(ws, '', false, undefined, protocolError('invalid_request', 'Expected req frame'));
       return;
     }
-    try {
-      const result = await dispatchMethod(frame.method, frame.params);
-      sendResult(ws, frame.id, true, result);
-    } catch (error) {
-      if (error instanceof MethodError) {
-        sendResult(ws, frame.id, false, undefined, protocolError(error.code, error.message));
-      } else {
-        const message = error instanceof Error ? error.message : String(error);
-        sendResult(ws, frame.id, false, undefined, protocolError('internal', message));
+    const legacyMethod =
+      frame.method === 'run.submit' ||
+      frame.method === 'run.get' ||
+      frame.method === 'run.cancel' ||
+      frame.method === 'permission.respond' ||
+      frame.method === 'ask.respond' ||
+      frame.method.startsWith('team.');
+
+    if (legacyMethod) {
+      try {
+        const result = await dispatchMethod(frame.method, frame.params);
+        sendResult(ws, frame.id, true, result);
+      } catch (error) {
+        if (error instanceof RpcError) {
+          sendResult(
+            ws,
+            frame.id,
+            false,
+            undefined,
+            protocolError(legacyProtocolCode(error), error.message),
+          );
+        } else if (error instanceof MethodError) {
+          sendResult(ws, frame.id, false, undefined, protocolError(error.code, error.message));
+        } else {
+          const message = error instanceof Error ? error.message : String(error);
+          sendResult(ws, frame.id, false, undefined, protocolError('internal', message));
+        }
       }
+      return;
+    }
+
+    if (!methodTable.byName.has(frame.method)) {
+      // 0.4 WS 兼容：未知方法保持 method_not_allowed（HTTP RPC 用 not_found）
+      sendResult(
+        ws,
+        frame.id,
+        false,
+        undefined,
+        protocolError('method_not_allowed', `Unknown method: ${frame.method}`),
+      );
+      return;
+    }
+
+    const request: RpcRequest = {
+      v: 1,
+      id: typeof frame.id === 'string' ? frame.id : '',
+      method: frame.method,
+      ...(frame.params !== undefined ? { params: frame.params } : {}),
+    };
+    const response = await dispatcher.dispatchFor(
+      request,
+      ws.data.principal ?? localPrincipal,
+      'ws',
+    );
+    if (response.ok) {
+      if (frame.method === 'events.subscribe') applyWsSubscribe(ws, frame.params);
+      sendResult(ws, frame.id, true, response.result);
+    } else {
+      sendResult(
+        ws,
+        frame.id,
+        false,
+        undefined,
+        protocolError(response.error.code as ProtocolError['code'], response.error.message),
+      );
     }
   }
 
-  /** 授权：Bearer 头优先，兼容 ?token= */
+  function legacyProtocolCode(error: RpcError): ProtocolError['code'] {
+    const details = error.details as { legacy_code?: unknown } | undefined;
+    if (details && typeof details.legacy_code === 'string') {
+      return details.legacy_code as ProtocolError['code'];
+    }
+    if (error.code === 'invalid_params') return 'invalid_request';
+    if (error.code === 'conflict') return 'busy';
+    return error.code as ProtocolError['code'];
+  }
+
+  function applyWsSubscribe(ws: Ws, raw: unknown): void {
+    const params =
+      raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+    if (typeof params.since === 'number' && params.since >= 0) ws.data.since = params.since;
+    ws.data.runId = typeof params.run_id === 'string' ? params.run_id : undefined;
+    ws.data.types = Array.isArray(params.types)
+      ? params.types.filter((item): item is string => typeof item === 'string')
+      : undefined;
+    ws.data.allTenants = params.all_tenants === true && ws.data.principal?.role === 'admin';
+    replayEventsTo(ws);
+  }
+
+  /** 授权：Bearer 头优先，兼容 ?token=；返回 principal */
+  function principalForRequest(req: Request, url: URL): TenantPrincipal | null {
+    const raw = extractToken(req.headers.get('authorization'), url.searchParams.get('token'));
+    return resolvePrincipal(opts.auth, raw, token);
+  }
+
   function authorized(req: Request, url: URL): boolean {
-    const header = req.headers.get('authorization');
-    if (header?.startsWith('Bearer ') && safeEqual(header.slice(7), token)) return true;
-    const queryToken = url.searchParams.get('token');
-    return queryToken !== null && safeEqual(queryToken, token);
+    return principalForRequest(req, url) !== null;
+  }
+
+  /** 方法级 tenant 作用域（admin 可显式跨 tenant） */
+  function makeMethodContext(
+    method: RpcMethodDefinition,
+    params: Record<string, unknown>,
+    principal: TenantPrincipal,
+    connection: RpcMethodContext['connection'],
+  ): RpcMethodContext {
+    const scope = resolveTenantScope(principal, params, defaultTenantId);
+    return {
+      principal,
+      tenantId: scope.tenantId,
+      allTenants: method.name === 'events.subscribe' ? scope.allTenants : false,
+      isAdmin: principal.role === 'admin',
+      connection,
+    };
+  }
+
+  /** per-tenant 执行面；非 default 无工厂 → forbidden（A-3 §10.4） */
+  function runtimeFor(tenantId: string): RunnableAgent | undefined {
+    if (tenantId === defaultTenantId) return runtime;
+    return opts.runtimeFor?.(tenantId);
+  }
+
+  function sessionFor(tenantId: string): SessionBackend | undefined {
+    if (tenantId === defaultTenantId) return session;
+    return opts.sessionFor?.(tenantId);
+  }
+
+  function contextFor(tenantId: string): ContextManager | undefined {
+    if (tenantId === defaultTenantId) return context;
+    return opts.contextFor?.(tenantId);
+  }
+
+  function pluginHostFor(tenantId: string): PluginHost | undefined {
+    if (tenantId === defaultTenantId) return pluginHost();
+    return opts.pluginHostFor?.(tenantId);
+  }
+
+  function requireRuntime(tenantId: string): RunnableAgent {
+    const resolved = runtimeFor(tenantId);
+    if (!resolved) {
+      throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
+    }
+    return resolved;
+  }
+
+  function requireSession(tenantId: string): SessionBackend {
+    const resolved = sessionFor(tenantId);
+    if (!resolved) {
+      throw new RpcError('not_found', `Tenant session backend is not configured: ${tenantId}`);
+    }
+    return resolved;
   }
 
   /** 静态资源响应（同源托管 apps/web/dist） */
@@ -1672,6 +2860,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     req: Request,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/mcp' && !path.startsWith('/v1/mcp/')) return null;
     if (path !== '/v1/mcp/servers') {
@@ -1680,14 +2869,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (req.method !== 'GET') {
       return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
     }
-    if (!opts.mcp) {
-      return errorJson('mcp_disabled', 'MCP status is not enabled', 503, extra);
-    }
     try {
-      const servers = normalizeMcpServers(await opts.mcp.listServers());
-      return json({ servers }, 200, extra);
-    } catch {
-      return errorJson('internal', 'Failed to read MCP server status', 500, extra);
+      return json(await callMethod('mcp.list', {}, principal), 200, extra);
+    } catch (error) {
+      if (error instanceof LegacyRpcError && error.code === 'not_found') {
+        return errorJson('mcp_disabled', 'MCP status is not enabled', 503, extra);
+      }
+      return legacyErrorResponse(error, extra);
     }
   }
 
@@ -1970,16 +3158,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
     req: Request,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/metrics') return null;
     if (req.method !== 'GET') return methodNotAllowed(extra);
-    if (!opts.metrics) {
-      return errorJson('metrics_disabled', 'Metrics are not enabled', 503, extra);
-    }
     try {
-      return json({ metrics: normalizeMetricsSnapshot(opts.metrics()) }, 200, extra);
-    } catch {
-      return errorJson('internal', 'Failed to read metrics', 500, extra);
+      return json(await callMethod('metrics.get', { source: 'live' }, principal), 200, extra);
+    } catch (error) {
+      if (error instanceof LegacyRpcError && error.code === 'not_found') {
+        return errorJson('metrics_disabled', 'Metrics are not enabled', 503, extra);
+      }
+      return legacyErrorResponse(error, extra);
     }
   }
 
@@ -1988,16 +3177,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
     req: Request,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/channels/feishu') return null;
     if (req.method !== 'GET') return methodNotAllowed(extra);
-    if (!opts.feishu) {
-      return errorJson('channel_disabled', 'Feishu channel is not enabled', 503, extra);
-    }
     try {
-      return json({ channel: normalizeFeishuStatus(opts.feishu.status()) }, 200, extra);
-    } catch {
-      return errorJson('internal', 'Failed to read Feishu status', 500, extra);
+      return json(await callMethod('feishu.status', {}, principal), 200, extra);
+    } catch (error) {
+      if (error instanceof LegacyRpcError && error.code === 'not_found') {
+        return errorJson('channel_disabled', 'Feishu channel is not enabled', 503, extra);
+      }
+      return legacyErrorResponse(error, extra);
     }
   }
 
@@ -2009,6 +3199,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     url: URL,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/evals/latest') return null;
     if (req.method !== 'GET') return methodNotAllowed(extra);
@@ -2019,26 +3210,156 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (!SAFE_SUITE_NAME.test(suite) || suite.includes('..')) {
       return errorJson('invalid_request', 'Invalid suite name', 400, extra);
     }
-    if (!opts.evals) {
-      return errorJson('eval_not_found', 'Eval report not found', 404, extra);
-    }
     try {
-      const report = await opts.evals.latest(suite);
-      const normalized = report ? normalizeEvalReport(report) : null;
-      if (!normalized) {
-        return errorJson('eval_not_found', `Eval report not found: ${suite}`, 404, extra);
-      }
-      return json({ report: normalized }, 200, extra);
+      return json(await callMethod('evals.latest', { suite }, principal), 200, extra);
     } catch (error) {
-      const code = (error as { code?: unknown }).code;
-      const message = error instanceof Error ? error.message : 'Eval report not found';
-      if (code === 'eval_not_found') return errorJson('eval_not_found', message, 404, extra);
-      if (code === 'eval_invalid') return errorJson('invalid_request', message, 400, extra);
+      if (error instanceof LegacyRpcError) {
+        if (error.code === 'not_found') {
+          return errorJson('eval_not_found', error.message, 404, extra);
+        }
+        if (error.code === 'invalid_request') {
+          return errorJson('invalid_request', error.message, 400, extra);
+        }
+      }
       return errorJson('internal', 'Failed to read eval report', 500, extra);
     }
   }
 
   /** 轮询 peer 表，发布 join/left（失败只记录，不影响 v1） */
+  /** 旧 REST 适配器的错误载体（保持 0.4 错误码） */
+  class LegacyRpcError extends Error {
+    constructor(
+      readonly code: ProtocolError['code'],
+      message: string,
+    ) {
+      super(message);
+      this.name = 'LegacyRpcError';
+    }
+  }
+
+  function legacyStatus(code: ProtocolError['code'], fallback = 400): number {
+    switch (code) {
+      case 'unauthorized':
+        return 401;
+      case 'forbidden':
+        return 403;
+      case 'not_found':
+      case 'run_not_found':
+      case 'workflow_not_found':
+      case 'eval_not_found':
+        return 404;
+      case 'method_not_allowed':
+        return 405;
+      case 'conflict':
+      case 'run_already_running':
+      case 'workflow_already_running':
+      case 'workflow_not_resumable':
+      case 'tenant_locked':
+        return 409;
+      case 'busy':
+        return 429;
+      case 'quota_exceeded':
+      case 'payload_too_large':
+        return code === 'quota_exceeded' ? 429 : 413;
+      case 'internal':
+        return 500;
+      default:
+        return fallback;
+    }
+  }
+
+  function legacyErrorResponse(
+    error: unknown,
+    extra: Record<string, string>,
+    fallback = 400,
+  ): Response {
+    if (error instanceof LegacyRpcError) {
+      return errorJson(error.code, error.message, legacyStatus(error.code, fallback), extra);
+    }
+    if (error instanceof MethodError) {
+      return errorJson(error.code, error.message, legacyStatus(error.code, fallback), extra);
+    }
+    return errorJson('internal', 'Gateway operation failed', 500, extra);
+  }
+
+  /** 旧 REST → canonical 方法；错误码映射回 0.4 */
+  async function callMethod(
+    method: string,
+    params: Record<string, unknown>,
+    principal: TenantPrincipal,
+  ): Promise<unknown> {
+    const response = await dispatcher.dispatchFor(
+      { v: 1, id: randomUUID(), method, params },
+      principal,
+      'http',
+    );
+    if (response.ok) return response.result;
+    const details = response.error.details as { legacy_code?: unknown } | undefined;
+    const legacy =
+      details && typeof details.legacy_code === 'string'
+        ? (details.legacy_code as ProtocolError['code'])
+        : response.error.code === 'invalid_params'
+          ? 'invalid_request'
+          : response.error.code === 'conflict'
+            ? 'conflict'
+            : (response.error.code as ProtocolError['code']);
+    throw new LegacyRpcError(legacy, response.error.message);
+  }
+
+  /** POST /v1/rpc：信封校验 → dispatcher；方法错误 HTTP 200 + ok:false */
+  async function handleRpc(
+    req: Request,
+    principal: TenantPrincipal,
+    extra: Record<string, string>,
+  ): Promise<Response> {
+    const rpcFailure = (
+      id: string,
+      code: 'invalid_params' | 'payload_too_large',
+      message: string,
+      status: number,
+    ): Response => json({ v: 1, id, ok: false, error: { code, message } }, status, extra);
+
+    let text: string;
+    try {
+      text = await req.text();
+    } catch {
+      return rpcFailure('', 'invalid_params', 'Failed to read request body', 400);
+    }
+    if (new TextEncoder().encode(text).byteLength > maxBodyBytes) {
+      return rpcFailure('', 'payload_too_large', 'Request body too large', 413);
+    }
+
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      return rpcFailure('', 'invalid_params', 'Invalid JSON', 400);
+    }
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      return rpcFailure('', 'invalid_params', 'Request body must be an object', 400);
+    }
+    const record = body as Record<string, unknown>;
+    const id = typeof record.id === 'string' ? record.id : '';
+    if (record.v !== 1) {
+      return rpcFailure(id, 'invalid_params', 'v must be 1', 400);
+    }
+    if (id.length === 0) {
+      return rpcFailure('', 'invalid_params', 'id is required', 400);
+    }
+    if (typeof record.method !== 'string' || record.method.length === 0) {
+      return rpcFailure(id, 'invalid_params', 'method is required', 400);
+    }
+
+    const request: RpcRequest = {
+      v: 1,
+      id,
+      method: record.method,
+      ...(record.params !== undefined ? { params: record.params } : {}),
+    };
+    const response: RpcResponse = await dispatcher.dispatchFor(request, principal, 'http');
+    return json(response, 200, extra);
+  }
+
   function startTeamPolling(): void {
     if (teamPollTimer) clearInterval(teamPollTimer);
     teamPollTimer = undefined;
@@ -2153,11 +3474,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // WS：/v1/events?since=N（/ws 为 0.1.0 兼容别名）
       if ((path === '/v1/events' || path === '/ws') && isWebSocket) {
-        const queryToken = url.searchParams.get('token');
-        const authed = queryToken !== null && safeEqual(queryToken, token);
+        const principal = resolvePrincipal(
+          opts.auth,
+          extractToken(null, url.searchParams.get('token')),
+          token,
+        );
         const upgraded = srv.upgrade(req, {
           data: {
-            authed,
+            authed: principal !== null,
+            ...(principal ? { principal } : {}),
+            tenantId:
+              principal !== null && principal.tenant_id !== '*'
+                ? principal.tenant_id
+                : defaultTenantId,
+            allTenants: false,
             since: parseSince(url.searchParams.get('since')),
             alive: true,
             backpressure: new ClientBackpressure({
@@ -2188,8 +3518,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (opts.staticDir) return errorJson('not_found', `Not found: ${path}`, 404, extra);
       }
 
-      if (!authorized(req, url)) {
+      const principal = principalForRequest(req, url);
+      if (!principal) {
         return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
+      }
+
+      // 0.5：统一 RPC 入口（方法错误 HTTP 200 + ok:false）
+      if (path === '/v1/rpc') {
+        if (req.method !== 'POST') return methodNotAllowed(extra);
+        return handleRpc(req, principal, extra);
       }
 
       // R3：team 端点（默认关闭 → 404）
@@ -2199,22 +3536,36 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 0.3：durable / MCP（未注入 → 503 *_disabled）
       const durableResponse = await handleDurable(req, url, path, extra);
       if (durableResponse) return durableResponse;
-      const mcpResponse = await handleMcp(req, path, extra);
+      const mcpResponse = await handleMcp(req, path, extra, principal);
       if (mcpResponse) return mcpResponse;
 
       // 0.4：workflow / metrics / feishu / evals（未注入 → 稳定错误码）
       const workflowsResponse = await handleWorkflows(req, url, path, extra);
       if (workflowsResponse) return workflowsResponse;
-      const metricsResponse = await handleMetrics(req, path, extra);
+      const metricsResponse = await handleMetrics(req, path, extra, principal);
       if (metricsResponse) return metricsResponse;
-      const feishuResponse = await handleFeishu(req, path, extra);
+      const feishuResponse = await handleFeishu(req, path, extra, principal);
       if (feishuResponse) return feishuResponse;
-      const evalsResponse = await handleEvals(req, url, path, extra);
+      const evalsResponse = await handleEvals(req, url, path, extra, principal);
       if (evalsResponse) return evalsResponse;
 
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
+        const sseTenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+        const sseAllTenants =
+          url.searchParams.get('all_tenants') === '1' && principal.role === 'admin';
+        const sseRunId = url.searchParams.get('run_id') ?? undefined;
+        const sseTypes = (url.searchParams.get('types') ?? '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+        const accepts = (event: RunEvent): boolean => {
+          if (!eventVisible(event, sseTenantId, sseAllTenants)) return false;
+          if (sseRunId !== undefined && event.run_id !== sseRunId) return false;
+          if (sseTypes.length > 0 && !sseTypes.includes(event.type)) return false;
+          return true;
+        };
         let controller: SseController | undefined;
         let state: SseClientState | undefined;
         const stream = new ReadableStream<unknown>(
@@ -2229,17 +3580,24 @@ export function startGateway(opts: GatewayOptions): Gateway {
                 unacked: 0,
                 encodeGap: (gap) => `data: ${JSON.stringify(gapFrame(gap))}\n\n`,
                 onClose: () => sseClients.delete(ctrl),
+                tenantId: sseTenantId,
+                allTenants: sseAllTenants,
+                accepts,
               };
               state = clientState;
               sseClients.set(ctrl, clientState);
               writeSse(ctrl, clientState, 'retry: 3000\n\n');
-              writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(since))}\n\n`);
+              writeSse(
+                ctrl,
+                clientState,
+                `data: ${JSON.stringify(helloFrame(since, sseTenantId))}\n\n`,
+              );
               const gap = buffer.gapFor(since);
               if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
               clientState.replay = {
                 cursor: Math.max(since + 1, buffer.oldestSeq),
                 batch: SSE_REPLAY_BATCH,
-                accepts: () => true,
+                accepts,
                 encode: (item) => `data: ${JSON.stringify(eventFrame(item))}\n\n`,
               };
               if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
@@ -2270,25 +3628,37 @@ export function startGateway(opts: GatewayOptions): Gateway {
       // 会话列表（/sessions 为 0.1.0 兼容别名）
       if ((path === '/v1/sessions' || path === '/sessions') && req.method === 'GET') {
         try {
-          return json(await listSessions(), 200, extra);
+          return json(await callMethod('sessions.list', {}, principal), 200, extra);
         } catch (error) {
-          if (error instanceof MethodError) return errorJson(error.code, error.message, 400, extra);
-          return errorJson('internal', 'Failed to list sessions', 500, extra);
+          return legacyErrorResponse(error, extra);
         }
       }
 
       // 工具列表（不含 handler）
       if (path === '/v1/tools' && req.method === 'GET') {
-        return json(toolsPayload(), 200, extra);
+        try {
+          return json(await callMethod('tools.list', {}, principal), 200, extra);
+        } catch (error) {
+          return legacyErrorResponse(error, extra);
+        }
       }
 
       // 运行列表（内存内当前进程）
       if (path === '/v1/runs' && req.method === 'GET') {
         const sessionFilter = url.searchParams.get('session_id');
-        const list = [...runs.values()]
-          .filter((record) => !sessionFilter || record.session_id === sessionFilter)
-          .map(publicStatus);
-        return json({ runs: list }, 200, extra);
+        try {
+          return json(
+            await callMethod(
+              'runs.list',
+              sessionFilter !== null ? { session_id: sessionFilter } : {},
+              principal,
+            ),
+            200,
+            extra,
+          );
+        } catch (error) {
+          return legacyErrorResponse(error, extra);
+        }
       }
 
       // 提交运行（异步；事件流负责结果）
@@ -2296,13 +3666,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const body = await readJsonBody(req, maxBodyBytes);
         if (body instanceof Response) return body;
         try {
-          return json(submitRun(body), 202, extra);
+          return json(await callMethod('runs.start', body, principal), 202, extra);
         } catch (error) {
-          if (error instanceof MethodError) {
-            const status = error.code === 'busy' ? 429 : 400;
-            return errorJson(error.code, error.message, status, extra);
-          }
-          return errorJson('internal', 'Failed to submit run', 500, extra);
+          return legacyErrorResponse(error, extra);
         }
       }
 
@@ -2313,18 +3679,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const isCancel = Boolean(runMatch[2]);
         if (isCancel && req.method === 'POST') {
           try {
-            return json({ cancelled: cancelRun(runId) }, 200, extra);
+            return json(await callMethod('runs.cancel', { run_id: runId }, principal), 200, extra);
           } catch (error) {
-            if (error instanceof MethodError) {
-              return errorJson(error.code, error.message, 404, extra);
-            }
-            return errorJson('internal', 'Failed to cancel run', 500, extra);
+            return legacyErrorResponse(error, extra, 404);
           }
         }
         if (!isCancel && req.method === 'GET') {
-          const record = runs.get(runId);
-          if (!record) return errorJson('not_found', `Run not found: ${runId}`, 404, extra);
-          return json(publicStatus(record), 200, extra);
+          try {
+            const result = (await callMethod('runs.get', { run_id: runId }, principal)) as {
+              run?: unknown;
+            };
+            return json(result.run ?? result, 200, extra);
+          } catch (error) {
+            return legacyErrorResponse(error, extra, 404);
+          }
         }
         return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
       }
@@ -2340,13 +3708,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
           return errorJson('invalid_request', "decision must be 'allow' or 'deny'", 400, extra);
         }
         try {
-          respondPermission(requestId, decision, body.remember === true);
-          return json({ ok: true }, 200, extra);
+          return json(
+            await callMethod(
+              'permission.respond',
+              {
+                request_id: requestId,
+                decision,
+                ...(body.remember === true ? { remember: true } : {}),
+              },
+              principal,
+            ),
+            200,
+            extra,
+          );
         } catch (error) {
-          if (error instanceof MethodError) {
-            return errorJson(error.code, error.message, 404, extra);
-          }
-          return errorJson('internal', 'Failed to respond to permission request', 500, extra);
+          return legacyErrorResponse(error, extra, 404);
         }
       }
 
@@ -2360,13 +3736,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
           return errorJson('invalid_request', 'answers must be an array', 400, extra);
         }
         try {
-          respondAsk(requestId, body.answers);
-          return json({ ok: true }, 200, extra);
+          return json(
+            await callMethod(
+              'ask.respond',
+              { request_id: requestId, answers: body.answers },
+              principal,
+            ),
+            200,
+            extra,
+          );
         } catch (error) {
-          if (error instanceof MethodError) {
-            return errorJson(error.code, error.message, 404, extra);
-          }
-          return errorJson('internal', 'Failed to respond to ask request', 500, extra);
+          return legacyErrorResponse(error, extra, 404);
         }
       }
 
@@ -2378,13 +3758,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
           return errorJson('invalid_request', 'input is required', 400, extra);
         }
         try {
-          const sessionId =
-            typeof body.session_id === 'string' && body.session_id.length > 0
-              ? body.session_id
-              : activeSessionId;
-          activeSessionId = sessionId;
-          const record = createRun(body.input, sessionId);
-          pump();
+          const started = (await callMethod('runs.start', body, principal)) as {
+            run_id?: unknown;
+          };
+          const runId = typeof started.run_id === 'string' ? started.run_id : '';
+          const record = runs.get(runId);
+          if (!record) return errorJson('internal', 'Run not found', 500, extra);
           await record.done;
           if (record.status === 'completed') return json({ output: record.output }, 200, extra);
           return errorJson(
@@ -2394,8 +3773,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             extra,
           );
         } catch (error) {
-          if (error instanceof MethodError) return errorJson(error.code, error.message, 400, extra);
-          return errorJson('internal', 'Failed to run', 500, extra);
+          return legacyErrorResponse(error, extra);
         }
       }
 
@@ -2487,6 +3865,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     protocol: protocolInfo,
     tls: tlsMaterial !== undefined,
     attachTeam,
+    rpc: dispatcher.dispatch,
+    manifest,
     stop() {
       clearInterval(heartbeat);
       clearInterval(permissionSweeper);

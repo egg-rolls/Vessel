@@ -16,6 +16,8 @@ export const MCP_SERVER_STATES: readonly McpServerState[] = ['connected', 'faile
 /** gateway MCP 注入面；缺省 = 端点关闭 */
 export interface McpGatewayOptions {
   listServers: () => McpServerStatus[] | Promise<McpServerStatus[]>;
+  /** A-3 §10.1：重连指定 server；缺省 = mcp.reconnect 返回 not_found */
+  reconnect?: (name: string) => Promise<void> | void;
 }
 
 /** 注入方可以返回 ext 的完整状态；gateway 只读取这四个字段 */
