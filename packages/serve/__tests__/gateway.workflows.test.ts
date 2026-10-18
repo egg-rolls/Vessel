@@ -240,7 +240,17 @@ describe('gateway workflow endpoints', () => {
     const controls = makeControls();
     const gw = start(controls);
 
-    for (const name of ['../x', 'a/b', 'a\\b', '.hidden', 'a..b']) {
+    for (const name of [
+      '.',
+      '..',
+      'a.b',
+      '../x',
+      'a/b',
+      'a\\b',
+      '.hidden',
+      'a..b',
+      'a'.repeat(65),
+    ]) {
       const res = await post(gw, '/v1/workflows/run', { name });
       expect(res.status).toBe(400);
       expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
