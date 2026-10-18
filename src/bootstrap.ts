@@ -5,16 +5,13 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import { DEFAULT_CONFIG, defaultModelForProvider, loadConfig } from '../packages/config/src/index';
+import { DEFAULT_CONFIG, loadConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
   type AgentStatus,
   type EventBus,
-  type LLMProvider,
   MemoryContextManager,
-  MemoryLLMProvider,
   MemoryPluginHost,
-  OpenAICompatibleProvider,
   type Plugin,
   type PluginHost,
   type RunnableAgent,
@@ -52,6 +49,7 @@ import {
 } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
+import { createProvider } from './provider-factory';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionBackend } from './session-factory';
@@ -202,60 +200,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const loader = new PluginLoader();
 
   // ── Provider ────────────────────────────────────
-  // provider 类插件单独装配（不进 plugins 列表）：它们只 registerProvider，贡献工厂。
-  const providerHost = new MemoryPluginHost();
-  for (const name of loader.getProviders()) {
-    const p = await loader.load(name);
-    if (p) p.install(providerHost);
-  }
-
-  let provider: LLMProvider;
-  let providerName: string;
-  let providerModel: string;
-  let providerBaseUrl: string;
-
-  if (useMock) {
-    providerName = 'mock';
-    providerModel = 'mock-model';
-    providerBaseUrl = 'memory';
-    provider = new MemoryLLMProvider();
-  } else {
-    providerName = config.provider?.name ?? 'openai';
-    const configuredModel = config.provider?.model ?? defaultModelForProvider(providerName);
-    if (!configuredModel) {
-      console.error(
-        `Provider "${providerName}" has no model configured. ` +
-          'Set provider.model in vessel.yaml or ~/.vessel/config.yaml.',
-      );
-      process.exit(1);
-    }
-    providerModel = configuredModel;
-    providerBaseUrl = config.provider?.baseUrl ?? '';
-
-    const factory = providerHost.getProvider(providerName);
-    if (factory) {
-      provider = factory({
-        api_key: config.apiKey ?? '',
-        base_url: providerBaseUrl,
-        model: providerModel,
-        temperature: config.provider?.temperature,
-        max_tokens: config.provider?.maxTokens,
-        timeout_ms: config.provider?.timeoutMs,
-      });
-    } else {
-      console.warn(
-        `Provider "${providerName}" not registered; treating as OpenAI-compatible` +
-          ` (base_url: ${providerBaseUrl || 'default'}, model: ${providerModel}).`,
-      );
-      provider = new OpenAICompatibleProvider({
-        api_key: config.apiKey ?? '',
-        base_url: providerBaseUrl,
-        model: providerModel,
-        temperature: config.provider?.temperature,
-        max_tokens: config.provider?.maxTokens,
-      });
-    }
-  }
+  // provider 装配（0.4 抽到 provider-factory，eval --allow-network 复用）。
+  const resolvedProvider = await createProvider(config, loader, useMock).catch((error: unknown) => {
+    console.error(`✗ ${error instanceof Error ? error.message : error}`);
+    process.exit(configErrorExitCode);
+  });
+  const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 
   // ── 组件 ────────────────────────────────────────
   const context = new MemoryContextManager({

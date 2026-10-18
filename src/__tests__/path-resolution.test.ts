@@ -12,6 +12,7 @@ import {
   resolveEvalsOutDir,
   resolveWorkflowDefinition,
   resolveWorkflowDefPath,
+  resolveWorkflowDefPathSync,
   resolveWorkflowDir,
   resolveWorkflowStorePath,
 } from '../path-resolution';
@@ -157,6 +158,23 @@ describe('workflow definition resolution', () => {
     await expect(resolveWorkflowDefPath(cfg, '../demo')).resolves.toBeUndefined();
     await expect(resolveWorkflowDefPath(cfg, 'a/b')).resolves.toBeUndefined();
     await expect(resolveWorkflowDefPath(cfg, 'missing')).resolves.toBeUndefined();
+  });
+
+  it('sync resolver matches the async safe-name rules', () => {
+    const dir = tmpDir();
+    write(path.join(dir, 'demo.yaml'));
+    const cfg = config({ workflow: { dir } });
+
+    expect(resolveWorkflowDefPathSync(cfg, 'demo')).toBe(
+      fs.realpathSync(path.join(dir, 'demo.yaml')),
+    );
+    expect(resolveWorkflowDefPathSync(cfg, '../demo')).toBeUndefined();
+    expect(resolveWorkflowDefPathSync(cfg, 'a/b')).toBeUndefined();
+    expect(resolveWorkflowDefPathSync(cfg, 'missing')).toBeUndefined();
+
+    write(path.join(dir, 'dup.yaml'));
+    write(path.join(dir, 'dup.json'));
+    expect(resolveWorkflowDefPathSync(cfg, 'dup')).toBeUndefined();
   });
 
   it('rejects a symlink escaping workflow.dir when possible', async () => {

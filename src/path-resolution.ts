@@ -9,6 +9,7 @@
  * - eval suite：name 在 evals.dir 下解析；显式路径按 cwd。
  */
 
+import { realpathSync, statSync } from 'node:fs';
 import { realpath, stat } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -184,6 +185,36 @@ export async function resolveWorkflowDefPath(
   if (!isSafeWorkflowName(name)) return undefined;
   const resolved = await resolveWorkflowDefinition(config, name);
   return resolved.ok ? resolved.path : undefined;
+}
+
+/**
+ * gateway 同步版（Addendum A §10.3 冻结 `resolveDefinition(name): string | undefined`）。
+ * 只接受单段安全名；多个命中 / 越界 / 不存在 → undefined。
+ */
+export function resolveWorkflowDefPathSync(config: VesselConfig, name: string): string | undefined {
+  if (!isSafeWorkflowName(name)) return undefined;
+
+  try {
+    const dir = resolveWorkflowDir(config);
+    const dirReal = realpathSync(dir);
+    const matches: string[] = [];
+    for (const extension of DEFINITION_EXTENSIONS) {
+      const candidate = path.join(dir, `${name}.${extension}`);
+      try {
+        if (statSync(candidate).isFile()) matches.push(candidate);
+      } catch {
+        // 不存在则跳过
+      }
+    }
+    if (matches.length !== 1) return undefined;
+
+    const fileReal = realpathSync(matches[0] as string);
+    const rel = path.relative(dirReal, fileReal);
+    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
+    return fileReal;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
