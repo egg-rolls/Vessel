@@ -36,6 +36,7 @@ import {
   type LocalRpcDispatcher,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -652,7 +653,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       snapshot: async (requestedTenant: string): Promise<ConfigSnapshotLike> => {
         if (requestedTenant === tenantId) {
           return buildConfigSnapshot({
-            config,
+            config: sanitizeConfigForSnapshot(config),
             sources: loaded.sources,
             paths: loaded.paths,
             tenantId,
@@ -667,7 +668,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           tenantId: requestedTenant,
         });
         return buildConfigSnapshot({
-          config: other.config,
+          config: sanitizeConfigForSnapshot(other.config),
           sources: other.sources,
           paths: other.paths,
           tenantId: other.tenantId,

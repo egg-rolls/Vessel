@@ -375,6 +375,14 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     expect(workConfig.tenant_id).toBe('work');
     expect(workConfig.config.agent?.systemPrompt).toBe('work-prompt');
 
+    // A6-10：快照不含 tenant 注册表，也不泄漏另一 tenant 的 overlay。
+    const acmeConfigJson = JSON.stringify(acmeConfig.config);
+    const workConfigJson = JSON.stringify(workConfig.config);
+    expect(acmeConfigJson).not.toContain('"tenants"');
+    expect(acmeConfigJson).not.toContain('work-prompt');
+    expect(workConfigJson).not.toContain('"tenants"');
+    expect(workConfigJson).not.toContain('acme-prompt');
+
     const acmePlugins = (await rpc(url, 'tok-acme', 'plugins.list', {})).result as {
       plugins: Array<{ name: string; enabled: boolean }>;
     };

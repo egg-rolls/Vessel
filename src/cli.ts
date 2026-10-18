@@ -43,6 +43,7 @@ import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { runUpdateCommand } from './cli-update';
 import { configInitCommand, configPathCommand, configShowCommand } from './config-command';
+import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { runEvalCommand } from './eval-command';
@@ -653,7 +654,8 @@ async function runWithConfig(result: BootstrapResult) {
                   );
                 }
                 return buildConfigSnapshot({
-                  config: bundle.config,
+                  // A6-10：不向当前 tenant 暴露其它 tenant 的 overlay。
+                  config: sanitizeConfigForSnapshot(bundle.config),
                   sources: bundle.configSources,
                   paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
                   tenantId,
