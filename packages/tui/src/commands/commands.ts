@@ -31,6 +31,7 @@ import { mcpCommand } from './mcp-command.js';
 import { metricsCommand } from './metrics-command.js';
 import { runsCommand } from './runs-command.js';
 import { tenantCommand } from './tenant-command.js';
+import { traceCommand } from './trace-command.js';
 import { workflowsCommand } from './workflows-command.js';
 
 // ── 类型 ──────────────────────────────────────────
@@ -145,6 +146,7 @@ export function createCommands(): CommandRegistry {
   reg.register(capabilitiesCommand());
   reg.register(configCommand());
   reg.register(tenantCommand());
+  reg.register(traceCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));
