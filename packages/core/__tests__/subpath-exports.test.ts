@@ -6,6 +6,7 @@ import {
   InProcessScheduler,
   InProcessTransport,
   MemoryRunStore as RootMemoryRunStore,
+  MetricsCollector as RootMetricsCollector,
 } from '@vessel/core';
 import { MemoryContextManager } from '@vessel/core/context';
 import type { AgentSpec } from '@vessel/core/kernel';
@@ -15,7 +16,12 @@ import {
   MemoryEventBus,
   SerialScheduler,
 } from '@vessel/core/kernel';
-import { FileEventStore, MemoryEventStream, replayRun } from '@vessel/core/observability';
+import {
+  FileEventStore,
+  MemoryEventStream,
+  MetricsCollector,
+  replayRun,
+} from '@vessel/core/observability';
 import {
   GuardrailRunner,
   GuardrailStage,
@@ -73,6 +79,13 @@ describe('subpath exports (R6a/R6b)', () => {
     expect(typeof FileEventStore).toBe('function');
     expect(typeof MemoryEventStream).toBe('function');
     expect(typeof replayRun).toBe('function');
+
+    // observability（0.4 C2）
+    expect(typeof RootMetricsCollector).toBe('function');
+    expect(MetricsCollector).toBe(RootMetricsCollector);
+    const collector = new MetricsCollector(new MemoryEventStream());
+    expect(collector.snapshot().runs.started).toBe(0);
+    collector.dispose();
 
     expect(typeof PermissionPolicy).toBe('function');
     expect(typeof GuardrailRunner).toBe('function');
