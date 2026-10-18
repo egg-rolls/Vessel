@@ -8,6 +8,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
 import { MemoryEventStream } from '../../packages/core/src/index';
+import { bootstrap } from '../bootstrap';
 import {
   createTenantRuntimeFactory,
   listActiveTenantIds,
@@ -145,6 +146,46 @@ describe('createTenantRuntimeFactory', () => {
     // shutdown 释放全部锁。
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);
     expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
+  });
+
+  it('reuses a bootstrap-seeded tenant without rebuilding or closing it', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(base, twoTenantYaml());
+    const result = await bootstrap({
+      useMock: true,
+      headless: true,
+      configPath,
+      tenantId: 'acme',
+      dataDir: base,
+      acquireLock: true,
+    });
+    expect(result.bundle).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: result.config,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+      seededTenants: [result.bundle as NonNullable<typeof result.bundle>],
+    });
+
+    try {
+      expect(factory.tenantIds().sort()).toEqual(['acme', 'work']);
+      expect(factory.runtimeFor('acme')).toBe(result.runtime);
+      expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(true);
+
+      // work 由工厂构建并持锁；acme 的锁仍归 bootstrap。
+      expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(true);
+    } finally {
+      await factory.closeAll();
+    }
+
+    expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
+    expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(true);
+
+    await result.shutdown();
+    expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);
   });
 
   it('rejects a duplicate feishu app_id across tenants before building', async () => {

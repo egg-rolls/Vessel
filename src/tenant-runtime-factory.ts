@@ -745,6 +745,11 @@ export interface TenantRuntimeFactoryOptions {
   acquireLocks?: boolean;
   /** 默认 true：serve 安装每 tenant trace */
   writeTrace?: boolean;
+  /**
+   * 已由 bootstrap 构建的 tenant（serve 的默认 tenant）。
+   * 工厂不重复构建、不关闭；调用方负责其生命周期。
+   */
+  seededTenants?: TenantRuntimeBundle[];
   loadMcpModule?: () => Promise<unknown | null>;
   loadWorkflowModule?: () => Promise<unknown | null>;
   loadFeishuModule?: () => Promise<unknown | null>;
@@ -809,6 +814,10 @@ export async function createTenantRuntimeFactory(
   options: TenantRuntimeFactoryOptions,
 ): Promise<TenantRuntimeFactory> {
   const bundles = new Map<string, TenantRuntimeBundle>();
+  const owned = new Set<string>();
+  for (const seeded of options.seededTenants ?? []) {
+    bundles.set(seeded.tenantId, seeded);
+  }
   const loader = options.loader ?? new PluginLoader();
   const acquireLocks = options.acquireLocks ?? true;
   const writeTrace = options.writeTrace ?? true;
@@ -834,6 +843,8 @@ export async function createTenantRuntimeFactory(
     );
 
     for (const [tenantId, loaded] of loadedTenants) {
+      // serve 的默认 tenant 已由 bootstrap 构建。
+      if (bundles.has(tenantId)) continue;
       const bundle = await buildTenantRuntime({
         tenantId,
         config: loaded.config,
@@ -856,6 +867,7 @@ export async function createTenantRuntimeFactory(
         ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
       });
       bundles.set(tenantId, bundle);
+      owned.add(tenantId);
     }
 
     let closed = false;
@@ -875,9 +887,9 @@ export async function createTenantRuntimeFactory(
       closeAll: async () => {
         if (closed) return;
         closed = true;
-        // 逆序关闭；单个失败不阻断其余 tenant。
-        const entries = [...bundles.values()].reverse();
-        for (const bundle of entries) {
+        // 逆序关闭本工厂构建的 tenant；seed 由调用方关闭。
+        const entries = [...bundles.entries()].filter(([id]) => owned.has(id)).reverse();
+        for (const [, bundle] of entries) {
           try {
             await bundle.close();
           } catch (error) {
@@ -889,10 +901,12 @@ export async function createTenantRuntimeFactory(
           }
         }
         bundles.clear();
+        owned.clear();
       },
     };
   } catch (error) {
-    for (const bundle of [...bundles.values()].reverse()) {
+    for (const [id, bundle] of [...bundles.entries()].reverse()) {
+      if (!owned.has(id)) continue;
       try {
         await bundle.close();
       } catch {

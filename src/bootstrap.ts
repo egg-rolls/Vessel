@@ -60,7 +60,7 @@ import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { createTenantControl } from './tenant-command';
 import { acquireTenantLock, type TenantLock, TenantLockError, withTenantLock } from './tenant-lock';
-import { buildTenantRuntime } from './tenant-runtime-factory';
+import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { readPackageVersion } from './version';
 import { adaptWorkflowsControl } from './workflow-wiring';
@@ -132,6 +132,8 @@ export interface BootstrapResult {
   tenantPaths: TenantPaths;
   /** 0.5：非 connect 且请求写时持有 */
   tenantLock?: TenantLock;
+  /** 0.5 A-6：本地 tenant 的执行面；connect 模式为 undefined */
+  bundle?: TenantRuntimeBundle;
   /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
   trace?: TraceControl;
   /** 0.5：session rename/delete 控制面 */
@@ -822,6 +824,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     config,
     tenantId,
     tenantPaths,
+    bundle,
     ...(tenantLock ? { tenantLock } : {}),
     ...(trace ? { trace } : {}),
     sessionControl,
