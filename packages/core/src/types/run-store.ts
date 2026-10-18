@@ -28,6 +28,8 @@ export interface RunCheckpoint {
   updated_at: number;
   error?: string;
   metadata?: Record<string, unknown>;
+  /** 0.5：所属 tenant；缺省视为 `default` */
+  tenant_id?: string;
 }
 
 /** 检查点存储 port */

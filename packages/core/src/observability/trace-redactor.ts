@@ -1,0 +1,62 @@
+/**
+ * 默认 trace 脱敏（0.5 F2 / DECISION-010 §2.2、E7）
+ *
+ * - 键名匹配 api_key|apikey|token|secret|password|authorization|app_secret → `***`
+ * - 字符串匹配 `sk-` 前缀 → `***`
+ * - `app_id` 保留前 4 位 + `***`
+ * - deep clone，不修改原事件；深度上限 8；WeakSet 防环
+ *
+ * @module @vessel/core/observability
+ */
+
+import type { RunEvent } from '../types/event.js';
+import type { TraceRedactor } from '../types/trace.js';
+
+const SENSITIVE_KEY = /api[_-]?key|token|secret|password|authorization|app_secret/i;
+const SECRET_STRING = /(^|\s)sk-[A-Za-z0-9_-]{4,}/;
+const MAX_DEPTH = 8;
+
+function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
+  if (typeof value === 'string') {
+    return SECRET_STRING.test(value) ? '***' : value;
+  }
+  if (typeof value !== 'object' || value === null) return value;
+  if (depth >= MAX_DEPTH) return '[redacted]';
+  if (seen.has(value)) return '[redacted]';
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    return value.map((item) => redactValue(item, depth + 1, seen));
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    if (SENSITIVE_KEY.test(key)) {
+      // 数值/布尔不是密钥；保留 usage.* token 计数（metadata 白名单需要）
+      result[key] = typeof entry === 'number' || typeof entry === 'boolean' ? entry : '***';
+      continue;
+    }
+    if (key.toLowerCase() === 'app_id' && typeof entry === 'string') {
+      result[key] = `${entry.slice(0, 4)}***`;
+      continue;
+    }
+    result[key] = redactValue(entry, depth + 1, seen);
+  }
+  return result;
+}
+
+/** 默认 redactor 实现 */
+export function createDefaultTraceRedactor(): TraceRedactor {
+  return {
+    redact(event: RunEvent): RunEvent {
+      const data = redactValue(event.data, 0, new WeakSet<object>());
+      return {
+        ...event,
+        data: (typeof data === 'object' && data !== null ? data : { value: data }) as Record<
+          string,
+          unknown
+        >,
+      };
+    },
+  };
+}

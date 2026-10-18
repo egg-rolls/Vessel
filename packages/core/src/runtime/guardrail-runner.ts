@@ -20,6 +20,7 @@ export class GuardrailRunner {
   constructor(
     private host: PluginHost,
     private events: EventStream,
+    private readonly tenantId?: string,
   ) {}
 
   async apply(
@@ -45,6 +46,7 @@ export class GuardrailRunner {
             reason: result.reason ?? 'blocked',
           },
           ts: Date.now(),
+          ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
         });
         return { allowed: false, replacement: currentValue, reason: result.reason };
       }
