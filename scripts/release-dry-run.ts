@@ -317,7 +317,7 @@ export function checkEntryFiles(
     if (!available.has(target)) {
       issues.push({
         code: 'entry_file_missing',
-        severity: 'warning',
+        severity: 'error',
         message: `tarball: entry target not found: ${target}`,
       });
     }

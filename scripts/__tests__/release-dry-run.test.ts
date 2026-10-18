@@ -173,7 +173,7 @@ describe('detectForbiddenFile', () => {
 });
 
 describe('checkEntryFiles', () => {
-  it('warns when main, types or exports targets are missing from the tarball', () => {
+  it('fails when main, types or exports targets are missing from the tarball', () => {
     const issues = checkEntryFiles(
       manifest({
         main: 'src/main.ts',
@@ -183,6 +183,7 @@ describe('checkEntryFiles', () => {
       ['package.json'],
     );
     expect(issues.every((issue) => issue.code === 'entry_file_missing')).toBe(true);
+    expect(issues.every((issue) => issue.severity === 'error')).toBe(true);
     expect(issues).toHaveLength(3);
   });
 
