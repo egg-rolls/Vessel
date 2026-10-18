@@ -6,7 +6,12 @@
  */
 
 import { join } from 'node:path';
-import { DEFAULT_CONFIG, loadConfig, type VesselConfig } from '../packages/config/src/index';
+import {
+  buildConfigSnapshot,
+  DEFAULT_CONFIG,
+  loadConfig,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import {
   AgentRuntime,
   type AgentStatus,
@@ -16,15 +21,24 @@ import {
   MemorySessionBackend,
   type Plugin,
   type PluginHost,
+  pruneTrace,
+  type ReadTraceOptions,
   type RunEvent,
   type RunnableAgent,
   type RunOptions,
   type RunStore,
   type RuntimeHost,
+  readTraceEvents,
+  rebuildMetrics,
   resolveTenantPaths,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
+import {
+  type ConfigSnapshotLike,
+  createLocalRpcDispatcher,
+  type LocalRpcDispatcher,
+} from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
@@ -54,21 +68,25 @@ import {
   disposeMetrics,
   type MetricsFactory,
 } from './observability-wiring';
+import { resolveWorkflowDefPathSync } from './path-resolution';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { createProvider } from './provider-factory';
-import { createHttpRpcClient, type RpcClient } from './rpc/index';
+import { createHttpRpcClient, createLocalRpcClient, type RpcClient } from './rpc/index';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
+import { resolveGatewayAuth } from './serve-auth';
 import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionBackend } from './session-factory';
-import { acquireTenantLock, type TenantLock, TenantLockError } from './tenant-lock';
+import { createTenantControl } from './tenant-command';
+import { acquireTenantLock, type TenantLock, TenantLockError, withTenantLock } from './tenant-lock';
 import {
   installTrace,
   pruneTenantTrace,
   type TraceControl,
   type TraceRecorderFactory,
 } from './trace-wiring';
+import { readPackageVersion } from './version';
 import { adaptWorkflowsControl, createWorkflowFromConfig } from './workflow-wiring';
 
 export interface BootstrapOptions {
@@ -108,6 +126,11 @@ export interface BootstrapOptions {
   redactor?: TraceRedactor;
   /** 0.5：锁 / 服务测试时钟 */
   clock?: () => number;
+  /** 测试注入：connect 模式的 RPC client（缺省 createHttpRpcClient） */
+  rpcClientFactory?: (opts: {
+    baseUrl: string;
+    token: string;
+  }) => RpcClient & { close(): Promise<void> };
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
   /** 0.4 测试注入口：workflow / feishu 模块加载器 */
@@ -230,6 +253,10 @@ async function bootstrapConnect(input: {
   tenantId: string;
   tenantPaths: TenantPaths;
   url: string;
+  rpcClientFactory?: (opts: {
+    baseUrl: string;
+    token: string;
+  }) => RpcClient & { close(): Promise<void> };
 }): Promise<BootstrapResult> {
   // 连接 token：VESSEL_CONNECT_TOKEN → VESSEL_GATEWAY_TOKEN →
   // config 的 serve.token / token_env → transport.token；永不打印。
@@ -244,7 +271,9 @@ async function bootstrapConnect(input: {
     '';
   let client: RpcClient & { close(): Promise<void> };
   try {
-    client = createHttpRpcClient({ baseUrl: input.url, token });
+    client = input.rpcClientFactory
+      ? input.rpcClientFactory({ baseUrl: input.url, token })
+      : createHttpRpcClient({ baseUrl: input.url, token });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
@@ -320,6 +349,8 @@ async function bootstrapConnect(input: {
       baseUrl: input.config.provider?.baseUrl ?? '',
     },
     plugins: [],
+    rpc: client,
+    tenant: { tenant_id: input.tenantId, data_dir: input.tenantPaths.root },
     config: input.config,
     newSessionId,
     onExit: () => {
@@ -398,7 +429,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 tenant/token 选择。
   if (connectMode) {
-    return bootstrapConnect({ config, nodeId, tenantId, tenantPaths, url: connectUrl });
+    return bootstrapConnect({
+      config,
+      nodeId,
+      tenantId,
+      tenantPaths,
+      url: connectUrl,
+      ...(options.rpcClientFactory ? { rpcClientFactory: options.rpcClientFactory } : {}),
+    });
   }
 
   if (!useMock && !interactive && !config.apiKey) {
@@ -946,6 +984,122 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     };
   };
 
+  // ── Local RPC dispatcher（0.5 A-5）───────────────
+  // 本地模式不监听端口；CLI/TUI 通过 ctx.rpc 走与 gateway 相同的方法表。
+  const localAuth = resolveGatewayAuth(config, {
+    hostname: '127.0.0.1',
+    allowRemote: false,
+    env: process.env,
+  });
+  const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
+    events: runtimeEvents,
+    session,
+    runtime: activeRuntime,
+    context,
+    pluginHost: finalPluginHost,
+    ...(localAuth.ok ? { auth: localAuth.auth } : {}),
+    version: readPackageVersion(),
+    nodeId,
+    defaultTenantId: tenantId,
+    config: {
+      snapshot: async (requestedTenant: string): Promise<ConfigSnapshotLike> => {
+        if (requestedTenant === tenantId) {
+          return buildConfigSnapshot({
+            config,
+            sources: loaded.sources,
+            paths: loaded.paths,
+            tenantId,
+            tenantOverlayKeys: loaded.tenantOverlayKeys,
+          }) as unknown as ConfigSnapshotLike;
+        }
+        const other = await loadConfig({
+          ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+          ...(options.userConfigPath !== undefined
+            ? { userConfigPath: options.userConfigPath }
+            : {}),
+          tenantId: requestedTenant,
+        });
+        return buildConfigSnapshot({
+          config: other.config,
+          sources: other.sources,
+          paths: other.paths,
+          tenantId: other.tenantId,
+          tenantOverlayKeys: other.tenantOverlayKeys,
+        }) as unknown as ConfigSnapshotLike;
+      },
+    },
+    tenants: createTenantControl(dataDir),
+    plugins: () => plugins.map((plugin) => ({ name: plugin.name, enabled: true })),
+    ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
+    metricsControl: {
+      ...(typeof (metrics as unknown as { reset?: unknown })?.reset === 'function'
+        ? { reset: () => (metrics as unknown as { reset: () => void }).reset() }
+        : {}),
+      rebuild: (requestedTenant: string) =>
+        rebuildMetrics(resolveTenantPaths(dataDir, requestedTenant).events_dir),
+    },
+    trace: {
+      readEvents: (filter: Record<string, unknown>) =>
+        readTraceEvents(tenantPaths.events_dir, filter as ReadTraceOptions),
+      prune: (params: Record<string, unknown>) => {
+        const requestedTenant =
+          typeof params.tenant_id === 'string' && params.tenant_id !== ''
+            ? params.tenant_id
+            : tenantId;
+        const paths = resolveTenantPaths(dataDir, requestedTenant);
+        const pruneOptions = {
+          ...(typeof params.older_than_days === 'number'
+            ? { retentionDays: params.older_than_days }
+            : {}),
+          ...(typeof params.max_runs === 'number' ? { maxRuns: params.max_runs } : {}),
+          ...(typeof params.max_bytes === 'number' ? { maxBytes: params.max_bytes } : {}),
+        };
+        return withTenantLock({ tenantDir: paths.root, tenantId: requestedTenant }, () =>
+          pruneTrace(paths.events_dir, pruneOptions),
+        );
+      },
+    },
+    sessionData: {
+      deleteSessionData: (sessionId: string) =>
+        withTenantLock({ tenantDir: tenantPaths.root, tenantId }, () =>
+          sessionControl.delete(sessionId),
+        ),
+    },
+    ...(options.redactor ? { redactor: options.redactor } : {}),
+    runtimeFor: (requestedTenant: string) =>
+      requestedTenant === tenantId ? activeRuntime : undefined,
+    sessionFor: (requestedTenant: string) => (requestedTenant === tenantId ? session : undefined),
+    contextFor: (requestedTenant: string) => (requestedTenant === tenantId ? context : undefined),
+    pluginHostFor: (requestedTenant: string) =>
+      requestedTenant === tenantId ? finalPluginHost : undefined,
+    ...(runStore
+      ? {
+          durable: {
+            store: runStore,
+            ...(runs
+              ? {
+                  resume: async (runId: string) => {
+                    const handle = await runs.resume(runId);
+                    void handle?.done;
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    ...(mcpControl ? { mcp: { listServers: () => mcpControl.list() } } : {}),
+    ...(workflowEngine
+      ? {
+          workflows: {
+            ...adaptWorkflowsControl(workflowEngine, config),
+            resolveDefinition: (name: string) => resolveWorkflowDefPathSync(config, name),
+          },
+        }
+      : {}),
+    ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
+  });
+  const localRpcClient = createLocalRpcClient({ dispatch: localDispatcher.dispatch });
+
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
 
@@ -975,6 +1129,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
 
     disposeMetrics(metrics);
+    try {
+      localDispatcher.dispose();
+    } catch {
+      // dispatcher 释放是 best-effort
+    }
 
     if (mcpPlugin) {
       try {
@@ -1055,6 +1214,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
     provider: { name: providerName, model: providerModel, baseUrl: providerBaseUrl },
     plugins: plugins.map((p) => p.name),
+    rpc: localRpcClient,
+    tenant: { tenant_id: tenantId, data_dir: tenantPaths.root },
     config,
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),

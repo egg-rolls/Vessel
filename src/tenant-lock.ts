@@ -205,3 +205,29 @@ export async function acquireTenantLock(options: AcquireTenantLockOptions): Prom
 
   throw new TenantLockError(options.tenantId, lastOwner);
 }
+
+/**
+ * 在 tenant 锁内执行写操作。
+ * 若锁已由本进程持有（gateway 常驻锁 / bootstrap 写锁），直接执行，
+ * 避免同一进程把自己判定为 tenant_locked；其它进程持锁仍抛错。
+ */
+export async function withTenantLock<T>(
+  options: AcquireTenantLockOptions,
+  action: () => Promise<T>,
+): Promise<T> {
+  const selfPid = options.pid ?? process.pid;
+  let lock: TenantLock | undefined;
+  try {
+    lock = await acquireTenantLock(options);
+  } catch (error) {
+    if (error instanceof TenantLockError && error.owner?.pid === selfPid) {
+      return action();
+    }
+    throw error;
+  }
+  try {
+    return await action();
+  } finally {
+    await lock.release();
+  }
+}
