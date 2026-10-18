@@ -946,3 +946,156 @@ button {
   color: var(--dim);
   cursor: default;
 }
+
+/* ── 0.4 workflow / metrics / feishu 面板 ── */
+.status-chip.pending {
+  color: var(--dim);
+}
+
+.status-chip.skipped {
+  color: var(--dim);
+  border-style: dashed;
+}
+
+.workflow-panel {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 8px;
+}
+
+.workflow-start {
+  display: flex;
+  gap: 6px;
+  padding: 6px 16px 4px;
+}
+
+.workflow-name,
+.workflow-inputs {
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.workflow-name {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+}
+
+.workflow-inputs {
+  margin: 0 16px 6px;
+  padding: 6px 8px;
+  resize: vertical;
+  font-family: var(--mono);
+}
+
+.workflow-start .resume-btn {
+  margin-top: 0;
+}
+
+.workflow-item {
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.12s ease;
+}
+
+.workflow-item:hover {
+  background: var(--bg-hover);
+}
+
+.workflow-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workflow-meta,
+.workflow-error {
+  margin-top: 3px;
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.workflow-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.workflow-actions .resume-btn {
+  margin-top: 6px;
+}
+
+.workflow-actions .resume-btn.cancel {
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.4);
+}
+
+.workflow-detail {
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: var(--bg-soft);
+  border-radius: 6px;
+}
+
+.workflow-step {
+  padding: 4px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+.workflow-step:last-child {
+  border-bottom: 0;
+}
+
+.workflow-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.workflow-step-output,
+.workflow-step-error {
+  margin-top: 3px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.metrics-panel,
+.feishu-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 16px 10px;
+}
+
+.metrics-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.feishu-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.feishu-meta,
+.feishu-error {
+  font-size: 12px;
+  line-height: 1.4;
+}

@@ -77,7 +77,16 @@ export type ProtocolErrorCode =
   | 'run_not_resumable'
   | 'run_already_running'
   | 'durable_disabled'
-  | 'mcp_disabled';
+  | 'mcp_disabled'
+  // 0.4 workflow / metrics / feishu / evals（DECISION-009 §5.7 / §10.3）
+  | 'metrics_disabled'
+  | 'workflow_disabled'
+  | 'workflow_not_found'
+  | 'workflow_invalid'
+  | 'workflow_already_running'
+  | 'workflow_not_resumable'
+  | 'channel_disabled'
+  | 'eval_not_found';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;
