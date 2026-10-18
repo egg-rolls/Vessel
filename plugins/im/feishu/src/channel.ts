@@ -265,6 +265,7 @@ class FeishuChannelImpl implements FeishuPlugin {
   }
 
   private setConnected(connected: boolean, detail?: string): void {
+    if (connected && this.stopping) return;
     if (connected === this.connected) return;
     this.connected = connected;
     if (connected) {
