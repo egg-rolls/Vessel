@@ -30,22 +30,27 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 **0.2 状态：** 多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，**未随版本发布**）；`AgentRuntime` 仍是单 agent loop，Host 只包在它外面，不重写循环。边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 与 [docs/ADR.md](docs/ADR.md) ADR-037。
 
-**0.3 状态：** durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，**未随版本发布**）；默认行为与 0.2 一致，新能力全部 opt-in 或默认关闭。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-039 / 040 / 041。0.1.0 / 0.2 / 0.3.0 均未发布。
+**0.3 状态：** durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，**未随版本发布**）；默认行为与 0.2 一致，新能力全部 opt-in 或默认关闭。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-039 / 040 / 041。
+
+**0.4 状态：** workflow 编排、evals harness、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，**未随版本发布**）；三个能力全部是插件、默认关闭，四个新配置块缺省时行为与 0.3 一致。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-042 / 043 / 044 / 045。0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；**0.4 只做发布干跑，不 tag、不 publish、不合并 `main`**。
 
 **已落地的包**（bun workspaces monorepo）：
 
 | 包 | 版本 | 作用 |
 |---|---|---|
-| **`@vessel/core`** | 0.3.0 | Agent 运行时：tool-calling loop、provider 抽象、context / session、事件流、guardrails、hooks、Kernel、durable `RunStore`。**不依赖 TUI，可独立嵌入** |
-| **`@vessel/tui`** | 0.3.0 | 终端界面：Ink REPL、流式渲染、slash 命令、工具执行前权限确认、`/mcp`、`/runs` |
-| **`@vessel/config`** | 0.3.0 | 声明式 YAML 配置与 schema 校验（未知键报错） |
-| **`@vessel/permission`** | 0.3.0 | 共享权限原语：工具经事件流等用户授权 |
-| **`@vessel/serve`** | 0.3.0 | 常驻服务（gateway，`--serve` 模式；loopback / 远程 / TLS） |
-| **`@vessel/mcp-client`** | 0.3.0 | MCP client 插件：stdio + HTTP，工具经 `PluginHost` 注册 |
-| `apps/web` | 0.3.0 | 浏览器控制台：时间线、运行取消、权限弹窗、ask_user、MCP / interrupted run 面板（`vessel.gateway/1`） |
+| **`@vessel/core`** | 0.4.0 | Agent 运行时：tool-calling loop、provider 抽象、context / session、事件流、guardrails、hooks、Kernel、durable `RunStore`、`MetricsCollector` / `pruneRuns`。**不依赖 TUI，可独立嵌入** |
+| **`@vessel/tui`** | 0.4.0 | 终端界面：Ink REPL、流式渲染、slash 命令、权限确认、`/mcp`、`/runs`、`/workflows`、`/metrics`、`/feishu` |
+| **`@vessel/config`** | 0.4.0 | 声明式 YAML 配置与 schema 校验（未知键报错） |
+| **`@vessel/permission`** | 0.4.0 | 共享权限原语：工具经事件流等用户授权 |
+| **`@vessel/serve`** | 0.4.0 | 常驻服务（gateway；loopback / 远程 / TLS；workflow / metrics / feishu / evals 端点） |
+| **`@vessel/mcp-client`** | 0.4.0 | MCP client 插件：stdio + HTTP，工具经 `PluginHost` 注册 |
+| **`@vessel/workflow`** | 0.4.0 | workflow 插件：声明式 DAG（agent / tool steps）、持久化、resume、CLI/TUI/gateway 控制面 |
+| **`@vessel/evals`** | 0.4.0 | eval harness：默认离线、mock provider、断言白名单、JSON 报告 |
+| **`@vessel/feishu`** | 0.4.0 | 飞书渠道插件：WebSocket 长连接、文本单 chat 单 session、专用 Host |
+| `apps/web` | 0.4.0 | 浏览器控制台：时间线、运行取消、权限弹窗、ask_user、MCP / interrupted run / workflow / metrics / 飞书面板（`vessel.gateway/1`） |
 
-- CI：`.github/workflows/ci.yml`（质量门禁、跨平台矩阵、web 构建、examples 类型检查、MCP/TLS 离线集成、mock 冒烟）。
-- ⚠️ **0.1.0 / 0.2 / 0.3.0 均未发布**：库包版本为 `0.3.0`，发布流程已就绪；当前请从源码运行。
+- CI：`.github/workflows/ci.yml`（质量门禁、跨平台矩阵、web 构建、examples 类型检查、MCP/TLS/workflow/evals/feishu 离线集成、发布干跑、mock 冒烟）。
+- ⚠️ **0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布**：库包版本为 `0.4.0`，发布流程已就绪；当前请从源码运行。0.4 只做发布干跑。
 
 ## 快速开始
 
@@ -87,13 +92,17 @@ bun run src/cli.ts --serve 8642 --serve-host 0.0.0.0 --allow-remote \
   --tls-cert cert.pem --tls-key key.pem         # 显式远程 + TLS（非回环必须 token）
 bun run src/cli.ts --resume-run                 # 列出 interrupted durable run
 bun run src/cli.ts --resume-run <runId>         # 恢复并继续
+bun run src/cli.ts workflow run release-check   # 跑 workflow（定义在 workflow.dir）
+bun run src/cli.ts workflow list                # 列出 workflow run
+bun run src/cli.ts eval smoke                   # 跑 eval suite（默认离线）
+bun run src/cli.ts --feishu                     # 前台运行飞书渠道（需 enabled + 凭据）
 bun run src/cli.ts --version                    # 显示版本（读根 package.json）
 bun run src/cli.ts --tools                      # 列出当前配置下的工具（不需要 Key）
 bun run src/cli.ts update --check               # 检查新版本（只提示，不自替换）
 bun test                                        # 跑测试
 ```
 
-REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/setup` `/reload` `/clear` `/exit`）。
+REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/workflows` `/metrics` `/feishu` `/setup` `/reload` `/clear` `/exit`）。
 
 - `/clear` 清屏，**不清空会话上下文**；需要新会话用 `/new`。
 - `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
@@ -191,6 +200,135 @@ durable:
 - resume 并发守卫是 per-Host / per-store-instance；多 Host 共享同一 `FileRunStore` 或跨进程同时恢复同一 run 属部署错误。
 - 已知错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `run_store_required` / `agent_not_found`。
 
+## Workflow 怎么用
+
+Workflow 是**插件**（`@vessel/workflow`），默认关闭。打开后在 `workflow.dir` 下放 YAML/JSON 定义：
+
+```yaml
+name: release-check
+defaults:
+  max_parallel: 2
+steps:
+  - id: plan
+    type: agent
+    agent: owner
+    prompt: "分析仓库并输出计划"
+  - id: check
+    type: tool
+    tool: read
+    args:
+      path: "{{steps.plan.output}}"
+    depends_on: [plan]
+```
+
+```yaml
+workflow:
+  enabled: true
+  dir: ./workflows
+  path: ~/.vessel/workflows
+  max_parallel: 2
+  step_timeout_ms: 300000
+```
+
+```bash
+bun run src/cli.ts workflow run release-check --input repo=vessel
+bun run src/cli.ts workflow list --status failed
+bun run src/cli.ts workflow show <workflowRunId>
+bun run src/cli.ts workflow resume <workflowRunId>
+bun run src/cli.ts workflow cancel <workflowRunId>
+```
+
+- 入口只有 CLI / TUI `/workflows` / gateway；**不注册模型工具**，模型不能触发任意路径的定义。
+- `resume` 会重跑 `running` / `pending` / `failed` 步骤，**不保证幂等**，重跑可能重复副作用。
+- `type: tool` 直接调 handler，绕过 runtime 的 guardrail / hook；需要 guardrail 的步骤用 `type: agent`。
+- `cancel` 只支持同进程；跨进程 run 返回 `workflow_not_found`。
+- 已知错误码：`workflow_not_found` / `workflow_invalid` / `workflow_already_running` / `workflow_not_resumable` / `workflow_cancelled` / `workflow_disabled`。
+
+## Evals 怎么用
+
+Evals 是**插件 + 运行器**（`@vessel/evals`），**默认完全离线**，使用脚本化 mock provider：
+
+```yaml
+name: smoke
+defaults:
+  timeout_ms: 30000
+  session: fresh
+cases:
+  - id: basic
+    input: "hello"
+    mock:
+      responses:
+        - content: "hello"
+        - content: "done"
+    expect:
+      - type: output_contains
+        value: "hello"
+      - type: no_error
+```
+
+```yaml
+evals:
+  enabled: true
+  dir: ./evals
+  out_dir: ~/.vessel/evals
+  allow_network: false
+```
+
+```bash
+bun run src/cli.ts eval smoke
+bun run src/cli.ts eval smoke --json
+bun run src/cli.ts eval smoke --out ./report.json
+bun run src/cli.ts eval smoke --allow-network   # 还需 evals.allowNetwork: true
+```
+
+- 断言白名单：`output_contains` / `output_matches` / `no_error` / `tool_called` /
+  `tool_not_called` / `max_duration_ms` / `max_iterations` / `usage_under`；未知类型 = 配置错误。
+- 真实 provider 需要 **`evals.allowNetwork: true` 且 CLI `--allow-network`** 同时成立。
+- 报告由 `@vessel/evals/report.ts` 写盘，文件名 `<suite>-<YYYYMMDDTHHmmssSSSZ>.json`；
+  `GET /v1/evals/latest` 只读最近一次报告。
+- 退出码：0 全部通过；1 存在 failed/error；2 配置/解析错误。
+
+## 飞书怎么用
+
+飞书是**插件**（`@vessel/feishu`），使用官方 SDK 的 WebSocket 长连接，只做文本：
+
+```yaml
+feishu:
+  enabled: true
+  app_id: ""                 # 或 VESSEL_FEISHU_APP_ID
+  app_secret: ""             # 或 VESSEL_FEISHU_APP_SECRET
+  domain: feishu             # feishu | lark
+  allowed_chat_ids: []
+  session_prefix: feishu
+  reply_timeout_ms: 300000
+  max_reply_chars: 4000
+  max_members: 8
+```
+
+```bash
+bun run src/cli.ts --feishu            # TTY：REPL + 渠道；非 TTY：仅渠道前台
+bun run src/cli.ts --serve --feishu    # gateway + 渠道
+```
+
+- session 固定 `feishu:<chat_id>`；同一 chat 串行，不同 chat 并行；单 chat 队列上限 10。
+- 只处理文本；忽略机器人自己、非文本、重复 `message_id`；超长回复截断并追加 `…(truncated)`。
+- `app_secret` 永不打印，`app_id` 只显示前 4 位 + `***`；`feishu.agent_id` 已删除。
+- 已知错误码：`channel_disabled` / `channel_not_connected` / `channel_auth_failed`。
+
+## 可观测性
+
+```yaml
+observability:
+  event_history: 1000        # 缺省 1000；显式 0 = 不限制；>0 = 环形缓冲
+  metrics: true              # 块存在时才注入 metrics
+```
+
+- `MetricsCollector` 聚合 `runs` / `tool_calls` / `llm` / `duration_ms`；进程内、不持久化。
+- `runs.cancelled` 保持 0，取消计入 `runs.failed`；resume 不计 `runs.started`。
+- `pruneRuns(store, opts?)` 是显式 helper：按 `status` / `older_than_ms` / `keep_latest` 清理，
+  不自动调度，不修改 `RunStore` 接口。
+- gateway `GET /v1/metrics`；TUI `/metrics`；慢客户端丢事件并标记 `gap`，4 MiB 硬断开。
+
 ## Web 控制台
 
 `--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。
@@ -203,20 +341,21 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 - 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`。
 - 可用 `VESSEL_GATEWAY_TOKEN` 固定 token；优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。未设置时每次启动自动生成。
-- 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单；按 `hello.features` 显示 MCP server 面板与 interrupted run 面板（可触发 resume）。
-- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13。
+- 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单；按 `hello.features` 显示 MCP server / interrupted run / workflow / metrics / 飞书面板（0.4）。
+- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/workflows*`、`/v1/channels/feishu`、`/v1/evals/latest`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13 / §15 / §16。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
 - 远程 / TLS（显式 opt-in）：`--serve-host` + `--allow-remote` + `--tls-cert`/`--tls-key`，或 `serve.*` 配置；非回环必须 token，cert/key 必须成对。只做 HTTP/1.1。
 - 已知行为：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问时需替换为该机器的实际 IP（例如 `http://192.168.1.10:8642`）。
 - 生产同源托管：CLI 会自动传 `staticDir`（`VESSEL_STATIC_DIR` 优先，否则 `apps/web/dist` 存在时使用）；开发时用 Vite proxy。
-- 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存，重启丢失。
+- 限制：单 runtime / 单 context，并发 1；运行与事件历史在内存，重启丢失。0.4 gateway 事件缓冲缺省 10000，慢客户端丢事件并标记 `gap`，不无界增长。
 
 ## 发布与更新
 
 - 发布由 tag `v*` 触发，流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。
-- 0.3.0 发布 `@vessel/*` 库包与插件包（含 `@vessel/mcp-client`）；**根 CLI 暂不发布到 npm，`npx vessel` 不可用**。
+- **0.4 只做发布干跑**：`bun run scripts/release-dry-run.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**；发布仍等 1.0.0 之后。
+- 0.4.0 的可发布包包括 `@vessel/*` 库包与插件包（含 `@vessel/mcp-client`、`@vessel/workflow`、`@vessel/evals`、`@vessel/feishu`）；**根 CLI 暂不发布到 npm，`npx vessel` 不可用**。
 - **不提供独立二进制**（ADR-006 继续有效）。
-- 发布流程会生成 `latest.json`（`version` / `channel` / `assets: {}`）。
+- 0.4 不生成 `latest.json`；未来发布时仍为 `version` / `channel` / `assets: {}`。
 - `vessel update --check` 已实现：读取 Release 的 `latest.json`，只提示版本与安装命令；**不下载、不自替换**。
 - 后台检查：交互 REPL 启动时每天最多一次；`update.autoCheck: false` 或 `VESSEL_NO_UPDATE_CHECK=1` 可关闭，失败静默。
 - 通道：稳定版 `latest`，预发布 `beta`（`--channel` 或 `VESSEL_CHANNEL`）。
@@ -225,11 +364,14 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 以下能力**尚未实现**，明确不在本期范围：
 
-- **workflow / evals / 多租户** —— 未开始。
+- **多租户** —— 未开始，留 0.5。
+- **workflow 可视化编辑器 / 跨机器编排** —— 未实现；0.4 只做本机声明式编排，workflow 定义是 YAML/JSON 文件。
+- **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；0.4 只做文本、单 chat 单 session。
+- **微信（公众号 / 企业微信）** —— 0.5 评估；个人微信无官方 API，不做。
 - **跨机器调度 / 跨节点 team** —— 未实现；0.3 的 durable 只做本机，team 的跨进程仍限本机 loopback。
 - **npm CLI** —— 只发库包与插件包，根 CLI 未发布，`npx vessel` 不可用。
 - **独立二进制 / 自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
-- **0.1.0 / 0.2 / 0.3.0 发布** —— 均未发布；发布决定在 1。
+- **0.1.0 / 0.2 / 0.3.0 / 0.4.0 发布** —— 均未发布；0.4 只干跑；发布决定在 1。
 
 ## 文档索引
 

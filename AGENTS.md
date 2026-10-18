@@ -13,6 +13,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个�
 - **状态**：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/ADR.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
 - **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
+- **0.4 状态**：workflow、evals、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，未随版本发布）；三个能力全部是插件、默认关闭；0.4 只做发布干跑，不 tag / publish / 合并 `main`。决策边界见 ADR-042 / 043 / 044 / 045。
 
 ## 代码风格与硬规矩
 
@@ -21,6 +22,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个�
 - **core 保持小**。core 里不出现业务概念（skills、记忆、资产、文档、代码审查、OCR、PDF、图片、向量、浏览器、IAM、计费）。
 - 不新增第二套扩展机制——一切走 `Plugin` + `PluginHost`。
 - 不新增事件名常量/枚举。事件名一律是开放字符串字面量，命名空间 `<domain>.<action>.<event>`。
+- workflow / evals / feishu 只做插件，不进 core；core 的 `dependencies` 保持为空。workflow 不注册模型工具；evals 默认离线，真实 provider 需 `config.evals.allowNetwork` + CLI `--allow-network` 双门控；飞书凭据只走 env/config，`app_secret` 永不打印。
+- 0.4 发布只做干跑：`scripts/release-dry-run.ts`；不 tag、不 publish、不合并 `main`。
 - 全异步。不写 sync-in-async（阻塞调用混进异步路径）。
 - 不留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
@@ -33,7 +36,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个�
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.3` → `0.3.0-<role>`（`release/0.1` / `release/0.2` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。
+- 版本线：`main` → `release/0.4` → `0.4.0-<role>`（`release/0.1` / `release/0.2` / `release/0.3` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。0.4 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -47,10 +50,15 @@ bun run src/cli.ts --version                    # 版本（根 package.json）
 bun run src/cli.ts --tools                      # 当前配置下的工具（无 Key）
 bun run src/cli.ts update --check               # 检查新版本（只提示）
 bun run demo                                    # 无 Key 跑核心示例
+bun run src/cli.ts workflow list                # workflow run 列表（controls-only 可用）
+bun run src/cli.ts eval smoke                   # eval suite（默认离线）
+bun run src/cli.ts --feishu                     # 前台运行飞书渠道（需 enabled + 凭据）
 bun run scripts/version.ts --check              # 版本一致性 + CHANGELOG 校验
+bun run scripts/release-dry-run.ts              # 发布干跑（不 tag / 不 publish）
 ```
 
 改完代码，这三个必须过：`bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .`。
+收口还要求 `check-deps` / `smoke-subpaths` / `check-docs` / `version --check` / `release-dry-run`。
 CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[docs/operations/RELEASE.md](docs/operations/RELEASE.md)。发布由 tag `v*` 触发，只有 1 打 tag；N 不发布、不合并。
 
 ## 分层与能力准入
@@ -80,7 +88,9 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把 MCP 塞进 core（它是插件，工具只经 `PluginHost`）；durable 只做 core 的 `RunStore` port，不引入 workflow 引擎；workflow / evals / 多租户仍是非目标；team 仍默认 off、显式 opt-in。
+- 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户仍是非目标；team 仍默认 off、显式 opt-in。
+- 别在日志 / 事件 / 报告里输出飞书的 `app_secret` 或完整 `app_id`；只允许前 4 位 + `***`。
+- 别在 workflow 的 `type: tool` 步骤里期待 guardrail / hook——它直接调 handler；需要 guardrail 用 `type: agent`。
 - 别默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环不得匿名。
 - 别给 MCP 工具设默认 `allow`；除非在 `auto_approve_tools` 里按原始工具名精确列出。
 - 别让 Host 与成员 runtime 同时写同一个 run 的 checkpoint（唯一写者是 `AgentRuntime`，Host store 优先）。
