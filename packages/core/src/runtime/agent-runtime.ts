@@ -101,7 +101,7 @@ export class AgentRuntime {
     // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
     this.permissionPolicy = new PermissionPolicy(this.events, opts.permission, opts.tenantId);
     this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
-    this.hooks = new HookRunner(this.pluginHost);
+    this.hooks = new HookRunner(this.pluginHost, this.events, opts.tenantId);
   }
 
   /** 创建并异步初始化 AgentRuntime。用此替代 new AgentRuntime()。 */
@@ -122,9 +122,31 @@ export class AgentRuntime {
    * @param plugin 插件
    */
   private async installPlugin(plugin: Plugin): Promise<void> {
-    const result = plugin.install(this.pluginHost);
-    if (result instanceof Promise) {
-      await result; // 如果失败，让 async 构造函数抛出
+    try {
+      const result = plugin.install(this.pluginHost);
+      if (result instanceof Promise) {
+        await result; // 如果失败，让 async 构造函数抛出
+      }
+      this.publishEvent({
+        type: 'plugin.loaded',
+        run_id: 'plugin',
+        data: {
+          name: plugin.name,
+          ...(plugin.version !== undefined ? { version: plugin.version } : {}),
+        },
+        ts: Date.now(),
+      });
+    } catch (error) {
+      this.publishEvent({
+        type: 'plugin.failed',
+        run_id: 'plugin',
+        data: {
+          name: plugin.name,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        ts: Date.now(),
+      });
+      throw error;
     }
   }
 
@@ -237,9 +259,7 @@ export class AgentRuntime {
 
       // 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不再丢历史（C-02）
       runState.messages = this.context.messages;
-      if (this.session) {
-        await this.session.save(runState);
-      }
+      await this.saveSession(runState);
 
       // durable checkpoint：run 开始（用户消息已写入上下文）
       await this.writeCheckpoint(runId, currentSessionId, 'running');
@@ -259,9 +279,7 @@ export class AgentRuntime {
       runState.messages = this.context.messages;
 
       // 保存最终状态
-      if (this.session) {
-        await this.session.save(runState);
-      }
+      await this.saveSession(runState);
 
       // durable checkpoint：完成
       await this.writeCheckpoint(runId, currentSessionId, 'completed');
@@ -299,9 +317,7 @@ export class AgentRuntime {
       });
 
       // 保存失败状态
-      if (this.session) {
-        await this.session.save(runState);
-      }
+      await this.saveSession(runState);
 
       // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
       await this.writeCheckpoint(
@@ -312,15 +328,17 @@ export class AgentRuntime {
         true,
       );
 
-      // 发布 Run 失败事件
+      // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
+      const cancelled = this.isUserCancelled(signal);
       this.publishEvent({
-        type: 'run.failed',
+        type: cancelled ? 'run.cancelled' : 'run.failed',
         run_id: runId,
         data: {
           run_id: runId,
           session_id: currentSessionId,
           error: runState.error,
           duration_ms: Date.now() - startTime,
+          ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
         },
         ts: Date.now(),
       });
@@ -390,7 +408,7 @@ export class AgentRuntime {
           ? { tenant_id: this.tenantId ?? checkpoint.tenant_id }
           : {}),
       };
-      if (this.session) await this.session.save(runState);
+      await this.saveSession(runState);
 
       // 标记已被接管（唯一写者：AgentRuntime）
       await this.writeCheckpoint(runId, sessionId, 'running');
@@ -419,7 +437,7 @@ export class AgentRuntime {
           total_cost: this.stats.totalCost,
         };
         runState.messages = this.context.messages;
-        if (this.session) await this.session.save(runState);
+        await this.saveSession(runState);
         await this.writeCheckpoint(runId, sessionId, 'completed');
 
         this.publishEvent({
@@ -450,7 +468,7 @@ export class AgentRuntime {
           phase: 'run',
         });
 
-        if (this.session) await this.session.save(runState);
+        await this.saveSession(runState);
         await this.writeCheckpoint(
           runId,
           sessionId,
@@ -1066,6 +1084,30 @@ export class AgentRuntime {
       },
       ts: Date.now(),
     });
+  }
+
+  /** 保存 session 快照，并发布 `session.saved` */
+  private async saveSession(runState: RunState): Promise<void> {
+    if (!this.session) return;
+    await this.session.save(runState);
+    this.publishEvent({
+      type: 'session.saved',
+      run_id: runState.run_id,
+      data: {
+        run_id: runState.run_id,
+        session_id: runState.session_id,
+        status: runState.status,
+        message_count: runState.messages.length,
+      },
+      ts: Date.now(),
+    });
+  }
+
+  /** 用户显式取消（不是 Host 关闭/中断） */
+  private isUserCancelled(signal?: AbortSignal): boolean {
+    if (!signal?.aborted) return false;
+    const reason = signal.reason;
+    return !(typeof reason === 'string' && RUN_INTERRUPT_REASONS.has(reason));
   }
 
   /** AbortSignal 的 checkpoint 终态：Host 关闭 → interrupted，用户取消 → cancelled */

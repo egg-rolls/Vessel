@@ -42,6 +42,9 @@ export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 export {
   type AtomicWriteOptions,
   atomicWrite,
+  type DeleteSessionDataOptions,
+  type DeleteSessionDataResult,
+  deleteSessionData,
   FileRunStore,
   FileSessionBackend,
   MemoryRunStore,
@@ -49,6 +52,7 @@ export {
   type PruneRunsOptions,
   type PruneRunsResult,
   pruneRuns,
+  SessionDeleteConflictError,
   SQLiteSessionBackend,
 } from './session/index.js';
 // 多租户（0.5 F4：tenant 解析与目录布局）
