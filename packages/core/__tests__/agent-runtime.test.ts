@@ -896,8 +896,9 @@ describe('真实 token 语义（C-04）', () => {
 });
 
 describe('中断与限额（C-09）', () => {
-  it('AbortSignal 用户取消：发 run.cancelled（不发 run.failed）、触发 OnError', async () => {
+  it('AbortSignal 用户取消：发 run.cancelled、RunState 写 cancelled、触发 OnError', async () => {
     const events = new MemoryEventStream();
+    const session = new MemorySessionBackend();
     let onError = 0;
     const runtime = await AgentRuntime.create({
       provider: {
@@ -909,6 +910,7 @@ describe('中断与限额（C-09）', () => {
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
       termination: { maxIterations: 10 },
+      session,
       plugins: [
         {
           name: 'on-error',
@@ -933,7 +935,32 @@ describe('中断与限额（C-09）', () => {
     );
     expect(events.getHistory().some((e) => e.type === 'run.cancelled')).toBe(true);
     expect(events.getHistory().some((e) => e.type === 'run.failed')).toBe(false);
+    expect((await session.load('default'))?.status).toBe('cancelled');
     expect(onError).toBe(1);
+  });
+
+  it('Host 中断 reason：RunState 保持 failed（与 checkpoint interrupted 区分）', async () => {
+    const session = new MemorySessionBackend();
+    const runtime = await AgentRuntime.create({
+      provider: {
+        chat: async () => ({ content: 'never', finish_reason: 'stop' as const }),
+      },
+      model: 'test-model',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      session,
+    });
+
+    const controller = new AbortController();
+    controller.abort('agent closed');
+
+    await expect(runtime.run('hi', 's-interrupt', { signal: controller.signal })).rejects.toThrow(
+      'agent closed',
+    );
+    expect((await session.load('s-interrupt'))?.status).toBe('failed');
   });
 
   it('maxIterations 到达后终止（C-09）', async () => {

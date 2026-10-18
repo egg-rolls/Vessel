@@ -6,7 +6,11 @@
 export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.js';
 export { RunResumeError } from '../types/run-store.js';
 export type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
-export { type AtomicWriteOptions, atomicWrite } from './atomic-write.js';
+export {
+  AtomicWriteError,
+  type AtomicWriteOptions,
+  atomicWrite,
+} from './atomic-write.js';
 export {
   type DeleteSessionDataOptions,
   type DeleteSessionDataResult,
@@ -25,4 +29,7 @@ export {
   MemorySessionBackend,
   toSessionInfo,
 } from './session-backend.js';
-export { SQLiteSessionBackend } from './sqlite-backend.js';
+export {
+  SQLiteSessionBackend,
+  type SQLiteSessionBackendOptions,
+} from './sqlite-backend.js';

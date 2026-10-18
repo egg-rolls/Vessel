@@ -1,6 +1,7 @@
+import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
@@ -183,5 +184,117 @@ describe('tenant isolation in file/sqlite backends (0.5 E4)', () => {
 
   it('toSessionInfo carries tenant_id', () => {
     expect(toSessionInfo({ ...runState('s1'), tenant_id: 'acme' }).tenant_id).toBe('acme');
+  });
+});
+
+describe('SQLite tenant isolation (0.5 E4)', () => {
+  async function dbPath(): Promise<string> {
+    const dir = tempDir();
+    await mkdir(dir, { recursive: true });
+    return join(dir, 'sessions.db');
+  }
+
+  it('isolates load/list/listRich per tenant in one database', async () => {
+    const path = await dbPath();
+
+    const acme = new SQLiteSessionBackend(path, { tenantId: 'acme' });
+    await acme.save(runState('s-a'));
+    acme.close();
+
+    const other = new SQLiteSessionBackend(path, { tenantId: 'other' });
+    await other.save(runState('s-b'));
+
+    expect(await other.load('s-a')).toBeNull();
+    expect(await other.list()).toEqual(['s-b']);
+    expect((await other.listRich()).map((row) => row.session_id)).toEqual(['s-b']);
+    expect((await other.load('s-b'))?.tenant_id).toBe('other');
+    other.close();
+
+    const acmeAgain = new SQLiteSessionBackend(path, { tenantId: 'acme' });
+    expect((await acmeAgain.load('s-a'))?.tenant_id).toBe('acme');
+    expect(await acmeAgain.load('s-b')).toBeNull();
+    expect(await acmeAgain.list()).toEqual(['s-a']);
+    expect((await acmeAgain.listRich()).map((row) => row.session_id)).toEqual(['s-a']);
+    acmeAgain.close();
+  });
+
+  it('treats a missing tenant_id as default', async () => {
+    const path = await dbPath();
+
+    const unscoped = new SQLiteSessionBackend(path);
+    await unscoped.save(runState('s-default'));
+    unscoped.close();
+
+    const def = new SQLiteSessionBackend(path, { tenantId: 'default' });
+    expect((await def.load('s-default'))?.session_id).toBe('s-default');
+    def.close();
+
+    const acme = new SQLiteSessionBackend(path, { tenantId: 'acme' });
+    expect(await acme.load('s-default')).toBeNull();
+    expect(await acme.list()).toEqual([]);
+    expect(await acme.listRich()).toEqual([]);
+    acme.close();
+  });
+
+  it('stamps missing tenant_id and rejects a foreign tenant_id on save', async () => {
+    const path = await dbPath();
+    const acme = new SQLiteSessionBackend(path, { tenantId: 'acme' });
+
+    await acme.save(runState('s1'));
+    expect((await acme.load('s1'))?.tenant_id).toBe('acme');
+    await expect(acme.save({ ...runState('s1'), tenant_id: 'other' })).rejects.toThrow(
+      /tenant_mismatch/,
+    );
+    acme.close();
+  });
+
+  it('does not overwrite or delete another tenant row with the same session id', async () => {
+    const path = await dbPath();
+
+    const other = new SQLiteSessionBackend(path, { tenantId: 'other' });
+    await other.save(runState('s-b'));
+    other.close();
+
+    const acme = new SQLiteSessionBackend(path, { tenantId: 'acme' });
+    await expect(acme.save(runState('s-b'))).rejects.toThrow(/tenant_mismatch/);
+    await acme.delete('s-b');
+    acme.close();
+
+    const otherAgain = new SQLiteSessionBackend(path, { tenantId: 'other' });
+    expect(await otherAgain.load('s-b')).not.toBeNull();
+    otherAgain.close();
+  });
+
+  it('reads an old database after adding the tenant_id column', async () => {
+    const dir = tempDir();
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'old.db');
+
+    const legacy = new Database(path);
+    legacy.run(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        messages TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        status TEXT NOT NULL,
+        usage TEXT,
+        error TEXT
+      )
+    `);
+    legacy.run(
+      'INSERT INTO sessions (session_id, run_id, messages, started_at, status) VALUES (?, ?, ?, ?, ?)',
+      ['old', 'r1', '[{"role":"user","content":"hi"}]', 1, 'completed'],
+    );
+    legacy.close();
+
+    const def = new SQLiteSessionBackend(path, { tenantId: 'default' });
+    expect((await def.load('old'))?.session_id).toBe('old');
+    def.close();
+
+    const acme = new SQLiteSessionBackend(path, { tenantId: 'acme' });
+    expect(await acme.load('old')).toBeNull();
+    acme.close();
   });
 });

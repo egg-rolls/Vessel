@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { atomicWrite } from '../src/index';
+import { AtomicWriteError, atomicWrite } from '../src/index';
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 const roots: string[] = [];
 
@@ -51,27 +55,45 @@ describe('atomicWrite (0.5 E3)', () => {
     expect(await readFile(file, 'utf8')).toBe('x');
   });
 
-  it('serializes concurrent writes to valid content', async () => {
+  it('serializes concurrent writes and never exposes partial JSON', async () => {
     const dir = tempDir();
     await mkdir(dir, { recursive: true });
     const file = join(dir, 'state.json');
-    const payloads = Array.from({ length: 20 }, (_, i) => JSON.stringify({ i }));
+    await atomicWrite(file, JSON.stringify({ i: -1 }));
 
+    const failures: unknown[] = [];
+    let reading = true;
+    const reader = (async () => {
+      while (reading) {
+        try {
+          JSON.parse(await readFile(file, 'utf8'));
+        } catch (error) {
+          failures.push(error);
+        }
+        await delay(1);
+      }
+    })();
+
+    const payloads = Array.from({ length: 30 }, (_, i) => JSON.stringify({ i }));
     await Promise.all(payloads.map((payload) => atomicWrite(file, payload)));
+    reading = false;
+    await reader;
 
+    expect(failures).toEqual([]);
     const parsed = JSON.parse(await readFile(file, 'utf8')) as { i: number };
     expect(parsed.i).toBeGreaterThanOrEqual(0);
-    expect(parsed.i).toBeLessThan(20);
+    expect(parsed.i).toBeLessThan(30);
     expect(await readdir(dir)).toEqual(['state.json']);
   });
 
-  it('cleans up the temp file when the final path is invalid', async () => {
+  it('rejects with AtomicWriteError and leaves no temp when rename cannot succeed', async () => {
     const dir = tempDir();
     await mkdir(join(dir, 'target.json'), { recursive: true });
 
-    await expect(atomicWrite(join(dir, 'target.json'), 'x', { retries: 1 })).rejects.toBeDefined();
+    const error = await atomicWrite(join(dir, 'target.json'), 'x', { retries: 1 }).catch((e) => e);
 
-    const entries = await readdir(dir);
-    expect(entries).toEqual(['target.json']);
+    expect(error).toBeInstanceOf(AtomicWriteError);
+    expect((error as AtomicWriteError).code).toBe('atomic_write_failed');
+    expect(await readdir(dir)).toEqual(['target.json']);
   });
 });
