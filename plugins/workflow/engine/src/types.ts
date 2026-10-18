@@ -35,6 +35,8 @@ export interface WorkflowRunSummary {
   started_at: number;
   updated_at: number;
   error?: string;
+  /** 0.5：可选；缺失视为 default。 */
+  tenant_id?: string;
 }
 
 export interface WorkflowStepSummary {
@@ -157,6 +159,11 @@ export interface WorkflowEngineOptions {
   pluginHost: PluginHost;
   config: ResolvedWorkflowConfig;
   events: EventStream;
+  /**
+   * 0.5：tenant 作用域（可选）。缺省 = 0.4 兼容，不写 tenant_id、可读全部旧 record。
+   * 路径由 asm 解析；引擎不追加 tenants/<id>。
+   */
+  tenantId?: string;
   /** 测试注入。 */
   fs?: WorkflowFs;
 }
@@ -195,4 +202,6 @@ export interface WorkflowRunFile {
   updated_at: number;
   finished_at?: number;
   error?: string;
+  /** 0.5：可选；缺失视为 default（旧 record 可读）。 */
+  tenant_id?: string;
 }

@@ -55,14 +55,21 @@ function validateConfig(config: McpServerConfig): string | undefined {
 }
 
 export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
+  const tenantId = normalizeTenantId(options.tenantId);
   const events = options.events;
-  const entries: ServerEntry[] = buildEntries(options.servers ?? [], events);
+  const entries: ServerEntry[] = buildEntries(options.servers ?? [], events, tenantId);
   let host: PluginHost | undefined;
   let installed = false;
   let closePromise: Promise<void> | undefined;
 
   function publish(type: string, data: Record<string, unknown>): void {
-    events?.publish({ type, run_id: 'mcp', data, ts: Date.now() });
+    events?.publish({
+      type,
+      run_id: 'mcp',
+      data,
+      ts: Date.now(),
+      ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
+    });
   }
 
   function registerTools(pluginHost: PluginHost, entry: ServerEntry): void {
@@ -193,7 +200,7 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     const previous = entry.connection;
     if (previous) await previous.close().catch(() => {});
 
-    const connection = new McpServerConnection(entry.config, events);
+    const connection = new McpServerConnection(entry.config, events, tenantId);
     entry.connection = connection;
     await connection.connect();
     if (connection.state === 'connected') {
@@ -222,8 +229,20 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
   };
 }
 
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function normalizeTenantId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!TENANT_ID_RE.test(value)) throw new Error(`invalid tenant id "${value}"`);
+  return value;
+}
+
 /** 预检配置并创建连接对象；重名只保留第一个，后续标记失败 */
-function buildEntries(servers: McpServerConfig[], events?: EventStream): ServerEntry[] {
+function buildEntries(
+  servers: McpServerConfig[],
+  events?: EventStream,
+  tenantId?: string,
+): ServerEntry[] {
   const entries: ServerEntry[] = [];
   const seen = new Set<string>();
 
@@ -237,7 +256,7 @@ function buildEntries(servers: McpServerConfig[], events?: EventStream): ServerE
     } else {
       seen.add(config.name);
       if (config.enabled !== false) {
-        entry.connection = new McpServerConnection(config, events);
+        entry.connection = new McpServerConnection(config, events, tenantId);
       }
     }
     entries.push(entry);

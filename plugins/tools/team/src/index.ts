@@ -29,6 +29,14 @@ export * from './host.js';
 /** 团队工具前缀：不给成员复制，防止成员继续 spawn/发消息 */
 const TEAM_TOOL_PREFIX = 'team_';
 
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function normalizeTenantId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!TENANT_ID_RE.test(value)) throw new Error(`invalid tenant id "${value}"`);
+  return value;
+}
+
 /** 插件配置 */
 export interface TeamPluginOptions {
   /** 成员 provider 工厂（每次 spawn 调用一次） */
@@ -51,6 +59,8 @@ export interface TeamPluginOptions {
   memberLimits?: UsageLimits;
   /** 成员终止策略 */
   memberTermination?: TerminationPolicy;
+  /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
+  tenantId?: string;
 }
 
 /** 解析后的配置 */
@@ -259,6 +269,7 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
   }
 
   const ownerId = options.ownerId ?? 'owner';
+  const tenantId = normalizeTenantId(options.tenantId);
   // 跨进程时本地成员的结果需要经 routing 投递（远端用 transport，本机用 local）
   const holder: { routing?: RoutingTeamHost } = {};
   const deliverResult = options.transport
@@ -269,6 +280,7 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
     events: options.events,
     ownsHost: false,
     ...(deliverResult ? { deliverResult } : {}),
+    ...(tenantId !== undefined ? { tenantId } : {}),
   });
 
   let port: TeamHostPort = localPort;

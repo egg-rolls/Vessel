@@ -44,6 +44,8 @@ export interface ChatMemberRunnerOptions {
   maxConcurrency?: number;
   maxQueueSize?: number;
   perAgentSerial?: boolean;
+  /** 0.5：转发专用 Host 事件时补齐 tenant_id（缺省不写）。 */
+  tenantId?: string;
 }
 
 export class ChatMemberRunner {
@@ -82,7 +84,11 @@ export class ChatMemberRunner {
 
     // 把专用 Host 的聚合事件转发到注入的 events（metrics / TUI / gateway）。
     this.unsubscribe = this.host.events.subscribe((event) => {
-      options.events.publish(event);
+      options.events.publish(
+        options.tenantId !== undefined && event.tenant_id === undefined
+          ? { ...event, tenant_id: options.tenantId }
+          : event,
+      );
     });
   }
 

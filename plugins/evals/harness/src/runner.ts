@@ -31,6 +31,31 @@ import type {
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MODEL = 'eval-mock';
 const NETWORK_MODEL = 'eval-network';
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function normalizeTenantId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!TENANT_ID_RE.test(value)) throw invalid(`invalid tenant id "${value}"`);
+  return value;
+}
+
+function publishEvalEvent(
+  events: EventStream | undefined,
+  tenantId: string | undefined,
+  type: string,
+  suite: string,
+  data: Record<string, unknown>,
+  ts: number,
+): void {
+  if (!events) return;
+  events.publish({
+    type,
+    run_id: `eval:${suite}`,
+    data,
+    ts,
+    ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
+  });
+}
 
 interface RuntimeBundle {
   runtime: RunnableAgent;
@@ -294,8 +319,20 @@ export async function runEvalSuite(
     );
   }
 
+  const tenantId = normalizeTenantId(options.tenantId);
   const now = options.now ?? Date.now;
   const startedAt = now();
+  publishEvalEvent(
+    options.events,
+    tenantId,
+    'eval.run.started',
+    suite.name,
+    {
+      network,
+      total: suite.cases.length,
+    },
+    startedAt,
+  );
   const filterTags = options.filterTags ?? [];
   const shared: SharedRuntime = {};
   const results: EvalCaseResult[] = [];
@@ -326,7 +363,24 @@ export async function runEvalSuite(
     errors: results.filter((result) => result.status === 'error').length,
     skipped: results.filter((result) => result.status === 'skipped').length,
     cases: results,
+    ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
   };
+  publishEvalEvent(
+    options.events,
+    tenantId,
+    'eval.run.completed',
+    suite.name,
+    {
+      network,
+      total: report.total,
+      passed: report.passed,
+      failed: report.failed,
+      errors: report.errors,
+      skipped: report.skipped,
+      duration_ms: report.duration_ms,
+    },
+    finishedAt,
+  );
 
   const timestamp = options.timestamp ?? reportTimestamp(new Date(finishedAt));
   const outPath =

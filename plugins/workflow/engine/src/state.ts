@@ -64,6 +64,7 @@ export function runSummary(file: WorkflowRunFile): WorkflowRunSummary {
     updated_at: file.updated_at,
   };
   if (file.error !== undefined) summary.error = file.error;
+  if (file.tenant_id !== undefined) summary.tenant_id = file.tenant_id;
   return summary;
 }
 

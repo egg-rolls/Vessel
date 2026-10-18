@@ -9,11 +9,13 @@ export function publishWorkflowEvent(
   type: string,
   workflowRunId: string,
   data: Record<string, unknown>,
+  tenantId?: string,
 ): void {
   events.publish({
     type,
     run_id: workflowRunId,
     data: { workflow_run_id: workflowRunId, ...data },
     ts: Date.now(),
+    ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
   });
 }
