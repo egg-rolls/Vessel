@@ -4,6 +4,7 @@ import { createWorkflowEngine } from '../src/engine.js';
 import {
   createCountingGuardrail,
   createCountingHook,
+  createFakeAgent,
   createPluginHost,
   makeConfig,
   makeTempWorkspace,
@@ -57,6 +58,8 @@ steps:
 
   const engine = createWorkflowEngine({
     pluginHost,
+    // 仅 tool step；注入 runtime 只为满足 start 的执行后端守卫。
+    runtime: createFakeAgent().agent,
     config: makeConfig(workspace.dir, workspace.runs),
     events: new MemoryEventStream(),
   });

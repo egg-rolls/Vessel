@@ -186,6 +186,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
     opts?: { inputs?: Record<string, string> },
   ): Promise<{ workflowRunId: string; done: Promise<WorkflowOutcome> }> {
     this.assertEnabled();
+    this.assertRunnable();
     const absolute = await resolveDefinitionPath(definitionPath, this.config.dir, this.fsOps);
     const definition = await loadWorkflowDefinition(absolute, this.fsOps);
     const inputs = normalizeInputs(opts?.inputs);
@@ -206,6 +207,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
     workflowRunId: string,
   ): Promise<{ workflowRunId: string; done: Promise<WorkflowOutcome> }> {
     this.assertEnabled();
+    this.assertRunnable();
     if (this.active.has(workflowRunId)) {
       throw new WorkflowError(
         'workflow_already_running',
@@ -309,6 +311,19 @@ class WorkflowEngineImpl implements WorkflowEngine {
   private assertEnabled(): void {
     if (!this.config.enabled) {
       throw new WorkflowError('workflow_disabled', 'workflow is disabled');
+    }
+  }
+
+  /**
+   * start/resume 需要执行后端；controls-only 实例仍可 list/get/cancel。
+   * Addendum D §13.1：无 host 且无 runtime 时稳定抛 workflow_disabled。
+   */
+  private assertRunnable(): void {
+    if (this.host === undefined && this.runtime === undefined) {
+      throw new WorkflowError(
+        'workflow_disabled',
+        'workflow start/resume requires a host or runtime',
+      );
     }
   }
 
