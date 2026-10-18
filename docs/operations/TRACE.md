@@ -115,7 +115,7 @@ POSIX 下文件权限 best-effort 0600；不是强制访问控制。需要更强
 - `--serve` 为每个 active tenant 构建独立 `EventStream`；runtime 事件先进入本 tenant 流，再桥接到 gateway 共享流（事件已带 `tenant_id`，供 SSE/WS 过滤）。
 - trace recorder 只订阅本 tenant 的流，写入 `<data_dir>/tenants/<tenant_id>/events`；metrics collector 同样按 tenant 隔离。
 - gateway 为每个 active tenant 持有 writer lock；启动失败回滚、shutdown 释放；冲突 `tenant_locked`；disabled / 未配置 tenant → `forbidden`。
-- **状态**：插件侧 tenant 行为已合入；asm 的 per-tenant 执行接线标 **in progress (0.5)**，落地后本文改为已实现。两 tenant 的 trace / events / metrics 互不可见是 qa 验收项。
+- **状态**：插件侧 tenant 行为与 web A-6.3 的 `trace.readEvents(filter, tenantId)` / `sessionData.deleteSessionData(sessionId, tenantId)` 已合入；asm 的 per-tenant 执行接线（独立 EventStream、trace 写入路由、writer lock）标 **in progress (0.5)**，落地后本文改为已实现。两 tenant 的 trace / events / metrics 互不可见是 qa 验收项。
 
 ## 11. 运维建议
 
