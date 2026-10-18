@@ -16,6 +16,11 @@ const SENSITIVE_KEY = /api[_-]?key|token|secret|password|authorization|app_secre
 const SECRET_STRING = /(^|\s)sk-[A-Za-z0-9_-]{4,}/;
 const MAX_DEPTH = 8;
 
+/** `app_id` / `appId` / `APP_ID` 归一化为 `appid` */
+function isAppIdKey(key: string): boolean {
+  return key.toLowerCase().replace(/_/g, '') === 'appid';
+}
+
 function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
   if (typeof value === 'string') {
     return SECRET_STRING.test(value) ? '***' : value;
@@ -36,7 +41,7 @@ function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unkn
       result[key] = typeof entry === 'number' || typeof entry === 'boolean' ? entry : '***';
       continue;
     }
-    if (key.toLowerCase() === 'app_id' && typeof entry === 'string') {
+    if (isAppIdKey(key) && typeof entry === 'string') {
       result[key] = `${entry.slice(0, 4)}***`;
       continue;
     }

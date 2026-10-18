@@ -124,7 +124,22 @@ vessel config show [--sources] [--json] [--tenant <id>]
 | `tenant overlay` 报禁止块 | 覆盖了 `data_dir` / `trace` / `serve` / `tenant` / `update` | 改到项目或用户层 |
 | token 401 | 已配置 token 但请求未带，或 token 不在 `serve.tokens` | 检查 `serve.tokens` / `serve.token` / `VESSEL_GATEWAY_TOKEN` |
 
-## 6. 示例：多租户部署
+## 6. 内置多租户执行（A-6，in progress (0.5)）
+
+`--serve` 模式为每个已配置且 `status: active` 的 tenant 构建独立执行面：
+
+```text
+config（tenant overlay）/ provider / session backend / run store / context /
+plugin host + plugins / trace recorder / metrics collector / redactor / sessionControl
+```
+
+- 每个 tenant 独立 `EventStream`；runtime 事件先进入该流，再桥接到 gateway 共享流（事件带 `tenant_id`）。
+- 每个 active tenant 持有自己的 writer lock；启动失败必须回滚已获取的锁，shutdown 全部释放；锁冲突返回 `tenant_locked`。
+- `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
+- 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
+- **状态**：ext 插件 tenant 行为已合入；asm 的 per-tenant 执行接线标 **in progress (0.5)**，落地后本文改为已实现。
+
+## 7. 示例：多租户部署
 
 ```yaml
 # ~/.vessel/config.yaml

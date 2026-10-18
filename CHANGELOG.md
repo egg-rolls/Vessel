@@ -3,6 +3,46 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [Unreleased]
+
+> 0.5 开发中；版本号在收口时由 1 统一 bump。0.5 仍只做发布干跑，不 tag、不 publish、不合并 `main`。
+
+### Added
+
+- **F1 文件优先存储**：默认 `session.backend: file`；tenant 目录布局（`sessions/` / `runs/` / `events/` / `tenant.json` / `.lock`）；原子写；单写者锁；`vessel migrate`（sqlite / file-v1 → file-v2，默认 dry-run、源只读、幂等）。
+- **F2 trace**：`TraceRecorder` / `FileTraceRecorder`、`RunEvent.seq` / `tenant_id`、`readTraceEvents`、`pruneTrace`、`rebuildMetrics`、`TraceRedactor`；默认 `full`，30 天 / 1000 runs / 1 GiB。
+- **F3 统一入口**：RPC 信封 v1、方法表 v1.1、capability manifest、`RpcClient`（local / http）、`--connect`；旧 REST 端点保留为兼容别名。
+- **F4 多租户**：`TenantContext`、tenant 解析、token → principal、存储 / 配置 / 工具 / 权限 / quota / trace / RPC 隔离；`serve.tokens` / `serve.admin_token`；`vessel tenant list|get|create|update`。
+- **F6 配置与密钥**：YAML 主配置、`config path|init|show [--sources]`、`_env` 间接引用、来源标注、密钥脱敏输出。
+- **ADR 多文件**：`docs/adr/ADR-001..050`，`docs/adr/README.md` 索引与编写约定，`docs/ADR.md` 保留为兼容 stub。
+- **门禁**：`check-docs` ADR 树校验；`check-rpc-methods`；`check-config-sources`；`check-trace`。
+
+### Changed
+
+- `session.backend` 默认 sqlite → file；`durable.path` 默认统一到 `<data_dir>/tenants/<tenant_id>/runs`。
+- 显式用户取消只发 `run.cancelled`（不再同时发 `run.failed`），`metrics.runs.cancelled` 首次可能非 0；0.4 的 cancel→failed 是历史行为。
+- trace 的 `seq` 由 recorder 落盘分配并持久化；内存事件可无 seq，消费方按 `(seq ?? ts)`。
+- `.env` 从推荐主配置降为部署覆盖；CLI/TUI 走 RPC 客户端。
+- ADR 从单文件迁移到 `docs/adr/`；`docs/ADR.md` 只作兼容入口。
+
+### Upgrade notes
+
+- 旧 sqlite / file-v1 数据不会自动迁移：检测到后只提示执行 `vessel migrate`。先 dry-run，再 `--apply`。
+- 显式 `session.storage_path` / `durable.path` 可以逃出 tenant，但启动时会 warn。
+- 旧 `.vessel/sessions.db`、`~/.vessel/runs` 不自动删除；验证新数据后再手工处理。
+- 配置优先级固定为 `CLI > env > tenant overlay > project > user > default`；项目 `vessel.yaml` 禁止密钥。
+
+### Known limitations
+
+- 不承诺多进程并发写同一 tenant；单写者锁是唯一保障。
+- `sessions.list` / `runs.list` 为 O(N)；0.5 上限单 tenant 5,000 sessions / 20,000 runs。
+- redactor 只降低泄漏面，不是合规保证；0.5 不脱敏 run checkpoint / eval 报告 / 飞书回复。
+- trace 队列溢出会写 `trace.overflow`，该 trace 标记为不完整。
+- `pruneTrace` 不删除 `running` / `interrupted` run；tenant 删除默认 disabled，0.5 无 `--purge`。
+- `--connect` 只连本机回环 gateway；**F5 跨机器远程在 0.6**。
+- 插件 tenant 行为已合入；`--serve` 每 tenant 独立执行面（runtime / PluginHost / session / trace / 锁）**in progress (0.5)**，等 asm 接线落地。
+- **微信（公众号 / 企业微信）不做**；0.5 不发布。
+
 ## [0.4.0] - 2026-10-18
 
 > 0.4 代码就绪，发布决定在 1；**0.4 只做发布干跑，不 tag、不 publish、不合并 `main`**。

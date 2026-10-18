@@ -55,6 +55,7 @@ import {
   type ToolInfo,
 } from './protocol.js';
 import {
+  buildCapabilityManifest,
   type CapabilityManifest,
   createRpcDispatcher,
   defineMethods,
@@ -179,8 +180,10 @@ export interface GatewayOptions {
   config?: ConfigGatewayOptionsLike;
   /** tenant registry / quota（asm 注入） */
   tenants?: TenantControlLike;
-  /** plugins.list 数据源 */
+  /** plugins.list 数据源（全局） */
   plugins?: () => Array<{ name: string; enabled: boolean }>;
+  /** 0.5 A-6.3：per-tenant plugins.list / capabilities.list；缺省回退 `plugins` */
+  pluginsFor?: (tenantId: string) => Array<{ name: string; enabled: boolean }>;
   /** metrics.reset / trace 重建 */
   metricsControl?: {
     reset?(tenantId?: string): void;
@@ -191,11 +194,14 @@ export interface GatewayOptions {
   /** trace 读取 / prune（core readTraceEvents / pruneTrace，由 asm 注入） */
   trace?: {
     prune?(options: Record<string, unknown>): Promise<unknown>;
-    readEvents?(filter: Record<string, unknown>): Promise<RunEvent[]>;
+    readEvents?(filter: Record<string, unknown>, tenantId?: string): Promise<RunEvent[]>;
   };
   /** core deleteSessionData，由 asm 注入 */
   sessionData?: {
-    deleteSessionData(sessionId: string): Promise<{
+    deleteSessionData(
+      sessionId: string,
+      tenantId?: string,
+    ): Promise<{
       sessions_deleted: number;
       runs_deleted: number;
       events_deleted: number;
@@ -899,7 +905,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     tenantId: string = defaultTenantId,
   ): Promise<{ sessions: unknown[] }> {
     const backend = sessionFor(tenantId);
-    if (!backend) throw new MethodError('no_session', 'No session backend configured');
+    if (!backend) {
+      // 非 default tenant 未注入 sessionFor → 明确的 forbidden；default 保持旧语义。
+      if (tenantId !== defaultTenantId) {
+        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
+      }
+      throw new MethodError('no_session', 'No session backend configured');
+    }
     return { sessions: await backend.listRich() };
   }
 
@@ -1019,7 +1031,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       name: 'capabilities.list',
       permission: 'read',
       params_schema: { type: 'object' },
-      handler: () => manifest(),
+      handler: (_params, ctx) =>
+        buildCapabilityManifest({
+          version: opts.version ?? '0.0.0',
+          table: methodTable,
+          tools: toolDescriptionsForTenant(ctx.tenantId),
+          plugins: pluginsForTenant(ctx.tenantId),
+        }),
     },
     {
       name: 'config.get',
@@ -1083,12 +1101,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
         required: ['session_id'],
         properties: { session_id: { type: 'string', minLength: 1 } },
       },
-      handler: async (params) => {
+      handler: async (params, ctx) => {
         if (!opts.sessionData) {
           throw new RpcError('internal', 'deleteSessionData is not configured');
         }
         try {
-          return await opts.sessionData.deleteSessionData(stringParam(params, 'session_id'));
+          return await opts.sessionData.deleteSessionData(
+            stringParam(params, 'session_id'),
+            ctx.tenantId,
+          );
         } catch (error) {
           mapTenantError(error);
         }
@@ -1273,7 +1294,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           if (params[key] !== undefined) filter[key] = params[key];
         }
         try {
-          const events = await opts.trace.readEvents(filter);
+          const events = await opts.trace.readEvents(filter, ctx.tenantId);
           return {
             events: events.filter((event) => eventVisible(event, ctx.tenantId, ctx.allTenants)),
           };
@@ -1324,7 +1345,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       name: 'plugins.list',
       permission: 'read',
       params_schema: { type: 'object' },
-      handler: () => ({ plugins: opts.plugins?.() ?? [] }),
+      handler: (_params, ctx) => ({ plugins: pluginsForTenant(ctx.tenantId) }),
     },
     {
       name: 'metrics.get',
@@ -1767,17 +1788,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
     makeContext: makeMethodContext,
     version: opts.version,
     describe: () => ({
-      tools: (() => {
-        try {
-          return listTools().map((tool) => ({
-            name: tool.name,
-            ...(tool.description ? { description: tool.description } : {}),
-          }));
-        } catch {
-          return [];
-        }
-      })(),
-      plugins: opts.plugins?.() ?? [],
+      // gateway.manifest() 是默认 tenant 的兼容入口（asm local dispatcher 在用）
+      tools: toolDescriptionsForTenant(defaultTenantId),
+      plugins: pluginsForTenant(defaultTenantId),
     }),
   });
   let capabilityManifest: CapabilityManifest = dispatcher.manifest();
@@ -2022,10 +2035,34 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return opts.pluginHostFor?.(tenantId);
   }
 
+  /** A-6.3：capabilities.list 的 tools；未注入 per-tenant 时回退全局 host */
+  function toolDescriptionsForTenant(
+    tenantId: string,
+  ): Array<{ name: string; description?: string }> {
+    const host = pluginHostFor(tenantId) ?? pluginHost();
+    try {
+      return (host?.listTools() ?? []).map((tool) => ({
+        name: tool.name,
+        ...(tool.description ? { description: tool.description } : {}),
+      }));
+    } catch {
+      return [];
+    }
+  }
+
+  /** A-6.3：per-tenant plugins；缺省回退全局 `plugins` */
+  function pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }> {
+    return opts.pluginsFor?.(tenantId) ?? opts.plugins?.() ?? [];
+  }
+
   function requireRuntime(tenantId: string): RunnableAgent {
     const resolved = runtimeFor(tenantId);
     if (!resolved) {
-      throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
+      // 非 default tenant 未注入 runtimeFor → forbidden；default 保持旧码。
+      if (tenantId !== defaultTenantId) {
+        throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
+      }
+      throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
     }
     return resolved;
   }
@@ -2033,7 +2070,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function requireSession(tenantId: string): SessionBackend {
     const resolved = sessionFor(tenantId);
     if (!resolved) {
-      throw new RpcError('not_found', `Tenant session backend is not configured: ${tenantId}`);
+      if (tenantId !== defaultTenantId) {
+        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
+      }
+      throw new RpcError('not_found', 'No session backend configured');
     }
     return resolved;
   }
@@ -3062,6 +3102,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       'http',
     );
     if (response.ok) return response.result;
+    // 0.4 兼容：default tenant 未配置 session backend 时旧路径返回 invalid_request。
+    if (
+      response.error.code === 'internal' &&
+      response.error.message === 'No session backend configured'
+    ) {
+      throw new LegacyRpcError('invalid_request', response.error.message);
+    }
     const details = response.error.details as { legacy_code?: unknown } | undefined;
     const legacy =
       details && typeof details.legacy_code === 'string'

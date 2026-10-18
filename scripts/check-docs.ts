@@ -408,6 +408,19 @@ async function checkNotImplementedMarkers(root: string, issues: DocIssue[]): Pro
       });
     }
   }
+
+  const changelogPath = join(root, 'CHANGELOG.md');
+  if (existsSync(changelogPath)) {
+    const changelog = await readFile(changelogPath, 'utf8');
+    const hasReleaseSection = /^## \[(?:Unreleased|0\.5\.0)\]/m.test(changelog);
+    if (hasReleaseSection && !changelog.includes('Known limitations')) {
+      issues.push({
+        file: 'CHANGELOG.md',
+        line: 0,
+        message: '0.5 / Unreleased 段落必须包含 Known limitations',
+      });
+    }
+  }
 }
 
 async function checkLegacyAdrLinks(root: string, issues: DocIssue[]): Promise<void> {

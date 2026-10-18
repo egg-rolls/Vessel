@@ -63,6 +63,9 @@ jobs:
       - name: Check docs consistency
         run: bun run scripts/check-docs.ts
 
+      - name: Check RPC method table
+        run: bun run scripts/check-rpc-methods.ts
+
       - name: Check version consistency
         run: bun run scripts/version.ts --check
 
@@ -72,7 +75,7 @@ jobs:
   offline-integration:
     name: Offline Integration
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
 
     steps:
       - name: Checkout code
@@ -113,6 +116,12 @@ jobs:
       # Broad directory keeps this stable while core names the new test files.
       - name: Core observability and stability tests
         run: bun test packages/core
+
+      - name: Config sources matrix
+        run: bun run scripts/check-config-sources.ts
+
+      - name: Trace smoke
+        run: bun run scripts/check-trace.ts
 
   # ── 发布干跑：PR + release/**（0.4，不发布、不上传）──
   release-dry-run:
