@@ -301,8 +301,9 @@ export class AgentRuntime {
 
       return response;
     } catch (error) {
-      // 更新 Run 状态为失败
-      runState.status = 'failed';
+      // 用户显式取消 → cancelled；Host 中断/普通错误 → failed（与事件口径一致）
+      const cancelled = this.isUserCancelled(signal);
+      runState.status = cancelled ? 'cancelled' : 'failed';
       runState.completed_at = Date.now();
       runState.error = error instanceof Error ? error.message : String(error);
       // 失败也保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）
@@ -329,7 +330,6 @@ export class AgentRuntime {
       );
 
       // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
-      const cancelled = this.isUserCancelled(signal);
       this.publishEvent({
         type: cancelled ? 'run.cancelled' : 'run.failed',
         run_id: runId,

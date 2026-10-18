@@ -46,6 +46,7 @@ export {
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 // 会话后端
 export {
+  AtomicWriteError,
   type AtomicWriteOptions,
   atomicWrite,
   type DeleteSessionDataOptions,
