@@ -96,6 +96,7 @@ function errorText(error: unknown): string {
 export class CoreHostAdapter implements TeamHostPort {
   private readonly handles = new Map<string, CoreAgentHandle>();
   private readonly legacyEvents?: EventStream;
+  private readonly tenantId?: string;
   /** 是否拥有 host 的生命周期：注入的共享 Host 不能被插件关闭 */
   private readonly ownsHost: boolean;
   /** 结果投递钩子：跨进程路由时替换默认的本地 Host.send */
@@ -107,11 +108,13 @@ export class CoreHostAdapter implements TeamHostPort {
       events?: EventStream;
       ownsHost?: boolean;
       deliverResult?: (message: TeamMessage) => Promise<void>;
+      tenantId?: string;
     } = {},
   ) {
     this.legacyEvents = options.events;
     this.ownsHost = options.ownsHost ?? false;
     this.deliverResultHook = options.deliverResult;
+    if (options.tenantId !== undefined) this.tenantId = options.tenantId;
   }
 
   async spawn(spec: AgentSpec): Promise<AgentStatus> {
@@ -277,7 +280,13 @@ export class CoreHostAdapter implements TeamHostPort {
         : typeof data.memberId === 'string'
           ? data.memberId
           : 'team';
-    const event = { type, run_id: runId, data, ts: Date.now() };
+    const event = {
+      type,
+      run_id: runId,
+      data,
+      ts: Date.now(),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
+    };
     this.host.events.publish(event);
     if (this.legacyEvents !== undefined && this.legacyEvents !== this.host.events) {
       this.legacyEvents.publish(event);

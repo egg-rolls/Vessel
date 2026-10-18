@@ -26,6 +26,7 @@ import type {
   LLMProvider,
   Plugin,
   PluginHost,
+  RunEvent,
   RunOptions,
   TerminationPolicy,
   ToolContext,
@@ -46,8 +47,14 @@ function zeroUsage(): Usage {
   return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 }
 
-/** run_id → 递归深度；由临时成员 run.started 事件填充，供嵌套 delegate 读取 */
-const depthByRunId = new Map<string, number>();
+/** 0.5 tenant id 校验（与 DECISION-010 §2.1 一致）。 */
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function normalizeTenantId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!TENANT_ID_RE.test(value)) throw new Error(`invalid tenant id "${value}"`);
+  return value;
+}
 
 /** 子 agent 权限模式 */
 export type DelegatePermissionMode = 'bridge' | 'allow' | 'deny';
@@ -74,6 +81,8 @@ export interface DelegateTaskOptions {
   runtimeHost?: CoreRuntimeHost;
   /** 专用 Host 的成员上限（默认 8）；注入 runtimeHost 时忽略 */
   maxConcurrentDelegates?: number;
+  /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
+  tenantId?: string;
 }
 
 /** 解析后的插件配置（内部使用） */
@@ -90,6 +99,10 @@ interface ResolvedConfig {
   maxConcurrentDelegates: number;
   /** 懒创建的专用 Host（插件实例内复用） */
   host?: CoreRuntimeHost;
+  /** 0.5：tenant 作用域（可选）。 */
+  tenantId?: string;
+  /** run_id → 递归深度；实例级（避免模块级可变状态跨 tenant 共享）。 */
+  depthByRunId: Map<string, number>;
 }
 
 /** 类型守卫：值是否为对象记录 */
@@ -138,6 +151,12 @@ function withDelegateId(delegateId: string, data: unknown): Record<string, unkno
   return { value: data, delegateId };
 }
 
+/** 重发事件时保留 seq/tenant_id；只补缺失的 tenant_id。 */
+function withTenant(event: RunEvent, tenantId: string | undefined): RunEvent {
+  if (tenantId === undefined || event.tenant_id !== undefined) return event;
+  return { ...event, tenant_id: tenantId };
+}
+
 /** 取插件实例的 Host：注入优先，否则懒创建专用 Host 并复用 */
 function resolveHost(config: ResolvedConfig): CoreRuntimeHost {
   if (config.runtimeHost) return config.runtimeHost;
@@ -161,6 +180,8 @@ interface ChildTaskConfig {
   delegateId: string;
   depth: number;
   signal?: AbortSignal;
+  tenantId?: string;
+  depthByRunId: Map<string, number>;
 }
 
 /**
@@ -183,41 +204,37 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
 
       if (event.type === 'run.started' && typeof data.run_id === 'string') {
         childRunId = data.run_id;
-        depthByRunId.set(data.run_id, config.depth + 1);
+        config.depthByRunId.set(data.run_id, config.depth + 1);
       }
 
       // P12：dedicated Host 时把生命周期事件原样转发；sameStream 时已存在
       if (event.type === 'agent.spawned' || event.type === 'agent.closed') {
         if (!sameStream) {
-          config.parentEvents.publish({
-            type: event.type,
-            run_id: event.run_id,
-            data,
-            ts: event.ts,
-          });
+          // 保留 seq/tenant_id，只补缺失的 tenant（A-4 §11.1）。
+          config.parentEvents.publish(withTenant(event, config.tenantId));
         }
         return;
       }
       // Host 自身的 agent.* 事件不重复转发；成员 runtime 事件走 subagent.*
       if (event.type.startsWith('agent.')) return;
 
-      // A6：无论是否同一个流，都保证父流能看到 subagent.* + delegateId
-      config.parentEvents.publish({
-        type: `subagent.${event.type}`,
-        run_id: event.run_id,
-        data: withDelegateId(config.delegateId, event.data),
-        ts: event.ts,
-      });
+      // A6：无论是否同一个流，都保证父流能看到 subagent.* + delegateId。
+      // 保留原 envelope 的 seq/tenant_id（A-4 §11.1）。
+      config.parentEvents.publish(
+        withTenant(
+          {
+            ...event,
+            type: `subagent.${event.type}`,
+            data: withDelegateId(config.delegateId, event.data),
+          },
+          config.tenantId,
+        ),
+      );
 
       // 交互桥：dedicated Host 时用原名再送一份；sameStream 时原名已在流里
       if (sameStream || config.permissionMode !== 'bridge') return;
       if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
-        config.parentEvents.publish({
-          type: event.type,
-          run_id: event.run_id,
-          data,
-          ts: event.ts,
-        });
+        config.parentEvents.publish(withTenant(event, config.tenantId));
       }
     }),
   );
@@ -260,7 +277,7 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
     await handle?.close().catch(() => {});
     for (const unsubscribe of unsubscribers) unsubscribe();
     // 只清理本次 run 的深度映射，避免并发 delegate 互删
-    if (childRunId !== undefined) depthByRunId.delete(childRunId);
+    if (childRunId !== undefined) config.depthByRunId.delete(childRunId);
   }
 }
 
@@ -281,7 +298,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
       required: ['task'],
     },
     handler: async (args: unknown, ctx: ToolContext) => {
-      const depth = depthByRunId.get(ctx.run_id) ?? 0;
+      const depth = config.depthByRunId.get(ctx.run_id) ?? 0;
       if (depth >= config.maxDepth) {
         return `Error: delegate depth exceeded (max ${config.maxDepth})`;
       }
@@ -301,6 +318,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
         run_id: ctx.run_id,
         data: { depth, delegateId, task, hasContext: context.length > 0 },
         ts: startedAt,
+        ...(config.tenantId !== undefined ? { tenant_id: config.tenantId } : {}),
       });
 
       const childHost = buildChildHost(host, config);
@@ -319,6 +337,8 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
           delegateId,
           depth,
           signal: ctx.signal,
+          ...(config.tenantId !== undefined ? { tenantId: config.tenantId } : {}),
+          depthByRunId: config.depthByRunId,
         });
         ctx.events.publish({
           type: 'subagent.delegate.completed',
@@ -330,6 +350,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
             usage: outcome.usage,
           },
           ts: Date.now(),
+          ...(config.tenantId !== undefined ? { tenant_id: config.tenantId } : {}),
         });
         return outcome.text;
       } catch (error) {
@@ -344,6 +365,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
             error: message,
           },
           ts: Date.now(),
+          ...(config.tenantId !== undefined ? { tenant_id: config.tenantId } : {}),
         });
         throw error;
       }
@@ -353,7 +375,9 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
 
 /** 创建 delegate-task 插件（provider 工厂 + model 注入，上层构造时传入） */
 export function createDelegateTaskPlugin(options: DelegateTaskOptions): Plugin {
+  const tenantId = normalizeTenantId(options.tenantId);
   const config: ResolvedConfig = {
+    depthByRunId: new Map<string, number>(),
     providerFactory: options.providerFactory,
     model: options.model,
     maxDepth: options.maxDepth ?? 3,
@@ -364,6 +388,7 @@ export function createDelegateTaskPlugin(options: DelegateTaskOptions): Plugin {
     readOnlyTools: options.readOnlyTools ?? ['read'],
     maxConcurrentDelegates: options.maxConcurrentDelegates ?? DEFAULT_MAX_CONCURRENT_DELEGATES,
     ...(options.runtimeHost !== undefined ? { runtimeHost: options.runtimeHost } : {}),
+    ...(tenantId !== undefined ? { tenantId } : {}),
   };
   return {
     name: 'delegate-task',
