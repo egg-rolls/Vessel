@@ -9,6 +9,13 @@
 
 export * from '../events/index.js';
 export * from './metrics.js';
+export { type ReadTraceOptions, readTraceEvents } from './read-trace.js';
+export { rebuildMetrics } from './rebuild-metrics.js';
+export {
+  type PruneTraceOptions,
+  type PruneTraceResult,
+  pruneTrace,
+} from './trace-prune.js';
 export {
   FileTraceRecorder,
   type FileTraceRecorderOptions,
