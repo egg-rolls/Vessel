@@ -83,14 +83,19 @@ describe('deleteSessionData (0.5 A-4 §11.3)', () => {
       tenantId: 'acme',
     });
 
-    expect(result).toEqual({ runs_deleted: 2, events_deleted: 2 });
+    expect(result).toEqual({ sessions_deleted: 1, runs_deleted: 2, events_deleted: 2 });
     expect(await session.load('s1')).toBeNull();
     expect(await runStore.list()).toEqual([]);
     expect(await readdir(dir)).toEqual([]);
 
     const deleted = events.getHistory().find((e) => e.type === 'session.deleted');
     expect(deleted?.tenant_id).toBe('acme');
-    expect(deleted?.data).toMatchObject({ session_id: 's1', runs_deleted: 2, events_deleted: 2 });
+    expect(deleted?.data).toMatchObject({
+      session_id: 's1',
+      sessions_deleted: 1,
+      runs_deleted: 2,
+      events_deleted: 2,
+    });
   });
 
   it('deletes only the snapshot when no RunStore is provided', async () => {
@@ -98,6 +103,7 @@ describe('deleteSessionData (0.5 A-4 §11.3)', () => {
     await session.save(state());
 
     expect(await deleteSessionData('s1', { session })).toEqual({
+      sessions_deleted: 1,
       runs_deleted: 0,
       events_deleted: 0,
     });
