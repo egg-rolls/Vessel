@@ -18,6 +18,7 @@ export type ErrorCategory =
   | 'not_resumable'
   | 'conflict'
   | 'disabled'
+  | 'invalid'
   | 'unknown';
 
 /** 跨层稳定的错误 code（core RunResumeError / MCP 控制面约定） */
@@ -31,6 +32,16 @@ const STABLE_ERROR_CODES = [
   'mcp_disabled',
   'mcp_server_not_found',
   'mcp_server_disabled',
+  // 0.4：workflow / feishu 稳定错误码（DECISION-009 §5.1.4 / §5.3.4）
+  'workflow_not_found',
+  'workflow_invalid',
+  'workflow_already_running',
+  'workflow_not_resumable',
+  'workflow_cancelled',
+  'workflow_disabled',
+  'channel_disabled',
+  'channel_not_connected',
+  'channel_auth_failed',
 ] as const;
 
 type StableErrorCode = (typeof STABLE_ERROR_CODES)[number];
@@ -104,6 +115,56 @@ export function classifyError(error: unknown): ClassifiedError {
           category: 'disabled',
           message: msg,
           hint: 'mcp_servers 未配置或该 server 已禁用；检查配置后重启。',
+        };
+      case 'workflow_not_found':
+        return {
+          category: 'not_found',
+          message: msg,
+          hint: '目标不存在；用 /workflows 查看当前 workflow run。',
+        };
+      case 'workflow_invalid':
+        return {
+          category: 'invalid',
+          message: msg,
+          hint: 'workflow 定义无效；检查 YAML/JSON、workflow.dir 与模板变量。',
+        };
+      case 'workflow_already_running':
+        return {
+          category: 'conflict',
+          message: msg,
+          hint: '该 workflow run 已有执行在进行；等它结束或先 /workflows show。',
+        };
+      case 'workflow_not_resumable':
+        return {
+          category: 'not_resumable',
+          message: msg,
+          hint: '该 run 是 cancelled（或已终止）；cancelled 不可 resume。',
+        };
+      case 'workflow_cancelled':
+        return { category: 'cancelled', message: msg };
+      case 'workflow_disabled':
+        return {
+          category: 'disabled',
+          message: msg,
+          hint: 'workflow.enabled 未开启；检查配置后重启。',
+        };
+      case 'channel_disabled':
+        return {
+          category: 'disabled',
+          message: msg,
+          hint: 'feishu.enabled 未开启；检查配置后重启。',
+        };
+      case 'channel_not_connected':
+        return {
+          category: 'network',
+          message: msg,
+          hint: '飞书渠道未连接；查看 /feishu 的 last error。',
+        };
+      case 'channel_auth_failed':
+        return {
+          category: 'auth',
+          message: msg,
+          hint: '飞书 app_id/app_secret 无效；检查环境变量或配置。',
         };
     }
   }
