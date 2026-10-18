@@ -33,6 +33,28 @@ afterEach(() => {
 });
 
 describe('config command (0.5)', () => {
+  it('config path/show handle empty YAML files with exit 0', async () => {
+    const userConfigPath = tmpFile('', 'user.yaml');
+    const configPath = tmpFile('   \n# comment only\n', 'vessel.yaml');
+
+    const pathResult = await configPathCommand({ userConfigPath, configPath, env: {} });
+    expect(pathResult.exitCode).toBe(0);
+
+    const showResult = await configShowCommand({
+      json: true,
+      userConfigPath,
+      configPath,
+      env: {},
+    });
+    expect(showResult.exitCode).toBe(0);
+    const snapshot = JSON.parse(showResult.stdout) as {
+      schema_version: number;
+      tenant_id: string;
+    };
+    expect(snapshot.schema_version).toBe(1);
+    expect(snapshot.tenant_id).toBe('default');
+  });
+
   it('config path 输出用户/项目/data 路径与存在性', async () => {
     const userConfigPath = tmpFile('api_key: sk-test\n');
     const configPath = path.join(tempDir(), 'vessel.yaml');

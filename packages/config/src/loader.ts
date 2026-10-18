@@ -142,7 +142,8 @@ export function getUserConfigPath(): string {
 
 /**
  * 从 YAML 文件加载并解析配置，做 snake→camel 映射。
- * 文件不存在时返回 fallback；解析失败时向上抛出。
+ * 文件不存在、空文档（0 字节/纯空白/仅注释）或根节点不是对象时返回 fallback；
+ * 解析失败时向上抛出。
  */
 async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
   const file = Bun.file(filePath);
@@ -153,7 +154,12 @@ async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
   }
 
   const content = await file.text();
-  return snakeToCamel<T>(parseYaml(content), { preserveKey: preserveConfigMapKeys });
+  const parsed: unknown = parseYaml(content);
+  // parseYaml('') / 纯空白 → null；标量/数组不是合法配置根节点。
+  if (parsed === null || parsed === undefined || !isRecord(parsed)) {
+    return fallback;
+  }
+  return snakeToCamel<T>(parsed, { preserveKey: preserveConfigMapKeys });
 }
 
 /** 读取原始顶层对象；文件不存在或解析失败时返回 {}（保持 0.4 容错行为）。 */

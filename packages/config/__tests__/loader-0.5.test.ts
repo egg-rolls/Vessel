@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_CONFIG, DEFAULT_DATA_DIR, DEFAULT_TRACE_OPTIONS } from '../src/defaults';
-import { loadConfig } from '../src/loader';
+import { loadConfig, loadConfigFromFile } from '../src/loader';
 
 /** 写一个临时 YAML 文件，返回路径 */
 function tmpYaml(content: string): string {
@@ -309,5 +309,41 @@ api_key_env: PROJECT_API_KEY
 
     expect(config.apiKey).toBe('project-key-value');
     expect(validation.errors.some((e) => e.path === 'apiKey')).toBe(false);
+  });
+});
+
+describe('loadConfig 0.5 - empty YAML files', () => {
+  it('empty user and project files fall back to defaults', async () => {
+    const user = tmpYaml('');
+    const project = tmpYaml('   \n\t\n# only a comment\n');
+
+    const { config, validation, tenantId } = await load({ user, project, env: {} });
+
+    expect(validation.errors).toEqual([]);
+    expect(validation.valid).toBe(true);
+    expect(config.session?.backend).toBe('file');
+    expect(config.context?.maxMessages).toBe(100);
+    expect(tenantId).toBe('default');
+  });
+
+  it('whitespace-only user config does not throw', async () => {
+    const user = tmpYaml('  \n\n\t  \n');
+    const { config, validation } = await load({ user, env: {} });
+
+    expect(validation.errors).toEqual([]);
+    expect(config).toBeDefined();
+  });
+
+  it('loadConfigFromFile returns an empty object for an empty file', async () => {
+    const file = tmpYaml('\n\n');
+    await expect(loadConfigFromFile(file)).resolves.toEqual({});
+  });
+
+  it('non-object YAML roots fall back to empty config', async () => {
+    const scalar = tmpYaml('hello\n');
+    const list = tmpYaml('- a\n- b\n');
+
+    await expect(loadConfigFromFile(scalar)).resolves.toEqual({});
+    await expect(loadConfigFromFile(list)).resolves.toEqual({});
   });
 });
