@@ -145,6 +145,26 @@ describe('pollRunCompletion', () => {
     expect(calls).toBe(2);
   });
 
+  it('A-5：解包 runs.get 的 { run } 包装', async () => {
+    let calls = 0;
+    const completed = makeFakeRpc(async () => {
+      calls += 1;
+      return calls === 1 ? { run: { status: 'running' } } : { run: { status: 'completed' } };
+    });
+    await expect(pollRunCompletion(completed.rpc, 'run_1', { intervalMs: 1 })).resolves.toEqual({
+      status: 'completed',
+    });
+    expect(calls).toBe(2);
+
+    const failed = makeFakeRpc(async () => ({
+      run: { status: 'failed', error: 'wrapped boom' },
+    }));
+    await expect(pollRunCompletion(failed.rpc, 'run_1', { intervalMs: 1 })).resolves.toEqual({
+      status: 'failed',
+      error: 'wrapped boom',
+    });
+  });
+
   it('cancelled / failed 带错误', async () => {
     const cancelled = makeFakeRpc(async () => ({ status: 'cancelled' }));
     await expect(pollRunCompletion(cancelled.rpc, 'run_1', { intervalMs: 1 })).resolves.toEqual({

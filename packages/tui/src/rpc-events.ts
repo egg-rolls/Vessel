@@ -211,7 +211,9 @@ export async function pollRunCompletion(
   for (;;) {
     if (signal?.aborted) return { status: 'cancelled' };
 
-    const run = await rpc.request<unknown>('runs.get', { run_id: runId });
+    const result = await rpc.request<unknown>('runs.get', { run_id: runId });
+    // A-5 §12.2：live 与 durable 统一返回 { run: ... }
+    const run = isRecord(result) && isRecord(result.run) ? result.run : result;
     const status = isRecord(run) ? run.status : undefined;
 
     if (status === 'completed' || status === 'failed' || status === 'cancelled') {
