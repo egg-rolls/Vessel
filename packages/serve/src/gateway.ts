@@ -2039,7 +2039,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function toolDescriptionsForTenant(
     tenantId: string,
   ): Array<{ name: string; description?: string }> {
-    const host = pluginHostFor(tenantId) ?? pluginHost();
+    // A6-24：一旦注入 pluginHostFor，非 default tenant 未命中时返回空，
+    // 不得回退全局 host（否则 tenant b 会看到 default 的 tools）。
+    // 只有未注入 pluginHostFor 的单 tenant / legacy 路径才回退全局。
+    let host: PluginHost | undefined;
+    if (tenantId === defaultTenantId) {
+      host = pluginHost();
+    } else if (opts.pluginHostFor) {
+      host = opts.pluginHostFor(tenantId);
+    } else {
+      host = pluginHost();
+    }
     try {
       return (host?.listTools() ?? []).map((tool) => ({
         name: tool.name,
@@ -2050,8 +2060,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  /** A-6.3：per-tenant plugins；缺省回退全局 `plugins` */
+  /** A-6.3：per-tenant plugins；只有未注入 pluginsFor 时才回退全局 `plugins` */
   function pluginsForTenant(tenantId: string): Array<{ name: string; enabled: boolean }> {
+    if (tenantId !== defaultTenantId && opts.pluginsFor) {
+      return opts.pluginsFor(tenantId) ?? [];
+    }
     return opts.pluginsFor?.(tenantId) ?? opts.plugins?.() ?? [];
   }
 
