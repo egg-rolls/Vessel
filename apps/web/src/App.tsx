@@ -4,6 +4,8 @@ import type {
   AskUserAnswer,
   AskUserQuestion,
   AskUserRequest,
+  CapabilityManifest,
+  ConfigSourcesResponse,
   DurableRunSummary,
   FeishuStatus,
   HelloInfo,
@@ -528,12 +530,16 @@ export default function App() {
   const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
   const [feishu, setFeishu] = useState<FeishuStatus | null>(null);
+  const [capabilities, setCapabilities] = useState<CapabilityManifest | null>(null);
+  const [configSources, setConfigSources] = useState<ConfigSourcesResponse | null>(null);
+  const [tenantId, setTenantId] = useState<string | null>(null);
   const [panelErrors, setPanelErrors] = useState<{
     mcp?: string;
     durable?: string;
     workflow?: string;
     metrics?: string;
     feishu?: string;
+    capabilities?: string;
   }>({});
   const [now, setNow] = useState(() => Date.now());
 
@@ -622,6 +628,30 @@ export default function App() {
     } else {
       setFeishu(null);
     }
+
+    // 0.5：能力清单总是可用（无需 feature 广告）
+    client
+      .getCapabilities()
+      .then((manifest) => {
+        setCapabilities(manifest);
+        setPanelErrors((prev) => ({ ...prev, capabilities: undefined }));
+      })
+      .catch((e: unknown) => {
+        setPanelErrors((prev) => ({ ...prev, capabilities: errorMessage(e) }));
+      });
+    client
+      .getTenantId()
+      .then((id) => setTenantId(id ?? null))
+      .catch(() => setTenantId(null));
+
+    if (features.includes('config')) {
+      client
+        .getConfigSources()
+        .then(setConfigSources)
+        .catch(() => setConfigSources(null));
+    } else {
+      setConfigSources(null);
+    }
   }, [client]);
 
   const refreshNow = useCallback(() => {
@@ -653,6 +683,9 @@ export default function App() {
       setSelectedWorkflow(null);
       setMetrics(null);
       setFeishu(null);
+      setCapabilities(null);
+      setConfigSources(null);
+      setTenantId(null);
       return;
     }
 
@@ -670,6 +703,9 @@ export default function App() {
     setSelectedWorkflow(null);
     setMetrics(null);
     setFeishu(null);
+    setCapabilities(null);
+    setConfigSources(null);
+    setTenantId(null);
     setWorkflowNotice(null);
     setPanelErrors({});
     setResuming(new Set());
@@ -756,6 +792,7 @@ export default function App() {
     const offHello = client.onHello((info) => {
       attempt = 0;
       setHello(info);
+      if (info.tenant_id) setTenantId(info.tenant_id);
       setError(null);
       setGapNotice(null);
       loadPanels();
@@ -1048,6 +1085,8 @@ export default function App() {
   const showWorkflow = featureList.includes('workflow');
   const showMetrics = featureList.includes('metrics');
   const showFeishu = featureList.includes('feishu');
+  const showCapabilities = connState === 'open';
+  const showConfig = featureList.includes('config');
   const nodeLabel = hello?.node.name ?? hello?.node.node_id?.slice(0, 12) ?? '';
 
   return (
@@ -1061,6 +1100,11 @@ export default function App() {
         {hello && (
           <span className="protocol-badge mono" title={`node ${nodeLabel}`}>
             v{hello.protocol.version}
+          </span>
+        )}
+        {tenantId && (
+          <span className="protocol-badge mono" title="当前 tenant">
+            tenant {tenantId}
           </span>
         )}
         <input
@@ -1154,6 +1198,71 @@ export default function App() {
               ))
             )}
           </div>
+
+          {showCapabilities && (
+            <>
+              <div className="sidebar-title">
+                Capabilities{' '}
+                <span className="dim">({capabilities?.methods.length ?? 0} methods)</span>
+              </div>
+              <div className="tools">
+                {panelErrors.capabilities ? (
+                  <div className="panel-empty err">{panelErrors.capabilities}</div>
+                ) : !capabilities ? (
+                  <div className="panel-empty dim">连接后显示能力清单</div>
+                ) : (
+                  <>
+                    <div className="tool-item">
+                      <div className="tool-name">
+                        <span className="mono">v{capabilities.version}</span>
+                        <span className="dim">schema {capabilities.config_schema_version}</span>
+                      </div>
+                      <div className="tool-desc">
+                        {capabilities.tools.length} tools · {capabilities.plugins.length} plugins
+                      </div>
+                    </div>
+                    {capabilities.plugins.slice(0, 6).map((plugin) => (
+                      <div className="tool-item" key={plugin.name}>
+                        <div className="tool-name">
+                          <span className="mono">{plugin.name}</span>
+                          <span className="dim">{plugin.enabled ? 'on' : 'off'}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+
+              {showConfig && (
+                <>
+                  <div className="sidebar-title">
+                    Config sources{' '}
+                    <span className="dim">
+                      ({Object.keys(configSources?.sources ?? {}).length})
+                    </span>
+                  </div>
+                  <div className="tools">
+                    {!configSources ? (
+                      <div className="panel-empty dim">连接后显示配置来源</div>
+                    ) : Object.keys(configSources.sources).length === 0 ? (
+                      <div className="panel-empty dim">无来源信息</div>
+                    ) : (
+                      Object.entries(configSources.sources)
+                        .slice(0, 12)
+                        .map(([key, source]) => (
+                          <div className="tool-item" key={key} title={key}>
+                            <div className="tool-name">
+                              <span className="mono">{truncate(key, 28)}</span>
+                              <span className="dim">{source}</span>
+                            </div>
+                          </div>
+                        ))
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          )}
 
           {showMcp && (
             <>

@@ -11,6 +11,8 @@
 
 import type {
   AskUserAnswer,
+  CapabilityManifest,
+  ConfigSourcesResponse,
   DurableRunSummary,
   DurableRunsResponse,
   EvalReport,
@@ -24,10 +26,12 @@ import type {
   McpServersResponse,
   MetricsResponse,
   MetricsSnapshot,
+  RpcResponseEnvelope,
   RunEvent,
   RunStatus,
   ServerFrame,
   SessionInfo,
+  TenantInfo,
   ToolInfo,
   WorkflowCancelResponse,
   WorkflowResponse,
@@ -357,6 +361,50 @@ export class GatewayClient {
   /** 回答 ask_user；answers=[] 表示取消 */
   async respondAsk(requestId: string, answers: AskUserAnswer[]): Promise<void> {
     await this.request('ask.respond', { request_id: requestId, answers });
+  }
+
+  // ── 0.5 RPC（POST /v1/rpc）────────────────────
+
+  /** 统一 RPC 入口；失败抛 GatewayHttpError（携带冻结 code） */
+  async rpc<T = unknown>(method: string, params?: unknown): Promise<T> {
+    const response = await this.httpJson<RpcResponseEnvelope<T>>('/v1/rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        v: 1,
+        id: crypto.randomUUID(),
+        method,
+        ...(params !== undefined ? { params } : {}),
+      }),
+    });
+    if (!response.ok) {
+      throw new GatewayHttpError(
+        response.error?.code ?? 'internal',
+        response.error?.message ?? `RPC failed: ${method}`,
+      );
+    }
+    return response.result as T;
+  }
+
+  getCapabilities(): Promise<CapabilityManifest> {
+    return this.rpc<CapabilityManifest>('capabilities.list');
+  }
+
+  async getConfigSources(tenantId?: string): Promise<ConfigSourcesResponse> {
+    return this.rpc<ConfigSourcesResponse>(
+      'config.sources',
+      tenantId !== undefined ? { tenant_id: tenantId } : {},
+    );
+  }
+
+  async listTenants(): Promise<TenantInfo[]> {
+    const body = await this.rpc<{ tenants?: TenantInfo[] }>('tenants.list');
+    return body.tenants ?? [];
+  }
+
+  async getTenantId(): Promise<string | undefined> {
+    const body = await this.rpc<{ tenant_id?: string }>('health.get');
+    return body.tenant_id;
   }
 
   // ── 0.3 REST（durable / MCP）──────────────────
