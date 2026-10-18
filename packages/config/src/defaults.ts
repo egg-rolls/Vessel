@@ -11,6 +11,7 @@ import type {
   ObservabilityConfig,
   SchedulerConfig,
   ServeConfig,
+  TraceConfig,
   TransportConfig,
   VesselConfig,
   WorkflowConfig,
@@ -124,6 +125,7 @@ export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
   enabled: false,
   appId: '',
   appSecret: '',
+  appSecretEnv: '',
   domain: 'feishu',
   allowedChatIds: [],
   sessionPrefix: 'feishu',
@@ -140,6 +142,24 @@ export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
 export const DEFAULT_OBSERVABILITY_OPTIONS: Required<ObservabilityConfig> = {
   eventHistory: 1000,
   metrics: true,
+};
+
+/** 全局数据根（0.5；不写入 DEFAULT_CONFIG，保持 0.4 配置形状） */
+export const DEFAULT_DATA_DIR = '~/.vessel/data';
+
+/** tenant id 缺省值 */
+export const DEFAULT_TENANT_ID = 'default';
+
+/**
+ * 0.5 trace 默认值。
+ * 不写入 DEFAULT_CONFIG：未配置 trace 时仍按这些值消费。
+ */
+export const DEFAULT_TRACE_OPTIONS: Required<TraceConfig> = {
+  enabled: true,
+  level: 'full',
+  retentionDays: 30,
+  maxRuns: 1000,
+  maxBytes: 1073741824,
 };
 
 /** 安全默认值 */
@@ -160,7 +180,7 @@ export const DEFAULT_CONFIG: VesselConfig = {
     maxRuntimeSeconds: 300,
   },
   session: {
-    backend: 'sqlite',
+    backend: 'file',
   },
   context: {
     maxTokens: 4096,

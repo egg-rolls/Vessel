@@ -10,10 +10,17 @@ import {
 import { createSessionBackend } from '../session-factory';
 
 describe('createSessionBackend', () => {
-  it('缺省 backend 为 sqlite', () => {
-    const backend = createSessionBackend();
-    expect(backend).toBeInstanceOf(SQLiteSessionBackend);
-    backend.close?.();
+  it('缺省 backend 为 file（0.5）', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-session-'));
+    try {
+      const backend = createSessionBackend(undefined, {
+        tenantSessionsDir: path.join(dir, 'sessions'),
+      });
+      expect(backend).toBeInstanceOf(FileSessionBackend);
+      backend.close?.();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('backend=sqlite 使用 storage_path 作为数据库文件路径', () => {

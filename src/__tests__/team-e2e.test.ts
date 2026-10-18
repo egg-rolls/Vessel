@@ -49,7 +49,8 @@ function spawnNode(nodeId: string, peersDir: string, token: string): SpawnedNode
   fs.writeFileSync(path.join(dir, 'vessel.yaml'), configFor(nodeId, peersDir, token));
   const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
     cwd: dir,
-    env: { ...process.env, VESSEL_MOCK: '1' },
+    // 0.5：每个进程独占一个 tenant 写锁；测试节点各用自己的 data_dir。
+    env: { ...process.env, VESSEL_MOCK: '1', VESSEL_DATA_DIR: path.join(dir, 'data') },
     stdout: 'pipe',
     stderr: 'pipe',
   });

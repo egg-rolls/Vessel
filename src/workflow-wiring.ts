@@ -27,6 +27,7 @@ import {
   resolveWorkflowDefinition,
   resolveWorkflowDir,
   resolveWorkflowStorePath,
+  type TenantPathOptions,
 } from './path-resolution';
 import type { PluginLoader } from './plugin-loader';
 
@@ -38,6 +39,8 @@ export interface WorkflowCreateOptions {
   pluginHost: PluginHost;
   host?: RuntimeHost;
   runtime?: RunnableAgent;
+  /** 0.5：tenant 根目录；缺省路径落到 `<tenant>/workflows` */
+  tenantDir?: string;
   loader?: Pick<PluginLoader, 'loadModule'>;
   /** 测试注入口；优先于 loader */
   loadModule?: () => Promise<unknown | null>;
@@ -63,12 +66,15 @@ export class WorkflowPluginUnavailableError extends Error {
 }
 
 /** config → 引擎选项；路径解析为绝对路径，默认值只在 config 层一处 */
-export function resolveWorkflowOptions(config: VesselConfig): ResolvedWorkflowOptions {
+export function resolveWorkflowOptions(
+  config: VesselConfig,
+  options: TenantPathOptions = {},
+): ResolvedWorkflowOptions {
   const workflow = config.workflow;
   return {
     enabled: workflow?.enabled === true,
     dir: resolveWorkflowDir(config),
-    path: resolveWorkflowStorePath(config),
+    path: resolveWorkflowStorePath(config, options),
     maxParallel: workflow?.maxParallel ?? DEFAULT_WORKFLOW_OPTIONS.maxParallel,
     stepTimeoutMs: workflow?.stepTimeoutMs ?? DEFAULT_WORKFLOW_OPTIONS.stepTimeoutMs,
   };
@@ -94,8 +100,11 @@ export async function checkWorkflowDir(
 }
 
 /** `workflow.path` 不存在则递归创建（Addendum B §11.1.13） */
-export async function ensureWorkflowStorePath(config: VesselConfig): Promise<string> {
-  const storePath = resolveWorkflowStorePath(config);
+export async function ensureWorkflowStorePath(
+  config: VesselConfig,
+  options: TenantPathOptions = {},
+): Promise<string> {
+  const storePath = resolveWorkflowStorePath(config, options);
   try {
     await mkdir(storePath, { recursive: true });
     return storePath;
@@ -135,14 +144,20 @@ export async function createWorkflowFromConfig(
   const dirCheck = await checkWorkflowDir(options.config);
   if (!dirCheck.ok) throw workflowError('workflow_invalid', dirCheck.error);
 
-  await ensureWorkflowStorePath(options.config);
+  await ensureWorkflowStorePath(
+    options.config,
+    options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
+  );
   const mod = await loadWorkflowModule(options);
 
   return mod.createWorkflowEngine({
     ...(options.host ? { host: options.host } : {}),
     ...(options.runtime ? { runtime: options.runtime } : {}),
     pluginHost: options.pluginHost,
-    config: resolveWorkflowOptions(options.config),
+    config: resolveWorkflowOptions(
+      options.config,
+      options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
+    ),
     events: options.events,
   });
 }
@@ -155,11 +170,17 @@ export async function createWorkflowControlsOnly(
   options: WorkflowCreateOptions,
 ): Promise<WorkflowEngineLike | undefined> {
   if (options.config.workflow?.enabled !== true) return undefined;
-  await ensureWorkflowStorePath(options.config);
+  await ensureWorkflowStorePath(
+    options.config,
+    options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
+  );
   const mod = await loadWorkflowModule(options);
   return mod.createWorkflowEngine({
     pluginHost: options.pluginHost,
-    config: resolveWorkflowOptions(options.config),
+    config: resolveWorkflowOptions(
+      options.config,
+      options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
+    ),
     events: options.events,
   });
 }

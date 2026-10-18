@@ -12,7 +12,11 @@ import type {
   FeishuConfig,
   ObservabilityConfig,
   ServeConfig,
+  ServeTokenEntry,
+  TenantConfig,
+  TenantSettings,
   TerminationConfig,
+  TraceConfig,
   UsageLimitsConfig,
   VesselConfig,
   WorkflowConfig,
@@ -20,6 +24,12 @@ import type {
 
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
 const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** tenant id 字符集（DECISION-010 §2.5） */
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+/** 合法环境变量名（_env 间接引用） */
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
 /** MCP server 名字符集（用于 `mcp__<server>__<tool>`） */
 const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -207,6 +217,7 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
     // 不把 secret 值放进 error
     errors.push({ path: 'feishu.appSecret', message: 'feishu.appSecret must be a string' });
   }
+  validateEnvName('feishu.appSecretEnv', feishu.appSecretEnv, errors);
   if (domain !== undefined && domain !== 'feishu' && domain !== 'lark') {
     errors.push({
       path: 'feishu.domain',
@@ -467,7 +478,8 @@ export function validateServeSettings(
   serve: ServeConfig,
   errors: ConfigValidationError[] = [],
 ): ConfigValidationError[] {
-  const { hostname, port, allowRemote, tls } = serve as Record<string, unknown>;
+  const { hostname, port, allowRemote, tls, token, tokenEnv, tokens, adminToken, adminTokenEnv } =
+    serve as Record<string, unknown>;
 
   if (hostname !== undefined) {
     const invalid =
@@ -520,6 +532,69 @@ export function validateServeSettings(
     });
   }
 
+  validateEnvName('serve.tokenEnv', tokenEnv, errors);
+  validateEnvName('serve.adminTokenEnv', adminTokenEnv, errors);
+
+  if (token !== undefined && (typeof token !== 'string' || token.trim() === '')) {
+    // 不把 token 值放进 error
+    errors.push({ path: 'serve.token', message: 'serve.token must be a non-empty string' });
+  }
+  if (adminToken !== undefined && (typeof adminToken !== 'string' || adminToken.trim() === '')) {
+    errors.push({
+      path: 'serve.adminToken',
+      message: 'serve.adminToken must be a non-empty string',
+    });
+  }
+
+  if (tokens !== undefined) {
+    if (!isPlainObject(tokens)) {
+      errors.push({ path: 'serve.tokens', message: 'serve.tokens must be a mapping' });
+    } else {
+      for (const [rawToken, rawEntry] of Object.entries(tokens)) {
+        // 永不把 token 键写进 error / message。
+        if (rawToken.trim() === '') {
+          errors.push({
+            path: 'serve.tokens',
+            message: 'serve.tokens must not contain an empty token key',
+          });
+          continue;
+        }
+        if (!isPlainObject(rawEntry)) {
+          errors.push({
+            path: 'serve.tokens.<entry>',
+            message: 'serve.tokens entries must be objects',
+          });
+          continue;
+        }
+        const entry = rawEntry as ServeTokenEntry;
+        if (entry.role !== undefined && !['read', 'write', 'admin'].includes(entry.role)) {
+          errors.push({
+            path: 'serve.tokens.<entry>.role',
+            message: 'serve.tokens role must be "read", "write", or "admin"',
+          });
+        }
+        if (entry.tenantId !== undefined) {
+          if (typeof entry.tenantId !== 'string') {
+            errors.push({
+              path: 'serve.tokens.<entry>.tenantId',
+              message: 'serve.tokens tenantId must be a string',
+            });
+          } else if (entry.tenantId !== '*' && !isValidTenantId(entry.tenantId)) {
+            errors.push({
+              path: 'serve.tokens.<entry>.tenantId',
+              message: 'serve.tokens tenantId must be a valid tenant id or "*"',
+            });
+          } else if (entry.tenantId === '*' && entry.role !== 'admin') {
+            errors.push({
+              path: 'serve.tokens.<entry>.tenantId',
+              message: 'serve.tokens tenantId "*" requires role "admin"',
+            });
+          }
+        }
+      }
+    }
+  }
+
   if (tls !== undefined) {
     if (!isPlainObject(tls)) {
       errors.push({ path: 'serve.tls', message: 'serve.tls must be an object', value: tls });
@@ -550,6 +625,306 @@ export function validateServeSettings(
   return errors;
 }
 
+/** tenant id 是否合法（除正则外显式拒绝路径穿越） */
+export function isValidTenantId(value: string): boolean {
+  if (value === '.' || value === '..') return false;
+  if (value.includes('/') || value.includes('\\') || value.includes('\0')) return false;
+  return TENANT_ID_RE.test(value);
+}
+
+/** 校验 `_env` 字段：空串视为未设置（交给解析层），其余必须匹配环境变量名 */
+function validateEnvName(path: string, value: unknown, errors: ConfigValidationError[]): void {
+  if (value === undefined || value === '') return;
+  if (typeof value !== 'string' || !ENV_NAME_RE.test(value)) {
+    errors.push({
+      path,
+      message: `${path} must be a valid environment variable name`,
+    });
+  }
+}
+
+/** tenant overlay 允许的顶层块（DECISION-010 §11.4） */
+export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
+  'provider',
+  'agent',
+  'context',
+  'limits',
+  'termination',
+  'session',
+  'plugins',
+  'workflow',
+  'evals',
+  'feishu',
+  'tools',
+  'mcpServers',
+  'delegate',
+  'team',
+  'host',
+  'scheduler',
+  'transport',
+  'quota',
+];
+
+/** tenant overlay 明确禁止的块（全局或安全相关） */
+export const TENANT_OVERLAY_FORBIDDEN_KEYS: readonly string[] = [
+  'dataDir',
+  'trace',
+  'serve',
+  'tenant',
+  'update',
+];
+
+/** 顶层密钥字段（YAML camelCase 路径）；只返回路径，不返回任何值。 */
+export function findExplicitSecretPaths(config: Record<string, unknown>, prefix = ''): string[] {
+  const found: string[] = [];
+  const at = (path: string): string => (prefix === '' ? path : `${prefix}.${path}`);
+  const check = (holder: unknown, key: string, path: string): void => {
+    if (!isPlainObject(holder)) return;
+    const value = holder[key];
+    if (value !== undefined && value !== null && value !== '') found.push(at(path));
+  };
+
+  check(config, 'apiKey', 'apiKey');
+  check(config.provider, 'apiKey', 'provider.apiKey');
+  check(config.feishu, 'appSecret', 'feishu.appSecret');
+  check(config.serve, 'token', 'serve.token');
+  check(config.serve, 'adminToken', 'serve.adminToken');
+  check(config.transport, 'token', 'transport.token');
+  if (isPlainObject(config.serve) && isPlainObject(config.serve.tokens)) {
+    if (Object.keys(config.serve.tokens).length > 0) found.push(at('serve.tokens'));
+  }
+
+  return found;
+}
+
+/** 递归找出 overlay 内的 null（不允许进入合并），返回路径 */
+function findNullPaths(value: unknown, path: string[]): string[] {
+  if (value === null) return [path.join('.')];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => findNullPaths(item, [...path, String(index)]));
+  }
+  if (!isPlainObject(value)) return [];
+  return Object.entries(value).flatMap(([key, child]) => findNullPaths(child, [...path, key]));
+}
+
+/** 校验 trace 块（0.5） */
+function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): void {
+  const { enabled, level, retentionDays, maxRuns, maxBytes } = trace;
+
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'trace.enabled',
+      message: 'trace.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  if (level !== undefined && level !== 'full' && level !== 'metadata' && level !== 'off') {
+    errors.push({
+      path: 'trace.level',
+      message: 'trace.level must be "full", "metadata", or "off"',
+      value: level,
+    });
+  }
+  if (retentionDays !== undefined && (!Number.isInteger(retentionDays) || retentionDays < 1)) {
+    errors.push({
+      path: 'trace.retentionDays',
+      message: 'trace.retentionDays must be a positive integer',
+      value: retentionDays,
+    });
+  }
+  if (maxRuns !== undefined && (!Number.isInteger(maxRuns) || maxRuns < 0)) {
+    errors.push({
+      path: 'trace.maxRuns',
+      message: 'trace.maxRuns must be a non-negative integer',
+      value: maxRuns,
+    });
+  }
+  if (maxBytes !== undefined && (!Number.isInteger(maxBytes) || maxBytes < 0)) {
+    errors.push({
+      path: 'trace.maxBytes',
+      message: 'trace.maxBytes must be a non-negative integer (0 = unlimited)',
+      value: maxBytes,
+    });
+  }
+}
+
+const TENANT_SETTINGS_KEYS = ['name', 'status', 'quota', 'tools', 'config'];
+const TENANT_QUOTA_KEYS = ['maxSessions', 'maxRunsPerDay', 'maxConcurrentRuns', 'maxStorageBytes'];
+
+/** 校验 tenant 块与 overlay 白名单（0.5） */
+function validateTenant(tenant: TenantConfig, errors: ConfigValidationError[]): void {
+  if (tenant.default !== undefined) {
+    if (typeof tenant.default !== 'string' || !isValidTenantId(tenant.default)) {
+      errors.push({
+        path: 'tenant.default',
+        message: 'tenant.default must match ^[a-z0-9][a-z0-9_-]{0,63}$',
+        value: tenant.default,
+      });
+    }
+  }
+
+  if (tenant.tenants === undefined) return;
+  if (!isPlainObject(tenant.tenants)) {
+    errors.push({
+      path: 'tenant.tenants',
+      message: 'tenant.tenants must be a mapping of tenant id to settings',
+    });
+    return;
+  }
+
+  for (const [id, rawSettings] of Object.entries(tenant.tenants)) {
+    const settingsPath = `tenant.tenants.${id}`;
+    if (!isValidTenantId(id)) {
+      errors.push({
+        path: settingsPath,
+        message: 'tenant id must match ^[a-z0-9][a-z0-9_-]{0,63}$',
+      });
+    }
+    if (!isPlainObject(rawSettings)) {
+      errors.push({ path: settingsPath, message: 'tenant settings must be an object' });
+      continue;
+    }
+
+    const settings = rawSettings as TenantSettings;
+    for (const key of Object.keys(rawSettings)) {
+      if (!TENANT_SETTINGS_KEYS.includes(key)) {
+        errors.push({
+          path: `${settingsPath}.${key}`,
+          message: `Unknown tenant setting "${key}"`,
+        });
+      }
+    }
+
+    if (settings.name !== undefined && typeof settings.name !== 'string') {
+      errors.push({ path: `${settingsPath}.name`, message: 'tenant name must be a string' });
+    }
+    if (
+      settings.status !== undefined &&
+      settings.status !== 'active' &&
+      settings.status !== 'disabled'
+    ) {
+      errors.push({
+        path: `${settingsPath}.status`,
+        message: 'tenant status must be "active" or "disabled"',
+        value: settings.status,
+      });
+    }
+
+    if (settings.quota !== undefined) {
+      if (!isPlainObject(settings.quota)) {
+        errors.push({ path: `${settingsPath}.quota`, message: 'tenant quota must be an object' });
+      } else {
+        for (const [key, value] of Object.entries(settings.quota)) {
+          if (!TENANT_QUOTA_KEYS.includes(key)) {
+            errors.push({
+              path: `${settingsPath}.quota.${key}`,
+              message: `Unknown tenant quota key "${key}"`,
+            });
+          } else if (!Number.isInteger(value) || (value as number) < 0) {
+            errors.push({
+              path: `${settingsPath}.quota.${key}`,
+              message: 'tenant quota values must be non-negative integers',
+              value,
+            });
+          }
+        }
+      }
+    }
+
+    if (settings.tools !== undefined) {
+      const tools = settings.tools as Record<string, unknown>;
+      if (!isPlainObject(tools)) {
+        errors.push({ path: `${settingsPath}.tools`, message: 'tenant tools must be an object' });
+      } else {
+        for (const [listKey, list] of Object.entries(tools)) {
+          if (listKey !== 'allow' && listKey !== 'deny') {
+            errors.push({
+              path: `${settingsPath}.tools.${listKey}`,
+              message: `Unknown tenant tools key "${listKey}"`,
+            });
+          } else if (!Array.isArray(list) || list.some((item) => typeof item !== 'string')) {
+            errors.push({
+              path: `${settingsPath}.tools.${listKey}`,
+              message: `tenant tools.${listKey} must be an array of strings`,
+            });
+          }
+        }
+      }
+    }
+
+    if (settings.config !== undefined) {
+      const overlay = settings.config as unknown;
+      const overlayPath = `${settingsPath}.config`;
+      if (!isPlainObject(overlay)) {
+        errors.push({ path: overlayPath, message: 'tenant config overlay must be an object' });
+        continue;
+      }
+
+      for (const nullPath of findNullPaths(overlay, [])) {
+        errors.push({
+          path: `${overlayPath}.${nullPath}`,
+          message: 'null is not allowed in a tenant config overlay',
+        });
+      }
+
+      for (const key of Object.keys(overlay)) {
+        if (TENANT_OVERLAY_ALLOWED_KEYS.includes(key)) continue;
+        errors.push({
+          path: `${overlayPath}.${key}`,
+          message: TENANT_OVERLAY_FORBIDDEN_KEYS.includes(key)
+            ? `"${key}" is not allowed in a tenant config overlay`
+            : `Unknown tenant overlay key "${key}"`,
+        });
+      }
+
+      for (const secretPath of findExplicitSecretPaths(overlay, overlayPath)) {
+        errors.push({
+          path: secretPath,
+          message: 'Tenant overlay may contain secrets only via the _env form',
+        });
+      }
+
+      validateEnvName(`${overlayPath}.apiKeyEnv`, overlay.apiKeyEnv, errors);
+      validateEnvName(
+        `${overlayPath}.provider.apiKeyEnv`,
+        isPlainObject(overlay.provider) ? overlay.provider.apiKeyEnv : undefined,
+        errors,
+      );
+      validateEnvName(
+        `${overlayPath}.feishu.appSecretEnv`,
+        isPlainObject(overlay.feishu) ? overlay.feishu.appSecretEnv : undefined,
+        errors,
+      );
+    }
+  }
+}
+
+/** 校验 mcpServers env / headers 的 `_env` 键（0.5） */
+function validateMcpEnvRefs(
+  servers: Record<string, unknown>,
+  errors: ConfigValidationError[],
+): void {
+  for (const [name, server] of Object.entries(servers)) {
+    if (!isPlainObject(server)) continue;
+    for (const mapKey of ['env', 'headers'] as const) {
+      const map = server[mapKey];
+      if (!isPlainObject(map)) continue;
+      for (const [key, value] of Object.entries(map)) {
+        if (!key.endsWith('_env')) continue;
+        const path = `mcpServers.${name}.${mapKey}.${key}`;
+        if (key === '_env') {
+          errors.push({
+            path,
+            message: `"${mapKey}._env" is missing a target key name`,
+          });
+          continue;
+        }
+        validateEnvName(path, value, errors);
+      }
+    }
+  }
+}
+
 /**
  * 校验 Vessel 配置。所有字段为 camelCase（ADR-019）。
  * @param config 配置对象
@@ -558,6 +933,46 @@ export function validateServeSettings(
 export function validateConfig(config: VesselConfig): ConfigValidationResult {
   const errors: ConfigValidationError[] = [];
   const warnings: ConfigValidationWarning[] = [];
+
+  // 未知键（0.5）：顶层与已知块内都按 error 处理。
+  for (const key of findUnknownKeys(config, KNOWN_CONFIG_KEYS)) {
+    const suggestion = closestKey(key, KNOWN_CONFIG_KEYS);
+    errors.push({
+      path: key,
+      message: suggestion
+        ? `Unknown configuration key "${key}". Did you mean "${suggestion}"?`
+        : `Unknown configuration key "${key}".`,
+      value: key,
+    });
+  }
+  for (const { path, key, block } of findUnknownNestedKeys(
+    config as unknown as Record<string, unknown>,
+  )) {
+    const candidates = KNOWN_BLOCK_KEYS[block] ?? [];
+    const suggestion = closestKey(key, [...candidates]);
+    errors.push({
+      path,
+      message: suggestion
+        ? `Unknown configuration key "${path}". Did you mean "${suggestion}"?`
+        : `Unknown configuration key "${path}".`,
+      value: key,
+    });
+  }
+
+  // 校验 dataDir（0.5；全局数据根）
+  if (config.dataDir !== undefined) {
+    if (typeof config.dataDir !== 'string' || config.dataDir.trim() === '') {
+      errors.push({
+        path: 'dataDir',
+        message: 'dataDir must be a non-empty string',
+        value: config.dataDir,
+      });
+    } else if (config.dataDir.includes('\0')) {
+      errors.push({ path: 'dataDir', message: 'dataDir must not contain NUL' });
+    }
+  }
+
+  validateEnvName('apiKeyEnv', config.apiKeyEnv, errors);
 
   // 校验 API Key
   if (config.apiKey !== undefined) {
@@ -572,6 +987,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 provider
   if (config.provider) {
+    validateEnvName('provider.apiKeyEnv', config.provider.apiKeyEnv, errors);
     const { name, model, temperature, maxTokens, timeoutMs } = config.provider;
 
     if (name !== undefined) {
@@ -958,6 +1374,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       for (const [name, raw] of Object.entries(config.mcpServers)) {
         validateMcpServer(name, raw, errors, warnings);
       }
+      validateMcpEnvRefs(config.mcpServers as unknown as Record<string, unknown>, errors);
     }
   }
 
@@ -999,6 +1416,22 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateServeSettings(config.serve, errors);
   }
 
+  // 校验 0.5 tenant / trace
+  if (config.tenant !== undefined) {
+    if (!isPlainObject(config.tenant)) {
+      errors.push({ path: 'tenant', message: 'tenant must be an object' });
+    } else {
+      validateTenant(config.tenant, errors);
+    }
+  }
+  if (config.trace !== undefined) {
+    if (!isPlainObject(config.trace)) {
+      errors.push({ path: 'trace', message: 'trace must be an object' });
+    } else {
+      validateTrace(config.trace, errors);
+    }
+  }
+
   // 校验 0.4 四块；块缺省时不做任何事（保持 0.3 行为）。
   if (config.workflow) validateWorkflow(config.workflow, errors);
   if (config.evals) validateEvals(config.evals, errors);
@@ -1024,6 +1457,36 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   return { valid: errors.length === 0, errors, warnings };
 }
 
+/** 简单编辑距离（用于未知键的拼写建议） */
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let diagonal = prev[0] ?? 0;
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const above = prev[j] ?? 0;
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      prev[j] = Math.min(above + 1, (prev[j - 1] ?? 0) + 1, diagonal + cost);
+      diagonal = above;
+    }
+  }
+  return prev[b.length] ?? 0;
+}
+
+/** 取编辑距离最近的已知键（距离 <= 3 才建议） */
+function closestKey(key: string, candidates: string[]): string | undefined {
+  let best: string | undefined;
+  let bestDistance = 4;
+  for (const candidate of candidates) {
+    const distance = editDistance(key.toLowerCase(), candidate.toLowerCase());
+    if (distance < bestDistance) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
 /**
  * 检查配置是否有未知键（camelCase，由 loader 映射后产出的对象）。
  * @param config 配置对象
@@ -1036,7 +1499,16 @@ export function findUnknownKeys(config: object, knownKeys: string[]): string[] {
 
 /** 已知的配置块键（camelCase，ADR-019）；用于嵌套未知键检查 */
 export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
-  provider: ['name', 'apiKey', 'baseUrl', 'model', 'temperature', 'maxTokens', 'timeoutMs'],
+  provider: [
+    'name',
+    'apiKey',
+    'apiKeyEnv',
+    'baseUrl',
+    'model',
+    'temperature',
+    'maxTokens',
+    'timeoutMs',
+  ],
   agent: ['name', 'systemPrompt', 'model', 'temperature', 'maxTokens'],
   session: ['backend', 'storagePath', 'maxHistory'],
   update: ['autoCheck', 'channel', 'source'],
@@ -1055,13 +1527,24 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs'],
   team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
-  serve: ['hostname', 'port', 'allowRemote', 'tls'],
+  serve: [
+    'hostname',
+    'port',
+    'allowRemote',
+    'tls',
+    'token',
+    'tokenEnv',
+    'tokens',
+    'adminToken',
+    'adminTokenEnv',
+  ],
   workflow: ['enabled', 'dir', 'path', 'maxParallel', 'stepTimeoutMs'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
     'enabled',
     'appId',
     'appSecret',
+    'appSecretEnv',
     'domain',
     'allowedChatIds',
     'sessionPrefix',
@@ -1070,6 +1553,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxMembers',
   ],
   observability: ['eventHistory', 'metrics'],
+  tenant: ['default', 'tenants'],
+  trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes'],
 };
 
 /** serve.tls 的已知键 */
@@ -1124,6 +1609,10 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
 /** 已知的配置键（camelCase，ADR-019） */
 export const KNOWN_CONFIG_KEYS = [
   'apiKey',
+  'apiKeyEnv',
+  'dataDir',
+  'tenant',
+  'trace',
   'provider',
   'agent',
   'guardrails',

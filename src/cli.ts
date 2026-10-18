@@ -20,7 +20,7 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { isLoopbackHostname } from '../packages/config/src/index';
+import { isLoopbackHostname, loadConfig } from '../packages/config/src/index';
 import type { Transport } from '../packages/core/src/index';
 import { type Gateway, type GatewayOptions, startGateway } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
@@ -28,15 +28,26 @@ import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { runUpdateCommand } from './cli-update';
+import { configInitCommand, configPathCommand, configShowCommand } from './config-command';
 import type { FeishuChannelLike } from './control-plane-types';
+import { resolveDataDir } from './data-paths';
 import { runEvalCommand } from './eval-command';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
+import { migrateCommand } from './migrate-command';
 import { runResumeList } from './resume-command';
+import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { planTeamWiring } from './team-wiring';
+import {
+  tenantCreateCommand,
+  tenantGetCommand,
+  tenantListCommand,
+  tenantUpdateCommand,
+} from './tenant-command';
 import { listTools } from './tools-list';
+import { tracePruneCommand } from './trace-command';
 import { resolveGatewayToken, tryCreateLoopbackTransport } from './transport-factory';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
@@ -110,6 +121,24 @@ function printHelp(): void {
     ['bun run src/cli.ts eval <suite> --json --out <path>', '评测输出 JSON / 指定报告'],
     ['bun run src/cli.ts --feishu', '附加飞书渠道（可与 --serve / REPL 同用）'],
   ];
+  const config: Array<[string, string]> = [
+    ['bun run src/cli.ts --tenant <id> ...', '选择 tenant（也可用 VESSEL_TENANT）'],
+    ['bun run src/cli.ts --connect <url> ...', '连接本机 gateway（不加 tenant 写锁）'],
+    ['bun run src/cli.ts config path', '打印用户/项目配置路径'],
+    ['bun run src/cli.ts config init', '生成用户配置模板'],
+    ['bun run src/cli.ts config show --sources', '查看脱敏配置与来源'],
+  ];
+  const tenant: Array<[string, string]> = [
+    ['bun run src/cli.ts tenant list', '列出 tenant'],
+    ['bun run src/cli.ts tenant get <id>', '查看 tenant 元数据'],
+    ['bun run src/cli.ts tenant create <id>', '创建 tenant'],
+    ['bun run src/cli.ts tenant update <id> --status disabled', '更新 tenant'],
+  ];
+  const migrate: Array<[string, string]> = [
+    ['bun run src/cli.ts migrate --from sqlite --to file-v2', '迁移（默认 dry-run）'],
+    ['bun run src/cli.ts migrate --from file-v1 --to file-v2 --apply', '执行迁移'],
+    ['bun run src/cli.ts trace prune --dry-run', '清理 trace（默认 dry-run）'],
+  ];
   const debug: Array<[string, string]> = [
     ['VESSEL_MOCK=1 bun run src/cli.ts --run "x"', 'mock 模式（不调 API）'],
   ];
@@ -122,9 +151,17 @@ function printHelp(): void {
     ['bun run src/cli.ts --help', '显示本帮助'],
   ];
   const width = Math.max(
-    ...[...usage, ...headless, ...serve, ...capability, ...debug, ...meta].map(
-      ([cmd]) => cmd.length,
-    ),
+    ...[
+      ...usage,
+      ...headless,
+      ...serve,
+      ...capability,
+      ...config,
+      ...tenant,
+      ...migrate,
+      ...debug,
+      ...meta,
+    ].map(([cmd]) => cmd.length),
   );
 
   console.log(
@@ -143,6 +180,15 @@ function printHelp(): void {
       '  能力（0.4）',
       align(capability, width),
       '',
+      '  配置（0.5）',
+      align(config, width),
+      '',
+      '  多租户（0.5）',
+      align(tenant, width),
+      '',
+      '  迁移与 trace（0.5）',
+      align(migrate, width),
+      '',
       '  调试',
       align(debug, width),
       '',
@@ -159,6 +205,19 @@ async function printTools(): Promise<void> {
   console.log(`Tools (${tools.length}):`);
   for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
   console.log('ask_user (interactive only)');
+}
+
+/** 打印一次性命令结果并返回退出码 */
+function printCommandResult(result: { exitCode: number; stdout: string; stderr: string }): number {
+  if (result.stdout !== '') console.log(result.stdout);
+  if (result.stderr !== '') console.error(result.stderr);
+  return result.exitCode;
+}
+
+/** tenant 命令的数据根（本地命令，不 bootstrap） */
+async function resolveCommandDataDir(): Promise<string> {
+  const { config } = await loadConfig();
+  return resolveDataDir(config);
 }
 
 /**
@@ -229,6 +288,73 @@ if (args.eval) {
   process.exit(await runEvalCommand(args.eval, { useMock }));
 }
 
+// 0.5 一次性本地命令：不 bootstrap、不加载 provider、不获取 tenant 锁。
+if (args.configCommand) {
+  const command = args.configCommand;
+  if (command.kind === 'path') {
+    process.exit(printCommandResult(await configPathCommand({ json: command.json })));
+  }
+  if (command.kind === 'init') {
+    process.exit(
+      printCommandResult(await configInitCommand({ json: command.json, force: command.force })),
+    );
+  }
+  process.exit(
+    printCommandResult(
+      await configShowCommand({
+        json: command.json,
+        sources: command.sources,
+        ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
+      }),
+    ),
+  );
+}
+if (args.tenantCommand) {
+  const command = args.tenantCommand;
+  const base = { dataDir: await resolveCommandDataDir(), json: command.json };
+  const result =
+    command.kind === 'list'
+      ? await tenantListCommand(base)
+      : command.kind === 'get'
+        ? await tenantGetCommand(command.id, base)
+        : command.kind === 'create'
+          ? await tenantCreateCommand(command.id, {
+              ...base,
+              ...(command.name !== undefined ? { name: command.name } : {}),
+            })
+          : await tenantUpdateCommand(command.id, {
+              ...base,
+              ...(command.name !== undefined ? { name: command.name } : {}),
+              ...(command.status !== undefined ? { status: command.status } : {}),
+            });
+  process.exit(printCommandResult(result));
+}
+if (args.migrate) {
+  process.exit(
+    printCommandResult(
+      await migrateCommand({
+        from: args.migrate.from,
+        to: args.migrate.to,
+        apply: args.migrate.apply,
+        json: args.migrate.json,
+        ...(args.migrate.tenantId !== undefined ? { tenantId: args.migrate.tenantId } : {}),
+        ...(args.migrate.source !== undefined ? { source: args.migrate.source } : {}),
+      }),
+    ),
+  );
+}
+if (args.trace) {
+  process.exit(
+    printCommandResult(
+      await tracePruneCommand({
+        dryRun: args.trace.dryRun,
+        json: args.trace.json,
+        ...(args.trace.tenantId !== undefined ? { tenantId: args.trace.tenantId } : {}),
+      }),
+    ),
+  );
+}
+
 const { runArg, pipeMode, sessionArg, servePort, resumeRunArg } = args;
 const resumeRunId = resumeRunArg !== null && resumeRunArg !== '' ? resumeRunArg : null;
 // 恢复模式：TTY 下恢复完进 REPL；非 TTY 下恢复完打印结果退出。
@@ -249,6 +375,13 @@ const initialResult = await bootstrap({
   headless,
   interactive,
   registerAskUser: interactive,
+  acquireLock: true,
+  ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+  ...(args.connectArg !== null
+    ? { connect: args.connectArg }
+    : process.env.VESSEL_CONNECT !== undefined
+      ? { connect: process.env.VESSEL_CONNECT }
+      : {}),
   // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
   configErrorExitCode: args.feishu ? 2 : 1,
 });
@@ -278,6 +411,13 @@ if (!useMock && interactive && !config.apiKey) {
       headless,
       interactive,
       registerAskUser: interactive,
+      acquireLock: true,
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+      ...(args.connectArg !== null
+        ? { connect: args.connectArg }
+        : process.env.VESSEL_CONNECT !== undefined
+          ? { connect: process.env.VESSEL_CONNECT }
+          : {}),
       configErrorExitCode: args.feishu ? 2 : 1,
     });
     await runWithConfig(result);
@@ -365,6 +505,17 @@ async function runWithConfig(result: BootstrapResult) {
       process.exit(1);
     }
 
+    // 0.5：token → principal（A-3 §10.4）。无 token + 回环 = 匿名 default/admin。
+    const authResult = resolveGatewayAuth(config, {
+      hostname: resolved.options.hostname,
+      allowRemote: resolved.options.allowRemote,
+    });
+    if (!authResult.ok) {
+      console.error(authResult.error);
+      await result.shutdown();
+      process.exit(1);
+    }
+
     // 远程 + 无显式 token：gateway 会生成 token（仍强制鉴权），但重启即变——醒目提示。
     const remote = !isLoopbackHostname(resolved.options.hostname);
     if (remote && resolved.options.allowRemote && resolveGatewayToken(config) === undefined) {
@@ -406,6 +557,8 @@ async function runWithConfig(result: BootstrapResult) {
         : {}),
       ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
     };
+    // 0.5 鉴权面：web 的 GatewayOptions 尚未合入本分支，先按冻结形状注入。
+    Object.assign(gatewayOptions, { auth: authResult.auth });
 
     // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
     // 冻结形状；合并后可直接写进 GatewayOptions。
