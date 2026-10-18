@@ -287,15 +287,9 @@ export function resolveEnvRefsInLayer(
   resolveSimpleSecrets(cloned, '', env, errors, resolved);
   resolveMcpServers(cloned, '', env, errors, resolved);
 
-  const tenant = cloned.tenant;
-  if (isRecord(tenant) && isRecord(tenant.tenants)) {
-    for (const [id, settings] of Object.entries(tenant.tenants)) {
-      if (!isRecord(settings) || !isRecord(settings.config)) continue;
-      const prefix = `tenant.tenants.${id}.config`;
-      resolveSimpleSecrets(settings.config, prefix, env, errors, resolved);
-      resolveMcpServers(settings.config, prefix, env, errors, resolved);
-    }
-  }
+  // 注意：不解析 `tenant.tenants.<id>.config` 内的 `_env`。
+  // overlay 必须保持 `_env` 原样，validator 才能执行“tenant 密钥只允许 _env”；
+  // 选中 tenant 时由 loader 单独解析该 overlay（A-4 §11.4 / A6-23）。
 
   return { layer: cloned as Partial<VesselConfig>, errors, resolved };
 }

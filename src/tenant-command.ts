@@ -10,7 +10,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   assertTenantId,
@@ -273,6 +273,135 @@ export async function tenantUpdateCommand(
 
 // ── Gateway 注入面（A-5：TenantControlLike） ────────────────
 
+/** 配置里的 tenant 元数据（`tenant.tenants.<id>` 的 name/status/quota） */
+export interface ConfiguredTenant {
+  name?: string;
+  status?: 'active' | 'disabled';
+  quota?: TenantMeta['quota'];
+}
+
+export interface CreateTenantControlOptions {
+  /**
+   * 已合并配置中的 tenant 定义。配置是 status/quota 的权威来源
+   * （A-3 §10.4）；tenant.json 只在配置缺失时兜底。
+   */
+  configured?: Record<string, ConfiguredTenant>;
+}
+
+/** 配置定义 → TenantMeta（created_at=0 表示未落盘） */
+function configuredMeta(
+  tenantId: string,
+  entry: ConfiguredTenant | undefined,
+): TenantMeta | undefined {
+  if (!entry) return undefined;
+  return {
+    tenant_id: tenantId,
+    name: entry.name ?? tenantId,
+    created_at: 0,
+    status: entry.status ?? 'active',
+    ...(entry.quota ? { quota: { ...entry.quota } } : {}),
+  };
+}
+
+/** quota 超限（gateway 映射为 RPC `quota_exceeded`） */
+function quotaError(tenantId: string, limit: number, kind: string): Error {
+  return Object.assign(
+    new Error(`quota_exceeded: ${kind} limit ${limit} reached for tenant "${tenantId}"`),
+    { code: 'quota_exceeded', details: { tenant_id: tenantId, limit } },
+  );
+}
+
+/** 本地日界（用于 max_runs_per_day） */
+function dayStartMs(now: number): number {
+  const date = new Date(now);
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+/** 当天已启动 run 数：trace 中的 run.started（若 trace 关闭则为 0）。 */
+async function countRunsToday(paths: TenantPaths, now: number): Promise<number> {
+  const since = dayStartMs(now);
+  let names: string[];
+  try {
+    names = await readdir(paths.events_dir);
+  } catch {
+    return 0;
+  }
+
+  let count = 0;
+  for (const name of names) {
+    if (!name.endsWith('.jsonl') || name.startsWith('.')) continue;
+    let text: string;
+    try {
+      text = await readFile(join(paths.events_dir, name), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of text.split('\n')) {
+      if (line.trim() === '') continue;
+      try {
+        const event = JSON.parse(line) as { type?: unknown; ts?: unknown };
+        if (event.type === 'run.started' && typeof event.ts === 'number' && event.ts >= since) {
+          count += 1;
+        }
+      } catch {
+        // 损坏行跳过（trace 读取同一口径）
+      }
+    }
+  }
+  return count;
+}
+
+/** tenant 数据目录的递归字节数（max_storage_bytes） */
+async function directorySize(dir: string): Promise<number> {
+  let entries: Array<{ name: string; isDirectory(): boolean; isFile(): boolean }>;
+  try {
+    entries = await readdir(dir, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    const target = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      total += await directorySize(target);
+    } else if (entry.isFile()) {
+      try {
+        total += (await stat(target)).size;
+      } catch {
+        // 并发删除等，忽略
+      }
+    }
+  }
+  return total;
+}
+
+/** 当前 session 数（file backend）；sqlite / memory 返回 0。 */
+async function countSessions(paths: TenantPaths): Promise<number> {
+  try {
+    const names = await readdir(paths.sessions_dir);
+    return names.filter((name) => name.endsWith('.json')).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** 磁盘 meta 与配置 meta 合并；配置的 status/quota 优先。 */
+function mergeMeta(
+  disk: TenantMeta | undefined,
+  configured: TenantMeta | undefined,
+): TenantMeta | undefined {
+  if (!disk) return configured;
+  if (!configured) return disk;
+  return {
+    ...disk,
+    name: configured.name,
+    status: configured.status,
+    ...(configured.quota || disk.quota
+      ? { quota: { ...(disk.quota ?? {}), ...(configured.quota ?? {}) } }
+      : {}),
+  };
+}
+
 function tenantControlError(
   code: 'not_found' | 'conflict' | 'invalid_params',
   message: string,
@@ -316,15 +445,99 @@ function toTenantInfo(meta: TenantMeta): TenantInfo {
   };
 }
 
+/** max_storage_bytes 执行点（runs.start / storage） */
+async function enforceStorage(
+  tenantId: string,
+  paths: TenantPaths,
+  quota: NonNullable<TenantMeta['quota']>,
+): Promise<void> {
+  if (quota.maxStorageBytes === undefined) return;
+  const size = await directorySize(paths.root);
+  if (size >= quota.maxStorageBytes) {
+    throw quotaError(tenantId, quota.maxStorageBytes, 'max_storage_bytes');
+  }
+}
+
 /** `GatewayOptions.tenants` 的 asm 适配（0.5 无 purge） */
-export function createTenantControl(dataDir: string): TenantControlLike {
+export function createTenantControl(
+  dataDir: string,
+  options: CreateTenantControlOptions = {},
+): TenantControlLike {
+  const configured = options.configured ?? {};
+  const configuredFor = (tenantId: string): TenantMeta | undefined =>
+    configuredMeta(tenantId, configured[tenantId]);
+
+  /** tenant.json（若目录存在）与配置定义合并；配置优先。 */
+  const resolveMeta = async (tenantId: string): Promise<TenantMeta | undefined> => {
+    const paths = resolveTenantPaths(dataDir, tenantId);
+    const disk = existsSync(paths.root)
+      ? ((await readMeta(paths)) ?? synthesizedMeta(tenantId))
+      : undefined;
+    return mergeMeta(disk, configuredFor(tenantId));
+  };
+
+  /** 当天 run 计数的进程内兜底（trace 关闭时仍能限流）。 */
+  const daily = new Map<string, { day: number; count: number }>();
+
   return {
+    async checkQuota(tenantId, operation): Promise<void> {
+      const meta = await resolveMeta(tenantId);
+      const quota = meta?.quota;
+      if (!quota) return;
+      const paths = resolveTenantPaths(dataDir, tenantId);
+      const now = Date.now();
+
+      if (operation === 'runs.start' || operation === 'runs.concurrent') {
+        // max_runs_per_day：trace 统计 + 进程内计数取最大值。
+        if (quota.maxRunsPerDay !== undefined) {
+          const day = dayStartMs(now);
+          const entry = daily.get(tenantId);
+          const memory = entry && entry.day === day ? entry.count : 0;
+          const used = Math.max(await countRunsToday(paths, now), memory);
+          if (used >= quota.maxRunsPerDay) {
+            throw quotaError(tenantId, quota.maxRunsPerDay, 'max_runs_per_day');
+          }
+          daily.set(tenantId, { day, count: used + 1 });
+        }
+        await enforceStorage(tenantId, paths, quota);
+        return;
+      }
+
+      if (operation === 'sessions.create') {
+        // 0.5 gateway 目前没有 sessions.create 调用点；保留执行点供后续接入。
+        if (quota.maxSessions !== undefined) {
+          const used = await countSessions(paths);
+          if (used >= quota.maxSessions) {
+            throw quotaError(tenantId, quota.maxSessions, 'max_sessions');
+          }
+        }
+        return;
+      }
+
+      if (operation === 'storage') {
+        await enforceStorage(tenantId, paths, quota);
+      }
+    },
+
     async list(): Promise<TenantInfo[]> {
-      return (await listTenantMetas(dataDir)).map(toTenantInfo);
+      const byId = new Map<string, TenantMeta>();
+      for (const meta of await listTenantMetas(dataDir)) byId.set(meta.tenant_id, meta);
+      for (const tenantId of Object.keys(configured)) {
+        try {
+          assertTenantId(tenantId);
+        } catch {
+          continue;
+        }
+        const merged = mergeMeta(byId.get(tenantId), configuredFor(tenantId));
+        if (merged) byId.set(tenantId, merged);
+      }
+      return [...byId.values()]
+        .sort((a, b) => a.tenant_id.localeCompare(b.tenant_id))
+        .map(toTenantInfo);
     },
 
     async get(tenantId: string): Promise<TenantInfo | null> {
-      const meta = await getTenantMeta(dataDir, tenantId);
+      const meta = await resolveMeta(tenantId);
       return meta ? toTenantInfo(meta) : null;
     },
 
@@ -338,7 +551,7 @@ export function createTenantControl(dataDir: string): TenantControlLike {
         throw tenantControlError('invalid_params', `invalid tenant id "${tenantId}"`);
       }
       const paths = resolveTenantPaths(dataDir, tenantId);
-      if (existsSync(paths.root)) {
+      if (existsSync(paths.root) || configuredFor(tenantId)) {
         throw tenantControlError('conflict', `tenant "${tenantId}" already exists`);
       }
 
@@ -371,7 +584,7 @@ export function createTenantControl(dataDir: string): TenantControlLike {
         throw tenantControlError('invalid_params', `invalid tenant id "${tenantId}"`);
       }
       const paths = resolveTenantPaths(dataDir, tenantId);
-      if (!existsSync(paths.root)) {
+      if (!(await resolveMeta(tenantId))) {
         throw tenantControlError('not_found', `tenant "${tenantId}"`);
       }
 

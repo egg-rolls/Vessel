@@ -43,6 +43,7 @@ import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { runUpdateCommand } from './cli-update';
 import { configInitCommand, configPathCommand, configShowCommand } from './config-command';
+import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { runEvalCommand } from './eval-command';
@@ -56,6 +57,7 @@ import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { planTeamWiring } from './team-wiring';
 import {
+  createTenantControl,
   tenantCreateCommand,
   tenantGetCommand,
   tenantListCommand,
@@ -626,6 +628,11 @@ async function runWithConfig(result: BootstrapResult) {
       ...(tenantFactory
         ? {
             defaultTenantId: result.tenantId,
+            // A6-13：tenants.get/list/create/update 的数据源。
+            // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
+            tenants: createTenantControl(dataDir, {
+              ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
+            }),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
@@ -647,7 +654,8 @@ async function runWithConfig(result: BootstrapResult) {
                   );
                 }
                 return buildConfigSnapshot({
-                  config: bundle.config,
+                  // A6-10：不向当前 tenant 暴露其它 tenant 的 overlay。
+                  config: sanitizeConfigForSnapshot(bundle.config),
                   sources: bundle.configSources,
                   paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
                   tenantId,
@@ -694,6 +702,21 @@ async function runWithConfig(result: BootstrapResult) {
             metricsControl: {
               rebuild: (tenantId: string) =>
                 rebuildMetrics(resolveTenantPaths(dataDir, tenantId).events_dir),
+              // A6-09：只重置该 tenant 的 collector；无 metrics 的 tenant → not_found。
+              reset: (tenantId?: string) => {
+                const id = tenantId ?? result.tenantId;
+                const metrics =
+                  tenantFactory?.metricsFor(id) ??
+                  (id === result.tenantId ? result.metrics : undefined);
+                const reset = (metrics as { reset?: () => void } | undefined)?.reset;
+                if (typeof reset !== 'function') {
+                  throw Object.assign(
+                    new Error(`not_found: metrics are not available for tenant "${id}"`),
+                    { code: 'not_found' },
+                  );
+                }
+                reset.call(metrics);
+              },
             },
           }
         : {}),

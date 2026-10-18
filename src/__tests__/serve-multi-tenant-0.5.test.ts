@@ -63,7 +63,7 @@ async function waitForOutput(
 
 interface RpcResponse {
   result?: unknown;
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; details?: unknown };
 }
 
 async function rpc(
@@ -99,6 +99,93 @@ function traceText(dir: string, tenantId: string): string {
     .join('\n');
 }
 
+it('enforces config max_concurrent_runs through the tenant registry', async () => {
+  const dir = tmpDir();
+  writeFile(
+    path.join(dir, 'vessel.yaml'),
+    [
+      'provider:',
+      '  name: openai',
+      '  model: gpt-4',
+      'tenant:',
+      '  default: acme',
+      '  tenants:',
+      '    acme:',
+      '      status: active',
+      '      config: {}',
+      '    zero:',
+      '      status: active',
+      '      quota:',
+      '        max_concurrent_runs: 0',
+      '      config: {}',
+      '    daily:',
+      '      status: active',
+      '      quota:',
+      '        max_runs_per_day: 1',
+      '      config: {}',
+      '',
+    ].join('\n'),
+  );
+  writeFile(
+    path.join(dir, '.vessel', 'config.yaml'),
+    [
+      'serve:',
+      '  tokens:',
+      '    tok-acme:',
+      '      tenant_id: acme',
+      '      role: admin',
+      '    tok-zero:',
+      '      tenant_id: zero',
+      '      role: admin',
+      '    tok-daily:',
+      '      tenant_id: daily',
+      '      role: admin',
+      '',
+    ].join('\n'),
+  );
+
+  const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
+    cwd: dir,
+    env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  try {
+    const output = await waitForOutput(proc, /Gateway\s+http/);
+    const url = /Gateway\s+(http[^\s]+)/.exec(output)?.[1] as string;
+    expect(url).toBeDefined();
+
+    const info = await rpc(url, 'tok-zero', 'tenants.get', { tenant_id: 'zero' });
+    expect(
+      (info.result as { tenant: { quota?: { max_concurrent_runs?: number } } }).tenant.quota,
+    ).toMatchObject({ max_concurrent_runs: 0 });
+
+    const started = await rpc(url, 'tok-zero', 'runs.start', { input: 'blocked' });
+    expect(started.error?.code).toBe('quota_exceeded');
+    expect(started.error?.details).toMatchObject({ tenant_id: 'zero', limit: 0 });
+
+    // max_runs_per_day：第一次通过，第二次 quota_exceeded。
+    const dailyFirst = await rpc(url, 'tok-daily', 'runs.start', { input: 'first' });
+    expect(dailyFirst.error).toBeUndefined();
+    const dailySecond = await rpc(url, 'tok-daily', 'runs.start', { input: 'second' });
+    expect(dailySecond.error?.code).toBe('quota_exceeded');
+    expect(dailySecond.error?.details).toMatchObject({ tenant_id: 'daily', limit: 1 });
+
+    // acme 无 quota，仍可启动。
+    const acme = await rpc(url, 'tok-acme', 'runs.start', { input: 'ok' });
+    expect(acme.error).toBeUndefined();
+
+    // 未配置 observability 的 tenant：metrics.reset → not_found。
+    const reset = await rpc(url, 'tok-acme', 'metrics.reset', {});
+    expect(reset.error?.code).toBe('not_found');
+  } finally {
+    proc.kill();
+    await proc.exited;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 30000);
+
 it('serves two isolated tenants with per-tenant tokens', async () => {
   const dir = tmpDir();
   writeFile(
@@ -116,6 +203,8 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
       '    acme:',
       '      status: active',
       '      config:',
+      '        provider:',
+      '          api_key_env: ACME_API_KEY',
       '        agent:',
       '          system_prompt: acme-prompt',
       '        plugins:',
@@ -155,7 +244,14 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
 
   const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
     cwd: dir,
-    env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
+    env: {
+      ...process.env,
+      VESSEL_MOCK: '1',
+      USERPROFILE: dir,
+      HOME: dir,
+      // A6-23：非 default tenant overlay 的 _env 必须能正常启动。
+      ACME_API_KEY: 'acme-key-from-env',
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -171,6 +267,23 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     const workLock = path.join(dir, '.vessel', 'data', 'tenants', 'work', '.lock');
     expect(fs.existsSync(acmeLock)).toBe(true);
     expect(fs.existsSync(workLock)).toBe(true);
+
+    // A6-13：gateway 注入 tenants registry。
+    const tenantList = (await rpc(url, 'tok-admin', 'tenants.list', {})).result as {
+      tenants: Array<{ tenant_id: string; status: string }>;
+    };
+    // 配置里的 tenant（含 disabled）都应出现在 registry 中。
+    expect(tenantList.tenants.map((tenant) => tenant.tenant_id).sort()).toEqual([
+      'acme',
+      'off',
+      'work',
+    ]);
+    expect(tenantList.tenants.find((tenant) => tenant.tenant_id === 'off')?.status).toBe(
+      'disabled',
+    );
+
+    const tenantGet = await rpc(url, 'tok-admin', 'tenants.get', { tenant_id: 'acme' });
+    expect((tenantGet.result as { tenant: { tenant_id: string } }).tenant.tenant_id).toBe('acme');
 
     // acme run
     const acmeStart = await rpc(url, 'tok-acme', 'runs.start', {
@@ -275,6 +388,14 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     expect(workConfig.tenant_id).toBe('work');
     expect(workConfig.config.agent?.systemPrompt).toBe('work-prompt');
 
+    // A6-10：快照不含 tenant 注册表，也不泄漏另一 tenant 的 overlay。
+    const acmeConfigJson = JSON.stringify(acmeConfig.config);
+    const workConfigJson = JSON.stringify(workConfig.config);
+    expect(acmeConfigJson).not.toContain('"tenants"');
+    expect(acmeConfigJson).not.toContain('work-prompt');
+    expect(workConfigJson).not.toContain('"tenants"');
+    expect(workConfigJson).not.toContain('acme-prompt');
+
     const acmePlugins = (await rpc(url, 'tok-acme', 'plugins.list', {})).result as {
       plugins: Array<{ name: string; enabled: boolean }>;
     };
@@ -291,6 +412,14 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
       metrics: { runs: { started: number; completed: number } };
     };
     expect(workMetrics.metrics.runs.started).toBeGreaterThanOrEqual(1);
+
+    // A6-09：metrics.reset 只清空该 tenant。
+    const reset = await rpc(url, 'tok-acme', 'metrics.reset', {});
+    expect(reset.error).toBeUndefined();
+    const afterReset = await rpc(url, 'tok-acme', 'metrics.get', {});
+    expect(
+      (afterReset.result as { metrics: { runs: { started: number } } }).metrics.runs.started,
+    ).toBe(0);
 
     // disabled tenant → forbidden（admin token 显式指定 tenant）。
     const offStart = await rpc(url, 'tok-admin', 'runs.start', {
