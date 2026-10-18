@@ -172,6 +172,15 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     expect(fs.existsSync(acmeLock)).toBe(true);
     expect(fs.existsSync(workLock)).toBe(true);
 
+    // A6-13：gateway 注入 tenants registry。
+    const tenantList = (await rpc(url, 'tok-admin', 'tenants.list', {})).result as {
+      tenants: Array<{ tenant_id: string; status: string }>;
+    };
+    expect(tenantList.tenants.map((tenant) => tenant.tenant_id).sort()).toEqual(['acme', 'work']);
+
+    const tenantGet = await rpc(url, 'tok-admin', 'tenants.get', { tenant_id: 'acme' });
+    expect((tenantGet.result as { tenant: { tenant_id: string } }).tenant.tenant_id).toBe('acme');
+
     // acme run
     const acmeStart = await rpc(url, 'tok-acme', 'runs.start', {
       input: 'hello-acme',

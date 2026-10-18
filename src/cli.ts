@@ -56,6 +56,7 @@ import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { planTeamWiring } from './team-wiring';
 import {
+  createTenantControl,
   tenantCreateCommand,
   tenantGetCommand,
   tenantListCommand,
@@ -626,6 +627,8 @@ async function runWithConfig(result: BootstrapResult) {
       ...(tenantFactory
         ? {
             defaultTenantId: result.tenantId,
+            // A6-13：tenants.get/list/create/update 的数据源。
+            tenants: createTenantControl(dataDir),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
