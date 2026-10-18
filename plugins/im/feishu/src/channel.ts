@@ -27,6 +27,8 @@ export const BUSY_REPLY_TEXT = 'busy';
 export const TIMEOUT_REPLY_TEXT = 'Request timed out.';
 export const ERROR_REPLY_TEXT = 'Request failed.';
 
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -42,6 +44,7 @@ class FeishuChannelImpl implements FeishuPlugin {
 
   private readonly config: ResolvedFeishuConfig;
   private readonly options: FeishuPluginOptions;
+  private readonly tenantId?: string;
   private readonly transport: FeishuTransport;
   private readonly queues: PerChatQueues;
   private readonly dedupe = new LruSet(FEISHU_DEDUPE_SIZE);
@@ -55,6 +58,16 @@ class FeishuChannelImpl implements FeishuPlugin {
 
   constructor(options: FeishuPluginOptions) {
     this.options = options;
+    if (options.tenantId !== undefined) {
+      if (!TENANT_ID_RE.test(options.tenantId)) {
+        throw new FeishuError(
+          'channel_auth_failed',
+          `invalid tenant id "${options.tenantId}"`,
+          'config',
+        );
+      }
+      this.tenantId = options.tenantId;
+    }
     this.config = resolveFeishuConfig(options.config, options.env);
     this.transport =
       options.transport ??
@@ -98,6 +111,7 @@ class FeishuChannelImpl implements FeishuPlugin {
       ...(this.options.perAgentSerial !== undefined
         ? { perAgentSerial: this.options.perAgentSerial }
         : {}),
+      ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
     });
 
     try {
@@ -169,6 +183,7 @@ class FeishuChannelImpl implements FeishuPlugin {
       active_chats: this.queues.activeChats(),
       queued_messages: this.queues.pendingCount(),
       ...(this.lastError !== undefined ? { last_error: this.lastError } : {}),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
   }
 
@@ -293,6 +308,7 @@ class FeishuChannelImpl implements FeishuPlugin {
       run_id: chatId === undefined ? 'feishu' : `feishu:${chatId}`,
       data,
       ts: Date.now(),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     });
   }
 }

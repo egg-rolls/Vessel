@@ -30,6 +30,11 @@ export interface McpServerConfig {
 export interface McpPluginOptions {
   servers: McpServerConfig[];
   events?: EventStream;
+  /**
+   * 0.5：tenant 作用域（可选）。缺省 = 0.4 兼容，不写 tenant_id。
+   * server 配置与路径由 asm 按 tenant 解析；插件不追加 tenants/<id>。
+   */
+  tenantId?: string;
 }
 
 /** 冻结的插件形状 */

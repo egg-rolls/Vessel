@@ -36,13 +36,15 @@ export class McpServerConnection {
   serverInfo?: { name: string; version?: string };
 
   private readonly events?: EventStream;
+  private readonly tenantId?: string;
   private transport?: McpTransport;
   private toolList: McpToolDef[] = [];
   private closed = false;
 
-  constructor(config: McpServerConfig, events?: EventStream) {
+  constructor(config: McpServerConfig, events?: EventStream, tenantId?: string) {
     this.config = config;
     this.events = events;
+    if (tenantId !== undefined) this.tenantId = tenantId;
   }
 
   get tools(): McpToolDef[] {
@@ -311,6 +313,7 @@ export class McpServerConnection {
       run_id: runId ?? `mcp:${this.config.name}`,
       data,
       ts: Date.now(),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     });
   }
 }

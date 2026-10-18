@@ -45,6 +45,8 @@ export interface FeishuStatus {
   active_chats: number;
   queued_messages: number;
   last_error?: string;
+  /** 0.5：可选；缺失视为 default。 */
+  tenant_id?: string;
 }
 
 export interface FeishuChannel {
@@ -84,6 +86,11 @@ export interface FeishuTransport {
 
 export interface FeishuPluginOptions {
   config: FeishuConfig;
+  /**
+   * 0.5：tenant 作用域（可选）。缺省 = 0.4 兼容，不写 tenant_id。
+   * tenant 实例由 asm 注入 `env: {}`，避免 ambient VESSEL_FEISHU_* 串用。
+   */
+  tenantId?: string;
   /** 专用 Host 的事件出口；渠道把专用 Host 事件转发到这里。 */
   events: EventStream;
   /** 专用 Host 的成员依赖（Addendum B §11.3.3）；不注入主 Host。 */
