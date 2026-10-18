@@ -13,6 +13,7 @@ import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createCommands, doResume } from '../commands/commands.js';
+import { listSessions } from '../commands/sessions-command.js';
 import { formatWorkflowOutcome } from '../commands/workflows-command.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -179,11 +180,11 @@ function InkRepl({ ctx }: InkReplProps) {
   // 当 showResumePicker 变为 true 时加载会话列表
   useEffect(() => {
     if (state.showResumePicker) {
-      ctx.session.listRich().then((list) => {
+      listSessions(ctx).then((list) => {
         dispatch({ type: 'setResumeSessions', sessions: list });
       });
     }
-  }, [state.showResumePicker, ctx.session, dispatch]);
+  }, [state.showResumePicker, ctx, dispatch]);
 
   // 处理输入（TextInput 的 onSubmit —— Enter 的唯一入口）
   // 注意：Ink 的 useInput 子组件先于父组件触发，且无法 stopPropagation，
@@ -490,7 +491,12 @@ function InkRepl({ ctx }: InkReplProps) {
   return (
     <Box flexDirection="column" height={stdout.rows}>
       {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
-      <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
+      <StatusBar
+        provider={ctx.provider}
+        session={state.currentSessionId}
+        plugins={ctx.plugins}
+        {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
+      />
       <UpdateBanner events={ctx.events} />
 
       {/* 滚动区域：历史 + 流式输出 + 子 agent 活动，flexGrow 撑满剩余空间 */}

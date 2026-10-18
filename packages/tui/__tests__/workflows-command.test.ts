@@ -9,6 +9,8 @@ import {
   sortWorkflowRuns,
 } from '../src/commands/workflows-command.js';
 import type {
+  RpcClientLike,
+  RpcEventNotificationLike,
   WorkflowRunDetailLike,
   WorkflowRunStatusLike,
   WorkflowRunSummaryLike,
@@ -374,5 +376,106 @@ describe('formatWorkflowOutcome', () => {
     expect(
       formatWorkflowOutcome('wf_1', { status: 'failed', error: new Error('workflow_invalid') }),
     ).toContain('[invalid]');
+  });
+});
+
+function makeWorkflowRpc(handler: (method: string, params?: unknown) => unknown): RpcClientLike & {
+  calls: Array<{ method: string; params?: unknown }>;
+  handlers: Set<(notification: RpcEventNotificationLike) => void>;
+} {
+  const calls: Array<{ method: string; params?: unknown }> = [];
+  const handlers = new Set<(notification: RpcEventNotificationLike) => void>();
+  return {
+    calls,
+    handlers,
+    async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+      calls.push({ method, ...(params !== undefined ? { params } : {}) });
+      return (await handler(method, params)) as T;
+    },
+    subscribe(handlerFn) {
+      handlers.add(handlerFn);
+      return () => handlers.delete(handlerFn);
+    },
+  };
+}
+
+describe('0.5 RPC 路径', () => {
+  it('workflow.list 走方法表', async () => {
+    const rpc = makeWorkflowRpc(() => ({ workflows: [run('wf_1', 10, 'running')] }));
+    const result = await runWorkflowsCommand(['list'], makeCtx({ rpc }));
+    expect(result.output).toContain('Workflow runs (1');
+    expect(rpc.calls[0]).toEqual({ method: 'workflow.list', params: { limit: 20 } });
+  });
+
+  it('workflow.get 返回详情', async () => {
+    const detail: WorkflowRunDetailLike = {
+      ...run('wf_1', 10, 'completed'),
+      definition_path: '/wf/demo.yaml',
+      inputs: { topic: 'x' },
+      steps: [
+        {
+          id: 'step1',
+          type: 'agent',
+          status: 'completed',
+          attempts: 1,
+          output_preview: 'ok',
+        },
+      ],
+    };
+    const rpc = makeWorkflowRpc(() => ({ workflow: detail }));
+    const result = await runWorkflowsCommand(['show', 'wf_1'], makeCtx({ rpc }));
+    expect(result.output).toContain('Workflow run wf_1');
+    expect(result.output).toContain('definition:  /wf/demo.yaml');
+    expect(result.output).toContain('step1');
+    expect(rpc.calls[0]).toEqual({
+      method: 'workflow.get',
+      params: { workflow_run_id: 'wf_1' },
+    });
+  });
+
+  it('workflow.start 只取 id，完成走事件', async () => {
+    const rpc = makeWorkflowRpc(() => ({ workflow_run_id: 'wf_new' }));
+    const result = await runWorkflowsCommand(['run', 'demo'], makeCtx({ rpc }));
+
+    expect(result.workflowRun?.workflowRunId).toBe('wf_new');
+    expect(rpc.calls[0]).toEqual({ method: 'workflow.start', params: { name: 'demo' } });
+    expect(rpc.handlers.size).toBe(1);
+
+    for (const handler of [...rpc.handlers]) {
+      handler({
+        method: 'events.event',
+        params: {
+          type: 'workflow.completed',
+          run_id: 'wf_new',
+          data: { workflow_run_id: 'wf_new' },
+        },
+      });
+    }
+    await expect(result.workflowRun?.done).resolves.toMatchObject({
+      workflow_run_id: 'wf_new',
+      status: 'completed',
+    });
+    expect(rpc.handlers.size).toBe(0);
+  });
+
+  it('workflow.resume 与 cancel 走方法表', async () => {
+    const rpc = makeWorkflowRpc((method) => {
+      if (method === 'workflow.resume') return { workflow_run_id: 'wf_9' };
+      return {};
+    });
+    const resumed = await runWorkflowsCommand(['resume', 'wf_9'], makeCtx({ rpc }));
+    expect(resumed.workflowRun?.workflowRunId).toBe('wf_9');
+
+    const cancelResult = await runWorkflowsCommand(['cancel', 'wf_9'], makeCtx({ rpc }));
+    expect(cancelResult.output).toContain('Cancellation requested');
+    expect(rpc.calls.some((call) => call.method === 'workflow.cancel')).toBe(true);
+  });
+
+  it('RPC 错误按 code 展示', async () => {
+    const rpc = makeWorkflowRpc(() => {
+      throw { code: 'not_found', message: 'workflow not found' };
+    });
+    const result = await runWorkflowsCommand(['show', 'wf_x'], makeCtx({ rpc }));
+    expect(result.output).toContain('✗ [not_found] workflow not found');
   });
 });

@@ -83,6 +83,10 @@ export {
   type StartupNoticeInput,
 } from './repl/startup-notice.js';
 export type {
+  CapabilityManifestLike,
+  CapabilityMethodLike,
+  CapabilityPluginLike,
+  CapabilityToolLike,
   DurableRunHandle,
   DurableRunOutcome,
   DurableRunSummary,
@@ -93,6 +97,13 @@ export type {
   McpServerSummary,
   MetricsSnapshotLike,
   ReplContext,
+  RpcClientLike,
+  RpcErrorCodeLike,
+  RpcErrorLike,
+  RpcEventNotificationLike,
+  TenantInfoLike,
+  TenantQuotaLike,
+  TenantSummaryLike,
   WorkflowOutcomeLike,
   WorkflowRunDetailLike,
   WorkflowRunHandle,
@@ -109,6 +120,25 @@ export {
   divider,
   infoPanel,
 } from './rich-renderer.js';
+export {
+  formatRpcError,
+  isRpcError,
+  isRpcErrorCode,
+  RPC_ERROR_CODES,
+  readRpcCode,
+  redactForDisplay,
+} from './rpc.js';
+export {
+  type CompletionWaiter,
+  type PollOptions,
+  pollRunCompletion,
+  type RunCompletionOutcome,
+  type RunCompletionStatus,
+  type WorkflowCompletionOutcome,
+  type WorkflowCompletionStatus,
+  waitForRunCompletion,
+  waitForWorkflowCompletion,
+} from './rpc-events.js';
 // Git 工具
 export { getCurrentGitBranch } from './utils/git.js';
 export type { SetupWizardConfig } from './wizard/setup-wizard.js';

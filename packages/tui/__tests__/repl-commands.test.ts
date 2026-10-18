@@ -21,7 +21,7 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 15 个扁平命令（含 0.3 与 0.4 命令）', () => {
+  it('createCommands 注册 20 个扁平命令（含 0.3 / 0.4 / 0.5 命令）', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('tools');
@@ -32,6 +32,11 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).toContain('workflows');
     expect(names).toContain('metrics');
     expect(names).toContain('feishu');
+    expect(names).toContain('capabilities');
+    expect(names).toContain('config');
+    expect(names).toContain('tenant');
+    expect(names).toContain('trace');
+    expect(names).toContain('sessions');
     expect(names).toContain('new');
     expect(names).toContain('history');
     expect(names).toContain('help');
@@ -42,7 +47,7 @@ describe('CommandRegistry 扁平命令', () => {
     // 已删命令（/skills、/assets）仍不注册
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
-    expect(names.length).toBe(15);
+    expect(names.length).toBe(20);
     // /resume 仍是会话恢复，usage 不被 /runs 影响
     expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe('/resume [number|id]');
   });
@@ -83,6 +88,37 @@ describe('CommandRegistry 扁平命令', () => {
     const state = makeState(ctx.currentSessionId);
     const result = await reg.execute('tools', ctx, state);
     expect(result.output ?? '').toContain('No tools registered');
+  });
+
+  it('/tools 优先 RPC tools.list', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string): Promise<T> {
+          expect(method).toBe('tools.list');
+          return { tools: [{ name: 'bash', description: 'shell' }] } as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const result = await reg.execute('tools', ctx, makeState(ctx.currentSessionId));
+    expect(result.output ?? '').toContain('bash: shell');
+  });
+
+  it('/plugins 优先 RPC plugins.list', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string): Promise<T> {
+          expect(method).toBe('plugins.list');
+          return { plugins: [{ name: 'workflow', enabled: true }, 'feishu'] } as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const result = await reg.execute('plugins', ctx, makeState(ctx.currentSessionId));
+    expect(result.output ?? '').toContain('workflow');
+    expect(result.output ?? '').toContain('feishu');
   });
 });
 

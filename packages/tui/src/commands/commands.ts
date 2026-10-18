@@ -24,10 +24,21 @@
  */
 
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
+import { formatRpcError } from '../rpc.js';
+import { capabilitiesCommand } from './capabilities-command.js';
+import { configCommand } from './config-command.js';
 import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
 import { metricsCommand } from './metrics-command.js';
 import { runsCommand } from './runs-command.js';
+import {
+  deleteSession,
+  getSessionState,
+  listSessions,
+  sessionsCommand,
+} from './sessions-command.js';
+import { tenantCommand } from './tenant-command.js';
+import { traceCommand } from './trace-command.js';
 import { workflowsCommand } from './workflows-command.js';
 
 // ── 类型 ──────────────────────────────────────────
@@ -139,6 +150,11 @@ export function createCommands(): CommandRegistry {
   reg.register(workflowsCommand());
   reg.register(metricsCommand());
   reg.register(feishuCommand());
+  reg.register(capabilitiesCommand());
+  reg.register(configCommand());
+  reg.register(tenantCommand());
+  reg.register(traceCommand());
+  reg.register(sessionsCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));
@@ -178,7 +194,7 @@ function resumeCommand(): CommandEntry {
     usage: '/resume [number|id]',
     run: async (args, ctx, _state) => {
       if (args.length === 0) {
-        const sessions = await ctx.session.listRich();
+        const sessions = await listSessions(ctx);
         if (sessions.length === 0) {
           return { handled: true, output: '\nNo sessions to resume.\n' };
         }
@@ -211,7 +227,7 @@ export async function consumePendingResume(
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
-  const sessions = await ctx.session.listRich();
+  const sessions = await listSessions(ctx);
   const target = sessions[num - 1];
   if (!target) {
     const output = `\nNo session #${num}. Cancelled.\n`;
@@ -230,12 +246,12 @@ async function resolveResumeTarget(
 ): Promise<{ ok: true; sessionId: string } | { ok: false; message: string }> {
   const num = Number.parseInt(arg, 10);
   if (!Number.isNaN(num) && num >= 1) {
-    const sessions = await ctx.session.listRich();
+    const sessions = await listSessions(ctx);
     const target = sessions[num - 1];
     if (!target) return { ok: false, message: `No session #${num}.` };
     return { ok: true, sessionId: target.session_id };
   }
-  const loaded = await ctx.session.load(arg);
+  const loaded = await getSessionState(ctx, arg);
   if (!loaded) return { ok: false, message: `Session "${arg}" not found.` };
   return { ok: true, sessionId: arg };
 }
@@ -245,7 +261,7 @@ async function resolveResumeTarget(
 export async function doResume(ctx: ReplContext, sessionId: string): Promise<ResumeResult> {
   ctx.context.clear();
   ctx.onSessionChange(sessionId);
-  const loaded = await ctx.session.load(sessionId);
+  const loaded = await getSessionState(ctx, sessionId);
   const msgCount = loaded?.messages.length ?? 0;
   return {
     message: `Resumed session "${sessionId}" (${msgCount} messages).`,
@@ -263,9 +279,9 @@ function newCommand(): CommandEntry {
     run: async (_args, ctx, state) => {
       const oldId = state.currentSessionId;
       try {
-        const old = await ctx.session.load(oldId);
+        const old = await getSessionState(ctx, oldId);
         if (old && old.messages.length === 0) {
-          await ctx.session.delete(oldId);
+          await deleteSession(ctx, oldId);
         }
       } catch {
         // 丢弃失败不阻塞开新会话
@@ -306,7 +322,7 @@ function historyCommand(): CommandEntry {
     description: '显示当前会话的对话历史',
     usage: '/history',
     run: async (_args, ctx, state) => {
-      const loaded = await ctx.session.load(state.currentSessionId);
+      const loaded = await getSessionState(ctx, state.currentSessionId);
       if (!loaded || loaded.messages.length === 0) {
         return { handled: true, output: '\nNo conversation history.\n' };
       }
@@ -325,20 +341,57 @@ function historyCommand(): CommandEntry {
 
 // ── /tools ───────────────────────────────────────
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readToolList(value: unknown): Array<{ name: string; description?: string }> {
+  const raw = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.tools)
+      ? value.tools
+      : [];
+  return raw
+    .filter(
+      (item): item is Record<string, unknown> => isRecord(item) && typeof item.name === 'string',
+    )
+    .map((item) => ({
+      name: item.name as string,
+      ...(typeof item.description === 'string' ? { description: item.description } : {}),
+    }));
+}
+
+function readPluginNames(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.plugins)
+      ? value.plugins
+      : [];
+  return raw
+    .map((item) => (typeof item === 'string' ? item : isRecord(item) ? item.name : undefined))
+    .filter((name): name is string => typeof name === 'string');
+}
+
 function toolsCommand(): CommandEntry {
   return {
     name: 'tools',
     description: '列出已注册工具',
     usage: '/tools',
-    run: (_args, ctx, _state) => {
-      const list = ctx.pluginHost.listTools();
-      if (list.length === 0) {
-        return { handled: true, output: '\nNo tools registered.\n' };
+    run: async (_args, ctx, _state) => {
+      try {
+        const list = ctx.rpc
+          ? readToolList(await ctx.rpc.request<unknown>('tools.list'))
+          : ctx.pluginHost.listTools();
+        if (list.length === 0) {
+          return { handled: true, output: '\nNo tools registered.\n' };
+        }
+        const lines = ['', `Available tools (${list.length}):`];
+        for (const t of list) lines.push(`  - ${t.name}: ${t.description ?? ''}`.trimEnd());
+        lines.push('');
+        return { handled: true, output: lines.join('\n') };
+      } catch (error) {
+        return { handled: true, output: `\nFailed to list tools:\n${formatRpcError(error)}\n` };
       }
-      const lines = ['', `Available tools (${list.length}):`];
-      for (const t of list) lines.push(`  - ${t.name}: ${t.description}`);
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
     },
   };
 }
@@ -350,15 +403,24 @@ function pluginsCommand(): CommandEntry {
     name: 'plugins',
     description: '列出已加载插件',
     usage: '/plugins',
-    run: (_args, ctx, _state) => {
-      const plugins = ctx.plugins;
-      if (plugins.length === 0) {
-        return { handled: true, output: '\nNo plugins loaded.\n' };
+    run: async (_args, ctx, _state) => {
+      try {
+        const plugins = ctx.rpc
+          ? readPluginNames(await ctx.rpc.request<unknown>('plugins.list'))
+          : ctx.plugins;
+        if (plugins.length === 0) {
+          return { handled: true, output: '\nNo plugins loaded.\n' };
+        }
+        const lines = ['', `Loaded plugins (${plugins.length}):`];
+        for (const p of plugins) lines.push(`  - ${p}`);
+        lines.push('');
+        return { handled: true, output: lines.join('\n') };
+      } catch (error) {
+        return {
+          handled: true,
+          output: `\nFailed to list plugins:\n${formatRpcError(error)}\n`,
+        };
       }
-      const lines = ['', `Loaded plugins (${plugins.length}):`];
-      for (const p of plugins) lines.push(`  - ${p}`);
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
     },
   };
 }

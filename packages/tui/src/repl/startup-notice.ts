@@ -27,6 +27,8 @@ export interface StartupNoticeInput {
   interruptedWorkflows?: WorkflowRunSummaryLike[] | null;
   /** 0.4：null = 未注入 / 查询失败 / 未连接 */
   feishu?: FeishuStatusLike | null;
+  /** 0.5：当前 tenant；default / 缺失时不显示 */
+  tenantId?: string | null;
 }
 
 /** 纯函数：生成启动横幅（null = 不输出） */
@@ -38,6 +40,10 @@ export function buildStartupNotice(input: StartupNoticeInput): string | null {
   const segments: string[] = [];
   const hints: string[] = [];
 
+  if (input.tenantId && input.tenantId !== 'default') {
+    segments.push(`Tenant: ${input.tenantId}`);
+    hints.push('/tenant');
+  }
   if (mcpCount > 0) {
     segments.push(`MCP: ${mcpCount} ${mcpCount === 1 ? 'server' : 'servers'}`);
     hints.push('/mcp');
@@ -83,5 +89,6 @@ export async function loadStartupNotice(ctx: ReplContext): Promise<string | null
     interruptedRuns,
     interruptedWorkflows,
     feishu: feishuStatus,
+    ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
   });
 }

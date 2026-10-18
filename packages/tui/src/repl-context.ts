@@ -187,6 +187,90 @@ export interface FeishuControlLike {
   status(): FeishuStatusLike;
 }
 
+// ── 0.5 F3：统一 RPC 入口与 tenant（tui 定义结构，asm 注入实现） ──
+
+/** 冻结错误码集合（DECISION-010 §2.3 / Addendum A-3 §10.2） */
+export type RpcErrorCodeLike =
+  | 'unauthorized'
+  | 'forbidden'
+  | 'not_found'
+  | 'invalid_params'
+  | 'tenant_locked'
+  | 'quota_exceeded'
+  | 'conflict'
+  | 'internal';
+
+/** RPC 失败对象形状（asm 的 RpcClientError 结构兼容） */
+export interface RpcErrorLike {
+  code: RpcErrorCodeLike;
+  message: string;
+  details?: unknown;
+}
+
+/** 订阅通知（A-3 §10.3 冻结） */
+export interface RpcEventNotificationLike {
+  method: 'events.event';
+  /** RunEvent；缺字段时按可选处理（A-4 §11.1） */
+  params: unknown;
+}
+
+/**
+ * RPC 客户端（E16；A-3 §10.2 / A-4 §11.6）。
+ * vessel 自身 bootstrap 在 local 与 http 两种模式下都必须注入。
+ */
+export interface RpcClientLike {
+  request<T = unknown>(method: string, params?: unknown): Promise<T>;
+  subscribe(handler: (notification: RpcEventNotificationLike) => void): () => void;
+}
+
+/** 启动时解析出的 tenant（只用于展示；不参与数据访问） */
+export interface TenantInfoLike {
+  tenant_id: string;
+  data_dir?: string;
+}
+
+/** tenant 元数据（A-4 §11.3 / asm TenantMeta 形状） */
+export interface TenantQuotaLike {
+  max_sessions?: number;
+  max_runs_per_day?: number;
+  max_concurrent_runs?: number;
+  max_storage_bytes?: number;
+}
+
+export interface TenantSummaryLike {
+  tenant_id: string;
+  name?: string;
+  created_at?: number;
+  status?: 'active' | 'disabled';
+  quota?: TenantQuotaLike;
+}
+
+/** capability manifest（A-3 / DECISION-010 §2.3） */
+export interface CapabilityMethodLike {
+  name: string;
+  permission: 'read' | 'write' | 'admin';
+  params_schema?: unknown;
+  result_schema?: unknown;
+}
+
+export interface CapabilityToolLike {
+  name: string;
+  description?: string;
+}
+
+export interface CapabilityPluginLike {
+  name: string;
+  enabled: boolean;
+}
+
+export interface CapabilityManifestLike {
+  version: string;
+  config_schema_version: number;
+  methods: CapabilityMethodLike[];
+  tools: CapabilityToolLike[];
+  plugins: CapabilityPluginLike[];
+}
+
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
 export interface ReplContext {
   // ── 核心能力（egg-rolls 构造并注入）──────────────────
@@ -260,4 +344,12 @@ export interface ReplContext {
 
   /** 飞书渠道状态；feishu 未启用时不注入（已启用但未连接仍注入） */
   feishu?: FeishuControlLike;
+
+  // ── 0.5 注入面（vessel bootstrap 必须注入；旧字段只服务第三方嵌入） ──
+
+  /** 统一 RPC 入口（LocalRpcClient / HttpRpcClient）；TUI 的数据访问都走它 */
+  rpc?: RpcClientLike;
+
+  /** 当前 tenant；缺失时按 default 展示 */
+  tenant?: TenantInfoLike;
 }
