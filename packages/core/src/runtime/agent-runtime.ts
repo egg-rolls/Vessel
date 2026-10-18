@@ -61,6 +61,8 @@ export class AgentRuntime {
   /** durable run 检查点（0.3）；缺省不写、零开销 */
   private readonly runStore?: RunStore;
   private readonly agentId?: string;
+  /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
+  private readonly tenantId?: string;
   /** 同一 run 的并发 resume 锁（进程内；DECISION-008 Addendum A-2） */
   private readonly resuming = new Set<string>();
   /** 当前执行的 checkpoint 元数据（run() 或 resume() 时设置） */
@@ -78,6 +80,7 @@ export class AgentRuntime {
     this.systemPrompt = opts.systemPrompt;
     this.runStore = opts.runStore;
     this.agentId = opts.agentId;
+    this.tenantId = opts.tenantId;
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
     this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
 
@@ -96,9 +99,9 @@ export class AgentRuntime {
     this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
 
     // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
-    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission);
-    this.guardrails = new GuardrailRunner(this.pluginHost, this.events);
-    this.hooks = new HookRunner(this.pluginHost);
+    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission, opts.tenantId);
+    this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
+    this.hooks = new HookRunner(this.pluginHost, this.events, opts.tenantId);
   }
 
   /** 创建并异步初始化 AgentRuntime。用此替代 new AgentRuntime()。 */
@@ -119,9 +122,31 @@ export class AgentRuntime {
    * @param plugin 插件
    */
   private async installPlugin(plugin: Plugin): Promise<void> {
-    const result = plugin.install(this.pluginHost);
-    if (result instanceof Promise) {
-      await result; // 如果失败，让 async 构造函数抛出
+    try {
+      const result = plugin.install(this.pluginHost);
+      if (result instanceof Promise) {
+        await result; // 如果失败，让 async 构造函数抛出
+      }
+      this.publishEvent({
+        type: 'plugin.loaded',
+        run_id: 'plugin',
+        data: {
+          name: plugin.name,
+          ...(plugin.version !== undefined ? { version: plugin.version } : {}),
+        },
+        ts: Date.now(),
+      });
+    } catch (error) {
+      this.publishEvent({
+        type: 'plugin.failed',
+        run_id: 'plugin',
+        data: {
+          name: plugin.name,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        ts: Date.now(),
+      });
+      throw error;
     }
   }
 
@@ -196,6 +221,7 @@ export class AgentRuntime {
       started_at: startTime,
       status: 'running',
       branch: opts?.branch,
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
 
     // 发布 Run 开始事件
@@ -233,9 +259,7 @@ export class AgentRuntime {
 
       // 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不再丢历史（C-02）
       runState.messages = this.context.messages;
-      if (this.session) {
-        await this.session.save(runState);
-      }
+      await this.saveSession(runState);
 
       // durable checkpoint：run 开始（用户消息已写入上下文）
       await this.writeCheckpoint(runId, currentSessionId, 'running');
@@ -255,9 +279,7 @@ export class AgentRuntime {
       runState.messages = this.context.messages;
 
       // 保存最终状态
-      if (this.session) {
-        await this.session.save(runState);
-      }
+      await this.saveSession(runState);
 
       // durable checkpoint：完成
       await this.writeCheckpoint(runId, currentSessionId, 'completed');
@@ -295,9 +317,7 @@ export class AgentRuntime {
       });
 
       // 保存失败状态
-      if (this.session) {
-        await this.session.save(runState);
-      }
+      await this.saveSession(runState);
 
       // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
       await this.writeCheckpoint(
@@ -308,15 +328,17 @@ export class AgentRuntime {
         true,
       );
 
-      // 发布 Run 失败事件
+      // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
+      const cancelled = this.isUserCancelled(signal);
       this.publishEvent({
-        type: 'run.failed',
+        type: cancelled ? 'run.cancelled' : 'run.failed',
         run_id: runId,
         data: {
           run_id: runId,
           session_id: currentSessionId,
           error: runState.error,
           duration_ms: Date.now() - startTime,
+          ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
         },
         ts: Date.now(),
       });
@@ -382,8 +404,11 @@ export class AgentRuntime {
         started_at: this.runCreatedAt,
         status: 'running',
         ...(this.runBranch !== undefined ? { branch: this.runBranch } : {}),
+        ...((this.tenantId ?? checkpoint.tenant_id) !== undefined
+          ? { tenant_id: this.tenantId ?? checkpoint.tenant_id }
+          : {}),
       };
-      if (this.session) await this.session.save(runState);
+      await this.saveSession(runState);
 
       // 标记已被接管（唯一写者：AgentRuntime）
       await this.writeCheckpoint(runId, sessionId, 'running');
@@ -412,7 +437,7 @@ export class AgentRuntime {
           total_cost: this.stats.totalCost,
         };
         runState.messages = this.context.messages;
-        if (this.session) await this.session.save(runState);
+        await this.saveSession(runState);
         await this.writeCheckpoint(runId, sessionId, 'completed');
 
         this.publishEvent({
@@ -443,7 +468,7 @@ export class AgentRuntime {
           phase: 'run',
         });
 
-        if (this.session) await this.session.save(runState);
+        await this.saveSession(runState);
         await this.writeCheckpoint(
           runId,
           sessionId,
@@ -1036,6 +1061,7 @@ export class AgentRuntime {
       },
       ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
       ...(error !== undefined ? { error } : {}),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
 
     try {
@@ -1060,6 +1086,30 @@ export class AgentRuntime {
     });
   }
 
+  /** 保存 session 快照，并发布 `session.saved` */
+  private async saveSession(runState: RunState): Promise<void> {
+    if (!this.session) return;
+    await this.session.save(runState);
+    this.publishEvent({
+      type: 'session.saved',
+      run_id: runState.run_id,
+      data: {
+        run_id: runState.run_id,
+        session_id: runState.session_id,
+        status: runState.status,
+        message_count: runState.messages.length,
+      },
+      ts: Date.now(),
+    });
+  }
+
+  /** 用户显式取消（不是 Host 关闭/中断） */
+  private isUserCancelled(signal?: AbortSignal): boolean {
+    if (!signal?.aborted) return false;
+    const reason = signal.reason;
+    return !(typeof reason === 'string' && RUN_INTERRUPT_REASONS.has(reason));
+  }
+
   /** AbortSignal 的 checkpoint 终态：Host 关闭 → interrupted，用户取消 → cancelled */
   private failureCheckpointStatus(signal?: AbortSignal): 'failed' | 'cancelled' | 'interrupted' {
     if (!signal?.aborted) return 'failed';
@@ -1074,6 +1124,10 @@ export class AgentRuntime {
    * @param event 运行事件
    */
   protected publishEvent(event: RunEvent): void {
-    this.events.publish(event);
+    const stamped =
+      this.tenantId !== undefined && event.tenant_id === undefined
+        ? { ...event, tenant_id: this.tenantId }
+        : event;
+    this.events.publish(stamped);
   }
 }

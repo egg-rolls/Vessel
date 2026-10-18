@@ -128,6 +128,13 @@ export interface RunEvent {
   run_id: string;
   data: EventPayload | Record<string, unknown>;
   ts: number;
+  /**
+   * 0.5：同一 run 内单调递增序号。实时内存事件允许缺省；
+   * trace 落盘时由 `FileTraceRecorder` 分配并持久化。
+   */
+  seq?: number;
+  /** 0.5：所属 tenant；缺省视为 `default` */
+  tenant_id?: string;
 }
 
 /** 事件处理器 */

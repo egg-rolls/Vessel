@@ -896,7 +896,7 @@ describe('真实 token 语义（C-04）', () => {
 });
 
 describe('中断与限额（C-09）', () => {
-  it('AbortSignal 已中止：run 失败、发 run.failed、触发 OnError', async () => {
+  it('AbortSignal 用户取消：发 run.cancelled（不发 run.failed）、触发 OnError', async () => {
     const events = new MemoryEventStream();
     let onError = 0;
     const runtime = await AgentRuntime.create({
@@ -931,7 +931,8 @@ describe('中断与限额（C-09）', () => {
     await expect(runtime.run('hi', undefined, { signal: controller.signal })).rejects.toThrow(
       'cancelled by test',
     );
-    expect(events.getHistory().some((e) => e.type === 'run.failed')).toBe(true);
+    expect(events.getHistory().some((e) => e.type === 'run.cancelled')).toBe(true);
+    expect(events.getHistory().some((e) => e.type === 'run.failed')).toBe(false);
     expect(onError).toBe(1);
   });
 

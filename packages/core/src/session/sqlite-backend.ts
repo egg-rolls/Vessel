@@ -23,6 +23,7 @@ interface SessionRow {
   preview: string | null;
   updated_at: number | null;
   branch: string | null;
+  tenant_id: string | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -35,6 +36,7 @@ interface SessionListRow {
   updated_at: number;
   message_count: number;
   branch: string | null;
+  tenant_id: string | null;
 }
 
 /**
@@ -79,7 +81,8 @@ export class SQLiteSessionBackend implements SessionBackend {
         title TEXT,
         preview TEXT,
         updated_at INTEGER,
-        branch TEXT
+        branch TEXT,
+        tenant_id TEXT
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -87,6 +90,7 @@ export class SQLiteSessionBackend implements SessionBackend {
     this.ensureColumn('preview', 'TEXT');
     this.ensureColumn('updated_at', 'INTEGER');
     this.ensureColumn('branch', 'TEXT');
+    this.ensureColumn('tenant_id', 'TEXT');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -124,6 +128,7 @@ export class SQLiteSessionBackend implements SessionBackend {
       preview: row.preview || undefined,
       updated_at: row.updated_at || undefined,
       branch: row.branch || undefined,
+      tenant_id: row.tenant_id || undefined,
     };
   }
 
@@ -140,8 +145,8 @@ export class SQLiteSessionBackend implements SessionBackend {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, preview, updated_at, branch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, preview, updated_at, branch, tenant_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -157,6 +162,7 @@ export class SQLiteSessionBackend implements SessionBackend {
       preview,
       updatedAt,
       state.branch || null,
+      state.tenant_id || null,
     );
   }
 
@@ -192,7 +198,8 @@ export class SQLiteSessionBackend implements SessionBackend {
              started_at,
              COALESCE(updated_at, started_at) AS updated_at,
              json_array_length(messages) AS message_count,
-             branch
+             branch,
+             tenant_id
       FROM sessions
       WHERE json_array_length(messages) > 0
       ORDER BY updated_at DESC
@@ -207,6 +214,7 @@ export class SQLiteSessionBackend implements SessionBackend {
       updated_at: row.updated_at,
       message_count: row.message_count,
       branch: row.branch ?? undefined,
+      tenant_id: row.tenant_id ?? undefined,
     }));
   }
 

@@ -7,10 +7,10 @@
  * @module @vessel/core/session
  */
 
-import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';
+import { atomicWrite } from './atomic-write.js';
 
 export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.js';
 export { RUN_INTERRUPT_REASONS, RunResumeError } from '../types/run-store.js';
@@ -18,9 +18,6 @@ export { RUN_INTERRUPT_REASONS, RunResumeError } from '../types/run-store.js';
 /** list 的默认与最大返回条数（DECISION-008 Addendum A-4） */
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 200;
-
-/** Windows rename 失败的重试次数（Addendum A-8） */
-const RENAME_ATTEMPTS = 3;
 
 /** 把 limit 归一化到 [0, 200]；未传用默认 50 */
 function resolveLimit(limit?: number): number {
@@ -110,21 +107,24 @@ export class MemoryRunStore implements RunStore {
 /** 文件实现：`{dir}/{encodeURIComponent(run_id)}.json` */
 export class FileRunStore implements RunStore {
   private readonly dir: string;
+  private readonly tenantId?: string;
   private dirReady?: Promise<void>;
   /** 同一 run 的写入串行化；值为永不 reject 的 tail */
   private readonly pendingWrites = new Map<string, Promise<void>>();
 
-  constructor(opts: { dir: string }) {
+  constructor(opts: { dir: string; tenantId?: string }) {
     if (!opts.dir) throw new Error('FileRunStore requires a dir');
     this.dir = opts.dir;
+    this.tenantId = opts.tenantId;
   }
 
   async save(checkpoint: RunCheckpoint): Promise<void> {
-    const runId = this.assertRunId(checkpoint.run_id);
+    const effective = this.applyTenant(checkpoint);
+    const runId = this.assertRunId(effective.run_id);
     const previous = this.pendingWrites.get(runId) ?? Promise.resolve();
     const current = previous.then(
-      () => this.writeCheckpoint(runId, checkpoint),
-      () => this.writeCheckpoint(runId, checkpoint),
+      () => this.writeCheckpoint(runId, effective),
+      () => this.writeCheckpoint(runId, effective),
     );
     const tail = current.then(
       () => {},
@@ -143,7 +143,8 @@ export class FileRunStore implements RunStore {
       const path = this.filePath(runId);
       const content = await readFile(path, 'utf8');
       const parsed: unknown = JSON.parse(content);
-      return isRunCheckpoint(parsed) ? parsed : null;
+      if (!isRunCheckpoint(parsed)) return null;
+      return this.isForeign(parsed) ? null : parsed;
     } catch {
       return null;
     }
@@ -170,7 +171,7 @@ export class FileRunStore implements RunStore {
       try {
         const content = await readFile(join(this.dir, entry), 'utf8');
         const parsed: unknown = JSON.parse(content);
-        if (isRunCheckpoint(parsed)) checkpoints.push(parsed);
+        if (isRunCheckpoint(parsed) && !this.isForeign(parsed)) checkpoints.push(parsed);
       } catch {
         // 损坏/不可读文件跳过
       }
@@ -210,6 +211,25 @@ export class FileRunStore implements RunStore {
     return join(this.dir, `${encodeURIComponent(this.assertRunId(runId))}.json`);
   }
 
+  /** 写入前补齐/校验 tenant_id；跨 tenant 直接抛错 */
+  private applyTenant(checkpoint: RunCheckpoint): RunCheckpoint {
+    if (this.tenantId === undefined) return checkpoint;
+    if (checkpoint.tenant_id !== undefined && checkpoint.tenant_id !== this.tenantId) {
+      throw new Error(
+        `tenant_mismatch: checkpoint ${checkpoint.run_id} belongs to ${checkpoint.tenant_id}`,
+      );
+    }
+    return checkpoint.tenant_id === this.tenantId
+      ? checkpoint
+      : { ...checkpoint, tenant_id: this.tenantId };
+  }
+
+  /** 读取时过滤其它 tenant 的文件（缺省视为 default） */
+  private isForeign(checkpoint: RunCheckpoint): boolean {
+    if (this.tenantId === undefined) return false;
+    return (checkpoint.tenant_id ?? 'default') !== this.tenantId;
+  }
+
   private async ensureDir(): Promise<void> {
     this.dirReady ??= mkdir(this.dir, { recursive: true })
       .then(() => {})
@@ -222,46 +242,6 @@ export class FileRunStore implements RunStore {
 
   private async writeCheckpoint(runId: string, checkpoint: RunCheckpoint): Promise<void> {
     await this.ensureDir();
-    const json = JSON.stringify(checkpoint, null, 2);
-    const finalPath = this.filePath(runId);
-    const tmpPath = join(this.dir, `.${encodeURIComponent(runId)}.${randomUUID()}.tmp`);
-
-    await writeFile(tmpPath, json, 'utf8');
-    try {
-      await this.commit(tmpPath, finalPath, json);
-    } catch (error) {
-      await unlink(tmpPath).catch(() => {});
-      throw error;
-    }
+    await atomicWrite(this.filePath(runId), JSON.stringify(checkpoint, null, 2));
   }
-
-  /**
-   * 优先 rename（原子替换）；失败重试 3 次（Windows 文件占用常见）；
-   * 仍失败则整文件直写（best-effort，保证不会写入半截 JSON 字符串）。
-   */
-  private async commit(tmpPath: string, finalPath: string, json: string): Promise<void> {
-    let lastError: unknown;
-    for (let attempt = 0; attempt < RENAME_ATTEMPTS; attempt += 1) {
-      try {
-        await rename(tmpPath, finalPath);
-        return;
-      } catch (error) {
-        lastError = error;
-        if (attempt < RENAME_ATTEMPTS - 1) {
-          await delay(10 * 2 ** attempt);
-        }
-      }
-    }
-
-    try {
-      await writeFile(finalPath, json, 'utf8');
-      await unlink(tmpPath).catch(() => {});
-    } catch (fallbackError) {
-      throw lastError ?? fallbackError;
-    }
-  }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

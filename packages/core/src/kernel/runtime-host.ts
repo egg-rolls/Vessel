@@ -80,6 +80,8 @@ export interface InProcessRuntimeHostOptions {
   eventStreamFactory?: () => EventStream;
   /** 成员上限，默认 8 */
   maxMembers?: number;
+  /** 0.5：Host 级 tenant；成员 spec.tenantId 优先 */
+  tenantId?: string;
   /**
    * 可选：durable run store。Host 把它注入每个成员 runtime（Host 优先），
    * `Host.resume` 也用它加载 checkpoint。Host 自身不写 checkpoint。
@@ -167,6 +169,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
   /** R3a 注入点：当前只保存，不参与消息路由 */
   readonly transport?: Transport;
   private readonly runStore?: RunStore;
+  private readonly tenantId?: string;
   /** 同一 run 的并发 resume 锁（进程内） */
   private readonly resuming = new Set<string>();
   private closed = false;
@@ -181,6 +184,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.permission = options.permission;
     this.transport = options.transport;
     this.runStore = options.runStore;
+    this.tenantId = options.tenantId;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
@@ -233,6 +237,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
       const termination = limits.termination ??
         resolved.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 };
       const permission = resolved.permission ?? this.permission;
+      const tenantId = resolved.tenantId ?? this.tenantId;
 
       runtime = await this.runtimeFactory({
         provider: resolved.provider,
@@ -247,6 +252,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
         ...(permission !== undefined ? { permission } : {}),
         // 0.3：Host 的 store 优先；checkpoint 单写者是成员 runtime
         ...(this.runStore ? { runStore: this.runStore } : {}),
+        ...(tenantId !== undefined ? { tenantId } : {}),
         agentId: id,
       });
 
@@ -296,6 +302,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
         }
         this.events.publish({
           ...event,
+          ...(this.tenantId !== undefined && event.tenant_id === undefined
+            ? { tenant_id: this.tenantId }
+            : {}),
           data: withAgentId(event.data, id),
         });
       });
@@ -742,7 +751,13 @@ export class InProcessRuntimeHost implements RuntimeHost {
         : typeof data.agentId === 'string'
           ? data.agentId
           : 'host';
-    this.events.publish({ type, run_id: runId, data, ts: Date.now() });
+    this.events.publish({
+      type,
+      run_id: runId,
+      data,
+      ts: Date.now(),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
+    });
   }
 }
 

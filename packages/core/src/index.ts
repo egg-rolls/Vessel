@@ -21,8 +21,15 @@ export {
 export * from './kernel/index.js';
 // 限制检查器
 export { MemoryLimitChecker } from './limits/index.js';
-// Observability（0.4 C2：只读事件聚合）
-export { MetricsCollector, type MetricsSnapshot } from './observability/index.js';
+// Observability（0.4 C2 聚合 + 0.5 F2 trace）
+export {
+  createDefaultTraceRedactor,
+  FileTraceRecorder,
+  type FileTraceRecorderOptions,
+  MetricsCollector,
+  type MetricsSnapshot,
+  type TraceRecorderStats,
+} from './observability/index.js';
 // Provider
 export {
   AnthropicProvider,
@@ -33,6 +40,11 @@ export {
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 // 会话后端
 export {
+  type AtomicWriteOptions,
+  atomicWrite,
+  type DeleteSessionDataOptions,
+  type DeleteSessionDataResult,
+  deleteSessionData,
   FileRunStore,
   FileSessionBackend,
   MemoryRunStore,
@@ -40,8 +52,20 @@ export {
   type PruneRunsOptions,
   type PruneRunsResult,
   pruneRuns,
+  SessionDeleteConflictError,
   SQLiteSessionBackend,
 } from './session/index.js';
+// 多租户（0.5 F4：tenant 解析与目录布局）
+export {
+  assertTenantId,
+  type ResolveTenantIdInput,
+  type ResolveTenantInput,
+  resolveTenant,
+  resolveTenantId,
+  resolveTenantPaths,
+  type TenantPaths,
+  tenantRootPath,
+} from './tenant/index.js';
 // Transport（0.2 R3a-core：进程内实现）
 export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';
 // 类型定义
