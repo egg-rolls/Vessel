@@ -18,6 +18,7 @@ import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import type { EventStream, RunEvent } from '../src/types/event';
+import type { AgentRuntimeOptions } from '../src/types/plugin';
 import type { ChatRequest, LLMProvider, LLMResponse, Message, Usage } from '../src/types/provider';
 import type { ToolDefinition } from '../src/types/tool';
 
@@ -897,6 +898,168 @@ describe('Host 关闭与成员生命周期（0.4 C2）', () => {
     expect(internals.pendingInteractions.size).toBe(0);
     expect(host.list()).toEqual([]);
     expect(host.scheduler.stats()).toMatchObject({ queued: 0, running: 0 });
+
+    await host.close();
+  });
+});
+
+describe('spawn 并发名额预留（P1）', () => {
+  type SpawnInternals = {
+    members: Map<string, unknown>;
+    handles: Map<string, unknown>;
+    spawning: Set<string>;
+  };
+
+  const provider = new MemoryLLMProvider();
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /** 异步 runtimeFactory：拉长 spawn 的构造窗口，放大并发竞态 */
+  const slowFactory =
+    () =>
+    async (options: AgentRuntimeOptions): Promise<RunnableAgent> => {
+      await delay(1);
+      return {
+        events: options.events,
+        pluginHost: options.pluginHost ?? new MemoryPluginHost(),
+        run: async () => 'ok',
+        dispose: () => {},
+      };
+    };
+
+  it('enforces maxMembers for 20 concurrent spawns', async () => {
+    const host = new InProcessRuntimeHost({
+      maxMembers: 8,
+      runtimeFactory: slowFactory(),
+    });
+
+    const results = await Promise.allSettled(
+      Array.from({ length: 20 }, (_, i) => host.spawn({ id: `member-${i}`, provider, model: 'm' })),
+    );
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(8);
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    expect(rejected).toHaveLength(12);
+    expect(rejected.every((result) => String(result.reason).includes('agent limit reached'))).toBe(
+      true,
+    );
+    expect(host.list()).toHaveLength(8);
+
+    await host.close();
+  });
+
+  it('enforces maxMembers for sequential spawns', async () => {
+    const host = new InProcessRuntimeHost({
+      maxMembers: 8,
+      runtimeFactory: slowFactory(),
+    });
+
+    let accepted = 0;
+    let rejected = 0;
+    for (let i = 0; i < 20; i += 1) {
+      try {
+        await host.spawn({ id: `member-${i}`, provider, model: 'm' });
+        accepted += 1;
+      } catch (error) {
+        if (!String(error).includes('agent limit reached')) throw error;
+        rejected += 1;
+      }
+    }
+
+    expect(accepted).toBe(8);
+    expect(rejected).toBe(12);
+    expect(host.list()).toHaveLength(8);
+
+    await host.close();
+  });
+
+  it('releases the slot when runtimeFactory throws', async () => {
+    let attempts = 0;
+    const host = new InProcessRuntimeHost({
+      maxMembers: 1,
+      runtimeFactory: async (options) => {
+        attempts += 1;
+        await delay(1);
+        if (attempts === 1) throw new Error('factory boom');
+        return {
+          events: options.events,
+          pluginHost: options.pluginHost ?? new MemoryPluginHost(),
+          run: async () => 'ok',
+          dispose: () => {},
+        };
+      },
+    });
+
+    const internals = host as unknown as SpawnInternals;
+    await expect(host.spawn({ id: 'a', provider, model: 'm' })).rejects.toThrow('factory boom');
+
+    // 失败路径不得留下成员/句柄/预留
+    expect(internals.members.size).toBe(0);
+    expect(internals.handles.size).toBe(0);
+    expect(internals.spawning.size).toBe(0);
+
+    // 同一 id 与同一名额都应已释放
+    const handle = await host.spawn({ id: 'a', provider, model: 'm' });
+    expect(handle.id).toBe('a');
+    expect(host.list()).toHaveLength(1);
+
+    await host.close();
+  });
+
+  it('does not register a spawn that is in flight during close', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let disposed = 0;
+
+    const host = new InProcessRuntimeHost({
+      runtimeFactory: async (options) => {
+        await gate;
+        return {
+          events: options.events,
+          pluginHost: options.pluginHost ?? new MemoryPluginHost(),
+          run: async () => 'ok',
+          dispose: () => {
+            disposed += 1;
+          },
+        };
+      },
+    });
+    const internals = host as unknown as SpawnInternals;
+
+    const pending = host.spawn({ id: 'late', provider, model: 'm' });
+    expect(internals.spawning.size).toBe(1);
+
+    await host.close();
+    expect(internals.spawning.size).toBe(0);
+
+    release();
+    await expect(pending).rejects.toThrow('runtime host is closed');
+    expect(disposed).toBe(1);
+    expect(internals.members.size).toBe(0);
+    expect(internals.handles.size).toBe(0);
+    expect(host.list()).toEqual([]);
+  });
+
+  it('allows only one concurrent spawn for the same id', async () => {
+    const host = new InProcessRuntimeHost({
+      maxMembers: 8,
+      runtimeFactory: slowFactory(),
+    });
+
+    const results = await Promise.allSettled([
+      host.spawn({ id: 'dup', provider, model: 'm' }),
+      host.spawn({ id: 'dup', provider, model: 'm' }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.filter(
+      (result): result is PromiseRejectedResult => result.status === 'rejected',
+    );
+    expect(rejected).toHaveLength(1);
+    expect(String(rejected[0]?.reason)).toContain('agent already exists');
 
     await host.close();
   });
