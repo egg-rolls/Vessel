@@ -47,11 +47,13 @@ export class MemoryContextManager implements ContextManager {
       this.compact();
     }
 
-    if (msgs.length > (this.config.maxMessages ?? 100)) {
-      this.sessionMessages.set(
-        this.currentSessionId,
-        msgs.slice(-(this.config.maxMessages ?? 100)),
-      );
+    // compact 会替换 sessionMessages 里的数组；必须重新读取，否则会把压缩结果
+    // 用 compact 前的旧数组覆盖掉（长会话 summary 丢失 + 反复 compact）。
+    const current = this.sessionMessages.get(this.currentSessionId) ?? [];
+    const maxMessages = this.config.maxMessages ?? 100;
+    if (current.length > maxMessages) {
+      this.sessionMessages.set(this.currentSessionId, current.slice(-maxMessages));
+      this.realTokens = 0;
     }
   }
 
