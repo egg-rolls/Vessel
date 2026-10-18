@@ -427,6 +427,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.pendingInteractions.clear();
     this.extraInboxes.clear();
     this.resuming.clear();
+    // 在途 spawn 在 finally 中会安全删除自己；这里清空是为了让 close 后的
+    // 重复检查和名额计算立即反映 Host 已关闭，而不是等待异步构造结束。
+    this.spawning.clear();
   }
 
   /** @internal 由 AgentHandle.status() 调用 */

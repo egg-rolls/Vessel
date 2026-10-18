@@ -904,6 +904,12 @@ describe('Host 关闭与成员生命周期（0.4 C2）', () => {
 });
 
 describe('spawn 并发名额预留（P1）', () => {
+  type SpawnInternals = {
+    members: Map<string, unknown>;
+    handles: Map<string, unknown>;
+    spawning: Set<string>;
+  };
+
   const provider = new MemoryLLMProvider();
   const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -985,7 +991,13 @@ describe('spawn 并发名额预留（P1）', () => {
       },
     });
 
+    const internals = host as unknown as SpawnInternals;
     await expect(host.spawn({ id: 'a', provider, model: 'm' })).rejects.toThrow('factory boom');
+
+    // 失败路径不得留下成员/句柄/预留
+    expect(internals.members.size).toBe(0);
+    expect(internals.handles.size).toBe(0);
+    expect(internals.spawning.size).toBe(0);
 
     // 同一 id 与同一名额都应已释放
     const handle = await host.spawn({ id: 'a', provider, model: 'm' });
@@ -993,6 +1005,42 @@ describe('spawn 并发名额预留（P1）', () => {
     expect(host.list()).toHaveLength(1);
 
     await host.close();
+  });
+
+  it('does not register a spawn that is in flight during close', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let disposed = 0;
+
+    const host = new InProcessRuntimeHost({
+      runtimeFactory: async (options) => {
+        await gate;
+        return {
+          events: options.events,
+          pluginHost: options.pluginHost ?? new MemoryPluginHost(),
+          run: async () => 'ok',
+          dispose: () => {
+            disposed += 1;
+          },
+        };
+      },
+    });
+    const internals = host as unknown as SpawnInternals;
+
+    const pending = host.spawn({ id: 'late', provider, model: 'm' });
+    expect(internals.spawning.size).toBe(1);
+
+    await host.close();
+    expect(internals.spawning.size).toBe(0);
+
+    release();
+    await expect(pending).rejects.toThrow('runtime host is closed');
+    expect(disposed).toBe(1);
+    expect(internals.members.size).toBe(0);
+    expect(internals.handles.size).toBe(0);
+    expect(host.list()).toEqual([]);
   });
 
   it('allows only one concurrent spawn for the same id', async () => {
