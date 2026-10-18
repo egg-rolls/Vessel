@@ -29,4 +29,7 @@ export {
   MemorySessionBackend,
   toSessionInfo,
 } from './session-backend.js';
-export { SQLiteSessionBackend } from './sqlite-backend.js';
+export {
+  SQLiteSessionBackend,
+  type SQLiteSessionBackendOptions,
+} from './sqlite-backend.js';
