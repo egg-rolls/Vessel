@@ -2,23 +2,29 @@
  * File-based Session Backend 实现
  *
  * 将 Run 状态保存为 JSON 文件，每会话一个文件。
- * 最轻量的持久化方案——零原生依赖，纯 JSON 读写。
+ * 0.5：同会话写入串行 + temp/rename 原子写 + session_id 路径编码。
  *
  * @module @vessel/core/session
  */
 
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
+import { atomicWrite } from './atomic-write.js';
 import { deriveSessionMeta, toSessionInfo } from './session-backend.js';
 
 /**
  * 文件 Session Backend 实现
  *
- * 存储格式：`{basePath}/{session_id}.json`
- * 适用于不需要数据库依赖的单机部署场景。
+ * 存储格式：`{basePath}/{encodeURIComponent(session_id)}.json`
+ * 旧数据（未编码文件名）在 load 时回退读取。
  */
 export class FileSessionBackend implements SessionBackend {
-  private basePath: string;
+  private readonly basePath: string;
+  /** 目录创建只做一次（失败后可重试） */
+  private dirReady?: Promise<void>;
+  /** 同一 session 的写入串行化；值为永不 reject 的 tail */
+  private readonly pendingWrites = new Map<string, Promise<void>>();
 
   /**
    * @param basePath 会话文件存储目录，默认 `.vessel/sessions`
@@ -31,18 +37,40 @@ export class FileSessionBackend implements SessionBackend {
    * 确保存储目录存在（惰性创建，首次读写时触发）
    */
   private async ensureDir(): Promise<void> {
-    try {
-      await mkdir(this.basePath, { recursive: true });
-    } catch {
-      // Directory may already exist — that's fine
-    }
+    this.dirReady ??= mkdir(this.basePath, { recursive: true })
+      .then(() => {})
+      .catch((error: unknown) => {
+        this.dirReady = undefined;
+        throw error;
+      });
+    return this.dirReady;
   }
 
-  /**
-   * 获取会话文件路径
-   */
+  /** 校验 session id（空值/非法编码抛错） */
+  private assertSessionId(sessionId: string): string {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
+      throw new Error('invalid_session_id: session_id must be a non-empty string');
+    }
+    try {
+      encodeURIComponent(sessionId);
+    } catch {
+      throw new Error('invalid_session_id: session_id contains invalid characters');
+    }
+    return sessionId;
+  }
+
+  /** 编码后的正式路径 */
   private filePath(sessionId: string): string {
-    return `${this.basePath}/${sessionId}.json`;
+    const id = this.assertSessionId(sessionId);
+    return join(this.basePath, `${encodeURIComponent(id)}.json`);
+  }
+
+  /** 旧版未编码路径（仅对无路径分隔符的 id 生效） */
+  private legacyFilePath(sessionId: string): string | undefined {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) return undefined;
+    if (sessionId === '.' || sessionId === '..') return undefined;
+    if (sessionId.includes('/') || sessionId.includes('\\')) return undefined;
+    return join(this.basePath, `${sessionId}.json`);
   }
 
   /**
@@ -51,23 +79,46 @@ export class FileSessionBackend implements SessionBackend {
    * @returns Run 状态或 null（文件不存在或解析失败）
    */
   async load(sessionId: string): Promise<RunState | null> {
-    try {
-      const content = await Bun.file(this.filePath(sessionId)).text();
-      return JSON.parse(content) as RunState;
-    } catch {
-      return null;
+    const candidates = [this.filePath(sessionId), this.legacyFilePath(sessionId)];
+    for (const candidate of candidates) {
+      if (candidate === undefined) continue;
+      try {
+        const content = await readFile(candidate, 'utf8');
+        return JSON.parse(content) as RunState;
+      } catch {
+        // 尝试下一个候选路径
+      }
     }
+    return null;
   }
 
   /**
    * 保存 Run 状态
    *
    * 自动派生 title/preview（首条用户消息）并刷新 updated_at，
-   * 行为与 SQLiteSessionBackend 一致。
+   * 行为与 SQLiteSessionBackend 一致。同 session 串行写入。
    *
    * @param state Run 状态
    */
   async save(state: RunState): Promise<void> {
+    const sessionId = state.session_id;
+    const previous = this.pendingWrites.get(sessionId) ?? Promise.resolve();
+    const task = () => this.writeSession(sessionId, state);
+    const current = previous.then(task, task);
+    const tail = current.then(
+      () => {},
+      () => {},
+    );
+    this.pendingWrites.set(sessionId, tail);
+
+    try {
+      await current;
+    } finally {
+      if (this.pendingWrites.get(sessionId) === tail) this.pendingWrites.delete(sessionId);
+    }
+  }
+
+  private async writeSession(sessionId: string, state: RunState): Promise<void> {
     await this.ensureDir();
 
     const meta = deriveSessionMeta(state.messages);
@@ -82,7 +133,7 @@ export class FileSessionBackend implements SessionBackend {
       updated_at: updatedAt,
     };
 
-    await Bun.write(this.filePath(state.session_id), JSON.stringify(enriched, null, 2));
+    await atomicWrite(this.filePath(sessionId), JSON.stringify(enriched, null, 2));
   }
 
   /**
@@ -90,27 +141,40 @@ export class FileSessionBackend implements SessionBackend {
    * @param sessionId 会话 ID
    */
   async delete(sessionId: string): Promise<void> {
-    try {
-      await Bun.file(this.filePath(sessionId)).delete();
-    } catch {
-      // 文件不存在则静默忽略
+    const previous = this.pendingWrites.get(sessionId);
+    if (previous) await previous;
+
+    const candidates = [this.filePath(sessionId), this.legacyFilePath(sessionId)];
+    for (const candidate of candidates) {
+      if (candidate === undefined) continue;
+      try {
+        await unlink(candidate);
+      } catch {
+        // 文件不存在则静默忽略
+      }
     }
   }
 
   /**
    * 列出所有会话 ID
-   * @returns 会话 ID 数组（去后缀 .json）
+   * @returns 会话 ID 数组（去后缀 .json 并解码）
    */
   async list(): Promise<string[]> {
     await this.ensureDir();
 
     try {
       const glob = new Bun.Glob('*.json');
-      const files: string[] = [];
+      const ids: string[] = [];
       for await (const f of glob.scan(this.basePath)) {
-        files.push(f.replace(/\.json$/, ''));
+        if (f.startsWith('.')) continue;
+        const raw = f.replace(/\.json$/, '');
+        try {
+          ids.push(decodeURIComponent(raw));
+        } catch {
+          ids.push(raw);
+        }
       }
-      return files;
+      return ids;
     } catch {
       return [];
     }
@@ -144,3 +208,5 @@ export class FileSessionBackend implements SessionBackend {
     // no-op: file backend has no persistent connection
   }
 }
+
+export type { RunState, SessionBackend };

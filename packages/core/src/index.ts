@@ -33,6 +33,8 @@ export {
 export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
 // 会话后端
 export {
+  type AtomicWriteOptions,
+  atomicWrite,
   FileRunStore,
   FileSessionBackend,
   MemoryRunStore,
