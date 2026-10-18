@@ -11,6 +11,7 @@
 import {
   deleteSessionData as coreDeleteSessionData,
   type DeleteSessionDataResult,
+  type EventStream,
   type RunStore,
   type SessionBackend,
   type TenantPaths,
@@ -38,7 +39,13 @@ export interface SessionDeleteResult {
 /** 注入的删除实现（测试 / core 尚未提供时的适配） */
 export type DeleteSessionDataFn = (
   sessionId: string,
-  opts: { session: SessionBackend; paths: TenantPaths; runStore?: RunStore },
+  opts: {
+    session: SessionBackend;
+    paths: TenantPaths;
+    runStore?: RunStore;
+    events?: EventStream;
+    tenantId?: string;
+  },
 ) => Promise<SessionDeleteResult>;
 
 /** session 控制面 */
@@ -52,18 +59,29 @@ export interface CreateSessionControlOptions {
   session: SessionBackend;
   paths: TenantPaths;
   runStore?: RunStore;
+  /** 传入后 core 会发 `session.deleted`（带 tenant_id 与计数） */
+  events?: EventStream;
+  tenantId?: string;
   deleteSessionData?: DeleteSessionDataFn;
 }
 
-/** 默认委托 core；trace 目录来自 TenantPaths */
+/** 默认委托 core；trace 目录 / events / tenant 均原样透传 */
 function defaultDeleteSessionData(
   sessionId: string,
-  opts: { session: SessionBackend; paths: TenantPaths; runStore?: RunStore },
+  opts: {
+    session: SessionBackend;
+    paths: TenantPaths;
+    runStore?: RunStore;
+    events?: EventStream;
+    tenantId?: string;
+  },
 ): Promise<DeleteSessionDataResult> {
   return coreDeleteSessionData(sessionId, {
     session: opts.session,
     traceDir: opts.paths.events_dir,
     ...(opts.runStore ? { runStore: opts.runStore } : {}),
+    ...(opts.events ? { events: opts.events } : {}),
+    ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
   });
 }
 
@@ -85,6 +103,8 @@ export function createSessionControl(options: CreateSessionControlOptions): Sess
         session: options.session,
         paths: options.paths,
         ...(options.runStore ? { runStore: options.runStore } : {}),
+        ...(options.events ? { events: options.events } : {}),
+        ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
       });
     },
   };

@@ -102,6 +102,9 @@ function warnWriteFailure(event: RunEvent): void {
 /**
  * dry-run：把 events 目录的 jsonl 硬链接（跨卷回退复制）到临时目录，
  * 用 core pruneTrace 在副本上计算删除集合，原目录零改动。
+ *
+ * 已知限制：跨卷时回退 `copyFile`，大目录会临时占用同等空间；
+ * 临时目录在 finally 中递归清理，失败不影响原目录。
  */
 async function dryRunPrune(
   traceDir: string,

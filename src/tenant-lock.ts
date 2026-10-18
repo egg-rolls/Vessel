@@ -136,7 +136,8 @@ export class TenantLock {
     this.released = true;
     try {
       const current = await readLockInfo(this.lockPath);
-      if (current && current.pid === this.info.pid) {
+      // pid + started_at 全等才删除：同一进程重新加锁时旧 handle 不得删新锁。
+      if (current && current.pid === this.info.pid && current.started_at === this.info.started_at) {
         await unlink(this.lockPath);
       }
     } catch {
@@ -150,7 +151,11 @@ export class TenantLock {
     this.released = true;
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.lockPath, 'utf8'));
-      if (isLockInfo(parsed) && parsed.pid === this.info.pid) {
+      if (
+        isLockInfo(parsed) &&
+        parsed.pid === this.info.pid &&
+        parsed.started_at === this.info.started_at
+      ) {
         unlinkSync(this.lockPath);
       }
     } catch {

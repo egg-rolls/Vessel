@@ -3,7 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  MemoryEventStream,
   MemorySessionBackend,
+  type RunEvent,
   type RunState,
   resolveTenantPaths,
 } from '../../packages/core/src/index';
@@ -206,18 +208,31 @@ describe('session control (0.5)', () => {
     });
   });
 
-  it('默认 delete 走 core deleteSessionData', async () => {
+  it('默认 delete 走 core deleteSessionData，并发布 session.deleted', async () => {
     const backend = new MemorySessionBackend();
     const state = saveSession('s1');
     await backend.save(state);
 
+    const events = new MemoryEventStream();
     const control = createSessionControl({
       session: backend,
+      events,
+      tenantId: 'acme',
       paths: resolveTenantPaths(tempDir(), 'acme'),
     });
 
     const result = await control.delete('s1');
     expect(result.sessions_deleted).toBe(1);
     expect(await backend.load('s1')).toBeNull();
+
+    const deleted = events.getHistory().find((event: RunEvent) => event.type === 'session.deleted');
+    expect(deleted).toBeDefined();
+    expect(deleted?.tenant_id).toBe('acme');
+    expect(deleted?.data).toMatchObject({
+      session_id: 's1',
+      sessions_deleted: 1,
+      runs_deleted: 0,
+      events_deleted: 0,
+    });
   });
 });

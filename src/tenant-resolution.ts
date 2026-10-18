@@ -22,8 +22,10 @@ export interface ResolveTenantIdOptions {
   explicit?: string;
   /** CLI `--tenant`；null / undefined 视为未提供 */
   cli?: string | null;
-  /** 环境变量来源；缺省 process.env（读取 VESSEL_TENANT） */
+  /** 环境变量来源；缺省 process.env */
   env?: Record<string, string | undefined>;
+  /** 显式 env tenant 值；缺省读取 `env.VESSEL_TENANT`（支持自定义前缀） */
+  envTenantId?: string;
   /** 已合并 user/project 的配置（读取 tenant.default） */
   config?: VesselConfig;
 }
@@ -44,7 +46,7 @@ export function resolveTenantId(input: ResolveTenantIdOptions = {}): TenantResol
     const result = resolveCoreTenantId({
       explicitTenantId: input.explicit,
       cliTenantId: input.cli ?? undefined,
-      envTenantId: env.VESSEL_TENANT,
+      envTenantId: input.envTenantId ?? env.VESSEL_TENANT,
       configDefaultTenantId: input.config?.tenant?.default,
     });
     return {

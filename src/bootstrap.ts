@@ -5,6 +5,7 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
+import { join } from 'node:path';
 import { DEFAULT_CONFIG, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
@@ -197,6 +198,15 @@ export function newSessionId(): string {
   return `${ts}_${hex}`;
 }
 
+/** tenant 级 sqlite 文件（`<tenant>/sessions.db`） */
+function tenantDbPath(tenantRoot: string): string {
+  return join(tenantRoot, 'sessions.db');
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -221,7 +231,17 @@ async function bootstrapConnect(input: {
   tenantPaths: TenantPaths;
   url: string;
 }): Promise<BootstrapResult> {
-  const token = process.env.VESSEL_CONNECT_TOKEN ?? process.env.VESSEL_GATEWAY_TOKEN ?? '';
+  // 连接 token：VESSEL_CONNECT_TOKEN → VESSEL_GATEWAY_TOKEN →
+  // config 的 serve.token / token_env → transport.token；永不打印。
+  const token =
+    nonEmptyString(process.env.VESSEL_CONNECT_TOKEN) ??
+    nonEmptyString(process.env.VESSEL_GATEWAY_TOKEN) ??
+    nonEmptyString(input.config.serve?.token) ??
+    nonEmptyString(
+      input.config.serve?.tokenEnv ? process.env[input.config.serve.tokenEnv] : undefined,
+    ) ??
+    nonEmptyString(input.config.transport?.token) ??
+    '';
   let client: RpcClient & { close(): Promise<void> };
   try {
     client = createHttpRpcClient({ baseUrl: input.url, token });
@@ -283,6 +303,7 @@ async function bootstrapConnect(input: {
     }
   };
 
+  // Phase 1 todo：ctx.rpc / ctx.tenant 待 tui 类型与 web dispatcher 就绪后注入。
   const ctx: ReplContext = {
     runtime,
     pluginHost,
@@ -447,10 +468,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const events = createEventStream(config);
   const session = createSessionBackend(config.session, {
     tenantSessionsDir: tenantPaths.sessions_dir,
+    tenantSessionsDbPath: tenantDbPath(tenantPaths.root),
+    tenantId,
   });
   const sessionControl = createSessionControl({
     session,
     paths: tenantPaths,
+    events,
+    tenantId,
     ...(runStore ? { runStore } : {}),
   });
 

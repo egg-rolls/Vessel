@@ -68,6 +68,16 @@ describe('resolveTenantId (0.5)', () => {
     });
   });
 
+  it('envTenantId 参数覆盖固定 VESSEL_TENANT 前缀', () => {
+    expect(
+      resolveTenantId({
+        env: { CUSTOM_TENANT: 'custom' },
+        envTenantId: 'custom',
+        config: configWithDefault('from-config'),
+      }),
+    ).toEqual({ ok: true, tenantId: 'custom', source: 'env' });
+  });
+
   it('空白值视为未提供', () => {
     expect(
       resolveTenantId({ cli: '  ', env: { VESSEL_TENANT: ' ' }, config: configWithDefault('cfg') }),
@@ -231,5 +241,19 @@ describe('acquireTenantLock (0.5)', () => {
     await lock.release();
 
     expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(otherInfo);
+  });
+
+  it('同一 pid 重新加锁后，旧 handle 不会删掉新锁（比较 started_at）', async () => {
+    const dir = tempDir();
+    const oldInfo: TenantLockInfo = { pid: 123, started_at: 1000, host: 'me' };
+    writeLock(dir, oldInfo);
+
+    const oldLock = new TenantLock(lockPathOf(dir), oldInfo);
+    const newInfo: TenantLockInfo = { pid: 123, started_at: 2000, host: 'me' };
+    writeLock(dir, newInfo);
+
+    await oldLock.release();
+
+    expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(newInfo);
   });
 });
