@@ -126,6 +126,23 @@ async function dryRunPrune(
   }
 }
 
+/** 按配置 prune 一个 tenant 的 trace；dryRun 不改原目录 */
+export async function pruneTenantTrace(options: {
+  config: VesselConfig;
+  tenantPaths: TenantPaths;
+  dryRun?: boolean;
+}): Promise<PruneTraceResult> {
+  const trace = resolveTraceOptions(options.config);
+  const pruneOptions = {
+    retentionDays: trace.retentionDays,
+    maxRuns: trace.maxRuns,
+    maxBytes: trace.maxBytes,
+  };
+  return options.dryRun
+    ? dryRunPrune(options.tenantPaths.events_dir, pruneOptions)
+    : pruneTrace(options.tenantPaths.events_dir, pruneOptions);
+}
+
 /**
  * 安装 trace。
  * @returns disabled / off 时返回 undefined（零副作用）
@@ -209,13 +226,11 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
       const stats = recorder.stats?.();
       return stats ? { written: stats.written, failed: stats.failed } : { written, failed };
     },
-    prune: async (opts = {}) => {
-      const pruneOptions = {
-        retentionDays: trace.retentionDays,
-        maxRuns: trace.maxRuns,
-        maxBytes: trace.maxBytes,
-      };
-      return opts.dryRun ? dryRunPrune(dir, pruneOptions) : pruneTrace(dir, pruneOptions);
-    },
+    prune: (opts = {}) =>
+      pruneTenantTrace({
+        config: options.config,
+        tenantPaths: options.tenantPaths,
+        dryRun: opts.dryRun === true,
+      }),
   };
 }
