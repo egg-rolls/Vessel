@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { type RunEvent, resolveTenantPaths } from '../../packages/core/src/index';
 import { bootstrap } from '../bootstrap';
+import type { RpcClient } from '../rpc/index';
 
 const tempDirs: string[] = [];
 
@@ -164,5 +165,75 @@ describe('bootstrap 0.5 - trace / events', () => {
     expect(result.runtime).toBeDefined();
 
     await result.shutdown();
+  });
+});
+
+describe('bootstrap 0.5 - rpc injection', () => {
+  it('local 模式：ctx.rpc / ctx.tenant 注入，capabilities.list 与 sessions.list 可用', async () => {
+    const dataDir = tempDir();
+    const result = await bootstrap(baseOptions(dataDir));
+
+    try {
+      expect(result.ctx.rpc).toBeDefined();
+      expect(result.ctx.tenant).toEqual({
+        tenant_id: 'default',
+        data_dir: result.tenantPaths.root,
+      });
+
+      const capabilities = await result.ctx.rpc?.request<{
+        version: string;
+        methods: Array<{ name: string }>;
+      }>('capabilities.list');
+      const names = capabilities?.methods.map((method) => method.name) ?? [];
+      expect(names).toContain('capabilities.list');
+      expect(names).toContain('sessions.list');
+
+      await result.ctx.session.save({
+        run_id: 'run-rpc',
+        session_id: 'session-rpc',
+        messages: [{ role: 'user', content: 'hello' }],
+        started_at: 1000,
+        status: 'completed',
+      });
+      const listed = await result.ctx.rpc?.request<{
+        sessions: Array<{ session_id: string }>;
+      }>('sessions.list');
+      expect(listed?.sessions.some((item) => item.session_id === 'session-rpc')).toBe(true);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('connect 模式：已有 client 注入 ctx.rpc / ctx.tenant，不加锁', async () => {
+    const dataDir = tempDir();
+    const calls: string[] = [];
+    const stub = {
+      request: async <T = unknown>(method: string): Promise<T> => {
+        calls.push(method);
+        return { version: 'stub', methods: [] } as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      connect: 'http://127.0.0.1:1',
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      expect(result.ctx.rpc).toBe(stub);
+      expect(result.ctx.tenant).toEqual({
+        tenant_id: 'default',
+        data_dir: result.tenantPaths.root,
+      });
+      await result.ctx.rpc?.request('capabilities.list');
+      expect(calls).toEqual(['capabilities.list']);
+      expect(result.tenantLock).toBeUndefined();
+      expect(fs.existsSync(result.tenantPaths.lock_file)).toBe(false);
+    } finally {
+      await result.shutdown();
+    }
   });
 });

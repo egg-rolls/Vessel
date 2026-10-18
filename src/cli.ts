@@ -534,6 +534,7 @@ async function runWithConfig(result: BootstrapResult) {
       pluginHost: ctx.pluginHost,
       staticDir: resolveStaticDir(),
       nodeId: result.nodeId,
+      auth: authResult.auth,
       token: resolveGatewayToken(config),
       hostname: resolved.options.hostname,
       port: resolved.options.port,
@@ -557,8 +558,6 @@ async function runWithConfig(result: BootstrapResult) {
         : {}),
       ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
     };
-    // 0.5 鉴权面：web 的 GatewayOptions 尚未合入本分支，先按冻结形状注入。
-    Object.assign(gatewayOptions, { auth: authResult.auth });
 
     // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
     // 冻结形状；合并后可直接写进 GatewayOptions。
