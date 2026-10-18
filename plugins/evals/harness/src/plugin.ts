@@ -29,6 +29,12 @@ export function createEvalsPlugin(options: EvalPluginOptions = {}): EvalPlugin {
         ...(runOptions.enabled === undefined && options.enabled !== undefined
           ? { enabled: options.enabled }
           : {}),
+        ...(runOptions.tenantId === undefined && options.tenantId !== undefined
+          ? { tenantId: options.tenantId }
+          : {}),
+        ...(runOptions.events === undefined && options.events !== undefined
+          ? { events: options.events }
+          : {}),
       });
     },
 

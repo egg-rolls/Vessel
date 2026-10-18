@@ -92,6 +92,8 @@ export interface EvalReport {
   errors: number;
   skipped: number;
   cases: EvalCaseResult[];
+  /** 0.5：可选；缺失视为 default。报告正文不脱敏（A-4 §11.4 已知限制）。 */
+  tenant_id?: string;
 }
 
 export interface EvalCaseContext {
@@ -127,6 +129,10 @@ export interface EvalRunOptions {
   now?: () => number;
   /** 测试注入：报告文件名时间戳。 */
   timestamp?: string;
+  /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
+  tenantId?: string;
+  /** 0.5：事件出口（可选）；缺失不发 eval.run.* 事件（0.4 兼容）。 */
+  events?: import('@vessel/core').EventStream;
 }
 
 export interface EvalRunner {
@@ -139,6 +145,10 @@ export interface EvalPlugin extends Plugin, EvalRunner {}
 export interface EvalPluginOptions {
   outDir?: string;
   enabled?: boolean;
+  /** 0.5：tenant 作用域（可选）。 */
+  tenantId?: string;
+  /** 0.5：eval.run.* 事件出口（可选）；缺失不发。 */
+  events?: import('@vessel/core').EventStream;
 }
 
 export type EvalErrorCode = 'eval_not_found' | 'eval_invalid' | 'eval_network_required';
