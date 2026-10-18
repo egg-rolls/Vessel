@@ -47,8 +47,9 @@ export interface DeleteSessionDataOptions {
   tenantId?: string;
 }
 
-/** 删除计数（A-4 §11.3 冻结形状） */
+/** 删除计数（A-4 §11.3 + 1 追加：sessions_deleted 为 0/1） */
 export interface DeleteSessionDataResult {
+  sessions_deleted: number;
   runs_deleted: number;
   events_deleted: number;
 }
@@ -75,6 +76,7 @@ export async function deleteSessionData(
   }
 
   await session.delete(sessionId);
+  const sessionsDeleted = 1;
 
   let runsDeleted = 0;
   let eventsDeleted = 0;
@@ -107,6 +109,7 @@ export async function deleteSessionData(
         run_id: sessionId,
         data: {
           session_id: sessionId,
+          sessions_deleted: sessionsDeleted,
           runs_deleted: runsDeleted,
           events_deleted: eventsDeleted,
         },
@@ -118,5 +121,9 @@ export async function deleteSessionData(
     }
   }
 
-  return { runs_deleted: runsDeleted, events_deleted: eventsDeleted };
+  return {
+    sessions_deleted: sessionsDeleted,
+    runs_deleted: runsDeleted,
+    events_deleted: eventsDeleted,
+  };
 }
