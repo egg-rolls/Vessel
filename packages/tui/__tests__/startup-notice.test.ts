@@ -3,8 +3,12 @@ import { buildStartupNotice, loadStartupNotice } from '../src/repl/startup-notic
 import type {
   DurableRunSummary,
   DurableRunsControl,
+  FeishuControlLike,
+  FeishuStatusLike,
   McpControl,
   McpServerSummary,
+  WorkflowRunSummaryLike,
+  WorkflowsControl,
 } from '../src/repl-context.js';
 import { makeCtx } from './helpers.js';
 
@@ -20,6 +24,23 @@ const interruptedRun = (id: string): DurableRunSummary => ({
   status: 'interrupted',
   updated_at: 1,
 });
+
+const interruptedWorkflow = (id: string): WorkflowRunSummaryLike => ({
+  workflow_run_id: id,
+  workflow_name: 'wf',
+  status: 'interrupted',
+  step_count: 2,
+  completed_steps: 1,
+  started_at: 1,
+  updated_at: 1,
+});
+
+const connectedFeishu: FeishuStatusLike = {
+  connected: true,
+  appIdMasked: 'cli_***',
+  active_chats: 1,
+  queued_messages: 0,
+};
 
 describe('buildStartupNotice', () => {
   it('两者都没有 / 都为空 -> null', () => {
@@ -52,6 +73,53 @@ describe('buildStartupNotice', () => {
     });
     expect(line).toBe('ℹ MCP: 1 server · 2 interrupted runs — /mcp · /runs');
     expect(line).not.toContain('\n');
+  });
+
+  it('interrupted workflow run（含单复数）', () => {
+    expect(
+      buildStartupNotice({
+        mcpServers: [],
+        interruptedRuns: [],
+        interruptedWorkflows: [interruptedWorkflow('wf_1')],
+      }),
+    ).toBe('ℹ 1 interrupted workflow run — /workflows');
+    expect(
+      buildStartupNotice({
+        mcpServers: [],
+        interruptedRuns: [],
+        interruptedWorkflows: [interruptedWorkflow('wf_1'), interruptedWorkflow('wf_2')],
+      }),
+    ).toBe('ℹ 2 interrupted workflow runs — /workflows');
+  });
+
+  it('飞书已连接才出现；未连接不出现', () => {
+    expect(
+      buildStartupNotice({
+        mcpServers: [],
+        interruptedRuns: [],
+        feishu: connectedFeishu,
+      }),
+    ).toBe('ℹ Feishu connected — /feishu');
+    expect(
+      buildStartupNotice({
+        mcpServers: [],
+        interruptedRuns: [],
+        feishu: { ...connectedFeishu, connected: false },
+      }),
+    ).toBeNull();
+  });
+
+  it('四段组合顺序固定为 MCP -> runs -> workflows -> feishu', () => {
+    expect(
+      buildStartupNotice({
+        mcpServers: [mcpServer('a')],
+        interruptedRuns: [interruptedRun('r1')],
+        interruptedWorkflows: [interruptedWorkflow('wf_1'), interruptedWorkflow('wf_2')],
+        feishu: connectedFeishu,
+      }),
+    ).toBe(
+      'ℹ MCP: 1 server · 1 interrupted run · 2 interrupted workflow runs · Feishu connected — /mcp · /runs · /workflows · /feishu',
+    );
   });
 });
 
@@ -94,5 +162,62 @@ describe('loadStartupNotice', () => {
     } satisfies DurableRunsControl;
 
     expect(await loadStartupNotice(ctx)).toBe('ℹ 1 interrupted run — /runs');
+  });
+
+  it('读取 interrupted workflow 与飞书状态', async () => {
+    const ctx = makeCtx();
+    let listOpts: unknown;
+    ctx.workflows = {
+      listRuns: async (opts) => {
+        listOpts = opts;
+        return [interruptedWorkflow('wf_1')];
+      },
+      getRun: async () => null,
+      start: async () => {
+        throw new Error('not used');
+      },
+      resume: async () => {
+        throw new Error('not used');
+      },
+      cancel: async () => undefined,
+    } satisfies WorkflowsControl;
+    ctx.feishu = { status: () => connectedFeishu } satisfies FeishuControlLike;
+
+    expect(await loadStartupNotice(ctx)).toBe(
+      'ℹ 1 interrupted workflow run · Feishu connected — /workflows · /feishu',
+    );
+    expect(listOpts).toEqual({ status: 'interrupted', limit: 20 });
+  });
+
+  it('workflow 查询失败与 feishu status 抛错都静默降级', async () => {
+    const ctx = makeCtx();
+    ctx.workflows = {
+      listRuns: async () => {
+        throw new Error('boom');
+      },
+      getRun: async () => null,
+      start: async () => {
+        throw new Error('not used');
+      },
+      resume: async () => {
+        throw new Error('not used');
+      },
+      cancel: async () => undefined,
+    } satisfies WorkflowsControl;
+    ctx.feishu = {
+      status: () => {
+        throw new Error('boom');
+      },
+    } satisfies FeishuControlLike;
+
+    expect(await loadStartupNotice(ctx)).toBeNull();
+  });
+
+  it('未连接 feishu 不出现在横幅', async () => {
+    const ctx = makeCtx();
+    ctx.feishu = {
+      status: () => ({ ...connectedFeishu, connected: false }),
+    } satisfies FeishuControlLike;
+    expect(await loadStartupNotice(ctx)).toBeNull();
   });
 });

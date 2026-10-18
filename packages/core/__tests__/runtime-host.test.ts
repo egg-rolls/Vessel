@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { getEventListeners } from 'node:events';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
 import type {
@@ -781,6 +782,121 @@ describe('未应答交互清理（0.3 加固）', () => {
 
     fake.finishRun();
     expect(pending.size).toBe(0);
+
+    await host.close();
+  });
+});
+
+describe('Host 关闭与成员生命周期（0.4 C2）', () => {
+  type HostInternals = {
+    members: Map<string, unknown>;
+    handles: Map<string, unknown>;
+    pendingInteractions: Map<string, unknown>;
+  };
+
+  it('close cancels queued and running runs', async () => {
+    const host = new InProcessRuntimeHost();
+    const providerA = new ControlledProvider();
+    const providerB = new ControlledProvider();
+    const a = await host.spawn({ id: 'a', provider: providerA, model: 'm' });
+    const b = await host.spawn({ id: 'b', provider: providerB, model: 'm' });
+
+    const startedA = providerA.waitForRequest();
+    const runA = await a.run('a');
+    await startedA;
+
+    const runB = await b.run('b');
+    expect(runB.status()).toBe('queued');
+
+    await host.close();
+
+    await expect(runA.result).rejects.toThrow();
+    await expect(runB.result).rejects.toThrow();
+    expect(host.list()).toEqual([]);
+    expect(host.scheduler.stats()).toMatchObject({ queued: 0, running: 0 });
+  });
+
+  it('rejects API calls after close and is idempotent', async () => {
+    const host = new InProcessRuntimeHost();
+    await host.close();
+    await host.close();
+
+    await expect(
+      host.spawn({ id: 'a', provider: new MemoryLLMProvider(), model: 'm' }),
+    ).rejects.toThrow('runtime host is closed');
+    await expect(host.send(message({ to: 'a' }))).rejects.toThrow('runtime host is closed');
+  });
+
+  it('clears pending interactions when a member closes', async () => {
+    let memberEvents: MemoryEventStream | undefined;
+    const host = new InProcessRuntimeHost({
+      eventStreamFactory: () => {
+        memberEvents = new MemoryEventStream();
+        return memberEvents;
+      },
+    });
+    const agent = await host.spawn({ id: 'worker', provider: new MemoryLLMProvider(), model: 'm' });
+    const internals = host as unknown as HostInternals;
+    const events = memberEvents;
+    if (!events) throw new Error('missing member event stream');
+
+    events.publish({
+      type: 'tool.permission.request',
+      run_id: 'run-1',
+      data: { requestId: 'req-1' },
+      ts: Date.now(),
+    });
+    expect(internals.pendingInteractions.size).toBe(1);
+
+    await agent.close();
+    expect(internals.pendingInteractions.size).toBe(0);
+    expect(internals.members.size).toBe(0);
+    expect(internals.handles.size).toBe(0);
+
+    await host.close();
+  });
+
+  it('releases external abort listeners after each run', async () => {
+    const host = new InProcessRuntimeHost();
+    const agent = await host.spawn({
+      id: 'a',
+      provider: new RecordingProvider(),
+      model: 'm',
+    });
+    const controller = new AbortController();
+
+    for (let i = 0; i < 20; i += 1) {
+      const run = await agent.run(`input-${i}`, { signal: controller.signal });
+      await expect(run.result).resolves.toBe('ok:m');
+    }
+
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    await host.close();
+  });
+
+  it('does not retain members, handles or interactions after 100 spawn/close cycles', async () => {
+    const host = new InProcessRuntimeHost();
+    const internals = host as unknown as HostInternals;
+
+    for (let i = 0; i < 100; i += 1) {
+      const agent = await host.spawn({
+        id: `member-${i}`,
+        provider: new RecordingProvider(),
+        model: 'm',
+      });
+      const run = await agent.run('hello');
+      await expect(run.result).resolves.toBe('ok:m');
+      await agent.close();
+
+      expect(internals.members.size).toBe(0);
+      expect(internals.handles.size).toBe(0);
+    }
+
+    expect(internals.members.size).toBe(0);
+    expect(internals.handles.size).toBe(0);
+    expect(internals.pendingInteractions.size).toBe(0);
+    expect(host.list()).toEqual([]);
+    expect(host.scheduler.stats()).toMatchObject({ queued: 0, running: 0 });
 
     await host.close();
   });

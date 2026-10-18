@@ -5,17 +5,56 @@
 
 import type { EventHandler, EventStream, RunEvent, Unsubscribe } from '../types/event.js';
 
+/** 未配置时的历史上限（0.3 行为） */
+const DEFAULT_MAX_HISTORY = 1000;
+
+/** 历史上限选项（additive） */
+export interface MemoryEventStreamOptions {
+  /**
+   * 未配置 / 缺省 = 1000（保持 0.3 行为）；
+   * 0 = 不限制；> 0 = 只保留最近 N 条（环形缓冲）。
+   */
+  maxHistory?: number;
+}
+
+/**
+ * 解析历史上限：
+ * - 未传参数 → 1000；
+ * - options 对象缺 `maxHistory` → 1000；
+ * - 数字 / 显式 maxHistory：0 或负数/非有限 → 0（不限制），正数 → 环形容量。
+ */
+function resolveMaxHistory(options?: MemoryEventStreamOptions | number): number {
+  if (options === undefined) return DEFAULT_MAX_HISTORY;
+
+  const raw = typeof options === 'number' ? options : options.maxHistory;
+  if (raw === undefined) return DEFAULT_MAX_HISTORY;
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return 0;
+
+  const value = Math.floor(raw);
+  return value > 0 ? value : 0;
+}
+
 /**
  * 内存事件流实现
  * 支持发布/订阅模式，用于 trace/replay/TUI 流式渲染
  */
 export class MemoryEventStream implements EventStream {
   private handlers: Set<EventHandler> = new Set();
+  /** 不限上限时的历史；有上限时不用 */
   private history: RunEvent[] = [];
-  private maxHistorySize: number;
+  private readonly maxHistorySize: number;
+  /** 有上限时的环形缓冲；undefined 表示不限制 */
+  private ring?: { buffer: Array<RunEvent | undefined>; head: number; count: number };
 
-  constructor(maxHistorySize = 1000) {
-    this.maxHistorySize = maxHistorySize;
+  constructor(options?: MemoryEventStreamOptions | number) {
+    this.maxHistorySize = resolveMaxHistory(options);
+    if (this.maxHistorySize > 0) {
+      this.ring = {
+        buffer: new Array<RunEvent | undefined>(this.maxHistorySize),
+        head: 0,
+        count: 0,
+      };
+    }
   }
 
   /**
@@ -35,13 +74,8 @@ export class MemoryEventStream implements EventStream {
    * @param event 运行事件
    */
   publish(event: RunEvent): void {
-    // 保存到历史
-    this.history.push(event);
-
-    // 限制历史大小
-    if (this.history.length > this.maxHistorySize) {
-      this.history = this.history.slice(-this.maxHistorySize);
-    }
+    // 保存到历史（有上限时写环形缓冲，摊还 O(1)）
+    this.record(event);
 
     // 通知所有订阅者
     for (const handler of this.handlers) {
@@ -64,18 +98,57 @@ export class MemoryEventStream implements EventStream {
    */
   clear(): void {
     this.history = [];
+    if (this.ring) {
+      this.ring.buffer = new Array<RunEvent | undefined>(this.maxHistorySize);
+      this.ring.head = 0;
+      this.ring.count = 0;
+    }
   }
 
   /**
    * 获取事件历史
    * @param runId 可选的 run ID 过滤
-   * @returns 事件历史
+   * @returns 事件历史（按原始时间顺序；不超过 maxHistory）
    */
   getHistory(runId?: string): RunEvent[] {
+    const history = this.snapshotHistory();
     if (runId) {
-      return this.history.filter((e) => e.run_id === runId);
+      return history.filter((e) => e.run_id === runId);
     }
-    return [...this.history];
+    return history;
+  }
+
+  /** 记录事件到保留区 */
+  private record(event: RunEvent): void {
+    const ring = this.ring;
+    if (!ring) {
+      this.history.push(event);
+      return;
+    }
+
+    const capacity = this.maxHistorySize;
+    const index = (ring.head + ring.count) % capacity;
+    ring.buffer[index] = event;
+    if (ring.count < capacity) {
+      ring.count += 1;
+      return;
+    }
+    // 已满：覆盖最旧一条，head 前移
+    ring.head = (ring.head + 1) % capacity;
+  }
+
+  /** 按时间顺序复制当前保留的事件 */
+  private snapshotHistory(): RunEvent[] {
+    const ring = this.ring;
+    if (!ring) return [...this.history];
+
+    const capacity = this.maxHistorySize;
+    const events: RunEvent[] = [];
+    for (let i = 0; i < ring.count; i += 1) {
+      const event = ring.buffer[(ring.head + i) % capacity];
+      if (event !== undefined) events.push(event);
+    }
+    return events;
   }
 
   /**
@@ -90,7 +163,7 @@ export class MemoryEventStream implements EventStream {
     // 回答事件已入历史，直接 resolve，避免「先 publish 后 waitFor」的竞态丢事件。
     // 仅带 requestId 时回放历史——交互暂停事件必带 requestId（UUID，不会撞旧事件）。
     if (opts?.requestId !== undefined) {
-      const existing = this.history.find(
+      const existing = this.snapshotHistory().find(
         (e) =>
           e.type === name &&
           (e.data as Record<string, unknown> | undefined)?.requestId === opts.requestId,

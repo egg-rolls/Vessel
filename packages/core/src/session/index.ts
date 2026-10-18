@@ -7,6 +7,11 @@ export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.
 export { RunResumeError } from '../types/run-store.js';
 export type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
 export { FileSessionBackend } from './file-backend.js';
+export {
+  type PruneRunsOptions,
+  type PruneRunsResult,
+  pruneRuns,
+} from './prune.js';
 export { FileRunStore, MemoryRunStore } from './run-store.js';
 export {
   deriveSessionMeta,
