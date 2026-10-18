@@ -184,6 +184,16 @@ export function loadConfigFromEnv(prefix = 'VESSEL_'): Partial<VesselConfig> {
     }
   }
 
+  // 飞书凭据（0.4）：env 优先于配置文件；空串视为未设置，不覆盖文件值。
+  const feishuAppId = getEnvVar(`${prefix}FEISHU_APP_ID`);
+  const feishuAppSecret = getEnvVar(`${prefix}FEISHU_APP_SECRET`);
+  if (feishuAppId || feishuAppSecret) {
+    config.feishu = {
+      ...(feishuAppId ? { appId: feishuAppId } : {}),
+      ...(feishuAppSecret ? { appSecret: feishuAppSecret } : {}),
+    };
+  }
+
   return config;
 }
 
