@@ -21,7 +21,7 @@ describe('MetricsCollector (0.4 C2)', () => {
       llm: { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
       duration_ms: { total: 0, max: 0, avg: 0 },
     });
-    expect(collector.snapshot().updated_at).toBeGreaterThan(0);
+    expect(collector.snapshot().updated_at).toBe(0);
   });
 
   it('counts run lifecycle events', () => {
@@ -156,7 +156,11 @@ describe('MetricsCollector (0.4 C2)', () => {
     emit(stream, 'context.changed', { message_count: 1 });
     emit(stream, 'llm.request');
 
-    expect(collector.snapshot()).toEqual(before);
+    const after = collector.snapshot();
+    expect(after.runs).toEqual(before.runs);
+    expect(after.tool_calls).toEqual(before.tool_calls);
+    expect(after.llm).toEqual(before.llm);
+    expect(after.duration_ms).toEqual(before.duration_ms);
   });
 
   it('reset clears counters but keeps the subscription', () => {

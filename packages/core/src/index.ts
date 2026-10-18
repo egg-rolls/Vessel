@@ -28,6 +28,12 @@ export {
   type FileTraceRecorderOptions,
   MetricsCollector,
   type MetricsSnapshot,
+  type PruneTraceOptions,
+  type PruneTraceResult,
+  pruneTrace,
+  type ReadTraceOptions,
+  readTraceEvents,
+  rebuildMetrics,
   type TraceRecorderStats,
 } from './observability/index.js';
 // Provider

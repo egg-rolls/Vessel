@@ -1,8 +1,10 @@
 /**
- * Metrics 聚合（0.4 C2）
+ * Metrics 聚合（0.4 C2；0.5 抽出累加器供 trace 重建复用）
  *
  * 只订阅既有事件，做进程内聚合；不新增事件、不改 runtime、不持久化。
  * 多 Host / 多进程不合并；一个 collector 绑定一个 EventStream。
+ *
+ * `updated_at = max(event.ts)`（无事件为 0），实时与 `rebuildMetrics` 必须一致。
  *
  * @module @vessel/core/observability
  */
@@ -37,61 +39,21 @@ function readObject(value: unknown): Record<string, unknown> | undefined {
 }
 
 /**
- * 订阅既有事件并聚合 metrics。
- *
- * 消费事件：`run.started` / `run.completed` / `run.failed` / `run.cancelled` /
- * `tool.call.started` / `tool.call.failed` / `llm.response`。
- *
- * 注意：0.4 的取消路径由 `AgentRuntime` 发 `run.failed`，Core 暂无
- * `run.cancelled` 发射方，因此 `runs.cancelled` 当前恒为 0；
- * 被取消的 run 会计入 `runs.failed`。统一 run/host 取消事件留到 0.5。
+ * 纯累加器：实时 collector 与 trace 重建共用，保证语义一致。
  */
-export class MetricsCollector {
-  private unsubscribe?: Unsubscribe;
+export class MetricsAccumulator {
   private runs = { started: 0, completed: 0, failed: 0, cancelled: 0 };
   private toolCalls = { total: 0, failed: 0 };
   private llm = { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
   private duration = { total: 0, max: 0 };
-  private updatedAt: number;
+  private updatedAt = 0;
 
-  constructor(events: EventStream) {
-    this.updatedAt = Date.now();
-    this.unsubscribe = events.subscribe((event) => this.handle(event));
-  }
+  /** 消费一个事件；未知类型只推进 updated_at */
+  apply(event: RunEvent): void {
+    if (typeof event.ts === 'number' && Number.isFinite(event.ts)) {
+      this.updatedAt = Math.max(this.updatedAt, event.ts);
+    }
 
-  /** 当前快照（每次返回新对象） */
-  snapshot(): MetricsSnapshot {
-    const runCount = this.runs.completed + this.runs.failed;
-    return {
-      runs: { ...this.runs },
-      tool_calls: { ...this.toolCalls },
-      llm: { ...this.llm },
-      duration_ms: {
-        total: this.duration.total,
-        max: this.duration.max,
-        avg: runCount > 0 ? this.duration.total / runCount : 0,
-      },
-      updated_at: this.updatedAt,
-    };
-  }
-
-  /** 清零计数与时长样本；保持订阅 */
-  reset(): void {
-    this.runs = { started: 0, completed: 0, failed: 0, cancelled: 0 };
-    this.toolCalls = { total: 0, failed: 0 };
-    this.llm = { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-    this.duration = { total: 0, max: 0 };
-    this.updatedAt = Date.now();
-  }
-
-  /** 退订；不关闭 event stream。幂等。 */
-  dispose(): void {
-    if (!this.unsubscribe) return;
-    this.unsubscribe();
-    this.unsubscribe = undefined;
-  }
-
-  private handle(event: RunEvent): void {
     try {
       switch (event.type) {
         case 'run.started':
@@ -120,10 +82,34 @@ export class MetricsCollector {
         default:
           return;
       }
-      this.updatedAt = Date.now();
     } catch {
       // Metrics 聚合不得影响事件投递
     }
+  }
+
+  /** 当前快照（每次返回新对象） */
+  snapshot(): MetricsSnapshot {
+    const runCount = this.runs.completed + this.runs.failed;
+    return {
+      runs: { ...this.runs },
+      tool_calls: { ...this.toolCalls },
+      llm: { ...this.llm },
+      duration_ms: {
+        total: this.duration.total,
+        max: this.duration.max,
+        avg: runCount > 0 ? this.duration.total / runCount : 0,
+      },
+      updated_at: this.updatedAt,
+    };
+  }
+
+  /** 清零计数与时长样本 */
+  reset(): void {
+    this.runs = { started: 0, completed: 0, failed: 0, cancelled: 0 };
+    this.toolCalls = { total: 0, failed: 0 };
+    this.llm = { requests: 0, prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+    this.duration = { total: 0, max: 0 };
+    this.updatedAt = 0;
   }
 
   private recordDuration(value: unknown): void {
@@ -148,5 +134,37 @@ export class MetricsCollector {
     this.llm.prompt_tokens += prompt;
     this.llm.completion_tokens += completion;
     this.llm.total_tokens += total;
+  }
+}
+
+/**
+ * 订阅既有事件并聚合 metrics。
+ *
+ * 消费事件：`run.started` / `run.completed` / `run.failed` / `run.cancelled` /
+ * `tool.call.started` / `tool.call.failed` / `llm.response`。
+ */
+export class MetricsCollector {
+  private unsubscribe?: Unsubscribe;
+  private readonly accumulator = new MetricsAccumulator();
+
+  constructor(events: EventStream) {
+    this.unsubscribe = events.subscribe((event) => this.accumulator.apply(event));
+  }
+
+  /** 当前快照（每次返回新对象） */
+  snapshot(): MetricsSnapshot {
+    return this.accumulator.snapshot();
+  }
+
+  /** 清零计数与时长样本；保持订阅 */
+  reset(): void {
+    this.accumulator.reset();
+  }
+
+  /** 退订；不关闭 event stream。幂等。 */
+  dispose(): void {
+    if (!this.unsubscribe) return;
+    this.unsubscribe();
+    this.unsubscribe = undefined;
   }
 }
