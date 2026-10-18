@@ -567,3 +567,70 @@
 - **后果**：多一条显式配置路径；证书生命周期由用户负责；文档必须提示暴露 gateway 的风险；默认路径零变化，回归以默认配置对照 0.2。远程 / TLS 测试离线（本地自签证书 + 回环端口）。
 - **已知行为**：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问需把 host 换成实际 IP。这是显示层行为，不改变监听地址、token 鉴权或 Host/Origin 校验。
 - **关联**：ADR-036（gateway 协议）、ADR-037（0.2 非目标）、DECISION-008 §4.3 / §4.4 / §8 Addendum A §8.9。
+
+## ADR-042：workflow 引擎作为插件
+
+- **上下文**：ADR-010 / ADR-037 曾把 workflow 列为非目标。0.4 需要声明式多步骤编排，复用 `RuntimeHost` / `AgentRuntime` / `RunStore`，不重写 tool-calling loop。workflow 是领域无关但存在多种实现策略的编排能力，不是 runtime 必需 port；按能力准入（AGENTS.md）应做成插件。0.4 不注册模型可调用的 workflow 工具，入口只有 CLI / TUI / gateway。
+- **决策**：
+  1. **形态**：工厂式插件 `plugins/workflow/engine/`，包名 `@vessel/workflow`；加入 `src/plugin-loader.ts` 的 `FACTORY_PLUGINS`（短名 `workflow`），由 asm 构造。**不是 core 模块**；不新增 core 接口、不新增扩展机制。
+  2. **执行边界**：编排只经公开的 `RuntimeHost` / `RunnableAgent` 执行；除单 agent 回退外不绕过 Scheduler。工厂签名为 `createWorkflowEngine({ host?, runtime?, pluginHost, config, events })`；单 agent 注入 `RunnableAgent` 并强制并发 1。
+  3. **不注册工具**：0.4 不注册 `run_workflow`；模型不能触发任意路径的定义文件。工具化留待权限模型明确后另议。
+  4. **定义格式**：YAML/JSON；`steps[]` 为 `agent | tool`；`depends_on` 构成 DAG。环依赖、未知 `depends_on`、未知模板变量、未知工具/成员 = 定义错误。模板只做字符串插值（`{{inputs.*}}`、`{{steps.<id>.output|status}}`、`{{workflow.name}}`），**不做表达式/脚本求值**。`when.step` 必须是 `depends_on` 成员；无 `when` 时只有所有依赖 `completed` 才运行，否则 `skipped`；`contains` 与 `equals` 互斥。
+  5. **调度与终态**：依赖满足的步骤可并行，实际上限 `max_parallel = min(定义值, config.workflow.max_parallel)`；单 agent 回退强制 1。`retry` 只对 `failed` 生效，不对 `cancelled` 生效。只要有 step 最终为 `failed`，workflow 终态为 `failed`（即使 `on_error: continue` 跑完其余分支）；全部被跳过也算 `completed`。
+  6. **权限与中断**：`type: tool` 未声明 `checkPermission` → `allow`（与 core 库默认一致）；声明且返回 `ask` / `deny` → 一律拒绝（workflow 不弹权限框）。插件额外暴露 `interruptAll()`（**不进** `WorkflowControls`），由 asm 在 SIGINT/SIGTERM 调用；库本身不装全局 signal handler。
+  7. **状态与持久化**：workflow run id `wf_<uuid>`；workflow 状态 `pending | running | completed | failed | cancelled | interrupted`；step 状态 `pending | running | completed | failed | skipped | cancelled`。一 run 一 JSON，临时文件 + rename 原子写（Windows 失败重试 3 次后整文件直写）；检查点：workflow 开始、每个 step 开始/结束、workflow 结束。run JSON 保存完整定义快照，resume 使用快照、不重新读磁盘定义；`definition_path` 存解析后的绝对路径，list 只扫 `wf_*.json`，损坏文件跳过并告警。
+  8. **resume**：允许 `interrupted | failed | running`；`completed | cancelled` → `workflow_not_resumable`。跳过 `completed` / `skipped`；`running` / `pending` / `failed` 重置为 `pending` 并重跑；**不保证 step 幂等**。`cancel()` → `cancelled`（running step `cancelled`、pending step `skipped`），不可 resume；SIGINT/SIGTERM → `interrupted`，可 resume。0.4 的 `workflow cancel` 只支持同进程，对非本进程 run 返回 `workflow_not_found`。
+  9. **路径与命名**：相对路径按 `workflow.dir` 解析；CLI 允许绝对路径；拒绝 `..` 越界与 symlink 逃逸。TUI / gateway 的 name 只允许单段安全名，由 asm 的 `resolveDefinition(name)` 解析；解析顺序 `name.yaml` → `name.yml` → `name.json`，多个命中 → `workflow_invalid`。`workflow.dir` = 定义目录，`workflow.path` = run 存储目录。
+  10. **控制面**：`WorkflowControls` / `WorkflowRunSummary` / `WorkflowStepSummary` / `WorkflowRunDetail` / `WorkflowOutcome` 按 DECISION-009 §5.1.4 冻结；稳定错误码 `workflow_not_found` / `workflow_invalid` / `workflow_already_running` / `workflow_not_resumable` / `workflow_cancelled` / `workflow_disabled`；事件为开放字符串（`workflow.*`），不建常量（ADR-030）；**不新增 `workflow.step.skipped` 事件**，skipped 只体现在 run 详情与计数。CLI 退出码：0 成功；1 workflow failed；2 参数/配置错误；130 用户 cancel / SIGINT / interrupted。
+  11. **并发**：同一 run 同时只允许一个执行；不同 run 可并发 `start`；并发 `resume` 同一 run → `workflow_already_running`。
+- **备选**：(a) 放进 core——把编排语义与第二套扩展面塞进冻结区，违反 ADR-012 / ADR-034 / ADR-037；(b) 注册 `run_workflow` 工具——模型可触发任意路径定义，权限边界不清晰；(c) 新写一个调度器——与 `Scheduler` / `RuntimeHost` 重复；(d) 引入表达式引擎——扩大攻击面与依赖面。均不取。
+- **后果**：core 零改动；workflow 默认关闭、显式 opt-in；不增加默认工具。resume 可能重复副作用，文档与 TUI/gateway 提示必须如实写明。单 agent 回退时并行退化为串行；workflow 定义是用户文件，不提供可视化编辑器。0.4 `workflow cancel` 只支持同进程；文件级取消标记留到 0.5。0.4 不做跨机器编排。
+- **关联**：ADR-010、ADR-012、ADR-030、ADR-034、ADR-037、ADR-039、ADR-040；DECISION-009 §5.1 / §5.5 / §5.6 / §5.7 / §5.8 / §9 / §11.1 / §11.4 / §12.1。
+
+## ADR-043：evals harness（默认离线）
+
+- **上下文**：0.4 需要可复现、默认离线的 agent 评测基线，作为后续版本的回归门槛。评测是测试/质量工具，不是 runtime 能力；放进 core 会破坏能力准入。0.4 不允许加载自定义断言代码（安全边界）；真实 provider 必须显式联网。
+- **决策**：
+  1. **形态**：库 + 运行器 `plugins/evals/harness/`，包名 `@vessel/evals`；加入 `FACTORY_PLUGINS`（短名 `evals`）**仅为阻止被当作普通插件扫描**；不向 `PluginHost` 注册工具；由 asm CLI 直接调用库函数。工厂 `createEvalsPlugin()` 返回 `Plugin`（`install` no-op）+ runner（`runSuite` / `getLatest`）。
+  2. **默认完全离线**：只使用脚本化 mock provider；真实 provider 需要 `evals.allow_network: true` **且** CLI `--allow-network` 同时成立；否则 `eval_network_required`，退出码 2；报告 `network: true`。
+  3. **Suite 格式**：YAML/JSON；`defaults.timeout_ms` / `tags` / `session: fresh|shared`；case 级 `timeout_ms` 覆盖 defaults；`mock.responses` 按序回放，耗尽返回空内容并记 `mock_exhausted` 警告（warning 不单独判失败，是否失败由断言决定）。additive 字段：`EvalCaseResult.warnings?: string[]`、`mock.responses[].tool_calls?: ToolCall[]`、`usage_under.value: { total_tokens?; prompt_tokens?; completion_tokens? }`（至少一个字段）。
+  4. **断言白名单**（未知类型 = 配置错误，不执行任意代码）：`output_contains`、`output_matches`、`no_error`、`tool_called`、`tool_not_called`、`max_duration_ms`、`max_iterations`、`usage_under`。无 usage 时 `usage_under` 判 FAIL 并写明原因。
+  5. **报告**：`EvalReport` / `EvalCaseResult` 按 DECISION-009 §5.2.3；默认输出 `config.evals.out_dir/<suite>-<timestamp>.json`；`--out` 覆盖；`--json` 只输出 JSON 到 stdout。`--filter` 未匹配的 case 记 `skipped` 并计入 `total`；skipped 只由 filter 或显式跳过产生。`getLatest` 按 `finished_at` 倒序取第一条，suite 只允许安全单段名，只读报告目录下的 `*.json`。
+  6. **退出码与错误**：0 = 全部 passed/skipped；1 = 存在 failed/error；2 = suite 解析/配置错误。`evals.enabled: false` → `eval_invalid`（消息注明 disabled），退出码 2；**不新增** `eval_disabled` 错误码。稳定错误：`eval_not_found` / `eval_invalid` / `eval_network_required`。
+  7. **边界**：0.4 不做 LLM-as-judge、不做网络评测默认开启、不做任意断言插件、不做 eval 面板（gateway 只有 `GET /v1/evals/latest`）。
+- **备选**：(a) 进 core——评测不是 runtime 能力；(b) 加载用户 JS 断言——安全边界不可控；(c) 只做在线评测——CI 不可复现且需要 Key；(d) LLM-as-judge——引入不确定性与额外 provider 依赖。均不取。
+- **后果**：CI 可完全离线跑 eval 回归；断言面固定，扩展需要新版本。mock 回放不能覆盖真实模型行为；`--allow-network` 的结果不进入默认门禁。报告是 JSON 文件，不是 HTML 控制台。
+- **关联**：ADR-030、ADR-034、ADR-037、ADR-039；DECISION-009 §5.2 / §5.7 / §9 / §11.2 / §11.4 / §12.1。
+
+## ADR-044：飞书渠道（插件 + 官方 SDK 隔离）
+
+- **上下文**：0.4 需要第一个真实 IM 入口，验证“人 ↔ Vessel”；WebSocket 长连接无需公网 IP。飞书官方 Node SDK 是重依赖，只能进插件包；core 的 `dependencies` 必须保持为空。个人微信无官方 API；公众号需要认证账号与公网 HTTPS，0.4 不做。
+- **决策**：
+  1. **形态**：工厂式插件 `plugins/im/feishu/`，包名 `@vessel/feishu`；加入 `FACTORY_PLUGINS`（短名 `feishu`）。官方 SDK 依赖只出现在该插件包。
+  2. **传输抽象**：所有网络交互藏在 `FeishuTransport` 后；测试与 CI 使用 mock transport，零网络。SDK 只负责长连接与事件接收，业务语义在插件内。
+  3. **配置**：`feishu.enabled / app_id / app_secret / domain / allowed_chat_ids / agent_id / session_prefix / reply_timeout_ms / max_reply_chars / max_members`；环境变量 `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先于配置。`reply_timeout_ms` 1..86400000；`max_reply_chars` 1..100000；`session_prefix` 非空且不含 `:` / 路径分隔符；`max_members` 1..64，默认 8。
+  4. **专用 Host**：飞书渠道**自建专用 `InProcessRuntimeHost`**（core 公开类），`maxMembers = feishu.max_members`；不占用主 Host 的成员名额，**不改 core**。per-chat 懒 spawn 一个成员：`sessionId = feishu:<chat_id>`；agent id = `feishu_<sanitized chat_id>`（只保留 `[A-Za-z0-9_-]`，超过 64 字符时取前 55 + `_` + 8 位 hash）。同一 chat 串行；不同 chat 并行，受专用 Host 的 Scheduler 上限约束。
+  5. **注入面**：asm 注入 `provider` / `model` / `pluginHost` / `session` / `events` / 可选 `contextFactory` / 可选 `runStore`；渠道把专用 Host 的事件转发到注入的 `events`（供 metrics / TUI / gateway 观测），不注入主 Host。
+  6. **行为**：只处理 `im.message.receive_v1` 的 **text**；忽略机器人自己、非文本、重复 `message_id`（LRU 1000）。去重先于业务过滤；非文本消息也登记 `message_id`。单 chat 队列上限 10（只计 pending，running 不占名额），超出立即回复 `busy`；达到 `max_members` 时新 chat 立即回复 `busy`，不逐出已有成员（LRU 留 0.5）。
+  7. **回复**：`im.message.reply` 到原消息；最终回复长度 ≤ `max_reply_chars`（含 `…(truncated)` 后缀）；`reply_timeout_ms` 到期取消该 run 并回复超时提示；`busy` 与超时提示文案稳定。
+  8. **凭据**：任何日志 / 事件 / 错误不得输出 `app_secret` 或完整 `app_id`；只允许前 4 位 + `***`。凭据、token 不得出现在代码、测试、日志、报告或提交中。
+  9. **控制面**：`FeishuStatus` / `FeishuChannel` 按 DECISION-009 §5.3.4；稳定错误 `channel_disabled` / `channel_not_connected` / `channel_auth_failed`；事件 `channel.feishu.*` 为开放字符串。
+  10. **CLI 语义**：`--feishu` 是**附加开关**，可与 `--serve` 和 REPL 同时使用；仍与 `--run` / `--pipe` / `--resume-run` / `--tools` / `--version` / `--help` 互斥（退出码 2）。只有显式 `--feishu` 才启动渠道；`feishu.enabled: true` 单独不会启动。`--session` 只影响 REPL / serve，不影响飞书 session。
+  11. **失败语义**：配置错误 → 退出码 2；运行期连接/SDK 失败 → 退出码 1；错误必须明确，不静默降级；`start()` 失败不得被吞掉。运行中断线由 SDK 重连，状态事件如实上报。
+  12. **非目标**：富媒体、卡片、@ 解析、thread 区分、多机器人、OAuth、个人微信；微信公众号/企业微信 0.5 再评估。
+- **备选**：(a) 进 core——重 SDK 与渠道语义污染 core；(b) Webhook / 轮询——需要公网 HTTPS 或额外基础设施；(c) 个人微信——无官方 API；(d) 多渠道抽象层——0.4 只有一个真实渠道，抽象会变成 speculative generality。均不取。
+- **后果**：core 零改动；飞书默认关闭；离线测试可用。只支持文本与单 chat 单 session；富媒体与 thread 留待后续。凭据处理成为硬门禁；`--feishu` 必须显式开启。
+- **关联**：ADR-004、ADR-030、ADR-034、ADR-037、ADR-039；DECISION-009 §5.3 / §5.5 / §5.6 / §5.7 / §5.10 / §9 / §10.1 / §11.3 / §11.4 / §12.1。
+
+## ADR-045：0.4 可观测性与稳定性
+
+- **上下文**：0.3 的长会话、事件历史、run 存储与 gateway 慢客户端缺少统一上限与快照。0.4 需要进程内 metrics、事件历史环形缓冲、run 清理 helper 与背压加固，但不能扩 core 接口、不能新增事件、不能改变 0.3 默认行为。
+- **决策**：
+  1. **Metrics**：`MetricsCollector` 订阅既有事件（`run.started` / `run.completed` / `run.failed` / `run.cancelled` / `tool.call.started` / `tool.call.failed` / `llm.response`），只做进程内聚合；`MetricsSnapshot` 按 DECISION-009 §5.4.1；**不新增事件、不改 runtime**；`duration_ms.avg` 以 completed + failed 为分母，无样本为 0；进程重启即清零，不持久化、不跨 Host 合并。**`runs.cancelled` 保持 0**：取消的 run 计入 `runs.failed`（core 现有取消路径发 `run.failed`）；resume 不计 `runs.started`，按终态计 completed/failed，文档写明 `completed` 可能大于 `started`。`observability.metrics: false` 彻底关闭 collector 注入与 gateway/TUI 控制面。导出：`MetricsCollector`、`MetricsSnapshot` 可从根入口与 `@vessel/core/observability` 导入。
+  2. **事件历史上限**：`MemoryEventStreamOptions.maxHistory?`（additive）；**未配置/缺省 = 1000（保持 0.3 实际默认）**；显式 `0` = 不限制；`>0` = 环形缓冲，`getHistory()` 不超过 N。`observability.event_history` 的缺省语义同上，0.4 不得把缺省改成无限。构造函数接受 `MemoryEventStreamOptions | number`，数字形式保持 0.3 语义；`MemoryEventBus` 增加可选 `MemoryEventStreamOptions` 构造参数。**不改变 `replayRun` / `FileEventStore` 语义**；`FileEventStore` 不自动轮转。导出：`MemoryEventStreamOptions` 可从根入口导入。
+  3. **run 清理**：`pruneRuns(store, opts?)`（additive helper）。仅给 `status` → 删除全部匹配项；`older_than_ms` / `keep_latest` 至少一个才做年龄/保留裁剪；`keep_latest` 在 status 过滤后的集合内按 `updated_at` 倒序、`run_id` 升序；`keep_latest = 0` 删除全部匹配项；完全无条件 → 不删除。`kept` = 本次操作后仍保留的、符合 `status` 过滤的条目数；`RunStore.list` 的 200 上限不可精确统计，`keep_latest > 200` 不保证精确。**不修改 `RunStore` 接口**；不自动调度。导出：`pruneRuns`、`PruneRunsOptions`、`PruneRunsResult` 可从根入口导入。
+  4. **gateway 背压**：gateway `SeqEventBuffer` 的 `maxHistory` 缺省 10000，**永不无界**，与 core `observability.event_history` 的 `0 = unlimited` 语义**独立**、不被覆盖。慢客户端：WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；超过阈值先丢事件并标记 `gap`，4 MiB 硬断开作为最后手段。单请求体仍限 1 MiB；远程 / 鉴权 / Host / Origin 规则不变。gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
+  5. **加固**：`AgentRuntime` compact 后事件与消息不重复、不丢最后一条用户消息；`InProcessRuntimeHost` 关闭路径清理成员、排队 run、交互请求；大量成员 spawn/close（100 次循环）后内部 Map 无残留；`Scheduler` 队列满 / 并发取消 / 同成员串行不死锁。以测试固定，不改公开语义。
+- **备选**：(a) 新增 metrics 事件或第 10 个接口——违反 ADR-012/017 的克制原则；(b) metrics 持久化 / 跨 Host 合并——0.4 只需要进程内快照；(c) 自动 prune 调度器——引入新的生命周期与并发问题；(d) gateway 无界缓冲——慢客户端会导致内存无界增长。均不取。
+- **后果**：可观测性不增加扩展面；0.3 默认行为不变（事件历史缺省仍 1000）。metrics 是瞬时值；`runs.cancelled` 保持 0，取消计入 failed；`completed` 可能大于 `started`（resume 不计 started）。事件上限会丢旧事件（回放应使用 `FileEventStore`）；prune 需要显式调用；多 Host 不合并；gateway 缓冲与 core 事件历史相互独立。gateway 慢客户端会收到 `gap`，极端情况下被硬断开（4 MiB），这是刻意的背压。
+- **关联**：ADR-030、ADR-036、ADR-037、ADR-040；DECISION-009 §5.4 / §5.7 / §9 / §10.2 / §10.3 / §11.4 / §12.1。
