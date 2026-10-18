@@ -14,7 +14,7 @@
 - **F3 统一入口**：RPC 信封 v1、方法表 v1.1、capability manifest、`RpcClient`（local / http）、`--connect`；旧 REST 端点保留为兼容别名。
 - **F4 多租户**：`TenantContext`、tenant 解析、token → principal、存储 / 配置 / 工具 / 权限 / quota / trace / RPC 隔离；`serve.tokens` / `serve.admin_token`；`vessel tenant list|get|create|update`。
 - **F6 配置与密钥**：YAML 主配置、`config path|init|show [--sources]`、`_env` 间接引用、来源标注、密钥脱敏输出。
-- **A-6 内置多租户执行（接口增量）**：`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`；`--serve` 每 active tenant 独立执行面（runtime / PluginHost / session / trace / 锁）标 **in progress (0.5)**。
+- **A-6 内置多租户执行**：`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`；`--serve` 为每个 active tenant 构建独立执行面（config / provider / session / run store / context / PluginHost / trace / metrics / redactor / sessionControl）与独立 EventStream、per-tenant writer lock；启动失败回滚、shutdown 释放。
 - **ADR 多文件**：`docs/adr/ADR-001..050`，`docs/adr/README.md` 索引与编写约定，`docs/ADR.md` 保留为兼容 stub。
 - **门禁**：`check-docs` ADR 树校验；`check-rpc-methods`；`check-config-sources`；`check-trace`。
 
@@ -41,7 +41,7 @@
 - trace 队列溢出会写 `trace.overflow`，该 trace 标记为不完整。
 - `pruneTrace` 不删除 `running` / `interrupted` run；tenant 删除默认 disabled，0.5 无 `--purge`。
 - `--connect` 只连本机回环 gateway；**F5 跨机器远程在 0.6**。
-- 插件 tenant 行为已合入；`--serve` 每 tenant 独立执行面（runtime / PluginHost / session / trace / 锁）**in progress (0.5)**，等 asm 接线落地。
+- 多租户执行已实现（ext 插件、web 接口、asm per-tenant 执行面）；**gateway 的 workflow / 飞书控制面仍只走 default tenant**（A-6 §13.3 方法表未包含 per-tenant 变体）。
 - **微信（公众号 / 企业微信）不做**；0.5 不发布。
 
 ## [0.4.0] - 2026-10-18

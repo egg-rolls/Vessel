@@ -124,7 +124,7 @@ vessel config show [--sources] [--json] [--tenant <id>]
 | `tenant overlay` 报禁止块 | 覆盖了 `data_dir` / `trace` / `serve` / `tenant` / `update` | 改到项目或用户层 |
 | token 401 | 已配置 token 但请求未带，或 token 不在 `serve.tokens` | 检查 `serve.tokens` / `serve.token` / `VESSEL_GATEWAY_TOKEN` |
 
-## 6. 内置多租户执行（A-6，in progress (0.5)）
+## 6. 内置多租户执行（A-6）
 
 `--serve` 模式为每个已配置且 `status: active` 的 tenant 构建独立执行面：
 
@@ -137,7 +137,9 @@ plugin host + plugins / trace recorder / metrics collector / redactor / sessionC
 - 每个 active tenant 持有自己的 writer lock；启动失败必须回滚已获取的锁，shutdown 全部释放；锁冲突返回 `tenant_locked`。
 - `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
 - 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
-- **状态**：ext 插件 tenant 行为已合入；web A-6.3 接口增量已合入（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）；asm 的 per-tenant 执行接线标 **in progress (0.5)**，落地后本文改为已实现。
+- 每个 tenant bundle 还构建 workflow / feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。
+- **状态**：ext 插件 tenant 行为、web A-6.3 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 per-tenant 执行接线**均已实现**。
+- **已知限制**：gateway 的 workflow / 飞书控制面仍只走 default tenant（A-6 §13.3 方法表未包含 per-tenant 变体）。
 
 ## 7. 示例：多租户部署
 

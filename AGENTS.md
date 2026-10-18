@@ -14,7 +14,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
 - **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
 - **0.4 状态**：workflow、evals、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，未随版本发布）；三个能力全部是插件、默认关闭；0.4 只做发布干跑，不 tag / publish / 合并 `main`。决策边界见 ADR-042 / 043 / 044 / 045。
-- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为已由 ext 合入；`--serve` 每 tenant 独立执行面标 `in progress (0.5)`，等 asm 接线落地。F5 跨机器远程在 0.6，微信不做。决策边界见 ADR-046 ~ ADR-050。
+- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为与 `--serve` 每 tenant 独立执行面 **已实现**；gateway 的 workflow / 飞书控制面仍只走 default tenant。F5 跨机器远程在 0.6，微信不做。决策边界见 ADR-046 ~ ADR-050。
 
 ## 代码风格与硬规矩
 
