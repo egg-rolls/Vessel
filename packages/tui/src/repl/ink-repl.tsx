@@ -13,6 +13,7 @@ import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createCommands, doResume } from '../commands/commands.js';
+import { formatWorkflowOutcome } from '../commands/workflows-command.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
@@ -33,7 +34,7 @@ import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
-import { executeResume, executeTurn } from './run-turn.js';
+import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { loadStartupNotice } from './startup-notice.js';
 import { useReplState } from './use-repl-state.js';
 
@@ -254,6 +255,17 @@ function InkRepl({ ctx }: InkReplProps) {
                 line: formatClassifiedError(classifyError(outcome.error)),
               });
             }
+            dispatch({ type: 'runEnd' });
+          }
+          // /workflows run|resume：阻塞等待 done；Esc / Ctrl+C 走同一 abort -> cancel(id)。
+          if (result.workflowRun) {
+            const abort = new AbortController();
+            dispatch({ type: 'runStart', abort });
+            const outcome = await executeWorkflow(result.workflowRun, abort);
+            dispatch({
+              type: 'appendHistory',
+              line: formatWorkflowOutcome(result.workflowRun.workflowRunId, outcome),
+            });
             dispatch({ type: 'runEnd' });
           }
           return;
@@ -666,6 +678,11 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
         } else if (outcome.status === 'failed') {
           console.error(formatClassifiedError(classifyError(outcome.error)));
         }
+      }
+      if (result.workflowRun) {
+        const abort = new AbortController();
+        const outcome = await executeWorkflow(result.workflowRun, abort);
+        console.log(formatWorkflowOutcome(result.workflowRun.workflowRunId, outcome));
       }
       if (!result.handled) {
         const name = trimmed.split(/\s+/)[0] ?? trimmed;
