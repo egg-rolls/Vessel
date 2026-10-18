@@ -86,7 +86,13 @@ export type ProtocolErrorCode =
   | 'workflow_already_running'
   | 'workflow_not_resumable'
   | 'channel_disabled'
-  | 'eval_not_found';
+  | 'eval_not_found'
+  // 0.5 RPC / 多租户（DECISION-010 A-3 §10.2）
+  | 'forbidden'
+  | 'invalid_params'
+  | 'tenant_locked'
+  | 'quota_exceeded'
+  | 'conflict';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;
@@ -107,6 +113,8 @@ export type ServerFrame =
       from_seq: number;
       /** 服务端当前最新 seq；无事件时为 0 */
       latest_seq: number;
+      /** 0.5：token 解析出的目标 tenant（additive） */
+      tenant_id?: string;
     }
   | {
       v: 1;

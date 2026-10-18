@@ -303,6 +303,48 @@ export interface HelloInfo {
   node: NodeInfo;
   from_seq: number;
   latest_seq: number;
+  /** 0.5：token 解析出的 tenant（additive） */
+  tenant_id?: string;
+}
+
+/** RPC 响应信封（0.5） */
+export interface RpcResponseEnvelope<T = unknown> {
+  v: 1;
+  id: string;
+  ok: boolean;
+  result?: T;
+  error?: { code: string; message: string; details?: unknown };
+}
+
+/** capability manifest（0.5） */
+export interface CapabilityManifest {
+  version: string;
+  config_schema_version: number;
+  methods: Array<{
+    name: string;
+    params_schema?: unknown;
+    result_schema?: unknown;
+    permission: 'read' | 'write' | 'admin';
+  }>;
+  tools: Array<{ name: string; description?: string }>;
+  plugins: Array<{ name: string; enabled: boolean }>;
+}
+
+/** config.sources（0.5） */
+export interface ConfigSourcesResponse {
+  sources: Record<string, string>;
+  tenant_id?: string;
+  tenant_overlay_keys?: string[];
+}
+
+/** tenant 元数据（0.5） */
+export interface TenantInfo {
+  tenant_id: string;
+  name?: string;
+  status: 'active' | 'disabled';
+  created_at: number;
+  quota?: Record<string, number>;
+  usage?: Record<string, number>;
 }
 
 /** gap 帧 */

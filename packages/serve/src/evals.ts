@@ -46,6 +46,8 @@ export interface EvalReport {
 /** gateway 注入面；缺省 = evals 端点关闭（返回 eval_not_found） */
 export interface EvalsGatewayOptions {
   latest(suite: string): Promise<EvalReport | null>;
+  /** A-3 §10.1：evals.run 预留；未注入时方法返回 not_found */
+  run?(suite: string, options?: Record<string, unknown>): Promise<EvalReport>;
 }
 
 const CASE_STATUSES: readonly EvalCaseResult['status'][] = ['passed', 'failed', 'error', 'skipped'];
