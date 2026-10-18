@@ -42,9 +42,21 @@ const STABLE_ERROR_CODES = [
   'channel_disabled',
   'channel_not_connected',
   'channel_auth_failed',
+  // 0.5：RPC 冻结错误码（DECISION-010 §2.3）。放在长码之后，避免子串抢先匹配。
+  'unauthorized',
+  'forbidden',
+  'invalid_params',
+  'tenant_locked',
+  'quota_exceeded',
+  'conflict',
+  'internal',
+  'not_found',
 ] as const;
 
 type StableErrorCode = (typeof STABLE_ERROR_CODES)[number];
+
+/** 0.5 RPC 错误码中过短/易误判的两个，只从 Error.code 识别 */
+const CODE_ONLY_RPC_CODES = new Set<StableErrorCode>(['conflict', 'internal']);
 
 /** 先读 Error.code，再回退到 message；两者都可能来自不同装配层 */
 function readStableCode(error: unknown, lowerMessage: string): StableErrorCode | undefined {
@@ -56,7 +68,9 @@ function readStableCode(error: unknown, lowerMessage: string): StableErrorCode |
     const matched = STABLE_ERROR_CODES.find((code) => rawCode.includes(code));
     if (matched) return matched;
   }
-  return STABLE_ERROR_CODES.find((code) => lowerMessage.includes(code));
+  return STABLE_ERROR_CODES.find(
+    (code) => !CODE_ONLY_RPC_CODES.has(code) && lowerMessage.includes(code),
+  );
 }
 
 export interface ClassifiedError {
@@ -165,6 +179,55 @@ export function classifyError(error: unknown): ClassifiedError {
           category: 'auth',
           message: msg,
           hint: '飞书 app_id/app_secret 无效；检查环境变量或配置。',
+        };
+      // 0.5：RPC 冻结错误码
+      case 'unauthorized':
+        return {
+          category: 'auth',
+          message: msg,
+          hint: '凭据缺失或无效；检查 token 配置。',
+        };
+      case 'forbidden':
+        return {
+          category: 'permission',
+          message: msg,
+          hint: 'tenant 隔离或角色权限不足；确认 tenant 与权限后重试。',
+        };
+      case 'invalid_params':
+        return {
+          category: 'invalid',
+          message: msg,
+          hint: '命令参数不合法；用 /help 或命令 usage 确认格式。',
+        };
+      case 'not_found':
+        return {
+          category: 'not_found',
+          message: msg,
+          hint: '目标不存在；用 /runs、/sessions 或 /workflows 查看可用项。',
+        };
+      case 'tenant_locked':
+        return {
+          category: 'conflict',
+          message: msg,
+          hint: '同一 tenant 已有写者；用 --connect <url> 连接 gateway，或关闭占用进程。',
+        };
+      case 'quota_exceeded':
+        return {
+          category: 'quota',
+          message: msg,
+          hint: 'tenant quota 超限；清理会话/run 或调大配额后重试。',
+        };
+      case 'conflict':
+        return {
+          category: 'conflict',
+          message: msg,
+          hint: '状态冲突（已运行/已结束/仍有活动 run）；先查看当前状态。',
+        };
+      case 'internal':
+        return {
+          category: 'api',
+          message: msg,
+          hint: '服务端内部错误；稍后重试或查看 gateway 日志。',
         };
     }
   }

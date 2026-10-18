@@ -148,3 +148,38 @@ describe('0.4 workflow / feishu 稳定错误码', () => {
     );
   });
 });
+
+describe('0.5 RPC 冻结错误码', () => {
+  const byCode = (code: string, message = 'rpc failed') =>
+    Object.assign(new Error(message), { code });
+
+  it('身份 / 权限 / 参数', () => {
+    expect(classifyError(byCode('unauthorized')).category).toBe('auth');
+    expect(classifyError(byCode('forbidden')).category).toBe('permission');
+    expect(classifyError(byCode('invalid_params')).category).toBe('invalid');
+    expect(classifyError(byCode('not_found')).category).toBe('not_found');
+  });
+
+  it('冲突 / 锁 / quota / internal', () => {
+    expect(classifyError(byCode('tenant_locked')).category).toBe('conflict');
+    expect(classifyError(byCode('quota_exceeded')).category).toBe('quota');
+    expect(classifyError(byCode('conflict')).category).toBe('conflict');
+    expect(classifyError(byCode('internal')).category).toBe('api');
+  });
+
+  it('tenant_locked 的 hint 指向 --connect', () => {
+    expect(classifyError(byCode('tenant_locked')).hint).toContain('--connect');
+  });
+
+  it('internal 只从 Error.code 识别，不误吞 provider 文案', () => {
+    const providerError = classifyError(new Error('OpenAI API error: 500 - Internal Server Error'));
+    expect(providerError.category).toBe('api');
+    expect(providerError.hint).toContain('Provider');
+  });
+
+  it('既有 0.3 / 0.4 长码不被短码抢先', () => {
+    expect(classifyError(byCode('run_not_found')).category).toBe('not_found');
+    expect(classifyError(byCode('workflow_not_found')).category).toBe('not_found');
+    expect(classifyError(byCode('workflow_already_running')).category).toBe('conflict');
+  });
+});
