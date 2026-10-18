@@ -110,7 +110,14 @@ POSIX 下文件权限 best-effort 0600；不是强制访问控制。需要更强
 
 事件名仍是开放字符串；新增事件不需要改 core 类型。所有事件应带 `tenant_id`。
 
-## 10. 运维建议
+## 10. 内置多租户执行（A-6，in progress (0.5)）
+
+- `--serve` 为每个 active tenant 构建独立 `EventStream`；runtime 事件先进入本 tenant 流，再桥接到 gateway 共享流（事件已带 `tenant_id`，供 SSE/WS 过滤）。
+- trace recorder 只订阅本 tenant 的流，写入 `<data_dir>/tenants/<tenant_id>/events`；metrics collector 同样按 tenant 隔离。
+- gateway 为每个 active tenant 持有 writer lock；启动失败回滚、shutdown 释放；冲突 `tenant_locked`；disabled / 未配置 tenant → `forbidden`。
+- **状态**：插件侧 tenant 行为已合入；asm 的 per-tenant 执行接线标 **in progress (0.5)**，落地后本文改为已实现。两 tenant 的 trace / events / metrics 互不可见是 qa 验收项。
+
+## 11. 运维建议
 
 - 多租户部署优先用 `trace.level: metadata` 与较短留存；需要排障时临时切 `full`。
 - 定期跑 `vessel trace prune --dry-run` 观察增长，再执行真实 prune。
