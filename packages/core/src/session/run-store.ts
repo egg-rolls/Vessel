@@ -107,21 +107,24 @@ export class MemoryRunStore implements RunStore {
 /** 文件实现：`{dir}/{encodeURIComponent(run_id)}.json` */
 export class FileRunStore implements RunStore {
   private readonly dir: string;
+  private readonly tenantId?: string;
   private dirReady?: Promise<void>;
   /** 同一 run 的写入串行化；值为永不 reject 的 tail */
   private readonly pendingWrites = new Map<string, Promise<void>>();
 
-  constructor(opts: { dir: string }) {
+  constructor(opts: { dir: string; tenantId?: string }) {
     if (!opts.dir) throw new Error('FileRunStore requires a dir');
     this.dir = opts.dir;
+    this.tenantId = opts.tenantId;
   }
 
   async save(checkpoint: RunCheckpoint): Promise<void> {
-    const runId = this.assertRunId(checkpoint.run_id);
+    const effective = this.applyTenant(checkpoint);
+    const runId = this.assertRunId(effective.run_id);
     const previous = this.pendingWrites.get(runId) ?? Promise.resolve();
     const current = previous.then(
-      () => this.writeCheckpoint(runId, checkpoint),
-      () => this.writeCheckpoint(runId, checkpoint),
+      () => this.writeCheckpoint(runId, effective),
+      () => this.writeCheckpoint(runId, effective),
     );
     const tail = current.then(
       () => {},
@@ -140,7 +143,8 @@ export class FileRunStore implements RunStore {
       const path = this.filePath(runId);
       const content = await readFile(path, 'utf8');
       const parsed: unknown = JSON.parse(content);
-      return isRunCheckpoint(parsed) ? parsed : null;
+      if (!isRunCheckpoint(parsed)) return null;
+      return this.isForeign(parsed) ? null : parsed;
     } catch {
       return null;
     }
@@ -167,7 +171,7 @@ export class FileRunStore implements RunStore {
       try {
         const content = await readFile(join(this.dir, entry), 'utf8');
         const parsed: unknown = JSON.parse(content);
-        if (isRunCheckpoint(parsed)) checkpoints.push(parsed);
+        if (isRunCheckpoint(parsed) && !this.isForeign(parsed)) checkpoints.push(parsed);
       } catch {
         // 损坏/不可读文件跳过
       }
@@ -205,6 +209,25 @@ export class FileRunStore implements RunStore {
 
   private filePath(runId: string): string {
     return join(this.dir, `${encodeURIComponent(this.assertRunId(runId))}.json`);
+  }
+
+  /** 写入前补齐/校验 tenant_id；跨 tenant 直接抛错 */
+  private applyTenant(checkpoint: RunCheckpoint): RunCheckpoint {
+    if (this.tenantId === undefined) return checkpoint;
+    if (checkpoint.tenant_id !== undefined && checkpoint.tenant_id !== this.tenantId) {
+      throw new Error(
+        `tenant_mismatch: checkpoint ${checkpoint.run_id} belongs to ${checkpoint.tenant_id}`,
+      );
+    }
+    return checkpoint.tenant_id === this.tenantId
+      ? checkpoint
+      : { ...checkpoint, tenant_id: this.tenantId };
+  }
+
+  /** 读取时过滤其它 tenant 的文件（缺省视为 default） */
+  private isForeign(checkpoint: RunCheckpoint): boolean {
+    if (this.tenantId === undefined) return false;
+    return (checkpoint.tenant_id ?? 'default') !== this.tenantId;
   }
 
   private async ensureDir(): Promise<void> {

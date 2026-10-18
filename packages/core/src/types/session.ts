@@ -28,6 +28,8 @@ export interface RunState {
   updated_at?: number;
   /** 会话创建时的 git branch（用于 /resume 列表展示） */
   branch?: string;
+  /** 0.5：所属 tenant；缺省视为 `default` */
+  tenant_id?: string;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */
@@ -41,6 +43,8 @@ export interface SessionInfo {
   message_count: number;
   /** 会话创建时的 git branch */
   branch?: string;
+  /** 0.5：所属 tenant；缺省视为 `default` */
+  tenant_id?: string;
 }
 
 /** Session 信息 */

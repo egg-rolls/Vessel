@@ -60,4 +60,6 @@ export interface AgentRuntimeOptions {
   runStore?: RunStore;
   /** 可选：写入 checkpoint.agent_id（Host 注入成员 id；单 agent 可缺省） */
   agentId?: string;
+  /** 0.5：所属 tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
+  tenantId?: string;
 }

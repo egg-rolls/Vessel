@@ -49,6 +49,8 @@ export interface AgentSpec {
   termination?: TerminationPolicy;
   permission?: RuntimePermissionConfig;
   metadata?: Record<string, unknown>;
+  /** 0.5：成员所属 tenant；缺省继承 Host 的 tenantId */
+  tenantId?: string;
 }
 
 /** 限额作用域（F3）；0.2 R1 只消费 run，agent/host 由 R2 接 */
@@ -268,4 +270,6 @@ export interface RuntimeOptions {
   transport?: Transport;
   /** 0.3：durable run 检查点存储（additive） */
   runStore?: RunStore;
+  /** 0.5：Host 级 tenant；成员 spec.tenantId 优先 */
+  tenantId?: string;
 }

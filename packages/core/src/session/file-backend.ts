@@ -19,8 +19,14 @@ import { deriveSessionMeta, toSessionInfo } from './session-backend.js';
  * 存储格式：`{basePath}/{encodeURIComponent(session_id)}.json`
  * 旧数据（未编码文件名）在 load 时回退读取。
  */
+export interface FileSessionBackendOptions {
+  /** 配置后：写入补齐 tenant_id，读取过滤其它 tenant 的会话 */
+  tenantId?: string;
+}
+
 export class FileSessionBackend implements SessionBackend {
   private readonly basePath: string;
+  private readonly tenantId?: string;
   /** 目录创建只做一次（失败后可重试） */
   private dirReady?: Promise<void>;
   /** 同一 session 的写入串行化；值为永不 reject 的 tail */
@@ -29,8 +35,9 @@ export class FileSessionBackend implements SessionBackend {
   /**
    * @param basePath 会话文件存储目录，默认 `.vessel/sessions`
    */
-  constructor(basePath = '.vessel/sessions') {
+  constructor(basePath = '.vessel/sessions', options: FileSessionBackendOptions = {}) {
     this.basePath = basePath;
+    this.tenantId = options.tenantId;
   }
 
   /**
@@ -84,7 +91,8 @@ export class FileSessionBackend implements SessionBackend {
       if (candidate === undefined) continue;
       try {
         const content = await readFile(candidate, 'utf8');
-        return JSON.parse(content) as RunState;
+        const parsed = JSON.parse(content) as RunState;
+        return this.isForeign(parsed) ? null : parsed;
       } catch {
         // 尝试下一个候选路径
       }
@@ -121,19 +129,36 @@ export class FileSessionBackend implements SessionBackend {
   private async writeSession(sessionId: string, state: RunState): Promise<void> {
     await this.ensureDir();
 
-    const meta = deriveSessionMeta(state.messages);
-    const title = state.title ?? meta.title;
-    const preview = state.preview ?? meta.preview;
-    const updatedAt = state.updated_at ?? Date.now();
+    const effective = this.applyTenant(state);
+    const meta = deriveSessionMeta(effective.messages);
+    const title = effective.title ?? meta.title;
+    const preview = effective.preview ?? meta.preview;
+    const updatedAt = effective.updated_at ?? Date.now();
 
     const enriched: RunState = {
-      ...state,
+      ...effective,
       title,
       preview,
       updated_at: updatedAt,
     };
 
     await atomicWrite(this.filePath(sessionId), JSON.stringify(enriched, null, 2));
+  }
+
+  /** 写入前补齐/校验 tenant_id；跨 tenant 直接抛错 */
+  private applyTenant(state: RunState): RunState {
+    if (this.tenantId === undefined) return state;
+    if (state.tenant_id !== undefined && state.tenant_id !== this.tenantId) {
+      throw new Error(`tenant_mismatch: session ${state.session_id} belongs to ${state.tenant_id}`);
+    }
+    return state.tenant_id === this.tenantId ? state : { ...state, tenant_id: this.tenantId };
+  }
+
+  /** 读取时过滤其它 tenant 的会话（缺省视为 default） */
+  private isForeign(state: RunState): boolean {
+    if (this.tenantId === undefined) return false;
+    if (typeof state !== 'object' || state === null) return true;
+    return (state.tenant_id ?? 'default') !== this.tenantId;
   }
 
   /**

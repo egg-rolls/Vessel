@@ -23,6 +23,7 @@ export class PermissionPolicy {
   constructor(
     private events: EventStream,
     config?: RuntimePermissionConfig,
+    private readonly tenantId?: string,
   ) {
     this.defaultDecision = config?.default ?? 'allow';
     this.autoApprove = new Set(config?.autoApprove ?? []);
@@ -59,6 +60,7 @@ export class PermissionPolicy {
         run_id: ctx.run_id,
         data: { requestId, tool: tool.name, input: args },
         ts: Date.now(),
+        ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
       });
       const decided = (await this.events.waitFor('tool.permission.response', {
         requestId,

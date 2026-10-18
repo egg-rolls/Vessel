@@ -61,6 +61,8 @@ export class AgentRuntime {
   /** durable run 检查点（0.3）；缺省不写、零开销 */
   private readonly runStore?: RunStore;
   private readonly agentId?: string;
+  /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
+  private readonly tenantId?: string;
   /** 同一 run 的并发 resume 锁（进程内；DECISION-008 Addendum A-2） */
   private readonly resuming = new Set<string>();
   /** 当前执行的 checkpoint 元数据（run() 或 resume() 时设置） */
@@ -78,6 +80,7 @@ export class AgentRuntime {
     this.systemPrompt = opts.systemPrompt;
     this.runStore = opts.runStore;
     this.agentId = opts.agentId;
+    this.tenantId = opts.tenantId;
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
     this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
 
@@ -96,8 +99,8 @@ export class AgentRuntime {
     this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
 
     // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
-    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission);
-    this.guardrails = new GuardrailRunner(this.pluginHost, this.events);
+    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission, opts.tenantId);
+    this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
     this.hooks = new HookRunner(this.pluginHost);
   }
 
@@ -196,6 +199,7 @@ export class AgentRuntime {
       started_at: startTime,
       status: 'running',
       branch: opts?.branch,
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
 
     // 发布 Run 开始事件
@@ -382,6 +386,9 @@ export class AgentRuntime {
         started_at: this.runCreatedAt,
         status: 'running',
         ...(this.runBranch !== undefined ? { branch: this.runBranch } : {}),
+        ...((this.tenantId ?? checkpoint.tenant_id) !== undefined
+          ? { tenant_id: this.tenantId ?? checkpoint.tenant_id }
+          : {}),
       };
       if (this.session) await this.session.save(runState);
 
@@ -1036,6 +1043,7 @@ export class AgentRuntime {
       },
       ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
       ...(error !== undefined ? { error } : {}),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
 
     try {
@@ -1074,6 +1082,10 @@ export class AgentRuntime {
    * @param event 运行事件
    */
   protected publishEvent(event: RunEvent): void {
-    this.events.publish(event);
+    const stamped =
+      this.tenantId !== undefined && event.tenant_id === undefined
+        ? { ...event, tenant_id: this.tenantId }
+        : event;
+    this.events.publish(stamped);
   }
 }
