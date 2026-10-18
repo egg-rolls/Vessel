@@ -17,6 +17,7 @@ import {
   MemoryPluginHost,
   MemorySessionBackend,
   type RunnableAgent,
+  resolveTenantPaths,
 } from '../../packages/core/src/index';
 import * as evalsModule from '../../plugins/evals/harness/src/index';
 import * as feishuModule from '../../plugins/im/feishu/src/index';
@@ -24,6 +25,7 @@ import { maskAppId as extMaskAppId } from '../../plugins/im/feishu/src/index';
 import * as workflowModule from '../../plugins/workflow/engine/src/index';
 import { executeEvalSuite } from '../eval-wiring';
 import { createFeishuFromConfig, maskAppId } from '../feishu-wiring';
+import { installTrace } from '../trace-wiring';
 import { createWorkflowFromConfig } from '../workflow-wiring';
 
 const dirs: string[] = [];
@@ -147,6 +149,63 @@ describe('real @vessel/evals', () => {
 
     const reports = fs.readdirSync(outDir).filter((name) => name.endsWith('.json'));
     expect(reports).toHaveLength(1);
+  });
+
+  it('writes eval.run.* events into the tenant trace with tenant_id', async () => {
+    const base = tmpDir('vessel-eval-trace-');
+    const suiteDir = path.join(base, 'evals');
+    write(
+      path.join(suiteDir, 'smoke.yaml'),
+      [
+        'name: smoke',
+        'cases:',
+        '  - id: basic',
+        '    input: hello',
+        '    mock:',
+        '      responses:',
+        '        - content: hello',
+        '    expect:',
+        '      - type: output_contains',
+        '        value: hello',
+      ].join('\n'),
+    );
+
+    const events = new MemoryEventStream();
+    const tenantPaths = resolveTenantPaths(base, 'acme');
+    const config: VesselConfig = {
+      evals: { enabled: true, dir: suiteDir },
+      trace: { enabled: true, level: 'full' },
+    };
+    const trace = installTrace({ events, config, tenantPaths, tenantId: 'acme' });
+    expect(trace).toBeDefined();
+
+    try {
+      await executeEvalSuite({
+        config,
+        target: 'smoke',
+        filters: [],
+        allowNetwork: false,
+        tenantId: 'acme',
+        tenantDir: tenantPaths.root,
+        events,
+        loadModule: async () => evalsModule,
+      });
+    } finally {
+      await trace?.flush();
+      await trace?.close();
+    }
+
+    const traceText = fs
+      .readdirSync(tenantPaths.events_dir)
+      .filter((name) => name.endsWith('.jsonl'))
+      .map((name) => fs.readFileSync(path.join(tenantPaths.events_dir, name), 'utf8'))
+      .join('\n');
+
+    expect(traceText).toContain('eval.run.started');
+    expect(traceText).toContain('eval.run.completed');
+    expect(traceText).toContain('"tenant_id":"acme"');
+    // eval 报告默认落到 tenant 目录。
+    expect(fs.existsSync(path.join(tenantPaths.root, 'evals'))).toBe(true);
   });
 });
 
