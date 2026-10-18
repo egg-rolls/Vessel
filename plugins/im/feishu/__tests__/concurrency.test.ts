@@ -63,6 +63,7 @@ describe('feishu member concurrency', () => {
       expect(new Set(ids).size).toBe(1);
       expect(ids[0]).toBe('feishu_oc_same');
       expect(runner.memberCount).toBe(1);
+      expect(runner.pendingMemberCount).toBe(0);
     } finally {
       await runner.stop();
     }
@@ -83,6 +84,17 @@ describe('feishu member concurrency', () => {
         expect((result as PromiseRejectedResult).reason).toBeInstanceOf(MemberLimitError);
       }
       expect(runner.memberCount).toBe(8);
+      // 成功与失败的 in-flight 条目都已清理。
+      expect(runner.pendingMemberCount).toBe(0);
+
+      // 后续 wave：已有 chat 继续命中，新 chat 仍 busy；map 不增长。
+      const secondWave = await Promise.allSettled(
+        Array.from({ length: 20 }, (_, index) => runner.ensureMember(`oc_${index}`)),
+      );
+      expect(secondWave.filter((result) => result.status === 'fulfilled')).toHaveLength(8);
+      expect(secondWave.filter((result) => result.status === 'rejected')).toHaveLength(12);
+      expect(runner.memberCount).toBe(8);
+      expect(runner.pendingMemberCount).toBe(0);
     } finally {
       await runner.stop();
     }

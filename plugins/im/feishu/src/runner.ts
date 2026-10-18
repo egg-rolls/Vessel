@@ -90,6 +90,11 @@ export class ChatMemberRunner {
     return this.members.size;
   }
 
+  /** 诊断/测试：in-flight 创建数；settle 后必须回到 0。 */
+  get pendingMemberCount(): number {
+    return this.pendingMembers.size;
+  }
+
   /**
    * 确保 chat 有成员；达到上限返回 MemberLimitError。
    * 同一 chat 的并发调用合并到同一个创建 promise，避免重复 spawn。
