@@ -48,6 +48,15 @@ import type {
 
 const MAX_PARALLEL_LIMIT = 8;
 const FINALIZE_GRACE_MS = 5000;
+const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+
+function normalizeTenantId(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!TENANT_ID_RE.test(value)) {
+    throw invalid(`invalid tenant id "${value}"`);
+  }
+  return value;
+}
 
 interface RunningStep {
   controller: AbortController;
@@ -114,6 +123,7 @@ function buildRunFile(
   definition: WorkflowDefinition,
   inputs: Record<string, string>,
   now: number,
+  tenantId?: string,
 ): WorkflowRunFile {
   return {
     schema_version: 1,
@@ -132,6 +142,7 @@ function buildRunFile(
     })),
     started_at: now,
     updated_at: now,
+    ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
   };
 }
 
@@ -152,6 +163,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
   private readonly fsOps: WorkflowFs;
   private readonly store: WorkflowStore;
   private readonly active = new Map<string, ActiveRun>();
+  private readonly tenantId?: string;
 
   constructor(options: WorkflowEngineOptions) {
     this.config = options.config;
@@ -161,6 +173,15 @@ class WorkflowEngineImpl implements WorkflowEngine {
     if (options.runtime !== undefined) this.runtime = options.runtime;
     this.fsOps = options.fs ?? nodeWorkflowFs;
     this.store = new WorkflowStore(this.config.path, this.fsOps);
+    const tenantId = normalizeTenantId(options.tenantId);
+    if (tenantId !== undefined) this.tenantId = tenantId;
+  }
+
+  /** 跨 tenant 读取一律视为不存在，避免存在性泄漏。 */
+  private canAccess(file: WorkflowRunFile): boolean {
+    if (this.tenantId === undefined) return true;
+    if (file.tenant_id === this.tenantId) return true;
+    return file.tenant_id === undefined && this.tenantId === 'default';
   }
 
   /** 工具从构造时的 PluginHost 读取；install 不注册任何东西。 */
@@ -173,12 +194,13 @@ class WorkflowEngineImpl implements WorkflowEngine {
     limit?: number;
   }): Promise<WorkflowRunSummary[]> {
     const files = await this.store.list(opts);
-    return files.map(runSummary);
+    return files.filter((file) => this.canAccess(file)).map(runSummary);
   }
 
   async getRun(workflowRunId: string): Promise<WorkflowRunDetail | null> {
     const file = await this.store.load(workflowRunId);
-    return file ? runDetail(file) : null;
+    if (!file || !this.canAccess(file)) return null;
+    return runDetail(file);
   }
 
   async start(
@@ -193,7 +215,14 @@ class WorkflowEngineImpl implements WorkflowEngine {
     validateDefinitionInputs(definition, inputs);
 
     const workflowRunId = `wf_${randomUUID()}`;
-    const file = buildRunFile(workflowRunId, absolute, definition, inputs, Date.now());
+    const file = buildRunFile(
+      workflowRunId,
+      absolute,
+      definition,
+      inputs,
+      Date.now(),
+      this.tenantId,
+    );
     this.validateRuntimeTools(file);
     await this.store.save(file);
 
@@ -216,7 +245,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
     }
 
     const file = await this.store.load(workflowRunId);
-    if (!file) throw notFound(`workflow run not found: ${workflowRunId}`);
+    if (!file || !this.canAccess(file)) throw notFound(`workflow run not found: ${workflowRunId}`);
     if (file.status !== 'interrupted' && file.status !== 'failed' && file.status !== 'running') {
       throw new WorkflowError(
         'workflow_not_resumable',
@@ -269,7 +298,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
     }
 
     const file = await this.store.load(workflowRunId);
-    if (!file) throw notFound(`workflow run not found: ${workflowRunId}`);
+    if (!file || !this.canAccess(file)) throw notFound(`workflow run not found: ${workflowRunId}`);
     if (file.status === 'cancelled') return;
 
     if (file.status === 'interrupted' || file.status === 'pending') {
@@ -278,11 +307,17 @@ class WorkflowEngineImpl implements WorkflowEngine {
       file.updated_at = now;
       file.finished_at = now;
       await this.store.save(file);
-      publishWorkflowEvent(this.events, 'workflow.cancelled', workflowRunId, {
-        workflow_name: file.workflow_name,
-        step_count: file.steps.length,
-        completed_steps: file.steps.filter((step) => step.status === 'completed').length,
-      });
+      publishWorkflowEvent(
+        this.events,
+        'workflow.cancelled',
+        workflowRunId,
+        {
+          workflow_name: file.workflow_name,
+          step_count: file.steps.length,
+          completed_steps: file.steps.filter((step) => step.status === 'completed').length,
+        },
+        this.tenantId,
+      );
       return;
     }
 
@@ -370,6 +405,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
           ...(resumed ? {} : { definition_path: active.file.definition_path }),
           step_count: active.file.steps.length,
         },
+        this.tenantId,
       );
 
       await this.schedule(active);
@@ -532,11 +568,17 @@ class WorkflowEngineImpl implements WorkflowEngine {
       state.error = undefined;
       active.file.updated_at = Date.now();
       await this.store.save(active.file);
-      publishWorkflowEvent(this.events, 'workflow.step.started', active.file.workflow_run_id, {
-        step_id: step.id,
-        step_type: step.type,
-        attempt,
-      });
+      publishWorkflowEvent(
+        this.events,
+        'workflow.step.started',
+        active.file.workflow_run_id,
+        {
+          step_id: step.id,
+          step_type: step.type,
+          attempt,
+        },
+        this.tenantId,
+      );
 
       const timer = setTimeout(() => {
         controller.abort(new Error(`step "${step.id}" timed out after ${timeoutMs}ms`));
@@ -567,13 +609,19 @@ class WorkflowEngineImpl implements WorkflowEngine {
         await this.store.save(active.file);
 
         const willRetry = attempt < maxAttempts;
-        publishWorkflowEvent(this.events, 'workflow.step.failed', active.file.workflow_run_id, {
-          step_id: step.id,
-          step_type: step.type,
-          error: state.error,
-          attempt,
-          will_retry: willRetry,
-        });
+        publishWorkflowEvent(
+          this.events,
+          'workflow.step.failed',
+          active.file.workflow_run_id,
+          {
+            step_id: step.id,
+            step_type: step.type,
+            error: state.error,
+            attempt,
+            will_retry: willRetry,
+          },
+          this.tenantId,
+        );
 
         if (willRetry) {
           await delay(backoffMs);
@@ -610,12 +658,18 @@ class WorkflowEngineImpl implements WorkflowEngine {
       state.finished_at = Date.now();
       active.file.updated_at = state.finished_at;
       await this.store.save(active.file);
-      publishWorkflowEvent(this.events, 'workflow.step.completed', active.file.workflow_run_id, {
-        step_id: step.id,
-        step_type: step.type,
-        output_preview: state.output_preview,
-        duration_ms: state.finished_at - (state.started_at ?? state.finished_at),
-      });
+      publishWorkflowEvent(
+        this.events,
+        'workflow.step.completed',
+        active.file.workflow_run_id,
+        {
+          step_id: step.id,
+          step_type: step.type,
+          output_preview: state.output_preview,
+          duration_ms: state.finished_at - (state.started_at ?? state.finished_at),
+        },
+        this.tenantId,
+      );
       return;
     }
   }
@@ -762,7 +816,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
           : file.status === 'interrupted'
             ? 'workflow.interrupted'
             : 'workflow.failed';
-    publishWorkflowEvent(this.events, eventType, file.workflow_run_id, data);
+    publishWorkflowEvent(this.events, eventType, file.workflow_run_id, data, this.tenantId);
 
     const outcome: WorkflowOutcome = {
       workflow_run_id: file.workflow_run_id,
