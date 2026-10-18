@@ -46,6 +46,10 @@ export {
   type SecretState,
   secretMarker,
 } from './secrets.js';
+export {
+  type BuildConfigSnapshotInput,
+  buildConfigSnapshot,
+} from './sources.js';
 export * from './types.js';
 export { deepMerge } from './utils.js';
 export {
