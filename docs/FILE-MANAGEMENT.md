@@ -285,8 +285,8 @@ N 在自己的分支提交（只含共享侧成品）
 | Job | 内容 |
 |---|---|
 | `quality`（ubuntu） | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
-| `architecture`（ubuntu） | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/version.ts --check` |
-| `offline-integration`（ubuntu） | MCP / gateway + 0.4 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core`；全部使用 mock，不依赖外网 |
+| `architecture`（ubuntu） | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
+| `offline-integration`（ubuntu） | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网 |
 | `release-dry-run`（ubuntu） | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag |
 | `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
 | `web` | `apps/web`：`npm ci` → `npm run build` |
