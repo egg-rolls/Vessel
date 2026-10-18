@@ -112,8 +112,21 @@ function isUsage(value: unknown): value is RunState['usage'] {
   );
 }
 
-/** 规范化 RunState；非法返回 undefined */
-function normalizeRunState(value: unknown, tenantId: string): RunState | undefined {
+/** 源 tenant（缺省 = 0.4 legacy，归属由调用方补） */
+function sourceTenantOf(value: Record<string, unknown>): string | undefined {
+  return typeof value.tenant_id === 'string' && value.tenant_id !== ''
+    ? value.tenant_id
+    : undefined;
+}
+
+interface RunStateCandidate {
+  state: RunState;
+  /** 源数据自带的 tenant；undefined = 0.4 legacy */
+  sourceTenantId?: string;
+}
+
+/** 规范化 RunState；非法返回 undefined。保留源 tenant_id，不在此处改写归属。 */
+function normalizeRunState(value: unknown): RunStateCandidate | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.session_id !== 'string' || typeof value.run_id !== 'string') {
     return undefined;
@@ -125,25 +138,34 @@ function normalizeRunState(value: unknown, tenantId: string): RunState | undefin
     return undefined;
   }
 
+  const sourceTenantId = sourceTenantOf(value);
   return {
-    run_id: value.run_id,
-    session_id: value.session_id,
-    messages: value.messages as RunState['messages'],
-    started_at: value.started_at,
-    status: value.status as RunState['status'],
-    ...(typeof value.completed_at === 'number' ? { completed_at: value.completed_at } : {}),
-    ...(isUsage(value.usage) ? { usage: value.usage } : {}),
-    ...(typeof value.error === 'string' ? { error: value.error } : {}),
-    ...(typeof value.title === 'string' ? { title: value.title } : {}),
-    ...(typeof value.preview === 'string' ? { preview: value.preview } : {}),
-    ...(typeof value.updated_at === 'number' ? { updated_at: value.updated_at } : {}),
-    ...(typeof value.branch === 'string' ? { branch: value.branch } : {}),
-    tenant_id: tenantId,
+    state: {
+      run_id: value.run_id,
+      session_id: value.session_id,
+      messages: value.messages as RunState['messages'],
+      started_at: value.started_at,
+      status: value.status as RunState['status'],
+      ...(typeof value.completed_at === 'number' ? { completed_at: value.completed_at } : {}),
+      ...(isUsage(value.usage) ? { usage: value.usage } : {}),
+      ...(typeof value.error === 'string' ? { error: value.error } : {}),
+      ...(typeof value.title === 'string' ? { title: value.title } : {}),
+      ...(typeof value.preview === 'string' ? { preview: value.preview } : {}),
+      ...(typeof value.updated_at === 'number' ? { updated_at: value.updated_at } : {}),
+      ...(typeof value.branch === 'string' ? { branch: value.branch } : {}),
+      ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
+    },
+    ...(sourceTenantId !== undefined ? { sourceTenantId } : {}),
   };
 }
 
-/** 规范化 RunCheckpoint；非法返回 undefined */
-function normalizeRunCheckpoint(value: unknown, tenantId: string): RunCheckpoint | undefined {
+interface RunCheckpointCandidate {
+  checkpoint: RunCheckpoint;
+  sourceTenantId?: string;
+}
+
+/** 规范化 RunCheckpoint；非法返回 undefined。保留源 tenant_id。 */
+function normalizeRunCheckpoint(value: unknown): RunCheckpointCandidate | undefined {
   if (!isRecord(value)) return undefined;
   if (typeof value.run_id !== 'string' || typeof value.session_id !== 'string') {
     return undefined;
@@ -156,20 +178,35 @@ function normalizeRunCheckpoint(value: unknown, tenantId: string): RunCheckpoint
     return undefined;
   }
 
+  const sourceTenantId = sourceTenantOf(value);
   return {
-    run_id: value.run_id,
-    session_id: value.session_id,
-    status: value.status as RunCheckpoint['status'],
-    messages: value.messages as RunCheckpoint['messages'],
-    created_at: value.created_at,
-    updated_at: value.updated_at,
-    ...(typeof value.agent_id === 'string' ? { agent_id: value.agent_id } : {}),
-    ...(isUsage(value.usage) ? { usage: value.usage } : {}),
-    ...(typeof value.iteration === 'number' ? { iteration: value.iteration } : {}),
-    ...(typeof value.error === 'string' ? { error: value.error } : {}),
-    ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
-    tenant_id: tenantId,
+    checkpoint: {
+      run_id: value.run_id,
+      session_id: value.session_id,
+      status: value.status as RunCheckpoint['status'],
+      messages: value.messages as RunCheckpoint['messages'],
+      created_at: value.created_at,
+      updated_at: value.updated_at,
+      ...(typeof value.agent_id === 'string' ? { agent_id: value.agent_id } : {}),
+      ...(isUsage(value.usage) ? { usage: value.usage } : {}),
+      ...(typeof value.iteration === 'number' ? { iteration: value.iteration } : {}),
+      ...(typeof value.error === 'string' ? { error: value.error } : {}),
+      ...(isRecord(value.metadata) ? { metadata: value.metadata } : {}),
+      ...(sourceTenantId !== undefined ? { tenant_id: sourceTenantId } : {}),
+    },
+    ...(sourceTenantId !== undefined ? { sourceTenantId } : {}),
   };
+}
+
+/** legacy（无 tenant）补目标 tenant；源 tenant 不同则返回 undefined（foreign → skipped） */
+function assignTenant<T extends { tenant_id?: string }>(
+  value: T,
+  sourceTenantId: string | undefined,
+  targetTenantId: string,
+): T | undefined {
+  if (sourceTenantId !== undefined && sourceTenantId !== targetTenantId) return undefined;
+  if (sourceTenantId !== undefined) return value;
+  return { ...value, tenant_id: targetTenantId };
 }
 
 /** 写入一个目标文件；返回 migrated / skipped */
@@ -185,17 +222,8 @@ async function writeIfAbsent(
   return 'migrated';
 }
 
-interface SessionCandidate {
-  id: string;
-  state: RunState;
-}
-
 /** 读取 sqlite sessions 表（只读，绝不创建） */
-function readSqliteSessions(
-  sourcePath: string,
-  tenantId: string,
-  counts: MigrateCounts,
-): SessionCandidate[] {
+function readSqliteSessions(sourcePath: string, counts: MigrateCounts): RunStateCandidate[] {
   if (!existsSync(sourcePath)) {
     throw new MigrateError('source_not_found', `sqlite source not found: ${sourcePath}`);
   }
@@ -204,7 +232,7 @@ function readSqliteSessions(
   try {
     db = new Database(sourcePath, { readonly: true });
     const rows = db.prepare('SELECT * FROM sessions').all() as Record<string, unknown>[];
-    const candidates: SessionCandidate[] = [];
+    const candidates: RunStateCandidate[] = [];
 
     for (const row of rows) {
       if (typeof row.session_id !== 'string') {
@@ -214,28 +242,27 @@ function readSqliteSessions(
       }
       counts.found += 1;
       try {
-        const state = normalizeRunState(
-          {
-            run_id: row.run_id,
-            session_id: row.session_id,
-            messages: parseJson(row.messages),
-            started_at: row.started_at,
-            completed_at: row.completed_at ?? undefined,
-            status: row.status,
-            usage: parseJson(row.usage),
-            error: row.error ?? undefined,
-            title: row.title ?? undefined,
-            preview: row.preview ?? undefined,
-            updated_at: row.updated_at ?? undefined,
-            branch: row.branch ?? undefined,
-          },
-          tenantId,
-        );
-        if (!state) {
+        const candidate = normalizeRunState({
+          run_id: row.run_id,
+          session_id: row.session_id,
+          messages: parseJson(row.messages),
+          started_at: row.started_at,
+          completed_at: row.completed_at ?? undefined,
+          status: row.status,
+          usage: parseJson(row.usage),
+          error: row.error ?? undefined,
+          title: row.title ?? undefined,
+          preview: row.preview ?? undefined,
+          updated_at: row.updated_at ?? undefined,
+          branch: row.branch ?? undefined,
+          // 0.5 源库可能已有 tenant_id；0.4 旧库没有该列 → undefined
+          tenant_id: row.tenant_id ?? undefined,
+        });
+        if (!candidate) {
           counts.invalid += 1;
           continue;
         }
-        candidates.push({ id: state.session_id, state });
+        candidates.push(candidate);
       } catch {
         counts.invalid += 1;
       }
@@ -252,9 +279,8 @@ function readSqliteSessions(
 /** 读取 file-v1 sessions 目录 */
 async function readFileV1Sessions(
   sourceDir: string,
-  tenantId: string,
   counts: MigrateCounts,
-): Promise<SessionCandidate[]> {
+): Promise<RunStateCandidate[]> {
   if (!existsSync(sourceDir)) {
     throw new MigrateError('source_not_found', `file-v1 sessions source not found: ${sourceDir}`);
   }
@@ -269,17 +295,17 @@ async function readFileV1Sessions(
     throw new MigrateError('invalid_source', `cannot read sessions source: ${sourceDir}`);
   }
 
-  const candidates: SessionCandidate[] = [];
+  const candidates: RunStateCandidate[] = [];
   for (const name of entries) {
     counts.found += 1;
     try {
       const parsed: unknown = JSON.parse(await readFile(join(sourceDir, name), 'utf8'));
-      const state = normalizeRunState(parsed, tenantId);
-      if (!state) {
+      const candidate = normalizeRunState(parsed);
+      if (!candidate) {
         counts.invalid += 1;
         continue;
       }
-      candidates.push({ id: state.session_id, state });
+      candidates.push(candidate);
     } catch {
       counts.invalid += 1;
     }
@@ -290,9 +316,8 @@ async function readFileV1Sessions(
 /** 读取 file-v1 runs 目录（缺失视为 0 个） */
 async function readFileV1Runs(
   sourceDir: string,
-  tenantId: string,
   counts: MigrateCounts,
-): Promise<RunCheckpoint[]> {
+): Promise<RunCheckpointCandidate[]> {
   let entries: string[];
   try {
     const dirents = await readdir(sourceDir, { withFileTypes: true });
@@ -303,17 +328,17 @@ async function readFileV1Runs(
     return [];
   }
 
-  const checkpoints: RunCheckpoint[] = [];
+  const checkpoints: RunCheckpointCandidate[] = [];
   for (const name of entries) {
     counts.found += 1;
     try {
       const parsed: unknown = JSON.parse(await readFile(join(sourceDir, name), 'utf8'));
-      const checkpoint = normalizeRunCheckpoint(parsed, tenantId);
-      if (!checkpoint) {
+      const candidate = normalizeRunCheckpoint(parsed);
+      if (!candidate) {
         counts.invalid += 1;
         continue;
       }
-      checkpoints.push(checkpoint);
+      checkpoints.push(candidate);
     } catch {
       counts.invalid += 1;
     }
@@ -352,12 +377,12 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
   // 源读取全部发生在加锁/写入之前（源只读）。
   const sessionCandidates =
     options.from === 'sqlite'
-      ? readSqliteSessions(options.source ?? '.vessel/sessions.db', options.tenantId, sessions)
-      : await readFileV1Sessions(options.source ?? '.vessel/sessions', options.tenantId, sessions);
+      ? readSqliteSessions(options.source ?? '.vessel/sessions.db', sessions)
+      : await readFileV1Sessions(options.source ?? '.vessel/sessions', sessions);
 
   const runCandidates =
     options.from === 'file-v1'
-      ? await readFileV1Runs(options.runsSource ?? defaultRunsSource(), options.tenantId, runs)
+      ? await readFileV1Runs(options.runsSource ?? defaultRunsSource(), runs)
       : [];
 
   let lock: Awaited<ReturnType<typeof acquireTenantLock>> | undefined;
@@ -381,24 +406,39 @@ export async function migrate(options: MigrateOptions): Promise<MigrateResult> {
 
   try {
     for (const candidate of sessionCandidates) {
-      const encoded = encodeId(candidate.id);
+      const encoded = encodeId(candidate.state.session_id);
       if (encoded === undefined) {
         sessions.invalid += 1;
         continue;
       }
+      // 源已有 tenant：不同归属 → skipped，绝不改写。legacy 无 tenant 才补目标值。
+      const payload = assignTenant(candidate.state, candidate.sourceTenantId, options.tenantId);
+      if (!payload) {
+        sessions.skipped += 1;
+        continue;
+      }
       const target = join(tenantPaths.sessions_dir, `${encoded}.json`);
-      const outcome = await writeIfAbsent(target, candidate.state, apply);
+      const outcome = await writeIfAbsent(target, payload, apply);
       sessions[outcome] += 1;
     }
 
-    for (const checkpoint of runCandidates) {
-      const encoded = encodeId(checkpoint.run_id);
+    for (const candidate of runCandidates) {
+      const encoded = encodeId(candidate.checkpoint.run_id);
       if (encoded === undefined) {
         runs.invalid += 1;
         continue;
       }
+      const payload = assignTenant(
+        candidate.checkpoint,
+        candidate.sourceTenantId,
+        options.tenantId,
+      );
+      if (!payload) {
+        runs.skipped += 1;
+        continue;
+      }
       const target = join(tenantPaths.runs_dir, `${encoded}.json`);
-      const outcome = await writeIfAbsent(target, checkpoint, apply);
+      const outcome = await writeIfAbsent(target, payload, apply);
       runs[outcome] += 1;
     }
   } finally {

@@ -194,6 +194,120 @@ describe('migrate command (0.5)', () => {
     expect(migrated).toEqual({ ...runState, tenant_id: 'work' });
   });
 
+  it('多租户源：保留源 tenant_id，foreign 行 skipped 且不改归属', async () => {
+    const dataDir = tempDir();
+    const dbPath = path.join(tempDir(), 'multi.db');
+    const db = new Database(dbPath);
+    db.run(`
+      CREATE TABLE sessions (
+        session_id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        messages TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        status TEXT NOT NULL,
+        usage TEXT,
+        error TEXT,
+        title TEXT,
+        preview TEXT,
+        updated_at INTEGER,
+        branch TEXT,
+        tenant_id TEXT
+      )
+    `);
+    const insert = db.prepare(
+      `INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    insert.run(
+      'session-default',
+      'run-default',
+      JSON.stringify([{ role: 'user', content: 'default' }]),
+      1000,
+      null,
+      'completed',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      'default',
+    );
+    insert.run(
+      'session-acme',
+      'run-acme',
+      JSON.stringify([{ role: 'user', content: 'acme' }]),
+      1000,
+      null,
+      'completed',
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      'acme',
+    );
+    db.close();
+
+    const result = await migrateCommand({
+      from: 'sqlite',
+      to: 'file-v2',
+      source: dbPath,
+      tenantId: 'acme',
+      apply: true,
+      json: true,
+      env: { VESSEL_DATA_DIR: dataDir },
+      configPath: missingPath(),
+      userConfigPath: missingPath(),
+    });
+
+    expect(result.exitCode).toBe(0);
+    const counts = JSON.parse(result.stdout);
+    expect(counts.sessions).toEqual({ found: 2, migrated: 1, skipped: 1, invalid: 0 });
+
+    const paths = resolveTenantPaths(dataDir, 'acme');
+    const migrated = JSON.parse(
+      fs.readFileSync(path.join(paths.sessions_dir, 'session-acme.json'), 'utf8'),
+    );
+    expect(migrated.tenant_id).toBe('acme');
+    expect(fs.existsSync(path.join(paths.sessions_dir, 'session-default.json'))).toBe(false);
+  });
+
+  it('file-v1 runs：foreign tenant 不迁移', async () => {
+    const dataDir = tempDir();
+    const source = tempDir();
+    const runsSource = tempDir();
+    fs.writeFileSync(
+      path.join(source, 'legacy.json'),
+      JSON.stringify({ ...runState, session_id: 'legacy', run_id: 'legacy-run' }),
+    );
+    fs.writeFileSync(
+      path.join(runsSource, 'foreign.json'),
+      JSON.stringify({ ...runCheckpoint, run_id: 'foreign-run', tenant_id: 'default' }),
+    );
+
+    const result = await migrateCommand({
+      from: 'file-v1',
+      to: 'file-v2',
+      source,
+      runsSource,
+      tenantId: 'acme',
+      apply: true,
+      json: true,
+      env: { VESSEL_DATA_DIR: dataDir },
+      configPath: missingPath(),
+      userConfigPath: missingPath(),
+    });
+
+    expect(result.exitCode).toBe(0);
+    const counts = JSON.parse(result.stdout);
+    expect(counts.runs).toEqual({ found: 1, migrated: 0, skipped: 1, invalid: 0 });
+    expect(
+      fs.existsSync(path.join(resolveTenantPaths(dataDir, 'acme').runs_dir, 'foreign-run.json')),
+    ).toBe(false);
+  });
+
   it('源不存在 / 用法错误返回正确退出码', async () => {
     const dataDir = tempDir();
     const missingSource = await migrateCommand({
