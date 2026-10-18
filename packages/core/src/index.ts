@@ -42,6 +42,17 @@ export {
   pruneRuns,
   SQLiteSessionBackend,
 } from './session/index.js';
+// 多租户（0.5 F4：tenant 解析与目录布局）
+export {
+  assertTenantId,
+  type ResolveTenantIdInput,
+  type ResolveTenantInput,
+  resolveTenant,
+  resolveTenantId,
+  resolveTenantPaths,
+  type TenantPaths,
+  tenantRootPath,
+} from './tenant/index.js';
 // Transport（0.2 R3a-core：进程内实现）
 export { InProcessTransport, type InProcessTransportOptions } from './transport/index.js';
 // 类型定义
