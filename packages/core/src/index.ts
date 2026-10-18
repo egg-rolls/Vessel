@@ -61,6 +61,7 @@ export {
   pruneRuns,
   SessionDeleteConflictError,
   SQLiteSessionBackend,
+  type SQLiteSessionBackendOptions,
 } from './session/index.js';
 // 多租户（0.5 F4：tenant 解析与目录布局）
 export {
