@@ -923,6 +923,48 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
 - **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|delete|rename`；`runs.list|get|start|cancel|resume`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`。
+
+<!-- rpc-methods:begin -->
+| 方法 | permission |
+|---|---|
+| `health.get` | read |
+| `capabilities.list` | read |
+| `config.get` | read |
+| `config.sources` | read |
+| `sessions.list` | read |
+| `sessions.get` | read |
+| `sessions.delete` | write |
+| `sessions.rename` | write |
+| `runs.list` | read |
+| `runs.get` | read |
+| `runs.start` | write |
+| `runs.cancel` | write |
+| `runs.resume` | write |
+| `events.list` | read |
+| `events.subscribe` | read |
+| `tools.list` | read |
+| `plugins.list` | read |
+| `metrics.get` | read |
+| `metrics.reset` | write |
+| `mcp.list` | read |
+| `mcp.reconnect` | write |
+| `trace.prune` | admin |
+| `tenants.list` | admin |
+| `tenants.get` | read |
+| `tenants.create` | admin |
+| `tenants.update` | admin |
+| `permission.respond` | write |
+| `ask.respond` | write |
+| `workflow.list` | read |
+| `workflow.get` | read |
+| `workflow.start` | write |
+| `workflow.resume` | write |
+| `workflow.cancel` | write |
+| `evals.latest` | read |
+| `evals.run` | write |
+| `feishu.status` | read |
+<!-- rpc-methods:end -->
+
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
 - **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
@@ -1181,7 +1223,7 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 
 ### 17.5 tenant 隔离与 quota
 
-解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为（E20：每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）在 ext 合并后按 A-3 §10.7 补齐；当前标 **planned (0.5)**。
+解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为已由 ext 合入（每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）。A-6 的 `--serve` 每 tenant 独立执行面（config / provider / session / run store / context / PluginHost / trace / metrics / redactor / sessionControl、独立 EventStream、per-tenant writer lock）当前标 **in progress (0.5)**，等 asm 接线落地；disabled / 未配置 tenant → `forbidden`，锁冲突 → `tenant_locked`。
 
 ### 17.6 配置与密钥
 
