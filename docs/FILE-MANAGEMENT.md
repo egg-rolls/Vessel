@@ -74,7 +74,10 @@ Vessel\                                    # 共享侧（git）
 ├── LICENSE
 ├── docs\
 │   ├── ARCHITECTURE.md                    # 架构：怎么做的
-│   ├── ADR.md                             # 决策记录：为什么这么做（只追加）
+│   ├── ADR.md                             # 兼容 stub：指向 adr/README.md
+│   ├── adr\                               # 决策记录：一条 ADR 一个文件
+│   │   ├── README.md                      # 索引 + 编写约定
+│   │   └── ADR-<NNN>-<slug>.md            # ADR-001 ... ADR-045+
 │   ├── FILE-MANAGEMENT.md                 # 本文件：文件放哪里
 │   └── operations\                        # 运维/发布类文档（按需新增）
 │       ├── RELEASE.md                     # 发布流程
@@ -115,10 +118,15 @@ Vessel\                                    # 共享侧（git）
 | 目录/文件 | 回答的问题 | 维护者 |
 |---|---|---|
 | `ARCHITECTURE.md` | 系统怎么工作 | core 主笔，各 N 补充 |
-| `ADR.md` | 为什么做这个选择（只追加） | 1 审批后写入 |
+| `adr/README.md` | ADR 索引与编写约定 | gov |
+| `adr/ADR-<NNN>-<slug>.md` | 为什么做这个选择（只追加，一条一文件） | gov |
+| `ADR.md` | 兼容 stub，指向 `adr/README.md` | gov |
 | `FILE-MANAGEMENT.md` | 文件放哪里 | gov |
 | `operations/RELEASE.md` | 怎么发版 | gov |
 | `operations/CI-CD.md` | CI / CD / 自动更新怎么跑 | gov |
+| `operations/CONFIG.md` | 配置位置、优先级、tenant overlay、密钥 | gov |
+| `operations/MIGRATION.md` | sqlite / file-v1 → file-v2 | gov |
+| `operations/TRACE.md` | trace 留存、脱敏与重放 | gov |
 
 **禁止**：handoff、计划、报告、验收过程表、日期命名的文档、截图、数据库、日志。
 
@@ -159,17 +167,17 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | 分支 | 用途 | 谁写 | 生命周期 |
 |---|---|---|---|
 | `main` | 稳定主干，始终可发布 | 只有 1 合并 `release/*` / `hotfix/*` | 永久 |
-| `release/0.1` | 0.1.x 版本集成分支（开发基线） | 1 | 该 minor 线存续 |
-| `0.4.0-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
+| `release/0.5` | 0.5.x 版本集成分支（开发基线） | 1 | 该 minor 线存续 |
+| `0.5.0-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
 | `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N | 合并后删除 |
 | `hotfix/<slug>` | 线上紧急修复，从 `main` 拉出 | 1 指派 | 合并后删除 |
 
-- **版本周期**：目标版本 `0.4.0` → 集成分支 `release/0.4` → 角色分支 `0.4.0-<role>` → worktree `worktrees/0.4.0-<role>`。
-- **下一周期**：从 `main` 新建 `release/0.5`，角色分支改为 `0.5.0-<role>`；补丁周期用 `release/0.4` + `0.4.1-<role>`。
+- **版本周期**：目标版本 `0.5.0` → 集成分支 `release/0.5`（从 `release/0.4` 拉出）→ 角色分支 `0.5.0-<role>` → worktree `worktrees/0.5.0-<role>`。
+- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/0.6`；补丁周期用 `release/0.5` + `0.5.1-<role>`。
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
-- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.4.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
-- **基线**：`release/0.4` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.4 只干跑，不打 tag）。
+- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.5.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
+- **基线**：`release/0.5` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.5 只干跑，不打 tag）。
 
 ### 4.3 文件命名
 
@@ -197,7 +205,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 
 - **跨路径改动只能提 PR 或消息协商，不能直接改。**
 - `scripts/version.ts` 的写模式**只在发布收口由 1 执行**，机械改写各包 `package.json`；不属于日常跨路径改动，N 不运行写模式。
-- `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + `docs/ADR.md`，并通知全部 N。
+- `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + 对应的 `docs/adr/ADR-*.md`（或新增 ADR），并通知全部 N。
 - 依赖方向单向：`core` ← 其它。`core` 的 `dependencies` 永远为空。
 - 并行开发必须 worktree 隔离，禁止共享工作目录。
 
@@ -239,19 +247,19 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 7.2 合并流程
 
-1. N 在 `0.4.0-<role>` 完成一个任务，跑三件套，提交。
+1. N 在 `0.5.0-<role>` 完成一个任务，跑三件套，提交。
 2. N 在 `REPORT-*` / `HANDOFF-*` 写清：改了什么、影响哪些路径、需要谁复核。
-3. 1 审查 diff，决定目标版本（通常 `release/0.1`）。
+3. 1 审查 diff，决定目标版本（通常 `release/0.5`）。
 4. 冲突：1 召集相关 N，双方给出理由，1 裁决；裁决写入个人侧 `docs/decisions/`。
-5. 1 合并到 `release/0.1`。
-6. 版本收口：1 把 `release/0.4` 合并到 `main` 并打 tag，触发 release workflow。**0.4 只干跑：不合并 `main`、不打 tag、不 publish。**
+5. 1 合并到 `release/0.5`。
+6. 版本收口：1 把 `release/0.5` 合并到 `main` 并打 tag，触发 release workflow。**0.5 只干跑：不合并 `main`、不打 tag、不 publish。**
 
 ### 7.3 发布
 
 - **触发**：push tag `v*`（稳定版）或 `v*-beta.*`（预发布）。不用分支名触发发布——分支管开发，tag 管发布。
 - **发布前检查**：tag 在 `main` 上；tag 与所有 package 版本一致；CI 全绿；`CHANGELOG.md` 已更新。
 - **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。
-- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.4.0 无二进制与 sha256（且 0.4 不触发发布）。
+- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.5.0 无二进制与 sha256（且 0.5 不触发发布）。
 - **回滚**：不删 tag、不 force-push；发新 patch，或用 revert commit 回退 `main`。
 - **共享侧工作树**：除当前任务改动外，`git status` 必须干净，无未跟踪垃圾。
 
@@ -290,7 +298,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 9.2 Release（`.github/workflows/release.yml`）
 
-触发：push tag `v*`（含预发布）。**0.4 不触发本流程。**
+触发：push tag `v*`（含预发布）。**0.5 不触发本流程。**
 
 1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本。
 2. 复跑 quality（发布前再验一次）。

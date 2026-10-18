@@ -1,6 +1,6 @@
 # 技术架构
 
-> 本文描述 Vessel 当前的架构事实。历史决策与「为什么」见 [ADR.md](ADR.md)。
+> 本文描述 Vessel 当前的架构事实。历史决策与「为什么」见 [ADR 索引](adr/README.md)。
 
 ---
 
@@ -586,14 +586,18 @@ class PluginLoader {
 
 ## 9. 配置模型
 
-两层，后者覆盖前者：
+0.5 起按优先级从高到低为：
 
 | 层 | 路径 | 用途 |
 |---|---|---|
-| 用户级 | `~/.vessel/config.yaml`（Windows `%USERPROFILE%/.vessel/`） | API Key、provider、默认模型。首启向导写这里 |
-| 项目级 | `./vessel.yaml` | 项目级覆盖：agent system prompt、guardrails、hooks、limits、session、context |
+| CLI / env | 命令行 flag、`VESSEL_*` / `.env` | 操作者与部署覆盖；密钥首选 |
+| tenant overlay | `tenant.tenants.<id>.config` | 单 tenant 覆盖；**不得覆盖 CLI/env** |
+| 项目级 | `./vessel.yaml` | 项目行为：session、context、plugins、trace、tenant 覆盖；**禁止密钥** |
+| 用户级 | `~/.vessel/config.yaml`（Windows `%USERPROFILE%/.vessel/`） | provider、默认模型、`data_dir`、`tenant.default` |
+| 默认 | 代码 `DEFAULT_CONFIG` | 所有缺省值 |
 
-优先级：**CLI flag > 环境变量（`VESSEL_*`）> `vessel.yaml` > `~/.vessel/config.yaml` > 安全默认**。
+优先级：**CLI > env > tenant overlay > project > user > default**。
+tenant overlay 只叠加在项目/用户之上；`data_dir` 是全局键，tenant overlay 不得修改。
 
 loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验器对未知键报错——配置写错要立刻知道，不静默忽略。
 
@@ -602,14 +606,18 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | 键 | 说明 |
 |---|---|
 | `provider.timeout_ms` | LLM 请求超时（毫秒）；`<=0` 关闭。仅插件式 provider（openai / anthropic）生效 |
-| `session.backend` | `sqlite`（默认）/ `file` / `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
+| `data_dir` | 全局数据根，默认 `~/.vessel/data`；`VESSEL_DATA_DIR` 覆盖；tenant overlay 不得修改 |
+| `tenant.default` / `tenant.tenants.<id>.*` | `default` 缺省 tenant；`name` / `status`（`active`\|`disabled`）/ `quota`（`max_sessions` / `max_runs_per_day` / `max_concurrent_runs` / `max_storage_bytes`）/ `tools.allow|deny` / `config` overlay；白名单见 ADR-049 |
+| `trace.enabled` / `level` / `retention_days` / `max_runs` / `max_bytes` | 缺省 true / `full` / 30 / 1000 / 1 GiB；`level` 为 `full`\|`metadata`\|`off`；`max_bytes: 0` = 不限 |
+| `session.backend` | `file`（0.5 默认）/ `sqlite`（0.4 默认，仍可用）/ `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
 | `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
 | `delegate.enabled` / `maxDepth` / `disallowed` / `model` / `limits` / `termination` | `delegate_task` 接线；`enabled: false` 时默认工具变为 3 |
 | `delegate.permission_mode` | `bridge`（交互默认）/ `allow`（headless 默认）/ `deny`；`deny` 时保留 `read_only_tools`（默认 `["read"]`） |
 | `team.enabled` / `ownerId` / `model` / `memberLimits` / `memberTermination` | 进程内 team 原型；默认 false，必须显式开启；0.3 删除 `maxMembers`（Host 必填后无效果） |
 | `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
-| `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`，`path` 默认 `~/.vessel/runs`，0.3 只接受 `checkpoint_every: iteration` |
+| `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true` 且 token 非空；cert/key 必须成对 |
+| `serve.token` / `serve.token_env` / `serve.tokens` / `serve.admin_token` | 0.5：`serve.token` 为 default/admin 兼容单 token；`serve.tokens` 为 token → `{tenant_id, role}`；`serve.admin_token` 为 `*`/admin；解析顺序见 ADR-050 |
 | `workflow.enabled` / `dir` / `path` / `max_parallel` / `step_timeout_ms` | 默认 false；`dir` 默认 `./workflows`、`path` 默认 `~/.vessel/workflows`；`max_parallel` 1..8（默认 2）；`step_timeout_ms` 1..86400000（默认 300000）。`enabled: true` 且 `dir` 不存在 → 启动失败 |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
@@ -650,6 +658,8 @@ serve:
 
 0.4 的四个新块**全缺省时行为与 0.3 一致**：不构造 workflow 引擎、CLI `eval` 不可用、不启动飞书、不注入 metrics；`event_history` 仍为 1000。严格校验：类型、范围、未知键；`feishu.enabled: true` 且（env + config）无凭据 → 启动失败；`workflow.enabled: true` 且 `dir` 不存在 → 启动失败（`path` 不存在则创建）；`evals.allowNetwork: true` 不自动开启 CLI flag。
 
+0.5 新增 `data_dir` / `tenant` / `trace` 与 `serve.tokens` / `serve.admin_token`。缺省行为：`session.backend = file`、`durable.path = <tenant>/runs`、trace 默认开启 `full`（30 天 / 1000 runs / 1 GiB）、tenant 缺省 `default`。用户配置未知键仍是 error；legacy 白名单仅 `default_provider` / `default_model` / `providers`。项目 `vessel.yaml` 出现密钥、tenant overlay 出现禁止块或 `null`、`config show` 校验失败均直接报错（exit 1）。
+
 ## 10. 事件系统
 
 事件流是**跨组件的唯一异步沟通总线**：runtime → 观测（TUI / 日志 / 审计 / 回放）、工具 ↔ TUI（权限确认、ask_user 交互暂停）。
@@ -676,6 +686,7 @@ serve:
 | `context.changed` | `{ run_id, message, message_count, token_count }` | agent-runtime |
 | `run.completed` | `RunCompletedPayload` | agent-runtime |
 | `run.failed` | `RunFailedPayload` | agent-runtime |
+| `run.cancelled` | `RunCancelledPayload` | agent-runtime（0.5：仅显式用户取消；Host 中断仍发 `run.failed`） |
 | `replay.started` | `{ run_id, event_count }` | replayRun |
 | `replay.completed` | `{ run_id, event_count, duration_ms }` | replayRun |
 | `run.checkpoint` | `{ run_id, session_id, status, iteration? }` | agent-runtime |
@@ -691,6 +702,11 @@ serve:
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
 | `workflow.started` / `workflow.step.started` / `workflow.step.completed` / `workflow.step.failed` / `workflow.completed` / `workflow.failed` / `workflow.cancelled` / `workflow.interrupted` / `workflow.resumed` | workflow 插件 → 观测 | 编排生命周期；**没有 `workflow.step.skipped`**，skipped 只在 run 详情与计数中 |
 | `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |
+| `session.saved` / `session.deleted` | core → 观测 | 会话持久化（0.5） |
+| `config.loaded` | asm → 观测 | 只记来源与键名，不记密钥值（0.5） |
+| `plugin.loaded` / `plugin.failed` | asm / core → 观测 | 插件加载（0.5） |
+| `trace.write.failed` / `trace.overflow` | core trace → 观测 | 写失败/队列溢出，标记 trace 不完整（0.5） |
+| `eval.run.started` / `eval.run.completed` | evals 插件 → 观测 | eval 运行与计数（0.5，含 `tenant_id`） |
 
 插件可自定义任意 `<domain>.*` 事件名，无需改 core。
 
@@ -709,6 +725,19 @@ serve:
 ### 10.4 事件回放
 
 `MemoryEventStream` 之外，core 提供 `FileEventStore`（JSONL 一行一事件：`append` / `readRun` / `listRunIds` / `deleteRun`）与 `replayRun(store, runId, eventStream, { delayMs })`。回放经同一个 `publish()` 重新发布历史事件（保留原始 `ts`），订阅者用同一个 `subscribe()` 接收 live 与 replay，靠 `replay.started` / `replay.completed` 区分边界。
+
+### 10.5 trace 落盘（0.5）
+
+`RunEvent` 增加可选 `seq?` 与 `tenant_id?`；缺失 `tenant_id` 视为 `default`。`TraceRecorder` port 由 asm 接线，默认 `FileTraceRecorder` 把每个 run 写成 `<data_dir>/tenants/<tenant_id>/events/<run_id>.jsonl`（append-only，一行一事件）。
+
+- **seq**：由 recorder 落盘时分配，以文件尾部最大 seq 为种子；内存实时事件允许无 seq，消费方按 `(seq ?? ts)` 回退。`events.list` 返回 trace seq；gateway 的 `events.subscribe.since` 是 wire seq，二者分层。
+- **级别**：`full` 保留完整 payload；`metadata` 只留信封与白名单字段（`status` / `tool_name` / `duration_ms` / `iterations` / `iteration` / `message_count` / `finish_reason` / `usage.*`），`error` 截断 ≤500、`reason` ≤200；`off` 不落盘。
+- **留存**：缺省 30 天 / 1000 runs / 1 GiB（每 tenant）；`vessel trace prune` 或启动时执行，不删除 `running` / `interrupted` run。
+- **失败与溢出**：写失败发 `trace.write.failed` 并计数，不向事件投递路径抛错；每 run 队列上限 10000，溢出丢新事件并写一行 `trace.overflow { dropped }`，同一 run 最多一次 `trace.write.failed { reason: 'queue_overflow' }`。
+- **脱敏**：trace 写入前与 gateway 出站前都过 `TraceRedactor`；默认按键名与 `sk-` 前缀替换，`app_id` 只留前 4 位 + `***`。0.5 **不**对 run checkpoint、eval 报告、飞书回复脱敏（resume / 展示需要完整内容）；POSIX 下 0600 best-effort。
+- **读取与重建**：`readTraceEvents(traceDir, filter)` 默认 limit 50、最大 500，按 `(seq ?? ts)` 升序，跳过损坏行；`rebuildMetrics(traceDir)` 返回与实时 `MetricsSnapshot` 同形状，`updated_at = max(ts)`。
+- **取消**：显式用户取消只发 `run.cancelled`，不再同时发 `run.failed`；Host 关闭/中断仍发 `run.failed`。因此 `metrics.runs.cancelled` 在 0.5 可能非 0。
+- **事件归属**：core 发 `session.saved/deleted`、`hook.*`、`run.cancelled`、`installPlugin` 的 `plugin.*`；asm 发 `config.loaded` 与 `PluginLoader` 的 `plugin.loaded/failed`；ext 发 `workflow.*` / `eval.*` / `feishu.*` / `mcp.*` / `subagent.*`。
 
 ## 11. 工具集：三个能力工具，为什么这么少
 
@@ -890,9 +919,21 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
 - **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir` / `durable` / `mcp`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2、静态托管、durable/MCP 面板在 `--serve` 下生效。
 
+### 13.7 统一 RPC 方法表（0.5）
+
+- **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|delete|rename`；`runs.list|get|start|cancel|resume`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`。
+- **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
+- **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
+- **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
+- **manifest**：`capabilities.list` 返回 `{ version, config_schema_version: 1, methods: [{ name, params_schema?, result_schema?, permission }], tools, plugins }`；只含 canonical 方法。
+- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、仅本机回环；未设置时用 `LocalRpcClient` 并取锁。
+- **tenant**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。
+- **错误码**：方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal`。旧路径保留 0.4 错误码映射。
+
 ## 14. 0.2 Kernel 与模块边界（已实现，未发布）
 
-> **状态：已实现（0.2 分支起），未随版本发布。** 本节描述 Kernel / Modules / Transport 的事实；0.3 的能力见 §14.6 与正文 §5/§8/§9/§13。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
+> **状态：已实现（0.2 分支起），未随版本发布。** 本节描述 Kernel / Modules / Transport 的事实；0.3 的能力见 §14.6 与正文 §5/§8/§9/§13。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](adr/ADR-037-modular-agent-runtime.md)。
 > 0.2 不重写 loop、不删除公开 API；新能力默认 off / opt-in。
 
 ### 14.1 定位与分层（已实现）
@@ -1108,3 +1149,55 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - `pruneRuns` 是 helper，不自动调度。
 - 事件历史上限只作用于 `MemoryEventStream`；`FileEventStore` 不自动轮转。
 - 发布干跑通过不代表 npm 凭据、2FA、provenance 的线上配置已完成。
+
+## 17. 0.5 文件优先存储、trace、RPC 与多租户
+
+> 状态：0.5（`release/0.5`，未发布）。实现事实；决策依据见 [ADR-046](adr/ADR-046-file-first-storage.md) ~ [ADR-050](adr/ADR-050-yaml-first-config-and-secrets.md)。
+
+### 17.1 数据根与 tenant 布局
+
+```text
+<data_dir>/tenants/<tenant_id>/
+  .lock                         # pid + started_at + host
+  sessions/<session_id>.json    # 会话快照（原子写）
+  runs/<run_id>.json            # durable checkpoint
+  events/<run_id>.jsonl         # append-only trace
+  tenant.json                   # name / created_at / quota / status
+```
+
+`data_dir` 默认 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；`tenant_id` 匹配 `^[a-z0-9][a-z0-9_-]{0,63}$`，缺省 `default`，拒绝路径穿越。`RunState` / `SessionInfo` / `RunCheckpoint` 增可选 `tenant_id?`；SQLite backend 增 `tenant_id` 列；缺失视为 `default`。
+
+### 17.2 原子写、单写者与删除
+
+session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败重试 3 次，失败抛 `AtomicWriteError`。同一 tenant 同时只允许一个写者：`.lock` 存在且非 stale 时返回 `tenant_locked`（stale = pid 不存在或超过 24h）；gateway 是运行时唯一写者，CLI/TUI 取锁或走 gateway RPC。`deleteSessionData(sessionId, opts)` 返回 `{ sessions_deleted, runs_deleted, events_deleted }`；有 `running` / `interrupted` run 时 `conflict`。列表允许 O(N)，0.5 上限单 tenant 5,000 sessions / 20,000 runs。
+
+### 17.3 trace 与重放
+
+见 §10.5。默认 `full`、30 天 / 1000 runs / 1 GiB；`metadata` 白名单与截断；溢出写 `trace.overflow`；`readTraceEvents` 默认 50 / 最大 500、`(seq ?? ts)` 升序、跳过损坏行；`rebuildMetrics` 与实时 collector 一致。
+
+### 17.4 RPC 方法表
+
+见 §13.7。canonical v1.1 方法 + legacy-only 列表 + HTTP 语义 + capability manifest；CLI/TUI 走 `RpcClient`；旧 REST 端点保留为兼容别名。
+
+### 17.5 tenant 隔离与 quota
+
+解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为（E20：每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）在 ext 合并后按 A-3 §10.7 补齐；当前标 **planned (0.5)**。
+
+### 17.6 配置与密钥
+
+见 §9 与 [ADR-050](adr/ADR-050-yaml-first-config-and-secrets.md)。用户 YAML / 项目 YAML / env / 默认四层；`_env` 按层解析；`config.get` / `config.sources` 只输出 `<set>` / `<unset>`；项目 YAML 禁止密钥；`VESSEL_TENANT` 不写入 config。
+
+### 17.7 迁移
+
+`vessel migrate --from sqlite|file-v1 --to file-v2 [--apply] [--tenant <id>]`；默认 dry-run、源只读、幂等。检测到 legacy 数据只提示迁移，不自动迁移；显式 sqlite 后端继续可用。缺省 `session.backend = file`、`durable.path = <tenant>/runs`。
+
+### 17.8 已知限制（0.5）
+
+- 不承诺多进程并发写同一 tenant；单写者锁是唯一保障。
+- 列表为 O(N)；超过 5,000 sessions / 20,000 runs 建议改用 sqlite。
+- trace `full` 档包含用户消息与工具参数；redactor 只降低泄漏面，不是合规保证。
+- 队列溢出会产生不完整的 trace（`trace.overflow`）。
+- 0.5 不脱敏 run checkpoint / eval 报告 / 飞书回复；POSIX 文件权限 best-effort 0600。
+- 事件上历史中的 `runs.cancelled` 恒 0 是 0.4 行为；0.5 起显式取消发 `run.cancelled`，该值可能非 0。
+- 显式 `session.storage_path` / `durable.path` 可以逃出 tenant，启动时只 warn。
+- F5 跨机器远程在 0.6；微信不做。

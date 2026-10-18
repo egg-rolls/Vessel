@@ -2,15 +2,15 @@
 
 > 适用版本线：`0.x`。发布由 **tag `v*`** 触发，不由分支名触发。
 > 维护者：`gov`；最终发布决定权在 1。
-> **0.1.0 / 0.2 / 0.3.0 均未发布**；不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
-> **0.4 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
+> **0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布**；不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
+> **0.5 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
 > 发布仍等 1.0.0 之后。
 
 ## 1. 版本语义
 
 - 采用 SemVer：`MAJOR.MINOR.PATCH`。
 - alpha 阶段（`0.x`）：breaking 变更 → minor（`0.1` → `0.2`）；新功能 → minor；修复 → patch。
-- 预发布：`v0.4.0-beta.1`，npm dist-tag 用 `beta`；稳定版用 `latest`。
+- 预发布：`v0.5.0-beta.1`，npm dist-tag 用 `beta`；稳定版用 `latest`。
 
 ## 2. 发布前置条件
 
@@ -21,18 +21,18 @@
 - [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致（`@vessel/*` 与 10 个插件包，含 `@vessel/mcp-client`）。
 - [ ] `release/*` 已合并到 `main`，且 `main` CI 绿。
 - [ ] 仓库 Secrets 已配置 `NPM_TOKEN`。
-- [ ] 发布干跑通过：`bun run scripts/release-dry-run.ts`（0.4 用；见 §2.1）。
+- [ ] 发布干跑通过：`bun run scripts/release-dry-run.ts`（0.5 用；见 §2.1）。
 
-## 2.1 发布干跑（0.4，唯一发布动作）
+## 2.1 发布干跑（0.5，唯一发布动作）
 
-0.4 不执行 §4 的真实发布步骤，只运行干跑脚本：
+0.5 不执行 §4 的真实发布步骤，只运行干跑脚本：
 
 ```bash
 bun run scripts/release-dry-run.ts
 ```
 
-- **目标版本 = 当时的根 `package.json` 版本**：R2 为 `0.3.0`，0.4 收口 bump 后为
-  `0.4.0`；脚本不硬编码版本。
+- **目标版本 = 当时的根 `package.json` 版本**：R2 为 `0.4.0`，0.5 收口 bump 后为
+  `0.5.0`；脚本不硬编码版本。
 - 枚举所有非 `private` workspace 包；文件清单用 `npm pack --dry-run --json`，
   tarball manifest 用实际 `bun pm pack` 到 OS 临时目录后解析；结束后清理。
   临时文件不进入仓库，也不上传 CI artifact。
@@ -48,11 +48,11 @@ bun run scripts/release-dry-run.ts
 
 **收口顺序（DECISION-009 §12.3）**：
 
-1. 六轨合入 `release/0.4`，qa 能力门禁通过；
-2. **1 运行 `scripts/version.ts` 写模式 → 全部 manifest 升到 0.4.0**；
+1. 六轨合入 `release/0.5`，qa 能力门禁通过；
+2. **1 运行 `scripts/version.ts` 写模式 → 全部 manifest 升到 0.5.0**；
 3. **ext 在 bump 之后用普通 `bun install` 刷新 `bun.lock`（不要 `--frozen-lockfile`）**，
-   确保 lock 记录 0.4.0；
-4. gov 写 `CHANGELOG.md` 的 `## [0.4.0]`；
+   确保 lock 记录 0.5.0；
+4. gov 写 `CHANGELOG.md` 的 `## [0.5.0]`；
 5. 复跑 `version --check`、`release-dry-run`、三件套与 qa 最终门禁；
 6. 仍然**不 tag、不 push、不 publish、不合并 `main`**。
 
@@ -63,19 +63,19 @@ bun run scripts/release-dry-run.ts
 
 ```bash
 # 只校验（日常/CI）
-bun run scripts/version.ts --check 0.3.0
+bun run scripts/version.ts --check 0.5.0
 
 # 写入根、packages/*、plugins/*/*、apps/web 的版本（发布收口时由 1 执行）
-bun run scripts/version.ts 0.3.0
+bun run scripts/version.ts 0.5.0
 
 # 预演，不落盘
-bun run scripts/version.ts 0.3.0 --dry-run
+bun run scripts/version.ts 0.5.0 --dry-run
 ```
 
 规则：
 
 - `--check` 同时校验所有可发布包版本一致，以及 `CHANGELOG.md` 含 `## [<version>]`。
-- 根 `package.json` 的 `version`（0.3.0 已加入）与所有 workspace 包一起校验；`--version` 也从这里读取。
+- 根 `package.json` 的 `version`（0.3.0 起已加入）与所有 workspace 包一起校验；`--version` 也从这里读取。
 - 写模式会机械改写各包 `package.json`，**只由 1 在发布收口执行**；日常开发不运行写模式。
 - 脚本不做 git 操作（commit / tag 仍手工执行）。
 
@@ -87,18 +87,18 @@ git switch main
 git pull --ff-only
 git status --short
 
-# 2. 统一版本（示例：0.3.0）
-bun run scripts/version.ts 0.3.0
+# 2. 统一版本（示例：0.5.0）
+bun run scripts/version.ts 0.5.0
 
-# 3. 更新 CHANGELOG.md（把 Unreleased 改成 ## [0.3.0] - YYYY-MM-DD）
+# 3. 更新 CHANGELOG.md（把 Unreleased 改成 ## [0.5.0] - YYYY-MM-DD）
 # 4. 提交版本提交（中文/复杂 message 用 -F 文件，避免 shell 编码问题）
 git add package.json packages/*/package.json plugins/*/*/package.json apps/web/package.json CHANGELOG.md
 git commit -F <personal>/docs/tmp/release-msg.txt
 
 # 5. 打 annotated tag 并推送
-git tag -a v0.3.0 -m "v0.3.0"
+git tag -a v0.5.0 -m "v0.5.0"
 git push origin main
-git push origin v0.3.0
+git push origin v0.5.0
 ```
 
 推送 tag 后由 `.github/workflows/release.yml` 自动完成：
@@ -111,13 +111,13 @@ git push origin v0.3.0
 
 发布顺序：`verify → quality → publish-npm → github-release`。
 
-发布后用户侧：`vessel update --check` 读取 `latest.json`，只提示版本与安装命令；0.3.0 不做下载/自替换。
+发布后用户侧：`vessel update --check` 读取 `latest.json`，只提示版本与安装命令；0.5.0 不做下载/自替换。
 
 ## 5. 预发布
 
 ```bash
-git tag -a v0.4.0-beta.1 -m "v0.4.0-beta.1"
-git push origin v0.4.0-beta.1
+git tag -a v0.5.0-beta.1 -m "v0.5.0-beta.1"
+git push origin v0.5.0-beta.1
 ```
 
 - npm dist-tag：`beta`。
@@ -141,7 +141,7 @@ git push origin main v0.3.1
 - 代码回退：在 `main` 上 revert 问题提交，发新的 patch 版本。
 - npm 回滚：`npm dist-tag add @vessel/core@<last-good> latest`，再发 patch 修复。
 - GitHub Release：不删除旧 tag；如有需要，把旧版本重新标记为 latest 资产，再发 patch。
-- 0.3.0 无二进制，不涉及二进制回滚。
+- 0.5.0 无二进制，不涉及二进制回滚。
 
 ## 8. 发布失败处理
 

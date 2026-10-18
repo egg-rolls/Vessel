@@ -12,7 +12,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import { join, posix } from 'node:path';
 
 const TOKEN_PRIORITY = 'config > VESSEL_GATEWAY_TOKEN > gateway 自动生成';
@@ -23,9 +23,19 @@ const LINK_FILES = [
   'CONTRIBUTING.md',
   'docs/ARCHITECTURE.md',
   'docs/FILE-MANAGEMENT.md',
+  'docs/ADR.md',
+  'docs/adr/README.md',
   'docs/operations/CI-CD.md',
   'docs/operations/RELEASE.md',
+  'docs/operations/CONFIG.md',
+  'docs/operations/MIGRATION.md',
+  'docs/operations/TRACE.md',
 ];
+
+const ADR_DIR = 'docs/adr';
+const ADR_FILE_PATTERN = /^ADR-(\d{3})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
+const ADR_STATUS = new Set(['proposed', 'accepted', 'superseded']);
+const ADR_LINK_DOCS = ['README.md', 'AGENTS.md', 'docs/ARCHITECTURE.md', 'docs/FILE-MANAGEMENT.md'];
 
 export interface DocIssue {
   file: string;
@@ -38,6 +48,10 @@ export async function checkDocs(root: string): Promise<DocIssue[]> {
 
   await checkEnvExample(root, issues);
   await checkTokenDocs(root, issues);
+  await checkAdrTree(root, issues);
+  await checkOperationsIndex(root, issues);
+  await checkNotImplementedMarkers(root, issues);
+  await checkLegacyAdrLinks(root, issues);
 
   for (const file of LINK_FILES) {
     const full = join(root, file);
@@ -133,6 +147,290 @@ async function checkLinks(root: string, file: string, issues: DocIssue[]): Promi
       }
     }
   }
+}
+
+interface AdrEntry {
+  file: string;
+  number: string;
+  text: string;
+  frontmatter: Record<string, string>;
+}
+
+function parseFrontmatter(text: string): Record<string, string> | null {
+  const lines = text.split('\n');
+  if ((lines[0] ?? '').trim() !== '---') return null;
+
+  let end = -1;
+  for (let index = 1; index < lines.length; index += 1) {
+    if ((lines[index] ?? '').trim() === '---') {
+      end = index;
+      break;
+    }
+  }
+  if (end === -1) return null;
+
+  const frontmatter: Record<string, string> = {};
+  for (let index = 1; index < end; index += 1) {
+    const line = lines[index] ?? '';
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    const colon = line.indexOf(':');
+    if (colon <= 0) return null;
+    const key = line.slice(0, colon).trim();
+    const value = line
+      .slice(colon + 1)
+      .replace(/\s+#.*$/, '')
+      .trim();
+    frontmatter[key] = value;
+  }
+  return frontmatter;
+}
+
+function parseIntegerArray(value: string): number[] | null {
+  const match = /^\[(.*)\]$/.exec(value);
+  if (!match) return null;
+  const inner = (match[1] ?? '').trim();
+  if (!inner) return [];
+  const items = inner.split(',').map((item) => item.trim());
+  if (items.some((item) => !/^\d+$/.test(item))) return null;
+  return items.map(Number);
+}
+
+function parseStringArray(value: string): string[] | null {
+  const match = /^\[(.*)\]$/.exec(value);
+  if (!match) return null;
+  const inner = (match[1] ?? '').trim();
+  if (!inner) return [];
+  return inner.split(',').map((item) => item.trim());
+}
+
+async function checkAdrTree(root: string, issues: DocIssue[]): Promise<void> {
+  const dir = join(root, ADR_DIR);
+  if (!existsSync(dir)) return;
+
+  const files = (await readdir(dir))
+    .filter((file) => file.startsWith('ADR-') && file.endsWith('.md'))
+    .sort();
+  const byNumber = new Map<string, string>();
+  const entries: AdrEntry[] = [];
+
+  for (const file of files) {
+    const match = ADR_FILE_PATTERN.exec(file);
+    if (!match) {
+      issues.push({
+        file: `${ADR_DIR}/${file}`,
+        line: 0,
+        message: 'ADR 文件名必须匹配 ADR-<NNN>-<kebab-slug>.md（ASCII）',
+      });
+      continue;
+    }
+    const number = match[1] ?? '';
+    if (byNumber.has(number)) {
+      issues.push({
+        file: `${ADR_DIR}/${file}`,
+        line: 0,
+        message: `ADR 编号重复：${number}（已有 ${byNumber.get(number)}）`,
+      });
+      continue;
+    }
+    byNumber.set(number, file);
+
+    const text = await readFile(join(dir, file), 'utf8');
+    const frontmatter = parseFrontmatter(text);
+    if (!frontmatter) {
+      issues.push({
+        file: `${ADR_DIR}/${file}`,
+        line: 0,
+        message: '缺少合法的 YAML frontmatter',
+      });
+      continue;
+    }
+    entries.push({ file, number, text, frontmatter });
+  }
+
+  for (const entry of entries) {
+    const location = `${ADR_DIR}/${entry.file}`;
+    const { frontmatter, number } = entry;
+
+    if (!/^\d+$/.test(frontmatter.adr ?? '') || Number(frontmatter.adr) !== Number(number)) {
+      issues.push({
+        file: location,
+        line: 0,
+        message: `frontmatter.adr 必须等于文件名编号 ${Number(number)}`,
+      });
+    }
+    if (!frontmatter.title) {
+      issues.push({ file: location, line: 0, message: 'frontmatter.title 不能为空' });
+    }
+    if (frontmatter.status === undefined || !ADR_STATUS.has(frontmatter.status)) {
+      issues.push({
+        file: location,
+        line: 0,
+        message: 'frontmatter.status 必须是 proposed|accepted|superseded',
+      });
+    }
+    if (frontmatter.date !== 'null' && !/^\d{4}-\d{2}-\d{2}$/.test(frontmatter.date ?? '')) {
+      issues.push({
+        file: location,
+        line: 0,
+        message: 'frontmatter.date 必须是 YYYY-MM-DD 或 null',
+      });
+    }
+
+    for (const key of ['supersedes', 'related'] as const) {
+      const raw = frontmatter[key];
+      if (raw === undefined) continue;
+      const refs = parseIntegerArray(raw);
+      if (refs === null) {
+        issues.push({ file: location, line: 0, message: `frontmatter.${key} 必须是整数数组` });
+        continue;
+      }
+      for (const ref of refs) {
+        if (ref === Number(number)) {
+          issues.push({ file: location, line: 0, message: `frontmatter.${key} 不能引用自身` });
+        } else if (!byNumber.has(String(ref).padStart(3, '0'))) {
+          issues.push({
+            file: location,
+            line: 0,
+            message: `frontmatter.${key} 引用了不存在的 ADR-${String(ref).padStart(3, '0')}`,
+          });
+        }
+      }
+    }
+
+    if (frontmatter.tags !== undefined) {
+      const tags = parseStringArray(frontmatter.tags);
+      if (tags === null || tags.some((tag) => !/^[a-z0-9-]+$/.test(tag))) {
+        issues.push({
+          file: location,
+          line: 0,
+          message: 'frontmatter.tags 必须是小写 ASCII kebab 数组',
+        });
+      }
+    }
+
+    for (const match of entry.text.matchAll(/\]\((ADR-[^)]+\.md)\)/g)) {
+      const target = match[1] ?? '';
+      if (!existsSync(join(dir, target))) {
+        issues.push({ file: location, line: 0, message: `ADR 间链接不存在：${target}` });
+      }
+    }
+  }
+
+  const readmePath = join(dir, 'README.md');
+  if (!existsSync(readmePath)) {
+    issues.push({ file: `${ADR_DIR}/README.md`, line: 0, message: '缺少 ADR 索引 README.md' });
+    return;
+  }
+  const readme = await readFile(readmePath, 'utf8');
+  const linked = new Map<string, number>();
+  for (const line of readme.split('\n')) {
+    if (!line.startsWith('|')) continue;
+    for (const match of line.matchAll(/\]\((ADR-[^)]+\.md)\)/g)) {
+      const target = match[1] ?? '';
+      linked.set(target, (linked.get(target) ?? 0) + 1);
+    }
+  }
+  for (const file of files) {
+    const count = linked.get(file) ?? 0;
+    if (count === 0) {
+      issues.push({
+        file: `${ADR_DIR}/README.md`,
+        line: 0,
+        message: `ADR 索引缺少 ${file}`,
+      });
+    } else if (count > 1) {
+      issues.push({
+        file: `${ADR_DIR}/README.md`,
+        line: 0,
+        message: `ADR 索引重复 ${file}`,
+      });
+    }
+  }
+  for (const target of linked.keys()) {
+    if (!files.includes(target)) {
+      issues.push({
+        file: `${ADR_DIR}/README.md`,
+        line: 0,
+        message: `ADR 索引指向不存在的文件 ${target}`,
+      });
+    }
+  }
+
+  const stubPath = join(root, 'docs/ADR.md');
+  if (!existsSync(stubPath)) {
+    issues.push({ file: 'docs/ADR.md', line: 0, message: '缺少兼容 stub docs/ADR.md' });
+    return;
+  }
+  const stub = await readFile(stubPath, 'utf8');
+  if (!stub.includes('adr/README.md')) {
+    issues.push({ file: 'docs/ADR.md', line: 0, message: 'stub 必须指向 adr/README.md' });
+  }
+  if (/^## ADR-/m.test(stub)) {
+    issues.push({ file: 'docs/ADR.md', line: 0, message: 'stub 不能包含 ADR 正文标题' });
+  }
+  if (stub.split('\n').length > 20) {
+    issues.push({ file: 'docs/ADR.md', line: 0, message: 'stub 不得超过 20 行' });
+  }
+}
+
+async function checkOperationsIndex(root: string, issues: DocIssue[]): Promise<void> {
+  const dir = join(root, 'docs/operations');
+  const readmePath = join(root, 'README.md');
+  if (!existsSync(dir) || !existsSync(readmePath)) return;
+
+  const readme = await readFile(readmePath, 'utf8');
+  const files = (await readdir(dir)).filter((file) => file.endsWith('.md'));
+  for (const file of files) {
+    if (!readme.includes(`](docs/operations/${file})`)) {
+      issues.push({
+        file: 'README.md',
+        line: 0,
+        message: `文档索引缺少 docs/operations/${file}`,
+      });
+    }
+  }
+}
+
+async function checkNotImplementedMarkers(root: string, issues: DocIssue[]): Promise<void> {
+  const readmePath = join(root, 'README.md');
+  if (!existsSync(readmePath)) return;
+  const readme = await readFile(readmePath, 'utf8');
+
+  for (const [feature, marker] of [
+    ['跨机器远程', '0.6'],
+    ['微信', '不做'],
+  ] as const) {
+    if (!readme.includes(feature) || !readme.includes(marker)) {
+      issues.push({
+        file: 'README.md',
+        line: 0,
+        message: `未实现能力标注缺少：${feature} / ${marker}`,
+      });
+    }
+  }
+}
+
+async function checkLegacyAdrLinks(root: string, issues: DocIssue[]): Promise<void> {
+  for (const file of ADR_LINK_DOCS) {
+    const full = join(root, file);
+    if (!existsSync(full)) continue;
+    const text = await readFile(full, 'utf8');
+    for (const match of text.matchAll(/\]\((?:docs\/)?ADR\.md\)/g)) {
+      issues.push({
+        file,
+        line: lineOfText(text, match.index ?? 0),
+        message: '新文档不得链接 docs/ADR.md，请指向 docs/adr/ 具体文件或索引',
+      });
+    }
+  }
+}
+
+function lineOfText(text: string, index: number): number {
+  let line = 1;
+  for (let i = 0; i < index && i < text.length; i += 1) {
+    if (text[i] === '\n') line += 1;
+  }
+  return line;
 }
 
 async function main(): Promise<void> {
