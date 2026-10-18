@@ -23,7 +23,21 @@ export {
   sortCheckpoints,
   toRunSummary,
 } from './durable.js';
+export {
+  type EvalCaseAssertion,
+  type EvalCaseResult,
+  type EvalReport,
+  type EvalsGatewayOptions,
+  type EvalUsage,
+  normalizeEvalReport,
+} from './evals.js';
 export { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+export {
+  type FeishuGatewayOptions,
+  type FeishuStatus,
+  maskAppId,
+  normalizeFeishuStatus,
+} from './feishu.js';
 export type { Gateway, GatewayOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
 export {
@@ -34,6 +48,11 @@ export {
   normalizeMcpServers,
   type WireMcpServerStatus,
 } from './mcp.js';
+export {
+  type MetricsProvider,
+  type MetricsSnapshot,
+  normalizeMetricsSnapshot,
+} from './metrics.js';
 export {
   type ClientFrame,
   type NodeInfo,
@@ -75,3 +94,25 @@ export {
   PeerTransportError,
   type PeerTransportErrorCode,
 } from './transport/index.js';
+export {
+  DEFAULT_WORKFLOW_LIMIT,
+  dedupeWorkflowSummaries,
+  isSafeWorkflowName,
+  MAX_OUTPUT_PREVIEW,
+  MAX_WORKFLOW_LIMIT,
+  parseWorkflowLimit,
+  parseWorkflowStatus,
+  sortWorkflowSummaries,
+  toWireWorkflowDetail,
+  toWireWorkflowSummary,
+  WORKFLOW_RUN_STATUSES,
+  WORKFLOW_STEP_STATUSES,
+  type WorkflowControlsLike,
+  type WorkflowGatewayOptions,
+  type WorkflowOutcome,
+  type WorkflowRunDetail,
+  type WorkflowRunStatus,
+  type WorkflowRunSummary,
+  type WorkflowStepStatus,
+  type WorkflowStepSummary,
+} from './workflow.js';
