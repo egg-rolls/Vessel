@@ -137,7 +137,7 @@ plugin host + plugins / trace recorder / metrics collector / redactor / sessionC
 - 每个 active tenant 持有自己的 writer lock；启动失败必须回滚已获取的锁，shutdown 全部释放；锁冲突返回 `tenant_locked`。
 - `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
 - 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
-- **状态**：ext 插件 tenant 行为已合入；asm 的 per-tenant 执行接线标 **in progress (0.5)**，落地后本文改为已实现。
+- **状态**：ext 插件 tenant 行为已合入；web A-6.3 接口增量已合入（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）；asm 的 per-tenant 执行接线标 **in progress (0.5)**，落地后本文改为已实现。
 
 ## 7. 示例：多租户部署
 
