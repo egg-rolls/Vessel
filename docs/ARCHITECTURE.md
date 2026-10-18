@@ -1181,7 +1181,7 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 
 ### 17.5 tenant 隔离与 quota
 
-解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。
+解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为（E20：每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）在 ext 合并后按 A-3 §10.7 补齐；当前标 **planned (0.5)**。
 
 ### 17.6 配置与密钥
 
