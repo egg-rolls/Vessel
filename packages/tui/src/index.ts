@@ -70,7 +70,13 @@ export {
 export { formatPermissionQuestion, type ToolOrigin } from './renderer/tool-confirm.js';
 // Ink 版本（React 组件式 UI）
 export { startInkRepl } from './repl/ink-repl.js';
-export { executeResume, executeTurn, type TurnOutcome } from './repl/run-turn.js';
+export {
+  executeResume,
+  executeTurn,
+  executeWorkflow,
+  type TurnOutcome,
+  type WorkflowTurnOutcome,
+} from './repl/run-turn.js';
 export {
   buildStartupNotice,
   loadStartupNotice,
@@ -81,9 +87,21 @@ export type {
   DurableRunOutcome,
   DurableRunSummary,
   DurableRunsControl,
+  FeishuControlLike,
+  FeishuStatusLike,
   McpControl,
   McpServerSummary,
+  MetricsSnapshotLike,
   ReplContext,
+  WorkflowOutcomeLike,
+  WorkflowRunDetailLike,
+  WorkflowRunHandle,
+  WorkflowRunStatusLike,
+  WorkflowRunSummaryLike,
+  WorkflowStartResultLike,
+  WorkflowStepStatusLike,
+  WorkflowStepSummaryLike,
+  WorkflowsControl,
 } from './repl-context.js';
 export {
   buildBanner,

@@ -452,13 +452,16 @@ export class InProcessRuntimeHost implements RuntimeHost {
     record.lastError = undefined;
 
     const externalSignal = opts?.signal;
+    let removeAbortListener: (() => void) | undefined;
     if (externalSignal) {
       if (externalSignal.aborted) {
         run.cancel(externalSignal.reason);
       } else {
-        externalSignal.addEventListener('abort', () => run.cancel(externalSignal.reason), {
-          once: true,
-        });
+        const onAbort = () => run.cancel(externalSignal.reason);
+        externalSignal.addEventListener('abort', onAbort, { once: true });
+        // 长会话/网关可能复用同一个 AbortController；run 结束后必须移除监听，
+        // 否则监听器随 run 数量线性累积。
+        removeAbortListener = () => externalSignal.removeEventListener('abort', onAbort);
       }
     }
 
@@ -468,7 +471,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
       sessionId: run.sessionId,
     });
 
-    void this.executeRun(record, run, input, opts);
+    void this.executeRun(record, run, input, opts, removeAbortListener);
     return run;
   }
 
@@ -633,6 +636,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     run: InProcessRunHandle,
     input: string | Message,
     opts?: RunOptions,
+    removeAbortListener?: () => void,
   ): Promise<void> {
     try {
       const text = await record.runtime.run(input, run.sessionId, {
@@ -686,6 +690,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
       run.reject(error instanceof Error ? error : new Error(errorMessage));
     } finally {
       record.active = undefined;
+      removeAbortListener?.();
     }
   }
 

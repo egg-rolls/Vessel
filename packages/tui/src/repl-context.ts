@@ -81,6 +81,112 @@ export interface DurableRunsControl {
   resume(runId: string): Promise<DurableRunHandle>;
 }
 
+// ── 0.4 T2：workflow 控制面（tui 定义结构，asm 适配并注入；引擎契约见 DECISION-009 §5.1.4） ──
+
+export type WorkflowRunStatusLike =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted';
+
+export type WorkflowStepStatusLike =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled';
+
+export interface WorkflowRunSummaryLike {
+  workflow_run_id: string;
+  workflow_name: string;
+  status: WorkflowRunStatusLike;
+  step_count: number;
+  completed_steps: number;
+  started_at: number;
+  updated_at: number;
+  error?: string;
+}
+
+export interface WorkflowStepSummaryLike {
+  id: string;
+  type: 'agent' | 'tool';
+  status: WorkflowStepStatusLike;
+  attempts: number;
+  started_at?: number;
+  finished_at?: number;
+  error?: string;
+  /** 引擎已截断到 200 字符 */
+  output_preview?: string;
+}
+
+export interface WorkflowRunDetailLike extends WorkflowRunSummaryLike {
+  definition_path: string;
+  inputs: Record<string, string>;
+  steps: WorkflowStepSummaryLike[];
+}
+
+export interface WorkflowOutcomeLike {
+  workflow_run_id: string;
+  status: WorkflowRunStatusLike;
+  error?: string;
+}
+
+/** start / resume 的返回；done 恰好 resolve 一次，失败不 reject（用 status/error 表达） */
+export interface WorkflowStartResultLike {
+  workflowRunId: string;
+  done: Promise<WorkflowOutcomeLike>;
+}
+
+/**
+ * workflow 控制面（asm 注入；未启用时不注入）。
+ * name 只在 workflow.dir 下解析，调用方不得传任意路径。
+ */
+export interface WorkflowsControl {
+  listRuns(opts?: {
+    status?: WorkflowRunStatusLike;
+    limit?: number;
+  }): Promise<WorkflowRunSummaryLike[]>;
+  /** 未知 id 返回 null（也允许抛 workflow_not_found） */
+  getRun(workflowRunId: string): Promise<WorkflowRunDetailLike | null>;
+  start(name: string, opts?: { inputs?: Record<string, string> }): Promise<WorkflowStartResultLike>;
+  resume(workflowRunId: string): Promise<WorkflowStartResultLike>;
+  /** 主动取消；幂等 */
+  cancel(workflowRunId: string): Promise<void>;
+}
+
+/** /workflows run|resume：命令交给 REPL 的运行态句柄 */
+export interface WorkflowRunHandle {
+  workflowRunId: string;
+  done: Promise<WorkflowOutcomeLike>;
+  cancel(): Promise<void>;
+}
+
+// ── 0.4 T2：metrics / feishu 控制面 ──
+
+export interface MetricsSnapshotLike {
+  runs: { started: number; completed: number; failed: number; cancelled: number };
+  tool_calls: { total: number; failed: number };
+  llm: { requests: number; prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  duration_ms: { total: number; max: number; avg: number };
+  updated_at: number;
+}
+
+export interface FeishuStatusLike {
+  connected: boolean;
+  appIdMasked: string;
+  active_chats: number;
+  queued_messages: number;
+  last_error?: string;
+}
+
+/** feishu 已启用即注入；未连接时 connected=false，last_error 照常展示 */
+export interface FeishuControlLike {
+  status(): FeishuStatusLike;
+}
+
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
 export interface ReplContext {
   // ── 核心能力（egg-rolls 构造并注入）──────────────────
@@ -143,4 +249,15 @@ export interface ReplContext {
 
   /** durable run 列表与恢复；durable 未启用或不支持恢复时不注入 */
   runs?: DurableRunsControl;
+
+  // ── 0.4 能力控制面（asm 注入；未启用时保持 undefined） ──
+
+  /** workflow 列表 / 详情 / 启动 / 恢复 / 取消；workflow 未启用时不注入 */
+  workflows?: WorkflowsControl;
+
+  /** 进程内 metrics 快照；observability.metrics 关闭时不注入 */
+  metrics?: () => MetricsSnapshotLike;
+
+  /** 飞书渠道状态；feishu 未启用时不注入（已启用但未连接仍注入） */
+  feishu?: FeishuControlLike;
 }

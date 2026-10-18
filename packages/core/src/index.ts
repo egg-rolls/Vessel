@@ -11,11 +11,18 @@
 export { MemoryContextManager } from './context/index.js';
 
 // 事件流
-export { FileEventStore, MemoryEventStream, replayRun } from './events/index.js';
+export {
+  FileEventStore,
+  MemoryEventStream,
+  type MemoryEventStreamOptions,
+  replayRun,
+} from './events/index.js';
 // Kernel（0.2 R1：Host / Handles / Cancellation / EventBus / Transport port）
 export * from './kernel/index.js';
 // 限制检查器
 export { MemoryLimitChecker } from './limits/index.js';
+// Observability（0.4 C2：只读事件聚合）
+export { MetricsCollector, type MetricsSnapshot } from './observability/index.js';
 // Provider
 export {
   AnthropicProvider,
@@ -30,6 +37,9 @@ export {
   FileSessionBackend,
   MemoryRunStore,
   MemorySessionBackend,
+  type PruneRunsOptions,
+  type PruneRunsResult,
+  pruneRuns,
   SQLiteSessionBackend,
 } from './session/index.js';
 // Transport（0.2 R3a-core：进程内实现）

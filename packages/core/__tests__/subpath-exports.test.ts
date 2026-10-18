@@ -5,7 +5,9 @@ import {
   InProcessRuntimeHost,
   InProcessScheduler,
   InProcessTransport,
+  pruneRuns,
   MemoryRunStore as RootMemoryRunStore,
+  MetricsCollector as RootMetricsCollector,
 } from '@vessel/core';
 import { MemoryContextManager } from '@vessel/core/context';
 import type { AgentSpec } from '@vessel/core/kernel';
@@ -15,7 +17,12 @@ import {
   MemoryEventBus,
   SerialScheduler,
 } from '@vessel/core/kernel';
-import { FileEventStore, MemoryEventStream, replayRun } from '@vessel/core/observability';
+import {
+  FileEventStore,
+  MemoryEventStream,
+  MetricsCollector,
+  replayRun,
+} from '@vessel/core/observability';
 import {
   GuardrailRunner,
   GuardrailStage,
@@ -70,9 +77,20 @@ describe('subpath exports (R6a/R6b)', () => {
     expect(resumeError.code).toBe('run_not_found');
     expect(resumeError.runId).toBe('missing');
 
+    // prune helper（0.4 C2）
+    expect(typeof pruneRuns).toBe('function');
+    await expect(pruneRuns(runStore)).resolves.toEqual({ deleted: 0, kept: 1 });
+
     expect(typeof FileEventStore).toBe('function');
     expect(typeof MemoryEventStream).toBe('function');
     expect(typeof replayRun).toBe('function');
+
+    // observability（0.4 C2）
+    expect(typeof RootMetricsCollector).toBe('function');
+    expect(MetricsCollector).toBe(RootMetricsCollector);
+    const collector = new MetricsCollector(new MemoryEventStream());
+    expect(collector.snapshot().runs.started).toBe(0);
+    collector.dispose();
 
     expect(typeof PermissionPolicy).toBe('function');
     expect(typeof GuardrailRunner).toBe('function');

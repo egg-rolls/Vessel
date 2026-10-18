@@ -21,7 +21,7 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 12 个扁平命令（含 0.3 的 /mcp、/runs）', () => {
+  it('createCommands 注册 15 个扁平命令（含 0.3 与 0.4 命令）', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('tools');
@@ -29,6 +29,9 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).toContain('resume');
     expect(names).toContain('mcp');
     expect(names).toContain('runs');
+    expect(names).toContain('workflows');
+    expect(names).toContain('metrics');
+    expect(names).toContain('feishu');
     expect(names).toContain('new');
     expect(names).toContain('history');
     expect(names).toContain('help');
@@ -39,18 +42,21 @@ describe('CommandRegistry 扁平命令', () => {
     // 已删命令（/skills、/assets）仍不注册
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
-    expect(names.length).toBe(12);
+    expect(names.length).toBe(15);
     // /resume 仍是会话恢复，usage 不被 /runs 影响
     expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe('/resume [number|id]');
   });
 
-  it('/help 列出 mcp 与 runs', async () => {
+  it('/help 列出 0.3 / 0.4 命令', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
     const output = (await reg.execute('help', ctx, state)).output ?? '';
     expect(output).toContain('/mcp [reconnect <name>]');
     expect(output).toContain('/runs [resume <runId>]');
+    expect(output).toContain('/workflows [list|run|show|resume|cancel]');
+    expect(output).toContain('/metrics');
+    expect(output).toContain('/feishu');
   });
 
   it('未知命令 -> handled:false', async () => {

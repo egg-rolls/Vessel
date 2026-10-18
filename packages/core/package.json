@@ -8,7 +8,7 @@
     ".": "./src/index.ts",
     "./context": "./src/context/index.ts",
     "./kernel": "./src/kernel/index.ts",
-    "./observability": "./src/events/index.ts",
+    "./observability": "./src/observability/index.ts",
     "./policy": "./src/runtime/policy/index.ts",
     "./provider": "./src/provider/index.ts",
     "./session": "./src/session/index.ts",

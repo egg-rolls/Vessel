@@ -76,3 +76,80 @@ describe('MemoryContextManager', () => {
     expect(contextWithLimit.messages[4]?.content).toBe('Message 9');
   });
 });
+
+describe('MemoryContextManager long sessions (0.4 C2)', () => {
+  it('does not overwrite a fresh compaction with the pre-compact array', () => {
+    const context = new MemoryContextManager({
+      maxTokens: 20,
+      compactThreshold: 0.5,
+      maxMessages: 20,
+      autoCompact: true,
+    });
+
+    for (let i = 0; i < 30; i += 1) {
+      context.add({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `Message ${i} with some content`,
+      });
+    }
+
+    const messages = context.messages;
+    expect(messages.some((m) => m.content.includes('[Auto Compact'))).toBe(true);
+    expect(messages.at(-1)?.content).toContain('Message 29');
+  });
+
+  it('keeps the last added message when maxMessages is smaller than the compact tail', () => {
+    const context = new MemoryContextManager({
+      maxTokens: 20,
+      compactThreshold: 0.5,
+      maxMessages: 5,
+      autoCompact: true,
+    });
+
+    for (let i = 0; i < 50; i += 1) {
+      context.add({ role: 'user', content: `Message ${i}` });
+    }
+    context.add({ role: 'user', content: 'last-message' });
+
+    const messages = context.messages;
+    expect(messages.length).toBeLessThanOrEqual(5);
+    expect(messages.at(-1)?.content).toBe('last-message');
+  });
+
+  it('bounds a 10k message session without duplicating messages', () => {
+    const context = new MemoryContextManager({
+      maxMessages: 100,
+      autoCompact: false,
+    });
+
+    for (let i = 0; i < 10000; i += 1) {
+      context.add({ role: 'user', content: `Message ${i}` });
+    }
+
+    const messages = context.messages;
+    expect(messages).toHaveLength(100);
+    expect(messages[0]?.content).toBe('Message 9900');
+    expect(messages.at(-1)?.content).toBe('Message 9999');
+    expect(new Set(messages.map((m) => m.content)).size).toBe(100);
+  });
+
+  it('keeps compaction bounded across repeated threshold crossings', () => {
+    const context = new MemoryContextManager({
+      maxTokens: 20,
+      compactThreshold: 0.5,
+      maxMessages: 20,
+      autoCompact: true,
+    });
+
+    for (let i = 0; i < 500; i += 1) {
+      context.add({
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: `Message ${i} with some content`,
+      });
+    }
+
+    const messages = context.messages;
+    expect(messages.length).toBeLessThanOrEqual(20);
+    expect(messages.at(-1)?.content).toContain('Message 499');
+  });
+});

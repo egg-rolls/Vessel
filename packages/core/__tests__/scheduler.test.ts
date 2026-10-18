@@ -283,3 +283,187 @@ describe('Scheduler 取消竞态（0.3 回归）', () => {
     await scheduler.close();
   });
 });
+
+const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+describe('Scheduler 并发不变量（0.4 C2）', () => {
+  it('settles 200 tasks without losing or duplicating counts', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 4, maxQueueSize: 1000 });
+    const runs: RunHandle[] = [];
+
+    for (let i = 0; i < 200; i += 1) {
+      runs.push(
+        await scheduler.submit({
+          agent: { id: `agent-${i % 3}` } as AgentHandle,
+          input: `task-${i}`,
+          executor: (runId) => {
+            const handle = new FakeRunHandle(runId);
+            queueMicrotask(() => handle.finish('ok'));
+            return Promise.resolve(handle);
+          },
+        }),
+      );
+    }
+
+    const results = await Promise.allSettled(runs.map((run) => run.result));
+    expect(results.every((result) => result.status === 'fulfilled')).toBe(true);
+    expect(scheduler.stats()).toMatchObject({
+      queued: 0,
+      running: 0,
+      completed: 200,
+      failed: 0,
+      cancelled: 0,
+    });
+
+    await scheduler.close();
+  });
+
+  it('does not double count duplicate cancels', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 1, maxQueueSize: 10 });
+    const active = new FakeRunHandle('active');
+
+    const first = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: 'first',
+      executor: () => Promise.resolve(active),
+    });
+    await tick();
+
+    const second = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: 'second',
+    });
+    expect(second.status()).toBe('queued');
+
+    expect(scheduler.cancel(second.id, 'drop')).toBe(true);
+    expect(scheduler.cancel(second.id, 'drop')).toBe(false);
+    expect(scheduler.cancel(first.id, 'stop')).toBe(true);
+    expect(scheduler.cancel(first.id, 'stop')).toBe(true);
+
+    await expect(second.result).rejects.toThrow();
+    await expect(first.result).rejects.toThrow();
+    await tick();
+
+    expect(scheduler.stats()).toMatchObject({
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 2,
+    });
+    expect(active.cancelCalls).toBe(2);
+
+    await scheduler.close();
+  });
+
+  it('starts the next queued run after the running one is cancelled', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 1 });
+    const blocking = new FakeRunHandle('blocking');
+    let secondStarted = false;
+
+    const first = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: 'first',
+      executor: () => Promise.resolve(blocking),
+    });
+    await tick();
+
+    const second = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: 'second',
+      executor: (runId) => {
+        secondStarted = true;
+        const handle = new FakeRunHandle(runId);
+        queueMicrotask(() => handle.finish('second'));
+        return Promise.resolve(handle);
+      },
+    });
+    expect(second.status()).toBe('queued');
+    expect(secondStarted).toBe(false);
+
+    scheduler.cancel(first.id, 'stop');
+    await expect(first.result).rejects.toThrow();
+    await expect(second.result).resolves.toBe('second');
+    expect(secondStarted).toBe(true);
+
+    expect(scheduler.stats()).toMatchObject({
+      queued: 0,
+      running: 0,
+      completed: 1,
+      failed: 0,
+      cancelled: 1,
+    });
+
+    await scheduler.close();
+  });
+
+  it('close stops drain and cancels queued and in-flight entries', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 2, maxQueueSize: 100 });
+    const runs: RunHandle[] = [];
+
+    for (let i = 0; i < 10; i += 1) {
+      runs.push(
+        await scheduler.submit({
+          agent: { id: `agent-${i % 2}` } as AgentHandle,
+          input: `task-${i}`,
+          executor: () => new Promise<RunHandle>(() => undefined),
+        }),
+      );
+    }
+
+    await scheduler.close();
+
+    const results = await Promise.allSettled(runs.map((run) => run.result));
+    expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    expect(scheduler.stats()).toMatchObject({
+      queued: 0,
+      running: 0,
+      completed: 0,
+      failed: 0,
+      cancelled: 10,
+    });
+  });
+
+  it('keeps the queue bound while draining freed slots', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 1, maxQueueSize: 1 });
+    const first = new FakeRunHandle('first');
+
+    const runA = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: 'a',
+      executor: () => Promise.resolve(first),
+    });
+    await tick();
+
+    const runB = await scheduler.submit({
+      agent: { id: 'b' } as AgentHandle,
+      input: 'b',
+      executor: (runId) => {
+        const handle = new FakeRunHandle(runId);
+        queueMicrotask(() => handle.finish('b'));
+        return Promise.resolve(handle);
+      },
+    });
+
+    await expect(
+      scheduler.submit({
+        agent: { id: 'c' } as AgentHandle,
+        input: 'c',
+        executor: () => Promise.resolve(new FakeRunHandle('c')),
+      }),
+    ).rejects.toThrow('scheduler queue is full');
+
+    first.finish('a');
+    await expect(runA.result).resolves.toBe('a');
+    await expect(runB.result).resolves.toBe('b');
+    expect(scheduler.stats()).toMatchObject({
+      queued: 0,
+      running: 0,
+      completed: 2,
+      failed: 0,
+      cancelled: 0,
+    });
+
+    await scheduler.close();
+  });
+});
