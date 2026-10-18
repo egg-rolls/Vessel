@@ -22,7 +22,15 @@ function matches(event: RunEvent, filter?: EventFilter): boolean {
 
 /** Host 聚合事件总线 */
 export class MemoryEventBus implements EventBus {
-  private readonly stream = new MemoryEventStream();
+  private readonly stream: MemoryEventStream;
+
+  /**
+   * @param options 与 `MemoryEventStreamOptions` 结构一致（kernel 不 import 实现类型，
+   *   保持 D4 依赖边界）；缺省 / `{}` = 1000，`0` = 不限制。
+   */
+  constructor(options?: { maxHistory?: number }) {
+    this.stream = new MemoryEventStream(options);
+  }
 
   subscribe(handler: EventHandler): Unsubscribe {
     return this.stream.subscribe(handler);
