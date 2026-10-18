@@ -1051,6 +1051,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 - 位置：`packages/core/src/observability/metrics.ts`；从根入口与
   `@vessel/core/observability` 导出。
+- **`./observability` subpath 不是 0.4 新增**：0.3 已存在（当时指向
+  `src/events/index.ts`）；0.4 把它**改指**到新的 `src/observability/index.ts` barrel，
+  继续 re-export 原 events 符号。
 - 订阅既有事件：`run.started` / `run.completed` / `run.failed` / `run.cancelled` /
   `tool.call.started` / `tool.call.failed` / `llm.response`；**不新增事件、不改 runtime**。
 - `MetricsSnapshot`：`runs` / `tool_calls` / `llm` / `duration_ms` / `updated_at`。
