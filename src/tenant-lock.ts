@@ -16,6 +16,7 @@
  * @module vessel/tenant-lock
  */
 
+import { readFileSync, unlinkSync } from 'node:fs';
 import { mkdir, open, readFile, unlink } from 'node:fs/promises';
 import * as os from 'node:os';
 import { join } from 'node:path';
@@ -140,6 +141,20 @@ export class TenantLock {
       }
     } catch {
       // best-effort：锁文件可能已被外部清理
+    }
+  }
+
+  /** `process.once('exit')` 兜底：同步删除（受 pid 匹配保护）。 */
+  releaseSync(): void {
+    if (this.released) return;
+    this.released = true;
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(this.lockPath, 'utf8'));
+      if (isLockInfo(parsed) && parsed.pid === this.info.pid) {
+        unlinkSync(this.lockPath);
+      }
+    } catch {
+      // best-effort
     }
   }
 }

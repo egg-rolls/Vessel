@@ -1,4 +1,3 @@
-import { Database } from 'bun:sqlite';
 /**
  * Headless 模式集成测试（bash 管道驱动 = loop engineering 入口）
  *
@@ -102,7 +101,7 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
     fs.writeFileSync(path.join(tmpDir, 'conv.json'), JSON.stringify(messages));
     const { stdout, stderr, exitCode } = await runCli(
       ['--run', '@conv.json'],
-      { VESSEL_MOCK: '1' },
+      { VESSEL_MOCK: '1', VESSEL_DATA_DIR: path.join(tmpDir, 'data') },
       '',
       tmpDir,
     );
@@ -110,12 +109,15 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
     // 最后一条 user 作为本次输入
     expect(stdout.trim()).toBe('Echo: follow up');
     expect(stderr).toContain('[vessel]');
-    // 验证 seeding：session DB 含完整历史（seed 的前两条 + 本次 user + 响应）
-    const db = new Database(path.join(tmpDir, '.vessel', 'sessions.db'), { readonly: true });
-    const row = db.query('SELECT messages FROM sessions').get() as { messages: string } | null;
-    db.close();
-    if (!row) throw new Error('no session saved');
-    const saved = JSON.parse(row.messages) as Array<{ role: string; content: string }>;
+    // 验证 seeding：0.5 默认 file 后端，session 落在 tenant sessions 目录
+    const sessionsDir = path.join(tmpDir, 'data', 'tenants', 'default', 'sessions');
+    const files = fs.readdirSync(sessionsDir).filter((name) => name.endsWith('.json'));
+    const sessionFile = files[0];
+    if (!sessionFile) throw new Error('no session saved');
+    const state = JSON.parse(fs.readFileSync(path.join(sessionsDir, sessionFile), 'utf8')) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const saved = state.messages;
     const contents = saved.map((m) => m.content);
     expect(contents).toContain('first question');
     expect(contents).toContain('first answer');

@@ -37,6 +37,7 @@ import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { migrateCommand } from './migrate-command';
 import { runResumeList } from './resume-command';
+import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import { planTeamWiring } from './team-wiring';
 import {
@@ -374,7 +375,13 @@ const initialResult = await bootstrap({
   headless,
   interactive,
   registerAskUser: interactive,
+  acquireLock: true,
   ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+  ...(args.connectArg !== null
+    ? { connect: args.connectArg }
+    : process.env.VESSEL_CONNECT !== undefined
+      ? { connect: process.env.VESSEL_CONNECT }
+      : {}),
   // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
   configErrorExitCode: args.feishu ? 2 : 1,
 });
@@ -404,7 +411,13 @@ if (!useMock && interactive && !config.apiKey) {
       headless,
       interactive,
       registerAskUser: interactive,
+      acquireLock: true,
       ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+      ...(args.connectArg !== null
+        ? { connect: args.connectArg }
+        : process.env.VESSEL_CONNECT !== undefined
+          ? { connect: process.env.VESSEL_CONNECT }
+          : {}),
       configErrorExitCode: args.feishu ? 2 : 1,
     });
     await runWithConfig(result);
@@ -492,6 +505,17 @@ async function runWithConfig(result: BootstrapResult) {
       process.exit(1);
     }
 
+    // 0.5：token → principal（A-3 §10.4）。无 token + 回环 = 匿名 default/admin。
+    const authResult = resolveGatewayAuth(config, {
+      hostname: resolved.options.hostname,
+      allowRemote: resolved.options.allowRemote,
+    });
+    if (!authResult.ok) {
+      console.error(authResult.error);
+      await result.shutdown();
+      process.exit(1);
+    }
+
     // 远程 + 无显式 token：gateway 会生成 token（仍强制鉴权），但重启即变——醒目提示。
     const remote = !isLoopbackHostname(resolved.options.hostname);
     if (remote && resolved.options.allowRemote && resolveGatewayToken(config) === undefined) {
@@ -533,6 +557,8 @@ async function runWithConfig(result: BootstrapResult) {
         : {}),
       ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
     };
+    // 0.5 鉴权面：web 的 GatewayOptions 尚未合入本分支，先按冻结形状注入。
+    Object.assign(gatewayOptions, { auth: authResult.auth });
 
     // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
     // 冻结形状；合并后可直接写进 GatewayOptions。

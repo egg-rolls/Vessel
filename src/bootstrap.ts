@@ -5,19 +5,24 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import { DEFAULT_CONFIG, loadConfig } from '../packages/config/src/index';
+import { DEFAULT_CONFIG, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import {
   AgentRuntime,
   type AgentStatus,
   type EventBus,
   MemoryContextManager,
   MemoryPluginHost,
+  MemorySessionBackend,
   type Plugin,
   type PluginHost,
+  type RunEvent,
   type RunnableAgent,
   type RunOptions,
   type RunStore,
   type RuntimeHost,
+  resolveTenantPaths,
+  type TenantPaths,
+  type TraceRedactor,
 } from '../packages/core/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
@@ -28,6 +33,7 @@ import type {
   MetricsControlLike,
   WorkflowEngineLike,
 } from './control-plane-types';
+import { resolveDataDir } from './data-paths';
 import { DeferredTransport } from './deferred-transport';
 import {
   type DurableRunHandleLike,
@@ -50,9 +56,18 @@ import {
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { createProvider } from './provider-factory';
+import { createHttpRpcClient, type RpcClient } from './rpc/index';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
+import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionBackend } from './session-factory';
+import { acquireTenantLock, type TenantLock, TenantLockError } from './tenant-lock';
+import {
+  installTrace,
+  pruneTenantTrace,
+  type TraceControl,
+  type TraceRecorderFactory,
+} from './trace-wiring';
 import { adaptWorkflowsControl, createWorkflowFromConfig } from './workflow-wiring';
 
 export interface BootstrapOptions {
@@ -75,6 +90,23 @@ export interface BootstrapOptions {
   userConfigPath?: string;
   /** 0.5：显式 tenant id（CLI --tenant / RuntimeOptions）；缺省按 VESSEL_TENANT → config 解析 */
   tenantId?: string;
+  /** 0.5：tenant id 来源（CLI / env）；由调用方标注，缺省按解析结果 */
+  tenantSource?: 'cli' | 'env';
+  /**
+   * 0.5：是否获取 tenant 写锁。默认 false（由调用方按写意图传入）；
+   * CLI 的 run/REPL/serve/feishu 入口传 true。
+   */
+  acquireLock?: boolean;
+  /** 0.5：`--connect <url>` / VESSEL_CONNECT；设置时不加锁、不写本地 store */
+  connect?: string;
+  /** 0.5：测试注入 data_dir（缺省 config.dataDir → VESSEL_DATA_DIR → 默认值） */
+  dataDir?: string;
+  /** 0.5：trace recorder 工厂（测试） */
+  traceFactory?: TraceRecorderFactory;
+  /** 0.5：额外 trace redactor（ext redact-secrets） */
+  redactor?: TraceRedactor;
+  /** 0.5：锁 / 服务测试时钟 */
+  clock?: () => number;
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
   /** 0.4 测试注入口：workflow / feishu 模块加载器 */
@@ -95,6 +127,15 @@ export interface BootstrapResult {
   runtime: RunnableAgent;
   ctx: ReplContext;
   config: Awaited<ReturnType<typeof loadConfig>>['config'];
+  /** 0.5：解析后的 tenant 与目录 */
+  tenantId: string;
+  tenantPaths: TenantPaths;
+  /** 0.5：非 connect 且请求写时持有 */
+  tenantLock?: TenantLock;
+  /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
+  trace?: TraceControl;
+  /** 0.5：session rename/delete 控制面 */
+  sessionControl?: SessionControl;
   /** host.enabled=true 且构造成功时存在 */
   host?: RuntimeHost;
   /** nodeId 唯一来源：config.host.nodeId，缺省进程内生成 */
@@ -156,6 +197,139 @@ export function newSessionId(): string {
   return `${ts}_${hex}`;
 }
 
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isRunEventValue(value: unknown): value is RunEvent {
+  return (
+    isRecordValue(value) &&
+    typeof value.type === 'string' &&
+    typeof value.run_id === 'string' &&
+    typeof value.ts === 'number'
+  );
+}
+
+/**
+ * connect 模式（A-4 §11.6）：不获取 tenant 写锁、不写本地 store/trace。
+ * 本地 session 使用内存后端；run 走 canonical `runs.start`。
+ */
+async function bootstrapConnect(input: {
+  config: VesselConfig;
+  nodeId: string;
+  tenantId: string;
+  tenantPaths: TenantPaths;
+  url: string;
+}): Promise<BootstrapResult> {
+  const token = process.env.VESSEL_CONNECT_TOKEN ?? process.env.VESSEL_GATEWAY_TOKEN ?? '';
+  let client: RpcClient & { close(): Promise<void> };
+  try {
+    client = createHttpRpcClient({ baseUrl: input.url, token });
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+
+  const events = createEventStream(input.config);
+  const pluginHost = new MemoryPluginHost();
+  const session = new MemorySessionBackend();
+  const context = new MemoryContextManager({
+    maxTokens: input.config.context?.maxTokens,
+    maxMessages: input.config.context?.maxMessages,
+    autoCompact: input.config.context?.autoCompact,
+    compactThreshold: input.config.context?.compactThreshold,
+  });
+
+  let currentSessionId = newSessionId();
+  let shuttingDown = false;
+
+  const unsubscribe = client.subscribe((notification) => {
+    if (!isRunEventValue(notification.params)) return;
+    try {
+      events.publish(notification.params);
+    } catch {
+      // 订阅者异常不影响连接
+    }
+  });
+
+  const runtime: RunnableAgent = {
+    events,
+    pluginHost,
+    async run(inputValue, sessionId, opts) {
+      const prompt = typeof inputValue === 'string' ? inputValue : String(inputValue.content);
+      const result = await client.request<unknown>('runs.start', {
+        input: prompt,
+        session_id: sessionId ?? currentSessionId,
+        ...(opts?.messages ? { messages: opts.messages } : {}),
+      });
+      if (typeof result === 'string') return result;
+      if (isRecordValue(result) && typeof result.result === 'string') return result.result;
+      return '';
+    },
+    dispose() {
+      unsubscribe();
+      void client.close();
+    },
+  };
+
+  const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    unsubscribe();
+    try {
+      await client.close();
+    } catch {
+      // best-effort
+    }
+  };
+
+  const ctx: ReplContext = {
+    runtime,
+    pluginHost,
+    session,
+    events,
+    context,
+    currentSessionId,
+    onSessionChange: (id) => {
+      currentSessionId = id;
+    },
+    provider: {
+      name: input.config.provider?.name ?? 'openai',
+      model: input.config.provider?.model ?? '',
+      baseUrl: input.config.provider?.baseUrl ?? '',
+    },
+    plugins: [],
+    config: input.config,
+    newSessionId,
+    onExit: () => {
+      void shutdown().finally(() => process.exit(0));
+    },
+  };
+
+  return {
+    runtime,
+    ctx,
+    config: input.config,
+    tenantId: input.tenantId,
+    tenantPaths: input.tenantPaths,
+    nodeId: input.nodeId,
+    interruptWorkflows: async () => {},
+    resumeRun: async (runId) => {
+      const result = await client.request<unknown>('runs.resume', { run_id: runId });
+      const record = isRecordValue(result) ? result : {};
+      return {
+        sessionId: typeof record.session_id === 'string' ? record.session_id : currentSessionId,
+        result: typeof record.result === 'string' ? record.result : '',
+        mode: 'single-agent' as const,
+      };
+    },
+    shutdown,
+    cleanup: () => {
+      void shutdown();
+    },
+  };
+}
+
 /**
  * 引导应用启动
  */
@@ -170,11 +344,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   } = options;
 
   // ── 加载配置 ────────────────────────────────────
-  const { config, validation } = await loadConfig({
+  const loaded = await loadConfig({
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
+  const { config, validation, tenantId } = loaded;
 
   // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
   const nodeId =
@@ -189,14 +364,65 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     for (const w of validation.warnings) console.warn(`⚠ ${w.message}`);
   }
 
+  // ── tenant / data_dir / connect（0.5）───────────
+  if (config.tenant?.tenants?.[tenantId]?.status === 'disabled') {
+    console.error(`forbidden: tenant "${tenantId}" is disabled`);
+    process.exit(1);
+  }
+
+  const dataDir = options.dataDir ?? resolveDataDir(config);
+  const tenantPaths = resolveTenantPaths(dataDir, tenantId);
+  const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
+  const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
+
+  // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 tenant/token 选择。
+  if (connectMode) {
+    return bootstrapConnect({ config, nodeId, tenantId, tenantPaths, url: connectUrl });
+  }
+
   if (!useMock && !interactive && !config.apiKey) {
     console.error('No API key configured. Run `vessel` interactively first to set up.');
     process.exit(configErrorExitCode);
   }
 
+  // ── tenant 写锁（0.5）───────────────────────────
+  // 默认由调用方按写意图传入 acquireLock；connect 模式已在上面短路。
+  let tenantLock: TenantLock | undefined;
+  if (options.acquireLock === true) {
+    try {
+      tenantLock = await acquireTenantLock({
+        tenantDir: tenantPaths.root,
+        tenantId,
+        ...(options.clock ? { now: options.clock } : {}),
+      });
+    } catch (error) {
+      if (error instanceof TenantLockError) {
+        console.error(error.message);
+        process.exit(1);
+      }
+      throw error;
+    }
+    // exit 兜底：同步释放（仅持有锁的真实写入口注册）。
+    process.once('exit', () => {
+      tenantLock?.releaseSync();
+    });
+  }
+
+  // 启动 prune：best-effort，失败只 warn（无写意图时不触碰磁盘）。
+  const localWrites = options.acquireLock === true || options.dataDir !== undefined;
+  if (localWrites) {
+    try {
+      await pruneTenantTrace({ config, tenantPaths });
+    } catch (error) {
+      console.warn(
+        `⚠ Failed to prune trace: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   // ── Durable store（0.3）─────────────────────────
   // durable.enabled=false（默认）时不创建 store，checkpoint 路径完全不存在。
-  const runStore = createRunStore(config);
+  const runStore = createRunStore(config, { tenantRunsDir: tenantPaths.runs_dir });
 
   // ── 插件发现 ────────────────────────────────────
   // 唯一的发现机制：运行时扫描 plugins/<category>/<name>/（PluginLoader，ADR-028）。
@@ -219,7 +445,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   // observability.event_history 生效：块缺省走 0.3 默认，块存在按显式值。
   const events = createEventStream(config);
-  const session = createSessionBackend(config.session);
+  const session = createSessionBackend(config.session, {
+    tenantSessionsDir: tenantPaths.sessions_dir,
+  });
+  const sessionControl = createSessionControl({
+    session,
+    paths: tenantPaths,
+    ...(runStore ? { runStore } : {}),
+  });
 
   let currentSessionId = sessionId ?? newSessionId();
 
@@ -232,9 +465,32 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   );
 
   const plugins: Plugin[] = [];
+  // plugin.loaded / plugin.failed 在 runtimeEvents 选定后统一发布（避免丢失）。
+  const pluginLoadEvents: Array<{
+    type: 'plugin.loaded' | 'plugin.failed';
+    data: Record<string, unknown>;
+  }> = [];
   for (const name of defaultPluginNames) {
+    const descriptor = loader.list().find((candidate) => candidate.name === name);
+    const category = descriptor?.category ?? 'unknown';
     const p = await loader.load(name);
-    if (p) plugins.push(p);
+    if (p) {
+      plugins.push(p);
+      pluginLoadEvents.push({
+        type: 'plugin.loaded',
+        data: {
+          name: p.name,
+          category,
+          version: p.version ?? descriptor?.version ?? '',
+          tenant_id: tenantId,
+        },
+      });
+    } else {
+      pluginLoadEvents.push({
+        type: 'plugin.failed',
+        data: { name, category, reason: 'load_failed', tenant_id: tenantId },
+      });
+    }
   }
 
   // ask-user 交互工具——以插件形式注册（唯一工具入口是 PluginHost）。
@@ -450,6 +706,44 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const runtimeEvents = host?.events ?? events;
   const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
 
+  // ── Trace（0.5，A-4 §11.1/§11.2）───────────────
+  // 只有本地写意图才安装；disabled/off 时 installTrace 返回 undefined。
+  const trace: TraceControl | undefined = localWrites
+    ? installTrace({
+        events: runtimeEvents,
+        config,
+        tenantPaths,
+        tenantId,
+        ...(options.redactor ? { redactor: options.redactor } : {}),
+        ...(options.traceFactory ? { factory: options.traceFactory } : {}),
+      })
+    : undefined;
+
+  // asm 事件：不含值、不含密钥；只记录来源/键名/tenant。
+  try {
+    const nowTs = options.clock ?? Date.now;
+    runtimeEvents.publish({
+      type: 'config.loaded',
+      run_id: 'config',
+      data: {
+        sources: [...new Set(Object.values(loaded.sources))],
+        keys: Object.keys(config),
+        tenant_id: tenantId,
+      },
+      ts: nowTs(),
+    });
+    for (const event of pluginLoadEvents) {
+      runtimeEvents.publish({
+        type: event.type,
+        run_id: 'plugins',
+        data: event.data,
+        ts: nowTs(),
+      });
+    }
+  } catch {
+    // 事件投递失败不阻断启动
+  }
+
   // ── MCP（0.3）───────────────────────────────────
   // 在 runtime 就绪后安装：host 模式下 host.events 只有这时才存在；
   // PluginHost 是可变注册表，工具在每轮 loop 重新读取，后装对 owner/子 agent 立即生效。
@@ -486,6 +780,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         config,
         events: runtimeEvents,
         pluginHost: finalPluginHost,
+        tenantDir: tenantPaths.root,
         ...(host ? { host } : { runtime: activeRuntime }),
         loader,
         ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
@@ -688,8 +983,37 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 内部 team host 的清理是 best-effort
     }
 
+    // 0.5：trace flush → close 必须在 store 关闭前（A-4 §11.3）。
+    if (trace) {
+      try {
+        await trace.flush();
+      } catch (e) {
+        console.warn(`⚠ Failed to flush trace: ${e instanceof Error ? e.message : e}`);
+      }
+      try {
+        await trace.close();
+      } catch (e) {
+        console.warn(`⚠ Failed to close trace: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
     // store 最后关闭：确保所有 checkpoint 写入已落盘。
     await closeRunStore(runStore);
+
+    try {
+      session.close?.();
+    } catch {
+      // session 关闭是 best-effort
+    }
+
+    // 锁最后释放。
+    if (tenantLock) {
+      try {
+        await tenantLock.release();
+      } catch (e) {
+        console.warn(`⚠ Failed to release tenant lock: ${e instanceof Error ? e.message : e}`);
+      }
+    }
   };
 
   // ── ReplContext ─────────────────────────────────
@@ -724,6 +1048,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     runtime: activeRuntime,
     ctx,
     config,
+    tenantId,
+    tenantPaths,
+    ...(tenantLock ? { tenantLock } : {}),
+    ...(trace ? { trace } : {}),
+    sessionControl,
     host,
     nodeId,
     spawnAgent,
