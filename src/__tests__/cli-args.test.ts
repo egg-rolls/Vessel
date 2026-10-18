@@ -35,6 +35,12 @@ describe('parseArgs - 默认与 REPL', () => {
       workflow: null,
       eval: null,
       feishu: false,
+      tenantArg: null,
+      connectArg: null,
+      configCommand: null,
+      tenantCommand: null,
+      migrate: null,
+      trace: null,
     });
   });
 });

@@ -39,6 +39,43 @@ export interface EvalCommand {
   allowNetwork: boolean;
 }
 
+/** `config` 子命令（0.5） */
+export type ConfigCommandArgs =
+  | { kind: 'path'; json: boolean }
+  | { kind: 'init'; json: boolean; force: boolean }
+  | { kind: 'show'; json: boolean; sources: boolean; tenantId?: string };
+
+/** `tenant` 子命令（0.5） */
+export type TenantCommandArgs =
+  | { kind: 'list'; json: boolean }
+  | { kind: 'get'; id: string; json: boolean }
+  | { kind: 'create'; id: string; json: boolean; name?: string }
+  | {
+      kind: 'update';
+      id: string;
+      json: boolean;
+      name?: string;
+      status?: 'active' | 'disabled';
+    };
+
+/** `migrate` 子命令（0.5） */
+export interface MigrateCommandArgs {
+  from: string;
+  to: string;
+  apply: boolean;
+  json: boolean;
+  tenantId?: string;
+  source?: string;
+}
+
+/** `trace` 子命令（0.5） */
+export type TraceCommandArgs = {
+  kind: 'prune';
+  dryRun: boolean;
+  json: boolean;
+  tenantId?: string;
+};
+
 export interface CliArgs {
   /** null = 非 headless；'' = 从 stdin 读；非空 = 文本 prompt 或 @file */
   runArg: string | null;
@@ -69,6 +106,15 @@ export interface CliArgs {
   eval: EvalCommand | null;
   /** 0.4：附加开关；只与 run/pipe/resume/tools/version/help 互斥 */
   feishu: boolean;
+  /** 0.5：全局 `--tenant <id>`；null = 未指定 */
+  tenantArg: string | null;
+  /** 0.5：`--connect <url>`（或 VESSEL_CONNECT，由 cli 合并） */
+  connectArg: string | null;
+  /** 0.5 一次性本地命令 */
+  configCommand: ConfigCommandArgs | null;
+  tenantCommand: TenantCommandArgs | null;
+  migrate: MigrateCommandArgs | null;
+  trace: TraceCommandArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -108,13 +154,19 @@ export function parseArgs(argv: string[]): ParseResult {
     workflow: null,
     eval: null,
     feishu: false,
+    tenantArg: null,
+    connectArg: null,
+    configCommand: null,
+    tenantCommand: null,
+    migrate: null,
+    trace: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
 
-    // `update` / `workflow` / `eval` 只允许作为第一个参数（子命令），
-    // 其余位置按未知参数处理。
+    // `update` / `workflow` / `eval` / `config` / `tenant` / `migrate` / `trace`
+    // 只允许作为第一个参数（子命令），其余位置按未知参数处理。
     if (a === 'update' && i === 0) {
       return parseUpdateArgs(argv.slice(1), args);
     }
@@ -123,6 +175,18 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'eval' && i === 0) {
       return parseEvalArgs(argv.slice(1), args);
+    }
+    if (a === 'config' && i === 0) {
+      return parseConfigArgs(argv.slice(1), args);
+    }
+    if (a === 'tenant' && i === 0) {
+      return parseTenantArgs(argv.slice(1), args);
+    }
+    if (a === 'migrate' && i === 0) {
+      return parseMigrateArgs(argv.slice(1), args);
+    }
+    if (a === 'trace' && i === 0) {
+      return parseTraceArgs(argv.slice(1), args);
     }
 
     switch (a) {
@@ -214,9 +278,36 @@ export function parseArgs(argv: string[]): ParseResult {
       case '--feishu':
         args.feishu = true;
         break;
+      case '--tenant': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --tenant' };
+        }
+        args.tenantArg = next;
+        i++;
+        break;
+      }
+      case '--connect': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --connect' };
+        }
+        args.connectArg = next;
+        i++;
+        break;
+      }
       default:
         return { ok: false, error: `Unknown argument: ${a}` };
     }
+  }
+
+  // 0.5：全局 --tenant 与 --help / --version 同用是用法错误。
+  if (args.tenantArg !== null && (args.help || args.version)) {
+    return { ok: false, error: '--tenant cannot be combined with --help/--version' };
+  }
+  // 0.5：客户端模式与服务端模式互斥。
+  if (args.connectArg !== null && args.servePort !== null) {
+    return { ok: false, error: '--connect cannot be combined with --serve' };
   }
 
   // --resume-run 是独立模式：不能与其它输入/服务/一次性命令组合（Addendum A §6）。
@@ -565,6 +656,291 @@ function parseEvalArgs(rest: string[], args: CliArgs): ParseResult {
     ...(out !== undefined ? { out } : {}),
     filters,
     allowNetwork,
+  };
+  return { ok: true, args };
+}
+
+// ── 0.5 config / tenant / migrate / trace 子命令 ───────────────
+
+/** 读取 `--tenant <id>`；非法时返回错误文本 */
+function readTenantFlag(
+  rest: string[],
+  index: number,
+): { ok: true; value: string; next: number } | { ok: false; error: string } {
+  const next = rest[index + 1];
+  if (next === undefined || next.startsWith('-') || next.trim() === '') {
+    return { ok: false, error: 'Missing value for --tenant' };
+  }
+  return { ok: true, value: next, next: index + 1 };
+}
+
+/** `config path|init|show` */
+function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h' || sub === undefined) {
+    if (sub === undefined)
+      return { ok: false, error: 'Missing config subcommand (path|init|show)' };
+    args.help = true;
+    return { ok: true, args };
+  }
+
+  const tail = rest.slice(1);
+  let json = false;
+  let force = false;
+  let sources = false;
+  let tenantId: string | undefined;
+
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--tenant' && sub === 'show') {
+      const parsedTenant = readTenantFlag(tail, i);
+      if (!parsedTenant.ok) return parsedTenant;
+      tenantId = parsedTenant.value;
+      i = parsedTenant.next;
+      continue;
+    }
+    if (a === '--force' && sub === 'init') {
+      force = true;
+      continue;
+    }
+    if (a === '--sources' && sub === 'show') {
+      sources = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for config ${sub}: ${a}` };
+  }
+
+  if (args.help) return { ok: true, args };
+
+  if (sub === 'path') {
+    if (force || sources || tenantId !== undefined) {
+      return { ok: false, error: 'config path only supports --json' };
+    }
+    args.configCommand = { kind: 'path', json };
+    return { ok: true, args };
+  }
+  if (sub === 'init') {
+    if (sources || tenantId !== undefined) {
+      return { ok: false, error: 'config init only supports --force and --json' };
+    }
+    args.configCommand = { kind: 'init', json, force };
+    return { ok: true, args };
+  }
+  if (sub === 'show') {
+    if (force) return { ok: false, error: 'config show does not support --force' };
+    args.configCommand = {
+      kind: 'show',
+      json,
+      sources,
+      ...(tenantId !== undefined ? { tenantId } : {}),
+    };
+    return { ok: true, args };
+  }
+  return { ok: false, error: `Unknown config subcommand: ${sub}` };
+}
+
+const TENANT_STATUSES: ReadonlySet<string> = new Set(['active', 'disabled']);
+
+/** `tenant list|get|create|update` */
+function parseTenantArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return { ok: false, error: 'Missing tenant subcommand (list|get|create|update)' };
+  }
+
+  const tail = rest.slice(1);
+  let json = false;
+  let name: string | undefined;
+  let status: 'active' | 'disabled' | undefined;
+  let id: string | undefined;
+
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--name' && (sub === 'create' || sub === 'update')) {
+      const next = tail[i + 1];
+      if (next === undefined || next.startsWith('-') || next.trim() === '') {
+        return { ok: false, error: 'Missing value for --name' };
+      }
+      name = next;
+      i++;
+      continue;
+    }
+    if (a === '--status' && sub === 'update') {
+      const next = tail[i + 1];
+      if (next === undefined || next.startsWith('-')) {
+        return { ok: false, error: 'Missing value for --status' };
+      }
+      if (!TENANT_STATUSES.has(next)) {
+        return { ok: false, error: 'Invalid tenant status (expected active|disabled)' };
+      }
+      status = next as 'active' | 'disabled';
+      i++;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for tenant ${sub}: ${a}` };
+    }
+    if (id !== undefined) return { ok: false, error: `Unexpected argument: ${a}` };
+    id = a;
+  }
+
+  if (args.help) return { ok: true, args };
+
+  if (sub === 'list') {
+    if (id !== undefined || name !== undefined || status !== undefined) {
+      return { ok: false, error: 'tenant list only supports --json' };
+    }
+    args.tenantCommand = { kind: 'list', json };
+    return { ok: true, args };
+  }
+  if (sub !== 'get' && sub !== 'create' && sub !== 'update') {
+    return { ok: false, error: `Unknown tenant subcommand: ${sub}` };
+  }
+  if (id === undefined || id.trim() === '') {
+    return { ok: false, error: `Missing tenant id for tenant ${sub}` };
+  }
+  if (sub === 'get') {
+    if (name !== undefined || status !== undefined) {
+      return { ok: false, error: 'tenant get only supports --json' };
+    }
+    args.tenantCommand = { kind: 'get', id, json };
+    return { ok: true, args };
+  }
+  if (sub === 'create') {
+    if (status !== undefined)
+      return { ok: false, error: 'tenant create does not support --status' };
+    args.tenantCommand = { kind: 'create', id, json, ...(name !== undefined ? { name } : {}) };
+    return { ok: true, args };
+  }
+  args.tenantCommand = {
+    kind: 'update',
+    id,
+    json,
+    ...(name !== undefined ? { name } : {}),
+    ...(status !== undefined ? { status } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `migrate --from sqlite|file-v1 --to file-v2 [--apply] [--tenant <id>] [--source <path>]` */
+function parseMigrateArgs(rest: string[], args: CliArgs): ParseResult {
+  let from: string | undefined;
+  let to: string | undefined;
+  let apply = false;
+  let json = false;
+  let tenantId: string | undefined;
+  let source: string | undefined;
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--apply') {
+      apply = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--from' || a === '--to' || a === '--source' || a === '--tenant') {
+      const next = rest[i + 1];
+      if (next === undefined || next.startsWith('-') || next.trim() === '') {
+        return { ok: false, error: `Missing value for ${a}` };
+      }
+      if (a === '--from') from = next;
+      else if (a === '--to') to = next;
+      else if (a === '--source') source = next;
+      else tenantId = next;
+      i++;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for migrate: ${a}` };
+  }
+
+  if (args.help) return { ok: true, args };
+  if (from === undefined) return { ok: false, error: 'migrate requires --from sqlite|file-v1' };
+  if (to === undefined) return { ok: false, error: 'migrate requires --to file-v2' };
+
+  args.migrate = {
+    from,
+    to,
+    apply,
+    json,
+    ...(tenantId !== undefined ? { tenantId } : {}),
+    ...(source !== undefined ? { source } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `trace prune [--dry-run] [--json] [--tenant <id>]` */
+function parseTraceArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) return { ok: false, error: 'Missing trace subcommand (prune)' };
+  if (sub !== 'prune') return { ok: false, error: `Unknown trace subcommand: ${sub}` };
+
+  let dryRun = false;
+  let json = false;
+  let tenantId: string | undefined;
+
+  const tail = rest.slice(1);
+  for (let i = 0; i < tail.length; i++) {
+    const a = tail[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--dry-run') {
+      dryRun = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--tenant') {
+      const parsedTenant = readTenantFlag(tail, i);
+      if (!parsedTenant.ok) return parsedTenant;
+      tenantId = parsedTenant.value;
+      i = parsedTenant.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for trace prune: ${a}` };
+  }
+
+  if (args.help) return { ok: true, args };
+
+  args.trace = {
+    kind: 'prune',
+    dryRun,
+    json,
+    ...(tenantId !== undefined ? { tenantId } : {}),
   };
   return { ok: true, args };
 }

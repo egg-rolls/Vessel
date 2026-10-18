@@ -73,6 +73,8 @@ export interface BootstrapOptions {
   configPath?: string;
   /** 用户配置文件路径（默认 ~/.vessel/config.yaml）；嵌入/测试用 */
   userConfigPath?: string;
+  /** 0.5：显式 tenant id（CLI --tenant / RuntimeOptions）；缺省按 VESSEL_TENANT → config 解析 */
+  tenantId?: string;
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
   /** 0.4 测试注入口：workflow / feishu 模块加载器 */
@@ -171,6 +173,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const { config, validation } = await loadConfig({
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 
   // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
