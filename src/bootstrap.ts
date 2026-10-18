@@ -9,9 +9,9 @@ import { DEFAULT_CONFIG, defaultModelForProvider, loadConfig } from '../packages
 import {
   AgentRuntime,
   type AgentStatus,
+  type EventBus,
   type LLMProvider,
   MemoryContextManager,
-  MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
   OpenAICompatibleProvider,
@@ -26,6 +26,11 @@ import type { ReplContext } from '../packages/tui/src/index';
 import { createAskUserTool } from '../packages/tui/src/renderer/ask-user';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import type {
+  FeishuChannelLike,
+  MetricsControlLike,
+  WorkflowEngineLike,
+} from './control-plane-types';
 import { DeferredTransport } from './deferred-transport';
 import {
   type DurableRunHandleLike,
@@ -36,12 +41,21 @@ import {
   routeResume,
 } from './durable-wiring';
 import { planFactoryPlugins } from './factory-plugins';
+import { createFeishuFromConfig, stopFeishuChannel } from './feishu-wiring';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
+import {
+  createEventBus,
+  createEventStream,
+  createMetricsCollector,
+  disposeMetrics,
+  type MetricsFactory,
+} from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionBackend } from './session-factory';
+import { adaptWorkflowsControl, createWorkflowFromConfig } from './workflow-wiring';
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -63,6 +77,17 @@ export interface BootstrapOptions {
   userConfigPath?: string;
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
+  /** 0.4 测试注入口：workflow / feishu 模块加载器 */
+  loadWorkflowModule?: () => Promise<unknown | null>;
+  loadFeishuModule?: () => Promise<unknown | null>;
+  /** 0.4 测试/示例注入口：飞书 mock transport */
+  feishuTransport?: unknown;
+  /** 0.4 测试注入口：metrics 工厂（默认 core MetricsCollector） */
+  metricsFactory?: MetricsFactory;
+  /**
+   * 配置错误时的退出码：默认 1（0.3 行为）；`--feishu` 传 2（Addendum C/D）。
+   */
+  configErrorExitCode?: number;
 }
 
 export interface BootstrapResult {
@@ -91,6 +116,14 @@ export interface BootstrapResult {
   runStore?: RunStore;
   /** 0.3 durable：TUI `/runs` 控制面（durable 关闭时为 undefined） */
   runs?: DurableRunsControlLike;
+  /** 0.4：workflow 引擎（路径版 controls + close/interruptAll）；未启用为 undefined */
+  workflows?: WorkflowEngineLike;
+  /** 0.4：飞书渠道（enabled 时构造，不自动 start）；未启用为 undefined */
+  feishu?: FeishuChannelLike;
+  /** 0.4：metrics 控制面；observability 块缺省或 metrics:false 时为 undefined */
+  metrics?: MetricsControlLike;
+  /** 0.4：SIGINT/SIGTERM 时调用 workflow.interruptAll()（落 interrupted） */
+  interruptWorkflows: () => Promise<void>;
   /**
    * 恢复一次 run 并等待完成（CLI `--resume-run` 使用）。
    * 失败抛带稳定 code 的错误：run_not_found / run_not_resumable /
@@ -133,6 +166,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     headless = false,
     interactive = !headless,
     registerAskUser = interactive,
+    configErrorExitCode = 1,
   } = options;
 
   // ── 加载配置 ────────────────────────────────────
@@ -147,7 +181,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   if (!useMock && validation.errors.length > 0) {
     for (const e of validation.errors) console.error(`✗ ${e.message}`);
-    process.exit(1);
+    process.exit(configErrorExitCode);
   }
 
   if (validation.warnings.length > 0) {
@@ -156,7 +190,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   if (!useMock && !interactive && !config.apiKey) {
     console.error('No API key configured. Run `vessel` interactively first to set up.');
-    process.exit(1);
+    process.exit(configErrorExitCode);
   }
 
   // ── Durable store（0.3）─────────────────────────
@@ -230,7 +264,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     autoCompact: config.context?.autoCompact,
     compactThreshold: config.context?.compactThreshold,
   });
-  const events = new MemoryEventStream();
+  // observability.event_history 生效：块缺省走 0.3 默认，块存在按显式值。
+  const events = createEventStream(config);
   const session = createSessionBackend(config.session);
 
   let currentSessionId = sessionId ?? newSessionId();
@@ -361,11 +396,24 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   let selectedPluginHost: PluginHost | undefined;
   let spawnAgent: BootstrapResult['spawnAgent'];
   let deferredTransport: DeferredTransport | undefined;
+  let hostEvents: EventBus | undefined;
+
+  /** 成员 / 飞书 per-chat runtime 的上下文工厂 */
+  const contextFactory = () =>
+    new MemoryContextManager({
+      maxTokens: config.context?.maxTokens,
+      maxMessages: config.context?.maxMessages,
+      autoCompact: config.context?.autoCompact,
+      compactThreshold: config.context?.compactThreshold,
+    });
 
   // 0.2 host 路径：opt-in。只有 host.enabled=true 才动态加载 kernel/createRuntime。
   if (isHostEnabled(config)) {
     const hostPluginHost = new MemoryPluginHost();
     for (const plugin of plugins) await plugin.install(hostPluginHost);
+
+    // observability.event_history 同样作用于 Host 的聚合事件总线。
+    hostEvents = createEventBus(config);
 
     // team + loopback：transport 要等 gateway 启动后才能构造，用 DeferredTransport 占位。
     if (config.team?.enabled === true && config.transport?.kind === 'loopback') {
@@ -388,13 +436,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       },
       sessionId: currentSessionId,
       ...(runStore ? { runStore } : {}),
-      contextFactory: () =>
-        new MemoryContextManager({
-          maxTokens: config.context?.maxTokens,
-          maxMessages: config.context?.maxMessages,
-          autoCompact: config.context?.autoCompact,
-          compactThreshold: config.context?.compactThreshold,
-        }),
+      ...(hostEvents ? { events: hostEvents } : {}),
+      contextFactory,
       // Host 创建后、owner spawn 前，把 delegate/team 装到同一个 Host/PluginHost。
       beforeSpawn: async (createdHost) => {
         const factoryPlugins = await buildFactoryPlugins(createdHost, deferredTransport);
@@ -477,9 +520,52 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     } catch (e) {
       // 配置了 mcp_servers 但插件不可用属配置错误：启动即失败，不静默。
       console.error(`✗ ${e instanceof Error ? e.message : e}`);
-      process.exit(1);
+      process.exit(configErrorExitCode);
     }
   }
+
+  // ── Workflow / Feishu / Metrics（0.4）───────────
+  // 三者在 runtime / 最终 PluginHost / 事件流就绪后构造；未启用时零副作用。
+  let workflowEngine: WorkflowEngineLike | undefined;
+  if (config.workflow?.enabled === true) {
+    try {
+      workflowEngine = await createWorkflowFromConfig({
+        config,
+        events: runtimeEvents,
+        pluginHost: finalPluginHost,
+        ...(host ? { host } : { runtime: activeRuntime }),
+        loader,
+        ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
+      });
+    } catch (e) {
+      console.error(`✗ ${e instanceof Error ? e.message : e}`);
+      process.exit(configErrorExitCode);
+    }
+  }
+
+  let feishuChannel: FeishuChannelLike | undefined;
+  if (config.feishu?.enabled === true) {
+    try {
+      feishuChannel = await createFeishuFromConfig({
+        config,
+        provider,
+        model: providerModel,
+        pluginHost: finalPluginHost,
+        session,
+        events: runtimeEvents,
+        ...(runStore ? { runStore } : {}),
+        contextFactory,
+        ...(options.feishuTransport !== undefined ? { transport: options.feishuTransport } : {}),
+        loader,
+        ...(options.loadFeishuModule ? { loadModule: options.loadFeishuModule } : {}),
+      });
+    } catch (e) {
+      console.error(`✗ ${e instanceof Error ? e.message : e}`);
+      process.exit(configErrorExitCode);
+    }
+  }
+
+  const metrics = createMetricsCollector(runtimeEvents, config, options.metricsFactory);
 
   // ── Durable resume（0.3）─────────────────────────
   // 路由按 checkpoint.agent_id：缺失/owner/宿主成员 → host.resume；
@@ -589,9 +675,33 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
+
+  /** SIGINT/SIGTERM：workflow 在跑 run 落 interrupted（不是用户 cancel） */
+  const interruptWorkflows = async (): Promise<void> => {
+    if (!workflowEngine) return;
+    try {
+      await workflowEngine.interruptAll();
+    } catch (e) {
+      console.warn(`⚠ Failed to interrupt workflows: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+
+    // 0.4 冻结顺序：feishu.stop → workflow.close → metrics.dispose → MCP → host/runtime → store。
+    await stopFeishuChannel(feishuChannel);
+
+    if (workflowEngine) {
+      try {
+        await workflowEngine.close();
+      } catch (e) {
+        console.warn(`⚠ Failed to close workflow engine: ${e instanceof Error ? e.message : e}`);
+      }
+    }
+
+    disposeMetrics(metrics);
 
     if (mcpPlugin) {
       try {
@@ -647,6 +757,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),
     ...(runs ? { runs } : {}),
+    // 0.4 注入面：未启用时保持 undefined。
+    ...(workflowEngine ? { workflows: adaptWorkflowsControl(workflowEngine, config) } : {}),
+    ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
+    ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
     newSessionId,
     onExit: () => {
       void shutdown().finally(() => process.exit(0));
@@ -664,6 +778,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     mcp: mcpControl,
     runStore,
     runs,
+    workflows: workflowEngine,
+    feishu: feishuChannel,
+    metrics,
+    interruptWorkflows,
     resumeRun,
     shutdown,
     cleanup: () => {
