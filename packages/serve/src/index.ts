@@ -8,6 +8,10 @@
  */
 
 export {
+  type BackpressureThresholds,
+  ClientBackpressure,
+} from './backpressure.js';
+export {
   DEFAULT_DURABLE_LIMIT,
   DURABLE_RUN_STATUSES,
   type DurableCheckpointLike,

@@ -26,6 +26,7 @@ import type {
   SessionBackend,
   ToolDefinition,
 } from '@vessel/core';
+import { ClientBackpressure } from './backpressure.js';
 import {
   type DurableGatewayOptions,
   dedupeCheckpoints,
@@ -137,12 +138,38 @@ export interface Gateway {
   stop(): void;
 }
 
+/** SSE 回放状态：由 pull 驱动，慢连接不会一次性堆满队列 */
+interface SseReplayState {
+  /** 下一条要回放的 seq */
+  cursor: number;
+  /** 每次 pull 最多发送的事件数 */
+  batch: number;
+  accepts: (event: RunEvent) => boolean;
+  encode: (item: SeqEvent) => string;
+}
+
+/** 单个 SSE 连接的状态 */
+interface SseClientState {
+  backpressure: ClientBackpressure;
+  /** pull 之后自增；作为 Bun desiredSize 失效时的退化信号 */
+  unacked: number;
+  encodeGap: (gap: EventGap) => string;
+  replay?: SseReplayState;
+  onClose?: () => void;
+}
+
+/** team SSE 连接状态 */
+interface TeamClientState extends SseClientState {
+  agentId?: string;
+}
+
 /** WS 连接自定义数据 */
 interface WsData {
   authed: boolean;
   since: number;
   alive: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
+  backpressure: ClientBackpressure;
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
@@ -162,8 +189,16 @@ const MAX_QUEUE = 100;
 const MAX_RUNS = 200;
 /** 权限请求记录的清理阈值（与 core 的 120s 超时对齐） */
 const PERMISSION_TTL_MS = 120_000;
-/** 慢客户端缓冲阈值 */
+/** WS 慢客户端硬关闭阈值（最终安全网） */
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+/** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
+const WS_BACKPRESSURE_HIGH = 2 * 1024 * 1024;
+const WS_BACKPRESSURE_LOW = 512 * 1024;
+/** SSE 背压按帧计；highWaterMark 同时用于控制器队列 */
+const SSE_HIGH_WATER_FRAMES = 256;
+const SSE_LOW_WATER_FRAMES = 64;
+/** 每次 pull 回放的批大小 */
+const SSE_REPLAY_BATCH = 64;
 
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
@@ -408,7 +443,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const authTimeoutMs = opts.authTimeoutMs ?? 5_000;
 
-  const sseClients = new Set<SseController>();
+  const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
   const runs = new Map<string, RunRecord>();
   const queue: RunRecord[] = [];
@@ -426,7 +461,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   /** R3 team 状态（默认关闭） */
   let team: TeamGatewayOptions | undefined = opts.team;
-  const teamClients = new Map<SseController, { agentId?: string }>();
+  const teamClients = new Map<SseController, TeamClientState>();
   let teamPollTimer: ReturnType<typeof setInterval> | undefined;
   let knownPeers = new Set<string>();
   let inboundCursor = 0;
@@ -540,31 +575,88 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
-  function broadcast(frame: ServerFrame): void {
-    const encoded = JSON.stringify(frame);
-    for (const ws of [...wsClients]) {
-      if (ws.readyState !== 1) {
-        wsClients.delete(ws);
-        continue;
-      }
-      if (ws.getBufferedAmount() > MAX_BUFFERED_BYTES) {
-        ws.close(1013, 'slow_consumer');
-        wsClients.delete(ws);
-        continue;
-      }
-      try {
-        ws.send(encoded);
-      } catch {
-        wsClients.delete(ws);
-      }
+  function sendEventToWs(ws: Ws, item: SeqEvent): void {
+    const inflight = ws.getBufferedAmount();
+    if (!ws.data.backpressure.admit(item.seq, inflight)) return;
+    const gap = ws.data.backpressure.takeGap(inflight);
+    if (gap) sendFrame(ws, gapFrame(gap));
+    sendFrame(ws, eventFrame(item));
+  }
+
+  function flushWsGap(ws: Ws): void {
+    const gap = ws.data.backpressure.takeGap(ws.getBufferedAmount());
+    if (gap) sendFrame(ws, gapFrame(gap));
+  }
+
+  function sseInflight(ctrl: SseController, state: SseClientState): number {
+    const desired = ctrl.desiredSize;
+    const queued = typeof desired === 'number' ? Math.max(0, SSE_HIGH_WATER_FRAMES - desired) : 0;
+    return Math.max(queued, state.unacked);
+  }
+
+  function writeSse(ctrl: SseController, state: SseClientState, chunk: string): boolean {
+    try {
+      ctrl.enqueue(chunk);
+      state.unacked += 1;
+      return true;
+    } catch {
+      state.onClose?.();
+      return false;
     }
+  }
+
+  function flushSseGap(ctrl: SseController, state: SseClientState): boolean {
+    const gap = state.backpressure.takeGap(sseInflight(ctrl, state));
+    if (!gap) return true;
+    return writeSse(ctrl, state, state.encodeGap(gap));
+  }
+
+  function sendGatedSse(
+    ctrl: SseController,
+    state: SseClientState,
+    seq: number,
+    chunk: string,
+  ): boolean {
+    if (ctrl.desiredSize === null) {
+      state.onClose?.();
+      return false;
+    }
+    const inflight = sseInflight(ctrl, state);
+    if (!state.backpressure.admit(seq, inflight)) return true;
+    if (!flushSseGap(ctrl, state)) return false;
+    return writeSse(ctrl, state, chunk);
+  }
+
+  /** 由 pull 驱动回放：每次只发 batch 条，慢客户端自然停在队列满时 */
+  function pumpSseReplay(ctrl: SseController, state: SseClientState): void {
+    const replay = state.replay;
+    if (!replay) return;
+    const historyGap = buffer.gapFor(replay.cursor - 1);
+    if (historyGap) {
+      if (!writeSse(ctrl, state, state.encodeGap(historyGap))) return;
+      replay.cursor = historyGap.to_seq + 1;
+    }
+    let sent = 0;
+    for (const item of buffer.since(replay.cursor - 1)) {
+      const desired = ctrl.desiredSize;
+      if (typeof desired === 'number' && desired <= 0) return;
+      replay.cursor = item.seq + 1;
+      if (!replay.accepts(item.event)) continue;
+      if (!sendGatedSse(ctrl, state, item.seq, replay.encode(item))) return;
+      sent += 1;
+      if (sent >= replay.batch) return;
+    }
+    if (replay.cursor > buffer.latestSeq) state.replay = undefined;
+  }
+
+  function broadcastEvent(item: SeqEvent): void {
+    const encoded = JSON.stringify(eventFrame(item));
+    for (const ws of [...wsClients]) sendEventToWs(ws, item);
     const sseFrame = `data: ${encoded}\n\n`;
-    for (const ctrl of [...sseClients]) {
-      try {
-        ctrl.enqueue(sseFrame);
-      } catch {
-        sseClients.delete(ctrl);
-      }
+    for (const [ctrl, state] of [...sseClients]) {
+      // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
+      if (state.replay) continue;
+      sendGatedSse(ctrl, state, item.seq, sseFrame);
     }
   }
 
@@ -573,7 +665,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     sendFrame(ws, helloFrame(ws.data.since));
     const gap = buffer.gapFor(ws.data.since);
     if (gap) sendFrame(ws, gapFrame(gap));
-    for (const item of buffer.since(ws.data.since)) sendFrame(ws, eventFrame(item));
+    for (const item of buffer.since(ws.data.since)) sendEventToWs(ws, item);
   }
 
   /** 订阅 core 事件流：分配 seq、记录 run 映射与权限请求、广播 */
@@ -612,7 +704,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
     }
     const seq = buffer.append(event);
-    broadcast(eventFrame({ seq, event }));
+    broadcastEvent({ seq, event });
 
     // R3：team 事件流（agent.* / team.*），可选按 agent_id 过滤
     if (isTeamEvent(event) && teamClients.size > 0) {
@@ -624,14 +716,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
         kind: 'team.event',
         event: wire,
       })}\n\n`;
-      for (const [ctrl, filter] of [...teamClients]) {
+      for (const [ctrl, state] of [...teamClients]) {
+        if (state.replay) continue;
         const agentId = (wire.data as Record<string, unknown>).agent_id;
-        if (filter.agentId !== undefined && agentId !== filter.agentId) continue;
-        try {
-          ctrl.enqueue(frame);
-        } catch {
-          teamClients.delete(ctrl);
-        }
+        if (state.agentId !== undefined && agentId !== state.agentId) continue;
+        sendGatedSse(ctrl, state, seq, frame);
       }
     }
   });
@@ -1058,53 +1147,79 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const agentId = url.searchParams.get('agent_id') ?? undefined;
     const since = parseSince(url.searchParams.get('since'));
     let controller: SseController | undefined;
-    const stream = new ReadableStream<unknown>({
-      start(ctrl) {
-        controller = ctrl;
-        teamClients.set(ctrl, { ...(agentId !== undefined ? { agentId } : {}) });
-        ctrl.enqueue('retry: 3000\n\n');
-        const latest = buffer.latestSeq;
-        ctrl.enqueue(
-          `data: ${JSON.stringify({
-            protocol: 1,
-            node_id: nodeId,
-            kind: 'team.hello',
-            from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
-            latest_seq: latest,
-          })}\n\n`,
-        );
-        const gap = buffer.gapFor(since);
-        if (gap) {
-          ctrl.enqueue(
+    let state: TeamClientState | undefined;
+    const stream = new ReadableStream<unknown>(
+      {
+        start(ctrl) {
+          controller = ctrl;
+          const clientState: TeamClientState = {
+            ...(agentId !== undefined ? { agentId } : {}),
+            backpressure: new ClientBackpressure({
+              high: SSE_HIGH_WATER_FRAMES,
+              low: SSE_LOW_WATER_FRAMES,
+            }),
+            unacked: 0,
+            encodeGap: (gap) =>
+              `data: ${JSON.stringify({
+                protocol: 1,
+                node_id: nodeId,
+                kind: 'gap',
+                from_seq: gap.from_seq,
+                to_seq: gap.to_seq,
+              })}\n\n`,
+            onClose: () => teamClients.delete(ctrl),
+          };
+          state = clientState;
+          teamClients.set(ctrl, clientState);
+          writeSse(ctrl, clientState, 'retry: 3000\n\n');
+          const latest = buffer.latestSeq;
+          writeSse(
+            ctrl,
+            clientState,
             `data: ${JSON.stringify({
               protocol: 1,
               node_id: nodeId,
-              kind: 'gap',
-              from_seq: gap.from_seq,
-              to_seq: gap.to_seq,
+              kind: 'team.hello',
+              from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
+              latest_seq: latest,
             })}\n\n`,
           );
-        }
-        for (const item of buffer.since(since)) {
-          if (!isTeamEvent(item.event)) continue;
-          const wire = toWireEvent(item.event);
-          const eventAgentId = (wire.data as Record<string, unknown>).agent_id;
-          if (agentId !== undefined && eventAgentId !== agentId) continue;
-          ctrl.enqueue(
-            `data: ${JSON.stringify({
-              protocol: 1,
-              node_id: nodeId,
-              seq: item.seq,
-              kind: 'team.event',
-              event: wire,
-            })}\n\n`,
-          );
-        }
+          const gap = buffer.gapFor(since);
+          if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
+          clientState.replay = {
+            cursor: Math.max(since + 1, buffer.oldestSeq),
+            batch: SSE_REPLAY_BATCH,
+            accepts: (event) => {
+              if (!isTeamEvent(event)) return false;
+              if (agentId === undefined) return true;
+              const wire = toWireEvent(event);
+              return (wire.data as Record<string, unknown>).agent_id === agentId;
+            },
+            encode: (item) => {
+              const wire = toWireEvent(item.event);
+              return `data: ${JSON.stringify({
+                protocol: 1,
+                node_id: nodeId,
+                seq: item.seq,
+                kind: 'team.event',
+                event: wire,
+              })}\n\n`;
+            },
+          };
+          if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
+        },
+        pull() {
+          if (!controller || !state) return;
+          state.unacked = 0;
+          pumpSseReplay(controller, state);
+          flushSseGap(controller, state);
+        },
+        cancel() {
+          if (controller) teamClients.delete(controller);
+        },
       },
-      cancel() {
-        if (controller) teamClients.delete(controller);
-      },
-    });
+      { highWaterMark: SSE_HIGH_WATER_FRAMES },
+    );
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
@@ -1637,6 +1752,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
             authed,
             since: parseSince(url.searchParams.get('since')),
             alive: true,
+            backpressure: new ClientBackpressure({
+              high: WS_BACKPRESSURE_HIGH,
+              low: WS_BACKPRESSURE_LOW,
+            }),
           },
         });
         if (!upgraded) return errorJson('invalid_request', 'WebSocket upgrade failed', 400, extra);
@@ -1679,22 +1798,46 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
         let controller: SseController | undefined;
-        const stream = new ReadableStream<unknown>({
-          start(ctrl) {
-            controller = ctrl;
-            sseClients.add(ctrl);
-            ctrl.enqueue('retry: 3000\n\n');
-            ctrl.enqueue(`data: ${JSON.stringify(helloFrame(since))}\n\n`);
-            const gap = buffer.gapFor(since);
-            if (gap) ctrl.enqueue(`data: ${JSON.stringify(gapFrame(gap))}\n\n`);
-            for (const item of buffer.since(since)) {
-              ctrl.enqueue(`data: ${JSON.stringify(eventFrame(item))}\n\n`);
-            }
+        let state: SseClientState | undefined;
+        const stream = new ReadableStream<unknown>(
+          {
+            start(ctrl) {
+              controller = ctrl;
+              const clientState: SseClientState = {
+                backpressure: new ClientBackpressure({
+                  high: SSE_HIGH_WATER_FRAMES,
+                  low: SSE_LOW_WATER_FRAMES,
+                }),
+                unacked: 0,
+                encodeGap: (gap) => `data: ${JSON.stringify(gapFrame(gap))}\n\n`,
+                onClose: () => sseClients.delete(ctrl),
+              };
+              state = clientState;
+              sseClients.set(ctrl, clientState);
+              writeSse(ctrl, clientState, 'retry: 3000\n\n');
+              writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(since))}\n\n`);
+              const gap = buffer.gapFor(since);
+              if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
+              clientState.replay = {
+                cursor: Math.max(since + 1, buffer.oldestSeq),
+                batch: SSE_REPLAY_BATCH,
+                accepts: () => true,
+                encode: (item) => `data: ${JSON.stringify(eventFrame(item))}\n\n`,
+              };
+              if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
+            },
+            pull() {
+              if (!controller || !state) return;
+              state.unacked = 0;
+              pumpSseReplay(controller, state);
+              flushSseGap(controller, state);
+            },
+            cancel() {
+              if (controller) sseClients.delete(controller);
+            },
           },
-          cancel() {
-            if (controller) sseClients.delete(controller);
-          },
-        });
+          { highWaterMark: SSE_HIGH_WATER_FRAMES },
+        );
         return new Response(stream, {
           headers: {
             'Content-Type': 'text/event-stream',
@@ -1892,20 +2035,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       ws.data.alive = false;
       sendFrame(ws, { v: 1, kind: 'ping', node_id: nodeId, ts: Date.now() });
+      // 客户端已排空但没有新事件时，心跳负责补发 pending gap。
+      flushWsGap(ws);
     }
-    for (const ctrl of [...sseClients]) {
-      try {
-        ctrl.enqueue(': ping\n\n');
-      } catch {
-        sseClients.delete(ctrl);
-      }
+    for (const [ctrl, state] of [...sseClients]) {
+      if (!flushSseGap(ctrl, state)) continue;
+      writeSse(ctrl, state, ': ping\n\n');
     }
-    for (const ctrl of [...teamClients.keys()]) {
-      try {
-        ctrl.enqueue(': ping\n\n');
-      } catch {
-        teamClients.delete(ctrl);
-      }
+    for (const [ctrl, state] of [...teamClients]) {
+      if (!flushSseGap(ctrl, state)) continue;
+      writeSse(ctrl, state, ': ping\n\n');
     }
   }, heartbeatMs);
   (heartbeat as { unref?: () => void }).unref?.();
@@ -1950,7 +2089,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       }
       wsClients.clear();
-      for (const ctrl of sseClients) {
+      for (const ctrl of sseClients.keys()) {
         try {
           ctrl.close();
         } catch {
