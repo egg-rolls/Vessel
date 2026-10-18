@@ -122,6 +122,9 @@ jobs:
             plugins/tools/delegate-task
             plugins/tools/team
             plugins/mcp/client
+            plugins/workflow/engine
+            plugins/evals/harness
+            plugins/im/feishu
             plugins/provider/openai
             plugins/provider/anthropic
             plugins/security/guardrail-pii
