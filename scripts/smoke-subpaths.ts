@@ -50,9 +50,12 @@ export const ROOT_0_2_SYMBOLS = [
 /** 0.3 durable run 新增的根导出。 */
 export const ROOT_0_3_SYMBOLS = ['FileRunStore', 'MemoryRunStore', 'RunResumeError'] as const;
 
+/** 0.4 observability 新增的根导出（类型导出在运行时不可见）。 */
+export const ROOT_0_4_SYMBOLS = ['MetricsCollector', 'pruneRuns'] as const;
+
 /** 每个 subpath 必须存在的运行时符号；`./types` 允许为空。 */
 export const SMOKE_TARGETS: Readonly<Record<string, readonly string[]>> = {
-  '.': [...ROOT_COMPAT_SYMBOLS, ...ROOT_0_2_SYMBOLS, ...ROOT_0_3_SYMBOLS],
+  '.': [...ROOT_COMPAT_SYMBOLS, ...ROOT_0_2_SYMBOLS, ...ROOT_0_3_SYMBOLS, ...ROOT_0_4_SYMBOLS],
   './context': ['MemoryContextManager'],
   './kernel': [
     'createCancellationScope',
@@ -61,7 +64,7 @@ export const SMOKE_TARGETS: Readonly<Record<string, readonly string[]>> = {
     'InProcessScheduler',
     'MemoryEventBus',
   ],
-  './observability': ['FileEventStore', 'MemoryEventStream', 'replayRun'],
+  './observability': ['FileEventStore', 'MemoryEventStream', 'MetricsCollector', 'replayRun'],
   './policy': ['GuardrailRunner', 'HookRunner', 'PermissionPolicy', 'GuardrailStage', 'HookType'],
   './provider': ['AnthropicProvider', 'MemoryLLMProvider', 'OpenAICompatibleProvider'],
   './session': [
@@ -72,6 +75,7 @@ export const SMOKE_TARGETS: Readonly<Record<string, readonly string[]>> = {
     'RunResumeError',
     'SQLiteSessionBackend',
     'deriveSessionMeta',
+    'pruneRuns',
   ],
   './transport': ['InProcessTransport'],
   './types': [],
