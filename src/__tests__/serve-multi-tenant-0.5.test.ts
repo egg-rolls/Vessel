@@ -118,6 +118,11 @@ it('enforces config max_concurrent_runs through the tenant registry', async () =
       '      quota:',
       '        max_concurrent_runs: 0',
       '      config: {}',
+      '    daily:',
+      '      status: active',
+      '      quota:',
+      '        max_runs_per_day: 1',
+      '      config: {}',
       '',
     ].join('\n'),
   );
@@ -131,6 +136,9 @@ it('enforces config max_concurrent_runs through the tenant registry', async () =
       '      role: admin',
       '    tok-zero:',
       '      tenant_id: zero',
+      '      role: admin',
+      '    tok-daily:',
+      '      tenant_id: daily',
       '      role: admin',
       '',
     ].join('\n'),
@@ -156,6 +164,13 @@ it('enforces config max_concurrent_runs through the tenant registry', async () =
     const started = await rpc(url, 'tok-zero', 'runs.start', { input: 'blocked' });
     expect(started.error?.code).toBe('quota_exceeded');
     expect(started.error?.details).toMatchObject({ tenant_id: 'zero', limit: 0 });
+
+    // max_runs_per_day：第一次通过，第二次 quota_exceeded。
+    const dailyFirst = await rpc(url, 'tok-daily', 'runs.start', { input: 'first' });
+    expect(dailyFirst.error).toBeUndefined();
+    const dailySecond = await rpc(url, 'tok-daily', 'runs.start', { input: 'second' });
+    expect(dailySecond.error?.code).toBe('quota_exceeded');
+    expect(dailySecond.error?.details).toMatchObject({ tenant_id: 'daily', limit: 1 });
 
     // acme 无 quota，仍可启动。
     const acme = await rpc(url, 'tok-acme', 'runs.start', { input: 'ok' });
