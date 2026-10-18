@@ -233,9 +233,9 @@ export interface ServeTlsConfig {
 /** gateway principal 角色 */
 export type PrincipalRole = 'read' | 'write' | 'admin';
 
-/** 由 token 解析出的 principal */
+/** 由 token 解析出的 principal（A-3 §10.4 冻结：snake_case tenant_id） */
 export interface Principal {
-  tenantId: string;
+  tenant_id: string;
   role: PrincipalRole;
 }
 
