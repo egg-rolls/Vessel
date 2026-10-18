@@ -165,6 +165,61 @@ export interface DurableConfig {
   checkpointEvery?: 'iteration';
 }
 
+/** Workflow 配置（0.4；默认关闭） */
+export interface WorkflowConfig {
+  /** true 才构造 workflow 引擎（默认 false） */
+  enabled?: boolean;
+  /** 定义文件目录（默认 ./workflows） */
+  dir?: string;
+  /** run 状态存储目录（默认 ~/.vessel/workflows） */
+  path?: string;
+  /** 最大并行步骤数（默认 2；1..8） */
+  maxParallel?: number;
+  /** 单 step 超时毫秒（默认 300000；1..86400000） */
+  stepTimeoutMs?: number;
+}
+
+/** Eval harness 配置（0.4；默认关闭、默认离线） */
+export interface EvalsConfig {
+  /** true 才允许 CLI eval（默认 false） */
+  enabled?: boolean;
+  /** suite 目录（默认 ./evals） */
+  dir?: string;
+  /** 报告输出目录（默认 ~/.vessel/evals） */
+  outDir?: string;
+  /** 配置层网络允许；仍需 CLI --allow-network（默认 false） */
+  allowNetwork?: boolean;
+}
+
+/** 飞书渠道配置（0.4；默认关闭；凭据 env 优先） */
+export interface FeishuConfig {
+  enabled?: boolean;
+  /** 环境变量 VESSEL_FEISHU_APP_ID 优先 */
+  appId?: string;
+  /** 环境变量 VESSEL_FEISHU_APP_SECRET 优先；永不打印 */
+  appSecret?: string;
+  /** 仅切换域名，不改变语义（默认 feishu） */
+  domain?: 'feishu' | 'lark';
+  /** 空 = 机器人所在全部会话 */
+  allowedChatIds?: string[];
+  /** session = <prefix>:<chat_id>（默认 feishu） */
+  sessionPrefix?: string;
+  /** 单次回复超时毫秒（默认 300000；1..86400000） */
+  replyTimeoutMs?: number;
+  /** 单条回复最大字符数（默认 4000；1..100000） */
+  maxReplyChars?: number;
+  /** 专用 Host 成员上限（默认 8；1..64） */
+  maxMembers?: number;
+}
+
+/** 可观测性配置（0.4；块存在时才启用 metrics） */
+export interface ObservabilityConfig {
+  /** 事件历史容量：默认 1000；显式 0 = 不限制；>0 = 环形缓冲 */
+  eventHistory?: number;
+  /** 创建 MetricsCollector 并注入 gateway / TUI（默认 true） */
+  metrics?: boolean;
+}
+
 /** serve TLS 配置；cert/key 必须成对 */
 export interface ServeTlsConfig {
   certFile?: string;
@@ -234,6 +289,14 @@ export interface VesselConfig {
   durable?: DurableConfig;
   /** 0.3：gateway 监听与 TLS */
   serve?: ServeConfig;
+  /** 0.4：声明式 workflow 编排 */
+  workflow?: WorkflowConfig;
+  /** 0.4：eval harness */
+  evals?: EvalsConfig;
+  /** 0.4：飞书渠道 */
+  feishu?: FeishuConfig;
+  /** 0.4：可观测性 */
+  observability?: ObservabilityConfig;
 }
 
 /** 配置加载选项 */

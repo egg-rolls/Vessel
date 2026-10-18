@@ -5,11 +5,15 @@
 
 import type {
   DurableConfig,
+  EvalsConfig,
+  FeishuConfig,
   McpServerConfig,
+  ObservabilityConfig,
   SchedulerConfig,
   ServeConfig,
   TransportConfig,
   VesselConfig,
+  WorkflowConfig,
 } from './types.js';
 
 /**
@@ -86,6 +90,56 @@ export const DEFAULT_SERVE_OPTIONS: Required<
   hostname: '127.0.0.1',
   port: 8642,
   allowRemote: false,
+};
+
+/**
+ * 0.4 workflow 默认值。
+ * 不写入 DEFAULT_CONFIG：默认关闭，关闭时不加载引擎、0.3 行为不变。
+ */
+export const DEFAULT_WORKFLOW_OPTIONS: Required<WorkflowConfig> = {
+  enabled: false,
+  dir: './workflows',
+  path: '~/.vessel/workflows',
+  maxParallel: 2,
+  stepTimeoutMs: 300000,
+};
+
+/**
+ * 0.4 evals 默认值。
+ * 不写入 DEFAULT_CONFIG：默认关闭且完全离线。
+ */
+export const DEFAULT_EVALS_OPTIONS: Required<EvalsConfig> = {
+  enabled: false,
+  dir: './evals',
+  outDir: '~/.vessel/evals',
+  allowNetwork: false,
+};
+
+/**
+ * 0.4 feishu 默认值。
+ * 不写入 DEFAULT_CONFIG：默认关闭，关闭时不加载渠道插件。
+ * app_id / app_secret 由环境变量优先；这里只保留空串默认。
+ */
+export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
+  enabled: false,
+  appId: '',
+  appSecret: '',
+  domain: 'feishu',
+  allowedChatIds: [],
+  sessionPrefix: 'feishu',
+  replyTimeoutMs: 300000,
+  maxReplyChars: 4000,
+  maxMembers: 8,
+};
+
+/**
+ * 0.4 observability 默认值。
+ * 不写入 DEFAULT_CONFIG：块缺省时不创建 collector、不暴露 /v1/metrics。
+ * event_history 缺省 1000 与 core MemoryEventStream 默认一致；显式 0 = 不限制。
+ */
+export const DEFAULT_OBSERVABILITY_OPTIONS: Required<ObservabilityConfig> = {
+  eventHistory: 1000,
+  metrics: true,
 };
 
 /** 安全默认值 */

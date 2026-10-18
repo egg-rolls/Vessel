@@ -22,12 +22,16 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { isLoopbackHostname } from '../packages/config/src/index';
 import type { Transport } from '../packages/core/src/index';
-import { type Gateway, startGateway } from '../packages/serve/src/index';
+import { type Gateway, type GatewayOptions, startGateway } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { runUpdateCommand } from './cli-update';
+import type { FeishuChannelLike } from './control-plane-types';
+import { runEvalCommand } from './eval-command';
+import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
+import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { runResumeList } from './resume-command';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
@@ -36,6 +40,7 @@ import { listTools } from './tools-list';
 import { resolveGatewayToken, tryCreateLoopbackTransport } from './transport-factory';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
+import { runWorkflowCommand } from './workflow-command';
 
 // ── 终端排版辅助 ─────────────────────────────────
 
@@ -95,6 +100,16 @@ function printHelp(): void {
   const serve: Array<[string, string]> = [
     ['bun run src/cli.ts --serve 8642', '启动 HTTP/WS gateway（Web 控制台后端）'],
   ];
+  const capability: Array<[string, string]> = [
+    ['bun run src/cli.ts workflow list', '列出 workflow runs'],
+    ['bun run src/cli.ts workflow run <name>', '启动 workflow（workflow.dir 下解析）'],
+    ['bun run src/cli.ts workflow show <id>', '查看步骤状态'],
+    ['bun run src/cli.ts workflow resume <id>', '恢复 interrupted/failed/running'],
+    ['bun run src/cli.ts workflow cancel <id>', '取消同进程 run'],
+    ['bun run src/cli.ts eval <suite>', '离线评测'],
+    ['bun run src/cli.ts eval <suite> --json --out <path>', '评测输出 JSON / 指定报告'],
+    ['bun run src/cli.ts --feishu', '附加飞书渠道（可与 --serve / REPL 同用）'],
+  ];
   const debug: Array<[string, string]> = [
     ['VESSEL_MOCK=1 bun run src/cli.ts --run "x"', 'mock 模式（不调 API）'],
   ];
@@ -107,7 +122,9 @@ function printHelp(): void {
     ['bun run src/cli.ts --help', '显示本帮助'],
   ];
   const width = Math.max(
-    ...[...usage, ...headless, ...serve, ...debug, ...meta].map(([cmd]) => cmd.length),
+    ...[...usage, ...headless, ...serve, ...capability, ...debug, ...meta].map(
+      ([cmd]) => cmd.length,
+    ),
   );
 
   console.log(
@@ -122,6 +139,9 @@ function printHelp(): void {
       '',
       '  服务模式',
       align(serve, width),
+      '',
+      '  能力（0.4）',
+      align(capability, width),
       '',
       '  调试',
       align(debug, width),
@@ -179,6 +199,7 @@ if (!parsed.ok) {
   process.exit(2);
 }
 const args = parsed.args;
+const useMock = process.env.VESSEL_MOCK === '1' || process.env.VESSEL_MOCK === 'true';
 
 // 一次性命令在 bootstrap 之前短路：不加载 config / provider / gateway。
 if (args.help) {
@@ -200,6 +221,13 @@ if (args.update) {
 if (args.resumeRunArg === '') {
   process.exit(await runResumeList());
 }
+// 0.4 子命令：workflow / eval 自己加载配置并决定退出码。
+if (args.workflow) {
+  process.exit(await runWorkflowCommand(args.workflow, { useMock }));
+}
+if (args.eval) {
+  process.exit(await runEvalCommand(args.eval, { useMock }));
+}
 
 const { runArg, pipeMode, sessionArg, servePort, resumeRunArg } = args;
 const resumeRunId = resumeRunArg !== null && resumeRunArg !== '' ? resumeRunArg : null;
@@ -214,8 +242,6 @@ const interactive = entersRepl && process.stdin.isTTY === true;
 
 // ── 主流程 ──────────────────────────────────────
 
-const useMock = process.env.VESSEL_MOCK === '1' || process.env.VESSEL_MOCK === 'true';
-
 // 引导应用启动
 const initialResult = await bootstrap({
   useMock,
@@ -223,6 +249,8 @@ const initialResult = await bootstrap({
   headless,
   interactive,
   registerAskUser: interactive,
+  // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
+  configErrorExitCode: args.feishu ? 2 : 1,
 });
 const { config } = initialResult;
 
@@ -250,11 +278,12 @@ if (!useMock && interactive && !config.apiKey) {
       headless,
       interactive,
       registerAskUser: interactive,
+      configErrorExitCode: args.feishu ? 2 : 1,
     });
     await runWithConfig(result);
   } else {
     console.error('未配置 API Key，退出。');
-    process.exit(1);
+    process.exit(args.feishu ? 2 : 1);
   }
 } else {
   await runWithConfig(initialResult);
@@ -298,6 +327,20 @@ async function runWithConfig(result: BootstrapResult) {
     process.exit(exitCode);
   }
 
+  // ── Feishu（0.4）────────────────────────────────
+  // `--feishu` 是附加开关：先 start 渠道，再按模式（serve / REPL / 仅渠道）继续。
+  let feishuChannel: FeishuChannelLike | undefined;
+  if (args.feishu) {
+    try {
+      feishuChannel = await startFeishuChannel(result);
+      console.log(`Feishu channel connected (${feishuChannel.status().appIdMasked}).`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      await result.shutdown();
+      process.exit(feishuExitCode(error));
+    }
+  }
+
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   let gateway: Gateway | null = null;
   if (servePort !== null) {
@@ -331,7 +374,7 @@ async function runWithConfig(result: BootstrapResult) {
       );
     }
 
-    gateway = startGateway({
+    const gatewayOptions: GatewayOptions = {
       events: ctx.events,
       session: ctx.session,
       runtime,
@@ -362,7 +405,18 @@ async function runWithConfig(result: BootstrapResult) {
           }
         : {}),
       ...(result.mcp ? { mcp: { listServers: () => result.mcp?.list() ?? [] } } : {}),
+    };
+
+    // 0.4 控制面：web 的 GatewayOptions 尚未合入本分支，用 Object.assign 注入
+    // 冻结形状；合并后可直接写进 GatewayOptions。
+    const controlPlane = buildGatewayControlPlane({
+      config,
+      ...(result.metrics ? { metrics: result.metrics } : {}),
+      ...(result.workflows ? { workflows: result.workflows } : {}),
+      ...(result.feishu ? { feishu: result.feishu } : {}),
     });
+
+    gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
   }
 
   // ── Team / loopback 接线（A4）────────────────────
@@ -410,14 +464,26 @@ async function runWithConfig(result: BootstrapResult) {
     console.log(`\n${renderGatewayBanner(gateway)}\n`);
   }
 
+  let shutdownSignal: 'SIGINT' | 'SIGTERM' | undefined;
+  const waitForSignal = async (): Promise<void> => {
+    await new Promise<void>((resolve) => {
+      const onInterrupt = (): void => {
+        shutdownSignal = 'SIGINT';
+        resolve();
+      };
+      const onTerminate = (): void => {
+        shutdownSignal = 'SIGTERM';
+        resolve();
+      };
+      process.once('SIGINT', onInterrupt);
+      process.once('SIGTERM', onTerminate);
+    });
+  };
+
   // 纯 serve 模式（--serve 且无 --run）：gateway 常驻，不进 REPL，直到 SIGINT/SIGTERM。
   if (gateway && !headless) {
     console.log('Gateway 运行中… 按 Ctrl+C 停止。\n');
-    await new Promise<void>((resolve) => {
-      const stop = () => resolve();
-      process.once('SIGINT', stop);
-      process.once('SIGTERM', stop);
-    });
+    await waitForSignal();
   } else if (headless) {
     const exitCode = await runHeadless(runtime, ctx.session, {
       runArg,
@@ -427,6 +493,10 @@ async function runWithConfig(result: BootstrapResult) {
     });
     await result.shutdown();
     process.exit(exitCode);
+  } else if (args.feishu && process.stdin.isTTY !== true) {
+    // Addendum D §13.3：非 TTY + 无 --serve → 仅渠道前台，不启动 REPL。
+    console.log('Feishu channel running… 按 Ctrl+C 停止。\n');
+    await waitForSignal();
   } else {
     // REPL 启动后台检查：只提示、每天最多一次、失败静默。
     // 有新版本时发布 `update.available` 事件，由 TUI 消费。
@@ -456,5 +526,14 @@ async function runWithConfig(result: BootstrapResult) {
       // 关闭注册表失败不阻断退出
     }
   }
+
+  // 0.4：有 workflow / 显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
+  // 纯 0.3 serve 保持原来的自然退出（0）。
+  if (shutdownSignal && (result.workflows || args.feishu)) {
+    if (result.workflows) await result.interruptWorkflows();
+    await result.shutdown();
+    process.exit(signalExitCode(shutdownSignal));
+  }
+
   await result.shutdown();
 }

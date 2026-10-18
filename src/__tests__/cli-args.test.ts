@@ -32,6 +32,9 @@ describe('parseArgs - 默认与 REPL', () => {
       version: false,
       tools: false,
       update: null,
+      workflow: null,
+      eval: null,
+      feishu: false,
     });
   });
 });
@@ -214,5 +217,198 @@ describe('parseArgs - update 子命令', () => {
 describe('parseArgs - 未知参数', () => {
   it('未知参数报错，不静默忽略', () => {
     expect(err(['--bogus'])).toContain('Unknown argument: --bogus');
+  });
+
+  it('workflow / eval 只允许出现在位置 0', () => {
+    expect(err(['--run', 'x', 'workflow'])).toContain('Unknown argument: workflow');
+    expect(err(['--run', 'x', 'eval'])).toContain('Unknown argument: eval');
+  });
+});
+
+describe('parseArgs - workflow', () => {
+  it('workflow run 解析 target 与重复 --input', () => {
+    const args = ok(['workflow', 'run', 'release-check', '--input', 'a=1', '--input', 'b=x=y']);
+    expect(args.workflow).toEqual({
+      kind: 'run',
+      target: 'release-check',
+      inputs: { a: '1', b: 'x=y' },
+    });
+  });
+
+  it('workflow run 重复 key 后者覆盖', () => {
+    const args = ok(['workflow', 'run', 'x', '--input', 'a=1', '--input', 'a=2']);
+    expect(args.workflow).toEqual({ kind: 'run', target: 'x', inputs: { a: '2' } });
+  });
+
+  it('workflow run 允许空 value', () => {
+    const args = ok(['workflow', 'run', 'x', '--input', 'a=']);
+    expect(args.workflow).toEqual({ kind: 'run', target: 'x', inputs: { a: '' } });
+  });
+
+  it('workflow run 缺 target / 非法 input 报错', () => {
+    expect(err(['workflow', 'run'])).toContain('Missing workflow definition');
+    expect(err(['workflow', 'run', 'x', '--input'])).toContain('Missing value for --input');
+    expect(err(['workflow', 'run', 'x', '--input', 'bad'])).toContain('expected key=value');
+    expect(err(['workflow', 'run', 'x', '--input', '=v'])).toContain('expected key=value');
+    expect(err(['workflow', 'run', 'x', '--input', '1a=v'])).toContain('Invalid --input key');
+  });
+
+  it('workflow run 未知 flag / 多余位置参数报错', () => {
+    expect(err(['workflow', 'run', 'x', '--bogus'])).toContain('Unknown argument: --bogus');
+    expect(err(['workflow', 'run', 'x', 'y'])).toContain('Unexpected argument: y');
+  });
+
+  it('workflow list 缺省无 status/limit', () => {
+    expect(ok(['workflow', 'list']).workflow).toEqual({ kind: 'list' });
+  });
+
+  it('workflow list 解析 status / limit', () => {
+    expect(ok(['workflow', 'list', '--status', 'completed', '--limit', '200']).workflow).toEqual({
+      kind: 'list',
+      status: 'completed',
+      limit: 200,
+    });
+    expect(ok(['workflow', 'list', '--limit', '1']).workflow).toEqual({
+      kind: 'list',
+      limit: 1,
+    });
+  });
+
+  it('workflow list 非法 status / limit 报错', () => {
+    expect(err(['workflow', 'list', '--status', 'unknown'])).toContain('Invalid workflow status');
+    expect(err(['workflow', 'list', '--limit', '0'])).toContain('--limit must be');
+    expect(err(['workflow', 'list', '--limit', '201'])).toContain('--limit must be');
+    expect(err(['workflow', 'list', '--limit', 'abc'])).toContain('Invalid value for --limit');
+    expect(err(['workflow', 'list', '--status'])).toContain('Missing value for --status');
+  });
+
+  it('workflow list 未知 flag / 位置参数报错', () => {
+    expect(err(['workflow', 'list', '--bogus'])).toContain('Unknown argument: --bogus');
+    expect(err(['workflow', 'list', 'extra'])).toContain('Unknown argument: extra');
+  });
+
+  it('workflow show / resume / cancel 解析 id', () => {
+    expect(ok(['workflow', 'show', 'wf_1']).workflow).toEqual({
+      kind: 'show',
+      workflowRunId: 'wf_1',
+    });
+    expect(ok(['workflow', 'resume', 'wf_2']).workflow).toEqual({
+      kind: 'resume',
+      workflowRunId: 'wf_2',
+    });
+    expect(ok(['workflow', 'cancel', 'wf_3']).workflow).toEqual({
+      kind: 'cancel',
+      workflowRunId: 'wf_3',
+    });
+  });
+
+  it('workflow show / resume / cancel 缺 id 或多参数报错', () => {
+    expect(err(['workflow', 'show'])).toContain('Missing workflowRunId');
+    expect(err(['workflow', 'resume'])).toContain('Missing workflowRunId');
+    expect(err(['workflow', 'cancel'])).toContain('Missing workflowRunId');
+    expect(err(['workflow', 'show', 'a', 'b'])).toContain('Unexpected argument: b');
+    expect(err(['workflow', 'show', '--bogus'])).toContain('Unknown argument: --bogus');
+  });
+
+  it('未知 workflow 子命令 / 空子命令报错', () => {
+    expect(err(['workflow'])).toContain('Missing workflow subcommand');
+    expect(err(['workflow', 'bogus'])).toContain('Unknown workflow subcommand');
+  });
+
+  it('workflow 的 --help 走主帮助', () => {
+    expect(ok(['workflow', 'run', '--help']).help).toBe(true);
+    expect(ok(['workflow', 'list', '-h']).help).toBe(true);
+    expect(ok(['workflow', 'show', 'wf_1', '--help']).help).toBe(true);
+  });
+});
+
+describe('parseArgs - eval', () => {
+  it('解析 suite 与所有选项', () => {
+    const args = ok([
+      'eval',
+      'smoke',
+      '--json',
+      '--out',
+      '/tmp/report.json',
+      '--filter',
+      'smoke',
+      '--filter',
+      'fast',
+      '--allow-network',
+    ]);
+    expect(args.eval).toEqual({
+      target: 'smoke',
+      json: true,
+      out: '/tmp/report.json',
+      filters: ['smoke', 'fast'],
+      allowNetwork: true,
+    });
+  });
+
+  it('缺省选项', () => {
+    expect(ok(['eval', 'smoke']).eval).toEqual({
+      target: 'smoke',
+      json: false,
+      filters: [],
+      allowNetwork: false,
+    });
+  });
+
+  it('缺 suite / 选项缺值 / 多余位置参数报错', () => {
+    expect(err(['eval'])).toContain('Missing eval suite');
+    expect(err(['eval', 'smoke', '--out'])).toContain('Missing value for --out');
+    expect(err(['eval', 'smoke', '--filter'])).toContain('Missing value for --filter');
+    expect(err(['eval', 'smoke', 'extra'])).toContain('Unexpected argument: extra');
+    expect(err(['eval', 'smoke', '--bogus'])).toContain('Unknown argument: --bogus');
+  });
+
+  it('eval 的 --help 走主帮助', () => {
+    expect(ok(['eval', 'smoke', '--help']).help).toBe(true);
+  });
+});
+
+describe('parseArgs - --feishu 附加开关', () => {
+  it('单独使用合法', () => {
+    expect(ok(['--feishu']).feishu).toBe(true);
+  });
+
+  it('可与 --serve 同用', () => {
+    const args = ok(['--serve', '9000', '--feishu']);
+    expect(args.feishu).toBe(true);
+    expect(args.servePort).toBe(9000);
+  });
+
+  it('可与 --serve-host / TLS 同用', () => {
+    const args = ok([
+      '--serve',
+      '--serve-host',
+      '127.0.0.1',
+      '--tls-cert',
+      'cert.pem',
+      '--tls-key',
+      'key.pem',
+      '--feishu',
+    ]);
+    expect(args.feishu).toBe(true);
+    expect(args.tlsCert).toBe('cert.pem');
+  });
+
+  it('可与 --session 同用', () => {
+    const args = ok(['--feishu', '--session', 'abc']);
+    expect(args.feishu).toBe(true);
+    expect(args.sessionArg).toBe('abc');
+  });
+
+  it('与一次性输入命令互斥', () => {
+    for (const argv of [
+      ['--feishu', '--run', 'hi'],
+      ['--feishu', '--pipe'],
+      ['--feishu', '--resume-run', 'r1'],
+      ['--feishu', '--tools'],
+      ['--feishu', '--version'],
+      ['--feishu', '--help'],
+    ]) {
+      expect(err(argv)).toContain('--feishu cannot be combined with');
+    }
   });
 });

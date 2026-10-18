@@ -17,6 +17,7 @@ import type {
   AgentHandle,
   AgentSpec,
   ContextManager,
+  EventBus,
   LLMProvider,
   PluginHost,
   RunnableAgent,
@@ -61,6 +62,8 @@ export interface CreateHostRuntimeOptions {
   contextFactory?: () => ContextManager;
   /** R3 注入点；A4 接线 */
   transport?: Transport;
+  /** 0.4：Host 聚合事件总线；缺省由 core 新建（含 observability.event_history） */
+  events?: EventBus;
   /** 0.3 durable：Host 成员的 checkpoint store（Host 优先，单写者为成员 runtime） */
   runStore?: RunStore;
   /**
@@ -100,6 +103,7 @@ export async function tryCreateHostRuntime(
       ...(options.contextFactory ? { contextFactory: options.contextFactory } : {}),
       ...(owner.permission ? { permission: owner.permission } : {}),
       ...(options.transport ? { transport: options.transport } : {}),
+      ...(options.events ? { events: options.events } : {}),
       ...(options.runStore ? { runStore: options.runStore } : {}),
       scheduler: resolveScheduler(config),
       limits: resolveLimits(config, owner),

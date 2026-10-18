@@ -8,10 +8,14 @@ import type {
   ConfigValidationError,
   ConfigValidationResult,
   ConfigValidationWarning,
+  EvalsConfig,
+  FeishuConfig,
+  ObservabilityConfig,
   ServeConfig,
   TerminationConfig,
   UsageLimitsConfig,
   VesselConfig,
+  WorkflowConfig,
 } from './types.js';
 
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
@@ -95,6 +99,215 @@ function validateTermination(
         value: maxRuntimeSeconds,
       });
     }
+  }
+}
+
+/** 校验 workflow 块（0.4） */
+function validateWorkflow(workflow: WorkflowConfig, errors: ConfigValidationError[]): void {
+  const { enabled, dir, path, maxParallel, stepTimeoutMs } = workflow;
+
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'workflow.enabled',
+      message: 'workflow.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  if (dir !== undefined && (typeof dir !== 'string' || dir.trim() === '')) {
+    errors.push({
+      path: 'workflow.dir',
+      message: 'workflow.dir must be a non-empty string',
+      value: dir,
+    });
+  }
+  if (path !== undefined && (typeof path !== 'string' || path.trim() === '')) {
+    errors.push({
+      path: 'workflow.path',
+      message: 'workflow.path must be a non-empty string',
+      value: path,
+    });
+  }
+  if (
+    maxParallel !== undefined &&
+    (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 8)
+  ) {
+    errors.push({
+      path: 'workflow.maxParallel',
+      message: 'workflow.maxParallel must be an integer between 1 and 8',
+      value: maxParallel,
+    });
+  }
+  if (
+    stepTimeoutMs !== undefined &&
+    (!Number.isInteger(stepTimeoutMs) || stepTimeoutMs < 1 || stepTimeoutMs > 86400000)
+  ) {
+    errors.push({
+      path: 'workflow.stepTimeoutMs',
+      message: 'workflow.stepTimeoutMs must be an integer between 1 and 86400000',
+      value: stepTimeoutMs,
+    });
+  }
+}
+
+/** 校验 evals 块（0.4） */
+function validateEvals(evals: EvalsConfig, errors: ConfigValidationError[]): void {
+  const { enabled, dir, outDir, allowNetwork } = evals;
+
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'evals.enabled',
+      message: 'evals.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  if (dir !== undefined && (typeof dir !== 'string' || dir.trim() === '')) {
+    errors.push({ path: 'evals.dir', message: 'evals.dir must be a non-empty string', value: dir });
+  }
+  if (outDir !== undefined && (typeof outDir !== 'string' || outDir.trim() === '')) {
+    errors.push({
+      path: 'evals.outDir',
+      message: 'evals.outDir must be a non-empty string',
+      value: outDir,
+    });
+  }
+  if (allowNetwork !== undefined && typeof allowNetwork !== 'boolean') {
+    errors.push({
+      path: 'evals.allowNetwork',
+      message: 'evals.allowNetwork must be a boolean',
+      value: allowNetwork,
+    });
+  }
+}
+
+/** 校验 feishu 块（0.4；0.4 已移除单 agent_id） */
+function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): void {
+  const {
+    enabled,
+    appId,
+    appSecret,
+    domain,
+    allowedChatIds,
+    sessionPrefix,
+    replyTimeoutMs,
+    maxReplyChars,
+    maxMembers,
+  } = feishu;
+
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'feishu.enabled',
+      message: 'feishu.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  if (appId !== undefined && typeof appId !== 'string') {
+    errors.push({ path: 'feishu.appId', message: 'feishu.appId must be a string', value: appId });
+  }
+  if (appSecret !== undefined && typeof appSecret !== 'string') {
+    // 不把 secret 值放进 error
+    errors.push({ path: 'feishu.appSecret', message: 'feishu.appSecret must be a string' });
+  }
+  if (domain !== undefined && domain !== 'feishu' && domain !== 'lark') {
+    errors.push({
+      path: 'feishu.domain',
+      message: 'feishu.domain must be "feishu" or "lark"',
+      value: domain,
+    });
+  }
+  if (
+    allowedChatIds !== undefined &&
+    (!Array.isArray(allowedChatIds) ||
+      allowedChatIds.some((id) => typeof id !== 'string' || id.trim() === ''))
+  ) {
+    errors.push({
+      path: 'feishu.allowedChatIds',
+      message: 'feishu.allowedChatIds must be an array of non-empty strings',
+      value: allowedChatIds,
+    });
+  }
+  if (
+    sessionPrefix !== undefined &&
+    (typeof sessionPrefix !== 'string' ||
+      sessionPrefix.trim() === '' ||
+      /\s/.test(sessionPrefix) ||
+      sessionPrefix.includes(':') ||
+      sessionPrefix.includes('/') ||
+      sessionPrefix.includes('\\'))
+  ) {
+    errors.push({
+      path: 'feishu.sessionPrefix',
+      message: 'feishu.sessionPrefix must be non-empty without ":" or path separators',
+      value: sessionPrefix,
+    });
+  }
+  if (
+    replyTimeoutMs !== undefined &&
+    (!Number.isInteger(replyTimeoutMs) || replyTimeoutMs < 1 || replyTimeoutMs > 86400000)
+  ) {
+    errors.push({
+      path: 'feishu.replyTimeoutMs',
+      message: 'feishu.replyTimeoutMs must be an integer between 1 and 86400000',
+      value: replyTimeoutMs,
+    });
+  }
+  if (
+    maxReplyChars !== undefined &&
+    (!Number.isInteger(maxReplyChars) || maxReplyChars < 1 || maxReplyChars > 100000)
+  ) {
+    errors.push({
+      path: 'feishu.maxReplyChars',
+      message: 'feishu.maxReplyChars must be an integer between 1 and 100000',
+      value: maxReplyChars,
+    });
+  }
+  if (
+    maxMembers !== undefined &&
+    (!Number.isInteger(maxMembers) || maxMembers < 1 || maxMembers > 64)
+  ) {
+    errors.push({
+      path: 'feishu.maxMembers',
+      message: 'feishu.maxMembers must be an integer between 1 and 64',
+      value: maxMembers,
+    });
+  }
+
+  // 启用态必填：env 已在 loader 合并，这里只看最终 config。
+  if (enabled === true) {
+    if (typeof appId !== 'string' || appId.trim() === '') {
+      errors.push({
+        path: 'feishu.appId',
+        message: 'feishu.appId is required when feishu.enabled is true',
+      });
+    }
+    if (typeof appSecret !== 'string' || appSecret.trim() === '') {
+      errors.push({
+        path: 'feishu.appSecret',
+        message: 'feishu.appSecret is required when feishu.enabled is true',
+      });
+    }
+  }
+}
+
+/** 校验 observability 块（0.4） */
+function validateObservability(
+  observability: ObservabilityConfig,
+  errors: ConfigValidationError[],
+): void {
+  const { eventHistory, metrics } = observability;
+
+  if (eventHistory !== undefined && (!Number.isInteger(eventHistory) || eventHistory < 0)) {
+    errors.push({
+      path: 'observability.eventHistory',
+      message: 'observability.eventHistory must be a non-negative integer',
+      value: eventHistory,
+    });
+  }
+  if (metrics !== undefined && typeof metrics !== 'boolean') {
+    errors.push({
+      path: 'observability.metrics',
+      message: 'observability.metrics must be a boolean',
+      value: metrics,
+    });
   }
 }
 
@@ -786,6 +999,12 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateServeSettings(config.serve, errors);
   }
 
+  // 校验 0.4 四块；块缺省时不做任何事（保持 0.3 行为）。
+  if (config.workflow) validateWorkflow(config.workflow, errors);
+  if (config.evals) validateEvals(config.evals, errors);
+  if (config.feishu) validateFeishu(config.feishu, errors);
+  if (config.observability) validateObservability(config.observability, errors);
+
   // guardrails / hooks 在 0.1.0 尚未由装配层消费——明确警告，不静默忽略。
   if (config.guardrails && config.guardrails.length > 0) {
     warnings.push({
@@ -837,6 +1056,20 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: ['hostname', 'port', 'allowRemote', 'tls'],
+  workflow: ['enabled', 'dir', 'path', 'maxParallel', 'stepTimeoutMs'],
+  evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
+  feishu: [
+    'enabled',
+    'appId',
+    'appSecret',
+    'domain',
+    'allowedChatIds',
+    'sessionPrefix',
+    'replyTimeoutMs',
+    'maxReplyChars',
+    'maxMembers',
+  ],
+  observability: ['eventHistory', 'metrics'],
 };
 
 /** serve.tls 的已知键 */
@@ -909,4 +1142,8 @@ export const KNOWN_CONFIG_KEYS = [
   'mcpServers',
   'durable',
   'serve',
+  'workflow',
+  'evals',
+  'feishu',
+  'observability',
 ];

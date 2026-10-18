@@ -16,6 +16,7 @@ import type {
   Transport,
 } from '../../packages/core/src/index';
 import { MemoryRunStore } from '../../packages/core/src/index';
+import { MemoryEventBus } from '../../packages/core/src/kernel/index';
 import {
   buildOwnerSpec,
   type HostModule,
@@ -206,6 +207,30 @@ describe('tryCreateHostRuntime', () => {
       loadHostModule: async () => loaderFor(host2, captured2),
     });
     expect(captured2.options?.runStore).toBeUndefined();
+  });
+
+  it('observability：events 透传给 createRuntime；未提供时不出现', async () => {
+    const bus = new MemoryEventBus({ maxHistory: 5 });
+    const host = fakeHost();
+    const captured: { options?: RuntimeOptions } = {};
+    await tryCreateHostRuntime({
+      config: {},
+      owner,
+      sessionId: 's1',
+      events: bus,
+      loadHostModule: async () => loaderFor(host, captured),
+    });
+    expect(captured.options?.events).toBe(bus);
+
+    const host2 = fakeHost();
+    const captured2: { options?: RuntimeOptions } = {};
+    await tryCreateHostRuntime({
+      config: {},
+      owner,
+      sessionId: 's1',
+      loadHostModule: async () => loaderFor(host2, captured2),
+    });
+    expect(captured2.options?.events).toBeUndefined();
   });
 
   it('limits：run/agent 同源，host.limits 缺省关闭', async () => {
