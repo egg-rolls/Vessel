@@ -76,6 +76,8 @@ function compareCheckpoints(a: RunCheckpoint, b: RunCheckpoint): number {
  * `kept` = 本次操作后仍保留的、符合 `status` 过滤的条目数。
  * 由于 `RunStore.list` 单次最多返回 200 条，超出该窗口的条目无法精确统计；
  * `keep_latest > 200` 也不保证精确。
+ * `older_than_ms` 同样受 200 窗口限制：若首个窗口内没有可删项，更旧的条目
+ * 无法被本轮列表触及，因此年龄裁剪在超大数据集上也是尽力而为。
  *
  * 删除过程中任一 `list` / `delete` 抛错会直接向上传播；错误前已完成的删除保留。
  */
