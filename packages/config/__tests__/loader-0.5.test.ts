@@ -247,6 +247,65 @@ tenant:
     expect(tenantOverlayKeys).toContain('provider.apiKey');
     expect(validation.errors.some((e) => e.message.includes('tenant-key-value'))).toBe(false);
   });
+
+  it('non-default tenant overlay _env starts and resolves without being rejected', async () => {
+    const user = tmpYaml(`
+tenant:
+  default: acme
+  tenants:
+    acme:
+      config: {}
+    work:
+      config:
+        provider:
+          api_key_env: TENANT_API_KEY
+        feishu:
+          enabled: true
+          app_id: cli_work
+          app_secret_env: TENANT_FEISHU_SECRET
+`);
+
+    const { config, validation, tenantId } = await load({
+      user,
+      tenantId: 'work',
+      env: {
+        TENANT_API_KEY: 'work-key-value',
+        TENANT_FEISHU_SECRET: 'work-secret-value',
+      },
+    });
+
+    expect(tenantId).toBe('work');
+    expect(config.provider?.apiKey).toBe('work-key-value');
+    expect(config.feishu?.appSecret).toBe('work-secret-value');
+    expect(validation.errors).toEqual([]);
+
+    // 原始 overlay 保持 `_env`，不写回解析值。
+    const overlay = config.tenant?.tenants?.work?.config;
+    expect(overlay?.provider?.apiKey).toBeUndefined();
+    expect(overlay?.provider?.apiKeyEnv).toBe('TENANT_API_KEY');
+    expect(overlay?.feishu?.appSecret).toBeUndefined();
+    expect(overlay?.feishu?.appSecretEnv).toBe('TENANT_FEISHU_SECRET');
+  });
+
+  it('default tenant overlay _env resolves the same way', async () => {
+    const user = tmpYaml(`
+tenant:
+  default: acme
+  tenants:
+    acme:
+      config:
+        provider:
+          api_key_env: TENANT_API_KEY
+`);
+
+    const { config, validation } = await load({
+      user,
+      env: { TENANT_API_KEY: 'default-key-value' },
+    });
+
+    expect(config.provider?.apiKey).toBe('default-key-value');
+    expect(validation.errors).toEqual([]);
+  });
 });
 
 describe('loadConfig 0.5 - 未知键与项目密钥', () => {

@@ -199,6 +199,8 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
       '    acme:',
       '      status: active',
       '      config:',
+      '        provider:',
+      '          api_key_env: ACME_API_KEY',
       '        agent:',
       '          system_prompt: acme-prompt',
       '        plugins:',
@@ -238,7 +240,14 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
 
   const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
     cwd: dir,
-    env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
+    env: {
+      ...process.env,
+      VESSEL_MOCK: '1',
+      USERPROFILE: dir,
+      HOME: dir,
+      // A6-23：非 default tenant overlay 的 _env 必须能正常启动。
+      ACME_API_KEY: 'acme-key-from-env',
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
