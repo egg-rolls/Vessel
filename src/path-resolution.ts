@@ -53,16 +53,39 @@ export function resolveWorkflowDir(config: VesselConfig): string {
   return resolveFromCwd(config.workflow?.dir ?? DEFAULT_WORKFLOW_OPTIONS.dir);
 }
 
-export function resolveWorkflowStorePath(config: VesselConfig): string {
-  return resolveFromCwd(config.workflow?.path ?? DEFAULT_WORKFLOW_OPTIONS.path);
+/** tenant 最终路径选项（A-3 §10.7：插件不得自行追加 tenants/<id>） */
+export interface TenantPathOptions {
+  /** tenant 根目录（`<data_dir>/tenants/<id>`） */
+  tenantDir?: string;
+}
+
+/**
+ * workflow run 状态目录：
+ * 显式 `workflow.path` → `<tenant>/workflows` → legacy 默认。
+ */
+export function resolveWorkflowStorePath(
+  config: VesselConfig,
+  opts: TenantPathOptions = {},
+): string {
+  const explicit = config.workflow?.path;
+  if (explicit !== undefined && explicit.trim() !== '') return resolveFromCwd(explicit);
+  if (opts.tenantDir) return path.join(opts.tenantDir, 'workflows');
+  return resolveFromCwd(DEFAULT_WORKFLOW_OPTIONS.path);
 }
 
 export function resolveEvalsDir(config: VesselConfig): string {
   return resolveFromCwd(config.evals?.dir ?? DEFAULT_EVALS_OPTIONS.dir);
 }
 
-export function resolveEvalsOutDir(config: VesselConfig): string {
-  return resolveFromCwd(config.evals?.outDir ?? DEFAULT_EVALS_OPTIONS.outDir);
+/**
+ * eval 报告目录：
+ * 显式 `evals.outDir` → `<tenant>/evals` → legacy 默认。
+ */
+export function resolveEvalsOutDir(config: VesselConfig, opts: TenantPathOptions = {}): string {
+  const explicit = config.evals?.outDir;
+  if (explicit !== undefined && explicit.trim() !== '') return resolveFromCwd(explicit);
+  if (opts.tenantDir) return path.join(opts.tenantDir, 'evals');
+  return resolveFromCwd(DEFAULT_EVALS_OPTIONS.outDir);
 }
 
 export function isSafeWorkflowName(name: string): boolean {

@@ -18,13 +18,22 @@ export interface ResolvedDurableOptions {
   checkpointEvery: 'iteration';
 }
 
+/** run store 选项 */
+export interface RunStoreOptions {
+  /** tenant 的 runs 目录（`<tenant>/runs`）；显式 durable.path 优先 */
+  tenantRunsDir?: string;
+}
+
 /** config → durable 选项（默认值只在 DEFAULT_DURABLE_OPTIONS 一处） */
-export function resolveDurableOptions(config: VesselConfig): ResolvedDurableOptions {
+export function resolveDurableOptions(
+  config: VesselConfig,
+  opts: RunStoreOptions = {},
+): ResolvedDurableOptions {
   const durable = config.durable;
   return {
     enabled: durable?.enabled === true,
     backend: durable?.backend ?? DEFAULT_DURABLE_OPTIONS.backend,
-    path: durable?.path ?? DEFAULT_DURABLE_OPTIONS.path,
+    path: durable?.path ?? opts.tenantRunsDir ?? DEFAULT_DURABLE_OPTIONS.path,
     checkpointEvery: 'iteration',
   };
 }
@@ -43,8 +52,11 @@ export function resolveRunStorePath(input?: string): string {
 }
 
 /** 按配置创建 store；durable 关闭时返回 undefined */
-export function createRunStore(config: VesselConfig): RunStore | undefined {
-  const options = resolveDurableOptions(config);
+export function createRunStore(
+  config: VesselConfig,
+  opts: RunStoreOptions = {},
+): RunStore | undefined {
+  const options = resolveDurableOptions(config, opts);
   if (!options.enabled) return undefined;
 
   if (options.backend === 'memory') return new MemoryRunStore();
