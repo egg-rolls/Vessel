@@ -3,9 +3,9 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
-## [Unreleased]
+## [0.5.0] - 2026-10-18
 
-> 0.5 开发中；版本号在收口时由 1 统一 bump。0.5 仍只做发布干跑，不 tag、不 publish、不合并 `main`。
+> 0.5 代码就绪，发布决定在 1；0.5 仍只做发布干跑，不 tag、不 publish、不合并 `main`。
 
 ### Added
 
@@ -42,6 +42,7 @@
 - `pruneTrace` 不删除 `running` / `interrupted` run；tenant 删除默认 disabled，0.5 无 `--purge`。
 - `--connect` 只连本机回环 gateway；**F5 跨机器远程在 0.6**。
 - 多租户执行已实现（ext 插件、web 接口、asm per-tenant 执行面）；**gateway 的 workflow / 飞书控制面仍只走 default tenant**（A-6 §13.3 方法表未包含 per-tenant 变体）。
+- Windows 上 programmatic SIGINT 不触发 Bun 信号处理器，shutdown 释放 tenant 锁（A6-17/A6-21c）未自动验证；代码路径存在（`tenantFactory?.closeAll()`），需 POSIX CI 补验。
 - **微信（公众号 / 企业微信）不做**；0.5 不发布。
 
 ## [0.4.0] - 2026-10-18
