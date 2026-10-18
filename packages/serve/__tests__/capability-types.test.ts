@@ -45,17 +45,22 @@ describe('workflow parsers', () => {
     expect(parseWorkflowLimit('')).toBeNull();
   });
 
-  it('accepts only safe single-segment names', () => {
+  it('accepts only safe single-segment names of 1..64 chars', () => {
     expect(isSafeWorkflowName('release-check')).toBe(true);
-    expect(isSafeWorkflowName('a.b_c-1')).toBe(true);
+    expect(isSafeWorkflowName('a_b-1')).toBe(true);
+    expect(isSafeWorkflowName('-x')).toBe(true);
+    expect(isSafeWorkflowName('a'.repeat(64))).toBe(true);
     expect(isSafeWorkflowName('')).toBe(false);
+    expect(isSafeWorkflowName('.')).toBe(false);
+    expect(isSafeWorkflowName('..')).toBe(false);
+    expect(isSafeWorkflowName('a.b_c-1')).toBe(false);
     expect(isSafeWorkflowName('../x')).toBe(false);
     expect(isSafeWorkflowName('a/b')).toBe(false);
     expect(isSafeWorkflowName('a\\b')).toBe(false);
     expect(isSafeWorkflowName('a..b')).toBe(false);
     expect(isSafeWorkflowName('.hidden')).toBe(false);
-    expect(isSafeWorkflowName('-x')).toBe(false);
     expect(isSafeWorkflowName('a b')).toBe(false);
+    expect(isSafeWorkflowName('a'.repeat(65))).toBe(false);
     expect(isSafeWorkflowName('a'.repeat(129))).toBe(false);
   });
 });

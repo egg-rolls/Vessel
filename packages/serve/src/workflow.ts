@@ -129,14 +129,15 @@ export function parseWorkflowLimit(raw: string | null): number | null {
   return value;
 }
 
-const SAFE_WORKFLOW_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+// 与 asm resolver / 冻结契约一致：1..64 个 [A-Za-z0-9_-]，不允许点、路径分隔符。
+const SAFE_WORKFLOW_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 
 /**
- * gateway 只接受单段安全名：不含路径分隔符、盘符或 `..`。
+ * gateway 只接受单段安全名：仅字母、数字、下划线、连字符，长度 1..64。
  * 真正的目录解析由 asm 注入的 resolveDefinition 完成。
  */
 export function isSafeWorkflowName(raw: string): boolean {
-  return SAFE_WORKFLOW_NAME.test(raw) && !raw.includes('..');
+  return SAFE_WORKFLOW_NAME.test(raw);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
