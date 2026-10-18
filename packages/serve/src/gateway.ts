@@ -905,7 +905,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     tenantId: string = defaultTenantId,
   ): Promise<{ sessions: unknown[] }> {
     const backend = sessionFor(tenantId);
-    if (!backend) throw new MethodError('no_session', 'No session backend configured');
+    if (!backend) {
+      // 非 default tenant 未注入 sessionFor → 明确的 forbidden；default 保持旧语义。
+      if (tenantId !== defaultTenantId) {
+        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
+      }
+      throw new MethodError('no_session', 'No session backend configured');
+    }
     return { sessions: await backend.listRich() };
   }
 
@@ -2052,7 +2058,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function requireRuntime(tenantId: string): RunnableAgent {
     const resolved = runtimeFor(tenantId);
     if (!resolved) {
-      throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
+      // 非 default tenant 未注入 runtimeFor → forbidden；default 保持旧码。
+      if (tenantId !== defaultTenantId) {
+        throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
+      }
+      throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
     }
     return resolved;
   }
@@ -2060,7 +2070,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function requireSession(tenantId: string): SessionBackend {
     const resolved = sessionFor(tenantId);
     if (!resolved) {
-      throw new RpcError('not_found', `Tenant session backend is not configured: ${tenantId}`);
+      if (tenantId !== defaultTenantId) {
+        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
+      }
+      throw new RpcError('not_found', 'No session backend configured');
     }
     return resolved;
   }
@@ -3089,6 +3102,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       'http',
     );
     if (response.ok) return response.result;
+    // 0.4 兼容：default tenant 未配置 session backend 时旧路径返回 invalid_request。
+    if (
+      response.error.code === 'internal' &&
+      response.error.message === 'No session backend configured'
+    ) {
+      throw new LegacyRpcError('invalid_request', response.error.message);
+    }
     const details = response.error.details as { legacy_code?: unknown } | undefined;
     const legacy =
       details && typeof details.legacy_code === 'string'
