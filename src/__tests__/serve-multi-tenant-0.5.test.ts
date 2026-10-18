@@ -63,7 +63,7 @@ async function waitForOutput(
 
 interface RpcResponse {
   result?: unknown;
-  error?: { code?: string; message?: string };
+  error?: { code?: string; message?: string; details?: unknown };
 }
 
 async function rpc(
@@ -98,6 +98,74 @@ function traceText(dir: string, tenantId: string): string {
     .map((name) => fs.readFileSync(path.join(eventsDir, name), 'utf8'))
     .join('\n');
 }
+
+it('enforces config max_concurrent_runs through the tenant registry', async () => {
+  const dir = tmpDir();
+  writeFile(
+    path.join(dir, 'vessel.yaml'),
+    [
+      'provider:',
+      '  name: openai',
+      '  model: gpt-4',
+      'tenant:',
+      '  default: acme',
+      '  tenants:',
+      '    acme:',
+      '      status: active',
+      '      config: {}',
+      '    zero:',
+      '      status: active',
+      '      quota:',
+      '        max_concurrent_runs: 0',
+      '      config: {}',
+      '',
+    ].join('\n'),
+  );
+  writeFile(
+    path.join(dir, '.vessel', 'config.yaml'),
+    [
+      'serve:',
+      '  tokens:',
+      '    tok-acme:',
+      '      tenant_id: acme',
+      '      role: admin',
+      '    tok-zero:',
+      '      tenant_id: zero',
+      '      role: admin',
+      '',
+    ].join('\n'),
+  );
+
+  const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
+    cwd: dir,
+    env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+
+  try {
+    const output = await waitForOutput(proc, /Gateway\s+http/);
+    const url = /Gateway\s+(http[^\s]+)/.exec(output)?.[1] as string;
+    expect(url).toBeDefined();
+
+    const info = await rpc(url, 'tok-zero', 'tenants.get', { tenant_id: 'zero' });
+    expect(
+      (info.result as { tenant: { quota?: { max_concurrent_runs?: number } } }).tenant.quota,
+    ).toMatchObject({ max_concurrent_runs: 0 });
+
+    const started = await rpc(url, 'tok-zero', 'runs.start', { input: 'blocked' });
+    expect(started.error?.code).toBe('quota_exceeded');
+    expect(started.error?.details).toMatchObject({ tenant_id: 'zero', limit: 0 });
+
+    // acme 无 quota，仍可启动。
+    const acme = await rpc(url, 'tok-acme', 'runs.start', { input: 'ok' });
+    expect(acme.error).toBeUndefined();
+  } finally {
+    proc.kill();
+    await proc.exited;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}, 30000);
 
 it('serves two isolated tenants with per-tenant tokens', async () => {
   const dir = tmpDir();
@@ -176,7 +244,15 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     const tenantList = (await rpc(url, 'tok-admin', 'tenants.list', {})).result as {
       tenants: Array<{ tenant_id: string; status: string }>;
     };
-    expect(tenantList.tenants.map((tenant) => tenant.tenant_id).sort()).toEqual(['acme', 'work']);
+    // 配置里的 tenant（含 disabled）都应出现在 registry 中。
+    expect(tenantList.tenants.map((tenant) => tenant.tenant_id).sort()).toEqual([
+      'acme',
+      'off',
+      'work',
+    ]);
+    expect(tenantList.tenants.find((tenant) => tenant.tenant_id === 'off')?.status).toBe(
+      'disabled',
+    );
 
     const tenantGet = await rpc(url, 'tok-admin', 'tenants.get', { tenant_id: 'acme' });
     expect((tenantGet.result as { tenant: { tenant_id: string } }).tenant.tenant_id).toBe('acme');

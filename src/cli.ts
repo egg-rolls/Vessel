@@ -628,7 +628,10 @@ async function runWithConfig(result: BootstrapResult) {
         ? {
             defaultTenantId: result.tenantId,
             // A6-13：tenants.get/list/create/update 的数据源。
-            tenants: createTenantControl(dataDir),
+            // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
+            tenants: createTenantControl(dataDir, {
+              ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
+            }),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),

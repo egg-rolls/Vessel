@@ -675,7 +675,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }) as unknown as ConfigSnapshotLike;
       },
     },
-    tenants: createTenantControl(dataDir),
+    tenants: createTenantControl(dataDir, {
+      ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
+    }),
     plugins: () => plugins.map((plugin) => ({ name: plugin.name, enabled: true })),
     ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
     metricsControl: {

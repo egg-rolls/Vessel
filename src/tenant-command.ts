@@ -273,6 +273,53 @@ export async function tenantUpdateCommand(
 
 // ── Gateway 注入面（A-5：TenantControlLike） ────────────────
 
+/** 配置里的 tenant 元数据（`tenant.tenants.<id>` 的 name/status/quota） */
+export interface ConfiguredTenant {
+  name?: string;
+  status?: 'active' | 'disabled';
+  quota?: TenantMeta['quota'];
+}
+
+export interface CreateTenantControlOptions {
+  /**
+   * 已合并配置中的 tenant 定义。配置是 status/quota 的权威来源
+   * （A-3 §10.4）；tenant.json 只在配置缺失时兜底。
+   */
+  configured?: Record<string, ConfiguredTenant>;
+}
+
+/** 配置定义 → TenantMeta（created_at=0 表示未落盘） */
+function configuredMeta(
+  tenantId: string,
+  entry: ConfiguredTenant | undefined,
+): TenantMeta | undefined {
+  if (!entry) return undefined;
+  return {
+    tenant_id: tenantId,
+    name: entry.name ?? tenantId,
+    created_at: 0,
+    status: entry.status ?? 'active',
+    ...(entry.quota ? { quota: { ...entry.quota } } : {}),
+  };
+}
+
+/** 磁盘 meta 与配置 meta 合并；配置的 status/quota 优先。 */
+function mergeMeta(
+  disk: TenantMeta | undefined,
+  configured: TenantMeta | undefined,
+): TenantMeta | undefined {
+  if (!disk) return configured;
+  if (!configured) return disk;
+  return {
+    ...disk,
+    name: configured.name,
+    status: configured.status,
+    ...(configured.quota || disk.quota
+      ? { quota: { ...(disk.quota ?? {}), ...(configured.quota ?? {}) } }
+      : {}),
+  };
+}
+
 function tenantControlError(
   code: 'not_found' | 'conflict' | 'invalid_params',
   message: string,
@@ -317,14 +364,43 @@ function toTenantInfo(meta: TenantMeta): TenantInfo {
 }
 
 /** `GatewayOptions.tenants` 的 asm 适配（0.5 无 purge） */
-export function createTenantControl(dataDir: string): TenantControlLike {
+export function createTenantControl(
+  dataDir: string,
+  options: CreateTenantControlOptions = {},
+): TenantControlLike {
+  const configured = options.configured ?? {};
+  const configuredFor = (tenantId: string): TenantMeta | undefined =>
+    configuredMeta(tenantId, configured[tenantId]);
+
+  /** tenant.json（若目录存在）与配置定义合并；配置优先。 */
+  const resolveMeta = async (tenantId: string): Promise<TenantMeta | undefined> => {
+    const paths = resolveTenantPaths(dataDir, tenantId);
+    const disk = existsSync(paths.root)
+      ? ((await readMeta(paths)) ?? synthesizedMeta(tenantId))
+      : undefined;
+    return mergeMeta(disk, configuredFor(tenantId));
+  };
+
   return {
     async list(): Promise<TenantInfo[]> {
-      return (await listTenantMetas(dataDir)).map(toTenantInfo);
+      const byId = new Map<string, TenantMeta>();
+      for (const meta of await listTenantMetas(dataDir)) byId.set(meta.tenant_id, meta);
+      for (const tenantId of Object.keys(configured)) {
+        try {
+          assertTenantId(tenantId);
+        } catch {
+          continue;
+        }
+        const merged = mergeMeta(byId.get(tenantId), configuredFor(tenantId));
+        if (merged) byId.set(tenantId, merged);
+      }
+      return [...byId.values()]
+        .sort((a, b) => a.tenant_id.localeCompare(b.tenant_id))
+        .map(toTenantInfo);
     },
 
     async get(tenantId: string): Promise<TenantInfo | null> {
-      const meta = await getTenantMeta(dataDir, tenantId);
+      const meta = await resolveMeta(tenantId);
       return meta ? toTenantInfo(meta) : null;
     },
 
@@ -338,7 +414,7 @@ export function createTenantControl(dataDir: string): TenantControlLike {
         throw tenantControlError('invalid_params', `invalid tenant id "${tenantId}"`);
       }
       const paths = resolveTenantPaths(dataDir, tenantId);
-      if (existsSync(paths.root)) {
+      if (existsSync(paths.root) || configuredFor(tenantId)) {
         throw tenantControlError('conflict', `tenant "${tenantId}" already exists`);
       }
 
@@ -371,7 +447,7 @@ export function createTenantControl(dataDir: string): TenantControlLike {
         throw tenantControlError('invalid_params', `invalid tenant id "${tenantId}"`);
       }
       const paths = resolveTenantPaths(dataDir, tenantId);
-      if (!existsSync(paths.root)) {
+      if (!(await resolveMeta(tenantId))) {
         throw tenantControlError('not_found', `tenant "${tenantId}"`);
       }
 
