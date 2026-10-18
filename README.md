@@ -26,13 +26,15 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 ## 状态
 
-**alpha。Phase 0 / Phase 1 实现中。**
+**alpha。0.5 Phase 0 / Phase 1 已实现（`release/0.5`），未发布。**
 
 **0.2 状态：** 多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，**未随版本发布**）；`AgentRuntime` 仍是单 agent loop，Host 只包在它外面，不重写循环。边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 与 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md)。
 
 **0.3 状态：** durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，**未随版本发布**）；默认行为与 0.2 一致，新能力全部 opt-in 或默认关闭。决策边界见 [ADR-039](docs/adr/ADR-039-mcp-client-as-plugin.md) / [ADR-040](docs/adr/ADR-040-durable-run-store-checkpoint-resume.md) / [ADR-041](docs/adr/ADR-041-remote-listen-and-tls.md)。
 
 **0.4 状态：** workflow 编排、evals harness、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，**未随版本发布**）；三个能力全部是插件、默认关闭，四个新配置块缺省时行为与 0.3 一致。决策边界见 [ADR-042](docs/adr/ADR-042-workflow-engine-as-plugin.md) / [ADR-043](docs/adr/ADR-043-evals-harness-offline.md) / [ADR-044](docs/adr/ADR-044-feishu-channel-plugin.md) / [ADR-045](docs/adr/ADR-045-0-4-observability-and-stability.md)。0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；**0.4 只做发布干跑，不 tag、不 publish、不合并 `main`**。
+
+**0.5 状态：** 文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，**未随版本发布**）；默认 `session.backend: file`，trace 默认 `full`（30 天 / 1000 runs / 1 GiB），tenant 缺省 `default`。Phase 2 插件 tenant 行为（E20）**planned (0.5)**，等 ext 合并后补齐。F5 跨机器远程拆到 0.6，微信不做。决策边界见 [ADR-046](docs/adr/ADR-046-file-first-storage.md) / [ADR-047](docs/adr/ADR-047-trace-first-observability.md) / [ADR-048](docs/adr/ADR-048-unified-rpc-method-table.md) / [ADR-049](docs/adr/ADR-049-multi-tenant-isolation.md) / [ADR-050](docs/adr/ADR-050-yaml-first-config-and-secrets.md)。
 
 **已落地的包**（bun workspaces monorepo）：
 
@@ -99,6 +101,14 @@ bun run src/cli.ts --feishu                     # 前台运行飞书渠道（需
 bun run src/cli.ts --version                    # 显示版本（读根 package.json）
 bun run src/cli.ts --tools                      # 列出当前配置下的工具（不需要 Key）
 bun run src/cli.ts update --check               # 检查新版本（只提示，不自替换）
+bun run src/cli.ts config path                  # 两个 YAML 路径 + data_dir
+bun run src/cli.ts config init                  # 生成 ~/.vessel/config.yaml 模板（不含真实密钥）
+bun run src/cli.ts config show --sources        # 合并后的脱敏配置与来源
+bun run src/cli.ts tenant list                  # tenant 元数据
+bun run src/cli.ts migrate --from sqlite --to file-v2   # 默认 dry-run
+bun run src/cli.ts trace prune --dry-run        # 查看将清理的 trace
+bun run src/cli.ts --tenant acme --run "..."    # 指定 tenant
+bun run src/cli.ts --connect http://127.0.0.1:8642 --run "..."  # 走本机 gateway RPC，不取 tenant 锁
 bun test                                        # 跑测试
 ```
 
@@ -329,6 +339,15 @@ observability:
   不自动调度，不修改 `RunStore` 接口。
 - gateway `GET /v1/metrics`；TUI `/metrics`；慢客户端丢事件并标记 `gap`，4 MiB 硬断开。
 
+## 数据、trace 与租户（0.5）
+
+- 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；每个 tenant 在 `tenants/<id>/` 下独立存放 `sessions/`、`runs/`、`events/` 与 `tenant.json`。
+- 默认 `session.backend: file`；sqlite 仍可用。旧 `.vessel/sessions.db` 不会自动迁移：先跑 `vessel migrate --from sqlite --to file-v2`（默认 dry-run），确认后加 `--apply`。详见 [MIGRATION.md](docs/operations/MIGRATION.md)。
+- trace 默认开启 `full`，按 30 天 / 1000 runs / 1 GiB prune；`metadata` 只留计数与状态。详见 [TRACE.md](docs/operations/TRACE.md)。
+- tenant 解析：`--tenant` > `VESSEL_TENANT` > `tenant.default` > `default`；gateway 用 `serve.tokens` 发放 tenant token，`serve.token` 仅 0.4 兼容。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。
+- 配置：`config path|init|show`；优先级 `CLI > env > tenant overlay > project > user > default`。详见 [CONFIG.md](docs/operations/CONFIG.md)。
+- 0.5 不脱敏 run checkpoint / eval 报告 / 飞书回复；redactor 只降低泄漏面。
+
 ## Web 控制台
 
 `--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。
@@ -364,11 +383,11 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 以下能力**尚未实现**，明确不在本期范围：
 
-- **多租户** —— 未开始，留 0.5。
-- **workflow 可视化编辑器 / 跨机器编排** —— 未实现；0.4 只做本机声明式编排，workflow 定义是 YAML/JSON 文件。
-- **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；0.4 只做文本、单 chat 单 session。
-- **微信（公众号 / 企业微信）** —— 0.5 评估；个人微信无官方 API，不做。
-- **跨机器调度 / 跨节点 team** —— 未实现；0.3 的 durable 只做本机，team 的跨进程仍限本机 loopback。
+- **F5 跨机器远程 / 跨节点调度** —— 未实现，拆到 0.6；0.5 的 `--connect` 只连本机回环 gateway。
+- **workflow 可视化编辑器 / 跨机器编排** —— 未实现；0.5 只做本机声明式编排，workflow 定义是 YAML/JSON 文件。
+- **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；0.5 只做文本、单 chat 单 session。
+- **微信（公众号 / 企业微信）** —— **不做**；个人微信无官方 API。
+- **跨节点 team** —— 未实现；team 的跨进程仍限本机 loopback。
 - **npm CLI** —— 只发库包与插件包，根 CLI 未发布，`npx vessel` 不可用。
 - **独立二进制 / 自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
 - **0.1.0 / 0.2 / 0.3.0 / 0.4.0 发布** —— 均未发布；0.4 只干跑；发布决定在 1。
@@ -383,6 +402,9 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md) | 文件放哪里、路径归属、分支与发布规则 | 贡献者 / AI |
 | [docs/operations/RELEASE.md](docs/operations/RELEASE.md) | 怎么发版 | 维护者 |
 | [docs/operations/CI-CD.md](docs/operations/CI-CD.md) | CI / CD / 自动更新怎么跑 | 维护者 |
+| [docs/operations/CONFIG.md](docs/operations/CONFIG.md) | 配置位置、优先级、tenant overlay 与密钥 | 部署者 / 维护者 |
+| [docs/operations/MIGRATION.md](docs/operations/MIGRATION.md) | sqlite / file-v1 → file-v2 迁移 | 升级用户 |
+| [docs/operations/TRACE.md](docs/operations/TRACE.md) | trace 留存、脱敏与重放 | 部署者 / 维护者 |
 | [AGENTS.md](AGENTS.md) | AI 行为约定：风格、硬规矩、怎么跑、红线 | AI 代理必读 |
 
 ## 贡献

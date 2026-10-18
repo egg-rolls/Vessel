@@ -4,7 +4,7 @@
 
 ## 项目是什么
 
-Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个接口 + 1 个通用 tool-calling loop + 2 个插槽）、Provider 无关；TUI / CLI / Web / Gateway 是参考 harness 外壳。
+Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定接口 + 1 个通用 tool-calling loop + 扩展插槽）、Provider 无关；TUI / CLI / Web / Gateway 是参考 harness 外壳。
 
 - **语言/运行时**：TypeScript + Bun。
 - **monorepo**：bun workspaces。`packages/{core,config,tui,serve,permission}` + `plugins/` + `apps/web`。
@@ -14,6 +14,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个�
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
 - **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
 - **0.4 状态**：workflow、evals、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，未随版本发布）；三个能力全部是插件、默认关闭；0.4 只做发布干跑，不 tag / publish / 合并 `main`。决策边界见 ADR-042 / 043 / 044 / 045。
+- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为（E20）标 `planned (0.5)`，等 ext 合并后补齐。F5 跨机器远程在 0.6，微信不做。决策边界见 ADR-046 ~ ADR-050。
 
 ## 代码风格与硬规矩
 
@@ -36,7 +37,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（9 个�
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.4` → `0.4.0-<role>`（`release/0.1` / `release/0.2` / `release/0.3` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。0.4 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.5` → `0.5.0-<role>`（`release/0.1` ~ `release/0.4` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。0.5 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -49,6 +50,12 @@ VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # headless 冒烟
 bun run src/cli.ts --version                    # 版本（根 package.json）
 bun run src/cli.ts --tools                      # 当前配置下的工具（无 Key）
 bun run src/cli.ts update --check               # 检查新版本（只提示）
+bun run src/cli.ts config path                  # YAML 路径 + data_dir
+bun run src/cli.ts config init                  # 生成用户配置模板（不含真实密钥）
+bun run src/cli.ts config show --sources        # 脱敏配置与来源
+bun run src/cli.ts tenant list                  # tenant 元数据
+bun run src/cli.ts migrate --from sqlite --to file-v2   # 默认 dry-run
+bun run src/cli.ts trace prune --dry-run        # 查看将清理的 trace
 bun run demo                                    # 无 Key 跑核心示例
 bun run src/cli.ts workflow list                # workflow run 列表（controls-only 可用）
 bun run src/cli.ts eval smoke                   # eval suite（默认离线）
@@ -88,7 +95,12 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户仍是非目标；team 仍默认 off、显式 opt-in。
+- 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户已进 core（`tenant` 解析/隔离原语），但 **F5 跨机器远程仍是非目标**；team 仍默认 off、显式 opt-in。
+- 0.5 默认 `session.backend: file`；不要删除 sqlite 后端，也不要在检测到 legacy 数据时自动迁移——只提示 `vessel migrate`。
+- 别把 tenant overlay 写成能覆盖 CLI/env；优先级固定 `CLI > env > tenant overlay > project > user > default`。
+- 别绕开 RPC 方法表直接调内部实现；新增 canonical 方法必须发 addendum。
+- 别在 trace / 事件 / 日志 / `config show` 输出解析后的密钥值；0.5 不脱敏 checkpoint / eval 报告 / 飞书回复，文档不得写成“已脱敏”。
+- 别让多个进程同时写同一 tenant；写前必须拿 `.lock`，冲突返回 `tenant_locked`。
 - 别在日志 / 事件 / 报告里输出飞书的 `app_secret` 或完整 `app_id`；只允许前 4 位 + `***`。
 - 别在 workflow 的 `type: tool` 步骤里期待 guardrail / hook——它直接调 handler；需要 guardrail 用 `type: agent`。
 - 别默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环不得匿名。
