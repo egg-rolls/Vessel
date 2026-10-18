@@ -83,6 +83,10 @@ export {
   type StartupNoticeInput,
 } from './repl/startup-notice.js';
 export type {
+  CapabilityManifestLike,
+  CapabilityMethodLike,
+  CapabilityPluginLike,
+  CapabilityToolLike,
   DurableRunHandle,
   DurableRunOutcome,
   DurableRunSummary,

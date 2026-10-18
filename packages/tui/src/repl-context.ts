@@ -229,6 +229,32 @@ export interface TenantInfoLike {
   data_dir?: string;
 }
 
+/** capability manifest（A-3 / DECISION-010 §2.3） */
+export interface CapabilityMethodLike {
+  name: string;
+  permission: 'read' | 'write' | 'admin';
+  params_schema?: unknown;
+  result_schema?: unknown;
+}
+
+export interface CapabilityToolLike {
+  name: string;
+  description?: string;
+}
+
+export interface CapabilityPluginLike {
+  name: string;
+  enabled: boolean;
+}
+
+export interface CapabilityManifestLike {
+  version: string;
+  config_schema_version: number;
+  methods: CapabilityMethodLike[];
+  tools: CapabilityToolLike[];
+  plugins: CapabilityPluginLike[];
+}
+
 /** REPL 上下文——cli.ts 壳构造，传给 startRepl() */
 export interface ReplContext {
   // ── 核心能力（egg-rolls 构造并注入）──────────────────
