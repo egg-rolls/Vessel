@@ -76,6 +76,19 @@ async function checkEnvExample(root: string, issues: DocIssue[]): Promise<void> 
       message: '禁止新增 VESSEL_NODE_ID（DECISION-006 R9）',
     });
   }
+
+  for (const name of ['VESSEL_FEISHU_APP_ID', 'VESSEL_FEISHU_APP_SECRET'] as const) {
+    const lineIndex = lines.findIndex((line) => line.startsWith(`${name}=`));
+    if (lineIndex === -1) {
+      issues.push({ file, line: 0, message: `缺少 ${name} 变量` });
+    } else if ((lines[lineIndex] ?? '') !== `${name}=`) {
+      issues.push({
+        file,
+        line: lineIndex + 1,
+        message: `${name} 必须留空（不得写入真实值）`,
+      });
+    }
+  }
 }
 
 async function checkTokenDocs(root: string, issues: DocIssue[]): Promise<void> {
