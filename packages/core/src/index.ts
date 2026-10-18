@@ -37,6 +37,9 @@ export {
   FileSessionBackend,
   MemoryRunStore,
   MemorySessionBackend,
+  type PruneRunsOptions,
+  type PruneRunsResult,
+  pruneRuns,
   SQLiteSessionBackend,
 } from './session/index.js';
 // Transport（0.2 R3a-core：进程内实现）

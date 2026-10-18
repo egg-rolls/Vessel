@@ -5,6 +5,7 @@ import {
   InProcessRuntimeHost,
   InProcessScheduler,
   InProcessTransport,
+  pruneRuns,
   MemoryRunStore as RootMemoryRunStore,
   MetricsCollector as RootMetricsCollector,
 } from '@vessel/core';
@@ -75,6 +76,10 @@ describe('subpath exports (R6a/R6b)', () => {
     const resumeError = new RunResumeError('run_not_found', 'missing');
     expect(resumeError.code).toBe('run_not_found');
     expect(resumeError.runId).toBe('missing');
+
+    // prune helper（0.4 C2）
+    expect(typeof pruneRuns).toBe('function');
+    await expect(pruneRuns(runStore)).resolves.toEqual({ deleted: 0, kept: 1 });
 
     expect(typeof FileEventStore).toBe('function');
     expect(typeof MemoryEventStream).toBe('function');
