@@ -25,6 +25,13 @@ export class MemberLimitError extends Error {
   }
 }
 
+/** Host 的并发名额/重名错误统一映射为 busy。 */
+export function isCapacityError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes('agent limit reached') || message.includes('already exists');
+}
+
 export interface ChatMemberRunnerOptions {
   config: ResolvedFeishuConfig;
   events: EventStream;
@@ -42,8 +49,10 @@ export interface ChatMemberRunnerOptions {
 export class ChatMemberRunner {
   private readonly host: InProcessRuntimeHost;
   private readonly members = new Map<string, string>();
+  private readonly pendingMembers = new Map<string, Promise<string>>();
   private readonly usedAgentIds = new Set<string>();
   private readonly unsubscribe: () => void;
+  private stopped = false;
 
   constructor(private readonly options: ChatMemberRunnerOptions) {
     const schedulerOptions: {
@@ -81,33 +90,38 @@ export class ChatMemberRunner {
     return this.members.size;
   }
 
-  /** 确保 chat 有成员；达到上限返回 MemberLimitError。 */
+  /** 诊断/测试：in-flight 创建数；settle 后必须回到 0。 */
+  get pendingMemberCount(): number {
+    return this.pendingMembers.size;
+  }
+
+  /**
+   * 确保 chat 有成员；达到上限返回 MemberLimitError。
+   * 同一 chat 的并发调用合并到同一个创建 promise，避免重复 spawn。
+   */
   async ensureMember(chatId: string): Promise<string> {
+    if (this.stopped) throw new MemberLimitError();
+
     const existing = this.members.get(chatId);
     if (existing !== undefined) return existing;
 
-    const agentId = this.pickAgentId(chatId);
-    const sessionId = `${this.options.config.sessionPrefix}:${chatId}`;
+    const pending = this.pendingMembers.get(chatId);
+    if (pending !== undefined) return await pending;
 
-    try {
-      await this.host.spawn({
-        id: agentId,
-        name: `feishu:${chatId}`,
-        provider: this.options.provider,
-        model: this.options.model,
-        pluginHost: this.options.pluginHost,
-        sessionId,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('agent limit reached')) {
-        throw new MemberLimitError();
-      }
-      throw error;
+    // 本地名额预检：pending 也占名额，避免并发下把压力全部打到 Host。
+    if (this.members.size + this.pendingMembers.size >= this.options.config.maxMembers) {
+      throw new MemberLimitError();
     }
 
-    this.members.set(chatId, agentId);
-    this.usedAgentIds.add(agentId);
-    return agentId;
+    const creation = this.createMember(chatId);
+    this.pendingMembers.set(chatId, creation);
+    try {
+      return await creation;
+    } finally {
+      if (this.pendingMembers.get(chatId) === creation) {
+        this.pendingMembers.delete(chatId);
+      }
+    }
   }
 
   async run(chatId: string, text: string, signal: AbortSignal): Promise<string> {
@@ -119,7 +133,9 @@ export class ChatMemberRunner {
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     this.unsubscribe();
+    this.pendingMembers.clear();
     await this.host.close();
     this.members.clear();
     this.usedAgentIds.clear();
@@ -128,6 +144,39 @@ export class ChatMemberRunner {
   /** 诊断/测试：把错误文本中的凭据脱敏。 */
   sanitize(text: string): string {
     return maskSecrets(text, this.options.config.appId, this.options.config.appSecret);
+  }
+
+  private async createMember(chatId: string): Promise<string> {
+    const existing = this.members.get(chatId);
+    if (existing !== undefined) return existing;
+
+    const agentId = this.pickAgentId(chatId);
+    const sessionId = `${this.options.config.sessionPrefix}:${chatId}`;
+    // 先保留 id，避免并发创建时两个 chat 选中同一 id。
+    this.usedAgentIds.add(agentId);
+
+    try {
+      await this.host.spawn({
+        id: agentId,
+        name: `feishu:${chatId}`,
+        provider: this.options.provider,
+        model: this.options.model,
+        pluginHost: this.options.pluginHost,
+        sessionId,
+      });
+    } catch (error) {
+      this.usedAgentIds.delete(agentId);
+      if (isCapacityError(error)) throw new MemberLimitError();
+      throw error;
+    }
+
+    if (this.stopped) {
+      this.usedAgentIds.delete(agentId);
+      throw new MemberLimitError();
+    }
+
+    this.members.set(chatId, agentId);
+    return agentId;
   }
 
   private pickAgentId(chatId: string): string {
