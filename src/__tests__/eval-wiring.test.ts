@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
-import { MemoryLLMProvider } from '../../packages/core/src/index';
+import { MemoryEventStream, MemoryLLMProvider } from '../../packages/core/src/index';
 import type {
   EvalReport,
   EvalRunnerLike,
@@ -127,6 +127,36 @@ describe('createEvalsRunner', () => {
     );
     expect(error).toBe('eval_invalid');
   });
+
+  it('passes tenantId, events, and the tenant outDir', async () => {
+    const tenantDir = path.join(tmpDir(), 'tenants', 'acme');
+    const events = new MemoryEventStream();
+    let pluginOptions: Parameters<EvalsModuleLike['createEvalsPlugin']>[0] | undefined;
+    const mod: EvalsModuleLike = {
+      createEvalsPlugin: (options) => {
+        pluginOptions = options;
+        return {
+          name: 'evals',
+          version: '0.3.0',
+          install() {},
+          runSuite: async () => report(),
+          getLatest: async () => null,
+        };
+      },
+    };
+
+    await createEvalsRunner({
+      config: config(),
+      tenantId: 'acme',
+      tenantDir,
+      events,
+      loadModule: async () => mod,
+    });
+
+    expect(pluginOptions?.outDir).toBe(path.join(tenantDir, 'evals'));
+    expect(pluginOptions?.tenantId).toBe('acme');
+    expect(pluginOptions?.events).toBe(events);
+  });
 });
 
 describe('isNetworkAllowed (double gate)', () => {
@@ -162,6 +192,24 @@ describe('executeEvalSuite', () => {
       filterTags: ['smoke', 'fast'],
       allowNetwork: false,
     });
+  });
+
+  it('defaults the report outDir to <tenant>/evals', async () => {
+    const { suiteDir } = setupSuite();
+    const { calls, mod } = fakeRunner();
+    const tenantDir = path.join(tmpDir(), 'tenants', 'acme');
+
+    await executeEvalSuite({
+      config: config({ evals: { enabled: true, dir: suiteDir } }),
+      target: 'smoke',
+      filters: [],
+      allowNetwork: false,
+      tenantId: 'acme',
+      tenantDir,
+      loadModule: async () => mod,
+    });
+
+    expect(calls[0]?.options?.outDir).toBe(path.join(tenantDir, 'evals'));
   });
 
   it('config true + CLI flag false stays offline', async () => {

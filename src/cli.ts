@@ -282,10 +282,20 @@ if (args.resumeRunArg === '') {
 }
 // 0.4 子命令：workflow / eval 自己加载配置并决定退出码。
 if (args.workflow) {
-  process.exit(await runWorkflowCommand(args.workflow, { useMock }));
+  process.exit(
+    await runWorkflowCommand(args.workflow, {
+      useMock,
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+    }),
+  );
 }
 if (args.eval) {
-  process.exit(await runEvalCommand(args.eval, { useMock }));
+  process.exit(
+    await runEvalCommand(args.eval, {
+      useMock,
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+    }),
+  );
 }
 
 // 0.5 一次性本地命令：不 bootstrap、不加载 provider、不获取 tenant 锁。

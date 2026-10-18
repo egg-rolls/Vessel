@@ -44,6 +44,8 @@ export interface McpModuleLike {
   createMcpPlugin(options: {
     servers: Array<{ name: string } & McpServerConfig>;
     events: EventStream;
+    /** 0.5：tenant 作用域（A-6 §13.4）；缺省不写 tenant_id。 */
+    tenantId?: string;
   }): McpPluginLike;
 }
 
@@ -69,6 +71,8 @@ function mcpError(code: string, message: string): Error {
 export interface CreateMcpOptions {
   config: VesselConfig;
   events: EventStream;
+  /** 0.5：tenant 作用域；插件事件带 tenant_id */
+  tenantId?: string;
   /** 默认模块加载器（bootstrap 传 PluginLoader） */
   loader?: Pick<PluginLoader, 'loadModule'>;
   /** 测试注入口；优先于 loader */
@@ -108,7 +112,11 @@ export async function createMcpFromConfig(
     );
   }
 
-  const plugin = mod.createMcpPlugin({ servers, events: options.events });
+  const plugin = mod.createMcpPlugin({
+    servers,
+    events: options.events,
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+  });
   return { plugin, control: createMcpControl(plugin, servers) };
 }
 

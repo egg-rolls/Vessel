@@ -7,17 +7,24 @@
  */
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
-import type { LLMProvider } from '../packages/core/src/index';
+import { type LLMProvider, resolveTenantPaths, type TenantPaths } from '../packages/core/src/index';
 import type { EvalCommand } from './cli-args';
 import type { EvalReport } from './control-plane-types';
+import { resolveDataDir } from './data-paths';
 import { executeEvalSuite } from './eval-wiring';
+import { createEventStream } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
 import { createProvider } from './provider-factory';
+import { installTrace, type TraceControl } from './trace-wiring';
 
 export interface EvalCommandOptions {
   useMock?: boolean;
   configPath?: string;
   userConfigPath?: string;
+  /** 0.5：全局 `--tenant` / VESSEL_TENANT 已由 CLI 传入 */
+  tenantId?: string;
+  /** 0.5：测试注入 data_dir */
+  dataDir?: string;
   /** 测试注入口 */
   loadEvalsModule?: () => Promise<unknown | null>;
 }
@@ -55,8 +62,9 @@ export async function runEvalCommand(
   const loadOptions: ConfigLoadOptions = {
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   };
-  const { config, validation } = await loadConfig(loadOptions);
+  const { config, validation, tenantId } = await loadConfig(loadOptions);
   sendWarnings(validation.warnings);
   if (validation.errors.length > 0) {
     for (const error of validation.errors) console.error(`✗ ${error.message}`);
@@ -86,11 +94,27 @@ export async function runEvalCommand(
     }
   }
 
+  // 0.5：报告与 trace 落到 tenant 目录；eval.run.* 事件经 events 进入 trace。
+  const tenantPaths: TenantPaths = resolveTenantPaths(
+    options.dataDir ?? resolveDataDir(config),
+    tenantId,
+  );
+  const events = createEventStream(config);
+  const trace: TraceControl | undefined = installTrace({
+    events,
+    config,
+    tenantPaths,
+    tenantId,
+  });
+
   try {
     const result = await executeEvalSuite({
       config,
       target: cmd.target,
       filters: cmd.filters,
+      tenantId,
+      tenantDir: tenantPaths.root,
+      events,
       ...(cmd.out !== undefined ? { out: cmd.out } : {}),
       allowNetwork: cmd.allowNetwork,
       ...(provider ? { provider } : {}),
@@ -107,5 +131,14 @@ export async function runEvalCommand(
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     return 2;
+  } finally {
+    if (trace) {
+      try {
+        await trace.flush();
+        await trace.close();
+      } catch {
+        // trace 收尾失败不改变 eval 退出码
+      }
+    }
   }
 }

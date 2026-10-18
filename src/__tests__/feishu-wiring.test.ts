@@ -15,6 +15,7 @@ import type {
 } from '../control-plane-types';
 import {
   assertFeishuStartable,
+  assertUniqueFeishuAppIds,
   createFeishuFromConfig,
   feishuError,
   maskAppId,
@@ -244,6 +245,28 @@ describe('createFeishuFromConfig', () => {
     expect(options.maxConcurrency).toBe(2);
     expect(options.maxQueueSize).toBe(5);
     expect(options.perAgentSerial).toBe(false);
+    // 0.5：tenant 实例显式 env: {}，不读 ambient VESSEL_FEISHU_*。
+    expect(options.env).toEqual({});
+  });
+
+  it('passes tenantId and does not inherit ambient env', async () => {
+    const { channel } = makeChannel();
+    const { created, mod } = fakeModule(channel);
+
+    await createFeishuFromConfig({
+      config: enabledConfig(),
+      provider: new MemoryLLMProvider(),
+      model: 'mock',
+      pluginHost: new MemoryPluginHost(),
+      session: {} as SessionBackend,
+      events: new MemoryEventStream(),
+      tenantId: 'acme',
+      loadModule: async () => mod,
+    });
+
+    const options = created[0] as FeishuChannelOptionsLike;
+    expect(options.tenantId).toBe('acme');
+    expect(options.env).toEqual({});
   });
 
   it('enabled without credentials -> feishu_invalid', async () => {
@@ -296,6 +319,43 @@ describe('stopFeishuChannel', () => {
         queued_messages: 0,
       }),
     });
+  });
+});
+
+describe('assertUniqueFeishuAppIds', () => {
+  it('accepts distinct app ids across tenants', () => {
+    expect(() =>
+      assertUniqueFeishuAppIds([
+        { tenantId: 'a', config: enabledConfig() },
+        {
+          tenantId: 'b',
+          config: { feishu: { enabled: true, appId: 'cli_other', appSecret: 's' } },
+        },
+      ]),
+    ).not.toThrow();
+  });
+
+  it('rejects the same app id across tenants without leaking it', () => {
+    try {
+      assertUniqueFeishuAppIds([
+        { tenantId: 'a', config: enabledConfig() },
+        { tenantId: 'b', config: enabledConfig() },
+      ]);
+      throw new Error('expected duplicate rejection');
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe('feishu_duplicate_app_id');
+      expect((error as Error).message).toContain('cli_***');
+      expect((error as Error).message).not.toContain('cli_test_id');
+    }
+  });
+
+  it('ignores tenants with feishu disabled', () => {
+    expect(() =>
+      assertUniqueFeishuAppIds([
+        { tenantId: 'a', config: enabledConfig() },
+        { tenantId: 'b', config: {} },
+      ]),
+    ).not.toThrow();
   });
 });
 

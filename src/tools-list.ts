@@ -31,7 +31,7 @@ export interface ToolsListing {
 
 /** 按当前配置加载插件并列出工具（只读，无副作用） */
 export async function listTools(): Promise<ToolsListing> {
-  const { config, validation } = await loadConfig();
+  const { config, validation, tenantId } = await loadConfig();
   const warnings = [
     ...validation.warnings.map((w) => w.message),
     ...validation.errors.map((e) => e.message),
@@ -51,6 +51,7 @@ export async function listTools(): Promise<ToolsListing> {
   if (config.delegate?.enabled !== false) {
     const delegate = createDelegateTaskPlugin({
       providerFactory: () => new MemoryLLMProvider(),
+      tenantId,
       model: config.delegate?.model ?? config.provider?.model ?? 'mock-model',
       maxDepth: config.delegate?.maxDepth,
       disallowed: config.delegate?.disallowed,
@@ -76,6 +77,7 @@ export async function listTools(): Promise<ToolsListing> {
     try {
       const team = createTeamPlugin({
         providerFactory: () => new MemoryLLMProvider(),
+        tenantId,
         model: config.team.model ?? config.provider?.model ?? 'mock-model',
         events: new MemoryEventStream(),
         host: teamHost,

@@ -103,6 +103,26 @@ describe('createMcpFromConfig', () => {
     });
   });
 
+  it('passes tenantId to the factory', async () => {
+    let received: unknown;
+    const plugin = pluginWith();
+    const mod: McpModuleLike = {
+      createMcpPlugin: (options) => {
+        received = options;
+        return plugin;
+      },
+    };
+
+    await createMcpFromConfig({
+      config: { mcpServers: { demo: { transport: 'stdio', command: 'node' } } },
+      events,
+      tenantId: 'acme',
+      loadModule: async () => mod,
+    });
+
+    expect(received).toMatchObject({ tenantId: 'acme' });
+  });
+
   it('模块缺失或无 createMcpPlugin：抛 mcp_plugin_unavailable', async () => {
     const config: VesselConfig = {
       mcpServers: { demo: { transport: 'stdio', command: 'node' } },

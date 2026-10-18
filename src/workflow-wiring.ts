@@ -41,6 +41,8 @@ export interface WorkflowCreateOptions {
   runtime?: RunnableAgent;
   /** 0.5：tenant 根目录；缺省路径落到 `<tenant>/workflows` */
   tenantDir?: string;
+  /** 0.5：tenant 作用域；传给引擎，事件带 tenant_id */
+  tenantId?: string;
   loader?: Pick<PluginLoader, 'loadModule'>;
   /** 测试注入口；优先于 loader */
   loadModule?: () => Promise<unknown | null>;
@@ -159,6 +161,7 @@ export async function createWorkflowFromConfig(
       options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
     ),
     events: options.events,
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 }
 
@@ -182,6 +185,7 @@ export async function createWorkflowControlsOnly(
       options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
     ),
     events: options.events,
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 }
 

@@ -168,6 +168,28 @@ describe('createWorkflowFromConfig', () => {
     expect(fs.statSync(store).isDirectory()).toBe(true);
   });
 
+  it('passes tenantId and defaults the store to <tenant>/workflows', async () => {
+    const base = tmpDir();
+    const dir = path.join(base, 'defs');
+    fs.mkdirSync(dir);
+    const tenantDir = path.join(base, 'tenants', 'acme');
+    const { engine } = makeEngine();
+    const { created, mod } = fakeModule(engine);
+
+    await createWorkflowFromConfig({
+      config: { workflow: { enabled: true, dir } },
+      events: new MemoryEventStream(),
+      pluginHost: new MemoryPluginHost(),
+      tenantId: 'acme',
+      tenantDir,
+      loadModule: async () => mod,
+    });
+
+    expect(created[0]?.tenantId).toBe('acme');
+    expect(created[0]?.config.path).toBe(path.join(tenantDir, 'workflows'));
+    expect(fs.statSync(path.join(tenantDir, 'workflows')).isDirectory()).toBe(true);
+  });
+
   it('missing workflow.dir -> workflow_invalid', async () => {
     const base = tmpDir();
     const { engine } = makeEngine();

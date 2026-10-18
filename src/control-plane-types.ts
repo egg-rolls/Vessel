@@ -108,6 +108,8 @@ export interface WorkflowEngineOptionsLike {
   pluginHost: PluginHost;
   config: ResolvedWorkflowConfigLike;
   events: EventStream;
+  /** 0.5：tenant 作用域（A-6 §13.4）；缺省不写 tenant_id（0.4 兼容）。 */
+  tenantId?: string;
 }
 
 export interface WorkflowModuleLike {
@@ -163,6 +165,10 @@ export interface EvalRunOptionsLike {
   providerFactory?: () => LLMProvider;
   model?: string;
   enabled?: boolean;
+  /** 0.5：tenant 作用域（A-6 §13.4）。 */
+  tenantId?: string;
+  /** 0.5：`eval.run.*` 事件出口；缺失不发（0.4 兼容）。 */
+  events?: EventStream;
 }
 
 /** `createEvalsPlugin()` 返回 Plugin + runner 合体 */
@@ -172,7 +178,12 @@ export interface EvalRunnerLike {
 }
 
 export interface EvalsModuleLike {
-  createEvalsPlugin(options?: { outDir?: string; enabled?: boolean }): Plugin & EvalRunnerLike;
+  createEvalsPlugin(options?: {
+    outDir?: string;
+    enabled?: boolean;
+    tenantId?: string;
+    events?: EventStream;
+  }): Plugin & EvalRunnerLike;
 }
 
 // ── feishu ──────────────────────────────────────
@@ -222,6 +233,9 @@ export interface FeishuChannelOptionsLike {
   maxQueueSize?: number;
   perAgentSerial?: boolean;
   transport?: unknown;
+  /** 0.5：tenant 作用域（A-6 §13.4）；缺省不写 tenant_id。 */
+  tenantId?: string;
+  /** 0.5：tenant 实例显式 `{}`，避免 ambient VESSEL_FEISHU_* 串用。 */
   env?: Record<string, string | undefined>;
 }
 

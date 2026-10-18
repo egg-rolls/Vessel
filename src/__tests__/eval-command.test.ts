@@ -157,7 +157,7 @@ describe('eval command', () => {
 
     const code = await runEvalCommand(
       { ...baseCommand, filters: ['smoke', 'fast'], out },
-      { configPath, userConfigPath, loadEvalsModule: loadModule },
+      { dataDir: base, configPath, userConfigPath, loadEvalsModule: loadModule },
     );
 
     expect(code).toBe(0);
@@ -169,12 +169,12 @@ describe('eval command', () => {
   });
 
   it('CLI flag without config allow_network -> exit 2', async () => {
-    const { configPath, userConfigPath } = setup({ allowNetwork: false });
+    const { base, configPath, userConfigPath } = setup({ allowNetwork: false });
     const { calls, loadModule } = fakeModule();
 
     const code = await runEvalCommand(
       { ...baseCommand, allowNetwork: true },
-      { useMock: true, configPath, userConfigPath, loadEvalsModule: loadModule },
+      { useMock: true, dataDir: base, configPath, userConfigPath, loadEvalsModule: loadModule },
     );
 
     expect(code).toBe(2);
@@ -182,12 +182,12 @@ describe('eval command', () => {
   });
 
   it('both gates -> network run with a provider', async () => {
-    const { configPath, userConfigPath } = setup({ allowNetwork: true });
+    const { base, configPath, userConfigPath } = setup({ allowNetwork: true });
     const { calls, loadModule } = fakeModule();
 
     const code = await runEvalCommand(
       { ...baseCommand, allowNetwork: true },
-      { useMock: true, configPath, userConfigPath, loadEvalsModule: loadModule },
+      { useMock: true, dataDir: base, configPath, userConfigPath, loadEvalsModule: loadModule },
     );
 
     expect(code).toBe(0);
@@ -196,12 +196,13 @@ describe('eval command', () => {
   });
 
   it('failed cases -> exit 1', async () => {
-    const { configPath, userConfigPath } = setup();
+    const { base, configPath, userConfigPath } = setup();
     const { loadModule } = fakeModule({
       runSuite: async () => report({ failed: 1, passed: 0 }),
     });
 
     const code = await runEvalCommand(baseCommand, {
+      dataDir: base,
       configPath,
       userConfigPath,
       loadEvalsModule: loadModule,
@@ -210,20 +211,20 @@ describe('eval command', () => {
   });
 
   it('missing suite -> exit 2', async () => {
-    const { configPath, userConfigPath } = setup();
+    const { base, configPath, userConfigPath } = setup();
     const code = await runEvalCommand(
       { ...baseCommand, target: 'missing' },
-      { configPath, userConfigPath, loadEvalsModule: fakeModule().loadModule },
+      { dataDir: base, configPath, userConfigPath, loadEvalsModule: fakeModule().loadModule },
     );
     expect(code).toBe(2);
   });
 
   it('--json prints only the report JSON', async () => {
-    const { configPath, userConfigPath } = setup();
+    const { base, configPath, userConfigPath } = setup();
     const { result: code, logs } = await captureLogs(() =>
       runEvalCommand(
         { ...baseCommand, json: true },
-        { configPath, userConfigPath, loadEvalsModule: fakeModule().loadModule },
+        { dataDir: base, configPath, userConfigPath, loadEvalsModule: fakeModule().loadModule },
       ),
     );
 

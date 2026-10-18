@@ -15,6 +15,7 @@ import {
 import {
   AgentRuntime,
   type AgentStatus,
+  createDefaultTraceRedactor,
   type EventBus,
   MemoryContextManager,
   MemoryPluginHost,
@@ -81,6 +82,7 @@ import { createSessionBackend } from './session-factory';
 import { createTenantControl } from './tenant-command';
 import { acquireTenantLock, type TenantLock, TenantLockError, withTenantLock } from './tenant-lock';
 import {
+  composeTraceRedactors,
   installTrace,
   pruneTenantTrace,
   type TraceControl,
@@ -243,6 +245,31 @@ function isRunEventValue(value: unknown): value is RunEvent {
   );
 }
 
+/** ext redact-secrets 的结构镜像（动态加载，不静态跨包 import） */
+interface RedactSecretsModuleLike {
+  createTraceRedactor(config?: unknown): TraceRedactor;
+}
+
+/**
+ * 0.5 A-6 §13.4：加载 ext 的 `createTraceRedactor` 并与 core 默认组合。
+ * 用 PluginLoader 动态 import，保持 asm 对 ext 的零静态依赖；缺失只 warn。
+ */
+async function loadExtTraceRedactor(loader: PluginLoader): Promise<TraceRedactor | undefined> {
+  try {
+    const mod = (await loader.loadModule('redact-secrets')) as RedactSecretsModuleLike | null;
+    if (!mod || typeof mod.createTraceRedactor !== 'function') {
+      console.warn('⚠ redact-secrets unavailable; trace uses the core default redactor.');
+      return undefined;
+    }
+    return mod.createTraceRedactor();
+  } catch (error) {
+    console.warn(
+      `⚠ Failed to load redact-secrets: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+}
+
 /**
  * connect 模式（A-4 §11.6）：不获取 tenant 写锁、不写本地 store/trace。
  * 本地 session 使用内存后端；run 走 canonical `runs.start`。
@@ -332,7 +359,6 @@ async function bootstrapConnect(input: {
     }
   };
 
-  // Phase 1 todo：ctx.rpc / ctx.tenant 待 tui 类型与 web dispatcher 就绪后注入。
   const ctx: ReplContext = {
     runtime,
     pluginHost,
@@ -591,6 +617,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       factory.push(
         createDelegateTaskPlugin({
           providerFactory: () => provider,
+          tenantId,
           model: config.delegate?.model ?? providerModel,
           maxDepth: config.delegate?.maxDepth,
           disallowed: config.delegate?.disallowed,
@@ -621,6 +648,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       factory.push(
         createTeamPlugin({
           providerFactory: () => provider,
+          tenantId,
           model: config.team?.model ?? providerModel,
           events: runtimeHost?.events ?? events,
           host: teamHost,
@@ -771,13 +799,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── Trace（0.5，A-4 §11.1/§11.2）───────────────
   // 只有本地写意图才安装；disabled/off 时 installTrace 返回 undefined。
+  // redactor：测试注入优先，否则 ext redact-secrets（core 默认在 installTrace 内先执行）。
+  const extRedactor = await loadExtTraceRedactor(loader);
+  const traceRedactor = options.redactor ?? extRedactor;
   const trace: TraceControl | undefined = localWrites
     ? installTrace({
         events: runtimeEvents,
         config,
         tenantPaths,
         tenantId,
-        ...(options.redactor ? { redactor: options.redactor } : {}),
+        ...(traceRedactor ? { redactor: traceRedactor } : {}),
         ...(options.traceFactory ? { factory: options.traceFactory } : {}),
       })
     : undefined;
@@ -818,6 +849,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         {
           config,
           events: runtimeEvents,
+          tenantId,
           loader,
           ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
         },
@@ -844,6 +876,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         events: runtimeEvents,
         pluginHost: finalPluginHost,
         tenantDir: tenantPaths.root,
+        tenantId,
         ...(host ? { host } : { runtime: activeRuntime }),
         loader,
         ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
@@ -864,6 +897,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         pluginHost: finalPluginHost,
         session,
         events: runtimeEvents,
+        tenantId,
+        env: {},
         ...(runStore ? { runStore } : {}),
         contextFactory,
         ...(options.feishuTransport !== undefined ? { transport: options.feishuTransport } : {}),
@@ -1065,7 +1100,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
           sessionControl.delete(sessionId),
         ),
     },
-    ...(options.redactor ? { redactor: options.redactor } : {}),
+    ...(traceRedactor
+      ? { redactor: composeTraceRedactors(createDefaultTraceRedactor(), traceRedactor) }
+      : {}),
     runtimeFor: (requestedTenant: string) =>
       requestedTenant === tenantId ? activeRuntime : undefined,
     sessionFor: (requestedTenant: string) => (requestedTenant === tenantId ? session : undefined),

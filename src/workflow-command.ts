@@ -12,10 +12,15 @@ import {
   loadConfig,
   type VesselConfig,
 } from '../packages/config/src/index';
-import { MemoryEventStream, MemoryPluginHost } from '../packages/core/src/index';
+import {
+  MemoryEventStream,
+  MemoryPluginHost,
+  resolveTenantPaths,
+} from '../packages/core/src/index';
 import { bootstrap } from './bootstrap';
 import type { WorkflowCommand } from './cli-args';
 import type { WorkflowOutcome, WorkflowRunDetail, WorkflowRunSummary } from './control-plane-types';
+import { resolveDataDir } from './data-paths';
 import { resolveWorkflowDefinition } from './path-resolution';
 import { PluginLoader } from './plugin-loader';
 import { createWorkflowControlsAdapter, createWorkflowControlsOnly } from './workflow-wiring';
@@ -24,6 +29,10 @@ export interface WorkflowCommandOptions {
   useMock?: boolean;
   configPath?: string;
   userConfigPath?: string;
+  /** 0.5：全局 `--tenant` / VESSEL_TENANT 已由 CLI 传入 */
+  tenantId?: string;
+  /** 测试注入 data_dir */
+  dataDir?: string;
   /** 测试注入口 */
   loadWorkflowModule?: () => Promise<unknown | null>;
 }
@@ -94,6 +103,8 @@ function printRunDetail(run: WorkflowRunDetail): void {
 async function runControlsOnly(
   cmd: Extract<WorkflowCommand, { kind: 'list' | 'show' | 'cancel' }>,
   config: VesselConfig,
+  tenantId: string,
+  tenantDir: string,
   loader: PluginLoader,
   options: WorkflowCommandOptions,
 ): Promise<number> {
@@ -101,6 +112,8 @@ async function runControlsOnly(
     config,
     events: new MemoryEventStream(),
     pluginHost: new MemoryPluginHost(),
+    tenantDir,
+    tenantId,
     loader,
     ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
   });
@@ -153,6 +166,7 @@ async function runWithRuntime(
     configErrorExitCode: 2,
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     ...(options.loadWorkflowModule ? { loadWorkflowModule: options.loadWorkflowModule } : {}),
   };
 
@@ -231,8 +245,9 @@ export async function runWorkflowCommand(
   const loadOptions: ConfigLoadOptions = {
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   };
-  const { config, validation } = await loadConfig(loadOptions);
+  const { config, validation, tenantId } = await loadConfig(loadOptions);
   printWarnings(validation.warnings);
   if (validation.errors.length > 0) {
     for (const error of validation.errors) console.error(`✗ ${error.message}`);
@@ -243,8 +258,17 @@ export async function runWorkflowCommand(
     return 2;
   }
 
+  const tenantPaths = resolveTenantPaths(options.dataDir ?? resolveDataDir(config), tenantId);
+
   try {
-    return await runControlsOnly(cmd, config, new PluginLoader(), options);
+    return await runControlsOnly(
+      cmd,
+      config,
+      tenantId,
+      tenantPaths.root,
+      new PluginLoader(),
+      options,
+    );
   } catch (error) {
     console.error(errorMessage(error));
     return 2;

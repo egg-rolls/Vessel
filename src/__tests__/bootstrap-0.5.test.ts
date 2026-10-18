@@ -132,7 +132,8 @@ describe('bootstrap 0.5 - trace / events', () => {
       result.runtime.events.publish({
         type: 'run.started',
         run_id: 'run-trace',
-        data: { input: 'hi' },
+        // AWS key 只由 ext redact-secrets 命中，用于证明 asm 已组合该 redactor。
+        data: { input: 'hi', note: 'AKIAABCDEFGHIJKLMNOP' },
         ts: 1000,
       });
       await result.trace?.flush('run-trace');
@@ -147,6 +148,9 @@ describe('bootstrap 0.5 - trace / events', () => {
       expect(lines).toHaveLength(1);
       expect(lines[0]?.tenant_id).toBe('default');
       expect(lines[0]?.seq).toBe(1);
+      const raw = JSON.stringify(lines[0]);
+      expect(raw).not.toContain('AKIAABCDEFGHIJKLMNOP');
+      expect(raw).toContain('***AWS-KEY-REDACTED***');
     } finally {
       await result.shutdown();
     }

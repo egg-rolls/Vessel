@@ -9,13 +9,14 @@
  */
 
 import { DEFAULT_EVALS_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import type { LLMProvider } from '../packages/core/src/index';
+import type { EventStream, LLMProvider } from '../packages/core/src/index';
 import type { EvalReport, EvalRunnerLike, EvalsModuleLike } from './control-plane-types';
 import {
   isSafeSuiteName,
   resolveEvalSuite,
   resolveEvalsDir,
   resolveEvalsOutDir,
+  type TenantPathOptions,
 } from './path-resolution';
 import type { PluginLoader } from './plugin-loader';
 
@@ -26,12 +27,15 @@ export interface ResolvedEvalsOptions {
   allowNetwork: boolean;
 }
 
-/** config → eval 选项；路径解析为绝对路径 */
-export function resolveEvalsOptions(config: VesselConfig): ResolvedEvalsOptions {
+/** config → eval 选项；路径解析为绝对路径（0.5：outDir 缺省落到 tenant） */
+export function resolveEvalsOptions(
+  config: VesselConfig,
+  opts: TenantPathOptions = {},
+): ResolvedEvalsOptions {
   return {
     enabled: config.evals?.enabled === true,
     dir: resolveEvalsDir(config),
-    outDir: resolveEvalsOutDir(config),
+    outDir: resolveEvalsOutDir(config, opts),
     allowNetwork: config.evals?.allowNetwork ?? DEFAULT_EVALS_OPTIONS.allowNetwork,
   };
 }
@@ -48,6 +52,12 @@ export function isNetworkAllowed(config: VesselConfig, cliAllowNetwork: boolean)
 
 export interface EvalsRunnerOptions {
   config: VesselConfig;
+  /** 0.5：tenant 根目录；缺省 outDir 落到 `<tenant>/evals` */
+  tenantDir?: string;
+  /** 0.5：tenant 作用域；事件与报告带 tenant_id */
+  tenantId?: string;
+  /** 0.5：`eval.run.*` 事件出口（trace 订阅同一流） */
+  events?: EventStream;
   loader?: Pick<PluginLoader, 'loadModule'>;
   /** 测试注入口；优先于 loader */
   loadModule?: () => Promise<unknown | null>;
@@ -74,8 +84,13 @@ export async function createEvalsRunner(options: EvalsRunnerOptions): Promise<Ev
   }
 
   return mod.createEvalsPlugin({
-    outDir: resolveEvalsOutDir(options.config),
+    outDir: resolveEvalsOutDir(
+      options.config,
+      options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
+    ),
     enabled: true,
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+    ...(options.events !== undefined ? { events: options.events } : {}),
   });
 }
 
@@ -123,7 +138,10 @@ export async function executeEvalSuite(options: ExecuteEvalOptions): Promise<Exe
 
   const runner = await createEvalsRunner(options);
   const report = await runner.runSuite(resolved.path, {
-    outDir: resolveEvalsOutDir(options.config),
+    outDir: resolveEvalsOutDir(
+      options.config,
+      options.tenantDir !== undefined ? { tenantDir: options.tenantDir } : {},
+    ),
     ...(options.out !== undefined ? { outPath: options.out } : {}),
     ...(options.filters && options.filters.length > 0 ? { filterTags: options.filters } : {}),
     allowNetwork: wantNetwork,

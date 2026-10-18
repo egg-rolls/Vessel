@@ -82,7 +82,7 @@ export function resolveTraceOptions(config: VesselConfig): Required<TraceConfig>
 }
 
 /** core 默认 redactor → 注入实现；后者看到的是已脱敏事件 */
-function composeRedactors(base: TraceRedactor, extra?: TraceRedactor): TraceRedactor {
+export function composeTraceRedactors(base: TraceRedactor, extra?: TraceRedactor): TraceRedactor {
   if (!extra) return base;
   return {
     redact(event: RunEvent): RunEvent {
@@ -154,7 +154,7 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
   const trace = resolveTraceOptions(options.config);
   if (!trace.enabled || trace.level === 'off') return undefined;
 
-  const redactor = composeRedactors(createDefaultTraceRedactor(), options.redactor);
+  const redactor = composeTraceRedactors(createDefaultTraceRedactor(), options.redactor);
   const dir = options.tenantPaths.events_dir;
   const unsubscribes: Unsubscribe[] = [];
 

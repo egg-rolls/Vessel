@@ -102,9 +102,40 @@ export interface CreateFeishuOptions {
   contextFactory?: () => ContextManager;
   /** 测试/示例注入 mock transport */
   transport?: unknown;
+  /** 0.5：tenant 作用域；事件与状态带 tenant_id */
+  tenantId?: string;
+  /** 0.5：环境变量来源；tenant 实例缺省 `{}`（不读 ambient VESSEL_FEISHU_*） */
+  env?: Record<string, string | undefined>;
   loader?: Pick<PluginLoader, 'loadModule'>;
   /** 测试注入口；优先于 loader */
   loadModule?: () => Promise<unknown | null>;
+}
+
+/** 一个 tenant 的有效配置（用于飞书 app_id 唯一性检查） */
+export interface FeishuTenantConfig {
+  tenantId: string;
+  config: VesselConfig;
+}
+
+/**
+ * 同一 `app_id` 只能绑定一个 tenant（A-6 §13.4 / A-3 §10.7）。
+ * 只检查启用飞书的 tenant；错误信息里的 app_id 只保留前 4 位 + `***`。
+ */
+export function assertUniqueFeishuAppIds(entries: FeishuTenantConfig[]): void {
+  const owners = new Map<string, string>();
+  for (const entry of entries) {
+    if (entry.config.feishu?.enabled !== true) continue;
+    const appId = resolveFeishuOptions(entry.config).appId.trim();
+    if (appId === '') continue;
+    const existing = owners.get(appId);
+    if (existing !== undefined && existing !== entry.tenantId) {
+      throw feishuError(
+        'feishu_duplicate_app_id',
+        `app_id ${maskAppId(appId)} is bound to tenants "${existing}" and "${entry.tenantId}"`,
+      );
+    }
+    owners.set(appId, entry.tenantId);
+  }
 }
 
 /**
@@ -159,6 +190,9 @@ export async function createFeishuFromConfig(
     ...(options.runStore ? { runStore: options.runStore } : {}),
     ...(options.contextFactory ? { contextFactory: options.contextFactory } : {}),
     ...(options.transport !== undefined ? { transport: options.transport } : {}),
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+    // tenant 实例显式 `{}`：凭据已由 config loader 合并，禁止插件再读 ambient env。
+    env: options.env ?? {},
   };
 
   return mod.createFeishuPlugin(channelOptions);
