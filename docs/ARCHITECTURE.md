@@ -792,7 +792,7 @@ vessel --feishu
 
 **REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 0.3 的 `mcp` / `runs` 控制面适配器与 0.4 的 `workflows` / `metrics` / `feishu` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
 
-**用户可见行为（0.3.0）**：
+**用户可见行为（0.3.0；0.4 见上）**：
 
 - `/clear` 只清屏，不清空 `ContextManager`；需要新会话用 `/new`。
 - `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
@@ -900,7 +900,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **定位**：Vessel 是可嵌入的**多 agent 平台 runtime**；TUI / CLI / Web / Gateway 是参考 harness 外壳，只消费 runtime 的 SDK 与事件。
 - **分层**：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。依赖方向单向，并由 CI 自动检查。
 - **Module ≠ Plugin**：Module 是编译期/构造期边界（一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制。**不引入 `ModuleHost` / `ModuleRegistry` / 第二套扩展机制。**
-- **0.2 非目标（0.3 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；workflow / evals / 多租户 / 跨机器 / 单二进制仍非目标。
+- **0.2 非目标（0.3 / 0.4 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；0.4 以插件实现 workflow / evals / 飞书；多租户 / 跨机器 / 单二进制仍非目标。
 
 ### 14.2 Kernel（已实现）
 
