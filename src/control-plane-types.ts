@@ -260,4 +260,6 @@ export interface MetricsSnapshotLike {
 export interface MetricsControlLike {
   snapshot(): MetricsSnapshotLike;
   dispose(): void;
+  /** 0.5 A6-09：清空累计（gateway `metrics.reset`） */
+  reset?(): void;
 }

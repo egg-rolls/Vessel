@@ -702,6 +702,21 @@ async function runWithConfig(result: BootstrapResult) {
             metricsControl: {
               rebuild: (tenantId: string) =>
                 rebuildMetrics(resolveTenantPaths(dataDir, tenantId).events_dir),
+              // A6-09：只重置该 tenant 的 collector；无 metrics 的 tenant → not_found。
+              reset: (tenantId?: string) => {
+                const id = tenantId ?? result.tenantId;
+                const metrics =
+                  tenantFactory?.metricsFor(id) ??
+                  (id === result.tenantId ? result.metrics : undefined);
+                const reset = (metrics as { reset?: () => void } | undefined)?.reset;
+                if (typeof reset !== 'function') {
+                  throw Object.assign(
+                    new Error(`not_found: metrics are not available for tenant "${id}"`),
+                    { code: 'not_found' },
+                  );
+                }
+                reset.call(metrics);
+              },
             },
           }
         : {}),

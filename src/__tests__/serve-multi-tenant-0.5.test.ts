@@ -175,6 +175,10 @@ it('enforces config max_concurrent_runs through the tenant registry', async () =
     // acme 无 quota，仍可启动。
     const acme = await rpc(url, 'tok-acme', 'runs.start', { input: 'ok' });
     expect(acme.error).toBeUndefined();
+
+    // 未配置 observability 的 tenant：metrics.reset → not_found。
+    const reset = await rpc(url, 'tok-acme', 'metrics.reset', {});
+    expect(reset.error?.code).toBe('not_found');
   } finally {
     proc.kill();
     await proc.exited;
@@ -408,6 +412,14 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
       metrics: { runs: { started: number; completed: number } };
     };
     expect(workMetrics.metrics.runs.started).toBeGreaterThanOrEqual(1);
+
+    // A6-09：metrics.reset 只清空该 tenant。
+    const reset = await rpc(url, 'tok-acme', 'metrics.reset', {});
+    expect(reset.error).toBeUndefined();
+    const afterReset = await rpc(url, 'tok-acme', 'metrics.get', {});
+    expect(
+      (afterReset.result as { metrics: { runs: { started: number } } }).metrics.runs.started,
+    ).toBe(0);
 
     // disabled tenant → forbidden（admin token 显式指定 tenant）。
     const offStart = await rpc(url, 'tok-admin', 'runs.start', {
