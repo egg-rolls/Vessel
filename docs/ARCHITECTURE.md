@@ -1,6 +1,6 @@
 # 技术架构
 
-> 本文描述 Vessel 当前的架构事实。历史决策与「为什么」见 [ADR.md](ADR.md)。
+> 本文描述 Vessel 当前的架构事实。历史决策与「为什么」见 [ADR 索引](adr/README.md)。
 
 ---
 
@@ -892,7 +892,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 ## 14. 0.2 Kernel 与模块边界（已实现，未发布）
 
-> **状态：已实现（0.2 分支起），未随版本发布。** 本节描述 Kernel / Modules / Transport 的事实；0.3 的能力见 §14.6 与正文 §5/§8/§9/§13。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](ADR.md)。
+> **状态：已实现（0.2 分支起），未随版本发布。** 本节描述 Kernel / Modules / Transport 的事实；0.3 的能力见 §14.6 与正文 §5/§8/§9/§13。当前发布行为以 §1–§13 为准。决策依据见 [ADR-037](adr/ADR-037-modular-agent-runtime.md)。
 > 0.2 不重写 loop、不删除公开 API；新能力默认 off / opt-in。
 
 ### 14.1 定位与分层（已实现）

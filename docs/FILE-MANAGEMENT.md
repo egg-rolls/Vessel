@@ -74,7 +74,10 @@ Vessel\                                    # 共享侧（git）
 ├── LICENSE
 ├── docs\
 │   ├── ARCHITECTURE.md                    # 架构：怎么做的
-│   ├── ADR.md                             # 决策记录：为什么这么做（只追加）
+│   ├── ADR.md                             # 兼容 stub：指向 adr/README.md
+│   ├── adr\                               # 决策记录：一条 ADR 一个文件
+│   │   ├── README.md                      # 索引 + 编写约定
+│   │   └── ADR-<NNN>-<slug>.md            # ADR-001 ... ADR-045+
 │   ├── FILE-MANAGEMENT.md                 # 本文件：文件放哪里
 │   └── operations\                        # 运维/发布类文档（按需新增）
 │       ├── RELEASE.md                     # 发布流程
@@ -115,7 +118,9 @@ Vessel\                                    # 共享侧（git）
 | 目录/文件 | 回答的问题 | 维护者 |
 |---|---|---|
 | `ARCHITECTURE.md` | 系统怎么工作 | core 主笔，各 N 补充 |
-| `ADR.md` | 为什么做这个选择（只追加） | 1 审批后写入 |
+| `adr/README.md` | ADR 索引与编写约定 | gov |
+| `adr/ADR-<NNN>-<slug>.md` | 为什么做这个选择（只追加，一条一文件） | gov |
+| `ADR.md` | 兼容 stub，指向 `adr/README.md` | gov |
 | `FILE-MANAGEMENT.md` | 文件放哪里 | gov |
 | `operations/RELEASE.md` | 怎么发版 | gov |
 | `operations/CI-CD.md` | CI / CD / 自动更新怎么跑 | gov |
@@ -197,7 +202,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 
 - **跨路径改动只能提 PR 或消息协商，不能直接改。**
 - `scripts/version.ts` 的写模式**只在发布收口由 1 执行**，机械改写各包 `package.json`；不属于日常跨路径改动，N 不运行写模式。
-- `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + `docs/ADR.md`，并通知全部 N。
+- `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + 对应的 `docs/adr/ADR-*.md`（或新增 ADR），并通知全部 N。
 - 依赖方向单向：`core` ← 其它。`core` 的 `dependencies` 永远为空。
 - 并行开发必须 worktree 隔离，禁止共享工作目录。
 

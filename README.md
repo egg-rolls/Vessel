@@ -28,11 +28,11 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 **alpha。Phase 0 / Phase 1 实现中。**
 
-**0.2 状态：** 多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，**未随版本发布**）；`AgentRuntime` 仍是单 agent loop，Host 只包在它外面，不重写循环。边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 与 [docs/ADR.md](docs/ADR.md) ADR-037。
+**0.2 状态：** 多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，**未随版本发布**）；`AgentRuntime` 仍是单 agent loop，Host 只包在它外面，不重写循环。边界见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14 与 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md)。
 
-**0.3 状态：** durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，**未随版本发布**）；默认行为与 0.2 一致，新能力全部 opt-in 或默认关闭。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-039 / 040 / 041。
+**0.3 状态：** durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，**未随版本发布**）；默认行为与 0.2 一致，新能力全部 opt-in 或默认关闭。决策边界见 [ADR-039](docs/adr/ADR-039-mcp-client-as-plugin.md) / [ADR-040](docs/adr/ADR-040-durable-run-store-checkpoint-resume.md) / [ADR-041](docs/adr/ADR-041-remote-listen-and-tls.md)。
 
-**0.4 状态：** workflow 编排、evals harness、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，**未随版本发布**）；三个能力全部是插件、默认关闭，四个新配置块缺省时行为与 0.3 一致。决策边界见 [docs/ADR.md](docs/ADR.md) ADR-042 / 043 / 044 / 045。0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；**0.4 只做发布干跑，不 tag、不 publish、不合并 `main`**。
+**0.4 状态：** workflow 编排、evals harness、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，**未随版本发布**）；三个能力全部是插件、默认关闭，四个新配置块缺省时行为与 0.3 一致。决策边界见 [ADR-042](docs/adr/ADR-042-workflow-engine-as-plugin.md) / [ADR-043](docs/adr/ADR-043-evals-harness-offline.md) / [ADR-044](docs/adr/ADR-044-feishu-channel-plugin.md) / [ADR-045](docs/adr/ADR-045-0-4-observability-and-stability.md)。0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；**0.4 只做发布干跑，不 tag、不 publish、不合并 `main`**。
 
 **已落地的包**（bun workspaces monorepo）：
 
@@ -78,7 +78,7 @@ bun run src/cli.ts
 
 首次启动走**引导向导**，填 API 地址、Key、选模型，保存到 `~/.vessel/config.yaml`，之后无需重填。
 
-> **thinking 模型**（DeepSeek 等）：`reasoning_content` 会随 assistant 消息保存并在下一轮请求回传（工具调用轮次也保留）；TUI / 事件流不展示思维链。详见 [docs/ADR.md](docs/ADR.md) ADR-038。
+> **thinking 模型**（DeepSeek 等）：`reasoning_content` 会随 assistant 消息保存并在下一轮请求回传（工具调用轮次也保留）；TUI / 事件流不展示思维链。详见 [ADR-038](docs/adr/ADR-038-thinking-reasoning-content.md)。
 
 ### ③ 其它常用命令
 
@@ -379,7 +379,7 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 |------|------|--------|
 | [README.md](README.md) | 是什么 / 怎么跑 / 延后项 | 所有人，先看 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术架构：分层、循环、两个插槽、扩展模型、接口签名、事件名 | 开发者 / AI |
-| [docs/ADR.md](docs/ADR.md) | 架构决策记录：每个关键选择的「为什么」（只追加存档） | 开发者 / AI |
+| [docs/adr/README.md](docs/adr/README.md) | 架构决策记录索引：每个关键选择的「为什么」（一条一文件，只追加） | 开发者 / AI |
 | [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md) | 文件放哪里、路径归属、分支与发布规则 | 贡献者 / AI |
 | [docs/operations/RELEASE.md](docs/operations/RELEASE.md) | 怎么发版 | 维护者 |
 | [docs/operations/CI-CD.md](docs/operations/CI-CD.md) | CI / CD / 自动更新怎么跑 | 维护者 |
