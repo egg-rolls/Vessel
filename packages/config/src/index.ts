@@ -32,6 +32,14 @@ export {
   type SnakeToCamelOptions,
   snakeToCamel,
 } from './loader.js';
+export {
+  type ResolveEnvRefsResult,
+  redactConfig,
+  resolveEnvRefsInLayer,
+  resolveSecret,
+  type SecretState,
+  secretMarker,
+} from './secrets.js';
 export * from './types.js';
 export { deepMerge } from './utils.js';
 export {
