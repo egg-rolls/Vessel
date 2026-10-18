@@ -23,6 +23,9 @@ export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
   'delegate-task',
   'team',
   'mcp-client',
+  'workflow',
+  'evals',
+  'feishu',
 ]);
 
 export interface PluginDescriptor {

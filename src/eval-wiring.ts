@@ -73,8 +73,10 @@ export async function createEvalsRunner(options: EvalsRunnerOptions): Promise<Ev
     );
   }
 
-  const { runner } = mod.createEvalsPlugin({ outDir: resolveEvalsOutDir(options.config) });
-  return runner;
+  return mod.createEvalsPlugin({
+    outDir: resolveEvalsOutDir(options.config),
+    enabled: true,
+  });
 }
 
 export interface ExecuteEvalOptions extends EvalsRunnerOptions {
@@ -120,13 +122,14 @@ export async function executeEvalSuite(options: ExecuteEvalOptions): Promise<Exe
   }
 
   const runner = await createEvalsRunner(options);
-  const report = await runner.runSuite({
-    suitePath: resolved.path,
+  const report = await runner.runSuite(resolved.path, {
     outDir: resolveEvalsOutDir(options.config),
-    ...(options.out !== undefined ? { out: options.out } : {}),
-    ...(options.filters && options.filters.length > 0 ? { filters: options.filters } : {}),
-    network: wantNetwork,
-    ...(wantNetwork && options.provider ? { provider: options.provider } : {}),
+    ...(options.out !== undefined ? { outPath: options.out } : {}),
+    ...(options.filters && options.filters.length > 0 ? { filterTags: options.filters } : {}),
+    allowNetwork: wantNetwork,
+    ...(wantNetwork && options.provider
+      ? { providerFactory: () => options.provider as LLMProvider }
+      : {}),
   });
 
   const exitCode = report.failed + report.errors > 0 ? 1 : 0;
@@ -146,9 +149,6 @@ export async function latestEvalReport(
 
   try {
     const runner = await createEvalsRunner(options);
-    if (typeof runner.findLatestReport === 'function') {
-      return await runner.findLatestReport(suite);
-    }
     return await runner.getLatest(suite);
   } catch {
     return null;

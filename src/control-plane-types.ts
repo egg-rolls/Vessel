@@ -149,28 +149,30 @@ export interface EvalReport {
   cases: EvalCaseResult[];
 }
 
+/** 与 @vessel/evals `EvalRunOptions` 结构一致（去掉 suitePath） */
 export interface EvalRunOptionsLike {
-  suitePath: string;
+  /** suite 名解析目录 */
+  suiteDir?: string;
   /** 报告目录；写盘由 @vessel/evals report.ts 负责 */
-  outDir: string;
+  outDir?: string;
   /** --out 覆盖 */
-  out?: string;
-  filters?: string[];
-  network: boolean;
-  provider?: LLMProvider;
+  outPath?: string;
+  filterTags?: string[];
+  allowNetwork?: boolean;
+  /** 存在即视为网络 provider */
+  providerFactory?: () => LLMProvider;
+  model?: string;
+  enabled?: boolean;
 }
 
+/** `createEvalsPlugin()` 返回 Plugin + runner 合体 */
 export interface EvalRunnerLike {
-  runSuite(options: EvalRunOptionsLike): Promise<EvalReport>;
+  runSuite(suitePath: string, options?: EvalRunOptionsLike): Promise<EvalReport>;
   getLatest(suite: string): Promise<EvalReport | null>;
-  findLatestReport?(suite: string): Promise<EvalReport | null>;
 }
 
 export interface EvalsModuleLike {
-  createEvalsPlugin(options?: { outDir?: string }): {
-    plugin: Plugin;
-    runner: EvalRunnerLike;
-  };
+  createEvalsPlugin(options?: { outDir?: string; enabled?: boolean }): Plugin & EvalRunnerLike;
 }
 
 // ── feishu ──────────────────────────────────────
@@ -195,28 +197,40 @@ export interface FeishuSchedulerOptions {
   perAgentSerial: boolean;
 }
 
+/** 与 @vessel/feishu `FeishuPluginOptions` 结构一致 */
 export interface FeishuChannelOptionsLike {
-  appId: string;
-  appSecret: string;
-  domain: 'feishu' | 'lark';
-  allowedChatIds: string[];
-  sessionPrefix: string;
-  replyTimeoutMs: number;
-  maxReplyChars: number;
-  maxMembers: number;
+  /** 与 @vessel/feishu `FeishuConfig` 一致（env 已由 config loader 合并） */
+  config: {
+    enabled?: boolean;
+    appId?: string;
+    appSecret?: string;
+    domain?: 'feishu' | 'lark';
+    allowedChatIds?: string[];
+    sessionPrefix?: string;
+    replyTimeoutMs?: number;
+    maxReplyChars?: number;
+    maxMembers?: number;
+  };
+  events: EventStream;
   provider: LLMProvider;
   model: string;
   pluginHost: PluginHost;
   session: SessionBackend;
-  events: EventStream;
-  runStore?: RunStore;
   contextFactory?: () => ContextManager;
-  scheduler: FeishuSchedulerOptions;
+  runStore?: RunStore;
+  maxConcurrency?: number;
+  maxQueueSize?: number;
+  perAgentSerial?: boolean;
   transport?: unknown;
+  env?: Record<string, string | undefined>;
+}
+
+export interface FeishuPluginLike extends Plugin, FeishuChannelLike {
+  close(): Promise<void>;
 }
 
 export interface FeishuModuleLike {
-  createFeishuChannel(options: FeishuChannelOptionsLike): FeishuChannelLike;
+  createFeishuPlugin(options: FeishuChannelOptionsLike): FeishuPluginLike;
 }
 
 // ── observability ───────────────────────────────

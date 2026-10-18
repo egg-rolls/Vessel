@@ -64,9 +64,12 @@ export function resolveFeishuScheduler(config: VesselConfig): FeishuSchedulerOpt
   };
 }
 
-/** 只允许 app_id 前 4 位 + `***`（Addendum B §11.3.2 / Addendum D §13.5） */
+/**
+ * app_id 掩码（与 @vessel/feishu 的 maskAppId 同规则）：
+ * 长度 > 4 → 前 4 位 + `***`；否则整体 `***`，避免短 id 被完整暴露。
+ */
 export function maskAppId(appId: string): string {
-  return `${appId.slice(0, 4)}***`;
+  return appId.length > 4 ? `${appId.slice(0, 4)}***` : '***';
 }
 
 /** 带稳定 code 的错误 */
@@ -125,27 +128,40 @@ export async function createFeishuFromConfig(
   const load = options.loadModule ?? (async () => options.loader?.loadModule('feishu') ?? null);
   const mod = (await load()) as FeishuModuleLike | null | undefined;
 
-  if (!mod || typeof mod.createFeishuChannel !== 'function') {
+  if (!mod || typeof mod.createFeishuPlugin !== 'function') {
     throw feishuError(
       'feishu_plugin_unavailable',
-      'plugin "feishu" not found or does not export createFeishuChannel()',
+      'plugin "feishu" not found or does not export createFeishuPlugin()',
     );
   }
 
+  const scheduler = resolveFeishuScheduler(options.config);
   const channelOptions: FeishuChannelOptionsLike = {
-    ...resolved,
+    config: {
+      enabled: true,
+      appId: resolved.appId,
+      appSecret: resolved.appSecret,
+      domain: resolved.domain,
+      allowedChatIds: resolved.allowedChatIds,
+      sessionPrefix: resolved.sessionPrefix,
+      replyTimeoutMs: resolved.replyTimeoutMs,
+      maxReplyChars: resolved.maxReplyChars,
+      maxMembers: resolved.maxMembers,
+    },
+    events: options.events,
     provider: options.provider,
     model: options.model,
     pluginHost: options.pluginHost,
     session: options.session,
-    events: options.events,
-    scheduler: resolveFeishuScheduler(options.config),
+    maxConcurrency: scheduler.maxConcurrency,
+    maxQueueSize: scheduler.maxQueueSize,
+    perAgentSerial: scheduler.perAgentSerial,
     ...(options.runStore ? { runStore: options.runStore } : {}),
     ...(options.contextFactory ? { contextFactory: options.contextFactory } : {}),
     ...(options.transport !== undefined ? { transport: options.transport } : {}),
   };
 
-  return mod.createFeishuChannel(channelOptions);
+  return mod.createFeishuPlugin(channelOptions);
 }
 
 /** 幂等 stop（best-effort；shutdown 第一顺位） */

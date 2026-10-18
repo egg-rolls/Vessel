@@ -52,10 +52,10 @@ function report(overrides: Partial<EvalReport> = {}): EvalReport {
 }
 
 function fakeRunner(overrides: Partial<EvalRunnerLike> = {}) {
-  const calls: EvalRunOptionsLike[] = [];
+  const calls: Array<{ suitePath: string; options?: EvalRunOptionsLike }> = [];
   const runner: EvalRunnerLike = {
-    runSuite: async (options) => {
-      calls.push(options);
+    runSuite: async (suitePath, options) => {
+      calls.push({ suitePath, ...(options ? { options } : {}) });
       return report();
     },
     getLatest: async () => report(),
@@ -63,8 +63,11 @@ function fakeRunner(overrides: Partial<EvalRunnerLike> = {}) {
   };
   const mod: EvalsModuleLike = {
     createEvalsPlugin: () => ({
-      plugin: { name: 'evals', version: '0.3.0', install() {} },
-      runner,
+      name: 'evals',
+      version: '0.3.0',
+      install() {},
+      runSuite: runner.runSuite,
+      getLatest: runner.getLatest,
     }),
   };
   return { calls, runner, mod };
@@ -152,12 +155,12 @@ describe('executeEvalSuite', () => {
 
     expect(result.exitCode).toBe(0);
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual({
-      suitePath: fs.realpathSync(suitePath),
+    expect(calls[0]?.suitePath).toBe(fs.realpathSync(suitePath));
+    expect(calls[0]?.options).toEqual({
       outDir,
-      out: path.join(base, 'custom.json'),
-      filters: ['smoke', 'fast'],
-      network: false,
+      outPath: path.join(base, 'custom.json'),
+      filterTags: ['smoke', 'fast'],
+      allowNetwork: false,
     });
   });
 
@@ -173,7 +176,7 @@ describe('executeEvalSuite', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(calls[0]?.network).toBe(false);
+    expect(calls[0]?.options?.allowNetwork).toBe(false);
   });
 
   it('CLI flag true + config false -> eval_network_required', async () => {
@@ -207,8 +210,8 @@ describe('executeEvalSuite', () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(calls[0]?.network).toBe(true);
-    expect(calls[0]?.provider).toBe(provider);
+    expect(calls[0]?.options?.allowNetwork).toBe(true);
+    expect(calls[0]?.options?.providerFactory?.()).toBe(provider);
   });
 
   it('both gates true without provider -> eval_network_required', async () => {
@@ -278,7 +281,7 @@ describe('executeEvalSuite', () => {
 });
 
 describe('latestEvalReport', () => {
-  it('uses findLatestReport / getLatest for a safe suite', async () => {
+  it('uses getLatest for a safe suite', async () => {
     const { mod } = fakeRunner();
     await expect(
       latestEvalReport({ config: config(), loadModule: async () => mod }, 'smoke'),
@@ -286,8 +289,11 @@ describe('latestEvalReport', () => {
 
     const getLatestOnly: EvalsModuleLike = {
       createEvalsPlugin: () => ({
-        plugin: { name: 'evals', version: '0.3.0', install() {} },
-        runner: { runSuite: async () => report(), getLatest: async () => report({ total: 2 }) },
+        name: 'evals',
+        version: '0.3.0',
+        install() {},
+        runSuite: async () => report(),
+        getLatest: async () => report({ total: 2 }),
       }),
     };
     await expect(

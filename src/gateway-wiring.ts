@@ -34,12 +34,20 @@ export function buildGatewayControlPlane(
 
   if (options.metrics) {
     const metrics = options.metrics;
-    controlPlane.metrics = { snapshot: () => metrics.snapshot() };
+    // web 的 MetricsProvider 是函数，不是 { snapshot } 对象。
+    controlPlane.metrics = () => metrics.snapshot();
   }
 
   if (options.workflows) {
+    const workflows = options.workflows;
+    // web 的 WorkflowGatewayOptions extends WorkflowControlsLike（直接带方法）。
     controlPlane.workflows = {
-      controls: options.workflows,
+      listRuns: (opts?: Parameters<typeof workflows.listRuns>[0]) => workflows.listRuns(opts),
+      getRun: (id: string) => workflows.getRun(id),
+      start: (definitionPath: string, opts?: Parameters<typeof workflows.start>[1]) =>
+        workflows.start(definitionPath, opts),
+      resume: (id: string) => workflows.resume(id),
+      cancel: (id: string) => workflows.cancel(id),
       resolveDefinition: (name: string) => resolveWorkflowDefPathSync(options.config, name),
     };
   }

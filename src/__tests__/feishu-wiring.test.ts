@@ -9,9 +9,9 @@ import {
   type SessionBackend,
 } from '../../packages/core/src/index';
 import type {
-  FeishuChannelLike,
   FeishuChannelOptionsLike,
   FeishuModuleLike,
+  FeishuPluginLike,
 } from '../control-plane-types';
 import {
   assertFeishuStartable,
@@ -24,13 +24,20 @@ import {
 } from '../feishu-wiring';
 
 function makeChannel() {
-  const calls = { start: 0, stop: 0 };
-  const channel: FeishuChannelLike = {
+  const calls = { start: 0, stop: 0, close: 0 };
+  const channel: FeishuPluginLike = {
+    name: 'feishu',
+    version: '0.3.0',
+    description: 'fake',
+    install() {},
     start: async () => {
       calls.start++;
     },
     stop: async () => {
       calls.stop++;
+    },
+    close: async () => {
+      calls.close++;
     },
     status: () => ({
       connected: false,
@@ -42,10 +49,10 @@ function makeChannel() {
   return { channel, calls };
 }
 
-function fakeModule(channel: FeishuChannelLike) {
+function fakeModule(channel: FeishuPluginLike) {
   const created: FeishuChannelOptionsLike[] = [];
   const mod: FeishuModuleLike = {
-    createFeishuChannel(options) {
+    createFeishuPlugin(options) {
       created.push(options);
       return channel;
     },
@@ -117,9 +124,14 @@ describe('resolveFeishuOptions', () => {
 });
 
 describe('maskAppId', () => {
-  it('keeps only the first four characters', () => {
+  it('keeps the first four characters only when longer than four', () => {
     expect(maskAppId('cli_abcdefg')).toBe('cli_***');
-    expect(maskAppId('ab')).toBe('ab***');
+    expect(maskAppId('abcde')).toBe('abcd***');
+  });
+
+  it('fully masks ids of length <= 4', () => {
+    expect(maskAppId('abcd')).toBe('***');
+    expect(maskAppId('ab')).toBe('***');
     expect(maskAppId('')).toBe('***');
   });
 });
@@ -217,10 +229,10 @@ describe('createFeishuFromConfig', () => {
     const options = created[0] as FeishuChannelOptionsLike;
     expect(options).not.toHaveProperty('host');
     expect(options).not.toHaveProperty('runtime');
-    expect(options.appId).toBe('cli_test_id');
-    expect(options.appSecret).toBe('test_secret');
-    expect(options.allowedChatIds).toEqual(['oc_1']);
-    expect(options.maxMembers).toBe(4);
+    expect(options.config.appId).toBe('cli_test_id');
+    expect(options.config.appSecret).toBe('test_secret');
+    expect(options.config.allowedChatIds).toEqual(['oc_1']);
+    expect(options.config.maxMembers).toBe(4);
     expect(options.provider).toBe(provider);
     expect(options.model).toBe('test-model');
     expect(options.pluginHost).toBe(pluginHost);
@@ -229,11 +241,9 @@ describe('createFeishuFromConfig', () => {
     expect(options.runStore).toBe(runStore);
     expect(options.contextFactory).toBe(contextFactory);
     expect(options.transport).toBe(transport);
-    expect(options.scheduler).toEqual({
-      maxConcurrency: 2,
-      maxQueueSize: 5,
-      perAgentSerial: false,
-    });
+    expect(options.maxConcurrency).toBe(2);
+    expect(options.maxQueueSize).toBe(5);
+    expect(options.perAgentSerial).toBe(false);
   });
 
   it('enabled without credentials -> feishu_invalid', async () => {

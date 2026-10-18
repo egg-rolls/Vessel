@@ -102,8 +102,10 @@ describe('buildGatewayControlPlane', () => {
       feishu,
     });
 
-    const metricsInjected = controlPlane.metrics as { snapshot(): unknown };
-    expect(metricsInjected.snapshot()).toEqual(metrics.snapshot());
+    // web MetricsProvider 是函数
+    expect(typeof controlPlane.metrics).toBe('function');
+    const metricsInjected = controlPlane.metrics as () => unknown;
+    expect(metricsInjected()).toEqual(metrics.snapshot());
 
     const feishuInjected = controlPlane.feishu as { status(): unknown };
     expect(feishuInjected.status()).toEqual(feishu.status());
@@ -123,10 +125,18 @@ describe('buildGatewayControlPlane', () => {
     const controlPlane = buildGatewayControlPlane({ config, workflows: engine });
 
     const workflows = controlPlane.workflows as {
-      controls: WorkflowEngineLike;
+      listRuns: WorkflowEngineLike['listRuns'];
+      getRun: WorkflowEngineLike['getRun'];
+      start: WorkflowEngineLike['start'];
+      resume: WorkflowEngineLike['resume'];
+      cancel: WorkflowEngineLike['cancel'];
       resolveDefinition(name: string): string | undefined;
     };
-    expect(workflows.controls).toBe(engine);
+    expect(typeof workflows.listRuns).toBe('function');
+    expect(typeof workflows.getRun).toBe('function');
+    expect(typeof workflows.start).toBe('function');
+    expect(typeof workflows.resume).toBe('function');
+    expect(typeof workflows.cancel).toBe('function');
     expect(workflows.resolveDefinition('demo')).toBe(fs.realpathSync(demo));
     expect(workflows.resolveDefinition('missing')).toBeUndefined();
     expect(workflows.resolveDefinition('../demo')).toBeUndefined();
@@ -139,11 +149,11 @@ describe('buildGatewayControlPlane', () => {
 
     const mod = {
       createEvalsPlugin: () => ({
-        plugin: { name: 'evals', version: '0.3.0', install() {} },
-        runner: {
-          runSuite: async () => report(),
-          getLatest: async () => report(),
-        },
+        name: 'evals',
+        version: '0.3.0',
+        install() {},
+        runSuite: async () => report(),
+        getLatest: async () => report(),
       }),
     };
     const loader = {

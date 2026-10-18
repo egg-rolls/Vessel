@@ -97,10 +97,10 @@ function setup(overrides: { enabled?: boolean; allowNetwork?: boolean } = {}): {
 }
 
 function fakeModule(runner: Partial<EvalRunnerLike> = {}) {
-  const calls: EvalRunOptionsLike[] = [];
+  const calls: Array<{ suitePath: string; options?: EvalRunOptionsLike }> = [];
   const fullRunner: EvalRunnerLike = {
-    runSuite: async (options) => {
-      calls.push(options);
+    runSuite: async (suitePath, options) => {
+      calls.push({ suitePath, ...(options ? { options } : {}) });
       return report();
     },
     getLatest: async () => report(),
@@ -108,8 +108,11 @@ function fakeModule(runner: Partial<EvalRunnerLike> = {}) {
   };
   const mod: EvalsModuleLike = {
     createEvalsPlugin: () => ({
-      plugin: { name: 'evals', version: '0.3.0', install() {} },
-      runner: fullRunner,
+      name: 'evals',
+      version: '0.3.0',
+      install() {},
+      runSuite: fullRunner.runSuite,
+      getLatest: fullRunner.getLatest,
     }),
   };
   return { calls, mod, loadModule: async () => mod };
@@ -159,10 +162,10 @@ describe('eval command', () => {
 
     expect(code).toBe(0);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.outDir).toBe(outDir);
-    expect(calls[0]?.out).toBe(out);
-    expect(calls[0]?.filters).toEqual(['smoke', 'fast']);
-    expect(calls[0]?.network).toBe(false);
+    expect(calls[0]?.options?.outDir).toBe(outDir);
+    expect(calls[0]?.options?.outPath).toBe(out);
+    expect(calls[0]?.options?.filterTags).toEqual(['smoke', 'fast']);
+    expect(calls[0]?.options?.allowNetwork).toBe(false);
   });
 
   it('CLI flag without config allow_network -> exit 2', async () => {
@@ -188,8 +191,8 @@ describe('eval command', () => {
     );
 
     expect(code).toBe(0);
-    expect(calls[0]?.network).toBe(true);
-    expect(calls[0]?.provider).toBeDefined();
+    expect(calls[0]?.options?.allowNetwork).toBe(true);
+    expect(calls[0]?.options?.providerFactory).toBeDefined();
   });
 
   it('failed cases -> exit 1', async () => {

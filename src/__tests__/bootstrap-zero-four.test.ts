@@ -4,8 +4,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { bootstrap } from '../bootstrap';
 import type {
-  FeishuChannelLike,
   FeishuChannelOptionsLike,
+  FeishuPluginLike,
   MetricsControlLike,
   WorkflowEngineLike,
   WorkflowEngineOptionsLike,
@@ -93,7 +93,12 @@ function makeWorkflowEngine(log: string[]) {
 }
 
 function makeFeishuChannel(log: string[]) {
-  const channel: FeishuChannelLike = {
+  const channel: FeishuPluginLike = {
+    name: 'feishu',
+    version: '0.3.0',
+    description: 'fake',
+    install() {},
+    close: async () => {},
     start: async () => {
       log.push('feishu.start');
     },
@@ -230,7 +235,7 @@ describe('bootstrap 0.4 activation', () => {
       headless: true,
       ...paths,
       loadFeishuModule: async () => ({
-        createFeishuChannel: (options: FeishuChannelOptionsLike) => {
+        createFeishuPlugin: (options: FeishuChannelOptionsLike) => {
           created.push(options);
           return channel;
         },
@@ -242,15 +247,13 @@ describe('bootstrap 0.4 activation', () => {
       expect(created).toHaveLength(1);
       expect(created[0]).not.toHaveProperty('host');
       expect(created[0]).not.toHaveProperty('runtime');
-      expect(created[0]?.maxMembers).toBe(4);
-      expect(created[0]?.appId).toBe('test_app_id');
+      expect(created[0]?.config.maxMembers).toBe(4);
+      expect(created[0]?.config.appId).toBe('test_app_id');
       expect(created[0]?.provider).toBeDefined();
       expect(created[0]?.model).toBeDefined();
-      expect(created[0]?.scheduler).toEqual({
-        maxConcurrency: 2,
-        maxQueueSize: 100,
-        perAgentSerial: true,
-      });
+      expect(created[0]?.maxConcurrency).toBe(2);
+      expect(created[0]?.maxQueueSize).toBe(100);
+      expect(created[0]?.perAgentSerial).toBe(true);
       expect(log).not.toContain('feishu.start');
       expect(result.ctx.feishu?.status().connected).toBe(false);
     } finally {
@@ -324,7 +327,7 @@ describe('bootstrap 0.4 shutdown', () => {
         createWorkflowEngine: () => engine,
       }),
       loadFeishuModule: async () => ({
-        createFeishuChannel: () => channel,
+        createFeishuPlugin: () => channel,
       }),
       metricsFactory: () => metrics,
     });
