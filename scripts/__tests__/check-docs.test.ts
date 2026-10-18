@@ -25,7 +25,7 @@ async function withFixture(
 
 function validFiles(): Record<string, string> {
   return {
-    '.env.example': `# token\n${PRIORITY}\nVESSEL_GATEWAY_TOKEN=\n`,
+    '.env.example': `# token\n${PRIORITY}\nVESSEL_GATEWAY_TOKEN=\nVESSEL_FEISHU_APP_ID=\nVESSEL_FEISHU_APP_SECRET=\n`,
     'README.md': `# Vessel\nVESSEL_GATEWAY_TOKEN\n${PRIORITY}\n`,
     'docs/ARCHITECTURE.md': `# Arch\nVESSEL_GATEWAY_TOKEN\n${PRIORITY}\n`,
     'AGENTS.md': '# Agents\n[ARCHITECTURE](docs/ARCHITECTURE.md)\n',
@@ -51,6 +51,23 @@ describe('checkDocs', () => {
           expect.objectContaining({
             file: '.env.example',
             message: expect.stringContaining('留空'),
+          }),
+        );
+      },
+    );
+  });
+
+  it('rejects non-empty Feishu credentials', async () => {
+    await withFixture(
+      {
+        ...validFiles(),
+        '.env.example': `${PRIORITY}\nVESSEL_GATEWAY_TOKEN=\nVESSEL_FEISHU_APP_ID=real-id\nVESSEL_FEISHU_APP_SECRET=\n`,
+      },
+      async (root) => {
+        expect(await checkDocs(root)).toContainEqual(
+          expect.objectContaining({
+            file: '.env.example',
+            message: expect.stringContaining('VESSEL_FEISHU_APP_ID'),
           }),
         );
       },

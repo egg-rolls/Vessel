@@ -3,6 +3,51 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.4.0] - 2026-10-18
+
+> 0.4 代码就绪，发布决定在 1；**0.4 只做发布干跑，不 tag、不 publish、不合并 `main`**。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布。
+
+### Added
+
+- `@vessel/workflow`：声明式 workflow 插件——YAML/JSON DAG、`agent` / `tool` 步骤、模板插值、重试 / `on_error` / `when`、并行上限、run 持久化与 resume、`WorkflowControls` 控制面；工厂式插件，不进 core，不注册模型工具。
+- `@vessel/evals`：默认离线的 eval harness——suite / case、脚本化 mock provider、断言白名单（`output_contains` / `output_matches` / `no_error` / `tool_called` / `tool_not_called` / `max_duration_ms` / `max_iterations` / `usage_under`）、JSON 报告、`report.ts` 写盘与 latest 查找。
+- `@vessel/feishu`：飞书渠道插件——官方 SDK WebSocket 长连接、`FeishuTransport` 抽象、专用 `InProcessRuntimeHost`、per-chat session（`feishu:<chat_id>`）、文本消息、队列上限、凭据掩码；`--feishu` 附加开关。
+- `@vessel/core`：`MetricsCollector` / `MetricsSnapshot`（进程内事件聚合）；`MemoryEventStreamOptions.maxHistory`（缺省 1000、显式 0 = 不限制、>0 环形缓冲）；`pruneRuns` helper（`status` / `older_than_ms` / `keep_latest`）。
+- `@vessel/config`：`workflow` / `evals` / `feishu` / `observability` 四个配置块与严格校验；`feishu.agent_id` 已删除，按未知键拒绝。
+- CLI：`vessel workflow run|list|show|resume|cancel`、`vessel eval <suite>`、`--feishu`（TTY → REPL + 渠道；非 TTY → 仅渠道前台；`--serve` → gateway + 渠道）。
+- `@vessel/tui`：`/workflows`、`/metrics`、`/feishu`、启动横幅（interrupted workflow / 飞书已连接）。
+- `@vessel/serve`：`GET /v1/metrics`、`/v1/workflows*`、`/v1/channels/feishu`、`GET /v1/evals/latest`；新错误码与 `hello.features`；慢客户端丢事件并标记 `gap`。
+- `apps/web`：workflow / metrics / 飞书面板。
+- 发布干跑：`scripts/release-dry-run.ts` + `Release Dry Run` CI job（PR + `release/**`；不 tag / 不 publish / 不上传）；Offline Integration 扩展 workflow / evals / feishu / core。
+
+### Changed
+
+- `@vessel/core` 的 `./observability` subpath 在 0.3 已存在；0.4 **改指**到新的 `src/observability/index.ts` barrel，并继续 re-export 原 events 符号（不是新增 subpath）。
+- 四个新配置块全缺省时行为与 0.3 一致；`observability` 块缺省时不注入 metrics；事件历史缺省仍为 1000。
+- 发布流程不变：1.0 前不发布；0.4 只干跑，tag / publish / 合并 `main` 仍由 1 决定。
+
+### Fixed
+
+- `@vessel/core`：长会话 context compact 后消息/事件不重复、不丢最后一条用户消息。
+- `@vessel/core`：`InProcessRuntimeHost` 在 run 结束时释放 `AbortSignal` 监听器，避免泄漏；关闭路径清理成员、排队 run 与交互请求。
+- `@vessel/core`：`Scheduler` 队列满 / 并发取消 / 同成员串行的并发不变量由测试固定。
+- 发布干跑：`entry_file_missing`（`main` / `types` / `exports` 目标不在 tarball 中）由 warning 提升为 **error**。
+- 0.3 基线已包含 PeerRegistry stop race 修复（`ec25cfc`），0.4 不回归。
+
+### Known limitations
+
+- workflow `type: tool` 直接调用 handler，**绕过 runtime 的 guardrail / hook**；需要 guardrail 的步骤用 `type: agent`。
+- workflow resume 不保证 step 幂等；重跑可能重复副作用。
+- workflow agent step 使用 Host 中已存在的成员，**共享其 session**；workflow 级会话隔离不在 0.4 承诺。
+- workflow `cancel` 只支持同进程；跨进程 run 返回 `workflow_not_found`。
+- `MetricsCollector` 的 `runs.cancelled` 保持 0，取消的 run 计入 `runs.failed`；resume 不计 `runs.started`，因此 `completed` 可能大于 `started`。
+- `pruneRuns` 的 `kept` 受 `RunStore.list` 200 窗口限制，`keep_latest > 200` 不保证精确；prune 不自动调度。
+- 事件历史上限只作用于 `MemoryEventStream`；`FileEventStore` 不自动轮转。
+- 飞书只支持文本、单 chat 单 session；真实 WebSocket 连接未在离线 CI 验证（CI 使用 mock transport）；达到 `max_members` 时新 chat 回 `busy`，不逐出已有成员；不做富媒体 / 卡片 / thread / 多机器人 / OAuth。
+- eval 使用 mock provider 时 usage 可能为 0；`usage_under` 的判定以实际报告为准；真实 provider 需 `config.evals.allowNetwork` + CLI `--allow-network` 双门控。
+- 发布干跑通过不代表 npm 凭据、2FA、provenance 的线上配置已完成；0.4 不生成 `latest.json`。
+
 ## [0.3.0] - 2026-10-17
 
 > 0.1.0 与 0.2 均未单独发布；0.2 的变更并入本版本。0.3.0 代码就绪，发布决定在 1。

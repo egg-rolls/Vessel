@@ -314,6 +314,10 @@ interface RunEvent {
 }
 ```
 
+0.4 增加 `MemoryEventStreamOptions`：**缺省 `maxHistory = 1000`**；显式 `0` = 不限制；
+`>0` = 环形缓冲，只保留最近 N 条。构造函数接受 `MemoryEventStreamOptions | number`，
+数字形式保持 0.3 语义。`replayRun` / `FileEventStore` 语义不变，`FileEventStore` 不自动轮转（ADR-045）。
+
 ### 5.4 `ToolDefinition`（`types/tool.ts`）
 
 ```ts
@@ -488,6 +492,8 @@ interface RunStore {
 
 实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
 
+0.4 增加 `pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunStore` 接口**，也不自动调度（ADR-045）。
+
 ## 6. `AgentRuntime` 公开面
 
 ```ts
@@ -551,6 +557,9 @@ plugins/
 ├── tools/delegate-task/     → delegate_task（工厂式）
 ├── tools/team/              → team_* 5 个（工厂式；默认不加载，team.enabled 才构造）
 ├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
+├── workflow/engine/         → @vessel/workflow（工厂式；workflow.enabled 才构造）
+├── evals/harness/           → @vessel/evals（工厂式；asm 直接调用库，不注册工具）
+├── im/feishu/               → @vessel/feishu（工厂式；--feishu 才启动）
 ├── security/guardrail-pii/  → 输入输出 PII 脱敏
 ├── security/redact-secrets/ → 工具结果与输出里的密钥脱敏
 ├── security/tool-policy/    → ToolCall 阶段 allowlist / denylist
@@ -558,7 +567,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-共 **10 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team` 与 `mcp-client`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
+共 **13 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team`、`mcp-client`、`workflow`、`evals` 与 `feishu`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；workflow 要求 `workflow.enabled: true`；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
 
 `PluginLoader` 的接口：
 
@@ -588,7 +597,7 @@ class PluginLoader {
 
 loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验器对未知键报错——配置写错要立刻知道，不静默忽略。
 
-### 9.1 配置块（0.1.0）
+### 9.1 配置块（当前）
 
 | 键 | 说明 |
 |---|---|
@@ -601,6 +610,10 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
 | `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`，`path` 默认 `~/.vessel/runs`，0.3 只接受 `checkpoint_every: iteration` |
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true` 且 token 非空；cert/key 必须成对 |
+| `workflow.enabled` / `dir` / `path` / `max_parallel` / `step_timeout_ms` | 默认 false；`dir` 默认 `./workflows`、`path` 默认 `~/.vessel/workflows`；`max_parallel` 1..8（默认 2）；`step_timeout_ms` 1..86400000（默认 300000）。`enabled: true` 且 `dir` 不存在 → 启动失败 |
+| `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
+| `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
+| `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
 
 0.3 配置示例：
 
@@ -634,6 +647,8 @@ serve:
 - `VESSEL_PROVIDER_API_KEY` 可回填顶层 `apiKey`。
 
 **注意**：`vessel.yaml` 的 `tools:` 声明段已删除（连同 `ToolConfig` 类型）。从前"用户在配置里声明一个 shell/http 工具"这条路径没有了——有了 `bash` 之后，加能力就是写文件 + 跑命令。
+
+0.4 的四个新块**全缺省时行为与 0.3 一致**：不构造 workflow 引擎、CLI `eval` 不可用、不启动飞书、不注入 metrics；`event_history` 仍为 1000。严格校验：类型、范围、未知键；`feishu.enabled: true` 且（env + config）无凭据 → 启动失败；`workflow.enabled: true` 且 `dir` 不存在 → 启动失败（`path` 不存在则创建）；`evals.allowNetwork: true` 不自动开启 CLI flag。
 
 ## 10. 事件系统
 
@@ -674,6 +689,8 @@ serve:
 | `ask.user.requested` / `ask.user.answered` | 工具 → TUI → 工具 | ask_user 交互暂停 |
 | `mcp.server.connected` / `mcp.server.failed` / `mcp.server.disconnected` | MCP 插件 → 观测 | server 生命周期（失败隔离） |
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
+| `workflow.started` / `workflow.step.started` / `workflow.step.completed` / `workflow.step.failed` / `workflow.completed` / `workflow.failed` / `workflow.cancelled` / `workflow.interrupted` / `workflow.resumed` | workflow 插件 → 观测 | 编排生命周期；**没有 `workflow.step.skipped`**，skipped 只在 run 详情与计数中 |
+| `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |
 
 插件可自定义任意 `<domain>.*` 事件名，无需改 core。
 
@@ -724,14 +741,16 @@ serve:
 
 > MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变「三个能力工具」的判据。
 
+**0.4 的 workflow / evals / feishu 不注册模型工具**，工具口径不变（默认 4 / 交互 5 / team 9 / 4 + N MCP）。workflow 的入口只有 CLI / TUI / gateway；模型不能触发任意路径的 workflow 定义（ADR-042）。
+
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 
 ## 12. 装配层（`src/`）
 
 | 文件 | 职责 |
 |---|---|
-| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update`；非交互且无 Key 时快速失败，不进首启向导 |
-| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥 |
+| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `workflow` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导 |
+| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `workflow` / `eval` 子命令与 `--feishu` 附加开关 |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
 | `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore |
@@ -747,9 +766,33 @@ serve:
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
 
-**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 0.3 的 `mcp` / `runs` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
+**0.4 CLI / TUI 入口**：
 
-**用户可见行为（0.3.0）**：
+```text
+vessel workflow run <name-or-path> [--input key=value]...
+vessel workflow list [--status <status>] [--limit <n>]
+vessel workflow show <workflowRunId>
+vessel workflow resume <workflowRunId>
+vessel workflow cancel <workflowRunId>
+
+vessel eval <suite-name-or-path> [--json] [--out <path>] [--filter <tag>] [--allow-network]
+
+vessel --feishu
+```
+
+- `workflow` / `eval` 是位置 0 的子命令；未知子命令 → parse error（退出码 2）。
+- `workflow list` / `show` / `cancel` 允许 controls-only（无 host/runtime）；
+  `start` / `resume` 缺后端 → `workflow_disabled`，exit 2。
+- `eval` 的报告写盘由 `@vessel/evals/report.ts` 负责，asm 只传 `outDir` / `--out`。
+- `--feishu` 是附加开关：TTY + 无 `--serve` → REPL + 渠道；非 TTY + 无 `--serve` →
+  仅渠道前台；`--serve` → gateway + 渠道。与 `--run` / `--pipe` / `--resume-run` /
+  `--tools` / `--version` / `--help` 互斥。
+- TUI：`/workflows [list|run|show|resume|cancel]`、`/metrics`、`/feishu`；
+  启动横幅只在存在 interrupted workflow run 或飞书已连接时追加一行。
+
+**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 0.3 的 `mcp` / `runs` 控制面适配器与 0.4 的 `workflows` / `metrics` / `feishu` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
+
+**用户可见行为（0.3.0；0.4 见上）**：
 
 - `/clear` 只清屏，不清空 `ContextManager`；需要新会话用 `/new`。
 - `@路径` 引用在发送前展开为注入消息，界面以引用块展示，用户原文不变。
@@ -790,11 +833,21 @@ serve:
 | `GET /v1/durable/runs?status=&session_id=&limit=` | durable run 摘要列表；`status` 支持逗号分隔，缺省全部；默认 50、最大 200（0.3） |
 | `POST /v1/durable/runs/:runId/resume` | 202 `{run_id, status:'queued'}`；未启用/不支持 resume → `durable_disabled`（0.3） |
 | `GET /v1/mcp/servers` | `{servers:[{name,status,tools,error?}]}`；未注入 → `mcp_disabled`（0.3） |
+| `GET /v1/metrics` | `{metrics: MetricsSnapshot}`；未注入 → `metrics_disabled`（0.4） |
+| `GET /v1/workflows?status=&limit=` | `{workflows: WorkflowRunSummary[]}`；未注入 → `workflow_disabled`（0.4） |
+| `GET /v1/workflows/:id` | `{workflow: WorkflowRunDetail}`；不存在 → 404 `workflow_not_found`（0.4） |
+| `POST /v1/workflows/run` | `{name, inputs?}` → 202 `{workflow_run_id, status:'queued'}`；name 只在 `workflow.dir` 下解析（0.4） |
+| `POST /v1/workflows/:id/resume` | 202 `{workflow_run_id, status:'queued'}`（0.4） |
+| `POST /v1/workflows/:id/cancel` | 202 `{workflow_run_id, status:'cancelled'}`；已完成/失败 → 409 `workflow_invalid`；已取消幂等 202（0.4） |
+| `GET /v1/channels/feishu` | `{channel: FeishuStatus}`；未注入 → `channel_disabled`（0.4） |
+| `GET /v1/evals/latest?suite=` | `{report: EvalReport}`；无报告 → 404 `eval_not_found`（0.4） |
 | `POST /run` | 0.1.0 兼容的阻塞式入口 |
 
 WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 在 0.1.0 返回 `method_not_allowed`（0.2 草案见 `protocol.ts`）。
 
 0.3 新增稳定错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `durable_disabled` / `mcp_disabled`；`hello.features` 按实际启用增加 `durable-resume` / `mcp-status` / `tls`。
+
+0.4 新增稳定错误码（additive）：`metrics_disabled` / `workflow_disabled` / `workflow_not_found` / `workflow_invalid` / `workflow_already_running` / `workflow_not_resumable` / `channel_disabled` / `eval_not_found`；`hello.features` 按实际启用增加 `workflow` / `evals` / `feishu` / `metrics`。HTTP 映射：404 `*_not_found`；409 `*_already_running` / `*_not_resumable` / not cancellable；503 `*_disabled`；400 `invalid_request`。`queued` 只是 gateway 接受态，不是 `WorkflowRunStatus`。`workflow_cancelled` 不加入协议错误码，控制面抛该码时映射为 409 `workflow_invalid`。
 
 ### 13.3 G1：权限与 ask_user 桥
 
@@ -814,6 +867,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - token 来源优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。生成值 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
 - 事件流是长连接：`Bun.serve` 的 `idleTimeout` 默认 `0`（禁用，可用 `GatewayOptions.idleTimeout` 覆盖）；heartbeat 默认 15s，SSE 发 `: ping` 注释、WS 发 `ping` 帧，用于穿透代理与检测死客户端。
 - 请求体上限 1 MiB；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）；HTML 带 CSP；无 `*` CORS。
+- **0.4 背压**：gateway `SeqEventBuffer` 缺省 10000，**永不无界**，与 core `observability.event_history` 的 `0 = unlimited` 语义独立、不被覆盖。WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；超过阈值先丢事件并标记 `gap`，4 MiB 硬断开作为最后手段。gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
 
 ### 13.5.1 远程监听与 TLS（0.3）
 
@@ -831,6 +885,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - token 存 URL fragment，再转 `sessionStorage`。
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
 - 0.3：按 `hello.features` 显示 **MCP server 面板**（`mcp-status`）与 **interrupted run 面板**（`durable-resume`），可触发 durable resume；未启用的 feature 不显示面板。面板 10s 刷新。
+- 0.4：按 `hello.features` 显示 **workflow 面板**（列表 / 详情 / 启动 / resume / cancel）、**metrics 快照**与 **飞书状态**（`workflow` / `metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
 - 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
 - **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir` / `durable` / `mcp`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2、静态托管、durable/MCP 面板在 `--serve` 下生效。
@@ -845,7 +900,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **定位**：Vessel 是可嵌入的**多 agent 平台 runtime**；TUI / CLI / Web / Gateway 是参考 harness 外壳，只消费 runtime 的 SDK 与事件。
 - **分层**：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。依赖方向单向，并由 CI 自动检查。
 - **Module ≠ Plugin**：Module 是编译期/构造期边界（一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制。**不引入 `ModuleHost` / `ModuleRegistry` / 第二套扩展机制。**
-- **0.2 非目标（0.3 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；workflow / evals / 多租户 / 跨机器 / 单二进制仍非目标。
+- **0.2 非目标（0.3 / 0.4 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；0.4 以插件实现 workflow / evals / 飞书；多租户 / 跨机器 / 单二进制仍非目标。
 
 ### 14.2 Kernel（已实现）
 
@@ -896,3 +951,160 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | MCP client | `plugins/mcp/client/`（`@vessel/mcp-client`） | 插件，不是 core 模块；stdio + HTTP；默认 ask（ADR-039） |
 | 远程 / TLS | `packages/serve/src/gateway.ts` + `src/serve-config.ts` | 显式 opt-in；非回环必须 token；HTTP/1.1（ADR-041） |
 | 控制面 | `packages/serve/src/{durable,mcp}.ts`；TUI `/mcp` `/runs`；CLI `--resume-run` | 0.3 新增端点见 §13.2；命令见 §12 |
+
+## 15. 0.4 能力层（release/0.4，未发布）
+
+> 0.4 的主题是「可编排、可评测、可观测、可对话」。三个能力全部是**插件**，
+> core 只新增可观测性/稳定性原语；决策见 ADR-042 / 043 / 044 / 045。
+> 默认全部关闭；四个新配置块缺省时行为与 0.3 一致。
+
+### 15.1 Workflow（`@vessel/workflow`）
+
+- **位置与形态**：`plugins/workflow/engine/`，工厂式插件（`FACTORY_PLUGINS` 短名
+  `workflow`），由 asm 构造；**不是 core 模块**。
+- **定义**：YAML/JSON；步骤 `type: agent | tool`，`depends_on` 形成 DAG；
+  模板只做字符串插值（`{{inputs.*}}`、`{{steps.<id>.output|status}}`、
+  `{{workflow.name}}`），不做表达式/脚本求值。环依赖、未知依赖/变量/工具/成员 = 定义错误。
+- **执行**：依赖满足的步骤并行，上限 `min(定义值, workflow.max_parallel)`；
+  单 agent 回退强制串行。`type: agent` 调 `host.get(agent).run(prompt)`；
+  `type: tool` 直接调 `PluginHost.getTool(name).handler`，**绕过 runtime 的
+  guardrail / hook**（已知限制）；权限 `ask` / `deny` 一律拒绝
+  （`permission_denied`），workflow 不弹权限框。
+- **状态与持久化**：run id `wf_<uuid>`；workflow 状态 `pending | running |
+  completed | failed | cancelled | interrupted`；step 状态 `pending | running |
+  completed | failed | skipped | cancelled`。一 run 一 JSON（`workflow.path`），
+  temp + rename 原子写；检查点：workflow 开始、每 step 开始/结束、workflow 结束；
+  run JSON 保存完整定义快照。**只要有 step 最终 failed，workflow 终态为 failed**
+  （即使 `on_error: continue`）。
+- **resume**：允许 `interrupted | failed | running`；`completed | cancelled` →
+  `workflow_not_resumable`。跳过 `completed` / `skipped`；`running` / `pending` /
+  `failed` 重置为 `pending` 并重跑；**不保证 step 幂等**。
+- **cancel / interrupt**：`cancel()` → `cancelled`（running step `cancelled`、
+  pending step `skipped`），不可 resume；SIGINT/SIGTERM → `interrupted`，可 resume。
+  0.4 `workflow cancel` 只支持同进程，对非本进程 run 返回 `workflow_not_found`。
+- **controls-only**：`workflow list` / `show` / `cancel` 允许只构造 store 侧引擎，
+  `host` / `runtime` 缺省；`start` / `resume` 两者都缺省 → `workflow_disabled`，exit 2。
+- **会话**：agent step 使用 Host 中已存在的成员，不为每个 run 新建成员；同一成员的
+  多次 workflow run 共享 session，Host 默认 `perAgentSerial` 串行化。单 agent 回退
+  由 asm 为每次 run 生成 `workflow:<run_id>`。workflow 级会话隔离不在 0.4 承诺。
+- **入口**：CLI / TUI `/workflows` / gateway `/v1/workflows*`；**不注册模型工具**。
+- **错误码**：`workflow_not_found` / `workflow_invalid` / `workflow_already_running` /
+  `workflow_not_resumable` / `workflow_cancelled` / `workflow_disabled`。
+- **事件**：`workflow.*`（开放字符串）；**没有 `workflow.step.skipped`**。
+- **退出码**：0 成功；1 workflow failed；2 参数/配置错误 / `workflow_disabled`；
+  130 用户 cancel / SIGINT；143 SIGTERM。
+
+### 15.2 Evals（`@vessel/evals`）
+
+- **位置与形态**：`plugins/evals/harness/`；库 + 运行器，加入 `FACTORY_PLUGINS`
+  仅为阻止被当作普通插件扫描；**不注册工具**；asm CLI 直接调用库函数。
+- **默认离线**：只使用脚本化 mock provider。真实 provider 需要
+  `config.evals.allowNetwork === true` **且** CLI `--allow-network` 同时成立；
+  任一缺失 → `eval_network_required`，exit 2；报告 `network: true`。
+- **Suite**：YAML/JSON；`defaults.timeout_ms` / `tags` / `session: fresh|shared`；
+  `mock.responses` 按序回放，耗尽记 `mock_exhausted` 警告。
+- **断言白名单**：`output_contains` / `output_matches` / `no_error` / `tool_called` /
+  `tool_not_called` / `max_duration_ms` / `max_iterations` / `usage_under`；
+  未知类型 = 配置错误，不执行任意代码。
+- **报告**：**命名、写盘、latest 查找由 `report.ts` 负责**；文件名
+  `<suite>-<YYYYMMDDTHHmmssSSSZ>.json`；`--out` 覆盖；`findLatestReport` 按
+  `finished_at` 倒序取第一条，损坏文件跳过。asm 只传 `outDir` / `--out` 并处理
+  `--json` 的 stdout，不重复实现写盘。
+- **退出码**：0 全部 passed/skipped；1 存在 failed/error；2 suite 解析/配置错误；
+  `evals.enabled: false` → `eval_invalid`（消息注明 disabled），exit 2。
+- **入口**：CLI `vessel eval`；gateway 只读 `GET /v1/evals/latest`；不做面板。
+
+### 15.3 飞书（`@vessel/feishu`）
+
+- **位置与形态**：`plugins/im/feishu/`，工厂式插件；官方 SDK 只在该插件包，
+  core 依赖保持为空；所有网络交互藏在 `FeishuTransport` 后，测试/CI 用 mock。
+- **专用 Host**：渠道自建专用 `InProcessRuntimeHost`（`maxMembers =
+  feishu.max_members`，默认 8，范围 1..64）；per-chat 懒 spawn 成员，
+  `sessionId = feishu:<chat_id>`，agent id `feishu_<sanitized chat_id>`；
+  同一 chat 串行，不同 chat 并行；达到成员上限新 chat 回 `busy`，不逐出。
+- **行为**：只处理 `im.message.receive_v1` 的 text；忽略机器人自己、非文本、重复
+  `message_id`（LRU 1000，去重先于业务过滤，非文本也登记）。单 chat 队列 10
+  （只计 pending）；`im.message.reply` 到原消息；超过 `max_reply_chars` 截断并追加
+  `…(truncated)`；`reply_timeout_ms` 到期取消该 run。
+- **配置**：`enabled / app_id / app_secret / domain / allowed_chat_ids /
+  session_prefix / reply_timeout_ms / max_reply_chars / max_members`；
+  env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；
+  **`agent_id` 已删除，严格按未知键拒绝**。
+- **凭据**：`app_secret` 永不打印；`app_id` 只显示前 4 位 + `***`。
+- **运行模式**：TTY + 无 `--serve` → REPL + 渠道；非 TTY + 无 `--serve` → 仅渠道
+  前台（阻塞到 SIGINT/SIGTERM）；`--serve` → gateway + 渠道。`--feishu` 与
+  `--run` / `--pipe` / `--resume-run` / `--tools` / `--version` / `--help` 互斥。
+- **状态/错误**：`FeishuStatus` / `FeishuChannel`；`channel_disabled` /
+  `channel_not_connected` / `channel_auth_failed`；事件 `channel.feishu.*`。
+- **退出码**：配置错误 2；运行期连接/SDK 失败 1；SIGINT 130；SIGTERM 143。
+
+### 15.4 边界
+
+- 0.4 **不注册** `run_workflow` 或任何 workflow/eval/feishu 工具；工具口径不变。
+- 不做 workflow 可视化编辑器、多租户、跨机器编排、飞书富媒体/卡片/thread/多机器人/
+  OAuth、个人微信。微信公众号/企业微信留 0.5 评估。
+- 0.4 **不 tag、不 publish、不合并 `main`**；只做发布干跑。
+
+## 16. 0.4 可观测性与稳定性
+
+### 16.1 `MetricsCollector`
+
+- 位置：`packages/core/src/observability/metrics.ts`；从根入口与
+  `@vessel/core/observability` 导出。
+- **`./observability` subpath 不是 0.4 新增**：0.3 已存在（当时指向
+  `src/events/index.ts`）；0.4 把它**改指**到新的 `src/observability/index.ts` barrel，
+  继续 re-export 原 events 符号。
+- 订阅既有事件：`run.started` / `run.completed` / `run.failed` / `run.cancelled` /
+  `tool.call.started` / `tool.call.failed` / `llm.response`；**不新增事件、不改 runtime**。
+- `MetricsSnapshot`：`runs` / `tool_calls` / `llm` / `duration_ms` / `updated_at`。
+  `duration_ms.avg` 以 completed + failed 为分母；无样本为 0。
+- **`runs.cancelled` 保持 0**：取消计入 `runs.failed`（core 取消路径发 `run.failed`）；
+  resume 不计 `runs.started`，按终态计 completed/failed，因此 `completed` 可能大于
+  `started`。
+- 进程内聚合，不持久化、不跨 Host 合并；`observability.metrics: false` 彻底关闭
+  collector 注入与 gateway/TUI 控制面。
+
+### 16.2 事件历史上限
+
+- `MemoryEventStreamOptions.maxHistory`：**缺省 1000**；显式 `0` = 不限制；
+  `>0` = 环形缓冲，`getHistory()` 不超过 N。
+- 构造函数接受 `MemoryEventStreamOptions | number`，数字形式保持 0.3 语义；
+  `MemoryEventBus` 增加可选 `MemoryEventStreamOptions` 构造参数。
+- `replayRun` / `FileEventStore` 语义不变；`FileEventStore` 不自动轮转。
+
+### 16.3 `pruneRuns`
+
+- `pruneRuns(store, opts?)`：仅给 `status` → 删除全部匹配项；
+  `older_than_ms` / `keep_latest` 至少一个才做年龄/保留裁剪；`keep_latest` 在
+  status 过滤后的集合内按 `updated_at` 倒序、`run_id` 升序；`keep_latest = 0`
+  删除全部匹配项；完全无条件 → 不删除。
+- `kept` = 操作后仍保留的、符合 `status` 过滤的条目数；`RunStore.list` 的 200
+  上限不可精确统计，`keep_latest > 200` 不保证精确。
+- **不修改 `RunStore` 接口**；不自动调度，由用户/运维显式调用。
+
+### 16.4 Gateway 背压
+
+- `SeqEventBuffer` 缺省 10000，**永不无界**；与 core `event_history` 独立。
+- WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；
+  超阈值先丢事件并标记 `gap`，4 MiB 硬断开作为最后手段。
+- 单请求体仍限 1 MiB；远程 / 鉴权 / Host / Origin 规则不变。
+- gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
+
+### 16.5 加固
+
+- `AgentRuntime` compact 后事件与消息不重复、不丢最后一条用户消息。
+- `InProcessRuntimeHost` 关闭路径清理成员、排队 run、交互请求；100 次
+  spawn/close 循环后内部 Map 无残留。
+- `Scheduler` 队列满、并发取消、同成员串行不得死锁。
+
+### 16.6 已知限制（0.4）
+
+- workflow resume 不保证 step 幂等，重跑可能重复副作用。
+- workflow `type: tool` 绕过 runtime 的 guardrail / hook；需要 guardrail 用 `type: agent`。
+- workflow agent step 共享 Host 成员 session，无 workflow 级会话隔离。
+- workflow 单 agent 回退时并行退化为串行；`cancel` 只支持同进程。
+- 飞书只支持文本、单 chat 单 session；不做 thread 区分与富媒体。
+- `MetricsCollector` 是进程内聚合，不持久化；多 Host 不合并。
+- `pruneRuns` 是 helper，不自动调度。
+- 事件历史上限只作用于 `MemoryEventStream`；`FileEventStore` 不自动轮转。
+- 发布干跑通过不代表 npm 凭据、2FA、provenance 的线上配置已完成。
