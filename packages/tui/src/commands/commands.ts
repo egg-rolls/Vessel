@@ -30,6 +30,7 @@ import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
 import { metricsCommand } from './metrics-command.js';
 import { runsCommand } from './runs-command.js';
+import { tenantCommand } from './tenant-command.js';
 import { workflowsCommand } from './workflows-command.js';
 
 // ── 类型 ──────────────────────────────────────────
@@ -143,6 +144,7 @@ export function createCommands(): CommandRegistry {
   reg.register(feishuCommand());
   reg.register(capabilitiesCommand());
   reg.register(configCommand());
+  reg.register(tenantCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));

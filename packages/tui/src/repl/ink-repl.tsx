@@ -490,7 +490,12 @@ function InkRepl({ ctx }: InkReplProps) {
   return (
     <Box flexDirection="column" height={stdout.rows}>
       {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
-      <StatusBar provider={ctx.provider} session={state.currentSessionId} plugins={ctx.plugins} />
+      <StatusBar
+        provider={ctx.provider}
+        session={state.currentSessionId}
+        plugins={ctx.plugins}
+        {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
+      />
       <UpdateBanner events={ctx.events} />
 
       {/* 滚动区域：历史 + 流式输出 + 子 agent 活动，flexGrow 撑满剩余空间 */}

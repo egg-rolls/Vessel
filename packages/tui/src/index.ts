@@ -102,6 +102,8 @@ export type {
   RpcErrorLike,
   RpcEventNotificationLike,
   TenantInfoLike,
+  TenantQuotaLike,
+  TenantSummaryLike,
   WorkflowOutcomeLike,
   WorkflowRunDetailLike,
   WorkflowRunHandle,

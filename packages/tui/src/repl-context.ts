@@ -229,6 +229,22 @@ export interface TenantInfoLike {
   data_dir?: string;
 }
 
+/** tenant 元数据（A-4 §11.3 / asm TenantMeta 形状） */
+export interface TenantQuotaLike {
+  max_sessions?: number;
+  max_runs_per_day?: number;
+  max_concurrent_runs?: number;
+  max_storage_bytes?: number;
+}
+
+export interface TenantSummaryLike {
+  tenant_id: string;
+  name?: string;
+  created_at?: number;
+  status?: 'active' | 'disabled';
+  quota?: TenantQuotaLike;
+}
+
 /** capability manifest（A-3 / DECISION-010 §2.3） */
 export interface CapabilityMethodLike {
   name: string;

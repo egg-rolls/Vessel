@@ -109,6 +109,25 @@ describe('buildStartupNotice', () => {
     ).toBeNull();
   });
 
+  it('0.5：非 default tenant 追加一段；default 不显示', () => {
+    expect(buildStartupNotice({ mcpServers: null, interruptedRuns: null, tenantId: 'acme' })).toBe(
+      'ℹ Tenant: acme — /tenant',
+    );
+    expect(
+      buildStartupNotice({ mcpServers: null, interruptedRuns: null, tenantId: 'default' }),
+    ).toBeNull();
+  });
+
+  it('tenant 段位于最前', () => {
+    expect(
+      buildStartupNotice({
+        mcpServers: [mcpServer('a')],
+        interruptedRuns: [],
+        tenantId: 'acme',
+      }),
+    ).toBe('ℹ Tenant: acme · MCP: 1 server — /tenant · /mcp');
+  });
+
   it('四段组合顺序固定为 MCP -> runs -> workflows -> feishu', () => {
     expect(
       buildStartupNotice({
@@ -219,5 +238,10 @@ describe('loadStartupNotice', () => {
       status: () => ({ ...connectedFeishu, connected: false }),
     } satisfies FeishuControlLike;
     expect(await loadStartupNotice(ctx)).toBeNull();
+  });
+
+  it('0.5：从 ctx.tenant 读取 tenant 横幅', async () => {
+    const ctx = makeCtx({ tenant: { tenant_id: 'acme' } });
+    expect(await loadStartupNotice(ctx)).toBe('ℹ Tenant: acme — /tenant');
   });
 });
