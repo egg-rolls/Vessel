@@ -144,6 +144,8 @@ export class InProcessRuntimeHost implements RuntimeHost {
 
   private readonly members = new Map<string, MemberRecord>();
   private readonly handles = new Map<string, AgentHandle>();
+  /** 已通过 spawn 检查、尚未完成异步构造的成员 id（名额预留） */
+  private readonly spawning = new Set<string>();
   /** 非成员邮箱（owner / 外部地址）；send 时按需创建（Q2） */
   private readonly extraInboxes = new Map<string, AgentMessage[]>();
   /** 子成员交互请求 → 其事件流；用于把 owner 的应答路由回去（B4） */
@@ -208,94 +210,116 @@ export class InProcessRuntimeHost implements RuntimeHost {
     if (!AGENT_ID_PATTERN.test(id)) {
       throw new Error(`invalid agent id "${id}": must match [A-Za-z0-9_-]{1,64}`);
     }
-    if (this.members.has(id)) throw new Error(`agent already exists: ${id}`);
-    if (this.members.size >= this.maxMembers) {
+    // 同步预留名额：runtimeFactory 是异步的，若只检查 members.size，并发 spawn
+    // 会全部通过检查；spawning 记录「已通过检查、尚未注册」的 id。
+    if (this.members.has(id) || this.spawning.has(id)) {
+      throw new Error(`agent already exists: ${id}`);
+    }
+    if (this.members.size + this.spawning.size >= this.maxMembers) {
       throw new Error(`agent limit reached (max ${this.maxMembers})`);
     }
+    this.spawning.add(id);
 
-    const memberEvents = this.eventStreamFactory();
-    const context = resolved.context ?? this.contextFactory?.() ?? new MemoryContextManager();
-    const session =
-      resolved.session ?? (this.session ? new AgentSessionScope(this.session, id) : undefined);
-    const limits = resolved.limits ?? this.limits ?? {};
-    // 0.2 R1/R2：run/agent 同源；host 预算与更细作用域后续接
-    const runLimits = limits.run ?? limits.agent ?? {};
-    const termination = limits.termination ??
-      resolved.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 };
-    const permission = resolved.permission ?? this.permission;
+    let runtime: RunnableAgent | undefined;
+    let unsubscribeEvents: Unsubscribe | undefined;
+    try {
+      const memberEvents = this.eventStreamFactory();
+      const context = resolved.context ?? this.contextFactory?.() ?? new MemoryContextManager();
+      const session =
+        resolved.session ?? (this.session ? new AgentSessionScope(this.session, id) : undefined);
+      const limits = resolved.limits ?? this.limits ?? {};
+      // 0.2 R1/R2：run/agent 同源；host 预算与更细作用域后续接
+      const runLimits = limits.run ?? limits.agent ?? {};
+      const termination = limits.termination ??
+        resolved.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 };
+      const permission = resolved.permission ?? this.permission;
 
-    const runtime = await this.runtimeFactory({
-      provider: resolved.provider,
-      model: resolved.model,
-      context,
-      events: memberEvents,
-      pluginHost: resolved.pluginHost ?? this.pluginHost ?? new MemoryPluginHost(),
-      ...(session ? { session } : {}),
-      limits: runLimits,
-      termination,
-      ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}),
-      ...(permission !== undefined ? { permission } : {}),
-      // 0.3：Host 的 store 优先；checkpoint 单写者是成员 runtime
-      ...(this.runStore ? { runStore: this.runStore } : {}),
-      agentId: id,
-    });
-
-    const record: MemberRecord = {
-      id,
-      ...(resolved.name !== undefined ? { name: resolved.name } : {}),
-      spec: resolved,
-      runtime,
-      events: memberEvents,
-      state: 'idle',
-      inbox: [],
-      unsubscribeEvents: () => {},
-      closed: false,
-    };
-
-    record.unsubscribeEvents = memberEvents.subscribe((event) => {
-      // B4：记录交互请求的归属；请求本身继续转发到 Host 聚合流（owner 可见）
-      if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
-        const requestId = readRequestId(event.data);
-        if (requestId) {
-          this.pendingInteractions.set(requestId, {
-            memberId: id,
-            runId: event.run_id,
-            events: memberEvents,
-          });
-        }
-      }
-      // 0.3 加固：run 结束后清理未应答的交互请求，避免长生命周期进程泄漏
-      if (
-        event.type === 'run.completed' ||
-        event.type === 'run.failed' ||
-        event.type === 'run.cancelled'
-      ) {
-        this.clearRunInteractions(id, event.run_id);
-      }
-      // Host 路由回来的应答不再转发，避免 host.events ↔ member.events 回环
-      if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
-        return;
-      }
-      // A9：从 run.completed 捕获本次 run 的 usage
-      if (event.type === 'run.completed') {
-        const usage = readUsage(event.data);
-        if (usage) record.active?.setUsage(usage);
-      }
-      this.events.publish({
-        ...event,
-        data: withAgentId(event.data, id),
+      runtime = await this.runtimeFactory({
+        provider: resolved.provider,
+        model: resolved.model,
+        context,
+        events: memberEvents,
+        pluginHost: resolved.pluginHost ?? this.pluginHost ?? new MemoryPluginHost(),
+        ...(session ? { session } : {}),
+        limits: runLimits,
+        termination,
+        ...(resolved.systemPrompt !== undefined ? { systemPrompt: resolved.systemPrompt } : {}),
+        ...(permission !== undefined ? { permission } : {}),
+        // 0.3：Host 的 store 优先；checkpoint 单写者是成员 runtime
+        ...(this.runStore ? { runStore: this.runStore } : {}),
+        agentId: id,
       });
-    });
 
-    const handle = new InProcessAgentHandle(this, record);
-    this.members.set(id, record);
-    this.handles.set(id, handle);
-    this.publish('agent.spawned', {
-      agentId: id,
-      ...(resolved.name !== undefined ? { name: resolved.name } : {}),
-    });
+      // spawn 等待期间 Host 可能已关闭：不要往已关闭的 Host 里注册成员
+      if (this.closed) throw new Error('runtime host is closed');
 
-    return handle;
+      const record: MemberRecord = {
+        id,
+        ...(resolved.name !== undefined ? { name: resolved.name } : {}),
+        spec: resolved,
+        runtime,
+        events: memberEvents,
+        state: 'idle',
+        inbox: [],
+        unsubscribeEvents: () => {},
+        closed: false,
+      };
+
+      unsubscribeEvents = memberEvents.subscribe((event) => {
+        // B4：记录交互请求的归属；请求本身继续转发到 Host 聚合流（owner 可见）
+        if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
+          const requestId = readRequestId(event.data);
+          if (requestId) {
+            this.pendingInteractions.set(requestId, {
+              memberId: id,
+              runId: event.run_id,
+              events: memberEvents,
+            });
+          }
+        }
+        // 0.3 加固：run 结束后清理未应答的交互请求，避免长生命周期进程泄漏
+        if (
+          event.type === 'run.completed' ||
+          event.type === 'run.failed' ||
+          event.type === 'run.cancelled'
+        ) {
+          this.clearRunInteractions(id, event.run_id);
+        }
+        // Host 路由回来的应答不再转发，避免 host.events ↔ member.events 回环
+        if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
+          return;
+        }
+        // A9：从 run.completed 捕获本次 run 的 usage
+        if (event.type === 'run.completed') {
+          const usage = readUsage(event.data);
+          if (usage) record.active?.setUsage(usage);
+        }
+        this.events.publish({
+          ...event,
+          data: withAgentId(event.data, id),
+        });
+      });
+      record.unsubscribeEvents = unsubscribeEvents;
+
+      const handle = new InProcessAgentHandle(this, record);
+      this.members.set(id, record);
+      this.handles.set(id, handle);
+      this.publish('agent.spawned', {
+        agentId: id,
+        ...(resolved.name !== undefined ? { name: resolved.name } : {}),
+      });
+
+      return handle;
+    } catch (error) {
+      // 失败路径：释放已创建的 runtime 与订阅，避免名额/资源泄漏
+      this.members.delete(id);
+      this.handles.delete(id);
+      unsubscribeEvents?.();
+      runtime?.dispose();
+      throw error;
+    } finally {
+      this.spawning.delete(id);
+    }
   }
 
   get(id: string): AgentHandle | undefined {
