@@ -7,8 +7,14 @@
  * 排序：updated_at 倒序，同值 run_id 升序；展示上限 20。
  */
 
-import { classifyError, formatClassifiedError } from '../error-classifier.js';
-import type { DurableRunSummary, ReplContext } from '../repl-context.js';
+import type {
+  DurableRunHandle,
+  DurableRunOutcome,
+  DurableRunSummary,
+  ReplContext,
+} from '../repl-context.js';
+import { formatRpcError } from '../rpc.js';
+import { waitForRunCompletion } from '../rpc-events.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
@@ -89,22 +95,113 @@ function usage(message: string): CommandResult {
 function listFailure(error: unknown): CommandResult {
   return {
     handled: true,
-    output: `\nFailed to list durable runs:\n${formatClassifiedError(classifyError(error))}\n`,
+    output: `\nFailed to list durable runs:\n${formatRpcError(error)}\n`,
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readRunSummaries(value: unknown): DurableRunSummary[] {
+  const raw = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.runs)
+      ? value.runs
+      : [];
+  return raw
+    .filter(
+      (item): item is Record<string, unknown> => isRecord(item) && typeof item.run_id === 'string',
+    )
+    .map((item) => ({
+      run_id: item.run_id as string,
+      session_id: typeof item.session_id === 'string' ? item.session_id : '',
+      ...(typeof item.agent_id === 'string' ? { agent_id: item.agent_id } : {}),
+      ...(item.status === 'running' || item.status === 'interrupted'
+        ? { status: item.status }
+        : { status: 'interrupted' as const }),
+      updated_at: typeof item.updated_at === 'number' ? item.updated_at : 0,
+      ...(typeof item.iteration === 'number' ? { iteration: item.iteration } : {}),
+      ...(typeof item.preview === 'string' ? { preview: item.preview } : {}),
+    }));
+}
+
+interface ResumeResultLike {
+  run_id: string;
+  session_id: string;
+}
+
+function readResumeResult(value: unknown): ResumeResultLike | null {
+  const raw = isRecord(value) && isRecord(value.run) ? value.run : value;
+  if (!isRecord(raw)) return null;
+  const runId =
+    typeof raw.run_id === 'string'
+      ? raw.run_id
+      : typeof raw.runId === 'string'
+        ? raw.runId
+        : undefined;
+  if (!runId) return null;
+  const sessionId =
+    typeof raw.session_id === 'string'
+      ? raw.session_id
+      : typeof raw.sessionId === 'string'
+        ? raw.sessionId
+        : '';
+  return { run_id: runId, session_id: sessionId };
+}
+
+async function listRunSummaries(
+  ctx: ReplContext,
+  status: 'running' | 'interrupted',
+  limit: number,
+): Promise<DurableRunSummary[]> {
+  if (ctx.rpc) {
+    return readRunSummaries(await ctx.rpc.request<unknown>('runs.list', { status, limit }));
+  }
+  return ctx.runs ? ctx.runs.list({ status, limit }) : [];
+}
+
+function mapRunOutcome(outcome: {
+  status: 'completed' | 'failed' | 'cancelled';
+  error?: unknown;
+}): DurableRunOutcome {
+  if (outcome.status === 'failed') return { status: 'failed', error: outcome.error };
+  return { status: outcome.status };
+}
+
+/** 0.5：RPC resume 只返回 id；完成由事件判定（Q2） */
+function resumeViaRpc(ctx: ReplContext, runId: string): Promise<DurableRunHandle> {
+  if (!ctx.rpc) throw new Error('rpc unavailable');
+  const rpc = ctx.rpc;
+
+  return rpc.request<unknown>('runs.resume', { run_id: runId }).then((raw) => {
+    const result = readResumeResult(raw);
+    if (!result) throw new Error('invalid runs.resume result');
+    const waiter = waitForRunCompletion(rpc, result.run_id);
+
+    return {
+      runId: result.run_id,
+      sessionId: result.session_id,
+      done: waiter.done.then(mapRunOutcome),
+      cancel: () => {
+        waiter.stop();
+        void rpc.request('runs.cancel', { run_id: result.run_id }).catch(() => undefined);
+      },
+    } satisfies DurableRunHandle;
+  });
 }
 
 /** /runs 的执行体（导出供单测） */
 export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<CommandResult> {
-  const control = ctx.runs;
-  if (!control) return disabledMessage();
+  if (!ctx.rpc && !ctx.runs) return disabledMessage();
 
   const [subcommand, runId, ...rest] = args;
 
   if (subcommand === undefined) {
     try {
       const [running, interrupted] = await Promise.all([
-        control.list({ status: 'running', limit: DISPLAY_LIMIT }),
-        control.list({ status: 'interrupted', limit: DISPLAY_LIMIT }),
+        listRunSummaries(ctx, 'running', DISPLAY_LIMIT),
+        listRunSummaries(ctx, 'interrupted', DISPLAY_LIMIT),
       ]);
       return { handled: true, output: formatRuns(mergeRuns(running, interrupted)) };
     } catch (error) {
@@ -121,7 +218,9 @@ export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<
   }
 
   try {
-    const handle = await control.resume(runId);
+    const handle = ctx.rpc
+      ? await resumeViaRpc(ctx, runId)
+      : await (ctx.runs as NonNullable<ReplContext['runs']>).resume(runId);
     ctx.onSessionChange(handle.sessionId);
     return {
       handled: true,
@@ -132,9 +231,7 @@ export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to resume run "${runId}":\n${formatClassifiedError(
-        classifyError(error),
-      )}\n`,
+      output: `\nFailed to resume run "${runId}":\n${formatRpcError(error)}\n`,
     };
   }
 }

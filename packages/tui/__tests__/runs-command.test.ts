@@ -159,3 +159,90 @@ describe('/runs command', () => {
     expect((await runRunsCommand(['wat'], ctx)).output ?? '').toContain('Unknown /runs subcommand');
   });
 });
+
+describe('0.5 RPC 路径', () => {
+  it('runs.list 走方法表并合并 running/interrupted', async () => {
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+          calls.push({ method, params });
+          const status = (params as { status?: string }).status;
+          return {
+            runs:
+              status === 'running' ? [run('r1', 20, 'running')] : [run('r2', 10, 'interrupted')],
+          } as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+
+    const result = await runRunsCommand([], ctx);
+    expect(result.output).toContain('Durable runs (2');
+    expect(calls).toEqual([
+      { method: 'runs.list', params: { status: 'running', limit: 20 } },
+      { method: 'runs.list', params: { status: 'interrupted', limit: 20 } },
+    ]);
+  });
+
+  it('runs.resume 只取 id，run.completed 事件完成', async () => {
+    const handlers = new Set<(notification: unknown) => void>();
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string, params?: unknown): Promise<T> {
+          calls.push({ method, params });
+          if (method === 'runs.resume') return { run_id: 'r1', session_id: 's1' } as T;
+          return {} as T;
+        },
+        subscribe(handler) {
+          handlers.add(handler as (notification: unknown) => void);
+          return () => handlers.delete(handler as (notification: unknown) => void);
+        },
+      },
+    });
+
+    const result = await runRunsCommand(['resume', 'run-1'], ctx);
+    expect(result.nextState).toEqual({ currentSessionId: 's1' });
+    expect(result.resumeRun?.runId).toBe('r1');
+    expect(handlers.size).toBe(1);
+
+    for (const handler of [...handlers]) {
+      handler({
+        method: 'events.event',
+        params: { type: 'run.completed', run_id: 'r1', data: {} },
+      });
+    }
+    await expect(result.resumeRun?.done).resolves.toEqual({ status: 'completed' });
+    expect(handlers.size).toBe(0);
+
+    result.resumeRun?.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.some((call) => call.method === 'runs.cancel')).toBe(true);
+  });
+
+  it('runs.resume 失败事件带 error', async () => {
+    const handlers = new Set<(notification: unknown) => void>();
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string): Promise<T> {
+          if (method === 'runs.resume') return { run_id: 'r1', session_id: 's1' } as T;
+          return {} as T;
+        },
+        subscribe(handler) {
+          handlers.add(handler as (notification: unknown) => void);
+          return () => handlers.delete(handler as (notification: unknown) => void);
+        },
+      },
+    });
+
+    const result = await runRunsCommand(['resume', 'run-1'], ctx);
+    for (const handler of [...handlers]) {
+      handler({
+        method: 'events.event',
+        params: { type: 'run.failed', run_id: 'r1', data: { error: 'boom' } },
+      });
+    }
+    await expect(result.resumeRun?.done).resolves.toEqual({ status: 'failed', error: 'boom' });
+  });
+});

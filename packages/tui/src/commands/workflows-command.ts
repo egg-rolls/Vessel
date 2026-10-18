@@ -11,6 +11,7 @@ import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import type { WorkflowTurnOutcome } from '../repl/run-turn.js';
 import type {
   ReplContext,
+  WorkflowOutcomeLike,
   WorkflowRunDetailLike,
   WorkflowRunHandle,
   WorkflowRunStatusLike,
@@ -19,6 +20,8 @@ import type {
   WorkflowStepSummaryLike,
   WorkflowsControl,
 } from '../repl-context.js';
+import { formatRpcError } from '../rpc.js';
+import { waitForWorkflowCompletion } from '../rpc-events.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
@@ -303,6 +306,124 @@ function makeHandle(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function numberAt(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0;
+}
+
+function isWorkflowStatus(value: unknown): value is WorkflowRunStatusLike {
+  return typeof value === 'string' && isWorkflowRunStatus(value);
+}
+
+function isStepStatus(value: unknown): value is WorkflowStepSummaryLike['status'] {
+  return (
+    value === 'pending' ||
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'skipped' ||
+    value === 'cancelled'
+  );
+}
+
+function readWorkflowId(value: unknown): string | null {
+  const raw = isRecord(value) && isRecord(value.workflow) ? value.workflow : value;
+  if (!isRecord(raw)) return null;
+  if (typeof raw.workflow_run_id === 'string') return raw.workflow_run_id;
+  if (typeof raw.workflowRunId === 'string') return raw.workflowRunId;
+  return null;
+}
+
+function readWorkflowSummary(value: unknown): WorkflowRunSummaryLike | null {
+  if (!isRecord(value) || typeof value.workflow_run_id !== 'string') return null;
+  return {
+    workflow_run_id: value.workflow_run_id,
+    workflow_name: typeof value.workflow_name === 'string' ? value.workflow_name : '-',
+    status: isWorkflowStatus(value.status) ? value.status : 'pending',
+    step_count: numberAt(value.step_count),
+    completed_steps: numberAt(value.completed_steps),
+    started_at: numberAt(value.started_at),
+    updated_at: numberAt(value.updated_at),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+  };
+}
+
+function readWorkflowRuns(value: unknown): WorkflowRunSummaryLike[] {
+  const raw = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.workflows)
+      ? value.workflows
+      : isRecord(value) && Array.isArray(value.runs)
+        ? value.runs
+        : [];
+  return raw.map(readWorkflowSummary).filter((run): run is WorkflowRunSummaryLike => run !== null);
+}
+
+function readStep(value: unknown): WorkflowStepSummaryLike | null {
+  if (!isRecord(value) || typeof value.id !== 'string') return null;
+  return {
+    id: value.id,
+    type: value.type === 'tool' ? 'tool' : 'agent',
+    status: isStepStatus(value.status) ? value.status : 'pending',
+    attempts: numberAt(value.attempts),
+    ...(typeof value.started_at === 'number' ? { started_at: value.started_at } : {}),
+    ...(typeof value.finished_at === 'number' ? { finished_at: value.finished_at } : {}),
+    ...(typeof value.error === 'string' ? { error: value.error } : {}),
+    ...(typeof value.output_preview === 'string' ? { output_preview: value.output_preview } : {}),
+  };
+}
+
+function readInputs(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const inputs: Record<string, string> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (typeof item === 'string') inputs[key] = item;
+  }
+  return inputs;
+}
+
+function readWorkflowDetail(value: unknown): WorkflowRunDetailLike | null {
+  const raw = isRecord(value) && isRecord(value.workflow) ? value.workflow : value;
+  const summary = readWorkflowSummary(raw);
+  if (!summary || !isRecord(raw)) return null;
+  const steps = Array.isArray(raw.steps)
+    ? raw.steps.map(readStep).filter((step): step is WorkflowStepSummaryLike => step !== null)
+    : [];
+  return {
+    ...summary,
+    definition_path: typeof raw.definition_path === 'string' ? raw.definition_path : '',
+    inputs: readInputs(raw.inputs),
+    steps,
+  };
+}
+
+/** 0.5：RPC start/resume 只返回 id，完成由 workflow.* 事件判定（Q2） */
+function makeRpcHandle(
+  rpc: NonNullable<ReplContext['rpc']>,
+  workflowRunId: string,
+): WorkflowRunHandle {
+  const waiter = waitForWorkflowCompletion(rpc, workflowRunId);
+  return {
+    workflowRunId,
+    done: waiter.done.then(
+      (outcome): WorkflowOutcomeLike => ({
+        workflow_run_id: workflowRunId,
+        status: outcome.status,
+        ...(outcome.error !== undefined ? { error: String(outcome.error) } : {}),
+      }),
+    ),
+    cancel: async () => {
+      waiter.stop();
+      await rpc
+        .request('workflow.cancel', { workflow_run_id: workflowRunId })
+        .catch(() => undefined);
+    },
+  };
+}
+
 function singleId(args: string[], subcommand: string): ParseResult<string> {
   const id = args[0];
   if (id === undefined || id.length === 0 || args.length !== 1) {
@@ -316,8 +437,9 @@ export async function runWorkflowsCommand(
   args: string[],
   ctx: ReplContext,
 ): Promise<CommandResult> {
+  const rpc = ctx.rpc;
   const control = ctx.workflows;
-  if (!control) return disabledMessage();
+  if (!rpc && !control) return disabledMessage();
 
   const [subcommand, ...rest] = args;
 
@@ -329,7 +451,9 @@ export async function runWorkflowsCommand(
         limit: parsed.value.limit,
       };
       if (parsed.value.status) options.status = parsed.value.status;
-      const runs = await control.listRuns(options);
+      const runs = rpc
+        ? readWorkflowRuns(await rpc.request<unknown>('workflow.list', options))
+        : await (control as WorkflowsControl).listRuns(options);
       const sorted = sortWorkflowRuns(runs).slice(0, parsed.value.limit);
       return {
         handled: true,
@@ -338,7 +462,7 @@ export async function runWorkflowsCommand(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to list workflow runs:\n${formatClassifiedError(classifyError(error))}\n`,
+        output: `\nFailed to list workflow runs:\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -347,21 +471,33 @@ export async function runWorkflowsCommand(
     const parsed = parseWorkflowRunArgs(rest);
     if (!parsed.ok) return usage(parsed.message);
     try {
-      const started = await control.start(
+      if (rpc) {
+        const raw = await rpc.request<unknown>('workflow.start', {
+          name: parsed.value.name,
+          ...(parsed.value.inputs ? { inputs: parsed.value.inputs } : {}),
+        });
+        const id = readWorkflowId(raw);
+        if (!id) throw new Error('invalid workflow.start result');
+        return {
+          handled: true,
+          output: `\nStarted workflow run "${id}" (${parsed.value.name}).\n`,
+          workflowRun: makeRpcHandle(rpc, id),
+        };
+      }
+
+      const started = await (control as WorkflowsControl).start(
         parsed.value.name,
         parsed.value.inputs ? { inputs: parsed.value.inputs } : undefined,
       );
       return {
         handled: true,
         output: `\nStarted workflow run "${started.workflowRunId}" (${parsed.value.name}).\n`,
-        workflowRun: makeHandle(control, started),
+        workflowRun: makeHandle(control as WorkflowsControl, started),
       };
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to start workflow "${parsed.value.name}":\n${formatClassifiedError(
-          classifyError(error),
-        )}\n`,
+        output: `\nFailed to start workflow "${parsed.value.name}":\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -370,15 +506,17 @@ export async function runWorkflowsCommand(
     const parsed = singleId(rest, subcommand);
     if (!parsed.ok) return usage(parsed.message);
     try {
-      const detail = await control.getRun(parsed.value);
+      const detail = rpc
+        ? readWorkflowDetail(
+            await rpc.request<unknown>('workflow.get', { workflow_run_id: parsed.value }),
+          )
+        : await (control as WorkflowsControl).getRun(parsed.value);
       if (!detail) return usage(`Workflow run "${parsed.value}" not found.`);
       return { handled: true, output: formatWorkflowDetail(detail) };
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to load workflow run "${parsed.value}":\n${formatClassifiedError(
-          classifyError(error),
-        )}\n`,
+        output: `\nFailed to load workflow run "${parsed.value}":\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -387,18 +525,28 @@ export async function runWorkflowsCommand(
     const parsed = singleId(rest, subcommand);
     if (!parsed.ok) return usage(parsed.message);
     try {
-      const started = await control.resume(parsed.value);
+      if (rpc) {
+        const raw = await rpc.request<unknown>('workflow.resume', {
+          workflow_run_id: parsed.value,
+        });
+        const resumedId = readWorkflowId(raw) ?? parsed.value;
+        return {
+          handled: true,
+          output: `\nResuming workflow run "${resumedId}"...\n`,
+          workflowRun: makeRpcHandle(rpc, resumedId),
+        };
+      }
+
+      const started = await (control as WorkflowsControl).resume(parsed.value);
       return {
         handled: true,
         output: `\nResuming workflow run "${started.workflowRunId}"...\n`,
-        workflowRun: makeHandle(control, started),
+        workflowRun: makeHandle(control as WorkflowsControl, started),
       };
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to resume workflow run "${parsed.value}":\n${formatClassifiedError(
-          classifyError(error),
-        )}\n`,
+        output: `\nFailed to resume workflow run "${parsed.value}":\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -407,7 +555,11 @@ export async function runWorkflowsCommand(
     const parsed = singleId(rest, subcommand);
     if (!parsed.ok) return usage(parsed.message);
     try {
-      await control.cancel(parsed.value);
+      if (rpc) {
+        await rpc.request('workflow.cancel', { workflow_run_id: parsed.value });
+      } else {
+        await (control as WorkflowsControl).cancel(parsed.value);
+      }
       return {
         handled: true,
         output: `\nCancellation requested for workflow run "${parsed.value}".\n`,
@@ -415,9 +567,7 @@ export async function runWorkflowsCommand(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to cancel workflow run "${parsed.value}":\n${formatClassifiedError(
-          classifyError(error),
-        )}\n`,
+        output: `\nFailed to cancel workflow run "${parsed.value}":\n${formatRpcError(error)}\n`,
       };
     }
   }

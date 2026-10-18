@@ -24,6 +24,7 @@
  */
 
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
+import { formatRpcError } from '../rpc.js';
 import { capabilitiesCommand } from './capabilities-command.js';
 import { configCommand } from './config-command.js';
 import { feishuCommand } from './feishu-command.js';
@@ -340,20 +341,57 @@ function historyCommand(): CommandEntry {
 
 // ── /tools ───────────────────────────────────────
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readToolList(value: unknown): Array<{ name: string; description?: string }> {
+  const raw = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.tools)
+      ? value.tools
+      : [];
+  return raw
+    .filter(
+      (item): item is Record<string, unknown> => isRecord(item) && typeof item.name === 'string',
+    )
+    .map((item) => ({
+      name: item.name as string,
+      ...(typeof item.description === 'string' ? { description: item.description } : {}),
+    }));
+}
+
+function readPluginNames(value: unknown): string[] {
+  const raw = Array.isArray(value)
+    ? value
+    : isRecord(value) && Array.isArray(value.plugins)
+      ? value.plugins
+      : [];
+  return raw
+    .map((item) => (typeof item === 'string' ? item : isRecord(item) ? item.name : undefined))
+    .filter((name): name is string => typeof name === 'string');
+}
+
 function toolsCommand(): CommandEntry {
   return {
     name: 'tools',
     description: '列出已注册工具',
     usage: '/tools',
-    run: (_args, ctx, _state) => {
-      const list = ctx.pluginHost.listTools();
-      if (list.length === 0) {
-        return { handled: true, output: '\nNo tools registered.\n' };
+    run: async (_args, ctx, _state) => {
+      try {
+        const list = ctx.rpc
+          ? readToolList(await ctx.rpc.request<unknown>('tools.list'))
+          : ctx.pluginHost.listTools();
+        if (list.length === 0) {
+          return { handled: true, output: '\nNo tools registered.\n' };
+        }
+        const lines = ['', `Available tools (${list.length}):`];
+        for (const t of list) lines.push(`  - ${t.name}: ${t.description ?? ''}`.trimEnd());
+        lines.push('');
+        return { handled: true, output: lines.join('\n') };
+      } catch (error) {
+        return { handled: true, output: `\nFailed to list tools:\n${formatRpcError(error)}\n` };
       }
-      const lines = ['', `Available tools (${list.length}):`];
-      for (const t of list) lines.push(`  - ${t.name}: ${t.description}`);
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
     },
   };
 }
@@ -365,15 +403,24 @@ function pluginsCommand(): CommandEntry {
     name: 'plugins',
     description: '列出已加载插件',
     usage: '/plugins',
-    run: (_args, ctx, _state) => {
-      const plugins = ctx.plugins;
-      if (plugins.length === 0) {
-        return { handled: true, output: '\nNo plugins loaded.\n' };
+    run: async (_args, ctx, _state) => {
+      try {
+        const plugins = ctx.rpc
+          ? readPluginNames(await ctx.rpc.request<unknown>('plugins.list'))
+          : ctx.plugins;
+        if (plugins.length === 0) {
+          return { handled: true, output: '\nNo plugins loaded.\n' };
+        }
+        const lines = ['', `Loaded plugins (${plugins.length}):`];
+        for (const p of plugins) lines.push(`  - ${p}`);
+        lines.push('');
+        return { handled: true, output: lines.join('\n') };
+      } catch (error) {
+        return {
+          handled: true,
+          output: `\nFailed to list plugins:\n${formatRpcError(error)}\n`,
+        };
       }
-      const lines = ['', `Loaded plugins (${plugins.length}):`];
-      for (const p of plugins) lines.push(`  - ${p}`);
-      lines.push('');
-      return { handled: true, output: lines.join('\n') };
     },
   };
 }

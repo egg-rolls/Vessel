@@ -6,8 +6,8 @@
  * 只使用 appIdMasked，绝不展示 app_id / app_secret / token。
  */
 
-import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import type { FeishuStatusLike, ReplContext } from '../repl-context.js';
+import { formatRpcError } from '../rpc.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const ERROR_MAX = 80;
@@ -34,9 +34,41 @@ export function formatFeishuStatus(status: FeishuStatusLike): string {
     : base;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readFeishuStatus(value: unknown): FeishuStatusLike | null {
+  const raw = isRecord(value) && isRecord(value.status) ? value.status : value;
+  if (!isRecord(raw) || typeof raw.connected !== 'boolean') return null;
+  return {
+    connected: raw.connected,
+    appIdMasked: typeof raw.appIdMasked === 'string' ? raw.appIdMasked : '-',
+    active_chats: typeof raw.active_chats === 'number' ? raw.active_chats : 0,
+    queued_messages: typeof raw.queued_messages === 'number' ? raw.queued_messages : 0,
+    ...(typeof raw.last_error === 'string' ? { last_error: raw.last_error } : {}),
+  };
+}
+
 /** /feishu 的执行体（导出供单测） */
-export function runFeishuCommand(args: string[], ctx: ReplContext): CommandResult {
+export async function runFeishuCommand(args: string[], ctx: ReplContext): Promise<CommandResult> {
   if (args.length > 0) return { handled: true, output: '\nUsage: /feishu\n' };
+
+  if (ctx.rpc) {
+    try {
+      const raw = await ctx.rpc.request<unknown>('feishu.status');
+      const status = readFeishuStatus(raw);
+      if (!status) {
+        return { handled: true, output: '\nFailed to read Feishu status: invalid payload.\n' };
+      }
+      return { handled: true, output: `\n${formatFeishuStatus(status)}\n` };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to read Feishu status:\n${formatRpcError(error)}\n`,
+      };
+    }
+  }
 
   if (!ctx.feishu) {
     return {
@@ -50,7 +82,7 @@ export function runFeishuCommand(args: string[], ctx: ReplContext): CommandResul
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to read Feishu status:\n${formatClassifiedError(classifyError(error))}\n`,
+      output: `\nFailed to read Feishu status:\n${formatRpcError(error)}\n`,
     };
   }
 }

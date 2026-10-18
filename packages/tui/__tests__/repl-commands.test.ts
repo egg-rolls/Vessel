@@ -89,6 +89,37 @@ describe('CommandRegistry 扁平命令', () => {
     const result = await reg.execute('tools', ctx, state);
     expect(result.output ?? '').toContain('No tools registered');
   });
+
+  it('/tools 优先 RPC tools.list', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string): Promise<T> {
+          expect(method).toBe('tools.list');
+          return { tools: [{ name: 'bash', description: 'shell' }] } as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const result = await reg.execute('tools', ctx, makeState(ctx.currentSessionId));
+    expect(result.output ?? '').toContain('bash: shell');
+  });
+
+  it('/plugins 优先 RPC plugins.list', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx({
+      rpc: {
+        async request<T = unknown>(method: string): Promise<T> {
+          expect(method).toBe('plugins.list');
+          return { plugins: [{ name: 'workflow', enabled: true }, 'feishu'] } as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const result = await reg.execute('plugins', ctx, makeState(ctx.currentSessionId));
+    expect(result.output ?? '').toContain('workflow');
+    expect(result.output ?? '').toContain('feishu');
+  });
 });
 
 describe('扁平会话命令', () => {
