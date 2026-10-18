@@ -5,12 +5,16 @@ import type {
   AskUserQuestion,
   AskUserRequest,
   DurableRunSummary,
+  FeishuStatus,
   HelloInfo,
   McpServerStatus,
+  MetricsSnapshot,
   RunEvent,
   SessionInfo,
   StreamChunk,
   ToolInfo,
+  WorkflowRunDetail,
+  WorkflowRunSummary,
 } from './types';
 
 const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL as string | undefined) ?? '';
@@ -516,7 +520,21 @@ export default function App() {
   const [durableRuns, setDurableRuns] = useState<DurableRunSummary[]>([]);
   const [resuming, setResuming] = useState<Set<string>>(new Set());
   const [resumed, setResumed] = useState<Set<string>>(new Set());
-  const [panelErrors, setPanelErrors] = useState<{ mcp?: string; durable?: string }>({});
+  const [workflows, setWorkflows] = useState<WorkflowRunSummary[]>([]);
+  const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowRunDetail | null>(null);
+  const [workflowName, setWorkflowName] = useState('');
+  const [workflowInputs, setWorkflowInputs] = useState('');
+  const [workflowBusy, setWorkflowBusy] = useState(false);
+  const [workflowNotice, setWorkflowNotice] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+  const [feishu, setFeishu] = useState<FeishuStatus | null>(null);
+  const [panelErrors, setPanelErrors] = useState<{
+    mcp?: string;
+    durable?: string;
+    workflow?: string;
+    metrics?: string;
+    feishu?: string;
+  }>({});
   const [now, setNow] = useState(() => Date.now());
 
   const client = useMemo(() => new GatewayClient(GATEWAY_URL), []);
@@ -561,6 +579,49 @@ export default function App() {
     } else {
       setDurableRuns([]);
     }
+
+    if (features.includes('workflow')) {
+      client
+        .listWorkflows({ limit: 20 })
+        .then((runs) => {
+          setWorkflows(runs);
+          setPanelErrors((prev) => ({ ...prev, workflow: undefined }));
+        })
+        .catch((e: unknown) => {
+          setPanelErrors((prev) => ({ ...prev, workflow: errorMessage(e) }));
+        });
+    } else {
+      setWorkflows([]);
+      setSelectedWorkflow(null);
+    }
+
+    if (features.includes('metrics')) {
+      client
+        .getMetrics()
+        .then((snapshot) => {
+          setMetrics(snapshot);
+          setPanelErrors((prev) => ({ ...prev, metrics: undefined }));
+        })
+        .catch((e: unknown) => {
+          setPanelErrors((prev) => ({ ...prev, metrics: errorMessage(e) }));
+        });
+    } else {
+      setMetrics(null);
+    }
+
+    if (features.includes('feishu')) {
+      client
+        .getFeishuStatus()
+        .then((status) => {
+          setFeishu(status);
+          setPanelErrors((prev) => ({ ...prev, feishu: undefined }));
+        })
+        .catch((e: unknown) => {
+          setPanelErrors((prev) => ({ ...prev, feishu: errorMessage(e) }));
+        });
+    } else {
+      setFeishu(null);
+    }
   }, [client]);
 
   const refreshNow = useCallback(() => {
@@ -588,6 +649,10 @@ export default function App() {
       setTools([]);
       setPermissions([]);
       setAsks([]);
+      setWorkflows([]);
+      setSelectedWorkflow(null);
+      setMetrics(null);
+      setFeishu(null);
       return;
     }
 
@@ -601,11 +666,26 @@ export default function App() {
     setTools([]);
     setMcpServers([]);
     setDurableRuns([]);
+    setWorkflows([]);
+    setSelectedWorkflow(null);
+    setMetrics(null);
+    setFeishu(null);
+    setWorkflowNotice(null);
     setPanelErrors({});
     setResuming(new Set());
     setResumed(new Set());
     setGapNotice(null);
     setHello(null);
+
+    // workflow / 飞书事件到达后 500ms 防抖刷新面板，避免每个 step 事件都发请求。
+    let panelTimer: number | undefined;
+    const schedulePanels = () => {
+      if (panelTimer !== undefined) return;
+      panelTimer = window.setTimeout(() => {
+        panelTimer = undefined;
+        loadPanels();
+      }, 500);
+    };
 
     const addPermission = (event: RunEvent) => {
       const d = event.data as { requestId?: unknown; tool?: unknown; input?: unknown };
@@ -667,6 +747,9 @@ export default function App() {
       }
       if (event.type === 'run.resumed' || event.type === 'run.checkpoint') {
         window.setTimeout(loadPanels, 200);
+      }
+      if (event.type.startsWith('workflow.') || event.type.startsWith('channel.feishu.')) {
+        schedulePanels();
       }
     });
 
@@ -736,6 +819,7 @@ export default function App() {
       offState();
       offClose();
       window.clearTimeout(retryTimer);
+      window.clearTimeout(panelTimer);
       client.close();
     };
   }, [token, client, loadPanels]);
@@ -852,6 +936,82 @@ export default function App() {
     }
   };
 
+  const handleWorkflowSelect = async (id: string) => {
+    try {
+      setSelectedWorkflow(await client.getWorkflow(id));
+      setWorkflowNotice(null);
+    } catch (e: unknown) {
+      setWorkflowNotice(errorMessage(e));
+    }
+  };
+
+  const handleWorkflowStart = async () => {
+    const name = workflowName.trim();
+    if (!name || workflowBusy) return;
+    let inputs: Record<string, string> | undefined;
+    if (workflowInputs.trim().length > 0) {
+      try {
+        const parsed: unknown = JSON.parse(workflowInputs);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          throw new Error('inputs 必须是 JSON 对象');
+        }
+        const map: Record<string, string> = {};
+        for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+          if (typeof value !== 'string') throw new Error('inputs 的值必须是字符串');
+          map[key] = value;
+        }
+        inputs = map;
+      } catch (e: unknown) {
+        setWorkflowNotice(errorMessage(e));
+        return;
+      }
+    }
+    setWorkflowBusy(true);
+    setWorkflowNotice(null);
+    try {
+      const started = await client.startWorkflow(name, inputs);
+      setWorkflowNotice(`已排队：${started.workflow_run_id}`);
+      setWorkflowName('');
+      setWorkflowInputs('');
+      loadPanels();
+    } catch (e: unknown) {
+      setWorkflowNotice(errorMessage(e));
+    } finally {
+      setWorkflowBusy(false);
+    }
+  };
+
+  const handleWorkflowResume = async (id: string) => {
+    if (workflowBusy) return;
+    setWorkflowBusy(true);
+    setWorkflowNotice(null);
+    try {
+      await client.resumeWorkflow(id);
+      setWorkflowNotice(`已恢复：${id}`);
+      loadPanels();
+    } catch (e: unknown) {
+      setWorkflowNotice(errorMessage(e));
+    } finally {
+      setWorkflowBusy(false);
+    }
+  };
+
+  const handleWorkflowCancel = async (id: string) => {
+    if (workflowBusy) return;
+    setWorkflowBusy(true);
+    setWorkflowNotice(null);
+    try {
+      await client.cancelWorkflow(id);
+      setWorkflowNotice(`已取消：${id}`);
+      setSelectedWorkflow(null);
+      loadPanels();
+    } catch (e: unknown) {
+      setWorkflowNotice(errorMessage(e));
+    } finally {
+      setWorkflowBusy(false);
+    }
+  };
+
   const decidePermission = async (decision: 'allow' | 'deny', remember: boolean) => {
     const current = permissions[0];
     if (!current) return;
@@ -885,6 +1045,9 @@ export default function App() {
   const featureList = hello?.protocol.features ?? [];
   const showMcp = featureList.includes('mcp-status');
   const showDurable = featureList.includes('durable-resume');
+  const showWorkflow = featureList.includes('workflow');
+  const showMetrics = featureList.includes('metrics');
+  const showFeishu = featureList.includes('feishu');
   const nodeLabel = hello?.node.name ?? hello?.node.node_id?.slice(0, 12) ?? '';
 
   return (
@@ -1070,6 +1233,200 @@ export default function App() {
                   ))
                 )}
               </div>
+            </>
+          )}
+
+          {showWorkflow && (
+            <>
+              <div className="sidebar-title">
+                Workflows <span className="dim">({workflows.length})</span>
+              </div>
+              <div className="workflow-panel">
+                <div className="workflow-start">
+                  <input
+                    className="workflow-name"
+                    value={workflowName}
+                    onChange={(e) => setWorkflowName(e.target.value)}
+                    placeholder="workflow name"
+                    spellCheck={false}
+                  />
+                  <button
+                    type="button"
+                    className="resume-btn"
+                    disabled={!workflowName.trim() || workflowBusy}
+                    onClick={() => void handleWorkflowStart()}
+                  >
+                    {workflowBusy ? '处理中…' : '启动'}
+                  </button>
+                </div>
+                <textarea
+                  className="workflow-inputs"
+                  value={workflowInputs}
+                  onChange={(e) => setWorkflowInputs(e.target.value)}
+                  placeholder='inputs JSON（可选，如 {"env":"prod"}）'
+                  rows={2}
+                  spellCheck={false}
+                />
+                {workflowNotice && <div className="panel-empty dim">{workflowNotice}</div>}
+                {panelErrors.workflow ? (
+                  <div className="panel-empty err">{panelErrors.workflow}</div>
+                ) : workflows.length === 0 ? (
+                  <div className="panel-empty dim">暂无 workflow run</div>
+                ) : (
+                  workflows.map((run) => (
+                    <div className="workflow-item" key={run.workflow_run_id}>
+                      <button
+                        type="button"
+                        className="workflow-head"
+                        onClick={() => void handleWorkflowSelect(run.workflow_run_id)}
+                      >
+                        <span className={`status-chip ${run.status}`}>{run.status}</span>
+                        <span className="mono">{truncate(run.workflow_name, 18)}</span>
+                        <span className="dim">
+                          {run.completed_steps}/{run.step_count}
+                        </span>
+                      </button>
+                      <div className="workflow-meta dim">
+                        <span className="mono" title={run.workflow_run_id}>
+                          {truncate(run.workflow_run_id, 14)}
+                        </span>
+                        <span>{formatTime(run.updated_at)}</span>
+                      </div>
+                      {run.error && (
+                        <div className="workflow-error err">{truncate(run.error, 100)}</div>
+                      )}
+                      <div className="workflow-actions">
+                        {(run.status === 'interrupted' ||
+                          run.status === 'failed' ||
+                          run.status === 'pending') && (
+                          <button
+                            type="button"
+                            className="resume-btn"
+                            disabled={workflowBusy}
+                            onClick={() => void handleWorkflowResume(run.workflow_run_id)}
+                          >
+                            恢复
+                          </button>
+                        )}
+                        {run.status !== 'completed' &&
+                          run.status !== 'failed' &&
+                          run.status !== 'cancelled' && (
+                            <button
+                              type="button"
+                              className="resume-btn cancel"
+                              disabled={workflowBusy}
+                              onClick={() => void handleWorkflowCancel(run.workflow_run_id)}
+                            >
+                              取消
+                            </button>
+                          )}
+                      </div>
+                      {selectedWorkflow?.workflow_run_id === run.workflow_run_id && (
+                        <div className="workflow-detail">
+                          {selectedWorkflow.steps.length === 0 ? (
+                            <div className="panel-empty dim">无步骤信息</div>
+                          ) : (
+                            selectedWorkflow.steps.map((step) => (
+                              <div className="workflow-step" key={step.id}>
+                                <div className="workflow-step-head">
+                                  <span className={`status-chip ${step.status}`}>
+                                    {step.status}
+                                  </span>
+                                  <span className="mono">{step.id}</span>
+                                  <span className="dim">
+                                    {step.type} · {step.attempts} tries
+                                  </span>
+                                </div>
+                                {step.output_preview && (
+                                  <div className="workflow-step-output">
+                                    {truncate(step.output_preview, 120)}
+                                  </div>
+                                )}
+                                {step.error && (
+                                  <div className="workflow-step-error err">
+                                    {truncate(step.error, 100)}
+                                  </div>
+                                )}
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+
+          {showMetrics && (
+            <>
+              <div className="sidebar-title">Metrics</div>
+              {panelErrors.metrics ? (
+                <div className="panel-empty err">{panelErrors.metrics}</div>
+              ) : !metrics ? (
+                <div className="panel-empty dim">暂无 metrics</div>
+              ) : (
+                <div className="metrics-panel">
+                  <div className="metrics-row">
+                    <span className="dim">runs</span>
+                    <span className="mono">
+                      {metrics.runs.started} start · {metrics.runs.completed} done ·{' '}
+                      {metrics.runs.failed} fail
+                    </span>
+                  </div>
+                  <div className="metrics-row">
+                    <span className="dim">tools</span>
+                    <span className="mono">
+                      {metrics.tool_calls.total} calls · {metrics.tool_calls.failed} failed
+                    </span>
+                  </div>
+                  <div className="metrics-row">
+                    <span className="dim">tokens</span>
+                    <span className="mono">
+                      {metrics.llm.total_tokens} ({metrics.llm.prompt_tokens}+
+                      {metrics.llm.completion_tokens})
+                    </span>
+                  </div>
+                  <div className="metrics-row">
+                    <span className="dim">duration</span>
+                    <span className="mono">
+                      avg {Math.round(metrics.duration_ms.avg)}ms · max{' '}
+                      {Math.round(metrics.duration_ms.max)}ms
+                    </span>
+                  </div>
+                  <div className="metrics-row dim">
+                    <span>updated</span>
+                    <span>{formatTime(metrics.updated_at)}</span>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          {showFeishu && (
+            <>
+              <div className="sidebar-title">Feishu</div>
+              {panelErrors.feishu ? (
+                <div className="panel-empty err">{panelErrors.feishu}</div>
+              ) : !feishu ? (
+                <div className="panel-empty dim">暂无渠道状态</div>
+              ) : (
+                <div className="feishu-panel">
+                  <div className="feishu-head">
+                    <span className={`mcp-status ${feishu.connected ? 'connected' : 'failed'}`}>
+                      {feishu.connected ? 'connected' : 'disconnected'}
+                    </span>
+                    <span className="mono dim">{feishu.appIdMasked || '-'}</span>
+                  </div>
+                  <div className="feishu-meta dim">
+                    chats {feishu.active_chats} · queued {feishu.queued_messages}
+                  </div>
+                  {feishu.last_error && (
+                    <div className="feishu-error err">{truncate(feishu.last_error, 120)}</div>
+                  )}
+                </div>
+              )}
             </>
           )}
         </aside>

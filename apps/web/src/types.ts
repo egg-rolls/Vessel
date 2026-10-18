@@ -128,6 +128,142 @@ export interface McpServersResponse {
   servers: McpServerStatus[];
 }
 
+/** workflow 状态（与 DECISION-009 §5.1.3 一致） */
+export type WorkflowRunStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted';
+
+export type WorkflowStepStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'skipped'
+  | 'cancelled';
+
+/** workflow run 摘要（GET /v1/workflows） */
+export interface WorkflowRunSummary {
+  workflow_run_id: string;
+  workflow_name: string;
+  status: WorkflowRunStatus;
+  step_count: number;
+  completed_steps: number;
+  started_at: number;
+  updated_at: number;
+  error?: string;
+}
+
+export interface WorkflowStepSummary {
+  id: string;
+  type: 'agent' | 'tool';
+  status: WorkflowStepStatus;
+  attempts: number;
+  started_at?: number;
+  finished_at?: number;
+  error?: string;
+  output_preview?: string;
+}
+
+export interface WorkflowRunDetail extends WorkflowRunSummary {
+  definition_path: string;
+  inputs: Record<string, string>;
+  steps: WorkflowStepSummary[];
+}
+
+export interface WorkflowsResponse {
+  workflows: WorkflowRunSummary[];
+}
+
+export interface WorkflowResponse {
+  workflow: WorkflowRunDetail;
+}
+
+export interface WorkflowRunAccepted {
+  workflow_run_id: string;
+  status: 'queued';
+}
+
+export interface WorkflowCancelResponse {
+  workflow_run_id: string;
+  status: 'cancelled';
+}
+
+/** 进程内聚合快照（GET /v1/metrics） */
+export interface MetricsSnapshot {
+  runs: { started: number; completed: number; failed: number; cancelled: number };
+  tool_calls: { total: number; failed: number };
+  llm: {
+    requests: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+  };
+  duration_ms: { total: number; max: number; avg: number };
+  updated_at: number;
+}
+
+export interface MetricsResponse {
+  metrics: MetricsSnapshot;
+}
+
+/** 飞书渠道状态（GET /v1/channels/feishu） */
+export interface FeishuStatus {
+  connected: boolean;
+  appIdMasked: string;
+  active_chats: number;
+  queued_messages: number;
+  last_error?: string;
+}
+
+export interface FeishuResponse {
+  channel: FeishuStatus;
+}
+
+/** eval 报告（GET /v1/evals/latest） */
+export interface EvalCaseAssertion {
+  type: string;
+  ok: boolean;
+  detail?: string;
+}
+
+export interface EvalUsage {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface EvalCaseResult {
+  id: string;
+  status: 'passed' | 'failed' | 'error' | 'skipped';
+  duration_ms: number;
+  assertions: EvalCaseAssertion[];
+  output?: string;
+  usage?: EvalUsage;
+  error?: string;
+}
+
+export interface EvalReport {
+  suite: string;
+  network: boolean;
+  started_at: number;
+  finished_at: number;
+  duration_ms: number;
+  total: number;
+  passed: number;
+  failed: number;
+  errors: number;
+  skipped: number;
+  cases: EvalCaseResult[];
+}
+
+export interface EvalReportResponse {
+  report: EvalReport;
+}
+
 /** 网关错误信封 */
 export interface GatewayErrorBody {
   error: { code: string; message: string };
