@@ -33,9 +33,41 @@ describe('default trace redactor (0.5 E7)', () => {
     expect(data.text).toBe('healthy');
   });
 
-  it('masks app_id keeping the first four characters', () => {
-    const result = redactor.redact(event({ app_id: 'cli_abcdef' }));
-    expect((result.data as Record<string, unknown>).app_id).toBe('cli_***');
+  it('masks app_id / appId / APP_ID keeping the first four characters', () => {
+    const result = redactor.redact(
+      event({
+        app_id: 'cli_abcdef',
+        appId: 'app_abcdef',
+        APP_ID: 'ABC_abcdef',
+        ordinary: 'keep-me',
+      }),
+    );
+    const data = result.data as Record<string, unknown>;
+    expect(data.app_id).toBe('cli_***');
+    expect(data.appId).toBe('app_***');
+    expect(data.APP_ID).toBe('ABC_***');
+    expect(data.ordinary).toBe('keep-me');
+  });
+
+  it('leaves non-string appId values unchanged', () => {
+    const result = redactor.redact(event({ appId: 1234, APP_ID: null }));
+    const data = result.data as Record<string, unknown>;
+    expect(data.appId).toBe(1234);
+    expect(data.APP_ID).toBeNull();
+  });
+
+  it('masks appId in nested objects and arrays', () => {
+    const result = redactor.redact(
+      event({
+        nested: { appId: 'nested_secret' },
+        list: [{ APP_ID: 'array_secret' }, { appId: 'second_secret' }],
+      }),
+    );
+    const data = result.data as Record<string, unknown>;
+    expect((data.nested as Record<string, unknown>).appId).toBe('nest***');
+    const list = data.list as Array<Record<string, unknown>>;
+    expect(list[0]?.APP_ID).toBe('arra***');
+    expect(list[1]?.appId).toBe('seco***');
   });
 
   it('does not mutate the original event', () => {
