@@ -1,0 +1,904 @@
+/**
+ * 每 tenant 执行面（0.5 A-6 / DECISION-010 §13.2）。
+ *
+ * `buildTenantRuntime()` 构造一个 tenant 的独立 bundle：
+ *   config / provider / session / runStore / context / pluginHost + plugins /
+ *   trace / metrics / redactor / sessionControl / workflow / feishu / MCP。
+ *
+ * `createTenantRuntimeFactory()` 为 `--serve` 预构建全部 active tenant：
+ * - 每个 tenant 独立 EventStream；事件桥接到 gateway 共享流并补 `tenant_id`；
+ * - trace / metrics 只订阅本 tenant 流；
+ * - 每个 tenant 持有自己的 writer lock；启动失败回滚已获取的锁。
+ *
+ * 本地单 tenant 模式复用 `buildTenantRuntime()`，只是只创建一个 bundle。
+ *
+ * @module vessel/tenant-runtime-factory
+ */
+
+import { join } from 'node:path';
+import {
+  type ConfigSources,
+  DEFAULT_CONFIG,
+  loadConfig,
+  type VesselConfig,
+} from '../packages/config/src/index';
+import {
+  AgentRuntime,
+  type AgentStatus,
+  createDefaultTraceRedactor,
+  type EventStream,
+  type LLMProvider,
+  MemoryContextManager,
+  MemoryPluginHost,
+  type Plugin,
+  type PluginHost,
+  type RunnableAgent,
+  type RunStore,
+  type RuntimeHost,
+  resolveTenantPaths,
+  type SessionBackend,
+  type TenantPaths,
+  type TraceRedactor,
+} from '../packages/core/src/index';
+import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
+import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import type {
+  FeishuChannelLike,
+  MetricsControlLike,
+  WorkflowEngineLike,
+} from './control-plane-types';
+import { resolveDataDir } from './data-paths';
+import { DeferredTransport } from './deferred-transport';
+import { planFactoryPlugins } from './factory-plugins';
+import {
+  assertUniqueFeishuAppIds,
+  createFeishuFromConfig,
+  stopFeishuChannel,
+} from './feishu-wiring';
+import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
+import {
+  createEventBus,
+  createEventStream,
+  createMetricsCollector,
+  disposeMetrics,
+  type MetricsFactory,
+} from './observability-wiring';
+import { PluginLoader } from './plugin-loader';
+import { resolvePluginNames } from './plugin-selection';
+import { createProvider } from './provider-factory';
+import { closeRunStore, createRunStore } from './run-store-factory';
+import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
+import { createSessionControl, type SessionControl } from './session-control';
+import { createSessionBackend } from './session-factory';
+import { acquireTenantLock, type TenantLock } from './tenant-lock';
+import {
+  composeTraceRedactors,
+  installTrace,
+  pruneTenantTrace,
+  type TraceControl,
+  type TraceRecorderFactory,
+} from './trace-wiring';
+import { createWorkflowFromConfig } from './workflow-wiring';
+
+/** 构造一个 tenant 执行面的输入 */
+export interface BuildTenantRuntimeOptions {
+  tenantId: string;
+  /** 已合并 tenant overlay 的配置 */
+  config: VesselConfig;
+  tenantPaths: TenantPaths;
+  /** config.loaded 事件的来源（缺省空） */
+  configSources?: ConfigSources;
+  /** 已持有的锁；缺省且 acquireLock=true 时由本函数获取并负责释放 */
+  lock?: TenantLock;
+  acquireLock?: boolean;
+  /**
+   * 是否安装 trace（本地写意图）。false 时不创建 trace / 不写 events。
+   * 默认 false：仅供 --serve 的只读执行面显式开启。
+   */
+  writeTrace?: boolean;
+  /** 启动前按 trace 保留策略 prune；默认 false（本地 bootstrap 自己处理） */
+  pruneTrace?: boolean;
+  useMock?: boolean;
+  headless?: boolean;
+  /** ask_user 仅交互 REPL 注册；serve / headless 必须 false */
+  registerAskUser?: boolean;
+  loader?: PluginLoader;
+  nodeId: string;
+  /** host owner 的初始 sessionId；缺省随机 UUID（serve 每 tenant 独立） */
+  sessionId?: string;
+  /** team loopback 晚绑定 transport（仅本地主 tenant） */
+  transport?: DeferredTransport;
+  /** team + loopback 时由本函数创建 DeferredTransport */
+  createLoopbackTransport?: boolean;
+  metricsFactory?: MetricsFactory;
+  traceFactory?: TraceRecorderFactory;
+  /** 测试注入的 ext redactor */
+  redactor?: TraceRedactor;
+  clock?: () => number;
+  loadMcpModule?: () => Promise<unknown | null>;
+  loadWorkflowModule?: () => Promise<unknown | null>;
+  loadFeishuModule?: () => Promise<unknown | null>;
+  feishuTransport?: unknown;
+  /** gateway 共享事件流；tenant 事件镜像到此处（补 tenant_id） */
+  sharedEvents?: EventStream;
+}
+
+/** 一个 tenant 的完整执行面 */
+export interface TenantRuntimeBundle {
+  tenantId: string;
+  config: VesselConfig;
+  tenantPaths: TenantPaths;
+  provider: LLMProvider;
+  providerName: string;
+  providerModel: string;
+  providerBaseUrl: string;
+  /** tenant 独立事件流（trace / metrics 只订阅它） */
+  events: EventStream;
+  /** runtime 事件出口；host 模式下同 tenant 流（host bus 已桥接） */
+  runtimeEvents: EventStream;
+  session: SessionBackend;
+  context: MemoryContextManager;
+  pluginHost: PluginHost;
+  runtime: RunnableAgent;
+  host?: RuntimeHost;
+  agentRuntime?: AgentRuntime;
+  runStore?: RunStore;
+  trace?: TraceControl;
+  metrics?: MetricsControlLike;
+  redactor: TraceRedactor;
+  sessionControl: SessionControl;
+  plugins: Plugin[];
+  mcpPlugin?: McpPluginLike;
+  mcp?: McpControl;
+  workflows?: WorkflowEngineLike;
+  feishu?: FeishuChannelLike;
+  transport?: DeferredTransport;
+  spawnAgent?: (request: {
+    name?: string;
+    model?: string;
+    systemPrompt?: string;
+  }) => Promise<AgentStatus>;
+  lock?: TenantLock;
+  close(): Promise<void>;
+}
+
+/** 内部：锁所有权 */
+function nonEmpty(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function tenantSessionsDbPath(tenantRoot: string): string {
+  return join(tenantRoot, 'sessions.db');
+}
+
+/**
+ * 构造一个 tenant 的独立执行面。
+ * 失败时释放本函数获取的锁；调用方负责释放传入的锁。
+ */
+export async function buildTenantRuntime(
+  options: BuildTenantRuntimeOptions,
+): Promise<TenantRuntimeBundle> {
+  const { tenantId, config, tenantPaths } = options;
+  const useMock = options.useMock ?? false;
+  const headless = options.headless ?? false;
+  const loader = options.loader ?? new PluginLoader();
+
+  let ownedLock: TenantLock | undefined;
+  if (options.lock === undefined && options.acquireLock === true) {
+    ownedLock = await acquireTenantLock({
+      tenantDir: tenantPaths.root,
+      tenantId,
+      ...(options.clock ? { now: options.clock } : {}),
+    });
+  }
+  const lock = options.lock ?? ownedLock;
+
+  try {
+    if (options.pruneTrace === true) {
+      try {
+        await pruneTenantTrace({ config, tenantPaths });
+      } catch (error) {
+        console.warn(
+          `⚠ Failed to prune trace for tenant "${tenantId}": ${
+            error instanceof Error ? error.message : error
+          }`,
+        );
+      }
+    }
+
+    const runStore = createRunStore(config, { tenantRunsDir: tenantPaths.runs_dir });
+    const resolvedProvider = await createProvider(config, loader, useMock);
+    const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
+
+    const context = new MemoryContextManager({
+      maxTokens: config.context?.maxTokens,
+      maxMessages: config.context?.maxMessages,
+      autoCompact: config.context?.autoCompact,
+      compactThreshold: config.context?.compactThreshold,
+    });
+    const events = createEventStream(config);
+
+    // 本 tenant 事件 → gateway 共享流（事件带 tenant_id；SSE/WS 过滤靠它）。
+    const unsubShared = options.sharedEvents
+      ? events.subscribe((event) => {
+          const withTenant =
+            event.tenant_id === undefined ? { ...event, tenant_id: tenantId } : event;
+          try {
+            options.sharedEvents?.publish(withTenant);
+          } catch {
+            // 共享流订阅者异常不影响 tenant 执行
+          }
+        })
+      : undefined;
+
+    const session = createSessionBackend(config.session, {
+      tenantSessionsDir: tenantPaths.sessions_dir,
+      tenantSessionsDbPath: tenantSessionsDbPath(tenantPaths.root),
+      tenantId,
+    });
+    const sessionControl = createSessionControl({
+      session,
+      paths: tenantPaths,
+      events,
+      tenantId,
+      ...(runStore ? { runStore } : {}),
+    });
+
+    // ── 插件 ──────────────────────────────────────
+    const defaultPluginNames = resolvePluginNames(
+      loader,
+      config.plugins,
+      Boolean(process.env.VESSEL_DEBUG),
+    );
+
+    const plugins: Plugin[] = [];
+    const pluginLoadEvents: Array<{
+      type: 'plugin.loaded' | 'plugin.failed';
+      data: Record<string, unknown>;
+    }> = [];
+    for (const name of defaultPluginNames) {
+      const descriptor = loader.list().find((candidate) => candidate.name === name);
+      const category = descriptor?.category ?? 'unknown';
+      const plugin = await loader.load(name);
+      if (plugin) {
+        plugins.push(plugin);
+        pluginLoadEvents.push({
+          type: 'plugin.loaded',
+          data: {
+            name: plugin.name,
+            category,
+            version: plugin.version ?? descriptor?.version ?? '',
+            tenant_id: tenantId,
+          },
+        });
+      } else {
+        pluginLoadEvents.push({
+          type: 'plugin.failed',
+          data: { name, category, reason: 'load_failed', tenant_id: tenantId },
+        });
+      }
+    }
+
+    if (options.registerAskUser === true) {
+      const { createAskUserTool } = await import('../packages/tui/src/renderer/ask-user');
+      plugins.push({
+        name: 'ask-user',
+        version: '0.1.0',
+        description: 'Ask-user interactive tool (ADR-029)',
+        install(host) {
+          host.registerTool(createAskUserTool());
+        },
+      });
+    }
+    const staticPluginCount = plugins.length;
+
+    let internalTeamHost: RuntimeHost | undefined;
+    let deferredTransport = options.transport;
+    if (
+      deferredTransport === undefined &&
+      options.createLoopbackTransport === true &&
+      isHostEnabled(config) &&
+      config.team?.enabled === true &&
+      config.transport?.kind === 'loopback'
+    ) {
+      deferredTransport = new DeferredTransport();
+    }
+
+    const buildFactoryPlugins = async (
+      runtimeHost?: RuntimeHost,
+      transport?: DeferredTransport,
+    ): Promise<Plugin[]> => {
+      const plan = planFactoryPlugins(config, runtimeHost !== undefined);
+      for (const warning of plan.warnings) console.warn(`⚠ ${warning}`);
+
+      const factory: Plugin[] = [];
+      if (plan.delegate) {
+        factory.push(
+          createDelegateTaskPlugin({
+            providerFactory: () => provider,
+            tenantId,
+            model: config.delegate?.model ?? providerModel,
+            maxDepth: config.delegate?.maxDepth,
+            disallowed: config.delegate?.disallowed,
+            limits: config.delegate?.limits,
+            termination: config.delegate?.termination
+              ? {
+                  maxIterations: config.delegate.termination.maxIterations ?? 10,
+                  maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
+                }
+              : undefined,
+            permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
+            readOnlyTools: config.delegate?.readOnlyTools,
+            ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
+          }),
+        );
+      }
+
+      if (plan.team) {
+        let teamHost = plan.team.useHost ? runtimeHost : undefined;
+        if (!teamHost) {
+          const { createRuntime } = await import('../packages/core/src/kernel/create-runtime.js');
+          internalTeamHost ??= await createRuntime({ session });
+          teamHost = internalTeamHost;
+        }
+
+        factory.push(
+          createTeamPlugin({
+            providerFactory: () => provider,
+            tenantId,
+            model: config.team?.model ?? providerModel,
+            events: runtimeHost?.events ?? events,
+            host: teamHost,
+            ...(transport
+              ? {
+                  transport,
+                  nodeId: options.nodeId,
+                  ownerRef: `${options.nodeId}:${config.team?.ownerId ?? 'owner'}`,
+                }
+              : {}),
+            ownerId: config.team?.ownerId,
+            memberLimits: config.team?.memberLimits,
+            memberTermination: config.team?.memberTermination
+              ? {
+                  maxIterations: config.team.memberTermination.maxIterations ?? 10,
+                  maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+                }
+              : undefined,
+          }),
+        );
+      }
+      return factory;
+    };
+
+    // ── Runtime ───────────────────────────────────
+    const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
+    const termination = {
+      maxIterations:
+        config.termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20,
+      maxRuntimeSeconds:
+        config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
+    };
+    const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
+    const permission = {
+      default: headless ? ('allow' as const) : ('ask' as const),
+      autoApprove: ['ask_user'],
+    };
+
+    let runtime: RunnableAgent | undefined;
+    let host: RuntimeHost | undefined;
+    let agentRuntime: AgentRuntime | undefined;
+    let selectedPluginHost: PluginHost | undefined;
+    let spawnAgent: TenantRuntimeBundle['spawnAgent'];
+    let unsubHostBridge: (() => void) | undefined;
+
+    const contextFactory = () =>
+      new MemoryContextManager({
+        maxTokens: config.context?.maxTokens,
+        maxMessages: config.context?.maxMessages,
+        autoCompact: config.context?.autoCompact,
+        compactThreshold: config.context?.compactThreshold,
+      });
+
+    if (isHostEnabled(config)) {
+      const hostPluginHost = new MemoryPluginHost();
+      for (const plugin of plugins) await plugin.install(hostPluginHost);
+
+      const hostEvents = createEventBus(config);
+      // host runtime 事件先进入 host bus，再桥接到本 tenant 流。
+      unsubHostBridge = hostEvents.subscribe((event) => {
+        try {
+          events.publish(event);
+        } catch {
+          // tenant 流订阅者异常不影响 host
+        }
+      });
+
+      const hostResult = await tryCreateHostRuntime({
+        config,
+        owner: {
+          id: config.team?.ownerId ?? 'owner',
+          provider,
+          model: providerModel,
+          pluginHost: hostPluginHost,
+          context,
+          session,
+          systemPrompt,
+          limits,
+          termination,
+          permission,
+        },
+        sessionId: options.sessionId ?? crypto.randomUUID(),
+        ...(runStore ? { runStore } : {}),
+        ...(hostEvents ? { events: hostEvents } : {}),
+        contextFactory,
+        beforeSpawn: async (createdHost) => {
+          const factoryPlugins = await buildFactoryPlugins(createdHost, deferredTransport);
+          for (const plugin of factoryPlugins) await plugin.install(hostPluginHost);
+          plugins.push(...factoryPlugins);
+        },
+      });
+
+      if (hostResult.ok) {
+        runtime = hostResult.runtime;
+        host = hostResult.host;
+        selectedPluginHost = hostPluginHost;
+        const selectedHost = hostResult.host;
+        spawnAgent = async (request) => {
+          const handle = await selectedHost.spawn({
+            provider,
+            model: request.model ?? providerModel,
+            pluginHost: hostPluginHost,
+            ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
+            ...(request.name !== undefined ? { name: request.name } : {}),
+          });
+          return handle.status();
+        };
+      } else {
+        plugins.length = staticPluginCount;
+        deferredTransport = options.transport;
+        console.warn(
+          `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
+        );
+      }
+    }
+
+    if (!runtime) {
+      plugins.push(...(await buildFactoryPlugins(undefined, deferredTransport)));
+      agentRuntime = await AgentRuntime.create({
+        provider,
+        model: providerModel,
+        context,
+        events,
+        limits,
+        termination,
+        session,
+        plugins,
+        systemPrompt,
+        permission,
+        ...(runStore ? { runStore } : {}),
+      });
+      runtime = agentRuntime;
+      selectedPluginHost = agentRuntime.pluginHost;
+    }
+
+    const activeRuntime = runtime;
+    const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
+
+    // ── Trace ─────────────────────────────────────
+    const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
+    const redactor = composeTraceRedactors(createDefaultTraceRedactor(), extRedactor);
+    const trace =
+      options.writeTrace === true
+        ? installTrace({
+            events,
+            config,
+            tenantPaths,
+            tenantId,
+            ...(extRedactor ? { redactor: extRedactor } : {}),
+            ...(options.traceFactory ? { factory: options.traceFactory } : {}),
+          })
+        : undefined;
+
+    // asm 事件：不含值、不含密钥。
+    try {
+      const nowTs = options.clock ?? Date.now;
+      events.publish({
+        type: 'config.loaded',
+        run_id: 'config',
+        data: {
+          sources: [...new Set(Object.values(options.configSources ?? {}))],
+          keys: Object.keys(config),
+          tenant_id: tenantId,
+        },
+        ts: nowTs(),
+      });
+      for (const event of pluginLoadEvents) {
+        events.publish({ type: event.type, run_id: 'plugins', data: event.data, ts: nowTs() });
+      }
+    } catch {
+      // 事件投递失败不阻断启动
+    }
+
+    // ── MCP ───────────────────────────────────────
+    let mcpPlugin: McpPluginLike | undefined;
+    let mcpControl: McpControl | undefined;
+    if (config.mcpServers && Object.keys(config.mcpServers).length > 0) {
+      const wiring = await installMcp(
+        {
+          config,
+          events,
+          tenantId,
+          loader,
+          ...(options.loadMcpModule ? { loadModule: options.loadMcpModule } : {}),
+        },
+        finalPluginHost,
+      );
+      if (wiring) {
+        mcpPlugin = wiring.plugin;
+        mcpControl = wiring.control;
+      }
+    }
+
+    // ── Workflow / Feishu / Metrics ───────────────
+    const workflowEngine = await createWorkflowFromConfig({
+      config,
+      events,
+      pluginHost: finalPluginHost,
+      tenantDir: tenantPaths.root,
+      tenantId,
+      ...(host ? { host } : { runtime: activeRuntime }),
+      loader,
+      ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
+    });
+
+    const feishuChannel = await createFeishuFromConfig({
+      config,
+      provider,
+      model: providerModel,
+      pluginHost: finalPluginHost,
+      session,
+      events,
+      tenantId,
+      env: {},
+      ...(runStore ? { runStore } : {}),
+      contextFactory,
+      ...(options.feishuTransport !== undefined ? { transport: options.feishuTransport } : {}),
+      loader,
+      ...(options.loadFeishuModule ? { loadModule: options.loadFeishuModule } : {}),
+    });
+
+    const metrics = createMetricsCollector(events, config, options.metricsFactory);
+
+    let closed = false;
+    const close = async (): Promise<void> => {
+      if (closed) return;
+      closed = true;
+
+      await stopFeishuChannel(feishuChannel);
+
+      if (workflowEngine) {
+        try {
+          await workflowEngine.close();
+        } catch (error) {
+          console.warn(
+            `⚠ Failed to close workflow engine: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+
+      disposeMetrics(metrics);
+
+      if (mcpPlugin) {
+        try {
+          await mcpPlugin.close();
+        } catch (error) {
+          console.warn(
+            `⚠ Failed to close MCP client: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+
+      try {
+        if (host) await host.close();
+      } catch (error) {
+        console.warn(
+          `⚠ Failed to close runtime host: ${error instanceof Error ? error.message : error}`,
+        );
+      }
+
+      try {
+        activeRuntime.dispose();
+      } catch {
+        // best-effort
+      }
+
+      try {
+        if (internalTeamHost && internalTeamHost !== host) await internalTeamHost.close();
+      } catch {
+        // best-effort
+      }
+
+      if (trace) {
+        try {
+          await trace.flush();
+        } catch (error) {
+          console.warn(
+            `⚠ Failed to flush trace: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+        try {
+          await trace.close();
+        } catch (error) {
+          console.warn(
+            `⚠ Failed to close trace: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+
+      await closeRunStore(runStore);
+
+      try {
+        session.close?.();
+      } catch {
+        // best-effort
+      }
+
+      unsubHostBridge?.();
+      unsubShared?.();
+
+      if (ownedLock) {
+        try {
+          await ownedLock.release();
+        } catch (error) {
+          console.warn(
+            `⚠ Failed to release tenant lock: ${error instanceof Error ? error.message : error}`,
+          );
+        }
+      }
+    };
+
+    return {
+      tenantId,
+      config,
+      tenantPaths,
+      provider,
+      providerName,
+      providerModel,
+      providerBaseUrl,
+      events,
+      runtimeEvents: events,
+      session,
+      context,
+      pluginHost: finalPluginHost,
+      runtime: activeRuntime,
+      ...(host ? { host } : {}),
+      ...(agentRuntime ? { agentRuntime } : {}),
+      ...(runStore ? { runStore } : {}),
+      ...(trace ? { trace } : {}),
+      ...(metrics ? { metrics } : {}),
+      redactor,
+      sessionControl,
+      plugins,
+      ...(mcpPlugin ? { mcpPlugin } : {}),
+      ...(mcpControl ? { mcp: mcpControl } : {}),
+      ...(workflowEngine ? { workflows: workflowEngine } : {}),
+      ...(feishuChannel ? { feishu: feishuChannel } : {}),
+      ...(deferredTransport ? { transport: deferredTransport } : {}),
+      ...(spawnAgent ? { spawnAgent } : {}),
+      ...(lock ? { lock } : {}),
+      close,
+    };
+  } catch (error) {
+    if (ownedLock) {
+      try {
+        await ownedLock.release();
+      } catch {
+        // best-effort
+      }
+    }
+    throw error;
+  }
+}
+
+/** ext redact-secrets 的结构镜像 */
+interface RedactSecretsModuleLike {
+  createTraceRedactor(config?: unknown): TraceRedactor;
+}
+
+/** 动态加载 ext redactor；缺失只 warn，不阻断启动 */
+async function loadRedactSecrets(loader: PluginLoader): Promise<TraceRedactor | undefined> {
+  try {
+    const mod = (await loader.loadModule('redact-secrets')) as RedactSecretsModuleLike | null;
+    if (!mod || typeof mod.createTraceRedactor !== 'function') {
+      console.warn('⚠ redact-secrets unavailable; trace uses the core default redactor.');
+      return undefined;
+    }
+    return mod.createTraceRedactor();
+  } catch (error) {
+    console.warn(
+      `⚠ Failed to load redact-secrets: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return undefined;
+  }
+}
+
+// ── 多租户工厂（--serve） ─────────────────────────
+
+/** 工厂注入 */
+export interface TenantRuntimeFactoryOptions {
+  /** 基础配置（用于 data_dir / tenant 列表） */
+  config: VesselConfig;
+  configPath?: string;
+  userConfigPath?: string;
+  dataDir?: string;
+  useMock?: boolean;
+  headless?: boolean;
+  loader?: PluginLoader;
+  nodeId: string;
+  /** gateway 共享事件流（所有 tenant 事件镜像到这里） */
+  sharedEvents?: EventStream;
+  metricsFactory?: MetricsFactory;
+  traceFactory?: TraceRecorderFactory;
+  redactor?: TraceRedactor;
+  clock?: () => number;
+  /** 默认 true：serve 为每个 active tenant 持锁 */
+  acquireLocks?: boolean;
+  /** 默认 true：serve 安装每 tenant trace */
+  writeTrace?: boolean;
+  loadMcpModule?: () => Promise<unknown | null>;
+  loadWorkflowModule?: () => Promise<unknown | null>;
+  loadFeishuModule?: () => Promise<unknown | null>;
+}
+
+/** 工厂（启动完成后访问器是同步的，匹配 gateway 的注入面） */
+export interface TenantRuntimeFactory {
+  /** 已成功构建的 tenant id */
+  tenantIds(): string[];
+  runtimeFor(tenantId: string): RunnableAgent | undefined;
+  sessionFor(tenantId: string): SessionBackend | undefined;
+  contextFor(tenantId: string): MemoryContextManager | undefined;
+  pluginHostFor(tenantId: string): PluginHost | undefined;
+  metricsFor(tenantId: string): MetricsControlLike | undefined;
+  pluginsFor(tenantId: string): Array<{ name: string; enabled: boolean }> | undefined;
+  bundleFor(tenantId: string): TenantRuntimeBundle | undefined;
+  closeAll(): Promise<void>;
+}
+
+/** `status` 缺省视为 active；包含显式 default tenant（隐式配置）。 */
+export function listActiveTenantIds(config: VesselConfig): string[] {
+  const configured = config.tenant?.tenants ?? {};
+  const ids = Object.entries(configured)
+    .filter(([, settings]) => settings.status !== 'disabled')
+    .map(([id]) => id);
+  const fallback = nonEmpty(config.tenant?.default) ?? 'default';
+  const fallbackSettings = configured[fallback];
+  if (fallbackSettings?.status !== 'disabled' && !ids.includes(fallback)) ids.push(fallback);
+  return ids;
+}
+
+/** 载入一个 tenant 的合并配置；禁用 tenant 返回 null。 */
+export async function loadTenantRuntimeConfig(
+  tenantId: string,
+  options: Pick<TenantRuntimeFactoryOptions, 'configPath' | 'userConfigPath' | 'dataDir'>,
+): Promise<{ config: VesselConfig; sources: ConfigSources; tenantPaths: TenantPaths } | null> {
+  const loaded = await loadConfig({
+    tenantId,
+    ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
+    ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
+  });
+  if (loaded.validation.errors.length > 0) {
+    throw new Error(
+      `tenant "${tenantId}" config invalid: ${loaded.validation.errors
+        .map((error) => error.message)
+        .join('; ')}`,
+    );
+  }
+  if (loaded.config.tenant?.tenants?.[tenantId]?.status === 'disabled') return null;
+  const tenantPaths = resolveTenantPaths(
+    options.dataDir ?? resolveDataDir(loaded.config),
+    tenantId,
+  );
+  return { config: loaded.config, sources: loaded.sources, tenantPaths };
+}
+
+/**
+ * 预构建全部 active tenant；任一 tenant 失败 → 释放已建 bundle 的锁并抛出。
+ * 同一 app_id 跨 tenant → 装配期拒绝启动（A-6 §13.4）。
+ */
+export async function createTenantRuntimeFactory(
+  options: TenantRuntimeFactoryOptions,
+): Promise<TenantRuntimeFactory> {
+  const bundles = new Map<string, TenantRuntimeBundle>();
+  const loader = options.loader ?? new PluginLoader();
+  const acquireLocks = options.acquireLocks ?? true;
+  const writeTrace = options.writeTrace ?? true;
+
+  try {
+    const activeIds = listActiveTenantIds(options.config);
+    const loadedTenants = new Map<
+      string,
+      { config: VesselConfig; sources: ConfigSources; tenantPaths: TenantPaths }
+    >();
+
+    for (const tenantId of activeIds) {
+      const loaded = await loadTenantRuntimeConfig(tenantId, options);
+      if (!loaded) continue;
+      loadedTenants.set(tenantId, loaded);
+    }
+
+    assertUniqueFeishuAppIds(
+      [...loadedTenants.entries()].map(([tenantId, loaded]) => ({
+        tenantId,
+        config: loaded.config,
+      })),
+    );
+
+    for (const [tenantId, loaded] of loadedTenants) {
+      const bundle = await buildTenantRuntime({
+        tenantId,
+        config: loaded.config,
+        tenantPaths: loaded.tenantPaths,
+        configSources: loaded.sources,
+        acquireLock: acquireLocks,
+        writeTrace,
+        pruneTrace: writeTrace,
+        ...(options.useMock !== undefined ? { useMock: options.useMock } : {}),
+        ...(options.headless !== undefined ? { headless: options.headless } : {}),
+        loader,
+        nodeId: options.nodeId,
+        ...(options.sharedEvents ? { sharedEvents: options.sharedEvents } : {}),
+        ...(options.metricsFactory ? { metricsFactory: options.metricsFactory } : {}),
+        ...(options.traceFactory ? { traceFactory: options.traceFactory } : {}),
+        ...(options.redactor ? { redactor: options.redactor } : {}),
+        ...(options.clock ? { clock: options.clock } : {}),
+        ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
+        ...(options.loadWorkflowModule ? { loadWorkflowModule: options.loadWorkflowModule } : {}),
+        ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
+      });
+      bundles.set(tenantId, bundle);
+    }
+
+    let closed = false;
+    return {
+      tenantIds: () => [...bundles.keys()],
+      runtimeFor: (tenantId) => bundles.get(tenantId)?.runtime,
+      sessionFor: (tenantId) => bundles.get(tenantId)?.session,
+      contextFor: (tenantId) => bundles.get(tenantId)?.context,
+      pluginHostFor: (tenantId) => bundles.get(tenantId)?.pluginHost,
+      metricsFor: (tenantId) => bundles.get(tenantId)?.metrics,
+      pluginsFor: (tenantId) => {
+        const bundle = bundles.get(tenantId);
+        if (!bundle) return undefined;
+        return bundle.plugins.map((plugin) => ({ name: plugin.name, enabled: true }));
+      },
+      bundleFor: (tenantId) => bundles.get(tenantId),
+      closeAll: async () => {
+        if (closed) return;
+        closed = true;
+        // 逆序关闭；单个失败不阻断其余 tenant。
+        const entries = [...bundles.values()].reverse();
+        for (const bundle of entries) {
+          try {
+            await bundle.close();
+          } catch (error) {
+            console.warn(
+              `⚠ Failed to close tenant "${bundle.tenantId}": ${
+                error instanceof Error ? error.message : error
+              }`,
+            );
+          }
+        }
+        bundles.clear();
+      },
+    };
+  } catch (error) {
+    for (const bundle of [...bundles.values()].reverse()) {
+      try {
+        await bundle.close();
+      } catch {
+        // best-effort rollback
+      }
+    }
+    throw error;
+  }
+}
