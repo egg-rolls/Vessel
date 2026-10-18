@@ -25,6 +25,7 @@
 
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { capabilitiesCommand } from './capabilities-command.js';
+import { configCommand } from './config-command.js';
 import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
 import { metricsCommand } from './metrics-command.js';
@@ -141,6 +142,7 @@ export function createCommands(): CommandRegistry {
   reg.register(metricsCommand());
   reg.register(feishuCommand());
   reg.register(capabilitiesCommand());
+  reg.register(configCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));
