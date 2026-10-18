@@ -30,6 +30,12 @@ import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
 import { metricsCommand } from './metrics-command.js';
 import { runsCommand } from './runs-command.js';
+import {
+  deleteSession,
+  getSessionState,
+  listSessions,
+  sessionsCommand,
+} from './sessions-command.js';
 import { tenantCommand } from './tenant-command.js';
 import { traceCommand } from './trace-command.js';
 import { workflowsCommand } from './workflows-command.js';
@@ -147,6 +153,7 @@ export function createCommands(): CommandRegistry {
   reg.register(configCommand());
   reg.register(tenantCommand());
   reg.register(traceCommand());
+  reg.register(sessionsCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));
@@ -186,7 +193,7 @@ function resumeCommand(): CommandEntry {
     usage: '/resume [number|id]',
     run: async (args, ctx, _state) => {
       if (args.length === 0) {
-        const sessions = await ctx.session.listRich();
+        const sessions = await listSessions(ctx);
         if (sessions.length === 0) {
           return { handled: true, output: '\nNo sessions to resume.\n' };
         }
@@ -219,7 +226,7 @@ export async function consumePendingResume(
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
-  const sessions = await ctx.session.listRich();
+  const sessions = await listSessions(ctx);
   const target = sessions[num - 1];
   if (!target) {
     const output = `\nNo session #${num}. Cancelled.\n`;
@@ -238,12 +245,12 @@ async function resolveResumeTarget(
 ): Promise<{ ok: true; sessionId: string } | { ok: false; message: string }> {
   const num = Number.parseInt(arg, 10);
   if (!Number.isNaN(num) && num >= 1) {
-    const sessions = await ctx.session.listRich();
+    const sessions = await listSessions(ctx);
     const target = sessions[num - 1];
     if (!target) return { ok: false, message: `No session #${num}.` };
     return { ok: true, sessionId: target.session_id };
   }
-  const loaded = await ctx.session.load(arg);
+  const loaded = await getSessionState(ctx, arg);
   if (!loaded) return { ok: false, message: `Session "${arg}" not found.` };
   return { ok: true, sessionId: arg };
 }
@@ -253,7 +260,7 @@ async function resolveResumeTarget(
 export async function doResume(ctx: ReplContext, sessionId: string): Promise<ResumeResult> {
   ctx.context.clear();
   ctx.onSessionChange(sessionId);
-  const loaded = await ctx.session.load(sessionId);
+  const loaded = await getSessionState(ctx, sessionId);
   const msgCount = loaded?.messages.length ?? 0;
   return {
     message: `Resumed session "${sessionId}" (${msgCount} messages).`,
@@ -271,9 +278,9 @@ function newCommand(): CommandEntry {
     run: async (_args, ctx, state) => {
       const oldId = state.currentSessionId;
       try {
-        const old = await ctx.session.load(oldId);
+        const old = await getSessionState(ctx, oldId);
         if (old && old.messages.length === 0) {
-          await ctx.session.delete(oldId);
+          await deleteSession(ctx, oldId);
         }
       } catch {
         // 丢弃失败不阻塞开新会话
@@ -314,7 +321,7 @@ function historyCommand(): CommandEntry {
     description: '显示当前会话的对话历史',
     usage: '/history',
     run: async (_args, ctx, state) => {
-      const loaded = await ctx.session.load(state.currentSessionId);
+      const loaded = await getSessionState(ctx, state.currentSessionId);
       if (!loaded || loaded.messages.length === 0) {
         return { handled: true, output: '\nNo conversation history.\n' };
       }
