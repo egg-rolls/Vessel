@@ -23,9 +23,10 @@
  * state 应用集中在 CommandRegistry.execute()；output 由调用方消费（simple 模式打印、Ink 模式入历史）。
  */
 
-import type { DurableRunHandle, ReplContext } from '../repl-context.js';
+import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { mcpCommand } from './mcp-command.js';
 import { runsCommand } from './runs-command.js';
+import { workflowsCommand } from './workflows-command.js';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -53,6 +54,8 @@ export interface CommandResult {
   clearScreen?: boolean;
   /** /runs resume：命令已启动恢复，REPL 层接管运行态（runStart/runEnd、取消、流式） */
   resumeRun?: DurableRunHandle;
+  /** /workflows run|resume：命令已启动，REPL 层接管运行态与取消 */
+  workflowRun?: WorkflowRunHandle;
 }
 
 /** 命令执行函数签名 */
@@ -131,6 +134,7 @@ export function createCommands(): CommandRegistry {
   reg.register(resumeCommand());
   reg.register(mcpCommand());
   reg.register(runsCommand());
+  reg.register(workflowsCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));
