@@ -216,6 +216,19 @@ export function formatConfigPaths(snapshot: ConfigSnapshotLike): string {
   return formatPaths(snapshot).join('\n');
 }
 
+/**
+ * 展示用快照：config 值脱敏，但 `sources` 的 key 是配置路径、value 是来源枚举，
+ * 不能被键名规则误伤（例如 `provider.apiKey` 的来源标签仍应是 `env`）。
+ */
+function redactSnapshotForDisplay(snapshot: ConfigSnapshotLike): ConfigSnapshotLike {
+  const safe = redactForDisplay(snapshot);
+  return {
+    ...safe,
+    ...(snapshot.sources ? { sources: snapshot.sources } : {}),
+    ...(snapshot.tenant_overlay_keys ? { tenant_overlay_keys: snapshot.tenant_overlay_keys } : {}),
+  };
+}
+
 async function loadSources(
   ctx: ReplContext,
   snapshot: ConfigSnapshotLike,
@@ -264,7 +277,7 @@ export async function runConfigCommand(args: string[], ctx: ReplContext): Promis
     }
 
     if (options.sources) snapshot = await loadSources(ctx, snapshot);
-    const safe = redactForDisplay(snapshot);
+    const safe = redactSnapshotForDisplay(snapshot);
 
     if (options.json) {
       return { handled: true, output: `\n${JSON.stringify(safe, null, 2)}\n` };

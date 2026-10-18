@@ -80,4 +80,46 @@ describe('redactForDisplay', () => {
     expect(redactForDisplay(42)).toBe(42);
     expect(redactForDisplay(true)).toBe(true);
   });
+
+  it('camelCase 敏感键全部命中', () => {
+    const redacted = redactForDisplay({
+      appSecret: 'app-secret',
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      authToken: 'auth-token',
+      clientSecret: 'client-secret',
+      authorization: 'Bearer abc',
+      appId: 'cli_123456',
+      appid: 'cli_654321',
+    }) as Record<string, unknown>;
+
+    for (const key of [
+      'appSecret',
+      'accessToken',
+      'refreshToken',
+      'authToken',
+      'clientSecret',
+      'authorization',
+    ]) {
+      expect(redacted[key]).toBe('***');
+    }
+    expect(redacted.appId).toBe('cli_***');
+    expect(redacted.appid).toBe('cli_***');
+  });
+
+  it('usage 的 tokens 字段不被误伤', () => {
+    const redacted = redactForDisplay({
+      total_tokens: 10,
+      prompt_tokens: 3,
+      completion_tokens: 7,
+      max_tokens: 99,
+      tokenizer: 'cl100k',
+    }) as Record<string, unknown>;
+
+    expect(redacted.total_tokens).toBe(10);
+    expect(redacted.prompt_tokens).toBe(3);
+    expect(redacted.completion_tokens).toBe(7);
+    expect(redacted.max_tokens).toBe(99);
+    expect(redacted.tokenizer).toBe('cl100k');
+  });
 });

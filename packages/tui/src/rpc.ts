@@ -24,21 +24,40 @@ export const RPC_ERROR_CODES: readonly RpcErrorCodeLike[] = [
 
 const RPC_ERROR_CODE_SET = new Set<string>(RPC_ERROR_CODES);
 
-/** 敏感键名（精确匹配，大小写不敏感） */
-const SENSITIVE_KEYS = new Set([
-  'api_key',
-  'apikey',
-  'token',
-  'access_token',
-  'refresh_token',
-  'secret',
-  'app_secret',
-  'password',
-  'authorization',
-]);
+/**
+ * 把键名切成小写词序列：`appSecret` -> ['app','secret']，
+ * `app_secret` -> ['app','secret']，`total_tokens` -> ['total','tokens']。
+ */
+function keyWords(key: string): string[] {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean);
+}
 
-/** app_id 类键名：只显示前 4 位 */
-const APP_ID_KEYS = new Set(['app_id', 'appid']);
+/**
+ * 敏感键判定：
+ * - 单词级 `password` / `secret` / `authorization` / `token`（含 camelCase）；
+ * - `api_key` / `apikey` / `apiKey`（两个词相邻）。
+ * 注意：`total_tokens` / `prompt_tokens` 等 usage 字段不命中（单词是 tokens）。
+ */
+function isSensitiveKey(key: string): boolean {
+  const words = keyWords(key);
+  for (let i = 0; i < words.length; i++) {
+    const word = words[i];
+    if (word === 'password' || word === 'secret' || word === 'authorization') return true;
+    if (word === 'token' || word === 'apikey') return true;
+    if (word === 'api' && words[i + 1] === 'key') return true;
+  }
+  return false;
+}
+
+/** app_id / appId / appid：只显示前 4 位 */
+function isAppIdKey(key: string): boolean {
+  return keyWords(key).join('') === 'appid';
+}
 
 /** 字符串里的常见密钥前缀 */
 const SECRET_STRING_PATTERNS: ReadonlyArray<[RegExp, string]> = [
@@ -108,10 +127,9 @@ function redactValue(value: unknown, depth: number): unknown {
 
   const result: Record<string, unknown> = {};
   for (const [childKey, childValue] of Object.entries(value)) {
-    const lower = childKey.toLowerCase();
-    if (SENSITIVE_KEYS.has(lower)) {
+    if (isSensitiveKey(childKey)) {
       result[childKey] = '***';
-    } else if (APP_ID_KEYS.has(lower)) {
+    } else if (isAppIdKey(childKey)) {
       result[childKey] = maskAppId(childValue);
     } else {
       result[childKey] = redactValue(childValue, depth + 1);
