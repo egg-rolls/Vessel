@@ -46,6 +46,7 @@ const CORE_MODULES = [
   'provider',
   'runtime',
   'session',
+  'tenant',
   'types',
 ] as const;
 const CORE_MODULE_SET = new Set<string>(CORE_MODULES);
