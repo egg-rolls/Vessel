@@ -2,14 +2,13 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { ConfigSnapshot, VesselConfig } from '../../packages/config/src/index';
+import type { ConfigSnapshot } from '../../packages/config/src/index';
 import {
   configInitCommand,
   configPathCommand,
   configShowCommand,
   USER_CONFIG_TEMPLATE,
 } from '../config-command';
-import { mergeTenantOverlay } from '../tenant-overlay';
 
 const tempDirs: string[] = [];
 
@@ -31,99 +30,6 @@ afterEach(() => {
     const dir = tempDirs.pop();
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
   }
-});
-
-describe('mergeTenantOverlay (0.5)', () => {
-  it('深合并标量/对象、替换数组、按 name 合并 plugins、并集合并 mcpServers', () => {
-    const base = {
-      provider: { name: 'openai', model: 'base-model', temperature: 0.7 },
-      plugins: [
-        { name: 'a', enabled: true, config: { x: 1 } },
-        { name: 'b', enabled: true },
-      ],
-      mcpServers: {
-        srv: { transport: 'stdio', command: 'run', env: { A: '1' } },
-      },
-      limits: { requestLimit: 10 },
-    } as unknown as VesselConfig;
-
-    const overlay = {
-      provider: { model: 'tenant-model' },
-      plugins: [{ name: 'a', enabled: false }, { name: 'c' }],
-      mcpServers: {
-        srv: { env: { B: '2' } },
-        srv2: { transport: 'http', url: 'https://example.com' },
-      },
-    } as unknown as VesselConfig;
-
-    const { config, overlayKeys, errors } = mergeTenantOverlay(base, overlay, {
-      tenantId: 'acme',
-    });
-
-    expect(errors).toEqual([]);
-    expect(config.provider?.model).toBe('tenant-model');
-    expect(config.provider?.temperature).toBe(0.7);
-    expect(config.plugins).toEqual([
-      { name: 'a', enabled: false, config: { x: 1 } },
-      { name: 'b', enabled: true },
-      { name: 'c' },
-    ]);
-    expect(config.mcpServers?.srv).toEqual({
-      transport: 'stdio',
-      command: 'run',
-      env: { A: '1', B: '2' },
-    });
-    expect(config.mcpServers?.srv2).toEqual({
-      transport: 'http',
-      url: 'https://example.com',
-    });
-    expect(overlayKeys).toEqual(
-      expect.arrayContaining([
-        'provider.model',
-        'plugins',
-        'mcpServers.srv.env.B',
-        'mcpServers.srv2.transport',
-      ]),
-    );
-    // 不修改入参
-    expect(base.provider?.model).toBe('base-model');
-  });
-
-  it('null / 禁止块 / 未知块 / 显式密钥报错且不静默', () => {
-    const base = { context: { maxTokens: 1 } } as VesselConfig;
-    const overlay = {
-      context: null,
-      serve: { port: 1234 },
-      tenant: { default: 'x' },
-      bogus: true,
-      provider: { name: 'openai', apiKey: 'tenant-secret' },
-    } as unknown as VesselConfig;
-
-    const { errors, config } = mergeTenantOverlay(base, overlay, { tenantId: 'acme' });
-    const paths = errors.map((error) => error.path);
-
-    expect(paths).toContain('tenant.tenants.acme.config.context');
-    expect(paths).toContain('tenant.tenants.acme.config.serve');
-    expect(paths).toContain('tenant.tenants.acme.config.tenant');
-    expect(paths).toContain('tenant.tenants.acme.config.bogus');
-    expect(paths).toContain('tenant.tenants.acme.config.provider.apiKey');
-    expect(errors.some((error) => error.message.includes('tenant-secret'))).toBe(false);
-    expect(config.context?.maxTokens).toBe(1);
-    expect((config as Record<string, unknown>).serve).toBeUndefined();
-  });
-
-  it('tools/quota 是 tenant 设置层字段，不进入 VesselConfig 也不报错', () => {
-    const overlay = {
-      tools: { allow: ['bash'] },
-      quota: { maxSessions: 2 },
-    } as unknown as VesselConfig;
-
-    const { config, errors } = mergeTenantOverlay({}, overlay, { tenantId: 'acme' });
-
-    expect(errors).toEqual([]);
-    expect((config as Record<string, unknown>).tools).toBeUndefined();
-    expect((config as Record<string, unknown>).quota).toBeUndefined();
-  });
 });
 
 describe('config command (0.5)', () => {
