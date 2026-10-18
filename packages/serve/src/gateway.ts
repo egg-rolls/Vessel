@@ -26,6 +26,7 @@ import type {
   SessionBackend,
   ToolDefinition,
 } from '@vessel/core';
+import { ClientBackpressure } from './backpressure.js';
 import {
   type DurableGatewayOptions,
   dedupeCheckpoints,
@@ -36,8 +37,11 @@ import {
   sortCheckpoints,
   toRunSummary,
 } from './durable.js';
+import { type EvalsGatewayOptions, normalizeEvalReport } from './evals.js';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+import { type FeishuGatewayOptions, normalizeFeishuStatus } from './feishu.js';
 import { type McpGatewayOptions, normalizeMcpServers } from './mcp.js';
+import { type MetricsProvider, normalizeMetricsSnapshot } from './metrics.js';
 import {
   type ClientFrame,
   type NodeInfo,
@@ -62,6 +66,18 @@ import {
   toWireMessage,
   toWirePeer,
 } from './team.js';
+import {
+  dedupeWorkflowSummaries,
+  isSafeWorkflowName,
+  MAX_WORKFLOW_LIMIT,
+  parseWorkflowLimit,
+  parseWorkflowStatus,
+  sortWorkflowSummaries,
+  toWireWorkflowDetail,
+  toWireWorkflowSummary,
+  type WorkflowGatewayOptions,
+  type WorkflowRunStatus,
+} from './workflow.js';
 
 /** 网关启动选项 */
 export interface GatewayOptions {
@@ -117,6 +133,14 @@ export interface GatewayOptions {
   durable?: DurableGatewayOptions;
   /** MCP server 状态注入；缺省 = MCP 端点关闭 */
   mcp?: McpGatewayOptions;
+  /** workflow 控制面注入；缺省 = `/v1/workflows*` 返回 workflow_disabled */
+  workflows?: WorkflowGatewayOptions;
+  /** metrics 快照注入；缺省 = `/v1/metrics` 返回 metrics_disabled */
+  metrics?: MetricsProvider;
+  /** 飞书渠道状态注入；缺省 = `/v1/channels/feishu` 返回 channel_disabled */
+  feishu?: FeishuGatewayOptions;
+  /** evals 最近报告注入；缺省 = `/v1/evals/latest` 返回 eval_not_found */
+  evals?: EvalsGatewayOptions;
 }
 
 /** 网关实例 */
@@ -137,12 +161,38 @@ export interface Gateway {
   stop(): void;
 }
 
+/** SSE 回放状态：由 pull 驱动，慢连接不会一次性堆满队列 */
+interface SseReplayState {
+  /** 下一条要回放的 seq */
+  cursor: number;
+  /** 每次 pull 最多发送的事件数 */
+  batch: number;
+  accepts: (event: RunEvent) => boolean;
+  encode: (item: SeqEvent) => string;
+}
+
+/** 单个 SSE 连接的状态 */
+interface SseClientState {
+  backpressure: ClientBackpressure;
+  /** pull 之后自增；作为 Bun desiredSize 失效时的退化信号 */
+  unacked: number;
+  encodeGap: (gap: EventGap) => string;
+  replay?: SseReplayState;
+  onClose?: () => void;
+}
+
+/** team SSE 连接状态 */
+interface TeamClientState extends SseClientState {
+  agentId?: string;
+}
+
 /** WS 连接自定义数据 */
 interface WsData {
   authed: boolean;
   since: number;
   alive: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
+  backpressure: ClientBackpressure;
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
@@ -162,8 +212,16 @@ const MAX_QUEUE = 100;
 const MAX_RUNS = 200;
 /** 权限请求记录的清理阈值（与 core 的 120s 超时对齐） */
 const PERMISSION_TTL_MS = 120_000;
-/** 慢客户端缓冲阈值 */
+/** WS 慢客户端硬关闭阈值（最终安全网） */
 const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+/** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
+const WS_BACKPRESSURE_HIGH = 2 * 1024 * 1024;
+const WS_BACKPRESSURE_LOW = 512 * 1024;
+/** SSE 背压按帧计；highWaterMark 同时用于控制器队列 */
+const SSE_HIGH_WATER_FRAMES = 256;
+const SSE_LOW_WATER_FRAMES = 64;
+/** 每次 pull 回放的批大小 */
+const SSE_REPLAY_BATCH = 64;
 
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
@@ -386,11 +444,39 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.mcp !== undefined && typeof opts.mcp.listServers !== 'function') {
     throw new Error('mcp.listServers must be a function.');
   }
+  if (opts.workflows !== undefined) {
+    const required = [
+      'listRuns',
+      'getRun',
+      'start',
+      'resume',
+      'cancel',
+      'resolveDefinition',
+    ] as const;
+    for (const key of required) {
+      if (typeof opts.workflows[key] !== 'function') {
+        throw new Error(`workflows.${key} must be a function.`);
+      }
+    }
+  }
+  if (opts.metrics !== undefined && typeof opts.metrics !== 'function') {
+    throw new Error('metrics must be a function.');
+  }
+  if (opts.feishu !== undefined && typeof opts.feishu.status !== 'function') {
+    throw new Error('feishu.status must be a function.');
+  }
+  if (opts.evals !== undefined && typeof opts.evals.latest !== 'function') {
+    throw new Error('evals.latest must be a function.');
+  }
 
   const features = [...BASE_FEATURES];
   if (opts.durable?.store && opts.durable.resume) features.push('durable-resume');
   if (opts.mcp) features.push('mcp-status');
   if (tlsMaterial) features.push('tls');
+  if (opts.workflows) features.push('workflow');
+  if (opts.evals) features.push('evals');
+  if (opts.feishu) features.push('feishu');
+  if (opts.metrics) features.push('metrics');
   const protocolInfo: ProtocolInfo = {
     name: 'vessel.gateway',
     version: PROTOCOL_VERSION,
@@ -401,14 +487,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
   const startedAt = Date.now();
-  const buffer = new SeqEventBuffer(opts.maxHistory ?? DEFAULT_MAX_HISTORY);
+  // gateway 事件缓冲始终有界：缺省/0 = 10000；与 core MemoryEventStream 的
+  // `0 = unlimited` 语义无关（DECISION-009 §10.3.4）。
+  const configuredHistory = opts.maxHistory ?? DEFAULT_MAX_HISTORY;
+  if (!Number.isSafeInteger(configuredHistory) || configuredHistory < 0) {
+    throw new Error('maxHistory must be a non-negative integer.');
+  }
+  const buffer = new SeqEventBuffer(
+    configuredHistory === 0 ? DEFAULT_MAX_HISTORY : configuredHistory,
+  );
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
   const allowedOrigins = opts.allowedOrigins ?? [];
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const authTimeoutMs = opts.authTimeoutMs ?? 5_000;
 
-  const sseClients = new Set<SseController>();
+  const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
   const runs = new Map<string, RunRecord>();
   const queue: RunRecord[] = [];
@@ -423,10 +517,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * Addendum A §2：首个调用成功，后续（含重复）一律 run_already_running。
    */
   const resumedRuns = new Set<string>();
+  /** workflow resume 在途占位（同一 run 只允许一个），LRU 上限 1000 */
+  const resumedWorkflows = new Set<string>();
 
   /** R3 team 状态（默认关闭） */
   let team: TeamGatewayOptions | undefined = opts.team;
-  const teamClients = new Map<SseController, { agentId?: string }>();
+  const teamClients = new Map<SseController, TeamClientState>();
   let teamPollTimer: ReturnType<typeof setInterval> | undefined;
   let knownPeers = new Set<string>();
   let inboundCursor = 0;
@@ -540,31 +636,88 @@ export function startGateway(opts: GatewayOptions): Gateway {
     });
   }
 
-  function broadcast(frame: ServerFrame): void {
-    const encoded = JSON.stringify(frame);
-    for (const ws of [...wsClients]) {
-      if (ws.readyState !== 1) {
-        wsClients.delete(ws);
-        continue;
-      }
-      if (ws.getBufferedAmount() > MAX_BUFFERED_BYTES) {
-        ws.close(1013, 'slow_consumer');
-        wsClients.delete(ws);
-        continue;
-      }
-      try {
-        ws.send(encoded);
-      } catch {
-        wsClients.delete(ws);
-      }
+  function sendEventToWs(ws: Ws, item: SeqEvent): void {
+    const inflight = ws.getBufferedAmount();
+    if (!ws.data.backpressure.admit(item.seq, inflight)) return;
+    const gap = ws.data.backpressure.takeGap(inflight);
+    if (gap) sendFrame(ws, gapFrame(gap));
+    sendFrame(ws, eventFrame(item));
+  }
+
+  function flushWsGap(ws: Ws): void {
+    const gap = ws.data.backpressure.takeGap(ws.getBufferedAmount());
+    if (gap) sendFrame(ws, gapFrame(gap));
+  }
+
+  function sseInflight(ctrl: SseController, state: SseClientState): number {
+    const desired = ctrl.desiredSize;
+    const queued = typeof desired === 'number' ? Math.max(0, SSE_HIGH_WATER_FRAMES - desired) : 0;
+    return Math.max(queued, state.unacked);
+  }
+
+  function writeSse(ctrl: SseController, state: SseClientState, chunk: string): boolean {
+    try {
+      ctrl.enqueue(chunk);
+      state.unacked += 1;
+      return true;
+    } catch {
+      state.onClose?.();
+      return false;
     }
+  }
+
+  function flushSseGap(ctrl: SseController, state: SseClientState): boolean {
+    const gap = state.backpressure.takeGap(sseInflight(ctrl, state));
+    if (!gap) return true;
+    return writeSse(ctrl, state, state.encodeGap(gap));
+  }
+
+  function sendGatedSse(
+    ctrl: SseController,
+    state: SseClientState,
+    seq: number,
+    chunk: string,
+  ): boolean {
+    if (ctrl.desiredSize === null) {
+      state.onClose?.();
+      return false;
+    }
+    const inflight = sseInflight(ctrl, state);
+    if (!state.backpressure.admit(seq, inflight)) return true;
+    if (!flushSseGap(ctrl, state)) return false;
+    return writeSse(ctrl, state, chunk);
+  }
+
+  /** 由 pull 驱动回放：每次只发 batch 条，慢客户端自然停在队列满时 */
+  function pumpSseReplay(ctrl: SseController, state: SseClientState): void {
+    const replay = state.replay;
+    if (!replay) return;
+    const historyGap = buffer.gapFor(replay.cursor - 1);
+    if (historyGap) {
+      if (!writeSse(ctrl, state, state.encodeGap(historyGap))) return;
+      replay.cursor = historyGap.to_seq + 1;
+    }
+    let sent = 0;
+    for (const item of buffer.since(replay.cursor - 1)) {
+      const desired = ctrl.desiredSize;
+      if (typeof desired === 'number' && desired <= 0) return;
+      replay.cursor = item.seq + 1;
+      if (!replay.accepts(item.event)) continue;
+      if (!sendGatedSse(ctrl, state, item.seq, replay.encode(item))) return;
+      sent += 1;
+      if (sent >= replay.batch) return;
+    }
+    if (replay.cursor > buffer.latestSeq) state.replay = undefined;
+  }
+
+  function broadcastEvent(item: SeqEvent): void {
+    const encoded = JSON.stringify(eventFrame(item));
+    for (const ws of [...wsClients]) sendEventToWs(ws, item);
     const sseFrame = `data: ${encoded}\n\n`;
-    for (const ctrl of [...sseClients]) {
-      try {
-        ctrl.enqueue(sseFrame);
-      } catch {
-        sseClients.delete(ctrl);
-      }
+    for (const [ctrl, state] of [...sseClients]) {
+      // 回放期间由 pull 驱动，避免新事件插到历史事件前面。
+      if (state.replay) continue;
+      sendGatedSse(ctrl, state, item.seq, sseFrame);
     }
   }
 
@@ -573,7 +726,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     sendFrame(ws, helloFrame(ws.data.since));
     const gap = buffer.gapFor(ws.data.since);
     if (gap) sendFrame(ws, gapFrame(gap));
-    for (const item of buffer.since(ws.data.since)) sendFrame(ws, eventFrame(item));
+    for (const item of buffer.since(ws.data.since)) sendEventToWs(ws, item);
   }
 
   /** 订阅 core 事件流：分配 seq、记录 run 映射与权限请求、广播 */
@@ -612,7 +765,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
     }
     const seq = buffer.append(event);
-    broadcast(eventFrame({ seq, event }));
+    broadcastEvent({ seq, event });
 
     // R3：team 事件流（agent.* / team.*），可选按 agent_id 过滤
     if (isTeamEvent(event) && teamClients.size > 0) {
@@ -624,14 +777,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
         kind: 'team.event',
         event: wire,
       })}\n\n`;
-      for (const [ctrl, filter] of [...teamClients]) {
+      for (const [ctrl, state] of [...teamClients]) {
+        if (state.replay) continue;
         const agentId = (wire.data as Record<string, unknown>).agent_id;
-        if (filter.agentId !== undefined && agentId !== filter.agentId) continue;
-        try {
-          ctrl.enqueue(frame);
-        } catch {
-          teamClients.delete(ctrl);
-        }
+        if (state.agentId !== undefined && agentId !== state.agentId) continue;
+        sendGatedSse(ctrl, state, seq, frame);
       }
     }
   });
@@ -1058,53 +1208,79 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const agentId = url.searchParams.get('agent_id') ?? undefined;
     const since = parseSince(url.searchParams.get('since'));
     let controller: SseController | undefined;
-    const stream = new ReadableStream<unknown>({
-      start(ctrl) {
-        controller = ctrl;
-        teamClients.set(ctrl, { ...(agentId !== undefined ? { agentId } : {}) });
-        ctrl.enqueue('retry: 3000\n\n');
-        const latest = buffer.latestSeq;
-        ctrl.enqueue(
-          `data: ${JSON.stringify({
-            protocol: 1,
-            node_id: nodeId,
-            kind: 'team.hello',
-            from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
-            latest_seq: latest,
-          })}\n\n`,
-        );
-        const gap = buffer.gapFor(since);
-        if (gap) {
-          ctrl.enqueue(
+    let state: TeamClientState | undefined;
+    const stream = new ReadableStream<unknown>(
+      {
+        start(ctrl) {
+          controller = ctrl;
+          const clientState: TeamClientState = {
+            ...(agentId !== undefined ? { agentId } : {}),
+            backpressure: new ClientBackpressure({
+              high: SSE_HIGH_WATER_FRAMES,
+              low: SSE_LOW_WATER_FRAMES,
+            }),
+            unacked: 0,
+            encodeGap: (gap) =>
+              `data: ${JSON.stringify({
+                protocol: 1,
+                node_id: nodeId,
+                kind: 'gap',
+                from_seq: gap.from_seq,
+                to_seq: gap.to_seq,
+              })}\n\n`,
+            onClose: () => teamClients.delete(ctrl),
+          };
+          state = clientState;
+          teamClients.set(ctrl, clientState);
+          writeSse(ctrl, clientState, 'retry: 3000\n\n');
+          const latest = buffer.latestSeq;
+          writeSse(
+            ctrl,
+            clientState,
             `data: ${JSON.stringify({
               protocol: 1,
               node_id: nodeId,
-              kind: 'gap',
-              from_seq: gap.from_seq,
-              to_seq: gap.to_seq,
+              kind: 'team.hello',
+              from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
+              latest_seq: latest,
             })}\n\n`,
           );
-        }
-        for (const item of buffer.since(since)) {
-          if (!isTeamEvent(item.event)) continue;
-          const wire = toWireEvent(item.event);
-          const eventAgentId = (wire.data as Record<string, unknown>).agent_id;
-          if (agentId !== undefined && eventAgentId !== agentId) continue;
-          ctrl.enqueue(
-            `data: ${JSON.stringify({
-              protocol: 1,
-              node_id: nodeId,
-              seq: item.seq,
-              kind: 'team.event',
-              event: wire,
-            })}\n\n`,
-          );
-        }
+          const gap = buffer.gapFor(since);
+          if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
+          clientState.replay = {
+            cursor: Math.max(since + 1, buffer.oldestSeq),
+            batch: SSE_REPLAY_BATCH,
+            accepts: (event) => {
+              if (!isTeamEvent(event)) return false;
+              if (agentId === undefined) return true;
+              const wire = toWireEvent(event);
+              return (wire.data as Record<string, unknown>).agent_id === agentId;
+            },
+            encode: (item) => {
+              const wire = toWireEvent(item.event);
+              return `data: ${JSON.stringify({
+                protocol: 1,
+                node_id: nodeId,
+                seq: item.seq,
+                kind: 'team.event',
+                event: wire,
+              })}\n\n`;
+            },
+          };
+          if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
+        },
+        pull() {
+          if (!controller || !state) return;
+          state.unacked = 0;
+          pumpSseReplay(controller, state);
+          flushSseGap(controller, state);
+        },
+        cancel() {
+          if (controller) teamClients.delete(controller);
+        },
       },
-      cancel() {
-        if (controller) teamClients.delete(controller);
-      },
-    });
+      { highWaterMark: SSE_HIGH_WATER_FRAMES },
+    );
     return new Response(stream, {
       headers: {
         'Content-Type': 'text/event-stream',
@@ -1515,6 +1691,353 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
+  // ── 0.4 workflow / metrics / feishu / evals 端点 ──
+
+  const methodNotAllowed = (extra: Record<string, string>): Response =>
+    errorJson('method_not_allowed', 'Method not allowed', 405, extra);
+
+  /** workflow 控制面错误 → HTTP；未知 code 一律 500，不泄露内部堆栈 */
+  function workflowErrorResponse(error: unknown, extra: Record<string, string>): Response {
+    const code = (error as { code?: unknown }).code;
+    const message = error instanceof Error ? error.message : String(error);
+    switch (code) {
+      case 'workflow_not_found':
+        return errorJson('workflow_not_found', message, 404, extra);
+      case 'workflow_invalid':
+        return errorJson('workflow_invalid', message, 400, extra);
+      case 'workflow_already_running':
+        return errorJson('workflow_already_running', message, 409, extra);
+      case 'workflow_not_resumable':
+        return errorJson('workflow_not_resumable', message, 409, extra);
+      case 'workflow_cancelled':
+        // 不新增协议码（DECISION-009 §10.3.7）
+        return errorJson('workflow_invalid', message, 409, extra);
+      case 'workflow_disabled':
+        return errorJson('workflow_disabled', message, 503, extra);
+      default:
+        return errorJson('internal', 'Workflow operation failed', 500, extra);
+    }
+  }
+
+  /** 原子占位：同一 workflow run 同时只允许一个 resume */
+  function reserveWorkflowResume(runId: string): boolean {
+    if (resumedWorkflows.has(runId)) return false;
+    resumedWorkflows.add(runId);
+    while (resumedWorkflows.size > 1000) {
+      const first = resumedWorkflows.keys().next();
+      if (first.done) break;
+      if (first.value === runId) break;
+      resumedWorkflows.delete(first.value);
+    }
+    return true;
+  }
+
+  function releaseWorkflowResume(runId: string): void {
+    resumedWorkflows.delete(runId);
+  }
+
+  function decodeWorkflowId(raw: string): string | null {
+    let id: string;
+    try {
+      id = decodeURIComponent(raw);
+    } catch {
+      return null;
+    }
+    return id.length > 0 && id.length <= 256 ? id : null;
+  }
+
+  /** inputs 只接受扁平 string map；上限防止请求体外的二次膨胀 */
+  function parseWorkflowInputs(raw: unknown): Record<string, string> | null {
+    if (raw === undefined) return {};
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+    const entries = Object.entries(raw as Record<string, unknown>);
+    if (entries.length > 64) return null;
+    const inputs: Record<string, string> = {};
+    for (const [key, value] of entries) {
+      if (key.length === 0 || key.length > 64) return null;
+      if (typeof value !== 'string' || value.length > 10_000) return null;
+      inputs[key] = value;
+    }
+    return inputs;
+  }
+
+  /** `/v1/workflows*`：列表 / 详情 / 启动 / 恢复 / 取消 */
+  async function handleWorkflows(
+    req: Request,
+    url: URL,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/workflows' && !path.startsWith('/v1/workflows/')) return null;
+    const workflows = opts.workflows;
+    const disabled = (): Response =>
+      errorJson('workflow_disabled', 'Workflow control is not enabled', 503, extra);
+
+    if (path === '/v1/workflows') {
+      if (req.method !== 'GET') return methodNotAllowed(extra);
+      if (!workflows) return disabled();
+      const rawStatus = url.searchParams.get('status');
+      const status: WorkflowRunStatus | null = parseWorkflowStatus(rawStatus);
+      if (rawStatus !== null && status === null) {
+        return errorJson('invalid_request', 'Invalid workflow status filter', 400, extra);
+      }
+      const limit = parseWorkflowLimit(url.searchParams.get('limit'));
+      if (limit === null) {
+        return errorJson(
+          'invalid_request',
+          `limit must be an integer between 1 and ${MAX_WORKFLOW_LIMIT}`,
+          400,
+          extra,
+        );
+      }
+      try {
+        const runs = await workflows.listRuns({
+          ...(status !== null ? { status } : {}),
+          limit,
+        });
+        const summaries = runs
+          .map((run) => toWireWorkflowSummary(run))
+          .filter((run): run is NonNullable<typeof run> => run !== null);
+        return json(
+          {
+            workflows: sortWorkflowSummaries(dedupeWorkflowSummaries(summaries)).slice(0, limit),
+          },
+          200,
+          extra,
+        );
+      } catch (error) {
+        return workflowErrorResponse(error, extra);
+      }
+    }
+
+    if (path === '/v1/workflows/run') {
+      if (req.method !== 'POST') return methodNotAllowed(extra);
+      if (!workflows) return disabled();
+      const body = await readJsonBody(req, maxBodyBytes);
+      if (body instanceof Response) return body;
+      const rawName = body.name;
+      if (typeof rawName !== 'string' || rawName.trim().length === 0) {
+        return errorJson('invalid_request', 'name is required', 400, extra);
+      }
+      const name = rawName.trim();
+      if (!isSafeWorkflowName(name)) {
+        return errorJson('workflow_invalid', 'Invalid workflow name', 400, extra);
+      }
+      const inputs = parseWorkflowInputs(body.inputs);
+      if (inputs === null) {
+        return errorJson(
+          'invalid_request',
+          'inputs must be a flat string map (max 64 entries)',
+          400,
+          extra,
+        );
+      }
+      let definitionPath: string | undefined;
+      try {
+        definitionPath = workflows.resolveDefinition(name);
+      } catch {
+        return errorJson('internal', 'Failed to resolve workflow definition', 500, extra);
+      }
+      if (definitionPath === undefined) {
+        return errorJson('workflow_not_found', `Workflow not found: ${name}`, 404, extra);
+      }
+      try {
+        const started = await workflows.start(definitionPath, {
+          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+        });
+        return json({ workflow_run_id: started.workflowRunId, status: 'queued' }, 202, extra);
+      } catch (error) {
+        return workflowErrorResponse(error, extra);
+      }
+    }
+
+    const match = path.match(/^\/v1\/workflows\/([^/]+)(?:\/(resume|cancel))?$/);
+    if (!match) return errorJson('not_found', `Not found: ${path}`, 404, extra);
+    const workflowRunId = decodeWorkflowId(match[1] ?? '');
+    if (workflowRunId === null) {
+      return errorJson('invalid_request', 'Invalid workflow run id', 400, extra);
+    }
+    const action = match[2];
+
+    if (action === 'resume') {
+      if (req.method !== 'POST') return methodNotAllowed(extra);
+      if (!workflows) return disabled();
+      // 占位必须在任何 await 之前，保证并发 resume 只有一个通过。
+      if (!reserveWorkflowResume(workflowRunId)) {
+        return errorJson(
+          'workflow_already_running',
+          `Workflow run is already resuming: ${workflowRunId}`,
+          409,
+          extra,
+        );
+      }
+      try {
+        const run = await workflows.getRun(workflowRunId);
+        if (!run) {
+          releaseWorkflowResume(workflowRunId);
+          return errorJson(
+            'workflow_not_found',
+            `Workflow run not found: ${workflowRunId}`,
+            404,
+            extra,
+          );
+        }
+        const summary = toWireWorkflowSummary(run);
+        if (!summary) {
+          releaseWorkflowResume(workflowRunId);
+          return errorJson('internal', 'Invalid workflow run payload', 500, extra);
+        }
+        if (summary.status === 'running') {
+          releaseWorkflowResume(workflowRunId);
+          return errorJson(
+            'workflow_already_running',
+            `Workflow run is already running: ${workflowRunId}`,
+            409,
+            extra,
+          );
+        }
+        if (summary.status === 'completed' || summary.status === 'cancelled') {
+          releaseWorkflowResume(workflowRunId);
+          return errorJson(
+            'workflow_not_resumable',
+            `Workflow run is not resumable: ${workflowRunId}`,
+            409,
+            extra,
+          );
+        }
+        const resumed = await workflows.resume(workflowRunId);
+        // done 恰好 resolve 一次；不阻塞 HTTP 响应。
+        void resumed.done
+          .finally(() => releaseWorkflowResume(workflowRunId))
+          .catch(() => undefined);
+        return json({ workflow_run_id: resumed.workflowRunId, status: 'queued' }, 202, extra);
+      } catch (error) {
+        releaseWorkflowResume(workflowRunId);
+        return workflowErrorResponse(error, extra);
+      }
+    }
+
+    if (action === 'cancel') {
+      if (req.method !== 'POST') return methodNotAllowed(extra);
+      if (!workflows) return disabled();
+      try {
+        const run = await workflows.getRun(workflowRunId);
+        if (!run) {
+          return errorJson(
+            'workflow_not_found',
+            `Workflow run not found: ${workflowRunId}`,
+            404,
+            extra,
+          );
+        }
+        const summary = toWireWorkflowSummary(run);
+        if (!summary) return errorJson('internal', 'Invalid workflow run payload', 500, extra);
+        if (summary.status === 'cancelled') {
+          return json({ workflow_run_id: workflowRunId, status: 'cancelled' }, 202, extra);
+        }
+        if (summary.status === 'completed' || summary.status === 'failed') {
+          return errorJson('workflow_invalid', 'Run is not cancellable', 409, extra);
+        }
+        await workflows.cancel(workflowRunId);
+        return json({ workflow_run_id: workflowRunId, status: 'cancelled' }, 202, extra);
+      } catch (error) {
+        return workflowErrorResponse(error, extra);
+      }
+    }
+
+    if (req.method !== 'GET') return methodNotAllowed(extra);
+    if (!workflows) return disabled();
+    try {
+      const run = await workflows.getRun(workflowRunId);
+      if (!run) {
+        return errorJson(
+          'workflow_not_found',
+          `Workflow run not found: ${workflowRunId}`,
+          404,
+          extra,
+        );
+      }
+      const detail = toWireWorkflowDetail(run);
+      if (!detail) return errorJson('internal', 'Invalid workflow run payload', 500, extra);
+      return json({ workflow: detail }, 200, extra);
+    } catch (error) {
+      return workflowErrorResponse(error, extra);
+    }
+  }
+
+  /** `/v1/metrics`：只读快照 */
+  async function handleMetrics(
+    req: Request,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/metrics') return null;
+    if (req.method !== 'GET') return methodNotAllowed(extra);
+    if (!opts.metrics) {
+      return errorJson('metrics_disabled', 'Metrics are not enabled', 503, extra);
+    }
+    try {
+      return json({ metrics: normalizeMetricsSnapshot(opts.metrics()) }, 200, extra);
+    } catch {
+      return errorJson('internal', 'Failed to read metrics', 500, extra);
+    }
+  }
+
+  /** `/v1/channels/feishu`：只读状态，凭据二次掩码 */
+  async function handleFeishu(
+    req: Request,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/channels/feishu') return null;
+    if (req.method !== 'GET') return methodNotAllowed(extra);
+    if (!opts.feishu) {
+      return errorJson('channel_disabled', 'Feishu channel is not enabled', 503, extra);
+    }
+    try {
+      return json({ channel: normalizeFeishuStatus(opts.feishu.status()) }, 200, extra);
+    } catch {
+      return errorJson('internal', 'Failed to read Feishu status', 500, extra);
+    }
+  }
+
+  const SAFE_SUITE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+  /** `/v1/evals/latest?suite=`：只读最近一次报告 */
+  async function handleEvals(
+    req: Request,
+    url: URL,
+    path: string,
+    extra: Record<string, string>,
+  ): Promise<Response | null> {
+    if (path !== '/v1/evals/latest') return null;
+    if (req.method !== 'GET') return methodNotAllowed(extra);
+    const suite = (url.searchParams.get('suite') ?? '').trim();
+    if (suite.length === 0) {
+      return errorJson('invalid_request', 'suite is required', 400, extra);
+    }
+    if (!SAFE_SUITE_NAME.test(suite) || suite.includes('..')) {
+      return errorJson('invalid_request', 'Invalid suite name', 400, extra);
+    }
+    if (!opts.evals) {
+      return errorJson('eval_not_found', 'Eval report not found', 404, extra);
+    }
+    try {
+      const report = await opts.evals.latest(suite);
+      const normalized = report ? normalizeEvalReport(report) : null;
+      if (!normalized) {
+        return errorJson('eval_not_found', `Eval report not found: ${suite}`, 404, extra);
+      }
+      return json({ report: normalized }, 200, extra);
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      const message = error instanceof Error ? error.message : 'Eval report not found';
+      if (code === 'eval_not_found') return errorJson('eval_not_found', message, 404, extra);
+      if (code === 'eval_invalid') return errorJson('invalid_request', message, 400, extra);
+      return errorJson('internal', 'Failed to read eval report', 500, extra);
+    }
+  }
+
   /** 轮询 peer 表，发布 join/left（失败只记录，不影响 v1） */
   function startTeamPolling(): void {
     if (teamPollTimer) clearInterval(teamPollTimer);
@@ -1637,6 +2160,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
             authed,
             since: parseSince(url.searchParams.get('since')),
             alive: true,
+            backpressure: new ClientBackpressure({
+              high: WS_BACKPRESSURE_HIGH,
+              low: WS_BACKPRESSURE_LOW,
+            }),
           },
         });
         if (!upgraded) return errorJson('invalid_request', 'WebSocket upgrade failed', 400, extra);
@@ -1675,26 +2202,60 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const mcpResponse = await handleMcp(req, path, extra);
       if (mcpResponse) return mcpResponse;
 
+      // 0.4：workflow / metrics / feishu / evals（未注入 → 稳定错误码）
+      const workflowsResponse = await handleWorkflows(req, url, path, extra);
+      if (workflowsResponse) return workflowsResponse;
+      const metricsResponse = await handleMetrics(req, path, extra);
+      if (metricsResponse) return metricsResponse;
+      const feishuResponse = await handleFeishu(req, path, extra);
+      if (feishuResponse) return feishuResponse;
+      const evalsResponse = await handleEvals(req, url, path, extra);
+      if (evalsResponse) return evalsResponse;
+
       // SSE：只读事件流（EventSource 无法带 header，使用 ?token=）
       if ((path === '/v1/events' || path === '/events') && req.method === 'GET') {
         const since = parseSince(url.searchParams.get('since'));
         let controller: SseController | undefined;
-        const stream = new ReadableStream<unknown>({
-          start(ctrl) {
-            controller = ctrl;
-            sseClients.add(ctrl);
-            ctrl.enqueue('retry: 3000\n\n');
-            ctrl.enqueue(`data: ${JSON.stringify(helloFrame(since))}\n\n`);
-            const gap = buffer.gapFor(since);
-            if (gap) ctrl.enqueue(`data: ${JSON.stringify(gapFrame(gap))}\n\n`);
-            for (const item of buffer.since(since)) {
-              ctrl.enqueue(`data: ${JSON.stringify(eventFrame(item))}\n\n`);
-            }
+        let state: SseClientState | undefined;
+        const stream = new ReadableStream<unknown>(
+          {
+            start(ctrl) {
+              controller = ctrl;
+              const clientState: SseClientState = {
+                backpressure: new ClientBackpressure({
+                  high: SSE_HIGH_WATER_FRAMES,
+                  low: SSE_LOW_WATER_FRAMES,
+                }),
+                unacked: 0,
+                encodeGap: (gap) => `data: ${JSON.stringify(gapFrame(gap))}\n\n`,
+                onClose: () => sseClients.delete(ctrl),
+              };
+              state = clientState;
+              sseClients.set(ctrl, clientState);
+              writeSse(ctrl, clientState, 'retry: 3000\n\n');
+              writeSse(ctrl, clientState, `data: ${JSON.stringify(helloFrame(since))}\n\n`);
+              const gap = buffer.gapFor(since);
+              if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
+              clientState.replay = {
+                cursor: Math.max(since + 1, buffer.oldestSeq),
+                batch: SSE_REPLAY_BATCH,
+                accepts: () => true,
+                encode: (item) => `data: ${JSON.stringify(eventFrame(item))}\n\n`,
+              };
+              if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
+            },
+            pull() {
+              if (!controller || !state) return;
+              state.unacked = 0;
+              pumpSseReplay(controller, state);
+              flushSseGap(controller, state);
+            },
+            cancel() {
+              if (controller) sseClients.delete(controller);
+            },
           },
-          cancel() {
-            if (controller) sseClients.delete(controller);
-          },
-        });
+          { highWaterMark: SSE_HIGH_WATER_FRAMES },
+        );
         return new Response(stream, {
           headers: {
             'Content-Type': 'text/event-stream',
@@ -1892,20 +2453,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       ws.data.alive = false;
       sendFrame(ws, { v: 1, kind: 'ping', node_id: nodeId, ts: Date.now() });
+      // 客户端已排空但没有新事件时，心跳负责补发 pending gap。
+      flushWsGap(ws);
     }
-    for (const ctrl of [...sseClients]) {
-      try {
-        ctrl.enqueue(': ping\n\n');
-      } catch {
-        sseClients.delete(ctrl);
-      }
+    for (const [ctrl, state] of [...sseClients]) {
+      if (!flushSseGap(ctrl, state)) continue;
+      writeSse(ctrl, state, ': ping\n\n');
     }
-    for (const ctrl of [...teamClients.keys()]) {
-      try {
-        ctrl.enqueue(': ping\n\n');
-      } catch {
-        teamClients.delete(ctrl);
-      }
+    for (const [ctrl, state] of [...teamClients]) {
+      if (!flushSseGap(ctrl, state)) continue;
+      writeSse(ctrl, state, ': ping\n\n');
     }
   }, heartbeatMs);
   (heartbeat as { unref?: () => void }).unref?.();
@@ -1950,7 +2507,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
       }
       wsClients.clear();
-      for (const ctrl of sseClients) {
+      for (const ctrl of sseClients.keys()) {
         try {
           ctrl.close();
         } catch {

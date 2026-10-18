@@ -13,16 +13,28 @@ import type {
   AskUserAnswer,
   DurableRunSummary,
   DurableRunsResponse,
+  EvalReport,
+  EvalReportResponse,
+  FeishuResponse,
+  FeishuStatus,
   GapFrame,
   GatewayErrorBody,
   HelloInfo,
   McpServerStatus,
   McpServersResponse,
+  MetricsResponse,
+  MetricsSnapshot,
   RunEvent,
   RunStatus,
   ServerFrame,
   SessionInfo,
   ToolInfo,
+  WorkflowCancelResponse,
+  WorkflowResponse,
+  WorkflowRunAccepted,
+  WorkflowRunDetail,
+  WorkflowRunSummary,
+  WorkflowsResponse,
 } from './types';
 
 export type ConnectionState = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed' | 'error';
@@ -404,6 +416,64 @@ export class GatewayClient {
   async listMcpServers(): Promise<McpServerStatus[]> {
     const body = await this.httpJson<McpServersResponse>('/v1/mcp/servers');
     return body.servers ?? [];
+  }
+
+  // ── 0.4 REST（workflow / metrics / feishu / evals）──
+
+  async listWorkflows(
+    params: { status?: string; limit?: number } = {},
+  ): Promise<WorkflowRunSummary[]> {
+    const query = new URLSearchParams();
+    if (params.status) query.set('status', params.status);
+    if (params.limit !== undefined) query.set('limit', String(params.limit));
+    const suffix = query.toString();
+    const body = await this.httpJson<WorkflowsResponse>(
+      `/v1/workflows${suffix ? `?${suffix}` : ''}`,
+    );
+    return body.workflows ?? [];
+  }
+
+  async getWorkflow(id: string): Promise<WorkflowRunDetail> {
+    const body = await this.httpJson<WorkflowResponse>(`/v1/workflows/${encodeURIComponent(id)}`);
+    return body.workflow;
+  }
+
+  startWorkflow(name: string, inputs?: Record<string, string>): Promise<WorkflowRunAccepted> {
+    const payload: { name: string; inputs?: Record<string, string> } = { name };
+    if (inputs && Object.keys(inputs).length > 0) payload.inputs = inputs;
+    return this.httpJson<WorkflowRunAccepted>('/v1/workflows/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  }
+
+  resumeWorkflow(id: string): Promise<WorkflowRunAccepted> {
+    return this.httpJson<WorkflowRunAccepted>(`/v1/workflows/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
+    });
+  }
+
+  cancelWorkflow(id: string): Promise<WorkflowCancelResponse> {
+    return this.httpJson<WorkflowCancelResponse>(`/v1/workflows/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    });
+  }
+
+  async getMetrics(): Promise<MetricsSnapshot> {
+    const body = await this.httpJson<MetricsResponse>('/v1/metrics');
+    return body.metrics;
+  }
+
+  async getFeishuStatus(): Promise<FeishuStatus> {
+    const body = await this.httpJson<FeishuResponse>('/v1/channels/feishu');
+    return body.channel;
+  }
+
+  async getLatestEval(suite: string): Promise<EvalReport> {
+    const query = new URLSearchParams({ suite });
+    const body = await this.httpJson<EvalReportResponse>(`/v1/evals/latest?${query.toString()}`);
+    return body.report;
   }
 }
 
