@@ -153,6 +153,8 @@ export function RunDetail({
   const [hasMore, setHasMore] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const previousActive = useRef(active);
+  /** trace 请求代次：切换 run 后旧响应不得覆盖新 run。 */
+  const traceGeneration = useRef(0);
 
   // 实时事件的 run_id 是 core run id；live 列表的 run_id 是 gateway 引擎 id。
   const coreRunId =
@@ -167,13 +169,17 @@ export function RunDetail({
 
   const loadFirstPage = useCallback(async () => {
     if (!coreRunId || !hasToken) return;
+    traceGeneration.current += 1;
+    const generation = traceGeneration.current;
     setTraceLoading(true);
     setTraceError(null);
     try {
       const events = await client.readEvents({ run_id: coreRunId, limit: EVENT_PAGE_SIZE });
+      if (generation !== traceGeneration.current) return;
       setTrace(events);
       setHasMore(events.length >= EVENT_PAGE_SIZE);
     } catch (error) {
+      if (generation !== traceGeneration.current) return;
       setTrace([]);
       setHasMore(false);
       setTraceError({
@@ -181,13 +187,14 @@ export function RunDetail({
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      setTraceLoading(false);
+      if (generation === traceGeneration.current) setTraceLoading(false);
     }
   }, [client, coreRunId, hasToken]);
 
   // 切换 run / 手动重载：重置过滤器与分页。
   // biome-ignore lint/correctness/useExhaustiveDependencies: runId/coreRunId 变化时重置
   useEffect(() => {
+    traceGeneration.current += 1;
     setTrace([]);
     setHasMore(false);
     setTraceError(null);
@@ -219,6 +226,7 @@ export function RunDetail({
 
   const loadMore = async () => {
     if (!coreRunId || sinceSeq === undefined || loadingMore) return;
+    const generation = traceGeneration.current;
     setLoadingMore(true);
     try {
       const next = await client.readEvents({
@@ -226,12 +234,15 @@ export function RunDetail({
         since_seq: sinceSeq,
         limit: EVENT_PAGE_SIZE,
       });
+      if (generation !== traceGeneration.current) return;
       setTrace((prev) => mergeRunEvents(prev, next));
       setHasMore(next.length >= EVENT_PAGE_SIZE);
     } catch (error) {
-      toast.error(`加载更多事件失败：${error instanceof Error ? error.message : String(error)}`);
+      if (generation === traceGeneration.current) {
+        toast.error(`加载更多事件失败：${error instanceof Error ? error.message : String(error)}`);
+      }
     } finally {
-      setLoadingMore(false);
+      if (generation === traceGeneration.current) setLoadingMore(false);
     }
   };
 
@@ -241,6 +252,10 @@ export function RunDetail({
   const completedAt = run?.completed_at;
   const usage = run?.usage;
   const raw = run ?? durable;
+  const lastCheckpointMessage =
+    run?.messages && run.messages.length > 0
+      ? run.messages[run.messages.length - 1]?.content
+      : undefined;
   const cancellable = tab === 'live' && status !== undefined && isCancellableRun(status);
   const resumable = tab === 'durable' && status !== undefined && isResumableRun(status);
 
@@ -456,6 +471,11 @@ export function RunDetail({
             <>
               <h3 className="section-title">最后一条消息（checkpoint 预览）</h3>
               <pre className="run-output">{durable.preview}</pre>
+            </>
+          ) : lastCheckpointMessage ? (
+            <>
+              <h3 className="section-title">最后一条消息（checkpoint）</h3>
+              <pre className="run-output">{lastCheckpointMessage}</pre>
             </>
           ) : (
             <EmptyState title="没有可显示的输出。" description="运行可能仍在进行或已取消。" />

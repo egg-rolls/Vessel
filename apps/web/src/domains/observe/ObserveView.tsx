@@ -278,7 +278,10 @@ function EvalsPanel() {
     enabled: available && requested > 0,
     deps: [epoch, suite, requested],
   });
-  const report = runReport ?? resourceData(latest.state) ?? null;
+  // suite 切换后旧响应仍可能留在 resource 里：只接受当前 suite 的报告。
+  const latestData = resourceData(latest.state);
+  const latestReport = latestData && latestData.suite === suite ? latestData : undefined;
+  const report = runReport ?? latestReport ?? null;
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: suite 变化时清空上一次报告
   useEffect(() => {

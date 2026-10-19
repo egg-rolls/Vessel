@@ -153,7 +153,10 @@ export function WorkflowsView({
     ...(detailPolling && connected ? { pollMs: 2000 } : {}),
     deps: [route.workflowId, epoch],
   });
-  const detail = resourceData(detailResource.state);
+  // useResource 刷新时保留旧数据；路由切换后过滤掉上一个 workflow 的响应。
+  const fetchedDetail = resourceData(detailResource.state);
+  const detail =
+    fetchedDetail && fetchedDetail.workflow_run_id === route.workflowId ? fetchedDetail : undefined;
 
   useEffect(() => {
     setDetailPolling(Boolean(route.workflowId));

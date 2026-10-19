@@ -786,6 +786,14 @@
   cursor: pointer;
 }
 
+@media (max-width: 1023px) {
+  /* 平板/手机：选中 run 后详情作为整页，列表隐藏（× 返回列表）。 */
+  .domain-view.detail-open > .filter-bar,
+  .domain-view.detail-open > .domain-content > *:not(.run-detail) {
+    display: none;
+  }
+}
+
 @media (max-width: 680px) {
   .msg-bubble {
     max-width: 88%;

@@ -140,7 +140,10 @@ export function RunsView({
     ...(connected && detailPolling ? { pollMs: 2000 } : {}),
     deps: [route.runId, route.tab, epoch],
   });
-  const detailRun = resourceData(detailResource.state) ?? knownLive ?? null;
+  // useResource 刷新时会保留旧数据；路由切到另一个 run 时必须丢弃旧 id 的响应。
+  const fetchedDetail = resourceData(detailResource.state);
+  const detailRun =
+    fetchedDetail && fetchedDetail.run_id === route.runId ? fetchedDetail : (knownLive ?? null);
   const detailStatus = detailRun?.status ?? knownDurable?.status;
   const activeDetail = detailStatus === 'queued' || detailStatus === 'running';
 
@@ -320,7 +323,7 @@ export function RunsView({
     !knownDurable;
 
   return (
-    <div className="domain-view">
+    <div className={`domain-view ${route.runId ? 'detail-open' : ''}`.trim()}>
       <PageHeader
         title="运行"
         description="Live 是当前 gateway 进程内的执行（内存，最多约 200 条）；可恢复来自持久 checkpoint。"

@@ -249,6 +249,12 @@ function TenantEditDialog({
           }}
           placeholder="显示名称"
           data-autofocus
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && !event.nativeEvent.isComposing) {
+              event.preventDefault();
+              void submit();
+            }
+          }}
         />
         {errors.name && (
           <span className="field-error" role="alert">
