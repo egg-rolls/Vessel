@@ -294,6 +294,18 @@ export function loadConfigFromEnv(
     config.dataDir = dataDir;
   }
 
+  // 0.6：connect 客户端 token / CA。CLI 层由 `cliOverrides` 覆盖；
+  // `VESSEL_GATEWAY_TOKEN` 作为 token 的最后 env 回退（与 0.6 行为一致）。
+  const connectToken = getEnvVar(env, `${prefix}CONNECT_TOKEN`);
+  const gatewayToken = getEnvVar(env, `${prefix}GATEWAY_TOKEN`);
+  const connectCa = getEnvVar(env, `${prefix}CONNECT_CA`);
+  if (connectToken || gatewayToken || connectCa) {
+    config.connect = {
+      ...(connectToken ? { token: connectToken } : gatewayToken ? { token: gatewayToken } : {}),
+      ...(connectCa ? { caFile: connectCa } : {}),
+    };
+  }
+
   return config;
 }
 
@@ -560,9 +572,10 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   for (const key of Object.keys(resolvedEnv.resolved)) sources[key] = 'env';
   preErrors.push(...resolvedEnv.errors);
 
-  // 7. CLI 层（source=cli）
-  if (options.defaults) {
-    const resolvedCli = resolveEnvRefsInLayer(options.defaults, env);
+  // 7. CLI 层（source=cli）：`defaults`（deprecated）先应用，`cliOverrides` 覆盖。
+  for (const cliLayer of [options.defaults, options.cliOverrides]) {
+    if (!cliLayer) continue;
+    const resolvedCli = resolveEnvRefsInLayer(cliLayer, env);
     applyLayerWithSources(config, resolvedCli.layer, 'cli', sources);
     for (const key of Object.keys(resolvedCli.resolved)) sources[key] = 'env';
     preErrors.push(...resolvedCli.errors);
