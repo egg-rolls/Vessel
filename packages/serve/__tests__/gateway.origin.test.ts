@@ -128,6 +128,25 @@ describe('gateway Origin/CORS policy', () => {
     expect(unauthorized.headers.get('vary')).toBe('Origin');
   });
 
+  it('keeps CORS headers on request-body validation errors', async () => {
+    const gw = track(
+      gateways,
+      createGateway({ events: new MemoryEventStream(), allowedOrigins: [ALLOWED] }),
+    );
+    const res = await fetch(`${gw.url}/v1/runs`, {
+      method: 'POST',
+      headers: {
+        Origin: ALLOWED,
+        Authorization: `Bearer ${gw.token}`,
+        'Content-Type': 'text/plain',
+      },
+      body: 'not json',
+    });
+    expect(res.status).toBe(415);
+    expect(res.headers.get('access-control-allow-origin')).toBe(ALLOWED);
+    expect(res.headers.get('vary')).toBe('Origin');
+  });
+
   it('rejects disallowed origins with 403 and keeps Vary for caches', async () => {
     const gw = track(
       gateways,

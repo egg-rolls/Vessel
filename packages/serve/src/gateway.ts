@@ -550,33 +550,34 @@ export function corsHeaders(req: Request, allowedOrigins: string[]): Record<stri
 async function readJsonBody(
   req: Request,
   maxBytes: number,
+  extra: Record<string, string> = {},
 ): Promise<Record<string, unknown> | Response> {
   const contentType = req.headers.get('content-type');
   if (contentType && !contentType.toLowerCase().includes('application/json')) {
-    return errorJson('invalid_request', 'Content-Type must be application/json', 415);
+    return errorJson('invalid_request', 'Content-Type must be application/json', 415, extra);
   }
   const declared = Number(req.headers.get('content-length') ?? '0');
   if (Number.isFinite(declared) && declared > maxBytes) {
-    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413);
+    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413, extra);
   }
   let text: string;
   try {
     text = await req.text();
   } catch {
-    return errorJson('invalid_request', 'Cannot read request body', 400);
+    return errorJson('invalid_request', 'Cannot read request body', 400, extra);
   }
   if (Buffer.byteLength(text) > maxBytes) {
-    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413);
+    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413, extra);
   }
   if (text.trim().length === 0) return {};
   try {
     const parsed: unknown = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return errorJson('invalid_request', 'Request body must be a JSON object', 400);
+      return errorJson('invalid_request', 'Request body must be a JSON object', 400, extra);
     }
     return parsed as Record<string, unknown>;
   } catch {
-    return errorJson('invalid_request', 'Invalid JSON', 400);
+    return errorJson('invalid_request', 'Invalid JSON', 400, extra);
   }
 }
 
@@ -2473,7 +2474,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
 
     if (path === '/v1/team/messages' && req.method === 'POST') {
-      const body = await readJsonBody(req, maxBodyBytes);
+      const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
       if (body.protocol !== 1) {
         return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
@@ -2528,7 +2529,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!t.transport) {
         return errorJson('team_disabled', 'No loopback transport configured', 404, extra);
       }
-      const body = await readJsonBody(req, maxBodyBytes);
+      const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
       if (body.protocol !== 1) {
         return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
@@ -2589,7 +2590,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       if (req.method === 'POST') {
         if (!t.spawn) return errorJson('no_spawn', 'No spawn handler configured', 400, extra);
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         const name = body.name;
         const model = body.model;
@@ -3009,7 +3010,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     if (path === '/v1/workflows/run') {
       if (req.method !== 'POST') return methodNotAllowed(extra);
-      const body = await readJsonBody(req, maxBodyBytes);
+      const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
       const scope = restTenantScope(
         principal,
@@ -3703,7 +3704,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // 提交运行（异步；事件流负责结果）
       if (path === '/v1/runs' && req.method === 'POST') {
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         try {
           return json(await callMethod('runs.start', body, principal), 202, extra);
@@ -3741,7 +3742,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const permissionMatch = path.match(/^\/v1\/permissions\/([^/]+)$/);
       if (permissionMatch && req.method === 'POST') {
         const requestId = decodeURIComponent(permissionMatch[1] ?? '');
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         const decision = body.decision;
         if (decision !== 'allow' && decision !== 'deny') {
@@ -3770,7 +3771,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const askMatch = path.match(/^\/v1\/ask\/([^/]+)$/);
       if (askMatch && req.method === 'POST') {
         const requestId = decodeURIComponent(askMatch[1] ?? '');
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         if (!Array.isArray(body.answers)) {
           return errorJson('invalid_request', 'answers must be an array', 400, extra);
@@ -3792,7 +3793,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // 0.1.0 兼容：阻塞式 /run（旧 web 客户端 / 脚本）
       if (path === '/run' && req.method === 'POST') {
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         if (typeof body.input !== 'string' || body.input.length === 0) {
           return errorJson('invalid_request', 'input is required', 400, extra);
