@@ -36,6 +36,17 @@ export interface Theme {
   selectedBg: string | undefined;
   /** 彩色选中底上的前景（亮底用深色墨，保证对比度） */
   selectedInk: string | undefined;
+  /** 状态规则 / 分节线 */
+  rule: string | undefined;
+  /** badge、选中强调 */
+  badge: string | undefined;
+  /** 面板边框 */
+  panel: string | undefined;
+  /** context 用量阈值色（颜色不是唯一语义） */
+  statusGood: string | undefined;
+  statusWarn: string | undefined;
+  statusBad: string | undefined;
+  statusCritical: string | undefined;
 }
 
 const TRUECOLOR_THEME: Theme = {
@@ -50,6 +61,13 @@ const TRUECOLOR_THEME: Theme = {
   line: '#4a453d',
   selectedBg: '#3a352d',
   selectedInk: '#1c1a17',
+  rule: '#4a453d',
+  badge: '#c2a273',
+  panel: '#4a453d',
+  statusGood: '#6fa86f',
+  statusWarn: '#d8a23a',
+  statusBad: '#c85a4a',
+  statusCritical: '#c85a4a',
 };
 
 /** 16 色终端：只用命名 ANSI 色，避免 hex 映射到不可见黑 */
@@ -65,6 +83,13 @@ const ANSI16_THEME: Theme = {
   line: 'gray',
   selectedBg: 'black',
   selectedInk: 'black',
+  rule: 'gray',
+  badge: 'yellowBright',
+  panel: 'gray',
+  statusGood: 'green',
+  statusWarn: 'yellow',
+  statusBad: 'red',
+  statusCritical: 'red',
 };
 
 /** 无色终端：颜色全部关闭，依靠字形与文本标记区分状态 */
@@ -80,6 +105,13 @@ const NO_COLOR_THEME: Theme = {
   line: undefined,
   selectedBg: undefined,
   selectedInk: undefined,
+  rule: undefined,
+  badge: undefined,
+  panel: undefined,
+  statusGood: undefined,
+  statusWarn: undefined,
+  statusBad: undefined,
+  statusCritical: undefined,
 };
 
 /**
@@ -124,4 +156,12 @@ export const glyph = {
   running: '◐',
   idle: '○',
   rule: '─',
+  statusRunning: '●',
+  treeMid: '├─',
+  treeLast: '└─',
+  treePipe: '│',
+  expanded: '▾',
+  collapsed: '▸',
+  barFilled: '█',
+  barEmpty: '░',
 } as const;
