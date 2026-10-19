@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SessionCorruptError } from '../src/index';
 import { FileSessionBackend } from '../src/session/file-backend';
 import { MemorySessionBackend } from '../src/session/session-backend';
 import { SQLiteSessionBackend } from '../src/session/sqlite-backend';
@@ -266,6 +268,72 @@ describe('FileSessionBackend', () => {
 
     const loaded = await backend.load('timed');
     expect(loaded?.updated_at).toBeGreaterThan(0);
+  });
+
+  describe('损坏检测（0.8.1）', () => {
+    it('load 对损坏 JSON 抛 SessionCorruptError（含 path/cause），不返回 null', async () => {
+      await mkdir(TEST_DIR, { recursive: true });
+      const path = join(TEST_DIR, 'corrupt.json');
+      await writeFile(path, '{ not json', 'utf8');
+
+      const error = await backend.load('corrupt').catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(SessionCorruptError);
+      expect((error as SessionCorruptError).code).toBe('session_corrupt');
+      expect((error as SessionCorruptError).path).toContain('corrupt.json');
+      expect((error as SessionCorruptError).cause).toBeInstanceOf(Error);
+    });
+
+    it('主路径存在但损坏时不回退 legacy 路径', async () => {
+      await mkdir(TEST_DIR, { recursive: true });
+      const id = 'space id';
+      // 主路径（编码）损坏；legacy（未编码）是合法 JSON
+      await writeFile(join(TEST_DIR, `${encodeURIComponent(id)}.json`), 'broken', 'utf8');
+      await writeFile(
+        join(TEST_DIR, `${id}.json`),
+        JSON.stringify(createRunState(id, { messages: [{ role: 'user', content: 'legacy' }] })),
+        'utf8',
+      );
+
+      await expect(backend.load(id)).rejects.toBeInstanceOf(SessionCorruptError);
+    });
+
+    it('只有主路径 ENOENT 时才回退 legacy', async () => {
+      await mkdir(TEST_DIR, { recursive: true });
+      const id = 'legacy only id';
+      await writeFile(
+        join(TEST_DIR, `${id}.json`),
+        JSON.stringify(createRunState(id, { messages: [{ role: 'user', content: 'old' }] })),
+        'utf8',
+      );
+
+      expect((await backend.load(id))?.messages[0]?.content).toBe('old');
+    });
+
+    it('listRich 跳过损坏文件，继续返回健康会话（列表降级）', async () => {
+      await mkdir(TEST_DIR, { recursive: true });
+      await writeFile(join(TEST_DIR, 'broken.json'), '{ not json', 'utf8');
+      await backend.save(
+        createRunState('healthy', {
+          status: 'completed',
+          messages: [{ role: 'user', content: 'still here' }],
+        }),
+      );
+
+      const rich = await backend.listRich();
+
+      expect(rich.map((session) => session.session_id)).toEqual(['healthy']);
+      expect(rich[0]?.preview).toBe('still here');
+    });
+
+    it('delete 对损坏文件抛错且不删除（不静默保留/删除）', async () => {
+      await mkdir(TEST_DIR, { recursive: true });
+      const path = join(TEST_DIR, 'broken-delete.json');
+      await writeFile(path, '{ not json', 'utf8');
+
+      await expect(backend.delete('broken-delete')).rejects.toBeInstanceOf(SessionCorruptError);
+      expect(await readFile(path, 'utf8')).toBe('{ not json');
+    });
   });
 
   describe('listRich', () => {

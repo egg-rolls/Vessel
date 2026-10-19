@@ -5,12 +5,14 @@
  * - 同目录 temp + rename；Windows rename 失败重试 3 次（10/20/40ms 退避）；
  * - rename 全部失败 → 删除 temp 并抛 `AtomicWriteError`，**绝不直写最终路径**
  *   （直写会让并发读者看到半截内容）。
+ * - 0.8.1：`durable`（默认 true）时 temp 文件先 fsync、rename 后尽力 fsync 目录；
+ *   文件 fsync 失败抛 `AtomicWriteError`，目录 fsync 失败忽略。
  *
  * @module @vessel/core/session
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, rename, unlink, writeFile } from 'node:fs/promises';
+import { type FileHandle, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 /** rename 尝试次数（含第一次） */
@@ -24,6 +26,14 @@ export interface AtomicWriteOptions {
   ensureDir?: boolean;
   /** 字符串内容的编码；缺省 utf8 */
   encoding?: BufferEncoding;
+  /**
+   * 写入后 fsync 与目录 fsync；缺省 `true`。
+   *
+   * `false` 保留 0.5 的旧行为（仅 writeFile + rename），用于对持久性要求
+   * 不高的临时文件或测试。文件 fsync 失败会抛 `AtomicWriteError`；
+   * 目录 fsync 是尽力而为（Windows 上常不可用）。
+   */
+  durable?: boolean;
 }
 
 /** 原子写失败（稳定错误码，供上层映射 internal） */
@@ -87,6 +97,69 @@ export async function atomicWrite(
   }
 }
 
+/**
+ * 写临时文件；`durable` 时在关闭前 fsync。
+ *
+ * 文件 fsync 失败 → 清理 temp 并抛 `AtomicWriteError`（绝不 rename）。
+ */
+async function writeTemp(
+  tmpPath: string,
+  data: string | Uint8Array,
+  encoding: BufferEncoding,
+  durable: boolean,
+  targetPath: string,
+): Promise<void> {
+  if (!durable) {
+    try {
+      await writeFile(tmpPath, data, typeof data === 'string' ? encoding : undefined);
+    } catch (error) {
+      await unlink(tmpPath).catch(() => {});
+      throw error;
+    }
+    return;
+  }
+
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(tmpPath, 'w');
+    if (typeof data === 'string') {
+      await handle.writeFile(data, encoding);
+    } else {
+      await handle.writeFile(data);
+    }
+    await handle.sync();
+  } catch (error) {
+    await handle?.close().catch(() => {});
+    await unlink(tmpPath).catch(() => {});
+    throw new AtomicWriteError(targetPath, error);
+  }
+
+  try {
+    await handle.close();
+  } catch (error) {
+    await unlink(tmpPath).catch(() => {});
+    throw new AtomicWriteError(targetPath, error);
+  }
+}
+
+/**
+ * rename 后尽力 fsync 父目录，使目录项变更持久化。
+ *
+ * Windows 上目录通常不能以 `r` 打开或 fsync，常见 `EPERM` / `EISDIR` / `EBADF`；
+ * 目录 fsync 始终是尽力而为，任何失败都不影响写入结果。
+ */
+async function fsyncDirectory(dirPath: string): Promise<void> {
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(dirPath, 'r');
+    await handle.sync();
+  } catch {
+    // 目录 fsync 不可用：降级为 rename 已提供的可见性保证
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
 async function writeAtomically(
   filePath: string,
   data: string | Uint8Array,
@@ -98,13 +171,9 @@ async function writeAtomically(
 
   const tmpPath = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`);
   const encoding = options.encoding ?? 'utf8';
+  const durable = options.durable ?? true;
 
-  try {
-    await writeFile(tmpPath, data, typeof data === 'string' ? encoding : undefined);
-  } catch (error) {
-    await unlink(tmpPath).catch(() => {});
-    throw error;
-  }
+  await writeTemp(tmpPath, data, encoding, durable, filePath);
 
   const retries = resolveRetries(options.retries);
   let lastError: unknown;
@@ -112,6 +181,7 @@ async function writeAtomically(
   for (let attempt = 0; attempt < retries; attempt += 1) {
     try {
       await rename(tmpPath, filePath);
+      if (durable) await fsyncDirectory(dirname(filePath));
       return;
     } catch (error) {
       lastError = error;

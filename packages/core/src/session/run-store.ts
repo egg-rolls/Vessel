@@ -11,6 +11,7 @@ import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';
 import { atomicWrite } from './atomic-write.js';
+import { SessionCorruptError } from './file-backend.js';
 
 export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.js';
 export {
@@ -29,6 +30,21 @@ function resolveLimit(limit?: number): number {
   return Math.min(Math.max(Math.floor(limit), 0), MAX_LIMIT);
 }
 
+/** 把 offset 归一化为非负整数；未传用 0 */
+function resolveOffset(offset?: number): number {
+  if (offset === undefined || !Number.isFinite(offset)) return 0;
+  return Math.max(Math.floor(offset), 0);
+}
+
+/** 读取文件时的 ENOENT 判定（其余 IO 错误按损坏处理） */
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
 /** 排序：updated_at 倒序，同值 run_id 升序 */
 function compareCheckpoints(a: RunCheckpoint, b: RunCheckpoint): number {
   if (b.updated_at !== a.updated_at) return b.updated_at - a.updated_at;
@@ -43,10 +59,12 @@ function selectCheckpoints(
     status?: RunCheckpoint['status'];
     session_id?: string;
     limit?: number;
+    offset?: number;
   },
 ): RunCheckpoint[] {
   const limit = resolveLimit(opts?.limit);
   if (limit === 0) return [];
+  const offset = resolveOffset(opts?.offset);
 
   const filtered: RunCheckpoint[] = [];
   for (const checkpoint of checkpoints) {
@@ -55,7 +73,7 @@ function selectCheckpoints(
     filtered.push(structuredClone(checkpoint));
   }
   filtered.sort(compareCheckpoints);
-  return filtered.slice(0, limit);
+  return filtered.slice(offset, offset + limit);
 }
 
 /** 轻量形状校验：损坏/旧格式文件按不存在处理 */
@@ -95,6 +113,7 @@ export class MemoryRunStore implements RunStore {
     status?: RunCheckpoint['status'];
     session_id?: string;
     limit?: number;
+    offset?: number;
   }): Promise<RunCheckpoint[]> {
     return selectCheckpoints(this.checkpoints.values(), opts);
   }
@@ -142,22 +161,55 @@ export class FileRunStore implements RunStore {
     }
   }
 
+  /**
+   * 加载 checkpoint。
+   *
+   * tenant 模式下损坏文件抛 `SessionCorruptError`（归属未知，不能当成
+   * 「不存在」）；非 tenant 保持 0.3 的宽松语义（损坏 → null）。
+   * 这样 `delete()` 在 tenant 模式下不会把损坏文件误判为可删除。
+   */
   async load(runId: string): Promise<RunCheckpoint | null> {
+    let path: string;
     try {
-      const path = this.filePath(runId);
-      const content = await readFile(path, 'utf8');
-      const parsed: unknown = JSON.parse(content);
-      if (!isRunCheckpoint(parsed)) return null;
-      return this.isForeign(parsed) ? null : parsed;
+      path = this.filePath(runId);
     } catch {
+      // 非法 run id 保持旧语义：视为不存在
       return null;
     }
+
+    let content: string;
+    try {
+      content = await readFile(path, 'utf8');
+    } catch (error) {
+      if (this.tenantId !== undefined && !isNotFound(error)) {
+        throw new SessionCorruptError(path, error);
+      }
+      return null;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch (error) {
+      if (this.tenantId !== undefined) throw new SessionCorruptError(path, error);
+      return null;
+    }
+
+    if (!isRunCheckpoint(parsed)) {
+      if (this.tenantId !== undefined) {
+        throw new SessionCorruptError(path, new Error('invalid run checkpoint shape'));
+      }
+      return null;
+    }
+
+    return this.isForeign(parsed) ? null : parsed;
   }
 
   async list(opts?: {
     status?: RunCheckpoint['status'];
     session_id?: string;
     limit?: number;
+    offset?: number;
   }): Promise<RunCheckpoint[]> {
     const limit = resolveLimit(opts?.limit);
     if (limit === 0) return [];
@@ -189,13 +241,14 @@ export class FileRunStore implements RunStore {
    *
    * tenant 模式先 `load()` 校验归属：缺失或 foreign 均直接 no-op，
    * 避免共享目录时跨 tenant 删除（与 `FileSessionBackend.delete` 对称，0.8 A5）。
+   * 损坏文件由 `load()` 抛 `SessionCorruptError`，此处不捕获（0.8.1）。
    */
   async delete(runId: string): Promise<void> {
     const previous = this.pendingWrites.get(runId);
     if (previous) await previous;
 
     if (this.tenantId !== undefined) {
-      // load() 对 foreign/缺失/损坏一律返回 null；此时不得 unlink。
+      // 缺失/foreign → null（no-op）；损坏 → SessionCorruptError 向上传播。
       const checkpoint = await this.load(runId);
       if (!checkpoint) return;
     }

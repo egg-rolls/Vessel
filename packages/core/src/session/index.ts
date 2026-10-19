@@ -17,7 +17,11 @@ export {
   deleteSessionData,
   SessionDeleteConflictError,
 } from './delete-session.js';
-export { FileSessionBackend, type FileSessionBackendOptions } from './file-backend.js';
+export {
+  FileSessionBackend,
+  type FileSessionBackendOptions,
+  SessionCorruptError,
+} from './file-backend.js';
 export {
   type PruneRunsOptions,
   type PruneRunsResult,

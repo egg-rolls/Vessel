@@ -40,6 +40,8 @@ export interface RunStore {
     status?: RunCheckpoint['status'];
     session_id?: string;
     limit?: number;
+    /** 跳过排序后的前 N 条（缺省 0）；与 limit 一起用于全量分页 */
+    offset?: number;
   }): Promise<RunCheckpoint[]>;
   delete(runId: string): Promise<void>;
   close?(): Promise<void>;

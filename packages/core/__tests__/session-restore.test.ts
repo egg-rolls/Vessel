@@ -5,15 +5,21 @@
  * SessionBackend.listRich() 的过滤与排序。
  */
 import { describe, expect, it } from 'bun:test';
+import { randomUUID } from 'node:crypto';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   AgentRuntime,
   type ChatRequest,
+  FileSessionBackend,
   type LLMProvider,
   type LLMResponse,
   MemoryContextManager,
   MemoryEventStream,
   MemorySessionBackend,
   type Message,
+  type SessionBackend,
+  SessionCorruptError,
   SQLiteSessionBackend,
 } from '../src/index';
 
@@ -32,7 +38,7 @@ class RecordingProvider implements LLMProvider {
 
 function makeRuntime(
   provider: LLMProvider,
-  session: MemorySessionBackend,
+  session: SessionBackend,
   context = new MemoryContextManager(),
 ) {
   return AgentRuntime.create({
@@ -73,6 +79,25 @@ describe('session 多轮与恢复', () => {
 
     const first = rec2.received[0];
     expect(first?.some((m) => m.content.includes('remember this'))).toBe(true);
+  });
+
+  it('损坏的 session 文件使 run 失败且不覆盖原文件（0.8.1）', async () => {
+    const dir = join(process.env.TEMP ?? '/tmp', `vessel-corrupt-${randomUUID()}`);
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'corrupt.json');
+    const original = '{ not json';
+    await writeFile(path, original, 'utf8');
+
+    try {
+      const backend = new FileSessionBackend(dir);
+      const rt = await makeRuntime(new RecordingProvider(), backend);
+
+      await expect(rt.run('hello', 'corrupt')).rejects.toBeInstanceOf(SessionCorruptError);
+      // 不得「损坏即新会话」：原文件字节不变
+      expect(await readFile(path, 'utf8')).toBe(original);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
   });
 
   it('不同会话隔离：sessA 的历史不泄漏到 sessB', async () => {
