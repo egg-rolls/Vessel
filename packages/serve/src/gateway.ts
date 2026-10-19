@@ -154,10 +154,10 @@ export interface GatewayOptions {
   team?: TeamGatewayOptions;
   /**
    * 显式允许非回环监听（默认 false）。
-   * 非回环 hostname 必须同时给出 allowRemote=true 与非空 token。
+   * 非回环 hostname 必须同时给出 allowRemote=true、TLS 证书对与显式非空 token。
    */
   allowRemote?: boolean;
-  /** TLS 证书对；必须成对提供，缺一即启动失败 */
+  /** TLS 证书对；必须成对提供，缺一即启动失败；非回环监听必填 */
   tls?: { certFile: string; keyFile: string };
   /** durable run 查询/恢复注入；缺省 = durable 端点关闭 */
   durable?: DurableGatewayOptions;
@@ -591,20 +591,31 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   const allowRemote = opts.allowRemote === true;
-  if (!isLoopbackHostname(hostname) && !allowRemote) {
+  const loopback = isLoopbackHostname(hostname);
+  if (!loopback && !allowRemote) {
     throw new Error(
       `Refusing to listen on non-loopback hostname "${hostname}": ` +
-        'set serve.allow_remote=true (and a gateway token) to expose the gateway.',
+        'set serve.allow_remote=true (and a gateway token + TLS) to expose the gateway.',
     );
   }
-  if (allowRemote && opts.token !== undefined && opts.token.trim().length === 0) {
+  // DECISION-014 §2.1：非回环必须 TLS，不提供明文逃生口。
+  if (!loopback && (!opts.tls?.certFile || !opts.tls?.keyFile)) {
     throw new Error(
-      'Remote mode requires a non-empty gateway token ' +
-        '(serve token, VESSEL_GATEWAY_TOKEN, or gateway-generated).',
+      `Remote mode requires TLS: configure serve.tls.cert_file and serve.tls.key_file ` +
+        `when listening on non-loopback hostname "${hostname}". ` +
+        'Plaintext remote listeners are not supported.',
     );
   }
-  const token =
-    opts.token !== undefined && opts.token.trim().length > 0 ? opts.token : generateToken();
+  // 非回环必须提供显式 token；不允许依赖启动时自动生成的临时 token。
+  const configuredToken =
+    opts.token !== undefined && opts.token.trim().length > 0 ? opts.token : undefined;
+  if (!loopback && configuredToken === undefined) {
+    throw new Error(
+      'Remote mode requires an explicit non-empty gateway token ' +
+        '(serve.token, serve.tokens/admin_token, or VESSEL_GATEWAY_TOKEN).',
+    );
+  }
+  const token = configuredToken ?? generateToken();
 
   const tlsMaterial = opts.tls ? loadTlsMaterial(opts.tls) : undefined;
 

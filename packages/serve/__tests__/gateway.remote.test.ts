@@ -1,12 +1,39 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { request as httpsRequestRaw } from 'node:https';
+import { fileURLToPath } from 'node:url';
 import { MemoryEventStream } from '@vessel/core';
 import type { Gateway } from '../src/gateway';
 import { createGateway } from './helpers';
+
+const CERT = fileURLToPath(new URL('./fixtures/tls/localhost-cert.pem', import.meta.url));
+const KEY = fileURLToPath(new URL('./fixtures/tls/localhost-key.pem', import.meta.url));
 
 const fakeStore = {
   load: async () => null,
   list: async () => [],
 };
+
+function httpsGet(
+  url: string,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpsRequestRaw(
+      url,
+      { method: 'GET', headers, rejectUnauthorized: false },
+      (res) => {
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
+          body += chunk;
+        });
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
+      },
+    );
+    req.on('error', reject);
+    req.end();
+  });
+}
 
 describe('gateway remote listen', () => {
   const gateways: Gateway[] = [];
@@ -45,21 +72,49 @@ describe('gateway remote listen', () => {
         hostname: '0.0.0.0',
         allowRemote: true,
         token: '',
+        tls: { certFile: CERT, keyFile: KEY },
       }),
     ).toThrow(/non-empty gateway token/);
   });
 
-  it('generates a non-empty token when remote mode omits the token', async () => {
+  it('rejects non-loopback listeners without TLS', () => {
+    expect(() =>
+      createGateway({
+        events: new MemoryEventStream(),
+        hostname: '0.0.0.0',
+        allowRemote: true,
+        token: 'remote-secret',
+      }),
+    ).toThrow(/requires TLS/);
+  });
+
+  it('rejects non-loopback listeners with TLS but no explicit token', () => {
+    expect(() =>
+      createGateway({
+        events: new MemoryEventStream(),
+        hostname: '0.0.0.0',
+        allowRemote: true,
+        tls: { certFile: CERT, keyFile: KEY },
+      }),
+    ).toThrow(/explicit non-empty gateway token/);
+  });
+
+  it('starts non-loopback listeners with TLS and an explicit token', async () => {
     const gw = track(
       createGateway({
         events: new MemoryEventStream(),
         hostname: '0.0.0.0',
         allowRemote: true,
+        token: 'remote-secret',
+        tls: { certFile: CERT, keyFile: KEY },
       }),
     );
-    expect(gw.token.length).toBeGreaterThan(0);
+    expect(gw.tls).toBe(true);
+    expect(gw.url.startsWith('https://0.0.0.0:')).toBe(true);
 
-    const res = await fetch(`http://127.0.0.1:${gw.port}/health`);
+    const res = await httpsGet(`https://127.0.0.1:${gw.port}/v1/health`, {
+      Authorization: 'Bearer remote-secret',
+    });
     expect(res.status).toBe(200);
   });
 
@@ -139,18 +194,19 @@ describe('gateway remote listen', () => {
     expect(((await denied.json()) as { error: { code: string } }).error.code).toBe('invalid_host');
   });
 
-  it('accepts wildcard bindings with allowRemote', async () => {
+  it('accepts wildcard bindings with allowRemote + TLS', async () => {
     const gw = track(
       createGateway({
         events: new MemoryEventStream(),
         hostname: '0.0.0.0',
         allowRemote: true,
         token: 'remote-secret',
+        tls: { certFile: CERT, keyFile: KEY },
       }),
     );
 
-    const res = await fetch(`http://127.0.0.1:${gw.port}/v1/health`, {
-      headers: { Authorization: 'Bearer remote-secret' },
+    const res = await httpsGet(`https://127.0.0.1:${gw.port}/v1/health`, {
+      Authorization: 'Bearer remote-secret',
     });
     expect(res.status).toBe(200);
   });
