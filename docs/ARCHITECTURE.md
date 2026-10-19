@@ -626,7 +626,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
 
-0.6.1 已新增 `permission.autoApprove`、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖，见 §18.4。
+0.6.1 已新增 `permission.auto_approve`（TS 字段 `autoApprove`）、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖，见 §18.4。
 
 0.3 配置示例：
 
@@ -1325,7 +1325,7 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 
 ### 18.4 配置与插件
 
-- `permission.autoApprove: string[]`：按工具名精确匹配；装配层读取，不再硬编码 `['ask_user']`。TUI 选 `always` 时写回用户 YAML。
+- `permission.auto_approve: string[]`（TS 字段 `autoApprove`）：按工具名精确匹配；装配层读取，不再硬编码 `['ask_user']`。TUI 选 `always` 时写回用户 YAML。
 - `Plugin.install(host, options?: { config?: Record<string, unknown> })`：`plugins[].config` 原样传入；旧 `install(host)` 继续合法。
 - 插件扫描：仓库 `plugins/`、`~/.vessel/plugins/`、`./.vessel/plugins/`；启动时扫描一次，仍需重启生效。
 - `vessel plugin list|install <path>|remove <name>`：只处理本地目录，不做远程市场。
@@ -1363,4 +1363,4 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 ### 18.8 扩展
 
 - MCP client 增加 `resources/list|read` 与 prompts 列表（仍不做 OAuth）。
-- basic-tools 超大结果落盘到 session 目录并回路径。
+- basic-tools 超大结果落盘到 `VESSEL_TOOL_OUTPUT_DIR`（缺省 `VESSEL_DATA_DIR/tool-output`，再缺省 `~/.vessel/data/tool-output`）的 per-session 子目录，并回路径。

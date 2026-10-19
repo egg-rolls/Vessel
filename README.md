@@ -43,7 +43,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 - **P0 多租户会话隔离**：显式 `session.storage_path` 下 file 后端仍传 `tenantId`，`delete()` 先校验归属；跨 tenant 读取 / 删除不可见、无效果。
 - **P0 durable 控制面 / P1 team REST**：`/v1/durable/*` 接收 token principal；list 按 tenant 过滤（非 default 且无 per-tenant store → `forbidden`）；resume 要求 `write`；team REST 复用 `ROLE_RANK`（GET 允许 read，spawn/send/cancel/close 要求 write/admin）。
 - **CLI**：`-c/--continue`、`-r/--resume [id]`；`--run` 保留，不再占用 `-r`。
-- **配置 / 插件**：`permission.autoApprove`、`plugins[].config` 传给 `install(host, { config })`、`~/.vessel/plugins` 与 `./.vessel/plugins`、`vessel plugin list|install|remove`（仅本地目录）。
+- **配置 / 插件**：`permission.auto_approve`、`plugins[].config` 传给 `install(host, { config })`、`~/.vessel/plugins` 与 `./.vessel/plugins`、`vessel plugin list|install|remove`（仅本地目录）。
 - **运行时 / TUI**：可注入真实摘要、guardrail 阻断折回工具错误、provider 429/5xx 重试、bash/edit 响应取消、工具 diff / 展开、`/compact` `/context`、输入历史与排队。
 - **Web**：Markdown 渲染、`sessions.search` 全文检索、工具 args/result 折叠；durable 与 team 的角色收紧同步覆盖。
 - 本轮仍**不 tag、不 publish、不合并 `main`**。

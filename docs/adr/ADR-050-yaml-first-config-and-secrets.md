@@ -26,7 +26,7 @@ tags: [config, secrets, yaml]
 
 ## Addendum（0.6.1，已实现）
 
-- **`permission.autoApprove: string[]`（additive）**：按工具名精确匹配；装配层读取该块，替代硬编码的 `['ask_user']`。TUI 权限弹窗选 `always` 时写回用户 YAML。缺省为空，交互仍逐个询问。配置层级与优先级不变。
+- **`permission.auto_approve: string[]`（additive；TS 字段 `autoApprove`）**：按工具名精确匹配；装配层读取该块，替代硬编码的 `['ask_user']`。TUI 权限弹窗选 `always` 时写回用户 YAML。缺省为空，交互仍逐个询问。配置层级与优先级不变。
 - **`plugins[].config`（additive）**：`Record<string, unknown>`，通过 `Plugin.install(host, options?: { config?: Record<string, unknown> })` 传入；旧 `install(host)` 继续合法。不引入第二套扩展机制。
 - **合并语义更正**：`plugins` 是数组，配置层按整层替换，不按 `name` 合并；`mcp_servers` 仍是 map，按 key 合并。上文“map（`mcp_servers`、`plugins`）按 key/name 合并”的表述以本 addendum 为准（仅更正文档描述，不改变实现语义）。
 - **env 覆盖（additive）**：`VESSEL_PLUGINS`（逗号分隔插件名）、`VESSEL_SESSION_BACKEND`（`file|sqlite|memory`）、`VESSEL_MODEL`（覆盖 `provider.model`）属于 env 层，优先级仍为 `CLI > env > tenant overlay > project > user > default`。

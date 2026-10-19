@@ -82,7 +82,7 @@ tenant / update`；未知块直接报错。合并规则：对象深合并、数�
 
 ```yaml
 permission:
-  autoApprove: [bash, edit]     # 工具名精确匹配；替代 bootstrap 里硬编码的 ['ask_user']
+  auto_approve: [bash, edit]    # 工具名精确匹配；替代 bootstrap 里硬编码的 ['ask_user']
 
 plugins:
   - name: tool-policy
@@ -99,7 +99,7 @@ session:
   # storage_path: /shared/sessions   # 多 tenant 下会告警；file 后端仍按 tenant 隔离
 ```
 
-- `permission.autoApprove`：`string[]`，按工具名精确匹配；TUI 权限弹窗选 `always`
+- `permission.auto_approve`（TS 字段 `autoApprove`）：`string[]`，按工具名精确匹配；TUI 权限弹窗选 `always`
   时写回用户 YAML。缺省值为空（交互仍逐个询问）；`ask_user` 由装配层始终放行。
 - `plugins[].config`：`Record<string, unknown>`，原样传给 `install(host, { config })`；
   未声明 `config` 时按 `install(host)` 调用，旧插件不受影响。
