@@ -21,6 +21,7 @@ import { DOMAINS, routeBreadcrumb } from './nav';
 import { requestRefresh } from './refresh';
 import { formatRoute, type Route } from './router';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
+import { tenantResetPlan } from './tenant-reset';
 import { useHashRoute } from './useHashRoute';
 
 type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
@@ -93,12 +94,13 @@ export function AppShell() {
   useEffect(() => {
     if (tenantEpoch === tenantEpochRef.current) return;
     tenantEpochRef.current = tenantEpoch;
-    setChatSessionsOpen(false);
-    setPendingAction(null);
-    setPaletteOpen(false);
+    const plan = tenantResetPlan();
+    if (plan.closeSessionsDrawer) setChatSessionsOpen(false);
+    if (plan.clearPendingAction) setPendingAction(null);
+    if (plan.closePalette) setPaletteOpen(false);
     // 旧租户的实体（会话/run/workflow/MCP）不能留在命令面板里。
-    setEntityMap(new Map());
-    navigate({ domain: 'chat' });
+    if (plan.clearPaletteEntities) setEntityMap(new Map());
+    navigate(plan.route);
     toast.info('已切换租户；当前选择与事件缓冲已清空');
   }, [tenantEpoch, navigate, toast]);
 
@@ -316,9 +318,16 @@ export function AppShell() {
   return (
     <PaletteEntitiesProvider register={registerEntities}>
       <div className="app-shell">
-        <a className="skip-link" href="#main">
+        <button
+          type="button"
+          className="skip-link"
+          onClick={() => {
+            // 不用 href="#main"：hash 路由会把 #main 当成领域路由。
+            mainRef.current?.focus();
+          }}
+        >
           跳到主内容
-        </a>
+        </button>
         <AppBar
           route={route}
           navigate={navigate}

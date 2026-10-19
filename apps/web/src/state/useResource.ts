@@ -5,7 +5,20 @@ export type ResourceState<T> =
   | { status: 'idle' }
   | { status: 'loading'; data?: T }
   | { status: 'success'; data: T; updatedAt: number }
-  | { status: 'error'; data?: T; error: string; updatedAt?: number };
+  /**
+   * `code` 保留 gateway 的稳定错误码（forbidden / not_found / …）；
+   * 只保留 message 会让 403 分支永远匹配不到。
+   */
+  | { status: 'error'; data?: T; error: string; code?: string; updatedAt?: number };
+
+/** 从任意异常中取出 gateway code（WS 错误是字符串，RPC 错误带 code 属性）。 */
+export function errorCodeOf(error: unknown): string | undefined {
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === 'string') return code;
+  const message = error instanceof Error ? error.message : String(error);
+  const prefix = /^([a-z_]+):/.exec(message);
+  return prefix?.[1];
+}
 
 export const initialResourceState: ResourceState<never> = { status: 'idle' };
 
@@ -29,17 +42,25 @@ export function succeed<T>(data: T, now = Date.now()): ResourceState<T> {
   return { status: 'success', data, updatedAt: now };
 }
 
+export interface ResourceError {
+  message: string;
+  code?: string;
+}
+
 /** 失败时保留旧数据与时间戳，供「更新失败，显示 <time> 的数据」使用。 */
-export function fail<T>(prev: ResourceState<T>, error: string): ResourceState<T> {
+export function fail<T>(prev: ResourceState<T>, error: string | ResourceError): ResourceState<T> {
   const data =
     prev.status === 'success' || prev.status === 'loading' || prev.status === 'error'
       ? prev.data
       : undefined;
   const updatedAt =
     prev.status === 'success' || prev.status === 'error' ? prev.updatedAt : undefined;
+  const message = typeof error === 'string' ? error : error.message;
+  const code = typeof error === 'string' ? undefined : error.code;
   return {
     status: 'error',
-    error,
+    error: message,
+    ...(code !== undefined ? { code } : {}),
     ...(data !== undefined ? { data } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
   };
@@ -118,7 +139,8 @@ export function useResource<T>({
       .catch((error: unknown) => {
         if (!mounted.current || !isCurrentGeneration(generationAtStart, generation.current)) return;
         const message = error instanceof Error ? error.message : String(error);
-        setState((prev) => fail(prev, message));
+        const code = errorCodeOf(error);
+        setState((prev) => fail(prev, code ? { message, code } : message));
       });
   }, []);
 

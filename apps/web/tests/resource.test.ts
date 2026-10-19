@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   beginLoad,
+  errorCodeOf,
   fail,
   initialResourceState,
   isCurrentGeneration,
@@ -45,6 +46,27 @@ describe('ResourceState transitions', () => {
 
   test('error with no prior data has no data key', () => {
     expect(fail(initialResourceState, 'boom')).toEqual({ status: 'error', error: 'boom' });
+  });
+
+  test('error preserves the gateway code for forbidden/not_found branches', () => {
+    expect(
+      fail(initialResourceState, {
+        message: 'Cross-tenant access is not allowed',
+        code: 'forbidden',
+      }),
+    ).toEqual({
+      status: 'error',
+      error: 'Cross-tenant access is not allowed',
+      code: 'forbidden',
+    });
+    // 旧调用形态（纯字符串）不产生 code。
+    expect(fail(initialResourceState, 'boom')).not.toHaveProperty('code');
+  });
+
+  test('errorCodeOf reads Error.code and the WS "code: message" form', () => {
+    expect(errorCodeOf(Object.assign(new Error('x'), { code: 'forbidden' }))).toBe('forbidden');
+    expect(errorCodeOf(new Error('method_not_allowed: nope'))).toBe('method_not_allowed');
+    expect(errorCodeOf(new Error('plain failure'))).toBeUndefined();
   });
 
   test('resourceData reads success, loading, error and idle', () => {

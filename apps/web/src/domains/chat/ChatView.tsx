@@ -340,7 +340,9 @@ export function ChatView({
     selectedId && 'data' in detailState && detailState.data?.session_id === selectedId
       ? detailState.data
       : null;
-  const hydrateError = detailState.status === 'error' ? detailState.error : null;
+  // 已有历史时，刷新失败不能把 transcript 换成错误页；只显示 stale 提示。
+  const hydrateError = detailState.status === 'error' && !sessionDetail ? detailState.error : null;
+  const hydrateStale = detailState.status === 'error' && sessionDetail ? detailState.error : null;
   const hydrating = Boolean(selectedId) && detailState.status === 'loading' && !sessionDetail;
 
   const visibleGroups = useMemo(() => {
@@ -434,12 +436,14 @@ export function ChatView({
   const truncated = visibleGroups.some((group) => snapshot.truncatedRuns.has(group.runId));
 
   // 接近底部时跟随新事件；上翻阅读时不拉回。
+  // snapshot.version 覆盖流式 token（run 分组数量不变，但文本持续增长）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot.version 是流式追加的显式触发器
   useEffect(() => {
     if (visibleGroups.length === 0 && visibleQueued.length === 0) return;
     if (nearBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [visibleGroups.length, visibleQueued.length]);
+  }, [snapshot.version, visibleGroups.length, visibleQueued.length]);
 
   // 切换会话/历史加载完成后直接展示最新内容。
   // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId/sessionDetail 变化时跳到底部
@@ -749,6 +753,13 @@ export function ChatView({
                   description="在下方输入 prompt 继续这个会话。"
                 />
               ) : null}
+
+              {hydrateStale && (
+                <StaleNotice
+                  message={`历史刷新失败，显示已加载的记录：${hydrateStale}`}
+                  onRetry={detailResource.reload}
+                />
+              )}
 
               {truncated && (
                 <StaleNotice message="部分更早的事件已从内存缓冲截断；完整记录请查看运行详情。" />

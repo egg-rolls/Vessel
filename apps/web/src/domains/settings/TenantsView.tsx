@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { ModalShell } from '../../components/Modal';
 import { usePaletteEntities } from '../../components/PaletteEntities';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
@@ -18,14 +19,17 @@ import {
 } from '../../state/tenants';
 import { resourceData, useResource } from '../../state/useResource';
 
-function isForbidden(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  const message = error instanceof Error ? error.message : String(error);
+function isForbidden(code: string | undefined, message: string): boolean {
   return code === 'forbidden' || code === 'unauthorized' || message.includes('forbidden');
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function errorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' ? code : undefined;
 }
 
 function formatQuota(quota: Record<string, number> | undefined): string {
@@ -113,7 +117,11 @@ function TenantCreateDialog({
       toast.success(`已创建租户 ${tenant.tenant_id}`);
       onCreated();
     } catch (error) {
-      setSubmitError(isForbidden(error) ? '需要 admin token 才能创建租户。' : errorMessage(error));
+      setSubmitError(
+        isForbidden(errorCode(error), errorMessage(error))
+          ? '需要 admin token 才能创建租户。'
+          : errorMessage(error),
+      );
     } finally {
       setBusy(false);
     }
@@ -228,7 +236,11 @@ function TenantEditDialog({
       toast.success(`已更新租户 ${updated.tenant_id}`);
       onUpdated();
     } catch (error) {
-      setSubmitError(isForbidden(error) ? '需要 admin token 才能更新租户。' : errorMessage(error));
+      setSubmitError(
+        isForbidden(errorCode(error), errorMessage(error))
+          ? '需要 admin token 才能更新租户。'
+          : errorMessage(error),
+      );
     } finally {
       setBusy(false);
     }
@@ -321,6 +333,7 @@ export function TenantsView() {
     enabled: available,
     deps: [epoch],
   });
+  useRefreshSignal(resource.reload);
   const tenants = resourceData(resource.state);
 
   const paletteActions = useMemo(
@@ -351,7 +364,7 @@ export function TenantsView() {
       />
     );
   }
-  if (resource.state.status === 'error' && isForbidden(resource.state.error)) {
+  if (resource.state.status === 'error' && isForbidden(resource.state.code, resource.state.error)) {
     return (
       <NotEnabledState
         title="需要 admin token 才能管理租户。"

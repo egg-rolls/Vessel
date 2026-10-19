@@ -1,11 +1,11 @@
+import { useCallback } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { resourceData, useResource } from '../../state/useResource';
 
-function isForbidden(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  const message = error instanceof Error ? error.message : String(error);
+function isForbidden(code: string | undefined, message: string): boolean {
   return code === 'forbidden' || code === 'unauthorized' || message.includes('forbidden');
 }
 
@@ -36,6 +36,13 @@ export function NodesPanel() {
     deps: [epoch],
   });
 
+  const reloadAll = useCallback(() => {
+    health.reload();
+    peers.reload();
+    agents.reload();
+  }, [health.reload, peers.reload, agents.reload]);
+  useRefreshSignal(reloadAll);
+
   if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能查看节点。" />;
   }
@@ -62,9 +69,11 @@ export function NodesPanel() {
 
   const peersData = resourceData(peers.state);
   const agentsData = resourceData(agents.state);
+  const peersError = peers.state.status === 'error' ? peers.state : null;
+  const agentsError = agents.state.status === 'error' ? agents.state : null;
   const forbidden =
-    (peers.state.status === 'error' && isForbidden(peers.state.error)) ||
-    (agents.state.status === 'error' && isForbidden(agents.state.error));
+    Boolean(peersError && isForbidden(peersError.code, peersError.error)) ||
+    Boolean(agentsError && isForbidden(agentsError.code, agentsError.error));
 
   if (forbidden) {
     return (
@@ -72,6 +81,21 @@ export function NodesPanel() {
         title="Team 控制面仅对 default tenant 或 admin token 开放。"
         reason="当前 token 无法读取 peers/agents。"
         hint={`当前节点：${healthData.node.node_id}`}
+      />
+    );
+  }
+
+  // 非 403 的读取失败且没有旧数据：不要永远停在 Loading。
+  if ((peersError && !peersData) || (agentsError && !agentsData)) {
+    const failureMessage =
+      (peersError && !peersData ? peersError.error : agentsError?.error) ?? '无法读取节点信息';
+    return (
+      <ErrorState
+        message={failureMessage}
+        onRetry={() => {
+          peers.reload();
+          agents.reload();
+        }}
       />
     );
   }
@@ -131,8 +155,11 @@ export function NodesPanel() {
         </dl>
       </section>
 
-      {peers.state.status === 'error' && !forbidden && (
-        <StaleNotice message={`Peers 更新失败：${peers.state.error}`} onRetry={peers.reload} />
+      {peersError && (
+        <StaleNotice message={`Peers 更新失败：${peersError.error}`} onRetry={peers.reload} />
+      )}
+      {agentsError && (
+        <StaleNotice message={`Agents 更新失败：${agentsError.error}`} onRetry={agents.reload} />
       )}
 
       <section className="panel">

@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { JsonView } from '../../components/JsonView';
 import { PageHeader } from '../../components/PageHeader';
@@ -59,8 +60,9 @@ export function IntegrationsView({
         tabs={TABS}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'integrations', tab })}
+        panelId="integrations-panel"
       />
-      <div className="domain-content">
+      <div className="domain-content" id="integrations-panel" role="tabpanel" aria-label="能力内容">
         {route.tab === 'tools' && <ToolsPanel />}
         {route.tab === 'mcp' && <McpPanel />}
         {route.tab === 'channels' && <ChannelsPanel />}
@@ -79,6 +81,7 @@ function ToolsPanel() {
     enabled: hasToken,
     deps: [epoch],
   });
+  useRefreshSignal(resource.reload);
   const tools = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
   const confirmCount = useMemo(
     () => tools.filter((tool) => tool.has_permission_check).length,
@@ -199,6 +202,7 @@ function McpPanel() {
     pollMs: 10_000,
     deps: [epoch],
   });
+  useRefreshSignal(resource.reload);
   const servers = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
   const failed = servers.filter((server) => server.status === 'failed');
 
@@ -370,6 +374,7 @@ function ChannelsPanel() {
     pollMs: 10_000,
     deps: [epoch],
   });
+  useRefreshSignal(resource.reload);
   const channel = resourceData(resource.state);
 
   if (!hasToken) {
