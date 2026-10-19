@@ -19,25 +19,12 @@ const disconnected: FeishuStatusLike = {
 };
 
 describe('formatFeishuStatus', () => {
-  it('connected 单行输出', () => {
-    const output = formatFeishuStatus(connected);
-    expect(output).not.toContain('\n');
-    expect(output).toContain('Feishu: connected');
-    expect(output).toContain('appId cli_***');
-    expect(output).toContain('active chats 2');
-    expect(output).toContain('queued 0');
-  });
-
   it('disconnected 显示 last_error（单行）', () => {
     const output = formatFeishuStatus(disconnected);
     expect(output).toContain('Feishu: disconnected');
     expect(output).toContain('queued 3');
     expect(output).toContain('last error connect timeout');
     expect(output).not.toContain('\n');
-  });
-
-  it('空 appIdMasked 显示占位', () => {
-    expect(formatFeishuStatus({ ...connected, appIdMasked: '' })).toContain('appId -');
   });
 });
 

@@ -16,6 +16,7 @@ import {
   resolveWorkflowDir,
   resolveWorkflowStorePath,
 } from '../path-resolution';
+import { canonicalPath } from './path-helpers';
 
 const dirs: string[] = [];
 
@@ -76,7 +77,7 @@ describe('workflow definition resolution', () => {
       const file = path.join(dir, `demo.${extension}`);
       write(file);
       const result = await resolveWorkflowDefinition(config({ workflow: { dir } }), 'demo');
-      expect(result).toEqual({ ok: true, path: fs.realpathSync(file) });
+      expect(result).toEqual({ ok: true, path: canonicalPath(file) });
     }
   });
 
@@ -113,7 +114,7 @@ describe('workflow definition resolution', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.path).toBe(fs.realpathSync(path.join(dir, 'nested', 'demo.yaml')));
+      expect(result.path).toBe(canonicalPath(path.join(dir, 'nested', 'demo.yaml')));
     }
   });
 
@@ -153,7 +154,7 @@ describe('workflow definition resolution', () => {
     const cfg = config({ workflow: { dir } });
 
     await expect(resolveWorkflowDefPath(cfg, 'demo')).resolves.toBe(
-      fs.realpathSync(path.join(dir, 'demo.yaml')),
+      canonicalPath(path.join(dir, 'demo.yaml')),
     );
     await expect(resolveWorkflowDefPath(cfg, '../demo')).resolves.toBeUndefined();
     await expect(resolveWorkflowDefPath(cfg, 'a/b')).resolves.toBeUndefined();
@@ -166,7 +167,7 @@ describe('workflow definition resolution', () => {
     const cfg = config({ workflow: { dir } });
 
     expect(resolveWorkflowDefPathSync(cfg, 'demo')).toBe(
-      fs.realpathSync(path.join(dir, 'demo.yaml')),
+      canonicalPath(path.join(dir, 'demo.yaml')),
     );
     expect(resolveWorkflowDefPathSync(cfg, '../demo')).toBeUndefined();
     expect(resolveWorkflowDefPathSync(cfg, 'a/b')).toBeUndefined();
@@ -206,7 +207,7 @@ describe('eval suite resolution', () => {
     write(file);
 
     const result = await resolveEvalSuite(config({ evals: { dir } }), 'smoke');
-    expect(result).toEqual({ ok: true, path: fs.realpathSync(file) });
+    expect(result).toEqual({ ok: true, path: canonicalPath(file) });
   });
 
   it('rejects multiple / missing suites', async () => {

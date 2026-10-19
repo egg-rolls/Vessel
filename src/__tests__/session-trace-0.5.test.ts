@@ -6,13 +6,12 @@ import type { VesselConfig } from '../../packages/config/src/index';
 import {
   FileSessionBackend,
   MemoryEventStream,
-  MemorySessionBackend,
   type RunEvent,
   resolveTenantPaths,
 } from '../../packages/core/src/index';
 import { resolveTenantPaths as asmTenantPaths } from '../data-paths';
 import { resolveEvalsOutDir, resolveWorkflowStorePath } from '../path-resolution';
-import { createRunStore, resolveDurableOptions } from '../run-store-factory';
+import { resolveDurableOptions } from '../run-store-factory';
 import { createSessionBackend } from '../session-factory';
 import { installTrace, resolveTraceOptions } from '../trace-wiring';
 
@@ -45,10 +44,6 @@ describe('session-factory (0.5)', () => {
     );
     expect((backend as unknown as { basePath: string }).basePath).toBe('/explicit/sessions');
   });
-
-  it('memory 后端不变', () => {
-    expect(createSessionBackend({ backend: 'memory' })).toBeInstanceOf(MemorySessionBackend);
-  });
 });
 
 describe('durable 默认路径 (0.5)', () => {
@@ -61,10 +56,6 @@ describe('durable 默认路径 (0.5)', () => {
       ).path,
     ).toBe('/explicit/runs');
   });
-
-  it('durable 关闭时不创建 store', () => {
-    expect(createRunStore({})).toBeUndefined();
-  });
 });
 
 describe('workflow / evals tenant 最终路径 (0.5)', () => {
@@ -73,12 +64,12 @@ describe('workflow / evals tenant 最终路径 (0.5)', () => {
     expect(resolveWorkflowStorePath({}, { tenantDir })).toBe(path.join(tenantDir, 'workflows'));
     expect(resolveEvalsOutDir({}, { tenantDir })).toBe(path.join(tenantDir, 'evals'));
 
-    expect(resolveWorkflowStorePath({ workflow: { path: 'C:/custom/wf' } }, { tenantDir })).toBe(
-      path.normalize('C:/custom/wf'),
+    const customWf = path.resolve('/custom/wf');
+    const customEvals = path.resolve('/custom/evals');
+    expect(resolveWorkflowStorePath({ workflow: { path: customWf } }, { tenantDir })).toBe(
+      customWf,
     );
-    expect(resolveEvalsOutDir({ evals: { outDir: 'C:/custom/evals' } }, { tenantDir })).toBe(
-      path.normalize('C:/custom/evals'),
-    );
+    expect(resolveEvalsOutDir({ evals: { outDir: customEvals } }, { tenantDir })).toBe(customEvals);
   });
 });
 

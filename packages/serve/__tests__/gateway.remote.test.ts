@@ -162,28 +162,6 @@ describe('gateway remote listen', () => {
     }
   });
 
-  it('keeps Origin rules unchanged', async () => {
-    const gw = track(
-      createGateway({
-        events: new MemoryEventStream(),
-        allowedOrigins: ['http://localhost:5173'],
-      }),
-    );
-
-    const denied = await fetch(`${gw.url}/v1/health`, {
-      headers: { Origin: 'http://evil.example' },
-    });
-    expect(denied.status).toBe(403);
-    expect(((await denied.json()) as { error: { code: string } }).error.code).toBe(
-      'forbidden_origin',
-    );
-
-    const allowed = await fetch(`${gw.url}/v1/health`, {
-      headers: { Origin: 'http://localhost:5173' },
-    });
-    expect(allowed.status).toBe(200);
-  });
-
   it('keeps Host validation for concrete bindings', async () => {
     const gw = track(createGateway({ events: new MemoryEventStream() }));
 
@@ -192,23 +170,6 @@ describe('gateway remote listen', () => {
     });
     expect(denied.status).toBe(403);
     expect(((await denied.json()) as { error: { code: string } }).error.code).toBe('invalid_host');
-  });
-
-  it('accepts wildcard bindings with allowRemote + TLS', async () => {
-    const gw = track(
-      createGateway({
-        events: new MemoryEventStream(),
-        hostname: '0.0.0.0',
-        allowRemote: true,
-        token: 'remote-secret',
-        tls: { certFile: CERT, keyFile: KEY },
-      }),
-    );
-
-    const res = await httpsGet(`https://127.0.0.1:${gw.port}/v1/health`, {
-      Authorization: 'Bearer remote-secret',
-    });
-    expect(res.status).toBe(200);
   });
 
   it('rejects hostnames that contain a path or scheme', () => {

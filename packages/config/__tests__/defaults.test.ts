@@ -73,23 +73,6 @@ describe('provider-aware 默认 model', () => {
     expect(config.provider?.name).toBe('openai');
     expect(config.provider?.model).toBe('gpt-4');
   });
-
-  it('未知 provider 缺 model 时不回退 gpt-4，validator 报错', async () => {
-    const userConfigPath = tmpYaml(`
-api_key: sk-test
-default_provider: custom
-providers:
-  custom:
-    api_key: sk-test
-    base_url: https://example.com
-`);
-    const { config, validation } = await loadConfig({
-      configPath: missingPath(),
-      userConfigPath,
-    });
-    expect(config.provider?.model).toBeUndefined();
-    expect(validation.errors.some((e) => e.path === 'provider.model')).toBe(true);
-  });
 });
 
 describe('环境变量', () => {

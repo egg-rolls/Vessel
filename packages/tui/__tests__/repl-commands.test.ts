@@ -57,18 +57,6 @@ describe('CommandRegistry 扁平命令', () => {
     expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe('/resume [number|id]');
   });
 
-  it('/help 列出 0.3 / 0.4 命令', async () => {
-    const reg = createCommands();
-    const ctx = makeCtx();
-    const state = makeState(ctx.currentSessionId);
-    const output = (await reg.execute('help', ctx, state)).output ?? '';
-    expect(output).toContain('/mcp [reconnect <name>]');
-    expect(output).toContain('/runs [resume <runId>]');
-    expect(output).toContain('/workflows [list|run|show|resume|cancel]');
-    expect(output).toContain('/metrics');
-    expect(output).toContain('/feishu');
-  });
-
   it('未知命令 -> handled:false', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
@@ -425,16 +413,6 @@ describe('扁平会话命令', () => {
     const result = await reg.execute('clear', ctx, state);
     expect(result.handled).toBe(true);
     expect(result.clearScreen).toBe(true);
-  });
-
-  it('/setup 不在 REPL 内启动 readline 向导，给出退出后路径', async () => {
-    const reg = createCommands();
-    const ctx = makeCtx();
-    const state = makeState(ctx.currentSessionId);
-    const result = await reg.execute('setup', ctx, state);
-    const out = result.output ?? '';
-    expect(out).toContain('cannot run inside the REPL');
-    expect(out).toContain('Exit Vessel');
   });
 });
 

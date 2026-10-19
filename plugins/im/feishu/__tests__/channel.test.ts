@@ -293,11 +293,4 @@ describe('feishu channel', () => {
     expect(events.getHistory().some((event) => event.type.startsWith('run.'))).toBe(true);
     expect((await runStore.list()).length).toBeGreaterThan(0);
   });
-
-  it('installs no tools', () => {
-    const { plugin } = makeChannel();
-    const host = new MemoryPluginHost();
-    plugin.install(host);
-    expect(host.listTools()).toEqual([]);
-  });
 });

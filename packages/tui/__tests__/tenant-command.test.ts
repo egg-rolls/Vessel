@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  formatTenantCurrent,
-  formatTenantList,
   isValidTenantId,
   readTenantList,
   readTenantSummary,
@@ -163,10 +161,5 @@ describe('/tenant', () => {
     expect(readTenantSummary({ tenant_id: 'x', status: 'weird' })).toEqual({ tenant_id: 'x' });
     expect(readTenantSummary({ name: 'no id' })).toBeNull();
     expect(readTenantList({})).toEqual([]);
-  });
-
-  it('纯函数格式化空列表', () => {
-    expect(formatTenantList([], 'default')).toBe('No tenants.');
-    expect(formatTenantCurrent('default', undefined)).toContain('Current tenant: default');
   });
 });

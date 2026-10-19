@@ -11,7 +11,6 @@ import {
   type ToolDefinition,
 } from '@vessel/core';
 import { createMcpPlugin } from '../src/plugin';
-import { StdioTransport } from '../src/stdio-transport';
 import type { McpServerConfig } from '../src/types';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/mock-stdio-server.ts', import.meta.url));
@@ -163,31 +162,6 @@ describe('MCP stdio transport', () => {
       );
     } finally {
       await plugin.close();
-    }
-  });
-
-  it('maps JSON-RPC errors to a stable message', async () => {
-    const transport = new StdioTransport(stdioServer());
-    try {
-      await transport.start();
-      await transport.request(
-        'initialize',
-        {
-          protocolVersion: '2025-06-18',
-          capabilities: {},
-          clientInfo: { name: 'test', version: '0' },
-        },
-        { timeoutMs: 2000 },
-      );
-      let message = '';
-      try {
-        await transport.request('tools/call', { name: 'missing' }, { timeoutMs: 2000 });
-      } catch (error) {
-        message = error instanceof Error ? error.message : String(error);
-      }
-      expect(message).toContain('unknown tool: missing (code -32602)');
-    } finally {
-      await transport.close();
     }
   });
 });

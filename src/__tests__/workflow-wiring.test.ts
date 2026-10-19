@@ -23,6 +23,7 @@ import {
   WorkflowPluginUnavailableError,
   workflowError,
 } from '../workflow-wiring';
+import { canonicalPath } from './path-helpers';
 
 const dirs: string[] = [];
 
@@ -274,7 +275,7 @@ describe('adaptWorkflowsControl (TUI name version)', () => {
     await control.start('demo', { inputs: { x: 'y' } });
 
     expect(calls.start).toHaveLength(1);
-    expect(calls.start[0]?.definitionPath).toBe(fs.realpathSync(path.join(dir, 'demo.yaml')));
+    expect(calls.start[0]?.definitionPath).toBe(canonicalPath(path.join(dir, 'demo.yaml')));
     expect(calls.start[0]?.inputs).toEqual({ x: 'y' });
   });
 

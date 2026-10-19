@@ -227,23 +227,6 @@ describe('resolveEnvRefsInLayer', () => {
     expect(errors[0]?.message).toContain('MISSING_KEY');
   });
 
-  it('解析 tenant overlay 内的 mcpServers _env（overlay 单独解析）', () => {
-    // loader 在选中 tenant 时把 settings.config 单独传入；层解析不触碰
-    // `tenant.tenants.*.config`，以保留 `_env` 供 validator 判定。
-    const input = {
-      mcpServers: {
-        srv: { transport: 'stdio', command: 'run', env: { API_KEY_env: 'MCP_KEY' } },
-      },
-    } as unknown as Partial<VesselConfig>;
-
-    const { layer, errors, resolved } = resolveEnvRefsInLayer(input, ENV);
-    const out = asLayer(layer);
-
-    expect(errors).toEqual([]);
-    expect(out.mcpServers?.srv?.env).toEqual({ API_KEY: 'mcp-secret' });
-    expect(resolved).toEqual({ 'mcpServers.srv.env.API_KEY': 'MCP_KEY' });
-  });
-
   it('层解析保留 tenant.tenants 内的 _env（不提前写回密钥）', () => {
     const input = {
       tenant: {

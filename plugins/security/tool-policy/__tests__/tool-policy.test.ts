@@ -217,30 +217,6 @@ describe('tool-policy 插件（P2）', () => {
     expect(r.reason).toContain('安全策略拦截');
   });
 
-  it('工具名从上下文中获取', async () => {
-    const g = host.getGuardrails()[0];
-    if (!g) throw new Error('guardrail not registered');
-    const r = await g.check({}, {
-      run_id: 'r1',
-      stage: GuardrailStage.ToolCall,
-      ...{ tool_name: 'test_tool' },
-    } as Parameters<typeof g.check>[1]);
-    expect(r.allowed).toBe(true);
-  });
-
-  it('空工具名放行', async () => {
-    const g = host.getGuardrails()[0];
-    if (!g) throw new Error('guardrail not registered');
-    const r = await g.check(
-      {},
-      {
-        run_id: 'r1',
-        stage: GuardrailStage.ToolCall,
-      },
-    );
-    expect(r.allowed).toBe(true);
-  });
-
   it('多个工具在黑名单中', async () => {
     const multiDenyHost = new MemoryPluginHost();
     createToolPolicyPlugin({

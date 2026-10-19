@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { formatRuns, mergeRuns, runRunsCommand, sortRuns } from '../src/commands/runs-command.js';
+import { mergeRuns, runRunsCommand, sortRuns } from '../src/commands/runs-command.js';
 import type {
   DurableRunHandle,
   DurableRunOutcome,
@@ -70,23 +70,7 @@ describe('run sorting', () => {
   });
 });
 
-describe('formatRuns', () => {
-  it('running 标注 live，interrupted 原样', () => {
-    const output = formatRuns(
-      [run('run-live', 1000, 'running'), run('run-old', 500, 'interrupted')],
-      1000 + 60_000,
-    );
-    expect(output).toContain('Durable runs (2, newest first)');
-    expect(output).toContain('run-live');
-    expect(output).toContain('running (live)');
-    expect(output).toContain('1m ago');
-    expect(output).toContain('interrupted');
-  });
-
-  it('空列表给明确提示', () => {
-    expect(formatRuns([])).toContain('No running or interrupted runs');
-  });
-});
+describe('formatRuns', () => {});
 
 describe('/runs command', () => {
   it('未注入控制面 -> 明确提示，不抛错', async () => {

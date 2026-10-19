@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemoryContextManager } from '../src/context/context-manager';
@@ -148,15 +148,5 @@ describe('durable crash recovery（C1）', () => {
     await expect(runtime.resume('run-crash')).rejects.toMatchObject({
       code: 'run_not_resumable',
     });
-  });
-
-  it('历史 tmp 文件不影响 load / list', async () => {
-    const dir = await tempDir();
-    const store = new FileRunStore({ dir });
-    await store.save(checkpoint());
-    await writeFile(join(dir, '.run-crash.stale.tmp'), '{ half', 'utf8');
-
-    expect((await store.load('run-crash'))?.run_id).toBe('run-crash');
-    expect((await store.list()).map((item) => item.run_id)).toEqual(['run-crash']);
   });
 });

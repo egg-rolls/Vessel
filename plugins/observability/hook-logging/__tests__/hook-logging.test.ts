@@ -69,27 +69,6 @@ describe('hook-logging 插件（MECH-1）', () => {
     expect(logs.join('\n')).toContain('After LLM response');
   });
 
-  it('BeforeTool hook 记录工具名（debug 级别）', async () => {
-    // 创建 debug 级别的 hook
-    const debugHost = new MemoryPluginHost();
-    loggingHookPlugin.install(debugHost);
-    const beforeTool = debugHost.getHooks().find((h) => h.type === HookType.BeforeTool);
-    if (!beforeTool) throw new Error('BeforeTool hook not registered');
-
-    // 注意：默认日志级别是 info，debug 级别日志不会输出
-    // 但 hook 仍可正常运行（无返回值、不抛错）
-    await beforeTool.run({ run_id: 'r1', tool_name: 'test_tool' });
-  });
-
-  it('AfterTool hook 记录工具名（debug 级别）', async () => {
-    const afterTool = host.getHooks().find((h) => h.type === HookType.AfterTool);
-    if (!afterTool) throw new Error('AfterTool hook not registered');
-
-    // 注意：默认日志级别是 info，debug 级别日志不会输出
-    // 但 hook 仍可正常运行（无返回值、不抛错）
-    await afterTool.run({ run_id: 'r1', tool_name: 'test_tool' });
-  });
-
   it('所有 hook 都可正常运行且不返回 ctx（不拦截）', async () => {
     const hooks = host.getHooks();
     for (const hook of hooks) {

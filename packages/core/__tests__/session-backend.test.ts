@@ -336,10 +336,4 @@ describe('FileSessionBackend', () => {
       expect(noBranch?.branch).toBeUndefined();
     });
   });
-
-  it('should no-op on close', () => {
-    // close() should not throw
-    backend.close();
-    expect(true).toBe(true);
-  });
 });

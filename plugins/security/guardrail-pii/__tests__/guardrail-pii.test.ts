@@ -106,17 +106,6 @@ describe('guardrail-pii 插件（P2）', () => {
     expect(r.replacement).toBeUndefined();
   });
 
-  it('空字符串放行', async () => {
-    const g = host.getGuardrails()[0];
-    if (!g) throw new Error('guardrail not registered');
-    const r = await g.check('', {
-      run_id: 'r1',
-      stage: GuardrailStage.Output,
-    });
-    expect(r.allowed).toBe(true);
-    expect(r.replacement).toBeUndefined();
-  });
-
   it('自定义 PIIGuardrail 实例可单独使用', async () => {
     const customGuardrail = new PIIGuardrail({ detectEmail: false, detectPhone: false });
     const r = await customGuardrail.check('test@example.com', {

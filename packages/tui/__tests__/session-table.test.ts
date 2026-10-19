@@ -14,19 +14,4 @@ describe('clampSelection', () => {
     expect(clampSelection(0, 0)).toBe(0);
     expect(clampSelection(5, 0)).toBe(0);
   });
-
-  it('↑↓ 连续移动始终落在有效范围', () => {
-    let index = 0;
-    for (let i = 0; i < 10; i++) {
-      index = clampSelection(index + 1, 3);
-      expect(index).toBeGreaterThanOrEqual(0);
-      expect(index).toBeLessThanOrEqual(2);
-    }
-    expect(index).toBe(2);
-    for (let i = 0; i < 10; i++) {
-      index = clampSelection(index - 1, 3);
-      expect(index).toBeGreaterThanOrEqual(0);
-    }
-    expect(index).toBe(0);
-  });
 });

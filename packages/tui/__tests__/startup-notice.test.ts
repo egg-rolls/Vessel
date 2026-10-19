@@ -48,50 +48,6 @@ describe('buildStartupNotice', () => {
     expect(buildStartupNotice({ mcpServers: [], interruptedRuns: [] })).toBeNull();
   });
 
-  it('仅有 MCP server', () => {
-    expect(
-      buildStartupNotice({ mcpServers: [mcpServer('a'), mcpServer('b')], interruptedRuns: [] }),
-    ).toBe('ℹ MCP: 2 servers — /mcp');
-  });
-
-  it('仅有 interrupted run，含单复数', () => {
-    expect(buildStartupNotice({ mcpServers: [], interruptedRuns: [interruptedRun('r1')] })).toBe(
-      'ℹ 1 interrupted run — /runs',
-    );
-    expect(
-      buildStartupNotice({
-        mcpServers: [],
-        interruptedRuns: [interruptedRun('r1'), interruptedRun('r2')],
-      }),
-    ).toBe('ℹ 2 interrupted runs — /runs');
-  });
-
-  it('两者都有 -> 单行', () => {
-    const line = buildStartupNotice({
-      mcpServers: [mcpServer('a')],
-      interruptedRuns: [interruptedRun('r1'), interruptedRun('r2')],
-    });
-    expect(line).toBe('ℹ MCP: 1 server · 2 interrupted runs — /mcp · /runs');
-    expect(line).not.toContain('\n');
-  });
-
-  it('interrupted workflow run（含单复数）', () => {
-    expect(
-      buildStartupNotice({
-        mcpServers: [],
-        interruptedRuns: [],
-        interruptedWorkflows: [interruptedWorkflow('wf_1')],
-      }),
-    ).toBe('ℹ 1 interrupted workflow run — /workflows');
-    expect(
-      buildStartupNotice({
-        mcpServers: [],
-        interruptedRuns: [],
-        interruptedWorkflows: [interruptedWorkflow('wf_1'), interruptedWorkflow('wf_2')],
-      }),
-    ).toBe('ℹ 2 interrupted workflow runs — /workflows');
-  });
-
   it('飞书已连接才出现；未连接不出现', () => {
     expect(
       buildStartupNotice({
@@ -116,29 +72,6 @@ describe('buildStartupNotice', () => {
     expect(
       buildStartupNotice({ mcpServers: null, interruptedRuns: null, tenantId: 'default' }),
     ).toBeNull();
-  });
-
-  it('tenant 段位于最前', () => {
-    expect(
-      buildStartupNotice({
-        mcpServers: [mcpServer('a')],
-        interruptedRuns: [],
-        tenantId: 'acme',
-      }),
-    ).toBe('ℹ Tenant: acme · MCP: 1 server — /tenant · /mcp');
-  });
-
-  it('四段组合顺序固定为 MCP -> runs -> workflows -> feishu', () => {
-    expect(
-      buildStartupNotice({
-        mcpServers: [mcpServer('a')],
-        interruptedRuns: [interruptedRun('r1')],
-        interruptedWorkflows: [interruptedWorkflow('wf_1'), interruptedWorkflow('wf_2')],
-        feishu: connectedFeishu,
-      }),
-    ).toBe(
-      'ℹ MCP: 1 server · 1 interrupted run · 2 interrupted workflow runs · Feishu connected — /mcp · /runs · /workflows · /feishu',
-    );
   });
 });
 

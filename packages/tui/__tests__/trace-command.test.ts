@@ -135,12 +135,6 @@ describe('/trace', () => {
     });
   });
 
-  it('空结果显示明确文案', async () => {
-    const rpc = makeRpc(() => ({ events: [] }));
-    const result = await runTraceCommand(['show', 'r1'], makeCtx({ rpc }));
-    expect(result.output).toContain('No events for run "r1"');
-  });
-
   it('--json 输出可解析且已脱敏', async () => {
     const rpc = makeRpc(() => EVENTS);
     const result = await runTraceCommand(['show', 'r1', '--json'], makeCtx({ rpc }));

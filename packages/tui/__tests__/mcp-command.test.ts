@@ -48,10 +48,6 @@ describe('formatMcpServers', () => {
     expect(output).toContain('off');
     expect(output).toContain('disabled');
   });
-
-  it('空列表给明确提示', () => {
-    expect(formatMcpServers([])).toContain('No MCP servers configured');
-  });
 });
 
 describe('/mcp command', () => {

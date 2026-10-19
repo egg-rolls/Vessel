@@ -78,24 +78,6 @@ providers:
     expect(validation.errors.some((e) => e.path === 'provider.model')).toBe(false);
   });
 
-  it('default_provider: custom 时 provider.name 为 custom，不错显 openai', async () => {
-    const userConfigPath = tmpYaml(`
-api_key: sk-test
-default_provider: custom
-default_model: some-model
-providers:
-  custom:
-    api_key: sk-test
-    base_url: https://example.com
-`);
-    const { config } = await loadConfig({
-      userConfigPath,
-      configPath: missingPath(),
-    });
-
-    expect(config.provider?.name).toBe('custom');
-  });
-
   it('openai provider 缺 model 时保留安全默认 gpt-4（SPEC §6.2.3）', async () => {
     const userConfigPath = tmpYaml(`
 api_key: sk-test

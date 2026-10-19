@@ -114,7 +114,12 @@ describe('rpc envelope', () => {
     const denied = await rpc(gateway, envelope('1', 'runs.start', { input: 'hi' }), 'r');
     expect(denied.status).toBe(200);
     expect(denied.body.ok).toBe(false);
-    expect((denied.body.error as { code: string }).code).toBe('forbidden');
+    const error = denied.body.error as {
+      code: string;
+      details?: { method?: string; required?: string };
+    };
+    expect(error.code).toBe('forbidden');
+    expect(error.details).toMatchObject({ method: 'runs.start', required: 'write' });
   });
 });
 

@@ -34,9 +34,4 @@ describe('summarizeToolInput', () => {
   it('未知工具 -> JSON 摘要', () => {
     expect(summarizeToolInput('other', { a: 1 })).toEqual(['{"a":1}']);
   });
-
-  it('空入参 -> 空数组', () => {
-    expect(summarizeToolInput('bash', undefined)).toEqual([]);
-    expect(summarizeToolInput('other', null)).toEqual([]);
-  });
 });

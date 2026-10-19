@@ -18,6 +18,7 @@ import {
   latestEvalReport,
   resolveEvalsOptions,
 } from '../eval-wiring';
+import { canonicalPath } from './path-helpers';
 
 const dirs: string[] = [];
 
@@ -185,7 +186,7 @@ describe('executeEvalSuite', () => {
 
     expect(result.exitCode).toBe(0);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.suitePath).toBe(fs.realpathSync(suitePath));
+    expect(calls[0]?.suitePath).toBe(canonicalPath(suitePath));
     expect(calls[0]?.options).toEqual({
       outDir,
       outPath: path.join(base, 'custom.json'),

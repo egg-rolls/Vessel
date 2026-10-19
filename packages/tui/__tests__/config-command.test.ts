@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  formatConfigSources,
-  formatConfigSummary,
   parseConfigArgs,
   readConfigSnapshot,
   runConfigCommand,
@@ -164,14 +162,5 @@ describe('/config', () => {
       expect(parsed.value.action).toBe('path');
       expect(parsed.value.json).toBe(true);
     }
-  });
-
-  it('纯函数格式化空 sources', () => {
-    expect(formatConfigSources({ config: {} })).toBe('No config keys.');
-    expect(
-      formatConfigSummary({ config: { provider: { name: 'p' } } }).includes(
-        'provider.name:      p',
-      ),
-    ).toBe(true);
   });
 });

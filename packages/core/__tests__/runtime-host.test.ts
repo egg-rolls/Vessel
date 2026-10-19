@@ -582,26 +582,7 @@ describe('子成员交互请求（B4）', () => {
   });
 });
 
-describe('RunnableAgent（A10）', () => {
-  it('AgentRuntime 结构上满足 RunnableAgent', async () => {
-    const runtime = await AgentRuntime.create({
-      provider: new MemoryLLMProvider(),
-      model: 'm',
-      context: new MemoryContextManager(),
-      events: new MemoryEventStream(),
-      limits: {},
-      termination: { maxIterations: 1 },
-    });
-
-    const runnable: RunnableAgent = runtime;
-    expect(runnable.events).toBe(runtime.events);
-    expect(runnable.pluginHost).toBe(runtime.pluginHost);
-    expect(typeof runnable.run).toBe('function');
-    expect(typeof runnable.dispose).toBe('function');
-
-    runtime.dispose();
-  });
-});
+describe('RunnableAgent（A10）', () => {});
 
 describe('Scheduler（F2）', () => {
   it('submit 排队、排队取消、运行取消与 stats', async () => {

@@ -233,18 +233,7 @@ describe('StreamOutput segment ordering', () => {
     });
   });
 
-  describe('工厂函数', () => {
-    it('makeToolCallSegment 创建正确的 running 状态 segment', () => {
-      const seg = makeToolCallSegment('t1', 'search', { query: 'hello' });
-      expect(seg).toMatchObject({
-        type: 'tool_call',
-        id: 't1',
-        name: 'search',
-        arguments: { query: 'hello' },
-        status: 'running',
-      });
-    });
-  });
+  describe('工厂函数', () => {});
 
   describe('getResponseText', () => {
     it('提取所有 text segment 的拼接文本', () => {

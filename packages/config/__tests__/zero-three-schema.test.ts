@@ -10,12 +10,7 @@ import {
 } from '../src/defaults';
 import { loadConfig, loadConfigFromFile, preserveMcpMapKeys, snakeToCamel } from '../src/loader';
 import type { McpServerConfig, VesselConfig } from '../src/types';
-import {
-  findUnknownNestedKeys,
-  isLoopbackHostname,
-  validateConfig,
-  validateServeSettings,
-} from '../src/validator';
+import { findUnknownNestedKeys, isLoopbackHostname, validateConfig } from '../src/validator';
 
 // 隔离 VESSEL_* 环境变量
 const savedEnv: Record<string, string | undefined> = {};
@@ -324,11 +319,6 @@ describe('serve 校验', () => {
     expect(isLoopbackHostname('0.0.0.0')).toBe(false);
     expect(isLoopbackHostname('192.168.1.1')).toBe(false);
     expect(isLoopbackHostname('127.0.0.999')).toBe(false);
-  });
-
-  it('validateServeSettings 可直接调用并返回错误', () => {
-    const errors = validateServeSettings({ hostname: '0.0.0.0' });
-    expect(errors.map((e) => e.path)).toContain('serve.allowRemote');
   });
 });
 

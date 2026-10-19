@@ -11,6 +11,7 @@ import type {
 } from '../control-plane-types';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from '../gateway-wiring';
 import type { PluginLoader } from '../plugin-loader';
+import { canonicalPath } from './path-helpers';
 
 const dirs: string[] = [];
 
@@ -137,7 +138,7 @@ describe('buildGatewayControlPlane', () => {
     expect(typeof workflows.start).toBe('function');
     expect(typeof workflows.resume).toBe('function');
     expect(typeof workflows.cancel).toBe('function');
-    expect(workflows.resolveDefinition('demo')).toBe(fs.realpathSync(demo));
+    expect(workflows.resolveDefinition('demo')).toBe(canonicalPath(demo));
     expect(workflows.resolveDefinition('missing')).toBeUndefined();
     expect(workflows.resolveDefinition('../demo')).toBeUndefined();
     expect(workflows.resolveDefinition('a/b')).toBeUndefined();
@@ -156,9 +157,9 @@ describe('buildGatewayControlPlane', () => {
     const acme = buildWorkflowControlPlane(engine, { workflow: { dir: acmeDefs } });
     const work = buildWorkflowControlPlane(engine, { workflow: { dir: workDefs } });
 
-    expect(acme.resolveDefinition('acme')).toBe(fs.realpathSync(path.join(acmeDefs, 'acme.yaml')));
+    expect(acme.resolveDefinition('acme')).toBe(canonicalPath(path.join(acmeDefs, 'acme.yaml')));
     expect(acme.resolveDefinition('work')).toBeUndefined();
-    expect(work.resolveDefinition('work')).toBe(fs.realpathSync(path.join(workDefs, 'work.yaml')));
+    expect(work.resolveDefinition('work')).toBe(canonicalPath(path.join(workDefs, 'work.yaml')));
     expect(work.resolveDefinition('acme')).toBeUndefined();
   });
 

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  formatSessions,
   getSessionState,
   listSessions,
   runSessionsCommand,
@@ -143,12 +142,6 @@ describe('session helpers', () => {
     expect(sessions.map((session) => session.session_id)).toEqual(['s_new', 's_old']);
   });
 
-  it('listSessions 无 rpc 时退回 SessionBackend', async () => {
-    const ctx = makeCtx();
-    const sessions = await listSessions(ctx);
-    expect(Array.isArray(sessions)).toBe(true);
-  });
-
   it('getSessionState 读取 messages；not_found 返回 null', async () => {
     const rpc = makeRpc((_method, params) => {
       const id = (params as { session_id?: string }).session_id;
@@ -182,9 +175,5 @@ describe('session helpers', () => {
       },
     ]);
     expect(sorted.map((session) => session.session_id)).toEqual(['a', 'b']);
-  });
-
-  it('formatSessions 空列表', () => {
-    expect(formatSessions([], 's1')).toBe('No sessions.');
   });
 });

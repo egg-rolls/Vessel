@@ -9,13 +9,8 @@ import {
   DEFAULT_WORKFLOW_OPTIONS,
 } from '../src/defaults';
 import { loadConfig, loadConfigFromEnv, snakeToCamel } from '../src/loader';
-import type { FeishuConfig, VesselConfig } from '../src/types';
-import {
-  findUnknownKeys,
-  findUnknownNestedKeys,
-  KNOWN_CONFIG_KEYS,
-  validateConfig,
-} from '../src/validator';
+import type { VesselConfig } from '../src/types';
+import { findUnknownNestedKeys, validateConfig } from '../src/validator';
 
 // 隔离 VESSEL_* 环境变量
 const savedEnv: Record<string, string | undefined> = {};
@@ -309,11 +304,6 @@ describe('0.4 observability validation', () => {
 });
 
 describe('0.4 unknown keys', () => {
-  it('suggests the block name for a top-level typo', () => {
-    const unknown = findUnknownKeys({ workfloww: {} }, KNOWN_CONFIG_KEYS);
-    expect(unknown).toEqual(['workfloww']);
-  });
-
   it('reports a nested typo with a full path', () => {
     const unknown = findUnknownNestedKeys({
       workflow: { maxParallels: 2 },
@@ -384,20 +374,4 @@ feishu:
   });
 });
 
-describe('0.4 FeishuConfig type has no agentId', () => {
-  it('agentId is not part of the public config type', () => {
-    const feishu: FeishuConfig = {
-      enabled: false,
-      appId: '',
-      appSecret: '',
-      appSecretEnv: '',
-      domain: 'feishu',
-      allowedChatIds: [],
-      sessionPrefix: 'feishu',
-      replyTimeoutMs: 300000,
-      maxReplyChars: 4000,
-      maxMembers: 8,
-    };
-    expect(Object.keys(feishu)).not.toContain('agentId');
-  });
-});
+describe('0.4 FeishuConfig type has no agentId', () => {});

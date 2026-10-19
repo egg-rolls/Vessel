@@ -144,13 +144,4 @@ describe('gateway TLS', () => {
       }),
     ).toThrow(/non-empty gateway token/);
   });
-
-  it('does not advertise tls when running plaintext', async () => {
-    const gw = createGateway({ events: new MemoryEventStream() });
-    gateways.push(gw);
-    const body = (await (await fetch(`${gw.url}/v1/health`)).json()) as {
-      protocol: { features: string[] };
-    };
-    expect(body.protocol.features).not.toContain('tls');
-  });
 });

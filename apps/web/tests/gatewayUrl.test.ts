@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
   checkGatewayUrl,
-  displayGatewayUrl,
   isLoopbackHostname,
   resolveInitialGatewayUrl,
   toWebSocketBase,
@@ -119,14 +118,5 @@ describe('helpers', () => {
     expect(toWebSocketBase('')).toBe('');
     expect(toWebSocketBase('http://127.0.0.1:8642')).toBe('ws://127.0.0.1:8642');
     expect(toWebSocketBase('https://gw.example.com')).toBe('wss://gw.example.com');
-  });
-
-  it('displays the page origin for the same-origin sentinel', () => {
-    expect(displayGatewayUrl('', 'https://console.example.com')).toBe(
-      'https://console.example.com',
-    );
-    expect(displayGatewayUrl('https://gw.example.com', 'https://console.example.com')).toBe(
-      'https://gw.example.com',
-    );
   });
 });

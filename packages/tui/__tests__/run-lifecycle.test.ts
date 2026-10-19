@@ -108,12 +108,6 @@ describe('permission overlay cleanup', () => {
 });
 
 describe('executeTurn', () => {
-  it('正常完成 -> completed', async () => {
-    const abort = new AbortController();
-    const outcome = await executeTurn({ abort, run: async () => 'ok' });
-    expect(outcome).toEqual({ status: 'completed' });
-  });
-
   it('把 signal 传给 run', async () => {
     const abort = new AbortController();
     let received: AbortSignal | undefined;

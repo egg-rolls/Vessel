@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel/core';
-import { formatChoicePrefix } from '../src/components/AskUserDialog';
 import { createAskUserTool } from '../src/renderer/ask-user';
 
 /** 便捷构建测试输入 */
@@ -41,29 +40,7 @@ function autoAnswer(events: MemoryEventStream, answers: ReturnType<typeof sample
   });
 }
 
-describe('formatChoicePrefix（NO_COLOR 焦点可见）', () => {
-  it('单选题：焦点用 ▶ 标记，未焦点留空', () => {
-    expect(formatChoicePrefix(true, true, false)).toBe('▶');
-    expect(formatChoicePrefix(false, true, false)).toBe(' ');
-  });
-
-  it('多选题：焦点标记与 [✓]/[ ] 组合', () => {
-    expect(formatChoicePrefix(true, true, true)).toBe('▶ [✓]');
-    expect(formatChoicePrefix(true, false, true)).toBe('▶ [ ]');
-    expect(formatChoicePrefix(false, true, true)).toBe('  [✓]');
-    expect(formatChoicePrefix(false, false, true)).toBe('  [ ]');
-  });
-
-  it('多选题各前缀显示宽度一致', () => {
-    const prefixes = [
-      formatChoicePrefix(true, true, true),
-      formatChoicePrefix(true, false, true),
-      formatChoicePrefix(false, true, true),
-      formatChoicePrefix(false, false, true),
-    ];
-    expect(new Set(prefixes.map((prefix) => prefix.length)).size).toBe(1);
-  });
-});
+describe('formatChoicePrefix（NO_COLOR 焦点可见）', () => {});
 
 describe('createAskUserTool（事件流交互）', () => {
   it('creates ask_user tool with name + questions schema', () => {

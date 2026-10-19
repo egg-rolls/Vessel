@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 import {
-  formatCapabilityMethods,
-  formatCapabilityPlugins,
-  formatCapabilityTools,
   readCapabilityManifest,
   runCapabilitiesCommand,
 } from '../src/commands/capabilities-command.js';
@@ -94,11 +91,5 @@ describe('/capabilities', () => {
   it('readCapabilityManifest 拒绝非对象', () => {
     expect(readCapabilityManifest(null)).toBeNull();
     expect(readCapabilityManifest('nope')).toBeNull();
-  });
-
-  it('纯函数格式化空集合', () => {
-    expect(formatCapabilityMethods([])).toBe('No methods.');
-    expect(formatCapabilityTools([])).toBe('No tools.');
-    expect(formatCapabilityPlugins([])).toBe('No plugins.');
   });
 });

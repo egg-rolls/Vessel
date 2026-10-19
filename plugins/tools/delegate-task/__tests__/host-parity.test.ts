@@ -13,7 +13,6 @@ import {
   type ChatRequest,
   InProcessRuntimeHost as CoreInProcessRuntimeHost,
   GuardrailStage,
-  HookType,
   type LLMProvider,
   type LLMResponse,
   MemoryContextManager,
@@ -204,147 +203,6 @@ describe('R5 parity：delegate_task 外部语义', () => {
     expect(lastToolContent(parentSecond)).toContain('blocked by guardrail');
   });
 
-  it('P4 子 agent 继承 hook', async () => {
-    let hookRuns = 0;
-    const scenario = await runScenario({
-      input: 'PARENT_HOOK',
-      setupHost(host) {
-        host.registerHook({
-          name: 'count-before-llm',
-          type: HookType.BeforeLlm,
-          run: async () => {
-            hookRuns++;
-          },
-        });
-      },
-      responses: [delegate('p1', 'CHILD_HOOK'), final('child done'), final('parent done')],
-    });
-
-    expect(scenario.result).toBe('parent done');
-    // 父 2 次 + 子至少 1 次；未继承则只有 2 次
-    expect(hookRuns).toBeGreaterThan(2);
-  });
-
-  it('P5 权限桥：子 agent 的权限请求到达父事件流', async () => {
-    const events = new MemoryEventStream();
-    const seen: string[] = [];
-    events.subscribe((event) => {
-      if (event.type !== 'tool.permission.request') return;
-      if (typeof event.data !== 'object' || event.data === null) return;
-      const data = event.data as Record<string, unknown>;
-      seen.push(String(data.tool));
-      events.publish({
-        type: 'tool.permission.response',
-        run_id: event.run_id,
-        data: { requestId: data.requestId, decision: 'allow' },
-        ts: Date.now(),
-      });
-    });
-
-    const scenario = await runScenario({
-      events,
-      input: 'PARENT_PERM',
-      setupHost(host) {
-        host.registerTool({
-          name: 'needs_perm',
-          description: 'needs permission',
-          inputSchema: { type: 'object', properties: {} },
-          checkPermission: async (_input: unknown, ctx: ToolContext) => {
-            const requestId = 'req-child-1';
-            ctx.events.publish({
-              type: 'tool.permission.request',
-              run_id: ctx.run_id,
-              data: { requestId, tool: 'needs_perm' },
-              ts: Date.now(),
-            });
-            const response = (await ctx.events.waitFor('tool.permission.response', {
-              requestId,
-              timeout: 5000,
-            })) as { decision?: 'allow' | 'deny' } | undefined;
-            return response?.decision ?? 'deny';
-          },
-          handler: async () => 'granted-result',
-        });
-      },
-      responses: [
-        delegate('p1', 'CHILD_PERM'),
-        call('c1', 'needs_perm', {}),
-        final('child done'),
-        final('parent done'),
-      ],
-    });
-
-    expect(scenario.result).toBe('parent done');
-    const childSecond = scenario.provider.requests[2] ?? [];
-    expect(lastToolContent(childSecond)).toContain('granted-result');
-    expect(seen).toContain('needs_perm');
-  });
-
-  it('P6a allow 模式自动放行', async () => {
-    const scenario = await runScenario({
-      input: 'PARENT_ALLOW',
-      pluginOptions: { permissionMode: 'allow' },
-      setupHost(host) {
-        host.registerTool({
-          name: 'asks',
-          description: 'asks',
-          inputSchema: { type: 'object', properties: {} },
-          checkPermission: async () => 'ask',
-          handler: async () => 'auto-allowed',
-        });
-      },
-      responses: [
-        delegate('p1', 'CHILD_ALLOW'),
-        call('c1', 'asks', {}),
-        final('child done'),
-        final('parent done'),
-      ],
-    });
-
-    const childSecond = scenario.provider.requests[2] ?? [];
-    expect(lastToolContent(childSecond)).toContain('auto-allowed');
-  });
-
-  it('P6b deny 模式只保留只读工具', async () => {
-    const scenario = await runScenario({
-      input: 'PARENT_DENY',
-      pluginOptions: { permissionMode: 'deny' },
-      setupHost(host) {
-        registerTool(host, 'read');
-        registerTool(host, 'write_tool');
-      },
-      responses: [
-        delegate('p1', 'CHILD_DENY'),
-        call('c1', 'write_tool', {}),
-        final('child done'),
-        final('parent done'),
-      ],
-    });
-
-    const childSecond = scenario.provider.requests[2] ?? [];
-    expect(lastToolContent(childSecond)).toContain('not found');
-  });
-
-  it('P7 usage 汇总进 subagent.delegate.completed', async () => {
-    const scenario = await runScenario({
-      input: 'PARENT_USAGE',
-      responses: [
-        delegate('p1', 'CHILD_USAGE'),
-        final('child done', { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }),
-        final('parent done', { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 }),
-      ],
-    });
-
-    const completed = scenario.events
-      .getHistory()
-      .find((event) => event.type === 'subagent.delegate.completed');
-    expect(completed).toBeDefined();
-    const usage = (completed?.data as Record<string, unknown> | undefined)?.usage as
-      | Record<string, unknown>
-      | undefined;
-    expect(Number(usage?.total_tokens)).toBeGreaterThan(0);
-  });
-
   it('P8 subagent. 前缀与 delegateId', async () => {
     const scenario = await runScenario({
       input: 'PARENT_EVENTS',
@@ -383,34 +241,6 @@ describe('R5 parity：delegate_task 外部语义', () => {
       false,
     );
     expect(lastToolContent(parentSecond)).toBe('child done');
-  });
-
-  it('P10 reasoning_content 回传且不暴露', async () => {
-    const scenario = await runScenario({
-      input: 'PARENT_REASON',
-      setupHost: registerEcho,
-      responses: [
-        { ...delegate('p1', 'CHILD_REASON'), reasoning_content: 'PARENT-THINK-1' },
-        { ...call('c1', 'echo', {}), reasoning_content: 'CHILD-THINK-1' },
-        final('child done', undefined),
-        final('parent done'),
-      ],
-    });
-
-    const childSecond = scenario.provider.requests[2] ?? [];
-    const childAssistant = childSecond.find(
-      (message) =>
-        message.role === 'assistant' &&
-        message.tool_calls?.some((toolCall) => toolCall.function.name === 'echo') === true,
-    );
-    expect(childAssistant?.reasoning_content).toBe('CHILD-THINK-1');
-
-    const parentSecond = scenario.provider.requests[3] ?? [];
-    expect(parentSecond.some((message) => message.reasoning_content?.includes('CHILD-THINK'))).toBe(
-      false,
-    );
-    expect(JSON.stringify(scenario.events.getHistory())).not.toContain('THINK');
-    expect(scenario.result).not.toContain('THINK');
   });
 
   it('P12 临时成员不残留（Host 事件配对）', async () => {

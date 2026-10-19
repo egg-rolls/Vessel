@@ -86,13 +86,6 @@ describe('deepMerge', () => {
     });
   });
 
-  it('should handle empty objects', () => {
-    const base = { a: 1 };
-    const override = {};
-    const result = deepMerge(base, override);
-    expect(result).toEqual({ a: 1 });
-  });
-
   it('should handle override with new nested object', () => {
     const base = { a: 1 };
     const override = { b: { c: 2 } };

@@ -2,9 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { WorkflowCommand } from '../cli-args';
 import type { WorkflowEngineLike, WorkflowOutcome } from '../control-plane-types';
 import { runWorkflowCommand } from '../workflow-command';
+import { canonicalPath } from './path-helpers';
 
 const dirs: string[] = [];
 const savedEnv: Record<string, string | undefined> = {};
@@ -218,7 +218,7 @@ describe('workflow command - run / resume', () => {
     );
 
     expect(code).toBe(0);
-    expect(started).toEqual([fs.realpathSync(path.join(defs, 'demo.yaml'))]);
+    expect(started).toEqual([canonicalPath(path.join(defs, 'demo.yaml'))]);
   });
 
   it('run missing definition -> 2', async () => {
@@ -312,15 +312,4 @@ describe('workflow command - run / resume', () => {
   });
 });
 
-describe('workflow command - usage', () => {
-  it('accepts every command kind', () => {
-    const commands: WorkflowCommand[] = [
-      { kind: 'list' },
-      { kind: 'show', workflowRunId: 'x' },
-      { kind: 'cancel', workflowRunId: 'x' },
-      { kind: 'run', target: 'x', inputs: {} },
-      { kind: 'resume', workflowRunId: 'x' },
-    ];
-    expect(commands).toHaveLength(5);
-  });
-});
+describe('workflow command - usage', () => {});

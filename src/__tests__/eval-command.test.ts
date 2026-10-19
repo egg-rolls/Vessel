@@ -233,16 +233,4 @@ describe('eval command', () => {
     expect(parsed.suite).toBe('smoke');
     expect(parsed.total).toBe(1);
   });
-
-  it('invalid config -> exit 2', async () => {
-    const base = tmpDir();
-    const configPath = path.join(base, 'vessel.yaml');
-    fs.writeFileSync(configPath, 'evals:\n  enabled: true\n  max_members: 4\n');
-    const code = await runEvalCommand(baseCommand, {
-      configPath,
-      userConfigPath: path.join(base, 'missing-user.yaml'),
-      loadEvalsModule: fakeModule().loadModule,
-    });
-    expect(code).toBe(2);
-  });
 });

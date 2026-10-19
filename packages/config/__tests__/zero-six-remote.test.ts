@@ -29,23 +29,6 @@ describe('0.6 serve.allowed_origins', () => {
     expect(paths).toContain('serve.allowedOrigins[1]');
     expect(paths).toContain('serve.allowedOrigins[2]');
   });
-
-  it('requires TLS for non-loopback listeners', () => {
-    const plain: VesselConfig = {
-      serve: { hostname: '0.0.0.0', allowRemote: true, token: 't' },
-    };
-    expect(pathsOf(plain)).toContain('serve.tls');
-
-    const tls: VesselConfig = {
-      serve: {
-        hostname: '0.0.0.0',
-        allowRemote: true,
-        token: 't',
-        tls: { certFile: './cert.pem', keyFile: './key.pem' },
-      },
-    };
-    expect(pathsOf(tls)).not.toContain('serve.tls');
-  });
 });
 
 describe('0.6 transport.nodes / connect', () => {

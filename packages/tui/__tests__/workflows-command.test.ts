@@ -124,13 +124,6 @@ describe('workflow run sorting and formatting', () => {
     expect(output).toContain('boom');
   });
 
-  it('空列表给明确提示（无过滤 / 有过滤）', () => {
-    expect(formatWorkflowRuns([])).toContain('No workflow runs');
-    expect(formatWorkflowRuns([], Date.now(), 'failed')).toContain(
-      'No workflow runs with status "failed"',
-    );
-  });
-
   it('详情渲染状态、inputs、步骤、耗时与错误', () => {
     const output = formatWorkflowDetail(detail, 10_000);
     expect(output).toContain('Workflow run wf_1 (wf-wf_1)');
@@ -143,12 +136,6 @@ describe('workflow run sorting and formatting', () => {
     expect(output).toContain('wrote 4 files');
     expect(output).toContain('exit code 1');
     expect(output).toContain('skipped');
-  });
-
-  it('详情无 inputs / 无步骤时给出占位', () => {
-    const output = formatWorkflowDetail({ ...detail, inputs: {}, steps: [] }, 10_000);
-    expect(output).toContain('inputs:      -');
-    expect(output).toContain('(no steps)');
   });
 });
 

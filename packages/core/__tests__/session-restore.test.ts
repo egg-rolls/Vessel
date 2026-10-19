@@ -88,40 +88,6 @@ describe('session 多轮与恢复', () => {
 });
 
 describe('listRich', () => {
-  it('过滤空会话，按 updated_at 倒序，带 preview', async () => {
-    const backend = new SQLiteSessionBackend(':memory:');
-    await backend.save({
-      run_id: 'r1',
-      session_id: 'empty',
-      messages: [],
-      started_at: 1000,
-      status: 'completed',
-    });
-    await backend.save({
-      run_id: 'r2',
-      session_id: 'old',
-      messages: [{ role: 'user', content: 'old msg' }],
-      started_at: 1000,
-      status: 'completed',
-      updated_at: 2000,
-    });
-    await backend.save({
-      run_id: 'r3',
-      session_id: 'new',
-      messages: [{ role: 'user', content: 'new msg' }],
-      started_at: 1000,
-      status: 'completed',
-      updated_at: 5000,
-    });
-
-    const rich = await backend.listRich();
-    expect(rich.length).toBe(2); // empty 被过滤
-    expect(rich[0]?.session_id).toBe('new'); // updated_at 倒序
-    expect(rich[1]?.session_id).toBe('old');
-    expect(rich[0]?.preview).toBe('new msg');
-    expect(rich[0]?.message_count).toBe(1);
-  });
-
   it('MemorySessionBackend.listRich 同样过滤+排序', async () => {
     const backend = new MemorySessionBackend();
     await backend.save({

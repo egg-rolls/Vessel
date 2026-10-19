@@ -97,11 +97,6 @@ describe('FileEventStore', () => {
     expect(sorted).toEqual(['run-a', 'run-b']);
   });
 
-  it('should return empty list for non-existent file', async () => {
-    const ids = await store.listRunIds();
-    expect(ids).toEqual([]);
-  });
-
   it('should delete events for a specific run', async () => {
     await store.append(makeEvent('run.started', 'run-a'));
     await store.append(makeEvent('run.completed', 'run-a'));

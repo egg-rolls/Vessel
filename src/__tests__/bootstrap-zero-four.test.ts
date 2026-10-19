@@ -10,6 +10,7 @@ import type {
   WorkflowEngineLike,
   WorkflowEngineOptionsLike,
 } from '../control-plane-types';
+import { canonicalPath } from './path-helpers';
 
 const dirs: string[] = [];
 
@@ -205,7 +206,7 @@ describe('bootstrap 0.4 activation', () => {
 
       const started = await result.ctx.workflows?.start('demo');
       expect(started?.workflowRunId).toBe('wf_1');
-      expect(calls.start[0]).toBe(fs.realpathSync(path.join(defs, 'demo.yaml')));
+      expect(calls.start[0]).toBe(canonicalPath(path.join(defs, 'demo.yaml')));
     } finally {
       await result.shutdown();
     }

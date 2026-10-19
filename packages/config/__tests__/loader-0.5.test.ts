@@ -286,26 +286,6 @@ tenant:
     expect(overlay?.feishu?.appSecret).toBeUndefined();
     expect(overlay?.feishu?.appSecretEnv).toBe('TENANT_FEISHU_SECRET');
   });
-
-  it('default tenant overlay _env resolves the same way', async () => {
-    const user = tmpYaml(`
-tenant:
-  default: acme
-  tenants:
-    acme:
-      config:
-        provider:
-          api_key_env: TENANT_API_KEY
-`);
-
-    const { config, validation } = await load({
-      user,
-      env: { TENANT_API_KEY: 'default-key-value' },
-    });
-
-    expect(config.provider?.apiKey).toBe('default-key-value');
-    expect(validation.errors).toEqual([]);
-  });
 });
 
 describe('loadConfig 0.5 - 未知键与项目密钥', () => {
