@@ -14,9 +14,6 @@
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
-import { readFileSync } from 'node:fs';
-import { isIP } from 'node:net';
-import { extname, resolve, sep } from 'node:path';
 import type {
   AgentMessage,
   ContextManager,
@@ -43,6 +40,35 @@ import {
 import { type EvalsGatewayOptions, normalizeEvalReport } from './evals.js';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
 import { type FeishuGatewayOptions, normalizeFeishuStatus } from './feishu.js';
+import {
+  buildContentSecurityPolicy,
+  corsHeaders,
+  hostAllowed,
+  isLoopbackHostname,
+  loadTlsMaterial,
+  normalizeAllowedOrigins,
+  originAllowed,
+} from './gateway/auth.js';
+import {
+  eventFrame as buildEventFrame,
+  gapFrame as buildGapFrame,
+  helloFrame as buildHelloFrame,
+  errorFrame,
+  resultFrame,
+  eventSourceNodeId as sourceNodeId,
+} from './gateway/frames.js';
+import {
+  flushSseGap,
+  pumpSseReplay,
+  SSE_HIGH_WATER_FRAMES,
+  SSE_LOW_WATER_FRAMES,
+  SSE_REPLAY_BATCH,
+  type SseClientState,
+  type SseController,
+  sendGatedSse,
+  writeSse,
+} from './gateway/sse.js';
+import { serveStatic } from './gateway/static.js';
 import { type McpGatewayOptions, normalizeMcpServers } from './mcp.js';
 import { type MetricsProvider, type MetricsSnapshot, normalizeMetricsSnapshot } from './metrics.js';
 import {
@@ -120,6 +146,15 @@ import {
   type WorkflowGatewayOptions,
   type WorkflowRunStatus,
 } from './workflow.js';
+
+// 公开导出保持不变：这些辅助函数仍可从 `@vessel/serve/gateway` 导入。
+export {
+  buildContentSecurityPolicy,
+  corsHeaders,
+  isLoopbackHostname,
+  normalizeAllowedOrigins,
+  originAllowed,
+} from './gateway/auth.js';
 
 /** 网关启动选项 */
 export interface GatewayOptions {
@@ -279,31 +314,6 @@ export interface Gateway {
   stop(): void;
 }
 
-/** SSE 回放状态：由 pull 驱动，慢连接不会一次性堆满队列 */
-interface SseReplayState {
-  /** 下一条要回放的 seq */
-  cursor: number;
-  /** 每次 pull 最多发送的事件数 */
-  batch: number;
-  accepts: (event: RunEvent) => boolean;
-  encode: (item: SeqEvent) => string;
-}
-
-/** 单个 SSE 连接的状态 */
-interface SseClientState {
-  backpressure: ClientBackpressure;
-  /** pull 之后自增；作为 Bun desiredSize 失效时的退化信号 */
-  unacked: number;
-  encodeGap: (gap: EventGap) => string;
-  replay?: SseReplayState;
-  onClose?: () => void;
-  /** 0.5 tenant 过滤；undefined = 不过滤（team/MCP legacy 流） */
-  tenantId?: string;
-  allTenants?: boolean;
-  /** 可选事件过滤（events.subscribe run_id / types） */
-  accepts?: (event: RunEvent) => boolean;
-}
-
 /** team SSE 连接状态 */
 interface TeamClientState extends SseClientState {
   agentId?: string;
@@ -326,7 +336,6 @@ interface WsData {
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
-type SseController = ReadableStreamDefaultController<unknown>;
 
 /** 运行队列上限（防止无界堆积） */
 const MAX_QUEUE = 100;
@@ -337,11 +346,6 @@ const MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
 /** WS 事件背压：高水位开始丢事件，低水位补 gap（DECISION-009 §10.3.5） */
 const WS_BACKPRESSURE_HIGH = 2 * 1024 * 1024;
 const WS_BACKPRESSURE_LOW = 512 * 1024;
-/** SSE 背压按帧计；highWaterMark 同时用于控制器队列 */
-const SSE_HIGH_WATER_FRAMES = 256;
-const SSE_LOW_WATER_FRAMES = 64;
-/** 每次 pull 回放的批大小 */
-const SSE_REPLAY_BATCH = 64;
 
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
@@ -349,114 +353,6 @@ const DEFAULT_MAX_HISTORY = 10_000;
 const DEFAULT_MAX_BODY = 1024 * 1024;
 
 const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
-
-/** 回环判定：localhost / 127.0.0.0/8 / ::1（可带方括号） */
-export function isLoopbackHostname(hostname: string): boolean {
-  const host =
-    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
-  const lower = host.toLowerCase();
-  if (lower === 'localhost' || lower === '::1') return true;
-  return isIP(lower) === 4 && lower.startsWith('127.');
-}
-
-/** 通配绑定：0.0.0.0 / ::（可带方括号） */
-function isWildcardHostname(hostname: string): boolean {
-  const host =
-    hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
-  return host === '0.0.0.0' || host === '::';
-}
-
-/** 读取 TLS 证书/私钥；空文件与不可读都给出明确错误 */
-function loadTlsMaterial(tls: { certFile: string; keyFile: string }): {
-  cert: string;
-  key: string;
-} {
-  if (!tls.certFile || !tls.keyFile) {
-    throw new Error('serve.tls requires both cert_file and key_file.');
-  }
-  const read = (path: string, label: 'cert_file' | 'key_file'): string => {
-    try {
-      const content = readFileSync(path, 'utf8');
-      if (content.trim().length === 0) throw new Error('file is empty');
-      return content;
-    } catch (error) {
-      const detail =
-        (error as NodeJS.ErrnoException).code ??
-        (error instanceof Error ? error.message : String(error));
-      throw new Error(`Failed to read TLS ${label} "${path}": ${detail}`);
-    }
-  };
-  return { cert: read(tls.certFile, 'cert_file'), key: read(tls.keyFile, 'key_file') };
-}
-
-/**
- * 归一化 CORS/WS Origin allowlist：只接受显式 http(s) origin。
- * 拒绝 `*`、path/query/hash/userinfo；保存 `URL.origin`（小写 host、去默认端口）。
- */
-export function normalizeAllowedOrigins(raw: string[] | undefined): string[] {
-  if (raw === undefined) return [];
-  if (!Array.isArray(raw)) {
-    throw new Error('allowedOrigins must be an array of explicit http(s) origins.');
-  }
-  const normalized = new Set<string>();
-  for (const value of raw) {
-    if (typeof value !== 'string') {
-      throw new Error('allowedOrigins must contain strings.');
-    }
-    const trimmed = value.trim();
-    if (trimmed === '' || trimmed === '*') {
-      throw new Error(
-        'allowedOrigins must contain explicit origins; wildcard ("*") is not allowed.',
-      );
-    }
-    let url: URL;
-    try {
-      url = new URL(trimmed);
-    } catch {
-      throw new Error(`Invalid allowed origin "${trimmed}": expected an absolute URL.`);
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error(`Invalid allowed origin "${trimmed}": only http(s) origins are allowed.`);
-    }
-    if (url.username !== '' || url.password !== '') {
-      throw new Error(`Invalid allowed origin "${trimmed}": credentials are not allowed.`);
-    }
-    if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
-      throw new Error(`Invalid allowed origin "${trimmed}": use scheme://host[:port] only.`);
-    }
-    normalized.add(url.origin);
-  }
-  return [...normalized];
-}
-
-/**
- * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
- * 其余指令保持 0.5 的基线。
- */
-export function buildContentSecurityPolicy(req: Request, allowedOrigins: string[]): string {
-  const sources = new Set<string>(["'self'"]);
-  const rawHost = req.headers.get('host');
-  // Host 会进入 CSP 指令；只接受常规 host[:port] 字符，防止指令注入。
-  const host = rawHost && /^[A-Za-z0-9.\-:[\]]+$/.test(rawHost) ? rawHost : null;
-  if (host) {
-    const secure = new URL(req.url).protocol === 'https:';
-    sources.add(`${secure ? 'wss' : 'ws'}://${host}`);
-  }
-  for (const origin of allowedOrigins) {
-    sources.add(origin);
-    try {
-      const url = new URL(origin);
-      sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
-    } catch {
-      // normalizeAllowedOrigins 已校验；防御性跳过非法值。
-    }
-  }
-  return (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-    `img-src 'self' data:; font-src 'self'; connect-src ${[...sources].join(' ')}; ` +
-    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
-  );
-}
 
 /** 方法级错误（映射到协议错误码） */
 class MethodError extends Error {
@@ -481,40 +377,6 @@ function parseSince(value: string | null): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-/** 判断 Host 是否指向回环地址（防 DNS rebinding） */
-function hostAllowed(req: Request, listenHost: string): boolean {
-  const host = req.headers.get('host');
-  if (!host) return true;
-  let hostname: string;
-  try {
-    hostname = new URL(`http://${host}`).hostname.toLowerCase();
-  } catch {
-    return false;
-  }
-  if (isLoopbackHostname(hostname)) return true;
-  // 通配绑定无法与 Host 精确比较；远程模式仍要求 token，浏览器 Origin 仍须同源。
-  if (isWildcardHostname(listenHost)) return true;
-  return hostname === listenHost.toLowerCase();
-}
-
-/** Origin 校验：无 Origin（curl / peer）放行；浏览器必须同源或在允许列表 */
-export function originAllowed(req: Request, allowedOrigins: string[]): boolean {
-  const origin = req.headers.get('origin');
-  if (!origin) return true;
-  let parsed: URL;
-  try {
-    parsed = new URL(origin);
-  } catch {
-    return false;
-  }
-  // 只接受浏览器 http(s) origin；file:// / opaque origin 一律拒绝。
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
-  if (allowedOrigins.includes(parsed.origin)) return true;
-  const host = req.headers.get('host');
-  if (!host) return false;
-  return parsed.host.toLowerCase() === host.toLowerCase();
-}
-
 /** 构造 JSON 响应 */
 function json(data: unknown, status = 200, extra: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(data), {
@@ -536,32 +398,6 @@ function errorJson(
   extra: Record<string, string> = {},
 ): Response {
   return json({ error: protocolError(code, message) }, status, extra);
-}
-
-/**
- * 允许列表命中时返回 CORS 头（同源不需要）。
- * allowlist 非空时所有响应都带 Vary: Origin，避免共享缓存把 A 的 ACAO 复用给 B。
- * 不使用 Access-Control-Allow-Credentials：鉴权走 Authorization，不依赖 cookie。
- */
-export function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
-  if (allowedOrigins.length === 0) return {};
-  const headers: Record<string, string> = { Vary: 'Origin' };
-  const origin = req.headers.get('origin');
-  if (!origin) return headers;
-  let normalized: string;
-  try {
-    normalized = new URL(origin).origin;
-  } catch {
-    return headers;
-  }
-  if (!allowedOrigins.includes(normalized)) return headers;
-  return {
-    ...headers,
-    'Access-Control-Allow-Origin': normalized,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Vessel-Protocol',
-    'Access-Control-Max-Age': '600',
-  };
 }
 
 /** 从请求体读取 JSON 对象（带大小上限） */
@@ -819,50 +655,37 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * 否则回落到本 gateway nodeId（顶层 node_id 字段保持兼容）。
    */
   function eventSourceNodeId(event: RunEvent): string {
-    const raw = (event as RunEvent & { node_id?: unknown }).node_id;
-    return typeof raw === 'string' && raw.length > 0 ? raw : nodeId;
+    return sourceNodeId(event, nodeId);
   }
 
   function eventFrame(item: SeqEvent): ServerFrame {
-    const jobId = coreToJob.get(item.event.run_id);
-    return {
-      v: 1,
-      kind: 'event',
-      node_id: eventSourceNodeId(item.event),
-      ts: Date.now(),
+    return buildEventFrame({
+      nodeId,
       seq: item.seq,
-      ...(jobId ? { job_id: jobId } : {}),
-      // A7：agent.* / team.* 的 data 在 gateway 边界映射为 snake_case
-      event: toWireEvent(item.event),
-    };
+      event: item.event,
+      jobId: coreToJob.get(item.event.run_id),
+    });
   }
 
   function helloFrame(fromSeq: number, tenantId?: string): ServerFrame {
-    const latest = buffer.latestSeq;
-    // from_seq = 本次回放的第一条 seq；空缓冲时为 0（此时 latest_seq 也是 0）。
-    // 已追平时为 since + 1（= latest + 1），表示「下一条期望序号」。
-    return {
-      v: 1,
-      kind: 'hello',
-      node_id: nodeId,
-      ts: Date.now(),
+    // 求值顺序与原实现一致：latest → ts → node → oldest。
+    const latestSeq = buffer.latestSeq;
+    const ts = Date.now();
+    const node = nodeInfo();
+    return buildHelloFrame({
+      nodeId,
       protocol: protocolInfo,
-      node: nodeInfo(),
-      from_seq: latest === 0 ? 0 : Math.max(fromSeq + 1, buffer.oldestSeq),
-      latest_seq: latest,
-      ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
-    };
+      node,
+      fromSeq,
+      latestSeq,
+      oldestSeq: buffer.oldestSeq,
+      tenantId,
+      ts,
+    });
   }
 
   function gapFrame(gap: EventGap): ServerFrame {
-    return {
-      v: 1,
-      kind: 'gap',
-      node_id: nodeId,
-      ts: Date.now(),
-      from_seq: gap.from_seq,
-      to_seq: gap.to_seq,
-    };
+    return buildGapFrame({ nodeId, gap });
   }
 
   function sendFrame(ws: Ws, frame: ServerFrame): boolean {
@@ -885,19 +708,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function sendResult(ws: Ws, id: string, ok: boolean, result?: unknown, error?: ProtocolError) {
-    if (ok) {
-      sendFrame(ws, { v: 1, kind: 'res', node_id: nodeId, ts: Date.now(), id, ok: true, result });
-      return;
-    }
-    sendFrame(ws, {
-      v: 1,
-      kind: 'res',
-      node_id: nodeId,
-      ts: Date.now(),
-      id,
-      ok: false,
-      error: error ?? protocolError('internal', 'Unknown error'),
-    });
+    sendFrame(ws, ok ? resultFrame({ nodeId, id, result }) : errorFrame({ nodeId, id, error }));
   }
 
   function wsAccepts(ws: Ws, event: RunEvent): boolean {
@@ -919,67 +730,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function flushWsGap(ws: Ws): void {
     const gap = ws.data.backpressure.takeGap(ws.getBufferedAmount());
     if (gap) sendFrame(ws, gapFrame(gap));
-  }
-
-  function sseInflight(ctrl: SseController, state: SseClientState): number {
-    const desired = ctrl.desiredSize;
-    const queued = typeof desired === 'number' ? Math.max(0, SSE_HIGH_WATER_FRAMES - desired) : 0;
-    return Math.max(queued, state.unacked);
-  }
-
-  function writeSse(ctrl: SseController, state: SseClientState, chunk: string): boolean {
-    try {
-      ctrl.enqueue(chunk);
-      state.unacked += 1;
-      return true;
-    } catch {
-      state.onClose?.();
-      return false;
-    }
-  }
-
-  function flushSseGap(ctrl: SseController, state: SseClientState): boolean {
-    const gap = state.backpressure.takeGap(sseInflight(ctrl, state));
-    if (!gap) return true;
-    return writeSse(ctrl, state, state.encodeGap(gap));
-  }
-
-  function sendGatedSse(
-    ctrl: SseController,
-    state: SseClientState,
-    seq: number,
-    chunk: string,
-  ): boolean {
-    if (ctrl.desiredSize === null) {
-      state.onClose?.();
-      return false;
-    }
-    const inflight = sseInflight(ctrl, state);
-    if (!state.backpressure.admit(seq, inflight)) return true;
-    if (!flushSseGap(ctrl, state)) return false;
-    return writeSse(ctrl, state, chunk);
-  }
-
-  /** 由 pull 驱动回放：每次只发 batch 条，慢客户端自然停在队列满时 */
-  function pumpSseReplay(ctrl: SseController, state: SseClientState): void {
-    const replay = state.replay;
-    if (!replay) return;
-    const historyGap = buffer.gapFor(replay.cursor - 1);
-    if (historyGap) {
-      if (!writeSse(ctrl, state, state.encodeGap(historyGap))) return;
-      replay.cursor = historyGap.to_seq + 1;
-    }
-    let sent = 0;
-    for (const item of buffer.since(replay.cursor - 1)) {
-      const desired = ctrl.desiredSize;
-      if (typeof desired === 'number' && desired <= 0) return;
-      replay.cursor = item.seq + 1;
-      if (!replay.accepts(item.event)) continue;
-      if (!sendGatedSse(ctrl, state, item.seq, replay.encode(item))) return;
-      sent += 1;
-      if (sent >= replay.batch) return;
-    }
-    if (replay.cursor > buffer.latestSeq) state.replay = undefined;
   }
 
   function broadcastEvent(item: SeqEvent): void {
@@ -2373,42 +2123,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return resolved;
   }
 
-  /** 静态资源响应（同源托管 apps/web/dist） */
-  async function serveStatic(pathname: string): Promise<Response | null> {
-    if (!opts.staticDir) return null;
-    const root = resolve(opts.staticDir);
-    let relative = pathname;
-    try {
-      relative = decodeURIComponent(pathname);
-    } catch {
-      return null;
-    }
-    relative = relative.replace(/^\/+/, '');
-    const target = resolve(root, relative || 'index.html');
-    if (target !== root && !target.startsWith(root + sep)) {
-      return new Response('Forbidden', { status: 403 });
-    }
-    const file = Bun.file(target);
-    if (await file.exists()) {
-      const stat = await file.stat();
-      if (!stat.isDirectory()) return fileResponse(file, target);
-    }
-    if (!extname(target)) {
-      const index = Bun.file(resolve(root, 'index.html'));
-      if (await index.exists()) return fileResponse(index, resolve(root, 'index.html'));
-    }
-    return null;
-  }
-
-  function fileResponse(file: Bun.BunFile, path: string): Response {
-    const isHtml = path.toLowerCase().endsWith('.html');
-    const headers: Record<string, string> = {
-      'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
-      'X-Content-Type-Options': 'nosniff',
-    };
-    return new Response(file, { headers });
-  }
-
   // ── R3 team 端点 ───────────────────────────────
 
   /** 发布 team/agent 事件（core 内部 camelCase；gateway 边界统一转 snake_case） */
@@ -2562,7 +2276,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         pull() {
           if (!controller || !state) return;
           state.unacked = 0;
-          pumpSseReplay(controller, state);
+          pumpSseReplay(controller, state, buffer);
           flushSseGap(controller, state);
         },
         cancel() {
@@ -3764,7 +3478,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         path === '/events' ||
         path === '/ws';
       if (!isApiPath && (req.method === 'GET' || req.method === 'HEAD')) {
-        const staticResponse = await serveStatic(path);
+        const staticResponse = await serveStatic(path, opts.staticDir);
         if (staticResponse) {
           const contentType = staticResponse.headers.get('content-type') ?? '';
           if (contentType.includes('text/html')) {
@@ -3867,7 +3581,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             pull() {
               if (!controller || !state) return;
               state.unacked = 0;
-              pumpSseReplay(controller, state);
+              pumpSseReplay(controller, state, buffer);
               flushSseGap(controller, state);
             },
             cancel() {
