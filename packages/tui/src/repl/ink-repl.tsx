@@ -933,6 +933,7 @@ function InkRepl({ ctx }: InkReplProps) {
           expandSignal={ui.expandSignal}
           onFlush={handleStreamFlush}
           onComplete={handleStreamComplete}
+          detailMode={state.toolDetailMode ?? 'collapsed'}
         />
         <SubagentActivity events={ctx.events} />
       </Box>

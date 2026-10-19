@@ -23,10 +23,22 @@ export interface DisplayOptions {
   expanded?: boolean;
 }
 
+/** 单行 trail 摘要（R0 §4.4） */
+export interface ToolTrailLine {
+  label: string;
+  detail: string;
+}
+
 /** 工具显示定义（ADR-021 §2） */
 export interface ToolDisplayDefinition {
   /** 用户可见名称；返回空串表示回退到原始 tool_name */
   userFacingName(input: unknown): string;
+  /** Tool trail 单行摘要；未提供时用参数 JSON 摘要 */
+  getTrailLine?(
+    input: unknown,
+    result: string | undefined,
+    status: 'running' | 'completed' | 'failed',
+  ): ToolTrailLine;
   /** 用户可见颜色（可选） */
   userFacingColor?(input: unknown): string | undefined;
   /** 工具调用消息渲染（React 节点） */
@@ -78,6 +90,7 @@ export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition & {
     );
   },
   getActivityDescription: () => null,
+  getTrailLine: (input) => ({ label: '', detail: summarizeArguments(input, 60) }),
   renderToolResultMessage: (result, options) => {
     const max = options.maxArgumentLength ?? DEFAULT_MAX_ARGUMENT_LENGTH;
     return <Text color={theme.muted}>{truncateString(result, max)}</Text>;
@@ -146,6 +159,12 @@ toolDisplayRegistry.register('bash', {
     const command = inputString(input, 'command');
     return command ? `Running: ${compact(command, 80)}` : 'Running shell command';
   },
+  getTrailLine: (input, result, status) => ({
+    label: 'bash',
+    detail: `${compact(inputString(input, 'command'), 60)}${
+      status === 'failed' ? '  FAILED' : result ? '  PASS' : ''
+    }`.trim(),
+  }),
   renderToolUseMessage: (input) => {
     const command = inputString(input, 'command');
     return <Text color={theme.muted}>{command ? ` $ ${compact(command, 160)}` : ''}</Text>;
@@ -166,6 +185,11 @@ toolDisplayRegistry.register('read', {
   getActivityDescription: (input) => {
     const path = inputString(input, 'path');
     return path ? `Reading ${path}` : 'Reading file';
+  },
+  getTrailLine: (input, result) => {
+    const path = inputString(input, 'path');
+    const lines = result ? result.split('\n').length : 0;
+    return { label: 'read', detail: lines > 0 ? `${path}  ${lines} lines` : path };
   },
   renderToolUseMessage: (input) => {
     const path = inputString(input, 'path');
@@ -249,6 +273,19 @@ toolDisplayRegistry.register('edit', {
     const path = inputString(input, 'path');
     return path ? `Editing ${path}` : 'Editing file';
   },
+  getTrailLine: (input) => {
+    const path = inputString(input, 'path');
+    const added = inputString(input, 'new_string')
+      ? inputString(input, 'new_string').split('\n').length
+      : 0;
+    const removed = inputString(input, 'old_string')
+      ? inputString(input, 'old_string').split('\n').length
+      : 0;
+    return {
+      label: 'edit',
+      detail: added || removed ? `${path}  +${added} −${removed}` : path,
+    };
+  },
   renderToolUseMessage: (input) => {
     const path = inputString(input, 'path');
     return <Text color={theme.muted}>{path ? ` ${path}` : ''}</Text>;
@@ -267,6 +304,10 @@ toolDisplayRegistry.register('delegate_task', {
     const task = inputString(input, 'task');
     return task ? `Delegating: ${compact(task, 80)}` : 'Delegating subtask';
   },
+  getTrailLine: (input) => ({
+    label: 'delegate',
+    detail: compact(inputString(input, 'task'), 60),
+  }),
   renderToolUseMessage: (input) => {
     const task = inputString(input, 'task');
     return <Text color={theme.muted}>{task ? ` ${compact(task, 160)}` : ''}</Text>;
@@ -280,6 +321,7 @@ toolDisplayRegistry.register('delegate_task', {
 toolDisplayRegistry.register('ask_user', {
   userFacingName: () => 'ask_user',
   getActivityDescription: () => 'Asking user',
+  getTrailLine: () => ({ label: 'ask_user', detail: '' }),
   renderToolUseMessage: () => <Text color={theme.muted} />,
   renderToolResultMessage: (result, options) => (
     <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 120)}</Text>

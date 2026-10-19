@@ -31,6 +31,7 @@ import { capabilitiesCommand } from './capabilities-command.js';
 import { configCommand } from './config-command.js';
 import { compactCommand, contextCommand } from './context-command.js';
 import { costCommand } from './cost-command.js';
+import { detailsCommand } from './details-command.js';
 import { exportCommand } from './export-command.js';
 import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
@@ -53,6 +54,8 @@ import { workflowsCommand } from './workflows-command.js';
 // ── 类型 ──────────────────────────────────────────
 
 /** REPL 运行态--命令只读，execute 按 nextState 统一应用 */
+export type ToolDetailMode = 'hidden' | 'collapsed' | 'expanded';
+
 export interface ReplState {
   /** 当前会话 ID--/new、/resume 会改；chat 传它给 runtime.run() */
   currentSessionId: string;
@@ -66,6 +69,8 @@ export interface ReplState {
   showReasoning?: boolean;
   /** 成功压缩次数（状态规则展示；0/缺失不显示） */
   compactions?: number;
+  /** Tool trail 三态；缺失按 collapsed */
+  toolDetailMode?: ToolDetailMode;
 }
 
 /** 命令执行结果 */
@@ -241,6 +246,7 @@ export function createCommands(): CommandRegistry {
   reg.register(sessionsCommand());
   reg.register(contextCommand());
   reg.register(compactCommand());
+  reg.register(detailsCommand());
   reg.register(permissionsCommand());
   reg.register(exportCommand());
   reg.register(costCommand());
