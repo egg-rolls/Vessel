@@ -63,6 +63,7 @@ import {
   hasPermission,
   type RpcDispatcher,
   RpcError,
+  type RpcErrorBody,
   type RpcMethodContext,
   type RpcMethodDefinition,
   type RpcRequest,
@@ -1715,13 +1716,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
           tenant_id: { type: 'string' },
         },
       },
-      handler: (params) => {
+      handler: (params, ctx) => {
         const requestId = stringParam(params, 'request_id');
         const decision = params.decision;
         if (decision !== 'allow' && decision !== 'deny') {
           throw new RpcError('invalid_params', "decision must be 'allow' or 'deny'");
         }
-        respondPermission(requestId, decision, params.remember === true);
+        respondPermission(requestId, decision, params.remember === true, ctx.tenantId);
         return { ok: true };
       },
     },
@@ -1737,12 +1738,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
           tenant_id: { type: 'string' },
         },
       },
-      handler: (params) => {
+      handler: (params, ctx) => {
         const answers = params.answers;
         if (!Array.isArray(answers)) {
           throw new RpcError('invalid_params', 'answers must be an array');
         }
-        respondAsk(stringParam(params, 'request_id'), answers);
+        respondAsk(stringParam(params, 'request_id'), answers, ctx.tenantId);
         return { ok: true };
       },
     },
@@ -2002,65 +2003,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return capabilityManifest;
   };
 
-  async function dispatchMethod(method: string, rawParams: unknown): Promise<unknown> {
-    const params =
-      rawParams && typeof rawParams === 'object' && !Array.isArray(rawParams)
-        ? (rawParams as Record<string, unknown>)
-        : {};
-    switch (method) {
-      case 'run.submit':
-        return submitRun(params);
-      case 'run.cancel': {
-        const id = params.run_id;
-        if (typeof id !== 'string') throw new MethodError('invalid_request', 'run_id is required');
-        return { cancelled: cancelRun(id) };
-      }
-      case 'run.get': {
-        const id = params.run_id;
-        if (typeof id !== 'string') throw new MethodError('invalid_request', 'run_id is required');
-        const record = runs.get(id);
-        if (!record) throw new MethodError('not_found', `Run not found: ${id}`);
-        return publicStatus(record);
-      }
-      case 'sessions.list':
-        return listSessions();
-      case 'tools.list':
-        return toolsPayload();
-      case 'permission.respond': {
-        const requestId = params.request_id;
-        if (typeof requestId !== 'string') {
-          throw new MethodError('invalid_request', 'request_id is required');
-        }
-        const decision = params.decision;
-        if (decision !== 'allow' && decision !== 'deny') {
-          throw new MethodError('invalid_request', "decision must be 'allow' or 'deny'");
-        }
-        respondPermission(requestId, decision, params.remember === true);
-        return { ok: true };
-      }
-      case 'ask.respond': {
-        const requestId = params.request_id;
-        if (typeof requestId !== 'string') {
-          throw new MethodError('invalid_request', 'request_id is required');
-        }
-        const answers = params.answers;
-        if (!Array.isArray(answers)) {
-          throw new MethodError('invalid_request', 'answers must be an array');
-        }
-        respondAsk(requestId, answers);
-        return { ok: true };
-      }
-      case 'team.nodes':
-      case 'team.dispatch':
-      case 'team.task':
-      case 'team.cancel':
-        throw new MethodError(
-          'method_not_allowed',
-          'Team protocol is 0.2 (not implemented in 0.1.0)',
-        );
-      default:
-        throw new MethodError('method_not_allowed', `Unknown method: ${method}`);
+  /**
+   * P0-1：0.x legacy WS 方法 → canonical 方法名。
+   * 统一交给 dispatcher，保证 principal / tenant / 权限检查与 HTTP RPC 一致。
+   */
+  const LEGACY_WS_METHOD_MAP: Readonly<Record<string, string>> = {
+    'run.submit': 'runs.start',
+    'run.get': 'runs.get',
+    'run.cancel': 'runs.cancel',
+    'permission.respond': 'permission.respond',
+    'ask.respond': 'ask.respond',
+  };
+
+  /** canonical 错误码 → 0.4 legacy 错误码（保持旧客户端契约）。 */
+  function legacyResponseCode(error: RpcErrorBody): ProtocolError['code'] {
+    const details = error.details as { legacy_code?: unknown } | undefined;
+    if (details && typeof details.legacy_code === 'string') {
+      return details.legacy_code as ProtocolError['code'];
     }
+    if (error.code === 'invalid_params') return 'invalid_request';
+    if (error.code === 'conflict') return 'busy';
+    return error.code as ProtocolError['code'];
   }
 
   async function handleWsMessage(ws: Ws, raw: string | Buffer): Promise<void> {
@@ -2126,34 +2089,49 @@ export function startGateway(opts: GatewayOptions): Gateway {
       sendResult(ws, '', false, undefined, protocolError('invalid_request', 'Expected req frame'));
       return;
     }
-    const legacyMethod =
-      frame.method === 'run.submit' ||
-      frame.method === 'run.get' ||
-      frame.method === 'run.cancel' ||
-      frame.method === 'permission.respond' ||
-      frame.method === 'ask.respond' ||
-      frame.method.startsWith('team.');
+    if (frame.method.startsWith('team.')) {
+      sendResult(
+        ws,
+        frame.id,
+        false,
+        undefined,
+        protocolError('method_not_allowed', 'Team protocol is 0.2 (not implemented in 0.1.0)'),
+      );
+      return;
+    }
 
-    if (legacyMethod) {
-      try {
-        const result = await dispatchMethod(frame.method, frame.params);
-        sendResult(ws, frame.id, true, result);
-      } catch (error) {
-        if (error instanceof RpcError) {
-          sendResult(
-            ws,
-            frame.id,
-            false,
-            undefined,
-            protocolError(legacyProtocolCode(error), error.message),
-          );
-        } else if (error instanceof MethodError) {
-          sendResult(ws, frame.id, false, undefined, protocolError(error.code, error.message));
-        } else {
-          const message = error instanceof Error ? error.message : String(error);
-          sendResult(ws, frame.id, false, undefined, protocolError('internal', message));
-        }
+    const legacyMethod = LEGACY_WS_METHOD_MAP[frame.method];
+    if (legacyMethod !== undefined) {
+      const legacyRequest: RpcRequest = {
+        v: 1,
+        id: typeof frame.id === 'string' ? frame.id : '',
+        method: legacyMethod,
+        ...(frame.params !== undefined ? { params: frame.params } : {}),
+      };
+      const response = await dispatcher.dispatchFor(
+        legacyRequest,
+        ws.data.principal ?? localPrincipal,
+        'ws',
+      );
+      if (!response.ok) {
+        sendResult(
+          ws,
+          frame.id,
+          false,
+          undefined,
+          protocolError(legacyResponseCode(response.error), response.error.message),
+        );
+        return;
       }
+      // Web `getRun` 现有契约是裸 RunStatus；canonical runs.get 返回 { run }。
+      const result =
+        frame.method === 'run.get' &&
+        response.result !== null &&
+        typeof response.result === 'object' &&
+        'run' in response.result
+          ? (response.result as { run: unknown }).run
+          : response.result;
+      sendResult(ws, frame.id, true, result);
       return;
     }
 
@@ -2192,16 +2170,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         protocolError(response.error.code as ProtocolError['code'], response.error.message),
       );
     }
-  }
-
-  function legacyProtocolCode(error: RpcError): ProtocolError['code'] {
-    const details = error.details as { legacy_code?: unknown } | undefined;
-    if (details && typeof details.legacy_code === 'string') {
-      return details.legacy_code as ProtocolError['code'];
-    }
-    if (error.code === 'invalid_params') return 'invalid_request';
-    if (error.code === 'conflict') return 'busy';
-    return error.code as ProtocolError['code'];
   }
 
   function applyWsSubscribe(ws: Ws, raw: unknown): void {

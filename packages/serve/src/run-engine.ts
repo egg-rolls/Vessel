@@ -74,8 +74,13 @@ export interface RunEngine {
   get(id: string): RunRecord | undefined;
   /** 已受理（queued/running）的 run 数，quota 同步检查用 */
   activeCount(tenantId: string): number;
-  respondPermission(requestId: string, decision: 'allow' | 'deny', remember: boolean): void;
-  respondAsk(requestId: string, answers: unknown[]): void;
+  respondPermission(
+    requestId: string,
+    decision: 'allow' | 'deny',
+    remember: boolean,
+    tenantId?: string,
+  ): void;
+  respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
   reserveWorkflowResume(runId: string): boolean;
@@ -311,13 +316,27 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     }
   }
 
+  /**
+   * 交互请求归属校验：传入 tenantId 时，run 必须属于该 tenant（P0-1）。
+   * pending 里记录的是 core run_id；先经 coreToJob 映射到 gateway run 记录。
+   */
+  function interactionBelongsToTenant(coreRunId: string, tenantId: string): boolean {
+    const jobId = coreToJob.get(coreRunId) ?? coreRunId;
+    const owner = runs.get(jobId);
+    return owner !== undefined && owner.tenant_id === tenantId;
+  }
+
   function respondPermission(
     requestId: string,
     decision: 'allow' | 'deny',
     remember: boolean,
+    tenantId?: string,
   ): void {
     const pending = pendingPermissions.get(requestId);
     if (!pending) {
+      throw new RpcError('not_found', `Permission request not found: ${requestId}`);
+    }
+    if (tenantId !== undefined && !interactionBelongsToTenant(pending.run_id, tenantId)) {
       throw new RpcError('not_found', `Permission request not found: ${requestId}`);
     }
     events.publish({
@@ -329,9 +348,12 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     pendingPermissions.delete(requestId);
   }
 
-  function respondAsk(requestId: string, answers: unknown[]): void {
+  function respondAsk(requestId: string, answers: unknown[], tenantId?: string): void {
     const pending = pendingAsks.get(requestId);
     if (!pending) throw new RpcError('not_found', `Ask request not found: ${requestId}`);
+    if (tenantId !== undefined && !interactionBelongsToTenant(pending.run_id, tenantId)) {
+      throw new RpcError('not_found', `Ask request not found: ${requestId}`);
+    }
     events.publish({
       type: 'ask.user.answered',
       run_id: pending.run_id,
