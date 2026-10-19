@@ -1364,3 +1364,51 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 
 - MCP client 增加 `resources/list|read` 与 prompts 列表（仍不做 OAuth）。
 - basic-tools 超大结果落盘到 `VESSEL_TOOL_OUTPUT_DIR`（缺省 `VESSEL_DATA_DIR/tool-output`，再缺省 `~/.vessel/data/tool-output`）的 per-session 子目录，并回路径。
+
+## 19. 0.7 CLI/TUI 前端对齐（已实现）
+
+> 状态：**已实现，未发布**；冻结契约见 DECISION-016。本节只描述 CLI/TUI 的用户可见接口；
+> runtime / RPC / 插件语义零改动（E9/E16）。
+
+### 19.1 `VESSEL_INDICATOR`：思考指示器风格
+
+环境变量，取值 `unicode` | `ascii` | `emoji` | `kaomoji`，缺省 `unicode`。
+无效值、空值一律回退 `unicode`；实现为纯函数 `resolveIndicatorStyle`
+（`packages/tui/src/components/indicator.ts`），消费者是 `SpinnerWithVerb`
+（`packages/tui/src/components/SpinnerWithVerb.tsx`），组件实例挂载时读取一次，
+运行中修改环境变量需重启 REPL 才生效。
+
+| 取值 | 帧 | 帧间隔 |
+|---|---|---|
+| `unicode`（默认） | `⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏` | 80ms |
+| `ascii` | `\|` `/` `-` `\` | 100ms |
+| `emoji` | `⚙ 🌀 🤔 ✨ 🍵 🔮` | 600ms |
+| `kaomoji` | 6 个颜文字帧（`(・_・)` 等） | 2500ms |
+
+- 只影响 thinking / tool 态的前缀帧；`idle` 固定显示 `○ idle`。
+- thinking 态文案仍按 2500ms 轮换动词（`thinking` / `reading` / `editing` / `running` /
+  `planning` / `checking`），与 `VESSEL_INDICATOR` 无关。
+- thinking 态最少显示 2 秒（ADR-022），风格切换不改变该规则。
+
+### 19.2 `/details [hidden|collapsed|expanded]`
+
+Tool trail 详细程度，默认 `collapsed`；实现在
+`packages/tui/src/commands/details-command.ts`，取值写入 `ReplState.toolDetailMode`，
+只影响当前进程的渲染，不写入配置文件。
+
+- 无参数：打印当前值，例如 `Tool trail: collapsed (hidden | collapsed | expanded)`。
+- 合法值：写入状态并回显 `Tool trail: <mode>.`。
+- 非法值：回显 `Unknown mode: <value>. Usage: /details [hidden|collapsed|expanded]`，
+  **不改变**当前状态。
+- 语义（`packages/tui/src/components/ToolTrail.tsx`）：
+  - `hidden`：不渲染 trail；
+  - `collapsed`：渲染头行 + 最近 1 个工具调用；
+  - `expanded`：渲染头行 + 最近至多 8 个工具调用，更早的折叠为 `…and N earlier`。
+- 头行为 `✓` / `●` / `✗ tools (N) · <耗时>`（完成 / 运行中 / 失败），失败项附
+  `FAILED` 摘要；只聚合一轮内连续的工具段，文本段顺序不变。
+
+### 19.3 `ReplContext.version`
+
+`ReplContext.version?: string` 为可选字段，由装配层 `src/bootstrap.ts` 注入根
+`package.json` 的版本号；TUI 仅在启动头展示（`VESSEL · vX`），缺失时退化为 `VESSEL`，
+不参与任何 runtime / RPC 语义。
