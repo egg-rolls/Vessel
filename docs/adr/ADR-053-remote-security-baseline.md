@@ -24,3 +24,11 @@ tags: [security, tls, cors, tenancy]
 - **备选**：(a) 允许 `*` CORS 简化独立前端——会让任意站点携带用户凭据访问 gateway，不取；(b) token 放 URL query 便于 WS 握手——进入日志、代理与浏览器历史，不取；(c) 用 mTLS 替代 bearer token——证书分发与运维成本超出 0.6 范围；(d) 信任 `X-Forwarded-*`——在无受控反代时可直接伪造。均不取。
 - **后果**：独立前端部署需要显式配置 Origin 与（非回环时）TLS；不满足基线的连接直接失败。安全不变量在 HTTP、WS、RPC、跨节点与浏览器五条路径上统一，代价是部署配置更多、错误信息必须可诊断。
 - **关联**：ADR-036（gateway 默认安全）、ADR-041（远程监听与 TLS）、ADR-048（RPC 鉴权与错误码）、ADR-049（tenant / principal）、ADR-050（密钥分层）、ADR-051（远程控制面）、ADR-052（跨节点 transport）；DECISION-014 §2、§3、§4.3–§4.5。
+
+## Addendum（0.6.1，计划中）
+
+- **durable 控制面纳入 principal**：`/v1/durable/*` 接收 token principal；list 按 tenant 过滤；非 default tenant 且无 per-tenant store 时返回 `forbidden`；resume 要求 `write` 及以上。与 §6 的 tenant principal 规则一致。
+- **team REST 复用 `ROLE_RANK`**：`GET` 允许 `read`；spawn / send / cancel / close 要求 `write` / `admin`。REST 与 RPC 的鉴权判定必须一致，不保留“default tenant 放行一切角色”的旁路。
+- **跨节点事件来源抑制**：回灌时丢弃 `event.node_id === 本机 node_id` 的帧；事件来源仍由 token + TLS 边界信任，不引入逐事件签名。
+- **远端 spawn 隔离**：远端 `team_spawn` 复用 `buildChildHost`（剔除 `team_*`）并传 `memberLimits` / `memberTermination`，与本机 spawn 一致。
+- 以上均为对既有安全基线的补齐，不改变 §1–§9 的 TLS / Origin / WS 首帧 / 请求体上限规则。

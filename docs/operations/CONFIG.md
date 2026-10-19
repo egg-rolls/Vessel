@@ -73,7 +73,49 @@ tenant overlay 允许的顶层块：`provider / agent / context / limits / termi
 session / plugins / workflow / evals / feishu / tools / mcp_servers / delegate /
 team / host / scheduler / transport / quota`。禁止 `data_dir / trace / serve /
 tenant / update`；未知块直接报错。合并规则：对象深合并、数组整体替换、map
-（`mcp_servers`、`plugins`）按 key/name 合并、`null` 拒绝。
+（`mcp_servers`）按 key 合并、`null` 拒绝。`plugins` 是**数组**，按整层替换，
+不按 `name` 合并。
+
+### 2.1 0.6.1 新增配置（计划中，冻结契约见 DECISION-015）
+
+> 代码合入前按“计划中”标注；合入后改为“已实现”。
+
+```yaml
+permission:
+  autoApprove: [bash, edit]     # 工具名精确匹配；替代 bootstrap 里硬编码的 ['ask_user']
+
+plugins:
+  - name: tool-policy
+    enabled: true
+    config:                     # 传给 Plugin.install(host, { config })
+      allow: [bash, read, edit]
+  - name: redact-secrets
+    enabled: true
+    config:
+      patterns: []
+
+session:
+  backend: file
+  # storage_path: /shared/sessions   # 多 tenant 下会告警；file 后端仍按 tenant 隔离
+```
+
+- `permission.autoApprove`：`string[]`，按工具名精确匹配；TUI 权限弹窗选 `always`
+  时写回用户 YAML。缺省值为空（交互仍逐个询问）；`ask_user` 由装配层始终放行。
+- `plugins[].config`：`Record<string, unknown>`，原样传给 `install(host, { config })`；
+  未声明 `config` 时按 `install(host)` 调用，旧插件不受影响。
+- 插件目录：仓库 `plugins/`、用户 `~/.vessel/plugins/`（Windows
+  `%USERPROFILE%\.vessel\plugins\`）、项目 `./.vessel/plugins/`；启动时各扫描一次，
+  新增插件仍需重启。安装 / 卸载只接受本地目录，不做远程市场：
+
+```bash
+vessel plugin list
+vessel plugin install <path>
+vessel plugin remove <name>
+```
+
+- 环境变量覆盖（0.6.1 新增）：`VESSEL_PLUGINS`（逗号分隔的插件名列表）、
+  `VESSEL_SESSION_BACKEND`（`file|sqlite|memory`）、`VESSEL_MODEL`（覆盖
+  `provider.model`）。优先级仍为 `CLI > env > tenant overlay > project > user > default`。
 
 ## 3. 密钥与 `_env`
 
