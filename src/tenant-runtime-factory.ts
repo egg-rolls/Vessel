@@ -63,6 +63,12 @@ import {
   disposeMetrics,
   type MetricsFactory,
 } from './observability-wiring';
+import {
+  buildTeamMemberHost,
+  declarativePluginEntries,
+  pluginConfigFor,
+  withPluginConfig,
+} from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { createProvider } from './provider-factory';
@@ -252,10 +258,12 @@ export async function buildTenantRuntime(
     });
 
     // ── 插件 ──────────────────────────────────────
+    const declarativePlugins = declarativePluginEntries(config);
     const defaultPluginNames = resolvePluginNames(
       loader,
       config.plugins,
       Boolean(process.env.VESSEL_DEBUG),
+      declarativePlugins,
     );
 
     const plugins: Plugin[] = [];
@@ -268,7 +276,10 @@ export async function buildTenantRuntime(
       const category = descriptor?.category ?? 'unknown';
       const plugin = await loader.load(name);
       if (plugin) {
-        plugins.push(plugin);
+        // E1：plugins[].config / 声明式 guardrails+hooks → install(host,{config})
+        plugins.push(
+          withPluginConfig(plugin, pluginConfigFor(name, config.plugins, declarativePlugins)),
+        );
         pluginLoadEvents.push({
           type: 'plugin.loaded',
           data: {
@@ -388,7 +399,8 @@ export async function buildTenantRuntime(
     const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
     const permission = {
       default: headless ? ('allow' as const) : ('ask' as const),
-      autoApprove: ['ask_user'],
+      // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
+      autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
     };
 
     let runtime: RunnableAgent | undefined;
@@ -450,13 +462,24 @@ export async function buildTenantRuntime(
         host = hostResult.host;
         selectedPluginHost = hostPluginHost;
         const selectedHost = hostResult.host;
+        // E10：跨节点 spawn 与本机 spawn 使用同一成员隔离与限额。
+        const memberLimits = config.team?.memberLimits;
+        const memberTermination = config.team?.memberTermination
+          ? {
+              maxIterations: config.team.memberTermination.maxIterations ?? 10,
+              maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+            }
+          : undefined;
         spawnAgent = async (request) => {
           const handle = await selectedHost.spawn({
             provider,
             model: request.model ?? providerModel,
-            pluginHost: hostPluginHost,
+            // 成员不能反向调用 team_*（复用 ext 的 buildChildHost）。
+            pluginHost: buildTeamMemberHost(hostPluginHost),
             ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
             ...(request.name !== undefined ? { name: request.name } : {}),
+            ...(memberLimits ? { limits: { run: memberLimits } } : {}),
+            ...(memberTermination ? { termination: memberTermination } : {}),
           });
           return handle.status();
         };

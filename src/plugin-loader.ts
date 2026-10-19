@@ -1,19 +1,34 @@
 /**
- * 插件加载器 —— 运行时扫描 `plugins/<category>/<name>/` 并动态 import 入口。
+ * 插件加载器 —— 运行时扫描插件目录并动态 import 入口。
  *
- * 这是唯一的插件发现机制。此前并存四套（构建时生成的注册表 / 手维护的静态映射表 /
- * 用户目录扫描 / vessel.yaml 声明式连接），已合并到这里（ADR-028 的运行时扫描）。
+ * 扫描顺序（同名插件先出现者胜出）：
+ *   1. 仓库内 `plugins/<category>/<name>/`（内置插件，权威）；
+ *   2. 用户目录 `~/.vessel/plugins/`（扁平 `<name>/` 或 `<category>/<name>/`）；
+ *   3. 项目目录 `./.vessel/plugins/`（同上）；
+ *   4. `node_modules/@vessel/*`（仓库根与 cwd；跳过 core/config/tui/serve/permission）。
  *
- * 放一个 `plugins/<category>/<name>/package.json` + `src/index.ts` 即注册，
+ * 放一个 `package.json` + 入口（`src/index.ts`，或 package.json 的 exports/main）即注册，
  * 无需改代码、无需构建步骤。默认导出须是 `Plugin`（含 `install()`）。
+ *
+ * 插件目录在进程启动时扫描一次（结果缓存），安装/移除后需重启进程。
  */
 
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Plugin } from '../packages/core/src/index';
 
 const PLUGINS_DIR = fileURLToPath(new URL('../plugins', import.meta.url));
+
+/** 非插件 workspace 包：即使出现在 `node_modules/@vessel` 也不注册 */
+const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([
+  'core',
+  'config',
+  'tui',
+  'serve',
+  'permission',
+]);
 
 /**
  * 默认导出是**工厂函数**而非 Plugin 实例的插件——它们需要装配层注入运行时依赖
@@ -28,15 +43,35 @@ export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
   'feishu',
 ]);
 
+/** 插件来源 */
+export type PluginSource = 'repo' | 'user' | 'project' | 'node_modules';
+
+/** 扫描根 */
+export interface PluginRoot {
+  dir: string;
+  source: PluginSource;
+  /** category = `<category>/<name>`；flat = `<name>`；auto = 两者都试 */
+  layout: 'category' | 'flat' | 'auto';
+}
+
+/** 加载器选项（测试可注入 roots） */
+export interface PluginLoaderOptions {
+  repoDir?: string;
+  /** 显式扫描根；提供时忽略其它选项 */
+  roots?: PluginRoot[];
+}
+
 export interface PluginDescriptor {
   /** 短名（package.json name 去掉 scope），即调用 `load()` 时用的 key */
   name: string;
-  /** 分类目录名：`plugins/<category>/<name>/` */
+  /** 分类目录名（仓库内）或来源标签（用户/项目/node_modules） */
   category: string;
   version: string;
   description?: string;
   /** 模块入口的绝对路径 */
   entry: string;
+  /** 0.6.1：插件来源 */
+  source: PluginSource;
 }
 
 /** 读取目录下的子目录名；目录不存在返回空 */
@@ -51,18 +86,136 @@ function readDirs(dir: string): string[] {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 从 package.json 解析入口；找不到返回 null */
+function resolveEntry(base: string, pkg: Record<string, unknown>): string | null {
+  const candidates: string[] = [];
+  const exportsField = pkg.exports;
+  if (typeof exportsField === 'string') {
+    candidates.push(exportsField);
+  } else if (isRecord(exportsField)) {
+    const dot = exportsField['.'];
+    if (typeof dot === 'string') {
+      candidates.push(dot);
+    } else if (isRecord(dot)) {
+      for (const key of ['bun', 'import', 'default', 'require']) {
+        const value = dot[key];
+        if (typeof value === 'string') candidates.push(value);
+      }
+    }
+  }
+  if (typeof pkg.module === 'string') candidates.push(pkg.module);
+  if (typeof pkg.main === 'string') candidates.push(pkg.main);
+  candidates.push('src/index.ts', 'index.ts');
+
+  for (const candidate of candidates) {
+    const resolved = path.resolve(base, candidate);
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) return resolved;
+  }
+  return null;
+}
+
+/** 读取单个插件目录；不合格返回 null */
+function readPlugin(base: string, category: string, source: PluginSource): PluginDescriptor | null {
+  const pkgPath = path.join(base, 'package.json');
+  if (!fs.existsSync(pkgPath)) return null;
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as Record<string, unknown>;
+    const entry = resolveEntry(base, pkg);
+    if (!entry) return null;
+    const rawName = typeof pkg.name === 'string' ? pkg.name : '';
+    const shortName = rawName.replace(/^@[^/]+\//, '') || path.basename(base);
+    if (source === 'node_modules' && NON_PLUGIN_PACKAGES.has(shortName)) return null;
+    return {
+      name: shortName,
+      category,
+      version: typeof pkg.version === 'string' ? pkg.version : '0.0.0',
+      ...(typeof pkg.description === 'string' ? { description: pkg.description } : {}),
+      entry,
+      source,
+    };
+  } catch {
+    // 坏的 package.json，跳过
+    return null;
+  }
+}
+
+/** 扫描一个根；支持 category/flat/auto 三种布局 */
+function scanRoot(root: PluginRoot): PluginDescriptor[] {
+  const out: PluginDescriptor[] = [];
+  const top = readDirs(root.dir);
+
+  for (const child of top) {
+    const childDir = path.join(root.dir, child);
+    const isPlugin = fs.existsSync(path.join(childDir, 'package.json'));
+
+    if (root.layout === 'flat' || (root.layout === 'auto' && isPlugin)) {
+      const descriptor = readPlugin(childDir, root.source, root.source);
+      if (descriptor) out.push(descriptor);
+      continue;
+    }
+
+    if (root.layout === 'category' || root.layout === 'auto') {
+      for (const nested of readDirs(childDir)) {
+        const descriptor = readPlugin(path.join(childDir, nested), child, root.source);
+        if (descriptor) out.push(descriptor);
+      }
+    }
+  }
+
+  return out;
+}
+
+/** 默认扫描根；同名去重由 `PluginLoader.scan()` 负责 */
+export function defaultPluginRoots(repoDir: string = PLUGINS_DIR): PluginRoot[] {
+  const repoRoot = path.dirname(repoDir);
+  const roots: PluginRoot[] = [
+    { dir: repoDir, source: 'repo', layout: 'category' },
+    { dir: path.join(os.homedir(), '.vessel', 'plugins'), source: 'user', layout: 'auto' },
+    { dir: path.join(process.cwd(), '.vessel', 'plugins'), source: 'project', layout: 'auto' },
+    {
+      dir: path.join(repoRoot, 'node_modules', '@vessel'),
+      source: 'node_modules',
+      layout: 'flat',
+    },
+    {
+      dir: path.join(process.cwd(), 'node_modules', '@vessel'),
+      source: 'node_modules',
+      layout: 'flat',
+    },
+  ];
+
+  const seen = new Set<string>();
+  return roots.filter((root) => {
+    const key = path.resolve(root.dir);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 /**
  * 插件加载器。扫描结果缓存一次——插件目录在进程生命周期内不变。
  */
 export class PluginLoader {
-  private readonly dir: string;
+  private readonly roots: PluginRoot[];
   private cached?: PluginDescriptor[];
 
-  constructor(dir: string = PLUGINS_DIR) {
-    this.dir = dir;
+  constructor(options: PluginLoaderOptions | string = {}) {
+    if (typeof options === 'string') {
+      this.roots = [{ dir: options, source: 'repo', layout: 'category' }];
+    } else if (options.roots !== undefined) {
+      this.roots = options.roots;
+    } else {
+      this.roots = defaultPluginRoots(options.repoDir);
+    }
   }
 
-  /** 全部插件（含 provider 与工厂式），按名字排序 */
+  /** 全部插件（含 provider 与工厂式），按名字排序；同名先出现者胜出 */
   list(): PluginDescriptor[] {
     this.cached ??= this.scan();
     return this.cached;
@@ -119,35 +272,15 @@ export class PluginLoader {
   }
 
   private scan(): PluginDescriptor[] {
-    const descriptors: PluginDescriptor[] = [];
+    const byName = new Map<string, PluginDescriptor>();
 
-    for (const category of readDirs(this.dir)) {
-      for (const pluginDir of readDirs(path.join(this.dir, category))) {
-        const base = path.join(this.dir, category, pluginDir);
-        const pkgPath = path.join(base, 'package.json');
-        const entry = path.join(base, 'src', 'index.ts');
-        if (!fs.existsSync(pkgPath) || !fs.existsSync(entry)) continue;
-
-        try {
-          const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
-            name?: string;
-            version?: string;
-            description?: string;
-          };
-          descriptors.push({
-            // `@vessel/delegate-task` → `delegate-task`
-            name: (pkg.name ?? '').replace(/^@[^/]+\//, '') || pluginDir,
-            category,
-            version: pkg.version ?? '0.0.0',
-            description: pkg.description,
-            entry,
-          });
-        } catch {
-          // 坏的 package.json，跳过
-        }
+    for (const root of this.roots) {
+      for (const descriptor of scanRoot(root)) {
+        // 仓库内插件优先；用户/项目/node_modules 同名不覆盖内置插件。
+        if (!byName.has(descriptor.name)) byName.set(descriptor.name, descriptor);
       }
     }
 
-    return descriptors.sort((a, b) => a.name.localeCompare(b.name));
+    return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
   }
 }

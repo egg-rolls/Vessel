@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 import { type RunEvent, resolveTenantPaths } from '../../packages/core/src/index';
 import { bootstrap } from '../bootstrap';
 import type { RpcClient } from '../rpc/index';
@@ -242,6 +243,73 @@ describe('bootstrap 0.5 - rpc injection', () => {
     }
   });
 
+  it('connect 模式：-c 经 sessions.list 选择最近非空会话（E8）', async () => {
+    const dataDir = tempDir();
+    const calls: string[] = [];
+    const stub = {
+      request: async <T = unknown>(method: string): Promise<T> => {
+        calls.push(method);
+        if (method === 'health.get') return { tenant_id: 'default' } as T;
+        if (method === 'sessions.list') {
+          return {
+            sessions: [
+              { session_id: 's-old', updated_at: 1, message_count: 2 },
+              { session_id: 's-new', updated_at: 2, message_count: 3 },
+              { session_id: 's-empty', updated_at: 9, message_count: 0 },
+            ],
+          } as T;
+        }
+        return { version: 'stub', methods: [] } as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      connect: 'http://127.0.0.1:1',
+      continueLatest: true,
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      expect(result.ctx.currentSessionId).toBe('s-new');
+      expect(calls).toContain('sessions.list');
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('connect 模式：-r <id> 先用 sessions.get 校验（E8）', async () => {
+    const dataDir = tempDir();
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const stub = {
+      request: async <T = unknown>(method: string, params?: unknown): Promise<T> => {
+        calls.push({ method, params });
+        if (method === 'health.get') return { tenant_id: 'default' } as T;
+        if (method === 'sessions.get') return { session: { messages: [] } } as T;
+        return { version: 'stub', methods: [] } as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      connect: 'http://127.0.0.1:1',
+      resumeSessionId: 's-target',
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      expect(result.ctx.currentSessionId).toBe('s-target');
+      const getCall = calls.find((call) => call.method === 'sessions.get');
+      expect(getCall?.params).toEqual({ session_id: 's-target' });
+    } finally {
+      await result.shutdown();
+    }
+  });
+
   it('connect 模式：health.get 决定远端 tenant/node 展示', async () => {
     const dataDir = tempDir();
     const stub = {
@@ -425,6 +493,103 @@ describe('bootstrap 0.5 - rpc injection', () => {
         model: 'remote-model',
         baseUrl: 'http://remote',
       });
+    } finally {
+      await result.shutdown();
+    }
+  });
+});
+
+describe('bootstrap 0.6.1 - 团队远端 spawn 成员隔离（E10）', () => {
+  it('spawnAgent 使用 child host：成员看不到 team_* 工具', async () => {
+    const dataDir = tempDir();
+    const configPath = tmpYaml(`
+host:
+  enabled: true
+team:
+  enabled: true
+  member_limits:
+    tool_calls_limit: 1
+  member_termination:
+    max_iterations: 2
+`);
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      configPath,
+    });
+
+    try {
+      expect(result.spawnAgent).toBeDefined();
+      const status = await result.spawnAgent?.({ name: 'worker' });
+      expect(status?.toolNames).toContain('bash');
+      expect(status?.toolNames ?? []).not.toContain('team_spawn');
+      expect(status?.toolNames ?? []).not.toContain('team_send');
+    } finally {
+      await result.shutdown();
+    }
+  });
+});
+
+describe('bootstrap 0.6.1 - 权限 always 持久化（E7）', () => {
+  it('交互模式 remember:true 写回用户 YAML 的 permission.auto_approve', async () => {
+    const dataDir = tempDir();
+    const userConfigPath = tmpYaml('api_key: sk-test\n');
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      userConfigPath,
+      headless: false,
+      interactive: true,
+      registerAskUser: false,
+    });
+
+    try {
+      result.ctx.events.publish({
+        type: 'tool.permission.request',
+        run_id: 'r1',
+        data: { requestId: 'req-1', tool: 'bash', input: {} },
+        ts: Date.now(),
+      });
+      result.ctx.events.publish({
+        type: 'tool.permission.response',
+        run_id: 'r1',
+        data: { requestId: 'req-1', decision: 'allow', remember: true },
+        ts: Date.now(),
+      });
+
+      const parsed = parseYaml(fs.readFileSync(userConfigPath, 'utf-8')) as {
+        permission?: { auto_approve?: string[] };
+      };
+      expect(parsed.permission?.auto_approve).toEqual(['bash']);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('非交互模式不写回（headless 的 allow 不是用户选择）', async () => {
+    const dataDir = tempDir();
+    const userConfigPath = tmpYaml('api_key: sk-test\n');
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      userConfigPath,
+    });
+
+    try {
+      result.ctx.events.publish({
+        type: 'tool.permission.request',
+        run_id: 'r1',
+        data: { requestId: 'req-1', tool: 'bash', input: {} },
+        ts: Date.now(),
+      });
+      result.ctx.events.publish({
+        type: 'tool.permission.response',
+        run_id: 'r1',
+        data: { requestId: 'req-1', decision: 'allow', remember: true },
+        ts: Date.now(),
+      });
+
+      const parsed = parseYaml(fs.readFileSync(userConfigPath, 'utf-8')) as {
+        permission?: { auto_approve?: string[] };
+      };
+      expect(parsed.permission?.auto_approve).toBeUndefined();
     } finally {
       await result.shutdown();
     }

@@ -350,6 +350,61 @@ describe('RemoteTransport error normalization (0.6)', () => {
 });
 
 describe('RemoteTransport B4 event fan-out (0.6)', () => {
+  it('丢弃本节点来源的事件回声（E11）', async () => {
+    const sockets: FakeSocket[] = [];
+    const events: RunEvent[] = [];
+    const { fetchImpl } = makeFetch(() => jsonResponse({}));
+    const { transport } = await makeTransport({
+      fetchImpl,
+      onEvent: (event) => events.push(event),
+      webSocket: (url) => {
+        const socket = new FakeSocket(url);
+        sockets.push(socket);
+        return socket as unknown as WebSocketLike;
+      },
+    });
+
+    transport.start();
+    const first = sockets.find((socket) => socket.url.includes('127.0.0.1:9001'));
+    first?.emit('open');
+    first?.emitMessage(JSON.stringify({ kind: 'hello', latest_seq: 0 }));
+
+    // 对端回灌本节点事件（frame.node_id = node-a）。
+    first?.emitMessage(
+      JSON.stringify({
+        kind: 'event',
+        node_id: 'node-a',
+        seq: 1,
+        event: { type: 'agent.started', run_id: 'self-1', data: {}, ts: 1 },
+      }),
+    );
+    // event.node_id 自身也丢弃（即使 frame 标记为对端）。
+    first?.emitMessage(
+      JSON.stringify({
+        kind: 'event',
+        node_id: 'node-b',
+        seq: 2,
+        event: { type: 'agent.started', run_id: 'self-2', node_id: 'node-a', data: {}, ts: 2 },
+      }),
+    );
+    // 正常对端事件仍投递。
+    first?.emitMessage(
+      JSON.stringify({
+        kind: 'event',
+        node_id: 'node-b',
+        seq: 3,
+        event: { type: 'agent.started', run_id: 'peer-1', data: {}, ts: 3 },
+      }),
+    );
+
+    await waitFor(() => events.length === 1);
+    expect(events[0]?.run_id).toBe('peer-1');
+    await Bun.sleep(10);
+    expect(events).toHaveLength(1);
+
+    await transport.close();
+  });
+
   it('subscribes both nodes, dedupes (node_id, seq), reconnects with since', async () => {
     const sockets: FakeSocket[] = [];
     const events: RunEvent[] = [];

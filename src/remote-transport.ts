@@ -579,6 +579,9 @@ export class RemoteTransport implements Transport {
 
     const event = { ...frame.event } as unknown as RunEvent;
     if (event.node_id === undefined) event.node_id = origin;
+    // 0.6.1 E11：双向/网状拓扑下，本节点事件被对端回灌 → 丢弃，避免回声放大。
+    // seq/去重状态已在上面更新，保证重连 since 不重复回放。
+    if (event.node_id === this.nodeId) return;
     try {
       this.onEvent?.(event);
     } catch {

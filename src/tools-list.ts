@@ -15,6 +15,7 @@ import {
 } from '../packages/core/src/index';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import { declarativePluginEntries, pluginConfigFor, withPluginConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 
@@ -38,12 +39,22 @@ export async function listTools(): Promise<ToolsListing> {
   ];
 
   const loader = new PluginLoader();
-  const pluginNames = resolvePluginNames(loader, config.plugins, Boolean(process.env.VESSEL_DEBUG));
+  const declarative = declarativePluginEntries(config);
+  const pluginNames = resolvePluginNames(
+    loader,
+    config.plugins,
+    Boolean(process.env.VESSEL_DEBUG),
+    declarative,
+  );
 
   const host = new MemoryPluginHost();
   for (const name of pluginNames) {
     const plugin = await loader.load(name);
-    if (plugin) await plugin.install(host);
+    if (plugin) {
+      await withPluginConfig(plugin, pluginConfigFor(name, config.plugins, declarative)).install(
+        host,
+      );
+    }
   }
 
   // delegate_task 是工厂式插件，需装配层注入 provider 工厂；列工具不会调用它。

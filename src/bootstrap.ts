@@ -55,6 +55,7 @@ import {
 import type { McpControl } from './mcp-wiring';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveWorkflowDefPathSync } from './path-resolution';
+import { addAutoApproveRule } from './permission-store';
 import { PluginLoader } from './plugin-loader';
 import {
   createHttpRpcClient,
@@ -76,6 +77,10 @@ export interface BootstrapOptions {
   useMock?: boolean;
   /** 会话 ID */
   sessionId?: string;
+  /** 0.6.1：`-c/--continue`（仅 connect 模式由 bootstrapConnect 解析；本地由 CLI 解析） */
+  continueLatest?: boolean;
+  /** 0.6.1：`-r <id>`（仅 connect 模式由 bootstrapConnect 校验） */
+  resumeSessionId?: string;
   /** 是否为 headless 模式 */
   headless?: boolean;
   /**
@@ -243,6 +248,12 @@ async function bootstrapConnect(input: {
   headless: boolean;
   /** 0.6：显式 tenant（--tenant / VESSEL_TENANT）才把 tenant_id 合并进请求。 */
   tenantExplicit: boolean;
+  /** 0.6.1：显式 session id（`--session` / `-r <id>`） */
+  sessionId?: string;
+  /** 0.6.1：`-c/--continue`；经 sessions.list 选择最近的非空会话 */
+  continueLatest?: boolean;
+  /** 0.6.1：`-r <id>`；先用 sessions.get 校验存在 */
+  resumeSessionId?: string;
   connectToken?: string;
   caFile?: string;
   rpcClientFactory?: (opts: {
@@ -385,7 +396,57 @@ async function bootstrapConnect(input: {
     compactThreshold: input.config.context?.compactThreshold,
   });
 
-  let currentSessionId = newSessionId();
+  // ── 会话续接（0.6.1 E8）：remote 端是唯一数据源 ──
+  let resolvedSessionId = input.sessionId;
+  if (input.resumeSessionId !== undefined) {
+    try {
+      await rpc.request('sessions.get', { session_id: input.resumeSessionId });
+    } catch (error) {
+      console.error(
+        `Cannot resume session "${input.resumeSessionId}": ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      process.exit(1);
+    }
+    resolvedSessionId = input.resumeSessionId;
+  } else if (input.continueLatest === true) {
+    try {
+      const raw = await rpc.request<unknown>('sessions.list');
+      const list = Array.isArray(raw)
+        ? raw
+        : isRecordValue(raw) && Array.isArray(raw.sessions)
+          ? raw.sessions
+          : [];
+      const sessions = list
+        .filter(isRecordValue)
+        .filter((entry) => typeof entry.session_id === 'string')
+        .map((entry) => ({
+          session_id: entry.session_id as string,
+          updated_at: typeof entry.updated_at === 'number' ? entry.updated_at : 0,
+          message_count: typeof entry.message_count === 'number' ? entry.message_count : 0,
+        }))
+        .filter((entry) => entry.message_count > 0)
+        .sort((a, b) =>
+          b.updated_at !== a.updated_at
+            ? b.updated_at - a.updated_at
+            : a.session_id.localeCompare(b.session_id),
+        );
+      const latest = sessions[0];
+      if (!latest) {
+        console.error('No sessions to continue.');
+        process.exit(1);
+      }
+      resolvedSessionId = latest.session_id;
+    } catch (error) {
+      console.error(
+        `Cannot list sessions: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    }
+  }
+
+  let currentSessionId = resolvedSessionId ?? newSessionId();
   let shuttingDown = false;
 
   const unsubscribe = client.subscribe((notification) => {
@@ -598,6 +659,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       url: connectUrl,
       headless,
       tenantExplicit,
+      ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+      ...(options.continueLatest === true ? { continueLatest: true } : {}),
+      ...(options.resumeSessionId !== undefined
+        ? { resumeSessionId: options.resumeSessionId }
+        : {}),
       ...(options.connectToken !== undefined ? { connectToken: options.connectToken } : {}),
       ...(options.caFile !== undefined ? { caFile: options.caFile } : {}),
       ...(options.rpcClientFactory ? { rpcClientFactory: options.rpcClientFactory } : {}),
@@ -715,7 +781,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),
-    autoApprove: ['ask_user'],
+    // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
+    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
   };
 
   // ── Durable resume（0.3）─────────────────────────
@@ -958,6 +1025,50 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const localRpcClient = createLocalRpcClient({ dispatch: localDispatcher.dispatch });
 
+  // ── 权限 "always" 持久化（0.6.1 E7）────────────────
+  // 只在真正交互的本地 REPL 生效：remote/connect 的授权属于远端 gateway，
+  // serve/headless 的 allow 不是用户显式选择。
+  let unsubPermissionPersist: (() => void) | undefined;
+  if (interactive) {
+    const pendingTools = new Map<string, string>();
+    unsubPermissionPersist = runtimeEvents.subscribe((event) => {
+      const data = isRecordValue(event.data) ? event.data : undefined;
+      if (!data) return;
+
+      if (event.type === 'tool.permission.request') {
+        const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+        const tool = typeof data.tool === 'string' ? data.tool : undefined;
+        if (requestId === undefined || tool === undefined) return;
+        pendingTools.set(requestId, tool);
+        while (pendingTools.size > 1000) {
+          const first = pendingTools.keys().next();
+          if (first.done) break;
+          pendingTools.delete(first.value);
+        }
+        return;
+      }
+
+      if (event.type !== 'tool.permission.response') return;
+      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+      const tool = requestId === undefined ? undefined : pendingTools.get(requestId);
+      if (requestId !== undefined) pendingTools.delete(requestId);
+      if (tool === undefined || data.remember !== true) return;
+
+      try {
+        addAutoApproveRule(
+          tool,
+          options.userConfigPath !== undefined ? { configPath: options.userConfigPath } : {},
+        );
+      } catch (error) {
+        console.warn(
+          `⚠ Failed to persist permission rule for "${tool}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    });
+  }
+
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
 
@@ -974,6 +1085,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const shutdown = async (): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+
+    try {
+      unsubPermissionPersist?.();
+    } catch {
+      // 退订是 best-effort
+    }
+    unsubPermissionPersist = undefined;
 
     try {
       localDispatcher.dispose();

@@ -1,5 +1,8 @@
-import { expect, it } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
+import * as fs from 'node:fs';
 import { readFileSync } from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FACTORY_PLUGINS, PluginLoader } from '../plugin-loader';
 
@@ -68,4 +71,88 @@ it('load() 加载已知插件', async () => {
 
 it('load() 未知插件返回 null', async () => {
   expect(await new PluginLoader().load('does-not-exist')).toBeNull();
+});
+
+describe('插件目录扩展（0.6.1）', () => {
+  function writePlugin(dir: string, name: string): void {
+    fs.mkdirSync(path.join(dir, 'src'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name, version: '1.2.3', main: 'src/index.ts' }),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(dir, 'src', 'index.ts'),
+      'export default { name: "x", install() {} };\n',
+      'utf-8',
+    );
+  }
+
+  it('扫描用户/项目目录的扁平与分类布局', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugins-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const user = path.join(root, 'user');
+      const project = path.join(root, 'project');
+      writePlugin(path.join(repo, 'tools', 'basic-tools'), '@vessel/basic-tools');
+      writePlugin(path.join(user, 'my-plugin'), '@scope/my-plugin');
+      writePlugin(path.join(project, 'security', 'project-policy'), 'project-policy');
+
+      const loader = new PluginLoader({
+        roots: [
+          { dir: repo, source: 'repo', layout: 'category' },
+          { dir: user, source: 'user', layout: 'auto' },
+          { dir: project, source: 'project', layout: 'auto' },
+        ],
+      });
+
+      const byName = new Map(loader.list().map((d) => [d.name, d]));
+      expect(byName.get('basic-tools')?.source).toBe('repo');
+      expect(byName.get('my-plugin')?.source).toBe('user');
+      expect(byName.get('project-policy')?.source).toBe('project');
+      expect(byName.get('project-policy')?.category).toBe('security');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('同名插件以仓库内为准', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugins-'));
+    try {
+      const repo = path.join(root, 'repo');
+      const user = path.join(root, 'user');
+      writePlugin(path.join(repo, 'tools', 'basic-tools'), '@vessel/basic-tools');
+      writePlugin(path.join(user, 'basic-tools'), '@vessel/basic-tools');
+
+      const loader = new PluginLoader({
+        roots: [
+          { dir: repo, source: 'repo', layout: 'category' },
+          { dir: user, source: 'user', layout: 'auto' },
+        ],
+      });
+
+      const hits = loader.list().filter((d) => d.name === 'basic-tools');
+      expect(hits).toHaveLength(1);
+      expect(hits[0]?.source).toBe('repo');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('node_modules/@vessel 扫描跳过 core/config/tui/serve/permission', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugins-'));
+    try {
+      const modules = path.join(root, 'node_modules', '@vessel');
+      writePlugin(path.join(modules, 'core'), '@vessel/core');
+      writePlugin(path.join(modules, 'some-plugin'), '@vessel/some-plugin');
+
+      const loader = new PluginLoader({
+        roots: [{ dir: modules, source: 'node_modules', layout: 'flat' }],
+      });
+
+      expect(loader.list().map((d) => d.name)).toEqual(['some-plugin']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

@@ -78,12 +78,27 @@ export type TraceCommandArgs = {
   tenantId?: string;
 };
 
+/** `plugin` 子命令（0.6.1；仅本地目录，不做市场） */
+export type PluginCommandArgs =
+  | { kind: 'list'; json: boolean }
+  | { kind: 'install'; path: string; force: boolean }
+  | { kind: 'remove'; name: string; yes: boolean };
+
+/** `doctor` 子命令（0.6.1） */
+export interface DoctorCommandArgs {
+  json: boolean;
+}
+
 export interface CliArgs {
   /** null = 非 headless；'' = 从 stdin 读；非空 = 文本 prompt 或 @file */
   runArg: string | null;
   /** `--pipe` 隐藏别名，等价 `--run` 无参 */
   pipeMode: boolean;
   sessionArg: string | null;
+  /** 0.6.1：`-c/--continue`（续接最近会话） */
+  continueArg: boolean;
+  /** 0.6.1：null = 未使用；'' = 列出会话；非空 = 恢复该会话 */
+  resumeArg: string | null;
   /** null = 不启动 gateway；0 = 由系统分配端口 */
   servePort: number | null;
   /** 端口是否由用户显式给出（用于 config serve.port 回退） */
@@ -123,6 +138,10 @@ export interface CliArgs {
   tenantCommand: TenantCommandArgs | null;
   migrate: MigrateCommandArgs | null;
   trace: TraceCommandArgs | null;
+  /** 0.6.1：`vessel plugin ...` */
+  pluginCommand: PluginCommandArgs | null;
+  /** 0.6.1：`vessel doctor` */
+  doctorCommand: DoctorCommandArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -148,6 +167,8 @@ export function parseArgs(argv: string[]): ParseResult {
     runArg: null,
     pipeMode: false,
     sessionArg: null,
+    continueArg: false,
+    resumeArg: null,
     servePort: null,
     servePortExplicit: false,
     serveHost: null,
@@ -171,6 +192,8 @@ export function parseArgs(argv: string[]): ParseResult {
     tenantCommand: null,
     migrate: null,
     trace: null,
+    pluginCommand: null,
+    doctorCommand: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -199,16 +222,39 @@ export function parseArgs(argv: string[]): ParseResult {
     if (a === 'trace' && i === 0) {
       return parseTraceArgs(argv.slice(1), args);
     }
+    if (a === 'plugin' && i === 0) {
+      return parsePluginArgs(argv.slice(1), args);
+    }
+    if (a === 'doctor' && i === 0) {
+      return parseDoctorArgs(argv.slice(1), args);
+    }
 
     switch (a) {
       case '--run':
-      case '-r': {
+      case '--print':
+      case '-p': {
         const next = argv[i + 1];
         if (next !== undefined && !next.startsWith('-')) {
           args.runArg = next;
           i++;
         } else {
           args.runArg = '';
+        }
+        break;
+      }
+      case '-c':
+      case '--continue':
+        args.continueArg = true;
+        break;
+      case '-r':
+      case '--resume': {
+        // 0.6.1：`-r` 是 resume（不再等同 --run）；无 id = 列出会话。
+        const next = argv[i + 1];
+        if (next !== undefined && !next.startsWith('-')) {
+          args.resumeArg = next;
+          i++;
+        } else {
+          args.resumeArg = '';
         }
         break;
       }
@@ -376,10 +422,41 @@ export function parseArgs(argv: string[]): ParseResult {
       args.pipeMode ? '--pipe' : null,
       args.servePort !== null ? '--serve' : null,
       args.sessionArg !== null ? '--session' : null,
+      args.continueArg ? '--continue' : null,
+      args.resumeArg !== null ? '--resume' : null,
       args.tools ? '--tools' : null,
     ].filter((v): v is string => v !== null);
     if (conflicts.length > 0) {
       return { ok: false, error: `--resume-run cannot be combined with ${conflicts.join('/')}` };
+    }
+  }
+
+  // 0.6.1：会话续接 flag 互斥
+  if (args.continueArg && args.resumeArg !== null) {
+    return { ok: false, error: '--continue cannot be combined with --resume' };
+  }
+  if (args.continueArg && args.sessionArg !== null) {
+    return { ok: false, error: '--continue cannot be combined with --session' };
+  }
+  if (args.resumeArg !== null && args.sessionArg !== null) {
+    return { ok: false, error: '--resume cannot be combined with --session' };
+  }
+  if ((args.continueArg || args.resumeArg !== null) && args.servePort !== null) {
+    return { ok: false, error: '--continue/--resume cannot be combined with --serve' };
+  }
+  if (args.continueArg && args.pipeMode) {
+    return { ok: false, error: '--continue cannot be combined with --pipe' };
+  }
+  // `-r` 无 id = 列出会话：不能再要求一次 run 输入，也不能带会被忽略的模式开关。
+  if (args.resumeArg === '') {
+    if (args.runArg !== null) {
+      return { ok: false, error: '--resume without an id cannot be combined with --run' };
+    }
+    if (args.pipeMode) {
+      return { ok: false, error: '--resume without an id cannot be combined with --pipe' };
+    }
+    if (args.feishu) {
+      return { ok: false, error: '--resume without an id cannot be combined with --feishu' };
     }
   }
 
@@ -407,8 +484,15 @@ export function parseArgs(argv: string[]): ParseResult {
   if (oneShot.length > 1) {
     return { ok: false, error: `Cannot combine ${oneShot.join(' and ')}` };
   }
-  if (oneShot.length === 1 && (args.runArg !== null || args.pipeMode || args.servePort !== null)) {
-    return { ok: false, error: `${oneShot[0]} cannot be combined with --run/--serve` };
+  if (
+    oneShot.length === 1 &&
+    (args.runArg !== null ||
+      args.pipeMode ||
+      args.servePort !== null ||
+      args.continueArg ||
+      args.resumeArg !== null)
+  ) {
+    return { ok: false, error: `${oneShot[0]} cannot be combined with --run/--serve/--continue` };
   }
 
   // 0.4：`--feishu` 是附加开关，可与 `--serve` / REPL / `--session` 同用；
@@ -1001,5 +1085,116 @@ function parseTraceArgs(rest: string[], args: CliArgs): ParseResult {
     json,
     ...(tenantId !== undefined ? { tenantId } : {}),
   };
+  return { ok: true, args };
+}
+
+/** 插件短名：防止 `remove` 越出用户插件目录 */
+export const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/** `plugin list [--json] | install <path> [--force] | remove <name> [--yes]` */
+function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return { ok: false, error: 'Missing plugin subcommand (list|install|remove)' };
+  }
+
+  if (sub === 'list') {
+    let json = false;
+    for (const a of rest.slice(1)) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for plugin list: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.pluginCommand = { kind: 'list', json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'install') {
+    let source: string | undefined;
+    let force = false;
+    const tail = rest.slice(1);
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--force') {
+        force = true;
+        continue;
+      }
+      if (a.startsWith('-'))
+        return { ok: false, error: `Unknown argument for plugin install: ${a}` };
+      if (source !== undefined) {
+        return { ok: false, error: `Unexpected extra argument for plugin install: ${a}` };
+      }
+      source = a;
+    }
+    if (args.help) return { ok: true, args };
+    if (source === undefined) return { ok: false, error: 'Missing <path> for plugin install' };
+    args.pluginCommand = { kind: 'install', path: source, force };
+    return { ok: true, args };
+  }
+
+  if (sub === 'remove') {
+    let name: string | undefined;
+    let yes = false;
+    const tail = rest.slice(1);
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--yes' || a === '-y') {
+        yes = true;
+        continue;
+      }
+      if (a.startsWith('-'))
+        return { ok: false, error: `Unknown argument for plugin remove: ${a}` };
+      if (name !== undefined) {
+        return { ok: false, error: `Unexpected extra argument for plugin remove: ${a}` };
+      }
+      name = a;
+    }
+    if (args.help) return { ok: true, args };
+    if (name === undefined) return { ok: false, error: 'Missing <name> for plugin remove' };
+    if (!PLUGIN_NAME_RE.test(name)) {
+      return { ok: false, error: `Invalid plugin name: ${name}` };
+    }
+    args.pluginCommand = { kind: 'remove', name, yes };
+    return { ok: true, args };
+  }
+
+  return { ok: false, error: `Unknown plugin subcommand: ${sub}` };
+}
+
+/** `doctor [--json]` */
+function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for doctor: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.doctorCommand = { json };
   return { ok: true, args };
 }

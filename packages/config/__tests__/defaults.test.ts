@@ -186,14 +186,12 @@ describe('未知键与新增 schema', () => {
 });
 
 describe('未消费字段显式 warning', () => {
-  it('agent.temperature / session.max_history / guardrails 不再静默忽略', async () => {
+  it('agent.temperature / session.max_history 不再静默忽略', async () => {
     const configPath = tmpYaml(`
 agent:
   temperature: 0.2
 session:
   max_history: 50
-guardrails:
-  - name: pii
 `);
     const { validation } = await loadConfig({
       configPath,
@@ -202,6 +200,24 @@ guardrails:
     const paths = validation.warnings.map((w) => w.path);
     expect(paths).toContain('agent.temperature');
     expect(paths).toContain('session.maxHistory');
-    expect(paths).toContain('guardrails');
+  });
+
+  it('guardrails / hooks 已接线为插件配置，不再报「未应用」警告', async () => {
+    const configPath = tmpYaml(`
+guardrails:
+  - name: tool-policy
+    config:
+      allow: [read]
+hooks:
+  - name: hook-logging
+`);
+    const { validation } = await loadConfig({
+      configPath,
+      userConfigPath: missingPath(),
+    });
+    const paths = validation.warnings.map((w) => w.path);
+    expect(paths).not.toContain('guardrails');
+    expect(paths).not.toContain('hooks');
+    expect(validation.errors).toEqual([]);
   });
 });

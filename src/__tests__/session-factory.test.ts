@@ -70,6 +70,57 @@ describe('createSessionBackend', () => {
     }
   });
 
+  it('file 后端传 tenantId：共享 storagePath 下 load/listRich 隔离', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-session-file-'));
+    try {
+      const shared = path.join(root, 'shared');
+      const a = createSessionBackend(
+        { backend: 'file', storagePath: shared },
+        { tenantSessionsDir: path.join(root, 'a', 'sessions'), tenantId: 'a' },
+      );
+      const b = createSessionBackend(
+        { backend: 'file', storagePath: shared },
+        { tenantSessionsDir: path.join(root, 'b', 'sessions'), tenantId: 'b' },
+      );
+
+      await a.save({
+        run_id: 'run-a',
+        session_id: 's-a',
+        messages: [{ role: 'user', content: 'a' }],
+        started_at: 1000,
+        status: 'completed',
+      });
+      await b.save({
+        run_id: 'run-b',
+        session_id: 's-b',
+        messages: [{ role: 'user', content: 'b' }],
+        started_at: 2000,
+        status: 'completed',
+      });
+
+      expect((await a.load('s-a'))?.tenant_id).toBe('a');
+      expect(await a.load('s-b')).toBeNull();
+      expect(await b.load('s-a')).toBeNull();
+      expect((await a.listRich()).map((s) => s.session_id)).toEqual(['s-a']);
+      expect((await b.listRich()).map((s) => s.session_id)).toEqual(['s-b']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('file 显式 storagePath 也 warn tenant escape', () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      createSessionBackend(
+        { backend: 'file', storagePath: path.join(os.tmpdir(), 'shared-sessions') },
+        { tenantSessionsDir: path.join(os.tmpdir(), 'tenant', 'sessions'), tenantId: 'acme' },
+      );
+      expect(warn.mock.calls.some((call) => String(call[0]).includes('escapes tenant'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('显式 storagePath 优先并 warn tenant escape', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-session-'));
     const warn = spyOn(console, 'warn').mockImplementation(() => {});
