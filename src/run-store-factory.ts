@@ -22,6 +22,11 @@ export interface ResolvedDurableOptions {
 export interface RunStoreOptions {
   /** tenant 的 runs 目录（`<tenant>/runs`）；显式 durable.path 优先 */
   tenantRunsDir?: string;
+  /**
+   * 所属 tenant（A5）。FileRunStore 用它补齐/校验 checkpoint.tenant_id，
+   * 并在 delete 时拒绝跨 tenant 归属（core 侧实现）。
+   */
+  tenantId?: string;
 }
 
 /** config → durable 选项（默认值只在 DEFAULT_DURABLE_OPTIONS 一处） */
@@ -60,7 +65,10 @@ export function createRunStore(
   if (!options.enabled) return undefined;
 
   if (options.backend === 'memory') return new MemoryRunStore();
-  return new FileRunStore({ dir: resolveRunStorePath(options.path) });
+  return new FileRunStore({
+    dir: resolveRunStorePath(options.path),
+    ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
+  });
 }
 
 /** 关闭 store；失败不阻断退出 */

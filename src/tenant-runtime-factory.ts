@@ -261,7 +261,10 @@ export async function buildTenantRuntime(
       }
     }
 
-    const runStore = createRunStore(config, { tenantRunsDir: tenantPaths.runs_dir });
+    const runStore = createRunStore(config, {
+      tenantRunsDir: tenantPaths.runs_dir,
+      tenantId,
+    });
     const resolvedProvider = await createProvider(config, loader, useMock);
     const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 

@@ -4,8 +4,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { type RunEvent, resolveTenantPaths } from '../../packages/core/src/index';
+import { waitForRunCompletion } from '../../packages/tui/src/index';
 import { bootstrap } from '../bootstrap';
-import type { RpcClient } from '../rpc/index';
+import type { RpcClient, RpcEventNotification } from '../rpc/index';
 
 const tempDirs: string[] = [];
 
@@ -204,6 +205,55 @@ describe('bootstrap 0.5 - rpc injection', () => {
         sessions: Array<{ session_id: string }>;
       }>('sessions.list');
       expect(listed?.sessions.some((item) => item.session_id === 'session-rpc')).toBe(true);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('local 模式：rpc.subscribe 桥接 runtimeEvents 为 events.event 通知（A1）', async () => {
+    const dataDir = tempDir();
+    const result = await bootstrap(baseOptions(dataDir));
+
+    try {
+      const rpc = result.ctx.rpc;
+      if (!rpc) throw new Error('rpc missing');
+      const notifications: RpcEventNotification[] = [];
+      const unsubscribe = rpc.subscribe((notification) => notifications.push(notification));
+
+      // 终态等待只依赖 rpc.subscribe；没有桥接时会一直挂起（用超时守护）。
+      const waiter = waitForRunCompletion(rpc, 'run-local');
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('waitForRunCompletion timed out')), 2000);
+      });
+      try {
+        result.runtime.events.publish({
+          type: 'run.completed',
+          run_id: 'run-local',
+          data: { status: 'completed' },
+          ts: Date.now(),
+        });
+        const outcome = await Promise.race([waiter.done, timeout]);
+        expect(outcome).toEqual({ status: 'completed' });
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+      }
+
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]).toEqual({
+        method: 'events.event',
+        params: expect.objectContaining({ type: 'run.completed', run_id: 'run-local' }),
+      });
+
+      // 只读通知：退订后不再收到。
+      unsubscribe();
+      result.runtime.events.publish({
+        type: 'run.completed',
+        run_id: 'run-local',
+        data: { status: 'completed' },
+        ts: Date.now() + 1,
+      });
+      expect(notifications).toHaveLength(1);
     } finally {
       await result.shutdown();
     }

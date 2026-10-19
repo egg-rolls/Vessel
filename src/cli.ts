@@ -283,7 +283,11 @@ if (args.update) {
 }
 // 无参 --resume-run 是一次性列表命令：不构造 runtime、不需要 API Key。
 if (args.resumeRunArg === '') {
-  process.exit(await runResumeList());
+  process.exit(
+    await runResumeList({
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+    }),
+  );
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
@@ -521,6 +525,12 @@ function formatResumeError(error: unknown): string {
 
 async function runWithConfig(result: BootstrapResult) {
   const { runtime, ctx, config } = result;
+  /**
+   * A2：headless 不在这里直接 `process.exit`，否则会跳过末尾的
+   * gateway / tenantFactory / transport / shutdown 清理（`--serve --run`
+   * 会残留 tenant `.lock`）。只记录退出码，统一走公共清理后再退出。
+   */
+  let headlessExitCode: number | undefined;
 
   // 0.6 A4：connect 模式下展示远端 node/tenant。headless 写 stderr，避免污染 stdout。
   if (result.remote) {
@@ -906,14 +916,12 @@ async function runWithConfig(result: BootstrapResult) {
     console.log('Gateway 运行中… 按 Ctrl+C 停止。\n');
     await waitForSignal();
   } else if (headless) {
-    const exitCode = await runHeadless(runtime, ctx.session, {
+    headlessExitCode = await runHeadless(runtime, ctx.session, {
       runArg,
       pipeMode,
       sessionId: ctx.currentSessionId,
       provider: ctx.provider,
     });
-    await result.shutdown();
-    process.exit(exitCode);
   } else if (args.feishu && process.stdin.isTTY !== true) {
     // Addendum D §13.3：非 TTY + 无 --serve → 仅渠道前台，不启动 REPL。
     console.log('Feishu channel running… 按 Ctrl+C 停止。\n');
@@ -961,4 +969,7 @@ async function runWithConfig(result: BootstrapResult) {
   await tenantFactory?.closeAll();
 
   await result.shutdown();
+
+  // A2：清理完成后再落 headless 退出码（其余模式保持自然退出 0）。
+  if (headlessExitCode !== undefined) process.exitCode = headlessExitCode;
 }

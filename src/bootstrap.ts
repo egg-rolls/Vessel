@@ -1055,7 +1055,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       : {}),
     ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
   });
-  const localRpcClient = createLocalRpcClient({ dispatch: localDispatcher.dispatch });
+  // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume` 与
+  // `/workflows run|resume` 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时
+  // 订阅是 no-op，命令会一直挂起。通知只再分发，不写回事件流。
+  const localRpcClient = createLocalRpcClient({
+    dispatch: localDispatcher.dispatch,
+    onEvent: (handler) =>
+      runtimeEvents.subscribe((event) => {
+        handler({ method: 'events.event', params: event });
+      }),
+  });
 
   // ── 权限控制面（0.6.1 E7；tui 的 `ReplContext.permissions`）────
   // 用户 YAML 的 permission.auto_approve；TUI "always" 与 /permissions 共用。
