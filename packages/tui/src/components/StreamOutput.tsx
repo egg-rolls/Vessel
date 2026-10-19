@@ -437,7 +437,11 @@ export function StreamOutput({
 
       {/* 流式状态指示（ADR-022：StateTracker + SpinnerWithVerb 三态） */}
       {isActive && !hasContent && (
-        <SpinnerWithVerb verb={spinnerState.verb} description={spinnerState.description} />
+        <SpinnerWithVerb
+          verb={spinnerState.verb}
+          description={spinnerState.description}
+          {...(spinnerState.startedAt !== undefined ? { startedAt: spinnerState.startedAt } : {})}
+        />
       )}
     </Box>
   );
