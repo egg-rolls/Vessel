@@ -65,8 +65,20 @@ export function buildStartupNotice(input: StartupNoticeInput): string | null {
   return `ℹ ${segments.join(' · ')} — ${hints.join(' · ')}`;
 }
 
-/** 查询注入的控制面；任一失败都按“无该项”处理 */
-export async function loadStartupNotice(ctx: ReplContext): Promise<string | null> {
+/** 启动控制面事实；null = 未注入 / 查询失败 */
+export interface StartupFacts {
+  mcpServers: McpServerSummary[] | null;
+  interruptedRuns: DurableRunSummary[] | null;
+  interruptedWorkflows: WorkflowRunSummaryLike[] | null;
+  feishu: FeishuStatusLike | null;
+  tenantId: string | null;
+}
+
+/**
+ * 查询注入的控制面；任一失败都按“无该项”处理。
+ * 启动头与能力提示共用同一次查询，避免重复 RPC。
+ */
+export async function loadStartupFacts(ctx: ReplContext): Promise<StartupFacts> {
   const feishu = ctx.feishu;
 
   const [mcpServers, interruptedRuns, interruptedWorkflows, feishuStatus] = await Promise.all([
@@ -84,11 +96,23 @@ export async function loadStartupNotice(ctx: ReplContext): Promise<string | null
       : Promise.resolve(null),
   ]);
 
-  return buildStartupNotice({
+  return {
     mcpServers,
     interruptedRuns,
     interruptedWorkflows,
     feishu: feishuStatus,
-    ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
+    tenantId: ctx.tenant?.tenant_id ?? null,
+  };
+}
+
+/** 兼容入口：能力提示行（输出逐字不变） */
+export async function loadStartupNotice(ctx: ReplContext): Promise<string | null> {
+  const facts = await loadStartupFacts(ctx);
+  return buildStartupNotice({
+    mcpServers: facts.mcpServers,
+    interruptedRuns: facts.interruptedRuns,
+    interruptedWorkflows: facts.interruptedWorkflows,
+    feishu: facts.feishu,
+    ...(facts.tenantId ? { tenantId: facts.tenantId } : {}),
   });
 }

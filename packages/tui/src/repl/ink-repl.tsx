@@ -49,7 +49,8 @@ import { computeLiveLayout } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
-import { loadStartupNotice } from './startup-notice.js';
+import { buildStartupHeader } from './startup-header.js';
+import { buildStartupNotice, loadStartupFacts, loadStartupNotice } from './startup-notice.js';
 import { useReplState } from './use-repl-state.js';
 
 /** 与 core PermissionPolicy 一致的等待时限（ms） */
@@ -201,17 +202,40 @@ function InkRepl({ ctx }: InkReplProps) {
     ctx.currentSessionId = state.currentSessionId;
   }, [state.currentSessionId, ctx]);
 
-  // 启动横幅（0.3）：仅在配置了 MCP server 或存在 interrupted run 时追加一行。
-  // 查询失败静默，不阻塞启动。
+  /** 启动头 + 能力提示只写一次；/clear 后不重建（R0 风险 5） */
+  const startupWrittenRef = useRef(false);
   useEffect(() => {
+    if (startupWrittenRef.current) return;
+    startupWrittenRef.current = true;
     let disposed = false;
-    void loadStartupNotice(ctx).then((line) => {
-      if (!disposed && line) dispatch({ type: 'appendHistory', line });
-    });
+    void loadStartupFacts(ctx)
+      .then((facts) => {
+        if (disposed) return;
+        const header = buildStartupHeader({
+          columns: stdout.columns ?? 80,
+          rows: stdout.rows ?? 24,
+          ...(ctx.version ? { version: ctx.version } : {}),
+          summary: {
+            model: ctx.provider.model,
+            sessionId: ctx.currentSessionId,
+            ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
+            mcpCount: facts.mcpServers?.length ?? 0,
+            interruptedRuns: facts.interruptedRuns?.length ?? 0,
+            interruptedWorkflows: facts.interruptedWorkflows?.length ?? 0,
+            feishuConnected: facts.feishu?.connected ?? false,
+          },
+        });
+        const notice = buildStartupNotice(facts);
+        const lines = notice ? [...header, notice] : header;
+        if (lines.length > 0) dispatch({ type: 'appendHistoryLines', lines });
+      })
+      .catch(() => {
+        // 启动信息失败不阻塞 REPL
+      });
     return () => {
       disposed = true;
     };
-  }, [ctx, dispatch]);
+  }, [ctx, dispatch, stdout]);
 
   // 权限确认请求（ADR-029）：展示弹窗 + 120s 超时兜底 + run 结束/工具失败清理。
   // core 的 waitFor 超时后只发 tool.call.failed，不会发 response；不清理会留下永久弹窗。

@@ -370,6 +370,9 @@ export interface ReplContext {
   /** 当前 tenant；缺失时按 default 展示 */
   tenant?: TenantInfoLike;
 
+  /** 版本号（启动头展示）；缺失时省略 vX */
+  version?: string;
+
   /** 权限持久化写回；未注入时 "always" 只在当前进程生效 */
   permissions?: PermissionsControl;
 }
