@@ -246,6 +246,7 @@ export async function runCompactCommand(
       : 'placeholder summary (no summarizer; core < 0.6.1)';
   return {
     handled: true,
+    nextState: { compactions: (state.compactions ?? 0) + 1 },
     output: [
       '',
       `Compacted ${outcome.removed} message(s); ${outcome.remaining} remain.`,

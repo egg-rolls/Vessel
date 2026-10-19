@@ -45,7 +45,8 @@ import {
 import { DataTable } from './DataTable.js';
 import { DetailPanel } from './DetailPanel.js';
 import { EmptyState } from './EmptyState.js';
-import { KeyHints } from './KeyHints.js';
+import { formatKeyHints } from './KeyHints.js';
+import { PanelFrame } from './PanelFrame.js';
 
 export interface InteractiveViewHostProps {
   envelope: ViewEnvelope;
@@ -369,12 +370,57 @@ export function InteractiveViewHost({
 
   const width = viewWidth(columns);
   const contentWidth = viewContentWidth(columns);
-  const bordered = heightMode !== 'hidden';
-  const showHeader = heightMode === 'normal' || heightMode === 'compact';
+  // R0：normal/compact 加边框；minimal/hidden 不加。
+  const bordered = heightMode === 'normal' || heightMode === 'compact';
+  const showHeader = bordered;
+  const refresh = actions.find((action) => action.id === 'refresh');
+  const rangeWindow = scrollWindow(itemCount, selectedIndex, capacity);
+  const rangeVisible = itemCount > rangeWindow.end - rangeWindow.start;
+  const rangeText = rangeVisible
+    ? `showing ${rangeWindow.start + 1}-${rangeWindow.end} of ${itemCount}`
+    : null;
+  const titleParts = [titleLine(envelope)];
+  if (filter) titleParts.push(`filter: ${filter}${mode === 'filter' ? '_' : ''}`);
+  if (rangeText) titleParts.push(rangeText);
+  const titleText = view.kind === 'detail' ? '' : titleParts.join(' · ');
+  const moveHint =
+    itemCount > 0 ? `${heightMode === 'normal' ? '↑↓/jk/pgup/pgdn move' : '↑↓ move'}` : 'esc close';
+  const hintsText =
+    mode === 'filter'
+      ? 'type to filter · enter keep · esc clear'
+      : mode === 'rename'
+        ? 'enter save · esc cancel'
+        : mode === 'confirm'
+          ? confirmHint(pendingAction)
+          : formatKeyHints(actions, moveHint, disabledActionKeys);
+
+  const renderFrame = (title: string, hints: string, children: ReactNode) => {
+    if (bordered) {
+      return (
+        <PanelFrame width={width} title={title} hints={hints} marginY={1}>
+          {children}
+        </PanelFrame>
+      );
+    }
+    return (
+      <Box flexDirection="column" width={contentWidth} flexShrink={0}>
+        {title ? (
+          <Text bold color={theme.brand} wrap="truncate-end">
+            {title}
+          </Text>
+        ) : null}
+        {children}
+        <Box marginTop={1}>
+          <Text color={theme.faint} wrap="truncate-end">
+            {hints}
+          </Text>
+        </Box>
+      </Box>
+    );
+  };
 
   // hidden 必须先于 loading/error 判定：≤10 行时任何多行状态块都会顶掉输入行。
   if (heightMode === 'hidden') {
-    const refresh = actions.find((action) => action.id === 'refresh');
     const retry = refresh ? `${refresh.key} retry · ` : '';
     const line =
       status === 'loading'
@@ -383,190 +429,121 @@ export function InteractiveViewHost({
           ? `${view.title} failed · ${retry}esc close`
           : `${hiddenSummary(envelope)} · resize for actions · esc close`;
     return (
-      <ViewFrame bordered={false} width={contentWidth}>
+      <Box flexDirection="column" width={contentWidth} flexShrink={0}>
         <Text color={status === 'error' ? theme.danger : theme.muted} wrap="truncate-end">
           {truncateToWidth(line, contentWidth)}
         </Text>
-      </ViewFrame>
+      </Box>
     );
   }
 
   if (status === 'loading') {
-    return (
-      <ViewFrame bordered={bordered}>
-        <Text color={theme.muted}>Loading {view.title}…</Text>
-        <Box marginTop={1}>
-          <Text color={theme.faint}>esc close</Text>
-        </Box>
-      </ViewFrame>
+    return renderFrame(
+      titleLine(envelope),
+      'esc close',
+      <Text color={theme.muted}>Loading {view.title}…</Text>,
     );
   }
 
   if (status === 'error') {
-    return (
-      <ViewFrame bordered={bordered}>
+    return renderFrame(
+      titleLine(envelope),
+      `${refresh?.key ?? 'r'} retry · esc close`,
+      <Box flexDirection="column">
         <Text bold color={theme.danger}>
           Failed to load {view.title}
         </Text>
         <Box marginTop={1}>
           <Text color={theme.muted}>{error ?? 'Unknown error.'}</Text>
         </Box>
-        <Box marginTop={1}>
-          <Text color={theme.faint}>
-            {actions.find((action) => action.id === 'refresh')?.key ?? 'r'} retry · esc close
-          </Text>
-        </Box>
-      </ViewFrame>
+      </Box>,
     );
   }
 
-  const window = scrollWindow(itemCount, selectedIndex, capacity);
-  const rangeVisible = itemCount > window.end - window.start;
-  const rangeText = rangeVisible
-    ? `showing ${window.start + 1}-${window.end} of ${itemCount}`
-    : null;
+  const window = rangeWindow;
 
-  return (
-    <ViewFrame bordered={bordered} width={width} marginY={heightMode === 'minimal' ? 0 : 1}>
-      <Box flexDirection="column" width={contentWidth}>
-        {/* 标题 + 过滤/窗口状态。detail 的标题由 DetailPanel 渲染，避免重复。 */}
-        {view.kind !== 'detail' ? (
-          <Box marginBottom={1}>
-            <Text bold color={theme.brand}>
-              {titleLine(envelope)}
+  const content = (
+    <>
+      {/* 内容（容量为 0 时让位给确认/输入提示，绝不渲染空态多占行） */}
+      {view.kind === 'table' && capacity > 0 ? (
+        <TableBody
+          view={view}
+          rows={filteredRows.slice(window.start, window.end)}
+          columns={columns}
+          selectedKey={selectionKey}
+          start={window.start}
+          showHeader={showHeader}
+          emptyHint={filter ? 'esc to clear filter' : 'esc close'}
+        />
+      ) : null}
+
+      {view.kind === 'list' && capacity > 0 ? (
+        <ListBody
+          view={view}
+          items={filteredItems.slice(window.start, window.end)}
+          start={window.start}
+          selectedKey={selectionKey}
+          showHeader={showHeader}
+        />
+      ) : null}
+
+      {view.kind === 'detail' ? (
+        <DetailPanel view={view} width={contentWidth} maxRows={capacity} />
+      ) : null}
+
+      {view.kind === 'form' ? <FormBody view={view} draft={draft} mode={mode} /> : null}
+
+      {view.kind === 'confirm' ? (
+        <Box flexDirection="column">
+          <Text color={theme.muted}>{view.message}</Text>
+          {confirmDetails.map((detail) => (
+            <Text key={detail.id} color={theme.faint}>
+              {'  '}
+              {detail.text}
             </Text>
-            {filter ? (
-              <Text color={theme.warn}>
-                {' '}
-                · filter: {truncateToWidth(filter, Math.max(1, contentWidth - 20))}
-                {mode === 'filter' ? '_' : ''}
-              </Text>
-            ) : null}
-            {/* 窗口指示折进标题行，避免额外占 2 行 */}
-            {rangeText ? <Text color={theme.faint}> · {rangeText}</Text> : null}
-          </Box>
-        ) : null}
-
-        {/* 内容（容量为 0 时让位给确认/输入提示，绝不渲染空态多占行） */}
-        {view.kind === 'table' && capacity > 0 ? (
-          <TableBody
-            view={view}
-            rows={filteredRows.slice(window.start, window.end)}
-            columns={columns}
-            selectedKey={selectionKey}
-            start={window.start}
-            showHeader={showHeader}
-            emptyHint={filter ? 'esc to clear filter' : 'esc close'}
-          />
-        ) : null}
-
-        {view.kind === 'list' && capacity > 0 ? (
-          <ListBody
-            view={view}
-            items={filteredItems.slice(window.start, window.end)}
-            start={window.start}
-            selectedKey={selectionKey}
-            showHeader={showHeader}
-          />
-        ) : null}
-
-        {view.kind === 'detail' ? (
-          <DetailPanel view={view} width={contentWidth} maxRows={capacity} />
-        ) : null}
-
-        {view.kind === 'form' ? <FormBody view={view} draft={draft} mode={mode} /> : null}
-
-        {view.kind === 'confirm' ? (
-          <Box flexDirection="column">
-            <Text color={theme.muted}>{view.message}</Text>
-            {confirmDetails.map((detail) => (
-              <Text key={detail.id} color={theme.faint}>
-                {'  '}
-                {detail.text}
-              </Text>
-            ))}
-            <Box marginTop={1}>
-              <Text color={theme.faint}>
-                [y] {view.confirm.label} · [n] {view.cancel.label}
-              </Text>
-            </Box>
-          </Box>
-        ) : null}
-
-        {/* 重命名输入 / 内联确认 */}
-        {mode === 'rename' ? (
+          ))}
           <Box marginTop={1}>
-            <Text color={theme.warn}>
-              {'r Rename: '}
-              {draft}
-              <Text color={theme.faint}>▏</Text>
+            <Text color={theme.faint}>
+              [y] {view.confirm.label} · [n] {view.cancel.label}
             </Text>
           </Box>
-        ) : null}
-
-        {mode === 'confirm' && pendingAction ? (
-          <Box flexDirection="column" marginTop={1}>
-            <Text color={theme.danger} wrap="truncate-end">
-              {formatConfirmMessage(pendingAction, selectedRow)}
-            </Text>
-            <Text color={theme.faint}>{confirmHint(pendingAction)}</Text>
-          </Box>
-        ) : null}
-
-        {notice ? (
-          <Box marginTop={1}>
-            <Text color={theme.warn}>! {notice}</Text>
-          </Box>
-        ) : null}
-
-        {/* 按键提示 */}
-        <Box marginTop={1}>
-          {mode === 'filter' ? (
-            <Text color={theme.faint}>type to filter · enter keep · esc clear</Text>
-          ) : mode === 'rename' ? (
-            <Text color={theme.faint}>enter save · esc cancel</Text>
-          ) : mode === 'confirm' ? (
-            <Text color={theme.faint}>{confirmHint(pendingAction)}</Text>
-          ) : (
-            <KeyHints
-              actions={actions}
-              extra={
-                itemCount > 0
-                  ? `${heightMode === 'normal' ? '↑↓/jk/pgup/pgdn move' : '↑↓ move'}`
-                  : 'esc close'
-              }
-              disabledKeys={disabledActionKeys}
-            />
-          )}
         </Box>
-      </Box>
-    </ViewFrame>
-  );
-}
+      ) : null}
 
-function ViewFrame({
-  children,
-  bordered,
-  width,
-  marginY = 1,
-}: {
-  children: ReactNode;
-  bordered: boolean;
-  width?: number;
-  marginY?: number;
-}) {
-  if (!bordered) return <Box flexDirection="column">{children}</Box>;
-  return (
-    <Box
-      flexDirection="column"
-      borderStyle="single"
-      borderColor={theme.line}
-      paddingX={1}
-      marginY={marginY}
-      {...(width !== undefined ? { width } : {})}
-    >
-      {children}
-    </Box>
+      {/* 重命名输入 / 内联确认 */}
+      {mode === 'rename' ? (
+        <Box marginTop={1}>
+          <Text color={theme.warn}>
+            {'r Rename: '}
+            {draft}
+            <Text color={theme.faint}>▏</Text>
+          </Text>
+        </Box>
+      ) : null}
+
+      {mode === 'confirm' && pendingAction ? (
+        <Box flexDirection="column" marginTop={1}>
+          <Text color={theme.danger} wrap="truncate-end">
+            {formatConfirmMessage(pendingAction, selectedRow)}
+          </Text>
+          <Text color={theme.faint}>{confirmHint(pendingAction)}</Text>
+        </Box>
+      ) : null}
+
+      {notice ? (
+        <Box marginTop={1}>
+          <Text color={theme.warn}>! {notice}</Text>
+        </Box>
+      ) : null}
+    </>
+  );
+
+  return renderFrame(
+    titleText,
+    hintsText,
+    <Box flexDirection="column" width={contentWidth}>
+      {content}
+    </Box>,
   );
 }
 

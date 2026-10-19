@@ -11,7 +11,7 @@
 
 import { Box, render, Static, Text, useApp, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type CommandResult, createCommands, doResume } from '../commands/commands.js';
 import {
   deleteSessionAction,
@@ -28,10 +28,14 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
+import { QueuePreview } from '../components/QueuePreview.js';
+import { QuickHelp, shouldOpenQuickHelp } from '../components/QuickHelp.js';
 import { SessionTable } from '../components/SessionTable.js';
-import { StatusBar } from '../components/StatusBar.js';
+import { useSpinnerState } from '../components/StateTracker.js';
+import { StatusBar, type StatusKind } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import { SubagentActivity } from '../components/SubagentActivity.js';
+import { shouldPageOutput, TextViewer } from '../components/TextViewer.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
@@ -45,11 +49,13 @@ import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
-import { computeLiveLayout } from './layout.js';
+import { computeLiveLayout, queuePreviewRows } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
-import { loadStartupNotice } from './startup-notice.js';
+import { buildStartupHeader } from './startup-header.js';
+import { buildStartupNotice, loadStartupFacts, loadStartupNotice } from './startup-notice.js';
+import { useStatusMetrics } from './status-metrics.js';
 import { useReplState } from './use-repl-state.js';
 
 /** 与 core PermissionPolicy 一致的等待时限（ms） */
@@ -201,17 +207,40 @@ function InkRepl({ ctx }: InkReplProps) {
     ctx.currentSessionId = state.currentSessionId;
   }, [state.currentSessionId, ctx]);
 
-  // 启动横幅（0.3）：仅在配置了 MCP server 或存在 interrupted run 时追加一行。
-  // 查询失败静默，不阻塞启动。
+  /** 启动头 + 能力提示只写一次；/clear 后不重建（R0 风险 5） */
+  const startupWrittenRef = useRef(false);
   useEffect(() => {
+    if (startupWrittenRef.current) return;
+    startupWrittenRef.current = true;
     let disposed = false;
-    void loadStartupNotice(ctx).then((line) => {
-      if (!disposed && line) dispatch({ type: 'appendHistory', line });
-    });
+    void loadStartupFacts(ctx)
+      .then((facts) => {
+        if (disposed) return;
+        const header = buildStartupHeader({
+          columns: stdout.columns ?? 80,
+          rows: stdout.rows ?? 24,
+          ...(ctx.version ? { version: ctx.version } : {}),
+          summary: {
+            model: ctx.provider.model,
+            sessionId: ctx.currentSessionId,
+            ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
+            mcpCount: facts.mcpServers?.length ?? 0,
+            interruptedRuns: facts.interruptedRuns?.length ?? 0,
+            interruptedWorkflows: facts.interruptedWorkflows?.length ?? 0,
+            feishuConnected: facts.feishu?.connected ?? false,
+          },
+        });
+        const notice = buildStartupNotice(facts);
+        const lines = notice ? [...header, notice] : header;
+        if (lines.length > 0) dispatch({ type: 'appendHistoryLines', lines });
+      })
+      .catch(() => {
+        // 启动信息失败不阻塞 REPL
+      });
     return () => {
       disposed = true;
     };
-  }, [ctx, dispatch]);
+  }, [ctx, dispatch, stdout]);
 
   // 权限确认请求（ADR-029）：展示弹窗 + 120s 超时兜底 + run 结束/工具失败清理。
   // core 的 waitFor 超时后只发 tool.call.failed，不会发 response；不清理会留下永久弹窗。
@@ -299,6 +328,14 @@ function InkRepl({ ctx }: InkReplProps) {
   // 所以 Enter 的"补全 vs 执行"决策必须在此处（onSubmit）做，不能在 useInput 里做。
   const handleSubmit = useCallback(
     async (value: string) => {
+      // 队列编辑 Enter：保存并退出，不执行（B5）。
+      if (ui.queueEditIndex !== null) {
+        dispatch({ type: 'updateQueuedInput', index: ui.queueEditIndex, value });
+        dispatch({ type: 'setInput', input: '' });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+
       // 补全 case：输入是未完成的命令名 -> 补全到当前选中命令，不执行。
       // 用户再按一次 Enter 才执行。（决策逻辑见 decideCommandEnter，已单测覆盖）
       const decision = decideCommandEnter(
@@ -361,8 +398,18 @@ function InkRepl({ ctx }: InkReplProps) {
             dispatch({ type: 'clearHistory' });
             dispatch({ type: 'bumpClearSignal' }); // 触发 StreamOutput 清空
           } else if (result.output) {
-            // 如果命令有输出，添加到历史记录
-            dispatch({ type: 'appendHistory', line: result.output });
+            if (shouldPageOutput(result.output)) {
+              const name = value.trim().replace(/^\//, '').split(/\s+/)[0] ?? '';
+              const title = name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : 'Output';
+              dispatch({
+                type: 'openTextViewer',
+                title,
+                lines: result.output.split('\n'),
+              });
+            } else {
+              // 短输出照旧写入 scrollback
+              dispatch({ type: 'appendHistory', line: result.output });
+            }
           }
           if (result.history?.length) {
             // /resume 等命令附带的历史展示行
@@ -443,6 +490,7 @@ function InkRepl({ ctx }: InkReplProps) {
       ui.autocompleteIndex,
       ui.run.phase,
       ui.queuedInput.length,
+      ui.queueEditIndex,
       stdout,
       dispatch,
       startResumeRun,
@@ -613,11 +661,41 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
+    // quick help / pager 独占焦点；按键由组件自己处理
+    if (ui.quickHelpOpen || ui.textViewer) return;
+
     // ask-user / 权限弹窗显示时，其余键盘交给弹窗组件自己的 useInput
     if (ui.askUserActive || ui.permissionOverlay) return;
 
     // 命令视图打开时，键盘完全交给 InteractiveViewHost（单一焦点）。
     if (ui.view) return;
+
+    // 队列编辑独占 ↑↓ / Esc / Ctrl+X；其余键继续交给 TextInput。
+    if (ui.queueEditIndex !== null) {
+      if (key.ctrl && inputChar === 'x') {
+        dispatch({ type: 'removeQueuedInput', index: ui.queueEditIndex });
+        dispatch({ type: 'setInput', input: ui.queueReturnInput });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+      if (key.upArrow || key.downArrow) {
+        const count = ui.queuedInput.length;
+        if (count > 0) {
+          const step = key.upArrow ? -1 : 1;
+          const next = (ui.queueEditIndex + step + count) % count;
+          dispatch({ type: 'setQueueEditIndex', index: next });
+          dispatch({ type: 'setInput', input: ui.queuedInput[next] ?? '' });
+          dispatch({ type: 'bumpCaret' });
+        }
+        return;
+      }
+      if (key.escape) {
+        dispatch({ type: 'cancelQueueEdit' });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+      return;
+    }
 
     if (showAutocomplete) {
       if (key.tab) {
@@ -657,6 +735,20 @@ function InkRepl({ ctx }: InkReplProps) {
     if (key.ctrl && inputChar === 'o') {
       dispatch({ type: 'toggleExpanded' });
       dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      return;
+    }
+
+    // 输入框为空且不在历史浏览时，↑↓ 进入队列编辑（队尾 / 队首）。
+    if (
+      ui.input === '' &&
+      ui.historyIndex === null &&
+      ui.queuedInput.length > 0 &&
+      (key.upArrow || key.downArrow)
+    ) {
+      const index = key.upArrow ? ui.queuedInput.length - 1 : 0;
+      dispatch({ type: 'beginQueueEdit', index, returnInput: '' });
+      dispatch({ type: 'setInput', input: ui.queuedInput[index] ?? '' });
       dispatch({ type: 'bumpCaret' });
       return;
     }
@@ -775,14 +867,40 @@ function InkRepl({ ctx }: InkReplProps) {
   // 用 useWindowSize 订阅 resize，保证矮终端分级能即时生效。
   const windowSize = useWindowSize();
   const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
-  const layout = computeLiveLayout(terminalRows);
+  // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
+  const exclusiveOverlayActive =
+    ui.view !== null ||
+    state.showResumePicker ||
+    ui.permissionOverlay !== null ||
+    ui.askUserActive ||
+    ui.quickHelpOpen ||
+    ui.textViewer !== null;
+  const queueRows = exclusiveOverlayActive
+    ? 0
+    : queuePreviewRows(ui.queuedInput.length, terminalRows);
+  const layout = computeLiveLayout(terminalRows, queueRows);
   const runActive = ui.run.phase !== 'idle';
+  const spinner = useSpinnerState(ctx.events);
+  const metrics = useStatusMetrics(ctx, state.currentSessionId, ui.run.phase);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
+  useEffect(() => {
+    setTurnStartedAt(ui.run.phase === 'running' ? Date.now() : null);
+  }, [ui.run.phase]);
+  const statusKind: StatusKind =
+    ui.run.phase === 'cancelling'
+      ? 'cancelling'
+      : ui.run.phase !== 'idle'
+        ? spinner.verb === 'tool'
+          ? 'tool'
+          : 'thinking'
+        : 'idle';
+  const durationMs =
+    turnStartedAt !== null && ui.run.phase !== 'idle'
+      ? Math.max(0, metrics.now - turnStartedAt)
+      : undefined;
   // minimal 档在 run 进行中保留 1 行进度；hidden 始终为 0。
   const liveMaxHeight = layout.mode === 'minimal' && runActive ? 1 : layout.liveMaxHeight;
   const streamMaxLines = layout.mode === 'minimal' && runActive ? 1 : layout.streamMaxLines;
-  // 独占弹窗显示时隐藏实时流，避免浮层与流式内容争抢 live frame 空间。
-  const exclusiveOverlayActive =
-    ui.view !== null || state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
 
   // 矮终端降级只提示一次；写入 Static/scrollback，不占 live 行。
   useEffect(() => {
@@ -796,10 +914,14 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
       <Box flexDirection="column" flexShrink={0}>
         <StatusBar
-          provider={ctx.provider}
-          session={state.currentSessionId}
-          plugins={ctx.plugins}
-          {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
+          status={statusKind}
+          model={ctx.provider.model}
+          context={metrics.context}
+          {...(durationMs !== undefined ? { durationMs } : {})}
+          compactions={state.compactions ?? 0}
+          {...(metrics.sessions !== undefined ? { sessions: metrics.sessions } : {})}
+          cwd={metrics.cwd}
+          {...(metrics.branch ? { branch: metrics.branch } : {})}
         />
         {/* overlay 打开时隐藏更新横幅：高度预算只给状态栏留了 1 行 */}
         {!exclusiveOverlayActive && layout.mode !== 'minimal' && layout.mode !== 'hidden' && (
@@ -831,6 +953,7 @@ function InkRepl({ ctx }: InkReplProps) {
           expandSignal={ui.expandSignal}
           onFlush={handleStreamFlush}
           onComplete={handleStreamComplete}
+          detailMode={state.toolDetailMode ?? 'collapsed'}
         />
         <SubagentActivity events={ctx.events} />
       </Box>
@@ -966,39 +1089,94 @@ function InkRepl({ ctx }: InkReplProps) {
         <AskUserDialog events={ctx.events} onActiveChange={handleAskUserActive} />
       </Box>
 
-      {/* 输入框 - 只在没有独占交互组件时显示 */}
-      {!state.showResumePicker && !ui.view && !ui.permissionOverlay && !ui.askUserActive && (
-        <Box flexShrink={0}>
-          <Text color={theme.brand}>vessel › </Text>
-          <TextInput
-            key={ui.inputCaretKey}
-            value={ui.input}
-            onChange={(value) => dispatch({ type: 'setInput', input: value })}
-            onSubmit={handleSubmit}
+      {/* 队列预览（输入框上方；最多 3 条 + 尾行） */}
+      {!exclusiveOverlayActive && (
+        <QueuePreview
+          queued={ui.queuedInput}
+          editIndex={ui.queueEditIndex}
+          columns={stdout.columns ?? 80}
+          rows={terminalRows}
+        />
+      )}
+
+      {/* ? quick help（独占焦点；Backspace / Esc 关闭） */}
+      {ui.quickHelpOpen &&
+        !ui.view &&
+        !state.showResumePicker &&
+        !ui.permissionOverlay &&
+        !ui.askUserActive && (
+          <Box flexDirection="column" flexShrink={0}>
+            <QuickHelp
+              columns={stdout.columns ?? 80}
+              rows={terminalRows}
+              onClose={() => dispatch({ type: 'setQuickHelp', open: false })}
+            />
+          </Box>
+        )}
+
+      {/* 长文本 pager（CommandResult 形状不变；仅 TTY 路径） */}
+      {ui.textViewer && !ui.permissionOverlay && !ui.askUserActive && (
+        <Box flexDirection="column" flexShrink={0}>
+          <TextViewer
+            title={ui.textViewer.title}
+            lines={ui.textViewer.lines}
+            columns={stdout.columns ?? 80}
+            rows={terminalRows}
+            onClose={() => dispatch({ type: 'closeTextViewer' })}
           />
-          {argHint && <Text color={theme.faint}>{argHint}</Text>}
         </Box>
       )}
+
+      {/* 输入框 - 只在没有独占交互组件时显示 */}
+      {!state.showResumePicker &&
+        !ui.view &&
+        !ui.permissionOverlay &&
+        !ui.askUserActive &&
+        !ui.quickHelpOpen &&
+        !ui.textViewer && (
+          <Box flexShrink={0}>
+            <Text color={theme.brand}>vessel › </Text>
+            <TextInput
+              key={ui.inputCaretKey}
+              value={ui.input}
+              onChange={(value) => {
+                if (shouldOpenQuickHelp(ui.input, value)) {
+                  dispatch({ type: 'setInput', input: '' });
+                  dispatch({ type: 'bumpCaret' });
+                  dispatch({ type: 'setQuickHelp', open: true });
+                  return;
+                }
+                dispatch({ type: 'setInput', input: value });
+              }}
+              onSubmit={handleSubmit}
+            />
+            {argHint && <Text color={theme.faint}>{argHint}</Text>}
+          </Box>
+        )}
 
       {/* 运行态提示：输入框保持可用（可先打字），但 Enter 不会并发提交 */}
       {ui.run.phase !== 'idle' &&
         !state.showResumePicker &&
         !ui.view &&
         !ui.permissionOverlay &&
-        !ui.askUserActive && (
+        !ui.askUserActive &&
+        !ui.quickHelpOpen &&
+        !ui.textViewer && (
           <Box flexDirection="column" flexShrink={0}>
             <Text color={theme.warn}>
               {ui.run.phase === 'cancelling'
                 ? '◐ cancelling…'
                 : `◐ working… Esc to cancel · Ctrl+O ${ui.expandedOutput ? 'collapse' : 'expand'}${ui.expandedOutput ? ' (full output in scrollback)' : ''}`}
             </Text>
-            {ui.queuedInput.length > 0 && (
-              <Text color={theme.faint}>
-                ⏳ queued {ui.queuedInput.length}: {ui.queuedInput[0]}
-              </Text>
-            )}
           </Box>
         )}
+
+      {/* 底部快捷键提示（rows >= 18 才显示） */}
+      {!exclusiveOverlayActive && layout.hintRows > 0 && (
+        <Box flexShrink={0} paddingX={2}>
+          <Text color={theme.faint}>? quick help · Ctrl+O full transcript</Text>
+        </Box>
+      )}
 
       {/* 内联命令补全（输入框下方） */}
       {showAutocomplete && (

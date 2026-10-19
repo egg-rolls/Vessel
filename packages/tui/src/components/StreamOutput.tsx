@@ -9,16 +9,15 @@
  */
 
 import type { EventStream } from '@vessel/core';
-import { Box, Text, useStdout } from 'ink';
-import type { ReactNode } from 'react';
+import { Box, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { theme } from '../theme.js';
+import type { ToolDetailMode } from '../commands/commands.js';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
 import { MarkdownText } from './Markdown.js';
 import { SpinnerWithVerb } from './SpinnerWithVerb.js';
 import { useSpinnerState } from './StateTracker.js';
-import { DEFAULT_TOOL_DISPLAY, type DisplayOptions, toolDisplayRegistry } from './ToolDisplay.js';
+import { groupSegments, ToolTrail } from './ToolTrail.js';
 
 // ── 类型 & 工厂 & 纯 reducer（导出供测试） ──
 
@@ -234,53 +233,6 @@ export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => s
 
 // ── 组件 ──
 
-type ToolCallSegment = Extract<Segment, { type: 'tool_call' }>;
-
-/** 渲染 tool_call 片段：running=spinner；completed/failed 经 ToolDisplayRegistry 渲染结果/错误 */
-function renderToolCall(seg: ToolCallSegment, options: DisplayOptions): ReactNode {
-  const display = toolDisplayRegistry.get(seg.name);
-  const displayName = display.userFacingName(seg.arguments) || seg.name;
-  const activity = display.getActivityDescription?.(seg.arguments) ?? null;
-
-  if (seg.status === 'running') {
-    return (
-      <Box flexDirection="column">
-        <SpinnerWithVerb verb="tool" description={activity ?? displayName} />
-        {display.renderToolUseMessage(seg.arguments, { maxArgumentLength: 120, ...options })}
-      </Box>
-    );
-  }
-
-  const renderResult =
-    display.renderToolResultMessage ?? DEFAULT_TOOL_DISPLAY.renderToolResultMessage;
-  const renderError =
-    display.renderToolUseErrorMessage ?? DEFAULT_TOOL_DISPLAY.renderToolUseErrorMessage;
-
-  if (seg.status === 'completed') {
-    return (
-      <Box flexDirection="column">
-        <Box>
-          <Text color={theme.ok}>✓ {displayName}</Text>
-          {display.renderToolUseMessage(seg.arguments, { maxArgumentLength: 100, ...options })}
-          <Text color={theme.faint}> {seg.duration}ms</Text>
-        </Box>
-        {display.renderToolResultMessageWithInput
-          ? display.renderToolResultMessageWithInput(seg.arguments, seg.result ?? '', options)
-          : renderResult(seg.result ?? '', options)}
-      </Box>
-    );
-  }
-
-  return (
-    <Box flexDirection="column">
-      <Box>
-        <Text color={theme.danger}>✗ {displayName}</Text>
-      </Box>
-      {renderError(seg.error ?? '', options)}
-    </Box>
-  );
-}
-
 interface StreamOutputProps {
   events: EventStream;
   clearSignal?: number;
@@ -294,6 +246,8 @@ interface StreamOutputProps {
   onFlush?: (text: string) => void;
   /** 当前轮 run 结束时回调，传回可归档文本与终态原因 */
   onComplete?: (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => void;
+  /** Tool trail 三态；默认 collapsed */
+  detailMode?: ToolDetailMode;
 }
 
 export function StreamOutput({
@@ -304,6 +258,7 @@ export function StreamOutput({
   expandSignal,
   onFlush,
   onComplete,
+  detailMode = 'collapsed',
 }: StreamOutputProps) {
   const { stdout } = useStdout();
   const [segments, setSegments] = useState<Segment[]>([]);
@@ -413,31 +368,33 @@ export function StreamOutput({
 
   const hasContent = visibleSegments.length > 0;
   const isActive = spinnerState.verb !== 'idle';
-  const toolOptions: DisplayOptions = {};
+  const groups = useMemo(() => groupSegments(visibleSegments), [visibleSegments]);
 
   return (
     <Box flexDirection="column">
       {/* 只渲染最近的有界片段，最新内容自然出现在底部 */}
-      {visibleSegments.map((seg) => {
-        if (seg.type === 'text') {
-          return (
-            <Box key={seg.id}>
-              <MarkdownText text={seg.text} />
-            </Box>
-          );
-        }
-
-        // tool_call segment（ADR-021：经 ToolDisplayRegistry 渲染）
-        return (
-          <Box key={seg.id} marginY={1}>
-            {renderToolCall(seg, toolOptions)}
+      {groups.map((group) =>
+        group.type === 'text' ? (
+          <Box key={`text-${group.segment.id}`}>
+            <MarkdownText text={group.segment.text} />
           </Box>
-        );
-      })}
+        ) : (
+          <Box
+            key={`tools-${group.segments[0]?.id ?? 'none'}-${group.segments.length}`}
+            marginY={1}
+          >
+            <ToolTrail segments={group.segments} mode={detailMode} />
+          </Box>
+        ),
+      )}
 
       {/* 流式状态指示（ADR-022：StateTracker + SpinnerWithVerb 三态） */}
       {isActive && !hasContent && (
-        <SpinnerWithVerb verb={spinnerState.verb} description={spinnerState.description} />
+        <SpinnerWithVerb
+          verb={spinnerState.verb}
+          description={spinnerState.description}
+          {...(spinnerState.startedAt !== undefined ? { startedAt: spinnerState.startedAt } : {})}
+        />
       )}
     </Box>
   );

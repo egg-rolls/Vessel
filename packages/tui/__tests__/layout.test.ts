@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 import {
   computeLiveLayout,
   type LiveMode,
+  queuePreviewRows,
+  showsQuickHint,
   viewCapacity,
   viewChromeRows,
   viewExtraRows,
@@ -133,6 +135,27 @@ describe('computeLiveLayout', () => {
       expect(pickerMaxRows).toBeGreaterThanOrEqual(previous);
       previous = pickerMaxRows;
     }
+  });
+
+  it('队列行数从 live 预算扣除，矮终端仍保留输入行', () => {
+    expect(computeLiveLayout(15, 0).liveMaxHeight).toBe(3);
+    expect(computeLiveLayout(15, 3).liveMaxHeight).toBe(1);
+    expect(computeLiveLayout(11, 3).liveMaxHeight).toBe(0);
+    expect(computeLiveLayout(24, 5).liveMaxHeight).toBe(6);
+  });
+
+  it('queuePreviewRows：0 条 0 行，>3 条加尾行，矮终端 1 行', () => {
+    expect(queuePreviewRows(0, 24)).toBe(0);
+    expect(queuePreviewRows(2, 24)).toBe(3);
+    expect(queuePreviewRows(5, 24)).toBe(5);
+    expect(queuePreviewRows(5, 10)).toBe(1);
+  });
+
+  it('hintRows 只在 >=18 行出现', () => {
+    expect(showsQuickHint(17)).toBe(false);
+    expect(showsQuickHint(18)).toBe(true);
+    expect(computeLiveLayout(17).hintRows).toBe(0);
+    expect(computeLiveLayout(18).hintRows).toBe(1);
   });
 
   it('只有 minimal/hidden 给出过矮提示', () => {

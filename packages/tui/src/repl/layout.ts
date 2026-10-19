@@ -23,6 +23,8 @@ export interface LiveLayout {
   pickerMaxRows: number;
   /** 通用命令视图的数据行容量（已扣除 chrome 与状态栏） */
   viewMaxRows: number;
+  /** 底部快捷键提示占用行数（0/1） */
+  hintRows: number;
   notice: string | null;
 }
 
@@ -104,18 +106,45 @@ export function viewExtraRows(mode: OverlayInputMode, hasNotice = false): number
   return prompt + (hasNotice ? NOTICE_ROWS : 0);
 }
 
-export function computeLiveLayout(rows: number): LiveLayout {
+/** 底部快捷键提示只在 >=18 行显示 */
+export function showsQuickHint(rows: number): boolean {
+  return normalizeRows(rows) >= 18;
+}
+
+/**
+ * 纯函数：队列预览行数。
+ * rows<12 只显示一行；否则标题 + 最多 3 条 + 「…and N more」。
+ */
+export function queuePreviewRows(queuedCount: number, rows: number): number {
+  if (!Number.isFinite(queuedCount) || queuedCount <= 0) return 0;
+  if (normalizeRows(rows) < 12) return 1;
+  return 1 + Math.min(3, Math.floor(queuedCount)) + (queuedCount > 3 ? 1 : 0);
+}
+
+/**
+ * 纯函数：按终端行数计算 live 预算。
+ * `queueRows` 与底部 hint 行都从 live 区扣除，保证输入行不被挤掉。
+ */
+export function computeLiveLayout(rows: number, queueRows = 0): LiveLayout {
   const height = normalizeRows(rows);
   const mode = modeForHeight(height);
   const low = mode === 'minimal' || mode === 'hidden';
+  const queue = Math.max(0, Math.floor(Number.isFinite(queueRows) ? queueRows : 0));
+  const hintRows = showsQuickHint(height) ? 1 : 0;
+  const extra = queue + hintRows;
 
   return {
     mode,
-    liveMaxHeight: low ? 0 : height - 12,
-    streamMaxLines: low ? 0 : mode === 'compact' ? height - 12 : Math.max(3, height - 14),
-    autocompleteMax: mode === 'normal' ? 8 : low ? 3 : Math.max(3, height - 14),
+    liveMaxHeight: low ? 0 : Math.max(1, height - 12 - extra),
+    streamMaxLines: low
+      ? 0
+      : mode === 'compact'
+        ? Math.max(1, height - 12 - extra)
+        : Math.max(3, height - 14 - extra),
+    autocompleteMax: mode === 'normal' ? 8 : low ? 3 : Math.max(3, height - 14 - extra),
     pickerMaxRows: viewCapacity(height, mode, 'picker'),
     viewMaxRows: viewCapacity(height, mode, 'view'),
+    hintRows,
     notice: low ? LOW_HEIGHT_NOTICE : null,
   };
 }

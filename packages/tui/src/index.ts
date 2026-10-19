@@ -13,6 +13,7 @@ export type {
   CommandResult,
   ReplState,
   ResumeResult,
+  ToolDetailMode,
 } from './commands/commands.js';
 export {
   CommandRegistry,
@@ -45,7 +46,34 @@ export {
   InteractiveViewHost,
   type InteractiveViewHostProps,
 } from './components/InteractiveViewHost.js';
+export {
+  type IndicatorStyle,
+  indicatorFrame,
+  indicatorFrames,
+  indicatorInterval,
+  resolveIndicatorStyle,
+  THINKING_VERB_INTERVAL_MS,
+  THINKING_VERBS,
+  thinkingVerb,
+} from './components/indicator.js';
 export { formatKeyHints, KeyHints, type KeyHintsProps } from './components/KeyHints.js';
+export {
+  type BorderParts,
+  buildBorderParts,
+  PanelFrame,
+  type PanelFrameProps,
+  type PanelVariant,
+} from './components/PanelFrame.js';
+export {
+  formatQueuePreview,
+  getQueueWindow,
+  type QueueLine,
+  type QueueLineTone,
+  QueuePreview,
+  type QueuePreviewProps,
+  type QueueWindow,
+} from './components/QueuePreview.js';
+export { QuickHelp, type QuickHelpProps, shouldOpenQuickHelp } from './components/QuickHelp.js';
 export {
   type SessionPickerActionResult,
   SessionTable,
@@ -63,7 +91,16 @@ export {
   useSpinnerState,
 } from './components/StateTracker.js';
 // Ink 组件
-export { StatusBar } from './components/StatusBar.js';
+export {
+  contextBar,
+  contextTone,
+  formatStatusRule,
+  StatusBar,
+  type StatusKind,
+  type StatusRuleProps,
+  type StatusSegment,
+  type StatusTone,
+} from './components/StatusBar.js';
 export { StreamOutput } from './components/StreamOutput.js';
 export {
   reduceSubagentState,
@@ -71,12 +108,29 @@ export {
   type SubagentState,
 } from './components/SubagentActivity.js';
 export {
+  pagerRows,
+  shouldPageOutput,
+  TextViewer,
+  type TextViewerProps,
+} from './components/TextViewer.js';
+export {
   DEFAULT_TOOL_DISPLAY,
   type DisplayOptions,
   type ToolDisplayDefinition,
   ToolDisplayRegistry,
+  type ToolTrailLine,
   toolDisplayRegistry,
 } from './components/ToolDisplay.js';
+export {
+  buildTrail,
+  groupSegments,
+  type SegmentGroup,
+  type ToolSegment,
+  ToolTrail,
+  type TrailLine,
+  type TrailTone,
+  type TrailView,
+} from './components/ToolTrail.js';
 export {
   reduceUpdateState,
   UpdateBanner,
@@ -93,6 +147,13 @@ export { formatPermissionQuestion, type ToolOrigin } from './renderer/tool-confi
 // Ink 版本（React 组件式 UI）
 export { startInkRepl } from './repl/ink-repl.js';
 export {
+  computeLiveLayout,
+  type LiveLayout,
+  type LiveMode,
+  queuePreviewRows,
+  showsQuickHint,
+} from './repl/layout.js';
+export {
   executeResume,
   executeTurn,
   executeWorkflow,
@@ -100,8 +161,18 @@ export {
   type WorkflowTurnOutcome,
 } from './repl/run-turn.js';
 export {
+  buildSessionSummary,
+  buildStartupHeader,
+  type SessionSummaryFacts,
+  STARTUP_TAGLINE,
+  type StartupHeaderInput,
+  WORDMARK_5,
+} from './repl/startup-header.js';
+export {
   buildStartupNotice,
+  loadStartupFacts,
   loadStartupNotice,
+  type StartupFacts,
   type StartupNoticeInput,
 } from './repl/startup-notice.js';
 export type {
