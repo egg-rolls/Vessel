@@ -2,8 +2,10 @@
  * 统一工具执行管道（0.8.2 Wave 2B1）。
  *
  * AgentRuntime、workflow `type: tool`、delegate 子 runtime 共用同一套工具执行语义：
- * 权限判定 → BeforeTool hook → ToolCall guardrail → handler（timeout/abort）
- * → ToolResult guardrail → AfterTool hook。
+ * ToolCall guardrail → BeforeTool hook → 权限判定（最终工具与参数）
+ * → handler（timeout/abort）→ ToolResult guardrail → AfterTool hook。
+ *
+ * 权限判定必须对 guardrail/hook 改写后的最终工具与参数执行，避免旧工具/旧参数放行。
  *
  * 管道不发布 `tool.call.*` 事件（调用方负责，避免重复）。
  *
@@ -100,8 +102,8 @@ async function invokeTool(tool: ToolDefinition, args: unknown, ctx: ToolContext)
 /**
  * 创建工具执行管道。
  *
- * 阶段顺序：getTool → permission → BeforeTool → ToolCall guardrail → handler
- * → ToolResult guardrail → AfterTool（仅成功）。
+ * 阶段顺序：getTool → ToolCall guardrail → BeforeTool → permission（最终工具与参数）
+ * → handler → ToolResult guardrail → AfterTool（仅成功）。
  */
 export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
   const { pluginHost, events, permission, guardrails, hooks } = deps;
@@ -138,11 +140,36 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       let tool = pluginHost.getTool(toolName);
       if (!tool) return fail(`Tool "${toolName}" not found`);
 
-      // 2. 权限判定
-      try {
-        await permission.authorize(tool, args, ctx);
-      } catch (error) {
-        return fail(errorText(error));
+      // 2. ToolCall guardrail：replacement 可改写 name/arguments
+      if (stages.toolCallGuardrail) {
+        const outcome = await guardrails.apply(
+          toolCall,
+          GuardrailStage.ToolCall,
+          options.runId,
+          options.sessionId,
+        );
+        if (!outcome.allowed) {
+          return fail(`Tool call blocked by guardrail: ${outcome.reason ?? 'blocked'}`);
+        }
+        if (isToolCall(outcome.replacement)) {
+          const replacement = outcome.replacement;
+          // GuardrailRunner 在无 guardrail 时也会回传原值；只有真正改写才重解析。
+          const nameChanged = replacement.function.name !== toolName;
+          const argsChanged = replacement.function.arguments !== toolCall.function.arguments;
+          toolCall = replacement;
+          if (nameChanged || argsChanged) {
+            toolName = replacement.function.name;
+            try {
+              args = replacement.function.arguments
+                ? JSON.parse(replacement.function.arguments)
+                : {};
+            } catch (error) {
+              return fail(`Invalid JSON in tool arguments: ${errorText(error)}`);
+            }
+            tool = pluginHost.getTool(toolName);
+            if (!tool) return fail(`Tool "${toolName}" not found`);
+          }
+        }
       }
 
       // 3. BeforeTool hook：block 短路；updatedInput 改写入参
@@ -161,37 +188,11 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
         }
       }
 
-      // 4. ToolCall guardrail：replacement 可改写 name/arguments
-      if (stages.toolCallGuardrail) {
-        const outcome = await guardrails.apply(
-          toolCall,
-          GuardrailStage.ToolCall,
-          options.runId,
-          options.sessionId,
-        );
-        if (!outcome.allowed) {
-          return fail(`Tool call blocked by guardrail: ${outcome.reason ?? 'blocked'}`);
-        }
-        if (isToolCall(outcome.replacement)) {
-          const replacement = outcome.replacement;
-          // GuardrailRunner 在无 guardrail 时也会回传原值；只有真正改写才覆盖
-          // BeforeTool hook 的 updatedInput。
-          const nameChanged = replacement.function.name !== toolName;
-          const argsChanged = replacement.function.arguments !== toolCall.function.arguments;
-          toolCall = replacement;
-          if (nameChanged || argsChanged) {
-            toolName = replacement.function.name;
-            try {
-              args = replacement.function.arguments
-                ? JSON.parse(replacement.function.arguments)
-                : {};
-            } catch (error) {
-              return fail(`Invalid JSON in tool arguments: ${errorText(error)}`);
-            }
-            tool = pluginHost.getTool(toolName);
-            if (!tool) return fail(`Tool "${toolName}" not found`);
-          }
-        }
+      // 4. 权限判定：必须针对 guardrail/hook 改写后的最终工具与参数
+      try {
+        await permission.authorize(tool, args, ctx);
+      } catch (error) {
+        return fail(errorText(error));
       }
 
       // 5. handler（timeout + ctx.signal）

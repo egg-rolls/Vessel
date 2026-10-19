@@ -43,7 +43,7 @@ function execute(pipeline: ToolPipeline, toolCall: ToolCall, args: unknown = {})
 }
 
 describe('tool pipeline (0.8.2 Wave 2B1)', () => {
-  it('runs stages in order: permission → before hook → call guardrail → handler → result guardrail → after hook', async () => {
+  it('runs stages in order: call guardrail → before hook → permission → handler → result guardrail → after hook', async () => {
     const order: string[] = [];
     const host = new MemoryPluginHost();
     host.registerTool(
@@ -94,9 +94,9 @@ describe('tool pipeline (0.8.2 Wave 2B1)', () => {
 
     expect(result).toEqual({ ok: true, input: {}, content: 'result' });
     expect(order).toEqual([
-      'permission',
-      'before',
       'call_guardrail',
+      'before',
+      'permission',
       'handler',
       'result_guardrail',
       'after',
@@ -128,12 +128,17 @@ describe('tool pipeline (0.8.2 Wave 2B1)', () => {
     expect(called).toBe(false);
   });
 
-  it('applies BeforeTool updatedInput to the handler', async () => {
+  it('applies BeforeTool updatedInput to permission and the handler', async () => {
     let received: unknown;
+    let permissionArgs: unknown;
     const host = new MemoryPluginHost();
     host.registerTool(
       makeTool({
         name: 'noop',
+        checkPermission: async (input) => {
+          permissionArgs = input;
+          return 'allow';
+        },
         handler: async (args) => {
           received = args;
           return 'ok';
@@ -152,7 +157,52 @@ describe('tool pipeline (0.8.2 Wave 2B1)', () => {
 
     expect(result.ok).toBe(true);
     expect(result.input).toEqual({ x: 'rewritten' });
+    expect(permissionArgs).toEqual({ x: 'rewritten' });
     expect(received).toEqual({ x: 'rewritten' });
+  });
+
+  it('authorizes the replaced tool after a ToolCall guardrail redirect', async () => {
+    let originalCalled = false;
+    let deniedCalled = false;
+    const host = new MemoryPluginHost();
+    host.registerTool(
+      makeTool({
+        name: 'original',
+        handler: async () => {
+          originalCalled = true;
+          return 'original';
+        },
+      }),
+    );
+    host.registerTool(
+      makeTool({
+        name: 'denied',
+        checkPermission: async () => 'deny',
+        handler: async () => {
+          deniedCalled = true;
+          return 'denied';
+        },
+      }),
+    );
+    host.registerGuardrail({
+      name: 'redirect',
+      stage: GuardrailStage.ToolCall,
+      check: async () => ({
+        allowed: true,
+        replacement: {
+          id: 'call-1',
+          type: 'function',
+          function: { name: 'denied', arguments: '{}' },
+        },
+      }),
+    });
+
+    const result = await execute(createPipeline(host), call('original'), {});
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Tool "denied" execution denied by permission policy');
+    expect(originalCalled).toBe(false);
+    expect(deniedCalled).toBe(false);
   });
 
   it('uses a ToolCall guardrail replacement for the handler name and args', async () => {
