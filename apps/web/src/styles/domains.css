@@ -566,6 +566,203 @@
   margin-top: 4px;
 }
 
+.run-detail-id {
+  overflow-wrap: anywhere;
+}
+
+.run-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.load-more-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  font-size: 11.5px;
+}
+
+/* ── tool call 折叠行 ─────────────────────────────────── */
+
+.tool-call {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  margin: 4px 0;
+}
+
+.tool-call.failed {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+
+.tool-call-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.tool-call-head:hover {
+  background: var(--surface-2);
+}
+
+.tool-call-name {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.tool-call-toggle {
+  margin-left: auto;
+}
+
+.tool-call-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px 20px;
+  border-top: 1px solid var(--line);
+}
+
+.tool-call-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tool-call-field .json-body {
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  max-height: 240px;
+}
+
+.tool-schema {
+  margin-top: 4px;
+}
+
+.tool-schema summary {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* ── workflow 步骤时间线 ─────────────────────────────── */
+
+.step-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 10px;
+  list-style: none;
+  padding: 0;
+}
+
+.step-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding-bottom: 14px;
+}
+
+.step-rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: 5px;
+}
+
+.step-rail::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: -14px;
+  width: 1px;
+  background: var(--line);
+}
+
+.step-item:last-child .step-rail::before {
+  display: none;
+}
+
+.step-dot {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.step-completed .step-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.step-failed .step-dot {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.step-running .step-dot {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.step-body {
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.step-index {
+  color: var(--faint);
+}
+
+.step-id {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.step-times {
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+
+.step-output {
+  margin-top: 6px;
+}
+
+.step-output summary {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* ── run 详情 / 评测 ──────────────────────────────────── */
+
 .event-list {
   display: flex;
   flex-direction: column;

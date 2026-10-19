@@ -310,6 +310,7 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: clip;
   overscroll-behavior: contain;
   padding: 24px clamp(16px, 4vw, 48px) 40px;
 }
@@ -635,9 +636,44 @@
   }
 }
 
+@media (max-width: 1023px) {
+  /* 平板：隐藏诊断性列，避免表格横向溢出。 */
+  .data-table .col-optional {
+    display: none;
+  }
+
+  .data-table td:last-child {
+    white-space: normal;
+  }
+}
+
+@media (pointer: coarse) {
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+
+  .filter-chip {
+    min-height: 34px;
+    padding: 6px 12px;
+  }
+}
+
 @media (max-width: 680px) {
   :root {
     --appbar-h: 52px;
+  }
+
+  .palette {
+    margin-top: 4vh;
+  }
+
+  .more-sheet {
+    padding-bottom: calc(22px + env(safe-area-inset-bottom));
+  }
+
+  .kv-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) max-content;
   }
 
   .domain-nav {
@@ -697,7 +733,8 @@
   }
 
   .composer-area {
-    padding: 8px 12px calc(12px + env(safe-area-inset-bottom));
+    /* 底部导航自身处理 safe-area，避免双重留白。 */
+    padding: 8px 12px 8px;
   }
 
   .page-header {
