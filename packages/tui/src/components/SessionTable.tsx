@@ -27,6 +27,15 @@ function truncate(str: string, max: number): string {
   return `${str.slice(0, max - 3)}...`;
 }
 
+/**
+ * 纯函数：把选中索引钳制到 [0, len-1]。
+ * 空列表返回 0（不是 -1），避免 ↑↓ 后出现无效索引。
+ */
+export function clampSelection(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.min(Math.max(0, index), length - 1);
+}
+
 export function SessionTable({
   sessions,
   currentSessionId,
@@ -57,6 +66,11 @@ export function SessionTable({
   useEffect(() => {
     setSelectedIndex(0);
   }, [filterText]);
+
+  // 列表长度变化（过滤 / 重拉）时钳制到 [0, len-1]；空列表保持 0，绝不出现 -1。
+  useEffect(() => {
+    setSelectedIndex((prev) => clampSelection(prev, filteredSessions.length));
+  }, [filteredSessions.length]);
 
   // 矮终端：围绕选中项滚动，避免 picker 溢出压掉状态栏。
   const visibleWindow = useMemo(() => {
@@ -115,12 +129,12 @@ export function SessionTable({
     }
 
     if (key.upArrow) {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
+      setSelectedIndex((prev) => clampSelection(prev - 1, filteredSessions.length));
       return;
     }
 
     if (key.downArrow) {
-      setSelectedIndex((prev) => Math.min(filteredSessions.length - 1, prev + 1));
+      setSelectedIndex((prev) => clampSelection(prev + 1, filteredSessions.length));
       return;
     }
 
@@ -192,6 +206,26 @@ export function SessionTable({
         <Text color={theme.muted}>No sessions to resume.</Text>
         <Box marginTop={1}>
           <Text color={theme.faint}>Esc to close</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  // 有会话但过滤结果为空：明确提示，而不是留下一个空表头。
+  if (filteredSessions.length === 0) {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor={theme.line}
+        paddingX={1}
+        marginY={1}
+      >
+        <Text color={theme.muted}>No matching sessions</Text>
+        <Box marginTop={1}>
+          <Text color={theme.faint}>
+            {filterText ? `filter: "${filterText}" · ` : ''}esc to clear filter
+          </Text>
         </Box>
       </Box>
     );

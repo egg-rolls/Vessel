@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type CommandItem,
+  DISCOVERY_PRIORITY,
   decideCommandEnter,
   filterCommands,
   getVisibleCommandWindow,
   MAX_VISIBLE_COMMANDS,
+  sortCommandsForDiscovery,
 } from '../src/components/InlineAutocomplete.js';
 
 /** 构造测试用命令列表 */
@@ -51,6 +53,45 @@ function expectValidWindow(total: number, selected: number, maxVisible: number):
   expect(selected).toBeGreaterThanOrEqual(start);
   expect(selected).toBeLessThan(end);
 }
+
+describe('sortCommandsForDiscovery', () => {
+  it('空 filter 时 /help /new /history /clear 出现在首屏前四位', () => {
+    const commands: CommandItem[] = [
+      { name: '/tools', description: '工具' },
+      { name: '/plugins', description: '插件' },
+      { name: '/help', description: '帮助' },
+      { name: '/new', description: '新会话' },
+      { name: '/history', description: '历史' },
+      { name: '/clear', description: '清屏' },
+      { name: '/exit', description: '退出' },
+    ];
+
+    const sorted = filterCommands(commands, '');
+    expect(sorted.slice(0, 4).map((cmd) => cmd.name)).toEqual([...DISCOVERY_PRIORITY]);
+    // 其余保持注册顺序
+    expect(sorted.slice(4).map((cmd) => cmd.name)).toEqual(['/tools', '/plugins', '/exit']);
+    expect(sorted).toHaveLength(commands.length);
+  });
+
+  it('非首屏命令保持原有相对顺序', () => {
+    const commands: CommandItem[] = [
+      { name: '/runs', description: '运行' },
+      { name: '/config', description: '配置' },
+      { name: '/metrics', description: '指标' },
+    ];
+    expect(sortCommandsForDiscovery(commands).map((cmd) => cmd.name)).toEqual([
+      '/runs',
+      '/config',
+      '/metrics',
+    ]);
+  });
+
+  it('带 filter 时保持相关度排序（不强行置顶）', () => {
+    const filtered = filterCommands(sampleCommands(), 'resume');
+    // /resume 是命令名匹配，/help 只是描述匹配；优先级不应打乱相关度
+    expect(filtered[0]?.name).toBe('/resume');
+  });
+});
 
 describe('getVisibleCommandWindow', () => {
   it('条目不超过上限时覆盖全部', () => {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 import type { Message, RunState, ToolDefinition } from '@vessel/core';
-import { CommandRegistry, createCommands, parseHistoryArgs } from '../src/commands/commands.js';
+import {
+  CommandRegistry,
+  createCommands,
+  HISTORY_LIMIT_DEFAULT,
+  parseHistoryArgs,
+} from '../src/commands/commands.js';
 import { makeCtx, makeState } from './helpers.js';
 
 const sampleTool: ToolDefinition = {
@@ -299,6 +304,45 @@ describe('扁平会话命令', () => {
     expect(out).not.toContain('first');
     expect(out).toContain('second');
     expect(out).toContain('third');
+  });
+
+  it('/history 无参默认只输出最近 50 条并在标题注明', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const messages = Array.from({ length: 55 }, (_, i) => ({
+      role: 'user' as const,
+      content: `m${String(i + 1).padStart(3, '0')}`,
+    }));
+    await ctx.session.save(runState(ctx.currentSessionId, messages));
+    const state = makeState(ctx.currentSessionId);
+
+    const out = (await reg.execute('history', ctx, state)).output ?? '';
+
+    expect(out).toContain(`History (50 of 55 messages, last ${HISTORY_LIMIT_DEFAULT}):`);
+    expect(out).toContain('m006');
+    expect(out).toContain('m055');
+    expect(out).not.toContain('m001');
+    expect(out).not.toContain('m005');
+  });
+
+  it('/history --role 无 --limit 时先过滤，再取最近 50 条', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const messages = Array.from({ length: 60 }, (_, i) => ({
+      role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: `r${String(i + 1).padStart(3, '0')}`,
+    }));
+    await ctx.session.save(runState(ctx.currentSessionId, messages));
+    const state = makeState(ctx.currentSessionId);
+
+    const out = (await reg.execute('history --role assistant', ctx, state)).output ?? '';
+
+    expect(out).toContain(
+      `History (30 of 30 messages, role=assistant, last ${HISTORY_LIMIT_DEFAULT}):`,
+    );
+    expect(out).not.toContain('r001'); // user
+    expect(out).toContain('r002'); // assistant
+    expect(out).toContain('r060'); // assistant, latest
   });
 
   it('/history --role 先过滤再取最近 N 条', async () => {

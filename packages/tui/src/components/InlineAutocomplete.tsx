@@ -28,9 +28,31 @@ interface InlineAutocompleteProps {
   maxVisible?: number;
 }
 
+/**
+ * 首屏优先展示的常用命令（按此顺序）。
+ * `/` 打开补全时条目很多，这四个必须出现在第一屏；其余保持注册顺序。
+ */
+export const DISCOVERY_PRIORITY = ['/help', '/new', '/history', '/clear'] as const;
+
+/** 纯函数：把常用命令提到最前；其余保持原有（注册）顺序（sort 稳定）。 */
+export function sortCommandsForDiscovery(commands: CommandItem[]): CommandItem[] {
+  const rank = new Map<string, number>(
+    DISCOVERY_PRIORITY.map((name, index) => [name, index] as const),
+  );
+  return [...commands].sort((a, b) => {
+    const aRank = rank.get(a.name);
+    const bRank = rank.get(b.name);
+    if (aRank !== undefined && bRank !== undefined) return aRank - bRank;
+    if (aRank !== undefined) return -1;
+    if (bRank !== undefined) return 1;
+    return 0;
+  });
+}
+
 /** 纯函数：按 filter 模糊匹配命令（substring，大小写不敏感）。命令名匹配排在前，描述匹配排在后。 */
 export function filterCommands(commands: CommandItem[], filter: string): CommandItem[] {
-  if (!filter) return commands;
+  // 空 filter = 浏览全部命令：常用命令置顶，保证第一屏可见。
+  if (!filter) return sortCommandsForDiscovery(commands);
   const lower = filter.toLowerCase();
   const filtered = commands.filter(
     (cmd) =>
