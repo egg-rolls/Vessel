@@ -16,6 +16,7 @@ import type {
 import { formatRpcError } from '../rpc.js';
 import { waitForRunCompletion } from '../rpc-events.js';
 import { formatRelativeTime } from '../utils/time.js';
+import type { DetailView, TableView, ViewAction, ViewActionInvocation } from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const DISPLAY_LIMIT = 20;
@@ -53,6 +54,89 @@ function statusLabel(run: DurableRunSummary): string {
   return run.status === 'running' ? 'running (live)' : 'interrupted';
 }
 
+/** 视图状态同时带 glyph 与文本（无色终端也可读） */
+export function runStatusLabel(run: DurableRunSummary): string {
+  return run.status === 'running' ? '◐ running (live)' : '! interrupted';
+}
+
+/** 短 run id：窄屏展示；保留前 max-1 个字符 */
+export function shortRunId(runId: string, max = 18): string {
+  const chars = Array.from(runId);
+  if (chars.length <= max) return runId;
+  return `${chars.slice(0, Math.max(1, max - 1)).join('')}…`;
+}
+
+/** /runs 表格列（80 / 100+ 自适应） */
+export function runsColumns(): TableView['columns'] {
+  return [
+    { key: 'run', header: 'RUN', width: 18, priority: 1 },
+    { key: 'session', header: 'SESSION', width: 18, priority: 2 },
+    { key: 'status', header: 'STATUS', width: 17, priority: 1 },
+    { key: 'updated', header: 'UPDATED', width: 10, priority: 1 },
+    { key: 'iter', header: 'ITER', width: 4, align: 'right', priority: 2 },
+    { key: 'preview', header: 'PREVIEW', minWidth: 16, priority: 1 },
+  ];
+}
+
+/** /runs 视图动作：Enter 恢复、x 取消、r 刷新 */
+export function runsViewActions(): ViewAction[] {
+  return [
+    { id: 'resume', key: 'enter', label: 'resume', enabled: 'selected' },
+    {
+      id: 'cancel',
+      key: 'x',
+      label: 'cancel',
+      tone: 'danger',
+      enabled: 'selected',
+      confirm: 'Cancel run "{name}"?',
+    },
+    { id: 'refresh', key: 'r', label: 'refresh' },
+  ];
+}
+
+/** 纯函数：run 列表 -> TableView（行顺序与 formatRuns 一致） */
+export function buildRunsView(runs: DurableRunSummary[], now: number = Date.now()): TableView {
+  const rows = runs.map((run) => ({
+    key: run.run_id,
+    tone: run.status === 'running' ? ('warn' as const) : ('default' as const),
+    cells: {
+      run: shortRunId(run.run_id),
+      runId: run.run_id,
+      session: shortRunId(run.session_id),
+      status: runStatusLabel(run),
+      updated: formatRelativeTime(run.updated_at, now),
+      iter: String(run.iteration ?? '-'),
+      preview: truncate(oneLine(run.preview ?? ''), 60),
+    },
+  }));
+
+  return {
+    kind: 'table',
+    title: 'Durable runs',
+    columns: runsColumns(),
+    rows,
+    actions: runsViewActions(),
+    ...(rows[0] ? { initialKey: rows[0].key } : {}),
+    emptyText: 'No running or interrupted runs.',
+    meta: `${runs.length} · newest first`,
+  };
+}
+
+/** 纯函数：durable 未启用时的诚实空态 */
+export function disabledRunsView(): DetailView {
+  return {
+    kind: 'detail',
+    title: 'Durable runs',
+    badge: { text: 'disabled', tone: 'warn' },
+    sections: [
+      {
+        title: 'Not enabled',
+        lines: ['Durable runs are not enabled (durable.enabled: false).'],
+      },
+    ],
+  };
+}
+
 /** 纯函数：把 run 列表渲染成表格文本（测试用） */
 export function formatRuns(runs: DurableRunSummary[], now: number = Date.now()): string {
   if (runs.length === 0) return '\nNo running or interrupted runs.\n';
@@ -81,10 +165,15 @@ export function formatRuns(runs: DurableRunSummary[], now: number = Date.now()):
   return lines.join('\n');
 }
 
+function runsEnvelope(view: TableView | DetailView): NonNullable<CommandResult['view']> {
+  return { source: 'runs', view };
+}
+
 function disabledMessage(): CommandResult {
   return {
     handled: true,
     output: '\nDurable runs are not enabled (durable.enabled: false).\n',
+    view: runsEnvelope(disabledRunsView()),
   };
 }
 
@@ -191,6 +280,73 @@ function resumeViaRpc(ctx: ReplContext, runId: string): Promise<DurableRunHandle
   });
 }
 
+/** running + interrupted 合并、排序、截断（无参列表与视图刷新共用） */
+async function loadRuns(ctx: ReplContext): Promise<DurableRunSummary[]> {
+  const [running, interrupted] = await Promise.all([
+    listRunSummaries(ctx, 'running', DISPLAY_LIMIT),
+    listRunSummaries(ctx, 'interrupted', DISPLAY_LIMIT),
+  ]);
+  return mergeRuns(running, interrupted);
+}
+
+/** `/runs` 视图动作：Enter/r 恢复、x 取消、r 刷新（source 固定 'runs'） */
+export async function runRunsViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  if (invocation.actionId === 'refresh') {
+    try {
+      const runs = await loadRuns(ctx);
+      return { handled: true, view: runsEnvelope(buildRunsView(runs)) };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to list durable runs:\n${formatRpcError(error)}\n`,
+      };
+    }
+  }
+
+  if (invocation.actionId === 'resume' || invocation.actionId === 'enter') {
+    if (!invocation.selectionKey) {
+      return usage('Select a run first.');
+    }
+    return runRunsCommand(['resume', invocation.selectionKey], ctx);
+  }
+
+  if (invocation.actionId === 'cancel') {
+    if (!invocation.selectionKey) return usage('Select a run first.');
+    if (!ctx.rpc) {
+      return usage('Cancelling runs requires the RPC control plane.');
+    }
+    try {
+      const result = await ctx.rpc.request<unknown>('runs.cancel', {
+        run_id: invocation.selectionKey,
+      });
+      const cancelled =
+        typeof result === 'object' && result !== null && 'cancelled' in result
+          ? (result as { cancelled?: unknown }).cancelled
+          : undefined;
+      if (cancelled === false) {
+        return {
+          handled: true,
+          output: `\nRun "${invocation.selectionKey}" is not running; nothing to cancel.\n`,
+        };
+      }
+      return {
+        handled: true,
+        output: `\nCancellation requested for run "${invocation.selectionKey}".\n`,
+      };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to cancel run "${invocation.selectionKey}":\n${formatRpcError(error)}\n`,
+      };
+    }
+  }
+
+  return { handled: true, output: `\nUnknown /runs view action "${invocation.actionId}".\n` };
+}
+
 /** /runs 的执行体（导出供单测） */
 export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<CommandResult> {
   if (!ctx.rpc && !ctx.runs) return disabledMessage();
@@ -199,11 +355,12 @@ export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<
 
   if (subcommand === undefined) {
     try {
-      const [running, interrupted] = await Promise.all([
-        listRunSummaries(ctx, 'running', DISPLAY_LIMIT),
-        listRunSummaries(ctx, 'interrupted', DISPLAY_LIMIT),
-      ]);
-      return { handled: true, output: formatRuns(mergeRuns(running, interrupted)) };
+      const runs = await loadRuns(ctx);
+      return {
+        handled: true,
+        output: formatRuns(runs),
+        view: runsEnvelope(buildRunsView(runs)),
+      };
     } catch (error) {
       return listFailure(error);
     }
@@ -244,6 +401,8 @@ export function runsCommand(): CommandEntry {
     category: 'run',
     keywords: ['durable', 'interrupt', 'recover'],
     available: (ctx) => Boolean(ctx.runs || ctx.rpc),
+    unavailableHint: 'durable disabled',
     run: (args, ctx) => runRunsCommand(args, ctx),
+    viewAction: (invocation, ctx) => runRunsViewAction(invocation, ctx),
   };
 }

@@ -22,7 +22,15 @@ import type {
 } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { waitForWorkflowCompletion } from '../rpc-events.js';
+import { fitCell } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
+import type {
+  DetailView,
+  TableView,
+  ViewAction,
+  ViewActionInvocation,
+  ViewTone,
+} from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const DISPLAY_LIMIT = 20;
@@ -94,6 +102,236 @@ export function sortWorkflowRuns(runs: WorkflowRunSummaryLike[]): WorkflowRunSum
     if (a.workflow_run_id === b.workflow_run_id) return 0;
     return a.workflow_run_id < b.workflow_run_id ? -1 : 1;
   });
+}
+
+/** 状态文本：无色终端也能区分 */
+export function workflowStatusLabel(status: WorkflowRunStatusLike): string {
+  return status === 'running' ? '◐ running' : status;
+}
+
+/** 行 tone（颜色是增强，不是唯一信息） */
+export function workflowStatusTone(status: WorkflowRunStatusLike): ViewTone {
+  if (status === 'failed') return 'danger';
+  if (status === 'running' || status === 'interrupted' || status === 'pending') return 'warn';
+  if (status === 'completed') return 'ok';
+  return 'muted';
+}
+
+/** 短 id：窄屏展示 */
+export function shortWorkflowRunId(runId: string, max = 18): string {
+  const chars = Array.from(runId);
+  if (chars.length <= max) return runId;
+  return `${chars.slice(0, Math.max(1, max - 1)).join('')}…`;
+}
+
+/** /workflows 表格列 */
+export function workflowRunColumns(): TableView['columns'] {
+  return [
+    { key: 'run', header: 'RUN', width: 18, priority: 1 },
+    { key: 'workflow', header: 'WORKFLOW', width: 18, priority: 1 },
+    { key: 'status', header: 'STATUS', width: 13, priority: 1 },
+    { key: 'progress', header: 'PROGRESS', width: 9, priority: 1 },
+    { key: 'updated', header: 'UPDATED', width: 10, priority: 2 },
+    { key: 'error', header: 'ERROR', minWidth: 12, priority: 2 },
+  ];
+}
+
+/** 表格动作：Enter 详情、r 恢复、x 取消（确认）、g 刷新 */
+export function workflowRunActions(): ViewAction[] {
+  return [
+    { id: 'show', key: 'enter', label: 'open', enabled: 'selected' },
+    { id: 'resume', key: 'r', label: 'resume', enabled: 'selected' },
+    {
+      id: 'cancel',
+      key: 'x',
+      label: 'cancel',
+      tone: 'danger',
+      enabled: 'selected',
+      confirm: 'Cancel workflow run "{name}"?',
+    },
+    { id: 'refresh', key: 'g', label: 'refresh' },
+  ];
+}
+
+/** 详情动作：r 恢复、x 取消、g 刷新 */
+export function workflowDetailActions(): ViewAction[] {
+  return [
+    { id: 'resume', key: 'r', label: 'resume' },
+    {
+      id: 'cancel',
+      key: 'x',
+      label: 'cancel',
+      tone: 'danger',
+      confirm: 'Cancel this workflow run?',
+    },
+    { id: 'refresh', key: 'g', label: 'refresh' },
+  ];
+}
+
+/** 表格视图上下文：保留 --status / --limit，刷新时不丢失 */
+export function encodeWorkflowViewKey(
+  filter?: WorkflowRunStatusLike,
+  limit?: number,
+): string | undefined {
+  if (filter === undefined && limit === undefined) return undefined;
+  return JSON.stringify({
+    ...(filter !== undefined ? { status: filter } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+  });
+}
+
+export interface WorkflowViewOptions {
+  status?: WorkflowRunStatusLike;
+  limit?: number;
+}
+
+/** 纯函数：解析表格上下文；非法值当作默认 */
+export function decodeWorkflowViewKey(key: string | undefined): WorkflowViewOptions {
+  if (!key) return {};
+  try {
+    const raw = JSON.parse(key) as { status?: unknown; limit?: unknown };
+    const status =
+      typeof raw.status === 'string' && isWorkflowRunStatus(raw.status) ? raw.status : undefined;
+    const limit =
+      typeof raw.limit === 'number' &&
+      Number.isFinite(raw.limit) &&
+      raw.limit >= 1 &&
+      raw.limit <= DISPLAY_LIMIT
+        ? Math.floor(raw.limit)
+        : undefined;
+    return {
+      ...(status ? { status } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+/** 纯函数：list -> TableView */
+export function buildWorkflowRunsView(
+  runs: WorkflowRunSummaryLike[],
+  now: number = Date.now(),
+  filter?: WorkflowRunStatusLike,
+  limit?: number,
+): TableView {
+  const rows = runs.map((run) => ({
+    key: run.workflow_run_id,
+    tone: workflowStatusTone(run.status),
+    cells: {
+      run: shortWorkflowRunId(run.workflow_run_id),
+      workflow: run.workflow_name,
+      status: workflowStatusLabel(run.status),
+      progress: `${run.completed_steps}/${run.step_count}`,
+      updated: safeRelativeTime(run.updated_at, now),
+      error: run.error ? truncate(oneLine(run.error), 60) : '',
+    },
+  }));
+
+  return {
+    kind: 'table',
+    title: 'Workflow runs',
+    columns: workflowRunColumns(),
+    rows,
+    actions: workflowRunActions(),
+    ...(rows[0] ? { initialKey: rows[0].key } : {}),
+    emptyText: filter ? `No workflow runs with status "${filter}".` : 'No workflow runs.',
+    meta: `${runs.length} · newest first`,
+    ...(encodeWorkflowViewKey(filter, limit) ? { key: encodeWorkflowViewKey(filter, limit) } : {}),
+  };
+}
+
+/** 纯函数：步骤表（已按详情宽度截断、限制行数） */
+export function workflowStepLines(detail: WorkflowRunDetailLike, maxRows = 60): string[] {
+  if (detail.steps.length === 0) return ['(no steps)'];
+
+  const widths = [16, 6, 10, 3, 8, 20] as const;
+  const header = [
+    fitCell('STEP', widths[0]),
+    fitCell('TYPE', widths[1]),
+    fitCell('STATUS', widths[2]),
+    fitCell('ATT', widths[3], 'right'),
+    fitCell('DURATION', widths[4]),
+    fitCell('DETAIL', widths[5]),
+  ].join('  ');
+
+  const lines = [header];
+  const visible = detail.steps.slice(0, Math.max(0, maxRows));
+  for (const step of visible) {
+    const detailText = step.error
+      ? truncate(oneLine(step.error), widths[5])
+      : step.output_preview
+        ? truncate(oneLine(step.output_preview), widths[5])
+        : '-';
+    lines.push(
+      [
+        fitCell(step.id, widths[0]),
+        fitCell(step.type, widths[1]),
+        fitCell(step.status, widths[2]),
+        fitCell(String(step.attempts), widths[3], 'right'),
+        fitCell(stepDuration(step), widths[4]),
+        fitCell(detailText, widths[5]),
+      ].join('  '),
+    );
+  }
+  if (detail.steps.length > visible.length) {
+    lines.push(`… ${detail.steps.length - visible.length} more steps`);
+  }
+  return lines;
+}
+
+/** 纯函数：详情 -> DetailView（inputs + steps） */
+export function buildWorkflowDetailView(
+  detail: WorkflowRunDetailLike,
+  now: number = Date.now(),
+): DetailView {
+  const fields: NonNullable<DetailView['sections'][number]['fields']> = [
+    { label: 'Workflow', value: detail.workflow_name },
+    {
+      label: 'Status',
+      value: workflowStatusLabel(detail.status),
+      tone: workflowStatusTone(detail.status),
+    },
+    { label: 'Progress', value: `${detail.completed_steps}/${detail.step_count} steps` },
+    { label: 'Started', value: safeRelativeTime(detail.started_at, now) },
+    { label: 'Updated', value: safeRelativeTime(detail.updated_at, now) },
+    { label: 'Definition', value: detail.definition_path || '-' },
+    { label: 'Inputs', value: formatInputs(detail.inputs) },
+  ];
+  if (detail.error) {
+    fields.push({
+      label: 'Error',
+      value: truncate(oneLine(detail.error), DETAIL_ERROR_MAX),
+      tone: 'danger',
+    });
+  }
+
+  return {
+    kind: 'detail',
+    title: `Workflow run ${detail.workflow_run_id}`,
+    badge: { text: detail.status, tone: workflowStatusTone(detail.status) },
+    key: detail.workflow_run_id,
+    sections: [
+      { title: 'Overview', fields },
+      { title: 'Steps', lines: workflowStepLines(detail) },
+    ],
+    actions: workflowDetailActions(),
+  };
+}
+
+/** 纯函数：workflow 未启用时的诚实空态 */
+export function disabledWorkflowsView(): DetailView {
+  return {
+    kind: 'detail',
+    title: 'Workflows',
+    badge: { text: 'disabled', tone: 'warn' },
+    sections: [
+      {
+        title: 'Not enabled',
+        lines: ['Workflows are not enabled (workflow.enabled: false).'],
+      },
+    ],
+  };
 }
 
 /** 纯函数：列表渲染（调用方负责排序与截断） */
@@ -288,10 +526,15 @@ function usage(message: string): CommandResult {
   return { handled: true, output: `\n${message}\n` };
 }
 
+function workflowsEnvelope(view: TableView | DetailView): NonNullable<CommandResult['view']> {
+  return { source: 'workflows', view };
+}
+
 function disabledMessage(): CommandResult {
   return {
     handled: true,
     output: '\nWorkflows are not enabled (workflow.enabled: false).\n',
+    view: workflowsEnvelope(disabledWorkflowsView()),
   };
 }
 
@@ -432,6 +675,91 @@ function singleId(args: string[], subcommand: string): ParseResult<string> {
   return { ok: true, value: id };
 }
 
+/** 列表查询（命令主体与视图刷新共用；调用方负责排序与截断） */
+async function loadWorkflowRuns(
+  ctx: ReplContext,
+  options: { status?: WorkflowRunStatusLike; limit: number },
+): Promise<WorkflowRunSummaryLike[]> {
+  const runs = ctx.rpc
+    ? readWorkflowRuns(await ctx.rpc.request<unknown>('workflow.list', options))
+    : await (ctx.workflows as WorkflowsControl).listRuns(options);
+  return sortWorkflowRuns(runs).slice(0, options.limit);
+}
+
+/** 单条详情（命令主体与视图动作共用） */
+async function loadWorkflowDetail(
+  ctx: ReplContext,
+  workflowRunId: string,
+): Promise<WorkflowRunDetailLike | null> {
+  return ctx.rpc
+    ? readWorkflowDetail(
+        await ctx.rpc.request<unknown>('workflow.get', { workflow_run_id: workflowRunId }),
+      )
+    : await (ctx.workflows as WorkflowsControl).getRun(workflowRunId);
+}
+
+/** `/workflows` 视图动作：Enter 详情、r 恢复、x 取消、g 刷新 */
+export async function runWorkflowsViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  const targetId = invocation.selectionKey || invocation.viewKey || '';
+
+  if (invocation.actionId === 'refresh') {
+    try {
+      if (invocation.viewKind === 'detail' && targetId) {
+        const detail = await loadWorkflowDetail(ctx, targetId);
+        if (!detail) return usage(`Workflow run "${targetId}" not found.`);
+        return { handled: true, view: workflowsEnvelope(buildWorkflowDetailView(detail)) };
+      }
+      const options = decodeWorkflowViewKey(invocation.viewKey);
+      const limit = options.limit ?? DISPLAY_LIMIT;
+      const runs = await loadWorkflowRuns(ctx, {
+        limit,
+        ...(options.status ? { status: options.status } : {}),
+      });
+      return {
+        handled: true,
+        view: workflowsEnvelope(buildWorkflowRunsView(runs, Date.now(), options.status, limit)),
+      };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to load workflow runs:\n${formatRpcError(error)}\n`,
+      };
+    }
+  }
+
+  if (invocation.actionId === 'show' || invocation.actionId === 'enter') {
+    if (!targetId) return usage('Select a workflow run first.');
+    try {
+      const detail = await loadWorkflowDetail(ctx, targetId);
+      if (!detail) return usage(`Workflow run "${targetId}" not found.`);
+      return { handled: true, view: workflowsEnvelope(buildWorkflowDetailView(detail)) };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to load workflow run "${targetId}":\n${formatRpcError(error)}\n`,
+      };
+    }
+  }
+
+  if (invocation.actionId === 'resume') {
+    if (!targetId) return usage('Select a workflow run first.');
+    return runWorkflowsCommand(['resume', targetId], ctx);
+  }
+
+  if (invocation.actionId === 'cancel') {
+    if (!targetId) return usage('Select a workflow run first.');
+    return runWorkflowsCommand(['cancel', targetId], ctx);
+  }
+
+  return {
+    handled: true,
+    output: `\nUnknown /workflows view action "${invocation.actionId}".\n`,
+  };
+}
+
 /** /workflows 的执行体（导出供单测） */
 export async function runWorkflowsCommand(
   args: string[],
@@ -451,13 +779,13 @@ export async function runWorkflowsCommand(
         limit: parsed.value.limit,
       };
       if (parsed.value.status) options.status = parsed.value.status;
-      const runs = rpc
-        ? readWorkflowRuns(await rpc.request<unknown>('workflow.list', options))
-        : await (control as WorkflowsControl).listRuns(options);
-      const sorted = sortWorkflowRuns(runs).slice(0, parsed.value.limit);
+      const sorted = await loadWorkflowRuns(ctx, options);
       return {
         handled: true,
         output: formatWorkflowRuns(sorted, Date.now(), parsed.value.status),
+        view: workflowsEnvelope(
+          buildWorkflowRunsView(sorted, Date.now(), parsed.value.status, parsed.value.limit),
+        ),
       };
     } catch (error) {
       return {
@@ -506,13 +834,13 @@ export async function runWorkflowsCommand(
     const parsed = singleId(rest, subcommand);
     if (!parsed.ok) return usage(parsed.message);
     try {
-      const detail = rpc
-        ? readWorkflowDetail(
-            await rpc.request<unknown>('workflow.get', { workflow_run_id: parsed.value }),
-          )
-        : await (control as WorkflowsControl).getRun(parsed.value);
+      const detail = await loadWorkflowDetail(ctx, parsed.value);
       if (!detail) return usage(`Workflow run "${parsed.value}" not found.`);
-      return { handled: true, output: formatWorkflowDetail(detail) };
+      return {
+        handled: true,
+        output: formatWorkflowDetail(detail),
+        view: workflowsEnvelope(buildWorkflowDetailView(detail)),
+      };
     } catch (error) {
       return {
         handled: true,
@@ -583,6 +911,8 @@ export function workflowsCommand(): CommandEntry {
     category: 'run',
     keywords: ['pipeline', 'steps'],
     available: (ctx) => Boolean(ctx.workflows || ctx.rpc),
+    unavailableHint: 'workflows disabled',
     run: (args, ctx) => runWorkflowsCommand(args, ctx),
+    viewAction: (invocation, ctx) => runWorkflowsViewAction(invocation, ctx),
   };
 }
