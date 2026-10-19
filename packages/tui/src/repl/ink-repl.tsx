@@ -28,6 +28,7 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
+import { QueuePreview } from '../components/QueuePreview.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { useSpinnerState } from '../components/StateTracker.js';
 import { StatusBar, type StatusKind } from '../components/StatusBar.js';
@@ -46,7 +47,7 @@ import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
-import { computeLiveLayout } from './layout.js';
+import { computeLiveLayout, queuePreviewRows } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
@@ -325,6 +326,14 @@ function InkRepl({ ctx }: InkReplProps) {
   // 所以 Enter 的"补全 vs 执行"决策必须在此处（onSubmit）做，不能在 useInput 里做。
   const handleSubmit = useCallback(
     async (value: string) => {
+      // 队列编辑 Enter：保存并退出，不执行（B5）。
+      if (ui.queueEditIndex !== null) {
+        dispatch({ type: 'updateQueuedInput', index: ui.queueEditIndex, value });
+        dispatch({ type: 'setInput', input: '' });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+
       // 补全 case：输入是未完成的命令名 -> 补全到当前选中命令，不执行。
       // 用户再按一次 Enter 才执行。（决策逻辑见 decideCommandEnter，已单测覆盖）
       const decision = decideCommandEnter(
@@ -469,6 +478,7 @@ function InkRepl({ ctx }: InkReplProps) {
       ui.autocompleteIndex,
       ui.run.phase,
       ui.queuedInput.length,
+      ui.queueEditIndex,
       stdout,
       dispatch,
       startResumeRun,
@@ -645,6 +655,33 @@ function InkRepl({ ctx }: InkReplProps) {
     // 命令视图打开时，键盘完全交给 InteractiveViewHost（单一焦点）。
     if (ui.view) return;
 
+    // 队列编辑独占 ↑↓ / Esc / Ctrl+X；其余键继续交给 TextInput。
+    if (ui.queueEditIndex !== null) {
+      if (key.ctrl && inputChar === 'x') {
+        dispatch({ type: 'removeQueuedInput', index: ui.queueEditIndex });
+        dispatch({ type: 'setInput', input: ui.queueReturnInput });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+      if (key.upArrow || key.downArrow) {
+        const count = ui.queuedInput.length;
+        if (count > 0) {
+          const step = key.upArrow ? -1 : 1;
+          const next = (ui.queueEditIndex + step + count) % count;
+          dispatch({ type: 'setQueueEditIndex', index: next });
+          dispatch({ type: 'setInput', input: ui.queuedInput[next] ?? '' });
+          dispatch({ type: 'bumpCaret' });
+        }
+        return;
+      }
+      if (key.escape) {
+        dispatch({ type: 'cancelQueueEdit' });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+      return;
+    }
+
     if (showAutocomplete) {
       if (key.tab) {
         const selected = filteredCommands[ui.autocompleteIndex];
@@ -683,6 +720,20 @@ function InkRepl({ ctx }: InkReplProps) {
     if (key.ctrl && inputChar === 'o') {
       dispatch({ type: 'toggleExpanded' });
       dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      return;
+    }
+
+    // 输入框为空且不在历史浏览时，↑↓ 进入队列编辑（队尾 / 队首）。
+    if (
+      ui.input === '' &&
+      ui.historyIndex === null &&
+      ui.queuedInput.length > 0 &&
+      (key.upArrow || key.downArrow)
+    ) {
+      const index = key.upArrow ? ui.queuedInput.length - 1 : 0;
+      dispatch({ type: 'beginQueueEdit', index, returnInput: '' });
+      dispatch({ type: 'setInput', input: ui.queuedInput[index] ?? '' });
       dispatch({ type: 'bumpCaret' });
       return;
     }
@@ -801,7 +852,13 @@ function InkRepl({ ctx }: InkReplProps) {
   // 用 useWindowSize 订阅 resize，保证矮终端分级能即时生效。
   const windowSize = useWindowSize();
   const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
-  const layout = computeLiveLayout(terminalRows);
+  // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
+  const exclusiveOverlayActive =
+    ui.view !== null || state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
+  const queueRows = exclusiveOverlayActive
+    ? 0
+    : queuePreviewRows(ui.queuedInput.length, terminalRows);
+  const layout = computeLiveLayout(terminalRows, queueRows);
   const runActive = ui.run.phase !== 'idle';
   const spinner = useSpinnerState(ctx.events);
   const metrics = useStatusMetrics(ctx, state.currentSessionId, ui.run.phase);
@@ -824,9 +881,6 @@ function InkRepl({ ctx }: InkReplProps) {
   // minimal 档在 run 进行中保留 1 行进度；hidden 始终为 0。
   const liveMaxHeight = layout.mode === 'minimal' && runActive ? 1 : layout.liveMaxHeight;
   const streamMaxLines = layout.mode === 'minimal' && runActive ? 1 : layout.streamMaxLines;
-  // 独占弹窗显示时隐藏实时流，避免浮层与流式内容争抢 live frame 空间。
-  const exclusiveOverlayActive =
-    ui.view !== null || state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
 
   // 矮终端降级只提示一次；写入 Static/scrollback，不占 live 行。
   useEffect(() => {
@@ -1014,6 +1068,16 @@ function InkRepl({ ctx }: InkReplProps) {
         <AskUserDialog events={ctx.events} onActiveChange={handleAskUserActive} />
       </Box>
 
+      {/* 队列预览（输入框上方；最多 3 条 + 尾行） */}
+      {!exclusiveOverlayActive && (
+        <QueuePreview
+          queued={ui.queuedInput}
+          editIndex={ui.queueEditIndex}
+          columns={stdout.columns ?? 80}
+          rows={terminalRows}
+        />
+      )}
+
       {/* 输入框 - 只在没有独占交互组件时显示 */}
       {!state.showResumePicker && !ui.view && !ui.permissionOverlay && !ui.askUserActive && (
         <Box flexShrink={0}>
@@ -1040,13 +1104,15 @@ function InkRepl({ ctx }: InkReplProps) {
                 ? '◐ cancelling…'
                 : `◐ working… Esc to cancel · Ctrl+O ${ui.expandedOutput ? 'collapse' : 'expand'}${ui.expandedOutput ? ' (full output in scrollback)' : ''}`}
             </Text>
-            {ui.queuedInput.length > 0 && (
-              <Text color={theme.faint}>
-                ⏳ queued {ui.queuedInput.length}: {ui.queuedInput[0]}
-              </Text>
-            )}
           </Box>
         )}
+
+      {/* 底部快捷键提示（rows >= 18 才显示） */}
+      {!exclusiveOverlayActive && layout.hintRows > 0 && (
+        <Box flexShrink={0} paddingX={2}>
+          <Text color={theme.faint}>? quick help · Ctrl+O full transcript</Text>
+        </Box>
+      )}
 
       {/* 内联命令补全（输入框下方） */}
       {showAutocomplete && (

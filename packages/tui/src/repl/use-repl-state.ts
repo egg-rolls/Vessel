@@ -89,6 +89,10 @@ export interface ReplUiState {
   historyDraft: string;
   /** 运行中提交的输入队列（run 结束按顺序执行） */
   queuedInput: string[];
+  /** 当前正在编辑的队列下标；null = 未编辑 */
+  queueEditIndex: number | null;
+  /** 进入队列编辑前的输入草稿（Esc 恢复） */
+  queueReturnInput: string;
   /** Ctrl+O 展开态（归档完整输出） */
   expandedOutput: boolean;
   /** 递增触发 StreamOutput 把完整输出刷入 scrollback */
@@ -139,6 +143,11 @@ export type ReplUiAction =
   | { type: 'enqueueInput'; value: string }
   | { type: 'dequeueInput' }
   | { type: 'clearQueue' }
+  | { type: 'beginQueueEdit'; index: number; returnInput: string }
+  | { type: 'setQueueEditIndex'; index: number }
+  | { type: 'cancelQueueEdit' }
+  | { type: 'updateQueuedInput'; index: number; value: string }
+  | { type: 'removeQueuedInput'; index: number }
   | { type: 'bumpQueueTick' }
   | { type: 'toggleExpanded' };
 
@@ -338,9 +347,52 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
     case 'dequeueInput':
       return state.queuedInput.length === 0
         ? state
-        : { ...state, queuedInput: state.queuedInput.slice(1) };
+        : {
+            ...state,
+            queuedInput: state.queuedInput.slice(1),
+            queueEditIndex: null,
+            queueReturnInput: '',
+          };
     case 'clearQueue':
-      return state.queuedInput.length === 0 ? state : { ...state, queuedInput: [] };
+      return state.queuedInput.length === 0
+        ? state
+        : { ...state, queuedInput: [], queueEditIndex: null, queueReturnInput: '' };
+    case 'beginQueueEdit': {
+      if (state.queuedInput.length === 0) return state;
+      const index = Math.max(0, Math.min(state.queuedInput.length - 1, action.index));
+      return { ...state, queueEditIndex: index, queueReturnInput: action.returnInput };
+    }
+    case 'setQueueEditIndex': {
+      if (state.queueEditIndex === null || state.queuedInput.length === 0) return state;
+      const index = Math.max(0, Math.min(state.queuedInput.length - 1, action.index));
+      return { ...state, queueEditIndex: index };
+    }
+    case 'cancelQueueEdit':
+      return state.queueEditIndex === null
+        ? state
+        : {
+            ...state,
+            queueEditIndex: null,
+            queueReturnInput: '',
+            input: state.queueReturnInput,
+          };
+    case 'updateQueuedInput': {
+      if (action.index < 0 || action.index >= state.queuedInput.length) return state;
+      const value = action.value.trim();
+      const queuedInput = value
+        ? state.queuedInput.map((item, index) => (index === action.index ? value : item))
+        : state.queuedInput.filter((_, index) => index !== action.index);
+      return { ...state, queuedInput, queueEditIndex: null, queueReturnInput: '' };
+    }
+    case 'removeQueuedInput': {
+      if (action.index < 0 || action.index >= state.queuedInput.length) return state;
+      return {
+        ...state,
+        queuedInput: state.queuedInput.filter((_, index) => index !== action.index),
+        queueEditIndex: null,
+        queueReturnInput: '',
+      };
+    }
     case 'bumpQueueTick':
       return { ...state, queueTick: state.queueTick + 1 };
     case 'toggleExpanded': {
@@ -383,6 +435,8 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     historyIndex: null,
     historyDraft: '',
     queuedInput: [],
+    queueEditIndex: null,
+    queueReturnInput: '',
     expandedOutput: false,
     expandSignal: 0,
     queueTick: 0,
