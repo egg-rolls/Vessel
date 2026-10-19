@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   applyTheme,
+  initialTheme,
   normalizeTheme,
   readStoredTheme,
   storeTheme,
@@ -24,6 +25,17 @@ describe('normalizeTheme', () => {
   });
 });
 
+describe('initialTheme', () => {
+  test('defaults to dark only when no valid preference is stored', () => {
+    expect(initialTheme(null)).toBe('dark');
+    expect(initialTheme(undefined)).toBe('dark');
+    expect(initialTheme('banana')).toBe('dark');
+    expect(initialTheme('system')).toBe('system');
+    expect(initialTheme('light')).toBe('light');
+    expect(initialTheme('dark')).toBe('dark');
+  });
+});
+
 describe('applyTheme', () => {
   test('sets and removes data-theme on the root', () => {
     const root = {
@@ -42,16 +54,18 @@ describe('applyTheme', () => {
 });
 
 describe('storage helpers', () => {
-  test('readStoredTheme tolerates invalid values and storage errors', () => {
+  test('readStoredTheme falls back to dark when the preference is absent or unreadable', () => {
     expect(readStoredTheme({ getItem: () => 'dark' })).toBe('dark');
-    expect(readStoredTheme({ getItem: () => 'nope' })).toBe('system');
+    expect(readStoredTheme({ getItem: () => 'system' })).toBe('system');
+    expect(readStoredTheme({ getItem: () => 'nope' })).toBe('dark');
+    expect(readStoredTheme({ getItem: () => null })).toBe('dark');
     expect(
       readStoredTheme({
         getItem: () => {
           throw new Error('blocked');
         },
       }),
-    ).toBe('system');
+    ).toBe('dark');
   });
 
   test('storeTheme swallows quota errors', () => {

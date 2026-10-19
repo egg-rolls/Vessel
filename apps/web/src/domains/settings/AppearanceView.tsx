@@ -16,7 +16,7 @@ export function AppearanceView() {
       <section className="panel">
         <h2 className="section-title">主题</h2>
         <p className="section-desc">
-          默认跟随系统；手动选择会覆盖 prefers-color-scheme，并在刷新后保留。
+          默认深色；选择跟随系统会使用 prefers-color-scheme，选择会保留到刷新后。
         </p>
         <SegmentedTabs label="主题" tabs={THEMES} value={theme} onChange={setTheme} />
       </section>
