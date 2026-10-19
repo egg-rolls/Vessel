@@ -35,6 +35,13 @@ describe('formatStatusRule', () => {
     expect(text).toContain('[');
   });
 
+  it('80–99 列即使空间足够也不显示 cwd', () => {
+    const text = line({ status: 'idle', model: 'v3', cwd: '~/w', branch: 'b' }, 80);
+
+    expect(text).not.toContain('~/w');
+    expect(text).not.toContain(' b');
+  });
+
   it('60 列去掉进度条但保留 used/max 与百分比', () => {
     const text = line(base, 60);
 

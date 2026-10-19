@@ -7,6 +7,7 @@ describe('shouldOpenQuickHelp', () => {
   it('只在空输入框刚输入 ? 时打开，不吞已有输入里的问号', () => {
     expect(shouldOpenQuickHelp('', '?')).toBe(true);
     expect(shouldOpenQuickHelp('abc', 'abc?')).toBe(false);
+    expect(shouldOpenQuickHelp('abc', '?')).toBe(false);
     expect(shouldOpenQuickHelp('', 'x')).toBe(false);
     expect(shouldOpenQuickHelp('?', '??')).toBe(false);
   });
