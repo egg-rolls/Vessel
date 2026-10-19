@@ -12,9 +12,13 @@ import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
-import type { RunOptions } from '../types/run.js';
+import type { RunExecution, RunOptions } from '../types/run.js';
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';
-import { RUN_INTERRUPT_REASONS, RunResumeError } from '../types/run-store.js';
+import {
+  RUN_INTERRUPT_REASONS,
+  RunAlreadyRunningError,
+  RunResumeError,
+} from '../types/run-store.js';
 import type { RunState, SessionBackend } from '../types/session.js';
 
 export type { RunOptions } from '../types/run.js';
@@ -33,6 +37,29 @@ function isToolCall(value: unknown): value is ToolCall {
   if (typeof record.id !== 'string' || typeof fn !== 'object' || fn === null) return false;
   const fnRecord = fn as Record<string, unknown>;
   return typeof fnRecord.name === 'string' && typeof fnRecord.arguments === 'string';
+}
+
+/** finalizeRun 的终态输入（C1） */
+type RunTerminalOutcome =
+  | { status: 'completed'; output: string }
+  | { status: 'failed'; error: unknown; signal?: AbortSignal };
+
+/** 新建一次 run 的 usage 统计 */
+function createUsageStats(startTime: number): UsageStats {
+  return {
+    requestCount: 0,
+    toolCallsCount: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    totalCost: 0,
+    startTime,
+  };
+}
+
+/** 错误文本（事件/持久化统一口径） */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** 预处理后的工具调用（0.6.1 P1：安全批次并发） */
@@ -72,7 +99,6 @@ export class AgentRuntime {
   private termination: TerminationPolicy;
   private session?: SessionBackend;
   private limitChecker: LimitChecker;
-  private stats: UsageStats;
   private systemPrompt?: string;
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
@@ -86,9 +112,11 @@ export class AgentRuntime {
   private readonly tenantId?: string;
   /** 同一 run 的并发 resume 锁（进程内；DECISION-008 Addendum A-2） */
   private readonly resuming = new Set<string>();
-  /** 当前执行的 checkpoint 元数据（run() 或 resume() 时设置） */
-  private runCreatedAt = 0;
-  private runBranch?: string;
+  /**
+   * 当前 active run（0.8 C1）：run 级状态隔离 + 单 run 守卫。
+   * 同步占位、`finally` 清空；已有值时新的 run()/resume() 立即 `run_already_running`。
+   */
+  private activeRun?: RunExecution;
 
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -105,17 +133,6 @@ export class AgentRuntime {
     this.tenantId = opts.tenantId;
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
     this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
-
-    // 初始化使用量统计
-    this.stats = {
-      requestCount: 0,
-      toolCallsCount: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      startTime: Date.now(),
-    };
 
     // 初始化 PluginHost（唯一工具来源与注册表）——插件在 install() 里 registerTool
     this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
@@ -186,26 +203,51 @@ export class AgentRuntime {
   async run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string> {
     // F6：Host 可指定 runId，使 RunHandle.id 与事件流 run_id 一致；普通调用方缺省生成
     const runId = opts?.runId ?? randomUUID();
-    const startTime = Date.now();
     const currentSessionId = sessionId || 'default';
-    const signal = opts?.signal;
-    // checkpoint 元数据：created_at 在 run 内固定，branch 透传
-    this.runCreatedAt = startTime;
-    this.runBranch = opts?.branch;
+    // 单 run 守卫必须在任何 await 之前同步占位，第二个并发调用立即失败。
+    const execution = this.beginExecution(runId, currentSessionId, opts?.branch);
 
-    // 重置使用量统计（每次 run 都是新的对话）
-    this.stats = {
-      requestCount: 0,
-      toolCallsCount: 0,
-      inputTokens: 0,
-      outputTokens: 0,
-      totalTokens: 0,
-      totalCost: 0,
-      startTime: startTime,
+    try {
+      return await this.executeRun(execution, input, opts);
+    } finally {
+      this.endExecution(execution);
+    }
+  }
+
+  /** 同步预留 active run 槽位；已有 active run 时抛稳定错误 `run_already_running`。 */
+  private beginExecution(runId: string, sessionId: string, branch?: string): RunExecution {
+    if (this.activeRun) {
+      throw new RunAlreadyRunningError(runId);
+    }
+    const now = Date.now();
+    const execution: RunExecution = {
+      runId,
+      sessionId,
+      ...(branch !== undefined ? { branch } : {}),
+      createdAt: now,
+      startedAt: now,
+      stats: createUsageStats(now),
+      context: this.context,
     };
+    this.activeRun = execution;
+    return execution;
+  }
+
+  private endExecution(execution: RunExecution): void {
+    if (this.activeRun === execution) this.activeRun = undefined;
+  }
+
+  /** run() 的主体：调用方已持有 execution 槽位。 */
+  private async executeRun(
+    execution: RunExecution,
+    input: string | Message,
+    opts?: RunOptions,
+  ): Promise<string> {
+    const { runId, sessionId, createdAt } = execution;
+    const signal = opts?.signal;
 
     // 切换到当前会话的 Context
-    this.context.setSessionId(currentSessionId);
+    this.context.setSessionId(sessionId);
 
     // 仅当 context 为空时初始化：
     //   - in-process 同会话续聊：context 已有历史，不重置（多轮记忆）
@@ -216,7 +258,7 @@ export class AgentRuntime {
     if (this.context.messages.length === 0) {
       let restored = false;
       if (this.session) {
-        const saved = await this.session.load(currentSessionId);
+        const saved = await this.session.load(sessionId);
         if (saved?.messages?.length) {
           for (const m of saved.messages) {
             this.addContext(m, runId);
@@ -242,11 +284,11 @@ export class AgentRuntime {
     // 创建 Run 状态
     const runState: RunState = {
       run_id: runId,
-      session_id: currentSessionId,
+      session_id: sessionId,
       messages: [userMessage],
-      started_at: startTime,
+      started_at: createdAt,
       status: 'running',
-      branch: opts?.branch,
+      branch: execution.branch,
       ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
 
@@ -254,7 +296,7 @@ export class AgentRuntime {
     this.publishEvent({
       type: 'run.started',
       run_id: runId,
-      data: { run_id: runId, session_id: currentSessionId, input: userMessage.content },
+      data: { run_id: runId, session_id: sessionId, input: userMessage.content },
       ts: Date.now(),
     });
 
@@ -269,7 +311,7 @@ export class AgentRuntime {
         userMessage.content,
         GuardrailStage.Input,
         runId,
-        currentSessionId,
+        sessionId,
       );
       if (!inputResult.allowed) {
         throw new Error(`Input blocked by guardrail: ${inputResult.reason}`);
@@ -288,89 +330,145 @@ export class AgentRuntime {
       await this.saveSession(runState);
 
       // durable checkpoint：run 开始（用户消息已写入上下文）
-      await this.writeCheckpoint(runId, currentSessionId, 'running');
+      await this.writeCheckpoint(execution, 'running');
 
       // 执行 tool-calling loop
-      const response = await this.toolCallingLoop(runId, currentSessionId, signal);
+      const response = await this.toolCallingLoop(execution, signal);
 
-      // 更新 Run 状态
+      // 统一终态：status / OnError / session / checkpoint / 事件
+      await this.finalizeRun(execution, runState, { status: 'completed', output: response });
+
+      return response;
+    } catch (error) {
+      await this.finalizeFailure(execution, runState, error, signal);
+      throw error;
+    }
+  }
+
+  /**
+   * 统一终态（C1）：run()/resume() 共用。
+   *
+   * 顺序：status 映射 → OnError hook（best-effort）→ saveSession →
+   * writeCheckpoint → 发布 run.completed / run.cancelled / run.failed。
+   */
+  private async finalizeRun(
+    execution: RunExecution,
+    runState: RunState,
+    outcome: RunTerminalOutcome,
+  ): Promise<void> {
+    const { runId, sessionId, startedAt, stats } = execution;
+
+    if (outcome.status === 'completed') {
       runState.status = 'completed';
       runState.completed_at = Date.now();
-      runState.usage = {
-        prompt_tokens: this.stats.inputTokens,
-        completion_tokens: this.stats.outputTokens,
-        total_tokens: this.stats.totalTokens,
-        total_cost: this.stats.totalCost,
-      };
+      runState.usage = this.usageFromStats(stats);
       runState.messages = this.context.messages;
 
-      // 保存最终状态
       await this.saveSession(runState);
+      await this.writeCheckpoint(execution, 'completed');
 
-      // durable checkpoint：完成
-      await this.writeCheckpoint(runId, currentSessionId, 'completed');
-
-      // 发布 Run 完成事件
       this.publishEvent({
         type: 'run.completed',
         run_id: runId,
         data: {
           run_id: runId,
-          session_id: currentSessionId,
-          output: response,
+          session_id: sessionId,
+          output: outcome.output,
           usage: runState.usage,
-          duration_ms: Date.now() - startTime,
-          iterations: this.stats.requestCount,
+          duration_ms: Date.now() - startedAt,
+          iterations: stats.requestCount,
         },
         ts: Date.now(),
       });
+      return;
+    }
 
-      return response;
-    } catch (error) {
-      // 用户显式取消 → cancelled；Host 中断/普通错误 → failed（与事件口径一致）
-      const cancelled = this.isUserCancelled(signal);
-      runState.status = cancelled ? 'cancelled' : 'failed';
-      runState.completed_at = Date.now();
-      runState.error = error instanceof Error ? error.message : String(error);
-      // 失败也保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）
-      runState.messages = this.context.messages;
+    const signal = outcome.signal;
+    // 用户显式取消 → cancelled；Host 中断/普通错误 → failed（与事件口径一致）
+    const cancelled = this.isUserCancelled(signal);
+    const errorMessage = errorText(outcome.error);
+    runState.status = cancelled ? 'cancelled' : 'failed';
+    runState.completed_at = Date.now();
+    runState.error = errorMessage;
+    // 失败也保存真实上下文，避免用单条 user 消息覆盖既有历史（C-02）
+    runState.messages = this.context.messages;
 
-      // 触发 OnError Hook（LLM 错误、Guardrail 阻断、限制超限、Abort 等）
+    // OnError Hook best-effort（C2）：hook 故障不得替换原始错误，也不得跳过终态写入。
+    try {
       await this.hooks.run(HookType.OnError, {
         run_id: runId,
-        session_id: currentSessionId,
-        error: runState.error,
+        session_id: sessionId,
+        error: errorMessage,
         phase: 'run',
       });
-
-      // 保存失败状态
-      await this.saveSession(runState);
-
-      // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
-      await this.writeCheckpoint(
-        runId,
-        currentSessionId,
-        this.failureCheckpointStatus(signal),
-        runState.error,
-        true,
-      );
-
-      // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
+    } catch (hookError) {
       this.publishEvent({
-        type: cancelled ? 'run.cancelled' : 'run.failed',
+        type: 'hook.error',
         run_id: runId,
         data: {
           run_id: runId,
-          session_id: currentSessionId,
-          error: runState.error,
-          duration_ms: Date.now() - startTime,
-          ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
+          session_id: sessionId,
+          hook_type: HookType.OnError,
+          error: errorText(hookError),
         },
         ts: Date.now(),
       });
-
-      throw error;
     }
+
+    await this.saveSession(runState);
+
+    // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
+    await this.writeCheckpoint(execution, this.failureCheckpointStatus(signal), errorMessage, true);
+
+    // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
+    this.publishEvent({
+      type: cancelled ? 'run.cancelled' : 'run.failed',
+      run_id: runId,
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        error: errorMessage,
+        duration_ms: Date.now() - startedAt,
+        ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
+      },
+      ts: Date.now(),
+    });
+  }
+
+  /**
+   * 失败终态包装：终态持久化本身失败（如 session 盘满）也不得覆盖原始错误。
+   * OnError hook 已在 finalizeRun 内部 best-effort。
+   */
+  private async finalizeFailure(
+    execution: RunExecution,
+    runState: RunState,
+    error: unknown,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    try {
+      await this.finalizeRun(execution, runState, { status: 'failed', error, signal });
+    } catch (finalizeError) {
+      this.publishEvent({
+        type: 'run.finalize.failed',
+        run_id: execution.runId,
+        data: {
+          run_id: execution.runId,
+          session_id: execution.sessionId,
+          error: errorText(finalizeError),
+        },
+        ts: Date.now(),
+      });
+    }
+  }
+
+  /** RunState/checkpoint 共用的 usage 快照 */
+  private usageFromStats(stats: UsageStats): NonNullable<RunState['usage']> {
+    return {
+      prompt_tokens: stats.inputTokens,
+      completion_tokens: stats.outputTokens,
+      total_tokens: stats.totalTokens,
+      total_cost: stats.totalCost,
+    };
   }
 
   /**
@@ -383,10 +481,11 @@ export class AgentRuntime {
   async resume(runId: string, opts?: RunOptions): Promise<string> {
     const signal = opts?.signal;
     if (!this.runStore) throw new RunResumeError('run_store_required', runId);
-    if (this.resuming.has(runId)) throw new RunResumeError('run_already_running', runId);
+    if (this.resuming.has(runId)) throw new RunAlreadyRunningError(runId);
 
+    // 与 run() 共用单 run 守卫；同步占位，避免两次不同 run 的并发 resume。
+    const execution = this.beginExecution(runId, '');
     this.resuming.add(runId);
-    const startTime = Date.now();
     try {
       const checkpoint = await this.runStore.load(runId);
       if (!checkpoint) throw new RunResumeError('run_not_found', runId);
@@ -398,12 +497,13 @@ export class AgentRuntime {
       }
 
       const sessionId = checkpoint.session_id;
-      this.runCreatedAt = checkpoint.created_at;
-      this.runBranch =
+      execution.sessionId = sessionId;
+      execution.createdAt = checkpoint.created_at;
+      execution.branch =
         typeof checkpoint.metadata?.branch === 'string' ? checkpoint.metadata.branch : undefined;
 
       // 恢复统计，保持 limits / termination 连续
-      this.stats = {
+      execution.stats = {
         requestCount: checkpoint.iteration ?? 0,
         toolCallsCount:
           typeof checkpoint.metadata?.tool_calls_count === 'number'
@@ -413,7 +513,7 @@ export class AgentRuntime {
         outputTokens: checkpoint.usage?.completion_tokens ?? 0,
         totalTokens: checkpoint.usage?.total_tokens ?? 0,
         totalCost: checkpoint.usage?.total_cost ?? 0,
-        startTime,
+        startTime: execution.startedAt,
       };
 
       // checkpoint 的历史是恢复的唯一权威来源
@@ -427,9 +527,9 @@ export class AgentRuntime {
         run_id: runId,
         session_id: sessionId,
         messages: this.context.messages,
-        started_at: this.runCreatedAt,
+        started_at: execution.createdAt,
         status: 'running',
-        ...(this.runBranch !== undefined ? { branch: this.runBranch } : {}),
+        ...(execution.branch !== undefined ? { branch: execution.branch } : {}),
         ...((this.tenantId ?? checkpoint.tenant_id) !== undefined
           ? { tenant_id: this.tenantId ?? checkpoint.tenant_id }
           : {}),
@@ -437,7 +537,7 @@ export class AgentRuntime {
       await this.saveSession(runState);
 
       // 标记已被接管（唯一写者：AgentRuntime）
-      await this.writeCheckpoint(runId, sessionId, 'running');
+      await this.writeCheckpoint(execution, 'running');
 
       this.publishEvent({
         type: 'run.resumed',
@@ -446,94 +546,36 @@ export class AgentRuntime {
           run_id: runId,
           session_id: sessionId,
           from_status: checkpoint.status,
-          iteration: this.stats.requestCount,
+          iteration: execution.stats.requestCount,
         },
         ts: Date.now(),
       });
 
       try {
-        const response = await this.toolCallingLoop(runId, sessionId, signal);
+        const response = await this.toolCallingLoop(execution, signal);
 
-        runState.status = 'completed';
-        runState.completed_at = Date.now();
-        runState.usage = {
-          prompt_tokens: this.stats.inputTokens,
-          completion_tokens: this.stats.outputTokens,
-          total_tokens: this.stats.totalTokens,
-          total_cost: this.stats.totalCost,
-        };
-        runState.messages = this.context.messages;
-        await this.saveSession(runState);
-        await this.writeCheckpoint(runId, sessionId, 'completed');
-
-        this.publishEvent({
-          type: 'run.completed',
-          run_id: runId,
-          data: {
-            run_id: runId,
-            session_id: sessionId,
-            output: response,
-            usage: runState.usage,
-            duration_ms: Date.now() - startTime,
-            iterations: this.stats.requestCount,
-          },
-          ts: Date.now(),
-        });
+        // 与 run() 共用终态路径：用户取消同样发 run.cancelled（C1）
+        await this.finalizeRun(execution, runState, { status: 'completed', output: response });
 
         return response;
       } catch (error) {
-        runState.status = 'failed';
-        runState.completed_at = Date.now();
-        runState.error = error instanceof Error ? error.message : String(error);
-        runState.messages = this.context.messages;
-
-        await this.hooks.run(HookType.OnError, {
-          run_id: runId,
-          session_id: sessionId,
-          error: runState.error,
-          phase: 'run',
-        });
-
-        await this.saveSession(runState);
-        await this.writeCheckpoint(
-          runId,
-          sessionId,
-          this.failureCheckpointStatus(signal),
-          runState.error,
-          true,
-        );
-
-        this.publishEvent({
-          type: 'run.failed',
-          run_id: runId,
-          data: {
-            run_id: runId,
-            session_id: sessionId,
-            error: runState.error,
-            duration_ms: Date.now() - startTime,
-          },
-          ts: Date.now(),
-        });
-
+        await this.finalizeFailure(execution, runState, error, signal);
         throw error;
       }
     } finally {
       this.resuming.delete(runId);
+      this.endExecution(execution);
     }
   }
 
   /**
    * Tool-calling loop
    * 核心循环：调用 LLM -> 解析 tool_calls -> 执行工具 -> 注入结果 -> 循环
-   * @param runId Run ID
-   * @param sessionId 会话 ID
+   * @param execution 本次 run 的执行态（run/session/usage 的唯一来源）
    * @param signal 可选的 AbortSignal（Hermes/Claude Code 模式——Esc 中断）
    */
-  protected async toolCallingLoop(
-    runId: string,
-    sessionId: string,
-    signal?: AbortSignal,
-  ): Promise<string> {
+  protected async toolCallingLoop(execution: RunExecution, signal?: AbortSignal): Promise<string> {
+    const { runId, sessionId, stats } = execution;
     while (true) {
       // AbortSignal 中断（Hermes/Claude Code 模式——外部 Esc）
       if (signal?.aborted) {
@@ -541,12 +583,12 @@ export class AgentRuntime {
       }
 
       // 检查终止条件
-      if (this.limitChecker.checkTermination(this.stats, this.termination)) {
+      if (this.limitChecker.checkTermination(stats, this.termination)) {
         throw new Error('Termination policy triggered: max iterations or runtime exceeded');
       }
 
       // 检查使用量限制（含 request_limit、tool_calls_limit、token/cost 预算）——硬上限
-      if (!this.limitChecker.checkLimits(this.stats, this.limits)) {
+      if (!this.limitChecker.checkLimits(stats, this.limits)) {
         throw new Error('Usage limits exceeded');
       }
 
@@ -602,7 +644,7 @@ export class AgentRuntime {
       });
 
       // 增加请求计数
-      this.limitChecker.incrementRequest(this.stats);
+      this.limitChecker.incrementRequest(stats);
 
       // 调用 LLM
       const request: ChatRequest = {
@@ -639,7 +681,7 @@ export class AgentRuntime {
       // 更新 token 使用量
       if (response.usage) {
         this.limitChecker.addTokens(
-          this.stats,
+          stats,
           response.usage.prompt_tokens ?? 0,
           response.usage.completion_tokens ?? 0,
         );
@@ -712,7 +754,7 @@ export class AgentRuntime {
         const effectiveCalls: ToolCall[] = [];
         const blockedCalls = new Map<string, string>();
         for (const toolCall of toolCalls) {
-          this.limitChecker.incrementToolCall(this.stats);
+          this.limitChecker.incrementToolCall(stats);
           const toolCallResult = await this.guardrails.apply(
             toolCall,
             GuardrailStage.ToolCall,
@@ -819,7 +861,7 @@ export class AgentRuntime {
           }
 
           const outcomes = await Promise.all(
-            batch.map((entry) => this.runToolCall(entry, runId, sessionId, signal)),
+            batch.map((entry) => this.runToolCall(entry, execution, signal)),
           );
 
           // 上下文严格按原调用顺序写回（并行完成顺序不影响历史顺序）
@@ -848,7 +890,7 @@ export class AgentRuntime {
         }
 
         // durable checkpoint：本轮 tool-call 结果已全部写入上下文
-        await this.writeCheckpoint(runId, sessionId, 'running');
+        await this.writeCheckpoint(execution, 'running');
       } else {
         // 其他完成原因（如 length），直接返回当前内容
         this.addContext(
@@ -877,26 +919,42 @@ export class AgentRuntime {
    * 记录一次工具失败：OnError hook → tool.call.failed 事件 → 返回错误文本（C-01）。
    * 错误文本由调用方按原顺序折回上下文；工具失败不终止 run，模型可自行纠错。
    */
-  private async recordToolFailure(opts: {
-    runId: string;
-    sessionId: string;
-    toolCallId: string;
-    toolName: string;
-    startTime: number;
-    errorMessage: string;
-  }): Promise<string> {
-    await this.hooks.run(HookType.OnError, {
-      run_id: opts.runId,
-      session_id: opts.sessionId,
-      error: opts.errorMessage,
-      phase: 'tool_execution',
-      tool_name: opts.toolName,
-    });
+  private async recordToolFailure(
+    execution: RunExecution,
+    opts: {
+      toolCallId: string;
+      toolName: string;
+      startTime: number;
+      errorMessage: string;
+    },
+  ): Promise<string> {
+    // OnError hook 已由 HookRunner 隔离；这里再兜底，工具失败不得升级为 run 失败（C2）。
+    try {
+      await this.hooks.run(HookType.OnError, {
+        run_id: execution.runId,
+        session_id: execution.sessionId,
+        error: opts.errorMessage,
+        phase: 'tool_execution',
+        tool_name: opts.toolName,
+      });
+    } catch (hookError) {
+      this.publishEvent({
+        type: 'hook.error',
+        run_id: execution.runId,
+        data: {
+          run_id: execution.runId,
+          session_id: execution.sessionId,
+          hook_type: HookType.OnError,
+          error: errorText(hookError),
+        },
+        ts: Date.now(),
+      });
+    }
     this.publishEvent({
       type: 'tool.call.failed',
-      run_id: opts.runId,
+      run_id: execution.runId,
       data: {
-        run_id: opts.runId,
+        run_id: execution.runId,
         tool_call_id: opts.toolCallId,
         tool_name: opts.toolName,
         error: opts.errorMessage,
@@ -922,20 +980,18 @@ export class AgentRuntime {
    */
   private async runToolCall(
     entry: PreparedToolCall,
-    runId: string,
-    sessionId: string,
+    execution: RunExecution,
     signal?: AbortSignal,
   ): Promise<ToolExecutionOutcome> {
     const { toolCall, toolName } = entry;
+    const { runId, sessionId } = execution;
 
     if (entry.failureMessage !== undefined) {
       return {
         toolCall,
         input: entry.args,
         ok: false,
-        content: await this.recordToolFailure({
-          runId,
-          sessionId,
+        content: await this.recordToolFailure(execution, {
           toolCallId: toolCall.id,
           toolName,
           startTime: entry.startedAt,
@@ -978,9 +1034,7 @@ export class AgentRuntime {
           toolCall,
           input: entry.args,
           ok: false,
-          content: await this.recordToolFailure({
-            runId,
-            sessionId,
+          content: await this.recordToolFailure(execution, {
             toolCallId: toolCall.id,
             toolName,
             startTime: entry.startedAt,
@@ -1013,13 +1067,11 @@ export class AgentRuntime {
         toolCall,
         input: entry.args,
         ok: false,
-        content: await this.recordToolFailure({
-          runId,
-          sessionId,
+        content: await this.recordToolFailure(execution, {
           toolCallId: toolCall.id,
           toolName,
           startTime: entry.startedAt,
-          errorMessage: error instanceof Error ? error.message : String(error),
+          errorMessage: errorText(error),
         }),
       };
     }
@@ -1174,31 +1226,26 @@ export class AgentRuntime {
    * `bestEffort` 用于失败路径上的最终写入，避免覆盖原始错误。
    */
   private async writeCheckpoint(
-    runId: string,
-    sessionId: string,
+    execution: RunExecution,
     status: RunCheckpoint['status'],
     error?: string,
     bestEffort = false,
   ): Promise<void> {
     if (!this.runStore) return;
 
+    const { runId, sessionId, createdAt, stats, branch } = execution;
     const checkpoint: RunCheckpoint = {
       run_id: runId,
       session_id: sessionId,
       status,
       messages: structuredClone(this.context.messages),
-      usage: {
-        prompt_tokens: this.stats.inputTokens,
-        completion_tokens: this.stats.outputTokens,
-        total_tokens: this.stats.totalTokens,
-        total_cost: this.stats.totalCost,
-      },
-      iteration: this.stats.requestCount,
-      created_at: this.runCreatedAt || Date.now(),
+      usage: this.usageFromStats(stats),
+      iteration: stats.requestCount,
+      created_at: createdAt || Date.now(),
       updated_at: Date.now(),
       metadata: {
-        tool_calls_count: this.stats.toolCallsCount,
-        ...(this.runBranch !== undefined ? { branch: this.runBranch } : {}),
+        tool_calls_count: stats.toolCallsCount,
+        ...(branch !== undefined ? { branch } : {}),
       },
       ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
       ...(error !== undefined ? { error } : {}),

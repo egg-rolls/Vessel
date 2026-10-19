@@ -13,7 +13,11 @@ import type { RunCheckpoint, RunStore } from '../types/run-store.js';
 import { atomicWrite } from './atomic-write.js';
 
 export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.js';
-export { RUN_INTERRUPT_REASONS, RunResumeError } from '../types/run-store.js';
+export {
+  RUN_INTERRUPT_REASONS,
+  RunAlreadyRunningError,
+  RunResumeError,
+} from '../types/run-store.js';
 
 /** list 的默认与最大返回条数（DECISION-008 Addendum A-4） */
 const DEFAULT_LIMIT = 50;
@@ -180,9 +184,22 @@ export class FileRunStore implements RunStore {
     return selectCheckpoints(checkpoints, opts);
   }
 
+  /**
+   * 删除 checkpoint。
+   *
+   * tenant 模式先 `load()` 校验归属：缺失或 foreign 均直接 no-op，
+   * 避免共享目录时跨 tenant 删除（与 `FileSessionBackend.delete` 对称，0.8 A5）。
+   */
   async delete(runId: string): Promise<void> {
     const previous = this.pendingWrites.get(runId);
     if (previous) await previous;
+
+    if (this.tenantId !== undefined) {
+      // load() 对 foreign/缺失/损坏一律返回 null；此时不得 unlink。
+      const checkpoint = await this.load(runId);
+      if (!checkpoint) return;
+    }
+
     try {
       await unlink(this.filePath(runId));
     } catch {

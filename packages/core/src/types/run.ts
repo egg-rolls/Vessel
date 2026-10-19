@@ -3,7 +3,28 @@
  * @module @vessel/core/types
  */
 
+import type { ContextManager } from './context.js';
+import type { UsageStats } from './limits.js';
 import type { Message } from './provider.js';
+
+/**
+ * 一次 run 的执行态（0.8 C1）。
+ *
+ * run 级状态（run id / session / branch / 计时 / usage）收敛在这里，
+ * 由 `AgentRuntime` 在 run()/resume() 入口创建、`finally` 释放；
+ * 调用方不应持有或修改它。
+ */
+export interface RunExecution {
+  runId: string;
+  sessionId: string;
+  branch?: string;
+  /** checkpoint 的 created_at（resume 时沿用原 run） */
+  createdAt: number;
+  /** 本次执行开始时间（duration_ms 基准；resume 会重置） */
+  startedAt: number;
+  stats: UsageStats;
+  context: ContextManager;
+}
 
 /** Run 选项 */
 export interface RunOptions {
