@@ -38,6 +38,15 @@ export function moveConfirmSelection(
   return order[next] ?? current;
 }
 
+/**
+ * 纯函数：选项文本。
+ * 选中项始终带 `▸` 前缀，保证 NO_COLOR / 16 色终端下也能看出焦点。
+ */
+export function formatConfirmChoice(choice: ConfirmChoice, selected: boolean): string {
+  const label = choice === 'y' ? '[Y]es' : choice === 'n' ? '[N]o' : '[A]lways';
+  return `${selected ? '▸' : ' '}${label} `;
+}
+
 export function ConfirmDialog({
   question,
   details = [],
@@ -133,21 +142,21 @@ export function ConfirmDialog({
           color={selected === 'y' ? theme.selectedBg : theme.ok}
           bold={selected === 'y'}
         >
-          {' [Y]es '}
+          {formatConfirmChoice('y', selected === 'y')}
         </Text>
         <Text
           backgroundColor={selected === 'n' ? theme.danger : undefined}
           color={selected === 'n' ? theme.selectedBg : theme.danger}
           bold={selected === 'n'}
         >
-          {' [N]o '}
+          {formatConfirmChoice('n', selected === 'n')}
         </Text>
         <Text
           backgroundColor={selected === 'always' ? theme.info : undefined}
           color={selected === 'always' ? theme.selectedBg : theme.info}
           bold={selected === 'always'}
         >
-          {' [A]lways '}
+          {formatConfirmChoice('always', selected === 'always')}
         </Text>
       </Box>
 
