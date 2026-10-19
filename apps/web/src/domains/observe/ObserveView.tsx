@@ -27,6 +27,17 @@ const TABS: readonly { id: Tab; label: string }[] = [
 ];
 
 const EVAL_SUITES_KEY = 'vessel.eval-suites';
+const EVAL_CASE_PAGE = 100;
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isForbidden(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  const message = errorMessage(error);
+  return code === 'forbidden' || code === 'unauthorized' || message.includes('forbidden');
+}
 
 export function ObserveView({
   route,
@@ -61,21 +72,22 @@ function MetricsPanel() {
   const { client, connectionState, hasToken, features, epoch } = useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
-  const available = connected && features.includes('metrics');
+  const available = hasToken && features.includes('metrics');
   const [source, setSource] = useState<'live' | 'trace'>('live');
   const [confirmReset, setConfirmReset] = useState(false);
   const [resetting, setResetting] = useState(false);
 
   const resource = useResource({
-    load: () => client.getMetrics(source),
+    load: () => client.getMetricsSnapshot(source),
     enabled: available,
     pollMs: 10_000,
     deps: [epoch, source],
   });
-  const metrics = resourceData(resource.state);
+  const data = resourceData(resource.state);
+  const metrics = data?.metrics;
   useRefreshSignal(resource.reload);
 
-  if (!connected) {
+  if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能读取指标。" />;
   }
   if (!features.includes('metrics')) {
@@ -92,6 +104,7 @@ function MetricsPanel() {
       <NotEnabledState
         title="Trace 指标重建不可用"
         reason={resource.state.error}
+        hint="需要 gateway 注入 metrics.rebuild（trace）后重启。"
         action={
           <button type="button" className="btn" onClick={() => setSource('live')}>
             切回 Live
@@ -102,18 +115,28 @@ function MetricsPanel() {
   }
 
   const reset = async () => {
+    if (!connected) {
+      toast.error('连接断开，无法重置指标');
+      return;
+    }
     setResetting(true);
     try {
       await client.resetMetrics();
       toast.success('指标已重置');
       resource.reload();
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
+      toast.error(
+        isForbidden(error)
+          ? '当前 token 没有 metrics.reset 权限（需要 write/admin）。'
+          : errorMessage(error),
+      );
     } finally {
       setResetting(false);
       setConfirmReset(false);
     }
   };
+
+  const error = resource.state.status === 'error' ? resource.state.error : null;
 
   return (
     <div className="settings-section">
@@ -134,21 +157,25 @@ function MetricsPanel() {
           type="button"
           className="btn btn-small btn-danger-ghost"
           onClick={() => setConfirmReset(true)}
-          disabled={!metrics}
+          disabled={!connected || !metrics}
+          title={!connected ? '连接断开，写操作已禁用' : undefined}
         >
           重置指标
         </button>
       </div>
 
-      {resource.state.status === 'error' && metrics && (
+      {!connected && metrics && (
         <StaleNotice
-          message={`更新失败，显示旧数据：${resource.state.error}`}
+          message="连接已断开；显示最近一次读取的指标快照。写操作已禁用。"
           onRetry={resource.reload}
         />
       )}
+      {error && metrics && (
+        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
+      )}
       {!metrics ? (
-        resource.state.status === 'error' ? (
-          <ErrorState message={resource.state.error} onRetry={resource.reload} />
+        error ? (
+          <ErrorState message={error} onRetry={resource.reload} />
         ) : (
           <LoadingState label="正在读取指标…" />
         )
@@ -193,8 +220,8 @@ function MetricsPanel() {
             </div>
           </div>
           <p className="section-desc">
-            当前来源：{source === 'trace' ? 'Trace 重建' : 'Live'}
-            。指标是进程内计数器，不是时间序列。
+            当前来源：{data?.source === 'trace' ? 'Trace 重建' : 'Live'}
+            。指标是进程内计数器，不是时间序列。重置需要 write/admin 权限。
           </p>
         </>
       )}
@@ -202,10 +229,16 @@ function MetricsPanel() {
       {confirmReset && (
         <ConfirmDialog
           title="重置指标？"
-          body={<p>将清空当前 gateway 进程内的计数；不影响 trace 与运行记录。</p>}
+          body={
+            <>
+              <p>将清空当前 gateway 进程内的计数；不影响 trace 与运行记录。</p>
+              <p className="dim">该操作需要 write/admin 权限，非授权 token 会返回 forbidden。</p>
+            </>
+          }
           confirmLabel="重置"
           danger
           busy={resetting}
+          confirmDisabled={!connected}
           onConfirm={() => void reset()}
           onCancel={() => setConfirmReset(false)}
         />
@@ -230,13 +263,15 @@ function EvalsPanel() {
   const { client, connectionState, hasToken, features, epoch } = useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
-  const available = connected && features.includes('evals');
+  const available = hasToken && features.includes('evals');
   const [suite, setSuite] = useState('smoke');
   const [requested, setRequested] = useState(0);
   const [runReport, setRunReport] = useState<EvalReport | null>(null);
   const [runBusy, setRunBusy] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [suites, setSuites] = useState<string[]>(readSuites);
+  const [caseLimit, setCaseLimit] = useState(EVAL_CASE_PAGE);
+  const [caseFilter, setCaseFilter] = useState<'all' | 'failed'>('all');
 
   const latest = useResource({
     load: () => client.getLatestEval(suite),
@@ -245,19 +280,25 @@ function EvalsPanel() {
   });
   const report = runReport ?? resourceData(latest.state) ?? null;
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: suite change resets the previous run report
+  // biome-ignore lint/correctness/useExhaustiveDependencies: suite 变化时清空上一次报告
   useEffect(() => {
     setRunReport(null);
     setRunError(null);
-  }, [suite]);
+    setCaseLimit(EVAL_CASE_PAGE);
+    setCaseFilter('all');
+  }, [suite, requested]);
 
   const rememberSuite = (value: string) => {
     const next = [value, ...suites.filter((item) => item !== value)].slice(0, 8);
     setSuites(next);
-    localStorage.setItem(EVAL_SUITES_KEY, JSON.stringify(next));
+    try {
+      localStorage.setItem(EVAL_SUITES_KEY, JSON.stringify(next));
+    } catch {
+      // 最近使用存不下不影响评测。
+    }
   };
 
-  if (!connected) {
+  if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能读取评测报告。" />;
   }
   if (!features.includes('evals')) {
@@ -278,6 +319,10 @@ function EvalsPanel() {
   };
 
   const run = async () => {
+    if (!connected) {
+      toast.error('连接断开，无法运行评测');
+      return;
+    }
     setRunBusy(true);
     setRunError(null);
     try {
@@ -286,7 +331,7 @@ function EvalsPanel() {
       rememberSuite(suite);
       toast.success(`评测完成：${result.suite}`);
     } catch (error) {
-      setRunError(error instanceof Error ? error.message : String(error));
+      setRunError(errorMessage(error));
     } finally {
       setRunBusy(false);
     }
@@ -297,9 +342,14 @@ function EvalsPanel() {
     (latest.state.error.includes('not_found') ||
       latest.state.error.includes('eval_not_found') ||
       latest.state.error.includes('Eval report not found'));
+  const latestError = latest.state.status === 'error' ? latest.state.error : null;
 
   return (
     <div className="settings-section">
+      <p className="section-desc">
+        评测默认离线运行；网络模式由服务端 `evals.allowNetwork` 与 CLI `--allow-network` 双门控，
+        客户端不提供开关。运行评测可能需要较长时间，可以离开此页。
+      </p>
       <div className="filter-bar">
         <input
           className="input"
@@ -327,22 +377,40 @@ function EvalsPanel() {
           type="button"
           className="btn btn-small btn-primary"
           onClick={() => void run()}
-          disabled={!suite.trim() || runBusy}
+          disabled={!connected || !suite.trim() || runBusy}
+          title={!connected ? '连接断开，写操作已禁用' : undefined}
         >
           {runBusy ? '运行中…（可离开页面）' : '运行评测'}
         </button>
       </div>
+      {suites.length > 0 && (
+        <div className="chip-row">
+          <span className="dim">最近使用：</span>
+          {suites.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`filter-chip ${item === suite ? 'active' : ''}`.trim()}
+              aria-pressed={item === suite}
+              onClick={() => setSuite(item)}
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+      )}
 
       {runError && <ErrorState message={runError} onRetry={() => void run()} retryLabel="重试" />}
+      {!connected && report && <StaleNotice message="连接已断开；显示最近一次读取的评测报告。" />}
       {!runReport && notFound && (
         <NotEnabledState
           title="Evals 未启用或没有该 suite 的报告"
-          reason={latest.state.status === 'error' ? latest.state.error : undefined}
+          reason={latestError ?? undefined}
           hint="确认 suite 名称；运行评测可生成新报告。"
         />
       )}
-      {!runReport && !notFound && latest.state.status === 'error' && (
-        <ErrorState message={latest.state.error} onRetry={latest.reload} />
+      {!runReport && !notFound && latestError && (
+        <ErrorState message={latestError} onRetry={latest.reload} />
       )}
       {!report && !runError && !notFound ? (
         latest.state.status === 'loading' ? (
@@ -354,14 +422,40 @@ function EvalsPanel() {
           />
         )
       ) : report ? (
-        <EvalReportView report={report} />
+        <EvalReportView
+          report={report}
+          caseLimit={caseLimit}
+          caseFilter={caseFilter}
+          onCaseFilter={setCaseFilter}
+          onShowMore={() => setCaseLimit((value) => value + EVAL_CASE_PAGE)}
+        />
       ) : null}
     </div>
   );
 }
 
-function EvalReportView({ report }: { report: EvalReport }) {
-  const cases = useMemo(() => report.cases.slice(0, 100), [report.cases]);
+function EvalReportView({
+  report,
+  caseLimit,
+  caseFilter,
+  onCaseFilter,
+  onShowMore,
+}: {
+  report: EvalReport;
+  caseLimit: number;
+  caseFilter: 'all' | 'failed';
+  onCaseFilter: (value: 'all' | 'failed') => void;
+  onShowMore: () => void;
+}) {
+  const filteredCases = useMemo(
+    () =>
+      caseFilter === 'failed'
+        ? report.cases.filter((item) => item.status === 'failed' || item.status === 'error')
+        : report.cases,
+    [report.cases, caseFilter],
+  );
+  const cases = filteredCases.slice(0, caseLimit);
+
   return (
     <>
       <div className="stats-grid">
@@ -387,74 +481,98 @@ function EvalReportView({ report }: { report: EvalReport }) {
         </div>
         <div className="stat">
           <span className="stat-value">{report.duration_ms}ms</span>
-          <span className="stat-label">耗时 · network {report.network ? 'on' : 'off'}</span>
+          <span className="stat-label">耗时</span>
+        </div>
+        <div className="stat">
+          <span className="stat-value">{report.network ? 'on' : 'off'}</span>
+          <span className="stat-label">网络模式</span>
         </div>
       </div>
+      <p className="section-desc">
+        报告生成于 {formatTimestamp(report.finished_at)}。
+        {report.network ? '本次启用了网络模式。' : '本次为离线评测。'}
+      </p>
 
       <section className="panel">
-        <h2 className="section-title">用例</h2>
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th scope="col">状态</th>
-              <th scope="col">用例</th>
-              <th scope="col" className="col-optional">
-                耗时
-              </th>
-              <th scope="col" className="col-optional">
-                断言
-              </th>
-              <th scope="col">输出 / 错误</th>
-            </tr>
-          </thead>
-          <tbody>
-            {cases.map((item) => (
-              <tr key={item.id}>
-                <td>
-                  <StatusChip status={item.status} />
-                </td>
-                <td className="mono">{item.id}</td>
-                <td className="mono col-optional">{item.duration_ms}ms</td>
-                <td className="mono col-optional">
-                  {item.assertions.filter((assertion) => assertion.ok).length}/
-                  {item.assertions.length}
-                </td>
-                <td>
-                  {item.error ? (
-                    <span className="err">{item.error}</span>
-                  ) : (
-                    <span className="dim">{item.output ?? '—'}</span>
-                  )}
-                  {item.assertions.length > 0 && (
-                    <details className="case-assertions">
-                      <summary>断言详情</summary>
-                      <ul className="plain-list">
-                        {item.assertions.map((assertion, index) => (
-                          // biome-ignore lint/suspicious/noArrayIndexKey: 断言顺序稳定
-                          <li key={`${assertion.type}-${index}`}>
-                            <span className={assertion.ok ? 'ok' : 'err'}>
-                              {assertion.ok ? '✓' : '✗'} {assertion.type}
-                            </span>
-                            {assertion.detail && <span className="dim"> — {assertion.detail}</span>}
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  )}
-                </td>
+        <div className="panel-header">
+          <h2 className="section-title">用例</h2>
+          <button
+            type="button"
+            className={`filter-chip ${caseFilter === 'failed' ? 'active' : ''}`.trim()}
+            aria-pressed={caseFilter === 'failed'}
+            onClick={() => onCaseFilter(caseFilter === 'failed' ? 'all' : 'failed')}
+          >
+            只看失败
+          </button>
+          <span className="count-pill">
+            {filteredCases.length}/{report.cases.length}
+          </span>
+        </div>
+        {filteredCases.length === 0 ? (
+          <EmptyState title={caseFilter === 'failed' ? '没有失败用例。' : '没有用例。'} />
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">状态</th>
+                <th scope="col">用例</th>
+                <th scope="col" className="col-optional">
+                  耗时
+                </th>
+                <th scope="col" className="col-optional">
+                  断言
+                </th>
+                <th scope="col">输出 / 错误</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-        {report.cases.length > cases.length && (
-          <p className="section-desc">
-            显示前 {cases.length} 条，共 {report.cases.length} 条。
-          </p>
+            </thead>
+            <tbody>
+              {cases.map((item) => (
+                <tr key={item.id}>
+                  <td>
+                    <StatusChip status={item.status} />
+                  </td>
+                  <td className="mono">{item.id}</td>
+                  <td className="mono col-optional">{item.duration_ms}ms</td>
+                  <td className="mono col-optional">
+                    {item.assertions.filter((assertion) => assertion.ok).length}/
+                    {item.assertions.length}
+                  </td>
+                  <td>
+                    {item.error ? (
+                      <span className="err">{item.error}</span>
+                    ) : (
+                      <span className="dim">{item.output ?? '—'}</span>
+                    )}
+                    {item.assertions.length > 0 && (
+                      <details className="case-assertions" open={item.status === 'failed'}>
+                        <summary>断言详情</summary>
+                        <ul className="plain-list">
+                          {item.assertions.map((assertion, index) => (
+                            // biome-ignore lint/suspicious/noArrayIndexKey: 断言顺序稳定
+                            <li key={`${assertion.type}-${index}`}>
+                              <span className={assertion.ok ? 'ok' : 'err'}>
+                                {assertion.ok ? '✓' : '✗'} {assertion.type}
+                              </span>
+                              {assertion.detail && (
+                                <span className="dim"> — {assertion.detail}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+        {cases.length < filteredCases.length && (
+          <button type="button" className="load-more" onClick={onShowMore}>
+            显示更多用例（还有 {filteredCases.length - cases.length} 条）
+          </button>
         )}
       </section>
-      <p className="section-desc">
-        报告生成于 {formatTimestamp(report.finished_at)}。评测默认离线，网络模式由服务端门控。
-      </p>
     </>
   );
 }

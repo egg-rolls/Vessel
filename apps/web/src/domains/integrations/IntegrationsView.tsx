@@ -1,7 +1,8 @@
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import type { Route } from '../../app/router';
 import { JsonView } from '../../components/JsonView';
 import { PageHeader } from '../../components/PageHeader';
+import { usePaletteEntities } from '../../components/PaletteEntities';
 import {
   EmptyState,
   ErrorState,
@@ -13,6 +14,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { buildMcpPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
 
 type IntegrationsRoute = Extract<Route, { domain: 'integrations' }>;
@@ -23,6 +25,19 @@ const TABS: readonly { id: Tab; label: string }[] = [
   { id: 'mcp', label: 'MCP 服务' },
   { id: 'channels', label: '渠道' },
 ];
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** `mcp__<server>__<tool>` → server 名；普通工具返回 undefined。 */
+export function mcpServerOf(toolName: string): string | undefined {
+  if (!toolName.startsWith('mcp__')) return undefined;
+  const rest = toolName.slice('mcp__'.length);
+  const separator = rest.indexOf('__');
+  if (separator <= 0) return undefined;
+  return rest.slice(0, separator);
+}
 
 export function IntegrationsView({
   route,
@@ -58,23 +73,34 @@ function ToolsPanel() {
   const { client, connectionState, hasToken, epoch } = useConnection();
   const connected = hasToken && connectionState === 'open';
   const [query, setQuery] = useState('');
+  const [onlyConfirm, setOnlyConfirm] = useState(false);
   const resource = useResource({
     load: () => client.listTools(),
-    enabled: connected,
+    enabled: hasToken,
     deps: [epoch],
   });
-  const tools = resourceData(resource.state) ?? [];
+  const tools = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
+  const confirmCount = useMemo(
+    () => tools.filter((tool) => tool.has_permission_check).length,
+    [tools],
+  );
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return tools;
-    return tools.filter(
-      (tool) =>
-        tool.name.toLowerCase().includes(needle) || tool.description.toLowerCase().includes(needle),
-    );
-  }, [tools, query]);
+    return tools.filter((tool) => {
+      if (onlyConfirm && !tool.has_permission_check) return false;
+      if (!needle) return true;
+      return (
+        tool.name.toLowerCase().includes(needle) || tool.description.toLowerCase().includes(needle)
+      );
+    });
+  }, [tools, query, onlyConfirm]);
+  const error = resource.state.status === 'error' ? resource.state.error : null;
 
-  if (!connected) {
+  if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能读取工具目录。" />;
+  }
+  if (error && tools.length === 0) {
+    return <ErrorState message={error} onRetry={resource.reload} />;
   }
   if (
     resource.state.status === 'idle' ||
@@ -82,49 +108,77 @@ function ToolsPanel() {
   ) {
     return <LoadingState label="正在读取工具…" />;
   }
-  if (resource.state.status === 'error' && tools.length === 0) {
-    return <ErrorState message={resource.state.error} onRetry={resource.reload} />;
-  }
 
   return (
     <div className="settings-section">
-      {resource.state.status === 'error' && (
-        <StaleNotice
-          message={`更新失败，显示旧数据：${resource.state.error}`}
-          onRetry={resource.reload}
-        />
+      {!connected && tools.length > 0 && (
+        <StaleNotice message="连接已断开；显示最近一次读取的工具目录。" onRetry={resource.reload} />
+      )}
+      {error && tools.length > 0 && (
+        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
       )}
       <div className="filter-bar">
         <input
           className="input search-input"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="搜索工具"
+          placeholder="搜索工具名称或描述"
           type="search"
           aria-label="搜索工具"
         />
-        <span className="count-pill">{filtered.length}</span>
+        <button
+          type="button"
+          className={`filter-chip ${onlyConfirm ? 'active' : ''}`.trim()}
+          aria-pressed={onlyConfirm}
+          onClick={() => setOnlyConfirm((value) => !value)}
+        >
+          仅需确认（{confirmCount}）
+        </button>
+        <span className="count-pill">
+          {filtered.length}/{tools.length}
+        </span>
       </div>
       {tools.length === 0 ? (
         <EmptyState title="gateway 没有注册工具。" />
       ) : filtered.length === 0 ? (
-        <EmptyState title={`没有匹配“${query.trim()}”的工具。`} />
+        <EmptyState
+          title="没有匹配的工具。"
+          action={
+            <button
+              type="button"
+              className="btn"
+              onClick={() => {
+                setQuery('');
+                setOnlyConfirm(false);
+              }}
+            >
+              清除过滤
+            </button>
+          }
+        />
       ) : (
         <div className="card-grid">
-          {filtered.map((tool) => (
-            <article className="card" key={tool.name}>
-              <div className="card-header">
-                <h3 className="card-title mono">{tool.name}</h3>
-                {tool.has_permission_check && (
-                  <span className="perm-badge perm-warn" title="调用前需要确认">
-                    需确认
-                  </span>
-                )}
-              </div>
-              {tool.description && <p className="card-desc">{tool.description}</p>}
-              <JsonView value={tool.input_schema} label="input_schema" maxHeight={240} />
-            </article>
-          ))}
+          {filtered.map((tool) => {
+            const server = mcpServerOf(tool.name);
+            return (
+              <article className="card" key={tool.name}>
+                <div className="card-header">
+                  <h3 className="card-title mono">{tool.name}</h3>
+                  {tool.has_permission_check && (
+                    <span className="perm-badge perm-warn" title="调用前需要确认">
+                      需确认
+                    </span>
+                  )}
+                  {server && <span className="perm-badge">MCP · {server}</span>}
+                </div>
+                {tool.description && <p className="card-desc">{tool.description}</p>}
+                <details className="tool-schema">
+                  <summary>input schema</summary>
+                  <JsonView value={tool.input_schema} label="JSON Schema" maxHeight={320} open />
+                </details>
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
@@ -135,8 +189,9 @@ function McpPanel() {
   const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
-  const available = connected && features.includes('mcp-status');
+  const available = hasToken && features.includes('mcp-status');
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [reconnectingAll, setReconnectingAll] = useState(false);
 
   const resource = useResource({
     load: () => client.listMcpServers(),
@@ -144,9 +199,71 @@ function McpPanel() {
     pollMs: 10_000,
     deps: [epoch],
   });
-  const servers = resourceData(resource.state) ?? [];
+  const servers = useMemo(() => resourceData(resource.state) ?? [], [resource.state]);
+  const failed = servers.filter((server) => server.status === 'failed');
 
-  if (!connected) {
+  const reconnect = useCallback(
+    async (name: string) => {
+      if (!connected) {
+        toast.error('连接断开，无法重连 MCP');
+        return;
+      }
+      setBusy((prev) => new Set(prev).add(name));
+      try {
+        await client.reconnectMcp(name);
+        toast.success(`已重连 ${name}`);
+        resource.reload();
+      } catch (error) {
+        toast.error(`重连 ${name} 失败：${errorMessage(error)}`);
+      } finally {
+        setBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(name);
+          return next;
+        });
+      }
+    },
+    [client, connected, resource.reload, toast],
+  );
+
+  const reconnectAllFailed = useCallback(async () => {
+    if (!connected || failed.length === 0) return;
+    setReconnectingAll(true);
+    let succeeded = 0;
+    const failures: string[] = [];
+    for (const server of failed) {
+      setBusy((prev) => new Set(prev).add(server.name));
+      try {
+        await client.reconnectMcp(server.name);
+        succeeded += 1;
+      } catch (error) {
+        failures.push(`${server.name}: ${errorMessage(error)}`);
+      } finally {
+        setBusy((prev) => {
+          const next = new Set(prev);
+          next.delete(server.name);
+          return next;
+        });
+      }
+    }
+    setReconnectingAll(false);
+    resource.reload();
+    if (failures.length === 0) toast.success(`已重连 ${succeeded} 个 MCP 服务`);
+    else if (succeeded === 0) toast.error(`重连失败：${failures.join('；')}`);
+    else toast.error(`已重连 ${succeeded} 个；失败：${failures.join('；')}`);
+  }, [client, connected, failed, resource.reload, toast]);
+
+  const paletteActions = useMemo(
+    () =>
+      buildMcpPaletteActions({
+        servers,
+        reconnect: (name) => void reconnect(name),
+      }),
+    [servers, reconnect],
+  );
+  usePaletteEntities('integrations-mcp', paletteActions);
+
+  if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能读取 MCP 状态。" />;
   }
   if (!features.includes('mcp-status')) {
@@ -159,22 +276,7 @@ function McpPanel() {
     );
   }
 
-  const reconnect = async (name: string) => {
-    setBusy((prev) => new Set(prev).add(name));
-    try {
-      await client.reconnectMcp(name);
-      toast.success(`已重连 ${name}`);
-      resource.reload();
-    } catch (error) {
-      toast.error(`重连 ${name} 失败：${error instanceof Error ? error.message : String(error)}`);
-    } finally {
-      setBusy((prev) => {
-        const next = new Set(prev);
-        next.delete(name);
-        return next;
-      });
-    }
-  };
+  const error = resource.state.status === 'error' ? resource.state.error : null;
 
   return (
     <div className="settings-section">
@@ -182,14 +284,34 @@ function McpPanel() {
         MCP 控制面为 gateway 全局状态（default tenant），不随租户切换。
         {tenantId && tenantId !== 'default' ? ` 当前租户：${tenantId}。` : ''}
       </p>
-      {resource.state.status === 'error' && (
-        <StaleNotice
-          message={`MCP 状态更新失败：${resource.state.error}`}
-          onRetry={resource.reload}
-        />
+      {!connected && servers.length > 0 && (
+        <StaleNotice message="连接已断开；显示最近一次读取的 MCP 状态。写操作已禁用。" />
       )}
-      {resource.state.status === 'idle' ||
-      (resource.state.status === 'loading' && servers.length === 0) ? (
+      {error && servers.length > 0 && (
+        <StaleNotice message={`MCP 状态更新失败：${error}`} onRetry={resource.reload} />
+      )}
+      <div className="filter-bar">
+        <span className="count-pill">
+          {servers.length} 个服务 · {failed.length} 个失败
+        </span>
+        <button
+          type="button"
+          className="btn btn-small"
+          disabled={!connected || failed.length === 0 || reconnectingAll}
+          title={!connected ? '连接断开，写操作已禁用' : undefined}
+          onClick={() => void reconnectAllFailed()}
+        >
+          {reconnectingAll ? '重连中…' : `重连全部失败（${failed.length}）`}
+        </button>
+        <button type="button" className="btn btn-small" onClick={resource.reload}>
+          刷新
+        </button>
+      </div>
+
+      {error && servers.length === 0 ? (
+        <ErrorState message={error} onRetry={resource.reload} />
+      ) : resource.state.status === 'idle' ||
+        (resource.state.status === 'loading' && servers.length === 0) ? (
         <LoadingState label="正在读取 MCP 服务…" />
       ) : servers.length === 0 ? (
         <EmptyState
@@ -199,14 +321,20 @@ function McpPanel() {
       ) : (
         <div className="card-grid">
           {servers.map((server) => (
-            <article className="card" key={server.name}>
+            <article className={`card mcp-card mcp-${server.status}`} key={server.name}>
               <div className="card-header">
                 <h3 className="card-title mono">{server.name}</h3>
                 <StatusChip status={server.status} />
               </div>
               <p className="card-desc">{server.tools.length} 个工具</p>
               {server.tools.length > 0 && (
-                <p className="mono dim card-tools">{server.tools.join(', ')}</p>
+                <div className="chip-row">
+                  {server.tools.map((tool) => (
+                    <span className="perm-badge mono" key={tool}>
+                      {tool}
+                    </span>
+                  ))}
+                </div>
               )}
               {server.error && (
                 <p className="err" role="alert">
@@ -217,7 +345,8 @@ function McpPanel() {
                 <button
                   type="button"
                   className="btn btn-small"
-                  disabled={busy.has(server.name)}
+                  disabled={!connected || busy.has(server.name)}
+                  title={!connected ? '连接断开，写操作已禁用' : undefined}
                   onClick={() => void reconnect(server.name)}
                 >
                   {busy.has(server.name) ? '重连中…' : '重连'}
@@ -234,7 +363,7 @@ function McpPanel() {
 function ChannelsPanel() {
   const { client, connectionState, hasToken, features, epoch } = useConnection();
   const connected = hasToken && connectionState === 'open';
-  const available = connected && features.includes('feishu');
+  const available = hasToken && features.includes('feishu');
   const resource = useResource({
     load: () => client.getFeishuStatus(),
     enabled: available,
@@ -243,7 +372,7 @@ function ChannelsPanel() {
   });
   const channel = resourceData(resource.state);
 
-  if (!connected) {
+  if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能读取渠道状态。" />;
   }
   if (!features.includes('feishu')) {
@@ -255,26 +384,25 @@ function ChannelsPanel() {
       />
     );
   }
+  const error = resource.state.status === 'error' ? resource.state.error : null;
+  if (error && !channel) {
+    return <ErrorState message={error} onRetry={resource.reload} />;
+  }
   if (resource.state.status === 'idle' || (resource.state.status === 'loading' && !channel)) {
     return <LoadingState label="正在读取飞书状态…" />;
   }
   if (!channel) {
-    return (
-      <ErrorState
-        message={resource.state.status === 'error' ? resource.state.error : '没有渠道数据'}
-        onRetry={resource.reload}
-      />
-    );
+    return <EmptyState title="没有渠道数据。" />;
   }
 
   return (
     <div className="settings-section">
       <p className="section-desc">该控制面为 gateway 全局状态（default tenant），只读。</p>
-      {resource.state.status === 'error' && (
-        <StaleNotice
-          message={`更新失败，显示旧数据：${resource.state.error}`}
-          onRetry={resource.reload}
-        />
+      {!connected && (
+        <StaleNotice message="连接已断开；显示最近一次读取的渠道状态。" onRetry={resource.reload} />
+      )}
+      {error && (
+        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
       )}
       <section className="panel">
         <div className="panel-header">
@@ -291,6 +419,8 @@ function ChannelsPanel() {
           <dd className="mono">{channel.active_chats}</dd>
           <dt>排队消息</dt>
           <dd className="mono">{channel.queued_messages}</dd>
+          <dt>最近错误</dt>
+          <dd className={channel.last_error ? 'err' : 'dim'}>{channel.last_error ?? '—'}</dd>
         </dl>
         {channel.last_error && (
           <p className="form-error" role="alert">
