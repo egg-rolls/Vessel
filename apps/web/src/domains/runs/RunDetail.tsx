@@ -218,6 +218,7 @@ export function RunDetail({
   }, [active]);
 
   // 选中 run 后把详情滚入视野（桌面为内联面板；移动端是整页）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runId 变化是滚动触发条件
   useEffect(() => {
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     sectionRef.current?.scrollIntoView({

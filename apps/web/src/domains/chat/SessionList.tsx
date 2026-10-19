@@ -44,6 +44,7 @@ export function SessionList({
   onCloseDrawer,
   onOpenConnection,
   writesDisabled,
+  renameSignal,
 }: {
   sessions: readonly SessionInfo[];
   filteredCount: number;
@@ -70,6 +71,8 @@ export function SessionList({
   onOpenConnection: () => void;
   /** 断线时禁用重命名/删除，保留只读动作。 */
   writesDisabled: boolean;
+  /** 命令面板触发当前会话行内重命名；每次递增。 */
+  renameSignal: number;
 }) {
   const toast = useToast();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -89,6 +92,19 @@ export function SessionList({
     setDraft(sessionTitle(session));
     setRenameError(null);
   };
+
+  // 命令面板 → 行内重命名；只在 signal 变化时触发，轮询刷新不会重开编辑器。
+  const lastRenameSignal = useRef(0);
+  useEffect(() => {
+    if (renameSignal === lastRenameSignal.current) return;
+    lastRenameSignal.current = renameSignal;
+    if (writesDisabled || !selectedId) return;
+    const target = sessions.find((session) => session.session_id === selectedId);
+    if (!target) return;
+    setEditingId(target.session_id);
+    setDraft(sessionTitle(target));
+    setRenameError(null);
+  }, [renameSignal, sessions, selectedId, writesDisabled]);
 
   const cancelRename = () => {
     setEditingId(null);

@@ -326,7 +326,7 @@ export function RunsView({
     <div className={`domain-view ${route.runId ? 'detail-open' : ''}`.trim()}>
       <PageHeader
         title="运行"
-        description="Live 是当前 gateway 进程内的执行（内存，最多约 200 条）；可恢复来自持久 checkpoint。"
+        description="Live 是当前 gateway 进程内的执行（内存，最多约 200 条）；可恢复来自持久运行记录。"
         tenantId={tenantId}
       />
       <SegmentedTabs

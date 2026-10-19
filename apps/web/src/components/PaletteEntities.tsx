@@ -20,11 +20,20 @@ export function PaletteEntitiesProvider({
 
 /**
  * 注册实体项（调用方必须 memoize items）。
- * 卸载时不清空，保证从其他域打开命令面板时仍能搜索最近实体。
+ * 默认卸载时不清空，保证从其他域打开命令面板时仍能搜索最近实体；
+ * 依赖当前视图内部状态的动作（如会话改名）应传 clearOnUnmount，避免留下无效动作。
  */
-export function usePaletteEntities(source: string, items: readonly PaletteItem[]): void {
+export function usePaletteEntities(
+  source: string,
+  items: readonly PaletteItem[],
+  options: { clearOnUnmount?: boolean } = {},
+): void {
   const register = useContext(PaletteEntitiesContext);
+  const clearOnUnmount = options.clearOnUnmount === true;
   useEffect(() => {
     register?.(source, items);
-  }, [register, source, items]);
+    return () => {
+      if (clearOnUnmount) register?.(source, []);
+    };
+  }, [register, source, items, clearOnUnmount]);
 }

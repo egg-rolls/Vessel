@@ -394,45 +394,51 @@ export function ChatView({
   }, [sessionsResource.reload, detailResource.reload]);
   useRefreshSignal(refreshAll);
 
-  // 命令面板：最近 20 个会话 + 当前会话的改名/删除动作。
-  const paletteEntities = useMemo(() => {
-    const items = sessions.slice(0, 20).map((session) => ({
-      id: `session-${session.session_id}`,
-      group: 'entity' as const,
-      label: sessionTitle(session),
-      keywords: [session.session_id, session.preview ?? ''],
-      hint: '会话',
-      run: () => navigate({ domain: 'chat', sessionId: session.session_id }),
-    }));
-    const selected = selectedId ? sessions.find((item) => item.session_id === selectedId) : undefined;
-    if (selected) {
-      const title = sessionTitle(selected);
-      items.push(
-        {
-          id: 'action-rename-session',
-          group: 'action',
-          label: `重命名会话“${title}”`,
-          keywords: ['rename', 'title', selected.session_id],
-          hint: '会话',
-          run: () => setRenameSignal((value) => value + 1),
+  // 命令面板：最近 20 个会话（跨域可搜）+ 当前会话的改名/删除动作（离开 Chat 时清除）。
+  const paletteEntities = useMemo(
+    () =>
+      sessions.slice(0, 20).map((session) => ({
+        id: `session-${session.session_id}`,
+        group: 'entity' as const,
+        label: sessionTitle(session),
+        keywords: [session.session_id, session.preview ?? ''],
+        hint: '会话',
+        run: () => navigate({ domain: 'chat', sessionId: session.session_id }),
+      })),
+    [sessions, navigate],
+  );
+  usePaletteEntities('chat-entities', paletteEntities);
+
+  const paletteActions = useMemo<PaletteItem[]>(() => {
+    const selected = selectedId
+      ? sessions.find((item) => item.session_id === selectedId)
+      : undefined;
+    if (!selected) return [];
+    const title = sessionTitle(selected);
+    return [
+      {
+        id: 'action-rename-session',
+        group: 'action',
+        label: `重命名会话“${title}”`,
+        keywords: ['rename', 'title', selected.session_id],
+        hint: '会话',
+        run: () => setRenameSignal((value) => value + 1),
+      },
+      {
+        id: 'action-delete-session',
+        group: 'action',
+        label: `删除会话“${title}”（需确认）`,
+        keywords: ['delete', 'remove', selected.session_id],
+        hint: '需确认',
+        // 打开标准确认框（带消息数/关联 run 计数），不在面板内直接删除。
+        run: () => {
+          setDeleteError(null);
+          setDeleteTarget(selected);
         },
-        {
-          id: 'action-delete-session',
-          group: 'action',
-          label: `删除会话“${title}”（需确认）`,
-          keywords: ['delete', 'remove', selected.session_id],
-          hint: '需确认',
-          // 回车后打开标准确认框（带消息数/关联 run 计数），不在面板内直接删除。
-          run: () => {
-            setDeleteError(null);
-            setDeleteTarget(selected);
-          },
-        },
-      );
-    }
-    return items;
-  }, [sessions, selectedId, navigate]);
-  usePaletteEntities('chat', paletteEntities);
+      },
+    ];
+  }, [sessions, selectedId]);
+  usePaletteEntities('chat-actions', paletteActions, { clearOnUnmount: true });
 
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
   const filteredSessions = useMemo(
@@ -685,6 +691,7 @@ export function ChatView({
           onCloseDrawer={onCloseSessions}
           onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
           writesDisabled={!connected}
+          renameSignal={renameSignal}
         />
       </aside>
 

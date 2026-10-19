@@ -150,6 +150,7 @@ function MetricsPanel() {
           ]}
           value={source}
           onChange={setSource}
+          panelId="metrics-source-panel"
         />
         <button type="button" className="btn btn-small" onClick={resource.reload}>
           刷新
@@ -165,67 +166,69 @@ function MetricsPanel() {
         </button>
       </div>
 
-      {!connected && metrics && (
-        <StaleNotice
-          message="连接已断开；显示最近一次读取的指标快照。写操作已禁用。"
-          onRetry={resource.reload}
-        />
-      )}
-      {error && metrics && (
-        <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
-      )}
-      {!metrics ? (
-        error ? (
-          <ErrorState message={error} onRetry={resource.reload} />
+      <div id="metrics-source-panel" role="tabpanel" aria-label="指标内容">
+        {!connected && metrics && (
+          <StaleNotice
+            message="连接已断开；显示最近一次读取的指标快照。写操作已禁用。"
+            onRetry={resource.reload}
+          />
+        )}
+        {error && metrics && (
+          <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={resource.reload} />
+        )}
+        {!metrics ? (
+          error ? (
+            <ErrorState message={error} onRetry={resource.reload} />
+          ) : (
+            <LoadingState label="正在读取指标…" />
+          )
         ) : (
-          <LoadingState label="正在读取指标…" />
-        )
-      ) : (
-        <>
-          <div className="stats-grid">
-            <div className="stat">
-              <span className="stat-value">{metrics.runs.started}</span>
-              <span className="stat-label">Runs 已启动</span>
+          <>
+            <div className="stats-grid">
+              <div className="stat">
+                <span className="stat-value">{metrics.runs.started}</span>
+                <span className="stat-label">Runs 已启动</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{metrics.runs.completed}</span>
+                <span className="stat-label">已完成</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{metrics.runs.failed}</span>
+                <span className="stat-label">失败</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{metrics.runs.cancelled}</span>
+                <span className="stat-label">已取消</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{metrics.tool_calls.total}</span>
+                <span className="stat-label">工具调用（失败 {metrics.tool_calls.failed}）</span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{metrics.llm.total_tokens}</span>
+                <span className="stat-label">
+                  Tokens（{metrics.llm.prompt_tokens}+{metrics.llm.completion_tokens}）
+                </span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{Math.round(metrics.duration_ms.avg)}ms</span>
+                <span className="stat-label">
+                  平均耗时（最大 {Math.round(metrics.duration_ms.max)}ms）
+                </span>
+              </div>
+              <div className="stat">
+                <span className="stat-value">{formatTimestamp(metrics.updated_at)}</span>
+                <span className="stat-label">更新于</span>
+              </div>
             </div>
-            <div className="stat">
-              <span className="stat-value">{metrics.runs.completed}</span>
-              <span className="stat-label">已完成</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{metrics.runs.failed}</span>
-              <span className="stat-label">失败</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{metrics.runs.cancelled}</span>
-              <span className="stat-label">已取消</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{metrics.tool_calls.total}</span>
-              <span className="stat-label">工具调用（失败 {metrics.tool_calls.failed}）</span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{metrics.llm.total_tokens}</span>
-              <span className="stat-label">
-                Tokens（{metrics.llm.prompt_tokens}+{metrics.llm.completion_tokens}）
-              </span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{Math.round(metrics.duration_ms.avg)}ms</span>
-              <span className="stat-label">
-                平均耗时（最大 {Math.round(metrics.duration_ms.max)}ms）
-              </span>
-            </div>
-            <div className="stat">
-              <span className="stat-value">{formatTimestamp(metrics.updated_at)}</span>
-              <span className="stat-label">更新于</span>
-            </div>
-          </div>
-          <p className="section-desc">
-            当前来源：{data?.source === 'trace' ? '事件记录重建' : 'Live'}
-            。指标是进程内计数器，不是时间序列。重置需要 write/admin 权限。
-          </p>
-        </>
-      )}
+            <p className="section-desc">
+              当前来源：{data?.source === 'trace' ? '事件记录重建' : 'Live'}
+              。指标是进程内计数器，不是时间序列。重置需要 write/admin 权限。
+            </p>
+          </>
+        )}
+      </div>
 
       {confirmReset && (
         <ConfirmDialog
