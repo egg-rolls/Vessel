@@ -435,7 +435,6 @@ export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClien
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), requestTimeoutMs);
-      (timer as { unref?: () => void }).unref?.();
 
       let response: Response;
       try {
