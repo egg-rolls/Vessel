@@ -72,7 +72,7 @@ import {
   withPluginConfig,
 } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
-import { resolvePluginNames } from './plugin-selection';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
@@ -299,12 +299,15 @@ export async function buildTenantRuntime(
     const declarativePlugins = declarativePluginEntries(config);
     /** E1：插件名 → 安装配置（显式 plugins[].config 覆盖声明式条目） */
     const pluginConfigs = buildPluginConfigMap(config.plugins, declarativePlugins);
-    const defaultPluginNames = resolvePluginNames(
+    const pluginSelection = resolvePluginSelection(
       loader,
       config.plugins,
       Boolean(process.env.VESSEL_DEBUG),
       declarativePlugins,
     );
+    // 默认集里的外部插件以完整进程权限运行：启动时告警一次（stderr）。
+    warnExternalPluginsOnce(pluginSelection.external);
+    const defaultPluginNames = pluginSelection.names;
 
     const plugins: Plugin[] = [];
     const pluginLoadEvents: Array<{

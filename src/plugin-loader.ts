@@ -3,9 +3,11 @@
  *
  * 扫描顺序（同名插件先出现者胜出）：
  *   1. 仓库内 `plugins/<category>/<name>/`（内置插件，权威）；
- *   2. 用户目录 `~/.vessel/plugins/`（扁平 `<name>/` 或 `<category>/<name>/`）；
- *   3. 项目目录 `./.vessel/plugins/`（同上）；
+ *   2. 项目目录 `./.vessel/plugins/`（扁平 `<name>/` 或 `<category>/<name>/`）；
+ *   3. 用户目录 `~/.vessel/plugins/`（同上）；
  *   4. `node_modules/@vessel/*`（仓库根与 cwd；跳过 core/config/tui/serve/permission）。
+ *
+ * 项目优先于用户：项目级插件覆盖同名用户级插件，仓库内插件覆盖两者。
  *
  * 放一个 `package.json` + 入口（`src/index.ts`，或 package.json 的 exports/main）即注册，
  * 无需改代码、无需构建步骤。默认导出须是 `Plugin`（含 `install()`）。
@@ -175,8 +177,8 @@ export function defaultPluginRoots(repoDir: string = PLUGINS_DIR): PluginRoot[] 
   const repoRoot = path.dirname(repoDir);
   const roots: PluginRoot[] = [
     { dir: repoDir, source: 'repo', layout: 'category' },
-    { dir: path.join(os.homedir(), '.vessel', 'plugins'), source: 'user', layout: 'auto' },
     { dir: path.join(process.cwd(), '.vessel', 'plugins'), source: 'project', layout: 'auto' },
+    { dir: path.join(os.homedir(), '.vessel', 'plugins'), source: 'user', layout: 'auto' },
     {
       dir: path.join(repoRoot, 'node_modules', '@vessel'),
       source: 'node_modules',

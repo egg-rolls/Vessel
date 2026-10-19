@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FACTORY_PLUGINS, PluginLoader } from '../plugin-loader';
+import { defaultPluginRoots, FACTORY_PLUGINS, PluginLoader } from '../plugin-loader';
 
 /** 读取插件真实 package.json（用于核对 list() 没有臆造元数据） */
 function readPkg(category: string, name: string): { name: string; version: string } {
@@ -71,6 +71,14 @@ it('load() 加载已知插件', async () => {
 
 it('load() 未知插件返回 null', async () => {
   expect(await new PluginLoader().load('does-not-exist')).toBeNull();
+});
+
+it('defaultPluginRoots 顺序为 repo → project → user → node_modules（0.7.1）', () => {
+  const roots = defaultPluginRoots();
+  const sources = roots.map((root) => root.source);
+
+  expect(sources.slice(0, 3)).toEqual(['repo', 'project', 'user']);
+  expect(sources.slice(3).every((source) => source === 'node_modules')).toBe(true);
 });
 
 describe('插件目录扩展（0.6.1）', () => {

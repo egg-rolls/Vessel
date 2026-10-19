@@ -61,7 +61,9 @@ import {
   listAutoApproveRules,
   removeAutoApproveRule,
 } from './permission-store';
+import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import {
   createHttpRpcClient,
   createLocalRpcClient,
@@ -735,6 +737,15 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 本地模式复用同一工厂，只构建当前 tenant；provider / 插件 / trace /
   // metrics 全部由 bundle 持有。bootstrap 只负责入口、RPC 与生命周期。
   const loader = new PluginLoader();
+  // 启动告警：默认集包含外部插件时提示信任边界（opt-out 见 VESSEL_NO_EXTERNAL_PLUGINS）。
+  warnExternalPluginsOnce(
+    resolvePluginSelection(
+      loader,
+      config.plugins,
+      Boolean(process.env.VESSEL_DEBUG),
+      declarativePluginEntries(config),
+    ).external,
+  );
   let currentSessionId = sessionId ?? newSessionId();
   const bundle = await buildTenantRuntime({
     tenantId,

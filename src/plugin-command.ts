@@ -15,7 +15,7 @@ import { loadConfig, type PluginConfig } from '../packages/config/src/index';
 import type { PluginCommandArgs } from './cli-args';
 import { declarativePluginEntries } from './plugin-config';
 import { defaultPluginRoots, PluginLoader } from './plugin-loader';
-import { resolvePluginNames } from './plugin-selection';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 
 /** 与 CLI 解析一致的插件短名（防止路径穿越） */
 const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -131,9 +131,15 @@ async function readEnabledNames(options: PluginCommandOptions): Promise<{
   });
   const declarative = declarativePluginEntries(config);
   const loader = makeLoader(options.userDir ?? resolveUserPluginsDir(env));
-  const names = new Set(
-    resolvePluginNames(loader, config.plugins, Boolean(env.VESSEL_DEBUG), declarative),
+  const selection = resolvePluginSelection(
+    loader,
+    config.plugins,
+    Boolean(env.VESSEL_DEBUG),
+    declarative,
+    env,
   );
+  warnExternalPluginsOnce(selection.external);
+  const names = new Set(selection.names);
   // 工厂式插件不进 PluginLoader 名单，但确有启用语义；列表按实际装配标注。
   if (config.delegate?.enabled !== false) names.add('delegate-task');
   if (config.team?.enabled === true) names.add('team');

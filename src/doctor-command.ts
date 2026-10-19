@@ -17,7 +17,7 @@ import type { DoctorCommandArgs } from './cli-args';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
-import { resolvePluginNames } from './plugin-selection';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { readPackageVersion } from './version';
 
 export interface DoctorCommandResult {
@@ -175,9 +175,15 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     const loader = new PluginLoader();
     const all = loader.list();
     const declarative = declarativePluginEntries(config);
-    const enabled = new Set(
-      resolvePluginNames(loader, config.plugins, Boolean(env.VESSEL_DEBUG), declarative),
+    const selection = resolvePluginSelection(
+      loader,
+      config.plugins,
+      Boolean(env.VESSEL_DEBUG),
+      declarative,
+      env,
     );
+    warnExternalPluginsOnce(selection.external);
+    const enabled = new Set(selection.names);
     const missing =
       config.plugins === undefined
         ? []

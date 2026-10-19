@@ -188,7 +188,17 @@ describe('acquireTenantLock (0.5)', () => {
     await first.release();
   });
 
-  it('dead pid / 超过 24h / 无法解析的锁视为 stale 并回收', async () => {
+  async function captureLocked(promise: Promise<unknown>): Promise<TenantLockError> {
+    try {
+      await promise;
+    } catch (error) {
+      expect(error).toBeInstanceOf(TenantLockError);
+      return error as TenantLockError;
+    }
+    throw new Error('expected TenantLockError');
+  }
+
+  it('dead pid / 跨主机超过 24h / 不可解析超过宽限的锁被回收', async () => {
     const now = 5_000_000_000_000;
 
     const deadPidDir = tempDir();
@@ -203,16 +213,18 @@ describe('acquireTenantLock (0.5)', () => {
     expect(deadPidLock.info.pid).toBe(100);
     await deadPidLock.release();
 
+    // 跨主机 + 超过 24h：无法判活，按年龄回收。
     const oldDir = tempDir();
     writeLock(oldDir, {
       pid: 999,
       started_at: now - TENANT_LOCK_STALE_MS - 1,
-      host: 'h',
+      host: 'other-host',
     });
     const oldLock = await acquireTenantLock({
       tenantDir: oldDir,
       tenantId: 'work',
       pid: 101,
+      hostname: 'me-host',
       now: () => now,
       isPidAlive: () => true,
     });
@@ -221,15 +233,150 @@ describe('acquireTenantLock (0.5)', () => {
 
     const brokenDir = tempDir();
     writeLock(brokenDir, 'not-json');
+    const brokenMtime = fs.statSync(lockPathOf(brokenDir)).mtimeMs;
     const brokenLock = await acquireTenantLock({
       tenantDir: brokenDir,
       tenantId: 'work',
       pid: 102,
-      now: () => now,
+      now: () => brokenMtime + 60_000,
       isPidAlive: () => true,
     });
     expect(brokenLock.info.pid).toBe(102);
     await brokenLock.release();
+  });
+
+  it('同主机存活 pid 超过 24h 仍不能抢锁（0.7.1 语义）', async () => {
+    const now = 5_000_000_000_000;
+    const dir = tempDir();
+    const owner: TenantLockInfo = {
+      pid: 999,
+      started_at: now - TENANT_LOCK_STALE_MS - 1,
+      host: 'same-host',
+    };
+    writeLock(dir, owner);
+
+    const error = await captureLocked(
+      acquireTenantLock({
+        tenantDir: dir,
+        tenantId: 'work',
+        pid: 100,
+        hostname: 'same-host',
+        now: () => now,
+        isPidAlive: () => true,
+      }),
+    );
+
+    expect(error.owner).toEqual(owner);
+    expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(owner);
+  });
+
+  it('空 / 坏 JSON 锁在宽限内 → tenant_locked，不删除', async () => {
+    for (const content of ['', '{"pid": 999']) {
+      const dir = tempDir();
+      writeLock(dir, content);
+      const mtime = fs.statSync(lockPathOf(dir)).mtimeMs;
+
+      await captureLocked(
+        acquireTenantLock({
+          tenantDir: dir,
+          tenantId: 'work',
+          pid: 100,
+          now: () => mtime + 1_000,
+          unparseableGraceMs: 5_000,
+          isPidAlive: () => true,
+        }),
+      );
+
+      expect(fs.existsSync(lockPathOf(dir))).toBe(true);
+    }
+  });
+
+  it('空锁超过宽限 → 回收', async () => {
+    const dir = tempDir();
+    writeLock(dir, '');
+    const mtime = fs.statSync(lockPathOf(dir)).mtimeMs;
+
+    const lock = await acquireTenantLock({
+      tenantDir: dir,
+      tenantId: 'work',
+      pid: 100,
+      now: () => mtime + 6_000,
+      unparseableGraceMs: 5_000,
+      isPidAlive: () => true,
+    });
+
+    expect(lock.info.pid).toBe(100);
+    await lock.release();
+  });
+
+  it('回收守卫被占用时第二个回收者失败，且不删除锁', async () => {
+    const dir = tempDir();
+    const owner: TenantLockInfo = { pid: 999, started_at: 1000, host: 'h' };
+    writeLock(dir, owner);
+    // 模拟另一个回收者刚拿到守卫（mtime 新鲜）。
+    fs.writeFileSync(`${lockPathOf(dir)}.reclaim`, '', 'utf8');
+
+    await captureLocked(
+      acquireTenantLock({
+        tenantDir: dir,
+        tenantId: 'work',
+        pid: 100,
+        now: () => 2000,
+        isPidAlive: () => false,
+      }),
+    );
+
+    expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(owner);
+  });
+
+  it('回收守卫超过 10s 视为 stale 并清理后回收', async () => {
+    const dir = tempDir();
+    writeLock(dir, { pid: 999, started_at: 1000, host: 'h' });
+    const guardPath = `${lockPathOf(dir)}.reclaim`;
+    fs.writeFileSync(guardPath, '', 'utf8');
+    const old = new Date(Date.now() - 20_000);
+    fs.utimesSync(guardPath, old, old);
+
+    const lock = await acquireTenantLock({
+      tenantDir: dir,
+      tenantId: 'work',
+      pid: 100,
+      now: () => Date.now(),
+      isPidAlive: () => false,
+      reclaimGuardStaleMs: 10_000,
+    });
+
+    expect(lock.info.pid).toBe(100);
+    expect(fs.existsSync(guardPath)).toBe(false);
+    await lock.release();
+  });
+
+  it('回收前复验：owner 在两次判定间变为存活 → 放弃回收', async () => {
+    const dir = tempDir();
+    const owner: TenantLockInfo = { pid: 999, started_at: 1000, host: 'same-host' };
+    writeLock(dir, owner);
+
+    let calls = 0;
+    const isPidAlive = () => {
+      calls += 1;
+      // 第一次判 stale；拿到守卫复验时 pid 已存活。
+      return calls > 1;
+    };
+
+    const error = await captureLocked(
+      acquireTenantLock({
+        tenantDir: dir,
+        tenantId: 'work',
+        pid: 100,
+        hostname: 'same-host',
+        now: () => 2000,
+        isPidAlive,
+      }),
+    );
+
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(error.owner).toEqual(owner);
+    expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(owner);
   });
 
   it('release 只删除自己持有的锁', async () => {
@@ -241,6 +388,17 @@ describe('acquireTenantLock (0.5)', () => {
     await lock.release();
 
     expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(otherInfo);
+  });
+
+  it('pid + started_at 相同但 host 不同 → 不删除', async () => {
+    const dir = tempDir();
+    const otherHost: TenantLockInfo = { pid: 123, started_at: 1000, host: 'other-host' };
+    writeLock(dir, otherHost);
+
+    const lock = new TenantLock(lockPathOf(dir), { pid: 123, started_at: 1000, host: 'me' });
+    await lock.release();
+
+    expect(JSON.parse(fs.readFileSync(lockPathOf(dir), 'utf8'))).toEqual(otherHost);
   });
 
   it('同一 pid 重新加锁后，旧 handle 不会删掉新锁（比较 started_at）', async () => {

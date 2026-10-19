@@ -17,7 +17,7 @@ import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/ind
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
-import { resolvePluginNames } from './plugin-selection';
+import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 
 export interface ToolSummary {
   name: string;
@@ -40,12 +40,15 @@ export async function listTools(): Promise<ToolsListing> {
 
   const loader = new PluginLoader();
   const declarative = declarativePluginEntries(config);
-  const pluginNames = resolvePluginNames(
+  const selection = resolvePluginSelection(
     loader,
     config.plugins,
     Boolean(process.env.VESSEL_DEBUG),
     declarative,
   );
+  // 告警只走 stderr，不进入 stdout / 返回的 warnings（JSON 输出保持干净）。
+  warnExternalPluginsOnce(selection.external);
+  const pluginNames = selection.names;
 
   const pluginConfigs = buildPluginConfigMap(config.plugins, declarative);
   const host = new MemoryPluginHost();
