@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
 import {
+  GuardrailStage,
   MemoryEventStream,
   MemoryPluginHost,
   type RunnableAgent,
@@ -153,7 +154,8 @@ describe('createWorkflowFromConfig', () => {
 
     expect(result).toBe(engine);
     expect(created).toHaveLength(1);
-    expect(created[0]).toEqual({
+    const { toolPipeline, ...engineOptions } = created[0] as WorkflowEngineOptionsLike;
+    expect(engineOptions).toEqual({
       host,
       runtime,
       pluginHost,
@@ -166,7 +168,71 @@ describe('createWorkflowFromConfig', () => {
       },
       events,
     });
+    expect(toolPipeline).toBeDefined();
     expect(fs.statSync(store).isDirectory()).toBe(true);
+  });
+
+  it('injects an executable pipeline that enforces guardrails and permission', async () => {
+    const base = tmpDir();
+    const dir = path.join(base, 'defs');
+    fs.mkdirSync(dir);
+    const events = new MemoryEventStream();
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'echo',
+      description: 'echo',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async (args) => `ok:${JSON.stringify(args)}`,
+    });
+    pluginHost.registerTool({
+      name: 'denied',
+      description: 'denied by permission',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'should not run',
+      checkPermission: async () => 'deny',
+    });
+    pluginHost.registerGuardrail({
+      name: 'block-echo',
+      stage: GuardrailStage.ToolCall,
+      check: async (value) => {
+        const call = value as { function?: { name?: string } };
+        return call.function?.name === 'echo'
+          ? { allowed: false, reason: 'echo blocked' }
+          : { allowed: true };
+      },
+    });
+
+    const { engine } = makeEngine();
+    const { created, mod } = fakeModule(engine);
+    await createWorkflowFromConfig({
+      config: { workflow: { enabled: true, dir, path: path.join(base, 'runs') } },
+      events,
+      pluginHost,
+      permission: { default: 'allow' },
+      loadModule: async () => mod,
+    });
+
+    const pipeline = created[0]?.toolPipeline;
+    expect(pipeline).toBeDefined();
+    if (!pipeline) return;
+
+    const blocked = await pipeline.execute({
+      runId: 'run-1',
+      sessionId: 'session-1',
+      toolCall: { id: 'call-1', type: 'function', function: { name: 'echo', arguments: '{}' } },
+      args: {},
+    });
+    expect(blocked.ok).toBe(false);
+    expect(blocked.content).toContain('guardrail');
+
+    const denied = await pipeline.execute({
+      runId: 'run-1',
+      sessionId: 'session-1',
+      toolCall: { id: 'call-2', type: 'function', function: { name: 'denied', arguments: '{}' } },
+      args: {},
+    });
+    expect(denied.ok).toBe(false);
+    expect(denied.content).toContain('denied by permission policy');
   });
 
   it('passes tenantId and defaults the store to <tenant>/workflows', async () => {

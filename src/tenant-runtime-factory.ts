@@ -36,6 +36,7 @@ import {
   type RunnableAgent,
   type RunStore,
   type RuntimeHost,
+  type RuntimePermissionConfig,
   resolveTenantPaths,
   type SessionBackend,
   type TenantPaths,
@@ -366,6 +367,13 @@ export async function buildTenantRuntime(
       deferredTransport = new DeferredTransport();
     }
 
+    // runtime / delegate / workflow 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
+    const permission: RuntimePermissionConfig = {
+      default: headless ? 'allow' : 'ask',
+      // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
+      autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+    };
+
     const buildFactoryPlugins = async (
       runtimeHost?: RuntimeHost,
       transport?: DeferredTransport,
@@ -375,25 +383,30 @@ export async function buildTenantRuntime(
 
       const factory: Plugin[] = [];
       if (plan.delegate) {
-        factory.push(
-          createDelegateTaskPlugin({
-            providerFactory: () => provider,
-            tenantId,
-            model: config.delegate?.model ?? providerModel,
-            maxDepth: config.delegate?.maxDepth,
-            disallowed: config.delegate?.disallowed,
-            limits: config.delegate?.limits,
-            termination: config.delegate?.termination
-              ? {
-                  maxIterations: config.delegate.termination.maxIterations ?? 10,
-                  maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
-                }
-              : undefined,
-            permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
-            readOnlyTools: config.delegate?.readOnlyTools,
-            ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
-          }),
-        );
+        // 0.8.2 Wave 2B1：子 runtime 继承父 resolved 权限（default + autoApprove）。
+        // ext 侧在 0.8.2 增加 `DelegateTaskOptions.permission`；先按结构化扩展透传，
+        // 未识别该字段的旧实现行为不变（permissionMode 逻辑不动）。
+        const delegateOptions: Parameters<typeof createDelegateTaskPlugin>[0] & {
+          permission: RuntimePermissionConfig;
+        } = {
+          providerFactory: () => provider,
+          tenantId,
+          model: config.delegate?.model ?? providerModel,
+          maxDepth: config.delegate?.maxDepth,
+          disallowed: config.delegate?.disallowed,
+          limits: config.delegate?.limits,
+          termination: config.delegate?.termination
+            ? {
+                maxIterations: config.delegate.termination.maxIterations ?? 10,
+                maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
+              }
+            : undefined,
+          permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
+          readOnlyTools: config.delegate?.readOnlyTools,
+          permission,
+          ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
+        };
+        factory.push(createDelegateTaskPlugin(delegateOptions));
       }
 
       if (plan.team) {
@@ -441,11 +454,6 @@ export async function buildTenantRuntime(
         config.termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
     };
     const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
-    const permission = {
-      default: headless ? ('allow' as const) : ('ask' as const),
-      // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-      autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
-    };
 
     let runtime: RunnableAgent | undefined;
     let host: RuntimeHost | undefined;
@@ -621,6 +629,7 @@ export async function buildTenantRuntime(
       pluginHost: finalPluginHost,
       tenantDir: tenantPaths.root,
       tenantId,
+      permission,
       ...(host ? { host } : { runtime: activeRuntime }),
       loader,
       ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
