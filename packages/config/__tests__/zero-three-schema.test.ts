@@ -282,9 +282,18 @@ describe('serve 校验', () => {
     ).toHaveLength(0);
   });
 
-  it('非回环未 allowRemote 报错；非回环 + allowRemote 通过', () => {
+  it('非回环未 allowRemote 报错；allowRemote 但无 TLS 也报错（0.6）', () => {
     expect(pathsOf({ serve: { hostname: '0.0.0.0' } })).toContain('serve.allowRemote');
-    expect(errorsOf({ serve: { hostname: '0.0.0.0', allowRemote: true } })).toHaveLength(0);
+    expect(pathsOf({ serve: { hostname: '0.0.0.0', allowRemote: true } })).toContain('serve.tls');
+    expect(
+      errorsOf({
+        serve: {
+          hostname: '0.0.0.0',
+          allowRemote: true,
+          tls: { certFile: 'cert.pem', keyFile: 'key.pem' },
+        },
+      }),
+    ).toHaveLength(0);
   });
 
   it('非法 port / hostname / allowRemote', () => {

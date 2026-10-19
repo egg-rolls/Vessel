@@ -149,4 +149,26 @@ describe('parseArgs 0.5 - global flags', () => {
   it('子命令只允许作为第一个参数', () => {
     expect(errorOf(['--run', 'hi', 'config', 'path'])).toContain('Unknown argument');
   });
+
+  it('0.6：--connect-token / --ca / --allowed-origin', () => {
+    const parsed = args([
+      '--connect',
+      'https://gateway.example.com:8642',
+      '--connect-token',
+      'secret',
+      '--ca',
+      './ca.pem',
+    ]);
+    expect(parsed.connectTokenArg).toBe('secret');
+    expect(parsed.caArg).toBe('./ca.pem');
+
+    expect(errorOf(['--connect-token', 'secret', '--run', 'hi'])).toContain('requires --connect');
+    expect(errorOf(['--allowed-origin', 'https://console.example.com', '--run', 'hi'])).toContain(
+      'requires --serve',
+    );
+    expect(errorOf(['--serve', '--allowed-origin', '*'])).toContain('Invalid --allowed-origin');
+
+    const serve = args(['--serve', '--allowed-origin', 'https://console.example.com']);
+    expect(serve.allowedOrigins).toEqual(['https://console.example.com']);
+  });
 });

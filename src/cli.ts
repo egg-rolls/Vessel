@@ -142,7 +142,14 @@ function printHelp(): void {
   ];
   const config: Array<[string, string]> = [
     ['bun run src/cli.ts --tenant <id> ...', '选择 tenant（也可用 VESSEL_TENANT）'],
-    ['bun run src/cli.ts --connect <url> ...', '连接本机 gateway（不加 tenant 写锁）'],
+    [
+      'bun run src/cli.ts --connect <url> --connect-token <t> --ca <pem> ...',
+      '连接 gateway（非回环必须 https；token 也可用 VESSEL_CONNECT_TOKEN）',
+    ],
+    [
+      'bun run src/cli.ts --serve --allowed-origin <origin>',
+      '独立 Web 前端的 CORS/WS Origin 白名单',
+    ],
     ['bun run src/cli.ts config path', '打印用户/项目配置路径'],
     ['bun run src/cli.ts config init', '生成用户配置模板'],
     ['bun run src/cli.ts config show --sources', '查看脱敏配置与来源'],
@@ -411,6 +418,8 @@ const initialResult = await bootstrap({
     : process.env.VESSEL_CONNECT !== undefined
       ? { connect: process.env.VESSEL_CONNECT }
       : {}),
+  ...(args.connectTokenArg !== null ? { connectToken: args.connectTokenArg } : {}),
+  ...(args.caArg !== null ? { caFile: args.caArg } : {}),
   // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
   configErrorExitCode: args.feishu ? 2 : 1,
 });
@@ -447,6 +456,8 @@ if (!useMock && interactive && !config.apiKey) {
         : process.env.VESSEL_CONNECT !== undefined
           ? { connect: process.env.VESSEL_CONNECT }
           : {}),
+      ...(args.connectTokenArg !== null ? { connectToken: args.connectTokenArg } : {}),
+      ...(args.caArg !== null ? { caFile: args.caArg } : {}),
       configErrorExitCode: args.feishu ? 2 : 1,
     });
     await runWithConfig(result);
@@ -476,6 +487,14 @@ function formatResumeError(error: unknown): string {
 
 async function runWithConfig(result: BootstrapResult) {
   const { runtime, ctx, config } = result;
+
+  // 0.6 A4：connect 模式下展示远端 node/tenant。headless 写 stderr，避免污染 stdout。
+  if (result.remote) {
+    const node = result.remote.nodeId ?? 'unknown';
+    const line = `Remote gateway: node=${node} tenant=${result.remote.tenantId} (${result.remote.endpoint})`;
+    if (headless) console.error(line);
+    else console.log(line);
+  }
 
   // ── Durable resume（0.3）────────────────────────
   // --resume-run 与 --serve/--run 互斥（cli-args 已保证），这里直接恢复后分流。
@@ -609,6 +628,12 @@ async function runWithConfig(result: BootstrapResult) {
       hostname: resolved.options.hostname,
       port: resolved.options.port,
       allowRemote: resolved.options.allowRemote,
+      // 0.6 A5：CLI 覆盖 config；两端同名 allowed_origins。
+      ...(args.allowedOrigins.length > 0
+        ? { allowedOrigins: args.allowedOrigins }
+        : config.serve?.allowedOrigins
+          ? { allowedOrigins: config.serve.allowedOrigins }
+          : {}),
       ...(resolved.options.tls ? { tls: resolved.options.tls } : {}),
       ...(result.runStore
         ? {

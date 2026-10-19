@@ -5,6 +5,8 @@
  * 不加载配置、不构造 runtime、不产生副作用。
  */
 
+import { allowedOriginError } from '../packages/config/src/index';
+
 /** `--serve` 省略端口时的默认值 */
 export const DEFAULT_SERVE_PORT = 8642;
 
@@ -110,6 +112,12 @@ export interface CliArgs {
   tenantArg: string | null;
   /** 0.5：`--connect <url>`（或 VESSEL_CONNECT，由 cli 合并） */
   connectArg: string | null;
+  /** 0.6：`--connect-token <token>`（最高优先级；不回显） */
+  connectTokenArg: string | null;
+  /** 0.6：`--ca <path>`（自签/私有 CA，PEM） */
+  caArg: string | null;
+  /** 0.6：`--allowed-origin <origin>`（可重复；需 --serve） */
+  allowedOrigins: string[];
   /** 0.5 一次性本地命令 */
   configCommand: ConfigCommandArgs | null;
   tenantCommand: TenantCommandArgs | null;
@@ -156,6 +164,9 @@ export function parseArgs(argv: string[]): ParseResult {
     feishu: false,
     tenantArg: null,
     connectArg: null,
+    connectTokenArg: null,
+    caArg: null,
+    allowedOrigins: [],
     configCommand: null,
     tenantCommand: null,
     migrate: null,
@@ -296,6 +307,38 @@ export function parseArgs(argv: string[]): ParseResult {
         i++;
         break;
       }
+      case '--connect-token': {
+        const next = argv[i + 1];
+        if (next === undefined || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --connect-token' };
+        }
+        args.connectTokenArg = next;
+        i++;
+        break;
+      }
+      case '--ca':
+      case '--connect-ca': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: `Missing value for ${a}` };
+        }
+        args.caArg = next;
+        i++;
+        break;
+      }
+      case '--allowed-origin': {
+        const next = argv[i + 1];
+        if (next === undefined || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --allowed-origin' };
+        }
+        const message = allowedOriginError(next);
+        if (message !== null) {
+          return { ok: false, error: `Invalid --allowed-origin: ${message}` };
+        }
+        args.allowedOrigins.push(next);
+        i++;
+        break;
+      }
       default:
         return { ok: false, error: `Unknown argument: ${a}` };
     }
@@ -308,6 +351,22 @@ export function parseArgs(argv: string[]): ParseResult {
   // 0.5：客户端模式与服务端模式互斥。
   if (args.connectArg !== null && args.servePort !== null) {
     return { ok: false, error: '--connect cannot be combined with --serve' };
+  }
+  // 0.6：connect 专属参数只能用于连接（--connect 或 VESSEL_CONNECT）。
+  const connectOnly = [
+    args.connectTokenArg !== null ? '--connect-token' : null,
+    args.caArg !== null ? '--ca' : null,
+  ].filter((v): v is string => v !== null);
+  if (
+    connectOnly.length > 0 &&
+    args.connectArg === null &&
+    (process.env.VESSEL_CONNECT ?? '').trim() === ''
+  ) {
+    return { ok: false, error: `${connectOnly[0]} requires --connect` };
+  }
+  // 0.6：Origin allowlist 只服务 --serve。
+  if (args.allowedOrigins.length > 0 && args.servePort === null) {
+    return { ok: false, error: '--allowed-origin requires --serve' };
   }
 
   // --resume-run 是独立模式：不能与其它输入/服务/一次性命令组合（Addendum A §6）。

@@ -176,7 +176,7 @@ describe('HttpRpcClient (0.5)', () => {
     }
   });
 
-  it('id 不匹配 / 非 JSON / 非回环 URL 报错', async () => {
+  it('id 不匹配 / 非 JSON / 非回环 URL 规则', async () => {
     const { fetchImpl } = makeFetch(() => jsonResponse({ v: 1, id: 'other', ok: true, result: 1 }));
     const mismatch = createHttpRpcClient({
       baseUrl: 'http://127.0.0.1:1',
@@ -194,14 +194,22 @@ describe('HttpRpcClient (0.5)', () => {
     });
     await expect(nonJson.request('x')).rejects.toMatchObject({ code: 'internal' });
 
-    expect(() => createHttpRpcClient({ baseUrl: 'http://example.com:8642', token: 't' })).toThrow(
-      RpcClientError,
-    );
+    // 0.6：非回环必须 https + token；https 允许（构造期不发请求）。
+    expect(() =>
+      createHttpRpcClient({ baseUrl: 'http://example.com:8642', token: 't', subscribe: false }),
+    ).toThrow(RpcClientError);
+    expect(() =>
+      createHttpRpcClient({ baseUrl: 'https://example.com:8642', token: '', subscribe: false }),
+    ).toThrow(RpcClientError);
+    expect(() =>
+      createHttpRpcClient({ baseUrl: 'https://example.com:8642', token: 't', subscribe: false }),
+    ).not.toThrow();
   });
 
-  it('WS 只处理事件帧，close 关闭连接', async () => {
+  it('WS 首帧 auth + gateway 帧解析 + pong + close', async () => {
     class FakeSocket {
       readonly listeners = new Map<string, Array<(event?: unknown) => void>>();
+      readonly sent: string[] = [];
       closed = false;
 
       constructor(readonly url: string) {}
@@ -212,12 +220,20 @@ describe('HttpRpcClient (0.5)', () => {
         this.listeners.set(type, list);
       }
 
+      send(data: string): void {
+        this.sent.push(data);
+      }
+
       close(): void {
         this.closed = true;
       }
 
+      emit(type: string, event?: unknown): void {
+        for (const listener of this.listeners.get(type) ?? []) listener(event);
+      }
+
       emitMessage(data: unknown): void {
-        for (const listener of this.listeners.get('message') ?? []) listener({ data });
+        this.emit('message', { data });
       }
     }
 
@@ -237,19 +253,37 @@ describe('HttpRpcClient (0.5)', () => {
     const unsubscribe = client.subscribe((notification) => received.push(notification));
 
     expect(sockets).toHaveLength(1);
-    expect(sockets[0]?.url).toContain('wss://127.0.0.1:8642/ws');
-    expect(sockets[0]?.url).toContain('token=tok');
+    expect(sockets[0]?.url).toBe('wss://127.0.0.1:8642/ws');
+    expect(sockets[0]?.url).not.toContain('token=');
 
-    sockets[0]?.emitMessage(JSON.stringify({ type: 'run.started', run_id: 'r1', data: {}, ts: 1 }));
+    sockets[0]?.emit('open');
+    expect(JSON.parse(sockets[0]?.sent[0] ?? '{}')).toMatchObject({
+      v: 1,
+      kind: 'auth',
+      token: 'tok',
+    });
+
+    sockets[0]?.emitMessage(
+      JSON.stringify({ v: 1, kind: 'hello', node_id: 'n1', tenant_id: 'default', latest_seq: 5 }),
+    );
+    sockets[0]?.emitMessage(
+      JSON.stringify({
+        v: 1,
+        kind: 'event',
+        seq: 6,
+        event: { type: 'run.started', run_id: 'r1', data: {}, ts: 1 },
+      }),
+    );
     sockets[0]?.emitMessage(
       JSON.stringify({ method: 'events.event', params: { type: 'run.completed' } }),
     );
-    sockets[0]?.emitMessage(JSON.stringify({ type: 'pong' }));
+    sockets[0]?.emitMessage(JSON.stringify({ v: 1, kind: 'ping' }));
     sockets[0]?.emitMessage('not-json');
 
     expect(received).toHaveLength(2);
     expect(received[0]?.params).toMatchObject({ type: 'run.started', run_id: 'r1' });
     expect(received[1]?.params).toEqual({ type: 'run.completed' });
+    expect(JSON.parse(sockets[0]?.sent.at(-1) ?? '{}')).toEqual({ v: 1, kind: 'pong' });
 
     unsubscribe();
     await client.close();

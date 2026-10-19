@@ -470,6 +470,51 @@ function validateMcpServer(
 }
 
 /**
+ * 0.6：校验一个浏览器 Origin。
+ * 只接受绝对 http(s) origin；禁止 `*` / userinfo / path / query / hash；
+ * 非回环必须 https。返回错误消息，合法返回 null。
+ */
+export function allowedOriginError(value: string): string | null {
+  if (value.trim() === '' || value === '*') return 'origin must be an absolute http(s) origin';
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return 'origin must be an absolute http(s) origin';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return 'origin must use http or https';
+  }
+  if (url.username !== '' || url.password !== '') return 'origin must not contain userinfo';
+  if (url.pathname !== '/' && url.pathname !== '') return 'origin must not contain a path';
+  if (url.search !== '' || url.hash !== '') return 'origin must not contain query or hash';
+  if (!isLoopbackHostname(url.hostname) && url.protocol !== 'https:') {
+    return 'non-loopback origins must use https';
+  }
+  return null;
+}
+
+/** 0.6：校验节点 URL（与 HttpRpcClient 的 baseUrl 规则一致）。 */
+function nodeUrlError(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return 'must be an absolute http(s) URL';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return 'must use http or https';
+  }
+  if (url.username !== '' || url.password !== '') return 'must not contain userinfo';
+  if (url.pathname !== '/' && url.pathname !== '') return 'must not contain a path';
+  if (url.search !== '' || url.hash !== '') return 'must not contain query or hash';
+  if (!isLoopbackHostname(url.hostname) && url.protocol !== 'https:') {
+    return 'non-loopback nodes must use https';
+  }
+  return null;
+}
+
+/**
  * 校验 serve 块（schema 层；文件存在性由启动前检查）。
  * 非回环必须 `allowRemote: true`；TLS 必须 cert/key 成对。
  * @param errors 可选的目标数组；缺省返回新数组
@@ -516,6 +561,30 @@ export function validateServeSettings(
     });
   }
 
+  // 0.6：独立前端 Origin allowlist（YAML：serve.allowed_origins）。
+  const allowedOrigins = (serve as Record<string, unknown>).allowedOrigins;
+  if (allowedOrigins !== undefined) {
+    if (!Array.isArray(allowedOrigins)) {
+      errors.push({
+        path: 'serve.allowedOrigins',
+        message: 'serve.allowedOrigins must be an array of origins',
+      });
+    } else {
+      allowedOrigins.forEach((origin, index) => {
+        const message =
+          typeof origin === 'string' ? allowedOriginError(origin) : 'origin must be a string';
+        if (message !== null) {
+          errors.push({
+            path: `serve.allowedOrigins[${index}]`,
+            message: `serve.allowedOrigins[${index}] ${message}`,
+            // origin 不是密钥，可回显
+            value: origin,
+          });
+        }
+      });
+    }
+  }
+
   if (
     typeof hostname === 'string' &&
     !/\s/.test(hostname) &&
@@ -529,6 +598,23 @@ export function validateServeSettings(
         `Refusing to listen on non-loopback hostname "${hostname}": ` +
         'set serve.allow_remote=true to expose the gateway.',
       value: allowRemote,
+    });
+  }
+
+  // DECISION-014 §2.1：非回环必须 TLS；不提供明文逃生口。
+  if (
+    typeof hostname === 'string' &&
+    !/\s/.test(hostname) &&
+    hostname.trim() !== '' &&
+    !isLoopbackHostname(hostname) &&
+    allowRemote === true &&
+    tls === undefined
+  ) {
+    errors.push({
+      path: 'serve.tls',
+      message:
+        `Refusing to expose non-loopback gateway "${hostname}" without TLS: ` +
+        'set serve.tls.cert_file and serve.tls.key_file.',
     });
   }
 
@@ -670,6 +756,7 @@ export const TENANT_OVERLAY_FORBIDDEN_KEYS: readonly string[] = [
   'dataDir',
   'trace',
   'serve',
+  'connect',
   'tenant',
   'update',
 ];
@@ -690,8 +777,21 @@ export function findExplicitSecretPaths(config: Record<string, unknown>, prefix 
   check(config.serve, 'token', 'serve.token');
   check(config.serve, 'adminToken', 'serve.adminToken');
   check(config.transport, 'token', 'transport.token');
+  check(config.connect, 'token', 'connect.token');
   if (isPlainObject(config.serve) && isPlainObject(config.serve.tokens)) {
     if (Object.keys(config.serve.tokens).length > 0) found.push(at('serve.tokens'));
+  }
+  if (isPlainObject(config.transport) && Array.isArray(config.transport.nodes)) {
+    config.transport.nodes.forEach((node, index) => {
+      if (
+        isPlainObject(node) &&
+        node.token !== undefined &&
+        node.token !== null &&
+        node.token !== ''
+      ) {
+        found.push(at(`transport.nodes[${index}].token`));
+      }
+    });
   }
 
   return found;
@@ -1272,14 +1372,70 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 transport（0.2；默认 in-process）
   if (config.transport) {
-    const { kind, hostname, token, peersDir, heartbeatMs, peerTtlMs } = config.transport;
+    const { kind, hostname, token, peersDir, heartbeatMs, peerTtlMs, nodes } = config.transport;
 
-    if (kind !== undefined && kind !== 'in-process' && kind !== 'loopback') {
+    if (kind !== undefined && kind !== 'in-process' && kind !== 'loopback' && kind !== 'remote') {
       errors.push({
         path: 'transport.kind',
-        message: 'transport.kind must be "in-process" or "loopback"',
+        message: 'transport.kind must be "in-process", "loopback", or "remote"',
         value: kind,
       });
+    }
+    if (kind === 'remote' && nodes === undefined) {
+      errors.push({
+        path: 'transport.nodes',
+        message: 'transport.kind "remote" requires transport.nodes',
+      });
+    }
+    if (nodes !== undefined) {
+      if (!Array.isArray(nodes)) {
+        errors.push({ path: 'transport.nodes', message: 'transport.nodes must be an array' });
+      } else {
+        const seen = new Set<string>();
+        nodes.forEach((raw, index) => {
+          const base = `transport.nodes[${index}]`;
+          if (!isPlainObject(raw)) {
+            errors.push({ path: base, message: `${base} must be an object` });
+            return;
+          }
+          const node = raw as Record<string, unknown>;
+          if (typeof node.id !== 'string' || !NODE_ID_RE.test(node.id)) {
+            errors.push({
+              path: `${base}.id`,
+              message: `${base}.id must match ${NODE_ID_RE.source}`,
+            });
+          } else if (seen.has(node.id)) {
+            errors.push({ path: `${base}.id`, message: `${base}.id must be unique` });
+          } else {
+            seen.add(node.id);
+          }
+          if (typeof node.url !== 'string' || node.url.trim() === '') {
+            errors.push({ path: `${base}.url`, message: `${base}.url must be a non-empty string` });
+          } else {
+            const message = nodeUrlError(node.url);
+            if (message !== null) {
+              errors.push({ path: `${base}.url`, message: `${base}.url ${message}` });
+            }
+          }
+          if (node.token !== undefined && (typeof node.token !== 'string' || node.token === '')) {
+            // 不把 token 值放进 error
+            errors.push({
+              path: `${base}.token`,
+              message: `${base}.token must be a non-empty string`,
+            });
+          }
+          validateEnvName(`${base}.tokenEnv`, node.tokenEnv, errors);
+          if (
+            node.caFile !== undefined &&
+            (typeof node.caFile !== 'string' || node.caFile.trim() === '')
+          ) {
+            errors.push({
+              path: `${base}.caFile`,
+              message: `${base}.caFile must be a non-empty string`,
+            });
+          }
+        });
+      }
     }
     if (hostname !== undefined && !LOOPBACK_HOSTNAMES.has(hostname)) {
       errors.push({
@@ -1416,6 +1572,26 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateServeSettings(config.serve, errors);
   }
 
+  // 校验 connect（0.6；客户端 token/CA）
+  if (config.connect !== undefined) {
+    if (!isPlainObject(config.connect)) {
+      errors.push({ path: 'connect', message: 'connect must be an object' });
+    } else {
+      const { token, tokenEnv, caFile } = config.connect;
+      if (token !== undefined && (typeof token !== 'string' || token === '')) {
+        // 不把 token 值放进 error
+        errors.push({ path: 'connect.token', message: 'connect.token must be a non-empty string' });
+      }
+      validateEnvName('connect.tokenEnv', tokenEnv, errors);
+      if (caFile !== undefined && (typeof caFile !== 'string' || caFile.trim() === '')) {
+        errors.push({
+          path: 'connect.caFile',
+          message: 'connect.caFile must be a non-empty string',
+        });
+      }
+    }
+  }
+
   // 校验 0.5 tenant / trace
   if (config.tenant !== undefined) {
     if (!isPlainObject(config.tenant)) {
@@ -1524,11 +1700,12 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   ],
   host: ['enabled', 'nodeId', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
-  transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs'],
+  transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs', 'nodes'],
   team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: [
     'hostname',
+    'allowedOrigins',
     'port',
     'allowRemote',
     'tls',
@@ -1538,6 +1715,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'adminToken',
     'adminTokenEnv',
   ],
+  connect: ['token', 'tokenEnv', 'caFile'],
   workflow: ['enabled', 'dir', 'path', 'maxParallel', 'stepTimeoutMs'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
@@ -1628,6 +1806,7 @@ export const KNOWN_CONFIG_KEYS = [
   'host',
   'scheduler',
   'transport',
+  'connect',
   'mcpServers',
   'durable',
   'serve',

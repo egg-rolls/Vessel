@@ -8,6 +8,9 @@ export {
   type HttpRpcClient,
   type HttpRpcClientOptions,
   isLoopbackBaseUrl,
+  parseGatewayFrame,
+  type RpcHelloInfo,
+  type WebSocketFactory,
   type WebSocketLike,
   type WebSocketMessageEvent,
 } from './http-client';
