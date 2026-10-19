@@ -13,7 +13,10 @@ export interface LiveLayout {
   liveMaxHeight: number;
   streamMaxLines: number;
   autocompleteMax: number;
+  /** 会话 picker 的行容量（normal 也封顶，避免顶掉状态栏/输入行） */
   pickerMaxRows: number;
+  /** 通用命令视图的行容量（与 pickerMaxRows 同步；单调不减） */
+  viewMaxRows: number;
   notice: string | null;
 }
 
@@ -30,6 +33,7 @@ export function computeLiveLayout(rows: number): LiveLayout {
       streamMaxLines: Math.max(3, height - 14),
       autocompleteMax: 8,
       pickerMaxRows: 20,
+      viewMaxRows: 20,
       notice: null,
     };
   }
@@ -41,6 +45,7 @@ export function computeLiveLayout(rows: number): LiveLayout {
       streamMaxLines: Math.max(3, height - 14),
       autocompleteMax: 8,
       pickerMaxRows: 15,
+      viewMaxRows: 15,
       notice: null,
     };
   }
@@ -52,6 +57,7 @@ export function computeLiveLayout(rows: number): LiveLayout {
       streamMaxLines: height - 12,
       autocompleteMax: Math.max(3, height - 14),
       pickerMaxRows: 10,
+      viewMaxRows: 10,
       notice: null,
     };
   }
@@ -63,6 +69,7 @@ export function computeLiveLayout(rows: number): LiveLayout {
       streamMaxLines: 0,
       autocompleteMax: 3,
       pickerMaxRows: 5,
+      viewMaxRows: 5,
       notice: LOW_HEIGHT_NOTICE,
     };
   }
@@ -73,6 +80,7 @@ export function computeLiveLayout(rows: number): LiveLayout {
     streamMaxLines: 0,
     autocompleteMax: 3,
     pickerMaxRows: 3,
+    viewMaxRows: 3,
     notice: LOW_HEIGHT_NOTICE,
   };
 }

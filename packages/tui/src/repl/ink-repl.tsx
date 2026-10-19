@@ -13,6 +13,11 @@ import { Box, render, Static, Text, useApp, useInput, useStdout, useWindowSize }
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { type CommandResult, createCommands, doResume } from '../commands/commands.js';
+import {
+  deleteSessionAction,
+  renameSessionAction,
+  sessionActionResult,
+} from '../commands/sessions-command.js';
 import { formatWorkflowOutcome } from '../commands/workflows-command.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -22,6 +27,7 @@ import {
   filterCommands,
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
+import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { StatusBar } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
@@ -36,6 +42,8 @@ import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
+import { renderViewAsText } from '../views/render-text.js';
+import type { ViewAction } from '../views/types.js';
 import { computeLiveLayout } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
@@ -86,23 +94,31 @@ function InkRepl({ ctx }: InkReplProps) {
   const lastBusyNoticeRef = useRef(0);
   /** 矮终端提示只写一次 scrollback */
   const lowHeightNoticeShownRef = useRef(false);
+  /** 命令视图的异步动作：旧响应不得覆盖新响应 */
+  const viewRequestIdRef = useRef(0);
+  /** picker 重拉：旧响应不得覆盖新响应 */
+  const resumeRequestIdRef = useRef(0);
 
   const commands = useMemo(() => createCommands(), []);
 
-  // 预计算的命令列表（用于内联补全）
+  // 预计算的命令列表（用于内联补全）；hidden alias（/sessions）不出现
   const allCommands = useMemo<CommandItem[]>(() => {
-    return commands.list().map((entry) => ({
+    return commands.visibleList().map((entry) => ({
       name: `/${entry.name}`,
       description: entry.description,
       usage: entry.usage,
+      category: entry.category,
+      keywords: entry.keywords,
+      hidden: entry.hidden,
+      available: entry.available ? entry.available(ctx) : true,
     }));
-  }, [commands]);
+  }, [commands, ctx]);
 
   // 从当前输入中提取命令过滤词（"/" 之后、第一个空格之前的命令名部分）
   const commandFilter = ui.input.startsWith('/') ? (ui.input.slice(1).split(/\s+/)[0] ?? '') : '';
   const filteredCommands = useMemo(
-    () => filterCommands(allCommands, commandFilter),
-    [allCommands, commandFilter],
+    () => filterCommands(allCommands, commandFilter, { recent: ui.recentCommands }),
+    [allCommands, commandFilter, ui.recentCommands],
   );
   // 补全只在命令名阶段（/ 开头、尚未输入空格、非精确匹配）显示：
   // - 一旦输入空格进入参数输入即隐藏，避免 Tab/Enter 把已输入参数覆盖成命令名
@@ -110,6 +126,7 @@ function InkRepl({ ctx }: InkReplProps) {
   const isExactCommand =
     ui.input.startsWith('/') && allCommands.some((cmd) => cmd.name === ui.input);
   const showAutocomplete =
+    ui.view === null &&
     ui.run.phase === 'idle' &&
     ui.input.startsWith('/') &&
     !ui.input.includes(' ') &&
@@ -214,10 +231,12 @@ function InkRepl({ ctx }: InkReplProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: resumeReloadToken is an intentional re-fetch trigger
   useEffect(() => {
     if (!state.showResumePicker) return;
+    const requestId = ++resumeRequestIdRef.current;
     let cancelled = false;
     dispatch({ type: 'resumePickerLoading' });
     void loadResumeSessions(ctx).then((result) => {
-      if (cancelled) return;
+      // 快速连续 retry 时，旧响应不得覆盖新响应。
+      if (cancelled || requestId !== resumeRequestIdRef.current) return;
       if (result.status === 'ready') {
         dispatch({ type: 'resumePickerReady', sessions: result.sessions });
       } else {
@@ -280,6 +299,17 @@ function InkRepl({ ctx }: InkReplProps) {
           return;
         }
         if (result.handled) {
+          const recentName = value.trim().replace(/^\//, '').split(/\s+/)[0] ?? '';
+          if (recentName) dispatch({ type: 'pushRecentCommand', name: recentName });
+
+          // 命令返回交互视图：打开独占 overlay，不把整张表写进 scrollback。
+          if (result.view) {
+            if (result.nextState) dispatch({ type: 'patchRepl', patch: result.nextState });
+            dispatch({ type: 'openView', envelope: result.view });
+            dispatch({ type: 'setInput', input: '' });
+            return;
+          }
+
           // 特殊处理 /clear - 清终端（含 scrollback）+ 历史记录 + 流式输出
           if (result.clearScreen) {
             stdout.write(CLEAR_SCREEN_SEQUENCE);
@@ -400,6 +430,53 @@ function InkRepl({ ctx }: InkReplProps) {
     ],
   );
 
+  /**
+   * 视图动作：路由回产生该视图的命令（registry.dispatchViewAction）。
+   * 只有 refresh 进入 loading 态；其它动作成功返回 output 时按 toast 追加一行，视图保持打开。
+   */
+  const handleViewAction = useCallback(
+    async (action: ViewAction, selectionKey: string, actionValue?: string) => {
+      const active = ui.view;
+      if (!active) return;
+      const isRefresh = action.id === 'refresh';
+      const requestId = isRefresh ? ++viewRequestIdRef.current : viewRequestIdRef.current;
+      if (isRefresh) dispatch({ type: 'viewLoading', requestId });
+
+      const result = await commands.dispatchViewAction(
+        active.envelope.source,
+        {
+          actionId: action.id,
+          selectionKey,
+          ...(actionValue !== undefined ? { value: actionValue } : {}),
+        },
+        ctx,
+        { ...state },
+      );
+
+      // 旧响应不得覆盖新响应。
+      if (isRefresh && requestId !== viewRequestIdRef.current) return;
+
+      if (result.nextState) dispatch({ type: 'patchRepl', patch: result.nextState });
+      if (result.view) {
+        dispatch({
+          type: 'viewData',
+          envelope: result.view,
+          ...(selectionKey ? { selectedKey: selectionKey } : {}),
+          ...(isRefresh ? { requestId } : {}),
+        });
+      } else if (result.output) {
+        dispatch({ type: 'appendHistory', line: result.output });
+      }
+    },
+    [ui.view, commands, ctx, state, dispatch],
+  );
+
+  const closeView = useCallback(() => {
+    // 使在途响应失效，避免关闭后 late dispatch。
+    viewRequestIdRef.current += 1;
+    dispatch({ type: 'closeView' });
+  }, [dispatch]);
+
   /** 只取消当前 run（不退出进程） */
   const cancelRun = useCallback(() => {
     if (ui.run.phase !== 'running') return;
@@ -462,6 +539,9 @@ function InkRepl({ ctx }: InkReplProps) {
 
     // ask-user / 权限弹窗显示时，其余键盘交给弹窗组件自己的 useInput
     if (ui.askUserActive || ui.permissionOverlay) return;
+
+    // 命令视图打开时，键盘完全交给 InteractiveViewHost（单一焦点）。
+    if (ui.view) return;
 
     if (showAutocomplete) {
       if (key.tab) {
@@ -573,7 +653,7 @@ function InkRepl({ ctx }: InkReplProps) {
   const streamMaxLines = layout.mode === 'minimal' && runActive ? 1 : layout.streamMaxLines;
   // 独占弹窗显示时隐藏实时流，避免浮层与流式内容争抢 live frame 空间。
   const exclusiveOverlayActive =
-    state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
+    ui.view !== null || state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
 
   // 矮终端降级只提示一次；写入 Static/scrollback，不占 live 行。
   useEffect(() => {
@@ -623,6 +703,45 @@ function InkRepl({ ctx }: InkReplProps) {
       </Box>
 
       {/* 底部固定区域：overlays + 输入框 + 补全框（flexShrink=0 防止被 Yoga 压缩） */}
+
+      {/* 命令视图（CommandView -> InteractiveViewHost）；与 picker 同为独占 overlay */}
+      {ui.view && (
+        <Box
+          flexDirection="column"
+          flexShrink={0}
+          // 权限/ask-user 优先级更高：视图保持挂载（不丢状态），但让出屏幕与键盘。
+          display={ui.permissionOverlay || ui.askUserActive ? 'none' : 'flex'}
+        >
+          <InteractiveViewHost
+            envelope={ui.view.envelope}
+            selectedKey={ui.view.selectedKey}
+            filter={ui.view.filter}
+            mode={ui.view.mode}
+            draft={ui.view.draft}
+            pendingAction={ui.view.pendingAction}
+            columns={stdout.columns ?? 80}
+            maxRows={layout.viewMaxRows}
+            heightMode={layout.mode}
+            active={!ui.permissionOverlay && !ui.askUserActive}
+            onSelect={(key) => dispatch({ type: 'viewSelect', key })}
+            onFilter={(filter) => dispatch({ type: 'viewFilter', filter })}
+            onMode={(mode, draft, pendingAction) =>
+              dispatch({
+                type: 'viewMode',
+                mode,
+                ...(draft !== undefined ? { draft } : {}),
+                ...(pendingAction !== undefined ? { pendingAction } : {}),
+              })
+            }
+            onAction={(action, selectionKey, value) => {
+              void handleViewAction(action, selectionKey, value);
+            }}
+            onClose={closeView}
+          />
+        </Box>
+      )}
+
+      {/* 权限/ask-user 优先级高于命令视图：视图保持挂载但键盘被禁用（active=false） */}
       {state.showResumePicker && (
         <Box flexDirection="column" flexShrink={0}>
           <SessionTable
@@ -630,8 +749,37 @@ function InkRepl({ ctx }: InkReplProps) {
             currentSessionId={state.currentSessionId}
             status={ui.resumeStatus === 'idle' ? 'loading' : ui.resumeStatus}
             error={ui.resumeError}
-            maxRows={layout.mode === 'normal' ? undefined : layout.pickerMaxRows}
+            maxRows={layout.pickerMaxRows}
+            heightMode={layout.mode}
+            columns={stdout.columns ?? 80}
             onRetry={() => dispatch({ type: 'resumePickerRetry' })}
+            onDelete={async (id) => {
+              const result = await deleteSessionAction(ctx, id, {
+                confirmed: true,
+                currentSessionId: state.currentSessionId,
+              });
+              const outcome = sessionActionResult(result);
+              if (outcome.ok) {
+                dispatch({
+                  type: 'resumePickerReady',
+                  sessions: ui.resumeSessions.filter((session) => session.session_id !== id),
+                });
+              }
+              return outcome;
+            }}
+            onRename={async (id, title) => {
+              const result = await renameSessionAction(ctx, id, title);
+              const outcome = sessionActionResult(result);
+              if (outcome.ok) {
+                dispatch({
+                  type: 'resumePickerReady',
+                  sessions: ui.resumeSessions.map((session) =>
+                    session.session_id === id ? { ...session, title } : session,
+                  ),
+                });
+              }
+              return outcome;
+            }}
             onSelect={async (id) => {
               try {
                 const { message, history, nextState } = await doResume(ctx, id);
@@ -684,7 +832,7 @@ function InkRepl({ ctx }: InkReplProps) {
       </Box>
 
       {/* 输入框 - 只在没有独占交互组件时显示 */}
-      {!state.showResumePicker && !ui.permissionOverlay && !ui.askUserActive && (
+      {!state.showResumePicker && !ui.view && !ui.permissionOverlay && !ui.askUserActive && (
         <Box flexShrink={0}>
           <Text color={theme.brand}>vessel › </Text>
           <TextInput
@@ -700,6 +848,7 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 运行态提示：输入框保持可用（可先打字），但 Enter 不会并发提交 */}
       {ui.run.phase !== 'idle' &&
         !state.showResumePicker &&
+        !ui.view &&
         !ui.permissionOverlay &&
         !ui.askUserActive && (
           <Box flexShrink={0}>
@@ -717,6 +866,7 @@ function InkRepl({ ctx }: InkReplProps) {
             filter={commandFilter}
             selectedIndex={ui.autocompleteIndex}
             maxVisible={layout.autocompleteMax}
+            recent={ui.recentCommands}
           />
         </Box>
       )}
@@ -818,6 +968,9 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       }
       if (result.output) {
         console.log(result.output);
+      } else if (result.view) {
+        // 非 TTY 没有 Ink：用稳定的纯文本 fallback（命令忘记写 output 也不静默）。
+        console.log(renderViewAsText(result.view.view));
       }
       if (result.history?.length) {
         console.log(result.history.join('\n'));

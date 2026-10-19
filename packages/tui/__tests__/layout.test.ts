@@ -56,6 +56,33 @@ describe('computeLiveLayout', () => {
     }
   });
 
+  it('normal 也有 picker/view 行数上限（不允许 undefined/无上限）', () => {
+    for (const rows of [24, 30, 60]) {
+      expect(computeLiveLayout(rows).pickerMaxRows).toBe(20);
+      expect(computeLiveLayout(rows).viewMaxRows).toBe(20);
+    }
+  });
+
+  it('viewMaxRows 为正数且随模式单调不减', () => {
+    let previous = 0;
+    for (let rows = 1; rows <= 60; rows++) {
+      const { viewMaxRows } = computeLiveLayout(rows);
+      expect(viewMaxRows).toBeGreaterThan(0);
+      expect(viewMaxRows).toBeGreaterThanOrEqual(previous);
+      previous = viewMaxRows;
+    }
+  });
+
+  it('pickerMaxRows 随高度分档且单调不减', () => {
+    let previous = 0;
+    for (let rows = 1; rows <= 60; rows++) {
+      const { pickerMaxRows } = computeLiveLayout(rows);
+      expect(pickerMaxRows).toBeGreaterThan(0);
+      expect(pickerMaxRows).toBeGreaterThanOrEqual(previous);
+      previous = pickerMaxRows;
+    }
+  });
+
   it('只有 minimal/hidden 给出过矮提示', () => {
     for (let rows = 1; rows <= 60; rows++) {
       const { mode, notice } = computeLiveLayout(rows);
