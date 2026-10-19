@@ -3,10 +3,20 @@ import {
   charWidth,
   displayWidth,
   fitCell,
+  lineKey,
   padToWidth,
   truncateToWidth,
   wrapToWidth,
 } from '../src/utils/text-layout.js';
+
+describe('lineKey', () => {
+  it('空行/重复行按位置生成唯一 key，不碰撞', () => {
+    const lines = ['', '', '', 'same', 'same'];
+    const keys = lines.map((_, index) => lineKey(index));
+    expect(new Set(keys).size).toBe(lines.length);
+    expect(keys[0]).not.toBe(keys[1]);
+  });
+});
 
 describe('displayWidth', () => {
   it('ASCII / CJK / emoji 按终端列计算', () => {

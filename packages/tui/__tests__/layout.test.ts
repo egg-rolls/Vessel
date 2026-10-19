@@ -65,12 +65,21 @@ describe('computeLiveLayout', () => {
   });
 
   it('normal 也有 picker/view 行数上限（不允许 undefined/无上限）', () => {
-    for (const rows of [24, 30, 60]) {
+    for (const rows of [24, 30, 60, 100]) {
       expect(computeLiveLayout(rows).pickerMaxRows).toBeGreaterThan(0);
-      expect(computeLiveLayout(rows).pickerMaxRows).toBeLessThanOrEqual(20);
+      expect(computeLiveLayout(rows).pickerMaxRows).toBeLessThanOrEqual(60);
       expect(computeLiveLayout(rows).viewMaxRows).toBeGreaterThan(0);
-      expect(computeLiveLayout(rows).viewMaxRows).toBeLessThanOrEqual(20);
+      expect(computeLiveLayout(rows).viewMaxRows).toBeLessThanOrEqual(60);
     }
+  });
+
+  it('viewMaxRows 随 height - chrome - status 连续增长（宽屏不再固定 20）', () => {
+    const rows = [20, 24, 28, 32, 40, 60, 100];
+    const capacities = rows.map((value) => computeLiveLayout(value).viewMaxRows);
+    for (let index = 1; index < capacities.length; index++) {
+      expect(capacities[index]).toBeGreaterThan(capacities[index - 1] ?? 0);
+    }
+    expect(capacities.at(-1)).toBe(60);
   });
 
   it('24/20/15/11/10 行的容量扣除 chrome 与状态栏', () => {

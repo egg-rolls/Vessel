@@ -11,7 +11,23 @@ import type { SessionInfo } from '@vessel/core';
 import { useReducer } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import type { ReplContext } from '../repl-context.js';
+import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import type { ViewAction, ViewEnvelope, ViewMode } from '../views/types.js';
+
+/**
+ * Static 归档项：`markdown` 为 true 时保持 Markdown 渲染，
+ * 否则按纯文本输出（命令输出、用户输入、状态提示）。
+ */
+export interface HistoryItem {
+  text: string;
+  markdown?: boolean;
+}
+
+/** 纯函数：归档前清洗控制序列，避免 ANSI 破坏 scrollback 布局 */
+function toHistoryItem(text: string, markdown = false): HistoryItem {
+  const safe = sanitizeTerminalText(text);
+  return markdown ? { text: safe, markdown: true } : { text: safe };
+}
 
 /** 权限确认弹窗数据（ADR-029：tool.permission.request 载荷的展示态） */
 export interface PermissionOverlay {
@@ -63,7 +79,7 @@ export interface ReplUiState {
   /** REPL 运行态（currentSessionId / pendingResume / showResumePicker / running） */
   repl: ReplState;
   input: string;
-  history: string[];
+  history: HistoryItem[];
   autocompleteIndex: number;
   resumeSessions: SessionInfo[];
   resumeStatus: ResumePickerStatus;
@@ -107,8 +123,8 @@ export interface ReplUiState {
 
 export type ReplUiAction =
   | { type: 'setInput'; input: string }
-  | { type: 'appendHistory'; line: string }
-  | { type: 'appendHistoryLines'; lines: string[] }
+  | { type: 'appendHistory'; line: string; markdown?: boolean }
+  | { type: 'appendHistoryLines'; lines: string[]; markdown?: boolean }
   | { type: 'clearHistory' }
   | { type: 'setAutocompleteIndex'; index: number }
   | { type: 'resumePickerLoading' }
@@ -165,11 +181,20 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
       // 手工编辑离开历史浏览；否则 ↑ 会从旧位置继续而不是最新一条。
       return { ...state, input: action.input, historyIndex: null, historyDraft: '' };
     case 'appendHistory':
-      return { ...state, history: [...state.history, action.line] };
+      return {
+        ...state,
+        history: [...state.history, toHistoryItem(action.line, action.markdown === true)],
+      };
     case 'appendHistoryLines':
       return action.lines.length === 0
         ? state
-        : { ...state, history: [...state.history, ...action.lines] };
+        : {
+            ...state,
+            history: [
+              ...state.history,
+              ...action.lines.map((line) => toHistoryItem(line, action.markdown === true)),
+            ],
+          };
     case 'clearHistory':
       return { ...state, history: [] };
     case 'setAutocompleteIndex':

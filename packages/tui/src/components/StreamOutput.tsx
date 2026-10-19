@@ -14,6 +14,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolDetailMode } from '../commands/commands.js';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
+import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { MarkdownText } from './Markdown.js';
 import { SpinnerWithVerb } from './SpinnerWithVerb.js';
 import { useSpinnerState } from './StateTracker.js';
@@ -134,22 +135,25 @@ export function getTranscriptText(segs: Segment[], options: { full?: boolean } =
   const parts: string[] = [];
   for (const seg of segs) {
     if (seg.type === 'text') {
-      if (seg.text) parts.push(seg.text);
+      if (seg.text) parts.push(sanitizeTerminalText(seg.text));
       continue;
     }
 
     if (seg.status === 'completed') {
       const duration = seg.duration !== undefined ? ` (${seg.duration}ms)` : '';
       const header = `✓ ${seg.name}${duration}`;
-      const body = seg.result ? clipToolResult(seg.result, options.full === true) : '';
+      // 先清洗再截断，避免把控制序列的长度算进字符预算。
+      const body = seg.result
+        ? clipToolResult(sanitizeTerminalText(seg.result), options.full === true)
+        : '';
       const diff =
         options.full === true && seg.name === 'edit'
-          ? editDiffText(seg.arguments, EXPANDED_MAX_RESULT_LINES)
+          ? sanitizeTerminalText(editDiffText(seg.arguments, EXPANDED_MAX_RESULT_LINES))
           : '';
       parts.push([header, diff, body].filter((part) => part).join('\n'));
     } else if (seg.status === 'failed') {
       const header = `✗ ${seg.name}`;
-      const body = seg.error?.trim() ?? '';
+      const body = sanitizeTerminalText(seg.error?.trim() ?? '');
       parts.push(body ? `${header}\n${body}` : header);
     }
     // running：run 结束时仍处于 running 的工具没有结果，跳过。
@@ -376,7 +380,7 @@ export function StreamOutput({
       {groups.map((group) =>
         group.type === 'text' ? (
           <Box key={`text-${group.segment.id}`}>
-            <MarkdownText text={group.segment.text} />
+            <MarkdownText text={sanitizeTerminalText(group.segment.text)} />
           </Box>
         ) : (
           <Box

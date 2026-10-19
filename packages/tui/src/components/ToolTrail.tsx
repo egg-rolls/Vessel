@@ -9,6 +9,8 @@
 import { Box, Text } from 'ink';
 import type { ToolDetailMode } from '../commands/commands.js';
 import { theme } from '../theme.js';
+import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
+import { lineKey } from '../utils/text-layout.js';
 import type { Segment } from './StreamOutput.js';
 import { toolDisplayRegistry } from './ToolDisplay.js';
 
@@ -80,7 +82,7 @@ function detailText(segment: ToolSegment): string {
     const error = firstLine(segment.error);
     text += error ? `  FAILED: ${error}` : '  FAILED';
   }
-  return text;
+  return sanitizeTerminalText(text);
 }
 
 function lineTone(segment: ToolSegment): TrailTone {
@@ -147,20 +149,13 @@ export function ToolTrail({ segments, mode }: ToolTrailProps) {
   const view = buildTrail(segments, mode);
   if (!view) return null;
 
-  let offset = 0;
-  const keyed = view.lines.map((line) => {
-    const key = `${offset}-${line.tone}`;
-    offset += line.text.length;
-    return { line, key };
-  });
-
   return (
     <Box flexDirection="column">
       <Text color={toneColor(view.headerTone)} wrap="truncate-end">
         {view.header}
       </Text>
-      {keyed.map(({ line, key }) => (
-        <Text key={key} color={toneColor(line.tone)} wrap="truncate-end">
+      {view.lines.map((line, index) => (
+        <Text key={lineKey(index)} color={toneColor(line.tone)} wrap="truncate-end">
           {line.text}
         </Text>
       ))}

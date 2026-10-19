@@ -16,7 +16,7 @@
  */
 
 import type { EventStream } from '@vessel/core';
-import { Box, type Key, Text, useInput, useStdout } from 'ink';
+import { Box, type Key, Text, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
@@ -225,7 +225,9 @@ function ChoiceOptions({
 
 export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   const { stdout } = useStdout();
-  const width = computeDialogWidth(stdout.columns);
+  // useStdout 不订阅 resize：优先 useWindowSize，保证弹窗宽度即时跟随窗口。
+  const windowSize = useWindowSize();
+  const width = computeDialogWidth(windowSize.columns > 0 ? windowSize.columns : stdout.columns);
   const [prompt, setPrompt] = useState<ActivePrompt | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [view, setView] = useState<'question' | 'review'>('question');

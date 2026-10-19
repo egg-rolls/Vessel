@@ -8,7 +8,7 @@
 
 import { Box, Text } from 'ink';
 import { theme } from '../theme.js';
-import { truncateToWidth } from '../utils/text-layout.js';
+import { lineKey, truncateToWidth } from '../utils/text-layout.js';
 
 export const QUEUE_WINDOW = 3;
 
@@ -89,18 +89,11 @@ export function QueuePreview({ queued, editIndex, columns, rows }: QueuePreviewP
   const lines = formatQueuePreview(queued, editIndex, columns, rows);
   if (lines.length === 0) return null;
 
-  let offset = 0;
-  const keyed = lines.map((line) => {
-    const key = `${offset}-${line.tone}`;
-    offset += line.text.length;
-    return { line, key };
-  });
-
   return (
     <Box flexDirection="column" flexShrink={0} paddingX={2}>
-      {keyed.map(({ line, key }) => (
+      {lines.map((line, index) => (
         <Text
-          key={key}
+          key={lineKey(index)}
           color={
             line.tone === 'brand' ? theme.brand : line.tone === 'faint' ? theme.faint : theme.muted
           }

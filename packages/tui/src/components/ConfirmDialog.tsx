@@ -9,7 +9,7 @@
  * - 显示与 core 一致的 120s 超时倒计时。
  */
 
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
 import { useEffect, useState } from 'react';
 import { theme } from '../theme.js';
 import { computeDialogWidth } from '../utils/dialog.js';
@@ -56,7 +56,9 @@ export function ConfirmDialog({
   onConfirm,
 }: ConfirmDialogProps) {
   const { stdout } = useStdout();
-  const width = computeDialogWidth(stdout.columns);
+  // useStdout 不订阅 resize：优先 useWindowSize，保证弹窗宽度即时跟随窗口。
+  const windowSize = useWindowSize();
+  const width = computeDialogWidth(windowSize.columns > 0 ? windowSize.columns : stdout.columns);
   const [selected, setSelected] = useState<ConfirmChoice>(defaultChoice);
   const [now, setNow] = useState(() => Date.now());
 

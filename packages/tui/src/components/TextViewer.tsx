@@ -6,9 +6,10 @@
  */
 
 import { Box, Text, useInput } from 'ink';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { theme } from '../theme.js';
-import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
+import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
+import { displayWidth, lineKey, truncateToWidth } from '../utils/text-layout.js';
 import { viewWidth } from '../views/layout.js';
 import { PanelFrame } from './PanelFrame.js';
 
@@ -32,8 +33,13 @@ export interface TextViewerProps {
 }
 
 export function TextViewer({ title, lines, columns, rows, onClose }: TextViewerProps) {
+  // 展示层统一清洗控制序列；`\r` 归一化后可能拆出额外行。
+  const safeLines = useMemo(
+    () => lines.flatMap((line) => sanitizeTerminalText(line).split('\n')),
+    [lines],
+  );
   const page = pagerRows(rows);
-  const maxOffset = Math.max(0, lines.length - page);
+  const maxOffset = Math.max(0, safeLines.length - page);
   const [offset, setOffset] = useState(0);
   const clamp = (value: number) => Math.max(0, Math.min(maxOffset, value));
 
@@ -67,14 +73,8 @@ export function TextViewer({ title, lines, columns, rows, onClose }: TextViewerP
     }
   });
 
-  const visible = lines.slice(offset, offset + page);
+  const visible = safeLines.slice(offset, offset + page);
   const width = viewWidth(columns);
-  let cursor = 0;
-  const keyed = visible.map((line) => {
-    const key = `${cursor}`;
-    cursor += line.length;
-    return { line, key };
-  });
 
   return (
     <PanelFrame
@@ -84,15 +84,15 @@ export function TextViewer({ title, lines, columns, rows, onClose }: TextViewerP
       variant="double"
     >
       <Box flexDirection="column">
-        {keyed.map(({ line, key }) => (
-          <Text key={key} color={theme.muted} wrap="truncate-end">
+        {visible.map((line, index) => (
+          <Text key={lineKey(index)} color={theme.muted} wrap="truncate-end">
             {truncateToWidth(line, Math.max(1, width - 4))}
           </Text>
         ))}
         <Text color={theme.faint}>
-          {lines.length === 0
+          {safeLines.length === 0
             ? 'empty'
-            : `${offset + 1}-${offset + visible.length} of ${lines.length}`}
+            : `${offset + 1}-${offset + visible.length} of ${safeLines.length}`}
         </Text>
       </Box>
     </PanelFrame>

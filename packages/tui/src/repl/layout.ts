@@ -52,8 +52,13 @@ const MINIMAL_CHROME_ROWS: Record<ViewRowKind, number> = {
   view: 6,
 };
 
-/** normal/compact 数据行封顶 */
-const NORMAL_ROW_CAP = 20;
+/**
+ * normal/compact 数据行下限/上限。
+ * 容量随 `height - chrome - status` 增长（宽屏不再固定 20 行），
+ * 但保留下限避免矮终端抖动、上限避免超大终端一次渲染过多行。
+ */
+const NORMAL_ROW_MIN = 20;
+const NORMAL_ROW_MAX = 60;
 /** minimal 数据行封顶（设计 §4.2：3–5 行） */
 const MINIMAL_ROW_CAP = 5;
 
@@ -76,8 +81,12 @@ export function viewCapacity(rows: number, mode: LiveMode, kind: ViewRowKind = '
   if (mode === 'hidden') return 0;
   const height = normalizeRows(rows);
   const chrome = mode === 'minimal' ? MINIMAL_CHROME_ROWS[kind] : NORMAL_CHROME_ROWS[kind];
-  const cap = mode === 'minimal' ? MINIMAL_ROW_CAP : NORMAL_ROW_CAP;
-  return Math.max(1, Math.min(cap, height - STATUS_BAR_ROWS - chrome));
+  const available = height - STATUS_BAR_ROWS - chrome;
+  const cap =
+    mode === 'minimal'
+      ? MINIMAL_ROW_CAP
+      : Math.min(NORMAL_ROW_MAX, Math.max(NORMAL_ROW_MIN, available));
+  return Math.max(1, Math.min(cap, available));
 }
 
 /** 纯函数：chrome + 状态栏占用的行数（测试用于断言 chrome + 容量 ≤ 终端行数） */
