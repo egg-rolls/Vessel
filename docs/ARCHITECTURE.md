@@ -374,6 +374,8 @@ interface SessionBackend {
 }
 ```
 
+0.8.1（ADR-056）：`FileSessionBackend.load()` 只在主路径 `ENOENT` 时回退 legacy；文件存在但不可读或 JSON 损坏 → 抛 `SessionCorruptError`（`code: 'session_corrupt'`，含 `path`），不再静默当成“无会话”。`delete()` 同样先 `load()`，损坏时抛错不删除；`listRich()` 对损坏文件降级跳过，单文件损坏不拖垮列表。
+
 ### 5.6 `LimitChecker`（`types/limits.ts`）
 
 ```ts
@@ -505,7 +507,13 @@ interface RunCheckpoint {
 interface RunStore {
   save(checkpoint: RunCheckpoint): Promise<void>;
   load(runId: string): Promise<RunCheckpoint | null>;
-  list(opts?: { status?: RunCheckpoint['status']; session_id?: string; limit?: number }): Promise<RunCheckpoint[]>;
+  list(opts?: {
+    status?: RunCheckpoint['status'];
+    session_id?: string;
+    limit?: number;
+    /** 跳过排序后的前 N 条（缺省 0）；0.8.1 全量分页 */
+    offset?: number;
+  }): Promise<RunCheckpoint[]>;
   delete(runId: string): Promise<void>;
   close?(): Promise<void>;
 }
@@ -514,6 +522,8 @@ interface RunStore {
 实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir, tenantId? })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
 
 0.8 起（A5）：`FileRunStore` 接受可选的 `tenantId`。tenant 模式下 `delete(runId)` 先 `load()` 校验归属——缺失或属于其它 tenant 时直接 no-op，不 unlink 文件；与 `FileSessionBackend.delete` 的 foreign 会话语义对称。装配层在 `--resume-run`、单 agent 与 per-tenant runtime 三条路径都把 `tenantId` / `tenantRunsDir` 透传到 store。
+
+0.8.1 起（ADR-056）：`list` 增加可选 `offset`（过滤、排序后切片，用于 `deleteSessionData` 的全量分页冲突检查）。tenant 模式下 `FileRunStore.load()` 把非 ENOENT 读取错误、JSON 解析失败与非法 checkpoint 形状视为损坏并抛 `SessionCorruptError`（`code: 'session_corrupt'`）；`delete()` 让该错误向上传播，绝不删除归属未知的文件。非 tenant 模式保持 0.3 的宽松语义（损坏 → `null`）。
 
 0.4 增加 `pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunStore` 接口**，也不自动调度（ADR-045）。
 
@@ -628,6 +638,8 @@ class PluginLoader {
 优先级：**CLI > env > tenant overlay > project > user > default**。
 tenant overlay 只叠加在项目/用户之上；`data_dir` 是全局键，tenant overlay 不得修改。
 
+0.8.1（ADR-057）：所有层只在 `loadConfig()` 合并一次。CLI 层由 `ConfigLoadOptions.cliOverrides` 传入（`Partial<VesselConfig>`，`source=cli`）；旧 `defaults` 为 deprecated 同义层，先应用、`cliOverrides` 后应用。`src/cli-overrides.ts` 只把**显式** flag 组装成该层（端口仅在显式给出时写入；`allowed_origins` 整体替换）。`resolveServeOptions(config)` 不再接收 argv，`bootstrapConnect` 也不再直接读 `process.env`。
+
 loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验器对未知键报错——配置写错要立刻知道，不静默忽略。
 
 ### 9.1 配置块（当前）
@@ -647,7 +659,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |
 | `serve.allowed_origins` | 独立前端 Origin allowlist；绝对 http(s) origin，禁止 `*` / path / query；非回环必须 https；HTTP 与 WS 共用（0.6） |
-| `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN` / `token_env`）> config（0.6） |
+| `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN`，缺失时回退 `VESSEL_GATEWAY_TOKEN`；`token_env` 由 loader 在 env 层解析）> config（0.6；0.8.1 统一经 loader，`--ca` 对应 `VESSEL_CONNECT_CA`） |
 | `transport.kind` / `transport.nodes[]` | `in-process` / `loopback` / `remote`；`remote` 时静态节点 `{ id, url, token?, token_env?, ca_file? }`，无自动发现（0.6） |
 | `serve.token` / `serve.token_env` / `serve.tokens` / `serve.admin_token` | 0.5：`serve.token` 为 default/admin 兼容单 token；`serve.tokens` 为 token → `{tenant_id, role}`；`serve.admin_token` 为 `*`/admin；解析顺序见 ADR-050 |
 | `workflow.enabled` / `dir` / `path` / `max_parallel` / `step_timeout_ms` | 默认 false；`dir` 默认 `./workflows`、`path` 默认 `~/.vessel/workflows`；`max_parallel` 1..8（默认 2）；`step_timeout_ms` 1..86400000（默认 300000）。`enabled: true` 且 `dir` 不存在 → 启动失败 |
@@ -819,9 +831,10 @@ serve:
 |---|---|
 | `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `workflow` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导。0.8：headless 只记录退出码，不提前 `process.exit`，统一走 gateway / tenantFactory / transport / shutdown 清理后再落 `process.exitCode` |
 | `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `workflow` / `eval` 子命令与 `--feishu` 附加开关；0.6 解析 `--connect` / `--connect-token` / `--ca`（别名 `--connect-ca`）/ `--allowed-origin`（可重复，需 `--serve`） |
+| `src/cli-overrides.ts` | 0.8.1：把**显式** CLI flag 组装成 `Partial<VesselConfig>`（serve / connect / TLS / allowed-origins），作为 loader 的最高优先级层；未给出的字段不写入 |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
-| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event` |
+| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event`。0.8.1：接受 `cliOverrides` 并传给 loader；connect token / CA 只读 `config.connect` |
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
 | `src/factory-plugins.ts` | 工厂式插件（delegate / team / mcp-client）的接线决策；0.3 删除 `delegate.viaHost` |
@@ -829,7 +842,7 @@ serve:
 | `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
 | `src/mcp-wiring.ts` | 读取 `mcp_servers` → `createMcpPlugin`；构造 TUI / gateway 需要的状态适配器 |
-| `src/serve-config.ts` | `serve.*` 与 CLI flag 合并、远程/TLS 校验、证书文件检查；0.6 合并 `allowed_origins` 与 `--allowed-origin` |
+| `src/serve-config.ts` | `serve.*` 默认值补全、远程/TLS 校验、证书文件检查；0.8.1 起不再接收 argv，CLI 层已由 loader 合并 |
 | `src/rpc/http-client.ts` | `HttpRpcClient`：`POST /v1/rpc`、Bearer、可选 CA、WS 首帧 auth 与 `since` / `pong` / `gap` / 重连 |
 | `src/node-registry.ts` | 0.6 静态节点表：URL / token / CA 解析、心跳与 `healthy` / `unreachable` 状态 |
 | `src/remote-transport.ts` | 0.6 `kind:'remote'`：`send` / `request` / `peers`、远端事件订阅与 `(node_id, seq)` 去重 |
@@ -1060,6 +1073,19 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - `request_id` 去重不跨重启；同 key 不同参数返回首次结果。
 - 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
 - 自签证书 SAN 必须匹配目标 host/IP；浏览器无法按连接指定 CA。
+
+### 13.9 Gateway 拆分第一阶段（0.8.1）
+
+> 纯结构重构：公开导出、协议帧与运行时行为均不变；只把无状态辅助逻辑移出 `gateway.ts`。
+
+- **新模块**（`packages/serve/src/gateway/`）：
+  - `auth.ts`：回环 / 通配 host 判定、TLS cert/key 读取、Origin allowlist 归一化、CSP / CORS、Host 校验。均为无状态函数或只读文件操作。
+  - `frames.ts`：`hello` / `event` / `gap` / `error` / `result` 帧构造，事件来源节点选择，以及 `agent.*` / `team.*` 的 wire snake_case 映射。
+  - `sse.ts`：SSE 高 / 低水位（256 / 64 帧）、每次 pull 的回放批大小（64）、回放泵、gap 刷新与带背压的帧写入。连接状态仍由调用方持有。
+  - `static.ts`：静态站点路径解析、越界 403、目录 → `index.html` 回退与缓存头；不再持有 `startGateway` 闭包。
+- `gateway.ts` 从 4172 行降到 3886 行；保留 `startGateway`、`GatewayOptions`、`Gateway` 与既有 auth 辅助函数的公开导出。`gateway.ts` 继续负责路由、连接状态与编排。
+- 新增纯函数测试（`packages/serve/__tests__/gateway.pure.test.ts`）覆盖帧构造、Origin / Host 判定与静态路径。
+- **非目标**：本阶段不拆分路由与连接状态机，不改变 WS / SSE / RPC 的 wire 行为；后续阶段留给 Wave 2。
 
 ## 14. 0.2 Kernel 与模块边界（已实现，未发布）
 
@@ -1301,7 +1327,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 ### 17.2 原子写、单写者与删除
 
-session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败重试 3 次，失败抛 `AtomicWriteError`。同一 tenant 同时只允许一个写者：`.lock` 存在且非 stale 时返回 `tenant_locked`（stale = pid 不存在或超过 24h）；gateway 是运行时唯一写者，CLI/TUI 取锁或走 gateway RPC。`deleteSessionData(sessionId, opts)` 返回 `{ sessions_deleted, runs_deleted, events_deleted }`；有 `running` / `interrupted` run 时 `conflict`。列表允许 O(N)，0.5 上限单 tenant 5,000 sessions / 20,000 runs。
+session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败重试 3 次，失败抛 `AtomicWriteError`。0.8.1 起 `atomicWrite` 默认 durable：temp 文件 `fsync` 后才 rename，rename 后尽力 `fsync` 目录；文件 fsync 失败抛 `AtomicWriteError` 且不 rename，目录 fsync 失败忽略（Windows 常不可用）。`durable: false` 恢复 0.5 的旧行为。
+
+同一 tenant 同时只允许一个写者：`.lock` 存在且非 stale 时返回 `tenant_locked`（stale = pid 不存在或超过 24h）；gateway 是运行时唯一写者，CLI/TUI 取锁或走 gateway RPC。`deleteSessionData(sessionId, opts)` 返回 `{ sessions_deleted, runs_deleted, events_deleted }`；0.8.1 起冲突检查以 `limit: 200` + `offset` 全量分页遍历该 session 的 run（页数上限 10,000），有 `running` / `interrupted` 时 `conflict` 且零删除。文件存在但不可读 / JSON 损坏时抛 `SessionCorruptError`（`session_corrupt`），不得当成不存在覆盖或删除；`listRich` 对损坏项降级跳过。列表允许 O(N)，0.5 上限单 tenant 5,000 sessions / 20,000 runs。
 
 ### 17.3 trace 与重放
 
@@ -1494,3 +1522,36 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - 路径边界不是沙箱：`bash` 只校验 `cwd`，命令本身可访问其它路径；`edit` 未纳入边界；内置 denylist 不能通过配置移除，只能追加。
 - Web 的 seq 回放会清空本地事件存储并从头重放；大历史下重放成本随事件数增长。
 - `coreToJob` 在 run 终态后才清理；终态事件与清理之间仍有短暂窗口。
+
+## 21. 0.8.1 Wave 2A 加固（已实现）
+
+> 状态：已合入 `release/0.8.1`（未发布）。决策见 [ADR-056](adr/ADR-056-persistence-durability-and-corruption.md) / [ADR-057](adr/ADR-057-config-single-resolver.md)。
+
+### 21.1 持久化耐久性与损坏检测（ADR-056）
+
+- `atomicWrite` 新增 `durable`（默认 true）：temp 文件 fsync → rename → 尽力 fsync 目录；文件 fsync 失败抛 `AtomicWriteError` 且不 rename，目录 fsync 失败忽略。`durable: false` 恢复 0.5 行为。
+- `FileSessionBackend.load()`：主路径 `ENOENT` 才回退 legacy；非 ENOENT 读取错误 / JSON 解析失败 → `SessionCorruptError`（`session_corrupt`）。主路径存在（含 foreign tenant）不再回退 legacy。
+- `FileSessionBackend.delete()`：先 `load()`；foreign / 缺失 no-op，损坏抛错不 unlink。`listRich()` 跳过损坏文件继续。
+- `FileRunStore`（tenant 模式）：`load` 对读取错误 / JSON / 形状不符抛 `SessionCorruptError`，`delete` 不吞错；非 tenant 保持宽松 `null`。
+- `deleteSessionData` 冲突检查改为 `limit: 200` + `offset` 全量分页（上限 10,000 页）；`RunStore.list` 新增可选 `offset`。
+
+### 21.2 配置单一 resolver（ADR-057）
+
+- 所有层只在 `loadConfig()` 合并：`CLI > env > tenant overlay > project > user > default`。
+- `ConfigLoadOptions.cliOverrides` 为最高优先层；`defaults` deprecated（先应用，`cliOverrides` 后应用）。
+- `src/cli-overrides.ts` 只组装显式 flag：显式端口、hostname、`--allow-remote`、成对 TLS、整体替换的 `allowed_origins`、connect token / CA。
+- `resolveServeOptions(config)` 不再接收 argv；`bootstrapConnect` 不再直接读 `process.env`。connect token / CA 来自 `config.connect`（env：`VESSEL_CONNECT_TOKEN`，缺失时回退 `VESSEL_GATEWAY_TOKEN`；`VESSEL_CONNECT_CA`），`serve.token` / `transport.token` 仅作配置层旧版回退。
+
+### 21.3 Gateway 拆分第一阶段（§13.9）
+
+- 新增 `gateway/auth.ts`、`frames.ts`、`sse.ts`、`static.ts`；`gateway.ts` 4172 → 3886 行。
+- 公开导出、协议帧与 wire 行为不变；新增纯函数测试。
+
+### 21.4 已知限制（0.8.1）
+
+- 每次 session / checkpoint 写入多一次 fsync；Windows 上目录 fsync 通常被跳过。
+- 损坏文件只报错或跳过，不自动修复、不备份、不重试 fsync。
+- 非 tenant 的 `FileRunStore` 仍把损坏当 `null`（0.3 兼容语义）。
+- `deleteSessionData` 的冲突检查成本随 run 数增长；超过 10,000 页仍未结束会按已扫描结果判断。
+- Gateway 只完成第一阶段拆分，路由与连接状态机仍在 `gateway.ts`。
+- 新增 CLI flag 必须同时加入 `buildCliConfigOverrides()`，否则不会进入配置层。

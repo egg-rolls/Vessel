@@ -70,6 +70,8 @@
 | 053 | 远程安全基线 | accepted | 2026-10-19 | security, tls, cors, tenancy | [ADR-053-remote-security-baseline.md](ADR-053-remote-security-baseline.md) |
 | 054 | RunExecution 与失败隔离 | accepted | 2026-10-19 | runtime, correctness, hooks, guardrails | [ADR-054-run-execution-and-failure-isolation.md](ADR-054-run-execution-and-failure-isolation.md) |
 | 055 | 工具路径边界 | accepted | 2026-10-19 | security, tools, permissions, filesystem | [ADR-055-tool-path-boundaries.md](ADR-055-tool-path-boundaries.md) |
+| 056 | 持久化耐久性与损坏检测 | accepted | 2026-10-19 | storage, durability, corruption, files | [ADR-056-persistence-durability-and-corruption.md](ADR-056-persistence-durability-and-corruption.md) |
+| 057 | 配置单一 resolver | accepted | 2026-10-19 | config, cli, precedence, connect | [ADR-057-config-single-resolver.md](ADR-057-config-single-resolver.md) |
 
 ## 编写约定
 
