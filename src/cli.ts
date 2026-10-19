@@ -21,7 +21,7 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildConfigSnapshot, isLoopbackHostname, loadConfig } from '../packages/config/src/index';
+import { buildConfigSnapshot, isLoopbackHostname } from '../packages/config/src/index';
 import {
   type EventStream,
   pruneTrace,
@@ -44,22 +44,16 @@ import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { buildCliConfigOverrides } from './cli-overrides';
-import { runUpdateCommand } from './cli-update';
-import { configInitCommand, configPathCommand, configShowCommand } from './config-command';
+import { matchCommand } from './commands/registry';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
-import { doctorCommand } from './doctor-command';
 import { createDurableFor } from './durable-wiring';
-import { runEvalCommand } from './eval-command';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import { renderGatewayBanner } from './gateway-banner';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
-import { migrateCommand } from './migrate-command';
 import { createEventStream } from './observability-wiring';
-import { runPluginCommand } from './plugin-command';
-import { runResumeList } from './resume-command';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import {
@@ -68,16 +62,8 @@ import {
   validateResumeSessionId,
 } from './session-resume';
 import { planTeamWiring } from './team-wiring';
-import {
-  createTenantControl,
-  tenantCreateCommand,
-  tenantGetCommand,
-  tenantListCommand,
-  tenantUpdateCommand,
-} from './tenant-command';
+import { createTenantControl } from './tenant-command';
 import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
-import { listTools } from './tools-list';
-import { tracePruneCommand } from './trace-command';
 import {
   resolveGatewayToken,
   tryCreateLoopbackTransport,
@@ -85,7 +71,6 @@ import {
 } from './transport-factory';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
-import { runWorkflowCommand } from './workflow-command';
 
 // ── 终端排版辅助 ─────────────────────────────────
 
@@ -218,28 +203,6 @@ function printHelp(): void {
   );
 }
 
-/** `--tools`：列出当前配置下的工具（headless 口径，不需要 Key） */
-async function printTools(): Promise<void> {
-  const { tools, warnings } = await listTools();
-  for (const w of warnings) console.warn(`⚠ ${w}`);
-  console.log(`Tools (${tools.length}):`);
-  for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
-  console.log('ask_user (interactive only)');
-}
-
-/** 打印一次性命令结果并返回退出码 */
-function printCommandResult(result: { exitCode: number; stdout: string; stderr: string }): number {
-  if (result.stdout !== '') console.log(result.stdout);
-  if (result.stderr !== '') console.error(result.stderr);
-  return result.exitCode;
-}
-
-/** tenant 命令的数据根（本地命令，不 bootstrap） */
-async function resolveCommandDataDir(): Promise<string> {
-  const { config } = await loadConfig();
-  return resolveDataDir(config);
-}
-
 /**
  * Web 控制台静态目录：`VESSEL_STATIC_DIR` 覆盖；否则用仓库内 `apps/web/dist`。
  * 目录不存在时不传（gateway 不托管静态站点）。
@@ -275,20 +238,11 @@ if (args.version) {
   console.log(readPackageVersion());
   process.exit(0);
 }
-if (args.tools) {
-  await printTools();
-  process.exit(0);
-}
-if (args.update) {
-  process.exit(await runUpdateCommand(args.update));
-}
-// 无参 --resume-run 是一次性列表命令：不构造 runtime、不需要 API Key。
-if (args.resumeRunArg === '') {
-  process.exit(
-    await runResumeList({
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-    }),
-  );
+// 一次性命令注册表：按注册顺序命中第一个，执行后直接退出。
+// 命中后不进入 bootstrap / REPL / serve / headless 主流程。
+const command = matchCommand(args);
+if (command) {
+  process.exit((await command.run(args, { useMock })) ?? 0);
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
@@ -302,97 +256,6 @@ if (args.resumeArg === '') {
     }),
   );
 }
-// 0.4 子命令：workflow / eval 自己加载配置并决定退出码。
-if (args.workflow) {
-  process.exit(
-    await runWorkflowCommand(args.workflow, {
-      useMock,
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-    }),
-  );
-}
-if (args.eval) {
-  process.exit(
-    await runEvalCommand(args.eval, {
-      useMock,
-      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-    }),
-  );
-}
-
-// 0.5 一次性本地命令：不 bootstrap、不加载 provider、不获取 tenant 锁。
-if (args.configCommand) {
-  const command = args.configCommand;
-  if (command.kind === 'path') {
-    process.exit(printCommandResult(await configPathCommand({ json: command.json })));
-  }
-  if (command.kind === 'init') {
-    process.exit(
-      printCommandResult(await configInitCommand({ json: command.json, force: command.force })),
-    );
-  }
-  process.exit(
-    printCommandResult(
-      await configShowCommand({
-        json: command.json,
-        sources: command.sources,
-        ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
-      }),
-    ),
-  );
-}
-if (args.tenantCommand) {
-  const command = args.tenantCommand;
-  const base = { dataDir: await resolveCommandDataDir(), json: command.json };
-  const result =
-    command.kind === 'list'
-      ? await tenantListCommand(base)
-      : command.kind === 'get'
-        ? await tenantGetCommand(command.id, base)
-        : command.kind === 'create'
-          ? await tenantCreateCommand(command.id, {
-              ...base,
-              ...(command.name !== undefined ? { name: command.name } : {}),
-            })
-          : await tenantUpdateCommand(command.id, {
-              ...base,
-              ...(command.name !== undefined ? { name: command.name } : {}),
-              ...(command.status !== undefined ? { status: command.status } : {}),
-            });
-  process.exit(printCommandResult(result));
-}
-if (args.migrate) {
-  process.exit(
-    printCommandResult(
-      await migrateCommand({
-        from: args.migrate.from,
-        to: args.migrate.to,
-        apply: args.migrate.apply,
-        json: args.migrate.json,
-        ...(args.migrate.tenantId !== undefined ? { tenantId: args.migrate.tenantId } : {}),
-        ...(args.migrate.source !== undefined ? { source: args.migrate.source } : {}),
-      }),
-    ),
-  );
-}
-if (args.trace) {
-  process.exit(
-    printCommandResult(
-      await tracePruneCommand({
-        dryRun: args.trace.dryRun,
-        json: args.trace.json,
-        ...(args.trace.tenantId !== undefined ? { tenantId: args.trace.tenantId } : {}),
-      }),
-    ),
-  );
-}
-if (args.pluginCommand) {
-  process.exit(printCommandResult(await runPluginCommand(args.pluginCommand)));
-}
-if (args.doctorCommand) {
-  process.exit(printCommandResult(await doctorCommand(args.doctorCommand)));
-}
-
 const { runArg, pipeMode, sessionArg, servePort, resumeRunArg } = args;
 
 // ── 会话续接解析（0.6.1 E8）─────────────────────
