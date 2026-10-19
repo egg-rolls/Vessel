@@ -49,7 +49,7 @@ import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { runEvalCommand } from './eval-command';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
-import { buildGatewayControlPlane } from './gateway-wiring';
+import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { migrateCommand } from './migrate-command';
 import { createEventStream } from './observability-wiring';
@@ -732,6 +732,22 @@ async function runWithConfig(result: BootstrapResult) {
       ...(result.metrics ? { metrics: result.metrics } : {}),
       ...(result.workflows ? { workflows: result.workflows } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
+      // 0.5.4 P2-1：非 default tenant 使用自己的 workflow / feishu 实例。
+      // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
+      ...(tenantFactory
+        ? {
+            workflowsFor: (tenantId: string) => {
+              const bundle = tenantFactory?.bundleFor(tenantId);
+              return bundle?.workflows
+                ? buildWorkflowControlPlane(bundle.workflows, bundle.config)
+                : undefined;
+            },
+            feishuFor: (tenantId: string) => {
+              const feishu = tenantFactory?.bundleFor(tenantId)?.feishu;
+              return feishu ? { status: () => feishu.status() } : undefined;
+            },
+          }
+        : {}),
     });
 
     gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
