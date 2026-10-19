@@ -469,7 +469,9 @@ function InkRepl({ ctx }: InkReplProps) {
       const active = ui.view;
       if (!active) return;
       const isRefresh = action.id === 'refresh';
-      const requestId = isRefresh ? ++viewRequestIdRef.current : viewRequestIdRef.current;
+      // 所有动作都推进 requestId：关闭视图/切换视图/连续触发动作后，
+      // 任何 late response（包括 resume/cancel）都必须丢弃。
+      const requestId = ++viewRequestIdRef.current;
       if (isRefresh) dispatch({ type: 'viewLoading', requestId });
 
       const viewKey = viewContextKey(active.envelope.view);
@@ -486,8 +488,8 @@ function InkRepl({ ctx }: InkReplProps) {
         { ...state },
       );
 
-      // 旧响应不得覆盖新响应。
-      if (isRefresh && requestId !== viewRequestIdRef.current) return;
+      // 旧响应不得覆盖新响应（关闭/切换视图后也不得 late resume/cancel）。
+      if (requestId !== viewRequestIdRef.current) return;
 
       if (result.nextState) dispatch({ type: 'patchRepl', patch: result.nextState });
 
@@ -712,7 +714,8 @@ function InkRepl({ ctx }: InkReplProps) {
           plugins={ctx.plugins}
           {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
         />
-        {layout.mode !== 'minimal' && layout.mode !== 'hidden' && (
+        {/* overlay 打开时隐藏更新横幅：高度预算只给状态栏留了 1 行 */}
+        {!exclusiveOverlayActive && layout.mode !== 'minimal' && layout.mode !== 'hidden' && (
           <UpdateBanner events={ctx.events} />
         )}
       </Box>

@@ -296,6 +296,37 @@ function formMode(state: ViewKeyState, key: ViewKey): ViewKeyReduction {
   return { state, intent: { type: 'noop' } };
 }
 
+/** hidden 高度下允许的语义结果 */
+export type HiddenKeyDecision = 'close' | 'refresh' | 'blocked';
+
+export interface HiddenKeyContext {
+  status?: 'ready' | 'loading' | 'error';
+  /** error 态允许的刷新键（各视图声明；缺省 r） */
+  refreshKeys?: string[];
+}
+
+/**
+ * 纯函数：hidden 模式（≤10 行）的键盘闸门。
+ *
+ * hidden 只渲染一行摘要，没有列表、确认提示或输入框；此时若继续处理
+ * x/y/rename/form 会在用户看不到任何 UI 的情况下执行删除/取消等动作。
+ * 因此除 Esc（关闭）与 error 态的刷新键外，其余按键一律 blocked。
+ */
+export function decideHiddenKey(key: ViewKey, context: HiddenKeyContext = {}): HiddenKeyDecision {
+  if (key.escape) return 'close';
+  if (
+    context.status === 'error' &&
+    key.input !== undefined &&
+    key.input.length > 0 &&
+    !key.ctrl &&
+    !key.meta
+  ) {
+    const allowed = context.refreshKeys ?? ['r'];
+    if (allowed.includes(key.input)) return 'refresh';
+  }
+  return 'blocked';
+}
+
 /** 纯函数：按键 -> 新状态 + 语义 intent；不产生副作用 */
 export function reduceViewKey(state: ViewKeyState, key: ViewKey): ViewKeyReduction {
   switch (state.mode) {

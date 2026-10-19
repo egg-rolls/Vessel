@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  decideHiddenKey,
   initialViewKeyState,
   reduceViewKey,
   type ViewKey,
@@ -217,6 +218,36 @@ describe('form 模式', () => {
     const result = reduceViewKey(state({ mode: 'form', draft: 'x' }), { escape: true });
     expect(result.state.mode).toBe('browse');
     expect(result.intent).toEqual({ type: 'cancelMode' });
+  });
+});
+
+describe('hidden 模式键盘闸门（≤10 行）', () => {
+  it('x / y / r / Enter 一律 blocked，不产生删除/取消动作', () => {
+    for (const input of ['x', 'y', 'r', 'g', 's', 'n']) {
+      expect(decideHiddenKey({ input })).toBe('blocked');
+    }
+    expect(decideHiddenKey({ return: true })).toBe('blocked');
+    expect(decideHiddenKey({ input: 'x', ctrl: true })).toBe('blocked');
+  });
+
+  it('Esc 始终关闭', () => {
+    expect(decideHiddenKey({ escape: true })).toBe('close');
+    expect(decideHiddenKey({ escape: true }, { status: 'loading' })).toBe('close');
+  });
+
+  it('只有 error 态允许视图声明的刷新键', () => {
+    expect(decideHiddenKey({ input: 'r' }, { status: 'error', refreshKeys: ['r'] })).toBe(
+      'refresh',
+    );
+    expect(decideHiddenKey({ input: 'g' }, { status: 'error', refreshKeys: ['g'] })).toBe(
+      'refresh',
+    );
+    expect(decideHiddenKey({ input: 'r' }, { status: 'ready', refreshKeys: ['r'] })).toBe(
+      'blocked',
+    );
+    expect(decideHiddenKey({ input: 'x' }, { status: 'error', refreshKeys: ['r'] })).toBe(
+      'blocked',
+    );
   });
 });
 

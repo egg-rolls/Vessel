@@ -10,9 +10,11 @@
 import type { SessionInfo } from '@vessel/core';
 import { Box, Text, useInput, useStdout } from 'ink';
 import { type ReactNode, useMemo, useState } from 'react';
-import type { LiveMode } from '../repl/layout.js';
+import { type LiveMode, viewExtraRows } from '../repl/layout.js';
 import { theme } from '../theme.js';
+import { truncateToWidth } from '../utils/text-layout.js';
 import {
+  decideHiddenKey,
   initialViewKeyState,
   reduceViewKey,
   type ViewIntent,
@@ -144,6 +146,18 @@ export function SessionTable({
   });
 
   useInput((inputChar, key) => {
+    // hidden（≤10 行）只显示一行摘要：除 Esc 与 error 态重试外一律不处理，
+    // 否则 x/y/r 会在看不到列表与确认提示的情况下静默删除/改名。
+    if (heightMode === 'hidden') {
+      const decision = decideHiddenKey(
+        { ...key, input: inputChar },
+        { status, refreshKeys: ['r'] },
+      );
+      if (decision === 'close') onClose();
+      if (decision === 'refresh' && onRetry) onRetry();
+      return;
+    }
+
     if (status === 'loading') {
       if (key.escape) onClose();
       return;
@@ -309,7 +323,7 @@ export function SessionTable({
     return (
       <Text color={theme.muted} wrap="truncate-end">
         Resume: {selectedRow?.cells.title ?? first?.cells.title ?? '-'}
-        {more} · esc close
+        {more} · resize for actions · esc close
       </Text>
     );
   }
@@ -361,8 +375,17 @@ export function SessionTable({
   }
 
   const showHeader = heightMode === 'normal' || heightMode === 'compact';
-  const capacity = Math.max(1, maxRows);
+  // 确认/重命名/notice 会追加在数据行之后，必须先让出对应行数。
+  const extraRows = viewExtraRows(mode, notice !== null);
+  // 容量可以为 0：矮终端 + 确认/notice 时应隐藏数据行，而不是强行保留 1 行导致溢出。
+  const capacity = Math.max(0, maxRows - extraRows);
   const window = scrollWindow(rows.length, selectedIndex, capacity);
+  const rangeVisible = rows.length > window.end - window.start;
+  const rangeText = rangeVisible
+    ? `showing ${window.start + 1}-${window.end} of ${rows.length}${
+        rows.length !== sessions.length ? ` (filtered from ${sessions.length})` : ''
+      }`
+    : null;
   const contentWidth = Math.max(1, viewContentWidth(terminalColumns) - TABLE_PREFIX_WIDTH);
   const resolved = resolveColumns(sessionColumns(terminalColumns), contentWidth, terminalColumns);
 
@@ -376,30 +399,35 @@ export function SessionTable({
           {filter ? (
             <Text color={theme.warn}>
               {' '}
-              · filter: {filter}
+              · filter:{' '}
+              {truncateToWidth(filter, Math.max(1, viewContentWidth(terminalColumns) - 34))}
               {mode === 'filter' ? '_' : ''}
             </Text>
           ) : null}
+          {/* 窗口指示折进标题行，避免在矮终端额外占 2 行 */}
+          {rangeText ? <Text color={theme.faint}> · {rangeText}</Text> : null}
         </Box>
 
-        <DataTable
-          view={{
-            kind: 'table',
-            title: 'Resume session',
-            columns: sessionColumns(terminalColumns),
-            rows,
-            actions,
-          }}
-          columns={resolved}
-          rows={rows.slice(window.start, window.end)}
-          selectedKey={effectiveKey}
-          start={window.start}
-          showHeader={showHeader}
-        />
+        {capacity > 0 ? (
+          <DataTable
+            view={{
+              kind: 'table',
+              title: 'Resume session',
+              columns: sessionColumns(terminalColumns),
+              rows,
+              actions,
+            }}
+            columns={resolved}
+            rows={rows.slice(window.start, window.end)}
+            selectedKey={effectiveKey}
+            start={window.start}
+            showHeader={showHeader}
+          />
+        ) : null}
 
         {mode === 'confirm' && selectedSession ? (
           <Box flexDirection="column" marginTop={1}>
-            <Text color={theme.danger}>
+            <Text color={theme.danger} wrap="truncate-end">
               Delete "{selectedSession.title || selectedSession.preview || '(untitled)'}"?{' '}
               {String(selectedSession.message_count)} messages and related runs/events will be
               removed.
@@ -414,15 +442,6 @@ export function SessionTable({
               {'r Rename: '}
               {draft}
               <Text color={theme.faint}>▏</Text>
-            </Text>
-          </Box>
-        ) : null}
-
-        {rows.length > window.end - window.start ? (
-          <Box marginTop={1}>
-            <Text color={theme.faint}>
-              showing {window.start + 1}-{window.end} of {rows.length}
-              {rows.length !== sessions.length ? ` (filtered from ${sessions.length})` : ''}
             </Text>
           </Box>
         ) : null}

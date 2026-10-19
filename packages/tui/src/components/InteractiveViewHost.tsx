@@ -14,9 +14,11 @@
 
 import { Box, Text, useInput } from 'ink';
 import { type ReactNode, useMemo, useState } from 'react';
+import { viewExtraRows } from '../repl/layout.js';
 import { theme } from '../theme.js';
 import { truncateToWidth } from '../utils/text-layout.js';
 import {
+  decideHiddenKey,
   initialViewKeyState,
   reduceViewKey,
   type ViewIntent,
@@ -186,7 +188,10 @@ export function InteractiveViewHost({
     disabledActionKeys,
   });
 
-  const capacity = heightMode === 'hidden' ? 0 : Math.max(1, maxRows);
+  // 确认/重命名/notice 追加在数据行之后，先从容量中扣除，保证不顶出底栏。
+  const extraRows = viewExtraRows(mode, notice !== null);
+  // 容量可以为 0：矮终端 + 确认/notice 时隐藏数据行，而不是强行保留 1 行导致溢出。
+  const capacity = heightMode === 'hidden' ? 0 : Math.max(0, maxRows - extraRows);
   const confirmDetails =
     view.kind === 'confirm'
       ? (view.details ?? []).map((text, index) => ({ text, id: `confirm-${index}` }))
@@ -195,6 +200,22 @@ export function InteractiveViewHost({
   useInput(
     (inputChar, key) => {
       const inkKey: ViewKey = { ...key, input: inputChar };
+
+      // hidden（≤10 行）没有可见列表/确认提示/输入框：只允许 Esc 关闭与
+      // error 态重试，x/y/r/Enter 等一律阻断，绝不静默执行确认动作。
+      if (heightMode === 'hidden') {
+        const refresh = actions.find((action) => action.id === 'refresh');
+        const decision = decideHiddenKey(inkKey, {
+          status,
+          refreshKeys: refresh ? [refresh.key, 'r'] : ['r'],
+        });
+        if (decision === 'close') onClose();
+        else if (decision === 'refresh' && refresh) {
+          setNotice(null);
+          onAction(refresh, selectionKey);
+        }
+        return;
+      }
 
       if (status === 'error') {
         const refresh = actions.find((action) => action.id === 'refresh');
@@ -351,6 +372,24 @@ export function InteractiveViewHost({
   const bordered = heightMode !== 'hidden';
   const showHeader = heightMode === 'normal' || heightMode === 'compact';
 
+  // hidden 必须先于 loading/error 判定：≤10 行时任何多行状态块都会顶掉输入行。
+  if (heightMode === 'hidden') {
+    const refreshKey = actions.find((action) => action.id === 'refresh')?.key ?? 'r';
+    const line =
+      status === 'loading'
+        ? `Loading ${view.title}… · esc close`
+        : status === 'error'
+          ? `${view.title} failed · ${refreshKey} retry · esc close`
+          : `${hiddenSummary(envelope)} · resize for actions · esc close`;
+    return (
+      <ViewFrame bordered={false} width={contentWidth}>
+        <Text color={status === 'error' ? theme.danger : theme.muted} wrap="truncate-end">
+          {truncateToWidth(line, contentWidth)}
+        </Text>
+      </ViewFrame>
+    );
+  }
+
   if (status === 'loading') {
     return (
       <ViewFrame bordered={bordered}>
@@ -380,37 +419,35 @@ export function InteractiveViewHost({
     );
   }
 
-  if (heightMode === 'hidden') {
-    return (
-      <ViewFrame bordered={false} width={contentWidth}>
-        <Text color={theme.muted} wrap="truncate-end">
-          {truncateToWidth(`${hiddenSummary(envelope)} · esc close`, contentWidth)}
-        </Text>
-      </ViewFrame>
-    );
-  }
-
   const window = scrollWindow(itemCount, selectedIndex, capacity);
+  const rangeVisible = itemCount > window.end - window.start;
+  const rangeText = rangeVisible
+    ? `showing ${window.start + 1}-${window.end} of ${itemCount}`
+    : null;
 
   return (
-    <ViewFrame bordered={bordered} width={width}>
+    <ViewFrame bordered={bordered} width={width} marginY={heightMode === 'minimal' ? 0 : 1}>
       <Box flexDirection="column" width={contentWidth}>
-        {/* 标题 + 过滤/模式状态 */}
-        <Box marginBottom={1}>
-          <Text bold color={theme.brand}>
-            {titleLine(envelope)}
-          </Text>
-          {filter ? (
-            <Text color={theme.warn}>
-              {' '}
-              · filter: {truncateToWidth(filter, Math.max(1, contentWidth - 20))}
-              {mode === 'filter' ? '_' : ''}
+        {/* 标题 + 过滤/窗口状态。detail 的标题由 DetailPanel 渲染，避免重复。 */}
+        {view.kind !== 'detail' ? (
+          <Box marginBottom={1}>
+            <Text bold color={theme.brand}>
+              {titleLine(envelope)}
             </Text>
-          ) : null}
-        </Box>
+            {filter ? (
+              <Text color={theme.warn}>
+                {' '}
+                · filter: {truncateToWidth(filter, Math.max(1, contentWidth - 20))}
+                {mode === 'filter' ? '_' : ''}
+              </Text>
+            ) : null}
+            {/* 窗口指示折进标题行，避免额外占 2 行 */}
+            {rangeText ? <Text color={theme.faint}> · {rangeText}</Text> : null}
+          </Box>
+        ) : null}
 
-        {/* 内容 */}
-        {view.kind === 'table' ? (
+        {/* 内容（容量为 0 时让位给确认/输入提示，绝不渲染空态多占行） */}
+        {view.kind === 'table' && capacity > 0 ? (
           <TableBody
             view={view}
             rows={filteredRows.slice(window.start, window.end)}
@@ -422,7 +459,7 @@ export function InteractiveViewHost({
           />
         ) : null}
 
-        {view.kind === 'list' ? (
+        {view.kind === 'list' && capacity > 0 ? (
           <ListBody
             view={view}
             items={filteredItems.slice(window.start, window.end)}
@@ -455,15 +492,6 @@ export function InteractiveViewHost({
           </Box>
         ) : null}
 
-        {/* 窗口指示 */}
-        {itemCount > window.end - window.start && itemCount > 0 ? (
-          <Box marginTop={1}>
-            <Text color={theme.faint}>
-              showing {window.start + 1}-{window.end} of {itemCount}
-            </Text>
-          </Box>
-        ) : null}
-
         {/* 重命名输入 / 内联确认 */}
         {mode === 'rename' ? (
           <Box marginTop={1}>
@@ -477,7 +505,9 @@ export function InteractiveViewHost({
 
         {mode === 'confirm' && pendingAction ? (
           <Box flexDirection="column" marginTop={1}>
-            <Text color={theme.danger}>{formatConfirmMessage(pendingAction, selectedRow)}</Text>
+            <Text color={theme.danger} wrap="truncate-end">
+              {formatConfirmMessage(pendingAction, selectedRow)}
+            </Text>
             <Text color={theme.faint}>{confirmHint(pendingAction)}</Text>
           </Box>
         ) : null}
@@ -517,10 +547,12 @@ function ViewFrame({
   children,
   bordered,
   width,
+  marginY = 1,
 }: {
   children: ReactNode;
   bordered: boolean;
   width?: number;
+  marginY?: number;
 }) {
   if (!bordered) return <Box flexDirection="column">{children}</Box>;
   return (
@@ -529,7 +561,7 @@ function ViewFrame({
       borderStyle="single"
       borderColor={theme.line}
       paddingX={1}
-      marginY={1}
+      marginY={marginY}
       {...(width !== undefined ? { width } : {})}
     >
       {children}

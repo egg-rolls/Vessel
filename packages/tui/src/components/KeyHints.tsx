@@ -32,5 +32,10 @@ export function formatKeyHints(
 }
 
 export function KeyHints({ actions, extra, disabledKeys = [] }: KeyHintsProps) {
-  return <Text color={theme.faint}>{formatKeyHints(actions, extra, disabledKeys)}</Text>;
+  // 提示必须固定单行：换行会多占 1 行，把底栏顶出预算。
+  return (
+    <Text color={theme.faint} wrap="truncate-end">
+      {formatKeyHints(actions, extra, disabledKeys)}
+    </Text>
+  );
 }
