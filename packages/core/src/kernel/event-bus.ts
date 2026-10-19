@@ -13,6 +13,7 @@ function matches(event: RunEvent, filter?: EventFilter): boolean {
   if (!filter) return true;
   if (filter.runId !== undefined && event.run_id !== filter.runId) return false;
   if (filter.typePrefix !== undefined && !event.type.startsWith(filter.typePrefix)) return false;
+  if (filter.nodeId !== undefined && event.node_id !== filter.nodeId) return false;
   if (filter.agentId !== undefined) {
     const data = event.data as Record<string, unknown> | undefined;
     if (data?.agentId !== filter.agentId) return false;

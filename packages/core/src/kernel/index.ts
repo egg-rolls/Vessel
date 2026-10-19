@@ -31,4 +31,5 @@ export type {
   SchedulerOptions,
   SchedulerStats,
   Transport,
+  TransportRequest,
 } from './types.js';

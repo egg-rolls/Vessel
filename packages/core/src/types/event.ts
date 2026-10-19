@@ -135,6 +135,12 @@ export interface RunEvent {
   seq?: number;
   /** 0.5：所属 tenant；缺省视为 `default` */
   tenant_id?: string;
+  /**
+   * 0.6：事件来源节点。本节点直接产生的事件可不填；跨节点回灌 / 扇出时
+   * 由传输或 gateway 边界填充。消费方按 `(node_id, run_id)` 理解 seq，
+   * 按 `(node_id, seq)` 去重；没有全局序号。
+   */
+  node_id?: string;
 }
 
 /** 事件处理器 */

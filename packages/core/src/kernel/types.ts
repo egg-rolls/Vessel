@@ -141,24 +141,54 @@ export interface CancellationScope extends Cancellation {
   child(): CancellationScope;
 }
 
+/** 跨节点通用请求（0.6；method/params 的语义由上层定义，port 不解释） */
+export interface TransportRequest {
+  /** 调用方请求 id；缺省由实现生成，用于日志关联与重试去重 */
+  requestId?: string;
+  /** 方法名；port 保持开放字符串，不枚举 team/gateway 语义 */
+  method: string;
+  /** 方法参数；透传给远端，port 不校验 */
+  params?: unknown;
+}
+
 /**
- * Transport port（R1 冻结；R3 实现）。
+ * Transport port（R1 冻结；0.6 additive）。
+ *
  * 0.2 约束见 DECISION-003 A3：只绑 loopback、消息带 protocol、失败只降级该传输。
+ * 0.6 只做追加：`kind` 增加 `'remote'`，`nodeId` / `request` 可选；
+ * `send` / `receive` / `peers` / `close` 签名不变。
+ *
+ * `send` 语义：对端受理即可 resolve（at-least-once）；跨节点实现必须按
+ * `message.id` 去重，且不得依赖共享文件系统。
  */
 export interface Transport {
-  readonly kind: 'in-process' | 'loopback';
+  readonly kind: 'in-process' | 'loopback' | 'remote';
+  /**
+   * 本节点 id；0.5 的 InProcessTransport / LoopbackTransport 已提供。
+   * port 层保持可选，避免破坏 0.5 的适配器与测试 fake。
+   */
+  readonly nodeId?: string;
   send(message: AgentMessage): Promise<void>;
   receive(handler: (message: AgentMessage) => void): Unsubscribe;
   peers(): Promise<PeerInfo[]>;
+  /**
+   * 面向指定节点的通用请求（可选能力）。只定义传输语义，method / params
+   * 由 ext（team）或 asm（gateway）定义；不支持远程调用的实现可不提供。
+   */
+  request?<T>(nodeId: string, request: TransportRequest): Promise<T>;
   close(): Promise<void>;
 }
 
-/** 同机/远程节点公开信息（0.2 只做本机） */
+/** 同机/远程节点公开信息（0.2 只做本机；0.6 允许远程节点） */
 export interface PeerInfo {
   nodeId: string;
   endpoint?: string;
   agents: AgentStatus[];
   protocol: 1;
+  /** 最近一次健康探测结果；仅在实现有能力提供时出现 */
+  status?: 'healthy' | 'unreachable';
+  /** 最近一次成功心跳/探测的 Unix 毫秒；缺省表示未知 */
+  lastSeen?: number;
 }
 
 /** Host 聚合事件的过滤条件 */
@@ -167,6 +197,8 @@ export interface EventFilter {
   runId?: string;
   /** 开放字符串前缀，例如 'agent.' */
   typePrefix?: string;
+  /** 0.6：事件来源节点；显式设置时只匹配带相同 node_id 的事件 */
+  nodeId?: string;
 }
 
 /** Host 级事件总线；仍实现 EventStream（9 接口不变） */
