@@ -14,7 +14,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
 - **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
 - **0.4 状态**：workflow、evals、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，未随版本发布）；三个能力全部是插件、默认关闭；0.4 只做发布干跑，不 tag / publish / 合并 `main`。决策边界见 ADR-042 / 043 / 044 / 045。
-- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为与 `--serve` 每 tenant 独立执行面 **已实现**；gateway 的 workflow / 飞书控制面仍只走 default tenant。F5 跨机器远程在 0.6，微信不做。决策边界见 ADR-046 ~ ADR-050。
+- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为与 `--serve` 每 tenant 独立执行面 **已实现**；gateway 的 workflow / 飞书控制面仍只走 default tenant。微信不做。决策边界见 ADR-046 ~ ADR-050。
+- **0.6 状态**：F5 跨机器远程、独立前端与跨节点 team **已实现**（`release/0.6`，未随版本发布）：`--connect` 非回环强制 HTTPS + token/CA，`serve.allowed_origins`，`transport.kind: remote` 静态节点与 `(node_id, seq)` 事件去重。默认仍本机回环；跨节点 team 控制面 default/admin-only。决策边界见 ADR-051 ~ ADR-053。
 
 ## 代码风格与硬规矩
 
@@ -37,7 +38,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.5` → `0.5.0-<role>`（`release/0.1` ~ `release/0.4` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。0.5 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.6` → `0.6.0-<role>`（`release/0.1` ~ `release/0.5` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。0.6 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -95,7 +96,7 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户已进 core（`tenant` 解析/隔离原语），但 **F5 跨机器远程仍是非目标**；team 仍默认 off、显式 opt-in。
+- 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户已进 core（`tenant` 解析/隔离原语），0.6 的跨机器远程 / 跨节点 transport 已在装配层实现（core 只加可选字段）；team 仍默认 off、显式 opt-in。
 - 0.5 默认 `session.backend: file`；不要删除 sqlite 后端，也不要在检测到 legacy 数据时自动迁移——只提示 `vessel migrate`。
 - 别把 tenant overlay 写成能覆盖 CLI/env；优先级固定 `CLI > env > tenant overlay > project > user > default`。
 - 别绕开 RPC 方法表直接调内部实现；新增 canonical 方法必须发 addendum。

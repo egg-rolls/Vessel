@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.5（`release/0.5`；包版本在收口前保持 0.4.0）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.6（`release/0.6`；包版本在收口前保持 0.4.0）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -23,6 +23,9 @@
 | `web` | ubuntu-latest | `apps/web`：`npm ci` → `npm run build`（Node 22，npm cache） |
 | `architecture` | ubuntu-latest | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
 | `offline-integration` | ubuntu-latest | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；MCP 用本地 mock server，TLS 用本地自签证书，workflow / evals / feishu / config / trace 均用 mock 或临时目录，**不依赖外网** |
+| `multi-node` | ubuntu-latest | 0.6 跨节点专项（**非 required**）：remote transport / registry / team routing / 事件回灌测试；不启动真实多机，使用本地两个 gateway |
+| `tls-ca` | ubuntu-latest | 0.6 TLS/CA 专项（**非 required**）：`packages/serve` TLS/remote 测试 + `connect-e2e-0.6` / `rpc-remote-0.6`；使用仓库内自签 fixture |
+| `frontend-cors` | ubuntu-latest | 0.6 独立前端专项（**非 required**）：`gateway.origin` / `gateway.ws-tenant` + `apps/web/tests/gatewayUrl.test.ts` |
 | `release-dry-run` | ubuntu-latest | **仅 PR + `release/**` push**：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，**不上传、不 publish、不 tag** |
 | `examples` | ubuntu-latest | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（关闭上轮 typecheck 盲区） |
 | `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：`--version`、`--tools`、headless 文本、stdin、`@file`、`/help`、`/exit`（除 `--version` 外均带 `VESSEL_MOCK=1`） |
@@ -33,6 +36,8 @@
 - 三件套任一红 → 禁止合并。
 - 不在 CI 中写入任何真实 API Key；mock 模式覆盖全部冒烟路径。
 - 分支保护 required checks：`Quality Checks`、`Web Build`、`Examples`、`Cross Platform (ubuntu-latest)`；0.5 建议把 `Architecture`、`Offline Integration` 与 `Release Dry Run` 也设为 required（由 1 / 仓库管理员在 GitHub 设置）。
+- 0.6 的 `multi-node` / `tls-ca` / `frontend-cors` 只在 ubuntu 跑，**不设 required**；Windows 仍在 `cross-platform` 中跑单机全量 `bun test`。
+- 0.6 专项 job 复用仓库内自签证书 fixture 与本地临时端口，不依赖外网或真实第二台机器；真实两机 / 浏览器信任仍需人工验收（见 [REMOTE.md](REMOTE.md)）。
 
 ### 1.1 发布干跑 job（0.5）
 

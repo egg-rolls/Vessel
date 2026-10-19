@@ -616,7 +616,10 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `team.enabled` / `ownerId` / `model` / `memberLimits` / `memberTermination` | 进程内 team 原型；默认 false，必须显式开启；0.3 删除 `maxMembers`（Host 必填后无效果） |
 | `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
 | `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
-| `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true` 且 token 非空；cert/key 必须成对 |
+| `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |
+| `serve.allowed_origins` | 独立前端 Origin allowlist；绝对 http(s) origin，禁止 `*` / path / query；非回环必须 https；HTTP 与 WS 共用（0.6） |
+| `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN` / `token_env`）> config（0.6） |
+| `transport.kind` / `transport.nodes[]` | `in-process` / `loopback` / `remote`；`remote` 时静态节点 `{ id, url, token?, token_env?, ca_file? }`，无自动发现（0.6） |
 | `serve.token` / `serve.token_env` / `serve.tokens` / `serve.admin_token` | 0.5：`serve.token` 为 default/admin 兼容单 token；`serve.tokens` 为 token → `{tenant_id, role}`；`serve.admin_token` 为 `*`/admin；解析顺序见 ADR-050 |
 | `workflow.enabled` / `dir` / `path` / `max_parallel` / `step_timeout_ms` | 默认 false；`dir` 默认 `./workflows`、`path` 默认 `~/.vessel/workflows`；`max_parallel` 1..8（默认 2）；`step_timeout_ms` 1..86400000（默认 300000）。`enabled: true` 且 `dir` 不存在 → 启动失败 |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
@@ -779,7 +782,7 @@ serve:
 | 文件 | 职责 |
 |---|---|
 | `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `workflow` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导 |
-| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `workflow` / `eval` 子命令与 `--feishu` 附加开关 |
+| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `workflow` / `eval` 子命令与 `--feishu` 附加开关；0.6 解析 `--connect` / `--connect-token` / `--ca`（别名 `--connect-ca`）/ `--allowed-origin`（可重复，需 `--serve`） |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
 | `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore |
@@ -790,7 +793,11 @@ serve:
 | `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
 | `src/mcp-wiring.ts` | 读取 `mcp_servers` → `createMcpPlugin`；构造 TUI / gateway 需要的状态适配器 |
-| `src/serve-config.ts` | `serve.*` 与 CLI flag 合并、远程/TLS 校验、证书文件检查 |
+| `src/serve-config.ts` | `serve.*` 与 CLI flag 合并、远程/TLS 校验、证书文件检查；0.6 合并 `allowed_origins` 与 `--allowed-origin` |
+| `src/rpc/http-client.ts` | `HttpRpcClient`：`POST /v1/rpc`、Bearer、可选 CA、WS 首帧 auth 与 `since` / `pong` / `gap` / 重连 |
+| `src/node-registry.ts` | 0.6 静态节点表：URL / token / CA 解析、心跳与 `healthy` / `unreachable` 状态 |
+| `src/remote-transport.ts` | 0.6 `kind:'remote'`：`send` / `request` / `peers`、远端事件订阅与 `(node_id, seq)` 去重 |
+| `src/team-wiring.ts` / `src/transport-factory.ts` | 按配置构造 in-process / loopback / remote transport；remote 节点与事件回灌接线 |
 | `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key） |
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
@@ -838,10 +845,13 @@ vessel --feishu
 
 ### 13.1 协议 `vessel.gateway/1`
 
-- 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`）、`event`（带 `seq`、可选 `job_id`）、`gap`（历史被截断）、`res`（方法应答）、`ping`。
+- 服务端帧：`hello`（协议/节点信息 + `from_seq` / `latest_seq`）、`event`（带 `seq`、可选 `job_id` 与 `node_id`）、`gap`（历史被截断）、`res`（方法应答）、`ping`。
 - `hello.from_seq` 是本次回放的**第一条** seq：空缓冲为 `0`；已追平时为 `since + 1`（下一条期望序号）。`latest_seq` 是当前最新 seq（空缓冲为 `0`）。
-- 客户端帧：`auth`（首帧）、`req`（`id` + `method` + `params`）、`pong`。
-- `seq` 由 gateway 分配；环形缓冲默认保留 10000 条。客户端记录 `lastSeq`，重连用 `?since=` 续订；超出缓冲发 `gap`。
+- 客户端帧：`auth`（首帧，`{ kind: 'auth', token, since?, tenant_id? }`）、`req`（`id` + `method` + `params`）、`pong`。
+- **首帧鉴权（0.6 冻结）**：token 不进 WS URL / query；连接后 5s 内未收到合法 `auth` → 关闭码 4401。admin 可在 `auth` 指定 `tenant_id`；非 admin 指定其它 tenant → 4403。
+- `seq` 由 gateway 分配；环形缓冲默认保留 10000 条。客户端记录 `lastSeq`，重连用 `?since=` 或 `auth.since` 续订；超出缓冲发 `gap`。
+- **since / pong / seq 回退（0.6）**：客户端收到 `ping` 回 `pong`；收到 `gap` 用 `to_seq` 触发带 `since` 的重连；`hello.latest_seq < lastSeq` 时从 `since=0` 重新对齐。重连指数退避 1s → 30s 加 jitter；10s 未收到 `hello` 视为失败并重连；`close()` 清理全部定时器。
+- **跨节点事件**：`event.node_id` 优先于顶层 `node_id`；远端事件由 `(node_id, wire seq)` 去重后回灌。wire seq 按各节点 / 连接分配，**没有全局序**。
 - `RunStatus.run_id` 是网关级 id；`core_run_id` 在 `run.started` 后可知；事件帧的 `job_id` 用于把 core run 与网关 run 对齐。
 
 ### 13.2 端点
@@ -849,7 +859,7 @@ vessel --feishu
 | 方法 / 路径 | 说明 |
 |---|---|
 | `GET /v1/health`（`/health` 兼容） | 开放探针；返回 clients / latest_seq / protocol / node |
-| `GET /v1/events`（WS，`/ws` 兼容） | 事件流；query token 兼容，推荐首帧 `auth` |
+| `GET /v1/events`（WS，`/ws` 兼容） | 事件流；query token 仅为兼容，0.6 客户端用首帧 `auth`，token 不进 URL |
 | `GET /v1/events`（SSE，`/events` 兼容） | 只读事件流；`?token=` |
 | `GET /v1/sessions`（`/sessions` 兼容） | 会话列表（`listRich`） |
 | `GET /v1/tools` | 工具列表（不含 handler） |
@@ -870,9 +880,13 @@ vessel --feishu
 | `POST /v1/workflows/:id/cancel` | 202 `{workflow_run_id, status:'cancelled'}`；已完成/失败 → 409 `workflow_invalid`；已取消幂等 202（0.4） |
 | `GET /v1/channels/feishu` | `{channel: FeishuStatus}`；未注入 → `channel_disabled`（0.4） |
 | `GET /v1/evals/latest?suite=` | `{report: EvalReport}`；无报告 → 404 `eval_not_found`（0.4） |
+| `POST /v1/team/agents` | 跨节点 spawn；`request_id` 幂等去重（进程内 LRU 1000）；缺 spawn 注入 → `no_spawn`（0.6） |
+| `GET /v1/team/agents` / `GET /v1/team/agents/:id` | 节点成员列表 / 单成员状态（0.6） |
+| `GET /v1/team/inbox` | 成员 inbox（cursor 分页）（0.6） |
+| `POST /v1/team/messages` | 跨节点消息投递；`node_id` 标识来源，按消息 `id` 入站去重（0.6） |
 | `POST /run` | 0.1.0 兼容的阻塞式入口 |
 
-WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 在 0.1.0 返回 `method_not_allowed`（0.2 草案见 `protocol.ts`）。
+WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.list` / `permission.respond` / `ask.respond`。`team.*` 在 0.1.0 返回 `method_not_allowed`（0.2 草案见 `protocol.ts`）。0.6 的跨节点 team 控制协议走 `Transport.request` → `/v1/team/*`，不进入 canonical RPC manifest。
 
 0.3 新增稳定错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `durable_disabled` / `mcp_disabled`；`hello.features` 按实际启用增加 `durable-resume` / `mcp-status` / `tls`。
 
@@ -892,26 +906,32 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 - `staticDir` 存在时，GET/HEAD 的非 API 路径托管 `apps/web/dist`；无扩展名路径回落 `index.html`（SPA）；路径解析后校验 root 前缀，防穿越；API 路径永不托管。
 - 默认绑定 `127.0.0.1`；Host 只接受 `127.0.0.1` / `localhost` / `[::1]` 或显式 `hostname`。
-- Origin：无 Origin 放行（curl / peer）；浏览器必须同源或在 `allowedOrigins`。默认不返回 CORS 头。
+- **Origin allowlist（0.6）**：`serve.allowed_origins` / `--allowed-origin` 在启动时归一化为 `URL.origin`，拒绝 `*`、path、query；HTTP 与 WS upgrade 共用同一判定，无 Origin 放行（curl / peer），浏览器必须同源或在 allowlist。
+- **CORS（0.6）**：预检命中 allowlist 返回 204，只回 `Access-Control-Allow-Origin` / `Methods` / `Headers` / `Max-Age`；永不使用 `*`，不使用 credentials。allowlist 非空时所有响应带 `Vary: Origin`。
+- **CSP（0.6）**：移除裸 `ws:` / `wss:`；`connect-src` 由 Host 与 allowlist 动态生成，其余策略保持 `script-src 'self'`。独立静态站点自行下发 CSP。
 - token 来源优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。生成值 32B 随机 base64url，恒定时间比较；WS 5s 未鉴权关闭 4401。
 - 事件流是长连接：`Bun.serve` 的 `idleTimeout` 默认 `0`（禁用，可用 `GatewayOptions.idleTimeout` 覆盖）；heartbeat 默认 15s，SSE 发 `: ping` 注释、WS 发 `ping` 帧，用于穿透代理与检测死客户端。
-- 请求体上限 1 MiB；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）；HTML 带 CSP；无 `*` CORS。
+- 请求体上限 1 MiB（RPC / legacy REST / 跨节点消息端点一致）；慢客户端 `bufferedAmount > 4 MiB` 断开（1013）。
 - **0.4 背压**：gateway `SeqEventBuffer` 缺省 10000，**永不无界**，与 core `observability.event_history` 的 `0 = unlimited` 语义独立、不被覆盖。WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；超过阈值先丢事件并标记 `gap`，4 MiB 硬断开作为最后手段。gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
 
-### 13.5.1 远程监听与 TLS（0.3）
+### 13.5.1 远程监听与 TLS（0.3；0.6 收紧为 TLS 强制）
 
 - **默认不变**：`127.0.0.1:8642`、明文、token 来源优先级不变。
 - **远程 opt-in**：`serve.allow_remote: true` 或 `--allow-remote`；非回环 hostname 未显式允许时启动失败。
 - **远程必须 token**：非回环必须有非空 gateway token（配置 / `VESSEL_GATEWAY_TOKEN` / 自动生成）；不得匿名。
-- **TLS 独立于 allow_remote**：loopback 也可以启 TLS；`serve.tls.cert_file` + `key_file`（或 `--tls-cert` / `--tls-key`）必须成对且文件非空，否则启动失败。
+- **远程必须 TLS（0.6 行为变更）**：非回环监听在 0.6 起必须同时提供 `serve.tls.cert_file` + `key_file`（或 `--tls-cert` / `--tls-key`），否则启动失败；不再允许明文远程。回环仍可在无 TLS 下运行，也可显式启 TLS。
+- **无逃生口**：不提供 `--insecure` / `-k`；证书、token、Origin 任一不满足即 fail-closed，不静默降级。
+- **独立前端 Origin**：`serve.allowed_origins` 或重复 `--allowed-origin`；与 HTTP / WS 共用 allowlist，规则见 §13.5。
 - **只做 HTTP/1.1**：不做 HTTP/2 / ALPN / mTLS / ACME；HTTPS 与 WSS 共用同一 server、token、Host/Origin 规则。
-- `hello.features` 在启用 TLS 时增加 `tls`；不新增 `remote` feature。细节见 ADR-041。
-- **已知行为**：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问需替换为实际 IP。这是显示层行为，不改变监听/鉴权。
+- `hello.features` 在启用 TLS 时增加 `tls`；不新增 `remote` feature。细节见 ADR-041 / ADR-051 / ADR-053。
+- **已知行为**：监听 `0.0.0.0` 时，banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；其它机器访问需替换为实际 IP / 域名，且证书 SAN 必须匹配。这是显示层行为，不改变监听/鉴权。
 
 ### 13.6 Web 控制台（`apps/web`）
 
-- React + Vite；`GatewayClient` 用 WS 收事件，`seq` 去重、断线重连（`?since=`）、gap 提示。
-- token 存 URL fragment，再转 `sessionStorage`。
+- React + Vite；`GatewayClient` 用 WS 收事件，`seq` 去重、断线重连（`since`）、gap 提示。
+- token 存 URL fragment，再转 `sessionStorage`；不写 `localStorage`、不进 URL query。
+- **运行时 gateway URL（0.6）**：优先级 `localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；只接受 `http(s)://host[:port]` origin，拒绝 path / query / hash / userinfo / wildcard；非回环必须 https，HTTPS 页面拒绝 http/ws（mixed content）。换 URL 时重建 client 并重置 seq / 时间线 / 选中会话。
+- **独立前端（0.6）**：可把 `apps/web/dist` 部署到任意静态站点；服务端配置 `serve.allowed_origins` 允许该 Origin（CORS + WS upgrade），浏览器需信任 gateway 证书。同源部署仍由 gateway 托管 `dist`。
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
 - 0.3：按 `hello.features` 显示 **MCP server 面板**（`mcp-status`）与 **interrupted run 面板**（`durable-resume`），可触发 durable resume；未启用的 feature 不显示面板。面板 10s 刷新。
 - 0.4：按 `hello.features` 显示 **workflow 面板**（列表 / 详情 / 启动 / resume / cancel）、**metrics 快照**与 **飞书状态**（`workflow` / `metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
@@ -969,9 +989,37 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
 - **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
 - **manifest**：`capabilities.list` 返回 `{ version, config_schema_version: 1, methods: [{ name, params_schema?, result_schema?, permission }], tools, plugins }`；只含 canonical 方法。A-6.3：manifest 按 `ctx.tenantId` 生成，tools / plugins 取 `pluginHostFor` / `pluginsFor`（缺省回退全局）；`trace.readEvents(filter, tenantId)` 与 `sessionData.deleteSessionData(sessionId, tenantId)` 由 web 传入当前 tenant，asm 已按 tenant 路由到对应的 trace 目录与 session backend。
-- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、仅本机回环；未设置时用 `LocalRpcClient` 并取锁。
+- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、不写本地 store / trace；回环可明文，非回环必须 HTTPS + token。未设置时用 `LocalRpcClient` 并取锁。
+- **远程客户端（0.6）**：token 解析顺序 `--connect-token` > env（`VESSEL_CONNECT_TOKEN` / `connect.token_env`）> `connect.token`；CA 用 `--ca` / `connect.ca_file`。建连后 `health.get` 取远端 tenant / node；显式 `--tenant` 才把 `tenant_id` 合并进请求（admin 覆盖），否则由 token principal 决定。connect 模式下 `permission.respond` / `ask.respond` 经 RPC 回远端；TUI / headless 同路径。
 - **tenant**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。
 - **错误码**：方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal`。旧路径保留 0.4 错误码映射。
+
+### 13.8 0.6 远程控制面与跨节点 transport
+
+> 状态：已合入 `release/0.6`（未发布）；决策见 ADR-051 / ADR-052 / ADR-053。
+
+**远程客户端（CLI / TUI / headless）**
+
+- `--connect` / `VESSEL_CONNECT` 指向 gateway origin；非回环强制 HTTPS，token 缺失在发起网络请求前失败。
+- WS 首帧 `auth` 带 token + `since`；解析 `hello` / `event` / `gap` / `ping`，`ping` → `pong`，`gap.to_seq` 触发 `since` 重连，`hello.latest_seq < lastSeq` 从 0 重新对齐；退避 1s → 30s + jitter，10s hello 超时。
+- `health.get` 返回远端 `tenant_id` / `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
+- connect 模式不获取本地 tenant 写锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
+
+**节点注册与远程 Transport（asm）**
+
+- `transport.kind: remote` + 静态 `transport.nodes[]`（`id` / `url` / `token` / `token_env` / `ca_file`）；不做 mDNS / 自动发现。
+- `src/node-registry.ts`：节点 URL 归一化（非回环必须 https），token 显式值 > env，CA 读取为 PEM；心跳 `GET /v1/team/agents`（失败回退 `/health`），状态 `healthy` / `unreachable`，默认心跳 5s、展示 TTL 15s。
+- `src/remote-transport.ts`：`kind: 'remote'`；`send` 走 `POST /v1/team/messages`（Bearer + 可选 CA），`request` 走团队控制协议；错误统一 `RemoteTransportError`，冻结码 `transport_closed` / `peer_not_found` / `peer_unreachable` / `timeout` / `unauthorized` / `unsupported_protocol` / `invalid_request` / `agent_not_found` / `no_spawn`。
+- **事件扇出**：按节点订阅 `ws(s)://<node>/v1/events`，按 `(node_id, wire seq)` 去重（LRU 上限 10000）后回灌，补 `RunEvent.node_id`；断线指数退避 + `since` 续放；`seq` 按 `(node_id, run_id)` 解释，无全局序。
+- **投递语义**：入站消息按 `id` 去重（LRU 10000）；`spawn` 带 `request_id` 去重（gateway 进程内 Map，上限 1000），不自动重试；`status` / `inbox` 超时或不可达最多重试一次并复用 `request_id`；结果回投失败只发 `team.transport.error`。
+- **tenant**：远端 tenant 由 token principal 派生，不从 `AgentMessage` 取；跨节点 team 控制面 default/admin-only（非 default tenant → 403）。
+
+**已知限制（0.6）**
+
+- 无全局事件序、无分布式锁、无跨机 durable、无 mTLS、无节点自动发现。
+- `request_id` 去重不跨重启；同 key 不同参数返回首次结果。
+- 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
+- 自签证书 SAN 必须匹配目标 host/IP；浏览器无法按连接指定 CA。
 
 ## 14. 0.2 Kernel 与模块边界（已实现，未发布）
 
@@ -983,7 +1031,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **定位**：Vessel 是可嵌入的**多 agent 平台 runtime**；TUI / CLI / Web / Gateway 是参考 harness 外壳，只消费 runtime 的 SDK 与事件。
 - **分层**：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。依赖方向单向，并由 CI 自动检查。
 - **Module ≠ Plugin**：Module 是编译期/构造期边界（一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制。**不引入 `ModuleHost` / `ModuleRegistry` / 第二套扩展机制。**
-- **0.2 非目标（0.3 / 0.4 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；0.4 以插件实现 workflow / evals / 飞书；多租户 / 跨机器 / 单二进制仍非目标。
+- **0.2 非目标（0.3–0.6 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；0.4 以插件实现 workflow / evals / 飞书；0.5 实现多租户；0.6 实现跨机器远程与跨节点 transport；单二进制仍非目标。
 
 ### 14.2 Kernel（已实现）
 
@@ -1016,7 +1064,8 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 - 0.2 只做 **in-process** 与 **loopback HTTP** 两种实现；loopback 只绑 `127.0.0.1`，复用 gateway v1 的 token 鉴权，禁止 `0.0.0.0`。
 - 消息带 `protocol: 1`；in-process 失败不得影响本机路径；loopback 失败只降级该传输。
-- 远程监听 / TLS / 跨机器发现 / 消息持久化不在 0.2。
+- **0.6 additive**：`kind` 扩为 `'in-process' | 'loopback' | 'remote'`；新增可选 `nodeId?` 与 `request?<T>(nodeId, { requestId?, method, params? })`；`RunEvent.node_id?` / `EventFilter.nodeId?`。`request` 是领域无关 port 能力，不含 team 语义。远程实现与节点注册见 §13.8。
+- 远程监听 / TLS / 跨机器发现 / 消息持久化不在 0.2；跨机器传输在 0.6 以静态节点表实现，仍不做自动发现与消息持久化。
 
 ### 14.5 兼容与迁移（已实现）
 
@@ -1034,6 +1083,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | MCP client | `plugins/mcp/client/`（`@vessel/mcp-client`） | 插件，不是 core 模块；stdio + HTTP；默认 ask（ADR-039） |
 | 远程 / TLS | `packages/serve/src/gateway.ts` + `src/serve-config.ts` | 显式 opt-in；非回环必须 token；HTTP/1.1（ADR-041） |
 | 控制面 | `packages/serve/src/{durable,mcp}.ts`；TUI `/mcp` `/runs`；CLI `--resume-run` | 0.3 新增端点见 §13.2；命令见 §12 |
+| 跨机器远程 / 跨节点 | `packages/serve/src/gateway.ts`；`src/rpc/http-client.ts`；`src/remote-transport.ts` / `src/node-registry.ts` | 显式 opt-in；非回环 TLS + token；静态节点表；ADR-051 / 052 / 053；见 §13.8 |
 
 ## 15. 0.4 能力层（release/0.4，未发布）
 
@@ -1170,7 +1220,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - `SeqEventBuffer` 缺省 10000，**永不无界**；与 core `event_history` 独立。
 - WS high 2 MiB / low 512 KiB / 硬关闭 4 MiB；SSE high 256 帧 / low 64 帧；
   超阈值先丢事件并标记 `gap`，4 MiB 硬断开作为最后手段。
-- 单请求体仍限 1 MiB；远程 / 鉴权 / Host / Origin 规则不变。
+- 单请求体仍限 1 MiB；鉴权 / Host / Origin 规则见 §13.5；0.6 起非回环强制 TLS。
 - gateway `stop()` 不关闭 asm 注入的 collector / channel，生命周期归 asm。
 
 ### 16.5 加固
@@ -1242,4 +1292,4 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 - 0.5 不脱敏 run checkpoint / eval 报告 / 飞书回复；POSIX 文件权限 best-effort 0600。
 - 事件上历史中的 `runs.cancelled` 恒 0 是 0.4 行为；0.5 起显式取消发 `run.cancelled`，该值可能非 0。
 - 显式 `session.storage_path` / `durable.path` 可以逃出 tenant，启动时只 warn。
-- F5 跨机器远程在 0.6；微信不做。
+- F5 跨机器远程已在 0.6 实现（`release/0.6`）；微信不做。

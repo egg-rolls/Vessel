@@ -9,7 +9,7 @@ tags: [transport, multi-node, team, events]
 
 ## ADR-052：跨节点 transport 与 team 调度
 
-- **上下文**：0.5 的 `Transport` 只有进程内与回环实现，team 的 5 个工具与消息投递都假设单机、单一 gateway。0.6 的 F5 要求父端能把 run / team 任务派发到远端节点，并在父端观测结果与事件。跨节点不能依赖共享文件系统，也没有全局时钟或全局事件序；同时 core 不能吸收 team 业务语义。本 ADR 记录已批准的 additive 扩展、跨节点协议与断线语义；实现随 0.6 合入，本文不宣称已实现。
+- **上下文**：0.5 的 `Transport` 只有进程内与回环实现，team 的 5 个工具与消息投递都假设单机、单一 gateway。0.6 的 F5 要求父端能把 run / team 任务派发到远端节点，并在父端观测结果与事件。跨节点不能依赖共享文件系统，也没有全局时钟或全局事件序；同时 core 不能吸收 team 业务语义。本 ADR 记录已批准的 additive 扩展、跨节点协议与断线语义；实现已随 `release/0.6` 合入（未发布）。
 - **决策**：
   1. **Transport port additive 扩展（core）**：`kind` 扩为 `'in-process' | 'loopback' | 'remote'`；新增可选 `readonly nodeId?: string` 与可选 `request?<T>(nodeId, { requestId?, method, params? }): Promise<T>`。`send` / `receive` / `peers` / `close` 语义不变。`request` 是通用 port 能力，**不含 team 语义**。
   2. **事件字段（core）**：`RunEvent.node_id?: string`、`EventFilter.nodeId?: string` 作为 additive 字段；seq 仍由各节点自行分配。
