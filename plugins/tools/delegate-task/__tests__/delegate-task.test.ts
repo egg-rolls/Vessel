@@ -244,7 +244,7 @@ async function makeRuntime(
 }
 
 describe('delegate-task 安全继承', () => {
-  it('子 agent 继承父级 guardrail，违规工具调用被拦截', async () => {
+  it('子 agent 继承父级 guardrail：违规调用折回错误，delegate 正常完成', async () => {
     const provider = new MemoryLLMProvider();
     provider.setResponse(
       'PARENT_FORBIDDEN',
@@ -275,9 +275,13 @@ describe('delegate-task 安全继承', () => {
     });
     const runtime = await makeRuntime(provider, host, events, plugin);
 
+    // 新语义：child run 不 throw，delegate 正常返回含拦截原因的文本
     const result = await runtime.run('PARENT_FORBIDDEN');
     expect(result).toContain('blocked by guardrail');
-    expect(events.getHistory().some((e) => e.type === 'subagent.delegate.failed')).toBe(true);
+    expect(result).toContain('forbidden');
+    const types = events.getHistory().map((event) => event.type);
+    expect(types).toContain('subagent.delegate.completed');
+    expect(types).not.toContain('subagent.delegate.failed');
   });
 
   it('子 agent 继承父级 hook', async () => {

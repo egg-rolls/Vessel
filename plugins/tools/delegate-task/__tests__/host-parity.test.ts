@@ -196,11 +196,23 @@ describe('R5 parity：delegate_task 外部语义', () => {
           },
         });
       },
-      responses: [delegate('p1', 'CHILD_GUARD'), call('c1', 'forbidden', {}), final('parent done')],
+      responses: [
+        delegate('p1', 'CHILD_GUARD'),
+        call('c1', 'forbidden', {}),
+        // 新语义：阻断折回后 child 多一轮 LLM 调用
+        final('child saw blocked by guardrail'),
+        final('parent done'),
+      ],
     });
 
-    const parentSecond = scenario.provider.requests[2] ?? [];
+    // child 第二轮请求应看到折回的 guardrail 错误
+    const childSecond = scenario.provider.requests[2] ?? [];
+    expect(lastToolContent(childSecond)).toContain('blocked by guardrail');
+
+    // child 的最终文本经 delegate 结果回到 parent 第二轮请求
+    const parentSecond = scenario.provider.requests[3] ?? [];
     expect(lastToolContent(parentSecond)).toContain('blocked by guardrail');
+    expect(scenario.result).toBe('parent done');
   });
 
   it('P8 subagent. 前缀与 delegateId', async () => {

@@ -314,15 +314,19 @@ function callTool(provider: MemoryLLMProvider, input: string, toolName: string):
 }
 
 describe('tool-policy 与 runtime 集成', () => {
-  it('经 AgentRuntime 的真实 tool_call 会被拦截', async () => {
+  it('经 AgentRuntime 的真实 tool_call 被拦截后折回工具错误，run 继续', async () => {
     const provider = new MemoryLLMProvider();
     callTool(provider, 'CALL_DANGER', 'danger_tool');
 
+    let handlerCalled = false;
     const dangerTool: ToolDefinition = {
       name: 'danger_tool',
       description: 'danger',
       inputSchema: { type: 'object', properties: {} },
-      handler: async () => 'should not run',
+      handler: async () => {
+        handlerCalled = true;
+        return 'should not run';
+      },
     };
 
     const runtime = await AgentRuntime.create({
@@ -338,7 +342,11 @@ describe('tool-policy 与 runtime 集成', () => {
       ],
     });
 
-    await expect(runtime.run('CALL_DANGER')).rejects.toThrow(/blocked by guardrail/);
+    const result = await runtime.run('CALL_DANGER');
+    expect(handlerCalled).toBe(false);
+    expect(result).toContain('blocked by guardrail');
+    expect(result).toContain('danger_tool');
+    expect(result).not.toContain('should not run');
   });
 
   it('未命中策略的工具照常执行', async () => {
