@@ -22,6 +22,11 @@ export interface Message {
    * 不发送到 TUI / 事件流，避免泄漏思维链。
    */
   reasoning_content?: string;
+  /**
+   * 消息写入时间（Unix ms，0.6.1 P2）。可选：旧数据缺失时消费者降级。
+   * runtime 在加入上下文时补齐；Provider 适配层忽略该字段。
+   */
+  timestamp?: number;
 }
 
 /** 使用量 */

@@ -1139,14 +1139,16 @@ export class AgentRuntime {
    * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
    */
   private addContext(msg: Message, runId: string): void {
-    this.context.add(msg);
+    // 0.6.1 P2：逐条消息时间戳（已有值不覆盖，恢复的历史保持原时间）
+    const stamped: Message = msg.timestamp === undefined ? { ...msg, timestamp: Date.now() } : msg;
+    this.context.add(stamped);
     this.publishEvent({
       type: 'context.changed',
       run_id: runId,
       data: {
         run_id: runId,
         // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
-        message: this.stripReasoningFromMessage(msg),
+        message: this.stripReasoningFromMessage(stamped),
         message_count: this.context.messages.length,
         token_count: this.context.tokenCount,
       },

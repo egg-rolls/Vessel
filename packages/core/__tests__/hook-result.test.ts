@@ -127,7 +127,7 @@ describe('HookResult rewriting (0.6.1 P2)', () => {
     });
     await runtime.run('hi');
 
-    expect(captured[0]?.[0]).toEqual({
+    expect(captured[0]?.[0]).toMatchObject({
       role: 'system',
       content: 'BASE PROMPT\n\nEXTRA CONTEXT',
     });
