@@ -54,6 +54,39 @@ export interface SessionInfo {
   branch?: string;
 }
 
+/** 会话消息角色（与 core `Message` 对齐） */
+export type MessageRole = 'system' | 'user' | 'assistant' | 'tool';
+
+/** 工具调用（assistant 消息里的 tool_calls） */
+export interface ToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
+
+/** 单条会话消息（sessions.get 返回的 session.messages） */
+export interface Message {
+  role: MessageRole;
+  content: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  name?: string;
+}
+
+/** 会话详情（sessions.get 返回 `{ session: RunState }`） */
+export interface SessionDetail {
+  session_id: string;
+  messages: Message[];
+  title?: string;
+  preview?: string;
+  started_at?: number;
+  updated_at?: number;
+  status?: string;
+}
+
 /** 工具公开信息（/v1/tools） */
 export interface ToolInfo {
   name: string;

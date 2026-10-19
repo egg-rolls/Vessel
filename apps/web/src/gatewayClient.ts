@@ -24,12 +24,14 @@ import type {
   HelloInfo,
   McpServerStatus,
   McpServersResponse,
+  Message,
   MetricsResponse,
   MetricsSnapshot,
   RpcResponseEnvelope,
   RunEvent,
   RunStatus,
   ServerFrame,
+  SessionDetail,
   SessionInfo,
   TenantInfo,
   ToolInfo,
@@ -318,18 +320,39 @@ export class GatewayClient {
 
   // ── 语义方法 ──────────────────────────────────
 
-  submitRun(
+  /**
+   * 提交 run：优先 0.5 canonical RPC `runs.start`（带 tenant + quota），
+   * 旧 gateway 不支持时回退 WS legacy `run.submit`。
+   */
+  async submitRun(
     input: string,
     sessionId?: string,
   ): Promise<{ run_id: string; status: RunStatus['status']; queue_position?: number }> {
-    return this.request('run.submit', {
-      input,
-      ...(sessionId ? { session_id: sessionId } : {}),
-    });
+    try {
+      return await this.rpc<{
+        run_id: string;
+        status: RunStatus['status'];
+        queue_position?: number;
+      }>('runs.start', {
+        input,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      });
+    } catch (error) {
+      if (!canFallbackToLegacyRuns(error)) throw error;
+      return this.request('run.submit', {
+        input,
+        ...(sessionId ? { session_id: sessionId } : {}),
+      });
+    }
   }
 
-  cancelRun(runId: string): Promise<{ cancelled: boolean }> {
-    return this.request('run.cancel', { run_id: runId });
+  async cancelRun(runId: string): Promise<{ cancelled: boolean }> {
+    try {
+      return await this.rpc<{ cancelled: boolean }>('runs.cancel', { run_id: runId });
+    } catch (error) {
+      if (!canFallbackToLegacyRuns(error)) throw error;
+      return this.request('run.cancel', { run_id: runId });
+    }
   }
 
   getRun(runId: string): Promise<RunStatus> {
@@ -339,6 +362,33 @@ export class GatewayClient {
   async listSessions(): Promise<SessionInfo[]> {
     const body = await this.request<{ sessions?: SessionInfo[] }>('sessions.list');
     return body.sessions ?? [];
+  }
+
+  /**
+   * 读取单个会话的完整状态（含 messages）。
+   * WS `sessions.get` 优先；方法不可用/超时再回退 0.5 HTTP RPC。
+   * not_found 是业务结果，不触发回退。
+   */
+  async getSession(sessionId: string): Promise<SessionDetail> {
+    if (this.state === 'open' && this.helloInfo) {
+      try {
+        const body = await this.request<{ session?: SessionDetail }>('sessions.get', {
+          session_id: sessionId,
+        });
+        const session = body.session;
+        if (!session) throw new GatewayHttpError('not_found', 'Session not found');
+        return { ...session, messages: normalizeMessages(session.messages) };
+      } catch (error) {
+        if (isNotFoundError(error)) throw error;
+        // WS 不可用：继续走 HTTP RPC
+      }
+    }
+    const body = await this.rpc<{ session?: SessionDetail }>('sessions.get', {
+      session_id: sessionId,
+    });
+    const session = body.session;
+    if (!session) throw new GatewayHttpError('not_found', 'Session not found');
+    return { ...session, messages: normalizeMessages(session.messages) };
   }
 
   async listTools(): Promise<ToolInfo[]> {
@@ -523,6 +573,31 @@ export class GatewayClient {
     const body = await this.httpJson<EvalReportResponse>(`/v1/evals/latest?${query.toString()}`);
     return body.report;
   }
+}
+
+/** 兼容 WS 错误（`code: message`）与 HTTP GatewayHttpError 两种形状 */
+function isNotFoundError(error: unknown): boolean {
+  if (error instanceof GatewayHttpError) return error.code === 'not_found';
+  return error instanceof Error && error.message.startsWith('not_found:');
+}
+
+/** 旧 gateway 没有 /v1/rpc 或 runs.* 时回退到 WS legacy 方法；业务错误不回退。 */
+function canFallbackToLegacyRuns(error: unknown): boolean {
+  if (!(error instanceof GatewayHttpError)) return false;
+  if (error.status === 404 || error.status === 405) return true;
+  return error.code === 'method_not_allowed';
+}
+
+/** 服务端返回的 messages 可能是旧数据/空值；统一成前端可渲染的形状 */
+function normalizeMessages(raw: unknown): Message[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (item): item is Message =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof (item as Message).role === 'string' &&
+      typeof (item as Message).content === 'string',
+  );
 }
 
 /** WS close code → 用户可读信息 */
