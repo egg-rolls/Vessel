@@ -16,6 +16,7 @@ import type {
   RunStore,
   RuntimeHost,
   SessionBackend,
+  ToolPipeline,
 } from '../packages/core/src/index';
 
 // ── workflow ────────────────────────────────────
@@ -110,6 +111,11 @@ export interface WorkflowEngineOptionsLike {
   events: EventStream;
   /** 0.5：tenant 作用域（A-6 §13.4）；缺省不写 tenant_id（0.4 兼容）。 */
   tenantId?: string;
+  /**
+   * 0.8.2 Wave 2B1：统一工具执行管道（权限 / guardrail / hook）。
+   * 注入后 `type: tool` 步骤走同一套语义；ext 未识别时忽略该字段（旧路径）。
+   */
+  toolPipeline?: ToolPipeline;
 }
 
 export interface WorkflowModuleLike {

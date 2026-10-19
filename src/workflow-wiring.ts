@@ -10,11 +10,13 @@
 
 import { mkdir, stat } from 'node:fs/promises';
 import { DEFAULT_WORKFLOW_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import type {
-  EventStream,
-  PluginHost,
-  RunnableAgent,
-  RuntimeHost,
+import {
+  createToolPipelineFor,
+  type EventStream,
+  type PluginHost,
+  type RunnableAgent,
+  type RuntimeHost,
+  type RuntimePermissionConfig,
 } from '../packages/core/src/index';
 import type { WorkflowsControl } from '../packages/tui/src/index';
 import type {
@@ -43,6 +45,11 @@ export interface WorkflowCreateOptions {
   tenantDir?: string;
   /** 0.5：tenant 作用域；传给引擎，事件带 tenant_id */
   tenantId?: string;
+  /**
+   * 0.8.2 Wave 2B1：与 runtime 相同的 resolved 权限配置（default + autoApprove）。
+   * 缺省回退 `config.permission`；headless 的 allow 口径由装配层显式传入。
+   */
+  permission?: RuntimePermissionConfig;
   loader?: Pick<PluginLoader, 'loadModule'>;
   /** 测试注入口；优先于 loader */
   loadModule?: () => Promise<unknown | null>;
@@ -152,6 +159,16 @@ export async function createWorkflowFromConfig(
   );
   const mod = await loadWorkflowModule(options);
 
+  // 0.8.2 Wave 2B1：workflow `type: tool` 与 runtime 共用权限 / guardrail / hook。
+  // 权限配置优先用装配层传入的 resolved 值（headless allow 等），否则回退 config。
+  const permissionConfig = options.permission ?? options.config.permission;
+  const toolPipeline = createToolPipelineFor({
+    pluginHost: options.pluginHost,
+    events: options.events,
+    ...(permissionConfig !== undefined ? { permission: permissionConfig } : {}),
+    ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+  });
+
   return mod.createWorkflowEngine({
     ...(options.host ? { host: options.host } : {}),
     ...(options.runtime ? { runtime: options.runtime } : {}),
@@ -162,6 +179,7 @@ export async function createWorkflowFromConfig(
     ),
     events: options.events,
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+    toolPipeline,
   });
 }
 
