@@ -24,7 +24,7 @@ tags: [config, secrets, yaml]
 - **后果**：用户配置可提交、可审查，密钥集中在 env；`config show --sources` 能解释每个键的来源，但只显示是否设置，不显示值。显式值仍可写在用户 YAML 中，部署方需自行保证文件权限。项目配置出现密钥会直接失败，迁移时需要把密钥移到 env 或 `_env`。
 - **关联**：ADR-005（双层配置）、ADR-019（命名映射）；DECISION-010 §2.4；Addendum A-1（优先级出处更正）、A-3 §10.4 / §10.6；A-4 §11.4 / §11.5。
 
-## Addendum（0.6.1，计划中）
+## Addendum（0.6.1，已实现）
 
 - **`permission.autoApprove: string[]`（additive）**：按工具名精确匹配；装配层读取该块，替代硬编码的 `['ask_user']`。TUI 权限弹窗选 `always` 时写回用户 YAML。缺省为空，交互仍逐个询问。配置层级与优先级不变。
 - **`plugins[].config`（additive）**：`Record<string, unknown>`，通过 `Plugin.install(host, options?: { config?: Record<string, unknown> })` 传入；旧 `install(host)` 继续合法。不引入第二套扩展机制。

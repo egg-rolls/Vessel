@@ -580,7 +580,7 @@ class PluginLoader {
 }
 ```
 
-**扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。0.6.1 计划增加用户 / 项目插件目录与 `plugins[].config` 注入，见 §18.4。
+**扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。0.6.1 已增加用户 / 项目插件目录与 `plugins[].config` 注入，见 §18.4。
 
 **加能力就是放一个文件夹。** `bash` 工具在，写文件 + 跑命令本身就是模型能做的事——这就是不再需要「声明式工具」「用户目录工具扫描」「运行时注册表」的原因。
 
@@ -626,7 +626,7 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
 
-0.6.1 计划新增 `permission.autoApprove`、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖，见 §18.4。
+0.6.1 已新增 `permission.autoApprove`、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖，见 §18.4。
 
 0.3 配置示例：
 
@@ -939,7 +939,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 0.4：按 `hello.features` 显示 **workflow 面板**（列表 / 详情 / 启动 / resume / cancel）、**metrics 快照**与 **飞书状态**（`workflow` / `metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
 - 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
-- 0.6.1 计划：Markdown 渲染、`sessions.search` 全文检索、工具事件 `args` / `result` 折叠，见 §18.6。
+- 0.6.1：Markdown 渲染、`sessions.search` 全文检索、工具事件 `args` / `result` 折叠，见 §18.6。
 - **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir` / `durable` / `mcp`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2、静态托管、durable/MCP 面板在 `--serve` 下生效。
 
 ### 13.7 统一 RPC 方法表（0.5）
@@ -1009,7 +1009,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - `health.get` 返回远端 `tenant_id` / `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
 - connect 模式不获取本地 tenant 写锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
 
-**0.6.1 计划的安全收紧**：durable 端点按 principal 的 tenant 过滤并校验 `write`；team REST 复用 `ROLE_RANK`；事件回灌丢弃本机来源帧；远端 spawn 复用 `buildChildHost`。见 §18.2 / §18.7。
+**0.6.1 的安全收紧**：durable 端点按 principal 的 tenant 过滤并校验 `write`；team REST 复用 `ROLE_RANK`；事件回灌丢弃本机来源帧；远端 spawn 复用 `buildChildHost`。见 §18.2 / §18.7。
 
 **节点注册与远程 Transport（asm）**
 
@@ -1300,10 +1300,9 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 - 显式 `session.storage_path` / `durable.path` 可以逃出 tenant，启动时只 warn。
 - F5 跨机器远程已在 0.6 实现（`release/0.6`）；微信不做。
 
-## 18. 0.6.1 对标修复（计划中）
+## 18. 0.6.1 对标修复（已实现）
 
-> 状态：**计划中，冻结契约见 DECISION-015**。代码合入前本节不得被引用为“已实现”。
-> 合入后由 gov 把本节状态改为“已实现”，并同步 §8 / §9 / §13.6 / §13.7 / §13.8。
+> 状态：**已实现，未发布**；冻结契约见 DECISION-015。本节与 §8 / §9 / §13.6 / §13.7 / §13.8 同步。
 
 ### 18.1 多租户会话隔离（P0）
 

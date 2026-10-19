@@ -30,7 +30,7 @@ related: [3, 4, 12, 24, 26, 28, 30]
   - `@vessel/core` 的公开面收窄：不再导出 `MemoryToolRegistry` 与 `ToolRegistry` 类型；嵌入方若只想要简单注册表，用 `MemoryPluginHost`。
 - **关联**：**supersede ADR-017（Core 冻结）**、**supersede ADR-011（Skills 经 skills-loader 插件注入）**；使 **ADR-024（`ToolDefinition.default` 过滤）失效**（字段已删）、**部分取代 ADR-026**（`render` / `isEnabled` / `shouldDefer` / `interactive` 已删，`checkPermission` / `timeout` 保留）、**收窄 ADR-028**（保留其「运行时扫描」结论，删除 `PluginProvider` 接口与另外三套实现）；ADR-003（插件不进构造函数）、ADR-004（唯一扩展机制）、ADR-030（事件名开放字符串）不变；架构事实见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-## Addendum（0.6.1，计划中）
+## Addendum（0.6.1，已实现）
 
 - **插件扫描范围（additive）**：在仓库 `plugins/` 之外增加用户 `~/.vessel/plugins/` 与项目 `./.vessel/plugins/`。仍然是同一套运行时目录扫描、启动时扫描一次、无构建步骤；不恢复第二套注册机制，也不做远程市场。
 - **插件配置（additive）**：`plugins[].config` 通过 `Plugin.install(host, { config })` 传入；插件对象仍由 `PluginHost` 注册。ADR-003 / ADR-004 的边界不变。

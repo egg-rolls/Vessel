@@ -40,7 +40,7 @@ tags: [rpc, api, manifest]
 - **后果**：所有入口共享鉴权、tenant、错误码与 manifest；旧端点短期保留，增加一层适配与一致性测试成本。方法表成为冻结契约，新增能力需要 addendum 与文档同步。
 - **关联**：ADR-020（双轨命令）、ADR-029（事件流交互）、ADR-036（gateway 协议）、ADR-041（远程/TLS 边界）；DECISION-010 §2.3；Addendum A-3 §10.1–§10.5；A-4 §11.1 / §11.5 / §11.6。
 
-## Addendum（0.6.1，计划中）
+## Addendum（0.6.1，已实现）
 
 - **新增 canonical 方法 `sessions.search`（additive）**：permission `read`；参数 `{ query, limit? }`（`query` 1..256 字符，`limit` 1..100、缺省 20）；结果 `{ sessions: [{ session_id, title, preview, snippet, updated_at, message_count }] }`。匹配顺序 title / preview / session_id → 消息 content；按 `updated_at` 倒序。它加入 v1.1 方法表与 capability manifest，不改变既有方法、信封、错误码或 legacy-only 列表。
 - 前端（Web）在输入防抖后调用该方法；本地 title / preview / id 过滤保留为降级路径。

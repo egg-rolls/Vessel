@@ -25,7 +25,7 @@ tags: [security, tls, cors, tenancy]
 - **后果**：独立前端部署需要显式配置 Origin 与（非回环时）TLS；不满足基线的连接直接失败。安全不变量在 HTTP、WS、RPC、跨节点与浏览器五条路径上统一，代价是部署配置更多、错误信息必须可诊断。
 - **关联**：ADR-036（gateway 默认安全）、ADR-041（远程监听与 TLS）、ADR-048（RPC 鉴权与错误码）、ADR-049（tenant / principal）、ADR-050（密钥分层）、ADR-051（远程控制面）、ADR-052（跨节点 transport）；DECISION-014 §2、§3、§4.3–§4.5。
 
-## Addendum（0.6.1，计划中）
+## Addendum（0.6.1，已实现）
 
 - **durable 控制面纳入 principal**：`/v1/durable/*` 接收 token principal；list 按 tenant 过滤；非 default tenant 且无 per-tenant store 时返回 `forbidden`；resume 要求 `write` 及以上。与 §6 的 tenant principal 规则一致。
 - **team REST 复用 `ROLE_RANK`**：`GET` 允许 `read`；spawn / send / cancel / close 要求 `write` / `admin`。REST 与 RPC 的鉴权判定必须一致，不保留“default tenant 放行一切角色”的旁路。
