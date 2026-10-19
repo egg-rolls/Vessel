@@ -3,6 +3,30 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.7.1] - 2026-10-19
+
+> 0.7 的 P0 加固补丁线（基于 `release/0.7`）。与 0.5 / 0.6 / 0.7 一样只做发布干跑，不 tag、不 publish、不合并 `main`。
+
+### Security
+
+- **P0-1 legacy WS 租户作用域**：`run.submit` / `run.get` / `run.cancel` / `permission.respond` / `ask.respond` 等 legacy WS 方法不再绕过 principal/tenant，统一经 dispatcher 按调用方 tenant 执行；跨 tenant 读取 / 取消 / 应答返回 `forbidden/not_found`，`team.*` legacy 帧保持 `method_not_allowed`。
+- **P0-2 tenant 锁回收**：锁内容改为原子发布，不可解析锁增加 mtime 宽限，stale 回收改为带互斥守卫的 compare-and-delete；同主机存活 pid 不再被 24h 年龄判为 stale，跨主机仍按年龄兜底。消除空文件窗口与双重回收导致的单写者失效。
+- **P0-3 外部插件信任边界（缓解 / MITIGATED）**：默认仍加载 repo / project / user / node_modules 插件，但启动时向 stderr 打印外部插件告警；新增 `VESSEL_NO_EXTERNAL_PLUGINS=1` 显式 opt-out；显式 `plugins:` 始终可加载指定外部插件。**该风险只是缓解，未完全关闭**——外部插件仍以完整进程权限在启动时执行。
+
+### Changed
+
+- 插件来源优先级修正为 `repo → project → user → node_modules`，同名插件先出现者胜出（项目覆盖用户）。
+
+### Upgrade notes
+
+- 在不可信仓库中运行请设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`。默认行为不变（外部插件仍会加载），但启动会看到告警。
+- 若依赖外部插件，可继续使用默认集；只想信任指定插件时，使用显式 `plugins:` 列表。
+
+### Known limitations
+
+- P0-3 记录为 **MITIGATED**（残余风险经用户接受）：没有插件 manifest / 签名 / 沙箱，也没有 `install()` 超时与故障隔离。
+- 0.7.1 不包含 Gateway 拆分、统一工具执行管道、RunExecution、协议 schema 与 fsync（留在 0.8）。
+
 ## [0.5.0] - 2026-10-18
 
 > 0.5 代码就绪，发布决定在 1；0.5 仍只做发布干跑，不 tag、不 publish、不合并 `main`。
