@@ -70,4 +70,12 @@ describe('createTheme', () => {
       expect(color).toMatch(/^#[0-9a-f]{6}$/i);
     }
   });
+
+  it('selectedInk 是彩色选中底上的可读前景，selectedBg 只作背景', () => {
+    expect(createTheme(3).selectedInk).toBe('#1c1a17');
+    expect(createTheme(1).selectedInk).toBe('black');
+    expect(createTheme(0).selectedInk).toBeUndefined();
+    // 前景与选中背景不能是同一个 token（ConfirmDialog 的对比度回归）
+    expect(createTheme(3).selectedInk).not.toBe(createTheme(3).selectedBg);
+  });
 });

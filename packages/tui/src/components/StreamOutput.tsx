@@ -126,6 +126,18 @@ export function getTranscriptText(segs: Segment[]): string {
   return parts.join('\n');
 }
 
+/** 取消归档时追加的标注（与 ink-repl 的取消提示保持单一来源） */
+export const CANCEL_TRANSCRIPT_NOTICE = '⏹ 已取消（Cancelled）';
+
+/**
+ * 纯函数：取消时归档当前轮已流出的内容。
+ * 有文本/工具摘要时保留原文并追加取消标注；完全没有内容时只返回标注。
+ */
+export function getCancelledTranscript(segs: Segment[]): string {
+  const transcript = getTranscriptText(segs);
+  return transcript ? `${transcript}\n\n${CANCEL_TRANSCRIPT_NOTICE}` : CANCEL_TRANSCRIPT_NOTICE;
+}
+
 /**
  * 纯函数：根据 RunEvent 计算新的 segments 数组。
  *
@@ -240,8 +252,8 @@ interface StreamOutputProps {
   clearSignal?: number;
   /** 外部按终端分档传入的文本行上限；缺省时按终端高度推导 */
   maxLines?: number;
-  /** 当前轮 run 完成时回调，传回响应文本 */
-  onComplete?: (responseText: string) => void;
+  /** 当前轮 run 结束时回调，传回可归档文本与终态原因 */
+  onComplete?: (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => void;
 }
 
 export function StreamOutput({ events, clearSignal, maxLines, onComplete }: StreamOutputProps) {
@@ -299,8 +311,16 @@ export function StreamOutput({ events, clearSignal, maxLines, onComplete }: Stre
           const fallback = event.type === 'run.completed' ? event.data.output : event.data.error;
           const text = transcript || fallback || '';
           if (text) {
-            onCompleteRef.current?.(text);
+            onCompleteRef.current?.(text, event.type === 'run.completed' ? 'completed' : 'failed');
           }
+          resetSegments();
+          break;
+        }
+
+        case 'run.cancelled': {
+          // 取消前已经流出的回答必须保留：归档 segments + 取消标注，再清空实时区。
+          // 立即 reset 保证下一次 run.started 不会把同一段内容重复归档。
+          onCompleteRef.current?.(getCancelledTranscript(segmentsRef.current), 'cancelled');
           resetSegments();
           break;
         }

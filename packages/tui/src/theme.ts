@@ -32,8 +32,10 @@ export interface Theme {
   info: string | undefined;
   /** 细分隔线 */
   line: string | undefined;
-  /** 选中背景（也用作彩色背景上的前景，保证对比度） */
+  /** 选中背景（只作背景，不用于文字） */
   selectedBg: string | undefined;
+  /** 彩色选中底上的前景（亮底用深色墨，保证对比度） */
+  selectedInk: string | undefined;
 }
 
 const TRUECOLOR_THEME: Theme = {
@@ -47,6 +49,7 @@ const TRUECOLOR_THEME: Theme = {
   info: '#93a5b3',
   line: '#4a453d',
   selectedBg: '#3a352d',
+  selectedInk: '#1c1a17',
 };
 
 /** 16 色终端：只用命名 ANSI 色，避免 hex 映射到不可见黑 */
@@ -61,6 +64,7 @@ const ANSI16_THEME: Theme = {
   info: 'cyanBright',
   line: 'gray',
   selectedBg: 'black',
+  selectedInk: 'black',
 };
 
 /** 无色终端：颜色全部关闭，依靠字形与文本标记区分状态 */
@@ -75,6 +79,7 @@ const NO_COLOR_THEME: Theme = {
   info: undefined,
   line: undefined,
   selectedBg: undefined,
+  selectedInk: undefined,
 };
 
 /**

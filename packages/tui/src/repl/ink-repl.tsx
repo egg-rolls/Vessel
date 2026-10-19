@@ -37,6 +37,7 @@ import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { computeLiveLayout } from './layout.js';
+import { PermissionTimeoutController } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { loadStartupNotice } from './startup-notice.js';
@@ -61,8 +62,26 @@ function InkRepl({ ctx }: InkReplProps) {
   const [ui, dispatch] = useReplState(ctx);
   const state = ui.repl;
 
-  /** 权限弹窗超时计时器（与 core 的 120s 对齐） */
-  const permissionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * 权限弹窗超时控制器（与 core 的 120s 对齐）。
+   * 按 requestId 记录已答，避免旧计时器在用户已答后继续追加超时提示。
+   */
+  const permissionTimeoutRef = useRef<PermissionTimeoutController | null>(null);
+  if (permissionTimeoutRef.current === null) {
+    permissionTimeoutRef.current = new PermissionTimeoutController({
+      timeoutMs: PERMISSION_TIMEOUT_MS,
+      onTimeout: (requestId) => {
+        dispatch({ type: 'clearPermissionForRequest', requestId });
+        dispatch({
+          type: 'appendHistory',
+          line: '⚠ Permission request timed out (120s); tool call was cancelled.',
+        });
+      },
+    });
+  }
+  /** 订阅回调里读取最新 overlay（不随 effect 重建订阅） */
+  const permissionOverlayRef = useRef(ui.permissionOverlay);
+  permissionOverlayRef.current = ui.permissionOverlay;
   /** 运行中重复提交提示的节流时间戳 */
   const lastBusyNoticeRef = useRef(0);
   /** 矮终端提示只写一次 scrollback */
@@ -138,20 +157,13 @@ function InkRepl({ ctx }: InkReplProps) {
       const event = asTuiEvent(rawEvent);
       switch (event.type) {
         case 'tool.permission.request': {
-          if (permissionTimerRef.current) clearTimeout(permissionTimerRef.current);
+          const requestId = event.data.requestId;
           const expiresAt = Date.now() + PERMISSION_TIMEOUT_MS;
-          permissionTimerRef.current = setTimeout(() => {
-            permissionTimerRef.current = null;
-            dispatch({ type: 'clearPermissionForRequest', requestId: event.data.requestId });
-            dispatch({
-              type: 'appendHistory',
-              line: '⚠ Permission request timed out (120s); tool call was cancelled.',
-            });
-          }, PERMISSION_TIMEOUT_MS);
+          permissionTimeoutRef.current?.start(requestId);
           dispatch({
             type: 'setPermissionOverlay',
             overlay: {
-              requestId: event.data.requestId,
+              requestId,
               run_id: event.run_id,
               toolName: event.data.tool,
               input: event.data.input,
@@ -160,24 +172,40 @@ function InkRepl({ ctx }: InkReplProps) {
           });
           break;
         }
-        case 'tool.call.failed':
+        case 'tool.call.failed': {
+          const overlay = permissionOverlayRef.current;
+          if (
+            overlay &&
+            overlay.run_id === event.run_id &&
+            overlay.toolName === event.data.tool_name
+          ) {
+            // 当前等待确认的工具已失败：标记已答并取消计时器。
+            permissionTimeoutRef.current?.answer(overlay.requestId);
+          }
           dispatch({
             type: 'clearPermissionForTool',
             runId: event.run_id,
             toolName: event.data.tool_name,
           });
           break;
+        }
         case 'run.completed':
         case 'run.failed':
+        case 'run.cancelled': {
+          // run 终态：弹窗会关闭，计时器也必须停止，避免 120s 后误报超时。
+          const overlay = permissionOverlayRef.current;
+          if (overlay && overlay.run_id === event.run_id) {
+            permissionTimeoutRef.current?.answer(overlay.requestId);
+          }
           dispatch({ type: 'clearPermissionForRun', runId: event.run_id });
           break;
+        }
         default:
           break;
       }
     });
     return () => {
-      if (permissionTimerRef.current) clearTimeout(permissionTimerRef.current);
-      permissionTimerRef.current = null;
+      permissionTimeoutRef.current?.dispose();
       unsubscribe();
     };
   }, [ctx.events, dispatch]);
@@ -275,7 +303,12 @@ function InkRepl({ ctx }: InkReplProps) {
             dispatch({ type: 'runStart', abort });
             const outcome = await executeResume(handle, abort);
             if (outcome.status === 'cancelled') {
-              dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+              // 有流式内容时，StreamOutput 已归档带「已取消」标注的正文；
+              // 仅在没有内容可归档时补一条简短的取消提示。
+              if (!streamCancellationArchivedRef.current) {
+                dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+              }
+              streamCancellationArchivedRef.current = false;
             } else if (outcome.status === 'failed') {
               dispatch({
                 type: 'appendHistory',
@@ -332,7 +365,12 @@ function InkRepl({ ctx }: InkReplProps) {
             ctx.runtime.run(value, state.currentSessionId, { branch, messages, signal }),
         });
         if (outcome.status === 'cancelled') {
-          dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+          // 取消前已流出的内容由 StreamOutput 归档（含「已取消」标注）；
+          // 没有内容时保留一条简短提示，避免用户以为什么都没发生。
+          if (!streamCancellationArchivedRef.current) {
+            dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+          }
+          streamCancellationArchivedRef.current = false;
         } else if (outcome.status === 'failed') {
           dispatch({
             type: 'appendHistory',
@@ -382,6 +420,7 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
     if (ui.permissionOverlay) {
+      permissionTimeoutRef.current?.answer(ui.permissionOverlay.requestId);
       ctx.events.publish({
         type: 'tool.permission.response',
         run_id: ui.permissionOverlay.run_id,
@@ -473,6 +512,8 @@ function InkRepl({ ctx }: InkReplProps) {
     (answer: string) => {
       const overlay = ui.permissionOverlay;
       if (!overlay) return;
+      // 先标记已答并停表：即使旧回调已排队，也不能再追加超时提示。
+      permissionTimeoutRef.current?.answer(overlay.requestId);
       const always = answer === 'always';
       ctx.events.publish({
         type: 'tool.permission.response',
@@ -498,9 +539,13 @@ function InkRepl({ ctx }: InkReplProps) {
     [dispatch],
   );
 
+  /** 本轮取消是否已由 StreamOutput 归档（避免再追加一条独立的 Cancelled 提示） */
+  const streamCancellationArchivedRef = useRef(false);
+
   // StreamOutput 完成回调：将 AI 响应归档到 history
   const handleStreamComplete = useCallback(
-    (responseText: string) => {
+    (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => {
+      streamCancellationArchivedRef.current = reason === 'cancelled';
       dispatch({ type: 'appendHistory', line: responseText });
     },
     [dispatch],

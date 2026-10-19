@@ -13,7 +13,9 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  CANCEL_TRANSCRIPT_NOTICE,
   DEFAULT_MAX_SEGMENTS,
+  getCancelledTranscript,
   getResponseText,
   getTranscriptText,
   limitSegments,
@@ -385,5 +387,40 @@ describe('getTranscriptText', () => {
   it('running 工具段被跳过', () => {
     const segs: Segment[] = [makeToolCallSegment('c1', 'bash', { command: 'sleep 1' })];
     expect(getTranscriptText(segs)).toBe('');
+  });
+});
+
+describe('getCancelledTranscript', () => {
+  it('取消时保留已流出的回答并追加“已取消”标注', () => {
+    let segs: Segment[] = [];
+    const nextId = makeNextId();
+    segs = reduceSegments(segs, textDelta('已经流出的部分回答'), nextId);
+
+    const transcript = getCancelledTranscript(segs);
+
+    expect(transcript).toContain('已经流出的部分回答');
+    expect(transcript).toContain(CANCEL_TRANSCRIPT_NOTICE);
+  });
+
+  it('没有内容时只返回取消标注', () => {
+    expect(getCancelledTranscript([])).toBe(CANCEL_TRANSCRIPT_NOTICE);
+  });
+
+  it('工具摘要同样被保留', () => {
+    const segs: Segment[] = [
+      {
+        type: 'tool_call',
+        id: 'c1',
+        name: 'read',
+        arguments: { path: 'a.md' },
+        status: 'completed',
+        duration: 3,
+        result: 'file body',
+      },
+    ];
+    const transcript = getCancelledTranscript(segs);
+    expect(transcript).toContain('✓ read');
+    expect(transcript).toContain('file body');
+    expect(transcript).toContain(CANCEL_TRANSCRIPT_NOTICE);
   });
 });

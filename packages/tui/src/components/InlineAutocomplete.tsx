@@ -6,9 +6,10 @@
  * 当过滤结果为空时返回 null（不渲染任何东西）。
  */
 
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 import { useMemo } from 'react';
 import { theme } from '../theme.js';
+import { computeDialogWidth, displayWidth, truncateToWidth } from '../utils/dialog.js';
 
 export interface CommandItem {
   name: string;
@@ -27,9 +28,31 @@ interface InlineAutocompleteProps {
   maxVisible?: number;
 }
 
+/**
+ * 首屏优先展示的常用命令（按此顺序）。
+ * `/` 打开补全时条目很多，这四个必须出现在第一屏；其余保持注册顺序。
+ */
+export const DISCOVERY_PRIORITY = ['/help', '/new', '/history', '/clear'] as const;
+
+/** 纯函数：把常用命令提到最前；其余保持原有（注册）顺序（sort 稳定）。 */
+export function sortCommandsForDiscovery(commands: CommandItem[]): CommandItem[] {
+  const rank = new Map<string, number>(
+    DISCOVERY_PRIORITY.map((name, index) => [name, index] as const),
+  );
+  return [...commands].sort((a, b) => {
+    const aRank = rank.get(a.name);
+    const bRank = rank.get(b.name);
+    if (aRank !== undefined && bRank !== undefined) return aRank - bRank;
+    if (aRank !== undefined) return -1;
+    if (bRank !== undefined) return 1;
+    return 0;
+  });
+}
+
 /** 纯函数：按 filter 模糊匹配命令（substring，大小写不敏感）。命令名匹配排在前，描述匹配排在后。 */
 export function filterCommands(commands: CommandItem[], filter: string): CommandItem[] {
-  if (!filter) return commands;
+  // 空 filter = 浏览全部命令：常用命令置顶，保证第一屏可见。
+  if (!filter) return sortCommandsForDiscovery(commands);
   const lower = filter.toLowerCase();
   const filtered = commands.filter(
     (cmd) =>
@@ -112,11 +135,15 @@ export function InlineAutocomplete({
   selectedIndex,
   maxVisible = MAX_VISIBLE_COMMANDS,
 }: InlineAutocompleteProps) {
+  const { stdout } = useStdout();
+  const width = computeDialogWidth(stdout.columns);
   const filtered = useMemo(() => filterCommands(commands, filter), [commands, filter]);
 
   if (filtered.length === 0) return null;
 
   const { start, end } = getVisibleCommandWindow(filtered.length, selectedIndex, maxVisible);
+  // 内容区宽度 = 弹窗宽度 - 边框(2) - 左右内边距(2)；行 = 标记(2) + 命令名 + " · " + 描述
+  const contentWidth = Math.max(1, width - 4);
 
   return (
     <Box
@@ -125,17 +152,23 @@ export function InlineAutocomplete({
       borderStyle="single"
       borderColor={theme.line}
       paddingX={1}
+      width={width}
+      overflow="hidden"
     >
       {filtered.slice(start, end).map((cmd, offset) => {
         const i = start + offset;
         const active = i === selectedIndex;
+        const descriptionBudget = Math.max(1, contentWidth - 2 - displayWidth(cmd.name) - 3);
         return (
           <Box key={cmd.name}>
             <Text color={active ? theme.brand : theme.muted} bold={active}>
               {active ? '› ' : '  '}
               {cmd.name}
             </Text>
-            <Text color={theme.faint}> · {cmd.description}</Text>
+            <Text color={theme.faint} wrap="truncate-end">
+              {' · '}
+              {truncateToWidth(cmd.description, descriptionBudget)}
+            </Text>
           </Box>
         );
       })}

@@ -380,12 +380,14 @@ function formatHistoryMessage(msg: { role: string; content: string }): string[] 
 export type HistoryRole = 'user' | 'assistant' | 'tool';
 
 export interface HistoryOptions {
-  /** undefined = 全量（默认，保持 0.5.2 行为） */
+  /** 未显式指定时使用 HISTORY_LIMIT_DEFAULT（最近 50 条） */
   limit?: number;
   role?: HistoryRole;
 }
 
 const HISTORY_LIMIT_MAX = 500;
+/** 无参 /history 的默认展示条数（只显示最近 N 条） */
+export const HISTORY_LIMIT_DEFAULT = 50;
 const HISTORY_USAGE = 'Usage: /history [--limit <n>] [--role user|assistant|tool]';
 const HISTORY_ROLES: readonly HistoryRole[] = ['user', 'assistant', 'tool'];
 
@@ -470,16 +472,12 @@ function historyCommand(): CommandEntry {
         };
       }
 
-      // 先按 role 过滤，再取最近 N 条。
-      const shown = limit !== undefined ? scoped.slice(-limit) : scoped;
-      const header =
-        limit === undefined
-          ? role
-            ? `History (${scoped.length} messages, role=${role}):`
-            : `History (${loaded.messages.length} messages):`
-          : `History (${shown.length} of ${scoped.length} messages${
-              role ? `, role=${role}` : ''
-            }, last ${limit}):`;
+      // 先按 role 过滤，再取最近 N 条；无参默认只展示最近 50 条。
+      const effectiveLimit = limit ?? HISTORY_LIMIT_DEFAULT;
+      const shown = scoped.slice(-effectiveLimit);
+      const header = `History (${shown.length} of ${scoped.length} messages${
+        role ? `, role=${role}` : ''
+      }, last ${effectiveLimit}):`;
 
       const lines = ['', header];
       for (const msg of shown) {
