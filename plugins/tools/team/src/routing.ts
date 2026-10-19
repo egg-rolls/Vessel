@@ -13,6 +13,13 @@ import { randomUUID } from 'node:crypto';
 import type { AgentMessage, PeerInfo, Transport } from '@vessel/core';
 import { type TeamHostPort, toCoreMessage, toLegacyMessage } from './core-adapter.js';
 import type { AgentSpec, AgentStatus, InboxPage, TeamMessage } from './host.js';
+import {
+  requestRemote,
+  TEAM_REMOTE_METHODS,
+  toRemoteInbox,
+  toRemoteStatus,
+  toRemoteStatusList,
+} from './remote.js';
 
 /** 地址段字符集（DECISION-005 U1） */
 const ADDRESS_PART = /^[A-Za-z0-9_-]{1,64}$/;
@@ -98,9 +105,22 @@ export class RoutingTeamHost implements TeamHostPort {
     });
   }
 
-  spawn(spec: AgentSpec): Promise<AgentStatus> {
-    // 0.2 只在本地创建成员；远端 spawn 不做
-    return this.local.spawn(spec);
+  async spawn(spec: AgentSpec, node?: string): Promise<AgentStatus> {
+    if (node === undefined || node === this.nodeId) {
+      return this.local.spawn(spec);
+    }
+    this.assertNodeId(node);
+    const result = await requestRemote<{ agent?: unknown }>(
+      this.transport,
+      node,
+      TEAM_REMOTE_METHODS.spawn,
+      {
+        ...(spec.name !== undefined ? { name: spec.name } : {}),
+        model: spec.model,
+        ...(spec.systemPrompt !== undefined ? { systemPrompt: spec.systemPrompt } : {}),
+      },
+    );
+    return toRemoteStatus(result.agent, node);
   }
 
   async send(message: TeamMessage): Promise<void> {
@@ -126,7 +146,18 @@ export class RoutingTeamHost implements TeamHostPort {
   async inbox(id: string, cursor?: string): Promise<InboxPage> {
     const parsed = parseAgentAddress(id);
     if (parsed.nodeId !== undefined && parsed.nodeId !== this.nodeId) {
-      throw new Error('remote inbox is not supported in 0.2');
+      this.assertNodeId(parsed.nodeId);
+      const result = await requestRemote<unknown>(
+        this.transport,
+        parsed.nodeId,
+        TEAM_REMOTE_METHODS.inbox,
+        {
+          agentId: parsed.agentId,
+          ...(cursor !== undefined && cursor !== '' ? { cursor } : {}),
+        },
+        { retryOnce: true },
+      );
+      return toRemoteInbox(result, parsed.nodeId);
     }
     return this.local.inbox(parsed.agentId, cursor);
   }
@@ -152,13 +183,37 @@ export class RoutingTeamHost implements TeamHostPort {
     }
   }
 
-  async status(id?: string): Promise<AgentStatus | AgentStatus[]> {
-    if (id === undefined) return this.local.status();
-    const parsed = parseAgentAddress(id);
-    if (parsed.nodeId !== undefined && parsed.nodeId !== this.nodeId) {
-      throw new Error('remote status is not supported in 0.2');
+  async status(id?: string, node?: string): Promise<AgentStatus | AgentStatus[]> {
+    if (id === undefined) {
+      if (node === undefined || node === this.nodeId) return this.local.status();
+      this.assertNodeId(node);
+      const result = await requestRemote<unknown>(
+        this.transport,
+        node,
+        TEAM_REMOTE_METHODS.statusList,
+        undefined,
+        { retryOnce: true },
+      );
+      return toRemoteStatusList(result, node);
     }
-    return this.local.status(parsed.agentId);
+
+    const parsed = parseAgentAddress(id);
+    if (node !== undefined && parsed.nodeId !== undefined && node !== parsed.nodeId) {
+      throw new Error(`conflicting node for member ${id}: ${node}`);
+    }
+    const targetNode = parsed.nodeId ?? node;
+    if (targetNode === undefined || targetNode === this.nodeId) {
+      return this.local.status(parsed.agentId);
+    }
+    this.assertNodeId(targetNode);
+    const result = await requestRemote<{ agent?: unknown }>(
+      this.transport,
+      targetNode,
+      TEAM_REMOTE_METHODS.status,
+      { agentId: parsed.agentId },
+      { retryOnce: true },
+    );
+    return toRemoteStatus(result.agent, targetNode);
   }
 
   async close(): Promise<void> {
@@ -212,6 +267,13 @@ export class RoutingTeamHost implements TeamHostPort {
       await this.local.send(legacy);
     } else {
       await this.local.deliver(legacy);
+    }
+  }
+
+  /** nodeId 校验（canonical 地址段字符集） */
+  private assertNodeId(nodeId: string): void {
+    if (!ADDRESS_PART.test(nodeId)) {
+      throw new Error(`invalid nodeId: ${nodeId} (must match [A-Za-z0-9_-]{1,64})`);
     }
   }
 

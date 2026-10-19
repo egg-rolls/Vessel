@@ -84,6 +84,12 @@ function readString(record: Record<string, unknown>, key: string): string {
   return typeof value === 'string' ? value : '';
 }
 
+/** 把可选的 node 与短 id 合成 canonical 地址；已有 ':' 或 '*' 时原样返回 */
+function withNode(id: string, node: string): string {
+  if (node === '' || id === '' || id === '*' || id.includes(':')) return id;
+  return `${node}:${id}`;
+}
+
 /**
  * 成员的插件宿主：复制工具（排除 team_*）、guardrail、hook。
  * 成员不能继续 delegate 团队能力，避免无限扩张。
@@ -104,28 +110,33 @@ function makeSpawnTool(host: PluginHost, config: ResolvedConfig): ToolDefinition
   return {
     name: 'team_spawn',
     description:
-      'Spawn a long-lived in-process team member with its own context. Returns the member id.',
+      'Spawn a long-lived team member with its own context. Returns the member id. ' +
+      'Set `node` to spawn on a remote node (default: local).',
     inputSchema: {
       type: 'object',
       properties: {
         name: { type: 'string', description: 'Display name' },
         model: { type: 'string', description: 'Model override for this member' },
         systemPrompt: { type: 'string', description: 'Optional system prompt' },
+        node: { type: 'string', description: 'Target node id (default: local)' },
       },
       required: [],
     },
     handler: async (args: unknown) => {
       const record = isRecord(args) ? args : {};
       try {
-        const status = await config.port.spawn({
-          name: readString(record, 'name') || undefined,
-          provider: config.providerFactory(),
-          model: readString(record, 'model') || config.model,
-          pluginHost: buildChildHost(host),
-          systemPrompt: readString(record, 'systemPrompt') || undefined,
-          limits: config.memberLimits,
-          termination: config.memberTermination,
-        });
+        const status = await config.port.spawn(
+          {
+            name: readString(record, 'name') || undefined,
+            provider: config.providerFactory(),
+            model: readString(record, 'model') || config.model,
+            pluginHost: buildChildHost(host),
+            systemPrompt: readString(record, 'systemPrompt') || undefined,
+            limits: config.memberLimits,
+            termination: config.memberTermination,
+          },
+          readString(record, 'node') || undefined,
+        );
         return JSON.stringify(status);
       } catch (error) {
         return `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -151,12 +162,13 @@ function makeSendTool(config: ResolvedConfig): ToolDefinition {
           enum: ['message', 'task'],
           description: 'message (default) or task',
         },
+        node: { type: 'string', description: 'Target node id for a short member id' },
       },
       required: ['to', 'content'],
     },
     handler: async (args: unknown) => {
       if (!isRecord(args)) return 'Error: team_send requires { to, content }';
-      const to = readString(args, 'to');
+      const to = withNode(readString(args, 'to'), readString(args, 'node'));
       const content = readString(args, 'content');
       const rawKind = readString(args, 'kind');
       const kind: TeamMessageKind = rawKind === 'task' ? 'task' : 'message';
@@ -190,14 +202,21 @@ function makeInboxTool(config: ResolvedConfig): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        member: { type: 'string', description: 'Member id (default: owner)' },
+        member: {
+          type: 'string',
+          description: 'Member id or canonical nodeId:agentId (default: owner)',
+        },
         cursor: { type: 'string', description: 'Cursor from the previous call' },
+        node: { type: 'string', description: 'Target node id for a short member id' },
       },
       required: [],
     },
     handler: async (args: unknown) => {
       const record = isRecord(args) ? args : {};
-      const member = readString(record, 'member') || config.ownerId;
+      const member = withNode(
+        readString(record, 'member') || config.ownerId,
+        readString(record, 'node'),
+      );
       try {
         const page = await config.port.inbox(member, readString(record, 'cursor'));
         return JSON.stringify(page);
@@ -212,19 +231,29 @@ function makeInboxTool(config: ResolvedConfig): ToolDefinition {
 function makeStatusTool(config: ResolvedConfig): ToolDefinition {
   return {
     name: 'team_status',
-    description: 'List team members, or show one member when `member` is provided.',
+    description:
+      'List team members, or show one member when `member` is provided. ' +
+      'Set `node` (without `member`) to list a remote node.',
     inputSchema: {
       type: 'object',
       properties: {
-        member: { type: 'string', description: 'Optional member id' },
+        member: {
+          type: 'string',
+          description: 'Optional member id or canonical nodeId:agentId',
+        },
+        node: { type: 'string', description: 'Target node id (remote list or short member id)' },
       },
       required: [],
     },
     handler: async (args: unknown) => {
       const record = isRecord(args) ? args : {};
       const member = readString(record, 'member');
+      const node = readString(record, 'node') || undefined;
       try {
-        const status: AgentStatus | AgentStatus[] = await config.port.status(member || undefined);
+        const status: AgentStatus | AgentStatus[] = await config.port.status(
+          member || undefined,
+          node,
+        );
         return JSON.stringify(status);
       } catch (error) {
         return `Error: ${error instanceof Error ? error.message : String(error)}`;
@@ -241,13 +270,14 @@ function makeCancelTool(config: ResolvedConfig): ToolDefinition {
     inputSchema: {
       type: 'object',
       properties: {
-        member: { type: 'string', description: 'Member id' },
+        member: { type: 'string', description: 'Member id or canonical nodeId:agentId' },
+        node: { type: 'string', description: 'Target node id for a short member id' },
       },
       required: ['member'],
     },
     handler: async (args: unknown) => {
       if (!isRecord(args)) return 'Error: team_cancel requires { member }';
-      const member = readString(args, 'member');
+      const member = withNode(readString(args, 'member'), readString(args, 'node'));
       if (!member) return 'Error: team_cancel requires a non-empty member';
       try {
         await config.port.cancel(member);

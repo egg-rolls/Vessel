@@ -22,6 +22,8 @@ export interface TeamMessage {
   content: string;
   reply_to?: string;
   ts: number;
+  /** 0.6：消息来自远端节点时标注来源；本机消息缺省 */
+  nodeId?: string;
 }
 
 /** spawn 规格（0.1 形状；适配层翻译成 core AgentSpec） */
@@ -43,6 +45,8 @@ export interface AgentStatus {
   state: AgentState;
   toolNames: string[];
   lastError?: string;
+  /** 0.6：远端成员所属节点；本机成员缺省 */
+  nodeId?: string;
 }
 
 /** 收件箱分页 */
