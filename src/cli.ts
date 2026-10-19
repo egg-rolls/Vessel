@@ -33,6 +33,7 @@ import {
 } from '../packages/core/src/index';
 import {
   type ConfigSnapshotLike,
+  type DurableGatewayOptions,
   type Gateway,
   type GatewayOptions,
   type MetricsProvider,
@@ -48,6 +49,7 @@ import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { doctorCommand } from './doctor-command';
+import { createDurableFor } from './durable-wiring';
 import { runEvalCommand } from './eval-command';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import { renderGatewayBanner } from './gateway-banner';
@@ -644,7 +646,12 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     const dataDir = resolveDataDir(config);
-    const gatewayOptions: GatewayOptions = {
+    // 0.6.1 P0-2：非 default tenant 只走 per-tenant runStore；
+    // default tenant 由上面的 `durable` 提供（gateway 优先 opts.durable）。
+    const durableFor = createDurableFor(tenantFactory, result.tenantId);
+    const gatewayOptions: GatewayOptions & {
+      durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
+    } = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
       events: sharedEvents ?? ctx.events,
@@ -688,6 +695,8 @@ async function runWithConfig(result: BootstrapResult) {
       ...(tenantFactory
         ? {
             defaultTenantId: result.tenantId,
+            // 0.6.1：per-tenant durable（缺失 → 非 default tenant 403）。
+            durableFor,
             // A6-13：tenants.get/list/create/update 的数据源。
             // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
             tenants: createTenantControl(dataDir, {

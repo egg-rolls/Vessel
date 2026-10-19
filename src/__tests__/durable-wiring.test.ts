@@ -8,12 +8,14 @@ import {
   type RunStore,
 } from '../../packages/core/src/index';
 import {
+  createDurableFor,
   listRunSummaries,
   loadResumableCheckpoint,
   previewOf,
   routeResume,
 } from '../durable-wiring';
 import { createRunStore, resolveDurableOptions, resolveRunStorePath } from '../run-store-factory';
+import type { TenantRuntimeBundle, TenantRuntimeFactory } from '../tenant-runtime-factory';
 
 function checkpoint(overrides: Partial<RunCheckpoint> = {}): RunCheckpoint {
   return {
@@ -196,3 +198,69 @@ describe('previewOf', () => {
 // 确保 RunStore 结构仍与 asm 的调用面一致（类型层兜底）
 const _typeOnly: RunStore = new MemoryRunStore();
 void _typeOnly;
+
+describe('createDurableFor（0.6.1 P0-2 per-tenant）', () => {
+  const store = new MemoryRunStore();
+
+  function factory(bundles: Record<string, Partial<TenantRuntimeBundle>>): TenantRuntimeFactory {
+    return {
+      bundleFor: (tenantId: string) => bundles[tenantId] as TenantRuntimeBundle | undefined,
+    } as TenantRuntimeFactory;
+  }
+
+  it('default tenant 返回 undefined（由 gateway 的 durable 提供）', () => {
+    const durableFor = createDurableFor(factory({ default: { runStore: store } }), 'default');
+    expect(durableFor('default')).toBeUndefined();
+  });
+
+  it('非 default tenant 无 runStore → undefined（gateway 403）', () => {
+    const durableFor = createDurableFor(factory({ acme: {} }), 'default');
+    expect(durableFor('acme')).toBeUndefined();
+    expect(durableFor('missing')).toBeUndefined();
+  });
+
+  it('host.resume：只等待受理，不等待 run 完成', async () => {
+    let resumed = '';
+    const host = {
+      resume: async (runId: string) => {
+        resumed = runId;
+        return { result: new Promise<string>(() => {}) };
+      },
+    };
+    const durableFor = createDurableFor(
+      factory({ acme: { runStore: store, host: host as never } }),
+      'default',
+    );
+    const options = durableFor('acme');
+    expect(options?.store).toBe(store);
+    await options?.resume?.('run-1');
+    expect(resumed).toBe('run-1');
+  });
+
+  it('runtime.resume：返回 void 且调用后不阻塞', () => {
+    let resumed = '';
+    const runtime = {
+      resume: (runId: string) => {
+        resumed = runId;
+        return new Promise<string>(() => {});
+      },
+    };
+    const durableFor = createDurableFor(
+      factory({ acme: { runStore: store, runtime: runtime as never } }),
+      'default',
+    );
+    const options = durableFor('acme');
+    expect(options?.resume?.('run-2')).toBeUndefined();
+    expect(resumed).toBe('run-2');
+  });
+
+  it('无 host/runtime resume 时只提供列表 store', () => {
+    const durableFor = createDurableFor(
+      factory({ acme: { runStore: store, runtime: { resume: undefined } as never } }),
+      'default',
+    );
+    const options = durableFor('acme');
+    expect(options?.store).toBe(store);
+    expect(options?.resume).toBeUndefined();
+  });
+});

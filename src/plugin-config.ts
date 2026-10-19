@@ -90,6 +90,26 @@ export function declarativePluginEntries(config: VesselConfig): PluginConfig[] {
 }
 
 /**
+ * 构造 `plugin.name → config` 映射（core 0.6.1 的 `AgentRuntimeOptions.pluginConfigs`）。
+ * 声明式条目先合并，显式 `plugins[].config` 覆盖。
+ */
+export function buildPluginConfigMap(
+  configured: PluginConfig[] | undefined,
+  declarative: PluginConfig[] = [],
+): Record<string, Record<string, unknown>> {
+  const map: Record<string, Record<string, unknown>> = {};
+  for (const entry of declarative) {
+    if (entry.config === undefined) continue;
+    map[entry.name] = { ...(map[entry.name] ?? {}), ...entry.config };
+  }
+  for (const entry of configured ?? []) {
+    if (entry.config === undefined) continue;
+    map[entry.name] = { ...(map[entry.name] ?? {}), ...entry.config };
+  }
+  return map;
+}
+
+/**
  * 取某插件的安装配置：显式 `plugins[].config` 覆盖声明式条目；都没有返回 undefined。
  */
 export function pluginConfigFor(

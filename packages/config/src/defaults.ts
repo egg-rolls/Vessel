@@ -185,7 +185,8 @@ export const DEFAULT_CONFIG: VesselConfig = {
   context: {
     maxTokens: 4096,
     maxMessages: 100,
-    autoCompact: false,
+    // 0.6.1 P1：默认开启压缩；有 provider summarizer 时生成真实摘要。
+    autoCompact: true,
     compactThreshold: 0.8,
   },
 };

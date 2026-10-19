@@ -8,6 +8,7 @@
 import {
   buildConfigSnapshot,
   DEFAULT_CONFIG,
+  getUserConfigPath,
   loadConfig,
   type VesselConfig,
 } from '../packages/config/src/index';
@@ -55,7 +56,11 @@ import {
 import type { McpControl } from './mcp-wiring';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveWorkflowDefPathSync } from './path-resolution';
-import { addAutoApproveRule } from './permission-store';
+import {
+  addAutoApproveRule,
+  listAutoApproveRules,
+  removeAutoApproveRule,
+} from './permission-store';
 import { PluginLoader } from './plugin-loader';
 import {
   createHttpRpcClient,
@@ -71,6 +76,21 @@ import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-f
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { readPackageVersion } from './version';
 import { adaptWorkflowsControl } from './workflow-wiring';
+
+/**
+ * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。
+ * 合并 tui 后可改为 `import type { PermissionsControl } from '@vessel/tui'`。
+ */
+interface PermissionsControlLike {
+  list(): Promise<string[]>;
+  add(toolName: string): Promise<void>;
+  remove(toolName: string): Promise<void>;
+  path?(): string;
+}
+
+type ReplContextWithPermissions = ReplContext & {
+  permissions?: PermissionsControlLike;
+};
 
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
@@ -1025,6 +1045,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const localRpcClient = createLocalRpcClient({ dispatch: localDispatcher.dispatch });
 
+  // ── 权限控制面（0.6.1 E7；tui 的 `ReplContext.permissions`）────
+  // 用户 YAML 的 permission.auto_approve；TUI "always" 与 /permissions 共用。
+  const permissionConfigPath = options.userConfigPath ?? getUserConfigPath();
+  const permissionsControl = {
+    list: async (): Promise<string[]> => listAutoApproveRules({ configPath: permissionConfigPath }),
+    add: async (toolName: string): Promise<void> => {
+      addAutoApproveRule(toolName, { configPath: permissionConfigPath });
+    },
+    remove: async (toolName: string): Promise<void> => {
+      removeAutoApproveRule(toolName, { configPath: permissionConfigPath });
+    },
+    path: (): string => permissionConfigPath,
+  };
+
   // ── 权限 "always" 持久化（0.6.1 E7）────────────────
   // 只在真正交互的本地 REPL 生效：remote/connect 的授权属于远端 gateway，
   // serve/headless 的 allow 不是用户显式选择。
@@ -1055,10 +1089,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       if (tool === undefined || data.remember !== true) return;
 
       try {
-        addAutoApproveRule(
-          tool,
-          options.userConfigPath !== undefined ? { configPath: options.userConfigPath } : {},
-        );
+        addAutoApproveRule(tool, { configPath: permissionConfigPath });
       } catch (error) {
         console.warn(
           `⚠ Failed to persist permission rule for "${tool}": ${
@@ -1121,7 +1152,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── ReplContext ─────────────────────────────────
   // 工具/插件的唯一来源是同一个 PluginHost（插件在 install() 里注册）。
-  const ctx: ReplContext = {
+  const ctx: ReplContextWithPermissions = {
     runtime: activeRuntime,
     pluginHost: finalPluginHost,
     session,
@@ -1136,6 +1167,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     rpc: localRpcClient,
     tenant: { tenant_id: tenantId, data_dir: tenantPaths.root },
     config,
+    // 0.6.1：TUI "always" 与 /permissions 的用户 YAML 写回面。
+    permissions: permissionsControl,
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),
     ...(runs ? { runs } : {}),

@@ -44,6 +44,11 @@ describe('DEFAULT_CONFIG', () => {
     expect(DEFAULT_CONFIG.session?.maxHistory).toBeUndefined();
   });
 
+  it('0.6.1：context.autoCompact 默认开启', () => {
+    expect(DEFAULT_CONFIG.context?.autoCompact).toBe(true);
+    expect(DEFAULT_CONFIG.context?.compactThreshold).toBe(0.8);
+  });
+
   it('嵌套默认值不跨 loadConfig 调用共享（structuredClone）', async () => {
     const first = await loadConfig({
       configPath: missingPath(),

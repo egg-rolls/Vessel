@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { VesselConfig } from '../../packages/config/src/index';
 import { MemoryPluginHost, type Plugin, type PluginHost } from '../../packages/core/src/index';
 import {
+  buildPluginConfigMap,
   buildTeamMemberHost,
   declarativePluginEntries,
   installWithConfig,
@@ -71,6 +72,16 @@ describe('声明式 guardrails / hooks（0.6.1 P2）', () => {
       { name: 'redact-secrets', enabled: false },
       { name: 'hook-logging' },
     ]);
+  });
+
+  it('buildPluginConfigMap：显式配置覆盖声明式，未配置的插件不出现', () => {
+    expect(
+      buildPluginConfigMap(
+        [{ name: 'tool-policy', config: { allow: ['edit'] } }, { name: 'basic-tools' }],
+        [{ name: 'tool-policy', config: { allow: ['read'], deny: ['bash'] } }],
+      ),
+    ).toEqual({ 'tool-policy': { allow: ['edit'], deny: ['bash'] } });
+    expect(buildPluginConfigMap(undefined, [])).toEqual({});
   });
 
   it('显式 plugins[].config 覆盖声明式 config', () => {

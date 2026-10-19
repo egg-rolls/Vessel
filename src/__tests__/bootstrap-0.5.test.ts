@@ -564,6 +564,42 @@ describe('bootstrap 0.6.1 - 权限 always 持久化（E7）', () => {
     }
   });
 
+  it('ctx.permissions 提供 list/add/remove/path（TUI 冻结接口）', async () => {
+    const dataDir = tempDir();
+    const userConfigPath = tmpYaml('api_key: sk-test\n');
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      userConfigPath,
+      headless: false,
+      interactive: true,
+      registerAskUser: false,
+    });
+
+    const permissions = (
+      result.ctx as unknown as {
+        permissions?: {
+          list(): Promise<string[]>;
+          add(tool: string): Promise<void>;
+          remove(tool: string): Promise<void>;
+          path?(): string;
+        };
+      }
+    ).permissions;
+
+    try {
+      expect(permissions).toBeDefined();
+      expect(permissions?.path?.()).toBe(userConfigPath);
+      expect(await permissions?.list()).toEqual([]);
+      await permissions?.add('bash');
+      await permissions?.add('bash');
+      expect(await permissions?.list()).toEqual(['bash']);
+      await permissions?.remove('bash');
+      expect(await permissions?.list()).toEqual([]);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
   it('非交互模式不写回（headless 的 allow 不是用户选择）', async () => {
     const dataDir = tempDir();
     const userConfigPath = tmpYaml('api_key: sk-test\n');
