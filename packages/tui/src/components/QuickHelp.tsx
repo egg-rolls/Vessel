@@ -8,7 +8,7 @@
 
 import { Box, Text, useInput } from 'ink';
 import { theme } from '../theme.js';
-import { padToWidth } from '../utils/text-layout.js';
+import { lineKey, padToWidth } from '../utils/text-layout.js';
 import { viewWidth } from '../views/layout.js';
 import { PanelFrame } from './PanelFrame.js';
 
@@ -61,12 +61,6 @@ export function QuickHelp({ columns, rows, onClose }: QuickHelpProps) {
       pairLine(COMMANDS[index], HOTKEYS[index]),
     ),
   ].slice(0, maxRows);
-  let offset = 0;
-  const keyed = body.map((line) => {
-    const key = `${offset}`;
-    offset += line.length;
-    return { line, key };
-  });
 
   return (
     <PanelFrame
@@ -76,8 +70,12 @@ export function QuickHelp({ columns, rows, onClose }: QuickHelpProps) {
       variant="round"
     >
       <Box flexDirection="column">
-        {keyed.map(({ line, key }, index) => (
-          <Text key={key} color={index === 0 ? theme.brand : theme.muted} wrap="truncate-end">
+        {body.map((line, index) => (
+          <Text
+            key={lineKey(index)}
+            color={index === 0 ? theme.brand : theme.muted}
+            wrap="truncate-end"
+          >
             {line}
           </Text>
         ))}

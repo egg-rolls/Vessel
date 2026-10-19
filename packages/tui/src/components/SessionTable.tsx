@@ -8,7 +8,7 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
-import { Box, Text, useInput, useStdout } from 'ink';
+import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
 import { type ReactNode, useMemo, useState } from 'react';
 import { type LiveMode, viewExtraRows } from '../repl/layout.js';
 import { theme } from '../theme.js';
@@ -97,7 +97,10 @@ export function SessionTable({
   onRename,
 }: SessionTableProps) {
   const { stdout } = useStdout();
-  const terminalColumns = columns ?? stdout.columns ?? 80;
+  // useStdout 不订阅 resize：优先 useWindowSize（props.columns 仍可覆盖）。
+  const windowSize = useWindowSize();
+  const terminalColumns =
+    columns ?? (windowSize.columns > 0 ? windowSize.columns : (stdout.columns ?? 80));
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [mode, setMode] = useState<ViewMode>('browse');

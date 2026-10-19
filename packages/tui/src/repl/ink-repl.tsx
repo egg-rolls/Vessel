@@ -28,6 +28,7 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
+import { MarkdownText } from '../components/Markdown.js';
 import { QueuePreview } from '../components/QueuePreview.js';
 import { QuickHelp, shouldOpenQuickHelp } from '../components/QuickHelp.js';
 import { SessionTable } from '../components/SessionTable.js';
@@ -45,6 +46,7 @@ import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
+import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
@@ -398,17 +400,19 @@ function InkRepl({ ctx }: InkReplProps) {
             dispatch({ type: 'clearHistory' });
             dispatch({ type: 'bumpClearSignal' }); // 触发 StreamOutput 清空
           } else if (result.output) {
-            if (shouldPageOutput(result.output)) {
+            // 命令输出可能夹带控制序列：展示/归档前统一清洗。
+            const output = sanitizeTerminalText(result.output);
+            if (shouldPageOutput(output)) {
               const name = value.trim().replace(/^\//, '').split(/\s+/)[0] ?? '';
               const title = name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : 'Output';
               dispatch({
                 type: 'openTextViewer',
                 title,
-                lines: result.output.split('\n'),
+                lines: output.split('\n'),
               });
             } else {
               // 短输出照旧写入 scrollback
-              dispatch({ type: 'appendHistory', line: result.output });
+              dispatch({ type: 'appendHistory', line: output });
             }
           }
           if (result.history?.length) {
@@ -839,7 +843,8 @@ function InkRepl({ ctx }: InkReplProps) {
   const handleStreamComplete = useCallback(
     (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => {
       streamCancellationArchivedRef.current = reason === 'cancelled';
-      dispatch({ type: 'appendHistory', line: responseText });
+      // 流式阶段用 MarkdownText 渲染；归档后必须保持同一渲染方式，否则会回落成源码。
+      dispatch({ type: 'appendHistory', line: responseText, markdown: true });
     },
     [dispatch],
   );
@@ -847,7 +852,7 @@ function InkRepl({ ctx }: InkReplProps) {
   // Ctrl+O：StreamOutput 把完整输出刷入 Static scrollback
   const handleStreamFlush = useCallback(
     (text: string) => {
-      dispatch({ type: 'appendHistory', line: text });
+      dispatch({ type: 'appendHistory', line: text, markdown: true });
     },
     [dispatch],
   );
@@ -867,6 +872,8 @@ function InkRepl({ ctx }: InkReplProps) {
   // 用 useWindowSize 订阅 resize，保证矮终端分级能即时生效。
   const windowSize = useWindowSize();
   const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
+  // useStdout 不订阅 resize；列宽同样走 useWindowSize，保证弹窗/面板随窗口变化。
+  const terminalColumns = windowSize.columns > 0 ? windowSize.columns : (stdout.columns ?? 80);
   // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
   const exclusiveOverlayActive =
     ui.view !== null ||
@@ -932,7 +939,15 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 已完成历史交给 Ink <Static>：直接写入终端 scrollback，不再参与每帧重绘。
           key={clearSignal} 让 /clear 与 Ctrl+L 强制重挂载。 */}
       <Static key={ui.clearSignal} items={ui.history}>
-        {(line, i) => <Text key={`${i}-${ui.clearSignal}`}>{line}</Text>}
+        {(item, i) =>
+          item.markdown ? (
+            <Box key={`${i}-${ui.clearSignal}`} flexDirection="column">
+              <MarkdownText text={item.text} />
+            </Box>
+          ) : (
+            <Text key={`${i}-${ui.clearSignal}`}>{item.text}</Text>
+          )
+        }
       </Static>
 
       {/* 实时区域：只显示当前轮流式输出 / 子 agent 活动，限制高度防止覆盖底栏。
@@ -975,7 +990,7 @@ function InkRepl({ ctx }: InkReplProps) {
             mode={ui.view.mode}
             draft={ui.view.draft}
             pendingAction={ui.view.pendingAction}
-            columns={stdout.columns ?? 80}
+            columns={terminalColumns}
             maxRows={layout.viewMaxRows}
             heightMode={layout.mode}
             active={!ui.permissionOverlay && !ui.askUserActive}
@@ -1007,7 +1022,7 @@ function InkRepl({ ctx }: InkReplProps) {
             error={ui.resumeError}
             maxRows={layout.pickerMaxRows}
             heightMode={layout.mode}
-            columns={stdout.columns ?? 80}
+            columns={terminalColumns}
             onRetry={() => dispatch({ type: 'resumePickerRetry' })}
             onDelete={async (id) => {
               const result = await deleteSessionAction(ctx, id, {
@@ -1094,7 +1109,7 @@ function InkRepl({ ctx }: InkReplProps) {
         <QueuePreview
           queued={ui.queuedInput}
           editIndex={ui.queueEditIndex}
-          columns={stdout.columns ?? 80}
+          columns={terminalColumns}
           rows={terminalRows}
         />
       )}
@@ -1107,7 +1122,7 @@ function InkRepl({ ctx }: InkReplProps) {
         !ui.askUserActive && (
           <Box flexDirection="column" flexShrink={0}>
             <QuickHelp
-              columns={stdout.columns ?? 80}
+              columns={terminalColumns}
               rows={terminalRows}
               onClose={() => dispatch({ type: 'setQuickHelp', open: false })}
             />
@@ -1120,7 +1135,7 @@ function InkRepl({ ctx }: InkReplProps) {
           <TextViewer
             title={ui.textViewer.title}
             lines={ui.textViewer.lines}
-            columns={stdout.columns ?? 80}
+            columns={terminalColumns}
             rows={terminalRows}
             onClose={() => dispatch({ type: 'closeTextViewer' })}
           />

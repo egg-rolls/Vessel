@@ -60,3 +60,47 @@ describe('resume picker reducer', () => {
     expect(reset.resumeSessions).toEqual([]);
   });
 });
+
+describe('history archive', () => {
+  it('appendHistory 支持 markdown 标记，默认纯文本', () => {
+    let state = replUiReducer(initialReplUiState(ctx), { type: 'appendHistory', line: '# hi' });
+    state = replUiReducer(state, { type: 'appendHistory', line: '# hi', markdown: true });
+
+    expect(state.history).toEqual([{ text: '# hi' }, { text: '# hi', markdown: true }]);
+  });
+
+  it('appendHistoryLines 默认纯文本，可整体标记 markdown', () => {
+    let state = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendHistoryLines',
+      lines: ['a', 'b'],
+    });
+    state = replUiReducer(state, {
+      type: 'appendHistoryLines',
+      lines: ['**c**'],
+      markdown: true,
+    });
+
+    expect(state.history).toEqual([
+      { text: 'a' },
+      { text: 'b' },
+      { text: '**c**', markdown: true },
+    ]);
+  });
+
+  it('归档前清洗控制序列，空行也保留', () => {
+    const state = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendHistoryLines',
+      lines: ['a\x1b[31mb', '', 'c\r\nd'],
+    });
+
+    expect(state.history).toEqual([{ text: 'ab' }, { text: '' }, { text: 'c\nd' }]);
+  });
+
+  it('clearHistory 清空归档', () => {
+    const filled = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendHistory',
+      line: 'x',
+    });
+    expect(replUiReducer(filled, { type: 'clearHistory' }).history).toEqual([]);
+  });
+});

@@ -116,3 +116,12 @@ export function wrapToWidth(text: string, width: number): string[] {
 
   return lines;
 }
+
+/**
+ * 纯函数：列表行的 React key。
+ * 只依赖位置——文本内容可能为空或重复（例如 /history 的连续空行），
+ * 用内容/累计偏移做 key 会碰撞。
+ */
+export function lineKey(index: number): string {
+  return `line-${index}`;
+}
