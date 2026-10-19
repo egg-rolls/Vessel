@@ -122,19 +122,24 @@ it('mcp_servers 经 bootstrap 安装并在 /v1/mcp/servers 可见', async () => 
     ].join('\n'),
   );
 
+  const token = 'e2e-gateway-token';
   const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
     cwd: dir,
-    env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
+    env: {
+      ...process.env,
+      VESSEL_MOCK: '1',
+      VESSEL_GATEWAY_TOKEN: token,
+      USERPROFILE: dir,
+      HOME: dir,
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
   try {
-    const output = await waitForOutput(proc, /Token\s+(\S+)/);
+    const output = await waitForOutput(proc, /Gateway\s+http/);
     const gatewayUrl = /Gateway\s+(http[^\s]+)/.exec(output)?.[1];
-    const token = /Token\s+(\S+)/.exec(output)?.[1];
     expect(gatewayUrl).toBeDefined();
-    expect(token).toBeDefined();
 
     const health = (await (await fetch(`${gatewayUrl}/v1/health`)).json()) as {
       protocol?: { features?: string[] };
@@ -183,17 +188,23 @@ it('durable store/resume 注入 gateway：列表可见且 resume 返回 202', as
     ].join('\n'),
   );
 
+  const token = 'e2e-gateway-token';
   const proc = Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
     cwd: dir,
-    env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
+    env: {
+      ...process.env,
+      VESSEL_MOCK: '1',
+      VESSEL_GATEWAY_TOKEN: token,
+      USERPROFILE: dir,
+      HOME: dir,
+    },
     stdout: 'pipe',
     stderr: 'pipe',
   });
 
   try {
-    const output = await waitForOutput(proc, /Token\s+(\S+)/);
+    const output = await waitForOutput(proc, /Gateway\s+http/);
     const gatewayUrl = /Gateway\s+(http[^\s]+)/.exec(output)?.[1];
-    const token = /Token\s+(\S+)/.exec(output)?.[1];
 
     const health = (await (await fetch(`${gatewayUrl}/v1/health`)).json()) as {
       protocol?: { features?: string[] };

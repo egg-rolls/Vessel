@@ -58,23 +58,38 @@ describe('resolvePeersDir', () => {
 });
 
 describe('resolveGatewayToken', () => {
-  it('legacy > env > admin > tokens（与 gateway 鉴权一致）', () => {
+  it('serve.token > admin_token > env > transport.token；不含 serve.tokens', () => {
     expect(resolveGatewayToken({}, {})).toBeUndefined();
 
-    expect(resolveGatewayToken({ serve: { token: 'serve-token' } }, {})).toBe('serve-token');
-    expect(
-      resolveGatewayToken({ serve: { tokenEnv: 'SERVE_TOKEN' } }, { SERVE_TOKEN: 'env-serve' }),
-    ).toBe('env-serve');
     expect(
       resolveGatewayToken(
-        { transport: { token: 'config-token' } },
         {
-          VESSEL_GATEWAY_TOKEN: 'env-token',
+          serve: { token: 'serve-token', adminToken: 'admin-token' },
+          transport: { token: 'transport-token' },
         },
+        { VESSEL_GATEWAY_TOKEN: 'env-token' },
       ),
-    ).toBe('config-token');
-    expect(resolveGatewayToken({}, { VESSEL_GATEWAY_TOKEN: 'env-token' })).toBe('env-token');
-    expect(resolveGatewayToken({ serve: { adminToken: 'admin-token' } }, {})).toBe('admin-token');
+    ).toBe('serve-token');
+
+    expect(
+      resolveGatewayToken(
+        { serve: { adminToken: 'admin-token' }, transport: { token: 'transport-token' } },
+        { VESSEL_GATEWAY_TOKEN: 'env-token' },
+      ),
+    ).toBe('admin-token');
+
+    expect(
+      resolveGatewayToken(
+        { transport: { token: 'transport-token' } },
+        { VESSEL_GATEWAY_TOKEN: 'env-token' },
+      ),
+    ).toBe('env-token');
+
+    expect(resolveGatewayToken({ transport: { token: 'transport-token' } }, {})).toBe(
+      'transport-token',
+    );
+
+    // serve.tokens 是客户端凭据，绝不能当 gateway token。
     expect(
       resolveGatewayToken(
         {
@@ -87,7 +102,7 @@ describe('resolveGatewayToken', () => {
         },
         {},
       ),
-    ).toBe('write-token');
+    ).toBeUndefined();
   });
 });
 

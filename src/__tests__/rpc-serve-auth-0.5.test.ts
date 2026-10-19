@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { resolveLocalPrincipal } from '../../packages/serve/src/tenant';
 import type { WebSocketLike } from '../rpc/http-client';
 import type { RpcEventNotification, RpcRequest, RpcResponse } from '../rpc/index';
 import { createHttpRpcClient, createLocalRpcClient, RpcClientError } from '../rpc/index';
@@ -398,6 +399,44 @@ describe('serve-auth (0.5)', () => {
       expect(result.error).toContain('gateway_requires_token');
       expect(result.error).not.toContain('gateway-token-value');
     }
+  });
+
+  it('非回环 + 仅 serve.tokens → 拒绝启动（tenant token 只是客户端凭据）', () => {
+    const result = resolveGatewayAuth(
+      { serve: { tokens: { 'tenant-only-token': { tenantId: 'acme', role: 'write' } } } },
+      { hostname: '0.0.0.0', allowRemote: true, env: {} },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain('serve.token or serve.admin_token');
+      expect(result.error).not.toContain('tenant-only-token');
+    }
+  });
+
+  it('回环 + 仅 serve.tokens：客户端仍需 token；本地 principal 用第一个 token 的 role', () => {
+    const result = resolveGatewayAuth(
+      {
+        serve: {
+          tokens: {
+            'first-read-token': { tenantId: 'acme', role: 'read' },
+            'second-write-token': { tenantId: 'acme', role: 'write' },
+          },
+        },
+      },
+      { hostname: '127.0.0.1', allowRemote: false, env: {} },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // 无凭据的 HTTP 客户端仍被拒绝；匿名 principal 不被设置。
+    expect(result.auth.anonymous).toBeUndefined();
+    expect(result.auth.authenticate(null)).toBeNull();
+    // 本地 dispatcher 按第一个 token 的最小权限解析，而不是 admin。
+    expect(result.auth.legacyToken).toBe('first-read-token');
+    expect(resolveLocalPrincipal(result.auth, result.auth.legacyToken ?? '')).toEqual({
+      tenant_id: 'acme',
+      role: 'read',
+    });
   });
 
   it('safeTokenEqual 正确且长度无关', () => {
