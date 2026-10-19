@@ -285,7 +285,39 @@ function spawnBash(command: string, cwd: string | undefined) {
     cwd,
     stdout: 'pipe',
     stderr: 'pipe',
+    // POSIX 下建独立进程组，取消时能连同孙进程一起杀
+    detached: process.platform !== 'win32',
   });
+}
+
+/** 杀掉 bash 及其派生的孙进程（POSIX 用进程组；Windows 用 taskkill /T） */
+function killProcessTree(proc: ReturnType<typeof spawnBash>): void {
+  const pid = proc.pid;
+  if (typeof pid === 'number' && pid > 0) {
+    if (process.platform === 'win32') {
+      try {
+        Bun.spawnSync({
+          cmd: ['taskkill', '/PID', String(pid), '/T', '/F'],
+          stdout: 'ignore',
+          stderr: 'ignore',
+        });
+      } catch {
+        // taskkill 不可用：仍尝试直接 kill
+      }
+    } else {
+      try {
+        // detached 时 pid 即进程组 id
+        process.kill(-pid, 'SIGTERM');
+      } catch {
+        // 进程组已不存在
+      }
+    }
+  }
+  try {
+    proc.kill();
+  } catch {
+    // 已退出
+  }
 }
 
 /** 执行 bash 命令；超时/取消返回错误文本，不抛异常 */
@@ -322,7 +354,7 @@ async function runBash(args: unknown, ctx: ToolContext): Promise<string> {
   const onAbort = (): void => {
     if (cancelled) return;
     cancelled = true;
-    proc.kill();
+    killProcessTree(proc);
   };
   signal?.addEventListener('abort', onAbort, { once: true });
   // addEventListener 不会补发已发生的 abort
@@ -330,7 +362,7 @@ async function runBash(args: unknown, ctx: ToolContext): Promise<string> {
 
   const timer = setTimeout(() => {
     timedOut = true;
-    proc.kill();
+    killProcessTree(proc);
   }, timeoutMs);
 
   try {
