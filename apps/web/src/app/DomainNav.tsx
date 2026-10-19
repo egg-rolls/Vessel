@@ -45,6 +45,7 @@ export function DomainNav({ route, navigate }: { route: Route; navigate: (route:
               type="button"
               className={`nav-item ${active ? 'active' : ''}`.trim()}
               aria-current={active ? 'page' : undefined}
+              aria-label={domain.label}
               title={domain.label}
               onClick={() => navigate(primaryRoute(domain.id))}
             >
@@ -68,6 +69,7 @@ export function DomainNav({ route, navigate }: { route: Route; navigate: (route:
           type="button"
           className={`nav-item ${route.domain === 'settings' ? 'active' : ''}`.trim()}
           aria-current={route.domain === 'settings' ? 'page' : undefined}
+          aria-label={SETTINGS_DOMAIN.label}
           title={SETTINGS_DOMAIN.label}
           onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
         >

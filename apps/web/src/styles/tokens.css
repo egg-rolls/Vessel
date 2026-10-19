@@ -62,11 +62,12 @@
   --sessions-w: 280px;
   --content-max: 1200px;
 
+  /* 层级：nav < drawer/scrim < modal/palette < toast。drawer 内打开的确认框必须在抽屉之上。 */
   --z-nav: 30;
   --z-drawer: 60;
-  --z-modal: 50;
-  --z-toast: 70;
-  --z-palette: 50;
+  --z-modal: 70;
+  --z-toast: 80;
+  --z-palette: 70;
   --focus-ring: 0 0 0 2px var(--accent);
 }
 

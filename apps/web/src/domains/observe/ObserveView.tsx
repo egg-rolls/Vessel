@@ -59,8 +59,9 @@ export function ObserveView({
         tabs={TABS}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'observe', tab })}
+        panelId="observe-panel"
       />
-      <div className="domain-content">
+      <div className="domain-content" id="observe-panel" role="tabpanel" aria-label="可观测内容">
         {route.tab === 'metrics' && <MetricsPanel />}
         {route.tab === 'evals' && <EvalsPanel />}
       </div>
@@ -102,9 +103,9 @@ function MetricsPanel() {
   if (source === 'trace' && resource.state.status === 'error') {
     return (
       <NotEnabledState
-        title="Trace 指标重建不可用"
+        title="事件记录重建不可用"
         reason={resource.state.error}
-        hint="需要 gateway 注入 metrics.rebuild（trace）后重启。"
+        hint="需要 gateway 注入 metrics.rebuild（事件记录）后重启。"
         action={
           <button type="button" className="btn" onClick={() => setSource('live')}>
             切回 Live
@@ -145,7 +146,7 @@ function MetricsPanel() {
           label="指标来源"
           tabs={[
             { id: 'live', label: 'Live' },
-            { id: 'trace', label: 'Trace 重建' },
+            { id: 'trace', label: '事件记录重建' },
           ]}
           value={source}
           onChange={setSource}
@@ -220,7 +221,7 @@ function MetricsPanel() {
             </div>
           </div>
           <p className="section-desc">
-            当前来源：{data?.source === 'trace' ? 'Trace 重建' : 'Live'}
+            当前来源：{data?.source === 'trace' ? '事件记录重建' : 'Live'}
             。指标是进程内计数器，不是时间序列。重置需要 write/admin 权限。
           </p>
         </>
@@ -231,7 +232,7 @@ function MetricsPanel() {
           title="重置指标？"
           body={
             <>
-              <p>将清空当前 gateway 进程内的计数；不影响 trace 与运行记录。</p>
+              <p>将清空当前 gateway 进程内的计数；不影响事件记录与运行记录。</p>
               <p className="dim">该操作需要 write/admin 权限，非授权 token 会返回 forbidden。</p>
             </>
           }
@@ -278,6 +279,7 @@ function EvalsPanel() {
     enabled: available && requested > 0,
     deps: [epoch, suite, requested],
   });
+  useRefreshSignal(latest.reload);
   // suite 切换后旧响应仍可能留在 resource 里：只接受当前 suite 的报告。
   const latestData = resourceData(latest.state);
   const latestReport = latestData && latestData.suite === suite ? latestData : undefined;

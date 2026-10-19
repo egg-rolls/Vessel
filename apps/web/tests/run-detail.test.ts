@@ -9,6 +9,7 @@ import {
   mergeRunEvents,
   nextSinceSeq,
   type ToolCallGroup,
+  traceRunId,
 } from '../src/state/run-detail';
 
 function event(
@@ -160,6 +161,21 @@ describe('mergeRunEvents', () => {
     expect(nextSinceSeq([event('a', {}, { seq: 4 }), event('b', {}, { ts: 2 })])).toBe(4);
     expect(nextSinceSeq([event('a'), event('b')])).toBeUndefined();
     expect(nextSinceSeq([])).toBeUndefined();
+  });
+});
+
+describe('traceRunId', () => {
+  test('live detail reads trace by core_run_id, never the engine job id', () => {
+    expect(traceRunId('live', { run_id: 'job-1', core_run_id: 'core-1' }, 'job-1')).toBe('core-1');
+    // 排队中尚未映射到 core run：不能拿引擎 id 去猜。
+    expect(traceRunId('live', { run_id: 'job-1' }, 'job-1')).toBeUndefined();
+    expect(traceRunId('live', null, 'job-1')).toBeUndefined();
+  });
+
+  test('durable detail uses the checkpoint id (already a core run id)', () => {
+    expect(traceRunId('durable', { run_id: 'core-1' }, 'route-1')).toBe('core-1');
+    expect(traceRunId('durable', null, 'route-1', 'core-2')).toBe('core-2');
+    expect(traceRunId('durable', null, 'route-1')).toBe('route-1');
   });
 });
 

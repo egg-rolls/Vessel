@@ -11,11 +11,14 @@ export function SegmentedTabs<T extends string>({
   tabs,
   value,
   onChange,
+  panelId,
 }: {
   label: string;
   tabs: readonly TabOption<T>[];
   value: T;
   onChange: (value: T) => void;
+  /** 对应 tabpanel 的 id；提供时每个 tab 生成 id + aria-controls。 */
+  panelId?: string;
 }) {
   const refs = useRef(new Map<T, HTMLButtonElement>());
 
@@ -30,6 +33,8 @@ export function SegmentedTabs<T extends string>({
           }}
           type="button"
           role="tab"
+          id={panelId ? `${panelId}-tab-${tab.id}` : undefined}
+          aria-controls={panelId}
           aria-selected={tab.id === value}
           tabIndex={tab.id === value ? 0 : -1}
           className={`segment ${tab.id === value ? 'active' : ''}`.trim()}

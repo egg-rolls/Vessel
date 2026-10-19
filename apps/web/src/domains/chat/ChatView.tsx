@@ -8,6 +8,7 @@ import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type { SessionDetail, SessionInfo } from '../../gateway/types';
 import { groupEvents, isGroupPersisted } from '../../state/events';
+import type { PaletteItem } from '../../state/palette';
 import {
   filterSessions,
   removeSessionFromList,
@@ -88,6 +89,7 @@ export function ChatView({
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
   const [showInternal, setShowInternal] = useState(false);
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
+  const [renameSignal, setRenameSignal] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<SessionInfo | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -392,19 +394,44 @@ export function ChatView({
   }, [sessionsResource.reload, detailResource.reload]);
   useRefreshSignal(refreshAll);
 
-  // 命令面板实体：最近 20 个会话。
-  const paletteEntities = useMemo(
-    () =>
-      sessions.slice(0, 20).map((session) => ({
-        id: `session-${session.session_id}`,
-        group: 'entity' as const,
-        label: sessionTitle(session),
-        keywords: [session.session_id, session.preview ?? ''],
-        hint: '会话',
-        run: () => navigate({ domain: 'chat', sessionId: session.session_id }),
-      })),
-    [sessions, navigate],
-  );
+  // 命令面板：最近 20 个会话 + 当前会话的改名/删除动作。
+  const paletteEntities = useMemo(() => {
+    const items = sessions.slice(0, 20).map((session) => ({
+      id: `session-${session.session_id}`,
+      group: 'entity' as const,
+      label: sessionTitle(session),
+      keywords: [session.session_id, session.preview ?? ''],
+      hint: '会话',
+      run: () => navigate({ domain: 'chat', sessionId: session.session_id }),
+    }));
+    const selected = selectedId ? sessions.find((item) => item.session_id === selectedId) : undefined;
+    if (selected) {
+      const title = sessionTitle(selected);
+      items.push(
+        {
+          id: 'action-rename-session',
+          group: 'action',
+          label: `重命名会话“${title}”`,
+          keywords: ['rename', 'title', selected.session_id],
+          hint: '会话',
+          run: () => setRenameSignal((value) => value + 1),
+        },
+        {
+          id: 'action-delete-session',
+          group: 'action',
+          label: `删除会话“${title}”（需确认）`,
+          keywords: ['delete', 'remove', selected.session_id],
+          hint: '需确认',
+          // 回车后打开标准确认框（带消息数/关联 run 计数），不在面板内直接删除。
+          run: () => {
+            setDeleteError(null);
+            setDeleteTarget(selected);
+          },
+        },
+      );
+    }
+    return items;
+  }, [sessions, selectedId, navigate]);
   usePaletteEntities('chat', paletteEntities);
 
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);

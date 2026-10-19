@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { CopyButton } from '../../components/CopyButton';
 import { JsonView } from '../../components/JsonView';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
@@ -20,6 +21,7 @@ export function ConfigView() {
     enabled: available,
     deps: [epoch],
   });
+  useRefreshSignal(resource.reload);
   const data = resourceData(resource.state);
   const entries = useMemo(() => (data ? flattenConfig(data.config.config) : []), [data]);
   const filteredEntries = useMemo(() => filterConfigEntries(entries, query), [entries, query]);

@@ -191,6 +191,28 @@ export function nextSinceSeq(events: readonly RunEvent[]): number | undefined {
   return undefined;
 }
 
+export interface TraceRunLike {
+  run_id: string;
+  core_run_id?: string;
+}
+
+/**
+ * 选择事件记录（trace）使用的 run id。
+ *
+ * gateway 的 `runs.list` / `runs.get` 返回引擎 run id，而 trace 文件按 core run id
+ * 命名（`run.started.event.run_id`）。live 详情必须用 `core_run_id`，否则永远读不到事件；
+ * durable 的 checkpoint id 本身就是 core run id。
+ */
+export function traceRunId(
+  tab: 'live' | 'durable',
+  run: TraceRunLike | null | undefined,
+  fallbackId: string,
+  durableId?: string,
+): string | undefined {
+  if (tab === 'durable') return run?.run_id ?? durableId ?? fallbackId;
+  return run?.core_run_id;
+}
+
 export interface TraceErrorLike {
   code?: string;
   message: string;

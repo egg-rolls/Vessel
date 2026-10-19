@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useRefreshSignal } from '../../app/refresh';
 import { ErrorState, LoadingState, NotEnabledState, StaleNotice } from '../../components/States';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useConnection } from '../../gateway/ConnectionProvider';
@@ -24,6 +25,7 @@ export function CapabilitiesView() {
     deps: [epoch],
   });
 
+  useRefreshSignal(resource.reload);
   const manifest = resourceData(resource.state);
   const counts = useMemo(() => (manifest ? capabilityCounts(manifest) : null), [manifest]);
   const result = useMemo(

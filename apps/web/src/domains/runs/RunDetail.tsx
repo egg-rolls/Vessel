@@ -23,6 +23,7 @@ import {
   RUN_EVENT_FILTERS,
   type RunEventFilter,
   type ToolCallGroup,
+  traceRunId,
 } from '../../state/run-detail';
 import { isCancellableRun, isResumableRun } from '../../state/runs';
 import { EventRow } from '../chat/EventRow';
@@ -153,12 +154,12 @@ export function RunDetail({
   const [hasMore, setHasMore] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
   const previousActive = useRef(active);
+  const sectionRef = useRef<HTMLElement | null>(null);
   /** trace 请求代次：切换 run 后旧响应不得覆盖新 run。 */
   const traceGeneration = useRef(0);
 
   // 实时事件的 run_id 是 core run id；live 列表的 run_id 是 gateway 引擎 id。
-  const coreRunId =
-    tab === 'durable' ? (run?.run_id ?? durable?.run_id ?? runId) : (run?.core_run_id ?? undefined);
+  const coreRunId = traceRunId(tab, run, runId, durable?.run_id);
 
   const liveEvents = useMemo(() => {
     if (!coreRunId) return [];
@@ -216,6 +217,15 @@ export function RunDetail({
     previousActive.current = active;
   }, [active]);
 
+  // 选中 run 后把详情滚入视野（桌面为内联面板；移动端是整页）。
+  useEffect(() => {
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    sectionRef.current?.scrollIntoView({
+      block: 'start',
+      behavior: reduced ? 'auto' : 'smooth',
+    });
+  }, [runId]);
+
   const events = useMemo(() => mergeRunEvents(trace, liveEvents), [trace, liveEvents]);
   const filtered = useMemo(
     () => filterRunEvents(events, { filter, showInternal, typePrefix }),
@@ -260,7 +270,7 @@ export function RunDetail({
   const resumable = tab === 'durable' && status !== undefined && isResumableRun(status);
 
   return (
-    <section className="panel run-detail" aria-label="运行详情">
+    <section ref={sectionRef} className="panel run-detail" aria-label="运行详情">
       <div className="panel-header">
         <h2 className="section-title">运行详情</h2>
         <StatusChip status={status} />
@@ -345,10 +355,16 @@ export function RunDetail({
         <StaleNotice message="连接已断开；以下数据为最近一次读取的结果。" onRetry={loadFirstPage} />
       )}
 
-      <SegmentedTabs label="运行详情视图" tabs={DETAIL_TABS} value={view} onChange={setView} />
+      <SegmentedTabs
+        label="运行详情视图"
+        tabs={DETAIL_TABS}
+        value={view}
+        onChange={setView}
+        panelId="run-detail-panel"
+      />
 
       {view === 'timeline' && (
-        <div role="tabpanel" aria-label="事件时间线">
+        <div id="run-detail-panel" role="tabpanel" aria-label="事件时间线">
           <div className="filter-bar">
             <fieldset className="filter-chips">
               <legend className="sr-only">按事件类别过滤</legend>
@@ -391,9 +407,9 @@ export function RunDetail({
           {traceError && events.length === 0 ? (
             isTraceUnavailable(traceError) ? (
               <NotEnabledState
-                title="事件回放不可用（trace 未启用或无记录）。"
+                title="事件记录未启用或无记录。"
                 reason={traceError.message}
-                hint="run 摘要与输出仍可用；启用 trace 后重启 gateway 可查看完整时间线。"
+                hint="run 摘要与输出仍可用；在 gateway 配置中启用事件记录后重启即可查看完整时间线。"
               />
             ) : (
               <ErrorState message={traceError.message} onRetry={() => void loadFirstPage()} />
@@ -402,7 +418,7 @@ export function RunDetail({
             <>
               {traceError && (
                 <StaleNotice
-                  message={`trace 回放不可用；仅显示实时缓冲中的 ${liveEvents.length} 条事件。`}
+                  message={`事件记录不可用；仅显示实时缓冲中的 ${liveEvents.length} 条事件。`}
                   onRetry={() => void loadFirstPage()}
                 />
               )}
@@ -413,8 +429,8 @@ export function RunDetail({
                   title="没有事件记录。"
                   description={
                     tab === 'live' && !coreRunId
-                      ? '该运行尚未映射到 core run（可能仍在排队），暂时没有 trace。'
-                      : 'trace 中没有该 run 的事件；输出与 Raw JSON 仍可查看。'
+                      ? '该运行尚未映射到核心运行（可能仍在排队），暂时没有事件记录。'
+                      : '事件记录中没有该 run 的事件；输出与 Raw JSON 仍可查看。'
                   }
                 />
               ) : filtered.length === 0 ? (
@@ -455,7 +471,7 @@ export function RunDetail({
       )}
 
       {view === 'output' && (
-        <div role="tabpanel" aria-label="运行输出">
+        <div id="run-detail-panel" role="tabpanel" aria-label="运行输出">
           {run?.error && (
             <>
               <h3 className="section-title">错误</h3>
@@ -484,7 +500,7 @@ export function RunDetail({
       )}
 
       {view === 'raw' && (
-        <div role="tabpanel" aria-label="原始 JSON">
+        <div id="run-detail-panel" role="tabpanel" aria-label="原始 JSON">
           {raw ? (
             <>
               <div className="form-actions">

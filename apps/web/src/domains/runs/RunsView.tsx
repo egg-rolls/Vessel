@@ -337,6 +337,7 @@ export function RunsView({
         ]}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'runs', tab })}
+        panelId="runs-panel"
       />
 
       <div className="filter-bar">
@@ -377,7 +378,7 @@ export function RunsView({
         </button>
       </div>
 
-      <div className="domain-content">
+      <div className="domain-content" id="runs-panel" role="tabpanel" aria-label="运行内容">
         {!hasToken ? (
           <EmptyState
             title="连接 gateway 后显示运行。"
@@ -394,8 +395,8 @@ export function RunsView({
         ) : route.tab === 'durable' && !durableAvailable ? (
           <NotEnabledState
             title="可恢复运行未启用"
-            reason="此 gateway 没有 durable store / resume。"
-            hint="需要启用 durable.store 与 durable.resume 后重启 gateway。"
+            reason="此 gateway 没有启用持久运行恢复。"
+            hint="需要启用 checkpoint 存储与 resume 后重启 gateway。"
           />
         ) : (
           <>

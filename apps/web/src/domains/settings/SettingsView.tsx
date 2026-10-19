@@ -42,8 +42,9 @@ export function SettingsView({
         tabs={TABS}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'settings', tab })}
+        panelId="settings-panel"
       />
-      <div className="domain-content">
+      <div className="domain-content" id="settings-panel" role="tabpanel" aria-label="设置内容">
         {route.tab === 'connection' && <ConnectionForm />}
         {route.tab === 'nodes' && <NodesPanel />}
         {route.tab === 'config' && <ConfigView />}
