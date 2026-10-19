@@ -57,9 +57,11 @@ export function DomainNav({
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
+  const drawerA11y = drawer ? { role: 'dialog' as const, 'aria-modal': open } : {};
 
   return (
     <nav
+      {...drawerA11y}
       ref={navRef}
       id="domain-nav"
       className={`domain-nav ${open ? 'open' : ''}`.trim()}

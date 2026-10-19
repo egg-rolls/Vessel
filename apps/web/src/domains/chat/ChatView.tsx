@@ -643,9 +643,12 @@ export function ChatView({
     ? `→ ${selectedSession ? sessionTitle(selectedSession) : selectedId}`
     : '＋ 新会话';
 
+  const drawerA11y = compact ? { role: 'dialog' as const, 'aria-modal': sessionsOpen } : {};
+
   return (
     <div className="chat-workspace">
       <aside
+        {...drawerA11y}
         ref={drawerRef}
         id="chat-sessions"
         className={`chat-session-column ${sessionsOpen ? 'open' : ''}`.trim()}
