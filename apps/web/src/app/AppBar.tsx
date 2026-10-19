@@ -39,6 +39,7 @@ export function AppBar({
     <header className="appbar">
       {onToggleSessions && (
         <button
+          id="sessions-toggle"
           type="button"
           className="appbar-icon"
           aria-label="打开会话列表"

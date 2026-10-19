@@ -40,11 +40,11 @@ describe('run predicates', () => {
     }
   });
 
-  test('resumable covers interrupted, failed and pending', () => {
-    for (const status of ['interrupted', 'failed', 'pending']) {
-      expect(isResumableRun(status)).toBe(true);
-    }
-    for (const status of ['running', 'completed', 'cancelled']) {
+  test('resumable covers interrupted only (server resumes running/interrupted)', () => {
+    // gateway durable.isResumableStatus = running | interrupted；running 恢复会 conflict，
+    // 因此 UI 只对 interrupted 提供动作。
+    expect(isResumableRun('interrupted')).toBe(true);
+    for (const status of ['running', 'failed', 'pending', 'completed', 'cancelled']) {
       expect(isResumableRun(status)).toBe(false);
     }
   });

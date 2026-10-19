@@ -63,10 +63,11 @@ export function ChatView({
   sessionsOpen: boolean;
   onCloseSessions: () => void;
 }) {
-  const { client, hasToken, connectionState, epoch, retry } = useConnection();
+  const { client, hasToken, connectionState, epoch, retry, features } = useConnection();
   const toast = useToast();
   const snapshot = useEventSnapshot();
   const connected = connectionState === 'open' && hasToken;
+  const durableFeature = features.includes('durable-resume');
 
   const selectedId = route.sessionId && route.sessionId !== 'new' ? route.sessionId : null;
   const draftActive = route.sessionId === 'new';
@@ -90,6 +91,13 @@ export function ChatView({
   const [deleteTarget, setDeleteTarget] = useState<SessionInfo | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteCounts, setDeleteCounts] = useState<{
+    live: number;
+    durable: number;
+    active: number;
+    loading: boolean;
+    error: string | null;
+  } | null>(null);
   const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 1023px)').matches);
   const [nearBottom, setNearBottom] = useState(true);
   const [composerFocus, setComposerFocus] = useState(0);
@@ -113,10 +121,10 @@ export function ChatView({
     }
   }, [draftActive, draftId]);
 
-  // 会话列表：连接后加载，15s 轮询；本地副本支持乐观重命名。
+  // 会话列表：有 token 就加载（重连期间走 HTTP RPC），15s 轮询；本地副本支持乐观重命名。
   const sessionsResource = useResource({
     load: () => client.listSessions(),
-    enabled: connected,
+    enabled: hasToken,
     pollMs: 15_000,
     deps: [epoch],
   });
@@ -146,7 +154,7 @@ export function ChatView({
 
   const detailResource = useResource({
     load: loadDetail,
-    enabled: connected && Boolean(selectedId),
+    enabled: hasToken && Boolean(selectedId),
     deps: [selectedId, epoch],
   });
 
@@ -165,15 +173,24 @@ export function ChatView({
     return () => media.removeEventListener('change', sync);
   }, []);
 
-  // 抽屉：Esc 关闭；打开时把焦点移入。
+  // 抽屉：Esc 关闭；打开时把焦点移入，关闭后还给触发按钮。
+  const sessionsWasOpen = useRef(false);
   useEffect(() => {
-    if (!compact) return;
+    if (!compact) {
+      sessionsWasOpen.current = sessionsOpen;
+      return;
+    }
     if (sessionsOpen) {
       const first = drawerRef.current?.querySelector<HTMLElement>(
         'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
       );
       first?.focus();
+      sessionsWasOpen.current = true;
       return;
+    }
+    if (sessionsWasOpen.current) {
+      sessionsWasOpen.current = false;
+      document.getElementById('sessions-toggle')?.focus();
     }
   }, [compact, sessionsOpen]);
 
@@ -208,6 +225,45 @@ export function ChatView({
   }, [compact, sessionsOpen, onCloseSessions]);
 
   useEffect(() => () => window.clearTimeout(refreshTimer.current), []);
+
+  // 删除确认前统计关联数据：消息数、live/durable runs、活动 run（服务端会拒绝删除活动会话）。
+  useEffect(() => {
+    if (!deleteTarget) {
+      setDeleteCounts(null);
+      return;
+    }
+    let cancelled = false;
+    const sessionId = deleteTarget.session_id;
+    setDeleteCounts({ live: 0, durable: 0, active: 0, loading: true, error: null });
+    void (async () => {
+      let live = 0;
+      let active = 0;
+      let durable = 0;
+      let error: string | null = null;
+      try {
+        const runs = await client.listRuns({ session_id: sessionId });
+        live = runs.length;
+        active = runs.filter((run) => run.status === 'queued' || run.status === 'running').length;
+      } catch (caught) {
+        error = errorMessage(caught);
+      }
+      if (durableFeature) {
+        try {
+          const checkpoints = await client.listDurableRuns({ session_id: sessionId, limit: 200 });
+          durable = checkpoints.length;
+          active += checkpoints.filter(
+            (run) => run.status === 'running' || run.status === 'interrupted',
+          ).length;
+        } catch {
+          // durable 计数不可用不影响删除确认；服务端仍会做冲突检查。
+        }
+      }
+      if (!cancelled) setDeleteCounts({ live, durable, active, loading: false, error });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deleteTarget, client, durableFeature]);
 
   // 排队位置没有推送事件：只轮询未取消的排队卡片。
   useEffect(() => {
@@ -507,6 +563,10 @@ export function ChatView({
   };
 
   const handleRename = async (sessionId: string, title: string): Promise<boolean> => {
+    if (!connected) {
+      toast.error('连接断开，暂时无法重命名会话');
+      return false;
+    }
     const previous = sessions;
     setSessions((list) => renameSessionInList(list, sessionId, title));
     try {
@@ -522,6 +582,14 @@ export function ChatView({
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
+    if (!connected) {
+      setDeleteError('连接断开，暂时无法删除会话');
+      return;
+    }
+    if ((deleteCounts?.active ?? 0) > 0) {
+      setDeleteError('该会话仍有运行中或中断的 run，暂时无法删除。');
+      return;
+    }
     setDeleteBusy(true);
     setDeleteError(null);
     try {
@@ -585,6 +653,7 @@ export function ChatView({
           compact={compact}
           onCloseDrawer={onCloseSessions}
           onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
+          writesDisabled={!connected}
         />
       </aside>
 
@@ -621,6 +690,7 @@ export function ChatView({
             onViewRuns={() => navigate({ domain: 'runs', tab: 'live', sessionId: selectedId })}
             showInternal={showInternal}
             onToggleInternal={() => setShowInternal((value) => !value)}
+            writesDisabled={!connected}
           />
         ) : (
           <div className="conversation-head draft-head">
@@ -797,7 +867,23 @@ export function ChatView({
           body={
             <>
               <p>将同时删除该会话的持久历史、关联 runs 与事件，无法撤销。</p>
-              <p className="dim">存在运行中或中断的 run 时会被拒绝。</p>
+              <p className="dim">
+                该会话有 {deleteTarget.message_count} 条消息
+                {deleteCounts && !deleteCounts.loading
+                  ? `、${deleteCounts.live + deleteCounts.durable} 个关联运行记录`
+                  : deleteCounts?.loading
+                    ? '；正在统计关联运行…'
+                    : ''}
+                。
+              </p>
+              {deleteCounts && deleteCounts.active > 0 && (
+                <p className="err" role="alert">
+                  当前有 {deleteCounts.active} 个运行中/中断的 run，需先结束或恢复后再删除。
+                </p>
+              )}
+              {deleteCounts?.error && <p className="dim">关联运行统计失败：{deleteCounts.error}</p>}
+              <p className="dim">存在运行中或中断的 run 时服务端会拒绝删除。</p>
+              {!connected && <p className="err">连接已断开，写操作已禁用。</p>}
               {deleteError && (
                 <p className="err" role="alert">
                   {deleteError}
@@ -808,6 +894,9 @@ export function ChatView({
           confirmLabel="删除会话"
           danger
           busy={deleteBusy}
+          confirmDisabled={
+            !connected || Boolean(deleteCounts?.loading) || (deleteCounts?.active ?? 0) > 0
+          }
           onConfirm={() => void handleDelete()}
           onCancel={() => setDeleteTarget(null)}
           extra={

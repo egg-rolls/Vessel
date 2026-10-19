@@ -55,6 +55,8 @@ export interface ConnectionContextValue {
   /** tenant 变化递增；Chat 用它清空选择。 */
   tenantEpoch: number;
   stale: boolean;
+  /** 最近一次 WS close code（诊断用；重连开始时清空）。 */
+  closeCode: number | null;
   permissions: PermissionRequest[];
   asks: AskUserRequest[];
   now: number;
@@ -447,6 +449,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       epoch,
       tenantEpoch,
       stale: hello !== null && connectionState !== 'open',
+      closeCode: client.closedWithCode,
       permissions,
       asks,
       now,

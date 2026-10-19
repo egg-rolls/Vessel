@@ -21,6 +21,7 @@ export function SessionHeader({
   onViewRuns,
   showInternal,
   onToggleInternal,
+  writesDisabled,
 }: {
   session: SessionInfo | null;
   sessionId: string;
@@ -32,6 +33,8 @@ export function SessionHeader({
   onViewRuns: () => void;
   showInternal: boolean;
   onToggleInternal: () => void;
+  /** 断线时禁用重命名/删除。 */
+  writesDisabled: boolean;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -137,9 +140,15 @@ export function SessionHeader({
         <ActionMenu
           label="会话操作"
           items={[
-            { id: 'rename', label: '重命名', onSelect: start },
+            { id: 'rename', label: '重命名', disabled: writesDisabled, onSelect: start },
             { id: 'runs', label: '查看运行', onSelect: onViewRuns },
-            { id: 'delete', label: '删除会话', danger: true, onSelect: onDelete },
+            {
+              id: 'delete',
+              label: '删除会话',
+              danger: true,
+              disabled: writesDisabled,
+              onSelect: onDelete,
+            },
           ]}
         />
       </div>

@@ -436,9 +436,19 @@ export class GatewayClient {
     }
   }
 
+  /**
+   * 会话列表：canonical RPC 优先（HTTP + token，断线重连时仍可读），
+   * 旧 gateway 回退 WS legacy `sessions.list`。
+   */
   async listSessions(): Promise<SessionInfo[]> {
-    const body = await this.request<{ sessions?: SessionInfo[] }>('sessions.list');
-    return body.sessions ?? [];
+    try {
+      const body = await this.rpc<{ sessions?: SessionInfo[] }>('sessions.list');
+      return body.sessions ?? [];
+    } catch (error) {
+      if (!canFallbackToRest(error)) throw error;
+      const body = await this.request<{ sessions?: SessionInfo[] }>('sessions.list');
+      return body.sessions ?? [];
+    }
   }
 
   /** 删除会话及其持久历史、关联 runs 与事件；返回级联计数。 */
@@ -524,9 +534,16 @@ export class GatewayClient {
     return { ...session, messages: normalizeMessages(session.messages) };
   }
 
+  /** 工具目录：canonical RPC 优先，旧 gateway 回退 WS legacy `tools.list`。 */
   async listTools(): Promise<ToolInfo[]> {
-    const body = await this.request<{ tools?: ToolInfo[] }>('tools.list');
-    return body.tools ?? [];
+    try {
+      const body = await this.rpc<{ tools?: ToolInfo[] }>('tools.list');
+      return body.tools ?? [];
+    } catch (error) {
+      if (!canFallbackToRest(error)) throw error;
+      const body = await this.request<{ tools?: ToolInfo[] }>('tools.list');
+      return body.tools ?? [];
+    }
   }
 
   async respondPermission(

@@ -24,6 +24,7 @@ export function ConnectionForm() {
     hello,
     tenantId,
     epoch,
+    closeCode,
     connect,
     disconnect,
     retry,
@@ -158,6 +159,8 @@ export function ConnectionForm() {
         <dl className="diag-list">
           <dt>连接状态</dt>
           <dd>{STATE_LABELS[connectionState] ?? connectionState}</dd>
+          <dt>Gateway</dt>
+          <dd className="mono">{displayGatewayUrl(gatewayUrl, window.location.origin)}</dd>
           <dt>协议版本</dt>
           <dd className="mono">
             {hello ? `v${hello.protocol.version}` : '—'}
@@ -170,7 +173,21 @@ export function ConnectionForm() {
           <dt>最新 seq</dt>
           <dd className="mono">{hello ? hello.latest_seq : '—'}</dd>
           <dt>Feature 数</dt>
-          <dd className="mono">{hello?.protocol.features.length ?? '—'}</dd>
+          <dd className="mono">
+            {hello?.protocol.features.length ?? '—'}
+            {hello ? `（${hello.protocol.features.join(', ')}）` : ''}
+          </dd>
+          <dt>Close code</dt>
+          <dd className="mono">
+            {closeCode === null ? '—' : closeCode}
+            {closeCode === 4401
+              ? ' · token 无效'
+              : closeCode === 4403
+                ? ' · 无权访问该租户'
+                : closeCode === 4400
+                  ? ' · 协议不兼容'
+                  : ''}
+          </dd>
         </dl>
         {!hello && (
           <p className="section-desc">

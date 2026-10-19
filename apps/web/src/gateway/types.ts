@@ -11,6 +11,11 @@ export interface RunEvent {
   run_id: string;
   data: Record<string, unknown>;
   ts: number;
+  /**
+   * trace 落盘时分配的 per-run 序号（`events.list` 会返回）。
+   * 实时 WS 事件通常没有该字段；分页时只能依赖 trace 事件。
+   */
+  seq?: number;
 }
 
 /** LLM 流式 chunk（对应 core 的 StreamChunk） */
@@ -118,18 +123,25 @@ export interface AskUserRequest {
   expiresAt: number;
 }
 
-/** 运行状态（/v1/runs/:id、run.get） */
+/** 运行状态（/v1/runs/:id、run.get；durable checkpoint 是其中的超集） */
 export interface RunStatus {
   run_id: string;
+  /** gateway 引擎 id → core run id；trace 事件使用 core run id。 */
   core_run_id?: string;
   session_id: string;
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
   output?: string;
   error?: string;
   usage?: Usage;
   started_at?: number;
   completed_at?: number;
   queue_position?: number;
+  /** durable checkpoint 字段（runs.get 对 durable run 返回）。 */
+  agent_id?: string;
+  iteration?: number;
+  updated_at?: number;
+  preview?: string;
+  messages?: Message[];
 }
 
 /** durable run 摘要（GET /v1/durable/runs） */

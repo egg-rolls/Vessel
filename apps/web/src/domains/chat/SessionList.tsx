@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActionMenu } from '../../components/ActionMenu';
-import { EmptyState, ErrorState, LoadingState } from '../../components/States';
+import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
@@ -43,6 +43,7 @@ export function SessionList({
   compact,
   onCloseDrawer,
   onOpenConnection,
+  writesDisabled,
 }: {
   sessions: readonly SessionInfo[];
   filteredCount: number;
@@ -67,6 +68,8 @@ export function SessionList({
   compact: boolean;
   onCloseDrawer: () => void;
   onOpenConnection: () => void;
+  /** 断线时禁用重命名/删除，保留只读动作。 */
+  writesDisabled: boolean;
 }) {
   const toast = useToast();
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -171,7 +174,10 @@ export function SessionList({
       </div>
 
       <div className="session-scroll">
-        {error ? (
+        {error && sessions.length > 0 && (
+          <StaleNotice message={`更新失败，显示旧数据：${error}`} onRetry={onRetry} />
+        )}
+        {error && sessions.length === 0 ? (
           <ErrorState message={error} onRetry={onRetry} />
         ) : !hasToken ? (
           <EmptyState
@@ -287,6 +293,7 @@ export function SessionList({
                           {
                             id: 'rename',
                             label: '重命名',
+                            disabled: writesDisabled,
                             onSelect: () => startRename(session),
                           },
                           {
@@ -303,6 +310,7 @@ export function SessionList({
                             id: 'delete',
                             label: '删除会话',
                             danger: true,
+                            disabled: writesDisabled,
                             onSelect: () => onDelete(session),
                           },
                         ]}

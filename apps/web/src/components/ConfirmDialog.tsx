@@ -9,6 +9,7 @@ export function ConfirmDialog({
   cancelLabel = '取消',
   danger = false,
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onCancel,
   extra,
@@ -19,6 +20,8 @@ export function ConfirmDialog({
   cancelLabel?: string;
   danger?: boolean;
   busy?: boolean;
+  /** 前置条件不满足（例如仍有活动 run）时禁用主按钮。 */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   extra?: ReactNode;
@@ -45,7 +48,7 @@ export function ConfirmDialog({
           type="button"
           className={danger ? 'btn btn-danger' : 'btn btn-primary'}
           onClick={onConfirm}
-          disabled={busy}
+          disabled={busy || confirmDisabled}
         >
           {busy ? '处理中…' : confirmLabel}
         </button>

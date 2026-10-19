@@ -16,9 +16,12 @@ export function isCancellableRun(status: string): boolean {
   return status === 'queued' || status === 'running';
 }
 
-/** durable run 的「恢复运行」条件（后端还会做最终校验）。 */
+/**
+ * durable run 的「恢复运行」条件（后端 `isResumableStatus` = running | interrupted；
+ * running 恢复会返回 conflict，所以 UI 只对 interrupted 提供动作）。
+ */
 export function isResumableRun(status: string): boolean {
-  return status === 'interrupted' || status === 'failed' || status === 'pending';
+  return status === 'interrupted';
 }
 
 export function sortLiveRuns(runs: readonly RunStatus[]): RunStatus[] {

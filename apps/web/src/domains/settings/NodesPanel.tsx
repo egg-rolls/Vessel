@@ -16,7 +16,7 @@ export function NodesPanel() {
 
   const health = useResource({
     load: () => client.getHealth(),
-    enabled: connected,
+    enabled: hasToken,
     pollMs: 15_000,
     deps: [epoch],
   });
@@ -25,18 +25,18 @@ export function NodesPanel() {
 
   const peers = useResource({
     load: () => client.listTeamPeers(),
-    enabled: connected && teamEnabled,
+    enabled: hasToken && teamEnabled,
     pollMs: 15_000,
     deps: [epoch],
   });
   const agents = useResource({
     load: () => client.listTeamAgents(),
-    enabled: connected && teamEnabled,
+    enabled: hasToken && teamEnabled,
     pollMs: 15_000,
     deps: [epoch],
   });
 
-  if (!connected) {
+  if (!hasToken) {
     return <NotEnabledState title="未连接 gateway" reason="连接后才能查看节点。" />;
   }
   if (health.state.status === 'idle' || (health.state.status === 'loading' && !healthData)) {
@@ -78,6 +78,9 @@ export function NodesPanel() {
 
   return (
     <div className="settings-section">
+      {!connected && (
+        <StaleNotice message="连接已断开；显示最近一次读取的节点信息。" onRetry={health.reload} />
+      )}
       <section className="panel">
         <h2 className="section-title">当前节点</h2>
         <dl className="diag-list">
@@ -109,7 +112,18 @@ export function NodesPanel() {
           <dt>Team transport</dt>
           <dd className="mono">{healthData.team.transport ?? '—'}</dd>
           <dt>当前 run</dt>
-          <dd className="mono">{healthData.node.current_run_id ?? '—'}</dd>
+          <dd className="mono">
+            {healthData.node.current_run_id ? (
+              <a
+                className="link-btn mono"
+                href={`#/runs?tab=live&run=${encodeURIComponent(healthData.node.current_run_id)}`}
+              >
+                {healthData.node.current_run_id}
+              </a>
+            ) : (
+              '—'
+            )}
+          </dd>
           <dt>Peers / Agents</dt>
           <dd className="mono">
             {peersData?.peers.length ?? '…'} / {agentsData?.agents.length ?? '…'}
