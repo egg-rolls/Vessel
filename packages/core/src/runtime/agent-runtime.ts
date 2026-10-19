@@ -531,6 +531,10 @@ export class AgentRuntime {
         throw new Error('Usage limits exceeded');
       }
 
+      // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
+      // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
+      await this.context.autoCompactAsync?.();
+
       // 执行 BeforeLlm 钩子（hook 可往 ctx.systemPrompt 注入内容：skills / memory）
       // 用 this.systemPrompt 作基底，hook 链 prepend 注入
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };

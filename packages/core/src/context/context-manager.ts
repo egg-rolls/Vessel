@@ -9,11 +9,23 @@
 import type { ContextConfig, ContextManager } from '../types/context.js';
 import type { Message } from '../types/provider.js';
 
+/** 无 summarizer 时的占位摘要（保持 0.4/0.5 的可见行为） */
+function placeholderSummary(removed: number): string {
+  return `[Auto Compact: ${removed} older messages summarized. Continuing...]`;
+}
+
+interface CompactionPlan {
+  /** 将被摘要替代的消息（对象引用，用于并发安全地移除） */
+  toSummarize: Message[];
+}
+
 export class MemoryContextManager implements ContextManager {
   private sessionMessages: Map<string, Message[]> = new Map();
   private currentSessionId = 'default';
   private config: ContextConfig;
   private realTokens = 0;
+  /** 异步压缩去重：同一时刻只跑一次 summarizer */
+  private compaction?: Promise<number>;
 
   constructor(config: ContextConfig = {}) {
     this.config = {
@@ -22,6 +34,7 @@ export class MemoryContextManager implements ContextManager {
       autoCompact: config.autoCompact ?? true,
       compactThreshold: config.compactThreshold ?? 0.8,
       onCompact: config.onCompact,
+      summarizer: config.summarizer,
     };
     this.sessionMessages.set(this.currentSessionId, []);
   }
@@ -43,7 +56,10 @@ export class MemoryContextManager implements ContextManager {
     msgs.push(msg);
     this.sessionMessages.set(this.currentSessionId, msgs);
 
-    if (this.config.autoCompact && this.shouldCompact()) {
+    // 配置真实 summarizer 时不在 add() 里同步压缩（不能 await）：
+    // 由 runtime 在请求组装前调用 autoCompactAsync() 产生真实摘要。
+    // 未配置时保持同步占位符压缩，向后兼容。
+    if (this.config.autoCompact && this.shouldCompact() && !this.config.summarizer) {
       this.compact();
     }
 
@@ -85,31 +101,57 @@ export class MemoryContextManager implements ContextManager {
    * @returns 本次移除的消息数（0 = 未压缩）
    */
   compact(): number {
-    const msgs = this.sessionMessages.get(this.currentSessionId) || [];
-    if (msgs.length <= 2) return 0;
+    const plan = this.planCompaction();
+    if (!plan) return 0;
 
-    const systemMsgs = msgs.filter((m) => m.role === 'system');
-    const nonSystem = msgs.filter((m) => m.role !== 'system');
-
-    const keep = Math.max(2, Math.floor(nonSystem.length * 0.3));
-    if (nonSystem.length <= keep) return 0;
-
-    const removed = nonSystem.length - keep;
-    const summary: Message = {
-      role: 'assistant',
-      content: `[Auto Compact: ${removed} older messages summarized. Continuing...]`,
-    };
-
-    this.sessionMessages.set(this.currentSessionId, [
-      ...systemMsgs,
-      summary,
-      ...nonSystem.slice(-keep),
-    ]);
-
-    this.config.onCompact?.(removed, this.messages.length);
-
+    this.applyCompaction(plan, placeholderSummary(plan.toSummarize.length));
     this.realTokens = 0;
-    return removed;
+    return plan.toSummarize.length;
+  }
+
+  /**
+   * 0.6.1 E3：异步压缩。有 summarizer 时等待真实摘要；失败或空结果回退占位符。
+   * 并发调用共享同一次压缩，避免重复摘要。
+   */
+  async compactAsync(): Promise<number> {
+    if (this.compaction) return this.compaction;
+
+    const plan = this.planCompaction();
+    if (!plan) return 0;
+
+    const removed = plan.toSummarize.length;
+    const task = (async () => {
+      let summary = '';
+      if (this.config.summarizer) {
+        try {
+          summary = await this.config.summarizer(plan.toSummarize, {
+            maxTokens: this.config.maxTokens ?? 4096,
+          });
+        } catch {
+          // 摘要失败不应中断 run：退回占位符。
+          summary = '';
+        }
+      }
+      const text = summary.trim() ? summary : placeholderSummary(removed);
+      this.applyCompaction(plan, text);
+      this.realTokens = 0;
+      return removed;
+    })();
+
+    this.compaction = task;
+    try {
+      return await task;
+    } finally {
+      if (this.compaction === task) this.compaction = undefined;
+    }
+  }
+
+  /**
+   * 0.6.1 E3：按阈值自动压缩。`autoCompact: false` 或未超阈值时返回 0。
+   */
+  async autoCompactAsync(): Promise<number> {
+    if (!this.config.autoCompact || !this.shouldCompact()) return 0;
+    return this.compactAsync();
   }
 
   clear(): void {
@@ -131,6 +173,36 @@ export class MemoryContextManager implements ContextManager {
 
   hasSession(sessionId: string): boolean {
     return this.sessionMessages.has(sessionId);
+  }
+
+  /** 计算本次压缩范围：保留 system + 最近 ~30% 非 system 消息 */
+  private planCompaction(): CompactionPlan | null {
+    const msgs = this.sessionMessages.get(this.currentSessionId) || [];
+    if (msgs.length <= 2) return null;
+
+    const nonSystem = msgs.filter((m) => m.role !== 'system');
+    const keepCount = Math.max(2, Math.floor(nonSystem.length * 0.3));
+    if (nonSystem.length <= keepCount) return null;
+
+    return {
+      toSummarize: nonSystem.slice(0, nonSystem.length - keepCount),
+    };
+  }
+
+  /**
+   * 应用压缩结果。按对象引用移除摘要范围内消息，因此 summarizer await 期间
+   * 新加入的消息不会被丢弃；system 消息始终保留。
+   */
+  private applyCompaction(plan: CompactionPlan, summaryText: string): void {
+    const summary: Message = { role: 'assistant', content: summaryText };
+    const current = this.sessionMessages.get(this.currentSessionId) ?? [];
+    const removed = new Set(plan.toSummarize);
+    const remaining = current.filter((m) => !removed.has(m));
+    const systemMsgs = remaining.filter((m) => m.role === 'system');
+    const others = remaining.filter((m) => m.role !== 'system');
+
+    this.sessionMessages.set(this.currentSessionId, [...systemMsgs, summary, ...others]);
+    this.config.onCompact?.(plan.toSummarize.length, this.messages.length);
   }
 
   private shouldCompact(): boolean {

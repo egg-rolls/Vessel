@@ -5,12 +5,37 @@
 
 import type { Message } from './provider.js';
 
+/** 摘要器选项（0.6.1 E3） */
+export interface ContextSummaryOptions {
+  /** 摘要目标 token 预算（取 ContextConfig.maxTokens） */
+  maxTokens: number;
+}
+
+/**
+ * 真实上下文摘要器（0.6.1 E3）。
+ * 输入被移除的消息，返回一段可替代它们的摘要文本。
+ */
+export type ContextSummarizer = (
+  messages: Message[],
+  options: ContextSummaryOptions,
+) => Promise<string>;
+
 /** 上下文管理器接口 */
 export interface ContextManager {
   add(msg: Message): void;
   readonly messages: Message[];
-  /** @returns 本次移除的消息数（0 = 未压缩） */
+  /** @returns 本次移除的消息数（0 = 未压缩）；同步实现，无 summarizer 时用占位符 */
   compact(): number;
+  /**
+   * 0.6.1 E3：异步压缩。配置 summarizer 时产生真实摘要，
+   * 否则回退到同步 compact() 的占位符。实现可选，旧 ContextManager 不受影响。
+   */
+  compactAsync?(): Promise<number>;
+  /**
+   * 0.6.1 E3：按 `autoCompact` / `compactThreshold` 决定是否压缩。
+   * 返回本次移除的消息数（0 = 未触发）。
+   */
+  autoCompactAsync?(): Promise<number>;
   clear(): void;
   readonly tokenCount: number;
   setSessionId(sessionId: string): void;
@@ -27,4 +52,9 @@ export interface ContextConfig {
   compactThreshold?: number;
   /** 压缩完成回调（removedCount, remainingCount），供 TUI 显示提示 */
   onCompact?: (removed: number, remaining: number) => void;
+  /**
+   * 0.6.1 E3：真实摘要器。缺省时保留占位符摘要（向后兼容）。
+   * 配置后由 `compactAsync()` / `autoCompactAsync()` 消费；`compact()` 保持同步占位符。
+   */
+  summarizer?: ContextSummarizer;
 }
