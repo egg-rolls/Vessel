@@ -44,5 +44,5 @@ tags: [rpc, api, manifest]
 
 - **新增 canonical 方法 `sessions.search`（additive）**：permission `read`；参数 `{ query, limit? }`（`query` 1..256 字符，`limit` 1..100、缺省 20）；结果 `{ sessions: [{ session_id, title, preview, snippet, updated_at, message_count }] }`。匹配顺序 title / preview / session_id → 消息 content；按 `updated_at` 倒序。它加入 v1.1 方法表与 capability manifest，不改变既有方法、信封、错误码或 legacy-only 列表。
 - 前端（Web）在输入防抖后调用该方法；本地 title / preview / id 过滤保留为降级路径。
-- 实现合入后，`docs/ARCHITECTURE.md` 的 `rpc-methods` 标记表与 `scripts/check-rpc-methods.ts` 的 `EXPECTED_METHODS` 必须同批更新；合入前方法表中不出现该方法。
+- `docs/ARCHITECTURE.md` 的 `rpc-methods` 标记表与 `scripts/check-rpc-methods.ts` 的 `EXPECTED_METHODS` 同批更新；`check-rpc-methods` 以 manifest 为准校验该条目。
 - 本 addendum 仅追加，不修改上文冻结的方法表语义。

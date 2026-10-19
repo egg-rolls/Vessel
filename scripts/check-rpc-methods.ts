@@ -29,6 +29,7 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'config.sources': 'read',
   'sessions.list': 'read',
   'sessions.get': 'read',
+  'sessions.search': 'read',
   'sessions.delete': 'write',
   'sessions.rename': 'write',
   'runs.list': 'read',
