@@ -1,6 +1,15 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
   MemoryEventStream,
@@ -8,7 +17,11 @@ import {
   type ToolContext,
   type ToolDefinition,
 } from '@vessel/core';
-import basicToolsPlugin, { createBasicTools } from '../src/index';
+import basicToolsPlugin, {
+  type BasicToolsConfig,
+  createBasicTools,
+  parseBasicToolsConfig,
+} from '../src/index';
 
 /** 临时工作目录：测试文件读写都在这里，不碰仓库 */
 const workDir = mkdtempSync(path.join(tmpdir(), 'vessel-basic-tools-'));
@@ -39,6 +52,32 @@ function writeTemp(name: string, content: string): string {
   const filePath = path.join(workDir, name);
   writeFileSync(filePath, content, 'utf-8');
   return filePath;
+}
+
+/** 按插件配置构造工具（与 install 同一条路径） */
+function configuredTool(name: string, config: BasicToolsConfig): ToolDefinition {
+  const tool = createBasicTools(config).find((item) => item.name === name);
+  if (!tool) throw new Error(`tool not created: ${name}`);
+  return tool;
+}
+
+/** 自动应答权限请求为 allow 的上下文（bash 的 requestPermission 需要应答） */
+function makeAllowContext(): ToolContext {
+  const events = new MemoryEventStream();
+  const context: ToolContext = { run_id: 'perm-run', messages: [], events };
+  events.subscribe((event) => {
+    if (event.type !== 'tool.permission.request') return;
+    const data = event.data;
+    if (typeof data === 'object' && data !== null) {
+      events.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: { requestId: (data as Record<string, unknown>).requestId, decision: 'allow' },
+        ts: Date.now(),
+      });
+    }
+  });
+  return context;
 }
 
 describe('basic-tools 插件（注册）', () => {
@@ -451,5 +490,137 @@ describe('edit', () => {
         makeContext(),
       ),
     ).toContain('old_string 不能为空');
+  });
+});
+
+describe('路径边界（E1）', () => {
+  /** 内置 denylist 里的代表路径（不要求文件真实存在） */
+  const sensitivePaths = [
+    path.join(homedir(), '.ssh', 'id_rsa'),
+    path.join(homedir(), '.aws', 'credentials'),
+    path.join(homedir(), '.gnupg', 'secring.gpg'),
+    path.join(homedir(), '.vessel', 'config.yaml'),
+  ];
+
+  it('配置解析兼容 snake_case / camelCase，未知键忽略', () => {
+    expect(
+      parseBasicToolsConfig({ allowed_roots: ['/a'], deny_paths: ['~/.custom'], unknown: 1 }),
+    ).toEqual({ allowedRoots: ['/a'], denyPaths: ['~/.custom'] });
+    expect(parseBasicToolsConfig({ allowedRoots: ['/b'], denyPaths: ['/c'] })).toEqual({
+      allowedRoots: ['/b'],
+      denyPaths: ['/c'],
+    });
+    expect(parseBasicToolsConfig(null)).toEqual({});
+    expect(parseBasicToolsConfig({ allowed_roots: ['/a', 42, ''], deny_paths: 'nope' })).toEqual({
+      allowedRoots: ['/a'],
+    });
+  });
+
+  it('install 把 plugins[].config 透传给工具', async () => {
+    const allowed = path.join(workDir, 'install-root');
+    mkdirSync(allowed, { recursive: true });
+    const host = new MemoryPluginHost();
+    await basicToolsPlugin.install(host, { config: { allowed_roots: [allowed] } });
+    const read = host.getTool('read');
+    expect(await read?.checkPermission?.({ path: workDir }, makeContext())).toBe('ask');
+    expect(await read?.checkPermission?.({ path: allowed }, makeContext())).toBe('allow');
+  });
+
+  it('内置敏感路径的 checkPermission 返回 deny', async () => {
+    for (const target of sensitivePaths) {
+      expect(await toolOf('read').checkPermission?.({ path: target }, makeContext())).toBe('deny');
+    }
+  });
+
+  it('read handler 防御性拒绝敏感路径（绕过 checkPermission 也不读）', async () => {
+    const result = await toolOf('read').handler({ path: sensitivePaths[0] }, makeContext());
+    expect(result).toContain('敏感路径拒绝列表');
+    expect(result).not.toContain('\t');
+  });
+
+  it('allowed_roots 内 allow、根外 ask', async () => {
+    const allowed = path.join(workDir, 'boundary-allowed');
+    mkdirSync(allowed, { recursive: true });
+    const inside = path.join(allowed, 'inside.txt');
+    writeFileSync(inside, 'inside\n', 'utf-8');
+    const outside = writeTemp('boundary-outside.txt', 'outside\n');
+    const tool = configuredTool('read', { allowedRoots: [allowed] });
+
+    expect(await tool.checkPermission?.({ path: inside }, makeContext())).toBe('allow');
+    expect(await tool.checkPermission?.({ path: outside }, makeContext())).toBe('ask');
+    expect(await tool.handler({ path: inside }, makeContext())).toBe('1\tinside');
+  });
+
+  it('`..` 不能逃出 allowed_roots', async () => {
+    const root = path.join(workDir, 'dotdot-root');
+    const nested = path.join(root, 'nested');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(path.join(root, 'secret.txt'), 'secret\n', 'utf-8');
+    const tool = configuredTool('read', { allowedRoots: [nested] });
+    const escaped = path.join(nested, '..', 'secret.txt');
+
+    expect(await tool.checkPermission?.({ path: escaped }, makeContext())).toBe('ask');
+  });
+
+  it('符号链接指向根外时不被 allowed_roots 蒙混', async () => {
+    const outside = path.join(workDir, 'symlink-outside');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(path.join(outside, 'secret.txt'), 'secret\n', 'utf-8');
+    const allowed = path.join(workDir, 'symlink-allowed');
+    mkdirSync(allowed, { recursive: true });
+    const link = path.join(allowed, 'escape');
+    // Windows 目录符号链接需要特权，用 junction 表达同一语义
+    symlinkSync(outside, link, process.platform === 'win32' ? 'junction' : 'dir');
+
+    const tool = configuredTool('read', { allowedRoots: [allowed] });
+    expect(
+      await tool.checkPermission?.({ path: path.join(link, 'secret.txt') }, makeContext()),
+    ).toBe('ask');
+  });
+
+  it('自定义 deny_paths 与内置 denylist 合并，且 deny 优先于 allow', async () => {
+    const secretDir = path.join(workDir, 'custom-secret');
+    mkdirSync(secretDir, { recursive: true });
+    const file = path.join(secretDir, 'token.txt');
+    writeFileSync(file, 'token\n', 'utf-8');
+    const tool = configuredTool('read', {
+      allowedRoots: [workDir],
+      denyPaths: [secretDir],
+    });
+
+    expect(await tool.checkPermission?.({ path: file }, makeContext())).toBe('deny');
+    expect(await tool.checkPermission?.({ path: sensitivePaths[1] }, makeContext())).toBe('deny');
+    expect(await tool.handler({ path: file }, makeContext())).toContain('敏感路径拒绝列表');
+  });
+
+  it('bash cwd 越界 ask、根内 allow', async () => {
+    const allowed = path.join(workDir, 'bash-root');
+    mkdirSync(allowed, { recursive: true });
+    const outside = path.join(workDir, 'bash-outside');
+    mkdirSync(outside, { recursive: true });
+    const tool = configuredTool('bash', { allowedRoots: [allowed] });
+
+    expect(await tool.checkPermission?.({ command: 'pwd', cwd: outside }, makeContext())).toBe(
+      'ask',
+    );
+    expect(await tool.checkPermission?.({ command: 'pwd', cwd: allowed }, makeAllowContext())).toBe(
+      'allow',
+    );
+  });
+
+  it('bash cwd 命中 denylist 时直接拒绝，handler 不再执行命令', async () => {
+    const secretDir = path.join(workDir, 'bash-deny');
+    mkdirSync(secretDir, { recursive: true });
+    const tool = configuredTool('bash', { denyPaths: [secretDir] });
+
+    expect(await tool.checkPermission?.({ command: 'pwd', cwd: secretDir }, makeContext())).toBe(
+      'deny',
+    );
+    const result = await tool.handler(
+      { command: 'echo should-not-run', cwd: secretDir },
+      makeContext(),
+    );
+    expect(result).toContain('敏感路径拒绝列表');
+    expect(result).not.toContain('should-not-run');
   });
 });
