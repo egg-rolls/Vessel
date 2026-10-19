@@ -271,13 +271,22 @@ export class FileSessionBackend implements SessionBackend {
    *
    * 过滤空会话（message_count > 0），按 updated_at 倒序。
    * 每个文件独立加载——文件数量通常很小（几十到几百），无需批量优化。
+   *
+   * 0.8.1：列表降级——单个文件损坏（`SessionCorruptError`）只跳过该项，
+   * 不让整张列表失败；直接 `load()` 仍抛错，保证损坏文件不被覆盖。
    */
   async listRich(): Promise<SessionInfo[]> {
     const ids = await this.list();
     const results: SessionInfo[] = [];
 
     for (const id of ids) {
-      const state = await this.load(id);
+      let state: RunState | null;
+      try {
+        state = await this.load(id);
+      } catch (error) {
+        if (error instanceof SessionCorruptError) continue;
+        throw error;
+      }
       if (state && state.messages.length > 0) {
         results.push(toSessionInfo(state));
       }

@@ -310,6 +310,22 @@ describe('FileSessionBackend', () => {
       expect((await backend.load(id))?.messages[0]?.content).toBe('old');
     });
 
+    it('listRich 跳过损坏文件，继续返回健康会话（列表降级）', async () => {
+      await mkdir(TEST_DIR, { recursive: true });
+      await writeFile(join(TEST_DIR, 'broken.json'), '{ not json', 'utf8');
+      await backend.save(
+        createRunState('healthy', {
+          status: 'completed',
+          messages: [{ role: 'user', content: 'still here' }],
+        }),
+      );
+
+      const rich = await backend.listRich();
+
+      expect(rich.map((session) => session.session_id)).toEqual(['healthy']);
+      expect(rich[0]?.preview).toBe('still here');
+    });
+
     it('delete 对损坏文件抛错且不删除（不静默保留/删除）', async () => {
       await mkdir(TEST_DIR, { recursive: true });
       const path = join(TEST_DIR, 'broken-delete.json');
