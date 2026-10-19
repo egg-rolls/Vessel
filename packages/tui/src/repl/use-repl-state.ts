@@ -93,6 +93,8 @@ export interface ReplUiState {
   queueEditIndex: number | null;
   /** 进入队列编辑前的输入草稿（Esc 恢复） */
   queueReturnInput: string;
+  /** `?` quick help 浮层（独占焦点） */
+  quickHelpOpen: boolean;
   /** Ctrl+O 展开态（归档完整输出） */
   expandedOutput: boolean;
   /** 递增触发 StreamOutput 把完整输出刷入 scrollback */
@@ -148,6 +150,7 @@ export type ReplUiAction =
   | { type: 'cancelQueueEdit' }
   | { type: 'updateQueuedInput'; index: number; value: string }
   | { type: 'removeQueuedInput'; index: number }
+  | { type: 'setQuickHelp'; open: boolean }
   | { type: 'bumpQueueTick' }
   | { type: 'toggleExpanded' };
 
@@ -393,6 +396,8 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
         queueReturnInput: '',
       };
     }
+    case 'setQuickHelp':
+      return state.quickHelpOpen === action.open ? state : { ...state, quickHelpOpen: action.open };
     case 'bumpQueueTick':
       return { ...state, queueTick: state.queueTick + 1 };
     case 'toggleExpanded': {
@@ -437,6 +442,7 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     queuedInput: [],
     queueEditIndex: null,
     queueReturnInput: '',
+    quickHelpOpen: false,
     expandedOutput: false,
     expandSignal: 0,
     queueTick: 0,

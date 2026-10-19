@@ -29,6 +29,7 @@ import {
 } from '../components/InlineAutocomplete.js';
 import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
 import { QueuePreview } from '../components/QueuePreview.js';
+import { QuickHelp, shouldOpenQuickHelp } from '../components/QuickHelp.js';
 import { SessionTable } from '../components/SessionTable.js';
 import { useSpinnerState } from '../components/StateTracker.js';
 import { StatusBar, type StatusKind } from '../components/StatusBar.js';
@@ -649,6 +650,9 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
+    // quick help 独占焦点；Esc / Backspace 由组件自己处理
+    if (ui.quickHelpOpen) return;
+
     // ask-user / 权限弹窗显示时，其余键盘交给弹窗组件自己的 useInput
     if (ui.askUserActive || ui.permissionOverlay) return;
 
@@ -854,7 +858,11 @@ function InkRepl({ ctx }: InkReplProps) {
   const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
   // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
   const exclusiveOverlayActive =
-    ui.view !== null || state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
+    ui.view !== null ||
+    state.showResumePicker ||
+    ui.permissionOverlay !== null ||
+    ui.askUserActive ||
+    ui.quickHelpOpen;
   const queueRows = exclusiveOverlayActive
     ? 0
     : queuePreviewRows(ui.queuedInput.length, terminalRows);
@@ -1079,26 +1087,54 @@ function InkRepl({ ctx }: InkReplProps) {
         />
       )}
 
+      {/* ? quick help（独占焦点；Backspace / Esc 关闭） */}
+      {ui.quickHelpOpen &&
+        !ui.view &&
+        !state.showResumePicker &&
+        !ui.permissionOverlay &&
+        !ui.askUserActive && (
+          <Box flexDirection="column" flexShrink={0}>
+            <QuickHelp
+              columns={stdout.columns ?? 80}
+              rows={terminalRows}
+              onClose={() => dispatch({ type: 'setQuickHelp', open: false })}
+            />
+          </Box>
+        )}
+
       {/* 输入框 - 只在没有独占交互组件时显示 */}
-      {!state.showResumePicker && !ui.view && !ui.permissionOverlay && !ui.askUserActive && (
-        <Box flexShrink={0}>
-          <Text color={theme.brand}>vessel › </Text>
-          <TextInput
-            key={ui.inputCaretKey}
-            value={ui.input}
-            onChange={(value) => dispatch({ type: 'setInput', input: value })}
-            onSubmit={handleSubmit}
-          />
-          {argHint && <Text color={theme.faint}>{argHint}</Text>}
-        </Box>
-      )}
+      {!state.showResumePicker &&
+        !ui.view &&
+        !ui.permissionOverlay &&
+        !ui.askUserActive &&
+        !ui.quickHelpOpen && (
+          <Box flexShrink={0}>
+            <Text color={theme.brand}>vessel › </Text>
+            <TextInput
+              key={ui.inputCaretKey}
+              value={ui.input}
+              onChange={(value) => {
+                if (shouldOpenQuickHelp(ui.input, value)) {
+                  dispatch({ type: 'setInput', input: '' });
+                  dispatch({ type: 'bumpCaret' });
+                  dispatch({ type: 'setQuickHelp', open: true });
+                  return;
+                }
+                dispatch({ type: 'setInput', input: value });
+              }}
+              onSubmit={handleSubmit}
+            />
+            {argHint && <Text color={theme.faint}>{argHint}</Text>}
+          </Box>
+        )}
 
       {/* 运行态提示：输入框保持可用（可先打字），但 Enter 不会并发提交 */}
       {ui.run.phase !== 'idle' &&
         !state.showResumePicker &&
         !ui.view &&
         !ui.permissionOverlay &&
-        !ui.askUserActive && (
+        !ui.askUserActive &&
+        !ui.quickHelpOpen && (
           <Box flexDirection="column" flexShrink={0}>
             <Text color={theme.warn}>
               {ui.run.phase === 'cancelling'
