@@ -17,6 +17,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为与 `--serve` 每 tenant 独立执行面 **已实现**；gateway 的 workflow / 飞书控制面仍只走 default tenant。微信不做。决策边界见 ADR-046 ~ ADR-050。
 - **0.6 状态**：F5 跨机器远程、独立前端与跨节点 team **已实现**（`release/0.6`，未随版本发布）：`--connect` 非回环强制 HTTPS + token/CA，`serve.allowed_origins`，`transport.kind: remote` 静态节点与 `(node_id, seq)` 事件去重。默认仍本机回环；跨节点 team 控制面 default/admin-only。决策边界见 ADR-051 ~ ADR-053。
 - **0.7.1 状态**：0.7 的 P0 加固补丁线（基于 `release/0.7`，未随版本发布）：legacy WS 方法统一按 principal/tenant 作用域执行；tenant 单写者锁修复回收 TOCTOU 与 24h 语义；外部插件仍默认加载但启动告警，并提供 `VESSEL_NO_EXTERNAL_PLUGINS=1` 显式 opt-out（P0-3 记为 **MITIGATED**，未关闭）。
+- **0.8.0 状态**：Wave 1 结构收口（基于 `release/0.8`，未随版本发布）：core 的 run 级状态收敛到 `RunExecution` + 单 run 守卫 `run_already_running`，`run()` / `resume()` 共用 `finalizeRun` 终态路径；hook 抛错发 `hook.error` 并继续，guardrail 抛错 fail-closed（`guardrail_error`）；本地 RPC `subscribe` 接线；headless 统一清理；`--resume-run` / `FileRunStore` 走 tenant 目录与归属校验；Web seq 回退重放、durable REST admin 显式 tenant；`read` / `bash cwd` 路径边界与内置凭据 denylist。决策见 ADR-054 / ADR-055。
 
 ## 代码风格与硬规矩
 
@@ -29,6 +30,9 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - 0.4 发布只做干跑：`scripts/release-dry-run.ts`；不 tag、不 publish、不合并 `main`。
 - 全异步。不写 sync-in-async（阻塞调用混进异步路径）。
 - 不留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。
+- **单 run 守卫与统一终态**（0.8，ADR-054）：同一个 `AgentRuntime` 同时只允许一个 active run。`run()` / `resume()` 必须经 `beginExecution` 占位、`finalizeRun` 收尾；不要绕开 `activeRun`，也不要另写一份终态持久化 / 事件发布路径。第二个 run 抛 `run_already_running`（`RunAlreadyRunningError`）。
+- **插件异常必须隔离**（0.8，ADR-054）：Hook 抛错发 `hook.failed` + `hook.error` 后继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `guardrail_error`，发 `guardrail.error`），不得让插件异常以原始异常形式冒泡；随后仍按该阶段的 blocked 语义执行。
+- **工具路径边界**（0.8，ADR-055）：`read` / `bash cwd` 统一走 basic-tools 的 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`，`allowed_roots` 只把越界降级为 `ask`，`deny_paths` 只能追加。比较必须基于 realpath（含最近已存在祖先），不要用未解析的字符串前缀。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
 - 文档只写已实现；规划项明确标注。不吹未实现的能力。
@@ -39,7 +43,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.7` → `0.7.1-<role>`（`release/0.1` ~ `release/0.6` 已冻结）；发布由 tag `v*` 触发，不由分支名触发。0.7.1 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.8` → `0.8-<role>`（`release/0.1` ~ `release/0.7` 已冻结；0.8 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.8.0 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -120,5 +124,9 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环不得匿名。
 - 别给 MCP 工具设默认 `allow`；除非在 `auto_approve_tools` 里按原始工具名精确列出。
 - 别让 Host 与成员 runtime 同时写同一个 run 的 checkpoint（唯一写者是 `AgentRuntime`，Host store 优先）。
+- 别在同一 runtime 上并发跑多个 run（守卫会拒绝）；需要并行就用多个 runtime（Host 的“一 agent 一 runtime”）。
+- 别靠 hook / guardrail 抛异常来终止 run：hook 异常被隔离，guardrail 异常按 fail-closed 转成 `guardrail_error`。要阻断就返回 `allowed: false`，要停止就 abort。
+- 别把内置凭据 denylist 改成 `ask` 或做成可移除；也别把 `allowed_roots` 当沙箱——`bash` 只校验 `cwd`，`edit` 未纳入边界。
+- 别在 headless 分支里提前 `process.exit` 跳过 gateway / tenant / transport / shutdown 清理。
 - 别在文档里描述一个不存在的架构。
 - 别绕过 PR 直接 push main。

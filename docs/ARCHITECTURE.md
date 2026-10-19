@@ -66,8 +66,10 @@ plugins/mcp/client       MCP client 插件（stdio + HTTP），经 PluginHost �
 
 ```
 run(input, sessionId?, opts?):
-    runId = uuid()
-    重置 usage 统计
+    runId = opts?.runId ?? uuid()
+    execution = beginExecution(runId, sessionId)   # run 级状态 + 同步占位
+        # 已有 active run → 立即抛 run_already_running（RunAlreadyRunningError）
+        # 占位发生在任何 await 之前；finally 里 endExecution 释放
     context.setSessionId(sessionId)
 
     # 只在 context 为空时初始化（同会话续聊时不重置，多轮记忆靠这个）
@@ -94,23 +96,35 @@ run(input, sessionId?, opts?):
         session.save(runState)
         writeCheckpoint(runState, 'running')      # durable 开启时；发 run.checkpoint
 
-        output = toolCallingLoop(runId, sessionId, opts.signal)
-        runState.status = 'completed'; runState.messages = context.messages
-        session.save(runState)
-        writeCheckpoint(runState, 'completed')    # durable 开启时；发 run.checkpoint
-        发 run.completed
+        output = await toolCallingLoop(execution, signal)
+        await finalizeRun(execution, runState, { status: 'completed', output })
         return output
     catch error:
-        run OnError hooks
-        runState.status = 'failed'
-        runState.messages = context.messages   # 失败也保存真实上下文，不覆盖历史
-        session.save(runState)
-        writeCheckpoint(runState, 'failed')    # durable 开启时；发 run.checkpoint
-        发 run.failed
+        await finalizeRun(execution, runState, { status: 'failed', error, signal })
         throw
+
+# run() 与 resume() 共用的唯一终态路径
+finalizeRun(execution, runState, outcome):
+    if outcome.status == 'completed':
+        runState = completed + usage + messages
+        session.save → writeCheckpoint('completed') → 发 run.completed
+        return
+
+    # 失败 / 取消 / 中断
+    cancelled = signal 已 abort 且 reason 不属于 Host 中断集合
+    runState.status = cancelled ? 'cancelled' : 'failed'
+    runState.messages = context.messages       # 失败也保存真实上下文，不覆盖历史
+    OnError hook（best-effort；自己抛错只发 hook.error，不替换原始错误）
+    session.save → writeCheckpoint(failed | cancelled | interrupted)
+    发 run.cancelled（用户取消）或 run.failed（Host 中断 / 普通错误）
+    # finalizeRun 自身失败（如磁盘写失败）→ 发 run.finalize.failed，原错误继续上抛
 ```
 
+`resume()` 走同一条 `finalizeRun` 路径，因此用户取消同样发 `run.cancelled`，checkpoint 状态同样按 abort reason 映射为 `cancelled` / `interrupted`。`RunExecution` 是 run 级状态的唯一来源（run id / session / branch / 计时 / usage / context），见 §6。
+
 ### 3.2 `toolCallingLoop()`：循环骨架
+
+签名 `toolCallingLoop(execution, signal)`；run id / session / usage 全部取自 `RunExecution`，不读实例字段。
 
 ```
 loop:
@@ -167,13 +181,13 @@ loop:
                 await hooks.run(AfterTool, hookCtx)
                 addContext({ role: 'tool', tool_call_id, content: finalResult })
             catch error:
-                run OnError hooks
+                OnError hooks（best-effort；HookRunner 已隔离，抛错只发 hook.error）
                 发 tool.call.failed
                 addContext({ role: 'tool', tool_call_id, content: `Error: ${msg}` })
                 # 工具失败不中断循环——错误文本折回语言空间，模型自行决定下一步
 
         # 一轮 tool-call 全部处理完：写 checkpoint（durable 开启时；发 run.checkpoint）
-        writeCheckpoint(context.messages, 'running')
+        writeCheckpoint(execution, 'running')
 
     else:  # 例如 finish_reason == 'length'
         addContext(assistant 消息，带上 response.reasoning_content)
@@ -191,6 +205,9 @@ loop:
 - **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，120s 超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
 - **`HookRunner` 丢弃 hook 返回值**（`Hook.run` 收窄为 `Promise<void>`）。跨 hook 通信的唯一通道是 `HookContext` 的字段（例如 `BeforeLlm` 的 `systemPrompt`）。
 - **durable checkpoint 只由 `AgentRuntime` 写**（唯一写者）。Host 模式把 Host 的 `runStore` 注入成员 runtime；同时给 Host 与 runtime 两个 store 时 Host 优先，禁止双写（ADR-040）。
+- **一个 runtime 同时只跑一个 run**（0.8，ADR-054）：`activeRun` 在任何 await 之前同步占位，已有 active run 时新的 `run()` / `resume()` 立即抛 `run_already_running`（`RunAlreadyRunningError`）。真正并行需要多个 runtime（Host 的“一 agent 一 runtime”模型）。
+- **终态只有一条路径**：`run()` / `resume()` 都经 `finalizeRun()`；用户取消发 `run.cancelled`，Host 中断 / 普通错误发 `run.failed`，checkpoint 状态分别映射为 `cancelled` / `interrupted` / `failed`。终态持久化失败发 `run.finalize.failed`，不覆盖原始错误。
+- **插件故障隔离**（0.8，ADR-054）：单个 Hook 抛错发 `hook.failed` + `hook.error` 并继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `reason: 'guardrail_error'`，发 `guardrail.error`），不把原始异常冒泡成 run 失败。
 
 ## 4. 消息组装：`RunOptions.messages`
 
@@ -407,7 +424,9 @@ interface GuardrailResult {
 }
 ```
 
-四个阶段任一 `allowed: false` 即短路并抛错（并发 `guardrail.blocked`）。`replacement` **真实生效**（ADR-035）：Input 改写持久化的用户消息；Output 改写返回值与持久化 assistant 消息；ToolCall 改写实际执行的调用（先于 assistant 消息写入）；ToolResult 改写事件、上下文与返回值。类型不符的 replacement 按未改写处理（Input/Output/ToolResult 只接受字符串，ToolCall 只接受合法 `ToolCall`）。
+四个阶段任一 `allowed: false` 即短路（发 `guardrail.blocked`），随后沿用各阶段的 blocked 语义：Input / Output 终止 run，ToolCall 标记该调用被阻断，ToolResult 折回 tool 错误。`replacement` **真实生效**（ADR-035）：Input 改写持久化的用户消息；Output 改写返回值与持久化 assistant 消息；ToolCall 改写实际执行的调用（先于 assistant 消息写入）；ToolResult 改写事件、上下文与返回值。类型不符的 replacement 按未改写处理（Input/Output/ToolResult 只接受字符串，ToolCall 只接受合法 `ToolCall`）。
+
+0.8 起（ADR-054）：`check()` 自身抛错按 **fail-closed** 处理——发 `guardrail.error`，返回 `{ allowed: false, reason: 'guardrail_error' }`，再走上述 blocked 语义；原始异常不再冒泡成 run 失败。
 
 ### 5.8 `Hook`（`types/hook.ts`）
 
@@ -437,6 +456,8 @@ enum HookType {
 ```
 
 返回值被丢弃（`Promise<void>`）——跨 hook 通信只用 `HookContext` 字段。
+
+0.8 起（ADR-054）：`HookRunner` 对每个 hook 独立 try/catch。某个 hook 抛错时发 `hook.failed`（兼容既有订阅方）与 `hook.error`（统一信号），继续执行后续 hook，不终止 run，也不丢弃已聚合的结果。
 
 ### 5.9 `Plugin` / `PluginHost`（`types/plugin.ts`）
 
@@ -490,7 +511,9 @@ interface RunStore {
 }
 ```
 
-实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
+实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir, tenantId? })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
+
+0.8 起（A5）：`FileRunStore` 接受可选的 `tenantId`。tenant 模式下 `delete(runId)` 先 `load()` 校验归属——缺失或属于其它 tenant 时直接 no-op，不 unlink 文件；与 `FileSessionBackend.delete` 的 foreign 会话语义对称。装配层在 `--resume-run`、单 agent 与 per-tenant runtime 三条路径都把 `tenantId` / `tenantRunsDir` 透传到 store。
 
 0.4 增加 `pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunStore` 接口**，也不自动调度（ADR-045）。
 
@@ -530,6 +553,8 @@ interface AgentRuntimeOptions {
 ```
 
 `create()` 是异步静态工厂（构造函数私有）——插件安装是异步的，且要求 fail-fast（ADR-023）。
+
+0.8（ADR-054）：run 级状态收敛在 `RunExecution`（`runId` / `sessionId` / `branch` / `createdAt` / `startedAt` / `stats` / `context`，从根入口导出）。`run()` / `resume()` 共用同一个 `activeRun` 槽位，在第一个 await 之前同步占位；已有 active run 时立即抛 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`）。公开签名与 `AgentRuntimeOptions` 不变。
 
 Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`；`RuntimeHost.resume?(runId)` 同样恢复，但**不经 Scheduler**（保持 run_id 不变）。resume 只接受 `running` / `interrupted`；同一 run 并发恢复首个成功，后续 `run_already_running`（ADR-040）。
 
@@ -692,6 +717,8 @@ serve:
 | `tool.call.completed` | `ToolCallCompletedPayload` | agent-runtime |
 | `tool.call.failed` | `ToolCallFailedPayload` | agent-runtime |
 | `guardrail.blocked` | `GuardrailBlockedPayload` | guardrail-runner |
+| `guardrail.error` | `{ run_id, guardrail_name, stage, error }` | guardrail-runner（0.8：`check()` 抛错，随后按 `guardrail_error` blocked） |
+| `hook.failed` / `hook.error` | `{ hook_name, hook_type, run_id, duration_ms, error }` | hook-runner（0.8：单 hook 抛错后继续后续 hook） |
 | `context.changed` | `{ run_id, message, message_count, token_count }` | agent-runtime |
 | `run.completed` | `RunCompletedPayload` | agent-runtime |
 | `run.failed` | `RunFailedPayload` | agent-runtime |
@@ -700,6 +727,7 @@ serve:
 | `replay.completed` | `{ run_id, event_count, duration_ms }` | replayRun |
 | `run.checkpoint` | `{ run_id, session_id, status, iteration? }` | agent-runtime |
 | `run.resumed` | `{ run_id, session_id, from_status, iteration }` | agent-runtime |
+| `run.finalize.failed` | `{ run_id, session_id, error }` | agent-runtime（0.8：终态持久化失败，保留原始 run 错误） |
 
 **约定事件名**（不在 `EventPayload` 联合类型里，按开放字符串协议使用）：
 
@@ -745,7 +773,7 @@ serve:
 - **失败与溢出**：写失败发 `trace.write.failed` 并计数，不向事件投递路径抛错；每 run 队列上限 10000，溢出丢新事件并写一行 `trace.overflow { dropped }`，同一 run 最多一次 `trace.write.failed { reason: 'queue_overflow' }`。
 - **脱敏**：trace 写入前与 gateway 出站前都过 `TraceRedactor`；默认按键名与 `sk-` 前缀替换，`app_id` 只留前 4 位 + `***`。0.5 **不**对 run checkpoint、eval 报告、飞书回复脱敏（resume / 展示需要完整内容）；POSIX 下 0600 best-effort。
 - **读取与重建**：`readTraceEvents(traceDir, filter)` 默认 limit 50、最大 500，按 `(seq ?? ts)` 升序，跳过损坏行；`rebuildMetrics(traceDir)` 返回与实时 `MetricsSnapshot` 同形状，`updated_at = max(ts)`。
-- **取消**：显式用户取消只发 `run.cancelled`，不再同时发 `run.failed`；Host 关闭/中断仍发 `run.failed`。因此 `metrics.runs.cancelled` 在 0.5 可能非 0。
+- **取消**：显式用户取消只发 `run.cancelled`，不再同时发 `run.failed`；Host 关闭/中断仍发 `run.failed`。0.8 起 `run()` 与 `resume()` 共用 `finalizeRun`，resume 的用户取消同样发 `run.cancelled`（ADR-054）。因此 `metrics.runs.cancelled` 在 0.5+ 可能非 0。
 - **事件归属**：core 发 `session.saved/deleted`、`hook.*`、`run.cancelled`、`installPlugin` 的 `plugin.*`；asm 发 `config.loaded` 与 `PluginLoader` 的 `plugin.loaded/failed`；ext 发 `workflow.*` / `eval.*` / `feishu.*` / `mcp.*` / `subagent.*`。
 
 ## 11. 工具集：三个能力工具，为什么这么少
@@ -763,9 +791,11 @@ serve:
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
-| `bash` | `{ command, cwd?, timeout_ms? }` | `ask` | `Bun.spawn(['bash','-c',command])`。超时默认 120s；输出超 2000 行时保留头 1000 + 尾 1000 并标注省略行数；超时返回明确错误文本而非抛异常 |
-| `read` | `{ path, offset?, limit? }` | `allow` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
+| `bash` | `{ command, cwd?, timeout_ms? }` | `ask`；cwd 命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `Bun.spawn(['bash','-c',command])`。超时默认 120s；输出超 2000 行时保留头 1000 + 尾 1000 并标注省略行数；超时返回明确错误文本而非抛异常 |
+| `read` | `{ path, offset?, limit? }` | `allow`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
 | `edit` | `{ path, old_string, new_string, replace_all? }` | `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
+
+**路径边界（0.8，ADR-055）**：`read` / `bash cwd` 先按真实路径（`realpath`；不存在的路径取最近已存在祖先）判定，`..` 与 symlink 不能绕过。内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）命中即 `deny`；插件 `config.allowed_roots` 非空时越界为 `ask`，`config.deny_paths` 追加到内置列表。默认 `allowed_roots` 为空 = 不限制根，行为与 0.7 兼容。`bash` 只校验 `cwd`，命令本身仍可访问其它路径；`edit` 未纳入该边界——这不是沙箱。
 
 **被判死的工具，以及为什么**：
 
@@ -787,16 +817,16 @@ serve:
 
 | 文件 | 职责 |
 |---|---|
-| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `workflow` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导 |
+| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `workflow` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导。0.8：headless 只记录退出码，不提前 `process.exit`，统一走 gateway / tenantFactory / transport / shutdown 清理后再落 `process.exitCode` |
 | `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `workflow` / `eval` 子命令与 `--feishu` 附加开关；0.6 解析 `--connect` / `--connect-token` / `--ca`（别名 `--connect-ca`）/ `--allowed-origin`（可重复，需 `--serve`） |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
-| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore |
+| `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event` |
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
 | `src/factory-plugins.ts` | 工厂式插件（delegate / team / mcp-client）的接线决策；0.3 删除 `delegate.viaHost` |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
-| `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null |
+| `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
 | `src/mcp-wiring.ts` | 读取 `mcp_servers` → `createMcpPlugin`；构造 TUI / gateway 需要的状态适配器 |
 | `src/serve-config.ts` | `serve.*` 与 CLI flag 合并、远程/TLS 校验、证书文件检查；0.6 合并 `allowed_origins` 与 `--allowed-origin` |
@@ -804,7 +834,7 @@ serve:
 | `src/node-registry.ts` | 0.6 静态节点表：URL / token / CA 解析、心跳与 `healthy` / `unreachable` 状态 |
 | `src/remote-transport.ts` | 0.6 `kind:'remote'`：`send` / `request` / `peers`、远端事件订阅与 `(node_id, seq)` 去重 |
 | `src/team-wiring.ts` / `src/transport-factory.ts` | 按配置构造 in-process / loopback / remote transport；remote 节点与事件回灌接线 |
-| `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key） |
+| `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key）。0.8：解析 tenant 后读 `<data_dir>/tenants/<id>/runs`（与执行面一致），并透传 `tenantId` |
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
 
@@ -997,9 +1027,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
 - **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
 - **manifest**：`capabilities.list` 返回 `{ version, config_schema_version: 1, methods: [{ name, params_schema?, result_schema?, permission }], tools, plugins }`；只含 canonical 方法。A-6.3：manifest 按 `ctx.tenantId` 生成，tools / plugins 取 `pluginHostFor` / `pluginsFor`（缺省回退全局）；`trace.readEvents(filter, tenantId)` 与 `sessionData.deleteSessionData(sessionId, tenantId)` 由 web 传入当前 tenant，asm 已按 tenant 路由到对应的 trace 目录与 session backend。
-- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、不写本地 store / trace；回环可明文，非回环必须 HTTPS + token。未设置时用 `LocalRpcClient` 并取锁。
+- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。0.8：本地 `subscribe()` 由装配层桥接到 `runtimeEvents`（每条 `RunEvent` 包成 `{ method: 'events.event', params }`），是只读旁路，不写回事件流；`/runs resume`、`/workflows run|resume` 因此能收到终态而不是挂起。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、不写本地 store / trace；回环可明文，非回环必须 HTTPS + token。未设置时用 `LocalRpcClient` 并取锁。
 - **远程客户端（0.6）**：token 解析顺序 `--connect-token` > env（`VESSEL_CONNECT_TOKEN` / `connect.token_env`）> `connect.token`；CA 用 `--ca` / `connect.ca_file`。建连后 `health.get` 取远端 tenant / node；显式 `--tenant` 才把 `tenant_id` 合并进请求（admin 覆盖），否则由 token principal 决定。connect 模式下 `permission.respond` / `ask.respond` 经 RPC 回远端；TUI / headless 同路径。
-- **tenant**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。
+- **tenant**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。0.8：durable REST 端点允许 admin 通过 query `tenant_id` 或 `X-Vessel-Tenant` 显式指定 tenant，两处同时出现且不一致 → 400；其余角色仍按 principal 作用域。
 - **错误码**：方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal`。旧路径保留 0.4 错误码映射。
 
 ### 13.8 0.6 远程控制面与跨节点 transport
@@ -1285,6 +1315,8 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 
 解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为已由 ext 合入（每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）。A-6 的 web 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 `--serve` per-tenant 执行面（config / provider / session / run store / context / PluginHost / trace / metrics / redactor / sessionControl、独立 EventStream、per-tenant writer lock）**均已实现**。disabled / 未配置 tenant → `forbidden`，锁冲突 → `tenant_locked`。已知限制：gateway 的 workflow / 飞书控制面仍只走 default tenant。
 
+0.8 补充（ADR-054 / ADR-055）：`FileRunStore` 的 `delete()` 在 tenant 模式下先校验 checkpoint 归属，foreign / 缺失一律 no-op，跨 tenant 删除不再可能；`--resume-run` 与执行面使用同一个 `<data_dir>/tenants/<id>/runs`；durable REST 让 admin 用 query `tenant_id` 或 `X-Vessel-Tenant` 显式跨 tenant（两者不一致 → 400）。工具路径边界与 tenant 无关，但同一 denylist 保护所有 tenant 的宿主凭据。
+
 ### 17.6 配置与密钥
 
 见 §9 与 [ADR-050](adr/ADR-050-yaml-first-config-and-secrets.md)。用户 YAML / 项目 YAML / env / 默认四层；`_env` 按层解析；`config.get` / `config.sources` 只输出 `<set>` / `<unset>`；项目 YAML 禁止密钥；`VESSEL_TENANT` 不写入 config。
@@ -1416,3 +1448,49 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 `ReplContext.version?: string` 为可选字段，由装配层 `src/bootstrap.ts` 注入根
 `package.json` 的版本号；TUI 仅在启动头展示（`VESSEL · vX`），缺失时退化为 `VESSEL`，
 不参与任何 runtime / RPC 语义。
+
+## 20. 0.8 Wave 1 加固（已实现）
+
+> 状态：已合入 `release/0.8`（未发布）。决策见 [ADR-054](adr/ADR-054-run-execution-and-failure-isolation.md) / [ADR-055](adr/ADR-055-tool-path-boundaries.md)；本节只写已实现行为。
+
+### 20.1 run 执行态与终态（C1）
+
+- `RunExecution` 收敛 run 级状态（run id / session / branch / `created_at` / `started_at` / usage / context），`run()` 与 `resume()` 在入口创建、`finally` 释放；loop 与 checkpoint 不再读实例字段。
+- `activeRun` 单 run 守卫在第一个 await 前同步占位；已有 active run 时新的 `run()` / `resume()` 立即抛 `RunAlreadyRunningError`（`run_already_running`，继承 `RunResumeError`）。同一 `runId` 的并发 resume 仍由 `resuming` 集合拒绝。
+- `finalizeRun()` 是唯一终态路径：completed → `run.completed`；用户取消 → checkpoint `cancelled` + `run.cancelled`；Host 中断 → checkpoint `interrupted` + `run.failed`；普通错误 → `failed` + `run.failed`。终态持久化自身失败发 `run.finalize.failed`，原始错误继续上抛。
+- `resume()` 的用户取消现在与 `run()` 一致，不再发 `run.failed`。
+
+### 20.2 Hook / Guardrail 失败隔离（C2）
+
+- `HookRunner` 对每个 hook 独立 try/catch：抛错发 `hook.failed` + `hook.error`，继续后续 hook；`OnError` hook 始终 best-effort，失败不替换原始错误、不跳过 session / checkpoint 写入。
+- `GuardrailRunner` 的 `check()` 抛错按 fail-closed：发 `guardrail.error`，返回 `{ allowed:false, reason:'guardrail_error' }`，再走各阶段既有的 blocked 语义；原始异常不冒泡。
+- 工具执行失败路径的 OnError hook 同样兜底，工具失败仍折回 `role: tool` 错误文本，不升级为 run 失败。
+
+### 20.3 装配与配置（A1–A5）
+
+- **本地 RPC subscribe**：`src/bootstrap.ts` 给 `createLocalRpcClient` 传入 `onEvent`，订阅 `runtimeEvents` 并以 `{ method:'events.event', params }` 转发。只读旁路，不重复发布事件。`/runs resume`、`/workflows run|resume` 不再挂起。
+- **headless 清理**：`src/cli.ts` 的 headless 分支只记录退出码，不再提前 `process.exit`；跳出后统一执行 gateway / `tenantFactory.closeAll()` / transport / `result.shutdown()` 清理，最后设置 `process.exitCode`。`--serve --run` 退出后不残留 tenant 锁。
+- **env provider 合并**：`packages/config/src/loader.ts` 只在显式 `VESSEL_PROVIDER` 时写 `provider.name`；`VESSEL_MODEL` / `VESSEL_BASE_URL` / `VESSEL_PROVIDER_API_KEY` 只合并对应字段，不再把项目里的 `provider.name` 覆盖成 `openai`。
+- **`--resume-run` 目录**：读取 `<data_dir>/tenants/<id>/runs`，与执行面一致，并透传 `tenantId`。
+- **FileRunStore tenant**：`createRunStore` 透传 `tenantId`；tenant 模式下 `delete()` 先 `load()` 校验归属，foreign / 缺失 no-op；`list` 的 tenant 过滤沿用既有实现。
+
+### 20.4 Web 事件回放与 durable tenant（W1–W3）
+
+- **seq 回退重放**：`hello.latest_seq < currentSeq` 时不再只 `reset(latest_seq)`，而是重置游标为 0、断开当前 WS、以 `since=0` 重连重放；旧 socket 的在途帧由 socket identity 检查丢弃。逻辑抽为纯函数 `planHelloSeq`（`apps/web/src/gateway/seq-replay.ts`），与 TUI `http-client` 的 seq 回退语义一致。
+- **durable REST admin tenant**：admin 可通过 query `tenant_id` 或 `X-Vessel-Tenant` 显式指定 tenant，经 `restTenantScope` 校验；两者不一致返回 400 `invalid_request`；非 admin 仍按 principal 作用域。
+- **`coreToJob` 清理**：run 进入终态（`execute` 的 finally）与 `trimRuns` 时删除 core run → gateway job 映射；终态事件本身仍带 `job_id` 出站，清理发生在其后。
+
+### 20.5 工具路径边界（E1，ADR-055）
+
+- 内置 denylist：`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`；命中 `deny`（不可通过 ask 放行）。
+- 插件配置 `allowed_roots`（越界 `ask`；空 = 不限制根，保持兼容）与 `deny_paths`（追加到内置列表）。
+- `read` / `bash cwd` 均按 `realpath` 判定；不存在的路径对最近已存在祖先做 `realpath` 再拼回剩余段，`..` 与 symlink 不能绕过。
+- `read` handler 与 `runBash` handler 各做一次防御性 denylist 检查；`allowed_roots` 越界只在 `checkPermission` 走 `ask`。
+
+### 20.6 已知限制（0.8）
+
+- 单 run 守卫是**进程内、每 runtime** 的；跨进程并发仍靠 tenant 写锁与 durable 唯一写者约定。
+- `finalizeRun` 持久化失败只发 `run.finalize.failed`，不重试、不补偿。
+- 路径边界不是沙箱：`bash` 只校验 `cwd`，命令本身可访问其它路径；`edit` 未纳入边界；内置 denylist 不能通过配置移除，只能追加。
+- Web 的 seq 回放会清空本地事件存储并从头重放；大历史下重放成本随事件数增长。
+- `coreToJob` 在 run 终态后才清理；终态事件与清理之间仍有短暂窗口。
