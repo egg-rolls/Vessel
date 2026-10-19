@@ -4,7 +4,14 @@
  * 字段名按 DECISION-009 §5.1.4 / Addendum B / Addendum C 冻结，不得单方面改名。
  */
 
-import type { EventStream, Plugin, PluginHost, RunnableAgent, RuntimeHost } from '@vessel/core';
+import type {
+  EventStream,
+  Plugin,
+  PluginHost,
+  RunnableAgent,
+  RuntimeHost,
+  ToolPipeline,
+} from '@vessel/core';
 
 export type WorkflowRunStatus =
   | 'pending'
@@ -157,6 +164,12 @@ export interface WorkflowEngineOptions {
   runtime?: RunnableAgent;
   /** 工具来源（冻结签名必填）。 */
   pluginHost: PluginHost;
+  /**
+   * 0.8.2 Wave 2B1：统一工具执行管道（可选）。
+   * 注入时 `type: tool` 步骤走 pipeline（permission/hook/guardrail/handler）；
+   * 缺省保留旧的直接 handler 路径（兼容嵌入方）。
+   */
+  toolPipeline?: ToolPipeline;
   config: ResolvedWorkflowConfig;
   events: EventStream;
   /**

@@ -11,7 +11,10 @@ import type {
   PluginHost,
   RunnableAgent,
   RuntimeHost,
+  ToolCall,
   ToolContext,
+  ToolPipeline,
+  ToolPipelineResult,
 } from '@vessel/core';
 import { invalid, notFound, WorkflowError } from './errors.js';
 import { publishWorkflowEvent } from './events.js';
@@ -158,6 +161,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
   private readonly config: ResolvedWorkflowConfig;
   private readonly events: EventStream;
   private readonly pluginHost: PluginHost;
+  private readonly toolPipeline?: ToolPipeline;
   private readonly host?: RuntimeHost;
   private readonly runtime?: RunnableAgent;
   private readonly fsOps: WorkflowFs;
@@ -169,6 +173,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
     this.config = options.config;
     this.events = options.events;
     this.pluginHost = options.pluginHost;
+    if (options.toolPipeline !== undefined) this.toolPipeline = options.toolPipeline;
     if (options.host !== undefined) this.host = options.host;
     if (options.runtime !== undefined) this.runtime = options.runtime;
     this.fsOps = options.fs ?? nodeWorkflowFs;
@@ -674,6 +679,27 @@ class WorkflowEngineImpl implements WorkflowEngine {
     }
   }
 
+  /** tool.call.* 观测事件：run_id 固定为 workflow run，便于与 workflow.* 关联。 */
+  private publishToolCallEvent(
+    type: 'tool.call.started' | 'tool.call.completed' | 'tool.call.failed',
+    workflowRunId: string,
+    toolCall: ToolCall,
+    data: Record<string, unknown>,
+  ): void {
+    this.events.publish({
+      type,
+      run_id: workflowRunId,
+      data: {
+        workflow_run_id: workflowRunId,
+        tool_call_id: toolCall.id,
+        tool_name: toolCall.function.name,
+        ...data,
+      },
+      ts: Date.now(),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
+    });
+  }
+
   private async executeStep(
     active: ActiveRun,
     definition: WorkflowDefinition,
@@ -688,6 +714,49 @@ class WorkflowEngineImpl implements WorkflowEngine {
       if (!tool) throw new Error(`tool "${name}" is not registered`);
 
       const args = interpolateValue(step.args ?? {}, context);
+
+      // 0.8.2 Wave 2B1：注入 pipeline 时走统一语义（含 hook/guardrail/权限）。
+      if (this.toolPipeline) {
+        const runId = active.file.workflow_run_id;
+        const toolCall: ToolCall = {
+          id: `${runId}:${step.id}`,
+          type: 'function',
+          function: { name, arguments: JSON.stringify(args) },
+        };
+        const startedAt = Date.now();
+        this.publishToolCallEvent('tool.call.started', runId, toolCall, { arguments: args });
+
+        let result: ToolPipelineResult;
+        try {
+          result = await raceAbort(
+            this.toolPipeline.execute({ runId, sessionId: runId, toolCall, args, signal }),
+            signal,
+          );
+        } catch (error) {
+          this.publishToolCallEvent('tool.call.failed', runId, toolCall, {
+            error: errorMessage(error),
+            duration_ms: Date.now() - startedAt,
+          });
+          throw error;
+        }
+
+        if (!result.ok) {
+          const error = result.error ?? result.content;
+          this.publishToolCallEvent('tool.call.failed', runId, toolCall, {
+            error,
+            duration_ms: Date.now() - startedAt,
+          });
+          throw new Error(error);
+        }
+
+        this.publishToolCallEvent('tool.call.completed', runId, toolCall, {
+          result: result.content,
+          duration_ms: Date.now() - startedAt,
+        });
+        return result.content;
+      }
+
+      // Deprecated：未注入 pipeline 的旧直接调用路径（兼容嵌入方）。
       const toolContext: ToolContext = {
         run_id: active.file.workflow_run_id,
         session_id: active.file.workflow_run_id,
