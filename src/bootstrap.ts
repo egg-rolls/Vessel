@@ -95,6 +95,10 @@ export interface BootstrapOptions {
   acquireLock?: boolean;
   /** 0.5：`--connect <url>` / VESSEL_CONNECT；设置时不加锁、不写本地 store */
   connect?: string;
+  /** 0.6：`--connect-token`（最高优先级；不回显） */
+  connectToken?: string;
+  /** 0.6：`--ca <path>`（自签/私有 CA，PEM） */
+  caFile?: string;
   /** 0.5：测试注入 data_dir（缺省 config.dataDir → VESSEL_DATA_DIR → 默认值） */
   dataDir?: string;
   /** 0.5：trace recorder 工厂（测试） */
@@ -107,6 +111,7 @@ export interface BootstrapOptions {
   rpcClientFactory?: (opts: {
     baseUrl: string;
     token: string;
+    ca?: string;
   }) => RpcClient & { close(): Promise<void> };
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
@@ -131,6 +136,8 @@ export interface BootstrapResult {
   /** 0.5：解析后的 tenant 与目录 */
   tenantId: string;
   tenantPaths: TenantPaths;
+  /** 0.6：connect 模式下远端 gateway 的 tenant / node（来自 health.get） */
+  remote?: { tenantId: string; nodeId?: string; endpoint: string };
   /** 0.5：非 connect 且请求写时持有 */
   tenantLock?: TenantLock;
   /** 0.5 A-6：本地 tenant 的执行面；connect 模式为 undefined */
@@ -229,30 +236,106 @@ async function bootstrapConnect(input: {
   url: string;
   /** headless 不显示 provider banner，无需额外查询 gateway。 */
   headless: boolean;
+  /** 0.6：显式 tenant（--tenant / VESSEL_TENANT）才把 tenant_id 合并进请求。 */
+  tenantExplicit: boolean;
+  connectToken?: string;
+  caFile?: string;
   rpcClientFactory?: (opts: {
     baseUrl: string;
     token: string;
+    ca?: string;
   }) => RpcClient & { close(): Promise<void> };
 }): Promise<BootstrapResult> {
-  // 连接 token：VESSEL_CONNECT_TOKEN → VESSEL_GATEWAY_TOKEN →
-  // config 的 serve.token / token_env → transport.token；永不打印。
+  const connectConfig = input.config.connect;
+
+  // 连接 token 优先级（DECISION-014 A1）：CLI > env > config。
+  // 永不打印。
   const token =
+    nonEmptyString(input.connectToken) ??
     nonEmptyString(process.env.VESSEL_CONNECT_TOKEN) ??
     nonEmptyString(process.env.VESSEL_GATEWAY_TOKEN) ??
+    nonEmptyString(connectConfig?.tokenEnv ? process.env[connectConfig.tokenEnv] : undefined) ??
+    nonEmptyString(connectConfig?.token) ??
     nonEmptyString(input.config.serve?.token) ??
     nonEmptyString(
       input.config.serve?.tokenEnv ? process.env[input.config.serve.tokenEnv] : undefined,
     ) ??
     nonEmptyString(input.config.transport?.token) ??
     '';
+
+  // CA：CLI > env > config；只读文件，错误信息不带 token。
+  const caPath =
+    nonEmptyString(input.caFile) ??
+    nonEmptyString(process.env.VESSEL_CONNECT_CA) ??
+    nonEmptyString(connectConfig?.caFile);
+  let ca: string | undefined;
+  if (caPath !== undefined) {
+    try {
+      ca = await Bun.file(caPath).text();
+    } catch {
+      console.error(`Cannot read CA file: ${caPath}`);
+      process.exit(1);
+    }
+    if (ca.trim() === '') {
+      console.error(`CA file is empty: ${caPath}`);
+      process.exit(1);
+    }
+  }
+
   let client: RpcClient & { close(): Promise<void> };
   try {
     client = input.rpcClientFactory
-      ? input.rpcClientFactory({ baseUrl: input.url, token })
-      : createHttpRpcClient({ baseUrl: input.url, token });
+      ? input.rpcClientFactory({
+          baseUrl: input.url,
+          token,
+          ...(ca !== undefined ? { ca } : {}),
+        })
+      : createHttpRpcClient({
+          baseUrl: input.url,
+          token,
+          ...(ca !== undefined ? { ca } : {}),
+        });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
+  }
+
+  // A4：显式 --tenant / VESSEL_TENANT 时把 tenant_id 合并进每个请求；
+  // 未显式指定时由 gateway token principal 决定（不发送 tenant_id）。
+  const withTenant = (params: unknown): unknown => {
+    if (!input.tenantExplicit) return params;
+    if (isRecordValue(params)) return { ...params, tenant_id: input.tenantId };
+    return { tenant_id: input.tenantId };
+  };
+  const rpc: RpcClient & { close(): Promise<void> } = {
+    request: <T = unknown>(method: string, params?: unknown) =>
+      client.request<T>(method, withTenant(params)),
+    subscribe: (handler) => client.subscribe(handler),
+    close: () => client.close(),
+  };
+
+  // A4：远端 tenant/node 以 health.get 为准（token principal 或 admin 覆盖）。
+  let remote: BootstrapResult['remote'];
+  let effectiveTenantId = input.tenantId;
+  try {
+    const health = await rpc.request<unknown>('health.get');
+    if (isRecordValue(health)) {
+      const remoteTenant =
+        typeof health.tenant_id === 'string' && health.tenant_id !== ''
+          ? health.tenant_id
+          : input.tenantId;
+      const node = isRecordValue(health.node) ? health.node : undefined;
+      const remoteNodeId =
+        node && typeof node.node_id === 'string' && node.node_id !== '' ? node.node_id : undefined;
+      remote = {
+        tenantId: remoteTenant,
+        ...(remoteNodeId !== undefined ? { nodeId: remoteNodeId } : {}),
+        endpoint: input.url,
+      };
+      effectiveTenantId = remoteTenant;
+    }
+  } catch {
+    // 旧 gateway / 权限不足：保留本地 tenant，仅少展示 node。
   }
 
   // connect 模式下 agent 实际跑在 gateway 上：状态栏应显示 gateway 的 provider，
@@ -260,7 +343,7 @@ async function bootstrapConnect(input: {
   let gatewayProvider = input.config.provider;
   if (!input.headless) {
     try {
-      const snapshot = await client.request<unknown>('config.get');
+      const snapshot = await rpc.request<unknown>('config.get');
       if (isRecordValue(snapshot)) {
         const configValue = isRecordValue(snapshot.config) ? snapshot.config : undefined;
         const provider =
@@ -307,12 +390,72 @@ async function bootstrapConnect(input: {
     }
   });
 
+  /**
+   * A3：TUI / headless 只会在本地 events 上发布 response；
+   * connect 模式下必须经 canonical RPC 回远端。失败只写 stderr。
+   */
+  /**
+   * gateway 会把 `permission.respond` / `ask.respond` 的结果再作为事件推回来。
+   * 记录已转发的 requestId，回声到达时只消费一次，避免二次 RPC。
+   */
+  const forwardedInteractions = new Set<string>();
+  const rememberForwarded = (key: string): void => {
+    forwardedInteractions.add(key);
+    while (forwardedInteractions.size > 1000) {
+      const first = forwardedInteractions.values().next();
+      if (first.done) break;
+      forwardedInteractions.delete(first.value);
+    }
+  };
+
+  const unsubscribeInteractions = events.subscribe((event) => {
+    const data = isRecordValue(event.data) ? event.data : undefined;
+    if (!data) return;
+    if (event.type === 'tool.permission.response') {
+      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+      const decision =
+        data.decision === 'allow' || data.decision === 'deny' ? data.decision : undefined;
+      if (requestId === undefined || decision === undefined) return;
+      const key = `permission:${requestId}`;
+      if (forwardedInteractions.delete(key)) return;
+      rememberForwarded(key);
+      void rpc
+        .request('permission.respond', {
+          request_id: requestId,
+          decision,
+          ...(data.remember === true ? { remember: true } : {}),
+        })
+        .catch((error: unknown) => {
+          console.error(
+            `Remote permission response failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        });
+      return;
+    }
+    if (event.type === 'ask.user.answered') {
+      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
+      if (requestId === undefined || !Array.isArray(data.answers)) return;
+      const key = `ask:${requestId}`;
+      if (forwardedInteractions.delete(key)) return;
+      rememberForwarded(key);
+      void rpc
+        .request('ask.respond', { request_id: requestId, answers: data.answers })
+        .catch((error: unknown) => {
+          console.error(
+            `Remote ask response failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        });
+    }
+  });
+
   const runtime: RunnableAgent = {
     events,
     pluginHost,
     async run(inputValue, sessionId, opts) {
       const prompt = typeof inputValue === 'string' ? inputValue : String(inputValue.content);
-      const result = await client.request<unknown>('runs.start', {
+      const result = await rpc.request<unknown>('runs.start', {
         input: prompt,
         session_id: sessionId ?? currentSessionId,
         ...(opts?.messages ? { messages: opts.messages } : {}),
@@ -323,6 +466,7 @@ async function bootstrapConnect(input: {
     },
     dispose() {
       unsubscribe();
+      unsubscribeInteractions();
       void client.close();
     },
   };
@@ -331,6 +475,7 @@ async function bootstrapConnect(input: {
     if (shuttingDown) return;
     shuttingDown = true;
     unsubscribe();
+    unsubscribeInteractions();
     try {
       await client.close();
     } catch {
@@ -354,8 +499,8 @@ async function bootstrapConnect(input: {
       baseUrl: gatewayProvider?.baseUrl ?? '',
     },
     plugins: [],
-    rpc: client,
-    tenant: { tenant_id: input.tenantId, data_dir: input.tenantPaths.root },
+    rpc,
+    tenant: { tenant_id: effectiveTenantId, data_dir: input.tenantPaths.root },
     config: input.config,
     newSessionId,
     onExit: () => {
@@ -367,12 +512,13 @@ async function bootstrapConnect(input: {
     runtime,
     ctx,
     config: input.config,
-    tenantId: input.tenantId,
+    tenantId: effectiveTenantId,
+    ...(remote !== undefined ? { remote } : {}),
     tenantPaths: input.tenantPaths,
     nodeId: input.nodeId,
     interruptWorkflows: async () => {},
     resumeRun: async (runId) => {
-      const result = await client.request<unknown>('runs.resume', { run_id: runId });
+      const result = await rpc.request<unknown>('runs.resume', { run_id: runId });
       const record = isRecordValue(result) ? result : {};
       return {
         sessionId: typeof record.session_id === 'string' ? record.session_id : currentSessionId,
@@ -434,6 +580,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // connect 模式：不获取写锁、不写本地 store/trace；配置仍加载用于 tenant/token 选择。
   if (connectMode) {
+    // 只有 CLI / env 显式选择 tenant 才覆盖 token principal；config.tenant.default 不算。
+    const tenantExplicit =
+      options.tenantId !== undefined || (process.env.VESSEL_TENANT ?? '').trim() !== '';
     return bootstrapConnect({
       config,
       nodeId,
@@ -441,6 +590,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       tenantPaths,
       url: connectUrl,
       headless,
+      tenantExplicit,
+      ...(options.connectToken !== undefined ? { connectToken: options.connectToken } : {}),
+      ...(options.caFile !== undefined ? { caFile: options.caFile } : {}),
       ...(options.rpcClientFactory ? { rpcClientFactory: options.rpcClientFactory } : {}),
     });
   }

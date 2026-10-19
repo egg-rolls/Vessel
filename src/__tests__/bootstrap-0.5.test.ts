@@ -227,15 +227,165 @@ describe('bootstrap 0.5 - rpc injection', () => {
     });
 
     try {
-      expect(result.ctx.rpc).toBe(stub);
+      expect(result.ctx.rpc).toBeDefined();
       expect(result.ctx.tenant).toEqual({
         tenant_id: 'default',
         data_dir: result.tenantPaths.root,
       });
       await result.ctx.rpc?.request('capabilities.list');
-      expect(calls).toEqual(['capabilities.list']);
+      // 0.6：connect 建连先探测 health.get；其余调用顺序不变。
+      expect(calls).toEqual(['health.get', 'capabilities.list']);
       expect(result.tenantLock).toBeUndefined();
       expect(fs.existsSync(result.tenantPaths.lock_file)).toBe(false);
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('connect 模式：health.get 决定远端 tenant/node 展示', async () => {
+    const dataDir = tempDir();
+    const stub = {
+      request: async <T = unknown>(method: string): Promise<T> => {
+        if (method === 'health.get') {
+          return {
+            status: 'ok',
+            tenant_id: 'tenant-b',
+            node: { node_id: 'node-b' },
+          } as T;
+        }
+        return {} as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      connect: 'http://127.0.0.1:1',
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      expect(result.remote).toEqual({
+        tenantId: 'tenant-b',
+        nodeId: 'node-b',
+        endpoint: 'http://127.0.0.1:1',
+      });
+      expect(result.tenantId).toBe('tenant-b');
+      expect(result.ctx.tenant?.tenant_id).toBe('tenant-b');
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('connect 模式：显式 tenant 合并进每个请求', async () => {
+    const dataDir = tempDir();
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const stub = {
+      request: async <T = unknown>(method: string, params?: unknown): Promise<T> => {
+        calls.push({ method, params });
+        if (method === 'runs.start') return 'done' as T;
+        return {} as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      tenantId: 'tenant-b',
+      connect: 'http://127.0.0.1:1',
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      expect(calls[0]).toEqual({ method: 'health.get', params: { tenant_id: 'tenant-b' } });
+      await result.runtime.run('hello');
+      const start = calls.find((call) => call.method === 'runs.start');
+      expect(start?.params).toMatchObject({ input: 'hello', tenant_id: 'tenant-b' });
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('connect 模式：permission/ask response 经 RPC 回远端', async () => {
+    const dataDir = tempDir();
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const stub = {
+      request: async <T = unknown>(method: string, params?: unknown): Promise<T> => {
+        calls.push({ method, params });
+        return {} as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      connect: 'http://127.0.0.1:1',
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      result.ctx.events.publish({
+        type: 'tool.permission.response',
+        run_id: 'run-1',
+        data: { requestId: 'perm-1', decision: 'allow', remember: true },
+        ts: Date.now(),
+      });
+      result.ctx.events.publish({
+        type: 'ask.user.answered',
+        run_id: 'run-1',
+        data: {
+          requestId: 'ask-1',
+          answers: [{ header: 'h', question: 'q', answer: 'a' }],
+        },
+        ts: Date.now(),
+      });
+      await Bun.sleep(10);
+
+      expect(calls).toContainEqual({
+        method: 'permission.respond',
+        params: { request_id: 'perm-1', decision: 'allow', remember: true },
+      });
+      expect(calls).toContainEqual({
+        method: 'ask.respond',
+        params: {
+          request_id: 'ask-1',
+          answers: [{ header: 'h', question: 'q', answer: 'a' }],
+        },
+      });
+    } finally {
+      await result.shutdown();
+    }
+  });
+
+  it('connect 模式：CLI token 优先，CA 读取后传给 client', async () => {
+    const dataDir = tempDir();
+    const caPath = path.join(dataDir, 'ca.pem');
+    fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----\n');
+    const received: Array<{ baseUrl: string; token: string; ca?: string }> = [];
+    const stub = {
+      request: async <T = unknown>(): Promise<T> => ({}) as T,
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      connect: 'https://gateway.example.com:8642',
+      connectToken: 'cli-token',
+      caFile: caPath,
+      rpcClientFactory: (opts) => {
+        received.push(opts);
+        return stub;
+      },
+    });
+
+    try {
+      expect(received[0]?.baseUrl).toBe('https://gateway.example.com:8642');
+      expect(received[0]?.token).toBe('cli-token');
+      expect(received[0]?.ca).toContain('BEGIN CERTIFICATE');
     } finally {
       await result.shutdown();
     }
@@ -245,6 +395,9 @@ describe('bootstrap 0.5 - rpc injection', () => {
     const dataDir = tempDir();
     const stub = {
       request: async <T = unknown>(method: string): Promise<T> => {
+        if (method === 'health.get') {
+          return { status: 'ok', tenant_id: 'default' } as T;
+        }
         if (method === 'config.get') {
           return {
             config: {
