@@ -28,6 +28,7 @@ import type {
   PluginHost,
   RunEvent,
   RunOptions,
+  RuntimePermissionConfig,
   TerminationPolicy,
   ToolContext,
   ToolDefinition,
@@ -83,6 +84,12 @@ export interface DelegateTaskOptions {
   maxConcurrentDelegates?: number;
   /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
   tenantId?: string;
+  /**
+   * 0.8.2 Wave 2B1：子 agent 继承的默认权限策略。
+   * 缺省保持旧行为 `{ default: 'allow' }`；显式传入时以父配置为准
+   * （例如 `{ default: 'ask' }` 不再静默放行无 checkPermission 的工具）。
+   */
+  permission?: RuntimePermissionConfig;
 }
 
 /** 解析后的插件配置（内部使用） */
@@ -101,6 +108,8 @@ interface ResolvedConfig {
   host?: CoreRuntimeHost;
   /** 0.5：tenant 作用域（可选）。 */
   tenantId?: string;
+  /** 0.8.2 Wave 2B1：子 agent 默认权限策略（未注入时沿用 `{default:'allow'}`）。 */
+  permission?: RuntimePermissionConfig;
   /** run_id → 递归深度；实例级（避免模块级可变状态跨 tenant 共享）。 */
   depthByRunId: Map<string, number>;
 }
@@ -177,6 +186,8 @@ interface ChildTaskConfig {
   limits: UsageLimits;
   termination: TerminationPolicy;
   permissionMode: DelegatePermissionMode;
+  /** 0.8.2：子 agent 默认权限策略；缺省沿用 `{default:'allow'}`。 */
+  permission?: RuntimePermissionConfig;
   delegateId: string;
   depth: number;
   signal?: AbortSignal;
@@ -263,8 +274,9 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
       pluginHost: config.pluginHost,
       limits: { run: config.limits },
       termination: config.termination,
-      // deny 模式已过滤工具；bridge 由 Host 转发权限请求
-      permission: { default: 'allow' },
+      // deny 模式已过滤工具；bridge 由 Host 转发权限请求。
+      // 0.8.2：继承父配置的默认权限策略；未注入时保持旧行为。
+      permission: config.permission ?? { default: 'allow' },
       metadata: { ephemeral: true, depth: config.depth + 1 },
     });
 
@@ -334,6 +346,7 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
           limits: config.limits,
           termination: config.termination,
           permissionMode: config.permissionMode,
+          ...(config.permission !== undefined ? { permission: config.permission } : {}),
           delegateId,
           depth,
           signal: ctx.signal,
@@ -387,6 +400,7 @@ export function createDelegateTaskPlugin(options: DelegateTaskOptions): Plugin {
     permissionMode: options.permissionMode ?? 'bridge',
     readOnlyTools: options.readOnlyTools ?? ['read'],
     maxConcurrentDelegates: options.maxConcurrentDelegates ?? DEFAULT_MAX_CONCURRENT_DELEGATES,
+    ...(options.permission !== undefined ? { permission: options.permission } : {}),
     ...(options.runtimeHost !== undefined ? { runtimeHost: options.runtimeHost } : {}),
     ...(tenantId !== undefined ? { tenantId } : {}),
   };
