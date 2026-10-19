@@ -8,6 +8,7 @@
  */
 
 export type {
+  CommandCategory,
   CommandEntry,
   CommandResult,
   ReplState,
@@ -19,8 +20,20 @@ export {
   createCommands,
   doResume,
 } from './commands/commands.js';
+export {
+  type DeleteSessionOptions,
+  deleteSessionAction,
+  renameSessionAction,
+  runSessionsCommand,
+  SESSIONS_DEPRECATION,
+  sessionActionResult,
+  sessionsCommand,
+} from './commands/sessions-command.js';
 export { AskUserDialog } from './components/AskUserDialog.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
+export { DataTable, type DataTableProps } from './components/DataTable.js';
+export { DetailPanel, type DetailPanelProps } from './components/DetailPanel.js';
+export { EmptyState, type EmptyStateProps } from './components/EmptyState.js';
 export {
   type CommandEnterDecision,
   type CommandItem,
@@ -28,7 +41,16 @@ export {
   filterCommands,
   InlineAutocomplete,
 } from './components/InlineAutocomplete.js';
-export { SessionTable } from './components/SessionTable.js';
+export {
+  InteractiveViewHost,
+  type InteractiveViewHostProps,
+} from './components/InteractiveViewHost.js';
+export { formatKeyHints, KeyHints, type KeyHintsProps } from './components/KeyHints.js';
+export {
+  type SessionPickerActionResult,
+  SessionTable,
+  type SessionTableProps,
+} from './components/SessionTable.js';
 export {
   minVerbDelayMs,
   SpinnerWithVerb,
@@ -141,5 +163,46 @@ export {
 } from './rpc-events.js';
 // Git 工具
 export { getCurrentGitBranch } from './utils/git.js';
+// 命令视图（CommandView）纯数据与渲染工具
+export {
+  COLUMN_GAP,
+  formatTableHeader,
+  formatTableRow,
+  priorityThreshold,
+  resolveColumns,
+  scrollWindow,
+  TABLE_PREFIX_WIDTH,
+  VIEW_MAX_WIDTH,
+  viewContentWidth,
+  viewWidth,
+  widthClass,
+} from './views/layout.js';
+export { type RenderTextOptions, renderViewAsText } from './views/render-text.js';
+export {
+  buildSessionPickerView,
+  buildSessionRows,
+  filterSessions as filterSessionsForPicker,
+  sessionColumns,
+  sessionPickerActions,
+  sortSessionsForPicker,
+} from './views/session-picker.js';
+export type {
+  CommandView,
+  ConfirmView,
+  DetailField,
+  DetailSection,
+  DetailView,
+  FormField,
+  FormView,
+  ListView,
+  TableView,
+  ViewAction,
+  ViewActionInvocation,
+  ViewColumn,
+  ViewEnvelope,
+  ViewMode,
+  ViewRow,
+  ViewTone,
+} from './views/types.js';
 export type { SetupWizardConfig } from './wizard/setup-wizard.js';
 export { runSetupWizard, SetupWizard } from './wizard/setup-wizard.js';

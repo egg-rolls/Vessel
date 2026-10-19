@@ -9,6 +9,8 @@
 
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError, redactForDisplay } from '../rpc.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
+import type { DetailView, TableView, ViewAction, ViewActionInvocation } from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const USAGE = 'Usage: /config [show|path] [--sources] [--json]';
@@ -205,7 +207,10 @@ export function formatConfigSources(snapshot: ConfigSnapshotLike): string {
     const source = typeof rawSource === 'string' ? rawSource : '?';
     const overlay = overlays.has(key) ? ' +tenant' : '';
     lines.push(
-      `  ${key.padEnd(36)} ${displayValue(leaves.get(key)).padEnd(24)} (${source}${overlay})`.trimEnd(),
+      `  ${padToWidth(truncateToWidth(key, 36), 36)} ${padToWidth(
+        truncateToWidth(displayValue(leaves.get(key)), 24),
+        24,
+      )} (${source}${overlay})`.trimEnd(),
     );
   }
   return lines.join('\n');
@@ -255,43 +260,275 @@ async function loadSources(
   }
 }
 
+/** 纯函数：详情动作（s 切 sources；path 视图没有 sources） */
+export function configDetailActions(action: 'show' | 'path'): ViewAction[] {
+  if (action === 'path') return [{ id: 'refresh', key: 'r', label: 'refresh' }];
+  return [
+    { id: 'sources', key: 's', label: 'sources' },
+    { id: 'refresh', key: 'r', label: 'refresh' },
+  ];
+}
+
+/** sources 表格动作：s 回到摘要 */
+export function configSourcesActions(): ViewAction[] {
+  return [
+    { id: 'sources', key: 's', label: 'summary' },
+    { id: 'refresh', key: 'r', label: 'refresh' },
+  ];
+}
+
+/** 纯函数：摘要/路径详情（字段分区，路径也走同一详情） */
+export function buildConfigDetailView(
+  snapshot: ConfigSnapshotLike,
+  action: 'show' | 'path' = 'show',
+): DetailView {
+  const config = snapshot.config;
+  const provider = isRecord(config.provider) ? config.provider : {};
+  const session = isRecord(config.session) ? config.session : {};
+  const trace = isRecord(config.trace) ? config.trace : {};
+  const tenant =
+    snapshot.tenant_id ?? (isRecord(config.tenant) ? String(config.tenant.default ?? '-') : '-');
+  const errors = readErrors(snapshot);
+  const warnings = snapshot.validation?.warnings ?? [];
+
+  const pathsSection: DetailView['sections'][number] = {
+    title: 'Paths',
+    fields: [
+      { label: 'User config', value: snapshot.paths?.user ?? '~/.vessel/config.yaml' },
+      { label: 'Project config', value: snapshot.paths?.project ?? './vessel.yaml' },
+      { label: 'Create user config', value: 'vessel config init' },
+    ],
+  };
+
+  if (action === 'path') {
+    return {
+      kind: 'detail',
+      title: 'Config paths',
+      badge: { text: `tenant ${tenant}`, tone: 'info' },
+      key: 'paths',
+      sections: [pathsSection],
+      actions: configDetailActions('path'),
+    };
+  }
+
+  const sections: DetailView['sections'] = [];
+  if (errors.length > 0 || warnings.length > 0) {
+    sections.push({
+      title: 'Validation',
+      lines: [
+        ...errors.map((error) => `✗ ${error}`),
+        ...warnings.map((warning) => `⚠ ${warning.path ?? '-'}: ${warning.message ?? 'warning'}`),
+      ],
+    });
+  }
+
+  sections.push(
+    {
+      title: 'Provider',
+      fields: [
+        { label: 'name', value: displayValue(provider.name) },
+        { label: 'model', value: displayValue(provider.model) },
+        { label: 'baseUrl', value: displayValue(provider.baseUrl) },
+      ],
+    },
+    {
+      title: 'Session',
+      fields: [
+        { label: 'backend', value: displayValue(session.backend) },
+        { label: 'dataDir', value: displayValue(config.dataDir) },
+      ],
+    },
+    {
+      title: 'Trace',
+      fields: [
+        { label: 'enabled', value: displayValue(trace.enabled) },
+        { label: 'level', value: displayValue(trace.level) },
+        { label: 'retentionDays', value: displayValue(trace.retentionDays) },
+      ],
+    },
+    pathsSection,
+  );
+
+  return {
+    kind: 'detail',
+    title: 'Config',
+    badge: {
+      text: `schema ${snapshot.schema_version ?? '-'} · tenant ${tenant}`,
+      tone: errors.length > 0 ? 'danger' : warnings.length > 0 ? 'warn' : 'info',
+    },
+    key: 'detail',
+    sections,
+    actions: configDetailActions('show'),
+  };
+}
+
+/** 纯函数：逐叶子键 -> TableView（值已脱敏） */
+export function buildConfigSourcesTableView(snapshot: ConfigSnapshotLike): TableView {
+  const leaves = flattenLeaves(snapshot.config, '', new Map());
+  const sources = snapshot.sources ?? {};
+  const overlays = new Set(snapshot.tenant_overlay_keys ?? []);
+  const keys = [...leaves.keys()].sort();
+
+  const rows = keys.map((key) => {
+    const rawSource = sources[key];
+    return {
+      key,
+      cells: {
+        key,
+        value: displayValue(leaves.get(key)),
+        source: typeof rawSource === 'string' ? rawSource : '?',
+        overlay: overlays.has(key) ? '+tenant' : '',
+      },
+    };
+  });
+
+  return {
+    kind: 'table',
+    title: 'Config sources',
+    columns: [
+      // SOURCE/OVERLAY 是 --sources 的核心信息，80 列也必须可见：
+      // 24 + 16 + 8 + 9 + 3*2 = 63 ≤ 80 列的 67 个单元格预算。
+      { key: 'key', header: 'KEY', minWidth: 24, priority: 1 },
+      { key: 'value', header: 'VALUE', minWidth: 16, priority: 1 },
+      { key: 'source', header: 'SOURCE', width: 8, priority: 1 },
+      { key: 'overlay', header: 'OVERLAY', width: 9, priority: 1 },
+    ],
+    rows,
+    actions: configSourcesActions(),
+    ...(rows[0] ? { initialKey: rows[0].key } : {}),
+    emptyText: 'No config keys.',
+    meta: `${keys.length} keys`,
+    key: 'sources',
+  };
+}
+
+/** 纯函数：没有 RPC 时的诚实不可用视图 */
+export function unavailableConfigView(): DetailView {
+  return {
+    kind: 'detail',
+    title: 'Config',
+    badge: { text: 'unavailable', tone: 'warn' },
+    sections: [
+      {
+        title: 'RPC required',
+        lines: [
+          'RPC control plane is not available. Start Vessel with a gateway connection (--connect <url>) to inspect config.',
+        ],
+      },
+    ],
+  };
+}
+
+type ConfigLoad = { ok: true; snapshot: ConfigSnapshotLike } | { ok: false; message: string };
+
+/** 读取并脱敏快照（命令主体与视图动作共用） */
+async function loadSafeConfig(
+  ctx: ReplContext,
+  options: { withSources: boolean },
+): Promise<ConfigLoad> {
+  if (!ctx.rpc) {
+    return {
+      ok: false,
+      message:
+        'RPC control plane is not available. Start Vessel with a gateway connection (--connect <url>) to inspect config.',
+    };
+  }
+  try {
+    const raw = await ctx.rpc.request<unknown>('config.get');
+    let snapshot = readConfigSnapshot(raw);
+    if (!snapshot) return { ok: false, message: 'Failed to load config: invalid snapshot.' };
+    if (options.withSources) snapshot = await loadSources(ctx, snapshot);
+    return { ok: true, snapshot: redactSnapshotForDisplay(snapshot) };
+  } catch (error) {
+    return { ok: false, message: `Failed to load config:\n${formatRpcError(error)}` };
+  }
+}
+
+function envelope(view: DetailView | TableView): NonNullable<CommandResult['view']> {
+  return { source: 'config', view };
+}
+
+/** `/config` 视图动作：s 在摘要/sources 表格间切换、r 刷新 */
+export async function runConfigViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  if (invocation.actionId === 'sources') {
+    // 当前是 sources 表格 -> 回摘要；否则加载 sources。
+    const loaded = await loadSafeConfig(ctx, {
+      withSources: invocation.viewKind !== 'table',
+    });
+    if (!loaded.ok) return { handled: true, output: `\n${loaded.message}\n` };
+    return {
+      handled: true,
+      view: envelope(
+        invocation.viewKind === 'table'
+          ? buildConfigDetailView(loaded.snapshot, 'show')
+          : buildConfigSourcesTableView(loaded.snapshot),
+      ),
+    };
+  }
+
+  if (invocation.actionId === 'refresh') {
+    const wantsSources = invocation.viewKey === 'sources';
+    const loaded = await loadSafeConfig(ctx, { withSources: wantsSources });
+    if (!loaded.ok) return { handled: true, output: `\n${loaded.message}\n` };
+    if (wantsSources) {
+      return { handled: true, view: envelope(buildConfigSourcesTableView(loaded.snapshot)) };
+    }
+    return {
+      handled: true,
+      view: envelope(
+        buildConfigDetailView(loaded.snapshot, invocation.viewKey === 'paths' ? 'path' : 'show'),
+      ),
+    };
+  }
+
+  return {
+    handled: true,
+    output: `\nUnknown /config view action "${invocation.actionId}".\n`,
+  };
+}
+
 /** /config 的执行体（导出供单测） */
 export async function runConfigCommand(args: string[], ctx: ReplContext): Promise<CommandResult> {
   const parsed = parseConfigArgs(args);
   if (!parsed.ok) return { handled: true, output: `\n${parsed.message}\n` };
   const options = parsed.value;
 
-  if (!ctx.rpc) {
+  const loaded = await loadSafeConfig(ctx, { withSources: options.sources });
+  if (!loaded.ok) {
     return {
       handled: true,
-      output:
-        '\nRPC control plane is not available. Start Vessel with a gateway connection (--connect <url>) to inspect config.\n',
+      output: `\n${loaded.message}\n`,
+      ...(ctx.rpc ? {} : { view: envelope(unavailableConfigView()) }),
     };
   }
+  const safe = loaded.snapshot;
 
-  try {
-    const raw = await ctx.rpc.request<unknown>('config.get');
-    let snapshot = readConfigSnapshot(raw);
-    if (!snapshot) {
-      return { handled: true, output: '\nFailed to load config: invalid snapshot.\n' };
-    }
-
-    if (options.sources) snapshot = await loadSources(ctx, snapshot);
-    const safe = redactSnapshotForDisplay(snapshot);
-
-    if (options.json) {
-      return { handled: true, output: `\n${JSON.stringify(safe, null, 2)}\n` };
-    }
-    if (options.action === 'path') {
-      return { handled: true, output: `\n${formatConfigPaths(safe)}\n` };
-    }
-    const body = options.sources
-      ? `${formatConfigSummary(safe)}\n\n${formatConfigSources(safe)}`
-      : formatConfigSummary(safe);
-    return { handled: true, output: `\n${body}\n` };
-  } catch (error) {
-    return { handled: true, output: `\nFailed to load config:\n${formatRpcError(error)}\n` };
+  // JSON 是机器可读出口：保持纯文本，不返回 view。
+  if (options.json) {
+    return { handled: true, output: `\n${JSON.stringify(safe, null, 2)}\n` };
   }
+  if (options.action === 'path') {
+    return {
+      handled: true,
+      output: `\n${formatConfigPaths(safe)}\n`,
+      view: envelope(buildConfigDetailView(safe, 'path')),
+    };
+  }
+  if (options.sources) {
+    return {
+      handled: true,
+      output: `\n${formatConfigSummary(safe)}\n\n${formatConfigSources(safe)}\n`,
+      view: envelope(buildConfigSourcesTableView(safe)),
+    };
+  }
+  return {
+    handled: true,
+    output: `\n${formatConfigSummary(safe)}\n`,
+    view: envelope(buildConfigDetailView(safe, 'show')),
+  };
 }
 
 export function configCommand(): CommandEntry {
@@ -299,6 +536,11 @@ export function configCommand(): CommandEntry {
     name: 'config',
     description: 'Show config (masked) and YAML config paths',
     usage: '/config [show|path] [--sources] [--json]',
+    category: 'config',
+    keywords: ['yaml', 'provider', 'sources'],
+    available: (ctx) => Boolean(ctx.rpc),
+    unavailableHint: 'RPC required',
     run: (args, ctx) => runConfigCommand(args, ctx),
+    viewAction: (invocation, ctx) => runConfigViewAction(invocation, ctx),
   };
 }

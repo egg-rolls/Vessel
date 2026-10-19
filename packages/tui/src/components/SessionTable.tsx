@@ -1,30 +1,73 @@
 /**
- * 交互式会话选择器组件
- * 全屏交互式界面，支持搜索过滤、键盘导航、会话元数据展示
+ * 交互式会话选择器（/resume）
+ * @module @vessel/tui
+ *
+ * 保留既有导出名与 props（onSelect/onClose），内部改用 DataTable + 纯 session-picker：
+ * ↑↓/jk、PgUp/PgDn、Home/End、`/`/`f` 过滤、Enter 打开、`r` 重命名、`x` 删除（内联确认）。
+ * 选中项按 session_id 记录；任何高度都封顶（默认 20 行）。
  */
 
 import type { SessionInfo } from '@vessel/core';
-import { Box, Text, useInput } from 'ink';
-import { useEffect, useMemo, useState } from 'react';
+import { Box, Text, useInput, useStdout } from 'ink';
+import { type ReactNode, useMemo, useState } from 'react';
+import { type LiveMode, viewExtraRows } from '../repl/layout.js';
 import { theme } from '../theme.js';
-import { formatRelativeTime } from '../utils/time.js';
+import { truncateToWidth } from '../utils/text-layout.js';
+import {
+  decideHiddenKey,
+  initialViewKeyState,
+  reduceViewKey,
+  type ViewIntent,
+  type ViewKey,
+  type ViewKeyState,
+} from '../views/keys.js';
+import {
+  resolveColumns,
+  scrollWindow,
+  TABLE_PREFIX_WIDTH,
+  viewContentWidth,
+  viewWidth,
+} from '../views/layout.js';
+import {
+  buildSessionRows,
+  clampSelectedKey,
+  filterSessions,
+  keyAfterRemoval,
+  selectedIndexForKey,
+  sessionColumns,
+  sessionPickerActions,
+  shortSessionId,
+} from '../views/session-picker.js';
+import type { ViewMode } from '../views/types.js';
+import { DataTable } from './DataTable.js';
+import { EmptyState } from './EmptyState.js';
+import { KeyHints } from './KeyHints.js';
 
-interface SessionTableProps {
+/** 删除/重命名回调的返回：ok=false 保留行并显示 message */
+export interface SessionPickerActionResult {
+  ok: boolean;
+  message?: string;
+}
+
+export interface SessionTableProps {
   sessions: SessionInfo[];
   currentSessionId?: string;
   /** picker 数据加载状态；默认 ready，保持外部调用兼容 */
   status?: 'loading' | 'ready' | 'error';
   error?: string | null;
-  /** 矮终端下可见会话行数上限；缺省不封顶 */
+  /** 可见会话行数上限；缺省 20（normal 也封顶） */
   maxRows?: number;
+  /** 终端高度分档（normal/compact/minimal/hidden）；缺省 normal */
+  heightMode?: LiveMode;
+  /** 终端列数；缺省取 stdout.columns */
+  columns?: number;
   onRetry?: () => void;
   onSelect: (id: string) => void;
   onClose: () => void;
-}
-
-function truncate(str: string, max: number): string {
-  if (str.length <= max) return str;
-  return `${str.slice(0, max - 3)}...`;
+  /** 交互删除；缺省时 `x` 不启用 */
+  onDelete?: (id: string) => Promise<SessionPickerActionResult>;
+  /** 交互重命名；缺省时 `r` 不启用 */
+  onRename?: (id: string, title: string) => Promise<SessionPickerActionResult>;
 }
 
 /**
@@ -36,151 +79,269 @@ export function clampSelection(index: number, length: number): number {
   return Math.min(Math.max(0, index), length - 1);
 }
 
+const DEFAULT_MAX_ROWS = 20;
+const ACTIVE_DELETE_NOTICE = 'Cannot delete the current session; run /new first.';
+
 export function SessionTable({
   sessions,
   currentSessionId,
   status = 'ready',
   error = null,
-  maxRows,
+  maxRows = DEFAULT_MAX_ROWS,
+  heightMode = 'normal',
+  columns,
   onRetry,
   onSelect,
   onClose,
+  onDelete,
+  onRename,
 }: SessionTableProps) {
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [filterMode, setFilterMode] = useState(false);
-  const [filterText, setFilterText] = useState('');
+  const { stdout } = useStdout();
+  const terminalColumns = columns ?? stdout.columns ?? 80;
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [mode, setMode] = useState<ViewMode>('browse');
+  const [draft, setDraft] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const filteredSessions = useMemo(() => {
-    if (!filterText) return sessions;
-    const lower = filterText.toLowerCase();
-    return sessions.filter(
-      (s) =>
-        s.title?.toLowerCase().includes(lower) ||
-        s.preview?.toLowerCase().includes(lower) ||
-        s.branch?.toLowerCase().includes(lower) ||
-        s.session_id.toLowerCase().includes(lower),
-    );
-  }, [sessions, filterText]);
+  const filtered = useMemo(() => filterSessions(sessions, filter), [sessions, filter]);
+  const rows = useMemo(
+    () => buildSessionRows(filtered, currentSessionId),
+    [filtered, currentSessionId],
+  );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filter changes
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [filterText]);
+  // 选中 key 失效（过滤/删除/刷新）时钳制到有效行，绝不指向不存在的 id。
+  const effectiveKey = clampSelectedKey(
+    rows,
+    selectedKey,
+    selectedIndexForKey(rows, selectedKey) >= 0 ? selectedIndexForKey(rows, selectedKey) : 0,
+  );
+  const selectedIndex = Math.max(0, selectedIndexForKey(rows, effectiveKey));
+  const selectedRow = rows[selectedIndex] ?? null;
+  const selectedSession = selectedRow
+    ? filtered.find((session) => session.session_id === selectedRow.key)
+    : undefined;
 
-  // 列表长度变化（过滤 / 重拉）时钳制到 [0, len-1]；空列表保持 0，绝不出现 -1。
-  useEffect(() => {
-    setSelectedIndex((prev) => clampSelection(prev, filteredSessions.length));
-  }, [filteredSessions.length]);
+  const actions = sessionPickerActions();
+  const enabledActions = actions.filter((action) => {
+    if (action.id === 'rename' && !onRename) return false;
+    if (action.id === 'delete' && !onDelete) return false;
+    return true;
+  });
+  const disabledActionKeys = actions
+    .filter((action) => action.id === 'delete' && selectedRow?.current === true)
+    .map((action) => action.key);
+  const actionKeys = enabledActions.map((action) => action.key);
 
-  // 矮终端：围绕选中项滚动，避免 picker 溢出压掉状态栏。
-  const visibleWindow = useMemo(() => {
-    if (maxRows === undefined || maxRows <= 0 || filteredSessions.length <= maxRows) {
-      return { start: 0, items: filteredSessions };
-    }
-    const maxStart = filteredSessions.length - maxRows;
-    const start = Math.min(Math.max(0, selectedIndex - Math.floor(maxRows / 2)), maxStart);
-    return { start, items: filteredSessions.slice(start, start + maxRows) };
-  }, [filteredSessions, maxRows, selectedIndex]);
+  const keyState: ViewKeyState = initialViewKeyState({
+    mode,
+    filter,
+    draft,
+    selectedIndex,
+    itemCount: rows.length,
+    pageSize: 5,
+    selectedCurrent: selectedRow?.current === true,
+    actionKeys,
+    disabledActionKeys,
+  });
 
   useInput((inputChar, key) => {
-    // Filter mode: type to filter
-    if (filterMode) {
-      if (key.escape) {
-        setFilterMode(false);
-        setFilterText('');
-        return;
-      }
-      if (key.return) {
-        setFilterMode(false);
-        return;
-      }
-      if (key.backspace || key.delete) {
-        setFilterText((prev) => prev.slice(0, -1));
-        return;
-      }
-      if (inputChar && !key.ctrl && !key.meta) {
-        setFilterText((prev) => prev + inputChar);
-        return;
-      }
+    // hidden（≤10 行）只显示一行摘要：除 Esc 与 error 态重试外一律不处理，
+    // 否则 x/y/r 会在看不到列表与确认提示的情况下静默删除/改名。
+    if (heightMode === 'hidden') {
+      const decision = decideHiddenKey(
+        { ...key, input: inputChar },
+        { status, refreshKeys: onRetry ? ['r'] : [] },
+      );
+      if (decision === 'close') onClose();
+      if (decision === 'refresh' && onRetry) onRetry();
       return;
     }
 
-    // Normal mode
-    if (key.escape) {
-      onClose();
+    if (status === 'loading') {
+      if (key.escape) onClose();
       return;
     }
-
-    // loading 时除 Esc 外不响应；error 时 r 重试。
-    if (status === 'loading') return;
     if (status === 'error') {
       if (inputChar === 'r' && onRetry) onRetry();
+      if (key.escape) onClose();
       return;
     }
 
-    if (key.return) {
-      if (filteredSessions.length > 0 && selectedIndex < filteredSessions.length) {
-        const selected = filteredSessions[selectedIndex];
-        if (selected) {
-          onSelect(selected.session_id);
-        }
-      }
-      return;
-    }
+    const inkKey: ViewKey = { ...key, input: inputChar };
+    const reduction = reduceViewKey(keyState, inkKey);
+    const next = reduction.state;
 
-    if (key.upArrow) {
-      setSelectedIndex((prev) => clampSelection(prev - 1, filteredSessions.length));
-      return;
-    }
-
-    if (key.downArrow) {
-      setSelectedIndex((prev) => clampSelection(prev + 1, filteredSessions.length));
-      return;
-    }
-
-    // Enter filter mode with / or f
-    if (inputChar === '/' || inputChar === 'f') {
-      setFilterMode(true);
-      setFilterText('');
-      return;
-    }
-
-    // Number quick-select (1-9)
-    const num = Number.parseInt(inputChar, 10);
-    if (!Number.isNaN(num) && num >= 1 && num <= filteredSessions.length) {
-      const selected = filteredSessions[num - 1];
-      if (selected) {
-        onSelect(selected.session_id);
-      }
-    }
+    if (next.filter !== filter) setFilter(next.filter);
+    if (next.draft !== draft) setDraft(next.draft);
+    if (next.mode !== mode) setMode(next.mode);
+    if (reduction.intent.type !== 'noop') handleIntent(reduction.intent);
   });
+
+  function handleIntent(intent: ViewIntent): void {
+    switch (intent.type) {
+      case 'noop':
+        return;
+      case 'close':
+        onClose();
+        return;
+      case 'moveSelection': {
+        const nextKey = rows[intent.index]?.key;
+        if (nextKey) setSelectedKey(nextKey);
+        return;
+      }
+      case 'quickSelect': {
+        const row = rows[intent.index];
+        if (row) {
+          setSelectedKey(row.key);
+          onSelect(row.key);
+        }
+        return;
+      }
+      case 'beginFilter':
+        setNotice(null);
+        setFilter('');
+        setMode('filter');
+        return;
+      case 'setFilter':
+        setFilter(intent.filter);
+        return;
+      case 'exitFilter':
+      case 'clearFilter':
+        setMode('browse');
+        if (intent.type === 'clearFilter') setFilter('');
+        return;
+      case 'action': {
+        setNotice(null);
+        if (intent.key === 'enter') {
+          if (selectedRow) onSelect(selectedRow.key);
+          return;
+        }
+        if (intent.key === 'r') {
+          setDraft(selectedSession?.title || selectedSession?.preview || '');
+          setMode('rename');
+          return;
+        }
+        if (intent.key === 'x') {
+          if (!selectedRow) return;
+          if (selectedRow.current) {
+            setNotice(ACTIVE_DELETE_NOTICE);
+            return;
+          }
+          setMode('confirm');
+          return;
+        }
+        if (intent.key === 'R' && onRetry) onRetry();
+        return;
+      }
+      case 'disabledAction':
+        setNotice(intent.reason === 'current' ? ACTIVE_DELETE_NOTICE : 'Select a session first.');
+        return;
+      case 'submit': {
+        // rename
+        if (!onRename || !selectedRow) {
+          setMode('browse');
+          return;
+        }
+        void onRename(selectedRow.key, intent.value).then((result) => {
+          if (result.ok) {
+            setMode('browse');
+            setNotice(result.message ?? 'Renamed.');
+          } else {
+            setNotice(result.message ?? 'Rename failed.');
+          }
+        });
+        return;
+      }
+      case 'submitConfirm': {
+        const removed = selectedRow?.key ?? null;
+        if (!intent.yes || !onDelete || !removed) {
+          setMode('browse');
+          return;
+        }
+        void onDelete(removed).then((result) => {
+          if (result.ok) {
+            const nextKey = keyAfterRemoval(rows, removed);
+            setSelectedKey(nextKey);
+            setMode('browse');
+            setNotice(result.message ?? 'Deleted.');
+          } else {
+            setMode('browse');
+            setNotice(result.message ?? 'Delete failed.');
+          }
+        });
+        return;
+      }
+      case 'cancelMode':
+        setMode('browse');
+        setDraft('');
+        return;
+      case 'focusField':
+      case 'beginRename':
+      case 'beginConfirm':
+      case 'beginForm':
+      case 'reject':
+        if (intent.type === 'reject') {
+          setNotice(intent.reason === 'empty-title' ? 'Title cannot be empty.' : 'Value required.');
+        }
+        return;
+    }
+  }
+
+  // < 11 行：只渲染一行摘要，绝不把输入行顶出屏幕。
+  if (heightMode === 'hidden') {
+    if (status === 'loading') {
+      return (
+        <Text color={theme.muted} wrap="truncate-end">
+          Resume: loading sessions… · esc close
+        </Text>
+      );
+    }
+    if (status === 'error') {
+      return (
+        <Text color={theme.danger} wrap="truncate-end">
+          Resume: failed to load sessions{onRetry ? ' · r retry' : ''} · esc close
+        </Text>
+      );
+    }
+    if (sessions.length === 0) {
+      return (
+        <Text color={theme.muted} wrap="truncate-end">
+          Resume: no sessions · esc close
+        </Text>
+      );
+    }
+    if (rows.length === 0) {
+      return (
+        <Text color={theme.muted} wrap="truncate-end">
+          Resume: no matches · esc close
+        </Text>
+      );
+    }
+    const first = rows[0];
+    const more = rows.length > 1 ? ` · ${rows.length - 1} more` : '';
+    return (
+      <Text color={theme.muted} wrap="truncate-end">
+        Resume: {selectedRow?.cells.title ?? first?.cells.title ?? '-'}
+        {more} · resize for actions · esc close
+      </Text>
+    );
+  }
 
   if (status === 'loading') {
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderColor={theme.line}
-        paddingX={1}
-        marginY={1}
-      >
+      <SelectionFrame heightMode={heightMode}>
         <Text color={theme.muted}>Loading sessions…</Text>
         <Box marginTop={1}>
           <Text color={theme.faint}>Esc to close</Text>
         </Box>
-      </Box>
+      </SelectionFrame>
     );
   }
 
   if (status === 'error') {
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderColor={theme.line}
-        paddingX={1}
-        marginY={1}
-      >
+      <SelectionFrame heightMode={heightMode}>
         <Text bold color={theme.danger}>
           Failed to load sessions
         </Text>
@@ -190,147 +351,150 @@ export function SessionTable({
         <Box marginTop={1}>
           <Text color={theme.faint}>r retry · Esc to close</Text>
         </Box>
-      </Box>
+      </SelectionFrame>
     );
   }
 
   if (sessions.length === 0) {
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderColor={theme.line}
-        paddingX={1}
-        marginY={1}
-      >
-        <Text color={theme.muted}>No sessions to resume.</Text>
-        <Box marginTop={1}>
-          <Text color={theme.faint}>Esc to close</Text>
-        </Box>
-      </Box>
+      <SelectionFrame heightMode={heightMode}>
+        <EmptyState title="No sessions to resume." hint="Esc to close" />
+      </SelectionFrame>
     );
   }
 
-  // 有会话但过滤结果为空：明确提示，而不是留下一个空表头。
-  if (filteredSessions.length === 0) {
+  if (rows.length === 0) {
     return (
-      <Box
-        flexDirection="column"
-        borderStyle="single"
-        borderColor={theme.line}
-        paddingX={1}
-        marginY={1}
-      >
-        <Text color={theme.muted}>No matching sessions</Text>
-        <Box marginTop={1}>
-          <Text color={theme.faint}>
-            {filterText ? `filter: "${filterText}" · ` : ''}esc to clear filter
-          </Text>
-        </Box>
-      </Box>
+      <SelectionFrame heightMode={heightMode}>
+        <EmptyState
+          title="No matching sessions"
+          hint={filter ? `filter: "${filter}" · esc to clear filter` : 'esc close'}
+        />
+      </SelectionFrame>
     );
   }
 
-  const maxIdWidth = 28;
-  const maxPreviewWidth = 32;
-  const maxBranchWidth = 14;
+  const showHeader = heightMode === 'normal' || heightMode === 'compact';
+  // 确认/重命名/notice 会追加在数据行之后，必须先让出对应行数。
+  const extraRows = viewExtraRows(mode, notice !== null);
+  // 容量可以为 0：矮终端 + 确认/notice 时应隐藏数据行，而不是强行保留 1 行导致溢出。
+  const capacity = Math.max(0, maxRows - extraRows);
+  const window = scrollWindow(rows.length, selectedIndex, capacity);
+  const rangeVisible = rows.length > window.end - window.start;
+  const rangeText = rangeVisible
+    ? `showing ${window.start + 1}-${window.end} of ${rows.length}${
+        rows.length !== sessions.length ? ` (filtered from ${sessions.length})` : ''
+      }`
+    : null;
+  const contentWidth = Math.max(1, viewContentWidth(terminalColumns) - TABLE_PREFIX_WIDTH);
+  const resolved = resolveColumns(sessionColumns(terminalColumns), contentWidth, terminalColumns);
 
+  return (
+    <SelectionFrame heightMode={heightMode} width={viewWidth(terminalColumns)}>
+      <Box flexDirection="column" width={viewContentWidth(terminalColumns)}>
+        <Box marginBottom={1}>
+          <Text bold color={theme.brand}>
+            Resume session
+          </Text>
+          {filter ? (
+            <Text color={theme.warn}>
+              {' '}
+              · filter:{' '}
+              {truncateToWidth(filter, Math.max(1, viewContentWidth(terminalColumns) - 34))}
+              {mode === 'filter' ? '_' : ''}
+            </Text>
+          ) : null}
+          {/* 窗口指示折进标题行，避免在矮终端额外占 2 行 */}
+          {rangeText ? <Text color={theme.faint}> · {rangeText}</Text> : null}
+        </Box>
+
+        {capacity > 0 ? (
+          <DataTable
+            view={{
+              kind: 'table',
+              title: 'Resume session',
+              columns: sessionColumns(terminalColumns),
+              rows,
+              actions,
+            }}
+            columns={resolved}
+            rows={rows.slice(window.start, window.end)}
+            selectedKey={effectiveKey}
+            start={window.start}
+            showHeader={showHeader}
+          />
+        ) : null}
+
+        {mode === 'confirm' && selectedSession ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={theme.danger} wrap="truncate-end">
+              Delete "{selectedSession.title || selectedSession.preview || '(untitled)'}"?{' '}
+              {String(selectedSession.message_count)} messages and related runs/events will be
+              removed.
+            </Text>
+            <Text color={theme.faint}>[y] delete · [n] keep · esc cancel</Text>
+          </Box>
+        ) : null}
+
+        {mode === 'rename' ? (
+          <Box marginTop={1}>
+            <Text color={theme.warn}>
+              {'r Rename: '}
+              {draft}
+              <Text color={theme.faint}>▏</Text>
+            </Text>
+          </Box>
+        ) : null}
+
+        {notice ? (
+          <Box marginTop={1}>
+            <Text color={theme.warn}>! {notice}</Text>
+          </Box>
+        ) : null}
+
+        <Box marginTop={1}>
+          {mode === 'filter' ? (
+            <Text color={theme.faint}>
+              type to filter · enter keep · esc clear
+              {selectedRow ? ` · ${shortSessionId(selectedRow.key)}` : ''}
+            </Text>
+          ) : mode === 'rename' ? (
+            <Text color={theme.faint}>enter save · esc cancel</Text>
+          ) : mode === 'confirm' ? (
+            <Text color={theme.faint}>[y] delete · [n] keep · esc cancel</Text>
+          ) : (
+            <KeyHints
+              actions={enabledActions}
+              extra="↑↓/jk move"
+              disabledKeys={disabledActionKeys}
+            />
+          )}
+        </Box>
+      </Box>
+    </SelectionFrame>
+  );
+}
+
+function SelectionFrame({
+  children,
+  heightMode,
+  width,
+}: {
+  children: ReactNode;
+  heightMode: LiveMode;
+  width?: number;
+}) {
   return (
     <Box
       flexDirection="column"
+      flexShrink={0}
       borderStyle="single"
       borderColor={theme.line}
       paddingX={1}
-      marginY={1}
+      marginY={heightMode === 'minimal' ? 0 : 1}
+      {...(width !== undefined ? { width } : {})}
     >
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color={theme.brand}>
-          Resume session
-        </Text>
-        {filterMode && (
-          <Text color={theme.warn}>
-            {' '}
-            · filter: {filterText}
-            <Text color={theme.faint}>_</Text>
-          </Text>
-        )}
-        {filterText && !filterMode && <Text color={theme.warn}> · filtered: "{filterText}"</Text>}
-      </Box>
-
-      {/* Header */}
-      <Box>
-        <Text color={theme.faint} bold>
-          {'#  '}
-        </Text>
-        <Text color={theme.faint} bold>
-          {'ID'.padEnd(maxIdWidth, ' ')}
-        </Text>
-        <Text color={theme.faint} bold>
-          {'Msgs '}
-        </Text>
-        <Text color={theme.faint} bold>
-          {'Time'.padEnd(12, ' ')}
-        </Text>
-        <Text color={theme.faint} bold>
-          {'Branch'.padEnd(maxBranchWidth, ' ')}
-        </Text>
-        <Text color={theme.faint} bold>
-          Preview
-        </Text>
-      </Box>
-
-      {/* Session list */}
-      {visibleWindow.items.map((s, offset) => {
-        const i = visibleWindow.start + offset;
-        const isCurrent = s.session_id === currentSessionId;
-        const isSelected = i === selectedIndex;
-        const color = isSelected ? theme.brand : isCurrent ? theme.ok : theme.muted;
-        const timeColor = isSelected ? theme.brand : theme.faint;
-        const branchColor = isSelected ? theme.brand : theme.faint;
-
-        return (
-          <Box key={s.session_id}>
-            <Text color={color} bold={isSelected}>
-              {isSelected ? '› ' : '  '}
-              {String(i + 1).padStart(2, '0')}
-            </Text>
-            <Text color={color} bold={isSelected}>
-              {' '}
-              {truncate(s.session_id, maxIdWidth).padEnd(maxIdWidth, ' ')}
-            </Text>
-            <Text color={timeColor}>{String(s.message_count).padStart(4, ' ')} </Text>
-            <Text color={timeColor}>{formatRelativeTime(s.updated_at).padEnd(12, ' ')}</Text>
-            <Text color={branchColor}>
-              {truncate(s.branch || '-', maxBranchWidth).padEnd(maxBranchWidth, ' ')}
-            </Text>
-            <Text color={timeColor}>
-              {' '}
-              {truncate(s.preview || s.title || '', maxPreviewWidth)}
-              {isCurrent ? ' (active)' : ''}
-            </Text>
-          </Box>
-        );
-      })}
-
-      {/* Window indicator */}
-      {filteredSessions.length > visibleWindow.items.length && (
-        <Box marginTop={1}>
-          <Text color={theme.faint}>
-            showing {visibleWindow.start + 1}-{visibleWindow.start + visibleWindow.items.length} of{' '}
-            {filteredSessions.length}
-          </Text>
-        </Box>
-      )}
-
-      {/* Footer hints */}
-      <Box marginTop={1}>
-        <Text color={theme.faint}>
-          {filterMode
-            ? 'type to filter · enter confirm · esc clear'
-            : '↑↓ navigate · enter resume · / filter · 1-9 select · esc cancel'}
-        </Text>
-      </Box>
+      {children}
     </Box>
   );
 }

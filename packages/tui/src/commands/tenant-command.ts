@@ -8,7 +8,15 @@
 
 import type { ReplContext, TenantQuotaLike, TenantSummaryLike } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
+import type {
+  DetailView,
+  TableView,
+  ViewAction,
+  ViewActionInvocation,
+  ViewTone,
+} from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const USAGE = 'Usage: /tenant [current|list|use <id>]';
@@ -93,16 +101,21 @@ export function formatTenantList(
 
   const lines = ['', `Tenants (${tenants.length}):`];
   lines.push(
-    `  ${'TENANT'.padEnd(TENANT_WIDTH)} ${'STATUS'.padEnd(STATUS_WIDTH)} ${'CREATED'.padEnd(
-      CREATED_WIDTH,
-    )} QUOTA`,
+    `  ${padToWidth('TENANT', TENANT_WIDTH)} ${padToWidth(
+      'STATUS',
+      STATUS_WIDTH,
+    )} ${padToWidth('CREATED', CREATED_WIDTH)} QUOTA`,
   );
   for (const tenant of tenants) {
     const marker = tenant.tenant_id === currentTenantId ? '*' : ' ';
     lines.push(
-      `${marker} ${tenant.tenant_id.padEnd(TENANT_WIDTH)} ${(tenant.status ?? '-').padEnd(
-        STATUS_WIDTH,
-      )} ${formatCreated(tenant.created_at, now).padEnd(CREATED_WIDTH)} ${formatQuota(tenant.quota)}`.trimEnd(),
+      `${marker} ${padToWidth(
+        truncateToWidth(tenant.tenant_id, TENANT_WIDTH),
+        TENANT_WIDTH,
+      )} ${padToWidth(tenant.status ?? '-', STATUS_WIDTH)} ${padToWidth(
+        formatCreated(tenant.created_at, now),
+        CREATED_WIDTH,
+      )} ${formatQuota(tenant.quota)}`.trimEnd(),
     );
   }
   lines.push('');
@@ -124,6 +137,164 @@ export function formatTenantCurrent(
   }
   lines.push('');
   return lines.join('\n');
+}
+
+function tenantStatusTone(tenant: TenantSummaryLike): ViewTone {
+  if (tenant.status === 'disabled') return 'muted';
+  if (tenant.status === 'active') return 'ok';
+  return 'default';
+}
+
+/** 纯函数：tenant 表格列 */
+export function tenantColumns(): TableView['columns'] {
+  return [
+    { key: 'tenant', header: 'TENANT', minWidth: 18, priority: 1 },
+    { key: 'status', header: 'STATUS', width: 9, priority: 1 },
+    { key: 'created', header: 'CREATED', width: 10, priority: 2 },
+    { key: 'quota', header: 'QUOTA', minWidth: 18, priority: 1 },
+  ];
+}
+
+export function tenantListActions(): ViewAction[] {
+  return [
+    { id: 'inspect', key: 'enter', label: 'open', enabled: 'selected' },
+    { id: 'refresh', key: 'r', label: 'refresh' },
+  ];
+}
+
+export function tenantDetailActions(): ViewAction[] {
+  return [{ id: 'refresh', key: 'r', label: 'refresh' }];
+}
+
+/** 纯函数：tenant 列表 -> TableView（当前 tenant 用 current 标记） */
+export function buildTenantListView(
+  tenants: TenantSummaryLike[],
+  currentTenantId: string,
+  now: number = Date.now(),
+): TableView {
+  const rows = tenants.map((tenant) => {
+    const current = tenant.tenant_id === currentTenantId;
+    return {
+      key: tenant.tenant_id,
+      current,
+      tone: tenantStatusTone(tenant),
+      cells: {
+        tenant: current ? `${tenant.tenant_id} (active)` : tenant.tenant_id,
+        status: tenant.status ?? '-',
+        created: formatCreated(tenant.created_at, now),
+        quota: formatQuota(tenant.quota),
+        name: tenant.name ?? '-',
+      },
+    };
+  });
+
+  return {
+    kind: 'table',
+    title: 'Tenants',
+    columns: tenantColumns(),
+    rows,
+    actions: tenantListActions(),
+    ...(rows[0] ? { initialKey: rows[0].key } : {}),
+    emptyText: 'No tenants.',
+    meta: `${tenants.length}`,
+  };
+}
+
+/** 纯函数：单个 tenant 详情（current 与 list -> detail 共用） */
+export function buildTenantDetailView(
+  tenantId: string,
+  dataDir: string | undefined,
+  tenant?: TenantSummaryLike | null,
+  now: number = Date.now(),
+): DetailView {
+  const fields: NonNullable<DetailView['sections'][number]['fields']> = [
+    { label: 'tenant_id', value: tenantId },
+  ];
+  if (dataDir) fields.push({ label: 'data_dir', value: dataDir });
+  if (tenant) {
+    if (tenant.name) fields.push({ label: 'name', value: tenant.name });
+    fields.push(
+      {
+        label: 'status',
+        value: tenant.status ?? '-',
+        tone: tenantStatusTone(tenant),
+      },
+      { label: 'created', value: formatCreated(tenant.created_at, now) },
+      { label: 'quota', value: formatQuota(tenant.quota) },
+    );
+  }
+
+  return {
+    kind: 'detail',
+    title: `Tenant ${tenantId}`,
+    ...(tenant?.status ? { badge: { text: tenant.status, tone: tenantStatusTone(tenant) } } : {}),
+    key: tenantId,
+    sections: [{ title: 'Overview', fields }],
+    actions: tenantDetailActions(),
+  };
+}
+
+type TenantLoad = { ok: true; tenant: TenantSummaryLike | null } | { ok: false; message: string };
+
+/** tenants.get（命令主体与详情刷新共用；失败时保持本地上下文展示） */
+async function loadTenantDetail(
+  ctx: ReplContext,
+  tenantId: string,
+  strict = false,
+): Promise<TenantLoad> {
+  if (!ctx.rpc) return { ok: true, tenant: null };
+  try {
+    const raw = await ctx.rpc.request<unknown>('tenants.get', { tenant_id: tenantId });
+    const wrapped = isRecord(raw) && isRecord(raw.tenant) ? raw.tenant : raw;
+    return { ok: true, tenant: readTenantSummary(wrapped) };
+  } catch (error) {
+    if (strict)
+      return {
+        ok: false,
+        message: `Failed to load tenant "${tenantId}":\n${formatRpcError(error)}`,
+      };
+    return { ok: true, tenant: null };
+  }
+}
+
+function envelope(view: TableView | DetailView): NonNullable<CommandResult['view']> {
+  return { source: 'tenant', view };
+}
+
+/** `/tenant` 视图动作：Enter 详情、r 刷新 */
+export async function runTenantViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  const currentTenantId = ctx.tenant?.tenant_id ?? 'default';
+  const targetId = invocation.selectionKey || invocation.viewKey || currentTenantId;
+
+  if (invocation.actionId === 'refresh') {
+    if (invocation.viewKind === 'table') {
+      return runTenantCommand(['list'], ctx);
+    }
+    const loaded = await loadTenantDetail(ctx, targetId, true);
+    if (!loaded.ok) return { handled: true, output: `\n${loaded.message}\n` };
+    return {
+      handled: true,
+      view: envelope(buildTenantDetailView(targetId, ctx.tenant?.data_dir, loaded.tenant)),
+    };
+  }
+
+  if (invocation.actionId === 'inspect' || invocation.actionId === 'enter') {
+    if (!targetId) return { handled: true, output: '\nSelect a tenant first.\n' };
+    const loaded = await loadTenantDetail(ctx, targetId);
+    if (!loaded.ok) return { handled: true, output: `\n${loaded.message}\n` };
+    return {
+      handled: true,
+      view: envelope(buildTenantDetailView(targetId, ctx.tenant?.data_dir, loaded.tenant)),
+    };
+  }
+
+  return {
+    handled: true,
+    output: `\nUnknown /tenant view action "${invocation.actionId}".\n`,
+  };
 }
 
 function restartInstructions(currentTenantId: string, targetTenantId: string): string {
@@ -148,21 +319,13 @@ export async function runTenantCommand(args: string[], ctx: ReplContext): Promis
       return { handled: true, output: `\n${USAGE}\n` };
     }
 
-    let tenant: TenantSummaryLike | null = null;
-    if (ctx.rpc) {
-      try {
-        const raw = await ctx.rpc.request<unknown>('tenants.get', {
-          tenant_id: currentTenantId,
-        });
-        const wrapped = isRecord(raw) && isRecord(raw.tenant) ? raw.tenant : raw;
-        tenant = readTenantSummary(wrapped);
-      } catch {
-        // tenants.get 不可用时只展示本地上下文
-      }
-    }
+    // tenants.get 不可用时只展示本地上下文（不伪装成失败）。
+    const loaded = await loadTenantDetail(ctx, currentTenantId);
+    const tenant = loaded.ok ? loaded.tenant : null;
     return {
       handled: true,
       output: formatTenantCurrent(currentTenantId, ctx.tenant?.data_dir, tenant),
+      view: envelope(buildTenantDetailView(currentTenantId, ctx.tenant?.data_dir, tenant)),
     };
   }
 
@@ -176,9 +339,11 @@ export async function runTenantCommand(args: string[], ctx: ReplContext): Promis
     }
     try {
       const raw = await ctx.rpc.request<unknown>('tenants.list');
+      const tenants = readTenantList(raw);
       return {
         handled: true,
-        output: formatTenantList(readTenantList(raw), currentTenantId),
+        output: formatTenantList(tenants, currentTenantId),
+        view: envelope(buildTenantListView(tenants, currentTenantId)),
       };
     } catch (error) {
       return {
@@ -230,6 +395,11 @@ export function tenantCommand(): CommandEntry {
     name: 'tenant',
     description: 'Show current tenant, list tenants, or print restart guidance',
     usage: '/tenant [current|list|use <id>]',
+    category: 'config',
+    keywords: ['tenant', 'scope'],
+    available: (ctx) => Boolean(ctx.tenant || ctx.rpc),
+    unavailableHint: 'not available',
     run: (args, ctx) => runTenantCommand(args, ctx),
+    viewAction: (invocation, ctx) => runTenantViewAction(invocation, ctx),
   };
 }

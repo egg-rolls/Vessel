@@ -8,6 +8,7 @@
 
 import { Box, Text, useStdout } from 'ink';
 import { theme } from '../theme.js';
+import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
 
 export interface StatusBarProps {
   provider: {
@@ -19,44 +20,6 @@ export interface StatusBarProps {
   plugins: string[];
   /** 0.5：当前 tenant；未注入时不显示（0.4 调用方零改动） */
   tenant?: string;
-}
-
-/** 单字符显示宽度（CJK / 全角 / emoji 按 2 列计） */
-function charWidth(ch: string): number {
-  const code = ch.codePointAt(0) ?? 0;
-  const wide =
-    (code >= 0x1100 && code <= 0x115f) ||
-    (code >= 0x2e80 && code <= 0xa4cf) ||
-    (code >= 0xac00 && code <= 0xd7a3) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xfe10 && code <= 0xfe6f) ||
-    (code >= 0xff00 && code <= 0xff60) ||
-    (code >= 0xffe0 && code <= 0xffe6) ||
-    (code >= 0x1f300 && code <= 0x1faff);
-  return wide ? 2 : 1;
-}
-
-/** 字符串显示宽度 */
-function displayWidth(text: string): number {
-  let width = 0;
-  for (const ch of text) width += charWidth(ch);
-  return width;
-}
-
-/** 截断到指定显示宽度，末尾保留一个 … */
-function truncateToWidth(text: string, maxWidth: number): string {
-  if (maxWidth <= 0) return '';
-  if (displayWidth(text) <= maxWidth) return text;
-
-  let out = '';
-  let width = 0;
-  for (const ch of text) {
-    const next = charWidth(ch);
-    if (width + next > maxWidth - 1) break;
-    out += ch;
-    width += next;
-  }
-  return `${out}…`;
 }
 
 /**

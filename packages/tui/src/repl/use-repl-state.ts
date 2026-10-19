@@ -11,6 +11,7 @@ import type { SessionInfo } from '@vessel/core';
 import { useReducer } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import type { ReplContext } from '../repl-context.js';
+import type { ViewAction, ViewEnvelope, ViewMode } from '../views/types.js';
 
 /** 权限确认弹窗数据（ADR-029：tool.permission.request 载荷的展示态） */
 export interface PermissionOverlay {
@@ -34,6 +35,29 @@ export interface RunUiState {
   abort: AbortController | null;
 }
 
+/** 当前打开的交互视图（唯一 overlay；与权限/ask-user 同一优先级链） */
+export interface ActiveViewState {
+  envelope: ViewEnvelope;
+  /** 选中的 row/item key（不是索引） */
+  selectedKey: string | null;
+  filter: string;
+  mode: ViewMode;
+  /** rename/form 的草稿 */
+  draft: string;
+  /** 二次确认的动作 */
+  pendingAction: ViewAction | null;
+  /** 防旧响应覆盖 */
+  requestId: number;
+}
+
+/** 视图打开时的默认选中 key */
+export function defaultViewSelection(envelope: ViewEnvelope): string | null {
+  const { view } = envelope;
+  if (view.kind === 'table') return view.initialKey ?? view.rows[0]?.key ?? null;
+  if (view.kind === 'list') return view.initialKey ?? view.items[0]?.key ?? null;
+  return null;
+}
+
 /** InkRepl 的完整 UI 状态 */
 export interface ReplUiState {
   /** REPL 运行态（currentSessionId / pendingResume / showResumePicker / running） */
@@ -53,6 +77,10 @@ export interface ReplUiState {
   askUserRunId: string | null;
   permissionOverlay: PermissionOverlay | null;
   run: RunUiState;
+  /** 命令返回的交互视图；非 null 时为独占 overlay */
+  view: ActiveViewState | null;
+  /** 最近成功执行的命令名（不含斜杠，最多 5 个；内存态） */
+  recentCommands: string[];
 }
 
 export type ReplUiAction =
@@ -76,7 +104,21 @@ export type ReplUiAction =
   | { type: 'runStart'; abort: AbortController }
   | { type: 'runCancelRequested' }
   | { type: 'runEnd' }
-  | { type: 'patchRepl'; patch: Partial<ReplState> };
+  | { type: 'patchRepl'; patch: Partial<ReplState> }
+  | { type: 'openView'; envelope: ViewEnvelope; initialKey?: string }
+  | { type: 'closeView' }
+  | { type: 'viewSelect'; key: string }
+  | { type: 'viewFilter'; filter: string }
+  | {
+      type: 'viewMode';
+      mode: ViewMode;
+      draft?: string;
+      pendingAction?: ViewAction | null;
+    }
+  | { type: 'viewData'; envelope: ViewEnvelope; selectedKey?: string; requestId?: number }
+  | { type: 'viewLoading'; requestId: number }
+  | { type: 'viewError'; message: string; requestId: number }
+  | { type: 'pushRecentCommand'; name: string };
 
 /** 纯 reducer：不可变推进 UI 状态 */
 export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiState {
@@ -149,6 +191,94 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
       return { ...state, run: { phase: 'idle', abort: null } };
     case 'patchRepl':
       return { ...state, repl: { ...state.repl, ...action.patch } };
+    case 'openView': {
+      const selectedKey = action.initialKey ?? defaultViewSelection(action.envelope);
+      return {
+        ...state,
+        view: {
+          envelope: action.envelope,
+          selectedKey,
+          filter: '',
+          mode: 'browse',
+          draft: '',
+          pendingAction: null,
+          requestId: 0,
+        },
+      };
+    }
+    case 'closeView':
+      return state.view === null ? state : { ...state, view: null };
+    case 'viewSelect':
+      return state.view === null
+        ? state
+        : { ...state, view: { ...state.view, selectedKey: action.key } };
+    case 'viewFilter':
+      return state.view === null
+        ? state
+        : { ...state, view: { ...state.view, filter: action.filter } };
+    case 'viewMode':
+      return state.view === null
+        ? state
+        : {
+            ...state,
+            view: {
+              ...state.view,
+              mode: action.mode,
+              draft: action.draft ?? '',
+              pendingAction:
+                action.pendingAction !== undefined
+                  ? action.pendingAction
+                  : state.view.pendingAction,
+            },
+          };
+    case 'viewData': {
+      if (state.view === null) return state;
+      // 旧响应不得覆盖新响应。
+      if (action.requestId !== undefined && action.requestId < state.view.requestId) {
+        return state;
+      }
+      return {
+        ...state,
+        view: {
+          ...state.view,
+          envelope: action.envelope,
+          selectedKey:
+            action.selectedKey !== undefined ? action.selectedKey : state.view.selectedKey,
+          pendingAction: null,
+          draft: '',
+          mode: 'browse',
+        },
+      };
+    }
+    case 'viewLoading':
+      return state.view === null
+        ? state
+        : {
+            ...state,
+            view: {
+              ...state.view,
+              requestId: action.requestId,
+              envelope: { ...state.view.envelope, status: 'loading', error: undefined },
+            },
+          };
+    case 'viewError': {
+      if (state.view === null || action.requestId < state.view.requestId) return state;
+      return {
+        ...state,
+        view: {
+          ...state.view,
+          envelope: {
+            ...state.view.envelope,
+            status: 'error',
+            error: action.message,
+          },
+        },
+      };
+    }
+    case 'pushRecentCommand': {
+      const rest = state.recentCommands.filter((name) => name !== action.name);
+      return { ...state, recentCommands: [action.name, ...rest].slice(0, 5) };
+    }
   }
 }
 
@@ -175,6 +305,8 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     askUserRunId: null,
     permissionOverlay: null,
     run: { phase: 'idle', abort: null },
+    view: null,
+    recentCommands: [],
   };
 }
 
