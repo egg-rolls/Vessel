@@ -43,6 +43,7 @@ import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
+import { buildCliConfigOverrides } from './cli-overrides';
 import { runUpdateCommand } from './cli-update';
 import { configInitCommand, configPathCommand, configShowCommand } from './config-command';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
@@ -440,6 +441,19 @@ const interactive = entersRepl && process.stdin.isTTY === true;
 
 // ── 主流程 ──────────────────────────────────────
 
+// CLI 层只组装一次：serve / connect / allowed-origin 全部经 config loader 合并。
+const cliOverrides = buildCliConfigOverrides({
+  servePort: args.servePort,
+  servePortExplicit: args.servePortExplicit,
+  serveHost: args.serveHost,
+  allowRemote: args.allowRemote,
+  tlsCert: args.tlsCert,
+  tlsKey: args.tlsKey,
+  allowedOrigins: args.allowedOrigins,
+  connectToken: args.connectTokenArg,
+  caFile: args.caArg,
+});
+
 // 引导应用启动
 const initialResult = await bootstrap({
   useMock,
@@ -448,6 +462,7 @@ const initialResult = await bootstrap({
   interactive,
   registerAskUser: interactive,
   acquireLock: true,
+  cliOverrides,
   ...(continueLatest ? { continueLatest: true } : {}),
   ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
@@ -456,8 +471,6 @@ const initialResult = await bootstrap({
     : process.env.VESSEL_CONNECT !== undefined
       ? { connect: process.env.VESSEL_CONNECT }
       : {}),
-  ...(args.connectTokenArg !== null ? { connectToken: args.connectTokenArg } : {}),
-  ...(args.caArg !== null ? { caFile: args.caArg } : {}),
   // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
   configErrorExitCode: args.feishu ? 2 : 1,
 });
@@ -488,14 +501,13 @@ if (!useMock && interactive && !config.apiKey) {
       interactive,
       registerAskUser: interactive,
       acquireLock: true,
+      cliOverrides,
       ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       ...(args.connectArg !== null
         ? { connect: args.connectArg }
         : process.env.VESSEL_CONNECT !== undefined
           ? { connect: process.env.VESSEL_CONNECT }
           : {}),
-      ...(args.connectTokenArg !== null ? { connectToken: args.connectTokenArg } : {}),
-      ...(args.caArg !== null ? { caFile: args.caArg } : {}),
       configErrorExitCode: args.feishu ? 2 : 1,
     });
     await runWithConfig(result);
@@ -581,14 +593,8 @@ async function runWithConfig(result: BootstrapResult) {
   let sharedEvents: EventStream | undefined;
   let unsubSharedBridge: (() => void) | undefined;
   if (servePort !== null) {
-    const resolved = resolveServeOptions(config, {
-      port: servePort,
-      portExplicit: args.servePortExplicit,
-      hostname: args.serveHost,
-      allowRemote: args.allowRemote,
-      tlsCert: args.tlsCert,
-      tlsKey: args.tlsKey,
-    });
+    // CLI flag 已由 loader 合并进 config.serve；这里只做补全与校验。
+    const resolved = resolveServeOptions(config);
     if (!resolved.ok) {
       console.error(resolved.error);
       await result.shutdown();
@@ -677,12 +683,8 @@ async function runWithConfig(result: BootstrapResult) {
       hostname: resolved.options.hostname,
       port: resolved.options.port,
       allowRemote: resolved.options.allowRemote,
-      // 0.6 A5：CLI 覆盖 config；两端同名 allowed_origins。
-      ...(args.allowedOrigins.length > 0
-        ? { allowedOrigins: args.allowedOrigins }
-        : config.serve?.allowedOrigins
-          ? { allowedOrigins: config.serve.allowedOrigins }
-          : {}),
+      // 0.6 A5：CLI 覆盖已在 loader 合并；两端同名 allowed_origins。
+      ...(config.serve?.allowedOrigins ? { allowedOrigins: config.serve.allowedOrigins } : {}),
       ...(resolved.options.tls ? { tls: resolved.options.tls } : {}),
       ...(result.runStore
         ? {

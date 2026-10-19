@@ -116,6 +116,11 @@ export interface BootstrapOptions {
   configPath?: string;
   /** 用户配置文件路径（默认 ~/.vessel/config.yaml）；嵌入/测试用 */
   userConfigPath?: string;
+  /**
+   * 0.8.1：CLI 显式 flag 组成的最高优先级配置层。
+   * 与 env / tenant overlay / project / user / default 一起由 loader 合并。
+   */
+  cliOverrides?: Partial<VesselConfig>;
   /** 0.5：显式 tenant id（CLI --tenant / RuntimeOptions）；缺省按 VESSEL_TENANT → config 解析 */
   tenantId?: string;
   /** 0.5：tenant id 来源（CLI / env）；由调用方标注，缺省按解析结果 */
@@ -243,6 +248,29 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined;
 }
 
+/**
+ * 把旧式 `connectToken` / `caFile` 选项折入 CLI 覆盖层。
+ * 生产路径直接传 `cliOverrides`；这里仅为兼容既有调用方，保证只有一个合并点。
+ */
+function withConnectCliOverrides(
+  cliOverrides: Partial<VesselConfig> | undefined,
+  connectToken: string | undefined,
+  caFile: string | undefined,
+): Partial<VesselConfig> | undefined {
+  const token = nonEmptyString(connectToken);
+  const ca = nonEmptyString(caFile);
+  if (token === undefined && ca === undefined) return cliOverrides;
+
+  const legacy: NonNullable<VesselConfig['connect']> = {
+    ...(token !== undefined ? { token } : {}),
+    ...(ca !== undefined ? { caFile: ca } : {}),
+  };
+  return {
+    ...cliOverrides,
+    connect: { ...legacy, ...(cliOverrides?.connect ?? {}) },
+  };
+}
+
 function isRecordValue(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -276,38 +304,28 @@ async function bootstrapConnect(input: {
   continueLatest?: boolean;
   /** 0.6.1：`-r <id>`；先用 sessions.get 校验存在 */
   resumeSessionId?: string;
-  connectToken?: string;
-  caFile?: string;
   rpcClientFactory?: (opts: {
     baseUrl: string;
     token: string;
     ca?: string;
   }) => RpcClient & { close(): Promise<void> };
 }): Promise<BootstrapResult> {
-  const connectConfig = input.config.connect;
   // P2：--connect 接受 ws:// / wss://（归一化为 http/https）。
   const connectUrl = normalizeConnectUrl(input.url);
 
-  // 连接 token 优先级（DECISION-014 A1）：CLI > env > config。
+  // 连接 token / CA 全部来自 config loader 的单一结果：
+  // CLI（cliOverrides）> env（VESSEL_CONNECT_TOKEN / VESSEL_GATEWAY_TOKEN /
+  // VESSEL_CONNECT_CA）> project > user > default。此处不再读 argv / env。
+  // 旧版 fallback（serve.token / transport.token）仍作为配置层回退保留。
   // 永不打印。
   const token =
-    nonEmptyString(input.connectToken) ??
-    nonEmptyString(process.env.VESSEL_CONNECT_TOKEN) ??
-    nonEmptyString(process.env.VESSEL_GATEWAY_TOKEN) ??
-    nonEmptyString(connectConfig?.tokenEnv ? process.env[connectConfig.tokenEnv] : undefined) ??
-    nonEmptyString(connectConfig?.token) ??
+    nonEmptyString(input.config.connect?.token) ??
     nonEmptyString(input.config.serve?.token) ??
-    nonEmptyString(
-      input.config.serve?.tokenEnv ? process.env[input.config.serve.tokenEnv] : undefined,
-    ) ??
     nonEmptyString(input.config.transport?.token) ??
     '';
 
-  // CA：CLI > env > config；只读文件，错误信息不带 token。
-  const caPath =
-    nonEmptyString(input.caFile) ??
-    nonEmptyString(process.env.VESSEL_CONNECT_CA) ??
-    nonEmptyString(connectConfig?.caFile);
+  // CA：只读文件，错误信息不带 token。
+  const caPath = nonEmptyString(input.config.connect?.caFile);
   let ca: string | undefined;
   if (caPath !== undefined) {
     try {
@@ -638,10 +656,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   } = options;
 
   // ── 加载配置 ────────────────────────────────────
+  // 单一 resolver：CLI 覆盖层（含旧式 connectToken/caFile）只在这里进入。
+  const cliOverrides = withConnectCliOverrides(
+    options.cliOverrides,
+    options.connectToken,
+    options.caFile,
+  );
   const loaded = await loadConfig({
     ...(options.configPath !== undefined ? { configPath: options.configPath } : {}),
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+    ...(cliOverrides !== undefined ? { cliOverrides } : {}),
   });
   const { config, validation, tenantId } = loaded;
 
@@ -687,8 +712,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(options.resumeSessionId !== undefined
         ? { resumeSessionId: options.resumeSessionId }
         : {}),
-      ...(options.connectToken !== undefined ? { connectToken: options.connectToken } : {}),
-      ...(options.caFile !== undefined ? { caFile: options.caFile } : {}),
       ...(options.rpcClientFactory ? { rpcClientFactory: options.rpcClientFactory } : {}),
     });
   }
@@ -957,6 +980,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
             ? { userConfigPath: options.userConfigPath }
             : {}),
           tenantId: requestedTenant,
+          ...(cliOverrides !== undefined ? { cliOverrides } : {}),
         });
         return buildConfigSnapshot({
           config: sanitizeConfigForSnapshot(other.config),

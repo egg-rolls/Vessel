@@ -1,7 +1,10 @@
 /**
- * serve 启动选项解析（0.3 A1）。
+ * serve 启动选项解析（0.3 A1；0.8.1 C 收敛为单一 resolver）。
  *
- * 优先级：CLI flag > `serve.*` 配置 > `DEFAULT_SERVE_OPTIONS`。
+ * 输入是 config loader 的最终结果：CLI flag 已在 loader 的 CLI 层合并
+ * （`CLI > env > tenant overlay > project > user > default`），这里只做
+ * `serve.*` → 默认值补全与启动前校验，不再单独合并 argv。
+ *
  * 校验与 web 的 `GatewayOptions` 一致：非回环必须显式 allow_remote；
  * TLS 与 allow_remote 独立，但 cert/key 必须成对。
  */
@@ -12,17 +15,6 @@ import {
   isLoopbackHostname,
   type VesselConfig,
 } from '../packages/config/src/index';
-
-/** CLI 侧已解析的值 */
-export interface ServeCliInput {
-  port: number;
-  /** 用户是否显式给出端口（否则用 config.serve.port） */
-  portExplicit: boolean;
-  hostname: string | null;
-  allowRemote: boolean;
-  tlsCert: string | null;
-  tlsKey: string | null;
-}
 
 /** 传给 `startGateway` 的解析结果 */
 export interface ServeRuntimeOptions {
@@ -42,16 +34,11 @@ function validHostname(host: string): boolean {
 }
 
 /**
- * 解析最终监听选项。
+ * 解析最终监听选项（单一来源：已合并 CLI 层的 config）。
  * @param config 已校验的配置
- * @param cli CLI 解析结果
  */
-export function resolveServeOptions(config: VesselConfig, cli: ServeCliInput): ServeOptionsResult {
-  const hostname = (
-    cli.hostname ??
-    config.serve?.hostname ??
-    DEFAULT_SERVE_OPTIONS.hostname
-  ).trim();
+export function resolveServeOptions(config: VesselConfig): ServeOptionsResult {
+  const hostname = (config.serve?.hostname ?? DEFAULT_SERVE_OPTIONS.hostname).trim();
 
   if (!validHostname(hostname)) {
     return {
@@ -60,8 +47,8 @@ export function resolveServeOptions(config: VesselConfig, cli: ServeCliInput): S
     };
   }
 
-  const port = cli.portExplicit ? cli.port : (config.serve?.port ?? cli.port);
-  const allowRemote = cli.allowRemote || config.serve?.allowRemote === true;
+  const port = config.serve?.port ?? DEFAULT_SERVE_OPTIONS.port;
+  const allowRemote = config.serve?.allowRemote === true;
 
   if (!isLoopbackHostname(hostname) && !allowRemote) {
     return {
@@ -73,18 +60,12 @@ export function resolveServeOptions(config: VesselConfig, cli: ServeCliInput): S
   }
 
   let tls: { certFile: string; keyFile: string } | undefined;
-  if (cli.tlsCert !== null || cli.tlsKey !== null) {
-    // cli-args 已在解析期保证成对；这里再做一次防御性检查。
-    if (cli.tlsCert === null || cli.tlsKey === null) {
-      return { ok: false, error: '--tls-cert and --tls-key must be provided together' };
-    }
-    tls = { certFile: cli.tlsCert, keyFile: cli.tlsKey };
-  } else if (config.serve?.tls) {
+  if (config.serve?.tls) {
     const { certFile, keyFile } = config.serve.tls;
     if (!certFile || !keyFile) {
       return {
         ok: false,
-        error: 'serve.tls requires both cert_file and key_file',
+        error: 'serve.tls requires both cert_file and key_file (or pass --tls-cert/--tls-key)',
       };
     }
     tls = { certFile, keyFile };

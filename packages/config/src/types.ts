@@ -443,7 +443,15 @@ export interface ConfigLoadOptions {
   tenantId?: string;
   /** 环境变量来源；缺省 process.env（便于测试注入） */
   env?: Record<string, string | undefined>;
-  /** CLI 覆盖 */
+  /**
+   * CLI 覆盖层（最高优先级）。生产路径由 CLI/外壳把显式 flag 组装成
+   * `Partial<VesselConfig>` 后传入，loader 统一合并并标注 source=cli。
+   */
+  cliOverrides?: Partial<VesselConfig>;
+  /**
+   * @deprecated 与 `cliOverrides` 同义；保留仅为兼容旧调用方。
+   * 同时提供时 `cliOverrides` 后应用（优先）。
+   */
   defaults?: Partial<VesselConfig>;
 }
 

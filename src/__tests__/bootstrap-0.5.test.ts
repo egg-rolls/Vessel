@@ -509,6 +509,44 @@ describe('bootstrap 0.5 - rpc injection', () => {
     }
   });
 
+  it('connect 模式：VESSEL_CONNECT_TOKEN / VESSEL_CONNECT_CA 经 config resolver 读取', async () => {
+    const dataDir = tempDir();
+    const caPath = path.join(dataDir, 'env-ca.pem');
+    fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\nenv\n-----END CERTIFICATE-----\n');
+    const received: Array<{ baseUrl: string; token: string; ca?: string }> = [];
+    const stub = {
+      request: async <T = unknown>(): Promise<T> => ({}) as T,
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const previousToken = process.env.VESSEL_CONNECT_TOKEN;
+    const previousCa = process.env.VESSEL_CONNECT_CA;
+    process.env.VESSEL_CONNECT_TOKEN = 'env-token';
+    process.env.VESSEL_CONNECT_CA = caPath;
+    try {
+      const result = await bootstrap({
+        ...baseOptions(dataDir),
+        connect: 'https://gateway.example.com:8642',
+        rpcClientFactory: (opts) => {
+          received.push(opts);
+          return stub;
+        },
+      });
+      try {
+        expect(received[0]?.token).toBe('env-token');
+        expect(received[0]?.ca).toContain('BEGIN CERTIFICATE');
+      } finally {
+        await result.shutdown();
+      }
+    } finally {
+      if (previousToken === undefined) delete process.env.VESSEL_CONNECT_TOKEN;
+      else process.env.VESSEL_CONNECT_TOKEN = previousToken;
+      if (previousCa === undefined) delete process.env.VESSEL_CONNECT_CA;
+      else process.env.VESSEL_CONNECT_CA = previousCa;
+    }
+  });
+
   it('connect 模式：REPL 的 provider 展示以 gateway config.get 为准', async () => {
     const dataDir = tempDir();
     const stub = {

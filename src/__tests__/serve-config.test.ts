@@ -2,26 +2,16 @@ import { describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { VesselConfig } from '../../packages/config/src/index';
+import { mergeConfig, type VesselConfig } from '../../packages/config/src/index';
+import { buildCliConfigOverrides, type CliConfigOverridesInput } from '../cli-overrides';
 import { checkTlsFiles, resolveServeOptions } from '../serve-config';
 
-function cli(overrides: Partial<Parameters<typeof resolveServeOptions>[1]> = {}) {
-  return {
-    port: 8642,
-    portExplicit: false,
-    hostname: null,
-    allowRemote: false,
-    tlsCert: null,
-    tlsKey: null,
-    ...overrides,
-  };
-}
-
-function resolve(
-  config: VesselConfig,
-  overrides: Partial<Parameters<typeof resolveServeOptions>[1]> = {},
-) {
-  return resolveServeOptions(config, cli(overrides));
+/**
+ * 模拟生产路径：CLI flag 先经 loader 的 CLI 层合并，再交给 serve resolver。
+ * 这里用 mergeConfig 做同样的合并（deepMerge 语义与 loader 一致）。
+ */
+function resolve(config: VesselConfig, overrides: CliConfigOverridesInput = {}) {
+  return resolveServeOptions(mergeConfig(config, buildCliConfigOverrides(overrides)));
 }
 
 describe('resolveServeOptions', () => {
@@ -35,7 +25,7 @@ describe('resolveServeOptions', () => {
   it('CLI 覆盖配置', () => {
     const result = resolve(
       { serve: { hostname: '127.0.0.2', port: 9000, allowRemote: true } },
-      { hostname: '127.0.0.1', port: 7000, portExplicit: true },
+      { serveHost: '127.0.0.1', servePort: 7000, servePortExplicit: true },
     );
     expect(result).toEqual({
       ok: true,
@@ -51,19 +41,41 @@ describe('resolveServeOptions', () => {
   });
 
   it('非回环且未 allowRemote：拒绝', () => {
-    const result = resolve({}, { hostname: '0.0.0.0' });
+    const result = resolve({}, { serveHost: '0.0.0.0' });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('non-loopback');
   });
 
   it('非回环 + allowRemote（CLI 或配置）：允许', () => {
-    expect(resolve({}, { hostname: '0.0.0.0', allowRemote: true }).ok).toBe(true);
+    expect(resolve({}, { serveHost: '0.0.0.0', allowRemote: true }).ok).toBe(true);
     expect(resolve({ serve: { hostname: '0.0.0.0', allowRemote: true } }).ok).toBe(true);
   });
 
   it('非法 hostname：拒绝', () => {
-    const result = resolve({}, { hostname: 'http://example.com/x' });
+    const result = resolve({}, { serveHost: 'http://example.com/x' });
     expect(result.ok).toBe(false);
+  });
+
+  it('未显式给端口时 --serve 的默认值不进入 CLI 层', () => {
+    const overrides = buildCliConfigOverrides({
+      servePort: 8642,
+      servePortExplicit: false,
+    });
+    expect(overrides.serve?.port).toBeUndefined();
+  });
+
+  it('--allowed-origin 整体替换 config 列表', () => {
+    const result = resolve(
+      { serve: { allowedOrigins: ['https://old.example.com'] } },
+      { allowedOrigins: ['https://new.example.com'] },
+    );
+    expect(result.ok).toBe(true);
+    // resolver 不消费 allowedOrigins；由 loader 合并结果直接交给 gateway。
+    const merged = mergeConfig(
+      { serve: { allowedOrigins: ['https://old.example.com'] } },
+      buildCliConfigOverrides({ allowedOrigins: ['https://new.example.com'] }),
+    );
+    expect(merged.serve?.allowedOrigins).toEqual(['https://new.example.com']);
   });
 
   it('CLI TLS 优先于配置 TLS', () => {
@@ -95,10 +107,8 @@ describe('resolveServeOptions', () => {
     if (!result.ok) expect(result.error).toContain('cert_file and key_file');
   });
 
-  it('CLI TLS 缺一半：防御性拒绝', () => {
-    const result = resolve({}, { tlsCert: 'c.pem' });
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toContain('must be provided together');
+  it('CLI TLS 缺一半：不生成 tls 层（cli-args 已在解析期拦截）', () => {
+    expect(buildCliConfigOverrides({ tlsCert: 'c.pem' })).toEqual({});
   });
 });
 
