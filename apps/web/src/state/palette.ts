@@ -16,6 +16,13 @@ export const PALETTE_GROUP_LABELS: Record<PaletteGroup, string> = {
   help: '帮助',
 };
 
+/** 破坏性动作的二次确认（由 AppShell 渲染 ConfirmDialog）。 */
+export interface PaletteConfirm {
+  title: string;
+  body: string;
+  confirmLabel: string;
+}
+
 export interface PaletteItem {
   /** 稳定 id（测试与 aria-activedescendant 用）。 */
   id: string;
@@ -23,6 +30,9 @@ export interface PaletteItem {
   label: string;
   keywords?: readonly string[];
   hint?: string;
+  /** 破坏性/不可逆动作：必须二次确认，不允许在面板内直接执行。 */
+  danger?: boolean;
+  confirm?: PaletteConfirm;
   run: () => void;
 }
 

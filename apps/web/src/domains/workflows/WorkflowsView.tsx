@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useStartWorkflowSignal } from '../../app/intents';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -14,14 +15,23 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
-import { useConnection } from '../../gateway/ConnectionProvider';
-import type { WorkflowRunSummary } from '../../gateway/types';
+import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
+import type { WorkflowStepSummary } from '../../gateway/types';
+import { buildWorkflowPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
+import {
+  filterWorkflows,
+  progressPercent,
+  type WorkflowStatusFilter,
+  workflowStatusActive,
+  workflowStatusCancellable,
+  workflowStatusResumable,
+} from '../../state/workflows';
+import { StartWorkflowDialog } from './StartWorkflowDialog';
 
 type WorkflowsRoute = Extract<Route, { domain: 'workflows' }>;
-type StatusFilter = 'all' | WorkflowRunSummary['status'];
 
-const FILTERS: readonly { id: StatusFilter; label: string }[] = [
+const FILTERS: readonly { id: WorkflowStatusFilter; label: string }[] = [
   { id: 'all', label: '全部' },
   { id: 'pending', label: '待执行' },
   { id: 'running', label: '运行中' },
@@ -35,28 +45,52 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function parseInputs(
-  raw: string,
-): { ok: true; value?: Record<string, string> } | { ok: false; error: string } {
-  const trimmed = raw.trim();
-  if (!trimmed) return { ok: true };
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(trimmed);
-  } catch {
-    return { ok: false, error: 'inputs 必须是合法 JSON 对象' };
+function stepDuration(step: WorkflowStepSummary): string {
+  if (step.started_at === undefined) return '—';
+  if (step.finished_at === undefined) return '进行中';
+  return `${Math.max(0, step.finished_at - step.started_at)}ms`;
+}
+
+function WorkflowSteps({ steps }: { steps: readonly WorkflowStepSummary[] }) {
+  if (steps.length === 0) {
+    return <p className="section-desc">无步骤信息。</p>;
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { ok: false, error: 'inputs 必须是 JSON 对象' };
-  }
-  const entries = Object.entries(parsed as Record<string, unknown>);
-  if (entries.length > 64) return { ok: false, error: 'inputs 最多 64 项' };
-  const value: Record<string, string> = {};
-  for (const [key, item] of entries) {
-    if (typeof item !== 'string') return { ok: false, error: 'inputs 的值必须是字符串' };
-    value[key] = item;
-  }
-  return { ok: true, value };
+  return (
+    <ol className="step-timeline">
+      {steps.map((step, index) => (
+        <li className={`step-item step-${step.status}`} key={step.id}>
+          <div className="step-rail" aria-hidden="true">
+            <span className="step-dot" />
+          </div>
+          <div className="step-body">
+            <div className="step-head">
+              <span className="step-index mono">{index + 1}</span>
+              <StatusChip status={step.status} />
+              <span className="mono step-id">{step.id}</span>
+              <span className="dim">{step.type}</span>
+              <span className="dim mono">attempts {step.attempts}</span>
+              <span className="dim mono">{stepDuration(step)}</span>
+            </div>
+            <div className="step-times dim mono">
+              开始 {formatTimestamp(step.started_at) || '—'} · 结束{' '}
+              {formatTimestamp(step.finished_at) || '—'}
+            </div>
+            {step.error && (
+              <pre className="run-output err" role="alert">
+                {step.error}
+              </pre>
+            )}
+            {step.output_preview && (
+              <details className="step-output" open={step.status === 'failed'}>
+                <summary>输出预览</summary>
+                <pre className="json-body">{step.output_preview}</pre>
+              </details>
+            )}
+          </div>
+        </li>
+      ))}
+    </ol>
+  );
 }
 
 export function WorkflowsView({
@@ -69,15 +103,24 @@ export function WorkflowsView({
   const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
-  const available = connected && features.includes('workflow');
+  const available = hasToken && features.includes('workflow');
 
-  const [status, setStatus] = useState<StatusFilter>('all');
+  const [status, setStatus] = useState<WorkflowStatusFilter>('all');
+  const [query, setQuery] = useState('');
   const [busy, setBusy] = useState<Set<string>>(new Set());
   const [cancelTarget, setCancelTarget] = useState<string | null>(null);
-  const [name, setName] = useState('');
-  const [inputsText, setInputsText] = useState('');
-  const [startBusy, setStartBusy] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [startOpen, setStartOpen] = useState(false);
+
+  // 命令面板「启动 workflow」：导航到本域后打开对话框。
+  useStartWorkflowSignal(
+    useCallback(() => {
+      if (!connected) {
+        toast.error('连接断开，无法启动 workflow');
+        return;
+      }
+      setStartOpen(true);
+    }, [connected, toast]),
+  );
 
   const listResource = useResource({
     load: () => client.listWorkflowsRpc({ limit: 100 }),
@@ -85,27 +128,38 @@ export function WorkflowsView({
     pollMs: 10_000,
     deps: [epoch],
   });
-  const workflows = resourceData(listResource.state) ?? [];
-  const filtered = useMemo(
-    () => (status === 'all' ? workflows : workflows.filter((run) => run.status === status)),
-    [workflows, status],
-  );
+  const workflows = useMemo(() => resourceData(listResource.state) ?? [], [listResource.state]);
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    const byStatus = filterWorkflows(workflows, status);
+    if (!needle) return byStatus;
+    return byStatus.filter(
+      (run) =>
+        run.workflow_name.toLowerCase().includes(needle) ||
+        run.workflow_run_id.toLowerCase().includes(needle),
+    );
+  }, [workflows, status, query]);
+
+  const summary = route.workflowId
+    ? workflows.find((run) => run.workflow_run_id === route.workflowId)
+    : undefined;
+  // 详情轮询：先按 summary 推断，详情加载后按真实状态停止（终态不再 2s 拉取）。
+  const [detailPolling, setDetailPolling] = useState(Boolean(route.workflowId));
 
   const detailResource = useResource({
     load: async () => (route.workflowId ? client.getWorkflowRpc(route.workflowId) : null),
     enabled: available && Boolean(route.workflowId),
+    ...(detailPolling && connected ? { pollMs: 2000 } : {}),
     deps: [route.workflowId, epoch],
   });
   const detail = resourceData(detailResource.state);
-  const detailActive =
-    detail?.status === 'pending' ||
-    detail?.status === 'running' ||
-    detail?.status === 'interrupted';
+
   useEffect(() => {
-    if (!detailActive) return;
-    const id = window.setInterval(detailResource.reload, 2000);
-    return () => window.clearInterval(id);
-  }, [detailActive, detailResource.reload]);
+    setDetailPolling(Boolean(route.workflowId));
+  }, [route.workflowId]);
+  useEffect(() => {
+    if (detail) setDetailPolling(workflowStatusActive(detail.status));
+  }, [detail]);
 
   const refreshAll = useCallback(() => {
     listResource.reload();
@@ -113,21 +167,25 @@ export function WorkflowsView({
   }, [listResource.reload, detailResource.reload]);
   useRefreshSignal(refreshAll);
 
-  const paletteEntities = useMemo(
-    () =>
-      (resourceData(listResource.state) ?? []).slice(0, 15).map((run) => ({
-        id: `workflow-${run.workflow_run_id}`,
-        group: 'entity' as const,
-        label: `工作流 ${run.workflow_name}`,
-        keywords: [run.workflow_run_id, run.status],
-        hint: '工作流运行',
-        run: () => navigate({ domain: 'workflows', workflowId: run.workflow_run_id }),
-      })),
-    [listResource.state, navigate],
-  );
-  usePaletteEntities('workflows', paletteEntities);
+  // workflow.* 事件后 500ms 合并刷新；10s 轮询兜底。
+  const snapshot = useEventSnapshot();
+  const lastVersion = useRef(-1);
+  const eventTimer = useRef<number | undefined>(undefined);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version 是合批键；entries 只在 version 变化时读取
+  useEffect(() => {
+    if (snapshot.version === lastVersion.current) return;
+    lastVersion.current = snapshot.version;
+    const recent = snapshot.entries.slice(-100);
+    if (!recent.some(({ event }) => event.type.startsWith('workflow.'))) return;
+    window.clearTimeout(eventTimer.current);
+    eventTimer.current = window.setTimeout(() => {
+      listResource.reload();
+      detailResource.reload();
+    }, 500);
+  }, [snapshot.version, listResource.reload, detailResource.reload]);
+  useEffect(() => () => window.clearTimeout(eventTimer.current), []);
 
-  const runAction = async (id: string, action: () => Promise<void>) => {
+  const runAction = useCallback(async (id: string, action: () => Promise<void>) => {
     setBusy((prev) => new Set(prev).add(id));
     try {
       await action();
@@ -138,66 +196,79 @@ export function WorkflowsView({
         return next;
       });
     }
-  };
+  }, []);
 
-  const resume = (id: string) =>
-    void runAction(id, async () => {
-      try {
-        await client.resumeWorkflowRpc(id);
-        toast.success(`已恢复工作流运行 ${id}`);
-        refreshAll();
-      } catch (error) {
-        const message = errorMessage(error);
-        if (message.includes('workflow_already_running') || message.includes('conflict')) {
-          toast.info('该工作流运行已在恢复中');
+  const resume = useCallback(
+    (id: string) => {
+      if (!connected) {
+        toast.error('连接断开，无法恢复工作流');
+        return;
+      }
+      void runAction(id, async () => {
+        try {
+          await client.resumeWorkflowRpc(id);
+          toast.success(`已恢复工作流运行 ${id}`);
           refreshAll();
-        } else {
-          toast.error(message);
+        } catch (error) {
+          const message = errorMessage(error);
+          if (message.includes('workflow_already_running') || message.includes('conflict')) {
+            toast.info('该工作流运行已在恢复中');
+            refreshAll();
+          } else {
+            toast.error(message);
+          }
         }
+      });
+    },
+    [client, connected, refreshAll, runAction, toast],
+  );
+
+  const cancel = useCallback(
+    (id: string) => {
+      setCancelTarget(null);
+      if (!connected) {
+        toast.error('连接断开，无法取消工作流');
+        return;
       }
-    });
+      void runAction(id, async () => {
+        try {
+          await client.cancelWorkflowRpc(id);
+          toast.success(`已取消工作流运行 ${id}`);
+          refreshAll();
+        } catch (error) {
+          toast.error(errorMessage(error));
+        }
+      });
+    },
+    [client, connected, refreshAll, runAction, toast],
+  );
 
-  const cancel = async (id: string) => {
-    setCancelTarget(null);
-    await runAction(id, async () => {
-      try {
-        await client.cancelWorkflowRpc(id);
-        toast.success(`已取消工作流运行 ${id}`);
-        refreshAll();
-      } catch (error) {
-        toast.error(errorMessage(error));
-      }
-    });
-  };
+  // 命令面板：实体 + 打开/恢复/取消动作。
+  const paletteEntities = useMemo(
+    () =>
+      workflows.slice(0, 15).map((run) => ({
+        id: `workflow-${run.workflow_run_id}`,
+        group: 'entity' as const,
+        label: `工作流 ${run.workflow_name}`,
+        keywords: [run.workflow_run_id, run.status],
+        hint: '工作流运行',
+        run: () => navigate({ domain: 'workflows', workflowId: run.workflow_run_id }),
+      })),
+    [workflows, navigate],
+  );
+  const paletteActions = useMemo(
+    () =>
+      buildWorkflowPaletteActions({
+        workflows,
+        open: (workflowId) => navigate({ domain: 'workflows', workflowId }),
+        resume,
+        cancel,
+      }),
+    [workflows, navigate, resume, cancel],
+  );
+  usePaletteEntities('workflows', [...paletteEntities, ...paletteActions]);
 
-  const start = async () => {
-    const workflowName = name.trim();
-    if (!workflowName || startBusy) return;
-    const inputs = parseInputs(inputsText);
-    if (!inputs.ok) {
-      setFormError(inputs.error);
-      return;
-    }
-    setStartBusy(true);
-    setFormError(null);
-    try {
-      const accepted = await client.startWorkflowRpc(workflowName, inputs.value);
-      toast.success(`已排队：${accepted.workflow_run_id}`);
-      setName('');
-      setInputsText('');
-      navigate({ domain: 'workflows', workflowId: accepted.workflow_run_id });
-      listResource.reload();
-    } catch (error) {
-      const message = errorMessage(error);
-      setFormError(
-        message.includes('not_found') ? `找不到 workflow 定义：${workflowName}` : message,
-      );
-    } finally {
-      setStartBusy(false);
-    }
-  };
-
-  if (!connected) {
+  if (!hasToken) {
     return (
       <div className="domain-view">
         <PageHeader title="工作流" tenantId={tenantId} />
@@ -231,12 +302,17 @@ export function WorkflowsView({
   }
 
   if (route.workflowId) {
+    const detailError = detailResource.state.status === 'error' ? detailResource.state.error : null;
+    const loadingDetail =
+      !detail &&
+      (detailResource.state.status === 'idle' || detailResource.state.status === 'loading');
     return (
       <div className="domain-view">
         <PageHeader
-          title={detail?.workflow_name ?? '工作流运行'}
+          title={detail?.workflow_name ?? summary?.workflow_name ?? '工作流运行'}
           description={<span className="mono">{route.workflowId}</span>}
           tenantId={tenantId}
+          scopeNote="default tenant only"
           actions={
             <>
               <button
@@ -246,42 +322,65 @@ export function WorkflowsView({
               >
                 ← 返回列表
               </button>
-              {detail &&
-                (detail.status === 'interrupted' ||
-                  detail.status === 'failed' ||
-                  detail.status === 'pending') && (
-                  <button
-                    type="button"
-                    className="btn btn-small btn-primary"
-                    disabled={busy.has(detail.workflow_run_id)}
-                    onClick={() => resume(detail.workflow_run_id)}
-                  >
-                    恢复运行
-                  </button>
-                )}
-              {detail &&
-                detail.status !== 'completed' &&
-                detail.status !== 'failed' &&
-                detail.status !== 'cancelled' && (
-                  <button
-                    type="button"
-                    className="btn btn-small btn-danger-ghost"
-                    onClick={() => setCancelTarget(detail.workflow_run_id)}
-                  >
-                    取消
-                  </button>
-                )}
+              {detail && workflowStatusResumable(detail.status) && (
+                <button
+                  type="button"
+                  className="btn btn-small btn-primary"
+                  disabled={!connected || busy.has(detail.workflow_run_id)}
+                  title={!connected ? '连接断开，写操作已禁用' : undefined}
+                  onClick={() => resume(detail.workflow_run_id)}
+                >
+                  {busy.has(detail.workflow_run_id) ? '恢复中…' : '恢复运行'}
+                </button>
+              )}
+              {detail && workflowStatusCancellable(detail.status) && (
+                <button
+                  type="button"
+                  className="btn btn-small btn-danger-ghost"
+                  disabled={!connected}
+                  title={!connected ? '连接断开，写操作已禁用' : undefined}
+                  onClick={() => setCancelTarget(detail.workflow_run_id)}
+                >
+                  取消
+                </button>
+              )}
             </>
           }
         />
 
         <div className="domain-content">
-          {detailResource.state.status === 'error' ? (
-            <ErrorState message={detailResource.state.error} onRetry={detailResource.reload} />
-          ) : !detail ? (
+          {!connected && detail && (
+            <StaleNotice
+              message="连接已断开；显示最近一次读取的工作流详情，写操作已禁用。"
+              onRetry={detailResource.reload}
+            />
+          )}
+          {detailError && !detail ? (
+            <ErrorState message={detailError} onRetry={detailResource.reload} />
+          ) : loadingDetail ? (
             <LoadingState label="正在加载工作流运行…" />
+          ) : !detail ? (
+            <EmptyState
+              title="找不到该工作流运行。"
+              description="它可能已被清理，或属于其他租户。"
+              action={
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={() => navigate({ domain: 'workflows' })}
+                >
+                  返回列表
+                </button>
+              }
+            />
           ) : (
             <>
+              {detailError && (
+                <StaleNotice
+                  message={`更新失败，显示旧数据：${detailError}`}
+                  onRetry={detailResource.reload}
+                />
+              )}
               <section className="panel">
                 <div className="panel-header">
                   <h2 className="section-title">概览</h2>
@@ -327,54 +426,7 @@ export function WorkflowsView({
 
               <section className="panel">
                 <h2 className="section-title">步骤</h2>
-                {detail.steps.length === 0 ? (
-                  <p className="section-desc">无步骤信息。</p>
-                ) : (
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th scope="col">状态</th>
-                        <th scope="col">步骤</th>
-                        <th scope="col" className="col-optional">
-                          类型
-                        </th>
-                        <th scope="col" className="col-optional">
-                          尝试
-                        </th>
-                        <th scope="col" className="col-optional">
-                          耗时
-                        </th>
-                        <th scope="col">输出 / 错误</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {detail.steps.map((step) => (
-                        <tr key={step.id}>
-                          <td>
-                            <StatusChip status={step.status} />
-                          </td>
-                          <td className="mono">{step.id}</td>
-                          <td className="col-optional">{step.type}</td>
-                          <td className="mono col-optional">{step.attempts}</td>
-                          <td className="mono col-optional">
-                            {step.started_at
-                              ? step.finished_at
-                                ? `${Math.max(0, step.finished_at - step.started_at)}ms`
-                                : '进行中'
-                              : '—'}
-                          </td>
-                          <td>
-                            {step.error ? (
-                              <span className="err">{step.error}</span>
-                            ) : (
-                              <span className="dim">{step.output_preview ?? '—'}</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
+                <WorkflowSteps steps={detail.steps} />
               </section>
             </>
           )}
@@ -386,13 +438,26 @@ export function WorkflowsView({
             body={<p>已完成步骤会保留；取消后无法继续执行该运行。</p>}
             confirmLabel="取消运行"
             danger
-            onConfirm={() => void cancel(cancelTarget)}
+            confirmDisabled={!connected}
+            onConfirm={() => cancel(cancelTarget)}
             onCancel={() => setCancelTarget(null)}
           />
         )}
       </div>
     );
   }
+
+  const listError = listResource.state.status === 'error' ? listResource.state.error : null;
+  const loading =
+    listResource.state.status === 'idle' ||
+    (listResource.state.status === 'loading' && workflows.length === 0);
+  const openStart = () => {
+    if (!connected) {
+      toast.error('连接断开，无法启动 workflow');
+      return;
+    }
+    setStartOpen(true);
+  };
 
   return (
     <div className="domain-view">
@@ -401,54 +466,35 @@ export function WorkflowsView({
         description="工作流运行与步骤；启动需要输入定义名（后端没有定义枚举接口）。"
         tenantId={tenantId}
         scopeNote="default tenant only"
-      />
-
-      <section className="panel start-panel">
-        <h2 className="section-title">启动 workflow</h2>
-        <div className="start-grid">
-          <label className="field">
-            <span className="field-label">定义名</span>
-            <input
-              className="input"
-              value={name}
-              onChange={(event) => {
-                setName(event.target.value);
-                setFormError(null);
-              }}
-              placeholder="workflow name"
-              spellCheck={false}
-            />
-          </label>
-          <label className="field">
-            <span className="field-label">inputs（可选 JSON）</span>
-            <input
-              className="input mono"
-              value={inputsText}
-              onChange={(event) => {
-                setInputsText(event.target.value);
-                setFormError(null);
-              }}
-              placeholder='{"env":"prod"}'
-              spellCheck={false}
-            />
-          </label>
+        actions={
           <button
             type="button"
-            className="btn btn-primary"
-            disabled={!name.trim() || startBusy}
-            onClick={() => void start()}
+            className="btn btn-primary btn-small"
+            onClick={openStart}
+            disabled={!connected}
+            title={!connected ? '连接断开，写操作已禁用' : undefined}
           >
-            {startBusy ? '提交中…' : '启动'}
+            启动 workflow
           </button>
-        </div>
-        {formError && (
-          <p className="field-error" role="alert">
-            {formError}
-          </p>
-        )}
-      </section>
+        }
+      />
+
+      {!connected && workflows.length > 0 && (
+        <StaleNotice
+          message="连接已断开；显示最近一次读取的工作流列表，写操作已禁用。"
+          onRetry={refreshAll}
+        />
+      )}
 
       <div className="filter-bar">
+        <input
+          className="input search-input"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="搜索名称或运行 ID"
+          type="search"
+          aria-label="搜索工作流"
+        />
         <fieldset className="filter-chips">
           <legend className="sr-only">按状态过滤工作流</legend>
           {FILTERS.map((filter) => (
@@ -469,39 +515,68 @@ export function WorkflowsView({
       </div>
 
       <div className="domain-content">
-        {listResource.state.status === 'error' && workflows.length === 0 ? (
-          <ErrorState message={listResource.state.error} onRetry={listResource.reload} />
-        ) : listResource.state.status === 'idle' ||
-          (listResource.state.status === 'loading' && workflows.length === 0) ? (
+        {listError && workflows.length > 0 && (
+          <StaleNotice
+            message={`更新失败，显示旧数据：${listError}`}
+            onRetry={listResource.reload}
+          />
+        )}
+        {listError && workflows.length === 0 ? (
+          <ErrorState message={listError} onRetry={listResource.reload} />
+        ) : loading ? (
           <LoadingState label="正在加载工作流运行…" />
         ) : workflows.length === 0 ? (
-          <EmptyState title="还没有 workflow run。" description="在上方输入定义名并启动。" />
+          <EmptyState
+            title="还没有 workflow run。"
+            description="点击右上角「启动 workflow」运行一个定义。"
+            action={
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={openStart}
+                disabled={!connected}
+                title={!connected ? '连接断开，写操作已禁用' : undefined}
+              >
+                启动 workflow
+              </button>
+            }
+          />
         ) : filtered.length === 0 ? (
-          <EmptyState title="没有匹配的工作流运行。" description="切换状态过滤后重试。" />
+          <EmptyState
+            title="没有匹配的工作流运行。"
+            description="切换状态或清除搜索后重试。"
+            action={
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setQuery('');
+                  setStatus('all');
+                }}
+              >
+                清除过滤
+              </button>
+            }
+          />
         ) : (
-          <>
-            {listResource.state.status === 'error' && (
-              <StaleNotice
-                message={`更新失败，显示旧数据：${listResource.state.error}`}
-                onRetry={listResource.reload}
-              />
-            )}
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th scope="col">状态</th>
-                  <th scope="col">名称</th>
-                  <th scope="col" className="col-optional">
-                    进度
-                  </th>
-                  <th scope="col" className="col-optional">
-                    更新
-                  </th>
-                  <th scope="col">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((run) => (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">状态</th>
+                <th scope="col">名称</th>
+                <th scope="col" className="col-optional">
+                  进度
+                </th>
+                <th scope="col" className="col-optional">
+                  更新
+                </th>
+                <th scope="col">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((run) => {
+                const percent = progressPercent(run.completed_steps, run.step_count);
+                return (
                   <tr key={run.workflow_run_id}>
                     <td>
                       <StatusChip status={run.status} />
@@ -522,38 +597,40 @@ export function WorkflowsView({
                     </td>
                     <td className="mono col-optional">
                       {run.completed_steps}/{run.step_count}
+                      <span className="progress" aria-hidden="true">
+                        <span className="progress-bar" style={{ width: `${percent}%` }} />
+                      </span>
                     </td>
                     <td className="mono col-optional">{formatTimestamp(run.updated_at)}</td>
                     <td>
-                      {(run.status === 'interrupted' ||
-                        run.status === 'failed' ||
-                        run.status === 'pending') && (
+                      {workflowStatusResumable(run.status) && (
                         <button
                           type="button"
                           className="btn btn-small"
-                          disabled={busy.has(run.workflow_run_id)}
+                          disabled={!connected || busy.has(run.workflow_run_id)}
+                          title={!connected ? '连接断开，写操作已禁用' : undefined}
                           onClick={() => resume(run.workflow_run_id)}
                         >
-                          恢复
+                          {busy.has(run.workflow_run_id) ? '恢复中…' : '恢复'}
                         </button>
                       )}
-                      {run.status !== 'completed' &&
-                        run.status !== 'failed' &&
-                        run.status !== 'cancelled' && (
-                          <button
-                            type="button"
-                            className="btn btn-small btn-danger-ghost"
-                            onClick={() => setCancelTarget(run.workflow_run_id)}
-                          >
-                            取消
-                          </button>
-                        )}
+                      {workflowStatusCancellable(run.status) && (
+                        <button
+                          type="button"
+                          className="btn btn-small btn-danger-ghost"
+                          disabled={!connected}
+                          title={!connected ? '连接断开，写操作已禁用' : undefined}
+                          onClick={() => setCancelTarget(run.workflow_run_id)}
+                        >
+                          取消
+                        </button>
+                      )}
                     </td>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </>
+                );
+              })}
+            </tbody>
+          </table>
         )}
       </div>
 
@@ -563,8 +640,20 @@ export function WorkflowsView({
           body={<p>已完成步骤会保留；取消后无法继续执行该运行。</p>}
           confirmLabel="取消运行"
           danger
-          onConfirm={() => void cancel(cancelTarget)}
+          confirmDisabled={!connected}
+          onConfirm={() => cancel(cancelTarget)}
           onCancel={() => setCancelTarget(null)}
+        />
+      )}
+
+      {startOpen && (
+        <StartWorkflowDialog
+          onClose={() => setStartOpen(false)}
+          onStarted={(workflowRunId) => {
+            setStartOpen(false);
+            navigate({ domain: 'workflows', workflowId: workflowRunId });
+            listResource.reload();
+          }}
         />
       )}
     </div>
