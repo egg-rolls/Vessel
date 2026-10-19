@@ -11,7 +11,7 @@
 
 import { Box, render, Static, Text, useApp, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type CommandResult, createCommands, doResume } from '../commands/commands.js';
 import {
   deleteSessionAction,
@@ -29,7 +29,8 @@ import {
 } from '../components/InlineAutocomplete.js';
 import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
 import { SessionTable } from '../components/SessionTable.js';
-import { StatusBar } from '../components/StatusBar.js';
+import { useSpinnerState } from '../components/StateTracker.js';
+import { StatusBar, type StatusKind } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import { SubagentActivity } from '../components/SubagentActivity.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
@@ -51,6 +52,7 @@ import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { buildStartupHeader } from './startup-header.js';
 import { buildStartupNotice, loadStartupFacts, loadStartupNotice } from './startup-notice.js';
+import { useStatusMetrics } from './status-metrics.js';
 import { useReplState } from './use-repl-state.js';
 
 /** 与 core PermissionPolicy 一致的等待时限（ms） */
@@ -801,6 +803,24 @@ function InkRepl({ ctx }: InkReplProps) {
   const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
   const layout = computeLiveLayout(terminalRows);
   const runActive = ui.run.phase !== 'idle';
+  const spinner = useSpinnerState(ctx.events);
+  const metrics = useStatusMetrics(ctx, state.currentSessionId, ui.run.phase);
+  const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
+  useEffect(() => {
+    setTurnStartedAt(ui.run.phase === 'running' ? Date.now() : null);
+  }, [ui.run.phase]);
+  const statusKind: StatusKind =
+    ui.run.phase === 'cancelling'
+      ? 'cancelling'
+      : ui.run.phase !== 'idle'
+        ? spinner.verb === 'tool'
+          ? 'tool'
+          : 'thinking'
+        : 'idle';
+  const durationMs =
+    turnStartedAt !== null && ui.run.phase !== 'idle'
+      ? Math.max(0, metrics.now - turnStartedAt)
+      : undefined;
   // minimal 档在 run 进行中保留 1 行进度；hidden 始终为 0。
   const liveMaxHeight = layout.mode === 'minimal' && runActive ? 1 : layout.liveMaxHeight;
   const streamMaxLines = layout.mode === 'minimal' && runActive ? 1 : layout.streamMaxLines;
@@ -820,10 +840,14 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
       <Box flexDirection="column" flexShrink={0}>
         <StatusBar
-          provider={ctx.provider}
-          session={state.currentSessionId}
-          plugins={ctx.plugins}
-          {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
+          status={statusKind}
+          model={ctx.provider.model}
+          context={metrics.context}
+          {...(durationMs !== undefined ? { durationMs } : {})}
+          compactions={state.compactions ?? 0}
+          {...(metrics.sessions !== undefined ? { sessions: metrics.sessions } : {})}
+          cwd={metrics.cwd}
+          {...(metrics.branch ? { branch: metrics.branch } : {})}
         />
         {/* overlay 打开时隐藏更新横幅：高度预算只给状态栏留了 1 行 */}
         {!exclusiveOverlayActive && layout.mode !== 'minimal' && layout.mode !== 'hidden' && (

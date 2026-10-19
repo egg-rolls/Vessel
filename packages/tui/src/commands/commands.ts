@@ -64,6 +64,8 @@ export interface ReplState {
   running: boolean;
   /** 历史/恢复回灌是否展示 reasoning_content（默认 false） */
   showReasoning?: boolean;
+  /** 成功压缩次数（状态规则展示；0/缺失不显示） */
+  compactions?: number;
 }
 
 /** 命令执行结果 */
