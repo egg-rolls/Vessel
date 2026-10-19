@@ -1,4 +1,5 @@
 /** 会话列表的纯选择器/更新函数（可单测，无 React 依赖）。 */
+import { localDayKey, localDayLabel } from '../format';
 import type { SessionInfo } from '../gateway/types';
 
 export const MAX_SESSION_TITLE = 512;
@@ -51,6 +52,33 @@ export function filterSessions(
       (value ?? '').toLowerCase().includes(needle),
     );
   });
+}
+
+export interface SessionDayGroup {
+  key: string;
+  label: string;
+  sessions: SessionInfo[];
+}
+
+/**
+ * 按本地日历日分组（保持传入顺序；调用方已按 updated_at 倒序）。
+ * 只影响渲染，不改变窗口/“显示更多”计数。
+ */
+export function groupSessionsByDay(
+  list: readonly SessionInfo[],
+  now: number = Date.now(),
+): SessionDayGroup[] {
+  const groups: SessionDayGroup[] = [];
+  for (const session of list) {
+    const key = localDayKey(session.updated_at);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) {
+      last.sessions.push(session);
+      continue;
+    }
+    groups.push({ key, label: localDayLabel(session.updated_at, now), sessions: [session] });
+  }
+  return groups;
 }
 
 /** 窗口化：先渲染 `limit` 条，返回被隐藏的数量。 */

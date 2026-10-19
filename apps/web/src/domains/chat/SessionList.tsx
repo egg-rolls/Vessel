@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { ActionMenu } from '../../components/ActionMenu';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { StatusChip } from '../../components/StatusChip';
@@ -6,6 +6,7 @@ import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
 import type { SessionInfo } from '../../gateway/types';
 import {
+  groupSessionsByDay,
   normalizeSessionTitle,
   type SessionStatusFilter,
   sessionTitle,
@@ -28,6 +29,7 @@ export function SessionList({
   draftActive,
   query,
   onQueryChange,
+  searchSnippets,
   status,
   onStatusChange,
   loading,
@@ -54,6 +56,8 @@ export function SessionList({
   draftActive: boolean;
   query: string;
   onQueryChange: (value: string) => void;
+  /** 服务端搜索命中的片段；query 非空时优先展示。 */
+  searchSnippets?: ReadonlyMap<string, string>;
   status: SessionStatusFilter;
   onStatusChange: (value: SessionStatusFilter) => void;
   loading: boolean;
@@ -245,97 +249,110 @@ export function SessionList({
                 </div>
               </div>
             )}
-            {sessions.map((session) => {
-              const active = session.session_id === selectedId;
-              const editing = editingId === session.session_id;
-              const title = sessionTitle(session);
-              const preview =
-                session.preview && session.preview !== session.title ? session.preview : '';
-              return (
-                <div
-                  className={`session-row ${active ? 'active' : ''}`.trim()}
-                  key={session.session_id}
-                >
-                  {editing ? (
-                    <div className="session-rename">
-                      <input
-                        ref={renameRef}
-                        className="input"
-                        value={draft}
-                        aria-label="会话标题"
-                        onFocus={(event) => event.currentTarget.select()}
-                        onChange={(event) => {
-                          setDraft(event.target.value);
-                          setRenameError(null);
-                        }}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            void commitRename(session.session_id);
-                          } else if (event.key === 'Escape') {
-                            event.preventDefault();
-                            cancelRename();
-                          }
-                        }}
-                        onBlur={() => void commitRename(session.session_id)}
-                      />
-                      {renameError && (
-                        <span className="field-error" role="alert">
-                          {renameError}
-                        </span>
+            {groupSessionsByDay(sessions).map((group) => (
+              <Fragment key={group.key || 'unknown'}>
+                {group.label && (
+                  <div className="session-day">
+                    <span>{group.label}</span>
+                  </div>
+                )}
+                {group.sessions.map((session) => {
+                  const active = session.session_id === selectedId;
+                  const editing = editingId === session.session_id;
+                  const title = sessionTitle(session);
+                  const snippet = query.trim()
+                    ? searchSnippets?.get(session.session_id)
+                    : undefined;
+                  const preview =
+                    snippet ??
+                    (session.preview && session.preview !== session.title ? session.preview : '');
+                  return (
+                    <div
+                      className={`session-row ${active ? 'active' : ''}`.trim()}
+                      key={session.session_id}
+                    >
+                      {editing ? (
+                        <div className="session-rename">
+                          <input
+                            ref={renameRef}
+                            className="input"
+                            value={draft}
+                            aria-label="会话标题"
+                            onFocus={(event) => event.currentTarget.select()}
+                            onChange={(event) => {
+                              setDraft(event.target.value);
+                              setRenameError(null);
+                            }}
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault();
+                                void commitRename(session.session_id);
+                              } else if (event.key === 'Escape') {
+                                event.preventDefault();
+                                cancelRename();
+                              }
+                            }}
+                            onBlur={() => void commitRename(session.session_id)}
+                          />
+                          {renameError && (
+                            <span className="field-error" role="alert">
+                              {renameError}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            className="session-main"
+                            aria-current={active ? 'true' : undefined}
+                            onClick={() => onSelect(session.session_id)}
+                          >
+                            <span className="session-title" title={title}>
+                              {title}
+                            </span>
+                            {preview && <span className="session-preview">{preview}</span>}
+                            <span className="session-meta">
+                              <StatusChip status={session.status} />
+                              <span>{session.message_count} 条</span>
+                              <span className="dim">{formatTimestamp(session.updated_at)}</span>
+                            </span>
+                          </button>
+                          <ActionMenu
+                            label={`会话 ${title} 的操作`}
+                            items={[
+                              {
+                                id: 'rename',
+                                label: '重命名',
+                                disabled: writesDisabled,
+                                onSelect: () => startRename(session),
+                              },
+                              {
+                                id: 'copy',
+                                label: '复制 ID',
+                                onSelect: () => copyId(session.session_id),
+                              },
+                              {
+                                id: 'runs',
+                                label: '查看运行',
+                                onSelect: () => onViewRuns(session.session_id),
+                              },
+                              {
+                                id: 'delete',
+                                label: '删除会话',
+                                danger: true,
+                                disabled: writesDisabled,
+                                onSelect: () => onDelete(session),
+                              },
+                            ]}
+                          />
+                        </>
                       )}
                     </div>
-                  ) : (
-                    <>
-                      <button
-                        type="button"
-                        className="session-main"
-                        aria-current={active ? 'true' : undefined}
-                        onClick={() => onSelect(session.session_id)}
-                      >
-                        <span className="session-title" title={title}>
-                          {title}
-                        </span>
-                        {preview && <span className="session-preview">{preview}</span>}
-                        <span className="session-meta">
-                          <StatusChip status={session.status} />
-                          <span>{session.message_count} 条</span>
-                          <span className="dim">{formatTimestamp(session.updated_at)}</span>
-                        </span>
-                      </button>
-                      <ActionMenu
-                        label={`会话 ${title} 的操作`}
-                        items={[
-                          {
-                            id: 'rename',
-                            label: '重命名',
-                            disabled: writesDisabled,
-                            onSelect: () => startRename(session),
-                          },
-                          {
-                            id: 'copy',
-                            label: '复制 ID',
-                            onSelect: () => copyId(session.session_id),
-                          },
-                          {
-                            id: 'runs',
-                            label: '查看运行',
-                            onSelect: () => onViewRuns(session.session_id),
-                          },
-                          {
-                            id: 'delete',
-                            label: '删除会话',
-                            danger: true,
-                            disabled: writesDisabled,
-                            onSelect: () => onDelete(session),
-                          },
-                        ]}
-                      />
-                    </>
-                  )}
-                </div>
-              );
-            })}
+                  );
+                })}
+              </Fragment>
+            ))}
             {hiddenCount > 0 && (
               <button type="button" className="load-more" onClick={onShowMore}>
                 显示更多（还有 {hiddenCount} 个）

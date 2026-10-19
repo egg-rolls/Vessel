@@ -12,6 +12,33 @@ function pad(value: number, width: number): string {
  *
  * `undefined` timestamps render as an empty string.
  */
+/** 本地日历日 key（`YYYY-MM-DD`）；用于会话/消息按天分组。 */
+export function localDayKey(ts: number): string {
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${pad(date.getFullYear(), 4)}-${pad(date.getMonth() + 1, 2)}-${pad(date.getDate(), 2)}`;
+}
+
+/** 分组标题：今天/昨天/本地日期。 */
+export function localDayLabel(ts: number, now: number = Date.now()): string {
+  const key = localDayKey(ts);
+  if (!key) return '';
+  const today = new Date(now);
+  const yesterday = new Date(now);
+  yesterday.setDate(today.getDate() - 1);
+  if (key === localDayKey(now)) return '今天';
+  if (key === localDayKey(yesterday.getTime())) return '昨天';
+  return key;
+}
+
+/** 仅显示本地时间 `HH:MM`（逐条消息时间）。 */
+export function formatClock(ts: number | undefined): string {
+  if (ts === undefined) return '';
+  const date = new Date(ts);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${pad(date.getHours(), 2)}:${pad(date.getMinutes(), 2)}`;
+}
+
 export function formatTimestamp(
   ts: number | undefined,
   opts?: { now?: number; withMs?: boolean },

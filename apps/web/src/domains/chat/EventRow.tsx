@@ -6,24 +6,67 @@ function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
+function payloadText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function ToolPayload({ label, value, open }: { label: string; value: unknown; open?: boolean }) {
+  const text = payloadText(value);
+  if (!text) return null;
+  return (
+    <details className="event-details" open={open}>
+      <summary className="event-summary">{label}</summary>
+      <pre className="event-payload">{text}</pre>
+    </details>
+  );
+}
+
 function renderEventBody(event: RunEvent) {
   switch (event.type) {
     case 'tool.call.started': {
-      const d = event.data as { tool_name?: string; arguments?: unknown };
-      const args = d.arguments == null ? '' : JSON.stringify(d.arguments);
+      const d = event.data as {
+        tool_name?: string;
+        arguments?: unknown;
+        args?: unknown;
+        truncated?: boolean;
+      };
+      const args = d.arguments !== undefined ? d.arguments : d.args;
       return (
         <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
-          {args && <span className="dim">{truncate(args, 160)}</span>}
+          {args !== undefined && (
+            <>
+              <span className="dim">{truncate(payloadText(args), 160)}</span>
+              <ToolPayload label="参数" value={args} />
+              {d.truncated === true && <span className="dim">（已截断）</span>}
+            </>
+          )}
         </>
       );
     }
     case 'tool.call.completed': {
-      const d = event.data as { tool_name?: string; duration_ms?: number };
+      const d = event.data as {
+        tool_name?: string;
+        duration_ms?: number;
+        result?: unknown;
+        truncated?: boolean;
+      };
       return (
         <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
           {d.duration_ms != null && <span className="dim">{d.duration_ms}ms</span>}
+          {d.result !== undefined && (
+            <>
+              <span className="dim">{truncate(payloadText(d.result), 160)}</span>
+              <ToolPayload label="结果" value={d.result} />
+              {d.truncated === true && <span className="dim">（已截断）</span>}
+            </>
+          )}
         </>
       );
     }
@@ -32,7 +75,7 @@ function renderEventBody(event: RunEvent) {
       return (
         <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
-          <span className="err">{truncate(d.error ?? '', 160)}</span>
+          <ToolPayload label="错误（已展开）" value={d.error ?? 'error'} open />
         </>
       );
     }
