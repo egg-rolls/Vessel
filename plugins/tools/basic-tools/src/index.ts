@@ -8,10 +8,19 @@
  * - `edit`：精确且唯一匹配的字符串替换，权限 ask
  *
  * 危险操作（bash / edit）经 `checkPermission` → `requestPermission` 等用户授权（ADR-029）。
- * 三个工具都不做沙箱/白名单/路径穿越防护——权限判定是唯一关口。
+ * `read` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
+ * 可选 `allowed_roots` 把越界访问降级为 ask。`..` 与符号链接按真实路径判定。
  */
 
-import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -71,6 +80,119 @@ function readString(record: Record<string, unknown>, key: string): string {
 function readNumber(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+// ── 路径边界（0.8 E1） ────────────────────────────
+
+/** 内置敏感路径：命中即 deny，不可通过 ask 放行 */
+const DEFAULT_DENY_PATHS: readonly string[] = [
+  '~/.ssh',
+  '~/.aws',
+  '~/.gnupg',
+  '~/.vessel/config.yaml',
+];
+
+/** 插件配置（同时接受 camelCase / snake_case；未知键忽略） */
+export interface BasicToolsConfig {
+  /** 配置后 read / bash cwd 必须落在任一 root 内；越界走 ask。空 = 不限制根 */
+  allowedRoots?: string[];
+  /** 追加到内置 denylist 的敏感路径（前缀匹配） */
+  denyPaths?: string[];
+}
+
+/** 从记录读取字符串数组字段（camelCase 优先，兼容 snake_case） */
+function readStringArray(
+  record: Record<string, unknown>,
+  camel: string,
+  snake: string,
+): string[] | undefined {
+  const value = record[camel] ?? record[snake];
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
+}
+
+/** 把 YAML 里的插件配置解析成已知字段（未知键忽略） */
+export function parseBasicToolsConfig(value: unknown): BasicToolsConfig {
+  if (!isRecord(value)) return {};
+  const allowedRoots = readStringArray(value, 'allowedRoots', 'allowed_roots');
+  const denyPaths = readStringArray(value, 'denyPaths', 'deny_paths');
+  return {
+    ...(allowedRoots !== undefined ? { allowedRoots } : {}),
+    ...(denyPaths !== undefined ? { denyPaths } : {}),
+  };
+}
+
+/** 展开开头的 `~`；其余按 cwd 解析为绝对路径 */
+function expandHome(entry: string): string {
+  if (entry === '~') return os.homedir();
+  if (entry.startsWith('~/') || entry.startsWith('~\\')) {
+    return path.join(os.homedir(), entry.slice(2));
+  }
+  return path.resolve(entry);
+}
+
+/**
+ * 取真实路径：存在则 realpath；不存在则对最近的已存在祖先做 realpath 再拼回剩余段，
+ * 这样符号链接目录下的新路径也不会被词法前缀蒙混过去。
+ */
+function canonicalPath(target: string): string {
+  const absolute = path.resolve(target);
+  try {
+    return realpathSync.native(absolute);
+  } catch {
+    // 路径（或末端）不存在：沿父目录上溯到第一个可解析的位置
+  }
+  const suffix: string[] = [];
+  let current = absolute;
+  for (;;) {
+    const parent = path.dirname(current);
+    if (parent === current) return absolute;
+    suffix.unshift(path.basename(current));
+    current = parent;
+    try {
+      return path.join(realpathSync.native(current), ...suffix);
+    } catch {
+      // 继续上溯
+    }
+  }
+}
+
+/** candidate 是否等于 root 或位于 root 之下（按路径段，不按字符串前缀） */
+function isWithin(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === '' ||
+    (relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
+/** 解析后的路径边界（配置在工具构造时固定，避免每次调用重复 realpath） */
+interface PathBoundary {
+  /** 允许的根；空数组 = 不限制根 */
+  allowedRoots: string[];
+  denyRoots: string[];
+}
+
+/** 构造边界：内置 denylist 始终生效，配置项追加/合并 */
+function buildPathBoundary(config: BasicToolsConfig): PathBoundary {
+  const denyEntries = [...DEFAULT_DENY_PATHS, ...(config.denyPaths ?? [])];
+  return {
+    allowedRoots: (config.allowedRoots ?? []).map((entry) => canonicalPath(expandHome(entry))),
+    denyRoots: denyEntries.map((entry) => canonicalPath(expandHome(entry))),
+  };
+}
+
+/** 判定路径：deny 优先于 allow；配置 allowed_roots 后越界为 ask */
+function evaluatePath(target: string, boundary: PathBoundary): 'allow' | 'ask' | 'deny' {
+  const canonical = canonicalPath(target);
+  if (boundary.denyRoots.some((root) => isWithin(canonical, root))) return 'deny';
+  if (
+    boundary.allowedRoots.length > 0 &&
+    !boundary.allowedRoots.some((root) => isWithin(canonical, root))
+  ) {
+    return 'ask';
+  }
+  return 'allow';
 }
 
 /**
@@ -321,7 +443,7 @@ function killProcessTree(proc: ReturnType<typeof spawnBash>): void {
 }
 
 /** 执行 bash 命令；超时/取消返回错误文本，不抛异常 */
-async function runBash(args: unknown, ctx: ToolContext): Promise<string> {
+async function runBash(args: unknown, ctx: ToolContext, boundary: PathBoundary): Promise<string> {
   if (!isRecord(args)) return '错误：bash 需要 { command: string }';
   const command = readString(args, 'command');
   // 纯空白命令是无意义的一次调用，直接挡掉（否则白烧一轮）
@@ -329,6 +451,11 @@ async function runBash(args: unknown, ctx: ToolContext): Promise<string> {
 
   const cwd = readString(args, 'cwd');
   if (cwd !== '' && !existsSync(cwd)) return `错误：cwd 不存在：${cwd}`;
+  // 防御性检查：即使调用方绕过 checkPermission（如 workflow 直接调 handler），
+  // 敏感路径的 cwd 仍然拒绝；allowed_roots 的越界由 checkPermission 走 ask。
+  if (evaluatePath(cwd === '' ? process.cwd() : cwd, boundary) === 'deny') {
+    return `错误：cwd 在敏感路径拒绝列表中：${cwd === '' ? process.cwd() : cwd}`;
+  }
 
   const timeoutMs = readNumber(args, 'timeout_ms') ?? DEFAULT_BASH_TIMEOUT_MS;
   if (timeoutMs <= 0) return '错误：timeout_ms 必须为正数';
@@ -417,36 +544,56 @@ async function runBash(args: unknown, ctx: ToolContext): Promise<string> {
   return persistNote !== undefined ? `${formatted}\n${persistNote}` : formatted;
 }
 
-const bashTool: ToolDefinition = {
-  name: 'bash',
-  description:
-    'Run a shell command in bash and return merged stdout/stderr with the exit code. ' +
-    'Use it for everything that has no dedicated tool: finding/listing files, batch ' +
-    'edits, git, builds, tests, HTTP requests.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      command: { type: 'string', description: 'The bash command to run' },
-      cwd: { type: 'string', description: 'Working directory (defaults to process cwd)' },
-      timeout_ms: {
-        type: 'number',
-        description: `Timeout in milliseconds (default ${DEFAULT_BASH_TIMEOUT_MS})`,
+/** 构造 bash 工具（路径边界随配置固定） */
+function createBashTool(config: BasicToolsConfig): ToolDefinition {
+  const boundary = buildPathBoundary(config);
+  return {
+    name: 'bash',
+    description:
+      'Run a shell command in bash and return merged stdout/stderr with the exit code. ' +
+      'Use it for everything that has no dedicated tool: finding/listing files, batch ' +
+      'edits, git, builds, tests, HTTP requests.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: 'The bash command to run' },
+        cwd: { type: 'string', description: 'Working directory (defaults to process cwd)' },
+        timeout_ms: {
+          type: 'number',
+          description: `Timeout in milliseconds (default ${DEFAULT_BASH_TIMEOUT_MS})`,
+        },
       },
+      required: ['command'],
     },
-    required: ['command'],
-  },
-  checkPermission: async (input, ctx) => requestPermission(ctx, 'bash', input),
-  handler: async (args: unknown, ctx) => runBash(args, ctx),
-};
+    checkPermission: async (input, ctx) => {
+      if (isRecord(input)) {
+        const cwd = readString(input, 'cwd');
+        const decision = evaluatePath(cwd === '' ? process.cwd() : cwd, boundary);
+        // deny 直接拒绝；配置 allowed_roots 的越界走 ask（由运行时向用户确认）
+        if (decision !== 'allow') return decision;
+      }
+      return requestPermission(ctx, 'bash', input);
+    },
+    handler: async (args: unknown, ctx) => runBash(args, ctx, boundary),
+  };
+}
 
 // ── read ─────────────────────────────────────────
 
 /** 读出带行号的文本片段（行号从 1 开始，`<行号>\t<内容>`） */
-function readFileSlice(args: unknown, signal?: AbortSignal): string {
+function readFileSlice(
+  args: unknown,
+  signal: AbortSignal | undefined,
+  boundary: PathBoundary,
+): string {
   if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：read 需要 { path: string }';
   const inputPath = readString(args, 'path');
   if (inputPath === '') return '错误：path 不能为空';
+  // 防御性检查：即使调用方绕过 checkPermission，也绝不读取敏感路径
+  if (evaluatePath(inputPath, boundary) === 'deny') {
+    return `错误：路径在敏感路径拒绝列表中：${inputPath}`;
+  }
 
   const absolute = path.resolve(inputPath);
   if (!existsSync(absolute)) return `错误：文件不存在：${inputPath}`;
@@ -500,27 +647,36 @@ function readFileSlice(args: unknown, signal?: AbortSignal): string {
   return numbered;
 }
 
-const readTool: ToolDefinition = {
-  name: 'read',
-  description:
-    'Read a text file and return its content with line numbers (1-based, `<line>\\t<content>`). ' +
-    `Use offset/limit to page through large files (limit defaults to ${DEFAULT_READ_LIMIT} lines).`,
-  inputSchema: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'File path' },
-      offset: { type: 'number', description: 'First line to read (1-based, default 1)' },
-      limit: {
-        type: 'number',
-        description: `How many lines to read (default ${DEFAULT_READ_LIMIT})`,
+/** 构造 read 工具（路径边界随配置固定） */
+function createReadTool(config: BasicToolsConfig): ToolDefinition {
+  const boundary = buildPathBoundary(config);
+  return {
+    name: 'read',
+    description:
+      'Read a text file and return its content with line numbers (1-based, `<line>\\t<content>`). ' +
+      `Use offset/limit to page through large files (limit defaults to ${DEFAULT_READ_LIMIT} lines).`,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path' },
+        offset: { type: 'number', description: 'First line to read (1-based, default 1)' },
+        limit: {
+          type: 'number',
+          description: `How many lines to read (default ${DEFAULT_READ_LIMIT})`,
+        },
       },
+      required: ['path'],
     },
-    required: ['path'],
-  },
-  // 只读操作，无副作用：无需用户授权
-  checkPermission: async () => 'allow',
-  handler: async (args: unknown, ctx) => readFileSlice(args, ctx.signal),
-};
+    // 只读操作无副作用；但敏感路径 deny、配置 allowed_roots 后越界 ask
+    checkPermission: async (input) => {
+      if (!isRecord(input)) return 'allow';
+      const inputPath = readString(input, 'path');
+      if (inputPath === '') return 'allow';
+      return evaluatePath(inputPath, boundary);
+    },
+    handler: async (args: unknown, ctx) => readFileSlice(args, ctx.signal, boundary),
+  };
+}
 
 // ── edit ─────────────────────────────────────────
 
@@ -626,9 +782,12 @@ const editTool: ToolDefinition = {
 
 // ── 插件导出 ──────────────────────────────────────
 
-/** 创建三个基础工具（幂等：返回同一组无状态工具定义） */
-export function createBasicTools(): ToolDefinition[] {
-  return [bashTool, readTool, editTool];
+/**
+ * 创建三个基础工具。
+ * 不传配置时只启用内置 denylist（不限制根），与旧行为兼容。
+ */
+export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[] {
+  return [createBashTool(config), createReadTool(config), editTool];
 }
 
 /** basic-tools 插件——唯一工具包，install 时把三个工具注册进 PluginHost */
@@ -636,8 +795,9 @@ export const basicToolsPlugin: Plugin = {
   name: 'basic-tools',
   version: '0.1.0',
   description: 'bash / read / edit — the minimal tool set everything else composes from',
-  install(host: PluginHost) {
-    for (const tool of createBasicTools()) {
+  install(host: PluginHost, options?: { config?: Record<string, unknown> }) {
+    const config = parseBasicToolsConfig(options?.config);
+    for (const tool of createBasicTools(config)) {
       host.registerTool(tool);
     }
   },
