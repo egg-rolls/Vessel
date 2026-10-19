@@ -74,9 +74,10 @@ async function loadLoopbackModule(): Promise<LoopbackTransportModule> {
 }
 
 /**
- * 解析 loopback/本地客户端使用的 gateway token，来源与 gateway 鉴权一致：
- * `serve.token` / `serve.token_env` → `transport.token` → `VESSEL_GATEWAY_TOKEN`
- * → `serve.admin_token(_env)` → `serve.tokens`（优先 admin/write）。
+ * 解析 gateway/本地客户端 token（绝不返回 serve.tokens 条目）：
+ * `serve.token` / `serve.token_env` → `serve.admin_token(_env)` →
+ * `VESSEL_GATEWAY_TOKEN` → `transport.token`。
+ * `serve.tokens` 是客户端认证凭据，不能当作 gateway token。
  * 返回 undefined 表示交给 gateway 生成。
  */
 export function resolveGatewayToken(
@@ -86,28 +87,14 @@ export function resolveGatewayToken(
   const nonEmpty = (value: unknown): string | undefined =>
     typeof value === 'string' && value !== '' ? value : undefined;
 
-  const legacy =
+  return (
     nonEmpty(config.serve?.token) ??
     nonEmpty(config.serve?.tokenEnv ? env[config.serve.tokenEnv] : undefined) ??
-    nonEmpty(config.transport?.token) ??
-    nonEmpty(env.VESSEL_GATEWAY_TOKEN);
-  if (legacy !== undefined) return legacy;
-
-  const admin =
     nonEmpty(config.serve?.adminToken) ??
-    nonEmpty(config.serve?.adminTokenEnv ? env[config.serve.adminTokenEnv] : undefined);
-  if (admin !== undefined) return admin;
-
-  const tokens = config.serve?.tokens;
-  if (tokens) {
-    const entries = Object.entries(tokens).filter(([token]) => token !== '');
-    const preferred =
-      entries.find(([, entry]) => entry.role === 'admin') ??
-      entries.find(([, entry]) => entry.role === 'write') ??
-      entries[0];
-    if (preferred !== undefined) return preferred[0];
-  }
-  return undefined;
+    nonEmpty(config.serve?.adminTokenEnv ? env[config.serve.adminTokenEnv] : undefined) ??
+    nonEmpty(env.VESSEL_GATEWAY_TOKEN) ??
+    nonEmpty(config.transport?.token)
+  );
 }
 
 /** 解析 peers 目录：支持 `~`；相对路径按进程 cwd 解析 */

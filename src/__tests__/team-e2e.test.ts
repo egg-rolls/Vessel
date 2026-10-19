@@ -57,11 +57,8 @@ function spawnNode(nodeId: string, peersDir: string, token: string): SpawnedNode
   return { proc, dir };
 }
 
-/** 从 gateway banner 解析实际地址与 token */
-async function readBanner(
-  proc: Bun.Subprocess,
-  timeoutMs = 15_000,
-): Promise<{ endpoint: string; token: string }> {
+/** 从 gateway banner 解析实际地址（banner 不打印 token） */
+async function readBanner(proc: Bun.Subprocess, timeoutMs = 15_000): Promise<{ endpoint: string }> {
   const reader = (proc.stdout as ReadableStream<Uint8Array>).getReader();
   const decoder = new TextDecoder();
   const deadline = Date.now() + timeoutMs;
@@ -74,10 +71,9 @@ async function readBanner(
     if (chunk === null || chunk.done) break;
     buffer += decoder.decode(chunk.value);
     const endpoint = buffer.match(/Gateway\s+(http:\/\/127\.0\.0\.1:\d+)/)?.[1];
-    const token = buffer.match(/Token\s+([A-Za-z0-9_-]+)/)?.[1];
-    if (endpoint && token) {
+    if (endpoint) {
       await reader.cancel().catch(() => {});
-      return { endpoint, token };
+      return { endpoint };
     }
   }
   throw new Error('gateway banner timeout');

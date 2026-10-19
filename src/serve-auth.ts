@@ -3,11 +3,13 @@
  *
  * 映射（冻结）：
  * - `serve.token` → default/admin（0.4 兼容）
- * - `serve.tokens` map → 条目 {tenantId, role}
+ * - `serve.tokens` map → 条目 {tenantId, role}（仅客户端凭据）
  * - `serve.adminToken` → tenant "*" / admin
  * - 无 token + 回环 → default/admin（anonymous）
  * - 已配置 token 但未带 → null（401）
- * - 非回环 + 无 token → 拒绝启动
+ * - 非回环 + 无 gateway/admin token → 拒绝启动（仅 serve.tokens 不够）
+ * - 回环 + 仅 serve.tokens → 允许启动；in-process dispatcher 用第一个
+ *   token 的 role（最小权限），HTTP 客户端仍必须带 token
  *
  * token 比较使用常量时间比较；错误信息与日志永不包含 token。
  *
@@ -116,20 +118,36 @@ export function resolveGatewayAuth(
 
   const configured = candidates.length > 0;
   const loopback = isLoopbackHostname(options.hostname);
+  const hasGatewayToken = legacyToken !== undefined || adminToken !== undefined;
 
-  if (!configured && !loopback) {
+  // 非回环必须有 gateway/admin token；serve.tokens 只是客户端凭据，
+  // 不能让“仅 tenant token”的 remote gateway 启动。
+  if (!loopback && !hasGatewayToken) {
     return {
       ok: false,
-      error: 'gateway_requires_token: refusing to start a non-loopback gateway without a token',
+      error: configured
+        ? 'gateway_requires_token: non-loopback gateway requires serve.token or serve.admin_token; serve.tokens entries are client credentials only'
+        : 'gateway_requires_token: refusing to start a non-loopback gateway without a token',
     };
   }
 
   const anonymous: Principal | undefined =
     !configured && loopback ? { tenant_id: 'default', role: 'admin' } : undefined;
 
+  /**
+   * 回环 + 仅 serve.tokens：网关仍要求客户端带 token（anonymous 不设置），
+   * 但 in-process LocalRpcClient 没有凭据，按**第一个** token 的 principal
+   * 解析（最小权限，避免退化成 admin）。该值只用于本地 dispatcher，不打印。
+   */
+  const firstToken =
+    !hasGatewayToken && loopback && tokens
+      ? Object.keys(tokens).find((token) => token !== '')
+      : undefined;
+  const localLegacyToken = legacyToken ?? firstToken;
+
   const auth: GatewayAuth = {
     configured,
-    ...(legacyToken !== undefined ? { legacyToken } : {}),
+    ...(localLegacyToken !== undefined ? { legacyToken: localLegacyToken } : {}),
     ...(anonymous ? { anonymous } : {}),
     authenticate(token: string | null): Principal | null {
       if (token === null || token === '') {
