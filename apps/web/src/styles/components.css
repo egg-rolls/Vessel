@@ -505,10 +505,11 @@
 
 .data-table th,
 .data-table td {
-  padding: 9px 10px;
+  height: 36px;
+  padding: 6px 10px;
   border-bottom: 1px solid var(--line);
   text-align: left;
-  vertical-align: top;
+  vertical-align: middle;
   overflow-wrap: anywhere;
 }
 
@@ -520,7 +521,7 @@
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
-  letter-spacing: 0.12em;
+  letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--faint);
 }
@@ -1091,6 +1092,7 @@
   overflow: hidden;
   align-self: flex-start;
   margin-top: 8vh;
+  z-index: var(--z-palette);
 }
 
 .palette-input-row {

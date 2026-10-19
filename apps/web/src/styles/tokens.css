@@ -74,8 +74,8 @@
   --z-nav: 30;
   --z-drawer: 60;
   --z-modal: 70;
+  --z-palette: 75;
   --z-toast: 80;
-  --z-palette: 70;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 }
 

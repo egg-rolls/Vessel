@@ -526,7 +526,7 @@
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
-  letter-spacing: 0.16em;
+  letter-spacing: var(--tracking-wide);
   text-transform: uppercase;
   color: var(--faint);
 }
@@ -803,6 +803,10 @@
   .page-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .panel {
+    padding: 16px;
   }
 
   .page-actions {

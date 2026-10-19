@@ -283,7 +283,6 @@
   border-radius: var(--radius);
   background: var(--surface);
   overflow: hidden;
-  box-shadow: var(--shadow);
 }
 
 .run-card.running,
