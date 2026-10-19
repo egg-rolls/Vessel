@@ -787,6 +787,10 @@ export default function App() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   /** ≤680px 侧栏抽屉；桌面不生效。 */
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** 当前视口是否为窄屏（与 CSS 的 680px 断点一致）。 */
+  const [isNarrowViewport, setIsNarrowViewport] = useState(
+    () => window.matchMedia('(max-width: 680px)').matches,
+  );
   /** 持久历史窗口大小（仅客户端，不发分页请求）。 */
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
 
@@ -794,6 +798,9 @@ export default function App() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const timelineRef = useRef<HTMLElement | null>(null);
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const sidebarToggleRef = useRef<HTMLButtonElement | null>(null);
+  const sidebarWasOpenRef = useRef(false);
   const nearBottomRef = useRef(true);
   const hydrateGen = useRef(0);
   const workflowDetailGen = useRef(0);
@@ -1326,6 +1333,15 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [queuedRuns, client]);
 
+  // 窄屏抽屉：跟随视口宽度（与 CSS 的 680px 断点一致）。
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 680px)');
+    const sync = () => setIsNarrowViewport(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
+
   // 窄屏抽屉：Esc 关闭。
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -1335,6 +1351,26 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [sidebarOpen]);
+
+  // 窄屏抽屉：打开时聚焦第一个可聚焦控件，关闭后把焦点还给触发按钮。
+  useEffect(() => {
+    if (!isNarrowViewport) {
+      sidebarWasOpenRef.current = false;
+      return;
+    }
+    if (sidebarOpen) {
+      sidebarWasOpenRef.current = true;
+      const firstFocusable = sidebarRef.current?.querySelector<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      );
+      firstFocusable?.focus();
+      return;
+    }
+    if (sidebarWasOpenRef.current) {
+      sidebarWasOpenRef.current = false;
+      sidebarToggleRef.current?.focus();
+    }
+  }, [isNarrowViewport, sidebarOpen]);
 
   // durable / MCP 面板定期刷新（10s；未启用的 feature 会被 loadPanels 清空）
   useEffect(() => {
@@ -1732,6 +1768,7 @@ export default function App() {
     <div className="app">
       <header className="topbar" inert={modalOpen || undefined}>
         <button
+          ref={sidebarToggleRef}
           type="button"
           className="sidebar-toggle"
           onClick={() => setSidebarOpen((value) => !value)}
@@ -1859,7 +1896,13 @@ export default function App() {
       )}
 
       <div className="body" inert={modalOpen || undefined}>
-        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} id="session-sidebar">
+        <aside
+          ref={sidebarRef}
+          className={`sidebar ${sidebarOpen ? 'open' : ''}`}
+          id="session-sidebar"
+          inert={isNarrowViewport && !sidebarOpen ? true : undefined}
+          aria-hidden={isNarrowViewport && !sidebarOpen ? true : undefined}
+        >
           <div className="sidebar-title">
             <span>
               会话{' '}

@@ -12,19 +12,19 @@
   --surface-2: #efece5;
   --surface-3: #e9e5dc;
   --ink: #23211d;
-  --muted: #6f6a61;
-  --faint: #6b665d;
+  --muted: #605c54;
+  --faint: #6f6a61;
   --line: #e3ded4;
   --line-strong: #d2cabd;
   --accent: #8a6a45;
   --accent-ink: #6f5233;
   --accent-soft: rgba(138, 106, 69, 0.1);
   --accent-line: rgba(138, 106, 69, 0.35);
-  --ok: #5f7357;
+  --ok: #52654a;
   --ok-soft: rgba(95, 115, 87, 0.1);
-  --warn: #9a7436;
+  --warn: #7d5a24;
   --warn-soft: rgba(154, 116, 54, 0.1);
-  --danger: #a25a50;
+  --danger: #8f4a40;
   --danger-soft: rgba(162, 90, 80, 0.09);
   --info: #5c6b78;
   --info-soft: rgba(92, 107, 120, 0.1);
@@ -38,6 +38,7 @@
     "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 
+  --radius-sm: 9px;
   --radius: 12px;
   --radius-lg: 16px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
@@ -110,7 +111,7 @@ button {
 }
 
 *:focus-visible {
-  outline: 2px solid var(--accent-line);
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
 
@@ -175,9 +176,11 @@ button {
   letter-spacing: 0.02em;
 }
 
-.sidebar-toggle:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
+@media (hover: hover) {
+  .sidebar-toggle:hover {
+    color: var(--ink);
+    border-color: var(--line-strong);
+  }
 }
 
 .brand {
@@ -282,7 +285,7 @@ button {
   padding: 8px 12px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--ink);
@@ -302,8 +305,11 @@ button {
   color: var(--danger);
 }
 
-.token-input:focus,
-.control-input:focus,
+.token-input:focus {
+  border-color: var(--accent-line);
+  background: var(--surface);
+}
+
 .session-search:focus,
 .ask-input:focus,
 .workflow-name:focus,
@@ -325,7 +331,7 @@ button {
   border-radius: 999px;
   background: transparent;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.05em;
 }
 
@@ -409,7 +415,7 @@ button {
   padding: 1px 6px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0;
   color: var(--muted);
 }
@@ -419,7 +425,7 @@ button {
   padding: 1px 6px;
   border: 1px solid var(--line);
   border-radius: 999px;
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0;
   text-transform: none;
   white-space: nowrap;
@@ -432,7 +438,7 @@ button {
   border: 1px solid transparent;
   border-radius: 999px;
   background: transparent;
-  font-size: 10px;
+  font-size: 11px;
   letter-spacing: 0.02em;
   color: var(--faint);
   text-transform: none;
@@ -441,9 +447,11 @@ button {
     border-color 0.18s var(--ease);
 }
 
-.section-toggle:hover {
-  color: var(--ink);
-  border-color: var(--line);
+@media (hover: hover) {
+  .section-toggle:hover {
+    color: var(--ink);
+    border-color: var(--line);
+  }
 }
 
 .session-actions {
@@ -456,7 +464,7 @@ button {
   flex: 1;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--muted);
   font-size: 12px;
@@ -467,9 +475,11 @@ button {
     background 0.18s var(--ease);
 }
 
-.action-btn:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
+@media (hover: hover) {
+  .action-btn:hover {
+    color: var(--ink);
+    border-color: var(--line-strong);
+  }
 }
 
 .action-btn.active {
@@ -491,7 +501,7 @@ button {
   width: 100%;
   padding: 8px 11px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   font-size: 12px;
   transition: border-color 0.18s var(--ease);
@@ -518,7 +528,7 @@ button {
   padding: 11px 12px;
   text-align: left;
   border: 1px solid transparent;
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--ink);
   transition:
@@ -526,8 +536,10 @@ button {
     border-color 0.16s var(--ease);
 }
 
-.session-item:hover {
-  background: var(--surface-2);
+@media (hover: hover) {
+  .session-item:hover {
+    background: var(--surface-2);
+  }
 }
 
 .session-item.active {
@@ -557,7 +569,7 @@ button {
   align-items: center;
   gap: 8px;
   margin-top: 2px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
 }
 
@@ -566,7 +578,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--faint);
   background: transparent;
@@ -611,15 +623,17 @@ button {
 .durable-item,
 .workflow-item {
   padding: 9px 12px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   transition: background 0.16s var(--ease);
 }
 
-.tool-item:hover,
-.mcp-item:hover,
-.durable-item:hover,
-.workflow-item:hover {
-  background: var(--surface-2);
+@media (hover: hover) {
+  .tool-item:hover,
+  .mcp-item:hover,
+  .durable-item:hover,
+  .workflow-item:hover {
+    background: var(--surface-2);
+  }
 }
 
 .tool-name {
@@ -658,7 +672,7 @@ button {
   margin: 6px 16px 12px;
   padding: 9px 12px;
   border: 1px dashed var(--line-strong);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
   font-size: 11.5px;
@@ -668,10 +682,16 @@ button {
     border-color 0.18s var(--ease);
 }
 
-.advanced-toggle:hover,
 .advanced-toggle.open {
   color: var(--ink);
   border-color: var(--accent-line);
+}
+
+@media (hover: hover) {
+  .advanced-toggle:hover {
+    color: var(--ink);
+    border-color: var(--accent-line);
+  }
 }
 
 .advanced-mark {
@@ -799,9 +819,11 @@ button {
     border-color 0.18s var(--ease);
 }
 
-.load-earlier:hover {
-  color: var(--ink);
-  border-color: var(--line-strong);
+@media (hover: hover) {
+  .load-earlier:hover {
+    color: var(--ink);
+    border-color: var(--line-strong);
+  }
 }
 
 .msg {
@@ -812,7 +834,7 @@ button {
   display: block;
   margin-bottom: 6px;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10px;
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--faint);
@@ -861,7 +883,7 @@ button {
   margin-left: 2px;
   padding: 8px 12px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
 }
 
@@ -895,8 +917,10 @@ button {
   transition: border-color 0.18s var(--ease);
 }
 
-.run-card:hover {
-  border-color: var(--line-strong);
+@media (hover: hover) {
+  .run-card:hover {
+    border-color: var(--line-strong);
+  }
 }
 
 .run-card.running {
@@ -922,7 +946,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10px;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
@@ -1014,7 +1038,7 @@ button {
 
 .row .ts {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-variant-numeric: tabular-nums;
   color: var(--faint);
 }
@@ -1024,7 +1048,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 5px;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   line-height: 17px;
   letter-spacing: 0.02em;
   color: var(--faint);
@@ -1103,7 +1127,7 @@ button {
   margin: 8px 0 0;
   padding: 10px 12px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -1120,12 +1144,14 @@ button {
   border-radius: 999px;
   background: transparent;
   color: var(--danger);
-  font-size: 10.5px;
+  font-size: 11px;
   transition: background 0.16s var(--ease);
 }
 
-.cancel-btn:hover:not(:disabled) {
-  background: var(--danger-soft);
+@media (hover: hover) {
+  .cancel-btn:hover:not(:disabled) {
+    background: var(--danger-soft);
+  }
 }
 
 .cancel-btn:disabled {
@@ -1154,17 +1180,19 @@ button {
     transform 0.18s var(--ease);
 }
 
-.to-bottom:hover {
-  color: var(--ink);
-  border-color: var(--accent-line);
-  transform: translateY(-1px);
+@media (hover: hover) {
+  .to-bottom:hover {
+    color: var(--ink);
+    border-color: var(--accent-line);
+    transform: translateY(-1px);
+  }
 }
 
 /* ── Composer ─────────────────────────────────────────── */
 
 .control {
   flex: none;
-  padding: 12px clamp(16px, 4vw, 40px) 18px;
+  padding: 12px clamp(16px, 4vw, 40px) calc(18px + env(safe-area-inset-bottom));
   background: linear-gradient(transparent, var(--bg) 24%);
 }
 
@@ -1184,7 +1212,9 @@ button {
 
 .composer:focus-within {
   border-color: var(--accent-line);
-  box-shadow: var(--shadow-lift);
+  box-shadow:
+    var(--shadow),
+    0 0 0 2px var(--accent);
 }
 
 .composer-meta {
@@ -1193,14 +1223,14 @@ button {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 8px;
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--faint);
 }
 
 .control-session {
   min-width: 0;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.02em;
   color: var(--accent);
   white-space: nowrap;
@@ -1211,7 +1241,7 @@ button {
 .composer-hint {
   flex: none;
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
 }
 
@@ -1224,7 +1254,7 @@ button {
 .control-input {
   flex: 1;
   min-height: 24px;
-  max-height: 160px;
+  max-height: min(160px, 34dvh);
   padding: 6px 2px;
   border: 0;
   background: transparent;
@@ -1237,7 +1267,6 @@ button {
 
 .control-input:focus,
 .control-input:focus-visible {
-  outline: none;
   border: 0;
   background: transparent;
 }
@@ -1254,7 +1283,7 @@ button {
   flex: none;
   padding: 9px 20px;
   border: 1px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: var(--accent);
   color: var(--surface);
   font-size: 12.5px;
@@ -1266,10 +1295,12 @@ button {
     transform 0.18s var(--ease);
 }
 
-.send-btn:hover:not(:disabled) {
-  background: var(--accent-ink);
-  border-color: var(--accent-ink);
-  transform: translateY(-1px);
+@media (hover: hover) {
+  .send-btn:hover:not(:disabled) {
+    background: var(--accent-ink);
+    border-color: var(--accent-ink);
+    transform: translateY(-1px);
+  }
 }
 
 .send-btn:disabled {
@@ -1280,7 +1311,7 @@ button {
 .last-output {
   display: block;
   margin-top: 6px;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 .ghost-btn {
@@ -1297,10 +1328,12 @@ button {
     background 0.18s var(--ease);
 }
 
-.ghost-btn:hover:not(:disabled) {
-  color: var(--ink);
-  border-color: var(--line-strong);
-  background: var(--surface-2);
+@media (hover: hover) {
+  .ghost-btn:hover:not(:disabled) {
+    color: var(--ink);
+    border-color: var(--line-strong);
+    background: var(--surface-2);
+  }
 }
 
 .ghost-btn.active {
@@ -1316,7 +1349,7 @@ button {
 
 .ghost-btn.small {
   padding: 5px 11px;
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 /* ── 弹窗 ─────────────────────────────────────────────── */
@@ -1388,7 +1421,7 @@ button {
   max-height: 38vh;
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   font-family: var(--font-mono);
   font-size: 11.5px;
@@ -1408,15 +1441,17 @@ button {
 .deny-btn {
   padding: 9px 18px;
   border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line));
-  border-radius: 10px;
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--danger);
   font-size: 12.5px;
   transition: background 0.18s var(--ease);
 }
 
-.deny-btn:hover {
-  background: var(--danger-soft);
+@media (hover: hover) {
+  .deny-btn:hover {
+    background: var(--danger-soft);
+  }
 }
 
 /* ── ask_user ─────────────────────────────────────────── */
@@ -1442,7 +1477,7 @@ button {
 
 .ask-header {
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10px;
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -1487,7 +1522,7 @@ button {
 .ask-input {
   padding: 9px 12px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   font-size: 13px;
 }
@@ -1513,7 +1548,7 @@ button {
   border: 1px solid var(--line);
   border-radius: 999px;
   font-family: var(--font-mono);
-  font-size: 9px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   color: var(--faint);
 }
@@ -1554,15 +1589,17 @@ button {
   border-radius: 999px;
   background: transparent;
   color: var(--accent);
-  font-size: 10.5px;
+  font-size: 11px;
   transition:
     background 0.16s var(--ease),
     border-color 0.16s var(--ease);
 }
 
-.resume-btn:hover:not(:disabled) {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
+@media (hover: hover) {
+  .resume-btn:hover:not(:disabled) {
+    border-color: var(--accent-line);
+    background: var(--accent-soft);
+  }
 }
 
 .resume-btn:disabled {
@@ -1586,7 +1623,7 @@ button {
   min-width: 0;
   padding: 7px 10px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   font-size: 11.5px;
 }
@@ -1600,7 +1637,7 @@ button {
   margin-bottom: 8px;
   padding: 8px 10px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -1640,7 +1677,7 @@ button {
 .workflow-detail {
   margin-top: 8px;
   padding: 8px 10px;
-  border-radius: 9px;
+  border-radius: var(--radius-sm);
   background: var(--bg);
 }
 
@@ -1681,7 +1718,7 @@ button {
   justify-content: space-between;
   gap: 8px;
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 11px;
 }
 
 /* ── 响应式 ───────────────────────────────────────────── */
@@ -1727,11 +1764,15 @@ button {
     border-right: 1px solid var(--line);
     border-bottom: 0;
     box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 22%, transparent);
+    visibility: hidden;
     transform: translateX(-100%);
-    transition: transform 0.2s var(--ease);
+    transition:
+      transform 0.2s var(--ease),
+      visibility 0.2s var(--ease);
   }
 
   .sidebar.open {
+    visibility: visible;
     transform: none;
   }
 
@@ -1756,10 +1797,23 @@ button {
 
   .topbar {
     padding: 10px 16px;
+    row-gap: 6px;
+  }
+
+  .brand-sub,
+  .protocol-badge {
+    display: none;
+  }
+
+  .token-field {
+    flex: 1 0 100%;
+    min-width: 0;
+    max-width: none;
+    margin-left: 0;
   }
 
   .control {
-    padding: 10px 14px 14px;
+    padding: 10px 14px calc(14px + env(safe-area-inset-bottom));
   }
 
   .msg-bubble {
