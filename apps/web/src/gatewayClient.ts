@@ -359,6 +359,20 @@ export class GatewayClient {
     return this.request('run.get', { run_id: runId });
   }
 
+  /**
+   * 查询 run 状态：canonical `runs.get` 优先，旧 gateway 回退 WS legacy `run.get`。
+   * 排队卡片用它轮询 queue_position；不新增服务端方法。
+   */
+  async getRunStatus(runId: string): Promise<RunStatus> {
+    try {
+      const body = await this.rpc<{ run: RunStatus }>('runs.get', { run_id: runId });
+      return body.run;
+    } catch (error) {
+      if (!canFallbackToLegacyRuns(error)) throw error;
+      return this.request<RunStatus>('run.get', { run_id: runId });
+    }
+  }
+
   async listSessions(): Promise<SessionInfo[]> {
     const body = await this.request<{ sessions?: SessionInfo[] }>('sessions.list');
     return body.sessions ?? [];

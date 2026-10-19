@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { formatTimestamp } from './format';
 import { type ConnectionState, GatewayClient } from './gatewayClient';
+import { windowTail } from './transcript';
 import type {
   AskUserAnswer,
   AskUserQuestion,
@@ -22,6 +24,10 @@ import type {
 } from './types';
 
 const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL as string | undefined) ?? '';
+/** 长历史默认只渲染最近 N 条；「加载更早」每次再取 N 条。 */
+const TRANSCRIPT_WINDOW = 50;
+/** 排队位置没有推送事件，只能轮询既有 runs.get。 */
+const QUEUE_POLL_MS = 2000;
 
 /** 默认隐藏的内部事件：状态同步/提示词上下文，不是用户关心的对话内容。 */
 const INTERNAL_EVENT_TYPES = new Set([
@@ -74,6 +80,17 @@ interface PermissionRequest {
   input: unknown;
   runId: string;
   expiresAt: number;
+}
+
+/** 已受理但尚未开始执行的 run（服务端 queued 阶段不发事件）。 */
+interface QueuedSubmission {
+  runId: string;
+  sessionId?: string;
+  input: string;
+  queuePosition?: number;
+  submittedAt: number;
+  cancelling: boolean;
+  cancelled: boolean;
 }
 
 function buildGroup(runId: string, entries: TimelineEntry[]): RunGroup {
@@ -160,20 +177,8 @@ function truncate(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n)}…` : s;
 }
 
-function formatTime(ts?: number): string {
-  if (ts == null) return '';
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** 行内时间戳（带毫秒，便于区分同一秒内的多条事件） */
-function formatRowTime(ts: number): string {
-  const d = new Date(ts);
-  const base = d.toLocaleTimeString('zh-CN', { hour12: false });
-  return `${base}.${String(d.getMilliseconds()).padStart(3, '0')}`;
 }
 
 /** 读取 URL fragment / sessionStorage 里的 token（fragment 不发给服务端） */
@@ -233,7 +238,7 @@ function EventRow({ event }: { event: RunEvent }) {
   const tag = eventTag(event.type);
   return (
     <div className={`row ${tag.cls}`}>
-      <span className="ts dim">{formatRowTime(event.ts)}</span>
+      <span className="ts dim">{formatTimestamp(event.ts, { withMs: true })}</span>
       <span className={`type-tag ${tag.cls}`}>{tag.label}</span>
       <span className="event-body">{renderEventBody(event)}</span>
     </div>
@@ -347,7 +352,7 @@ function RunCard({
         <span className="mono run-id" title={group.runId}>
           {truncate(group.runId, 24)}
         </span>
-        {group.startedAt != null && <span className="dim">{formatTime(group.startedAt)}</span>}
+        {group.startedAt != null && <span className="dim">{formatTimestamp(group.startedAt)}</span>}
         {group.sessionId && <span className="dim">session {truncate(group.sessionId, 16)}</span>}
         {group.status === 'running' && group.jobId && !cancelled && (
           <button
@@ -382,7 +387,7 @@ function RunCard({
             {group.durationMs != null && <span className="dim">{group.durationMs}ms</span>}
             {group.iterations != null && <span className="dim">{group.iterations} iters</span>}
             {group.completedAt != null && (
-              <span className="dim">{formatTime(group.completedAt)}</span>
+              <span className="dim">{formatTimestamp(group.completedAt)}</span>
             )}
           </div>
           {group.output && !outputAlreadyShown && <pre className="run-output">{group.output}</pre>}
@@ -392,6 +397,41 @@ function RunCard({
         <div className="run-footer failed">✗ failed {truncate(group.error ?? '', 240)}</div>
       )}
       {status === 'cancelled' && <div className="run-footer cancelled">⏹ cancelled</div>}
+    </div>
+  );
+}
+
+// ── 排队卡片：queued 阶段服务端不发事件，由提交响应 + 轮询驱动 ──
+function QueuedCard({
+  item,
+  onCancel,
+}: {
+  item: QueuedSubmission;
+  onCancel: (runId: string) => void;
+}) {
+  const status = item.cancelled ? 'cancelled' : 'queued';
+  const position =
+    item.queuePosition != null ? `排队中 · 第 ${item.queuePosition} 位` : '排队中 · 位置未知';
+  return (
+    <div className={`run-card ${status}`}>
+      <div className="run-header">
+        <span className={`status-chip ${status}`}>{status}</span>
+        <span className="mono run-id" title={item.runId}>
+          {truncate(item.runId, 24)}
+        </span>
+        <span className="dim">{item.cancelled ? '已取消' : position}</span>
+        {!item.cancelled && (
+          <button
+            type="button"
+            className="cancel-btn"
+            onClick={() => onCancel(item.runId)}
+            disabled={item.cancelling}
+          >
+            {item.cancelling ? '取消中…' : '取消排队'}
+          </button>
+        )}
+      </div>
+      <div className="run-input">{item.input}</div>
     </div>
   );
 }
@@ -433,14 +473,29 @@ function TranscriptMessage({ message }: { message: Message }) {
   );
 }
 
-function Transcript({ messages }: { messages: Message[] }) {
-  const visible = messages.filter((message) => message.role !== 'system');
-  if (visible.length === 0) return null;
+function Transcript({
+  messages,
+  startIndex,
+  hiddenCount,
+  onLoadEarlier,
+}: {
+  messages: Message[];
+  /** 窗口在完整可见消息里的起始下标，用于稳定 key。 */
+  startIndex: number;
+  hiddenCount: number;
+  onLoadEarlier: () => void;
+}) {
+  if (messages.length === 0) return null;
   return (
     <div className="transcript">
-      {visible.map((message, index) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: 历史消息是不可变的只读列表
-        <TranscriptMessage key={index} message={message} />
+      {hiddenCount > 0 && (
+        <button type="button" className="load-earlier" onClick={onLoadEarlier}>
+          加载更早（还有 {hiddenCount} 条）
+        </button>
+      )}
+      {messages.map((message, index) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: 窗口切片用完整列表下标做稳定 key
+        <TranscriptMessage key={`${startIndex + index}`} message={message} />
       ))}
     </div>
   );
@@ -666,6 +721,11 @@ function AskModal({
 // ── 主应用 ──
 export default function App() {
   const [token, setToken] = useState<string>(initialToken);
+  /** 输入框草稿；只有显式「连接」/Enter 才提交到 token，避免逐字重连。 */
+  const [tokenDraft, setTokenDraft] = useState<string>(token);
+  const [tokenError, setTokenError] = useState<string | null>(null);
+  /** 同一 token 手动重试时也触发一次重连。 */
+  const [connectSeq, setConnectSeq] = useState(0);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** 新会话草稿 id：提交前就确定目标 session，避免服务端落到 activeSessionId。 */
@@ -690,12 +750,17 @@ export default function App() {
   const [lastOutput, setLastOutput] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
-  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
-  const [durableRuns, setDurableRuns] = useState<DurableRunSummary[]>([]);
+  /** queued 阶段没有事件，提交响应先落卡片，再由轮询/事件接管。 */
+  const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
+  /** null = 尚未加载（用于面板 loading 三态）；[] = 已加载且为空。 */
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[] | null>(null);
+  const [durableRuns, setDurableRuns] = useState<DurableRunSummary[] | null>(null);
   const [resuming, setResuming] = useState<Set<string>>(new Set());
   const [resumed, setResumed] = useState<Set<string>>(new Set());
-  const [workflows, setWorkflows] = useState<WorkflowRunSummary[]>([]);
+  const [workflows, setWorkflows] = useState<WorkflowRunSummary[] | null>(null);
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowRunDetail | null>(null);
+  const [selectedWorkflowId, setSelectedWorkflowId] = useState<string | null>(null);
+  const [workflowDetailLoading, setWorkflowDetailLoading] = useState(false);
   const [workflowName, setWorkflowName] = useState('');
   const [workflowInputs, setWorkflowInputs] = useState('');
   const [workflowBusy, setWorkflowBusy] = useState(false);
@@ -712,6 +777,7 @@ export default function App() {
     metrics?: string;
     feishu?: string;
     capabilities?: string;
+    config?: string;
   }>({});
   const [now, setNow] = useState(() => Date.now());
   /** 是否显示 context.changed / session.saved / llm.* 等内部事件 */
@@ -719,6 +785,10 @@ export default function App() {
   const [sessionQuery, setSessionQuery] = useState('');
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  /** ≤680px 侧栏抽屉；桌面不生效。 */
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** 持久历史窗口大小（仅客户端，不发分页请求）。 */
+  const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
 
   const client = useMemo(() => new GatewayClient(GATEWAY_URL), []);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -726,14 +796,25 @@ export default function App() {
   const timelineRef = useRef<HTMLElement | null>(null);
   const nearBottomRef = useRef(true);
   const hydrateGen = useRef(0);
+  const workflowDetailGen = useRef(0);
   const lastSeq = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
+  const queuedRef = useRef<QueuedSubmission[]>([]);
+  queuedRef.current = queuedRuns;
+  /** 已收到事件的 job run_id：防止「run.started 先于 HTTP 提交响应」时补插重复卡片。 */
+  const seenJobIds = useRef<Set<string>>(new Set());
 
-  const setTokenAndPersist = (value: string) => {
-    setToken(value);
-    if (value) sessionStorage.setItem('vessel.token', value);
+  /** 显式提交 token：一次编辑只触发一次连接；空值表示断开。 */
+  const commitToken = () => {
+    const next = tokenDraft.trim();
+    // 已连接且 token 未变时不重复重连；错误状态下允许重试。
+    if (next === token && connState === 'open' && !tokenError) return;
+    setTokenError(null);
+    if (next) sessionStorage.setItem('vessel.token', next);
     else sessionStorage.removeItem('vessel.token');
+    setToken(next);
+    setConnectSeq((value) => value + 1);
   };
 
   const refreshSessions = useCallback(() => {
@@ -829,6 +910,8 @@ export default function App() {
     } else {
       setWorkflows([]);
       setSelectedWorkflow(null);
+      setSelectedWorkflowId(null);
+      workflowDetailGen.current += 1;
     }
 
     if (features.includes('metrics')) {
@@ -877,10 +960,16 @@ export default function App() {
     if (features.includes('config')) {
       client
         .getConfigSources()
-        .then(setConfigSources)
-        .catch(() => setConfigSources(null));
+        .then((sources) => {
+          setConfigSources(sources);
+          setPanelErrors((prev) => ({ ...prev, config: undefined }));
+        })
+        .catch((e: unknown) => {
+          setPanelErrors((prev) => ({ ...prev, config: errorMessage(e) }));
+        });
     } else {
       setConfigSources(null);
+      setPanelErrors((prev) => ({ ...prev, config: undefined }));
     }
   }, [client]);
 
@@ -898,17 +987,26 @@ export default function App() {
   }, [client, loadPanels, refreshSessions, loadSessionDetail]);
 
   // WS 连接 + 事件订阅（token 变化时重连；断线指数退避，用 since 续订）
+  // biome-ignore lint/correctness/useExhaustiveDependencies: connectSeq 用于同 token 手动重连
   useEffect(() => {
     const tk = token.trim();
     if (!tk) {
+      seenJobIds.current.clear();
       setConnState('idle');
       setEntries([]);
       setHello(null);
       setTools([]);
       setPermissions([]);
       setAsks([]);
-      setWorkflows([]);
+      setQueuedRuns([]);
+      setTokenError(null);
+      setMcpServers(null);
+      setDurableRuns(null);
+      setWorkflows(null);
       setSelectedWorkflow(null);
+      setSelectedWorkflowId(null);
+      workflowDetailGen.current += 1;
+      setWorkflowDetailLoading(false);
       setMetrics(null);
       setFeishu(null);
       setCapabilities(null);
@@ -929,6 +1027,7 @@ export default function App() {
     let retryTimer: number | undefined;
     let attempt = 0;
     lastSeq.current = 0;
+    seenJobIds.current.clear();
     setEntries([]);
     setPermissions([]);
     setAsks([]);
@@ -939,11 +1038,16 @@ export default function App() {
     setHydrateError(null);
     setHydrating(false);
     setLastOutput(null);
+    setQueuedRuns([]);
+    setTokenError(null);
     setTools([]);
-    setMcpServers([]);
-    setDurableRuns([]);
-    setWorkflows([]);
+    setMcpServers(null);
+    setDurableRuns(null);
+    setWorkflows(null);
     setSelectedWorkflow(null);
+    setSelectedWorkflowId(null);
+    workflowDetailGen.current += 1;
+    setWorkflowDetailLoading(false);
     setMetrics(null);
     setFeishu(null);
     setCapabilities(null);
@@ -1010,6 +1114,20 @@ export default function App() {
     const offEvent = client.onEvent((event, meta) => {
       if (meta.seq <= lastSeq.current) return;
       lastSeq.current = meta.seq;
+      // queued 卡片只活到该 job 的第一条事件（run.started 起带 job_id）。
+      if (meta.jobId) {
+        const jobId = meta.jobId;
+        seenJobIds.current.add(jobId);
+        if (seenJobIds.current.size > 500) {
+          const oldest = seenJobIds.current.values().next().value;
+          if (oldest !== undefined) seenJobIds.current.delete(oldest);
+        }
+        setQueuedRuns((prev) =>
+          prev.some((item) => item.runId === jobId)
+            ? prev.filter((item) => item.runId !== jobId)
+            : prev,
+        );
+      }
       setEntries((prev) => [
         ...prev,
         {
@@ -1064,6 +1182,7 @@ export default function App() {
         }
       }
       setHello(info);
+      setTokenError(null);
       if (info.tenant_id) setTenantId(info.tenant_id);
       setError(null);
       loadPanels();
@@ -1087,14 +1206,25 @@ export default function App() {
       if (!disposed) setConnState(state);
     });
 
+    /** connect() 的 reject 与 close 事件会先后到达：4401 只保留字段级提示。 */
+    const reportConnectError = (error: unknown) => {
+      if (disposed) return;
+      if (client.closedWithCode === 4401) {
+        setTokenError('鉴权失败：token 错误或已失效');
+        return;
+      }
+      setError(error instanceof Error ? error.message : String(error));
+    };
+
     const offClose = client.onClose((code) => {
       if (disposed) return;
       if (code === 4400 || code === 4401) {
-        setError(
-          code === 4400
-            ? '协议版本不兼容（需要 vessel.gateway/1）'
-            : '鉴权失败：token 错误或已失效',
-        );
+        if (code === 4401) {
+          // token 是字段级输入：错误提示贴在输入框下，不占用全局 banner。
+          setTokenError('鉴权失败：token 错误或已失效');
+        } else {
+          setError('协议版本不兼容（需要 vessel.gateway/1）');
+        }
         return;
       }
       // 自动重连（1s 起，指数退避，上限 30s，带 jitter）
@@ -1104,15 +1234,11 @@ export default function App() {
       setConnState('reconnecting');
       retryTimer = window.setTimeout(() => {
         if (disposed) return;
-        void client.connect(tk, lastSeq.current).catch((e: unknown) => {
-          if (!disposed) setError(e instanceof Error ? e.message : String(e));
-        });
+        void client.connect(tk, lastSeq.current).catch(reportConnectError);
       }, delay);
     });
 
-    void client.connect(tk, 0).catch((e: unknown) => {
-      if (!disposed) setError(e instanceof Error ? e.message : String(e));
-    });
+    void client.connect(tk, 0).catch(reportConnectError);
 
     return () => {
       disposed = true;
@@ -1125,7 +1251,7 @@ export default function App() {
       window.clearTimeout(panelTimer);
       client.close();
     };
-  }, [token, client, loadPanels, loadSessionDetail, refreshSessions]);
+  }, [token, connectSeq, client, loadPanels, loadSessionDetail, refreshSessions]);
 
   // 会话列表定期刷新（仅连接可用时）
   useEffect(() => {
@@ -1142,6 +1268,73 @@ export default function App() {
     if (!selectedId || connState !== 'open') return;
     loadSessionDetail(selectedId);
   }, [selectedId, connState, loadSessionDetail]);
+
+  // 切换会话重置历史窗口；后台 silent 刷新不重置。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId 变化是重置条件
+  useEffect(() => {
+    setTranscriptLimit(TRANSCRIPT_WINDOW);
+  }, [selectedId]);
+
+  // 排队位置没有推送事件：只对未取消的排队卡片轮询既有 runs.get。
+  useEffect(() => {
+    if (!queuedRuns.some((item) => !item.cancelled)) return;
+    const id = window.setInterval(() => {
+      for (const item of queuedRef.current) {
+        if (item.cancelled) continue;
+        client
+          .getRunStatus(item.runId)
+          .then((status) => {
+            setQueuedRuns((prev) => {
+              const current = prev.find((entry) => entry.runId === item.runId);
+              if (!current || current.cancelled) return prev;
+              if (status.status === 'queued') {
+                const sessionId = current.sessionId ?? status.session_id;
+                if (
+                  current.queuePosition === status.queue_position &&
+                  current.sessionId === sessionId
+                ) {
+                  return prev;
+                }
+                return prev.map((entry) =>
+                  entry.runId === item.runId
+                    ? {
+                        ...entry,
+                        ...(status.queue_position !== undefined
+                          ? { queuePosition: status.queue_position }
+                          : {}),
+                        ...(sessionId ? { sessionId } : {}),
+                      }
+                    : entry,
+                );
+              }
+              if (status.status === 'cancelled') {
+                return prev.map((entry) =>
+                  entry.runId === item.runId
+                    ? { ...entry, cancelling: false, cancelled: true }
+                    : entry,
+                );
+              }
+              // running/completed/failed：事件流接管，移除占位卡片。
+              return prev.filter((entry) => entry.runId !== item.runId);
+            });
+          })
+          .catch(() => {
+            // 位置未知时保留卡片，不把轮询失败升级成全局错误。
+          });
+      }
+    }, QUEUE_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [queuedRuns, client]);
+
+  // 窄屏抽屉：Esc 关闭。
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSidebarOpen(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [sidebarOpen]);
 
   // durable / MCP 面板定期刷新（10s；未启用的 feature 会被 loadPanels 清空）
   useEffect(() => {
@@ -1196,11 +1389,11 @@ export default function App() {
 
   // 仅在接近底部时跟随新事件，避免用户上翻阅读时被拉回
   useEffect(() => {
-    if (entries.length === 0) return;
+    if (entries.length === 0 && queuedRuns.length === 0) return;
     if (nearBottomRef.current) {
       bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
     }
-  }, [entries.length]);
+  }, [entries.length, queuedRuns.length]);
 
   // 切换会话 / 历史加载完成后直接展示最新内容
   // biome-ignore lint/correctness/useExhaustiveDependencies: sessionDetail 变化时跳到最新
@@ -1230,7 +1423,23 @@ export default function App() {
         setSessionDetail({ session_id: targetSessionId, messages: [] });
         setHydrateError(null);
       }
-      if (result.status === 'queued') setLastOutput('已排队');
+      if (result.status === 'queued' && !seenJobIds.current.has(result.run_id)) {
+        setLastOutput('已排队');
+        setQueuedRuns((prev) => [
+          ...prev.filter((item) => item.runId !== result.run_id),
+          {
+            runId: result.run_id,
+            ...(targetSessionId ? { sessionId: targetSessionId } : {}),
+            input: text,
+            ...(result.queue_position !== undefined
+              ? { queuePosition: result.queue_position }
+              : {}),
+            submittedAt: Date.now(),
+            cancelling: false,
+            cancelled: false,
+          },
+        ]);
+      }
       refreshSessions();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -1247,6 +1456,7 @@ export default function App() {
     setHydrateError(null);
     setHydrating(false);
     setInput('');
+    setSidebarOpen(false);
   };
 
   /** 全部 runs：不筛选会话，也不指定提交目标。 */
@@ -1256,6 +1466,7 @@ export default function App() {
     setSessionDetail(null);
     setHydrateError(null);
     setHydrating(false);
+    setSidebarOpen(false);
   };
 
   const selectSession = (sessionId: string) => {
@@ -1263,6 +1474,7 @@ export default function App() {
     setDraftSessionId(null);
     setSessionDetail(null);
     setHydrateError(null);
+    setSidebarOpen(false);
   };
 
   const handleCancel = async (group: RunGroup) => {
@@ -1282,6 +1494,36 @@ export default function App() {
         next.delete(jobId);
         return next;
       });
+    }
+  };
+
+  /** 取消排队中的 run：queued 取消不发事件，本地收敛为 cancelled。 */
+  const handleCancelQueued = async (runId: string) => {
+    setQueuedRuns((prev) =>
+      prev.map((item) => (item.runId === runId ? { ...item, cancelling: true } : item)),
+    );
+    try {
+      const result = await client.cancelRun(runId);
+      if (result.cancelled) {
+        setQueuedRuns((prev) =>
+          prev.map((item) =>
+            item.runId === runId ? { ...item, cancelling: false, cancelled: true } : item,
+          ),
+        );
+        window.setTimeout(() => {
+          setQueuedRuns((prev) => prev.filter((item) => item.runId !== runId));
+        }, 4000);
+      } else {
+        setQueuedRuns((prev) =>
+          prev.map((item) => (item.runId === runId ? { ...item, cancelling: false } : item)),
+        );
+        setError('取消请求未被受理，run 可能已经开始执行');
+      }
+    } catch (e: unknown) {
+      setQueuedRuns((prev) =>
+        prev.map((item) => (item.runId === runId ? { ...item, cancelling: false } : item)),
+      );
+      setError(errorMessage(e));
     }
   };
 
@@ -1309,11 +1551,20 @@ export default function App() {
   };
 
   const handleWorkflowSelect = async (id: string) => {
+    const gen = ++workflowDetailGen.current;
+    setSelectedWorkflowId(id);
+    setSelectedWorkflow(null);
+    setWorkflowDetailLoading(true);
     try {
-      setSelectedWorkflow(await client.getWorkflow(id));
+      const detail = await client.getWorkflow(id);
+      if (gen !== workflowDetailGen.current) return;
+      setSelectedWorkflow(detail);
       setWorkflowNotice(null);
     } catch (e: unknown) {
+      if (gen !== workflowDetailGen.current) return;
       setWorkflowNotice(errorMessage(e));
+    } finally {
+      if (gen === workflowDetailGen.current) setWorkflowDetailLoading(false);
     }
   };
 
@@ -1376,6 +1627,8 @@ export default function App() {
       await client.cancelWorkflow(id);
       setWorkflowNotice(`已取消：${id}`);
       setSelectedWorkflow(null);
+      setSelectedWorkflowId(null);
+      workflowDetailGen.current += 1;
       loadPanels();
     } catch (e: unknown) {
       setWorkflowNotice(errorMessage(e));
@@ -1443,11 +1696,25 @@ export default function App() {
     });
   }, [groups, selectedId, sessionDetail, draftSessionId]);
 
+  const visibleQueued = useMemo(() => {
+    if (!selectedId) return queuedRuns;
+    return queuedRuns.filter((item) => item.sessionId === selectedId);
+  }, [queuedRuns, selectedId]);
+
   const pendingPermission = permissions[0];
   const pendingAsk = asks[0];
   const modalOpen = Boolean(pendingAsk || pendingPermission);
   const transcriptMessages = sessionDetail?.messages ?? [];
-  const hasTranscript = transcriptMessages.some((message) => message.role !== 'system');
+  const visibleTranscript = useMemo(
+    () => transcriptMessages.filter((message) => message.role !== 'system'),
+    [transcriptMessages],
+  );
+  const transcriptWindow = useMemo(
+    () => windowTail(visibleTranscript, transcriptLimit),
+    [visibleTranscript, transcriptLimit],
+  );
+  const hasTranscript = visibleTranscript.length > 0;
+  const transcriptStart = visibleTranscript.length - transcriptWindow.shown.length;
   const selectedSession = selectedId
     ? sessions.find((session) => session.session_id === selectedId)
     : undefined;
@@ -1464,6 +1731,15 @@ export default function App() {
   return (
     <div className="app">
       <header className="topbar" inert={modalOpen || undefined}>
+        <button
+          type="button"
+          className="sidebar-toggle"
+          onClick={() => setSidebarOpen((value) => !value)}
+          aria-expanded={sidebarOpen}
+          aria-controls="session-sidebar"
+        >
+          会话
+        </button>
         <span className="brand">Vessel</span>
         <span className="brand-sub">agent runtime</span>
         <span className={`conn conn-${connState}`} title="gateway 连接状态">
@@ -1475,20 +1751,51 @@ export default function App() {
             v{hello.protocol.version}
           </span>
         )}
-        {tenantId && (
-          <span className="protocol-badge mono" title="当前 tenant">
-            tenant {tenantId}
+        {hello && (
+          <span className="protocol-badge mono" title="当前连接租户；会话与 run 按 tenant 隔离">
+            租户 {tenantId ?? '—'}
           </span>
         )}
-        <input
-          className="token-input"
-          type="password"
-          value={token}
-          onChange={(e) => setTokenAndPersist(e.target.value)}
-          placeholder="gateway token（或打开 #token=…）"
-          spellCheck={false}
-          autoComplete="off"
-        />
+        <div className="token-field">
+          <div className="token-row">
+            <input
+              className={`token-input ${tokenError ? 'invalid' : ''}`}
+              type="password"
+              value={tokenDraft}
+              onChange={(e) => {
+                setTokenDraft(e.target.value);
+                setTokenError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitToken();
+                }
+              }}
+              placeholder="gateway token（或打开 #token=…）"
+              spellCheck={false}
+              autoComplete="off"
+              aria-invalid={tokenError ? true : undefined}
+              aria-describedby={tokenError ? 'token-error' : undefined}
+            />
+            <button
+              type="button"
+              className="ghost-btn token-connect"
+              onClick={commitToken}
+              disabled={
+                !tokenDraft.trim() ||
+                (tokenDraft.trim() === token && connState === 'open' && !tokenError)
+              }
+            >
+              {tokenError ? '重试' : '连接'}
+            </button>
+          </div>
+          {tokenError && (
+            <span className="field-error" id="token-error" role="alert">
+              {tokenError}
+            </span>
+          )}
+        </div>
         <span className="gateway-url dim">{GATEWAY_URL || window.location.origin}</span>
         <button
           type="button"
@@ -1542,8 +1849,17 @@ export default function App() {
         </button>
       )}
 
+      {sidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label="关闭会话侧栏"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       <div className="body" inert={modalOpen || undefined}>
-        <aside className="sidebar">
+        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} id="session-sidebar">
           <div className="sidebar-title">
             <span>
               会话{' '}
@@ -1612,7 +1928,7 @@ export default function App() {
                       <span className="session-meta">
                         <span className={`chip ${s.status}`}>{s.status}</span>
                         <span>{s.message_count} 条</span>
-                        <span className="dim">{formatTime(s.updated_at)}</span>
+                        <span className="dim">{formatTimestamp(s.updated_at)}</span>
                       </span>
                     </button>
                   );
@@ -1672,13 +1988,15 @@ export default function App() {
                 <>
                   <div className="sidebar-title">
                     Capabilities{' '}
-                    <span className="dim">({capabilities?.methods.length ?? 0} methods)</span>
+                    <span className="dim">
+                      ({capabilities ? capabilities.methods.length : '…'} methods)
+                    </span>
                   </div>
                   <div className="tools">
                     {panelErrors.capabilities ? (
                       <div className="panel-empty err">{panelErrors.capabilities}</div>
                     ) : !capabilities ? (
-                      <div className="panel-empty dim">连接后显示能力清单</div>
+                      <div className="panel-empty dim">加载中…</div>
                     ) : (
                       <>
                         <div className="tool-item">
@@ -1712,8 +2030,10 @@ export default function App() {
                         </span>
                       </div>
                       <div className="tools">
-                        {!configSources ? (
-                          <div className="panel-empty dim">连接后显示配置来源</div>
+                        {panelErrors.config ? (
+                          <div className="panel-empty err">{panelErrors.config}</div>
+                        ) : !configSources ? (
+                          <div className="panel-empty dim">加载中…</div>
                         ) : Object.keys(configSources.sources).length === 0 ? (
                           <div className="panel-empty dim">无来源信息</div>
                         ) : (
@@ -1737,11 +2057,22 @@ export default function App() {
               {showMcp && (
                 <>
                   <div className="sidebar-title">
-                    MCP servers <span className="dim">({mcpServers.length})</span>
+                    <span>
+                      MCP servers{' '}
+                      <span className="dim">({mcpServers ? mcpServers.length : '…'})</span>
+                      <span
+                        className="scope-note"
+                        title="该控制面为 gateway 全局状态，不随 tenant 切换"
+                      >
+                        仅 default tenant
+                      </span>
+                    </span>
                   </div>
                   <div className="mcp-list">
                     {panelErrors.mcp ? (
                       <div className="panel-empty err">{panelErrors.mcp}</div>
+                    ) : mcpServers === null ? (
+                      <div className="panel-empty dim">加载中…</div>
                     ) : mcpServers.length === 0 ? (
                       <div className="panel-empty dim">无 MCP server</div>
                     ) : (
@@ -1774,11 +2105,14 @@ export default function App() {
               {showDurable && (
                 <>
                   <div className="sidebar-title">
-                    Interrupted runs <span className="dim">({durableRuns.length})</span>
+                    Interrupted runs{' '}
+                    <span className="dim">({durableRuns ? durableRuns.length : '…'})</span>
                   </div>
                   <div className="durable-list">
                     {panelErrors.durable ? (
                       <div className="panel-empty err">{panelErrors.durable}</div>
+                    ) : durableRuns === null ? (
+                      <div className="panel-empty dim">加载中…</div>
                     ) : durableRuns.length === 0 ? (
                       <div className="panel-empty dim">没有未完成的 run</div>
                     ) : (
@@ -1789,7 +2123,7 @@ export default function App() {
                             <span className="mono run-id" title={run.run_id}>
                               {truncate(run.run_id, 18)}
                             </span>
-                            <span className="dim">{formatTime(run.updated_at)}</span>
+                            <span className="dim">{formatTimestamp(run.updated_at)}</span>
                           </div>
                           <div className="durable-meta dim">
                             {run.agent_id ? `agent ${run.agent_id}` : ''}
@@ -1822,7 +2156,15 @@ export default function App() {
               {showWorkflow && (
                 <>
                   <div className="sidebar-title">
-                    Workflows <span className="dim">({workflows.length})</span>
+                    <span>
+                      Workflows <span className="dim">({workflows ? workflows.length : '…'})</span>
+                      <span
+                        className="scope-note"
+                        title="该控制面为 gateway 全局状态，不随 tenant 切换"
+                      >
+                        仅 default tenant
+                      </span>
+                    </span>
                   </div>
                   <div className="workflow-panel">
                     <div className="workflow-start">
@@ -1853,6 +2195,8 @@ export default function App() {
                     {workflowNotice && <div className="panel-empty dim">{workflowNotice}</div>}
                     {panelErrors.workflow ? (
                       <div className="panel-empty err">{panelErrors.workflow}</div>
+                    ) : workflows === null ? (
+                      <div className="panel-empty dim">加载中…</div>
                     ) : workflows.length === 0 ? (
                       <div className="panel-empty dim">暂无 workflow run</div>
                     ) : (
@@ -1873,7 +2217,7 @@ export default function App() {
                             <span className="mono" title={run.workflow_run_id}>
                               {truncate(run.workflow_run_id, 14)}
                             </span>
-                            <span>{formatTime(run.updated_at)}</span>
+                            <span>{formatTimestamp(run.updated_at)}</span>
                           </div>
                           {run.error && (
                             <div className="workflow-error err">{truncate(run.error, 100)}</div>
@@ -1904,9 +2248,14 @@ export default function App() {
                                 </button>
                               )}
                           </div>
-                          {selectedWorkflow?.workflow_run_id === run.workflow_run_id && (
+                          {selectedWorkflowId === run.workflow_run_id && (
                             <div className="workflow-detail">
-                              {selectedWorkflow.steps.length === 0 ? (
+                              {workflowDetailLoading ? (
+                                <div className="panel-empty dim">加载中…</div>
+                              ) : !selectedWorkflow ||
+                                selectedWorkflow.workflow_run_id !== run.workflow_run_id ? (
+                                <div className="panel-empty dim">暂无详情</div>
+                              ) : selectedWorkflow.steps.length === 0 ? (
                                 <div className="panel-empty dim">无步骤信息</div>
                               ) : (
                                 selectedWorkflow.steps.map((step) => (
@@ -1947,8 +2296,8 @@ export default function App() {
                   <div className="sidebar-title">Metrics</div>
                   {panelErrors.metrics ? (
                     <div className="panel-empty err">{panelErrors.metrics}</div>
-                  ) : !metrics ? (
-                    <div className="panel-empty dim">暂无 metrics</div>
+                  ) : metrics === null ? (
+                    <div className="panel-empty dim">加载中…</div>
                   ) : (
                     <div className="metrics-panel">
                       <div className="metrics-row">
@@ -1980,7 +2329,7 @@ export default function App() {
                       </div>
                       <div className="metrics-row dim">
                         <span>updated</span>
-                        <span>{formatTime(metrics.updated_at)}</span>
+                        <span>{formatTimestamp(metrics.updated_at)}</span>
                       </div>
                     </div>
                   )}
@@ -1989,11 +2338,21 @@ export default function App() {
 
               {showFeishu && (
                 <>
-                  <div className="sidebar-title">Feishu</div>
+                  <div className="sidebar-title">
+                    <span>
+                      Feishu
+                      <span
+                        className="scope-note"
+                        title="该控制面为 gateway 全局状态，不随 tenant 切换"
+                      >
+                        仅 default tenant
+                      </span>
+                    </span>
+                  </div>
                   {panelErrors.feishu ? (
                     <div className="panel-empty err">{panelErrors.feishu}</div>
-                  ) : !feishu ? (
-                    <div className="panel-empty dim">暂无渠道状态</div>
+                  ) : feishu === null ? (
+                    <div className="panel-empty dim">加载中…</div>
                   ) : (
                     <div className="feishu-panel">
                       <div className="feishu-head">
@@ -2028,7 +2387,7 @@ export default function App() {
                     ? `${selectedSession.message_count} 条消息`
                     : '会话历史'}
                   {selectedSession?.updated_at
-                    ? ` · 更新于 ${formatTime(selectedSession.updated_at)}`
+                    ? ` · 更新于 ${formatTimestamp(selectedSession.updated_at)}`
                     : ''}
                   <span className="mono"> · {truncate(selectedId, 20)}</span>
                 </div>
@@ -2065,11 +2424,19 @@ export default function App() {
             !hydrating &&
             !hydrateError &&
             !hasTranscript &&
-            visibleGroups.length === 0 && (
+            visibleGroups.length === 0 &&
+            visibleQueued.length === 0 && (
               <div className="state-block dim">该会话暂无对话记录。</div>
             )}
 
-          {selectedId && hasTranscript && <Transcript messages={transcriptMessages} />}
+          {selectedId && hasTranscript && (
+            <Transcript
+              messages={transcriptWindow.shown}
+              startIndex={transcriptStart}
+              hiddenCount={transcriptWindow.hiddenCount}
+              onLoadEarlier={() => setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW)}
+            />
+          )}
 
           {selectedId && visibleGroups.length > 0 && hasTranscript && (
             <div className="divider-label">
@@ -2081,7 +2448,7 @@ export default function App() {
             <div className="timeline-hint dim">实时事件 · 按时间正序</div>
           )}
 
-          {visibleGroups.length === 0 && !selectedId && (
+          {visibleGroups.length === 0 && visibleQueued.length === 0 && !selectedId && (
             <div className="empty">
               {draftSessionId
                 ? '新会话已就绪，发送第一条消息开始。'
@@ -2104,6 +2471,13 @@ export default function App() {
                 )
               }
               onCancel={handleCancel}
+            />
+          ))}
+          {visibleQueued.map((item) => (
+            <QueuedCard
+              key={item.runId}
+              item={item}
+              onCancel={(runId) => void handleCancelQueued(runId)}
             />
           ))}
           <div ref={bottomRef} />
