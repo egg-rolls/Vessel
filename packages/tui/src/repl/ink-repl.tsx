@@ -91,8 +91,8 @@ function InkRepl({ ctx }: InkReplProps) {
   /** 订阅回调里读取最新 overlay（不随 effect 重建订阅） */
   const permissionOverlayRef = useRef(ui.permissionOverlay);
   permissionOverlayRef.current = ui.permissionOverlay;
-  /** 运行中重复提交提示的节流时间戳 */
-  const lastBusyNoticeRef = useRef(0);
+  /** 队列串行执行守卫（避免同一 tick 重复出队） */
+  const queueDrainingRef = useRef(false);
   /** 矮终端提示只写一次 scrollback */
   const lowHeightNoticeShownRef = useRef(false);
   /** 命令视图的异步动作：旧响应不得覆盖新响应 */
@@ -315,21 +315,20 @@ function InkRepl({ ctx }: InkReplProps) {
 
       if (!value.trim()) return;
 
-      // 运行中禁止第二次提交：AgentRuntime.run 会重置 stats 并共享 context，
-      // 并发 run 会互相污染。只放行 /exit（它本来就要结束进程）。
+      // 运行中禁止并发 run（AgentRuntime.run 会重置 stats 并共享 context）。
+      // 除 /exit 外一律入队，run 结束后按顺序自动执行。
       const isExitCommand = value.trim() === '/exit';
       if (ui.run.phase !== 'idle' && !isExitCommand) {
-        const now = Date.now();
-        if (now - lastBusyNoticeRef.current > 1500) {
-          lastBusyNoticeRef.current = now;
-          dispatch({
-            type: 'appendHistory',
-            line: '⏳ A run is in progress; press Esc to cancel before sending again.',
-          });
-        }
+        dispatch({ type: 'enqueueInput', value });
+        dispatch({ type: 'setInput', input: '' });
+        dispatch({
+          type: 'appendHistory',
+          line: `⏳ Queued (${ui.queuedInput.length + 1}): ${value}`,
+        });
         return;
       }
 
+      dispatch({ type: 'recordInput', value });
       dispatch({ type: 'appendHistory', line: `› ${value}` });
       dispatch({ type: 'setInput', input: '' });
 
@@ -443,12 +442,44 @@ function InkRepl({ ctx }: InkReplProps) {
       filteredCommands,
       ui.autocompleteIndex,
       ui.run.phase,
+      ui.queuedInput.length,
       stdout,
       dispatch,
       startResumeRun,
       startWorkflowRun,
     ],
   );
+
+  /** 队列执行时读取最新 handleSubmit（phase 必须是最新值） */
+  const handleSubmitRef = useRef(handleSubmit);
+  handleSubmitRef.current = handleSubmit;
+
+  // 运行结束后按顺序执行队列；draining 守卫 + queueTick 保证异步命令也能继续出队。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: queueTick is an intentional re-run trigger
+  useEffect(() => {
+    if (queueDrainingRef.current) return;
+    if (ui.run.phase !== 'idle' || !state.running) return;
+    if (ui.queuedInput.length === 0) return;
+    if (ui.view || state.showResumePicker || ui.permissionOverlay || ui.askUserActive) return;
+    const next = ui.queuedInput[0];
+    if (next === undefined) return;
+    queueDrainingRef.current = true;
+    dispatch({ type: 'dequeueInput' });
+    void handleSubmitRef.current(next).finally(() => {
+      queueDrainingRef.current = false;
+      dispatch({ type: 'bumpQueueTick' });
+    });
+  }, [
+    ui.run.phase,
+    ui.queuedInput,
+    ui.view,
+    ui.permissionOverlay,
+    ui.askUserActive,
+    ui.queueTick,
+    state.running,
+    state.showResumePicker,
+    dispatch,
+  ]);
 
   const closeView = useCallback(() => {
     // 使在途响应失效，避免关闭后 late dispatch。
@@ -622,6 +653,28 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
+    // Ctrl+O：展开完整输出到 scrollback。TextInput 会把 Ctrl+O 当字符插入，需覆盖回去。
+    if (key.ctrl && inputChar === 'o') {
+      dispatch({ type: 'toggleExpanded' });
+      dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      return;
+    }
+
+    // ↑↓ 召回已提交输入；多行草稿不拦截（保留行内光标移动）。
+    if (!ui.input.includes('\n')) {
+      if (key.upArrow) {
+        dispatch({ type: 'historyPrev' });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+      if (key.downArrow) {
+        dispatch({ type: 'historyNext' });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
+    }
+
     if (key.escape) {
       // TextInput 不忽略 Esc，会把 ESC 序列插进输入；用当前值覆盖回去（并重置光标）
       dispatch({ type: 'setInput', input: ui.input });
@@ -652,8 +705,34 @@ function InkRepl({ ctx }: InkReplProps) {
         ts: Date.now(),
       });
       dispatch({ type: 'setPermissionOverlay', overlay: null });
+
+      // "always" 同时写回用户 YAML（跨进程）；未注入写回接口时降级为本次会话。
+      if (always) {
+        const control = ctx.permissions;
+        if (!control) {
+          dispatch({
+            type: 'appendHistory',
+            line: `ℹ "${overlay.toolName}" is approved for this session; config write-back is unavailable.`,
+          });
+        } else {
+          void control
+            .add(overlay.toolName)
+            .then(() => {
+              dispatch({
+                type: 'appendHistory',
+                line: `✓ "${overlay.toolName}" added to permission.autoApprove (effective after restart).`,
+              });
+            })
+            .catch((error: unknown) => {
+              dispatch({
+                type: 'appendHistory',
+                line: `⚠ Could not persist "${overlay.toolName}": ${formatRpcError(error)} (this session only).`,
+              });
+            });
+        }
+      }
     },
-    [ui.permissionOverlay, ctx.events, dispatch],
+    [ui.permissionOverlay, ctx.events, ctx.permissions, dispatch],
   );
 
   // ask-user 弹窗激活状态回调（子组件汇报 requestId/runId，供 Ctrl+C 主动解除 waitFor）
@@ -669,6 +748,14 @@ function InkRepl({ ctx }: InkReplProps) {
     (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => {
       streamCancellationArchivedRef.current = reason === 'cancelled';
       dispatch({ type: 'appendHistory', line: responseText });
+    },
+    [dispatch],
+  );
+
+  // Ctrl+O：StreamOutput 把完整输出刷入 Static scrollback
+  const handleStreamFlush = useCallback(
+    (text: string) => {
+      dispatch({ type: 'appendHistory', line: text });
     },
     [dispatch],
   );
@@ -740,6 +827,9 @@ function InkRepl({ ctx }: InkReplProps) {
           events={ctx.events}
           clearSignal={ui.clearSignal}
           maxLines={streamMaxLines}
+          expanded={ui.expandedOutput}
+          expandSignal={ui.expandSignal}
+          onFlush={handleStreamFlush}
           onComplete={handleStreamComplete}
         />
         <SubagentActivity events={ctx.events} />
@@ -825,7 +915,9 @@ function InkRepl({ ctx }: InkReplProps) {
             }}
             onSelect={async (id) => {
               try {
-                const { message, history, nextState } = await doResume(ctx, id);
+                const { message, history, nextState } = await doResume(ctx, id, {
+                  showReasoning: state.showReasoning ?? false,
+                });
                 dispatch({
                   type: 'patchRepl',
                   patch: { showResumePicker: false, pendingResume: false },
@@ -894,10 +986,17 @@ function InkRepl({ ctx }: InkReplProps) {
         !ui.view &&
         !ui.permissionOverlay &&
         !ui.askUserActive && (
-          <Box flexShrink={0}>
+          <Box flexDirection="column" flexShrink={0}>
             <Text color={theme.warn}>
-              {ui.run.phase === 'cancelling' ? '◐ cancelling…' : '◐ working… Esc to cancel'}
+              {ui.run.phase === 'cancelling'
+                ? '◐ cancelling…'
+                : `◐ working… Esc to cancel · Ctrl+O ${ui.expandedOutput ? 'collapse' : 'expand'}${ui.expandedOutput ? ' (full output in scrollback)' : ''}`}
             </Text>
+            {ui.queuedInput.length > 0 && (
+              <Text color={theme.faint}>
+                ⏳ queued {ui.queuedInput.length}: {ui.queuedInput[0]}
+              </Text>
+            )}
           </Box>
         )}
 

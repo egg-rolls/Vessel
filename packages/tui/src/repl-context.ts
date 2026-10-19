@@ -187,6 +187,23 @@ export interface FeishuControlLike {
   status(): FeishuStatusLike;
 }
 
+// ── 0.6.1 E7：权限持久化（tui 定义结构，asm 写用户 YAML） ──
+
+/**
+ * `permission.autoApprove` 的读写控制面。
+ * asm 注入后，TUI 的 "always" 与 `/permissions add|remove` 才可跨进程生效。
+ */
+export interface PermissionsControl {
+  /** 当前持久化的免确认工具名（用户 YAML） */
+  list(): Promise<string[]>;
+  /** 写入用户 YAML；已存在时幂等 */
+  add(toolName: string): Promise<void>;
+  /** 从用户 YAML 移除；不存在时幂等 */
+  remove(toolName: string): Promise<void>;
+  /** 用户配置文件路径（展示用） */
+  path?(): string;
+}
+
 // ── 0.5 F3：统一 RPC 入口与 tenant（tui 定义结构，asm 注入实现） ──
 
 /** 冻结错误码集合（DECISION-010 §2.3 / Addendum A-3 §10.2） */
@@ -352,4 +369,7 @@ export interface ReplContext {
 
   /** 当前 tenant；缺失时按 default 展示 */
   tenant?: TenantInfoLike;
+
+  /** 权限持久化写回；未注入时 "always" 只在当前进程生效 */
+  permissions?: PermissionsControl;
 }

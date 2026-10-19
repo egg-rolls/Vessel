@@ -76,6 +76,35 @@ describe('formatResumeHistory（/resume 历史回灌）', () => {
     });
   });
 
+  it('assistant tool_calls 显示工具名与参数摘要（否则恢复后看不出调用过什么）', () => {
+    const lines = formatResumeHistory([
+      {
+        role: 'assistant',
+        content: 'checking',
+        tool_calls: [
+          {
+            id: 'c1',
+            function: { name: 'bash', arguments: '{"command":"ls -la"}' },
+          },
+        ],
+      },
+    ]);
+    const joined = lines.join('\n');
+    expect(joined).toContain('tool_calls: bash({"command":"ls -la"})');
+  });
+
+  it('reasoning 默认隐藏，显式开启才展示', () => {
+    const message = {
+      role: 'assistant' as const,
+      content: 'answer',
+      reasoning_content: 'private chain of thought',
+    };
+    expect(formatResumeHistory([message]).join('\n')).not.toContain('private chain of thought');
+    expect(formatResumeHistory([message], { showReasoning: true }).join('\n')).toContain(
+      '[reasoning] private chain of thought',
+    );
+  });
+
   it('多行内容用 │ 续行', () => {
     const lines = formatResumeHistory([{ role: 'user', content: 'first\nsecond\nthird' }]);
     const contentLines = lines.filter((line) => line.includes('│'));

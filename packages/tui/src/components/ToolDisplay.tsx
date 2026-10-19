@@ -7,9 +7,11 @@
  * 未注册的工具走 DEFAULT_TOOL_DISPLAY 默认渲染器。
  */
 
-import { Text } from 'ink';
+import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { theme } from '../theme.js';
+import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
+import { truncateToWidth } from '../utils/text-layout.js';
 
 /** 渲染选项（默认渲染器读这些字段） */
 export interface DisplayOptions {
@@ -17,6 +19,8 @@ export interface DisplayOptions {
   showArguments?: boolean;
   /** 参数字符串最大长度（超出截断，默认 120） */
   maxArgumentLength?: number;
+  /** Ctrl+O 展开态：工具结果保留更多行（默认 false） */
+  expanded?: boolean;
 }
 
 /** 工具显示定义（ADR-021 §2） */
@@ -31,6 +35,12 @@ export interface ToolDisplayDefinition {
   getActivityDescription?(input: unknown): string | null;
   /** 工具结果渲染（React 节点） */
   renderToolResultMessage?(result: string, options: DisplayOptions): ReactNode;
+  /** 需要入参才能渲染结果时优先走这里（edit diff） */
+  renderToolResultMessageWithInput?(
+    input: unknown,
+    result: string,
+    options: DisplayOptions,
+  ): ReactNode;
   /** 工具错误渲染（React 节点） */
   renderToolUseErrorMessage?(error: string, options: DisplayOptions): ReactNode;
 }
@@ -113,6 +123,10 @@ function compact(text: string, max: number): string {
 
 /** bash 结果实时视图保留的末尾行数（含退出码等关键行） */
 const BASH_RESULT_TAIL_LINES = 8;
+/** Ctrl+O 展开态保留的末尾行数（滚动回看走 scrollback 全文） */
+const BASH_RESULT_EXPANDED_LINES = 400;
+/** diff 单行展示宽度（CJK 安全截断） */
+const DIFF_LINE_MAX = 120;
 
 /**
  * 按行截断工具结果：保留末尾 `maxLines` 行，避免按字符切断行。
@@ -136,8 +150,13 @@ toolDisplayRegistry.register('bash', {
     const command = inputString(input, 'command');
     return <Text color={theme.muted}>{command ? ` $ ${compact(command, 160)}` : ''}</Text>;
   },
-  renderToolResultMessage: (result) => (
-    <Text color={theme.muted}>{tailResultLines(result, BASH_RESULT_TAIL_LINES)}</Text>
+  renderToolResultMessage: (result, options) => (
+    <Text color={theme.muted}>
+      {tailResultLines(
+        result,
+        options.expanded ? BASH_RESULT_EXPANDED_LINES : BASH_RESULT_TAIL_LINES,
+      )}
+    </Text>
   ),
   renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
@@ -158,6 +177,72 @@ toolDisplayRegistry.register('read', {
   renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
+/** 单行 diff 的行号列（4 位右对齐） */
+function lineNumber(value: number | undefined): string {
+  return (value ?? '').toString().padStart(4, ' ');
+}
+
+function renderDiffLine(line: DisplayDiffLine, key: string): ReactNode {
+  if (line.kind === 'gap') {
+    return (
+      <Text key={key} color={theme.faint}>
+        {'      …'}
+      </Text>
+    );
+  }
+  if (line.kind === 'add') {
+    return (
+      <Text key={key} color={theme.ok}>
+        {`+ ${lineNumber(line.newLine)} │ `}
+        {truncateToWidth(line.text, DIFF_LINE_MAX)}
+      </Text>
+    );
+  }
+  if (line.kind === 'del') {
+    return (
+      <Text key={key} color={theme.danger}>
+        {`- ${lineNumber(line.oldLine)} │ `}
+        {truncateToWidth(line.text, DIFF_LINE_MAX)}
+      </Text>
+    );
+  }
+  return (
+    <Text key={key} color={theme.faint}>
+      {`  ${lineNumber(line.oldLine)} │ `}
+      {truncateToWidth(line.text, DIFF_LINE_MAX)}
+    </Text>
+  );
+}
+
+/** edit 的结构化 diff：入参里的 old_string/new_string -> +/- 行与行号 */
+export function renderEditDiff(
+  input: unknown,
+  result: string,
+  options: DisplayOptions = {},
+): ReactNode {
+  const oldText = inputString(input, 'old_string');
+  const newText = inputString(input, 'new_string');
+  if (!oldText && !newText) {
+    return (
+      <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
+    );
+  }
+  const lines = condenseDiff(diffLines(oldText, newText), {
+    context: 2,
+    maxLines: options.expanded ? 200 : 24,
+  });
+  if (lines.length === 0) {
+    return (
+      <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
+    );
+  }
+  return (
+    <Box flexDirection="column">
+      {lines.map((line, index) => renderDiffLine(line, `d${index}`))}
+    </Box>
+  );
+}
+
 toolDisplayRegistry.register('edit', {
   userFacingName: () => 'edit',
   getActivityDescription: (input) => {
@@ -171,6 +256,8 @@ toolDisplayRegistry.register('edit', {
   renderToolResultMessage: (result, options) => (
     <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
   ),
+  renderToolResultMessageWithInput: (input, result, options) =>
+    renderEditDiff(input, result, options),
   renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 

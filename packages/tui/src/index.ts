@@ -118,6 +118,7 @@ export type {
   McpControl,
   McpServerSummary,
   MetricsSnapshotLike,
+  PermissionsControl,
   ReplContext,
   RpcClientLike,
   RpcErrorCodeLike,
