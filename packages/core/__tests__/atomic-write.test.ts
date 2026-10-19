@@ -46,6 +46,31 @@ describe('atomicWrite (0.5 E3)', () => {
     expect(await readFile(file, 'utf8')).toBe('new');
   });
 
+  it('durable:true（默认）写文件后可用且不留 temp', async () => {
+    const dir = tempDir();
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'durable.json');
+
+    await atomicWrite(file, '{"durable":true}');
+    expect(await readFile(file, 'utf8')).toBe('{"durable":true}');
+
+    await atomicWrite(file, '{"durable":true,"n":2}', { durable: true });
+    expect(await readFile(file, 'utf8')).toBe('{"durable":true,"n":2}');
+    expect(await readdir(dir)).toEqual(['durable.json']);
+  });
+
+  it('durable:false 保留旧行为：仍原子写且覆盖旧文件', async () => {
+    const dir = tempDir();
+    await mkdir(dir, { recursive: true });
+    const file = join(dir, 'plain.json');
+    await writeFile(file, 'old', 'utf8');
+
+    await atomicWrite(file, 'new', { durable: false });
+
+    expect(await readFile(file, 'utf8')).toBe('new');
+    expect(await readdir(dir)).toEqual(['plain.json']);
+  });
+
   it('creates parent directories when ensureDir is set', async () => {
     const dir = tempDir();
     const file = join(dir, 'nested', 'deep', 'state.json');

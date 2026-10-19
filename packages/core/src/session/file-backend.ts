@@ -24,6 +24,31 @@ export interface FileSessionBackendOptions {
   tenantId?: string;
 }
 
+/** 会话文件存在但不可读/不是合法 JSON（0.8.1 损坏检测） */
+export class SessionCorruptError extends Error {
+  readonly code = 'session_corrupt' as const;
+  readonly path: string;
+
+  constructor(path: string, cause?: unknown) {
+    const detail = cause instanceof Error ? `: ${cause.message}` : '';
+    super(`session_corrupt: ${path}${detail}`, { cause });
+    this.name = 'SessionCorruptError';
+    this.path = path;
+  }
+}
+
+/** Node errno 是否为「文件不存在」；其余读取错误一律视为损坏 */
+function isNotFound(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as NodeJS.ErrnoException).code === 'ENOENT'
+  );
+}
+
+/** 单个文件的读取结果；ENOENT 之外的可读/解析错误直接抛 SessionCorruptError */
+type ReadStateResult = { found: true; state: RunState } | { found: false };
+
 export class FileSessionBackend implements SessionBackend {
   private readonly basePath: string;
   private readonly tenantId?: string;
@@ -82,22 +107,47 @@ export class FileSessionBackend implements SessionBackend {
 
   /**
    * 加载 Run 状态
+   *
+   * 损坏检测（0.8.1）：
+   * - 主路径 `ENOENT` → 才尝试 legacy 路径；
+   * - 文件存在但读取失败/JSON 解析失败 → 抛 `SessionCorruptError`，
+   *   **不得**当成「无会话」回退，否则下一次 save 会静默覆盖原文件；
+   * - 主路径存在但属于其它 tenant → 返回 null，不回退 legacy。
+   *
    * @param sessionId 会话 ID
-   * @returns Run 状态或 null（文件不存在或解析失败）
+   * @returns Run 状态或 null（两处文件都不存在，或属于其它 tenant）
+   * @throws {SessionCorruptError} 文件存在但不可读或 JSON 不合法
    */
   async load(sessionId: string): Promise<RunState | null> {
-    const candidates = [this.filePath(sessionId), this.legacyFilePath(sessionId)];
-    for (const candidate of candidates) {
-      if (candidate === undefined) continue;
-      try {
-        const content = await readFile(candidate, 'utf8');
-        const parsed = JSON.parse(content) as RunState;
-        return this.isForeign(parsed) ? null : parsed;
-      } catch {
-        // 尝试下一个候选路径
-      }
+    const primaryPath = this.filePath(sessionId);
+    const primary = await this.readStateFile(primaryPath);
+    if (primary.found) {
+      return this.isForeign(primary.state) ? null : primary.state;
     }
-    return null;
+
+    const legacyPath = this.legacyFilePath(sessionId);
+    if (legacyPath === undefined || legacyPath === primaryPath) return null;
+
+    const legacy = await this.readStateFile(legacyPath);
+    if (!legacy.found) return null;
+    return this.isForeign(legacy.state) ? null : legacy.state;
+  }
+
+  /** 读取并解析单个状态文件；ENOENT 以外一律视为损坏 */
+  private async readStateFile(path: string): Promise<ReadStateResult> {
+    let content: string;
+    try {
+      content = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isNotFound(error)) return { found: false };
+      throw new SessionCorruptError(path, error);
+    }
+
+    try {
+      return { found: true, state: JSON.parse(content) as RunState };
+    } catch (error) {
+      throw new SessionCorruptError(path, error);
+    }
   }
 
   /**
@@ -166,17 +216,19 @@ export class FileSessionBackend implements SessionBackend {
    *
    * tenant 模式先 `load()` 校验归属：缺失或 foreign 均直接 no-op，
    * 避免通过显式 storagePath 共享目录跨 tenant 删除（0.6.1 P0-1）。
+   *
+   * 0.8.1：`load()` 对损坏文件抛 `SessionCorruptError`，此处不捕获——
+   * 既不静默保留，也不静默删除归属未知的文件。
    * @param sessionId 会话 ID
+   * @throws {SessionCorruptError} 文件存在但不可读或 JSON 不合法
    */
   async delete(sessionId: string): Promise<void> {
     const previous = this.pendingWrites.get(sessionId);
     if (previous) await previous;
 
-    if (this.tenantId !== undefined) {
-      // load() 对 foreign 返回 null；缺失/解析失败同样无需删除。
-      const state = await this.load(sessionId);
-      if (!state) return;
-    }
+    // 先校验存在性与归属；损坏文件在此抛错，绝不 unlink。
+    const state = await this.load(sessionId);
+    if (!state) return;
 
     const candidates = [this.filePath(sessionId), this.legacyFilePath(sessionId)];
     for (const candidate of candidates) {

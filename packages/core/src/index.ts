@@ -59,6 +59,7 @@ export {
   type PruneRunsOptions,
   type PruneRunsResult,
   pruneRuns,
+  SessionCorruptError,
   SessionDeleteConflictError,
   SQLiteSessionBackend,
   type SQLiteSessionBackendOptions,

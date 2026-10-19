@@ -63,6 +63,33 @@ describe('deleteSessionData (0.5 A-4 §11.3)', () => {
     }
   });
 
+  it('冲突检查分页遍历全部 run：第 201+ 条 running 也阻止删除（0.8.1）', async () => {
+    const session = new MemorySessionBackend();
+    const runStore = new MemoryRunStore();
+    await session.save(state());
+
+    // 250 条已完成 + 1 条 running（updated_at 最旧，排在第 251 位）
+    for (let i = 0; i < 250; i += 1) {
+      await runStore.save({
+        ...checkpoint(`done-${String(i).padStart(3, '0')}`, 'completed'),
+        updated_at: 10_000 + i,
+      });
+    }
+    await runStore.save({
+      ...checkpoint('late-running', 'running'),
+      updated_at: 1,
+    });
+
+    await expect(deleteSessionData('s1', { session, runStore })).rejects.toBeInstanceOf(
+      SessionDeleteConflictError,
+    );
+
+    // 冲突时零删除
+    expect(await session.load('s1')).not.toBeNull();
+    expect((await runStore.list({ limit: 200 })).length).toBe(200);
+    expect((await runStore.list({ offset: 200, limit: 200 })).length).toBe(51);
+  });
+
   it('deletes the snapshot plus runs and trace files, returning counts', async () => {
     const dir = tempDir();
     await mkdir(dir, { recursive: true });

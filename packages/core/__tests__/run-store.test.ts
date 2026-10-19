@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { SessionCorruptError } from '../src/session/file-backend';
 import { FileRunStore, MemoryRunStore } from '../src/session/run-store';
 import { type RunCheckpoint, RunResumeError, type RunStore } from '../src/types/run-store';
 
@@ -79,6 +80,19 @@ describe('MemoryRunStore', () => {
     expect((await store.list({ limit: 999 })).length).toBe(200);
   });
 
+  it('list offset：跳过排序后的前 N 条，越界返回空，负数/非法按 0', async () => {
+    const store = new MemoryRunStore();
+    await seedList(store); // ['b', 'c', 'a']
+
+    expect(ids(await store.list({ offset: 0 }))).toEqual(['b', 'c', 'a']);
+    expect(ids(await store.list({ offset: 1 }))).toEqual(['c', 'a']);
+    expect(ids(await store.list({ offset: 2, limit: 1 }))).toEqual(['a']);
+    expect(await store.list({ offset: 3 })).toEqual([]);
+    expect(await store.list({ offset: 999 })).toEqual([]);
+    expect(ids(await store.list({ offset: -5 }))).toEqual(['b', 'c', 'a']);
+    expect(ids(await store.list({ offset: Number.NaN }))).toEqual(['b', 'c', 'a']);
+  });
+
   it('delete 不存在不抛，覆盖写取最后一次', async () => {
     const store = new MemoryRunStore();
     await store.save(checkpoint({ messages: [{ role: 'user', content: 'first' }] }));
@@ -123,6 +137,8 @@ describe('FileRunStore', () => {
     );
     expect(await file.list({ limit: 0 })).toEqual([]);
     expect(ids(await file.list({ limit: 2 }))).toEqual(['b', 'c']);
+    expect(ids(await file.list({ offset: 1, limit: 2 }))).toEqual(['c', 'a']);
+    expect(await file.list({ offset: 3 })).toEqual([]);
   });
 
   it('损坏 JSON / 形状不合法 → load=null，list 跳过', async () => {
@@ -160,15 +176,24 @@ describe('FileRunStore', () => {
     expect(await tenantA.load('run-1')).toBeNull();
   });
 
-  it('tenant 模式 delete 对缺失/损坏文件保持 no-op', async () => {
+  it('tenant 模式 delete 对缺失文件 no-op，对损坏文件抛 SessionCorruptError 且不删除', async () => {
     const dir = await tempDir();
     await writeFile(join(dir, 'broken.json'), '{ not json', 'utf8');
     const store = new FileRunStore({ dir, tenantId: 'a' });
 
     await store.delete('missing');
-    await store.delete('broken');
-    // 损坏文件不因 delete 被误删
+
+    const error = await store.delete('broken').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(SessionCorruptError);
+    expect((error as SessionCorruptError).path).toContain('broken.json');
+    // 归属未知时不 unlink
     expect((await readdir(dir)).includes('broken.json')).toBe(true);
+
+    // 非 tenant 模式保持 0.3 旧语义：损坏 → load null，delete 不额外校验
+    const loose = new FileRunStore({ dir });
+    expect(await loose.load('broken')).toBeNull();
+    await loose.delete('broken');
+    expect((await readdir(dir)).includes('broken.json')).toBe(false);
   });
 
   it('run_id 编码后不逃出目录；空 run_id 抛错', async () => {

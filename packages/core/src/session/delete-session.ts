@@ -65,11 +65,23 @@ export async function deleteSessionData(
 
   const { session, runStore, traceDir, events, tenantId } = options;
 
-  // 冲突前置检查：不删除任何东西
+  // 冲突前置检查：分页遍历该 session 的全部 run，不只看第一页（0.8.1）。
+  // 不删除任何东西。
   if (runStore) {
-    const page = await runStore.list({ session_id: sessionId, limit: PAGE_LIMIT });
-    const running = page.filter((c) => c.status === 'running').map((c) => c.run_id);
-    const interrupted = page.filter((c) => c.status === 'interrupted').map((c) => c.run_id);
+    const running: string[] = [];
+    const interrupted: string[] = [];
+    let offset = 0;
+
+    for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex += 1) {
+      const page = await runStore.list({ session_id: sessionId, limit: PAGE_LIMIT, offset });
+      for (const checkpoint of page) {
+        if (checkpoint.status === 'running') running.push(checkpoint.run_id);
+        else if (checkpoint.status === 'interrupted') interrupted.push(checkpoint.run_id);
+      }
+      if (page.length < PAGE_LIMIT) break;
+      offset += page.length;
+    }
+
     if (running.length > 0 || interrupted.length > 0) {
       throw new SessionDeleteConflictError(sessionId, running, interrupted);
     }
