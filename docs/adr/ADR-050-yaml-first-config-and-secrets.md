@@ -23,3 +23,11 @@ tags: [config, secrets, yaml]
 - **备选**：(a) 继续以 `.env` 为主配置——来源不可查、项目配置不可提交、tenant 覆盖难表达；(b) 引入 `${VAR}` 插值——与 YAML 类型/转义冲突，解析歧义大；(c) 允许项目 YAML 写密钥——容易误提交。均不取。
 - **后果**：用户配置可提交、可审查，密钥集中在 env；`config show --sources` 能解释每个键的来源，但只显示是否设置，不显示值。显式值仍可写在用户 YAML 中，部署方需自行保证文件权限。项目配置出现密钥会直接失败，迁移时需要把密钥移到 env 或 `_env`。
 - **关联**：ADR-005（双层配置）、ADR-019（命名映射）；DECISION-010 §2.4；Addendum A-1（优先级出处更正）、A-3 §10.4 / §10.6；A-4 §11.4 / §11.5。
+
+## Addendum（0.6.1，计划中）
+
+- **`permission.autoApprove: string[]`（additive）**：按工具名精确匹配；装配层读取该块，替代硬编码的 `['ask_user']`。TUI 权限弹窗选 `always` 时写回用户 YAML。缺省为空，交互仍逐个询问。配置层级与优先级不变。
+- **`plugins[].config`（additive）**：`Record<string, unknown>`，通过 `Plugin.install(host, options?: { config?: Record<string, unknown> })` 传入；旧 `install(host)` 继续合法。不引入第二套扩展机制。
+- **合并语义更正**：`plugins` 是数组，配置层按整层替换，不按 `name` 合并；`mcp_servers` 仍是 map，按 key 合并。上文“map（`mcp_servers`、`plugins`）按 key/name 合并”的表述以本 addendum 为准（仅更正文档描述，不改变实现语义）。
+- **env 覆盖（additive）**：`VESSEL_PLUGINS`（逗号分隔插件名）、`VESSEL_SESSION_BACKEND`（`file|sqlite|memory`）、`VESSEL_MODEL`（覆盖 `provider.model`）属于 env 层，优先级仍为 `CLI > env > tenant overlay > project > user > default`。
+- **插件目录（additive）**：仓库 `plugins/`、用户 `~/.vessel/plugins/`、项目 `./.vessel/plugins/`；启动时各扫描一次，仍需重启生效。`plugins[].config` 与目录扩展不改变“唯一运行期扩展机制”的边界。

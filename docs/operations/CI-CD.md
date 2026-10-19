@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.6（`release/0.6`；包版本在收口前保持 0.4.0）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.6.1（基线 `release/0.6`；根包与可发布包版本均为 `0.5.0`）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.6.1 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -39,12 +39,27 @@
 - 0.6 的 `multi-node` / `tls-ca` / `frontend-cors` 只在 ubuntu 跑，**不设 required**；Windows 仍在 `cross-platform` 中跑单机全量 `bun test`。
 - 0.6 专项 job 复用仓库内自签证书 fixture 与本地临时端口，不依赖外网或真实第二台机器；真实两机 / 浏览器信任仍需人工验收（见 [REMOTE.md](REMOTE.md)）。
 
-### 1.1 发布干跑 job（0.5）
+### 1.1 0.6.1 修复轮门禁
+
+0.6.1 是对标修复轮，不新增 CI job，把定向回归并入现有 job：
+
+| Job | 新增覆盖 |
+|---|---|
+| `quality` | 全量 `bun test` 已覆盖新增回归；三件套任一红禁止合并 |
+| `architecture` | `check-rpc-methods` 必须与 `docs/ARCHITECTURE.md` 的 `sessions.search` 同步 |
+| `offline-integration` | 会话租户隔离（`src/__tests__/session-factory.test.ts`、`packages/core/__tests__/session-backend.test.ts`）、durable tenant/role（`packages/serve/__tests__/gateway.durable.test.ts`）、team REST 角色（`packages/serve/__tests__/team.auth.test.ts`）、CLI flags（`src/__tests__/cli-args.test.ts`）、插件目录/配置（`src/__tests__/plugin-loader.test.ts`、`src/__tests__/plugin-selection.test.ts`）、上下文与取消（`packages/core/__tests__/context-manager.test.ts`、`packages/core/__tests__/guardrail-replacement.test.ts`） |
+| `multi-node` | 双向 / 网状节点的事件回声抑制 |
+| `web` | Web Markdown、`sessions.search` 与工具卡事件（`apps/web/tests`） |
+
+- 0.6.1 不 bump 版本；`version --check` 仍以 `0.5.0` 为准。
+- 修复轮的 P0 验收（显式 `session.storagePath` 多 tenant 隔离、durable 跨 tenant 越权）必须由上述定向测试守；只跑 mock 不算通过。
+
+### 1.2 发布干跑 job（0.5）
 
 - 触发：`pull_request` + `release/**` push；不覆盖 `main` push。
 - 命令：`bun run scripts/release-dry-run.ts`（详细检查项与退出码见
   [RELEASE.md §2.1](RELEASE.md)）。
-- 目标版本 = 根 `package.json` 版本：R2 为 `0.4.0`，收口 bump 后为 `0.5.0`。
+- 目标版本 = 根 `package.json` 版本：当前为 `0.5.0`；0.6.1 不 bump，收口是否升版由 1 决定。
 - 打包到 runner 的 OS 临时目录并在结束后清理；**不上传 artifact、不登录 npm、
   不创建 tag、不发布**。
 - 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；
@@ -65,7 +80,7 @@
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
-   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 10 个插件包（含 `@vessel/team` 与 `@vessel/mcp-client`）。
+   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 13 个插件包（含 `@vessel/team` 与 `@vessel/mcp-client`），合计 18 个可发布包。
    - **不发布根 CLI**（`private: true`，无 `bin`）。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。
    - `npm publish --provenance --access public`（OIDC provenance）。

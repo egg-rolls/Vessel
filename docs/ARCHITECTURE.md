@@ -580,7 +580,7 @@ class PluginLoader {
 }
 ```
 
-**扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。
+**扫描只在进程启动时发生一次。** `PluginLoader` 把扫描结果缓存在实例上（插件目录在进程生命周期内视为不变），**这不是热加载**：新增或改动插件需要**重启进程**才生效，`/reload` 只重载配置、不重扫插件目录。0.6.1 计划增加用户 / 项目插件目录与 `plugins[].config` 注入，见 §18.4。
 
 **加能力就是放一个文件夹。** `bash` 工具在，写文件 + 跑命令本身就是模型能做的事——这就是不再需要「声明式工具」「用户目录工具扫描」「运行时注册表」的原因。
 
@@ -625,6 +625,8 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
+
+0.6.1 计划新增 `permission.autoApprove`、`plugins[].config` 消费与 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL` 覆盖，见 §18.4。
 
 0.3 配置示例：
 
@@ -937,12 +939,13 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - 0.4：按 `hello.features` 显示 **workflow 面板**（列表 / 详情 / 启动 / resume / cancel）、**metrics 快照**与 **飞书状态**（`workflow` / `metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
 - 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
+- 0.6.1 计划：Markdown 渲染、`sessions.search` 全文检索、工具事件 `args` / `result` 折叠，见 §18.6。
 - **接线（已完成）**：CLI 给 `startGateway` 传 `events` / `session` / `runtime` / `context` / `pluginHost` / `staticDir` / `durable` / `mcp`；`staticDir` 取 `VESSEL_STATIC_DIR`，否则仓库内 `apps/web/dist` 存在时使用。因此 G2、静态托管、durable/MCP 面板在 `--serve` 下生效。
 
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|delete|rename`；`runs.list|get|start|cancel|resume`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|delete|rename`（0.6.1 计划新增 `sessions.search`，见 §18.6）；`runs.list|get|start|cancel|resume`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1004,6 +1007,8 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - WS 首帧 `auth` 带 token + `since`；解析 `hello` / `event` / `gap` / `ping`，`ping` → `pong`，`gap.to_seq` 触发 `since` 重连，`hello.latest_seq < lastSeq` 从 0 重新对齐；退避 1s → 30s + jitter，10s hello 超时。
 - `health.get` 返回远端 `tenant_id` / `node_id`；CLI 在 stderr（headless）或 TUI 状态行展示；TUI 不污染 stdout。
 - connect 模式不获取本地 tenant 写锁、不写本地 store / trace；交互回路由事件流转为 `permission.respond` / `ask.respond` RPC。
+
+**0.6.1 计划的安全收紧**：durable 端点按 principal 的 tenant 过滤并校验 `write`；team REST 复用 `ROLE_RANK`；事件回灌丢弃本机来源帧；远端 spawn 复用 `buildChildHost`。见 §18.2 / §18.7。
 
 **节点注册与远程 Transport（asm）**
 
@@ -1293,3 +1298,69 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 - 事件上历史中的 `runs.cancelled` 恒 0 是 0.4 行为；0.5 起显式取消发 `run.cancelled`，该值可能非 0。
 - 显式 `session.storage_path` / `durable.path` 可以逃出 tenant，启动时只 warn。
 - F5 跨机器远程已在 0.6 实现（`release/0.6`）；微信不做。
+
+## 18. 0.6.1 对标修复（计划中）
+
+> 状态：**计划中，冻结契约见 DECISION-015**。代码合入前本节不得被引用为“已实现”。
+> 合入后由 gov 把本节状态改为“已实现”，并同步 §8 / §9 / §13.6 / §13.7 / §13.8。
+
+### 18.1 多租户会话隔离（P0）
+
+- `createSessionBackend` 的 file 分支也传 `{ tenantId }`，与 sqlite 分支一致。
+- `FileSessionBackend.delete()` 在 tenant 模式先 `load()` 再 `isForeign()`；foreign 会话直接 no-op，不删除文件。
+- 显式 `session.storage_path` 指到 tenant 目录之外时启动 warn（与 sqlite / durable 的 tenant escape 提示一致）；默认 `<data_dir>/tenants/<id>/sessions` 不变。
+- 验收：共享 storagePath 下，tenant A 的 `listRich` / `load` / `delete` 对 tenant B 无可见、无效果。
+
+### 18.2 durable 与 team 控制面（P0 / P1）
+
+- `handleDurable` 接收 `principal`；list 按 `ctx.tenant_id` 过滤；非 default tenant 且没有 per-tenant store 时返回 `forbidden`。
+- `/v1/durable/runs/:id/resume` 要求 `write` 及以上角色。
+- team REST 复用 `ROLE_RANK`：`GET` 允许 `read`；spawn / send / cancel / close 要求 `write` / `admin`。RPC 路径与 REST 路径的判定必须一致。
+
+### 18.3 CLI 会话参数
+
+- 新增 `-c/--continue`（继续最近会话）与 `-r/--resume [id]`（恢复指定会话）。
+- `-r` 不再作为 `--run` 的短别名；`--run` 保留（可另加 `-p/--print`）。
+- 与 `--session` / `--resume-run` / `--serve` / `--connect` 的冲突在参数解析期报错，不静默择一。
+
+### 18.4 配置与插件
+
+- `permission.autoApprove: string[]`：按工具名精确匹配；装配层读取，不再硬编码 `['ask_user']`。TUI 选 `always` 时写回用户 YAML。
+- `Plugin.install(host, options?: { config?: Record<string, unknown> })`：`plugins[].config` 原样传入；旧 `install(host)` 继续合法。
+- 插件扫描：仓库 `plugins/`、`~/.vessel/plugins/`、`./.vessel/plugins/`；启动时扫描一次，仍需重启生效。
+- `vessel plugin list|install <path>|remove <name>`：只处理本地目录，不做远程市场。
+- env 覆盖新增 `VESSEL_PLUGINS` / `VESSEL_SESSION_BACKEND` / `VESSEL_MODEL`。
+- 插件选择：显式列表全为 `enabled: false` 时不得回退为全部；空数组语义写清。
+
+### 18.5 运行时与 TUI
+
+- `ContextManager` 可注入 `summarizer(messages, { maxTokens }) => Promise<string>`；无 summarizer 时保留占位符 fallback；`autoCompact` 按阈值触发。
+- Guardrail 阻断折回 tool error，不 `throw`；run 继续，模型可改道。
+- Provider 对 429 / 5xx / 网络错误做 3 次指数退避，尊重 `AbortSignal`。
+- `bash` / `read` / `edit` 消费 `ToolContext.signal`；bash abort 时 kill 子进程。
+- 可选 `ToolDefinition.concurrencySafe`：安全批次 `Promise.all`，结果按原顺序回写。
+- `finish_reason === 'stop'` 但存在 `tool_calls` 时仍进入工具轮。
+- `HookResult`（block / updatedInput / additionalContext）与 `HookContext.tool/input`；`void` 返回值继续兼容。
+- TUI：edit diff 渲染、bash 输出 Ctrl+O 展开、`/compact` / `/context`、输入历史与运行中排队、`/permissions` 列表/移除。
+
+### 18.6 Web 控制台
+
+- 助手文本 Markdown（代码块 / 列表 / 表格 / 链接）；流式期间可先纯文本，完成后渲染。
+- 新增 canonical RPC `sessions.search`（permission `read`）：
+  - 参数 `{ query, limit? }`：`query` 去空白后 1..256 字符；`limit` 为 1..100 的整数，缺省 20；
+  - 结果 `{ sessions: [{ session_id, title, preview, snippet, updated_at, message_count }] }`；
+  - 匹配顺序：title / preview / session_id，然后逐消息 content；snippet 取命中前后各 60 字符；
+  - 数据面只依赖 core `SessionBackend`（`listRich()` + `load()` 线性扫描），按 `updated_at` 倒序截断；
+  - 前端 150ms 防抖，保留本地 title/preview/id 过滤作为降级。
+- `tool.call.started` 带 `args`，`tool.call.completed` 带 `result`；上限 8 KiB，超出截断并标记；事件卡可折叠，失败默认展开。
+- 会话时间分组与逐消息时间展示依赖 core `Message.timestamp?`，缺失时降级。
+
+### 18.7 跨节点
+
+- 事件回灌丢弃 `event.node_id === this.nodeId` 的帧，避免双向 / 网状拓扑回声。
+- 远端 `team_spawn` 复用 `buildChildHost`（剔除 `team_*`）并传 `memberLimits` / `memberTermination`，与本机 spawn 一致。
+
+### 18.8 扩展
+
+- MCP client 增加 `resources/list|read` 与 prompts 列表（仍不做 OAuth）。
+- basic-tools 超大结果落盘到 session 目录并回路径。

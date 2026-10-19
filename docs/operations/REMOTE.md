@@ -20,6 +20,15 @@
 - **信任边界**：`node_id` 以 token + TLS 边界信任，没有逐事件签名；不要通过不可信第三方转发同 Origin 的节点事件。
 - **不在 0.6 范围**：mTLS / 客户端证书、HTTP/2、ACME / 自动续期、反向代理信任头、mDNS / 服务网格 / 节点自动发现。
 
+### 1.1 0.6.1 计划中的安全收紧
+
+> 代码合入前按“计划中”标注。
+
+- **durable 端点**：`/v1/durable/*` 接收 token principal；list 只返回当前 tenant 的 run；非 default tenant 且没有 per-tenant store 时返回 `forbidden`；resume 要求 `write` 及以上。
+- **team REST 角色**：复用 `ROLE_RANK`；`GET /v1/team/*` 允许 `read`，spawn / send / cancel / close 要求 `write` / `admin`。default tenant 的只读 token 不再能变更 team。
+- **跨节点事件**：回灌时丢弃 `event.node_id === 本机 node_id` 的帧；双向 / 网状拓扑不再回声放大。静态节点表仍建议按单向父端订阅配置。
+- **远端 spawn**：复用 `buildChildHost`（剔除 `team_*`），并传入 `memberLimits` / `memberTermination`，与本机 spawn 的隔离和限额一致。
+
 ## 2. 证书与 CA
 
 ### 2.1 服务端证书
@@ -221,6 +230,7 @@ gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由 gateway 按
 - 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
 - 监听 `0.0.0.0` 时 banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；实际访问需换成真实 IP / 域名（并匹配证书 SAN）。
 - `--connect-token` 会出现在进程参数列表中；生产优先用 env 或文件权限受控的 config。
+- 0.6.1 计划修复：durable 端点按 tenant / 角色收紧，team REST 复用 `ROLE_RANK`，双向节点事件回声抑制，远端 spawn 成员隔离与限额对齐；合入前上述限制仍然存在。
 
 ## 7. 验证清单
 
