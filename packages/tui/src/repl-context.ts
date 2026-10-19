@@ -190,7 +190,7 @@ export interface FeishuControlLike {
 // ── 0.6.1 E7：权限持久化（tui 定义结构，asm 写用户 YAML） ──
 
 /**
- * `permission.autoApprove` 的读写控制面。
+ * `permission.auto_approve`（YAML）的读写控制面。
  * asm 注入后，TUI 的 "always" 与 `/permissions add|remove` 才可跨进程生效。
  */
 export interface PermissionsControl {

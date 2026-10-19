@@ -720,7 +720,7 @@ function InkRepl({ ctx }: InkReplProps) {
             .then(() => {
               dispatch({
                 type: 'appendHistory',
-                line: `✓ "${overlay.toolName}" added to permission.autoApprove (effective after restart).`,
+                line: `✓ "${overlay.toolName}" added to permission.auto_approve (effective after restart).`,
               });
             })
             .catch((error: unknown) => {

@@ -2,7 +2,7 @@
  * /permissions —— 持久化免确认工具列表
  * @module @vessel/tui
  *
- * 写回接口由 asm 注入（PermissionsControl -> 用户 YAML permission.autoApprove）。
+ * 写回接口由 asm 注入（PermissionsControl -> 用户 YAML permission.auto_approve）。
  * 未注入时只读展示 config；明确提示重启后生效。
  */
 
@@ -13,12 +13,15 @@ import type { CommandEntry, CommandResult } from './commands.js';
 /** config 里的权限段（asm 0.6.1 才加类型；这里用结构类型避免跨分支耦合） */
 interface PermissionConfigLike {
   autoApprove?: string[];
+  /** YAML permission.auto_approve 的 snake_case 形态 */
+  auto_approve?: string[];
 }
 
-/** 纯函数：读取 config.permission.autoApprove（去重排序） */
+/** 纯函数：读取 config.permission.autoApprove / auto_approve（去重排序） */
 export function configuredAutoApprove(ctx: ReplContext): string[] {
   const permission = (ctx.config as { permission?: PermissionConfigLike }).permission;
-  return [...new Set(permission?.autoApprove ?? [])].sort();
+  const entries = permission?.autoApprove ?? permission?.auto_approve ?? [];
+  return [...new Set(entries)].sort();
 }
 
 async function loadAutoApprove(ctx: ReplContext): Promise<string[]> {
@@ -41,7 +44,7 @@ export async function runPermissionsCommand(
   if (subcommand === undefined || subcommand === 'list' || subcommand === 'ls') {
     try {
       const entries = await loadAutoApprove(ctx);
-      const lines = ['', 'Auto-approved tools (permission.autoApprove):'];
+      const lines = ['', 'Auto-approved tools (permission.auto_approve):'];
       if (entries.length === 0) {
         lines.push('  (none)');
       } else {
@@ -60,7 +63,7 @@ export async function runPermissionsCommand(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to read permission.autoApprove:\n${formatRpcError(error)}\n`,
+        output: `\nFailed to read permission.auto_approve:\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -83,7 +86,7 @@ export async function runPermissionsCommand(
         handled: true,
         output: [
           '',
-          `${subcommand === 'add' ? 'Added' : 'Removed'} "${tool}" ${subcommand === 'add' ? 'to' : 'from'} permission.autoApprove.`,
+          `${subcommand === 'add' ? 'Added' : 'Removed'} "${tool}" ${subcommand === 'add' ? 'to' : 'from'} permission.auto_approve.`,
           `Current entries: ${entries.length > 0 ? entries.join(', ') : '(none)'}`,
           ...(path ? [`User config: ${path}`] : []),
           'Takes effect on restart; "always" already covers the current session.',
@@ -104,7 +107,7 @@ export async function runPermissionsCommand(
 export function permissionsCommand(): CommandEntry {
   return {
     name: 'permissions',
-    description: '查看/编辑持久化免确认工具（permission.autoApprove）',
+    description: '查看/编辑持久化免确认工具（permission.auto_approve）',
     usage: '/permissions [list|add <tool>|remove <tool>]',
     category: 'inspect',
     keywords: ['permissions', 'auto approve', 'always', 'config'],
