@@ -19,6 +19,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.7.1 状态**：0.7 的 P0 加固补丁线（基于 `release/0.7`，未随版本发布）：legacy WS 方法统一按 principal/tenant 作用域执行；tenant 单写者锁修复回收 TOCTOU 与 24h 语义；外部插件仍默认加载但启动告警，并提供 `VESSEL_NO_EXTERNAL_PLUGINS=1` 显式 opt-out（P0-3 记为 **MITIGATED**，未关闭）。
 - **0.8.0 状态**：Wave 1 结构收口（基于 `release/0.8`，未随版本发布）：core 的 run 级状态收敛到 `RunExecution` + 单 run 守卫 `run_already_running`，`run()` / `resume()` 共用 `finalizeRun` 终态路径；hook 抛错发 `hook.error` 并继续，guardrail 抛错 fail-closed（`guardrail_error`）；本地 RPC `subscribe` 接线；headless 统一清理；`--resume-run` / `FileRunStore` 走 tenant 目录与归属校验；Web seq 回退重放、durable REST admin 显式 tenant；`read` / `bash cwd` 路径边界与内置凭据 denylist。决策见 ADR-054 / ADR-055。
 - **0.8.1 状态**：Wave 2A 加固（基于 `release/0.8.1`，未随版本发布）：`atomicWrite` 默认 fsync（temp 文件 fsync → rename → 尽力目录 fsync）；`SessionCorruptError` 让损坏的 session / tenant run 不再被静默当成不存在或删除，`listRich` 降级跳过；`deleteSessionData` 冲突检查全量分页（`RunStore.list` 新增 `offset`）；配置收敛为单一 resolver（`cliOverrides`、`serve` / `connect` 不再自行读 argv / env）；Gateway 拆分第一阶段（auth / frames / sse / static），协议与公开导出不变。决策见 ADR-056 / ADR-057。
+- **0.8.2 状态**：Wave 2B1 统一工具执行（基于 `release/0.8.2`，未随版本发布）：新增 core `ToolPipeline`（getTool → ToolCall guardrail → BeforeTool → permission（最终工具与参数）→ handler（timeout/signal）→ ToolResult guardrail → AfterTool）；`AgentRuntime` 改用管道并关闭外层已处理阶段；workflow `type: tool` 注入 pipeline 后与 runtime 同语义并发布 `tool.call.*`；delegate 子 runtime 继承父级 resolved 权限；runtime / delegate / workflow 共用同一 permission。决策见 ADR-058。
 
 ## 代码风格与硬规矩
 
@@ -37,6 +38,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **持久化写入**（0.8.1，ADR-056）：session / checkpoint 一律走 `atomicWrite`，默认 `durable: true`（temp fsync → rename → 尽力目录 fsync）；不要直写最终路径，不要吞掉 `AtomicWriteError`。只有临时文件或测试才显式 `durable: false`。
 - **损坏检测**（0.8.1，ADR-056）：文件存在但不可读 / JSON 损坏一律抛 `SessionCorruptError`，不得当成“不存在”返回 `null`；否则下一次 save 会覆盖原文件。删除同样先 `load()`，损坏时抛错不 unlink；只有 `listRich()` 允许逐项降级跳过。
 - **配置层序与单一 resolver**（0.8.1，ADR-057）：层序固定 `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并。CLI flag 必须经 `buildCliConfigOverrides()` → `cliOverrides`；serve / connect 不得自行读 argv 或 `process.env`。`defaults` 仅为 deprecated 兼容层。
+- **工具执行必须走统一 pipeline**（0.8.2，ADR-058）：任何入口都不得直调 `ToolDefinition.handler`（workflow 未注入 pipeline 的 deprecated 兼容路径除外）；走 `ToolPipeline`（阶段顺序 getTool → ToolCall guardrail → BeforeTool → permission（最终工具与参数）→ handler（timeout/signal）→ ToolResult guardrail → AfterTool）。权限必须在 guardrail/hook 改写之后判定；`tool.call.*` 由调用方发布，管道不发布。
+- **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
 - 文档只写已实现；规划项明确标注。不吹未实现的能力。
@@ -47,7 +50,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.8.1` → `0.8-<role>`（`release/0.1` ~ `release/0.7` 已冻结；0.8 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.8.1 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.8.2` → `0.8-<role>`（`release/0.1` ~ `release/0.7` 已冻结；0.8 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.8.2 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -124,7 +127,6 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别在 trace / 事件 / 日志 / `config show` 输出解析后的密钥值；0.5 不脱敏 checkpoint / eval 报告 / 飞书回复，文档不得写成“已脱敏”。
 - 别让多个进程同时写同一 tenant；写前必须拿 `.lock`，冲突返回 `tenant_locked`。
 - 别在日志 / 事件 / 报告里输出飞书的 `app_secret` 或完整 `app_id`；只允许前 4 位 + `***`。
-- 别在 workflow 的 `type: tool` 步骤里期待 guardrail / hook——它直接调 handler；需要 guardrail 用 `type: agent`。
 - 别默认开启远程监听或 TLS；远程必须显式 opt-in 且带 token；非回环不得匿名。
 - 别给 MCP 工具设默认 `allow`；除非在 `auto_approve_tools` 里按原始工具名精确列出。
 - 别让 Host 与成员 runtime 同时写同一个 run 的 checkpoint（唯一写者是 `AgentRuntime`，Host store 优先）。

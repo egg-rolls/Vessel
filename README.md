@@ -270,7 +270,7 @@ bun run src/cli.ts workflow cancel <workflowRunId>
 
 - 入口只有 CLI / TUI `/workflows` / gateway；**不注册模型工具**，模型不能触发任意路径的定义。
 - `resume` 会重跑 `running` / `pending` / `failed` 步骤，**不保证幂等**，重跑可能重复副作用。
-- `type: tool` 直接调 handler，绕过 runtime 的 guardrail / hook；需要 guardrail 的步骤用 `type: agent`。
+- 0.8.2 起 `type: tool` 走统一的工具执行管道（guardrail / hook / 权限 / timeout），与 runtime 语义一致（ADR-058）。
 - `cancel` 只支持同进程；跨进程 run 返回 `workflow_not_found`。
 - 已知错误码：`workflow_not_found` / `workflow_invalid` / `workflow_already_running` / `workflow_not_resumable` / `workflow_cancelled` / `workflow_disabled`。
 
