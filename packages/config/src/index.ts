@@ -53,6 +53,7 @@ export {
 export * from './types.js';
 export { deepMerge } from './utils.js';
 export {
+  allowedOriginError,
   findExplicitSecretPaths,
   findUnknownKeys,
   findUnknownNestedKeys,

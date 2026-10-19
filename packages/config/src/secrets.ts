@@ -247,6 +247,29 @@ function resolveSimpleSecrets(
     resolvePair(serve, 'token', 'tokenEnv', servePath, env, errors, resolved);
     resolvePair(serve, 'adminToken', 'adminTokenEnv', servePath, env, errors, resolved);
   }
+
+  // 0.6：connect.token_env → connect.token
+  const connect = config.connect;
+  if (isRecord(connect)) {
+    resolvePair(connect, 'token', 'tokenEnv', joinPath(prefix, 'connect'), env, errors, resolved);
+  }
+
+  // 0.6：transport.nodes[i].token_env → token（数组路径用于错误定位）
+  const transport = config.transport;
+  if (isRecord(transport) && Array.isArray(transport.nodes)) {
+    transport.nodes.forEach((node, index) => {
+      if (!isRecord(node)) return;
+      resolvePair(
+        node,
+        'token',
+        'tokenEnv',
+        joinPath(joinPath(prefix, 'transport'), `nodes[${index}]`),
+        env,
+        errors,
+        resolved,
+      );
+    });
+  }
 }
 
 /** 解析一个配置对象内的 mcpServers（含 tenant overlay 前缀）。 */
@@ -319,6 +342,7 @@ const FIXED_SECRET_PATHS: readonly string[][] = [
   ['serve', 'token'],
   ['serve', 'adminToken'],
   ['transport', 'token'],
+  ['connect', 'token'],
 ];
 
 /** mcpServers.<name>.env|headers.<KEY> 的值（值本身是密钥）。 */

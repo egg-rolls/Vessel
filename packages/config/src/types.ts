@@ -281,6 +281,11 @@ export interface TenantConfig {
 export interface ServeConfig {
   /** 监听地址（默认 127.0.0.1） */
   hostname?: string;
+  /**
+   * 0.6：独立前端允许的浏览器 Origin。
+   * 绝对 http(s) origin；禁止 `*` / path / query / hash；非回环必须 https。
+   */
+  allowedOrigins?: string[];
   /** 监听端口（默认 8642；0 = 系统分配） */
   port?: number;
   /** 显式允许非回环监听（默认 false） */
@@ -299,9 +304,23 @@ export interface ServeConfig {
   tls?: ServeTlsConfig;
 }
 
-/** Transport 配置（0.2；默认 in-process） */
+/** 远程节点（0.6；静态注册，无自动发现） */
+export interface TransportNodeConfig {
+  /** 节点 id；唯一，匹配 ^[A-Za-z0-9_-]{1,64}$ */
+  id: string;
+  /** 节点 gateway URL；非回环必须 https */
+  url: string;
+  /** 节点 token；建议改用 tokenEnv */
+  token?: string;
+  /** 从该环境变量读取 token */
+  tokenEnv?: string;
+  /** 节点自签/私有 CA 文件（PEM） */
+  caFile?: string;
+}
+
+/** Transport 配置（0.2；0.6 增加 remote） */
 export interface TransportConfig {
-  kind?: 'in-process' | 'loopback';
+  kind?: 'in-process' | 'loopback' | 'remote';
   /** 仅 loopback；只允许回环地址 */
   hostname?: string;
   /** 缺省复用 VESSEL_GATEWAY_TOKEN / gateway token */
@@ -312,6 +331,18 @@ export interface TransportConfig {
   heartbeatMs?: number;
   /** peer 失效毫秒（默认 15000；必须 > heartbeatMs） */
   peerTtlMs?: number;
+  /** 0.6 remote：静态节点列表 */
+  nodes?: TransportNodeConfig[];
+}
+
+/** 0.6：`--connect` 客户端配置（token/CA；URL 仍走 CLI/env） */
+export interface ConnectConfig {
+  /** gateway token；建议改用 tokenEnv */
+  token?: string;
+  /** 从该环境变量读取 token */
+  tokenEnv?: string;
+  /** 自签/私有 CA 文件（PEM） */
+  caFile?: string;
 }
 
 /** agent team 原型配置（0.1.0 显式 opt-in；默认关闭） */
@@ -371,6 +402,8 @@ export interface VesselConfig {
   host?: HostConfig;
   scheduler?: SchedulerConfig;
   transport?: TransportConfig;
+  /** 0.6：`--connect` 客户端 token/CA */
+  connect?: ConnectConfig;
   /** 0.3：MCP servers，键为 server 名 */
   mcpServers?: Record<string, McpServerConfig>;
   /** 0.3：durable run（checkpoint / resume） */
