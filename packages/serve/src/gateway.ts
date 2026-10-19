@@ -371,10 +371,74 @@ function loadTlsMaterial(tls: { certFile: string; keyFile: string }): {
   return { cert: read(tls.certFile, 'cert_file'), key: read(tls.keyFile, 'key_file') };
 }
 
-const CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; " +
-  "object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+/**
+ * 归一化 CORS/WS Origin allowlist：只接受显式 http(s) origin。
+ * 拒绝 `*`、path/query/hash/userinfo；保存 `URL.origin`（小写 host、去默认端口）。
+ */
+export function normalizeAllowedOrigins(raw: string[] | undefined): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error('allowedOrigins must be an array of explicit http(s) origins.');
+  }
+  const normalized = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== 'string') {
+      throw new Error('allowedOrigins must contain strings.');
+    }
+    const trimmed = value.trim();
+    if (trimmed === '' || trimmed === '*') {
+      throw new Error(
+        'allowedOrigins must contain explicit origins; wildcard ("*") is not allowed.',
+      );
+    }
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      throw new Error(`Invalid allowed origin "${trimmed}": expected an absolute URL.`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`Invalid allowed origin "${trimmed}": only http(s) origins are allowed.`);
+    }
+    if (url.username !== '' || url.password !== '') {
+      throw new Error(`Invalid allowed origin "${trimmed}": credentials are not allowed.`);
+    }
+    if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+      throw new Error(`Invalid allowed origin "${trimmed}": use scheme://host[:port] only.`);
+    }
+    normalized.add(url.origin);
+  }
+  return [...normalized];
+}
+
+/**
+ * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
+ * 其余指令保持 0.5 的基线。
+ */
+export function buildContentSecurityPolicy(req: Request, allowedOrigins: string[]): string {
+  const sources = new Set<string>(["'self'"]);
+  const rawHost = req.headers.get('host');
+  // Host 会进入 CSP 指令；只接受常规 host[:port] 字符，防止指令注入。
+  const host = rawHost && /^[A-Za-z0-9.\-:[\]]+$/.test(rawHost) ? rawHost : null;
+  if (host) {
+    const secure = new URL(req.url).protocol === 'https:';
+    sources.add(`${secure ? 'wss' : 'ws'}://${host}`);
+  }
+  for (const origin of allowedOrigins) {
+    sources.add(origin);
+    try {
+      const url = new URL(origin);
+      sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
+    } catch {
+      // normalizeAllowedOrigins 已校验；防御性跳过非法值。
+    }
+  }
+  return (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    `img-src 'self' data:; font-src 'self'; connect-src ${[...sources].join(' ')}; ` +
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+  );
+}
 
 /** 方法级错误（映射到协议错误码） */
 class MethodError extends Error {
@@ -416,17 +480,21 @@ function hostAllowed(req: Request, listenHost: string): boolean {
 }
 
 /** Origin 校验：无 Origin（curl / peer）放行；浏览器必须同源或在允许列表 */
-function originAllowed(req: Request, allowedOrigins: string[]): boolean {
+export function originAllowed(req: Request, allowedOrigins: string[]): boolean {
   const origin = req.headers.get('origin');
   if (!origin) return true;
-  if (allowedOrigins.includes(origin)) return true;
-  const host = req.headers.get('host');
-  if (!host) return false;
+  let parsed: URL;
   try {
-    return new URL(origin).host === host;
+    parsed = new URL(origin);
   } catch {
     return false;
   }
+  // 只接受浏览器 http(s) origin；file:// / opaque origin 一律拒绝。
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (allowedOrigins.includes(parsed.origin)) return true;
+  const host = req.headers.get('host');
+  if (!host) return false;
+  return parsed.host.toLowerCase() === host.toLowerCase();
 }
 
 /** 构造 JSON 响应 */
@@ -452,16 +520,29 @@ function errorJson(
   return json({ error: protocolError(code, message) }, status, extra);
 }
 
-/** 允许列表命中时返回 CORS 头（同源不需要） */
-function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
+/**
+ * 允许列表命中时返回 CORS 头（同源不需要）。
+ * allowlist 非空时所有响应都带 Vary: Origin，避免共享缓存把 A 的 ACAO 复用给 B。
+ * 不使用 Access-Control-Allow-Credentials：鉴权走 Authorization，不依赖 cookie。
+ */
+export function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
+  if (allowedOrigins.length === 0) return {};
+  const headers: Record<string, string> = { Vary: 'Origin' };
   const origin = req.headers.get('origin');
-  if (!origin || !allowedOrigins.includes(origin)) return {};
+  if (!origin) return headers;
+  let normalized: string;
+  try {
+    normalized = new URL(origin).origin;
+  } catch {
+    return headers;
+  }
+  if (!allowedOrigins.includes(normalized)) return headers;
   return {
-    'Access-Control-Allow-Origin': origin,
+    ...headers,
+    'Access-Control-Allow-Origin': normalized,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Vessel-Protocol',
     'Access-Control-Max-Age': '600',
-    Vary: 'Origin',
   };
 }
 
@@ -628,7 +709,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   );
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
-  const allowedOrigins = opts.allowedOrigins ?? [];
+  const allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const authTimeoutMs = opts.authTimeoutMs ?? 5_000;
 
@@ -2190,7 +2271,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
       'X-Content-Type-Options': 'nosniff',
     };
-    if (isHtml) headers['Content-Security-Policy'] = CSP;
     return new Response(file, { headers });
   }
 
@@ -3464,6 +3544,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!isApiPath && (req.method === 'GET' || req.method === 'HEAD')) {
         const staticResponse = await serveStatic(path);
         if (staticResponse) {
+          const contentType = staticResponse.headers.get('content-type') ?? '';
+          if (contentType.includes('text/html')) {
+            staticResponse.headers.set(
+              'Content-Security-Policy',
+              buildContentSecurityPolicy(req, allowedOrigins),
+            );
+          }
           for (const [key, value] of Object.entries(extra)) staticResponse.headers.set(key, value);
           return staticResponse;
         }
