@@ -43,6 +43,7 @@ import type {
   ServerFrame,
   SessionDetail,
   SessionInfo,
+  SessionSearchHit,
   TeamAgentsResponse,
   TeamPeersResponse,
   TenantInfo,
@@ -448,6 +449,24 @@ export class GatewayClient {
       if (!canFallbackToRest(error)) throw error;
       const body = await this.request<{ sessions?: SessionInfo[] }>('sessions.list');
       return body.sessions ?? [];
+    }
+  }
+
+  /**
+   * 会话内容搜索（canonical `sessions.search`）。
+   * 旧 gateway 没有该方法时返回 null，由调用方回退到本地 title/preview/id 过滤。
+   */
+  async searchSessions(query: string, limit?: number): Promise<SessionSearchHit[] | null> {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+    try {
+      const body = await this.rpc<{ sessions?: SessionSearchHit[] }>('sessions.search', {
+        query: trimmed,
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      return body.sessions ?? [];
+    } catch {
+      return null;
     }
   }
 

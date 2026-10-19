@@ -1,3 +1,4 @@
+import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import type { RunGroup } from '../../state/events';
@@ -71,9 +72,13 @@ export function RunCard({
       <div className="run-items">
         {group.items.map((item) =>
           item.kind === 'text' ? (
-            <div className="text-block" key={item.key}>
-              {item.text}
-            </div>
+            group.status === 'running' || status === 'running' ? (
+              <div className="text-block" key={item.key}>
+                {item.text}
+              </div>
+            ) : (
+              <Markdown className="text-block" key={item.key} text={item.text} />
+            )
           ) : (
             <EventRow key={item.key} event={item.event} />
           ),
@@ -90,7 +95,9 @@ export function RunCard({
               <span className="dim">{formatTimestamp(group.completedAt)}</span>
             )}
           </div>
-          {group.output && !outputAlreadyShown && <pre className="run-output">{group.output}</pre>}
+          {group.output && !outputAlreadyShown && (
+            <Markdown className="run-output" text={group.output} />
+          )}
         </div>
       )}
       {group.status === 'failed' && status === 'failed' && (

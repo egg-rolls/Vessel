@@ -11,6 +11,7 @@ import { groupEvents, isGroupPersisted } from '../../state/events';
 import type { PaletteItem } from '../../state/palette';
 import {
   filterSessions,
+  matchesSessionStatus,
   removeSessionFromList,
   renameSessionInList,
   SESSION_PAGE_SIZE,
@@ -80,6 +81,12 @@ export function ChatView({
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [query, setQuery] = useState('');
   const debouncedQuery = useDebounced(query, 150);
+  /** 服务端内容搜索；null = 用本地 title/preview/id 过滤兜底。 */
+  const [serverSearch, setServerSearch] = useState<{
+    query: string;
+    ids: Set<string>;
+    snippets: Map<string, string>;
+  } | null>(null);
   const [status, setStatus] = useState<SessionStatusFilter>('all');
   const [renderLimit, setRenderLimit] = useState(SESSION_PAGE_SIZE);
   const [input, setInput] = useState('');
@@ -135,6 +142,31 @@ export function ChatView({
       setSessions(sortSessions(sessionsResource.state.data));
     }
   }, [sessionsResource.state]);
+
+  // 服务端全文搜索：150ms debounce 后切换；旧 gateway/失败时保持本地过滤。
+  useEffect(() => {
+    const needle = debouncedQuery.trim();
+    if (!needle || !hasToken) {
+      setServerSearch(null);
+      return;
+    }
+    let cancelled = false;
+    void client.searchSessions(needle).then((hits) => {
+      if (cancelled) return;
+      if (hits === null) {
+        setServerSearch(null);
+        return;
+      }
+      setServerSearch({
+        query: needle,
+        ids: new Set(hits.map((hit) => hit.session_id)),
+        snippets: new Map(hits.map((hit) => [hit.session_id, hit.snippet])),
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [client, debouncedQuery, hasToken]);
 
   const loadDetail = useCallback(async (): Promise<SessionDetail | null> => {
     if (!selectedId) return null;
@@ -441,10 +473,18 @@ export function ChatView({
   usePaletteEntities('chat-actions', paletteActions, { clearOnUnmount: true });
 
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
-  const filteredSessions = useMemo(
-    () => filterSessions(sortedSessions, { query: debouncedQuery, status }),
-    [sortedSessions, debouncedQuery, status],
-  );
+  const searchQuery = debouncedQuery.trim();
+  const activeServerSearch = serverSearch?.query === searchQuery ? serverSearch : null;
+  const filteredSessions = useMemo(() => {
+    // 服务端命中的会话可能只在消息正文里匹配，不能再叠加本地 title/preview 过滤。
+    if (activeServerSearch) {
+      return sortedSessions.filter(
+        (session) =>
+          activeServerSearch.ids.has(session.session_id) && matchesSessionStatus(session, status),
+      );
+    }
+    return filterSessions(sortedSessions, { query: debouncedQuery, status });
+  }, [activeServerSearch, sortedSessions, debouncedQuery, status]);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: 查询/过滤变化时回到第一页
   useEffect(() => {
@@ -672,6 +712,7 @@ export function ChatView({
           draftActive={draftActive}
           query={query}
           onQueryChange={setQuery}
+          searchSnippets={activeServerSearch?.snippets}
           status={status}
           onStatusChange={setStatus}
           loading={sessionsResource.state.status === 'loading'}

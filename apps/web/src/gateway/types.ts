@@ -79,6 +79,18 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /** 0.6.1：逐条消息时间戳（core 可能缺省；缺失时 Web 降级为不分组/不显示时间）。 */
+  timestamp?: number;
+}
+
+/** sessions.search 的单条结果（E5 冻结形状）。 */
+export interface SessionSearchHit {
+  session_id: string;
+  title: string;
+  preview: string;
+  snippet: string;
+  updated_at: number;
+  message_count: number;
 }
 
 /** 会话详情（sessions.get 返回 `{ session: RunState }`） */
