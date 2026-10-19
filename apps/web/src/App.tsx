@@ -28,6 +28,11 @@ const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL as string | undefined) ?? 
 const TRANSCRIPT_WINDOW = 50;
 /** 排队位置没有推送事件，只能轮询既有 runs.get。 */
 const QUEUE_POLL_MS = 2000;
+/** 刷新后恢复上次选中会话（草稿 / All-runs 不持久化）。 */
+const SELECTED_SESSION_KEY = 'vessel.selected-session';
+/** 记录选中会话所属 tenant，tenant 变化时丢弃旧选择。 */
+const SESSION_TENANT_KEY = 'vessel.selected-session-tenant';
+const NOT_FOUND_MESSAGE = '会话不存在或已删除';
 
 /** 默认隐藏的内部事件：状态同步/提示词上下文，不是用户关心的对话内容。 */
 const INTERNAL_EVENT_TYPES = new Set([
@@ -162,6 +167,8 @@ function groupEvents(entries: TimelineEntry[], showInternal: boolean): RunGroup[
   const byRun = new Map<string, TimelineEntry[]>();
   for (const entry of entries) {
     if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) continue;
+    // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
+    if (!showInternal && entry.event.type.startsWith('subagent.')) continue;
     const runId = entry.event.run_id;
     const list = byRun.get(runId);
     if (list) list.push(entry);
@@ -639,7 +646,8 @@ function AskModal({
     return {
       header: question.header,
       question: question.question,
-      answer: text || picked.join(', '),
+      // 自定义文本与已选项合并，避免输入自定义回答时丢掉勾选。
+      answer: [...picked, ...(text ? [text] : [])].join(' · '),
     };
   });
   const complete = answers.every((answer) => answer.answer.length > 0);
@@ -724,10 +732,13 @@ export default function App() {
   /** 输入框草稿；只有显式「连接」/Enter 才提交到 token，避免逐字重连。 */
   const [tokenDraft, setTokenDraft] = useState<string>(token);
   const [tokenError, setTokenError] = useState<string | null>(null);
-  /** 同一 token 手动重试时也触发一次重连。 */
+  /** token 变更时触发连接 effect 重建（同 token 重连直接复用现有连接）。 */
   const [connectSeq, setConnectSeq] = useState(0);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(() => {
+    const stored = localStorage.getItem(SELECTED_SESSION_KEY);
+    return stored?.trim() ? stored : null;
+  });
   /** 新会话草稿 id：提交前就确定目标 session，避免服务端落到 activeSessionId。 */
   const [draftSessionId, setDraftSessionId] = useState<string | null>(null);
   /** 选中会话的持久化历史（sessions.get）。 */
@@ -787,6 +798,10 @@ export default function App() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   /** ≤680px 侧栏抽屉；桌面不生效。 */
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  /** 当前视口是否为窄屏（与 CSS 的 680px 断点一致）。 */
+  const [isNarrowViewport, setIsNarrowViewport] = useState(
+    () => window.matchMedia('(max-width: 680px)').matches,
+  );
   /** 持久历史窗口大小（仅客户端，不发分页请求）。 */
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
 
@@ -794,12 +809,21 @@ export default function App() {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const timelineRef = useRef<HTMLElement | null>(null);
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const sidebarToggleRef = useRef<HTMLButtonElement | null>(null);
+  const sidebarWasOpenRef = useRef(false);
   const nearBottomRef = useRef(true);
   const hydrateGen = useRef(0);
   const workflowDetailGen = useRef(0);
   const lastSeq = useRef(0);
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
+  const draftSessionIdRef = useRef<string | null>(null);
+  draftSessionIdRef.current = draftSessionId;
+  /** 新建但可能尚未落盘的 session id；not_found 时只对它按空历史处理。 */
+  const pendingNewSessionRef = useRef<string | null>(null);
+  const connectedTokenRef = useRef(token);
+  const lastTenantRef = useRef<string | null>(null);
   const queuedRef = useRef<QueuedSubmission[]>([]);
   queuedRef.current = queuedRuns;
   /** 已收到事件的 job run_id：防止「run.started 先于 HTTP 提交响应」时补插重复卡片。 */
@@ -813,6 +837,15 @@ export default function App() {
     setTokenError(null);
     if (next) sessionStorage.setItem('vessel.token', next);
     else sessionStorage.removeItem('vessel.token');
+    if (next === token) {
+      // 同 token 手动重连：只续订 WS，保留当前会话/历史/时间线/队列。
+      if (next) {
+        void client.connect(next, lastSeq.current).catch((e: unknown) => {
+          setError(errorMessage(e));
+        });
+      }
+      return;
+    }
     setToken(next);
     setConnectSeq((value) => value + 1);
   };
@@ -831,6 +864,9 @@ export default function App() {
   /** 读取选中会话的持久化历史；silent=true 用于 run 结束后的后台刷新。 */
   const loadSessionDetail = useCallback(
     (sessionId: string, silent = false) => {
+      // silent 刷新只针对当前会话：已切走时早退，且不递增代次，
+      // 否则会作废刚切到的新会话请求并让 hydrating 卡在 true。
+      if (silent && selectedIdRef.current !== sessionId) return;
       // 代次保护：较慢的旧请求不能覆盖较新的 hydrate 结果
       const gen = ++hydrateGen.current;
       if (!silent) setHydrating(true);
@@ -846,10 +882,14 @@ export default function App() {
           const message = errorMessage(e);
           const notFound =
             (e as { code?: string }).code === 'not_found' || message.startsWith('not_found:');
-          if (notFound) {
+          if (notFound && pendingNewSessionRef.current === sessionId) {
             // 新会话尚未落盘：视为空历史，不是错误
             setSessionDetail({ session_id: sessionId, messages: [] });
             setHydrateError(null);
+          } else if (notFound) {
+            // 已知会话被删除或 id 失效：不要伪装成空历史
+            setSessionDetail(null);
+            setHydrateError(NOT_FOUND_MESSAGE);
           } else {
             setHydrateError(message);
           }
@@ -987,10 +1027,12 @@ export default function App() {
   }, [client, loadPanels, refreshSessions, loadSessionDetail]);
 
   // WS 连接 + 事件订阅（token 变化时重连；断线指数退避，用 since 续订）
-  // biome-ignore lint/correctness/useExhaustiveDependencies: connectSeq 用于同 token 手动重连
+  // biome-ignore lint/correctness/useExhaustiveDependencies: connectSeq 用于 token 变更时显式重建连接
   useEffect(() => {
     const tk = token.trim();
     if (!tk) {
+      connectedTokenRef.current = '';
+      pendingNewSessionRef.current = null;
       seenJobIds.current.clear();
       setConnState('idle');
       setEntries([]);
@@ -1026,17 +1068,23 @@ export default function App() {
     let disposed = false;
     let retryTimer: number | undefined;
     let attempt = 0;
+    const tokenChanged = connectedTokenRef.current !== tk;
+    connectedTokenRef.current = tk;
     lastSeq.current = 0;
     seenJobIds.current.clear();
     setEntries([]);
     setPermissions([]);
     setAsks([]);
-    setSelectedId(null);
-    setDraftSessionId(null);
-    setSessionDetail(null);
+    if (tokenChanged) {
+      // token 变更才丢弃会话选择；首次挂载保留刷新前恢复的会话。
+      pendingNewSessionRef.current = null;
+      setSelectedId(null);
+      setDraftSessionId(null);
+      setSessionDetail(null);
+      setHydrateError(null);
+      setHydrating(false);
+    }
     setSessionListError(null);
-    setHydrateError(null);
-    setHydrating(false);
     setLastOutput(null);
     setQueuedRuns([]);
     setTokenError(null);
@@ -1253,6 +1301,33 @@ export default function App() {
     };
   }, [token, connectSeq, client, loadPanels, loadSessionDetail, refreshSessions]);
 
+  // tenant 变化：上一租户的会话 id 不能继续沿用（先于持久化 effect 读取旧值）。
+  useEffect(() => {
+    if (!tenantId) return;
+    const previous = lastTenantRef.current ?? localStorage.getItem(SESSION_TENANT_KEY);
+    lastTenantRef.current = tenantId;
+    if (!previous || previous === tenantId) return;
+    pendingNewSessionRef.current = null;
+    setSelectedId(null);
+    setDraftSessionId(null);
+    setSessionDetail(null);
+    setHydrateError(null);
+    setHydrating(false);
+    localStorage.removeItem(SELECTED_SESSION_KEY);
+    localStorage.removeItem(SESSION_TENANT_KEY);
+  }, [tenantId]);
+
+  // 选中会话持久化：草稿 / All-runs（selectedId=null）不写。
+  useEffect(() => {
+    if (selectedId) {
+      localStorage.setItem(SELECTED_SESSION_KEY, selectedId);
+      if (tenantId) localStorage.setItem(SESSION_TENANT_KEY, tenantId);
+    } else {
+      localStorage.removeItem(SELECTED_SESSION_KEY);
+      localStorage.removeItem(SESSION_TENANT_KEY);
+    }
+  }, [selectedId, tenantId]);
+
   // 会话列表定期刷新（仅连接可用时）
   useEffect(() => {
     if (!token.trim()) {
@@ -1326,6 +1401,15 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [queuedRuns, client]);
 
+  // 窄屏抽屉：跟随视口宽度（与 CSS 的 680px 断点一致）。
+  useEffect(() => {
+    const query = window.matchMedia('(max-width: 680px)');
+    const sync = () => setIsNarrowViewport(query.matches);
+    sync();
+    query.addEventListener('change', sync);
+    return () => query.removeEventListener('change', sync);
+  }, []);
+
   // 窄屏抽屉：Esc 关闭。
   useEffect(() => {
     if (!sidebarOpen) return;
@@ -1335,6 +1419,26 @@ export default function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [sidebarOpen]);
+
+  // 窄屏抽屉：打开时聚焦第一个可聚焦控件，关闭后把焦点还给触发按钮。
+  useEffect(() => {
+    if (!isNarrowViewport) {
+      sidebarWasOpenRef.current = false;
+      return;
+    }
+    if (sidebarOpen) {
+      sidebarWasOpenRef.current = true;
+      const firstFocusable = sidebarRef.current?.querySelector<HTMLElement>(
+        'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      );
+      firstFocusable?.focus();
+      return;
+    }
+    if (sidebarWasOpenRef.current) {
+      sidebarWasOpenRef.current = false;
+      sidebarToggleRef.current?.focus();
+    }
+  }, [isNarrowViewport, sidebarOpen]);
 
   // durable / MCP 面板定期刷新（10s；未启用的 feature 会被 loadPanels 清空）
   useEffect(() => {
@@ -1408,16 +1512,28 @@ export default function App() {
     const tk = token.trim();
     const text = input.trim();
     if (!tk || !text || submitting) return;
-    const targetSessionId = selectedId ?? draftSessionId ?? undefined;
+    const startedSelectedId = selectedId;
+    const startedDraftId = draftSessionId;
+    // All-runs 下也不能省略目标：否则服务端会落到 activeSessionId。
+    const targetSessionId = selectedId ?? draftSessionId ?? crypto.randomUUID();
+    if (!selectedId && !draftSessionId) pendingNewSessionRef.current = targetSessionId;
     setSubmitting(true);
     setError(null);
     setNotice(null);
     setLastOutput(null);
     try {
       const result = await client.submitRun(text, targetSessionId);
+      if (pendingNewSessionRef.current === targetSessionId) {
+        pendingNewSessionRef.current = null;
+      }
       setInput('');
-      // 新会话草稿转为正式目标：后续事件与历史都落到同一个 session id
-      if (targetSessionId && !selectedId) {
+      // 新会话草稿转为正式目标：后续事件与历史都落到同一个 session id。
+      // 若提交期间用户已切换目标，则不覆盖当前选择。
+      if (
+        !startedSelectedId &&
+        selectedIdRef.current === startedSelectedId &&
+        draftSessionIdRef.current === startedDraftId
+      ) {
         setSelectedId(targetSessionId);
         setDraftSessionId(null);
         setSessionDetail({ session_id: targetSessionId, messages: [] });
@@ -1450,8 +1566,10 @@ export default function App() {
 
   /** 新会话：先在前端确定 session id，避免服务端回落到 activeSessionId。 */
   const startNewSession = () => {
+    const sessionId = crypto.randomUUID();
+    pendingNewSessionRef.current = sessionId;
     setSelectedId(null);
-    setDraftSessionId(crypto.randomUUID());
+    setDraftSessionId(sessionId);
     setSessionDetail(null);
     setHydrateError(null);
     setHydrating(false);
@@ -1461,6 +1579,7 @@ export default function App() {
 
   /** 全部 runs：不筛选会话，也不指定提交目标。 */
   const showAllRuns = () => {
+    pendingNewSessionRef.current = null;
     setSelectedId(null);
     setDraftSessionId(null);
     setSessionDetail(null);
@@ -1470,6 +1589,7 @@ export default function App() {
   };
 
   const selectSession = (sessionId: string) => {
+    pendingNewSessionRef.current = null;
     setSelectedId(sessionId);
     setDraftSessionId(null);
     setSessionDetail(null);
@@ -1732,6 +1852,7 @@ export default function App() {
     <div className="app">
       <header className="topbar" inert={modalOpen || undefined}>
         <button
+          ref={sidebarToggleRef}
           type="button"
           className="sidebar-toggle"
           onClick={() => setSidebarOpen((value) => !value)}
@@ -1859,7 +1980,13 @@ export default function App() {
       )}
 
       <div className="body" inert={modalOpen || undefined}>
-        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`} id="session-sidebar">
+        <aside
+          ref={sidebarRef}
+          className={`sidebar ${sidebarOpen ? 'open' : ''}`}
+          id="session-sidebar"
+          inert={isNarrowViewport && !sidebarOpen ? true : undefined}
+          aria-hidden={isNarrowViewport && !sidebarOpen ? true : undefined}
+        >
           <div className="sidebar-title">
             <span>
               会话{' '}
@@ -2405,14 +2532,19 @@ export default function App() {
 
           {hydrateError && (
             <div className="state-block err">
-              历史加载失败：{hydrateError}
+              {hydrateError === NOT_FOUND_MESSAGE ? hydrateError : `历史加载失败：${hydrateError}`}
               <button
                 type="button"
                 className="ghost-btn small"
                 onClick={() => selectedId && loadSessionDetail(selectedId)}
               >
-                重试
+                刷新
               </button>
+              {hydrateError === NOT_FOUND_MESSAGE && (
+                <button type="button" className="ghost-btn small" onClick={showAllRuns}>
+                  返回全部 runs
+                </button>
+              )}
             </div>
           )}
 
