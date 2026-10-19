@@ -250,6 +250,8 @@ export class GatewayClient {
       });
 
       ws.addEventListener('message', (event) => {
+        // 已切到新连接（如 seq 回退重放）时，旧 socket 的在途帧必须丢弃。
+        if (this.ws !== ws) return;
         this.handleFrame(String(event.data));
       });
 
@@ -272,6 +274,15 @@ export class GatewayClient {
         for (const cb of [...this.closeListeners]) cb(event.code);
       });
     });
+  }
+
+  /**
+   * 丢弃当前连接并以指定 since 重新建连。
+   * 与 `connect` 不同：即使 state 已是 open 也会强制重建（seq 回退重放）。
+   */
+  restart(token: string, since = 0, tenantId?: string): Promise<void> {
+    this.close();
+    return this.connect(token, since, tenantId);
   }
 
   private failConnect(message: string): void {

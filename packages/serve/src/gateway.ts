@@ -2261,9 +2261,29 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return opts.durableFor?.(tenantId);
   }
 
-  /** principal → 实际 durable tenant（wildcard admin 落到 default）。 */
-  function durableTenantId(principal: TenantPrincipal): string {
-    return principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+  /**
+   * durable 端点的目标 tenant：admin 可用 query `tenant_id` 或
+   * `X-Vessel-Tenant` 头显式跨 tenant；其余沿用 principal 作用域。
+   * 与 RPC `runs.resume` 的 `ctx.tenantId`（resolveTenantScope）保持一致。
+   */
+  function durableScope(
+    req: Request,
+    url: URL,
+    principal: TenantPrincipal,
+    extra: Record<string, string>,
+  ): { tenantId: string } | Response {
+    const queryTenant = url.searchParams.get('tenant_id');
+    const headerTenant = req.headers.get('x-vessel-tenant');
+    if (queryTenant !== null && headerTenant !== null && queryTenant !== headerTenant) {
+      return errorJson(
+        'invalid_request',
+        'tenant_id in query and X-Vessel-Tenant header must match',
+        400,
+        extra,
+      );
+    }
+    const requested = queryTenant ?? headerTenant;
+    return restTenantScope(principal, requested === null ? {} : { tenant_id: requested }, extra);
   }
 
   /**
@@ -2892,8 +2912,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/durable' && !path.startsWith('/v1/durable/')) return null;
-    // P0-2：durable 端点按 token principal 作用域；非 default tenant 只走 per-tenant store。
-    const tenantId = durableTenantId(principal);
+    // P0-2/P1：durable 端点按 tenant 作用域；admin 可显式指定，非 default
+    // tenant 只走 per-tenant store。
+    const scope = durableScope(req, url, principal, extra);
+    if (scope instanceof Response) return scope;
+    const tenantId = scope.tenantId;
     const durable = durableForTenant(tenantId);
     const missingStore = (): Response =>
       tenantId !== defaultTenantId
