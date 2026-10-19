@@ -1,11 +1,11 @@
 import { createContext, type ReactNode, useContext, useEffect } from 'react';
 import type { PaletteItem } from '../state/palette';
 
-type Register = (items: readonly PaletteItem[]) => void;
+type Register = (source: string, items: readonly PaletteItem[]) => void;
 
 const PaletteEntitiesContext = createContext<Register | null>(null);
 
-/** AppShell 持有实体结果；域视图通过 sink 注册，不把业务数据提升到外壳。 */
+/** AppShell 持有实体结果；域视图按来源注册，离开视图后保留最近一次结果。 */
 export function PaletteEntitiesProvider({
   register,
   children,
@@ -18,12 +18,13 @@ export function PaletteEntitiesProvider({
   );
 }
 
-/** 注册实体项（调用方必须 memoize items）；卸载时清空。 */
-export function usePaletteEntities(items: readonly PaletteItem[]): void {
+/**
+ * 注册实体项（调用方必须 memoize items）。
+ * 卸载时不清空，保证从其他域打开命令面板时仍能搜索最近实体。
+ */
+export function usePaletteEntities(source: string, items: readonly PaletteItem[]): void {
   const register = useContext(PaletteEntitiesContext);
   useEffect(() => {
-    if (!register) return;
-    register(items);
-    return () => register([]);
-  }, [register, items]);
+    register?.(source, items);
+  }, [register, source, items]);
 }

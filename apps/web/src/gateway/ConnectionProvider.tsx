@@ -137,6 +137,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
   const reportConnectError = useCallback(
     (error: unknown) => {
+      // probe/connect 失败可能发生在 WS close 之前；显式落到 error，
+      // 避免 UI 一直停在「正在连接」。
+      setConnectionState('error');
       if (client.closedWithCode === 4401) {
         setTokenError('鉴权失败：token 错误或已失效');
         return;

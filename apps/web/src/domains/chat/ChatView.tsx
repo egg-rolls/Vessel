@@ -347,7 +347,7 @@ export function ChatView({
       })),
     [sessions, navigate],
   );
-  usePaletteEntities(paletteEntities);
+  usePaletteEntities('chat', paletteEntities);
 
   const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
   const filteredSessions = useMemo(

@@ -108,6 +108,10 @@ export function SessionList({
   };
 
   const copyId = (sessionId: string) => {
+    if (!navigator.clipboard?.writeText) {
+      toast.error('当前环境不支持剪贴板');
+      return;
+    }
     void navigator.clipboard
       .writeText(sessionId)
       .then(() => toast.success('已复制会话 ID'))

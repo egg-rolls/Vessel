@@ -45,7 +45,9 @@ export function AppShell() {
 
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState('');
-  const [entities, setEntities] = useState<readonly PaletteItem[]>([]);
+  const [entityMap, setEntityMap] = useState<ReadonlyMap<string, readonly PaletteItem[]>>(
+    new Map(),
+  );
   const [helpOpen, setHelpOpen] = useState(false);
   const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
@@ -55,6 +57,21 @@ export function AppShell() {
 
   const modalOpen = Boolean(permissions[0] || asks[0]);
   const tenantEpochRef = useRef(tenantEpoch);
+
+  const registerEntities = useCallback((source: string, items: readonly PaletteItem[]) => {
+    setEntityMap((prev) => {
+      if (items.length === 0) {
+        if (!prev.has(source)) return prev;
+        const next = new Map(prev);
+        next.delete(source);
+        return next;
+      }
+      const next = new Map(prev);
+      next.set(source, items);
+      return next;
+    });
+  }, []);
+  const entities = useMemo(() => [...entityMap.values()].flat(), [entityMap]);
 
   // 切 tenant：清空选择后回到 Chat 空态（事件缓冲已在 ConnectionProvider 重置）。
   useEffect(() => {
@@ -218,7 +235,7 @@ export function AppShell() {
   const closeSessions = useCallback(() => setChatSessionsOpen(false), []);
 
   return (
-    <PaletteEntitiesProvider register={setEntities}>
+    <PaletteEntitiesProvider register={registerEntities}>
       <div className="app-shell">
         <a className="skip-link" href="#main">
           跳到主内容

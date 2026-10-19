@@ -125,7 +125,7 @@ export function WorkflowsView({
       })),
     [listResource.state, navigate],
   );
-  usePaletteEntities(paletteEntities);
+  usePaletteEntities('workflows', paletteEntities);
 
   const runAction = async (id: string, action: () => Promise<void>) => {
     setBusy((prev) => new Set(prev).add(id));

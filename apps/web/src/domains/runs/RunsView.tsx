@@ -194,7 +194,7 @@ export function RunsView({
       })),
     ];
   }, [liveResource.state, durableResource.state, navigate]);
-  usePaletteEntities(paletteEntities);
+  usePaletteEntities('runs', paletteEntities);
 
   const withBusy = async (runId: string, action: () => Promise<void>) => {
     setBusy((prev) => new Set(prev).add(runId));
