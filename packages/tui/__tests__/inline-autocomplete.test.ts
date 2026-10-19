@@ -3,6 +3,8 @@ import {
   type CommandItem,
   decideCommandEnter,
   filterCommands,
+  getVisibleCommandWindow,
+  MAX_VISIBLE_COMMANDS,
 } from '../src/components/InlineAutocomplete.js';
 
 /** 构造测试用命令列表 */
@@ -35,6 +37,35 @@ describe('filterCommands', () => {
     const filtered = filterCommands(sampleCommands(), 'resume');
     expect(filtered[0]?.name).toBe('/resume');
     expect(filtered.map((c) => c.name)).toContain('/help');
+  });
+});
+
+describe('getVisibleCommandWindow', () => {
+  it('条目不超过上限时显示全部', () => {
+    expect(getVisibleCommandWindow(3, 0)).toEqual({ start: 0, end: 3 });
+    expect(getVisibleCommandWindow(8, 7)).toEqual({ start: 0, end: 8 });
+  });
+
+  it('选中靠前时从 0 开始，最多 8 条', () => {
+    expect(getVisibleCommandWindow(20, 2)).toEqual({ start: 0, end: MAX_VISIBLE_COMMANDS });
+  });
+
+  it('选中靠后时围绕选中项滚动', () => {
+    // 20 条、窗口 8：selected=10 -> start=7
+    expect(getVisibleCommandWindow(20, 10)).toEqual({ start: 7, end: 15 });
+  });
+
+  it('选中最后一项时窗口贴住末尾', () => {
+    expect(getVisibleCommandWindow(20, 19)).toEqual({ start: 12, end: 20 });
+  });
+
+  it('空列表 / 非法上限返回空窗口', () => {
+    expect(getVisibleCommandWindow(0, 0)).toEqual({ start: 0, end: 0 });
+    expect(getVisibleCommandWindow(5, 0, 0)).toEqual({ start: 0, end: 0 });
+  });
+
+  it('支持自定义窗口大小', () => {
+    expect(getVisibleCommandWindow(10, 8, 4)).toEqual({ start: 5, end: 9 });
   });
 });
 

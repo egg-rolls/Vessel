@@ -61,6 +61,8 @@ export interface CommandResult {
   handled: boolean;
   /** 命令输出文本（调用方显示） */
   output?: string;
+  /** 需要写入终端 scrollback 的多行历史（/resume hydrate） */
+  history?: string[];
   /** 命令请求的 state 变更（execute 统一应用到 state） */
   nextState?: Partial<ReplState>;
   /** /clear 等需要 REPL 层清屏的命令置 true（替代硬编码字符串匹配） */
@@ -90,6 +92,8 @@ export interface CommandEntry {
 /** 恢复会话结果（doResume 纯函数返回） */
 export interface ResumeResult {
   message: string;
+  /** 最近 N 条历史消息的展示行（供 Ink Static / simple 模式输出） */
+  history?: string[];
   nextState: Partial<ReplState>;
 }
 
@@ -209,8 +213,8 @@ function resumeCommand(): CommandEntry {
       if (!resolved.ok) {
         return { handled: true, output: `\n${resolved.message}\n` };
       }
-      const { message, nextState } = await doResume(ctx, resolved.sessionId);
-      return { handled: true, output: message, nextState };
+      const { message, history, nextState } = await doResume(ctx, resolved.sessionId);
+      return { handled: true, output: message, history, nextState };
     },
   };
 }
@@ -234,9 +238,9 @@ export async function consumePendingResume(
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
-  const { message, nextState } = await doResume(ctx, target.session_id);
+  const { message, history, nextState } = await doResume(ctx, target.session_id);
   applyNextState(state, { ...nextState, pendingResume: false });
-  return { handled: true, output: message };
+  return { handled: true, output: message, history };
 }
 
 /** 解析 resume 参数：纯数字=按编号，否则按精确 session_id */
@@ -256,15 +260,53 @@ async function resolveResumeTarget(
   return { ok: true, sessionId: arg };
 }
 
+/** resume 后回灌的历史：最多条数 / 单条字符上限 */
+const RESUME_HISTORY_MESSAGES = 20;
+const RESUME_HISTORY_MESSAGE_CHARS = 600;
+
+/**
+ * 纯函数：把最近 N 条消息格式化为可写入终端 scrollback 的行。
+ * system 不展示；user/assistant/tool 用轻量角色前缀与竖线缩进。
+ */
+export function formatResumeHistory(messages: Array<{ role: string; content: string }>): string[] {
+  const visible = messages.filter((message) => message.role !== 'system');
+  if (visible.length === 0) return [];
+
+  const recent = visible.slice(-RESUME_HISTORY_MESSAGES);
+  const omitted = visible.length - recent.length;
+  const lines = [
+    '',
+    `── history · last ${recent.length}${omitted > 0 ? ` of ${visible.length}` : ''} messages ──`,
+    '',
+  ];
+
+  for (const message of recent) {
+    const formatted = formatHistoryMessage(message).join('\n');
+    const clipped =
+      formatted.length > RESUME_HISTORY_MESSAGE_CHARS
+        ? `${formatted.slice(0, RESUME_HISTORY_MESSAGE_CHARS)}…`
+        : formatted;
+    // 统一到 4 列，保证多行内容的竖线与首行对齐
+    const label = message.role === 'user' ? 'you ' : message.role === 'assistant' ? 'ai  ' : 'tool';
+    const [first = '', ...rest] = clipped.split('\n');
+    lines.push(`  ${label} │ ${first}`);
+    for (const line of rest) lines.push(`       │ ${line}`);
+    lines.push('');
+  }
+
+  return lines;
+}
+
 /** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史。
- *  纯函数：只返回确认消息 + 请求的 state 变更，不直接改 state、不打印。 */
+ *  纯函数：只返回确认消息 + 历史展示行 + 请求的 state 变更，不直接改 state、不打印。 */
 export async function doResume(ctx: ReplContext, sessionId: string): Promise<ResumeResult> {
   ctx.context.clear();
   ctx.onSessionChange(sessionId);
   const loaded = await getSessionState(ctx, sessionId);
-  const msgCount = loaded?.messages.length ?? 0;
+  const messages = loaded?.messages ?? [];
   return {
-    message: `Resumed session "${sessionId}" (${msgCount} messages).`,
+    message: `Resumed session "${sessionId}" (${messages.length} messages).`,
+    history: formatResumeHistory(messages),
     nextState: { currentSessionId: sessionId },
   };
 }

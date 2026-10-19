@@ -20,6 +20,7 @@ import { Box, type Key, Text, useInput } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
+import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
 
 export interface AskUserDialogProps {
@@ -74,11 +75,11 @@ function QuestionTabs({
         return (
           <Text
             key={q.header}
-            backgroundColor={isCurrent ? 'cyan' : undefined}
-            color={done ? 'green' : isCurrent ? 'black' : 'gray'}
+            backgroundColor={isCurrent ? theme.selectedBg : undefined}
+            color={done ? theme.ok : isCurrent ? theme.brand : theme.faint}
             bold={isCurrent}
           >
-            {` ${done ? '✓' : '○'} ${q.header} `}
+            {` ${done ? glyph.done : glyph.idle} ${q.header} `}
           </Text>
         );
       })}
@@ -104,7 +105,7 @@ function ReviewPage({
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
-        <Text bold color="cyan">
+        <Text bold color={theme.brand}>
           📋 Review Your Answers
         </Text>
       </Box>
@@ -116,15 +117,15 @@ function ReviewPage({
               {i + 1}. <Text bold>{q.header}</Text>
               {done ? `: ${resolveAnswer(i)}` : ''}
             </Text>
-            {!done && <Text color="yellow"> (未回答)</Text>}
+            {!done && <Text color={theme.warn}> (未回答)</Text>}
           </Box>
         );
       })}
       <Box marginTop={1}>
         {unansweredCount > 0 ? (
-          <Text color="yellow">⚠ {notice || `还有 ${unansweredCount} 个问题未回答`}</Text>
+          <Text color={theme.warn}>⚠ {notice || `还有 ${unansweredCount} 个问题未回答`}</Text>
         ) : (
-          <Text color="gray">[Enter] 确认提交 · [Esc] 返回修改</Text>
+          <Text color={theme.faint}>[Enter] 确认提交 · [Esc] 返回修改</Text>
         )}
       </Box>
     </Box>
@@ -165,8 +166,8 @@ function ChoiceOptions({
           return (
             <Box key={opt} flexDirection="row">
               <Text
-                backgroundColor={focused ? 'cyan' : undefined}
-                color={focused ? 'black' : isSelected ? 'green' : undefined}
+                backgroundColor={focused ? theme.selectedBg : undefined}
+                color={focused ? theme.brand : isSelected ? theme.ok : undefined}
                 bold={focused || isSelected}
               >
                 {` ${prefix}`}
@@ -184,7 +185,7 @@ function ChoiceOptions({
         // 自定义输入项：已填内容时在同一行展示答案
         if (isCustom && custom.trim()) {
           return (
-            <Text key={opt} color="green" bold>
+            <Text key={opt} color={theme.ok} bold>
               {` ${prefix} 你的答案: ${custom.trim()}`}
             </Text>
           );
@@ -193,8 +194,8 @@ function ChoiceOptions({
         return (
           <Text
             key={opt}
-            backgroundColor={focused ? 'cyan' : undefined}
-            color={focused ? 'black' : isSelected ? 'green' : undefined}
+            backgroundColor={focused ? theme.selectedBg : undefined}
+            color={focused ? theme.brand : isSelected ? theme.ok : undefined}
             bold={focused || isSelected}
           >
             {` ${prefix} ${opt}`}
@@ -518,13 +519,19 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   const currentAnswer = answers[currentIndex] ?? { selected: new Set<string>(), custom: '' };
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor={theme.line}
+      paddingX={1}
+      marginY={1}
+    >
       {/* 标题行：标题 + 进度 */}
       <Box justifyContent="space-between" marginBottom={1}>
-        <Text bold color="cyan">
+        <Text bold color={theme.brand}>
           ❓ Agent Question
         </Text>
-        <Text color="gray">
+        <Text color={theme.muted}>
           {currentIndex + 1} / {total}
         </Text>
       </Box>
@@ -567,7 +574,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
           ) : (
             /* 开放式输入 */
             <Box>
-              <Text color="cyan">{'> '}</Text>
+              <Text color={theme.brand}>{`${glyph.pointer} `}</Text>
               <TextInput
                 value={currentAnswer.custom}
                 onChange={(v) =>
@@ -581,9 +588,9 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
           {/* 底部提示 */}
           <Box marginTop={1}>
             {customFocus || !isChoice ? (
-              <Text color="gray">Enter 提交 · Tab 切换问题 · Esc 取消</Text>
+              <Text color={theme.faint}>Enter 提交 · Tab 切换问题 · Esc 取消</Text>
             ) : (
-              <Text color="gray">
+              <Text color={theme.faint}>
                 {question.multi_select
                   ? 'Space 勾选/取消 · Enter 提交 · Tab/←→ 切换问题 · Esc 取消'
                   : '↑↓ 选择 · Enter 确认 · Tab/←→ 切换问题 · Esc 取消'}

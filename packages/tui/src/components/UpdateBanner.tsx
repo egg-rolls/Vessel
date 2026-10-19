@@ -8,6 +8,7 @@
 import type { EventStream } from '@vessel/core';
 import { Box, Text } from 'ink';
 import { useEffect, useState } from 'react';
+import { theme } from '../theme.js';
 import { asTuiEvent, type TuiEvent, type UpdateAvailableData } from '../types/events.js';
 
 export interface UpdateBannerState {
@@ -38,8 +39,8 @@ export function UpdateBanner({ events }: { events: EventStream }) {
 
   return (
     <Box paddingX={1}>
-      <Text color="yellow" wrap="truncate">
-        ⬆ Vessel v{info.latest} available ({info.channel}) · {info.installHint}
+      <Text color={theme.warn} wrap="truncate">
+        ↑ Vessel v{info.latest} available ({info.channel}) · {info.installHint}
         {info.notesUrl ? ` · ${info.notesUrl}` : ''}
       </Text>
     </Box>

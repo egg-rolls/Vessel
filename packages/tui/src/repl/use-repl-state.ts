@@ -51,6 +51,7 @@ export interface ReplUiState {
 export type ReplUiAction =
   | { type: 'setInput'; input: string }
   | { type: 'appendHistory'; line: string }
+  | { type: 'appendHistoryLines'; lines: string[] }
   | { type: 'clearHistory' }
   | { type: 'setAutocompleteIndex'; index: number }
   | { type: 'setResumeSessions'; sessions: SessionInfo[] }
@@ -73,6 +74,10 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
       return { ...state, input: action.input };
     case 'appendHistory':
       return { ...state, history: [...state.history, action.line] };
+    case 'appendHistoryLines':
+      return action.lines.length === 0
+        ? state
+        : { ...state, history: [...state.history, ...action.lines] };
     case 'clearHistory':
       return { ...state, history: [] };
     case 'setAutocompleteIndex':

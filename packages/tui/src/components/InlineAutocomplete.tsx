@@ -8,6 +8,7 @@
 
 import { Box, Text } from 'ink';
 import { useMemo } from 'react';
+import { theme } from '../theme.js';
 
 export interface CommandItem {
   name: string;
@@ -40,6 +41,34 @@ export function filterCommands(commands: CommandItem[], filter: string): Command
     if (!aName && bName) return 1;
     return 0;
   });
+}
+
+/** 补全框最多可见的条数（超出时围绕选中项滚动） */
+export const MAX_VISIBLE_COMMANDS = 8;
+/** 选中项上方保留的条数 */
+const VISIBLE_BEFORE_SELECTED = 3;
+
+export interface VisibleCommandWindow {
+  /** 切片起点（含） */
+  start: number;
+  /** 切片终点（不含） */
+  end: number;
+}
+
+/**
+ * 纯函数：计算补全框可见窗口，围绕 selectedIndex 滚动。
+ * 结果始终落在 [0, total] 内；total=0 时返回空窗口。
+ */
+export function getVisibleCommandWindow(
+  total: number,
+  selectedIndex: number,
+  maxVisible: number = MAX_VISIBLE_COMMANDS,
+): VisibleCommandWindow {
+  if (total <= 0 || maxVisible <= 0) return { start: 0, end: 0 };
+  const size = Math.min(maxVisible, total);
+  const maxStart = Math.max(0, total - size);
+  const start = Math.min(Math.max(0, selectedIndex - VISIBLE_BEFORE_SELECTED), maxStart);
+  return { start, end: start + size };
 }
 
 /** Enter 键的"补全 vs 执行"决策结果 */
@@ -80,17 +109,29 @@ export function InlineAutocomplete({ commands, filter, selectedIndex }: InlineAu
 
   if (filtered.length === 0) return null;
 
+  const { start, end } = getVisibleCommandWindow(filtered.length, selectedIndex);
+
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
-      {filtered.map((cmd, i) => (
-        <Box key={cmd.name}>
-          <Text color={i === selectedIndex ? 'cyan' : 'white'} bold={i === selectedIndex}>
-            {i === selectedIndex ? '❯ ' : '  '}
-            {cmd.name}
-          </Text>
-          <Text color="gray"> — {cmd.description}</Text>
-        </Box>
-      ))}
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      borderStyle="single"
+      borderColor={theme.line}
+      paddingX={1}
+    >
+      {filtered.slice(start, end).map((cmd, offset) => {
+        const i = start + offset;
+        const active = i === selectedIndex;
+        return (
+          <Box key={cmd.name}>
+            <Text color={active ? theme.brand : theme.muted} bold={active}>
+              {active ? '› ' : '  '}
+              {cmd.name}
+            </Text>
+            <Text color={theme.faint}> · {cmd.description}</Text>
+          </Box>
+        );
+      })}
     </Box>
   );
 }

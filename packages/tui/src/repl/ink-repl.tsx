@@ -9,7 +9,7 @@
  * 命令为纯函数（返回 output/nextState），Ink 层以不可变合并消费 nextState。
  */
 
-import { Box, render, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, render, Static, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { createCommands, doResume } from '../commands/commands.js';
@@ -31,6 +31,7 @@ import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
 import type { ReplContext } from '../repl-context.js';
+import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
@@ -222,7 +223,7 @@ function InkRepl({ ctx }: InkReplProps) {
         return;
       }
 
-      dispatch({ type: 'appendHistory', line: `> ${value}` });
+      dispatch({ type: 'appendHistory', line: `› ${value}` });
       dispatch({ type: 'setInput', input: '' });
 
       // 处理命令。命令是纯函数：execute 应用 nextState 到传入的 working 副本，
@@ -238,6 +239,10 @@ function InkRepl({ ctx }: InkReplProps) {
           } else if (result.output) {
             // 如果命令有输出，添加到历史记录
             dispatch({ type: 'appendHistory', line: result.output });
+          }
+          if (result.history?.length) {
+            // /resume 等命令附带的历史展示行
+            dispatch({ type: 'appendHistoryLines', lines: result.history });
           }
           if (result.nextState) {
             dispatch({ type: 'patchRepl', patch: result.nextState });
@@ -488,23 +493,42 @@ function InkRepl({ ctx }: InkReplProps) {
     }
   }, [state.running, ctx, exit]);
 
-  return (
-    <Box flexDirection="column" height={stdout.rows}>
-      {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
-      <StatusBar
-        provider={ctx.provider}
-        session={state.currentSessionId}
-        plugins={ctx.plugins}
-        {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
-      />
-      <UpdateBanner events={ctx.events} />
+  // 实时区域高度上限：给状态栏、输入行、running 行、补全框留出空间。
+  // 根 Box 不再设置 height —— 固定 height 会让 Ink 判定为 fullscreen 并每帧 clearTerminal，
+  // 在 Windows/PowerShell 下会导致历史、流式输出和底栏互相覆盖。
+  const terminalRows = stdout.rows ?? 24;
+  const liveMaxHeight = Math.max(3, terminalRows - 12);
+  // 独占弹窗显示时隐藏实时流，避免浮层与流式内容争抢 live frame 空间。
+  const exclusiveOverlayActive =
+    state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
 
-      {/* 滚动区域：历史 + 流式输出 + 子 agent 活动，flexGrow 撑满剩余空间 */}
-      <Box flexDirection="column" flexGrow={1}>
-        {ui.history.map((line, i) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: REPL history is append-only, items are never reordered
-          <Text key={i}>{line}</Text>
-        ))}
+  return (
+    <Box flexDirection="column">
+      {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
+      <Box flexDirection="column" flexShrink={0}>
+        <StatusBar
+          provider={ctx.provider}
+          session={state.currentSessionId}
+          plugins={ctx.plugins}
+          {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
+        />
+        <UpdateBanner events={ctx.events} />
+      </Box>
+
+      {/* 已完成历史交给 Ink <Static>：直接写入终端 scrollback，不再参与每帧重绘。
+          key={clearSignal} 让 /clear 与 Ctrl+L 强制重挂载。 */}
+      <Static key={ui.clearSignal} items={ui.history}>
+        {(line, i) => <Text key={`${i}-${ui.clearSignal}`}>{line}</Text>}
+      </Static>
+
+      {/* 实时区域：只显示当前轮流式输出 / 子 agent 活动，限制高度防止覆盖底栏。
+          独占弹窗显示时用 display="none" 隐藏（保持组件挂载，避免丢失本轮 segments）。 */}
+      <Box
+        flexDirection="column"
+        overflowY="hidden"
+        maxHeight={liveMaxHeight}
+        display={exclusiveOverlayActive ? 'none' : 'flex'}
+      >
         <StreamOutput
           events={ctx.events}
           clearSignal={ui.clearSignal}
@@ -513,58 +537,67 @@ function InkRepl({ ctx }: InkReplProps) {
         <SubagentActivity events={ctx.events} />
       </Box>
 
-      {/* 底部固定区域：overlays + 输入框 + 补全框 */}
+      {/* 底部固定区域：overlays + 输入框 + 补全框（flexShrink=0 防止被 Yoga 压缩） */}
       {state.showResumePicker && (
-        <SessionTable
-          sessions={ui.resumeSessions}
-          currentSessionId={state.currentSessionId}
-          onSelect={async (id) => {
-            dispatch({
-              type: 'patchRepl',
-              patch: { showResumePicker: false, pendingResume: false },
-            });
-            dispatch({ type: 'setInput', input: '' });
-            const { message, nextState } = await doResume(ctx, id);
-            dispatch({ type: 'patchRepl', patch: nextState });
-            dispatch({ type: 'appendHistory', line: message });
-          }}
-          onClose={() => {
-            dispatch({
-              type: 'patchRepl',
-              patch: { showResumePicker: false, pendingResume: false },
-            });
-          }}
-        />
+        <Box flexDirection="column" flexShrink={0}>
+          <SessionTable
+            sessions={ui.resumeSessions}
+            currentSessionId={state.currentSessionId}
+            onSelect={async (id) => {
+              dispatch({
+                type: 'patchRepl',
+                patch: { showResumePicker: false, pendingResume: false },
+              });
+              dispatch({ type: 'setInput', input: '' });
+              const { message, history, nextState } = await doResume(ctx, id);
+              dispatch({ type: 'patchRepl', patch: nextState });
+              dispatch({ type: 'appendHistory', line: message });
+              if (history?.length) {
+                dispatch({ type: 'appendHistoryLines', lines: history });
+              }
+            }}
+            onClose={() => {
+              dispatch({
+                type: 'patchRepl',
+                patch: { showResumePicker: false, pendingResume: false },
+              });
+            }}
+          />
+        </Box>
       )}
 
       {/* 权限确认对话框（ADR-029：订阅 tool.permission.request，发布 response） */}
       {ui.permissionOverlay && (
-        <ConfirmDialog
-          question={formatPermissionQuestion(
-            ui.permissionOverlay.toolName,
-            ctx.mcp?.toolSource(ui.permissionOverlay.toolName) ?? null,
-          )}
-          details={summarizeToolInput(ui.permissionOverlay.toolName, ui.permissionOverlay.input)}
-          defaultChoice="n"
-          expiresAt={ui.permissionOverlay.expiresAt}
-          onConfirm={handlePermission}
-        />
+        <Box flexDirection="column" flexShrink={0}>
+          <ConfirmDialog
+            question={formatPermissionQuestion(
+              ui.permissionOverlay.toolName,
+              ctx.mcp?.toolSource(ui.permissionOverlay.toolName) ?? null,
+            )}
+            details={summarizeToolInput(ui.permissionOverlay.toolName, ui.permissionOverlay.input)}
+            defaultChoice="n"
+            expiresAt={ui.permissionOverlay.expiresAt}
+            onConfirm={handlePermission}
+          />
+        </Box>
       )}
 
       {/* ask-user 问答弹窗（自身订阅 ask.user.requested / 发布 answered） */}
-      <AskUserDialog events={ctx.events} onActiveChange={handleAskUserActive} />
+      <Box flexDirection="column" flexShrink={0}>
+        <AskUserDialog events={ctx.events} onActiveChange={handleAskUserActive} />
+      </Box>
 
       {/* 输入框 - 只在没有独占交互组件时显示 */}
       {!state.showResumePicker && !ui.permissionOverlay && !ui.askUserActive && (
-        <Box>
-          <Text color="cyan">vessel&gt; </Text>
+        <Box flexShrink={0}>
+          <Text color={theme.brand}>vessel › </Text>
           <TextInput
             key={ui.inputCaretKey}
             value={ui.input}
             onChange={(value) => dispatch({ type: 'setInput', input: value })}
             onSubmit={handleSubmit}
           />
-          {argHint && <Text color="gray">{argHint}</Text>}
+          {argHint && <Text color={theme.faint}>{argHint}</Text>}
         </Box>
       )}
 
@@ -573,18 +606,22 @@ function InkRepl({ ctx }: InkReplProps) {
         !state.showResumePicker &&
         !ui.permissionOverlay &&
         !ui.askUserActive && (
-          <Text color="yellow">
-            {ui.run.phase === 'cancelling' ? '⏳ cancelling…' : '⏳ running… Esc to cancel'}
-          </Text>
+          <Box flexShrink={0}>
+            <Text color={theme.warn}>
+              {ui.run.phase === 'cancelling' ? '◐ cancelling…' : '◐ working… Esc to cancel'}
+            </Text>
+          </Box>
         )}
 
       {/* 内联命令补全（输入框下方） */}
       {showAutocomplete && (
-        <InlineAutocomplete
-          commands={allCommands}
-          filter={commandFilter}
-          selectedIndex={ui.autocompleteIndex}
-        />
+        <Box flexDirection="column" flexShrink={0}>
+          <InlineAutocomplete
+            commands={allCommands}
+            filter={commandFilter}
+            selectedIndex={ui.autocompleteIndex}
+          />
+        </Box>
       )}
     </Box>
   );
@@ -630,7 +667,8 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
 
   console.log(`Vessel  ·  ${ctx.provider.name} | ${ctx.provider.model}`);
   console.log(`session: ${state.currentSessionId}`);
-  console.log('Type your message, or /help for commands.\n');
+  console.log('Type your message, or /help for commands.');
+  console.log(glyph.rule.repeat(48));
 
   // 启动横幅（simple mode 同样适用；headless / serve 不经过这里）
   const startupNotice = await loadStartupNotice(ctx);
@@ -662,6 +700,9 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
         if (resumeResult.output) {
           console.log(resumeResult.output);
         }
+        if (resumeResult.history?.length) {
+          console.log(resumeResult.history.join('\n'));
+        }
         continue;
       }
       state.pendingResume = false;
@@ -675,6 +716,9 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       }
       if (result.output) {
         console.log(result.output);
+      }
+      if (result.history?.length) {
+        console.log(result.history.join('\n'));
       }
       if (result.resumeRun) {
         const abort = new AbortController();

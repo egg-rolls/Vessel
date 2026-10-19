@@ -9,6 +9,7 @@
 
 import { Text } from 'ink';
 import type { ReactNode } from 'react';
+import { theme } from '../theme.js';
 
 /** 渲染选项（默认渲染器读这些字段） */
 export interface DisplayOptions {
@@ -62,14 +63,16 @@ export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition & {
   renderToolUseMessage: (input, options) => {
     const showArguments = options.showArguments !== false;
     const max = options.maxArgumentLength ?? DEFAULT_MAX_ARGUMENT_LENGTH;
-    return <Text color="gray">{showArguments ? ` ${summarizeArguments(input, max)}` : ' …'}</Text>;
+    return (
+      <Text color={theme.muted}>{showArguments ? ` ${summarizeArguments(input, max)}` : ' …'}</Text>
+    );
   },
   getActivityDescription: () => null,
   renderToolResultMessage: (result, options) => {
     const max = options.maxArgumentLength ?? DEFAULT_MAX_ARGUMENT_LENGTH;
-    return <Text color="gray">{truncateString(result, max)}</Text>;
+    return <Text color={theme.muted}>{truncateString(result, max)}</Text>;
   },
-  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 };
 
 /** 工具显示注册表（ADR-021 §3）：注册自定义显示，未注册走默认渲染器 */
@@ -108,6 +111,21 @@ function compact(text: string, max: number): string {
   return truncateString(text.replace(/\s+/g, ' ').trim(), max);
 }
 
+/** bash 结果实时视图保留的末尾行数（含退出码等关键行） */
+const BASH_RESULT_TAIL_LINES = 8;
+
+/**
+ * 按行截断工具结果：保留末尾 `maxLines` 行，避免按字符切断行。
+ * 截断时在顶部加一行提示。
+ */
+export function tailResultLines(result: string, maxLines: number): string {
+  const trimmed = result.trim();
+  if (!trimmed || maxLines <= 0) return maxLines <= 0 ? '' : trimmed;
+  const lines = trimmed.split('\n');
+  if (lines.length <= maxLines) return trimmed;
+  return `…（前文已折叠）\n${lines.slice(-maxLines).join('\n')}`;
+}
+
 toolDisplayRegistry.register('bash', {
   userFacingName: () => 'bash',
   getActivityDescription: (input) => {
@@ -116,12 +134,12 @@ toolDisplayRegistry.register('bash', {
   },
   renderToolUseMessage: (input) => {
     const command = inputString(input, 'command');
-    return <Text color="gray">{command ? ` $ ${compact(command, 160)}` : ''}</Text>;
+    return <Text color={theme.muted}>{command ? ` $ ${compact(command, 160)}` : ''}</Text>;
   },
-  renderToolResultMessage: (result, options) => (
-    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 300)}</Text>
+  renderToolResultMessage: (result) => (
+    <Text color={theme.muted}>{tailResultLines(result, BASH_RESULT_TAIL_LINES)}</Text>
   ),
-  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 toolDisplayRegistry.register('read', {
@@ -132,12 +150,12 @@ toolDisplayRegistry.register('read', {
   },
   renderToolUseMessage: (input) => {
     const path = inputString(input, 'path');
-    return <Text color="gray">{path ? ` ${path}` : ''}</Text>;
+    return <Text color={theme.muted}>{path ? ` ${path}` : ''}</Text>;
   },
   renderToolResultMessage: (result) => (
-    <Text color="gray">{`Read ${result.split('\n').length} lines`}</Text>
+    <Text color={theme.muted}>{`Read ${result.split('\n').length} lines`}</Text>
   ),
-  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 toolDisplayRegistry.register('edit', {
@@ -148,12 +166,12 @@ toolDisplayRegistry.register('edit', {
   },
   renderToolUseMessage: (input) => {
     const path = inputString(input, 'path');
-    return <Text color="gray">{path ? ` ${path}` : ''}</Text>;
+    return <Text color={theme.muted}>{path ? ` ${path}` : ''}</Text>;
   },
   renderToolResultMessage: (result, options) => (
-    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
+    <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
   ),
-  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 toolDisplayRegistry.register('delegate_task', {
@@ -164,20 +182,20 @@ toolDisplayRegistry.register('delegate_task', {
   },
   renderToolUseMessage: (input) => {
     const task = inputString(input, 'task');
-    return <Text color="gray">{task ? ` ${compact(task, 160)}` : ''}</Text>;
+    return <Text color={theme.muted}>{task ? ` ${compact(task, 160)}` : ''}</Text>;
   },
   renderToolResultMessage: (result, options) => (
-    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 300)}</Text>
+    <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 300)}</Text>
   ),
-  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 toolDisplayRegistry.register('ask_user', {
   userFacingName: () => 'ask_user',
   getActivityDescription: () => 'Asking user',
-  renderToolUseMessage: () => <Text color="gray" />,
+  renderToolUseMessage: () => <Text color={theme.muted} />,
   renderToolResultMessage: (result, options) => (
-    <Text color="gray">{truncateString(result, options.maxArgumentLength ?? 120)}</Text>
+    <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 120)}</Text>
   ),
-  renderToolUseErrorMessage: (error) => <Text color="red">{error}</Text>,
+  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });

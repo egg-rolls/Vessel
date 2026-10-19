@@ -11,6 +11,7 @@
 
 import { Box, Text, useInput } from 'ink';
 import { useEffect, useState } from 'react';
+import { theme } from '../theme.js';
 
 export type ConfirmChoice = 'y' | 'n' | 'always';
 
@@ -97,10 +98,16 @@ export function ConfirmDialog({
   });
 
   return (
-    <Box flexDirection="column" borderStyle="double" borderColor="yellow" paddingX={1} marginY={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor={theme.line}
+      paddingX={1}
+      marginY={1}
+    >
       <Box marginBottom={1}>
-        <Text bold color="yellow">
-          ⚠ Permission Required
+        <Text bold color={theme.warn}>
+          Permission required
         </Text>
       </Box>
 
@@ -112,7 +119,7 @@ export function ConfirmDialog({
         <Box flexDirection="column" marginBottom={1}>
           {details.map((line, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: details are a short immutable list
-            <Text key={index} color="gray">
+            <Text key={index} color={theme.muted}>
               {'  '}
               {line}
             </Text>
@@ -122,22 +129,22 @@ export function ConfirmDialog({
 
       <Box>
         <Text
-          backgroundColor={selected === 'y' ? 'green' : undefined}
-          color={selected === 'y' ? 'white' : 'green'}
+          backgroundColor={selected === 'y' ? theme.ok : undefined}
+          color={selected === 'y' ? theme.selectedBg : theme.ok}
           bold={selected === 'y'}
         >
           {' [Y]es '}
         </Text>
         <Text
-          backgroundColor={selected === 'n' ? 'red' : undefined}
-          color={selected === 'n' ? 'white' : 'red'}
+          backgroundColor={selected === 'n' ? theme.danger : undefined}
+          color={selected === 'n' ? theme.selectedBg : theme.danger}
           bold={selected === 'n'}
         >
           {' [N]o '}
         </Text>
         <Text
-          backgroundColor={selected === 'always' ? 'blue' : undefined}
-          color={selected === 'always' ? 'white' : 'blue'}
+          backgroundColor={selected === 'always' ? theme.info : undefined}
+          color={selected === 'always' ? theme.selectedBg : theme.info}
           bold={selected === 'always'}
         >
           {' [A]lways '}
@@ -145,9 +152,9 @@ export function ConfirmDialog({
       </Box>
 
       <Box marginTop={1}>
-        <Text color="gray">
-          ←→ Select · Enter Confirm · y/n/a Quick Select · Esc Deny
-          {remainingSeconds !== null ? ` · Times out in ${remainingSeconds}s` : ''}
+        <Text color={theme.faint}>
+          ←→ select · enter confirm · y/n/a quick · esc deny
+          {remainingSeconds !== null ? ` · ${remainingSeconds}s left` : ''}
         </Text>
       </Box>
     </Box>

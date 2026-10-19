@@ -12,6 +12,7 @@
 import { Box, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { useEffect, useRef, useState } from 'react';
+import { theme } from '../theme.js';
 import type { SpinnerVerb } from './StateTracker.js';
 
 /** 思考态最少显示时长（ms） */
@@ -53,7 +54,7 @@ export function SpinnerWithVerb({ verb, description }: SpinnerWithVerbProps) {
   if (visibleVerb === 'idle') {
     return (
       <Box>
-        <Text color="gray">✻ Idle</Text>
+        <Text color={theme.faint}>○ idle</Text>
       </Box>
     );
   }
@@ -62,7 +63,7 @@ export function SpinnerWithVerb({ verb, description }: SpinnerWithVerbProps) {
     return (
       <Box>
         <Spinner type="dots" />
-        <Text color="blue"> 📖 {description ?? 'Working...'}</Text>
+        <Text color={theme.info}> {description ?? 'working…'}</Text>
       </Box>
     );
   }
@@ -70,7 +71,7 @@ export function SpinnerWithVerb({ verb, description }: SpinnerWithVerbProps) {
   return (
     <Box>
       <Spinner type="dots" />
-      <Text color="gray"> 🤔 Thinking...</Text>
+      <Text color={theme.muted}> thinking…</Text>
     </Box>
   );
 }

@@ -9,6 +9,7 @@
 import type { EventStream } from '@vessel/core';
 import { Box, Text } from 'ink';
 import { useEffect, useState } from 'react';
+import { theme } from '../theme.js';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 
 export type SubagentStatus = 'idle' | 'running' | 'completed' | 'failed';
@@ -88,7 +89,7 @@ export function SubagentActivity({ events }: { events: EventStream }) {
     const task = state.task ? truncate(state.task.replace(/\s+/g, ' '), 40) : 'subagent';
     return (
       <Box paddingX={1}>
-        <Text color="magenta" wrap="truncate">
+        <Text color={theme.brand} wrap="truncate">
           ↳ {task}
           {state.activity ? ` · ${state.activity}` : ''}
         </Text>
@@ -98,7 +99,7 @@ export function SubagentActivity({ events }: { events: EventStream }) {
 
   return (
     <Box paddingX={1}>
-      <Text color={state.status === 'completed' ? 'green' : 'red'}>
+      <Text color={state.status === 'completed' ? theme.ok : theme.danger}>
         {state.status === 'completed' ? '✓ subagent finished' : '✗ subagent failed'}
       </Text>
     </Box>

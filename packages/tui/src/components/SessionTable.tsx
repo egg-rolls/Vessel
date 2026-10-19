@@ -6,6 +6,7 @@
 import type { SessionInfo } from '@vessel/core';
 import { Box, Text, useInput } from 'ink';
 import { useEffect, useMemo, useState } from 'react';
+import { theme } from '../theme.js';
 import { formatRelativeTime } from '../utils/time.js';
 
 interface SessionTableProps {
@@ -110,10 +111,16 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
 
   if (sessions.length === 0) {
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginY={1}>
-        <Text color="gray">No sessions to resume.</Text>
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor={theme.line}
+        paddingX={1}
+        marginY={1}
+      >
+        <Text color={theme.muted}>No sessions to resume.</Text>
         <Box marginTop={1}>
-          <Text color="gray">Esc to close</Text>
+          <Text color={theme.faint}>Esc to close</Text>
         </Box>
       </Box>
     );
@@ -124,40 +131,46 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
   const maxBranchWidth = 14;
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginY={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor={theme.line}
+      paddingX={1}
+      marginY={1}
+    >
       {/* Title */}
       <Box marginBottom={1}>
-        <Text bold color="blue">
-          Resume Session
+        <Text bold color={theme.brand}>
+          Resume session
         </Text>
         {filterMode && (
-          <Text color="yellow">
+          <Text color={theme.warn}>
             {' '}
-            | Filter: {filterText}
-            <Text color="gray">_</Text>
+            · filter: {filterText}
+            <Text color={theme.faint}>_</Text>
           </Text>
         )}
-        {filterText && !filterMode && <Text color="yellow"> | Filtered: "{filterText}"</Text>}
+        {filterText && !filterMode && <Text color={theme.warn}> · filtered: "{filterText}"</Text>}
       </Box>
 
       {/* Header */}
       <Box>
-        <Text color="gray" bold>
+        <Text color={theme.faint} bold>
           {'#  '}
         </Text>
-        <Text color="gray" bold>
+        <Text color={theme.faint} bold>
           {'ID'.padEnd(maxIdWidth, ' ')}
         </Text>
-        <Text color="gray" bold>
+        <Text color={theme.faint} bold>
           {'Msgs '}
         </Text>
-        <Text color="gray" bold>
+        <Text color={theme.faint} bold>
           {'Time'.padEnd(12, ' ')}
         </Text>
-        <Text color="gray" bold>
+        <Text color={theme.faint} bold>
           {'Branch'.padEnd(maxBranchWidth, ' ')}
         </Text>
-        <Text color="gray" bold>
+        <Text color={theme.faint} bold>
           Preview
         </Text>
       </Box>
@@ -166,14 +179,14 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
       {filteredSessions.map((s, i) => {
         const isCurrent = s.session_id === currentSessionId;
         const isSelected = i === selectedIndex;
-        const color = isSelected ? 'cyan' : isCurrent ? 'green' : 'white';
-        const timeColor = isSelected ? 'cyan' : 'gray';
-        const branchColor = isSelected ? 'cyan' : 'yellow';
+        const color = isSelected ? theme.brand : isCurrent ? theme.ok : theme.muted;
+        const timeColor = isSelected ? theme.brand : theme.faint;
+        const branchColor = isSelected ? theme.brand : theme.faint;
 
         return (
           <Box key={s.session_id}>
             <Text color={color} bold={isSelected}>
-              {isSelected ? '> ' : '  '}
+              {isSelected ? '› ' : '  '}
               {String(i + 1).padStart(2, '0')}
             </Text>
             <Text color={color} bold={isSelected}>
@@ -196,10 +209,10 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
 
       {/* Footer hints */}
       <Box marginTop={1}>
-        <Text color="gray">
+        <Text color={theme.faint}>
           {filterMode
-            ? 'Type to filter · Enter confirm · Esc clear filter'
-            : '↑↓ Navigate · Enter Resume · / or f Filter · 1-9 Quick Select · Esc Cancel'}
+            ? 'type to filter · enter confirm · esc clear'
+            : '↑↓ navigate · enter resume · / filter · 1-9 select · esc cancel'}
         </Text>
       </Box>
     </Box>
