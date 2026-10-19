@@ -1,0 +1,160 @@
+/**
+ * 事件模型（纯函数）：按 run_id 分组，把 `llm.stream.chunk` 的 text_delta
+ * 拼成文本块，并在历史已落盘时抑制重复的 live 卡片。
+ */
+import type { Message, RunEvent, SessionDetail, StreamChunk } from '../gateway/types';
+
+export interface StoredEvent {
+  event: RunEvent;
+  seq: number;
+  jobId?: string;
+}
+
+export type TimelineItem =
+  | { kind: 'text'; text: string; key: string }
+  | { kind: 'event'; event: RunEvent; key: string };
+
+export interface RunGroup {
+  runId: string;
+  jobId?: string;
+  sessionId?: string;
+  input?: string;
+  output?: string;
+  error?: string;
+  status: 'running' | 'completed' | 'failed' | 'cancelled';
+  /** 首个事件时间（没有 run.started 时用于排序） */
+  firstTs?: number;
+  startedAt?: number;
+  completedAt?: number;
+  durationMs?: number;
+  iterations?: number;
+  items: TimelineItem[];
+}
+
+/** 默认隐藏的内部事件：状态同步/提示词上下文，不是用户关心的对话内容。 */
+export const INTERNAL_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'context.changed',
+  'session.saved',
+  'llm.request',
+  'llm.response',
+]);
+
+/** 单个 run 的事件序列 → 可渲染分组。 */
+export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunGroup {
+  const group: RunGroup = { runId, status: 'running', items: [] };
+  let buf = '';
+  let textIndex = 0;
+  const flush = () => {
+    if (buf) {
+      group.items.push({ kind: 'text', text: buf, key: `text-${runId}-${textIndex++}` });
+      buf = '';
+    }
+  };
+
+  for (const entry of entries) {
+    const ev = entry.event;
+    if (group.firstTs === undefined) group.firstTs = ev.ts;
+    if (entry.jobId) group.jobId = entry.jobId;
+    switch (ev.type) {
+      case 'run.started': {
+        const d = ev.data as { input?: string; session_id?: string };
+        group.input = d.input;
+        group.sessionId = d.session_id;
+        group.startedAt = ev.ts;
+        continue;
+      }
+      case 'run.completed': {
+        flush();
+        const d = ev.data as { output?: string; duration_ms?: number; iterations?: number };
+        group.output = d.output;
+        group.durationMs = d.duration_ms;
+        group.iterations = d.iterations;
+        group.status = 'completed';
+        group.completedAt = ev.ts;
+        continue;
+      }
+      case 'run.failed': {
+        flush();
+        const d = ev.data as { error?: string; duration_ms?: number };
+        group.error = d.error;
+        group.durationMs = d.duration_ms;
+        group.status = 'failed';
+        group.completedAt = ev.ts;
+        continue;
+      }
+      case 'run.cancelled': {
+        flush();
+        const d = ev.data as { duration_ms?: number };
+        group.durationMs = d.duration_ms;
+        group.status = 'cancelled';
+        group.completedAt = ev.ts;
+        continue;
+      }
+      case 'llm.stream.chunk': {
+        const chunk = (ev.data as { chunk?: StreamChunk }).chunk;
+        if (chunk?.type === 'text_delta' && chunk.delta) buf += chunk.delta;
+        else if (chunk?.type === 'finish') flush();
+        continue;
+      }
+      default:
+        flush();
+        group.items.push({ kind: 'event', event: ev, key: `ev-${entry.seq}` });
+    }
+  }
+  flush();
+  return group;
+}
+
+/** 按 run_id 分组并按开始时间正序排列。 */
+export function groupEvents(entries: readonly StoredEvent[], showInternal: boolean): RunGroup[] {
+  const byRun = new Map<string, StoredEvent[]>();
+  for (const entry of entries) {
+    if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) continue;
+    // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
+    if (!showInternal && entry.event.type.startsWith('subagent.')) continue;
+    const runId = entry.event.run_id;
+    const list = byRun.get(runId);
+    if (list) list.push(entry);
+    else byRun.set(runId, [entry]);
+  }
+  return [...byRun.entries()]
+    .map(([runId, list]) => buildGroup(runId, list))
+    .sort((a, b) => (a.startedAt ?? a.firstTs ?? 0) - (b.startedAt ?? b.firstTs ?? 0));
+}
+
+/** 只保留属于某个会话的 run 分组。 */
+export function groupsForSession(groups: readonly RunGroup[], sessionId: string): RunGroup[] {
+  return groups.filter((group) => group.sessionId === sessionId);
+}
+
+/**
+ * 已完成 run 的 live 卡片是否应隐藏（历史里已经有同一条用户输入 + 最终输出）。
+ * 无法确认输出已落盘时保留卡片，避免 hydrate 失败时整个 run 消失。
+ */
+export function isGroupPersisted(group: RunGroup, detail: SessionDetail | null): boolean {
+  if (group.status !== 'completed' || !detail) return false;
+  const messages: Message[] = detail.messages;
+  const input = group.input?.trim();
+  const userSaved = !input || messages.some((m) => m.role === 'user' && m.content.trim() === input);
+  if (!userSaved) return false;
+  const output = group.output?.trim();
+  if (!output) return false;
+  return messages.some(
+    (m) =>
+      m.role === 'assistant' &&
+      (m.content.trim() === output || (output.length >= 8 && m.content.includes(output))),
+  );
+}
+
+/** 事件类型 → 时间线标签与颜色类名。 */
+export function eventTag(type: string): { label: string; cls: string } {
+  if (type.startsWith('tool.call.')) {
+    if (type.endsWith('.failed')) return { label: 'tool.fail', cls: 'tag-tool-fail' };
+    if (type.endsWith('.completed')) return { label: 'tool.ok', cls: 'tag-tool-done' };
+    return { label: 'tool', cls: 'tag-tool-start' };
+  }
+  if (type.startsWith('guardrail.')) return { label: type, cls: 'tag-guard' };
+  if (type.startsWith('llm.')) return { label: type, cls: 'tag-llm' };
+  if (type === 'error') return { label: 'error', cls: 'tag-error' };
+  return { label: type, cls: 'tag-raw' };
+}
