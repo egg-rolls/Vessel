@@ -30,6 +30,7 @@ import {
   type LLMProvider,
   MemoryContextManager,
   MemoryPluginHost,
+  type Message,
   type Plugin,
   type PluginHost,
   type RunnableAgent,
@@ -63,6 +64,13 @@ import {
   disposeMetrics,
   type MetricsFactory,
 } from './observability-wiring';
+import {
+  buildPluginConfigMap,
+  buildTeamMemberHost,
+  declarativePluginEntries,
+  installWithConfig,
+  withPluginConfig,
+} from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginNames } from './plugin-selection';
 import { createProvider } from './provider-factory';
@@ -178,6 +186,46 @@ function tenantSessionsDbPath(tenantRoot: string): string {
   return join(tenantRoot, 'sessions.db');
 }
 
+/** core 0.6.1 E3 的 summarizer 形状（本 worktree 的 core 尚未导出该类型） */
+type ContextSummarizer = (messages: Message[], options: { maxTokens: number }) => Promise<string>;
+
+/**
+ * 用当前 provider 生成真实上下文摘要（0.6.1 E3）。
+ * 失败由 core 捕获并回退占位符；这里不吞错，便于测试/观测。
+ */
+export function createContextSummarizer(provider: LLMProvider, model: string): ContextSummarizer {
+  return async (messages, options) => {
+    const transcript = messages
+      .map((message) => `[${message.role}] ${message.content}`)
+      .join('\n\n');
+    const response = await provider.chat({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Summarize the conversation for context compaction. Preserve decisions, file paths, tool results, and open tasks. Output only the summary.',
+        },
+        { role: 'user', content: transcript },
+      ],
+      max_tokens: Math.max(128, Math.min(options.maxTokens, 2048)),
+      temperature: 0,
+    });
+    return typeof response.content === 'string' ? response.content : '';
+  };
+}
+
+/** 每 tenant 的上下文配置（含真实 summarizer）；供 owner 与成员共用。 */
+function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer) {
+  return {
+    maxTokens: config.context?.maxTokens,
+    maxMessages: config.context?.maxMessages,
+    autoCompact: config.context?.autoCompact,
+    compactThreshold: config.context?.compactThreshold,
+    summarizer,
+  };
+}
+
 /**
  * 构造一个 tenant 的独立执行面。
  * 失败时释放本函数获取的锁；调用方负责释放传入的锁。
@@ -217,12 +265,8 @@ export async function buildTenantRuntime(
     const resolvedProvider = await createProvider(config, loader, useMock);
     const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 
-    const context = new MemoryContextManager({
-      maxTokens: config.context?.maxTokens,
-      maxMessages: config.context?.maxMessages,
-      autoCompact: config.context?.autoCompact,
-      compactThreshold: config.context?.compactThreshold,
-    });
+    const summarizer = createContextSummarizer(provider, providerModel);
+    const context = new MemoryContextManager(contextConfigFor(config, summarizer));
     const events = createEventStream(config);
 
     // 本 tenant 事件 → gateway 共享流（事件带 tenant_id；SSE/WS 过滤靠它）。
@@ -252,10 +296,14 @@ export async function buildTenantRuntime(
     });
 
     // ── 插件 ──────────────────────────────────────
+    const declarativePlugins = declarativePluginEntries(config);
+    /** E1：插件名 → 安装配置（显式 plugins[].config 覆盖声明式条目） */
+    const pluginConfigs = buildPluginConfigMap(config.plugins, declarativePlugins);
     const defaultPluginNames = resolvePluginNames(
       loader,
       config.plugins,
       Boolean(process.env.VESSEL_DEBUG),
+      declarativePlugins,
     );
 
     const plugins: Plugin[] = [];
@@ -268,6 +316,7 @@ export async function buildTenantRuntime(
       const category = descriptor?.category ?? 'unknown';
       const plugin = await loader.load(name);
       if (plugin) {
+        // E1：配置在 install 时透传（host 路径直接传；非 host 路径见 AgentRuntime）。
         plugins.push(plugin);
         pluginLoadEvents.push({
           type: 'plugin.loaded',
@@ -388,7 +437,8 @@ export async function buildTenantRuntime(
     const systemPrompt = config.agent?.systemPrompt ?? '你是一个有用的 AI 助手。';
     const permission = {
       default: headless ? ('allow' as const) : ('ask' as const),
-      autoApprove: ['ask_user'],
+      // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
+      autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
     };
 
     let runtime: RunnableAgent | undefined;
@@ -398,17 +448,13 @@ export async function buildTenantRuntime(
     let spawnAgent: TenantRuntimeBundle['spawnAgent'];
     let unsubHostBridge: (() => void) | undefined;
 
-    const contextFactory = () =>
-      new MemoryContextManager({
-        maxTokens: config.context?.maxTokens,
-        maxMessages: config.context?.maxMessages,
-        autoCompact: config.context?.autoCompact,
-        compactThreshold: config.context?.compactThreshold,
-      });
+    const contextFactory = () => new MemoryContextManager(contextConfigFor(config, summarizer));
 
     if (isHostEnabled(config)) {
       const hostPluginHost = new MemoryPluginHost();
-      for (const plugin of plugins) await plugin.install(hostPluginHost);
+      for (const plugin of plugins) {
+        await installWithConfig(plugin, hostPluginHost, pluginConfigs[plugin.name]);
+      }
 
       const hostEvents = createEventBus(config);
       // host runtime 事件先进入 host bus，再桥接到本 tenant 流。
@@ -450,13 +496,24 @@ export async function buildTenantRuntime(
         host = hostResult.host;
         selectedPluginHost = hostPluginHost;
         const selectedHost = hostResult.host;
+        // E10：跨节点 spawn 与本机 spawn 使用同一成员隔离与限额。
+        const memberLimits = config.team?.memberLimits;
+        const memberTermination = config.team?.memberTermination
+          ? {
+              maxIterations: config.team.memberTermination.maxIterations ?? 10,
+              maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+            }
+          : undefined;
         spawnAgent = async (request) => {
           const handle = await selectedHost.spawn({
             provider,
             model: request.model ?? providerModel,
-            pluginHost: hostPluginHost,
+            // 成员不能反向调用 team_*（复用 ext 的 buildChildHost）。
+            pluginHost: buildTeamMemberHost(hostPluginHost),
             ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
             ...(request.name !== undefined ? { name: request.name } : {}),
+            ...(memberLimits ? { limits: { run: memberLimits } } : {}),
+            ...(memberTermination ? { termination: memberTermination } : {}),
           });
           return handle.status();
         };
@@ -479,10 +536,15 @@ export async function buildTenantRuntime(
         limits,
         termination,
         session,
-        plugins,
+        // core 0.6.1：pluginConfigs 按名透传；本 worktree 的 core 尚未有该字段，
+        // 同时用 wrapper 绑定配置，保证 core 合并前后行为一致。
+        plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
         systemPrompt,
         permission,
+        ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
         ...(runStore ? { runStore } : {}),
+      } as Parameters<typeof AgentRuntime.create>[0] & {
+        pluginConfigs?: Record<string, Record<string, unknown>>;
       });
       runtime = agentRuntime;
       selectedPluginHost = agentRuntime.pluginHost;

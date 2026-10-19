@@ -21,6 +21,8 @@ describe('parseArgs - 默认与 REPL', () => {
       runArg: null,
       pipeMode: false,
       sessionArg: null,
+      continueArg: false,
+      resumeArg: null,
       servePort: null,
       servePortExplicit: false,
       serveHost: null,
@@ -44,6 +46,8 @@ describe('parseArgs - 默认与 REPL', () => {
       tenantCommand: null,
       migrate: null,
       trace: null,
+      pluginCommand: null,
+      doctorCommand: null,
     });
   });
 });
@@ -53,8 +57,9 @@ describe('parseArgs - headless', () => {
     expect(ok(['--run', 'hello']).runArg).toBe('hello');
   });
 
-  it('-r 是 --run 的别名', () => {
-    expect(ok(['-r', 'hello']).runArg).toBe('hello');
+  it('-p / --print 是 --run 的别名', () => {
+    expect(ok(['-p', 'hello']).runArg).toBe('hello');
+    expect(ok(['--print', 'hello']).runArg).toBe('hello');
   });
 
   it('--run 无参 = 从 stdin 读', () => {
@@ -419,5 +424,107 @@ describe('parseArgs - --feishu 附加开关', () => {
     ]) {
       expect(err(argv)).toContain('--feishu cannot be combined with');
     }
+  });
+});
+
+describe('parseArgs - 会话续接（0.6.1）', () => {
+  it('-c / --continue', () => {
+    expect(ok(['-c']).continueArg).toBe(true);
+    expect(ok(['--continue']).continueArg).toBe(true);
+  });
+
+  it('-r / --resume [id]；-r 不再等同 --run', () => {
+    expect(ok(['-r', 'abc']).resumeArg).toBe('abc');
+    expect(ok(['--resume', 'abc']).resumeArg).toBe('abc');
+    expect(ok(['-r']).resumeArg).toBe('');
+    expect(ok(['-r', 'abc']).runArg).toBeNull();
+  });
+
+  it('--continue 与 --resume 互斥', () => {
+    expect(err(['-c', '-r', 'abc'])).toContain('--continue cannot be combined with --resume');
+  });
+
+  it('与 --session 互斥', () => {
+    expect(err(['-c', '--session', 'x'])).toContain('--continue cannot be combined with --session');
+    expect(err(['-r', 'x', '--session', 'y'])).toContain(
+      '--resume cannot be combined with --session',
+    );
+  });
+
+  it('与 --serve / --resume-run / --tools 互斥', () => {
+    for (const argv of [
+      ['-c', '--serve'],
+      ['-r', 'abc', '--serve'],
+      ['-c', '--resume-run', 'r1'],
+      ['-r', 'abc', '--resume-run', 'r1'],
+      ['-c', '--tools'],
+      ['-r', 'abc', '--tools'],
+    ]) {
+      expect(parseArgs(argv).ok).toBe(false);
+    }
+  });
+
+  it('-c/--resume 可与 --run 同用（续接后运行一轮）', () => {
+    const args = ok(['-c', '--run', 'hi']);
+    expect(args.continueArg).toBe(true);
+    expect(args.runArg).toBe('hi');
+    expect(ok(['-r', 'abc', '--run', 'hi']).resumeArg).toBe('abc');
+  });
+
+  it('-r 无 id 是列表模式，不能再给 --run/--pipe/--feishu', () => {
+    expect(err(['-r', '--run', 'hi'])).toContain(
+      '--resume without an id cannot be combined with --run',
+    );
+    expect(err(['-r', '--pipe'])).toContain(
+      '--resume without an id cannot be combined with --pipe',
+    );
+    expect(err(['-r', '--feishu'])).toContain(
+      '--resume without an id cannot be combined with --feishu',
+    );
+  });
+});
+
+describe('parseArgs - plugin / doctor（0.6.1）', () => {
+  it('plugin list [--json]', () => {
+    expect(ok(['plugin', 'list']).pluginCommand).toEqual({ kind: 'list', json: false });
+    expect(ok(['plugin', 'list', '--json']).pluginCommand).toEqual({
+      kind: 'list',
+      json: true,
+    });
+  });
+
+  it('plugin install <path> [--force]', () => {
+    expect(ok(['plugin', 'install', './my-plugin']).pluginCommand).toEqual({
+      kind: 'install',
+      path: './my-plugin',
+      force: false,
+    });
+    expect(ok(['plugin', 'install', './my-plugin', '--force']).pluginCommand).toEqual({
+      kind: 'install',
+      path: './my-plugin',
+      force: true,
+    });
+    expect(err(['plugin', 'install'])).toContain('Missing <path>');
+  });
+
+  it('plugin remove <name> 拒绝路径穿越', () => {
+    expect(ok(['plugin', 'remove', 'my-plugin']).pluginCommand).toEqual({
+      kind: 'remove',
+      name: 'my-plugin',
+      yes: false,
+    });
+    expect(err(['plugin', 'remove', '../evil'])).toContain('Invalid plugin name');
+  });
+
+  it('plugin 未知子命令/参数报错', () => {
+    expect(err(['plugin'])).toContain('Missing plugin subcommand');
+    expect(err(['plugin', 'market'])).toContain('Unknown plugin subcommand');
+    expect(err(['plugin', 'list', '--bogus'])).toContain('Unknown argument');
+  });
+
+  it('doctor [--json]', () => {
+    expect(ok(['doctor']).doctorCommand).toEqual({ json: false });
+    expect(ok(['doctor', '--json']).doctorCommand).toEqual({ json: true });
+    expect(err(['doctor', '--bogus'])).toContain('Unknown argument');
   });
 });

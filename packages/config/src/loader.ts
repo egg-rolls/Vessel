@@ -263,6 +263,25 @@ export function loadConfigFromEnv(
     };
   }
 
+  // 0.6.1：session backend（file / sqlite / memory）。非法值留给 validator 报错。
+  const sessionBackend = getEnvVar(env, `${prefix}SESSION_BACKEND`);
+  if (sessionBackend !== undefined && sessionBackend.trim() !== '') {
+    config.session = {
+      ...(config.session ?? {}),
+      backend: sessionBackend.trim() as NonNullable<VesselConfig['session']>['backend'],
+    };
+  }
+
+  // 0.6.1：插件启停（逗号分隔的插件名；整体替换 YAML 列表，符合 env > config）。
+  const pluginsRaw = getEnvVar(env, `${prefix}PLUGINS`);
+  if (pluginsRaw !== undefined && pluginsRaw.trim() !== '') {
+    config.plugins = pluginsRaw
+      .split(',')
+      .map((name) => name.trim())
+      .filter((name) => name !== '')
+      .map((name) => ({ name, enabled: true }));
+  }
+
   // 0.5：全局数据根。VESSEL_TENANT 不写入 config，只参与 tenant 解析。
   const dataDir = getEnvVar(env, `${prefix}DATA_DIR`);
   if (dataDir) {

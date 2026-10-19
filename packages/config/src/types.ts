@@ -376,6 +376,15 @@ export interface ConfigSnapshot {
   tenant_overlay_keys?: string[];
 }
 
+/** 权限配置（0.6.1；交互确认与免确认规则） */
+export interface PermissionConfig {
+  /**
+   * 免确认工具名列表（精确匹配）。交互 REPL 的 "always" 也会写回这里，
+   * 重启后继续生效。`ask_user` 由运行时始终免确认。
+   */
+  autoApprove?: string[];
+}
+
 /** Vessel 配置 */
 export interface VesselConfig {
   apiKey?: string;
@@ -395,6 +404,8 @@ export interface VesselConfig {
   termination?: TerminationConfig;
   session?: SessionConfig;
   context?: ContextConfig;
+  /** 0.6.1：工具权限免确认规则 */
+  permission?: PermissionConfig;
   plugins?: PluginConfig[];
   update?: UpdateConfig;
   delegate?: DelegateConfig;

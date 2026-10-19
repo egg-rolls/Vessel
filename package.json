@@ -1,9 +1,20 @@
 {
   "name": "vessel",
   "version": "0.5.0",
+  "description": "Vessel — an embeddable, provider-agnostic multi-agent runtime and CLI harness",
+  "license": "MIT",
+  "type": "module",
   "bin": {
     "vessel": "src/cli.ts"
   },
+  "files": [
+    "src",
+    "packages",
+    "plugins",
+    "skills",
+    "README.md",
+    "LICENSE"
+  ],
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
     "@types/bun": "^1.3.14",
@@ -13,7 +24,6 @@
   "engines": {
     "bun": ">=1.0.0"
   },
-  "private": true,
   "scripts": {
     "start": "bun run src/cli.ts",
     "demo": "bun run examples/demo.ts",

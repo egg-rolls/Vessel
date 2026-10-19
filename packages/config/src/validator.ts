@@ -737,6 +737,7 @@ export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
   'limits',
   'termination',
   'session',
+  'permission',
   'plugins',
   'workflow',
   'evals',
@@ -1226,6 +1227,107 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
+  // 校验 permission（0.6.1）：免确认工具名
+  if (config.permission !== undefined) {
+    if (!isPlainObject(config.permission)) {
+      errors.push({ path: 'permission', message: 'permission must be an object' });
+    } else {
+      const { autoApprove } = config.permission;
+      if (autoApprove !== undefined) {
+        if (
+          !Array.isArray(autoApprove) ||
+          autoApprove.some((name) => typeof name !== 'string' || name.trim() === '')
+        ) {
+          errors.push({
+            path: 'permission.autoApprove',
+            message: 'permission.autoApprove must be an array of non-empty strings',
+            value: autoApprove,
+          });
+        }
+      }
+    }
+  }
+
+  // 校验 plugins（0.6.1）：数组、name 非空、config 为对象
+  if (config.plugins !== undefined) {
+    if (!Array.isArray(config.plugins)) {
+      errors.push({ path: 'plugins', message: 'plugins must be an array' });
+    } else {
+      const seen = new Set<string>();
+      for (const [index, plugin] of config.plugins.entries()) {
+        const prefix = `plugins.${index}`;
+        if (!isPlainObject(plugin)) {
+          errors.push({ path: prefix, message: 'plugin entry must be an object' });
+          continue;
+        }
+        if (typeof plugin.name !== 'string' || plugin.name.trim() === '') {
+          errors.push({
+            path: `${prefix}.name`,
+            message: 'plugin name must be a non-empty string',
+          });
+        } else if (seen.has(plugin.name)) {
+          errors.push({
+            path: `${prefix}.name`,
+            message: `duplicate plugin "${plugin.name}"`,
+            value: plugin.name,
+          });
+        } else {
+          seen.add(plugin.name);
+        }
+        if (plugin.enabled !== undefined && typeof plugin.enabled !== 'boolean') {
+          errors.push({
+            path: `${prefix}.enabled`,
+            message: 'plugin enabled must be a boolean',
+            value: plugin.enabled,
+          });
+        }
+        if (plugin.config !== undefined && !isPlainObject(plugin.config)) {
+          errors.push({ path: `${prefix}.config`, message: 'plugin config must be an object' });
+        }
+      }
+    }
+  }
+
+  // 校验授权规则声明块（0.6.1）：name 必填，config 为对象。
+  // 这些条目在装配层映射为同名插件的安装配置（见 src/plugin-config.ts）。
+  for (const block of ['guardrails', 'hooks'] as const) {
+    const entries = config[block];
+    if (entries === undefined) continue;
+    if (!Array.isArray(entries)) {
+      errors.push({ path: block, message: `${block} must be an array` });
+      continue;
+    }
+    for (const [index, entry] of entries.entries()) {
+      const prefix = `${block}.${index}`;
+      if (!isPlainObject(entry)) {
+        errors.push({ path: prefix, message: `${block} entry must be an object` });
+        continue;
+      }
+      if (typeof entry.name !== 'string' || entry.name.trim() === '') {
+        errors.push({
+          path: `${prefix}.name`,
+          message: `${block} name must be a non-empty string`,
+        });
+      } else if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.name)) {
+        errors.push({
+          path: `${prefix}.name`,
+          message: `${block} name must contain only letters, digits, ".", "_" or "-"`,
+          value: entry.name,
+        });
+      }
+      if (entry.enabled !== undefined && typeof entry.enabled !== 'boolean') {
+        errors.push({
+          path: `${prefix}.enabled`,
+          message: `${block} enabled must be a boolean`,
+          value: entry.enabled,
+        });
+      }
+      if (entry.config !== undefined && !isPlainObject(entry.config)) {
+        errors.push({ path: `${prefix}.config`, message: `${block} config must be an object` });
+      }
+    }
+  }
+
   // 校验 update
   if (config.update) {
     const { autoCheck, channel, source } = config.update;
@@ -1614,21 +1716,8 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   if (config.feishu) validateFeishu(config.feishu, errors);
   if (config.observability) validateObservability(config.observability, errors);
 
-  // guardrails / hooks 在 0.1.0 尚未由装配层消费——明确警告，不静默忽略。
-  if (config.guardrails && config.guardrails.length > 0) {
-    warnings.push({
-      path: 'guardrails',
-      message: 'guardrails are declared but not applied in 0.1.0.',
-      value: config.guardrails.length,
-    });
-  }
-  if (config.hooks && config.hooks.length > 0) {
-    warnings.push({
-      path: 'hooks',
-      message: 'hooks are declared but not applied in 0.1.0.',
-      value: config.hooks.length,
-    });
-  }
+  // guardrails / hooks 由装配层映射为同名插件的安装配置（0.6.1），
+  // 不再产生「声明但未应用」警告。
 
   return { valid: errors.length === 0, errors, warnings };
 }
@@ -1687,6 +1776,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   ],
   agent: ['name', 'systemPrompt', 'model', 'temperature', 'maxTokens'],
   session: ['backend', 'storagePath', 'maxHistory'],
+  permission: ['autoApprove'],
   update: ['autoCheck', 'channel', 'source'],
   delegate: [
     'enabled',
@@ -1799,6 +1889,7 @@ export const KNOWN_CONFIG_KEYS = [
   'termination',
   'session',
   'context',
+  'permission',
   'plugins',
   'update',
   'delegate',

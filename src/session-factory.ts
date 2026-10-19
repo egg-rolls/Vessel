@@ -54,9 +54,21 @@ export function createSessionBackend(
         opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {},
       );
     }
-    default:
+    default: {
+      const explicit = config?.storagePath;
+      // 显式 storagePath 仍优先，但可能逃出 tenant 目录；启动时 warn（与 sqlite 一致）。
+      if (
+        explicit !== undefined &&
+        explicit !== '' &&
+        opts.tenantId !== undefined &&
+        opts.tenantSessionsDir !== undefined
+      ) {
+        console.warn(`⚠ session.storage_path escapes tenant "${opts.tenantId}": ${explicit}`);
+      }
       return new FileSessionBackend(
-        config?.storagePath ?? opts.tenantSessionsDir ?? DEFAULT_FILE_DIR,
+        explicit ?? opts.tenantSessionsDir ?? DEFAULT_FILE_DIR,
+        opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {},
       );
+    }
   }
 }

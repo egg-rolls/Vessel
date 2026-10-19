@@ -11,6 +11,8 @@
  */
 
 import type { RunCheckpoint, RunStore } from '../packages/core/src/index';
+import type { DurableGatewayOptions } from '../packages/serve/src/index';
+import type { TenantRuntimeFactory } from './tenant-runtime-factory';
 
 /** TUI `/runs` 与 CLI 列表共用的摘要（只含可恢复状态） */
 export interface DurableRunSummary {
@@ -159,4 +161,50 @@ export function routeResume(
 /** 把任意错误归一为 `done` 的 failed 结局（不 reject） */
 export function toFailedOutcome(error: unknown): DurableRunOutcome {
   return { status: 'failed', error };
+}
+
+/**
+ * 0.6.1 P0-2：gateway `durableFor(tenantId)` 的装配。
+ *
+ * - default tenant 返回 undefined：由 gateway 的 `durable`（bootstrap bundle）提供；
+ * - 非 default tenant 只使用自己的 runStore；没有则 undefined（gateway 返回 403）；
+ * - resume 只等待“受理”（host 创建 handle）；AgentRuntime.resume 的完成 Promise 不等待。
+ */
+export function createDurableFor(
+  factory: Pick<TenantRuntimeFactory, 'bundleFor'> | undefined,
+  defaultTenantId: string,
+): (tenantId: string) => DurableGatewayOptions | undefined {
+  return (tenantId) => {
+    if (tenantId === defaultTenantId) return undefined;
+    const bundle = factory?.bundleFor(tenantId);
+    const store = bundle?.runStore;
+    if (!store) return undefined;
+
+    const host = bundle?.host;
+    const hostResume = host?.resume;
+    if (host && typeof hostResume === 'function') {
+      return {
+        store,
+        resume: async (runId: string) => {
+          const handle = await hostResume.call(host, runId);
+          // 受理即返回；run 结束/失败不阻塞 HTTP。
+          void handle.result.catch(() => {});
+        },
+      };
+    }
+
+    const runtime = bundle?.runtime;
+    const runtimeResume = runtime?.resume;
+    if (runtime && typeof runtimeResume === 'function') {
+      return {
+        store,
+        resume: (runId: string) => {
+          // AgentRuntime.resume 在 run 结束时才 resolve：不等待。
+          void runtimeResume.call(runtime, runId).catch(() => {});
+        },
+      };
+    }
+
+    return { store };
+  };
 }

@@ -33,6 +33,7 @@ import {
 } from '../packages/core/src/index';
 import {
   type ConfigSnapshotLike,
+  type DurableGatewayOptions,
   type Gateway,
   type GatewayOptions,
   type MetricsProvider,
@@ -47,6 +48,8 @@ import { configInitCommand, configPathCommand, configShowCommand } from './confi
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
+import { doctorCommand } from './doctor-command';
+import { createDurableFor } from './durable-wiring';
 import { runEvalCommand } from './eval-command';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import { renderGatewayBanner } from './gateway-banner';
@@ -54,9 +57,15 @@ import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-w
 import { runHeadless } from './headless-runner';
 import { migrateCommand } from './migrate-command';
 import { createEventStream } from './observability-wiring';
+import { runPluginCommand } from './plugin-command';
 import { runResumeList } from './resume-command';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
+import {
+  resolveContinueSessionId,
+  runSessionList,
+  validateResumeSessionId,
+} from './session-resume';
 import { planTeamWiring } from './team-wiring';
 import {
   createTenantControl,
@@ -86,71 +95,82 @@ function align(rows: Array<[string, string]>, width: number): string {
 
 /** --help 输出：分组 + 对齐列，命令保持不变 */
 function printHelp(): void {
-  const usage: Array<[string, string]> = [['bun run src/cli.ts', '交互式 REPL（直进对话）']];
+  const usage: Array<[string, string]> = [['vessel', '交互式 REPL（直进对话）']];
+  const session: Array<[string, string]> = [
+    ['vessel -c', '续接最近的非空会话（--continue）'],
+    ['vessel -r <id>', '恢复指定会话（--resume）'],
+    ['vessel -r', '列出当前 tenant 的会话'],
+    ['vessel --session <id>', '指定会话（不校验存在）'],
+  ];
   const headless: Array<[string, string]> = [
-    ['bun run src/cli.ts --run "<prompt>"', 'headless 单轮（文本参数）'],
-    ['bun run src/cli.ts --run @path', 'headless：.json=多轮 seeding，其它=文本 prompt'],
-    ['echo "..." | bun run src/cli.ts --run', 'headless 单轮（stdin）'],
-    ['bun run src/cli.ts --session <id> --run "..."', '续接会话'],
-    ['bun run src/cli.ts --resume-run <runId>', '恢复中断的 durable run'],
+    ['vessel -p "<prompt>"', 'headless 单轮（--print / --run 同义）'],
+    ['vessel --run @path', 'headless：.json=多轮 seeding，其它=文本 prompt'],
+    ['echo "..." | vessel --run', 'headless 单轮（stdin）'],
+    ['vessel -c --run "..."', '续接最近会话并运行一轮'],
+    ['vessel --resume-run <runId>', '恢复中断的 durable run'],
   ];
   const serve: Array<[string, string]> = [
-    ['bun run src/cli.ts --serve 8642', '启动 HTTP/WS gateway（Web 控制台后端）'],
+    ['vessel --serve 8642', '启动 HTTP/WS gateway（Web 控制台后端）'],
   ];
   const capability: Array<[string, string]> = [
-    ['bun run src/cli.ts workflow list', '列出 workflow runs'],
-    ['bun run src/cli.ts workflow run <name>', '启动 workflow（workflow.dir 下解析）'],
-    ['bun run src/cli.ts workflow show <id>', '查看步骤状态'],
-    ['bun run src/cli.ts workflow resume <id>', '恢复 interrupted/failed/running'],
-    ['bun run src/cli.ts workflow cancel <id>', '取消同进程 run'],
-    ['bun run src/cli.ts eval <suite>', '离线评测'],
-    ['bun run src/cli.ts eval <suite> --json --out <path>', '评测输出 JSON / 指定报告'],
-    ['bun run src/cli.ts --feishu', '附加飞书渠道（可与 --serve / REPL 同用）'],
+    ['vessel workflow list', '列出 workflow runs'],
+    ['vessel workflow run <name>', '启动 workflow（workflow.dir 下解析）'],
+    ['vessel workflow show <id>', '查看步骤状态'],
+    ['vessel workflow resume <id>', '恢复 interrupted/failed/running'],
+    ['vessel workflow cancel <id>', '取消同进程 run'],
+    ['vessel eval <suite>', '离线评测'],
+    ['vessel eval <suite> --json --out <path>', '评测输出 JSON / 指定报告'],
+    ['vessel --feishu', '附加飞书渠道（可与 --serve / REPL 同用）'],
   ];
   const config: Array<[string, string]> = [
-    ['bun run src/cli.ts --tenant <id> ...', '选择 tenant（也可用 VESSEL_TENANT）'],
+    ['vessel --tenant <id> ...', '选择 tenant（也可用 VESSEL_TENANT）'],
     [
-      'bun run src/cli.ts --connect <url> --connect-token <t> --ca <pem> ...',
+      'vessel --connect <url> --connect-token <t> --ca <pem> ...',
       '连接 gateway（非回环必须 https；token 也可用 VESSEL_CONNECT_TOKEN）',
     ],
-    [
-      'bun run src/cli.ts --serve --allowed-origin <origin>',
-      '独立 Web 前端的 CORS/WS Origin 白名单',
-    ],
-    ['bun run src/cli.ts config path', '打印用户/项目配置路径'],
-    ['bun run src/cli.ts config init', '生成用户配置模板'],
-    ['bun run src/cli.ts config show --sources', '查看脱敏配置与来源'],
+    ['vessel --serve --allowed-origin <origin>', '独立 Web 前端的 CORS/WS Origin 白名单'],
+    ['vessel config path', '打印用户/项目配置路径'],
+    ['vessel config init', '生成用户配置模板'],
+    ['vessel config show --sources', '查看脱敏配置与来源'],
   ];
   const tenant: Array<[string, string]> = [
-    ['bun run src/cli.ts tenant list', '列出 tenant'],
-    ['bun run src/cli.ts tenant get <id>', '查看 tenant 元数据'],
-    ['bun run src/cli.ts tenant create <id>', '创建 tenant'],
-    ['bun run src/cli.ts tenant update <id> --status disabled', '更新 tenant'],
+    ['vessel tenant list', '列出 tenant'],
+    ['vessel tenant get <id>', '查看 tenant 元数据'],
+    ['vessel tenant create <id>', '创建 tenant'],
+    ['vessel tenant update <id> --status disabled', '更新 tenant'],
+  ];
+  const plugins: Array<[string, string]> = [
+    ['vessel plugin list', '列出仓库/用户/项目/node_modules 插件'],
+    ['vessel plugin install <path> [--force]', '安装本地插件目录到 ~/.vessel/plugins'],
+    ['vessel plugin remove <name>', '从 ~/.vessel/plugins 移除插件'],
   ];
   const migrate: Array<[string, string]> = [
-    ['bun run src/cli.ts migrate --from sqlite --to file-v2', '迁移（默认 dry-run）'],
-    ['bun run src/cli.ts migrate --from file-v1 --to file-v2 --apply', '执行迁移'],
-    ['bun run src/cli.ts trace prune --dry-run', '清理 trace（默认 dry-run）'],
+    ['vessel migrate --from sqlite --to file-v2', '迁移（默认 dry-run）'],
+    ['vessel migrate --from file-v1 --to file-v2 --apply', '执行迁移'],
+    ['vessel trace prune --dry-run', '清理 trace（默认 dry-run）'],
   ];
   const debug: Array<[string, string]> = [
-    ['VESSEL_MOCK=1 bun run src/cli.ts --run "x"', 'mock 模式（不调 API）'],
+    ['VESSEL_MOCK=1 vessel --run "x"', 'mock 模式（不调 API）'],
   ];
   const meta: Array<[string, string]> = [
-    ['bun run src/cli.ts --resume-run', '列出可恢复的 interrupted run'],
-    ['bun run src/cli.ts update --check', '检查新版本（只提示，不自替换）'],
-    ['bun run src/cli.ts update --channel beta', '检查预发布通道'],
-    ['bun run src/cli.ts --version', '显示版本'],
-    ['bun run src/cli.ts --tools', '列出已注册工具（不需要 API Key）'],
-    ['bun run src/cli.ts --help', '显示本帮助'],
+    ['vessel doctor', '本机配置/环境自检'],
+    ['vessel --resume-run', '列出可恢复的 interrupted run'],
+    ['vessel update --check', '检查新版本（只提示，不自替换）'],
+    ['vessel update --channel beta', '检查预发布通道'],
+    ['vessel --version', '显示版本'],
+    ['vessel --tools', '列出已注册工具（不需要 API Key）'],
+    ['vessel --help', '显示本帮助'],
   ];
   const width = Math.max(
     ...[
       ...usage,
+      ...session,
       ...headless,
       ...serve,
       ...capability,
       ...config,
       ...tenant,
+      ...plugins,
       ...migrate,
       ...debug,
       ...meta,
@@ -163,6 +183,9 @@ function printHelp(): void {
       '',
       '  用法',
       align(usage, width),
+      '',
+      '  会话',
+      align(session, width),
       '',
       '  Headless 模式',
       align(headless, width),
@@ -178,6 +201,9 @@ function printHelp(): void {
       '',
       '  多租户（0.5）',
       align(tenant, width),
+      '',
+      '  插件（0.6.1）',
+      align(plugins, width),
       '',
       '  迁移与 trace（0.5）',
       align(migrate, width),
@@ -258,6 +284,18 @@ if (args.update) {
 // 无参 --resume-run 是一次性列表命令：不构造 runtime、不需要 API Key。
 if (args.resumeRunArg === '') {
   process.exit(await runResumeList());
+}
+// `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
+if (args.resumeArg === '') {
+  if (args.connectArg !== null || (process.env.VESSEL_CONNECT ?? '').trim() !== '') {
+    console.error('--resume without an id requires a local session store (not with --connect).');
+    process.exit(2);
+  }
+  process.exit(
+    await runSessionList({
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+    }),
+  );
 }
 // 0.4 子命令：workflow / eval 自己加载配置并决定退出码。
 if (args.workflow) {
@@ -343,8 +381,49 @@ if (args.trace) {
     ),
   );
 }
+if (args.pluginCommand) {
+  process.exit(printCommandResult(await runPluginCommand(args.pluginCommand)));
+}
+if (args.doctorCommand) {
+  process.exit(printCommandResult(await doctorCommand(args.doctorCommand)));
+}
 
 const { runArg, pipeMode, sessionArg, servePort, resumeRunArg } = args;
+
+// ── 会话续接解析（0.6.1 E8）─────────────────────
+// connect 模式交给 bootstrapConnect（远端是唯一数据源）；本地先校验/选择 id。
+const connectConfigured =
+  args.connectArg !== null || (process.env.VESSEL_CONNECT ?? '').trim() !== '';
+let resolvedSessionId = sessionArg ?? undefined;
+let continueLatest = false;
+let resumeSessionId: string | undefined;
+if (args.continueArg) {
+  if (connectConfigured) {
+    continueLatest = true;
+  } else {
+    const resolved = await resolveContinueSessionId({
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+    });
+    if (!resolved.ok) {
+      console.error(resolved.error);
+      process.exit(1);
+    }
+    resolvedSessionId = resolved.sessionId;
+  }
+} else if (args.resumeArg !== null && args.resumeArg !== '') {
+  if (connectConfigured) {
+    resumeSessionId = args.resumeArg;
+  } else {
+    const checked = await validateResumeSessionId(args.resumeArg, {
+      ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+    });
+    if (!checked.ok) {
+      console.error(checked.error);
+      process.exit(1);
+    }
+    resolvedSessionId = args.resumeArg;
+  }
+}
 const resumeRunId = resumeRunArg !== null && resumeRunArg !== '' ? resumeRunArg : null;
 // 恢复模式：TTY 下恢复完进 REPL；非 TTY 下恢复完打印结果退出。
 const headless =
@@ -360,11 +439,13 @@ const interactive = entersRepl && process.stdin.isTTY === true;
 // 引导应用启动
 const initialResult = await bootstrap({
   useMock,
-  sessionId: sessionArg ?? undefined,
+  sessionId: resolvedSessionId,
   headless,
   interactive,
   registerAskUser: interactive,
   acquireLock: true,
+  ...(continueLatest ? { continueLatest: true } : {}),
+  ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
   ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
   ...(args.connectArg !== null
     ? { connect: args.connectArg }
@@ -398,7 +479,7 @@ if (!useMock && interactive && !config.apiKey) {
     await initialResult.shutdown();
     const result = await bootstrap({
       useMock,
-      sessionId: sessionArg ?? undefined,
+      sessionId: resolvedSessionId,
       headless,
       interactive,
       registerAskUser: interactive,
@@ -565,7 +646,12 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     const dataDir = resolveDataDir(config);
-    const gatewayOptions: GatewayOptions = {
+    // 0.6.1 P0-2：非 default tenant 只走 per-tenant runStore；
+    // default tenant 由上面的 `durable` 提供（gateway 优先 opts.durable）。
+    const durableFor = createDurableFor(tenantFactory, result.tenantId);
+    const gatewayOptions: GatewayOptions & {
+      durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
+    } = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
       events: sharedEvents ?? ctx.events,
@@ -609,6 +695,8 @@ async function runWithConfig(result: BootstrapResult) {
       ...(tenantFactory
         ? {
             defaultTenantId: result.tenantId,
+            // 0.6.1：per-tenant durable（缺失 → 非 default tenant 403）。
+            durableFor,
             // A6-13：tenants.get/list/create/update 的数据源。
             // A6-14：配置的 status/quota 是权威来源，tenant.json 兜底。
             tenants: createTenantControl(dataDir, {

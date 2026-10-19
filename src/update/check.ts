@@ -90,7 +90,7 @@ async function fetchJson(
   return (await response.json()) as unknown;
 }
 
-/** 0.1.0 的升级方式：提示包管理器命令，不做自替换 */
+/** 升级方式：提示包管理器命令，不做自替换（根包 `vessel` 自 0.6.1 起可发布） */
 export function installHint(version: string): string {
-  return `bun add -g vessel@${version}  (or npm i -g vessel@${version})`;
+  return `npm i -g vessel@${version}  (or bun add -g vessel@${version}; npx vessel@${version})`;
 }
