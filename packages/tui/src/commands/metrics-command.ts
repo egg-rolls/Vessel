@@ -187,7 +187,7 @@ export function buildMetricsDetailView(
 type MetricsFetch = { ok: true; snapshot: MetricsSnapshotLike } | { ok: false; message: string };
 
 /** 读取快照（命令主体与视图刷新共用；错误文本与既有命令一致） */
-async function fetchMetricsSnapshot(
+export async function fetchMetricsSnapshot(
   ctx: ReplContext,
   source: MetricsSource,
 ): Promise<MetricsFetch> {

@@ -29,9 +29,13 @@ import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
 import type { DetailView, ListView, ViewActionInvocation, ViewEnvelope } from '../views/types.js';
 import { capabilitiesCommand } from './capabilities-command.js';
 import { configCommand } from './config-command.js';
+import { compactCommand, contextCommand } from './context-command.js';
+import { costCommand } from './cost-command.js';
+import { exportCommand } from './export-command.js';
 import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
 import { metricsCommand } from './metrics-command.js';
+import { permissionsCommand } from './permissions-command.js';
 import { runsCommand } from './runs-command.js';
 import {
   deleteSession,
@@ -39,6 +43,7 @@ import {
   getSessionState,
   listSessions,
   renameSessionAction,
+  type SessionMessageLike,
   sessionsCommand,
 } from './sessions-command.js';
 import { tenantCommand } from './tenant-command.js';
@@ -57,6 +62,8 @@ export interface ReplState {
   showResumePicker: boolean;
   /** 主循环运行标志--/exit 置 false 退出 */
   running: boolean;
+  /** 历史/恢复回灌是否展示 reasoning_content（默认 false） */
+  showReasoning?: boolean;
 }
 
 /** 命令执行结果 */
@@ -230,6 +237,12 @@ export function createCommands(): CommandRegistry {
   reg.register(tenantCommand());
   reg.register(traceCommand());
   reg.register(sessionsCommand());
+  reg.register(contextCommand());
+  reg.register(compactCommand());
+  reg.register(permissionsCommand());
+  reg.register(exportCommand());
+  reg.register(costCommand());
+  reg.register(reasoningCommand());
   reg.register(newCommand());
   reg.register(historyCommand());
   reg.register(helpCommand(reg));
@@ -275,9 +288,11 @@ function renderHelp(reg: CommandRegistry, ctx: ReplContext): string {
   lines.push('');
   lines.push('Tips:');
   lines.push('  Ctrl+J   insert a newline (multi-line input)');
+  lines.push('  ↑/↓      recall submitted input (outside the completion menu)');
   lines.push('  Esc      cancel the running turn (or clear the command list)');
   lines.push('  Ctrl+C   cancel the running turn; press again / when idle to exit');
   lines.push('  Ctrl+L   clear the screen');
+  lines.push('  Ctrl+O   expand full tool output into scrollback');
   lines.push('  Resume   picker: ↑↓/jk move · / filter · enter open · r rename · x delete');
   lines.push('');
   return lines.join('\n');
@@ -289,7 +304,7 @@ function resumeCommand(): CommandEntry {
   return {
     name: 'resume',
     description: 'Resume a session (picker: r rename, x delete)',
-    usage: '/resume [number|id|delete <id> --yes|rename <id> <title>]',
+    usage: '/resume [number|id|prefix|title #N|delete <id> --yes|rename <id> <title>]',
     category: 'session',
     keywords: ['session', 'switch', 'load', 'history'],
     run: async (args, ctx, state) => {
@@ -341,11 +356,13 @@ function resumeCommand(): CommandEntry {
           nextState: { showResumePicker: true, pendingResume: true },
         };
       }
-      const resolved = await resolveResumeTarget(args[0] ?? '', ctx);
+      const resolved = await resolveResumeTarget(args.join(' '), ctx);
       if (!resolved.ok) {
         return { handled: true, output: `\n${resolved.message}\n` };
       }
-      const { message, history, nextState } = await doResume(ctx, resolved.sessionId);
+      const { message, history, nextState } = await doResume(ctx, resolved.sessionId, {
+        showReasoning: state.showReasoning ?? false,
+      });
       return { handled: true, output: message, history, nextState };
     },
   };
@@ -370,37 +387,144 @@ export async function consumePendingResume(
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
-  const { message, history, nextState } = await doResume(ctx, target.session_id);
+  const { message, history, nextState } = await doResume(ctx, target.session_id, {
+    showReasoning: state.showReasoning ?? false,
+  });
   applyNextState(state, { ...nextState, pendingResume: false });
   return { handled: true, output: message, history };
 }
 
-/** 解析 resume 参数：纯数字=按编号，否则按精确 session_id */
-async function resolveResumeTarget(
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 解析 resume 参数（Hermes 语义）：
+ * 编号 → 精确 id → 唯一 id 前缀 → title（同名取最新；`title #N` 取第 N 新）。
+ */
+export async function resolveResumeTarget(
   arg: string,
   ctx: ReplContext,
 ): Promise<{ ok: true; sessionId: string } | { ok: false; message: string }> {
-  const num = Number.parseInt(arg, 10);
-  if (!Number.isNaN(num) && num >= 1) {
-    const sessions = await listSessions(ctx);
-    const target = sessions[num - 1];
-    if (!target) return { ok: false, message: `No session #${num}.` };
-    return { ok: true, sessionId: target.session_id };
+  const query = arg.trim();
+  if (!query) return { ok: false, message: 'Usage: /resume <number|id|prefix|title>' };
+
+  if (/^\d+$/.test(query)) {
+    const num = Number.parseInt(query, 10);
+    if (num >= 1) {
+      const sessions = await listSessions(ctx);
+      const target = sessions[num - 1];
+      // 纯数字也可能是日期形式的 id 前缀（YYYYMMDD...），越界时继续按 id 解析。
+      if (target) return { ok: true, sessionId: target.session_id };
+    }
   }
-  const loaded = await getSessionState(ctx, arg);
-  if (!loaded) return { ok: false, message: `Session "${arg}" not found.` };
-  return { ok: true, sessionId: arg };
+
+  const exact = await getSessionState(ctx, query);
+  if (exact) return { ok: true, sessionId: query };
+
+  const sessions = await listSessions(ctx);
+  const prefixMatches = sessions.filter((session) => session.session_id.startsWith(query));
+  if (prefixMatches.length === 1) {
+    return { ok: true, sessionId: prefixMatches[0]?.session_id ?? query };
+  }
+  if (prefixMatches.length > 1) {
+    const candidates = prefixMatches
+      .slice(0, 5)
+      .map((session) => session.session_id)
+      .join(', ');
+    return {
+      ok: false,
+      message: `Session prefix "${query}" is ambiguous (${prefixMatches.length} matches: ${candidates}).`,
+    };
+  }
+
+  // Hermes 语义：存在 "title #N" 变体时取最新（列表已按 updated_at 倒序）。
+  const numbered = new RegExp(`^${escapeRegExp(query)} #\\d+$`);
+  const numberedMatches = sessions.filter((session) => numbered.test(session.title));
+  if (numberedMatches.length > 0) {
+    return { ok: true, sessionId: numberedMatches[0]?.session_id ?? '' };
+  }
+
+  // title 精确匹配（含字面 "title #N"）。
+  const exactTitle = sessions.filter((session) => session.title === query);
+  if (exactTitle.length > 0) {
+    return { ok: true, sessionId: exactTitle[0]?.session_id ?? '' };
+  }
+
+  // "base #N"：同名会话按更新时间取第 N 新（1-based）。
+  const explicit = /^(.*\S)\s+#(\d+)$/.exec(query);
+  if (explicit) {
+    const base = explicit[1] ?? '';
+    const index = Number.parseInt(explicit[2] ?? '0', 10);
+    const sameTitle = sessions.filter(
+      (session) => session.title.toLowerCase() === base.toLowerCase(),
+    );
+    if (sameTitle.length > 0) {
+      const target = sameTitle[index - 1];
+      if (!target) {
+        return {
+          ok: false,
+          message: `No session "${base} #${index}" (${sameTitle.length} found).`,
+        };
+      }
+      return { ok: true, sessionId: target.session_id };
+    }
+  }
+
+  const caseInsensitive = sessions.filter(
+    (session) => session.title.toLowerCase() === query.toLowerCase(),
+  );
+  if (caseInsensitive.length === 1) {
+    return { ok: true, sessionId: caseInsensitive[0]?.session_id ?? '' };
+  }
+
+  return {
+    ok: false,
+    message: `Session "${query}" not found (tried exact id, unique id prefix, and title).`,
+  };
 }
 
 /** resume 后回灌的历史：最多条数 / 单条字符上限 */
 const RESUME_HISTORY_MESSAGES = 20;
 const RESUME_HISTORY_MESSAGE_CHARS = 600;
 
+export interface HistoryFormatOptions {
+  /** 展示 assistant reasoning_content（默认 false） */
+  showReasoning?: boolean;
+}
+
+/** 单条工具调用摘要（工具名 + 参数） */
+function summarizeToolCalls(message: SessionMessageLike): string | null {
+  if (!message.tool_calls?.length) return null;
+  const calls = message.tool_calls.map((call) => {
+    const name = call.function?.name ?? 'unknown';
+    const raw = call.function?.arguments ?? '';
+    let args = raw.replace(/\s+/g, ' ').trim();
+    try {
+      args = JSON.stringify(JSON.parse(raw));
+    } catch {
+      // 非 JSON 参数原样展示
+    }
+    return `${name}(${args.length > 160 ? `${args.slice(0, 160)}…` : args})`;
+  });
+  return calls.join(', ');
+}
+
+function reasoningLine(message: SessionMessageLike): string | null {
+  const reasoning = message.reasoning_content?.trim();
+  if (!reasoning) return null;
+  const oneLine = reasoning.replace(/\s+/g, ' ');
+  return `[reasoning] ${oneLine.length > 400 ? `${oneLine.slice(0, 400)}…` : oneLine}`;
+}
+
 /**
  * 纯函数：把最近 N 条消息格式化为可写入终端 scrollback 的行。
  * system 不展示；user/assistant/tool 用轻量角色前缀与竖线缩进。
  */
-export function formatResumeHistory(messages: Array<{ role: string; content: string }>): string[] {
+export function formatResumeHistory(
+  messages: SessionMessageLike[],
+  options: HistoryFormatOptions = {},
+): string[] {
   const visible = messages.filter((message) => message.role !== 'system');
   if (visible.length === 0) return [];
 
@@ -413,7 +537,7 @@ export function formatResumeHistory(messages: Array<{ role: string; content: str
   ];
 
   for (const message of recent) {
-    const formatted = formatHistoryMessage(message).join('\n');
+    const formatted = formatHistoryMessage(message, options).join('\n');
     const clipped =
       formatted.length > RESUME_HISTORY_MESSAGE_CHARS
         ? `${formatted.slice(0, RESUME_HISTORY_MESSAGE_CHARS)}…`
@@ -431,14 +555,18 @@ export function formatResumeHistory(messages: Array<{ role: string; content: str
 
 /** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史。
  *  纯函数：只返回确认消息 + 历史展示行 + 请求的 state 变更，不直接改 state、不打印。 */
-export async function doResume(ctx: ReplContext, sessionId: string): Promise<ResumeResult> {
+export async function doResume(
+  ctx: ReplContext,
+  sessionId: string,
+  options: HistoryFormatOptions = {},
+): Promise<ResumeResult> {
   ctx.context.clear();
   ctx.onSessionChange(sessionId);
   const loaded = await getSessionState(ctx, sessionId);
   const messages = loaded?.messages ?? [];
   return {
     message: `Resumed session "${sessionId}" (${messages.length} messages).`,
-    history: formatResumeHistory(messages),
+    history: formatResumeHistory(messages, options),
     nextState: { currentSessionId: sessionId },
   };
 }
@@ -480,16 +608,34 @@ function newCommand(): CommandEntry {
 const MAX_HISTORY_MESSAGE_CHARS = 1200;
 
 /** 把一条历史消息格式化为若干展示行（注入文件只显示路径与大小） */
-function formatHistoryMessage(msg: { role: string; content: string }): string[] {
+function formatHistoryMessage(
+  msg: SessionMessageLike,
+  options: HistoryFormatOptions = {},
+): string[] {
   if (msg.role === 'user') {
     const fileMatch = msg.content.match(/^<file path="([^"]+)">/);
     if (fileMatch?.[1]) {
       return [`[User · file] ${fileMatch[1]}`, `(attached file, ${msg.content.length} chars)`];
     }
   }
-  if (msg.content.length <= MAX_HISTORY_MESSAGE_CHARS) return [msg.content];
-  const omitted = msg.content.length - MAX_HISTORY_MESSAGE_CHARS;
-  return [`${msg.content.slice(0, MAX_HISTORY_MESSAGE_CHARS)}\n… (+${omitted} chars)`];
+
+  const lines: string[] = [];
+  if (options.showReasoning) {
+    const reasoning = reasoningLine(msg);
+    if (reasoning) lines.push(reasoning);
+  }
+
+  if (msg.content.length <= MAX_HISTORY_MESSAGE_CHARS) {
+    if (msg.content) lines.push(msg.content);
+  } else {
+    const omitted = msg.content.length - MAX_HISTORY_MESSAGE_CHARS;
+    lines.push(`${msg.content.slice(0, MAX_HISTORY_MESSAGE_CHARS)}\n… (+${omitted} chars)`);
+  }
+
+  const toolCalls = summarizeToolCalls(msg);
+  if (toolCalls) lines.push(`→ tool_calls: ${toolCalls}`);
+  if (msg.role === 'tool' && msg.name) lines.push(`(tool: ${msg.name})`);
+  return lines.length > 0 ? lines : [''];
 }
 
 export type HistoryRole = 'user' | 'assistant' | 'tool';
@@ -498,12 +644,15 @@ export interface HistoryOptions {
   /** 未显式指定时使用 HISTORY_LIMIT_DEFAULT（最近 50 条） */
   limit?: number;
   role?: HistoryRole;
+  /** 单次覆盖 showReasoning；缺省用 ReplState.showReasoning */
+  reasoning?: boolean;
 }
 
 const HISTORY_LIMIT_MAX = 500;
 /** 无参 /history 的默认展示条数（只显示最近 N 条） */
 export const HISTORY_LIMIT_DEFAULT = 50;
-const HISTORY_USAGE = 'Usage: /history [--limit <n>] [--role user|assistant|tool]';
+const HISTORY_USAGE =
+  'Usage: /history [--limit <n>] [--role user|assistant|tool] [--reasoning|--no-reasoning]';
 const HISTORY_ROLES: readonly HistoryRole[] = ['user', 'assistant', 'tool'];
 
 /** 解析 /history 参数；未知参数直接给 usage，不发数据请求。 */
@@ -512,6 +661,7 @@ export function parseHistoryArgs(
 ): { ok: true; value: HistoryOptions } | { ok: false; message: string } {
   let limit: number | undefined;
   let role: HistoryRole | undefined;
+  let reasoning: boolean | undefined;
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -548,6 +698,16 @@ export function parseHistoryArgs(
       continue;
     }
 
+    if (arg === '--reasoning') {
+      reasoning = true;
+      continue;
+    }
+
+    if (arg === '--no-reasoning') {
+      reasoning = false;
+      continue;
+    }
+
     return { ok: false, message: `${HISTORY_USAGE} (unknown argument "${arg}")` };
   }
 
@@ -556,6 +716,7 @@ export function parseHistoryArgs(
     value: {
       ...(limit !== undefined ? { limit } : {}),
       ...(role !== undefined ? { role } : {}),
+      ...(reasoning !== undefined ? { reasoning } : {}),
     },
   };
 }
@@ -563,8 +724,8 @@ export function parseHistoryArgs(
 function historyCommand(): CommandEntry {
   return {
     name: 'history',
-    description: '显示当前会话的对话历史',
-    usage: '/history [--limit <n>] [--role user|assistant|tool]',
+    description: '显示当前会话的对话历史（--reasoning 显示思维链）',
+    usage: '/history [--limit <n>] [--role user|assistant|tool] [--reasoning|--no-reasoning]',
     category: 'session',
     keywords: ['history', 'transcript', 'messages'],
     run: async (args, ctx, state) => {
@@ -596,15 +757,41 @@ function historyCommand(): CommandEntry {
         role ? `, role=${role}` : ''
       }, last ${effectiveLimit}):`;
 
-      const lines = ['', header];
+      const showReasoning = parsed.value.reasoning ?? state.showReasoning ?? false;
+      const lines = ['', `${header}${showReasoning ? ' [reasoning on]' : ''}`];
       for (const msg of shown) {
         const label = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
         lines.push('');
         lines.push(`[${label}]`);
-        lines.push(...formatHistoryMessage(msg));
+        lines.push(...formatHistoryMessage(msg, { showReasoning }));
       }
       lines.push('');
       return { handled: true, output: lines.join('\n') };
+    },
+  };
+}
+
+// ── /reasoning ───────────────────────────────────
+
+function reasoningCommand(): CommandEntry {
+  return {
+    name: 'reasoning',
+    description: '切换历史中的 reasoning 展示（on/off）',
+    usage: '/reasoning [on|off]',
+    category: 'session',
+    keywords: ['reasoning', 'thinking', 'history', 'toggle'],
+    run: (args, _ctx, state) => {
+      const value = (args[0] ?? '').toLowerCase();
+      if (value && value !== 'on' && value !== 'off') {
+        return { handled: true, output: '\nUsage: /reasoning [on|off]\n' };
+      }
+      const next =
+        value === 'on' ? true : value === 'off' ? false : !(state.showReasoning ?? false);
+      return {
+        handled: true,
+        output: `\nReasoning display: ${next ? 'on' : 'off'} (applies to /history and /resume).\n`,
+        nextState: { showReasoning: next },
+      };
     },
   };
 }

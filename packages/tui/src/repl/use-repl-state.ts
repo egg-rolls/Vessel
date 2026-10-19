@@ -81,6 +81,20 @@ export interface ReplUiState {
   view: ActiveViewState | null;
   /** 最近成功执行的命令名（不含斜杠，最多 5 个；内存态） */
   recentCommands: string[];
+  /** 已提交输入历史（↑↓ 召回；内存态） */
+  inputHistory: string[];
+  /** 当前浏览历史的位置；null = 未浏览 */
+  historyIndex: number | null;
+  /** 开始浏览历史前的输入草稿（↓ 到底恢复） */
+  historyDraft: string;
+  /** 运行中提交的输入队列（run 结束按顺序执行） */
+  queuedInput: string[];
+  /** Ctrl+O 展开态（归档完整输出） */
+  expandedOutput: boolean;
+  /** 递增触发 StreamOutput 把完整输出刷入 scrollback */
+  expandSignal: number;
+  /** 队列处理完成后的重渲染触发器 */
+  queueTick: number;
 }
 
 export type ReplUiAction =
@@ -118,13 +132,22 @@ export type ReplUiAction =
   | { type: 'viewData'; envelope: ViewEnvelope; selectedKey?: string; requestId?: number }
   | { type: 'viewLoading'; requestId: number }
   | { type: 'viewError'; message: string; requestId: number }
-  | { type: 'pushRecentCommand'; name: string };
+  | { type: 'pushRecentCommand'; name: string }
+  | { type: 'recordInput'; value: string }
+  | { type: 'historyPrev' }
+  | { type: 'historyNext' }
+  | { type: 'enqueueInput'; value: string }
+  | { type: 'dequeueInput' }
+  | { type: 'clearQueue' }
+  | { type: 'bumpQueueTick' }
+  | { type: 'toggleExpanded' };
 
 /** 纯 reducer：不可变推进 UI 状态 */
 export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiState {
   switch (action.type) {
     case 'setInput':
-      return { ...state, input: action.input };
+      // 手工编辑离开历史浏览；否则 ↑ 会从旧位置继续而不是最新一条。
+      return { ...state, input: action.input, historyIndex: null, historyDraft: '' };
     case 'appendHistory':
       return { ...state, history: [...state.history, action.line] };
     case 'appendHistoryLines':
@@ -279,6 +302,55 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
       const rest = state.recentCommands.filter((name) => name !== action.name);
       return { ...state, recentCommands: [action.name, ...rest].slice(0, 5) };
     }
+    case 'recordInput': {
+      const value = action.value.trim();
+      if (!value) return state;
+      const last = state.inputHistory.at(-1);
+      const inputHistory =
+        last === value ? state.inputHistory : [...state.inputHistory, value].slice(-200);
+      return { ...state, inputHistory, historyIndex: null, historyDraft: '' };
+    }
+    case 'historyPrev': {
+      if (state.inputHistory.length === 0) return state;
+      const index =
+        state.historyIndex === null
+          ? state.inputHistory.length - 1
+          : Math.max(0, state.historyIndex - 1);
+      return {
+        ...state,
+        historyIndex: index,
+        historyDraft: state.historyIndex === null ? state.input : state.historyDraft,
+        input: state.inputHistory[index] ?? '',
+      };
+    }
+    case 'historyNext': {
+      if (state.historyIndex === null) return state;
+      const index = state.historyIndex + 1;
+      if (index >= state.inputHistory.length) {
+        return { ...state, historyIndex: null, input: state.historyDraft, historyDraft: '' };
+      }
+      return { ...state, historyIndex: index, input: state.inputHistory[index] ?? '' };
+    }
+    case 'enqueueInput':
+      return action.value.trim()
+        ? { ...state, queuedInput: [...state.queuedInput, action.value] }
+        : state;
+    case 'dequeueInput':
+      return state.queuedInput.length === 0
+        ? state
+        : { ...state, queuedInput: state.queuedInput.slice(1) };
+    case 'clearQueue':
+      return state.queuedInput.length === 0 ? state : { ...state, queuedInput: [] };
+    case 'bumpQueueTick':
+      return { ...state, queueTick: state.queueTick + 1 };
+    case 'toggleExpanded': {
+      const expandedOutput = !state.expandedOutput;
+      return {
+        ...state,
+        expandedOutput,
+        expandSignal: expandedOutput ? state.expandSignal + 1 : state.expandSignal,
+      };
+    }
   }
 }
 
@@ -307,6 +379,13 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     run: { phase: 'idle', abort: null },
     view: null,
     recentCommands: [],
+    inputHistory: [],
+    historyIndex: null,
+    historyDraft: '',
+    queuedInput: [],
+    expandedOutput: false,
+    expandSignal: 0,
+    queueTick: 0,
   };
 }
 

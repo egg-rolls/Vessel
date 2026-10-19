@@ -21,10 +21,20 @@ const MESSAGES_WIDTH = 8;
 const UPDATED_WIDTH = 10;
 const TITLE_MAX = 48;
 
+/** 历史展示需要的消息形状（tool_calls/reasoning 可选，旧会话缺失时降级） */
+export interface SessionMessageLike {
+  role: string;
+  content: string;
+  tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>;
+  tool_call_id?: string;
+  name?: string;
+  reasoning_content?: string;
+}
+
 /** sessions.get 的最小形状 */
 export interface SessionStateLike {
   session_id?: string;
-  messages: Array<{ role: string; content: string }>;
+  messages: SessionMessageLike[];
 }
 
 /** delete 计数（A-4 §11.3；1 追加 sessions_deleted） */
@@ -78,14 +88,42 @@ export function sortSessions(sessions: SessionInfo[]): SessionInfo[] {
   });
 }
 
-function readMessages(value: unknown): Array<{ role: string; content: string }> {
+function readToolCalls(
+  value: unknown,
+): Array<{ id?: string; function?: { name?: string; arguments?: string } }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const calls = value
+    .filter((call): call is Record<string, unknown> => isRecord(call))
+    .map((call) => {
+      const fn = isRecord(call.function) ? call.function : {};
+      return {
+        ...(typeof call.id === 'string' ? { id: call.id } : {}),
+        function: {
+          ...(typeof fn.name === 'string' ? { name: fn.name } : {}),
+          ...(typeof fn.arguments === 'string' ? { arguments: fn.arguments } : {}),
+        },
+      };
+    });
+  return calls.length > 0 ? calls : undefined;
+}
+
+function readMessages(value: unknown): SessionMessageLike[] {
   if (!Array.isArray(value)) return [];
   return value
     .filter((message): message is Record<string, unknown> => isRecord(message))
-    .map((message) => ({
-      role: asString(message.role, 'unknown'),
-      content: asString(message.content),
-    }));
+    .map((message) => {
+      const toolCalls = readToolCalls(message.tool_calls);
+      return {
+        role: asString(message.role, 'unknown'),
+        content: asString(message.content),
+        ...(toolCalls ? { tool_calls: toolCalls } : {}),
+        ...(typeof message.tool_call_id === 'string' ? { tool_call_id: message.tool_call_id } : {}),
+        ...(typeof message.name === 'string' ? { name: message.name } : {}),
+        ...(typeof message.reasoning_content === 'string'
+          ? { reasoning_content: message.reasoning_content }
+          : {}),
+      };
+    });
 }
 
 /** 读取会话列表：RPC 优先，第三方嵌入退回 SessionBackend */
