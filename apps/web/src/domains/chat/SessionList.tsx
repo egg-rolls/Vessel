@@ -11,6 +11,7 @@ import {
   type SessionStatusFilter,
   sessionTitle,
 } from '../../state/sessions';
+import { highlightSegments } from './highlight';
 
 const STATUS_FILTERS: readonly { id: SessionStatusFilter; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -311,7 +312,19 @@ export function SessionList({
                             <span className="session-title" title={title}>
                               {title}
                             </span>
-                            {preview && <span className="session-preview">{preview}</span>}
+                            {preview && (
+                              <span className="session-preview">
+                                {query.trim()
+                                  ? highlightSegments(preview, query).map((segment) =>
+                                      segment.match ? (
+                                        <mark key={segment.start}>{segment.text}</mark>
+                                      ) : (
+                                        <Fragment key={segment.start}>{segment.text}</Fragment>
+                                      ),
+                                    )
+                                  : preview}
+                              </span>
+                            )}
                             <span className="session-meta">
                               <StatusChip status={session.status} />
                               <span>{session.message_count} 条</span>

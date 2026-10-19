@@ -151,6 +151,8 @@
 }
 
 .search-input {
+  height: var(--control-h);
+  padding-block: 0;
   background: var(--bg);
 }
 
@@ -270,6 +272,10 @@
 
 .status-glyph {
   font-size: 10px;
+}
+
+.status-chip[data-status="running"] .status-glyph {
+  animation: pulse 1.6s ease-in-out infinite;
 }
 
 .status-chip.tone-ok {
