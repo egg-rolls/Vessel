@@ -22,3 +22,11 @@ Vessel 是 Agent Harness，会执行工具（文件 / shell / 代码）。使用
 - 不向 core 提交任何厂商 API Key / 价格；Key 永远用户自备（ADR-005）。
 - 沙箱类能力（code-sandbox / sandbox-fs）作为插件按需启用，不进 core 默认。
 - Guardrail（PII / 密钥脱敏 / prompt 注入防御）作为插件按需启用。
+
+## 在不可信仓库中运行
+
+仓库内的 `.vessel/plugins/` 与 `node_modules/@vessel` 插件会在进程启动时被动态 import，并拥有完整进程权限，早于任何工具权限判定。
+
+- 在克隆来的、未审计的仓库中运行前，设置 `VESSEL_NO_EXTERNAL_PLUGINS=1`（或 `true`）；默认集将只加载仓库内置的 `repo` 插件。
+- 只在确认来源可信时，才通过显式 `plugins:` 加载 project / user / node_modules 插件；显式列表不受上述 opt-out 限制。
+- 0.7.1 对外部插件默认加载只提供“启动告警 + opt-out”的缓解（**MITIGATED**），并未建立完整的插件信任边界。
