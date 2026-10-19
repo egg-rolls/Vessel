@@ -215,7 +215,7 @@ describe('provider-anthropic 流式与错误', () => {
   it('HTTP 非 2xx 抛出带状态码与 body 的错误', async () => {
     globalThis.fetch = (async () =>
       new Response('rate limited', { status: 429 })) as unknown as typeof fetch;
-    const provider = factoryFor()({ api_key: 'k', timeout_ms: 0 });
+    const provider = factoryFor()({ api_key: 'k', timeout_ms: 0, max_retries: 0 });
 
     await expect(
       provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'm' }),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { type Guardrail, GuardrailStage, MemoryPluginHost } from '@vessel/core';
-import redactPlugin, { createRedactSecretsPlugin } from '../src/index';
+import redactPlugin, { createRedactSecretsPlugin, type PluginInstallOptions } from '../src/index';
 
 /** 取 Output 阶段的 guardrail */
 function outputGuardrail(plugin = redactPlugin): Guardrail {
@@ -109,5 +109,33 @@ describe('redact-secrets 插件（P2）', () => {
       'sk-abcdefghijklmnopqrstuv',
     );
     expect(await redact('编号 INT-1234', plugin)).toContain('***ID***');
+  });
+
+  it('install 传入 plugins[].config 时生效（E1，含非法正则跳过）', async () => {
+    const host = new MemoryPluginHost();
+    const plugin = createRedactSecretsPlugin({ enableBuiltin: true });
+    (plugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(host, {
+      config: {
+        enableBuiltin: false,
+        extraPatterns: [
+          { name: 'internal-id', pattern: 'INT-\\d{4}', replacement: '***ID***' },
+          { name: 'broken', pattern: '([' },
+        ],
+      },
+    });
+    const guardrail = host.getGuardrails().find((g) => g.stage === GuardrailStage.Output);
+    if (!guardrail) throw new Error('Output guardrail not registered');
+
+    const builtin = await guardrail.check('sk-abcdefghijklmnopqrstuv', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(builtin.replacement).toBeUndefined();
+
+    const custom = await guardrail.check('编号 INT-1234', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(custom.replacement).toContain('***ID***');
   });
 });

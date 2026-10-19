@@ -6,7 +6,10 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type AgentMessage,
+  type AgentSpec as CoreAgentSpec,
   InProcessRuntimeHost as CoreInProcessRuntimeHost,
+  GuardrailStage,
+  HookType,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
@@ -18,7 +21,7 @@ import {
 } from '@vessel/core';
 import { CoreHostAdapter } from '../src/core-adapter';
 import type { TeamMessage } from '../src/host';
-import { createTeamPlugin, disabledTeamPlugin } from '../src/index';
+import { buildChildHost, createTeamPlugin, disabledTeamPlugin } from '../src/index';
 
 interface FakeRequest {
   requestId?: string;
@@ -93,6 +96,64 @@ describe('team 插件注册面', () => {
     const host = new MemoryPluginHost();
     disabledTeamPlugin.install(host);
     expect(host.listTools()).toHaveLength(0);
+  });
+});
+
+describe('buildChildHost（供 asm 远端 spawn 复用）', () => {
+  it('剔除 team_*，保留普通工具与 guardrail/hook', () => {
+    const parent = new MemoryPluginHost();
+    parent.registerTool({
+      name: 'bash',
+      description: 'bash',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    });
+    parent.registerTool({
+      name: 'team_send',
+      description: 'team',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    });
+    parent.registerGuardrail({
+      name: 'g',
+      stage: GuardrailStage.Output,
+      check: async () => ({ allowed: true }),
+    });
+    parent.registerHook({
+      name: 'h',
+      type: HookType.BeforeTool,
+      run: async () => {},
+    });
+
+    const child = buildChildHost(parent);
+    expect(child.listTools().map((tool) => tool.name)).toEqual(['bash']);
+    expect(child.getGuardrails().map((guardrail) => guardrail.name)).toEqual(['g']);
+    expect(child.getHooks().map((hook) => hook.name)).toEqual(['h']);
+  });
+
+  it('memberLimits / memberTermination 透传到 core AgentSpec', async () => {
+    const coreHost = new CoreInProcessRuntimeHost();
+    const spawned: CoreAgentSpec[] = [];
+    const originalSpawn = coreHost.spawn.bind(coreHost);
+    coreHost.spawn = async (spec) => {
+      spawned.push(spec);
+      return originalSpawn(spec);
+    };
+
+    const pluginHost = new MemoryPluginHost();
+    createTeamPlugin({
+      providerFactory: () => new MemoryLLMProvider(),
+      model: 'test-model',
+      host: coreHost,
+      memberLimits: { requestLimit: 7, toolCallsLimit: 3 },
+      memberTermination: { maxIterations: 2, maxRuntimeSeconds: 30 },
+    }).install(pluginHost);
+
+    await pluginHost.getTool('team_spawn')?.handler({ name: 'worker' }, makeContext());
+
+    expect(spawned[0]?.limits).toEqual({ run: { requestLimit: 7, toolCallsLimit: 3 } });
+    expect(spawned[0]?.termination).toEqual({ maxIterations: 2, maxRuntimeSeconds: 30 });
+    await coreHost.close();
   });
 });
 

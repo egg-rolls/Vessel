@@ -9,7 +9,7 @@ import {
   type Plugin,
   type ToolDefinition,
 } from '@vessel/core';
-import { createToolPolicyPlugin, toolPolicyPlugin } from '../src/index';
+import { createToolPolicyPlugin, type PluginInstallOptions, toolPolicyPlugin } from '../src/index';
 
 describe('tool-policy 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -217,6 +217,46 @@ describe('tool-policy 插件（P2）', () => {
     expect(r.reason).toContain('安全策略拦截');
   });
 
+  it('install 传入 plugins[].config 时生效（E1）', async () => {
+    const configHost = new MemoryPluginHost();
+    (toolPolicyPlugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(
+      configHost,
+      { config: { mode: 'allowlist', tools: ['read'], block_message: 'YAML 策略：' } },
+    );
+    const g = configHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    const allowed = await g.check(
+      { name: 'read' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(allowed.allowed).toBe(true);
+
+    const blocked = await g.check(
+      { name: 'bash' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toContain('YAML 策略');
+  });
+
+  it('install 配置覆盖工厂配置（工厂默认 denylist，运行时改 allowlist）', async () => {
+    const configHost = new MemoryPluginHost();
+    const plugin = createToolPolicyPlugin({ mode: 'denylist', tools: ['read'] });
+    (plugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(configHost, {
+      config: { mode: 'allowlist', tools: ['read'] },
+    });
+    const g = configHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    expect(
+      (await g.check({ name: 'read' }, { run_id: 'r1', stage: GuardrailStage.ToolCall })).allowed,
+    ).toBe(true);
+    expect(
+      (await g.check({ name: 'bash' }, { run_id: 'r1', stage: GuardrailStage.ToolCall })).allowed,
+    ).toBe(false);
+  });
+
   it('多个工具在黑名单中', async () => {
     const multiDenyHost = new MemoryPluginHost();
     createToolPolicyPlugin({
@@ -274,15 +314,19 @@ function callTool(provider: MemoryLLMProvider, input: string, toolName: string):
 }
 
 describe('tool-policy 与 runtime 集成', () => {
-  it('经 AgentRuntime 的真实 tool_call 会被拦截', async () => {
+  it('经 AgentRuntime 的真实 tool_call 被拦截后折回工具错误，run 继续', async () => {
     const provider = new MemoryLLMProvider();
     callTool(provider, 'CALL_DANGER', 'danger_tool');
 
+    let handlerCalled = false;
     const dangerTool: ToolDefinition = {
       name: 'danger_tool',
       description: 'danger',
       inputSchema: { type: 'object', properties: {} },
-      handler: async () => 'should not run',
+      handler: async () => {
+        handlerCalled = true;
+        return 'should not run';
+      },
     };
 
     const runtime = await AgentRuntime.create({
@@ -298,7 +342,11 @@ describe('tool-policy 与 runtime 集成', () => {
       ],
     });
 
-    await expect(runtime.run('CALL_DANGER')).rejects.toThrow(/blocked by guardrail/);
+    const result = await runtime.run('CALL_DANGER');
+    expect(handlerCalled).toBe(false);
+    expect(result).toContain('blocked by guardrail');
+    expect(result).toContain('danger_tool');
+    expect(result).not.toContain('should not run');
   });
 
   it('未命中策略的工具照常执行', async () => {

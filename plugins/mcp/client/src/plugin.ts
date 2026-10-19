@@ -111,6 +111,67 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     }
   }
 
+  /** 注册 resources/prompts 辅助工具；能力未广告时不注册 */
+  function registerResourceTools(pluginHost: PluginHost, entry: ServerEntry): void {
+    const connection = entry.connection;
+    if (!connection) return;
+
+    const toolPrefix = entry.config.toolPrefix !== false;
+    const register = (definition: ToolDefinition): void => {
+      if (pluginHost.getTool(definition.name) !== undefined) {
+        if (!entry.registered.includes(definition.name)) {
+          console.warn(
+            `Skipping MCP tool "${definition.name}" from server "${entry.config.name}": ` +
+              'a tool with this name is already registered; the existing tool is kept',
+          );
+        }
+        return;
+      }
+      pluginHost.registerTool(definition);
+      entry.registered.push(definition.name);
+    };
+
+    if (connection.supportsResources) {
+      register({
+        name: exposedToolName(entry.config.name, 'list_resources', toolPrefix),
+        description: `List resources exposed by MCP server "${entry.config.name}"`,
+        inputSchema: { type: 'object', properties: {} },
+        handler: async () => JSON.stringify(connection.resources),
+        checkPermission: async () => 'ask',
+      });
+      register({
+        name: exposedToolName(entry.config.name, 'read_resource', toolPrefix),
+        description: `Read a resource (by uri) from MCP server "${entry.config.name}"`,
+        inputSchema: {
+          type: 'object',
+          properties: { uri: { type: 'string', description: 'Resource uri' } },
+          required: ['uri'],
+        },
+        handler: async (args, ctx) => {
+          if (typeof args !== 'object' || args === null) {
+            return 'Error: read_resource requires { uri: string }';
+          }
+          const uri = (args as Record<string, unknown>).uri;
+          if (typeof uri !== 'string' || uri === '') {
+            return 'Error: read_resource requires a non-empty uri';
+          }
+          return connection.readResource(uri, ctx.signal);
+        },
+        checkPermission: async () => 'ask',
+      });
+    }
+
+    if (connection.supportsPrompts) {
+      register({
+        name: exposedToolName(entry.config.name, 'list_prompts', toolPrefix),
+        description: `List prompts exposed by MCP server "${entry.config.name}"`,
+        inputSchema: { type: 'object', properties: {} },
+        handler: async () => JSON.stringify(connection.prompts),
+        checkPermission: async () => 'ask',
+      });
+    }
+  }
+
   async function install(pluginHost: PluginHost): Promise<void> {
     if (installed) return;
     installed = true;
@@ -138,6 +199,7 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
       if (entry.connection?.state !== 'connected') continue;
       try {
         registerTools(pluginHost, entry);
+        registerResourceTools(pluginHost, entry);
       } catch (error) {
         publish('mcp.server.failed', {
           server: entry.config.name,
@@ -170,6 +232,8 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
         ? { protocolVersion: connection.protocolVersion }
         : {}),
       ...(connection?.serverInfo !== undefined ? { serverInfo: connection.serverInfo } : {}),
+      ...(connection?.supportsResources === true ? { resources: connection.resources.length } : {}),
+      ...(connection?.supportsPrompts === true ? { prompts: connection.prompts.length } : {}),
     };
   }
 
@@ -205,7 +269,36 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     await connection.connect();
     if (connection.state === 'connected') {
       registerTools(host, entry);
+      registerResourceTools(host, entry);
     }
+  }
+
+  /** 校验 server 并返回已连接实例 */
+  function connected(name: string): McpServerConnection {
+    const entry = entries.find((candidate) => candidate.config.name === name);
+    if (!entry) {
+      throw new McpPluginError('mcp_server_not_found', `MCP server "${name}" is not configured`);
+    }
+    if (entry.config.enabled === false) {
+      throw new McpPluginError('mcp_server_disabled', `MCP server "${name}" is disabled`);
+    }
+    const connection = entry.connection;
+    if (connection === undefined || connection.state !== 'connected') {
+      throw new McpPluginError('mcp_server_not_connected', `MCP server "${name}" is not connected`);
+    }
+    return connection;
+  }
+
+  async function listResources(name: string) {
+    return connected(name).resources;
+  }
+
+  async function readResource(name: string, uri: string): Promise<string> {
+    return connected(name).readResource(uri);
+  }
+
+  async function listPrompts(name: string) {
+    return connected(name).prompts;
   }
 
   function close(): Promise<void> {
@@ -225,6 +318,9 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     listServers,
     getServer,
     reconnect,
+    listResources,
+    readResource,
+    listPrompts,
     close,
   };
 }

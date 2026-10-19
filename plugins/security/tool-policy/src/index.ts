@@ -33,6 +33,41 @@ export interface ToolPolicyConfig {
   blockMessage?: string;
 }
 
+/** E1：`install(host, {config})` 的窄类型（core 尚未声明第二参数） */
+export interface PluginInstallOptions {
+  config?: Record<string, unknown>;
+}
+
+/** 类型守卫 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 读取布尔值（同时接受 camelCase / snake_case） */
+function readBoolean(
+  config: Record<string, unknown>,
+  camel: string,
+  snake: string,
+): boolean | undefined {
+  const value = config[camel] ?? config[snake];
+  return typeof value === 'boolean' ? value : undefined;
+}
+
+/** 把 YAML 里的插件配置解析成已知字段（未知键忽略） */
+export function parseToolPolicyConfig(value: unknown): ToolPolicyConfig {
+  if (!isRecord(value)) return {};
+  const parsed: ToolPolicyConfig = {};
+  if (value.mode === 'allowlist' || value.mode === 'denylist') parsed.mode = value.mode;
+  if (Array.isArray(value.tools)) {
+    parsed.tools = value.tools.filter((tool): tool is string => typeof tool === 'string');
+  }
+  const enableWildcards = readBoolean(value, 'enableWildcards', 'enable_wildcards');
+  if (enableWildcards !== undefined) parsed.enableWildcards = enableWildcards;
+  const blockMessage = value.blockMessage ?? value.block_message;
+  if (typeof blockMessage === 'string') parsed.blockMessage = blockMessage;
+  return parsed;
+}
+
 // ── 默认配置 ──────────────────────────────────────
 
 const DEFAULT_CONFIG: Required<ToolPolicyConfig> = {
@@ -131,10 +166,11 @@ export function createToolPolicyPlugin(config?: ToolPolicyConfig): Plugin {
     name: 'tool-policy',
     version: '0.1.0',
     description: 'Tool allow/deny policy — intercepts tool calls via ToolCall guardrail',
-    install(host: PluginHost) {
+    install(host: PluginHost, options?: PluginInstallOptions) {
       const mergedConfig: Required<ToolPolicyConfig> = {
         ...DEFAULT_CONFIG,
         ...(config ?? {}),
+        ...parseToolPolicyConfig(options?.config),
       };
 
       host.registerGuardrail(createToolPolicyGuardrail(mergedConfig));

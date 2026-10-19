@@ -93,8 +93,9 @@ function withNode(id: string, node: string): string {
 /**
  * 成员的插件宿主：复制工具（排除 team_*）、guardrail、hook。
  * 成员不能继续 delegate 团队能力，避免无限扩张。
+ * 对外导出供 asm 远端 spawn 复用，保证远端与本机成员工具面一致。
  */
-function buildChildHost(host: PluginHost): MemoryPluginHost {
+export function buildChildHost(host: PluginHost): MemoryPluginHost {
   const childHost = new MemoryPluginHost();
   for (const guardrail of host.getGuardrails()) childHost.registerGuardrail(guardrail);
   for (const hook of host.getHooks()) childHost.registerHook(hook);

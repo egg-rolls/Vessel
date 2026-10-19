@@ -47,7 +47,10 @@ function handleMessage(message: IncomingMessage): void {
     const requested = message.params?.protocolVersion;
     reply(message.id ?? 0, {
       protocolVersion: typeof requested === 'string' ? requested : '2025-06-18',
-      capabilities: { tools: {} },
+      capabilities: {
+        tools: {},
+        ...(process.env.MOCK_RESOURCES === '1' ? { resources: {}, prompts: {} } : {}),
+      },
       serverInfo: { name: 'mock-stdio', version: '0.0.0' },
     });
     if (process.env.MOCK_DIE_AFTER_INIT === '1') {
@@ -63,6 +66,41 @@ function handleMessage(message: IncomingMessage): void {
   if (method === 'tools/list') {
     const cursor = message.params?.cursor;
     reply(message.id ?? 0, toolsPage(typeof cursor === 'string' ? cursor : undefined));
+    return;
+  }
+
+  if (method === 'resources/list') {
+    reply(message.id ?? 0, {
+      resources: [
+        { uri: 'mem://alpha', name: 'alpha', mimeType: 'text/plain' },
+        { uri: 'mem://beta', name: 'beta' },
+      ],
+    });
+    return;
+  }
+
+  if (method === 'resources/read') {
+    const uri = message.params?.uri;
+    if (typeof uri !== 'string' || uri === '') {
+      replyError(message.id ?? 0, -32602, 'resources/read requires a uri');
+      return;
+    }
+    reply(message.id ?? 0, {
+      contents: [{ uri, mimeType: 'text/plain', text: `resource-body:${uri}` }],
+    });
+    return;
+  }
+
+  if (method === 'prompts/list') {
+    reply(message.id ?? 0, {
+      prompts: [
+        {
+          name: 'greet',
+          description: 'Greeting prompt',
+          arguments: [{ name: 'who', description: 'Person to greet', required: true }],
+        },
+      ],
+    });
     return;
   }
 

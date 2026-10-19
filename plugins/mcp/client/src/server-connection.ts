@@ -9,6 +9,8 @@ import type { EventStream } from '@vessel/core';
 import { formatError, isRecord, JsonRpcError, McpTransportError } from './json-rpc.js';
 import { createTransport } from './transport.js';
 import type {
+  McpPromptDef,
+  McpResourceDef,
   McpServerConfig,
   McpServerState,
   McpToolDef,
@@ -39,6 +41,9 @@ export class McpServerConnection {
   private readonly tenantId?: string;
   private transport?: McpTransport;
   private toolList: McpToolDef[] = [];
+  private resourceList: McpResourceDef[] = [];
+  private promptList: McpPromptDef[] = [];
+  private capabilities: Record<string, unknown> = {};
   private closed = false;
 
   constructor(config: McpServerConfig, events?: EventStream, tenantId?: string) {
@@ -49,6 +54,24 @@ export class McpServerConnection {
 
   get tools(): McpToolDef[] {
     return this.toolList;
+  }
+
+  get resources(): McpResourceDef[] {
+    return this.resourceList;
+  }
+
+  get prompts(): McpPromptDef[] {
+    return this.promptList;
+  }
+
+  /** initialize 协商出的 resources 能力 */
+  get supportsResources(): boolean {
+    return isRecord(this.capabilities.resources);
+  }
+
+  /** initialize 协商出的 prompts 能力 */
+  get supportsPrompts(): boolean {
+    return isRecord(this.capabilities.prompts);
   }
 
   get connectTimeoutMs(): number {
@@ -75,6 +98,22 @@ export class McpServerConnection {
       await transport.start();
       await this.handshake(transport);
       this.toolList = await this.listAllTools(transport);
+      if (this.supportsResources) {
+        this.resourceList = await this.listAllResources(transport).catch((error: unknown) => {
+          console.warn(
+            `MCP server "${this.config.name}" resources/list failed: ${formatError(error)}`,
+          );
+          return [];
+        });
+      }
+      if (this.supportsPrompts) {
+        this.promptList = await this.listAllPrompts(transport).catch((error: unknown) => {
+          console.warn(
+            `MCP server "${this.config.name}" prompts/list failed: ${formatError(error)}`,
+          );
+          return [];
+        });
+      }
       this.state = 'connected';
       this.error = undefined;
       this.publish('mcp.server.connected', {
@@ -83,6 +122,8 @@ export class McpServerConnection {
         ...(this.protocolVersion !== undefined ? { protocolVersion: this.protocolVersion } : {}),
         ...(this.serverInfo !== undefined ? { serverInfo: this.serverInfo } : {}),
         toolCount: this.toolList.length,
+        ...(this.supportsResources ? { resourceCount: this.resourceList.length } : {}),
+        ...(this.supportsPrompts ? { promptCount: this.promptList.length } : {}),
       });
     } catch (error) {
       this.state = 'failed';
@@ -153,6 +194,41 @@ export class McpServerConnection {
     }
   }
 
+  /** 读取一个资源；结果渲染为模型可读文本 */
+  async readResource(uri: string, signal?: AbortSignal): Promise<string> {
+    const transport = this.transport;
+    if (this.closed || this.state !== 'connected' || !transport) {
+      throw new Error(`MCP server "${this.config.name}" is not connected`);
+    }
+    if (typeof uri !== 'string' || uri === '') {
+      throw new Error('MCP resources/read requires a non-empty uri');
+    }
+
+    const startedAt = Date.now();
+    try {
+      const result = await transport.request(
+        'resources/read',
+        { uri },
+        { timeoutMs: this.toolTimeoutMs, ...(signal !== undefined ? { signal } : {}) },
+      );
+      const text = renderResourceResult(result);
+      this.publish('mcp.resource.read', {
+        server: this.config.name,
+        uri,
+        duration_ms: Date.now() - startedAt,
+      });
+      return text;
+    } catch (error) {
+      if (error instanceof McpTransportError && error.kind === 'timeout') {
+        throw new Error(`MCP resource "${uri}" timed out after ${this.toolTimeoutMs}ms`);
+      }
+      if (error instanceof McpTransportError && error.kind === 'aborted') {
+        throw new Error(`MCP resource "${uri}" aborted`);
+      }
+      throw new Error(`MCP resource "${uri}" failed: ${this.toolErrorMessage(error)}`);
+    }
+  }
+
   /** 关闭连接；幂等。关闭后工具调用返回 not connected */
   async close(): Promise<void> {
     if (this.closed) return;
@@ -186,6 +262,7 @@ export class McpServerConnection {
       );
     }
     this.protocolVersion = result.protocolVersion;
+    if (isRecord(result.capabilities)) this.capabilities = result.capabilities;
     if (!KNOWN_PROTOCOL_VERSIONS.has(result.protocolVersion)) {
       console.warn(
         `MCP server "${this.config.name}" negotiated unsupported protocol version "${result.protocolVersion}"; continuing`,
@@ -271,6 +348,98 @@ export class McpServerConnection {
     return tools;
   }
 
+  private async listAllResources(transport: McpTransport): Promise<McpResourceDef[]> {
+    const items = await this.listPages(transport, 'resources/list', 'resources');
+    const seen = new Set<string>();
+    const resources: McpResourceDef[] = [];
+    for (const item of items) {
+      const uri = typeof item.uri === 'string' ? item.uri : '';
+      if (uri === '' || seen.has(uri)) continue;
+      seen.add(uri);
+      resources.push({
+        uri,
+        ...(typeof item.name === 'string' ? { name: item.name } : {}),
+        ...(typeof item.description === 'string' ? { description: item.description } : {}),
+        ...(typeof item.mimeType === 'string' ? { mimeType: item.mimeType } : {}),
+      });
+    }
+    return resources;
+  }
+
+  private async listAllPrompts(transport: McpTransport): Promise<McpPromptDef[]> {
+    const items = await this.listPages(transport, 'prompts/list', 'prompts');
+    const seen = new Set<string>();
+    const prompts: McpPromptDef[] = [];
+    for (const item of items) {
+      const name = typeof item.name === 'string' ? item.name : '';
+      if (name === '' || seen.has(name)) continue;
+      seen.add(name);
+      const args: McpPromptDef['arguments'] = [];
+      if (Array.isArray(item.arguments)) {
+        for (const arg of item.arguments) {
+          if (!isRecord(arg) || typeof arg.name !== 'string' || arg.name === '') continue;
+          args.push({
+            name: arg.name,
+            ...(typeof arg.description === 'string' ? { description: arg.description } : {}),
+            ...(typeof arg.required === 'boolean' ? { required: arg.required } : {}),
+          });
+        }
+      }
+      prompts.push({
+        name,
+        ...(typeof item.description === 'string' ? { description: item.description } : {}),
+        ...(args.length > 0 ? { arguments: args } : {}),
+      });
+    }
+    return prompts;
+  }
+
+  /** 通用分页：METHOD_NOT_FOUND 视为空能力 */
+  private async listPages(
+    transport: McpTransport,
+    method: string,
+    field: string,
+  ): Promise<Array<Record<string, unknown>>> {
+    const items: Array<Record<string, unknown>> = [];
+    let cursor: string | undefined;
+
+    for (let page = 0; page < MAX_TOOL_PAGES; page++) {
+      let result: unknown;
+      try {
+        result = await transport.request(method, cursor === undefined ? {} : { cursor }, {
+          timeoutMs: this.connectTimeoutMs,
+        });
+      } catch (error) {
+        if (error instanceof JsonRpcError && error.code === METHOD_NOT_FOUND) return items;
+        throw error;
+      }
+
+      if (!isRecord(result)) {
+        throw new McpTransportError(
+          'protocol',
+          `MCP server "${this.config.name}" returned an invalid ${method} result`,
+        );
+      }
+      const raw = result[field];
+      if (raw !== undefined && !Array.isArray(raw)) {
+        throw new McpTransportError(
+          'protocol',
+          `MCP server "${this.config.name}" returned a non-array ${field} field`,
+        );
+      }
+      for (const item of raw ?? []) {
+        if (isRecord(item)) items.push(item);
+      }
+
+      const next = result.nextCursor;
+      if (typeof next !== 'string' || next === '') break;
+      if (next === cursor) break;
+      cursor = next;
+    }
+
+    return items;
+  }
+
   private handlePassiveClose(reason: string): void {
     if (this.closed) return;
     if (this.state === 'connected') {
@@ -316,6 +485,27 @@ export class McpServerConnection {
       ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     });
   }
+}
+
+/** MCP resources/read 结果 → 模型可读文本 */
+function renderResourceResult(result: unknown): string {
+  if (!isRecord(result) || !Array.isArray(result.contents)) return '';
+  const parts: string[] = [];
+  for (const item of result.contents) {
+    if (!isRecord(item)) {
+      parts.push(JSON.stringify(item));
+      continue;
+    }
+    if (typeof item.text === 'string') {
+      parts.push(item.text);
+    } else if (typeof item.blob === 'string') {
+      const mime = typeof item.mimeType === 'string' ? item.mimeType : 'application/octet-stream';
+      parts.push(`[base64 ${mime}] ${item.blob}`);
+    } else {
+      parts.push(JSON.stringify(item));
+    }
+  }
+  return parts.join('\n');
 }
 
 /** MCP tools/call 结果 → 模型可读文本 */

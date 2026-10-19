@@ -5,7 +5,13 @@
 
 import type { Plugin, PluginHost } from '@vessel/core';
 import { AnthropicProvider } from '@vessel/core';
+import { resolveRetryOptions, withRetry } from './retry.js';
 import { withTimeout } from './timeout.js';
+
+/** E1：插件级配置（core Plugin 类型尚未声明第二参数时的窄类型） */
+export interface ProviderPluginOptions {
+  config?: Record<string, unknown>;
+}
 
 /** 默认服务端点 */
 const DEFAULT_BASE_URL = 'https://api.anthropic.com';
@@ -20,9 +26,10 @@ function normalizeBaseUrl(url: string): string {
 
 const plugin: Plugin = {
   name: 'provider-anthropic',
-  install(host: PluginHost) {
+  install(host: PluginHost, options?: ProviderPluginOptions) {
+    const installConfig = options?.config ?? {};
     host.registerProvider('anthropic', (config) => {
-      const c = config as Record<string, unknown>;
+      const c = { ...installConfig, ...(config as Record<string, unknown>) };
       // 注意 `||` 而非 `??`：bootstrap 未配置时会传空字符串
       const baseUrl = normalizeBaseUrl((c.base_url as string) || DEFAULT_BASE_URL);
       const model = (c.model as string) || DEFAULT_MODEL;
@@ -31,7 +38,11 @@ const plugin: Plugin = {
         base_url: baseUrl,
         model,
       });
-      return withTimeout(provider, c.timeout_ms as number | undefined);
+      // timeout 在外层：总时限覆盖全部重试与退避
+      return withTimeout(
+        withRetry(provider, resolveRetryOptions(c)),
+        c.timeout_ms as number | undefined,
+      );
     });
   },
 };
