@@ -17,7 +17,7 @@ export interface TeamWiringInput {
 export interface TeamWiringPlan {
   /** 是否调用 gateway.attachTeam */
   attachToGateway: boolean;
-  /** 是否构造 loopback transport */
+  /** 是否构造 loopback transport（kind=loopback） */
   useLoopback: boolean;
   /** 是否构造 remote transport（kind=remote） */
   useRemote: boolean;

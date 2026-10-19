@@ -56,7 +56,12 @@ import type { McpControl } from './mcp-wiring';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveWorkflowDefPathSync } from './path-resolution';
 import { PluginLoader } from './plugin-loader';
-import { createHttpRpcClient, createLocalRpcClient, type RpcClient } from './rpc/index';
+import {
+  createHttpRpcClient,
+  createLocalRpcClient,
+  normalizeConnectUrl,
+  type RpcClient,
+} from './rpc/index';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { createTenantControl } from './tenant-command';
@@ -157,8 +162,8 @@ export interface BootstrapResult {
     systemPrompt?: string;
   }) => Promise<AgentStatus>;
   /**
-   * team loopback 的晚绑定 transport（仅 host + team + loopback）。
-   * cli 在 gateway 启动、真实 loopback 构造后调用 resolve/fail。
+   * team 的晚绑定 transport（仅 host + team + loopback/remote）。
+   * cli 在 gateway 启动、真实 transport 构造后调用 resolve/fail。
    */
   transport?: DeferredTransport;
   /** 0.3：MCP 控制面（未配置 mcp_servers 时为 undefined） */
@@ -247,6 +252,8 @@ async function bootstrapConnect(input: {
   }) => RpcClient & { close(): Promise<void> };
 }): Promise<BootstrapResult> {
   const connectConfig = input.config.connect;
+  // P2：--connect 接受 ws:// / wss://（归一化为 http/https）。
+  const connectUrl = normalizeConnectUrl(input.url);
 
   // 连接 token 优先级（DECISION-014 A1）：CLI > env > config。
   // 永不打印。
@@ -286,12 +293,12 @@ async function bootstrapConnect(input: {
   try {
     client = input.rpcClientFactory
       ? input.rpcClientFactory({
-          baseUrl: input.url,
+          baseUrl: connectUrl,
           token,
           ...(ca !== undefined ? { ca } : {}),
         })
       : createHttpRpcClient({
-          baseUrl: input.url,
+          baseUrl: connectUrl,
           token,
           ...(ca !== undefined ? { ca } : {}),
         });
@@ -330,7 +337,7 @@ async function bootstrapConnect(input: {
       remote = {
         tenantId: remoteTenant,
         ...(remoteNodeId !== undefined ? { nodeId: remoteNodeId } : {}),
-        endpoint: input.url,
+        endpoint: connectUrl,
       };
       effectiveTenantId = remoteTenant;
     }

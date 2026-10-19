@@ -98,6 +98,22 @@ export function isLoopbackBaseUrl(baseUrl: string): boolean {
 }
 
 /**
+ * 归一化 `--connect`：接受 ws:// / wss://（转 http/https），
+ * 以及误传的 `/ws`、`/v1/events` 路径。其余校验交给 assertConnectUrl。
+ */
+export function normalizeConnectUrl(baseUrl: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (url.protocol === 'ws:') url.protocol = 'http:';
+    else if (url.protocol === 'wss:') url.protocol = 'https:';
+    if (url.pathname === '/ws' || url.pathname === '/v1/events') url.pathname = '/';
+    return url.toString().replace(/\/+$/, '');
+  } catch {
+    return baseUrl;
+  }
+}
+
+/**
  * 校验 `--connect` URL。非回环必须 HTTPS 且 token 非空；不回退明文。
  * 错误信息不包含 token。
  */
@@ -256,10 +272,11 @@ export function parseGatewayFrame(data: unknown): GatewayFrame | undefined {
 
 /** 创建 HTTP RPC 客户端；非回环必须 HTTPS + token */
 export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClient {
-  assertConnectUrl(options.baseUrl, options.token);
+  const normalized = normalizeConnectUrl(options.baseUrl);
+  assertConnectUrl(normalized, options.token);
 
   const fetchImpl = options.fetch ?? fetch;
-  const baseUrl = options.baseUrl.replace(/\/+$/, '');
+  const baseUrl = normalized.replace(/\/+$/, '');
   const rpcUrl = `${baseUrl}/v1/rpc`;
   const wsUrl = toWsUrl(baseUrl);
   const subscribeEnabled = options.subscribe !== false;
@@ -384,7 +401,7 @@ export function createHttpRpcClient(options: HttpRpcClientOptions): HttpRpcClien
 
     current.addEventListener('open', () => {
       if (socket !== current) return;
-      attempt = 0;
+      // 退避计数只在 hello 后重置；open 不代表对端可用。
       try {
         current.send(
           JSON.stringify({

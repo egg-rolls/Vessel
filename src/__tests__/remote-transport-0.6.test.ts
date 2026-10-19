@@ -145,6 +145,7 @@ describe('RemoteTransport.request (0.6 B3 协议映射)', () => {
     expect(headersOf(spawnCall ?? { url: '', init: {} }).Authorization).toBe('Bearer tok-b');
     expect(headersOf(spawnCall ?? { url: '', init: {} })['X-Vessel-Request-Id']).toBe('req-1');
     expect(JSON.parse(String(spawnCall?.init.body))).toEqual({
+      request_id: 'req-1',
       name: 'worker',
       model: 'm1',
       system_prompt: 'be nice',
@@ -405,19 +406,49 @@ describe('RemoteTransport B4 event fan-out (0.6)', () => {
     second?.emit('open');
     expect(second?.auth()).toMatchObject({ kind: 'auth', token: 'tok-b', since: 6 });
 
-    // gateway 重启：latest_seq 回退 → 从 0 重连。
+    // gateway 重启：latest_seq 回退 → 清空去重键并从 0 重连。
     second?.emitMessage(JSON.stringify({ kind: 'hello', latest_seq: 2 }));
     await waitFor(() => bSockets().length === 3);
     const third = bSockets()[2];
     third?.emit('open');
     expect(third?.auth().since).toBeUndefined();
 
-    // 第二个节点使用自己的 token。
+    // 重启后 seq 复用（6）不应被旧去重键吞掉。
+    third?.emitMessage(
+      JSON.stringify({
+        kind: 'event',
+        node_id: 'node-b',
+        seq: 6,
+        event: { type: 'agent.started', run_id: 'r1-restarted', data: {}, ts: 2 },
+      }),
+    );
+    await waitFor(() => events.length === 2);
+    expect(events[1]?.run_id).toBe('r1-restarted');
+
+    // gap → 以 to_seq 立即重连续放。
+    third?.emitMessage(JSON.stringify({ kind: 'gap', to_seq: 20 }));
+    await waitFor(() => bSockets().length === 4);
+    const fourth = bSockets()[3];
+    fourth?.emit('open');
+    expect(fourth?.auth()).toMatchObject({ kind: 'auth', since: 20 });
+    fourth?.emitMessage(JSON.stringify({ kind: 'ping' }));
+    expect(JSON.parse(fourth?.sent.at(-1) ?? '{}')).toEqual({ v: 1, kind: 'pong' });
+
+    // 第二个节点使用自己的 token；无 seq 的帧不做去重，逐条投递。
     cSocket?.emit('open');
     expect(cSocket?.auth()).toMatchObject({ kind: 'auth', token: 'tok-c' });
+    const noSeq = JSON.stringify({
+      kind: 'event',
+      node_id: 'node-c',
+      event: { type: 'agent.updated', run_id: 'r2', data: {}, ts: 1 },
+    });
+    cSocket?.emitMessage(noSeq);
+    cSocket?.emitMessage(noSeq);
+    await waitFor(() => events.length === 4);
+    expect(events.filter((event) => event.run_id === 'r2')).toHaveLength(2);
 
     await transport.close();
-    expect(third?.closed).toBe(true);
+    expect(fourth?.closed).toBe(true);
   });
 });
 

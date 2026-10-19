@@ -284,15 +284,15 @@ export class RemoteTransport implements Transport {
     }
 
     const params = isRecord(request.params) ? request.params : {};
-    const requestId = request.requestId;
-    const headers: Record<string, string> = {};
-    if (requestId !== undefined) headers['X-Vessel-Request-Id'] = requestId;
+    // 幂等 id：header 供日志/代理；spawn 的 body 也必须带（gateway 只读 body）。
+    const requestId = request.requestId ?? crypto.randomUUID();
+    const headers: Record<string, string> = { 'X-Vessel-Request-Id': requestId };
 
     let result: unknown;
     try {
       switch (request.method) {
         case 'team.spawn': {
-          const body: Record<string, unknown> = {};
+          const body: Record<string, unknown> = { request_id: requestId };
           if (typeof params.name === 'string') body.name = params.name;
           if (typeof params.model === 'string') body.model = params.model;
           const systemPrompt = params.systemPrompt ?? params.system_prompt;
@@ -487,7 +487,7 @@ export class RemoteTransport implements Transport {
 
     current.addEventListener('open', () => {
       if (this.closed || state.socket !== current) return;
-      state.attempt = 0;
+      // 退避计数只在收到 hello 后重置；open 不代表对端可用。
       try {
         current.send(
           JSON.stringify({
@@ -542,9 +542,18 @@ export class RemoteTransport implements Transport {
       state.attempt = 0;
       const latest = typeof frame.latest_seq === 'number' ? frame.latest_seq : undefined;
       if (latest !== undefined && latest < state.lastSeq) {
+        // 对端重启/缓冲区清空：旧 seq 的去重键全部作废，否则新 seq=1 会被丢。
+        this.seenEvents.clear();
         state.lastSeq = 0;
         this.dropEventSocket(nodeId, state, current, true);
       }
+      return;
+    }
+    if (frame.kind === 'gap') {
+      // 历史区间缺失：以 to_seq 为 since 立即重连，由 gateway 续放后续事件。
+      const toSeq = typeof frame.to_seq === 'number' ? frame.to_seq : undefined;
+      if (toSeq !== undefined) state.lastSeq = Math.max(state.lastSeq, toSeq);
+      this.dropEventSocket(nodeId, state, current, true);
       return;
     }
     if (frame.kind === 'ping') {
@@ -558,11 +567,15 @@ export class RemoteTransport implements Transport {
     if (frame.kind !== 'event' || !isRecord(frame.event)) return;
 
     const seq = typeof frame.seq === 'number' ? frame.seq : undefined;
-    if (seq !== undefined) state.lastSeq = Math.max(state.lastSeq, seq);
+    if (seq !== undefined) {
+      state.lastSeq = Math.max(state.lastSeq, seq);
+      const origin = typeof frame.node_id === 'string' ? frame.node_id : nodeId;
+      const key = `${origin}:${seq}`;
+      if (this.seenEvents.has(key)) return;
+      this.remember(this.seenEvents, key);
+    }
+    // 无 seq 的帧无法安全去重：直接投递，不做 origin:na 合并。
     const origin = typeof frame.node_id === 'string' ? frame.node_id : nodeId;
-    const key = `${origin}:${seq ?? 'na'}`;
-    if (this.seenEvents.has(key)) return;
-    this.remember(this.seenEvents, key);
 
     const event = { ...frame.event } as unknown as RunEvent;
     if (event.node_id === undefined) event.node_id = origin;

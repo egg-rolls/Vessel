@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   createHttpRpcClient,
+  normalizeConnectUrl,
   parseGatewayFrame,
   RpcClientError,
   type RpcEventNotification,
@@ -158,6 +159,26 @@ describe('HttpRpcClient remote connect (0.6 A1)', () => {
     expect(() =>
       createHttpRpcClient({ baseUrl: 'http://127.0.0.1:8642', token: '', subscribe: false }),
     ).not.toThrow();
+
+    // P2：ws:// / wss:// 与误传的 /ws 路径归一化为 http(s)。
+    expect(() =>
+      createHttpRpcClient({
+        baseUrl: 'wss://gateway.example.com:8642',
+        token: 't',
+        subscribe: false,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      createHttpRpcClient({
+        baseUrl: 'wss://gateway.example.com:8642/ws',
+        token: 't',
+        subscribe: false,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      createHttpRpcClient({ baseUrl: 'ws://127.0.0.1:8642', token: '', subscribe: false }),
+    ).not.toThrow();
+    expect(normalizeConnectUrl('wss://host:1/ws')).toBe('https://host:1');
   });
 });
 
