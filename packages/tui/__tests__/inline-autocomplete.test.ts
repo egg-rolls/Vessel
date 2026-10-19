@@ -55,10 +55,11 @@ function expectValidWindow(total: number, selected: number, maxVisible: number):
 }
 
 describe('sortCommandsForDiscovery', () => {
-  it('空 filter 时 /help /new /history /clear 出现在首屏前四位', () => {
+  it('空 filter 时 /resume 置顶，常用命令占首屏前五位', () => {
     const commands: CommandItem[] = [
       { name: '/tools', description: '工具' },
       { name: '/plugins', description: '插件' },
+      { name: '/resume', description: '会话' },
       { name: '/help', description: '帮助' },
       { name: '/new', description: '新会话' },
       { name: '/history', description: '历史' },
@@ -67,9 +68,9 @@ describe('sortCommandsForDiscovery', () => {
     ];
 
     const sorted = filterCommands(commands, '');
-    expect(sorted.slice(0, 4).map((cmd) => cmd.name)).toEqual([...DISCOVERY_PRIORITY]);
+    expect(sorted.slice(0, 5).map((cmd) => cmd.name)).toEqual([...DISCOVERY_PRIORITY]);
     // 其余保持注册顺序
-    expect(sorted.slice(4).map((cmd) => cmd.name)).toEqual(['/tools', '/plugins', '/exit']);
+    expect(sorted.slice(5).map((cmd) => cmd.name)).toEqual(['/tools', '/plugins', '/exit']);
     expect(sorted).toHaveLength(commands.length);
   });
 

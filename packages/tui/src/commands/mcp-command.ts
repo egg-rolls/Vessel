@@ -111,6 +111,9 @@ export function mcpCommand(): CommandEntry {
     name: 'mcp',
     description: 'MCP servers: status / reconnect',
     usage: '/mcp [reconnect <name>]',
+    category: 'inspect',
+    keywords: ['server', 'reconnect'],
+    available: (ctx) => Boolean(ctx.mcp || ctx.rpc),
     run: (args, ctx) => runMcpCommand(args, ctx),
   };
 }

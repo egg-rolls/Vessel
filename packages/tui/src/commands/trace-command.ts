@@ -245,6 +245,9 @@ export function traceCommand(): CommandEntry {
     name: 'trace',
     description: 'Show run events from trace (replay)',
     usage: '/trace show <run_id> [--limit <n>] [--since-seq <n>] [--type <prefix>] [--json]',
+    category: 'inspect',
+    keywords: ['events', 'replay'],
+    available: (ctx) => Boolean(ctx.rpc),
     run: (args, ctx) => runTraceCommand(args, ctx),
   };
 }

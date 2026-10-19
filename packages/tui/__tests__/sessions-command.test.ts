@@ -1,12 +1,19 @@
 import { describe, expect, it } from 'bun:test';
+import type { CommandResult } from '../src/commands/commands.js';
 import {
+  deleteSessionAction,
   formatSessions,
   getSessionState,
   listSessions,
+  renameSessionAction,
   runSessionsCommand,
+  SESSIONS_DEPRECATION,
+  sessionActionResult,
+  sessionsCommand,
   sortSessions,
 } from '../src/commands/sessions-command.js';
 import type { RpcClientLike } from '../src/repl-context.js';
+import { displayWidth } from '../src/utils/text-layout.js';
 import { makeCtx } from './helpers.js';
 
 const NOW = 1_700_000_000_000;
@@ -46,51 +53,41 @@ function makeRpc(
   };
 }
 
-describe('/sessions', () => {
-  it('list 按 updated_at 倒序并标记当前会话', async () => {
-    const rpc = makeRpc(() => ({ sessions: SESSIONS }));
-    const ctx = makeCtx({ rpc, currentSessionId: 's_new' });
-    const result = await runSessionsCommand(['list'], ctx, 's_new');
-    const output = result.output ?? '';
-
-    expect(output).toContain('Sessions (2, newest first):');
-    expect(output.indexOf('s_new')).toBeLessThan(output.indexOf('s_old'));
-    expect(output).toContain('* s_new');
-    expect(output).toContain('New');
-  });
-
-  it('delete 需要 --yes，未确认不发请求', async () => {
+describe('deleteSessionAction', () => {
+  it('需要 --yes，未确认不发请求', async () => {
     let called = 0;
     const rpc = makeRpc((method) => {
       if (method === 'sessions.delete') called += 1;
       return {};
     });
-    const result = await runSessionsCommand(['delete', 's_old'], makeCtx({ rpc }), 's_new');
+    const result = await deleteSessionAction(makeCtx({ rpc }), 's_old', {
+      confirmed: false,
+      currentSessionId: 's_new',
+    });
     expect(result.output).toContain('Add --yes to confirm');
     expect(called).toBe(0);
   });
 
-  it('delete 拒绝删除当前会话', async () => {
+  it('拒绝删除当前会话（即使带 --yes）', async () => {
     const rpc = makeRpc(() => ({}));
-    const result = await runSessionsCommand(
-      ['delete', 's_new', '--yes'],
-      makeCtx({ rpc }),
-      's_new',
-    );
+    const result = await deleteSessionAction(makeCtx({ rpc }), 's_new', {
+      confirmed: true,
+      currentSessionId: 's_new',
+    });
     expect(result.output).toContain('Refusing to delete the current session');
+    expect(rpc.calls).toHaveLength(0);
   });
 
-  it('delete 成功显示三项计数', async () => {
+  it('成功显示三项计数', async () => {
     const rpc = makeRpc(() => ({
       sessions_deleted: 1,
       runs_deleted: 2,
       events_deleted: 3,
     }));
-    const result = await runSessionsCommand(
-      ['delete', 's_old', '--yes'],
-      makeCtx({ rpc }),
-      's_new',
-    );
+    const result = await deleteSessionAction(makeCtx({ rpc }), 's_old', {
+      confirmed: true,
+      currentSessionId: 's_new',
+    });
     expect(result.output).toContain('Deleted session "s_old".');
     expect(result.output).toContain('sessions: 1, runs: 2, events: 3');
     expect(rpc.calls[0]).toEqual({
@@ -99,25 +96,35 @@ describe('/sessions', () => {
     });
   });
 
-  it('delete 遇到 conflict 按 code 展示', async () => {
+  it('conflict 按 code 展示', async () => {
     const rpc = makeRpc(() => {
       throw { code: 'conflict', message: 'session has running run(s)' };
     });
-    const result = await runSessionsCommand(
-      ['delete', 's_old', '--yes'],
-      makeCtx({ rpc }),
-      's_new',
-    );
+    const result = await deleteSessionAction(makeCtx({ rpc }), 's_old', {
+      confirmed: true,
+      currentSessionId: 's_new',
+    });
     expect(result.output).toContain('✗ [conflict] session has running run(s)');
+    expect(sessionActionResult(result)).toEqual({
+      ok: false,
+      message: expect.stringContaining('[conflict]'),
+    });
   });
 
-  it('rename 透传 id 与 title', async () => {
+  it('成功结果可归一为 { ok: true }', async () => {
+    const rpc = makeRpc(() => ({ sessions_deleted: 1 }));
+    const result = await deleteSessionAction(makeCtx({ rpc }), 's_old', {
+      confirmed: true,
+      currentSessionId: 's_new',
+    });
+    expect(sessionActionResult(result).ok).toBe(true);
+  });
+});
+
+describe('renameSessionAction', () => {
+  it('透传 id 与 title', async () => {
     const rpc = makeRpc(() => ({}));
-    const result = await runSessionsCommand(
-      ['rename', 's_old', 'My', 'renamed', 'session'],
-      makeCtx({ rpc }),
-      's_new',
-    );
+    const result = await renameSessionAction(makeCtx({ rpc }), 's_old', 'My renamed session');
     expect(result.output).toContain('Renamed session "s_old" to "My renamed session".');
     expect(rpc.calls[0]).toEqual({
       method: 'sessions.rename',
@@ -125,14 +132,76 @@ describe('/sessions', () => {
     });
   });
 
-  it('rename 缺少 title 给 usage', async () => {
-    const result = await runSessionsCommand(['rename', 's_old'], makeCtx(), 's_new');
-    expect(result.output).toContain('Usage: /sessions rename');
+  it('空标题拒绝且不发请求', async () => {
+    let called = 0;
+    const rpc = makeRpc(() => {
+      called += 1;
+      return {};
+    });
+    const result = await renameSessionAction(makeCtx({ rpc }), 's_old', '   ');
+    expect(result.output).toContain('Usage: /resume rename');
+    expect(called).toBe(0);
   });
 
-  it('未知子命令给 usage', async () => {
+  it('无 RPC 时给出明确提示', async () => {
+    const result = await renameSessionAction(makeCtx(), 's_old', 'New');
+    expect(result.output).toContain('Renaming sessions requires the RPC control plane');
+  });
+});
+
+describe('/sessions deprecated alias', () => {
+  it('list 打印迁移提示并转入 /resume 选择器状态', async () => {
+    const rpc = makeRpc(() => ({ sessions: SESSIONS }));
+    const ctx = makeCtx({ rpc });
+    const entry = sessionsCommand();
+    const state = {
+      currentSessionId: 's_new',
+      pendingResume: false,
+      showResumePicker: false,
+      running: true,
+    };
+    const result = await entry.run(['list'], ctx, state);
+    expect(result.output).toContain(SESSIONS_DEPRECATION);
+    expect(result.nextState).toEqual({ showResumePicker: true, pendingResume: true });
+  });
+
+  it('delete/rename 转调同一 action，并保留迁移提示', async () => {
+    const rpc = makeRpc((method) => {
+      if (method === 'sessions.delete') {
+        return { sessions_deleted: 1, runs_deleted: 0, events_deleted: 0 };
+      }
+      return {};
+    });
+    const ctx = makeCtx({ rpc, currentSessionId: 's_new' });
+    const entry = sessionsCommand();
+    const state = {
+      currentSessionId: 's_new',
+      pendingResume: false,
+      showResumePicker: false,
+      running: true,
+    };
+
+    const deleted = await entry.run(['delete', 's_old', '--yes'], ctx, state);
+    expect(deleted.output).toContain(SESSIONS_DEPRECATION);
+    expect(deleted.output).toContain('Deleted session "s_old".');
+
+    const renamed = await entry.run(['rename', 's_old', 'New title'], ctx, state);
+    expect(renamed.output).toContain(SESSIONS_DEPRECATION);
+    expect(renamed.output).toContain('Renamed session "s_old" to "New title".');
+  });
+
+  it('未知子命令的 usage 指向 /resume', async () => {
     const result = await runSessionsCommand(['nope'], makeCtx(), 's_new');
-    expect(result.output).toContain('Usage: /sessions');
+    expect(result.output).toContain('Usage: /resume');
+  });
+
+  it('runSessionsCommand list 不再打印旧表格，而是请求 picker', async () => {
+    const result = await runSessionsCommand(['list'], makeCtx(), 's_new');
+    expect(result.output).toContain('Resume which session?');
+    expect((result as CommandResult).nextState).toEqual({
+      showResumePicker: true,
+      pendingResume: true,
+    });
   });
 });
 
@@ -186,5 +255,31 @@ describe('session helpers', () => {
 
   it('formatSessions 空列表', () => {
     expect(formatSessions([], 's1')).toBe('No sessions.');
+  });
+
+  it('formatSessions 的 CJK 标题按显示宽度截断且不破坏列', () => {
+    const longTitle = '中文标题'.repeat(20);
+    const output = formatSessions(
+      [
+        {
+          session_id: 's_zh',
+          title: longTitle,
+          preview: '',
+          status: 'completed',
+          started_at: NOW,
+          updated_at: NOW - 1_000,
+          message_count: 3,
+        },
+      ],
+      's_other',
+      NOW,
+    );
+    const row = output.split('\n').find((line) => line.includes('s_zh'));
+    expect(row).toBeDefined();
+    if (!row) return;
+    // 行首 marker + id(28 列) + msgs(8) + updated(10)；标题被截断到 48 显示列。
+    expect(row).toContain('s_zh');
+    expect(row).toContain('…');
+    expect(displayWidth(row)).toBeLessThan(110);
   });
 });

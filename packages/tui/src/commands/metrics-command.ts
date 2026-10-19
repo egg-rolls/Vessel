@@ -176,6 +176,9 @@ export function metricsCommand(): CommandEntry {
     name: 'metrics',
     description: 'Show runtime metrics (live or rebuilt from trace)',
     usage: '/metrics [--source live|trace] [--json]',
+    category: 'inspect',
+    keywords: ['tokens', 'usage', 'stats'],
+    available: (ctx) => Boolean(ctx.metrics || ctx.rpc),
     run: (args, ctx) => runMetricsCommand(args, ctx),
   };
 }

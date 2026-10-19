@@ -180,6 +180,9 @@ export function capabilitiesCommand(): CommandEntry {
     name: 'capabilities',
     description: 'Show RPC capability manifest (methods / tools / plugins)',
     usage: '/capabilities [methods|tools|plugins]',
+    category: 'inspect',
+    keywords: ['manifest', 'methods', 'tools', 'plugins'],
+    available: (ctx) => Boolean(ctx.rpc),
     run: (args, ctx) => runCapabilitiesCommand(args, ctx),
   };
 }

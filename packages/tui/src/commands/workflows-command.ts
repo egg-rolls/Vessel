@@ -580,6 +580,9 @@ export function workflowsCommand(): CommandEntry {
     name: 'workflows',
     description: 'Workflows: list / run / show / resume / cancel',
     usage: '/workflows [list|run|show|resume|cancel]',
+    category: 'run',
+    keywords: ['pipeline', 'steps'],
+    available: (ctx) => Boolean(ctx.workflows || ctx.rpc),
     run: (args, ctx) => runWorkflowsCommand(args, ctx),
   };
 }

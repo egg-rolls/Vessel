@@ -241,6 +241,9 @@ export function runsCommand(): CommandEntry {
     name: 'runs',
     description: 'Durable runs: list / resume',
     usage: '/runs [resume <runId>]',
+    category: 'run',
+    keywords: ['durable', 'interrupt', 'recover'],
+    available: (ctx) => Boolean(ctx.runs || ctx.rpc),
     run: (args, ctx) => runRunsCommand(args, ctx),
   };
 }

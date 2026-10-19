@@ -230,6 +230,9 @@ export function tenantCommand(): CommandEntry {
     name: 'tenant',
     description: 'Show current tenant, list tenants, or print restart guidance',
     usage: '/tenant [current|list|use <id>]',
+    category: 'config',
+    keywords: ['tenant', 'scope'],
+    available: (ctx) => Boolean(ctx.tenant || ctx.rpc),
     run: (args, ctx) => runTenantCommand(args, ctx),
   };
 }

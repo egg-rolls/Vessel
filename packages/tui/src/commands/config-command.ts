@@ -299,6 +299,9 @@ export function configCommand(): CommandEntry {
     name: 'config',
     description: 'Show config (masked) and YAML config paths',
     usage: '/config [show|path] [--sources] [--json]',
+    category: 'config',
+    keywords: ['yaml', 'provider', 'sources'],
+    available: (ctx) => Boolean(ctx.rpc),
     run: (args, ctx) => runConfigCommand(args, ctx),
   };
 }

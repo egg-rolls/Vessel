@@ -10,13 +10,16 @@
 import type { SessionInfo } from '@vessel/core';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
-const USAGE = 'Usage: /sessions [list | delete <id> --yes | rename <id> <title>]';
+const USAGE = 'Usage: /resume [number|id|delete <id> --yes|rename <id> <title>]';
+const DEPRECATION = '/sessions is deprecated; use /resume (picker: r rename, x delete).';
 const SESSION_WIDTH = 28;
 const MESSAGES_WIDTH = 8;
 const UPDATED_WIDTH = 10;
+const TITLE_MAX = 48;
 
 /** sessions.get 的最小形状 */
 export interface SessionStateLike {
@@ -157,19 +160,23 @@ export function formatSessions(
   if (sessions.length === 0) return 'No sessions.';
 
   const lines = ['', `Sessions (${sessions.length}, newest first):`];
-  lines.push(
-    `  ${'SESSION'.padEnd(SESSION_WIDTH)} ${'MESSAGES'.padEnd(
-      MESSAGES_WIDTH,
-    )} ${'UPDATED'.padEnd(UPDATED_WIDTH)} TITLE`,
-  );
+  const header = `  ${padToWidth('SESSION', SESSION_WIDTH)} ${padToWidth(
+    'MESSAGES',
+    MESSAGES_WIDTH,
+  )} ${padToWidth('UPDATED', UPDATED_WIDTH)} TITLE`;
+  lines.push(header.trimEnd());
   for (const session of sessions) {
     const marker = session.session_id === currentSessionId ? '*' : ' ';
     const updated = session.updated_at > 0 ? formatRelativeTime(session.updated_at, now) : '-';
-    const title = session.title || session.preview || '-';
+    const title = truncateToWidth(session.title || session.preview || '-', TITLE_MAX);
     lines.push(
-      `${marker} ${session.session_id.padEnd(SESSION_WIDTH)} ${String(session.message_count).padEnd(
-        MESSAGES_WIDTH,
-      )} ${updated.padEnd(UPDATED_WIDTH)} ${title}`.trimEnd(),
+      `${marker} ${padToWidth(
+        truncateToWidth(session.session_id, SESSION_WIDTH),
+        SESSION_WIDTH,
+      )} ${padToWidth(String(session.message_count), MESSAGES_WIDTH)} ${padToWidth(
+        updated,
+        UPDATED_WIDTH,
+      )} ${title}`.trimEnd(),
     );
   }
   lines.push('');
@@ -180,7 +187,77 @@ function usage(message: string = USAGE): CommandResult {
   return { handled: true, output: `\n${message}\n` };
 }
 
-/** /sessions 的执行体（导出供单测） */
+export interface DeleteSessionOptions {
+  /** 必须显式确认；非交互删除绝不能默认确认 */
+  confirmed: boolean;
+  /** 当前会话 ID；命中时拒绝删除 */
+  currentSessionId?: string;
+}
+
+/**
+ * 删除会话（/resume delete 与 deprecated /sessions delete 共用）。
+ * 纯函数：只返回 CommandResult，不发 UI 事件。
+ */
+export async function deleteSessionAction(
+  ctx: ReplContext,
+  sessionId: string,
+  options: DeleteSessionOptions,
+): Promise<CommandResult> {
+  if (options.currentSessionId && sessionId === options.currentSessionId) {
+    return usage(`Refusing to delete the current session "${sessionId}"; run /new first.`);
+  }
+  if (!options.confirmed) {
+    return usage(`Will delete session "${sessionId}" and its runs/events. Add --yes to confirm.`);
+  }
+
+  try {
+    const counts = await deleteSession(ctx, sessionId);
+    return {
+      handled: true,
+      output: `\nDeleted session "${sessionId}".${formatDeleteCounts(counts)}\n`,
+    };
+  } catch (error) {
+    return {
+      handled: true,
+      output: `\nFailed to delete session "${sessionId}":\n${formatRpcError(error)}\n`,
+    };
+  }
+}
+
+/**
+ * 重命名会话（/resume rename 与 deprecated /sessions rename 共用）。
+ * 空标题直接拒绝；重命名需要 RPC 控制面。
+ */
+export async function renameSessionAction(
+  ctx: ReplContext,
+  sessionId: string,
+  title: string,
+): Promise<CommandResult> {
+  const trimmed = title.trim();
+  if (trimmed.length === 0) {
+    return usage('Usage: /resume rename <id> <title>');
+  }
+  if (!ctx.rpc) {
+    return usage('Renaming sessions requires the RPC control plane.');
+  }
+  try {
+    await ctx.rpc.request('sessions.rename', { session_id: sessionId, title: trimmed });
+    return {
+      handled: true,
+      output: `\nRenamed session "${sessionId}" to "${trimmed}".\n`,
+    };
+  } catch (error) {
+    return {
+      handled: true,
+      output: `\nFailed to rename session "${sessionId}":\n${formatRpcError(error)}\n`,
+    };
+  }
+}
+
+/**
+ * /sessions 的执行体（deprecated alias，导出供单测）。
+ * `delete` / `rename` 转调共享 action；`list` 转调 /resume 的选择器状态。
+ */
 export async function runSessionsCommand(
   args: string[],
   ctx: ReplContext,
@@ -190,73 +267,62 @@ export async function runSessionsCommand(
 
   if (subcommand === undefined || subcommand === 'list') {
     if (target !== undefined) return usage();
-    try {
-      return {
-        handled: true,
-        output: formatSessions(await listSessions(ctx), currentSessionId),
-      };
-    } catch (error) {
-      return {
-        handled: true,
-        output: `\nFailed to list sessions:\n${formatRpcError(error)}\n`,
-      };
-    }
+    return {
+      handled: true,
+      output: '\nResume which session? Enter its number:\n',
+      nextState: { showResumePicker: true, pendingResume: true },
+    };
   }
 
   if (subcommand === 'delete') {
-    if (target === undefined) return usage('Usage: /sessions delete <id> --yes');
+    if (target === undefined) return usage('Usage: /resume delete <id> --yes');
     const confirmed = rest.includes('--yes');
     const extra = rest.filter((arg) => arg !== '--yes');
-    if (extra.length > 0) return usage('Usage: /sessions delete <id> --yes');
-
-    if (target === currentSessionId) {
-      return usage(`Refusing to delete the current session "${target}"; run /new first.`);
-    }
-    if (!confirmed) {
-      return usage(`Will delete session "${target}" and its runs/events. Add --yes to confirm.`);
-    }
-
-    try {
-      const counts = await deleteSession(ctx, target);
-      return {
-        handled: true,
-        output: `\nDeleted session "${target}".${formatDeleteCounts(counts)}\n`,
-      };
-    } catch (error) {
-      return {
-        handled: true,
-        output: `\nFailed to delete session "${target}":\n${formatRpcError(error)}\n`,
-      };
-    }
+    if (extra.length > 0) return usage('Usage: /resume delete <id> --yes');
+    return deleteSessionAction(ctx, target, { confirmed, currentSessionId });
   }
 
   if (subcommand === 'rename') {
     const title = rest.join(' ').trim();
     if (target === undefined || title.length === 0) {
-      return usage('Usage: /sessions rename <id> <title>');
+      return usage('Usage: /resume rename <id> <title>');
     }
-    if (!ctx.rpc) {
-      return usage('Renaming sessions requires the RPC control plane.');
-    }
-    try {
-      await ctx.rpc.request('sessions.rename', { session_id: target, title });
-      return { handled: true, output: `\nRenamed session "${target}" to "${title}".\n` };
-    } catch (error) {
-      return {
-        handled: true,
-        output: `\nFailed to rename session "${target}":\n${formatRpcError(error)}\n`,
-      };
-    }
+    return renameSessionAction(ctx, target, title);
   }
 
   return usage();
 }
 
+/** /sessions 是 /resume 的 hidden deprecated alias（0.7 删除） */
 export function sessionsCommand(): CommandEntry {
   return {
     name: 'sessions',
-    description: 'List / delete / rename sessions',
-    usage: '/sessions [list | delete <id> --yes | rename <id> <title>]',
-    run: (args, ctx, state) => runSessionsCommand(args, ctx, state.currentSessionId),
+    description: 'Deprecated: use /resume',
+    usage: '/sessions (deprecated; use /resume)',
+    category: 'session',
+    hidden: true,
+    run: async (args, ctx, state) => {
+      const result = await runSessionsCommand(args, ctx, state.currentSessionId);
+      return {
+        ...result,
+        output: `${DEPRECATION}\n${result.output ?? ''}`.trimEnd(),
+      };
+    },
   };
 }
+
+/**
+ * 把 action 的文本结果归一为 UI 可消费的 { ok, message }。
+ * （命令契约仍是 CommandResult；Ink 选择器需要知道是否保留行。）
+ */
+export function sessionActionResult(result: CommandResult): {
+  ok: boolean;
+  message: string;
+} {
+  const message = (result.output ?? '').trim();
+  const ok = /^(Deleted|Renamed) session /.test(message);
+  return { ok, message };
+}
+
+/** deprecated 提示文本（测试用） */
+export const SESSIONS_DEPRECATION = DEPRECATION;

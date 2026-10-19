@@ -53,11 +53,18 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
     expect(names.length).toBe(20);
-    // /resume 仍是会话恢复，usage 不被 /runs 影响
-    expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe('/resume [number|id]');
+    // /sessions 保留为 hidden deprecated alias：注册但不出现在 help/autocomplete
+    expect(reg.list().find((e) => e.name === 'sessions')?.hidden).toBe(true);
+    expect(reg.visibleList()).toHaveLength(19);
+    expect(reg.visibleList().map((e) => e.name)).not.toContain('sessions');
+    // /resume 仍是会话恢复，usage 扩展为 delete/rename 子命令
+    expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe(
+      '/resume [number|id|delete <id> --yes|rename <id> <title>]',
+    );
+    expect(reg.list().find((e) => e.name === 'resume')?.category).toBe('session');
   });
 
-  it('/help 列出 0.3 / 0.4 命令', async () => {
+  it('/help 列出 0.3 / 0.4 命令并按 category 分组', async () => {
     const reg = createCommands();
     const ctx = makeCtx();
     const state = makeState(ctx.currentSessionId);
@@ -67,6 +74,16 @@ describe('CommandRegistry 扁平命令', () => {
     expect(output).toContain('/workflows [list|run|show|resume|cancel]');
     expect(output).toContain('/metrics');
     expect(output).toContain('/feishu');
+    // 分组标题
+    expect(output).toContain('SESSION:');
+    expect(output).toContain('RUN:');
+    expect(output).toContain('INSPECT:');
+    expect(output).toContain('CONFIG:');
+    expect(output).toContain('SYSTEM:');
+    // hidden deprecated alias 不出现在 help
+    expect(output).not.toContain('/sessions');
+    // picker 键位提示
+    expect(output).toContain('picker:');
   });
 
   it('未知命令 -> handled:false', async () => {
@@ -225,6 +242,90 @@ describe('扁平会话命令', () => {
     expect(state.showResumePicker).toBe(false);
     expect(result.output).toContain('Failed to list sessions');
     expect(result.output).toContain('✗ [internal] list down');
+  });
+
+  it('/resume delete 未带 --yes -> 不发 RPC', async () => {
+    const calls: string[] = [];
+    const ctx = makeCtx({
+      rpc: {
+        request: async <T>(method: string): Promise<T> => {
+          calls.push(method);
+          return {} as T;
+        },
+        subscribe: () => () => undefined,
+      },
+      currentSessionId: 'current',
+    });
+    const state = makeState('current');
+    const result = await createCommands().execute('resume delete other-session', ctx, state);
+    expect(result.output).toContain('Add --yes to confirm');
+    expect(calls).not.toContain('sessions.delete');
+  });
+
+  it('/resume delete --yes 调 sessions.delete', async () => {
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const ctx = makeCtx({
+      rpc: {
+        request: async <T>(method: string, params?: unknown): Promise<T> => {
+          calls.push({ method, ...(params !== undefined ? { params } : {}) });
+          return { sessions_deleted: 1, runs_deleted: 2, events_deleted: 3 } as T;
+        },
+        subscribe: () => () => undefined,
+      },
+      currentSessionId: 'current',
+    });
+    const state = makeState('current');
+    const result = await createCommands().execute('resume delete other-session --yes', ctx, state);
+    expect(result.output).toContain('Deleted session "other-session".');
+    expect(result.output).toContain('sessions: 1, runs: 2, events: 3');
+    expect(calls[0]).toEqual({
+      method: 'sessions.delete',
+      params: { session_id: 'other-session' },
+    });
+  });
+
+  it('/resume delete 当前会话 -> 拒绝', async () => {
+    const reg2 = createCommands();
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+    const result = await reg2.execute(`resume delete ${ctx.currentSessionId} --yes`, ctx, state);
+    expect(result.output).toContain('Refusing to delete the current session');
+  });
+
+  it('/resume rename 透传 id 与 title', async () => {
+    const calls: Array<{ method: string; params?: unknown }> = [];
+    const ctx2 = makeCtx({
+      rpc: {
+        request: async <T>(method: string, params?: unknown): Promise<T> => {
+          calls.push({ method, ...(params !== undefined ? { params } : {}) });
+          return {} as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const state = makeState(ctx2.currentSessionId);
+    const result = await createCommands().execute('resume rename s1 My new title', ctx2, state);
+    expect(result.output).toContain('Renamed session "s1" to "My new title".');
+    expect(calls[0]).toEqual({
+      method: 'sessions.rename',
+      params: { session_id: 's1', title: 'My new title' },
+    });
+  });
+
+  it('/resume rename 空标题 -> usage，不发 RPC', async () => {
+    let called = 0;
+    const ctx2 = makeCtx({
+      rpc: {
+        request: async <T>(): Promise<T> => {
+          called += 1;
+          return {} as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
+    const result = await createCommands().execute('resume rename s1', ctx2, makeState('current'));
+    expect(result.output).toContain('Usage: /resume rename');
+    expect(called).toBe(0);
   });
 
   it('/new 清 context + 新 id + 丢弃空当前会话', async () => {

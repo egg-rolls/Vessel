@@ -92,6 +92,9 @@ export function feishuCommand(): CommandEntry {
     name: 'feishu',
     description: 'Show Feishu channel status',
     usage: '/feishu',
+    category: 'inspect',
+    keywords: ['channel', 'status'],
+    available: (ctx) => Boolean(ctx.feishu || ctx.rpc),
     run: (args, ctx) => runFeishuCommand(args, ctx),
   };
 }

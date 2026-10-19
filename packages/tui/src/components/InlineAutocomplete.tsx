@@ -8,6 +8,7 @@
 
 import { Box, Text, useStdout } from 'ink';
 import { useMemo } from 'react';
+import type { CommandCategory } from '../commands/commands.js';
 import { theme } from '../theme.js';
 import { computeDialogWidth, displayWidth, truncateToWidth } from '../utils/dialog.js';
 
@@ -15,6 +16,12 @@ export interface CommandItem {
   name: string;
   description: string;
   usage?: string;
+  category?: CommandCategory;
+  keywords?: string[];
+  /** hidden 命令不进入补全（visibleList 已过滤，这里再兜一层） */
+  hidden?: boolean;
+  /** 当前上下文是否可用；false 显示 `(unavailable)` 标签 */
+  available?: boolean;
 }
 
 interface InlineAutocompleteProps {
@@ -26,46 +33,134 @@ interface InlineAutocompleteProps {
   selectedIndex: number;
   /** 矮终端下可见条数上限；默认 MAX_VISIBLE_COMMANDS */
   maxVisible?: number;
+  /** 最近成功执行的命令名（不含斜杠），空 query 时优先 */
+  recent?: string[];
 }
 
 /**
  * 首屏优先展示的常用命令（按此顺序）。
- * `/` 打开补全时条目很多，这四个必须出现在第一屏；其余保持注册顺序。
+ * `/resume` 是唯一会话入口，必须排第一。
  */
-export const DISCOVERY_PRIORITY = ['/help', '/new', '/history', '/clear'] as const;
+export const DISCOVERY_PRIORITY = ['/resume', '/new', '/help', '/history', '/clear'] as const;
 
-/** 纯函数：把常用命令提到最前；其余保持原有（注册）顺序（sort 稳定）。 */
-export function sortCommandsForDiscovery(commands: CommandItem[]): CommandItem[] {
-  const rank = new Map<string, number>(
-    DISCOVERY_PRIORITY.map((name, index) => [name, index] as const),
-  );
+const CATEGORY_ORDER: CommandCategory[] = ['session', 'run', 'inspect', 'config', 'system'];
+export const CATEGORY_LABELS: Record<CommandCategory, string> = {
+  session: 'SESSION',
+  run: 'RUN',
+  inspect: 'INSPECT',
+  config: 'CONFIG',
+  system: 'SYSTEM',
+};
+
+function isSubsequence(query: string, text: string): boolean {
+  let index = 0;
+  for (const ch of text) {
+    if (ch === query[index]) index += 1;
+    if (index >= query.length) return true;
+  }
+  return query.length === 0;
+}
+
+/**
+ * 纯函数：命令模糊评分。
+ * name 前缀 100 / name 子串 80 / keywords 前缀 60 / keywords 子串 50 /
+ * description 子串 30 / 子序列 20；不匹配 0。
+ */
+export function scoreCommand(query: string, command: CommandItem): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+  const name = command.name.toLowerCase();
+  if (name.startsWith(`/${q}`) || name.startsWith(q)) return 100;
+  if (name.includes(q)) return 80;
+
+  const keywords = (command.keywords ?? []).map((keyword) => keyword.toLowerCase());
+  if (keywords.some((keyword) => keyword.startsWith(q))) return 60;
+  if (keywords.some((keyword) => keyword.includes(q))) return 50;
+
+  if (command.description.toLowerCase().includes(q)) return 30;
+
+  if (isSubsequence(q, name.slice(1))) return 20;
+  return 0;
+}
+
+function discoveryRank(name: string): number {
+  const index = (DISCOVERY_PRIORITY as readonly string[]).indexOf(name);
+  return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+}
+
+function recentRank(name: string, recent: string[]): number {
+  const index = recent.indexOf(name.startsWith('/') ? name.slice(1) : name);
+  return index >= 0 ? index : Number.MAX_SAFE_INTEGER;
+}
+
+/** 纯函数：把常用/最近命令提到最前；其余保持原有（注册）顺序（sort 稳定）。 */
+export function sortCommandsForDiscovery(
+  commands: CommandItem[],
+  recent: string[] = [],
+): CommandItem[] {
   return [...commands].sort((a, b) => {
-    const aRank = rank.get(a.name);
-    const bRank = rank.get(b.name);
-    if (aRank !== undefined && bRank !== undefined) return aRank - bRank;
-    if (aRank !== undefined) return -1;
-    if (bRank !== undefined) return 1;
+    const aRecent = recentRank(a.name, recent);
+    const bRecent = recentRank(b.name, recent);
+    if (aRecent !== bRecent) return aRecent - bRecent;
+    const aRank = discoveryRank(a.name);
+    const bRank = discoveryRank(b.name);
+    if (aRank !== bRank) return aRank - bRank;
     return 0;
   });
 }
 
-/** 纯函数：按 filter 模糊匹配命令（substring，大小写不敏感）。命令名匹配排在前，描述匹配排在后。 */
-export function filterCommands(commands: CommandItem[], filter: string): CommandItem[] {
-  // 空 filter = 浏览全部命令：常用命令置顶，保证第一屏可见。
-  if (!filter) return sortCommandsForDiscovery(commands);
-  const lower = filter.toLowerCase();
-  const filtered = commands.filter(
-    (cmd) =>
-      cmd.name.toLowerCase().includes(lower) || cmd.description.toLowerCase().includes(lower),
-  );
-  // 命令名匹配优先于描述匹配
-  return filtered.sort((a, b) => {
-    const aName = a.name.toLowerCase().includes(lower);
-    const bName = b.name.toLowerCase().includes(lower);
-    if (aName && !bName) return -1;
-    if (!aName && bName) return 1;
-    return 0;
+export interface CommandFilterOptions {
+  recent?: string[];
+}
+
+/** 纯函数：按 filter 模糊匹配命令；hidden 不出现。 */
+export function filterCommands(
+  commands: CommandItem[],
+  filter: string,
+  options: CommandFilterOptions = {},
+): CommandItem[] {
+  const visible = commands.filter((command) => !command.hidden);
+  const recent = options.recent ?? [];
+
+  // 空 filter = 浏览全部命令：最近使用 > 常用命令 > 注册顺序。
+  if (!filter) return sortCommandsForDiscovery(visible, recent);
+
+  const scored = visible
+    .map((command, index) => ({ command, index, score: scoreCommand(filter, command) }))
+    .filter((entry) => entry.score > 0);
+
+  scored.sort((a, b) => {
+    if (a.score !== b.score) return b.score - a.score;
+    const aRecent = recentRank(a.command.name, recent);
+    const bRecent = recentRank(b.command.name, recent);
+    if (aRecent !== bRecent) return aRecent - bRecent;
+    const aRank = discoveryRank(a.command.name);
+    const bRank = discoveryRank(b.command.name);
+    if (aRank !== bRank) return aRank - bRank;
+    return a.index - b.index;
   });
+
+  return scored.map((entry) => entry.command);
+}
+
+export interface CommandGroup {
+  category: CommandCategory;
+  label: string;
+  commands: CommandItem[];
+}
+
+/** 纯函数：按 category 分组（隐藏命令不出现；组顺序固定） */
+export function groupCommandsByCategory(commands: CommandItem[]): CommandGroup[] {
+  const groups: CommandGroup[] = [];
+  for (const category of CATEGORY_ORDER) {
+    const items = commands.filter(
+      (command) => !command.hidden && (command.category ?? 'system') === category,
+    );
+    if (items.length > 0) {
+      groups.push({ category, label: CATEGORY_LABELS[category], commands: items });
+    }
+  }
+  return groups;
 }
 
 /** 补全框最多可见的条数（超出时围绕选中项滚动） */
@@ -134,10 +229,14 @@ export function InlineAutocomplete({
   filter,
   selectedIndex,
   maxVisible = MAX_VISIBLE_COMMANDS,
+  recent = [],
 }: InlineAutocompleteProps) {
   const { stdout } = useStdout();
   const width = computeDialogWidth(stdout.columns);
-  const filtered = useMemo(() => filterCommands(commands, filter), [commands, filter]);
+  const filtered = useMemo(
+    () => filterCommands(commands, filter, { recent }),
+    [commands, filter, recent],
+  );
 
   if (filtered.length === 0) return null;
 
@@ -158,7 +257,11 @@ export function InlineAutocomplete({
       {filtered.slice(start, end).map((cmd, offset) => {
         const i = start + offset;
         const active = i === selectedIndex;
-        const descriptionBudget = Math.max(1, contentWidth - 2 - displayWidth(cmd.name) - 3);
+        const availability = cmd.available === false ? ' (unavailable)' : '';
+        const descriptionBudget = Math.max(
+          1,
+          contentWidth - 2 - displayWidth(cmd.name) - 3 - availability.length,
+        );
         return (
           <Box key={cmd.name}>
             <Text color={active ? theme.brand : theme.muted} bold={active}>
@@ -168,6 +271,7 @@ export function InlineAutocomplete({
             <Text color={theme.faint} wrap="truncate-end">
               {' · '}
               {truncateToWidth(cmd.description, descriptionBudget)}
+              {availability}
             </Text>
           </Box>
         );

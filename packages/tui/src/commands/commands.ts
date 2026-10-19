@@ -25,6 +25,8 @@
 
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
+import { displayWidth } from '../utils/text-layout.js';
+import type { ViewActionInvocation, ViewEnvelope } from '../views/types.js';
 import { capabilitiesCommand } from './capabilities-command.js';
 import { configCommand } from './config-command.js';
 import { feishuCommand } from './feishu-command.js';
@@ -33,8 +35,10 @@ import { metricsCommand } from './metrics-command.js';
 import { runsCommand } from './runs-command.js';
 import {
   deleteSession,
+  deleteSessionAction,
   getSessionState,
   listSessions,
+  renameSessionAction,
   sessionsCommand,
 } from './sessions-command.js';
 import { tenantCommand } from './tenant-command.js';
@@ -71,6 +75,11 @@ export interface CommandResult {
   resumeRun?: DurableRunHandle;
   /** /workflows run|resume：命令已启动，REPL 层接管运行态与取消 */
   workflowRun?: WorkflowRunHandle;
+  /**
+   * Ink 模式下打开交互视图；simple mode 忽略并打印 `output`
+   * （`output` 仍是契约，缺失时 fallback 到 `renderViewAsText(view)`）。
+   */
+  view?: ViewEnvelope;
 }
 
 /** 命令执行函数签名 */
@@ -80,13 +89,30 @@ type Run = (
   state: ReplState,
 ) => Promise<CommandResult> | CommandResult;
 
+/** 命令元数据分类（help / autocomplete 分组） */
+export type CommandCategory = 'session' | 'run' | 'inspect' | 'config' | 'system';
+
 /** 命令条目 */
 export interface CommandEntry {
   name: string;
   description: string;
   usage?: string;
+  /** help/autocomplete 分组；缺省 'system' */
+  category?: CommandCategory;
+  /** 模糊匹配的别名词 */
+  keywords?: string[];
+  /** 不出现在 help/autocomplete，但仍可执行 */
+  hidden?: boolean;
+  /** 当前上下文是否可用；缺省 true（用于 dim 标签，不用于隐藏） */
+  available?: (ctx: ReplContext) => boolean;
   /** 命令执行函数 */
   run: Run;
+  /** 视图动作处理；返回新的 CommandResult（可带新 view） */
+  viewAction?: (
+    invocation: ViewActionInvocation,
+    ctx: ReplContext,
+    state: ReplState,
+  ) => Promise<CommandResult> | CommandResult;
 }
 
 /** 恢复会话结果（doResume 纯函数返回） */
@@ -122,6 +148,39 @@ export class CommandRegistry {
 
   list(): CommandEntry[] {
     return [...this.entries.values()];
+  }
+
+  /** help / autocomplete 使用的可见命令（过滤 hidden alias） */
+  visibleList(): CommandEntry[] {
+    return this.list().filter((entry) => !entry.hidden);
+  }
+
+  /**
+   * 视图动作统一入口：与 execute 一样应用 nextState、捕获异常。
+   * 渲染层不 import 命令实现，只按 source + actionId 路由回来。
+   */
+  async dispatchViewAction(
+    source: string,
+    invocation: ViewActionInvocation,
+    ctx: ReplContext,
+    state: ReplState,
+  ): Promise<CommandResult> {
+    const entry = this.entries.get(source);
+    if (!entry?.viewAction) {
+      return { handled: false, output: `\nNo view action handler for /${source}.\n` };
+    }
+    let result: CommandResult;
+    try {
+      result =
+        (await entry.viewAction(invocation, ctx, state)) || ({ handled: true } as CommandResult);
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to handle /${source} ${invocation.actionId}:\n${formatRpcError(error)}\n`,
+      };
+    }
+    if (result.nextState) applyNextState(state, result.nextState);
+    return result;
   }
 
   async execute(input: string, ctx: ReplContext, state: ReplState): Promise<CommandResult> {
@@ -181,12 +240,30 @@ export function createCommands(): CommandRegistry {
 
 // ── 帮助渲染 ──────────────────────────────────────
 
+const CATEGORY_ORDER: CommandCategory[] = ['session', 'run', 'inspect', 'config', 'system'];
+const CATEGORY_LABEL: Record<CommandCategory, string> = {
+  session: 'SESSION',
+  run: 'RUN',
+  inspect: 'INSPECT',
+  config: 'CONFIG',
+  system: 'SYSTEM',
+};
+
 function renderHelp(reg: CommandRegistry): string {
   const lines: string[] = ['', 'Available commands:'];
+  const visible = reg.visibleList();
 
-  for (const entry of reg.list()) {
-    const usage = entry.usage || `/${entry.name}`;
-    lines.push(`  ${usage.padEnd(26)} ${entry.description}`);
+  for (const category of CATEGORY_ORDER) {
+    const entries = visible.filter((entry) => (entry.category ?? 'system') === category);
+    if (entries.length === 0) continue;
+    lines.push('');
+    lines.push(`${CATEGORY_LABEL[category]}:`);
+    for (const entry of entries) {
+      const usage = entry.usage || `/${entry.name}`;
+      // usage 必须完整可读：只用空格补齐，绝不截断（/trace、/workflows 的用法很长）。
+      const padded = usage + ' '.repeat(Math.max(0, 30 - displayWidth(usage)));
+      lines.push(`  ${padded} ${entry.description}`);
+    }
   }
 
   lines.push('');
@@ -195,6 +272,7 @@ function renderHelp(reg: CommandRegistry): string {
   lines.push('  Esc      cancel the running turn (or clear the command list)');
   lines.push('  Ctrl+C   cancel the running turn; press again / when idle to exit');
   lines.push('  Ctrl+L   clear the screen');
+  lines.push('  Resume   picker: ↑↓/jk move · / filter · enter open · r rename · x delete');
   lines.push('');
   return lines.join('\n');
 }
@@ -204,9 +282,38 @@ function renderHelp(reg: CommandRegistry): string {
 function resumeCommand(): CommandEntry {
   return {
     name: 'resume',
-    description: '恢复会话：无参=交互式选择器，N/id=直接恢复',
-    usage: '/resume [number|id]',
-    run: async (args, ctx, _state) => {
+    description: 'Resume a session (picker: r rename, x delete)',
+    usage: '/resume [number|id|delete <id> --yes|rename <id> <title>]',
+    category: 'session',
+    keywords: ['session', 'switch', 'load', 'history'],
+    run: async (args, ctx, state) => {
+      // /resume delete <id> --yes（从 /sessions 迁移）
+      if (args[0] === 'delete') {
+        const target = args[1];
+        const rest = args.slice(2);
+        const extra = rest.filter((arg) => arg !== '--yes');
+        if (target === undefined || extra.length > 0) {
+          return {
+            handled: true,
+            output: '\nUsage: /resume delete <id> --yes\n',
+          };
+        }
+        return deleteSessionAction(ctx, target, {
+          confirmed: rest.includes('--yes'),
+          currentSessionId: state.currentSessionId,
+        });
+      }
+
+      // /resume rename <id> <title>
+      if (args[0] === 'rename') {
+        const target = args[1];
+        const title = args.slice(2).join(' ').trim();
+        if (target === undefined || title.length === 0) {
+          return { handled: true, output: '\nUsage: /resume rename <id> <title>\n' };
+        }
+        return renameSessionAction(ctx, target, title);
+      }
+
       if (args.length === 0) {
         let sessions: Awaited<ReturnType<typeof listSessions>>;
         try {
@@ -337,6 +444,8 @@ function newCommand(): CommandEntry {
     name: 'new',
     description: '开启新会话（丢弃当前空会话）',
     usage: '/new',
+    category: 'session',
+    keywords: ['new', 'session', 'create'],
     run: async (_args, ctx, state) => {
       const oldId = state.currentSessionId;
       try {
@@ -450,6 +559,8 @@ function historyCommand(): CommandEntry {
     name: 'history',
     description: '显示当前会话的对话历史',
     usage: '/history [--limit <n>] [--role user|assistant|tool]',
+    category: 'session',
+    keywords: ['history', 'transcript', 'messages'],
     run: async (args, ctx, state) => {
       const parsed = parseHistoryArgs(args);
       if (!parsed.ok) {
@@ -530,6 +641,8 @@ function toolsCommand(): CommandEntry {
     name: 'tools',
     description: '列出已注册工具',
     usage: '/tools',
+    category: 'inspect',
+    keywords: ['plugins', 'capabilities', 'tools'],
     run: async (_args, ctx, _state) => {
       try {
         const list = ctx.rpc
@@ -556,6 +669,8 @@ function pluginsCommand(): CommandEntry {
     name: 'plugins',
     description: '列出已加载插件',
     usage: '/plugins',
+    category: 'inspect',
+    keywords: ['plugins', 'loaded'],
     run: async (_args, ctx, _state) => {
       try {
         const plugins = ctx.rpc
@@ -585,6 +700,8 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
     name: 'help',
     description: '显示可用命令',
     usage: '/help',
+    category: 'system',
+    keywords: ['commands', 'usage'],
     run: (_args, _ctx, _state) => ({ handled: true, output: renderHelp(reg) }),
   };
 }
@@ -596,6 +713,8 @@ function clearCommand(): CommandEntry {
     name: 'clear',
     description: '清屏（含 scrollback）',
     usage: '/clear',
+    category: 'system',
+    keywords: ['clear', 'screen'],
     run: () => ({ handled: true, clearScreen: true }),
   };
 }
@@ -607,6 +726,8 @@ function setupCommand(): CommandEntry {
     name: 'setup',
     description: '配置向导入口（需退出 REPL 后运行）',
     usage: '/setup',
+    category: 'system',
+    keywords: ['setup', 'config', 'wizard'],
     run: async (_args, _ctx, _state) => {
       // P0：向导用 readline 独占 stdin，与已挂载的 Ink 抢 raw mode 会串屏/失效。
       // 因此不在 REPL 内直接启动；给出准确的手动路径。
@@ -635,6 +756,8 @@ function reloadCommand(): CommandEntry {
     name: 'reload',
     description: '重新校验配置（provider/model、插件、权限需重启生效）',
     usage: '/reload',
+    category: 'system',
+    keywords: ['reload', 'validate', 'config'],
     run: async (_args, ctx, _state) => {
       try {
         const { loadConfig } = await import('@vessel/config');
@@ -683,6 +806,8 @@ function exitCommand(): CommandEntry {
     name: 'exit',
     description: '退出',
     usage: '/exit',
+    category: 'system',
+    keywords: ['quit', 'exit'],
     run: (_args, ctx, _state) => {
       ctx.onExit();
       return { handled: true, output: '\nGoodbye!\n', nextState: { running: false } };
