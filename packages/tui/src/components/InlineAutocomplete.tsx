@@ -23,6 +23,8 @@ interface InlineAutocompleteProps {
   filter: string;
   /** 当前高亮索引 */
   selectedIndex: number;
+  /** 矮终端下可见条数上限；默认 MAX_VISIBLE_COMMANDS */
+  maxVisible?: number;
 }
 
 /** 纯函数：按 filter 模糊匹配命令（substring，大小写不敏感）。命令名匹配排在前，描述匹配排在后。 */
@@ -104,12 +106,17 @@ export function decideCommandEnter(
   return { action: 'execute' };
 }
 
-export function InlineAutocomplete({ commands, filter, selectedIndex }: InlineAutocompleteProps) {
+export function InlineAutocomplete({
+  commands,
+  filter,
+  selectedIndex,
+  maxVisible = MAX_VISIBLE_COMMANDS,
+}: InlineAutocompleteProps) {
   const filtered = useMemo(() => filterCommands(commands, filter), [commands, filter]);
 
   if (filtered.length === 0) return null;
 
-  const { start, end } = getVisibleCommandWindow(filtered.length, selectedIndex);
+  const { start, end } = getVisibleCommandWindow(filtered.length, selectedIndex, maxVisible);
 
   return (
     <Box

@@ -15,6 +15,8 @@ interface SessionTableProps {
   /** picker 数据加载状态；默认 ready，保持外部调用兼容 */
   status?: 'loading' | 'ready' | 'error';
   error?: string | null;
+  /** 矮终端下可见会话行数上限；缺省不封顶 */
+  maxRows?: number;
   onRetry?: () => void;
   onSelect: (id: string) => void;
   onClose: () => void;
@@ -30,6 +32,7 @@ export function SessionTable({
   currentSessionId,
   status = 'ready',
   error = null,
+  maxRows,
   onRetry,
   onSelect,
   onClose,
@@ -54,6 +57,16 @@ export function SessionTable({
   useEffect(() => {
     setSelectedIndex(0);
   }, [filterText]);
+
+  // 矮终端：围绕选中项滚动，避免 picker 溢出压掉状态栏。
+  const visibleWindow = useMemo(() => {
+    if (maxRows === undefined || maxRows <= 0 || filteredSessions.length <= maxRows) {
+      return { start: 0, items: filteredSessions };
+    }
+    const maxStart = filteredSessions.length - maxRows;
+    const start = Math.min(Math.max(0, selectedIndex - Math.floor(maxRows / 2)), maxStart);
+    return { start, items: filteredSessions.slice(start, start + maxRows) };
+  }, [filteredSessions, maxRows, selectedIndex]);
 
   useInput((inputChar, key) => {
     // Filter mode: type to filter
@@ -234,7 +247,8 @@ export function SessionTable({
       </Box>
 
       {/* Session list */}
-      {filteredSessions.map((s, i) => {
+      {visibleWindow.items.map((s, offset) => {
+        const i = visibleWindow.start + offset;
         const isCurrent = s.session_id === currentSessionId;
         const isSelected = i === selectedIndex;
         const color = isSelected ? theme.brand : isCurrent ? theme.ok : theme.muted;
@@ -264,6 +278,16 @@ export function SessionTable({
           </Box>
         );
       })}
+
+      {/* Window indicator */}
+      {filteredSessions.length > visibleWindow.items.length && (
+        <Box marginTop={1}>
+          <Text color={theme.faint}>
+            showing {visibleWindow.start + 1}-{visibleWindow.start + visibleWindow.items.length} of{' '}
+            {filteredSessions.length}
+          </Text>
+        </Box>
+      )}
 
       {/* Footer hints */}
       <Box marginTop={1}>

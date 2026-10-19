@@ -9,7 +9,7 @@
  * 命令为纯函数（返回 output/nextState），Ink 层以不可变合并消费 nextState。
  */
 
-import { Box, render, Static, Text, useApp, useInput, useStdout } from 'ink';
+import { Box, render, Static, Text, useApp, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { type CommandResult, createCommands, doResume } from '../commands/commands.js';
@@ -36,6 +36,7 @@ import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
+import { computeLiveLayout } from './layout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { loadStartupNotice } from './startup-notice.js';
@@ -64,6 +65,8 @@ function InkRepl({ ctx }: InkReplProps) {
   const permissionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** 运行中重复提交提示的节流时间戳 */
   const lastBusyNoticeRef = useRef(0);
+  /** 矮终端提示只写一次 scrollback */
+  const lowHeightNoticeShownRef = useRef(false);
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -514,11 +517,25 @@ function InkRepl({ ctx }: InkReplProps) {
   // 实时区域高度上限：给状态栏、输入行、running 行、补全框留出空间。
   // 根 Box 不再设置 height —— 固定 height 会让 Ink 判定为 fullscreen 并每帧 clearTerminal，
   // 在 Windows/PowerShell 下会导致历史、流式输出和底栏互相覆盖。
-  const terminalRows = stdout.rows ?? 24;
-  const liveMaxHeight = Math.max(3, terminalRows - 12);
+  // Ink 的 resize 只重算 Yoga 并序列化现有树，不会重跑 React render；
+  // 用 useWindowSize 订阅 resize，保证矮终端分级能即时生效。
+  const windowSize = useWindowSize();
+  const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
+  const layout = computeLiveLayout(terminalRows);
+  const runActive = ui.run.phase !== 'idle';
+  // minimal 档在 run 进行中保留 1 行进度；hidden 始终为 0。
+  const liveMaxHeight = layout.mode === 'minimal' && runActive ? 1 : layout.liveMaxHeight;
+  const streamMaxLines = layout.mode === 'minimal' && runActive ? 1 : layout.streamMaxLines;
   // 独占弹窗显示时隐藏实时流，避免浮层与流式内容争抢 live frame 空间。
   const exclusiveOverlayActive =
     state.showResumePicker || ui.permissionOverlay !== null || ui.askUserActive;
+
+  // 矮终端降级只提示一次；写入 Static/scrollback，不占 live 行。
+  useEffect(() => {
+    if (!layout.notice || lowHeightNoticeShownRef.current) return;
+    lowHeightNoticeShownRef.current = true;
+    dispatch({ type: 'appendHistory', line: `⚠ ${layout.notice}` });
+  }, [layout.notice, dispatch]);
 
   return (
     <Box flexDirection="column">
@@ -530,7 +547,9 @@ function InkRepl({ ctx }: InkReplProps) {
           plugins={ctx.plugins}
           {...(ctx.tenant ? { tenant: ctx.tenant.tenant_id } : {})}
         />
-        <UpdateBanner events={ctx.events} />
+        {layout.mode !== 'minimal' && layout.mode !== 'hidden' && (
+          <UpdateBanner events={ctx.events} />
+        )}
       </Box>
 
       {/* 已完成历史交给 Ink <Static>：直接写入终端 scrollback，不再参与每帧重绘。
@@ -541,15 +560,18 @@ function InkRepl({ ctx }: InkReplProps) {
 
       {/* 实时区域：只显示当前轮流式输出 / 子 agent 活动，限制高度防止覆盖底栏。
           独占弹窗显示时用 display="none" 隐藏（保持组件挂载，避免丢失本轮 segments）。 */}
+      {/* 即使 liveMaxHeight=0 也只 display:none，不卸载组件：
+          StreamOutput 仍订阅事件，run 完成时通过 onComplete 归档到 Static。 */}
       <Box
         flexDirection="column"
         overflowY="hidden"
         maxHeight={liveMaxHeight}
-        display={exclusiveOverlayActive ? 'none' : 'flex'}
+        display={exclusiveOverlayActive || liveMaxHeight === 0 ? 'none' : 'flex'}
       >
         <StreamOutput
           events={ctx.events}
           clearSignal={ui.clearSignal}
+          maxLines={streamMaxLines}
           onComplete={handleStreamComplete}
         />
         <SubagentActivity events={ctx.events} />
@@ -563,6 +585,7 @@ function InkRepl({ ctx }: InkReplProps) {
             currentSessionId={state.currentSessionId}
             status={ui.resumeStatus === 'idle' ? 'loading' : ui.resumeStatus}
             error={ui.resumeError}
+            maxRows={layout.pickerMaxRows}
             onRetry={() => dispatch({ type: 'resumePickerRetry' })}
             onSelect={async (id) => {
               try {
@@ -648,6 +671,7 @@ function InkRepl({ ctx }: InkReplProps) {
             commands={allCommands}
             filter={commandFilter}
             selectedIndex={ui.autocompleteIndex}
+            maxVisible={layout.autocompleteMax}
           />
         </Box>
       )}

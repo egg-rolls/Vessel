@@ -238,11 +238,13 @@ function renderToolCall(seg: ToolCallSegment): ReactNode {
 interface StreamOutputProps {
   events: EventStream;
   clearSignal?: number;
+  /** 外部按终端分档传入的文本行上限；缺省时按终端高度推导 */
+  maxLines?: number;
   /** 当前轮 run 完成时回调，传回响应文本 */
   onComplete?: (responseText: string) => void;
 }
 
-export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputProps) {
+export function StreamOutput({ events, clearSignal, maxLines, onComplete }: StreamOutputProps) {
   const { stdout } = useStdout();
   const [segments, setSegments] = useState<Segment[]>([]);
   const segmentsRef = useRef<Segment[]>([]);
@@ -308,8 +310,8 @@ export function StreamOutput({ events, clearSignal, onComplete }: StreamOutputPr
     return unsubscribe;
   }, [events, resetSegments, nextId]);
 
-  // 按终端高度限制实时视图：留给状态栏 / 输入框 / 补全框 / running 行约 14 行。
-  const maxTextLines = Math.max(4, (stdout.rows ?? 24) - 14);
+  // 按终端高度限制实时视图：优先用外部 computeLiveLayout 的分档值。
+  const maxTextLines = maxLines ?? Math.max(4, (stdout.rows ?? 24) - 14);
   const visibleSegments = useMemo(
     () => limitSegments(segments, { maxSegments: DEFAULT_MAX_SEGMENTS, maxLines: maxTextLines }),
     [segments, maxTextLines],
