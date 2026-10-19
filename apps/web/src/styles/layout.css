@@ -215,6 +215,8 @@
 .app-shell.nav-drawer .domain-nav.open {
   visibility: visible;
   transform: none;
+  /* 打开时 visibility 立即生效，避免抽屉首个可聚焦元素 focus() 被浏览器忽略 */
+  transition: transform var(--motion-ui) var(--ease);
 }
 
 .nav-brand {
@@ -696,6 +698,8 @@
   .chat-session-column.open {
     visibility: visible;
     transform: none;
+    /* 打开时 visibility 立即生效，避免抽屉首个可聚焦元素 focus() 被浏览器忽略 */
+    transition: transform var(--motion-ui) var(--ease);
   }
 
   .conversation {
