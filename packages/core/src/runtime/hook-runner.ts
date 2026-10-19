@@ -3,6 +3,8 @@
  * 从 AgentRuntime 抽出（ADR-033 编排逻辑外推），保持单一职责。
  *
  * 0.5：发 `hook.started` / `hook.completed` / `hook.failed`（DECISION-010 §2.2）。
+ * 0.8 C2：单个 hook 抛错不再向上传播——发 `hook.error`（并保留 `hook.failed` 兼容），
+ * 继续执行后续 hook。坏插件不得拖垮整个 run。
  *
  * @module @vessel/core/runtime
  */
@@ -66,15 +68,18 @@ export class HookRunner {
           return merged;
         }
       } catch (error) {
-        this.publish('hook.failed', {
+        const payload = {
           hook_name: hook.name,
           hook_type: type,
           run_id: ctx.run_id,
           ...(ctx.session_id !== undefined ? { session_id: ctx.session_id } : {}),
           duration_ms: Date.now() - startedAt,
           error: error instanceof Error ? error.message : String(error),
-        });
-        throw error;
+        };
+        // 0.8 C2：隔离故障。`hook.failed` 保留给既有订阅方，`hook.error` 为统一信号。
+        this.publish('hook.failed', payload);
+        this.publish('hook.error', payload);
+        // 继续下一个 hook：单点故障不能终止 run，也不能丢弃已聚合的结果。
       }
     }
 

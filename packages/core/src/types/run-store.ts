@@ -70,6 +70,19 @@ export class RunResumeError extends Error {
 }
 
 /**
+ * 同一 `AgentRuntime` 已有 active run（0.8 C1）。
+ *
+ * 继承 `RunResumeError` 以保持既有 `instanceof` 与 `code` 消费方兼容；
+ * `message` 固定为 `run_already_running`，调用方按 `code` 分支即可。
+ */
+export class RunAlreadyRunningError extends RunResumeError {
+  constructor(runId: string) {
+    super('run_already_running', runId);
+    this.name = 'RunAlreadyRunningError';
+  }
+}
+
+/**
  * @internal Host 关闭导致的取消 reason。
  * AgentRuntime 据此把 checkpoint 写成 `interrupted`（可恢复），
  * 其他取消 reason 一律写 `cancelled`。

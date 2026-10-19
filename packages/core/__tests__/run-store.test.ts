@@ -144,6 +144,33 @@ describe('FileRunStore', () => {
     await store.delete('run-1');
   });
 
+  it('tenant 模式 delete 不删除其它 tenant 的 checkpoint（A5）', async () => {
+    const dir = await tempDir();
+    const tenantA = new FileRunStore({ dir, tenantId: 'a' });
+    const tenantB = new FileRunStore({ dir, tenantId: 'b' });
+    await tenantA.save(checkpoint({ tenant_id: 'a' }));
+
+    // 跨 tenant 读不到，也不能通过 delete 删除
+    expect(await tenantB.load('run-1')).toBeNull();
+    await tenantB.delete('run-1');
+    expect(await tenantA.load('run-1')).not.toBeNull();
+
+    // 归属 tenant 可以删除
+    await tenantA.delete('run-1');
+    expect(await tenantA.load('run-1')).toBeNull();
+  });
+
+  it('tenant 模式 delete 对缺失/损坏文件保持 no-op', async () => {
+    const dir = await tempDir();
+    await writeFile(join(dir, 'broken.json'), '{ not json', 'utf8');
+    const store = new FileRunStore({ dir, tenantId: 'a' });
+
+    await store.delete('missing');
+    await store.delete('broken');
+    // 损坏文件不因 delete 被误删
+    expect((await readdir(dir)).includes('broken.json')).toBe(true);
+  });
+
   it('run_id 编码后不逃出目录；空 run_id 抛错', async () => {
     const dir = await tempDir();
     const store = new FileRunStore({ dir });

@@ -32,24 +32,39 @@ describe('HookRunner events (0.5 event manifest)', () => {
     expect(typeof completed?.duration_ms).toBe('number');
   });
 
-  it('emits hook.failed and rethrows', async () => {
+  it('isolates a throwing hook: emits hook.failed + hook.error and continues', async () => {
     const events = new MemoryEventStream();
+    const seen: string[] = [];
     const runner = new HookRunner(
       hostWith([
         {
           name: 'boom',
           type: HookType.AfterTool,
           run: async () => {
+            seen.push('boom');
             throw new Error('hook exploded');
+          },
+        },
+        {
+          name: 'after',
+          type: HookType.AfterTool,
+          run: async () => {
+            seen.push('after');
+            return { block: true, reason: 'still works' };
           },
         },
       ]),
       events,
     );
 
-    await expect(runner.run(HookType.AfterTool, { run_id: 'r1' })).rejects.toThrow('hook exploded');
+    // 0.8 C2：坏 hook 不向上传播，后续 hook 继续执行
+    const result = await runner.run(HookType.AfterTool, { run_id: 'r1' });
+    expect(result).toEqual({ block: true, reason: 'still works' });
+    expect(seen).toEqual(['boom', 'after']);
 
     const failed = events.getHistory().find((e) => e.type === 'hook.failed');
     expect(failed?.data).toMatchObject({ hook_name: 'boom', error: 'hook exploded' });
+    const errored = events.getHistory().find((e) => e.type === 'hook.error');
+    expect(errored?.data).toMatchObject({ hook_name: 'boom', error: 'hook exploded' });
   });
 });
