@@ -661,8 +661,13 @@ export class AgentRuntime {
       // 执行 AfterLlm 钩子
       await this.hooks.run(HookType.AfterLlm, hookCtx);
 
-      // 检查完成原因
-      if (response.finish_reason === 'stop') {
+      // 检查完成原因。
+      // 0.6.1 P1：finish_reason 不可靠——存在实际 tool_calls 时优先继续工具轮，
+      // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
+      const toolCalls = response.tool_calls;
+      const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
+
+      if (!hasToolCalls && response.finish_reason === 'stop') {
         // 应用输出 Guardrail
         const outputResult = await this.guardrails.apply(
           response.content,
@@ -694,13 +699,13 @@ export class AgentRuntime {
         return finalContent;
       }
 
-      if (response.finish_reason === 'tool_calls' && response.tool_calls) {
+      if (toolCalls && toolCalls.length > 0) {
         // 先对全部 tool_call 过 Guardrail，得到实际要执行的调用（replacement 可改写，C-05）。
         // 放在写 assistant 消息之前，保证上下文里的 tool_calls 与后续 role:tool 结果严格配对。
         // 阻断不再 throw（0.6.1 P1）：保留调用并折回 role:tool 错误，模型可改道。
         const effectiveCalls: ToolCall[] = [];
         const blockedCalls = new Map<string, string>();
-        for (const toolCall of response.tool_calls) {
+        for (const toolCall of toolCalls) {
           this.limitChecker.incrementToolCall(this.stats);
           const toolCallResult = await this.guardrails.apply(
             toolCall,
