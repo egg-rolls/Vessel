@@ -13,6 +13,7 @@ import { extractTokenFromHash } from '../app/router';
 import { useToast } from '../components/ToastProvider';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
+import { planHelloSeq } from './seq-replay';
 import type { AskUserAnswer, AskUserRequest, HelloInfo, RunEvent } from './types';
 import { checkGatewayUrl, GATEWAY_URL_KEY, resolveInitialGatewayUrl } from './url';
 
@@ -263,11 +264,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const offHello = client.onHello((info) => {
       attempt = 0;
       setReconnectAttempt(0);
-      // gateway 重启后 seq 从 1 重新计数；旧 seq 会永久丢弃新事件。
-      if (info.latest_seq < eventStore.currentSeq) {
-        const reset = eventStore.currentSeq > 0;
-        eventStore.reset(info.latest_seq);
-        if (reset) setGapNotice('gateway 已重启，事件序号已重置，已重新同步');
+      // gateway 重启后 seq 从 1 重新计数；旧 seq 会让重放事件被永久丢弃。
+      // 不能只 reset(latest_seq) 后继续用当前连接：必须断开并以 since=0 重放。
+      const seqPlan = planHelloSeq(info.latest_seq, eventStore.currentSeq);
+      if (seqPlan.replay) {
+        eventStore.reset(seqPlan.resetTo ?? 0);
+        if (seqPlan.notice) setGapNotice(seqPlan.notice);
+        setTokenError(null);
+        setGatewayError(null);
+        setLastError(null);
+        // 旧连接的在途帧由 client 的 socket identity 检查丢弃。
+        void client
+          .restart(token, seqPlan.since, tenantIdRef.current ?? targetTenantId)
+          .catch(reportConnectError);
+        return;
       }
       const previousTenant = tenantIdRef.current;
       const nextTenant = info.tenant_id ?? previousTenant;

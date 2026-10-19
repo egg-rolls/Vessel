@@ -209,6 +209,8 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       active = null;
       record.resolveDone();
       releaseTenantSlot(record.tenant_id);
+      // run 终态：映射不再被 eventTenantId 需要。
+      forgetCoreRun(record.core_run_id);
       trimRuns();
       pump();
     }
@@ -221,11 +223,19 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     void execute(next);
   }
 
+  /** 终态/trim 后不再需要 core run → gateway job 的映射。 */
+  function forgetCoreRun(coreRunId: string | undefined): void {
+    if (coreRunId !== undefined) coreToJob.delete(coreRunId);
+  }
+
   function trimRuns(): void {
     if (runs.size <= maxRuns) return;
     for (const [id, record] of runs) {
       if (runs.size <= maxRuns) break;
-      if (record.status !== 'running' && record.status !== 'queued') runs.delete(id);
+      if (record.status !== 'running' && record.status !== 'queued') {
+        forgetCoreRun(record.core_run_id);
+        runs.delete(id);
+      }
     }
   }
 
@@ -337,6 +347,8 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
         if (pending.run_id === event.run_id) pendingAsks.delete(id);
       }
     }
+    // 注意：终态事件本身仍要带 job_id 出站（gateway 在 handleEvent 之后构造帧），
+    // 所以映射在 execute 的 finally（run 真正收尾）与 trimRuns 里清理。
   }
 
   function respondPermission(
