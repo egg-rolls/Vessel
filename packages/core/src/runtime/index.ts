@@ -6,3 +6,11 @@
 export type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 export { AgentRuntime } from './agent-runtime.js';
 export { MemoryPluginHost } from './plugin-host.js';
+export {
+  createToolPipeline,
+  type ToolPipeline,
+  type ToolPipelineDeps,
+  type ToolPipelineOptions,
+  type ToolPipelineResult,
+  type ToolPipelineStages,
+} from './tool-pipeline.js';

@@ -23,21 +23,12 @@ import type { RunState, SessionBackend } from '../types/session.js';
 
 export type { RunOptions } from '../types/run.js';
 
-import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
+import type { ToolCall } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
 import { PermissionPolicy } from './permission-policy.js';
 import { MemoryPluginHost } from './plugin-host.js';
-
-/** 类型守卫：Guardrail replacement 是否是合法的 ToolCall（C-05） */
-function isToolCall(value: unknown): value is ToolCall {
-  if (typeof value !== 'object' || value === null) return false;
-  const record = value as Record<string, unknown>;
-  const fn = record.function;
-  if (typeof record.id !== 'string' || typeof fn !== 'object' || fn === null) return false;
-  const fnRecord = fn as Record<string, unknown>;
-  return typeof fnRecord.name === 'string' && typeof fnRecord.arguments === 'string';
-}
+import { createToolPipeline, isToolCall, type ToolPipeline } from './tool-pipeline.js';
 
 /** finalizeRun 的终态输入（C1） */
 type RunTerminalOutcome =
@@ -103,6 +94,8 @@ export class AgentRuntime {
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
   private hooks: HookRunner;
+  /** 统一工具执行管道（0.8.2 Wave 2B1）：permission + handler + ToolResult guardrail */
+  private readonly toolPipeline: ToolPipeline;
   /** durable run 检查点（0.3）；缺省不写、零开销 */
   private readonly runStore?: RunStore;
   /** E1：按插件名提供的安装配置 */
@@ -141,6 +134,14 @@ export class AgentRuntime {
     this.permissionPolicy = new PermissionPolicy(this.events, opts.permission, opts.tenantId);
     this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
     this.hooks = new HookRunner(this.pluginHost, this.events, opts.tenantId);
+    this.toolPipeline = createToolPipeline({
+      pluginHost: this.pluginHost,
+      events: this.events,
+      permission: this.permissionPolicy,
+      guardrails: this.guardrails,
+      hooks: this.hooks,
+      ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
+    });
   }
 
   /** 创建并异步初始化 AgentRuntime。用此替代 new AgentRuntime()。 */
@@ -1001,35 +1002,24 @@ export class AgentRuntime {
     }
 
     try {
-      // 统一工具调用：只从 PluginHost 查找
-      const pluginTool = this.pluginHost.getTool(toolName);
-      if (!pluginTool) {
-        throw new Error(`Tool "${toolName}" not found`);
-      }
-
-      const toolCtx: ToolContext = {
-        run_id: runId,
-        session_id: sessionId,
-        messages: this.context.messages,
-        events: this.events,
-        // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
-        ...(signal ? { signal } : {}),
-      };
-
-      // 权限判定（ADR-026/029，逻辑在 PermissionPolicy，ADR-033）
-      await this.permissionPolicy.authorize(pluginTool, entry.args, toolCtx);
-
-      const result = await this.invokeTool(pluginTool, entry.args, toolCtx);
-
-      // 应用工具结果 Guardrail（replacement 可改写结果，C-05）
-      const toolResultResult = await this.guardrails.apply(
-        result,
-        GuardrailStage.ToolResult,
+      // 统一执行管道（0.8.2 Wave 2B1）：permission + handler(timeout/signal) + ToolResult guardrail。
+      // BeforeTool / ToolCall guardrail / AfterTool 仍由外层批次与写回逻辑编排，故在此关闭。
+      const result = await this.toolPipeline.execute({
         runId,
         sessionId,
-      );
-      if (!toolResultResult.allowed) {
-        // 0.6.1 P1：结果阻断折回 tool 错误，不终止 run。
+        toolCall,
+        args: entry.args,
+        messages: this.context.messages,
+        // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
+        ...(signal ? { signal } : {}),
+        stages: {
+          beforeToolHook: false,
+          toolCallGuardrail: false,
+          afterToolHook: false,
+        },
+      });
+
+      if (!result.ok) {
         return {
           toolCall,
           input: entry.args,
@@ -1038,14 +1028,10 @@ export class AgentRuntime {
             toolCallId: toolCall.id,
             toolName,
             startTime: entry.startedAt,
-            errorMessage: `Tool result blocked by guardrail: ${
-              toolResultResult.reason ?? 'blocked'
-            }`,
+            errorMessage: result.error ?? result.content,
           }),
         };
       }
-      const finalResult =
-        typeof toolResultResult.replacement === 'string' ? toolResultResult.replacement : result;
 
       // 发布工具调用完成事件
       this.publishEvent({
@@ -1055,13 +1041,13 @@ export class AgentRuntime {
           run_id: runId,
           tool_call_id: toolCall.id,
           tool_name: toolName,
-          result: finalResult,
+          result: result.content,
           duration_ms: Date.now() - entry.startedAt,
         },
         ts: Date.now(),
       });
 
-      return { toolCall, input: entry.args, ok: true, content: finalResult };
+      return { toolCall, input: result.input, ok: true, content: result.content };
     } catch (error) {
       return {
         toolCall,
@@ -1074,29 +1060,6 @@ export class AgentRuntime {
           errorMessage: errorText(error),
         }),
       };
-    }
-  }
-
-  /**
-   * 调用工具并应用超时。
-   * ADR-017(2b)：loop 必须经统一入口执行工具并套 timeout——此前 loop 直调 handler，
-   * `ToolDefinition.timeout` 从未在真实执行路径生效。
-   */
-  private async invokeTool(tool: ToolDefinition, args: unknown, ctx: ToolContext): Promise<string> {
-    if (!tool.timeout || tool.timeout <= 0) {
-      return tool.handler(args, ctx);
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(
-        () => reject(new Error(`Tool "${tool.name}" timed out after ${tool.timeout}ms`)),
-        tool.timeout,
-      );
-    });
-    try {
-      return await Promise.race([tool.handler(args, ctx), timeout]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
     }
   }
 

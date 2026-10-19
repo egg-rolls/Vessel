@@ -43,7 +43,16 @@ export {
   OpenAICompatibleProvider,
 } from './provider/index.js';
 // 运行时
-export { AgentRuntime, MemoryPluginHost } from './runtime/index.js';
+export {
+  AgentRuntime,
+  createToolPipeline,
+  MemoryPluginHost,
+  type ToolPipeline,
+  type ToolPipelineDeps,
+  type ToolPipelineOptions,
+  type ToolPipelineResult,
+  type ToolPipelineStages,
+} from './runtime/index.js';
 // 会话后端
 export {
   AtomicWriteError,
