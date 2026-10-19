@@ -283,7 +283,7 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
       throw new McpPluginError('mcp_server_disabled', `MCP server "${name}" is disabled`);
     }
     const connection = entry.connection;
-    if (!connection || connection.state !== 'connected') {
+    if (connection === undefined || connection.state !== 'connected') {
       throw new McpPluginError('mcp_server_not_connected', `MCP server "${name}" is not connected`);
     }
     return connection;
