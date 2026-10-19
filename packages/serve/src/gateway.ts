@@ -79,6 +79,7 @@ import {
   toWireEvent,
   toWireMessage,
   toWirePeer,
+  type WireAgentStatus,
 } from './team.js';
 import {
   type ConfigGatewayOptionsLike,
@@ -91,6 +92,7 @@ import {
   resolveLocalPrincipal,
   resolvePrincipal,
   resolveTenantScope,
+  TENANT_ID_PATTERN,
   type TenantControlLike,
   type TenantInfo,
   type TenantPrincipal,
@@ -763,6 +765,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   let inboundCursor = 0;
   /** 入站去重（transport.deliver 之外的兜底，防止注入 deliver 时绕过） */
   const seenInbound = new Map<string, true>();
+  /** spawn 幂等：request_id → 在途/已完成结果；LRU 上限 1000 */
+  const spawnRequests = new Map<string, Promise<WireAgentStatus>>();
 
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
@@ -794,12 +798,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   // ── 事件广播：分配 seq → 扇出 ──────────────────
 
+  /**
+   * 事件来源节点：跨节点扇出的事件带 `node_id` 时优先使用它，
+   * 否则回落到本 gateway nodeId（顶层 node_id 字段保持兼容）。
+   */
+  function eventSourceNodeId(event: RunEvent): string {
+    const raw = (event as RunEvent & { node_id?: unknown }).node_id;
+    return typeof raw === 'string' && raw.length > 0 ? raw : nodeId;
+  }
+
   function eventFrame(item: SeqEvent): ServerFrame {
     const jobId = coreToJob.get(item.event.run_id);
     return {
       v: 1,
       kind: 'event',
-      node_id: nodeId,
+      node_id: eventSourceNodeId(item.event),
       ts: Date.now(),
       seq: item.seq,
       ...(jobId ? { job_id: jobId } : {}),
@@ -996,7 +1009,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const wire = toWireEvent(safeEvent);
       const frame = `data: ${JSON.stringify({
         protocol: 1,
-        node_id: nodeId,
+        node_id: eventSourceNodeId(safeEvent),
         seq,
         kind: 'team.event',
         event: wire,
@@ -2010,9 +2023,30 @@ export function startGateway(opts: GatewayOptions): Gateway {
         ws.close(4401, 'unauthorized');
         return;
       }
+      // 0.6：admin 可在 auth 首帧显式指定 tenant；非 admin 只能使用 token principal。
+      const rawTenant = frame.tenant_id;
+      if (rawTenant !== undefined && typeof rawTenant !== 'string') {
+        ws.close(4400, 'invalid tenant');
+        return;
+      }
+      const requestedTenant =
+        typeof rawTenant === 'string' && rawTenant.trim() !== '' ? rawTenant.trim() : undefined;
+      if (requestedTenant !== undefined && !TENANT_ID_PATTERN.test(requestedTenant)) {
+        ws.close(4400, 'invalid tenant');
+        return;
+      }
+      if (
+        requestedTenant !== undefined &&
+        principal.role !== 'admin' &&
+        requestedTenant !== principal.tenant_id
+      ) {
+        ws.close(4403, 'forbidden tenant');
+        return;
+      }
       ws.data.authed = true;
       ws.data.principal = principal;
-      ws.data.tenantId = principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+      ws.data.tenantId =
+        requestedTenant ?? (principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id);
       if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
       if (typeof frame.since === 'number' && frame.since > 0) ws.data.since = frame.since;
       replayTo(ws);
@@ -2107,6 +2141,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const params =
       raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
     if (typeof params.since === 'number' && params.since >= 0) ws.data.since = params.since;
+    // 仅 dispatcher 成功后到达这里：非 admin 的跨 tenant 请求已在上游返回 forbidden。
+    if (typeof params.tenant_id === 'string' && params.tenant_id !== '') {
+      ws.data.tenantId = params.tenant_id;
+    }
     ws.data.runId = typeof params.run_id === 'string' ? params.run_id : undefined;
     ws.data.types = Array.isArray(params.types)
       ? params.types.filter((item): item is string => typeof item === 'string')
@@ -2427,7 +2465,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
               const wire = toWireEvent(item.event);
               return `data: ${JSON.stringify({
                 protocol: 1,
-                node_id: nodeId,
+                node_id: eventSourceNodeId(item.event),
                 seq: item.seq,
                 kind: 'team.event',
                 event: wire,
@@ -2465,10 +2503,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
     url: URL,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/team' && !path.startsWith('/v1/team/')) return null;
     const t = team;
     if (!t) return errorJson('not_found', `Not found: ${path}`, 404, extra);
+    // team 控制面是 gateway 全局状态：仅 default tenant 或 admin 可访问。
+    if (principal.role !== 'admin' && principal.tenant_id !== defaultTenantId) {
+      return errorJson(
+        'forbidden',
+        'Team control plane is only available to the default tenant or an admin token',
+        403,
+        extra,
+      );
+    }
 
     if (path === '/v1/team/peers' && req.method === 'GET') {
       let peers = t.transport ? await t.transport.peers().catch(() => []) : [];
@@ -2600,12 +2648,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return json({ protocol: 1, agents: t.host.list().map(toWireAgentStatus) }, 200, extra);
       }
       if (req.method === 'POST') {
-        if (!t.spawn) return errorJson('no_spawn', 'No spawn handler configured', 400, extra);
+        const spawn = t.spawn;
+        if (!spawn) return errorJson('no_spawn', 'No spawn handler configured', 400, extra);
         const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         const name = body.name;
         const model = body.model;
         const systemPrompt = body.system_prompt;
+        const requestIdRaw = body.request_id;
         if (name !== undefined && typeof name !== 'string') {
           return errorJson('invalid_request', 'name must be a string', 400, extra);
         }
@@ -2615,14 +2665,54 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
           return errorJson('invalid_request', 'system_prompt must be a string', 400, extra);
         }
+        if (
+          requestIdRaw !== undefined &&
+          (typeof requestIdRaw !== 'string' ||
+            requestIdRaw.length === 0 ||
+            requestIdRaw.length > 128)
+        ) {
+          return errorJson(
+            'invalid_request',
+            'request_id must be a non-empty string (<=128)',
+            400,
+            extra,
+          );
+        }
+        const requestId = typeof requestIdRaw === 'string' ? requestIdRaw : undefined;
+
+        // 幂等：同一 request_id 返回第一次 spawn 的结果（含在途请求）。
+        if (requestId !== undefined) {
+          const existing = spawnRequests.get(requestId);
+          if (existing) {
+            try {
+              return json({ protocol: 1, agent: await existing, deduplicated: true }, 200, extra);
+            } catch (error) {
+              return teamErrorResponse(error, extra);
+            }
+          }
+        }
+
+        const pending = (async () =>
+          toWireAgentStatus(
+            await spawn({
+              ...(name !== undefined ? { name } : {}),
+              ...(model !== undefined ? { model } : {}),
+              ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+            }),
+          ))();
+        if (requestId !== undefined) {
+          spawnRequests.set(requestId, pending);
+          while (spawnRequests.size > 1000) {
+            const first = spawnRequests.keys().next();
+            if (first.done) break;
+            spawnRequests.delete(first.value);
+          }
+        }
         try {
-          const status = await t.spawn({
-            ...(name !== undefined ? { name } : {}),
-            ...(model !== undefined ? { model } : {}),
-            ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-          });
-          return json({ protocol: 1, agent: toWireAgentStatus(status) }, 201, extra);
+          const agent = await pending;
+          return json({ protocol: 1, agent }, 201, extra);
         } catch (error) {
+          if (requestId !== undefined) spawnRequests.delete(requestId);
           return teamErrorResponse(error, extra);
         }
       }
@@ -3582,7 +3672,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
 
       // R3：team 端点（默认关闭 → 404）
-      const teamResponse = await handleTeam(req, url, path, extra);
+      const teamResponse = await handleTeam(req, url, path, extra, principal);
       if (teamResponse) return teamResponse;
 
       // 0.3：durable / MCP（未注入 → 503 *_disabled）

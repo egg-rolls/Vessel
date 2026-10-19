@@ -161,7 +161,7 @@ export class TestWs {
   /** 建立连接并发送首帧 auth */
   static async connect(
     gateway: Gateway,
-    opts: { token?: string | null; since?: number } = {},
+    opts: { token?: string | null; since?: number; tenantId?: string } = {},
   ): Promise<TestWs> {
     const wsUrl = `${gateway.url.replace(/^http/, 'ws')}/v1/events?since=${opts.since ?? 0}`;
     const ws = new WebSocket(wsUrl);
@@ -174,7 +174,14 @@ export class TestWs {
     });
     const token = opts.token === undefined ? gateway.token : opts.token;
     if (token !== null) {
-      ws.send(JSON.stringify({ v: 1, kind: 'auth', token }));
+      ws.send(
+        JSON.stringify({
+          v: 1,
+          kind: 'auth',
+          token,
+          ...(opts.tenantId !== undefined ? { tenant_id: opts.tenantId } : {}),
+        }),
+      );
     }
     return client;
   }

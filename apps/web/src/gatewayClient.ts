@@ -183,8 +183,11 @@ export class GatewayClient {
     }
   }
 
-  /** 建立 WS 并完成首帧鉴权；resolve 时机是收到 hello */
-  connect(token: string, since = 0): Promise<void> {
+  /**
+   * 建立 WS 并完成首帧鉴权；resolve 时机是收到 hello。
+   * tenantId 仅对 admin principal 生效（非 admin 传其它 tenant 会被 4403 关闭）。
+   */
+  connect(token: string, since = 0, tenantId?: string): Promise<void> {
     const tk = token.trim();
     if (!tk) return Promise.reject(new Error('token 不能为空'));
     if (this.state === 'open') return Promise.resolve();
@@ -222,7 +225,15 @@ export class GatewayClient {
       this.ws = ws;
 
       ws.addEventListener('open', () => {
-        ws.send(JSON.stringify({ v: 1, kind: 'auth', token: tk, since }));
+        ws.send(
+          JSON.stringify({
+            v: 1,
+            kind: 'auth',
+            token: tk,
+            since,
+            ...(tenantId !== undefined && tenantId !== '' ? { tenant_id: tenantId } : {}),
+          }),
+        );
       });
 
       ws.addEventListener('message', (event) => {
@@ -659,6 +670,8 @@ function closeMessage(code: number): string {
       return '协议版本不兼容（需要 vessel.gateway/1）';
     case 4401:
       return '鉴权失败（token 错误或已失效）';
+    case 4403:
+      return '无权访问该 tenant';
     case 1001:
       return 'gateway 已停止';
     case 1006:
