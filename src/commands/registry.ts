@@ -1,0 +1,220 @@
+/**
+ * CLI 一次性命令注册表
+ *
+ * 每个命令自己判断是否命中（`match`），命中后执行并返回退出码。
+ * cli.ts 只负责解析参数、按顺序匹配、执行与统一落 exitCode；
+ * 主 REPL / serve / headless 路径不经过这里。
+ */
+
+import { loadConfig } from '../../packages/config/src/index';
+import type { CliArgs } from '../cli-args';
+import { runUpdateCommand } from '../cli-update';
+import { configInitCommand, configPathCommand, configShowCommand } from '../config-command';
+import { resolveDataDir } from '../data-paths';
+import { doctorCommand } from '../doctor-command';
+import { runEvalCommand } from '../eval-command';
+import { migrateCommand } from '../migrate-command';
+import { runPluginCommand } from '../plugin-command';
+import { runResumeList } from '../resume-command';
+import {
+  tenantCreateCommand,
+  tenantGetCommand,
+  tenantListCommand,
+  tenantUpdateCommand,
+} from '../tenant-command';
+import { listTools } from '../tools-list';
+import { tracePruneCommand } from '../trace-command';
+import { runWorkflowCommand } from '../workflow-command';
+
+export interface CliCommandContext {
+  /** `VESSEL_MOCK=1|true` */
+  useMock: boolean;
+}
+
+export interface CliCommand {
+  name: string;
+  match(args: CliArgs): boolean;
+  /** 返回进程退出码；`undefined` 等价于 0 */
+  run(args: CliArgs, ctx: CliCommandContext): Promise<number | undefined>;
+}
+
+/** 打印一次性命令结果并返回退出码 */
+function printCommandResult(result: { exitCode: number; stdout: string; stderr: string }): number {
+  if (result.stdout !== '') console.log(result.stdout);
+  if (result.stderr !== '') console.error(result.stderr);
+  return result.exitCode;
+}
+
+/** tenant 命令的数据根（本地命令，不 bootstrap） */
+async function resolveCommandDataDir(): Promise<string> {
+  const { config } = await loadConfig();
+  return resolveDataDir(config);
+}
+
+/** `--tools`：列出当前配置下的工具（headless 口径，不需要 Key） */
+async function printTools(): Promise<void> {
+  const { tools, warnings } = await listTools();
+  for (const w of warnings) console.warn(`⚠ ${w}`);
+  console.log(`Tools (${tools.length}):`);
+  for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
+  console.log('ask_user (interactive only)');
+}
+
+/**
+ * 有序注册表：命中即停。
+ * 顺序与迁移前 cli.ts 的短路顺序一致（help/version 在入口处先行处理）。
+ */
+export const cliCommands: readonly CliCommand[] = [
+  {
+    name: 'tools',
+    match: (args) => args.tools,
+    run: async () => {
+      await printTools();
+      return 0;
+    },
+  },
+  {
+    name: 'update',
+    match: (args) => args.update !== null,
+    run: async (args) => {
+      if (args.update === null) return 1;
+      return runUpdateCommand(args.update);
+    },
+  },
+  {
+    name: 'resume-run-list',
+    match: (args) => args.resumeRunArg === '',
+    run: async (args) =>
+      runResumeList({
+        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+      }),
+  },
+  {
+    name: 'workflow',
+    match: (args) => args.workflow !== null,
+    run: async (args, ctx) => {
+      const command = args.workflow;
+      if (command === null) return 1;
+      return runWorkflowCommand(command, {
+        useMock: ctx.useMock,
+        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+      });
+    },
+  },
+  {
+    name: 'eval',
+    match: (args) => args.eval !== null,
+    run: async (args, ctx) => {
+      const command = args.eval;
+      if (command === null) return 1;
+      return runEvalCommand(command, {
+        useMock: ctx.useMock,
+        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+      });
+    },
+  },
+  {
+    name: 'config',
+    match: (args) => args.configCommand !== null,
+    run: async (args) => {
+      const command = args.configCommand;
+      if (command === null) return 1;
+      if (command.kind === 'path') {
+        return printCommandResult(await configPathCommand({ json: command.json }));
+      }
+      if (command.kind === 'init') {
+        return printCommandResult(
+          await configInitCommand({ json: command.json, force: command.force }),
+        );
+      }
+      return printCommandResult(
+        await configShowCommand({
+          json: command.json,
+          sources: command.sources,
+          ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
+        }),
+      );
+    },
+  },
+  {
+    name: 'tenant',
+    match: (args) => args.tenantCommand !== null,
+    run: async (args) => {
+      const command = args.tenantCommand;
+      if (command === null) return 1;
+      const base = { dataDir: await resolveCommandDataDir(), json: command.json };
+      const result =
+        command.kind === 'list'
+          ? await tenantListCommand(base)
+          : command.kind === 'get'
+            ? await tenantGetCommand(command.id, base)
+            : command.kind === 'create'
+              ? await tenantCreateCommand(command.id, {
+                  ...base,
+                  ...(command.name !== undefined ? { name: command.name } : {}),
+                })
+              : await tenantUpdateCommand(command.id, {
+                  ...base,
+                  ...(command.name !== undefined ? { name: command.name } : {}),
+                  ...(command.status !== undefined ? { status: command.status } : {}),
+                });
+      return printCommandResult(result);
+    },
+  },
+  {
+    name: 'migrate',
+    match: (args) => args.migrate !== null,
+    run: async (args) => {
+      const command = args.migrate;
+      if (command === null) return 1;
+      return printCommandResult(
+        await migrateCommand({
+          from: command.from,
+          to: command.to,
+          apply: command.apply,
+          json: command.json,
+          ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
+          ...(command.source !== undefined ? { source: command.source } : {}),
+        }),
+      );
+    },
+  },
+  {
+    name: 'trace',
+    match: (args) => args.trace !== null,
+    run: async (args) => {
+      const command = args.trace;
+      if (command === null) return 1;
+      return printCommandResult(
+        await tracePruneCommand({
+          dryRun: command.dryRun,
+          json: command.json,
+          ...(command.tenantId !== undefined ? { tenantId: command.tenantId } : {}),
+        }),
+      );
+    },
+  },
+  {
+    name: 'plugin',
+    match: (args) => args.pluginCommand !== null,
+    run: async (args) => {
+      const command = args.pluginCommand;
+      if (command === null) return 1;
+      return printCommandResult(await runPluginCommand(command));
+    },
+  },
+  {
+    name: 'doctor',
+    match: (args) => args.doctorCommand !== null,
+    run: async (args) => {
+      const command = args.doctorCommand;
+      if (command === null) return 1;
+      return printCommandResult(await doctorCommand(command));
+    },
+  },
+];
+
+/** 按注册顺序返回首个命中的命令 */
+export function matchCommand(args: CliArgs): CliCommand | undefined {
+  return cliCommands.find((command) => command.match(args));
+}
