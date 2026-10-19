@@ -6,9 +6,10 @@
  * 当过滤结果为空时返回 null（不渲染任何东西）。
  */
 
-import { Box, Text } from 'ink';
+import { Box, Text, useStdout } from 'ink';
 import { useMemo } from 'react';
 import { theme } from '../theme.js';
+import { computeDialogWidth, displayWidth, truncateToWidth } from '../utils/dialog.js';
 
 export interface CommandItem {
   name: string;
@@ -112,11 +113,15 @@ export function InlineAutocomplete({
   selectedIndex,
   maxVisible = MAX_VISIBLE_COMMANDS,
 }: InlineAutocompleteProps) {
+  const { stdout } = useStdout();
+  const width = computeDialogWidth(stdout.columns);
   const filtered = useMemo(() => filterCommands(commands, filter), [commands, filter]);
 
   if (filtered.length === 0) return null;
 
   const { start, end } = getVisibleCommandWindow(filtered.length, selectedIndex, maxVisible);
+  // 内容区宽度 = 弹窗宽度 - 边框(2) - 左右内边距(2)；行 = 标记(2) + 命令名 + " · " + 描述
+  const contentWidth = Math.max(1, width - 4);
 
   return (
     <Box
@@ -125,17 +130,23 @@ export function InlineAutocomplete({
       borderStyle="single"
       borderColor={theme.line}
       paddingX={1}
+      width={width}
+      overflow="hidden"
     >
       {filtered.slice(start, end).map((cmd, offset) => {
         const i = start + offset;
         const active = i === selectedIndex;
+        const descriptionBudget = Math.max(1, contentWidth - 2 - displayWidth(cmd.name) - 3);
         return (
           <Box key={cmd.name}>
             <Text color={active ? theme.brand : theme.muted} bold={active}>
               {active ? '› ' : '  '}
               {cmd.name}
             </Text>
-            <Text color={theme.faint}> · {cmd.description}</Text>
+            <Text color={theme.faint} wrap="truncate-end">
+              {' · '}
+              {truncateToWidth(cmd.description, descriptionBudget)}
+            </Text>
           </Box>
         );
       })}

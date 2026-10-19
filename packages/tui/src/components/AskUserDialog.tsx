@@ -16,12 +16,13 @@
  */
 
 import type { EventStream } from '@vessel/core';
-import { Box, type Key, Text, useInput } from 'ink';
+import { Box, type Key, Text, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
 import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
+import { computeDialogWidth } from '../utils/dialog.js';
 
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
@@ -54,6 +55,20 @@ interface ActivePrompt extends AskUserRequestedData {
   run_id: string;
 }
 
+/**
+ * 选项前缀：焦点标记必须是非颜色字形，NO_COLOR 下仍可见。
+ * 多选时与 `[✓]/[ ]` 组合，并保持各选项前缀等宽（5 列），避免文字错位。
+ */
+export function formatChoicePrefix(
+  focused: boolean,
+  selected: boolean,
+  multiSelect: boolean,
+): string {
+  const focusMark = focused ? '▶' : ' ';
+  if (!multiSelect) return focusMark;
+  return `${focusMark} ${selected ? '[✓]' : '[ ]'}`;
+}
+
 // ── 子组件：顶部 Tab 行 ──────────────────────────
 
 function QuestionTabs({
@@ -68,7 +83,7 @@ function QuestionTabs({
   isAnswered: (i: number) => boolean;
 }) {
   return (
-    <Box marginBottom={1}>
+    <Box marginBottom={1} flexWrap="wrap">
       {questions.map((q, i) => {
         const isCurrent = i === currentIndex && !isReview;
         const done = isAnswered(i);
@@ -159,7 +174,7 @@ function ChoiceOptions({
         const focused = i === selectIndex;
         const isSelected = selected.has(opt);
         const isCustom = opt === CUSTOM_OPTION;
-        const prefix = multiSelect ? (isSelected ? '[✓]' : '[ ]') : focused ? '▶' : ' ';
+        const prefix = formatChoicePrefix(focused, isSelected, multiSelect);
 
         // 自定义输入项：聚焦时该行本身就是输入框（placeholder 暗灰提示）
         if (isCustom && customFocus) {
@@ -209,6 +224,8 @@ function ChoiceOptions({
 // ── 主组件 ───────────────────────────────────────
 
 export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
+  const { stdout } = useStdout();
+  const width = computeDialogWidth(stdout.columns);
   const [prompt, setPrompt] = useState<ActivePrompt | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [view, setView] = useState<'question' | 'review'>('question');
@@ -525,6 +542,8 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
       borderColor={theme.line}
       paddingX={1}
       marginY={1}
+      width={width}
+      overflow="hidden"
     >
       {/* 标题行：标题 + 进度 */}
       <Box justifyContent="space-between" marginBottom={1}>
@@ -554,7 +573,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
       ) : (
         <Box flexDirection="column">
           <Box marginBottom={1}>
-            <Text>{question.question}</Text>
+            <Text wrap="wrap">{question.question}</Text>
           </Box>
 
           {/* 选择题 */}

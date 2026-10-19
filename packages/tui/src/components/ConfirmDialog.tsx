@@ -9,9 +9,10 @@
  * - 显示与 core 一致的 120s 超时倒计时。
  */
 
-import { Box, Text, useInput } from 'ink';
+import { Box, Text, useInput, useStdout } from 'ink';
 import { useEffect, useState } from 'react';
 import { theme } from '../theme.js';
+import { computeDialogWidth } from '../utils/dialog.js';
 
 export type ConfirmChoice = 'y' | 'n' | 'always';
 
@@ -54,6 +55,8 @@ export function ConfirmDialog({
   expiresAt,
   onConfirm,
 }: ConfirmDialogProps) {
+  const { stdout } = useStdout();
+  const width = computeDialogWidth(stdout.columns);
   const [selected, setSelected] = useState<ConfirmChoice>(defaultChoice);
   const [now, setNow] = useState(() => Date.now());
 
@@ -113,6 +116,8 @@ export function ConfirmDialog({
       borderColor={theme.line}
       paddingX={1}
       marginY={1}
+      width={width}
+      overflow="hidden"
     >
       <Box marginBottom={1}>
         <Text bold color={theme.warn}>
@@ -121,14 +126,14 @@ export function ConfirmDialog({
       </Box>
 
       <Box marginBottom={1}>
-        <Text>{question}</Text>
+        <Text wrap="wrap">{question}</Text>
       </Box>
 
       {details.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
           {details.map((line, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: details are a short immutable list
-            <Text key={index} color={theme.muted}>
+            <Text key={index} color={theme.muted} wrap="wrap">
               {'  '}
               {line}
             </Text>
@@ -139,21 +144,21 @@ export function ConfirmDialog({
       <Box>
         <Text
           backgroundColor={selected === 'y' ? theme.ok : undefined}
-          color={selected === 'y' ? theme.selectedBg : theme.ok}
+          color={selected === 'y' ? theme.selectedInk : theme.ok}
           bold={selected === 'y'}
         >
           {formatConfirmChoice('y', selected === 'y')}
         </Text>
         <Text
           backgroundColor={selected === 'n' ? theme.danger : undefined}
-          color={selected === 'n' ? theme.selectedBg : theme.danger}
+          color={selected === 'n' ? theme.selectedInk : theme.danger}
           bold={selected === 'n'}
         >
           {formatConfirmChoice('n', selected === 'n')}
         </Text>
         <Text
           backgroundColor={selected === 'always' ? theme.info : undefined}
-          color={selected === 'always' ? theme.selectedBg : theme.info}
+          color={selected === 'always' ? theme.selectedInk : theme.info}
           bold={selected === 'always'}
         >
           {formatConfirmChoice('always', selected === 'always')}
