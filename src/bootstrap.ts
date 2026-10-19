@@ -590,6 +590,7 @@ async function bootstrapConnect(input: {
     rpc,
     tenant: { tenant_id: effectiveTenantId, data_dir: input.tenantPaths.root },
     config: input.config,
+    version: readPackageVersion(),
     newSessionId,
     onExit: () => {
       void shutdown().finally(() => process.exit(0));
@@ -1167,6 +1168,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     rpc: localRpcClient,
     tenant: { tenant_id: tenantId, data_dir: tenantPaths.root },
     config,
+    version: readPackageVersion(),
     // 0.6.1：TUI "always" 与 /permissions 的用户 YAML 写回面。
     permissions: permissionsControl,
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
