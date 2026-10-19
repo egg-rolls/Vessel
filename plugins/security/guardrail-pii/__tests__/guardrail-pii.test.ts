@@ -1,6 +1,10 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { GuardrailStage, MemoryPluginHost } from '@vessel/core';
-import piiPlugin, { PIIGuardrail } from '../src/index';
+import piiPlugin, {
+  createPiiGuardrailPlugin,
+  PIIGuardrail,
+  type PluginInstallOptions,
+} from '../src/index';
 
 describe('guardrail-pii 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -177,6 +181,51 @@ describe('guardrail-pii 插件（P2）', () => {
     expect(r.allowed).toBe(true);
     expect(r.reason).toContain('phone');
     expect(String(r.replacement)).not.toContain('13800138000');
+  });
+
+  it('install 传入 plugins[].config 时生效（E1：开关 + 字符串自定义规则）', async () => {
+    const configHost = new MemoryPluginHost();
+    (piiPlugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(configHost, {
+      config: {
+        detectEmail: false,
+        detectPhone: false,
+        detectSSN: false,
+        detectCreditCard: false,
+        maskingStrategy: 'hash',
+        customPatterns: [{ name: 'employee-id', pattern: 'EMP-\\d{4}' }],
+      },
+    });
+    const g = configHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    const email = await g.check('test@example.com', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(email.replacement).toBeUndefined();
+
+    const employee = await g.check('员工 EMP-1234 入职', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(employee.reason).toContain('employee-id');
+    expect(String(employee.replacement)).toContain('[REDACTED_EMPLOYEE-ID]');
+  });
+
+  it('install 配置覆盖工厂配置', async () => {
+    const configHost = new MemoryPluginHost();
+    const plugin = createPiiGuardrailPlugin({ detectEmail: true, maskingStrategy: 'full' });
+    (plugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(configHost, {
+      config: { detectEmail: false, maskingStrategy: 'hash' },
+    });
+    const g = configHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    const r = await g.check('test@example.com', {
+      run_id: 'r1',
+      stage: GuardrailStage.Output,
+    });
+    expect(r.replacement).toBeUndefined();
   });
 
   it('自定义规则参与检测与遮罩', async () => {

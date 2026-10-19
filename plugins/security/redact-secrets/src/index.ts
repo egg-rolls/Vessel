@@ -21,6 +21,46 @@ import { BUILTIN_RULES, type RedactRule, type RedactSecretsConfig, redactText } 
 export { createTraceRedactor } from './redactor.js';
 export type { RedactSecretsConfig } from './rules.js';
 
+/** E1：`install(host, {config})` 的窄类型（core 尚未声明第二参数） */
+export interface PluginInstallOptions {
+  config?: Record<string, unknown>;
+}
+
+/** 类型守卫 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 把 YAML 插件配置解析成 RedactSecretsConfig（非法正则跳过） */
+export function parseRedactSecretsConfig(value: unknown): RedactSecretsConfig {
+  if (!isRecord(value)) return {};
+  const parsed: RedactSecretsConfig = {};
+  if (typeof value.enableBuiltin === 'boolean') parsed.enableBuiltin = value.enableBuiltin;
+
+  if (Array.isArray(value.extraPatterns)) {
+    const extraPatterns: NonNullable<RedactSecretsConfig['extraPatterns']> = [];
+    for (const item of value.extraPatterns) {
+      if (!isRecord(item)) continue;
+      const name = item.name;
+      const pattern = item.pattern;
+      if (typeof name !== 'string' || typeof pattern !== 'string') continue;
+      try {
+        new RegExp(pattern, 'g');
+      } catch {
+        continue;
+      }
+      extraPatterns.push({
+        name,
+        pattern,
+        ...(typeof item.replacement === 'string' ? { replacement: item.replacement } : {}),
+      });
+    }
+    parsed.extraPatterns = extraPatterns;
+  }
+
+  return parsed;
+}
+
 // ── Guardrail ─────────────────────────────────────
 
 function createRedactGuardrail(rules: RedactRule[], stage: GuardrailStage): Guardrail {
@@ -73,14 +113,15 @@ export function createRedactSecretsPlugin(config?: RedactSecretsConfig): Plugin 
     version: '0.1.0',
     description:
       'Secret redaction plugin — detects and redacts API keys, tokens, and passwords in tool results and outputs',
-    install(host: PluginHost) {
-      const enableBuiltin = config?.enableBuiltin ?? true;
+    install(host: PluginHost, options?: PluginInstallOptions) {
+      const merged = { ...(config ?? {}), ...parseRedactSecretsConfig(options?.config) };
+      const enableBuiltin = merged.enableBuiltin ?? true;
 
       // 组装规则
       const rules: RedactRule[] = enableBuiltin ? [...BUILTIN_RULES] : [];
 
-      if (config?.extraPatterns) {
-        for (const extra of config.extraPatterns) {
+      if (merged.extraPatterns) {
+        for (const extra of merged.extraPatterns) {
           rules.push({
             name: extra.name,
             pattern: new RegExp(extra.pattern, 'g'),

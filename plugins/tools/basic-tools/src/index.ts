@@ -12,8 +12,10 @@
  */
 
 import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Plugin, PluginHost, ToolDefinition } from '@vessel/core';
+import type { Plugin, PluginHost, ToolContext, ToolDefinition } from '@vessel/core';
 import { requestPermission } from '@vessel/permission';
 
 // ── 常量 ──────────────────────────────────────────
@@ -33,8 +35,14 @@ const KEEP_TAIL_LINES = 1000;
 /** read 缺省读取行数 */
 const DEFAULT_READ_LIMIT = 2000;
 
-/** 单方向输出最多保留的字节数（超出即丢弃并标注，避免无换行输出撑爆内存） */
+/** 返回给模型的单方向预览字节数（超出即标注） */
 const MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
+
+/** 落盘时单方向最多保留的字节数（超出仍丢弃，防止无界输出撑爆内存） */
+const MAX_PERSIST_BYTES = 16 * 1024 * 1024;
+
+/** 取消时返回的固定文本 */
+const CANCELLED_TEXT = '错误：操作已取消（cancelled）。';
 
 /** read 允许的最大文件字节数（超过直接拒绝，提示用 bash 分块） */
 const MAX_READ_BYTES = 8 * 1024 * 1024;
@@ -142,7 +150,7 @@ function createSink(): OutputSink {
   return { chunks: [], bytes: 0, truncated: false };
 }
 
-/** 把子进程管道泵成文本（超过 MAX_OUTPUT_BYTES 的部分丢弃并标记截断） */
+/** 把子进程管道泵成文本（超过 MAX_PERSIST_BYTES 的部分丢弃并标记截断） */
 function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -152,16 +160,16 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump 
         const chunk = await reader.read();
         if (chunk.done) break;
         if (!chunk.value) continue;
-        if (sink.bytes >= MAX_OUTPUT_BYTES) {
+        if (sink.bytes >= MAX_PERSIST_BYTES) {
           sink.truncated = true;
           continue;
         }
         sink.chunks.push(decoder.decode(chunk.value, { stream: true }));
         sink.bytes += chunk.value.byteLength;
-        if (sink.bytes >= MAX_OUTPUT_BYTES) sink.truncated = true;
+        if (sink.bytes >= MAX_PERSIST_BYTES) sink.truncated = true;
       }
       const tail = decoder.decode();
-      if (tail && sink.bytes < MAX_OUTPUT_BYTES) sink.chunks.push(tail);
+      if (tail && sink.bytes < MAX_PERSIST_BYTES) sink.chunks.push(tail);
     } catch {
       // 管道被强制关闭——已读到的内容仍然可用
     }
@@ -176,6 +184,67 @@ function pumpStream(stream: ReadableStream<Uint8Array>, sink: OutputSink): Pump 
 
 // ── bash ─────────────────────────────────────────
 
+/** 把完整输出裁成模型可读预览（按字节上限） */
+function toPreview(text: string): { text: string; truncated: boolean } {
+  const buffer = Buffer.from(text, 'utf-8');
+  if (buffer.byteLength <= MAX_OUTPUT_BYTES) return { text, truncated: false };
+  return {
+    text: buffer.subarray(0, MAX_OUTPUT_BYTES).toString('utf-8'),
+    truncated: true,
+  };
+}
+
+/** 输出落盘根目录：显式 env → data_dir → 默认数据目录 */
+function toolOutputRoot(): string {
+  const explicit = process.env.VESSEL_TOOL_OUTPUT_DIR;
+  if (typeof explicit === 'string' && explicit.trim() !== '') return path.resolve(explicit);
+  const dataDir = process.env.VESSEL_DATA_DIR;
+  if (typeof dataDir === 'string' && dataDir.trim() !== '') {
+    return path.join(path.resolve(dataDir), 'tool-output');
+  }
+  return path.join(os.homedir(), '.vessel', 'data', 'tool-output');
+}
+
+/** 目录名安全化：只保留字母数字与 ._- */
+function safeSegment(value: string | undefined): string {
+  const cleaned = (value ?? '').replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 64);
+  return cleaned === '' ? 'no-session' : cleaned;
+}
+
+/** 把完整输出写入 session 目录；失败返回 undefined（调用方降级为纯截断） */
+async function persistBashOutput(payload: {
+  command: string;
+  exitCode: number | null;
+  cancelled: boolean;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+  truncated: boolean;
+  sessionId?: string;
+}): Promise<string | undefined> {
+  try {
+    const dir = path.join(toolOutputRoot(), safeSegment(payload.sessionId));
+    await mkdir(dir, { recursive: true });
+    const file = path.join(dir, `bash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.log`);
+    const body = [
+      `# command: ${payload.command}`,
+      `# exit_code: ${payload.exitCode ?? 'null'}`,
+      `# cancelled: ${payload.cancelled}`,
+      `# timed_out: ${payload.timedOut}`,
+      `# truncated_at_16MiB: ${payload.truncated}`,
+      '',
+      '[stdout]',
+      payload.stdout,
+      '[stderr]',
+      payload.stderr,
+    ].join('\n');
+    await writeFile(file, body, 'utf-8');
+    return file;
+  } catch {
+    return undefined;
+  }
+}
+
 /** 组装 bash 返回文本：退出码 + 非空输出段（行数或字节超限时截断并标注） */
 function formatBashResult(result: {
   exitCode: number | null;
@@ -185,9 +254,12 @@ function formatBashResult(result: {
   stderrTruncated: boolean;
   timedOut: boolean;
   timeoutMs: number;
+  cancelled: boolean;
 }): string {
   const parts: string[] = [];
-  if (result.timedOut) {
+  if (result.cancelled) {
+    parts.push(CANCELLED_TEXT);
+  } else if (result.timedOut) {
     parts.push(`错误：命令执行超时（已超过 ${result.timeoutMs}ms），进程已被终止。`);
   }
   parts.push(`退出码: ${result.exitCode ?? 'null（进程被信号终止）'}`);
@@ -216,8 +288,8 @@ function spawnBash(command: string, cwd: string | undefined) {
   });
 }
 
-/** 执行 bash 命令；超时返回错误文本，不抛异常 */
-async function runBash(args: unknown): Promise<string> {
+/** 执行 bash 命令；超时/取消返回错误文本，不抛异常 */
+async function runBash(args: unknown, ctx: ToolContext): Promise<string> {
   if (!isRecord(args)) return '错误：bash 需要 { command: string }';
   const command = readString(args, 'command');
   // 纯空白命令是无意义的一次调用，直接挡掉（否则白烧一轮）
@@ -228,6 +300,9 @@ async function runBash(args: unknown): Promise<string> {
 
   const timeoutMs = readNumber(args, 'timeout_ms') ?? DEFAULT_BASH_TIMEOUT_MS;
   if (timeoutMs <= 0) return '错误：timeout_ms 必须为正数';
+
+  const signal = ctx.signal;
+  if (signal?.aborted) return CANCELLED_TEXT;
 
   let proc: ReturnType<typeof spawnBash>;
   try {
@@ -243,6 +318,16 @@ async function runBash(args: unknown): Promise<string> {
   const stderrPump = pumpStream(proc.stderr, stderrSink);
 
   let timedOut = false;
+  let cancelled = false;
+  const onAbort = (): void => {
+    if (cancelled) return;
+    cancelled = true;
+    proc.kill();
+  };
+  signal?.addEventListener('abort', onAbort, { once: true });
+  // addEventListener 不会补发已发生的 abort
+  if (signal?.aborted) onAbort();
+
   const timer = setTimeout(() => {
     timedOut = true;
     proc.kill();
@@ -252,6 +337,7 @@ async function runBash(args: unknown): Promise<string> {
     await proc.exited;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
   }
 
   await waitAtMost(Promise.all([stdoutPump.done, stderrPump.done]), DRAIN_GRACE_MS);
@@ -259,15 +345,44 @@ async function runBash(args: unknown): Promise<string> {
   stdoutPump.cancel();
   stderrPump.cancel();
 
-  return formatBashResult({
+  const stdout = stdoutSink.chunks.join('');
+  const stderr = stderrSink.chunks.join('');
+  const stdoutPreview = toPreview(stdout);
+  const stderrPreview = toPreview(stderr);
+  const overLines =
+    splitLines(stdout).length > MAX_OUTPUT_LINES || splitLines(stderr).length > MAX_OUTPUT_LINES;
+  const overBytes = stdoutPreview.truncated || stderrPreview.truncated;
+  const shouldPersist = overLines || overBytes || stdoutSink.truncated || stderrSink.truncated;
+
+  let persistNote: string | undefined;
+  if (shouldPersist) {
+    const saved = await persistBashOutput({
+      command,
+      exitCode: proc.exitCode,
+      cancelled,
+      timedOut,
+      stdout,
+      stderr,
+      truncated: stdoutSink.truncated || stderrSink.truncated,
+      ...(ctx.session_id !== undefined ? { sessionId: ctx.session_id } : {}),
+    });
+    persistNote =
+      saved !== undefined
+        ? `完整输出已写入：${saved}（${Buffer.byteLength(stdout) + Buffer.byteLength(stderr)} 字节）`
+        : '完整输出落盘失败（预览已截断）。';
+  }
+
+  const formatted = formatBashResult({
     exitCode: proc.exitCode,
-    stdout: stdoutSink.chunks.join(''),
-    stderr: stderrSink.chunks.join(''),
-    stdoutTruncated: stdoutSink.truncated,
-    stderrTruncated: stderrSink.truncated,
+    stdout: stdoutPreview.text,
+    stderr: stderrPreview.text,
+    stdoutTruncated: stdoutPreview.truncated || stdoutSink.truncated,
+    stderrTruncated: stderrPreview.truncated || stderrSink.truncated,
     timedOut,
     timeoutMs,
+    cancelled,
   });
+  return persistNote !== undefined ? `${formatted}\n${persistNote}` : formatted;
 }
 
 const bashTool: ToolDefinition = {
@@ -289,13 +404,14 @@ const bashTool: ToolDefinition = {
     required: ['command'],
   },
   checkPermission: async (input, ctx) => requestPermission(ctx, 'bash', input),
-  handler: async (args: unknown) => runBash(args),
+  handler: async (args: unknown, ctx) => runBash(args, ctx),
 };
 
 // ── read ─────────────────────────────────────────
 
 /** 读出带行号的文本片段（行号从 1 开始，`<行号>\t<内容>`） */
-function readFileSlice(args: unknown): string {
+function readFileSlice(args: unknown, signal?: AbortSignal): string {
+  if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：read 需要 { path: string }';
   const inputPath = readString(args, 'path');
   if (inputPath === '') return '错误：path 不能为空';
@@ -371,7 +487,7 @@ const readTool: ToolDefinition = {
   },
   // 只读操作，无副作用：无需用户授权
   checkPermission: async () => 'allow',
-  handler: async (args: unknown) => readFileSlice(args),
+  handler: async (args: unknown, ctx) => readFileSlice(args, ctx.signal),
 };
 
 // ── edit ─────────────────────────────────────────
@@ -396,7 +512,8 @@ function writeFileAtomic(absolutePath: string, content: string): void {
 }
 
 /** 精确且唯一匹配的字符串替换；多处替换必须显式 replace_all */
-function editFile(args: unknown): string {
+function editFile(args: unknown, signal?: AbortSignal): string {
+  if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：edit 需要 { path, old_string, new_string }';
   const inputPath = readString(args, 'path');
   const oldString = readString(args, 'old_string');
@@ -441,6 +558,9 @@ function editFile(args: unknown): string {
     ? original.split(oldString).join(newString)
     : replaceFirst(original, oldString, newString);
 
+  // 校验通过后、落盘前再检查一次：取消后不得留下半次修改
+  if (signal?.aborted) return CANCELLED_TEXT;
+
   try {
     writeFileAtomic(absolute, updated);
   } catch (error) {
@@ -469,7 +589,7 @@ const editTool: ToolDefinition = {
     required: ['path', 'old_string', 'new_string'],
   },
   checkPermission: async (input, ctx) => requestPermission(ctx, 'edit', input),
-  handler: async (args: unknown) => editFile(args),
+  handler: async (args: unknown, ctx) => editFile(args, ctx.signal),
 };
 
 // ── 插件导出 ──────────────────────────────────────

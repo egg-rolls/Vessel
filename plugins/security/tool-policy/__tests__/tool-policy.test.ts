@@ -9,7 +9,7 @@ import {
   type Plugin,
   type ToolDefinition,
 } from '@vessel/core';
-import { createToolPolicyPlugin, toolPolicyPlugin } from '../src/index';
+import { createToolPolicyPlugin, type PluginInstallOptions, toolPolicyPlugin } from '../src/index';
 
 describe('tool-policy 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -215,6 +215,46 @@ describe('tool-policy 插件（P2）', () => {
     );
     expect(r.allowed).toBe(false);
     expect(r.reason).toContain('安全策略拦截');
+  });
+
+  it('install 传入 plugins[].config 时生效（E1）', async () => {
+    const configHost = new MemoryPluginHost();
+    (toolPolicyPlugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(
+      configHost,
+      { config: { mode: 'allowlist', tools: ['read'], block_message: 'YAML 策略：' } },
+    );
+    const g = configHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    const allowed = await g.check(
+      { name: 'read' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(allowed.allowed).toBe(true);
+
+    const blocked = await g.check(
+      { name: 'bash' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toContain('YAML 策略');
+  });
+
+  it('install 配置覆盖工厂配置（工厂默认 denylist，运行时改 allowlist）', async () => {
+    const configHost = new MemoryPluginHost();
+    const plugin = createToolPolicyPlugin({ mode: 'denylist', tools: ['read'] });
+    (plugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(configHost, {
+      config: { mode: 'allowlist', tools: ['read'] },
+    });
+    const g = configHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    expect(
+      (await g.check({ name: 'read' }, { run_id: 'r1', stage: GuardrailStage.ToolCall })).allowed,
+    ).toBe(true);
+    expect(
+      (await g.check({ name: 'bash' }, { run_id: 'r1', stage: GuardrailStage.ToolCall })).allowed,
+    ).toBe(false);
   });
 
   it('多个工具在黑名单中', async () => {

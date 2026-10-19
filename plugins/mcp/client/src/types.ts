@@ -53,6 +53,32 @@ export interface McpServerStatus {
   error?: string;
   protocolVersion?: string;
   serverInfo?: { name: string; version?: string };
+  /** server 广告 resources 能力时：已列出的资源数 */
+  resources?: number;
+  /** server 广告 prompts 能力时：已列出的 prompt 数 */
+  prompts?: number;
+}
+
+/** resources/list 返回的资源描述 */
+export interface McpResourceDef {
+  uri: string;
+  name?: string;
+  description?: string;
+  mimeType?: string;
+}
+
+/** prompt 参数描述 */
+export interface McpPromptArgumentDef {
+  name: string;
+  description?: string;
+  required?: boolean;
+}
+
+/** prompts/list 返回的 prompt 描述 */
+export interface McpPromptDef {
+  name: string;
+  description?: string;
+  arguments?: McpPromptArgumentDef[];
 }
 
 /** 控制面（Addendum B §9.1） */
@@ -60,13 +86,22 @@ export interface McpPluginControls {
   listServers(): McpServerStatus[];
   getServer(name: string): McpServerStatus | undefined;
   reconnect(name: string): Promise<void>;
+  /** 已连接的 server 列出的资源（能力未广告时为空数组） */
+  listResources(name: string): Promise<McpResourceDef[]>;
+  /** 读取一个资源；失败抛稳定错误 */
+  readResource(name: string, uri: string): Promise<string>;
+  /** 已连接的 server 列出的 prompts（能力未广告时为空数组） */
+  listPrompts(name: string): Promise<McpPromptDef[]>;
 }
 
 /** 工厂返回类型 */
 export type McpClientPlugin = Plugin & McpPluginControls & { close(): Promise<void> };
 
 /** 稳定错误码（Addendum B §9.1） */
-export type McpPluginErrorCode = 'mcp_server_not_found' | 'mcp_server_disabled';
+export type McpPluginErrorCode =
+  | 'mcp_server_not_found'
+  | 'mcp_server_disabled'
+  | 'mcp_server_not_connected';
 
 /** 控制面稳定错误 */
 export class McpPluginError extends Error {

@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import {
@@ -12,6 +12,9 @@ import basicToolsPlugin, { createBasicTools } from '../src/index';
 
 /** 临时工作目录：测试文件读写都在这里，不碰仓库 */
 const workDir = mkdtempSync(path.join(tmpdir(), 'vessel-basic-tools-'));
+
+/** 大结果落盘目录固定在临时目录，避免写用户数据目录 */
+process.env.VESSEL_TOOL_OUTPUT_DIR = path.join(workDir, 'tool-output');
 
 afterAll(() => {
   rmSync(workDir, { recursive: true, force: true });
@@ -173,6 +176,55 @@ describe('bash', () => {
     expect(result).toContain('b');
     expect(result).not.toContain('\r');
   });
+
+  it('运行中 abort 会杀死子进程并在 1s 内返回 cancelled', async () => {
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = toolOf('bash').handler(
+      { command: 'sleep 10' },
+      { ...makeContext(), signal: controller.signal },
+    );
+    setTimeout(() => controller.abort(), 50);
+    const result = await pending;
+
+    expect(result).toContain('cancelled');
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('启动前已 abort 时不执行命令', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const result = await toolOf('bash').handler(
+      { command: 'echo should-not-run' },
+      { ...makeContext(), signal: controller.signal },
+    );
+    expect(result).toContain('cancelled');
+    expect(result).not.toContain('should-not-run');
+  });
+
+  it('超限输出落盘：返回绝对路径且文件保留完整行', async () => {
+    const result = await toolOf('bash').handler(
+      { command: 'seq 1 5000' },
+      { ...makeContext(), session_id: 'sess-1' },
+    );
+    const marker = '完整输出已写入：';
+    const start = result.indexOf(marker);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const pathStart = start + marker.length;
+    const pathEnd = result.indexOf('（', pathStart);
+    const file = result.slice(pathStart, pathEnd);
+
+    expect(file).toContain(path.join('tool-output', 'sess-1'));
+    expect(existsSync(file)).toBe(true);
+    const saved = readFileSync(file, 'utf-8');
+    const dataLines = saved.split('\n').filter((line) => /^\d+$/.test(line));
+    expect(dataLines).toHaveLength(5000);
+  });
+
+  it('未超限输出不落盘', async () => {
+    const result = await toolOf('bash').handler({ command: 'echo small' }, makeContext());
+    expect(result).not.toContain('完整输出已写入');
+  });
 });
 
 describe('read', () => {
@@ -259,6 +311,18 @@ describe('read', () => {
     const result = await toolOf('read').handler({ path: filePath }, makeContext());
     expect(result).toContain('文件过大');
     expect(result).toContain('bash');
+  });
+
+  it('abort 后 read 返回 cancelled 而不是文件内容', async () => {
+    const filePath = writeTemp('read-cancelled.txt', 'secret\n');
+    const controller = new AbortController();
+    controller.abort();
+    const result = await toolOf('read').handler(
+      { path: filePath },
+      { ...makeContext(), signal: controller.signal },
+    );
+    expect(result).toContain('cancelled');
+    expect(result).not.toContain('secret');
   });
 });
 
@@ -353,6 +417,18 @@ describe('edit', () => {
     );
     expect(result).toContain('已替换 1 处');
     expect(readFileSync(filePath, 'utf-8')).toBe('xa');
+  });
+
+  it('abort 后 edit 不写文件', async () => {
+    const filePath = writeTemp('edit-cancelled.txt', 'before\n');
+    const controller = new AbortController();
+    controller.abort();
+    const result = await toolOf('edit').handler(
+      { path: filePath, old_string: 'before', new_string: 'after' },
+      { ...makeContext(), signal: controller.signal },
+    );
+    expect(result).toContain('cancelled');
+    expect(readFileSync(filePath, 'utf-8')).toBe('before\n');
   });
 
   it('文件不存在 / old_string 为空 / path 为空时返回明确错误', async () => {

@@ -7,7 +7,13 @@
 
 import type { Plugin, PluginHost } from '@vessel/core';
 import { OpenAICompatibleProvider } from '@vessel/core';
+import { resolveRetryOptions, withRetry } from './retry.js';
 import { withTimeout } from './timeout.js';
+
+/** E1：插件级配置（core Plugin 类型尚未声明第二参数时的窄类型） */
+export interface ProviderPluginOptions {
+  config?: Record<string, unknown>;
+}
 
 /** Provider 注册项：名字 + 默认 base_url + 默认 model */
 const PROVIDERS: Array<{ name: string; baseUrl: string; model: string }> = [
@@ -30,10 +36,11 @@ function normalizeBaseUrl(url: string): string {
 
 const plugin: Plugin = {
   name: 'provider-openai',
-  install(host: PluginHost) {
+  install(host: PluginHost, options?: ProviderPluginOptions) {
+    const installConfig = options?.config ?? {};
     for (const p of PROVIDERS) {
       host.registerProvider(p.name, (config) => {
-        const c = config as Record<string, unknown>;
+        const c = { ...installConfig, ...(config as Record<string, unknown>) };
         // 注意 `||` 而非 `??`：bootstrap 未配置时会传空字符串
         const baseUrl = normalizeBaseUrl((c.base_url as string) || p.baseUrl);
         const model = (c.model as string) || p.model;
@@ -44,7 +51,11 @@ const plugin: Plugin = {
           temperature: c.temperature as number | undefined,
           max_tokens: c.max_tokens as number | undefined,
         });
-        return withTimeout(provider, c.timeout_ms as number | undefined);
+        // timeout 在外层：总时限覆盖全部重试与退避
+        return withTimeout(
+          withRetry(provider, resolveRetryOptions(c)),
+          c.timeout_ms as number | undefined,
+        );
       });
     }
   },

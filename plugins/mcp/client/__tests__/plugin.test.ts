@@ -196,6 +196,64 @@ describe('createMcpPlugin', () => {
     }
   });
 
+  it('resources/prompts 能力：列出资源并读取，辅助工具默认 ask', async () => {
+    const plugin = createMcpPlugin({
+      servers: [stdioServer({ env: { MOCK_RESOURCES: '1' } })],
+    });
+    const host = new MemoryPluginHost();
+    try {
+      await plugin.install(host);
+
+      expect(toolNames(host)).toEqual([
+        'mcp__mock__add',
+        'mcp__mock__echo',
+        'mcp__mock__fail',
+        'mcp__mock__list_prompts',
+        'mcp__mock__list_resources',
+        'mcp__mock__read_resource',
+        'mcp__mock__slow',
+      ]);
+      expect(plugin.getServer('mock')).toMatchObject({ resources: 2, prompts: 1 });
+      expect((await plugin.listResources('mock')).map((resource) => resource.uri)).toEqual([
+        'mem://alpha',
+        'mem://beta',
+      ]);
+      expect((await plugin.listPrompts('mock'))[0]?.name).toBe('greet');
+
+      const readTool = host.getTool('mcp__mock__read_resource');
+      if (!readTool) throw new Error('read_resource not registered');
+      expect(await readTool.checkPermission?.({ uri: 'mem://alpha' }, makeContext())).toBe('ask');
+      expect(await readTool.handler({ uri: 'mem://alpha' }, makeContext())).toBe(
+        'resource-body:mem://alpha',
+      );
+      expect(await plugin.readResource('mock', 'mem://beta')).toBe('resource-body:mem://beta');
+
+      const listTool = host.getTool('mcp__mock__list_resources');
+      const listed = JSON.parse(String(await listTool?.handler({}, makeContext()))) as Array<{
+        uri: string;
+      }>;
+      expect(listed).toHaveLength(2);
+    } finally {
+      await plugin.close();
+    }
+  });
+
+  it('未连接或未知 server 的控制面调用返回稳定错误码', async () => {
+    const plugin = createMcpPlugin({ servers: [stdioServer({ name: 'off', enabled: false })] });
+    const host = new MemoryPluginHost();
+    try {
+      await plugin.install(host);
+      await expect(plugin.listResources('off')).rejects.toMatchObject({
+        code: 'mcp_server_disabled',
+      });
+      await expect(plugin.readResource('missing', 'mem://a')).rejects.toMatchObject({
+        code: 'mcp_server_not_found',
+      });
+    } finally {
+      await plugin.close();
+    }
+  });
+
   it('warns and keeps the existing tool on a prefixed collision', async () => {
     const host = new MemoryPluginHost();
     host.registerTool({
