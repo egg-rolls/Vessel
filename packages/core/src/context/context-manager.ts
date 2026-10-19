@@ -15,6 +15,8 @@ function placeholderSummary(removed: number): string {
 }
 
 interface CompactionPlan {
+  /** 计划所属会话：summarizer await 期间可能切换会话，应用时必须回到原会话 */
+  sessionId: string;
   /** 将被摘要替代的消息（对象引用，用于并发安全地移除） */
   toSummarize: Message[];
 }
@@ -24,8 +26,8 @@ export class MemoryContextManager implements ContextManager {
   private currentSessionId = 'default';
   private config: ContextConfig;
   private realTokens = 0;
-  /** 异步压缩去重：同一时刻只跑一次 summarizer */
-  private compaction?: Promise<number>;
+  /** 异步压缩去重：同一会话同一时刻只跑一次 summarizer */
+  private compaction?: { sessionId: string; promise: Promise<number> };
 
   constructor(config: ContextConfig = {}) {
     this.config = {
@@ -114,7 +116,9 @@ export class MemoryContextManager implements ContextManager {
    * 并发调用共享同一次压缩，避免重复摘要。
    */
   async compactAsync(): Promise<number> {
-    if (this.compaction) return this.compaction;
+    const sessionId = this.currentSessionId;
+    const inFlight = this.compaction;
+    if (inFlight?.sessionId === sessionId) return inFlight.promise;
 
     const plan = this.planCompaction();
     if (!plan) return 0;
@@ -134,15 +138,16 @@ export class MemoryContextManager implements ContextManager {
       }
       const text = summary.trim() ? summary : placeholderSummary(removed);
       this.applyCompaction(plan, text);
-      this.realTokens = 0;
+      if (this.currentSessionId === plan.sessionId) this.realTokens = 0;
       return removed;
     })();
 
-    this.compaction = task;
+    const entry = { sessionId, promise: task };
+    this.compaction = entry;
     try {
       return await task;
     } finally {
-      if (this.compaction === task) this.compaction = undefined;
+      if (this.compaction === entry) this.compaction = undefined;
     }
   }
 
@@ -177,7 +182,8 @@ export class MemoryContextManager implements ContextManager {
 
   /** 计算本次压缩范围：保留 system + 最近 ~30% 非 system 消息 */
   private planCompaction(): CompactionPlan | null {
-    const msgs = this.sessionMessages.get(this.currentSessionId) || [];
+    const sessionId = this.currentSessionId;
+    const msgs = this.sessionMessages.get(sessionId) || [];
     if (msgs.length <= 2) return null;
 
     const nonSystem = msgs.filter((m) => m.role !== 'system');
@@ -185,6 +191,7 @@ export class MemoryContextManager implements ContextManager {
     if (nonSystem.length <= keepCount) return null;
 
     return {
+      sessionId,
       toSummarize: nonSystem.slice(0, nonSystem.length - keepCount),
     };
   }
@@ -195,14 +202,15 @@ export class MemoryContextManager implements ContextManager {
    */
   private applyCompaction(plan: CompactionPlan, summaryText: string): void {
     const summary: Message = { role: 'assistant', content: summaryText };
-    const current = this.sessionMessages.get(this.currentSessionId) ?? [];
+    const current = this.sessionMessages.get(plan.sessionId) ?? [];
     const removed = new Set(plan.toSummarize);
     const remaining = current.filter((m) => !removed.has(m));
     const systemMsgs = remaining.filter((m) => m.role === 'system');
     const others = remaining.filter((m) => m.role !== 'system');
+    const next = [...systemMsgs, summary, ...others];
 
-    this.sessionMessages.set(this.currentSessionId, [...systemMsgs, summary, ...others]);
-    this.config.onCompact?.(plan.toSummarize.length, this.messages.length);
+    this.sessionMessages.set(plan.sessionId, next);
+    this.config.onCompact?.(plan.toSummarize.length, next.length);
   }
 
   private shouldCompact(): boolean {

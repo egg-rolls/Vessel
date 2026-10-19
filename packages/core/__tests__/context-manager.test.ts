@@ -174,6 +174,33 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
     expect(context.messages.some((m) => m.content === 'REAL SUMMARY')).toBe(true);
   });
 
+  it('applies an in-flight summary to the session it started in', async () => {
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const context = new MemoryContextManager({
+      autoCompact: false,
+      summarizer: async () => {
+        await gate;
+        return 'SESSION A SUMMARY';
+      },
+    });
+    seed(context);
+
+    const pending = context.compactAsync();
+    context.setSessionId('session-b');
+    context.add({ role: 'user', content: 'B message' });
+    release?.();
+    await pending;
+
+    // 切换后的会话不受旧会话压缩影响
+    expect(context.messages.map((m) => m.content)).toEqual(['B message']);
+
+    context.setSessionId('default');
+    expect(context.messages.some((m) => m.content === 'SESSION A SUMMARY')).toBe(true);
+  });
+
   it('preserves messages added while the summarizer is running', async () => {
     let release: (() => void) | undefined;
     const gate = new Promise<void>((resolve) => {
