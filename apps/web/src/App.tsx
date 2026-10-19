@@ -1339,10 +1339,12 @@ export default function App() {
 
     const offClose = client.onClose((code) => {
       if (disposed) return;
-      if (code === 4400 || code === 4401) {
+      if (code === 4400 || code === 4401 || code === 4403) {
         if (code === 4401) {
           // token 是字段级输入：错误提示贴在输入框下，不占用全局 banner。
           setTokenError('鉴权失败：token 错误或已失效');
+        } else if (code === 4403) {
+          setError('无权访问该 tenant（需要 admin token）');
         } else {
           setError('协议版本不兼容（需要 vessel.gateway/1）');
         }

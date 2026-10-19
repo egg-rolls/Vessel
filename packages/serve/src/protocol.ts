@@ -148,7 +148,15 @@ export type ServerFrame =
 
 /** 客户端 → 服务端帧 */
 export type ClientFrame =
-  | { v?: 1; kind: 'auth'; token: string; role?: 'console'; since?: number }
+  | {
+      v?: 1;
+      kind: 'auth';
+      token: string;
+      role?: 'console';
+      since?: number;
+      /** 0.6：admin 可显式覆盖 tenant；非 admin 只能使用 token principal */
+      tenant_id?: string;
+    }
   | { v?: 1; kind: 'req'; id: string; method: string; params?: unknown }
   | { v?: 1; kind: 'pong' };
 
