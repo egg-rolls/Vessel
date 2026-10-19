@@ -6,9 +6,11 @@
  *   - 帧    `event` / `gap` / `res` / `ping`（见 packages/serve/src/protocol.ts）
  *   - REST  `/v1/sessions` / `/v1/tools`（Bearer 头，仅在 WS 不可用时兜底）
  *
- * 浏览器默认同源（gateway 托管 dist，或 Vite proxy）；VITE_GATEWAY_URL 可覆盖。
+ * 浏览器默认同源（gateway 托管 dist，或 Vite proxy）；也可在运行时指定远端 gateway
+ * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
+import { toWebSocketBase } from './gatewayUrl';
 import type {
   AskUserAnswer,
   CapabilityManifest,
@@ -140,9 +142,45 @@ export class GatewayClient {
   }
 
   private wsUrl(since: number): string {
-    const http = this.httpBase();
-    const ws = http.replace(/^http/, 'ws');
-    return `${ws}/v1/events?since=${since}`;
+    return `${toWebSocketBase(this.httpBase())}/v1/events?since=${since}`;
+  }
+
+  /**
+   * 连接前预探 `/health`：把 Origin 403 / TLS / 网络错误与 WS 鉴权失败区分开。
+   * `/health` 公开（远程模式也不要求 token），但同样经过 Host/Origin 校验；
+   * 跨 Origin 且未列入 allowlist 时浏览器会以 CORS 失败形式报 network。
+   */
+  async probeHealth(timeoutMs = 5_000): Promise<void> {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(`${this.httpBase()}/health`, {
+        method: 'GET',
+        credentials: 'omit',
+        signal: controller.signal,
+      });
+      if (res.ok) return;
+      let code = 'internal';
+      let message = `HTTP ${res.status}`;
+      try {
+        const body = (await res.json()) as GatewayErrorBody;
+        if (body?.error?.code) {
+          code = body.error.code;
+          message = body.error.message || message;
+        }
+      } catch {
+        // 非 JSON 错误体：保留 HTTP 状态
+      }
+      throw new GatewayHttpError(code, message, res.status);
+    } catch (error) {
+      if (error instanceof GatewayHttpError) throw error;
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new GatewayHttpError('network', '连接 gateway 超时');
+      }
+      throw new GatewayHttpError('network', error instanceof Error ? error.message : String(error));
+    } finally {
+      window.clearTimeout(timer);
+    }
   }
 
   /** 建立 WS 并完成首帧鉴权；resolve 时机是收到 hello */

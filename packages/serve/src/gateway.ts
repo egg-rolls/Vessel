@@ -154,10 +154,10 @@ export interface GatewayOptions {
   team?: TeamGatewayOptions;
   /**
    * 显式允许非回环监听（默认 false）。
-   * 非回环 hostname 必须同时给出 allowRemote=true 与非空 token。
+   * 非回环 hostname 必须同时给出 allowRemote=true、TLS 证书对与显式非空 token。
    */
   allowRemote?: boolean;
-  /** TLS 证书对；必须成对提供，缺一即启动失败 */
+  /** TLS 证书对；必须成对提供，缺一即启动失败；非回环监听必填 */
   tls?: { certFile: string; keyFile: string };
   /** durable run 查询/恢复注入；缺省 = durable 端点关闭 */
   durable?: DurableGatewayOptions;
@@ -371,10 +371,74 @@ function loadTlsMaterial(tls: { certFile: string; keyFile: string }): {
   return { cert: read(tls.certFile, 'cert_file'), key: read(tls.keyFile, 'key_file') };
 }
 
-const CSP =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-  "img-src 'self' data:; font-src 'self'; connect-src 'self' ws: wss:; " +
-  "object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+/**
+ * 归一化 CORS/WS Origin allowlist：只接受显式 http(s) origin。
+ * 拒绝 `*`、path/query/hash/userinfo；保存 `URL.origin`（小写 host、去默认端口）。
+ */
+export function normalizeAllowedOrigins(raw: string[] | undefined): string[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw)) {
+    throw new Error('allowedOrigins must be an array of explicit http(s) origins.');
+  }
+  const normalized = new Set<string>();
+  for (const value of raw) {
+    if (typeof value !== 'string') {
+      throw new Error('allowedOrigins must contain strings.');
+    }
+    const trimmed = value.trim();
+    if (trimmed === '' || trimmed === '*') {
+      throw new Error(
+        'allowedOrigins must contain explicit origins; wildcard ("*") is not allowed.',
+      );
+    }
+    let url: URL;
+    try {
+      url = new URL(trimmed);
+    } catch {
+      throw new Error(`Invalid allowed origin "${trimmed}": expected an absolute URL.`);
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error(`Invalid allowed origin "${trimmed}": only http(s) origins are allowed.`);
+    }
+    if (url.username !== '' || url.password !== '') {
+      throw new Error(`Invalid allowed origin "${trimmed}": credentials are not allowed.`);
+    }
+    if (url.pathname !== '/' || url.search !== '' || url.hash !== '') {
+      throw new Error(`Invalid allowed origin "${trimmed}": use scheme://host[:port] only.`);
+    }
+    normalized.add(url.origin);
+  }
+  return [...normalized];
+}
+
+/**
+ * HTML CSP：connect-src 只放同源 Host 与显式 allowlist，不再使用裸 `ws:` / `wss:`。
+ * 其余指令保持 0.5 的基线。
+ */
+export function buildContentSecurityPolicy(req: Request, allowedOrigins: string[]): string {
+  const sources = new Set<string>(["'self'"]);
+  const rawHost = req.headers.get('host');
+  // Host 会进入 CSP 指令；只接受常规 host[:port] 字符，防止指令注入。
+  const host = rawHost && /^[A-Za-z0-9.\-:[\]]+$/.test(rawHost) ? rawHost : null;
+  if (host) {
+    const secure = new URL(req.url).protocol === 'https:';
+    sources.add(`${secure ? 'wss' : 'ws'}://${host}`);
+  }
+  for (const origin of allowedOrigins) {
+    sources.add(origin);
+    try {
+      const url = new URL(origin);
+      sources.add(`${url.protocol === 'https:' ? 'wss' : 'ws'}://${url.host}`);
+    } catch {
+      // normalizeAllowedOrigins 已校验；防御性跳过非法值。
+    }
+  }
+  return (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+    `img-src 'self' data:; font-src 'self'; connect-src ${[...sources].join(' ')}; ` +
+    "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+  );
+}
 
 /** 方法级错误（映射到协议错误码） */
 class MethodError extends Error {
@@ -416,17 +480,21 @@ function hostAllowed(req: Request, listenHost: string): boolean {
 }
 
 /** Origin 校验：无 Origin（curl / peer）放行；浏览器必须同源或在允许列表 */
-function originAllowed(req: Request, allowedOrigins: string[]): boolean {
+export function originAllowed(req: Request, allowedOrigins: string[]): boolean {
   const origin = req.headers.get('origin');
   if (!origin) return true;
-  if (allowedOrigins.includes(origin)) return true;
-  const host = req.headers.get('host');
-  if (!host) return false;
+  let parsed: URL;
   try {
-    return new URL(origin).host === host;
+    parsed = new URL(origin);
   } catch {
     return false;
   }
+  // 只接受浏览器 http(s) origin；file:// / opaque origin 一律拒绝。
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  if (allowedOrigins.includes(parsed.origin)) return true;
+  const host = req.headers.get('host');
+  if (!host) return false;
+  return parsed.host.toLowerCase() === host.toLowerCase();
 }
 
 /** 构造 JSON 响应 */
@@ -452,16 +520,29 @@ function errorJson(
   return json({ error: protocolError(code, message) }, status, extra);
 }
 
-/** 允许列表命中时返回 CORS 头（同源不需要） */
-function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
+/**
+ * 允许列表命中时返回 CORS 头（同源不需要）。
+ * allowlist 非空时所有响应都带 Vary: Origin，避免共享缓存把 A 的 ACAO 复用给 B。
+ * 不使用 Access-Control-Allow-Credentials：鉴权走 Authorization，不依赖 cookie。
+ */
+export function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, string> {
+  if (allowedOrigins.length === 0) return {};
+  const headers: Record<string, string> = { Vary: 'Origin' };
   const origin = req.headers.get('origin');
-  if (!origin || !allowedOrigins.includes(origin)) return {};
+  if (!origin) return headers;
+  let normalized: string;
+  try {
+    normalized = new URL(origin).origin;
+  } catch {
+    return headers;
+  }
+  if (!allowedOrigins.includes(normalized)) return headers;
   return {
-    'Access-Control-Allow-Origin': origin,
+    ...headers,
+    'Access-Control-Allow-Origin': normalized,
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Vessel-Protocol',
     'Access-Control-Max-Age': '600',
-    Vary: 'Origin',
   };
 }
 
@@ -469,33 +550,34 @@ function corsHeaders(req: Request, allowedOrigins: string[]): Record<string, str
 async function readJsonBody(
   req: Request,
   maxBytes: number,
+  extra: Record<string, string> = {},
 ): Promise<Record<string, unknown> | Response> {
   const contentType = req.headers.get('content-type');
   if (contentType && !contentType.toLowerCase().includes('application/json')) {
-    return errorJson('invalid_request', 'Content-Type must be application/json', 415);
+    return errorJson('invalid_request', 'Content-Type must be application/json', 415, extra);
   }
   const declared = Number(req.headers.get('content-length') ?? '0');
   if (Number.isFinite(declared) && declared > maxBytes) {
-    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413);
+    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413, extra);
   }
   let text: string;
   try {
     text = await req.text();
   } catch {
-    return errorJson('invalid_request', 'Cannot read request body', 400);
+    return errorJson('invalid_request', 'Cannot read request body', 400, extra);
   }
   if (Buffer.byteLength(text) > maxBytes) {
-    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413);
+    return errorJson('payload_too_large', `Request body exceeds ${maxBytes} bytes`, 413, extra);
   }
   if (text.trim().length === 0) return {};
   try {
     const parsed: unknown = JSON.parse(text);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      return errorJson('invalid_request', 'Request body must be a JSON object', 400);
+      return errorJson('invalid_request', 'Request body must be a JSON object', 400, extra);
     }
     return parsed as Record<string, unknown>;
   } catch {
-    return errorJson('invalid_request', 'Invalid JSON', 400);
+    return errorJson('invalid_request', 'Invalid JSON', 400, extra);
   }
 }
 
@@ -509,20 +591,31 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   const allowRemote = opts.allowRemote === true;
-  if (!isLoopbackHostname(hostname) && !allowRemote) {
+  const loopback = isLoopbackHostname(hostname);
+  if (!loopback && !allowRemote) {
     throw new Error(
       `Refusing to listen on non-loopback hostname "${hostname}": ` +
-        'set serve.allow_remote=true (and a gateway token) to expose the gateway.',
+        'set serve.allow_remote=true (and a gateway token + TLS) to expose the gateway.',
     );
   }
-  if (allowRemote && opts.token !== undefined && opts.token.trim().length === 0) {
+  // DECISION-014 §2.1：非回环必须 TLS，不提供明文逃生口。
+  if (!loopback && (!opts.tls?.certFile || !opts.tls?.keyFile)) {
     throw new Error(
-      'Remote mode requires a non-empty gateway token ' +
-        '(serve token, VESSEL_GATEWAY_TOKEN, or gateway-generated).',
+      `Remote mode requires TLS: configure serve.tls.cert_file and serve.tls.key_file ` +
+        `when listening on non-loopback hostname "${hostname}". ` +
+        'Plaintext remote listeners are not supported.',
     );
   }
-  const token =
-    opts.token !== undefined && opts.token.trim().length > 0 ? opts.token : generateToken();
+  // 非回环必须提供显式 token；不允许依赖启动时自动生成的临时 token。
+  const configuredToken =
+    opts.token !== undefined && opts.token.trim().length > 0 ? opts.token : undefined;
+  if (!loopback && configuredToken === undefined) {
+    throw new Error(
+      'Remote mode requires an explicit non-empty gateway token ' +
+        '(serve.token, serve.tokens/admin_token, or VESSEL_GATEWAY_TOKEN).',
+    );
+  }
+  const token = configuredToken ?? generateToken();
 
   const tlsMaterial = opts.tls ? loadTlsMaterial(opts.tls) : undefined;
 
@@ -628,7 +721,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   );
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
-  const allowedOrigins = opts.allowedOrigins ?? [];
+  const allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const authTimeoutMs = opts.authTimeoutMs ?? 5_000;
 
@@ -2190,7 +2283,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       'Cache-Control': isHtml ? 'no-cache' : 'public, max-age=31536000, immutable',
       'X-Content-Type-Options': 'nosniff',
     };
-    if (isHtml) headers['Content-Security-Policy'] = CSP;
     return new Response(file, { headers });
   }
 
@@ -2393,7 +2485,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
 
     if (path === '/v1/team/messages' && req.method === 'POST') {
-      const body = await readJsonBody(req, maxBodyBytes);
+      const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
       if (body.protocol !== 1) {
         return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
@@ -2448,7 +2540,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!t.transport) {
         return errorJson('team_disabled', 'No loopback transport configured', 404, extra);
       }
-      const body = await readJsonBody(req, maxBodyBytes);
+      const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
       if (body.protocol !== 1) {
         return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
@@ -2509,7 +2601,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       if (req.method === 'POST') {
         if (!t.spawn) return errorJson('no_spawn', 'No spawn handler configured', 400, extra);
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         const name = body.name;
         const model = body.model;
@@ -2929,7 +3021,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     if (path === '/v1/workflows/run') {
       if (req.method !== 'POST') return methodNotAllowed(extra);
-      const body = await readJsonBody(req, maxBodyBytes);
+      const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
       const scope = restTenantScope(
         principal,
@@ -3464,6 +3556,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!isApiPath && (req.method === 'GET' || req.method === 'HEAD')) {
         const staticResponse = await serveStatic(path);
         if (staticResponse) {
+          const contentType = staticResponse.headers.get('content-type') ?? '';
+          if (contentType.includes('text/html')) {
+            staticResponse.headers.set(
+              'Content-Security-Policy',
+              buildContentSecurityPolicy(req, allowedOrigins),
+            );
+          }
           for (const [key, value] of Object.entries(extra)) staticResponse.headers.set(key, value);
           return staticResponse;
         }
@@ -3616,7 +3715,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // 提交运行（异步；事件流负责结果）
       if (path === '/v1/runs' && req.method === 'POST') {
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         try {
           return json(await callMethod('runs.start', body, principal), 202, extra);
@@ -3654,7 +3753,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const permissionMatch = path.match(/^\/v1\/permissions\/([^/]+)$/);
       if (permissionMatch && req.method === 'POST') {
         const requestId = decodeURIComponent(permissionMatch[1] ?? '');
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         const decision = body.decision;
         if (decision !== 'allow' && decision !== 'deny') {
@@ -3683,7 +3782,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const askMatch = path.match(/^\/v1\/ask\/([^/]+)$/);
       if (askMatch && req.method === 'POST') {
         const requestId = decodeURIComponent(askMatch[1] ?? '');
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         if (!Array.isArray(body.answers)) {
           return errorJson('invalid_request', 'answers must be an array', 400, extra);
@@ -3705,7 +3804,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // 0.1.0 兼容：阻塞式 /run（旧 web 客户端 / 脚本）
       if (path === '/run' && req.method === 'POST') {
-        const body = await readJsonBody(req, maxBodyBytes);
+        const body = await readJsonBody(req, maxBodyBytes, extra);
         if (body instanceof Response) return body;
         if (typeof body.input !== 'string' || body.input.length === 0) {
           return errorJson('invalid_request', 'input is required', 400, extra);

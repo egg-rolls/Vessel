@@ -116,7 +116,7 @@ describe('gateway TLS', () => {
     expect(hello.kind).toBe('hello');
   });
 
-  it('keeps TLS and allowRemote independent', () => {
+  it('requires allowRemote, TLS and an explicit token for non-loopback', () => {
     expect(() =>
       createGateway({
         events: new MemoryEventStream(),
@@ -124,6 +124,15 @@ describe('gateway TLS', () => {
         tls: tlsOptions(),
       }),
     ).toThrow(/allow_remote/);
+
+    expect(() =>
+      createGateway({
+        events: new MemoryEventStream(),
+        hostname: '0.0.0.0',
+        allowRemote: true,
+        token: 'remote-secret',
+      }),
+    ).toThrow(/requires TLS/);
 
     expect(() =>
       createGateway({
