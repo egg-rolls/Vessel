@@ -227,6 +227,60 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer) {
   };
 }
 
+/** 0.8.2 Wave 2B1：runtime / delegate / workflow 共用的 resolved 权限配置。 */
+export function resolveRuntimePermission(
+  config: VesselConfig,
+  headless: boolean,
+): RuntimePermissionConfig {
+  return {
+    default: headless ? 'allow' : 'ask',
+    // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
+    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+  };
+}
+
+/** delegate 工厂插件 options；ext 0.8.2 起识别 `permission`。 */
+export type DelegateTaskOptionsWithPermission = Parameters<typeof createDelegateTaskPlugin>[0] & {
+  permission: RuntimePermissionConfig;
+};
+
+export interface BuildDelegateTaskOptionsInput {
+  config: VesselConfig;
+  providerFactory: () => LLMProvider;
+  tenantId: string;
+  providerModel: string;
+  headless: boolean;
+  permission: RuntimePermissionConfig;
+  runtimeHost?: RuntimeHost;
+}
+
+/**
+ * 构造 delegate 工厂插件 options（纯函数，便于测试）。
+ * `permissionMode` 保持原逻辑：显式配置优先，否则交互 bridge / headless allow。
+ */
+export function buildDelegateTaskOptions(
+  input: BuildDelegateTaskOptionsInput,
+): DelegateTaskOptionsWithPermission {
+  return {
+    providerFactory: input.providerFactory,
+    tenantId: input.tenantId,
+    model: input.config.delegate?.model ?? input.providerModel,
+    maxDepth: input.config.delegate?.maxDepth,
+    disallowed: input.config.delegate?.disallowed,
+    limits: input.config.delegate?.limits,
+    termination: input.config.delegate?.termination
+      ? {
+          maxIterations: input.config.delegate.termination.maxIterations ?? 10,
+          maxRuntimeSeconds: input.config.delegate.termination.maxRuntimeSeconds,
+        }
+      : undefined,
+    permissionMode: input.config.delegate?.permissionMode ?? (input.headless ? 'allow' : 'bridge'),
+    readOnlyTools: input.config.delegate?.readOnlyTools,
+    permission: input.permission,
+    ...(input.runtimeHost !== undefined ? { runtimeHost: input.runtimeHost } : {}),
+  };
+}
+
 /**
  * 构造一个 tenant 的独立执行面。
  * 失败时释放本函数获取的锁；调用方负责释放传入的锁。
@@ -368,11 +422,7 @@ export async function buildTenantRuntime(
     }
 
     // runtime / delegate / workflow 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
-    const permission: RuntimePermissionConfig = {
-      default: headless ? 'allow' : 'ask',
-      // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-      autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
-    };
+    const permission = resolveRuntimePermission(config, headless);
 
     const buildFactoryPlugins = async (
       runtimeHost?: RuntimeHost,
@@ -384,29 +434,19 @@ export async function buildTenantRuntime(
       const factory: Plugin[] = [];
       if (plan.delegate) {
         // 0.8.2 Wave 2B1：子 runtime 继承父 resolved 权限（default + autoApprove）。
-        // ext 侧在 0.8.2 增加 `DelegateTaskOptions.permission`；先按结构化扩展透传，
-        // 未识别该字段的旧实现行为不变（permissionMode 逻辑不动）。
-        const delegateOptions: Parameters<typeof createDelegateTaskPlugin>[0] & {
-          permission: RuntimePermissionConfig;
-        } = {
-          providerFactory: () => provider,
-          tenantId,
-          model: config.delegate?.model ?? providerModel,
-          maxDepth: config.delegate?.maxDepth,
-          disallowed: config.delegate?.disallowed,
-          limits: config.delegate?.limits,
-          termination: config.delegate?.termination
-            ? {
-                maxIterations: config.delegate.termination.maxIterations ?? 10,
-                maxRuntimeSeconds: config.delegate.termination.maxRuntimeSeconds,
-              }
-            : undefined,
-          permissionMode: config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge'),
-          readOnlyTools: config.delegate?.readOnlyTools,
-          permission,
-          ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
-        };
-        factory.push(createDelegateTaskPlugin(delegateOptions));
+        factory.push(
+          createDelegateTaskPlugin(
+            buildDelegateTaskOptions({
+              config,
+              providerFactory: () => provider,
+              tenantId,
+              providerModel,
+              headless,
+              permission,
+              ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
+            }),
+          ),
+        );
       }
 
       if (plan.team) {
