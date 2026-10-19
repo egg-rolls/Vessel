@@ -11,7 +11,7 @@ import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { WorkflowsView } from '../domains/workflows/WorkflowsView';
-import { useConnection, useEventSnapshot } from '../gateway/ConnectionProvider';
+import { useConnection } from '../gateway/ConnectionProvider';
 import type { PaletteItem } from '../state/palette';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
@@ -41,6 +41,7 @@ export function AppShell() {
     connectionState,
     hasToken,
     tenantEpoch,
+    eventStore,
     lastError,
     tokenError,
     gapNotice,
@@ -68,7 +69,6 @@ export function AppShell() {
   const mainRef = useRef<HTMLElement | null>(null);
   const firstRoute = useRef(true);
   const routeKey = formatRoute(route);
-  const eventSnapshot = useEventSnapshot();
   const lastEventVersion = useRef(-1);
 
   const modalOpen = Boolean(permissions[0] || asks[0] || pendingAction || helpOpen);
@@ -95,6 +95,9 @@ export function AppShell() {
     tenantEpochRef.current = tenantEpoch;
     setChatSessionsOpen(false);
     setPendingAction(null);
+    setPaletteOpen(false);
+    // 旧租户的实体（会话/run/workflow/MCP）不能留在命令面板里。
+    setEntityMap(new Map());
     navigate({ domain: 'chat' });
     toast.info('已切换租户；当前选择与事件缓冲已清空');
   }, [tenantEpoch, navigate, toast]);
@@ -114,28 +117,31 @@ export function AppShell() {
   }, [routeKey]);
 
   // 运行终态播报（只播报 completed/failed/cancelled，不播报 token/流式内容）。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: version 是合批键；entries 只在 version 变化时读取
+  // 直接订阅 store，避免每个 50ms 合批都让整个外壳重渲染。
   useEffect(() => {
-    if (eventSnapshot.version === lastEventVersion.current) return;
-    lastEventVersion.current = eventSnapshot.version;
-    const recent = eventSnapshot.entries.slice(-20);
-    const terminal = [...recent]
-      .reverse()
-      .find(
-        ({ event }) =>
-          event.type === 'run.completed' ||
-          event.type === 'run.failed' ||
-          event.type === 'run.cancelled',
-      );
-    if (!terminal) return;
-    const label =
-      terminal.event.type === 'run.completed'
-        ? '已完成'
-        : terminal.event.type === 'run.failed'
-          ? '失败'
-          : '已取消';
-    setAnnouncement(`运行 ${terminal.event.run_id.slice(0, 12)} ${label}`);
-  }, [eventSnapshot.version]);
+    return eventStore.subscribe(() => {
+      const snapshot = eventStore.getSnapshot();
+      if (snapshot.version === lastEventVersion.current) return;
+      lastEventVersion.current = snapshot.version;
+      const recent = snapshot.entries.slice(-20);
+      const terminal = [...recent]
+        .reverse()
+        .find(
+          ({ event }) =>
+            event.type === 'run.completed' ||
+            event.type === 'run.failed' ||
+            event.type === 'run.cancelled',
+        );
+      if (!terminal) return;
+      const label =
+        terminal.event.type === 'run.completed'
+          ? '已完成'
+          : terminal.event.type === 'run.failed'
+            ? '失败'
+            : '已取消';
+      setAnnouncement(`运行 ${terminal.event.run_id.slice(0, 12)} ${label}`);
+    });
+  }, [eventStore]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -286,7 +292,19 @@ export function AppShell() {
   // 破坏性动作离开面板后仍需二次确认；非破坏动作直接执行。
   const runPaletteItem = useCallback((item: PaletteItem) => {
     if (item.danger || item.confirm) {
-      setPendingAction(item);
+      // 没有显式确认文案的破坏性动作也要有兜底确认，避免“点了没反应”。
+      setPendingAction(
+        item.confirm
+          ? item
+          : {
+              ...item,
+              confirm: {
+                title: `执行「${item.label}」？`,
+                body: '该操作可能无法撤销。',
+                confirmLabel: '确认执行',
+              },
+            },
+      );
       return;
     }
     item.run();
@@ -377,7 +395,8 @@ export function AppShell() {
 
         <div className="shell-body">
           <DomainNav route={route} navigate={navigate} />
-          <main id="main" ref={mainRef} className="main-content" tabIndex={-1}>
+          {/* tenant 变化时整块重挂载：旧租户的 resource 缓存、会话副本与选中项全部丢弃。 */}
+          <main key={tenantEpoch} id="main" ref={mainRef} className="main-content" tabIndex={-1}>
             {route.domain === 'chat' && (
               <ChatView
                 route={route}

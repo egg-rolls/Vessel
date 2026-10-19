@@ -14,7 +14,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { SegmentedTabs } from '../../components/Tabs';
 import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
-import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
+import { useConnection } from '../../gateway/ConnectionProvider';
 import type { DurableRunSummary, RunStatus } from '../../gateway/types';
 import { buildRunPaletteActions } from '../../state/palette-actions';
 import {
@@ -68,7 +68,8 @@ export function RunsView({
   route: RunsRoute;
   navigate: (route: Route) => void;
 }) {
-  const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
+  const { client, connectionState, hasToken, features, epoch, tenantId, eventStore } =
+    useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
   const durableAvailable = hasToken && features.includes('durable-resume');
@@ -143,6 +144,7 @@ export function RunsView({
   const detailStatus = detailRun?.status ?? knownDurable?.status;
   const activeDetail = detailStatus === 'queued' || detailStatus === 'running';
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: route 变化时必须重置轮询
   useEffect(() => {
     setDetailPolling(false);
   }, [route.runId, route.tab]);
@@ -158,30 +160,35 @@ export function RunsView({
   useRefreshSignal(reloadAll);
 
   // 事件驱动刷新：run.* 事件后 500ms 合并刷新（10s 轮询兜底，页面隐藏时暂停）。
-  const snapshot = useEventSnapshot();
+  // 直接订阅 store，避免每个流式合批都重渲染整个列表。
   const lastVersion = useRef(-1);
   const eventTimer = useRef<number | undefined>(undefined);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: version 是合批键；entries 只在 version 变化时读取
   useEffect(() => {
-    if (snapshot.version === lastVersion.current) return;
-    lastVersion.current = snapshot.version;
-    const recent = snapshot.entries.slice(-100);
-    if (!recent.some(({ event }) => event.type.startsWith('run.'))) return;
-    window.clearTimeout(eventTimer.current);
-    eventTimer.current = window.setTimeout(() => {
-      liveResource.reload();
-      if (durableAvailable) durableResource.reload();
-      if (route.runId) detailResource.reload();
-    }, 500);
+    const unsubscribe = eventStore.subscribe(() => {
+      const snapshot = eventStore.getSnapshot();
+      if (snapshot.version === lastVersion.current) return;
+      lastVersion.current = snapshot.version;
+      const recent = snapshot.entries.slice(-100);
+      if (!recent.some(({ event }) => event.type.startsWith('run.'))) return;
+      window.clearTimeout(eventTimer.current);
+      eventTimer.current = window.setTimeout(() => {
+        liveResource.reload();
+        if (durableAvailable) durableResource.reload();
+        if (route.runId) detailResource.reload();
+      }, 500);
+    });
+    return () => {
+      unsubscribe();
+      window.clearTimeout(eventTimer.current);
+    };
   }, [
-    snapshot.version,
+    eventStore,
     liveResource.reload,
     durableResource.reload,
     detailResource.reload,
     durableAvailable,
     route.runId,
   ]);
-  useEffect(() => () => window.clearTimeout(eventTimer.current), []);
 
   const withBusy = useCallback(async (runId: string, action: () => Promise<void>) => {
     setBusy((prev) => new Set(prev).add(runId));

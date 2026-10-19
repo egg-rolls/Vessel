@@ -15,7 +15,7 @@ import {
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
-import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
+import { useConnection } from '../../gateway/ConnectionProvider';
 import type { WorkflowStepSummary } from '../../gateway/types';
 import { buildWorkflowPaletteActions } from '../../state/palette-actions';
 import { resourceData, useResource } from '../../state/useResource';
@@ -100,7 +100,8 @@ export function WorkflowsView({
   route: WorkflowsRoute;
   navigate: (route: Route) => void;
 }) {
-  const { client, connectionState, hasToken, features, epoch, tenantId } = useConnection();
+  const { client, connectionState, hasToken, features, epoch, tenantId, eventStore } =
+    useConnection();
   const toast = useToast();
   const connected = hasToken && connectionState === 'open';
   const available = hasToken && features.includes('workflow');
@@ -168,22 +169,26 @@ export function WorkflowsView({
   useRefreshSignal(refreshAll);
 
   // workflow.* 事件后 500ms 合并刷新；10s 轮询兜底。
-  const snapshot = useEventSnapshot();
   const lastVersion = useRef(-1);
   const eventTimer = useRef<number | undefined>(undefined);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: version 是合批键；entries 只在 version 变化时读取
   useEffect(() => {
-    if (snapshot.version === lastVersion.current) return;
-    lastVersion.current = snapshot.version;
-    const recent = snapshot.entries.slice(-100);
-    if (!recent.some(({ event }) => event.type.startsWith('workflow.'))) return;
-    window.clearTimeout(eventTimer.current);
-    eventTimer.current = window.setTimeout(() => {
-      listResource.reload();
-      detailResource.reload();
-    }, 500);
-  }, [snapshot.version, listResource.reload, detailResource.reload]);
-  useEffect(() => () => window.clearTimeout(eventTimer.current), []);
+    const unsubscribe = eventStore.subscribe(() => {
+      const snapshot = eventStore.getSnapshot();
+      if (snapshot.version === lastVersion.current) return;
+      lastVersion.current = snapshot.version;
+      const recent = snapshot.entries.slice(-100);
+      if (!recent.some(({ event }) => event.type.startsWith('workflow.'))) return;
+      window.clearTimeout(eventTimer.current);
+      eventTimer.current = window.setTimeout(() => {
+        listResource.reload();
+        detailResource.reload();
+      }, 500);
+    });
+    return () => {
+      unsubscribe();
+      window.clearTimeout(eventTimer.current);
+    };
+  }, [eventStore, listResource.reload, detailResource.reload]);
 
   const runAction = useCallback(async (id: string, action: () => Promise<void>) => {
     setBusy((prev) => new Set(prev).add(id));
