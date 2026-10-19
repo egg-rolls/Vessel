@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { formatTimestamp } from './format';
-import { type ConnectionState, GatewayClient } from './gatewayClient';
+import { type ConnectionState, GatewayClient, GatewayHttpError } from './gatewayClient';
+import {
+  checkGatewayUrl,
+  displayGatewayUrl,
+  GATEWAY_URL_KEY,
+  resolveInitialGatewayUrl,
+} from './gatewayUrl';
 import { windowTail } from './transcript';
 import type {
   AskUserAnswer,
@@ -23,7 +29,6 @@ import type {
   WorkflowRunSummary,
 } from './types';
 
-const GATEWAY_URL = (import.meta.env.VITE_GATEWAY_URL as string | undefined) ?? '';
 /** 长历史默认只渲染最近 N 条；「加载更早」每次再取 N 条。 */
 const TRANSCRIPT_WINDOW = 50;
 /** 排队位置没有推送事件，只能轮询既有 runs.get。 */
@@ -728,6 +733,25 @@ function AskModal({
 
 // ── 主应用 ──
 export default function App() {
+  /** 首次加载：localStorage > VITE_GATEWAY_URL > 同源；非法值保留错误提示。 */
+  const initialGateway = useMemo(
+    () =>
+      resolveInitialGatewayUrl(
+        localStorage.getItem(GATEWAY_URL_KEY),
+        import.meta.env.VITE_GATEWAY_URL as string | undefined,
+        window.location.protocol,
+      ),
+    [],
+  );
+  const [gatewayUrl, setGatewayUrl] = useState(initialGateway.ok ? initialGateway.value : '');
+  const [gatewayDraft, setGatewayDraft] = useState(() => {
+    const stored = localStorage.getItem(GATEWAY_URL_KEY);
+    if (stored?.trim()) return stored;
+    return (import.meta.env.VITE_GATEWAY_URL as string | undefined) ?? '';
+  });
+  const [gatewayError, setGatewayError] = useState<string | null>(
+    initialGateway.ok ? null : (initialGateway.error ?? '无效的 gateway 地址'),
+  );
   const [token, setToken] = useState<string>(initialToken);
   /** 输入框草稿；只有显式「连接」/Enter 才提交到 token，避免逐字重连。 */
   const [tokenDraft, setTokenDraft] = useState<string>(token);
@@ -805,7 +829,8 @@ export default function App() {
   /** 持久历史窗口大小（仅客户端，不发分页请求）。 */
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
 
-  const client = useMemo(() => new GatewayClient(GATEWAY_URL), []);
+  /** gateway URL 变化时重建 client：旧 socket/seq 不得跨地址复用。 */
+  const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const timelineRef = useRef<HTMLElement | null>(null);
@@ -823,21 +848,39 @@ export default function App() {
   /** 新建但可能尚未落盘的 session id；not_found 时只对它按空历史处理。 */
   const pendingNewSessionRef = useRef<string | null>(null);
   const connectedTokenRef = useRef(token);
+  const connectedUrlRef = useRef(gatewayUrl);
   const lastTenantRef = useRef<string | null>(null);
   const queuedRef = useRef<QueuedSubmission[]>([]);
   queuedRef.current = queuedRuns;
   /** 已收到事件的 job run_id：防止「run.started 先于 HTTP 提交响应」时补插重复卡片。 */
   const seenJobIds = useRef<Set<string>>(new Set());
 
-  /** 显式提交 token：一次编辑只触发一次连接；空值表示断开。 */
-  const commitToken = () => {
+  /**
+   * 显式提交 gateway 地址与 token：一次编辑只触发一次连接。
+   * 空 token 表示断开；地址留空表示同源。
+   */
+  const commitConnection = () => {
+    const urlCheck = checkGatewayUrl(gatewayDraft, window.location.protocol);
+    if (!urlCheck.ok) {
+      setGatewayError(urlCheck.error ?? '无效的 gateway 地址');
+      return;
+    }
+    setGatewayError(null);
+    setGatewayDraft(urlCheck.value);
+    if (urlCheck.value) localStorage.setItem(GATEWAY_URL_KEY, urlCheck.value);
+    else localStorage.removeItem(GATEWAY_URL_KEY);
+    const urlChanged = urlCheck.value !== gatewayUrl;
+    if (urlChanged) setGatewayUrl(urlCheck.value);
+
     const next = tokenDraft.trim();
-    // 已连接且 token 未变时不重复重连；错误状态下允许重试。
-    if (next === token && connState === 'open' && !tokenError) return;
+    // 地址与 token 都没变且已连接时不重复重连；错误状态下允许重试。
+    if (!urlChanged && next === token && connState === 'open' && !tokenError) return;
     setTokenError(null);
     if (next) sessionStorage.setItem('vessel.token', next);
     else sessionStorage.removeItem('vessel.token');
     if (next === token) {
+      // 地址变化：新 client 由连接 effect 重建并重置 seq/时间线。
+      if (urlChanged) return;
       // 同 token 手动重连：只续订 WS，保留当前会话/历史/时间线/队列。
       if (next) {
         void client.connect(next, lastSeq.current).catch((e: unknown) => {
@@ -1032,6 +1075,7 @@ export default function App() {
     const tk = token.trim();
     if (!tk) {
       connectedTokenRef.current = '';
+      connectedUrlRef.current = gatewayUrl;
       pendingNewSessionRef.current = null;
       seenJobIds.current.clear();
       setConnState('idle');
@@ -1068,6 +1112,8 @@ export default function App() {
     let disposed = false;
     let retryTimer: number | undefined;
     let attempt = 0;
+    const urlChanged = connectedUrlRef.current !== gatewayUrl;
+    connectedUrlRef.current = gatewayUrl;
     const tokenChanged = connectedTokenRef.current !== tk;
     connectedTokenRef.current = tk;
     lastSeq.current = 0;
@@ -1075,8 +1121,8 @@ export default function App() {
     setEntries([]);
     setPermissions([]);
     setAsks([]);
-    if (tokenChanged) {
-      // token 变更才丢弃会话选择；首次挂载保留刷新前恢复的会话。
+    if (tokenChanged || urlChanged) {
+      // token 或 gateway 地址变更才丢弃会话选择；首次挂载保留刷新前恢复的会话。
       pendingNewSessionRef.current = null;
       setSelectedId(null);
       setDraftSessionId(null);
@@ -1231,6 +1277,7 @@ export default function App() {
       }
       setHello(info);
       setTokenError(null);
+      setGatewayError(null);
       if (info.tenant_id) setTenantId(info.tenant_id);
       setError(null);
       loadPanels();
@@ -1254,11 +1301,37 @@ export default function App() {
       if (!disposed) setConnState(state);
     });
 
-    /** connect() 的 reject 与 close 事件会先后到达：4401 只保留字段级提示。 */
+    /** connect()/probe 的 reject 与 close 事件会先后到达：4401 只保留字段级提示。 */
     const reportConnectError = (error: unknown) => {
       if (disposed) return;
       if (client.closedWithCode === 4401) {
         setTokenError('鉴权失败：token 错误或已失效');
+        return;
+      }
+      if (error instanceof GatewayHttpError) {
+        if (
+          error.status === 403 ||
+          error.code === 'forbidden_origin' ||
+          error.code === 'invalid_host'
+        ) {
+          setError(
+            `gateway 拒绝该 Origin/Host：${error.message}。` +
+              '跨 Origin 部署需把本站加入 serve.allowed_origins。',
+          );
+          return;
+        }
+        if (error.status === 401 || error.code === 'unauthorized') {
+          setTokenError('鉴权失败：token 错误或已失效');
+          return;
+        }
+        if (error.code === 'network') {
+          setError(
+            `无法连接 gateway（检查地址/TLS/网络）：${error.message}。` +
+              '跨 Origin 时还需配置 serve.allowed_origins。',
+          );
+          return;
+        }
+        setError(error.message);
         return;
       }
       setError(error instanceof Error ? error.message : String(error));
@@ -1286,7 +1359,11 @@ export default function App() {
       }, delay);
     });
 
-    void client.connect(tk, 0).catch(reportConnectError);
+    // 先探 /health：Origin 403 / TLS / 网络错误在 WS 之前给出可诊断提示。
+    void client
+      .probeHealth()
+      .then(() => client.connect(tk, 0))
+      .catch(reportConnectError);
 
     return () => {
       disposed = true;
@@ -1880,6 +1957,33 @@ export default function App() {
         <div className="token-field">
           <div className="token-row">
             <input
+              className={`token-input gateway-input ${gatewayError ? 'invalid' : ''}`}
+              value={gatewayDraft}
+              onChange={(e) => {
+                setGatewayDraft(e.target.value);
+                setGatewayError(null);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  commitConnection();
+                }
+              }}
+              placeholder="gateway URL（留空 = 同源）"
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="gateway URL"
+              aria-invalid={gatewayError ? true : undefined}
+              aria-describedby={gatewayError ? 'gateway-url-error' : undefined}
+            />
+          </div>
+          {gatewayError && (
+            <span className="field-error" id="gateway-url-error" role="alert">
+              {gatewayError}
+            </span>
+          )}
+          <div className="token-row">
+            <input
               className={`token-input ${tokenError ? 'invalid' : ''}`}
               type="password"
               value={tokenDraft}
@@ -1890,7 +1994,7 @@ export default function App() {
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {
                   e.preventDefault();
-                  commitToken();
+                  commitConnection();
                 }
               }}
               placeholder="gateway token（或打开 #token=…）"
@@ -1902,10 +2006,13 @@ export default function App() {
             <button
               type="button"
               className="ghost-btn token-connect"
-              onClick={commitToken}
+              onClick={commitConnection}
               disabled={
                 !tokenDraft.trim() ||
-                (tokenDraft.trim() === token && connState === 'open' && !tokenError)
+                (!gatewayError &&
+                  gatewayDraft.trim() === gatewayUrl &&
+                  tokenDraft.trim() === token &&
+                  connState === 'open')
               }
             >
               {tokenError ? '重试' : '连接'}
@@ -1917,7 +2024,9 @@ export default function App() {
             </span>
           )}
         </div>
-        <span className="gateway-url dim">{GATEWAY_URL || window.location.origin}</span>
+        <span className="gateway-url dim" title="当前连接的 gateway">
+          {displayGatewayUrl(gatewayUrl, window.location.origin)}
+        </span>
         <button
           type="button"
           className={`ghost-btn ${showInternal ? 'active' : ''}`}

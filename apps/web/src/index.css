@@ -264,7 +264,7 @@ button {
   flex-direction: column;
   gap: 4px;
   min-width: 180px;
-  max-width: 430px;
+  max-width: 520px;
   margin-left: auto;
 }
 
@@ -297,6 +297,10 @@ button {
 .token-input.invalid {
   border-color: var(--danger);
   background: var(--danger-soft);
+}
+
+.gateway-input {
+  font-size: 11px;
 }
 
 .field-error {
