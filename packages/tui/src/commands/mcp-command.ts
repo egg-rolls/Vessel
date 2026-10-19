@@ -7,6 +7,14 @@
 
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import type { McpServerSummary, ReplContext } from '../repl-context.js';
+import { truncateToWidth } from '../utils/text-layout.js';
+import type {
+  DetailView,
+  ListView,
+  ViewAction,
+  ViewActionInvocation,
+  ViewTone,
+} from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const NAME_WIDTH = 16;
@@ -37,10 +45,122 @@ export function formatMcpServers(servers: McpServerSummary[]): string {
   return lines.join('\n');
 }
 
+function mcpEnvelope(view: ListView | DetailView): NonNullable<CommandResult['view']> {
+  return { source: 'mcp', view };
+}
+
+/** 状态文本：glyph + 文本，无色终端也可读 */
+export function mcpStatusLabel(server: McpServerSummary): string {
+  if (server.status === 'connected') return '● connected';
+  if (server.status === 'failed') return '✗ failed';
+  return '○ disabled';
+}
+
+export function mcpStatusTone(server: McpServerSummary): ViewTone {
+  if (server.status === 'connected') return 'ok';
+  if (server.status === 'failed') return 'danger';
+  return 'muted';
+}
+
+/** 列表动作：Enter 详情、r 重连、g 刷新 */
+export function mcpListActions(): ViewAction[] {
+  return [
+    { id: 'inspect', key: 'enter', label: 'inspect', enabled: 'selected' },
+    { id: 'reconnect', key: 'r', label: 'reconnect', enabled: 'selected' },
+    { id: 'refresh', key: 'g', label: 'refresh' },
+  ];
+}
+
+/** 详情动作：r 重连、g 刷新 */
+export function mcpDetailActions(): ViewAction[] {
+  return [
+    { id: 'reconnect', key: 'r', label: 'reconnect' },
+    { id: 'refresh', key: 'g', label: 'refresh' },
+  ];
+}
+
+/** 纯函数：server 列表视图 */
+export function buildMcpListView(servers: McpServerSummary[]): ListView {
+  return {
+    kind: 'list',
+    title: 'MCP servers',
+    items: servers.map((server) => ({
+      key: server.name,
+      label: server.name,
+      description: [
+        `${server.tools.length} tools`,
+        server.error ? truncateToWidth(oneLine(server.error), ERROR_MAX) : '',
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      badge: server.status,
+      tone: mcpStatusTone(server),
+    })),
+    actions: mcpListActions(),
+    emptyText: 'No MCP servers configured.',
+  };
+}
+
+/** 纯函数：server 详情（工具名列表，限制行数） */
+export function buildMcpDetailView(server: McpServerSummary, maxTools = 80): DetailView {
+  const tools = server.tools.slice(0, Math.max(0, maxTools));
+  const toolLines =
+    server.tools.length === 0
+      ? ['(no tools registered)']
+      : [
+          ...tools,
+          ...(server.tools.length > tools.length
+            ? [`… ${server.tools.length - tools.length} more tools`]
+            : []),
+        ];
+  return {
+    kind: 'detail',
+    title: `MCP server ${server.name}`,
+    badge: { text: server.status, tone: mcpStatusTone(server) },
+    key: server.name,
+    sections: [
+      {
+        title: 'Overview',
+        fields: [
+          { label: 'Status', value: mcpStatusLabel(server), tone: mcpStatusTone(server) },
+          { label: 'Tools', value: String(server.tools.length) },
+          ...(server.error
+            ? [
+                {
+                  label: 'Error',
+                  value: truncateToWidth(oneLine(server.error), ERROR_MAX),
+                  tone: 'danger' as const,
+                },
+              ]
+            : []),
+        ],
+      },
+      { title: 'Tools', lines: toolLines },
+    ],
+    actions: mcpDetailActions(),
+  };
+}
+
+/** 纯函数：MCP 未配置时的诚实空态 */
+export function disabledMcpView(): DetailView {
+  return {
+    kind: 'detail',
+    title: 'MCP servers',
+    badge: { text: 'disabled', tone: 'warn' },
+    sections: [
+      {
+        title: 'Not enabled',
+        lines: ['MCP is not enabled (no mcp_servers configured).'],
+      },
+    ],
+  };
+}
+
 function disabledMessage(): CommandResult {
   return {
     handled: true,
     output: '\nMCP is not enabled (no mcp_servers configured).\n',
+    view: mcpEnvelope(disabledMcpView()),
   };
 }
 
@@ -57,7 +177,12 @@ export async function runMcpCommand(args: string[], ctx: ReplContext): Promise<C
 
   if (subcommand === undefined) {
     try {
-      return { handled: true, output: formatMcpServers(await control.list()) };
+      const servers = await control.list();
+      return {
+        handled: true,
+        output: formatMcpServers(servers),
+        view: mcpEnvelope(buildMcpListView(servers)),
+      };
     } catch (error) {
       return {
         handled: true,
@@ -106,6 +231,77 @@ export async function runMcpCommand(args: string[], ctx: ReplContext): Promise<C
   }
 }
 
+/** 重新列出 servers（视图刷新/动作共用） */
+async function listServers(ctx: ReplContext): Promise<McpServerSummary[]> {
+  if (!ctx.mcp) throw new Error('mcp control is not available');
+  return ctx.mcp.list();
+}
+
+/**
+ * `/mcp` 视图动作：Enter 详情、r 重连（沿用子命令的 disabled/unknown 守卫）、g 刷新。
+ * 重连成功只回 toast，视图保持打开（按 g 刷新）。
+ */
+export async function runMcpViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  const name = invocation.selectionKey || invocation.viewKey || '';
+
+  if (invocation.actionId === 'refresh') {
+    try {
+      return {
+        handled: true,
+        view: mcpEnvelope(buildMcpListView(await listServers(ctx))),
+      };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to list MCP servers:\n${formatClassifiedError(classifyError(error))}\n`,
+      };
+    }
+  }
+
+  let servers: McpServerSummary[];
+  try {
+    servers = await listServers(ctx);
+  } catch (error) {
+    return {
+      handled: true,
+      output: `\nFailed to list MCP servers:\n${formatClassifiedError(classifyError(error))}\n`,
+    };
+  }
+  const target = servers.find((server) => server.name === name);
+  if (!target) {
+    return usage(name ? `No MCP server named "${name}".` : 'Select an MCP server first.');
+  }
+
+  if (invocation.actionId === 'inspect' || invocation.actionId === 'enter') {
+    return { handled: true, view: mcpEnvelope(buildMcpDetailView(target)) };
+  }
+
+  if (invocation.actionId === 'reconnect') {
+    if (target.status === 'disabled') {
+      return usage(`MCP server "${name}" is disabled (enabled: false).`);
+    }
+    try {
+      const summary = await (ctx.mcp as NonNullable<ReplContext['mcp']>).reconnect(name);
+      return {
+        handled: true,
+        output: `\nReconnected MCP server "${name}" (${summary.tools.length} tools).\n`,
+      };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to reconnect MCP server "${name}":\n${formatClassifiedError(
+          classifyError(error),
+        )}\n`,
+      };
+    }
+  }
+
+  return { handled: true, output: `\nUnknown /mcp view action "${invocation.actionId}".\n` };
+}
+
 export function mcpCommand(): CommandEntry {
   return {
     name: 'mcp',
@@ -114,6 +310,8 @@ export function mcpCommand(): CommandEntry {
     category: 'inspect',
     keywords: ['server', 'reconnect'],
     available: (ctx) => Boolean(ctx.mcp || ctx.rpc),
+    unavailableHint: 'not configured',
     run: (args, ctx) => runMcpCommand(args, ctx),
+    viewAction: (invocation, ctx) => runMcpViewAction(invocation, ctx),
   };
 }
