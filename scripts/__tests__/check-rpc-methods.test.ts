@@ -51,6 +51,6 @@ describe('check-rpc-methods', () => {
 
   it('matches the repository manifest and architecture table', async () => {
     expect(await checkRpcMethods(process.cwd())).toEqual([]);
-    expect(Object.keys(EXPECTED_METHODS).length).toBe(36);
+    expect(Object.keys(EXPECTED_METHODS).length).toBe(37);
   });
 });
