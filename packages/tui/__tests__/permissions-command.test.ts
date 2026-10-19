@@ -23,6 +23,15 @@ describe('/permissions', () => {
     expect(result.output).not.toContain('User config:');
   });
 
+  it('同时兼容 YAML snake_case（permission.auto_approve），否则只读回退会显示空列表', () => {
+    const ctx = makeCtx({
+      config: { permission: { auto_approve: ['edit'] } } as unknown as ReturnType<
+        typeof makeCtx
+      >['config'],
+    });
+    expect(configuredAutoApprove(ctx)).toEqual(['edit']);
+  });
+
   it('add/remove 调写回接口，并回读最新列表（失败会静默丢配置）', async () => {
     const entries = ['ask_user'];
     const calls: string[] = [];
