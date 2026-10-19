@@ -331,6 +331,35 @@ describe('R4 生命周期与事件（F7/F8）', () => {
     expect(count).toBe(1);
     await port.close();
   });
+
+  it('结果回投失败发 team.transport.error，不抛进成员 run', async () => {
+    const coreHost = new CoreInProcessRuntimeHost();
+    const port = new CoreHostAdapter(coreHost, {
+      deliverResult: async () => {
+        throw Object.assign(new Error('wire down'), { code: 'peer_unreachable' });
+      },
+    });
+    await port.spawn({
+      id: 'worker',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+    });
+    const task = message('owner', 'worker', 'task', 'hello');
+    await port.send(task);
+
+    const event = await waitFor(async () => {
+      return coreHost.events.getHistory().find((item) => item.type === 'team.transport.error');
+    });
+    expect(event.data).toMatchObject({
+      code: 'peer_unreachable',
+      replyTo: task.id,
+      from: 'worker',
+      to: 'owner',
+    });
+    expect((await port.status('worker')) as { state: string }).toMatchObject({ state: 'idle' });
+    await port.close();
+  });
 });
 
 describe('R4 工具面快照', () => {
@@ -348,11 +377,15 @@ describe('R4 工具面快照', () => {
       properties: Object.keys(tool.inputSchema.properties as Record<string, unknown>).sort(),
     }));
     expect(snapshot).toEqual([
-      { name: 'team_spawn', required: [], properties: ['model', 'name', 'systemPrompt'] },
-      { name: 'team_send', required: ['to', 'content'], properties: ['content', 'kind', 'to'] },
-      { name: 'team_inbox', required: [], properties: ['cursor', 'member'] },
-      { name: 'team_status', required: [], properties: ['member'] },
-      { name: 'team_cancel', required: ['member'], properties: ['member'] },
+      { name: 'team_spawn', required: [], properties: ['model', 'name', 'node', 'systemPrompt'] },
+      {
+        name: 'team_send',
+        required: ['to', 'content'],
+        properties: ['content', 'kind', 'node', 'to'],
+      },
+      { name: 'team_inbox', required: [], properties: ['cursor', 'member', 'node'] },
+      { name: 'team_status', required: [], properties: ['member', 'node'] },
+      { name: 'team_cancel', required: ['member'], properties: ['member', 'node'] },
     ]);
   });
 

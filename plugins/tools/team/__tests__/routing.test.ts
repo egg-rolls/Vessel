@@ -61,6 +61,25 @@ class FakeTransport implements Transport {
   }
 }
 
+interface RecordedRequest {
+  nodeId: string;
+  request: { requestId?: string; method: string; params?: unknown };
+}
+
+/** 带 request 能力的 fake transport（0.6 跨节点控制） */
+class RequestFakeTransport extends FakeTransport {
+  readonly calls: RecordedRequest[] = [];
+  responder: (nodeId: string, request: RecordedRequest['request']) => Promise<unknown> =
+    async () => {
+      throw new Error('no responder');
+    };
+
+  async request<T>(nodeId: string, request: RecordedRequest['request']): Promise<T> {
+    this.calls.push({ nodeId, request });
+    return (await this.responder(nodeId, request)) as T;
+  }
+}
+
 interface NodeFixture {
   coreHost: CoreInProcessRuntimeHost;
   local: CoreHostAdapter;
@@ -69,9 +88,8 @@ interface NodeFixture {
 }
 
 /** 创建一个节点：core Host + CoreHostAdapter + RoutingTeamHost */
-function createNode(nodeId: string): NodeFixture {
+function createNode(nodeId: string, transport: FakeTransport = new FakeTransport()): NodeFixture {
   const coreHost = new CoreInProcessRuntimeHost();
-  const transport = new FakeTransport();
   const holder: { routing?: RoutingTeamHost } = {};
   const local = new CoreHostAdapter(coreHost, {
     deliverResult: (message) => holder.routing?.deliverResult(message) ?? Promise.resolve(),
@@ -140,6 +158,34 @@ function peer(nodeId: string, agentIds: string[]): PeerInfo {
     nodeId,
     agents: agentIds.map((id) => ({ id, state: 'idle', toolNames: [] })),
     protocol: 1,
+  };
+}
+
+/** gateway wire status */
+function wireStatus(id: string, state = 'idle'): Record<string, unknown> {
+  return { id, state, tool_names: [] };
+}
+
+/** gateway wire message */
+function wireMessage(id: string, content = 'hi'): Record<string, unknown> {
+  return {
+    id,
+    from: 'owner',
+    to: 'worker',
+    kind: 'message',
+    content,
+    ts: Date.now(),
+  };
+}
+
+/** 构造可本地 spawn 的 spec */
+function spec(overrides: Partial<Parameters<RoutingTeamHost['spawn']>[0]> = {}) {
+  return {
+    name: 'worker',
+    provider: new MemoryLLMProvider(),
+    model: 'test-model',
+    pluginHost: new MemoryPluginHost(),
+    ...overrides,
   };
 }
 
@@ -229,14 +275,11 @@ describe('RoutingTeamHost 远端路径', () => {
     );
   });
 
-  it('远端 inbox/status 在 0.2 返回稳定错误', async () => {
+  it('transport 无 request 时远端 inbox/status/spawn 返回 remote_unsupported', async () => {
     const node = createNode('nodeA');
-    await expect(node.routing.inbox('nodeB:worker')).rejects.toThrow(
-      /remote inbox is not supported in 0.2/,
-    );
-    await expect(node.routing.status('nodeB:worker')).rejects.toThrow(
-      /remote status is not supported in 0.2/,
-    );
+    await expect(node.routing.inbox('nodeB:worker')).rejects.toThrow(/remote_unsupported/);
+    await expect(node.routing.status('nodeB:worker')).rejects.toThrow(/remote_unsupported/);
+    await expect(node.routing.spawn(spec(), 'nodeB')).rejects.toThrow(/remote_unsupported/);
   });
 
   it('失败隔离：peers 失败不影响本机；transport 失败返回稳定错误', async () => {
@@ -261,6 +304,132 @@ describe('RoutingTeamHost 远端路径', () => {
     await expect(
       node.routing.send(message('owner', 'nodeB:worker', 'message', 'x')),
     ).rejects.toThrow(/transport send failed: wire down/);
+  });
+});
+
+describe('RoutingTeamHost 远端控制（0.6）', () => {
+  it('远端 spawn 走 team.spawn；本机 spawn 不发 request', async () => {
+    const transport = new RequestFakeTransport();
+    transport.responder = async () => ({ protocol: 1, agent: wireStatus('worker') });
+    const node = createNode('nodeA', transport);
+
+    await node.routing.spawn(spec());
+    expect(transport.calls).toHaveLength(0);
+
+    const status = await node.routing.spawn(spec({ systemPrompt: 'be brief' }), 'nodeB');
+    expect(transport.calls).toHaveLength(1);
+    expect(transport.calls[0]).toMatchObject({
+      nodeId: 'nodeB',
+      request: {
+        method: 'team.spawn',
+        params: { name: 'worker', model: 'test-model', systemPrompt: 'be brief' },
+      },
+    });
+    expect(status).toMatchObject({
+      id: 'worker',
+      state: 'idle',
+      toolNames: [],
+      nodeId: 'nodeB',
+    });
+  });
+
+  it('远端 inbox 分页映射 wire 消息并带 nodeId', async () => {
+    const transport = new RequestFakeTransport();
+    transport.responder = async () => ({
+      protocol: 1,
+      agent_id: 'worker',
+      messages: [wireMessage('m1')],
+      cursor: 'c2',
+    });
+    const node = createNode('nodeA', transport);
+
+    const page = await node.routing.inbox('nodeB:worker', 'c1');
+    expect(transport.calls[0]).toMatchObject({
+      nodeId: 'nodeB',
+      request: { method: 'team.inbox', params: { agentId: 'worker', cursor: 'c1' } },
+    });
+    expect(page.cursor).toBe('c2');
+    expect(page.messages[0]).toMatchObject({ id: 'm1', content: 'hi', nodeId: 'nodeB' });
+  });
+
+  it('远端单成员与整节点 status', async () => {
+    const transport = new RequestFakeTransport();
+    let response: unknown = { protocol: 1, agent: wireStatus('worker', 'running') };
+    transport.responder = async () => response;
+    const node = createNode('nodeA', transport);
+
+    const one = await node.routing.status('nodeB:worker');
+    expect(one).toMatchObject({ id: 'worker', state: 'running', nodeId: 'nodeB' });
+    expect(transport.calls[0]?.request).toMatchObject({
+      method: 'team.status',
+      params: { agentId: 'worker' },
+    });
+
+    response = { protocol: 1, agents: [wireStatus('worker'), wireStatus('other')] };
+    const all = (await node.routing.status(undefined, 'nodeB')) as Array<{
+      id: string;
+      nodeId?: string;
+    }>;
+    expect(all.map((item) => item.id)).toEqual(['worker', 'other']);
+    expect(all.every((item) => item.nodeId === 'nodeB')).toBe(true);
+    expect(transport.calls[1]?.request).toMatchObject({ method: 'team.status.list' });
+  });
+
+  it('status/inbox 超时重试一次并复用 requestId；spawn 不重试', async () => {
+    const transport = new RequestFakeTransport();
+    let calls = 0;
+    transport.responder = async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('slow'), { code: 'timeout' });
+      return { protocol: 1, agents: [] };
+    };
+    const node = createNode('nodeA', transport);
+    expect(await node.routing.status(undefined, 'nodeB')).toEqual([]);
+    expect(calls).toBe(2);
+    expect(transport.calls[0]?.request.requestId).toBe(transport.calls[1]?.request.requestId);
+
+    calls = 0;
+    transport.responder = async () => {
+      calls += 1;
+      if (calls === 1) throw Object.assign(new Error('slow'), { code: 'timeout' });
+      return { protocol: 1, agent_id: 'worker', messages: [], cursor: '' };
+    };
+    await node.routing.inbox('nodeB:worker');
+    expect(calls).toBe(2);
+
+    calls = 0;
+    transport.responder = async () => {
+      calls += 1;
+      throw Object.assign(new Error('slow'), { code: 'timeout' });
+    };
+    await expect(node.routing.spawn(spec(), 'nodeB')).rejects.toThrow(/timeout/);
+    expect(calls).toBe(1);
+  });
+
+  it('错误码归一：已知码保留，未知码按 peer_unreachable', async () => {
+    const transport = new RequestFakeTransport();
+    const node = createNode('nodeA', transport);
+    let code: string | undefined;
+
+    transport.responder = async () => {
+      throw Object.assign(new Error('denied'), { code: 'unauthorized' });
+    };
+    try {
+      await node.routing.status('nodeB:worker');
+    } catch (error) {
+      code = (error as { code?: string }).code;
+    }
+    expect(code).toBe('unauthorized');
+
+    transport.responder = async () => {
+      throw Object.assign(new Error('weird'), { code: 'something_else' });
+    };
+    try {
+      await node.routing.inbox('nodeB:worker');
+    } catch (error) {
+      code = (error as { code?: string }).code;
+    }
+    expect(code).toBe('peer_unreachable');
   });
 });
 

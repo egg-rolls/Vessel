@@ -23,13 +23,15 @@ import type { AgentSpec, AgentStatus, InboxPage, TeamMessage } from './host.js';
 
 /** team 工具依赖的端口（与 0.1 插件 RuntimeHost 同形） */
 export interface TeamHostPort {
-  spawn(spec: AgentSpec): Promise<AgentStatus>;
+  /** node 由路由层消费；本机适配器忽略。0.6 additive */
+  spawn(spec: AgentSpec, node?: string): Promise<AgentStatus>;
   send(message: TeamMessage): Promise<void>;
   /** 直接投递到邮箱（不做成员校验；用于结果/外部消息） */
   deliver(message: TeamMessage): Promise<void>;
   inbox(id: string, cursor?: string): Promise<InboxPage>;
   cancel(id: string): Promise<void>;
-  status(id?: string): Promise<AgentStatus | AgentStatus[]>;
+  /** node 省略时为本机；node 存在且成员 id 为本机简写时按该节点解析。0.6 additive */
+  status(id?: string, node?: string): Promise<AgentStatus | AgentStatus[]>;
   close(): Promise<void>;
 }
 
@@ -258,8 +260,25 @@ export class CoreHostAdapter implements TeamHostPort {
       } else {
         await this.host.send(toCoreMessage(result));
       }
-    } catch {
-      // 发送者地址不可达（例如跨进程 transport 失败）：结果丢弃，不影响成员状态
+    } catch (error) {
+      // 发送者地址不可达（例如跨进程 transport 失败）：结果丢弃，不影响成员状态。
+      // 0.6：用既有 team.transport.error 暴露，父端可通过 inbox/status 对账。
+      const code =
+        error !== null &&
+        typeof error === 'object' &&
+        typeof (error as { code?: unknown }).code === 'string'
+          ? (error as { code: string }).code
+          : 'peer_unreachable';
+      this.publish('team.transport.error', {
+        code,
+        message: errorText(error),
+        messageId: result.id,
+        replyTo: request.id,
+        from: result.from,
+        to: result.to,
+        ...(result.to.includes(':') ? { nodeId: result.to.split(':')[0] } : {}),
+        failed,
+      });
     }
     this.publish('team.message.received', {
       messageId: request.id,

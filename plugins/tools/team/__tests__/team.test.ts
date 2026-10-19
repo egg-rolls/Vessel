@@ -5,17 +5,49 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  type AgentMessage,
   InProcessRuntimeHost as CoreInProcessRuntimeHost,
   type LLMProvider,
   MemoryEventStream,
   MemoryLLMProvider,
   MemoryPluginHost,
+  type PeerInfo,
   type ToolContext,
   type ToolDefinition,
+  type Transport,
+  type Unsubscribe,
 } from '@vessel/core';
 import { CoreHostAdapter } from '../src/core-adapter';
 import type { TeamMessage } from '../src/host';
 import { createTeamPlugin, disabledTeamPlugin } from '../src/index';
+
+interface FakeRequest {
+  requestId?: string;
+  method: string;
+  params?: unknown;
+}
+
+/** 带 request 的 fake transport：记录方法名，响应由测试注入 */
+class RequestTransport implements Transport {
+  readonly kind = 'in-process' as const;
+  readonly methods: string[] = [];
+  responder: (nodeId: string, request: FakeRequest) => Promise<unknown> = async () => {
+    throw new Error('no responder');
+  };
+
+  async send(_message: AgentMessage): Promise<void> {}
+  receive(_handler: (message: AgentMessage) => void | Promise<void>): Unsubscribe {
+    return () => {};
+  }
+  async peers(): Promise<PeerInfo[]> {
+    return [];
+  }
+  async request<T>(nodeId: string, request: FakeRequest): Promise<T> {
+    this.methods.push(request.method);
+    return (await this.responder(nodeId, request)) as T;
+  }
+  async close(): Promise<void> {}
+}
 
 /** 轮询等待条件成立 */
 async function waitFor<T>(probe: () => Promise<T | undefined>, timeoutMs = 3000): Promise<T> {
@@ -246,5 +278,57 @@ describe('team 工具面', () => {
     const spawned = JSON.parse(spawnRaw) as { id: string };
     const result = await toolOf(host, 'team_cancel').handler({ member: spawned.id }, makeContext());
     expect(result).toContain('cancelled');
+  });
+
+  it('node 参数把 spawn/inbox/status 路由到远端', async () => {
+    const transport = new RequestTransport();
+    transport.responder = async (_nodeId, request) => {
+      switch (request.method) {
+        case 'team.spawn':
+          return { protocol: 1, agent: { id: 'worker', state: 'idle', tool_names: [] } };
+        case 'team.inbox':
+          return {
+            protocol: 1,
+            agent_id: 'worker',
+            messages: [
+              {
+                id: 'm1',
+                from: 'owner',
+                to: 'worker',
+                kind: 'message',
+                content: 'hi',
+                ts: Date.now(),
+              },
+            ],
+            cursor: 'c1',
+          };
+        case 'team.status.list':
+          return { protocol: 1, agents: [{ id: 'worker', state: 'idle', tool_names: [] }] };
+        default:
+          throw new Error(`unexpected method: ${request.method}`);
+      }
+    };
+    const host = teamHost({
+      providerFactory: () => new MemoryLLMProvider(),
+      model: 'test-model',
+      transport,
+      nodeId: 'nodeA',
+    });
+
+    const spawned = JSON.parse(
+      await toolOf(host, 'team_spawn').handler({ name: 'worker', node: 'nodeB' }, makeContext()),
+    ) as { nodeId?: string };
+    expect(spawned.nodeId).toBe('nodeB');
+
+    const page = JSON.parse(
+      await toolOf(host, 'team_inbox').handler({ member: 'worker', node: 'nodeB' }, makeContext()),
+    ) as { messages: Array<{ nodeId?: string }> };
+    expect(page.messages[0]?.nodeId).toBe('nodeB');
+
+    const list = JSON.parse(
+      await toolOf(host, 'team_status').handler({ node: 'nodeB' }, makeContext()),
+    ) as Array<{ nodeId?: string }>;
+    expect(list[0]?.nodeId).toBe('nodeB');
+    expect(transport.methods).toEqual(['team.spawn', 'team.inbox', 'team.status.list']);
   });
 });
