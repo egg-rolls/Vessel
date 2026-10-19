@@ -15,12 +15,12 @@
 import type { EventStream } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { HookType } from '../types/hook.js';
-import type { PluginHost } from '../types/plugin.js';
+import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message } from '../types/provider.js';
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
-import type { GuardrailRunner } from './guardrail-runner.js';
-import type { HookRunner } from './hook-runner.js';
-import type { PermissionPolicy } from './permission-policy.js';
+import { GuardrailRunner } from './guardrail-runner.js';
+import { HookRunner } from './hook-runner.js';
+import { PermissionPolicy } from './permission-policy.js';
 
 export interface ToolPipelineDeps {
   pluginHost: PluginHost;
@@ -232,4 +232,30 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       return { ok: true, input: args, content: result };
     },
   };
+}
+
+/** 便捷工厂依赖：内部构造三个编排器，供 harness 装配层使用。 */
+export interface ToolPipelineFactoryDeps {
+  pluginHost: PluginHost;
+  events: EventStream;
+  /** 默认权限策略（未声明 checkPermission 的工具） */
+  permission?: RuntimePermissionConfig;
+  tenantId?: string;
+}
+
+/**
+ * 基于 PluginHost/EventStream 构造完整工具执行管道。
+ *
+ * 与 `createToolPipeline` 的区别：编排器（PermissionPolicy / GuardrailRunner /
+ * HookRunner）由本函数按同一 PluginHost/events/tenant 构造，调用方只需提供装配层依赖。
+ */
+export function createToolPipelineFor(deps: ToolPipelineFactoryDeps): ToolPipeline {
+  return createToolPipeline({
+    pluginHost: deps.pluginHost,
+    events: deps.events,
+    permission: new PermissionPolicy(deps.events, deps.permission, deps.tenantId),
+    guardrails: new GuardrailRunner(deps.pluginHost, deps.events, deps.tenantId),
+    hooks: new HookRunner(deps.pluginHost, deps.events, deps.tenantId),
+    ...(deps.tenantId !== undefined ? { tenantId: deps.tenantId } : {}),
+  });
 }

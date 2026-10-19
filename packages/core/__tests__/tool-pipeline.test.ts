@@ -4,7 +4,11 @@ import { GuardrailRunner } from '../src/runtime/guardrail-runner';
 import { HookRunner } from '../src/runtime/hook-runner';
 import { PermissionPolicy } from '../src/runtime/permission-policy';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
-import { createToolPipeline, type ToolPipeline } from '../src/runtime/tool-pipeline';
+import {
+  createToolPipeline,
+  createToolPipelineFor,
+  type ToolPipeline,
+} from '../src/runtime/tool-pipeline';
 import { GuardrailStage } from '../src/types/guardrail';
 import { HookType } from '../src/types/hook';
 import type { ToolCall, ToolDefinition } from '../src/types/tool';
@@ -398,5 +402,54 @@ describe('tool pipeline (0.8.2 Wave 2B1)', () => {
       content: 'Tool "missing" not found',
       error: 'Tool "missing" not found',
     });
+  });
+});
+
+describe('createToolPipelineFor', () => {
+  it('executes tools with the default allow policy when no guardrails are registered', async () => {
+    const host = new MemoryPluginHost();
+    host.registerTool(
+      makeTool({
+        name: 'noop',
+        handler: async () => 'ok',
+      }),
+    );
+
+    const pipeline = createToolPipelineFor({
+      pluginHost: host,
+      events: new MemoryEventStream(),
+    });
+    const result = await execute(pipeline, call('noop'));
+
+    expect(result).toEqual({ ok: true, input: {}, content: 'ok' });
+  });
+
+  it('blocks when a ToolCall guardrail denies', async () => {
+    let called = false;
+    const host = new MemoryPluginHost();
+    host.registerTool(
+      makeTool({
+        name: 'noop',
+        handler: async () => {
+          called = true;
+          return 'ok';
+        },
+      }),
+    );
+    host.registerGuardrail({
+      name: 'deny',
+      stage: GuardrailStage.ToolCall,
+      check: async () => ({ allowed: false, reason: 'policy says no' }),
+    });
+
+    const pipeline = createToolPipelineFor({
+      pluginHost: host,
+      events: new MemoryEventStream(),
+    });
+    const result = await execute(pipeline, call('noop'));
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toBe('Tool call blocked by guardrail: policy says no');
+    expect(called).toBe(false);
   });
 });

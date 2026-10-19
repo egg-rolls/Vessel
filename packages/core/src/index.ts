@@ -46,9 +46,11 @@ export {
 export {
   AgentRuntime,
   createToolPipeline,
+  createToolPipelineFor,
   MemoryPluginHost,
   type ToolPipeline,
   type ToolPipelineDeps,
+  type ToolPipelineFactoryDeps,
   type ToolPipelineOptions,
   type ToolPipelineResult,
   type ToolPipelineStages,
