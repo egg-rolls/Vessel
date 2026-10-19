@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  formatConfigSources,
+  formatConfigSummary,
   parseConfigArgs,
   readConfigSnapshot,
   runConfigCommand,
