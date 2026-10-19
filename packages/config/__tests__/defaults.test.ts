@@ -100,6 +100,42 @@ describe('环境变量', () => {
     });
     expect(config.provider?.model).toBe('env-model');
   });
+
+  it('只设 VESSEL_MODEL 时保留项目配置的 provider.name（A3）', async () => {
+    process.env.VESSEL_MODEL = 'env-model';
+    const configPath = tmpYaml('provider:\n  name: anthropic\n  model: file-model\n');
+    const { config } = await loadConfig({
+      configPath,
+      userConfigPath: missingPath(),
+    });
+    expect(config.provider?.name).toBe('anthropic');
+    expect(config.provider?.model).toBe('env-model');
+  });
+
+  it('VESSEL_BASE_URL / VESSEL_PROVIDER_API_KEY 不重置 provider.name（A3）', async () => {
+    process.env.VESSEL_BASE_URL = 'https://example.com';
+    process.env.VESSEL_PROVIDER_API_KEY = 'sk-provider';
+    const configPath = tmpYaml('provider:\n  name: anthropic\n  model: claude-x\n');
+    const { config } = await loadConfig({
+      configPath,
+      userConfigPath: missingPath(),
+    });
+    expect(config.provider?.name).toBe('anthropic');
+    expect(config.provider?.baseUrl).toBe('https://example.com');
+    expect(config.provider?.apiKey).toBe('sk-provider');
+  });
+
+  it('显式 VESSEL_PROVIDER 才覆盖 provider.name（A3）', async () => {
+    process.env.VESSEL_PROVIDER = 'openai';
+    process.env.VESSEL_MODEL = 'env-model';
+    const configPath = tmpYaml('provider:\n  name: anthropic\n  model: file-model\n');
+    const { config } = await loadConfig({
+      configPath,
+      userConfigPath: missingPath(),
+    });
+    expect(config.provider?.name).toBe('openai');
+    expect(config.provider?.model).toBe('env-model');
+  });
 });
 
 describe('未知键与新增 schema', () => {

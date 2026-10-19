@@ -106,6 +106,45 @@ describe('runResumeList', () => {
     }
   });
 
+  it('默认布局：从 <data_dir>/tenants/<tenant>/runs 列出（A4）', async () => {
+    const dir = tmpDir();
+    try {
+      const dataDir = path.join(dir, 'data');
+      const runsDir = path.join(dataDir, 'tenants', 'work', 'runs');
+      const store = new FileRunStore({ dir: runsDir, tenantId: 'work' });
+      await store.save(checkpoint({ run_id: 'tenant-run', tenant_id: 'work' }));
+
+      const paths = writeConfig(
+        dir,
+        'provider:\n  name: openai\n  model: gpt-4\ndurable:\n  enabled: true\n',
+      );
+      const result = await capture(() =>
+        runResumeList({
+          ...paths,
+          tenantId: 'work',
+          env: { VESSEL_DATA_DIR: dataDir },
+        }),
+      );
+
+      expect(result.code).toBe(0);
+      expect(result.out).toContain('Interrupted runs (1, newest first):');
+      expect(result.out).toContain('tenant-run');
+
+      // 其它 tenant 不读取该目录。
+      const other = await capture(() =>
+        runResumeList({
+          ...paths,
+          tenantId: 'other',
+          env: { VESSEL_DATA_DIR: dataDir },
+        }),
+      );
+      expect(other.code).toBe(0);
+      expect(other.out).toContain('No interrupted runs.');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('只列出 interrupted，按 updated_at 倒序', async () => {
     const dir = tmpDir();
     try {

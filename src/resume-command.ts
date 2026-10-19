@@ -6,6 +6,7 @@
  */
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
+import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { previewOf } from './durable-wiring';
 import { closeRunStore, createRunStore } from './run-store-factory';
 
@@ -24,7 +25,7 @@ function clip(value: string, width: number): string {
 }
 
 export async function runResumeList(options: ConfigLoadOptions = {}): Promise<number> {
-  const { config, validation } = await loadConfig(options);
+  const { config, validation, tenantId } = await loadConfig(options);
 
   for (const warning of validation.warnings) console.warn(`⚠ ${warning.message}`);
   if (validation.errors.length > 0) {
@@ -37,7 +38,13 @@ export async function runResumeList(options: ConfigLoadOptions = {}): Promise<nu
     return 0;
   }
 
-  const store = createRunStore(config);
+  // A4：与执行面一致 —— 未显式 durable.path 时使用
+  // `<data_dir>/tenants/<id>/runs`，而不是回退到 `~/.vessel/runs`。
+  const tenantPaths = resolveTenantPaths(resolveDataDir(config), tenantId);
+  const store = createRunStore(config, {
+    tenantRunsDir: tenantPaths.runs_dir,
+    tenantId,
+  });
   if (!store) {
     console.log('Durable runs are not enabled (durable.enabled: false).');
     return 0;

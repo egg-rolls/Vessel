@@ -20,6 +20,7 @@ import type {
   ConfigSources,
   ConfigValidationError,
   ConfigValidationResult,
+  ProviderConfig,
   UserConfig,
   VesselConfig,
 } from './types.js';
@@ -224,33 +225,38 @@ export function loadConfigFromEnv(
     config.apiKey = providerApiKey;
   }
 
-  if (providerName || providerModel || providerBaseUrl || providerApiKey) {
-    config.provider = {
-      name: providerName ?? 'openai',
-      model: providerModel,
-      baseUrl: providerBaseUrl,
-      apiKey: providerApiKey ?? apiKey,
-    };
-  }
+  // A3：`name` 只在显式 VESSEL_PROVIDER 时写入。这里返回的是 env 层，
+  // 后续与 project/user/default 深合并；若为其它字段凭空补 `openai`，
+  // 会把项目配置里的 provider.name（如 anthropic）覆盖掉。
+  const hasProviderFields =
+    Boolean(providerName) ||
+    Boolean(providerModel) ||
+    Boolean(providerBaseUrl) ||
+    Boolean(providerApiKey);
+  const envProvider: Partial<ProviderConfig> = {};
+  if (providerName) envProvider.name = providerName;
+  if (providerModel) envProvider.model = providerModel;
+  if (providerBaseUrl) envProvider.baseUrl = providerBaseUrl;
+  // 兼容 0.x：provider 级 Key 之外的顶层 VESSEL_API_KEY 也回填到 provider。
+  const providerEnvApiKey = providerApiKey ?? apiKey;
+  if (hasProviderFields && providerEnvApiKey) envProvider.apiKey = providerEnvApiKey;
 
   // Temperature
   const temperature = getEnvVar(env, `${prefix}TEMPERATURE`);
   if (temperature) {
     const temp = Number.parseFloat(temperature);
-    if (!Number.isNaN(temp)) {
-      if (!config.provider) config.provider = { name: 'openai' };
-      config.provider.temperature = temp;
-    }
+    if (!Number.isNaN(temp)) envProvider.temperature = temp;
   }
 
   // Max tokens
   const maxTokens = getEnvVar(env, `${prefix}MAX_TOKENS`);
   if (maxTokens) {
     const tokens = Number.parseInt(maxTokens, 10);
-    if (!Number.isNaN(tokens)) {
-      if (!config.provider) config.provider = { name: 'openai' };
-      config.provider.maxTokens = tokens;
-    }
+    if (!Number.isNaN(tokens)) envProvider.maxTokens = tokens;
+  }
+
+  if (Object.keys(envProvider).length > 0) {
+    config.provider = envProvider as ProviderConfig;
   }
 
   // 飞书凭据（0.4）：env 优先于配置文件；空串视为未设置，不覆盖文件值。

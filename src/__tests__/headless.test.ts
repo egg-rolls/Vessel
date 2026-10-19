@@ -47,6 +47,24 @@ it('headless --run：stdout 只放响应，exit 0', async () => {
   expect(stdout.trim()).toBe('Echo: hello');
 });
 
+it('--serve --run：run 结束后统一清理，不残留 tenant 锁（A2）', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-serve-run-'));
+  try {
+    const dataDir = path.join(tmpDir, 'data');
+    const { exitCode } = await runCli(
+      ['--run', 'hello', '--serve', '0'],
+      { VESSEL_MOCK: '1', VESSEL_DATA_DIR: dataDir },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(0);
+    // 锁由 bootstrap 的 shutdown 释放；提前 process.exit 会留下该文件。
+    expect(fs.existsSync(path.join(dataDir, 'tenants', 'default', '.lock'))).toBe(false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 it('headless --pipe：从 stdin 读输入', async () => {
   const { stdout, exitCode } = await runCli(['--pipe'], { VESSEL_MOCK: '1' }, 'from pipe');
   expect(exitCode).toBe(0);
