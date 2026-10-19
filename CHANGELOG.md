@@ -3,6 +3,56 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.8.0] - 2026-10-19
+
+> 0.8 Wave 1 结构收口（基于 `release/0.8`，未发布）：只做真实行为缺陷、core 失败隔离与工具安全边界，不做 Gateway 拆分等大重构。版本号由 1 在集成线统一写入。
+
+### Added
+
+- **RunExecution（core）**：新增 `RunExecution` 类型，run 级状态（run id / session / branch / 计时 / usage / context）从 `AgentRuntime` 实例字段收敛到每次执行；`run()` 与 `resume()` 共用。
+- **单 run 守卫**：新增 `RunAlreadyRunningError`（`code: 'run_already_running'`，继承 `RunResumeError`，从根入口与 `@vessel/core/session` 导出）；同一 runtime 已有 active run 时，新的 `run()` / `resume()` 立即失败。
+- **统一终态**：`finalizeRun()` 成为 `run()` / `resume()` 唯一终态路径；新增 `run.finalize.failed` 事件（终态持久化失败时保留原始错误）。
+- **失败隔离**：新增 `hook.error` 与 `guardrail.error` 事件；单个 hook 抛错发事件后继续执行，guardrail 抛错按 fail-closed 返回 `guardrail_error`。
+- **本地 RPC subscribe**：装配层把 `LocalRpcClient.subscribe()` 桥接到 `runtimeEvents`（只读 `events.event` 转发）。
+- **basic-tools 路径边界**：内置敏感路径 denylist；插件配置 `allowed_roots`（越界 `ask`）与 `deny_paths`（追加）；`read` / `bash cwd` 按 realpath 判定。
+- **Web seq 回退重放**：`hello.latest_seq < currentSeq` 时以 `since=0` 重连并从头重放；新增 `GatewayClient.restart` 与纯函数 `planHelloSeq`。
+- **durable REST 显式 tenant**：admin 可用 query `tenant_id` 或 `X-Vessel-Tenant` 指定 tenant；两者不一致返回 400。
+- **文档**：新增 [ADR-054](docs/adr/ADR-054-run-execution-and-failure-isolation.md) / [ADR-055](docs/adr/ADR-055-tool-path-boundaries.md)，同步 ARCHITECTURE / AGENTS / SECURITY。
+
+### Changed
+
+- `resume()` 的用户取消改为 checkpoint `cancelled` + `run.cancelled`，与 `run()` 一致；不再发 `run.failed`。
+- `OnError` hook 变为 best-effort：hook 自身抛错不替换原始错误，也不跳过 session / checkpoint 写入。
+- `VESSEL_MODEL` / `VESSEL_BASE_URL` / `VESSEL_PROVIDER_API_KEY` 只合并对应字段；只有显式 `VESSEL_PROVIDER` 才覆盖 `provider.name`（修复项目 `provider.name: anthropic` 被改成 `openai`）。
+- headless 不再提前 `process.exit`：先统一执行 gateway / tenant / transport / shutdown 清理，再设置退出码。
+- `--resume-run` 读取 `<data_dir>/tenants/<id>/runs`，与执行面一致。
+- `createRunStore` 透传 `tenantId`；`FileRunStore.delete()` 在 tenant 模式下先校验归属，foreign / 缺失 no-op。
+- durable REST 的 tenant 解析与 RPC `runs.resume` 的 `ctx.tenantId` 对齐（admin 显式指定，其余按 principal）。
+
+### Fixed
+
+- 本地 REPL 的 `/runs resume`、`/workflows run|resume` 因缺少事件订阅而挂起。
+- `--serve --run` 退出时跳过清理，残留 tenant `.lock`。
+- 同一 runtime 并发 `run()` 互相污染 usage / session / branch。
+- Web 在 gateway 重启（seq 回退）后丢失重放事件。
+- durable REST 忽略 admin 的显式 tenant。
+- `coreToJob` 随 run 数量无界增长（终态与 `trimRuns` 时清理）。
+- `--resume-run` 在默认 tenant 布局下列不出 run。
+
+### Security
+
+- `read` / `bash cwd` 内置 denylist 硬拒绝 `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`，用于降低提示注入诱导的凭据读取；命中 `deny` 而非 `ask`。
+- `allowed_roots` / `deny_paths` 为 opt-in；路径比较基于 realpath（含最近已存在祖先），`..` 与符号链接不能绕过。
+- **明确边界**：这不是沙箱。`bash` 只校验 `cwd`，命令本身仍可访问其它路径；`edit` 未纳入路径边界。真正的隔离仍需沙箱类插件与受限运行环境。
+
+### Known limitations
+
+- 单 run 守卫是进程内、每 runtime 的；跨进程并发仍依赖 tenant 写锁与 durable 唯一写者约定。
+- `finalizeRun` 持久化失败只发 `run.finalize.failed`，不重试、不补偿。
+- 内置 denylist 不能通过配置移除，只能追加。
+- Web seq 回退会清空本地事件存储并全量重放，成本随事件数增长。
+- 0.8 Wave 1 不包含 Gateway 拆分、统一工具执行管道、插件生命周期 v2、协议 schema、fsync/损坏恢复、CLI 命令注册表与配置单一 resolver（留在 Wave 2）。
+
 ## [0.7.1] - 2026-10-19
 
 > 0.7 的 P0 加固补丁线（基于 `release/0.7`）。与 0.5 / 0.6 / 0.7 一样只做发布干跑，不 tag、不 publish、不合并 `main`。

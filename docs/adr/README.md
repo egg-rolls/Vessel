@@ -68,6 +68,8 @@
 | 051 | 远程控制面（非回环 HTTPS 与 token/CA） | accepted | 2026-10-19 | remote, gateway, tls, client | [ADR-051-remote-control-plane.md](ADR-051-remote-control-plane.md) |
 | 052 | 跨节点 transport 与 team 调度 | accepted | 2026-10-19 | transport, multi-node, team, events | [ADR-052-cross-node-transport.md](ADR-052-cross-node-transport.md) |
 | 053 | 远程安全基线 | accepted | 2026-10-19 | security, tls, cors, tenancy | [ADR-053-remote-security-baseline.md](ADR-053-remote-security-baseline.md) |
+| 054 | RunExecution 与失败隔离 | accepted | 2026-10-19 | runtime, correctness, hooks, guardrails | [ADR-054-run-execution-and-failure-isolation.md](ADR-054-run-execution-and-failure-isolation.md) |
+| 055 | 工具路径边界 | accepted | 2026-10-19 | security, tools, permissions, filesystem | [ADR-055-tool-path-boundaries.md](ADR-055-tool-path-boundaries.md) |
 
 ## 编写约定
 
