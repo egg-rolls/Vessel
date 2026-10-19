@@ -585,7 +585,7 @@ function InkRepl({ ctx }: InkReplProps) {
             currentSessionId={state.currentSessionId}
             status={ui.resumeStatus === 'idle' ? 'loading' : ui.resumeStatus}
             error={ui.resumeError}
-            maxRows={layout.pickerMaxRows}
+            maxRows={layout.mode === 'normal' ? undefined : layout.pickerMaxRows}
             onRetry={() => dispatch({ type: 'resumePickerRetry' })}
             onSelect={async (id) => {
               try {
