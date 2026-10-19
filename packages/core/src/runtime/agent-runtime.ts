@@ -35,6 +35,25 @@ function isToolCall(value: unknown): value is ToolCall {
   return typeof fnRecord.name === 'string' && typeof fnRecord.arguments === 'string';
 }
 
+/** 预处理后的工具调用（0.6.1 P1：安全批次并发） */
+interface PreparedToolCall {
+  toolCall: ToolCall;
+  toolName: string;
+  args: unknown;
+  startedAt: number;
+  /** 已定性的失败（guardrail 阻断 / 非法 JSON）；不执行工具，直接折回 */
+  failureMessage?: string;
+}
+
+/** 单个工具调用的执行结果（上下文按原顺序写回） */
+interface ToolExecutionOutcome {
+  toolCall: ToolCall;
+  /** 实际使用的输入（BeforeTool hook 改写后）；供 AfterTool 读取 */
+  input: unknown;
+  ok: boolean;
+  content: string;
+}
+
 /**
  * Agent Runtime
  * 核心运行时，实现 tool-calling loop。
@@ -60,6 +79,8 @@ export class AgentRuntime {
   private hooks: HookRunner;
   /** durable run 检查点（0.3）；缺省不写、零开销 */
   private readonly runStore?: RunStore;
+  /** E1：按插件名提供的安装配置 */
+  private readonly pluginConfigs?: Record<string, Record<string, unknown>>;
   private readonly agentId?: string;
   /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
   private readonly tenantId?: string;
@@ -79,6 +100,7 @@ export class AgentRuntime {
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
     this.runStore = opts.runStore;
+    this.pluginConfigs = opts.pluginConfigs;
     this.agentId = opts.agentId;
     this.tenantId = opts.tenantId;
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
@@ -123,7 +145,11 @@ export class AgentRuntime {
    */
   private async installPlugin(plugin: Plugin): Promise<void> {
     try {
-      const result = plugin.install(this.pluginHost);
+      const config = this.pluginConfigs?.[plugin.name];
+      const result =
+        config === undefined
+          ? plugin.install(this.pluginHost)
+          : plugin.install(this.pluginHost, { config });
       if (result instanceof Promise) {
         await result; // 如果失败，让 async 构造函数抛出
       }
@@ -524,16 +550,24 @@ export class AgentRuntime {
         throw new Error('Usage limits exceeded');
       }
 
+      // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
+      // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
+      await this.context.autoCompactAsync?.();
+
       // 执行 BeforeLlm 钩子（hook 可往 ctx.systemPrompt 注入内容：skills / memory）
       // 用 this.systemPrompt 作基底，hook 链 prepend 注入
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
       if (this.systemPrompt) {
         hookCtx.systemPrompt = this.systemPrompt;
       }
-      await this.hooks.run(HookType.BeforeLlm, hookCtx);
+      const beforeLlm = await this.hooks.run(HookType.BeforeLlm, hookCtx);
 
-      // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）
-      const messages = this.buildRequestMessages(hookCtx.systemPrompt);
+      // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）。
+      // 0.6.1 P2：HookResult.additionalContext 追加在 systemPrompt 之后。
+      const injectedSystem = [hookCtx.systemPrompt, beforeLlm.additionalContext]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .join('\n\n');
+      const messages = this.buildRequestMessages(injectedSystem || undefined);
 
       // 统一工具来源：PluginHost（插件在 install() 里 registerTool）
       const allTools = this.pluginHost.listTools();
@@ -633,8 +667,13 @@ export class AgentRuntime {
       // 执行 AfterLlm 钩子
       await this.hooks.run(HookType.AfterLlm, hookCtx);
 
-      // 检查完成原因
-      if (response.finish_reason === 'stop') {
+      // 检查完成原因。
+      // 0.6.1 P1：finish_reason 不可靠——存在实际 tool_calls 时优先继续工具轮，
+      // 只有「无 tool_calls 且 stop」才视为终稿（对齐 Claude Code query.ts 的 tool_use 判定）。
+      const toolCalls = response.tool_calls;
+      const hasToolCalls = toolCalls !== undefined && toolCalls.length > 0;
+
+      if (!hasToolCalls && response.finish_reason === 'stop') {
         // 应用输出 Guardrail
         const outputResult = await this.guardrails.apply(
           response.content,
@@ -666,11 +705,13 @@ export class AgentRuntime {
         return finalContent;
       }
 
-      if (response.finish_reason === 'tool_calls' && response.tool_calls) {
+      if (toolCalls && toolCalls.length > 0) {
         // 先对全部 tool_call 过 Guardrail，得到实际要执行的调用（replacement 可改写，C-05）。
         // 放在写 assistant 消息之前，保证上下文里的 tool_calls 与后续 role:tool 结果严格配对。
+        // 阻断不再 throw（0.6.1 P1）：保留调用并折回 role:tool 错误，模型可改道。
         const effectiveCalls: ToolCall[] = [];
-        for (const toolCall of response.tool_calls) {
+        const blockedCalls = new Map<string, string>();
+        for (const toolCall of toolCalls) {
           this.limitChecker.incrementToolCall(this.stats);
           const toolCallResult = await this.guardrails.apply(
             toolCall,
@@ -679,7 +720,12 @@ export class AgentRuntime {
             sessionId,
           );
           if (!toolCallResult.allowed) {
-            throw new Error(`Tool call blocked by guardrail: ${toolCallResult.reason}`);
+            blockedCalls.set(
+              toolCall.id,
+              `Tool call blocked by guardrail: ${toolCallResult.reason ?? 'blocked'}`,
+            );
+            effectiveCalls.push(toolCall);
+            continue;
           }
           effectiveCalls.push(
             isToolCall(toolCallResult.replacement) ? toolCallResult.replacement : toolCall,
@@ -700,18 +746,20 @@ export class AgentRuntime {
           runId,
         );
 
-        // 执行每个工具调用
-        for (const toolCall of effectiveCalls) {
+        // 预处理工具调用：参数只解析一次（C-01）；guardrail 阻断/非法 JSON 走折回路径。
+        const prepared: PreparedToolCall[] = effectiveCalls.map((toolCall) => {
           const toolName = toolCall.function.name;
-          const toolStartTime = Date.now();
-
-          // 参数只解析一次（C-01）：失败按工具失败折回上下文，不终止 run
+          const blockedReason = blockedCalls.get(toolCall.id);
           let args: unknown = {};
-          let argsError: string | undefined;
-          try {
-            args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
-          } catch (error) {
-            argsError = error instanceof Error ? error.message : String(error);
+          let failureMessage = blockedReason;
+          if (blockedReason === undefined) {
+            try {
+              args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+            } catch (error) {
+              failureMessage = `Invalid JSON in tool arguments: ${
+                error instanceof Error ? error.message : String(error)
+              }`;
+            }
           }
 
           // 发布工具调用开始事件
@@ -722,101 +770,81 @@ export class AgentRuntime {
               run_id: runId,
               tool_call_id: toolCall.id,
               tool_name: toolName,
-              arguments: argsError ? toolCall.function.arguments : args,
+              arguments: failureMessage !== undefined ? toolCall.function.arguments : args,
             },
             ts: Date.now(),
           });
 
-          if (argsError) {
-            await this.recordToolFailure({
-              runId,
-              sessionId,
-              toolCallId: toolCall.id,
-              toolName,
-              startTime: toolStartTime,
-              errorMessage: `Invalid JSON in tool arguments: ${argsError}`,
-            });
-            continue;
+          return {
+            toolCall,
+            toolName,
+            args,
+            startedAt: Date.now(),
+            ...(failureMessage !== undefined ? { failureMessage } : {}),
+          };
+        });
+
+        // 执行工具调用：连续的 concurrencySafe 只读工具并批发车（0.6.1 P1），
+        // 其余按原顺序串行；结果始终按原调用顺序写回上下文。
+        let cursor = 0;
+        while (cursor < prepared.length) {
+          const first = prepared[cursor];
+          if (!first) break;
+
+          const batch: PreparedToolCall[] = [first];
+          if (this.isConcurrencySafe(first)) {
+            let candidate = prepared[cursor + batch.length];
+            while (candidate && this.isConcurrencySafe(candidate)) {
+              batch.push(candidate);
+              candidate = prepared[cursor + batch.length];
+            }
           }
 
-          // 执行 BeforeTool 钩子
-          await this.hooks.run(HookType.BeforeTool, hookCtx);
-
-          try {
-            // 统一工具调用：只从 PluginHost 查找
-            const pluginTool = this.pluginHost.getTool(toolName);
-
-            if (!pluginTool) {
-              throw new Error(`Tool "${toolName}" not found`);
-            }
-
-            const toolCtx: ToolContext = {
-              run_id: runId,
-              session_id: sessionId,
-              messages: this.context.messages,
-              events: this.events,
-              // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
-              ...(signal ? { signal } : {}),
-            };
-
-            // 权限判定（ADR-026/029，逻辑在 PermissionPolicy，ADR-033）
-            await this.permissionPolicy.authorize(pluginTool, args, toolCtx);
-
-            const result = await this.invokeTool(pluginTool, args, toolCtx);
-
-            // 应用工具结果 Guardrail（replacement 可改写结果，C-05）
-            const toolResultResult = await this.guardrails.apply(
-              result,
-              GuardrailStage.ToolResult,
-              runId,
-              sessionId,
-            );
-            if (!toolResultResult.allowed) {
-              throw new Error(`Tool result blocked by guardrail: ${toolResultResult.reason}`);
-            }
-            const finalResult =
-              typeof toolResultResult.replacement === 'string'
-                ? toolResultResult.replacement
-                : result;
-
-            // 发布工具调用完成事件
-            this.publishEvent({
-              type: 'tool.call.completed',
-              run_id: runId,
-              data: {
-                run_id: runId,
-                tool_call_id: toolCall.id,
-                tool_name: toolName,
-                result: finalResult,
-                duration_ms: Date.now() - toolStartTime,
-              },
-              ts: Date.now(),
+          // BeforeTool 钩子逐调用串行执行，避免并行批次共享 hookCtx 的竞态。
+          // 0.6.1 P2：hook 可读取 tool/input；block 折回 tool 错误，updatedInput 改写入参。
+          for (const entry of batch) {
+            if (entry.failureMessage !== undefined) continue;
+            const hookResult = await this.hooks.run(HookType.BeforeTool, {
+              ...hookCtx,
+              tool: entry.toolName,
+              input: entry.args,
             });
+            if (hookResult.block) {
+              entry.failureMessage = `Tool call blocked by hook: ${hookResult.reason ?? 'blocked'}`;
+              continue;
+            }
+            if (hookResult.updatedInput !== undefined) {
+              entry.args = hookResult.updatedInput;
+            }
+          }
 
-            // 执行 AfterTool 钩子
-            await this.hooks.run(HookType.AfterTool, hookCtx);
+          const outcomes = await Promise.all(
+            batch.map((entry) => this.runToolCall(entry, runId, sessionId, signal)),
+          );
 
-            // 添加工具结果到上下文（标准 role: tool 消息）
+          // 上下文严格按原调用顺序写回（并行完成顺序不影响历史顺序）
+          for (const outcome of outcomes) {
+            if (outcome.ok) {
+              // 执行 AfterTool 钩子（0.6.1 P2：携带 tool/input）
+              await this.hooks.run(HookType.AfterTool, {
+                ...hookCtx,
+                tool: outcome.toolCall.function.name,
+                input: outcome.input,
+              });
+            }
             this.addContext(
               {
                 role: 'tool',
-                tool_call_id: toolCall.id,
-                content: finalResult,
+                tool_call_id: outcome.toolCall.id,
+                content: outcome.content,
               },
               runId,
             );
             // 注：不再注入假 assistant 消息（见 ADR-005 / Phase 1 review #3）
             // Provider 负责正确解释 role: tool 消息
-          } catch (error) {
-            await this.recordToolFailure({
-              runId,
-              sessionId,
-              toolCallId: toolCall.id,
-              toolName,
-              startTime: toolStartTime,
-              errorMessage: error instanceof Error ? error.message : String(error),
-            });
           }
+
+          cursor += batch.length;
         }
 
         // durable checkpoint：本轮 tool-call 结果已全部写入上下文
@@ -846,8 +874,8 @@ export class AgentRuntime {
   }
 
   /**
-   * 记录一次工具失败：OnError hook → tool.call.failed 事件 → 错误文本折回上下文（C-01）。
-   * 工具失败不终止 run，模型可自行纠错。
+   * 记录一次工具失败：OnError hook → tool.call.failed 事件 → 返回错误文本（C-01）。
+   * 错误文本由调用方按原顺序折回上下文；工具失败不终止 run，模型可自行纠错。
    */
   private async recordToolFailure(opts: {
     runId: string;
@@ -856,7 +884,7 @@ export class AgentRuntime {
     toolName: string;
     startTime: number;
     errorMessage: string;
-  }): Promise<void> {
+  }): Promise<string> {
     await this.hooks.run(HookType.OnError, {
       run_id: opts.runId,
       session_id: opts.sessionId,
@@ -876,14 +904,125 @@ export class AgentRuntime {
       },
       ts: Date.now(),
     });
-    this.addContext(
-      {
-        role: 'tool',
-        tool_call_id: opts.toolCallId,
-        content: `Error: ${opts.errorMessage}`,
-      },
-      opts.runId,
-    );
+    return `Error: ${opts.errorMessage}`;
+  }
+
+  /**
+   * 连续只读工具可并发执行（0.6.1 P1）：仅当插件显式标记 `concurrencySafe`
+   * 且该调用没有预处理失败时成立。
+   */
+  private isConcurrencySafe(entry: PreparedToolCall): boolean {
+    if (entry.failureMessage !== undefined) return false;
+    return this.pluginHost.getTool(entry.toolName)?.concurrencySafe === true;
+  }
+
+  /**
+   * 执行单个工具调用（不含 BeforeTool / AfterTool，钩子由批次循环串行编排）。
+   * 返回结果文本与成功标记；失败已通过 OnError hook 与 tool.call.failed 记录。
+   */
+  private async runToolCall(
+    entry: PreparedToolCall,
+    runId: string,
+    sessionId: string,
+    signal?: AbortSignal,
+  ): Promise<ToolExecutionOutcome> {
+    const { toolCall, toolName } = entry;
+
+    if (entry.failureMessage !== undefined) {
+      return {
+        toolCall,
+        input: entry.args,
+        ok: false,
+        content: await this.recordToolFailure({
+          runId,
+          sessionId,
+          toolCallId: toolCall.id,
+          toolName,
+          startTime: entry.startedAt,
+          errorMessage: entry.failureMessage,
+        }),
+      };
+    }
+
+    try {
+      // 统一工具调用：只从 PluginHost 查找
+      const pluginTool = this.pluginHost.getTool(toolName);
+      if (!pluginTool) {
+        throw new Error(`Tool "${toolName}" not found`);
+      }
+
+      const toolCtx: ToolContext = {
+        run_id: runId,
+        session_id: sessionId,
+        messages: this.context.messages,
+        events: this.events,
+        // F10：把当前 run 的 signal 交给工具，便于 handler 响应取消
+        ...(signal ? { signal } : {}),
+      };
+
+      // 权限判定（ADR-026/029，逻辑在 PermissionPolicy，ADR-033）
+      await this.permissionPolicy.authorize(pluginTool, entry.args, toolCtx);
+
+      const result = await this.invokeTool(pluginTool, entry.args, toolCtx);
+
+      // 应用工具结果 Guardrail（replacement 可改写结果，C-05）
+      const toolResultResult = await this.guardrails.apply(
+        result,
+        GuardrailStage.ToolResult,
+        runId,
+        sessionId,
+      );
+      if (!toolResultResult.allowed) {
+        // 0.6.1 P1：结果阻断折回 tool 错误，不终止 run。
+        return {
+          toolCall,
+          input: entry.args,
+          ok: false,
+          content: await this.recordToolFailure({
+            runId,
+            sessionId,
+            toolCallId: toolCall.id,
+            toolName,
+            startTime: entry.startedAt,
+            errorMessage: `Tool result blocked by guardrail: ${
+              toolResultResult.reason ?? 'blocked'
+            }`,
+          }),
+        };
+      }
+      const finalResult =
+        typeof toolResultResult.replacement === 'string' ? toolResultResult.replacement : result;
+
+      // 发布工具调用完成事件
+      this.publishEvent({
+        type: 'tool.call.completed',
+        run_id: runId,
+        data: {
+          run_id: runId,
+          tool_call_id: toolCall.id,
+          tool_name: toolName,
+          result: finalResult,
+          duration_ms: Date.now() - entry.startedAt,
+        },
+        ts: Date.now(),
+      });
+
+      return { toolCall, input: entry.args, ok: true, content: finalResult };
+    } catch (error) {
+      return {
+        toolCall,
+        input: entry.args,
+        ok: false,
+        content: await this.recordToolFailure({
+          runId,
+          sessionId,
+          toolCallId: toolCall.id,
+          toolName,
+          startTime: entry.startedAt,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        }),
+      };
+    }
   }
 
   /**
@@ -1000,14 +1139,16 @@ export class AgentRuntime {
    * 加入上下文并发布 context.changed 事件（ADR-031：同步写保证关键路径可靠 + 事件观测可回放）
    */
   private addContext(msg: Message, runId: string): void {
-    this.context.add(msg);
+    // 0.6.1 P2：逐条消息时间戳（已有值不覆盖，恢复的历史保持原时间）
+    const stamped: Message = msg.timestamp === undefined ? { ...msg, timestamp: Date.now() } : msg;
+    this.context.add(stamped);
     this.publishEvent({
       type: 'context.changed',
       run_id: runId,
       data: {
         run_id: runId,
         // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
-        message: this.stripReasoningFromMessage(msg),
+        message: this.stripReasoningFromMessage(stamped),
         message_count: this.context.messages.length,
         token_count: this.context.tokenCount,
       },

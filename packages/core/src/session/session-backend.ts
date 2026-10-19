@@ -37,6 +37,8 @@ export function toSessionInfo(state: RunState): SessionInfo {
     message_count: state.messages.length,
     branch: state.branch,
     tenant_id: state.tenant_id,
+    ...(state.ended_at !== undefined ? { ended_at: state.ended_at } : {}),
+    ...(state.end_reason !== undefined ? { end_reason: state.end_reason } : {}),
   };
 }
 

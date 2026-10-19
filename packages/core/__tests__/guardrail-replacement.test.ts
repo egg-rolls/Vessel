@@ -187,6 +187,90 @@ describe('Guardrail replacement 生效（C-05）', () => {
     expect(toolMessage?.content).toBe('safe result');
   });
 
+  it('ToolCall 阻断折回 tool 错误，不终止 run', async () => {
+    let handlerCalled = false;
+    const host = createHost({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        handlerCalled = true;
+        return 'ok';
+      },
+    });
+    host.registerGuardrail({
+      name: 'deny-call',
+      stage: GuardrailStage.ToolCall,
+      check: async () => ({ allowed: false, reason: 'policy denied' }),
+    });
+    const events = new MemoryEventStream();
+    const failures: string[] = [];
+    events.subscribe((event) => {
+      if (event.type === 'tool.call.failed') {
+        failures.push((event.data as unknown as { error: string }).error);
+      }
+    });
+    const context = new MemoryContextManager();
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStop(),
+      model: 'test-model',
+      pluginHost: host,
+      context,
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await runtime.run('hi');
+
+    expect(response).toBe('done');
+    expect(handlerCalled).toBe(false);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toContain('policy denied');
+    const toolMessage = context.messages.find((m) => m.role === 'tool');
+    expect(toolMessage?.content).toBe('Error: Tool call blocked by guardrail: policy denied');
+    // assistant 消息仍保留该调用，保证 tool_calls / tool 结果配对
+    const assistant = context.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.tool_calls?.[0]?.id).toBe('call-1');
+  });
+
+  it('ToolResult 阻断折回 tool 错误，不发布 completed', async () => {
+    const host = createHost({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'secret result',
+    });
+    host.registerGuardrail({
+      name: 'deny-result',
+      stage: GuardrailStage.ToolResult,
+      check: async () => ({ allowed: false, reason: 'pii detected' }),
+    });
+    const events = new MemoryEventStream();
+    const completed: string[] = [];
+    events.subscribe((event) => {
+      if (event.type === 'tool.call.completed') completed.push(event.type);
+    });
+    const context = new MemoryContextManager();
+    const runtime = await AgentRuntime.create({
+      provider: toolCallThenStop(),
+      model: 'test-model',
+      pluginHost: host,
+      context,
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+
+    const response = await runtime.run('hi');
+
+    expect(response).toBe('done');
+    expect(completed).toHaveLength(0);
+    const toolMessage = context.messages.find((m) => m.role === 'tool');
+    expect(toolMessage?.content).toBe('Error: Tool result blocked by guardrail: pii detected');
+    expect(context.messages.some((m) => m.content === 'secret result')).toBe(false);
+  });
+
   it('非法 replacement 类型按未改写处理', async () => {
     const host = createHost({
       name: 'noop',

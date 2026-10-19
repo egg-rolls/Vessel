@@ -162,6 +162,22 @@ describe('tenant isolation in file/sqlite backends (0.5 E4)', () => {
     );
   });
 
+  it('FileSessionBackend delete is a no-op for foreign and missing sessions', async () => {
+    const dir = tempDir();
+    const acme = new FileSessionBackend(dir, { tenantId: 'acme' });
+    const other = new FileSessionBackend(dir, { tenantId: 'other' });
+
+    await acme.save(runState('s1'));
+    await other.delete('s1');
+    expect((await acme.load('s1'))?.session_id).toBe('s1');
+
+    // 缺失会话 / 无 tenant 后端均保持静默 no-op
+    await other.delete('missing');
+    const unscoped = new FileSessionBackend(dir);
+    await unscoped.delete('s1');
+    expect(await acme.load('s1')).toBeNull();
+  });
+
   it('FileRunStore stamps, filters, and rejects foreign checkpoints', async () => {
     const dir = tempDir();
     const acme = new FileRunStore({ dir, tenantId: 'acme' });

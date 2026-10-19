@@ -9,12 +9,21 @@ import type { ProviderFactory } from './provider.js';
 import type { RunStore } from './run-store.js';
 import type { ToolDefinition } from './tool.js';
 
+/**
+ * Plugin 安装选项（0.6.1 E1）。
+ * 宿主按插件配置透传；未提供配置时沿用旧调用 `install(host)`。
+ */
+export interface PluginInstallOptions {
+  config?: Record<string, unknown>;
+}
+
 /** Plugin 接口 */
 export interface Plugin {
   name: string;
   version?: string;
   description?: string;
-  install(host: PluginHost): void | Promise<void>;
+  /** 第二个参数可选：旧的 `install(host)` 实现与调用继续合法（E1） */
+  install(host: PluginHost, options?: PluginInstallOptions): void | Promise<void>;
 }
 
 /** PluginHost 接口 */
@@ -48,6 +57,11 @@ export interface AgentRuntimeOptions {
   limits: import('./limits.js').UsageLimits;
   termination: import('./limits.js').TerminationPolicy;
   plugins?: Plugin[];
+  /**
+   * 按插件名提供的安装配置（0.6.1 E1）。
+   * 存在时以 `install(host, { config })` 调用；缺省时保持 `install(host)`。
+   */
+  pluginConfigs?: Record<string, Record<string, unknown>>;
   session?: import('./session.js').SessionBackend;
   systemPrompt?: string; // 系统提示词
   /** 默认权限策略——未声明 checkPermission 的工具用 default/autoApprove 判定（ADR-029） */

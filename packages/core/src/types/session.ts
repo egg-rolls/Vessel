@@ -30,6 +30,10 @@ export interface RunState {
   branch?: string;
   /** 0.5：所属 tenant；缺省视为 `default` */
   tenant_id?: string;
+  /** 0.6.1 P2：会话结束时间（Unix ms）；旧数据/未结束会话缺失 */
+  ended_at?: number;
+  /** 0.6.1 P2：结束原因（由写入方定义，如 new / resume / exit） */
+  end_reason?: string;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */
@@ -45,6 +49,10 @@ export interface SessionInfo {
   branch?: string;
   /** 0.5：所属 tenant；缺省视为 `default` */
   tenant_id?: string;
+  /** 0.6.1 P2：会话结束时间（Unix ms）；未结束/旧数据缺失 */
+  ended_at?: number;
+  /** 0.6.1 P2：结束原因 */
+  end_reason?: string;
 }
 
 /** Session 信息 */

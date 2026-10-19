@@ -13,7 +13,7 @@ export type {
   GuardrailResult,
 } from '../../types/guardrail.js';
 export { GuardrailStage } from '../../types/guardrail.js';
-export type { Hook, HookContext } from '../../types/hook.js';
+export type { Hook, HookContext, HookResult } from '../../types/hook.js';
 export { HookType } from '../../types/hook.js';
 export type { RuntimePermissionConfig } from '../../types/plugin.js';
 export { type GuardrailOutcome, GuardrailRunner } from '../guardrail-runner.js';

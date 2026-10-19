@@ -31,6 +31,11 @@ export interface ToolDefinition {
   handler: ToolHandler;
   /** 超时毫秒数；缺省或 0 = 不限时 */
   timeout?: number;
+  /**
+   * 只读、无共享副作用：同一响应内连续的 concurrencySafe 调用会并批发车（0.6.1 P1）。
+   * 缺省 false（串行）。有写副作用或依赖执行顺序的工具不要开启。
+   */
+  concurrencySafe?: boolean;
   /** 执行时权限判定（allow/deny/ask）；缺省走 runtime 默认策略 */
   checkPermission?(input: unknown, ctx: ToolContext): Promise<'allow' | 'deny' | 'ask'>;
 }

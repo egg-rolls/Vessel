@@ -163,11 +163,20 @@ export class FileSessionBackend implements SessionBackend {
 
   /**
    * 删除会话
+   *
+   * tenant 模式先 `load()` 校验归属：缺失或 foreign 均直接 no-op，
+   * 避免通过显式 storagePath 共享目录跨 tenant 删除（0.6.1 P0-1）。
    * @param sessionId 会话 ID
    */
   async delete(sessionId: string): Promise<void> {
     const previous = this.pendingWrites.get(sessionId);
     if (previous) await previous;
+
+    if (this.tenantId !== undefined) {
+      // load() 对 foreign 返回 null；缺失/解析失败同样无需删除。
+      const state = await this.load(sessionId);
+      if (!state) return;
+    }
 
     const candidates = [this.filePath(sessionId), this.legacyFilePath(sessionId)];
     for (const candidate of candidates) {
