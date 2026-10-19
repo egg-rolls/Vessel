@@ -130,7 +130,7 @@
 .transcript {
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   padding: 6px 0 10px;
 }
 
@@ -336,6 +336,138 @@
   padding: 12px 16px;
 }
 
+.tool-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.tool-card[data-status="error"] {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--row-h-tool);
+  padding: 0 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.tool-card-header:hover {
+  background: var(--surface-3);
+}
+
+.tool-card-glyph {
+  flex: none;
+  font-size: 10px;
+}
+
+.tool-card-glyph.tone-info {
+  color: var(--info);
+}
+
+.tool-card-glyph.tone-ok {
+  color: var(--ok);
+}
+
+.tool-card-glyph.tone-warn {
+  color: var(--warn);
+}
+
+.tool-card-glyph.tone-danger {
+  color: var(--danger);
+}
+
+.tool-card-glyph.tone-muted {
+  color: var(--faint);
+}
+
+.tool-card[data-status="running"] .tool-card-glyph {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.tool-card-name {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.tool-card-args {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.tool-card-duration {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.tool-card-chevron {
+  flex: none;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.tool-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.tool-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.tool-section-label {
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.tool-section-body {
+  max-height: 320px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-card-note {
+  font-size: 10.5px;
+  color: var(--warn);
+}
+
 .text-block {
   padding: 2px 0;
   font-size: 13.5px;
@@ -492,7 +624,7 @@
 
 .composer {
   width: 100%;
-  max-width: 880px;
+  max-width: 860px;
   margin-inline: auto;
   padding: 9px 14px 12px;
   border: 1px solid var(--line-strong);
@@ -902,7 +1034,7 @@
   padding: 4px 10px;
   border-bottom: 1px solid var(--line);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--faint);

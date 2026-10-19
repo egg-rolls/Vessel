@@ -1,8 +1,11 @@
+import { useMemo } from 'react';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import type { RunGroup } from '../../state/events';
 import { EventRow } from './EventRow';
+import { ToolCard } from './ToolCard';
+import { foldToolItems } from './tool-cards';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -45,6 +48,7 @@ export function RunCard({
     .join('')
     .trim();
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
+  const renderItems = useMemo(() => foldToolItems(group.items), [group.items]);
 
   return (
     <div className={`run-card ${status}`}>
@@ -70,19 +74,19 @@ export function RunCard({
       {group.input && !hideInput && <div className="run-input">{group.input}</div>}
 
       <div className="run-items">
-        {group.items.map((item) =>
-          item.kind === 'text' ? (
-            group.status === 'running' || status === 'running' ? (
+        {renderItems.map((item) => {
+          if (item.kind === 'text') {
+            return group.status === 'running' || status === 'running' ? (
               <div className="text-block" key={item.key}>
                 {item.text}
               </div>
             ) : (
               <Markdown className="text-block" key={item.key} text={item.text} />
-            )
-          ) : (
-            <EventRow key={item.key} event={item.event} />
-          ),
-        )}
+            );
+          }
+          if (item.kind === 'tool') return <ToolCard key={item.key} card={item} />;
+          return <EventRow key={item.key} event={item.event} />;
+        })}
       </div>
 
       {group.status === 'completed' && (

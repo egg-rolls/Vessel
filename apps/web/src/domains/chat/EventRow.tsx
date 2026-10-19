@@ -2,11 +2,11 @@ import { formatTimestamp } from '../../format';
 import type { RunEvent } from '../../gateway/types';
 import { eventTag } from '../../state/events';
 
-function truncate(value: string, length: number): string {
+export function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
-function payloadText(value: unknown): string {
+export function payloadText(value: unknown): string {
   if (typeof value === 'string') return value;
   try {
     return JSON.stringify(value, null, 2) ?? String(value);
