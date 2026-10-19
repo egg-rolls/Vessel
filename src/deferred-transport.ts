@@ -2,8 +2,8 @@
  * DeferredTransport — 晚绑定的 Transport 适配器（0.2 A5/F14）。
  *
  * bootstrap 需要先把 team 插件装到 Host 上，但 loopback 必须等 gateway
- * 启动拿到实际端口/token 后才能构造。这个适配器让 team 插件从一开始就拿到
- * 一个稳定的 Transport 实例：
+ * 启动拿到实际端口/token 后才能构造（remote 也由 cli 在 gateway 启动后构造）。
+ * 这个适配器让 team 插件从一开始就拿到一个稳定的 Transport 实例：
  *
  * - `receive` 先本地登记，`resolve(real)` 后补订阅；
  * - `send` 在 resolve 前排队，resolve 后按序 flush；
@@ -14,7 +14,13 @@
  * 它只做适配，不实现传输、不复制 inbox/peers 语义。
  */
 
-import type { AgentMessage, PeerInfo, Transport, Unsubscribe } from '../packages/core/src/index';
+import type {
+  AgentMessage,
+  PeerInfo,
+  Transport,
+  TransportRequest,
+  Unsubscribe,
+} from '../packages/core/src/index';
 
 type ReceiveHandler = (message: AgentMessage) => void | Promise<void>;
 
@@ -25,7 +31,10 @@ interface PendingSend {
 }
 
 export class DeferredTransport implements Transport {
-  readonly kind = 'loopback' as const;
+  /** 绑定前按 loopback 展示；绑定后跟随真实实现（loopback/remote）。 */
+  get kind(): Transport['kind'] {
+    return this.real?.kind ?? 'loopback';
+  }
 
   private real?: Transport;
   private failure?: Error;
@@ -63,6 +72,21 @@ export class DeferredTransport implements Transport {
   async peers(): Promise<PeerInfo[]> {
     if (!this.real || this.failure) return [];
     return this.real.peers();
+  }
+
+  /**
+   * 远程控制能力委托给真实 transport。绑定前/真实实现不支持时拒绝，
+   * 由 ext 归一为稳定错误码（不静默降级为本机）。
+   */
+  request<T = unknown>(nodeId: string, request: TransportRequest): Promise<T> {
+    const real = this.real;
+    if (real?.request) return real.request<T>(nodeId, request);
+    const error = new Error(
+      this.real
+        ? `transport "${this.real.kind}" does not support remote requests`
+        : 'transport is not bound yet',
+    );
+    return Promise.reject(Object.assign(error, { code: 'transport_closed', nodeId }));
   }
 
   async close(): Promise<void> {

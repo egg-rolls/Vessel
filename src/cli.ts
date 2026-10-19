@@ -261,13 +261,12 @@ function resolveStaticDir(): string | undefined {
   return existsSync(dist) ? dist : undefined;
 }
 
-/** --serve 启动 banner：对齐 box，含 gateway/token/SSE/WS + 控制台提示 */
+/** --serve 启动 banner：对齐 box，含 gateway/token + 控制台提示 */
 function renderGatewayBanner(gateway: Gateway): string {
+  // 不在任何展示 URL 中拼接 token（避免进入终端历史/日志）。
   const rows: Array<[string, string]> = [
     ['Gateway', gateway.url],
     ['Token', `${gateway.token}  ← 复制到浏览器`],
-    ['SSE', `${gateway.url}/events?token=${gateway.token}`],
-    ['WS', `${gateway.url}/ws?token=${gateway.token}`],
   ];
   if (gateway.tls) rows.push(['TLS', 'on']);
   if (!isLoopbackHostname(new URL(gateway.url).hostname)) {
@@ -782,8 +781,8 @@ async function runWithConfig(result: BootstrapResult) {
     gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
   }
 
-  // ── Team / loopback 接线（A4）────────────────────
-  // gateway 必须先启动：loopback 的 endpoint/token 来自实际监听端口。
+  // ── Team / transport 接线（A4；0.6 remote）────────────
+  // gateway 必须先启动：loopback 的 endpoint/token 来自实际监听端口；remote 使用静态 nodes。
   const teamPlan = planTeamWiring({
     config,
     hasGateway: gateway !== null,

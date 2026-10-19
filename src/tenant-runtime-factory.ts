@@ -110,9 +110,9 @@ export interface BuildTenantRuntimeOptions {
   nodeId: string;
   /** host owner 的初始 sessionId；缺省随机 UUID（serve 每 tenant 独立） */
   sessionId?: string;
-  /** team loopback 晚绑定 transport（仅本地主 tenant） */
+  /** team 晚绑定 transport（loopback/remote；仅本地主 tenant） */
   transport?: DeferredTransport;
-  /** team + loopback 时由本函数创建 DeferredTransport */
+  /** team + loopback/remote 时由本函数创建 DeferredTransport */
   createLoopbackTransport?: boolean;
   metricsFactory?: MetricsFactory;
   traceFactory?: TraceRecorderFactory;
@@ -306,7 +306,7 @@ export async function buildTenantRuntime(
       options.createLoopbackTransport === true &&
       isHostEnabled(config) &&
       config.team?.enabled === true &&
-      config.transport?.kind === 'loopback'
+      (config.transport?.kind === 'loopback' || config.transport?.kind === 'remote')
     ) {
       deferredTransport = new DeferredTransport();
     }

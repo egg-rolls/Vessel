@@ -8,6 +8,7 @@ export {
   type HttpRpcClient,
   type HttpRpcClientOptions,
   isLoopbackBaseUrl,
+  normalizeConnectUrl,
   parseGatewayFrame,
   type RpcHelloInfo,
   type WebSocketFactory,

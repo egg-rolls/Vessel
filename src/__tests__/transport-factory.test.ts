@@ -58,13 +58,36 @@ describe('resolvePeersDir', () => {
 });
 
 describe('resolveGatewayToken', () => {
-  it('config > VESSEL_GATEWAY_TOKEN > undefined', () => {
-    expect(resolveGatewayToken({})).toBeUndefined();
+  it('legacy > env > admin > tokens（与 gateway 鉴权一致）', () => {
+    expect(resolveGatewayToken({}, {})).toBeUndefined();
 
-    process.env.VESSEL_GATEWAY_TOKEN = 'env-token';
-    expect(resolveGatewayToken({})).toBe('env-token');
-
-    expect(resolveGatewayToken({ transport: { token: 'config-token' } })).toBe('config-token');
+    expect(resolveGatewayToken({ serve: { token: 'serve-token' } }, {})).toBe('serve-token');
+    expect(
+      resolveGatewayToken({ serve: { tokenEnv: 'SERVE_TOKEN' } }, { SERVE_TOKEN: 'env-serve' }),
+    ).toBe('env-serve');
+    expect(
+      resolveGatewayToken(
+        { transport: { token: 'config-token' } },
+        {
+          VESSEL_GATEWAY_TOKEN: 'env-token',
+        },
+      ),
+    ).toBe('config-token');
+    expect(resolveGatewayToken({}, { VESSEL_GATEWAY_TOKEN: 'env-token' })).toBe('env-token');
+    expect(resolveGatewayToken({ serve: { adminToken: 'admin-token' } }, {})).toBe('admin-token');
+    expect(
+      resolveGatewayToken(
+        {
+          serve: {
+            tokens: {
+              'read-token': { role: 'read' },
+              'write-token': { role: 'write', tenantId: 'default' },
+            },
+          },
+        },
+        {},
+      ),
+    ).toBe('write-token');
   });
 });
 

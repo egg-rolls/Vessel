@@ -90,11 +90,21 @@ describe('remote transport e2e (0.6 real gateway endpoints)', () => {
     expect(inbox.agent_id).toBe('worker');
     expect(inbox.cursor).toBe('0');
 
-    const spawned = await transport.request<{ agent: { id: string } }>('node-b', {
+    const spawnRequest = {
+      requestId: 'spawn-1',
       method: 'team.spawn',
       params: { name: 'new-worker', model: 'm1', systemPrompt: 'hi' },
-    });
+    };
+    const spawned = await transport.request<{ agent: { id: string } }>('node-b', spawnRequest);
     expect(spawned.agent.id).toBe('new-worker');
+
+    // P1：body 携带 request_id；同 id 重试由 gateway 幂等返回 deduplicated。
+    const retried = await transport.request<{ agent: { id: string }; deduplicated?: boolean }>(
+      'node-b',
+      spawnRequest,
+    );
+    expect(retried.agent.id).toBe('new-worker');
+    expect(retried.deduplicated).toBe(true);
 
     // B1：跨节点消息（gateway 归一成本机地址后交给 deliver）。
     await transport.send({

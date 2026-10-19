@@ -122,4 +122,30 @@ describe('DeferredTransport', () => {
     deferred.resolve(late.transport);
     expect(late.closed).toBe(1);
   });
+
+  it('request 委托真实 remote transport；绑定前结构化失败；kind 跟随真实实现', async () => {
+    const deferred = new DeferredTransport();
+    expect(deferred.kind).toBe('loopback');
+    await expect(deferred.request('node-b', { method: 'team.status.list' })).rejects.toMatchObject({
+      code: 'transport_closed',
+    });
+
+    const remote: Transport = {
+      kind: 'remote',
+      nodeId: 'A',
+      send: async () => undefined,
+      receive: () => () => undefined,
+      peers: async () => [],
+      request: async <T = unknown>(nodeId: string, request: { method: string }): Promise<T> =>
+        ({ nodeId, method: request.method }) as T,
+      close: async () => undefined,
+    };
+    deferred.resolve(remote);
+    expect(deferred.kind).toBe('remote');
+    expect(await deferred.request('node-b', { method: 'team.status.list' })).toEqual({
+      nodeId: 'node-b',
+      method: 'team.status.list',
+    });
+    await deferred.close();
+  });
 });

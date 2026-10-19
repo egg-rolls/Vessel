@@ -1,8 +1,9 @@
 /**
- * 0.2 Transport 装配（A4）。
+ * Transport 装配（0.2 A4；0.6 增加 remote）。
  *
  * - loopback 只在 `--serve` 且 `transport.kind=loopback` 时构造；
- * - endpoint 用 gateway 实际地址，token 与 gateway 共用（U7）；
+ * - remote 由 `tryCreateRemoteTransport` 构造（静态 nodes，HTTP/WS + token/CA）；
+ * - endpoint 用 gateway 实际地址，loopback token 与 gateway 共用（U7）；
  * - 任何失败返回结构化 error，由调用方告警并降级，不影响单 agent 路径。
  *
  * web 的 loopback 实现用动态 import，in-process/关闭路径不加载 serve transport。
@@ -73,15 +74,40 @@ async function loadLoopbackModule(): Promise<LoopbackTransportModule> {
 }
 
 /**
- * token 优先级（DECISION-006 R4）：
- * `transport.token` > `VESSEL_GATEWAY_TOKEN` > gateway 生成值。
- * 该函数只解析前两级；返回 undefined 表示交给 gateway 生成。
+ * 解析 loopback/本地客户端使用的 gateway token，来源与 gateway 鉴权一致：
+ * `serve.token` / `serve.token_env` → `transport.token` → `VESSEL_GATEWAY_TOKEN`
+ * → `serve.admin_token(_env)` → `serve.tokens`（优先 admin/write）。
+ * 返回 undefined 表示交给 gateway 生成。
  */
-export function resolveGatewayToken(config: VesselConfig): string | undefined {
-  const fromConfig = config.transport?.token;
-  if (fromConfig) return fromConfig;
-  const fromEnv = process.env.VESSEL_GATEWAY_TOKEN;
-  return fromEnv && fromEnv.length > 0 ? fromEnv : undefined;
+export function resolveGatewayToken(
+  config: VesselConfig,
+  env: Record<string, string | undefined> = process.env,
+): string | undefined {
+  const nonEmpty = (value: unknown): string | undefined =>
+    typeof value === 'string' && value !== '' ? value : undefined;
+
+  const legacy =
+    nonEmpty(config.serve?.token) ??
+    nonEmpty(config.serve?.tokenEnv ? env[config.serve.tokenEnv] : undefined) ??
+    nonEmpty(config.transport?.token) ??
+    nonEmpty(env.VESSEL_GATEWAY_TOKEN);
+  if (legacy !== undefined) return legacy;
+
+  const admin =
+    nonEmpty(config.serve?.adminToken) ??
+    nonEmpty(config.serve?.adminTokenEnv ? env[config.serve.adminTokenEnv] : undefined);
+  if (admin !== undefined) return admin;
+
+  const tokens = config.serve?.tokens;
+  if (tokens) {
+    const entries = Object.entries(tokens).filter(([token]) => token !== '');
+    const preferred =
+      entries.find(([, entry]) => entry.role === 'admin') ??
+      entries.find(([, entry]) => entry.role === 'write') ??
+      entries[0];
+    if (preferred !== undefined) return preferred[0];
+  }
+  return undefined;
 }
 
 /** 解析 peers 目录：支持 `~`；相对路径按进程 cwd 解析 */
@@ -102,7 +128,9 @@ export async function tryCreateLoopbackTransport(
   if (!token) {
     return {
       ok: false,
-      error: 'loopback requires a gateway token (config or VESSEL_GATEWAY_TOKEN)',
+      error:
+        'loopback requires a gateway token ' +
+        '(serve.token, serve.tokens, admin_token, transport.token, or VESSEL_GATEWAY_TOKEN)',
     };
   }
 
