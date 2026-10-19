@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommandPalette } from '../components/CommandPalette';
+import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { AskModal, PermissionModal } from '../components/PermissionModals';
@@ -10,16 +11,28 @@ import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { WorkflowsView } from '../domains/workflows/WorkflowsView';
-import { useConnection } from '../gateway/ConnectionProvider';
+import { useConnection, useEventSnapshot } from '../gateway/ConnectionProvider';
 import type { PaletteItem } from '../state/palette';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav, primaryRoute } from './DomainNav';
+import { requestStartWorkflow } from './intents';
 import { DOMAINS, routeBreadcrumb } from './nav';
 import { requestRefresh } from './refresh';
-import { formatRoute } from './router';
+import { formatRoute, type Route } from './router';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { useHashRoute } from './useHashRoute';
+
+type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
+
+const SETTINGS_NAV: readonly { tab: SettingsTab; label: string; keywords: string[] }[] = [
+  { tab: 'connection', label: '连接', keywords: ['gateway', 'token', 'url', 'connect'] },
+  { tab: 'nodes', label: '节点', keywords: ['team', 'peers', 'agents', 'nodes'] },
+  { tab: 'config', label: '配置', keywords: ['config', 'sources', 'paths'] },
+  { tab: 'capabilities', label: '能力清单', keywords: ['capabilities', 'methods', 'plugins'] },
+  { tab: 'tenants', label: '租户', keywords: ['tenant', 'quota', 'admin'] },
+  { tab: 'appearance', label: '外观', keywords: ['theme', 'dark', 'light', '外观'] },
+];
 
 export function AppShell() {
   const { route, navigate } = useHashRoute();
@@ -51,11 +64,14 @@ export function AppShell() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
+  const [pendingAction, setPendingAction] = useState<PaletteItem | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
   const firstRoute = useRef(true);
   const routeKey = formatRoute(route);
+  const eventSnapshot = useEventSnapshot();
+  const lastEventVersion = useRef(-1);
 
-  const modalOpen = Boolean(permissions[0] || asks[0]);
+  const modalOpen = Boolean(permissions[0] || asks[0] || pendingAction || helpOpen);
   const tenantEpochRef = useRef(tenantEpoch);
 
   const registerEntities = useCallback((source: string, items: readonly PaletteItem[]) => {
@@ -78,6 +94,7 @@ export function AppShell() {
     if (tenantEpoch === tenantEpochRef.current) return;
     tenantEpochRef.current = tenantEpoch;
     setChatSessionsOpen(false);
+    setPendingAction(null);
     navigate({ domain: 'chat' });
     toast.info('已切换租户；当前选择与事件缓冲已清空');
   }, [tenantEpoch, navigate, toast]);
@@ -95,6 +112,30 @@ export function AppShell() {
     setAnnouncement(`已打开 ${routeBreadcrumb(route)}`);
     if (route.domain !== 'chat') setChatSessionsOpen(false);
   }, [routeKey]);
+
+  // 运行终态播报（只播报 completed/failed/cancelled，不播报 token/流式内容）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: version 是合批键；entries 只在 version 变化时读取
+  useEffect(() => {
+    if (eventSnapshot.version === lastEventVersion.current) return;
+    lastEventVersion.current = eventSnapshot.version;
+    const recent = eventSnapshot.entries.slice(-20);
+    const terminal = [...recent]
+      .reverse()
+      .find(
+        ({ event }) =>
+          event.type === 'run.completed' ||
+          event.type === 'run.failed' ||
+          event.type === 'run.cancelled',
+      );
+    if (!terminal) return;
+    const label =
+      terminal.event.type === 'run.completed'
+        ? '已完成'
+        : terminal.event.type === 'run.failed'
+          ? '失败'
+          : '已取消';
+    setAnnouncement(`运行 ${terminal.event.run_id.slice(0, 12)} ${label}`);
+  }, [eventSnapshot.version]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -129,10 +170,18 @@ export function AppShell() {
         id: 'nav-settings',
         group: 'navigation',
         label: '打开设置',
-        keywords: ['settings', '设置', 'connection', '连接'],
+        keywords: ['settings', '设置'],
         hint: '导航',
         run: () => navigate({ domain: 'settings', tab: 'connection' }),
       },
+      ...SETTINGS_NAV.map((entry) => ({
+        id: `nav-settings-${entry.tab}`,
+        group: 'navigation' as const,
+        label: `设置 › ${entry.label}`,
+        keywords: ['settings', entry.tab, ...entry.keywords],
+        hint: '设置',
+        run: () => navigate({ domain: 'settings', tab: entry.tab }),
+      })),
       {
         id: 'action-new-session',
         group: 'action',
@@ -151,7 +200,10 @@ export function AppShell() {
         label: '启动 workflow',
         keywords: ['workflow', 'start', '工作流'],
         hint: '动作',
-        run: () => navigate({ domain: 'workflows' }),
+        run: () => {
+          navigate({ domain: 'workflows' });
+          requestStartWorkflow();
+        },
       },
       {
         id: 'action-resume-run',
@@ -230,6 +282,15 @@ export function AppShell() {
   }, [connectionState, hasToken, navigate, retry, toast]);
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
+
+  // 破坏性动作离开面板后仍需二次确认；非破坏动作直接执行。
+  const runPaletteItem = useCallback((item: PaletteItem) => {
+    if (item.danger || item.confirm) {
+      setPendingAction(item);
+      return;
+    }
+    item.run();
+  }, []);
 
   const openSessions = useCallback(() => setChatSessionsOpen(true), []);
   const closeSessions = useCallback(() => setChatSessionsOpen(false), []);
@@ -347,6 +408,7 @@ export function AppShell() {
             entities={entities}
             initialQuery={paletteQuery}
             onClose={closePalette}
+            onExecute={runPaletteItem}
           />
         )}
 
@@ -386,6 +448,21 @@ export function AppShell() {
               </button>
             </div>
           </ModalShell>
+        )}
+
+        {pendingAction?.confirm && (
+          <ConfirmDialog
+            title={pendingAction.confirm.title}
+            body={<p>{pendingAction.confirm.body}</p>}
+            confirmLabel={pendingAction.confirm.confirmLabel}
+            danger
+            onConfirm={() => {
+              const action = pendingAction;
+              setPendingAction(null);
+              action.run();
+            }}
+            onCancel={() => setPendingAction(null)}
+          />
         )}
 
         {asks[0] ? (

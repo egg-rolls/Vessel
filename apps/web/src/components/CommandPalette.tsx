@@ -17,11 +17,14 @@ export function CommandPalette({
   entities,
   initialQuery = '',
   onClose,
+  onExecute,
 }: {
   items: readonly PaletteItem[];
   entities: readonly PaletteItem[];
   initialQuery?: string;
   onClose: () => void;
+  /** 由 AppShell 统一处理破坏性动作的二次确认。 */
+  onExecute?: (item: PaletteItem) => void;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [active, setActive] = useState(0);
@@ -45,7 +48,10 @@ export function CommandPalette({
   const execute = (item: PaletteItem) => {
     onClose();
     // 让关闭/焦点恢复先发生，再执行导航/动作。
-    window.setTimeout(() => item.run(), 0);
+    window.setTimeout(() => {
+      if (onExecute) onExecute(item);
+      else item.run();
+    }, 0);
   };
 
   return (
@@ -116,6 +122,7 @@ export function CommandPalette({
                   onClick={() => execute(item)}
                 >
                   <span className="palette-label">{item.label}</span>
+                  {item.danger && <span className="palette-danger">需确认</span>}
                   {item.hint && <span className="palette-hint">{item.hint}</span>}
                 </button>
               );
