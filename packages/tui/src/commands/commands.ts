@@ -25,8 +25,8 @@
 
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
-import { displayWidth } from '../utils/text-layout.js';
-import type { ViewActionInvocation, ViewEnvelope } from '../views/types.js';
+import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
+import type { DetailView, ListView, ViewActionInvocation, ViewEnvelope } from '../views/types.js';
 import { capabilitiesCommand } from './capabilities-command.js';
 import { configCommand } from './config-command.js';
 import { feishuCommand } from './feishu-command.js';
@@ -105,6 +105,8 @@ export interface CommandEntry {
   hidden?: boolean;
   /** 当前上下文是否可用；缺省 true（用于 dim 标签，不用于隐藏） */
   available?: (ctx: ReplContext) => boolean;
+  /** 不可用原因（如 'RPC required' / 'durable disabled'），用于 help/autocomplete 标签 */
+  unavailableHint?: string;
   /** 命令执行函数 */
   run: Run;
   /** 视图动作处理；返回新的 CommandResult（可带新 view） */
@@ -249,7 +251,7 @@ const CATEGORY_LABEL: Record<CommandCategory, string> = {
   system: 'SYSTEM',
 };
 
-function renderHelp(reg: CommandRegistry): string {
+function renderHelp(reg: CommandRegistry, ctx: ReplContext): string {
   const lines: string[] = ['', 'Available commands:'];
   const visible = reg.visibleList();
 
@@ -262,7 +264,11 @@ function renderHelp(reg: CommandRegistry): string {
       const usage = entry.usage || `/${entry.name}`;
       // usage 必须完整可读：只用空格补齐，绝不截断（/trace、/workflows 的用法很长）。
       const padded = usage + ' '.repeat(Math.max(0, 30 - displayWidth(usage)));
-      lines.push(`  ${padded} ${entry.description}`);
+      const unavailable =
+        entry.available && !entry.available(ctx)
+          ? ` (${entry.unavailableHint ?? 'unavailable'})`
+          : '';
+      lines.push(`  ${padded} ${entry.description}${unavailable}`);
     }
   }
 
@@ -609,7 +615,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function readToolList(value: unknown): Array<{ name: string; description?: string }> {
+/** /tools 视图使用的归一化条目（RPC 与本地 PluginHost 同构） */
+export interface ToolViewInfo {
+  name: string;
+  description: string;
+  inputSchema?: unknown;
+  /** mcp__<server>__<tool> 归为 mcp，其余为插件工具 */
+  source: 'mcp' | 'plugin';
+  /** 是否声明了权限判定（执行时可能 ask） */
+  requiresApproval: boolean;
+}
+
+function toolSource(name: string): 'mcp' | 'plugin' {
+  return name.startsWith('mcp__') ? 'mcp' : 'plugin';
+}
+
+function readToolList(value: unknown): ToolViewInfo[] {
   const raw = Array.isArray(value)
     ? value
     : isRecord(value) && Array.isArray(value.tools)
@@ -621,8 +642,89 @@ function readToolList(value: unknown): Array<{ name: string; description?: strin
     )
     .map((item) => ({
       name: item.name as string,
-      ...(typeof item.description === 'string' ? { description: item.description } : {}),
+      description: typeof item.description === 'string' ? item.description : '',
+      ...(isRecord(item.input_schema) ? { inputSchema: item.input_schema } : {}),
+      source: toolSource(item.name as string),
+      requiresApproval: item.has_permission_check === true,
     }));
+}
+
+function readLocalTools(ctx: ReplContext): ToolViewInfo[] {
+  return ctx.pluginHost.listTools().map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    inputSchema: tool.inputSchema,
+    source: toolSource(tool.name),
+    requiresApproval: typeof tool.checkPermission === 'function',
+  }));
+}
+
+async function loadToolInfo(ctx: ReplContext): Promise<ToolViewInfo[]> {
+  return ctx.rpc ? readToolList(await ctx.rpc.request<unknown>('tools.list')) : readLocalTools(ctx);
+}
+
+function truncateText(text: string, max: number): string {
+  return truncateToWidth(text, max);
+}
+
+function oneLine(text: string): string {
+  return text.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** 纯函数：工具列表视图（名称 + 截断描述 + source/permission 标记） */
+export function buildToolsListView(tools: ToolViewInfo[]): ListView {
+  return {
+    kind: 'list',
+    title: 'Tools',
+    items: tools.map((tool) => ({
+      key: tool.name,
+      label: tool.name,
+      description: truncateText(oneLine(tool.description), 96),
+      badge: `${tool.source}${tool.requiresApproval ? ' · ask' : ''}`,
+    })),
+    actions: [{ id: 'inspect', key: 'enter', label: 'inspect', enabled: 'selected' }],
+    emptyText: 'No tools registered.',
+  };
+}
+
+/** 纯函数：schema 美化并限制行数/字符数（避免超大 schema 撑爆详情） */
+export function formatToolSchema(schema: unknown, maxLines = 80, maxChars = 8000): string[] {
+  if (schema === undefined || schema === null) return ['(none)'];
+  let text: string;
+  try {
+    text = JSON.stringify(schema, null, 2) ?? '(none)';
+  } catch {
+    text = String(schema);
+  }
+  const clipped = text.length > maxChars ? `${text.slice(0, maxChars)}\n… (truncated)` : text;
+  const lines = clipped.split('\n');
+  if (lines.length <= maxLines) return lines;
+  return [...lines.slice(0, maxLines), `… ${lines.length - maxLines} more lines`];
+}
+
+/** 纯函数：工具详情视图 */
+export function buildToolDetailView(tool: ToolViewInfo): DetailView {
+  return {
+    kind: 'detail',
+    title: `Tool: ${tool.name}`,
+    key: tool.name,
+    badge: { text: tool.source, tone: tool.source === 'mcp' ? 'info' : 'default' },
+    sections: [
+      {
+        title: 'Overview',
+        fields: [
+          { label: 'Name', value: tool.name },
+          { label: 'Source', value: tool.source },
+          {
+            label: 'Permission',
+            value: tool.requiresApproval ? 'ask when invoked' : 'default policy',
+          },
+          { label: 'Description', value: tool.description || '-' },
+        ],
+      },
+      { title: 'Input schema', lines: formatToolSchema(tool.inputSchema) },
+    ],
+  };
 }
 
 function readPluginNames(value: unknown): string[] {
@@ -636,6 +738,34 @@ function readPluginNames(value: unknown): string[] {
     .filter((name): name is string => typeof name === 'string');
 }
 
+/** `/tools` 视图动作：Enter 打开工具详情（含完整描述与 input schema） */
+export async function runToolsViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  if (invocation.actionId !== 'inspect' && invocation.actionId !== 'enter') {
+    return {
+      handled: true,
+      output: `\nUnknown /tools view action "${invocation.actionId}".\n`,
+    };
+  }
+  const name = invocation.selectionKey || invocation.viewKey;
+  if (!name) return { handled: true, output: '\nSelect a tool first.\n' };
+  try {
+    const tool = (await loadToolInfo(ctx)).find((item) => item.name === name);
+    if (!tool) return { handled: true, output: `\nTool "${name}" not found.\n` };
+    return {
+      handled: true,
+      view: { source: 'tools', view: buildToolDetailView(tool) },
+    };
+  } catch (error) {
+    return {
+      handled: true,
+      output: `\nFailed to load tool "${name}":\n${formatRpcError(error)}\n`,
+    };
+  }
+}
+
 function toolsCommand(): CommandEntry {
   return {
     name: 'tools',
@@ -645,24 +775,34 @@ function toolsCommand(): CommandEntry {
     keywords: ['plugins', 'capabilities', 'tools'],
     run: async (_args, ctx, _state) => {
       try {
-        const list = ctx.rpc
-          ? readToolList(await ctx.rpc.request<unknown>('tools.list'))
-          : ctx.pluginHost.listTools();
+        const list = await loadToolInfo(ctx);
+        const view: ViewEnvelope = { source: 'tools', view: buildToolsListView(list) };
         if (list.length === 0) {
-          return { handled: true, output: '\nNo tools registered.\n' };
+          return { handled: true, output: '\nNo tools registered.\n', view };
         }
         const lines = ['', `Available tools (${list.length}):`];
-        for (const t of list) lines.push(`  - ${t.name}: ${t.description ?? ''}`.trimEnd());
+        for (const t of list) lines.push(`  - ${t.name}: ${t.description}`.trimEnd());
         lines.push('');
-        return { handled: true, output: lines.join('\n') };
+        return { handled: true, output: lines.join('\n'), view };
       } catch (error) {
         return { handled: true, output: `\nFailed to list tools:\n${formatRpcError(error)}\n` };
       }
     },
+    viewAction: (invocation, ctx) => runToolsViewAction(invocation, ctx),
   };
 }
 
 // ── /plugins ─────────────────────────────────────
+
+/** 纯函数：插件列表视图（名称列表足够清晰，无详情层） */
+export function buildPluginsListView(plugins: string[]): ListView {
+  return {
+    kind: 'list',
+    title: 'Loaded plugins',
+    items: plugins.map((name) => ({ key: name, label: name, badge: 'plugin' })),
+    emptyText: 'No plugins loaded.',
+  };
+}
 
 function pluginsCommand(): CommandEntry {
   return {
@@ -676,13 +816,14 @@ function pluginsCommand(): CommandEntry {
         const plugins = ctx.rpc
           ? readPluginNames(await ctx.rpc.request<unknown>('plugins.list'))
           : ctx.plugins;
+        const view: ViewEnvelope = { source: 'plugins', view: buildPluginsListView(plugins) };
         if (plugins.length === 0) {
-          return { handled: true, output: '\nNo plugins loaded.\n' };
+          return { handled: true, output: '\nNo plugins loaded.\n', view };
         }
         const lines = ['', `Loaded plugins (${plugins.length}):`];
         for (const p of plugins) lines.push(`  - ${p}`);
         lines.push('');
-        return { handled: true, output: lines.join('\n') };
+        return { handled: true, output: lines.join('\n'), view };
       } catch (error) {
         return {
           handled: true,
@@ -702,7 +843,7 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
     usage: '/help',
     category: 'system',
     keywords: ['commands', 'usage'],
-    run: (_args, _ctx, _state) => ({ handled: true, output: renderHelp(reg) }),
+    run: (_args, ctx, _state) => ({ handled: true, output: renderHelp(reg, ctx) }),
   };
 }
 

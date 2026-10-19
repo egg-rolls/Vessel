@@ -31,6 +31,7 @@ import {
   viewContentWidth,
   viewWidth,
 } from '../views/layout.js';
+import { viewSelectionKey, viewSelectionRow } from '../views/selection.js';
 import type { ListView, TableView, ViewRow } from '../views/types.js';
 import {
   formatConfirmMessage,
@@ -159,14 +160,14 @@ export function InteractiveViewHost({
     return 0;
   }, [view, filteredRows, filteredItems, selectedKey]);
 
-  const selectedRow: ViewRow | null =
-    view.kind === 'table' ? (filteredRows[selectedIndex] ?? null) : null;
-  const selectionKey =
-    view.kind === 'table'
-      ? (selectedRow?.key ?? '')
-      : view.kind === 'list'
-        ? (filteredItems[selectedIndex]?.key ?? '')
-        : '';
+  // list 的 item 与 detail 的 view.key 都归一为行，保证 enabled: 'selected' /
+  // 'not-current' 与 confirm 文案在非表格视图里同样生效。
+  const selectedRow: ViewRow | null = viewSelectionRow(
+    view,
+    view.kind === 'table' ? (filteredRows[selectedIndex] ?? null) : null,
+    view.kind === 'list' ? filteredItems[selectedIndex] : undefined,
+  );
+  const selectionKey = viewSelectionKey(selectedRow);
 
   const disabledActionKeys = actions
     .filter((action) => !isViewActionEnabled(action, selectedRow))
@@ -196,12 +197,11 @@ export function InteractiveViewHost({
       const inkKey: ViewKey = { ...key, input: inputChar };
 
       if (status === 'error') {
-        if (inputChar === 'r') {
-          const refresh = actions.find((action) => action.id === 'refresh');
-          if (refresh) {
-            setNotice(null);
-            onAction(refresh, selectionKey);
-          }
+        const refresh = actions.find((action) => action.id === 'refresh');
+        // 刷新键由视图声明（runs/metrics 用 r，workflows/mcp 用 g）；r 作为兼容兜底。
+        if (refresh && (inputChar === refresh.key || inputChar === 'r')) {
+          setNotice(null);
+          onAction(refresh, selectionKey);
         }
         if (key.escape) onClose();
         return;
@@ -372,7 +372,9 @@ export function InteractiveViewHost({
           <Text color={theme.muted}>{error ?? 'Unknown error.'}</Text>
         </Box>
         <Box marginTop={1}>
-          <Text color={theme.faint}>r retry · esc close</Text>
+          <Text color={theme.faint}>
+            {actions.find((action) => action.id === 'refresh')?.key ?? 'r'} retry · esc close
+          </Text>
         </Box>
       </ViewFrame>
     );

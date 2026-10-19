@@ -136,6 +136,12 @@ function move(state: ViewKeyState, index: number): ViewKeyReduction {
 function browse(state: ViewKeyState, key: ViewKey): ViewKeyReduction {
   if (key.escape) return { state, intent: { type: 'close' } };
 
+  // 动作键优先于单字符导航（g 既是 home 又可能是 refresh；动作必须能触发）。
+  if (isPrintable(key)) {
+    const input = key.input ?? '';
+    if (state.actionKeys.includes(input)) return emitAction(state, input);
+  }
+
   if (key.upArrow || (key.input === 'k' && !key.ctrl && !key.meta)) {
     return move(state, state.selectedIndex - 1);
   }
@@ -162,7 +168,6 @@ function browse(state: ViewKeyState, key: ViewKey): ViewKeyReduction {
 
   if (isPrintable(key)) {
     const input = key.input ?? '';
-    if (state.actionKeys.includes(input)) return emitAction(state, input);
 
     // 1-9 快速选择：与旧 picker 行为一致（数字不是动作键时）。
     if (/^[1-9]$/.test(input)) {

@@ -20,8 +20,10 @@ export interface CommandItem {
   keywords?: string[];
   /** hidden 命令不进入补全（visibleList 已过滤，这里再兜一层） */
   hidden?: boolean;
-  /** 当前上下文是否可用；false 显示 `(unavailable)` 标签 */
+  /** 当前上下文是否可用；false 显示不可用原因标签 */
   available?: boolean;
+  /** 不可用原因（如 'RPC required'）；缺省显示 'unavailable' */
+  unavailableHint?: string;
 }
 
 interface InlineAutocompleteProps {
@@ -257,7 +259,8 @@ export function InlineAutocomplete({
       {filtered.slice(start, end).map((cmd, offset) => {
         const i = start + offset;
         const active = i === selectedIndex;
-        const availability = cmd.available === false ? ' (unavailable)' : '';
+        const availability =
+          cmd.available === false ? ` (${cmd.unavailableHint ?? 'unavailable'})` : '';
         const descriptionBudget = Math.max(
           1,
           contentWidth - 2 - displayWidth(cmd.name) - 3 - availability.length,

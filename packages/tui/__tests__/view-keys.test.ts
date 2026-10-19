@@ -52,6 +52,19 @@ describe('browse 模式', () => {
     expect(reduceViewKey(state(), { end: true }).state.selectedIndex).toBe(4);
   });
 
+  it('动作键优先于单字符导航（g 刷新 vs go-home）', () => {
+    // 未声明 g 动作时，g 仍是 Home。
+    expect(reduceViewKey(state({ selectedIndex: 3 }), { input: 'g' }).state.selectedIndex).toBe(0);
+    // 声明 g 动作（/workflows 刷新）时，g 必须触发动作而不是移动选中项。
+    const withAction = state({
+      selectedIndex: 3,
+      actionKeys: ['g', 'r'],
+    });
+    const result = reduceViewKey(withAction, { input: 'g' });
+    expect(result.intent).toEqual({ type: 'action', key: 'g' });
+    expect(result.state.selectedIndex).toBe(3);
+  });
+
   it('Esc 关闭视图', () => {
     expect(reduceViewKey(state(), { escape: true }).intent).toEqual({ type: 'close' });
   });

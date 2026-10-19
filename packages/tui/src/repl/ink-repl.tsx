@@ -35,7 +35,7 @@ import { SubagentActivity } from '../components/SubagentActivity.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
-import type { ReplContext } from '../repl-context.js';
+import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
@@ -43,6 +43,7 @@ import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
+import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
 import { computeLiveLayout } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
@@ -98,8 +99,52 @@ function InkRepl({ ctx }: InkReplProps) {
   const viewRequestIdRef = useRef(0);
   /** picker 重拉：旧响应不得覆盖新响应 */
   const resumeRequestIdRef = useRef(0);
+  /** 本轮取消是否已由 StreamOutput 归档（避免再追加一条独立的 Cancelled 提示） */
+  const streamCancellationArchivedRef = useRef(false);
 
   const commands = useMemo(() => createCommands(), []);
+
+  /**
+   * /runs resume 与视图动作 Enter 共用的运行态接管：
+   * 复用 runStart/runEnd、Esc/Ctrl+C 取消路径与归档语义。
+   */
+  const startResumeRun = useCallback(
+    async (handle: DurableRunHandle) => {
+      const abort = new AbortController();
+      dispatch({ type: 'runStart', abort });
+      const outcome = await executeResume(handle, abort);
+      if (outcome.status === 'cancelled') {
+        // 有流式内容时，StreamOutput 已归档带「已取消」标注的正文；
+        // 仅在没有内容可归档时补一条简短的取消提示。
+        if (!streamCancellationArchivedRef.current) {
+          dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+        }
+        streamCancellationArchivedRef.current = false;
+      } else if (outcome.status === 'failed') {
+        dispatch({
+          type: 'appendHistory',
+          line: formatClassifiedError(classifyError(outcome.error)),
+        });
+      }
+      dispatch({ type: 'runEnd' });
+    },
+    [dispatch],
+  );
+
+  /** /workflows run|resume 与视图动作共用的运行态接管。 */
+  const startWorkflowRun = useCallback(
+    async (handle: WorkflowRunHandle) => {
+      const abort = new AbortController();
+      dispatch({ type: 'runStart', abort });
+      const outcome = await executeWorkflow(handle, abort);
+      dispatch({
+        type: 'appendHistory',
+        line: formatWorkflowOutcome(handle.workflowRunId, outcome),
+      });
+      dispatch({ type: 'runEnd' });
+    },
+    [dispatch],
+  );
 
   // 预计算的命令列表（用于内联补全）；hidden alias（/sessions）不出现
   const allCommands = useMemo<CommandItem[]>(() => {
@@ -111,6 +156,7 @@ function InkRepl({ ctx }: InkReplProps) {
       keywords: entry.keywords,
       hidden: entry.hidden,
       available: entry.available ? entry.available(ctx) : true,
+      ...(entry.unavailableHint ? { unavailableHint: entry.unavailableHint } : {}),
     }));
   }, [commands, ctx]);
 
@@ -327,37 +373,9 @@ function InkRepl({ ctx }: InkReplProps) {
             dispatch({ type: 'patchRepl', patch: result.nextState });
           }
           // /runs resume：复用既有运行态（runStart/runEnd），Esc / Ctrl+C 走同一取消路径。
-          if (result.resumeRun) {
-            const handle = result.resumeRun;
-            const abort = new AbortController();
-            dispatch({ type: 'runStart', abort });
-            const outcome = await executeResume(handle, abort);
-            if (outcome.status === 'cancelled') {
-              // 有流式内容时，StreamOutput 已归档带「已取消」标注的正文；
-              // 仅在没有内容可归档时补一条简短的取消提示。
-              if (!streamCancellationArchivedRef.current) {
-                dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
-              }
-              streamCancellationArchivedRef.current = false;
-            } else if (outcome.status === 'failed') {
-              dispatch({
-                type: 'appendHistory',
-                line: formatClassifiedError(classifyError(outcome.error)),
-              });
-            }
-            dispatch({ type: 'runEnd' });
-          }
+          if (result.resumeRun) await startResumeRun(result.resumeRun);
           // /workflows run|resume：阻塞等待 done；Esc / Ctrl+C 走同一 abort -> cancel(id)。
-          if (result.workflowRun) {
-            const abort = new AbortController();
-            dispatch({ type: 'runStart', abort });
-            const outcome = await executeWorkflow(result.workflowRun, abort);
-            dispatch({
-              type: 'appendHistory',
-              line: formatWorkflowOutcome(result.workflowRun.workflowRunId, outcome),
-            });
-            dispatch({ type: 'runEnd' });
-          }
+          if (result.workflowRun) await startWorkflowRun(result.workflowRun);
           return;
         }
 
@@ -427,12 +445,24 @@ function InkRepl({ ctx }: InkReplProps) {
       ui.run.phase,
       stdout,
       dispatch,
+      startResumeRun,
+      startWorkflowRun,
     ],
   );
 
+  const closeView = useCallback(() => {
+    // 使在途响应失效，避免关闭后 late dispatch。
+    viewRequestIdRef.current += 1;
+    dispatch({ type: 'closeView' });
+  }, [dispatch]);
+
   /**
    * 视图动作：路由回产生该视图的命令（registry.dispatchViewAction）。
-   * 只有 refresh 进入 loading 态；其它动作成功返回 output 时按 toast 追加一行，视图保持打开。
+   *
+   * - refresh 进入 loading 态；失败时进入 error 态（可 r 重试），不会卡在 loading。
+   * - resume/cancel 等动作返回 `resumeRun` / `workflowRun` 时，先关闭视图再接管运行态
+   *   （与 /runs resume、/workflows run|resume 同一条路径）。
+   * - 其它动作成功返回 output 时按 toast 追加一行，视图保持打开。
    */
   const handleViewAction = useCallback(
     async (action: ViewAction, selectionKey: string, actionValue?: string) => {
@@ -442,12 +472,15 @@ function InkRepl({ ctx }: InkReplProps) {
       const requestId = isRefresh ? ++viewRequestIdRef.current : viewRequestIdRef.current;
       if (isRefresh) dispatch({ type: 'viewLoading', requestId });
 
+      const viewKey = viewContextKey(active.envelope.view);
       const result = await commands.dispatchViewAction(
         active.envelope.source,
         {
           actionId: action.id,
           selectionKey,
           ...(actionValue !== undefined ? { value: actionValue } : {}),
+          viewKind: active.envelope.view.kind,
+          ...(viewKey !== undefined ? { viewKey } : {}),
         },
         ctx,
         { ...state },
@@ -457,6 +490,16 @@ function InkRepl({ ctx }: InkReplProps) {
       if (isRefresh && requestId !== viewRequestIdRef.current) return;
 
       if (result.nextState) dispatch({ type: 'patchRepl', patch: result.nextState });
+
+      // 运行态接管：视图让位给正常 run 生命周期（先保留 "Resuming..." 状态行）。
+      if (result.resumeRun || result.workflowRun) {
+        if (result.output) dispatch({ type: 'appendHistory', line: result.output });
+        closeView();
+        if (result.resumeRun) await startResumeRun(result.resumeRun);
+        if (result.workflowRun) await startWorkflowRun(result.workflowRun);
+        return;
+      }
+
       if (result.view) {
         dispatch({
           type: 'viewData',
@@ -464,18 +507,18 @@ function InkRepl({ ctx }: InkReplProps) {
           ...(selectionKey ? { selectedKey: selectionKey } : {}),
           ...(isRefresh ? { requestId } : {}),
         });
+      } else if (isRefresh) {
+        dispatch({
+          type: 'viewError',
+          message: (result.output ?? 'Refresh failed.').trim() || 'Refresh failed.',
+          requestId,
+        });
       } else if (result.output) {
         dispatch({ type: 'appendHistory', line: result.output });
       }
     },
-    [ui.view, commands, ctx, state, dispatch],
+    [ui.view, commands, ctx, state, dispatch, closeView, startResumeRun, startWorkflowRun],
   );
-
-  const closeView = useCallback(() => {
-    // 使在途响应失效，避免关闭后 late dispatch。
-    viewRequestIdRef.current += 1;
-    dispatch({ type: 'closeView' });
-  }, [dispatch]);
 
   /** 只取消当前 run（不退出进程） */
   const cancelRun = useCallback(() => {
@@ -618,9 +661,6 @@ function InkRepl({ ctx }: InkReplProps) {
     },
     [dispatch],
   );
-
-  /** 本轮取消是否已由 StreamOutput 归档（避免再追加一条独立的 Cancelled 提示） */
-  const streamCancellationArchivedRef = useRef(false);
 
   // StreamOutput 完成回调：将 AI 响应归档到 history
   const handleStreamComplete = useCallback(

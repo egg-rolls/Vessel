@@ -57,6 +57,11 @@ export interface TableView {
   emptyText?: string;
   /** 标题右侧的计数 / 过滤说明 */
   meta?: string;
+  /**
+   * 视图上下文（如 /trace 的 run_id、/config 的 detail|sources）。
+   * 渲染层不解释它，只在 viewAction 调用时作为 `viewKey` 回传。
+   */
+  key?: string;
 }
 
 export interface ListView {
@@ -73,6 +78,8 @@ export interface ListView {
   actions?: ViewAction[];
   initialKey?: string;
   emptyText?: string;
+  /** 视图上下文；同 TableView.key */
+  key?: string;
 }
 
 export interface DetailField {
@@ -94,6 +101,11 @@ export interface DetailView {
   badge?: { text: string; tone: ViewTone };
   sections: DetailSection[];
   actions?: ViewAction[];
+  /**
+   * 详情对应的实体 key（如 workflow_run_id / tenant_id / tool name）。
+   * 详情没有行选中，viewAction 用它作为 `selectionKey` 的等价物。
+   */
+  key?: string;
 }
 
 export interface FormField {
@@ -141,6 +153,10 @@ export interface ViewActionInvocation {
   selectionKey: string;
   /** rename/form 的输入值 */
   value?: string;
+  /** 触发动作时的视图类型（用于同一命令内 table/detail 分支，如 /config 的 s） */
+  viewKind?: CommandView['kind'];
+  /** 视图自带上下文（TableView.key / ListView.key / DetailView.key） */
+  viewKey?: string;
 }
 
 /** 当前视图的 actions；缺省空数组 */
