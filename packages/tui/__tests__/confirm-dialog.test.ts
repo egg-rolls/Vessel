@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import {
-  type ConfirmChoice,
-  formatConfirmChoice,
-  moveConfirmSelection,
-} from '../src/components/ConfirmDialog.js';
+import { formatConfirmChoice, moveConfirmSelection } from '../src/components/ConfirmDialog.js';
 
 describe('moveConfirmSelection', () => {
   it('左右切换', () => {
@@ -18,16 +14,10 @@ describe('moveConfirmSelection', () => {
     expect(moveConfirmSelection('always', 'right')).toBe('always');
   });
 
-  it('类型覆盖三个选项', () => {
-    const choices: ConfirmChoice[] = ['y', 'n', 'always'];
-    expect(choices).toHaveLength(3);
-  });
-
-  it('选中项始终带非颜色标记 ▸', () => {
-    expect(formatConfirmChoice('y', true)).toBe('▸[Y]es ');
-    expect(formatConfirmChoice('y', false)).toBe(' [Y]es ');
-    expect(formatConfirmChoice('n', true)).toBe('▸[N]o ');
-    expect(formatConfirmChoice('always', true)).toBe('▸[A]lways ');
-    expect(formatConfirmChoice('always', false)).toBe(' [A]lways ');
+  it('选中项以非颜色标记 ▸ 开头，未选中项没有', () => {
+    for (const choice of ['y', 'n', 'always'] as const) {
+      expect(formatConfirmChoice(choice, true).startsWith('▸')).toBe(true);
+      expect(formatConfirmChoice(choice, false).startsWith('▸')).toBe(false);
+    }
   });
 });

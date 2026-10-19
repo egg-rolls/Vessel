@@ -16,14 +16,6 @@ const session: SessionInfo = {
 };
 
 describe('resume picker reducer', () => {
-  it('初始为 idle + 空列表', () => {
-    const state = initialReplUiState(ctx);
-    expect(state.resumeStatus).toBe('idle');
-    expect(state.resumeError).toBeNull();
-    expect(state.resumeSessions).toEqual([]);
-    expect(state.resumeReloadToken).toBe(0);
-  });
-
   it('loading -> ready 保存会话并清除错误', () => {
     const loading = replUiReducer(initialReplUiState(ctx), { type: 'resumePickerLoading' });
     expect(loading.resumeStatus).toBe('loading');

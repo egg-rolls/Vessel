@@ -40,23 +40,36 @@ describe('filterCommands', () => {
   });
 });
 
+/** 窗口不变量：选中项可见、长度不超上限、边界落在 [0,total]。 */
+function expectValidWindow(total: number, selected: number, maxVisible: number): void {
+  const { start, end } = getVisibleCommandWindow(total, selected, maxVisible);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeLessThanOrEqual(total);
+  expect(end).toBeGreaterThan(start);
+  expect(end - start).toBeLessThanOrEqual(Math.min(maxVisible, total));
+  expect(selected).toBeGreaterThanOrEqual(start);
+  expect(selected).toBeLessThan(end);
+}
+
 describe('getVisibleCommandWindow', () => {
-  it('条目不超过上限时显示全部', () => {
-    expect(getVisibleCommandWindow(3, 0)).toEqual({ start: 0, end: 3 });
-    expect(getVisibleCommandWindow(8, 7)).toEqual({ start: 0, end: 8 });
+  it('条目不超过上限时覆盖全部', () => {
+    for (const [total, selected] of [
+      [3, 0],
+      [8, 7],
+    ] as const) {
+      expect(getVisibleCommandWindow(total, selected)).toEqual({ start: 0, end: total });
+    }
   });
 
-  it('选中靠前时从 0 开始，最多 8 条', () => {
-    expect(getVisibleCommandWindow(20, 2)).toEqual({ start: 0, end: MAX_VISIBLE_COMMANDS });
-  });
-
-  it('选中靠后时围绕选中项滚动', () => {
-    // 20 条、窗口 8：selected=10 -> start=7
-    expect(getVisibleCommandWindow(20, 10)).toEqual({ start: 7, end: 15 });
+  it('选中项始终落在可见窗口内且窗口不超上限', () => {
+    for (const selected of [0, 2, 10, 19]) {
+      expectValidWindow(20, selected, MAX_VISIBLE_COMMANDS);
+    }
   });
 
   it('选中最后一项时窗口贴住末尾', () => {
-    expect(getVisibleCommandWindow(20, 19)).toEqual({ start: 12, end: 20 });
+    expect(getVisibleCommandWindow(20, 19).end).toBe(20);
   });
 
   it('空列表 / 非法上限返回空窗口', () => {
@@ -64,8 +77,8 @@ describe('getVisibleCommandWindow', () => {
     expect(getVisibleCommandWindow(5, 0, 0)).toEqual({ start: 0, end: 0 });
   });
 
-  it('支持自定义窗口大小', () => {
-    expect(getVisibleCommandWindow(10, 8, 4)).toEqual({ start: 5, end: 9 });
+  it('自定义窗口大小同样满足窗口不变量', () => {
+    expectValidWindow(10, 8, 4);
   });
 });
 

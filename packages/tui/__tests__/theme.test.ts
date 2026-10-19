@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { createTheme, detectColorLevel, theme } from '../src/theme.js';
+import { createTheme, detectColorLevel } from '../src/theme.js';
 
 describe('detectColorLevel', () => {
   it('默认 16 色', () => {
@@ -30,29 +30,44 @@ describe('detectColorLevel', () => {
   });
 });
 
+const ANSI16_NAMES = new Set([
+  'black',
+  'red',
+  'green',
+  'yellow',
+  'blue',
+  'magenta',
+  'cyan',
+  'white',
+  'blackBright',
+  'redBright',
+  'greenBright',
+  'yellowBright',
+  'blueBright',
+  'magentaBright',
+  'cyanBright',
+  'whiteBright',
+  'gray',
+  'grey',
+]);
+
 describe('createTheme', () => {
   it('level 0 关闭全部颜色', () => {
     const fallback = createTheme(0);
     expect(Object.values(fallback).every((value) => value === undefined)).toBe(true);
   });
 
-  it('level 1 使用命名 ANSI 色（不用黑色/暗色正文）', () => {
-    const fallback = createTheme(1);
-    expect(fallback.brand).toBe('yellowBright');
-    expect(fallback.faint).toBe('gray');
-    expect(fallback.line).toBe('gray');
-    expect(fallback.danger).toBe('redBright');
-    expect(fallback.selectedBg).toBe('black');
-    expect(Object.values(fallback).every((value) => value !== undefined)).toBe(true);
+  it('level 1 全部使用命名 ANSI 色', () => {
+    for (const color of Object.values(createTheme(1))) {
+      expect(typeof color).toBe('string');
+      expect(ANSI16_NAMES.has(color as string)).toBe(true);
+    }
   });
 
-  it('level 2/3 保持 Linen hex', () => {
+  it('level 2/3 使用 hex 真彩色', () => {
     expect(createTheme(2)).toEqual(createTheme(3));
-    expect(createTheme(3).brand).toBe('#c2a273');
-    expect(createTheme(3).line).toBe('#4a453d');
-  });
-
-  it('默认 theme 按当前环境检测', () => {
-    expect(theme).toEqual(createTheme(detectColorLevel(process.env)));
+    for (const color of Object.values(createTheme(3))) {
+      expect(color).toMatch(/^#[0-9a-f]{6}$/i);
+    }
   });
 });

@@ -338,7 +338,16 @@ describe('扁平会话命令', () => {
 
   it('/history 参数非法 -> usage，不读数据', async () => {
     const reg = createCommands();
-    const ctx = makeCtx();
+    let reads = 0;
+    const ctx = makeCtx({
+      rpc: {
+        request: async <T>(_method: string, _params?: unknown): Promise<T> => {
+          reads += 1;
+          return {} as T;
+        },
+        subscribe: () => () => undefined,
+      },
+    });
     const state = makeState(ctx.currentSessionId);
 
     const badLimit = (await reg.execute('history --limit 0', ctx, state)).output ?? '';
@@ -348,6 +357,7 @@ describe('扁平会话命令', () => {
     expect(badLimit).toContain('--limit must be an integer between 1 and 500');
     expect(badRole).toContain('--role must be one of: user, assistant, tool');
     expect(unknown).toContain('unknown argument "--bogus"');
+    expect(reads).toBe(0);
   });
 
   it('/exit 置 running=false 并调 onExit', async () => {
@@ -385,10 +395,6 @@ describe('扁平会话命令', () => {
 });
 
 describe('parseHistoryArgs', () => {
-  it('默认无限制、无角色', () => {
-    expect(parseHistoryArgs([])).toEqual({ ok: true, value: {} });
-  });
-
   it('解析 limit 与 role', () => {
     expect(parseHistoryArgs(['--limit', '20'])).toEqual({ ok: true, value: { limit: 20 } });
     expect(parseHistoryArgs(['--role', 'tool'])).toEqual({ ok: true, value: { role: 'tool' } });

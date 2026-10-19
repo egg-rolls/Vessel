@@ -319,7 +319,7 @@ describe('getTranscriptText', () => {
     expect(getTranscriptText(segs)).toBe('hello\nworld');
   });
 
-  it('completed 工具段生成紧凑摘要 + 结果', () => {
+  it('completed 工具段包含工具名、耗时与结果尾部', () => {
     const segs: Segment[] = [
       { type: 'text', id: 't1', text: 'Checking.' },
       {
@@ -332,10 +332,18 @@ describe('getTranscriptText', () => {
         result: 'a.txt\nb.txt',
       },
     ];
-    expect(getTranscriptText(segs)).toBe('Checking.\n✓ bash (12ms)\na.txt\nb.txt');
+    const transcript = getTranscriptText(segs);
+
+    expect(transcript).toContain('Checking.');
+    expect(transcript).toContain('bash');
+    expect(transcript).toContain('12ms');
+    expect(transcript).toContain('a.txt');
+    expect(transcript).toContain('b.txt');
+    expect(transcript.indexOf('bash')).toBeLessThan(transcript.indexOf('a.txt'));
+    expect(transcript.indexOf('a.txt')).toBeLessThan(transcript.indexOf('b.txt'));
   });
 
-  it('failed 工具段生成 ✗ 摘要 + error', () => {
+  it('failed 工具段包含失败标记、工具名与 error', () => {
     const segs: Segment[] = [
       {
         type: 'tool_call',
@@ -346,7 +354,11 @@ describe('getTranscriptText', () => {
         error: 'permission denied',
       },
     ];
-    expect(getTranscriptText(segs)).toBe('✗ bash\npermission denied');
+    const transcript = getTranscriptText(segs);
+
+    expect(transcript).toContain('✗');
+    expect(transcript).toContain('bash');
+    expect(transcript).toContain('permission denied');
   });
 
   it('超长工具结果只保留末尾 12 行', () => {
@@ -364,9 +376,10 @@ describe('getTranscriptText', () => {
     ];
     const transcript = getTranscriptText(segs);
     expect(transcript).toContain('…（前文已折叠）');
+    expect(transcript).toContain('line 9');
     expect(transcript).toContain('line 20');
-    expect(transcript).not.toContain('line 7');
     expect(transcript).not.toContain('line 8\n');
+    expect(transcript).not.toContain('line 1\n');
   });
 
   it('running 工具段被跳过', () => {

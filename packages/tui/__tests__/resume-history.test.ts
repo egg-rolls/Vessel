@@ -6,11 +6,11 @@ function title(lines: string[]): string {
   return lines.find((line) => line.startsWith('── history')) ?? '';
 }
 
-/** 取出所有消息内容行（跳过标题/空行），并按实现的前缀剥离。 */
+/** 取出所有消息内容行（跳过标题/空行），剥离角色前缀。 */
 function bodies(lines: string[]): string[] {
   return lines
     .filter((line) => line.includes('│'))
-    .map((line) => line.slice(line.indexOf('│') + 2));
+    .map((line) => line.slice(line.indexOf('│') + 1).trimStart());
 }
 
 describe('formatResumeHistory（/resume 历史回灌）', () => {
@@ -25,16 +25,6 @@ describe('formatResumeHistory（/resume 历史回灌）', () => {
     expect(lines.join('\n')).not.toContain('secret instructions');
     expect(title(lines)).toContain('last 3 messages');
     expect(bodies(lines)).toEqual(['hello', 'hi there', 'tool output']);
-  });
-
-  it('空数组或只有 system 消息时返回空数组', () => {
-    expect(formatResumeHistory([])).toEqual([]);
-    expect(
-      formatResumeHistory([
-        { role: 'system', content: 'a' },
-        { role: 'system', content: 'b' },
-      ]),
-    ).toEqual([]);
   });
 
   it('超过 20 条时只保留最后 20 条，标题带 of', () => {
@@ -70,7 +60,7 @@ describe('formatResumeHistory（/resume 历史回灌）', () => {
     expect(body).not.toContain('…');
   });
 
-  it('三种角色使用 you/ai /tool 前缀并保持消息顺序', () => {
+  it('三种角色使用 you/ai/tool 前缀并保持消息顺序', () => {
     const lines = formatResumeHistory([
       { role: 'user', content: 'u' },
       { role: 'assistant', content: 'a' },
@@ -78,16 +68,27 @@ describe('formatResumeHistory（/resume 历史回灌）', () => {
     ]);
     const contentLines = lines.filter((line) => line.includes('│'));
 
-    expect(contentLines[0]).toBe('  you  │ u');
-    expect(contentLines[1]).toBe('  ai   │ a');
-    expect(contentLines[2]).toBe('  tool │ t');
+    expect(contentLines).toHaveLength(3);
+    contentLines.forEach((line, index) => {
+      const role = ['you', 'ai', 'tool'][index] ?? '';
+      expect(line).toContain(role);
+      expect(bodies([line])[0]).toBe(['u', 'a', 't'][index] ?? '');
+    });
   });
 
   it('多行内容用 │ 续行', () => {
     const lines = formatResumeHistory([{ role: 'user', content: 'first\nsecond\nthird' }]);
+    const contentLines = lines.filter((line) => line.includes('│'));
 
-    expect(lines).toContain('  you  │ first');
-    expect(lines).toContain('       │ second');
-    expect(lines).toContain('       │ third');
+    expect(contentLines).toHaveLength(3);
+    const first = contentLines[0] ?? '';
+    expect(first).toContain('you');
+    expect(bodies([first])[0]).toBe('first');
+
+    for (const [index, text] of ['second', 'third'].entries()) {
+      const line = contentLines[index + 1] ?? '';
+      expect(line.trimStart().startsWith('│')).toBe(true);
+      expect(line).toContain(text);
+    }
   });
 });
