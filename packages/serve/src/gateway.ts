@@ -37,9 +37,9 @@ import {
   sortCheckpoints,
   toRunSummary,
 } from './durable.js';
-import { type EvalsGatewayOptions, normalizeEvalReport } from './evals.js';
+import type { EvalsGatewayOptions } from './evals.js';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
-import { type FeishuGatewayOptions, normalizeFeishuStatus } from './feishu.js';
+import type { FeishuGatewayOptions } from './feishu.js';
 import {
   buildContentSecurityPolicy,
   corsHeaders,
@@ -49,6 +49,7 @@ import {
   normalizeAllowedOrigins,
   originAllowed,
 } from './gateway/auth.js';
+import { MethodError } from './gateway/errors.js';
 import {
   eventFrame as buildEventFrame,
   gapFrame as buildGapFrame,
@@ -57,6 +58,25 @@ import {
   resultFrame,
   eventSourceNodeId as sourceNodeId,
 } from './gateway/frames.js';
+import { checkpointBelongsToTenant } from './gateway/methods/common.js';
+import {
+  createConfigMethods,
+  createPluginsMethods,
+  createToolMethods,
+} from './gateway/methods/config.js';
+import { createEvalMethods } from './gateway/methods/evals.js';
+import { createFeishuMethods } from './gateway/methods/feishu.js';
+import { createInteractionMethods } from './gateway/methods/interactions.js';
+import { createMcpMethods } from './gateway/methods/mcp.js';
+import {
+  createEventsMethods,
+  createMetricsMethods,
+  createTraceMethods,
+} from './gateway/methods/observability.js';
+import { createRunMethods } from './gateway/methods/runs.js';
+import { createSessionMethods } from './gateway/methods/sessions.js';
+import { createTenantMethods } from './gateway/methods/tenants.js';
+import { createWorkflowMethods, parseWorkflowInputs } from './gateway/methods/workflow.js';
 import {
   flushSseGap,
   pumpSseReplay,
@@ -69,8 +89,8 @@ import {
   writeSse,
 } from './gateway/sse.js';
 import { serveStatic } from './gateway/static.js';
-import { type McpGatewayOptions, normalizeMcpServers } from './mcp.js';
-import { type MetricsProvider, type MetricsSnapshot, normalizeMetricsSnapshot } from './metrics.js';
+import type { McpGatewayOptions } from './mcp.js';
+import type { MetricsProvider, MetricsSnapshot } from './metrics.js';
 import {
   type ClientFrame,
   type NodeInfo,
@@ -79,10 +99,8 @@ import {
   type ProtocolInfo,
   protocolError,
   type ServerFrame,
-  type ToolInfo,
 } from './protocol.js';
 import {
-  buildCapabilityManifest,
   type CapabilityManifest,
   createRpcDispatcher,
   defineMethods,
@@ -92,16 +110,11 @@ import {
   type RpcErrorBody,
   type RpcMethodContext,
   type RpcMethodDefinition,
+  type RpcMethodTable,
   type RpcRequest,
   type RpcResponse,
 } from './rpc.js';
 import { createRunEngine } from './run-engine.js';
-import {
-  MAX_SESSION_SEARCH_LIMIT,
-  normalizeSearchQuery,
-  parseSearchLimit,
-  searchSessions,
-} from './session-search.js';
 import {
   fromWireMessage,
   isRemoteAddress,
@@ -122,16 +135,12 @@ import {
   eventVisible,
   extractToken,
   type GatewayAuthLike,
-  mapTenantError,
-  normalizeTenantInfo,
   resolveLocalPrincipal,
   resolvePrincipal,
   resolveTenantScope,
   TENANT_ID_PATTERN,
   type TenantControlLike,
-  type TenantInfo,
   type TenantPrincipal,
-  type TenantQuota,
 } from './tenant.js';
 import { capToolEvent } from './tool-events.js';
 import {
@@ -353,17 +362,6 @@ const DEFAULT_MAX_HISTORY = 10_000;
 const DEFAULT_MAX_BODY = 1024 * 1024;
 
 const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
-
-/** 方法级错误（映射到协议错误码） */
-class MethodError extends Error {
-  constructor(
-    readonly code: ProtocolError['code'],
-    message: string,
-  ) {
-    super(message);
-    this.name = 'MethodError';
-  }
-}
 
 /** 生成 32 字节随机令牌（base64url） */
 function generateToken(): string {
@@ -792,463 +790,55 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   // ── 运行队列 ───────────────────────────────────
 
-  async function listSessions(
-    tenantId: string = defaultTenantId,
-  ): Promise<{ sessions: unknown[] }> {
-    const backend = sessionFor(tenantId);
-    if (!backend) {
-      // 非 default tenant 未注入 sessionFor → 明确的 forbidden；default 保持旧语义。
-      if (tenantId !== defaultTenantId) {
-        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
-      }
-      throw new MethodError('no_session', 'No session backend configured');
-    }
-    return { sessions: await backend.listRich() };
-  }
-
-  function toolsPayload(tenantId: string = defaultTenantId): { tools: ToolInfo[] } {
-    const host = pluginHostFor(tenantId);
-    if (tenantId !== defaultTenantId && !host) {
-      throw new RpcError('forbidden', `Tenant plugin host is not configured: ${tenantId}`);
-    }
-    const tools = host?.listTools() ?? [];
-    return {
-      tools: tools.map((tool) => ({
-        name: tool.name,
-        description: tool.description,
-        input_schema: tool.inputSchema,
-        has_permission_check: typeof tool.checkPermission === 'function',
-      })),
-    };
-  }
-
   // ── 0.5 RPC 方法表（E10/E11；A-3 §10.1 v1.1） ──
+  // 方法按域拆到 `gateway/methods/`；这里只负责组装，保持原方法顺序。
 
-  const tenantParamSchema = {
-    type: 'object',
-    properties: { tenant_id: { type: 'string' } },
-  } as const;
+  /** 方法表在组装完成后才有值；capabilities.list 在调用时读取。 */
+  let methodTable: RpcMethodTable;
 
-  function configControl(): ConfigGatewayOptionsLike {
-    if (!opts.config) throw new RpcError('not_found', 'Config view is not available');
-    return opts.config;
-  }
-
-  async function checkQuota(
-    tenantId: string,
-    operation: 'runs.start' | 'sessions.create',
-  ): Promise<void> {
-    try {
-      await opts.tenants?.checkQuota?.(tenantId, operation);
-    } catch (error) {
-      mapTenantError(error);
-    }
-  }
-
-  async function enforceConcurrentQuota(tenantId: string): Promise<void> {
-    let limit: number | undefined;
-    try {
-      limit = (await opts.tenants?.get(tenantId))?.quota?.max_concurrent_runs;
-    } catch (error) {
-      mapTenantError(error);
-    }
-    if (limit !== undefined && engine.activeCount(tenantId) >= limit) {
-      throw new RpcError('quota_exceeded', `max_concurrent_runs exceeded for tenant ${tenantId}`, {
-        tenant_id: tenantId,
-        limit,
-      });
-    }
-  }
-
-  function throwWorkflowError(error: unknown): never {
-    const code = (error as { code?: unknown }).code;
-    const message = error instanceof Error ? error.message : String(error);
-    switch (code) {
-      case 'workflow_not_found':
-        throw new RpcError('not_found', message);
-      case 'workflow_invalid':
-        throw new RpcError('invalid_params', message);
-      case 'workflow_already_running':
-        throw new RpcError('conflict', message, { legacy_code: 'workflow_already_running' });
-      case 'workflow_not_resumable':
-        throw new RpcError('conflict', message, { legacy_code: 'workflow_not_resumable' });
-      case 'workflow_cancelled':
-        throw new RpcError('conflict', message, { legacy_code: 'workflow_invalid' });
-      case 'workflow_disabled':
-        throw new RpcError('not_found', message);
-      default:
-        throw new RpcError('internal', 'Workflow operation failed');
-    }
-  }
-
-  function metricsProvider(tenantId: string): MetricsProvider | undefined {
-    if (tenantId === defaultTenantId) return opts.metrics;
-    return opts.metricsFor?.(tenantId);
-  }
-
-  function tenantInfoOrThrow(info: unknown): TenantInfo {
-    const normalized = normalizeTenantInfo(info);
-    if (!normalized) throw new RpcError('internal', 'Invalid tenant metadata');
-    return normalized;
-  }
-
-  function stringParam(params: Record<string, unknown>, key: string): string {
-    const value = params[key];
-    if (typeof value !== 'string' || value.length === 0) {
-      throw new RpcError('invalid_params', `${key} is required`);
-    }
-    return value;
-  }
+  const configMethodsDeps = {
+    defaultTenantId,
+    version: opts.version,
+    config: opts.config,
+    methodTable: () => methodTable,
+    toolDescriptionsForTenant,
+    pluginsForTenant,
+    pluginHostFor,
+    clientCount: () => sseClients.size + wsClients.size,
+    latestSeq: () => buffer.latestSeq,
+    protocolInfo,
+    nodeInfo,
+    startedAt,
+    getTeam: () => team,
+  };
+  const observabilityMethodsDeps = {
+    defaultTenantId,
+    trace: opts.trace,
+    metricsControl: opts.metricsControl,
+    metrics: opts.metrics,
+    metricsFor: opts.metricsFor,
+  };
 
   const rpcMethods: RpcMethodDefinition[] = [
-    {
-      name: 'health.get',
-      permission: 'read',
-      params_schema: { type: 'object' },
-      handler: (_params, ctx) => ({
-        status: 'ok',
-        clients: sseClients.size + wsClients.size,
-        latest_seq: buffer.latestSeq,
-        protocol: protocolInfo,
-        node: nodeInfo(),
-        started_at: startedAt,
-        tenant_id: ctx.tenantId,
-        team: team
-          ? { enabled: true, node_id: team.nodeId, transport: team.transport?.kind ?? 'in-process' }
-          : { enabled: false },
-      }),
-    },
-    {
-      name: 'capabilities.list',
-      permission: 'read',
-      params_schema: { type: 'object' },
-      handler: (_params, ctx) =>
-        buildCapabilityManifest({
-          version: opts.version ?? '0.0.0',
-          table: methodTable,
-          tools: toolDescriptionsForTenant(ctx.tenantId),
-          plugins: pluginsForTenant(ctx.tenantId),
-        }),
-    },
-    {
-      name: 'config.get',
-      permission: 'read',
-      params_schema: tenantParamSchema,
-      handler: async (_params, ctx) => {
-        const snapshot = await configControl().snapshot(ctx.tenantId);
-        return {
-          schema_version: snapshot.schema_version,
-          config: snapshot.config,
-          // A-5 §12.2：TUI 需要展示 user/project 路径
-          paths: snapshot.paths ?? { user: '', project: '' },
-          tenant_id: snapshot.tenant_id ?? ctx.tenantId,
-          ...(snapshot.tenant_overlay_keys
-            ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
-            : {}),
-        };
-      },
-    },
-    {
-      name: 'config.sources',
-      permission: 'read',
-      params_schema: tenantParamSchema,
-      handler: async (_params, ctx) => {
-        const snapshot = await configControl().snapshot(ctx.tenantId);
-        return {
-          sources: snapshot.sources,
-          tenant_id: snapshot.tenant_id ?? ctx.tenantId,
-          ...(snapshot.tenant_overlay_keys
-            ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
-            : {}),
-        };
-      },
-    },
-    {
-      name: 'sessions.list',
-      permission: 'read',
-      params_schema: tenantParamSchema,
-      handler: (_params, ctx) => listSessions(ctx.tenantId),
-    },
-    {
-      name: 'sessions.get',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['session_id'],
-        properties: { session_id: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params, ctx) => {
-        const backend = requireSession(ctx.tenantId);
-        const state = await backend.load(stringParam(params, 'session_id'));
-        if (!state) throw new RpcError('not_found', 'Session not found');
-        return { session: state };
-      },
-    },
-    {
-      name: 'sessions.search',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['query'],
-        properties: {
-          query: { type: 'string', minLength: 1, maxLength: 256 },
-          limit: { type: 'integer', minimum: 1, maximum: MAX_SESSION_SEARCH_LIMIT },
-        },
-      },
-      handler: async (params, ctx) => {
-        const query = normalizeSearchQuery(params.query);
-        if (query === null) {
-          throw new RpcError('invalid_params', 'query must be 1..256 characters');
-        }
-        const limit = parseSearchLimit(params.limit);
-        if (limit === null) {
-          throw new RpcError(
-            'invalid_params',
-            `limit must be an integer between 1 and ${MAX_SESSION_SEARCH_LIMIT}`,
-          );
-        }
-        const backend = requireSession(ctx.tenantId);
-        try {
-          return { sessions: await searchSessions(backend, query, limit) };
-        } catch (error) {
-          mapTenantError(error);
-        }
-      },
-    },
-    {
-      name: 'sessions.delete',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['session_id'],
-        properties: { session_id: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params, ctx) => {
-        if (!opts.sessionData) {
-          throw new RpcError('internal', 'deleteSessionData is not configured');
-        }
-        try {
-          return await opts.sessionData.deleteSessionData(
-            stringParam(params, 'session_id'),
-            ctx.tenantId,
-          );
-        } catch (error) {
-          mapTenantError(error);
-        }
-      },
-    },
-    {
-      name: 'sessions.rename',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['session_id', 'title'],
-        properties: {
-          session_id: { type: 'string', minLength: 1 },
-          title: { type: 'string', maxLength: 512 },
-        },
-      },
-      handler: async (params, ctx) => {
-        const backend = requireSession(ctx.tenantId);
-        const sessionId = stringParam(params, 'session_id');
-        const title = stringParam(params, 'title');
-        const state = await backend.load(sessionId);
-        if (!state) throw new RpcError('not_found', 'Session not found');
-        await backend.save({ ...state, title, updated_at: Date.now() });
-        return { session_id: sessionId, title };
-      },
-    },
-    {
-      name: 'runs.list',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: {
-          session_id: { type: 'string' },
-          status: { type: 'string' },
-        },
-      },
-      handler: (params, ctx) => {
-        const sessionFilter = typeof params.session_id === 'string' ? params.session_id : undefined;
-        const statusFilter = typeof params.status === 'string' ? params.status : undefined;
-        return {
-          runs: [...runs.values()]
-            .filter((record) => record.tenant_id === ctx.tenantId)
-            .filter((record) => !sessionFilter || record.session_id === sessionFilter)
-            .filter((record) => !statusFilter || record.status === statusFilter)
-            .map(publicStatus),
-        };
-      },
-    },
-    {
-      name: 'runs.get',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['run_id'],
-        properties: { run_id: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params, ctx) => {
-        const runId = stringParam(params, 'run_id');
-        const record = runs.get(runId);
-        if (record && record.tenant_id === ctx.tenantId) return { run: publicStatus(record) };
-        const durable = durableForTenant(ctx.tenantId);
-        if (!durable) {
-          if (ctx.tenantId !== defaultTenantId) {
-            throw new RpcError(
-              'forbidden',
-              `Durable runs are not configured for tenant: ${ctx.tenantId}`,
-            );
-          }
-          throw new RpcError('not_found', `Run not found: ${runId}`);
-        }
-        const checkpoint = await durable.store.load(runId);
-        if (!checkpoint || !checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
-          throw new RpcError('not_found', `Run not found: ${runId}`);
-        }
-        return { run: checkpoint };
-      },
-    },
-    {
-      name: 'runs.start',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['input'],
-        properties: {
-          input: { type: 'string', minLength: 1 },
-          session_id: { type: 'string' },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        requireRuntime(ctx.tenantId);
-        await enforceConcurrentQuota(ctx.tenantId);
-        await checkQuota(ctx.tenantId, 'runs.start');
-        return submitRun(params, ctx.tenantId);
-      },
-    },
-    {
-      name: 'runs.cancel',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['run_id'],
-        properties: { run_id: { type: 'string', minLength: 1 } },
-      },
-      handler: (params, ctx) => ({
-        cancelled: cancelRun(stringParam(params, 'run_id'), ctx.tenantId),
-      }),
-    },
-    {
-      name: 'runs.resume',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['run_id'],
-        properties: { run_id: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params, ctx) => {
-        const durable = durableForTenant(ctx.tenantId);
-        if (!durable?.store || !durable.resume) {
-          if (ctx.tenantId !== defaultTenantId) {
-            throw new RpcError(
-              'forbidden',
-              `Durable runs are not configured for tenant: ${ctx.tenantId}`,
-            );
-          }
-          throw new RpcError('not_found', 'Durable resume is not available');
-        }
-        const runId = stringParam(params, 'run_id');
-        if (!reserveResume(runId)) {
-          throw new RpcError('conflict', `Run is already being resumed: ${runId}`, {
-            legacy_code: 'run_already_running',
-          });
-        }
-        let checkpoint: Awaited<ReturnType<typeof durable.store.load>>;
-        try {
-          checkpoint = await durable.store.load(runId);
-        } catch (error) {
-          resumedRuns.delete(runId);
-          mapTenantError(error);
-        }
-        if (!checkpoint) {
-          resumedRuns.delete(runId);
-          throw new RpcError('not_found', `Run not found: ${runId}`);
-        }
-        if (!checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
-          resumedRuns.delete(runId);
-          throw new RpcError('forbidden', `Run does not belong to tenant: ${ctx.tenantId}`);
-        }
-        if (!isResumableStatus(checkpoint.status)) {
-          resumedRuns.delete(runId);
-          throw new RpcError('conflict', `Run is not resumable: ${runId}`, {
-            legacy_code: 'run_not_resumable',
-          });
-        }
-        try {
-          await durable.resume(runId);
-        } catch (error) {
-          resumedRuns.delete(runId);
-          const code = (error as { code?: unknown }).code;
-          if (code === 'run_not_found' || code === 'run_store_required') {
-            throw new RpcError(
-              'not_found',
-              error instanceof Error ? error.message : 'Run not found',
-            );
-          }
-          throw new RpcError('conflict', error instanceof Error ? error.message : 'Resume failed');
-        }
-        return { run_id: runId, status: 'queued' };
-      },
-    },
-    {
-      name: 'events.list',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: {
-          run_id: { type: 'string' },
-          since_seq: { type: 'integer', minimum: 0 },
-          since_ts: { type: 'integer', minimum: 0 },
-          types: { type: 'array', items: { type: 'string' } },
-          type_prefix: { type: 'string' },
-          limit: { type: 'integer', minimum: 0, maximum: 500 },
-          all_tenants: { type: 'boolean' },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        if (!opts.trace?.readEvents)
-          throw new RpcError('not_found', 'Trace reader is not available');
-        if (params.types !== undefined && params.type_prefix !== undefined) {
-          throw new RpcError('invalid_params', 'types and type_prefix are mutually exclusive');
-        }
-        const filter: Record<string, unknown> = {};
-        for (const key of [
-          'run_id',
-          'since_seq',
-          'since_ts',
-          'types',
-          'type_prefix',
-          'limit',
-        ] as const) {
-          if (params[key] !== undefined) filter[key] = params[key];
-        }
-        try {
-          const events = await opts.trace.readEvents(filter, ctx.tenantId);
-          return {
-            events: events.filter((event) => eventVisible(event, ctx.tenantId, ctx.allTenants)),
-          };
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          if (message.includes('invalid_params')) {
-            throw new RpcError('invalid_params', message);
-          }
-          throw new RpcError('internal', 'Failed to read trace');
-        }
-      },
-    },
+    // 顺序与拆分前一致：health → capabilities → config → sessions → runs →
+    // events.list → events.subscribe → tools/plugins → metrics → mcp → trace →
+    // tenants → interactions → workflow → evals → feishu。
+    ...createConfigMethods(configMethodsDeps),
+    ...createSessionMethods({ defaultTenantId, sessionFor, sessionData: opts.sessionData }),
+    ...createRunMethods({
+      defaultTenantId,
+      runs,
+      publicStatus,
+      submitRun,
+      cancelRun,
+      requireRuntime,
+      durableForTenant,
+      tenants: opts.tenants,
+      activeCount: (tenantId) => engine.activeCount(tenantId),
+      reserveResume,
+      releaseResume,
+    }),
+    ...createEventsMethods(observabilityMethodsDeps),
     {
       name: 'events.subscribe',
       permission: 'read',
@@ -1277,465 +867,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
         };
       },
     },
-    {
-      name: 'tools.list',
-      permission: 'read',
-      params_schema: tenantParamSchema,
-      handler: (_params, ctx) => toolsPayload(ctx.tenantId),
-    },
-    {
-      name: 'plugins.list',
-      permission: 'read',
-      params_schema: { type: 'object' },
-      handler: (_params, ctx) => ({ plugins: pluginsForTenant(ctx.tenantId) }),
-    },
-    {
-      name: 'metrics.get',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: {
-          source: { type: 'string', enum: ['live', 'trace'] },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        const source = params.source === 'trace' ? 'trace' : 'live';
-        if (source === 'trace') {
-          if (!opts.metricsControl?.rebuild) {
-            throw new RpcError('not_found', 'Trace metrics rebuild is not available');
-          }
-          const snapshot = await opts.metricsControl.rebuild(ctx.tenantId);
-          return { metrics: normalizeMetricsSnapshot(snapshot), source };
-        }
-        const provider = metricsProvider(ctx.tenantId);
-        if (!provider) throw new RpcError('not_found', 'Metrics are not available');
-        return { metrics: normalizeMetricsSnapshot(provider()), source };
-      },
-    },
-    {
-      name: 'metrics.reset',
-      permission: 'write',
-      params_schema: tenantParamSchema,
-      handler: (_params, ctx) => {
-        if (!opts.metricsControl?.reset) {
-          throw new RpcError('not_found', 'Metrics reset is not available');
-        }
-        opts.metricsControl.reset(ctx.tenantId);
-        return { ok: true };
-      },
-    },
-    {
-      name: 'mcp.list',
-      permission: 'read',
-      params_schema: { type: 'object' },
-      handler: async () => {
-        if (!opts.mcp) throw new RpcError('not_found', 'MCP is not enabled');
-        try {
-          return { servers: normalizeMcpServers(await opts.mcp.listServers()) };
-        } catch {
-          throw new RpcError('internal', 'Failed to read MCP server status');
-        }
-      },
-    },
-    {
-      name: 'mcp.reconnect',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['name'],
-        properties: { name: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params, ctx) => {
-        if (!opts.mcp?.reconnect) {
-          throw new RpcError('not_found', 'MCP reconnect is not available');
-        }
-        await opts.mcp.reconnect(stringParam(params, 'name'));
-        return { ok: true, tenant_id: ctx.tenantId };
-      },
-    },
-    {
-      name: 'trace.prune',
-      permission: 'admin',
-      params_schema: {
-        type: 'object',
-        properties: {
-          older_than_days: { type: 'integer', minimum: 0 },
-          max_runs: { type: 'integer', minimum: 0 },
-          max_bytes: { type: 'integer', minimum: 0 },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        if (!opts.trace?.prune) throw new RpcError('not_found', 'Trace prune is not available');
-        return opts.trace.prune({ ...params, tenant_id: ctx.tenantId });
-      },
-    },
-    {
-      name: 'tenants.list',
-      permission: 'admin',
-      params_schema: { type: 'object' },
-      handler: async () => {
-        if (!opts.tenants) throw new RpcError('not_found', 'Tenant registry is not available');
-        return { tenants: (await opts.tenants.list()).map(tenantInfoOrThrow) };
-      },
-    },
-    {
-      name: 'tenants.get',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['tenant_id'],
-        properties: { tenant_id: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params, ctx) => {
-        if (!opts.tenants) throw new RpcError('not_found', 'Tenant registry is not available');
-        const tenantId = stringParam(params, 'tenant_id');
-        if (!ctx.isAdmin && tenantId !== ctx.principal.tenant_id) {
-          throw new RpcError('forbidden', 'Cross-tenant access is not allowed');
-        }
-        const info = await opts.tenants.get(tenantId);
-        if (!info) throw new RpcError('not_found', `Tenant not found: ${tenantId}`);
-        return { tenant: tenantInfoOrThrow(info) };
-      },
-    },
-    {
-      name: 'tenants.create',
-      permission: 'admin',
-      params_schema: {
-        type: 'object',
-        required: ['tenant_id'],
-        properties: {
-          tenant_id: { type: 'string', minLength: 1 },
-          name: { type: 'string' },
-          quota: { type: 'object' },
-        },
-      },
-      handler: async (params) => {
-        if (!opts.tenants?.create) {
-          throw new RpcError('not_found', 'Tenant create is not available');
-        }
-        const info = await opts.tenants.create(stringParam(params, 'tenant_id'), {
-          ...(typeof params.name === 'string' ? { name: params.name } : {}),
-          ...(typeof params.quota === 'object' && params.quota !== null
-            ? { quota: params.quota as TenantQuota }
-            : {}),
-        });
-        return { tenant: tenantInfoOrThrow(info) };
-      },
-    },
-    {
-      name: 'tenants.update',
-      permission: 'admin',
-      params_schema: {
-        type: 'object',
-        required: ['tenant_id'],
-        properties: {
-          tenant_id: { type: 'string', minLength: 1 },
-          name: { type: 'string' },
-          status: { type: 'string', enum: ['active', 'disabled'] },
-          quota: { type: 'object' },
-        },
-      },
-      handler: async (params) => {
-        if (!opts.tenants?.update) {
-          throw new RpcError('not_found', 'Tenant update is not available');
-        }
-        const info = await opts.tenants.update(stringParam(params, 'tenant_id'), {
-          ...(typeof params.name === 'string' ? { name: params.name } : {}),
-          ...(params.status === 'active' || params.status === 'disabled'
-            ? { status: params.status }
-            : {}),
-          ...(typeof params.quota === 'object' && params.quota !== null
-            ? { quota: params.quota as TenantQuota }
-            : {}),
-        });
-        return { tenant: tenantInfoOrThrow(info) };
-      },
-    },
-    {
-      name: 'permission.respond',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['request_id', 'decision'],
-        properties: {
-          request_id: { type: 'string', minLength: 1 },
-          decision: { type: 'string', enum: ['allow', 'deny'] },
-          remember: { type: 'boolean' },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: (params, ctx) => {
-        const requestId = stringParam(params, 'request_id');
-        const decision = params.decision;
-        if (decision !== 'allow' && decision !== 'deny') {
-          throw new RpcError('invalid_params', "decision must be 'allow' or 'deny'");
-        }
-        respondPermission(requestId, decision, params.remember === true, ctx.tenantId);
-        return { ok: true };
-      },
-    },
-    {
-      name: 'ask.respond',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['request_id', 'answers'],
-        properties: {
-          request_id: { type: 'string', minLength: 1 },
-          answers: { type: 'array' },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: (params, ctx) => {
-        const answers = params.answers;
-        if (!Array.isArray(answers)) {
-          throw new RpcError('invalid_params', 'answers must be an array');
-        }
-        respondAsk(stringParam(params, 'request_id'), answers, ctx.tenantId);
-        return { ok: true };
-      },
-    },
-    {
-      name: 'workflow.list',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: {
-          status: { type: 'string' },
-          limit: { type: 'integer', minimum: 1, maximum: 200 },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        const workflows = requireWorkflows(ctx.tenantId);
-        const rawStatus = typeof params.status === 'string' ? params.status : null;
-        const status = parseWorkflowStatus(rawStatus);
-        if (rawStatus !== null && status === null) {
-          throw new RpcError('invalid_params', 'Invalid workflow status filter');
-        }
-        const limit = parseWorkflowLimit(
-          typeof params.limit === 'number' ? String(params.limit) : null,
-        );
-        if (limit === null) throw new RpcError('invalid_params', 'Invalid workflow limit');
-        try {
-          const list = await workflows.listRuns({
-            ...(status !== null ? { status } : {}),
-            limit,
-          });
-          const summaries = list
-            .map((run) => toWireWorkflowSummary(run))
-            .filter((run): run is NonNullable<typeof run> => run !== null);
-          return {
-            workflows: sortWorkflowSummaries(dedupeWorkflowSummaries(summaries)).slice(0, limit),
-          };
-        } catch (error) {
-          throwWorkflowError(error);
-        }
-      },
-    },
-    {
-      name: 'workflow.get',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['workflow_run_id'],
-        properties: {
-          workflow_run_id: { type: 'string', minLength: 1 },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        const workflows = requireWorkflows(ctx.tenantId);
-        const id = stringParam(params, 'workflow_run_id');
-        try {
-          const run = await workflows.getRun(id);
-          if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
-          const detail = toWireWorkflowDetail(run);
-          if (!detail) throw new RpcError('internal', 'Invalid workflow run payload');
-          return { workflow: detail };
-        } catch (error) {
-          if (error instanceof RpcError) throw error;
-          throwWorkflowError(error);
-        }
-      },
-    },
-    {
-      name: 'workflow.start',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['name'],
-        properties: {
-          name: { type: 'string', minLength: 1, maxLength: 64 },
-          inputs: { type: 'object' },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        const workflows = requireWorkflows(ctx.tenantId);
-        const name = stringParam(params, 'name').trim();
-        if (!isSafeWorkflowName(name)) {
-          throw new RpcError('invalid_params', 'Invalid workflow name');
-        }
-        const inputs = parseWorkflowInputs(params.inputs);
-        if (inputs === null) {
-          throw new RpcError('invalid_params', 'inputs must be a flat string map (max 64 entries)');
-        }
-        let definitionPath: string | undefined;
-        try {
-          definitionPath = workflows.resolveDefinition(name);
-        } catch {
-          throw new RpcError('internal', 'Failed to resolve workflow definition');
-        }
-        if (definitionPath === undefined) {
-          throw new RpcError('not_found', `Workflow not found: ${name}`);
-        }
-        try {
-          const started = await workflows.start(definitionPath, {
-            ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-          });
-          return { workflow_run_id: started.workflowRunId, status: 'queued' };
-        } catch (error) {
-          throwWorkflowError(error);
-        }
-      },
-    },
-    {
-      name: 'workflow.resume',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['workflow_run_id'],
-        properties: {
-          workflow_run_id: { type: 'string', minLength: 1 },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        const workflows = requireWorkflows(ctx.tenantId);
-        const id = stringParam(params, 'workflow_run_id');
-        if (!reserveWorkflowResume(id)) {
-          throw new RpcError('conflict', `Workflow run is already resuming: ${id}`, {
-            legacy_code: 'workflow_already_running',
-          });
-        }
-        try {
-          const run = await workflows.getRun(id);
-          if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
-          const summary = toWireWorkflowSummary(run);
-          if (!summary) throw new RpcError('internal', 'Invalid workflow run payload');
-          if (summary.status === 'running') {
-            throw new RpcError('conflict', `Workflow run is already running: ${id}`, {
-              legacy_code: 'workflow_already_running',
-            });
-          }
-          if (summary.status === 'completed' || summary.status === 'cancelled') {
-            throw new RpcError('conflict', `Workflow run is not resumable: ${id}`, {
-              legacy_code: 'workflow_not_resumable',
-            });
-          }
-          const resumed = await workflows.resume(id);
-          void resumed.done.finally(() => releaseWorkflowResume(id)).catch(() => undefined);
-          return { workflow_run_id: resumed.workflowRunId, status: 'queued' };
-        } catch (error) {
-          releaseWorkflowResume(id);
-          if (error instanceof RpcError) throw error;
-          throwWorkflowError(error);
-        }
-      },
-    },
-    {
-      name: 'workflow.cancel',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['workflow_run_id'],
-        properties: {
-          workflow_run_id: { type: 'string', minLength: 1 },
-          tenant_id: { type: 'string' },
-        },
-      },
-      handler: async (params, ctx) => {
-        const workflows = requireWorkflows(ctx.tenantId);
-        const id = stringParam(params, 'workflow_run_id');
-        try {
-          const run = await workflows.getRun(id);
-          if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
-          const summary = toWireWorkflowSummary(run);
-          if (!summary) throw new RpcError('internal', 'Invalid workflow run payload');
-          if (summary.status === 'cancelled') {
-            return { workflow_run_id: id, status: 'cancelled' };
-          }
-          if (summary.status === 'completed' || summary.status === 'failed') {
-            throw new RpcError('invalid_params', 'Run is not cancellable');
-          }
-          await workflows.cancel(id);
-          return { workflow_run_id: id, status: 'cancelled' };
-        } catch (error) {
-          if (error instanceof RpcError) throw error;
-          throwWorkflowError(error);
-        }
-      },
-    },
-    {
-      name: 'evals.latest',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        required: ['suite'],
-        properties: { suite: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params) => {
-        const suite = stringParam(params, 'suite').trim();
-        if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(suite) || suite.includes('..')) {
-          throw new RpcError('invalid_params', 'Invalid suite name');
-        }
-        if (!opts.evals) throw new RpcError('not_found', 'Eval report not found');
-        try {
-          const report = await opts.evals.latest(suite);
-          const normalized = report ? normalizeEvalReport(report) : null;
-          if (!normalized) throw new RpcError('not_found', `Eval report not found: ${suite}`);
-          return { report: normalized };
-        } catch (error) {
-          if (error instanceof RpcError) throw error;
-          const code = (error as { code?: unknown }).code;
-          if (code === 'eval_not_found') throw new RpcError('not_found', String(error));
-          if (code === 'eval_invalid') throw new RpcError('invalid_params', String(error));
-          throw new RpcError('internal', 'Failed to read eval report');
-        }
-      },
-    },
-    {
-      name: 'evals.run',
-      permission: 'write',
-      params_schema: {
-        type: 'object',
-        required: ['suite'],
-        properties: { suite: { type: 'string', minLength: 1 } },
-      },
-      handler: async (params) => {
-        if (!opts.evals?.run) throw new RpcError('not_found', 'Evals runner is not available');
-        const suite = stringParam(params, 'suite');
-        return { report: normalizeEvalReport(await opts.evals.run(suite)) };
-      },
-    },
-    {
-      name: 'feishu.status',
-      permission: 'read',
-      params_schema: {
-        type: 'object',
-        properties: { tenant_id: { type: 'string' } },
-      },
-      handler: (_params, ctx) => {
-        const feishu = requireFeishu(ctx.tenantId);
-        return { channel: normalizeFeishuStatus(feishu.status()) };
-      },
-    },
+    ...createToolMethods(configMethodsDeps),
+    ...createPluginsMethods(configMethodsDeps),
+    ...createMetricsMethods(observabilityMethodsDeps),
+    ...createMcpMethods({ mcp: opts.mcp }),
+    ...createTraceMethods(observabilityMethodsDeps),
+    ...createTenantMethods({ tenants: opts.tenants }),
+    ...createInteractionMethods({ respondPermission, respondAsk }),
+    ...createWorkflowMethods({
+      requireWorkflows,
+      reserveWorkflowResume,
+      releaseWorkflowResume,
+    }),
+    ...createEvalMethods({ evals: opts.evals }),
+    ...createFeishuMethods({ requireFeishu }),
   ];
 
-  const methodTable = defineMethods(rpcMethods);
+  methodTable = defineMethods(rpcMethods);
   const dispatcher = createRpcDispatcher({
     table: methodTable,
     localPrincipal,
@@ -2036,17 +1184,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return restTenantScope(principal, requested === null ? {} : { tenant_id: requested }, extra);
   }
 
-  /**
-   * checkpoint 是否属于该 tenant。
-   * 未标注 tenant 的 checkpoint 视为当前 store 所属 tenant（file store 按目录隔离）。
-   */
-  function checkpointBelongsToTenant(
-    checkpoint: { tenant_id?: string },
-    tenantId: string,
-  ): boolean {
-    return checkpoint.tenant_id === undefined || checkpoint.tenant_id === tenantId;
-  }
-
   /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
   function requireWorkflows(tenantId: string): WorkflowGatewayOptions {
     const resolved = workflowsForTenant(tenantId);
@@ -2108,17 +1245,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         throw new RpcError('forbidden', `Tenant runtime is not configured: ${tenantId}`);
       }
       throw new RpcError('forbidden', 'No runtime configured', { legacy_code: 'no_runtime' });
-    }
-    return resolved;
-  }
-
-  function requireSession(tenantId: string): SessionBackend {
-    const resolved = sessionFor(tenantId);
-    if (!resolved) {
-      if (tenantId !== defaultTenantId) {
-        throw new RpcError('forbidden', `Tenant session backend is not configured: ${tenantId}`);
-      }
-      throw new RpcError('not_found', 'No session backend configured');
     }
     return resolved;
   }
@@ -2617,6 +1743,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return true;
   }
 
+  /** resume 失败时释放占位；成功占位保留，重复调用一律 conflict。 */
+  function releaseResume(runId: string): void {
+    resumedRuns.delete(runId);
+  }
+
   /** `/v1/durable/*`：只读 store，不写盘、不创建 run */
   async function handleDurable(
     req: Request,
@@ -2836,21 +1967,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       return null;
     }
     return id.length > 0 && id.length <= 256 ? id : null;
-  }
-
-  /** inputs 只接受扁平 string map；上限防止请求体外的二次膨胀 */
-  function parseWorkflowInputs(raw: unknown): Record<string, string> | null {
-    if (raw === undefined) return {};
-    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
-    const entries = Object.entries(raw as Record<string, unknown>);
-    if (entries.length > 64) return null;
-    const inputs: Record<string, string> = {};
-    for (const [key, value] of entries) {
-      if (key.length === 0 || key.length > 64) return null;
-      if (typeof value !== 'string' || value.length > 10_000) return null;
-      inputs[key] = value;
-    }
-    return inputs;
   }
 
   /** REST 适配：解析 query/body 的 tenant_id；错误转 HTTP */
