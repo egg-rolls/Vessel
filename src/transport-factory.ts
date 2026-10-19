@@ -11,7 +11,9 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_TRANSPORT_OPTIONS, type VesselConfig } from '../packages/config/src/index';
-import type { AgentStatus, Transport } from '../packages/core/src/index';
+import type { AgentStatus, RunEvent, Transport } from '../packages/core/src/index';
+import { RemoteTransport } from './remote-transport';
+import type { WebSocketFactory } from './rpc/index';
 
 export interface LoopbackTransportOptionsLike {
   nodeId: string;
@@ -41,7 +43,28 @@ export interface CreateLoopbackOptions {
   loadModule?: () => Promise<LoopbackTransportModule>;
 }
 
-export type LoopbackResult = { ok: true; transport: Transport } | { ok: false; error: string };
+export type TransportResult = { ok: true; transport: Transport } | { ok: false; error: string };
+
+export type LoopbackResult = TransportResult;
+
+export interface CreateRemoteOptions {
+  config: VesselConfig;
+  /** 唯一来源：host.node_id */
+  nodeId: string;
+  /** B4：远端事件回调（调用方负责回灌到本地 gateway 事件流） */
+  onEvent?: (event: RunEvent) => void;
+  env?: Record<string, string | undefined>;
+  fetch?: typeof fetch;
+  webSocket?: WebSocketFactory;
+  heartbeatMs?: number;
+  peerTtlMs?: number;
+  requestTimeoutMs?: number;
+  eventReconnect?: {
+    initialMs?: number;
+    maxMs?: number;
+    helloTimeoutMs?: number;
+  };
+}
 
 /** 默认 loader：只在 loopback 生效时加载 web transport */
 async function loadLoopbackModule(): Promise<LoopbackTransportModule> {
@@ -99,4 +122,75 @@ export async function tryCreateLoopbackTransport(
   } catch (error) {
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * 构造 remote transport；失败返回 { ok:false }，不抛。
+ * 配置错误（无 nodes / 非法 URL / CA 不可读）在这里转为启动告警。
+ */
+export async function tryCreateRemoteTransport(
+  options: CreateRemoteOptions,
+): Promise<TransportResult> {
+  const nodes = options.config.transport?.nodes;
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return {
+      ok: false,
+      error: 'transport.kind=remote requires transport.nodes (static node list)',
+    };
+  }
+  try {
+    const transport = await RemoteTransport.create({
+      nodeId: options.nodeId,
+      nodes,
+      registryOptions: {
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.fetch ? { fetch: options.fetch } : {}),
+        ...(options.heartbeatMs !== undefined
+          ? { heartbeatMs: options.heartbeatMs }
+          : options.config.transport?.heartbeatMs !== undefined
+            ? { heartbeatMs: options.config.transport.heartbeatMs }
+            : {}),
+        ...(options.peerTtlMs !== undefined
+          ? { peerTtlMs: options.peerTtlMs }
+          : options.config.transport?.peerTtlMs !== undefined
+            ? { peerTtlMs: options.config.transport.peerTtlMs }
+            : {}),
+        ...(options.requestTimeoutMs !== undefined
+          ? { requestTimeoutMs: options.requestTimeoutMs }
+          : {}),
+      },
+      ...(options.fetch ? { fetch: options.fetch } : {}),
+      ...(options.requestTimeoutMs !== undefined
+        ? { requestTimeoutMs: options.requestTimeoutMs }
+        : {}),
+      ...(options.onEvent ? { onEvent: options.onEvent } : {}),
+      ...(options.webSocket ? { webSocket: options.webSocket } : {}),
+      ...(options.eventReconnect ? { eventReconnect: options.eventReconnect } : {}),
+    });
+    return { ok: true, transport };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** 按 `transport.kind` 构造；in-process 返回 ok:false 由调用方保持默认路径 */
+export async function tryCreateConfiguredTransport(
+  options: CreateRemoteOptions & {
+    endpoint: string;
+    gatewayToken?: string;
+    agents?: () => AgentStatus[];
+  },
+): Promise<TransportResult> {
+  const kind = options.config.transport?.kind;
+  if (kind === 'remote') return tryCreateRemoteTransport(options);
+  if (kind === 'loopback') {
+    return tryCreateLoopbackTransport({
+      config: options.config,
+      nodeId: options.nodeId,
+      endpoint: options.endpoint,
+      ...(options.gatewayToken ? { gatewayToken: options.gatewayToken } : {}),
+      ...(options.agents ? { agents: options.agents } : {}),
+    });
+  }
+  return { ok: false, error: `transport.kind "${kind ?? 'in-process'}" has no external transport` };
 }

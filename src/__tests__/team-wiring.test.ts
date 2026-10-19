@@ -6,6 +6,7 @@ describe('planTeamWiring', () => {
     expect(planTeamWiring({ config: {}, hasGateway: false, hasHost: false })).toEqual({
       attachToGateway: false,
       useLoopback: false,
+      useRemote: false,
       warnings: [],
     });
   });
@@ -49,7 +50,12 @@ describe('planTeamWiring', () => {
       hasGateway: true,
       hasHost: true,
     });
-    expect(plan).toEqual({ attachToGateway: true, useLoopback: false, warnings: [] });
+    expect(plan).toEqual({
+      attachToGateway: true,
+      useLoopback: false,
+      useRemote: false,
+      warnings: [],
+    });
   });
 
   it('team on + serve + host + loopback：接团队端点并建 loopback', () => {
@@ -58,6 +64,42 @@ describe('planTeamWiring', () => {
       hasGateway: true,
       hasHost: true,
     });
-    expect(plan).toEqual({ attachToGateway: true, useLoopback: true, warnings: [] });
+    expect(plan).toEqual({
+      attachToGateway: true,
+      useLoopback: true,
+      useRemote: false,
+      warnings: [],
+    });
+  });
+
+  it('team on + serve + host + remote：接团队端点并建 remote', () => {
+    const plan = planTeamWiring({
+      config: {
+        team: { enabled: true },
+        transport: {
+          kind: 'remote',
+          nodes: [{ id: 'node-b', url: 'https://b.example.com', token: 't' }],
+        },
+      },
+      hasGateway: true,
+      hasHost: true,
+    });
+    expect(plan).toEqual({
+      attachToGateway: true,
+      useLoopback: false,
+      useRemote: true,
+      warnings: [],
+    });
+  });
+
+  it('team on + 未 serve + remote：降级 in-process 并告警', () => {
+    const plan = planTeamWiring({
+      config: { team: { enabled: true }, transport: { kind: 'remote', nodes: [] } },
+      hasGateway: false,
+      hasHost: true,
+    });
+    expect(plan.attachToGateway).toBe(false);
+    expect(plan.useRemote).toBe(false);
+    expect(plan.warnings[0]).toContain('requires --serve');
   });
 });

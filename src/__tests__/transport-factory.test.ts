@@ -7,7 +7,9 @@ import {
   type LoopbackTransportOptionsLike,
   resolveGatewayToken,
   resolvePeersDir,
+  tryCreateConfiguredTransport,
   tryCreateLoopbackTransport,
+  tryCreateRemoteTransport,
 } from '../transport-factory';
 
 const savedEnv: Record<string, string | undefined> = {};
@@ -195,5 +197,50 @@ describe('tryCreateLoopbackTransport', () => {
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('peers dir unwritable');
+  });
+});
+
+describe('remote transport factory (0.6)', () => {
+  const nodes = [{ id: 'node-b', url: 'https://b.example.com', token: 'tok-b' }];
+  const noopFetch = (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch;
+
+  it('builds kind=remote via configured dispatcher', async () => {
+    const remote = await tryCreateRemoteTransport({
+      config: { transport: { kind: 'remote', nodes } },
+      nodeId: 'node-a',
+      fetch: noopFetch,
+      heartbeatMs: 0,
+    });
+    expect(remote.ok).toBe(true);
+    if (remote.ok) {
+      expect(remote.transport.kind).toBe('remote');
+      expect(remote.transport.nodeId).toBe('node-a');
+      expect(typeof remote.transport.request).toBe('function');
+      await remote.transport.close();
+    }
+
+    const configured = await tryCreateConfiguredTransport({
+      config: { transport: { kind: 'remote', nodes } },
+      nodeId: 'node-a',
+      endpoint: 'http://127.0.0.1:1',
+      fetch: noopFetch,
+      heartbeatMs: 0,
+    });
+    expect(configured.ok).toBe(true);
+    if (configured.ok) {
+      expect(configured.transport.kind).toBe('remote');
+      await configured.transport.close();
+    }
+  });
+
+  it('returns ok:false when nodes are missing', async () => {
+    const result = await tryCreateRemoteTransport({
+      config: { transport: { kind: 'remote' } },
+      nodeId: 'node-a',
+      fetch: noopFetch,
+      heartbeatMs: 0,
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('transport.nodes');
   });
 });

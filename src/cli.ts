@@ -67,7 +67,11 @@ import {
 import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
 import { listTools } from './tools-list';
 import { tracePruneCommand } from './trace-command';
-import { resolveGatewayToken, tryCreateLoopbackTransport } from './transport-factory';
+import {
+  resolveGatewayToken,
+  tryCreateLoopbackTransport,
+  tryCreateRemoteTransport,
+} from './transport-factory';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
 import { runWorkflowCommand } from './workflow-command';
@@ -809,6 +813,27 @@ async function runWithConfig(result: BootstrapResult) {
         console.warn(
           `⚠ Loopback transport unavailable (${loopback.error}); team is in-process only.`,
         );
+      }
+    } else if (teamPlan.useRemote) {
+      const remote = await tryCreateRemoteTransport({
+        config,
+        nodeId: result.nodeId,
+        // B4：远端事件带 origin node_id 回灌到 gateway 共享事件流。
+        onEvent: (event) => {
+          const sink = sharedEvents ?? ctx.events;
+          try {
+            sink.publish(event);
+          } catch {
+            // 事件订阅者异常不影响其它节点
+          }
+        },
+      });
+      if (remote.ok) {
+        teamTransport = remote.transport;
+        result.transport?.resolve(teamTransport);
+      } else {
+        result.transport?.fail(new Error(remote.error));
+        console.warn(`⚠ Remote transport unavailable (${remote.error}); team is in-process only.`);
       }
     }
     gateway.attachTeam({
