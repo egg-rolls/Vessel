@@ -1,15 +1,16 @@
 /**
- * Gateway — 本地 HTTP/WS 服务网关（协议 vessel.gateway/1）
+ * Gateway — HTTP/WS 服务网关（协议 vessel.gateway/1）
  * @module @vessel/serve
  *
  * 把 runtime 的 EventStream 暴露为 WS / SSE 广播，并提供 /v1 控制端点：
  * 会话、工具、运行提交/查询/取消、权限应答、静态 web 托管。
  *
  * 设计约束：
- * - 只监听回环地址（默认 127.0.0.1），不做远程暴露；
+ * - 默认只监听回环地址 127.0.0.1；远程监听必须显式 allowRemote + TLS + 显式 token；
+ * - 浏览器 WS 必须在首帧 `{kind:'auth',token,since}` 鉴权，token 不接受 URL/query；
  * - 事件在传输层分配单调 seq，支持 since 回放与 gap 信号，不改 core 类型；
  * - 单 runtime / 单 ContextManager：运行串行执行；会话切换时 clear 上下文（G2）；
- * - `/v1/team/*` 属于 0.2，0.1.0 只保留协议草案（见 protocol.ts）。
+ * - `/v1/team/*` 是跨节点 team 控制面（默认关闭，见 team.ts）。
  */
 
 import { randomBytes, randomUUID } from 'node:crypto';
@@ -2153,7 +2154,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     replayEventsTo(ws);
   }
 
-  /** 授权：Bearer 头优先，兼容 ?token=；返回 principal */
+  /**
+   * REST/SSE 授权：Bearer 头优先，兼容 ?token=（EventSource 不能带 header）。
+   * WebSocket 不走这里：必须在首帧 `{kind:'auth',token,since}` 鉴权。
+   */
   function principalForRequest(req: Request, url: URL): TenantPrincipal | null {
     const raw = extractToken(req.headers.get('authorization'), url.searchParams.get('token'));
     return resolvePrincipal(opts.auth, raw, token);
@@ -3607,21 +3611,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       const isWebSocket = (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket';
 
-      // WS：/v1/events?since=N（/ws 为 0.1.0 兼容别名）
+      // WS：/v1/events（/ws 为 0.1.0 兼容别名）。
+      // ADR-053：token 不进 URL/query，只接受首帧 `{kind:'auth',token,since}`。
+      // `?since=N` 仍保留为回放兼容参数；auth 首帧的 since 优先。
       if ((path === '/v1/events' || path === '/ws') && isWebSocket) {
-        const principal = resolvePrincipal(
-          opts.auth,
-          extractToken(null, url.searchParams.get('token')),
-          token,
-        );
+        if (url.searchParams.has('token')) {
+          return errorJson(
+            'invalid_request',
+            'WebSocket auth must use the first auth frame; token in query is not supported',
+            400,
+            extra,
+          );
+        }
         const upgraded = srv.upgrade(req, {
           data: {
-            authed: principal !== null,
-            ...(principal ? { principal } : {}),
-            tenantId:
-              principal !== null && principal.tenant_id !== '*'
-                ? principal.tenant_id
-                : defaultTenantId,
+            authed: false,
+            tenantId: defaultTenantId,
             allTenants: false,
             since: parseSince(url.searchParams.get('since')),
             alive: true,

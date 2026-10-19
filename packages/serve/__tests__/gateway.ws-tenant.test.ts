@@ -29,6 +29,45 @@ afterEach(() => {
   for (const gw of gateways.splice(0)) gw.stop();
 });
 
+function wsAttempt(url: string): Promise<'open' | 'error' | 'timeout'> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (value: 'open' | 'error' | 'timeout') => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => done('timeout'), 1_500);
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(url);
+    } catch {
+      done('error');
+      return;
+    }
+    ws.addEventListener('open', () => {
+      done('open');
+      ws.close();
+    });
+    ws.addEventListener('error', () => done('error'));
+    ws.addEventListener('close', () => done('error'));
+  });
+}
+
+describe('WS auth transport', () => {
+  it('rejects token in query for both /v1/events and /ws', async () => {
+    const events = new MemoryEventStream();
+    const gw = createGateway({ events });
+    gateways.push(gw);
+    for (const path of ['/v1/events', '/ws']) {
+      expect(await wsAttempt(`${gw.url.replace(/^http/, 'ws')}${path}?token=${gw.token}`)).toBe(
+        'error',
+      );
+    }
+  });
+});
+
 describe('WS tenant override', () => {
   const setup = () => {
     const events = new MemoryEventStream();
