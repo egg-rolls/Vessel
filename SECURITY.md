@@ -33,6 +33,13 @@ Vessel 是 Agent Harness，会执行工具（文件 / shell / 代码）。使用
 - **真实路径判定**：比较前做 `realpath`；不存在的路径对最近已存在祖先做 `realpath` 再拼回剩余段。`..` 与符号链接不能绕过。
 - **这不是沙箱**：`bash` 只校验 `cwd`，命令本身仍可访问其它路径；`edit` 未纳入该边界。需要真正隔离时使用沙箱类插件，并在受限用户/容器中运行。
 
+## 持久化与损坏文件（0.8.1，ADR-056）
+
+- session 快照与 run checkpoint 默认 `durable` 写入（temp fsync → rename → 尽力目录 fsync），降低掉电后“文件存在但内容未落盘”的风险；这不等于备份，也不防磁盘损坏。
+- 文件存在但不可读或 JSON 损坏时抛 `SessionCorruptError`，**不会**被当成“无会话”覆盖，也不会在 delete 时被删除。损坏文件可能仍包含敏感会话内容；排查时不要把它粘贴到 issue / 日志，必要时离线备份后再人工处理。
+- `listRich` 只跳过损坏项以保持列表可用；直接 `load` 仍报错，避免静默数据丢失。
+- connect token / CA 统一经配置 loader：`VESSEL_CONNECT_TOKEN`（缺失时回退 `VESSEL_GATEWAY_TOKEN`）与 `VESSEL_CONNECT_CA` 只作为 env 层来源，不在日志、事件或 `config show` 中输出明文。
+
 ## 在不可信仓库中运行
 
 仓库内的 `.vessel/plugins/` 与 `node_modules/@vessel` 插件会在进程启动时被动态 import，并拥有完整进程权限，早于任何工具权限判定。
