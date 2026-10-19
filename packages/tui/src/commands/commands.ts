@@ -377,21 +377,115 @@ function formatHistoryMessage(msg: { role: string; content: string }): string[] 
   return [`${msg.content.slice(0, MAX_HISTORY_MESSAGE_CHARS)}\n… (+${omitted} chars)`];
 }
 
+export type HistoryRole = 'user' | 'assistant' | 'tool';
+
+export interface HistoryOptions {
+  /** undefined = 全量（默认，保持 0.5.2 行为） */
+  limit?: number;
+  role?: HistoryRole;
+}
+
+const HISTORY_LIMIT_MAX = 500;
+const HISTORY_USAGE = 'Usage: /history [--limit <n>] [--role user|assistant|tool]';
+const HISTORY_ROLES: readonly HistoryRole[] = ['user', 'assistant', 'tool'];
+
+/** 解析 /history 参数；未知参数直接给 usage，不发数据请求。 */
+export function parseHistoryArgs(
+  args: string[],
+): { ok: true; value: HistoryOptions } | { ok: false; message: string } {
+  let limit: number | undefined;
+  let role: HistoryRole | undefined;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === undefined) break;
+
+    if (arg === '--limit') {
+      const value = args[++i];
+      if (value === undefined || !/^\d+$/.test(value)) {
+        return {
+          ok: false,
+          message: `--limit must be an integer between 1 and ${HISTORY_LIMIT_MAX}.`,
+        };
+      }
+      const parsed = Number.parseInt(value, 10);
+      if (parsed < 1 || parsed > HISTORY_LIMIT_MAX) {
+        return {
+          ok: false,
+          message: `--limit must be an integer between 1 and ${HISTORY_LIMIT_MAX}.`,
+        };
+      }
+      limit = parsed;
+      continue;
+    }
+
+    if (arg === '--role') {
+      const value = args[++i];
+      if (value === undefined || !HISTORY_ROLES.includes(value as HistoryRole)) {
+        return {
+          ok: false,
+          message: `--role must be one of: ${HISTORY_ROLES.join(', ')}.`,
+        };
+      }
+      role = value as HistoryRole;
+      continue;
+    }
+
+    return { ok: false, message: `${HISTORY_USAGE} (unknown argument "${arg}")` };
+  }
+
+  return {
+    ok: true,
+    value: {
+      ...(limit !== undefined ? { limit } : {}),
+      ...(role !== undefined ? { role } : {}),
+    },
+  };
+}
+
 function historyCommand(): CommandEntry {
   return {
     name: 'history',
     description: '显示当前会话的对话历史',
-    usage: '/history',
-    run: async (_args, ctx, state) => {
+    usage: '/history [--limit <n>] [--role user|assistant|tool]',
+    run: async (args, ctx, state) => {
+      const parsed = parseHistoryArgs(args);
+      if (!parsed.ok) {
+        return { handled: true, output: `\n${parsed.message}\n` };
+      }
+
       const loaded = await getSessionState(ctx, state.currentSessionId);
       if (!loaded || loaded.messages.length === 0) {
         return { handled: true, output: '\nNo conversation history.\n' };
       }
-      const lines = ['', `History (${loaded.messages.length} messages):`];
-      for (const msg of loaded.messages) {
-        const role = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
+
+      const { limit, role } = parsed.value;
+      const scoped = role
+        ? loaded.messages.filter((message) => message.role === role)
+        : loaded.messages;
+      if (scoped.length === 0) {
+        return {
+          handled: true,
+          output: `\nNo ${role ?? 'matching'} messages in this session.\n`,
+        };
+      }
+
+      // 先按 role 过滤，再取最近 N 条。
+      const shown = limit !== undefined ? scoped.slice(-limit) : scoped;
+      const header =
+        limit === undefined
+          ? role
+            ? `History (${scoped.length} messages, role=${role}):`
+            : `History (${loaded.messages.length} messages):`
+          : `History (${shown.length} of ${scoped.length} messages${
+              role ? `, role=${role}` : ''
+            }, last ${limit}):`;
+
+      const lines = ['', header];
+      for (const msg of shown) {
+        const label = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
         lines.push('');
-        lines.push(`[${role}]`);
+        lines.push(`[${label}]`);
         lines.push(...formatHistoryMessage(msg));
       }
       lines.push('');

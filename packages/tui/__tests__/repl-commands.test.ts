@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { Message, RunState, ToolDefinition } from '@vessel/core';
-import { CommandRegistry, createCommands } from '../src/commands/commands.js';
+import { CommandRegistry, createCommands, parseHistoryArgs } from '../src/commands/commands.js';
 import { makeCtx, makeState } from './helpers.js';
 
 const sampleTool: ToolDefinition = {
@@ -281,6 +281,75 @@ describe('扁平会话命令', () => {
     expect(out).toContain('(+800 chars)');
   });
 
+  it('/history --limit 只显示最近 N 条', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(
+      runState(ctx.currentSessionId, [
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'second' },
+        { role: 'user', content: 'third' },
+      ]),
+    );
+    const state = makeState(ctx.currentSessionId);
+
+    const out = (await reg.execute('history --limit 2', ctx, state)).output ?? '';
+
+    expect(out).toContain('History (2 of 3 messages, last 2):');
+    expect(out).not.toContain('first');
+    expect(out).toContain('second');
+    expect(out).toContain('third');
+  });
+
+  it('/history --role 先过滤再取最近 N 条', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(
+      runState(ctx.currentSessionId, [
+        { role: 'user', content: 'u1' },
+        { role: 'assistant', content: 'a1' },
+        { role: 'user', content: 'u2' },
+        { role: 'assistant', content: 'a2' },
+      ]),
+    );
+    const state = makeState(ctx.currentSessionId);
+
+    const out = (await reg.execute('history --role user --limit 1', ctx, state)).output ?? '';
+
+    expect(out).toContain('History (1 of 2 messages, role=user, last 1):');
+    expect(out).toContain('u2');
+    expect(out).not.toContain('u1');
+    expect(out).not.toContain('a1');
+    expect(out).not.toContain('a2');
+  });
+
+  it('/history --role 无匹配 -> 明确提示', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    await ctx.session.save(
+      runState(ctx.currentSessionId, [{ role: 'user', content: 'only user' }]),
+    );
+    const state = makeState(ctx.currentSessionId);
+
+    const out = (await reg.execute('history --role assistant', ctx, state)).output ?? '';
+
+    expect(out).toContain('No assistant messages in this session.');
+  });
+
+  it('/history 参数非法 -> usage，不读数据', async () => {
+    const reg = createCommands();
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+
+    const badLimit = (await reg.execute('history --limit 0', ctx, state)).output ?? '';
+    const badRole = (await reg.execute('history --role system', ctx, state)).output ?? '';
+    const unknown = (await reg.execute('history --bogus', ctx, state)).output ?? '';
+
+    expect(badLimit).toContain('--limit must be an integer between 1 and 500');
+    expect(badRole).toContain('--role must be one of: user, assistant, tool');
+    expect(unknown).toContain('unknown argument "--bogus"');
+  });
+
   it('/exit 置 running=false 并调 onExit', async () => {
     const reg = createCommands();
     let exited = false;
@@ -312,5 +381,33 @@ describe('扁平会话命令', () => {
     const out = result.output ?? '';
     expect(out).toContain('cannot run inside the REPL');
     expect(out).toContain('Exit Vessel');
+  });
+});
+
+describe('parseHistoryArgs', () => {
+  it('默认无限制、无角色', () => {
+    expect(parseHistoryArgs([])).toEqual({ ok: true, value: {} });
+  });
+
+  it('解析 limit 与 role', () => {
+    expect(parseHistoryArgs(['--limit', '20'])).toEqual({ ok: true, value: { limit: 20 } });
+    expect(parseHistoryArgs(['--role', 'tool'])).toEqual({ ok: true, value: { role: 'tool' } });
+    expect(parseHistoryArgs(['--role', 'user', '--limit', '1'])).toEqual({
+      ok: true,
+      value: { role: 'user', limit: 1 },
+    });
+  });
+
+  it('拒绝 0、负数、非整数与超上限', () => {
+    for (const value of ['0', '-1', '1.5', 'abc', '501']) {
+      const result = parseHistoryArgs(['--limit', value]);
+      expect(result.ok).toBe(false);
+    }
+  });
+
+  it('拒绝 system 角色与未知参数', () => {
+    expect(parseHistoryArgs(['--role', 'system']).ok).toBe(false);
+    expect(parseHistoryArgs(['extra']).ok).toBe(false);
+    expect(parseHistoryArgs(['--limit']).ok).toBe(false);
   });
 });
