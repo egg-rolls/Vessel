@@ -9,7 +9,7 @@ import type {
   MetricsControlLike,
   WorkflowEngineLike,
 } from '../control-plane-types';
-import { buildGatewayControlPlane } from '../gateway-wiring';
+import { buildGatewayControlPlane, buildWorkflowControlPlane } from '../gateway-wiring';
 import type { PluginLoader } from '../plugin-loader';
 
 const dirs: string[] = [];
@@ -141,6 +141,45 @@ describe('buildGatewayControlPlane', () => {
     expect(workflows.resolveDefinition('missing')).toBeUndefined();
     expect(workflows.resolveDefinition('../demo')).toBeUndefined();
     expect(workflows.resolveDefinition('a/b')).toBeUndefined();
+  });
+
+  it('binds resolveDefinition to the engine tenant config', () => {
+    const base = tmpDir();
+    const acmeDefs = path.join(base, 'acme');
+    const workDefs = path.join(base, 'work');
+    fs.mkdirSync(acmeDefs);
+    fs.mkdirSync(workDefs);
+    fs.writeFileSync(path.join(acmeDefs, 'acme.yaml'), 'name: acme\nsteps: []\n');
+    fs.writeFileSync(path.join(workDefs, 'work.yaml'), 'name: work\nsteps: []\n');
+
+    const engine = fakeEngine();
+    const acme = buildWorkflowControlPlane(engine, { workflow: { dir: acmeDefs } });
+    const work = buildWorkflowControlPlane(engine, { workflow: { dir: workDefs } });
+
+    expect(acme.resolveDefinition('acme')).toBe(fs.realpathSync(path.join(acmeDefs, 'acme.yaml')));
+    expect(acme.resolveDefinition('work')).toBeUndefined();
+    expect(work.resolveDefinition('work')).toBe(fs.realpathSync(path.join(workDefs, 'work.yaml')));
+    expect(work.resolveDefinition('acme')).toBeUndefined();
+  });
+
+  it('passes per-tenant control-plane accessors through', () => {
+    const engine = fakeEngine();
+    const feishu = fakeFeishu();
+    const controlPlane = buildGatewayControlPlane({
+      config: {},
+      workflowsFor: (tenantId) =>
+        tenantId === 'acme'
+          ? buildWorkflowControlPlane(engine, { workflow: { enabled: true } })
+          : undefined,
+      feishuFor: (tenantId) => (tenantId === 'acme' ? feishu : undefined),
+    });
+
+    const workflowsFor = controlPlane.workflowsFor as (tenantId: string) => unknown;
+    const feishuFor = controlPlane.feishuFor as (tenantId: string) => unknown;
+    expect(workflowsFor('acme')).toBeDefined();
+    expect(workflowsFor('work')).toBeUndefined();
+    expect(feishuFor('acme')).toBe(feishu);
+    expect(feishuFor('work')).toBeUndefined();
   });
 
   it('injects evals.latest only when enabled', async () => {
