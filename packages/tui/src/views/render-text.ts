@@ -7,7 +7,14 @@
  */
 
 import { displayWidth, padToWidth } from '../utils/text-layout.js';
-import { COLUMN_GAP, formatTableHeader, formatTableRow, resolveColumns } from './layout.js';
+import {
+  COLUMN_GAP,
+  formatRowPrefix,
+  formatTableHeader,
+  formatTableRow,
+  resolveColumns,
+  TABLE_PREFIX_WIDTH,
+} from './layout.js';
 import type { CommandView, DetailView, ListView, TableView } from './types.js';
 
 export interface RenderTextOptions {
@@ -29,15 +36,18 @@ function tableText(view: TableView, options: RenderTextOptions): string[] {
   const rows = view.rows.slice(0, Math.max(0, maxRows));
 
   if (options.width !== undefined) {
-    const columns = resolveColumns(view.columns, Math.max(1, options.width), options.width);
-    lines.push(`  ${formatTableHeader(columns)}`);
+    // 前缀与列共享同一宽度预算，保证表头/数据行起点一致且整行不超宽。
+    const columns = resolveColumns(
+      view.columns,
+      Math.max(1, options.width - TABLE_PREFIX_WIDTH),
+      options.width,
+    );
+    lines.push(`${' '.repeat(TABLE_PREFIX_WIDTH)}${formatTableHeader(columns)}`);
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       if (!row) continue;
       const marker = row.current ? '●' : ' ';
-      lines.push(
-        `${marker} ${String(i + 1).padStart(2, ' ')}  ${formatTableRow(row.cells, columns)}`,
-      );
+      lines.push(`${formatRowPrefix(marker, i)}${formatTableRow(row.cells, columns)}`);
     }
     return lines;
   }
@@ -55,7 +65,7 @@ function tableText(view: TableView, options: RenderTextOptions): string[] {
   const header = view.columns
     .map((column, i) => padToWidth(column.header, widths[i] ?? 1))
     .join(' '.repeat(COLUMN_GAP));
-  lines.push(`  ${header}`);
+  lines.push(`${' '.repeat(TABLE_PREFIX_WIDTH)}${header}`);
 
   for (let r = 0; r < rows.length; r++) {
     const row = rows[r];
@@ -64,7 +74,7 @@ function tableText(view: TableView, options: RenderTextOptions): string[] {
       .map((column, i) => padToWidth(row.cells[column.key] ?? '', widths[i] ?? 1))
       .join(' '.repeat(COLUMN_GAP));
     const marker = row.current ? '●' : ' ';
-    lines.push(`${marker} ${String(r + 1).padStart(2, ' ')}  ${cells}`);
+    lines.push(`${formatRowPrefix(marker, r)}${cells}`);
   }
 
   if (view.rows.length > rows.length) {

@@ -9,6 +9,7 @@
 
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError, redactForDisplay } from '../rpc.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import type { DetailView, TableView, ViewAction, ViewActionInvocation } from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
@@ -206,7 +207,10 @@ export function formatConfigSources(snapshot: ConfigSnapshotLike): string {
     const source = typeof rawSource === 'string' ? rawSource : '?';
     const overlay = overlays.has(key) ? ' +tenant' : '';
     lines.push(
-      `  ${key.padEnd(36)} ${displayValue(leaves.get(key)).padEnd(24)} (${source}${overlay})`.trimEnd(),
+      `  ${padToWidth(truncateToWidth(key, 36), 36)} ${padToWidth(
+        truncateToWidth(displayValue(leaves.get(key)), 24),
+        24,
+      )} (${source}${overlay})`.trimEnd(),
     );
   }
   return lines.join('\n');
@@ -382,10 +386,12 @@ export function buildConfigSourcesTableView(snapshot: ConfigSnapshotLike): Table
     kind: 'table',
     title: 'Config sources',
     columns: [
+      // SOURCE/OVERLAY 是 --sources 的核心信息，80 列也必须可见：
+      // 24 + 16 + 8 + 9 + 3*2 = 63 ≤ 80 列的 67 个单元格预算。
       { key: 'key', header: 'KEY', minWidth: 24, priority: 1 },
       { key: 'value', header: 'VALUE', minWidth: 16, priority: 1 },
-      { key: 'source', header: 'SOURCE', width: 8, priority: 2 },
-      { key: 'overlay', header: 'OVERLAY', width: 8, priority: 2 },
+      { key: 'source', header: 'SOURCE', width: 8, priority: 1 },
+      { key: 'overlay', header: 'OVERLAY', width: 9, priority: 1 },
     ],
     rows,
     actions: configSourcesActions(),

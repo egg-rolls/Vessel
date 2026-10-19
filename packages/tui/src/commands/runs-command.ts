@@ -15,6 +15,7 @@ import type {
 } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { waitForRunCompletion } from '../rpc-events.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { DetailView, TableView, ViewAction, ViewActionInvocation } from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
@@ -26,7 +27,7 @@ const STATUS_WIDTH = 14;
 const PREVIEW_MAX = 40;
 
 function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  return truncateToWidth(text, max);
 }
 
 function oneLine(text: string): string {
@@ -143,21 +144,24 @@ export function formatRuns(runs: DurableRunSummary[], now: number = Date.now()):
 
   const lines = ['', `Durable runs (${runs.length}, newest first):`];
   lines.push(
-    `  ${'RUN ID'.padEnd(RUN_ID_WIDTH)} ${'SESSION'.padEnd(SESSION_WIDTH)} ${'STATUS'.padEnd(
-      STATUS_WIDTH,
-    )} ${'UPDATED'.padEnd(10)} ${'ITER'.padStart(4)}  PREVIEW`,
+    `  ${padToWidth('RUN ID', RUN_ID_WIDTH)} ${padToWidth(
+      'SESSION',
+      SESSION_WIDTH,
+    )} ${padToWidth('STATUS', STATUS_WIDTH)} ${padToWidth('UPDATED', 10)} ${'ITER'.padStart(
+      4,
+    )}  PREVIEW`,
   );
 
   for (const run of runs) {
     const preview = truncate(oneLine(run.preview ?? ''), PREVIEW_MAX);
     lines.push(
-      `  ${truncate(run.run_id, RUN_ID_WIDTH).padEnd(RUN_ID_WIDTH)} ${truncate(
-        run.session_id,
+      `  ${padToWidth(truncate(run.run_id, RUN_ID_WIDTH), RUN_ID_WIDTH)} ${padToWidth(
+        truncate(run.session_id, SESSION_WIDTH),
         SESSION_WIDTH,
-      ).padEnd(SESSION_WIDTH)} ${statusLabel(run).padEnd(STATUS_WIDTH)} ${formatRelativeTime(
-        run.updated_at,
-        now,
-      ).padEnd(10)} ${String(run.iteration ?? '-').padStart(4)}  ${preview}`,
+      )} ${padToWidth(statusLabel(run), STATUS_WIDTH)} ${padToWidth(
+        formatRelativeTime(run.updated_at, now),
+        10,
+      )} ${String(run.iteration ?? '-').padStart(4)}  ${preview}`,
     );
   }
 

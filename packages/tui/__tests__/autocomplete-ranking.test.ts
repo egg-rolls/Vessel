@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  buildAutocompleteRows,
   type CommandItem,
   DISCOVERY_PRIORITY,
   filterCommands,
-  groupCommandsByCategory,
   scoreCommand,
   sortCommandsForDiscovery,
 } from '../src/components/InlineAutocomplete.js';
@@ -103,17 +103,35 @@ describe('sortCommandsForDiscovery', () => {
   });
 });
 
-describe('groupCommandsByCategory', () => {
-  it('按固定顺序分组且不包含 hidden', () => {
-    const groups = groupCommandsByCategory(COMMANDS);
-    expect(groups.map((group) => group.label)).toEqual(['SESSION', 'RUN', 'INSPECT', 'SYSTEM']);
-    const session = groups.find((group) => group.category === 'session');
-    expect(session?.commands.map((command) => command.name)).toEqual([
-      '/resume',
-      '/new',
-      '/history',
+describe('buildAutocompleteRows', () => {
+  it('在 category 变化处插入组头；命令 index 指向扁平列表位置', () => {
+    const list: CommandItem[] = [
+      { name: '/resume', description: 'resume', category: 'session' },
+      { name: '/new', description: 'new', category: 'session' },
+      { name: '/runs', description: 'runs', category: 'run' },
+      { name: '/help', description: 'help', category: 'system' },
+    ];
+    const rows = buildAutocompleteRows(list);
+    expect(rows.map((row) => (row.kind === 'header' ? `#${row.label}` : row.command.name))).toEqual(
+      ['#SESSION', '/resume', '/new', '#RUN', '/runs', '#SYSTEM', '/help'],
+    );
+    expect(rows.filter((row) => row.kind === 'command').map((row) => row.index)).toEqual([
+      0, 1, 2, 3,
     ]);
-    const all = groups.flatMap((group) => group.commands.map((command) => command.name));
-    expect(all).not.toContain('/sessions');
+  });
+
+  it('headings=false 时不插入组头（输入过滤词后的扁平排名）', () => {
+    const rows = buildAutocompleteRows(COMMANDS, false);
+    expect(rows.every((row) => row.kind === 'command')).toBe(true);
+    expect(rows.map((row) => (row.kind === 'command' ? row.index : -1))).toEqual(
+      rows.map((_, index) => index),
+    );
+  });
+
+  it('hidden 命令不进入行列表', () => {
+    const rows = buildAutocompleteRows(COMMANDS);
+    expect(rows.some((row) => row.kind === 'command' && row.command.name === '/sessions')).toBe(
+      false,
+    );
   });
 });

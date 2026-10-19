@@ -22,7 +22,7 @@ import type {
 } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { waitForWorkflowCompletion } from '../rpc-events.js';
-import { fitCell } from '../utils/text-layout.js';
+import { fitCell, padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type {
   DetailView,
@@ -71,7 +71,7 @@ function oneLine(text: string): string {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  return truncateToWidth(text, max);
 }
 
 function safeRelativeTime(ts: number, now: number): string {
@@ -245,7 +245,8 @@ export function buildWorkflowRunsView(
 export function workflowStepLines(detail: WorkflowRunDetailLike, maxRows = 60): string[] {
   if (detail.steps.length === 0) return ['(no steps)'];
 
-  const widths = [16, 6, 10, 3, 8, 20] as const;
+  // 16+6+10+3+8+19 + 5*2 gaps = 72：80 列终端里加上 2 空格前缀仍不触发截断。
+  const widths = [16, 6, 10, 3, 8, 19] as const;
   const header = [
     fitCell('STEP', widths[0]),
     fitCell('TYPE', widths[1]),
@@ -313,7 +314,8 @@ export function buildWorkflowDetailView(
     key: detail.workflow_run_id,
     sections: [
       { title: 'Overview', fields },
-      { title: 'Steps', lines: workflowStepLines(detail) },
+      // 步骤表是预排版：DetailPanel 按内容宽度截断而不是换行，窄终端不破列。
+      { title: 'Steps', lines: workflowStepLines(detail), preformatted: true },
     ],
     actions: workflowDetailActions(),
   };
@@ -346,19 +348,26 @@ export function formatWorkflowRuns(
 
   const lines = ['', `Workflow runs (${runs.length}, newest first):`];
   lines.push(
-    `  ${'RUN ID'.padEnd(RUN_ID_WIDTH)} ${'WORKFLOW'.padEnd(WORKFLOW_WIDTH)} ${'STATUS'.padEnd(
-      STATUS_WIDTH,
-    )} ${'PROGRESS'.padEnd(PROGRESS_WIDTH)} ${'UPDATED'.padEnd(UPDATED_WIDTH)} ERROR`,
+    `  ${padToWidth('RUN ID', RUN_ID_WIDTH)} ${padToWidth(
+      'WORKFLOW',
+      WORKFLOW_WIDTH,
+    )} ${padToWidth('STATUS', STATUS_WIDTH)} ${padToWidth(
+      'PROGRESS',
+      PROGRESS_WIDTH,
+    )} ${padToWidth('UPDATED', UPDATED_WIDTH)} ERROR`,
   );
 
   for (const run of runs) {
     const progress = `${run.completed_steps}/${run.step_count}`;
     const error = run.error ? truncate(oneLine(run.error), LIST_ERROR_MAX) : '';
-    const row = `  ${truncate(run.workflow_run_id, RUN_ID_WIDTH).padEnd(
+    const row = `  ${padToWidth(
+      truncate(run.workflow_run_id, RUN_ID_WIDTH),
       RUN_ID_WIDTH,
-    )} ${truncate(run.workflow_name, WORKFLOW_WIDTH).padEnd(WORKFLOW_WIDTH)} ${run.status.padEnd(
+    )} ${padToWidth(truncate(run.workflow_name, WORKFLOW_WIDTH), WORKFLOW_WIDTH)} ${padToWidth(
+      run.status,
       STATUS_WIDTH,
-    )} ${progress.padEnd(PROGRESS_WIDTH)} ${safeRelativeTime(run.updated_at, now).padEnd(
+    )} ${padToWidth(progress, PROGRESS_WIDTH)} ${padToWidth(
+      safeRelativeTime(run.updated_at, now),
       UPDATED_WIDTH,
     )} ${error}`;
     lines.push(row.trimEnd());
@@ -384,9 +393,12 @@ export function formatWorkflowDetail(
     lines.push(`  error:       ${truncate(oneLine(detail.error), DETAIL_ERROR_MAX)}`);
   lines.push('  steps:');
   lines.push(
-    `  ${'STEP'.padEnd(STEP_ID_WIDTH)} ${'TYPE'.padEnd(STEP_TYPE_WIDTH)} ${'STATUS'.padEnd(
-      STEP_STATUS_WIDTH,
-    )} ${'ATT'.padStart(ATTEMPTS_WIDTH)}  ${'DURATION'.padEnd(DURATION_WIDTH)} DETAIL`,
+    `  ${padToWidth('STEP', STEP_ID_WIDTH)} ${padToWidth(
+      'TYPE',
+      STEP_TYPE_WIDTH,
+    )} ${padToWidth('STATUS', STEP_STATUS_WIDTH)} ${'ATT'.padStart(
+      ATTEMPTS_WIDTH,
+    )}  ${padToWidth('DURATION', DURATION_WIDTH)} DETAIL`,
   );
 
   if (detail.steps.length === 0) lines.push('  (no steps)');
@@ -397,11 +409,14 @@ export function formatWorkflowDetail(
       : step.output_preview
         ? truncate(oneLine(step.output_preview), STEP_DETAIL_MAX)
         : '-';
-    const row = `  ${truncate(step.id, STEP_ID_WIDTH).padEnd(
+    const row = `  ${padToWidth(
+      truncate(step.id, STEP_ID_WIDTH),
       STEP_ID_WIDTH,
-    )} ${step.type.padEnd(STEP_TYPE_WIDTH)} ${step.status.padEnd(
+    )} ${padToWidth(step.type, STEP_TYPE_WIDTH)} ${padToWidth(
+      step.status,
       STEP_STATUS_WIDTH,
-    )} ${String(step.attempts).padStart(ATTEMPTS_WIDTH)}  ${stepDuration(step).padEnd(
+    )} ${String(step.attempts).padStart(ATTEMPTS_WIDTH)}  ${padToWidth(
+      stepDuration(step),
       DURATION_WIDTH,
     )} ${detailText}`;
     lines.push(row.trimEnd());

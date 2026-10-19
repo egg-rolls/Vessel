@@ -8,6 +8,7 @@
 
 import type { ReplContext, TenantQuotaLike, TenantSummaryLike } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type {
   DetailView,
@@ -100,16 +101,21 @@ export function formatTenantList(
 
   const lines = ['', `Tenants (${tenants.length}):`];
   lines.push(
-    `  ${'TENANT'.padEnd(TENANT_WIDTH)} ${'STATUS'.padEnd(STATUS_WIDTH)} ${'CREATED'.padEnd(
-      CREATED_WIDTH,
-    )} QUOTA`,
+    `  ${padToWidth('TENANT', TENANT_WIDTH)} ${padToWidth(
+      'STATUS',
+      STATUS_WIDTH,
+    )} ${padToWidth('CREATED', CREATED_WIDTH)} QUOTA`,
   );
   for (const tenant of tenants) {
     const marker = tenant.tenant_id === currentTenantId ? '*' : ' ';
     lines.push(
-      `${marker} ${tenant.tenant_id.padEnd(TENANT_WIDTH)} ${(tenant.status ?? '-').padEnd(
-        STATUS_WIDTH,
-      )} ${formatCreated(tenant.created_at, now).padEnd(CREATED_WIDTH)} ${formatQuota(tenant.quota)}`.trimEnd(),
+      `${marker} ${padToWidth(
+        truncateToWidth(tenant.tenant_id, TENANT_WIDTH),
+        TENANT_WIDTH,
+      )} ${padToWidth(tenant.status ?? '-', STATUS_WIDTH)} ${padToWidth(
+        formatCreated(tenant.created_at, now),
+        CREATED_WIDTH,
+      )} ${formatQuota(tenant.quota)}`.trimEnd(),
     );
   }
   lines.push('');

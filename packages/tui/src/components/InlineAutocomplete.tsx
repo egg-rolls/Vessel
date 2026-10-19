@@ -45,7 +45,6 @@ interface InlineAutocompleteProps {
  */
 export const DISCOVERY_PRIORITY = ['/resume', '/new', '/help', '/history', '/clear'] as const;
 
-const CATEGORY_ORDER: CommandCategory[] = ['session', 'run', 'inspect', 'config', 'system'];
 export const CATEGORY_LABELS: Record<CommandCategory, string> = {
   session: 'SESSION',
   run: 'RUN',
@@ -145,24 +144,41 @@ export function filterCommands(
   return scored.map((entry) => entry.command);
 }
 
-export interface CommandGroup {
-  category: CommandCategory;
-  label: string;
-  commands: CommandItem[];
-}
+export type AutocompleteRow =
+  | { kind: 'header'; key: string; label: string; category: CommandCategory }
+  | { kind: 'command'; key: string; command: CommandItem; index: number };
 
-/** 纯函数：按 category 分组（隐藏命令不出现；组顺序固定） */
-export function groupCommandsByCategory(commands: CommandItem[]): CommandGroup[] {
-  const groups: CommandGroup[] = [];
-  for (const category of CATEGORY_ORDER) {
-    const items = commands.filter(
-      (command) => !command.hidden && (command.category ?? 'system') === category,
-    );
-    if (items.length > 0) {
-      groups.push({ category, label: CATEGORY_LABELS[category], commands: items });
+/**
+ * 纯函数：把（已排序的）命令列表展开成可渲染行，在 category 变化处插入组头。
+ * 组头不是可选项：`index` 始终指向命令在扁平列表中的位置，选中索引不会漂移。
+ * 组头也占用 `maxVisible` 行数，避免矮终端里补全框溢出。
+ */
+export function buildAutocompleteRows(commands: CommandItem[], headings = true): AutocompleteRow[] {
+  const rows: AutocompleteRow[] = [];
+  let previous: CommandCategory | null = null;
+
+  for (let index = 0; index < commands.length; index++) {
+    const command = commands[index];
+    if (!command || command.hidden) continue;
+    const category = command.category ?? 'system';
+    if (headings && category !== previous) {
+      rows.push({
+        kind: 'header',
+        key: `header-${index}-${category}`,
+        label: CATEGORY_LABELS[category],
+        category,
+      });
     }
+    previous = category;
+    rows.push({
+      kind: 'command',
+      key: `command-${command.name}`,
+      command,
+      index,
+    });
   }
-  return groups;
+
+  return rows;
 }
 
 /** 补全框最多可见的条数（超出时围绕选中项滚动） */
@@ -242,7 +258,13 @@ export function InlineAutocomplete({
 
   if (filtered.length === 0) return null;
 
-  const { start, end } = getVisibleCommandWindow(filtered.length, selectedIndex, maxVisible);
+  // 命令名阶段（无过滤词）按 category 插入组头；输入过滤词后只保留扁平排名。
+  const rows = buildAutocompleteRows(filtered, filter.length === 0);
+  const selectedRowIndex = Math.max(
+    0,
+    rows.findIndex((row) => row.kind === 'command' && row.index === selectedIndex),
+  );
+  const { start, end } = getVisibleCommandWindow(rows.length, selectedRowIndex, maxVisible);
   // 内容区宽度 = 弹窗宽度 - 边框(2) - 左右内边距(2)；行 = 标记(2) + 命令名 + " · " + 描述
   const contentWidth = Math.max(1, width - 4);
 
@@ -256,17 +278,25 @@ export function InlineAutocomplete({
       width={width}
       overflow="hidden"
     >
-      {filtered.slice(start, end).map((cmd, offset) => {
-        const i = start + offset;
-        const active = i === selectedIndex;
+      {rows.slice(start, end).map((row) => {
+        if (row.kind === 'header') {
+          return (
+            <Text key={row.key} color={theme.faint} bold wrap="truncate-end">
+              {row.label}
+            </Text>
+          );
+        }
+
+        const cmd = row.command;
+        const active = row.index === selectedIndex;
         const availability =
           cmd.available === false ? ` (${cmd.unavailableHint ?? 'unavailable'})` : '';
         const descriptionBudget = Math.max(
           1,
-          contentWidth - 2 - displayWidth(cmd.name) - 3 - availability.length,
+          contentWidth - 2 - displayWidth(cmd.name) - 3 - displayWidth(availability),
         );
         return (
-          <Box key={cmd.name}>
+          <Box key={row.key}>
             <Text color={active ? theme.brand : theme.muted} bold={active}>
               {active ? '› ' : '  '}
               {cmd.name}

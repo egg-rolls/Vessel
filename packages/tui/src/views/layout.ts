@@ -24,8 +24,17 @@ export const VIEW_MAX_WIDTH = 120;
 export const VIEW_HORIZONTAL_MARGIN = 2;
 /** 列间距（固定 2 空格） */
 export const COLUMN_GAP = 2;
-/** 表格行首前缀宽度：选中/current 标记 + 序号（`›  1 `） */
-export const TABLE_PREFIX_WIDTH = 4;
+/**
+ * 表格行首前缀宽度：标记(1) + 空格(1) + 三位序号(3) + 两空格(2) = 7。
+ * 表头与数据行共用 `formatRowPrefix`，且列宽预算必须先扣掉这 7 列。
+ * 三位序号覆盖 /trace 的 500 条上限；超过 999 条时序号列会自然变宽。
+ */
+export const TABLE_PREFIX_WIDTH = 7;
+
+/** 纯函数：数据行前缀（标记 + 右对齐序号 + 两个空格），宽度恒为 TABLE_PREFIX_WIDTH */
+export function formatRowPrefix(marker: string, index: number): string {
+  return `${marker} ${String(index + 1).padStart(3, ' ')}  `;
+}
 /** 宽屏断点：priority 2 / 3 */
 export const WIDE_COLUMNS = 100;
 export const XL_COLUMNS = 120;

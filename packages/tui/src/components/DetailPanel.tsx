@@ -5,7 +5,7 @@
 
 import { Box, Text } from 'ink';
 import { theme } from '../theme.js';
-import { displayWidth, padToWidth, wrapToWidth } from '../utils/text-layout.js';
+import { displayWidth, padToWidth, truncateToWidth, wrapToWidth } from '../utils/text-layout.js';
 import { toneColor } from '../views/tones.js';
 import type { DetailView } from '../views/types.js';
 
@@ -36,8 +36,9 @@ export function DetailPanel({ view, width, maxRows }: DetailPanelProps) {
       18,
       Math.max(0, ...(section.fields ?? []).map((field) => displayWidth(field.label))),
     );
+    // 行前缀是 2 空格 + label 列 + 2 空格，value 只能占剩余部分。
     for (const field of section.fields ?? []) {
-      const valueWidth = Math.max(1, width - labelWidth - 2);
+      const valueWidth = Math.max(1, width - labelWidth - 4);
       const wrapped = wrapToWidth(field.value, valueWidth);
       const [first = '', ...rest] = wrapped;
       lines.push({
@@ -49,8 +50,13 @@ export function DetailPanel({ view, width, maxRows }: DetailPanelProps) {
       }
     }
 
+    const lineWidth = Math.max(1, width - 2);
     for (const raw of section.lines ?? []) {
-      for (const line of wrapToWidth(raw, width)) lines.push({ text: `  ${line}` });
+      // 预排版表格：截断保持列对齐；普通文本：换行。
+      const wrapped = section.preformatted
+        ? [truncateToWidth(raw, lineWidth)]
+        : wrapToWidth(raw, lineWidth);
+      for (const line of wrapped) lines.push({ text: `  ${line}` });
     }
   }
 

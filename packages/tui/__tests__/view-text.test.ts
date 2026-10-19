@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { displayWidth } from '../src/views/layout.js';
 import { renderViewAsText } from '../src/views/render-text.js';
 import type { ConfirmView, DetailView, FormView, ListView, TableView } from '../src/views/types.js';
 
@@ -52,6 +53,18 @@ describe('renderViewAsText: table', () => {
     const text = renderViewAsText(cjk, { width: 40 });
     expect(text).toContain('中文标题');
     expect(text).toContain('TITLE');
+  });
+
+  it('表头与数据行从同一列开始，整行不超过 width', () => {
+    const cjk: TableView = {
+      ...table,
+      rows: [{ key: 'zh', cells: { title: '中文标题', msgs: '3' } }],
+    };
+    const lines = renderViewAsText(cjk, { width: 40 }).split('\n');
+    const header = lines.find((line) => line.includes('TITLE')) ?? '';
+    const row = lines.find((line) => line.includes('中文标题')) ?? '';
+    expect(header.indexOf('TITLE')).toBe(row.indexOf('中文标题'));
+    expect(displayWidth(row)).toBeLessThanOrEqual(40);
   });
 });
 

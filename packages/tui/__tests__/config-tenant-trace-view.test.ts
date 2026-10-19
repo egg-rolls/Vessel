@@ -22,6 +22,7 @@ import {
   type TraceOptions,
 } from '../src/commands/trace-command.js';
 import type { RpcClientLike, TenantSummaryLike } from '../src/repl-context.js';
+import { resolveColumns, TABLE_PREFIX_WIDTH, viewContentWidth } from '../src/views/layout.js';
 import { makeCtx } from './helpers.js';
 
 const NOW = 1_700_000_000_000;
@@ -98,6 +99,17 @@ describe('/config view mapping', () => {
     expect(backend?.cells.source).toBe('default');
     expect(backend?.cells.overlay).toBe('+tenant');
     expect(view.actions?.map((action) => action.key)).toEqual(['s', 'r']);
+  });
+
+  it('80 列下仍显示 SOURCE 与 OVERLAY 列', () => {
+    const view = buildConfigSourcesTableView(CONFIG_SNAPSHOT);
+    const resolved = resolveColumns(view.columns, viewContentWidth(80) - TABLE_PREFIX_WIDTH, 80);
+    expect(resolved.map((column) => column.column.key)).toEqual([
+      'key',
+      'value',
+      'source',
+      'overlay',
+    ]);
   });
 
   it('命令返回详情；--json 不返回 view；path 返回 paths 详情', async () => {

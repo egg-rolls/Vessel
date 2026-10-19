@@ -93,6 +93,8 @@ export interface DetailSection {
   fields?: DetailField[];
   /** 原样多行（已由命令层截断/脱敏） */
   lines?: string[];
+  /** true = 预排版行（如步骤表），渲染时截断而不是换行，避免破坏列对齐 */
+  preformatted?: boolean;
 }
 
 export interface DetailView {

@@ -3,10 +3,12 @@ import {
   COLUMN_GAP,
   displayWidth,
   fitCell,
+  formatRowPrefix,
   formatTableHeader,
   formatTableRow,
   resolveColumns,
   scrollWindow,
+  TABLE_PREFIX_WIDTH,
   viewContentWidth,
   viewWidth,
   widthClass,
@@ -88,6 +90,35 @@ describe('resolveColumns', () => {
 
   it('空列定义返回空数组', () => {
     expect(resolveColumns([], 80)).toEqual([]);
+  });
+});
+
+describe('表格行前缀（表头/数据行对齐）', () => {
+  it('所有标记的前缀宽度都等于 TABLE_PREFIX_WIDTH', () => {
+    for (const marker of ['›', '●', ' ']) {
+      expect(displayWidth(formatRowPrefix(marker, 0))).toBe(TABLE_PREFIX_WIDTH);
+      expect(displayWidth(formatRowPrefix(marker, 9))).toBe(TABLE_PREFIX_WIDTH);
+      expect(displayWidth(formatRowPrefix(marker, 99))).toBe(TABLE_PREFIX_WIDTH);
+    }
+  });
+
+  it('表头与数据行总宽度一致，且整行不超过内容宽度', () => {
+    for (const terminal of [80, 100, 120]) {
+      const resolved = resolveColumns(
+        [
+          { key: 'title', header: 'TITLE', priority: 1, minWidth: 24 },
+          { key: 'msgs', header: 'MSGS', width: 5, align: 'right', priority: 1 },
+        ],
+        viewContentWidth(terminal) - TABLE_PREFIX_WIDTH,
+        terminal,
+      );
+      const headerWidth = TABLE_PREFIX_WIDTH + displayWidth(formatTableHeader(resolved));
+      const rowWidth =
+        TABLE_PREFIX_WIDTH +
+        displayWidth(formatTableRow({ title: '中文标题', msgs: '3' }, resolved));
+      expect(rowWidth).toBe(headerWidth);
+      expect(rowWidth).toBeLessThanOrEqual(viewContentWidth(terminal));
+    }
   });
 });
 

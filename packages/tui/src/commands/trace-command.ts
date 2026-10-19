@@ -10,6 +10,7 @@
 
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError, redactForDisplay } from '../rpc.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { TableView, ViewAction, ViewActionInvocation } from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
@@ -51,7 +52,7 @@ function oneLine(text: string): string {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  return truncateToWidth(text, max);
 }
 
 function parsePositiveInt(value: string | undefined): number | undefined {
@@ -194,7 +195,10 @@ export function formatTraceEvents(events: TraceEventLike[], now: number = Date.n
     const ts =
       typeof event.ts === 'number' && event.ts > 0 ? formatRelativeTime(event.ts, now) : '-';
     lines.push(
-      `  ${seq.padEnd(8)} ${ts.padEnd(10)} ${event.type.padEnd(28)} ${summarizeData(event)}`.trimEnd(),
+      `  ${padToWidth(seq, 8)} ${padToWidth(ts, 10)} ${padToWidth(
+        event.type,
+        28,
+      )} ${summarizeData(event)}`.trimEnd(),
     );
   }
   return lines.join('\n');

@@ -7,6 +7,7 @@ import {
   runConfigCommand,
 } from '../src/commands/config-command.js';
 import type { RpcClientLike } from '../src/repl-context.js';
+import { displayWidth } from '../src/utils/text-layout.js';
 import { makeCtx } from './helpers.js';
 
 const SNAPSHOT = {
@@ -164,6 +165,15 @@ describe('/config', () => {
       expect(parsed.value.action).toBe('path');
       expect(parsed.value.json).toBe(true);
     }
+  });
+
+  it('CJK 值按显示宽度对齐（不使用 .padEnd）', () => {
+    const text = formatConfigSources({ config: { name: '中文配置值' } });
+    const line = text.split('\n').find((item) => item.includes('name')) ?? '';
+    const source = line.indexOf('(');
+    expect(source).toBeGreaterThan(0);
+    // 2 空格 + KEY(36) + 空格 + VALUE(24) + 空格
+    expect(displayWidth(line.slice(0, source))).toBe(2 + 36 + 1 + 24 + 1);
   });
 
   it('纯函数格式化空 sources', () => {

@@ -7,7 +7,7 @@
 
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import type { McpServerSummary, ReplContext } from '../repl-context.js';
-import { truncateToWidth } from '../utils/text-layout.js';
+import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import type {
   DetailView,
   ListView,
@@ -26,7 +26,7 @@ function oneLine(text: string): string {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max - 1)}…`;
+  return truncateToWidth(text, max);
 }
 
 /** 纯函数：把 server 快照渲染成列表文本（测试用） */
@@ -35,9 +35,10 @@ export function formatMcpServers(servers: McpServerSummary[]): string {
 
   const lines = ['', `MCP servers (${servers.length}):`];
   for (const server of servers) {
-    const base = `  ${server.name.padEnd(NAME_WIDTH)} ${server.status.padEnd(STATUS_WIDTH)} ${String(
-      server.tools.length,
-    ).padStart(3)} tools`;
+    const base = `  ${padToWidth(server.name, NAME_WIDTH)} ${padToWidth(
+      server.status,
+      STATUS_WIDTH,
+    )} ${String(server.tools.length).padStart(3)} tools`;
     const error = server.error ? `  ${truncate(oneLine(server.error), ERROR_MAX)}` : '';
     lines.push(`${base}${error}`);
   }

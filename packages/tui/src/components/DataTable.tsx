@@ -8,7 +8,12 @@
 import { Box, Text } from 'ink';
 import { theme } from '../theme.js';
 import { fitCell } from '../utils/text-layout.js';
-import { COLUMN_GAP, type ResolvedColumn, TABLE_PREFIX_WIDTH } from '../views/layout.js';
+import {
+  COLUMN_GAP,
+  formatRowPrefix,
+  type ResolvedColumn,
+  TABLE_PREFIX_WIDTH,
+} from '../views/layout.js';
 import { toneColor } from '../views/tones.js';
 import type { TableView, ViewRow } from '../views/types.js';
 import { EmptyState } from './EmptyState.js';
@@ -78,7 +83,7 @@ export function DataTable({
         return (
           <Box key={row.key}>
             <Text color={markerColor} bold={selected}>
-              {`${marker} ${String(index + 1).padStart(2, ' ')}  `}
+              {formatRowPrefix(marker, index)}
             </Text>
             {columns.map(({ column, width }, cellIndex) => (
               <Text key={column.key} color={rowColor} bold={selected} wrap="truncate-end">
