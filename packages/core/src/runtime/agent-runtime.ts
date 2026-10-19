@@ -680,7 +680,9 @@ export class AgentRuntime {
       if (response.finish_reason === 'tool_calls' && response.tool_calls) {
         // 先对全部 tool_call 过 Guardrail，得到实际要执行的调用（replacement 可改写，C-05）。
         // 放在写 assistant 消息之前，保证上下文里的 tool_calls 与后续 role:tool 结果严格配对。
+        // 阻断不再 throw（0.6.1 P1）：保留调用并折回 role:tool 错误，模型可改道。
         const effectiveCalls: ToolCall[] = [];
+        const blockedCalls = new Map<string, string>();
         for (const toolCall of response.tool_calls) {
           this.limitChecker.incrementToolCall(this.stats);
           const toolCallResult = await this.guardrails.apply(
@@ -690,7 +692,12 @@ export class AgentRuntime {
             sessionId,
           );
           if (!toolCallResult.allowed) {
-            throw new Error(`Tool call blocked by guardrail: ${toolCallResult.reason}`);
+            blockedCalls.set(
+              toolCall.id,
+              `Tool call blocked by guardrail: ${toolCallResult.reason ?? 'blocked'}`,
+            );
+            effectiveCalls.push(toolCall);
+            continue;
           }
           effectiveCalls.push(
             isToolCall(toolCallResult.replacement) ? toolCallResult.replacement : toolCall,
@@ -716,13 +723,17 @@ export class AgentRuntime {
           const toolName = toolCall.function.name;
           const toolStartTime = Date.now();
 
-          // 参数只解析一次（C-01）：失败按工具失败折回上下文，不终止 run
+          // 参数只解析一次（C-01）：失败按工具失败折回上下文，不终止 run。
+          // Guardrail 阻断的调用不再 throw，而是走同一折回路径（0.6.1 P1）。
+          const blockedReason = blockedCalls.get(toolCall.id);
           let args: unknown = {};
-          let argsError: string | undefined;
-          try {
-            args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
-          } catch (error) {
-            argsError = error instanceof Error ? error.message : String(error);
+          let argsError: string | undefined = blockedReason;
+          if (!blockedReason) {
+            try {
+              args = toolCall.function.arguments ? JSON.parse(toolCall.function.arguments) : {};
+            } catch (error) {
+              argsError = error instanceof Error ? error.message : String(error);
+            }
           }
 
           // 发布工具调用开始事件
@@ -745,7 +756,10 @@ export class AgentRuntime {
               toolCallId: toolCall.id,
               toolName,
               startTime: toolStartTime,
-              errorMessage: `Invalid JSON in tool arguments: ${argsError}`,
+              errorMessage:
+                blockedReason !== undefined
+                  ? blockedReason
+                  : `Invalid JSON in tool arguments: ${argsError}`,
             });
             continue;
           }
@@ -783,7 +797,18 @@ export class AgentRuntime {
               sessionId,
             );
             if (!toolResultResult.allowed) {
-              throw new Error(`Tool result blocked by guardrail: ${toolResultResult.reason}`);
+              // 0.6.1 P1：结果阻断折回 tool 错误，不终止 run。
+              await this.recordToolFailure({
+                runId,
+                sessionId,
+                toolCallId: toolCall.id,
+                toolName,
+                startTime: toolStartTime,
+                errorMessage: `Tool result blocked by guardrail: ${
+                  toolResultResult.reason ?? 'blocked'
+                }`,
+              });
+              continue;
             }
             const finalResult =
               typeof toolResultResult.replacement === 'string'
