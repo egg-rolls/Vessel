@@ -186,7 +186,17 @@ export interface RpcDispatcherHandle {
   manifest: () => CapabilityManifest;
 }
 
-const ROLE_RANK: Record<MethodPermission, number> = { read: 1, write: 2, admin: 3 };
+/** 角色等级；REST 控制面与 RPC 方法表共用，避免第二套权限判断。 */
+export const ROLE_RANK: Record<MethodPermission, number> = { read: 1, write: 2, admin: 3 };
+
+/** principal 是否达到所需权限（未知角色按 read 处理）。 */
+export function hasPermission(
+  role: MethodPermission | string | undefined,
+  required: MethodPermission,
+): boolean {
+  const rank = ROLE_RANK[role as MethodPermission] ?? ROLE_RANK.read;
+  return rank >= ROLE_RANK[required];
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

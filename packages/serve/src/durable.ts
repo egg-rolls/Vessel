@@ -33,6 +33,8 @@ export interface DurableCheckpointLike {
   messages?: Array<{ role?: string; content?: string }>;
   iteration?: number;
   updated_at: number;
+  /** 0.5：所属 tenant；缺省视为 default */
+  tenant_id?: string;
 }
 
 /** store 的最小结构面（core RunStore 结构满足） */

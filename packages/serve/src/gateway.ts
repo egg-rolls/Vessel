@@ -60,6 +60,7 @@ import {
   type CapabilityManifest,
   createRpcDispatcher,
   defineMethods,
+  hasPermission,
   type RpcDispatcher,
   RpcError,
   type RpcMethodContext,
@@ -68,6 +69,12 @@ import {
   type RpcResponse,
 } from './rpc.js';
 import { createRunEngine } from './run-engine.js';
+import {
+  MAX_SESSION_SEARCH_LIMIT,
+  normalizeSearchQuery,
+  parseSearchLimit,
+  searchSessions,
+} from './session-search.js';
 import {
   fromWireMessage,
   isRemoteAddress,
@@ -99,6 +106,7 @@ import {
   type TenantPrincipal,
   type TenantQuota,
 } from './tenant.js';
+import { capToolEvent } from './tool-events.js';
 import {
   dedupeWorkflowSummaries,
   isSafeWorkflowName,
@@ -164,6 +172,12 @@ export interface GatewayOptions {
   tls?: { certFile: string; keyFile: string };
   /** durable run 查询/恢复注入；缺省 = durable 端点关闭 */
   durable?: DurableGatewayOptions;
+  /**
+   * 0.6.1 P0-2：per-tenant durable store。
+   * default tenant 先用 `durable`，再 fallback 本工厂；
+   * 非 default tenant 只走本工厂，缺失时返回 forbidden（绝不回退全局 store）。
+   */
+  durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
   /** MCP server 状态注入；缺省 = MCP 端点关闭 */
   mcp?: McpGatewayOptions;
   /** workflow 控制面注入；缺省 = `/v1/workflows*` 返回 workflow_disabled */
@@ -1001,7 +1015,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const unsubscribe = events.subscribe((event: RunEvent) => {
     engine.handleEvent(event);
     // 0.5：出站前统一脱敏（实时与回放都是脱敏后的副本；A-3 §10.3）
-    const safeEvent = redactor.redact(event);
+    // 0.6.1 E12：先脱敏再裁剪工具参数/结果，实时与回放保持一致。
+    const safeEvent = capToolEvent(redactor.redact(event));
     const seq = buffer.append(safeEvent);
     broadcastEvent({ seq, event: safeEvent });
 
@@ -1219,6 +1234,37 @@ export function startGateway(opts: GatewayOptions): Gateway {
       },
     },
     {
+      name: 'sessions.search',
+      permission: 'read',
+      params_schema: {
+        type: 'object',
+        required: ['query'],
+        properties: {
+          query: { type: 'string', minLength: 1, maxLength: 256 },
+          limit: { type: 'integer', minimum: 1, maximum: MAX_SESSION_SEARCH_LIMIT },
+        },
+      },
+      handler: async (params, ctx) => {
+        const query = normalizeSearchQuery(params.query);
+        if (query === null) {
+          throw new RpcError('invalid_params', 'query must be 1..256 characters');
+        }
+        const limit = parseSearchLimit(params.limit);
+        if (limit === null) {
+          throw new RpcError(
+            'invalid_params',
+            `limit must be an integer between 1 and ${MAX_SESSION_SEARCH_LIMIT}`,
+          );
+        }
+        const backend = requireSession(ctx.tenantId);
+        try {
+          return { sessions: await searchSessions(backend, query, limit) };
+        } catch (error) {
+          mapTenantError(error);
+        }
+      },
+    },
+    {
       name: 'sessions.delete',
       permission: 'write',
       params_schema: {
@@ -1295,10 +1341,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const runId = stringParam(params, 'run_id');
         const record = runs.get(runId);
         if (record && record.tenant_id === ctx.tenantId) return { run: publicStatus(record) };
-        const store = opts.durable?.store;
-        if (!store) throw new RpcError('not_found', `Run not found: ${runId}`);
-        const checkpoint = await store.load(runId);
-        if (!checkpoint) throw new RpcError('not_found', `Run not found: ${runId}`);
+        const durable = durableForTenant(ctx.tenantId);
+        if (!durable) {
+          if (ctx.tenantId !== defaultTenantId) {
+            throw new RpcError(
+              'forbidden',
+              `Durable runs are not configured for tenant: ${ctx.tenantId}`,
+            );
+          }
+          throw new RpcError('not_found', `Run not found: ${runId}`);
+        }
+        const checkpoint = await durable.store.load(runId);
+        if (!checkpoint || !checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
+          throw new RpcError('not_found', `Run not found: ${runId}`);
+        }
         return { run: checkpoint };
       },
     },
@@ -1341,9 +1397,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
         required: ['run_id'],
         properties: { run_id: { type: 'string', minLength: 1 } },
       },
-      handler: async (params) => {
-        const durable = opts.durable;
+      handler: async (params, ctx) => {
+        const durable = durableForTenant(ctx.tenantId);
         if (!durable?.store || !durable.resume) {
+          if (ctx.tenantId !== defaultTenantId) {
+            throw new RpcError(
+              'forbidden',
+              `Durable runs are not configured for tenant: ${ctx.tenantId}`,
+            );
+          }
           throw new RpcError('not_found', 'Durable resume is not available');
         }
         const runId = stringParam(params, 'run_id');
@@ -1362,6 +1424,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (!checkpoint) {
           resumedRuns.delete(runId);
           throw new RpcError('not_found', `Run not found: ${runId}`);
+        }
+        if (!checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
+          resumedRuns.delete(runId);
+          throw new RpcError('forbidden', `Run does not belong to tenant: ${ctx.tenantId}`);
         }
         if (!isResumableStatus(checkpoint.status)) {
           resumedRuns.delete(runId);
@@ -2216,6 +2282,33 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return opts.feishuFor?.(tenantId);
   }
 
+  /**
+   * P0-2：durable store 也按 tenant 解析。
+   * 非 default tenant 绝不回退全局 store（否则跨租户读/恢复）。
+   */
+  function durableForTenant(tenantId: string): DurableGatewayOptions | undefined {
+    if (tenantId === defaultTenantId) {
+      return opts.durable ?? opts.durableFor?.(tenantId);
+    }
+    return opts.durableFor?.(tenantId);
+  }
+
+  /** principal → 实际 durable tenant（wildcard admin 落到 default）。 */
+  function durableTenantId(principal: TenantPrincipal): string {
+    return principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+  }
+
+  /**
+   * checkpoint 是否属于该 tenant。
+   * 未标注 tenant 的 checkpoint 视为当前 store 所属 tenant（file store 按目录隔离）。
+   */
+  function checkpointBelongsToTenant(
+    checkpoint: { tenant_id?: string },
+    tenantId: string,
+  ): boolean {
+    return checkpoint.tenant_id === undefined || checkpoint.tenant_id === tenantId;
+  }
+
   /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
   function requireWorkflows(tenantId: string): WorkflowGatewayOptions {
     const resolved = workflowsForTenant(tenantId);
@@ -2521,6 +2614,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
         extra,
       );
     }
+    // P1：GET 允许 read；所有变更操作要求 write/admin（与 RPC 方法表同一 ROLE_RANK）。
+    const requiredRole = req.method === 'GET' ? 'read' : 'write';
+    if (!hasPermission(principal.role, requiredRole)) {
+      return errorJson(
+        'forbidden',
+        `Team ${req.method} requires ${requiredRole} permission`,
+        403,
+        extra,
+      );
+    }
 
     if (path === '/v1/team/peers' && req.method === 'GET') {
       let peers = t.transport ? await t.transport.peers().catch(() => []) : [];
@@ -2818,17 +2921,27 @@ export function startGateway(opts: GatewayOptions): Gateway {
     url: URL,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/durable' && !path.startsWith('/v1/durable/')) return null;
-    const durable = opts.durable;
+    // P0-2：durable 端点按 token principal 作用域；非 default tenant 只走 per-tenant store。
+    const tenantId = durableTenantId(principal);
+    const durable = durableForTenant(tenantId);
+    const missingStore = (): Response =>
+      tenantId !== defaultTenantId
+        ? errorJson(
+            'forbidden',
+            `Durable runs are not configured for tenant: ${tenantId}`,
+            403,
+            extra,
+          )
+        : errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
 
     if (path === '/v1/durable/runs') {
       if (req.method !== 'GET') {
         return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
       }
-      if (!durable) {
-        return errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
-      }
+      if (!durable) return missingStore();
       const statuses = parseStatusFilter(url.searchParams.get('status'));
       if (statuses === null) {
         return errorJson('invalid_request', 'Invalid status filter', 400, extra);
@@ -2854,7 +2967,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
             : (
                 await Promise.all(statuses.map((status) => durable.store.list({ ...base, status })))
               ).flat();
-        const runs = sortCheckpoints(dedupeCheckpoints(checkpoints))
+        const runs = sortCheckpoints(
+          dedupeCheckpoints(
+            checkpoints.filter((checkpoint) => checkpointBelongsToTenant(checkpoint, tenantId)),
+          ),
+        )
           .slice(0, limit)
           .map(toRunSummary);
         return json({ runs }, 200, extra);
@@ -2868,16 +2985,19 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (req.method !== 'POST') {
         return errorJson('method_not_allowed', 'Method not allowed', 405, extra);
       }
-      if (!durable) {
-        return errorJson('durable_disabled', 'Durable runs are not enabled', 503, extra);
-      }
+      if (!durable) return missingStore();
       if (!durable.resume) {
+        if (tenantId !== defaultTenantId) return missingStore();
         return errorJson(
           'durable_disabled',
           'Durable resume is not available in this mode',
           503,
           extra,
         );
+      }
+      // P0-2：resume 会启动 run，必须 write 及以上。
+      if (!hasPermission(principal.role, 'write')) {
+        return errorJson('forbidden', 'Durable resume requires write permission', 403, extra);
       }
       let runId: string;
       try {
@@ -2909,6 +3029,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (!checkpoint) {
         resumedRuns.delete(runId);
         return errorJson('run_not_found', `Run not found: ${runId}`, 404, extra);
+      }
+      if (!checkpointBelongsToTenant(checkpoint, tenantId)) {
+        resumedRuns.delete(runId);
+        return errorJson('forbidden', `Run does not belong to tenant: ${tenantId}`, 403, extra);
       }
       if (!isResumableStatus(checkpoint.status)) {
         resumedRuns.delete(runId);
@@ -3681,7 +3805,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (teamResponse) return teamResponse;
 
       // 0.3：durable / MCP（未注入 → 503 *_disabled）
-      const durableResponse = await handleDurable(req, url, path, extra);
+      const durableResponse = await handleDurable(req, url, path, extra, principal);
       if (durableResponse) return durableResponse;
       const mcpResponse = await handleMcp(req, path, extra, principal);
       if (mcpResponse) return mcpResponse;
