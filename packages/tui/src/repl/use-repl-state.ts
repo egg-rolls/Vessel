@@ -26,6 +26,9 @@ export interface PermissionOverlay {
 /** 单轮 run 的 UI 阶段 */
 export type RunPhase = 'idle' | 'running' | 'cancelling';
 
+/** resume picker 的加载状态：失败不能伪装成空列表 */
+export type ResumePickerStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 export interface RunUiState {
   phase: RunPhase;
   abort: AbortController | null;
@@ -39,6 +42,10 @@ export interface ReplUiState {
   history: string[];
   autocompleteIndex: number;
   resumeSessions: SessionInfo[];
+  resumeStatus: ResumePickerStatus;
+  resumeError: string | null;
+  /** retry 时自增，驱动 Ink effect 重新拉取 */
+  resumeReloadToken: number;
   clearSignal: number;
   inputCaretKey: number;
   askUserActive: boolean;
@@ -54,7 +61,11 @@ export type ReplUiAction =
   | { type: 'appendHistoryLines'; lines: string[] }
   | { type: 'clearHistory' }
   | { type: 'setAutocompleteIndex'; index: number }
-  | { type: 'setResumeSessions'; sessions: SessionInfo[] }
+  | { type: 'resumePickerLoading' }
+  | { type: 'resumePickerReady'; sessions: SessionInfo[] }
+  | { type: 'resumePickerError'; message: string }
+  | { type: 'resumePickerRetry' }
+  | { type: 'resumePickerReset' }
   | { type: 'bumpClearSignal' }
   | { type: 'bumpCaret' }
   | { type: 'setAskUserActive'; active: boolean; requestId?: string; runId?: string }
@@ -82,8 +93,26 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
       return { ...state, history: [] };
     case 'setAutocompleteIndex':
       return { ...state, autocompleteIndex: action.index };
-    case 'setResumeSessions':
-      return { ...state, resumeSessions: action.sessions };
+    case 'resumePickerLoading':
+      return { ...state, resumeStatus: 'loading', resumeError: null };
+    case 'resumePickerReady':
+      return {
+        ...state,
+        resumeStatus: 'ready',
+        resumeError: null,
+        resumeSessions: action.sessions,
+      };
+    case 'resumePickerError':
+      return { ...state, resumeStatus: 'error', resumeError: action.message };
+    case 'resumePickerRetry':
+      return {
+        ...state,
+        resumeStatus: 'loading',
+        resumeError: null,
+        resumeReloadToken: state.resumeReloadToken + 1,
+      };
+    case 'resumePickerReset':
+      return { ...state, resumeStatus: 'idle', resumeError: null, resumeSessions: [] };
     case 'bumpClearSignal':
       return { ...state, clearSignal: state.clearSignal + 1 };
     case 'bumpCaret':
@@ -136,6 +165,9 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     history: [],
     autocompleteIndex: 0,
     resumeSessions: [],
+    resumeStatus: 'idle',
+    resumeError: null,
+    resumeReloadToken: 0,
     clearSignal: 0,
     inputCaretKey: 0,
     askUserActive: false,

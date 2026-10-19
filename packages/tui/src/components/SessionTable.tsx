@@ -12,6 +12,10 @@ import { formatRelativeTime } from '../utils/time.js';
 interface SessionTableProps {
   sessions: SessionInfo[];
   currentSessionId?: string;
+  /** picker 数据加载状态；默认 ready，保持外部调用兼容 */
+  status?: 'loading' | 'ready' | 'error';
+  error?: string | null;
+  onRetry?: () => void;
   onSelect: (id: string) => void;
   onClose: () => void;
 }
@@ -21,7 +25,15 @@ function truncate(str: string, max: number): string {
   return `${str.slice(0, max - 3)}...`;
 }
 
-export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: SessionTableProps) {
+export function SessionTable({
+  sessions,
+  currentSessionId,
+  status = 'ready',
+  error = null,
+  onRetry,
+  onSelect,
+  onClose,
+}: SessionTableProps) {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [filterMode, setFilterMode] = useState(false);
   const [filterText, setFilterText] = useState('');
@@ -72,6 +84,13 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
       return;
     }
 
+    // loading 时除 Esc 外不响应；error 时 r 重试。
+    if (status === 'loading') return;
+    if (status === 'error') {
+      if (inputChar === 'r' && onRetry) onRetry();
+      return;
+    }
+
     if (key.return) {
       if (filteredSessions.length > 0 && selectedIndex < filteredSessions.length) {
         const selected = filteredSessions[selectedIndex];
@@ -108,6 +127,45 @@ export function SessionTable({ sessions, currentSessionId, onSelect, onClose }: 
       }
     }
   });
+
+  if (status === 'loading') {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor={theme.line}
+        paddingX={1}
+        marginY={1}
+      >
+        <Text color={theme.muted}>Loading sessions…</Text>
+        <Box marginTop={1}>
+          <Text color={theme.faint}>Esc to close</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <Box
+        flexDirection="column"
+        borderStyle="single"
+        borderColor={theme.line}
+        paddingX={1}
+        marginY={1}
+      >
+        <Text bold color={theme.danger}>
+          Failed to load sessions
+        </Text>
+        <Box marginTop={1}>
+          <Text color={theme.muted}>{error ?? 'Unknown error.'}</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={theme.faint}>r retry · Esc to close</Text>
+        </Box>
+      </Box>
+    );
+  }
 
   if (sessions.length === 0) {
     return (

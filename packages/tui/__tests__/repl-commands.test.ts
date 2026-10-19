@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { Message, RunState, ToolDefinition } from '@vessel/core';
-import { createCommands } from '../src/commands/commands.js';
+import { CommandRegistry, createCommands } from '../src/commands/commands.js';
 import { makeCtx, makeState } from './helpers.js';
 
 const sampleTool: ToolDefinition = {
@@ -70,6 +70,43 @@ describe('CommandRegistry 扁平命令', () => {
     const state = makeState(ctx.currentSessionId);
     const result = await reg.execute('nope', ctx, state);
     expect(result.handled).toBe(false);
+  });
+
+  it('命令抛错 -> handled:true + 稳定错误（不向 REPL 抛出）', async () => {
+    const reg = new CommandRegistry();
+    reg.register({
+      name: 'boom',
+      description: 'always throws',
+      run: async () => {
+        throw { code: 'internal', message: 'kaboom' };
+      },
+    });
+    const ctx = makeCtx();
+    const state = makeState(ctx.currentSessionId);
+
+    const result = await reg.execute('boom', ctx, state);
+
+    expect(result.handled).toBe(true);
+    expect(result.output).toContain('Failed to run /boom');
+    expect(result.output).toContain('✗ [internal] kaboom');
+  });
+
+  it('数据层失败 -> /history 返回稳定错误而不是 reject', async () => {
+    const rpc = {
+      request: async <T>(_method: string, _params?: unknown): Promise<T> => {
+        throw { code: 'internal', message: 'db down' };
+      },
+      subscribe: () => () => undefined,
+    };
+    const reg = createCommands();
+    const ctx = makeCtx({ rpc });
+    const state = makeState(ctx.currentSessionId);
+
+    const result = await reg.execute('history', ctx, state);
+
+    expect(result.handled).toBe(true);
+    expect(result.output).toContain('Failed to run /history');
+    expect(result.output).toContain('✗ [internal] db down');
   });
 
   it('/tools 返回已注册工具', async () => {
@@ -165,6 +202,24 @@ describe('扁平会话命令', () => {
     const result = await reg.execute('resume', ctx, state);
     expect(state.showResumePicker).toBe(false);
     expect(result.output ?? '').toContain('No sessions');
+  });
+
+  it('/resume 无参 + 列表失败 -> 稳定错误且不伪装成无会话', async () => {
+    const rpc = {
+      request: async <T>(_method: string, _params?: unknown): Promise<T> => {
+        throw { code: 'internal', message: 'list down' };
+      },
+      subscribe: () => () => undefined,
+    };
+    const reg = createCommands();
+    const ctx = makeCtx({ rpc });
+    const state = makeState(ctx.currentSessionId);
+
+    const result = await reg.execute('resume', ctx, state);
+
+    expect(state.showResumePicker).toBe(false);
+    expect(result.output).toContain('Failed to list sessions');
+    expect(result.output).toContain('✗ [internal] list down');
   });
 
   it('/new 清 context + 新 id + 丢弃空当前会话', async () => {

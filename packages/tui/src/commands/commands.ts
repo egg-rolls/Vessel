@@ -135,7 +135,17 @@ export class CommandRegistry {
     const entry = this.entries.get(command);
     if (!entry) return { handled: false };
 
-    const result = (await entry.run(tokens.slice(1), ctx, state)) || { handled: true };
+    // 最后一道防线：单条命令的异常不得让 REPL 崩溃。
+    // 命令自身已有的精确 catch（/tools、/sessions 等）优先，这里只兜未捕获的异常。
+    let result: CommandResult;
+    try {
+      result = (await entry.run(tokens.slice(1), ctx, state)) || { handled: true };
+    } catch (error) {
+      return {
+        handled: true,
+        output: `\nFailed to run /${entry.name}:\n${formatRpcError(error)}\n`,
+      };
+    }
     if (result.nextState) {
       applyNextState(state, result.nextState);
     }
@@ -198,7 +208,16 @@ function resumeCommand(): CommandEntry {
     usage: '/resume [number|id]',
     run: async (args, ctx, _state) => {
       if (args.length === 0) {
-        const sessions = await listSessions(ctx);
+        let sessions: Awaited<ReturnType<typeof listSessions>>;
+        try {
+          sessions = await listSessions(ctx);
+        } catch (error) {
+          // 拉取失败必须显示错误，不能伪装成「无会话」。
+          return {
+            handled: true,
+            output: `\nFailed to list sessions:\n${formatRpcError(error)}\n`,
+          };
+        }
         if (sessions.length === 0) {
           return { handled: true, output: '\nNo sessions to resume.\n' };
         }

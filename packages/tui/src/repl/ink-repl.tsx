@@ -12,8 +12,7 @@
 import { Box, render, Static, Text, useApp, useInput, useStdout } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { createCommands, doResume } from '../commands/commands.js';
-import { listSessions } from '../commands/sessions-command.js';
+import { type CommandResult, createCommands, doResume } from '../commands/commands.js';
 import { formatWorkflowOutcome } from '../commands/workflows-command.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -31,11 +30,13 @@ import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
 import type { ReplContext } from '../repl-context.js';
+import { formatRpcError } from '../rpc.js';
 import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
 import { collectFileReferences } from '../utils/file-reference.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import { summarizeToolInput } from '../utils/tool-input-summary.js';
+import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { loadStartupNotice } from './startup-notice.js';
 import { useReplState } from './use-repl-state.js';
@@ -178,14 +179,24 @@ function InkRepl({ ctx }: InkReplProps) {
     };
   }, [ctx.events, dispatch]);
 
-  // 当 showResumePicker 变为 true 时加载会话列表
+  // picker 三态：loading / ready / error；retry 时 resumeReloadToken 自增触发重拉。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: resumeReloadToken is an intentional re-fetch trigger
   useEffect(() => {
-    if (state.showResumePicker) {
-      listSessions(ctx).then((list) => {
-        dispatch({ type: 'setResumeSessions', sessions: list });
-      });
-    }
-  }, [state.showResumePicker, ctx, dispatch]);
+    if (!state.showResumePicker) return;
+    let cancelled = false;
+    dispatch({ type: 'resumePickerLoading' });
+    void loadResumeSessions(ctx).then((result) => {
+      if (cancelled) return;
+      if (result.status === 'ready') {
+        dispatch({ type: 'resumePickerReady', sessions: result.sessions });
+      } else {
+        dispatch({ type: 'resumePickerError', message: result.message });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.showResumePicker, ui.resumeReloadToken, ctx, dispatch]);
 
   // 处理输入（TextInput 的 onSubmit —— Enter 的唯一入口）
   // 注意：Ink 的 useInput 子组件先于父组件触发，且无法 stopPropagation，
@@ -229,7 +240,14 @@ function InkRepl({ ctx }: InkReplProps) {
       // 处理命令。命令是纯函数：execute 应用 nextState 到传入的 working 副本，
       // Ink 层再用 result.nextState 做不可变合并（不直接改 React state 对象）。
       if (value.startsWith('/')) {
-        const result = await commands.execute(value, ctx, { ...state });
+        // registry 已统一兜底；这里再防一层，保证命令实现异常不会让 REPL 崩溃。
+        let result: CommandResult;
+        try {
+          result = await commands.execute(value, ctx, { ...state });
+        } catch (error) {
+          dispatch({ type: 'appendHistory', line: formatRpcError(error) });
+          return;
+        }
         if (result.handled) {
           // 特殊处理 /clear - 清终端（含 scrollback）+ 历史记录 + 流式输出
           if (result.clearScreen) {
@@ -543,17 +561,26 @@ function InkRepl({ ctx }: InkReplProps) {
           <SessionTable
             sessions={ui.resumeSessions}
             currentSessionId={state.currentSessionId}
+            status={ui.resumeStatus === 'idle' ? 'loading' : ui.resumeStatus}
+            error={ui.resumeError}
+            onRetry={() => dispatch({ type: 'resumePickerRetry' })}
             onSelect={async (id) => {
-              dispatch({
-                type: 'patchRepl',
-                patch: { showResumePicker: false, pendingResume: false },
-              });
-              dispatch({ type: 'setInput', input: '' });
-              const { message, history, nextState } = await doResume(ctx, id);
-              dispatch({ type: 'patchRepl', patch: nextState });
-              dispatch({ type: 'appendHistory', line: message });
-              if (history?.length) {
-                dispatch({ type: 'appendHistoryLines', lines: history });
+              try {
+                const { message, history, nextState } = await doResume(ctx, id);
+                dispatch({
+                  type: 'patchRepl',
+                  patch: { showResumePicker: false, pendingResume: false },
+                });
+                dispatch({ type: 'setInput', input: '' });
+                dispatch({ type: 'patchRepl', patch: nextState });
+                dispatch({ type: 'appendHistory', line: message });
+                if (history?.length) {
+                  dispatch({ type: 'appendHistoryLines', lines: history });
+                }
+                dispatch({ type: 'resumePickerReset' });
+              } catch (error) {
+                // 恢复失败：保持 picker 打开，错误态可 r 重试。
+                dispatch({ type: 'resumePickerError', message: formatRpcError(error) });
               }
             }}
             onClose={() => {
@@ -561,6 +588,7 @@ function InkRepl({ ctx }: InkReplProps) {
                 type: 'patchRepl',
                 patch: { showResumePicker: false, pendingResume: false },
               });
+              dispatch({ type: 'resumePickerReset' });
             }}
           />
         </Box>
@@ -696,12 +724,17 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     // 处理 /session resume 的 pending one-shot
     if (state.pendingResume) {
       if (/^\d+$/.test(trimmed)) {
-        const resumeResult = await consumePendingResume(trimmed, ctx, state);
-        if (resumeResult.output) {
-          console.log(resumeResult.output);
-        }
-        if (resumeResult.history?.length) {
-          console.log(resumeResult.history.join('\n'));
+        try {
+          const resumeResult = await consumePendingResume(trimmed, ctx, state);
+          if (resumeResult.output) {
+            console.log(resumeResult.output);
+          }
+          if (resumeResult.history?.length) {
+            console.log(resumeResult.history.join('\n'));
+          }
+        } catch (error) {
+          console.error(formatRpcError(error));
+          state.pendingResume = false;
         }
         continue;
       }
