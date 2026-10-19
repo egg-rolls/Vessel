@@ -9,7 +9,7 @@ tags: [remote, gateway, tls, client]
 
 ## ADR-051：远程控制面（非回环 HTTPS 与 token/CA）
 
-- **上下文**：ADR-036 的 gateway 默认只绑 `127.0.0.1`；ADR-041 允许显式 opt-in 的远程监听与 TLS，但客户端侧没有对应能力；ADR-048 §8 明确写着 `HttpRpcClient` 只支持本机回环 gateway、不是 F5 跨机器远程。0.6 的 F5 要求 CLI / TUI / Web 以远程客户端身份连接非回环的 TLS gateway，同时保持默认本地路径不变。本 ADR 只描述已批准的 0.6 目标与实现边界，不表示相关代码已合入。
+- **上下文**：ADR-036 的 gateway 默认只绑 `127.0.0.1`；ADR-041 允许显式 opt-in 的远程监听与 TLS，但客户端侧没有对应能力；ADR-048 §8 明确写着 `HttpRpcClient` 只支持本机回环 gateway、不是 F5 跨机器远程。0.6 的 F5 要求 CLI / TUI / Web 以远程客户端身份连接非回环的 TLS gateway，同时保持默认本地路径不变。本 ADR 记录已批准的 0.6 目标与实现边界；相关实现已随 `release/0.6` 合入（未发布）。
 - **决策**：
   1. **连接目标**：`--connect <url>` 接受 `http(s)://` 与 `ws(s)://`；回环地址允许明文用于本地开发；**非回环地址强制 HTTPS/WSS**。URL 只允许 origin，不接受 path / query / 内嵌 token 作为连接参数。
   2. **token 来源（冻结）**：客户端解析顺序为 **CLI `--connect-token` > env（`VESSEL_CONNECT_TOKEN` / `connect.token_env`）> config `connect.token`**。非回环连接在发起网络请求前校验 token，缺失即失败，不回退匿名或明文。

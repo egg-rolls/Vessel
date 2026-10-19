@@ -30,6 +30,7 @@ const LINK_FILES = [
   'docs/operations/CONFIG.md',
   'docs/operations/MIGRATION.md',
   'docs/operations/TRACE.md',
+  'docs/operations/REMOTE.md',
 ];
 
 const ADR_DIR = 'docs/adr';

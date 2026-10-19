@@ -9,7 +9,7 @@ tags: [security, tls, cors, tenancy]
 
 ## ADR-053：远程安全基线
 
-- **上下文**：0.6 把 gateway 从回环扩展到非回环访问，并引入独立前端（跨 Origin）与跨节点通信。攻击面从“本机同名进程”变成网络、浏览器 Origin 与远端节点；如果 token、TLS、Origin、WS 鉴权与 tenant 边界不冻结，各入口会出现不一致的降级路径。本 ADR 固化已批准的安全基线；它是 0.6 目标与验收条件，不表示代码已合入。
+- **上下文**：0.6 把 gateway 从回环扩展到非回环访问，并引入独立前端（跨 Origin）与跨节点通信。攻击面从“本机同名进程”变成网络、浏览器 Origin 与远端节点；如果 token、TLS、Origin、WS 鉴权与 tenant 边界不冻结，各入口会出现不一致的降级路径。本 ADR 固化已批准的安全基线；它是 0.6 的验收条件，相关实现已随 `release/0.6` 合入（未发布）。
 - **决策**：
   1. **token + TLS（fail-closed）**：非回环访问必须同时具备 token 与 HTTPS/WSS；启动或连接时任一缺失即失败，不回退匿名、明文或自签默认信任。TLS 证书由用户提供 cert/key；客户端可显式提供 CA 文件。**不提供 `--insecure`**。
   2. **Host / Origin 校验**：HTTP 与 WS upgrade 共用同一 allowlist；`serve.allowed_origins` 在启动时归一化为 `URL.origin`，拒绝 `*`、path 与 query。allowlist 非空时，所有响应加 `Vary: Origin`。
