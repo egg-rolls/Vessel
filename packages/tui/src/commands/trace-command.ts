@@ -11,6 +11,7 @@
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError, redactForDisplay } from '../rpc.js';
 import { formatRelativeTime } from '../utils/time.js';
+import type { TableView, ViewAction, ViewActionInvocation } from '../views/types.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 
 const USAGE =
@@ -199,17 +200,92 @@ export function formatTraceEvents(events: TraceEventLike[], now: number = Date.n
   return lines.join('\n');
 }
 
-/** /trace 的执行体（导出供单测） */
-export async function runTraceCommand(args: string[], ctx: ReplContext): Promise<CommandResult> {
-  const parsed = parseTraceArgs(args);
-  if (!parsed.ok) return { handled: true, output: `\n${parsed.message}\n` };
-  const options = parsed.value;
+/**
+ * 视图上下文：把 trace 的查询参数编码进 `TableView.key`。
+ * 刷新必须复用同一组过滤条件（run_id / limit / since-seq / type(s)）。
+ */
+export function encodeTraceViewKey(options: TraceOptions): string {
+  return JSON.stringify({
+    runId: options.runId,
+    limit: options.limit,
+    ...(options.sinceSeq !== undefined ? { sinceSeq: options.sinceSeq } : {}),
+    ...(options.types ? { types: options.types } : {}),
+    ...(options.typePrefix ? { typePrefix: options.typePrefix } : {}),
+  });
+}
 
+/** 纯函数：解码视图上下文；非法/缺 run_id 返回 null */
+export function decodeTraceViewKey(key: string | undefined): TraceOptions | null {
+  if (!key) return null;
+  try {
+    const raw = JSON.parse(key) as Record<string, unknown>;
+    if (typeof raw.runId !== 'string' || raw.runId.length === 0) return null;
+    const limit =
+      typeof raw.limit === 'number' && Number.isFinite(raw.limit)
+        ? Math.min(Math.max(1, Math.floor(raw.limit)), MAX_LIMIT)
+        : DEFAULT_LIMIT;
+    return {
+      runId: raw.runId,
+      limit,
+      json: false,
+      ...(typeof raw.sinceSeq === 'number' && raw.sinceSeq > 0 ? { sinceSeq: raw.sinceSeq } : {}),
+      ...(Array.isArray(raw.types)
+        ? { types: raw.types.filter((item): item is string => typeof item === 'string') }
+        : {}),
+      ...(typeof raw.typePrefix === 'string' ? { typePrefix: raw.typePrefix } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** 纯函数：事件 -> TableView（seq/time/type/紧凑 data） */
+export function buildTraceView(
+  events: TraceEventLike[],
+  options: TraceOptions,
+  now: number = Date.now(),
+): TableView {
+  const rows = events.map((event, index) => ({
+    key: typeof event.seq === 'number' ? `seq:${event.seq}` : `ts:${event.ts ?? 'none'}:${index}`,
+    cells: {
+      seq: typeof event.seq === 'number' ? `#${event.seq}` : '#-',
+      time: typeof event.ts === 'number' && event.ts > 0 ? formatRelativeTime(event.ts, now) : '-',
+      type: event.type,
+      data: summarizeData(event),
+    },
+  }));
+
+  return {
+    kind: 'table',
+    title: `Trace: ${options.runId}`,
+    columns: [
+      { key: 'seq', header: 'SEQ', width: 6, priority: 1 },
+      { key: 'time', header: 'TIME', width: 10, priority: 1 },
+      { key: 'type', header: 'TYPE', minWidth: 20, priority: 1 },
+      { key: 'data', header: 'DATA', minWidth: 20, priority: 2 },
+    ],
+    rows,
+    actions: traceActions(),
+    ...(rows[0] ? { initialKey: rows[0].key } : {}),
+    emptyText: `No events for run "${options.runId}".`,
+    meta: `${events.length} events · oldest first`,
+    key: encodeTraceViewKey(options),
+  };
+}
+
+export function traceActions(): ViewAction[] {
+  return [{ id: 'refresh', key: 'r', label: 'refresh' }];
+}
+
+type TraceFetch = { ok: true; events: TraceEventLike[] } | { ok: false; message: string };
+
+/** events.list 读取（命令主体与视图刷新共用；错误文本与既有命令一致） */
+async function fetchTraceEvents(ctx: ReplContext, options: TraceOptions): Promise<TraceFetch> {
   if (!ctx.rpc) {
     return {
-      handled: true,
-      output:
-        '\nRPC control plane is not available. Start Vessel with a gateway connection (--connect <url>) to read traces.\n',
+      ok: false,
+      message:
+        'RPC control plane is not available. Start Vessel with a gateway connection (--connect <url>) to read traces.',
     };
   }
 
@@ -220,24 +296,72 @@ export async function runTraceCommand(args: string[], ctx: ReplContext): Promise
 
   try {
     const raw = await ctx.rpc.request<unknown>('events.list', params);
-    const events = sortTraceEvents(readTraceEvents(raw));
-
-    if (options.json) {
-      return {
-        handled: true,
-        output: `\n${JSON.stringify(redactForDisplay(events), null, 2)}\n`,
-      };
-    }
-    if (events.length === 0) {
-      return { handled: true, output: `\nNo events for run "${options.runId}".\n` };
-    }
-    return { handled: true, output: `\n${formatTraceEvents(events)}\n` };
+    return { ok: true, events: sortTraceEvents(readTraceEvents(raw)) };
   } catch (error) {
     return {
-      handled: true,
-      output: `\nFailed to read trace for run "${options.runId}":\n${formatRpcError(error)}\n`,
+      ok: false,
+      message: `Failed to read trace for run "${options.runId}":\n${formatRpcError(error)}`,
     };
   }
+}
+
+/** `/trace` 视图动作：r 用同一组查询参数刷新 */
+export async function runTraceViewAction(
+  invocation: ViewActionInvocation,
+  ctx: ReplContext,
+): Promise<CommandResult> {
+  if (invocation.actionId !== 'refresh') {
+    return {
+      handled: true,
+      output: `\nUnknown /trace view action "${invocation.actionId}".\n`,
+    };
+  }
+  const options = decodeTraceViewKey(invocation.viewKey);
+  if (!options) {
+    return {
+      handled: true,
+      output: '\nTrace view is missing its run context; reopen /trace show <run_id>.\n',
+    };
+  }
+  const fetched = await fetchTraceEvents(ctx, options);
+  if (!fetched.ok) return { handled: true, output: `\n${fetched.message}\n` };
+  return {
+    handled: true,
+    view: { source: 'trace', view: buildTraceView(fetched.events, options) },
+  };
+}
+
+/** /trace 的执行体（导出供单测） */
+export async function runTraceCommand(args: string[], ctx: ReplContext): Promise<CommandResult> {
+  const parsed = parseTraceArgs(args);
+  if (!parsed.ok) return { handled: true, output: `\n${parsed.message}\n` };
+  const options = parsed.value;
+
+  const fetched = await fetchTraceEvents(ctx, options);
+  if (!fetched.ok) {
+    return { handled: true, output: `\n${fetched.message}\n` };
+  }
+  const events = fetched.events;
+
+  // JSON 是机器可读出口：保持纯文本，不返回 view。
+  if (options.json) {
+    return {
+      handled: true,
+      output: `\n${JSON.stringify(redactForDisplay(events), null, 2)}\n`,
+    };
+  }
+  if (events.length === 0) {
+    return {
+      handled: true,
+      output: `\nNo events for run "${options.runId}".\n`,
+      view: { source: 'trace', view: buildTraceView(events, options) },
+    };
+  }
+  return {
+    handled: true,
+    output: `\n${formatTraceEvents(events)}\n`,
+    view: { source: 'trace', view: buildTraceView(events, options) },
+  };
 }
 
 export function traceCommand(): CommandEntry {
@@ -248,6 +372,8 @@ export function traceCommand(): CommandEntry {
     category: 'inspect',
     keywords: ['events', 'replay'],
     available: (ctx) => Boolean(ctx.rpc),
+    unavailableHint: 'RPC required',
     run: (args, ctx) => runTraceCommand(args, ctx),
+    viewAction: (invocation, ctx) => runTraceViewAction(invocation, ctx),
   };
 }
