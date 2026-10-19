@@ -20,6 +20,18 @@ export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
 
 export const SETTINGS_DOMAIN: DomainDef = { id: 'settings', label: '设置' };
 
+/** 桌面侧栏分组；只影响导航展示，不改变路由。 */
+export const NAV_GROUPS: readonly {
+  id: string;
+  label: string;
+  domains: readonly PrimaryDomain[];
+}[] = [
+  { id: 'chat', label: 'CHAT', domains: ['chat'] },
+  { id: 'observe', label: 'OBSERVE', domains: ['runs', 'observe'] },
+  { id: 'workflows', label: 'WORKFLOWS', domains: ['workflows'] },
+  { id: 'integrations', label: 'INTEGRATIONS', domains: ['integrations'] },
+];
+
 export function domainLabel(domain: Domain): string {
   if (domain === 'settings') return SETTINGS_DOMAIN.label;
   return DOMAINS.find((item) => item.id === domain)?.label ?? domain;

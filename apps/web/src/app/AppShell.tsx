@@ -17,14 +17,35 @@ import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav, primaryRoute } from './DomainNav';
 import { requestStartWorkflow } from './intents';
+import { defaultNavCollapsed, navModeForWidth, parseNavCollapsed } from './layout';
 import { DOMAINS, routeBreadcrumb } from './nav';
 import { requestRefresh } from './refresh';
 import { formatRoute, type Route } from './router';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { tenantResetPlan } from './tenant-reset';
+import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
+import { useViewportWidth } from './useViewportWidth';
 
 type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
+
+const NAV_COLLAPSED_KEY = 'vessel.nav.collapsed';
+
+function readNavPreference(): boolean | null {
+  try {
+    return parseNavCollapsed(localStorage.getItem(NAV_COLLAPSED_KEY));
+  } catch {
+    return null;
+  }
+}
+
+function writeNavPreference(collapsed: boolean): void {
+  try {
+    localStorage.setItem(NAV_COLLAPSED_KEY, collapsed ? '1' : '0');
+  } catch {
+    // 隐私模式/配额满：折叠仍在本会话内生效。
+  }
+}
 
 const SETTINGS_NAV: readonly { tab: SettingsTab; label: string; keywords: string[] }[] = [
   { tab: 'connection', label: '连接', keywords: ['gateway', 'token', 'url', 'connect'] },
@@ -65,6 +86,12 @@ export function AppShell() {
   );
   const [helpOpen, setHelpOpen] = useState(false);
   const [chatSessionsOpen, setChatSessionsOpen] = useState(false);
+  const [navPreference] = useState<boolean | null>(() => readNavPreference());
+  const hasNavPreference = useRef(navPreference !== null);
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => navPreference ?? defaultNavCollapsed(window.innerWidth),
+  );
+  const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [pendingAction, setPendingAction] = useState<PaletteItem | null>(null);
   const mainRef = useRef<HTMLElement | null>(null);
@@ -73,6 +100,14 @@ export function AppShell() {
   const lastEventVersion = useRef(-1);
 
   const modalOpen = Boolean(permissions[0] || asks[0] || pendingAction || helpOpen);
+  const viewportWidth = useViewportWidth();
+  const navMode = navModeForWidth(viewportWidth, navCollapsed);
+  const navDrawerRef = useDrawerA11y({
+    open: navDrawerOpen,
+    onClose: () => setNavDrawerOpen(false),
+    enabled: navMode === 'drawer',
+    returnFocusId: 'nav-toggle',
+  });
   const tenantEpochRef = useRef(tenantEpoch);
 
   const registerEntities = useCallback((source: string, items: readonly PaletteItem[]) => {
@@ -104,6 +139,16 @@ export function AppShell() {
     toast.info('已切换租户；当前选择与事件缓冲已清空');
   }, [tenantEpoch, navigate, toast]);
 
+  // 无显式偏好时，跨 1200 边界自动切换默认展开/折叠。
+  useEffect(() => {
+    if (hasNavPreference.current) return;
+    setNavCollapsed(defaultNavCollapsed(viewportWidth));
+  }, [viewportWidth]);
+
+  useEffect(() => {
+    if (navMode !== 'drawer') setNavDrawerOpen(false);
+  }, [navMode]);
+
   // 路由切换：滚动回顶、焦点移到 main、播报；首次挂载不抢焦点。
   // biome-ignore lint/correctness/useExhaustiveDependencies: routeKey 是路由变化的稳定标识
   useEffect(() => {
@@ -115,6 +160,7 @@ export function AppShell() {
     mainRef.current?.scrollTo?.(0, 0);
     mainRef.current?.focus();
     setAnnouncement(`已打开 ${routeBreadcrumb(route)}`);
+    setNavDrawerOpen(false);
     if (route.domain !== 'chat') setChatSessionsOpen(false);
   }, [routeKey]);
 
@@ -312,12 +358,27 @@ export function AppShell() {
     item.run();
   }, []);
 
-  const openSessions = useCallback(() => setChatSessionsOpen(true), []);
+  const openSessions = useCallback(() => {
+    setNavDrawerOpen(false);
+    setChatSessionsOpen(true);
+  }, []);
   const closeSessions = useCallback(() => setChatSessionsOpen(false), []);
+  const toggleNavDrawer = useCallback(() => {
+    setChatSessionsOpen(false);
+    setNavDrawerOpen((value) => !value);
+  }, []);
+  const toggleNavCollapsed = useCallback(() => {
+    hasNavPreference.current = true;
+    setNavCollapsed((value) => {
+      const next = !value;
+      writeNavPreference(next);
+      return next;
+    });
+  }, []);
 
   return (
     <PaletteEntitiesProvider register={registerEntities}>
-      <div className="app-shell">
+      <div className={`app-shell nav-${navMode}`}>
         <button
           type="button"
           className="skip-link"
@@ -337,7 +398,9 @@ export function AppShell() {
           }}
           {...(route.domain === 'chat'
             ? { onToggleSessions: openSessions, sessionsOpen: chatSessionsOpen }
-            : {})}
+            : navMode === 'drawer'
+              ? { onToggleNav: toggleNavDrawer, navOpen: navDrawerOpen }
+              : {})}
         />
 
         {(lastError || tokenError || gapNotice || stale) && (
@@ -403,9 +466,24 @@ export function AppShell() {
         )}
 
         <div className="shell-body">
-          <DomainNav route={route} navigate={navigate} />
+          <DomainNav
+            route={route}
+            navigate={navigate}
+            mode={navMode}
+            open={navDrawerOpen}
+            onClose={() => setNavDrawerOpen(false)}
+            onToggleCollapsed={toggleNavCollapsed}
+            navRef={navDrawerRef}
+          />
           {/* tenant 变化时整块重挂载：旧租户的 resource 缓存、会话副本与选中项全部丢弃。 */}
-          <main key={tenantEpoch} id="main" ref={mainRef} className="main-content" tabIndex={-1}>
+          <main
+            key={tenantEpoch}
+            id="main"
+            ref={mainRef}
+            className="main-content"
+            tabIndex={-1}
+            inert={navMode === 'drawer' && navDrawerOpen ? true : undefined}
+          >
             {route.domain === 'chat' && (
               <ChatView
                 route={route}
@@ -423,6 +501,15 @@ export function AppShell() {
             {route.domain === 'settings' && <SettingsView route={route} navigate={navigate} />}
           </main>
         </div>
+
+        {navMode === 'drawer' && navDrawerOpen && (
+          <button
+            type="button"
+            className="drawer-backdrop"
+            aria-label="关闭导航"
+            onClick={() => setNavDrawerOpen(false)}
+          />
+        )}
 
         <BottomNav route={route} navigate={navigate} />
 

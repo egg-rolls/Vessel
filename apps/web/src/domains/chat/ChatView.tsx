@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
+import { useDrawerA11y } from '../../app/useDrawerA11y';
+import { useViewportWidth } from '../../app/useViewportWidth';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { usePaletteEntities } from '../../components/PaletteEntities';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
@@ -107,14 +110,19 @@ export function ChatView({
     loading: boolean;
     error: string | null;
   } | null>(null);
-  const [compact, setCompact] = useState(() => window.matchMedia('(max-width: 1023px)').matches);
+  const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
   const [nearBottom, setNearBottom] = useState(true);
   const [composerFocus, setComposerFocus] = useState(0);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const nearBottomRef = useRef(true);
-  const drawerRef = useRef<HTMLElement | null>(null);
+  const drawerRef = useDrawerA11y({
+    open: sessionsOpen,
+    onClose: onCloseSessions,
+    enabled: compact,
+    returnFocusId: 'sessions-toggle',
+  });
   const queuedRef = useRef(queuedRuns);
   queuedRef.current = queuedRuns;
   const refreshTimer = useRef<number | undefined>(undefined);
@@ -198,65 +206,7 @@ export function ChatView({
     setTranscriptLimit(TRANSCRIPT_WINDOW);
   }, [selectedId]);
 
-  // 窄屏/平板：会话列是抽屉。
-  useEffect(() => {
-    const media = window.matchMedia('(max-width: 1023px)');
-    const sync = () => setCompact(media.matches);
-    sync();
-    media.addEventListener('change', sync);
-    return () => media.removeEventListener('change', sync);
-  }, []);
-
-  // 抽屉：Esc 关闭；打开时把焦点移入，关闭后还给触发按钮。
-  const sessionsWasOpen = useRef(false);
-  useEffect(() => {
-    if (!compact) {
-      sessionsWasOpen.current = sessionsOpen;
-      return;
-    }
-    if (sessionsOpen) {
-      const first = drawerRef.current?.querySelector<HTMLElement>(
-        'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-      );
-      first?.focus();
-      sessionsWasOpen.current = true;
-      return;
-    }
-    if (sessionsWasOpen.current) {
-      sessionsWasOpen.current = false;
-      document.getElementById('sessions-toggle')?.focus();
-    }
-  }, [compact, sessionsOpen]);
-
-  useEffect(() => {
-    if (!compact || !sessionsOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        onCloseSessions();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const root = drawerRef.current;
-      if (!root) return;
-      const items = [
-        ...root.querySelectorAll<HTMLElement>(
-          'button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])',
-        ),
-      ].filter((element) => element.offsetParent !== null);
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [compact, sessionsOpen, onCloseSessions]);
+  // 抽屉的 Esc / Tab 圈 / 焦点返回 / body 滚动锁由 useDrawerA11y 统一处理。
 
   useEffect(() => () => window.clearTimeout(refreshTimer.current), []);
 

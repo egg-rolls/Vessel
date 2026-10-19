@@ -24,28 +24,49 @@ export function AppBar({
   onOpenPalette,
   onToggleSessions,
   sessionsOpen = false,
+  onToggleNav,
+  navOpen = false,
   navigate,
 }: {
   route: Route;
   onOpenPalette: () => void;
   onToggleSessions?: () => void;
   sessionsOpen?: boolean;
+  onToggleNav?: () => void;
+  navOpen?: boolean;
   navigate: (route: Route) => void;
 }) {
   const { connectionState, tenantId, hasToken } = useConnection();
   const connLabel = hasToken ? connectionLabel(connectionState) : '未连接';
+  const drawerToggle = onToggleSessions
+    ? {
+        id: 'sessions-toggle',
+        controls: 'chat-sessions',
+        label: sessionsOpen ? '关闭会话列表' : '打开会话列表',
+        open: sessionsOpen,
+        onClick: onToggleSessions,
+      }
+    : onToggleNav
+      ? {
+          id: 'nav-toggle',
+          controls: 'domain-nav',
+          label: navOpen ? '关闭导航' : '打开导航',
+          open: navOpen,
+          onClick: onToggleNav,
+        }
+      : null;
 
   return (
     <header className="appbar">
-      {onToggleSessions && (
+      {drawerToggle && (
         <button
-          id="sessions-toggle"
+          id={drawerToggle.id}
           type="button"
           className="appbar-icon"
-          aria-label="打开会话列表"
-          aria-expanded={sessionsOpen}
-          aria-controls="chat-sessions"
-          onClick={onToggleSessions}
+          aria-label={drawerToggle.label}
+          aria-expanded={drawerToggle.open}
+          aria-controls={drawerToggle.controls}
+          onClick={drawerToggle.onClick}
         >
           <span aria-hidden="true">☰</span>
         </button>
