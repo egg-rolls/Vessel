@@ -170,13 +170,14 @@ loop:
             catch: 发 tool.call.failed; addContext(role:tool, `Error: Invalid JSON...`); continue
             await hooks.run(BeforeTool, hookCtx)
             try:
-                tool = PluginHost.getTool(toolCall.function.name)   # 唯一工具来源
-                未找到 → 抛错
-                toolCtx = { run_id, session_id, messages: context.messages, events }
-                await permissionPolicy.authorize(tool, args, toolCtx)   # allow / deny / ask
-                result = invokeTool(tool, args, toolCtx)                # 统一入口，套 tool.timeout
-                应用 ToolResult guardrail，被阻止 → 抛错
-                finalResult = replacement 是字符串 ? replacement : result
+                # 统一工具执行管道（0.8.2，ADR-058）：getTool → permission → handler → ToolResult guardrail。
+                # 外层已处理 ToolCall guardrail / BeforeTool / AfterTool，故在管道里关闭这三阶段。
+                outcome = toolPipeline.execute({
+                    runId, sessionId, toolCall, args, messages: context.messages, signal,
+                    stages: { toolCallGuardrail: false, beforeToolHook: false, afterToolHook: false },
+                })
+                outcome.ok == false → 抛错（工具不存在 / 权限拒绝 / handler 超时 / 结果被阻断）
+                finalResult = outcome.content
                 发 tool.call.completed
                 await hooks.run(AfterTool, hookCtx)
                 addContext({ role: 'tool', tool_call_id, content: finalResult })
@@ -197,7 +198,7 @@ loop:
 ### 3.3 关键约束
 
 - **工具只能从 `PluginHost` 拿。** 循环里没有第二张表。装配层要么在 `plugins` 里传 Plugin（插件 `install` 时 `registerTool`），要么直接注入 `pluginHost`。
-- **工具调用统一走 `invokeTool()`**，由它套 `tool.timeout`——handler 直调会让 `timeout` 失效。
+- **工具调用统一走 `ToolPipeline`**（0.8.2，ADR-058）：`AgentRuntime`、workflow `type: tool` 与 delegate 共用同一阶段顺序；handler 只由管道调用，由它套 `tool.timeout` 与 `ctx.signal`——handler 直调会让 `timeout` 与权限判定失效。权限判定发生在 ToolCall guardrail / BeforeTool 的改写之后，针对最终工具与参数。
 - **工具失败不终止 run**。错误变成 `role: tool` 消息回到上下文，模型自己纠。非法 tool arguments JSON 也走这条路径（解析一次、发 `tool.call.failed`、折回错误文本）。
 - **发给 Provider 的消息始终是合法序列**：`buildRequestMessages` 在输出前丢弃孤儿 `role: tool`、把不完整 `tool_calls` 轮次降级为普通 assistant 文本，并在上下文缺 system 时补回基底 `systemPrompt`。归一化只影响本次请求，不改 `ContextManager` 的持久化记录。
 - **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
@@ -360,6 +361,8 @@ interface ToolDefinition {
 ```
 
 工具是**自描述对象**：权限判定与超时随工具走，不集中在 runtime 的一张策略表里。core 里**没有 `ToolRegistry` 接口**——唯一的工具注册表是 `PluginHost` / `MemoryPluginHost`。
+
+工具的实际执行统一走 `ToolPipeline`（0.8.2，ADR-058）：`getTool` → ToolCall guardrail → BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→ ToolResult guardrail → AfterTool hook（仅成功）。`ToolPipelineStages` 可关闭调用方已在外层处理的阶段；`AgentRuntime`（含 delegate 子 runtime）关闭 guardrail/BeforeTool/AfterTool，只复用 permission / handler / ToolResult，workflow 使用默认全开。
 
 ### 5.5 `SessionBackend`（`types/session.ts`）
 
@@ -602,7 +605,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-共 **13 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team`、`mcp-client`、`workflow`、`evals` 与 `feishu`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；workflow 要求 `workflow.enabled: true`；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。
+共 **13 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team`、`mcp-client`、`workflow`、`evals` 与 `feishu`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；workflow 要求 `workflow.enabled: true`；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。0.8.2（ADR-058）起，装配层给 delegate 注入父级 resolved 权限，并给 workflow 注入统一的 `ToolPipeline`——workflow 的 `type: tool` 不再直调 handler。
 
 `PluginLoader` 的接口：
 
@@ -838,6 +841,8 @@ serve:
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
 | `src/factory-plugins.ts` | 工厂式插件（delegate / team / mcp-client）的接线决策；0.3 删除 `delegate.viaHost` |
+| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）。0.8.2：`resolveRuntimePermission` / `buildDelegateTaskOptions` 纯函数，runtime / delegate / workflow 共用同一份 resolved 权限 |
+| `src/workflow-wiring.ts` | 配置 → workflow 引擎；0.8.2 起总是注入 `createToolPipelineFor({ pluginHost, events, permission, tenantId })` |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
 | `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
@@ -1165,10 +1170,13 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
   模板只做字符串插值（`{{inputs.*}}`、`{{steps.<id>.output|status}}`、
   `{{workflow.name}}`），不做表达式/脚本求值。环依赖、未知依赖/变量/工具/成员 = 定义错误。
 - **执行**：依赖满足的步骤并行，上限 `min(定义值, workflow.max_parallel)`；
-  单 agent 回退强制串行。`type: agent` 调 `host.get(agent).run(prompt)`；
-  `type: tool` 直接调 `PluginHost.getTool(name).handler`，**绕过 runtime 的
-  guardrail / hook**（已知限制）；权限 `ask` / `deny` 一律拒绝
-  （`permission_denied`），workflow 不弹权限框。
+  单 agent 回退强制串行。`type: agent` 调 `host.get(agent).run(prompt)`。
+  0.8.2 起（ADR-058）`type: tool` 走统一的 `ToolPipeline`：ToolCall guardrail →
+  BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→
+  ToolResult guardrail → AfterTool hook，并发布
+  `tool.call.started|completed|failed`（`run_id` 为 workflow run id）；权限 `ask`
+  经 `tool.permission.request` 等待应答（120s 无应答按失败处理），`deny` 拒绝。
+  未注入 `toolPipeline` 的旧嵌入路径仍直接调 handler（deprecated）。
 - **状态与持久化**：run id `wf_<uuid>`；workflow 状态 `pending | running |
   completed | failed | cancelled | interrupted`；step 状态 `pending | running |
   completed | failed | skipped | cancelled`。一 run 一 JSON（`workflow.path`），
@@ -1299,7 +1307,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 16.6 已知限制（0.4）
 
 - workflow resume 不保证 step 幂等，重跑可能重复副作用。
-- workflow `type: tool` 绕过 runtime 的 guardrail / hook；需要 guardrail 用 `type: agent`。
+- workflow `type: tool` 在 0.4 绕过 runtime 的 guardrail / hook；0.8.2 起已统一到工具执行管道（ADR-058），详见 §15.1。
 - workflow agent step 共享 Host 成员 session，无 workflow 级会话隔离。
 - workflow 单 agent 回退时并行退化为串行；`cancel` 只支持同进程。
 - 飞书只支持文本、单 chat 单 session；不做 thread 区分与富媒体。
@@ -1555,3 +1563,24 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `deleteSessionData` 的冲突检查成本随 run 数增长；超过 10,000 页仍未结束会按已扫描结果判断。
 - Gateway 只完成第一阶段拆分，路由与连接状态机仍在 `gateway.ts`。
 - 新增 CLI flag 必须同时加入 `buildCliConfigOverrides()`，否则不会进入配置层。
+
+## 22. 0.8.2 Wave 2B1 统一工具执行（已实现）
+
+> 状态：已合入 `release/0.8.2`（未发布）。决策见 [ADR-058](adr/ADR-058-unified-tool-execution-pipeline.md)。
+
+### 22.1 统一工具执行管道
+
+- `packages/core/src/runtime/tool-pipeline.ts` 导出 `createToolPipeline` / `createToolPipelineFor` / `ToolPipeline` / `ToolPipelineOptions` / `ToolPipelineStages` / `ToolPipelineResult`（根入口与 `@vessel/core/runtime`）。
+- 阶段顺序：`getTool` → ToolCall guardrail → BeforeTool hook → **permission（最终工具与参数）** → handler（timeout + `ctx.signal`）→ ToolResult guardrail → AfterTool hook（仅成功）。guardrail 改写工具名/参数后重新查找工具并解析参数；BeforeTool 的 `updatedInput` 同样在权限判定前生效。
+- `ToolPipelineStages` 可关闭调用方已在外层处理的阶段（默认全开）。`AgentRuntime`（包括 delegate 子 runtime）关闭 ToolCall guardrail / BeforeTool / AfterTool，仅复用 permission、handler 超时与 ToolResult guardrail；workflow 使用默认全开。
+- 管道不发布 `tool.call.*`；由 `AgentRuntime` / workflow 引擎各自发布，避免重复。
+- **workflow**：`WorkflowEngineOptions.toolPipeline?`；asm 的 `createWorkflowFromConfig` 总是注入 `createToolPipelineFor({ pluginHost, events, permission, tenantId })`。`type: tool` 走管道并发布 `tool.call.started|completed|failed`（payload 含 `workflow_run_id` / `tool_call_id` / `tool_name`）；未注入时保留旧直接 handler 路径（deprecated）。
+- **delegate**：`DelegateTaskOptions.permission?`；子 runtime 继承父级 `default` + `autoApprove`，缺省仍 `{ default: 'allow' }`。`permissionMode: 'allow'` 继续显式覆盖（`withAutoAllow`），`deny` 在注册前过滤工具，`bridge` 保留工具自带 `checkPermission`。
+- **装配**：`resolveRuntimePermission(config, headless)` / `buildDelegateTaskOptions()` 为纯函数；runtime / delegate / workflow 共用同一份 resolved 权限（交互 `ask`、headless `allow`，`ask_user` 始终 auto-approve）。
+
+### 22.2 已知限制（0.8.2）
+
+- 直接构造 workflow 引擎且不注入 `toolPipeline` 的第三方嵌入方仍走旧直接 handler 路径，需要自行迁移。
+- workflow 中的权限 `ask` 会发布 `tool.permission.request` 并等待 120s；若无应答方，步骤失败，不会静默放行。
+- 关闭阶段由调用方负责语义正确性；禁用 ToolResult guardrail 会让未检查的结果直接写回上下文。
+- 管道只统一执行语义，不改变 `ToolDefinition` / `PermissionPolicy` / guardrail / hook 的接口。

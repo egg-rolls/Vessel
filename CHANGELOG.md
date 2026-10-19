@@ -3,6 +3,45 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.8.2] - 2026-10-19
+
+> 0.8 Wave 2B1（基于 `release/0.8.2`，未发布）：统一工具执行管道，关闭 workflow / delegate 的权限与检查旁路。版本号由 1 在集成线统一写入。
+
+### Added
+
+- **core `ToolPipeline`**：新增 `packages/core/src/runtime/tool-pipeline.ts`，导出 `createToolPipeline` / `createToolPipelineFor` / `ToolPipeline` / `ToolPipelineOptions` / `ToolPipelineStages` / `ToolPipelineResult`（根入口与 `@vessel/core/runtime`）。阶段顺序：getTool → ToolCall guardrail → BeforeTool hook → permission（最终工具与参数）→ handler（timeout + signal）→ ToolResult guardrail → AfterTool hook（仅成功）。
+- **workflow 注入点**：`WorkflowEngineOptions.toolPipeline?`；`type: tool` 走管道并发布 `tool.call.started|completed|failed`（payload 含 `workflow_run_id` / `tool_call_id` / `tool_name`）。
+- **delegate 权限继承**：`DelegateTaskOptions.permission?`；子 runtime 使用父级 resolved 权限（`default` + `autoApprove`）。
+- **装配纯函数**：`resolveRuntimePermission(config, headless)` 与 `buildDelegateTaskOptions()`；runtime / delegate / workflow 共用同一份 permission。
+
+### Changed
+
+- `AgentRuntime.runToolCall` 改用 `ToolPipeline`；关闭外层已处理的 ToolCall guardrail / BeforeTool / AfterTool，只复用 permission、handler 超时与 ToolResult guardrail；删除私有 `invokeTool`。
+- 权限判定统一在 guardrail / hook 改写之后执行，针对最终工具与参数；改写导致参数 JSON 非法时直接失败。
+- workflow `type: tool` 从“直接调 handler”改为走统一管道；未注入 `toolPipeline` 的旧嵌入路径保留但标记 deprecated。
+- delegate 子 agent 不再固定 `{ default: 'allow' }`；显式 `permissionMode: 'allow'` 仍覆盖，`deny` 仍过滤工具。
+- 交互默认 `ask` / headless 默认 `allow` 的口径由同一 resolved 权限提供给 runtime / delegate / workflow。
+
+### Fixed
+
+- workflow `type: tool` 绕过 runtime 的 guardrail / hook / 超时，以及与 runtime 权限语义不一致。
+- delegate 子 agent 静默放行未声明 `checkPermission` 的工具（现继承父级 `ask` / `autoApprove`）。
+- 三条执行路径的权限判定时机不一致；统一管道后一律针对 guardrail / hook 改写后的最终工具与参数判定。
+- `ToolDefinition.timeout` 在 workflow 直接 handler 路径不生效；统一管道后生效。
+
+### Security
+
+- 关闭 workflow / delegate 的工具执行旁路：两处与 runtime 使用同一 guardrail / hook / permission / timeout 顺序。
+- delegate 默认权限不再无条件 allow；交互模式继承父级 `ask`。
+- workflow 的权限 `ask` 走 `tool.permission.request`，120s 无应答按失败处理，不静默放行。
+- 管道阶段可由嵌入方显式关闭（`ToolPipelineStages`），关闭即由调用方承担检查责任；asm 默认全开。
+
+### Known limitations
+
+- 直接构造 workflow 引擎且不注入 `toolPipeline` 的第三方嵌入方仍走旧直接 handler 路径。
+- 管道统一执行语义，不改变 `ToolDefinition` / `PermissionPolicy` / guardrail / hook 的接口。
+- 测试禁止使用 `mock.module`（Bun 进程级污染），接线测试改用依赖注入与纯函数。
+
 ## [0.8.1] - 2026-10-19
 
 > 0.8 Wave 2A 加固（基于 `release/0.8.1`，未发布）：持久化耐久性与损坏检测、配置单一 resolver、Gateway 拆分第一阶段。版本号由 1 在集成线统一写入。

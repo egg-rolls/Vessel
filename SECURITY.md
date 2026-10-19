@@ -33,6 +33,14 @@ Vessel 是 Agent Harness，会执行工具（文件 / shell / 代码）。使用
 - **真实路径判定**：比较前做 `realpath`；不存在的路径对最近已存在祖先做 `realpath` 再拼回剩余段。`..` 与符号链接不能绕过。
 - **这不是沙箱**：`bash` 只校验 `cwd`，命令本身仍可访问其它路径；`edit` 未纳入该边界。需要真正隔离时使用沙箱类插件，并在受限用户/容器中运行。
 
+## 统一工具执行（0.8.2，ADR-058）
+
+- runtime / workflow `type: tool` / delegate 子 agent 共用 `ToolPipeline`：ToolCall guardrail → BeforeTool hook → **权限判定（最终工具与参数）** → handler（timeout + signal）→ ToolResult guardrail → AfterTool hook。
+- 权限判定发生在 guardrail / hook 改写之后，避免“旧工具/旧参数被放行”；handler 直调不再被允许（workflow 未注入 pipeline 的 deprecated 兼容路径除外）。
+- workflow 的 `type: tool` 不再绕过 guardrail / hook / 超时；权限 `ask` 经 `tool.permission.request` 等待应答（120s 无应答按失败处理）。
+- delegate 子 runtime 继承父级 `default` + `autoApprove`；缺省仍为 `{ default: 'allow' }` 以兼容，但装配层会显式传入 resolved 权限。`permissionMode: 'allow'` 仍可显式覆盖（`withAutoAllow`），`deny` 在注册前过滤工具。
+- 交互模式默认 `ask`、headless 默认 `allow`；`ask_user` 始终 auto-approve。关闭管道阶段（`ToolPipelineStages`）是嵌入方的显式选择，会削弱对应检查。
+
 ## 持久化与损坏文件（0.8.1，ADR-056）
 
 - session 快照与 run checkpoint 默认 `durable` 写入（temp fsync → rename → 尽力目录 fsync），降低掉电后“文件存在但内容未落盘”的风险；这不等于备份，也不防磁盘损坏。

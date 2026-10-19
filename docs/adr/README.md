@@ -72,6 +72,7 @@
 | 055 | 工具路径边界 | accepted | 2026-10-19 | security, tools, permissions, filesystem | [ADR-055-tool-path-boundaries.md](ADR-055-tool-path-boundaries.md) |
 | 056 | 持久化耐久性与损坏检测 | accepted | 2026-10-19 | storage, durability, corruption, files | [ADR-056-persistence-durability-and-corruption.md](ADR-056-persistence-durability-and-corruption.md) |
 | 057 | 配置单一 resolver | accepted | 2026-10-19 | config, cli, precedence, connect | [ADR-057-config-single-resolver.md](ADR-057-config-single-resolver.md) |
+| 058 | 统一工具执行管道 | accepted | 2026-10-19 | runtime, tools, permissions, workflow, delegate | [ADR-058-unified-tool-execution-pipeline.md](ADR-058-unified-tool-execution-pipeline.md) |
 
 ## 编写约定
 
