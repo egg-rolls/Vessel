@@ -88,7 +88,10 @@ export class MemorySessionBackend implements SessionBackend {
     return Array.from(this.sessions.values())
       .filter((s) => s.messages.length > 0)
       .map(toSessionInfo)
-      .sort((a, b) => b.updated_at - a.updated_at);
+      .sort((a, b) => {
+        if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
+        return a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0;
+      });
   }
 
   /**

@@ -227,6 +227,8 @@ async function bootstrapConnect(input: {
   tenantId: string;
   tenantPaths: TenantPaths;
   url: string;
+  /** headless 不显示 provider banner，无需额外查询 gateway。 */
+  headless: boolean;
   rpcClientFactory?: (opts: {
     baseUrl: string;
     token: string;
@@ -251,6 +253,36 @@ async function bootstrapConnect(input: {
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
+  }
+
+  // connect 模式下 agent 实际跑在 gateway 上：状态栏应显示 gateway 的 provider，
+  // 而不是本地 config 的 provider（否则 mock/远端 gateway 会显示成误导性的本地模型）。
+  let gatewayProvider = input.config.provider;
+  if (!input.headless) {
+    try {
+      const snapshot = await client.request<unknown>('config.get');
+      if (isRecordValue(snapshot)) {
+        const configValue = isRecordValue(snapshot.config) ? snapshot.config : undefined;
+        const provider =
+          configValue && isRecordValue(configValue.provider) ? configValue.provider : undefined;
+        if (provider) {
+          const name =
+            typeof provider.name === 'string' && provider.name
+              ? provider.name
+              : gatewayProvider?.name;
+          if (name) {
+            gatewayProvider = {
+              ...gatewayProvider,
+              name,
+              ...(typeof provider.model === 'string' ? { model: provider.model } : {}),
+              ...(typeof provider.baseUrl === 'string' ? { baseUrl: provider.baseUrl } : {}),
+            };
+          }
+        }
+      }
+    } catch {
+      // 旧 gateway / 受限权限没有 config.get：退回本地配置。
+    }
   }
 
   const events = createEventStream(input.config);
@@ -317,9 +349,9 @@ async function bootstrapConnect(input: {
       currentSessionId = id;
     },
     provider: {
-      name: input.config.provider?.name ?? 'openai',
-      model: input.config.provider?.model ?? '',
-      baseUrl: input.config.provider?.baseUrl ?? '',
+      name: gatewayProvider?.name ?? 'openai',
+      model: gatewayProvider?.model ?? '',
+      baseUrl: gatewayProvider?.baseUrl ?? '',
     },
     plugins: [],
     rpc: client,
@@ -408,6 +440,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       tenantId,
       tenantPaths,
       url: connectUrl,
+      headless,
       ...(options.rpcClientFactory ? { rpcClientFactory: options.rpcClientFactory } : {}),
     });
   }

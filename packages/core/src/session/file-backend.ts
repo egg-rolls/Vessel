@@ -222,7 +222,11 @@ export class FileSessionBackend implements SessionBackend {
       }
     }
 
-    results.sort((a, b) => b.updated_at - a.updated_at);
+    // updated_at 倒序；同值用 session_id 升序，避免刷新时顺序抖动。
+    results.sort((a, b) => {
+      if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
+      return a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0;
+    });
     return results;
   }
 

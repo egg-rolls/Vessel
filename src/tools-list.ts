@@ -97,10 +97,9 @@ export async function listTools(): Promise<ToolsListing> {
     }
   }
 
-  const tools = host
-    .listTools()
-    .map((t) => ({ name: t.name, description: t.description }))
-    .sort((a, b) => a.name.localeCompare(b.name));
+  // 保持与运行时相同的注册顺序（能力工具 → delegate_task → team_*），
+  // 不要在这里单独按字母序排，否则 --tools 与 /tools、Web 会给出两种顺序。
+  const tools = host.listTools().map((t) => ({ name: t.name, description: t.description }));
 
   return { tools, plugins: pluginNamesWithFactories, warnings };
 }

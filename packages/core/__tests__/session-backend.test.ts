@@ -136,6 +136,22 @@ describe('SQLiteSessionBackend', () => {
     expect((await backend.list()).sort()).toEqual(['b', 'empty']);
     expect(await backend.load('a')).toBeNull();
   });
+
+  it('listRich 在 updated_at 相同时按 session_id 升序', async () => {
+    backend = new SQLiteSessionBackend(':memory:');
+    for (const id of ['b', 'a']) {
+      await backend.save(
+        createRunState(id, {
+          status: 'completed',
+          updated_at: 100,
+          messages: [{ role: 'user', content: id }],
+        }),
+      );
+    }
+
+    const rich = await backend.listRich();
+    expect(rich.map((r) => r.session_id)).toEqual(['a', 'b']);
+  });
 });
 
 describe('FileSessionBackend', () => {
@@ -281,6 +297,21 @@ describe('FileSessionBackend', () => {
       expect(rich[1]?.session_id).toBe('old');
       expect(rich[0]?.preview).toBe('new msg');
       expect(rich[0]?.message_count).toBe(1);
+    });
+
+    it('updated_at 相同时按 session_id 升序', async () => {
+      for (const id of ['b', 'a']) {
+        await backend.save(
+          createRunState(id, {
+            messages: [{ role: 'user', content: id }],
+            status: 'completed',
+            updated_at: 1000,
+          }),
+        );
+      }
+
+      const rich = await backend.listRich();
+      expect(rich.map((session) => session.session_id)).toEqual(['a', 'b']);
     });
 
     it('should persist and return branch field', async () => {

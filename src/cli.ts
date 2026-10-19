@@ -593,6 +593,8 @@ async function runWithConfig(result: BootstrapResult) {
 
     const dataDir = resolveDataDir(config);
     const gatewayOptions: GatewayOptions = {
+      // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
+      version: readPackageVersion(),
       events: sharedEvents ?? ctx.events,
       session: ctx.session,
       runtime,

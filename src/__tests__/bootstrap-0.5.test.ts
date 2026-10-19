@@ -240,4 +240,40 @@ describe('bootstrap 0.5 - rpc injection', () => {
       await result.shutdown();
     }
   });
+
+  it('connect 模式：REPL 的 provider 展示以 gateway config.get 为准', async () => {
+    const dataDir = tempDir();
+    const stub = {
+      request: async <T = unknown>(method: string): Promise<T> => {
+        if (method === 'config.get') {
+          return {
+            config: {
+              provider: { name: 'remote', model: 'remote-model', baseUrl: 'http://remote' },
+            },
+          } as T;
+        }
+        return { version: 'stub', methods: [] } as T;
+      },
+      subscribe: () => () => {},
+      close: async () => {},
+    } as unknown as RpcClient & { close(): Promise<void> };
+
+    const result = await bootstrap({
+      ...baseOptions(dataDir),
+      headless: false,
+      interactive: true,
+      connect: 'http://127.0.0.1:1',
+      rpcClientFactory: () => stub,
+    });
+
+    try {
+      expect(result.ctx.provider).toEqual({
+        name: 'remote',
+        model: 'remote-model',
+        baseUrl: 'http://remote',
+      });
+    } finally {
+      await result.shutdown();
+    }
+  });
 });

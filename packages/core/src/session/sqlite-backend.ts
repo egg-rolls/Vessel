@@ -255,7 +255,7 @@ export class SQLiteSessionBackend implements SessionBackend {
              tenant_id
       FROM sessions
       WHERE json_array_length(messages) > 0${tenantPredicate}
-      ORDER BY updated_at DESC
+      ORDER BY updated_at DESC, session_id ASC
     `);
     const rows = (
       this.tenantId === undefined ? stmt.all() : stmt.all(this.tenantId)
