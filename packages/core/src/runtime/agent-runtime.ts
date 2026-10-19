@@ -48,6 +48,8 @@ interface PreparedToolCall {
 /** 单个工具调用的执行结果（上下文按原顺序写回） */
 interface ToolExecutionOutcome {
   toolCall: ToolCall;
+  /** 实际使用的输入（BeforeTool hook 改写后）；供 AfterTool 读取 */
+  input: unknown;
   ok: boolean;
   content: string;
 }
@@ -558,10 +560,14 @@ export class AgentRuntime {
       if (this.systemPrompt) {
         hookCtx.systemPrompt = this.systemPrompt;
       }
-      await this.hooks.run(HookType.BeforeLlm, hookCtx);
+      const beforeLlm = await this.hooks.run(HookType.BeforeLlm, hookCtx);
 
-      // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）
-      const messages = this.buildRequestMessages(hookCtx.systemPrompt);
+      // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）。
+      // 0.6.1 P2：HookResult.additionalContext 追加在 systemPrompt 之后。
+      const injectedSystem = [hookCtx.systemPrompt, beforeLlm.additionalContext]
+        .filter((value): value is string => typeof value === 'string' && value.length > 0)
+        .join('\n\n');
+      const messages = this.buildRequestMessages(injectedSystem || undefined);
 
       // 统一工具来源：PluginHost（插件在 install() 里 registerTool）
       const allTools = this.pluginHost.listTools();
@@ -794,10 +800,22 @@ export class AgentRuntime {
             }
           }
 
-          // BeforeTool 钩子逐调用串行执行，避免并行批次共享 hookCtx 的竞态
+          // BeforeTool 钩子逐调用串行执行，避免并行批次共享 hookCtx 的竞态。
+          // 0.6.1 P2：hook 可读取 tool/input；block 折回 tool 错误，updatedInput 改写入参。
           for (const entry of batch) {
             if (entry.failureMessage !== undefined) continue;
-            await this.hooks.run(HookType.BeforeTool, hookCtx);
+            const hookResult = await this.hooks.run(HookType.BeforeTool, {
+              ...hookCtx,
+              tool: entry.toolName,
+              input: entry.args,
+            });
+            if (hookResult.block) {
+              entry.failureMessage = `Tool call blocked by hook: ${hookResult.reason ?? 'blocked'}`;
+              continue;
+            }
+            if (hookResult.updatedInput !== undefined) {
+              entry.args = hookResult.updatedInput;
+            }
           }
 
           const outcomes = await Promise.all(
@@ -807,8 +825,12 @@ export class AgentRuntime {
           // 上下文严格按原调用顺序写回（并行完成顺序不影响历史顺序）
           for (const outcome of outcomes) {
             if (outcome.ok) {
-              // 执行 AfterTool 钩子
-              await this.hooks.run(HookType.AfterTool, hookCtx);
+              // 执行 AfterTool 钩子（0.6.1 P2：携带 tool/input）
+              await this.hooks.run(HookType.AfterTool, {
+                ...hookCtx,
+                tool: outcome.toolCall.function.name,
+                input: outcome.input,
+              });
             }
             this.addContext(
               {
@@ -909,6 +931,7 @@ export class AgentRuntime {
     if (entry.failureMessage !== undefined) {
       return {
         toolCall,
+        input: entry.args,
         ok: false,
         content: await this.recordToolFailure({
           runId,
@@ -953,6 +976,7 @@ export class AgentRuntime {
         // 0.6.1 P1：结果阻断折回 tool 错误，不终止 run。
         return {
           toolCall,
+          input: entry.args,
           ok: false,
           content: await this.recordToolFailure({
             runId,
@@ -983,10 +1007,11 @@ export class AgentRuntime {
         ts: Date.now(),
       });
 
-      return { toolCall, ok: true, content: finalResult };
+      return { toolCall, input: entry.args, ok: true, content: finalResult };
     } catch (error) {
       return {
         toolCall,
+        input: entry.args,
         ok: false,
         content: await this.recordToolFailure({
           runId,
