@@ -11,18 +11,13 @@
 import { mkdir, stat } from 'node:fs/promises';
 import { DEFAULT_WORKFLOW_OPTIONS, type VesselConfig } from '../packages/config/src/index';
 import {
-  createToolPipeline,
+  createToolPipelineFor,
   type EventStream,
   type PluginHost,
   type RunnableAgent,
   type RuntimeHost,
   type RuntimePermissionConfig,
 } from '../packages/core/src/index';
-import {
-  GuardrailRunner,
-  HookRunner,
-  PermissionPolicy,
-} from '../packages/core/src/runtime/policy/index';
 import type { WorkflowsControl } from '../packages/tui/src/index';
 import type {
   ResolvedWorkflowConfigLike,
@@ -167,12 +162,10 @@ export async function createWorkflowFromConfig(
   // 0.8.2 Wave 2B1：workflow `type: tool` 与 runtime 共用权限 / guardrail / hook。
   // 权限配置优先用装配层传入的 resolved 值（headless allow 等），否则回退 config。
   const permissionConfig = options.permission ?? options.config.permission;
-  const toolPipeline = createToolPipeline({
+  const toolPipeline = createToolPipelineFor({
     pluginHost: options.pluginHost,
     events: options.events,
-    permission: new PermissionPolicy(options.events, permissionConfig, options.tenantId),
-    guardrails: new GuardrailRunner(options.pluginHost, options.events, options.tenantId),
-    hooks: new HookRunner(options.pluginHost, options.events, options.tenantId),
+    ...(permissionConfig !== undefined ? { permission: permissionConfig } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   });
 
