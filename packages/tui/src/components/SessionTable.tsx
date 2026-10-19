@@ -151,7 +151,7 @@ export function SessionTable({
     if (heightMode === 'hidden') {
       const decision = decideHiddenKey(
         { ...key, input: inputChar },
-        { status, refreshKeys: ['r'] },
+        { status, refreshKeys: onRetry ? ['r'] : [] },
       );
       if (decision === 'close') onClose();
       if (decision === 'refresh' && onRetry) onRetry();
@@ -300,7 +300,7 @@ export function SessionTable({
     if (status === 'error') {
       return (
         <Text color={theme.danger} wrap="truncate-end">
-          Resume: failed to load sessions · r retry · esc close
+          Resume: failed to load sessions{onRetry ? ' · r retry' : ''} · esc close
         </Text>
       );
     }

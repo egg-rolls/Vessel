@@ -207,7 +207,7 @@ export function InteractiveViewHost({
         const refresh = actions.find((action) => action.id === 'refresh');
         const decision = decideHiddenKey(inkKey, {
           status,
-          refreshKeys: refresh ? [refresh.key, 'r'] : ['r'],
+          refreshKeys: refresh ? [refresh.key, 'r'] : [],
         });
         if (decision === 'close') onClose();
         else if (decision === 'refresh' && refresh) {
@@ -374,12 +374,13 @@ export function InteractiveViewHost({
 
   // hidden 必须先于 loading/error 判定：≤10 行时任何多行状态块都会顶掉输入行。
   if (heightMode === 'hidden') {
-    const refreshKey = actions.find((action) => action.id === 'refresh')?.key ?? 'r';
+    const refresh = actions.find((action) => action.id === 'refresh');
+    const retry = refresh ? `${refresh.key} retry · ` : '';
     const line =
       status === 'loading'
         ? `Loading ${view.title}… · esc close`
         : status === 'error'
-          ? `${view.title} failed · ${refreshKey} retry · esc close`
+          ? `${view.title} failed · ${retry}esc close`
           : `${hiddenSummary(envelope)} · resize for actions · esc close`;
     return (
       <ViewFrame bordered={false} width={contentWidth}>
