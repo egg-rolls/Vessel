@@ -96,6 +96,14 @@ export {
   validateParams,
 } from './rpc.js';
 export {
+  DEFAULT_SESSION_SEARCH_LIMIT,
+  MAX_SESSION_SEARCH_LIMIT,
+  normalizeSearchQuery,
+  parseSearchLimit,
+  type SessionSearchHit,
+  searchSessions,
+} from './session-search.js';
+export {
   fromWireMessage,
   isTeamEvent,
   parseAddress,
@@ -135,6 +143,7 @@ export {
   type TenantQuota,
   type TenantRole,
 } from './tenant.js';
+export { capToolEvent, capToolPayload, TOOL_EVENT_PAYLOAD_LIMIT } from './tool-events.js';
 export {
   createLoopbackTransport,
   ensurePeersDir,
