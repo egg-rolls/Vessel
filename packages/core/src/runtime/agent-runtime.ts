@@ -60,6 +60,8 @@ export class AgentRuntime {
   private hooks: HookRunner;
   /** durable run 检查点（0.3）；缺省不写、零开销 */
   private readonly runStore?: RunStore;
+  /** E1：按插件名提供的安装配置 */
+  private readonly pluginConfigs?: Record<string, Record<string, unknown>>;
   private readonly agentId?: string;
   /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
   private readonly tenantId?: string;
@@ -79,6 +81,7 @@ export class AgentRuntime {
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
     this.runStore = opts.runStore;
+    this.pluginConfigs = opts.pluginConfigs;
     this.agentId = opts.agentId;
     this.tenantId = opts.tenantId;
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
@@ -123,7 +126,11 @@ export class AgentRuntime {
    */
   private async installPlugin(plugin: Plugin): Promise<void> {
     try {
-      const result = plugin.install(this.pluginHost);
+      const config = this.pluginConfigs?.[plugin.name];
+      const result =
+        config === undefined
+          ? plugin.install(this.pluginHost)
+          : plugin.install(this.pluginHost, { config });
       if (result instanceof Promise) {
         await result; // 如果失败，让 async 构造函数抛出
       }
