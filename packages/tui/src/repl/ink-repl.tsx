@@ -35,6 +35,7 @@ import { useSpinnerState } from '../components/StateTracker.js';
 import { StatusBar, type StatusKind } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import { SubagentActivity } from '../components/SubagentActivity.js';
+import { shouldPageOutput, TextViewer } from '../components/TextViewer.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
@@ -397,8 +398,18 @@ function InkRepl({ ctx }: InkReplProps) {
             dispatch({ type: 'clearHistory' });
             dispatch({ type: 'bumpClearSignal' }); // 触发 StreamOutput 清空
           } else if (result.output) {
-            // 如果命令有输出，添加到历史记录
-            dispatch({ type: 'appendHistory', line: result.output });
+            if (shouldPageOutput(result.output)) {
+              const name = value.trim().replace(/^\//, '').split(/\s+/)[0] ?? '';
+              const title = name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : 'Output';
+              dispatch({
+                type: 'openTextViewer',
+                title,
+                lines: result.output.split('\n'),
+              });
+            } else {
+              // 短输出照旧写入 scrollback
+              dispatch({ type: 'appendHistory', line: result.output });
+            }
           }
           if (result.history?.length) {
             // /resume 等命令附带的历史展示行
@@ -650,8 +661,8 @@ function InkRepl({ ctx }: InkReplProps) {
       return;
     }
 
-    // quick help 独占焦点；Esc / Backspace 由组件自己处理
-    if (ui.quickHelpOpen) return;
+    // quick help / pager 独占焦点；按键由组件自己处理
+    if (ui.quickHelpOpen || ui.textViewer) return;
 
     // ask-user / 权限弹窗显示时，其余键盘交给弹窗组件自己的 useInput
     if (ui.askUserActive || ui.permissionOverlay) return;
@@ -862,7 +873,8 @@ function InkRepl({ ctx }: InkReplProps) {
     state.showResumePicker ||
     ui.permissionOverlay !== null ||
     ui.askUserActive ||
-    ui.quickHelpOpen;
+    ui.quickHelpOpen ||
+    ui.textViewer !== null;
   const queueRows = exclusiveOverlayActive
     ? 0
     : queuePreviewRows(ui.queuedInput.length, terminalRows);
@@ -1102,12 +1114,26 @@ function InkRepl({ ctx }: InkReplProps) {
           </Box>
         )}
 
+      {/* 长文本 pager（CommandResult 形状不变；仅 TTY 路径） */}
+      {ui.textViewer && !ui.permissionOverlay && !ui.askUserActive && (
+        <Box flexDirection="column" flexShrink={0}>
+          <TextViewer
+            title={ui.textViewer.title}
+            lines={ui.textViewer.lines}
+            columns={stdout.columns ?? 80}
+            rows={terminalRows}
+            onClose={() => dispatch({ type: 'closeTextViewer' })}
+          />
+        </Box>
+      )}
+
       {/* 输入框 - 只在没有独占交互组件时显示 */}
       {!state.showResumePicker &&
         !ui.view &&
         !ui.permissionOverlay &&
         !ui.askUserActive &&
-        !ui.quickHelpOpen && (
+        !ui.quickHelpOpen &&
+        !ui.textViewer && (
           <Box flexShrink={0}>
             <Text color={theme.brand}>vessel › </Text>
             <TextInput
@@ -1134,7 +1160,8 @@ function InkRepl({ ctx }: InkReplProps) {
         !ui.view &&
         !ui.permissionOverlay &&
         !ui.askUserActive &&
-        !ui.quickHelpOpen && (
+        !ui.quickHelpOpen &&
+        !ui.textViewer && (
           <Box flexDirection="column" flexShrink={0}>
             <Text color={theme.warn}>
               {ui.run.phase === 'cancelling'

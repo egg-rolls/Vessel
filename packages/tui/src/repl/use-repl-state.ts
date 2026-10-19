@@ -95,6 +95,8 @@ export interface ReplUiState {
   queueReturnInput: string;
   /** `?` quick help 浮层（独占焦点） */
   quickHelpOpen: boolean;
+  /** 长文本 pager；null = 未打开 */
+  textViewer: { title: string; lines: string[] } | null;
   /** Ctrl+O 展开态（归档完整输出） */
   expandedOutput: boolean;
   /** 递增触发 StreamOutput 把完整输出刷入 scrollback */
@@ -151,6 +153,8 @@ export type ReplUiAction =
   | { type: 'updateQueuedInput'; index: number; value: string }
   | { type: 'removeQueuedInput'; index: number }
   | { type: 'setQuickHelp'; open: boolean }
+  | { type: 'openTextViewer'; title: string; lines: string[] }
+  | { type: 'closeTextViewer' }
   | { type: 'bumpQueueTick' }
   | { type: 'toggleExpanded' };
 
@@ -398,6 +402,10 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
     }
     case 'setQuickHelp':
       return state.quickHelpOpen === action.open ? state : { ...state, quickHelpOpen: action.open };
+    case 'openTextViewer':
+      return { ...state, textViewer: { title: action.title, lines: action.lines } };
+    case 'closeTextViewer':
+      return state.textViewer === null ? state : { ...state, textViewer: null };
     case 'bumpQueueTick':
       return { ...state, queueTick: state.queueTick + 1 };
     case 'toggleExpanded': {
@@ -443,6 +451,7 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     queueEditIndex: null,
     queueReturnInput: '',
     quickHelpOpen: false,
+    textViewer: null,
     expandedOutput: false,
     expandSignal: 0,
     queueTick: 0,
