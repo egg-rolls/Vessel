@@ -165,10 +165,22 @@ export interface GatewayOptions {
   mcp?: McpGatewayOptions;
   /** workflow 控制面注入；缺省 = `/v1/workflows*` 返回 workflow_disabled */
   workflows?: WorkflowGatewayOptions;
+  /**
+   * 0.5.4：per-tenant workflow 控制面。
+   * default tenant 先用 `workflows`，再 fallback 本工厂；
+   * 非 default tenant 只走本工厂，绝不回退全局实例。
+   */
+  workflowsFor?: (tenantId: string) => WorkflowGatewayOptions | undefined;
   /** metrics 快照注入；缺省 = `/v1/metrics` 返回 metrics_disabled */
   metrics?: MetricsProvider;
   /** 飞书渠道状态注入；缺省 = `/v1/channels/feishu` 返回 channel_disabled */
   feishu?: FeishuGatewayOptions;
+  /**
+   * 0.5.4：per-tenant 飞书渠道。
+   * default tenant 先用 `feishu`，再 fallback 本工厂；
+   * 非 default tenant 只走本工厂，绝不回退全局实例。
+   */
+  feishuFor?: (tenantId: string) => FeishuGatewayOptions | undefined;
   /** evals 最近报告注入；缺省 = `/v1/evals/latest` 返回 eval_not_found */
   evals?: EvalsGatewayOptions;
   // ── 0.5 RPC / 多租户（全部可选；0.4 调用方不传即旧行为） ──
@@ -569,11 +581,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
     }
   }
+  if (opts.workflowsFor !== undefined && typeof opts.workflowsFor !== 'function') {
+    throw new Error('workflowsFor must be a function.');
+  }
   if (opts.metrics !== undefined && typeof opts.metrics !== 'function') {
     throw new Error('metrics must be a function.');
   }
   if (opts.feishu !== undefined && typeof opts.feishu.status !== 'function') {
     throw new Error('feishu.status must be a function.');
+  }
+  if (opts.feishuFor !== undefined && typeof opts.feishuFor !== 'function') {
+    throw new Error('feishuFor must be a function.');
   }
   if (opts.evals !== undefined && typeof opts.evals.latest !== 'function') {
     throw new Error('evals.latest must be a function.');
@@ -583,9 +601,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.durable?.store && opts.durable.resume) features.push('durable-resume');
   if (opts.mcp) features.push('mcp-status');
   if (tlsMaterial) features.push('tls');
-  if (opts.workflows) features.push('workflow');
+  if (opts.workflows || opts.workflowsFor) features.push('workflow');
   if (opts.evals) features.push('evals');
-  if (opts.feishu) features.push('feishu');
+  if (opts.feishu || opts.feishuFor) features.push('feishu');
   if (opts.metrics) features.push('metrics');
   if (opts.config) features.push('config');
   if (opts.tenants) features.push('tenants');
@@ -1566,8 +1584,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
           tenant_id: { type: 'string' },
         },
       },
-      handler: async (params) => {
-        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+      handler: async (params, ctx) => {
+        const workflows = requireWorkflows(ctx.tenantId);
         const rawStatus = typeof params.status === 'string' ? params.status : null;
         const status = parseWorkflowStatus(rawStatus);
         if (rawStatus !== null && status === null) {
@@ -1578,7 +1596,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         );
         if (limit === null) throw new RpcError('invalid_params', 'Invalid workflow limit');
         try {
-          const list = await opts.workflows.listRuns({
+          const list = await workflows.listRuns({
             ...(status !== null ? { status } : {}),
             limit,
           });
@@ -1599,13 +1617,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       params_schema: {
         type: 'object',
         required: ['workflow_run_id'],
-        properties: { workflow_run_id: { type: 'string', minLength: 1 } },
+        properties: {
+          workflow_run_id: { type: 'string', minLength: 1 },
+          tenant_id: { type: 'string' },
+        },
       },
-      handler: async (params) => {
-        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+      handler: async (params, ctx) => {
+        const workflows = requireWorkflows(ctx.tenantId);
         const id = stringParam(params, 'workflow_run_id');
         try {
-          const run = await opts.workflows.getRun(id);
+          const run = await workflows.getRun(id);
           if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
           const detail = toWireWorkflowDetail(run);
           if (!detail) throw new RpcError('internal', 'Invalid workflow run payload');
@@ -1628,8 +1649,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
           tenant_id: { type: 'string' },
         },
       },
-      handler: async (params) => {
-        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+      handler: async (params, ctx) => {
+        const workflows = requireWorkflows(ctx.tenantId);
         const name = stringParam(params, 'name').trim();
         if (!isSafeWorkflowName(name)) {
           throw new RpcError('invalid_params', 'Invalid workflow name');
@@ -1640,7 +1661,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
         let definitionPath: string | undefined;
         try {
-          definitionPath = opts.workflows.resolveDefinition(name);
+          definitionPath = workflows.resolveDefinition(name);
         } catch {
           throw new RpcError('internal', 'Failed to resolve workflow definition');
         }
@@ -1648,7 +1669,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           throw new RpcError('not_found', `Workflow not found: ${name}`);
         }
         try {
-          const started = await opts.workflows.start(definitionPath, {
+          const started = await workflows.start(definitionPath, {
             ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
           });
           return { workflow_run_id: started.workflowRunId, status: 'queued' };
@@ -1663,10 +1684,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       params_schema: {
         type: 'object',
         required: ['workflow_run_id'],
-        properties: { workflow_run_id: { type: 'string', minLength: 1 } },
+        properties: {
+          workflow_run_id: { type: 'string', minLength: 1 },
+          tenant_id: { type: 'string' },
+        },
       },
-      handler: async (params) => {
-        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+      handler: async (params, ctx) => {
+        const workflows = requireWorkflows(ctx.tenantId);
         const id = stringParam(params, 'workflow_run_id');
         if (!reserveWorkflowResume(id)) {
           throw new RpcError('conflict', `Workflow run is already resuming: ${id}`, {
@@ -1674,7 +1698,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           });
         }
         try {
-          const run = await opts.workflows.getRun(id);
+          const run = await workflows.getRun(id);
           if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
           const summary = toWireWorkflowSummary(run);
           if (!summary) throw new RpcError('internal', 'Invalid workflow run payload');
@@ -1688,7 +1712,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
               legacy_code: 'workflow_not_resumable',
             });
           }
-          const resumed = await opts.workflows.resume(id);
+          const resumed = await workflows.resume(id);
           void resumed.done.finally(() => releaseWorkflowResume(id)).catch(() => undefined);
           return { workflow_run_id: resumed.workflowRunId, status: 'queued' };
         } catch (error) {
@@ -1704,13 +1728,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       params_schema: {
         type: 'object',
         required: ['workflow_run_id'],
-        properties: { workflow_run_id: { type: 'string', minLength: 1 } },
+        properties: {
+          workflow_run_id: { type: 'string', minLength: 1 },
+          tenant_id: { type: 'string' },
+        },
       },
-      handler: async (params) => {
-        if (!opts.workflows) throw new RpcError('not_found', 'Workflow control is not enabled');
+      handler: async (params, ctx) => {
+        const workflows = requireWorkflows(ctx.tenantId);
         const id = stringParam(params, 'workflow_run_id');
         try {
-          const run = await opts.workflows.getRun(id);
+          const run = await workflows.getRun(id);
           if (!run) throw new RpcError('not_found', `Workflow run not found: ${id}`);
           const summary = toWireWorkflowSummary(run);
           if (!summary) throw new RpcError('internal', 'Invalid workflow run payload');
@@ -1720,7 +1747,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           if (summary.status === 'completed' || summary.status === 'failed') {
             throw new RpcError('invalid_params', 'Run is not cancellable');
           }
-          await opts.workflows.cancel(id);
+          await workflows.cancel(id);
           return { workflow_run_id: id, status: 'cancelled' };
         } catch (error) {
           if (error instanceof RpcError) throw error;
@@ -1773,10 +1800,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     {
       name: 'feishu.status',
       permission: 'read',
-      params_schema: { type: 'object' },
-      handler: () => {
-        if (!opts.feishu) throw new RpcError('not_found', 'Feishu channel is not enabled');
-        return { channel: normalizeFeishuStatus(opts.feishu.status()) };
+      params_schema: {
+        type: 'object',
+        properties: { tenant_id: { type: 'string' } },
+      },
+      handler: (_params, ctx) => {
+        const feishu = requireFeishu(ctx.tenantId);
+        return { channel: normalizeFeishuStatus(feishu.status()) };
       },
     },
   ];
@@ -2033,6 +2063,42 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function pluginHostFor(tenantId: string): PluginHost | undefined {
     if (tenantId === defaultTenantId) return pluginHost();
     return opts.pluginHostFor?.(tenantId);
+  }
+
+  /** per-tenant workflow 控制面；非 default 绝不回退全局实例 */
+  function workflowsForTenant(tenantId: string): WorkflowGatewayOptions | undefined {
+    if (tenantId === defaultTenantId) {
+      return opts.workflows ?? opts.workflowsFor?.(tenantId);
+    }
+    return opts.workflowsFor?.(tenantId);
+  }
+
+  /** per-tenant 飞书渠道；非 default 绝不回退全局实例 */
+  function feishuForTenant(tenantId: string): FeishuGatewayOptions | undefined {
+    if (tenantId === defaultTenantId) {
+      return opts.feishu ?? opts.feishuFor?.(tenantId);
+    }
+    return opts.feishuFor?.(tenantId);
+  }
+
+  /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
+  function requireWorkflows(tenantId: string): WorkflowGatewayOptions {
+    const resolved = workflowsForTenant(tenantId);
+    if (resolved !== undefined) return resolved;
+    if (tenantId !== defaultTenantId) {
+      throw new RpcError('forbidden', `Workflow control is not configured for tenant: ${tenantId}`);
+    }
+    throw new RpcError('not_found', 'Workflow control is not enabled');
+  }
+
+  /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
+  function requireFeishu(tenantId: string): FeishuGatewayOptions {
+    const resolved = feishuForTenant(tenantId);
+    if (resolved !== undefined) return resolved;
+    if (tenantId !== defaultTenantId) {
+      throw new RpcError('forbidden', `Feishu channel is not configured for tenant: ${tenantId}`);
+    }
+    throw new RpcError('not_found', 'Feishu channel is not enabled');
   }
 
   /** A-6.3：capabilities.list 的 tools；未注入 per-tenant 时回退全局 host */
@@ -2723,6 +2789,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return errorJson('workflow_invalid', message, 409, extra);
       case 'workflow_disabled':
         return errorJson('workflow_disabled', message, 503, extra);
+      case 'forbidden':
+        return errorJson('forbidden', message, 403, extra);
       default:
         return errorJson('internal', 'Workflow operation failed', 500, extra);
     }
@@ -2770,21 +2838,61 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return inputs;
   }
 
+  /** REST 适配：解析 query/body 的 tenant_id；错误转 HTTP */
+  function restTenantScope(
+    principal: TenantPrincipal,
+    params: Record<string, unknown>,
+    extra: Record<string, string>,
+  ): { tenantId: string } | Response {
+    try {
+      const scope = resolveTenantScope(principal, params, defaultTenantId);
+      return { tenantId: scope.tenantId };
+    } catch (error) {
+      if (error instanceof RpcError) {
+        if (error.code === 'forbidden') return errorJson('forbidden', error.message, 403, extra);
+        if (error.code === 'invalid_params') {
+          return errorJson('invalid_request', error.message, 400, extra);
+        }
+      }
+      return errorJson('internal', 'Gateway operation failed', 500, extra);
+    }
+  }
+
+  /** query 中的 tenant_id（仅供 admin 跨 tenant） */
+  function tenantQuery(url: URL): Record<string, unknown> {
+    const raw = url.searchParams.get('tenant_id');
+    return raw === null ? {} : { tenant_id: raw };
+  }
+
+  /** 非 default tenant 未配置 → 403；default 保持 0.4 workflow_disabled */
+  function workflowUnavailable(tenantId: string, extra: Record<string, string>): Response {
+    if (tenantId !== defaultTenantId) {
+      return errorJson(
+        'forbidden',
+        `Workflow control is not configured for tenant: ${tenantId}`,
+        403,
+        extra,
+      );
+    }
+    return errorJson('workflow_disabled', 'Workflow control is not enabled', 503, extra);
+  }
+
   /** `/v1/workflows*`：列表 / 详情 / 启动 / 恢复 / 取消 */
   async function handleWorkflows(
     req: Request,
     url: URL,
     path: string,
     extra: Record<string, string>,
+    principal: TenantPrincipal,
   ): Promise<Response | null> {
     if (path !== '/v1/workflows' && !path.startsWith('/v1/workflows/')) return null;
-    const workflows = opts.workflows;
-    const disabled = (): Response =>
-      errorJson('workflow_disabled', 'Workflow control is not enabled', 503, extra);
 
     if (path === '/v1/workflows') {
       if (req.method !== 'GET') return methodNotAllowed(extra);
-      if (!workflows) return disabled();
+      const scope = restTenantScope(principal, tenantQuery(url), extra);
+      if (scope instanceof Response) return scope;
+      const workflows = workflowsForTenant(scope.tenantId);
+      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
       const rawStatus = url.searchParams.get('status');
       const status: WorkflowRunStatus | null = parseWorkflowStatus(rawStatus);
       if (rawStatus !== null && status === null) {
@@ -2821,9 +2929,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     if (path === '/v1/workflows/run') {
       if (req.method !== 'POST') return methodNotAllowed(extra);
-      if (!workflows) return disabled();
       const body = await readJsonBody(req, maxBodyBytes);
       if (body instanceof Response) return body;
+      const scope = restTenantScope(
+        principal,
+        body.tenant_id === undefined ? {} : { tenant_id: body.tenant_id },
+        extra,
+      );
+      if (scope instanceof Response) return scope;
+      const workflows = workflowsForTenant(scope.tenantId);
+      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
       const rawName = body.name;
       if (typeof rawName !== 'string' || rawName.trim().length === 0) {
         return errorJson('invalid_request', 'name is required', 400, extra);
@@ -2870,7 +2985,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     if (action === 'resume') {
       if (req.method !== 'POST') return methodNotAllowed(extra);
-      if (!workflows) return disabled();
+      const scope = restTenantScope(principal, tenantQuery(url), extra);
+      if (scope instanceof Response) return scope;
+      const workflows = workflowsForTenant(scope.tenantId);
+      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
       // 占位必须在任何 await 之前，保证并发 resume 只有一个通过。
       if (!reserveWorkflowResume(workflowRunId)) {
         return errorJson(
@@ -2928,7 +3046,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
     if (action === 'cancel') {
       if (req.method !== 'POST') return methodNotAllowed(extra);
-      if (!workflows) return disabled();
+      const scope = restTenantScope(principal, tenantQuery(url), extra);
+      if (scope instanceof Response) return scope;
+      const workflows = workflowsForTenant(scope.tenantId);
+      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
       try {
         const run = await workflows.getRun(workflowRunId);
         if (!run) {
@@ -2955,7 +3076,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
 
     if (req.method !== 'GET') return methodNotAllowed(extra);
-    if (!workflows) return disabled();
+    const scope = restTenantScope(principal, tenantQuery(url), extra);
+    if (scope instanceof Response) return scope;
+    const workflows = workflowsForTenant(scope.tenantId);
+    if (!workflows) return workflowUnavailable(scope.tenantId, extra);
     try {
       const run = await workflows.getRun(workflowRunId);
       if (!run) {
@@ -2996,6 +3120,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** `/v1/channels/feishu`：只读状态，凭据二次掩码 */
   async function handleFeishu(
     req: Request,
+    url: URL,
     path: string,
     extra: Record<string, string>,
     principal: TenantPrincipal,
@@ -3003,7 +3128,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (path !== '/v1/channels/feishu') return null;
     if (req.method !== 'GET') return methodNotAllowed(extra);
     try {
-      return json(await callMethod('feishu.status', {}, principal), 200, extra);
+      return json(await callMethod('feishu.status', tenantQuery(url), principal), 200, extra);
     } catch (error) {
       if (error instanceof LegacyRpcError && error.code === 'not_found') {
         return errorJson('channel_disabled', 'Feishu channel is not enabled', 503, extra);
@@ -3368,11 +3493,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
       if (mcpResponse) return mcpResponse;
 
       // 0.4：workflow / metrics / feishu / evals（未注入 → 稳定错误码）
-      const workflowsResponse = await handleWorkflows(req, url, path, extra);
+      const workflowsResponse = await handleWorkflows(req, url, path, extra, principal);
       if (workflowsResponse) return workflowsResponse;
       const metricsResponse = await handleMetrics(req, path, extra, principal);
       if (metricsResponse) return metricsResponse;
-      const feishuResponse = await handleFeishu(req, path, extra, principal);
+      const feishuResponse = await handleFeishu(req, url, path, extra, principal);
       if (feishuResponse) return feishuResponse;
       const evalsResponse = await handleEvals(req, url, path, extra, principal);
       if (evalsResponse) return evalsResponse;
