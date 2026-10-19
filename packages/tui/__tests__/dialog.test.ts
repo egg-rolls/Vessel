@@ -3,6 +3,8 @@ import {
   computeDialogWidth,
   DIALOG_MAX_WIDTH,
   displayWidth,
+  fitCell,
+  padToWidth,
   truncateToWidth,
 } from '../src/utils/dialog.js';
 
@@ -51,5 +53,22 @@ describe('displayWidth / truncateToWidth', () => {
   it('宽度 <= 0 返回空串', () => {
     expect(truncateToWidth('abc', 0)).toBe('');
     expect(truncateToWidth('abc', -1)).toBe('');
+  });
+});
+
+describe('padToWidth / fitCell（宽字符）', () => {
+  it('中文按显示宽度补齐', () => {
+    expect(padToWidth('中文', 6)).toBe('中文  ');
+    expect(displayWidth(padToWidth('中文', 6))).toBe(6);
+  });
+
+  it('超宽时截断，宽度精确', () => {
+    expect(displayWidth(padToWidth('中文标题', 4))).toBe(4);
+    expect(padToWidth('中文标题', 4)).toBe('中… ');
+  });
+
+  it('fitCell 右对齐数字/中文', () => {
+    expect(fitCell('12', 4, 'right')).toBe('  12');
+    expect(fitCell('中文', 6, 'right')).toBe('  中文');
   });
 });
