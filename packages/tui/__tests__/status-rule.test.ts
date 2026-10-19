@@ -54,8 +54,11 @@ describe('formatStatusRule', () => {
   it('24–59 列只留状态与 model', () => {
     const text = line(base, 40);
 
-    expect(text).toContain('thinking');
-    expect(text).toContain('deepseek-flash');
+    expect(text).toBe('─ ● thinking │ deepseek-flash');
+    expect(displayWidth(text)).toBeLessThanOrEqual(36);
+    expect(text).not.toContain('1m');
+    expect(text).not.toContain('cmp');
+    expect(text).not.toContain('sess');
     expect(text).not.toContain('ctx');
   });
 

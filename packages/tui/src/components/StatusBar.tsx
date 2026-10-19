@@ -141,21 +141,21 @@ export function formatStatusRule(props: StatusRuleProps, columns: number): Statu
       }
       parts.push({ text: `${percent}%`, tone: contextTone(percent) });
     }
-  }
 
-  if (props.durationMs !== undefined && props.durationMs >= 0) {
-    parts.push({ text: formatDuration(props.durationMs), tone: 'muted' });
-  }
+    if (props.durationMs !== undefined && props.durationMs >= 0) {
+      parts.push({ text: formatDuration(props.durationMs), tone: 'muted' });
+    }
 
-  if (props.compactions !== undefined && props.compactions > 0) {
-    parts.push({
-      text: `cmp ${props.compactions}`,
-      tone: props.compactions >= 10 ? 'danger' : props.compactions >= 5 ? 'warn' : 'muted',
-    });
-  }
+    if (props.compactions !== undefined && props.compactions > 0) {
+      parts.push({
+        text: `cmp ${props.compactions}`,
+        tone: props.compactions >= 10 ? 'danger' : props.compactions >= 5 ? 'warn' : 'muted',
+      });
+    }
 
-  if (props.sessions !== undefined && props.sessions > 0) {
-    parts.push({ text: `${props.sessions} sess`, tone: 'muted' });
+    if (props.sessions !== undefined && props.sessions > 0) {
+      parts.push({ text: `${props.sessions} sess`, tone: 'muted' });
+    }
   }
 
   if (width >= 100 && props.cwd) {

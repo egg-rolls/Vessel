@@ -66,7 +66,7 @@ const TRUECOLOR_THEME: Theme = {
   panel: '#4a453d',
   statusGood: '#6fa86f',
   statusWarn: '#d8a23a',
-  statusBad: '#c85a4a',
+  statusBad: '#d08a3a',
   statusCritical: '#c85a4a',
 };
 
@@ -88,7 +88,7 @@ const ANSI16_THEME: Theme = {
   panel: 'gray',
   statusGood: 'green',
   statusWarn: 'yellow',
-  statusBad: 'red',
+  statusBad: 'yellowBright',
   statusCritical: 'red',
 };
 
