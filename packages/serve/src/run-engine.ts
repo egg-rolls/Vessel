@@ -25,6 +25,8 @@ export interface RunRecord extends RunStatus {
 /** 待答权限请求 */
 export interface PendingPermission {
   run_id: string;
+  /** 请求产生时绑定的 tenant；应答必须来自同一 tenant（P0-1） */
+  tenant_id: string;
   tool: string;
   input: unknown;
   ts: number;
@@ -33,6 +35,8 @@ export interface PendingPermission {
 /** 待答 ask 请求 */
 export interface PendingAsk {
   run_id: string;
+  /** 请求产生时绑定的 tenant；应答必须来自同一 tenant（P0-1） */
+  tenant_id: string;
   ts: number;
 }
 
@@ -281,6 +285,18 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     return false;
   }
 
+  /**
+   * 事件归属 tenant：优先 run 记录（经 coreToJob 映射），
+   * 其次事件自带的 tenant_id，最后回退 default（P0-1）。
+   */
+  function eventTenantId(event: RunEvent): string {
+    const jobId = coreToJob.get(event.run_id);
+    const record = jobId === undefined ? undefined : runs.get(jobId);
+    if (record !== undefined) return record.tenant_id;
+    if (event.tenant_id !== undefined && event.tenant_id.length > 0) return event.tenant_id;
+    return defaultTenantId;
+  }
+
   function handleEvent(event: RunEvent): void {
     if (event.type === 'run.started' && active && !active.core_run_id) {
       active.core_run_id = event.run_id;
@@ -292,6 +308,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       if (requestId) {
         pendingPermissions.set(requestId, {
           run_id: event.run_id,
+          tenant_id: eventTenantId(event),
           tool: typeof data.tool === 'string' ? data.tool : 'tool',
           input: data.input,
           ts: Date.now(),
@@ -301,7 +318,13 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     if (event.type === 'ask.user.requested') {
       const data = event.data as Record<string, unknown>;
       const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
-      if (requestId) pendingAsks.set(requestId, { run_id: event.run_id, ts: Date.now() });
+      if (requestId) {
+        pendingAsks.set(requestId, {
+          run_id: event.run_id,
+          tenant_id: eventTenantId(event),
+          ts: Date.now(),
+        });
+      }
     }
     if (event.type === 'run.completed' || event.type === 'run.failed') {
       if (active && active.core_run_id === event.run_id) {
@@ -316,16 +339,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     }
   }
 
-  /**
-   * 交互请求归属校验：传入 tenantId 时，run 必须属于该 tenant（P0-1）。
-   * pending 里记录的是 core run_id；先经 coreToJob 映射到 gateway run 记录。
-   */
-  function interactionBelongsToTenant(coreRunId: string, tenantId: string): boolean {
-    const jobId = coreToJob.get(coreRunId) ?? coreRunId;
-    const owner = runs.get(jobId);
-    return owner !== undefined && owner.tenant_id === tenantId;
-  }
-
   function respondPermission(
     requestId: string,
     decision: 'allow' | 'deny',
@@ -336,7 +349,8 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     if (!pending) {
       throw new RpcError('not_found', `Permission request not found: ${requestId}`);
     }
-    if (tenantId !== undefined && !interactionBelongsToTenant(pending.run_id, tenantId)) {
+    // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
+    if (tenantId !== undefined && pending.tenant_id !== tenantId) {
       throw new RpcError('not_found', `Permission request not found: ${requestId}`);
     }
     events.publish({
@@ -351,7 +365,8 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
   function respondAsk(requestId: string, answers: unknown[], tenantId?: string): void {
     const pending = pendingAsks.get(requestId);
     if (!pending) throw new RpcError('not_found', `Ask request not found: ${requestId}`);
-    if (tenantId !== undefined && !interactionBelongsToTenant(pending.run_id, tenantId)) {
+    // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
+    if (tenantId !== undefined && pending.tenant_id !== tenantId) {
       throw new RpcError('not_found', `Ask request not found: ${requestId}`);
     }
     events.publish({
