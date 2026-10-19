@@ -91,4 +91,24 @@ describe('parseInline', () => {
     expect(isSafeHref('javascript:void(0)')).toBe(false);
     expect(isSafeHref('')).toBe(false);
   });
+
+  it('rejects backslash protocol-relative variants', () => {
+    for (const href of ['\\evil.example', '/\\evil.example', 'https:\\\\evil.example']) {
+      expect(isSafeHref(href)).toBe(false);
+    }
+    expect(parseInline('[click](\\evil.example)')).toEqual([{ type: 'text', text: 'click' }]);
+  });
+
+  it('parses single-character emphasis', () => {
+    expect(parseInline('*a*')).toEqual([{ type: 'em', text: 'a' }]);
+    expect(parseInline('**a**')).toEqual([{ type: 'strong', text: 'a' }]);
+  });
+
+  it('bounds pathological inline lines instead of scanning quadratically', () => {
+    const oversized = '['.repeat(50_000);
+    expect(parseInline(oversized)).toEqual([{ type: 'text', text: oversized }]);
+
+    const unclosed = '[a'.repeat(5_000);
+    expect(parseInline(unclosed)).toEqual([{ type: 'text', text: unclosed }]);
+  });
 });

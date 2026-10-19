@@ -168,10 +168,15 @@ export function parseMarkdown(source: string): MarkdownBlock[] {
   return blocks;
 }
 
-/** 仅允许 http(s)/mailto/锚点/相对路径；拒绝 javascript:/data:/协议相对 URL。 */
+/**
+ * 仅允许 http(s)/mailto/锚点/相对路径；
+ * 拒绝 javascript:/data:/协议相对 URL，以及反斜杠变体（`\\evil` / `/\evil`
+ * 会被 WHATWG URL 归一化成 `//evil`）。
+ */
 export function isSafeHref(href: string): boolean {
   const value = href.trim();
   if (value === '') return false;
+  if (value.includes('\\')) return false;
   if (value.startsWith('//')) return false;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(value)) {
     return /^(https?|mailto):/i.test(value);
@@ -179,34 +184,121 @@ export function isSafeHref(href: string): boolean {
   return true;
 }
 
-const INLINE = /(`[^`\n]+`|\[([^\]]*)\]\(([^)\s]+)\)|\*\*([^*]+)\*\*|\*([^*\n]+)\*)/g;
+/**
+ * 单行内联扫描上限：超过后退化为纯文本。
+ * 避免模型输出的病态超长行（几万 `[`/`*`）拖死主线程。
+ */
+const MAX_INLINE_LENGTH = 20_000;
 
-/** 解析内联 Markdown；粗体/斜体内部不再嵌套解析（聊天场景足够）。 */
+/**
+ * 解析内联 Markdown（线性扫描）；粗体/斜体内部不再嵌套解析（聊天场景足够）。
+ * 括号/圆括号的查找位置会被缓存，未闭合的定界符不会导致重复全行扫描。
+ */
 export function parseInline(source: string): InlineNode[] {
+  if (source.length > MAX_INLINE_LENGTH) return [{ type: 'text', text: source }];
+
   const nodes: InlineNode[] = [];
-  let lastIndex = 0;
-  for (const match of source.matchAll(INLINE)) {
-    const index = match.index ?? 0;
-    if (index > lastIndex) {
-      nodes.push({ type: 'text', text: source.slice(lastIndex, index) });
+  let buffer = '';
+  const flush = () => {
+    if (buffer !== '') {
+      nodes.push({ type: 'text', text: buffer });
+      buffer = '';
     }
-    const token = match[0];
-    if (token.startsWith('`')) {
-      nodes.push({ type: 'code', text: token.slice(1, -1) });
-    } else if (token.startsWith('[')) {
-      const label = match[2] ?? '';
-      const href = match[3] ?? '';
-      if (isSafeHref(href)) nodes.push({ type: 'link', text: label, href });
-      else nodes.push({ type: 'text', text: label });
-    } else if (token.startsWith('**')) {
-      nodes.push({ type: 'strong', text: match[4] ?? '' });
-    } else {
-      nodes.push({ type: 'em', text: match[5] ?? '' });
+  };
+
+  let closeBracket: number | undefined;
+  let closeParen: number | undefined;
+  let index = 0;
+
+  while (index < source.length) {
+    const char = source[index];
+
+    if (char === '`') {
+      const end = source.indexOf('`', index + 1);
+      if (end === -1) {
+        buffer += source.slice(index);
+        break;
+      }
+      flush();
+      nodes.push({ type: 'code', text: source.slice(index + 1, end) });
+      index = end + 1;
+      continue;
     }
-    lastIndex = index + token.length;
+
+    if (char === '[') {
+      // `-1` 一旦算出即代表其后没有 `]`，无需再扫描。
+      if (closeBracket === undefined || (closeBracket !== -1 && closeBracket <= index)) {
+        closeBracket = source.indexOf(']', index + 1);
+      }
+      const close = closeBracket;
+      if (close === -1) {
+        buffer += source.slice(index);
+        break;
+      }
+      if (source[close + 1] === '(') {
+        if (closeParen === undefined || (closeParen !== -1 && closeParen <= close + 1)) {
+          closeParen = source.indexOf(')', close + 2);
+        }
+        const end = closeParen;
+        if (end !== -1 && end > close + 2) {
+          const href = source.slice(close + 2, end);
+          if (!/\s/.test(href)) {
+            flush();
+            const label = source.slice(index + 1, close);
+            if (isSafeHref(href)) nodes.push({ type: 'link', text: label, href });
+            else nodes.push({ type: 'text', text: label });
+            index = end + 1;
+            closeBracket = undefined;
+            closeParen = undefined;
+            continue;
+          }
+        }
+      }
+      buffer += char;
+      index += 1;
+      continue;
+    }
+
+    if (source.startsWith('**', index)) {
+      const end = source.indexOf('**', index + 2);
+      if (end >= index + 3) {
+        const content = source.slice(index + 2, end);
+        if (!content.includes('*')) {
+          flush();
+          nodes.push({ type: 'strong', text: content });
+          index = end + 2;
+          continue;
+        }
+      }
+      buffer += '**';
+      index += 2;
+      continue;
+    }
+
+    if (char === '*') {
+      const end = source.indexOf('*', index + 1);
+      if (end === -1) {
+        buffer += source.slice(index);
+        break;
+      }
+      if (end >= index + 2) {
+        const content = source.slice(index + 1, end);
+        if (!content.includes('*')) {
+          flush();
+          nodes.push({ type: 'em', text: content });
+          index = end + 1;
+          continue;
+        }
+      }
+      buffer += char;
+      index += 1;
+      continue;
+    }
+
+    buffer += char;
+    index += 1;
   }
-  if (lastIndex < source.length) {
-    nodes.push({ type: 'text', text: source.slice(lastIndex) });
-  }
+
+  flush();
   return nodes;
 }
