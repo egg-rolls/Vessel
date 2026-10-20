@@ -183,7 +183,7 @@ export const DEFAULT_CONFIG: VesselConfig = {
     backend: 'file',
   },
   context: {
-    maxTokens: 4096,
+    maxTokens: 1_000_000,
     maxMessages: 100,
     // 0.6.1 P1：默认开启压缩；有 provider summarizer 时生成真实摘要。
     autoCompact: true,
