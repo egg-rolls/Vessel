@@ -297,6 +297,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      # 根 tarball 的 files 包含 apps/web/dist（被 .gitignore 忽略），
+      # 必须先构建，smoke 才能断言根包内含 Web 控制台。
+      - name: Build web console
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
 
       # npm pack 全部 18 个可发布包 + 根 tarball，临时工程用 overrides 指向
       # 本地 tarball 安装，然后运行 `vessel --version` / `vessel --tools`。

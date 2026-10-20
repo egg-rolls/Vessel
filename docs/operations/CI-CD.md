@@ -1,7 +1,7 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.10.0（基线 `release/0.10.0`；目标是根包与可发布包版本均为 `0.10.0`，bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍为上一版本，本分支的 `version --check` 在版本 bump 前可能失败）。
+> 当前开发线：0.10.0（基线 `release/0.10.0`；根包与可发布包版本已 bump 到 `0.10.0`，未 tag / 未 publish / 未合并 `main`）。
 > 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
@@ -27,7 +27,7 @@
 | `tls-ca` | ubuntu-latest | 0.6 TLS/CA 专项（**非 required**）：`packages/serve` TLS/remote 测试 + `connect-e2e-0.6` / `rpc-remote-0.6`；使用仓库内自签 fixture |
 | `frontend-cors` | ubuntu-latest | 0.6 独立前端专项（**非 required**）：`gateway.origin` / `gateway.ws-tenant` + `apps/web/tests/gatewayUrl.test.ts` |
 | `release-dry-run` | ubuntu-latest | **仅 PR + `release/**` push**：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，**不上传、不 publish、不 tag** |
-| `install-smoke` | ubuntu-latest | **仅 PR + `release/**` push**：Node 22 + `bun run scripts/smoke-install.ts`；`npm pack` 18 个子包 + 根 tarball，用本地 `overrides` 安装后运行 `vessel --version` / `vessel --tools`（mock，无 Key）；**不上传、不 publish、不 tag**；Windows 默认跳过 |
+| `install-smoke` | ubuntu-latest | **仅 PR + `release/**` push**：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；`npm pack` 18 个子包 + 根 tarball，用本地 `overrides` 安装后运行 `vessel --version` / `vessel --tools`（mock，无 Key），并断言根 tarball 含 `apps/web/dist/index.html`；**不上传、不 publish、不 tag**；Windows 默认跳过 |
 | `examples` | ubuntu-latest | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（关闭上轮 typecheck 盲区） |
 | `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：`--version`、`--tools`、headless 文本、stdin、`@file`、`/help`、`/exit`（除 `--version` 外均带 `VESSEL_MOCK=1`） |
 
@@ -62,7 +62,7 @@
 - 触发：`pull_request` + `release/**` push；不覆盖 `main` push。
 - 命令：`bun run scripts/release-dry-run.ts`（详细检查项与退出码见
   [RELEASE.md §2.1](RELEASE.md)）。
-- 目标版本 = 根 `package.json` 版本：`0.9.0` → `0.10.0`（bump 由 1 在集成线统一写入；bump 前 job 仍按上一版本校验）；收口是否再升版由 1 决定。
+- 目标版本 = 根 `package.json` 版本：`0.9.0` → `0.10.0`（已 bump；收口是否再升版由 1 决定）。
 - 打包到 runner 的 OS 临时目录并在结束后清理；**不上传 artifact、不登录 npm、
   不创建 tag、不发布**。
 - 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；
@@ -73,7 +73,10 @@
 - 触发：与 `release-dry-run` 相同（`pull_request` + `release/**` push）。
 - 命令：`bun run scripts/smoke-install.ts`（详见 [RELEASE.md §2.2](RELEASE.md)）。
 - 覆盖：18 个可发布包 + 根 tarball 的 `npm pack`、本地 `file:` `overrides`
-  安装解析、`vessel --version`、`VESSEL_MOCK=1 vessel --tools`。
+  安装解析、`vessel --version`、`VESSEL_MOCK=1 vessel --tools`，以及根 tarball
+  必须包含 `apps/web/dist/index.html`。
+- **前置构建**：`dist/` 被 `.gitignore` 忽略，job 必须先执行 Node 22 +
+  `apps/web` 的 `npm ci` / `npm run build`；未构建时 smoke 失败（exit 1）。
 - 运行在 ubuntu + Node 22（`npm`）；Windows 跳过（`.cmd` bin shim 未验证），
   不作为 `cross-platform` 的一部分。
 - 只写 OS 临时目录；**不上传 artifact、不登录 npm、不创建 tag、不发布**。
@@ -88,7 +91,7 @@
 
 ### 1.4 0.10 发版硬化门禁
 
-- **安装解析 smoke**：`install-smoke` job 与 `release.yml` 的 `verify` 都执行 `scripts/smoke-install.ts`；改 18 个子包或根包 manifest 的 `files` / 依赖版本后必须本地跑一次。失败时先看 `npm pack` 内容与 `file:` overrides 解析，不要靠放宽断言绕过。
+- **安装解析 smoke**：`install-smoke` job 与 `release.yml` 的 `verify` 都执行 `scripts/smoke-install.ts`；两者都先构建 `apps/web`（Node 22 + `npm ci` + `npm run build`）。smoke 在打包根包前检查 `apps/web/dist/index.html`，并断言根 tarball 的文件清单包含它；缺 Web 时 `npm pack` 仍会成功，只有该断言能发现。改 18 个子包或根包 manifest 的 `files` / 依赖版本后必须本地跑一次。失败时先看 `npm pack` 内容与 `file:` overrides 解析，不要靠放宽断言绕过。
 - **配置与首启**：`src/__tests__/config-hardening-0.10.test.ts` 覆盖未知 provider 无 `base_url` 的 `ProviderConfigError`、legacy provider 优先级与 deprecation、YAML 错误与来源脱敏；改 `packages/config` 或 `src/provider-factory.ts` 后定向复跑。
 - **日志不污染 stdout**：`packages/core/__tests__/runtime-logging.test.ts`、`src/__tests__/runtime-0.10.test.ts` 守卫 Logger 级别 / 脱敏、`process.error` / `shutdown.failed`。任何诊断输出都必须写 stderr；headless / `--json` 的输出断言失败时先查 `console.log`。
 - **关闭与 interrupt**：`packages/serve/__tests__/gateway.shutdown.test.ts`、`src/__tests__/shutdown-sequence-0.10.test.ts` 覆盖 `gateway.stop()` 幂等、5s drain、固定关闭顺序与不重复 drain；`packages/core/__tests__/runtime-overflow-interrupt.test.ts` 覆盖 interrupt 原因与 400 overflow 重试。
@@ -109,11 +112,13 @@
    - tag 必须在 `main` 上：`git merge-base --is-ancestor "$GITHUB_SHA" origin/main`。
    - 从 tag 提取版本（去掉 `v`）。
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
+   - Node 22 + `apps/web` 的 `npm ci` / `npm run build`：根 tarball 的 `files` 含 `apps/web/dist`，而 `dist/` 被忽略，必须先构建。
    - `bun run scripts/release-dry-run.ts`：tarball 内容 / 版本 / 禁止文件检查。
-   - `bun run scripts/smoke-install.ts`：18 个子包 + 根 tarball 的安装解析与运行 smoke。
+   - `bun run scripts/smoke-install.ts`：18 个子包 + 根 tarball 的安装解析与运行 smoke，并断言根 tarball 含 `apps/web/dist/index.html`。
    - **任一步失败即停止，`publish-npm` 不会执行。**
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
+   - 独立 checkout，先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`，确保根 tarball 含 Web 控制台。
    - **先发布 18 个子包**，顺序固定：`core` → `permission` → `config` → `serve` → `tui` → `plugins`
      （5 个库包 + 13 个插件包，含 `@vessel/team` 与 `@vessel/mcp-client`）。
    - **最后发布根 CLI `vessel-agent`**（依赖前 18 个包的精确版本；bin 仍是 `vessel`）。

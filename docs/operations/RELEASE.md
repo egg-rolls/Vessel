@@ -6,6 +6,9 @@
 > **0.5 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
 > 发布仍等 1.0.0 之后。
 > **0.10 发布前置**：除发布干跑外，新增安装解析 smoke（18 个子包 + 根 tarball）；
+> **必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
+> `.gitignore` 忽略，根 tarball 的 `files` 虽然包含 `apps/web/dist`，不构建就会发出缺少
+> Web 控制台的根包。smoke 会断言根 tarball 含 `apps/web/dist/index.html`。
 > 根 CLI 的发布名是 **`vessel-agent`**（bin 仍是 `vessel`），必须在 18 个子包之后发布。
 
 ## 1. 版本语义
@@ -18,7 +21,9 @@
 
 - [ ] 目标改动已合并到 `release/<major>.<minor>`。
 - [ ] `bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 全绿。
-- [ ] `cd apps/web && npm ci && npm run build` 成功。
+- [ ] `cd apps/web && npm ci && npm run build` 成功，且 `apps/web/dist/index.html` 存在。
+      这一步必须早于 `release-dry-run` / `smoke-install`：`dist/` 被 `.gitignore` 忽略，
+      不构建时根 tarball 会缺少 Web 控制台（smoke 会直接失败）。
 - [ ] `CHANGELOG.md` 已更新（Unreleased → `## [<version>] - YYYY-MM-DD`）；0.2 未发布，其条目已并入 `## [0.3.0]`。
 - [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致：根包 + **18 个可发布包**
       （`@vessel/core`、`@vessel/permission`、`@vessel/config`、`@vessel/serve`、`@vessel/tui`
@@ -74,6 +79,9 @@ bun run scripts/smoke-install.ts          # POSIX / CI
 bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳过）
 ```
 
+- **前置**：`apps/web/dist/index.html` 必须存在（先 `cd apps/web && npm ci && npm run build`）。
+  脚本在打包根包前检查该文件，并断言根 tarball 的文件清单包含
+  `apps/web/dist/index.html`；缺失时 smoke 失败（exit 1），不会静默发出缺 Web 的包。
 - 对全部 18 个可发布包与根包执行 `npm pack` 到 OS 临时目录。
 - 临时工程写入与 `overrides` 完全一致的 `file:` 依赖，`npm install --no-save`
   根 tarball + 18 个子包；根包对 `@vessel/*` 的精确版本依赖全部指向本地 tarball，
@@ -117,15 +125,18 @@ git switch main
 git pull --ff-only
 git status --short
 
-# 2. 统一版本（示例：0.5.0）
+# 2. 构建 Web 控制台（根 tarball 的 files 含 apps/web/dist）
+cd apps/web && npm ci && npm run build && cd ../..
+
+# 3. 统一版本（示例：0.5.0）
 bun run scripts/version.ts 0.5.0
 
-# 3. 更新 CHANGELOG.md（把 Unreleased 改成 ## [0.5.0] - YYYY-MM-DD）
-# 4. 提交版本提交（中文/复杂 message 用 -F 文件，避免 shell 编码问题）
+# 4. 更新 CHANGELOG.md（把 Unreleased 改成 ## [0.5.0] - YYYY-MM-DD）
+# 5. 提交版本提交（中文/复杂 message 用 -F 文件，避免 shell 编码问题）
 git add package.json packages/*/package.json plugins/*/*/package.json apps/web/package.json CHANGELOG.md
 git commit -F <personal>/docs/tmp/release-msg.txt
 
-# 5. 打 annotated tag 并推送
+# 6. 打 annotated tag 并推送
 git tag -a v0.5.0 -m "v0.5.0"
 git push origin main
 git push origin v0.5.0
@@ -134,10 +145,12 @@ git push origin v0.5.0
 推送 tag 后由 `.github/workflows/release.yml` 自动完成：
 
 1. `verify`：校验 tag 在 `main` 上、版本一致、CHANGELOG 有该版本；
-   运行 `scripts/release-dry-run.ts` 与 `scripts/smoke-install.ts`。
+   先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再运行
+   `scripts/release-dry-run.ts` 与 `scripts/smoke-install.ts`。
    **任一步失败即停止，不会进入 publish。**
 2. 复跑 quality。
-3. `npm publish`：**先 18 个子包**
+3. `npm publish`：`publish-npm` 是独立 checkout，会再次构建 Web 控制台；
+   **先 18 个子包**
    （core → permission → config → serve → tui → plugins），
    **最后根 `vessel-agent`**（`--provenance --access public`，稳定版 `latest` / 预发布 `beta`）。
    根包名不是 `vessel-agent` 时 workflow fail-fast。

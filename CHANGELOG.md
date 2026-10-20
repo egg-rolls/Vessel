@@ -5,7 +5,7 @@
 
 ## [0.10.0] - 2026-10-20
 
-> 0.10.0（基于 `release/0.10.0`，未发布）：发版硬化——首启与配置、上下文 / 运行时、日志与可观测、打包与分发、CLI 语言。新增能力都保留兼容路径；发布包名改为 `vessel-agent`，版本号由 1 在集成线统一写入。
+> 0.10.0（基于 `release/0.10.0`，未发布）：发版硬化——首启与配置、上下文 / 运行时、日志与可观测、打包与分发、CLI 语言。新增能力都保留兼容路径；根包与 18 个可发布子包已 bump 到 `0.10.0`，发布名改为 `vessel-agent`。
 
 ### Security
 
@@ -25,7 +25,7 @@
 - **provider 超时与重试观测**：provider 插件默认 120s 请求超时（`timeout_ms`，`<=0` 关闭），超时抛 `ProviderTimeoutError`（`provider_timeout`）；重试通过 `onRetry` 回调输出结构化事件。
 - **MCP 告警结构化**：MCP server 连接 / 工具冲突告警写 stderr 并发布 `mcp.warning` 事件。
 - **CLI i18n**：`src/i18n/` 提供 zh-CN / en 两份 catalog（各 85 个 key）与 `t(key, params?)`；`--help`、一次性命令错误、默认空状态与 demo banner 走同一 locale 解析。
-- **安装解析 smoke**：`scripts/smoke-install.ts` 对 18 个子包 + 根 tarball 执行 `npm pack`，用本地 `file:` `overrides` 安装后运行 `vessel --version` / `VESSEL_MOCK=1 vessel --tools`；CI 新增 `install-smoke` job，`release.yml` 的 `verify` 同时跑发布干跑与安装 smoke。
+- **安装解析 smoke**：`scripts/smoke-install.ts` 对 18 个子包 + 根 tarball 执行 `npm pack`，用本地 `file:` `overrides` 安装后运行 `vessel --version` / `VESSEL_MOCK=1 vessel --tools`，并断言根 tarball 含 `apps/web/dist/index.html`；CI 新增 `install-smoke` job，`release.yml` 的 `verify` 与 `publish-npm` 都先构建 Web 控制台再打包 / 发布。
 - **包元数据**：18 个子包补充 `files: ["src"]`、`license`、`repository`、`engines`；根包 `files` 排除 `**/node_modules/**` 并加入 `apps/web/dist`。
 
 ### Changed
@@ -60,7 +60,7 @@
 - 安装解析 smoke 只在 POSIX / Node 22 运行；Windows 的 npm `.cmd` bin shim 与 `file:` override 未验证，默认跳过。
 - CLI 本地化覆盖 `--help` / 错误 / 空状态 / demo banner；命令数据输出仍为英文，Web 前端未本地化。`--help` 在配置加载前短路，只能看到环境变量层。
 - `context.maxMessages` 缺省值由 core 按 token 预算推导；依赖旧默认条数的调用方需显式配置。
-- 版本号 bump 由 1 在集成线统一写入；本分支 `package.json` 在 bump 前仍是上一版本。
+- 0.10.0 仍未 tag、未 `npm publish`、未合并 `main`；根包与子包版本已 bump，lock 由 ext 在集成线刷新。
 
 ## [0.9.0] - 2026-10-20
 

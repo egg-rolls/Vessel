@@ -288,7 +288,7 @@ N 在自己的分支提交（只含共享侧成品）
 | `architecture`（ubuntu） | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
 | `offline-integration`（ubuntu） | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网 |
 | `release-dry-run`（ubuntu） | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag |
-| `install-smoke`（ubuntu） | 仅 PR + `release/**` push：Node 22 + `bun run scripts/smoke-install.ts`；18 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock）；不上传、不 publish、不 tag；Windows 跳过 |
+| `install-smoke`（ubuntu） | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；18 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
 | `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
 | `web` | `apps/web`：`npm ci` → `npm run build` |
 | `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供） |

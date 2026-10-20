@@ -4,6 +4,8 @@
  * 安装解析 smoke（0.10 R2B）。
  *
  * 验证「发布后的 tarball 能被 npm 真正装上并运行」，而不是只看包内文件：
+ *   0. 根包打包前必须已有 `apps/web/dist/index.html`（dist 被 .gitignore 忽略，
+ *      由 CI / 发布前置构建）；根 tarball 的文件清单也必须包含它；
  *   1. 对全部可发布包（18 个）与根 CLI 包执行 `npm pack` 到 OS 临时目录；
  *   2. 在临时工程里用 `overrides` 把每个 `@vessel/*` 指向本地 tarball，
  *      再 `npm install` 根 CLI tarball（不访问尚未发布的 @vessel/* 版本）；
@@ -57,6 +59,9 @@ export const PUBLISH_ORDER = [
 
 const REQUIRED_TOOLS = ['bash', 'read', 'edit'] as const;
 
+/** 根 tarball 必须包含的 Web 控制台入口（`files` 里的 `apps/web/dist`）。 */
+export const WEB_DIST_ENTRY = 'apps/web/dist/index.html';
+
 export class SmokeConfigError extends Error {}
 
 export interface SmokePackage {
@@ -74,6 +79,8 @@ export interface TarballInfo {
   filename: string;
   /** tarball 绝对路径 */
   tarball: string;
+  /** `npm pack --json` 报告的文件路径；根包用于断言 Web dist 存在 */
+  files?: string[];
 }
 
 export interface SmokeReport {
@@ -141,6 +148,8 @@ export interface PackOutputEntry {
   filename: string;
   name: string;
   version: string;
+  /** `npm pack --json` 的 `files[].path`；旧版 npm 没有该字段时为 undefined */
+  files?: string[];
 }
 
 export function parsePackOutput(stdout: string): PackOutputEntry[] {
@@ -165,9 +174,36 @@ export function parsePackOutput(stdout: string): PackOutputEntry[] {
     if (typeof filename !== 'string' || typeof name !== 'string' || typeof version !== 'string') {
       throw new SmokeConfigError('npm pack --json: entry missing filename/name/version');
     }
-    entries.push({ filename, name, version });
+
+    const filesRaw = (entry as { files?: unknown }).files;
+    let files: string[] | undefined;
+    if (filesRaw !== undefined) {
+      if (!Array.isArray(filesRaw)) {
+        throw new SmokeConfigError('npm pack --json: entry "files" must be an array');
+      }
+      files = filesRaw.map((file) => {
+        const path = (file as { path?: unknown } | null)?.path;
+        if (typeof path !== 'string') {
+          throw new SmokeConfigError('npm pack --json: entry "files[].path" must be a string');
+        }
+        return path;
+      });
+    }
+
+    entries.push({ filename, name, version, ...(files === undefined ? {} : { files }) });
   }
   return entries;
+}
+
+/** 根 tarball 必须包含 `apps/web/dist/index.html`；没有文件清单也视为失败。 */
+export function checkRootIncludesWeb(files: readonly string[] | undefined): string | null {
+  if (files === undefined) {
+    return 'root tarball: npm pack --json did not report a file list; cannot verify apps/web/dist';
+  }
+  if (!files.includes(WEB_DIST_ENTRY)) {
+    return `root tarball: missing ${WEB_DIST_ENTRY}; build apps/web before packing (cd apps/web && npm ci && npm run build)`;
+  }
+  return null;
 }
 
 export function checkVersionOutput(output: string, version: string): string | null {
@@ -229,6 +265,7 @@ function packPackage(pkgDir: string, destination: string): TarballInfo[] {
     version: entry.version,
     filename: entry.filename,
     tarball: join(destination, entry.filename),
+    ...(entry.files === undefined ? {} : { files: entry.files }),
   }));
 }
 
@@ -260,6 +297,14 @@ async function packAll(
   if (rootName === '') throw new SmokeConfigError('root package.json: missing "name"');
   if (rootVersion === '') throw new SmokeConfigError('root package.json: missing "version"');
 
+  // dist 被 .gitignore 忽略；未构建时根 tarball 会静默缺少 Web 控制台。
+  if (!existsSync(join(root, WEB_DIST_ENTRY))) {
+    throw new SmokeConfigError(
+      `root package requires a built web console: missing ${WEB_DIST_ENTRY}; ` +
+        'run "cd apps/web && npm ci && npm run build" before smoke-install',
+    );
+  }
+
   const [rootEntry] = packPackage(root, destination);
   if (!rootEntry) throw new SmokeConfigError('root package: npm pack produced no tarball');
   if (rootEntry.name !== rootName || rootEntry.version !== rootVersion) {
@@ -270,6 +315,9 @@ async function packAll(
   if (!existsSync(rootEntry.tarball)) {
     throw new SmokeConfigError(`root tarball not found: ${rootEntry.tarball}`);
   }
+
+  const webIssue = checkRootIncludesWeb(rootEntry.files);
+  if (webIssue) throw new SmokeConfigError(webIssue);
 
   return { packages: packed, rootTarball: rootEntry, rootName };
 }
@@ -478,7 +526,8 @@ function printUsage(): void {
 
 Packs every publishable package plus the root CLI, installs the root tarball
 with local @vessel/* overrides, then runs \`vessel --version\` and
-\`vessel --tools\` (VESSEL_MOCK=1, no API key).
+\`vessel --tools\` (VESSEL_MOCK=1, no API key). The root tarball must contain
+apps/web/dist/index.html; build apps/web before running this script.
 
 Windows is skipped by default (npm .cmd bin shims are not validated); use
 --force to attempt it anyway.
