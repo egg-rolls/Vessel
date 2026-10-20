@@ -1,6 +1,6 @@
 {
   "name": "@vessel/feishu",
-  "version": "0.8.6",
+  "version": "0.8.7",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0",
-    "@vessel/core": "workspace:*"
+    "@vessel/core": "0.8.7"
   },
   "devDependencies": {
     "typescript": "^7.0.2"
