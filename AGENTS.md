@@ -23,6 +23,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.8.3 状态**：Wave 2B2A 结构拆分（基于 `release/0.8.3`，未随版本发布）：Gateway 方法表按 domain 拆到 `packages/serve/src/gateway/methods/`（`createXxxMethods`），`gateway.ts` 只保留选项校验 / 状态 / 路由，协议与公开导出不变；CLI 一次性命令改为 `src/commands/registry.ts` 的有序注册表，`cli.ts` 删除顶层 `if` 链。决策见 ADR-059 / ADR-060。
 - **0.8.4 状态**：TUI 可见问题修复（基于 `release/0.8.4`，未随版本发布）：列表 key 改用 `lineKey(index)`；展示层统一 `sanitizeTerminalText()`（core / 工具原始返回值不变）；TUI 历史改为 `HistoryItem[]` 并保持 Markdown 渲染；`ink-repl.tsx` 用 `useWindowSize()` 订阅 resize，`VIEW_MAX_WIDTH` 160，矮终端隐藏 live。决策见 ADR-061。
 - **0.8.5 状态**：TUI 本地化（基于 `release/0.8.5`，未随版本发布）：`packages/tui/src/i18n/` 提供 zh-CN / en 两份 catalog（各 271 个 key）与 `t(key, params?)`；locale 优先级 `VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN`，默认 zh-CN 文案与 0.8.4 逐字一致。CLI 一次性命令与 Web 未本地化，命令数据输出仍为英文。决策见 ADR-062。
+- **0.8.6 状态**：mock 场景化与 `vessel demo`（基于 `release/0.8.6`，未随版本发布）：新增 app 层 `src/mock/scenarios.ts`（`echo` / `tools` / `permissions` / `error` / `multi-turn`，场景名冻结，默认 `echo` 与 `MemoryLLMProvider` 逐字一致）；`VESSEL_MOCK_SCENARIO` 只在 `src/cli.ts` 读取并经 bootstrap / tenant runtime factory 透传到 provider factory；`vessel demo` 走 bootstrap / REPL，固定 `tools`，数据目录隔离到 `<dataDir>/demo`，非 TTY exit 1。core 不变。决策见 ADR-063。
 
 ## 代码风格与硬规矩
 
@@ -46,6 +47,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **新一次性 CLI 子命令进注册表**（0.8.3，ADR-060）：加到 `src/commands/registry.ts` 的 `cliCommands`，实现 `match(args)` / `run(args, ctx)`；不要在 `cli.ts` 加新的 `if` 链。顺序即语义，宽泛的 `match` 会遮蔽后面的命令。（以代码事实为准，改代码时同步改本节。）
 - **TUI 展示层统一清洗与 key**（0.8.4，ADR-061）：渲染工具 / 命令文本前用 `sanitizeTerminalText()`，不要在 core / 工具层清洗（原始返回值必须保持原样）；列表 key 用 `lineKey(index)`，不要用文本内容或累计偏移。
 - **TUI 用户可见文案必须走 `t()`**（0.8.5，ADR-062）：新增或修改 UI 文案一律用 `t(key, params?)`，并把 key 同时加入 `packages/tui/src/i18n/messages/zh-CN.ts` 与 `en.ts`；中文字面量不得作为 UI 文案直接出现在组件 / 命令里；仅 catalog 与非 UI 逻辑（如 CJK 宽度检测）允许。技术词、命令名、工具名、错误码不翻译；命令的数据输出保持英文。默认 zh-CN 文案不得改动已有措辞。
+- **mock 场景只在 app 层**（0.8.6，ADR-063）：场景 provider 放 `src/mock/`，core 不出现场景概念，`MemoryLLMProvider` 及其公开导出保持原样；`VESSEL_MOCK_SCENARIO` 只在 CLI 入口读一次，工厂接收已解析的场景名，不得在 bootstrap / provider factory 里读 env；默认 `echo` 的文本 / usage / 流式分片不得改，场景名只能追加、不能改名。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -57,7 +59,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.8.5` → `0.8-<role>`（`release/0.1` ~ `release/0.7` 已冻结；0.8 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.8.5 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.8.6` → `0.8-<role>`（`release/0.1` ~ `release/0.7` 已冻结；0.8 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.8.6 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
