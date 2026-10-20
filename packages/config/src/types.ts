@@ -385,6 +385,12 @@ export interface PermissionConfig {
   autoApprove?: string[];
 }
 
+/** UI 配置（0.8.5） */
+export interface UiConfig {
+  /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
+  language?: string;
+}
+
 /** Vessel 配置 */
 export interface VesselConfig {
   apiKey?: string;
@@ -429,6 +435,8 @@ export interface VesselConfig {
   feishu?: FeishuConfig;
   /** 0.4：可观测性 */
   observability?: ObservabilityConfig;
+  /** 0.8.5：UI 语言 */
+  ui?: UiConfig;
 }
 
 /** 配置加载选项 */

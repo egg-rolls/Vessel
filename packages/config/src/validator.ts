@@ -1821,6 +1821,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxMembers',
   ],
   observability: ['eventHistory', 'metrics'],
+  ui: ['language'],
   tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes'],
 };
@@ -1905,4 +1906,5 @@ export const KNOWN_CONFIG_KEYS = [
   'evals',
   'feishu',
   'observability',
+  'ui',
 ];
