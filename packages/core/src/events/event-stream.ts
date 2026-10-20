@@ -180,14 +180,18 @@ export class MemoryEventStream implements EventStream {
    * 订阅事件流，收到 name 匹配（且 requestId 匹配）的事件时 resolve 其 data；
    * 超时或 signal abort 时 reject，并清理 timer / 订阅 / abort listener。
    *
-   * 0.13（DECISION-024 §2.3）：abort 必须立即结束等待，不得等到超时；取消原因
-   * 沿用现有 run 取消语义（`signal.reason` 是 Error 时原样抛出，否则 AbortError）。
+   * 0.13（DECISION-024 §2.3 / Addendum A）：
+   * - 缺省或 `timeout <= 0` 不设 timer，一直等到应答或 abort；
+   * - 只有正数超时才 reject `Timed out`；
+   * - abort 立即结束等待，取消原因沿用 run 取消语义
+   *   （`signal.reason` 是 Error 时原样抛出，否则 AbortError）。
    */
   waitFor(
     name: string,
     opts?: { requestId?: string; timeout?: number; signal?: AbortSignal },
   ): Promise<unknown> {
-    const timeoutMs = opts?.timeout ?? 30000;
+    const timeoutMs = opts?.timeout;
+    const hasTimeout = typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0;
     const signal = opts?.signal;
 
     // 已中止：不查历史、不建订阅 / timer，立即结束（取消优先于已到达的应答）。
@@ -237,11 +241,13 @@ export class MemoryEventStream implements EventStream {
         return;
       }
 
-      timer = setTimeout(() => {
-        settle(() =>
-          reject(new Error(`Timed out after ${timeoutMs}ms waiting for event "${name}"`)),
-        );
-      }, timeoutMs);
+      if (hasTimeout) {
+        timer = setTimeout(() => {
+          settle(() =>
+            reject(new Error(`Timed out after ${timeoutMs}ms waiting for event "${name}"`)),
+          );
+        }, timeoutMs);
+      }
 
       unsubscribe = this.subscribe((event) => {
         if (event.type !== name) return;

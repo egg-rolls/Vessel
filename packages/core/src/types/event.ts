@@ -160,7 +160,8 @@ export interface EventStream {
    * 等待一次匹配事件（ADR-027）。工具用它实现交互暂停：发请求事件 → 等回复事件。
    * @param name 事件名
    * @param opts.requestId 匹配 payload 中的 requestId（防多实例串台）
-   * @param opts.timeout 超时毫秒（默认 30000），超时 reject
+   * @param opts.timeout 超时毫秒。缺省 / `<= 0` 不设 timer（一直等到应答或 abort）；
+   *   只有正数才超时 reject（0.13 Addendum A）
    * @param opts.signal 取消信号（0.13）：abort 时立即 reject 并清理等待资源，
    *   不复用超时错误；拒绝原因与 run 取消一致（`signal.reason` 或 AbortError）
    * @returns 匹配事件的 data

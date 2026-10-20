@@ -1,11 +1,13 @@
 /**
- * 0.13 权限生命周期（DECISION-024 §2.1 / §2.3）。
+ * 0.13 权限生命周期（DECISION-024 §2.1 / §2.3 + Addendum A）。
  *
  * 守卫：
- * - `waitFor` 绑定 `AbortSignal`：abort 立即结束等待并清理订阅，不等满超时；
+ * - `waitFor` 绑定 `AbortSignal`：abort 立即结束等待并清理订阅；
+ * - 缺省 / `timeout <= 0` 不设 timer：一直等到应答或 abort；
  * - 权限等待被取消抛 `PermissionAbortedError`，不得误报 `permission_timeout`；
- * - 请求事件补齐 session_id / tool_call_id / deadline_at / source（additive）；
- * - 正常应答、超时致命行为保持不变。
+ * - 只有显式正数超时才产生 `PermissionTimeoutError` 与 `deadline_at`；
+ * - 请求事件补齐 session_id / tool_call_id / source（additive）；
+ * - 正常应答行为保持不变。
  */
 import { describe, expect, it } from 'bun:test';
 import { MemoryContextManager } from '../src/context/context-manager';
@@ -63,6 +65,24 @@ class ImmediateTimeoutEventStream extends MemoryEventStream {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** 观察 promise 是否已 settle（不改变其结果） */
+function observe(promise: Promise<unknown>): { readonly settled: boolean } {
+  const state = { settled: false };
+  promise.then(
+    () => {
+      state.settled = true;
+    },
+    () => {
+      state.settled = true;
+    },
+  );
+  return state;
+}
+
 describe('waitFor 的取消语义', () => {
   it('已中止的 signal 立即拒绝，且不建立订阅', async () => {
     const events = new MemoryEventStream();
@@ -110,10 +130,49 @@ describe('waitFor 的取消语义', () => {
     expect(events.subscriberCount).toBe(0);
   });
 
-  it('无 signal 时超时错误仍是 Timed out（行为不变）', async () => {
+  it('显式正数 timeout 仍以 Timed out 拒绝（行为不变）', async () => {
     const events = new MemoryEventStream();
     await expect(events.waitFor('never.event', { timeout: 20 })).rejects.toThrow('Timed out');
     expect(events.subscriberCount).toBe(0);
+  });
+
+  it('timeout 缺省 / <= 0 不设 timer：短窗口内不结束，abort 立即结束', async () => {
+    const cases: Array<{ label: string; timeout?: number }> = [
+      { label: 'undefined' },
+      { label: '0', timeout: 0 },
+      { label: 'negative', timeout: -1 },
+    ];
+
+    for (const testCase of cases) {
+      const events = new MemoryEventStream();
+      const controller = new AbortController();
+      const pending = events.waitFor('never.event', {
+        ...(testCase.timeout !== undefined ? { timeout: testCase.timeout } : {}),
+        signal: controller.signal,
+      });
+      const state = observe(pending);
+
+      await sleep(60);
+      expect({ label: testCase.label, settled: state.settled }).toEqual({
+        label: testCase.label,
+        settled: false,
+      });
+      expect(events.subscriberCount).toBe(1);
+
+      // abort 仍能立即结束无限等待，并清理订阅
+      const started = performance.now();
+      controller.abort('stop infinite wait');
+      let caught: unknown;
+      try {
+        await pending;
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect((caught as Error).name).toBe('AbortError');
+      expect(performance.now() - started).toBeLessThan(100);
+      expect(events.subscriberCount).toBe(0);
+    }
   });
 });
 
@@ -158,9 +217,51 @@ describe('PermissionPolicy 的取消与超时分类', () => {
     expect(events.subscriberCount).toBe(subscribers);
   });
 
-  it('signal 未 abort 时仍抛 PermissionTimeoutError（0.11.1 行为不变）', async () => {
-    const events = new ImmediateTimeoutEventStream();
+  it('默认配置不设超时：无应答时保持等待，abort 立即结束', async () => {
+    const events = new MemoryEventStream();
     const policy = new PermissionPolicy(events, { default: 'ask' });
+    const controller = new AbortController();
+    const ctx = context(events, controller.signal);
+
+    const pending = policy.authorize(guardedTool({ count: 0 }), {}, ctx);
+    const state = observe(pending);
+
+    await sleep(80);
+    expect(state.settled).toBe(false);
+
+    controller.abort('cancel infinite permission wait');
+    let caught: unknown;
+    try {
+      await pending;
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(PermissionAbortedError);
+    expect(caught).not.toBeInstanceOf(PermissionTimeoutError);
+  });
+
+  it('显式正数 timeoutMs 超时 → PermissionTimeoutError', async () => {
+    const events = new MemoryEventStream();
+    const policy = new PermissionPolicy(events, { default: 'ask', timeoutMs: 30 });
+    const ctx = context(events, undefined);
+
+    // 有界等待：若实现错误地无限等待，该守卫在 1s 后失败而不是挂住测试
+    const outcome = await Promise.race([
+      policy.authorize(guardedTool({ count: 0 }), {}, ctx).then(
+        () => 'allowed' as const,
+        (error: unknown) => error,
+      ),
+      sleep(1000).then(() => 'still-pending' as const),
+    ]);
+
+    expect(outcome).toBeInstanceOf(PermissionTimeoutError);
+    expect((outcome as PermissionTimeoutError).code).toBe('permission_timeout');
+  });
+
+  it('signal 未 abort 时仍把超时映射为 PermissionTimeoutError（0.11.1 行为不变）', async () => {
+    const events = new ImmediateTimeoutEventStream();
+    // Addendum A：只有显式正数超时才存在 timeout 语义
+    const policy = new PermissionPolicy(events, { default: 'ask', timeoutMs: 1 });
     const controller = new AbortController();
 
     let caught: unknown;
@@ -176,7 +277,7 @@ describe('PermissionPolicy 的取消与超时分类', () => {
 });
 
 describe('tool.permission.request 关联字段', () => {
-  it('携带 session_id / tool_call_id / deadline_at / source，且正常应答仍生效', async () => {
+  it('携带 session_id / tool_call_id / source，默认无限等待不带 deadline_at，且正常应答仍生效', async () => {
     const calls = { count: 0 };
     const handlerCalls = { count: 0 };
     const pluginHost = new MemoryPluginHost();
@@ -220,7 +321,39 @@ describe('tool.permission.request 关联字段', () => {
       source: 'runtime',
     });
     expect(typeof captured.data.requestId).toBe('string');
-    expect(captured.data.deadline_at).toBe(captured.eventTs + 120_000);
+    // Addendum A：默认不设超时 → 不承诺 deadline
+    expect('deadline_at' in captured.data).toBe(false);
+  });
+
+  it('显式正数 timeoutMs 才带 deadline_at = ts + timeoutMs', async () => {
+    const events = new MemoryEventStream();
+    const policy = new PermissionPolicy(events, { default: 'ask', timeoutMs: 5000 });
+    let request: { eventTs: number; data: Record<string, unknown> } | undefined;
+    events.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      request = { eventTs: event.ts, data: event.data as Record<string, unknown> };
+      events.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: { requestId: request.data.requestId, decision: 'allow' },
+        ts: Date.now(),
+      });
+    });
+
+    await policy.authorize(
+      guardedTool({ count: 0 }),
+      {},
+      {
+        run_id: 'run-deadline',
+        messages: [],
+        events,
+      },
+    );
+
+    const captured = request;
+    expect(captured).toBeDefined();
+    if (!captured) throw new Error('tool.permission.request was not published');
+    expect(captured.data.deadline_at).toBe(captured.eventTs + 5000);
   });
 });
 
@@ -275,5 +408,53 @@ describe('runtime 级取消', () => {
       ),
     ).toBe(false);
     expect(history.some((event) => event.type === 'tool.call.failed')).toBe(false);
+  });
+
+  it('无应答时 run 保持等待（默认不超时），延迟取消仍立即结束', async () => {
+    const calls = { count: 0 };
+    const handlerCalls = { count: 0 };
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool(guardedTool(handlerCalls));
+
+    const events = new MemoryEventStream();
+    const controller = new AbortController();
+    let requested = false;
+    events.subscribe((event) => {
+      if (event.type === 'tool.permission.request') requested = true;
+    });
+
+    const runtime = await AgentRuntime.create({
+      provider: toolCallProvider('guarded', 'call-1', calls),
+      model: 'm',
+      pluginHost,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      permission: { default: 'ask' },
+    });
+
+    const running = runtime.run('hi', 'session-1', { signal: controller.signal });
+    const state = observe(running);
+    for (let i = 0; i < 50 && !requested; i += 1) await sleep(10);
+    expect(requested).toBe(true);
+
+    // Addendum A：默认无限等待 → 观察窗口内不结束
+    await sleep(80);
+    expect(state.settled).toBe(false);
+    expect(handlerCalls.count).toBe(0);
+
+    const started = performance.now();
+    controller.abort('user cancel');
+    let caught: unknown;
+    try {
+      await running;
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(PermissionAbortedError);
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(events.getHistory().some((event) => event.type === 'run.cancelled')).toBe(true);
   });
 });
