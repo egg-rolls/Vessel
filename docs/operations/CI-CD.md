@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.11.0（基线 `release/0.11.0`；manifest 版本由 1 在收口时统一写入，未 tag / 未 publish / 未合并 `main`）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 / 0.11.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke；0.11 起子包使用 `@vessel-agent/*` scope。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.12.0（基线 `release/0.12.0`；manifest 版本由 1 在收口时统一写入，未 tag / 未 publish / 未合并 `main`）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 / 0.11.0 / 0.12.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke；0.11 起子包使用 `@vessel-agent/*` scope。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -85,7 +85,7 @@
 
 ### 1.3 0.9 Wave 2B2B 门禁
 
-- **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；37 个 canonical 方法的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
+- **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；canonical 方法（0.12 起 38 个）的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
 - **插件生命周期**：插件卸载 / 释放相关测试覆盖 `init` 失败隔离、`dispose` 逆序、幂等与安装回滚；不要在测试里依赖插件释放顺序之外的全局状态。
 - **去重键**：跨节点测试覆盖 `incarnation` 代际变化、seq 回退与旧对端（缺 `incarnation` 按 `-`）；去重集合不跨进程持久化，测试不得断言重启后仍去重。
 - 全量测试在 Windows 与 POSIX（Docker）上均以同一 env 跑；Windows 的 `cross-platform` 与 ubuntu 的 `quality` 结果不一致时按环境差异排查，不要先关校验。
@@ -99,6 +99,14 @@
 - **trace 与打包**：`packages/config/__tests__/trace-0.10.test.ts` 覆盖 `includeStreamChunks` 默认关闭与 trace 文件 `0600`；发布前用 `release-dry-run` + `smoke-install` 双门禁。
 - **CLI i18n**：`src/__tests__/i18n-0.10.test.ts` 校验 zh-CN / en key 集合一致；新增用户可见文案必须同时改两份 catalog。
 - 全量测试在 Windows 与 POSIX（Docker）上以同一 env 跑；平台差异先按环境排查，不要先关校验。
+
+### 1.5 0.12 Gateway 生命周期与 CLI 门禁
+
+- **gateway 生命周期**：`src/__tests__/gateway-args.test.ts`、`src/__tests__/gateway-pid.test.ts`、`src/__tests__/gateway-service.test.ts`、`src/__tests__/gateway-e2e.test.ts` 覆盖参数解析、PID 原子写 / stale 判定、三平台服务定义与 daemon 启停；测试注入 `runCommand` / `spawn`，**不得**在 CI 里真的注册服务或修改开发机。
+- **热重载**：`packages/serve/__tests__/gateway.reload.test.ts` 覆盖 admin-only、缺省 scope、未知 scope 与 `result_schema`（canonical 总数为 38）；`src/__tests__/gateway-reload-wiring.test.ts` 覆盖 plugins 缓存刷新、`allowed_origins` 的 `reconfigure`、无 `reconfigure` 时 `requires_restart` 与配置读取失败。改热重载范围必须同时更新 ADR-075 与本门禁。
+- **自更新**：`src/__tests__/update-*.test.ts` 覆盖 npm / bun / dev / unknown 形态与 `--yes` / 非 TTY 行为；测试只断言 argv，不执行真实全局安装。
+- **CLI 样式**：`src/__tests__/ui-style.test.ts` 覆盖 TTY / `NO_COLOR` / `TERM=dumb` 与纯文本回退；新增一次性命令必须走 `ui`，`--json` 断言不带 ANSI。
+- **0.11.1 回归**：权限 TTL（事件时间）、`not_found` 单次提交、`PermissionTimeoutError`、`reasoning_delta` opt-in 与 `agent.cwd` 优先级由 web / core / basic-tools 测试覆盖；CI 的 Test step 仍固定 `VESSEL_VALIDATE_RESULTS=1`。
 
 ## 2. Release（`.github/workflows/release.yml`）
 
@@ -160,14 +168,19 @@
 
 ## 3. 用户侧 CD / 自动更新
 
-> 0.3.0 已实现 **check-only** 客户端：`vessel update [--check] [--channel latest|beta] [--json] [--force]`。
-> **不下载、不校验、不自替换**。版本源是根 `package.json`（`--version` 同源）。
+> 0.12 起 `vessel update` 支持**按安装形态自更新**：`vessel update [--check] [--yes] [--channel latest|beta] [--json]`。
+> 版本源是根 `package.json`（`--version` 同源）；不下载二进制、不替换可执行文件。
 
 | 安装方式 | 更新方式 |
 |---|---|
-| npm / bun 全局安装 | `vessel update` 提示 `bun add -g vessel-agent@<v>`（或 `npm i -g vessel-agent@<v>`）；bin 仍是 `vessel`，由用户执行 |
+| npm 全局安装 | `vessel update` 执行 `npm i -g vessel-agent@latest`（默认确认，`--yes` 跳过）；bin 仍是 `vessel` |
+| bun 全局安装 | `vessel update` 执行 `bun add -g vessel-agent@latest` |
+| 源码 / 开发模式 | 只提示 `git pull && bun install`，不自动改 git 工作区 |
 | 独立二进制 | **不提供**（ADR-006 继续有效）；后续再评估 |
-| 源码运行 | `vessel update --check` 只提示新版本，不自动改 git 工作区 |
+
+- `--check` 保持只检查与提示，行为与 0.3 一致；不带 `--check` 才执行或提示自更新。
+- 非 TTY 且无 `--yes` 返回 1，避免脚本无确认地安装全局包；安装失败返回 1，`--json` 带形态、命令、退出码与末尾输出。
+- 成功后提示重启当前进程；`VESSEL_INSTALL_FORM=npm|bun|dev` 可显式覆盖形态检测（CI / 非常规布局）。
 
 行为：
 

@@ -3,7 +3,7 @@
 > 适用版本线：`0.x`。发布由 **tag `v*`** 触发，不由分支名触发。
 > 维护者：`gov`；最终发布决定权在 1。
 > **0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布**；不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
-> **0.5 / 0.11 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
+> **0.5 / 0.11 / 0.12 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
 > 发布仍等 1.0.0 之后。
 > **0.10 发布前置**：除发布干跑外，新增安装解析 smoke（18 个子包 + 根 tarball）；
 > **必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
@@ -99,6 +99,18 @@ bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳�
 发布顺序在 `.github/workflows/release.yml` 中固定为：
 **先 18 个子包**（core → permission → config → serve → tui → plugins），
 **最后根 `vessel-agent`**（它依赖前 18 个包的精确版本）。
+
+## 2.3 0.12 运行形态与发布前确认
+
+0.12 引入 gateway 生命周期与包级自更新，发布前需要额外确认：
+
+- **gateway 入口**：常驻统一为 `vessel gateway start --daemon`；`--serve` 是前台别名。发布说明不得再教用户自行 `nohup` / `&`。PID 文件 `<dataDir>/gateway.pid` 与日志 `<dataDir>/logs/gateway.log` 均为 `0600`。
+- **服务注册**：`vessel gateway install-service` 只注册当前平台的用户级服务（systemd user / LaunchAgent / Windows 登录计划任务）；发布说明需注明不提供 root 服务，daemon 自身不做崩溃重启，常驻交给服务管理器。
+- **热重载边界**：`gateway.reload` 只承诺 plugins 扫描缓存与 `serve.allowed_origins`；其它配置字段返回 `requires_restart`。release notes 不得把“reload 成功”写成“所有配置已生效”。
+- **自更新**：`vessel update` 只对 npm / bun 全局安装执行 `npm i -g vessel-agent@latest` / `bun add -g vessel-agent@latest`；源码 / 开发模式只提示，非 TTY 必须 `--yes`。不提供二进制替换（ADR-006）。
+- **CLI 样式**：人类可读输出走 `src/ui-style.ts`，`--json` 与数据行无 ANSI；CI 日志与管道不依赖颜色。
+- **0.11.1 并入**：0.11.1 不单独发布，权限 TTL / 超时、`ui.showReasoning` 与 `agent.cwd` 的修复只出现在 0.12.0 的 CHANGELOG，不要创建 `0.11.1` tag。
+- **版本线**：0.12.0 仍未 tag / `npm publish` / 合并 `main`；版本号与 `bun.lock` 由 1 在收口时统一写入。
 
 ## 3. 版本脚本
 

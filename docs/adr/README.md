@@ -88,6 +88,10 @@
 | 071 | 分发：vessel-agent 根包、子包 files 与安装解析 smoke | accepted | 2026-10-20 | distribution, packaging, npm, release, ci | [ADR-071-distribution-vessel-agent-and-install-smoke.md](ADR-071-distribution-vessel-agent-and-install-smoke.md) |
 | 072 | UI 设置与终端观感（/settings、clearOnStart、全宽面板） | accepted | 2026-10-20 | tui, i18n, settings, layout, terminal, web | [ADR-072-ui-settings-and-terminal-polish.md](ADR-072-ui-settings-and-terminal-polish.md) |
 | 073 | npm scope 归属：子包统一为 @vessel-agent/* | accepted | 2026-10-20 | distribution, packaging, npm, release, scope, naming | [ADR-073-npm-scope-vessel-agent.md](ADR-073-npm-scope-vessel-agent.md) |
+| 074 | Gateway 生命周期：统一命令、daemon 与用户级服务注册 | accepted | 2026-10-20 | gateway, cli, daemon, service, lifecycle, operations | [ADR-074-gateway-lifecycle-daemon-service.md](ADR-074-gateway-lifecycle-daemon-service.md) |
+| 075 | gateway.reload 只热重载可验证的范围 | accepted | 2026-10-20 | gateway, rpc, reload, config, plugins, hot-reload | [ADR-075-gateway-reload-scope.md](ADR-075-gateway-reload-scope.md) |
+| 076 | CLI 暗金样式与按安装形态自更新 | accepted | 2026-10-20 | cli, ui, style, update, distribution, ansi | [ADR-076-cli-style-and-self-update.md](ADR-076-cli-style-and-self-update.md) |
+| 077 | 权限交互时效、思考流与 agent.cwd（0.11.1 修复并入 0.12.0） | accepted | 2026-10-20 | permission, timeout, reasoning, cwd, web, tui, interaction | [ADR-077-permission-reasoning-cwd.md](ADR-077-permission-reasoning-cwd.md) |
 
 ## 编写约定
 

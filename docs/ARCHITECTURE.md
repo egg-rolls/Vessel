@@ -1738,7 +1738,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 28.2 协议 result schema
 
-- **覆盖**：38 个 canonical 方法（37 个 domain 方法 + `events.subscribe`）全部带 `result_schema`；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
@@ -1856,3 +1856,60 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `ui.clearOnStart` 仅影响 TTY REPL 启动，非 TTY / headless 不清屏。
 - `VESSEL_LANG` 高于 `config.ui.language`；环境变量显式设置时设置命令不改变当前显示。
 - 0.11.0 仍未 tag / `npm publish` / 合并 `main`；manifest 版本由 1 统一写入。
+
+## 31. 0.12.0 Gateway 生命周期、热重载与 CLI 样式（已实现）
+
+> 状态：已合入 `release/0.12.0`（未发布）。决策见 [ADR-074](adr/ADR-074-gateway-lifecycle-daemon-service.md)、[ADR-075](adr/ADR-075-gateway-reload-scope.md)、[ADR-076](adr/ADR-076-cli-style-and-self-update.md)；同版本并入的 0.11.1 修复见 [ADR-077](adr/ADR-077-permission-reasoning-cwd.md)。
+
+### 31.1 `vessel gateway` 生命周期
+
+- **命令**：`start [--daemon] [--port <n>] [--host <h>] [--log <path>]`、`stop [--timeout 10s]`、`status [--json]`、`restart [--daemon]`、`reload [--scope config,plugins]`、`install-service [--systemd|--launchd|--schtasks]`、`uninstall-service`（`src/cli-args.ts` 解析，`src/gateway-command.ts` 执行）。
+- **入口统一**：前台 `start` / `restart` 映射到既有 `--serve` 装配管线；`--serve` 保留为前台别名。其余子命令由一次性命令注册表执行。
+- **daemon**：`start --daemon` 由父进程 `Bun.spawn` 分离一个前台子进程；stdio 追加到 `<dataDir>/logs/gateway.log`（目录 `0700`、文件 `0600`）。子进程写出实际 host / port 后父进程退出；已有实例、spawn 失败、超时或提前退出返回非 0，并 tail 日志。
+- **PID**：`<dataDir>/gateway.pid`，JSON `{pid, started_at, host, port, version, node_id?}`；同目录临时文件 + rename 原子写入，权限 `0600`。运行中 = PID 存活且命令行匹配 gateway / serve；死 PID、损坏文件、命令行不匹配按 stale 处理。退出时只删除本进程持有的文件。
+- **stop / restart**：`stop` 默认等待 10s；Windows 用 `process.kill(pid)`，POSIX 用 `SIGTERM`；PID 指向自身时拒绝。`restart` 先 stop 再按前台 / `--daemon` 启动。
+- **status**：人类输出为标题 + `label value`，包含运行状态、PID、URL、uptime、版本、node id 与服务注册状态；`--json` 输出 `running` / `pid` / `host` / `port` / `url` / `started_at` / `uptime_seconds` / `version` / `pid_file` / `service` 等字段，未运行返回 1。
+
+### 31.2 用户级服务注册
+
+- **Linux**：systemd user unit `~/.config/systemd/user/vessel-gateway.service`，`ExecStart=/usr/bin/env vessel gateway start`，`Restart=on-failure`，`WantedBy=default.target`；安装执行 `systemctl --user daemon-reload` + `enable --now`。
+- **macOS**：LaunchAgent `~/Library/LaunchAgents/com.vessel.gateway.plist`，`RunAtLoad` / `KeepAlive`，日志写 `<dataDir>/logs/gateway.log`；安装执行 `launchctl load -w`。
+- **Windows**：登录计划任务 `VesselGateway`（`schtasks /SC ONLOGON`），运行 `vessel gateway start`。
+- **边界**：只支持当前平台，交叉指定与不支持平台返回明确错误；只在显式 `install-service` / `uninstall-service` 时写入定义并调用平台命令，不随启动或安装自动注册；不提供 root 级系统服务。服务定义生成是纯函数，测试通过注入 `runCommand` 断言形状，不修改开发机。
+
+### 31.3 `gateway.reload`
+
+- **RPC**：canonical 方法 `gateway.reload`（admin-only），`params { scopes?: string[] }` → `{ reloaded: string[], requires_restart: string[] }`，带 `result_schema`；canonical 总数 38（37 个 domain 方法 + `events.subscribe`）。
+- **plugins**：清空插件目录扫描缓存，下次 `list()` 重新扫描；已安装插件、已注册工具与 active run 不受影响。
+- **config**：重新 `loadConfig()`；只有 `serve.allowed_origins` 变化会经 `Gateway.reconfigure({ allowedOrigins })` 生效，并计入 `reloaded`。provider（不含 model）/ model / agent / permission / TLS / token / port 变更一律进 `requires_restart`；gateway 未提供 `reconfigure()` 时 allowlist 也进 `requires_restart`。
+- **错误**：未知 scope、配置读取失败、`reconfigure` 抛错都返回 RPC 错误，不假装成功。
+- **CLI**：`vessel gateway reload` 从 PID 文件取地址、从配置解析 token，经本地 HTTP RPC 调用；未运行 / 无 token / 调用失败返回非 0，随后打印 `reloaded` 与 `requires_restart`。
+
+### 31.4 `vessel update` 自更新
+
+- **安装形态检测**（`src/update/install-detect.ts`）：入口在 `~/.bun/.../node_modules` → `bun`；在 `node_modules/vessel-agent`、Windows npm 前缀或 `/lib/node_modules` → `npm`；入口是仓库 `src/cli.ts` 或向上存在 `.git` → `dev`；其余 `unknown`。`VESSEL_INSTALL_FORM` 可显式覆盖。
+- **动作**：npm → `npm i -g vessel-agent@latest`；bun → `bun add -g vessel-agent@latest`；dev / unknown → 只打印 `git pull && bun install`，不改工作区。
+- **交互**：默认确认，`--yes` 跳过；非 TTY 且无 `--yes` 返回 1。安装失败返回 1，`--json` 输出形态、命令、退出码与末尾输出；成功提示重启。`--check` 保持只检查与提示。
+
+### 31.5 CLI 暗金样式
+
+- **模块**：`src/ui-style.ts`；暗金主色 `#d08a3a`、亮色 `#e8a94c`，提供 `brand` / `title` / `section` / `ok|warn|err|info` / `symbol` / `rule` / `kv`；CJK 显示宽度按 2 列计算。
+- **ANSI 条件**：stdout 为 TTY、`NO_COLOR` 未设置（含空串）、`TERM !== 'dumb'` 同时满足；否则全部返回原文。`--json` 与数据行保持纯文本。
+- **范围**：全部一次性命令的人类可读输出；TUI 使用自己的 theme，不经过该模块。
+
+### 31.6 0.11.1 修复（并入本版本）
+
+- **权限交互时效**：Web `expiresAt = event.ts + 120s`；重放旧请求直接丢弃；`requestId` 去重；`not_found` 移除弹窗并提示；同一请求只提交一次。
+- **权限超时**：core 等待超时抛 `PermissionTimeoutError`（`permission_timeout`），run 失败，不交给模型重试。
+- **思考流**：`ui.showReasoning` 默认 `false`；显式开启时 provider 的 `reasoning_content` 转 `reasoning_delta` 并经 `llm.stream.chunk` 发布；TUI / Web 折叠为思考块；`trace.includeStreamChunks` 仍默认 `false`。
+- **默认工作目录**：`agent.cwd`（支持 `~`）；优先级 `工具参数 cwd > agent.cwd > process.cwd()`；`bash` 默认 cwd 与 `read` / `edit` 相对路径按它解析，denylist / `allowed_roots` 继续生效。
+- **Web 实时显示**：`EventStore` 通知时复制 `entries` 数组，`useMemo(..., [snapshot.entries])` 在流式增量到达时重算，不再需要刷新。
+
+### 31.7 已知限制（0.12.0）
+
+- `gateway.reload` 只承诺 plugins 扫描缓存与 `serve.allowed_origins`；其余配置必须重启，已安装插件与 active run 不会被替换。
+- 服务注册只覆盖当前平台与用户级；daemon 自身不做崩溃重启，需要常驻时交给服务管理器；PID 命令行不可读时按 stale 处理。
+- 自更新只覆盖 npm / bun 全局安装；源码模式只提示；不提供独立二进制或二进制自替换。
+- CLI 样式是可选的 TTY 装饰，不进入 `--json` / 数据输出；重定向时无 ANSI。
+- 0.12.0 的 Windows 全量门禁为 `3126 pass / 2 skip / 0 fail`；POSIX CI 实跑仍待完成。
+- 0.11.1 不单独发布，修复只随 0.12.0；0.12.0 仍未 tag / `npm publish` / 合并 `main`。

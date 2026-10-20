@@ -156,6 +156,22 @@ ui:
 - **Web 壳层**：`apps/web/src/i18n/` 覆盖导航、面包屑、Settings 六个 tab、Appearance 与通用按钮；locale 取 `localStorage['vessel.ui.language']` > `navigator.language`，可在 Settings → Appearance 切换并立即生效；未收录页面回退中文。Web 不是全量本地化。
 - **`ui.clearOnStart`**（默认 `true`）：TTY 进入 REPL 前写 `\x1b[2J\x1b[H` 清可视区并归位光标；设为 `false` 时保留终端历史；非 TTY / headless 不清屏。
 
+### 2.4 思考流与默认工作目录（0.11.1→0.12.0，ADR-077）
+
+```yaml
+ui:
+  showReasoning: false     # 默认 false；显式 true 才发布 reasoning_delta
+
+agent:
+  cwd: ~/project           # 默认工作目录；支持 ~
+```
+
+- **`ui.showReasoning`**（默认 `false`）：只有显式 `true` 时，provider 返回的 `reasoning_content` 才转为 `reasoning_delta` 并经 `llm.stream.chunk` 发布；TUI / Web 折叠展示「思考过程」。`trace.includeStreamChunks` 仍默认 `false`，思考增量默认不落 trace。`vessel config set ui.showReasoning <true|false>` 写入用户配置。
+- **`agent.cwd`**：`bash` 未显式传 `cwd` 时使用该目录；`read` / `edit` 的相对路径按它解析。支持 `~`，相对路径按进程 cwd 解析为绝对路径；未配置 / 空串等价于不设置。优先级固定为 **工具参数 `cwd` > `agent.cwd` > `process.cwd()`**。
+- **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。
+- **CLI 写配置**：`vessel config set agent.cwd <path>`；空值被拒绝。与 `ui.language` 一样只改用户配置、保留其它键、`0600` 原子写。
+- **权限时效**：Web 权限 / 提问弹窗的有效期由事件时间推导（`event.ts + 120s`），重放 / 刷新不会重新计时；服务端返回 `not_found` 时弹窗关闭并提示。core 的权限等待超时抛 `PermissionTimeoutError`（`permission_timeout`），run 失败，不让模型重试。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：
@@ -184,6 +200,9 @@ principal 映射见 [ADR-049](../adr/ADR-049-multi-tenant-isolation.md)。
 vessel config path [--json]
 vessel config init [--force] [--json]
 vessel config show [--sources] [--json] [--tenant <id>]
+vessel config set ui.language <zh-CN|en> [--json]
+vessel config set ui.showReasoning <true|false> [--json]
+vessel config set agent.cwd <path> [--json]
 vessel doctor [--json]
 ```
 
@@ -195,6 +214,23 @@ vessel doctor [--json]
   `tenant_overlay_keys`。**有校验错误时 exit 1**。
 - `config.get` / `config.sources`（RPC）与 `config show` 一样，永不输出解析后的
   密钥值，只输出 `"<set>"` / `"<unset>"`。
+
+### 4.1 Gateway 生命周期与配置生效（0.12）
+
+```bash
+vessel gateway start [--daemon] [--port <n>] [--host <h>] [--log <path>]
+vessel gateway stop [--timeout 10s]
+vessel gateway status [--json]
+vessel gateway restart [--daemon]
+vessel gateway reload [--scope config,plugins]
+vessel gateway install-service [--systemd|--launchd|--schtasks]
+vessel gateway uninstall-service
+```
+
+- `--serve` 是前台 `vessel gateway start` 的别名；常驻部署用 `start --daemon` 或 `install-service`。
+- 运行态以 `<dataDir>/gateway.pid`（`0600`）为准；daemon 日志在 `<dataDir>/logs/gateway.log`（`0600`）。`status --json` 只输出 JSON。
+- `reload` 只热更新 plugins 扫描缓存与 `serve.allowed_origins`；provider / model / agent / permission / TLS / token / port 的变更会出现在 `requires_restart`，必须重启。未知 scope 或读取失败返回非 0。
+- `install-service` / `uninstall-service` 只在显式执行时注册当前平台的**用户级**服务（systemd user / LaunchAgent / Windows 登录计划任务），不随启动自动修改本机。
 
 ## 5. 错误与排查
 
