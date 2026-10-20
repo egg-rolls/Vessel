@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { type LLMProvider, MemoryPluginHost, type Message } from '@vessel/core';
 import plugin from '../src/index';
-import { withTimeout } from '../src/timeout';
+import { DEFAULT_TIMEOUT_MS, resolveTimeoutMs, withTimeout } from '../src/timeout';
 
 const realFetch = globalThis.fetch;
 
@@ -250,5 +250,53 @@ describe('provider-openai 错误与超时', () => {
   it('withTimeout 在 timeoutMs <= 0 时返回原 provider', () => {
     const inner: LLMProvider = { chat: async () => ({ content: '', finish_reason: 'stop' }) };
     expect(withTimeout(inner, 0)).toBe(inner);
+    expect(withTimeout(inner, -1)).toBe(inner);
+  });
+
+  it('resolveTimeoutMs：缺省/非法回落到 120s，<=0 关闭', () => {
+    expect(DEFAULT_TIMEOUT_MS).toBe(120_000);
+    expect(resolveTimeoutMs(undefined)).toBe(120_000);
+    expect(resolveTimeoutMs(Number.NaN)).toBe(120_000);
+    expect(resolveTimeoutMs('25')).toBe(120_000);
+    expect(resolveTimeoutMs(0)).toBe(0);
+    expect(resolveTimeoutMs(-1)).toBe(0);
+    expect(resolveTimeoutMs(25)).toBe(25);
+  });
+
+  it('超时抛出可识别的 ProviderTimeoutError，并用合并信号中断底层', async () => {
+    let received: AbortSignal | undefined;
+    const inner: LLMProvider = {
+      chat(req) {
+        received = req.signal;
+        return new Promise<never>((_resolve, reject) => {
+          req.signal?.addEventListener('abort', () => reject(req.signal?.reason));
+        });
+      },
+    };
+    const wrapped = withTimeout(inner, 10);
+
+    await expect(wrapped.chat({ messages: [], model: 'm' })).rejects.toMatchObject({
+      name: 'ProviderTimeoutError',
+      code: 'provider_timeout',
+      timeoutMs: 10,
+    });
+    expect(received?.aborted).toBe(true);
+  });
+
+  it('调用方 abort 透传原错误，不误报为超时', async () => {
+    const controller = new AbortController();
+    const inner: LLMProvider = {
+      chat(req) {
+        return new Promise<never>((_resolve, reject) => {
+          req.signal?.addEventListener('abort', () => reject(req.signal?.reason));
+        });
+      },
+    };
+    const wrapped = withTimeout(inner, 10_000);
+    const pending = wrapped.chat({ messages: [], model: 'm', signal: controller.signal });
+    const reason = new Error('user cancelled');
+    controller.abort(reason);
+
+    await expect(pending).rejects.toBe(reason);
   });
 });

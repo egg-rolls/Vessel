@@ -19,6 +19,7 @@ import {
   McpTransportError,
   parseJsonRpcLine,
 } from './json-rpc.js';
+import { warnMcp } from './logging.js';
 import type { McpServerConfig, McpTransport, RequestOptions } from './types.js';
 
 /** DELETE 终止会话的预算 */
@@ -354,9 +355,9 @@ export class HttpTransport implements McpTransport {
         return { matched: true, result };
       }
       if (isServerRequest(message)) {
-        console.warn(
-          `MCP server "${this.config.name}" sent an unsupported request: ${message.method}`,
-        );
+        warnMcp(this.config.name, 'MCP server sent an unsupported request', {
+          method: message.method,
+        });
       }
     }
     return { matched: false };

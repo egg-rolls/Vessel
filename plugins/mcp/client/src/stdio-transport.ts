@@ -15,6 +15,7 @@ import {
   McpTransportError,
   parseJsonRpcLine,
 } from './json-rpc.js';
+import { warnMcp } from './logging.js';
 import type { McpServerConfig, McpTransport, RequestOptions } from './types.js';
 
 /** 单行上限：防止坏 server 把内存吃光 */
@@ -289,7 +290,7 @@ export class StdioTransport implements McpTransport {
   private handleLine(line: string): void {
     const parsed = parseJsonRpcLine(line);
     if (parsed === undefined) {
-      console.warn(`MCP server "${this.config.name}" wrote a non-JSON line to stdout; ignoring`);
+      warnMcp(this.config.name, 'MCP server wrote a non-JSON line to stdout; ignoring');
       return;
     }
     if (Array.isArray(parsed)) {
@@ -302,12 +303,12 @@ export class StdioTransport implements McpTransport {
   private handleMessage(message: unknown): void {
     if (isResponse(message)) {
       if (typeof message.id !== 'number') {
-        console.warn(`MCP server "${this.config.name}" returned a response with unknown id`);
+        warnMcp(this.config.name, 'MCP server returned a response with a non-numeric id');
         return;
       }
       const pending = this.pending.get(message.id);
       if (!pending) {
-        console.warn(`MCP server "${this.config.name}" returned an unknown response id`);
+        warnMcp(this.config.name, 'MCP server returned an unknown response id');
         return;
       }
       this.pending.delete(message.id);
@@ -319,9 +320,9 @@ export class StdioTransport implements McpTransport {
       return;
     }
     if (isServerRequest(message)) {
-      console.warn(
-        `MCP server "${this.config.name}" sent an unsupported request: ${message.method}`,
-      );
+      warnMcp(this.config.name, 'MCP server sent an unsupported request', {
+        method: message.method,
+      });
       return;
     }
     // 通知（无 id）忽略

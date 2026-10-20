@@ -141,6 +141,73 @@ describe('withRetry', () => {
     await expect(off.chat({ messages: [], model: 'm' })).rejects.toThrow(/reset/);
     expect(calls()).toBe(1);
   });
+
+  it('onRetry 记录每次重试的 attempt / delay / status', async () => {
+    const { provider } = sequencedProvider([
+      new Error('OpenAI API error: 429 - slow down'),
+      new Error('OpenAI API error: 503 - busy'),
+    ]);
+    const events: Array<{
+      attempt: number;
+      delayMs: number;
+      status?: number;
+      errorName: string;
+      provider?: string;
+    }> = [];
+
+    const wrapped = withRetry(provider, {
+      maxRetries: 3,
+      baseDelayMs: 5,
+      jitter: 0,
+      sleep: async () => {},
+      provider: 'openai',
+      onRetry: (event) => events.push(event),
+    });
+
+    await wrapped.chat({ messages: [], model: 'm' });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      attempt: 1,
+      delayMs: 5,
+      status: 429,
+      errorName: 'Error',
+      provider: 'openai',
+    });
+    expect(events[1]).toMatchObject({ attempt: 2, delayMs: 10, status: 503 });
+  });
+
+  it('未注入 onRetry 时写结构化 stderr，且不含错误正文', async () => {
+    const { provider } = sequencedProvider([
+      new Error('OpenAI API error: 429 - slow down sk-abcdefghijklmnop'),
+    ]);
+    const lines: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      lines.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      const wrapped = withRetry(provider, {
+        maxRetries: 1,
+        baseDelayMs: 1,
+        jitter: 0,
+        sleep: async () => {},
+      });
+      await wrapped.chat({ messages: [], model: 'm' });
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const line = lines.find((entry) => entry.includes('provider retry'));
+    if (line === undefined) throw new Error('retry log line not found');
+    expect(JSON.parse(line)).toMatchObject({
+      level: 'warn',
+      message: 'provider retry',
+      fields: { attempt: 1, status: 429, error_name: 'Error' },
+    });
+    expect(line).not.toContain('abcdefghijklmnop');
+  });
 });
 
 describe('provider-openai 插件装配重试', () => {
@@ -176,5 +243,32 @@ describe('provider-openai 插件装配重试', () => {
       provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'm' }),
     ).resolves.toMatchObject({ content: 'ok' });
     expect(requests).toBe(3);
+  });
+
+  it('程序化 config.onRetry 注入到重试层，并带 provider 名', async () => {
+    let requests = 0;
+    globalThis.fetch = (async () => {
+      requests += 1;
+      if (requests === 1) return new Response('busy', { status: 503 });
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: 'ok' }, finish_reason: 'stop' }] }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    }) as unknown as typeof fetch;
+
+    const events: Array<Record<string, unknown>> = [];
+    const host = installWithConfig({
+      timeout_ms: 0,
+      max_retries: 2,
+      retry_base_delay_ms: 1,
+      retry_jitter: 0,
+      onRetry: (event: Record<string, unknown>) => events.push(event),
+    });
+    const provider = host.getProvider('openai')?.({ api_key: 'k', timeout_ms: 0 });
+    if (!provider) throw new Error('provider not registered');
+
+    await provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'm' });
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ attempt: 1, status: 503, provider: 'openai' });
   });
 });
