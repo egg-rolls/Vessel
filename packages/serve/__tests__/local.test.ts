@@ -78,6 +78,6 @@ describe('createLocalRpcDispatcher', () => {
       user: '/home/u/.vessel/config.yaml',
       project: '/repo/vessel.yaml',
     });
-    expect(result.config).toEqual({ provider: { apiKey: '***' } });
+    expect(result.config).toEqual({ provider: { apiKey: '<set>' } });
   });
 });
