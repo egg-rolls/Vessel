@@ -72,11 +72,15 @@ export function createRunStore(
 }
 
 /** 关闭 store；失败不阻断退出 */
-export async function closeRunStore(store: RunStore | undefined): Promise<void> {
+export async function closeRunStore(
+  store: RunStore | undefined,
+  onError?: (error: unknown) => void,
+): Promise<void> {
   if (!store?.close) return;
   try {
     await store.close();
-  } catch {
-    // best-effort：关闭失败不影响进程退出
+  } catch (error) {
+    // best-effort：关闭失败不影响进程退出；调用方用它发 shutdown.failed。
+    onError?.(error);
   }
 }

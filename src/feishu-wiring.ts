@@ -199,11 +199,15 @@ export async function createFeishuFromConfig(
 }
 
 /** 幂等 stop（best-effort；shutdown 第一顺位） */
-export async function stopFeishuChannel(channel: FeishuChannelLike | undefined): Promise<void> {
+export async function stopFeishuChannel(
+  channel: FeishuChannelLike | undefined,
+  onError?: (error: unknown) => void,
+): Promise<void> {
   if (!channel) return;
   try {
     await channel.stop();
-  } catch {
-    // 关闭失败不阻断退出
+  } catch (error) {
+    // 关闭失败不阻断退出；调用方（bundle）用它发 shutdown.failed。
+    onError?.(error);
   }
 }

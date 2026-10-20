@@ -6,6 +6,7 @@
  */
 
 import { loadConfig } from '../packages/config/src/index';
+import { t } from './i18n';
 import { checkForUpdate } from './update/check';
 import type { UpdateChannel } from './update/manifest';
 import { readPackageVersion } from './version';
@@ -23,7 +24,7 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
 
   const channel = resolveChannel(options.channel, config.update?.channel);
   if (!channel) {
-    console.error('Invalid update channel. Use "latest" or "beta" (--channel or VESSEL_CHANNEL).');
+    console.error(t('update.invalidChannel'));
     return 2;
   }
 
@@ -52,18 +53,22 @@ export async function runUpdateCommand(options: UpdateCommandOptions): Promise<n
         ),
       );
     } else if (result.upToDate) {
-      console.log(`Vessel is up to date (${current}, channel: ${result.channel}).`);
+      console.log(t('update.upToDate', { current, channel: result.channel }));
     } else {
-      console.log(`Update available: ${current} -> ${result.latest} (channel: ${result.channel})`);
-      console.log(result.installHint);
       console.log(
-        'Self-update is disabled in 0.1.0; install the new version with the command above.',
+        t('update.available', {
+          current,
+          latest: result.latest,
+          channel: result.channel,
+        }),
       );
+      console.log(result.installHint);
+      console.log(t('update.selfDisabled'));
     }
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Update check failed: ${message}`);
+    console.error(t('update.failed', { detail: message }));
     return 1;
   }
 }

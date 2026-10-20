@@ -13,6 +13,7 @@ import { configInitCommand, configPathCommand, configShowCommand } from '../conf
 import { resolveDataDir } from '../data-paths';
 import { doctorCommand } from '../doctor-command';
 import { runEvalCommand } from '../eval-command';
+import { applyLocale } from '../i18n';
 import { migrateCommand } from '../migrate-command';
 import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
@@ -43,6 +44,19 @@ function printCommandResult(result: { exitCode: number; stdout: string; stderr: 
   if (result.stdout !== '') console.log(result.stdout);
   if (result.stderr !== '') console.error(result.stderr);
   return result.exitCode;
+}
+
+/**
+ * 一次性命令也尊重 `config.ui.language`（0.10 R2-20）：
+ * 配置读取失败时保持入口的 env locale，不阻断命令。
+ */
+export async function applyCommandLocale(): Promise<void> {
+  try {
+    const { config } = await loadConfig();
+    applyLocale((config.ui as { language?: string } | undefined)?.language);
+  } catch {
+    // 配置不可读：沿用 VESSEL_LANG / LANG / LC_ALL
+  }
 }
 
 /** tenant 命令的数据根（本地命令，不 bootstrap） */

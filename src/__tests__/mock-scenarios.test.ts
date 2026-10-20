@@ -87,6 +87,7 @@ it('unknown scenario falls back to echo but warns once on stderr', async () => {
   const { stdout, stderr, exitCode } = await runCli(['--run', 'hi'], {
     VESSEL_MOCK: '1',
     VESSEL_MOCK_SCENARIO: 'bogus',
+    VESSEL_LANG: 'en',
   });
 
   expect(exitCode).toBe(0);
@@ -106,7 +107,10 @@ it('default mock run stays silent and echoes when no scenario is set', async () 
 });
 
 it('demo refuses a non-TTY stdin instead of starting a dead REPL', async () => {
-  const { stderr, exitCode } = await runCli(['demo'], { VESSEL_MOCK_SCENARIO: '' });
+  const { stderr, exitCode } = await runCli(['demo'], {
+    VESSEL_MOCK_SCENARIO: '',
+    VESSEL_LANG: 'en',
+  });
 
   expect(exitCode).toBe(1);
   expect(stderr).toContain('interactive terminal');

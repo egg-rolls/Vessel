@@ -20,6 +20,7 @@ import {
 } from '../packages/config/src/index';
 import { formatConfigError, formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
+import { t } from './i18n';
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -127,7 +128,7 @@ export async function configInitCommand(
     return {
       exitCode: 1,
       stdout: '',
-      stderr: `config already exists at ${target}; use --force to overwrite`,
+      stderr: t('config.init.exists', { path: target }),
     };
   }
 
@@ -142,10 +143,7 @@ export async function configInitCommand(
   }
   return {
     exitCode: 0,
-    stdout: [
-      `created ${target}`,
-      'next: run `vessel` to configure your API key, or `vessel doctor` to verify the setup.',
-    ].join('\n'),
+    stdout: [`created ${target}`, t('config.init.next')].join('\n'),
     stderr: '',
   };
 }

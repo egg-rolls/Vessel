@@ -28,9 +28,11 @@ import {
   createDefaultTraceRedactor,
   type EventStream,
   type LLMProvider,
+  type Logger,
   MemoryContextManager,
   MemoryPluginHost,
   type Message,
+  noopLogger,
   type Plugin,
   type PluginHost,
   type RunnableAgent,
@@ -80,6 +82,7 @@ import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionBackend } from './session-factory';
+import { reportShutdownFailure } from './shutdown-report';
 import { acquireTenantLock, type TenantLock } from './tenant-lock';
 import {
   composeTraceRedactors,
@@ -130,6 +133,8 @@ export interface BuildTenantRuntimeOptions {
   traceFactory?: TraceRecorderFactory;
   /** 测试注入的 ext redactor */
   redactor?: TraceRedactor;
+  /** 诊断 logger（0.10 R2-14）；缺省 noop，CLI / serve 注入 stderr logger */
+  logger?: Logger;
   clock?: () => number;
   loadMcpModule?: () => Promise<unknown | null>;
   loadWorkflowModule?: () => Promise<unknown | null>;
@@ -284,6 +289,58 @@ export function buildDelegateTaskOptions(
   };
 }
 
+/** `drainActiveRuns` 结果：无 run / 已终态 / 超时 / 运行时无 interrupt */
+export type DrainOutcome = 'idle' | 'interrupted' | 'timeout' | 'unsupported';
+
+export interface DrainActiveRunsOptions {
+  /** active run id 集合；run 终态事件由订阅方删除 */
+  activeRuns: Set<string>;
+  /** legacy AgentRuntime.interrupt；host 模式没有 */
+  interrupt?: (reason: 'shutdown') => void;
+  logger: Logger;
+  tenantId: string;
+  timeoutMs?: number;
+  /** 测试注入：等待下一次轮询 */
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * 0.10 R2-18：关闭前的软中断。调用方先 `interrupt('shutdown')`（checkpoint 落
+ * interrupted，可 `--resume-run`），再限时等待 active run 从集合中消失。
+ * 超时只 warning，不阻断关闭。
+ */
+export async function drainActiveRuns(options: DrainActiveRunsOptions): Promise<DrainOutcome> {
+  if (options.activeRuns.size === 0) return 'idle';
+  if (!options.interrupt) {
+    options.logger.warn('shutdown drain: no interrupt hook for active runs', {
+      tenant_id: options.tenantId,
+      runs: options.activeRuns.size,
+    });
+    return 'unsupported';
+  }
+
+  options.interrupt('shutdown');
+
+  const timeoutMs = options.timeoutMs ?? 5000;
+  const sleep =
+    options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = options.now ?? Date.now;
+  const deadline = now() + timeoutMs;
+
+  while (options.activeRuns.size > 0 && now() < deadline) {
+    await sleep(25);
+  }
+  if (options.activeRuns.size > 0) {
+    options.logger.warn('shutdown drain timed out', {
+      tenant_id: options.tenantId,
+      runs: [...options.activeRuns],
+    });
+    return 'timeout';
+  }
+  return 'interrupted';
+}
+
 /**
  * 构造一个 tenant 的独立执行面。
  * 失败时释放本函数获取的锁；调用方负责释放传入的锁。
@@ -295,6 +352,7 @@ export async function buildTenantRuntime(
   const useMock = options.useMock ?? false;
   const headless = options.headless ?? false;
   const loader = options.loader ?? new PluginLoader();
+  const logger = options.logger ?? noopLogger;
 
   let ownedLock: TenantLock | undefined;
   if (options.lock === undefined && options.acquireLock === true) {
@@ -329,6 +387,25 @@ export async function buildTenantRuntime(
     const summarizer = createContextSummarizer(provider, providerModel);
     const context = new MemoryContextManager(contextConfigFor(config, summarizer));
     const events = createEventStream(config);
+
+    // 0.10 R2-18：只跟踪真实在跑的 run（包装 legacy `AgentRuntime.run/resume`），
+    // 不从事件推断——测试 / gateway 也会发布合成的 run.started，按事件跟踪会让
+    // shutdown 白等 5s。host 模式没有可中断的 handle，不在此集合内。
+    const activeRuns = new Set<string>();
+    let activeRunSeq = 0;
+    const trackActive = <T>(promise: Promise<T>): Promise<T> => {
+      activeRunSeq += 1;
+      const token = `inflight-${activeRunSeq}`;
+      activeRuns.add(token);
+      void promise
+        .finally(() => {
+          activeRuns.delete(token);
+        })
+        .catch(() => {
+          // 原 promise 的拒绝由调用方处理；这里只为清理跟踪标记
+        });
+      return promise;
+    };
 
     // 本 tenant 事件 → gateway 共享流（事件带 tenant_id；SSE/WS 过滤靠它）。
     const unsubShared = options.sharedEvents
@@ -604,9 +681,18 @@ export async function buildTenantRuntime(
         permission,
         ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
         ...(runStore ? { runStore } : {}),
+        logger,
       } as Parameters<typeof AgentRuntime.create>[0] & {
         pluginConfigs?: Record<string, Record<string, unknown>>;
       });
+      // 0.10 R2-18：包装 run/resume 以精确跟踪在跑 run（shutdown drain 用）。
+      const originalRun = agentRuntime.run.bind(agentRuntime);
+      agentRuntime.run = (input, sessionId, opts) =>
+        trackActive(originalRun(input, sessionId, opts));
+      const originalResume = agentRuntime.resume?.bind(agentRuntime);
+      if (originalResume) {
+        agentRuntime.resume = (runId, opts) => trackActive(originalResume(runId, opts));
+      }
       runtime = agentRuntime;
       selectedPluginHost = agentRuntime.pluginHost;
     }
@@ -701,9 +787,49 @@ export async function buildTenantRuntime(
     const metrics = createMetricsCollector(events, config, options.metricsFactory);
 
     let closed = false;
+    const SHUTDOWN_DRAIN_TIMEOUT_MS = 5000;
+
+    /** 关闭失败统一出口：logger.error + `shutdown.failed`（不阻断后续步骤） */
+    const report = (step: string, error: unknown): void => {
+      reportShutdownFailure({
+        events,
+        logger,
+        step,
+        error,
+        tenantId,
+        ...(options.clock ? { now: options.clock } : {}),
+      });
+    };
+
+    /**
+     * 0.10 R2-18：有在跑 run 时先 `interrupt('shutdown')`（checkpoint 落 interrupted，
+     * 可 `--resume-run`），限时等待终态；超时记录 warning 后继续关闭。
+     * host 模式 core 尚无公开 interrupt，只有 host.close() 的取消语义。
+     */
+    const drain = async (): Promise<void> => {
+      const interrupt = (agentRuntime as { interrupt?: (reason?: 'shutdown') => void } | undefined)
+        ?.interrupt;
+      try {
+        await drainActiveRuns({
+          activeRuns,
+          logger,
+          tenantId,
+          timeoutMs: SHUTDOWN_DRAIN_TIMEOUT_MS,
+          ...(typeof interrupt === 'function'
+            ? { interrupt: (reason: 'shutdown') => interrupt.call(agentRuntime, reason) }
+            : {}),
+        });
+      } catch (error) {
+        report('runtime.interrupt', error);
+      }
+    };
+
     const close = async (): Promise<void> => {
       if (closed) return;
       closed = true;
+
+      // 先中断 / 等待在跑 run，再进入关闭顺序。
+      await drain();
 
       // 关闭顺序：feishu → workflow → metrics → MCP → host/runtime → trace
       // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
@@ -711,15 +837,13 @@ export async function buildTenantRuntime(
       // `AgentRuntime.dispose()` 触达不到；它们的 dispose() 只是 close() 的
       // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
       // 而改安装顺序（DECISION-019 A）。
-      await stopFeishuChannel(feishuChannel);
+      await stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error));
 
       if (workflowEngine) {
         try {
           await workflowEngine.close();
         } catch (error) {
-          console.warn(
-            `⚠ Failed to close workflow engine: ${error instanceof Error ? error.message : error}`,
-          );
+          report('workflow.close', error);
         }
       }
 
@@ -729,18 +853,14 @@ export async function buildTenantRuntime(
         try {
           await mcpPlugin.close();
         } catch (error) {
-          console.warn(
-            `⚠ Failed to close MCP client: ${error instanceof Error ? error.message : error}`,
-          );
+          report('mcp.close', error);
         }
       }
 
       try {
         if (host) await host.close();
       } catch (error) {
-        console.warn(
-          `⚠ Failed to close runtime host: ${error instanceof Error ? error.message : error}`,
-        );
+        report('host.close', error);
       }
 
       // 0.9：AgentRuntime.dispose() 返回 Promise（逆序调插件 dispose）；
@@ -748,40 +868,34 @@ export async function buildTenantRuntime(
       try {
         await activeRuntime.dispose();
       } catch (error) {
-        console.warn(
-          `⚠ Failed to dispose runtime: ${error instanceof Error ? error.message : error}`,
-        );
+        report('runtime.dispose', error);
       }
 
       try {
         if (internalTeamHost && internalTeamHost !== host) await internalTeamHost.close();
-      } catch {
-        // best-effort
+      } catch (error) {
+        report('teamHost.close', error);
       }
 
       if (trace) {
         try {
           await trace.flush();
         } catch (error) {
-          console.warn(
-            `⚠ Failed to flush trace: ${error instanceof Error ? error.message : error}`,
-          );
+          report('trace.flush', error);
         }
         try {
           await trace.close();
         } catch (error) {
-          console.warn(
-            `⚠ Failed to close trace: ${error instanceof Error ? error.message : error}`,
-          );
+          report('trace.close', error);
         }
       }
 
-      await closeRunStore(runStore);
+      await closeRunStore(runStore, (error) => report('runStore.close', error));
 
       try {
         session.close?.();
-      } catch {
-        // best-effort
+      } catch (error) {
+        report('session.close', error);
       }
 
       unsubHostBridge?.();
@@ -791,9 +905,7 @@ export async function buildTenantRuntime(
         try {
           await ownedLock.release();
         } catch (error) {
-          console.warn(
-            `⚠ Failed to release tenant lock: ${error instanceof Error ? error.message : error}`,
-          );
+          report('tenantLock.release', error);
         }
       }
     };
@@ -886,6 +998,8 @@ export interface TenantRuntimeFactoryOptions {
   metricsFactory?: MetricsFactory;
   traceFactory?: TraceRecorderFactory;
   redactor?: TraceRedactor;
+  /** 诊断 logger（0.10 R2-14）；所有 tenant 共用同一 stderr sink */
+  logger?: Logger;
   clock?: () => number;
   /** 默认 true：serve 为每个 active tenant 持锁 */
   acquireLocks?: boolean;
@@ -1040,6 +1154,7 @@ export async function createTenantRuntimeFactory(
         ...(options.metricsFactory ? { metricsFactory: options.metricsFactory } : {}),
         ...(options.traceFactory ? { traceFactory: options.traceFactory } : {}),
         ...(options.redactor ? { redactor: options.redactor } : {}),
+        ...(options.logger ? { logger: options.logger } : {}),
         ...(options.clock ? { clock: options.clock } : {}),
         ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
         ...(options.loadWorkflowModule ? { loadWorkflowModule: options.loadWorkflowModule } : {}),

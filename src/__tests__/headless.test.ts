@@ -82,7 +82,7 @@ it('headless 失败时 exit 非零', async () => {
   // 不给 mock、不给 api key、headless -> 应 fail-fast 退出
   const { exitCode, stderr } = await runCli(['--run', 'hi'], { VESSEL_MOCK: '' });
   expect(exitCode).not.toBe(0);
-  expect(stderr).toContain('API key');
+  expect(stderr).toContain('API Key');
 });
 
 it('headless --run（无参）：从 stdin 读输入（--pipe 已折叠进 --run）', async () => {
@@ -299,7 +299,11 @@ it('--run @missing.txt 报错 exit 1', async () => {
 });
 
 it('--serve 非 TTY 且无 Key 时快速失败，不进首启向导', async () => {
-  const { exitCode, stderr } = await runCli(['--serve', '18643'], { VESSEL_MOCK: '' }, ' ');
+  const { exitCode, stderr } = await runCli(
+    ['--serve', '18643'],
+    { VESSEL_MOCK: '', VESSEL_LANG: 'en' },
+    ' ',
+  );
   expect(exitCode).toBe(1);
   expect(stderr).toContain('No API key configured');
 });

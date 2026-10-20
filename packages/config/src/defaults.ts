@@ -160,6 +160,7 @@ export const DEFAULT_TRACE_OPTIONS: Required<TraceConfig> = {
   retentionDays: 30,
   maxRuns: 1000,
   maxBytes: 1073741824,
+  includeStreamChunks: false,
 };
 
 /** 安全默认值 */
