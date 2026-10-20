@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@vessel/config": "0.9.0",
     "@vessel/core": "0.9.0"
   },
   "devDependencies": {

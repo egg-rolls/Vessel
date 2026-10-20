@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { redactSourcePaths } from '@vessel/config';
 import { MemoryEventStream } from '@vessel/core';
 import type { Gateway } from '../src/gateway';
-import { redactSourcePaths } from '../src/gateway/redact-sources';
 import type { ConfigSnapshotLike } from '../src/tenant';
 import { createGateway } from './helpers';
 

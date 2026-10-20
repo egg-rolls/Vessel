@@ -4,6 +4,7 @@
  * @module @vessel/serve
  */
 
+import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel/config';
 import type { PluginHost } from '@vessel/core';
 import type { NodeInfo, ProtocolInfo, ToolInfo } from '../../protocol.js';
 import {
@@ -14,7 +15,6 @@ import {
 } from '../../rpc.js';
 import type { TeamGatewayOptions } from '../../team.js';
 import type { ConfigGatewayOptionsLike } from '../../tenant.js';
-import { redactConfigServeTokens, redactSourcePaths } from '../redact-sources.js';
 import { tenantParamSchema } from './common.js';
 import { stringListSchema } from './schemas.js';
 
@@ -236,8 +236,9 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         const snapshot = await configControl().snapshot(ctx.tenantId);
         return {
           schema_version: snapshot.schema_version,
-          // DECISION-020 §R1.1：防御性二次脱敏 serve.tokens（asm snapshot 已先脱敏）。
-          config: redactConfigServeTokens(snapshot.config),
+          // DECISION-020 §R1.1：防御性二次脱敏（asm snapshot 已先脱敏）；
+          // 复用 @vessel/config#redactConfig，不在 serve 维护副本。
+          config: redactConfig(snapshot.config as VesselConfig),
           // A-5 §12.2：TUI 需要展示 user/project 路径
           paths: snapshot.paths ?? { user: '', project: '' },
           tenant_id: snapshot.tenant_id ?? ctx.tenantId,

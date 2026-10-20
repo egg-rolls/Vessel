@@ -201,7 +201,7 @@ describe('canonical methods', () => {
     const getResult = await rpc(gateway, envelope('1', 'config.get'), 't');
     expect(getResult.body.ok).toBe(true);
     expect((getResult.body.result as { config: unknown }).config).toEqual({
-      provider: { apiKey: '***' },
+      provider: { apiKey: '<set>' },
     });
     const sourcesResult = await rpc(gateway, envelope('2', 'config.sources'), 't');
     expect((sourcesResult.body.result as { sources: unknown }).sources).toEqual({
