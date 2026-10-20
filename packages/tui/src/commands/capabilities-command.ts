@@ -6,6 +6,7 @@
  * 未注入 RpcClient（第三方嵌入）时给出明确提示。
  */
 
+import { t } from '../i18n/index.js';
 import type {
   CapabilityManifestLike,
   CapabilityMethodLike,
@@ -343,7 +344,7 @@ export async function runCapabilitiesCommand(
 export function capabilitiesCommand(): CommandEntry {
   return {
     name: 'capabilities',
-    description: 'Show RPC capability manifest (methods / tools / plugins)',
+    description: t('command.capabilities.description'),
     usage: '/capabilities [methods|tools|plugins]',
     category: 'inspect',
     keywords: ['manifest', 'methods', 'tools', 'plugins'],

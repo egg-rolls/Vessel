@@ -6,6 +6,7 @@
  * 数据：`tenants.list` / `tenants.get`（E19 消费端）；当前 tenant 来自 asm 注入的 ctx.tenant。
  */
 
+import { t } from '../i18n/index.js';
 import type { ReplContext, TenantQuotaLike, TenantSummaryLike } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -393,7 +394,7 @@ export async function runTenantCommand(args: string[], ctx: ReplContext): Promis
 export function tenantCommand(): CommandEntry {
   return {
     name: 'tenant',
-    description: 'Show current tenant, list tenants, or print restart guidance',
+    description: t('command.tenant.description'),
     usage: '/tenant [current|list|use <id>]',
     category: 'config',
     keywords: ['tenant', 'scope'],

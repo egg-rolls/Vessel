@@ -7,6 +7,7 @@
  * 不提供修改入口：写配置走 `vessel config init` / 编辑 YAML。
  */
 
+import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError, redactForDisplay } from '../rpc.js';
 import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -534,7 +535,7 @@ export async function runConfigCommand(args: string[], ctx: ReplContext): Promis
 export function configCommand(): CommandEntry {
   return {
     name: 'config',
-    description: 'Show config (masked) and YAML config paths',
+    description: t('command.config.description'),
     usage: '/config [show|path] [--sources] [--json]',
     category: 'config',
     keywords: ['yaml', 'provider', 'sources'],

@@ -9,6 +9,7 @@
  */
 
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
+import { t } from '../i18n/index.js';
 import type { MetricsSnapshotLike, ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { formatRelativeTime } from '../utils/time.js';
@@ -295,7 +296,7 @@ export async function runMetricsCommand(args: string[], ctx: ReplContext): Promi
 export function metricsCommand(): CommandEntry {
   return {
     name: 'metrics',
-    description: 'Show runtime metrics (live or rebuilt from trace)',
+    description: t('command.metrics.description'),
     usage: '/metrics [--source live|trace] [--json]',
     category: 'inspect',
     keywords: ['tokens', 'usage', 'stats'],

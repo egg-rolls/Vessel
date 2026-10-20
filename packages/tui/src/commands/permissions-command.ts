@@ -6,6 +6,7 @@
  * 未注入时只读展示 config；明确提示重启后生效。
  */
 
+import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import type { CommandEntry, CommandResult } from './commands.js';
@@ -107,7 +108,7 @@ export async function runPermissionsCommand(
 export function permissionsCommand(): CommandEntry {
   return {
     name: 'permissions',
-    description: '查看/编辑持久化免确认工具（permission.auto_approve）',
+    description: t('command.permissions.description'),
     usage: '/permissions [list|add <tool>|remove <tool>]',
     category: 'inspect',
     keywords: ['permissions', 'auto approve', 'always', 'config'],

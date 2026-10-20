@@ -10,6 +10,7 @@
  * 查询失败静默降级，不阻塞、不打断启动。
  */
 
+import { t } from '../i18n/index.js';
 import type {
   DurableRunSummary,
   FeishuStatusLike,
@@ -41,23 +42,31 @@ export function buildStartupNotice(input: StartupNoticeInput): string | null {
   const hints: string[] = [];
 
   if (input.tenantId && input.tenantId !== 'default') {
-    segments.push(`Tenant: ${input.tenantId}`);
+    segments.push(t('startup.notice.tenant', { id: input.tenantId }));
     hints.push('/tenant');
   }
   if (mcpCount > 0) {
-    segments.push(`MCP: ${mcpCount} ${mcpCount === 1 ? 'server' : 'servers'}`);
+    segments.push(
+      t(mcpCount === 1 ? 'startup.notice.mcpOne' : 'startup.notice.mcpOther', { count: mcpCount }),
+    );
     hints.push('/mcp');
   }
   if (runCount > 0) {
-    segments.push(`${runCount} interrupted ${runCount === 1 ? 'run' : 'runs'}`);
+    segments.push(
+      t(runCount === 1 ? 'startup.notice.runOne' : 'startup.notice.runOther', { count: runCount }),
+    );
     hints.push('/runs');
   }
   if (workflowCount > 0) {
-    segments.push(`${workflowCount} interrupted workflow ${workflowCount === 1 ? 'run' : 'runs'}`);
+    segments.push(
+      t(workflowCount === 1 ? 'startup.notice.workflowOne' : 'startup.notice.workflowOther', {
+        count: workflowCount,
+      }),
+    );
     hints.push('/workflows');
   }
   if (input.feishu?.connected) {
-    segments.push('Feishu connected');
+    segments.push(t('startup.notice.feishu'));
     hints.push('/feishu');
   }
 

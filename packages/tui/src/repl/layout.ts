@@ -9,6 +9,8 @@
  * 否则 24 行终端上的 overlay 会把输入行/状态栏挤出屏幕。
  */
 
+import { t } from '../i18n/index.js';
+
 export type LiveMode = 'normal' | 'compact' | 'minimal' | 'hidden';
 
 /** 视图行容量按 picker 或通用命令视图分别计算（当前 chrome 相同，保留区分） */
@@ -27,9 +29,6 @@ export interface LiveLayout {
   hintRows: number;
   notice: string | null;
 }
-
-const LOW_HEIGHT_NOTICE =
-  'Terminal height is low (<15 rows); live output is hidden. Resize to see streaming output.';
 
 /** 状态栏固定占 1 行；视图/picker 打开时输入行不渲染，因此不扣输入行 */
 export const STATUS_BAR_ROWS = 1;
@@ -154,6 +153,6 @@ export function computeLiveLayout(rows: number, queueRows = 0): LiveLayout {
     pickerMaxRows: viewCapacity(height, mode, 'picker'),
     viewMaxRows: viewCapacity(height, mode, 'view'),
     hintRows,
-    notice: low ? LOW_HEIGHT_NOTICE : null,
+    notice: low ? t('layout.lowHeight') : null,
   };
 }

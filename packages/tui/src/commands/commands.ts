@@ -23,6 +23,7 @@
  * state 应用集中在 CommandRegistry.execute()；output 由调用方消费（simple 模式打印、Ink 模式入历史）。
  */
 
+import { t } from '../i18n/index.js';
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -311,7 +312,7 @@ function renderHelp(reg: CommandRegistry, ctx: ReplContext): string {
 function resumeCommand(): CommandEntry {
   return {
     name: 'resume',
-    description: 'Resume a session (picker: r rename, x delete)',
+    description: t('command.resume.description'),
     usage: '/resume [number|id|prefix|title #N|delete <id> --yes|rename <id> <title>]',
     category: 'session',
     keywords: ['session', 'switch', 'load', 'history'],
@@ -584,7 +585,7 @@ export async function doResume(
 function newCommand(): CommandEntry {
   return {
     name: 'new',
-    description: '开启新会话（丢弃当前空会话）',
+    description: t('command.new.description'),
     usage: '/new',
     category: 'session',
     keywords: ['new', 'session', 'create'],
@@ -623,7 +624,10 @@ function formatHistoryMessage(
   if (msg.role === 'user') {
     const fileMatch = msg.content.match(/^<file path="([^"]+)">/);
     if (fileMatch?.[1]) {
-      return [`[User · file] ${fileMatch[1]}`, `(attached file, ${msg.content.length} chars)`];
+      return [
+        t('history.userFile', { path: fileMatch[1] }),
+        t('history.attachedFile', { chars: msg.content.length }),
+      ];
     }
   }
 
@@ -637,12 +641,16 @@ function formatHistoryMessage(
     if (msg.content) lines.push(msg.content);
   } else {
     const omitted = msg.content.length - MAX_HISTORY_MESSAGE_CHARS;
-    lines.push(`${msg.content.slice(0, MAX_HISTORY_MESSAGE_CHARS)}\n… (+${omitted} chars)`);
+    lines.push(
+      `${msg.content.slice(0, MAX_HISTORY_MESSAGE_CHARS)}\n${t('history.omitted', {
+        chars: omitted,
+      })}`,
+    );
   }
 
   const toolCalls = summarizeToolCalls(msg);
-  if (toolCalls) lines.push(`→ tool_calls: ${toolCalls}`);
-  if (msg.role === 'tool' && msg.name) lines.push(`(tool: ${msg.name})`);
+  if (toolCalls) lines.push(t('history.toolCalls', { calls: toolCalls }));
+  if (msg.role === 'tool' && msg.name) lines.push(t('history.toolLabel', { name: msg.name }));
   return lines.length > 0 ? lines : [''];
 }
 
@@ -659,8 +667,6 @@ export interface HistoryOptions {
 const HISTORY_LIMIT_MAX = 500;
 /** 无参 /history 的默认展示条数（只显示最近 N 条） */
 export const HISTORY_LIMIT_DEFAULT = 50;
-const HISTORY_USAGE =
-  'Usage: /history [--limit <n>] [--role user|assistant|tool] [--reasoning|--no-reasoning]';
 const HISTORY_ROLES: readonly HistoryRole[] = ['user', 'assistant', 'tool'];
 
 /** 解析 /history 参数；未知参数直接给 usage，不发数据请求。 */
@@ -680,14 +686,14 @@ export function parseHistoryArgs(
       if (value === undefined || !/^\d+$/.test(value)) {
         return {
           ok: false,
-          message: `--limit must be an integer between 1 and ${HISTORY_LIMIT_MAX}.`,
+          message: t('history.limitError', { max: HISTORY_LIMIT_MAX }),
         };
       }
       const parsed = Number.parseInt(value, 10);
       if (parsed < 1 || parsed > HISTORY_LIMIT_MAX) {
         return {
           ok: false,
-          message: `--limit must be an integer between 1 and ${HISTORY_LIMIT_MAX}.`,
+          message: t('history.limitError', { max: HISTORY_LIMIT_MAX }),
         };
       }
       limit = parsed;
@@ -699,7 +705,7 @@ export function parseHistoryArgs(
       if (value === undefined || !HISTORY_ROLES.includes(value as HistoryRole)) {
         return {
           ok: false,
-          message: `--role must be one of: ${HISTORY_ROLES.join(', ')}.`,
+          message: t('history.roleError', { roles: HISTORY_ROLES.join(', ') }),
         };
       }
       role = value as HistoryRole;
@@ -716,7 +722,10 @@ export function parseHistoryArgs(
       continue;
     }
 
-    return { ok: false, message: `${HISTORY_USAGE} (unknown argument "${arg}")` };
+    return {
+      ok: false,
+      message: t('history.unknownArg', { usage: t('history.usage'), arg }),
+    };
   }
 
   return {
@@ -732,7 +741,7 @@ export function parseHistoryArgs(
 function historyCommand(): CommandEntry {
   return {
     name: 'history',
-    description: '显示当前会话的对话历史（--reasoning 显示思维链）',
+    description: t('command.history.description'),
     usage: '/history [--limit <n>] [--role user|assistant|tool] [--reasoning|--no-reasoning]',
     category: 'session',
     keywords: ['history', 'transcript', 'messages'],
@@ -744,7 +753,7 @@ function historyCommand(): CommandEntry {
 
       const loaded = await getSessionState(ctx, state.currentSessionId);
       if (!loaded || loaded.messages.length === 0) {
-        return { handled: true, output: '\nNo conversation history.\n' };
+        return { handled: true, output: `\n${t('history.empty')}\n` };
       }
 
       const { limit, role } = parsed.value;
@@ -754,19 +763,22 @@ function historyCommand(): CommandEntry {
       if (scoped.length === 0) {
         return {
           handled: true,
-          output: `\nNo ${role ?? 'matching'} messages in this session.\n`,
+          output: `\n${t('history.noMessages', { role: role ?? t('history.matching') })}\n`,
         };
       }
 
       // 先按 role 过滤，再取最近 N 条；无参默认只展示最近 50 条。
       const effectiveLimit = limit ?? HISTORY_LIMIT_DEFAULT;
       const shown = scoped.slice(-effectiveLimit);
-      const header = `History (${shown.length} of ${scoped.length} messages${
-        role ? `, role=${role}` : ''
-      }, last ${effectiveLimit}):`;
+      const header = t('history.header', {
+        shown: shown.length,
+        total: scoped.length,
+        roleSuffix: role ? t('history.roleSuffix', { role }) : '',
+        limit: effectiveLimit,
+      });
 
       const showReasoning = parsed.value.reasoning ?? state.showReasoning ?? false;
-      const lines = ['', `${header}${showReasoning ? ' [reasoning on]' : ''}`];
+      const lines = ['', `${header}${showReasoning ? t('history.reasoningOn') : ''}`];
       for (const msg of shown) {
         const label = msg.role.charAt(0).toUpperCase() + msg.role.slice(1);
         lines.push('');
@@ -784,7 +796,7 @@ function historyCommand(): CommandEntry {
 function reasoningCommand(): CommandEntry {
   return {
     name: 'reasoning',
-    description: '切换历史中的 reasoning 展示（on/off）',
+    description: t('command.reasoning.description'),
     usage: '/reasoning [on|off]',
     category: 'session',
     keywords: ['reasoning', 'thinking', 'history', 'toggle'],
@@ -964,7 +976,7 @@ export async function runToolsViewAction(
 function toolsCommand(): CommandEntry {
   return {
     name: 'tools',
-    description: '列出已注册工具',
+    description: t('command.tools.description'),
     usage: '/tools',
     category: 'inspect',
     keywords: ['plugins', 'capabilities', 'tools'],
@@ -1002,7 +1014,7 @@ export function buildPluginsListView(plugins: string[]): ListView {
 function pluginsCommand(): CommandEntry {
   return {
     name: 'plugins',
-    description: '列出已加载插件',
+    description: t('command.plugins.description'),
     usage: '/plugins',
     category: 'inspect',
     keywords: ['plugins', 'loaded'],
@@ -1034,7 +1046,7 @@ function pluginsCommand(): CommandEntry {
 function helpCommand(reg: CommandRegistry): CommandEntry {
   return {
     name: 'help',
-    description: '显示可用命令',
+    description: t('command.help.description'),
     usage: '/help',
     category: 'system',
     keywords: ['commands', 'usage'],
@@ -1047,7 +1059,7 @@ function helpCommand(reg: CommandRegistry): CommandEntry {
 function clearCommand(): CommandEntry {
   return {
     name: 'clear',
-    description: '清屏（含 scrollback）',
+    description: t('command.clear.description'),
     usage: '/clear',
     category: 'system',
     keywords: ['clear', 'screen'],
@@ -1060,7 +1072,7 @@ function clearCommand(): CommandEntry {
 function setupCommand(): CommandEntry {
   return {
     name: 'setup',
-    description: '配置向导入口（需退出 REPL 后运行）',
+    description: t('command.setup.description'),
     usage: '/setup',
     category: 'system',
     keywords: ['setup', 'config', 'wizard'],
@@ -1090,7 +1102,7 @@ function setupCommand(): CommandEntry {
 function reloadCommand(): CommandEntry {
   return {
     name: 'reload',
-    description: '重新校验配置（provider/model、插件、权限需重启生效）',
+    description: t('command.reload.description'),
     usage: '/reload',
     category: 'system',
     keywords: ['reload', 'validate', 'config'],
@@ -1140,7 +1152,7 @@ function reloadCommand(): CommandEntry {
 function exitCommand(): CommandEntry {
   return {
     name: 'exit',
-    description: '退出',
+    description: t('command.exit.description'),
     usage: '/exit',
     category: 'system',
     keywords: ['quit', 'exit'],

@@ -6,6 +6,7 @@
  * 并明确标注价格未配置，避免给出编造的金额。
  */
 
+import { t } from '../i18n/index.js';
 import type { MetricsSnapshotLike, ReplContext } from '../repl-context.js';
 import type { CommandEntry, CommandResult } from './commands.js';
 import { fetchMetricsSnapshot } from './metrics-command.js';
@@ -49,7 +50,7 @@ export async function runCostCommand(args: string[], ctx: ReplContext): Promise<
 export function costCommand(): CommandEntry {
   return {
     name: 'cost',
-    description: '显示 token/时长用量（无价格配置）',
+    description: t('command.cost.description'),
     usage: '/cost',
     category: 'inspect',
     keywords: ['cost', 'tokens', 'usage', 'duration'],

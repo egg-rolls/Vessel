@@ -6,6 +6,7 @@
  * 只使用 appIdMasked，绝不展示 app_id / app_secret / token。
  */
 
+import { t } from '../i18n/index.js';
 import type { FeishuStatusLike, ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import type { CommandEntry, CommandResult } from './commands.js';
@@ -90,7 +91,7 @@ export async function runFeishuCommand(args: string[], ctx: ReplContext): Promis
 export function feishuCommand(): CommandEntry {
   return {
     name: 'feishu',
-    description: 'Show Feishu channel status',
+    description: t('command.feishu.description'),
     usage: '/feishu',
     category: 'inspect',
     keywords: ['channel', 'status'],

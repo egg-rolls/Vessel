@@ -16,6 +16,7 @@ import * as readline from 'node:readline';
 import type { UserConfig } from '@vessel/config';
 import { getUserConfigPath } from '@vessel/config';
 import { parse as fromYaml, stringify as toYaml } from 'yaml';
+import { resolveLocale, setLocale, t } from '../i18n/index.js';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -116,6 +117,7 @@ export class SetupWizard {
 
   /** 运行向导，返回 UserConfig（供 start.ts 使用） */
   async run(): Promise<UserConfig> {
+    setLocale(resolveLocale({ env: process.env }));
     this.printHeader();
 
     const existing = await readUserConfig();
@@ -141,14 +143,14 @@ export class SetupWizard {
   /** 打印向导头 */
   private printHeader(): void {
     console.log(`\n${'═'.repeat(56)}`);
-    console.log('  🔑  Vessel — 首次配置向导');
-    console.log('  三步完成：连接 → 模型 → 保存');
+    console.log(t('wizard.headerTitle'));
+    console.log(t('wizard.headerSubtitle'));
     console.log(`${'═'.repeat(56)}`);
   }
 
   /** 打印步骤标题（emoji 分组 + 步骤号） */
   private step(emoji: string, n: number, title: string): void {
-    console.log(`\n  ${emoji}  步骤 ${n}/4 · ${title}`);
+    console.log(`\n${t('wizard.step', { emoji, number: n, title })}`);
     console.log(`  ${'─'.repeat(44)}`);
   }
 
@@ -156,10 +158,10 @@ export class SetupWizard {
   private async reuseExisting(existing: UserConfig): Promise<UserConfig | null> {
     if (!existing.apiKey) return null;
 
-    console.log('\n  💾  检测到已有配置:');
+    console.log(`\n${t('wizard.existing')}`);
     console.log(`    Provider: ${existing.defaultProvider ?? '(default)'}`);
     console.log(`    API Key:  ****${existing.apiKey.slice(-4)}`);
-    const reuse = await this.ask('\n  使用已有配置？(Y/n): ');
+    const reuse = await this.ask(`\n${t('wizard.reusePrompt')}`);
     if (reuse.toLowerCase() !== 'n') {
       this.rl.close();
       return existing;
@@ -179,44 +181,48 @@ export class SetupWizard {
     let connected = false;
 
     while (!connected) {
-      this.step('⚙️', 1, '连接配置');
-      baseUrl = await this.ask('  BaseURL  (默认: https://api.openai.com/v1): ');
+      this.step('⚙️', 1, t('wizard.step.connection'));
+      baseUrl = await this.ask(t('wizard.baseUrlPrompt'));
       if (!baseUrl) baseUrl = 'https://api.openai.com/v1';
 
       apiKey = await this.ask('  API Key  (sk-...): ');
       if (!apiKey) {
-        console.log('\n  ❌ API Key 不能为空，请重新输入');
+        console.log(`\n${t('wizard.apiKeyEmpty')}`);
         continue;
       }
 
-      this.step('🔌', 2, '测试连接');
+      this.step('🔌', 2, t('wizard.step.test'));
       if (this.cfg.skipConnectivityTest) {
         connected = true;
         continue;
       }
       const probe = inferProvider(baseUrl);
-      console.log(`\n  ⏳ 正在测试连接 (${probe})...`);
+      console.log(`\n${t('wizard.testing', { provider: probe })}`);
 
       // Anthropic 等非 OpenAI-compat provider 无 /models 端点，跳过模型列表
       if (probe !== 'openai' && probe !== 'custom') {
-        console.log(`  ℹ️  ${probe} 不支持自动获取模型列表，请手动输入`);
+        console.log(t('wizard.noModelList', { provider: probe }));
         models = [];
         connected = true;
       } else {
         try {
           models = await fetchModels(baseUrl, apiKey, probe);
           models = filterChatModels(models);
-          console.log(`\n  ✅ 连接成功！获取到 ${models.length} 个模型:`);
+          console.log(`\n${t('wizard.connected', { count: models.length })}`);
           for (let i = 0; i < Math.min(models.length, 20); i++) {
             console.log(`      ${i + 1}. ${models[i]?.id}`);
           }
           if (models.length > 20) {
-            console.log(`      ... 还有 ${models.length - 20} 个`);
+            console.log(t('wizard.moreModels', { count: models.length - 20 }));
           }
           connected = true;
         } catch (err) {
-          console.log(`\n  ❌ 连接失败: ${err instanceof Error ? err.message : err}`);
-          console.log('  请检查 BaseURL 和 API Key 后重试。');
+          console.log(
+            `\n${t('wizard.connectFailed', {
+              error: err instanceof Error ? err.message : String(err),
+            })}`,
+          );
+          console.log(t('wizard.connectRetry'));
         }
       }
     }
@@ -225,12 +231,12 @@ export class SetupWizard {
 
   /** 步骤 3：选择默认模型 */
   private async selectModel(models: ModelEntry[]): Promise<string> {
-    this.step('🤖', 3, '选择模型');
+    this.step('🤖', 3, t('wizard.step.model'));
     const defaultModel = models.length > 0 ? (models[0]?.id ?? 'gpt-4') : 'gpt-4';
 
     if (models.length > 0) {
       const choice = await this.ask(
-        `\n  选择默认模型 (1-${Math.min(models.length, 20)}, 默认 1): `,
+        `\n${t('wizard.selectModelPrompt', { max: Math.min(models.length, 20) })}`,
       );
       const idx = Number.parseInt(choice, 10) - 1;
       if (!Number.isNaN(idx) && idx >= 0 && idx < models.length) {
@@ -239,7 +245,7 @@ export class SetupWizard {
       return defaultModel;
     }
 
-    const input = await this.ask('\n  输入模型名称 (默认 gpt-4): ');
+    const input = await this.ask(`\n${t('wizard.modelNamePrompt')}`);
     return input || 'gpt-4';
   }
 
@@ -251,22 +257,22 @@ export class SetupWizard {
     selectedModel: string,
     apiKey: string,
   ): Promise<UserConfig> {
-    this.step('📋', 4, '确认保存');
+    this.step('📋', 4, t('wizard.step.save'));
     console.log(`\n  Provider:  ${providerName}`);
     console.log(`  BaseURL:   ${baseUrl}`);
     console.log(`  Model:     ${selectedModel}`);
     console.log(`  API Key:   ****${apiKey.slice(-4)}`);
 
-    const save = await this.ask('\n  保存配置？(Y/n): ');
+    const save = await this.ask(`\n${t('wizard.savePrompt')}`);
     if (save.toLowerCase() === 'n') {
-      console.log('\n  ⚠️  未保存，本次改动不会写入配置文件。');
+      console.log(`\n${t('wizard.notSaved')}`);
       this.rl.close();
       return config;
     }
 
     await writeUserConfig(config);
-    console.log(`\n  ✅ 已保存到 ${getUserConfigPath()}`);
-    console.log('  修改配置: /setup');
+    console.log(`\n${t('wizard.saved', { path: getUserConfigPath() })}`);
+    console.log(t('wizard.editHint'));
     console.log(`${'═'.repeat(56)}\n`);
 
     this.rl.close();

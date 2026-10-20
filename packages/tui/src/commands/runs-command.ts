@@ -7,6 +7,7 @@
  * 排序：updated_at 倒序，同值 run_id 升序；展示上限 20。
  */
 
+import { t } from '../i18n/index.js';
 import type {
   DurableRunHandle,
   DurableRunOutcome,
@@ -400,7 +401,7 @@ export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<
 export function runsCommand(): CommandEntry {
   return {
     name: 'runs',
-    description: 'Durable runs: list / resume',
+    description: t('command.runs.description'),
     usage: '/runs [resume <runId>]',
     category: 'run',
     keywords: ['durable', 'interrupt', 'recover'],

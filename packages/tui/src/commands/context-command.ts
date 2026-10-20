@@ -9,6 +9,7 @@
  */
 
 import type { ContextManager, Message } from '@vessel/core';
+import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import type { CommandEntry, CommandResult, ReplState } from './commands.js';
@@ -260,7 +261,7 @@ export async function runCompactCommand(
 export function contextCommand(): CommandEntry {
   return {
     name: 'context',
-    description: '显示上下文 token 估算（system/消息/工具结果）',
+    description: t('command.context.description'),
     usage: '/context',
     category: 'session',
     keywords: ['context', 'tokens', 'usage', 'compact'],
@@ -271,7 +272,7 @@ export function contextCommand(): CommandEntry {
 export function compactCommand(): CommandEntry {
   return {
     name: 'compact',
-    description: '压缩上下文并替换会话历史',
+    description: t('command.compact.description'),
     usage: '/compact',
     category: 'session',
     keywords: ['compact', 'compress', 'summary', 'context'],

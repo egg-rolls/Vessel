@@ -9,6 +9,8 @@
  * 与 ask-user 同构：组件间交流全走事件流，无直接回调。
  */
 
+import { t } from '../i18n/index.js';
+
 /** tool.permission.request 事件载荷（工具 checkPermission / runtime 'ask' 分支发布，TUI 订阅展示确认框） */
 export interface ToolPermissionRequestedData {
   requestId: string;
@@ -35,7 +37,7 @@ export interface ToolOrigin {
  */
 export function formatPermissionQuestion(toolName: string, origin: ToolOrigin | null): string {
   if (origin) {
-    return `Allow tool "${origin.tool}" from MCP server "${origin.server}" to run?`;
+    return t('permission.questionMcp', { tool: origin.tool, server: origin.server });
   }
-  return `Allow tool "${toolName}" to run?`;
+  return t('permission.question', { tool: toolName });
 }

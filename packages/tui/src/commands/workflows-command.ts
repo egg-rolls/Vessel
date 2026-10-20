@@ -8,6 +8,7 @@
  */
 
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
+import { t } from '../i18n/index.js';
 import type { WorkflowTurnOutcome } from '../repl/run-turn.js';
 import type {
   ReplContext,
@@ -921,7 +922,7 @@ export async function runWorkflowsCommand(
 export function workflowsCommand(): CommandEntry {
   return {
     name: 'workflows',
-    description: 'Workflows: list / run / show / resume / cancel',
+    description: t('command.workflows.description'),
     usage: '/workflows [list|run|show|resume|cancel]',
     category: 'run',
     keywords: ['pipeline', 'steps'],

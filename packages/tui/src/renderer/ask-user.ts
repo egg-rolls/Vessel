@@ -10,6 +10,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { EventStream, ToolDefinition } from '@vessel/core';
+import { t } from '../i18n/index.js';
 
 // ── 事件名与载荷 ──────────────────────────────────
 
@@ -82,7 +83,9 @@ function normalizeQuestions(input: AskUserInput): AskUserQuestion[] | string {
   }
 
   return input.questions.map((q, i) => ({
-    header: q.header?.trim() ? q.header.trim().slice(0, 12) : `问题 ${i + 1}`,
+    header: q.header?.trim()
+      ? q.header.trim().slice(0, 12)
+      : t('ask.questionHeader', { number: i + 1 }),
     question: q.question.trim(),
     options: q.options,
     multi_select: q.multi_select ?? false,
