@@ -125,7 +125,7 @@ function printHelp(): void {
     ['vessel config path', t('help.cmd.configPath')],
     ['vessel config init', t('help.cmd.configInit')],
     ['vessel config show --sources', t('help.cmd.configShow')],
-    ['vessel config set ui.language <zh-CN|en>', t('help.cmd.configSet')],
+    ['vessel config set <key> <value>', t('help.cmd.configSet')],
   ];
   const tenant: Array<[string, string]> = [
     ['vessel tenant list', t('help.cmd.tenantList')],

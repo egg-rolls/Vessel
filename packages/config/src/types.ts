@@ -55,6 +55,12 @@ export interface AgentConfig {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * 默认工作目录（0.11.1，DECISION-022 §2.4）。
+   * 支持 `~`；相对路径按进程 cwd 解析为绝对路径（由装配层解析，validator 只校验类型）。
+   * 优先级：工具参数 `cwd` > `agent.cwd` > `process.cwd()`。
+   */
+  cwd?: string;
 }
 
 /** 会话配置 */
@@ -396,7 +402,7 @@ export interface PermissionConfig {
   autoApprove?: string[];
 }
 
-/** UI 配置（0.8.5；0.11 增加 clearOnStart） */
+/** UI 配置（0.8.5；0.11 增加 clearOnStart；0.11.1 增加 showReasoning） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
   language?: string;
@@ -405,6 +411,11 @@ export interface UiConfig {
    * 不写入默认配置；消费方按 `!== false` 处理。
    */
   clearOnStart?: boolean;
+  /**
+   * 是否把模型思考流（`reasoning_delta`）发布给 UI（默认 false）。
+   * 不写入默认配置；消费方按 `=== true` 处理，避免思维链默认外泄。
+   */
+  showReasoning?: boolean;
 }
 
 /** Vessel 配置 */

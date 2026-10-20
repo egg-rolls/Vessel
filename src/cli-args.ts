@@ -46,7 +46,12 @@ export type ConfigCommandArgs =
   | { kind: 'path'; json: boolean }
   | { kind: 'init'; json: boolean; force: boolean }
   | { kind: 'show'; json: boolean; sources: boolean; tenantId?: string }
-  | { kind: 'set'; key: 'ui.language'; value: 'zh-CN' | 'en'; json: boolean };
+  | {
+      kind: 'set';
+      key: 'ui.language' | 'ui.showReasoning' | 'agent.cwd';
+      value: string;
+      json: boolean;
+    };
 
 /** `tenant` 子命令（0.5） */
 export type TenantCommandArgs =
@@ -840,7 +845,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
   let sources = false;
   let tenantId: string | undefined;
 
-  // 0.11：`config set ui.language <zh-CN|en> [--json]`
+  // 0.11/0.11.1：`config set <key> <value> [--json]`
   if (sub === 'set') {
     const positional: string[] = [];
     for (const a of tail) {
@@ -861,15 +866,24 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
     if (positional.length !== 2) {
       return {
         ok: false,
-        error: 'Usage: vessel config set ui.language <zh-CN|en> [--json]',
+        error: 'Usage: vessel config set <ui.language|ui.showReasoning|agent.cwd> <value> [--json]',
       };
     }
-    const [key, value] = positional;
-    if (key !== 'ui.language') {
-      return { ok: false, error: `Unsupported config key: ${key} (supported: ui.language)` };
+    const [key = '', value = ''] = positional;
+    if (key !== 'ui.language' && key !== 'ui.showReasoning' && key !== 'agent.cwd') {
+      return {
+        ok: false,
+        error: `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, agent.cwd)`,
+      };
     }
-    if (value !== 'zh-CN' && value !== 'en') {
+    if (key === 'ui.language' && value !== 'zh-CN' && value !== 'en') {
       return { ok: false, error: 'ui.language must be "zh-CN" or "en"' };
+    }
+    if (key === 'ui.showReasoning' && value !== 'true' && value !== 'false') {
+      return { ok: false, error: 'ui.showReasoning must be "true" or "false"' };
+    }
+    if (key === 'agent.cwd' && value.trim() === '') {
+      return { ok: false, error: 'agent.cwd must be a non-empty path' };
     }
     args.configCommand = { kind: 'set', key, value, json };
     return { ok: true, args };

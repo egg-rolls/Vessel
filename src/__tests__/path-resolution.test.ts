@@ -7,6 +7,7 @@ import {
   expandHome,
   isSafeSuiteName,
   isSafeWorkflowName,
+  resolveAgentCwd,
   resolveEvalSuite,
   resolveEvalsDir,
   resolveEvalsOutDir,
@@ -52,6 +53,23 @@ describe('expandHome', () => {
   it('leaves other paths untouched', () => {
     expect(expandHome('./x')).toBe('./x');
     expect(expandHome('/tmp/x')).toBe('/tmp/x');
+  });
+});
+
+describe('resolveAgentCwd（0.11.1）', () => {
+  it('未配置/空串返回 undefined', () => {
+    expect(resolveAgentCwd({})).toBeUndefined();
+    expect(resolveAgentCwd({ agent: { cwd: '' } })).toBeUndefined();
+    expect(resolveAgentCwd({ agent: { cwd: '   ' } })).toBeUndefined();
+  });
+
+  it('展开 ~ 并解析相对路径为绝对路径', () => {
+    expect(resolveAgentCwd({ agent: { cwd: '~' } })).toBe(os.homedir());
+    expect(resolveAgentCwd({ agent: { cwd: '~/work' } })).toBe(path.join(os.homedir(), 'work'));
+    expect(resolveAgentCwd({ agent: { cwd: './relative' } })).toBe(path.resolve('./relative'));
+    expect(resolveAgentCwd({ agent: { cwd: '/absolute/path' } })).toBe(
+      path.normalize('/absolute/path'),
+    );
   });
 });
 

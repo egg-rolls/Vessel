@@ -1,9 +1,10 @@
 /**
  * UI 设置持久化（0.11 DECISION-021 §3.2）。
  *
- * 写用户配置 `~/.vessel/config.yaml` 的 `ui.language`（YAML snake_case）。
+ * 写用户配置 `~/.vessel/config.yaml` 的已知键（YAML snake_case）：
+ * 0.11 只有 `ui.language`；0.11.1 增加 `ui.showReasoning` 与 `agent.cwd`。
  * 复用 `permission-store` 的写入风格：YAML parse/stringify、同目录临时文件 + rename、
- * 临时文件 0600；只改目标键，根对象与 `ui` 块的其它键保留。
+ * 临时文件 0600；只改目标键，根对象与目标块的其它键保留。
  *
  * 本模块属于应用层：core / config 不感知文件写入；TUI 的 `/settings`
  * 经 `ReplContext.settings.setLanguage()` 调用这里，返回后由调用方 `setLocale()`。
@@ -110,6 +111,57 @@ async function writeRoot(configPath: string, root: Record<string, unknown>): Pro
   });
 }
 
+/** `vessel config set` 支持的键（0.11.1 扩展） */
+export type SettableConfigKey = 'ui.language' | 'ui.showReasoning' | 'agent.cwd';
+
+interface ConfigSetTarget {
+  /** YAML 根下的块名 */
+  block: string;
+  /** 块内的 YAML 键（snake_case） */
+  yamlKey: string;
+}
+
+const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> = {
+  'ui.language': { block: 'ui', yamlKey: 'language' },
+  'ui.showReasoning': { block: 'ui', yamlKey: 'show_reasoning' },
+  'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
+};
+
+/** 是否为支持的 `config set` 键 */
+export function isSettableConfigKey(value: string): value is SettableConfigKey {
+  return Object.hasOwn(CONFIG_SET_TARGETS, value);
+}
+
+/**
+ * 写入用户配置的单个已知键（保留其它键与块内其它键）。
+ * 值先按键校验：语言枚举 / 布尔 / 非空路径；写入失败抛 `ui_settings_*`。
+ */
+export async function setUserConfigValue(
+  key: SettableConfigKey,
+  value: string | boolean,
+  options: UiSettingsStoreOptions = {},
+): Promise<void> {
+  const target = CONFIG_SET_TARGETS[key];
+  if (key === 'ui.language' && !isUiLanguage(value)) {
+    throw new Error(`invalid_language: ${JSON.stringify(value)}`);
+  }
+  if (key === 'ui.showReasoning' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
+    throw new Error(`invalid_path: ${JSON.stringify(value)}`);
+  }
+
+  const configPath = options.configPath ?? getUserConfigPath();
+  const root = await readRoot(configPath);
+  const existing = root[target.block];
+  if (existing !== undefined && existing !== null && !isRecord(existing)) {
+    throw new Error(`ui_settings_invalid_config: ${target.block} must be a YAML object`);
+  }
+  root[target.block] = { ...(existing ?? {}), [target.yamlKey]: value };
+  await writeRoot(configPath, root);
+}
+
 /**
  * 写入用户配置 `ui.language`，返回后调用方立即 setLocale。
  * 只接受 'zh-CN' / 'en'；其它值抛 `invalid_language`。
@@ -118,18 +170,7 @@ export async function setUserLanguage(
   locale: UiLanguage,
   options: UiSettingsStoreOptions = {},
 ): Promise<void> {
-  if (!isUiLanguage(locale)) {
-    throw new Error(`invalid_language: ${JSON.stringify(locale)}`);
-  }
-
-  const configPath = options.configPath ?? getUserConfigPath();
-  const root = await readRoot(configPath);
-  const existing = root.ui;
-  if (existing !== undefined && existing !== null && !isRecord(existing)) {
-    throw new Error('ui_settings_invalid_config: ui must be a YAML object');
-  }
-  root.ui = { ...(existing ?? {}), language: locale };
-  await writeRoot(configPath, root);
+  await setUserConfigValue('ui.language', locale, options);
 }
 
 /**

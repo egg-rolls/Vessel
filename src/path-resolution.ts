@@ -49,6 +49,17 @@ function resolveFromCwd(input: string): string {
   return path.isAbsolute(expanded) ? path.normalize(expanded) : path.resolve(expanded);
 }
 
+/**
+ * 解析默认工作目录（0.11.1，DECISION-022 §2.4）。
+ * 支持 `~`；相对路径按进程 cwd 解析为绝对路径。未配置/空串返回 undefined。
+ * 只做路径解析，不检查目录是否存在（存在性由工具/插件在调用时处理）。
+ */
+export function resolveAgentCwd(config: VesselConfig): string | undefined {
+  const raw = config.agent?.cwd;
+  if (typeof raw !== 'string' || raw.trim() === '') return undefined;
+  return resolveFromCwd(raw.trim());
+}
+
 export function resolveWorkflowDir(config: VesselConfig): string {
   return resolveFromCwd(config.workflow?.dir ?? DEFAULT_WORKFLOW_OPTIONS.dir);
 }

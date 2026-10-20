@@ -101,10 +101,14 @@ export function declarativePluginEntries(config: VesselConfig): PluginConfig[] {
 /**
  * 构造 `plugin.name → config` 映射（core 0.6.1 的 `AgentRuntimeOptions.pluginConfigs`）。
  * 声明式条目先合并，显式 `plugins[].config` 覆盖。
+ *
+ * 0.11.1（DECISION-022 §2.4）：`agentCwd` 是全局默认工作目录，只作为
+ * `basic-tools` 安装配置的 `cwd` 兜底；显式/声明式插件配置里的 `cwd` 始终优先。
  */
 export function buildPluginConfigMap(
   configured: PluginConfig[] | undefined,
   declarative: PluginConfig[] = [],
+  agentCwd?: string,
 ): Record<string, Record<string, unknown>> {
   const map: Record<string, Record<string, unknown>> = {};
   for (const entry of declarative) {
@@ -114,6 +118,9 @@ export function buildPluginConfigMap(
   for (const entry of configured ?? []) {
     if (entry.config === undefined) continue;
     map[entry.name] = { ...(map[entry.name] ?? {}), ...entry.config };
+  }
+  if (agentCwd !== undefined && map['basic-tools']?.cwd === undefined) {
+    map['basic-tools'] = { ...(map['basic-tools'] ?? {}), cwd: agentCwd };
   }
   return map;
 }
