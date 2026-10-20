@@ -2,7 +2,7 @@
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
 > 当前开发线：0.9.0（基线 `release/0.9.0`；目标是根包与可发布包版本均为 `0.9.0`，bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍为上一版本，本分支的 `version --check` 在版本 bump 前可能失败）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -27,6 +27,7 @@
 | `tls-ca` | ubuntu-latest | 0.6 TLS/CA 专项（**非 required**）：`packages/serve` TLS/remote 测试 + `connect-e2e-0.6` / `rpc-remote-0.6`；使用仓库内自签 fixture |
 | `frontend-cors` | ubuntu-latest | 0.6 独立前端专项（**非 required**）：`gateway.origin` / `gateway.ws-tenant` + `apps/web/tests/gatewayUrl.test.ts` |
 | `release-dry-run` | ubuntu-latest | **仅 PR + `release/**` push**：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，**不上传、不 publish、不 tag** |
+| `install-smoke` | ubuntu-latest | **仅 PR + `release/**` push**：Node 22 + `bun run scripts/smoke-install.ts`；`npm pack` 18 个子包 + 根 tarball，用本地 `overrides` 安装后运行 `vessel --version` / `vessel --tools`（mock，无 Key）；**不上传、不 publish、不 tag**；Windows 默认跳过 |
 | `examples` | ubuntu-latest | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（关闭上轮 typecheck 盲区） |
 | `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：`--version`、`--tools`、headless 文本、stdin、`@file`、`/help`、`/exit`（除 `--version` 外均带 `VESSEL_MOCK=1`） |
 
@@ -67,6 +68,17 @@
 - 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；
   由 ext 在 1 bump 之后用普通 `bun install` 刷新 lock（不要 `--frozen-lockfile`）。
 
+### 1.2.1 安装解析 smoke job（0.10）
+
+- 触发：与 `release-dry-run` 相同（`pull_request` + `release/**` push）。
+- 命令：`bun run scripts/smoke-install.ts`（详见 [RELEASE.md §2.2](RELEASE.md)）。
+- 覆盖：18 个可发布包 + 根 tarball 的 `npm pack`、本地 `file:` `overrides`
+  安装解析、`vessel --version`、`VESSEL_MOCK=1 vessel --tools`。
+- 运行在 ubuntu + Node 22（`npm`）；Windows 跳过（`.cmd` bin shim 未验证），
+  不作为 `cross-platform` 的一部分。
+- 只写 OS 临时目录；**不上传 artifact、不登录 npm、不创建 tag、不发布**。
+- 失败即 PR 红；不设 required 时仍应视为发布前必须人工确认的门禁。
+
 ### 1.3 0.9 Wave 2B2B 门禁
 
 - **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；37 个 canonical 方法的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
@@ -87,10 +99,15 @@
    - tag 必须在 `main` 上：`git merge-base --is-ancestor "$GITHUB_SHA" origin/main`。
    - 从 tag 提取版本（去掉 `v`）。
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
+   - `bun run scripts/release-dry-run.ts`：tarball 内容 / 版本 / 禁止文件检查。
+   - `bun run scripts/smoke-install.ts`：18 个子包 + 根 tarball 的安装解析与运行 smoke。
+   - **任一步失败即停止，`publish-npm` 不会执行。**
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
-   - 只发布库包与插件包：`@vessel/core`、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve` + 13 个插件包（含 `@vessel/team` 与 `@vessel/mcp-client`），合计 18 个可发布包。
-   - **不发布根 CLI**（`private: true`，无 `bin`）。
+   - **先发布 18 个子包**，顺序固定：`core` → `permission` → `config` → `serve` → `tui` → `plugins`
+     （5 个库包 + 13 个插件包，含 `@vessel/team` 与 `@vessel/mcp-client`）。
+   - **最后发布根 CLI `vessel-agent`**（依赖前 18 个包的精确版本；bin 仍是 `vessel`）。
+     根 `package.json` 的 `name` 不是 `vessel-agent` 时 fail-fast。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。
    - `npm publish --provenance --access public`（OIDC provenance）。
    - 已存在的版本跳过，便于部分失败后重跑。
@@ -132,7 +149,7 @@
 
 | 安装方式 | 更新方式 |
 |---|---|
-| npm / bun 全局安装 | `vessel update` 提示 `bun add -g vessel@<v>`（或 `npm i -g vessel@<v>`）；由用户执行 |
+| npm / bun 全局安装 | `vessel update` 提示 `bun add -g vessel-agent@<v>`（或 `npm i -g vessel-agent@<v>`）；bin 仍是 `vessel`，由用户执行 |
 | 独立二进制 | **不提供**（ADR-006 继续有效）；后续再评估 |
 | 源码运行 | `vessel update --check` 只提示新版本，不自动改 git 工作区 |
 
