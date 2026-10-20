@@ -17,7 +17,12 @@ import type {
   PluginConfig,
   VesselConfig,
 } from '../packages/config/src/index';
-import { MemoryPluginHost, type Plugin, type PluginHost } from '../packages/core/src/index';
+import {
+  MemoryPluginHost,
+  type Plugin,
+  type PluginHost,
+  type PluginInitContext,
+} from '../packages/core/src/index';
 import * as teamPluginModule from '../plugins/tools/team/src/index';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
@@ -54,6 +59,10 @@ export function withPluginConfig(
     ...(plugin.version !== undefined ? { version: plugin.version } : {}),
     ...(plugin.description !== undefined ? { description: plugin.description } : {}),
     install: (host) => installWithConfig(plugin, host, config),
+    // 0.9 生命周期 v2：包装层必须透传 init/dispose，否则配置过的插件
+    // 不会收到 init，也不会在 AgentRuntime.dispose() 时被清理。
+    ...(plugin.init !== undefined ? { init: (ctx: PluginInitContext) => plugin.init?.(ctx) } : {}),
+    ...(plugin.dispose !== undefined ? { dispose: () => plugin.dispose?.() } : {}),
   };
 }
 

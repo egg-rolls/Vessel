@@ -1185,8 +1185,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // dispatcher 释放是 best-effort
     }
 
+    // 0.9：dispose 返回 Promise（插件逆序清理）；等待完成，异常不外抛。
     try {
-      fallbackRuntime?.dispose();
+      await fallbackRuntime?.dispose();
     } catch {
       // 单 agent 回退 runtime 的清理同样是 best-effort
     }
