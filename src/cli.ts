@@ -92,9 +92,9 @@ import { readPackageVersion } from './version';
 
 // ── 终端排版辅助 ─────────────────────────────────
 
-/** 对齐两列（命令 + 说明）并缩进 */
+/** 对齐两列（命令 + 说明）并缩进；命令列走暗金，说明保持纯文本 */
 function align(rows: Array<[string, string]>, width: number): string {
-  return rows.map(([cmd, desc]) => `  ${cmd.padEnd(width)}  ${desc}`).join('\n');
+  return rows.map(([cmd, desc]) => `  ${ui.brand(cmd.padEnd(width))}  ${desc}`).join('\n');
 }
 
 /** --help 输出：分组 + 对齐列，命令保持不变；描述跟随 locale。 */
@@ -269,7 +269,7 @@ installProcessErrorHandlers({
 
 const parsed = parseArgs(process.argv.slice(2));
 if (!parsed.ok) {
-  console.error(`${parsed.error}\n${t('common.helpHint')}`);
+  console.error(`${ui.err(parsed.error)}\n${ui.dim(t('common.helpHint'))}`);
   // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分。
   process.exit(2);
 }
@@ -330,7 +330,7 @@ if (foregroundGateway && args.gateway !== null) {
   }
   const prepared = await prepareForegroundGatewayStart();
   if (!prepared.ok) {
-    console.error(prepared.error);
+    console.error(ui.err(prepared.error));
     process.exit(1);
   }
   // 端口/主机缺省沿用 serve 配置；显式 flag 才进 CLI 覆盖层。
@@ -954,7 +954,7 @@ async function runWithConfig(result: BootstrapResult) {
 
   // 纯 serve 模式（--serve 且无 --run）：gateway 常驻，不进 REPL，直到 SIGINT/SIGTERM。
   if (gateway && !headless) {
-    console.log(`${t('cli.gatewayRunning')}\n`);
+    console.log(`${ui.ok(t('cli.gatewayRunning'))}\n`);
     await waitForSignal();
   } else if (headless) {
     headlessExitCode = await runHeadless(runtime, ctx.session, {

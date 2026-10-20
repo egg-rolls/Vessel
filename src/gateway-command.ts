@@ -179,13 +179,13 @@ export async function stopGateway(
     if (state.kind !== 'absent') {
       await removeGatewayPid(context.dataDir).catch(() => undefined);
     }
-    print(t('gateway.notRunning'));
+    print(ui.info(t('gateway.notRunning')));
     return 0;
   }
 
   const pid = state.record.pid;
   if (pid === process.pid) {
-    printErr(t('gateway.stopSelf'));
+    printErr(ui.err(t('gateway.stopSelf')));
     return 1;
   }
 
@@ -193,7 +193,7 @@ export async function stopGateway(
     terminateProcess(pid, context.platform);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-      printErr(t('gateway.stopFailed', { pid, detail: errorMessage(error) }));
+      printErr(ui.err(t('gateway.stopFailed', { pid, detail: errorMessage(error) })));
       return 1;
     }
   }
@@ -208,7 +208,7 @@ export async function stopGateway(
     await sleep(100);
   }
 
-  printErr(t('gateway.stopTimeout', { pid, timeout: `${timeoutMs}ms` }));
+  printErr(ui.err(t('gateway.stopTimeout', { pid, timeout: `${timeoutMs}ms` })));
   return 1;
 }
 
@@ -253,6 +253,7 @@ export async function gatewayStatus(
       );
     } else {
       print(ui.title(t('gateway.status.title')));
+      print(ui.rule(48));
       print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
       if (state.kind === 'stale') {
         print(
@@ -297,6 +298,7 @@ export async function gatewayStatus(
   }
 
   print(ui.title(t('gateway.status.title')));
+  print(ui.rule(48));
   const rows: Array<[string, string]> = [
     [t('gateway.status.status'), ui.ok(t('gateway.running'))],
     [t('gateway.status.pid'), String(record.pid)],
@@ -328,13 +330,13 @@ export async function reloadGatewayCommand(
     ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
   });
   if (state.kind !== 'running') {
-    printErr(t('gateway.reloadNoGateway'));
+    printErr(ui.err(t('gateway.reloadNoGateway')));
     return 1;
   }
 
   const token = resolveGatewayToken(context.config, context.env);
   if (token === undefined) {
-    printErr(t('gateway.noToken'));
+    printErr(ui.err(t('gateway.noToken')));
     return 1;
   }
 
@@ -345,7 +347,7 @@ export async function reloadGatewayCommand(
     tls: context.config.serve?.tls !== undefined,
   });
   if (!result.ok) {
-    printErr(t('gateway.reloadFailed', { detail: result.error }));
+    printErr(ui.err(t('gateway.reloadFailed', { detail: result.error })));
     return 1;
   }
 
@@ -392,12 +394,14 @@ async function startDaemonCommand(
 
   if (result.error === 'already_running') {
     printErr(
-      t('gateway.alreadyRunningPid', {
-        pid: result.runningPid ?? 0,
-      }),
+      ui.err(
+        t('gateway.alreadyRunningPid', {
+          pid: result.runningPid ?? 0,
+        }),
+      ),
     );
   } else {
-    printErr(t('gateway.startFailed', { detail: result.message }));
+    printErr(ui.err(t('gateway.startFailed', { detail: result.message })));
     printErr(ui.dim(t('gateway.logPath', { path: result.logPath })));
   }
   return 1;
