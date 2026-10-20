@@ -6,6 +6,7 @@ import { formatTimestamp } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import type { PermissionRequest, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
+import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import { EventRow } from './EventRow';
 import { PermissionCard } from './PermissionCard';
@@ -197,6 +198,12 @@ export function RunCard({
       {group.status === 'failed' && status === 'failed' && (
         <div className="run-footer failed">
           <StatusChip status="failed" />
+          {formatErrorMeta(group.errorMeta) && (
+            <span className="error-meta mono">
+              {formatErrorMeta(group.errorMeta)}
+              {group.errorMeta?.retryable === true ? ' · 可重试' : ''}
+            </span>
+          )}
           <details className="run-error">
             <summary className="run-error-summary">
               <span className="run-error-preview">

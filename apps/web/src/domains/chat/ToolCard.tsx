@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { statusMeta } from '../../components/StatusChip';
+import { formatErrorMeta } from '../../state/error-visibility';
 import { payloadText, truncate } from './EventRow';
 import type { ToolCardView } from './tool-cards';
 
@@ -55,6 +56,12 @@ export function ToolCard({ card }: { card: ToolCardView }) {
           <ToolSection label="参数" value={card.args} open={card.status === 'running'} />
           <ToolSection label="结果" value={card.result} open={card.status === 'done'} />
           <ToolSection label="错误" value={card.error} open={card.status === 'error'} />
+          {formatErrorMeta(card.errorMeta) && (
+            <p className="error-meta mono">
+              {formatErrorMeta(card.errorMeta)}
+              {card.errorMeta?.retryable === true ? ' · 可重试' : ''}
+            </p>
+          )}
           {card.truncated && <p className="tool-card-note">输出已截断</p>}
         </div>
       )}

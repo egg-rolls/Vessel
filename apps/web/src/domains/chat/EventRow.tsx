@@ -1,5 +1,6 @@
 import { formatTimestamp } from '../../format';
 import type { RunEvent } from '../../gateway/types';
+import { errorMetaOf, formatErrorMeta } from '../../state/error-visibility';
 import { eventTag } from '../../state/events';
 
 export function truncate(value: string, length: number): string {
@@ -72,9 +73,11 @@ function renderEventBody(event: RunEvent) {
     }
     case 'tool.call.failed': {
       const d = event.data as { tool_name?: string; error?: string };
+      const meta = formatErrorMeta(errorMetaOf(event.data));
       return (
         <>
           <span className="mono">{d.tool_name ?? 'tool'}</span>
+          {meta && <span className="error-meta mono">{meta}</span>}
           <ToolPayload label="错误（已展开）" value={d.error ?? 'error'} open />
         </>
       );
@@ -116,7 +119,13 @@ function renderEventBody(event: RunEvent) {
     }
     case 'error': {
       const d = event.data as { error?: string };
-      return <span className="err">{truncate(d.error ?? 'error', 240)}</span>;
+      const meta = formatErrorMeta(errorMetaOf(event.data));
+      return (
+        <>
+          {meta && <span className="error-meta mono">{meta}</span>}
+          <span className="err">{truncate(d.error ?? 'error', 240)}</span>
+        </>
+      );
     }
     default:
       return <span className="dim">{truncate(JSON.stringify(event.data), 200)}</span>;

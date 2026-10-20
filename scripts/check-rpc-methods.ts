@@ -37,6 +37,9 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'runs.start': 'write',
   'runs.cancel': 'write',
   'runs.resume': 'write',
+  // 0.14 P0（DECISION-025 §1.4）：agents 注册表。
+  'agents.list': 'read',
+  'agents.get': 'read',
   'events.list': 'read',
   'events.subscribe': 'read',
   'tools.list': 'read',

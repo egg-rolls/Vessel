@@ -1,4 +1,5 @@
 import type { RunEvent } from '../../gateway/types';
+import { type ErrorMeta, errorMetaOf } from '../../state/error-visibility';
 import type { TimelineItem } from '../../state/events';
 
 export type ToolCardStatus = 'running' | 'done' | 'error';
@@ -12,6 +13,8 @@ export interface ToolCardView {
   args?: unknown;
   result?: unknown;
   error?: string;
+  /** 0.14 additive：tool.call.failed 的结构化错误元数据。 */
+  errorMeta?: ErrorMeta;
   durationMs?: number;
   truncated?: boolean;
   startedAt: number;
@@ -108,7 +111,10 @@ export function foldToolItems(items: readonly TimelineItem[]): ChatRenderItem[] 
           started.card.callId = callId;
         }
         if (completed) started.card.result = event.data.result;
-        else started.card.error = errorOf(event.data);
+        else {
+          started.card.error = errorOf(event.data);
+          started.card.errorMeta = errorMetaOf(event.data);
+        }
         if (durationMs !== undefined) started.card.durationMs = durationMs;
         if (event.data.truncated === true) started.card.truncated = true;
         continue;
@@ -122,6 +128,7 @@ export function foldToolItems(items: readonly TimelineItem[]): ChatRenderItem[] 
         status: completed ? 'done' : 'error',
         result: completed ? event.data.result : undefined,
         error: completed ? undefined : errorOf(event.data),
+        errorMeta: completed ? undefined : errorMetaOf(event.data),
         durationMs,
         truncated: event.data.truncated === true ? true : undefined,
         startedAt: event.ts,

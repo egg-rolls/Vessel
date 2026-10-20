@@ -3,6 +3,12 @@
  * 拼成文本块、reasoning_delta 拼成独立的思考块，并在历史已落盘时抑制重复的 live 卡片。
  */
 import type { Message, RunEvent, SessionDetail, StreamChunk } from '../gateway/types';
+import {
+  type ErrorMeta,
+  type ErrorVisibility,
+  errorMetaOf,
+  isHiddenInternalError,
+} from './error-visibility';
 
 export interface StoredEvent {
   event: RunEvent;
@@ -22,6 +28,8 @@ export interface RunGroup {
   input?: string;
   output?: string;
   error?: string;
+  /** 0.14 additive：run.failed 的结构化错误元数据（缺字段时 undefined）。 */
+  errorMeta?: ErrorMeta;
   status: 'running' | 'completed' | 'failed' | 'cancelled';
   /** 首个事件时间（没有 run.started 时用于排序） */
   firstTs?: number;
@@ -94,6 +102,7 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         flush();
         const d = ev.data as { error?: string; duration_ms?: number };
         group.error = d.error;
+        group.errorMeta = errorMetaOf(ev.data);
         group.durationMs = d.duration_ms;
         group.status = 'failed';
         group.completedAt = ev.ts;
@@ -131,13 +140,21 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   return group;
 }
 
-/** 按 run_id 分组并按开始时间正序排列。 */
-export function groupEvents(entries: readonly StoredEvent[], showInternal: boolean): RunGroup[] {
+/**
+ * 按 run_id 分组并按开始时间正序排列。
+ * `errorLevel` 默认 `user`：internal 级错误只在 `all` 或展开内部事件时进入时间线。
+ */
+export function groupEvents(
+  entries: readonly StoredEvent[],
+  showInternal: boolean,
+  errorLevel: ErrorVisibility = 'user',
+): RunGroup[] {
   const byRun = new Map<string, StoredEvent[]>();
   for (const entry of entries) {
     if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) continue;
     // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
     if (!showInternal && entry.event.type.startsWith('subagent.')) continue;
+    if (isHiddenInternalError(entry.event.type, errorLevel, showInternal)) continue;
     const runId = entry.event.run_id;
     const list = byRun.get(runId);
     if (list) list.push(entry);

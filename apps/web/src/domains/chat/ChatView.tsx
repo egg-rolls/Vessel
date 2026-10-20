@@ -10,6 +10,8 @@ import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../compone
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type { PermissionRequest, SessionDetail, SessionInfo } from '../../gateway/types';
+import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
+import { resolveErrorLevel } from '../../state/error-visibility';
 import { groupEvents, isGroupPersisted } from '../../state/events';
 import type { PaletteItem } from '../../state/palette';
 import {
@@ -30,6 +32,7 @@ import { Composer } from './Composer';
 import { QueuedCard, type QueuedSubmission, RunCard } from './RunCard';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
+import { SubagentTranscript } from './SubagentTranscript';
 import { Transcript } from './Transcript';
 
 const TRANSCRIPT_WINDOW = 50;
@@ -161,6 +164,20 @@ export function ChatView({
       setSessions(sortSessions(sessionsResource.state.data));
     }
   }, [sessionsResource.state]);
+
+  // 0.14：错误可见性来自 `ui.errorLevel`；读取失败回退 user（0.13 行为）。
+  const configResource = useResource({
+    load: () => client.getConfig(),
+    enabled: hasToken,
+    deps: [epoch],
+  });
+  const errorLevel = useMemo(
+    () =>
+      configResource.state.status === 'success'
+        ? resolveErrorLevel(configResource.state.data)
+        : 'user',
+    [configResource.state],
+  );
 
   // 服务端全文搜索：150ms debounce 后切换；旧 gateway/失败时保持本地过滤。
   useEffect(() => {
@@ -326,9 +343,17 @@ export function ChatView({
   }, [seenJobIds]);
 
   const groups = useMemo(
-    () => groupEvents(snapshot.entries, showInternal),
-    [snapshot.entries, showInternal],
+    () => groupEvents(snapshot.entries, showInternal, errorLevel),
+    [snapshot.entries, showInternal, errorLevel],
   );
+
+  // 0.14：子 agent 树与 `?agent=` 深链（纯事件派生，不新增 RPC）。
+  const allAgents = useMemo(() => reduceAgents(snapshot.entries), [snapshot.entries]);
+  const sessionAgents = useMemo(
+    () => (selectedId ? agentsForSession(allAgents, selectedId) : []),
+    [allAgents, selectedId],
+  );
+  const activeAgent = selectedId && route.agent ? findAgent(sessionAgents, route.agent) : undefined;
 
   // 权限请求按 run_id 挂到对应 RunCard；没匹配到 run 的由 AppShell 顶部条提示。
   const permissionsByRun = useMemo(() => {
@@ -745,6 +770,15 @@ export function ChatView({
             showInternal={showInternal}
             onToggleInternal={() => setShowInternal((value) => !value)}
             writesDisabled={!connected}
+            agents={sessionAgents}
+            activeAgentId={activeAgent?.id}
+            onSelectAgent={(agentId) =>
+              navigate({
+                domain: 'chat',
+                sessionId: selectedId,
+                ...(agentId ? { agent: agentId } : {}),
+              })
+            }
           />
         ) : (
           <div className="conversation-head draft-head">
@@ -797,7 +831,10 @@ export function ChatView({
                 />
               ) : hydrating && !hasTranscript ? (
                 <LoadingState label="正在加载会话历史…" />
-              ) : !hasTranscript && visibleGroups.length === 0 && visibleQueued.length === 0 ? (
+              ) : !hasTranscript &&
+                visibleGroups.length === 0 &&
+                visibleQueued.length === 0 &&
+                !activeAgent ? (
                 <EmptyState
                   title="该会话暂无对话记录。"
                   description="在下方输入 prompt 继续这个会话。"
@@ -824,41 +861,51 @@ export function ChatView({
                 />
               )}
 
-              {visibleGroups.length > 0 && hasTranscript && (
+              {activeAgent && (
+                <SubagentTranscript
+                  agent={activeAgent}
+                  entries={snapshot.entries}
+                  errorLevel={errorLevel}
+                />
+              )}
+
+              {!activeAgent && visibleGroups.length > 0 && hasTranscript && (
                 <div className="divider-label">
                   <span>继续中</span>
                 </div>
               )}
-              {visibleGroups.length > 0 && (
+              {!activeAgent && visibleGroups.length > 0 && (
                 <div className="timeline-hint dim">实时事件 · 按时间正序</div>
               )}
-              {visibleGroups.map((group) => (
-                <RunCard
-                  key={group.runId}
-                  group={group}
-                  cancelled={group.jobId ? cancelledJobs.has(group.jobId) : false}
-                  cancelling={group.jobId ? cancelling.has(group.jobId) : false}
-                  hideInput={
-                    hasTranscript &&
-                    transcriptMessages.some(
-                      (message) => message.role === 'user' && message.content === group.input,
-                    )
-                  }
-                  onCancel={(value) => void handleCancel(value)}
-                  permissions={permissionsByRun.get(group.runId) ?? NO_PERMISSIONS}
-                  permissionBusy={responding}
-                  onDecidePermission={(requestId, decision, scope) =>
-                    void respondPermission(requestId, decision, scope)
-                  }
-                />
-              ))}
-              {visibleQueued.map((item) => (
-                <QueuedCard
-                  key={item.runId}
-                  item={item}
-                  onCancel={(runId) => void handleCancelQueued(runId)}
-                />
-              ))}
+              {!activeAgent &&
+                visibleGroups.map((group) => (
+                  <RunCard
+                    key={group.runId}
+                    group={group}
+                    cancelled={group.jobId ? cancelledJobs.has(group.jobId) : false}
+                    cancelling={group.jobId ? cancelling.has(group.jobId) : false}
+                    hideInput={
+                      hasTranscript &&
+                      transcriptMessages.some(
+                        (message) => message.role === 'user' && message.content === group.input,
+                      )
+                    }
+                    onCancel={(value) => void handleCancel(value)}
+                    permissions={permissionsByRun.get(group.runId) ?? NO_PERMISSIONS}
+                    permissionBusy={responding}
+                    onDecidePermission={(requestId, decision, scope) =>
+                      void respondPermission(requestId, decision, scope)
+                    }
+                  />
+                ))}
+              {!activeAgent &&
+                visibleQueued.map((item) => (
+                  <QueuedCard
+                    key={item.runId}
+                    item={item}
+                    onCancel={(runId) => void handleCancelQueued(runId)}
+                  />
+                ))}
             </>
           ) : draftActive ? (
             <EmptyState
