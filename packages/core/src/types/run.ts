@@ -26,6 +26,14 @@ export interface RunExecution {
   context: ContextManager;
 }
 
+/**
+ * `AgentRuntime.interrupt()` 的中断原因（0.10 R2-18）。
+ *
+ * - `shutdown` / `timeout`：checkpoint 落 `interrupted`，可 `--resume-run`；
+ * - `user`：按用户取消处理，checkpoint 落 `cancelled`。
+ */
+export type RunInterruptReason = 'shutdown' | 'timeout' | 'user';
+
 /** Run 选项 */
 export interface RunOptions {
   /**

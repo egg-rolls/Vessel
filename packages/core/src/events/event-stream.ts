@@ -3,10 +3,14 @@
  * @module @vessel/core/events
  */
 
+import { createStderrLogger } from '../logging.js';
 import type { EventHandler, EventStream, RunEvent, Unsubscribe } from '../types/event.js';
 
 /** 未配置时的历史上限（0.3 行为） */
 const DEFAULT_MAX_HISTORY = 1000;
+
+/** 订阅者异常走 stderr logger（0.10 R2-14）；不带事件正文之外的信息 */
+const logger = createStderrLogger();
 
 /** 历史上限选项（additive） */
 export interface MemoryEventStreamOptions {
@@ -84,11 +88,17 @@ export class MemoryEventStream implements EventStream {
         // 支持异步处理器
         if (result instanceof Promise) {
           result.catch((err) => {
-            console.error(`Event handler error: ${err}`);
+            logger.error('event handler error', {
+              run_id: event.run_id,
+              error: err instanceof Error ? err.message : String(err),
+            });
           });
         }
       } catch (err) {
-        console.error(`Event handler error: ${err}`);
+        logger.error('event handler error', {
+          run_id: event.run_id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
   }
