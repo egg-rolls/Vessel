@@ -1632,4 +1632,31 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `sanitizeTerminalText()` 只做清洗，不做宽度重排。
 - Markdown 历史项比纯文本更占内存与渲染成本；`<Static>` 已写入内容不重绘，窗口变宽后按原宽度换行。
 - Windows 真终端的 resize 行为仍需人工验证；`<15` 行的终端不显示流式 live 区。
-- i18n 只在设计文档中（设计已完成、未实现）。
+- i18n 在 0.8.4 未实现（0.8.5 已实现，见 §25）。
+
+## 25. 0.8.5 TUI i18n（已实现）
+
+> 状态：已合入 `release/0.8.5`（未发布）。决策见 [ADR-062](adr/ADR-062-tui-i18n.md)。默认 zh-CN 文案与 0.8.4 逐字一致；core / 工具语义不变。
+
+### 25.1 catalog 与 `t()`
+
+- `packages/tui/src/i18n/messages/zh-CN.ts` 与 `en.ts` 各导出 `Record<string, string>` 形式的 catalog，各 271 个 key、key 集合一致；key 形如 `<域>.<项>`（`startup.summary.model`、`error.classifier.timeout`）。
+- `packages/tui/src/i18n/index.ts` 导出 `t(key, params?)`、`setLocale(locale)`、`getLocale()`、`resolveLocale(input)` 与类型 `Locale` / `MessageKey`。
+- `t()` 查当前 catalog → 缺失回退 zh-CN → 再回退 key 本身；`{name}` 插值，缺失参数保留原文；不抛错、不打印。
+- 不引入 i18n 运行时库；catalog 随 TUI 源码打包，无异步加载、无额外构建步骤。
+
+### 25.2 locale 解析与回退
+
+- 优先级：`VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN`，每个候选值独立归一化，非法值跳过该层。
+- 归一化：`zh` / `zh-*` / `zh_*`（可带 `.UTF-8` 等后缀）→ `zh-CN`；`en` / `en-*` → `en`；其它 → 未识别。
+- REPL 在 `startInkRepl` 启动时解析一次并 `setLocale()`，进程内固定；运行中不切换。
+- wizard 没有 `ReplContext`，只按环境变量（`VESSEL_LANG` / `LANG` / `LC_ALL`）解析，不读 `config.ui.language`。
+- `VesselConfig.ui.language?: string`（`UiConfig`）由 config validator 接受为已知键；类型不枚举，非法值由解析层跳过。
+
+### 25.3 适用范围与已知限制
+
+- 覆盖：启动头 / 摘要、状态栏、确认与提问弹窗、队列预览、帮助、命令描述、错误分类文案、会话选择器、setup wizard、流式与工具显示的 chrome。
+- 不覆盖：技术词、命令名、工具名、错误码、模型 / provider 名不翻译；命令的数据输出（会话 / trace / metrics / 成本等）仍为英文；CLI 一次性命令与 Web 前端未本地化。
+- `en` catalog 缺失 key 时静默回退 zh-CN；测试只保证两份 key 集合一致，不校验翻译质量。
+- 切换语言需重启进程；已归档的 Ink `<Static>` 历史不会重绘。
+- wizard 与 REPL 的 locale 来源不同（wizard 仅 env），同一机器上可能出现 wizard 中文、REPL 英文的组合。

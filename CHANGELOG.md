@@ -3,6 +3,31 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.8.5] - 2026-10-20
+
+> 0.8.5（基于 `release/0.8.5`，未发布）：TUI 本地化（zh-CN / en）。用户可见文案收敛到 catalog 并经 `t()` 查表；新增 `ui.language` 配置与 `VESSEL_LANG` 环境变量。默认 zh-CN 文案与 0.8.4 逐字一致。版本号由 1 在集成线统一写入。
+
+### Added
+
+- `packages/tui/src/i18n/`：`index.ts`（`resolveLocale` / `setLocale` / `getLocale` / `t`）、`messages/zh-CN.ts`、`messages/en.ts`；两份 catalog 各 271 个 key，集合一致。
+- `packages/config`：`VesselConfig.ui.language`（`UiConfig`），validator 的已知键包含 `ui` / `ui.language`；配置含该字段时不再被当作未知键拒绝。
+- locale 优先级：`VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN`；`zh` / `zh-*` / `zh_*`（可带 `.UTF-8`）归一为 `zh-CN`，`en` / `en-*` 归一为 `en`，非法值跳过该层。
+- 新增 ADR-062。
+
+### Changed
+
+- TUI 启动头 / 摘要、状态栏、确认与提问弹窗、队列预览、命令描述与错误文案改走 `t(key, params?)`；会话选择器、setup wizard、流式与工具显示同步。
+- `t()` 缺失 key 回退 zh-CN，再回退 key 本身；缺失参数保留 `{name}` 原文，不抛错、不打印。
+- locale 在 REPL 启动时解析一次并进程内固定；wizard 没有 `ReplContext`，只按环境变量解析。
+
+### Known limitations
+
+- CLI 一次性命令（`--run` / `--tools` 等）与 Web 前端未本地化。
+- 运行时切换语言需重启 REPL / wizard 进程。
+- wizard 只读环境变量，不读 `config.ui.language`。
+- 命令的数据输出（会话 / trace / metrics / 成本等）仍为英文；`t()` 只覆盖 UI chrome 与交互文案。
+- 新增 key 必须在 `zh-CN` 与 `en` 两份 catalog 同步；en 缺失时静默回退 zh-CN，不会报错。
+
 ## [0.8.4] - 2026-10-20
 
 > 0.8.4（基于 `release/0.8.4`，未发布）：TUI 可见问题修复——重复 key、ANSI 控制序列、Markdown 归档与 resize。全部改动在展示层，core / 工具的原始返回值不变。版本号由 1 在集成线统一写入。
