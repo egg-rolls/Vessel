@@ -167,17 +167,17 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | 分支 | 用途 | 谁写 | 生命周期 |
 |---|---|---|---|
 | `main` | 稳定主干，始终可发布 | 只有 1 合并 `release/*` / `hotfix/*` | 永久 |
-| `release/0.8.6` | 0.8.x 补丁集成分支（当前开发基线） | 1 | 该 minor 线存续 |
+| `release/0.8.7` | 0.8.x 补丁集成分支（当前开发基线） | 1 | 该 minor 线存续 |
 | `0.8-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
 | `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N | 合并后删除 |
 | `hotfix/<slug>` | 线上紧急修复，从 `main` 拉出 | 1 指派 | 合并后删除 |
 
-- **版本周期**：目标版本 `0.8.6` → 集成分支 `release/0.8.6`（从 `release/0.8.5` 拉出）→ 角色分支 `0.8-<role>` → worktree `worktrees/0.7-<role>`（0.8 复用已有 worktree，仅切换分支）。
+- **版本周期**：目标版本 `0.8.7` → 集成分支 `release/0.8.7`（从 `release/0.8.6` 拉出）→ 角色分支 `0.8-<role>` → worktree `worktrees/0.7-<role>`（0.8 复用已有 worktree，仅切换分支）。
 - **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/0.9`；补丁周期用 `release/0.8.x` + `0.8-<role>`。
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
-- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.8.6-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
-- **基线**：`release/0.8.6` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.8.6 只干跑，不打 tag）。
+- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.8.7-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
+- **基线**：`release/0.8.7` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.8.7 只干跑，不打 tag）。
 
 ### 4.3 文件命名
 
