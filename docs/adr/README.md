@@ -79,6 +79,9 @@
 | 062 | TUI 本地化（catalog + t() + locale 解析） | accepted | 2026-10-20 | tui, i18n, locale, catalog | [ADR-062-tui-i18n.md](ADR-062-tui-i18n.md) |
 | 063 | mock 场景 provider 与 vessel demo | accepted | 2026-10-20 | mock, demo, cli, testing | [ADR-063-mock-scenarios-and-demo.md](ADR-063-mock-scenarios-and-demo.md) |
 | 064 | 上下文默认预算提升到 1M token | accepted | 2026-10-20 | context, tokens, defaults, config | [ADR-064-context-budget-default-1m.md](ADR-064-context-budget-default-1m.md) |
+| 065 | 插件生命周期 v2（init / dispose / 安装回滚） | accepted | 2026-10-20 | plugins, lifecycle, dispose, runtime | [ADR-065-plugin-lifecycle-v2.md](ADR-065-plugin-lifecycle-v2.md) |
+| 066 | canonical RPC 方法的结果 schema 与可选校验 | accepted | 2026-10-20 | rpc, schema, validation, protocol | [ADR-066-rpc-result-schemas.md](ADR-066-rpc-result-schemas.md) |
+| 067 | 跨节点去重键与进程代际 incarnation | accepted | 2026-10-20 | transport, dedup, multi-node, incarnation | [ADR-067-cross-node-dedup-keys.md](ADR-067-cross-node-dedup-keys.md) |
 
 ## 编写约定
 

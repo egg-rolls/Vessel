@@ -167,17 +167,17 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | 分支 | 用途 | 谁写 | 生命周期 |
 |---|---|---|---|
 | `main` | 稳定主干，始终可发布 | 只有 1 合并 `release/*` / `hotfix/*` | 永久 |
-| `release/0.8.7` | 0.8.x 补丁集成分支（当前开发基线） | 1 | 该 minor 线存续 |
-| `0.8-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
+| `release/0.9.0` | 0.9.x 集成分支（当前开发基线） | 1 | 该 minor 线存续 |
+| `0.9-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
 | `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N | 合并后删除 |
 | `hotfix/<slug>` | 线上紧急修复，从 `main` 拉出 | 1 指派 | 合并后删除 |
 
-- **版本周期**：目标版本 `0.8.7` → 集成分支 `release/0.8.7`（从 `release/0.8.6` 拉出）→ 角色分支 `0.8-<role>` → worktree `worktrees/0.7-<role>`（0.8 复用已有 worktree，仅切换分支）。
-- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/0.9`；补丁周期用 `release/0.8.x` + `0.8-<role>`。
+- **版本周期**：目标版本 `0.9.0` → 集成分支 `release/0.9.0`（从 `release/0.8.7` 拉出）→ 角色分支 `0.9-<role>` → worktree `worktrees/0.7-<role>`（0.9 复用已有 worktree，仅切换分支）。
+- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/1.0`；补丁周期用 `release/0.9.x` + `0.9-<role>`。
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
-- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.8.7-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
-- **基线**：`release/0.8.7` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.8.7 只干跑，不打 tag）。
+- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.9.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
+- **基线**：`release/0.9.0` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.9.0 只干跑，不打 tag）。
 
 ### 4.3 文件命名
 
@@ -284,11 +284,11 @@ N 在自己的分支提交（只含共享侧成品）
 
 | Job | 内容 |
 |---|---|
-| `quality`（ubuntu） | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
+| `quality`（ubuntu） | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test`（`VESSEL_VALIDATE_RESULTS=1`）→ `bun run build` |
 | `architecture`（ubuntu） | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
 | `offline-integration`（ubuntu） | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网 |
 | `release-dry-run`（ubuntu） | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag |
-| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
+| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
 | `web` | `apps/web`：`npm ci` → `npm run build` |
 | `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供） |
 | `smoke` | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock） |

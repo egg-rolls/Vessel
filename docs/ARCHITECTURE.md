@@ -1721,3 +1721,41 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - 根 `workspaces` 只有 `packages/*`、`plugins/*/*`，不含 `apps/web`；`bun install` 不会安装 react 等前端依赖。
 - 根 `bun test` 会扫 `apps/web/tests`，因此 `quality`（composite action）与 `cross-platform` 必须先执行 `actions/setup-node@v4`（Node 22）+ `apps/web` 下的 `npm ci`，再跑 typecheck / `bun test`。
 - `web` job 的 `npm ci` 在独立 job 中，不与其他 job 共享 `node_modules`。
+
+## 28. 0.9.0 Wave 2B2B（已实现）
+
+> 状态：已合入 `release/0.9.0`（未发布）。决策见 [ADR-065](adr/ADR-065-plugin-lifecycle-v2.md)、[ADR-066](adr/ADR-066-rpc-result-schemas.md)、[ADR-067](adr/ADR-067-cross-node-dedup-keys.md)。三块改动都保持默认兼容：生命周期钩子是可选的，结果校验默认关闭，旧对端缺少 `incarnation` 时按 `-` 处理。
+
+### 28.1 插件生命周期 v2
+
+- **钩子**：`Plugin.init?(ctx: { host: PluginHost })`、`Plugin.dispose?()`；两者都是可选方法，现有插件不实现也能加载。
+- **安装 → 初始化**：`AgentRuntime.create()` 先逐个 `install()`，全部成功后再按安装顺序调用 `init()`。`init` 抛错只发 `plugin.init.failed`（`{ name, error }`）并继续，不使 runtime 构造失败。
+- **安装回滚**：`PluginHost.beginPluginInstall?(name)` 返回 `{ commit, rollback }`。安装成功 `commit()` 并发布 `plugin.loaded`（`{ name, version? }`）；失败 `rollback()` 该插件本次注册的 tool / provider / guardrail / hook，然后发布 `plugin.failed` 并重抛——安装阶段仍是 fail-fast。
+- **释放**：`AgentRuntime.dispose()` 按逆安装顺序 best-effort 调用 `dispose()`，异常只发 `plugin.dispose.failed`；Promise 缓存保证幂等；最后关闭 session。
+- **装配层**：bootstrap / CLI / serve 的 shutdown 链 `await` runtime 释放；MCP client 与 workflow engine 是工厂式插件，由装配层显式 close，二者自身 `dispose()` 幂等；其余 11 个仓库插件没有需要释放的资源。
+- **包装**：`withPluginConfig` 保留 `init` / `dispose`，配置包装不会丢失生命周期钩子。
+
+### 28.2 协议 result schema
+
+- **覆盖**：37 个 canonical 方法（36 个 domain 方法 + `events.subscribe`）全部带 `result_schema`；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
+- **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
+- **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
+- **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
+- **可空字段**：`sessions.list` 的 `branch` / `tenant_id` / `ended_at` / `end_reason` 因真实值可为 `null` 或缺失、校验器不支持 union，声明为空 schema（任意值通过），`required` 与其余字段仍受约束。
+
+### 28.3 去重键与 incarnation
+
+- **事件键**：`${node}:${incarnation}:${run_id ?? '-'}:${seq}`。代际变化或 seq 回退时只清空该来源节点的键，不做全局 `clear()`；无 `seq` 的帧不参与去重。
+- **代际传播**：每个 gateway 进程启动生成 `incarnation`，随 auth 帧发送，`hello` / `peers` 透出；transport 用最近观察到的对端代际构造键。
+- **旧对端**：缺少 `incarnation` 时按固定占位 `-` 处理，行为退化为同一代际内去重，连接不被拒绝。
+- **消息键**：transport `${from}:${id}`（本机 `/send` 与入站共用集合）；gateway `${tenant}:${from}:${id}`；spawn 幂等 `${tenant}:${request_id}`。
+- **持久化**：去重集合只在单 gateway 进程内，语义为单进程生命周期内 at-most-once。
+
+### 28.4 已知限制（0.9.0）
+
+- 去重不持久化；重启后可能重复投递，跨重启 exactly-once 需消费端自行持久化幂等键。
+- host 模式直接使用 `PluginHost` 装配时绕过生命周期 v2，不保证 `init` / `dispose`。
+- 工厂式插件（MCP client、workflow engine）由装配层关闭，不走 `Plugin.dispose` 自动路径。
+- `runs.get` 的 `result_schema` 是 `RunStatus` 与 durable checkpoint 的宽松超集，不是精确校验。
+- 结果校验默认关闭，只在 `VESSEL_VALIDATE_RESULTS=1` 时生效；CI 的 Test step 固定开启。
+- `sessions.list` 的四个可空字段只做存在性约束，不做类型校验。
