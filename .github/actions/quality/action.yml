@@ -43,8 +43,11 @@ runs:
       shell: bash
       run: bun run typecheck
 
+    # 0.9：开启 canonical RPC 结果校验，防止 result_schema 与实现漂移。
     - name: Test
       shell: bash
+      env:
+        VESSEL_VALIDATE_RESULTS: "1"
       run: bun test
 
     - name: Build
