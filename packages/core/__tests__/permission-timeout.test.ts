@@ -1,9 +1,10 @@
 /**
  * 0.11.1 权限超时致命化（DECISION-022 §2.2）。
  *
- * `waitFor('tool.permission.response')` 超时抛 `PermissionTimeoutError`，
- * run 以 `run.failed`（reason `permission_timeout`）结束；
+ * `waitFor('tool.permission.response')` 在**显式正数超时**（0.13 Addendum A）时抛
+ * `PermissionTimeoutError`，run 以 `run.failed`（reason `permission_timeout`）结束；
  * 不得把超时当作普通工具错误回给模型（否则模型会重试同一工具）。
+ * 默认无限等待由 `permission-lifecycle.test.ts` 覆盖。
  */
 import { describe, expect, it } from 'bun:test';
 import { MemoryContextManager } from '../src/context/context-manager';
@@ -72,7 +73,8 @@ describe('权限超时致命化', () => {
       events,
       limits: { requestLimit: 10, toolCallsLimit: 5 },
       termination: { maxIterations: 10 },
-      permission: { default: 'ask' },
+      // Addendum A：默认无限等待；显式正数超时才产生 permission_timeout
+      permission: { default: 'ask', timeoutMs: 1 },
     });
 
     let caught: unknown;

@@ -69,6 +69,12 @@ export interface RuntimePermissionConfig {
   default?: 'allow' | 'ask';
   /** 免确认工具名列表 */
   autoApprove?: string[];
+  /**
+   * 0.13（DECISION-024 Addendum A）：等待 `tool.permission.response` 的显式超时（毫秒）。
+   * 缺省 / `<= 0` = 无限期等待，直到应答或取消；只有正数才产生
+   * `PermissionTimeoutError` 并在请求事件里带 `deadline_at`。
+   */
+  timeoutMs?: number;
 }
 
 /** AgentRuntime 配置 */

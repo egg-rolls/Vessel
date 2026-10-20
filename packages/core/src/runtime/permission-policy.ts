@@ -9,13 +9,11 @@ import type { EventStream } from '../types/event.js';
 import type { RuntimePermissionConfig } from '../types/plugin.js';
 import type { ToolContext, ToolDefinition } from '../types/tool.js';
 
-/** checkPermission 返回 'ask' 时等待用户决定的事件超时（毫秒） */
-const PERMISSION_TIMEOUT_MS = 120_000;
-
 /**
  * 权限请求超时（0.11.1，DECISION-022 §2.2）。
  *
  * 超时是致命的：调用方必须终止 run，不得把它当作普通工具错误回给模型重试。
+ * 0.13（DECISION-024 Addendum A）：默认无限等待，只有显式正数 `timeoutMs` 才产生该错误。
  */
 export class PermissionTimeoutError extends Error {
   /** 稳定错误码，供事件 / 调用方判定 */
@@ -56,6 +54,8 @@ export class PermissionPolicy {
   private defaultDecision: 'allow' | 'ask';
   private autoApprove: Set<string>;
   private approved: Set<string>;
+  /** 显式正数超时；undefined = 无限等待（Addendum A） */
+  private readonly timeoutMs?: number;
 
   constructor(
     private events: EventStream,
@@ -65,6 +65,11 @@ export class PermissionPolicy {
     this.defaultDecision = config?.default ?? 'allow';
     this.autoApprove = new Set(config?.autoApprove ?? []);
     this.approved = new Set();
+    const timeoutMs = config?.timeoutMs;
+    this.timeoutMs =
+      typeof timeoutMs === 'number' && Number.isFinite(timeoutMs) && timeoutMs > 0
+        ? timeoutMs
+        : undefined;
   }
 
   /**
@@ -103,7 +108,8 @@ export class PermissionPolicy {
           // 0.13（DECISION-024 §2.1）：交互事件与 run / session / tool call 关联，additive。
           ...(ctx.session_id !== undefined ? { session_id: ctx.session_id } : {}),
           ...(ctx.tool_call_id !== undefined ? { tool_call_id: ctx.tool_call_id } : {}),
-          deadline_at: ts + PERMISSION_TIMEOUT_MS,
+          // 只有显式正数超时才承诺 deadline；默认无限等待时不写（Addendum A）。
+          ...(this.timeoutMs !== undefined ? { deadline_at: ts + this.timeoutMs } : {}),
           source: ctx.source ?? 'runtime',
         },
         ts,
@@ -124,9 +130,10 @@ export class PermissionPolicy {
   }
 
   /**
-   * 等待用户决定；超时抛 `PermissionTimeoutError`（0.11.1）。
+   * 等待用户决定。默认无限等待，直到应答或 abort（Addendum A）；
+   * 只有显式正数 `timeoutMs` 才在超时后抛 `PermissionTimeoutError`（0.11.1）。
    * 0.13（DECISION-024 §2.3）：等待绑定 `ctx.signal`；abort 时立即结束并把取消错误
-   * 原样抛出，不得等满 120s 后误报 `permission_timeout`。
+   * 原样抛出，不得误报 `permission_timeout`。
    */
   private async waitForDecision(
     tool: ToolDefinition,
@@ -136,7 +143,8 @@ export class PermissionPolicy {
     try {
       return await this.events.waitFor('tool.permission.response', {
         requestId,
-        timeout: PERMISSION_TIMEOUT_MS,
+        // 不传 timeout = 不设 timer；显式正数才计时。
+        ...(this.timeoutMs !== undefined ? { timeout: this.timeoutMs } : {}),
         ...(ctx.signal ? { signal: ctx.signal } : {}),
       });
     } catch (error) {
@@ -144,8 +152,10 @@ export class PermissionPolicy {
       if (ctx.signal?.aborted) {
         throw new PermissionAbortedError(ctx.signal.reason ?? error);
       }
+      // 未配置超时时不存在“超时”语义，原样抛出（不伪造 permission_timeout）。
+      if (this.timeoutMs === undefined) throw error;
       throw new PermissionTimeoutError(
-        `Permission request for tool "${tool.name}" timed out after ${PERMISSION_TIMEOUT_MS}ms`,
+        `Permission request for tool "${tool.name}" timed out after ${this.timeoutMs}ms`,
       );
     }
   }
