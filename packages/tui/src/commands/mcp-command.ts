@@ -188,7 +188,7 @@ export async function runMcpCommand(args: string[], ctx: ReplContext): Promise<C
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to list MCP servers:\n${formatClassifiedError(classifyError(error))}\n`,
+        output: `\n${t('error.command.listMcp')}\n${formatClassifiedError(classifyError(error))}\n`,
       };
     }
   }
@@ -207,7 +207,7 @@ export async function runMcpCommand(args: string[], ctx: ReplContext): Promise<C
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to list MCP servers:\n${formatClassifiedError(classifyError(error))}\n`,
+      output: `\n${t('error.command.listMcp')}\n${formatClassifiedError(classifyError(error))}\n`,
     };
   }
 
@@ -226,7 +226,7 @@ export async function runMcpCommand(args: string[], ctx: ReplContext): Promise<C
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to reconnect MCP server "${name}":\n${formatClassifiedError(
+      output: `\n${t('error.command.reconnectMcp', { name })}\n${formatClassifiedError(
         classifyError(error),
       )}\n`,
     };
@@ -258,7 +258,7 @@ export async function runMcpViewAction(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to list MCP servers:\n${formatClassifiedError(classifyError(error))}\n`,
+        output: `\n${t('error.command.listMcp')}\n${formatClassifiedError(classifyError(error))}\n`,
       };
     }
   }
@@ -269,7 +269,7 @@ export async function runMcpViewAction(
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to list MCP servers:\n${formatClassifiedError(classifyError(error))}\n`,
+      output: `\n${t('error.command.listMcp')}\n${formatClassifiedError(classifyError(error))}\n`,
     };
   }
   const target = servers.find((server) => server.name === name);
@@ -294,7 +294,7 @@ export async function runMcpViewAction(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to reconnect MCP server "${name}":\n${formatClassifiedError(
+        output: `\n${t('error.command.reconnectMcp', { name })}\n${formatClassifiedError(
           classifyError(error),
         )}\n`,
       };

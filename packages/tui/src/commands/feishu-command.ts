@@ -60,13 +60,13 @@ export async function runFeishuCommand(args: string[], ctx: ReplContext): Promis
       const raw = await ctx.rpc.request<unknown>('feishu.status');
       const status = readFeishuStatus(raw);
       if (!status) {
-        return { handled: true, output: '\nFailed to read Feishu status: invalid payload.\n' };
+        return { handled: true, output: `\n${t('error.command.feishuInvalid')}\n` };
       }
       return { handled: true, output: `\n${formatFeishuStatus(status)}\n` };
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to read Feishu status:\n${formatRpcError(error)}\n`,
+        output: `\n${t('error.command.feishuStatus')}\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -83,7 +83,7 @@ export async function runFeishuCommand(args: string[], ctx: ReplContext): Promis
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to read Feishu status:\n${formatRpcError(error)}\n`,
+      output: `\n${t('error.command.feishuStatus')}\n${formatRpcError(error)}\n`,
     };
   }
 }

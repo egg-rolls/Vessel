@@ -196,10 +196,13 @@ export async function fetchMetricsSnapshot(
     try {
       const raw = await ctx.rpc.request<unknown>('metrics.get', { source });
       const snapshot = readMetricsSnapshot(raw);
-      if (!snapshot) return { ok: false, message: 'Failed to read metrics: invalid snapshot.' };
+      if (!snapshot) return { ok: false, message: t('error.command.metricsInvalid') };
       return { ok: true, snapshot };
     } catch (error) {
-      return { ok: false, message: `Failed to read metrics:\n${formatRpcError(error)}` };
+      return {
+        ok: false,
+        message: `${t('error.command.readMetrics')}\n${formatRpcError(error)}`,
+      };
     }
   }
 
@@ -214,7 +217,7 @@ export async function fetchMetricsSnapshot(
   } catch (error) {
     return {
       ok: false,
-      message: `Failed to read metrics:\n${formatClassifiedError(classifyError(error))}`,
+      message: `${t('error.command.readMetrics')}\n${formatClassifiedError(classifyError(error))}`,
     };
   }
 }

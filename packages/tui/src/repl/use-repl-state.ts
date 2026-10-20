@@ -21,12 +21,26 @@ import type { ViewAction, ViewEnvelope, ViewMode } from '../views/types.js';
 export interface HistoryItem {
   text: string;
   markdown?: boolean;
+  /** 失败项用 danger 色渲染；普通正文保持默认色 */
+  tone?: 'normal' | 'error';
+  /** 被截断时保留完整文本，Ctrl+O 用 TextViewer 打开 */
+  fullText?: string;
 }
 
 /** 纯函数：归档前清洗控制序列，避免 ANSI 破坏 scrollback 布局 */
-function toHistoryItem(text: string, markdown = false): HistoryItem {
+function toHistoryItem(
+  text: string,
+  markdown = false,
+  tone?: 'normal' | 'error',
+  fullText?: string,
+): HistoryItem {
   const safe = sanitizeTerminalText(text);
-  return markdown ? { text: safe, markdown: true } : { text: safe };
+  return {
+    text: safe,
+    ...(markdown ? { markdown: true } : {}),
+    ...(tone !== undefined ? { tone } : {}),
+    ...(fullText !== undefined ? { fullText: sanitizeTerminalText(fullText) } : {}),
+  };
 }
 
 /** 权限确认弹窗数据（ADR-029：tool.permission.request 载荷的展示态） */
@@ -123,8 +137,20 @@ export interface ReplUiState {
 
 export type ReplUiAction =
   | { type: 'setInput'; input: string }
-  | { type: 'appendHistory'; line: string; markdown?: boolean }
-  | { type: 'appendHistoryLines'; lines: string[]; markdown?: boolean }
+  | {
+      type: 'appendHistory';
+      line: string;
+      markdown?: boolean;
+      tone?: 'normal' | 'error';
+      fullText?: string;
+    }
+  | {
+      type: 'appendHistoryLines';
+      lines: string[];
+      markdown?: boolean;
+      tone?: 'normal' | 'error';
+      fullText?: string;
+    }
   | { type: 'clearHistory' }
   | { type: 'setAutocompleteIndex'; index: number }
   | { type: 'resumePickerLoading' }
@@ -183,7 +209,10 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
     case 'appendHistory':
       return {
         ...state,
-        history: [...state.history, toHistoryItem(action.line, action.markdown === true)],
+        history: [
+          ...state.history,
+          toHistoryItem(action.line, action.markdown === true, action.tone, action.fullText),
+        ],
       };
     case 'appendHistoryLines':
       return action.lines.length === 0
@@ -192,7 +221,9 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
             ...state,
             history: [
               ...state.history,
-              ...action.lines.map((line) => toHistoryItem(line, action.markdown === true)),
+              ...action.lines.map((line) =>
+                toHistoryItem(line, action.markdown === true, action.tone, action.fullText),
+              ),
             ],
           };
     case 'clearHistory':

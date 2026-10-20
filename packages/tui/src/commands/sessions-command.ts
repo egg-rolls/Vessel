@@ -196,7 +196,7 @@ export function formatSessions(
   currentSessionId: string,
   now: number = Date.now(),
 ): string {
-  if (sessions.length === 0) return 'No sessions.';
+  if (sessions.length === 0) return t('empty.sessions');
 
   const lines = ['', `Sessions (${sessions.length}, newest first):`];
   const header = `  ${padToWidth('SESSION', SESSION_WIDTH)} ${padToWidth(
@@ -258,7 +258,7 @@ export async function deleteSessionAction(
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to delete session "${sessionId}":\n${formatRpcError(error)}\n`,
+      output: `\n${t('error.command.deleteSession', { id: sessionId })}\n${formatRpcError(error)}\n`,
     };
   }
 }
@@ -288,7 +288,7 @@ export async function renameSessionAction(
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to rename session "${sessionId}":\n${formatRpcError(error)}\n`,
+      output: `\n${t('error.command.renameSession', { id: sessionId })}\n${formatRpcError(error)}\n`,
     };
   }
 }

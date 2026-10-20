@@ -38,7 +38,6 @@ import { StreamOutput } from '../components/StreamOutput.js';
 import { SubagentActivity } from '../components/SubagentActivity.js';
 import { shouldPageOutput, TextViewer } from '../components/TextViewer.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
-import { classifyError, formatClassifiedError } from '../error-classifier.js';
 import { resolveLocale, setLocale, t } from '../i18n/index.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
@@ -52,6 +51,7 @@ import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
+import { failureFallbackAction, failureViewerTitle } from './error-archive.js';
 import { computeLiveLayout, queuePreviewRows } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
@@ -110,6 +110,8 @@ function InkRepl({ ctx }: InkReplProps) {
   const resumeRequestIdRef = useRef(0);
   /** 本轮取消是否已由 StreamOutput 归档（避免再追加一条独立的 Cancelled 提示） */
   const streamCancellationArchivedRef = useRef(false);
+  /** 本轮失败是否已由 StreamOutput 归档（失败只产生一条历史项） */
+  const streamFailureArchivedRef = useRef(false);
 
   const commands = useMemo(() => createCommands(), []);
 
@@ -120,6 +122,7 @@ function InkRepl({ ctx }: InkReplProps) {
   const startResumeRun = useCallback(
     async (handle: DurableRunHandle) => {
       const abort = new AbortController();
+      streamFailureArchivedRef.current = false;
       dispatch({ type: 'runStart', abort });
       const outcome = await executeResume(handle, abort);
       if (outcome.status === 'cancelled') {
@@ -130,10 +133,10 @@ function InkRepl({ ctx }: InkReplProps) {
         }
         streamCancellationArchivedRef.current = false;
       } else if (outcome.status === 'failed') {
-        dispatch({
-          type: 'appendHistory',
-          line: formatClassifiedError(classifyError(outcome.error)),
-        });
+        // StreamOutput 已归档时不再补第二条；事件缺失时才回退。
+        const action = failureFallbackAction(streamFailureArchivedRef.current, outcome.error);
+        streamFailureArchivedRef.current = false;
+        if (action) dispatch(action);
       }
       dispatch({ type: 'runEnd' });
     },
@@ -144,12 +147,19 @@ function InkRepl({ ctx }: InkReplProps) {
   const startWorkflowRun = useCallback(
     async (handle: WorkflowRunHandle) => {
       const abort = new AbortController();
+      streamFailureArchivedRef.current = false;
       dispatch({ type: 'runStart', abort });
       const outcome = await executeWorkflow(handle, abort);
-      dispatch({
-        type: 'appendHistory',
-        line: formatWorkflowOutcome(handle.workflowRunId, outcome),
-      });
+      // 失败且 StreamOutput 已归档错误时，不再追加 workflow summary（避免同屏两条）。
+      const suppress = outcome.status === 'failed' && streamFailureArchivedRef.current;
+      streamFailureArchivedRef.current = false;
+      if (!suppress) {
+        dispatch({
+          type: 'appendHistory',
+          line: formatWorkflowOutcome(handle.workflowRunId, outcome),
+          ...(outcome.status === 'failed' ? { tone: 'error' as const } : {}),
+        });
+      }
       dispatch({ type: 'runEnd' });
     },
     [dispatch],
@@ -446,6 +456,7 @@ function InkRepl({ ctx }: InkReplProps) {
       // run 完成后通过 onComplete 回调将响应归档到 history。
       // signal 来自本轮 AbortController：Esc / 运行中 Ctrl+C 会中断它。
       const abort = new AbortController();
+      streamFailureArchivedRef.current = false;
       dispatch({ type: 'runStart', abort });
       try {
         const branch = await getCurrentGitBranch();
@@ -477,17 +488,15 @@ function InkRepl({ ctx }: InkReplProps) {
           }
           streamCancellationArchivedRef.current = false;
         } else if (outcome.status === 'failed') {
-          dispatch({
-            type: 'appendHistory',
-            line: formatClassifiedError(classifyError(outcome.error)),
-          });
+          // 单源：StreamOutput 已在 run.failed 时归档；只有事件缺失时才回退补一条。
+          const action = failureFallbackAction(streamFailureArchivedRef.current, outcome.error);
+          streamFailureArchivedRef.current = false;
+          if (action) dispatch(action);
         }
       } catch (error) {
-        // 只可能是 run 之前的准备工作（git 分支、文件扫描）失败
-        dispatch({
-          type: 'appendHistory',
-          line: formatClassifiedError(classifyError(error)),
-        });
+        // 只可能是 run 之前的准备工作（git 分支、文件扫描）失败；没有 StreamOutput 归档。
+        const action = failureFallbackAction(false, error);
+        if (action) dispatch(action);
       } finally {
         dispatch({ type: 'runEnd' });
       }
@@ -744,6 +753,18 @@ function InkRepl({ ctx }: InkReplProps) {
 
     // Ctrl+O：展开完整输出到 scrollback。TextInput 会把 Ctrl+O 当字符插入，需覆盖回去。
     if (key.ctrl && inputChar === 'o') {
+      // 最近一条历史项因过长被截断时，用现有 pager 展示完整错误。
+      const last = ui.history.at(-1);
+      if (ui.run.phase === 'idle' && last?.fullText) {
+        dispatch({
+          type: 'openTextViewer',
+          title: failureViewerTitle(),
+          lines: last.fullText.split('\n'),
+        });
+        dispatch({ type: 'setInput', input: ui.input });
+        dispatch({ type: 'bumpCaret' });
+        return;
+      }
       dispatch({ type: 'toggleExpanded' });
       dispatch({ type: 'setInput', input: ui.input });
       dispatch({ type: 'bumpCaret' });
@@ -851,10 +872,22 @@ function InkRepl({ ctx }: InkReplProps) {
 
   // StreamOutput 完成回调：将 AI 响应归档到 history
   const handleStreamComplete = useCallback(
-    (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => {
+    (
+      responseText: string,
+      reason: 'completed' | 'failed' | 'cancelled',
+      options?: { tone?: 'normal' | 'error'; fullText?: string },
+    ) => {
       streamCancellationArchivedRef.current = reason === 'cancelled';
-      // 流式阶段用 MarkdownText 渲染；归档后必须保持同一渲染方式，否则会回落成源码。
-      dispatch({ type: 'appendHistory', line: responseText, markdown: true });
+      // 失败由 StreamOutput 单源归档，父组件不再重复追加。
+      streamFailureArchivedRef.current = reason === 'failed';
+      // completed/cancelled 的正文保持 Markdown；失败项是纯文本 danger。
+      dispatch({
+        type: 'appendHistory',
+        line: responseText,
+        markdown: reason !== 'failed',
+        ...(options?.tone !== undefined ? { tone: options.tone } : {}),
+        ...(options?.fullText !== undefined ? { fullText: options.fullText } : {}),
+      });
     },
     [dispatch],
   );
@@ -954,6 +987,10 @@ function InkRepl({ ctx }: InkReplProps) {
             <Box key={`${i}-${ui.clearSignal}`} flexDirection="column">
               <MarkdownText text={item.text} />
             </Box>
+          ) : item.tone === 'error' ? (
+            <Text key={`${i}-${ui.clearSignal}`} color={theme.danger}>
+              {item.text}
+            </Text>
           ) : (
             <Text key={`${i}-${ui.clearSignal}`}>{item.text}</Text>
           )
