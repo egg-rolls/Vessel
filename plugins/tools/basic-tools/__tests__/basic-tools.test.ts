@@ -624,3 +624,139 @@ describe('路径边界（E1）', () => {
     expect(result).not.toContain('should-not-run');
   });
 });
+
+describe('默认工作目录（cwd / working_dir）', () => {
+  /** 建一个临时子目录并返回绝对路径 */
+  function makeDir(name: string): string {
+    const dir = path.join(workDir, name);
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  it('配置解析：cwd 为主名，兼容 working_dir，非法值忽略', () => {
+    expect(parseBasicToolsConfig({ cwd: '/a' })).toEqual({ cwd: '/a' });
+    expect(parseBasicToolsConfig({ working_dir: '~/work' })).toEqual({ cwd: '~/work' });
+    expect(parseBasicToolsConfig({ cwd: '/a', working_dir: '/b' })).toEqual({ cwd: '/a' });
+    expect(parseBasicToolsConfig({ cwd: '', working_dir: '/b' })).toEqual({ cwd: '/b' });
+    expect(parseBasicToolsConfig({ cwd: 42 })).toEqual({});
+    expect(parseBasicToolsConfig({ cwd: '   ' })).toEqual({});
+  });
+
+  it('bash 未传 cwd 时落在 baseCwd；显式 cwd 覆盖 baseCwd', async () => {
+    const base = makeDir('cwd-bash-base');
+    const explicit = makeDir('cwd-bash-explicit');
+    const tool = configuredTool('bash', { cwd: base });
+
+    const defaulted = await tool.handler({ command: 'pwd' }, makeContext());
+    expect(defaulted).toContain(path.basename(base));
+
+    const overridden = await tool.handler({ command: 'pwd', cwd: explicit }, makeContext());
+    expect(overridden).toContain(path.basename(explicit));
+    expect(overridden).not.toContain(path.basename(base));
+  });
+
+  it('未配置 cwd 时仍使用 process.cwd()（旧行为）', async () => {
+    const result = await toolOf('bash').handler({ command: 'pwd' }, makeContext());
+    expect(result).toContain(path.basename(process.cwd()));
+  });
+
+  it('cwd 支持 ~ 展开', async () => {
+    const tool = configuredTool('bash', { cwd: '~' });
+    const result = await tool.handler({ command: 'pwd' }, makeContext());
+    expect(result).toContain(path.basename(homedir()));
+  });
+
+  it('working_dir 别名经插件配置端到端生效', async () => {
+    const base = makeDir('cwd-alias-base');
+    const host = new MemoryPluginHost();
+    await basicToolsPlugin.install(host, { config: { working_dir: base } });
+    const result = await host.getTool('bash')?.handler({ command: 'pwd' }, makeContext());
+    expect(result).toContain(path.basename(base));
+  });
+
+  it('read 相对路径按 baseCwd 解析，绝对路径不变', async () => {
+    const base = makeDir('cwd-read-base');
+    writeFileSync(path.join(base, 'relative.txt'), 'from-base\n', 'utf-8');
+    const absolute = writeTemp('cwd-read-absolute.txt', 'from-absolute\n');
+    const tool = configuredTool('read', { cwd: base });
+
+    expect(await tool.handler({ path: 'relative.txt' }, makeContext())).toBe('1\tfrom-base');
+    expect(await tool.handler({ path: absolute }, makeContext())).toBe('1\tfrom-absolute');
+    expect(await tool.checkPermission?.({ path: 'relative.txt' }, makeContext())).toBe('allow');
+  });
+
+  it('edit 相对路径按 baseCwd 解析', async () => {
+    const base = makeDir('cwd-edit-base');
+    writeFileSync(path.join(base, 'relative.txt'), 'before\n', 'utf-8');
+    const tool = configuredTool('edit', { cwd: base });
+
+    const result = await tool.handler(
+      { path: 'relative.txt', old_string: 'before', new_string: 'after' },
+      makeContext(),
+    );
+    expect(result).toContain('已替换 1 处');
+    expect(readFileSync(path.join(base, 'relative.txt'), 'utf-8')).toBe('after\n');
+  });
+
+  it('baseCwd 命中 denylist 时 bash / read 仍拒绝', async () => {
+    const secret = makeDir('cwd-denied');
+    writeFileSync(path.join(secret, 'token.txt'), 'token\n', 'utf-8');
+
+    const bash = configuredTool('bash', { cwd: secret, denyPaths: [secret] });
+    expect(await bash.checkPermission?.({ command: 'pwd' }, makeContext())).toBe('deny');
+    const bashResult = await bash.handler({ command: 'echo should-not-run' }, makeContext());
+    expect(bashResult).toContain('敏感路径拒绝列表');
+    expect(bashResult).not.toContain('should-not-run');
+
+    const read = configuredTool('read', { cwd: secret, denyPaths: [secret] });
+    expect(await read.checkPermission?.({ path: 'token.txt' }, makeContext())).toBe('deny');
+    expect(await read.handler({ path: 'token.txt' }, makeContext())).toContain('敏感路径拒绝列表');
+  });
+
+  it('baseCwd 不放宽 allowed_roots：根外 ask、根内 allow', async () => {
+    const allowed = makeDir('cwd-allowed');
+    const outside = makeDir('cwd-outside');
+    writeFileSync(path.join(outside, 'outside.txt'), 'outside\n', 'utf-8');
+
+    const insideBash = configuredTool('bash', { cwd: allowed, allowedRoots: [allowed] });
+    expect(await insideBash.checkPermission?.({ command: 'pwd' }, makeAllowContext())).toBe(
+      'allow',
+    );
+
+    const outsideBash = configuredTool('bash', { cwd: outside, allowedRoots: [allowed] });
+    expect(await outsideBash.checkPermission?.({ command: 'pwd' }, makeContext())).toBe('ask');
+
+    const outsideRead = configuredTool('read', { cwd: outside, allowedRoots: [allowed] });
+    expect(await outsideRead.checkPermission?.({ path: 'outside.txt' }, makeContext())).toBe('ask');
+  });
+
+  it('baseCwd 不存在时 bash / read / edit 明确报错，不回退', async () => {
+    const missing = path.join(workDir, 'cwd-missing');
+    const explicit = makeDir('cwd-missing-explicit');
+    const absolute = writeTemp('cwd-missing-absolute.txt', 'ok\n');
+    const issue = '配置的默认工作目录不存在或不是目录';
+
+    const bash = configuredTool('bash', { cwd: missing });
+    expect(await bash.handler({ command: 'echo x' }, makeContext())).toContain(issue);
+    // 显式 cwd 优先，不受非法 baseCwd 影响
+    expect(await bash.handler({ command: 'pwd', cwd: explicit }, makeContext())).toContain(
+      path.basename(explicit),
+    );
+
+    const read = configuredTool('read', { cwd: missing });
+    expect(await read.handler({ path: 'nope.txt' }, makeContext())).toContain(issue);
+    // 绝对路径不依赖 baseCwd，仍可读
+    expect(await read.handler({ path: absolute }, makeContext())).toBe('1\tok');
+
+    const edit = configuredTool('edit', { cwd: missing });
+    expect(
+      await edit.handler({ path: 'nope.txt', old_string: 'a', new_string: 'b' }, makeContext()),
+    ).toContain(issue);
+  });
+
+  it('baseCwd 指向文件时按“不是目录”报错', async () => {
+    const fileBase = writeTemp('cwd-base-is-file.txt', 'x\n');
+    const tool = configuredTool('bash', { cwd: fileBase });
+    expect(await tool.handler({ command: 'echo x' }, makeContext())).toContain('不存在或不是目录');
+  });
+});
