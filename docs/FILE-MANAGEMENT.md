@@ -167,17 +167,17 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | 分支 | 用途 | 谁写 | 生命周期 |
 |---|---|---|---|
 | `main` | 稳定主干，始终可发布 | 只有 1 合并 `release/*` / `hotfix/*` | 永久 |
-| `release/0.11.0` | 0.11.x 集成分支（当前开发基线） | 1 | 该 minor 线存续 |
-| `0.11-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
+| `release/0.12.0` | 0.12.x 集成分支（当前开发基线） | 1 | 该 minor 线存续 |
+| `0.12-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
 | `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N | 合并后删除 |
 | `hotfix/<slug>` | 线上紧急修复，从 `main` 拉出 | 1 指派 | 合并后删除 |
 
-- **版本周期**：目标版本 `0.11.0` → 集成分支 `release/0.11.0`（从 `release/0.10.0` 拉出）→ 角色分支 `0.11-<role>` → worktree `worktrees/0.7-<role>`（沿用已有 worktree，仅切换分支）。
-- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/1.0`；补丁周期用 `release/0.11.x` + `0.11-<role>`。
+- **版本周期**：目标版本 `0.12.0` → 集成分支 `release/0.12.0`（从 `release/0.11.0` 拉出）→ 角色分支 `0.12-<role>` → worktree `worktrees/0.7-<role>`（沿用已有 worktree，仅切换分支）。
+- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/1.0`；补丁周期用 `release/0.12.x` + `0.12-<role>`。
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
-- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.11.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
-- **基线**：`release/0.11.0` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.11.0 只干跑，不打 tag）。
+- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.12.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
+- **基线**：`release/0.12.0` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.12.0 只干跑，不打 tag）。
 
 ### 4.3 文件命名
 
@@ -247,19 +247,19 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 7.2 合并流程
 
-1. N 在 `0.11-<role>` 完成一个任务，跑三件套，提交。
+1. N 在 `0.12-<role>` 完成一个任务，跑三件套，提交。
 2. N 在 `REPORT-*` / `HANDOFF-*` 写清：改了什么、影响哪些路径、需要谁复核。
-3. 1 审查 diff，决定目标版本（通常 `release/0.11.0`）。
+3. 1 审查 diff，决定目标版本（通常 `release/0.12.0`）。
 4. 冲突：1 召集相关 N，双方给出理由，1 裁决；裁决写入个人侧 `docs/decisions/`。
-5. 1 合并到 `release/0.11.0`。
-6. 版本收口：1 把 `release/0.11.0` 合并到 `main` 并打 tag，触发 release workflow。**0.11.0 只干跑：不合并 `main`、不打 tag、不 publish。**
+5. 1 合并到 `release/0.12.0`。
+6. 版本收口：1 把 `release/0.12.0` 合并到 `main` 并打 tag，触发 release workflow。**0.12.0 只干跑：不合并 `main`、不打 tag、不 publish。**
 
 ### 7.3 发布
 
 - **触发**：push tag `v*`（稳定版）或 `v*-beta.*`（预发布）。不用分支名触发发布——分支管开发，tag 管发布。
 - **发布前检查**：tag 在 `main` 上；tag 与所有 package 版本一致；CI 全绿；`CHANGELOG.md` 已更新。
 - **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。先发 18 个子包（core → permission → config → serve → tui → plugins），最后发根包 `vessel-agent`；0.11 起子包 scope 为 `@vessel-agent/*`，发布账号需对该组织有写权限。
-- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.11.0 无二进制与 sha256（且 0.11 不触发发布）。
+- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.12.0 无二进制与 sha256（且 0.12 不触发发布）。
 - **回滚**：不删 tag、不 force-push；发新 patch，或用 revert commit 回退 `main`。
 - **共享侧工作树**：除当前任务改动外，`git status` 必须干净，无未跟踪垃圾。
 
@@ -299,7 +299,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 9.2 Release（`.github/workflows/release.yml`）
 
-触发：push tag `v*`（含预发布）。**0.11 不触发本流程。**
+触发：push tag `v*`（含预发布）。**0.12 不触发本流程。**
 
 1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本；`verify` 跑 `release-dry-run` 与 `smoke-install`，任一失败则不进入发布。
 2. 复跑 quality（发布前再验一次）。
@@ -310,9 +310,9 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 9.3 用户侧 CD / 自动更新
 
-- `vessel update [--check] [--channel latest|beta]`：读取 GitHub Release 的 `latest.json` 对比当前版本，只提示版本与安装命令（check-only）。
+- `vessel update --check [--channel latest|beta]`：读取 GitHub Release 的 `latest.json` 对比当前版本，只提示版本与安装命令。
+- `vessel update`（不带 `--check`）：按安装形态自更新——npm 全局执行 `npm i -g vessel-agent@latest`，bun 全局执行 `bun add -g vessel-agent@latest`；源码 / 开发模式只提示 `git pull && bun install`，不改工作区。默认确认，`--yes` 跳过，非 TTY 且无 `--yes` 失败。
 - REPL 启动时后台检查（24h 节流、失败静默、可配置关闭），只提示、不打断。
-- npm 安装：`vessel update` 提示升级命令，不自动替换。
 - **不提供独立二进制，也不做二进制自更新**；后续再评估。
 - 预发布通道：`--channel beta` 或 `VESSEL_CHANNEL=beta`。
 - `latest.json` 由 release workflow 生成；0.4.0 只含 `version` / `channel` / `released_at` / `assets: {}`（0.4 不生成、不发布）。
@@ -322,6 +322,15 @@ N 在自己的分支提交（只含共享侧成品）
 - **Phase 1（当前）**：Conventional Commits + 1 定版本 + tag 驱动发布；`CHANGELOG.md` 由 release 汇总。
 - **Phase 2（包可发布后）**：引入 Changesets 或 Release Please 管理多包版本与 changelog，减少手工。
 - **0.x 语义**：breaking → minor，feature → minor，fix → patch；预发布加 `-beta.N`。
+- **0.12.0 收口**：`CHANGELOG.md` 的 `## [0.12.0]` 同时记录 0.11.1 修复（0.11.1 不单独发布）；运行形态变化（`vessel gateway`、服务注册、`gateway.reload`、`vessel update`、CLI 样式）与配置项（`ui.showReasoning`、`agent.cwd`）一并写入；ADR-074 ~ 077 已登记索引。
+
+### 9.5 0.12 运行形态与文档同步
+
+- **gateway 生命周期**：文档统一写 `vessel gateway start|stop|status|restart|reload|install-service|uninstall-service`；`--serve` 只作前台别名，不再教授 `nohup` / `&`。
+- **服务注册**：只说明当前平台的用户级服务（systemd user / LaunchAgent / Windows 登录计划任务），不宣称 root 服务或跨平台注册；daemon 自身不做崩溃重启。
+- **热重载**：只承诺 plugins 扫描缓存与 `serve.allowed_origins`；其它字段必须写 `requires_restart`，文档不得把 reload 描述成全量热更新。
+- **CLI 样式**：人类输出走 `src/ui-style.ts`；`--json` 与数据行无 ANSI。
+- **新增配置**：`ui.showReasoning`（默认 `false`）与 `agent.cwd`（优先级 `工具参数 cwd > agent.cwd > process.cwd()`）写入 CONFIG / AGENTS / README；0.11.1 权限 TTL 与超时语义同步。
 
 ## 10. 违规判定
 

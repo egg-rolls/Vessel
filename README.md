@@ -26,9 +26,9 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 ## 状态
 
-**alpha。当前开发线 `release/0.11.0`（基线 `release/0.10.0`），未发布。** 0.1 ~ 0.11 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.11 的 UI 设置与终端观感（`/settings`、`clearOnStart`、全宽面板）和 npm scope（`@vessel-agent/*`）已实现；本文只写已合入当前分支的行为。
+**alpha。当前开发线 `release/0.12.0`（基线 `release/0.11.0`），未发布。** 0.1 ~ 0.12 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.12 的 gateway 生命周期（`vessel gateway start|stop|status|restart|reload|install-service`）、`gateway.reload` 热重载、`vessel update` 自更新与 CLI 暗金样式已实现；同时并入 0.11.1 的权限交互、思考流与 `agent.cwd` 修复（0.11.1 不单独发布）。本文只写已合入当前分支的行为。
 
-**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.11.0`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
+**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.12.0`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
 
 **语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 内可直接 `/settings language <zh-CN|en>` 切换并写回用户配置（`VESSEL_LANG` 仍最高）；TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 控制台的壳层与 Settings 已支持 zh-CN / en（语言选择在 Settings → Appearance，存 `localStorage['vessel.ui.language']`，初始跟随 `navigator.language`）；未覆盖的功能页回退中文。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
@@ -83,7 +83,12 @@ echo "翻译这句话" | vessel --run     # 从管道读输入
 vessel --session <id> --run "..."    # 续接指定会话
 vessel -c                            # 继续最近会话（--continue）
 vessel -r <id>                       # 恢复指定会话（--resume [id]）
-vessel --serve                       # 纯 serve 常驻模式（不进 REPL）
+vessel --serve                       # 纯 serve 常驻模式（前台；gateway start 的别名）
+vessel gateway start --daemon        # 后台常驻 gateway（写 PID + 日志）
+vessel gateway status --json         # 运行状态（纯 JSON）
+vessel gateway reload                # 热重载 plugins 与 allowed_origins（其余需重启）
+vessel gateway stop                  # 停止（默认等待 10s）
+vessel gateway install-service       # 注册当前平台的用户级服务
 vessel --serve 8642 --serve-host 0.0.0.0 --allow-remote \
   --tls-cert cert.pem --tls-key key.pem \
   --allowed-origin https://console.example.com  # 显式远程 + TLS（非回环必须 token + TLS）
@@ -98,11 +103,14 @@ vessel --feishu                      # 前台运行飞书渠道（需 enabled + 
 vessel --version                     # 显示版本（读根 package.json）
 vessel --tools                       # 列出当前配置下的工具（不需要 Key）
 vessel doctor                        # 本机配置 / 环境自检
-vessel update --check                # 检查新版本（只提示，不自替换）
+vessel update --check                # 检查新版本（只提示）
+vessel update                        # 按安装形态更新（npm / bun 全局；源码只提示）
 vessel config path                   # 两个 YAML 路径 + data_dir
 vessel config init                   # 生成 ~/.vessel/config.yaml 模板（不含真实密钥）
 vessel config show --sources         # 合并后的脱敏配置与来源
 vessel config set ui.language en     # 写用户配置 ui.language（zh-CN | en）
+vessel config set ui.showReasoning true   # 显示思考过程（默认 false）
+vessel config set agent.cwd ~/project     # 默认工作目录（bash / read / edit）
 vessel plugin list                   # 仓库 / 用户 / 项目插件目录
 vessel plugin install <path>         # 安装本地插件目录
 vessel tenant list                   # tenant 元数据
@@ -355,10 +363,12 @@ observability:
 
 ## Web 控制台
 
-`--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。
+`--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。0.12 起常驻部署统一走 `vessel gateway`；`--serve` 保留为前台别名。
 
 ```bash
-VESSEL_MOCK=1 vessel --serve 8642   # 终端打印 token
+VESSEL_MOCK=1 vessel --serve 8642   # 终端打印 token（前台）
+vessel gateway start --daemon       # 后台常驻，PID + 日志在 data_dir
+vessel gateway status               # 查看 PID / 地址 / uptime / 服务注册
 cd apps/web && npm run dev                       # 开发：http://127.0.0.1:5173
 cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管 dist
 ```
@@ -366,6 +376,7 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 - 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`，不写 `localStorage`、不进 URL query。
 - 可用 `VESSEL_GATEWAY_TOKEN` 固定 token；优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。未设置时每次启动自动生成。
 - 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单；按 `hello.features` 显示 MCP server / interrupted run / workflow / metrics / 飞书面板。
+- 权限弹窗按事件时间计算 120s 有效期，重连 / 刷新不会复活旧请求；服务端返回 `not_found` 时弹窗关闭并提示。`ui.showReasoning: true` 时思考过程折叠显示（默认关闭）。
 - 助手文本 Markdown 渲染（代码块 / 列表 / 表格 / 链接）；`sessions.search` 服务端全文检索（返回 snippet，前端 150ms 防抖并保留本地过滤兜底）；`tool.call.started` 带 `args`、`tool.call.completed` 带 `result`（上限 8 KiB，超出截断标记），事件卡可折叠、失败默认展开。
 - 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/workflows*`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/team/*`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13 / §15 / §16。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
@@ -423,11 +434,12 @@ team:
 
 ## 发布与更新
 
-- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.11 均未发布，1.0 前不发布。
-- 当前 `release/0.11.0` 只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
+- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.12 均未发布，1.0 前不发布。
+- 当前 `release/0.12.0` 只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
 - npm 分发名为 **`vessel-agent`**（bin 仍是 `vessel`），18 个可发布子包使用 **`@vessel-agent/*`** scope；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）。子包带 `files: ["src"]` 与 `license` / `repository` / `engines`，根包排除 `node_modules` 并包含 `apps/web/dist`；tarball 安装 smoke 已在 0.10 实现，0.11 起按 `@vessel-agent/*` 覆盖安装（POSIX / Node 22，Windows 跳过）。
 - **不提供独立二进制**（ADR-006）。
-- `vessel update --check` 读取 Release 的 `latest.json`，只提示版本与安装命令；**不下载、不自替换**。当前仓库不生成 `latest.json`。
+- `vessel update --check` 读取 Release 的 `latest.json`，只提示版本与安装命令；当前仓库不生成 `latest.json`。
+- `vessel update`（不带 `--check`）按安装形态自更新：npm 全局 `npm i -g vessel-agent@latest`，bun 全局 `bun add -g vessel-agent@latest`；源码 / 开发模式只提示 `git pull && bun install`，不改工作区。默认确认，`--yes` 跳过；非 TTY 且无 `--yes` 直接失败。
 - 后台检查：交互 REPL 启动时每天最多一次；`update.autoCheck: false` 或 `VESSEL_NO_UPDATE_CHECK=1` 可关闭，失败静默。
 - 通道：稳定版 `latest`，预发布 `beta`（`--channel` 或 `VESSEL_CHANNEL`）。
 
@@ -442,9 +454,9 @@ team:
 - **微信（公众号 / 企业微信）** —— **不做**；个人微信无官方 API。
 - **per-tenant 跨节点 team** —— 未实现；跨节点 team 控制面为 default/admin-only。
 - **npm 分发** —— 根包名 `vessel-agent`，子包 scope `@vessel-agent/*`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已在 0.10 实现、0.11 按新 scope 验证，但发布决定在 1。
-- **独立二进制 / 自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
+- **独立二进制 / 二进制自替换更新** —— 不做（ADR-006 继续有效）；0.12 的 `vessel update` 只对 npm / bun 全局安装执行包级更新，不下载或替换二进制，也不改源码工作区。
 - **Web 全量本地化** —— Web 壳层（导航 / 面包屑 / Settings / Appearance / 通用按钮）已支持 zh-CN / en；功能页未覆盖文案回退中文，命令数据输出保持英文，不能宣称全量本地化。
-- **版本发布** —— 0.1 ~ 0.11 均未发布；发布决定在 1。
+- **版本发布** —— 0.1 ~ 0.12 均未发布；发布决定在 1。
 
 ## 文档索引
 

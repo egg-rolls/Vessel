@@ -28,6 +28,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.9.0 状态**：Wave 2B2B 收口（基于 `release/0.9.0`，未随版本发布）：core 插件生命周期 v2（`init` 全部安装后按序调用、`dispose` 逆序 best-effort 且幂等、安装失败按插件回滚后重抛）；37 个 canonical 方法补 `result_schema`，`VESSEL_VALIDATE_RESULTS=1` 时校验结果，`PROTOCOL_VERSION` 成为协议版本单源；跨节点事件键改为 `${node}:${incarnation}:${run_id ?? '-'}:${seq}`，消息键含 tenant / from，网关 `hello` / `peers` 透出 `incarnation`。CI 的 Test step 固定 `VESSEL_VALIDATE_RESULTS=1`。决策见 ADR-065 / 066 / 067。
 - **0.10.0 状态**：发版硬化（基于 `release/0.10.0`，未随版本发布）：配置与首启（`resolveEffectiveApiKey()` 单源、legacy `default_provider` / `providers` 只读兼容且新版 `provider:` 优先、未知 provider 无 `base_url` 时 `ProviderConfigError`、YAML 解析 / 重复键转 validation error、`config show --sources` 脱敏）；运行时（去掉 100 条硬截断、400 context-overflow 先压缩再重试一次、`interrupt('shutdown'|'timeout'|'user')`、gateway stop 幂等并 drain ≤5s、固定关闭顺序）；可观测（core `Logger` 端口 + stderr JSON + redact、`process.error` / `shutdown.failed`、provider 120s 超时与 `onRetry`、MCP `mcp.warning`、trace 0600 且默认不落 `llm.stream.chunk`）；分发（根包 `vessel-agent`、18 子包 `files:["src"]` + 元数据、`scripts/smoke-install.ts` 与 `install-smoke` job）；CLI i18n（zh-CN / en 各 85 key）。决策见 ADR-068 / 069 / 070 / 071。
 - **0.11.0 状态**：UI 设置与包 scope（基于 `release/0.11.0`，未随版本发布）：TUI `/settings language <zh-CN|en>` 经注入的 `ctx.settings.setLanguage` 持久化到用户配置 `ui.language` 并立即 `setLocale`（未注入时只读，失败显示 `error.command.settings`）；`ui.clearOnStart`（默认 `true`，仅 TTY 清屏）；删除 `VIEW_MAX_WIDTH = 160`，面板宽度 = `cols - 2`；状态栏 / 启动头 + 会话摘要 / 队列预览统一 `PanelFrame`（`STATUS_BAR_ROWS = 3`、`MINIMAL_ROW_CAP = 3`）；asm 提供 `setUserLanguage()` 原子写配置与 `vessel config set ui.language`；Web 壳层 i18n（导航 / 面包屑 / Settings 六 tab / Appearance / 通用按钮，`localStorage['vessel.ui.language']` > `navigator.language`）；18 个子包改为 `@vessel-agent/*`，根包仍 `vessel-agent`。决策见 ADR-072 / 073。
+- **0.12.0 状态**：Gateway 生命周期与 CLI 样式（基于 `release/0.12.0`，未随版本发布）：`vessel gateway start|stop|status|restart|reload|install-service|uninstall-service`；daemon + `<dataDir>/gateway.pid`（0600）+ `<dataDir>/logs/gateway.log`，`--serve` 保留前台别名；用户级服务注册（systemd user / launchd / Windows 登录计划任务）；admin RPC `gateway.reload`（38 个 canonical 方法）只热重载 plugins 扫描缓存与 `serve.allowed_origins`，其余如实 `requires_restart`；`vessel update` 按安装形态自更新（npm / bun 全局；源码只提示）；`src/ui-style.ts` 暗金 CLI 样式覆盖一次性命令，`--json` / 数据行纯文本。同版本并入 0.11.1 修复（Web 权限 TTL 按事件时间、权限超时致命、`ui.showReasoning` 思考流、`agent.cwd` 默认工作目录、Web 流式实时显示）；0.11.1 不单独发布。决策见 ADR-074 / 075 / 076 / 077。
 
 ## 代码风格与硬规矩
 
@@ -65,6 +66,12 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **TUI 语言变更必须经 `ctx.settings`**（0.11，ADR-072）：`/settings` 等入口不得直接写用户配置文件，必须调用注入的 `setLanguage`；成功后再 `setLocale` 立即重渲染，未注入时保持只读，失败显示 `error.command.settings`。写配置只改 `ui.language`、保留其它键、`0600` 原子写。`VESSEL_LANG` 仍高于 `config.ui.language`，不要声称设置命令能覆盖显式环境变量。
 - **新面板默认全宽、常驻信息用 PanelFrame**（0.11，ADR-072）：不要再引入 `VIEW_MAX_WIDTH` 一类的固定上限；宽度用 `viewWidth(columns)`（`cols - 2`）。状态栏 / 启动头 / 队列预览等常驻信息用 `PanelFrame`，行数预算同步计入 `STATUS_BAR_ROWS = 3`；minimal 数据行封顶 `MINIMAL_ROW_CAP = 3`，新增 chrome 必须同时改 `viewCapacity()` 的测试。
 - **Web 新文案必须走 `apps/web/src/i18n`**（0.11，ADR-072）：每个新增 key 同时加 zh-CN 与 en 两份 catalog；locale 解析保持 `localStorage['vessel.ui.language']` > `navigator.language`，切换经 `setLocale` 并同步 `<html lang>`。未收录 key 回退中文，但不得把回退当成“已本地化”。
+- **gateway 生命周期只经 `vessel gateway`**（0.12，ADR-074）：前台 `start` / `restart` 复用 `--serve` 装配管线，`--serve` 只是前台别名；不要再加第二条启动路径。运行态以 `<dataDir>/gateway.pid` 为唯一来源（0600 原子写；PID 存活且命令行匹配才算 running，stale 可回收）。`stop` 只删本进程持有的 PID；服务注册只在显式 `install-service` / `uninstall-service` 时执行，只做当前平台的用户级定义，不随启动或安装自动改本机。
+- **`gateway.reload` 只承诺可验证的范围**（0.12，ADR-075）：`plugins` 只清扫描缓存（已安装插件 / active run 不变），`config` 只热更新 `serve.allowed_origins`；provider / model / agent / permission / TLS / token / port 变更必须如实进 `requires_restart`，不得报成已生效。未知 scope、配置读取失败、`reconfigure` 抛错必须返回 RPC 错误。
+- **CLI 人类输出走 `ui-style`，`--json` 无 ANSI**（0.12，ADR-076）：一次性命令的人类可读输出用 `src/ui-style.ts` 的 `ui`，不要自行拼 ANSI；ANSI 只在 TTY、未设 `NO_COLOR`、`TERM !== 'dumb'` 时输出。`--json`、路径与数据行保持纯文本。`vessel update` 只在 npm / bun 全局安装时执行全局升级；dev / unknown 只提示，不改工作区；非 TTY 必须显式 `--yes`。
+- **权限交互时效用事件时间**（0.11.1→0.12.0，ADR-077）：Web 的 `expiresAt` 必须是 `event.ts + 120s`，不得用收到事件时的 `Date.now()`；过期项直接丢弃，`not_found` 移除弹窗并提示，同一 `requestId` 只允许一次提交。core 权限等待超时抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败，不要转成可重试的工具错误。
+- **reasoning 仅在 `ui.showReasoning` 开启时发布**（0.11.1→0.12.0，ADR-077）：默认 `false`；只有显式 `true` 才把 `reasoning_content` 转成 `reasoning_delta` 经 `llm.stream.chunk` 发布。TUI / Web 折叠展示；`trace.includeStreamChunks` 仍默认 `false`。
+- **`agent.cwd` 优先级固定**（0.11.1→0.12.0，ADR-077）：工具参数 `cwd` > `agent.cwd` > `process.cwd()`；`bash` 默认 cwd 与 `read` / `edit` 相对路径都按 `agent.cwd` 解析。配置只提供默认目录，不得放宽 denylist / `allowed_roots` 的路径边界。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -76,7 +83,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.11.0` → `0.11-<role>`（`release/0.1` ~ `release/0.10.0` 已冻结；工作树沿用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.11.0 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.12.0` → `0.12-<role>`（`release/0.1` ~ `release/0.11.0` 已冻结；工作树沿用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.12.0 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -89,6 +96,11 @@ VESSEL_MOCK=1 bun run src/cli.ts --run "hello"  # headless 冒烟
 bun run src/cli.ts --version                    # 版本（根 package.json）
 bun run src/cli.ts --tools                      # 当前配置下的工具（无 Key）
 bun run src/cli.ts update --check               # 检查新版本（只提示）
+bun run src/cli.ts update                       # 按安装形态自更新（npm / bun 全局；默认确认）
+bun run src/cli.ts gateway start --daemon       # 后台启动 gateway（PID + 日志）
+bun run src/cli.ts gateway status --json        # 运行态（纯 JSON）
+bun run src/cli.ts gateway reload --scope config,plugins  # 热重载（其余字段需重启）
+bun run src/cli.ts gateway stop                 # 停止（默认等待 10s）
 bun run src/cli.ts config path                  # YAML 路径 + data_dir
 bun run src/cli.ts config init                  # 生成用户配置模板（不含真实密钥）
 bun run src/cli.ts config show --sources        # 脱敏配置与来源

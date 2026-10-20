@@ -177,6 +177,24 @@ team_cancel { "member": "node-b:worker" }
 - 节点心跳：`GET /v1/team/agents`（失败回退 `/health`），默认 5s；状态 `healthy` / `unreachable`，展示 TTL 15s。
 - 跨节点事件：父端订阅 `wss://<node>/v1/events`，按 `node:incarnation:run_id:seq` 去重后回灌（无 `run_id` 写 `-`；对端 `incarnation` 变化或 seq 回退只清该来源节点的键）。`seq` 按 `(node_id, run_id)` 解释，没有全局序；去重集合只在进程内，不跨重启。
 
+### 3.4 节点常驻、服务注册与热重载（0.12）
+
+远程节点通常需要长期运行 gateway；0.12 起不再依赖 `nohup` / 自建守护脚本：
+
+```bash
+vessel gateway start --daemon        # 分离进程；PID <dataDir>/gateway.pid，日志 <dataDir>/logs/gateway.log
+vessel gateway status --json         # running / pid / host / port / url / uptime / service
+vessel gateway reload                # 只重载 plugins 扫描缓存与 serve.allowed_origins
+vessel gateway stop --timeout 10s
+vessel gateway install-service       # systemd user / LaunchAgent / Windows 登录计划任务
+```
+
+- 常驻与开机自启交给 `install-service`（当前平台的用户级服务）；daemon 自身不做崩溃重启。
+- 修改 TLS 证书、token、端口或 provider / model 后必须 `restart`（或由服务管理器重启）；`gateway reload` 会在 `requires_restart` 中列出这些字段，不能把 reload 成功当成新证书 / 新 token 已生效。
+- 跨 Origin 的 `serve.allowed_origins` 是少数可热更新项：改配置后执行 `vessel gateway reload --scope config` 即可，无需重启。token 仍在配置解析时读取，热重载不替换已建立的鉴权状态。
+- PID 文件与 daemon 日志权限为 `0600`；`status --json` 可直接给运维脚本消费，人类输出带暗金样式（非 TTY 自动无 ANSI）。
+- 节点升级用 `vessel update`（npm / bun 全局安装）或 `--check` 仅检查；源码部署只提示 `git pull && bun install`。
+
 ## 4. 独立前端部署
 
 ```bash

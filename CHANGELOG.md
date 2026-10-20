@@ -3,6 +3,61 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.12.0] - 2026-10-20
+
+> 0.12.0（基于 `release/0.12.0`，未发布）：Gateway 生命周期与热重载 + CLI 暗金样式与自更新；同时并入 0.11.1 的权限交互、思考流与默认工作目录修复（0.11.1 不单独发布）。gateway 常驻、服务注册与 `gateway.reload` 都需显式命令触发，不随启动自动改本机配置。
+
+### Security
+
+- **权限交互过期按事件时间计算**：Web 权限 / 提问弹窗的 `expiresAt = event.ts + 120s`，不再用浏览器收到事件的时间；重放 / 刷新后的旧请求直接丢弃，避免服务端已丢弃的请求被重新计时后误点。应答返回 `not_found` 时移除弹窗并提示已过期，不静默保留。
+- **权限超时是致命错误**：core 的权限等待超时抛 `PermissionTimeoutError`（`code: 'permission_timeout'`），run 以失败结束，不把超时当成普通工具错误交给模型重试。
+- **思考流默认不外泄**：`ui.showReasoning` 默认 `false`；只有显式开启时才把 provider 的 `reasoning_delta` 经 `llm.stream.chunk` 发布给 UI。`trace.includeStreamChunks` 仍默认 `false`，思考增量默认不落 trace。
+- **PID 与服务定义权限**：`<dataDir>/gateway.pid` 以同目录临时文件 + rename 原子写入，权限 `0600`；daemon 日志目录 `0700`、日志文件 `0600`。PID 属主校验避免误删其它进程持有的文件。
+- **热重载只承诺可验证的范围**：`gateway.reload` 为 admin-only；plugins 只刷新扫描缓存，config 只有 `serve.allowed_origins` 热更新，其余字段如实返回 `requires_restart`，不把未生效的改动报成成功。
+- **服务注册需显式命令**：`install-service` / `uninstall-service` 只在用户主动执行时写入用户级定义并调用平台注册命令；不随 `gateway start` 或包安装自动修改本机服务。
+- **自更新不碰工作区**：`vessel update` 只对 npm / bun 全局安装执行 `npm i -g vessel-agent@latest` / `bun add -g vessel-agent@latest`；源码 / 开发模式只打印 `git pull && bun install`，不改动工作区。
+
+### Added
+
+- **`vessel gateway` 生命周期命令**：`start [--daemon] [--port <n>] [--host <h>] [--log <path>]`、`stop [--timeout 10s]`、`status [--json]`、`restart [--daemon]`、`reload [--scope config,plugins]`、`install-service [--systemd|--launchd|--schtasks]`、`uninstall-service`。前台 `start` / `restart` 走原有 `--serve` 装配管线；`--serve` 保留为前台别名。
+- **daemon 与 PID 状态**：`start --daemon` 用分离子进程常驻，stdio 追加到 `<dataDir>/logs/gateway.log`；PID 文件 `<dataDir>/gateway.pid` 记录 `{pid, started_at, host, port, version, node_id?}`。`status` 输出运行状态、地址、uptime、版本、服务注册状态；`--json` 为纯 JSON。死 PID、损坏文件或命令行不匹配按 stale 处理并可回收。
+- **系统服务注册**：Linux 生成 systemd **user** unit，macOS 生成 LaunchAgent plist，Windows 生成登录时计划任务（`VesselGateway`）；运行命令固定为 `vessel gateway start`。只支持当前平台，指定其它平台或不支持的平台明确报错，不静默降级。
+- **`gateway.reload` canonical RPC**：新增 admin-only 方法，`params { scopes?: string[] }` → `{ reloaded: string[], requires_restart: string[] }`；canonical 方法增至 38 个（37 个 domain 方法 + `events.subscribe`），带 `result_schema`。CLI 经本地 HTTP RPC 调用，token 来自配置、不放 URL。
+- **`vessel update` 自更新**：按安装形态选择 `npm i -g vessel-agent@latest` / `bun add -g vessel-agent@latest`；默认交互确认，`--yes` 跳过（非 TTY 无 `--yes` 直接失败）；源码 / 开发模式只提示。`--check` 行为不变（只检查与提示）。
+- **`ui.showReasoning`**：布尔配置，默认 `false`；`vessel config set ui.showReasoning <true|false>` 可写入用户配置。TUI / Web 在开启后折叠展示「思考过程」。
+- **`agent.cwd`**：默认工作目录配置，支持 `~`；`bash` 未显式传 `cwd` 时使用它，`read` / `edit` 的相对路径按它解析。`vessel config set agent.cwd <path>` 可写入用户配置。
+- **CLI 暗金样式**：`src/ui-style.ts` 提供标题、分隔线、状态前缀与 `label value` 对齐；覆盖全部一次性命令的人类可读输出。ANSI 只在 stdout 为 TTY、未设置 `NO_COLOR` 且 `TERM !== 'dumb'` 时输出；`--json` 与表格数据行保持纯文本。
+
+### Changed
+
+- **`--serve` 与 gateway 命令统一入口**：`vessel --serve` 与前台 `vessel gateway start` 走同一前台装配管线；常驻部署统一走 `vessel gateway start --daemon` 或服务管理器，不再需要自行拼接后台命令。
+- **`restart` 语义**：先 `stop`（默认等待 10s）再按前台 / `--daemon` 方式启动；PID 指向自身时拒绝停止。
+- **热重载范围**：`gateway reload` 缺省重载 `config,plugins`；`--scope` 只接受这两个值。`plugins` 清空插件目录扫描缓存，已安装插件与 active run 不受影响；`config` 重新读取配置，仅 `serve.allowed_origins` 经 `Gateway.reconfigure` 生效。
+- **Web 权限弹窗**：显示剩余有效期；同一 `requestId` 只允许一次提交（双击 / 重复点击不发第二次 RPC）；过期项定时移除。
+- **TUI / Web 思考展示**：`reasoning_delta` 合并成独立、可折叠的思考块，与正文文本分开；未开启 `ui.showReasoning` 时完全不发布。
+- **`vessel update` 文案**：`--check` 仍只提示；不带 `--check` 时按安装形态执行或提示，成功后提示重启当前进程。
+
+### Fixed
+
+- **Web 流式内容必须刷新才可见**：`EventStore` 发布快照时复制 `entries` 数组；消费者用 `snapshot.entries` 派生的视图在流式增量到达时正确重算，不再需要手动刷新。
+- **重放旧权限请求重新计时**：TTL 改由事件时间推导后，重连 / 刷新不会把历史请求当成新请求；`not_found` 不再表现为无响应的弹窗。
+- **权限超时被当成可重试工具错误**：超时现在直接失败 run，不再让模型反复申请同一权限。
+- **思考增量污染 trace**：只有显式 `ui.showReasoning: true` 才发布 `reasoning_delta`；trace 仍默认不落 stream chunk。
+- **相对路径落在进程 cwd**：配置 `agent.cwd` 后，`bash` / `read` / `edit` 的默认目录与相对路径按配置解析；显式 `cwd` 仍优先，denylist 与 `allowed_roots` 继续生效。
+- **gateway reload 假装成功**：配置读取失败、`reconfigure` 抛错或 scope 未知都返回 RPC 错误；不可热更新的字段只出现在 `requires_restart`。
+
+### Known limitations
+
+- **0.11.1 不单独发布**：其修复已并入本版本；不存在 `0.11.1` 的 tag、CHANGELOG 段落或 npm 版本。
+- **热重载边界**：`gateway.reload` 只承诺 plugins 扫描缓存与 `serve.allowed_origins`。provider / model / agent / permission / TLS / token / port 等变更必须重启；已安装插件与 active run 不会被替换。
+- **服务注册只覆盖当前平台**：Linux 只写 systemd user unit，macOS 只写 LaunchAgent，Windows 只建登录计划任务；不支持 root 级系统服务，也不做跨平台交叉注册。平台注册命令失败时 `install-service` 返回非 0。
+- **daemon 不自带崩溃重启**：`gateway start --daemon` 只是分离进程；需要常驻与自动拉起时用 `install-service` 交给 systemd / launchd / 计划任务。PID 存活判定依赖读取命令行，读不到时按 stale 处理。
+- **自更新只覆盖 npm / bun 全局安装**：源码 / 开发模式与未知安装形态只提示；不提供独立二进制或二进制自替换（ADR-006 继续有效）。非 TTY 环境必须显式 `--yes`。
+- **CLI 样式不是语义输出**：ANSI 仅在 TTY 且未禁用颜色时输出；`--json`、路径与数据行不加颜色。重定向到文件时本来就不会有 ANSI。
+- **思考流是 UI 行为**：`ui.showReasoning` 只控制是否向 UI 发布增量，不改变模型请求参数；provider 是否返回 reasoning 取决于模型与端点。
+- **验证范围**：本版本 Windows 全量门禁为 `3126 pass / 2 skip / 0 fail`（`VESSEL_VALIDATE_RESULTS=1`）；POSIX CI 实跑仍待完成，文档不宣称已通过。
+- 0.12.0 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.11.0] - 2026-10-20
 
 > 0.11.0（基于 `release/0.11.0`，未发布）：UI 设置与终端观感 + npm scope 归属。TUI 新增 `/settings language`，Web 壳层接入 zh-CN / en，终端面板改为全宽并统一边框；18 个可发布子包从 `@vessel/*` 迁到 `@vessel-agent/*`（根包仍是 `vessel-agent`）。
