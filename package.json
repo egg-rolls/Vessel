@@ -13,7 +13,11 @@
     "plugins",
     "skills",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "!**/__tests__",
+    "!**/__tests__/**",
+    "!**/*.test.ts",
+    "!**/*.test.tsx"
   ],
   "devDependencies": {
     "@biomejs/biome": "^2.5.6",
@@ -41,6 +45,11 @@
   ],
   "dependencies": {
     "@promptctl/rich-js": "^0.6.0",
+    "@vessel/config": "workspace:*",
+    "@vessel/core": "workspace:*",
+    "@vessel/permission": "workspace:*",
+    "@vessel/serve": "workspace:*",
+    "@vessel/tui": "workspace:*",
     "yaml": "^2.9.0"
   }
 }
