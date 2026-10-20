@@ -79,10 +79,19 @@ bun install
 ### ① 先跑起来看看（**不需要 API Key**）
 
 ```bash
-VESSEL_MOCK=1 bun run src/cli.ts
+bun run src/cli.ts demo
 ```
 
-`VESSEL_MOCK=1` 是**模拟模式**：不调真实模型，用本地模拟响应把整条链路跑通 —— **没有 Key 也能完整体验对话、工具调用、流式渲染与会话管理。**
+`vessel demo` 用隔离的数据目录启动一次演示会话：不调真实模型，助手会调用一次无害的 `bash` 命令（`echo vessel-demo-ok`），能看到工具调用、权限确认与最终回复。演示数据写在 `<dataDir>/demo`，不会读取你已有的会话；需要交互式终端（非 TTY 会直接退出）。
+
+调试 / CI 仍用 `VESSEL_MOCK=1`：
+
+```bash
+VESSEL_MOCK=1 bun run src/cli.ts               # 模拟 REPL（默认 echo 场景）
+VESSEL_MOCK=1 bun run src/cli.ts --run "hello" # headless 冒烟，输出 Echo: hello
+```
+
+`VESSEL_MOCK=1` 是**模拟模式**：不调真实模型，用本地模拟响应把整条链路跑通。可选 `VESSEL_MOCK_SCENARIO=echo|tools|permissions|error|multi-turn`（默认 `echo`）。
 
 ### ② 接入真实模型
 

@@ -1660,3 +1660,36 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `en` catalog 缺失 key 时静默回退 zh-CN；测试只保证两份 key 集合一致，不校验翻译质量。
 - 切换语言需重启进程；已归档的 Ink `<Static>` 历史不会重绘。
 - wizard 与 REPL 的 locale 来源不同（wizard 仅 env），同一机器上可能出现 wizard 中文、REPL 英文的组合。
+
+## 26. 0.8.6 mock 场景与 demo（已实现）
+
+> 状态：已合入 `release/0.8.6`（未发布）。决策见 [ADR-063](adr/ADR-063-mock-scenarios-and-demo.md)。场景 provider 在 app 层 `src/mock/`；core 不出现场景概念，默认 mock 行为与 0.8.5 逐字一致。
+
+### 26.1 场景 provider（`src/mock/scenarios.ts`）
+
+- `resolveMockScenario(raw: string | undefined)` → `{ name, unknown? }`：未设置或空串 → `echo`；未知值 → `echo` 并带回原值（入口层打印一次警告）。
+- `createScenarioProvider(name)` 返回 `LLMProvider`；场景名为冻结契约：`echo` / `tools` / `permissions` / `error` / `multi-turn`。
+  - `echo`：返回 `Echo: <最后一条 user>`；最后一条是 tool 消息时回显其内容。文本、usage 与流式两段分片与 core `MemoryLLMProvider` 逐字一致。
+  - `tools` / `permissions`：首轮返回一次 `bash` tool_call（`echo vessel-demo-ok`，不写文件、不联网），收到 role=tool 的消息后以固定文本收尾；两者共用实现，交互 REPL 下是否弹权限确认由权限层决定。
+  - `error`：`chat()` 抛固定错误，用于演示错误路径。
+  - `multi-turn`：返回 `Turn N: <输入>`，N 为消息历史中的 user 条数。
+- provider factory：`createProvider(..., useMock, scenario?)` 在 `useMock` 时若收到 `scenario` 用 `createScenarioProvider()`，否则仍用 `MemoryLLMProvider`（eval / workflow 等未透传场景的调用方保持原行为）。
+
+### 26.2 `VESSEL_MOCK_SCENARIO`
+
+- 只在 `src/cli.ts` 读取一次；CLI 始终把解析后的场景经 bootstrap → tenant runtime factory 透传到 provider factory。未设置时解析为 `echo`，走场景 provider，输出与 `MemoryLLMProvider` 逐字一致。
+- 未知值回退 `echo`，并向 stderr 打印一行 `Unknown VESSEL_MOCK_SCENARIO "..."` 警告；`VESSEL_MOCK` 的语义（放宽启动门禁、跳过 Key）不变。
+- 不提供 `--scenario` flag，也不支持场景文件 / DSL。
+
+### 26.3 `vessel demo` 与数据隔离
+
+- `vessel demo` 是 CLI 模式而非一次性命令：`src/cli.ts` 解析后走现有 bootstrap / REPL 路径，固定 mock + `tools` 场景，忽略 `VESSEL_MOCK_SCENARIO`；`--help` 可见。
+- 启动前打印英文引导（会看到工具调用、权限确认与最终回复，Ctrl+C 退出，下一步配 Key）；数据目录隔离到 `<dataDir>/demo`，不读用户已有 session。
+- 非 TTY 时打印提示（改用 `VESSEL_MOCK=1 vessel --run "hello"`）并 exit 1。
+
+### 26.4 已知限制（0.8.6）
+
+- demo 需要交互式 TTY；CI 与非交互环境只能用 `VESSEL_MOCK=1 ... --run`。
+- evals 与 workflow 未接入场景 provider，仍是各自固定的 mock 行为。
+- web / gateway 没有 demo 入口；场景只在 CLI 装配路径可达。
+- demo 引导与 CLI 输出保持英文，不在 0.8.5 i18n 范围内。

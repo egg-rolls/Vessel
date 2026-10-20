@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.8.5（基线 `release/0.8.5`；目标是根包与可发布包版本均为 `0.8.5`，根 `package.json` 由 asm bump；本分支的 `version --check` 在版本 bump 前可能失败）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.8.6（基线 `release/0.8.6`；目标是根包与可发布包版本均为 `0.8.6`，bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍为 `0.8.5`，本分支的 `version --check` 在版本 bump 前可能失败）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 只做发布干跑。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -59,7 +59,7 @@
 - 触发：`pull_request` + `release/**` push；不覆盖 `main` push。
 - 命令：`bun run scripts/release-dry-run.ts`（详细检查项与退出码见
   [RELEASE.md §2.1](RELEASE.md)）。
-- 目标版本 = 根 `package.json` 版本：当前为 `0.8.5`（由 asm 在 `0.8-asm` bump，1 合并后生效）；收口是否再升版由 1 决定。
+- 目标版本 = 根 `package.json` 版本：0.8.5 → `0.8.6`（bump 由 1 在集成线统一写入；bump 前 job 仍按 `0.8.5` 校验）；收口是否再升版由 1 决定。
 - 打包到 runner 的 OS 临时目录并在结束后清理；**不上传 artifact、不登录 npm、
   不创建 tag、不发布**。
 - 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；

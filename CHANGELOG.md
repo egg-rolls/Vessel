@@ -3,6 +3,29 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.8.6] - 2026-10-20
+
+> 0.8.6（基于 `release/0.8.6`，未发布）：确定性 mock 场景与 `vessel demo`。默认 mock 行为（`echo`）与 0.8.5 逐字一致；core 不引入场景概念。版本号由 1 在集成线统一写入。
+
+### Added
+
+- `src/mock/scenarios.ts`：`resolveMockScenario()` / `createScenarioProvider()`；场景名 `echo`（默认）/ `tools` / `permissions` / `error` / `multi-turn` 为冻结契约。`echo` 的文本、usage 与流式分片与 core `MemoryLLMProvider` 逐字一致。
+- `tools` / `permissions`：首轮返回一次 `bash echo vessel-demo-ok` 的 tool_call，收到 tool 结果后以固定文本收尾；`error` 抛固定错误；`multi-turn` 返回 `Turn N: <输入>`。
+- `VESSEL_MOCK_SCENARIO`：只在 `src/cli.ts` 读取一次，经 bootstrap / tenant runtime factory 透传到 provider factory；未设置时仍用 `MemoryLLMProvider`；未知值回退 `echo` 并打印一行 stderr 警告。
+- `vessel demo`：CLI 模式（复用现有 bootstrap / REPL，不进一次性命令注册表），固定 mock + `tools` 场景，数据目录隔离到 `<dataDir>/demo`，不读用户已有 session；`--help` 可见。非 TTY 时打印提示并 exit 1。
+- 测试 `src/__tests__/mock-scenarios.test.ts`：5 个 CLI spawn 用例，含未知场景回退与 `error` 场景的反向验证。
+
+### Changed
+
+- README 快速开始步骤① 改为 `vessel demo`；`VESSEL_MOCK=1` 保留为调试 / CI 用法。
+- `vessel demo` 忽略 `VESSEL_MOCK_SCENARIO`，固定 `tools`；`VESSEL_MOCK` 的语义不变。
+
+### Known limitations
+
+- `vessel demo` 需要交互式 TTY；非 TTY 直接失败（CI 用 `VESSEL_MOCK=1 ... --run`）。
+- evals 与 workflow 未接入场景 provider，仍使用各自固定的 mock 行为。
+- `vessel demo` 的引导文案与 CLI 输出未本地化（0.8.5 的本地化范围限制继续有效）。
+
 ## [0.8.5] - 2026-10-20
 
 > 0.8.5（基于 `release/0.8.5`，未发布）：TUI 本地化（zh-CN / en）。用户可见文案收敛到 catalog 并经 `t()` 查表；新增 `ui.language` 配置与 `VESSEL_LANG` 环境变量。默认 zh-CN 文案与 0.8.4 逐字一致。版本号由 1 在集成线统一写入。
@@ -19,6 +42,11 @@
 - TUI 启动头 / 摘要、状态栏、确认与提问弹窗、队列预览、命令描述与错误文案改走 `t(key, params?)`；会话选择器、setup wizard、流式与工具显示同步。
 - `t()` 缺失 key 回退 zh-CN，再回退 key 本身；缺失参数保留 `{name}` 原文，不抛错、不打印。
 - locale 在 REPL 启动时解析一次并进程内固定；wizard 没有 `ReplContext`，只按环境变量解析。
+
+### Build
+
+- 根 `package.json` 的 `files` 排除 `__tests__` 与 `*.test.ts` / `*.test.tsx`：`npm pack --dry-run` 由 packed **1,035,163 B** 降到 **642,679 B**、unpacked **4,349,088 B** 降到 **2,549,095 B**、文件数 **660** 降到 **374**；包内测试文件为 0。
+- 根 `dependencies` 显式声明 `@vessel/{config,core,permission,serve,tui}` 为 `^0.8.5`。**发布前提：先发布这些子包**，否则 tarball 安装时依赖无法解析。
 
 ### Known limitations
 
