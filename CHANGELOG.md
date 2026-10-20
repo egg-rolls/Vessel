@@ -3,6 +3,33 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.11.0] - 2026-10-20
+
+> 0.11.0（基于 `release/0.11.0`，未发布）：UI 设置与终端观感 + npm scope 归属。TUI 新增 `/settings language`，Web 壳层接入 zh-CN / en，终端面板改为全宽并统一边框；18 个可发布子包从 `@vessel/*` 迁到 `@vessel-agent/*`（根包仍是 `vessel-agent`）。
+
+### Added
+
+- **TUI `/settings language <zh-CN|en>`**：经装配层注入的 `ctx.settings.setLanguage` 把语言持久化到用户配置 `ui.language`，成功后立即 `setLocale` 重渲染；未注入 `ctx.settings` 时只读；写入失败显示 `error.command.settings`。`VESSEL_LANG` 仍是最高优先级，显式设置环境变量时命令不会改变当前显示。
+- **`ui.clearOnStart?: boolean`**（默认 `true`）：TTY 进入 REPL 前清可视区并归位光标（`\x1b[2J\x1b[H`）；显式 `false` 或非 TTY 不清屏。
+- **`vessel config set ui.language <zh-CN|en> [--json]`**：原子写 `~/.vessel/config.yaml`（`0600`，保留其它键），本地 REPL 与 `--connect` 两处 `ReplContext` 都注入 `settings`。
+- **Web 壳层 i18n**：`apps/web/src/i18n/` 提供 zh-CN / en catalog，覆盖导航、面包屑、Settings 六个 tab、Appearance 与通用按钮；locale 取 `localStorage['vessel.ui.language']` > `navigator.language`；Settings → Appearance 提供语言选择并立即重渲染。
+- **npm scope `@vessel-agent`**：18 个可发布子包从 `@vessel/*` 改为 `@vessel-agent/*`；根包仍为 `vessel-agent`（bin 仍是 `vessel`）。源码 import、manifest、`scripts/{version,release-dry-run,check-deps,smoke-subpaths,smoke-install}.ts` 与当前维护文档同步更新。
+
+### Changed
+
+- **面板全宽**：移除 `VIEW_MAX_WIDTH = 160`，视图宽度改为 `cols - 2`（`VIEW_HORIZONTAL_MARGIN`），宽终端不再人为留白。
+- **统一边框与行数预算**：状态栏、启动头 + 会话摘要、队列预览改用单线 `PanelFrame`；`STATUS_BAR_ROWS = 3`，minimal 数据行封顶 `MINIMAL_ROW_CAP = 3`，14 / 15 行终端切换时容量不回落。
+- **locale 可在运行中切换**：TUI 不再要求改配置后重启；Web 语言选择即时生效。
+- **安装与发布引用**：`release-dry-run`、`smoke-install`、`check-deps`、`smoke-subpaths` 全部按 `@vessel-agent/*` 解析；历史 ADR 与 CHANGELOG 的既往版本段落保留旧包名，不改写。
+
+### Known limitations
+
+- Web 只有壳层 i18n（导航 / 面包屑 / Settings / Appearance / 通用按钮）；功能页未收录的 key 回退中文，不能宣称 Web 已全量本地化。
+- TUI `/settings` 依赖 asm 注入 `ctx.settings`；未注入的宿主只能只读查看语言，不能切换。
+- `ui.clearOnStart` 只影响 TTY 的 REPL 启动；非 TTY / headless 不清屏。
+- `VESSEL_LANG` 优先于 `config.ui.language`；环境变量显式设置时，`/settings` 与 `config set` 会写入配置但当前显示不变。
+- 0.11.0 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入，本周期文档不维护版本副本。
+
 ## [0.10.0] - 2026-10-20
 
 > 0.10.0（基于 `release/0.10.0`，未发布）：发版硬化——首启与配置、上下文 / 运行时、日志与可观测、打包与分发、CLI 语言。新增能力都保留兼容路径；根包与 18 个可发布子包已 bump 到 `0.10.0`，发布名改为 `vessel-agent`。

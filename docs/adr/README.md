@@ -86,6 +86,8 @@
 | 069 | 日志端口与可观测（stderr 诊断、脱敏与进程级兜底） | accepted | 2026-10-20 | logging, observability, redaction, trace, process | [ADR-069-logging-port-and-observability.md](ADR-069-logging-port-and-observability.md) |
 | 070 | 关闭 drain 与 interrupt 原因（可恢复的 interrupted checkpoint） | accepted | 2026-10-20 | runtime, shutdown, interrupt, drain, gateway, durable | [ADR-070-shutdown-drain-and-interrupt-reasons.md](ADR-070-shutdown-drain-and-interrupt-reasons.md) |
 | 071 | 分发：vessel-agent 根包、子包 files 与安装解析 smoke | accepted | 2026-10-20 | distribution, packaging, npm, release, ci | [ADR-071-distribution-vessel-agent-and-install-smoke.md](ADR-071-distribution-vessel-agent-and-install-smoke.md) |
+| 072 | UI 设置与终端观感（/settings、clearOnStart、全宽面板） | accepted | 2026-10-20 | tui, i18n, settings, layout, terminal, web | [ADR-072-ui-settings-and-terminal-polish.md](ADR-072-ui-settings-and-terminal-polish.md) |
+| 073 | npm scope 归属：子包统一为 @vessel-agent/* | accepted | 2026-10-20 | distribution, packaging, npm, release, scope, naming | [ADR-073-npm-scope-vessel-agent.md](ADR-073-npm-scope-vessel-agent.md) |
 
 ## 编写约定
 

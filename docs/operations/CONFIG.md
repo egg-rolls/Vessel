@@ -138,18 +138,23 @@ legacy 键（仅兼容）：`default_provider` / `default_model` / `providers.<n
 5. 已注册 provider 缺 `model` → 启动失败（`provider_invalid`），不回退全局默认模型；未注册 provider 缺 `model` 同样要求显式配置。
 6. 密钥解析统一走 `provider.api_key_env` / `provider.apiKey`（见 §3）；不要写 `${VAR}` 插值。
 
-### 2.3 界面语言（`VESSEL_LANG` / `ui.language`）
+### 2.3 界面语言与启动清屏（`VESSEL_LANG` / `ui.language`）
 
 ```yaml
 ui:
   language: zh-CN        # zh-CN（默认）| en
+  clearOnStart: true     # 默认 true；仅 TTY 生效
 ```
 
 - 默认 **zh-CN**；`VESSEL_LANG=en` 或 `ui.language: en` 切换英文。
 - 优先级：`VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`；每个值独立归一化（`zh` / `zh-*` / `zh_*` → `zh-CN`，`en` / `en-*` → `en`），非法值跳过该层，不报错。
-- locale 在进程启动时解析一次，运行中切换需重启。
+- **TUI 内切换**：`/settings language <zh-CN|en>` 经装配层注入的 `ctx.settings.setLanguage` 写回用户配置 `ui.language`（原子写、`0600`、保留其它键），成功后立即 `setLocale` 重渲染，无需重启。未注入 `ctx.settings` 的宿主只能只读查看；写入失败显示 `error.command.settings`。
+- **CLI 写配置**：`vessel config set ui.language <zh-CN|en> [--json]`。
+- `VESSEL_LANG` 仍高于 `config.ui.language`：显式设置环境变量时，`/settings` 与 `config set` 会写入配置，但当前显示以环境变量为准。
 - **TUI 界面文案已接入 `t()`**（zh-CN / en 两份 catalog）。命令名、工具名、错误码、provider / 模型名不翻译；命令的数据输出（会话、trace、metrics、成本等）保持英文。
-- **CLI 的 `--help`、一次性命令错误、默认空状态、demo banner 跟随同一 locale 属于 0.10 计划**；Web 前端未本地化。CLI 当前**尚未全量本地化**，不要按已全量本地化使用。
+- **CLI 的 `--help`、一次性命令错误、默认空状态、demo banner 跟随同一 locale**（zh-CN / en 各 85 个 key）。命令数据输出仍为英文。
+- **Web 壳层**：`apps/web/src/i18n/` 覆盖导航、面包屑、Settings 六个 tab、Appearance 与通用按钮；locale 取 `localStorage['vessel.ui.language']` > `navigator.language`，可在 Settings → Appearance 切换并立即生效；未收录页面回退中文。Web 不是全量本地化。
+- **`ui.clearOnStart`**（默认 `true`）：TTY 进入 REPL 前写 `\x1b[2J\x1b[H` 清可视区并归位光标；设为 `false` 时保留终端历史；非 TTY / headless 不清屏。
 
 ## 3. 密钥与 `_env`
 

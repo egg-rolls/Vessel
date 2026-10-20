@@ -1,6 +1,6 @@
 # 跨机器远程运维（0.6）
 
-> 状态：F5 跨机器远程与跨节点 team **已合入 `release/0.6`（未发布）**。
+> 状态：F5 跨机器远程与跨节点 team **已合入 `release/0.6`（未发布）**；0.11 起 Web 控制台壳层支持 zh-CN / en。
 > 决策边界见 [ADR-051](../adr/ADR-051-remote-control-plane.md) /
 > [ADR-052](../adr/ADR-052-cross-node-transport.md) /
 > [ADR-053](../adr/ADR-053-remote-security-baseline.md)。
@@ -194,6 +194,7 @@ npm run build            # 产物在 apps/web/dist
    - 只接受 `http(s)://host[:port]`，非回环必须 `https`；
    - HTTPS 页面不能连接 `http://` gateway（mixed content 会被浏览器拦截）。
 4. 首次用 `#token=<token>` 导入 token；token 随后只存 `sessionStorage`。
+5. **界面语言**（0.11）：Web 壳层与 Settings 支持 zh-CN / en。初始 locale 取 `localStorage['vessel.ui.language']` > `navigator.language`，可在 Settings → Appearance 切换并立即生效；未收录的功能页回退中文。语言选择存本地，不影响 gateway。
 
 独立静态站点需要自行下发 CSP，至少允许连接目标 gateway：
 
