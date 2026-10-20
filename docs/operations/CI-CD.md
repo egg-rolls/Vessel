@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.9.0（基线 `release/0.9.0`；目标是根包与可发布包版本均为 `0.9.0`，bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍为上一版本，本分支的 `version --check` 在版本 bump 前可能失败）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.10.0（基线 `release/0.10.0`；目标是根包与可发布包版本均为 `0.10.0`，bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍为上一版本，本分支的 `version --check` 在版本 bump 前可能失败）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -62,7 +62,7 @@
 - 触发：`pull_request` + `release/**` push；不覆盖 `main` push。
 - 命令：`bun run scripts/release-dry-run.ts`（详细检查项与退出码见
   [RELEASE.md §2.1](RELEASE.md)）。
-- 目标版本 = 根 `package.json` 版本：`0.8.7` → `0.9.0`（bump 由 1 在集成线统一写入；bump 前 job 仍按上一版本校验）；收口是否再升版由 1 决定。
+- 目标版本 = 根 `package.json` 版本：`0.9.0` → `0.10.0`（bump 由 1 在集成线统一写入；bump 前 job 仍按上一版本校验）；收口是否再升版由 1 决定。
 - 打包到 runner 的 OS 临时目录并在结束后清理；**不上传 artifact、不登录 npm、
   不创建 tag、不发布**。
 - 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；
@@ -85,6 +85,16 @@
 - **插件生命周期**：插件卸载 / 释放相关测试覆盖 `init` 失败隔离、`dispose` 逆序、幂等与安装回滚；不要在测试里依赖插件释放顺序之外的全局状态。
 - **去重键**：跨节点测试覆盖 `incarnation` 代际变化、seq 回退与旧对端（缺 `incarnation` 按 `-`）；去重集合不跨进程持久化，测试不得断言重启后仍去重。
 - 全量测试在 Windows 与 POSIX（Docker）上均以同一 env 跑；Windows 的 `cross-platform` 与 ubuntu 的 `quality` 结果不一致时按环境差异排查，不要先关校验。
+
+### 1.4 0.10 发版硬化门禁
+
+- **安装解析 smoke**：`install-smoke` job 与 `release.yml` 的 `verify` 都执行 `scripts/smoke-install.ts`；改 18 个子包或根包 manifest 的 `files` / 依赖版本后必须本地跑一次。失败时先看 `npm pack` 内容与 `file:` overrides 解析，不要靠放宽断言绕过。
+- **配置与首启**：`src/__tests__/config-hardening-0.10.test.ts` 覆盖未知 provider 无 `base_url` 的 `ProviderConfigError`、legacy provider 优先级与 deprecation、YAML 错误与来源脱敏；改 `packages/config` 或 `src/provider-factory.ts` 后定向复跑。
+- **日志不污染 stdout**：`packages/core/__tests__/runtime-logging.test.ts`、`src/__tests__/runtime-0.10.test.ts` 守卫 Logger 级别 / 脱敏、`process.error` / `shutdown.failed`。任何诊断输出都必须写 stderr；headless / `--json` 的输出断言失败时先查 `console.log`。
+- **关闭与 interrupt**：`packages/serve/__tests__/gateway.shutdown.test.ts`、`src/__tests__/shutdown-sequence-0.10.test.ts` 覆盖 `gateway.stop()` 幂等、5s drain、固定关闭顺序与不重复 drain；`packages/core/__tests__/runtime-overflow-interrupt.test.ts` 覆盖 interrupt 原因与 400 overflow 重试。
+- **trace 与打包**：`packages/config/__tests__/trace-0.10.test.ts` 覆盖 `includeStreamChunks` 默认关闭与 trace 文件 `0600`；发布前用 `release-dry-run` + `smoke-install` 双门禁。
+- **CLI i18n**：`src/__tests__/i18n-0.10.test.ts` 校验 zh-CN / en key 集合一致；新增用户可见文案必须同时改两份 catalog。
+- 全量测试在 Windows 与 POSIX（Docker）上以同一 env 跑；平台差异先按环境排查，不要先关校验。
 
 ## 2. Release（`.github/workflows/release.yml`）
 

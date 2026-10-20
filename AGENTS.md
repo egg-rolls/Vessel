@@ -26,6 +26,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.8.6 状态**：mock 场景化与 `vessel demo`（基于 `release/0.8.6`，未随版本发布）：新增 app 层 `src/mock/scenarios.ts`（`echo` / `tools` / `permissions` / `error` / `multi-turn`，场景名冻结，默认 `echo` 与 `MemoryLLMProvider` 逐字一致）；`VESSEL_MOCK_SCENARIO` 只在 `src/cli.ts` 读取并经 bootstrap / tenant runtime factory 透传到 provider factory；`vessel demo` 走 bootstrap / REPL，固定 `tools`，数据目录隔离到 `<dataDir>/demo`，非 TTY exit 1。core 不变。决策见 ADR-063。
 - **0.8.7 状态**：上下文默认预算与发布前置（基于 `release/0.8.7`，未随版本发布）：`context.maxTokens` 默认 4096 → 1,000,000（core `context-manager.ts` 三处 fallback + config `defaults.ts`），`provider.maxTokens` / 请求 `max_tokens` 仍 4096；自动压缩阈值仍 0.8，默认约 800k 估算 token 触发。`quality` / `cross-platform` 在 `bun test` 前安装 `apps/web` 依赖；`scripts/version.ts` 写模式同步所有 manifest 的 `@vessel/*` 依赖为精确目标版本。决策见 ADR-064。
 - **0.9.0 状态**：Wave 2B2B 收口（基于 `release/0.9.0`，未随版本发布）：core 插件生命周期 v2（`init` 全部安装后按序调用、`dispose` 逆序 best-effort 且幂等、安装失败按插件回滚后重抛）；37 个 canonical 方法补 `result_schema`，`VESSEL_VALIDATE_RESULTS=1` 时校验结果，`PROTOCOL_VERSION` 成为协议版本单源；跨节点事件键改为 `${node}:${incarnation}:${run_id ?? '-'}:${seq}`，消息键含 tenant / from，网关 `hello` / `peers` 透出 `incarnation`。CI 的 Test step 固定 `VESSEL_VALIDATE_RESULTS=1`。决策见 ADR-065 / 066 / 067。
+- **0.10.0 状态**：发版硬化（基于 `release/0.10.0`，未随版本发布）：配置与首启（`resolveEffectiveApiKey()` 单源、legacy `default_provider` / `providers` 只读兼容且新版 `provider:` 优先、未知 provider 无 `base_url` 时 `ProviderConfigError`、YAML 解析 / 重复键转 validation error、`config show --sources` 脱敏）；运行时（去掉 100 条硬截断、400 context-overflow 先压缩再重试一次、`interrupt('shutdown'|'timeout'|'user')`、gateway stop 幂等并 drain ≤5s、固定关闭顺序）；可观测（core `Logger` 端口 + stderr JSON + redact、`process.error` / `shutdown.failed`、provider 120s 超时与 `onRetry`、MCP `mcp.warning`、trace 0600 且默认不落 `llm.stream.chunk`）；分发（根包 `vessel-agent`、18 子包 `files:["src"]` + 元数据、`scripts/smoke-install.ts` 与 `install-smoke` job）；CLI i18n（zh-CN / en 各 85 key）。决策见 ADR-068 / 069 / 070 / 071。
 
 ## 代码风格与硬规矩
 
@@ -54,6 +55,11 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **插件资源必须可回收**（0.9，ADR-065）：新增插件若在 `install()` 期间创建资源（连接、定时器、子进程、文件句柄、订阅），**必须**实现 `dispose()` 并在其中释放；不得在 `install()` 里创建不可回收资源。`init()` 在所有插件安装完成后按安装顺序调用，不得假设“后续插件已安装”。安装失败由 `beginPluginInstall()` 的 `rollback()` 清理，不要手动逐个反注册，也不要把安装失败改成隔离继续（安装阶段保持 fail-fast）。`dispose()` 必须幂等或可安全重复调用。
 - **canonical 方法必须带 result_schema**（0.9，ADR-066）：新增或修改 canonical RPC 方法时必须同时写 `result_schema`，复用 `gateway/methods/schemas.ts` 的片段；只使用校验器支持的子集，不引入 `oneOf` / `$ref` / `additionalProperties`。CI 的 Test step 以 `VESSEL_VALIDATE_RESULTS=1` 运行，结果形状漂移会直接失败；本地如改了结果形状，用该变量复跑相关测试。协议版本一律引用 `PROTOCOL_VERSION`，不要写字面量 `1`。
 - **去重键必须含范围维度**（0.9，ADR-067）：事件键必须包含 `node`、`incarnation` 与 `run_id`（缺失写 `-`）；消息键必须含 `from`，gateway 层还必须含 `tenant`。代际变化或 seq 回退只清该来源节点的键，**不得**退回全局 `clear()`；无 `seq` 的帧不参与去重。去重集合不持久化，文档不得宣称跨重启 exactly-once。
+- **配置 legacy 只读兼容**（0.10，ADR-068）：legacy `default_provider` / `providers` 只读，新版 `provider:` 优先；两者并存必须发 deprecation warning，不得让 legacy 覆盖新版。未注册 provider 且无 `provider.base_url` 必须抛 `ProviderConfigError`，不得猜厂商默认端点；已知 provider 缺 model 同样 fail-fast。YAML 解析失败 / 重复键必须是 validation error，不得静默回落默认配置。API Key 一律经 `resolveEffectiveApiKey()`。
+- **诊断走 Logger（stderr）**（0.10，ADR-069）：诊断日志一律经 core `Logger`（CLI / serve 注入 `createCliLogger()`），写 stderr；**不得** `console.log` 到 stdout（stdout 只留命令结果 / JSON / UX）。`VESSEL_DEBUG` 只提级别，不打印 prompt 正文；日志 message / fields 必须经 redactor，异常兜底只带 `kind` 与脱敏 message。未捕获异常必须走 `process.error` + 限时 shutdown，不得让运行时默认打印。
+- **关闭必须 await gateway.stop()**（0.10，ADR-070）：serve 路径固定 `await gateway.stop()` → 取消订阅 / 关闭 transport → `beforeClose` → `closeAll` → `shutdown`，后两步传 `{ drain: false }`，不得二次 drain。中断 active run 用 `interrupt('shutdown')`（或 `timeout` / `user`），不得只 abort signal 而丢失原因；`shutdown` / `timeout` 必须落可恢复的 `interrupted` checkpoint。
+- **发布包名与包元数据**（0.10，ADR-071）：根包发布名为 `vessel-agent`（bin 仍是 `vessel`）；18 个可发布子包必须带 `files: ["src"]`、`license`、`repository`、`engines`。改发布形态后必须跑 `scripts/smoke-install.ts`；发布顺序固定 core → permission → config → serve → tui → plugins → 根包，不得先发根包。
+- **CLI 用户可见文案走 `src/i18n/`**（0.10）：`--help` / 一次性命令错误 / 默认空状态 / demo banner 必须用 `t(key, params?)`，zh-CN 与 en 两份 catalog 同步；命令的数据输出保持英文，技术词、命令名、错误码不翻译。`--help` 在配置加载前短路，只能读环境变量层。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -65,7 +71,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.9.0` → `0.9-<role>`（`release/0.1` ~ `release/0.8.7` 已冻结；0.9 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.9.0 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.10.0` → `0.10-<role>`（`release/0.1` ~ `release/0.9.0` 已冻结；0.10 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.10.0 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
