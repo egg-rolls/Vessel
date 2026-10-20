@@ -317,6 +317,9 @@ function renderHelp(reg: CommandRegistry, ctx: ReplContext): string {
   lines.push('  Ctrl+C   cancel the running turn; press again / when idle to exit');
   lines.push('  Ctrl+L   clear the screen');
   lines.push('  Ctrl+O   expand full tool output into scrollback');
+  lines.push(`  Ctrl+T   ${t('help.tip.toggleTop')}`);
+  lines.push(`  Ctrl+G   ${t('help.tip.toggleBottom')}`);
+  lines.push(`  Ctrl+R   ${t('help.tip.sessions')}`);
   lines.push('  Resume   picker: ↑↓/jk move · / filter · enter open · r rename · x delete');
   lines.push('');
   return lines.join('\n');
