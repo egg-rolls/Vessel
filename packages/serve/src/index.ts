@@ -42,6 +42,11 @@ export {
   maskAppId,
   normalizeFeishuStatus,
 } from './feishu.js';
+export {
+  type GatewayReloadResult,
+  RELOAD_SCOPES,
+  type ReloadScope,
+} from './gateway/methods/admin.js';
 export type { Gateway, GatewayOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
 export {
