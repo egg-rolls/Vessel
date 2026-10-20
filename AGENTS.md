@@ -27,6 +27,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.8.7 状态**：上下文默认预算与发布前置（基于 `release/0.8.7`，未随版本发布）：`context.maxTokens` 默认 4096 → 1,000,000（core `context-manager.ts` 三处 fallback + config `defaults.ts`），`provider.maxTokens` / 请求 `max_tokens` 仍 4096；自动压缩阈值仍 0.8，默认约 800k 估算 token 触发。`quality` / `cross-platform` 在 `bun test` 前安装 `apps/web` 依赖；`scripts/version.ts` 写模式同步所有 manifest 的 `@vessel-agent/*` 依赖为精确目标版本。决策见 ADR-064。
 - **0.9.0 状态**：Wave 2B2B 收口（基于 `release/0.9.0`，未随版本发布）：core 插件生命周期 v2（`init` 全部安装后按序调用、`dispose` 逆序 best-effort 且幂等、安装失败按插件回滚后重抛）；37 个 canonical 方法补 `result_schema`，`VESSEL_VALIDATE_RESULTS=1` 时校验结果，`PROTOCOL_VERSION` 成为协议版本单源；跨节点事件键改为 `${node}:${incarnation}:${run_id ?? '-'}:${seq}`，消息键含 tenant / from，网关 `hello` / `peers` 透出 `incarnation`。CI 的 Test step 固定 `VESSEL_VALIDATE_RESULTS=1`。决策见 ADR-065 / 066 / 067。
 - **0.10.0 状态**：发版硬化（基于 `release/0.10.0`，未随版本发布）：配置与首启（`resolveEffectiveApiKey()` 单源、legacy `default_provider` / `providers` 只读兼容且新版 `provider:` 优先、未知 provider 无 `base_url` 时 `ProviderConfigError`、YAML 解析 / 重复键转 validation error、`config show --sources` 脱敏）；运行时（去掉 100 条硬截断、400 context-overflow 先压缩再重试一次、`interrupt('shutdown'|'timeout'|'user')`、gateway stop 幂等并 drain ≤5s、固定关闭顺序）；可观测（core `Logger` 端口 + stderr JSON + redact、`process.error` / `shutdown.failed`、provider 120s 超时与 `onRetry`、MCP `mcp.warning`、trace 0600 且默认不落 `llm.stream.chunk`）；分发（根包 `vessel-agent`、18 子包 `files:["src"]` + 元数据、`scripts/smoke-install.ts` 与 `install-smoke` job）；CLI i18n（zh-CN / en 各 85 key）。决策见 ADR-068 / 069 / 070 / 071。
+- **0.11.0 状态**：UI 设置与包 scope（基于 `release/0.11.0`，未随版本发布）：TUI `/settings language <zh-CN|en>` 经注入的 `ctx.settings.setLanguage` 持久化到用户配置 `ui.language` 并立即 `setLocale`（未注入时只读，失败显示 `error.command.settings`）；`ui.clearOnStart`（默认 `true`，仅 TTY 清屏）；删除 `VIEW_MAX_WIDTH = 160`，面板宽度 = `cols - 2`；状态栏 / 启动头 + 会话摘要 / 队列预览统一 `PanelFrame`（`STATUS_BAR_ROWS = 3`、`MINIMAL_ROW_CAP = 3`）；asm 提供 `setUserLanguage()` 原子写配置与 `vessel config set ui.language`；Web 壳层 i18n（导航 / 面包屑 / Settings 六 tab / Appearance / 通用按钮，`localStorage['vessel.ui.language']` > `navigator.language`）；18 个子包改为 `@vessel-agent/*`，根包仍 `vessel-agent`。决策见 ADR-072 / 073。
 
 ## 代码风格与硬规矩
 
@@ -60,6 +61,10 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **关闭必须 await gateway.stop()**（0.10，ADR-070）：serve 路径固定 `await gateway.stop()` → 取消订阅 / 关闭 transport → `beforeClose` → `closeAll` → `shutdown`，后两步传 `{ drain: false }`，不得二次 drain。中断 active run 用 `interrupt('shutdown')`（或 `timeout` / `user`），不得只 abort signal 而丢失原因；`shutdown` / `timeout` 必须落可恢复的 `interrupted` checkpoint。
 - **发布包名与包元数据**（0.10，ADR-071）：根包发布名为 `vessel-agent`（bin 仍是 `vessel`）；18 个可发布子包必须带 `files: ["src"]`、`license`、`repository`、`engines`。改发布形态后必须跑 `scripts/smoke-install.ts`；发布顺序固定 core → permission → config → serve → tui → plugins → 根包，不得先发根包。
 - **CLI 用户可见文案走 `src/i18n/`**（0.10）：`--help` / 一次性命令错误 / 默认空状态 / demo banner 必须用 `t(key, params?)`，zh-CN 与 en 两份 catalog 同步；命令的数据输出保持英文，技术词、命令名、错误码不翻译。`--help` 在配置加载前短路，只能读环境变量层。
+- **包名统一 `@vessel-agent/*`**（0.11，ADR-073）：18 个可发布子包的 `name`、包间依赖与 import specifier 一律使用 `@vessel-agent/<name>`，不得回退到旧 `@vessel` scope；根包名保持 `vessel-agent`，bin 仍是 `vessel`。历史 ADR / CHANGELOG 的旧包名是有意存档，不要批量改写；改发布形态或包名后必须跑 `release-dry-run` + `smoke-install`。
+- **TUI 语言变更必须经 `ctx.settings`**（0.11，ADR-072）：`/settings` 等入口不得直接写用户配置文件，必须调用注入的 `setLanguage`；成功后再 `setLocale` 立即重渲染，未注入时保持只读，失败显示 `error.command.settings`。写配置只改 `ui.language`、保留其它键、`0600` 原子写。`VESSEL_LANG` 仍高于 `config.ui.language`，不要声称设置命令能覆盖显式环境变量。
+- **新面板默认全宽、常驻信息用 PanelFrame**（0.11，ADR-072）：不要再引入 `VIEW_MAX_WIDTH` 一类的固定上限；宽度用 `viewWidth(columns)`（`cols - 2`）。状态栏 / 启动头 / 队列预览等常驻信息用 `PanelFrame`，行数预算同步计入 `STATUS_BAR_ROWS = 3`；minimal 数据行封顶 `MINIMAL_ROW_CAP = 3`，新增 chrome 必须同时改 `viewCapacity()` 的测试。
+- **Web 新文案必须走 `apps/web/src/i18n`**（0.11，ADR-072）：每个新增 key 同时加 zh-CN 与 en 两份 catalog；locale 解析保持 `localStorage['vessel.ui.language']` > `navigator.language`，切换经 `setLocale` 并同步 `<html lang>`。未收录 key 回退中文，但不得把回退当成“已本地化”。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -71,7 +76,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.10.0` → `0.10-<role>`（`release/0.1` ~ `release/0.9.0` 已冻结；0.10 复用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.10.0 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.11.0` → `0.11-<role>`（`release/0.1` ~ `release/0.10.0` 已冻结；工作树沿用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.11.0 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 

@@ -3,13 +3,15 @@
 > 适用版本线：`0.x`。发布由 **tag `v*`** 触发，不由分支名触发。
 > 维护者：`gov`；最终发布决定权在 1。
 > **0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布**；不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
-> **0.5 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
+> **0.5 / 0.11 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
 > 发布仍等 1.0.0 之后。
 > **0.10 发布前置**：除发布干跑外，新增安装解析 smoke（18 个子包 + 根 tarball）；
 > **必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
 > `.gitignore` 忽略，根 tarball 的 `files` 虽然包含 `apps/web/dist`，不构建就会发出缺少
 > Web 控制台的根包。smoke 会断言根 tarball 含 `apps/web/dist/index.html`。
-> 根 CLI 的发布名是 **`vessel-agent`**（bin 仍是 `vessel`），必须在 18 个子包之后发布。
+> **0.11 包 scope**：18 个可发布子包为 **`@vessel-agent/*`**（5 个库包 + 13 个插件包）；
+> 根 CLI 的发布名仍是 **`vessel-agent`**（bin 仍是 `vessel`），必须在 18 个子包之后发布。
+> 发布账号需要对 `vessel-agent` npm 组织有写权限。
 
 ## 1. 版本语义
 
@@ -29,6 +31,7 @@
       （`@vessel-agent/core`、`@vessel-agent/permission`、`@vessel-agent/config`、`@vessel-agent/serve`、`@vessel-agent/tui`
       + 13 个插件包，含 `@vessel-agent/team` 与 `@vessel-agent/mcp-client`）。
 - [ ] 根包 `package.json` 的 `name` 为 **`vessel-agent`**（bin 仍是 `vessel`）。
+- [ ] 18 个可发布子包的 `name` 以 **`@vessel-agent/`** 开头，包间依赖均为 `@vessel-agent/*` 的精确版本；不得残留旧 `@vessel` scope（历史 ADR / CHANGELOG 除外）。
 - [ ] `release/*` 已合并到 `main`，且 `main` CI 绿。
 - [ ] 仓库 Secrets 已配置 `NPM_TOKEN`。
 - [ ] 发布干跑通过：`bun run scripts/release-dry-run.ts`（见 §2.1）。

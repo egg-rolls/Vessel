@@ -1812,3 +1812,46 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - 安装 smoke 只在 POSIX / Node 22 运行；Windows 安装未验证。
 - CLI 本地化不覆盖命令数据输出；Web 前端未本地化。
 - 0.10.0 仍未 tag、未 `npm publish`、未合并 `main`；根包与子包已 bump 到 `0.10.0`。
+
+## 30. 0.11.0 UI 设置与包 scope（已实现）
+
+> 状态：已合入 `release/0.11.0`（未发布）。决策见 [ADR-072](adr/ADR-072-ui-settings-and-terminal-polish.md)、[ADR-073](adr/ADR-073-npm-scope-vessel-agent.md)。两处改动都保留兼容路径：`/settings` 在未注入 `ctx.settings` 时只读，包 scope 变更不影响 bin 名 `vessel`。
+
+### 30.1 TUI `/settings` 与语言持久化
+
+- **命令**：`/settings [language <zh-CN|en>]`（`packages/tui/src/commands/settings-command.ts`）。不带参数显示当前语言与用法；非法值显示 `settings.invalid` 与用法。
+- **持久化**：装配层把 `settings.setLanguage` 注入 `ReplContext`；该函数写用户配置 `ui.language`，成功后命令调用 `setLocale(locale)` 立即重渲染。TUI 包本身不读用户配置路径。
+- **写回**：`src/ui-settings.ts` 的 `setUserLanguage()` 读取 YAML 根对象，只改 `ui.language`，同目录临时文件 + rename 原子写入，权限 `0600`；读取 / 解析 / 写入失败分别抛 `ui_settings_*` 错误，不回显文件内容。
+- **CLI 等价入口**：`vessel config set ui.language <zh-CN|en> [--json]`，失败走统一错误 formatter。
+- **未注入 / 失败**：无 `ctx.settings` 时只读并提示 `settings.readOnly`；写入失败输出 `error.command.settings` 与格式化错误。
+- **优先级不变**：`VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN`；`VESSEL_LANG` 显式设置时，写入配置不会改变当前显示。
+
+### 30.2 终端观感（清屏、全宽与面板）
+
+- **`ui.clearOnStart`**：默认 `true`；仅 TTY 且值不为 `false` 时，进入 REPL 前写 `\x1b[2J\x1b[H` 清可视区并归位光标（`packages/tui/src/repl/clear-on-start.ts`）。非 TTY 不清屏；不用 alternate screen，保留滚动历史。
+- **全宽**：删除 `VIEW_MAX_WIDTH = 160`；`viewWidth(columns)` 返回 `max(1, cols - VIEW_HORIZONTAL_MARGIN)`（水平边距 2），内容宽度再减边框与 padding。
+- **统一 PanelFrame**：状态栏、启动头 + 会话摘要、队列预览改用单线 `PanelFrame`；标题嵌上边框、键位提示嵌下边框。
+- **行数预算**：`STATUS_BAR_ROWS = 3`（上边框 + 1 行内容 + 下边框）；`viewCapacity()` 用 `height - STATUS_BAR_ROWS - chrome` 计算，minimal 封顶 `MINIMAL_ROW_CAP = 3`，避免矮终端抖动。
+
+### 30.3 Web 壳层本地化
+
+- **模块**：`apps/web/src/i18n/`（`index.ts` + `messages/{zh-CN,en}.ts`），无依赖、无 RPC。
+- **范围**：导航、面包屑、Settings 六个 tab、Appearance、通用按钮；未收录 key 回退 zh-CN，再回退 key 本身。
+- **locale 解析**：`localStorage['vessel.ui.language']` > `navigator.language`（`en*` → `en`，`zh*` → `zh-CN`，其余 `zh-CN`）；`setLocale` 同步写 localStorage 与 `<html lang>`，通知订阅者重渲染。
+- **入口**：Settings → Appearance 提供语言选择。
+
+### 30.4 包 scope：`@vessel-agent/*`
+
+- **根包**：`name` 为 `vessel-agent`，bin 仍是 `vessel`。
+- **子包**：18 个可发布子包（5 个库包 + 13 个插件包）统一为 `@vessel-agent/<name>`；import specifier、manifest 精确版本依赖与脚本前缀同步。
+- **历史**：`docs/adr/` 历史 ADR 与 `CHANGELOG.md` 既往版本段落保留旧 scope（`@vessel`），不改写。
+- **门禁**：`release-dry-run` 校验 18 个包名与版本；`smoke-install` 用 `@vessel-agent/*` 的本地 `file:` overrides 安装 root tarball；`check-deps` / `smoke-subpaths` 按新前缀运行。
+- **发布顺序**：`core → permission → config → serve → tui → plugins → 根包 vessel-agent`。
+
+### 30.5 已知限制（0.11.0）
+
+- Web 只覆盖壳层与 Settings；功能页未收录文案回退中文，不是全量本地化。
+- TUI 语言切换依赖 asm 注入 `ctx.settings`；只读宿主不能切换。
+- `ui.clearOnStart` 仅影响 TTY REPL 启动，非 TTY / headless 不清屏。
+- `VESSEL_LANG` 高于 `config.ui.language`；环境变量显式设置时设置命令不改变当前显示。
+- 0.11.0 仍未 tag / `npm publish` / 合并 `main`；manifest 版本由 1 统一写入。
