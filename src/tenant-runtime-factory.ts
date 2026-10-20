@@ -733,10 +733,14 @@ export async function buildTenantRuntime(
         );
       }
 
+      // 0.9：AgentRuntime.dispose() 返回 Promise（逆序调插件 dispose）；
+      // 必须等待，否则进程退出会截断插件清理。dispose 自身幂等且不外抛。
       try {
-        activeRuntime.dispose();
-      } catch {
-        // best-effort
+        await activeRuntime.dispose();
+      } catch (error) {
+        console.warn(
+          `⚠ Failed to dispose runtime: ${error instanceof Error ? error.message : error}`,
+        );
       }
 
       try {

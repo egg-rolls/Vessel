@@ -32,6 +32,13 @@ export interface ResolvedNode {
   status: NodeStatus;
   lastSeen?: number;
   agents: AgentStatus[];
+  /** 对端进程代际（0.9；由 WS hello 学习）；未知时省略 */
+  incarnation?: string;
+}
+
+/** PeerInfo + 0.9 additive 代际字段（旧消费方按 `-` 处理缺失） */
+export interface PeerInfoWithIncarnation extends PeerInfo {
+  incarnation?: string;
 }
 
 export interface NodeRegistryOptions {
@@ -215,8 +222,8 @@ export class NodeRegistry {
     return this.entries.get(id);
   }
 
-  /** core Transport.peers() 形状；不暴露 token/ca */
-  peers(): PeerInfo[] {
+  /** core Transport.peers() 形状；不暴露 token/ca。0.9：附带已学习的对端代际。 */
+  peers(): PeerInfoWithIncarnation[] {
     return [...this.entries.values()].map((entry) => ({
       nodeId: entry.id,
       endpoint: entry.url,
@@ -224,7 +231,15 @@ export class NodeRegistry {
       protocol: 1,
       status: entry.status,
       ...(entry.lastSeen !== undefined ? { lastSeen: entry.lastSeen } : {}),
+      ...(entry.incarnation !== undefined ? { incarnation: entry.incarnation } : {}),
     }));
+  }
+
+  /** 0.9：记录 WS hello 学到的对端代际；`-` 表示旧对端未知，不覆盖已知值。 */
+  markIncarnation(id: string, incarnation: string): void {
+    const entry = this.entries.get(id);
+    if (!entry || incarnation === '' || incarnation === '-') return;
+    entry.incarnation = incarnation;
   }
 
   markHealthy(id: string, agents?: AgentStatus[]): void {

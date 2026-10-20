@@ -5,8 +5,11 @@
  * - `send`：`node:agent` 目标 → `POST /v1/team/messages`（Bearer + 可选 CA）。
  * - `request`：ext 的跨节点控制协议（team.spawn / team.inbox / team.status）。
  * - `peers`：静态 nodes + 心跳状态（见 node-registry）。
- * - B4：按节点订阅 `ws(s)://.../v1/events`，按 `(node_id, wire seq)` 去重后
- *   带 `node_id` 回调；断线指数退避重连，`since` 续放，seq 回退重置。
+ * - B4：按节点订阅 `ws(s)://.../v1/events`，按
+ *   `(node_id, peer incarnation, run_id, wire seq)` 去重后带 `node_id` 回调；
+ *   断线指数退避重连，`since` 续放，seq 回退/incarnation 变化只重置该节点。
+ * - 0.9：进程级 `incarnation` 随 auth 帧传播；hello 读取对端代际；消息键
+ *   `${from}:${message.id}`，本机 send 与入站共用同一去重集合。
  *
  * 错误统一为 RemoteTransportError（稳定 code）；token 永不打印。
  *
@@ -15,14 +18,18 @@
 
 import type {
   AgentMessage,
-  PeerInfo,
   RunEvent,
   Transport,
   TransportRequest,
   Unsubscribe,
 } from '../packages/core/src/index';
 import { fromWireMessage, toWireMessage } from '../packages/serve/src/index';
-import { NodeRegistry, type NodeRegistryOptions, type ResolvedNode } from './node-registry';
+import {
+  NodeRegistry,
+  type NodeRegistryOptions,
+  type PeerInfoWithIncarnation,
+  type ResolvedNode,
+} from './node-registry';
 import type { WebSocketFactory, WebSocketLike } from './rpc/index';
 
 /** 远端传输错误码（覆盖 loopback 的稳定码 + team 控制面码） */
@@ -63,6 +70,11 @@ export interface RemoteTransportOptions {
    * 事件已带 `node_id`（远端 origin）。
    */
   onEvent?: (event: RunEvent) => void;
+  /**
+   * 本进程的事务代际（0.9）。缺省为模块加载时生成的进程级随机短 id；
+   * 提供时只用于测试/多 transport 注入。
+   */
+  incarnation?: string;
   /** 测试注入 */
   webSocket?: WebSocketFactory;
   eventReconnect?: {
@@ -87,6 +99,10 @@ const DEFAULT_RECONNECT_INITIAL_MS = 1_000;
 const DEFAULT_RECONNECT_MAX_MS = 30_000;
 const DEFAULT_HELLO_TIMEOUT_MS = 10_000;
 const MAX_SEEN = 10_000;
+/** 对端未提供 incarnation（旧网关 / 旧帧）时的占位（0.9，向后兼容） */
+const UNKNOWN_INCARNATION = '-';
+/** 进程级代际：模块加载时生成一次；重启进程即变化（0.9 C） */
+const PROCESS_INCARNATION = crypto.randomUUID().replace(/-/g, '').slice(0, 12);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -139,12 +155,16 @@ interface EventState {
   helloTimer?: ReturnType<typeof setTimeout>;
   attempt: number;
   lastSeq: number;
+  /** 对端当前代际；未知为 '-'（0.9） */
+  peerIncarnation: string;
 }
 
 /** 跨节点 Transport */
 export class RemoteTransport implements Transport {
   readonly kind = 'remote' as const;
   readonly nodeId: string;
+  /** 本进程事务代际（0.9；随 auth 帧传播） */
+  readonly incarnation: string;
 
   private readonly registry: NodeRegistry;
   private readonly fetchImpl: typeof fetch;
@@ -162,6 +182,7 @@ export class RemoteTransport implements Transport {
 
   constructor(options: RemoteTransportOptions) {
     this.nodeId = options.nodeId;
+    this.incarnation = options.incarnation ?? PROCESS_INCARNATION;
     this.registry = options.registry;
     this.fetchImpl = options.fetch ?? fetch;
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
@@ -185,6 +206,7 @@ export class RemoteTransport implements Transport {
         ? { requestTimeoutMs: options.requestTimeoutMs }
         : {}),
       ...(options.onEvent ? { onEvent: options.onEvent } : {}),
+      ...(options.incarnation !== undefined ? { incarnation: options.incarnation } : {}),
       ...(options.webSocket ? { webSocket: options.webSocket } : {}),
       ...(options.eventReconnect ? { eventReconnect: options.eventReconnect } : {}),
     });
@@ -202,7 +224,7 @@ export class RemoteTransport implements Transport {
     }
   }
 
-  peers(): Promise<PeerInfo[]> {
+  peers(): Promise<PeerInfoWithIncarnation[]> {
     return Promise.resolve(this.registry.peers());
   }
 
@@ -218,8 +240,7 @@ export class RemoteTransport implements Transport {
     if (this.closed) {
       throw new RemoteTransportError('transport_closed', 'Transport is closed');
     }
-    if (this.seenMessages.has(message.id)) return false;
-    this.remember(this.seenMessages, message.id);
+    if (!this.rememberMessage(message)) return false;
     await this.deliverLocal(message);
     return true;
   }
@@ -241,6 +262,8 @@ export class RemoteTransport implements Transport {
 
     const target = parseAddress(normalized.to);
     if (target?.nodeId === undefined || target.nodeId === this.nodeId) {
+      // 0.9：本机路径与入站共用消息去重集合；同一 `from + message.id` 重放只投递一次。
+      if (!this.rememberMessage(normalized)) return;
       await this.deliverLocal(normalized);
       return;
     }
@@ -452,6 +475,27 @@ export class RemoteTransport implements Transport {
     void results;
   }
 
+  /**
+   * 消息键（0.9）：`${from}:${message.id}`。
+   * team 控制面只服务 default tenant；tenant 维由 web 网关在跨节点入站处补
+   * `${tenant_id}:${from}:${id}`，本层不重复持有。
+   * 返回 false 表示同一键已投递过（有界窗口内 at-most-once）。
+   */
+  private rememberMessage(message: AgentMessage): boolean {
+    const key = `${message.from}:${message.id}`;
+    if (this.seenMessages.has(key)) return false;
+    this.remember(this.seenMessages, key);
+    return true;
+  }
+
+  /** 0.9：只作废某个来源节点的去重键（incarnation 变化 / seq 回退）。 */
+  private clearEventKeys(nodeId: string): void {
+    const prefix = `${nodeId}:`;
+    for (const key of this.seenEvents.keys()) {
+      if (key.startsWith(prefix)) this.seenEvents.delete(key);
+    }
+  }
+
   private remember(map: Map<string, true>, key: string): void {
     map.set(key, true);
     while (map.size > MAX_SEEN) {
@@ -471,6 +515,7 @@ export class RemoteTransport implements Transport {
     const state: EventState = this.eventStates.get(nodeId) ?? {
       attempt: 0,
       lastSeq: 0,
+      peerIncarnation: UNKNOWN_INCARNATION,
     };
     this.eventStates.set(nodeId, state);
     if (state.socket) return;
@@ -494,6 +539,8 @@ export class RemoteTransport implements Transport {
             v: 1,
             kind: 'auth',
             token: node.token,
+            // 0.9：本端代际随首帧传播（additive；旧网关忽略未知字段）。
+            incarnation: this.incarnation,
             ...(state.lastSeq > 0 ? { since: state.lastSeq } : {}),
           }),
         );
@@ -540,10 +587,23 @@ export class RemoteTransport implements Transport {
     if (frame.kind === 'hello') {
       this.clearHelloTimer(state);
       state.attempt = 0;
+      const origin =
+        typeof frame.node_id === 'string' && frame.node_id !== '' ? frame.node_id : nodeId;
+      // 0.9：缺字段视为 '-'（旧网关），不阻断订阅。
+      const incarnation =
+        typeof frame.incarnation === 'string' && frame.incarnation !== ''
+          ? frame.incarnation
+          : UNKNOWN_INCARNATION;
+      if (incarnation !== state.peerIncarnation) {
+        // 对端重启（代际变化）：只作废该节点的去重键，其它节点不受影响。
+        this.clearEventKeys(origin);
+        state.peerIncarnation = incarnation;
+        this.registry.markIncarnation(nodeId, incarnation);
+      }
       const latest = typeof frame.latest_seq === 'number' ? frame.latest_seq : undefined;
       if (latest !== undefined && latest < state.lastSeq) {
-        // 对端重启/缓冲区清空：旧 seq 的去重键全部作废，否则新 seq=1 会被丢。
-        this.seenEvents.clear();
+        // 对端重启/缓冲区清空：该节点的旧 seq 去重键作废，否则新 seq=1 会被丢。
+        this.clearEventKeys(origin);
         state.lastSeq = 0;
         this.dropEventSocket(nodeId, state, current, true);
       }
@@ -566,19 +626,22 @@ export class RemoteTransport implements Transport {
     }
     if (frame.kind !== 'event' || !isRecord(frame.event)) return;
 
+    const origin = typeof frame.node_id === 'string' ? frame.node_id : nodeId;
+    const event = { ...frame.event } as unknown as RunEvent;
+    if (event.node_id === undefined) event.node_id = origin;
+
     const seq = typeof frame.seq === 'number' ? frame.seq : undefined;
     if (seq !== undefined) {
       state.lastSeq = Math.max(state.lastSeq, seq);
-      const origin = typeof frame.node_id === 'string' ? frame.node_id : nodeId;
-      const key = `${origin}:${seq}`;
+      // 0.9：键含对端代际与 run_id（无 run_id 用 '-'）——
+      // 对端重启或两个 run 复用同一 seq 时不互丢。
+      const runId = typeof event.run_id === 'string' && event.run_id !== '' ? event.run_id : '-';
+      const key = `${origin}:${state.peerIncarnation}:${runId}:${seq}`;
       if (this.seenEvents.has(key)) return;
       this.remember(this.seenEvents, key);
     }
-    // 无 seq 的帧无法安全去重：直接投递，不做 origin:na 合并。
-    const origin = typeof frame.node_id === 'string' ? frame.node_id : nodeId;
+    // 无 seq 的帧无法安全去重：直接投递，不参与键空间（也不做 origin:na 合并）。
 
-    const event = { ...frame.event } as unknown as RunEvent;
-    if (event.node_id === undefined) event.node_id = origin;
     // 0.6.1 E11：双向/网状拓扑下，本节点事件被对端回灌 → 丢弃，避免回声放大。
     // seq/去重状态已在上面更新，保证重连 since 不重复回放。
     if (event.node_id === this.nodeId) return;
