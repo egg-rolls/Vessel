@@ -22,6 +22,7 @@ import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { ui } from './ui-style';
 import { readPackageVersion } from './version';
 
 export interface DoctorCommandResult {
@@ -283,10 +284,25 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     fail: '[fail]',
     info: '[info]',
   };
-  const lines = [`Vessel doctor ${version}`];
+  const styledTag = (status: CheckStatus): string => {
+    const label = tag[status].padEnd(7);
+    if (status === 'ok') return ui.ok(label);
+    if (status === 'warn') return ui.warn(label);
+    if (status === 'fail') return ui.err(label);
+    return ui.info(label);
+  };
+  const lines = [ui.title(`Vessel doctor ${version}`)];
   for (const check of checks) {
-    lines.push(`${tag[check.status].padEnd(7)} ${check.name}: ${check.message}`);
+    lines.push(`${styledTag(check.status)} ${check.name}: ${check.message}`);
   }
-  lines.push('', `${summary.ok} ok, ${summary.warn} warning(s), ${summary.fail} failure(s)`);
+  const summaryLine = `${summary.ok} ok, ${summary.warn} warning(s), ${summary.fail} failure(s)`;
+  lines.push(
+    '',
+    summary.fail > 0
+      ? ui.err(summaryLine)
+      : summary.warn > 0
+        ? ui.warn(summaryLine)
+        : ui.ok(summaryLine),
+  );
   return { exitCode: summary.fail > 0 ? 1 : 0, stdout: lines.join('\n'), stderr: '' };
 }

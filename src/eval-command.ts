@@ -17,6 +17,7 @@ import { createEventStream } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
 import { createProvider } from './provider-factory';
 import { installTrace, type TraceControl } from './trace-wiring';
+import { ui } from './ui-style';
 
 export interface EvalCommandOptions {
   useMock?: boolean;
@@ -35,11 +36,11 @@ function sendWarnings(warnings: Array<{ message: string }>): void {
 }
 
 function printSummary(report: EvalReport): void {
-  console.log(
+  const summaryLine =
     `Eval "${report.suite}": total=${report.total} passed=${report.passed} ` +
-      `failed=${report.failed} errors=${report.errors} skipped=${report.skipped} ` +
-      `duration=${report.duration_ms}ms network=${report.network}`,
-  );
+    `failed=${report.failed} errors=${report.errors} skipped=${report.skipped} ` +
+    `duration=${report.duration_ms}ms network=${report.network}`;
+  console.log(report.failed > 0 || report.errors > 0 ? ui.err(summaryLine) : ui.ok(summaryLine));
   for (const result of report.cases) {
     if (result.status !== 'failed' && result.status !== 'error') continue;
     const failedAssertions = result.assertions
@@ -47,8 +48,10 @@ function printSummary(report: EvalReport): void {
       .map((assertion) =>
         assertion.detail ? `${assertion.type}: ${assertion.detail}` : assertion.type,
       );
-    console.log(`  - ${result.id}: ${result.status}${result.error ? ` (${result.error})` : ''}`);
-    for (const detail of failedAssertions) console.log(`      ${detail}`);
+    console.log(
+      ui.err(`  - ${result.id}: ${result.status}${result.error ? ` (${result.error})` : ''}`),
+    );
+    for (const detail of failedAssertions) console.log(ui.dim(`      ${detail}`));
   }
 }
 

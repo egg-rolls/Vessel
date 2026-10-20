@@ -21,6 +21,7 @@ import {
 } from '../packages/core/src/index';
 import type { TenantControlLike, TenantInfo, TenantQuota } from '../packages/serve/src/index';
 import { TenantLockError, withTenantLock } from './tenant-lock';
+import { ui } from './ui-style';
 
 /** tenant 元数据（tenant.json 冻结形状） */
 export interface TenantMeta {
@@ -235,7 +236,7 @@ export async function tenantCreateCommand(
     });
     return options.json
       ? { exitCode: 0, stdout: JSON.stringify(meta), stderr: '' }
-      : { exitCode: 0, stdout: `created tenant "${tenantId}"`, stderr: '' };
+      : { exitCode: 0, stdout: ui.ok(`created tenant "${tenantId}"`), stderr: '' };
   });
 }
 
@@ -267,7 +268,7 @@ export async function tenantUpdateCommand(
     });
     return options.json
       ? { exitCode: 0, stdout: JSON.stringify(updated), stderr: '' }
-      : { exitCode: 0, stdout: `updated tenant "${tenantId}"`, stderr: '' };
+      : { exitCode: 0, stdout: ui.ok(`updated tenant "${tenantId}"`), stderr: '' };
   });
 }
 

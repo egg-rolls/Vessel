@@ -18,6 +18,7 @@ import {
 import { resolveDataDir } from '../data-paths';
 import { doctorCommand } from '../doctor-command';
 import { runEvalCommand } from '../eval-command';
+import { isForegroundGatewayCommand, runGatewayCommand } from '../gateway-command';
 import { applyLocale } from '../i18n';
 import { migrateCommand } from '../migrate-command';
 import { runPluginCommand } from '../plugin-command';
@@ -30,6 +31,7 @@ import {
 } from '../tenant-command';
 import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
+import { ui } from '../ui-style';
 import { runWorkflowCommand } from '../workflow-command';
 
 export interface CliCommandContext {
@@ -47,7 +49,7 @@ export interface CliCommand {
 /** 打印一次性命令结果并返回退出码 */
 function printCommandResult(result: { exitCode: number; stdout: string; stderr: string }): number {
   if (result.stdout !== '') console.log(result.stdout);
-  if (result.stderr !== '') console.error(result.stderr);
+  if (result.stderr !== '') console.error(ui.err(result.stderr));
   return result.exitCode;
 }
 
@@ -74,7 +76,7 @@ async function resolveCommandDataDir(): Promise<string> {
 async function printTools(): Promise<void> {
   const { tools, warnings } = await listTools();
   for (const w of warnings) console.warn(`⚠ ${w}`);
-  console.log(`Tools (${tools.length}):`);
+  console.log(ui.section(`Tools (${tools.length}):`));
   for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
   console.log('ask_user (interactive only)');
 }
@@ -234,6 +236,16 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.doctorCommand;
       if (command === null) return 1;
       return printCommandResult(await doctorCommand(command));
+    },
+  },
+  {
+    name: 'gateway',
+    // 前台 start/restart 由 cli.ts 接进 --serve 管线，这里只处理一次性子命令。
+    match: (args) => args.gateway !== null && !isForegroundGatewayCommand(args.gateway),
+    run: async (args) => {
+      const command = args.gateway;
+      if (command === null) return 1;
+      return runGatewayCommand(command);
     },
   },
 ];
