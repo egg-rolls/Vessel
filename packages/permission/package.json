@@ -7,6 +7,18 @@
   "exports": {
     ".": "./src/index.ts"
   },
+  "files": [
+    "src"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "packages/permission"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit"
