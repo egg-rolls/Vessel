@@ -103,5 +103,5 @@ export interface AgentRuntimeOptions {
    * 0.10：诊断日志 sink；缺省 noop。
    * 未注入且设置了 `VESSEL_DEBUG` 时，runtime 兜底为 stderr logger（level=debug）。
    */
-  logger?: import('../logging.js').Logger;
+  logger?: import('./logging.js').Logger;
 }

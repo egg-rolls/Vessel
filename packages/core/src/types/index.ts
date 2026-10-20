@@ -8,6 +8,7 @@ export * from './event.js';
 export * from './guardrail.js';
 export * from './hook.js';
 export * from './limits.js';
+export * from './logging.js';
 export * from './plugin.js';
 export * from './provider.js';
 export * from './run.js';

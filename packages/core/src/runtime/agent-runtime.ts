@@ -4,14 +4,15 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { estimateMessagesTokens } from '../context/context-manager.js';
+import { estimateMessagesTokens } from '../context/index.js';
 import { MemoryLimitChecker } from '../limits/index.js';
-import { createStderrLogger, type Logger, noopLogger } from '../logging.js';
+import { createStderrLogger, noopLogger } from '../logging.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
+import type { Logger } from '../types/logging.js';
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../types/provider.js';
 import type { RunExecution, RunInterruptReason, RunOptions } from '../types/run.js';
