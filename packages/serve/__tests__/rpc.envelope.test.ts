@@ -205,7 +205,7 @@ describe('canonical methods', () => {
     });
     const sourcesResult = await rpc(gateway, envelope('2', 'config.sources'), 't');
     expect((sourcesResult.body.result as { sources: unknown }).sources).toEqual({
-      'provider.apiKey': 'env',
+      'provider.apiKey': '<set>',
     });
     expect(
       (sourcesResult.body.result as { tenant_overlay_keys: string[] }).tenant_overlay_keys,

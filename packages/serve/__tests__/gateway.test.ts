@@ -75,14 +75,14 @@ describe('gateway core', () => {
     }
   });
 
-  it('accepts Bearer header and query token', async () => {
+  it('accepts Bearer header but rejects query token on REST', async () => {
     const gw = track(
       createGateway({ events: new MemoryEventStream(), session: new MemorySessionBackend() }),
     );
     const viaHeader = await fetch(`${gw.url}/v1/sessions`, { headers: authHeaders(gw) });
     expect(viaHeader.status).toBe(200);
     const viaQuery = await fetch(`${gw.url}/v1/sessions?token=${gw.token}`);
-    expect(viaQuery.status).toBe(200);
+    expect(viaQuery.status).toBe(401);
   });
 
   it('rejects cross-origin browser requests and allows configured origins', async () => {
@@ -180,9 +180,9 @@ describe('gateway core', () => {
     const events = new MemoryEventStream();
     const runtime = await createRuntime({ events });
     const gw = track(createGateway({ events, runtime }));
-    const res = await fetch(`${gw.url}/run?token=${gw.token}`, {
+    const res = await fetch(`${gw.url}/run`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { ...authHeaders(gw), 'Content-Type': 'application/json' },
       body: JSON.stringify({ input: 'Hello' }),
     });
     expect(res.status).toBe(200);

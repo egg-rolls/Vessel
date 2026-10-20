@@ -570,6 +570,66 @@
   color: var(--danger);
 }
 
+/* 失败 run：摘要保留 240 字截断，展开后显示完整错误（保留换行）。 */
+.run-error {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.run-error-summary {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-error-summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-error-preview {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-error-toggle {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.run-error[open] .run-error-toggle {
+  display: none;
+}
+
+.run-error-body {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line));
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-error-hint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.run-detail-link {
+  margin-left: auto;
+  text-decoration: none;
+}
+
 .run-footer.cancelled {
   background: var(--surface-2);
   color: var(--faint);

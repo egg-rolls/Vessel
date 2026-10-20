@@ -255,9 +255,12 @@ describe('gateway events / protocol', () => {
     const client = await connect(gw);
     await client.next((frame) => frame.kind === 'hello');
 
-    const res = await fetch(`${gw.url}/v1/runs?token=${gw.token}`, {
+    const res = await fetch(`${gw.url}/v1/runs`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        Authorization: `Bearer ${gw.token}`,
+        'Content-Type': 'application/json',
+      },
       body: JSON.stringify({ input: 'Hello' }),
     });
     expect(res.status).toBe(202);
