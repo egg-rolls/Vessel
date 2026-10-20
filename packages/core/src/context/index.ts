@@ -4,4 +4,9 @@
  */
 
 export type { ContextConfig, ContextManager } from '../types/context.js';
-export { MemoryContextManager } from './context-manager.js';
+export {
+  estimateMessagesTokens,
+  estimateMessageTokens,
+  estimateTokens,
+  MemoryContextManager,
+} from './context-manager.js';

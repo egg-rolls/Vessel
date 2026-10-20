@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { MemoryContextManager } from '../src/context/context-manager';
+import {
+  estimateMessagesTokens,
+  estimateMessageTokens,
+  MemoryContextManager,
+} from '../src/context/context-manager';
 
 describe('MemoryContextManager', () => {
   let context: MemoryContextManager;
@@ -56,12 +60,8 @@ describe('MemoryContextManager', () => {
     expect(contextWithCompact.messages.length).toBeLessThan(30);
   });
 
-  it('should limit max messages', () => {
-    const config = {
-      maxMessages: 5,
-    };
-
-    const contextWithLimit = new MemoryContextManager(config);
+  it('summarizes instead of silently slicing when maxMessages is exceeded', () => {
+    const contextWithLimit = new MemoryContextManager({ maxMessages: 5 });
 
     for (let i = 0; i < 10; i++) {
       contextWithLimit.add({
@@ -70,10 +70,11 @@ describe('MemoryContextManager', () => {
       });
     }
 
-    expect(contextWithLimit.messages).toHaveLength(5);
-    // 应该保留最后5条
-    expect(contextWithLimit.messages[0]?.content).toBe('Message 5');
-    expect(contextWithLimit.messages[4]?.content).toBe('Message 9');
+    const messages = contextWithLimit.messages;
+    expect(messages.length).toBeLessThanOrEqual(5);
+    expect(messages.at(-1)?.content).toBe('Message 9');
+    // 旧消息没有静默消失：以摘要形式留在上下文里。
+    expect(messages.some((message) => message.content.startsWith('[Auto Compact'))).toBe(true);
   });
 });
 
@@ -285,7 +286,7 @@ describe('MemoryContextManager long sessions (0.4 C2)', () => {
     expect(messages.at(-1)?.content).toBe('last-message');
   });
 
-  it('bounds a 10k message session without duplicating messages', () => {
+  it('bounds a 10k message session with summaries instead of hard slicing', () => {
     const context = new MemoryContextManager({
       maxMessages: 100,
       autoCompact: false,
@@ -296,10 +297,11 @@ describe('MemoryContextManager long sessions (0.4 C2)', () => {
     }
 
     const messages = context.messages;
-    expect(messages).toHaveLength(100);
-    expect(messages[0]?.content).toBe('Message 9900');
+    expect(messages.length).toBeLessThanOrEqual(100);
     expect(messages.at(-1)?.content).toBe('Message 9999');
-    expect(new Set(messages.map((m) => m.content)).size).toBe(100);
+    // 安全上限即使 autoCompact=false 也要先摘要，不能静默丢弃旧历史。
+    expect(messages.some((m) => m.content.startsWith('[Auto Compact'))).toBe(true);
+    expect(new Set(messages.map((m) => m.content)).size).toBe(messages.length);
   });
 
   it('keeps compaction bounded across repeated threshold crossings', () => {
@@ -320,5 +322,133 @@ describe('MemoryContextManager long sessions (0.4 C2)', () => {
     const messages = context.messages;
     expect(messages.length).toBeLessThanOrEqual(20);
     expect(messages.at(-1)?.content).toContain('Message 499');
+  });
+});
+
+describe('MemoryContextManager token budget (0.10 R1-10)', () => {
+  it('summarizes messages past the old 100-message cap instead of dropping them', async () => {
+    const summarized: string[] = [];
+    const context = new MemoryContextManager({
+      maxMessages: 100,
+      summarizer: async (messages) => {
+        summarized.push(...messages.map((message) => message.content));
+        return 'SUMMARY: early context retained';
+      },
+    });
+
+    for (let i = 0; i < 150; i += 1) {
+      context.add({ role: i % 2 === 0 ? 'user' : 'assistant', content: `Message ${i}` });
+    }
+
+    // add() 不再硬截断；摘要需要 await，等待运行时在请求前的 autoCompactAsync。
+    expect(context.messages).toHaveLength(150);
+    expect(summarized).toHaveLength(0);
+
+    expect(await context.autoCompactAsync()).toBeGreaterThan(0);
+    expect(summarized).toContain('Message 0');
+    expect(summarized).toContain('Message 99');
+    expect(context.messages.some((m) => m.content === 'SUMMARY: early context retained')).toBe(
+      true,
+    );
+    expect(context.messages.at(-1)?.content).toBe('Message 149');
+    expect(context.messages.length).toBeLessThan(150);
+  });
+
+  it('forces overflow compaction even when autoCompact is disabled', async () => {
+    let calls = 0;
+    const context = new MemoryContextManager({
+      maxMessages: 5,
+      autoCompact: false,
+      summarizer: async () => {
+        calls += 1;
+        return 'OVERFLOW SUMMARY';
+      },
+    });
+
+    for (let i = 0; i < 8; i += 1) {
+      context.add({ role: 'user', content: `Message ${i}` });
+    }
+
+    expect(context.messages).toHaveLength(8);
+    expect(await context.autoCompactAsync()).toBeGreaterThan(0);
+    expect(calls).toBe(1);
+    expect(context.messages.some((m) => m.content === 'OVERFLOW SUMMARY')).toBe(true);
+    expect(context.messages.at(-1)?.content).toBe('Message 7');
+  });
+
+  it('counts tool_calls arguments, reasoning_content, and message name', () => {
+    const message = {
+      role: 'assistant' as const,
+      content: 'x'.repeat(400),
+      name: 'agent',
+      reasoning_content: 'r'.repeat(400),
+      tool_calls: [
+        {
+          id: 'call-1',
+          type: 'function' as const,
+          function: { name: 'bash', arguments: 'a'.repeat(800) },
+        },
+      ],
+    };
+
+    // content 100 + name 2 + reasoning 100 + function name 1 + arguments 200
+    expect(estimateMessageTokens(message)).toBe(403);
+
+    const context = new MemoryContextManager({ autoCompact: false });
+    context.add(message);
+    expect(context.tokenCount).toBe(estimateMessageTokens(message));
+    expect(context.tokenCount).toBe(estimateMessagesTokens(context.messages));
+  });
+
+  it('keeps system messages and reports overflow compactions', () => {
+    const compactions: Array<{ removed: number; remaining: number }> = [];
+    const context = new MemoryContextManager({
+      maxMessages: 5,
+      autoCompact: false,
+      onCompact: (removed, remaining) => compactions.push({ removed, remaining }),
+    });
+    context.add({ role: 'system', content: 'SYSTEM PROMPT' });
+    for (let i = 0; i < 40; i += 1) {
+      context.add({ role: 'user', content: `Message ${i}` });
+    }
+
+    const messages = context.messages;
+    expect(messages.length).toBeLessThanOrEqual(5);
+    expect(messages[0]).toEqual({ role: 'system', content: 'SYSTEM PROMPT' });
+    expect(messages.filter((m) => m.role === 'system')).toHaveLength(1);
+    expect(messages.at(-1)?.content).toBe('Message 39');
+    // 无 summarizer 时也不静默：占位摘要 + onCompact 通知都可见。
+    expect(compactions.length).toBeGreaterThan(0);
+    expect(compactions.at(-1)?.removed).toBeGreaterThan(0);
+  });
+
+  it('triggers exactly when the shared estimate crosses maxTokens * threshold', async () => {
+    let calls = 0;
+    const context = new MemoryContextManager({
+      maxTokens: 1000,
+      compactThreshold: 0.8,
+      summarizer: async () => {
+        calls += 1;
+        return 'THRESHOLD SUMMARY';
+      },
+    });
+
+    for (let i = 0; i < 7; i += 1) {
+      context.add({ role: 'user', content: `${i}`.padEnd(397, 'a') });
+    }
+
+    expect(context.tokenCount).toBe(estimateMessagesTokens(context.messages));
+    expect(context.tokenCount).toBe(700);
+    expect(await context.autoCompactAsync()).toBe(0);
+    expect(calls).toBe(0);
+
+    context.add({ role: 'user', content: 'b'.repeat(400) });
+    expect(context.tokenCount).toBe(800);
+    expect(await context.autoCompactAsync()).toBe(0);
+
+    context.add({ role: 'user', content: 'c'.repeat(400) });
+    expect(context.tokenCount).toBe(900);
+    expect(await context.autoCompactAsync()).toBeGreaterThan(0);
+    expect(calls).toBe(1);
   });
 });
