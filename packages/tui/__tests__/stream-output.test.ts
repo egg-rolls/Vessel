@@ -12,6 +12,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
+import { buildReasoningView } from '../src/components/ReasoningBlock.js';
 import {
   cancelTranscriptNotice,
   DEFAULT_MAX_SEGMENTS,
@@ -20,10 +21,12 @@ import {
   getTranscriptText,
   limitSegments,
   makeToolCallSegment,
+  readReasoningDelta,
   reduceSegments,
   type Segment,
   tailLines,
 } from '../src/components/StreamOutput.js';
+import { groupSegments } from '../src/components/ToolTrail.js';
 import { asTuiEvent } from '../src/types/events.js';
 
 /** 模拟 ID 生成器 */
@@ -41,6 +44,15 @@ function textDelta(delta: string) {
     type: 'llm.stream.chunk',
     run_id: 'r',
     data: { chunk: { type: 'text_delta', delta } },
+    ts: 0,
+  });
+}
+
+function reasoningDelta(delta: string) {
+  return asTuiEvent({
+    type: 'llm.stream.chunk',
+    run_id: 'r',
+    data: { chunk: { type: 'reasoning_delta', delta } },
     ts: 0,
   });
 }
@@ -100,6 +112,65 @@ describe('StreamOutput segment ordering', () => {
       // 空 delta 不产生 segment
       const result = reduceSegments(segs, textDelta(''), nextId);
       expect(result).toHaveLength(0);
+    });
+  });
+
+  describe('思考流（0.11.1 / DECISION-022 §2.3）', () => {
+    it('连续 reasoning_delta 合并为同一 reasoning 段落', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, reasoningDelta('Let me '), nextId);
+      segs = reduceSegments(segs, reasoningDelta('think.'), nextId);
+
+      expect(segs).toHaveLength(1);
+      expect(segs[0]).toMatchObject({ type: 'reasoning', text: 'Let me think.' });
+    });
+
+    it('reasoning 与正文各自独立，顺序不变', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, reasoningDelta('plan'), nextId);
+      segs = reduceSegments(segs, textDelta('answer'), nextId);
+      segs = reduceSegments(segs, reasoningDelta('more'), nextId);
+
+      expect(segs.map((seg) => seg.type)).toEqual(['reasoning', 'text', 'reasoning']);
+      expect(segs[1]).toMatchObject({ type: 'text', text: 'answer' });
+    });
+
+    it('空 reasoning delta 不产生段落', () => {
+      const nextId = makeNextId();
+      expect(reduceSegments([], reasoningDelta(''), nextId)).toHaveLength(0);
+    });
+
+    it('无 reasoning 时 text_delta 行为与 0.11.0 一致', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, textDelta('Hello'), nextId);
+      segs = reduceSegments(segs, textDelta(' world'), nextId);
+
+      expect(segs).toEqual([{ type: 'text', id: 't1', text: 'Hello world' }]);
+    });
+
+    it('readReasoningDelta 只识别 reasoning_delta 的字符串增量', () => {
+      expect(readReasoningDelta({ type: 'reasoning_delta', delta: 'x' })).toBe('x');
+      expect(readReasoningDelta({ type: 'reasoning_delta', delta: '' })).toBeNull();
+      expect(readReasoningDelta({ type: 'text_delta', delta: 'x' })).toBeNull();
+      expect(readReasoningDelta(null)).toBeNull();
+    });
+
+    it('groupSegments 把 reasoning 作为独立组交给实时渲染', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, reasoningDelta('thinking'), nextId);
+      segs = reduceSegments(segs, textDelta('body'), nextId);
+
+      expect(groupSegments(segs).map((group) => group.type)).toEqual(['reasoning', 'text']);
+    });
+
+    it('buildReasoningView 提供 i18n 前缀并清洗控制序列', () => {
+      const view = buildReasoningView('\x1b[31mred\x1b[0m');
+      expect(view.header.length).toBeGreaterThan(0);
+      expect(view.body).toBe('red');
     });
   });
 
@@ -254,6 +325,15 @@ describe('StreamOutput segment ordering', () => {
 
       expect(getResponseText(segs)).toBe('');
     });
+
+    it('reasoning 不算正文', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, reasoningDelta('hidden thinking'), nextId);
+      segs = reduceSegments(segs, textDelta('visible'), nextId);
+
+      expect(getResponseText(segs)).toBe('visible');
+    });
   });
 });
 
@@ -298,6 +378,16 @@ describe('limitSegments', () => {
     const limited = limitSegments(segs, { maxSegments: 6, maxLines: 2 });
     expect(limited[0]).toMatchObject({ type: 'text', text: '…（前文已折叠）\nc\nd' });
     expect(limited[1]).toEqual(tool);
+  });
+
+  it('reasoning 段同样按行截断', () => {
+    const segs: Segment[] = [{ type: 'reasoning', id: 'r1', text: 'a\nb\nc\nd' }];
+
+    const limited = limitSegments(segs, { maxSegments: 6, maxLines: 2 });
+    expect(limited[0]).toMatchObject({
+      type: 'reasoning',
+      text: '…（前文已折叠）\nc\nd',
+    });
   });
 });
 
@@ -377,6 +467,26 @@ describe('getTranscriptText', () => {
     const segs: Segment[] = [makeToolCallSegment('c1', 'bash', { command: 'sleep 1' })];
     expect(getTranscriptText(segs)).toBe('');
   });
+
+  it('reasoning 段不进入最终 Markdown 历史', () => {
+    const segs: Segment[] = [
+      { type: 'reasoning', id: 'r1', text: 'secret chain of thought' },
+      { type: 'text', id: 't1', text: '# Answer' },
+    ];
+
+    const transcript = getTranscriptText(segs);
+    expect(transcript).toBe('# Answer');
+    expect(transcript).not.toContain('secret chain of thought');
+  });
+
+  it('Ctrl+O 展开同样不归档 reasoning', () => {
+    const segs: Segment[] = [
+      { type: 'reasoning', id: 'r1', text: 'long thinking' },
+      { type: 'text', id: 't1', text: 'body' },
+    ];
+
+    expect(getTranscriptText(segs, { full: true })).toBe('body');
+  });
 });
 
 describe('getCancelledTranscript', () => {
@@ -411,5 +521,10 @@ describe('getCancelledTranscript', () => {
     expect(transcript).toContain('✓ read');
     expect(transcript).toContain('file body');
     expect(transcript).toContain(cancelTranscriptNotice());
+  });
+
+  it('只有 reasoning 时只归档取消标注', () => {
+    const segs: Segment[] = [{ type: 'reasoning', id: 'r1', text: 'still thinking' }];
+    expect(getCancelledTranscript(segs)).toBe(cancelTranscriptNotice());
   });
 });

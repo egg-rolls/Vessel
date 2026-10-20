@@ -54,16 +54,19 @@ import type { ViewAction } from '../views/types.js';
 import { maybeClearOnStart } from './clear-on-start.js';
 import { failureFallbackAction, failureViewerTitle } from './error-archive.js';
 import { computeLiveLayout, queuePreviewRows } from './layout.js';
-import { PermissionTimeoutController } from './permission-timeout.js';
+import {
+  decidePermissionAnswer,
+  decidePermissionRequest,
+  PERMISSION_TIMEOUT_MS,
+  PermissionTimeoutController,
+  permissionExpiresAt,
+} from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { buildStartupHeader } from './startup-header.js';
 import { buildStartupNotice, loadStartupFacts, loadStartupNotice } from './startup-notice.js';
 import { useStatusMetrics } from './status-metrics.js';
 import { useReplState } from './use-repl-state.js';
-
-/** 与 core PermissionPolicy 一致的等待时限（ms） */
-const PERMISSION_TIMEOUT_MS = 120_000;
 
 /** 终端清屏：清可视区 + scrollback，并把光标移回左上 */
 const CLEAR_SCREEN_SEQUENCE = '\x1b[2J\x1b[3J\x1b[H';
@@ -101,6 +104,13 @@ function InkRepl({ ctx }: InkReplProps) {
   /** 订阅回调里读取最新 overlay（不随 effect 重建订阅） */
   const permissionOverlayRef = useRef(ui.permissionOverlay);
   permissionOverlayRef.current = ui.permissionOverlay;
+  /** 0.11.1：同一 requestId 只允许发布一次 response（防重复点击 / 竞态） */
+  const submittedPermissionRef = useRef<Set<string>>(new Set());
+  const markPermissionSubmitted = useCallback((requestId: string): boolean => {
+    if (submittedPermissionRef.current.has(requestId)) return false;
+    submittedPermissionRef.current.add(requestId);
+    return true;
+  }, []);
   /** 队列串行执行守卫（避免同一 tick 重复出队） */
   const queueDrainingRef = useRef(false);
   /** 矮终端提示只写一次 scrollback */
@@ -266,8 +276,14 @@ function InkRepl({ ctx }: InkReplProps) {
       switch (event.type) {
         case 'tool.permission.request': {
           const requestId = event.data.requestId;
-          const expiresAt = Date.now() + PERMISSION_TIMEOUT_MS;
-          permissionTimeoutRef.current?.start(requestId);
+          // 0.11.1（DECISION-022 §2.1）：用事件时间计算过期点；事件延迟送达时
+          // 不能重新补满 120s。已过期请求不加入弹窗队列。
+          const expiresAt = permissionExpiresAt(event.ts);
+          if (decidePermissionRequest(event.ts) === 'expired') {
+            dispatch({ type: 'appendHistory', line: t('permission.expired') });
+            break;
+          }
+          permissionTimeoutRef.current?.startAt(requestId, expiresAt);
           dispatch({
             type: 'setPermissionOverlay',
             overlay: {
@@ -645,14 +661,17 @@ function InkRepl({ ctx }: InkReplProps) {
       exit();
       return;
     }
-    if (ui.permissionOverlay) {
+    if (ui.permissionOverlay && markPermissionSubmitted(ui.permissionOverlay.requestId)) {
       permissionTimeoutRef.current?.answer(ui.permissionOverlay.requestId);
-      ctx.events.publish({
-        type: 'tool.permission.response',
-        run_id: ui.permissionOverlay.run_id,
-        data: { requestId: ui.permissionOverlay.requestId, decision: 'deny' },
-        ts: Date.now(),
-      });
+      // 已过期的请求不再发布 response（core 的 waitFor 已超时，重发只会制造噪音）。
+      if (decidePermissionAnswer(ui.permissionOverlay.expiresAt) !== 'expired') {
+        ctx.events.publish({
+          type: 'tool.permission.response',
+          run_id: ui.permissionOverlay.run_id,
+          data: { requestId: ui.permissionOverlay.requestId, decision: 'deny' },
+          ts: Date.now(),
+        });
+      }
       dispatch({ type: 'clearPermissionForRequest', requestId: ui.permissionOverlay.requestId });
     }
     if (ui.askUserActive && ui.askUserRequestId) {
@@ -664,7 +683,7 @@ function InkRepl({ ctx }: InkReplProps) {
       });
     }
     cancelRun();
-  }, [ui, ctx.events, dispatch, exit, cancelRun]);
+  }, [ui, ctx.events, dispatch, exit, cancelRun, markPermissionSubmitted]);
 
   // 键盘输入处理（Tab/↑↓/Esc 在补全可见时拦截）
   // Enter 不在此处理：Ink 子组件 useInput 先于父组件、且无法 stopPropagation，
@@ -819,8 +838,18 @@ function InkRepl({ ctx }: InkReplProps) {
     (answer: string) => {
       const overlay = ui.permissionOverlay;
       if (!overlay) return;
+      // 0.11.1：同一请求只提交一次（重复 Enter / 快速按键不再发布第二条 response）。
+      if (!markPermissionSubmitted(overlay.requestId)) return;
       // 先标记已答并停表：即使旧回调已排队，也不能再追加超时提示。
       permissionTimeoutRef.current?.answer(overlay.requestId);
+
+      // 0.11.1（DECISION-022 §2.1）：已过期的弹窗只关闭并提示，不重试、不发布 response。
+      if (decidePermissionAnswer(overlay.expiresAt) === 'expired') {
+        dispatch({ type: 'setPermissionOverlay', overlay: null });
+        dispatch({ type: 'appendHistory', line: t('permission.expired') });
+        return;
+      }
+
       const always = answer === 'always';
       ctx.events.publish({
         type: 'tool.permission.response',
@@ -864,7 +893,7 @@ function InkRepl({ ctx }: InkReplProps) {
         }
       }
     },
-    [ui.permissionOverlay, ctx.events, ctx.permissions, dispatch],
+    [ui.permissionOverlay, ctx.events, ctx.permissions, dispatch, markPermissionSubmitted],
   );
 
   // ask-user 弹窗激活状态回调（子组件汇报 requestId/runId，供 Ctrl+C 主动解除 waitFor）
