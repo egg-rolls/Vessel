@@ -51,6 +51,7 @@ import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
+import { maybeClearOnStart } from './clear-on-start.js';
 import { failureFallbackAction, failureViewerTitle } from './error-archive.js';
 import { computeLiveLayout, queuePreviewRows } from './layout.js';
 import { PermissionTimeoutController } from './permission-timeout.js';
@@ -113,7 +114,9 @@ function InkRepl({ ctx }: InkReplProps) {
   /** 本轮失败是否已由 StreamOutput 归档（失败只产生一条历史项） */
   const streamFailureArchivedRef = useRef(false);
 
-  const commands = useMemo(() => createCommands(), []);
+  // locale 切换后重建注册表：help / autocomplete 的 description 由 t() 在创建时求值。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: localeVersion is not read in the factory, only used to invalidate
+  const commands = useMemo(() => createCommands(), [ui.localeVersion]);
 
   /**
    * /runs resume 与视图动作 Enter 共用的运行态接管：
@@ -396,6 +399,8 @@ function InkRepl({ ctx }: InkReplProps) {
         if (result.handled) {
           const recentName = value.trim().replace(/^\//, '').split(/\s+/)[0] ?? '';
           if (recentName) dispatch({ type: 'pushRecentCommand', name: recentName });
+          // /settings 已 setLocale：重建命令并重渲染，状态栏 / 弹窗 / help 立即跟随。
+          if (result.localeChanged) dispatch({ type: 'bumpLocale' });
 
           // 命令返回交互视图：打开独占 overlay，不把整张表写进 scrollback。
           if (result.view) {
@@ -1268,7 +1273,8 @@ function InkRepl({ ctx }: InkReplProps) {
  * - 非 TTY：使用简单的行模式（兼容管道输入）
  */
 export async function startInkRepl(ctx: ReplContext): Promise<void> {
-  const configLanguage = (ctx.config as { ui?: { language?: string } }).ui?.language;
+  const uiConfig = (ctx.config as { ui?: { language?: string; clearOnStart?: boolean } }).ui;
+  const configLanguage = uiConfig?.language;
   setLocale(
     resolveLocale({
       env: process.env,
@@ -1281,6 +1287,13 @@ export async function startInkRepl(ctx: ReplContext): Promise<void> {
     await runSimpleMode(ctx);
     return;
   }
+
+  // 进入清屏：仅 TTY 且 ui.clearOnStart !== false（DECISION-021 §3.1）。
+  maybeClearOnStart({
+    isTTY: Boolean(process.stdin.isTTY),
+    clearOnStart: uiConfig?.clearOnStart,
+    write: (text) => process.stdout.write(text),
+  });
 
   // TTY 环境使用完整的 Ink UI
   const { waitUntilExit } = render(<InkRepl ctx={ctx} />);
@@ -1297,7 +1310,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
   const { createCommands, consumePendingResume } = await import('../commands/commands.js');
   const { classifyError, formatClassifiedError } = await import('../error-classifier.js');
 
-  const commands = createCommands();
+  let commands = createCommands();
   const state = {
     currentSessionId: ctx.currentSessionId,
     pendingResume: false,
@@ -1356,6 +1369,8 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     // 处理命令
     if (trimmed.startsWith('/')) {
       const result = await commands.execute(trimmed.slice(1), ctx, state);
+      // /settings 切换后重建注册表，后续 /help 的 description 跟随新 locale。
+      if (result.localeChanged) commands = createCommands();
       if (result.clearScreen) {
         console.clear();
       }

@@ -30,12 +30,12 @@ function totalWidth(columns: ReturnType<typeof resolveColumns>): number {
 }
 
 describe('viewWidth', () => {
-  it('40/80/120/160/200 列随终端增长，封顶 160', () => {
+  it('40/80/120/160/200 列随终端增长，200 列使用全宽（不封顶）', () => {
     expect(viewWidth(40)).toBe(38);
     expect(viewWidth(80)).toBe(78);
     expect(viewWidth(120)).toBe(118);
     expect(viewWidth(160)).toBe(158);
-    expect(viewWidth(200)).toBe(160);
+    expect(viewWidth(200)).toBe(198);
   });
 
   it('异常宽度兜底', () => {

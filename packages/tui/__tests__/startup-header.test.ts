@@ -11,35 +11,42 @@ const summary = {
 };
 
 describe('buildStartupHeader', () => {
-  it('80x24 生成 7 行且每行不超过终端列数', () => {
+  it('80x24 生成 7 行内容 + 单线边框，且每行不超过终端列数', () => {
     const lines = buildStartupHeader({ columns: 80, rows: 24, version: '0.7.0', summary });
 
-    expect(lines).toHaveLength(7);
-    expect(lines.slice(0, 5)).toEqual(WORDMARK_5.map((line) => line.trimEnd()));
+    // viewWidth(80) = 78：上下边框 + 7 行内容。
+    expect(lines).toHaveLength(9);
+    expect(lines[0]).toBe(`╭${'─'.repeat(76)}╮`);
+    expect(lines.at(-1)).toBe(`╰${'─'.repeat(76)}╯`);
+    expect(lines[1]).toContain(WORDMARK_5[0]?.trimEnd() ?? '');
+    expect(lines[6]).toContain('Agent Harness');
+    expect(lines[7]).toContain('deepseek-flash');
     for (const line of lines) {
+      expect(displayWidth(line)).toBe(78);
       expect(displayWidth(line)).toBeLessThanOrEqual(80);
     }
   });
 
-  it('60 列不渲染 wordmark，压成 3 行', () => {
+  it('60 列不渲染 wordmark，内容 3 行 + 边框', () => {
     const lines = buildStartupHeader({ columns: 60, rows: 24, version: '0.7.0', summary });
 
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(5);
     expect(lines.join('\n')).not.toContain('█');
     for (const line of lines) {
+      expect(displayWidth(line)).toBe(58);
       expect(displayWidth(line)).toBeLessThanOrEqual(60);
     }
   });
 
-  it('15/14 行压成 2 行，10 行 1 行，9 行隐藏', () => {
+  it('15/14 行内容 2 行，10 行 1 行，9 行隐藏（边框计入行数）', () => {
     expect(buildStartupHeader({ columns: 80, rows: 15, version: '0.7.0', summary })).toHaveLength(
-      2,
+      4,
     );
     expect(buildStartupHeader({ columns: 80, rows: 14, version: '0.7.0', summary })).toHaveLength(
-      2,
+      4,
     );
     expect(buildStartupHeader({ columns: 80, rows: 10, version: '0.7.0', summary })).toHaveLength(
-      1,
+      3,
     );
     expect(buildStartupHeader({ columns: 80, rows: 9, version: '0.7.0', summary })).toHaveLength(0);
   });
@@ -52,7 +59,9 @@ describe('buildStartupHeader', () => {
       summary: { model: '深度求索-模型', sessionId: '会话_20261018_230506_830174' },
     });
 
+    expect(lines.length).toBeGreaterThan(0);
     for (const line of lines) {
+      expect(displayWidth(line)).toBe(38);
       expect(displayWidth(line)).toBeLessThanOrEqual(40);
     }
   });

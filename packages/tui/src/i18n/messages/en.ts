@@ -37,6 +37,13 @@ export const en: Record<MessageKey, string> = {
   'layout.lowHeight':
     'Terminal height is low (<15 rows); live output is hidden. Resize to see streaming output.',
 
+  // ── settings（0.11） ──
+  'settings.current': 'Current language: {language}',
+  'settings.usage': 'Usage: /settings [language <zh-CN|en>]',
+  'settings.switched': '✓ Language switched to {language}.',
+  'settings.readOnly': 'Language is read-only in this build ({language}).',
+  'settings.invalid': 'Unknown language "{value}". Use zh-CN or en.',
+
   // ── queue ──
   'queue.header': 'queued ({count})',
   'queue.headerEditing': 'queued ({count}) · editing {index} · Ctrl+X delete · Esc cancel',
@@ -285,6 +292,7 @@ export const en: Record<MessageKey, string> = {
   'error.command.loadTool': '✗ Failed to load tool "{name}":',
   'error.command.listTools': '✗ Failed to list tools:',
   'error.command.listPlugins': '✗ Failed to list plugins:',
+  'error.command.settings': '✗ Failed to save language setting:',
   'error.command.listRuns': '✗ Failed to list durable runs:',
   'error.command.cancelRun': '✗ Failed to cancel run "{id}":',
   'error.command.resumeRun': '✗ Failed to resume run "{id}":',
@@ -348,6 +356,7 @@ export const en: Record<MessageKey, string> = {
   'command.permissions.description':
     'View/edit persisted auto-approved tools (permission.auto_approve)',
   'command.config.description': 'Show config (masked) and YAML config paths',
+  'command.settings.description': 'UI language: show / switch (zh-CN | en)',
   'command.feishu.description': 'Show Feishu channel status',
   'command.mcp.description': 'MCP servers: status / reconnect',
   'command.metrics.description': 'Show runtime metrics (live or rebuilt from trace)',

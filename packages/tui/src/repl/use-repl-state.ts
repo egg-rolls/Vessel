@@ -133,6 +133,8 @@ export interface ReplUiState {
   expandSignal: number;
   /** 队列处理完成后的重渲染触发器 */
   queueTick: number;
+  /** /settings 切换 locale 后自增：重建命令注册表并触发整屏重渲染 */
+  localeVersion: number;
 }
 
 export type ReplUiAction =
@@ -198,6 +200,7 @@ export type ReplUiAction =
   | { type: 'openTextViewer'; title: string; lines: string[] }
   | { type: 'closeTextViewer' }
   | { type: 'bumpQueueTick' }
+  | { type: 'bumpLocale' }
   | { type: 'toggleExpanded' };
 
 /** 纯 reducer：不可变推进 UI 状态 */
@@ -464,6 +467,8 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
       return state.textViewer === null ? state : { ...state, textViewer: null };
     case 'bumpQueueTick':
       return { ...state, queueTick: state.queueTick + 1 };
+    case 'bumpLocale':
+      return { ...state, localeVersion: state.localeVersion + 1 };
     case 'toggleExpanded': {
       const expandedOutput = !state.expandedOutput;
       return {
@@ -511,6 +516,7 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     expandedOutput: false,
     expandSignal: 0,
     queueTick: 0,
+    localeVersion: 0,
   };
 }
 

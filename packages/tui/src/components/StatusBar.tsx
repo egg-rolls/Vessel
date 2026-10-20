@@ -6,11 +6,13 @@
  * 进度条与百分比、字形与文本同时表达状态。
  */
 
-import { Box, Text, useStdout } from 'ink';
+import { Text, useStdout } from 'ink';
 import { t } from '../i18n/index.js';
 import { glyph, theme } from '../theme.js';
 import { formatDuration, formatModelLabel, formatTokenCount } from '../utils/display-labels.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
+import { viewWidth } from '../views/layout.js';
+import { PanelFrame } from './PanelFrame.js';
 
 export type StatusKind = 'idle' | 'thinking' | 'tool' | 'cancelling';
 
@@ -215,7 +217,8 @@ function toneColor(tone: StatusTone): string | undefined {
 export function StatusBar(props: StatusRuleProps) {
   const { stdout } = useStdout();
   const columns = stdout.columns ?? 80;
-  const segments = formatStatusRule(props, columns);
+  // PanelFrame 内侧可用宽度 = viewWidth - 4；formatStatusRule 的 max 也是入参 - 4。
+  const segments = formatStatusRule(props, Math.max(4, columns - 2));
   let offset = 0;
   const keyed = segments.map((segment) => {
     const key = `${offset}-${segment.tone}`;
@@ -224,7 +227,7 @@ export function StatusBar(props: StatusRuleProps) {
   });
 
   return (
-    <Box paddingX={2} width="100%" overflow="hidden" flexShrink={0} height={1}>
+    <PanelFrame width={viewWidth(columns)}>
       <Text wrap="truncate-end">
         {keyed.map(({ segment, key }) => (
           <Text key={key} color={toneColor(segment.tone)}>
@@ -232,6 +235,6 @@ export function StatusBar(props: StatusRuleProps) {
           </Text>
         ))}
       </Text>
-    </Box>
+    </PanelFrame>
   );
 }

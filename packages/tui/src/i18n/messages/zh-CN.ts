@@ -35,6 +35,13 @@ export const zhCN = {
   'layout.lowHeight':
     'Terminal height is low (<15 rows); live output is hidden. Resize to see streaming output.',
 
+  // ── settings（0.11） ──
+  'settings.current': '当前语言：{language}',
+  'settings.usage': '用法：/settings [language <zh-CN|en>]',
+  'settings.switched': '✓ 界面语言已切换为 {language}。',
+  'settings.readOnly': '当前构建的语言设置为只读（{language}）。',
+  'settings.invalid': '未知语言 "{value}"，可选 zh-CN 或 en。',
+
   // ── queue ──
   'queue.header': 'queued ({count})',
   'queue.headerEditing': 'queued ({count}) · editing {index} · Ctrl+X delete · Esc cancel',
@@ -272,6 +279,7 @@ export const zhCN = {
   'error.command.loadTool': '✗ Failed to load tool "{name}":',
   'error.command.listTools': '✗ Failed to list tools:',
   'error.command.listPlugins': '✗ Failed to list plugins:',
+  'error.command.settings': '✗ Failed to save language setting:',
   'error.command.listRuns': '✗ Failed to list durable runs:',
   'error.command.cancelRun': '✗ Failed to cancel run "{id}":',
   'error.command.resumeRun': '✗ Failed to resume run "{id}":',
@@ -332,6 +340,7 @@ export const zhCN = {
   'command.export.description': '导出当前会话（Markdown/JSON）',
   'command.permissions.description': '查看/编辑持久化免确认工具（permission.auto_approve）',
   'command.config.description': 'Show config (masked) and YAML config paths',
+  'command.settings.description': '界面语言：查看 / 切换（zh-CN | en）',
   'command.feishu.description': 'Show Feishu channel status',
   'command.mcp.description': 'MCP servers: status / reconnect',
   'command.metrics.description': 'Show runtime metrics (live or rebuilt from trace)',

@@ -6,10 +6,12 @@
  * 行数由 `computeLiveLayout(rows, queueRows)` 扣除。
  */
 
-import { Box, Text } from 'ink';
+import { Text } from 'ink';
 import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { lineKey, truncateToWidth } from '../utils/text-layout.js';
+import { viewWidth } from '../views/layout.js';
+import { PanelFrame } from './PanelFrame.js';
 
 export const QUEUE_WINDOW = 3;
 
@@ -90,11 +92,11 @@ export interface QueuePreviewProps {
 }
 
 export function QueuePreview({ queued, editIndex, columns, rows }: QueuePreviewProps) {
-  const lines = formatQueuePreview(queued, editIndex, columns, rows);
+  const lines = formatQueuePreview(queued, editIndex, viewWidth(columns), rows);
   if (lines.length === 0) return null;
 
   return (
-    <Box flexDirection="column" flexShrink={0} paddingX={2}>
+    <PanelFrame width={viewWidth(columns)}>
       {lines.map((line, index) => (
         <Text
           key={lineKey(index)}
@@ -106,6 +108,6 @@ export function QueuePreview({ queued, editIndex, columns, rows }: QueuePreviewP
           {line.text}
         </Text>
       ))}
-    </Box>
+    </PanelFrame>
   );
 }
