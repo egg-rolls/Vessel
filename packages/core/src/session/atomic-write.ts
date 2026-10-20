@@ -12,7 +12,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { type FileHandle, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises';
+import { chmod, type FileHandle, mkdir, open, rename, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 
 /** rename 尝试次数（含第一次） */
@@ -34,6 +34,8 @@ export interface AtomicWriteOptions {
    * 目录 fsync 是尽力而为（Windows 上常不可用）。
    */
   durable?: boolean;
+  /** 替换前设置的 POSIX 文件权限（如 0o600）；Windows 上忽略 */
+  mode?: number;
 }
 
 /** 原子写失败（稳定错误码，供上层映射 internal） */
@@ -174,6 +176,14 @@ async function writeAtomically(
   const durable = options.durable ?? true;
 
   await writeTemp(tmpPath, data, encoding, durable, filePath);
+  if (options.mode !== undefined) {
+    try {
+      await chmod(tmpPath, options.mode);
+    } catch (error) {
+      await unlink(tmpPath).catch(() => {});
+      throw new AtomicWriteError(filePath, error);
+    }
+  }
 
   const retries = resolveRetries(options.retries);
   let lastError: unknown;

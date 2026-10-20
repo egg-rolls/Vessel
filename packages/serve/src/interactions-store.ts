@@ -9,7 +9,6 @@
  */
 
 import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
-import { chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWrite } from '@vessel-agent/core';
 
@@ -156,8 +155,7 @@ export class InteractionsStore {
     }
     const payload = `${JSON.stringify({ version: 1, interactions: records }, null, 2)}\n`;
     try {
-      await atomicWrite(path, payload, { ensureDir: true });
-      await chmod(path, 0o600);
+      await atomicWrite(path, payload, { ensureDir: true, mode: 0o600 });
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       console.error(`[vessel] interactions: failed to persist ${path}: ${detail}`);
