@@ -21,6 +21,20 @@ runs:
       shell: bash
       run: bun install --frozen-lockfile
 
+    # 根 `bun test` 会扫 apps/web/tests；apps/web 不在根 workspaces 里，
+    # 必须先装它自己的依赖（react 等），否则测试文件按 error 计。
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: apps/web/package-lock.json
+
+    - name: Install web dependencies
+      shell: bash
+      working-directory: apps/web
+      run: npm ci
+
     - name: Lint
       shell: bash
       run: bun run lint

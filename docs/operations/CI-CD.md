@@ -18,8 +18,8 @@
 
 | Job | Runner | 内容 |
 |---|---|---|
-| `quality` | ubuntu-latest | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
-| `cross-platform` | matrix：ubuntu / windows / macos | `bun install --frozen-lockfile` → `bun run typecheck` → `bun test`；**PR 只跑 ubuntu**，`main` / `release/**` 跑全矩阵 |
+| `quality` | ubuntu-latest | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run lint` → `bun run typecheck` → `bun test` → `bun run build` |
+| `cross-platform` | matrix：ubuntu / windows / macos | `bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run typecheck` → `bun test`；**PR 只跑 ubuntu**，`main` / `release/**` 跑全矩阵 |
 | `web` | ubuntu-latest | `apps/web`：`npm ci` → `npm run build`（Node 22，npm cache） |
 | `architecture` | ubuntu-latest | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
 | `offline-integration` | ubuntu-latest | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；MCP 用本地 mock server，TLS 用本地自签证书，workflow / evals / feishu / config / trace 均用 mock 或临时目录，**不依赖外网** |
@@ -33,6 +33,7 @@
 ### 通用规则
 
 - Bun 安装缓存：`actions/cache` + `~/.bun/install/cache`，key 取 `bun.lock` 哈希。
+- **`bun test` 覆盖 `apps/web/tests`**：`apps/web` 不在根 `workspaces`（根只有 `packages/*`、`plugins/*/*`），`bun install` 不会安装 `react` 等前端依赖。因此凡是要跑根 `bun test` 的 job（`quality`、`cross-platform` 的 ubuntu / windows / macos）必须在该步之前执行 `actions/setup-node@v4`（Node 22，npm cache 取 `apps/web/package-lock.json`）+ `apps/web` 下的 `npm ci`；否则 `apps/web/tests` 会因 `Cannot find package 'react'` 计为 error。`web` job 自己的 `npm ci` 在独立 job 中，不与其他 job 共享 `node_modules`。
 - 三件套任一红 → 禁止合并。
 - 不在 CI 中写入任何真实 API Key；mock 模式覆盖全部冒烟路径。
 - 分支保护 required checks：`Quality Checks`、`Web Build`、`Examples`、`Cross Platform (ubuntu-latest)`；0.5 建议把 `Architecture`、`Offline Integration` 与 `Release Dry Run` 也设为 required（由 1 / 仓库管理员在 GitHub 设置）。
