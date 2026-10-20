@@ -175,7 +175,7 @@ team_cancel { "member": "node-b:worker" }
 
 - 成员地址支持 `node:agent`；不带 node 前缀时按本机处理。
 - 节点心跳：`GET /v1/team/agents`（失败回退 `/health`），默认 5s；状态 `healthy` / `unreachable`，展示 TTL 15s。
-- 跨节点事件：父端订阅 `wss://<node>/v1/events`，按 `(node_id, wire seq)` 去重后回灌；`seq` 按 `(node_id, run_id)` 解释，没有全局序。
+- 跨节点事件：父端订阅 `wss://<node>/v1/events`，按 `node:incarnation:run_id:seq` 去重后回灌（无 `run_id` 写 `-`；对端 `incarnation` 变化或 seq 回退只清该来源节点的键）。`seq` 按 `(node_id, run_id)` 解释，没有全局序；去重集合只在进程内，不跨重启。
 
 ## 4. 独立前端部署
 
