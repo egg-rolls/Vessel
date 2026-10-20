@@ -20,6 +20,7 @@ import type {
   EventStream,
   PluginHost,
   RunEvent,
+  RunInterruptReason,
   RunnableAgent,
   SessionBackend,
   ToolDefinition,
@@ -114,7 +115,7 @@ import {
   type RpcRequest,
   type RpcResponse,
 } from './rpc.js';
-import { createRunEngine } from './run-engine.js';
+import { createRunEngine, type RunRecord } from './run-engine.js';
 import {
   fromWireMessage,
   isRemoteAddress,
@@ -321,7 +322,11 @@ export interface Gateway {
   rpc: RpcDispatcher;
   /** 当前 capability manifest（capabilities.list 同源） */
   manifest(): CapabilityManifest;
-  stop(): void;
+  /**
+   * 停止网关（0.10 R2-18）：以 `shutdown` 中断 active run 并限时等待终态，
+   * 然后关闭连接。幂等；重复调用返回同一个 promise。
+   */
+  stop(): Promise<void>;
 }
 
 /** team SSE 连接状态 */
@@ -346,6 +351,14 @@ interface WsData {
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
+
+/**
+ * 0.10 R2-18：`RunnableAgent` 尚未把 `interrupt()` 纳入结构契约，
+ * gateway 按可选能力探测（`AgentRuntime` 已实现），不依赖具体类。
+ */
+type InterruptibleRuntime = RunnableAgent & {
+  interrupt?(reason?: RunInterruptReason): void;
+};
 
 /** 运行队列上限（防止无界堆积） */
 const MAX_QUEUE = 100;
@@ -3057,6 +3070,122 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }, 30_000);
   (permissionSweeper as { unref?: () => void }).unref?.();
 
+  /** 关闭时等待 active run 的上限（0.10 R2-18） */
+  const SHUTDOWN_RUN_TIMEOUT_MS = 5_000;
+
+  /** 关闭路径的异常只记 stderr，不阻断后续清理 */
+  function reportStopError(action: string, error: unknown): void {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`[vessel] gateway stop: ${action} failed: ${detail}`);
+  }
+
+  /**
+   * 以 `shutdown` reason 中断 active run（0.10 R2-18）。
+   *
+   * 优先调用 runtime 的 `interrupt()`（AgentRuntime 会把 checkpoint 落 `interrupted`）；
+   * 同时用现有 `RunOptions.signal` 透传同一 reason，覆盖未实现 `interrupt` 的 facade。
+   */
+  function interruptActiveRun(record: RunRecord): void {
+    const tenantRuntime = runtimeFor(record.tenant_id) as InterruptibleRuntime | undefined;
+    const interrupt = tenantRuntime?.interrupt;
+    if (typeof interrupt === 'function') {
+      try {
+        interrupt.call(tenantRuntime, 'shutdown');
+      } catch (error) {
+        reportStopError('interrupt active run', error);
+      }
+    }
+    try {
+      record.controller.abort('shutdown');
+    } catch (error) {
+      reportStopError('abort active run', error);
+    }
+  }
+
+  /** 限时等待 run 终态；超时返回 false，不抛 */
+  async function waitForRun(record: RunRecord, timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const expired = new Promise<boolean>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+    });
+    try {
+      return await Promise.race([record.done.then(() => true), expired]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
+  function closeWsClients(): void {
+    for (const ws of wsClients) {
+      try {
+        ws.close(1001, 'server stopping');
+      } catch (error) {
+        reportStopError('close websocket', error);
+      }
+    }
+    wsClients.clear();
+  }
+
+  function closeSseClients<T>(clients: Map<SseController, T>): void {
+    for (const ctrl of clients.keys()) {
+      try {
+        ctrl.close();
+      } catch (error) {
+        reportStopError('close event stream', error);
+      }
+    }
+    clients.clear();
+  }
+
+  async function shutdown(): Promise<void> {
+    if (heartbeat !== undefined) clearInterval(heartbeat);
+    clearInterval(permissionSweeper);
+    if (teamPollTimer) clearInterval(teamPollTimer);
+    teamPollTimer = undefined;
+
+    // 先清队列：active run 收尾时 pump() 不得再启动新 run。
+    for (const record of queue.splice(0)) {
+      record.status = 'cancelled';
+      record.completed_at = Date.now();
+      record.resolveDone();
+    }
+
+    // 中断并等待 active run 落终态；等待期间事件仍订阅，终态帧可正常广播。
+    const activeRun = engine.active;
+    if (activeRun !== null) {
+      interruptActiveRun(activeRun);
+      const settled = await waitForRun(activeRun, SHUTDOWN_RUN_TIMEOUT_MS);
+      if (!settled) {
+        console.error(
+          `[vessel] gateway stop: run ${activeRun.run_id} did not finish within ` +
+            `${SHUTDOWN_RUN_TIMEOUT_MS}ms`,
+        );
+      }
+    }
+
+    try {
+      unsubscribe();
+    } catch (error) {
+      reportStopError('unsubscribe events', error);
+    }
+
+    closeWsClients();
+    closeSseClients(sseClients);
+    closeSseClients(teamClients);
+    knownPeers.clear();
+
+    if (server) {
+      try {
+        await server.stop(true);
+      } catch (error) {
+        reportStopError('stop http server', error);
+      }
+    }
+  }
+
+  let stopPromise: Promise<void> | undefined;
+
   return {
     port: actualPort,
     url: `${scheme}://${hostname}:${actualPort}`,
@@ -3068,43 +3197,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     rpc: dispatcher.dispatch,
     manifest,
     stop() {
-      if (heartbeat !== undefined) clearInterval(heartbeat);
-      clearInterval(permissionSweeper);
-      if (teamPollTimer) clearInterval(teamPollTimer);
-      teamPollTimer = undefined;
-      unsubscribe();
-      engine.active?.controller.abort();
-      for (const record of queue.splice(0)) {
-        record.status = 'cancelled';
-        record.completed_at = Date.now();
-        record.resolveDone();
-      }
-      for (const ws of wsClients) {
-        try {
-          ws.close(1001, 'server stopping');
-        } catch {
-          // 已断开
-        }
-      }
-      wsClients.clear();
-      for (const ctrl of sseClients.keys()) {
-        try {
-          ctrl.close();
-        } catch {
-          // 已关闭
-        }
-      }
-      sseClients.clear();
-      for (const ctrl of teamClients.keys()) {
-        try {
-          ctrl.close();
-        } catch {
-          // 已关闭
-        }
-      }
-      teamClients.clear();
-      knownPeers.clear();
-      void server?.stop(true);
+      stopPromise ??= shutdown();
+      return stopPromise;
     },
   };
 }
