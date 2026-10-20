@@ -9,6 +9,7 @@
 
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
+import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
 import { truncateToWidth } from '../utils/text-layout.js';
@@ -150,19 +151,21 @@ export function tailResultLines(result: string, maxLines: number): string {
   if (!trimmed || maxLines <= 0) return maxLines <= 0 ? '' : trimmed;
   const lines = trimmed.split('\n');
   if (lines.length <= maxLines) return trimmed;
-  return `…（前文已折叠）\n${lines.slice(-maxLines).join('\n')}`;
+  return `${t('tool.truncated')}\n${lines.slice(-maxLines).join('\n')}`;
 }
 
 toolDisplayRegistry.register('bash', {
   userFacingName: () => 'bash',
   getActivityDescription: (input) => {
     const command = inputString(input, 'command');
-    return command ? `Running: ${compact(command, 80)}` : 'Running shell command';
+    return command
+      ? t('tool.activity.running', { command: compact(command, 80) })
+      : t('tool.activity.runningShell');
   },
   getTrailLine: (input, result, status) => ({
     label: 'bash',
     detail: `${compact(inputString(input, 'command'), 60)}${
-      status === 'failed' ? '  FAILED' : result ? '  PASS' : ''
+      status === 'failed' ? `  ${t('tool.trail.failed')}` : result ? `  ${t('tool.pass')}` : ''
     }`.trim(),
   }),
   renderToolUseMessage: (input) => {
@@ -184,19 +187,22 @@ toolDisplayRegistry.register('read', {
   userFacingName: () => 'read',
   getActivityDescription: (input) => {
     const path = inputString(input, 'path');
-    return path ? `Reading ${path}` : 'Reading file';
+    return path ? t('tool.activity.reading', { path }) : t('tool.activity.readingFile');
   },
   getTrailLine: (input, result) => {
     const path = inputString(input, 'path');
     const lines = result ? result.split('\n').length : 0;
-    return { label: 'read', detail: lines > 0 ? `${path}  ${lines} lines` : path };
+    return {
+      label: 'read',
+      detail: lines > 0 ? `${path}  ${t('tool.lineCount', { count: lines })}` : path,
+    };
   },
   renderToolUseMessage: (input) => {
     const path = inputString(input, 'path');
     return <Text color={theme.muted}>{path ? ` ${path}` : ''}</Text>;
   },
   renderToolResultMessage: (result) => (
-    <Text color={theme.muted}>{`Read ${result.split('\n').length} lines`}</Text>
+    <Text color={theme.muted}>{t('tool.readLines', { count: result.split('\n').length })}</Text>
   ),
   renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
@@ -271,7 +277,7 @@ toolDisplayRegistry.register('edit', {
   userFacingName: () => 'edit',
   getActivityDescription: (input) => {
     const path = inputString(input, 'path');
-    return path ? `Editing ${path}` : 'Editing file';
+    return path ? t('tool.activity.editing', { path }) : t('tool.activity.editingFile');
   },
   getTrailLine: (input) => {
     const path = inputString(input, 'path');
@@ -302,7 +308,9 @@ toolDisplayRegistry.register('delegate_task', {
   userFacingName: () => 'delegate_task',
   getActivityDescription: (input) => {
     const task = inputString(input, 'task');
-    return task ? `Delegating: ${compact(task, 80)}` : 'Delegating subtask';
+    return task
+      ? t('tool.activity.delegating', { task: compact(task, 80) })
+      : t('tool.activity.delegatingTask');
   },
   getTrailLine: (input) => ({
     label: 'delegate',
@@ -320,7 +328,7 @@ toolDisplayRegistry.register('delegate_task', {
 
 toolDisplayRegistry.register('ask_user', {
   userFacingName: () => 'ask_user',
-  getActivityDescription: () => 'Asking user',
+  getActivityDescription: () => t('tool.activity.askingUser'),
   getTrailLine: () => ({ label: 'ask_user', detail: '' }),
   renderToolUseMessage: () => <Text color={theme.muted} />,
   renderToolResultMessage: (result, options) => (

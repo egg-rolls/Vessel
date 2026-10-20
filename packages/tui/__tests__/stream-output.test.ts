@@ -13,7 +13,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
-  CANCEL_TRANSCRIPT_NOTICE,
+  cancelTranscriptNotice,
   DEFAULT_MAX_SEGMENTS,
   getCancelledTranscript,
   getResponseText,
@@ -388,11 +388,11 @@ describe('getCancelledTranscript', () => {
     const transcript = getCancelledTranscript(segs);
 
     expect(transcript).toContain('已经流出的部分回答');
-    expect(transcript).toContain(CANCEL_TRANSCRIPT_NOTICE);
+    expect(transcript).toContain(cancelTranscriptNotice());
   });
 
   it('没有内容时只返回取消标注', () => {
-    expect(getCancelledTranscript([])).toBe(CANCEL_TRANSCRIPT_NOTICE);
+    expect(getCancelledTranscript([])).toBe(cancelTranscriptNotice());
   });
 
   it('工具摘要同样被保留', () => {
@@ -410,6 +410,6 @@ describe('getCancelledTranscript', () => {
     const transcript = getCancelledTranscript(segs);
     expect(transcript).toContain('✓ read');
     expect(transcript).toContain('file body');
-    expect(transcript).toContain(CANCEL_TRANSCRIPT_NOTICE);
+    expect(transcript).toContain(cancelTranscriptNotice());
   });
 });

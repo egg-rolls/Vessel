@@ -19,6 +19,7 @@ import type { EventStream } from '@vessel/core';
 import { Box, type Key, Text, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
+import { t } from '../i18n/index.js';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
 import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
@@ -31,8 +32,12 @@ export interface AskUserDialogProps {
   onActiveChange?: (active: boolean, requestId?: string, runId?: string) => void;
 }
 
-/** 每个选择题末尾默认追加的自定义输入选项 */
-const CUSTOM_OPTION = '输入你自己的答案';
+/** 每个选择题末尾默认追加的自定义输入选项（内部哨兵，不直接展示） */
+const CUSTOM_OPTION = '__vessel_custom_answer__';
+
+function optionLabel(option: string): string {
+  return option === CUSTOM_OPTION ? t('ask.customOption') : option;
+}
 
 /** ESC 控制字符（不用正则：避免 lint/suspicious/noControlCharactersInRegex） */
 const ESC_CHAR = String.fromCharCode(0x1b);
@@ -121,7 +126,7 @@ function ReviewPage({
     <Box flexDirection="column">
       <Box marginBottom={1}>
         <Text bold color={theme.brand}>
-          📋 Review Your Answers
+          {t('ask.reviewTitle')}
         </Text>
       </Box>
       {questions.map((q, i) => {
@@ -132,15 +137,17 @@ function ReviewPage({
               {i + 1}. <Text bold>{q.header}</Text>
               {done ? `: ${resolveAnswer(i)}` : ''}
             </Text>
-            {!done && <Text color={theme.warn}> (未回答)</Text>}
+            {!done && <Text color={theme.warn}> {t('ask.unanswered')}</Text>}
           </Box>
         );
       })}
       <Box marginTop={1}>
         {unansweredCount > 0 ? (
-          <Text color={theme.warn}>⚠ {notice || `还有 ${unansweredCount} 个问题未回答`}</Text>
+          <Text color={theme.warn}>
+            ⚠ {notice || t('ask.unansweredCount', { count: unansweredCount })}
+          </Text>
         ) : (
-          <Text color={theme.faint}>[Enter] 确认提交 · [Esc] 返回修改</Text>
+          <Text color={theme.faint}>{t('ask.reviewFooter')}</Text>
         )}
       </Box>
     </Box>
@@ -188,7 +195,7 @@ function ChoiceOptions({
                 {` ${prefix}`}
               </Text>
               <TextInput
-                placeholder="输入你自己的答案"
+                placeholder={t('ask.customOption')}
                 value={custom}
                 onChange={onCustomChange}
                 onSubmit={onCustomSubmit}
@@ -201,7 +208,7 @@ function ChoiceOptions({
         if (isCustom && custom.trim()) {
           return (
             <Text key={opt} color={theme.ok} bold>
-              {` ${prefix} 你的答案: ${custom.trim()}`}
+              {` ${prefix} ${t('ask.yourAnswer', { answer: custom.trim() })}`}
             </Text>
           );
         }
@@ -213,7 +220,7 @@ function ChoiceOptions({
             color={focused ? theme.brand : isSelected ? theme.ok : undefined}
             bold={focused || isSelected}
           >
-            {` ${prefix} ${opt}`}
+            {` ${prefix} ${optionLabel(opt)}`}
           </Text>
         );
       })}
@@ -398,7 +405,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
     (key: Key) => {
       if (key.return) {
         if (unansweredCount === 0) submit();
-        else setNotice(`还有 ${unansweredCount} 个问题未回答，请按 Esc 返回补充`);
+        else setNotice(t('ask.unansweredNotice', { count: unansweredCount }));
       } else if (key.escape) {
         setView('question');
         setNotice('');
@@ -550,7 +557,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
       {/* 标题行：标题 + 进度 */}
       <Box justifyContent="space-between" marginBottom={1}>
         <Text bold color={theme.brand}>
-          ❓ Agent Question
+          {t('ask.questionTitle')}
         </Text>
         <Text color={theme.muted}>
           {currentIndex + 1} / {total}
@@ -609,12 +616,10 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
           {/* 底部提示 */}
           <Box marginTop={1}>
             {customFocus || !isChoice ? (
-              <Text color={theme.faint}>Enter 提交 · Tab 切换问题 · Esc 取消</Text>
+              <Text color={theme.faint}>{t('ask.hintSubmit')}</Text>
             ) : (
               <Text color={theme.faint}>
-                {question.multi_select
-                  ? 'Space 勾选/取消 · Enter 提交 · Tab/←→ 切换问题 · Esc 取消'
-                  : '↑↓ 选择 · Enter 确认 · Tab/←→ 切换问题 · Esc 取消'}
+                {question.multi_select ? t('ask.hintMulti') : t('ask.hintSingle')}
               </Text>
             )}
           </Box>

@@ -12,6 +12,7 @@ import type { EventStream } from '@vessel/core';
 import { Box, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolDetailMode } from '../commands/commands.js';
+import { t } from '../i18n/index.js';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
@@ -60,19 +61,16 @@ const TRANSCRIPT_MAX_RESULT_CHARS = 1200;
 const EXPANDED_MAX_RESULT_LINES = 4000;
 const EXPANDED_MAX_RESULT_CHARS = 32000;
 
-/** 截断提示行（与 ToolDisplay 的按行截断保持一致的文案） */
-const TRUNCATED_NOTICE = '…（前文已折叠）';
-
 /**
  * 纯函数：按行取文本尾部，最多保留 `maxLines` 行。
- * 截断时在前面加一行 `…（前文已折叠）`；返回值已 trim。
+ * 截断时在前面加一行折叠提示；返回值已 trim。
  */
 export function tailLines(text: string, maxLines: number): string {
   const trimmed = text.trim();
   if (!trimmed || maxLines <= 0) return maxLines <= 0 ? '' : trimmed;
   const lines = trimmed.split('\n');
   if (lines.length <= maxLines) return trimmed;
-  return `${TRUNCATED_NOTICE}\n${lines.slice(-maxLines).join('\n')}`;
+  return `${t('tool.truncated')}\n${lines.slice(-maxLines).join('\n')}`;
 }
 
 export interface LimitSegmentsOptions {
@@ -162,7 +160,9 @@ export function getTranscriptText(segs: Segment[], options: { full?: boolean } =
 }
 
 /** 取消归档时追加的标注（与 ink-repl 的取消提示保持单一来源） */
-export const CANCEL_TRANSCRIPT_NOTICE = '⏹ 已取消（Cancelled）';
+export function cancelTranscriptNotice(): string {
+  return t('stream.cancelNotice');
+}
 
 /**
  * 纯函数：取消时归档当前轮已流出的内容。
@@ -170,7 +170,8 @@ export const CANCEL_TRANSCRIPT_NOTICE = '⏹ 已取消（Cancelled）';
  */
 export function getCancelledTranscript(segs: Segment[], options: { full?: boolean } = {}): string {
   const transcript = getTranscriptText(segs, options);
-  return transcript ? `${transcript}\n\n${CANCEL_TRANSCRIPT_NOTICE}` : CANCEL_TRANSCRIPT_NOTICE;
+  const notice = cancelTranscriptNotice();
+  return transcript ? `${transcript}\n\n${notice}` : notice;
 }
 
 /**

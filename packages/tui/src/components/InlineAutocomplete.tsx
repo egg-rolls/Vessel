@@ -9,6 +9,7 @@
 import { Box, Text, useStdout } from 'ink';
 import { useMemo } from 'react';
 import type { CommandCategory } from '../commands/commands.js';
+import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { computeDialogWidth, displayWidth, truncateToWidth } from '../utils/dialog.js';
 
@@ -290,7 +291,9 @@ export function InlineAutocomplete({
         const cmd = row.command;
         const active = row.index === selectedIndex;
         const availability =
-          cmd.available === false ? ` (${cmd.unavailableHint ?? 'unavailable'})` : '';
+          cmd.available === false
+            ? ` (${cmd.unavailableHint ?? t('autocomplete.unavailable')})`
+            : '';
         const descriptionBudget = Math.max(
           1,
           contentWidth - 2 - displayWidth(cmd.name) - 3 - displayWidth(availability),

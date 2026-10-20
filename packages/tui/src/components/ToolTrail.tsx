@@ -8,6 +8,7 @@
 
 import { Box, Text } from 'ink';
 import type { ToolDetailMode } from '../commands/commands.js';
+import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { lineKey } from '../utils/text-layout.js';
@@ -80,7 +81,7 @@ function detailText(segment: ToolSegment): string {
   let text = trail.detail ? `${label}  ${trail.detail}` : label;
   if (segment.status === 'failed') {
     const error = firstLine(segment.error);
-    text += error ? `  FAILED: ${error}` : '  FAILED';
+    text += error ? `  ${t('tool.trail.failedWith', { error })}` : `  ${t('tool.trail.failed')}`;
   }
   return sanitizeTerminalText(text);
 }
@@ -104,14 +105,14 @@ export function buildTrail(segments: ToolSegment[], mode: ToolDetailMode): Trail
     0,
   );
   const suffix = totalMs > 0 ? ` · ${trailDuration(totalMs)}` : '';
-  const header = `${glyph} tools (${segments.length})${suffix}`;
+  const header = t('tool.trail.header', { glyph, count: segments.length, suffix });
 
   const visible = mode === 'collapsed' ? segments.slice(-1) : segments.slice(-EXPANDED_MAX);
   const hiddenCount = segments.length - visible.length;
   const lines: TrailLine[] = [];
 
   if (mode === 'expanded' && hiddenCount > 0) {
-    lines.push({ text: `…and ${hiddenCount} earlier`, tone: 'faint' });
+    lines.push({ text: t('tool.trail.earlier', { count: hiddenCount }), tone: 'faint' });
   }
 
   visible.forEach((segment, index) => {

@@ -7,26 +7,27 @@
  */
 
 import { Box, Text, useInput } from 'ink';
+import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { lineKey, padToWidth } from '../utils/text-layout.js';
 import { viewWidth } from '../views/layout.js';
 import { PanelFrame } from './PanelFrame.js';
 
 const COMMANDS: ReadonlyArray<readonly [string, string]> = [
-  ['/help', 'Show all commands'],
-  ['/clear', 'Clear transcript'],
-  ['/resume', 'Resume a session'],
-  ['/details', 'Tool trail verbosity'],
-  ['/compact', 'Compress conversation'],
+  ['/help', 'help.cmd.help'],
+  ['/clear', 'help.cmd.clear'],
+  ['/resume', 'help.cmd.resume'],
+  ['/details', 'help.cmd.details'],
+  ['/compact', 'help.cmd.compact'],
 ];
 
 const HOTKEYS: ReadonlyArray<readonly [string, string]> = [
-  ['Ctrl+C', 'Cancel run'],
-  ['Ctrl+O', 'Full transcript'],
-  ['Ctrl+L', 'Redraw'],
-  ['↑ ↓', 'History / queue'],
-  ['Tab', 'Complete'],
-  ['Esc', 'Close / cancel'],
+  ['Ctrl+C', 'help.hotkey.cancelRun'],
+  ['Ctrl+O', 'help.hotkey.fullTranscript'],
+  ['Ctrl+L', 'help.hotkey.redraw'],
+  ['↑ ↓', 'help.hotkey.historyQueue'],
+  ['Tab', 'help.hotkey.complete'],
+  ['Esc', 'help.hotkey.closeCancel'],
 ];
 
 /** 纯函数：只在空输入框刚输入 `?` 时打开 */
@@ -55,18 +56,20 @@ export function QuickHelp({ columns, rows, onClose }: QuickHelpProps) {
   });
 
   const maxRows = Math.max(5, rows - 6);
+  const commands = COMMANDS.map(([name, key]) => [name, t(key)] as const);
+  const hotkeys = HOTKEYS.map(([name, key]) => [name, t(key)] as const);
   const body = [
-    `${padToWidth('Common commands', 33)}  Hotkeys`,
-    ...Array.from({ length: Math.max(COMMANDS.length, HOTKEYS.length) }, (_, index) =>
-      pairLine(COMMANDS[index], HOTKEYS[index]),
+    `${padToWidth(t('help.commonCommands'), 33)}  ${t('help.hotkeys')}`,
+    ...Array.from({ length: Math.max(commands.length, hotkeys.length) }, (_, index) =>
+      pairLine(commands[index], hotkeys[index]),
     ),
   ].slice(0, maxRows);
 
   return (
     <PanelFrame
       width={viewWidth(columns)}
-      title="? quick help"
-      hints="type /help for the full panel · backspace to dismiss"
+      title={t('help.title')}
+      hints={t('help.hints')}
       variant="round"
     >
       <Box flexDirection="column">

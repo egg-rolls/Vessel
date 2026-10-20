@@ -11,6 +11,7 @@
 
 import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
 import { useEffect, useState } from 'react';
+import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { computeDialogWidth } from '../utils/dialog.js';
 
@@ -44,7 +45,8 @@ export function moveConfirmSelection(
  * 选中项始终带 `▸` 前缀，保证 NO_COLOR / 16 色终端下也能看出焦点。
  */
 export function formatConfirmChoice(choice: ConfirmChoice, selected: boolean): string {
-  const label = choice === 'y' ? '[Y]es' : choice === 'n' ? '[N]o' : '[A]lways';
+  const label =
+    choice === 'y' ? t('confirm.yes') : choice === 'n' ? t('confirm.no') : t('confirm.always');
   return `${selected ? '▸' : ' '}${label} `;
 }
 
@@ -123,7 +125,7 @@ export function ConfirmDialog({
     >
       <Box marginBottom={1}>
         <Text bold color={theme.warn}>
-          Permission required
+          {t('confirm.title')}
         </Text>
       </Box>
 
@@ -169,8 +171,10 @@ export function ConfirmDialog({
 
       <Box marginTop={1}>
         <Text color={theme.faint}>
-          ←→ select · enter confirm · y/n/a quick · esc deny
-          {remainingSeconds !== null ? ` · ${remainingSeconds}s left` : ''}
+          {t('confirm.hint')}
+          {remainingSeconds !== null
+            ? ` · ${t('confirm.secondsLeft', { count: remainingSeconds })}`
+            : ''}
         </Text>
       </Box>
     </Box>
