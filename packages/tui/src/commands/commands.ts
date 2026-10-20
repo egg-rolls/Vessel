@@ -101,6 +101,11 @@ export interface CommandResult {
    * （`output` 仍是契约，缺失时 fallback 到 `renderViewAsText(view)`）。
    */
   view?: ViewEnvelope;
+  /**
+   * /exit：REPL 层负责 farewell——Ink 在 `waitUntilExit()` 后清 live frame 再写一次，
+   * 简单行模式直接写 `GOODBYE_TEXT`。命令本身不返回 output，避免被状态框夹住。
+   */
+  exit?: boolean;
 }
 
 /** 命令执行函数签名 */
@@ -1162,6 +1167,9 @@ function reloadCommand(): CommandEntry {
 
 // ── /exit ─────────────────────────────────────────
 
+/** 退出文案：TTY（Ink）与非 TTY（简单行模式）共用，保证只打印一次且措辞一致 */
+export const GOODBYE_TEXT = '\nGoodbye!\n';
+
 function exitCommand(): CommandEntry {
   return {
     name: 'exit',
@@ -1171,7 +1179,8 @@ function exitCommand(): CommandEntry {
     keywords: ['quit', 'exit'],
     run: (_args, ctx, _state) => {
       ctx.onExit();
-      return { handled: true, output: '\nGoodbye!\n', nextState: { running: false } };
+      // 输出由 REPL 层在退出后统一写：Ink 需要先清 live frame，简单模式直接打印。
+      return { handled: true, exit: true, nextState: { running: false } };
     },
   };
 }

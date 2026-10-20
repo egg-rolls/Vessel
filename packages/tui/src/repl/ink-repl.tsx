@@ -12,7 +12,12 @@
 import { Box, render, Static, Text, useApp, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type CommandResult, createCommands, doResume } from '../commands/commands.js';
+import {
+  type CommandResult,
+  createCommands,
+  doResume,
+  GOODBYE_TEXT,
+} from '../commands/commands.js';
 import {
   deleteSessionAction,
   renameSessionAction,
@@ -73,12 +78,14 @@ const CLEAR_SCREEN_SEQUENCE = '\x1b[2J\x1b[3J\x1b[H';
 
 interface InkReplProps {
   ctx: ReplContext;
+  /** /exit 命令触发退出（区别于 Ctrl+C）；由 startInkRepl 决定是否补写 farewell */
+  onExitCommand?: () => void;
 }
 
 /**
  * Ink REPL 主组件
  */
-function InkRepl({ ctx }: InkReplProps) {
+function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [ui, dispatch] = useReplState(ctx);
@@ -258,7 +265,10 @@ function InkRepl({ ctx }: InkReplProps) {
         });
         const notice = buildStartupNotice(facts);
         const lines = notice ? [...header, notice] : header;
-        if (lines.length > 0) dispatch({ type: 'appendHistoryLines', lines });
+        // 启动头 / wordmark / tagline / 能力提示统一暗金品牌色（打开终端第一眼看到的文字）。
+        if (lines.length > 0) {
+          dispatch({ type: 'appendHistoryLines', lines, tone: 'brand' });
+        }
       })
       .catch(() => {
         // 启动信息失败不阻塞 REPL
@@ -934,13 +944,14 @@ function InkRepl({ ctx }: InkReplProps) {
     [dispatch],
   );
 
-  // 退出处理
+  // 退出处理：running=false 只由 /exit 置位，交由 startInkRepl 在 unmount 后写 farewell。
   useEffect(() => {
     if (!state.running) {
+      onExitCommand?.();
       ctx.onExit();
       exit();
     }
-  }, [state.running, ctx, exit]);
+  }, [state.running, ctx, exit, onExitCommand]);
 
   // 实时区域高度上限：给状态栏、输入行、running 行、补全框留出空间。
   // 根 Box 不再设置 height —— 固定 height 会让 Ink 判定为 fullscreen 并每帧 clearTerminal，
@@ -1023,6 +1034,10 @@ function InkRepl({ ctx }: InkReplProps) {
             </Box>
           ) : item.tone === 'error' ? (
             <Text key={`${i}-${ui.clearSignal}`} color={theme.danger}>
+              {item.text}
+            </Text>
+          ) : item.tone === 'brand' ? (
+            <Text key={`${i}-${ui.clearSignal}`} color={theme.brand}>
               {item.text}
             </Text>
           ) : (
@@ -1325,8 +1340,22 @@ export async function startInkRepl(ctx: ReplContext): Promise<void> {
   });
 
   // TTY 环境使用完整的 Ink UI
-  const { waitUntilExit } = render(<InkRepl ctx={ctx} />);
-  await waitUntilExit();
+  let exitedViaCommand = false;
+  const instance = render(
+    <InkRepl
+      ctx={ctx}
+      onExitCommand={() => {
+        exitedViaCommand = true;
+      }}
+    />,
+  );
+  await instance.waitUntilExit();
+  // /exit：Ink 已 unmount，先清掉最后一帧 live UI（状态栏 / 输入框 / 补全框），
+  // 再单独写一次 Goodbye，避免被状态框和提示行夹住。Ctrl+C 退出不打印（保持原行为）。
+  if (exitedViaCommand) {
+    instance.clear();
+    process.stdout.write(GOODBYE_TEXT);
+  }
 }
 
 /**
@@ -1403,7 +1432,10 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       if (result.clearScreen) {
         console.clear();
       }
-      if (result.output) {
+      if (result.exit) {
+        // 简单模式没有 Ink live frame：直接按原措辞打印一次 goodbye。
+        console.log(GOODBYE_TEXT);
+      } else if (result.output) {
         console.log(result.output);
       } else if (result.view) {
         // 非 TTY 没有 Ink：用稳定的纯文本 fallback（命令忘记写 output 也不静默）。

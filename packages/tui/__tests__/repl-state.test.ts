@@ -87,6 +87,19 @@ describe('history archive', () => {
     ]);
   });
 
+  it('brand tone 在归档后保留（启动头 / 能力提示暗金）', () => {
+    const state = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendHistoryLines',
+      lines: ['wordmark', 'tagline'],
+      tone: 'brand',
+    });
+
+    expect(state.history).toEqual([
+      { text: 'wordmark', tone: 'brand' },
+      { text: 'tagline', tone: 'brand' },
+    ]);
+  });
+
   it('归档前清洗控制序列，空行也保留', () => {
     const state = replUiReducer(initialReplUiState(ctx), {
       type: 'appendHistoryLines',

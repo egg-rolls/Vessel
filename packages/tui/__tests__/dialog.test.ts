@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import {
   computeDialogWidth,
-  DIALOG_MAX_WIDTH,
   displayWidth,
   fitCell,
   padToWidth,
@@ -9,22 +8,23 @@ import {
 } from '../src/utils/dialog.js';
 
 describe('computeDialogWidth', () => {
-  it('宽终端封顶 72 列', () => {
-    expect(computeDialogWidth(200)).toBe(DIALOG_MAX_WIDTH);
+  it('跟随终端全宽（无 72 列上限）', () => {
+    expect(computeDialogWidth(200)).toBe(196);
+    expect(computeDialogWidth(200)).toBeGreaterThanOrEqual(196);
     expect(computeDialogWidth(76)).toBe(72);
   });
 
-  it('窄终端按 columns - 4 收缩', () => {
-    expect(computeDialogWidth(80)).toBe(72);
+  it('按 columns - 4 收缩', () => {
+    expect(computeDialogWidth(80)).toBe(76);
     expect(computeDialogWidth(60)).toBe(56);
     expect(computeDialogWidth(40)).toBe(36);
   });
 
-  it('拿不到宽度时回退 80 列（封顶 72）', () => {
-    expect(computeDialogWidth(undefined)).toBe(72);
-    expect(computeDialogWidth(Number.NaN)).toBe(72);
-    expect(computeDialogWidth(0)).toBe(72);
-    expect(computeDialogWidth(-10)).toBe(72);
+  it('拿不到宽度时回退 80 列（-4）', () => {
+    expect(computeDialogWidth(undefined)).toBe(76);
+    expect(computeDialogWidth(Number.NaN)).toBe(76);
+    expect(computeDialogWidth(0)).toBe(76);
+    expect(computeDialogWidth(-10)).toBe(76);
   });
 
   it('异常窄终端也有正宽度', () => {

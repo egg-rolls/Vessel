@@ -18,11 +18,13 @@ import type { ViewAction, ViewEnvelope, ViewMode } from '../views/types.js';
  * Static 归档项：`markdown` 为 true 时保持 Markdown 渲染，
  * 否则按纯文本输出（命令输出、用户输入、状态提示）。
  */
+export type HistoryTone = 'normal' | 'error' | 'brand';
+
 export interface HistoryItem {
   text: string;
   markdown?: boolean;
-  /** 失败项用 danger 色渲染；普通正文保持默认色 */
-  tone?: 'normal' | 'error';
+  /** error 用 danger 色、brand 用暗金品牌色；普通正文保持默认色 */
+  tone?: HistoryTone;
   /** 被截断时保留完整文本，Ctrl+O 用 TextViewer 打开 */
   fullText?: string;
 }
@@ -31,7 +33,7 @@ export interface HistoryItem {
 function toHistoryItem(
   text: string,
   markdown = false,
-  tone?: 'normal' | 'error',
+  tone?: HistoryTone,
   fullText?: string,
 ): HistoryItem {
   const safe = sanitizeTerminalText(text);
@@ -143,14 +145,14 @@ export type ReplUiAction =
       type: 'appendHistory';
       line: string;
       markdown?: boolean;
-      tone?: 'normal' | 'error';
+      tone?: HistoryTone;
       fullText?: string;
     }
   | {
       type: 'appendHistoryLines';
       lines: string[];
       markdown?: boolean;
-      tone?: 'normal' | 'error';
+      tone?: HistoryTone;
       fullText?: string;
     }
   | { type: 'clearHistory' }
