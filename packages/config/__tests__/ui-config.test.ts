@@ -78,4 +78,37 @@ describe('ui 配置', () => {
 
     expect(result.validation.errors.map((error) => error.path)).toContain('ui.language');
   });
+
+  it('ui.status_bars 映射为 statusBars 并接受枚举（0.13）', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  status_bars: bottom\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors).toEqual([]);
+    expect(result.config.ui).toEqual({ statusBars: 'bottom' });
+  });
+
+  it('ui.statusBars camelCase 也能直接加载（0.13）', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  statusBars: top\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors).toEqual([]);
+    expect(result.config.ui?.statusBars).toBe('top');
+  });
+
+  it('ui.statusBars 非法枚举时报错（0.13）', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  status_bars: side\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.valid).toBe(false);
+    expect(result.validation.errors.map((error) => error.path)).toContain('ui.statusBars');
+  });
 });

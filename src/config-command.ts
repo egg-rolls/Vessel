@@ -21,7 +21,12 @@ import {
 import { formatConfigError, formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { t } from './i18n';
-import { isSettableConfigKey, isUiLanguage, setUserConfigValue } from './ui-settings';
+import {
+  isSettableConfigKey,
+  isUiLanguage,
+  isUiStatusBars,
+  setUserConfigValue,
+} from './ui-settings';
 import { ui } from './ui-style';
 
 type EnvMap = Record<string, string | undefined>;
@@ -157,8 +162,9 @@ export async function configInitCommand(
 }
 
 /**
- * `vessel config set <key> <value> [--json]`（0.11；0.11.1 扩展键）。
- * 支持 `ui.language` / `ui.showReasoning` / `agent.cwd`；只写用户配置，保留其它键。
+ * `vessel config set <key> <value> [--json]`（0.11；0.11.1 / 0.13 扩展键）。
+ * 支持 `ui.language` / `ui.showReasoning` / `ui.statusBars` / `agent.cwd`；
+ * 只写用户配置（YAML），保留其它键。
  */
 export async function configSetCommand(
   key: string,
@@ -187,6 +193,14 @@ export async function configSetCommand(
       };
     }
     parsed = value === 'true';
+  } else if (key === 'ui.statusBars') {
+    if (!isUiStatusBars(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidStatusBars', { value }),
+      };
+    }
   } else if (value.trim() === '') {
     return {
       exitCode: 2,

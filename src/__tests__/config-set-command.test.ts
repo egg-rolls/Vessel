@@ -121,6 +121,39 @@ describe('vessel config set（0.11）', () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
+  it('解析并写入 ui.statusBars（0.13）', async () => {
+    const parsed = parseArgs(['config', 'set', 'ui.statusBars', 'bottom']);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args.configCommand).toEqual({
+        kind: 'set',
+        key: 'ui.statusBars',
+        value: 'bottom',
+        json: false,
+      });
+    }
+
+    const invalid = parseArgs(['config', 'set', 'ui.statusBars', 'side']);
+    expect(invalid.ok).toBe(false);
+
+    fs.writeFileSync(configPath, 'ui:\n  language: en\n', 'utf-8');
+    const result = await configSetCommand('ui.statusBars', 'both', {
+      userConfigPath: configPath,
+    });
+    expect(result.exitCode).toBe(0);
+    const root = parseYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    expect(root.ui).toEqual({ language: 'en', status_bars: 'both' });
+  });
+
+  it('ui.statusBars 非法值返回 exit 2 且不写文件（0.13）', async () => {
+    const result = await configSetCommand('ui.statusBars', 'side', {
+      userConfigPath: configPath,
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('top');
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
   it('解析新键与非法值（0.11.1）', () => {
     const showReasoning = parseArgs(['config', 'set', 'ui.showReasoning', 'false']);
     expect(showReasoning.ok).toBe(true);

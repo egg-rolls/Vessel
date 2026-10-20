@@ -322,7 +322,10 @@ function validateObservability(
   }
 }
 
-/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning） */
+/** `ui.statusBars` 允许值（0.13） */
+const UI_STATUS_BARS: ReadonlySet<string> = new Set(['top', 'bottom', 'both', 'none']);
+
+/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars） */
 function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
   if (!isPlainObject(ui)) {
     errors.push({ path: 'ui', message: 'ui must be an object', value: ui });
@@ -347,6 +350,16 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       path: 'ui.showReasoning',
       message: 'ui.showReasoning must be a boolean',
       value: ui.showReasoning,
+    });
+  }
+  if (
+    ui.statusBars !== undefined &&
+    (typeof ui.statusBars !== 'string' || !UI_STATUS_BARS.has(ui.statusBars))
+  ) {
+    errors.push({
+      path: 'ui.statusBars',
+      message: 'ui.statusBars must be one of "top", "bottom", "both", "none"',
+      value: ui.statusBars,
     });
   }
 }
@@ -1872,7 +1885,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxMembers',
   ],
   observability: ['eventHistory', 'metrics'],
-  ui: ['language', 'clearOnStart', 'showReasoning'],
+  ui: ['language', 'clearOnStart', 'showReasoning', 'statusBars'],
   tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };

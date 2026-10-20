@@ -649,6 +649,9 @@ async function bootstrapConnect(input: {
     settings: createReplSettings({
       configPath: input.userConfigPath ?? getUserConfigPath(),
       configLanguage: input.config.ui?.language,
+      ...(input.config.ui?.statusBars !== undefined
+        ? { configStatusBars: input.config.ui.statusBars }
+        : {}),
     }),
     version: readPackageVersion(),
     newSessionId,
@@ -1287,10 +1290,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     version: readPackageVersion(),
     // 0.6.1：TUI "always" 与 /permissions 的用户 YAML 写回面。
     permissions: permissionsControl,
-    // 0.11：TUI /settings 的语言写回面（同一用户 YAML）。
+    // 0.11：TUI /settings 的语言写回面（同一用户 YAML）；0.13 增加状态栏位置。
     settings: createReplSettings({
       configPath: permissionConfigPath,
       configLanguage: config.ui?.language,
+      ...(config.ui?.statusBars !== undefined ? { configStatusBars: config.ui.statusBars } : {}),
     }),
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),

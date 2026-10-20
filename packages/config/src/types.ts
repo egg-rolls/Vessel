@@ -402,7 +402,10 @@ export interface PermissionConfig {
   autoApprove?: string[];
 }
 
-/** UI 配置（0.8.5；0.11 增加 clearOnStart；0.11.1 增加 showReasoning） */
+/** 状态栏位置（0.13）：top / bottom / both / none */
+export type UiStatusBars = 'top' | 'bottom' | 'both' | 'none';
+
+/** UI 配置（0.8.5；0.11 增加 clearOnStart；0.11.1 增加 showReasoning；0.13 增加 statusBars） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
   language?: string;
@@ -416,6 +419,11 @@ export interface UiConfig {
    * 不写入默认配置；消费方按 `=== true` 处理，避免思维链默认外泄。
    */
   showReasoning?: boolean;
+  /**
+   * 状态栏位置（默认由消费方决定）。
+   * YAML 键为 `status_bars`；非法值由 validator 拒绝，不做静默回退。
+   */
+  statusBars?: UiStatusBars;
 }
 
 /** Vessel 配置 */

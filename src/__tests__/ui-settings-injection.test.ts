@@ -106,6 +106,52 @@ describe('bootstrap settings 注入（0.11）', () => {
     expect(readRoot(userConfigPath).ui).toEqual({ language: 'en' });
   });
 
+  it('本地模式注入 statusBars，setStatusBars 写 ui.status_bars（0.13）', async () => {
+    const userConfigPath = writeUserConfig('ui:\n  status_bars: bottom\n');
+    const result = await bootstrap({
+      useMock: true,
+      headless: true,
+      dataDir: path.join(tempDir(), 'data'),
+      configPath: path.join(tempDir(), 'missing.yaml'),
+      userConfigPath,
+    });
+    results.push(result);
+
+    expect(settingsOf(result)?.statusBars).toBe('bottom');
+    await settingsOf(result)?.setStatusBars('both');
+
+    const root = readRoot(userConfigPath);
+    expect(root.ui).toEqual({ status_bars: 'both' });
+  });
+
+  it('connect 模式也注入 statusBars 并写本地用户配置（0.13）', async () => {
+    const userConfigPath = writeUserConfig('ui:\n  status_bars: top\n');
+    const client: RpcClient & { close(): Promise<void> } = {
+      request: async <T = unknown>(method: string): Promise<T> =>
+        (method === 'health.get'
+          ? { tenant_id: 'default', node: { node_id: 'remote-1' } }
+          : {}) as T,
+      subscribe: () => () => {},
+      close: async () => {},
+    };
+
+    const result = await bootstrap({
+      useMock: true,
+      headless: true,
+      connect: 'http://127.0.0.1:1',
+      connectToken: 'connect-token',
+      dataDir: path.join(tempDir(), 'data'),
+      configPath: path.join(tempDir(), 'missing.yaml'),
+      userConfigPath,
+      rpcClientFactory: () => client,
+    });
+    results.push(result);
+
+    expect(settingsOf(result)?.statusBars).toBe('top');
+    await settingsOf(result)?.setStatusBars('none');
+    expect(readRoot(userConfigPath).ui).toEqual({ status_bars: 'none' });
+  });
+
   it('VESSEL_LANG 优先于 config.ui.language', async () => {
     process.env.VESSEL_LANG = 'en-US';
     const result = await bootstrap({

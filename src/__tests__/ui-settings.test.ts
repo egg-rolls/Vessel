@@ -3,7 +3,12 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parse as parseYaml } from 'yaml';
-import { createReplSettings, setUserLanguage, type UiLanguage } from '../ui-settings';
+import {
+  createReplSettings,
+  setUserConfigValue,
+  setUserLanguage,
+  type UiLanguage,
+} from '../ui-settings';
 
 describe('ui-settings（0.11 DECISION-021 §3.2）', () => {
   let dir: string;
@@ -101,5 +106,52 @@ describe('ui-settings（0.11 DECISION-021 §3.2）', () => {
       configLanguage: 'en',
     });
     expect(settings.language).toBe('en');
+  });
+
+  it('写入 ui.status_bars 并保留 ui 其它键（0.13）', async () => {
+    fs.writeFileSync(
+      configPath,
+      ['ui:', '  language: en', '  clear_on_start: false', ''].join('\n'),
+      'utf-8',
+    );
+
+    await setUserConfigValue('ui.statusBars', 'bottom', { configPath });
+
+    expect(readRoot().ui).toEqual({
+      language: 'en',
+      clear_on_start: false,
+      status_bars: 'bottom',
+    });
+  });
+
+  it('非法 statusBars 显式失败且不写文件（0.13）', async () => {
+    await expect(setUserConfigValue('ui.statusBars', 'side', { configPath })).rejects.toThrow(
+      'invalid_status_bars',
+    );
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it('createReplSettings 注入 statusBars 且 setter 写回并同步内存值（0.13）', async () => {
+    fs.writeFileSync(configPath, 'ui:\n  status_bars: both\n', 'utf-8');
+
+    const settings = createReplSettings({
+      configPath,
+      env: {},
+      configStatusBars: 'both',
+    });
+    expect(settings.statusBars).toBe('both');
+
+    await settings.setStatusBars('none');
+    expect(settings.statusBars).toBe('none');
+    expect(readRoot().ui).toEqual({ status_bars: 'none' });
+  });
+
+  it('createReplSettings 对非法 configStatusBars 回退 undefined（0.13）', () => {
+    const settings = createReplSettings({
+      configPath,
+      env: {},
+      configStatusBars: 'side',
+    });
+    expect(settings.statusBars).toBeUndefined();
   });
 });
