@@ -133,11 +133,13 @@ describe('remote transport e2e (0.6 real gateway endpoints)', () => {
     const event = received.find((item) => item.run_id === 'run-1');
     expect(event?.node_id).toBe('node-b');
 
-    // 0.9 向后兼容：真实旧 gateway 的 hello / peer 记录没有 incarnation，
-    // 事件扇出不崩，peers() 省略该字段（消费方按 '-'）。
+    // 0.9：真实 gateway 的 hello 携带 incarnation，transport 从 hello 学到后
+    // 经 peers() 暴露。旧网关（缺少该字段）的兼容路径由 fake socket 的
+    // remote-transport-0.9-dedup.test.ts 覆盖，不在这里伪造。
     const peers = await transport.peers();
     const peer = peers.find((item) => item.nodeId === 'node-b');
     expect(peer).toBeDefined();
-    expect(peer?.incarnation).toBeUndefined();
+    expect(typeof peer?.incarnation).toBe('string');
+    expect(peer?.incarnation).not.toBe('');
   });
 });
