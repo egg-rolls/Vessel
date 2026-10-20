@@ -10,6 +10,8 @@
  * 危险操作（bash / edit）经 `checkPermission` → `requestPermission` 等用户授权（ADR-029）。
  * `read` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
  * 可选 `allowed_roots` 把越界访问降级为 ask。`..` 与符号链接按真实路径判定。
+ * 可选 `cwd`（0.11.1）提供默认工作目录：`bash` 未显式传 `cwd` 时使用它，
+ * `read` / `edit` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
  */
 
 import {
@@ -98,6 +100,8 @@ export interface BasicToolsConfig {
   allowedRoots?: string[];
   /** 追加到内置 denylist 的敏感路径（前缀匹配） */
   denyPaths?: string[];
+  /** 默认工作目录（支持 `~`；相对路径按进程 cwd 解析）。bash 未传 cwd、read/edit 相对路径使用 */
+  cwd?: string;
 }
 
 /** 从记录读取字符串数组字段（camelCase 优先，兼容 snake_case） */
@@ -111,24 +115,83 @@ function readStringArray(
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
 }
 
+/** 从记录读取非空字符串字段（camelCase 优先，空值回落 snake_case） */
+function readStringField(
+  record: Record<string, unknown>,
+  camel: string,
+  snake?: string,
+): string | undefined {
+  for (const value of snake === undefined ? [record[camel]] : [record[camel], record[snake]]) {
+    if (typeof value === 'string' && value.trim() !== '') return value;
+  }
+  return undefined;
+}
+
 /** 把 YAML 里的插件配置解析成已知字段（未知键忽略） */
 export function parseBasicToolsConfig(value: unknown): BasicToolsConfig {
   if (!isRecord(value)) return {};
   const allowedRoots = readStringArray(value, 'allowedRoots', 'allowed_roots');
   const denyPaths = readStringArray(value, 'denyPaths', 'deny_paths');
+  const cwd = readStringField(value, 'cwd', 'working_dir');
   return {
     ...(allowedRoots !== undefined ? { allowedRoots } : {}),
     ...(denyPaths !== undefined ? { denyPaths } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
   };
 }
 
-/** 展开开头的 `~`；其余按 cwd 解析为绝对路径 */
-function expandHome(entry: string): string {
+/** 只展开开头的 `~`，不解析相对路径 */
+function expandHomePrefix(entry: string): string {
   if (entry === '~') return os.homedir();
   if (entry.startsWith('~/') || entry.startsWith('~\\')) {
     return path.join(os.homedir(), entry.slice(2));
   }
-  return path.resolve(entry);
+  return entry;
+}
+
+/** 展开开头的 `~`；其余按 cwd 解析为绝对路径 */
+function expandHome(entry: string): string {
+  return path.resolve(expandHomePrefix(entry));
+}
+
+/** 解析后的默认工作目录；`issue` 只在配置了 cwd 且不可用时存在 */
+interface BaseCwd {
+  path: string;
+  issue?: string;
+}
+
+/** 目录存在且是目录（不跟随到文件） */
+function isDirectory(target: string): boolean {
+  try {
+    return statSync(target).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 固定 baseCwd：未配置时用进程 cwd（旧行为）；配置后即使目录暂不存在也记录解析结果，
+ * 真正用到时由工具返回明确错误（不静默回退到进程 cwd）。
+ */
+function resolveBaseCwd(config: BasicToolsConfig): BaseCwd {
+  if (config.cwd === undefined) return { path: process.cwd() };
+  const resolved = path.resolve(expandHome(config.cwd));
+  if (isDirectory(resolved)) return { path: resolved };
+  return {
+    path: resolved,
+    issue: `错误：配置的默认工作目录不存在或不是目录：${resolved}`,
+  };
+}
+
+/** 工具路径解析：`~` 展开；相对路径按 baseCwd；绝对路径不变 */
+function resolveToolPath(baseCwd: string, entry: string): string {
+  return path.resolve(baseCwd, expandHomePrefix(entry));
+}
+
+/** 相对路径（且不是 `~`）才会依赖 baseCwd */
+function dependsOnBaseCwd(entry: string): boolean {
+  if (entry === '~' || entry.startsWith('~/') || entry.startsWith('~\\')) return false;
+  return !path.isAbsolute(entry);
 }
 
 /**
@@ -443,7 +506,12 @@ function killProcessTree(proc: ReturnType<typeof spawnBash>): void {
 }
 
 /** 执行 bash 命令；超时/取消返回错误文本，不抛异常 */
-async function runBash(args: unknown, ctx: ToolContext, boundary: PathBoundary): Promise<string> {
+async function runBash(
+  args: unknown,
+  ctx: ToolContext,
+  boundary: PathBoundary,
+  baseCwd: BaseCwd,
+): Promise<string> {
   if (!isRecord(args)) return '错误：bash 需要 { command: string }';
   const command = readString(args, 'command');
   // 纯空白命令是无意义的一次调用，直接挡掉（否则白烧一轮）
@@ -451,11 +519,14 @@ async function runBash(args: unknown, ctx: ToolContext, boundary: PathBoundary):
 
   const cwd = readString(args, 'cwd');
   if (cwd !== '' && !existsSync(cwd)) return `错误：cwd 不存在：${cwd}`;
+  // 显式 cwd 优先；未传时落 baseCwd（未配置即进程 cwd）。
+  const effectiveCwd = cwd === '' ? baseCwd.path : cwd;
   // 防御性检查：即使调用方绕过 checkPermission（如 workflow 直接调 handler），
   // 敏感路径的 cwd 仍然拒绝；allowed_roots 的越界由 checkPermission 走 ask。
-  if (evaluatePath(cwd === '' ? process.cwd() : cwd, boundary) === 'deny') {
-    return `错误：cwd 在敏感路径拒绝列表中：${cwd === '' ? process.cwd() : cwd}`;
+  if (evaluatePath(effectiveCwd, boundary) === 'deny') {
+    return `错误：cwd 在敏感路径拒绝列表中：${effectiveCwd}`;
   }
+  if (cwd === '' && baseCwd.issue !== undefined) return baseCwd.issue;
 
   const timeoutMs = readNumber(args, 'timeout_ms') ?? DEFAULT_BASH_TIMEOUT_MS;
   if (timeoutMs <= 0) return '错误：timeout_ms 必须为正数';
@@ -465,7 +536,7 @@ async function runBash(args: unknown, ctx: ToolContext, boundary: PathBoundary):
 
   let proc: ReturnType<typeof spawnBash>;
   try {
-    proc = spawnBash(command, cwd === '' ? undefined : cwd);
+    proc = spawnBash(command, effectiveCwd);
   } catch (error) {
     return `错误：无法启动 bash：${String(error)}`;
   }
@@ -544,9 +615,8 @@ async function runBash(args: unknown, ctx: ToolContext, boundary: PathBoundary):
   return persistNote !== undefined ? `${formatted}\n${persistNote}` : formatted;
 }
 
-/** 构造 bash 工具（路径边界随配置固定） */
-function createBashTool(config: BasicToolsConfig): ToolDefinition {
-  const boundary = buildPathBoundary(config);
+/** 构造 bash 工具（路径边界与默认工作目录随配置固定） */
+function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinition {
   return {
     name: 'bash',
     description:
@@ -557,7 +627,10 @@ function createBashTool(config: BasicToolsConfig): ToolDefinition {
       type: 'object',
       properties: {
         command: { type: 'string', description: 'The bash command to run' },
-        cwd: { type: 'string', description: 'Working directory (defaults to process cwd)' },
+        cwd: {
+          type: 'string',
+          description: 'Working directory (defaults to the configured agent cwd, then process cwd)',
+        },
         timeout_ms: {
           type: 'number',
           description: `Timeout in milliseconds (default ${DEFAULT_BASH_TIMEOUT_MS})`,
@@ -568,13 +641,14 @@ function createBashTool(config: BasicToolsConfig): ToolDefinition {
     checkPermission: async (input, ctx) => {
       if (isRecord(input)) {
         const cwd = readString(input, 'cwd');
-        const decision = evaluatePath(cwd === '' ? process.cwd() : cwd, boundary);
+        // 显式 cwd 优先；未传时按 baseCwd 做边界判定（baseCwd 不放宽 denylist / allowed_roots）
+        const decision = evaluatePath(cwd === '' ? baseCwd.path : cwd, boundary);
         // deny 直接拒绝；配置 allowed_roots 的越界走 ask（由运行时向用户确认）
         if (decision !== 'allow') return decision;
       }
       return requestPermission(ctx, 'bash', input);
     },
-    handler: async (args: unknown, ctx) => runBash(args, ctx, boundary),
+    handler: async (args: unknown, ctx) => runBash(args, ctx, boundary, baseCwd),
   };
 }
 
@@ -585,17 +659,20 @@ function readFileSlice(
   args: unknown,
   signal: AbortSignal | undefined,
   boundary: PathBoundary,
+  baseCwd: BaseCwd,
 ): string {
   if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：read 需要 { path: string }';
   const inputPath = readString(args, 'path');
   if (inputPath === '') return '错误：path 不能为空';
-  // 防御性检查：即使调用方绕过 checkPermission，也绝不读取敏感路径
-  if (evaluatePath(inputPath, boundary) === 'deny') {
+  const absolute = resolveToolPath(baseCwd.path, inputPath);
+  // 防御性检查：即使调用方绕过 checkPermission，也绝不读取敏感路径。
+  // 相对路径先按 baseCwd 解析，边界按解析后的绝对路径判定（不因 baseCwd 放宽）。
+  if (evaluatePath(absolute, boundary) === 'deny') {
     return `错误：路径在敏感路径拒绝列表中：${inputPath}`;
   }
+  if (dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) return baseCwd.issue;
 
-  const absolute = path.resolve(inputPath);
   if (!existsSync(absolute)) return `错误：文件不存在：${inputPath}`;
 
   let stat: ReturnType<typeof statSync>;
@@ -647,9 +724,8 @@ function readFileSlice(
   return numbered;
 }
 
-/** 构造 read 工具（路径边界随配置固定） */
-function createReadTool(config: BasicToolsConfig): ToolDefinition {
-  const boundary = buildPathBoundary(config);
+/** 构造 read 工具（路径边界与默认工作目录随配置固定） */
+function createReadTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinition {
   return {
     name: 'read',
     description:
@@ -672,9 +748,10 @@ function createReadTool(config: BasicToolsConfig): ToolDefinition {
       if (!isRecord(input)) return 'allow';
       const inputPath = readString(input, 'path');
       if (inputPath === '') return 'allow';
-      return evaluatePath(inputPath, boundary);
+      // 与 handler 同一条解析路径：相对路径按 baseCwd，再按绝对路径判定边界
+      return evaluatePath(resolveToolPath(baseCwd.path, inputPath), boundary);
     },
-    handler: async (args: unknown, ctx) => readFileSlice(args, ctx.signal, boundary),
+    handler: async (args: unknown, ctx) => readFileSlice(args, ctx.signal, boundary, baseCwd),
   };
 }
 
@@ -700,7 +777,7 @@ function writeFileAtomic(absolutePath: string, content: string): void {
 }
 
 /** 精确且唯一匹配的字符串替换；多处替换必须显式 replace_all */
-function editFile(args: unknown, signal?: AbortSignal): string {
+function editFile(args: unknown, signal: AbortSignal | undefined, baseCwd: BaseCwd): string {
   if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：edit 需要 { path, old_string, new_string }';
   const inputPath = readString(args, 'path');
@@ -709,7 +786,8 @@ function editFile(args: unknown, signal?: AbortSignal): string {
   if (inputPath === '') return '错误：path 不能为空';
   if (oldString === '') return '错误：old_string 不能为空';
 
-  const absolute = path.resolve(inputPath);
+  const absolute = resolveToolPath(baseCwd.path, inputPath);
+  if (dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) return baseCwd.issue;
   if (!existsSync(absolute)) return `错误：文件不存在：${inputPath}`;
 
   let stat: ReturnType<typeof statSync>;
@@ -758,36 +836,45 @@ function editFile(args: unknown, signal?: AbortSignal): string {
   return `已替换 ${count} 处（${inputPath}）`;
 }
 
-const editTool: ToolDefinition = {
-  name: 'edit',
-  description:
-    'Replace a text snippet in a file. old_string must match the file content exactly and ' +
-    'occur exactly once; pass replace_all: true to replace every occurrence.',
-  inputSchema: {
-    type: 'object',
-    properties: {
-      path: { type: 'string', description: 'File path' },
-      old_string: { type: 'string', description: 'Exact text to replace (must be unique)' },
-      new_string: { type: 'string', description: 'Replacement text' },
-      replace_all: {
-        type: 'boolean',
-        description: 'Replace every occurrence instead of requiring a unique match',
+/** 构造 edit 工具（相对路径按 baseCwd 解析；ADR-055 下 edit 仍不纳入路径边界） */
+function createEditTool(baseCwd: BaseCwd): ToolDefinition {
+  return {
+    name: 'edit',
+    description:
+      'Replace a text snippet in a file. old_string must match the file content exactly and ' +
+      'occur exactly once; pass replace_all: true to replace every occurrence.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'File path' },
+        old_string: { type: 'string', description: 'Exact text to replace (must be unique)' },
+        new_string: { type: 'string', description: 'Replacement text' },
+        replace_all: {
+          type: 'boolean',
+          description: 'Replace every occurrence instead of requiring a unique match',
+        },
       },
+      required: ['path', 'old_string', 'new_string'],
     },
-    required: ['path', 'old_string', 'new_string'],
-  },
-  checkPermission: async (input, ctx) => requestPermission(ctx, 'edit', input),
-  handler: async (args: unknown, ctx) => editFile(args, ctx.signal),
-};
+    checkPermission: async (input, ctx) => requestPermission(ctx, 'edit', input),
+    handler: async (args: unknown, ctx) => editFile(args, ctx.signal, baseCwd),
+  };
+}
 
 // ── 插件导出 ──────────────────────────────────────
 
 /**
  * 创建三个基础工具。
- * 不传配置时只启用内置 denylist（不限制根），与旧行为兼容。
+ * 不传配置时只启用内置 denylist（不限制根）、baseCwd 为进程 cwd，与旧行为兼容。
  */
 export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[] {
-  return [createBashTool(config), createReadTool(config), editTool];
+  const boundary = buildPathBoundary(config);
+  const baseCwd = resolveBaseCwd(config);
+  return [
+    createBashTool(boundary, baseCwd),
+    createReadTool(boundary, baseCwd),
+    createEditTool(baseCwd),
+  ];
 }
 
 /** basic-tools 插件——唯一工具包，install 时把三个工具注册进 PluginHost */
