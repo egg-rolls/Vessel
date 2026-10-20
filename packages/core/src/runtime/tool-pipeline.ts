@@ -20,7 +20,11 @@ import type { Message } from '../types/provider.js';
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
-import { PermissionPolicy, PermissionTimeoutError } from './permission-policy.js';
+import {
+  PermissionAbortedError,
+  PermissionPolicy,
+  PermissionTimeoutError,
+} from './permission-policy.js';
 
 export interface ToolPipelineDeps {
   pluginHost: PluginHost;
@@ -49,6 +53,8 @@ export interface ToolPipelineOptions {
   signal?: AbortSignal;
   /** 工具上下文中的消息快照；未提供时为空数组 */
   messages?: Message[];
+  /** 权限请求来源（0.13）；缺省 `runtime` */
+  source?: 'runtime' | 'workflow' | 'host';
   stages?: ToolPipelineStages;
 }
 
@@ -131,8 +137,11 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       const ctx: ToolContext = {
         run_id: options.runId,
         session_id: options.sessionId,
+        // 0.13：权限请求按 tool_call_id 关联到 tool.call.*
+        tool_call_id: toolCall.id,
         messages: options.messages ?? [],
         events,
+        source: options.source ?? 'runtime',
         ...(options.signal ? { signal: options.signal } : {}),
       };
 
@@ -194,6 +203,9 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       } catch (error) {
         // 权限超时是致命错误（DECISION-022 §2.2）：不得折成普通工具错误回给模型。
         if (error instanceof PermissionTimeoutError) throw error;
+        // 0.13（DECISION-024 §2.3）：run 取消时权限等待立即结束；取消不是工具错误，
+        // 原样抛出，由 run 终态按 cancelled 收尾。
+        if (error instanceof PermissionAbortedError || ctx.signal?.aborted) throw error;
         return fail(errorText(error));
       }
 

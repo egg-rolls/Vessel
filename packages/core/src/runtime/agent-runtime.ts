@@ -29,7 +29,11 @@ export type { RunOptions } from '../types/run.js';
 import type { ToolCall } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
-import { PermissionPolicy, PermissionTimeoutError } from './permission-policy.js';
+import {
+  PermissionAbortedError,
+  PermissionPolicy,
+  PermissionTimeoutError,
+} from './permission-policy.js';
 import { MemoryPluginHost } from './plugin-host.js';
 import { createToolPipeline, isToolCall, type ToolPipeline } from './tool-pipeline.js';
 
@@ -1271,6 +1275,8 @@ export class AgentRuntime {
     } catch (error) {
       // 权限超时是致命错误（DECISION-022 §2.2）：终止 run，不折回工具错误让模型重试。
       if (error instanceof PermissionTimeoutError) throw error;
+      // 0.13（DECISION-024 §2.3）：权限等待被取消同样终止 run，不记成工具失败。
+      if (error instanceof PermissionAbortedError) throw error;
       return {
         toolCall,
         input: entry.args,

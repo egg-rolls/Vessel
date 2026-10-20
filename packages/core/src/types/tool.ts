@@ -10,11 +10,21 @@ import type { Message } from './provider.js';
 export interface ToolContext {
   session_id?: string;
   run_id: string;
+  /**
+   * 当前工具调用 ID（0.13，DECISION-024 §2.1）：与 `tool.call.started/completed`
+   * 的 `tool_call_id` 对齐，供权限请求等交互事件关联。
+   */
+  tool_call_id?: string;
   messages: Message[];
   /** 事件流（ADR-026/027：工具可发事件、等事件，实现交互暂停） */
   events: EventStream;
   /** 当前 run 的 AbortSignal（F10）；工具可用它响应取消 */
   signal?: AbortSignal;
+  /**
+   * 权限请求来源（0.13）：管道默认 `runtime`；workflow / host 装配方可显式覆盖。
+   * 仅用于事件关联，不参与权限判定。
+   */
+  source?: 'runtime' | 'workflow' | 'host';
 }
 
 /** 工具处理函数 */

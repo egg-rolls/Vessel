@@ -39,6 +39,20 @@ function resolveMaxHistory(options?: MemoryEventStreamOptions | number): number 
 }
 
 /**
+ * 把 AbortSignal 的取消原因转成拒绝值（0.13）。
+ * 沿用 run 取消语义：reason 是 Error 时原样保留；字符串 / 其他值包成 AbortError。
+ */
+function abortReason(signal: AbortSignal): Error {
+  const reason: unknown = signal.reason;
+  if (reason instanceof Error) return reason;
+  const error = new Error(
+    typeof reason === 'string' && reason.length > 0 ? reason : 'The operation was aborted',
+  );
+  error.name = 'AbortError';
+  return error;
+}
+
+/**
  * 内存事件流实现
  * 支持发布/订阅模式，用于 trace/replay/TUI 流式渲染
  */
@@ -164,10 +178,22 @@ export class MemoryEventStream implements EventStream {
   /**
    * 等待一次匹配事件（ADR-027：工具交互暂停原语）。
    * 订阅事件流，收到 name 匹配（且 requestId 匹配）的事件时 resolve 其 data；
-   * 超时 reject。收到匹配事件后自动取消订阅。
+   * 超时或 signal abort 时 reject，并清理 timer / 订阅 / abort listener。
+   *
+   * 0.13（DECISION-024 §2.3）：abort 必须立即结束等待，不得等到超时；取消原因
+   * 沿用现有 run 取消语义（`signal.reason` 是 Error 时原样抛出，否则 AbortError）。
    */
-  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown> {
+  waitFor(
+    name: string,
+    opts?: { requestId?: string; timeout?: number; signal?: AbortSignal },
+  ): Promise<unknown> {
     const timeoutMs = opts?.timeout ?? 30000;
+    const signal = opts?.signal;
+
+    // 已中止：不查历史、不建订阅 / timer，立即结束（取消优先于已到达的应答）。
+    if (signal?.aborted) {
+      return Promise.reject(abortReason(signal));
+    }
 
     // 先查历史：发布请求事件时若订阅者同步应答（如 headless 自动允许 / 测试自动应答），
     // 回答事件已入历史，直接 resolve，避免「先 publish 后 waitFor」的竞态丢事件。
@@ -184,10 +210,37 @@ export class MemoryEventStream implements EventStream {
     }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
       let unsubscribe: Unsubscribe | undefined;
-      const timer = setTimeout(() => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+
+      const cleanup = (): void => {
+        if (timer !== undefined) clearTimeout(timer);
         unsubscribe?.();
-        reject(new Error(`Timed out after ${timeoutMs}ms waiting for event "${name}"`));
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const settle = (action: () => void): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        action();
+      };
+      const onAbort = (): void => {
+        settle(() => reject(abortReason(signal as AbortSignal)));
+      };
+
+      // 检查与监听之间可能已被其他任务 abort；addEventListener 不会补发历史事件，
+      // 因此注册后再确认一次。
+      signal?.addEventListener('abort', onAbort, { once: true });
+      if (signal?.aborted) {
+        settle(() => reject(abortReason(signal)));
+        return;
+      }
+
+      timer = setTimeout(() => {
+        settle(() =>
+          reject(new Error(`Timed out after ${timeoutMs}ms waiting for event "${name}"`)),
+        );
       }, timeoutMs);
 
       unsubscribe = this.subscribe((event) => {
@@ -196,9 +249,7 @@ export class MemoryEventStream implements EventStream {
         if (opts?.requestId !== undefined && data?.requestId !== opts.requestId) {
           return;
         }
-        unsubscribe?.();
-        clearTimeout(timer);
-        resolve(event.data);
+        settle(() => resolve(event.data));
       });
     });
   }

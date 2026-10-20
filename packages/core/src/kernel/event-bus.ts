@@ -55,7 +55,11 @@ export class MemoryEventBus implements EventBus {
     return this.stream.getHistory(runId);
   }
 
-  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown> {
+  waitFor(
+    name: string,
+    opts?: { requestId?: string; timeout?: number; signal?: AbortSignal },
+  ): Promise<unknown> {
+    // 0.13：signal 取消语义由 EventStream 实现统一处理
     return this.stream.waitFor(name, opts);
   }
 }
