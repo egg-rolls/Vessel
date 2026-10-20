@@ -15,6 +15,7 @@ import {
 import type { TeamGatewayOptions } from '../../team.js';
 import type { ConfigGatewayOptionsLike } from '../../tenant.js';
 import { tenantParamSchema } from './common.js';
+import { stringListSchema } from './schemas.js';
 
 export interface ConfigMethodsDeps {
   defaultTenantId: string;
@@ -60,6 +61,79 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       name: 'health.get',
       permission: 'read',
       params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: [
+          'status',
+          'clients',
+          'latest_seq',
+          'protocol',
+          'node',
+          'started_at',
+          'tenant_id',
+          'team',
+        ],
+        properties: {
+          status: { type: 'string', enum: ['ok'] },
+          clients: { type: 'integer' },
+          latest_seq: { type: 'integer' },
+          protocol: {
+            type: 'object',
+            required: ['name', 'version', 'min', 'features'],
+            properties: {
+              name: { type: 'string', enum: ['vessel.gateway'] },
+              version: { type: 'integer' },
+              min: { type: 'integer' },
+              features: stringListSchema,
+            },
+          },
+          node: {
+            type: 'object',
+            required: [
+              'node_id',
+              'pid',
+              'started_at',
+              'endpoint',
+              'role',
+              'status',
+              'capabilities',
+            ],
+            properties: {
+              node_id: { type: 'string' },
+              name: { type: 'string' },
+              pid: { type: 'integer' },
+              started_at: { type: 'number' },
+              endpoint: { type: 'string' },
+              role: { type: 'string', enum: ['standalone', 'team'] },
+              status: { type: 'string', enum: ['idle', 'busy', 'draining'] },
+              current_run_id: { type: 'string' },
+              current_session_id: { type: 'string' },
+              capabilities: {
+                type: 'object',
+                required: ['tools', 'max_concurrency', 'protocol'],
+                properties: {
+                  tools: stringListSchema,
+                  provider: { type: 'string' },
+                  model: { type: 'string' },
+                  max_concurrency: { type: 'integer' },
+                  protocol: { type: 'integer' },
+                },
+              },
+            },
+          },
+          started_at: { type: 'number' },
+          tenant_id: { type: 'string' },
+          team: {
+            type: 'object',
+            required: ['enabled'],
+            properties: {
+              enabled: { type: 'boolean' },
+              node_id: { type: 'string' },
+              transport: { type: 'string' },
+            },
+          },
+        },
+      },
       handler: (_params, ctx) => {
         const team = getTeam();
         return {
@@ -84,6 +158,49 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       name: 'capabilities.list',
       permission: 'read',
       params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: ['version', 'config_schema_version', 'methods', 'tools', 'plugins'],
+        properties: {
+          version: { type: 'string' },
+          config_schema_version: { type: 'integer' },
+          methods: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'permission'],
+              properties: {
+                name: { type: 'string' },
+                params_schema: { type: 'object' },
+                result_schema: { type: 'object' },
+                permission: { type: 'string', enum: ['read', 'write', 'admin'] },
+              },
+            },
+          },
+          tools: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name'],
+              properties: {
+                name: { type: 'string' },
+                description: { type: 'string' },
+              },
+            },
+          },
+          plugins: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'enabled'],
+              properties: {
+                name: { type: 'string' },
+                enabled: { type: 'boolean' },
+              },
+            },
+          },
+        },
+      },
       handler: (_params, ctx) =>
         buildCapabilityManifest({
           version: version ?? '0.0.0',
@@ -96,6 +213,24 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       name: 'config.get',
       permission: 'read',
       params_schema: tenantParamSchema,
+      result_schema: {
+        type: 'object',
+        required: ['schema_version', 'config', 'paths', 'tenant_id'],
+        properties: {
+          schema_version: { type: 'integer' },
+          config: { type: 'object' },
+          paths: {
+            type: 'object',
+            required: ['user', 'project'],
+            properties: {
+              user: { type: 'string' },
+              project: { type: 'string' },
+            },
+          },
+          tenant_id: { type: 'string' },
+          tenant_overlay_keys: stringListSchema,
+        },
+      },
       handler: async (_params, ctx) => {
         const snapshot = await configControl().snapshot(ctx.tenantId);
         return {
@@ -114,6 +249,15 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
       name: 'config.sources',
       permission: 'read',
       params_schema: tenantParamSchema,
+      result_schema: {
+        type: 'object',
+        required: ['sources', 'tenant_id'],
+        properties: {
+          sources: { type: 'object' },
+          tenant_id: { type: 'string' },
+          tenant_overlay_keys: stringListSchema,
+        },
+      },
       handler: async (_params, ctx) => {
         const snapshot = await configControl().snapshot(ctx.tenantId);
         return {
@@ -153,6 +297,25 @@ export function createToolMethods(deps: ConfigMethodsDeps): RpcMethodDefinition[
       name: 'tools.list',
       permission: 'read',
       params_schema: tenantParamSchema,
+      result_schema: {
+        type: 'object',
+        required: ['tools'],
+        properties: {
+          tools: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'description', 'input_schema', 'has_permission_check'],
+              properties: {
+                name: { type: 'string' },
+                description: { type: 'string' },
+                input_schema: { type: 'object' },
+                has_permission_check: { type: 'boolean' },
+              },
+            },
+          },
+        },
+      },
       handler: (_params, ctx) => toolsPayload(ctx.tenantId),
     },
   ];
@@ -165,6 +328,23 @@ export function createPluginsMethods(deps: ConfigMethodsDeps): RpcMethodDefiniti
       name: 'plugins.list',
       permission: 'read',
       params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: ['plugins'],
+        properties: {
+          plugins: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'enabled'],
+              properties: {
+                name: { type: 'string' },
+                enabled: { type: 'boolean' },
+              },
+            },
+          },
+        },
+      },
       handler: (_params, ctx) => ({ plugins: deps.pluginsForTenant(ctx.tenantId) }),
     },
   ];

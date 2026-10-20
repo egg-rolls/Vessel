@@ -8,9 +8,12 @@
  */
 
 import type { RunEvent } from '@vessel/core';
+import { PROTOCOL_VERSION } from './protocol.js';
 
-/** 协议版本（主版本） */
-export const RPC_VERSION = 1 as const;
+/**
+ * @deprecated 版本常量唯一来源是 `PROTOCOL_VERSION`；此导出仅为兼容旧导入。
+ */
+export const RPC_VERSION = PROTOCOL_VERSION;
 
 /** 冻结错误码（A-3 §10.2） */
 export type RpcErrorCode =
@@ -171,6 +174,11 @@ export interface CreateRpcDispatcherOptions {
   /** manifest 生成所需的动态部分 */
   describe?: () => { tools?: CapabilityManifest['tools']; plugins?: CapabilityManifest['plugins'] };
   version?: string;
+  /**
+   * 结果校验失败时回调（gateway 用它发布 `rpc.result_invalid`）。
+   * 回调异常不得影响错误响应。
+   */
+  onResultInvalid?: (violation: { method: string; path: string }) => void;
 }
 
 /** 分发器 */
@@ -202,6 +210,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** 校验失败的位置与人类可读信息 */
+export interface SchemaViolation {
+  /** 失败字段的 JSON 路径（例如 `result.value`） */
+  path: string;
+  message: string;
+}
+
 /** 最小 JSON Schema 校验（只支持本仓库 manifest 用到的子集） */
 export function validateParams(
   schema: Record<string, unknown> | undefined,
@@ -210,20 +225,31 @@ export function validateParams(
   if (schema === undefined) {
     return value === undefined || isRecord(value) ? null : 'params must be an object';
   }
-  return validateValue(schema, value, 'params');
+  return validateValue(schema, value, 'params')?.message ?? null;
+}
+
+/** 结果校验：返回失败路径；schema 缺失时视为通过（覆盖率由测试保证）。 */
+export function validateResult(
+  schema: Record<string, unknown> | undefined,
+  value: unknown,
+): SchemaViolation | null {
+  if (schema === undefined) return null;
+  return validateValue(schema, value, 'result');
 }
 
 function validateValue(
   schema: Record<string, unknown>,
   value: unknown,
   path: string,
-): string | null {
+): SchemaViolation | null {
   const type = schema.type;
   if (type === 'object') {
-    if (!isRecord(value)) return `${path} must be an object`;
+    if (!isRecord(value)) return { path, message: `${path} must be an object` };
     const required = Array.isArray(schema.required) ? schema.required : [];
     for (const key of required) {
-      if (typeof key === 'string' && !(key in value)) return `${path}.${key} is required`;
+      if (typeof key === 'string' && !(key in value)) {
+        return { path: `${path}.${key}`, message: `${path}.${key} is required` };
+      }
     }
     const properties = isRecord(schema.properties) ? schema.properties : {};
     for (const [key, child] of Object.entries(properties)) {
@@ -235,7 +261,7 @@ function validateValue(
     return null;
   }
   if (type === 'array') {
-    if (!Array.isArray(value)) return `${path} must be an array`;
+    if (!Array.isArray(value)) return { path, message: `${path} must be an array` };
     const items = isRecord(schema.items) ? schema.items : undefined;
     if (items) {
       for (let index = 0; index < value.length; index += 1) {
@@ -246,38 +272,44 @@ function validateValue(
     return null;
   }
   if (type === 'string') {
-    if (typeof value !== 'string') return `${path} must be a string`;
+    if (typeof value !== 'string') return { path, message: `${path} must be a string` };
     if (typeof schema.minLength === 'number' && value.length < schema.minLength) {
-      return `${path} is too short`;
+      return { path, message: `${path} is too short` };
     }
     if (typeof schema.maxLength === 'number' && value.length > schema.maxLength) {
-      return `${path} is too long`;
+      return { path, message: `${path} is too long` };
     }
     if (typeof schema.pattern === 'string') {
       try {
-        if (!new RegExp(schema.pattern).test(value)) return `${path} has an invalid format`;
+        if (!new RegExp(schema.pattern).test(value)) {
+          return { path, message: `${path} has an invalid format` };
+        }
       } catch {
         return null;
       }
     }
     if (Array.isArray(schema.enum) && !schema.enum.includes(value)) {
-      return `${path} must be one of ${schema.enum.join(', ')}`;
+      return { path, message: `${path} must be one of ${schema.enum.join(', ')}` };
     }
     return null;
   }
   if (type === 'number' || type === 'integer') {
-    if (typeof value !== 'number' || !Number.isFinite(value)) return `${path} must be a number`;
-    if (type === 'integer' && !Number.isInteger(value)) return `${path} must be an integer`;
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+      return { path, message: `${path} must be a number` };
+    }
+    if (type === 'integer' && !Number.isInteger(value)) {
+      return { path, message: `${path} must be an integer` };
+    }
     if (typeof schema.minimum === 'number' && value < schema.minimum) {
-      return `${path} must be >= ${schema.minimum}`;
+      return { path, message: `${path} must be >= ${schema.minimum}` };
     }
     if (typeof schema.maximum === 'number' && value > schema.maximum) {
-      return `${path} must be <= ${schema.maximum}`;
+      return { path, message: `${path} must be <= ${schema.maximum}` };
     }
     return null;
   }
   if (type === 'boolean') {
-    return typeof value === 'boolean' ? null : `${path} must be a boolean`;
+    return typeof value === 'boolean' ? null : { path, message: `${path} must be a boolean` };
   }
   return null;
 }
@@ -289,7 +321,7 @@ function normalizeParams(value: unknown): Record<string, unknown> {
 }
 
 function failure(id: string, error: RpcErrorBody): RpcFailureResponse {
-  return { v: 1, id, ok: false, error };
+  return { v: PROTOCOL_VERSION, id, ok: false, error };
 }
 
 function toErrorBody(error: unknown): RpcErrorBody {
@@ -375,8 +407,25 @@ export function createRpcDispatcher(options: CreateRpcDispatcherOptions): RpcDis
     }
 
     try {
-      const result = await method.handler(params, ctx);
-      return { v: 1, id, ok: true, result: result ?? null };
+      const result = (await method.handler(params, ctx)) ?? null;
+      // 生产默认关闭；测试与 qa 探针用 VESSEL_VALIDATE_RESULTS=1 打开。
+      if (process.env.VESSEL_VALIDATE_RESULTS === '1' && method.result_schema !== undefined) {
+        const violation = validateResult(method.result_schema, result);
+        if (violation !== null) {
+          try {
+            options.onResultInvalid?.({ method: method.name, path: violation.path });
+          } catch {
+            // 事件发布失败不影响错误返回
+          }
+          return failure(id, {
+            code: 'internal',
+            message: 'RPC result failed schema validation',
+            // 只暴露 method/path，绝不回传 payload。
+            details: { method: method.name, path: violation.path },
+          });
+        }
+      }
+      return { v: PROTOCOL_VERSION, id, ok: true, result };
     } catch (error) {
       return failure(id, toErrorBody(error));
     }

@@ -7,6 +7,7 @@
 import { type EvalsGatewayOptions, normalizeEvalReport } from '../../evals.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { stringParam } from './common.js';
+import { evalReportSchema } from './schemas.js';
 
 export interface EvalMethodsDeps {
   evals?: EvalsGatewayOptions;
@@ -22,6 +23,11 @@ export function createEvalMethods(deps: EvalMethodsDeps): RpcMethodDefinition[] 
         type: 'object',
         required: ['suite'],
         properties: { suite: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['report'],
+        properties: { report: evalReportSchema },
       },
       handler: async (params) => {
         const suite = stringParam(params, 'suite').trim();
@@ -50,6 +56,11 @@ export function createEvalMethods(deps: EvalMethodsDeps): RpcMethodDefinition[] 
         type: 'object',
         required: ['suite'],
         properties: { suite: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['report'],
+        properties: { report: evalReportSchema },
       },
       handler: async (params) => {
         if (!evals?.run) throw new RpcError('not_found', 'Evals runner is not available');

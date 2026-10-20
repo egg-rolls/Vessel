@@ -22,6 +22,23 @@ export function createFeishuMethods(deps: FeishuMethodsDeps): RpcMethodDefinitio
         type: 'object',
         properties: { tenant_id: { type: 'string' } },
       },
+      result_schema: {
+        type: 'object',
+        required: ['channel'],
+        properties: {
+          channel: {
+            type: 'object',
+            required: ['connected', 'appIdMasked', 'active_chats', 'queued_messages'],
+            properties: {
+              connected: { type: 'boolean' },
+              appIdMasked: { type: 'string' },
+              active_chats: { type: 'integer' },
+              queued_messages: { type: 'integer' },
+              last_error: { type: 'string' },
+            },
+          },
+        },
+      },
       handler: (_params, ctx) => {
         const feishu = requireFeishu(ctx.tenantId);
         return { channel: normalizeFeishuStatus(feishu.status()) };

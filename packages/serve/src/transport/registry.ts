@@ -13,11 +13,12 @@
 import { chmod, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { AgentStatus, PeerInfo } from '@vessel/core';
+import { PROTOCOL_VERSION } from '../protocol.js';
 import { toWireAgentStatus, type WireAgentStatus } from '../team.js';
 
 /** 注册表文件记录（snake_case，内部格式） */
 export interface PeerFileRecord {
-  protocol: 1;
+  protocol: typeof PROTOCOL_VERSION;
   node_id: string;
   pid: number;
   endpoint: string;
@@ -203,7 +204,7 @@ export class PeerRegistry {
       nodeId: this.options.nodeId,
       endpoint: this.options.endpoint,
       agents: this.safeAgents(),
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
     };
   }
 
@@ -242,7 +243,7 @@ export class PeerRegistry {
     // 写前二次检查：tick 排队后 stop() 可能已经执行。
     if (this.closed) return;
     const record: PeerFileRecord = {
-      protocol: 1,
+      protocol: PROTOCOL_VERSION,
       node_id: this.options.nodeId,
       pid: process.pid,
       endpoint: this.options.endpoint,
@@ -315,7 +316,7 @@ export class PeerRegistry {
         nodeId: record.node_id,
         endpoint: record.endpoint,
         agents,
-        protocol: 1,
+        protocol: PROTOCOL_VERSION,
       },
       pid: record.pid,
       heartbeatAt: record.heartbeat_at,

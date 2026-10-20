@@ -15,6 +15,7 @@ import type {
   RunEvent,
   Transport,
 } from '@vessel/core';
+import { PROTOCOL_VERSION } from './protocol.js';
 
 /** 协议边界允许的 kind（U2：core 仍是开放 string） */
 export const TEAM_MESSAGE_KINDS = new Set(['message', 'task', 'result', 'cancel']);
@@ -48,7 +49,7 @@ export interface WirePeerInfo {
   node_id: string;
   endpoint?: string;
   agents: WireAgentStatus[];
-  protocol: 1;
+  protocol: typeof PROTOCOL_VERSION;
 }
 
 /** 协议错误（带稳定 code） */
@@ -211,7 +212,7 @@ export function toWirePeer(peer: PeerInfo): WirePeerInfo {
     node_id: peer.nodeId,
     ...(peer.endpoint !== undefined ? { endpoint: peer.endpoint } : {}),
     agents: peer.agents.map(toWireAgentStatus),
-    protocol: 1,
+    protocol: PROTOCOL_VERSION,
   };
 }
 

@@ -773,7 +773,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (isTeamEvent(safeEvent) && teamClients.size > 0) {
       const wire = toWireEvent(safeEvent);
       const frame = `data: ${JSON.stringify({
-        protocol: 1,
+        protocol: PROTOCOL_VERSION,
         node_id: eventSourceNodeId(safeEvent),
         seq,
         kind: 'team.event',
@@ -853,6 +853,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
           tenant_id: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['subscribed', 'from_seq', 'latest_seq', 'mode'],
+        properties: {
+          subscribed: { type: 'boolean' },
+          from_seq: { type: 'integer' },
+          latest_seq: { type: 'integer' },
+          mode: { type: 'string', enum: ['ws', 'stream'] },
+          stream_url: { type: 'string' },
+        },
+      },
       handler: (params, ctx) => {
         const since = typeof params.since === 'number' ? params.since : 0;
         const mode = ctx.connection === 'ws' ? 'ws' : 'stream';
@@ -894,6 +905,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
       tools: toolDescriptionsForTenant(defaultTenantId),
       plugins: pluginsForTenant(defaultTenantId),
     }),
+    // 结果校验只在 VESSEL_VALIDATE_RESULTS=1 时触发；事件 payload 只含 method/path。
+    onResultInvalid: ({ method, path }) => {
+      events.publish({
+        type: 'rpc.result_invalid',
+        run_id: 'rpc',
+        data: { method, path },
+        ts: Date.now(),
+      });
+    },
   });
   let capabilityManifest: CapabilityManifest = dispatcher.manifest();
   const manifest = (): CapabilityManifest => {
@@ -1001,7 +1021,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const legacyMethod = LEGACY_WS_METHOD_MAP[frame.method];
     if (legacyMethod !== undefined) {
       const legacyRequest: RpcRequest = {
-        v: 1,
+        v: PROTOCOL_VERSION,
         id: typeof frame.id === 'string' ? frame.id : '',
         method: legacyMethod,
         ...(frame.params !== undefined ? { params: frame.params } : {}),
@@ -1046,7 +1066,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
 
     const request: RpcRequest = {
-      v: 1,
+      v: PROTOCOL_VERSION,
       id: typeof frame.id === 'string' ? frame.id : '',
       method: frame.method,
       ...(frame.params !== undefined ? { params: frame.params } : {}),
@@ -1300,37 +1320,64 @@ export function startGateway(opts: GatewayOptions): Gateway {
     );
   }
 
-  /** 入站投递：deliver 注入优先 → transport.deliver → host.send */
-  async function deliverInbound(message: AgentMessage): Promise<boolean> {
-    const t = team;
-    if (!t) throw new TeamProtocolError('team_disabled', 'Team is not enabled');
-    if (isRemoteAddress(message.to, t.nodeId)) {
-      throw new TeamProtocolError('agent_not_found', `Cannot relay to another node: ${message.to}`);
-    }
-    if (seenInbound.has(message.id)) return false;
-    seenInbound.set(message.id, true);
+  /** 去重键里的 tenant：admin 通配 principal 落到 default（与 gateway 其余作用域一致）。 */
+  function effectiveTenantId(principal: TenantPrincipal): string {
+    return principal.tenant_id === '*' ? defaultTenantId : principal.tenant_id;
+  }
+
+  /** 消息去重键：`${tenant_id}:${from}:${message.id}`（DECISION-019 §C）。 */
+  function inboundKey(tenantId: string, message: AgentMessage): string {
+    return `${tenantId}:${message.from}:${message.id}`;
+  }
+
+  /** 记录键；已存在返回 false（LRU 上限 1000）。 */
+  function beginInbound(key: string): boolean {
+    if (seenInbound.has(key)) return false;
+    seenInbound.set(key, true);
     while (seenInbound.size > 1000) {
       const first = seenInbound.keys().next();
       if (first.done) break;
       seenInbound.delete(first.value);
     }
-    const local = normalizeLocalAddress(message, t.nodeId);
-    if (t.deliver) {
-      await t.deliver(local);
-      return true;
+    return true;
+  }
+
+  /** 投递失败时回滚键，允许发送方用同一 id 重试。 */
+  function forgetInbound(key: string): void {
+    seenInbound.delete(key);
+  }
+
+  /** 入站投递：deliver 注入优先 → transport.deliver → host.send */
+  async function deliverInbound(message: AgentMessage, tenantId: string): Promise<boolean> {
+    const t = team;
+    if (!t) throw new TeamProtocolError('team_disabled', 'Team is not enabled');
+    if (isRemoteAddress(message.to, t.nodeId)) {
+      throw new TeamProtocolError('agent_not_found', `Cannot relay to another node: ${message.to}`);
     }
-    const withDeliver = t.transport as unknown as {
-      deliver?: (msg: AgentMessage) => boolean | Promise<boolean>;
-    };
-    if (typeof withDeliver?.deliver === 'function') {
-      const result = await withDeliver.deliver(local);
-      return result !== false;
+    const key = inboundKey(tenantId, message);
+    if (!beginInbound(key)) return false;
+    try {
+      const local = normalizeLocalAddress(message, t.nodeId);
+      if (t.deliver) {
+        await t.deliver(local);
+        return true;
+      }
+      const withDeliver = t.transport as unknown as {
+        deliver?: (msg: AgentMessage) => boolean | Promise<boolean>;
+      };
+      if (typeof withDeliver?.deliver === 'function') {
+        const result = await withDeliver.deliver(local);
+        return result !== false;
+      }
+      if (t.host?.send) {
+        await t.host.send(local);
+        return true;
+      }
+      throw new TeamProtocolError('no_host', 'No team delivery handler configured');
+    } catch (error) {
+      forgetInbound(key);
+      throw error;
     }
-    if (t.host?.send) {
-      await t.host.send(local);
-      return true;
-    }
-    throw new TeamProtocolError('no_host', 'No team delivery handler configured');
   }
 
   /** team 事件 SSE */
@@ -1352,7 +1399,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             unacked: 0,
             encodeGap: (gap) =>
               `data: ${JSON.stringify({
-                protocol: 1,
+                protocol: PROTOCOL_VERSION,
                 node_id: nodeId,
                 kind: 'gap',
                 from_seq: gap.from_seq,
@@ -1368,7 +1415,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             ctrl,
             clientState,
             `data: ${JSON.stringify({
-              protocol: 1,
+              protocol: PROTOCOL_VERSION,
               node_id: nodeId,
               kind: 'team.hello',
               from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
@@ -1389,7 +1436,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             encode: (item) => {
               const wire = toWireEvent(item.event);
               return `data: ${JSON.stringify({
-                protocol: 1,
+                protocol: PROTOCOL_VERSION,
                 node_id: eventSourceNodeId(item.event),
                 seq: item.seq,
                 kind: 'team.event',
@@ -1460,17 +1507,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
           {
             nodeId: t.nodeId,
             agents: t.host?.list() ?? [],
-            protocol: 1,
+            protocol: PROTOCOL_VERSION,
           },
         ];
       }
-      return json({ protocol: 1, node_id: t.nodeId, peers: peers.map(toWirePeer) }, 200, extra);
+      return json(
+        { protocol: PROTOCOL_VERSION, node_id: t.nodeId, peers: peers.map(toWirePeer) },
+        200,
+        extra,
+      );
     }
 
     if (path === '/v1/team/messages' && req.method === 'POST') {
       const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
-      if (body.protocol !== 1) {
+      if (body.protocol !== PROTOCOL_VERSION) {
         return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
       }
       let message: AgentMessage;
@@ -1494,7 +1545,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return errorJson('invalid_request', 'body.node_id must match message.from', 400, extra);
       }
       try {
-        const accepted = await deliverInbound(message);
+        const accepted = await deliverInbound(message, effectiveTenantId(principal));
         const target = message.to === '*' ? undefined : parseAddress(message.to).agentId;
         publishTeamEvent('team.message.received', {
           messageId: message.id,
@@ -1505,7 +1556,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         });
         return json(
           {
-            protocol: 1,
+            protocol: PROTOCOL_VERSION,
             ok: true,
             message_id: message.id,
             ...(accepted ? {} : { deduplicated: true }),
@@ -1525,7 +1576,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }
       const body = await readJsonBody(req, maxBodyBytes, extra);
       if (body instanceof Response) return body;
-      if (body.protocol !== 1) {
+      if (body.protocol !== PROTOCOL_VERSION) {
         return errorJson('unsupported_protocol', 'protocol must be 1', 426, extra);
       }
       let message: AgentMessage;
@@ -1533,6 +1584,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
         message = fromWireMessage(body.message);
       } catch (error) {
         return teamErrorResponse(error, extra);
+      }
+      // 与跨节点接收共用同一去重集合（DECISION-019 §C）；失败回滚，允许重试。
+      const sendKey = inboundKey(effectiveTenantId(principal), message);
+      if (!beginInbound(sendKey)) {
+        return json(
+          { protocol: PROTOCOL_VERSION, ok: true, message_id: message.id, deduplicated: true },
+          200,
+          extra,
+        );
       }
       try {
         await t.transport.send(message);
@@ -1542,8 +1602,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
           to: message.to,
           kind: message.kind,
         });
-        return json({ protocol: 1, ok: true, message_id: message.id }, 202, extra);
+        return json({ protocol: PROTOCOL_VERSION, ok: true, message_id: message.id }, 202, extra);
       } catch (error) {
+        forgetInbound(sendKey);
         publishTeamError(error);
         return teamErrorResponse(error, extra);
       }
@@ -1560,7 +1621,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const page = await t.host.inbox(agentId, cursor);
         return json(
           {
-            protocol: 1,
+            protocol: PROTOCOL_VERSION,
             agent_id: agentId,
             messages: page.messages.map(toWireMessage),
             cursor: page.cursor,
@@ -1580,7 +1641,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (path === '/v1/team/agents') {
       if (req.method === 'GET') {
         if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
-        return json({ protocol: 1, agents: t.host.list().map(toWireAgentStatus) }, 200, extra);
+        return json(
+          { protocol: PROTOCOL_VERSION, agents: t.host.list().map(toWireAgentStatus) },
+          200,
+          extra,
+        );
       }
       if (req.method === 'POST') {
         const spawn = t.spawn;
@@ -1614,13 +1679,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
           );
         }
         const requestId = typeof requestIdRaw === 'string' ? requestIdRaw : undefined;
+        // 幂等键含 tenant：不同 tenant 的同名 request_id 互不影响（DECISION-019 §C）。
+        const spawnKey =
+          requestId !== undefined ? `${effectiveTenantId(principal)}:${requestId}` : undefined;
 
-        // 幂等：同一 request_id 返回第一次 spawn 的结果（含在途请求）。
-        if (requestId !== undefined) {
-          const existing = spawnRequests.get(requestId);
+        // 幂等：同一 tenant+request_id 返回第一次 spawn 的结果（含在途请求）。
+        if (spawnKey !== undefined) {
+          const existing = spawnRequests.get(spawnKey);
           if (existing) {
             try {
-              return json({ protocol: 1, agent: await existing, deduplicated: true }, 200, extra);
+              return json(
+                { protocol: PROTOCOL_VERSION, agent: await existing, deduplicated: true },
+                200,
+                extra,
+              );
             } catch (error) {
               return teamErrorResponse(error, extra);
             }
@@ -1635,8 +1707,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
               ...(systemPrompt !== undefined ? { systemPrompt } : {}),
             }),
           ))();
-        if (requestId !== undefined) {
-          spawnRequests.set(requestId, pending);
+        if (spawnKey !== undefined) {
+          spawnRequests.set(spawnKey, pending);
           while (spawnRequests.size > 1000) {
             const first = spawnRequests.keys().next();
             if (first.done) break;
@@ -1645,9 +1717,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
         }
         try {
           const agent = await pending;
-          return json({ protocol: 1, agent }, 201, extra);
+          return json({ protocol: PROTOCOL_VERSION, agent }, 201, extra);
         } catch (error) {
-          if (requestId !== undefined) spawnRequests.delete(requestId);
+          if (spawnKey !== undefined) spawnRequests.delete(spawnKey);
           return teamErrorResponse(error, extra);
         }
       }
@@ -1684,19 +1756,19 @@ export function startGateway(opts: GatewayOptions): Gateway {
             extra,
           );
         }
-        return json({ protocol: 1, cancelled: true }, 200, extra);
+        return json({ protocol: PROTOCOL_VERSION, cancelled: true }, 200, extra);
       }
       if (action === 'close' && req.method === 'POST') {
         const handle = t.host?.get(id);
         if (!handle) return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
         await handle.close();
-        return json({ protocol: 1, closed: true }, 200, extra);
+        return json({ protocol: PROTOCOL_VERSION, closed: true }, 200, extra);
       }
       if (!action && req.method === 'GET') {
         if (!t.host) return errorJson('no_host', 'No team host configured', 400, extra);
         const status = t.host.get(id)?.status() ?? t.host.list().find((item) => item.id === id);
         if (!status) return errorJson('agent_not_found', `Unknown agent: ${id}`, 404, extra);
-        return json({ protocol: 1, agent: toWireAgentStatus(status) }, 200, extra);
+        return json({ protocol: PROTOCOL_VERSION, agent: toWireAgentStatus(status) }, 200, extra);
       }
     }
 
@@ -2366,7 +2438,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     principal: TenantPrincipal,
   ): Promise<unknown> {
     const response = await dispatcher.dispatchFor(
-      { v: 1, id: randomUUID(), method, params },
+      { v: PROTOCOL_VERSION, id: randomUUID(), method, params },
       principal,
       'http',
     );
@@ -2401,7 +2473,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       code: 'invalid_params' | 'payload_too_large',
       message: string,
       status: number,
-    ): Response => json({ v: 1, id, ok: false, error: { code, message } }, status, extra);
+    ): Response =>
+      json({ v: PROTOCOL_VERSION, id, ok: false, error: { code, message } }, status, extra);
 
     let text: string;
     try {
@@ -2424,7 +2497,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
     const record = body as Record<string, unknown>;
     const id = typeof record.id === 'string' ? record.id : '';
-    if (record.v !== 1) {
+    if (record.v !== PROTOCOL_VERSION) {
       return rpcFailure(id, 'invalid_params', 'v must be 1', 400);
     }
     if (id.length === 0) {
@@ -2435,7 +2508,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
 
     const request: RpcRequest = {
-      v: 1,
+      v: PROTOCOL_VERSION,
       id,
       method: record.method,
       ...(record.params !== undefined ? { params: record.params } : {}),
@@ -2928,7 +3001,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
             continue;
           }
           ws.data.alive = false;
-          sendFrame(ws, { v: 1, kind: 'ping', node_id: nodeId, ts: Date.now() });
+          sendFrame(ws, { v: PROTOCOL_VERSION, kind: 'ping', node_id: nodeId, ts: Date.now() });
           // 客户端已排空但没有新事件时，心跳负责补发 pending gap。
           flushWsGap(ws);
         }
