@@ -45,11 +45,11 @@
   ],
   "dependencies": {
     "@promptctl/rich-js": "^0.6.0",
-    "@vessel/config": "workspace:*",
-    "@vessel/core": "workspace:*",
-    "@vessel/permission": "workspace:*",
-    "@vessel/serve": "workspace:*",
-    "@vessel/tui": "workspace:*",
+    "@vessel/config": "^0.8.5",
+    "@vessel/core": "^0.8.5",
+    "@vessel/permission": "^0.8.5",
+    "@vessel/serve": "^0.8.5",
+    "@vessel/tui": "^0.8.5",
     "yaml": "^2.9.0"
   }
 }
