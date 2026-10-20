@@ -168,6 +168,8 @@ class WorkflowEngineImpl implements WorkflowEngine {
   private readonly store: WorkflowStore;
   private readonly active = new Map<string, ActiveRun>();
   private readonly tenantId?: string;
+  /** 0.9 生命周期 v2：重复 dispose 复用同一 Promise。 */
+  private disposePromise?: Promise<void>;
 
   constructor(options: WorkflowEngineOptions) {
     this.config = options.config;
@@ -346,6 +348,12 @@ class WorkflowEngineImpl implements WorkflowEngine {
 
   async close(): Promise<void> {
     await this.store.close();
+  }
+
+  /** 0.9 生命周期 v2：store 由引擎创建，宿主 dispose 时等待写入落盘（幂等）。 */
+  dispose(): Promise<void> {
+    this.disposePromise ??= this.close();
+    return this.disposePromise;
   }
 
   private assertEnabled(): void {
