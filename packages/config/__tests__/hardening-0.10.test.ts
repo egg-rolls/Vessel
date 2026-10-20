@@ -4,6 +4,7 @@
  * - resolveEffectiveApiKey 优先级；
  * - YAML 解析错误 / 重复键上抛为带文件路径的 validation error；
  * - legacy 与新版 provider: 的合并规则与 deprecation warning；
+ * - 不提供默认 context.maxMessages（由 core 按 maxTokens 推导）；
  * - redactSourcePaths 不泄露 token 原文。
  */
 
@@ -210,5 +211,28 @@ describe('redactSourcePaths', () => {
 
     expect(JSON.stringify(snapshot)).not.toContain('tok-secret');
     expect(snapshot.sources['serve.tokens.<set>.tenantId']).toBe('<set>');
+  });
+});
+
+describe('context.maxMessages 默认值', () => {
+  it('未配置时 config 不出现 maxMessages（由 core 按 maxTokens 推导）', async () => {
+    const result = await loadConfig({
+      userConfigPath: missingPath(),
+      configPath: missingPath(),
+      env: {},
+    });
+
+    expect(result.config.context?.maxTokens).toBe(1_000_000);
+    expect(result.config.context?.maxMessages).toBeUndefined();
+    expect(result.sources['context.maxMessages']).toBeUndefined();
+  });
+
+  it('显式配置仍原样透传（项目层优先）', async () => {
+    const userConfigPath = tmpYaml('context:\n  max_messages: 250\n');
+    const configPath = tmpYaml('context:\n  max_messages: 40\n');
+    const result = await loadConfig({ userConfigPath, configPath, env: {} });
+
+    expect(result.config.context?.maxMessages).toBe(40);
+    expect(result.sources['context.maxMessages']).toBe('project');
   });
 });
