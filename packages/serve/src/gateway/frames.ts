@@ -48,6 +48,8 @@ export interface HelloFrameInput {
   nodeId: string;
   protocol: ProtocolInfo;
   node: NodeInfo;
+  /** 0.9：本进程事务代际 */
+  incarnation: string;
   fromSeq: number;
   latestSeq: number;
   oldestSeq: number;
@@ -66,6 +68,7 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
     ts: input.ts ?? Date.now(),
     protocol: input.protocol,
     node: input.node,
+    incarnation: input.incarnation,
     from_seq: latestSeq === 0 ? 0 : Math.max(input.fromSeq + 1, input.oldestSeq),
     latest_seq: latestSeq,
     ...(input.tenantId !== undefined ? { tenant_id: input.tenantId } : {}),

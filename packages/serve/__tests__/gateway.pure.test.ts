@@ -96,9 +96,16 @@ describe('gateway frame constructors', () => {
   });
 
   it('computes hello from_seq against the replay window', () => {
-    const base = { nodeId: 'node-1', protocol: PROTOCOL, node: NODE, ts: 5 };
+    const base = {
+      nodeId: 'node-1',
+      protocol: PROTOCOL,
+      node: NODE,
+      incarnation: 'inc-test-001',
+      ts: 5,
+    };
     expect(helloFrame({ ...base, fromSeq: 0, latestSeq: 0, oldestSeq: 1 })).toMatchObject({
       kind: 'hello',
+      incarnation: 'inc-test-001',
       from_seq: 0,
       latest_seq: 0,
     });
