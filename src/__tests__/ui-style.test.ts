@@ -1,16 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 import { createUiStyle, DARK_GOLD, DARK_GOLD_BRIGHT, shouldUseColor, truecolor } from '../ui-style';
 
-const GOLD = '\x1b[38;2;208;138;58m';
-const GOLD_BRIGHT = '\x1b[38;2;232;169;76m';
+const GOLD = '\x1b[38;2;194;162;115m';
+const GOLD_BRIGHT = '\x1b[38;2;194;162;115m';
 const RESET = '\x1b[0m';
 
 describe('ui-style', () => {
   it('dark gold truecolor 编码', () => {
-    expect(DARK_GOLD).toBe('#d08a3a');
-    expect(DARK_GOLD_BRIGHT).toBe('#e8a94c');
+    expect(DARK_GOLD).toBe('#c2a273');
+    expect(DARK_GOLD_BRIGHT).toBe('#c2a273');
     expect(truecolor(DARK_GOLD)).toBe(GOLD);
-    expect(truecolor('#E8A94C')).toBe(GOLD_BRIGHT);
+    expect(truecolor('#C2A273')).toBe(GOLD_BRIGHT);
     expect(truecolor('not-a-color')).toBe('');
   });
 
