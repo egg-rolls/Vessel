@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream, type RunEvent } from '@vessel/core';
+import { MemoryEventStream, MemorySessionBackend, type RunEvent } from '@vessel/core';
 import type { Gateway } from '../src/gateway';
 import { PROTOCOL_VERSION } from '../src/protocol';
 import { createRpcDispatcher, defineMethods, RPC_VERSION, type RpcMethodContext } from '../src/rpc';
@@ -102,6 +102,41 @@ describe('rpc result_schema', () => {
     const bad = await dispatcher.dispatch({ v: 1, id: 'bad', method: 'test.bad' });
     expect(bad.ok).toBe(true);
     expect(violations).toEqual([]);
+  });
+
+  it('accepts sessions.list results with branch null or missing', async () => {
+    process.env.VESSEL_VALIDATE_RESULTS = '1';
+    const session = new MemorySessionBackend();
+    await session.save({
+      run_id: 'run-null',
+      session_id: 'session-null',
+      messages: [{ role: 'user', content: 'hi' }] as never,
+      started_at: 1,
+      status: 'completed',
+      // 真实 session 文件可能出现显式 null。
+      branch: null as unknown as string,
+    });
+    await session.save({
+      run_id: 'run-missing',
+      session_id: 'session-missing',
+      messages: [{ role: 'user', content: 'hi' }] as never,
+      started_at: 2,
+      status: 'completed',
+    });
+    const gw = createGateway({ events: new MemoryEventStream(), session });
+    gateways.push(gw);
+
+    const response = await gw.rpc({ v: 1, id: 'sessions', method: 'sessions.list' });
+    expect(response.ok).toBe(true);
+    if (!response.ok) throw new Error(response.error.message);
+    const result = response.result as {
+      sessions: Array<{ session_id: string; branch?: unknown }>;
+    };
+    expect(result.sessions.map((item) => item.session_id).sort()).toEqual([
+      'session-missing',
+      'session-null',
+    ]);
+    expect(result.sessions.find((item) => item.session_id === 'session-null')?.branch).toBeNull();
   });
 
   it('gateway emits rpc.result_invalid with method/path only', async () => {
