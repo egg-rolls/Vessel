@@ -29,7 +29,7 @@ export type { RunOptions } from '../types/run.js';
 import type { ToolCall } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
-import { PermissionPolicy } from './permission-policy.js';
+import { PermissionPolicy, PermissionTimeoutError } from './permission-policy.js';
 import { MemoryPluginHost } from './plugin-host.js';
 import { createToolPipeline, isToolCall, type ToolPipeline } from './tool-pipeline.js';
 
@@ -150,6 +150,8 @@ export class AgentRuntime {
   private readonly agentId?: string;
   /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
   private readonly tenantId?: string;
+  /** 0.11.1：是否发布 reasoning 流式增量（默认 false） */
+  private readonly includeReasoning: boolean;
   /** 成功安装的插件（按安装顺序；dispose 逆序，0.9） */
   private readonly installedPlugins: Plugin[] = [];
   /** dispose 幂等：第二次调用复用同一个 Promise，不再调用插件（0.9） */
@@ -186,6 +188,7 @@ export class AgentRuntime {
     this.pluginConfigs = opts.pluginConfigs;
     this.agentId = opts.agentId;
     this.tenantId = opts.tenantId;
+    this.includeReasoning = opts.includeReasoning === true;
     this.logger =
       opts.logger ??
       (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
@@ -564,6 +567,7 @@ export class AgentRuntime {
     await this.writeCheckpoint(execution, this.failureCheckpointStatus(signal), errorMessage, true);
 
     // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
+    const permissionTimeout = outcome.error instanceof PermissionTimeoutError;
     this.publishEvent({
       type: cancelled ? 'run.cancelled' : 'run.failed',
       run_id: runId,
@@ -573,6 +577,8 @@ export class AgentRuntime {
         error: errorMessage,
         duration_ms: Date.now() - startedAt,
         ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
+        // 权限超时（DECISION-022 §2.2）：失败原因显式标注，供 UI / 观测区分
+        ...(!cancelled && permissionTimeout ? { reason: 'permission_timeout' } : {}),
       },
       ts: Date.now(),
     });
@@ -1055,6 +1061,8 @@ export class AgentRuntime {
         session_id: args.sessionId,
         // AbortSignal——Provider 透传给 fetch()，支持 Esc 中断（Hermes/Claude Code 模式）
         signal: args.signal,
+        // 0.11.1：仅在显式开启时要求 reasoning 流式增量；默认请求形状不变
+        ...(this.includeReasoning ? { include_reasoning: true } : {}),
         // 流式（ADR-007）：始终提供 stream + on_chunk。支持流式的 Provider 边收边经回调吐增量，
         // loop 在此发布 LlmStreamChunk 事件供 TUI 订阅渲染；不支持流式的 Provider 忽略字段、
         // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
@@ -1261,6 +1269,8 @@ export class AgentRuntime {
 
       return { toolCall, input: result.input, ok: true, content: result.content };
     } catch (error) {
+      // 权限超时是致命错误（DECISION-022 §2.2）：终止 run，不折回工具错误让模型重试。
+      if (error instanceof PermissionTimeoutError) throw error;
       return {
         toolCall,
         input: entry.args,

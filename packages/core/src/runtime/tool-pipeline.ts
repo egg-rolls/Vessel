@@ -20,7 +20,7 @@ import type { Message } from '../types/provider.js';
 import type { ToolCall, ToolContext, ToolDefinition } from '../types/tool.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
-import { PermissionPolicy } from './permission-policy.js';
+import { PermissionPolicy, PermissionTimeoutError } from './permission-policy.js';
 
 export interface ToolPipelineDeps {
   pluginHost: PluginHost;
@@ -192,6 +192,8 @@ export function createToolPipeline(deps: ToolPipelineDeps): ToolPipeline {
       try {
         await permission.authorize(tool, args, ctx);
       } catch (error) {
+        // 权限超时是致命错误（DECISION-022 §2.2）：不得折成普通工具错误回给模型。
+        if (error instanceof PermissionTimeoutError) throw error;
         return fail(errorText(error));
       }
 

@@ -12,7 +12,7 @@ import { StreamAccumulator } from '../src/provider/stream-accumulator';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
 import { SQLiteSessionBackend } from '../src/session/sqlite-backend';
-import type { LLMResponse, Message, StreamChunk } from '../src/types/provider';
+import type { ChatRequest, LLMResponse, Message, StreamChunk } from '../src/types/provider';
 import type { ToolDefinition } from '../src/types/tool';
 
 const realFetch = globalThis.fetch;
@@ -128,6 +128,65 @@ describe('OpenAI 兼容 reasoning_content', () => {
     expect(JSON.stringify(chunks)).not.toContain('think');
     expect(chunks.every((c) => c.type === 'text_delta' || c.type === 'finish')).toBe(true);
   });
+
+  it('include_reasoning=true 时回调 reasoning_delta，最终 reasoning_content 不变', async () => {
+    mockFetchSse([
+      `data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n`,
+      `data: {"choices":[{"delta":{"reasoning_content":" more"}}]}\n\n`,
+      `data: {"choices":[{"delta":{"content":"answer"}}]}\n\n`,
+      `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n`,
+      'data: [DONE]\n\n',
+    ]);
+
+    const chunks: StreamChunk[] = [];
+    const provider = new OpenAICompatibleProvider({ api_key: 'k', model: 'm' });
+    const response = await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'm',
+      stream: true,
+      include_reasoning: true,
+      on_chunk: (chunk) => chunks.push(chunk),
+    });
+
+    const reasoning = chunks
+      .filter((chunk) => chunk.type === 'reasoning_delta')
+      .map((chunk) => chunk.delta)
+      .join('');
+    expect(reasoning).toBe('think more');
+    // 最终 response 仍携带完整 reasoning（回传 provider / 持久化语义不变）
+    expect(response.reasoning_content).toBe('think more');
+    expect(response.content).toBe('answer');
+    // 正文仍是独立的 text_delta
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === 'text_delta')
+        .map((chunk) => chunk.delta)
+        .join(''),
+    ).toBe('answer');
+  });
+
+  it('include_reasoning=false 时不产生 reasoning_delta（0.11.0 行为）', async () => {
+    mockFetchSse([
+      `data: {"choices":[{"delta":{"reasoning_content":"think"}}]}\n\n`,
+      `data: {"choices":[{"delta":{"content":"answer"}}]}\n\n`,
+      `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n`,
+      'data: [DONE]\n\n',
+    ]);
+
+    const chunks: StreamChunk[] = [];
+    const provider = new OpenAICompatibleProvider({ api_key: 'k', model: 'm' });
+    const response = await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'm',
+      stream: true,
+      include_reasoning: false,
+      on_chunk: (chunk) => chunks.push(chunk),
+    });
+
+    expect(chunks.some((chunk) => chunk.type === 'reasoning_delta')).toBe(false);
+    expect(response.reasoning_content).toBe('think');
+    expect(response.content).toBe('answer');
+  });
 });
 
 describe('StreamAccumulator reasoning', () => {
@@ -217,6 +276,100 @@ describe('runtime reasoning_content 生命周期', () => {
     const dumped = JSON.stringify(events.getHistory());
     expect(dumped).not.toContain('SECRET-THINK');
     expect(dumped).not.toContain('FINAL-THINK');
+  });
+
+  it('includeReasoning 透传 include_reasoning（默认请求形状不变）', async () => {
+    const enabledRequests: ChatRequest[] = [];
+    const enabled = await AgentRuntime.create({
+      provider: {
+        chat: async (req: ChatRequest): Promise<LLMResponse> => {
+          enabledRequests.push(req);
+          return { content: 'ok', finish_reason: 'stop' };
+        },
+      },
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      includeReasoning: true,
+    });
+    await enabled.run('hi');
+    expect(enabledRequests[0]?.include_reasoning).toBe(true);
+
+    const defaultRequests: ChatRequest[] = [];
+    const disabled = await AgentRuntime.create({
+      provider: {
+        chat: async (req: ChatRequest): Promise<LLMResponse> => {
+          defaultRequests.push(req);
+          return { content: 'ok', finish_reason: 'stop' };
+        },
+      },
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+    await disabled.run('hi');
+    expect('include_reasoning' in (defaultRequests[0] ?? {})).toBe(false);
+  });
+
+  it('includeReasoning=true 经 llm.stream.chunk 发布 reasoning_delta；默认不发布', async () => {
+    const sse = [
+      `data: {"choices":[{"delta":{"reasoning_content":"SECRET-THINK"}}]}\n\n`,
+      `data: {"choices":[{"delta":{"content":"answer"}}]}\n\n`,
+      `data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n`,
+      'data: [DONE]\n\n',
+    ];
+
+    mockFetchSse(sse);
+    const enabledEvents = new MemoryEventStream();
+    const enabled = await AgentRuntime.create({
+      provider: new OpenAICompatibleProvider({ api_key: 'k', model: 'm' }),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events: enabledEvents,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      includeReasoning: true,
+    });
+    expect(await enabled.run('hi')).toBe('answer');
+    const chunks = enabledEvents
+      .getHistory()
+      .filter((event) => event.type === 'llm.stream.chunk')
+      .map((event) => (event.data as { chunk: StreamChunk }).chunk);
+    expect(chunks.some((chunk) => chunk.type === 'reasoning_delta')).toBe(true);
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === 'reasoning_delta')
+        .map((chunk) => chunk.delta)
+        .join(''),
+    ).toBe('SECRET-THINK');
+
+    mockFetchSse(sse);
+    const defaultEvents = new MemoryEventStream();
+    const disabled = await AgentRuntime.create({
+      provider: new OpenAICompatibleProvider({ api_key: 'k', model: 'm' }),
+      model: 'm',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events: defaultEvents,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+    expect(await disabled.run('hi')).toBe('answer');
+    expect(JSON.stringify(defaultEvents.getHistory())).not.toContain('SECRET-THINK');
+    expect(
+      defaultEvents
+        .getHistory()
+        .filter((event) => event.type === 'llm.stream.chunk')
+        .map((event) => (event.data as { chunk: StreamChunk }).chunk)
+        .every((chunk) => chunk.type !== 'reasoning_delta'),
+    ).toBe(true);
   });
 
   it('session 持久化与恢复保留 reasoning_content', async () => {

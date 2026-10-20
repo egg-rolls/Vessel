@@ -48,6 +48,12 @@ export interface ChatRequest {
   /** AbortSignal——Provider 传给 fetch() 以支持流中断（Hermes/Claude Code 模式） */
   signal?: AbortSignal;
   /**
+   * 是否把思维链增量经 `on_chunk` 回调（`reasoning_delta`，0.11.1）。
+   * 显式 opt-in；未设置时与 0.11.0 一致：只累积进 `response.reasoning_content`，
+   * 不产生 reasoning chunk / 事件。
+   */
+  include_reasoning?: boolean;
+  /**
    * 流式增量回调。当 stream=true 且本字段存在时，Provider 在接收 LLM 流式响应时
    * 逐 chunk 调用；chat() 仍返回拼装好的完整 LLMResponse（ADR-007：流式=事件订阅，
    * 非独立方法）。非流式 Provider 忽略本字段即退化为整段返回。
@@ -58,8 +64,8 @@ export interface ChatRequest {
 /** 流式 chunk：Provider 吐给 loop 的增量单元 */
 export interface StreamChunk {
   /** chunk 类型 */
-  type: 'text_delta' | 'tool_call_delta' | 'finish';
-  /** text_delta：文本增量 */
+  type: 'text_delta' | 'reasoning_delta' | 'tool_call_delta' | 'finish';
+  /** text_delta / reasoning_delta：增量文本 */
   delta?: string;
   /** tool_call_delta：第几个 tool_call（按 index 累积，对应 OpenAI delta.tool_calls[].index） */
   tool_call_index?: number;

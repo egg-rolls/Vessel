@@ -13,6 +13,21 @@ import type { ToolContext, ToolDefinition } from '../types/tool.js';
 const PERMISSION_TIMEOUT_MS = 120_000;
 
 /**
+ * 权限请求超时（0.11.1，DECISION-022 §2.2）。
+ *
+ * 超时是致命的：调用方必须终止 run，不得把它当作普通工具错误回给模型重试。
+ */
+export class PermissionTimeoutError extends Error {
+  /** 稳定错误码，供事件 / 调用方判定 */
+  readonly code = 'permission_timeout' as const;
+
+  constructor(message = 'Permission request timed out') {
+    super(message);
+    this.name = 'PermissionTimeoutError';
+  }
+}
+
+/**
  * 工具执行前的权限判定器。持有 remember-always 状态（跨 run，与运行时生命周期一致）。
  */
 export class PermissionPolicy {
@@ -62,10 +77,7 @@ export class PermissionPolicy {
         ts: Date.now(),
         ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
       });
-      const decided = (await this.events.waitFor('tool.permission.response', {
-        requestId,
-        timeout: PERMISSION_TIMEOUT_MS,
-      })) as
+      const decided = (await this.waitForDecision(tool, requestId)) as
         | { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean; remember?: boolean }
         | undefined;
       const userDecision = decided?.decision ?? (decided?.allowed === false ? 'deny' : 'allow');
@@ -76,6 +88,23 @@ export class PermissionPolicy {
       if (decided?.remember) {
         this.approved.add(tool.name);
       }
+    }
+  }
+
+  /**
+   * 等待用户决定；超时抛 `PermissionTimeoutError`（0.11.1）。
+   * `waitFor` 的约定拒绝原因只有超时，因此这里统一转换为稳定错误类型。
+   */
+  private async waitForDecision(tool: ToolDefinition, requestId: string): Promise<unknown> {
+    try {
+      return await this.events.waitFor('tool.permission.response', {
+        requestId,
+        timeout: PERMISSION_TIMEOUT_MS,
+      });
+    } catch {
+      throw new PermissionTimeoutError(
+        `Permission request for tool "${tool.name}" timed out after ${PERMISSION_TIMEOUT_MS}ms`,
+      );
     }
   }
 }
