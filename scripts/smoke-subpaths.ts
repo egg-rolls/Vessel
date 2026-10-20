@@ -4,7 +4,7 @@
  * subpath exports 冒烟（0.2 R8c）。
  *
  * 对 `packages/core/package.json` 的每个 exports 入口执行动态 import：
- * - 根入口 `@vessel/core`：断言 0.1 公开符号仍然存在（兼容性）；
+ * - 根入口 `@vessel-agent/core`：断言 0.1 公开符号仍然存在（兼容性）；
  * - 子路径：断言关键符号存在；`./types` 是纯类型入口，允许运行时为空。
  *
  * 新增 subpath 时必须同步更新 `SMOKE_TARGETS`；测试会校验两边的键一致。
@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const PACKAGE_NAME = '@vessel/core';
+const PACKAGE_NAME = '@vessel-agent/core';
 
 /** 0.1 根入口必须保持的运行时符号（类型导出在运行时不可见）。 */
 export const ROOT_COMPAT_SYMBOLS = [
@@ -111,7 +111,7 @@ export async function runSmoke(root: string): Promise<SmokeResult> {
   const targetKeys = Object.keys(SMOKE_TARGETS).sort();
   const failures: SmokeFailure[] = [];
   const checked: string[] = [];
-  // 从 packages/config 解析（它依赖 @vessel/core）；缺省回退到 core 自身。
+  // 从 packages/config 解析（它依赖 @vessel-agent/core）；缺省回退到 core 自身。
   const resolverDir = existsSync(join(root, 'packages/config'))
     ? join(root, 'packages/config')
     : join(root, 'packages/core');

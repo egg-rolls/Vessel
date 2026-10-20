@@ -1,6 +1,6 @@
 /**
- * @vessel/core/events 模块
- * @module @vessel/core/events
+ * @vessel-agent/core/events 模块
+ * @module @vessel-agent/core/events
  */
 
 export type { EventHandler, EventStream, RunEvent, Unsubscribe } from '../types/event.js';

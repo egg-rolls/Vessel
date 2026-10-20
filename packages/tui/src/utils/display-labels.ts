@@ -1,6 +1,6 @@
 /**
  * 状态行 / 启动头共用的显示标签——纯函数
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 import { displayWidth } from './text-layout.js';

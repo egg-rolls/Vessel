@@ -1,6 +1,6 @@
 /**
- * @vessel/serve — 本地 HTTP/WS 服务网关（vessel.gateway/1）
- * @module @vessel/serve
+ * @vessel-agent/serve — 本地 HTTP/WS 服务网关（vessel.gateway/1）
+ * @module @vessel-agent/serve
  *
  * 把 runtime 的 EventStream 暴露为 WS + SSE 广播，并提供 /v1 控制端点。
  * R3 增加：LoopbackTransport + peer 注册表 + /v1/team/*。

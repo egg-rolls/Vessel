@@ -1,7 +1,7 @@
 /**
  * workflow.* 方法（list / get / start / resume / cancel）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';

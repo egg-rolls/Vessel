@@ -15,7 +15,7 @@ import {
 
 function manifest(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
-    name: '@vessel/example',
+    name: '@vessel-agent/example',
     version: '0.3.0',
     type: 'module',
     main: 'src/index.ts',
@@ -112,8 +112,8 @@ describe('evaluatePackedManifest', () => {
   it('rejects workspace and file dependencies in every dependency field', () => {
     const issues = evaluatePackedManifest(
       manifest({
-        dependencies: { '@vessel/core': 'workspace:*' },
-        devDependencies: { '@vessel/tui': 'file:../tui' },
+        dependencies: { '@vessel-agent/core': 'workspace:*' },
+        devDependencies: { '@vessel-agent/tui': 'file:../tui' },
       }),
       '0.3.0',
     );
@@ -122,7 +122,7 @@ describe('evaluatePackedManifest', () => {
 
   it('rejects an exact internal version that differs from the root version', () => {
     const issues = evaluatePackedManifest(
-      manifest({ dependencies: { '@vessel/core': '0.1.0' } }),
+      manifest({ dependencies: { '@vessel-agent/core': '0.1.0' } }),
       '0.3.0',
     );
     expect(codes(issues)).toContain('internal_dependency_version');
@@ -130,7 +130,7 @@ describe('evaluatePackedManifest', () => {
 
   it('warns on internal semver ranges but does not fail', () => {
     const issues = evaluatePackedManifest(
-      manifest({ dependencies: { '@vessel/core': '^0.3.0' } }),
+      manifest({ dependencies: { '@vessel-agent/core': '^0.3.0' } }),
       '0.3.0',
     );
     expect(codes(issues)).toContain('internal_dependency_range');
@@ -212,7 +212,7 @@ describe('tar parsing', () => {
       { path: 'package/src/index.ts', content: 'export {};' },
     ]);
     const packed = unpackTarball(Bun.gzipSync(Uint8Array.from(tar)));
-    expect(packed.manifest.name).toBe('@vessel/example');
+    expect(packed.manifest.name).toBe('@vessel-agent/example');
     expect(packed.files).toEqual(['package.json', 'src/index.ts']);
   });
 });
@@ -230,11 +230,11 @@ describe('collectPublicPackages', () => {
       }
       await writeFile(
         join(root, 'packages/a/package.json'),
-        JSON.stringify(manifest({ name: '@vessel/a' })),
+        JSON.stringify(manifest({ name: '@vessel-agent/a' })),
       );
       await writeFile(
         join(root, 'packages/b/package.json'),
-        JSON.stringify(manifest({ name: '@vessel/b', private: true })),
+        JSON.stringify(manifest({ name: '@vessel-agent/b', private: true })),
       );
 
       const packages = await collectPublicPackages(root);

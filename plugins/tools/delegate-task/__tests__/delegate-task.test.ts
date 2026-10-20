@@ -15,7 +15,7 @@ import {
   type RunEvent,
   type ToolContext,
   type ToolDefinition,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createDelegateTaskPlugin } from '../src/index';
 
 /** 从 run 事件 data 安全读取 depth（不用 as） */

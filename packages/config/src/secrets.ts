@@ -1,6 +1,6 @@
 /**
  * 配置密钥间接引用（_env）与脱敏
- * @module @vessel/config
+ * @module @vessel-agent/config
  *
  * 规则见 DECISION-010 §2.4 / §11.5 与 PLAN-0.5.0-asm §3.3：
  * - 同层显式非空值优先；

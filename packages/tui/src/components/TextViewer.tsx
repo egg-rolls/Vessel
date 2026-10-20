@@ -1,6 +1,6 @@
 /**
  * 长文本 pager（R0 §4.3）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 只改渲染：`CommandResult` 形状不变。仅 Ink TTY 路径使用。
  */

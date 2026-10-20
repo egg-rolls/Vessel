@@ -1,5 +1,5 @@
 /**
- * @vessel/team - agent team 原型（0.1.0）
+ * @vessel-agent/team - agent team 原型（0.1.0）
  *
  * 只提供成员语义：spawn / send / inbox / cancel / status。
  * 依赖最小 `RuntimeHost` 形状接口（见 ./host.ts），不依赖 delegate_task 的内部 spawn，
@@ -18,8 +18,8 @@ import type {
   ToolDefinition,
   Transport,
   UsageLimits,
-} from '@vessel/core';
-import { MemoryPluginHost } from '@vessel/core';
+} from '@vessel-agent/core';
+import { MemoryPluginHost } from '@vessel-agent/core';
 import { CoreHostAdapter, type TeamHostPort } from './core-adapter.js';
 import type { AgentStatus, TeamMessage, TeamMessageKind } from './host.js';
 import { RoutingTeamHost } from './routing.js';

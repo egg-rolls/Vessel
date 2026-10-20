@@ -1,6 +1,6 @@
 /**
  * EventStream 实现
- * @module @vessel/core/events
+ * @module @vessel-agent/core/events
  */
 
 import { createStderrLogger } from '../logging.js';

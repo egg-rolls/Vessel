@@ -1,7 +1,7 @@
 /**
  * 飞书渠道离线示例（0.4）。
  *
- * 使用真实 @vessel/feishu 插件 + mock FeishuTransport + mock provider，
+ * 使用真实 @vessel-agent/feishu 插件 + mock FeishuTransport + mock provider，
  * 不访问网络、不需要真实凭据。
  * 运行：bun run examples/feishu-mock.ts
  */

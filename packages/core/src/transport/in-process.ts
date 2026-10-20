@@ -4,7 +4,7 @@
  * 进程内 Transport：`send` 把消息扇出给所有 `receive` 订阅者；不实现 Host 的
  * inbox / 地址路由语义（那是 Host 的职责）。`peers()` 返回本节点信息。
  *
- * @module @vessel/core/transport
+ * @module @vessel-agent/core/transport
  */
 
 import type { AgentMessage, AgentStatus, PeerInfo, Transport } from '../kernel/types.js';

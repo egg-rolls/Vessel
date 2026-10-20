@@ -33,7 +33,7 @@ function writeProbePlugin(root: string): void {
   fs.mkdirSync(path.join(pluginDir, 'src'), { recursive: true });
   fs.writeFileSync(
     path.join(pluginDir, 'package.json'),
-    JSON.stringify({ name: '@vessel/lifecycle-probe', version: '0.0.1' }),
+    JSON.stringify({ name: '@vessel-agent/lifecycle-probe', version: '0.0.1' }),
     'utf8',
   );
   fs.writeFileSync(

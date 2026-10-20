@@ -1,12 +1,12 @@
 /**
- * @vessel/provider-openai — OpenAI 兼容 Provider 插件
+ * @vessel-agent/provider-openai — OpenAI 兼容 Provider 插件
  *
  * 注册所有 OpenAI 兼容的 provider（openai / google / mistral / ollama / cohere），
  * 全部走核心 OpenAICompatibleProvider，仅 base_url 与默认 model 不同。
  */
 
-import type { Plugin, PluginHost } from '@vessel/core';
-import { OpenAICompatibleProvider } from '@vessel/core';
+import type { Plugin, PluginHost } from '@vessel-agent/core';
+import { OpenAICompatibleProvider } from '@vessel-agent/core';
 import { type RetryEvent, type RetryOptions, resolveRetryOptions, withRetry } from './retry.js';
 import { withTimeout } from './timeout.js';
 

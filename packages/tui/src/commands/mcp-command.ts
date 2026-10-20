@@ -1,6 +1,6 @@
 /**
  * /mcp —— MCP server 状态与重连
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据只来自 ReplContext.mcp（asm 注入的 McpControl）；本模块不 import 任何 MCP 实现。
  */

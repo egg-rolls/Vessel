@@ -11,7 +11,7 @@ import {
   MemoryLLMProvider,
   MemoryPluginHost,
   type RuntimeHost,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { CoreHostAdapter } from '../src/core-adapter.js';
 import { createTeamPlugin } from '../src/index.js';
 

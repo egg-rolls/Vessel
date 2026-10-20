@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { request as httpsRequestRaw } from 'node:https';
 import { fileURLToPath } from 'node:url';
-import { MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import { createGateway } from './helpers';
 

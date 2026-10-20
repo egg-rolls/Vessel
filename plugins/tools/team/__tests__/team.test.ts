@@ -18,7 +18,7 @@ import {
   type ToolDefinition,
   type Transport,
   type Unsubscribe,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { CoreHostAdapter } from '../src/core-adapter';
 import type { TeamMessage } from '../src/host';
 import { buildChildHost, createTeamPlugin, disabledTeamPlugin } from '../src/index';

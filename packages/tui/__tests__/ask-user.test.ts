@@ -3,7 +3,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { createAskUserTool } from '../src/renderer/ask-user';
 
 /** 便捷构建测试输入 */

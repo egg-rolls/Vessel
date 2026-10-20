@@ -1,6 +1,6 @@
 /**
  * 流式 SSE 累积器
- * @module @vessel/core/provider
+ * @module @vessel-agent/core/provider
  *
  * 负责 SSE 流式响应的状态累积，供 OpenAI 和 Anthropic provider 共用：
  *  - 文本增量累积 + text_delta 回调

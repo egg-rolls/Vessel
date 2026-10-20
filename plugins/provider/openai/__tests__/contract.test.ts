@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
-import { type LLMProvider, MemoryPluginHost, type Message } from '@vessel/core';
+import { type LLMProvider, MemoryPluginHost, type Message } from '@vessel-agent/core';
 import plugin from '../src/index';
 import { DEFAULT_TIMEOUT_MS, resolveTimeoutMs, withTimeout } from '../src/timeout';
 

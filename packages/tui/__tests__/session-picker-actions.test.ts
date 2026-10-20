@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { SessionInfo } from '@vessel/core';
+import type { SessionInfo } from '@vessel-agent/core';
 import {
   deleteSessionAction,
   renameSessionAction,

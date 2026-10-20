@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from 'bun:test';
 import { fileURLToPath } from 'node:url';
-import { MemoryEventStream, MemoryPluginHost } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost } from '@vessel-agent/core';
 import { createMcpPlugin } from '../src/plugin';
 import type { McpServerConfig } from '../src/types';
 

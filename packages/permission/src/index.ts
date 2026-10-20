@@ -1,6 +1,6 @@
 /**
- * @vessel/permission — 共享权限原语
- * @module @vessel/permission
+ * @vessel-agent/permission — 共享权限原语
+ * @module @vessel-agent/permission
  *
  * 自描述工具对象（ADR-026）的 `checkPermission` 复用本函数：发 `tool.permission.request`
  * 事件 → `waitFor('tool.permission.response', { requestId })` 等用户授权（ADR-029）。
@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ToolContext } from '@vessel/core';
+import type { ToolContext } from '@vessel-agent/core';
 
 export type PermissionDecision = 'allow' | 'deny' | 'ask';
 

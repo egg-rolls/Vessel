@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream, type RunEvent } from '@vessel/core';
+import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { GatewayAuthLike } from '../src/tenant';
 import { createGateway, TestWs } from './helpers';

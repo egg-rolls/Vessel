@@ -1,6 +1,6 @@
 /**
  * Hook 类型定义
- * @module @vessel/core/hooks
+ * @module @vessel-agent/core/hooks
  */
 
 /** Hook 类型枚举 */

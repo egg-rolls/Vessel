@@ -68,7 +68,7 @@ export class WorkflowPluginUnavailableError extends Error {
     super(
       detail
         ? `workflow_plugin_unavailable: ${detail}`
-        : 'workflow_plugin_unavailable: install @vessel/workflow (plugins/workflow/engine)',
+        : 'workflow_plugin_unavailable: install @vessel-agent/workflow (plugins/workflow/engine)',
     );
     this.name = 'WorkflowPluginUnavailableError';
   }

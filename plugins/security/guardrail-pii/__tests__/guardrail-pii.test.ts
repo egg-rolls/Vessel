@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { GuardrailStage, MemoryPluginHost } from '@vessel/core';
+import { GuardrailStage, MemoryPluginHost } from '@vessel-agent/core';
 import piiPlugin, {
   createPiiGuardrailPlugin,
   PIIGuardrail,

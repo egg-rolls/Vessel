@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { MemoryEventStream, MemoryPluginHost, type RunnableAgent } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost, type RunnableAgent } from '@vessel-agent/core';
 import { createRunEngine } from '../src/run-engine';
 
 interface GatedAgent {

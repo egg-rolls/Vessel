@@ -1,6 +1,6 @@
 /**
  * 视图 -> 纯文本——非 TTY / simple mode / 测试共用
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 输出契约：即使命令忘记写 `output`，non-TTY 也不会静默。
  * 不依赖终端宽度；可选 `width` 用于对齐（CJK 安全）。

@@ -5,10 +5,10 @@
  * gateway 在出站（redactor 之后、入 buffer 之前）统一裁剪到 8 KiB，
  * 避免大工具结果撑爆事件缓冲/浏览器。
  *
- * @module @vessel/serve/tool-events
+ * @module @vessel-agent/serve/tool-events
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 
 /** 单个字段的序列化上限（UTF-8 字节） */
 export const TOOL_EVENT_PAYLOAD_LIMIT = 8 * 1024;

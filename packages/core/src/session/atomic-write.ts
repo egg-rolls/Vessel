@@ -8,7 +8,7 @@
  * - 0.8.1：`durable`（默认 true）时 temp 文件先 fsync、rename 后尽力 fsync 目录；
  *   文件 fsync 失败抛 `AtomicWriteError`，目录 fsync 失败忽略。
  *
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import { randomUUID } from 'node:crypto';

@@ -1,6 +1,6 @@
 /**
  * 命令视图数据模型——纯数据，命令层与 Ink 层共用
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 设计约束：
  * - 本文件与 commands/** 不 import Ink/React；视图可 JSON 化、可直接单测。

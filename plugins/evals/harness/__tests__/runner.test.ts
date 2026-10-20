@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import type { PluginHost } from '@vessel/core';
+import type { PluginHost } from '@vessel-agent/core';
 import { EvalsError } from '../src/errors.js';
 import { runEvalSuite } from '../src/runner.js';
 import { fakeRuntime, makeTempWorkspace, writeSuite } from './fixtures/helpers.js';

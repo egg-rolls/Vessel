@@ -10,7 +10,7 @@ import {
   createStderrLogger,
   type LLMProvider,
   type LLMResponse,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 
 /** 默认重试次数（不含首次请求） */
 export const DEFAULT_MAX_RETRIES = 3;

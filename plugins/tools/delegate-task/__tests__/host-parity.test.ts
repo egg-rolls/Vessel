@@ -23,7 +23,7 @@ import {
   type Plugin,
   type ToolContext,
   type Usage,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createDelegateTaskPlugin, type DelegateTaskOptions } from '../src/index';
 
 /** 按顺序返回预设响应并记录请求消息的 provider */

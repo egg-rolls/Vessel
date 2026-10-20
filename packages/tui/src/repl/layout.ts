@@ -1,6 +1,6 @@
 /**
  * 终端高度自适应布局——纯函数
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 根据终端行数返回 live 区、流式输出、自动补全与 picker 的上限。
  * minimal / hidden 只给出空闲值；run 进行中的 live/stream 覆盖由调用方负责。

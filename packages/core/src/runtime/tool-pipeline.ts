@@ -9,7 +9,7 @@
  *
  * 管道不发布 `tool.call.*` 事件（调用方负责，避免重复）。
  *
- * @module @vessel/core/runtime
+ * @module @vessel-agent/core/runtime
  */
 
 import type { EventStream } from '../types/event.js';

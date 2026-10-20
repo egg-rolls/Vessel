@@ -6,7 +6,7 @@
  * - `app_id` 保留前 4 位 + `***`
  * - deep clone，不修改原事件；深度上限 8；WeakSet 防环
  *
- * @module @vessel/core/observability
+ * @module @vessel-agent/core/observability
  */
 
 import type { RunEvent } from '../types/event.js';

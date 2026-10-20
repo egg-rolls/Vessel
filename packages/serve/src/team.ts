@@ -4,7 +4,7 @@
  * core 内部一律 camelCase；gateway JSON 一律 snake_case（DECISION-003 A7）。
  * 这里只做 wire 映射/校验，不实现传输（见 transport/loopback.ts）。
  *
- * @module @vessel/serve/team
+ * @module @vessel-agent/serve/team
  */
 
 import type {
@@ -14,7 +14,7 @@ import type {
   PeerInfo,
   RunEvent,
   Transport,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from './protocol.js';
 
 /** 协议边界允许的 kind（U2：core 仍是开放 string） */

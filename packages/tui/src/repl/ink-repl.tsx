@@ -1,6 +1,6 @@
 /**
  * Ink REPL 主组件
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 用 Ink 框架替换 readline，实现 React 组件式终端 UI。
  * 保持 startRepl(ctx) 函数签名不变，壳不感知替换。

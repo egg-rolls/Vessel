@@ -1,12 +1,12 @@
 /**
  * 会话选择器的纯逻辑：排序、过滤、行构造、列集合、选中 key 维护
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 组件（SessionTable / InteractiveViewHost）只消费这里的结果；RPC 留在命令层。
  * 选中项始终按 session_id 记录，过滤/删除/刷新后不会按索引漂移。
  */
 
-import type { SessionInfo } from '@vessel/core';
+import type { SessionInfo } from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { TableView, ViewAction, ViewColumn, ViewRow } from './types.js';

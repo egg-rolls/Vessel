@@ -1,6 +1,6 @@
 /**
  * 状态追踪（ADR-022 §2）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 订阅事件流，把核心事件折叠成 Spinner 三态（thinking/tool/idle）。
  * - run.started → thinking 开始
@@ -12,7 +12,7 @@
  * reduceSpinnerState 为纯函数（可单测），useSpinnerState 在组件里订阅事件流。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 import { useEffect, useState } from 'react';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 

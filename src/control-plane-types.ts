@@ -2,7 +2,7 @@
  * 0.4 控制面结构类型（asm 侧）。
  *
  * 这些类型与 ext / tui / web 冻结的公开形状结构性兼容；asm 不静态 import
- * `@vessel/workflow` / `@vessel/evals` / `@vessel/feishu` 的实现，避免并行分支
+ * `@vessel-agent/workflow` / `@vessel-agent/evals` / `@vessel-agent/feishu` 的实现，避免并行分支
  * 在包尚未合入时 typecheck 失败。
  */
 
@@ -157,11 +157,11 @@ export interface EvalReport {
   cases: EvalCaseResult[];
 }
 
-/** 与 @vessel/evals `EvalRunOptions` 结构一致（去掉 suitePath） */
+/** 与 @vessel-agent/evals `EvalRunOptions` 结构一致（去掉 suitePath） */
 export interface EvalRunOptionsLike {
   /** suite 名解析目录 */
   suiteDir?: string;
-  /** 报告目录；写盘由 @vessel/evals report.ts 负责 */
+  /** 报告目录；写盘由 @vessel-agent/evals report.ts 负责 */
   outDir?: string;
   /** --out 覆盖 */
   outPath?: string;
@@ -214,9 +214,9 @@ export interface FeishuSchedulerOptions {
   perAgentSerial: boolean;
 }
 
-/** 与 @vessel/feishu `FeishuPluginOptions` 结构一致 */
+/** 与 @vessel-agent/feishu `FeishuPluginOptions` 结构一致 */
 export interface FeishuChannelOptionsLike {
-  /** 与 @vessel/feishu `FeishuConfig` 一致（env 已由 config loader 合并） */
+  /** 与 @vessel-agent/feishu `FeishuConfig` 一致（env 已由 config loader 合并） */
   config: {
     enabled?: boolean;
     appId?: string;

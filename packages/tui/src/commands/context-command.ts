@@ -1,6 +1,6 @@
 /**
  * /context 与 /compact
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * /context 只做估算展示；/compact 调 core 的压缩入口：
  * - 0.6.1 core：`compactAsync()`（配置了 summarizer 时生成真实摘要）
@@ -8,7 +8,7 @@
  * 压缩后把 context.messages 写回当前会话快照（远端内存后端 load 为空则跳过）。
  */
 
-import type { ContextManager, Message } from '@vessel/core';
+import type { ContextManager, Message } from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';

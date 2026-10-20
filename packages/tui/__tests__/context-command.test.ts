@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { ContextManager, Message } from '@vessel/core';
+import type { ContextManager, Message } from '@vessel-agent/core';
 import {
   compactSessionContext,
   estimateContextUsage,

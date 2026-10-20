@@ -5,7 +5,7 @@
  * 成员内的 sessionId 保持原样，读写时自动加/去前缀。
  * 这是 Host 内部实现，不新增公开接口。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';

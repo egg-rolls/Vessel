@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { type Guardrail, GuardrailStage, MemoryPluginHost } from '@vessel/core';
+import { type Guardrail, GuardrailStage, MemoryPluginHost } from '@vessel-agent/core';
 import redactPlugin, { createRedactSecretsPlugin, type PluginInstallOptions } from '../src/index';
 
 /** 取 Output 阶段的 guardrail */

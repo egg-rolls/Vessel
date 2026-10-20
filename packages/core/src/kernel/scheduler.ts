@@ -7,7 +7,7 @@
  * - `AgentHandle.run` 经本调度器；通过 `ScheduledTask.executor` 或内部符号
  *   直接执行，避免 submit → agent.run → submit 递归。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import { randomUUID } from 'node:crypto';

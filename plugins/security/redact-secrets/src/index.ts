@@ -1,6 +1,6 @@
 /**
- * @vessel/redact-secrets - 密钥/敏感信息脱敏插件
- * @module @vessel/redact-secrets
+ * @vessel-agent/redact-secrets - 密钥/敏感信息脱敏插件
+ * @module @vessel-agent/redact-secrets
  *
  * 自动检测并脱敏 API Key、Token、密码等敏感信息。
  * - ToolResult 阶段（脱敏工具返回结果）
@@ -14,8 +14,8 @@ import type {
   GuardrailResult,
   Plugin,
   PluginHost,
-} from '@vessel/core';
-import { GuardrailStage } from '@vessel/core';
+} from '@vessel-agent/core';
+import { GuardrailStage } from '@vessel-agent/core';
 import { BUILTIN_RULES, type RedactRule, type RedactSecretsConfig, redactText } from './rules.js';
 
 export { createTraceRedactor } from './redactor.js';

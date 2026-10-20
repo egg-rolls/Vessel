@@ -1,6 +1,6 @@
 /**
  * /runs —— durable run 列表与恢复
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据只来自 ReplContext.runs（asm 注入的 DurableRunsControl）。
  * 列表查询 running + interrupted 两次后合并（DECISION-008 Addendum B §9.5）。

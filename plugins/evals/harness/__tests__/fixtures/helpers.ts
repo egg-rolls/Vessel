@@ -12,7 +12,7 @@ import {
   MemoryEventStream,
   MemoryPluginHost,
   type RunnableAgent,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 
 export interface TempWorkspace {
   root: string;

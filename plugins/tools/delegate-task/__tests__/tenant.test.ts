@@ -12,7 +12,7 @@ import {
   type RunEvent,
   type RuntimeHost,
   type Usage,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createDelegateTaskPlugin } from '../src/index';
 
 const usage: Usage = { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 };

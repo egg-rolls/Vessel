@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import type { DurableCheckpointLike, DurableStoreLike } from '../src/durable';
 import type { Gateway } from '../src/gateway';
 import type { GatewayAuthLike } from '../src/tenant';

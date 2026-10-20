@@ -1,6 +1,6 @@
 /**
  * zh-CN catalog（默认语言）。值必须与 0.8.4 的可见文案逐字一致。
- * @module @vessel/tui/i18n
+ * @module @vessel-agent/tui/i18n
  */
 
 export const zhCN = {

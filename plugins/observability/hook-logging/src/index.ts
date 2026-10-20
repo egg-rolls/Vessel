@@ -1,13 +1,13 @@
 /**
- * @vessel/hook-logging - 日志 Hook 插件
- * @module @vessel/hook-logging
+ * @vessel-agent/hook-logging - 日志 Hook 插件
+ * @module @vessel-agent/hook-logging
  *
  * 记录 Agent 运行过程中的所有操作日志。默认写 stderr（stdout 留给命令结果），
  * 可注入 sink 替换输出目标；不记录 payload / 完整 ctx。
  */
 
-import type { Hook, HookContext, Plugin, PluginHost } from '@vessel/core';
-import { HookType } from '@vessel/core';
+import type { Hook, HookContext, Plugin, PluginHost } from '@vessel-agent/core';
+import { HookType } from '@vessel-agent/core';
 
 /** 日志级别 */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';

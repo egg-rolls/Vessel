@@ -1,6 +1,6 @@
 /**
  * Vessel 配置校验器
- * @module @vessel/config
+ * @module @vessel-agent/config
  */
 
 import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';

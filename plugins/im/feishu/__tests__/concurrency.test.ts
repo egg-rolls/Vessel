@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { MemoryEventStream, MemoryPluginHost, MemorySessionBackend } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost, MemorySessionBackend } from '@vessel-agent/core';
 import { resolveFeishuConfig } from '../src/config.js';
 import { BUSY_REPLY_TEXT, createFeishuPlugin } from '../src/index.js';
 import { ChatMemberRunner, isCapacityError, MemberLimitError } from '../src/runner.js';

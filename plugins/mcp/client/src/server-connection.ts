@@ -5,7 +5,7 @@
  * 工具注册由 plugin.ts 统一处理（需要检查 PluginHost 冲突）。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 import { formatError, isRecord, JsonRpcError, McpTransportError } from './json-rpc.js';
 import { warnMcp } from './logging.js';
 import { createTransport } from './transport.js';

@@ -1,6 +1,6 @@
 /**
  * /permissions —— 持久化免确认工具列表
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 写回接口由 asm 注入（PermissionsControl -> 用户 YAML permission.auto_approve）。
  * 未注入时只读展示 config；明确提示重启后生效。

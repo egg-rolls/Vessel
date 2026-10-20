@@ -1,11 +1,11 @@
 /**
  * config.* / health.get / capabilities.list 与工具、插件目录方法。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
-import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel/config';
-import type { PluginHost } from '@vessel/core';
+import { redactConfig, redactSourcePaths, type VesselConfig } from '@vessel-agent/config';
+import type { PluginHost } from '@vessel-agent/core';
 import type { NodeInfo, ProtocolInfo, ToolInfo } from '../../protocol.js';
 import {
   buildCapabilityManifest,
@@ -237,7 +237,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
         return {
           schema_version: snapshot.schema_version,
           // DECISION-020 §R1.1：防御性二次脱敏（asm snapshot 已先脱敏）；
-          // 复用 @vessel/config#redactConfig，不在 serve 维护副本。
+          // 复用 @vessel-agent/config#redactConfig，不在 serve 维护副本。
           config: redactConfig(snapshot.config as VesselConfig),
           // A-5 §12.2：TUI 需要展示 user/project 路径
           paths: snapshot.paths ?? { user: '', project: '' },

@@ -1,13 +1,13 @@
 /**
  * /sessions —— 会话列表 / 删除 / 重命名（0.5 file 后端）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据与写操作都走 RPC：`sessions.list` / `sessions.get` / `sessions.delete` /
  * `sessions.rename`（E4 消费端）；无 RpcClient 的第三方嵌入退回 ctx.session。
  * delete 底层是 core `deleteSessionData`，active run 时返回 conflict（A-4 §11.3）。
  */
 
-import type { SessionInfo } from '@vessel/core';
+import type { SessionInfo } from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';

@@ -1,6 +1,6 @@
 /**
  * `?` quick help（R0 §4.5）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 输入框内容恰为 `?` 时打开；独占焦点，Backspace / Esc 关闭。
  * `/help` 完整面板不受影响。

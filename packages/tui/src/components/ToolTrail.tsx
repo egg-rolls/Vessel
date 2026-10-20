@@ -1,6 +1,6 @@
 /**
  * Tool trail（R0 §4.4）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 一轮内连续工具调用聚合为一个 trail；文本段与工具段保持原顺序。
  * hidden / collapsed（默认）/ expanded 三态；归档路径不经过这里。

@@ -1,6 +1,6 @@
 /**
  * 交互式命令视图宿主——唯一持有视图 `useInput` 的组件
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 输入：纯数据 CommandView + 受控的交互状态（selectedKey/filter/mode/draft）。
  * 输出：onSelect / onFilter / onMode / onAction / onClose；不发 RPC。

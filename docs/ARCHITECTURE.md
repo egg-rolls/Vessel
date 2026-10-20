@@ -522,13 +522,13 @@ interface RunStore {
 }
 ```
 
-实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir, tenantId? })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
+实现：`MemoryRunStore`（进程内）与 `FileRunStore({ dir, tenantId? })`（每 run 一个 JSON 文件，temp + rename，Windows best-effort）。从 `@vessel-agent/core/session` 与根入口导出。**`RunStore` 是 module port，不是第 10 个扩展接口**；`SessionBackend`（会话对话持久化）与它正交（ADR-040）。
 
 0.8 起（A5）：`FileRunStore` 接受可选的 `tenantId`。tenant 模式下 `delete(runId)` 先 `load()` 校验归属——缺失或属于其它 tenant 时直接 no-op，不 unlink 文件；与 `FileSessionBackend.delete` 的 foreign 会话语义对称。装配层在 `--resume-run`、单 agent 与 per-tenant runtime 三条路径都把 `tenantId` / `tenantRunsDir` 透传到 store。
 
 0.8.1 起（ADR-056）：`list` 增加可选 `offset`（过滤、排序后切片，用于 `deleteSessionData` 的全量分页冲突检查）。tenant 模式下 `FileRunStore.load()` 把非 ENOENT 读取错误、JSON 解析失败与非法 checkpoint 形状视为损坏并抛 `SessionCorruptError`（`code: 'session_corrupt'`）；`delete()` 让该错误向上传播，绝不删除归属未知的文件。非 tenant 模式保持 0.3 的宽松语义（损坏 → `null`）。
 
-0.4 增加 `pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunStore` 接口**，也不自动调度（ADR-045）。
+0.4 增加 `pruneRuns(store, opts?)` helper（`PruneRunsOptions` / `PruneRunsResult`，从根入口与 `@vessel-agent/core/session` 导出），按 `status` / `older_than_ms` / `keep_latest` 清理 run；**不修改 `RunStore` 接口**，也不自动调度（ADR-045）。
 
 ## 6. `AgentRuntime` 公开面
 
@@ -583,7 +583,7 @@ Kernel 侧：`RunnableAgent.resume?(runId, opts?)` 返回 `RunHandle`；`Runtime
 
 插件能注册什么：**工具**（`registerTool`）、**Provider**（`registerProvider`）、**Guardrail**（`registerGuardrail`）、**Hook**（`registerHook`）。
 
-**MCP（0.3）**：`@vessel/mcp-client` 是**插件**，不是 core 模块。配置 `mcp_servers` 后由 asm 装配层构造；工具经 `PluginHost.registerTool` 进入语言空间。stdio 与 HTTP（Streamable HTTP）两种传输；工具名默认 `mcp__<server>__<tool>`；权限默认 `ask`；单 server 失败不影响其他 server（ADR-039）。
+**MCP（0.3）**：`@vessel-agent/mcp-client` 是**插件**，不是 core 模块。配置 `mcp_servers` 后由 asm 装配层构造；工具经 `PluginHost.registerTool` 进入语言空间。stdio 与 HTTP（Streamable HTTP）两种传输；工具名默认 `mcp__<server>__<tool>`；权限默认 `ask`；单 server 失败不影响其他 server（ADR-039）。
 
 ## 8. 插件发现
 
@@ -595,9 +595,9 @@ plugins/
 ├── tools/delegate-task/     → delegate_task（工厂式）
 ├── tools/team/              → team_* 5 个（工厂式；默认不加载，team.enabled 才构造）
 ├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
-├── workflow/engine/         → @vessel/workflow（工厂式；workflow.enabled 才构造）
-├── evals/harness/           → @vessel/evals（工厂式；asm 直接调用库，不注册工具）
-├── im/feishu/               → @vessel/feishu（工厂式；--feishu 才启动）
+├── workflow/engine/         → @vessel-agent/workflow（工厂式；workflow.enabled 才构造）
+├── evals/harness/           → @vessel-agent/evals（工厂式；asm 直接调用库，不注册工具）
+├── im/feishu/               → @vessel-agent/feishu（工厂式；--feishu 才启动）
 ├── security/guardrail-pii/  → 输入输出 PII 脱敏
 ├── security/redact-secrets/ → 工具结果与输出里的密钥脱敏
 ├── security/tool-policy/    → ToolCall 阶段 allowlist / denylist
@@ -873,7 +873,7 @@ vessel --feishu
 - `workflow` / `eval` 是位置 0 的子命令；未知子命令 → parse error（退出码 2）。
 - `workflow list` / `show` / `cancel` 允许 controls-only（无 host/runtime）；
   `start` / `resume` 缺后端 → `workflow_disabled`，exit 2。
-- `eval` 的报告写盘由 `@vessel/evals/report.ts` 负责，asm 只传 `outDir` / `--out`。
+- `eval` 的报告写盘由 `@vessel-agent/evals/report.ts` 负责，asm 只传 `outDir` / `--out`。
 - `--feishu` 是附加开关：TTY + 无 `--serve` → REPL + 渠道；非 TTY + 无 `--serve` →
   仅渠道前台；`--serve` → gateway + 渠道。与 `--run` / `--pipe` / `--resume-run` /
   `--tools` / `--version` / `--help` 互斥。
@@ -1121,15 +1121,15 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 | 模块 | Port | 计划入口 |
 |---|---|---|
-| provider | `LLMProvider` | `@vessel/core/provider` |
-| context | `ContextManager` | `@vessel/core/context` |
-| session | `SessionBackend` | `@vessel/core/session` |
-| policy | `PermissionPolicy` / `GuardrailRunner` / `HookRunner` | `@vessel/core/policy` |
-| transport | `Transport`（新增） | `@vessel/core/transport` |
-| observability | `EventStore`（新增）+ `EventStream` | `@vessel/core/observability` |
-| kernel | Host / Scheduler / Handles | `@vessel/core/kernel` |
+| provider | `LLMProvider` | `@vessel-agent/core/provider` |
+| context | `ContextManager` | `@vessel-agent/core/context` |
+| session | `SessionBackend` | `@vessel-agent/core/session` |
+| policy | `PermissionPolicy` / `GuardrailRunner` / `HookRunner` | `@vessel-agent/core/policy` |
+| transport | `Transport`（新增） | `@vessel-agent/core/transport` |
+| observability | `EventStore`（新增）+ `EventStream` | `@vessel-agent/core/observability` |
+| kernel | Host / Scheduler / Handles | `@vessel-agent/core/kernel` |
 
-0.2 **只在 `@vessel/core` 内做 ports & adapters + subpath exports，不拆包**；根入口继续 re-export 全部现有符号。依赖规则：`types/**` 不 import 实现；模块之间只经 port 交互；`kernel` 只依赖 port 类型（默认实现允许 F5 白名单：`AgentRuntime` + `MemoryContextManager` / `MemoryEventStream` / `MemoryPluginHost`，且必须可经 options 覆盖）；模块不得反向依赖 `src/**` / `packages/serve` / `plugins/**`。
+0.2 **只在 `@vessel-agent/core` 内做 ports & adapters + subpath exports，不拆包**；根入口继续 re-export 全部现有符号。依赖规则：`types/**` 不 import 实现；模块之间只经 port 交互；`kernel` 只依赖 port 类型（默认实现允许 F5 白名单：`AgentRuntime` + `MemoryContextManager` / `MemoryEventStream` / `MemoryPluginHost`，且必须可经 options 覆盖）；模块不得反向依赖 `src/**` / `packages/serve` / `plugins/**`。
 
 ### 14.4 Transport（已实现）
 
@@ -1141,8 +1141,8 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 14.5 兼容与迁移（已实现）
 
 - **冻结**：9 接口、`AgentRuntime` 公开面、`RunOptions` / `RunEvent`、事件名、插件机制、根导出面；0.2 只做加法与内部替换，不删除公开 API。
-- `delegate_task` 改为 Host 上的**一次性临时成员**（工具名与语义不变）；`@vessel/team` 改为**持久成员**；二者共用 `RuntimeHost`。
-- `@vessel/team` 的 `InProcessRuntimeHost` 在 0.2 标 `@deprecated` 并适配到 core Host；**0.3 已移除**该兼容路径与 `LegacyHostAdapter`。
+- `delegate_task` 改为 Host 上的**一次性临时成员**（工具名与语义不变）；`@vessel-agent/team` 改为**持久成员**；二者共用 `RuntimeHost`。
+- `@vessel-agent/team` 的 `InProcessRuntimeHost` 在 0.2 标 `@deprecated` 并适配到 core Host；**0.3 已移除**该兼容路径与 `LegacyHostAdapter`。
 - 事件：core TS 内部用 camelCase（`agentId`），gateway JSON 用 snake_case（`agent_id`），映射只在 gateway 边界做一次；事件名仍是开放字符串。
 - 依赖方向由 CI 自动检查（`scripts/check-deps.ts`），不只写在文档里。
 
@@ -1151,7 +1151,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | 能力 | 落地位置 | 边界 |
 |---|---|---|
 | Durable run | `packages/core/src/types/run-store.ts` + `session/run-store.ts`；`AgentRuntime.resume` / `RuntimeHost.resume` | 本机 file/memory；resume 并发守卫 per-Host / per-store-instance（ADR-040） |
-| MCP client | `plugins/mcp/client/`（`@vessel/mcp-client`） | 插件，不是 core 模块；stdio + HTTP；默认 ask（ADR-039） |
+| MCP client | `plugins/mcp/client/`（`@vessel-agent/mcp-client`） | 插件，不是 core 模块；stdio + HTTP；默认 ask（ADR-039） |
 | 远程 / TLS | `packages/serve/src/gateway.ts` + `src/serve-config.ts` | 显式 opt-in；非回环必须 token；HTTP/1.1（ADR-041） |
 | 控制面 | `packages/serve/src/{durable,mcp}.ts`；TUI `/mcp` `/runs`；CLI `--resume-run` | 0.3 新增端点见 §13.2；命令见 §12 |
 | 跨机器远程 / 跨节点 | `packages/serve/src/gateway.ts`；`src/rpc/http-client.ts`；`src/remote-transport.ts` / `src/node-registry.ts` | 显式 opt-in；非回环 TLS + token；静态节点表；ADR-051 / 052 / 053；见 §13.8 |
@@ -1162,7 +1162,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 > core 只新增可观测性/稳定性原语；决策见 ADR-042 / 043 / 044 / 045。
 > 默认全部关闭；四个新配置块缺省时行为与 0.3 一致。
 
-### 15.1 Workflow（`@vessel/workflow`）
+### 15.1 Workflow（`@vessel-agent/workflow`）
 
 - **位置与形态**：`plugins/workflow/engine/`，工厂式插件（`FACTORY_PLUGINS` 短名
   `workflow`），由 asm 构造；**不是 core 模块**。
@@ -1201,7 +1201,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **退出码**：0 成功；1 workflow failed；2 参数/配置错误 / `workflow_disabled`；
   130 用户 cancel / SIGINT；143 SIGTERM。
 
-### 15.2 Evals（`@vessel/evals`）
+### 15.2 Evals（`@vessel-agent/evals`）
 
 - **位置与形态**：`plugins/evals/harness/`；库 + 运行器，加入 `FACTORY_PLUGINS`
   仅为阻止被当作普通插件扫描；**不注册工具**；asm CLI 直接调用库函数。
@@ -1221,7 +1221,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
   `evals.enabled: false` → `eval_invalid`（消息注明 disabled），exit 2。
 - **入口**：CLI `vessel eval`；gateway 只读 `GET /v1/evals/latest`；不做面板。
 
-### 15.3 飞书（`@vessel/feishu`）
+### 15.3 飞书（`@vessel-agent/feishu`）
 
 - **位置与形态**：`plugins/im/feishu/`，工厂式插件；官方 SDK 只在该插件包，
   core 依赖保持为空；所有网络交互藏在 `FeishuTransport` 后，测试/CI 用 mock。
@@ -1257,7 +1257,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 16.1 `MetricsCollector`
 
 - 位置：`packages/core/src/observability/metrics.ts`；从根入口与
-  `@vessel/core/observability` 导出。
+  `@vessel-agent/core/observability` 导出。
 - **`./observability` subpath 不是 0.4 新增**：0.3 已存在（当时指向
   `src/events/index.ts`）；0.4 把它**改指**到新的 `src/observability/index.ts` barrel，
   继续 re-export 原 events 符号。
@@ -1570,7 +1570,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 22.1 统一工具执行管道
 
-- `packages/core/src/runtime/tool-pipeline.ts` 导出 `createToolPipeline` / `createToolPipelineFor` / `ToolPipeline` / `ToolPipelineOptions` / `ToolPipelineStages` / `ToolPipelineResult`（根入口与 `@vessel/core/runtime`）。
+- `packages/core/src/runtime/tool-pipeline.ts` 导出 `createToolPipeline` / `createToolPipelineFor` / `ToolPipeline` / `ToolPipelineOptions` / `ToolPipelineStages` / `ToolPipelineResult`（根入口与 `@vessel-agent/core/runtime`）。
 - 阶段顺序：`getTool` → ToolCall guardrail → BeforeTool hook → **permission（最终工具与参数）** → handler（timeout + `ctx.signal`）→ ToolResult guardrail → AfterTool hook（仅成功）。guardrail 改写工具名/参数后重新查找工具并解析参数；BeforeTool 的 `updatedInput` 同样在权限判定前生效。
 - `ToolPipelineStages` 可关闭调用方已在外层处理的阶段（默认全开）。`AgentRuntime`（包括 delegate 子 runtime）关闭 ToolCall guardrail / BeforeTool / AfterTool，仅复用 permission、handler 超时与 ToolResult guardrail；workflow 使用默认全开。
 - 管道不发布 `tool.call.*`；由 `AgentRuntime` / workflow 引擎各自发布，避免重复。

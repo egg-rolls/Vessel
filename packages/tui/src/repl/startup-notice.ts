@@ -1,6 +1,6 @@
 /**
  * 启动横幅：只有存在可操作能力时才输出一行
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 触发条件（DECISION-008 §4.5；DECISION-009 §5.8 / Addendum A §10.1）：
  * - 配置了至少一个 MCP server（含 disabled）；

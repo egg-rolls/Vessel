@@ -1,6 +1,6 @@
 /**
- * @vessel/tool-policy - 工具允许/禁止策略插件
- * @module @vessel/tool-policy
+ * @vessel-agent/tool-policy - 工具允许/禁止策略插件
+ * @module @vessel-agent/tool-policy
  *
  * 通过 Guardrail (ToolCall 阶段) 拦截或允许工具调用。
  * 支持 allowlist / denylist 两种模式。
@@ -13,8 +13,8 @@ import type {
   GuardrailResult,
   Plugin,
   PluginHost,
-} from '@vessel/core';
-import { GuardrailStage } from '@vessel/core';
+} from '@vessel-agent/core';
+import { GuardrailStage } from '@vessel-agent/core';
 
 // ── 类型 ──────────────────────────────────────────
 

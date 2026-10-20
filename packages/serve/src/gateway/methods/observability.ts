@@ -4,10 +4,10 @@
  * 拆成多个工厂是为了在 `gateway.ts` 中保持原方法表顺序
  * （events.subscribe 与工具目录方法夹在中间）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 import {
   type MetricsProvider,
   type MetricsSnapshot,

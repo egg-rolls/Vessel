@@ -1,6 +1,6 @@
 /**
- * @vessel/core 类型定义
- * @module @vessel/core/types
+ * @vessel-agent/core 类型定义
+ * @module @vessel-agent/core/types
  */
 
 export * from './context.js';

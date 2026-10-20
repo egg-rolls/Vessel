@@ -1,6 +1,6 @@
 /**
  * 视图布局——纯函数
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 宽度单位是终端列。列选择规则（与设计文档 §2.4 / §4.2 一致）：
  * priority 1 总是显示；priority 2 需要 >=100 列；priority 3 需要 >=120 列。

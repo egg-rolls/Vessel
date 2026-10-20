@@ -1,7 +1,7 @@
 /**
  * Gateway 静态资源响应 — 不持有 startGateway 闭包。
  *
- * @module @vessel/serve/gateway/static
+ * @module @vessel-agent/serve/gateway/static
  */
 
 import { extname, resolve, sep } from 'node:path';

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream, MemoryPluginHost } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { RunStatus } from '../src/protocol';
 import { createGateway, createRuntime, TestWs, ToolCallingProvider, waitUntil } from './helpers';

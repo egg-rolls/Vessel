@@ -1,6 +1,6 @@
 /**
- * @vessel/core/kernel 模块（0.2 R1）
- * @module @vessel/core/kernel
+ * @vessel-agent/core/kernel 模块（0.2 R1）
+ * @module @vessel-agent/core/kernel
  */
 
 export { createCancellationScope } from './cancellation.js';

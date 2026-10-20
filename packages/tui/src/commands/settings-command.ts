@@ -1,6 +1,6 @@
 /**
  * /settings —— 界面设置（当前：语言）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 语言写入用户配置 `ui.language`（DECISION-021 §3.2）：asm 注入 `ctx.settings` 时
  * 先 await setLanguage，成功后才 setLocale；未注入时只读展示解析结果。

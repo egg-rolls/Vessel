@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Message } from '@vessel/core';
+import type { Message } from '@vessel-agent/core';
 import {
   formatSessionJson,
   formatSessionMarkdown,

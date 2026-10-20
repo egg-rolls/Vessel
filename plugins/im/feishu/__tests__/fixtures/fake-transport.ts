@@ -2,7 +2,7 @@
  * 离线 transport / provider 夹具；CI 零网络。
  */
 
-import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel/core';
+import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel-agent/core';
 import type {
   FeishuIncomingMessage,
   FeishuTransport,

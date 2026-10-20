@@ -9,7 +9,7 @@
  *   bun run scripts/version.ts --check 0.1.0    # 校验一致性 + CHANGELOG 有该版本
  *   bun run scripts/version.ts --check          # 只校验仓库内一致性
  *
- * 写模式同时把各 manifest 的 `@vessel/*` 依赖（dependencies / devDependencies /
+ * 写模式同时把各 manifest 的 `@vessel-agent/*` 依赖（dependencies / devDependencies /
  * peerDependencies）改写为精确目标版本，避免 `workspace:*` / `^x.y.z` 进入发布
  * tarball（`release-dry-run` 的 `internal_dependency_version` 检查）。
  *
@@ -83,7 +83,7 @@ export async function rootVersionMissing(root: string): Promise<boolean> {
 const INTERNAL_DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'] as const;
 
 /**
- * 把 `@vessel/*` 依赖改写为精确目标版本；外部依赖保持原样。
+ * 把 `@vessel-agent/*` 依赖改写为精确目标版本；外部依赖保持原样。
  * 返回是否有内容被改写。
  */
 function syncInternalDependencies(pkg: Record<string, unknown>, version: string): boolean {
@@ -95,7 +95,7 @@ function syncInternalDependencies(pkg: Record<string, unknown>, version: string)
 
     const entries = deps as Record<string, unknown>;
     for (const name of Object.keys(entries)) {
-      if (!name.startsWith('@vessel/')) continue;
+      if (!name.startsWith('@vessel-agent/')) continue;
       if (entries[name] === version) continue;
       entries[name] = version;
       updated = true;

@@ -45,19 +45,19 @@ describe('collectManifests', () => {
     await withTempRoot(async (root) => {
       await writeJson(join(root, 'package.json'), { name: 'vessel', version: '0.1.0' });
       await writeJson(join(root, 'packages/core/package.json'), {
-        name: '@vessel/core',
+        name: '@vessel-agent/core',
         version: '0.1.0',
       });
       await writeJson(join(root, 'packages/config/package.json'), {
-        name: '@vessel/config',
+        name: '@vessel-agent/config',
         version: '0.1.0',
       });
       await writeJson(join(root, 'plugins/tools/basic-tools/package.json'), {
-        name: '@vessel/basic-tools',
+        name: '@vessel-agent/basic-tools',
         version: '0.1.0',
       });
       await writeJson(join(root, 'apps/web/package.json'), {
-        name: '@vessel/web',
+        name: '@vessel-agent/web',
         version: '0.1.0',
       });
 
@@ -76,7 +76,7 @@ describe('collectManifests', () => {
     await withTempRoot(async (root) => {
       await writeJson(join(root, 'package.json'), { name: 'vessel', private: true });
       await writeJson(join(root, 'packages/core/package.json'), {
-        name: '@vessel/core',
+        name: '@vessel-agent/core',
         version: '0.1.0',
       });
 
@@ -92,11 +92,11 @@ describe('applyVersion', () => {
     await withTempRoot(async (root) => {
       await writeJson(join(root, 'package.json'), { name: 'vessel', version: '0.1.0' });
       await writeJson(join(root, 'packages/core/package.json'), {
-        name: '@vessel/core',
+        name: '@vessel-agent/core',
         version: '0.1.0',
       });
       await writeJson(join(root, 'apps/web/package.json'), {
-        name: '@vessel/web',
+        name: '@vessel-agent/web',
         version: '0.1.0',
       });
 
@@ -120,20 +120,20 @@ describe('applyVersion', () => {
         name: 'vessel',
         version: '0.1.0',
         dependencies: {
-          '@vessel/core': '^0.1.0',
-          '@vessel/serve': 'workspace:*',
+          '@vessel-agent/core': '^0.1.0',
+          '@vessel-agent/serve': 'workspace:*',
           yaml: '^2.9.0',
         },
         devDependencies: {
-          '@vessel/config': 'workspace:*',
+          '@vessel-agent/config': 'workspace:*',
           typescript: '^7.0.2',
         },
         peerDependencies: {
-          '@vessel/tui': '>=0.1.0',
+          '@vessel-agent/tui': '>=0.1.0',
         },
       });
       await writeJson(join(root, 'packages/core/package.json'), {
-        name: '@vessel/core',
+        name: '@vessel-agent/core',
         version: '0.1.0',
         dependencies: {},
       });
@@ -148,10 +148,10 @@ describe('applyVersion', () => {
         peerDependencies: Record<string, string>;
       };
       expect(pkg.version).toBe('0.2.0');
-      expect(pkg.dependencies['@vessel/core']).toBe('0.2.0');
-      expect(pkg.dependencies['@vessel/serve']).toBe('0.2.0');
-      expect(pkg.devDependencies['@vessel/config']).toBe('0.2.0');
-      expect(pkg.peerDependencies['@vessel/tui']).toBe('0.2.0');
+      expect(pkg.dependencies['@vessel-agent/core']).toBe('0.2.0');
+      expect(pkg.dependencies['@vessel-agent/serve']).toBe('0.2.0');
+      expect(pkg.devDependencies['@vessel-agent/config']).toBe('0.2.0');
+      expect(pkg.peerDependencies['@vessel-agent/tui']).toBe('0.2.0');
       expect(pkg.dependencies.yaml).toBe('^2.9.0');
       expect(pkg.devDependencies.typescript).toBe('^7.0.2');
     });
@@ -162,10 +162,10 @@ describe('applyVersion', () => {
       await writeJson(join(root, 'package.json'), {
         name: 'vessel',
         version: '0.2.0',
-        dependencies: { '@vessel/core': '^0.1.0' },
+        dependencies: { '@vessel-agent/core': '^0.1.0' },
       });
       await writeJson(join(root, 'packages/core/package.json'), {
-        name: '@vessel/core',
+        name: '@vessel-agent/core',
         version: '0.2.0',
       });
 
@@ -175,7 +175,7 @@ describe('applyVersion', () => {
       const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
         dependencies: Record<string, string>;
       };
-      expect(pkg.dependencies['@vessel/core']).toBe('0.2.0');
+      expect(pkg.dependencies['@vessel-agent/core']).toBe('0.2.0');
 
       // 再跑一次应当幂等：没有需要改的内容。
       expect(await applyVersion(root, '0.2.0')).toEqual([]);
@@ -200,7 +200,7 @@ describe('checkVersions', () => {
     await withTempRoot(async (root) => {
       await writeJson(join(root, 'package.json'), { name: 'vessel', version: '0.1.0' });
       await writeJson(join(root, 'packages/core/package.json'), {
-        name: '@vessel/core',
+        name: '@vessel-agent/core',
         version: '0.1.1',
       });
       await writeFile(join(root, 'CHANGELOG.md'), '# Changelog\n');

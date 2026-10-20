@@ -1,6 +1,6 @@
 /**
  * 长任务完成追踪（0.5 / Q2：事件驱动）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * RPC 的 workflow.start|resume 与 runs.resume 只返回 id，不返回 Promise：
  * - 终态由 `run.completed|failed|cancelled` / `workflow.completed|failed|cancelled|interrupted`

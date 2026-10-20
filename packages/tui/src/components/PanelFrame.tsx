@@ -1,6 +1,6 @@
 /**
  * 面板边框（R0 §4.3）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 标题嵌在上边框、键位提示嵌在下边框；中间用 Ink Box 只画左右边框。
  * 手工顶/底行不消耗横向列，宽度与 Box border + paddingX=1 完全一致。

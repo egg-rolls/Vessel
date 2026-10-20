@@ -1,6 +1,6 @@
 /**
  * 详情视图渲染（纯展示，不用 useInput）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 import { Box, Text } from 'ink';

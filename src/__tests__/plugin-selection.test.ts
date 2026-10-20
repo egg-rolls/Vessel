@@ -152,8 +152,8 @@ describe('resolvePluginSelection（0.7.1 插件信任边界）', () => {
       const repo = path.join(root, 'repo');
       const project = path.join(root, 'project');
       const user = path.join(root, 'user');
-      writePlugin(path.join(repo, 'tools', 'shared'), '@vessel/shared');
-      writePlugin(path.join(repo, 'tools', 'repo-only'), '@vessel/repo-only');
+      writePlugin(path.join(repo, 'tools', 'shared'), '@vessel-agent/shared');
+      writePlugin(path.join(repo, 'tools', 'repo-only'), '@vessel-agent/repo-only');
       writePlugin(path.join(project, 'shared'), 'shared');
       writePlugin(path.join(project, 'project-only'), 'project-only');
       writePlugin(path.join(user, 'shared'), 'shared');

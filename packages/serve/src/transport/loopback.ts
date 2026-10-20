@@ -6,10 +6,16 @@
  * - 发现用 `PeerRegistry` 文件注册表；token 不落盘（U7）。
  * - 失败只影响本次调用：返回结构化 `PeerTransportError`，不抛进 owner run。
  *
- * @module @vessel/serve/transport
+ * @module @vessel-agent/serve/transport
  */
 
-import type { AgentMessage, AgentStatus, PeerInfo, Transport, Unsubscribe } from '@vessel/core';
+import type {
+  AgentMessage,
+  AgentStatus,
+  PeerInfo,
+  Transport,
+  Unsubscribe,
+} from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from '../protocol.js';
 import { fromWireMessage, parseAddress, TeamProtocolError, toWireMessage } from '../team.js';
 import { PeerRegistry } from './registry.js';

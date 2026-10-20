@@ -1,6 +1,6 @@
 /**
- * @vessel/config - 声明式配置
- * @module @vessel/config
+ * @vessel-agent/config - 声明式配置
+ * @module @vessel-agent/config
  *
  * 解析/校验 YAML，产出 core 可消费的配置对象。
  * 零配置起步 + 渐进披露。

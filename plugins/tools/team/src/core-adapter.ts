@@ -18,7 +18,7 @@ import type {
   RuntimeHost as CoreRuntimeHost,
   EventStream,
   Usage,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import type { AgentSpec, AgentStatus, InboxPage, TeamMessage } from './host.js';
 
 /** team 工具依赖的端口（与 0.1 插件 RuntimeHost 同形） */

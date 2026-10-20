@@ -21,7 +21,7 @@ it('list() 从 package.json 读出 name / category / version / entry', () => {
   expect(descriptor?.category).toBe('observability');
 
   const pkg = readPkg('observability', 'hook-logging');
-  // package.json 名是 @vessel/hook-logging，descriptor 去掉 scope
+  // package.json 名是 @vessel-agent/hook-logging，descriptor 去掉 scope
   expect(descriptor?.name).toBe(pkg.name.replace(/^@[^/]+\//, ''));
   expect(descriptor?.version).toBe(pkg.version);
   // Windows 下分隔符是 \，比较前统一
@@ -102,7 +102,7 @@ describe('插件目录扩展（0.6.1）', () => {
       const repo = path.join(root, 'repo');
       const user = path.join(root, 'user');
       const project = path.join(root, 'project');
-      writePlugin(path.join(repo, 'tools', 'basic-tools'), '@vessel/basic-tools');
+      writePlugin(path.join(repo, 'tools', 'basic-tools'), '@vessel-agent/basic-tools');
       writePlugin(path.join(user, 'my-plugin'), '@scope/my-plugin');
       writePlugin(path.join(project, 'security', 'project-policy'), 'project-policy');
 
@@ -129,8 +129,8 @@ describe('插件目录扩展（0.6.1）', () => {
     try {
       const repo = path.join(root, 'repo');
       const user = path.join(root, 'user');
-      writePlugin(path.join(repo, 'tools', 'basic-tools'), '@vessel/basic-tools');
-      writePlugin(path.join(user, 'basic-tools'), '@vessel/basic-tools');
+      writePlugin(path.join(repo, 'tools', 'basic-tools'), '@vessel-agent/basic-tools');
+      writePlugin(path.join(user, 'basic-tools'), '@vessel-agent/basic-tools');
 
       const loader = new PluginLoader({
         roots: [
@@ -151,8 +151,8 @@ describe('插件目录扩展（0.6.1）', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugins-'));
     try {
       const modules = path.join(root, 'node_modules', '@vessel');
-      writePlugin(path.join(modules, 'core'), '@vessel/core');
-      writePlugin(path.join(modules, 'some-plugin'), '@vessel/some-plugin');
+      writePlugin(path.join(modules, 'core'), '@vessel-agent/core');
+      writePlugin(path.join(modules, 'some-plugin'), '@vessel-agent/some-plugin');
 
       const loader = new PluginLoader({
         roots: [{ dir: modules, source: 'node_modules', layout: 'flat' }],

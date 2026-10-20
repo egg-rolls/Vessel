@@ -8,7 +8,7 @@ import {
   MemoryPluginHost,
   type Plugin,
   type ToolDefinition,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createToolPolicyPlugin, type PluginInstallOptions, toolPolicyPlugin } from '../src/index';
 
 describe('tool-policy 插件（P2）', () => {

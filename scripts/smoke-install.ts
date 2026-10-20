@@ -7,8 +7,8 @@
  *   0. 根包打包前必须已有 `apps/web/dist/index.html`（dist 被 .gitignore 忽略，
  *      由 CI / 发布前置构建）；根 tarball 的文件清单也必须包含它；
  *   1. 对全部可发布包（18 个）与根 CLI 包执行 `npm pack` 到 OS 临时目录；
- *   2. 在临时工程里用 `overrides` 把每个 `@vessel/*` 指向本地 tarball，
- *      再 `npm install` 根 CLI tarball（不访问尚未发布的 @vessel/* 版本）；
+ *   2. 在临时工程里用 `overrides` 把每个 `@vessel-agent/*` 指向本地 tarball，
+ *      再 `npm install` 根 CLI tarball（不访问尚未发布的 @vessel-agent/* 版本）；
  *   3. 运行 `vessel --version` 与 `vessel --tools`（`VESSEL_MOCK=1`，不需要 Key）
  *      并断言输出。
  *
@@ -331,7 +331,7 @@ async function installRoot(
   await mkdir(appDir, { recursive: true });
 
   // 18 个包作为直接依赖安装，确保每个 tarball 自身可解析；overrides 使用
-  // 完全相同的 `file:` spec，保证根 tarball 对 @vessel/* 的精确版本依赖
+  // 完全相同的 `file:` spec，保证根 tarball 对 @vessel-agent/* 的精确版本依赖
   // 全部指向本地文件（npm 要求直接依赖与 override 的 spec 完全一致）。
   const dependencies: Record<string, string> = {
     [rootTarball.name]: overrides[rootTarball.name] ?? `file:${rootTarball.tarball}`,
@@ -467,10 +467,10 @@ export async function runInstallSmoke(options: SmokeOptions = {}): Promise<Smoke
     }
 
     await installRoot(appDir, packed.rootTarball, packed.packages, buildOverrides(packed.packages));
-    steps.push('installed root tarball with local @vessel/* overrides');
+    steps.push('installed root tarball with local @vessel-agent/* overrides');
 
     await verifyInstalledTree(appDir, packages, version);
-    steps.push(`verified ${packages.length} installed @vessel/* package version(s)`);
+    steps.push(`verified ${packages.length} installed @vessel-agent/* package version(s)`);
 
     const versionResult = runBin(appDir, packed.rootName, ['--version'], dataDir);
     if (versionResult.exitCode !== 0) {
@@ -525,7 +525,7 @@ function printUsage(): void {
   bun run scripts/smoke-install.ts [--keep] [--force] [--json] [--help]
 
 Packs every publishable package plus the root CLI, installs the root tarball
-with local @vessel/* overrides, then runs \`vessel --version\` and
+with local @vessel-agent/* overrides, then runs \`vessel --version\` and
 \`vessel --tools\` (VESSEL_MOCK=1, no API key). The root tarball must contain
 apps/web/dist/index.html; build apps/web before running this script.
 

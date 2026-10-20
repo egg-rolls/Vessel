@@ -5,7 +5,7 @@
  * integer / boolean，以及 required / properties / items / enum / minLength /
  * maxLength / minimum / maximum。不要引入 oneOf / $ref / additionalProperties 等。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 export const stringListSchema = {

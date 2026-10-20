@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream, MemoryPluginHost, type RunEvent } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost, type RunEvent } from '@vessel-agent/core';
 import { createWorkflowEngine } from '../src/engine.js';
 import { createFakeHost, makeConfig, makeTempWorkspace, writeWorkflow } from './fixtures/fakes.js';
 

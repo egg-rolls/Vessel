@@ -5,7 +5,7 @@
  * `startGateway` 的同一方法表、同一运行引擎与同一 tenant/quota 语义，
  * 但跳过 `Bun.serve`、心跳与 team 轮询。
  *
- * @module @vessel/serve/local
+ * @module @vessel-agent/serve/local
  */
 
 import { type GatewayOptions, startGateway } from './gateway.js';

@@ -1,6 +1,6 @@
 /**
- * @vessel/core/context 模块
- * @module @vessel/core/context
+ * @vessel-agent/core/context 模块
+ * @module @vessel-agent/core/context
  */
 
 export type { ContextConfig, ContextManager } from '../types/context.js';

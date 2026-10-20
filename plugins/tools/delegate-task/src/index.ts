@@ -1,6 +1,6 @@
 /**
- * @vessel/delegate-task - 子 agent 分派工具插件
- * @module @vessel/delegate-task
+ * @vessel-agent/delegate-task - 子 agent 分派工具插件
+ * @module @vessel-agent/delegate-task
  *
  * 注册 delegate_task 工具：一次调用 = core Host 上的一个**临时成员**（ephemeral），
  * 只回收最终文本，不污染父上下文；完成后立即 close。
@@ -34,8 +34,11 @@ import type {
   ToolDefinition,
   Usage,
   UsageLimits,
-} from '@vessel/core';
-import { InProcessRuntimeHost as CoreInProcessRuntimeHost, MemoryPluginHost } from '@vessel/core';
+} from '@vessel-agent/core';
+import {
+  InProcessRuntimeHost as CoreInProcessRuntimeHost,
+  MemoryPluginHost,
+} from '@vessel-agent/core';
 
 /** 子 agent 工具白名单：默认排除 delegate_task 自身，阻断递归 */
 const DEFAULT_DISALLOWED = ['delegate_task'];

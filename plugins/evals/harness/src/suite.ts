@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { ToolCall } from '@vessel/core';
+import type { ToolCall } from '@vessel-agent/core';
 import { parse as parseYaml } from 'yaml';
 import { invalid, notFound } from './errors.js';
 import type {

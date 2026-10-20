@@ -4,7 +4,7 @@
  * 父作用域取消时，所有子作用域自动中止；子作用域取消不影响父。
  * 基于原生 AbortController，不引入新的取消机制。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import type { CancellationScope } from './types.js';

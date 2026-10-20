@@ -1,6 +1,6 @@
 /**
  * 启动头——纯函数（R0 §2.2 / D2）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 高度分级（rows 优先，cols 决定形态）：
  * - rows>=20, cols>=72：5 行 wordmark + tagline + session 摘要 = 7 行

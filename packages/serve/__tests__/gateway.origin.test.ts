@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { type Gateway, normalizeAllowedOrigins } from '../src/gateway';
 import { createGateway } from './helpers';
 

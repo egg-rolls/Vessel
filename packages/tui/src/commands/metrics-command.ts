@@ -1,6 +1,6 @@
 /**
  * /metrics —— 打印 MetricsSnapshot
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 0.5 双来源（A-3 §10.1）：
  * - live（默认）：`metrics.get { source: 'live' }`；

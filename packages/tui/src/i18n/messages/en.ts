@@ -1,6 +1,6 @@
 /**
  * en catalog。key 集合必须与 zh-CN 完全一致（测试守卫）。
- * @module @vessel/tui/i18n
+ * @module @vessel-agent/tui/i18n
  */
 
 import type { MessageKey } from './zh-CN.js';

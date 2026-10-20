@@ -1,10 +1,10 @@
 /**
  * sessions.* 方法（list / get / search / delete / rename）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
-import type { SessionBackend } from '@vessel/core';
+import type { SessionBackend } from '@vessel-agent/core';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import {
   MAX_SESSION_SEARCH_LIMIT,

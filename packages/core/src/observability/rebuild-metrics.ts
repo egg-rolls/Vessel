@@ -4,7 +4,7 @@
  * 与实时 `MetricsCollector` 共用 `MetricsAccumulator`；
  * `updated_at = max(event.ts)`（无事件为 0），形状保持 0.4 冻结。
  *
- * @module @vessel/core/observability
+ * @module @vessel-agent/core/observability
  */
 
 import { readdir, readFile } from 'node:fs/promises';

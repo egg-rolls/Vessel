@@ -1,6 +1,6 @@
 /**
  * 工具执行权限确认
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * ADR-029：permission 从「guardrail + readline 弹窗」改为事件流交互。
  * 默认权限策略由 runtime 统一判定（AgentRuntime.permission：'ask'/'allow' + autoApprove）；

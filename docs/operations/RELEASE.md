@@ -26,8 +26,8 @@
       不构建时根 tarball 会缺少 Web 控制台（smoke 会直接失败）。
 - [ ] `CHANGELOG.md` 已更新（Unreleased → `## [<version>] - YYYY-MM-DD`）；0.2 未发布，其条目已并入 `## [0.3.0]`。
 - [ ] 根 `package.json` 与所有可发布 workspace `package.json` 版本一致：根包 + **18 个可发布包**
-      （`@vessel/core`、`@vessel/permission`、`@vessel/config`、`@vessel/serve`、`@vessel/tui`
-      + 13 个插件包，含 `@vessel/team` 与 `@vessel/mcp-client`）。
+      （`@vessel-agent/core`、`@vessel-agent/permission`、`@vessel-agent/config`、`@vessel-agent/serve`、`@vessel-agent/tui`
+      + 13 个插件包，含 `@vessel-agent/team` 与 `@vessel-agent/mcp-client`）。
 - [ ] 根包 `package.json` 的 `name` 为 **`vessel-agent`**（bin 仍是 `vessel`）。
 - [ ] `release/*` 已合并到 `main`，且 `main` CI 绿。
 - [ ] 仓库 Secrets 已配置 `NPM_TOKEN`。
@@ -50,7 +50,7 @@ bun run scripts/release-dry-run.ts
 - 检查项：
   1. 包版本与根版本一致；
   2. tarball manifest 的任何依赖字段不含 `workspace:*` / `file:`；
-  3. `@vessel/*` 内部依赖的精确版本等于根版本；
+  3. `@vessel-agent/*` 内部依赖的精确版本等于根版本；
   4. 必填字段 `name` / `version` / `main` 或 `exports` / `types`；
   5. tarball 不含 `.env`、密钥、数据库、日志、覆盖率/测试产物；
   6. `CHANGELOG.md` 含 `## [<根版本>]`。
@@ -84,7 +84,7 @@ bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳�
   `apps/web/dist/index.html`；缺失时 smoke 失败（exit 1），不会静默发出缺 Web 的包。
 - 对全部 18 个可发布包与根包执行 `npm pack` 到 OS 临时目录。
 - 临时工程写入与 `overrides` 完全一致的 `file:` 依赖，`npm install --no-save`
-  根 tarball + 18 个子包；根包对 `@vessel/*` 的精确版本依赖全部指向本地 tarball，
+  根 tarball + 18 个子包；根包对 `@vessel-agent/*` 的精确版本依赖全部指向本地 tarball，
   因此**不需要这些版本已经发布到 npm**。
 - 运行 `vessel --version`（等于根版本）与 `VESSEL_MOCK=1 vessel --tools`
   （断言 `bash` / `read` / `edit`），不需要 API Key。
@@ -187,7 +187,7 @@ git push origin main v0.3.1
 
 - **不删除、不移动已发布 tag。**
 - 代码回退：在 `main` 上 revert 问题提交，发新的 patch 版本。
-- npm 回滚：`npm dist-tag add @vessel/core@<last-good> latest`，再发 patch 修复。
+- npm 回滚：`npm dist-tag add @vessel-agent/core@<last-good> latest`，再发 patch 修复。
 - GitHub Release：不删除旧 tag；如有需要，把旧版本重新标记为 latest 资产，再发 patch。
 - 0.5.0 无二进制，不涉及二进制回滚。
 

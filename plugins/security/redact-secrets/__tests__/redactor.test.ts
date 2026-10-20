@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 import { createTraceRedactor } from '../src/redactor.js';
 
 function event(data: Record<string, unknown>): RunEvent {

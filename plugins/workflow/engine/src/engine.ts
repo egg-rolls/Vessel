@@ -15,7 +15,7 @@ import type {
   ToolContext,
   ToolPipeline,
   ToolPipelineResult,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { invalid, notFound, WorkflowError } from './errors.js';
 import { publishWorkflowEvent } from './events.js';
 import { loadWorkflowDefinition, nodeWorkflowFs, resolveDefinitionPath } from './schema.js';

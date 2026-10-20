@@ -1,6 +1,6 @@
 /**
  * ViewTone -> theme token（纯映射）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 import { theme } from '../theme.js';

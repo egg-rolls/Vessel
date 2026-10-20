@@ -1,6 +1,6 @@
 /**
- * @vessel/guardrail-pii - PII 脱敏 Guardrail 插件
- * @module @vessel/guardrail-pii
+ * @vessel-agent/guardrail-pii - PII 脱敏 Guardrail 插件
+ * @module @vessel-agent/guardrail-pii
  *
  * 检测并脱敏个人身份信息（PII），如邮箱、电话、身份证号等
  */
@@ -11,8 +11,8 @@ import type {
   GuardrailResult,
   Plugin,
   PluginHost,
-} from '@vessel/core';
-import { GuardrailStage } from '@vessel/core';
+} from '@vessel-agent/core';
+import { GuardrailStage } from '@vessel-agent/core';
 
 /** PII Guardrail 配置 */
 export interface PIIGuardrailConfig {

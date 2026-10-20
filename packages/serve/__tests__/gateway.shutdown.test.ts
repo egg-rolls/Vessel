@@ -16,7 +16,7 @@ import {
   MemoryPluginHost,
   MemoryRunStore,
   MemorySessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { isResumableStatus } from '../src/durable';
 import { type Gateway, startGateway } from '../src/gateway';
 

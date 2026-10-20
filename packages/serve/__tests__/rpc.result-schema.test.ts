@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
-import { MemoryEventStream, MemorySessionBackend, type RunEvent } from '@vessel/core';
+import { MemoryEventStream, MemorySessionBackend, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import { PROTOCOL_VERSION } from '../src/protocol';
 import { createRpcDispatcher, defineMethods, RPC_VERSION, type RpcMethodContext } from '../src/rpc';

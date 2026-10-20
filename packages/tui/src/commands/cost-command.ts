@@ -1,6 +1,6 @@
 /**
  * /cost —— 会话用量
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * Vessel 不内置模型价格：有价格时才能算钱。这里只报 token 与时长，
  * 并明确标注价格未配置，避免给出编造的金额。

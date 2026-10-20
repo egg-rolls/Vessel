@@ -4,7 +4,7 @@ import {
   type AgentStatus,
   MemoryEventStream,
   type Transport,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { GatewayAuthLike } from '../src/tenant';
 import { createGateway } from './helpers';

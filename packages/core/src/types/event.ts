@@ -1,6 +1,6 @@
 /**
  * Event 类型定义
- * @module @vessel/core/events
+ * @module @vessel-agent/core/events
  */
 
 import type { StreamChunk } from './provider.js';

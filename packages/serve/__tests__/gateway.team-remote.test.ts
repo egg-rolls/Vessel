@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { type AgentStatus, MemoryEventStream, type RunEvent } from '@vessel/core';
+import { type AgentStatus, MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { TeamGatewayOptions, TeamHostLike, TeamSpawnRequest } from '../src/team';
 import type { GatewayAuthLike } from '../src/tenant';

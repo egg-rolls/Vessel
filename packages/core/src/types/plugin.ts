@@ -1,6 +1,6 @@
 /**
  * Plugin 类型定义
- * @module @vessel/core/plugin
+ * @module @vessel-agent/core/plugin
  */
 
 import type { Guardrail } from './guardrail.js';

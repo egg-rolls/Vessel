@@ -1,6 +1,6 @@
 /**
  * 视图选中项 -> 统一 ViewRow——纯函数
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * table 直接用行；list 把 item 归一为行（动作 enabled 判定需要 current 标记）；
  * detail 没有行选中，用 `DetailView.key` 合成一行，供 viewAction 的

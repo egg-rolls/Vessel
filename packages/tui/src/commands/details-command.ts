@@ -1,6 +1,6 @@
 /**
  * /details：Tool trail 三态（R0 §4.4）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 import { t } from '../i18n/index.js';

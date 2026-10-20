@@ -4,7 +4,7 @@
  * 用途：Host 与 Scheduler 之间的直接执行 / 取消通道，
  * 避免 `Scheduler.submit → AgentHandle.run → Scheduler.submit` 递归。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import type { Message } from '../types/provider.js';

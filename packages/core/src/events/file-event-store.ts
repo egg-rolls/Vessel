@@ -1,6 +1,6 @@
 /**
  * JSONL 事件持久化存储
- * @module @vessel/core/events
+ * @module @vessel-agent/core/events
  *
  * 将 RunEvent 以 JSONL 格式追加到文件（一行一个 JSON），
  * 支持按 run_id 读取和删除。遵循 .vessel/ 目录约定。

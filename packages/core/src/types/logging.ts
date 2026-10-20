@@ -3,7 +3,7 @@
  *
  * 纯类型模块：`types/**` 不得依赖实现，实现（`logging.ts`）反过来 import 这里。
  *
- * @module @vessel/core/types
+ * @module @vessel-agent/core/types
  */
 
 /** 日志等级（debug < info < warn < error） */

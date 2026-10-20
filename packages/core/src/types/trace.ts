@@ -1,7 +1,7 @@
 /**
  * Trace 类型定义（0.5 F2 / DECISION-010 §2.2、Addendum A-3/A-4）
  *
- * @module @vessel/core/types
+ * @module @vessel-agent/core/types
  */
 
 import type { RunEvent } from './event.js';

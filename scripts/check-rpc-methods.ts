@@ -3,7 +3,7 @@
 /**
  * RPC 方法表 v1.1 一致性检查（0.5）。
  *
- * 事实源：`@vessel/serve` 的 local dispatcher manifest（与 gateway 同一方法表）。
+ * 事实源：`@vessel-agent/serve` 的 local dispatcher manifest（与 gateway 同一方法表）。
  * 对照：`docs/ARCHITECTURE.md` 的 `rpc-methods` 标记表格 + DECISION-010 A-3/A-4
  * 冻结的 canonical 集合。
  *

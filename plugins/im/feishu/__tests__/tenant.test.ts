@@ -4,7 +4,7 @@ import {
   MemoryPluginHost,
   MemoryRunStore,
   MemorySessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createFeishuPlugin } from '../src/index.js';
 import type { FeishuConfig, FeishuPlugin } from '../src/types.js';
 import { FakeTransport, textMessage, textProvider, waitFor } from './fixtures/fake-transport.js';

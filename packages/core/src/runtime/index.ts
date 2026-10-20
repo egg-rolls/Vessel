@@ -1,6 +1,6 @@
 /**
- * @vessel/core/runtime 模块
- * @module @vessel/core/runtime
+ * @vessel-agent/core/runtime 模块
+ * @module @vessel-agent/core/runtime
  */
 
 export type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';

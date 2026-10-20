@@ -10,7 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { AgentMessage, PeerInfo, Transport } from '@vessel/core';
+import type { AgentMessage, PeerInfo, Transport } from '@vessel-agent/core';
 import { type TeamHostPort, toCoreMessage, toLegacyMessage } from './core-adapter.js';
 import type { AgentSpec, AgentStatus, InboxPage, TeamMessage } from './host.js';
 import {

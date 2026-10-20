@@ -1,6 +1,6 @@
 /**
  * AskUserDialog — Agent 多问题问答弹窗（slide 式）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * ADR-029：组件间交流全走事件流——本组件订阅 `ask.user.requested` 展示问题，
  * 用户作答后发布 `ask.user.answered`（answers 为空 = 用户取消）。
@@ -15,7 +15,7 @@
  * ReviewPage / ChoiceOptions 子组件。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 import { Box, type Key, Text, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';

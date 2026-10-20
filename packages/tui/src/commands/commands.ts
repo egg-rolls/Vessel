@@ -1,6 +1,6 @@
 /**
  * 斜杠命令（扁平结构：`/<command> [args]`）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 命令清单（ADR-020）：
  * /tools - 工具浏览器（读 ctx.pluginHost）
@@ -1092,7 +1092,7 @@ function setupCommand(): CommandEntry {
     run: async (_args, _ctx, _state) => {
       // P0：向导用 readline 独占 stdin，与已挂载的 Ink 抢 raw mode 会串屏/失效。
       // 因此不在 REPL 内直接启动；给出准确的手动路径。
-      const { getUserConfigPath } = await import('@vessel/config');
+      const { getUserConfigPath } = await import('@vessel-agent/config');
       return {
         handled: true,
         output: [
@@ -1121,7 +1121,7 @@ function reloadCommand(): CommandEntry {
     keywords: ['reload', 'validate', 'config'],
     run: async (_args, ctx, _state) => {
       try {
-        const { loadConfig } = await import('@vessel/config');
+        const { loadConfig } = await import('@vessel-agent/config');
         const { config: newConfig, validation } = await loadConfig();
         const lines = [''];
 

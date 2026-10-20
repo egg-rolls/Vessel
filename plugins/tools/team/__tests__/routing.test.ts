@@ -13,7 +13,7 @@ import {
   type PeerInfo,
   type Transport,
   type Unsubscribe,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { CoreHostAdapter } from '../src/core-adapter';
 import type { TeamMessage } from '../src/host';
 import { parseAgentAddress, RoutingTeamHost } from '../src/routing';

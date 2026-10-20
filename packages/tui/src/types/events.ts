@@ -1,6 +1,6 @@
 /**
  * TUI 消费侧事件类型（hermes 式消费侧 discriminated union）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * core 的 RunEvent 为开放字符串协议（ADR-030：type: string），编译器无法据 type 收窄 data，
  * 消费方被迫 per-case `event.data as {...}`。本模块在订阅边界用 asTuiEvent() 一次性 cast 到闭 union，
@@ -20,7 +20,7 @@ import type {
   ToolCallCompletedPayload,
   ToolCallFailedPayload,
   ToolCallStartedPayload,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import type { AskUserRequestedData } from '../renderer/ask-user.js';
 import type { ToolPermissionRequestedData } from '../renderer/tool-confirm.js';
 

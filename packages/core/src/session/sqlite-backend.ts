@@ -1,6 +1,6 @@
 /**
  * SQLite Session Backend 实现
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import { Database } from 'bun:sqlite';

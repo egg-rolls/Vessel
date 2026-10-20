@@ -8,7 +8,7 @@
  *
  * 该类是纯状态机：调用方负责提供当前积压量（字节或帧数）。
  *
- * @module @vessel/serve/backpressure
+ * @module @vessel-agent/serve/backpressure
  */
 
 import type { EventGap } from './event-buffer.js';

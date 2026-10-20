@@ -1,6 +1,6 @@
 /**
  * 指示器（ADR-022 + R0 §4.1）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * - thinking：`⠹ thinking… · 6s`（动词 2500ms 轮换）
  * - tool：`⠹ Running: ... · 6s`

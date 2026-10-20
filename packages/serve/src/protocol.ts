@@ -4,10 +4,10 @@
  * 0.1.0 只实现单节点控制面：事件、运行、会话、工具、权限、静态托管。
  * `/v1/team/*` 与任务协议是 0.2 草案，仅保留类型定义，不在 0.1.0 提供服务端实现。
  *
- * @module @vessel/serve/protocol
+ * @module @vessel-agent/serve/protocol
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 
 /** 协议版本（主版本） */
 export const PROTOCOL_VERSION = 1 as const;

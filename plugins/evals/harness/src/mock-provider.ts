@@ -2,7 +2,7 @@
  * 脚本化 mock provider：按顺序回放 responses；耗尽后返回空内容并标记 exhausted。
  */
 
-import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel/core';
+import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel-agent/core';
 import type { EvalMockResponse } from './types.js';
 
 const ZERO_USAGE = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };

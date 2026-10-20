@@ -1,6 +1,6 @@
 /**
  * /workflows —— workflow run 列表 / 详情 / 启动 / 恢复 / 取消
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据只来自 ReplContext.workflows（asm 注入的 name 版控制面）。
  * start/resume 返回 { workflowRunId, done }；命令只负责启动，运行态由 REPL 接管

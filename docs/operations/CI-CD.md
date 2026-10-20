@@ -120,7 +120,7 @@
 3. `publish-npm`
    - 独立 checkout，先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`，确保根 tarball 含 Web 控制台。
    - **先发布 18 个子包**，顺序固定：`core` → `permission` → `config` → `serve` → `tui` → `plugins`
-     （5 个库包 + 13 个插件包，含 `@vessel/team` 与 `@vessel/mcp-client`）。
+     （5 个库包 + 13 个插件包，含 `@vessel-agent/team` 与 `@vessel-agent/mcp-client`）。
    - **最后发布根 CLI `vessel-agent`**（依赖前 18 个包的精确版本；bin 仍是 `vessel`）。
      根 `package.json` 的 `name` 不是 `vessel-agent` 时 fail-fast。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。

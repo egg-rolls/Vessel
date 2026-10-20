@@ -1,6 +1,6 @@
 /**
  * 状态规则的数据采集——复用 /context 的估算，不复制第二套
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 import { useEffect, useState } from 'react';

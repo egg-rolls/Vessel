@@ -1,6 +1,6 @@
 /**
  * 流式渲染器（egg-rolls 基础版）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * @deprecated 已废弃——与 React 版 `components/StreamOutput.tsx` 同构并存，
  * 双渲染器造成维护负担。Ink TTY 模式统一走 StreamOutput（React），
@@ -17,7 +17,7 @@ import type {
   ToolCallCompletedPayload,
   ToolCallFailedPayload,
   ToolCallStartedPayload,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 
 /** 渲染器配置 */

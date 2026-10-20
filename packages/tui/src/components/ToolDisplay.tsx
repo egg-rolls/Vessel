@@ -1,6 +1,6 @@
 /**
  * 工具显示注册表（ADR-021）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 不改 core：`ToolDefinition` 保持冻结。显示接口在 TUI 层单独定义。
  * 工具可注册自定义显示定义（userFacingName / activityDescription / 渲染函数），

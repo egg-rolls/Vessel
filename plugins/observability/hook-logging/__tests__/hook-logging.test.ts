@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { HookType, MemoryPluginHost } from '@vessel/core';
+import { HookType, MemoryPluginHost } from '@vessel-agent/core';
 import loggingHookPlugin, { createLoggingHooks, LoggingHook } from '../src/index';
 
 /** 捕获 stderr（默认 sink）；输出不再走 stdout */

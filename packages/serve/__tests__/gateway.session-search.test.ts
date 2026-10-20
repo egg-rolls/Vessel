@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import type { RunState } from '@vessel/core';
-import { MemoryEventStream, MemorySessionBackend } from '@vessel/core';
+import type { RunState } from '@vessel-agent/core';
+import { MemoryEventStream, MemorySessionBackend } from '@vessel-agent/core';
 import { type Gateway, startGateway } from '../src/gateway';
 import {
   DEFAULT_SESSION_SEARCH_LIMIT,

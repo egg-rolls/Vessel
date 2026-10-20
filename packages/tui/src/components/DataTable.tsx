@@ -1,6 +1,6 @@
 /**
  * 通用表格渲染（纯展示，不用 useInput）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 所有单元格走 fitCell，保证终端显示宽度精确；不在这里做过滤/滚动/RPC。
  */

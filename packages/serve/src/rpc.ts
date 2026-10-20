@@ -4,10 +4,10 @@
  * HTTP `POST /v1/rpc` 与 WS `kind:'req'` 共用同一分发表；旧 REST 端点是适配器。
  * 方法级错误一律封装在 `ok:false` 中（HTTP 200）；传输/信封错误才用 4xx。
  *
- * @module @vessel/serve/rpc
+ * @module @vessel-agent/serve/rpc
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from './protocol.js';
 
 /**

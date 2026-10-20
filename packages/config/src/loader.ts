@@ -1,6 +1,6 @@
 /**
  * Vessel 配置加载器
- * @module @vessel/config
+ * @module @vessel-agent/config
  *
  * YAML 文件使用用户友好的 snake_case（api_key, base_url），TS 代码使用 camelCase（ADR-019）。
  * 加载器自动将 YAML 的 snake_case 键递归映射为 camelCase。

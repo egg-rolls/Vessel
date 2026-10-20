@@ -20,7 +20,7 @@ import {
   type PluginHost,
   type RuntimePermissionConfig,
   type SessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { type Gateway, type GatewayOptions, startGateway } from '../src/gateway';
 import type { ServerFrame } from '../src/protocol';
 import type { TeamGatewayOptions } from '../src/team';

@@ -4,7 +4,7 @@
  * 只注册 ToolDefinition；单 server 失败不阻塞启动；控制面按 Addendum B §9.1。
  */
 
-import type { EventStream, PluginHost, ToolDefinition } from '@vessel/core';
+import type { EventStream, PluginHost, ToolDefinition } from '@vessel-agent/core';
 import { formatError } from './json-rpc.js';
 import { sanitizeLogText, warnMcp } from './logging.js';
 import { exposedToolName } from './naming.js';

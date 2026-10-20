@@ -1,6 +1,6 @@
 /**
  * 配置工具函数
- * @module @vessel/config
+ * @module @vessel-agent/config
  */
 
 /**

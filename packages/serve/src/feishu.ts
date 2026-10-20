@@ -4,7 +4,7 @@
  * gateway 只读：asm 注入 ext `FeishuChannel.status()` 的适配器。
  * 只暴露冻结字段；app_id 再做一次防御性掩码，避免适配器误传完整凭据。
  *
- * @module @vessel/serve/feishu
+ * @module @vessel-agent/serve/feishu
  */
 
 /** 渠道状态（与 ext `FeishuStatus` 字段一致） */

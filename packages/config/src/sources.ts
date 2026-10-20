@@ -4,7 +4,7 @@
  * CLI `config show --sources` 与 web RPC 共用同一形状，保证输出一致。
  * 快照内 config 始终脱敏；sources 只含来源标签，不含值。
  *
- * @module @vessel/config
+ * @module @vessel-agent/config
  */
 
 import { redactConfig } from './secrets.js';

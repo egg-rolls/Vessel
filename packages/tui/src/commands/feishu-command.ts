@@ -1,6 +1,6 @@
 /**
  * /feishu —— 打印 FeishuStatus
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 只读：渠道生命周期归 asm 的 --feishu；TUI 只展示状态。
  * 只使用 appIdMasked，绝不展示 app_id / app_secret / token。

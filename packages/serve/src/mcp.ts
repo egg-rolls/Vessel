@@ -4,7 +4,7 @@
  * gateway 只读：asm 把 ext 的 `McpClientPlugin.listServers()` 适配成 `listServers`。
  * 线上只暴露冻结的 `name/status/tools/error`，不透传 transport/protocolVersion/serverInfo。
  *
- * @module @vessel/serve/mcp
+ * @module @vessel-agent/serve/mcp
  */
 
 /** server 状态（与 ext MCP 控制面一致） */

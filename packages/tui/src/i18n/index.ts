@@ -1,6 +1,6 @@
 /**
  * TUI i18n：locale 解析与 catalog 查表。
- * @module @vessel/tui/i18n
+ * @module @vessel-agent/tui/i18n
  *
  * locale 在 REPL 启动时解析一次，运行中不切换。
  * 缺失 key 回退 zh-CN，再回退 key 本身；不抛错、不打印。

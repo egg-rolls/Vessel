@@ -6,7 +6,7 @@
  * - `keep_latest > 200` 不保证精确；
  * - `kept` 是在可枚举窗口内统计的近似值（JSDoc 已注明）。
  *
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';

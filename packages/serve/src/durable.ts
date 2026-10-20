@@ -5,7 +5,7 @@
  * 这里用结构类型镜像 core 的 `RunCheckpoint` / `RunStore`（字段与 §4.1 一致），
  * 不依赖 core 新模块是否已经导出；asm 可以直接把 core 实例传进来。
  *
- * @module @vessel/serve/durable
+ * @module @vessel-agent/serve/durable
  */
 
 /** run 状态（与 core `RunCheckpoint['status']` 一致） */

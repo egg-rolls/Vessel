@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { Message, RunState } from '@vessel/core';
+import type { Message, RunState } from '@vessel-agent/core';
 import { resolveResumeTarget } from '../src/commands/commands.js';
 import { makeCtx } from './helpers.js';
 

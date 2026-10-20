@@ -16,8 +16,8 @@ import {
   MemoryEventStream,
   MemoryPluginHost,
   type RuntimePermissionConfig,
-} from '@vessel/core';
-import { GuardrailRunner, HookRunner, PermissionPolicy } from '@vessel/core/policy';
+} from '@vessel-agent/core';
+import { GuardrailRunner, HookRunner, PermissionPolicy } from '@vessel-agent/core/policy';
 import { createWorkflowEngine } from '../src/engine.js';
 import type { WorkflowOutcome } from '../src/types.js';
 import {

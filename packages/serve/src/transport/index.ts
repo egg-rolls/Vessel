@@ -1,6 +1,6 @@
 /**
- * @vessel/serve/transport — 本机 Transport 实现（R3）
- * @module @vessel/serve/transport
+ * @vessel-agent/serve/transport — 本机 Transport 实现（R3）
+ * @module @vessel-agent/serve/transport
  */
 
 export {

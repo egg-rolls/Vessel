@@ -6,7 +6,7 @@
  * ProviderTimeoutError 拒绝。默认 120s，可通过插件配置关闭（<=0）。
  */
 
-import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel/core';
+import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel-agent/core';
 
 /** 默认超时（毫秒） */
 export const DEFAULT_TIMEOUT_MS = 120_000;

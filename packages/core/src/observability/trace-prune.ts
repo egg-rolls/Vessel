@@ -5,7 +5,7 @@
  * - retentionDays / maxRuns / maxBytes 可组合
  * - 只 unlink 本目录的 `.jsonl`，不触碰 tenant 其它目录
  *
- * @module @vessel/core/observability
+ * @module @vessel-agent/core/observability
  */
 
 import { readdir, readFile, stat, unlink } from 'node:fs/promises';

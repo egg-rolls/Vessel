@@ -1,10 +1,10 @@
 /**
- * @vessel/provider-anthropic — Anthropic Claude Provider 插件
+ * @vessel-agent/provider-anthropic — Anthropic Claude Provider 插件
  * 薄工厂：实例化核心 AnthropicProvider。
  */
 
-import type { Plugin, PluginHost } from '@vessel/core';
-import { AnthropicProvider } from '@vessel/core';
+import type { Plugin, PluginHost } from '@vessel-agent/core';
+import { AnthropicProvider } from '@vessel-agent/core';
 import { type RetryEvent, type RetryOptions, resolveRetryOptions, withRetry } from './retry.js';
 import { withTimeout } from './timeout.js';
 

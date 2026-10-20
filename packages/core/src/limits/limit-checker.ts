@@ -1,6 +1,6 @@
 /**
  * LimitChecker 实现
- * @module @vessel/core/limits
+ * @module @vessel-agent/core/limits
  */
 
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';

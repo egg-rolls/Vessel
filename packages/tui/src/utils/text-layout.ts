@@ -1,6 +1,6 @@
 /**
  * 终端文本布局工具——纯函数
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 布局必须按「终端显示列」计算，不能用 `.length` / `.slice` / `.padEnd`：
  * CJK 与 emoji 占 2 列，按字符截断会让表格错位。

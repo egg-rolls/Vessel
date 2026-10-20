@@ -4,7 +4,7 @@
  * 将 Run 状态保存为 JSON 文件，每会话一个文件。
  * 0.5：同会话写入串行 + temp/rename 原子写 + session_id 路径编码。
  *
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import { mkdir, readFile, unlink } from 'node:fs/promises';

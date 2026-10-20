@@ -1,5 +1,5 @@
 /**
- * @vessel/mcp-client — MCP client 插件。
+ * @vessel-agent/mcp-client — MCP client 插件。
  *
  * 工厂式插件：由装配层（asm）按 `mcp_servers` 配置构造。
  * 默认导出是工厂函数，因此必须列入 `FACTORY_PLUGINS`。

@@ -1,6 +1,6 @@
 /**
  * /tenant —— 当前 tenant、tenant 列表与切换入口
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 0.5 不做热切换（1 裁决 / A-4 §11.6）：`/tenant use <id>` 只显示重启指引。
  * 数据：`tenants.list` / `tenants.get`（E19 消费端）；当前 tenant 来自 asm 注入的 ctx.tenant。

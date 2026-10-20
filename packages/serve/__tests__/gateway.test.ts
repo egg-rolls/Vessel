@@ -4,7 +4,7 @@ import {
   MemoryEventStream,
   MemoryPluginHost,
   MemorySessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { RunStatus } from '../src/protocol';
 import {

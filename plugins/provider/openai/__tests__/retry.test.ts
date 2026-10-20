@@ -3,7 +3,7 @@
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
-import { type LLMProvider, MemoryPluginHost } from '@vessel/core';
+import { type LLMProvider, MemoryPluginHost } from '@vessel-agent/core';
 import plugin, { type ProviderPluginOptions } from '../src/index';
 import { isRetryableError, withRetry } from '../src/retry';
 

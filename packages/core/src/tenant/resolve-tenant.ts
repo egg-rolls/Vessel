@@ -6,7 +6,7 @@
  *
  * core 不读 env/argv/YAML；调用方（asm）把各来源取出后传入。
  *
- * @module @vessel/core/tenant
+ * @module @vessel-agent/core/tenant
  */
 
 import { resolve, sep } from 'node:path';

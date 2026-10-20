@@ -1,6 +1,6 @@
 /**
  * Guardrail 类型定义
- * @module @vessel/core/guardrail
+ * @module @vessel-agent/core/guardrail
  */
 
 /** Guardrail 阶段枚举 */

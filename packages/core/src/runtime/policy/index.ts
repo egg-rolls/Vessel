@@ -1,10 +1,10 @@
 /**
- * @vessel/core/policy 模块入口（R6a）
+ * @vessel-agent/core/policy 模块入口（R6a）
  *
  * 实现暂留在 `runtime/` 下；这里只做公开 barrel，不移动文件（R6b 再评估）。
  * 只依赖 port 类型，不依赖 provider / context / session。
  *
- * @module @vessel/core/policy
+ * @module @vessel-agent/core/policy
  */
 
 export type {

@@ -1,6 +1,6 @@
 /**
- * @vessel/basic-tools - 基础工具插件（bash / read / edit）
- * @module @vessel/basic-tools
+ * @vessel-agent/basic-tools - 基础工具插件（bash / read / edit）
+ * @module @vessel-agent/basic-tools
  *
  * 本项目唯一的工具包，只提供三个互不可替代的工具：
  * - `bash`：执行任意 shell 命令（grep / cat / ls / mkdir / curl …… 全部由它承担），权限 ask
@@ -24,8 +24,8 @@ import {
 import { mkdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { Plugin, PluginHost, ToolContext, ToolDefinition } from '@vessel/core';
-import { requestPermission } from '@vessel/permission';
+import type { Plugin, PluginHost, ToolContext, ToolDefinition } from '@vessel-agent/core';
+import { requestPermission } from '@vessel-agent/permission';
 
 // ── 常量 ──────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 /**
  * 指示器风格与帧——纯函数（R0 §4.1）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 export type IndicatorStyle = 'unicode' | 'ascii' | 'emoji' | 'kaomoji';

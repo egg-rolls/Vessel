@@ -12,7 +12,7 @@ import {
   MemoryPluginHost,
   type ToolContext,
   type ToolDefinition,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { CoreHostAdapter, type TeamHostPort } from '../src/core-adapter';
 import type { TeamMessage } from '../src/host';
 import { createTeamPlugin } from '../src/index';

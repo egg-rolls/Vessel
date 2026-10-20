@@ -1,6 +1,6 @@
 /**
  * 失败归档：把一轮失败收敛成**一条**历史项。
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 0.10 R1-11：失败信息只渲染一次。
  * StreamOutput 在 run.failed 时调用 `buildFailureArchive` 归档；

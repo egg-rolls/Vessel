@@ -1,6 +1,6 @@
 /**
  * 视图键盘 -> 语义 intent——纯 reducer
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 渲染层只负责把按键喂进来并执行返回的 intent；业务（RPC/切会话）留在命令层。
  * Esc 分层：filter -> 清空并回 browse；rename/confirm/form -> 取消当前模式；

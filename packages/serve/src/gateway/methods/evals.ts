@@ -1,7 +1,7 @@
 /**
  * evals.* 方法（latest / run）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { type EvalsGatewayOptions, normalizeEvalReport } from '../../evals.js';

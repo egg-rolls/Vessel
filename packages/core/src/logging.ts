@@ -8,7 +8,7 @@
  * - 默认用 trace redactor 对 message 与 fields 脱敏（`redact: false` 可关闭）。
  * - sink 写失败一律吞掉：日志不得改变运行语义。
  *
- * @module @vessel/core/logging
+ * @module @vessel-agent/core/logging
  */
 
 import { createDefaultTraceRedactor } from './observability/trace-redactor.js';

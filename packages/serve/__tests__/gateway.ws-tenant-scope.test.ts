@@ -2,7 +2,7 @@
  * P0-1：legacy WS 方法必须经过 dispatcher，受 principal / tenant 作用域约束。
  */
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream, MemoryPluginHost, type RunEvent } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { ProtocolError, ServerFrame } from '../src/protocol';
 import type { GatewayAuthLike } from '../src/tenant';

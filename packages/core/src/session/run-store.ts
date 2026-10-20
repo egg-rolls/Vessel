@@ -4,7 +4,7 @@
  * - `MemoryRunStore`：进程内 Map，测试与短生命周期嵌入。
  * - `FileRunStore`：每 run 一个 JSON 文件；同 run 写入串行；temp + rename 原子写。
  *
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import { mkdir, readdir, readFile, unlink } from 'node:fs/promises';

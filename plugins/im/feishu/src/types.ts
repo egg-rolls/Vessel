@@ -1,5 +1,5 @@
 /**
- * @vessel/feishu 公开类型（DECISION-009 §5.3 / Addendum B §11.3）。
+ * @vessel-agent/feishu 公开类型（DECISION-009 §5.3 / Addendum B §11.3）。
  */
 
 import type {
@@ -10,7 +10,7 @@ import type {
   PluginHost,
   RunStore,
   SessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 
 export interface FeishuConfig {
   enabled?: boolean;

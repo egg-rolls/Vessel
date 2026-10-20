@@ -90,7 +90,7 @@ import { adaptWorkflowsControl } from './workflow-wiring';
 
 /**
  * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。
- * 合并 tui 后可改为 `import type { PermissionsControl } from '@vessel/tui'`。
+ * 合并 tui 后可改为 `import type { PermissionsControl } from '@vessel-agent/tui'`。
  */
 interface PermissionsControlLike {
   list(): Promise<string[]>;

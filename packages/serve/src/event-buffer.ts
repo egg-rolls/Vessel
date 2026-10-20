@@ -5,10 +5,10 @@
  * gateway 在广播前给每条事件分配进程内单调 `seq`，并用固定大小的环形缓冲
  * 支持 `since` 增量回放与 `gap` 信号。序号只在传输层，不改 core 类型。
  *
- * @module @vessel/serve/event-buffer
+ * @module @vessel-agent/serve/event-buffer
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 
 /** 缓冲条目 */
 export interface SeqEvent {

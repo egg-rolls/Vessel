@@ -1,6 +1,6 @@
 /**
  * AgentRuntime 实现
- * @module @vessel/core/runtime
+ * @module @vessel-agent/core/runtime
  */
 
 import { randomUUID } from 'node:crypto';

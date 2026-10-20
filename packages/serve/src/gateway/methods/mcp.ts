@@ -1,7 +1,7 @@
 /**
  * mcp.* 方法（list / reconnect）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { type McpGatewayOptions, normalizeMcpServers } from '../../mcp.js';

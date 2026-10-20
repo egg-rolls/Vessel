@@ -16,7 +16,7 @@ import {
   MemoryPluginHost,
   type ToolContext,
   type ToolDefinition,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import basicToolsPlugin, {
   type BasicToolsConfig,
   createBasicTools,

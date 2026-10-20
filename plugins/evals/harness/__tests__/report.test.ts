@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import { MemoryEventStream, MemoryPluginHost, type RunnableAgent } from '@vessel/core';
+import { MemoryEventStream, MemoryPluginHost, type RunnableAgent } from '@vessel-agent/core';
 import {
   findLatestReport,
   reportExitCode,

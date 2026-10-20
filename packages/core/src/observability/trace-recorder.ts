@@ -7,7 +7,7 @@
  * - 写前 redactor；`metadata` 档只保留白名单字段；`off` 不落盘
  * - 写失败发 `trace.write.failed`，绝不静默
  *
- * @module @vessel/core/observability
+ * @module @vessel-agent/core/observability
  */
 
 import { appendFile, mkdir, stat } from 'node:fs/promises';

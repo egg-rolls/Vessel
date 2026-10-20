@@ -1,6 +1,6 @@
 /**
- * @vessel/core/session 模块
- * @module @vessel/core/session
+ * @vessel-agent/core/session 模块
+ * @module @vessel-agent/core/session
  */
 
 export type { RunCheckpoint, RunResumeCode, RunStore } from '../types/run-store.js';

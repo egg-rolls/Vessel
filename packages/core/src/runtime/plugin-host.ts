@@ -1,6 +1,6 @@
 /**
  * PluginHost 实现
- * @module @vessel/core/runtime
+ * @module @vessel-agent/core/runtime
  */
 
 import type { Guardrail } from '../types/guardrail.js';

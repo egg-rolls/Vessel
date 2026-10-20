@@ -1,6 +1,6 @@
 /**
  * RPC 辅助：错误识别、展示格式化与输出脱敏
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * TUI 只依赖 RpcClientLike 的结构（repl-context.ts），不 import asm / core 的实现。
  * - 方法级错误在 HTTP 上是 200 + ok:false（A-3 §10.2），client 统一抛 {code, message}；

@@ -10,7 +10,7 @@
  *
  * 锁文件的读写归 asm（E15）；core 只提供路径。
  *
- * @module @vessel/core/tenant
+ * @module @vessel-agent/core/tenant
  */
 
 import { join } from 'node:path';

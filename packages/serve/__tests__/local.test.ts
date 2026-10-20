@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
 import type { CapabilityManifest } from '../src/rpc';
 import { runDispatcher } from './rpc-test-utils';

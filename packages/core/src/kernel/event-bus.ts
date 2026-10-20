@@ -1,7 +1,7 @@
 /**
  * Host 级 EventBus 实现（复用 MemoryEventStream，不新增事件机制）。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import { MemoryEventStream } from '../events/event-stream.js';

@@ -1,7 +1,7 @@
 /**
  * tenants.* 方法（list / get / create / update）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';

@@ -1,6 +1,6 @@
 /**
  * Run 选项（F1：从 runtime 移到 types，Kernel 只依赖 port 类型）
- * @module @vessel/core/types
+ * @module @vessel-agent/core/types
  */
 
 import type { ContextManager } from './context.js';

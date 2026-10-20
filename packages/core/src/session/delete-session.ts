@@ -5,7 +5,7 @@
  * - 否则删快照 + 按 session_id 清理 runs/events，返回计数
  * - 不新增 `SessionBackend` 方法；并发由上层单写者锁保证
  *
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import { unlink } from 'node:fs/promises';

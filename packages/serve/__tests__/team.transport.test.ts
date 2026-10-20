@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type AgentMessage, MemoryEventStream } from '@vessel/core';
+import { type AgentMessage, MemoryEventStream } from '@vessel-agent/core';
 import { startGateway } from '../src/gateway';
 import { createLoopbackTransport } from '../src/transport/index';
 import { createTeamNode, makeTempDir, removeTempDir, waitUntil } from './helpers';

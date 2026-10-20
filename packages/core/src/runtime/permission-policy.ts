@@ -1,7 +1,7 @@
 /**
  * 权限策略（ADR-026/029）——工具执行前的权限判定。
  * 从 AgentRuntime 抽出（ADR-033 编排逻辑外推），保持单一职责。
- * @module @vessel/core/runtime
+ * @module @vessel-agent/core/runtime
  */
 
 import { randomUUID } from 'node:crypto';

@@ -1,6 +1,6 @@
 /**
  * Vessel 默认配置
- * @module @vessel/config
+ * @module @vessel-agent/config
  */
 
 import type {

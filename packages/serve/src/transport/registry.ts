@@ -7,12 +7,12 @@
  *
  * 注册表**不写 token**（DECISION-005 U7）。
  *
- * @module @vessel/serve/transport
+ * @module @vessel-agent/serve/transport
  */
 
 import { chmod, mkdir, readdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { AgentStatus, PeerInfo } from '@vessel/core';
+import type { AgentStatus, PeerInfo } from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from '../protocol.js';
 import { toWireAgentStatus, type WireAgentStatus } from '../team.js';
 

@@ -5,7 +5,7 @@
  * 0.1 的插件私有 `RuntimeHost` / `InProcessRuntimeHost` 兼容层已移除（ADR-037）。
  */
 
-import type { LLMProvider, PluginHost, TerminationPolicy, UsageLimits } from '@vessel/core';
+import type { LLMProvider, PluginHost, TerminationPolicy, UsageLimits } from '@vessel-agent/core';
 
 /** 成员状态 */
 export type AgentState = 'idle' | 'running' | 'cancelled' | 'error' | 'closed';

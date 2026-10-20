@@ -12,7 +12,7 @@ import {
   WEB_DIST_ENTRY,
 } from '../smoke-install';
 
-function pkg(path: string, name = `@vessel/${path}`): SmokePackage {
+function pkg(path: string, name = `@vessel-agent/${path}`): SmokePackage {
   return { path, dir: `/repo/${path}`, name, version: '0.10.0' };
 }
 
@@ -49,10 +49,13 @@ describe('orderPackages', () => {
 
 describe('buildOverrides', () => {
   it('maps every package to a local file: tarball', () => {
-    const overrides = buildOverrides([tarball('@vessel/core'), tarball('@vessel/config')]);
+    const overrides = buildOverrides([
+      tarball('@vessel-agent/core'),
+      tarball('@vessel-agent/config'),
+    ]);
     expect(overrides).toEqual({
-      '@vessel/core': 'file:/tmp/@vessel/core.tgz',
-      '@vessel/config': 'file:/tmp/@vessel/config.tgz',
+      '@vessel-agent/core': 'file:/tmp/@vessel-agent/core.tgz',
+      '@vessel-agent/config': 'file:/tmp/@vessel-agent/config.tgz',
     });
   });
 });
@@ -61,11 +64,11 @@ describe('parsePackOutput', () => {
   it('parses npm pack --json output', () => {
     const entries = parsePackOutput(
       JSON.stringify([
-        { name: '@vessel/core', version: '0.10.0', filename: 'vessel-core-0.10.0.tgz' },
+        { name: '@vessel-agent/core', version: '0.10.0', filename: 'vessel-core-0.10.0.tgz' },
       ]),
     );
     expect(entries).toEqual([
-      { name: '@vessel/core', version: '0.10.0', filename: 'vessel-core-0.10.0.tgz' },
+      { name: '@vessel-agent/core', version: '0.10.0', filename: 'vessel-core-0.10.0.tgz' },
     ]);
   });
 

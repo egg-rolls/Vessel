@@ -3,7 +3,7 @@
  *
  * core 不读 env / argv / YAML；resolveTenant 只做纯函数。
  *
- * @module @vessel/core/types
+ * @module @vessel-agent/core/types
  */
 
 /** 缺省 tenant id */
@@ -18,7 +18,7 @@ export type TenantSource = 'explicit' | 'cli' | 'env' | 'config' | 'default';
 /**
  * tenant 上下文（DECISION-010 §2.5 冻结）。
  *
- * `Config` 泛型：core 不能 import `@vessel/config`（依赖方向），
+ * `Config` 泛型：core 不能 import `@vessel-agent/config`（依赖方向），
  * asm 实例化为 `TenantContext<VesselConfig>`（Addendum A-4 §11.3）。
  */
 export interface TenantContext<Config = unknown> {

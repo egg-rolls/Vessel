@@ -1,5 +1,5 @@
 /**
- * @vessel/workflow 公开类型与冻结控制面。
+ * @vessel-agent/workflow 公开类型与冻结控制面。
  *
  * 字段名按 DECISION-009 §5.1.4 / Addendum B / Addendum C 冻结，不得单方面改名。
  */
@@ -11,7 +11,7 @@ import type {
   RunnableAgent,
   RuntimeHost,
   ToolPipeline,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 
 export type WorkflowRunStatus =
   | 'pending'

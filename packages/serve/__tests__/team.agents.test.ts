@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import type { AgentMessage, AgentStatus, InboxPage } from '@vessel/core';
-import { MemoryEventStream } from '@vessel/core';
+import type { AgentMessage, AgentStatus, InboxPage } from '@vessel-agent/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { type Gateway, startGateway } from '../src/gateway';
 import type { TeamHostLike, TeamSpawnRequest } from '../src/team';
 

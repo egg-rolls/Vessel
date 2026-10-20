@@ -1,7 +1,7 @@
 /**
  * 方法表拆分后的共享小工具（纯函数 / 常量）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { RpcError } from '../../rpc.js';

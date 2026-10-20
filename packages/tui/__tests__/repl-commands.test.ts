@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { Message, RunState, ToolDefinition } from '@vessel/core';
+import type { Message, RunState, ToolDefinition } from '@vessel-agent/core';
 import {
   CommandRegistry,
   createCommands,

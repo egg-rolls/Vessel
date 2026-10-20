@@ -1,7 +1,7 @@
 /**
  * Evals 离线示例（0.4）。
  *
- * 使用真实 @vessel/evals harness 与脚本化 mock provider，不访问网络、不需要 API Key。
+ * 使用真实 @vessel-agent/evals harness 与脚本化 mock provider，不访问网络、不需要 API Key。
  * 报告由 ext 的 report.ts 写入 evals.out_dir。
  * 运行：bun run examples/eval-offline.ts
  */

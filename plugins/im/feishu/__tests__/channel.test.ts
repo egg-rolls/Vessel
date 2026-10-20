@@ -5,7 +5,7 @@ import {
   MemoryPluginHost,
   MemoryRunStore,
   MemorySessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import {
   BUSY_REPLY_TEXT,
   createFeishuPlugin,

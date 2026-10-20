@@ -4,11 +4,11 @@
  * gateway 与 `createLocalRpcDispatcher` 共用同一套 run 队列、权限请求与
  * ask 状态；禁止第二套实现。引擎不监听端口、不持有 server。
  *
- * @module @vessel/serve/run-engine
+ * @module @vessel-agent/serve/run-engine
  */
 
 import { randomUUID } from 'node:crypto';
-import type { ContextManager, EventStream, RunEvent, RunnableAgent } from '@vessel/core';
+import type { ContextManager, EventStream, RunEvent, RunnableAgent } from '@vessel-agent/core';
 import type { RunStatus } from './protocol.js';
 import { RpcError } from './rpc.js';
 

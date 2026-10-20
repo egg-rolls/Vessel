@@ -1,10 +1,10 @@
 /**
  * runs.* 方法（list / get / start / cancel / resume）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
-import type { RunnableAgent } from '@vessel/core';
+import type { RunnableAgent } from '@vessel-agent/core';
 import { type DurableGatewayOptions, isResumableStatus } from '../../durable.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { RunEngine, RunRecord } from '../../run-engine.js';

@@ -4,7 +4,7 @@
  * 只依赖 9 接口的类型定义，不依赖任何模块实现。
  * Module ≠ Plugin：Kernel 是构造期边界；运行期扩展仍只走 PluginHost。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import type { ContextManager } from '../types/context.js';

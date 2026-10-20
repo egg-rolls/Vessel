@@ -1,6 +1,6 @@
 /**
  * Limits 类型定义（camelCase，ADR-019）
- * @module @vessel/core/limits
+ * @module @vessel-agent/core/limits
  */
 
 /** 使用量限制 */

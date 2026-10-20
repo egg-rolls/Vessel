@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryPluginHost } from '@vessel/core';
+import { MemoryPluginHost } from '@vessel-agent/core';
 import { EvalsError } from '../src/errors.js';
 import { createEvalsPlugin } from '../src/plugin.js';
 import { makeTempWorkspace, writeSuite } from './fixtures/helpers.js';

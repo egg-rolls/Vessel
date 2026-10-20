@@ -6,8 +6,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { AgentMessage, AgentStatus, InboxPage } from '@vessel/core';
-import { MemoryEventStream } from '@vessel/core';
+import type { AgentMessage, AgentStatus, InboxPage } from '@vessel-agent/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { startGateway } from '../../src/index';
 import type { TeamHostLike } from '../../src/team';
 import { createLoopbackTransport } from '../../src/transport/index';

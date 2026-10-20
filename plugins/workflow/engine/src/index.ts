@@ -1,5 +1,5 @@
 /**
- * @vessel/workflow — 声明式 workflow 引擎插件。
+ * @vessel-agent/workflow — 声明式 workflow 引擎插件。
  *
  * 工厂式插件：由装配层（asm）构造并注入 RuntimeHost / RunnableAgent / PluginHost。
  * 默认导出是工厂函数，因此列入 `FACTORY_PLUGINS`（短名 workflow）。

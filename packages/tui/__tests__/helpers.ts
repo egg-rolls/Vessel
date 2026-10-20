@@ -2,13 +2,13 @@
  * REPL 命令测试用的 mock ReplContext 工具
  */
 
-import type { ToolDefinition } from '@vessel/core';
+import type { ToolDefinition } from '@vessel-agent/core';
 import {
   MemoryContextManager,
   MemoryEventStream,
   MemoryPluginHost,
   MemorySessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import type { ReplState } from '../src/commands/commands.js';
 import type { ReplContext } from '../src/repl-context.js';
 

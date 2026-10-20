@@ -5,10 +5,10 @@
  * 再逐会话 `load()` 线性扫描消息内容（file/sqlite 后端通用）。
  * 结果形状冻结为 `{ sessions: SessionSearchHit[] }` 的元素。
  *
- * @module @vessel/serve/session-search
+ * @module @vessel-agent/serve/session-search
  */
 
-import type { Message, SessionBackend, SessionInfo } from '@vessel/core';
+import type { Message, SessionBackend, SessionInfo } from '@vessel-agent/core';
 
 /** 默认/最大返回条数（E5 冻结形状的 limit 上限） */
 export const DEFAULT_SESSION_SEARCH_LIMIT = 20;

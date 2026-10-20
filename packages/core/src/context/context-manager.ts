@@ -1,6 +1,6 @@
 /**
  * ContextManager 实现
- * @module @vessel/core/context
+ * @module @vessel-agent/core/context
  *
  * Auto Compact: add() 时如果 autoCompact=true 且 token 超阈值，自动压缩。
  * 优先使用 LLM 响应的真实 token 数，否则用字符估算。

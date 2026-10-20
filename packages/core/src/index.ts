@@ -1,6 +1,6 @@
 /**
- * @vessel/core - AI Agent 运行时核心
- * @module @vessel/core
+ * @vessel-agent/core - AI Agent 运行时核心
+ * @module @vessel-agent/core
  *
  * 核心运行时库，零 UI 依赖，可独立嵌入。
  * 提供 tool-calling loop、provider 抽象、context/session、events、

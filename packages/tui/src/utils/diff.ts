@@ -1,6 +1,6 @@
 /**
  * 行级 diff（edit 工具结果展示）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * LCS 行级比较；输出带 old/new 行号。超大输入退化为整块删除+新增，
  * 避免 O(n*m) 在超长 old_string 上耗尽内存。

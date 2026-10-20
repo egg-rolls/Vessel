@@ -6,7 +6,7 @@
  * 枚举根 workspaces 中所有非 private 包，校验：
  *   1. 包版本与根版本一致；
  *   2. tarball 内 package.json 不含 workspace:* / file: 依赖；
- *   2b. @vessel/* 内部依赖（精确版本）等于根版本；
+ *   2b. @vessel-agent/* 内部依赖（精确版本）等于根版本；
  *   3. 必填字段存在（name / version / main 或 exports / types）；
  *   4. tarball 不含 .env、密钥、数据库、日志、覆盖率等禁止文件；
  *   5. CHANGELOG.md 含 `## [<root version>]`。
@@ -213,7 +213,7 @@ export function evaluatePackedManifest(
         continue;
       }
 
-      if (!name.startsWith('@vessel/')) continue;
+      if (!name.startsWith('@vessel-agent/')) continue;
       if (EXACT_SEMVER.test(value)) {
         if (value !== targetVersion) {
           issues.push({
@@ -615,7 +615,7 @@ function printUsage(): void {
 Checks every non-private workspace package:
   - version equals the root package version
   - tarball manifest has no workspace:* / file: dependencies
-  - internal @vessel/* versions match the root version
+  - internal @vessel-agent/* versions match the root version
   - required fields (name, version, main or exports, types)
   - no secrets, databases, logs or test artifacts
   - CHANGELOG.md contains the root version heading

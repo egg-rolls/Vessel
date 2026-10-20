@@ -1,7 +1,7 @@
 /**
  * 交互应答方法：permission.respond / ask.respond。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';

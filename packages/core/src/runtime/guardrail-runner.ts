@@ -4,7 +4,7 @@
  *
  * 0.8 C2：`check` 抛错按 fail-closed 处理（blocked + `guardrail_error`），
  * 发 `guardrail.error`，不把异常冒泡成 run 失败。
- * @module @vessel/core/runtime
+ * @module @vessel-agent/core/runtime
  */
 
 import type { EventStream } from '../types/event.js';

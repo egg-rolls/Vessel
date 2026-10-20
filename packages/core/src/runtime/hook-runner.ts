@@ -6,7 +6,7 @@
  * 0.8 C2：单个 hook 抛错不再向上传播——发 `hook.error`（并保留 `hook.failed` 兼容），
  * 继续执行后续 hook。坏插件不得拖垮整个 run。
  *
- * @module @vessel/core/runtime
+ * @module @vessel-agent/core/runtime
  */
 
 import type { EventStream } from '../types/event.js';

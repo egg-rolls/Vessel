@@ -1,7 +1,7 @@
 /**
  * Gateway 鉴权 / 监听边界辅助 — 无状态纯函数与文件读取。
  *
- * @module @vessel/serve/gateway/auth
+ * @module @vessel-agent/serve/gateway/auth
  */
 
 import { readFileSync } from 'node:fs';

@@ -14,7 +14,7 @@ import {
   type PluginHost,
   type RunStore,
   type SessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { fallbackAgentId, maskSecrets, sanitizeAgentId } from './config.js';
 import type { ResolvedFeishuConfig } from './types.js';
 
@@ -39,7 +39,7 @@ export interface ChatMemberRunnerOptions {
   model: string;
   pluginHost: PluginHost;
   session: SessionBackend;
-  contextFactory?: () => import('@vessel/core').ContextManager;
+  contextFactory?: () => import('@vessel-agent/core').ContextManager;
   runStore?: RunStore;
   maxConcurrency?: number;
   maxQueueSize?: number;

@@ -1,6 +1,6 @@
 /**
  * 首启配置向导
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 架构：TUI 层交互逻辑。
  * - 不在 core（core 不知道"向导"）
@@ -13,8 +13,8 @@ import { mkdir } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
-import type { ProviderConfig, UserConfig } from '@vessel/config';
-import { getUserConfigPath } from '@vessel/config';
+import type { ProviderConfig, UserConfig } from '@vessel-agent/config';
+import { getUserConfigPath } from '@vessel-agent/config';
 import { parse as fromYaml, stringify as toYaml } from 'yaml';
 import { resolveLocale, setLocale, t } from '../i18n/index.js';
 

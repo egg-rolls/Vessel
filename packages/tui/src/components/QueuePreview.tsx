@@ -1,6 +1,6 @@
 /**
  * 队列预览（R0 §4.2）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 3 条滑动窗口；编辑项尽量居中；>3 条显示尾行。
  * 行数由 `computeLiveLayout(rows, queueRows)` 扣除。

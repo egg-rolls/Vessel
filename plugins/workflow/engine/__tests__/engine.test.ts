@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import type { PluginHost, ToolContext } from '@vessel/core';
-import { MemoryEventStream } from '@vessel/core';
+import type { PluginHost, ToolContext } from '@vessel-agent/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { createWorkflowEngine } from '../src/engine.js';
 import { WorkflowError } from '../src/errors.js';
 import type { WorkflowEngine } from '../src/types.js';

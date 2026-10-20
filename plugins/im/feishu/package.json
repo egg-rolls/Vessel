@@ -1,5 +1,5 @@
 {
-  "name": "@vessel/feishu",
+  "name": "@vessel-agent/feishu",
   "version": "0.10.0",
   "type": "module",
   "main": "src/index.ts",
@@ -25,7 +25,7 @@
   },
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.76.0",
-    "@vessel/core": "0.10.0"
+    "@vessel-agent/core": "0.10.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

@@ -48,7 +48,7 @@ function write(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content, 'utf-8');
 }
 
-describe('real @vessel/workflow', () => {
+describe('real @vessel-agent/workflow', () => {
   it('constructs the engine and runs an agent step with workflow:<run_id> session', async () => {
     const base = tmpDir('vessel-04-real-wf-');
     const defs = path.join(base, 'defs');
@@ -108,7 +108,7 @@ describe('real @vessel/workflow', () => {
   });
 });
 
-describe('real @vessel/evals', () => {
+describe('real @vessel-agent/evals', () => {
   it('runs a suite offline and writes the report via ext report.ts', async () => {
     const base = tmpDir('vessel-04-real-eval-');
     const suiteDir = path.join(base, 'evals');
@@ -209,7 +209,7 @@ describe('real @vessel/evals', () => {
   });
 });
 
-describe('real @vessel/feishu', () => {
+describe('real @vessel-agent/feishu', () => {
   it('constructs the plugin with a mock transport and starts/stops', async () => {
     const transport = {
       start: async (handlers: { onConnected?: () => void }) => {

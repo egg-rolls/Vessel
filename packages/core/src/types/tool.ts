@@ -1,6 +1,6 @@
 /**
  * Tool 类型定义
- * @module @vessel/core/tools
+ * @module @vessel-agent/core/tools
  */
 
 import type { EventStream } from './event.js';

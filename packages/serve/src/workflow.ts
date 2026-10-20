@@ -5,7 +5,7 @@
  * 类型是冻结契约的结构镜像，不 import ext 实现；返回值做白名单归一化，
  * 只暴露冻结字段，避免内部字段或任意路径透传。
  *
- * @module @vessel/serve/workflow
+ * @module @vessel-agent/serve/workflow
  */
 
 /** workflow run 状态（与 DECISION-009 §5.1.3 一致） */

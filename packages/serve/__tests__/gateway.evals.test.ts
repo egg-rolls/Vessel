@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream } from '@vessel/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import type { EvalReport } from '../src/evals';
 import type { Gateway } from '../src/gateway';
 import { createGateway } from './helpers';

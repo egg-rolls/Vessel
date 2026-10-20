@@ -4,7 +4,7 @@
  * 构造 EventBus / Scheduler / Host，注入 session / contextFactory / permission /
  * transport 等 port 实现。**不自动 spawn owner**；调用方显式 `host.spawn(ownerSpec)`。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import { MemoryEventBus } from './event-bus.js';

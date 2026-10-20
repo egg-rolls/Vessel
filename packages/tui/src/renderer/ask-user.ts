@@ -1,6 +1,6 @@
 /**
  * ask-user 交互能力 — Agent 向用户提问
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * ADR-029：暂停型工具事件流化——ask-user 回归普通工具对象，
  * handler 发 `ask.user.requested` 事件 → 事件流等 `ask.user.answered` →
@@ -9,7 +9,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { EventStream, ToolDefinition } from '@vessel/core';
+import type { EventStream, ToolDefinition } from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 
 // ── 事件名与载荷 ──────────────────────────────────

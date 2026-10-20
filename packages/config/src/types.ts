@@ -1,6 +1,6 @@
 /**
  * Vessel 配置类型定义
- * @module @vessel/config
+ * @module @vessel-agent/config
  *
  * 所有字段使用 camelCase（ADR-019）。config loader 自动将 YAML 的 snake_case 映射过来。
  */

@@ -5,7 +5,7 @@
  * 不实现网络、不写缓存、不决定通道——无事件时零输出、零行为。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 import { Box, Text } from 'ink';
 import { useEffect, useState } from 'react';
 import { theme } from '../theme.js';

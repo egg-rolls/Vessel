@@ -1,6 +1,6 @@
 /**
  * Provider 实现
- * @module @vessel/core/provider
+ * @module @vessel-agent/core/provider
  */
 
 import type {

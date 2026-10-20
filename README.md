@@ -16,19 +16,19 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 | **范式** | 做一个场景 | 一个 while 循环兜住 Harness / Loop Engineering |
 | **核心** | 框架式大 core | 9 个接口、2 个插槽、1 个循环。MIT 开源，core 可嵌入任何应用 |
 
-三层架构：`@vessel/core`（运行时，可独立嵌入）+ `@vessel/config`（声明式配置）+ `@vessel/tui`（Claude-Code 式终端）。形态上参考 Claude Code，但 Provider 无关、范式无关、开源。
+三层架构：`@vessel-agent/core`（运行时，可独立嵌入）+ `@vessel-agent/config`（声明式配置）+ `@vessel-agent/tui`（Claude-Code 式终端）。形态上参考 Claude Code，但 Provider 无关、范式无关、开源。
 
 ## 为谁
 
 - **无基础用户** — 只用 TUI，填 Key 即跑。
 - **弱基础用户** — 改 YAML 定义 provider 与 agent。
-- **开发者** — 写 TypeScript 插件扩展能力，或把 `@vessel/core` 嵌入 Slack bot / CI / 桌面 app。
+- **开发者** — 写 TypeScript 插件扩展能力，或把 `@vessel-agent/core` 嵌入 Slack bot / CI / 桌面 app。
 
 ## 状态
 
 **alpha。当前开发线 `release/0.10.0`（基线 `release/0.9.0 = 23261b3`），未发布。** 0.1 ~ 0.10 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.10 的发版硬化（安全 / 配置 / 首启 / 错误呈现 / 可观测 / 打包 / 语言）已实现；本文只写已合入当前分支的行为。
 
-**包结构**（bun workspaces monorepo）：`@vessel/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前为 `0.10.0`，各包 manifest 同步，不在文档里维护副本。
+**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前为 `0.10.0`，各包 manifest 同步，不在文档里维护副本。
 
 **语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 前端未本地化。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
@@ -166,7 +166,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 ## MCP 怎么用
 
-MCP 是**插件**（`@vessel/mcp-client`），不是 core 模块。在 `vessel.yaml` 里配置 `mcp_servers`，server 的工具会经 `PluginHost` 注册给模型：
+MCP 是**插件**（`@vessel-agent/mcp-client`），不是 core 模块。在 `vessel.yaml` 里配置 `mcp_servers`，server 的工具会经 `PluginHost` 注册给模型：
 
 ```yaml
 mcp_servers:
@@ -214,7 +214,7 @@ durable:
 
 ## Workflow 怎么用
 
-Workflow 是**插件**（`@vessel/workflow`），默认关闭。打开后在 `workflow.dir` 下放 YAML/JSON 定义：
+Workflow 是**插件**（`@vessel-agent/workflow`），默认关闭。打开后在 `workflow.dir` 下放 YAML/JSON 定义：
 
 ```yaml
 name: release-check
@@ -258,7 +258,7 @@ vessel workflow cancel <workflowRunId>
 
 ## Evals 怎么用
 
-Evals 是**插件 + 运行器**（`@vessel/evals`），**默认完全离线**，使用脚本化 mock provider：
+Evals 是**插件 + 运行器**（`@vessel-agent/evals`），**默认完全离线**，使用脚本化 mock provider：
 
 ```yaml
 name: smoke
@@ -296,13 +296,13 @@ vessel eval smoke --allow-network   # 还需 evals.allowNetwork: true
 - 断言白名单：`output_contains` / `output_matches` / `no_error` / `tool_called` /
   `tool_not_called` / `max_duration_ms` / `max_iterations` / `usage_under`；未知类型 = 配置错误。
 - 真实 provider 需要 **`evals.allowNetwork: true` 且 CLI `--allow-network`** 同时成立。
-- 报告由 `@vessel/evals/report.ts` 写盘，文件名 `<suite>-<YYYYMMDDTHHmmssSSSZ>.json`；
+- 报告由 `@vessel-agent/evals/report.ts` 写盘，文件名 `<suite>-<YYYYMMDDTHHmmssSSSZ>.json`；
   `GET /v1/evals/latest` 只读最近一次报告。
 - 退出码：0 全部通过；1 存在 failed/error；2 配置/解析错误。
 
 ## 飞书怎么用
 
-飞书是**插件**（`@vessel/feishu`），使用官方 SDK 的 WebSocket 长连接，只做文本：
+飞书是**插件**（`@vessel-agent/feishu`），使用官方 SDK 的 WebSocket 长连接，只做文本：
 
 ```yaml
 feishu:

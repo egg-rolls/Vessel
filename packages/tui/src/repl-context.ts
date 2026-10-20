@@ -1,24 +1,24 @@
 /**
  * REPL 上下文契约——egg-rolls（壳）与 emma（REPL）的接缝
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 使用方式：
  *   // cli.ts（egg-rolls 壳）
- *   import { startRepl, type ReplContext } from '@vessel/tui';
+ *   import { startRepl, type ReplContext } from '@vessel-agent/tui';
  *   const ctx: ReplContext = { ... };
  *   await startRepl(ctx);
  *
  * ReplContext 类型由 emma 定义，egg-rolls 认可。本文件是 draft proposal。
  */
 
-import type { VesselConfig } from '@vessel/config';
+import type { VesselConfig } from '@vessel-agent/config';
 import type {
   ContextManager,
   EventStream,
   PluginHost,
   RunnableAgent,
   SessionBackend,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 
 // ── 0.3 T1：注入控制面（tui 定义结构，asm 实现；tui 不 import 任何实现） ──
 

@@ -6,11 +6,11 @@
       "name": "vessel-agent",
       "dependencies": {
         "@promptctl/rich-js": "^0.10.0",
-        "@vessel/config": "0.10.0",
-        "@vessel/core": "0.10.0",
-        "@vessel/permission": "0.10.0",
-        "@vessel/serve": "0.10.0",
-        "@vessel/tui": "0.10.0",
+        "@vessel-agent/config": "0.10.0",
+        "@vessel-agent/core": "0.10.0",
+        "@vessel-agent/permission": "0.10.0",
+        "@vessel-agent/serve": "0.10.0",
+        "@vessel-agent/tui": "0.10.0",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
@@ -21,50 +21,50 @@
       },
     },
     "packages/config": {
-      "name": "@vessel/config",
+      "name": "@vessel-agent/config",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "0.10.0",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/core": {
-      "name": "@vessel/core",
+      "name": "@vessel-agent/core",
       "version": "0.10.0",
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/permission": {
-      "name": "@vessel/permission",
+      "name": "@vessel-agent/permission",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/serve": {
-      "name": "@vessel/serve",
+      "name": "@vessel-agent/serve",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/config": "0.9.0",
-        "@vessel/core": "0.9.0",
+        "@vessel-agent/config": "0.10.0",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/tui": {
-      "name": "@vessel/tui",
+      "name": "@vessel-agent/tui",
       "version": "0.10.0",
       "dependencies": {
         "@types/react": "^19.2.17",
-        "@vessel/config": "0.10.0",
-        "@vessel/core": "0.10.0",
+        "@vessel-agent/config": "0.10.0",
+        "@vessel-agent/core": "0.10.0",
         "ink": "^7.1.1",
         "ink-markdown": "^1.0.4",
         "ink-select-input": "^6.2.0",
@@ -78,10 +78,10 @@
       },
     },
     "plugins/evals/harness": {
-      "name": "@vessel/evals",
+      "name": "@vessel-agent/evals",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
@@ -89,122 +89,122 @@
       },
     },
     "plugins/im/feishu": {
-      "name": "@vessel/feishu",
+      "name": "@vessel-agent/feishu",
       "version": "0.10.0",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.76.0",
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/mcp/client": {
-      "name": "@vessel/mcp-client",
+      "name": "@vessel-agent/mcp-client",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/observability/hook-logging": {
-      "name": "@vessel/hook-logging",
+      "name": "@vessel-agent/hook-logging",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/provider/anthropic": {
-      "name": "@vessel/provider-anthropic",
+      "name": "@vessel-agent/provider-anthropic",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/provider/openai": {
-      "name": "@vessel/provider-openai",
+      "name": "@vessel-agent/provider-openai",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/security/guardrail-pii": {
-      "name": "@vessel/guardrail-pii",
+      "name": "@vessel-agent/guardrail-pii",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/security/redact-secrets": {
-      "name": "@vessel/redact-secrets",
+      "name": "@vessel-agent/redact-secrets",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/security/tool-policy": {
-      "name": "@vessel/tool-policy",
+      "name": "@vessel-agent/tool-policy",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/tools/basic-tools": {
-      "name": "@vessel/basic-tools",
+      "name": "@vessel-agent/basic-tools",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
-        "@vessel/permission": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
+        "@vessel-agent/permission": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/tools/delegate-task": {
-      "name": "@vessel/delegate-task",
+      "name": "@vessel-agent/delegate-task",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/tools/team": {
-      "name": "@vessel/team",
+      "name": "@vessel-agent/team",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
       },
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "plugins/workflow/engine": {
-      "name": "@vessel/workflow",
+      "name": "@vessel-agent/workflow",
       "version": "0.10.0",
       "dependencies": {
-        "@vessel/core": "workspace:*",
+        "@vessel-agent/core": "0.10.0",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
@@ -359,41 +359,41 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
-    "@vessel/basic-tools": ["@vessel/basic-tools@workspace:plugins/tools/basic-tools"],
+    "@vessel-agent/basic-tools": ["@vessel-agent/basic-tools@workspace:plugins/tools/basic-tools"],
 
-    "@vessel/config": ["@vessel/config@workspace:packages/config"],
+    "@vessel-agent/config": ["@vessel-agent/config@workspace:packages/config"],
 
-    "@vessel/core": ["@vessel/core@workspace:packages/core"],
+    "@vessel-agent/core": ["@vessel-agent/core@workspace:packages/core"],
 
-    "@vessel/delegate-task": ["@vessel/delegate-task@workspace:plugins/tools/delegate-task"],
+    "@vessel-agent/delegate-task": ["@vessel-agent/delegate-task@workspace:plugins/tools/delegate-task"],
 
-    "@vessel/evals": ["@vessel/evals@workspace:plugins/evals/harness"],
+    "@vessel-agent/evals": ["@vessel-agent/evals@workspace:plugins/evals/harness"],
 
-    "@vessel/feishu": ["@vessel/feishu@workspace:plugins/im/feishu"],
+    "@vessel-agent/feishu": ["@vessel-agent/feishu@workspace:plugins/im/feishu"],
 
-    "@vessel/guardrail-pii": ["@vessel/guardrail-pii@workspace:plugins/security/guardrail-pii"],
+    "@vessel-agent/guardrail-pii": ["@vessel-agent/guardrail-pii@workspace:plugins/security/guardrail-pii"],
 
-    "@vessel/hook-logging": ["@vessel/hook-logging@workspace:plugins/observability/hook-logging"],
+    "@vessel-agent/hook-logging": ["@vessel-agent/hook-logging@workspace:plugins/observability/hook-logging"],
 
-    "@vessel/mcp-client": ["@vessel/mcp-client@workspace:plugins/mcp/client"],
+    "@vessel-agent/mcp-client": ["@vessel-agent/mcp-client@workspace:plugins/mcp/client"],
 
-    "@vessel/permission": ["@vessel/permission@workspace:packages/permission"],
+    "@vessel-agent/permission": ["@vessel-agent/permission@workspace:packages/permission"],
 
-    "@vessel/provider-anthropic": ["@vessel/provider-anthropic@workspace:plugins/provider/anthropic"],
+    "@vessel-agent/provider-anthropic": ["@vessel-agent/provider-anthropic@workspace:plugins/provider/anthropic"],
 
-    "@vessel/provider-openai": ["@vessel/provider-openai@workspace:plugins/provider/openai"],
+    "@vessel-agent/provider-openai": ["@vessel-agent/provider-openai@workspace:plugins/provider/openai"],
 
-    "@vessel/redact-secrets": ["@vessel/redact-secrets@workspace:plugins/security/redact-secrets"],
+    "@vessel-agent/redact-secrets": ["@vessel-agent/redact-secrets@workspace:plugins/security/redact-secrets"],
 
-    "@vessel/serve": ["@vessel/serve@workspace:packages/serve"],
+    "@vessel-agent/serve": ["@vessel-agent/serve@workspace:packages/serve"],
 
-    "@vessel/team": ["@vessel/team@workspace:plugins/tools/team"],
+    "@vessel-agent/team": ["@vessel-agent/team@workspace:plugins/tools/team"],
 
-    "@vessel/tool-policy": ["@vessel/tool-policy@workspace:plugins/security/tool-policy"],
+    "@vessel-agent/tool-policy": ["@vessel-agent/tool-policy@workspace:plugins/security/tool-policy"],
 
-    "@vessel/tui": ["@vessel/tui@workspace:packages/tui"],
+    "@vessel-agent/tui": ["@vessel-agent/tui@workspace:packages/tui"],
 
-    "@vessel/workflow": ["@vessel/workflow@workspace:plugins/workflow/engine"],
+    "@vessel-agent/workflow": ["@vessel-agent/workflow@workspace:plugins/workflow/engine"],
 
     "agent-base": ["agent-base@6.0.2", "", { "dependencies": { "debug": "4" } }, "sha512-RZNwNclF7+MS/8bDg70amg32dyeZGZxiDuQmZxKLAlQjr3jGyLx+4Kkk58UO7D2QdgFIQCovuSuZESne6RG6XQ=="],
 

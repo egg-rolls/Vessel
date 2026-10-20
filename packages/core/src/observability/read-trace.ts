@@ -4,7 +4,7 @@
  * 只读；跳过损坏行；按 `(seq ?? ts)` 升序。供 `events.list` 与
  * `rebuildMetrics` / `pruneTrace` 共用。
  *
- * @module @vessel/core/observability
+ * @module @vessel-agent/core/observability
  */
 
 import { readdir, readFile } from 'node:fs/promises';

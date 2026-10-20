@@ -8,7 +8,7 @@
  * spinner 状态经 StateTracker 折叠，SpinnerWithVerb 三态渲染。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 import { Box, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolDetailMode } from '../commands/commands.js';

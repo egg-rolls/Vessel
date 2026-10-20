@@ -2,7 +2,7 @@
  * workflow.* 事件发布。事件名是开放字符串，不建常量/枚举。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 
 export function publishWorkflowEvent(
   events: EventStream,

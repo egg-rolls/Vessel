@@ -1,12 +1,12 @@
 /**
  * /resume picker 的数据加载——永不 reject
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 成功返回按 updated_at 倒序的会话列表（listSessions 已排序）；
  * 失败转换为 formatRpcError 的展示文本，由 UI 决定如何呈现。
  */
 
-import type { SessionInfo } from '@vessel/core';
+import type { SessionInfo } from '@vessel-agent/core';
 import { listSessions } from '../commands/sessions-command.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';

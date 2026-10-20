@@ -1,6 +1,6 @@
 /**
  * 进入 REPL 清屏（DECISION-021 §3.1）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 仅 TTY 且 `ui.clearOnStart !== false` 时清可视区并把光标归位。
  * 非 TTY（管道 / headless）不清，避免污染机器可读输出。

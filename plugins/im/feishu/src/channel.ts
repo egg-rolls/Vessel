@@ -2,7 +2,7 @@
  * 飞书渠道：WebSocket 长连接、文本消息、per-chat 串行队列、专用 Host。
  */
 
-import type { PluginHost } from '@vessel/core';
+import type { PluginHost } from '@vessel-agent/core';
 import { maskAppId, maskSecrets, resolveFeishuConfig } from './config.js';
 import { LruSet } from './dedupe.js';
 import { FeishuError } from './errors.js';

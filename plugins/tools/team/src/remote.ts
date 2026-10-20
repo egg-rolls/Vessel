@@ -13,7 +13,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { Transport } from '@vessel/core';
+import type { Transport } from '@vessel-agent/core';
 import type { AgentState, AgentStatus, InboxPage, TeamMessage, TeamMessageKind } from './host.js';
 
 /** 跨节点控制方法（响应/请求均为 gateway wire 形状） */

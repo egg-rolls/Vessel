@@ -6,7 +6,7 @@
  * 还会发布 `mcp.warning` 事件。
  */
 
-import { createDefaultTraceRedactor, createStderrLogger } from '@vessel/core';
+import { createDefaultTraceRedactor, createStderrLogger } from '@vessel-agent/core';
 
 const logger = createStderrLogger();
 const redactor = createDefaultTraceRedactor();

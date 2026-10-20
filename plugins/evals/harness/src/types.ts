@@ -1,8 +1,8 @@
 /**
- * @vessel/evals 公开类型（DECISION-009 §5.2 / Addendum B §11.2）。
+ * @vessel-agent/evals 公开类型（DECISION-009 §5.2 / Addendum B §11.2）。
  */
 
-import type { LLMProvider, Plugin, RunnableAgent, ToolCall } from '@vessel/core';
+import type { LLMProvider, Plugin, RunnableAgent, ToolCall } from '@vessel-agent/core';
 
 export type EvalCaseStatus = 'passed' | 'failed' | 'error' | 'skipped';
 
@@ -132,7 +132,7 @@ export interface EvalRunOptions {
   /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
   tenantId?: string;
   /** 0.5：事件出口（可选）；缺失不发 eval.run.* 事件（0.4 兼容）。 */
-  events?: import('@vessel/core').EventStream;
+  events?: import('@vessel-agent/core').EventStream;
 }
 
 export interface EvalRunner {
@@ -148,7 +148,7 @@ export interface EvalPluginOptions {
   /** 0.5：tenant 作用域（可选）。 */
   tenantId?: string;
   /** 0.5：eval.run.* 事件出口（可选）；缺失不发。 */
-  events?: import('@vessel/core').EventStream;
+  events?: import('@vessel-agent/core').EventStream;
 }
 
 export type EvalErrorCode = 'eval_not_found' | 'eval_invalid' | 'eval_network_required';

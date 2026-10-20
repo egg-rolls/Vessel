@@ -1,13 +1,13 @@
 /**
  * InkRepl 的 UI 状态 reducer
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 把 ink-repl 里散落的多个 useState 收敛为一个 useReducer，
  * 消除 god-component（旧架构 10 个 useState 混装）。
  * 所有 UI 变更走 action，reducer 不可变返回新状态。
  */
 
-import type { SessionInfo } from '@vessel/core';
+import type { SessionInfo } from '@vessel-agent/core';
 import { useReducer } from 'react';
 import type { ReplState } from '../commands/commands.js';
 import type { ReplContext } from '../repl-context.js';

@@ -9,7 +9,7 @@ import {
   MemoryPluginHost,
   type ToolContext,
   type ToolDefinition,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createMcpPlugin } from '../src/plugin';
 import type { McpServerConfig } from '../src/types';
 

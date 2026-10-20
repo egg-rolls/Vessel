@@ -8,7 +8,7 @@
  * - run 统一经 Scheduler（并发/队列/同成员串行在 R2 Scheduler）。
  * - Transport 只保留注入点；实现归 R3a-core。
  *
- * @module @vessel/core/kernel
+ * @module @vessel-agent/core/kernel
  */
 
 import { randomUUID } from 'node:crypto';

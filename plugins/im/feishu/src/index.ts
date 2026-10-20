@@ -1,5 +1,5 @@
 /**
- * @vessel/feishu — WebSocket 长连接文本 bot。
+ * @vessel-agent/feishu — WebSocket 长连接文本 bot。
  *
  * 工厂式插件：asm 注入 provider/model/pluginHost/session/events 等；
  * 渠道自建专用 InProcessRuntimeHost，不占用主 Host。

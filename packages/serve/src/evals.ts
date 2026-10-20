@@ -4,7 +4,7 @@
  * gateway 只读最近一次报告：asm 注入
  * `latest(suite) => Promise<EvalReport | null>`，gateway 不读盘。
  *
- * @module @vessel/serve/evals
+ * @module @vessel-agent/serve/evals
  */
 
 export interface EvalCaseAssertion {

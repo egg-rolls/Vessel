@@ -4,7 +4,7 @@
  * gateway 只读：asm 注入 core `MetricsCollector.snapshot()`（或等价函数）。
  * 类型是冻结契约的结构镜像，不 import core 新模块。
  *
- * @module @vessel/serve/metrics
+ * @module @vessel-agent/serve/metrics
  */
 
 /** 进程内聚合快照（与 core `MetricsSnapshot` 字段一致） */

@@ -6,7 +6,7 @@
  *
  * `updated_at = max(event.ts)`（无事件为 0），实时与 `rebuildMetrics` 必须一致。
  *
- * @module @vessel/core/observability
+ * @module @vessel-agent/core/observability
  */
 
 import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';

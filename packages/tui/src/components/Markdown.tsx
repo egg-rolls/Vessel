@@ -1,7 +1,7 @@
 // biome-ignore-all lint/suspicious/noArrayIndexKey: Markdown 行是位置性的，整段文本变化即整体重渲染
 /**
  * 轻量 Markdown 渲染（流式安全）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 只处理代码块 / 标题 / 列表 / 引用 / 链接 / 行内代码；
  * 未闭合的代码 fence 视为代码（流式期间不会闪烁）。

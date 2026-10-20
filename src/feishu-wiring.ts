@@ -65,7 +65,7 @@ export function resolveFeishuScheduler(config: VesselConfig): FeishuSchedulerOpt
 }
 
 /**
- * app_id 掩码（与 @vessel/feishu 的 maskAppId 同规则）：
+ * app_id 掩码（与 @vessel-agent/feishu 的 maskAppId 同规则）：
  * 长度 > 4 → 前 4 位 + `***`；否则整体 `***`，避免短 id 被完整暴露。
  */
 export function maskAppId(appId: string): string {

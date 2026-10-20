@@ -4,10 +4,10 @@
  * web 只消费 asm 注入的 principal / tenant registry / quota；
  * 不读 env / YAML，也不直接持有 tenant 写锁。
  *
- * @module @vessel/serve/tenant
+ * @module @vessel-agent/serve/tenant
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 import { RpcError } from './rpc.js';
 
 /** 角色（A-3 冻结） */

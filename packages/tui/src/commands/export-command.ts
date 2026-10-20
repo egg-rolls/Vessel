@@ -1,6 +1,6 @@
 /**
  * /export —— 导出当前会话
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 默认 Markdown（`/export [path]`），`--json` 输出结构化消息。
  * 文件名默认 `vessel-session-<id>.md`（写当前工作目录）。

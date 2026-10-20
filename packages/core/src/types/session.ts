@@ -1,6 +1,6 @@
 /**
  * Session 类型定义
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import type { Message } from './provider.js';

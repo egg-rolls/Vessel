@@ -1,10 +1,10 @@
 /**
  * Gateway SSE 水位 / 背压与帧写入辅助 — 连接状态由调用方传入。
  *
- * @module @vessel/serve/gateway/sse
+ * @module @vessel-agent/serve/gateway/sse
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 import type { ClientBackpressure } from '../backpressure.js';
 import type { EventGap, SeqEvent } from '../event-buffer.js';
 

@@ -1,7 +1,7 @@
 /**
  * Eval harness 接线（0.4 A2）。
  *
- * - `@vessel/evals` 是库 + runner，不向 PluginHost 注册工具；
+ * - `@vessel-agent/evals` 是库 + runner，不向 PluginHost 注册工具；
  * - 默认离线 mock；真实 provider 必须 `config.evals.allowNetwork === true`
  *   且 CLI `--allow-network` 同时成立（Addendum C §12.1.3 / Addendum D §13.4）；
  * - 报告命名 / 写盘 / latest 查找由 ext 的 report.ts 负责；asm 只传 outDir/--out

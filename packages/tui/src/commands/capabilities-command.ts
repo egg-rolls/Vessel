@@ -1,6 +1,6 @@
 /**
  * /capabilities —— capability manifest 浏览器（E11 消费端）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据只来自 RPC `capabilities.list`；外部 agent 通过同一 manifest 自描述发现能力。
  * 未注入 RpcClient（第三方嵌入）时给出明确提示。

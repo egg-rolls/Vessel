@@ -1,6 +1,6 @@
 /**
  * `@path` 文件引用展开（C10，前端职责——core 只收消息）
- * @module @vessel/tui/utils
+ * @module @vessel-agent/tui/utils
  *
  * REPL 输入里的 `@<路径>` 在发送前展开为注入消息（走 Runtime.run 的 `RunOptions.messages`），
  * 交给 core 前置于用户输入。core 不认识「引用」这个概念，只知道「本轮要注入的消息」。
@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import type { Message } from '@vessel/core';
+import type { Message } from '@vessel-agent/core';
 
 /** 单文件注入上限（字节）。超出则截断并在内容末尾标注 */
 export const MAX_FILE_BYTES = 102400; // 100KB

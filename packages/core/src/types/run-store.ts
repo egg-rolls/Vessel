@@ -4,7 +4,7 @@
  * `RunStore` 是 run 级检查点的 port；与 `SessionBackend`（会话级历史）并列，
  * 互不依赖。接口放在 types/ 是为了满足依赖方向 D4（kernel 只能依赖 port 类型）。
  *
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import type { Message } from './provider.js';

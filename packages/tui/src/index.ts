@@ -1,6 +1,6 @@
 /**
- * @vessel/tui - 终端交互界面
- * @module @vessel/tui
+ * @vessel-agent/tui - 终端交互界面
+ * @module @vessel-agent/tui
  *
  * 调用 core + config，提供终端交互。
  * 无基础用户入口。

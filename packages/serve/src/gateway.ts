@@ -1,6 +1,6 @@
 /**
  * Gateway — HTTP/WS 服务网关（协议 vessel.gateway/1）
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  *
  * 把 runtime 的 EventStream 暴露为 WS / SSE 广播，并提供 /v1 控制端点：
  * 会话、工具、运行提交/查询/取消、权限应答、静态 web 托管。
@@ -25,8 +25,8 @@ import type {
   SessionBackend,
   ToolDefinition,
   TraceRedactor,
-} from '@vessel/core';
-import { createDefaultTraceRedactor } from '@vessel/core';
+} from '@vessel-agent/core';
+import { createDefaultTraceRedactor } from '@vessel-agent/core';
 import { ClientBackpressure } from './backpressure.js';
 import {
   type DurableGatewayOptions,
@@ -158,7 +158,7 @@ import {
   type WorkflowRunStatus,
 } from './workflow.js';
 
-// 公开导出保持不变：这些辅助函数仍可从 `@vessel/serve/gateway` 导入。
+// 公开导出保持不变：这些辅助函数仍可从 `@vessel-agent/serve/gateway` 导入。
 export {
   buildContentSecurityPolicy,
   corsHeaders,

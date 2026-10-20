@@ -5,7 +5,7 @@
  *   1. 仓库内 `plugins/<category>/<name>/`（内置插件，权威）；
  *   2. 项目目录 `./.vessel/plugins/`（扁平 `<name>/` 或 `<category>/<name>/`）；
  *   3. 用户目录 `~/.vessel/plugins/`（同上）；
- *   4. `node_modules/@vessel/*`（仓库根与 cwd；跳过 core/config/tui/serve/permission）。
+ *   4. `node_modules/@vessel-agent/*`（仓库根与 cwd；跳过 core/config/tui/serve/permission）。
  *
  * 项目优先于用户：项目级插件覆盖同名用户级插件，仓库内插件覆盖两者。
  *
@@ -239,7 +239,7 @@ export class PluginLoader {
 
   /**
    * 原样加载插件模块（不要求 default 是 Plugin）。
-   * 工厂式插件（如 `@vessel/mcp-client` 的 `createMcpPlugin`）由装配层自行构造。
+   * 工厂式插件（如 `@vessel-agent/mcp-client` 的 `createMcpPlugin`）由装配层自行构造。
    * 未知插件或 import 失败返回 null。
    */
   async loadModule(name: string): Promise<unknown | null> {

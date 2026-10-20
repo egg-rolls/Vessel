@@ -1,6 +1,6 @@
 /**
  * /config —— 配置查看（脱敏 + 来源 + YAML 路径）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据只来自 RPC `config.get` / `config.sources`（E12/E14）。
  * 服务端已脱敏；TUI 再做一层 redactForDisplay 兜底。

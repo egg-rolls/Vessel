@@ -1,6 +1,6 @@
 /**
  * Context 类型定义
- * @module @vessel/core/context
+ * @module @vessel-agent/core/context
  */
 
 import type { Message } from './provider.js';

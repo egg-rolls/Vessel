@@ -1,13 +1,13 @@
 /**
  * 交互式会话选择器（/resume）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 保留既有导出名与 props（onSelect/onClose），内部改用 DataTable + 纯 session-picker：
  * ↑↓/jk、PgUp/PgDn、Home/End、`/`/`f` 过滤、Enter 打开、`r` 重命名、`x` 删除（内联确认）。
  * 选中项按 session_id 记录；任何高度都封顶（默认 20 行）。
  */
 
-import type { SessionInfo } from '@vessel/core';
+import type { SessionInfo } from '@vessel-agent/core';
 import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
 import { type ReactNode, useMemo, useState } from 'react';
 import { t } from '../i18n/index.js';

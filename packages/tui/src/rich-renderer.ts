@@ -1,6 +1,6 @@
 /**
  * Rich 终端渲染器
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 封装 @promptctl/rich-js（Python Rich 的 TypeScript 端口），
  * 对标 Hermes 的 rich_output 模块。

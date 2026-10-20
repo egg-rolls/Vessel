@@ -51,11 +51,11 @@
   ],
   "dependencies": {
     "@promptctl/rich-js": "^0.10.0",
-    "@vessel/config": "0.10.0",
-    "@vessel/core": "0.10.0",
-    "@vessel/permission": "0.10.0",
-    "@vessel/serve": "0.10.0",
-    "@vessel/tui": "0.10.0",
+    "@vessel-agent/config": "0.10.0",
+    "@vessel-agent/core": "0.10.0",
+    "@vessel-agent/permission": "0.10.0",
+    "@vessel-agent/serve": "0.10.0",
+    "@vessel-agent/tui": "0.10.0",
     "yaml": "^2.9.0"
   }
 }

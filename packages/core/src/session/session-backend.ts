@@ -1,6 +1,6 @@
 /**
  * Session Backend 实现
- * @module @vessel/core/session
+ * @module @vessel-agent/core/session
  */
 
 import type { Message } from '../types/provider.js';

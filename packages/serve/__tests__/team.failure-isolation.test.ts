@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import type { AgentMessage, PeerInfo, RunEvent, Transport, Unsubscribe } from '@vessel/core';
-import { MemoryEventStream } from '@vessel/core';
+import type { AgentMessage, PeerInfo, RunEvent, Transport, Unsubscribe } from '@vessel-agent/core';
+import { MemoryEventStream } from '@vessel-agent/core';
 import { type Gateway, startGateway } from '../src/gateway';
 import { createRuntime, waitUntil } from './helpers';
 

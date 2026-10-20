@@ -1,7 +1,7 @@
 /**
  * Workflow 离线示例（0.4）。
  *
- * 使用 mock provider 与真实 @vessel/workflow 引擎，不访问网络、不需要 API Key。
+ * 使用 mock provider 与真实 @vessel-agent/workflow 引擎，不访问网络、不需要 API Key。
  * 运行：bun run examples/workflow-offline.ts
  */
 

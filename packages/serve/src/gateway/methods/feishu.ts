@@ -1,7 +1,7 @@
 /**
  * feishu.* 方法（当前仅 status）。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import { type FeishuGatewayOptions, normalizeFeishuStatus } from '../../feishu.js';

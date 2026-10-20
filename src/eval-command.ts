@@ -2,7 +2,7 @@
  * `vessel eval <suite>`（0.4 A2）。
  *
  * - 默认离线 mock；真实 provider 需 `evals.allowNetwork: true` **且** `--allow-network`；
- * - 报告写盘由 @vessel/evals report.ts 负责；asm 只传 outDir/--out 并处理 --json；
+ * - 报告写盘由 @vessel-agent/evals report.ts 负责；asm 只传 outDir/--out 并处理 --json；
  * - 退出码：0 全 pass/skip；1 有 failed/error；2 参数/配置/网络门控错误。
  */
 

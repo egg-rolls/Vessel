@@ -16,7 +16,7 @@ import {
   MemoryPluginHost,
   type RuntimeHost,
   type ToolContext,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { createDelegateTaskPlugin, type DelegateTaskOptions } from '../src/index';
 
 const provider: LLMProvider = {

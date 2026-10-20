@@ -6,7 +6,7 @@
  * 规则（D1-D6，见 PLAN-0.2.0-gov.md §5.1）：
  *   D1  packages/core/src/types/** 只能 import types/ 内部（禁止实现目录）
  *   D2  core 模块之间只经 port：相对 import 只能指向同模块、types/ 或另一模块的 index.ts
- *   D3  core 不得依赖 src/、packages/serve、plugins、apps；不得 import 外部 @vessel/*
+ *   D3  core 不得依赖 src/、packages/serve、plugins、apps；不得 import 外部 @vessel-agent/*
  *   D4  kernel 只依赖 types/ 与 kernel/ 内部；具体实现仅允许显式白名单（DECISION-007 F5）
  *   D5  非 core 的 workspace 包不得相对 import core 内部；core 不得反向依赖它们
  *   D6  packages/core 的 subpath exports 只能指向 index.ts（不暴露内部实现文件）
@@ -318,15 +318,15 @@ export async function checkDependencies(root: string): Promise<Violation[]> {
           line,
           specifier,
           resolved,
-          message: 'workspace 包必须通过 @vessel/core 导入，不得相对 import core 内部',
+          message: 'workspace 包必须通过 @vessel-agent/core 导入，不得相对 import core 内部',
         });
       } else {
-        addIf(violations, /^@vessel\/core\//.test(specifier), {
+        addIf(violations, /^@vessel-agent\/core\//.test(specifier), {
           rule: 'D5',
           file,
           line,
           specifier,
-          message: 'workspace 包不得 import @vessel/core/ 内部路径（只允许公开 subpath）',
+          message: 'workspace 包不得 import @vessel-agent/core/ 内部路径（只允许公开 subpath）',
         });
       }
     }

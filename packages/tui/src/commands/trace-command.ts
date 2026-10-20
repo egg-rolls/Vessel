@@ -1,6 +1,6 @@
 /**
  * /trace —— 从 trace 查看 / 重放 run 事件
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 数据只来自 RPC `events.list`（E5/E6 消费端）：
  *   { run_id, since_seq?, since_ts?, types?, type_prefix?, limit? }

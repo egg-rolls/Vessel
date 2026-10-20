@@ -8,7 +8,7 @@
  * - 幂等；不修改输入事件。
  */
 
-import type { RunEvent, TraceRedactor } from '@vessel/core';
+import type { RunEvent, TraceRedactor } from '@vessel-agent/core';
 import { BUILTIN_RULES, type RedactRule, type RedactSecretsConfig, redactText } from './rules.js';
 
 /** 与 core 默认 redactor 对齐的键名集合。 */

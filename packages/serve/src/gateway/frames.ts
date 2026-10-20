@@ -1,10 +1,10 @@
 /**
  * Gateway WS/SSE 帧构造 — 纯函数，所有输入显式传入。
  *
- * @module @vessel/serve/gateway/frames
+ * @module @vessel-agent/serve/gateway/frames
  */
 
-import type { RunEvent } from '@vessel/core';
+import type { RunEvent } from '@vessel-agent/core';
 import type { EventGap } from '../event-buffer.js';
 import {
   type NodeInfo,

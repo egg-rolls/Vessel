@@ -1,6 +1,6 @@
 /**
  * 时间格式化纯函数（SessionTable / /runs 共用）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 /** 相对时间格式化（如 "2h ago", "3d ago"）；`now` 可注入以便测试 */

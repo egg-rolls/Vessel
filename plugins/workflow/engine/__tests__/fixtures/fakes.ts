@@ -18,13 +18,13 @@ import type {
   Scheduler,
   ToolDefinition,
   ToolHandler,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import {
   MemoryEventStream as EventStreamImpl,
   GuardrailStage,
   HookType,
   MemoryPluginHost,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import type { ResolvedWorkflowConfig } from '../../src/types.js';
 
 export type AgentBehavior = (prompt: string, signal: AbortSignal | undefined) => Promise<string>;

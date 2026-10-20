@@ -1,6 +1,6 @@
 /**
  * 事件回放
- * @module @vessel/core/events
+ * @module @vessel-agent/core/events
  *
  * 从 FileEventStore 读取持久化事件，按序发布到 EventStream。
  * 订阅者不区分 live/replay——走同一 publish() 路径，保留原始 ts。

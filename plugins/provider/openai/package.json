@@ -1,5 +1,5 @@
 {
-  "name": "@vessel/provider-openai",
+  "name": "@vessel-agent/provider-openai",
   "version": "0.10.0",
   "type": "module",
   "main": "src/index.ts",
@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vessel/core": "0.10.0"
+    "@vessel-agent/core": "0.10.0"
   },
   "devDependencies": {
     "typescript": "^7.0.2"

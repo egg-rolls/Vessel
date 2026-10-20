@@ -1,6 +1,6 @@
 /**
  * 底部按键提示（由 ViewAction 生成，不硬编码业务键）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  */
 
 import { Text } from 'ink';

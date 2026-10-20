@@ -1,6 +1,6 @@
 /**
  * TUI 视觉主题（0.5.2 / 0.5.3）
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 暖中性 + 黄铜强调，与 Web 的 Linen 设计语言一致：
  * 少用高饱和色和大色块，靠层级、留白和细线表达结构。

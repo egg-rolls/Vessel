@@ -1,6 +1,6 @@
 /**
  * 空态：一行标题 + 一行提示
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * 不渲染空表头；调用方负责边框。
  */

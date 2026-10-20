@@ -5,7 +5,7 @@
  * 本插件只经 PluginHost.registerTool 接入，不新增 core 接口。
  */
 
-import type { EventStream, Plugin } from '@vessel/core';
+import type { EventStream, Plugin } from '@vessel-agent/core';
 
 /** 传输类型 */
 export type McpTransportKind = 'stdio' | 'http';

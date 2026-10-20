@@ -1,6 +1,6 @@
 /**
  * 终端控制序列清洗——纯函数
- * @module @vessel/tui
+ * @module @vessel-agent/tui
  *
  * bash / 工具输出可能带 ANSI 颜色、OSC 标题、光标移动等控制序列；
  * Ink 直接渲染会破坏行布局。展示层统一先清洗（core/tool 的原始返回值不变）。

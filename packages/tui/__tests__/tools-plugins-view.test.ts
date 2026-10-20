@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { ToolDefinition } from '@vessel/core';
+import type { ToolDefinition } from '@vessel-agent/core';
 import {
   buildPluginsListView,
   buildToolDetailView,

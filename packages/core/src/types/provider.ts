@@ -1,6 +1,6 @@
 /**
  * LLM Provider 类型定义
- * @module @vessel/core/provider
+ * @module @vessel-agent/core/provider
  */
 
 import type { ToolCall, ToolSchema } from './tool.js';

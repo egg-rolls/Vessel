@@ -1,7 +1,7 @@
 /**
  * MCP 工厂式插件接线（0.3 A1）。
  *
- * ext 的 `@vessel/mcp-client` 默认导出是工厂函数，不能经 `PluginLoader.load()`
+ * ext 的 `@vessel-agent/mcp-client` 默认导出是工厂函数，不能经 `PluginLoader.load()`
  * 当作普通 Plugin 加载。本模块：
  * - 按 `mcp_servers` 构造 `createMcpPlugin({ servers, events })`；
  * - 把插件控制面适配成 TUI `/mcp` 与 gateway `/v1/mcp/servers` 需要的结构接口；

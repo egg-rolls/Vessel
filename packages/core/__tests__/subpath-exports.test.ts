@@ -8,33 +8,33 @@ import {
   pruneRuns,
   MemoryRunStore as RootMemoryRunStore,
   MetricsCollector as RootMetricsCollector,
-} from '@vessel/core';
-import { MemoryContextManager } from '@vessel/core/context';
-import type { AgentSpec } from '@vessel/core/kernel';
+} from '@vessel-agent/core';
+import { MemoryContextManager } from '@vessel-agent/core/context';
+import type { AgentSpec } from '@vessel-agent/core/kernel';
 import {
   createCancellationScope,
   InProcessScheduler as KernelScheduler,
   MemoryEventBus,
   SerialScheduler,
-} from '@vessel/core/kernel';
+} from '@vessel-agent/core/kernel';
 import {
   FileEventStore,
   MemoryEventStream,
   MetricsCollector,
   replayRun,
-} from '@vessel/core/observability';
+} from '@vessel-agent/core/observability';
 import {
   GuardrailRunner,
   GuardrailStage,
   HookRunner,
   HookType,
   PermissionPolicy,
-} from '@vessel/core/policy';
+} from '@vessel-agent/core/policy';
 import {
   AnthropicProvider,
   MemoryLLMProvider,
   OpenAICompatibleProvider,
-} from '@vessel/core/provider';
+} from '@vessel-agent/core/provider';
 import {
   FileRunStore,
   FileSessionBackend,
@@ -42,9 +42,9 @@ import {
   MemorySessionBackend,
   RunResumeError,
   SQLiteSessionBackend,
-} from '@vessel/core/session';
-import { InProcessTransport as SubpathTransport } from '@vessel/core/transport';
-import type { Message } from '@vessel/core/types';
+} from '@vessel-agent/core/session';
+import { InProcessTransport as SubpathTransport } from '@vessel-agent/core/transport';
+import type { Message } from '@vessel-agent/core/types';
 import pkg from '../package.json';
 
 describe('subpath exports (R6a/R6b)', () => {

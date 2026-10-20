@@ -12,7 +12,7 @@ import {
   MemoryEventStream,
   type RunEvent,
   type RunnableAgent,
-} from '@vessel/core';
+} from '@vessel-agent/core';
 import { evaluateAssertions } from './assertions.js';
 import { EvalsError, invalid } from './errors.js';
 import { ScriptedProvider, SwitchableProvider } from './mock-provider.js';

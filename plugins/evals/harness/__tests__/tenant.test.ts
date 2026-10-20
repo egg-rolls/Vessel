@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream, type RunEvent } from '@vessel/core';
+import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import { EvalsError } from '../src/errors.js';
 import { findLatestReport } from '../src/report.js';
 import { runEvalSuite } from '../src/runner.js';

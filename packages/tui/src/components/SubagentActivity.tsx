@@ -6,7 +6,7 @@
  * 也不实现任何传输/队列（当前没有队列事件）。
  */
 
-import type { EventStream } from '@vessel/core';
+import type { EventStream } from '@vessel-agent/core';
 import { Box, Text } from 'ink';
 import { useEffect, useState } from 'react';
 import { theme } from '../theme.js';

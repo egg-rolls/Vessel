@@ -1,6 +1,6 @@
 /**
  * Git 工具函数（app 层）
- * @module @vessel/tui/utils
+ * @module @vessel-agent/tui/utils
  */
 
 /**

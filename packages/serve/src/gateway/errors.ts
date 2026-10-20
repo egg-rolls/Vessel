@@ -4,7 +4,7 @@
  * 与 `gateway.ts` 的 legacy 错误处理共享同一个类，保证 `instanceof MethodError`
  * 在拆分方法表后仍然成立。
  *
- * @module @vessel/serve
+ * @module @vessel-agent/serve
  */
 
 import type { ProtocolError } from '../protocol.js';

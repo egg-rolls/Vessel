@@ -1,5 +1,5 @@
 /**
- * @vessel/evals — 默认离线的 eval harness。
+ * @vessel-agent/evals — 默认离线的 eval harness。
  *
  * 库 + 运行器；不向 PluginHost 注册工具。默认导出是工厂函数，
  * 因此列入 `FACTORY_PLUGINS`（短名 evals）。
