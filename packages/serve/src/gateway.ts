@@ -120,6 +120,7 @@ import {
   isRemoteAddress,
   isTeamEvent,
   normalizeLocalAddress,
+  type PeerInfoWithIncarnation,
   parseAddress,
   type TeamGatewayOptions,
   TeamProtocolError,
@@ -561,6 +562,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const scheme = tlsMaterial ? 'https' : 'http';
 
   const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
+  /** 0.9 事务代际：进程启动时生成一次，随 hello / peer 记录传播（重启即变化）。 */
+  const incarnation = randomUUID().replace(/-/g, '').slice(0, 12);
   const startedAt = Date.now();
   // gateway 事件缓冲始终有界：缺省/0 = 10000；与 core MemoryEventStream 的
   // `0 = unlimited` 语义无关（DECISION-009 §10.3.4）。
@@ -674,6 +677,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       nodeId,
       protocol: protocolInfo,
       node,
+      incarnation,
       fromSeq,
       latestSeq,
       oldestSeq: buffer.oldestSeq,
@@ -1501,13 +1505,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
 
     if (path === '/v1/team/peers' && req.method === 'GET') {
-      let peers = t.transport ? await t.transport.peers().catch(() => []) : [];
+      let peers: PeerInfoWithIncarnation[] = t.transport
+        ? await t.transport.peers().catch(() => [])
+        : [];
       if (peers.length === 0) {
         peers = [
           {
             nodeId: t.nodeId,
             agents: t.host?.list() ?? [],
             protocol: PROTOCOL_VERSION,
+            // 自身也是 peer；透出本进程代际，形状与 transport.peers() 一致。
+            incarnation,
           },
         ];
       }

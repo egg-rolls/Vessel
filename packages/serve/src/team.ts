@@ -50,7 +50,12 @@ export interface WirePeerInfo {
   endpoint?: string;
   agents: WireAgentStatus[];
   protocol: typeof PROTOCOL_VERSION;
+  /** 0.9：对端进程代际；旧对端 / 未知时省略（消费方按 `-` 处理） */
+  incarnation?: string;
 }
+
+/** 0.9 additive：core `PeerInfo` + 代际（transport.peers() 可能是该超集）。 */
+export type PeerInfoWithIncarnation = PeerInfo & { incarnation?: string };
 
 /** 协议错误（带稳定 code） */
 export class TeamProtocolError extends Error {
@@ -206,13 +211,16 @@ export function toWireAgentStatus(status: AgentStatus): WireAgentStatus {
   };
 }
 
-/** PeerInfo → wire */
-export function toWirePeer(peer: PeerInfo): WirePeerInfo {
+/** PeerInfo → wire；0.9 代际存在时透出，缺失则省略（向后兼容）。 */
+export function toWirePeer(peer: PeerInfoWithIncarnation): WirePeerInfo {
+  const incarnation =
+    typeof peer.incarnation === 'string' && peer.incarnation !== '' ? peer.incarnation : undefined;
   return {
     node_id: peer.nodeId,
     ...(peer.endpoint !== undefined ? { endpoint: peer.endpoint } : {}),
     agents: peer.agents.map(toWireAgentStatus),
     protocol: PROTOCOL_VERSION,
+    ...(incarnation !== undefined ? { incarnation } : {}),
   };
 }
 

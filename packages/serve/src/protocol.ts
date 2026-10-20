@@ -109,6 +109,11 @@ export type ServerFrame =
       ts: number;
       protocol: ProtocolInfo;
       node: NodeInfo;
+      /**
+       * 0.9：本进程事务代际（12 位随机短 id）。
+       * 远端按 `(node_id, incarnation, run_id, seq)` 去重；缺失时按 `-` 兼容。
+       */
+      incarnation: string;
       /** 本次回放的第一条 seq；无事件时为 0 */
       from_seq: number;
       /** 服务端当前最新 seq；无事件时为 0 */
@@ -154,8 +159,12 @@ export type ClientFrame =
       token: string;
       role?: 'console';
       since?: number;
-      /** 0.6：admin 可显式覆盖 tenant；非 admin 只能使用 token principal */
+      /**
+       * 0.6：admin 可显式覆盖 tenant；非 admin 只能使用 token principal
+       */
       tenant_id?: string;
+      /** 0.9：客户端进程代际（additive；网关不据此做鉴权或去重） */
+      incarnation?: string;
     }
   | { v?: 1; kind: 'req'; id: string; method: string; params?: unknown }
   | { v?: 1; kind: 'pong' };
