@@ -3,7 +3,7 @@
 > 适用版本线：`0.x`。发布由 **tag `v*`** 触发，不由分支名触发。
 > 维护者：`gov`；最终发布决定权在 1。
 > **0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布**；不发布二进制（ADR-006 继续有效）；只发 npm 库包 + GitHub Release。
-> **0.5 / 0.11 / 0.12 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
+> **0.5 / 0.11 / 0.12 / 0.13 只做发布干跑**：不 tag、不 push tag、不 `npm publish`、不合并 `main`；
 > 发布仍等 1.0.0 之后。
 > **0.10 发布前置**：除发布干跑外，新增安装解析 smoke（18 个子包 + 根 tarball）；
 > **必须先构建 Web 控制台**（`apps/web` 的 `npm ci` + `npm run build`）——`dist/` 被
@@ -111,6 +111,17 @@ bun run scripts/smoke-install.ts --force  # Windows 上强制尝试（默认跳�
 - **CLI 样式**：人类可读输出走 `src/ui-style.ts`，`--json` 与数据行无 ANSI；CI 日志与管道不依赖颜色。
 - **0.11.1 并入**：0.11.1 不单独发布，权限 TTL / 超时、`ui.showReasoning` 与 `agent.cwd` 的修复只出现在 0.12.0 的 CHANGELOG，不要创建 `0.11.1` tag。
 - **版本线**：0.12.0 仍未 tag / `npm publish` / 合并 `main`；版本号与 `bun.lock` 由 1 在收口时统一写入。
+
+## 2.4 0.13 状态栏与权限生命周期发布前确认
+
+0.13 改变权限交互与 TUI 布局，发布说明与验收需要额外确认：
+
+- **权限等待默认不超时**：release notes 不得再写「权限弹窗 120s 过期」或「超时自动失败」。权限一直等待应答 / 取消 / abort；只有宿主显式配置正数 `timeoutMs` 才超时。`ask_user` 仍是全局弹窗，继续按 `event.ts + 120s` 计算有效期。
+- **持久化文件**：gateway 在 `<dataDir>/interactions-<tenant>.json` 写 `pending` / `answered` / `orphaned`（`0600` 原子写）。发布说明可写“重启后旧请求标记为已结束 / 迟到应答返回 `run_ended`”，不得写“跨重启恢复 pending 并继续应答”。
+- **Web 内联权限**：权限卡片在 run 卡片内，跨 session 用顶部待处理条；`ask_user` 仍是全局弹窗。release notes 不得宣称所有交互都已内联。
+- **状态栏**：`Ctrl+T` / `Ctrl+G` / `Ctrl+R` 与新下栏在 release notes 中列出；`ui.statusBars`（YAML `status_bars`）可持久化显隐，`VESSEL_STATUS_BARS` 只作启动初值。终端 `<40` 列不显示下栏、`<18` 行默认隐藏。
+- **0.12.1 并入**：0.12.1 不单独发布，斜杠提示 72 列上限移除、`computeDialogWidth = cols-4`、`InlineAutocomplete` resize、品牌色 `#c2a273` 与 `/exit` Goodbye 只出现在 0.13.0 的 CHANGELOG，不要创建 `0.12.1` tag。
+- **版本线**：0.13.0 仍未 tag / `npm publish` / 合并 `main`；版本号与 `bun.lock` 由 1 在收口时统一写入。
 
 ## 3. 版本脚本
 

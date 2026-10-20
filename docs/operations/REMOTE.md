@@ -195,6 +195,13 @@ vessel gateway install-service       # systemd user / LaunchAgent / Windows 登�
 - PID 文件与 daemon 日志权限为 `0600`；`status --json` 可直接给运维脚本消费，人类输出带暗金样式（非 TTY 自动无 ANSI）。
 - 节点升级用 `vessel update`（npm / bun 全局安装）或 `--check` 仅检查；源码部署只提示 `git pull && bun install`。
 
+### 3.5 远程权限交互与本地状态栏（0.13）
+
+- **权限等待默认不超时**：远程客户端不点击时权限请求会一直保留，直到应答、取消或 run abort；不要用固定超时清理 pending。`expired` 只在请求确已过期时返回，`run_ended` 表示 run 已结束或记录已 `orphaned`。
+- **持久化**：gateway 在 `<dataDir>/interactions-<tenant>.json` 记录 `pending` / `answered` / `orphaned`（`0600` 原子写）。重启后旧 `pending` 转 `orphaned`，迟到应答返回 `run_ended`；重复应答幂等，不同决定返回 `conflict`。多端连接同一 gateway 时共享这份状态。
+- **独立前端**：权限卡片内联在所属 run，跨 session 的待处理请求在顶部条提示；其他端应答 / 过期 / run 终态会自动收起卡片。`ask_user` 仍是全局弹窗。
+- **TUI 状态栏**：`Ctrl+T` / `Ctrl+G` 切换上 / 下栏，`Ctrl+R` 打开 `/resume`；显隐写回用户配置 `ui.statusBars`（YAML `status_bars`）。`VESSEL_STATUS_BARS` 只作启动初值，不随远程连接或手动切换改变。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
+
 ## 4. 独立前端部署
 
 ```bash

@@ -144,6 +144,7 @@ legacy 键（仅兼容）：`default_provider` / `default_model` / `providers.<n
 ui:
   language: zh-CN        # zh-CN（默认）| en
   clearOnStart: true     # 默认 true；仅 TTY 生效
+  status_bars: both      # 0.13：top | bottom | both | none（TS 字段 statusBars）
 ```
 
 - 默认 **zh-CN**；`VESSEL_LANG=en` 或 `ui.language: en` 切换英文。
@@ -170,7 +171,28 @@ agent:
 - **`agent.cwd`**：`bash` 未显式传 `cwd` 时使用该目录；`read` / `edit` 的相对路径按它解析。支持 `~`，相对路径按进程 cwd 解析为绝对路径；未配置 / 空串等价于不设置。优先级固定为 **工具参数 `cwd` > `agent.cwd` > `process.cwd()`**。
 - **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。
 - **CLI 写配置**：`vessel config set agent.cwd <path>`；空值被拒绝。与 `ui.language` 一样只改用户配置、保留其它键、`0600` 原子写。
-- **权限时效**：Web 权限 / 提问弹窗的有效期由事件时间推导（`event.ts + 120s`），重放 / 刷新不会重新计时；服务端返回 `not_found` 时弹窗关闭并提示。core 的权限等待超时抛 `PermissionTimeoutError`（`permission_timeout`），run 失败，不让模型重试。
+- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 弹窗仍按事件时间推导 `event.ts + 120s`；权限卡片不再按 TTL 丢弃。详见 §2.6。
+
+### 2.5 状态栏与显隐（0.13，ADR-078）
+
+```yaml
+ui:
+  status_bars: both      # top | bottom | both | none；缺省按终端高度自动
+```
+
+- **上栏**：状态、模型、context 用量 / 百分比（宽终端加进度条）、时长、压缩次数、路径 + branch。0.13 删除 `N sess`，不再每帧查询会话列表。
+- **下栏**：运行态字段 `perm ask · N auto` / `waiting <tool>`、`bash N`、`sub N`、`sess <短ID> · Ctrl+R`、tenant、queue。与上栏同宽；`<40` 列不渲染；`<18` 行默认隐藏；显示时吸收底部 hint 行（净增 2 行）。超宽按 `tenant → queue → session → sub → auto` 丢弃，`perm` / `bash` 保留。
+- **快捷键**：`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume` picker。手动切换立即生效，并写回用户配置 `ui.status_bars`（原子写、`0600`、保留其它键）；写回失败不改变本次会话显示。
+- **优先级**：`VESSEL_STATUS_BARS` > `ui.statusBars` > 自动规则。`VESSEL_STATUS_BARS` 只作启动初值（兼容 `top,bottom` 写法），手动切换不改环境变量。
+- **CLI 写配置**：`vessel config set ui.statusBars <top|bottom|both|none> [--json]`；非法值拒绝。TUI 热键与 CLI 写的是同一个 YAML 键 `ui.status_bars`。
+
+### 2.6 权限生命周期持久化（0.13，ADR-079）
+
+- **默认等待**：交互模式下应用层把默认策略设为 `ask`，请求一直等待，不受时间限制；应用层不设置 `timeoutMs`。只有宿主（core 嵌入方）显式传入正数 `RuntimePermissionConfig.timeoutMs` 才超时。
+- **持久化文件**：`<dataDir>/interactions-<tenant>.json`，`0600` 原子写，记录 `pending` / `answered` / `orphaned`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
+- **终态与幂等**：run 进入 `completed` / `failed` / `cancelled` 时，同 run 的 pending 清出并持久化为 `orphaned`。重复应答返回首次结果（`duplicate: true`）；不同决定返回 `conflict`；`orphaned` 返回 `run_ended`；不存在返回 `not_found`。有界清理只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
+- **关联字段**：`tool.permission.request` 带 `session_id` / `tool_call_id` / `source`；只有显式超时才带 `deadline_at`。
+- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；没有 `interactions.pending` RPC，刷新恢复依赖事件重放缓冲；`ask_user` 仍是全局弹窗。
 
 ## 3. 密钥与 `_env`
 
@@ -202,6 +224,7 @@ vessel config init [--force] [--json]
 vessel config show [--sources] [--json] [--tenant <id>]
 vessel config set ui.language <zh-CN|en> [--json]
 vessel config set ui.showReasoning <true|false> [--json]
+vessel config set ui.statusBars <top|bottom|both|none> [--json]
 vessel config set agent.cwd <path> [--json]
 vessel doctor [--json]
 ```

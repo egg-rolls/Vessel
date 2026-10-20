@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.12.0（基线 `release/0.12.0`；manifest 版本由 1 在收口时统一写入，未 tag / 未 publish / 未合并 `main`）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 / 0.11.0 / 0.12.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke；0.11 起子包使用 `@vessel-agent/*` scope。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.13.0（基线 `release/0.13.0`；manifest 版本由 1 在收口时统一写入，未 tag / 未 publish / 未合并 `main`）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 / 0.11.0 / 0.12.0 / 0.13.0 只做发布干跑。0.10 起发布前置增加安装解析 smoke；0.11 起子包使用 `@vessel-agent/*` scope。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -107,6 +107,16 @@
 - **自更新**：`src/__tests__/update-*.test.ts` 覆盖 npm / bun / dev / unknown 形态与 `--yes` / 非 TTY 行为；测试只断言 argv，不执行真实全局安装。
 - **CLI 样式**：`src/__tests__/ui-style.test.ts` 覆盖 TTY / `NO_COLOR` / `TERM=dumb` 与纯文本回退；新增一次性命令必须走 `ui`，`--json` 断言不带 ANSI。
 - **0.11.1 回归**：权限 TTL（事件时间）、`not_found` 单次提交、`PermissionTimeoutError`、`reasoning_delta` opt-in 与 `agent.cwd` 优先级由 web / core / basic-tools 测试覆盖；CI 的 Test step 仍固定 `VESSEL_VALIDATE_RESULTS=1`。
+
+### 1.6 0.13 状态栏与权限生命周期门禁
+
+- **状态栏纯函数**：`packages/tui/__tests__/status-format.test.ts` 覆盖上栏路径中间省略 / marquee 偏移、下栏宽度分级与固定丢弃顺序、`statusBarsValue` / `visibility` / `parseStatusBars`、`Ctrl+T/G/R` 匹配与切换结果；CJK / emoji 按显示列断言，不得用 `.length` 代替。
+- **配置**：`packages/config/__tests__/ui-config.test.ts` 覆盖 YAML `ui.status_bars` 映射、camelCase `statusBars` 与非法枚举报错；`src/__tests__/config-set-command.test.ts` / `ui-settings.test.ts` 覆盖 `vessel config set ui.statusBars` 的写入与拒绝。
+- **权限生命周期**：`packages/core/__tests__/permission-lifecycle.test.ts` 覆盖默认无限等待、abort → `PermissionAbortedError`、显式正数 `timeoutMs` → `PermissionTimeoutError`、请求字段与 `deadline_at` 条件写入；`permission-timeout.test.ts` 保留显式超时回归。
+- **持久化**：`packages/serve/__tests__/run-engine-permissions.test.ts` 覆盖请求字段、无时间过期、重复应答幂等 / `conflict`、run 终态 `orphaned` / `run_ended`、tenant 作用域、`pending → orphaned` 重载与 POSIX `0600`；`gateway.permissions.test.ts` 覆盖 REST / WS 应答、`scope`、重复提交、配置 `interactionsDir` 时的落盘与未知 `requestId` 的 `not_found`。
+- **Web**：交互测试覆盖权限卡片内联、跨 session 待处理条、其他端 `response` / `expired` 收起、`expired` / `run_ended` toast；不得重新引入全局权限遮罩。
+- **结构门禁**：`bun run scripts/check-docs.ts` 校验 ADR 索引 / 链接与文档一致性；`check-rpc-methods` 继续断言 canonical 方法 38 个，新增 `expired` / `run_ended` 不改变方法数。
+- **验证范围**：Windows 全量 `3226 pass / 2 skip / 0 fail`；POSIX（oven/bun + 持久缓存）`3228 pass / 0 fail`，build / Web build 通过。
 
 ## 2. Release（`.github/workflows/release.yml`）
 

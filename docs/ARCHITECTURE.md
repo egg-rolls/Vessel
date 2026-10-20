@@ -203,7 +203,7 @@ loop:
 - **发给 Provider 的消息始终是合法序列**：`buildRequestMessages` 在输出前丢弃孤儿 `role: tool`、把不完整 `tool_calls` 轮次降级为普通 assistant 文本，并在上下文缺 system 时补回基底 `systemPrompt`。归一化只影响本次请求，不改 `ContextManager` 的持久化记录。
 - **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
 - **thinking 模型的 `reasoning_content`**：Provider 返回后保存在 assistant 消息并随下一轮请求回传（含 `tool_calls` 轮次）；`llm.request` / `context.changed` 事件在发布前剥离该字段，TUI / 观测 / 回放看不到思维链，会话持久化保留（ADR-038）。
-- **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，120s 超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
+- **权限是执行期判定，不是注册期过滤**：`checkPermission` 返回 `'allow' | 'deny' | 'ask'`；`'ask'` 走事件流等用户决定（`tool.permission.request` → `waitFor('tool.permission.response')`，0.13 起默认不超时，只有显式正数 `timeoutMs` 才超时）。未声明 `checkPermission` 的工具走 `RuntimePermissionConfig` 默认策略（库默认 `'allow'`，交互模式由装配层传 `'ask'`）。
 - **`HookRunner` 丢弃 hook 返回值**（`Hook.run` 收窄为 `Promise<void>`）。跨 hook 通信的唯一通道是 `HookContext` 的字段（例如 `BeforeLlm` 的 `systemPrompt`）。
 - **durable checkpoint 只由 `AgentRuntime` 写**（唯一写者）。Host 模式把 Host 的 `runStore` 注入成员 runtime；同时给 Host 与 runtime 两个 store 时 Host 优先，禁止双写（ADR-040）。
 - **一个 runtime 同时只跑一个 run**（0.8，ADR-054）：`activeRun` 在任何 await 之前同步占位，已有 active run 时新的 `run()` / `resume()` 立即抛 `run_already_running`（`RunAlreadyRunningError`）。真正并行需要多个 runtime（Host 的“一 agent 一 runtime”模型）。
@@ -748,7 +748,7 @@ serve:
 
 | 事件名 | 方向 | 用途 |
 |---|---|---|
-| `tool.permission.request` / `tool.permission.response` | 工具 → TUI → 工具 | 执行期权限确认（120s 超时） |
+| `tool.permission.request` / `tool.permission.response` | 工具 → TUI → 工具 | 执行期权限确认（0.13 起默认不超时） |
 | `ask.user.requested` / `ask.user.answered` | 工具 → TUI → 工具 | ask_user 交互暂停 |
 | `mcp.server.connected` / `mcp.server.failed` / `mcp.server.disconnected` | MCP 插件 → 观测 | server 生命周期（失败隔离） |
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
@@ -1176,7 +1176,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
   BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→
   ToolResult guardrail → AfterTool hook，并发布
   `tool.call.started|completed|failed`（`run_id` 为 workflow run id）；权限 `ask`
-  经 `tool.permission.request` 等待应答（120s 无应答按失败处理），`deny` 拒绝。
+  经 `tool.permission.request` 等待应答（0.13 起默认不超时；只有显式正数 `timeoutMs` 才超时），`deny` 拒绝。
   未注入 `toolPipeline` 的旧嵌入路径仍直接调 handler（deprecated）。
 - **状态与持久化**：run id `wf_<uuid>`；workflow 状态 `pending | running |
   completed | failed | cancelled | interrupted`；step 状态 `pending | running |
@@ -1582,7 +1582,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 ### 22.2 已知限制（0.8.2）
 
 - 直接构造 workflow 引擎且不注入 `toolPipeline` 的第三方嵌入方仍走旧直接 handler 路径，需要自行迁移。
-- workflow 中的权限 `ask` 会发布 `tool.permission.request` 并等待 120s；若无应答方，步骤失败，不会静默放行。
+- workflow 中的权限 `ask` 会发布 `tool.permission.request` 并等待应答；0.13 起默认不超时（只有显式正数 `timeoutMs` 才超时），无应答方时会一直等待，不会静默放行。
 - 关闭阶段由调用方负责语义正确性；禁用 ToolResult guardrail 会让未检查的结果直接写回上下文。
 - 管道只统一执行语义，不改变 `ToolDefinition` / `PermissionPolicy` / guardrail / hook 的接口。
 
@@ -1893,11 +1893,13 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 31.5 CLI 暗金样式
 
-- **模块**：`src/ui-style.ts`；暗金主色 `#d08a3a`、亮色 `#e8a94c`，提供 `brand` / `title` / `section` / `ok|warn|err|info` / `symbol` / `rule` / `kv`；CJK 显示宽度按 2 列计算。
+- **模块**：`src/ui-style.ts`；暗金主色 `#c2a273`，亮色与主色同值（强调靠 `BOLD`），与 TUI `theme.brand` 一致；提供 `brand` / `title` / `section` / `ok|warn|err|info` / `symbol` / `rule` / `kv`；CJK 显示宽度按 2 列计算。
 - **ANSI 条件**：stdout 为 TTY、`NO_COLOR` 未设置（含空串）、`TERM !== 'dumb'` 同时满足；否则全部返回原文。`--json` 与数据行保持纯文本。
 - **范围**：全部一次性命令的人类可读输出；TUI 使用自己的 theme，不经过该模块。
 
 ### 31.6 0.11.1 修复（并入本版本）
+
+> 0.13 起权限默认不超时、Web 权限改为 run 内联，以下超时 / 弹窗描述由 §32 与 ADR-079 修订；`ask_user` 仍沿用事件时间 TTL。
 
 - **权限交互时效**：Web `expiresAt = event.ts + 120s`；重放旧请求直接丢弃；`requestId` 去重；`not_found` 移除弹窗并提示；同一请求只提交一次。
 - **权限超时**：core 等待超时抛 `PermissionTimeoutError`（`permission_timeout`），run 失败，不交给模型重试。
@@ -1913,3 +1915,47 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - CLI 样式是可选的 TTY 装饰，不进入 `--json` / 数据输出；重定向时无 ANSI。
 - 0.12.0 的 Windows 全量门禁为 `3126 pass / 2 skip / 0 fail`；POSIX CI 实跑仍待完成。
 - 0.11.1 不单独发布，修复只随 0.12.0；0.12.0 仍未 tag / `npm publish` / 合并 `main`。
+
+## 32. 0.13.0 状态栏与权限生命周期（已实现）
+
+> 状态：已合入 `release/0.13.0`（未发布）。决策见 [ADR-078](adr/ADR-078-dual-status-bars-and-path-overflow.md)、[ADR-079](adr/ADR-079-permission-lifecycle-persistence.md)；同版本并入 0.12.1 的 TUI 小修（0.12.1 不单独发布）。
+
+### 32.1 TUI 双状态栏
+
+- **上栏**：模型、context 用量（`width >= 60` 显示；`>= 80` 追加 10 格进度条）、百分比、时长、压缩次数（`>= 60` 列）、路径 + branch。0.13 删除 `N sess` 与每帧 `session.list()`。
+- **路径溢出**：宽度按终端显示列计算。放不下时先中间省略，保留根（`D:\` / `/` / `~/`）与末两级目录；空闲且路径自身仍溢出时用 marquee 窗口滚动（`MARQUEE_TICK_MS = 140`、`MARQUEE_PAUSE_MS = 1200`，往返循环）。branch 固定最右，超过 24 格才尾部截断。宽字符跨窗口边界时整字跳过，不打印半个字。
+- **下栏 `BottomBar`**：与上栏同构（`PanelFrame`、`viewWidth(columns)`），单行字段 `perm` / `bash` / `sub` / `session` / `tenant` / `queue`。`perm` 默认显示 `perm ask · N auto`，有等待中的权限时改为 `waiting <tool>`；`session` 显示 `sess <短ID> · Ctrl+R`。宽度分级：`<40` 列不渲染；`40–59` perm / bash / sub；`60–99` 增加 session；`>=100` 增加 tenant（非 default）与 queue。超宽按 `tenant → queue → session → sub → auto` 从右到左丢弃，perm / bash 不丢。
+- **行预算**：`STATUS_BAR_ROWS = 3`、`BOTTOM_BAR_ROWS = 3`。下栏显示时吸收底部 hint 行（`hintRows = 0`），净增 2 行；独占 overlay 打开时下栏让位；终端 `<40` 列时按未渲染计入预算。下栏默认在 `rows >= 18` 且非 minimal / hidden 时显示。
+- **显隐与配置**：`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume` picker。初始值优先级 `VESSEL_STATUS_BARS > ui.statusBars > 自动规则`；手动切换立即生效并写回用户配置 `ui.status_bars`（YAML，原子写 / `0600` / 保留其它键），写回失败不回滚界面。`ui.statusBars` 只接受 `top|bottom|both|none`，非法值由 validator 拒绝。
+- **快捷键副作用**：`ink-text-input` 会把 Ctrl 字符插入输入框，切换后必须用当前输入覆盖并重置光标。快捷键放在 overlay 早退之前，弹窗打开时也能恢复栏位。
+- **品牌色**：TUI `theme.brand` 与 CLI `src/ui-style.ts` 主色统一为 `#c2a273`；CLI 亮色同值 + `BOLD`。
+
+### 32.2 权限生命周期
+
+- **默认不超时**：core `PermissionPolicy` 只有显式正数 `RuntimePermissionConfig.timeoutMs` 才计时；应用层不设置，因此 REPL / gateway 权限等待一直持续到应答、取消或 abort。只有显式超时才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。
+- **取消语义**：等待绑定 `ctx.signal`；abort 抛 `PermissionAbortedError`（`permission_cancelled`，`name: AbortError`），优先于超时判定，不误报 `permission_timeout`。
+- **请求字段**：`tool.permission.request.data` 增加 `session_id` / `tool_call_id` / `deadline_at` / `source`（additive）；默认等待不写 `deadline_at`。
+- **持久化**：`packages/serve/src/interactions-store.ts` 按 tenant 写 `<dataDir>/interactions-<tenant>.json`，记录 `pending` / `answered` / `orphaned`，`atomicWrite` + `0600`。gateway 启动时 `loadAllSync()`；本进程没有对应 run 的 `pending` 转 `orphaned`。文件损坏 / 不可读向 stderr 报错并按空集处理，不删除原文件；tenant 名只接受 `[A-Za-z0-9._-]`。
+- **不按 TTL sweep**：pending 只由应答、run 终态或进程退出清理。run 的 `completed` / `failed` / `cancelled` 会把同 run 的 pending 持久化为 `orphaned`；迟到应答返回 `run_ended`。
+- **幂等与冲突**：重复应答返回首次结果（`duplicate: true`）；不同决定重答返回 `conflict`；记录不存在返回 `not_found`；`orphaned` 返回 `run_ended`。有界记录（`MAX_RECORDS`）只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
+- **错误码**：RPC 新增 `expired` / `run_ended`；canonical 方法总数仍为 38（不新增 `interactions.pending`）。
+
+### 32.3 Web 内联权限
+
+- **权限**：删除全局权限遮罩，`PermissionCard` 内联在所属 `RunCard`；同一 run 的多个请求按 `requestedAt` 排序。跨 session 的待处理请求由 `PendingPermissionsBar` 提示。
+- **收起条件**：其他端应答（`tool.permission.response`）、过期（`tool.permission.expired`）、run 终态，或应答返回 `expired` / `run_ended` 时移除卡片；`run_ended` toast「run 已结束」，`expired` toast 已过期。
+- **不再用 TTL 丢权限**：`PermissionRequest` 不含 `expiresAt`，只保留 `requestedAt` 排序；权限等待由服务端生命周期决定。`ask_user` 仍是全局 `AskModal`，继续按 `event.ts + 120s` 计算有效期（本批未改）。
+
+### 32.4 0.12.1 TUI 小修（并入本版本）
+
+- **斜杠提示宽度**：`computeDialogWidth = max(1, columns - 4)`，移除 72 列上限；`InlineAutocomplete` 订阅 `useWindowSize`，resize 后重排。
+- **品牌色**：启动头 / wordmark / tagline 使用 `theme.brand #c2a273`；CLI `ui-style` 同步为 `#c2a273` + `BOLD`。
+- **`/exit`**：Ink unmount 并清理最后一帧后输出 `Goodbye!`；`Ctrl+C` 退出不打印（保持原行为），简单模式不变。
+
+### 32.5 已知限制（0.13.0）
+
+- core 只读取 `remember`（等价 `always`）；`allow session` 目前等同 `once`，session 级批准尚未生效。
+- 没有 `interactions.pending` RPC；Web 刷新恢复依赖事件重放缓冲（默认 10000 条），超出缓冲的旧请求可能无法恢复。
+- `ask_user` 仍是全局弹窗与 120s 事件时间 TTL；本版本只把权限请求改为 run 内联。
+- 状态栏显隐写回失败不提示用户；`VESSEL_STATUS_BARS` 只是启动初值，不随手动切换改变。
+- Windows 全量门禁 `3226 pass / 2 skip / 0 fail`（`VESSEL_VALIDATE_RESULTS=1`）；POSIX `3228 pass / 0 fail`，build / Web build 通过；0.13.0 仍未 tag / `npm publish` / 合并 `main`。
