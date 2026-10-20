@@ -119,4 +119,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'permission.otherSessions': '{count} pending permission request(s) in other sessions',
   'permission.goTo': 'Review',
   'chat.reasoning.summary': 'Thinking',
+  // 0.14: subagent tree / child transcript
+  'chat.subagents.title': 'Subagents',
+  'chat.subagents.running': '{count} running',
+  'chat.subagents.details': 'Details',
+  'chat.subagents.view': 'View transcript',
+  'chat.subagents.back': 'Back to session',
+  'chat.subagents.emptyRun': 'No child run events yet',
+  'chat.subagents.crumb': 'Subagent',
 };

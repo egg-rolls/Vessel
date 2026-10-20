@@ -117,4 +117,12 @@ export const messages = {
   'permission.otherSessions': '其他会话有 {count} 个待处理权限请求',
   'permission.goTo': '前往处理',
   'chat.reasoning.summary': '思考过程',
+  // 0.14: subagent tree / child transcript
+  'chat.subagents.title': '子 agent',
+  'chat.subagents.running': '{count} 运行中',
+  'chat.subagents.details': '详情',
+  'chat.subagents.view': '查看 transcript',
+  'chat.subagents.back': '返回主会话',
+  'chat.subagents.emptyRun': '尚未产生子运行事件',
+  'chat.subagents.crumb': '子 agent',
 } as const;

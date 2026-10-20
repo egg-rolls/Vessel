@@ -115,6 +115,28 @@ export const sessionSearchHitSchema = {
   },
 };
 
+/**
+ * agents.list / agents.get 的条目（0.14 P0，DECISION-025 §1.4）。
+ * 只声明冻结字段；`state` 同时覆盖 Host AgentState 与 run/派生状态。
+ */
+export const agentInfoSchema = {
+  type: 'object',
+  required: ['id', 'depth', 'state'],
+  properties: {
+    id: { type: 'string' },
+    role: { type: 'string' },
+    parent_id: { type: 'string' },
+    depth: { type: 'integer', minimum: 0 },
+    state: {
+      type: 'string',
+      enum: ['idle', 'queued', 'running', 'completed', 'failed', 'cancelled', 'error', 'closed'],
+    },
+    current_tool: { type: 'string' },
+    session_id: { type: 'string' },
+    usage: usageSchema,
+  },
+};
+
 export const tenantInfoSchema = {
   type: 'object',
   required: ['tenant_id', 'status', 'created_at'],

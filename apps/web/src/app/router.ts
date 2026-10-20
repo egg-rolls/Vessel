@@ -6,7 +6,7 @@
  */
 
 export type Route =
-  | { domain: 'chat'; sessionId?: string }
+  | { domain: 'chat'; sessionId?: string; agent?: string }
   | { domain: 'runs'; tab: 'live' | 'durable'; runId?: string; sessionId?: string }
   | { domain: 'workflows'; workflowId?: string }
   | {
@@ -64,7 +64,14 @@ export function parseRoute(hash: string): Route {
   switch (domain) {
     case 'chat': {
       const sessionId = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
-      return sessionId ? { domain: 'chat', sessionId } : { domain: 'chat' };
+      // 0.14：`?agent=` 指向子 agent 深链；不校验 id，找不到时由 UI 降级。
+      const agent =
+        query.get('agent') !== null ? decodeSegment(query.get('agent') ?? '') : undefined;
+      return {
+        domain: 'chat',
+        ...(sessionId ? { sessionId } : {}),
+        ...(agent ? { agent } : {}),
+      };
     }
     case 'runs': {
       const tab = pick<'live' | 'durable'>(query.get('tab'), RUN_TABS, 'live');
@@ -112,8 +119,13 @@ export function parseRoute(hash: string): Route {
 /** Route → hash（带 `#`），保证 parseRoute(formatRoute(r)) 往返一致。 */
 export function formatRoute(route: Route): string {
   switch (route.domain) {
-    case 'chat':
-      return route.sessionId ? `#/chat/${encodeURIComponent(route.sessionId)}` : '#/chat';
+    case 'chat': {
+      const query = new URLSearchParams();
+      if (route.agent) query.set('agent', route.agent);
+      const suffix = query.toString();
+      const base = route.sessionId ? `#/chat/${encodeURIComponent(route.sessionId)}` : '#/chat';
+      return suffix ? `${base}?${suffix}` : base;
+    }
     case 'runs': {
       const query = new URLSearchParams({ tab: route.tab });
       if (route.runId) query.set('run', route.runId);

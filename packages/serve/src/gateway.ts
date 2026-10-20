@@ -27,6 +27,7 @@ import type {
   TraceRedactor,
 } from '@vessel-agent/core';
 import { createDefaultTraceRedactor } from '@vessel-agent/core';
+import { createAgentRegistry } from './agents-registry.js';
 import { ClientBackpressure } from './backpressure.js';
 import {
   type DurableGatewayOptions,
@@ -60,6 +61,7 @@ import {
   eventSourceNodeId as sourceNodeId,
 } from './gateway/frames.js';
 import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
+import { createAgentMethods } from './gateway/methods/agents.js';
 
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
@@ -637,6 +639,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     maxRuns: MAX_RUNS,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
+  /**
+   * 0.14 P0：agents 注册表。只吃实时事件；Host / run 记录由方法层合并。
+   * 在事件订阅处 ingest 脱敏/裁剪后的副本，与广播保持一致。
+   */
+  const agentRegistry = createAgentRegistry();
   const runs = engine.runs;
   const queue = engine.queue;
   const coreToJob = engine.coreToJob;
@@ -813,6 +820,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 0.5：出站前统一脱敏（实时与回放都是脱敏后的副本；A-3 §10.3）
     // 0.6.1 E12：先脱敏再裁剪工具参数/结果，实时与回放保持一致。
     const safeEvent = capToolEvent(redactor.redact(event));
+    agentRegistry.ingest(safeEvent);
     const seq = buffer.append(safeEvent);
     broadcastEvent({ seq, event: safeEvent });
 
@@ -941,6 +949,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createFeishuMethods({ requireFeishu }),
     // 0.12：追加在表尾，不改变既有方法顺序（DECISION-023 §2.3）。
     ...createAdminMethods({ reload: opts.reload }),
+    // 0.14 P0：agents 注册表（additive，排在表尾）。
+    ...createAgentMethods({
+      registry: agentRegistry,
+      host: () => team?.host,
+      runs,
+      defaultTenantId,
+    }),
   ];
 
   methodTable = defineMethods(rpcMethods);

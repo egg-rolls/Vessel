@@ -54,6 +54,42 @@ describe('RunCard failed footer', () => {
   });
 });
 
+describe('RunCard error metadata', () => {
+  test('renders additive code/category/phase chips and retryable hint', () => {
+    const markup = renderToStaticMarkup(
+      <RunCard
+        group={{
+          ...failedGroup('boom'),
+          errorMeta: {
+            code: 'provider_timeout',
+            category: 'provider',
+            phase: 'llm',
+            retryable: true,
+          },
+        }}
+        cancelled={false}
+        cancelling={false}
+        onCancel={() => {}}
+      />,
+    );
+    expect(markup).toContain('error-meta');
+    expect(markup).toContain('provider_timeout · provider · llm');
+    expect(markup).toContain('可重试');
+  });
+
+  test('leaves 0.13 markup unchanged when metadata is absent', () => {
+    const markup = renderToStaticMarkup(
+      <RunCard
+        group={failedGroup('boom')}
+        cancelled={false}
+        cancelling={false}
+        onCancel={() => {}}
+      />,
+    );
+    expect(markup).not.toContain('error-meta');
+  });
+});
+
 describe('runDetailHref', () => {
   test('builds the live run deep link with an optional session', () => {
     expect(runDetailHref({ runId: 'r1' })).toBe('#/runs?tab=live&run=r1');

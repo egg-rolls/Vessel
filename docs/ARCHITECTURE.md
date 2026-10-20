@@ -997,7 +997,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1016,6 +1016,8 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `runs.start` | write |
 | `runs.cancel` | write |
 | `runs.resume` | write |
+| `agents.list` | read |
+| `agents.get` | read |
 | `events.list` | read |
 | `events.subscribe` | read |
 | `tools.list` | read |
@@ -1738,7 +1740,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 28.2 协议 result schema
 
-- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。

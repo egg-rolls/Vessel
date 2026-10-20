@@ -11,6 +11,7 @@ const ROUTES: Route[] = [
   { domain: 'chat' },
   { domain: 'chat', sessionId: 'new' },
   { domain: 'chat', sessionId: 'session-1' },
+  { domain: 'chat', sessionId: 'session-1', agent: 'delegate-1' },
   { domain: 'runs', tab: 'live' },
   { domain: 'runs', tab: 'durable', runId: 'run 1', sessionId: 's/2' },
   { domain: 'workflows' },
@@ -62,6 +63,19 @@ describe('parseRoute / formatRoute', () => {
       domain: 'settings',
       tab: 'connection',
     });
+  });
+
+  test('parses and formats the subagent deep link', () => {
+    expect(parseRoute('#/chat/s1?agent=delegate%201')).toEqual({
+      domain: 'chat',
+      sessionId: 's1',
+      agent: 'delegate 1',
+    });
+    expect(formatRoute({ domain: 'chat', sessionId: 's1', agent: 'delegate 1' })).toBe(
+      '#/chat/s1?agent=delegate+1',
+    );
+    // 未知/空 agent 不影响会话路由。
+    expect(parseRoute('#/chat/s1?agent=')).toEqual({ domain: 'chat', sessionId: 's1' });
   });
 
   test('decodes ids and preserves ids that cannot be decoded', () => {

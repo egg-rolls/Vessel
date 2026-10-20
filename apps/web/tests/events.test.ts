@@ -55,7 +55,7 @@ describe('buildGroup', () => {
 });
 
 describe('groupEvents', () => {
-  test('hides internal and subagent events by default', () => {
+  test('hides internal, subagent and internal-level errors by default', () => {
     const entries = [
       stored('r1', 'run.started', 1, {}, 10),
       stored('r1', 'llm.request', 2, {}, 11),
@@ -64,7 +64,53 @@ describe('groupEvents', () => {
     ];
     const groups = groupEvents(entries, false);
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.items.filter((item) => item.kind === 'event')).toHaveLength(1);
+    expect(groups[0]?.items.filter((item) => item.kind === 'event')).toHaveLength(0);
+  });
+
+  test('keeps run/tool/permission errors at user level, hides internal at all level only when asked', () => {
+    const entries = [
+      stored('r1', 'run.started', 1, {}, 10),
+      stored('r1', 'tool.call.failed', 2, { tool_name: 'bash' }, 11),
+      stored('r1', 'permission.respond.failed', 3, { error: 'denied' }, 12),
+      stored('r1', 'hook.error', 4, { error: 'hook' }, 13),
+    ];
+    const user = groupEvents(entries, false);
+    const types = user[0]?.items
+      .filter((item) => item.kind === 'event')
+      .map((item) => (item.kind === 'event' ? item.event.type : ''))
+      .sort();
+    expect(types).toEqual(['permission.respond.failed', 'tool.call.failed']);
+
+    const all = groupEvents(entries, false, 'all');
+    expect(
+      all[0]?.items.filter((item) => item.kind === 'event' && item.event.type === 'hook.error'),
+    ).toHaveLength(1);
+  });
+
+  test('captures additive error metadata on failed runs', () => {
+    const group = buildGroup('r1', [
+      stored(
+        'r1',
+        'run.failed',
+        1,
+        {
+          error: 'boom',
+          error_code: 'provider_timeout',
+          category: 'provider',
+          phase: 'llm',
+          retryable: true,
+          http_status: 504,
+        },
+        10,
+      ),
+    ]);
+    expect(group.errorMeta).toEqual({
+      code: 'provider_timeout',
+      category: 'provider',
+      phase: 'llm',
+      retryable: true,
+      httpStatus: 504,
+    });
   });
 
   test('showInternal keeps internal events and groups by run', () => {
