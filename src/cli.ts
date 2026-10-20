@@ -46,7 +46,7 @@ import {
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
-import { parseArgs } from './cli-args';
+import { DEFAULT_SERVE_PORT, parseArgs } from './cli-args';
 import { buildCliConfigOverrides } from './cli-overrides';
 import { applyCommandLocale, matchCommand } from './commands/registry';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
@@ -55,6 +55,12 @@ import { resolveDataDir } from './data-paths';
 import { createDurableFor } from './durable-wiring';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
 import { renderGatewayBanner } from './gateway-banner';
+import {
+  isForegroundGatewayCommand,
+  prepareForegroundGatewayStart,
+  stopGateway,
+  writeForegroundGatewayPid,
+} from './gateway-command';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
@@ -78,6 +84,7 @@ import {
   tryCreateLoopbackTransport,
   tryCreateRemoteTransport,
 } from './transport-factory';
+import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
 
@@ -108,6 +115,15 @@ function printHelp(): void {
     ['vessel --resume-run <runId>', t('help.cmd.resumeRun')],
   ];
   const serve: Array<[string, string]> = [['vessel --serve 8642', t('help.cmd.serve')]];
+  const gateway: Array<[string, string]> = [
+    ['vessel gateway start [--daemon]', t('help.cmd.gatewayStart')],
+    ['vessel gateway stop [--timeout 10s]', t('help.cmd.gatewayStop')],
+    ['vessel gateway status [--json]', t('help.cmd.gatewayStatus')],
+    ['vessel gateway restart [--daemon]', t('help.cmd.gatewayRestart')],
+    ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
+    ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
+    ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
+  ];
   const capability: Array<[string, string]> = [
     ['vessel workflow list', t('help.cmd.workflowList')],
     ['vessel workflow run <name>', t('help.cmd.workflowRun')],
@@ -147,6 +163,7 @@ function printHelp(): void {
   const meta: Array<[string, string]> = [
     ['vessel doctor', t('help.cmd.doctor')],
     ['vessel --resume-run', t('help.cmd.resumeRunList')],
+    ['vessel update [--yes]', t('help.cmd.update')],
     ['vessel update --check', t('help.cmd.updateCheck')],
     ['vessel update --channel beta', t('help.cmd.updateBeta')],
     ['vessel --version', t('help.cmd.version')],
@@ -159,6 +176,7 @@ function printHelp(): void {
       ...session,
       ...headless,
       ...serve,
+      ...gateway,
       ...capability,
       ...config,
       ...tenant,
@@ -171,39 +189,43 @@ function printHelp(): void {
 
   console.log(
     [
-      t('help.title'),
+      ui.title(t('help.title')),
+      ui.rule(48),
       '',
-      `  ${t('help.section.usage')}`,
+      `  ${ui.section(t('help.section.usage'))}`,
       align(usage, width),
       '',
-      `  ${t('help.section.session')}`,
+      `  ${ui.section(t('help.section.session'))}`,
       align(session, width),
       '',
-      `  ${t('help.section.headless')}`,
+      `  ${ui.section(t('help.section.headless'))}`,
       align(headless, width),
       '',
-      `  ${t('help.section.serve')}`,
+      `  ${ui.section(t('help.section.serve'))}`,
       align(serve, width),
       '',
-      `  ${t('help.section.capability')}`,
+      `  ${ui.section(t('help.section.gateway'))}`,
+      align(gateway, width),
+      '',
+      `  ${ui.section(t('help.section.capability'))}`,
       align(capability, width),
       '',
-      `  ${t('help.section.config')}`,
+      `  ${ui.section(t('help.section.config'))}`,
       align(config, width),
       '',
-      `  ${t('help.section.tenant')}`,
+      `  ${ui.section(t('help.section.tenant'))}`,
       align(tenant, width),
       '',
-      `  ${t('help.section.plugins')}`,
+      `  ${ui.section(t('help.section.plugins'))}`,
       align(plugins, width),
       '',
-      `  ${t('help.section.migrate')}`,
+      `  ${ui.section(t('help.section.migrate'))}`,
       align(migrate, width),
       '',
-      `  ${t('help.section.debug')}`,
+      `  ${ui.section(t('help.section.debug'))}`,
       align(debug, width),
       '',
-      `  ${t('help.section.other')}`,
+      `  ${ui.section(t('help.section.other'))}`,
       align(meta, width),
     ].join('\n'),
   );
@@ -279,7 +301,7 @@ if (demoRequested) {
   }
   console.log(
     [
-      t('demo.title'),
+      ui.title(t('demo.title')),
       t('demo.line.command'),
       t('demo.line.flow'),
       t('demo.line.exit'),
@@ -294,6 +316,30 @@ const command = matchCommand(args);
 if (command) {
   await applyCommandLocale();
   process.exit((await command.run(args, { useMock })) ?? 0);
+}
+// 0.12：`gateway start` / `gateway restart` 前台 = 现有 `--serve` 管线。
+// `--daemon` 及其它 gateway 子命令已由注册表处理。
+const foregroundGateway = args.gateway !== null && isForegroundGatewayCommand(args.gateway);
+if (foregroundGateway && args.gateway !== null) {
+  const gatewayArgs = args.gateway;
+  if (gatewayArgs.kind === 'restart') {
+    const stopCode = await stopGateway({});
+    if (stopCode !== 0) process.exit(stopCode);
+  }
+  const prepared = await prepareForegroundGatewayStart();
+  if (!prepared.ok) {
+    console.error(prepared.error);
+    process.exit(1);
+  }
+  // 端口/主机缺省沿用 serve 配置；显式 flag 才进 CLI 覆盖层。
+  args.servePort =
+    gatewayArgs.kind === 'start' && gatewayArgs.port !== undefined
+      ? gatewayArgs.port
+      : DEFAULT_SERVE_PORT;
+  args.servePortExplicit = gatewayArgs.kind === 'start' && gatewayArgs.port !== undefined;
+  if (gatewayArgs.kind === 'start' && gatewayArgs.host !== undefined) {
+    args.serveHost = gatewayArgs.host;
+  }
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
@@ -761,6 +807,28 @@ async function runWithConfig(result: BootstrapResult) {
     });
 
     gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
+
+    // 0.12：PID 文件供 `gateway status/stop/restart/reload` 使用。
+    // `gateway start` 写失败视为启动失败；`--serve` 保持兼容，只告警。
+    try {
+      await writeForegroundGatewayPid({
+        dataDir,
+        host: resolved.options.hostname,
+        port: gateway.port,
+        version: gatewayOptions.version,
+        ...(result.nodeId ? { nodeId: result.nodeId } : {}),
+      });
+    } catch (error) {
+      const message =
+        `failed to write ${dataDir}/gateway.pid: ` +
+        (error instanceof Error ? error.message : String(error));
+      if (foregroundGateway) {
+        console.error(message);
+        await result.shutdown();
+        process.exit(1);
+      }
+      console.warn(`⚠ ${message}`);
+    }
   }
 
   // ── Team / transport 接线（A4；0.6 remote）────────────

@@ -15,7 +15,28 @@ export interface UpdateArgs {
   channel?: 'latest' | 'beta';
   json: boolean;
   force: boolean;
+  /** 跳过自更新确认（DECISION-023 §2.4） */
+  yes: boolean;
 }
+
+/** 支持的服务管理器（DECISION-023 §2.2） */
+export type GatewayInstallTarget = 'systemd' | 'launchd' | 'schtasks';
+
+/** `vessel gateway` 子命令（DECISION-023 §2.1，冻结契约） */
+export type GatewayCommand =
+  | {
+      kind: 'start';
+      daemon: boolean;
+      port?: number;
+      host?: string;
+      log?: string;
+    }
+  | { kind: 'stop'; timeoutMs: number }
+  | { kind: 'status'; json: boolean }
+  | { kind: 'restart'; daemon: boolean }
+  | { kind: 'reload'; scopes?: string[] }
+  | { kind: 'install-service'; target?: GatewayInstallTarget }
+  | { kind: 'uninstall-service' };
 
 /** `workflow` 子命令的状态过滤值（DECISION-009 §5.1.3） */
 export type WorkflowRunStatusArg =
@@ -150,6 +171,8 @@ export interface CliArgs {
   pluginCommand: PluginCommandArgs | null;
   /** 0.6.1：`vessel doctor` */
   doctorCommand: DoctorCommandArgs | null;
+  /** 0.12：`vessel gateway ...` */
+  gateway: GatewayCommand | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -203,6 +226,7 @@ export function parseArgs(argv: string[]): ParseResult {
     trace: null,
     pluginCommand: null,
     doctorCommand: null,
+    gateway: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -236,6 +260,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'doctor' && i === 0) {
       return parseDoctorArgs(argv.slice(1), args);
+    }
+    if (a === 'gateway' && i === 0) {
+      return parseGatewayArgs(argv.slice(1), args);
     }
     if (a === 'demo' && i === 0) {
       return parseDemoArgs(argv.slice(1), args);
@@ -528,7 +555,7 @@ export function parseArgs(argv: string[]): ParseResult {
 
 /** 解析 `update` 子命令的剩余参数 */
 function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
-  const update: UpdateArgs = { check: false, json: false, force: false };
+  const update: UpdateArgs = { check: false, json: false, force: false, yes: false };
 
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -553,6 +580,10 @@ function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
         break;
       case '--force':
         update.force = true;
+        break;
+      case '--yes':
+      case '-y':
+        update.yes = true;
         break;
       case '--help':
       case '-h':
@@ -1247,6 +1278,264 @@ function parseDemoArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (!args.help) args.demo = true;
   return { ok: true, args };
+}
+
+// ── 0.12 gateway 子命令（DECISION-023 §2.1）─────────────
+
+/** `gateway stop` 缺省等待时长 */
+export const DEFAULT_STOP_TIMEOUT_MS = 10_000;
+const MAX_STOP_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+/** 解析 `10s` / `500ms` / `1m`（裸数字按秒）；非法返回 null */
+export function parseTimeoutMs(raw: string): number | null {
+  const match = /^(\d+)(ms|s|m)?$/.exec(raw.trim());
+  if (!match) return null;
+  const amount = Number.parseInt(match[1] ?? '', 10);
+  if (!Number.isFinite(amount)) return null;
+  const unit = match[2] ?? 's';
+  const ms = unit === 'ms' ? amount : unit === 's' ? amount * 1000 : amount * 60_000;
+  if (ms < 100 || ms > MAX_STOP_TIMEOUT_MS) return null;
+  return ms;
+}
+
+const GATEWAY_TARGETS: ReadonlySet<string> = new Set(['systemd', 'launchd', 'schtasks']);
+const RELOAD_SCOPE_RE = /^[a-z][a-z0-9_-]*$/;
+
+/** 逗号分隔的 reload scope；非法返回 null */
+function parseReloadScopes(raw: string): string[] | null {
+  const parts = raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
+  if (parts.length === 0) return null;
+  return parts.every((part) => RELOAD_SCOPE_RE.test(part)) ? parts : null;
+}
+
+/** 读取 flag 的值（拒绝缺失/空/下一个 flag） */
+function readFlagValue(
+  rest: string[],
+  index: number,
+  flag: string,
+): { ok: true; value: string; next: number } | { ok: false; error: string } {
+  const next = rest[index + 1];
+  if (next === undefined || next.startsWith('-') || next.trim() === '') {
+    return { ok: false, error: `Missing value for ${flag}` };
+  }
+  return { ok: true, value: next, next: index + 1 };
+}
+
+/** `gateway start [--port N] [--host H] [--daemon] [--log <path>]` */
+function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
+  const command: Extract<GatewayCommand, { kind: 'start' }> = { kind: 'start', daemon: false };
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--daemon') {
+      command.daemon = true;
+      continue;
+    }
+    if (a === '--port') {
+      const value = readFlagValue(rest, i, '--port');
+      if (!value.ok) return value;
+      const port = parsePort(value.value);
+      if (port === null) return { ok: false, error: `Invalid port for --port: ${value.value}` };
+      command.port = port;
+      i = value.next;
+      continue;
+    }
+    if (a === '--host') {
+      const value = readFlagValue(rest, i, '--host');
+      if (!value.ok) return value;
+      command.host = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a === '--log') {
+      const value = readFlagValue(rest, i, '--log');
+      if (!value.ok) return value;
+      command.log = value.value;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway start: ${a}` };
+  }
+
+  if (args.help) return { ok: true, args };
+  args.gateway = command;
+  return { ok: true, args };
+}
+
+/** `gateway stop [--timeout 10s]` */
+function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
+  let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--timeout') {
+      const value = readFlagValue(rest, i, '--timeout');
+      if (!value.ok) return value;
+      const parsed = parseTimeoutMs(value.value);
+      if (parsed === null) {
+        return { ok: false, error: `Invalid --timeout: ${value.value} (expected e.g. 10s)` };
+      }
+      timeoutMs = parsed;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway stop: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gateway = { kind: 'stop', timeoutMs };
+  return { ok: true, args };
+}
+
+/** `gateway status [--json]` */
+function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway status: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gateway = { kind: 'status', json };
+  return { ok: true, args };
+}
+
+/** `gateway restart [--daemon]` */
+function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
+  let daemon = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--daemon') {
+      daemon = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway restart: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gateway = { kind: 'restart', daemon };
+  return { ok: true, args };
+}
+
+/** `gateway reload [--scope config,plugins]` */
+function parseGatewayReload(rest: string[], args: CliArgs): ParseResult {
+  let scopes: string[] | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--scope') {
+      const value = readFlagValue(rest, i, '--scope');
+      if (!value.ok) return value;
+      const parsed = parseReloadScopes(value.value);
+      if (parsed === null) {
+        return {
+          ok: false,
+          error: `Invalid --scope: ${value.value} (expected e.g. config,plugins)`,
+        };
+      }
+      scopes = [...new Set([...(scopes ?? []), ...parsed])];
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway reload: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gateway = { kind: 'reload', ...(scopes !== undefined ? { scopes } : {}) };
+  return { ok: true, args };
+}
+
+/** `gateway install-service [--systemd|--launchd|--schtasks]` */
+function parseGatewayInstallService(rest: string[], args: CliArgs): ParseResult {
+  let target: GatewayInstallTarget | undefined;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a.startsWith('--') && GATEWAY_TARGETS.has(a.slice(2))) {
+      const requested = a.slice(2) as GatewayInstallTarget;
+      if (target !== undefined && target !== requested) {
+        return { ok: false, error: 'gateway install-service accepts one platform flag' };
+      }
+      target = requested;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway install-service: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gateway = { kind: 'install-service', ...(target !== undefined ? { target } : {}) };
+  return { ok: true, args };
+}
+
+/** `gateway uninstall-service` */
+function parseGatewayUninstallService(rest: string[], args: CliArgs): ParseResult {
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway uninstall-service: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.gateway = { kind: 'uninstall-service' };
+  return { ok: true, args };
+}
+
+/** `gateway <subcommand>` 分发 */
+function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return {
+      ok: false,
+      error:
+        'Missing gateway subcommand ' +
+        '(start|stop|status|restart|reload|install-service|uninstall-service)',
+    };
+  }
+
+  const tail = rest.slice(1);
+  switch (sub) {
+    case 'start':
+      return parseGatewayStart(tail, args);
+    case 'stop':
+      return parseGatewayStop(tail, args);
+    case 'status':
+      return parseGatewayStatus(tail, args);
+    case 'restart':
+      return parseGatewayRestart(tail, args);
+    case 'reload':
+      return parseGatewayReload(tail, args);
+    case 'install-service':
+      return parseGatewayInstallService(tail, args);
+    case 'uninstall-service':
+      return parseGatewayUninstallService(tail, args);
+    default:
+      return { ok: false, error: `Unknown gateway subcommand: ${sub}` };
+  }
 }
 
 /** `doctor [--json]` */

@@ -49,6 +49,7 @@ describe('parseArgs - 默认与 REPL', () => {
       trace: null,
       pluginCommand: null,
       doctorCommand: null,
+      gateway: null,
     });
   });
 });
@@ -191,7 +192,12 @@ describe('parseArgs - 一次性命令', () => {
 
 describe('parseArgs - update 子命令', () => {
   it('update 默认选项', () => {
-    expect(ok(['update']).update).toEqual({ check: false, json: false, force: false });
+    expect(ok(['update']).update).toEqual({
+      check: false,
+      json: false,
+      force: false,
+      yes: false,
+    });
   });
 
   it('update --check --channel beta --json', () => {
@@ -200,6 +206,7 @@ describe('parseArgs - update 子命令', () => {
       channel: 'beta',
       json: true,
       force: false,
+      yes: false,
     });
   });
 
@@ -208,6 +215,7 @@ describe('parseArgs - update 子命令', () => {
       check: false,
       json: false,
       force: true,
+      yes: false,
     });
   });
 
