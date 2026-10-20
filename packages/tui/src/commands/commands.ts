@@ -28,11 +28,13 @@ import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-c
 import { formatRpcError } from '../rpc.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
 import type { DetailView, ListView, ViewActionInvocation, ViewEnvelope } from '../views/types.js';
+import { agentsCommand } from './agents-command.js';
 import { capabilitiesCommand } from './capabilities-command.js';
 import { configCommand } from './config-command.js';
 import { compactCommand, contextCommand } from './context-command.js';
 import { costCommand } from './cost-command.js';
 import { detailsCommand } from './details-command.js';
+import { errorsCommand } from './errors-command.js';
 import { exportCommand } from './export-command.js';
 import { feishuCommand } from './feishu-command.js';
 import { mcpCommand } from './mcp-command.js';
@@ -49,6 +51,7 @@ import {
   sessionsCommand,
 } from './sessions-command.js';
 import { settingsCommand } from './settings-command.js';
+import { statusCommand } from './status-command.js';
 import { tenantCommand } from './tenant-command.js';
 import { traceCommand } from './trace-command.js';
 import { workflowsCommand } from './workflows-command.js';
@@ -73,6 +76,8 @@ export interface ReplState {
   compactions?: number;
   /** Tool trail 三态；缺失按 collapsed */
   toolDetailMode?: ToolDetailMode;
+  /** 运行中输入队列长度（Ink 层同步；/status 只读展示） */
+  queuedCount?: number;
 }
 
 /** 命令执行结果 */
@@ -248,6 +253,9 @@ export function createCommands(): CommandRegistry {
   const reg = new CommandRegistry();
   reg.register(toolsCommand());
   reg.register(pluginsCommand());
+  reg.register(agentsCommand());
+  reg.register(statusCommand());
+  reg.register(errorsCommand());
   reg.register(resumeCommand());
   reg.register(mcpCommand());
   reg.register(runsCommand());

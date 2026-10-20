@@ -185,6 +185,11 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: localeVersion is not read in the factory, only used to invalidate
   const commands = useMemo(() => createCommands(), [ui.localeVersion]);
 
+  // /status 只读展示队列长度：UI 队列态不在 ReplContext 里，单独同步进 ReplState。
+  useEffect(() => {
+    dispatch({ type: 'patchRepl', patch: { queuedCount: ui.queuedInput.length } });
+  }, [ui.queuedInput.length, dispatch]);
+
   /**
    * /runs resume 与视图动作 Enter 共用的运行态接管：
    * 复用 runStart/runEnd、Esc/Ctrl+C 取消路径与归档语义。
