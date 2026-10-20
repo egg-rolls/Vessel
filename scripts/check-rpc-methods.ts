@@ -60,6 +60,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'evals.latest': 'read',
   'evals.run': 'write',
   'feishu.status': 'read',
+  // 0.12（DECISION-023 §2.3）：热重载，admin-only。
+  'gateway.reload': 'admin',
 };
 
 const LEGACY_PREFIXES = ['team.', 'durable.'] as const;

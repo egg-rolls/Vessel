@@ -59,6 +59,10 @@ import {
   resultFrame,
   eventSourceNodeId as sourceNodeId,
 } from './gateway/frames.js';
+import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
+
+export type { GatewayReloadResult } from './gateway/methods/admin.js';
+
 import { checkpointBelongsToTenant } from './gateway/methods/common.js';
 import {
   createConfigMethods,
@@ -272,6 +276,11 @@ export interface GatewayOptions {
     prune?(options: Record<string, unknown>): Promise<unknown>;
     readEvents?(filter: Record<string, unknown>, tenantId?: string): Promise<RunEvent[]>;
   };
+  /**
+   * 0.12 `gateway.reload`：配置 / 插件热重载实现（asm 注入）。
+   * 缺省 = 未支持，调用返回 `not_supported`；不得假装需要重启的项已生效。
+   */
+  reload?: (scopes: string[]) => Promise<GatewayReloadResult>;
   /** core deleteSessionData，由 asm 注入 */
   sessionData?: {
     deleteSessionData(
@@ -839,7 +848,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const rpcMethods: RpcMethodDefinition[] = [
     // 顺序与拆分前一致：health → capabilities → config → sessions → runs →
     // events.list → events.subscribe → tools/plugins → metrics → mcp → trace →
-    // tenants → interactions → workflow → evals → feishu。
+    // tenants → interactions → workflow → evals → feishu → gateway。
     ...createConfigMethods(configMethodsDeps),
     ...createSessionMethods({ defaultTenantId, sessionFor, sessionData: opts.sessionData }),
     ...createRunMethods({
@@ -909,6 +918,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }),
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
+    // 0.12：追加在表尾，不改变既有方法顺序（DECISION-023 §2.3）。
+    ...createAdminMethods({ reload: opts.reload }),
   ];
 
   methodTable = defineMethods(rpcMethods);
