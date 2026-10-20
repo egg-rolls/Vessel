@@ -1,12 +1,13 @@
 import { type ReactNode, useId } from 'react';
+import { t } from '../i18n';
 import { ModalShell } from './Modal';
 
 /** 破坏性动作确认：初始焦点在「取消」，Enter 不会误触发危险动作。 */
 export function ConfirmDialog({
   title,
   body,
-  confirmLabel = '确认',
-  cancelLabel = '取消',
+  confirmLabel,
+  cancelLabel,
   danger = false,
   busy = false,
   confirmDisabled = false,
@@ -27,6 +28,8 @@ export function ConfirmDialog({
   extra?: ReactNode;
 }) {
   const bodyId = useId();
+  const resolvedConfirm = confirmLabel ?? t('common.confirm');
+  const resolvedCancel = cancelLabel ?? t('common.cancel');
   return (
     <ModalShell
       label={title}
@@ -42,7 +45,7 @@ export function ConfirmDialog({
       {extra}
       <div className="modal-actions">
         <button type="button" className="btn" onClick={onCancel} disabled={busy} data-autofocus>
-          {cancelLabel}
+          {resolvedCancel}
         </button>
         <button
           type="button"
@@ -50,7 +53,7 @@ export function ConfirmDialog({
           onClick={onConfirm}
           disabled={busy || confirmDisabled}
         >
-          {busy ? '处理中…' : confirmLabel}
+          {busy ? t('common.processing') : resolvedConfirm}
         </button>
       </div>
     </ModalShell>
