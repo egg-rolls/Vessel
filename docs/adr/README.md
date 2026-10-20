@@ -78,6 +78,7 @@
 | 061 | TUI 展示层修复（key / ANSI / Markdown / resize） | accepted | 2026-10-20 | tui, rendering, ansi, markdown, resize | [ADR-061-tui-display-layer-fixes.md](ADR-061-tui-display-layer-fixes.md) |
 | 062 | TUI 本地化（catalog + t() + locale 解析） | accepted | 2026-10-20 | tui, i18n, locale, catalog | [ADR-062-tui-i18n.md](ADR-062-tui-i18n.md) |
 | 063 | mock 场景 provider 与 vessel demo | accepted | 2026-10-20 | mock, demo, cli, testing | [ADR-063-mock-scenarios-and-demo.md](ADR-063-mock-scenarios-and-demo.md) |
+| 064 | 上下文默认预算提升到 1M token | accepted | 2026-10-20 | context, tokens, defaults, config | [ADR-064-context-budget-default-1m.md](ADR-064-context-budget-default-1m.md) |
 
 ## 编写约定
 

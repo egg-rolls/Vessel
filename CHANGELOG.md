@@ -3,6 +3,23 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.8.7] - 2026-10-20
+
+> 0.8.7（基于 `release/0.8.7`，未发布）：上下文默认预算提升到 1,000,000 token，并补齐 CI 与发布脚本的前置条件。`provider.maxTokens`（单次输出上限）与 `context.maxTokens`（上下文预算）仍是两个独立配置。
+
+### Changed
+
+- `context.maxTokens` 默认值 4096 → **1,000,000**：core `context-manager.ts` 的三处 fallback（构造、summarizer 预算、`shouldCompact`）与 config `defaults.ts` 的 `context` 默认值同步调整；provider 请求的 `max_tokens` **仍为 4096**，不随上下文预算变化。
+- 自动压缩阈值仍为 `compactThreshold: 0.8`，默认约 **800,000** 估算 token 才触发摘要。
+- CI：`quality` 与 `cross-platform`（ubuntu / windows / macos）在 `bun test` 前执行 Node 22 + `apps/web` 的 `npm ci`；根 `workspaces` 不含 `apps/web`，此前 `apps/web/tests` 会因缺少 `react` 计为 error。
+- Build：`scripts/version.ts` 写模式在 bump 版本时同步各 manifest 的 `@vessel/*` 依赖为精确目标版本（含 `workspace:*`），修复 `release-dry-run` 的 `internal_dependency_version`。
+
+### Known limitations
+
+- 1,000,000 默认预算可能超过小上下文模型（如 8k 窗口）的实际容量；使用这类模型必须显式配置 `context.maxTokens`。
+- 默认自动压缩在约 800k 估算 token 才触发，小窗口模型在显式调低预算前不会得到保护。
+- token 计数是估算值，不等于 provider 的精确窗口 / 计费统计。
+
 ## [0.8.6] - 2026-10-20
 
 > 0.8.6（基于 `release/0.8.6`，未发布）：确定性 mock 场景与 `vessel demo`。默认 mock 行为（`echo`）与 0.8.5 逐字一致；core 不引入场景概念。版本号由 1 在集成线统一写入。

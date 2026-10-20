@@ -1693,3 +1693,31 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - evals 与 workflow 未接入场景 provider，仍是各自固定的 mock 行为。
 - web / gateway 没有 demo 入口；场景只在 CLI 装配路径可达。
 - demo 引导与 CLI 输出保持英文，不在 0.8.5 i18n 范围内。
+
+## 27. 0.8.7 上下文默认预算与 CI 前置（已实现）
+
+> 状态：已合入 `release/0.8.7`（未发布）。决策见 [ADR-064](adr/ADR-064-context-budget-default-1m.md)。默认上下文预算提升到 1,000,000 token；provider 输出上限不变；`quality` / `cross-platform` 在 `bun test` 前安装 `apps/web` 依赖。
+
+### 27.1 默认预算与来源
+
+- `packages/config/src/defaults.ts` 的 `DEFAULT_CONFIG.context.maxTokens = 1_000_000`；`autoCompact` 仍默认 `true`，`compactThreshold` 仍默认 `0.8`。
+- core `MemoryContextManager` 的三处 fallback 同步为 `1_000_000`：构造函数、summarizer 的 `{ maxTokens }` 预算、`shouldCompact()` 的 `maxTokens`。
+- 调用方显式传入 `context.maxTokens` 时以其为准；显式传 `ContextConfig` 但未给 `maxTokens` 时使用默认 1,000,000。
+
+### 27.2 provider 输出上限是两个概念
+
+- `provider.maxTokens`（config 默认 4096）与请求里的 `max_tokens` 是**单次输出上限**，不随 `context.maxTokens` 改变。
+- Anthropic provider 在 `max_tokens` 未指定时仍 fallback 4096（同步与流式两条路径）。
+- 上下文预算只影响 `ContextManager` 的压缩判断与摘要预算，不直接写入 provider 请求。
+
+### 27.3 自动压缩
+
+- 阈值 = `context.maxTokens × compactThreshold`，默认 1,000,000 × 0.8 ≈ 800,000 **估算** token。
+- 达到阈值后 `MemoryContextManager` 生成摘要（有 summarizer 时）或占位摘要，并保留 system 消息。
+- token 计数是估算值，不等于 provider 的精确窗口 / 计费统计。
+
+### 27.4 CI 前置（apps/web）
+
+- 根 `workspaces` 只有 `packages/*`、`plugins/*/*`，不含 `apps/web`；`bun install` 不会安装 react 等前端依赖。
+- 根 `bun test` 会扫 `apps/web/tests`，因此 `quality`（composite action）与 `cross-platform` 必须先执行 `actions/setup-node@v4`（Node 22）+ `apps/web` 下的 `npm ci`，再跑 typecheck / `bun test`。
+- `web` job 的 `npm ci` 在独立 job 中，不与其他 job 共享 `node_modules`。

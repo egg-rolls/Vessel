@@ -9,6 +9,10 @@
  *   bun run scripts/version.ts --check 0.1.0    # 校验一致性 + CHANGELOG 有该版本
  *   bun run scripts/version.ts --check          # 只校验仓库内一致性
  *
+ * 写模式同时把各 manifest 的 `@vessel/*` 依赖（dependencies / devDependencies /
+ * peerDependencies）改写为精确目标版本，避免 `workspace:*` / `^x.y.z` 进入发布
+ * tarball（`release-dry-run` 的 `internal_dependency_version` 检查）。
+ *
  * 发布收口时由 1 执行写模式；日常开发只跑 `--check`。
  */
 
@@ -75,6 +79,32 @@ export async function rootVersionMissing(root: string): Promise<boolean> {
   return typeof pkg.version !== 'string';
 }
 
+/** 参与内部版本同步的依赖字段；optionalDependencies 不在此列。 */
+const INTERNAL_DEPENDENCY_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies'] as const;
+
+/**
+ * 把 `@vessel/*` 依赖改写为精确目标版本；外部依赖保持原样。
+ * 返回是否有内容被改写。
+ */
+function syncInternalDependencies(pkg: Record<string, unknown>, version: string): boolean {
+  let updated = false;
+
+  for (const field of INTERNAL_DEPENDENCY_FIELDS) {
+    const deps = pkg[field];
+    if (!deps || typeof deps !== 'object' || Array.isArray(deps)) continue;
+
+    const entries = deps as Record<string, unknown>;
+    for (const name of Object.keys(entries)) {
+      if (!name.startsWith('@vessel/')) continue;
+      if (entries[name] === version) continue;
+      entries[name] = version;
+      updated = true;
+    }
+  }
+
+  return updated;
+}
+
 export async function applyVersion(root: string, version: string): Promise<string[]> {
   if (!validateVersion(version)) {
     throw new Error(`invalid semver: ${version}`);
@@ -84,11 +114,16 @@ export async function applyVersion(root: string, version: string): Promise<strin
   const changed: string[] = [];
 
   for (const manifest of manifests) {
-    if (manifest.version === version) continue;
-
     const fullPath = join(root, manifest.path);
     const pkg = JSON.parse(await readFile(fullPath, 'utf8')) as Record<string, unknown>;
-    pkg.version = version;
+
+    // 版本已经是目标值时也要检查内部依赖：bump 后 `workspace:*` / `^旧版本`
+    // 仍可能残留，release-dry-run 会拒绝这样的 tarball。
+    let updated = manifest.version !== version;
+    if (updated) pkg.version = version;
+    if (syncInternalDependencies(pkg, version)) updated = true;
+    if (!updated) continue;
+
     await writeFile(fullPath, `${JSON.stringify(pkg, null, 2)}\n`);
     changed.push(manifest.path);
   }
