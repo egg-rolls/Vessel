@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { MemoryEventStream, MemorySessionBackend, type RunEvent } from '@vessel/core';
 import type { Gateway } from '../src/gateway';
 import { PROTOCOL_VERSION } from '../src/protocol';
@@ -154,11 +154,17 @@ describe('rpc result_schema', () => {
     });
     gateways.push(gw);
 
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
     const response = await gw.rpc({ v: 1, id: 'config', method: 'config.get' });
+    const warnCalls = warn.mock.calls;
+    warn.mockRestore();
     expect(response.ok).toBe(false);
     if (response.ok) throw new Error('expected failure');
     expect(response.error.code).toBe('internal');
     expect(response.error.details).toEqual({ method: 'config.get', path: 'result.config' });
+    expect(warnCalls).toEqual([
+      ['[vessel] rpc.result_invalid', { method: 'config.get', path: 'result.config' }],
+    ]);
 
     const invalid = seen.find((event) => event.type === 'rpc.result_invalid');
     expect(invalid).toBeDefined();

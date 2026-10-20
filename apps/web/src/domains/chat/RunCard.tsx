@@ -1,7 +1,9 @@
 import { useMemo } from 'react';
+import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
+import { describeGatewayErrorText } from '../../gateway/errors';
 import type { RunGroup } from '../../state/events';
 import { EventRow } from './EventRow';
 import { ToolCard } from './ToolCard';
@@ -9,6 +11,16 @@ import { foldToolItems } from './tool-cards';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
+}
+
+/** 失败 run 的详情深链（与 RunsView 的 `#/runs?tab=live&run=…` 一致）。 */
+export function runDetailHref(group: Pick<RunGroup, 'runId' | 'sessionId'>): string {
+  return formatRoute({
+    domain: 'runs',
+    tab: 'live',
+    runId: group.runId,
+    ...(group.sessionId ? { sessionId: group.sessionId } : {}),
+  });
 }
 
 /** 已受理但尚未开始执行的 run（服务端 queued 阶段不发事件）。 */
@@ -49,6 +61,7 @@ export function RunCard({
     .trim();
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
   const renderItems = useMemo(() => foldToolItems(group.items), [group.items]);
+  const errorHint = describeGatewayErrorText(group.error);
 
   return (
     <div className={`run-card ${status}`}>
@@ -107,7 +120,21 @@ export function RunCard({
       {group.status === 'failed' && status === 'failed' && (
         <div className="run-footer failed">
           <StatusChip status="failed" />
-          <span>{truncate(group.error ?? '', 240)}</span>
+          <details className="run-error">
+            <summary className="run-error-summary">
+              <span className="run-error-preview">
+                {group.error ? truncate(group.error, 240) : '（无错误详情）'}
+              </span>
+              {group.error !== undefined && group.error.length > 240 && (
+                <span className="run-error-toggle">展开</span>
+              )}
+            </summary>
+            <pre className="run-error-body">{group.error || '（无错误详情）'}</pre>
+          </details>
+          {errorHint && <p className="run-error-hint">{errorHint}</p>}
+          <a className="btn btn-small run-detail-link" href={runDetailHref(group)}>
+            查看运行详情
+          </a>
         </div>
       )}
       {status === 'cancelled' && (

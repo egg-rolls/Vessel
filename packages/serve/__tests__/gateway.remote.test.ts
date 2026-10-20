@@ -137,7 +137,7 @@ describe('gateway remote listen', () => {
     expect(viaHeader.status).toBe(200);
 
     const viaQuery = await fetch(`${gw.url}/v1/health?token=remote-secret`);
-    expect(viaQuery.status).toBe(200);
+    expect(viaQuery.status).toBe(401);
 
     const legacy = await fetch(`${gw.url}/health`);
     expect(legacy.status).toBe(200);

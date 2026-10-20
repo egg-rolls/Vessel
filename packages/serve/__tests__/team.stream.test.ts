@@ -20,7 +20,9 @@ describe('gateway /v1/team/stream', () => {
     });
     gateways.push(gw);
 
-    const res = await fetch(`${gw.url}/v1/team/stream?token=${gw.token}&agent_id=a1`);
+    const res = await fetch(`${gw.url}/v1/team/stream?agent_id=a1`, {
+      headers: { Authorization: `Bearer ${gw.token}` },
+    });
     expect(res.status).toBe(200);
     expect(res.headers.get('content-type')).toContain('text/event-stream');
     const reader = res.body?.getReader();

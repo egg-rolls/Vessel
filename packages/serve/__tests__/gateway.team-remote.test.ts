@@ -146,7 +146,9 @@ describe('gateway /v1/team remote boundary', () => {
     });
     gateways.push(gw);
 
-    const res = await fetch(`${gw.url}/v1/team/stream?token=admin`);
+    const res = await fetch(`${gw.url}/v1/team/stream`, {
+      headers: { Authorization: 'Bearer admin' },
+    });
     expect(res.status).toBe(200);
     const reader = res.body?.getReader();
     if (!reader) throw new Error('no body');

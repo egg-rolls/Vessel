@@ -911,6 +911,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }),
     // 结果校验只在 VESSEL_VALIDATE_RESULTS=1 时触发；事件 payload 只含 method/path。
     onResultInvalid: ({ method, path }) => {
+      // 可观测性（DECISION-020 §R1.8）：只记 method/path，绝不打印结果 payload。
+      console.warn('[vessel] rpc.result_invalid', { method, path });
       events.publish({
         type: 'rpc.result_invalid',
         run_id: 'rpc',
@@ -1111,16 +1113,31 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
-   * REST/SSE 授权：Bearer 头优先，兼容 ?token=（EventSource 不能带 header）。
+   * EventSource 无法设置 Authorization：仅 GET `/v1/events`（含 0.1 别名 `/events`）
+   * 允许 query token。DECISION-020 §R1.8：其余 REST/SSE 一律拒绝 `?token=`。
+   */
+  function queryTokenAllowed(req: Request, path: string): boolean {
+    return req.method === 'GET' && (path === '/v1/events' || path === '/events');
+  }
+
+  /**
+   * REST/SSE 授权：Bearer 头优先；query token 只对 SSE `/v1/events` 生效。
    * WebSocket 不走这里：必须在首帧 `{kind:'auth',token,since}` 鉴权。
    */
-  function principalForRequest(req: Request, url: URL): TenantPrincipal | null {
-    const raw = extractToken(req.headers.get('authorization'), url.searchParams.get('token'));
+  function principalForRequest(req: Request, url: URL, path: string): TenantPrincipal | null {
+    const queryToken = queryTokenAllowed(req, path) ? url.searchParams.get('token') : null;
+    const raw = extractToken(req.headers.get('authorization'), queryToken);
     return resolvePrincipal(opts.auth, raw, token);
   }
 
-  function authorized(req: Request, url: URL): boolean {
-    return principalForRequest(req, url) !== null;
+  /** 只认 Authorization 头的请求（健康检查等非 EventSource 端点）。 */
+  function headerPrincipal(req: Request): TenantPrincipal | null {
+    const raw = extractToken(req.headers.get('authorization'), null);
+    return resolvePrincipal(opts.auth, raw, token);
+  }
+
+  function authorized(req: Request): boolean {
+    return headerPrincipal(req) !== null;
   }
 
   /** 方法级 tenant 作用域（admin 可显式跨 tenant） */
@@ -2606,7 +2623,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
       // 健康检查：/health 始终开放；远程模式下 /v1/health 也要求 token
       if (path === '/health' || path === '/v1/health') {
-        if (path === '/v1/health' && allowRemote && !authorized(req, url)) {
+        if (path === '/v1/health' && allowRemote && !authorized(req)) {
           return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
         }
         const base = {
@@ -2691,7 +2708,17 @@ export function startGateway(opts: GatewayOptions): Gateway {
         if (opts.staticDir) return errorJson('not_found', `Not found: ${path}`, 404, extra);
       }
 
-      const principal = principalForRequest(req, url);
+      // DECISION-020 §R1.8：token 不进 URL（SSE EventSource 例外见上）。
+      if (url.searchParams.has('token') && !queryTokenAllowed(req, path)) {
+        return errorJson(
+          'unauthorized',
+          'token in query is only accepted for GET /v1/events; use Authorization: Bearer',
+          401,
+          extra,
+        );
+      }
+
+      const principal = principalForRequest(req, url, path);
       if (!principal) {
         return errorJson('unauthorized', 'Missing or invalid token', 401, extra);
       }
