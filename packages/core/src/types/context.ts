@@ -47,6 +47,10 @@ export interface ContextManager {
 /** 上下文配置 */
 export interface ContextConfig {
   maxTokens?: number;
+  /**
+   * 消息条数安全上限。0.10 起不再硬截断：超限先摘要（system 永不丢），
+   * 并且只有显式配置时才用；缺省按 `maxTokens` 推导。
+   */
   maxMessages?: number;
   autoCompact?: boolean;
   compactThreshold?: number;
