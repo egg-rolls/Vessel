@@ -6,7 +6,7 @@
  * 当过滤结果为空时返回 null（不渲染任何东西）。
  */
 
-import { Box, Text, useStdout } from 'ink';
+import { Box, Text, useStdout, useWindowSize } from 'ink';
 import { useMemo } from 'react';
 import type { CommandCategory } from '../commands/commands.js';
 import { t } from '../i18n/index.js';
@@ -251,7 +251,9 @@ export function InlineAutocomplete({
   recent = [],
 }: InlineAutocompleteProps) {
   const { stdout } = useStdout();
-  const width = computeDialogWidth(stdout.columns);
+  // useStdout 不订阅 resize：优先 useWindowSize，保证补全框宽度即时跟随窗口。
+  const windowSize = useWindowSize();
+  const width = computeDialogWidth(windowSize.columns > 0 ? windowSize.columns : stdout.columns);
   const filtered = useMemo(
     () => filterCommands(commands, filter, { recent }),
     [commands, filter, recent],

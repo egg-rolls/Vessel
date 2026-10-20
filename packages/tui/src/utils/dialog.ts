@@ -17,21 +17,19 @@ export {
   wrapToWidth,
 } from './text-layout.js';
 
-/** 弹窗最大宽度（含边框与内边距） */
-export const DIALOG_MAX_WIDTH = 72;
 /** 左右预留列数，避免贴边与滚动条 */
 export const DIALOG_HORIZONTAL_MARGIN = 4;
 /** 拿不到终端宽度时的回退值 */
 export const FALLBACK_COLUMNS = 80;
 
 /**
- * 弹窗宽度：`min(columns - 4, 72)`。
- * 终端异常窄（< 5 列）时兜底为 1，避免出现 0 / 负数宽度。
+ * 弹窗宽度：`max(1, columns - 4)`，即跟随终端全宽（不再有 72 列上限）。
+ * 终端异常窄（<= 4 列）时兜底为 1，避免出现 0 / 负数宽度。
  */
 export function computeDialogWidth(columns: number | undefined): number {
   const cols =
     columns !== undefined && Number.isFinite(columns) && columns > 0
       ? Math.floor(columns)
       : FALLBACK_COLUMNS;
-  return Math.max(1, Math.min(cols - DIALOG_HORIZONTAL_MARGIN, DIALOG_MAX_WIDTH));
+  return Math.max(1, cols - DIALOG_HORIZONTAL_MARGIN);
 }

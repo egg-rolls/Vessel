@@ -63,4 +63,12 @@ describe('createTheme', () => {
       expect(ANSI16_NAMES.has(color as string)).toBe(true);
     }
   });
+
+  it('truecolor 品牌色为暗金 #c2a273（启动头 / accent）', () => {
+    const truecolor = createTheme(3);
+    expect(truecolor.brand).toBe('#c2a273');
+    // 品牌色只用于强调，不改状态语义色。
+    expect(truecolor.ok).not.toBe(truecolor.brand);
+    expect(truecolor.danger).not.toBe(truecolor.brand);
+  });
 });

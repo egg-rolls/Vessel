@@ -3,6 +3,7 @@ import type { Message, RunState, ToolDefinition } from '@vessel-agent/core';
 import {
   CommandRegistry,
   createCommands,
+  GOODBYE_TEXT,
   HISTORY_LIMIT_DEFAULT,
   parseHistoryArgs,
 } from '../src/commands/commands.js';
@@ -515,7 +516,7 @@ describe('扁平会话命令', () => {
     expect(reads).toBe(0);
   });
 
-  it('/exit 置 running=false 并调 onExit', async () => {
+  it('/exit 置 running=false 并调 onExit（不返回 Goodbye output）', async () => {
     const reg = createCommands();
     let exited = false;
     const ctx = makeCtx({
@@ -524,9 +525,14 @@ describe('扁平会话命令', () => {
       },
     });
     const state = makeState(ctx.currentSessionId);
-    await reg.execute('exit', ctx, state);
+    const result = await reg.execute('exit', ctx, state);
     expect(state.running).toBe(false);
     expect(exited).toBe(true);
+    // TTY 路径由 startInkRepl 在清 live frame 后写一次，命令本身不得输出。
+    expect(result.exit).toBe(true);
+    expect(result.output).toBeUndefined();
+    expect(result.history).toBeUndefined();
+    expect(GOODBYE_TEXT).toBe('\nGoodbye!\n');
   });
 
   it('/clear 返回 clearScreen 标记（不抛错）', async () => {
