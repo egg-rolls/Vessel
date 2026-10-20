@@ -193,7 +193,10 @@ export class CommandRegistry {
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to handle /${source} ${invocation.actionId}:\n${formatRpcError(error)}\n`,
+        output: `\n${t('error.command.viewAction', {
+          source,
+          action: invocation.actionId,
+        })}\n${formatRpcError(error)}\n`,
       };
     }
     if (result.nextState) applyNextState(state, result.nextState);
@@ -219,7 +222,7 @@ export class CommandRegistry {
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to run /${entry.name}:\n${formatRpcError(error)}\n`,
+        output: `\n${t('error.command.run', { name: entry.name })}\n${formatRpcError(error)}\n`,
       };
     }
     if (result.nextState) {
@@ -352,11 +355,11 @@ function resumeCommand(): CommandEntry {
           // 拉取失败必须显示错误，不能伪装成「无会话」。
           return {
             handled: true,
-            output: `\nFailed to list sessions:\n${formatRpcError(error)}\n`,
+            output: `\n${t('error.command.listSessions')}\n${formatRpcError(error)}\n`,
           };
         }
         if (sessions.length === 0) {
-          return { handled: true, output: '\nNo sessions to resume.\n' };
+          return { handled: true, output: `\n${t('session.empty')}\n` };
         }
         // Ink 模式由 showResumePicker 触发交互式选择器；simple 模式 fallback 到 pendingResume
         return {
@@ -890,7 +893,7 @@ export function buildToolsListView(tools: ToolViewInfo[]): ListView {
       badge: `${tool.source}${tool.requiresApproval ? ' · ask' : ''}`,
     })),
     actions: [{ id: 'inspect', key: 'enter', label: 'inspect', enabled: 'selected' }],
-    emptyText: 'No tools registered.',
+    emptyText: t('empty.tools'),
   };
 }
 
@@ -968,7 +971,7 @@ export async function runToolsViewAction(
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to load tool "${name}":\n${formatRpcError(error)}\n`,
+      output: `\n${t('error.command.loadTool', { name })}\n${formatRpcError(error)}\n`,
     };
   }
 }
@@ -985,14 +988,17 @@ function toolsCommand(): CommandEntry {
         const list = await loadToolInfo(ctx);
         const view: ViewEnvelope = { source: 'tools', view: buildToolsListView(list) };
         if (list.length === 0) {
-          return { handled: true, output: '\nNo tools registered.\n', view };
+          return { handled: true, output: `\n${t('empty.tools')}\n`, view };
         }
         const lines = ['', `Available tools (${list.length}):`];
         for (const t of list) lines.push(`  - ${t.name}: ${t.description}`.trimEnd());
         lines.push('');
         return { handled: true, output: lines.join('\n'), view };
       } catch (error) {
-        return { handled: true, output: `\nFailed to list tools:\n${formatRpcError(error)}\n` };
+        return {
+          handled: true,
+          output: `\n${t('error.command.listTools')}\n${formatRpcError(error)}\n`,
+        };
       }
     },
     viewAction: (invocation, ctx) => runToolsViewAction(invocation, ctx),
@@ -1007,7 +1013,7 @@ export function buildPluginsListView(plugins: string[]): ListView {
     kind: 'list',
     title: 'Loaded plugins',
     items: plugins.map((name) => ({ key: name, label: name, badge: 'plugin' })),
-    emptyText: 'No plugins loaded.',
+    emptyText: t('empty.plugins'),
   };
 }
 
@@ -1025,7 +1031,7 @@ function pluginsCommand(): CommandEntry {
           : ctx.plugins;
         const view: ViewEnvelope = { source: 'plugins', view: buildPluginsListView(plugins) };
         if (plugins.length === 0) {
-          return { handled: true, output: '\nNo plugins loaded.\n', view };
+          return { handled: true, output: `\n${t('empty.plugins')}\n`, view };
         }
         const lines = ['', `Loaded plugins (${plugins.length}):`];
         for (const p of plugins) lines.push(`  - ${p}`);
@@ -1034,7 +1040,7 @@ function pluginsCommand(): CommandEntry {
       } catch (error) {
         return {
           handled: true,
-          output: `\nFailed to list plugins:\n${formatRpcError(error)}\n`,
+          output: `\n${t('error.command.listPlugins')}\n${formatRpcError(error)}\n`,
         };
       }
     },

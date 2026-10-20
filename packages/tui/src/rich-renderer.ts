@@ -7,6 +7,7 @@
  */
 
 import { HEAVY, Panel, ROUNDED, Rule, renderToString, Table } from '@promptctl/rich-js';
+import { t } from './i18n/index.js';
 
 export { HEAVY, Panel, ROUNDED, Rule, renderToString, Table };
 
@@ -35,7 +36,7 @@ export function buildSessionTable(
   }>,
 ): string {
   if (sessions.length === 0) {
-    return renderToString(new Panel('No sessions.', { title: 'Sessions', box: ROUNDED }));
+    return renderToString(new Panel(t('empty.sessions'), { title: 'Sessions', box: ROUNDED }));
   }
 
   const table = new Table({ title: 'Recent Sessions', box: ROUNDED });

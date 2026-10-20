@@ -96,6 +96,22 @@ describe('history archive', () => {
     expect(state.history).toEqual([{ text: 'ab' }, { text: '' }, { text: 'c\nd' }]);
   });
 
+  it('error tone / fullText 在归档后保留，且不会复制成两条', () => {
+    const state = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendHistory',
+      line: '✗ [api] boom',
+      tone: 'error',
+      fullText: '✗ [api] boom\nmore',
+    });
+
+    expect(state.history).toHaveLength(1);
+    expect(state.history[0]).toEqual({
+      text: '✗ [api] boom',
+      tone: 'error',
+      fullText: '✗ [api] boom\nmore',
+    });
+  });
+
   it('clearHistory 清空归档', () => {
     const filled = replUiReducer(initialReplUiState(ctx), {
       type: 'appendHistory',

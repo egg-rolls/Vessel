@@ -189,7 +189,7 @@ function usage(message: string): CommandResult {
 function listFailure(error: unknown): CommandResult {
   return {
     handled: true,
-    output: `\nFailed to list durable runs:\n${formatRpcError(error)}\n`,
+    output: `\n${t('error.command.listRuns')}\n${formatRpcError(error)}\n`,
   };
 }
 
@@ -306,7 +306,7 @@ export async function runRunsViewAction(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to list durable runs:\n${formatRpcError(error)}\n`,
+        output: `\n${t('error.command.listRuns')}\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -344,7 +344,9 @@ export async function runRunsViewAction(
     } catch (error) {
       return {
         handled: true,
-        output: `\nFailed to cancel run "${invocation.selectionKey}":\n${formatRpcError(error)}\n`,
+        output: `\n${t('error.command.cancelRun', {
+          id: invocation.selectionKey,
+        })}\n${formatRpcError(error)}\n`,
       };
     }
   }
@@ -393,7 +395,7 @@ export async function runRunsCommand(args: string[], ctx: ReplContext): Promise<
   } catch (error) {
     return {
       handled: true,
-      output: `\nFailed to resume run "${runId}":\n${formatRpcError(error)}\n`,
+      output: `\n${t('error.command.resumeRun', { id: runId })}\n${formatRpcError(error)}\n`,
     };
   }
 }

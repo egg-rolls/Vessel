@@ -41,7 +41,7 @@ export async function runCostCommand(args: string[], ctx: ReplContext): Promise<
   if (!result.ok) {
     return {
       handled: true,
-      output: `\nUsage data unavailable: ${result.message.replace(/^Failed to read metrics:\s*/, '')}\n`,
+      output: `\nUsage data unavailable: ${result.message.replace(/^(?:✗ )?Failed to read metrics:\s*/, '')}\n`,
     };
   }
   return { handled: true, output: formatCostReport(result.snapshot) };

@@ -13,6 +13,7 @@ import { Box, useStdout } from 'ink';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ToolDetailMode } from '../commands/commands.js';
 import { t } from '../i18n/index.js';
+import { buildFailureArchive } from '../repl/error-archive.js';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
@@ -250,7 +251,11 @@ interface StreamOutputProps {
   /** 展开刷新回调（父组件追加到 Static history） */
   onFlush?: (text: string) => void;
   /** 当前轮 run 结束时回调，传回可归档文本与终态原因 */
-  onComplete?: (responseText: string, reason: 'completed' | 'failed' | 'cancelled') => void;
+  onComplete?: (
+    responseText: string,
+    reason: 'completed' | 'failed' | 'cancelled',
+    options?: { tone?: 'normal' | 'error'; fullText?: string },
+  ) => void;
   /** Tool trail 三态；默认 collapsed */
   detailMode?: ToolDetailMode;
 }
@@ -331,18 +336,29 @@ export function StreamOutput({
           break;
         }
 
-        case 'run.completed':
-        case 'run.failed': {
+        case 'run.completed': {
           // 通知父组件归档当前轮输出：文本 + 工具摘要。
           // 纯工具轮没有文本段时回退到事件载荷，避免 bash 结果完全不进 history。
           const transcript = getTranscriptText(segmentsRef.current, {
             full: expandedRef.current,
           });
-          const fallback = event.type === 'run.completed' ? event.data.output : event.data.error;
-          const text = transcript || fallback || '';
-          if (text) {
-            onCompleteRef.current?.(text, event.type === 'run.completed' ? 'completed' : 'failed');
-          }
+          const text = transcript || event.data.output || '';
+          if (text) onCompleteRef.current?.(text, 'completed');
+          resetSegments();
+          break;
+        }
+
+        case 'run.failed': {
+          // 0.10 R1-11：失败只归档一条。原始 error 不再按 Markdown 归档，
+          // 而是与已流出的正文合成一条 danger 文本项；父组件看到本回调后不再补加。
+          const transcript = getTranscriptText(segmentsRef.current, {
+            full: expandedRef.current,
+          });
+          const archive = buildFailureArchive(transcript, event.data.error);
+          onCompleteRef.current?.(archive.text, 'failed', {
+            tone: archive.tone,
+            ...(archive.fullText !== undefined ? { fullText: archive.fullText } : {}),
+          });
           resetSegments();
           break;
         }
