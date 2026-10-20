@@ -1,6 +1,6 @@
 {
   "name": "@vessel/basic-tools",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
