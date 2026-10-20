@@ -58,6 +58,7 @@ import {
   stopFeishuChannel,
 } from './feishu-wiring';
 import { installMcp, type McpControl, type McpPluginLike } from './mcp-wiring';
+import type { MockScenarioName } from './mock/scenarios';
 import {
   createEventBus,
   createEventStream,
@@ -112,6 +113,8 @@ export interface BuildTenantRuntimeOptions {
   /** 启动前按 trace 保留策略 prune；默认 false（本地 bootstrap 自己处理） */
   pruneTrace?: boolean;
   useMock?: boolean;
+  /** mock 场景（仅 useMock）；缺省时 provider-factory 走 MemoryLLMProvider */
+  mockScenario?: MockScenarioName;
   headless?: boolean;
   /** ask_user 仅交互 REPL 注册；serve / headless 必须 false */
   registerAskUser?: boolean;
@@ -320,7 +323,7 @@ export async function buildTenantRuntime(
       tenantRunsDir: tenantPaths.runs_dir,
       tenantId,
     });
-    const resolvedProvider = await createProvider(config, loader, useMock);
+    const resolvedProvider = await createProvider(config, loader, useMock, options.mockScenario);
     const { provider, providerName, providerModel, providerBaseUrl } = resolvedProvider;
 
     const summarizer = createContextSummarizer(provider, providerModel);
@@ -859,6 +862,8 @@ export interface TenantRuntimeFactoryOptions {
   userConfigPath?: string;
   dataDir?: string;
   useMock?: boolean;
+  /** mock 场景（仅 useMock）；逐 tenant 透传 */
+  mockScenario?: MockScenarioName;
   headless?: boolean;
   loader?: PluginLoader;
   nodeId: string;
@@ -1013,6 +1018,7 @@ export async function createTenantRuntimeFactory(
         writeTrace,
         pruneTrace: writeTrace,
         ...(options.useMock !== undefined ? { useMock: options.useMock } : {}),
+        ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
         ...(options.headless !== undefined ? { headless: options.headless } : {}),
         loader,
         nodeId: options.nodeId,
