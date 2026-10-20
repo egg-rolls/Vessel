@@ -93,10 +93,12 @@ export const sessionInfoSchema = {
     started_at: { type: 'number' },
     updated_at: { type: 'number' },
     message_count: { type: 'integer' },
-    branch: { type: 'string' },
-    tenant_id: { type: 'string' },
-    ended_at: { type: 'number' },
-    end_reason: { type: 'string' },
+    // 以下可选字段在真实 session 文件中可能是 null 或缺失；校验器不支持
+    // nullable/union，故不声明类型（任意值通过），required 与其余字段仍受约束。
+    branch: {},
+    tenant_id: {},
+    ended_at: {},
+    end_reason: {},
   },
 };
 
