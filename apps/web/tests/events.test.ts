@@ -204,4 +204,25 @@ describe('EventStore', () => {
     store.flush();
     expect(calls).toBe(2);
   });
+
+  test('publishes a new entries array so memoized views update in real time', () => {
+    const store = new EventStore(1_000);
+    store.push(event('r1', 'run.started'), meta(1));
+    store.flush();
+    const first = store.getSnapshot();
+
+    store.push(
+      event('r1', 'llm.stream.chunk', { chunk: { type: 'text_delta', delta: 'hi' } }),
+      meta(2),
+    );
+    store.flush();
+    const second = store.getSnapshot();
+
+    // 消费者用 useMemo(..., [snapshot.entries]) 派生视图：引用必须变化。
+    expect(second.entries).not.toBe(first.entries);
+    // 旧快照不能被后续 push 污染。
+    expect(first.entries).toHaveLength(1);
+    expect(second.entries).toHaveLength(2);
+    expect(second.entries.at(-1)?.event.type).toBe('llm.stream.chunk');
+  });
 });

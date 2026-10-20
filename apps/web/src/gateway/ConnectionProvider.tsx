@@ -13,6 +13,15 @@ import { extractTokenFromHash } from '../app/router';
 import { useToast } from '../components/ToastProvider';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
+import {
+  enqueueInteraction,
+  expireInteractions,
+  interactionExpiredMessage,
+  interactionExpiresAt,
+  isNotFoundError,
+  removeInteraction,
+  SubmitGuard,
+} from './interactions';
 import { planHelloSeq } from './seq-replay';
 import type { AskUserAnswer, AskUserRequest, HelloInfo, RunEvent } from './types';
 import { checkGatewayUrl, GATEWAY_URL_KEY, resolveInitialGatewayUrl } from './url';
@@ -26,7 +35,6 @@ export interface PermissionRequest {
 }
 
 const TOKEN_KEY = 'vessel.token';
-const INTERACTION_TTL_MS = 120_000;
 
 export interface ConnectionOptions {
   gatewayUrl: string;
@@ -58,8 +66,10 @@ export interface ConnectionContextValue {
   stale: boolean;
   /** 最近一次 WS close code（诊断用；重连开始时清空）。 */
   closeCode: number | null;
-  permissions: PermissionRequest[];
-  asks: AskUserRequest[];
+  permissions: readonly PermissionRequest[];
+  asks: readonly AskUserRequest[];
+  /** 正在提交应答的 requestId；UI 据此禁用按钮，避免双击重复提交。 */
+  responding: ReadonlySet<string>;
   now: number;
   connect: (options: ConnectionOptions) => boolean;
   disconnect: () => void;
@@ -127,10 +137,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [tenantEpoch, setTenantEpoch] = useState(0);
-  const [permissions, setPermissions] = useState<PermissionRequest[]>([]);
-  const [asks, setAsks] = useState<AskUserRequest[]>([]);
+  const [permissions, setPermissions] = useState<readonly PermissionRequest[]>([]);
+  const [asks, setAsks] = useState<readonly AskUserRequest[]>([]);
+  const [responding, setResponding] = useState<ReadonlySet<string>>(() => new Set());
   const [now, setNow] = useState(() => Date.now());
   const [connectSeq, setConnectSeq] = useState(0);
+  const submitGuard = useRef(new SubmitGuard());
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const tenantIdRef = useRef<string | null>(null);
@@ -205,19 +217,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const d = event.data as { requestId?: unknown; tool?: unknown; input?: unknown };
       if (typeof d.requestId !== 'string') return;
       const requestId = d.requestId;
+      const expiresAt = interactionExpiresAt(event.ts);
       setPermissions((prev) =>
-        prev.some((item) => item.requestId === requestId)
-          ? prev
-          : [
-              ...prev,
-              {
-                requestId,
-                tool: typeof d.tool === 'string' ? d.tool : 'tool',
-                input: d.input,
-                runId: event.run_id,
-                expiresAt: Date.now() + INTERACTION_TTL_MS,
-              },
-            ],
+        enqueueInteraction(
+          prev,
+          {
+            requestId,
+            tool: typeof d.tool === 'string' ? d.tool : 'tool',
+            input: d.input,
+            runId: event.run_id,
+            expiresAt,
+          },
+          Date.now(),
+        ),
       );
     };
 
@@ -232,18 +244,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
           typeof (item as { question?: unknown }).question === 'string',
       );
       if (questions.length === 0) return;
+      const expiresAt = interactionExpiresAt(event.ts);
       setAsks((prev) =>
-        prev.some((item) => item.requestId === requestId)
-          ? prev
-          : [
-              ...prev,
-              {
-                requestId,
-                questions,
-                runId: event.run_id,
-                expiresAt: Date.now() + INTERACTION_TTL_MS,
-              },
-            ],
+        enqueueInteraction(
+          prev,
+          {
+            requestId,
+            questions,
+            runId: event.run_id,
+            expiresAt,
+          },
+          Date.now(),
+        ),
       );
     };
 
@@ -361,8 +373,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         ? '权限请求已超时，run 可能已失败；请检查时间线或重新发送。'
         : '提问请求已超时，run 可能已失败；请检查时间线或重新发送。',
     );
-    setPermissions((prev) => prev.filter((item) => item.expiresAt > now));
-    setAsks((prev) => prev.filter((item) => item.expiresAt > now));
+    setPermissions((prev) => expireInteractions(prev, now));
+    setAsks((prev) => expireInteractions(prev, now));
   }, [now, permissions, asks, toast]);
 
   const connect = useCallback(
@@ -415,28 +427,65 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       .catch(reportConnectError);
   }, [client, eventStore, reportConnectError]);
 
+  const updateResponding = useCallback((requestId: string, active: boolean) => {
+    setResponding((prev) => {
+      if (active) {
+        if (prev.has(requestId)) return prev;
+        const next = new Set(prev);
+        next.add(requestId);
+        return next;
+      }
+      if (!prev.has(requestId)) return prev;
+      const next = new Set(prev);
+      next.delete(requestId);
+      return next;
+    });
+  }, []);
+
   const respondPermission = useCallback(
     async (requestId: string, decision: 'allow' | 'deny', remember = false) => {
+      // 同一 requestId 只允许一次在途提交（双击/连点）。
+      if (!submitGuard.current.begin(requestId)) return;
+      updateResponding(requestId, true);
       try {
         await client.respondPermission(requestId, decision, remember);
-        setPermissions((prev) => prev.filter((item) => item.requestId !== requestId));
+        setPermissions((prev) => removeInteraction(prev, requestId));
       } catch (error) {
+        if (isNotFoundError(error)) {
+          // 服务端已丢弃（TTL 到期/重放旧请求）：移除弹窗并提示，不重试。
+          setPermissions((prev) => removeInteraction(prev, requestId));
+          toast.info(interactionExpiredMessage());
+          return;
+        }
         toast.error(errorMessage(error));
+      } finally {
+        submitGuard.current.end(requestId);
+        updateResponding(requestId, false);
       }
     },
-    [client, toast],
+    [client, toast, updateResponding],
   );
 
   const respondAsk = useCallback(
     async (requestId: string, answers: AskUserAnswer[]) => {
+      if (!submitGuard.current.begin(requestId)) return;
+      updateResponding(requestId, true);
       try {
         await client.respondAsk(requestId, answers);
-        setAsks((prev) => prev.filter((item) => item.requestId !== requestId));
+        setAsks((prev) => removeInteraction(prev, requestId));
       } catch (error) {
+        if (isNotFoundError(error)) {
+          setAsks((prev) => removeInteraction(prev, requestId));
+          toast.info(interactionExpiredMessage());
+          return;
+        }
         toast.error(errorMessage(error));
+      } finally {
+        submitGuard.current.end(requestId);
+        updateResponding(requestId, false);
       }
     },
-    [client, toast],
+    [client, toast, updateResponding],
   );
 
   const value = useMemo<ConnectionContextValue>(
@@ -462,6 +511,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       closeCode: client.closedWithCode,
       permissions,
       asks,
+      responding,
       now,
       connect,
       disconnect,
@@ -490,6 +540,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       tenantEpoch,
       permissions,
       asks,
+      responding,
       now,
       connect,
       disconnect,

@@ -1,9 +1,10 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
+import { t } from '../../i18n';
 import type { RunGroup } from '../../state/events';
 import { EventRow } from './EventRow';
 import { ToolCard } from './ToolCard';
@@ -21,6 +22,35 @@ export function runDetailHref(group: Pick<RunGroup, 'runId' | 'sessionId'>): str
     runId: group.runId,
     ...(group.sessionId ? { sessionId: group.sessionId } : {}),
   });
+}
+
+/**
+ * 可折叠的思考过程块：流式期间默认展开，run 结束后自动折叠；
+ * 用户手动切换后不再被自动开合打断。内容按纯文本渲染，不进入正文 Markdown。
+ */
+function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }) {
+  const [open, setOpen] = useState(streaming);
+  const [userToggled, setUserToggled] = useState(false);
+
+  useEffect(() => {
+    if (!userToggled) setOpen(streaming);
+  }, [streaming, userToggled]);
+
+  return (
+    <details
+      className="reasoning-block"
+      open={open}
+      onToggle={(event) => {
+        const next = event.currentTarget.open;
+        if (next === open) return;
+        setUserToggled(true);
+        setOpen(next);
+      }}
+    >
+      <summary className="reasoning-summary">{t('chat.reasoning.summary')}</summary>
+      <div className="reasoning-text">{text}</div>
+    </details>
+  );
 }
 
 /** 已受理但尚未开始执行的 run（服务端 queued 阶段不发事件）。 */
@@ -61,6 +91,14 @@ export function RunCard({
     .trim();
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
   const renderItems = useMemo(() => foldToolItems(group.items), [group.items]);
+  // 只有最后一个思考块可能仍在流式输出；更早的块已经结束。
+  const lastReasoningKey = useMemo(() => {
+    for (let index = renderItems.length - 1; index >= 0; index -= 1) {
+      const item = renderItems[index];
+      if (item?.kind === 'reasoning') return item.key;
+    }
+    return undefined;
+  }, [renderItems]);
   const errorHint = describeGatewayErrorText(group.error);
 
   return (
@@ -88,6 +126,15 @@ export function RunCard({
 
       <div className="run-items">
         {renderItems.map((item) => {
+          if (item.kind === 'reasoning') {
+            return (
+              <ReasoningBlock
+                key={item.key}
+                text={item.text}
+                streaming={group.status === 'running' && item.key === lastReasoningKey}
+              />
+            );
+          }
           if (item.kind === 'text') {
             return group.status === 'running' || status === 'running' ? (
               <div className="text-block" key={item.key}>

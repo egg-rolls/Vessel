@@ -20,7 +20,8 @@ export interface RunEvent {
 
 /** LLM 流式 chunk（对应 core 的 StreamChunk） */
 export interface StreamChunk {
-  type: 'text_delta' | 'tool_call_delta' | 'finish';
+  /** `reasoning_delta` 仅在 `ui.showReasoning: true` 时由 core 发出（0.11.1，additive）。 */
+  type: 'text_delta' | 'reasoning_delta' | 'tool_call_delta' | 'finish';
   delta?: string;
   tool_call_index?: number;
   tool_call_id?: string;

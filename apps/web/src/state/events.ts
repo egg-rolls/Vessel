@@ -1,6 +1,6 @@
 /**
  * 事件模型（纯函数）：按 run_id 分组，把 `llm.stream.chunk` 的 text_delta
- * 拼成文本块，并在历史已落盘时抑制重复的 live 卡片。
+ * 拼成文本块、reasoning_delta 拼成独立的思考块，并在历史已落盘时抑制重复的 live 卡片。
  */
 import type { Message, RunEvent, SessionDetail, StreamChunk } from '../gateway/types';
 
@@ -12,6 +12,7 @@ export interface StoredEvent {
 
 export type TimelineItem =
   | { kind: 'text'; text: string; key: string }
+  | { kind: 'reasoning'; text: string; key: string }
   | { kind: 'event'; event: RunEvent; key: string };
 
 export interface RunGroup {
@@ -44,11 +45,27 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   const group: RunGroup = { runId, status: 'running', items: [] };
   let buf = '';
   let textIndex = 0;
-  const flush = () => {
+  let reasoningBuf = '';
+  let reasoningIndex = 0;
+  const flushText = () => {
     if (buf) {
       group.items.push({ kind: 'text', text: buf, key: `text-${runId}-${textIndex++}` });
       buf = '';
     }
+  };
+  const flushReasoning = () => {
+    if (reasoningBuf) {
+      group.items.push({
+        kind: 'reasoning',
+        text: reasoningBuf,
+        key: `reasoning-${runId}-${reasoningIndex++}`,
+      });
+      reasoningBuf = '';
+    }
+  };
+  const flush = () => {
+    flushReasoning();
+    flushText();
   };
 
   for (const entry of entries) {
@@ -92,8 +109,17 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
       }
       case 'llm.stream.chunk': {
         const chunk = (ev.data as { chunk?: StreamChunk }).chunk;
-        if (chunk?.type === 'text_delta' && chunk.delta) buf += chunk.delta;
-        else if (chunk?.type === 'finish') flush();
+        if (chunk?.type === 'text_delta' && chunk.delta) {
+          // 正文开始前先落盘已累积的思考段，保持时间顺序。
+          flushReasoning();
+          buf += chunk.delta;
+        } else if (chunk?.type === 'reasoning_delta' && chunk.delta) {
+          // 思考流独立累积，绝不并入正文 Markdown。
+          flushText();
+          reasoningBuf += chunk.delta;
+        } else if (chunk?.type === 'finish') {
+          flush();
+        }
         continue;
       }
       default:

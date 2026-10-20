@@ -4,7 +4,9 @@
  * - 每个 run 最多 2000 条，总数最多 10000 条；超出丢弃最旧并标记 truncated。
  * - 按 seq 去重（重连回放不会产生重复卡片）。
  * - 通知节流到 ~50ms，避免每个 token 重渲染整棵树。
- * - 快照对象在通知时整体替换，兼容 React `useSyncExternalStore`。
+ * - 快照对象在通知时整体替换，`entries` 也必须是新数组：消费者（ChatView / RunDetail）
+ *   用 `useMemo(..., [snapshot.entries])` 派生视图，复用可变数组会让流式事件不触发重算，
+ *   表现为“必须刷新才看到内容”。
  */
 import type { RunEvent } from '../gateway/types';
 import type { StoredEvent } from './events';
@@ -101,7 +103,7 @@ export class EventStore {
     this.lastSeq = nextSeq;
     this.version += 1;
     this.snapshot = {
-      entries: this.entries,
+      entries: [],
       truncatedRuns: new Set(),
       lastSeq: nextSeq,
       version: this.version,
@@ -115,7 +117,8 @@ export class EventStore {
     this.cancelTimer();
     this.version += 1;
     this.snapshot = {
-      entries: this.entries,
+      // 复制数组：entries 在 push 中原地追加，复用引用会让 memo 消费者永远看到旧视图。
+      entries: [...this.entries],
       truncatedRuns: new Set(this.truncated),
       lastSeq: this.lastSeq,
       version: this.version,
