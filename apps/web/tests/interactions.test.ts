@@ -4,11 +4,15 @@ import {
   expireInteractions,
   INTERACTION_TTL_MS,
   interactionExpiresAt,
+  isExpiredError,
   isInteractionExpired,
   isNotFoundError,
+  permissionFromEvent,
+  permissionRespondParams,
   removeInteraction,
   SubmitGuard,
 } from '../src/gateway/interactions';
+import type { RunEvent } from '../src/gateway/types';
 
 interface Item {
   requestId: string;
@@ -81,6 +85,75 @@ describe('expiry cleanup and not_found handling', () => {
   test('recognizes HTTP GatewayHttpError codes too', () => {
     expect(isNotFoundError({ code: 'not_found', message: 'gone' })).toBe(true);
     expect(isNotFoundError({ code: 'conflict', message: 'busy' })).toBe(false);
+  });
+});
+
+describe('permissionFromEvent (0.13)', () => {
+  const event = (data: Record<string, unknown>, ts = 1_000): RunEvent => ({
+    type: 'tool.permission.request',
+    run_id: 'run-1',
+    ts,
+    data,
+  });
+
+  test('derives expiry from event time when deadline_at is missing', () => {
+    const item = permissionFromEvent(
+      event({ requestId: 'perm-1', tool: 'bash', input: { cmd: 'ls' } }),
+      INTERACTION_TTL_MS,
+      9_999,
+    );
+    expect(item).toMatchObject({
+      requestId: 'perm-1',
+      tool: 'bash',
+      runId: 'run-1',
+      requestedAt: 1_000,
+      expiresAt: 1_000 + INTERACTION_TTL_MS,
+    });
+  });
+
+  test('prefers the server deadline_at and keeps association fields', () => {
+    const item = permissionFromEvent(
+      event({
+        requestId: 'perm-1',
+        tool: 'bash',
+        session_id: 'session-9',
+        tool_call_id: 'call-3',
+        source: 'workflow',
+        deadline_at: 7_500,
+      }),
+    );
+    expect(item).toMatchObject({
+      sessionId: 'session-9',
+      toolCallId: 'call-3',
+      source: 'workflow',
+      expiresAt: 7_500,
+    });
+  });
+
+  test('accepts request_id for older emitters and drops events without an id', () => {
+    expect(permissionFromEvent(event({ request_id: 'legacy-1' }))?.requestId).toBe('legacy-1');
+    expect(permissionFromEvent(event({ tool: 'bash' }))).toBeNull();
+  });
+});
+
+describe('expired error + scope params (0.13)', () => {
+  test('recognizes expired over both WS and HTTP shapes', () => {
+    expect(isExpiredError(new Error('expired: Permission request expired'))).toBe(true);
+    expect(isExpiredError({ code: 'expired', message: 'gone' })).toBe(true);
+    expect(isExpiredError(new Error('not_found: missing'))).toBe(false);
+  });
+
+  test('sends scope and keeps remember:true for always (old gateway compat)', () => {
+    expect(permissionRespondParams('allow', 'always')).toEqual({
+      decision: 'allow',
+      scope: 'always',
+      remember: true,
+    });
+    expect(permissionRespondParams('deny')).toEqual({ decision: 'deny', scope: 'once' });
+    expect(permissionRespondParams('allow', 'session')).toEqual({
+      decision: 'allow',
+      scope: 'session',
+    });
   });
 });
 

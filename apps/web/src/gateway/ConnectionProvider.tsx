@@ -18,21 +18,24 @@ import {
   expireInteractions,
   interactionExpiredMessage,
   interactionExpiresAt,
+  isExpiredError,
   isNotFoundError,
+  permissionFromEvent,
   removeInteraction,
   SubmitGuard,
 } from './interactions';
 import { planHelloSeq } from './seq-replay';
-import type { AskUserAnswer, AskUserRequest, HelloInfo, RunEvent } from './types';
+import type {
+  AskUserAnswer,
+  AskUserRequest,
+  HelloInfo,
+  PermissionRequest,
+  PermissionScope,
+  RunEvent,
+} from './types';
 import { checkGatewayUrl, GATEWAY_URL_KEY, resolveInitialGatewayUrl } from './url';
 
-export interface PermissionRequest {
-  requestId: string;
-  tool: string;
-  input: unknown;
-  runId: string;
-  expiresAt: number;
-}
+export type { PermissionRequest, PermissionScope } from './types';
 
 const TOKEN_KEY = 'vessel.token';
 
@@ -81,7 +84,7 @@ export interface ConnectionContextValue {
   respondPermission: (
     requestId: string,
     decision: 'allow' | 'deny',
-    remember?: boolean,
+    scope?: PermissionScope,
   ) => Promise<void>;
   respondAsk: (requestId: string, answers: AskUserAnswer[]) => Promise<void>;
 }
@@ -143,6 +146,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [now, setNow] = useState(() => Date.now());
   const [connectSeq, setConnectSeq] = useState(0);
   const submitGuard = useRef(new SubmitGuard());
+  const permissionsRef = useRef<readonly PermissionRequest[]>(permissions);
+  permissionsRef.current = permissions;
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const tenantIdRef = useRef<string | null>(null);
@@ -214,23 +219,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     setReconnectAttempt(0);
 
     const addPermission = (event: RunEvent) => {
-      const d = event.data as { requestId?: unknown; tool?: unknown; input?: unknown };
-      if (typeof d.requestId !== 'string') return;
-      const requestId = d.requestId;
-      const expiresAt = interactionExpiresAt(event.ts);
-      setPermissions((prev) =>
-        enqueueInteraction(
-          prev,
-          {
-            requestId,
-            tool: typeof d.tool === 'string' ? d.tool : 'tool',
-            input: d.input,
-            runId: event.run_id,
-            expiresAt,
-          },
-          Date.now(),
-        ),
-      );
+      const request = permissionFromEvent(event);
+      if (!request) return;
+      setPermissions((prev) => enqueueInteraction(prev, request, Date.now()));
+    };
+
+    /** response / expired 事件：无论是否本端应答，都收起对应卡片。 */
+    const removeByEvent = (event: RunEvent, expired: boolean) => {
+      const data = event.data as { requestId?: unknown; request_id?: unknown };
+      const requestId = data.requestId ?? data.request_id;
+      if (typeof requestId !== 'string' || requestId.length === 0) return;
+      const wasPending = permissionsRef.current.some((item) => item.requestId === requestId);
+      setPermissions((prev) => removeInteraction(prev, requestId));
+      if (expired && wasPending) toast.info(interactionExpiredMessage());
     };
 
     const addAsk = (event: RunEvent) => {
@@ -262,6 +263,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const offEvent = client.onEvent((event, meta) => {
       if (!eventStore.push(event, meta)) return;
       if (event.type === 'tool.permission.request') addPermission(event);
+      if (event.type === 'tool.permission.response') removeByEvent(event, false);
+      if (event.type === 'tool.permission.expired') removeByEvent(event, true);
       if (event.type === 'ask.user.requested') addAsk(event);
       if (
         event.type === 'run.completed' ||
@@ -355,7 +358,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(retryTimer);
       client.close();
     };
-  }, [client, token, connectSeq, targetTenantId, eventStore, reportConnectError]);
+  }, [client, token, connectSeq, targetTenantId, eventStore, reportConnectError, toast]);
 
   // 交互相应倒计时（仅在有等待确认时）。
   useEffect(() => {
@@ -443,16 +446,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const respondPermission = useCallback(
-    async (requestId: string, decision: 'allow' | 'deny', remember = false) => {
+    async (requestId: string, decision: 'allow' | 'deny', scope: PermissionScope = 'once') => {
       // 同一 requestId 只允许一次在途提交（双击/连点）。
       if (!submitGuard.current.begin(requestId)) return;
       updateResponding(requestId, true);
       try {
-        await client.respondPermission(requestId, decision, remember);
+        await client.respondPermission(requestId, decision, scope);
         setPermissions((prev) => removeInteraction(prev, requestId));
       } catch (error) {
-        if (isNotFoundError(error)) {
-          // 服务端已丢弃（TTL 到期/重放旧请求）：移除弹窗并提示，不重试。
+        if (isNotFoundError(error) || isExpiredError(error)) {
+          // 服务端已丢弃 / 已过期 / 已随 run 取消：移除卡片并提示，不重试。
           setPermissions((prev) => removeInteraction(prev, requestId));
           toast.info(interactionExpiredMessage());
           return;

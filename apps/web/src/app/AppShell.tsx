@@ -3,9 +3,14 @@ import { CommandPalette } from '../components/CommandPalette';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
-import { AskModal, PermissionModal } from '../components/PermissionModals';
+import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
+import { AskModal } from '../components/PermissionModals';
 import { useToast } from '../components/ToastProvider';
 import { ChatView } from '../domains/chat/ChatView';
+import {
+  pendingPermissionsOutsideView,
+  pendingPermissionTarget,
+} from '../domains/chat/pending-permissions';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
@@ -78,7 +83,6 @@ export function AppShell() {
     retry,
     dismissError,
     dismissGap,
-    respondPermission,
     respondAsk,
   } = useConnection();
 
@@ -102,7 +106,16 @@ export function AppShell() {
   const routeKey = formatRoute(route);
   const lastEventVersion = useRef(-1);
 
-  const modalOpen = Boolean(permissions[0] || asks[0] || pendingAction || helpOpen);
+  // 权限改用 RunCard 内联；ask 本批仍走全局 Modal（DECISION-024 §1.3）。
+  const modalOpen = Boolean(asks[0] || pendingAction || helpOpen);
+  const otherPending = useMemo(
+    () => pendingPermissionsOutsideView(permissions, route, now),
+    [permissions, route, now],
+  );
+  const openPending = useCallback(
+    (request: (typeof otherPending)[number]) => navigate(pendingPermissionTarget(request)),
+    [navigate],
+  );
   const viewportWidth = useViewportWidth();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
   const navDrawerRef = useDrawerA11y({
@@ -469,6 +482,10 @@ export function AppShell() {
           </div>
         )}
 
+        {otherPending.length > 0 && (
+          <PendingPermissionsBar requests={otherPending} onOpen={openPending} />
+        )}
+
         <div className="shell-body">
           <DomainNav
             route={route}
@@ -593,16 +610,6 @@ export function AppShell() {
             busy={responding.has(asks[0].requestId)}
             onSubmit={(answers) => void respondAsk(asks[0]?.requestId ?? '', answers)}
             onCancel={() => void respondAsk(asks[0]?.requestId ?? '', [])}
-          />
-        ) : permissions[0] ? (
-          <PermissionModal
-            request={permissions[0]}
-            pendingCount={permissions.length}
-            now={now}
-            busy={responding.has(permissions[0].requestId)}
-            onDecide={(decision, remember) =>
-              void respondPermission(permissions[0]?.requestId ?? '', decision, remember)
-            }
           />
         ) : null}
       </div>

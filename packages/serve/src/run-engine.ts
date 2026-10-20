@@ -22,6 +22,9 @@ export interface RunRecord extends RunStatus {
   tenant_id: string;
 }
 
+/** 权限应答 scope（DECISION-024 §2.1）。 */
+export type PermissionScope = 'once' | 'session' | 'always';
+
 /** 待答权限请求 */
 export interface PendingPermission {
   run_id: string;
@@ -30,6 +33,29 @@ export interface PendingPermission {
   tool: string;
   input: unknown;
   ts: number;
+  /** epoch ms；事件缺省时按 `ts + interactionTtlMs` 推导 */
+  deadline_at: number;
+  session_id?: string;
+  tool_call_id?: string;
+  source?: string;
+}
+
+/** 已应答请求的幂等结果（保留期内重复应答返回它）。 */
+export interface PermissionOutcome {
+  run_id: string;
+  tenant_id: string;
+  decision: 'allow' | 'deny';
+  scope: PermissionScope;
+  ts: number;
+}
+
+/** `permission.respond` 的结果（additive）。 */
+export interface PermissionRespondResult {
+  ok: true;
+  decision: 'allow' | 'deny';
+  scope: PermissionScope;
+  /** 重复应答：沿用第一次的结果，不再发布事件。 */
+  duplicate?: true;
 }
 
 /** 待答 ask 请求 */
@@ -52,6 +78,8 @@ export interface RunEngineOptions {
   maxRuns?: number;
   /** 缺省 120s，与 core 的 ask/权限超时对齐 */
   interactionTtlMs?: number;
+  /** 已应答结果保留期（幂等查询），缺省 10min。 */
+  answeredTtlMs?: number;
 }
 
 /** 共享运行引擎 */
@@ -83,7 +111,8 @@ export interface RunEngine {
     decision: 'allow' | 'deny',
     remember: boolean,
     tenantId?: string,
-  ): void;
+    scope?: PermissionScope,
+  ): PermissionRespondResult;
   respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
@@ -114,12 +143,19 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
   const maxQueue = options.maxQueue ?? 100;
   const maxRuns = options.maxRuns ?? 200;
   const interactionTtlMs = options.interactionTtlMs ?? 120_000;
+  const answeredTtlMs = options.answeredTtlMs ?? 600_000;
+  /** 幂等表上限（防止长时间进程无界增长）。 */
+  const OUTCOME_LIMIT = 1000;
 
   const runs = new Map<string, RunRecord>();
   const queue: RunRecord[] = [];
   const coreToJob = new Map<string, string>();
   const pendingPermissions = new Map<string, PendingPermission>();
   const pendingAsks = new Map<string, PendingAsk>();
+  /** requestId → 第一次应答的结果（有界 + TTL）。 */
+  const answeredPermissions = new Map<string, PermissionOutcome>();
+  /** requestId → 过期/取消时间（迟到应答返回 `expired`）。 */
+  const expiredPermissions = new Map<string, { tenant_id: string; ts: number }>();
   const activeByTenant = new Map<string, number>();
   const resumedRuns = new Set<string>();
   const resumedWorkflows = new Set<string>();
@@ -307,6 +343,35 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     return defaultTenantId;
   }
 
+  /** 记录过期/取消，供迟到应答返回 `expired`（有界）。 */
+  function rememberExpired(requestId: string, tenantId: string, ts: number): void {
+    expiredPermissions.set(requestId, { tenant_id: tenantId, ts });
+    while (expiredPermissions.size > OUTCOME_LIMIT) {
+      const first = expiredPermissions.keys().next();
+      if (first.done || first.value === requestId) break;
+      expiredPermissions.delete(first.value);
+    }
+  }
+
+  /** 记录第一次应答结果，供幂等重放（有界；TTL 在读取/sweep 时检查）。 */
+  function rememberAnswered(requestId: string, outcome: PermissionOutcome): void {
+    answeredPermissions.set(requestId, outcome);
+    while (answeredPermissions.size > OUTCOME_LIMIT) {
+      const first = answeredPermissions.keys().next();
+      if (first.done || first.value === requestId) break;
+      answeredPermissions.delete(first.value);
+    }
+  }
+
+  function pruneInteractions(now: number): void {
+    for (const [id, outcome] of answeredPermissions) {
+      if (now - outcome.ts > answeredTtlMs) answeredPermissions.delete(id);
+    }
+    for (const [id, expired] of expiredPermissions) {
+      if (now - expired.ts > answeredTtlMs) expiredPermissions.delete(id);
+    }
+  }
+
   function handleEvent(event: RunEvent): void {
     if (event.type === 'run.started' && active && !active.core_run_id) {
       active.core_run_id = event.run_id;
@@ -316,12 +381,33 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       const data = event.data as Record<string, unknown>;
       const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
       if (requestId) {
+        const now = Date.now();
+        const eventTs =
+          typeof event.ts === 'number' && Number.isFinite(event.ts) && event.ts > 0
+            ? event.ts
+            : now;
+        const deadlineAt =
+          typeof data.deadline_at === 'number' &&
+          Number.isFinite(data.deadline_at) &&
+          data.deadline_at > 0
+            ? data.deadline_at
+            : eventTs + interactionTtlMs;
         pendingPermissions.set(requestId, {
           run_id: event.run_id,
           tenant_id: eventTenantId(event),
           tool: typeof data.tool === 'string' ? data.tool : 'tool',
           input: data.input,
-          ts: Date.now(),
+          ts: eventTs,
+          deadline_at: deadlineAt,
+          ...(typeof data.session_id === 'string' && data.session_id.length > 0
+            ? { session_id: data.session_id }
+            : {}),
+          ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
+            ? { tool_call_id: data.tool_call_id }
+            : {}),
+          ...(typeof data.source === 'string' && data.source.length > 0
+            ? { source: data.source }
+            : {}),
         });
       }
     }
@@ -336,11 +422,22 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
         });
       }
     }
-    if (event.type === 'run.completed' || event.type === 'run.failed') {
+    if (
+      event.type === 'run.completed' ||
+      event.type === 'run.failed' ||
+      event.type === 'run.cancelled'
+    ) {
       if (active && active.core_run_id === event.run_id) {
         const data = event.data as Record<string, unknown>;
         if (data.usage && typeof data.usage === 'object') {
           active.usage = data.usage as RunStatus['usage'];
+        }
+      }
+      // run 终态：pending 全部清掉（不只 asks），迟到应答返回 expired。
+      for (const [id, pending] of pendingPermissions) {
+        if (pending.run_id === event.run_id) {
+          pendingPermissions.delete(id);
+          rememberExpired(id, pending.tenant_id, event.ts);
         }
       }
       for (const [id, pending] of pendingAsks) {
@@ -356,22 +453,71 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     decision: 'allow' | 'deny',
     remember: boolean,
     tenantId?: string,
-  ): void {
+    scope?: PermissionScope,
+  ): PermissionRespondResult {
+    // scope 优先；remember 是旧客户端的兼容写法（等价 always）。
+    const resolvedScope: PermissionScope = scope ?? (remember ? 'always' : 'once');
     const pending = pendingPermissions.get(requestId);
-    if (!pending) {
-      throw new RpcError('not_found', `Permission request not found: ${requestId}`);
+    if (pending) {
+      // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
+      if (tenantId !== undefined && pending.tenant_id !== tenantId) {
+        throw new RpcError('not_found', `Permission request not found: ${requestId}`);
+      }
+      const now = Date.now();
+      events.publish({
+        type: 'tool.permission.response',
+        run_id: pending.run_id,
+        data: {
+          requestId,
+          decision,
+          scope: resolvedScope,
+          ...(resolvedScope === 'always' ? { remember: true } : {}),
+        },
+        ts: now,
+        tenant_id: pending.tenant_id,
+      });
+      pendingPermissions.delete(requestId);
+      rememberAnswered(requestId, {
+        run_id: pending.run_id,
+        tenant_id: pending.tenant_id,
+        decision,
+        scope: resolvedScope,
+        ts: now,
+      });
+      return { ok: true, decision, scope: resolvedScope };
     }
-    // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
-    if (tenantId !== undefined && pending.tenant_id !== tenantId) {
-      throw new RpcError('not_found', `Permission request not found: ${requestId}`);
+
+    // 幂等：首次应答生效，重复应答返回上次结果（不发布新事件）。
+    const answered = answeredPermissions.get(requestId);
+    if (answered) {
+      if (tenantId !== undefined && answered.tenant_id !== tenantId) {
+        throw new RpcError('not_found', `Permission request not found: ${requestId}`);
+      }
+      if (Date.now() - answered.ts > answeredTtlMs) {
+        answeredPermissions.delete(requestId);
+      } else if (answered.decision !== decision) {
+        throw new RpcError(
+          'conflict',
+          `Permission request already answered as ${answered.decision}: ${requestId}`,
+        );
+      } else {
+        return { ok: true, decision, scope: answered.scope, duplicate: true };
+      }
     }
-    events.publish({
-      type: 'tool.permission.response',
-      run_id: pending.run_id,
-      data: { requestId, decision, ...(remember ? { remember: true } : {}) },
-      ts: Date.now(),
-    });
-    pendingPermissions.delete(requestId);
+
+    // 已过期 / 已随 run 终态取消：迟到应答返回 expired（DECISION-024 §2.2）。
+    const expired = expiredPermissions.get(requestId);
+    if (expired) {
+      if (tenantId !== undefined && expired.tenant_id !== tenantId) {
+        throw new RpcError('not_found', `Permission request not found: ${requestId}`);
+      }
+      if (Date.now() - expired.ts <= answeredTtlMs) {
+        throw new RpcError('expired', `Permission request expired: ${requestId}`);
+      }
+      expiredPermissions.delete(requestId);
+    }
+
+    throw new RpcError('not_found', `Permission request not found: ${requestId}`);
   }
 
   function respondAsk(requestId: string, answers: unknown[], tenantId?: string): void {
@@ -420,11 +566,27 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
 
   function sweep(now = Date.now()): void {
     for (const [id, pending] of pendingPermissions) {
-      if (now - pending.ts > interactionTtlMs) pendingPermissions.delete(id);
+      if (now < pending.deadline_at) continue;
+      // 过期不能静默删除：先发事件，让所有端的卡片收起（DECISION-024 §2.2）。
+      pendingPermissions.delete(id);
+      rememberExpired(id, pending.tenant_id, now);
+      events.publish({
+        type: 'tool.permission.expired',
+        run_id: pending.run_id,
+        data: {
+          requestId: id,
+          tool: pending.tool,
+          ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
+          ...(pending.tool_call_id !== undefined ? { tool_call_id: pending.tool_call_id } : {}),
+        },
+        ts: now,
+        tenant_id: pending.tenant_id,
+      });
     }
     for (const [id, pending] of pendingAsks) {
       if (now - pending.ts > interactionTtlMs) pendingAsks.delete(id);
     }
+    pruneInteractions(now);
   }
 
   function list(tenantId: string, opts: { sessionId?: string; status?: string } = {}): RunStatus[] {

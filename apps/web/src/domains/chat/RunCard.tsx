@@ -4,9 +4,11 @@ import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
+import type { PermissionRequest, PermissionScope } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { RunGroup } from '../../state/events';
 import { EventRow } from './EventRow';
+import { PermissionCard } from './PermissionCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
 
@@ -71,6 +73,10 @@ export function RunCard({
   cancelling,
   hideInput = false,
   onCancel,
+  permissions = [],
+  permissionNow = 0,
+  permissionBusy,
+  onDecidePermission,
 }: {
   group: RunGroup;
   cancelled: boolean;
@@ -78,6 +84,15 @@ export function RunCard({
   /** 历史消息里已经有同一条用户输入时，不再重复显示 run.input。 */
   hideInput?: boolean;
   onCancel: (group: RunGroup) => void;
+  /** 该 run 的待答权限（跨 session 的由顶部条提示）。 */
+  permissions?: readonly PermissionRequest[];
+  permissionNow?: number;
+  permissionBusy?: ReadonlySet<string>;
+  onDecidePermission?: (
+    requestId: string,
+    decision: 'allow' | 'deny',
+    scope: PermissionScope,
+  ) => void;
 }) {
   const status =
     group.status === 'cancelled' || (cancelled && group.status === 'failed')
@@ -100,6 +115,11 @@ export function RunCard({
     return undefined;
   }, [renderItems]);
   const errorHint = describeGatewayErrorText(group.error);
+  const sortedPermissions = useMemo(
+    () => [...permissions].sort((a, b) => a.requestedAt - b.requestedAt),
+    [permissions],
+  );
+  const cardNow = permissionNow > 0 ? permissionNow : Date.now();
 
   return (
     <div className={`run-card ${status}`}>
@@ -148,6 +168,20 @@ export function RunCard({
           return <EventRow key={item.key} event={item.event} />;
         })}
       </div>
+
+      {sortedPermissions.length > 0 && onDecidePermission && (
+        <div className="run-permissions">
+          {sortedPermissions.map((request) => (
+            <PermissionCard
+              key={request.requestId}
+              request={request}
+              now={cardNow}
+              busy={permissionBusy?.has(request.requestId) ?? false}
+              onDecide={(decision, scope) => onDecidePermission(request.requestId, decision, scope)}
+            />
+          ))}
+        </div>
+      )}
 
       {group.status === 'completed' && (
         <div className="run-footer completed">

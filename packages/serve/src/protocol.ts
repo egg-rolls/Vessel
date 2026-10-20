@@ -92,7 +92,9 @@ export type ProtocolErrorCode =
   | 'invalid_params'
   | 'tenant_locked'
   | 'quota_exceeded'
-  | 'conflict';
+  | 'conflict'
+  // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。
+  | 'expired';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;

@@ -2474,6 +2474,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       case 'quota_exceeded':
       case 'payload_too_large':
         return code === 'quota_exceeded' ? 429 : 413;
+      case 'expired':
+        // 410 Gone：请求存在过，但已过期/已取消（DECISION-024 §2.2）。
+        return 410;
       case 'internal':
         return 500;
       default:
@@ -2961,6 +2964,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
                 request_id: requestId,
                 decision,
                 ...(body.remember === true ? { remember: true } : {}),
+                ...(typeof body.scope === 'string' ? { scope: body.scope } : {}),
               },
               principal,
             ),
@@ -3097,10 +3101,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }, heartbeatMs);
   (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
-  // 清理过期的权限请求记录
+  // 清理过期的交互请求；1s 粒度保证 `tool.permission.expired` 不滞后于 deadline。
   const permissionSweeper = setInterval(() => {
     engine.sweep();
-  }, 30_000);
+  }, 1_000);
   (permissionSweeper as { unref?: () => void }).unref?.();
 
   /** 关闭时等待 active run 的上限（0.10 R2-18） */

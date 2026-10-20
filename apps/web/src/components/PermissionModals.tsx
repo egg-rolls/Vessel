@@ -1,80 +1,10 @@
 import { useState } from 'react';
-import type { PermissionRequest } from '../gateway/ConnectionProvider';
 import type { AskUserAnswer, AskUserRequest } from '../gateway/types';
 import { t } from '../i18n';
 import { ModalShell } from './Modal';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
-}
-
-function prettyInput(input: unknown): string {
-  try {
-    return truncate(JSON.stringify(input, null, 2) ?? String(input), 2000);
-  } catch {
-    return String(input);
-  }
-}
-
-/** 工具执行确认：拒绝 / 始终允许 / 允许。 */
-export function PermissionModal({
-  request,
-  pendingCount,
-  now,
-  busy = false,
-  onDecide,
-}: {
-  request: PermissionRequest;
-  pendingCount: number;
-  now: number;
-  /** 应答提交中：禁用按钮，防止双击重复应答。 */
-  busy?: boolean;
-  onDecide: (decision: 'allow' | 'deny', remember: boolean) => void;
-}) {
-  const remaining = Math.max(0, Math.ceil((request.expiresAt - now) / 1000));
-  return (
-    <ModalShell
-      label="工具执行确认"
-      describedBy="permission-summary"
-      onClose={() => onDecide('deny', false)}
-      closeOnBackdrop={false}
-      className="permission-modal"
-    >
-      <h2 className="modal-title">工具执行确认</h2>
-      <div className="permission-meta dim" id="permission-summary">
-        run {truncate(request.runId, 16)} · 剩余 {remaining}s
-        {pendingCount > 1 ? ` · 还有 ${pendingCount - 1} 个待处理` : ''}
-      </div>
-      <div className="permission-tool mono">{request.tool}</div>
-      <pre className="permission-input">{prettyInput(request.input)}</pre>
-      <div className="modal-actions">
-        <button
-          type="button"
-          className="btn btn-danger-ghost"
-          disabled={busy}
-          onClick={() => onDecide('deny', false)}
-        >
-          拒绝
-        </button>
-        <button
-          type="button"
-          className="btn"
-          disabled={busy}
-          onClick={() => onDecide('allow', true)}
-        >
-          始终允许
-        </button>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={busy}
-          onClick={() => onDecide('allow', false)}
-        >
-          {busy ? t('permission.busy') : '允许'}
-        </button>
-      </div>
-    </ModalShell>
-  );
 }
 
 /** ask_user：选项 + 自定义文本；空回答不可提交。 */

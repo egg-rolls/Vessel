@@ -127,6 +127,59 @@ describe('gateway permissions', () => {
     expect(state.executed).toBe(true);
   });
 
+  it('accepts scope and treats a duplicate response as idempotent', async () => {
+    const { gw } = await makePermissionGateway();
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    await submit(gw, 'please run');
+    const request = await client.nextEvent('tool.permission.request');
+    const requestId = request.requestId as string;
+
+    const first = (await client.request('permission.respond', {
+      request_id: requestId,
+      decision: 'allow',
+      scope: 'session',
+    })) as Record<string, unknown>;
+    expect(first).toMatchObject({ ok: true, decision: 'allow', scope: 'session' });
+
+    await client.nextEvent('run.completed');
+
+    // 幂等：同一 requestId 的重复应答返回上次结果，不再报 not_found。
+    const repeat = (await client.request('permission.respond', {
+      request_id: requestId,
+      decision: 'allow',
+    })) as Record<string, unknown>;
+    expect(repeat).toMatchObject({
+      ok: true,
+      decision: 'allow',
+      scope: 'session',
+      duplicate: true,
+    });
+  });
+
+  it('rejects an unknown permission scope', async () => {
+    const { gw } = await makePermissionGateway();
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    await submit(gw, 'please run');
+    const request = await client.nextEvent('tool.permission.request');
+    let message = '';
+    try {
+      await client.request('permission.respond', {
+        request_id: request.requestId,
+        decision: 'allow',
+        scope: 'forever',
+      });
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    // WS legacy 路径把 invalid_params 映射为 0.4 的 invalid_request。
+    expect(message).toContain('invalid_request');
+    expect(message).toContain('scope');
+  });
+
   it('returns not_found for an unknown permission request id', async () => {
     const { gw } = await makePermissionGateway();
     gateways.push(gw);

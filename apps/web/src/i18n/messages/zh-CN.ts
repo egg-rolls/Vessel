@@ -107,5 +107,14 @@ export const messages = {
   // 权限 / 提问 / 思考流（0.11.1）
   'permission.busy': '提交中…',
   'permission.expired': '请求已过期，已从待处理列表移除。',
+  // 0.13：内联权限卡片 + 跨 session 提示
+  'permission.allowOnce': '本次允许',
+  'permission.allowSession': '本会话允许',
+  'permission.always': '始终允许',
+  'permission.deny': '拒绝',
+  'permission.inline.waiting': '等待确认 · 剩余 {seconds}s',
+  'permission.inline.expired': '请求已过期',
+  'permission.otherSessions': '其他会话有 {count} 个待处理权限请求',
+  'permission.goTo': '前往处理',
   'chat.reasoning.summary': '思考过程',
 } as const;

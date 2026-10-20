@@ -5,6 +5,7 @@
  */
 
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
+import type { PermissionRespondResult, PermissionScope } from '../../run-engine.js';
 import { stringParam } from './common.js';
 
 export interface InteractionMethodsDeps {
@@ -13,9 +14,12 @@ export interface InteractionMethodsDeps {
     decision: 'allow' | 'deny',
     remember: boolean,
     tenantId?: string,
-  ): void;
+    scope?: PermissionScope,
+  ): PermissionRespondResult;
   respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
 }
+
+const PERMISSION_SCOPES: ReadonlySet<PermissionScope> = new Set(['once', 'session', 'always']);
 
 export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMethodDefinition[] {
   const { respondPermission, respondAsk } = deps;
@@ -25,27 +29,47 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
       permission: 'write',
       params_schema: {
         type: 'object',
-        required: ['request_id', 'decision'],
+        required: ['decision'],
         properties: {
           request_id: { type: 'string', minLength: 1 },
+          // DECISION-024 §2.2：兼容 camelCase。
+          requestId: { type: 'string', minLength: 1 },
           decision: { type: 'string', enum: ['allow', 'deny'] },
           remember: { type: 'boolean' },
+          scope: { type: 'string', enum: ['once', 'session', 'always'] },
           tenant_id: { type: 'string' },
         },
       },
       result_schema: {
         type: 'object',
         required: ['ok'],
-        properties: { ok: { type: 'boolean' } },
+        properties: {
+          ok: { type: 'boolean' },
+          decision: { type: 'string', enum: ['allow', 'deny'] },
+          scope: { type: 'string', enum: ['once', 'session', 'always'] },
+          duplicate: { type: 'boolean' },
+        },
       },
       handler: (params, ctx) => {
-        const requestId = stringParam(params, 'request_id');
+        const rawRequestId = params.request_id ?? params.requestId;
+        if (typeof rawRequestId !== 'string' || rawRequestId.length === 0) {
+          throw new RpcError('invalid_params', 'request_id is required');
+        }
         const decision = params.decision;
         if (decision !== 'allow' && decision !== 'deny') {
           throw new RpcError('invalid_params', "decision must be 'allow' or 'deny'");
         }
-        respondPermission(requestId, decision, params.remember === true, ctx.tenantId);
-        return { ok: true };
+        const rawScope = params.scope;
+        if (rawScope !== undefined && !PERMISSION_SCOPES.has(rawScope as PermissionScope)) {
+          throw new RpcError('invalid_params', "scope must be 'once', 'session' or 'always'");
+        }
+        return respondPermission(
+          rawRequestId,
+          decision,
+          params.remember === true,
+          ctx.tenantId,
+          rawScope as PermissionScope | undefined,
+        );
       },
     },
     {

@@ -10,6 +10,7 @@
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
+import { permissionRespondParams } from './interactions';
 import type {
   AskUserAnswer,
   CapabilityManifest,
@@ -33,6 +34,7 @@ import type {
   Message,
   MetricsResponse,
   MetricsSnapshot,
+  PermissionScope,
   RenameSessionResult,
   ResumeRunResponse,
   RpcResponseEnvelope,
@@ -579,12 +581,11 @@ export class GatewayClient {
   async respondPermission(
     requestId: string,
     decision: 'allow' | 'deny',
-    remember = false,
+    scope: PermissionScope = 'once',
   ): Promise<void> {
     await this.request('permission.respond', {
       request_id: requestId,
-      decision,
-      ...(remember ? { remember: true } : {}),
+      ...permissionRespondParams(decision, scope),
     });
   }
 
