@@ -184,7 +184,8 @@ export const DEFAULT_CONFIG: VesselConfig = {
   },
   context: {
     maxTokens: 1_000_000,
-    maxMessages: 100,
+    // 不提供默认 maxMessages：缺省时由 core 按 maxTokens 推导安全上限
+    // （0.10：条数不再硬截断，超限先摘要）。显式配置仍原样透传。
     // 0.6.1 P1：默认开启压缩；有 provider summarizer 时生成真实摘要。
     autoCompact: true,
     compactThreshold: 0.8,

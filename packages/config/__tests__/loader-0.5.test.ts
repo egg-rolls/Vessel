@@ -361,7 +361,8 @@ describe('loadConfig 0.5 - empty YAML files', () => {
     expect(validation.errors).toEqual([]);
     expect(validation.valid).toBe(true);
     expect(config.session?.backend).toBe('file');
-    expect(config.context?.maxMessages).toBe(100);
+    // 0.10：不提供默认 maxMessages，由 core 按 maxTokens 推导。
+    expect(config.context?.maxMessages).toBeUndefined();
     expect(tenantId).toBe('default');
   });
 
