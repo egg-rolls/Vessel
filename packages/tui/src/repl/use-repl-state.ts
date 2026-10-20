@@ -287,8 +287,13 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
         : state;
     case 'runEnd':
       return { ...state, run: { phase: 'idle', abort: null } };
-    case 'patchRepl':
-      return { ...state, repl: { ...state.repl, ...action.patch } };
+    case 'patchRepl': {
+      // 浅比较守卫：/status 的队列同步 effect 不应产生无意义重渲染。
+      const changed = Object.entries(action.patch).some(
+        ([key, value]) => state.repl[key as keyof ReplState] !== value,
+      );
+      return changed ? { ...state, repl: { ...state.repl, ...action.patch } } : state;
+    }
     case 'openView': {
       const selectedKey = action.initialKey ?? defaultViewSelection(action.envelope);
       return {

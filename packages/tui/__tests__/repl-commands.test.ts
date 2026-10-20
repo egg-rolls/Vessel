@@ -27,7 +27,7 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 28 个扁平命令（含 0.3 / 0.4 / 0.5 / 0.6.1 / 0.7 / 0.11 命令）', () => {
+  it('createCommands 注册 31 个扁平命令（含 0.3 / 0.4 / 0.5 / 0.6.1 / 0.7 / 0.11 / 0.14 命令）', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('tools');
@@ -60,13 +60,17 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).toContain('details');
     // 0.11 设置
     expect(names).toContain('settings');
+    // 0.14 可观察性
+    expect(names).toContain('agents');
+    expect(names).toContain('status');
+    expect(names).toContain('errors');
     // 已删命令（/skills、/assets）仍不注册
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
-    expect(names.length).toBe(28);
+    expect(names.length).toBe(31);
     // /sessions 保留为 hidden deprecated alias：注册但不出现在 help/autocomplete
     expect(reg.list().find((e) => e.name === 'sessions')?.hidden).toBe(true);
-    expect(reg.visibleList()).toHaveLength(27);
+    expect(reg.visibleList()).toHaveLength(30);
     expect(reg.visibleList().map((e) => e.name)).not.toContain('sessions');
     // /resume 仍是会话恢复，usage 扩展为 delete/rename 子命令
     expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe(
