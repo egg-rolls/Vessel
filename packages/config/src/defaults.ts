@@ -142,6 +142,7 @@ export const DEFAULT_FEISHU_OPTIONS: Required<FeishuConfig> = {
 export const DEFAULT_OBSERVABILITY_OPTIONS: Required<ObservabilityConfig> = {
   eventHistory: 1000,
   metrics: true,
+  showProcessErrors: false,
 };
 
 /** 全局数据根（0.5；不写入 DEFAULT_CONFIG，保持 0.4 配置形状） */

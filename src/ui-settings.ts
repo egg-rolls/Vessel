@@ -27,6 +27,12 @@ const SUPPORTED_LANGUAGES: ReadonlySet<string> = new Set(['zh-CN', 'en']);
 /** `ui.statusBars` 允许值（0.13） */
 const SUPPORTED_STATUS_BARS: ReadonlySet<string> = new Set(['top', 'bottom', 'both', 'none']);
 
+/** `ui.verbosity` 允许值（0.14） */
+const SUPPORTED_VERBOSITY: ReadonlySet<string> = new Set(['minimal', 'normal', 'debug']);
+
+/** `ui.errorLevel` 允许值（0.14） */
+const SUPPORTED_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
+
 /** 存储选项 */
 export interface UiSettingsStoreOptions {
   /** 用户配置文件路径；缺省 `~/.vessel/config.yaml` */
@@ -65,6 +71,16 @@ export function isUiLanguage(value: unknown): value is UiLanguage {
 /** 是否为受支持的状态栏位置（0.13） */
 export function isUiStatusBars(value: unknown): value is UiStatusBars {
   return typeof value === 'string' && SUPPORTED_STATUS_BARS.has(value);
+}
+
+/** 是否为受支持的输出详略（0.14） */
+export function isUiVerbosity(value: unknown): boolean {
+  return typeof value === 'string' && SUPPORTED_VERBOSITY.has(value);
+}
+
+/** 是否为受支持的错误展示层级（0.14） */
+export function isUiErrorLevel(value: unknown): boolean {
+  return typeof value === 'string' && SUPPORTED_ERROR_LEVELS.has(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -126,8 +142,16 @@ async function writeRoot(configPath: string, root: Record<string, unknown>): Pro
   });
 }
 
-/** `vessel config set` 支持的键（0.11.1 扩展；0.13 增加 ui.statusBars） */
-export type SettableConfigKey = 'ui.language' | 'ui.showReasoning' | 'ui.statusBars' | 'agent.cwd';
+/** `vessel config set` 支持的键（0.11.1 扩展；0.13 statusBars；0.14 可见性） */
+export type SettableConfigKey =
+  | 'ui.language'
+  | 'ui.showReasoning'
+  | 'ui.statusBars'
+  | 'ui.verbosity'
+  | 'ui.showInternalEvents'
+  | 'ui.errorLevel'
+  | 'observability.showProcessErrors'
+  | 'agent.cwd';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -140,6 +164,13 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'ui.language': { block: 'ui', yamlKey: 'language' },
   'ui.showReasoning': { block: 'ui', yamlKey: 'show_reasoning' },
   'ui.statusBars': { block: 'ui', yamlKey: 'status_bars' },
+  'ui.verbosity': { block: 'ui', yamlKey: 'verbosity' },
+  'ui.showInternalEvents': { block: 'ui', yamlKey: 'show_internal_events' },
+  'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
+  'observability.showProcessErrors': {
+    block: 'observability',
+    yamlKey: 'show_process_errors',
+  },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
 };
 
@@ -166,6 +197,18 @@ export async function setUserConfigValue(
   }
   if (key === 'ui.statusBars' && !isUiStatusBars(value)) {
     throw new Error(`invalid_status_bars: ${JSON.stringify(value)}`);
+  }
+  if (key === 'ui.verbosity' && !isUiVerbosity(value)) {
+    throw new Error(`invalid_verbosity: ${JSON.stringify(value)}`);
+  }
+  if (key === 'ui.showInternalEvents' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  if (key === 'ui.errorLevel' && !isUiErrorLevel(value)) {
+    throw new Error(`invalid_error_level: ${JSON.stringify(value)}`);
+  }
+  if (key === 'observability.showProcessErrors' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
   }
   if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);

@@ -26,6 +26,8 @@ describe('gateway start', () => {
         'start',
         '--port',
         '0',
+        '--instance',
+        'web',
         '--host',
         '127.0.0.1',
         '--daemon',
@@ -36,6 +38,7 @@ describe('gateway start', () => {
       kind: 'start',
       daemon: true,
       port: 0,
+      instance: 'web',
       host: '127.0.0.1',
       log: '/tmp/gw.log',
     });
@@ -75,7 +78,12 @@ describe('gateway stop / status / restart', () => {
       kind: 'status',
       json: true,
     });
-    expect(err(['gateway', 'status', '--port', '1'])).toContain('Unknown argument');
+    expect(ok(['gateway', 'status', '--port', '1']).gateway).toEqual({
+      kind: 'status',
+      json: false,
+      port: 1,
+    });
+    expect(err(['gateway', 'status', '--all', '--port', '1'])).toContain('only one of');
   });
 
   it('restart --daemon', () => {

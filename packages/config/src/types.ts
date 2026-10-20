@@ -228,6 +228,11 @@ export interface ObservabilityConfig {
   eventHistory?: number;
   /** 创建 MetricsCollector 并注入 gateway / TUI（默认 true） */
   metrics?: boolean;
+  /**
+   * 是否把 `process.error` / `shutdown.failed` 等进程级错误暴露给诊断面
+   * （0.14；默认 false，仅 logger + trace）。
+   */
+  showProcessErrors?: boolean;
 }
 
 /** serve TLS 配置；cert/key 必须成对 */
@@ -405,10 +410,31 @@ export interface PermissionConfig {
 /** 状态栏位置（0.13）：top / bottom / both / none */
 export type UiStatusBars = 'top' | 'bottom' | 'both' | 'none';
 
-/** UI 配置（0.8.5；0.11 增加 clearOnStart；0.11.1 增加 showReasoning；0.13 增加 statusBars） */
+/** UI 输出详略（0.14；默认 normal） */
+export type UiVerbosity = 'minimal' | 'normal' | 'debug';
+
+/** 错误展示层级（0.14；默认 user） */
+export type UiErrorLevel = 'user' | 'all';
+
+/** UI 配置（0.8.5；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars；0.14 可见性） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
   language?: string;
+  /**
+   * 输出详略（0.14；默认 normal）。
+   * minimal = 只保留结果，normal = 现有行为，debug = 额外诊断。
+   */
+  verbosity?: UiVerbosity;
+  /**
+   * 是否在事件流中展示 `llm.request` / `hook.*` / `agent.*` 等内部事件
+   * （0.14；默认 false，保持 0.13 行为）。
+   */
+  showInternalEvents?: boolean;
+  /**
+   * 错误展示层级（0.14；默认 user：只展示 run/tool/permission 级错误）。
+   * all = 同时展示 internal / process 级错误。
+   */
+  errorLevel?: UiErrorLevel;
   /**
    * 进入交互 REPL 时是否发送 ANSI 清屏（默认 true）。
    * 不写入默认配置；消费方按 `!== false` 处理。

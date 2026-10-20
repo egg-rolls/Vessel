@@ -77,7 +77,15 @@ describe('vessel gateway lifecycle', () => {
   it('start --daemon → status → 重复启动拒绝 → stop', async () => {
     const dir = tmpDir();
     try {
-      const start = await runCli(dir, ['gateway', 'start', '--daemon', '--port', '0']);
+      const start = await runCli(dir, [
+        'gateway',
+        'start',
+        '--daemon',
+        '--instance',
+        'default',
+        '--port',
+        '0',
+      ]);
       expect(start.stderr).toBe('');
       expect(start.exitCode).toBe(0);
       expect(start.stdout).toContain('Gateway');
@@ -116,7 +124,15 @@ describe('vessel gateway lifecycle', () => {
   it('reload：plugins/config 热重载 + requires_restart 如实返回', async () => {
     const dir = tmpDir();
     try {
-      const start = await runCli(dir, ['gateway', 'start', '--daemon', '--port', '0']);
+      const start = await runCli(dir, [
+        'gateway',
+        'start',
+        '--daemon',
+        '--instance',
+        'default',
+        '--port',
+        '0',
+      ]);
       expect(start.exitCode).toBe(0);
 
       const plugins = await runCli(dir, ['gateway', 'reload', '--scope', 'plugins']);
@@ -153,7 +169,15 @@ describe('vessel gateway lifecycle', () => {
         version: '0.0.0-stale',
       });
 
-      const start = await runCli(dir, ['gateway', 'start', '--daemon', '--port', '0']);
+      const start = await runCli(dir, [
+        'gateway',
+        'start',
+        '--daemon',
+        '--instance',
+        'default',
+        '--port',
+        '0',
+      ]);
       expect(start.exitCode).toBe(0);
 
       const status = await runCli(dir, ['gateway', 'status', '--json']);

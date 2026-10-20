@@ -24,7 +24,9 @@ import {
 /** daemon 启动选项 */
 export interface StartDaemonOptions {
   dataDir: string;
-  /** `--log`；缺省 `<dataDir>/logs/gateway.log` */
+  /** 实例名；缺省 default（0.14） */
+  instance?: string;
+  /** `--log`；缺省 `<dataDir>/logs/gateway.log`（命名实例 gateway-<instance>.log） */
   logPath?: string;
   port?: number;
   host?: string;
@@ -52,9 +54,10 @@ export type StartDaemonResult =
       runningPid?: number;
     };
 
-/** 默认日志路径 */
-export function gatewayLogPath(dataDir: string): string {
-  return path.join(dataDir, 'logs', 'gateway.log');
+/** 默认日志路径：default → gateway.log；命名 → gateway-<instance>.log */
+export function gatewayLogPath(dataDir: string, instance?: string): string {
+  const name = instance === undefined || instance === '' ? 'default' : instance;
+  return path.join(dataDir, 'logs', name === 'default' ? 'gateway.log' : `gateway-${name}.log`);
 }
 
 const DEFAULT_WAIT_MS = 15_000;
@@ -80,6 +83,7 @@ export async function tailLog(logPath: string, maxLines = 10): Promise<string> {
 export function buildDaemonArgv(options: {
   execPath: string;
   entryPath: string;
+  instance?: string;
   port?: number;
   host?: string;
 }): string[] {
@@ -88,6 +92,7 @@ export function buildDaemonArgv(options: {
     options.entryPath,
     'gateway',
     'start',
+    ...(options.instance !== undefined ? ['--instance', options.instance] : []),
     ...(options.port !== undefined ? ['--port', String(options.port)] : []),
     ...(options.host !== undefined ? ['--host', options.host] : []),
   ];
@@ -95,11 +100,13 @@ export function buildDaemonArgv(options: {
 
 /** 启动分离的 gateway 子进程并等待 PID 文件出现 */
 export async function startGatewayDaemon(options: StartDaemonOptions): Promise<StartDaemonResult> {
-  const logPath = options.logPath ?? gatewayLogPath(options.dataDir);
+  const instance = options.instance;
+  const logPath = options.logPath ?? gatewayLogPath(options.dataDir, instance);
 
   if (options.checkDuplicate !== false) {
     // 存活 + 命令行匹配才算重复；死 pid / 不可解析 / PID 复用都回收。
     const state = await readGatewayPidState(options.dataDir, {
+      ...(instance !== undefined ? { instance } : {}),
       ...(options.platform !== undefined ? { platform: options.platform } : {}),
       ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
     });
@@ -112,7 +119,9 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
         runningPid: state.record.pid,
       };
     }
-    if (state.kind !== 'absent') await removeGatewayPid(options.dataDir).catch(() => undefined);
+    if (state.kind !== 'absent') {
+      await removeGatewayPid(options.dataDir, instance).catch(() => undefined);
+    }
   }
 
   await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
@@ -143,6 +152,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
   const argv = buildDaemonArgv({
     execPath,
     entryPath,
+    ...(instance !== undefined ? { instance } : {}),
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
   });
@@ -171,7 +181,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
 
   const deadline = Date.now() + (options.waitMs ?? DEFAULT_WAIT_MS);
   while (Date.now() < deadline) {
-    const record = await readGatewayPidRecord(options.dataDir);
+    const record = await readGatewayPidRecord(options.dataDir, instance);
     if (record && record.pid === child.pid && isProcessAlive(record.pid)) {
       await handle.close().catch(() => undefined);
       return { ok: true, record, logPath };
@@ -201,7 +211,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     ok: false,
     error: 'timeout',
     message:
-      `gateway did not write ${gatewayPidPath(options.dataDir)} within ` +
+      `gateway did not write ${gatewayPidPath(options.dataDir, instance)} within ` +
       `${options.waitMs ?? DEFAULT_WAIT_MS}ms` +
       (tail ? `\n${tail}` : ''),
     logPath,

@@ -7,6 +7,7 @@
  */
 
 import { loadConfig } from '../../packages/config/src/index';
+import { agentsCommand } from '../agents-command';
 import type { CliArgs } from '../cli-args';
 import { runUpdateCommand } from '../cli-update';
 import {
@@ -17,12 +18,14 @@ import {
 } from '../config-command';
 import { resolveDataDir } from '../data-paths';
 import { doctorCommand } from '../doctor-command';
+import { errorsCommand } from '../errors-command';
 import { runEvalCommand } from '../eval-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from '../gateway-command';
 import { applyLocale } from '../i18n';
 import { migrateCommand } from '../migrate-command';
 import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
+import { statusCommand } from '../status-command';
 import {
   tenantCreateCommand,
   tenantGetCommand,
@@ -246,6 +249,56 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.gateway;
       if (command === null) return 1;
       return runGatewayCommand(command);
+    },
+  },
+  {
+    name: 'status',
+    match: (args) => args.statusCommand !== null,
+    run: async (args) => {
+      if (args.statusCommand === null) return 1;
+      return printCommandResult(
+        await statusCommand({
+          json: args.statusCommand.json,
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+          tenantId: args.tenantArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'agents',
+    match: (args) => args.agentsCommand !== null,
+    run: async (args) => {
+      if (args.agentsCommand === null) return 1;
+      return printCommandResult(
+        await agentsCommand({
+          json: args.agentsCommand.json,
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+          tenantId: args.tenantArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'errors',
+    match: (args) => args.errorsCommand !== null,
+    run: async (args) => {
+      const command = args.errorsCommand;
+      if (command === null) return 1;
+      return printCommandResult(
+        await errorsCommand({
+          json: command.json,
+          ...(command.limit !== undefined ? { limit: command.limit } : {}),
+          connectUrl: args.connectArg,
+          connectToken: args.connectTokenArg,
+          caFile: args.caArg,
+          tenantId: args.tenantArg,
+        }),
+      );
     },
   },
 ];
