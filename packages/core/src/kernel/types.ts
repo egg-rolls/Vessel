@@ -217,7 +217,7 @@ export interface RunnableAgent {
   run(input: string | Message, sessionId?: string, opts?: RunOptions): Promise<string>;
   /** 可选：从 durable checkpoint 恢复（AgentRuntime 已实现） */
   resume?(runId: string, opts?: RunOptions): Promise<string>;
-  dispose(): void;
+  dispose(): void | Promise<void>;
 }
 
 /** Scheduler 提交项（R1 冻结；R2 实现队列/并发） */

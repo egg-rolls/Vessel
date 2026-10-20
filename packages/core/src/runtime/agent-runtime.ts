@@ -103,6 +103,10 @@ export class AgentRuntime {
   private readonly agentId?: string;
   /** 0.5：tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
   private readonly tenantId?: string;
+  /** 成功安装的插件（按安装顺序；dispose 逆序，0.9） */
+  private readonly installedPlugins: Plugin[] = [];
+  /** dispose 幂等：第二次调用复用同一个 Promise，不再调用插件（0.9） */
+  private disposePromise?: Promise<void>;
   /** 同一 run 的并发 resume 锁（进程内；DECISION-008 Addendum A-2） */
   private readonly resuming = new Set<string>();
   /**
@@ -148,6 +152,7 @@ export class AgentRuntime {
   static async create(opts: AgentRuntimeOptions): Promise<AgentRuntime> {
     const runtime = new AgentRuntime(opts);
     await runtime.installPlugins(opts.plugins ?? []);
+    await runtime.initPlugins();
     return runtime;
   }
 
@@ -157,11 +162,30 @@ export class AgentRuntime {
     }
   }
 
+  /** 所有 install 成功后按安装顺序 init；单个插件异常被隔离（0.9） */
+  private async initPlugins(): Promise<void> {
+    for (const plugin of this.installedPlugins) {
+      if (plugin.init === undefined) continue;
+      try {
+        await plugin.init({ host: this.pluginHost });
+      } catch (error) {
+        this.publishEvent({
+          type: 'plugin.init.failed',
+          run_id: 'plugin',
+          data: { name: plugin.name, error: errorText(error) },
+          ts: Date.now(),
+        });
+      }
+    }
+  }
+
   /**
-   * 安装插件（fail-fast：安装失败则构造函数失败）
+   * 安装插件（fail-fast：安装失败则构造函数失败）。
+   * 失败时先回滚该插件本次注册的条目，再发 `plugin.failed` 并重新抛出（0.9）。
    * @param plugin 插件
    */
   private async installPlugin(plugin: Plugin): Promise<void> {
+    const scope = this.pluginHost.beginPluginInstall?.(plugin.name);
     try {
       const config = this.pluginConfigs?.[plugin.name];
       const result =
@@ -171,6 +195,8 @@ export class AgentRuntime {
       if (result instanceof Promise) {
         await result; // 如果失败，让 async 构造函数抛出
       }
+      scope?.commit();
+      this.installedPlugins.push(plugin);
       this.publishEvent({
         type: 'plugin.loaded',
         run_id: 'plugin',
@@ -181,12 +207,13 @@ export class AgentRuntime {
         ts: Date.now(),
       });
     } catch (error) {
+      scope?.rollback();
       this.publishEvent({
         type: 'plugin.failed',
         run_id: 'plugin',
         data: {
           name: plugin.name,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorText(error),
         },
         ts: Date.now(),
       });
@@ -910,9 +937,29 @@ export class AgentRuntime {
   }
 
   /**
-   * 释放资源（关闭连接、保存状态等）
+   * 释放资源（0.9）：按逆安装顺序 best-effort 调用插件 dispose（异常只发
+   * `plugin.dispose.failed`，不外抛），最后关闭 session。重复调用幂等。
    */
-  dispose(): void {
+  dispose(): Promise<void> {
+    this.disposePromise ??= this.disposeRuntime();
+    return this.disposePromise;
+  }
+
+  private async disposeRuntime(): Promise<void> {
+    for (let i = this.installedPlugins.length - 1; i >= 0; i -= 1) {
+      const plugin = this.installedPlugins[i] as Plugin;
+      if (plugin.dispose === undefined) continue;
+      try {
+        await plugin.dispose();
+      } catch (error) {
+        this.publishEvent({
+          type: 'plugin.dispose.failed',
+          run_id: 'plugin',
+          data: { name: plugin.name, error: errorText(error) },
+          ts: Date.now(),
+        });
+      }
+    }
     this.session?.close?.();
   }
 
