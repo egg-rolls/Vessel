@@ -109,6 +109,21 @@ describe('createMcpPlugin', () => {
     );
   });
 
+  it('dispose closes plugin-owned connections and is idempotent (0.9)', async () => {
+    const plugin = createMcpPlugin({ servers: [stdioServer()] });
+    const host = new MemoryPluginHost();
+    await plugin.install(host);
+    expect(plugin.getServer('mock')?.status).toBe('connected');
+
+    expect(typeof plugin.dispose).toBe('function');
+    await plugin.dispose?.();
+    await plugin.dispose?.();
+
+    await expect(host.getTool('mcp__mock__echo')?.handler({}, makeContext())).rejects.toThrow(
+      /not connected/,
+    );
+  });
+
   it('reconnects a server and keeps tools callable', async () => {
     const events = new MemoryEventStream();
     const plugin = createMcpPlugin({ servers: [stdioServer()], events });

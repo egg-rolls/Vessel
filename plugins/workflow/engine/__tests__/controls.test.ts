@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { MemoryEventStream, MemoryPluginHost } from '@vessel/core';
 import { createWorkflowEngine } from '../src/engine.js';
 import { WorkflowError } from '../src/errors.js';
@@ -72,6 +72,18 @@ describe('controls-only workflow engine', () => {
         expect((error as WorkflowError).message).toContain('requires a host or runtime');
       }
     }
+  });
+
+  it('dispose drains the store once and is idempotent (0.9)', async () => {
+    const { engine } = await setup();
+    const store = (engine as unknown as { store: WorkflowStore }).store;
+    const close = spyOn(store, 'close');
+
+    expect(typeof engine.dispose).toBe('function');
+    await engine.dispose?.();
+    await engine.dispose?.();
+
+    expect(close).toHaveBeenCalledTimes(1);
   });
 
   it('keeps list/get/cancel available without a backend', async () => {

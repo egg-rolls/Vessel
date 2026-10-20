@@ -310,6 +310,11 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     return closePromise;
   }
 
+  /** 0.9 生命周期 v2：连接由插件创建，由宿主在 dispose 时关闭（与 close 等价且幂等）。 */
+  function dispose(): Promise<void> {
+    return close();
+  }
+
   return {
     name: 'mcp-client',
     version: '0.3.0',
@@ -322,6 +327,7 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     readResource,
     listPrompts,
     close,
+    dispose,
   };
 }
 
