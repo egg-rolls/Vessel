@@ -12,13 +12,14 @@ import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { WorkflowsView } from '../domains/workflows/WorkflowsView';
 import { useConnection } from '../gateway/ConnectionProvider';
+import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav, primaryRoute } from './DomainNav';
 import { requestStartWorkflow } from './intents';
 import { defaultNavCollapsed, navModeForWidth, parseNavCollapsed } from './layout';
-import { DOMAINS, routeBreadcrumb } from './nav';
+import { DOMAINS, domainLabel, routeBreadcrumb, settingsTabLabel } from './nav';
 import { requestRefresh } from './refresh';
 import { formatRoute, type Route } from './router';
 import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
@@ -47,16 +48,17 @@ function writeNavPreference(collapsed: boolean): void {
   }
 }
 
-const SETTINGS_NAV: readonly { tab: SettingsTab; label: string; keywords: string[] }[] = [
-  { tab: 'connection', label: '连接', keywords: ['gateway', 'token', 'url', 'connect'] },
-  { tab: 'nodes', label: '节点', keywords: ['team', 'peers', 'agents', 'nodes'] },
-  { tab: 'config', label: '配置', keywords: ['config', 'sources', 'paths'] },
-  { tab: 'capabilities', label: '能力清单', keywords: ['capabilities', 'methods', 'plugins'] },
-  { tab: 'tenants', label: '租户', keywords: ['tenant', 'quota', 'admin'] },
-  { tab: 'appearance', label: '外观', keywords: ['theme', 'dark', 'light', '外观'] },
+const SETTINGS_NAV: readonly { tab: SettingsTab; keywords: string[] }[] = [
+  { tab: 'connection', keywords: ['gateway', 'token', 'url', 'connect'] },
+  { tab: 'nodes', keywords: ['team', 'peers', 'agents', 'nodes'] },
+  { tab: 'config', keywords: ['config', 'sources', 'paths'] },
+  { tab: 'capabilities', keywords: ['capabilities', 'methods', 'plugins'] },
+  { tab: 'tenants', keywords: ['tenant', 'quota', 'admin'] },
+  { tab: 'appearance', keywords: ['theme', 'dark', 'light'] },
 ];
 
 export function AppShell() {
+  const locale = useLocale();
   const { route, navigate } = useHashRoute();
   const toast = useToast();
   const {
@@ -159,7 +161,7 @@ export function AppShell() {
     window.scrollTo(0, 0);
     mainRef.current?.scrollTo?.(0, 0);
     mainRef.current?.focus();
-    setAnnouncement(`已打开 ${routeBreadcrumb(route)}`);
+    setAnnouncement(t('nav.opened', { path: routeBreadcrumb(route) }));
     setNavDrawerOpen(false);
     if (route.domain !== 'chat') setChatSessionsOpen(false);
   }, [routeKey]);
@@ -210,30 +212,31 @@ export function AppShell() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [modalOpen]);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: locale 变化需要重算面板文案
   const paletteItems = useMemo<PaletteItem[]>(() => {
     const items: PaletteItem[] = [
       ...DOMAINS.map((domain) => ({
         id: `nav-${domain.id}`,
         group: 'navigation' as const,
-        label: `打开${domain.label}`,
-        keywords: [domain.id, domain.label],
-        hint: '导航',
+        label: t('nav.openNamed', { domain: domainLabel(domain.id) }),
+        keywords: [domain.id, domainLabel(domain.id)],
+        hint: t('nav.hintNavigation'),
         run: () => navigate(primaryRoute(domain.id)),
       })),
       {
         id: 'nav-settings',
         group: 'navigation',
-        label: '打开设置',
+        label: t('nav.openNamed', { domain: domainLabel('settings') }),
         keywords: ['settings', '设置'],
-        hint: '导航',
+        hint: t('nav.hintNavigation'),
         run: () => navigate({ domain: 'settings', tab: 'connection' }),
       },
       ...SETTINGS_NAV.map((entry) => ({
         id: `nav-settings-${entry.tab}`,
         group: 'navigation' as const,
-        label: `设置 › ${entry.label}`,
+        label: t('breadcrumb.settings', { tab: settingsTabLabel(entry.tab) }),
         keywords: ['settings', entry.tab, ...entry.keywords],
-        hint: '设置',
+        hint: t('nav.hintSettings'),
         run: () => navigate({ domain: 'settings', tab: entry.tab }),
       })),
       {
@@ -333,7 +336,7 @@ export function AppShell() {
       });
     }
     return items;
-  }, [connectionState, hasToken, navigate, retry, toast]);
+  }, [connectionState, hasToken, locale, navigate, retry, toast]);
 
   const closePalette = useCallback(() => setPaletteOpen(false), []);
 
@@ -387,7 +390,7 @@ export function AppShell() {
             mainRef.current?.focus();
           }}
         >
-          跳到主内容
+          {t('nav.jumpToMain')}
         </button>
         <AppBar
           route={route}

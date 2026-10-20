@@ -3,11 +3,8 @@ export type Theme = 'system' | 'light' | 'dark';
 
 export const THEME_KEY = 'vessel.theme';
 
-export const THEMES: readonly { id: Theme; label: string }[] = [
-  { id: 'system', label: '跟随系统' },
-  { id: 'light', label: '浅色' },
-  { id: 'dark', label: '深色' },
-];
+/** label 由 UI 层经 i18n 提供（`appearance.theme.<id>`），这里只保留可选值。 */
+export const THEMES: readonly { id: Theme }[] = [{ id: 'system' }, { id: 'light' }, { id: 'dark' }];
 
 export function normalizeTheme(raw: string | null | undefined): Theme {
   return raw === 'light' || raw === 'dark' ? raw : 'system';

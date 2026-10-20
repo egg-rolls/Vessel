@@ -1,8 +1,16 @@
 import type { Ref } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
 import { useConnection } from '../gateway/ConnectionProvider';
+import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
-import { DOMAINS, isDomainActive, NAV_GROUPS, type PrimaryDomain, SETTINGS_DOMAIN } from './nav';
+import {
+  DOMAINS,
+  domainLabel,
+  isDomainActive,
+  NAV_GROUPS,
+  navGroupLabel,
+  type PrimaryDomain,
+} from './nav';
 import type { Domain, Route } from './router';
 
 export function primaryRoute(domain: Exclude<Domain, 'settings'>): Route {
@@ -44,16 +52,17 @@ export function DomainNav({
   onToggleCollapsed?: () => void;
   navRef?: Ref<HTMLElement>;
 }) {
+  useLocale();
   const { connectionState, hasToken, tenantId } = useConnection();
   const connLabel = !hasToken
-    ? '未连接'
+    ? t('nav.conn.idle')
     : connectionState === 'open'
-      ? 'online'
+      ? t('nav.conn.online')
       : connectionState === 'reconnecting'
-        ? '重连中'
+        ? t('nav.conn.reconnectingShort')
         : connectionState === 'connecting'
-          ? '连接中'
-          : '已断开';
+          ? t('nav.conn.connectingShort')
+          : t('nav.conn.closed');
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
@@ -65,7 +74,7 @@ export function DomainNav({
       ref={navRef}
       id="domain-nav"
       className={`domain-nav ${open ? 'open' : ''}`.trim()}
-      aria-label="主导航"
+      aria-label={t('nav.mainLabel')}
       inert={drawer && !open ? true : undefined}
       aria-hidden={drawer && !open ? true : undefined}
     >
@@ -77,7 +86,7 @@ export function DomainNav({
           <button
             type="button"
             className="icon-btn nav-close"
-            aria-label="关闭导航"
+            aria-label={t('nav.closeNav')}
             onClick={onClose}
           >
             ×
@@ -87,7 +96,7 @@ export function DomainNav({
       <div className="nav-list">
         {NAV_GROUPS.map((group) => (
           <div className="nav-group" key={group.id}>
-            {showLabels && <div className="nav-group-title">{group.label}</div>}
+            {showLabels && <div className="nav-group-title">{navGroupLabel(group.id)}</div>}
             {group.domains.map((domainId) => {
               const domain = domainDef(domainId);
               const active = isDomainActive(route, domain.id);
@@ -97,14 +106,14 @@ export function DomainNav({
                   type="button"
                   className={`nav-item ${active ? 'active' : ''}`.trim()}
                   aria-current={active ? 'page' : undefined}
-                  aria-label={domain.label}
-                  title={domain.label}
+                  aria-label={domainLabel(domain.id)}
+                  title={domainLabel(domain.id)}
                   onClick={() => navigate(primaryRoute(domain.id))}
                 >
                   <span className="nav-icon">
                     <DomainIcon domain={domain.id} />
                   </span>
-                  <span className="nav-label">{domain.label}</span>
+                  <span className="nav-label">{domainLabel(domain.id)}</span>
                 </button>
               );
             })}
@@ -116,36 +125,36 @@ export function DomainNav({
           <span className="conn-dot" aria-hidden="true" />
           <span className="nav-label">{connLabel}</span>
         </div>
-        <div className="nav-tenant nav-label" title="当前连接租户">
+        <div className="nav-tenant nav-label" title={t('nav.tenantCurrent')}>
           <span className="mono">{tenantId ?? '—'}</span>
         </div>
         {(mode === 'expanded' || mode === 'collapsed') && (
           <button
             type="button"
             className="nav-item nav-collapse"
-            aria-label={collapsed ? '展开侧栏' : '折叠侧栏'}
+            aria-label={collapsed ? t('nav.expandNav') : t('nav.collapseNav')}
             aria-expanded={!collapsed}
-            title={collapsed ? '展开侧栏' : '折叠侧栏'}
+            title={collapsed ? t('nav.expandNav') : t('nav.collapseNav')}
             onClick={onToggleCollapsed}
           >
             <span className="nav-icon" aria-hidden="true">
               {collapsed ? '»' : '«'}
             </span>
-            <span className="nav-label">折叠</span>
+            <span className="nav-label">{t('nav.collapsed')}</span>
           </button>
         )}
         <button
           type="button"
           className={`nav-item ${route.domain === 'settings' ? 'active' : ''}`.trim()}
           aria-current={route.domain === 'settings' ? 'page' : undefined}
-          aria-label={SETTINGS_DOMAIN.label}
-          title={SETTINGS_DOMAIN.label}
+          aria-label={domainLabel('settings')}
+          title={domainLabel('settings')}
           onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
         >
           <span className="nav-icon">
             <DomainIcon domain="settings" />
           </span>
-          <span className="nav-label">{SETTINGS_DOMAIN.label}</span>
+          <span className="nav-label">{domainLabel('settings')}</span>
         </button>
       </div>
     </nav>

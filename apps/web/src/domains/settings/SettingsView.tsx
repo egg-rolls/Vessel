@@ -1,7 +1,9 @@
+import { settingsTabLabel } from '../../app/nav';
 import type { Route } from '../../app/router';
 import { PageHeader } from '../../components/PageHeader';
 import { SegmentedTabs, type TabOption } from '../../components/Tabs';
 import { useConnection } from '../../gateway/ConnectionProvider';
+import { t, useLocale } from '../../i18n';
 import { AppearanceView } from './AppearanceView';
 import { CapabilitiesView } from './CapabilitiesView';
 import { ConfigView } from './ConfigView';
@@ -12,13 +14,13 @@ import { TenantsView } from './TenantsView';
 type SettingsRoute = Extract<Route, { domain: 'settings' }>;
 type SettingsTab = SettingsRoute['tab'];
 
-const TABS: readonly TabOption<SettingsTab>[] = [
-  { id: 'connection', label: '连接' },
-  { id: 'nodes', label: '节点' },
-  { id: 'config', label: '配置' },
-  { id: 'capabilities', label: '能力清单' },
-  { id: 'tenants', label: '租户' },
-  { id: 'appearance', label: '外观' },
+const TAB_IDS: readonly SettingsTab[] = [
+  'connection',
+  'nodes',
+  'config',
+  'capabilities',
+  'tenants',
+  'appearance',
 ];
 
 export function SettingsView({
@@ -28,23 +30,33 @@ export function SettingsView({
   route: SettingsRoute;
   navigate: (route: Route) => void;
 }) {
+  useLocale();
   const { tenantId } = useConnection();
+  const tabs: readonly TabOption<SettingsTab>[] = TAB_IDS.map((id) => ({
+    id,
+    label: settingsTabLabel(id),
+  }));
 
   return (
     <div className="domain-view">
       <PageHeader
-        title="设置"
-        description="连接、节点、配置、能力与租户。连接表单只在这里出现。"
+        title={t('settings.title')}
+        description={t('settings.description')}
         tenantId={tenantId}
       />
       <SegmentedTabs
-        label="设置分区"
-        tabs={TABS}
+        label={t('settings.tabsLabel')}
+        tabs={tabs}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'settings', tab })}
         panelId="settings-panel"
       />
-      <div className="domain-content" id="settings-panel" role="tabpanel" aria-label="设置内容">
+      <div
+        className="domain-content"
+        id="settings-panel"
+        role="tabpanel"
+        aria-label={t('settings.panelLabel')}
+      >
         {route.tab === 'connection' && <ConnectionForm />}
         {route.tab === 'nodes' && <NodesPanel />}
         {route.tab === 'config' && <ConfigView />}

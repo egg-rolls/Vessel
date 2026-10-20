@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { t } from '../i18n';
 
 /** 空态：一句解释 + 一个主行动。 */
 export function EmptyState({
@@ -20,10 +21,10 @@ export function EmptyState({
 }
 
 /** 首次加载：带标签的占位行，不显示空态。 */
-export function LoadingState({ label = '正在加载…', rows = 3 }: { label?: string; rows?: number }) {
+export function LoadingState({ label, rows = 3 }: { label?: string; rows?: number }) {
   return (
     <div className="state-loading" aria-busy="true" aria-live="polite">
-      <p className="state-desc">{label}</p>
+      <p className="state-desc">{label ?? t('common.loading')}</p>
       <div className="skeleton" aria-hidden="true">
         {Array.from({ length: Math.max(1, rows) }, (_, index) => (
           // biome-ignore lint/suspicious/noArrayIndexKey: 固定数量的占位行
@@ -38,7 +39,7 @@ export function LoadingState({ label = '正在加载…', rows = 3 }: { label?: 
 export function ErrorState({
   message,
   onRetry,
-  retryLabel = '重试',
+  retryLabel,
   action,
 }: {
   message: string;
@@ -48,13 +49,13 @@ export function ErrorState({
 }) {
   return (
     <div className="state-error" role="alert">
-      <p className="state-title">加载失败</p>
+      <p className="state-title">{t('common.loadFailed')}</p>
       <p className="state-desc mono">{message}</p>
       {(onRetry || action) && (
         <div className="state-action">
           {onRetry && (
             <button type="button" className="btn" onClick={onRetry}>
-              {retryLabel}
+              {retryLabel ?? t('common.retry')}
             </button>
           )}
           {action}
@@ -93,7 +94,7 @@ export function StaleNotice({ message, onRetry }: { message: string; onRetry?: (
       <span>{message}</span>
       {onRetry && (
         <button type="button" className="link-btn" onClick={onRetry}>
-          刷新
+          {t('common.refresh')}
         </button>
       )}
     </div>

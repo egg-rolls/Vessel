@@ -1,21 +1,22 @@
 import { useConnection } from '../gateway/ConnectionProvider';
+import { t, useLocale } from '../i18n';
 import { routeBreadcrumb } from './nav';
 import type { Route } from './router';
 
 function connectionLabel(state: string): string {
   switch (state) {
     case 'open':
-      return 'online';
+      return t('nav.conn.online');
     case 'connecting':
-      return '连接中…';
+      return t('nav.conn.connecting');
     case 'reconnecting':
-      return '重连中…';
+      return t('nav.conn.reconnecting');
     case 'closed':
-      return '已断开';
+      return t('nav.conn.closed');
     case 'error':
-      return '连接失败';
+      return t('nav.conn.error');
     default:
-      return '未连接';
+      return t('nav.conn.idle');
   }
 }
 
@@ -36,13 +37,14 @@ export function AppBar({
   navOpen?: boolean;
   navigate: (route: Route) => void;
 }) {
+  useLocale();
   const { connectionState, tenantId, hasToken } = useConnection();
-  const connLabel = hasToken ? connectionLabel(connectionState) : '未连接';
+  const connLabel = hasToken ? connectionLabel(connectionState) : t('nav.conn.idle');
   const drawerToggle = onToggleSessions
     ? {
         id: 'sessions-toggle',
         controls: 'chat-sessions',
-        label: sessionsOpen ? '关闭会话列表' : '打开会话列表',
+        label: sessionsOpen ? t('nav.closeSessions') : t('nav.openSessions'),
         open: sessionsOpen,
         onClick: onToggleSessions,
       }
@@ -50,7 +52,7 @@ export function AppBar({
       ? {
           id: 'nav-toggle',
           controls: 'domain-nav',
-          label: navOpen ? '关闭导航' : '打开导航',
+          label: navOpen ? t('nav.closeNav') : t('nav.openNav'),
           open: navOpen,
           onClick: onToggleNav,
         }
@@ -87,7 +89,7 @@ export function AppBar({
         <span className="palette-trigger-icon" aria-hidden="true">
           ⌕
         </span>
-        <span className="palette-trigger-text">搜索或输入命令</span>
+        <span className="palette-trigger-text">{t('nav.searchOrCommand')}</span>
         <kbd className="kbd">⌘K</kbd>
       </button>
 
@@ -95,7 +97,7 @@ export function AppBar({
         type="button"
         className={`conn conn-${hasToken ? connectionState : 'idle'}`}
         onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-        title="gateway 连接状态；点击打开连接设置"
+        title={t('nav.connStatusTitle')}
       >
         <span className="conn-dot" aria-hidden="true" />
         <span>{connLabel}</span>
@@ -105,9 +107,9 @@ export function AppBar({
         type="button"
         className="tenant-chip"
         onClick={() => navigate({ domain: 'settings', tab: 'tenants' })}
-        title="当前连接租户；点击查看/切换"
+        title={t('nav.tenantChipTitle')}
       >
-        租户 <span className="mono">{tenantId ?? '—'}</span>
+        {t('nav.tenant')} <span className="mono">{tenantId ?? '—'}</span>
       </button>
     </header>
   );
