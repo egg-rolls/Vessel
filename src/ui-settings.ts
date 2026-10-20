@@ -2,7 +2,8 @@
  * UI 设置持久化（0.11 DECISION-021 §3.2）。
  *
  * 写用户配置 `~/.vessel/config.yaml` 的已知键（YAML snake_case）：
- * 0.11 只有 `ui.language`；0.11.1 增加 `ui.showReasoning` 与 `agent.cwd`。
+ * 0.11 只有 `ui.language`；0.11.1 增加 `ui.showReasoning` 与 `agent.cwd`；
+ * 0.13 增加 `ui.statusBars`（YAML `ui.status_bars`）。
  * 复用 `permission-store` 的写入风格：YAML parse/stringify、同目录临时文件 + rename、
  * 临时文件 0600；只改目标键，根对象与目标块的其它键保留。
  *
@@ -15,13 +16,16 @@
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
-import { getUserConfigPath } from '../packages/config/src/index';
+import { getUserConfigPath, type UiStatusBars } from '../packages/config/src/index';
 import { type Locale, resolveLocale } from './i18n';
 
 /** 支持的 UI 语言（与 CLI / TUI catalog 一致） */
 export type UiLanguage = Locale;
 
 const SUPPORTED_LANGUAGES: ReadonlySet<string> = new Set(['zh-CN', 'en']);
+
+/** `ui.statusBars` 允许值（0.13） */
+const SUPPORTED_STATUS_BARS: ReadonlySet<string> = new Set(['top', 'bottom', 'both', 'none']);
 
 /** 存储选项 */
 export interface UiSettingsStoreOptions {
@@ -37,6 +41,10 @@ export interface ReplSettingsControlLike {
   language: UiLanguage;
   /** 写入用户配置 ui.language；返回后调用方立即 setLocale */
   setLanguage(locale: UiLanguage): Promise<void>;
+  /** 当前状态栏位置；未配置时为 undefined（0.13） */
+  statusBars: UiStatusBars | undefined;
+  /** 写入用户配置 ui.status_bars；成功后就地更新 statusBars（0.13） */
+  setStatusBars(value: UiStatusBars): Promise<void>;
 }
 
 /** `createReplSettings` 选项 */
@@ -45,11 +53,18 @@ export interface CreateReplSettingsOptions extends UiSettingsStoreOptions {
   env?: Record<string, string | undefined>;
   /** config.ui.language；通常为已加载配置的值 */
   configLanguage?: string;
+  /** config.ui.statusBars；通常为已加载配置的值（0.13） */
+  configStatusBars?: string;
 }
 
 /** 是否为受支持的 UI 语言 */
 export function isUiLanguage(value: unknown): value is UiLanguage {
   return typeof value === 'string' && SUPPORTED_LANGUAGES.has(value);
+}
+
+/** 是否为受支持的状态栏位置（0.13） */
+export function isUiStatusBars(value: unknown): value is UiStatusBars {
+  return typeof value === 'string' && SUPPORTED_STATUS_BARS.has(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -111,8 +126,8 @@ async function writeRoot(configPath: string, root: Record<string, unknown>): Pro
   });
 }
 
-/** `vessel config set` 支持的键（0.11.1 扩展） */
-export type SettableConfigKey = 'ui.language' | 'ui.showReasoning' | 'agent.cwd';
+/** `vessel config set` 支持的键（0.11.1 扩展；0.13 增加 ui.statusBars） */
+export type SettableConfigKey = 'ui.language' | 'ui.showReasoning' | 'ui.statusBars' | 'agent.cwd';
 
 interface ConfigSetTarget {
   /** YAML 根下的块名 */
@@ -124,6 +139,7 @@ interface ConfigSetTarget {
 const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> = {
   'ui.language': { block: 'ui', yamlKey: 'language' },
   'ui.showReasoning': { block: 'ui', yamlKey: 'show_reasoning' },
+  'ui.statusBars': { block: 'ui', yamlKey: 'status_bars' },
   'agent.cwd': { block: 'agent', yamlKey: 'cwd' },
 };
 
@@ -147,6 +163,9 @@ export async function setUserConfigValue(
   }
   if (key === 'ui.showReasoning' && typeof value !== 'boolean') {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
+  }
+  if (key === 'ui.statusBars' && !isUiStatusBars(value)) {
+    throw new Error(`invalid_status_bars: ${JSON.stringify(value)}`);
   }
   if (key === 'agent.cwd' && (typeof value !== 'string' || value.trim() === '')) {
     throw new Error(`invalid_path: ${JSON.stringify(value)}`);
@@ -181,6 +200,9 @@ export function createReplSettings(
   options: CreateReplSettingsOptions = {},
 ): ReplSettingsControlLike {
   const configPath = options.configPath;
+  let statusBars: UiStatusBars | undefined = isUiStatusBars(options.configStatusBars)
+    ? options.configStatusBars
+    : undefined;
   return {
     language: resolveLocale({
       env: options.env ?? process.env,
@@ -188,5 +210,16 @@ export function createReplSettings(
     }),
     setLanguage: (locale: UiLanguage): Promise<void> =>
       setUserLanguage(locale, configPath !== undefined ? { configPath } : {}),
+    get statusBars(): UiStatusBars | undefined {
+      return statusBars;
+    },
+    setStatusBars: async (value: UiStatusBars): Promise<void> => {
+      await setUserConfigValue(
+        'ui.statusBars',
+        value,
+        configPath !== undefined ? { configPath } : {},
+      );
+      statusBars = value;
+    },
   };
 }

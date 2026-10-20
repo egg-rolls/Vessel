@@ -69,7 +69,7 @@ export type ConfigCommandArgs =
   | { kind: 'show'; json: boolean; sources: boolean; tenantId?: string }
   | {
       kind: 'set';
-      key: 'ui.language' | 'ui.showReasoning' | 'agent.cwd';
+      key: 'ui.language' | 'ui.showReasoning' | 'ui.statusBars' | 'agent.cwd';
       value: string;
       json: boolean;
     };
@@ -897,14 +897,20 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
     if (positional.length !== 2) {
       return {
         ok: false,
-        error: 'Usage: vessel config set <ui.language|ui.showReasoning|agent.cwd> <value> [--json]',
+        error:
+          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|agent.cwd> <value> [--json]',
       };
     }
     const [key = '', value = ''] = positional;
-    if (key !== 'ui.language' && key !== 'ui.showReasoning' && key !== 'agent.cwd') {
+    if (
+      key !== 'ui.language' &&
+      key !== 'ui.showReasoning' &&
+      key !== 'ui.statusBars' &&
+      key !== 'agent.cwd'
+    ) {
       return {
         ok: false,
-        error: `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, agent.cwd)`,
+        error: `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, ui.statusBars, agent.cwd)`,
       };
     }
     if (key === 'ui.language' && value !== 'zh-CN' && value !== 'en') {
@@ -912,6 +918,9 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (key === 'ui.showReasoning' && value !== 'true' && value !== 'false') {
       return { ok: false, error: 'ui.showReasoning must be "true" or "false"' };
+    }
+    if (key === 'ui.statusBars' && !['top', 'bottom', 'both', 'none'].includes(value)) {
+      return { ok: false, error: 'ui.statusBars must be "top", "bottom", "both" or "none"' };
     }
     if (key === 'agent.cwd' && value.trim() === '') {
       return { ok: false, error: 'agent.cwd must be a non-empty path' };

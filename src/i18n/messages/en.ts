@@ -56,7 +56,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.configPath': 'print user/project config paths',
   'help.cmd.configInit': 'generate a user config template',
   'help.cmd.configShow': 'show redacted config and sources',
-  'help.cmd.configSet': 'write a user setting (ui.language, ui.showReasoning, agent.cwd)',
+  'help.cmd.configSet':
+    'write a user setting (ui.language, ui.showReasoning, ui.statusBars, agent.cwd)',
   'help.cmd.tenantList': 'list tenants',
   'help.cmd.tenantGet': 'show tenant metadata',
   'help.cmd.tenantCreate': 'create a tenant',
@@ -117,9 +118,10 @@ export const en: Record<MessageKey, string> = {
   'config.init.next':
     'next: run `vessel` to configure your API key, or `vessel doctor` to verify the setup.',
   'config.set.unknownKey':
-    'Unsupported config key "{key}"; supported keys: ui.language, ui.showReasoning, agent.cwd',
+    'Unsupported config key "{key}"; supported keys: ui.language, ui.showReasoning, ui.statusBars, agent.cwd',
   'config.set.invalidLanguage': 'ui.language must be "zh-CN" or "en"',
   'config.set.invalidBoolean': 'ui.showReasoning must be "true" or "false"',
+  'config.set.invalidStatusBars': 'ui.statusBars must be "top", "bottom", "both" or "none"',
   'config.set.invalidPath': 'agent.cwd must be a non-empty path',
   'config.set.failed': 'Failed to write user config: {detail}',
 
