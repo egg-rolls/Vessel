@@ -161,7 +161,12 @@ export interface EventStream {
    * @param name 事件名
    * @param opts.requestId 匹配 payload 中的 requestId（防多实例串台）
    * @param opts.timeout 超时毫秒（默认 30000），超时 reject
+   * @param opts.signal 取消信号（0.13）：abort 时立即 reject 并清理等待资源，
+   *   不复用超时错误；拒绝原因与 run 取消一致（`signal.reason` 或 AbortError）
    * @returns 匹配事件的 data
    */
-  waitFor(name: string, opts?: { requestId?: string; timeout?: number }): Promise<unknown>;
+  waitFor(
+    name: string,
+    opts?: { requestId?: string; timeout?: number; signal?: AbortSignal },
+  ): Promise<unknown>;
 }

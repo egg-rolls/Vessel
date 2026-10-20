@@ -28,6 +28,28 @@ export class PermissionTimeoutError extends Error {
 }
 
 /**
+ * 权限等待被取消（0.13，DECISION-024 §2.3）。
+ *
+ * 与 `PermissionTimeoutError` 区分：取消不是 `permission_timeout`，run 按取消收尾；
+ * 错误名沿用原生 abort 语义（`AbortError`），message 取 `signal.reason`。
+ */
+export class PermissionAbortedError extends Error {
+  /** 稳定错误码：取消（非超时） */
+  readonly code = 'permission_cancelled' as const;
+
+  constructor(reason?: unknown) {
+    const message =
+      reason instanceof Error
+        ? reason.message
+        : typeof reason === 'string' && reason.length > 0
+          ? reason
+          : 'Permission request cancelled';
+    super(message);
+    this.name = 'AbortError';
+  }
+}
+
+/**
  * 工具执行前的权限判定器。持有 remember-always 状态（跨 run，与运行时生命周期一致）。
  */
 export class PermissionPolicy {
@@ -70,14 +92,24 @@ export class PermissionPolicy {
     }
     if (decision === 'ask') {
       const requestId = randomUUID();
+      const ts = Date.now();
       this.events.publish({
         type: 'tool.permission.request',
         run_id: ctx.run_id,
-        data: { requestId, tool: tool.name, input: args },
-        ts: Date.now(),
+        data: {
+          requestId,
+          tool: tool.name,
+          input: args,
+          // 0.13（DECISION-024 §2.1）：交互事件与 run / session / tool call 关联，additive。
+          ...(ctx.session_id !== undefined ? { session_id: ctx.session_id } : {}),
+          ...(ctx.tool_call_id !== undefined ? { tool_call_id: ctx.tool_call_id } : {}),
+          deadline_at: ts + PERMISSION_TIMEOUT_MS,
+          source: ctx.source ?? 'runtime',
+        },
+        ts,
         ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
       });
-      const decided = (await this.waitForDecision(tool, requestId)) as
+      const decided = (await this.waitForDecision(tool, requestId, ctx)) as
         | { decision?: 'allow' | 'deny' | 'ask'; allowed?: boolean; remember?: boolean }
         | undefined;
       const userDecision = decided?.decision ?? (decided?.allowed === false ? 'deny' : 'allow');
@@ -93,15 +125,25 @@ export class PermissionPolicy {
 
   /**
    * 等待用户决定；超时抛 `PermissionTimeoutError`（0.11.1）。
-   * `waitFor` 的约定拒绝原因只有超时，因此这里统一转换为稳定错误类型。
+   * 0.13（DECISION-024 §2.3）：等待绑定 `ctx.signal`；abort 时立即结束并把取消错误
+   * 原样抛出，不得等满 120s 后误报 `permission_timeout`。
    */
-  private async waitForDecision(tool: ToolDefinition, requestId: string): Promise<unknown> {
+  private async waitForDecision(
+    tool: ToolDefinition,
+    requestId: string,
+    ctx: ToolContext,
+  ): Promise<unknown> {
     try {
       return await this.events.waitFor('tool.permission.response', {
         requestId,
         timeout: PERMISSION_TIMEOUT_MS,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
       });
-    } catch {
+    } catch (error) {
+      // 取消优先于超时：run 已被中止时保留取消语义，不转换成权限超时。
+      if (ctx.signal?.aborted) {
+        throw new PermissionAbortedError(ctx.signal.reason ?? error);
+      }
       throw new PermissionTimeoutError(
         `Permission request for tool "${tool.name}" timed out after ${PERMISSION_TIMEOUT_MS}ms`,
       );
