@@ -103,4 +103,9 @@ export const messages = {
   'common.refresh': '刷新',
   'common.loadFailed': '加载失败',
   'common.tenant': '租户',
+
+  // 权限 / 提问 / 思考流（0.11.1）
+  'permission.busy': '提交中…',
+  'permission.expired': '请求已过期，已从待处理列表移除。',
+  'chat.reasoning.summary': '思考过程',
 } as const;

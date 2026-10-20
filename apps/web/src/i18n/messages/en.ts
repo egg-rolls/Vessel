@@ -105,4 +105,9 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'common.refresh': 'Refresh',
   'common.loadFailed': 'Failed to load',
   'common.tenant': 'Tenant',
+
+  // Permission / ask / reasoning stream (0.11.1)
+  'permission.busy': 'Submitting…',
+  'permission.expired': 'Request expired; removed from the pending list.',
+  'chat.reasoning.summary': 'Thinking',
 };

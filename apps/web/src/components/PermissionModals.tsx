@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { PermissionRequest } from '../gateway/ConnectionProvider';
 import type { AskUserAnswer, AskUserRequest } from '../gateway/types';
+import { t } from '../i18n';
 import { ModalShell } from './Modal';
 
 function truncate(value: string, length: number): string {
@@ -20,11 +21,14 @@ export function PermissionModal({
   request,
   pendingCount,
   now,
+  busy = false,
   onDecide,
 }: {
   request: PermissionRequest;
   pendingCount: number;
   now: number;
+  /** 应答提交中：禁用按钮，防止双击重复应答。 */
+  busy?: boolean;
   onDecide: (decision: 'allow' | 'deny', remember: boolean) => void;
 }) {
   const remaining = Math.max(0, Math.ceil((request.expiresAt - now) / 1000));
@@ -47,15 +51,26 @@ export function PermissionModal({
         <button
           type="button"
           className="btn btn-danger-ghost"
+          disabled={busy}
           onClick={() => onDecide('deny', false)}
         >
           拒绝
         </button>
-        <button type="button" className="btn" onClick={() => onDecide('allow', true)}>
+        <button
+          type="button"
+          className="btn"
+          disabled={busy}
+          onClick={() => onDecide('allow', true)}
+        >
           始终允许
         </button>
-        <button type="button" className="btn btn-primary" onClick={() => onDecide('allow', false)}>
-          允许
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={busy}
+          onClick={() => onDecide('allow', false)}
+        >
+          {busy ? t('permission.busy') : '允许'}
         </button>
       </div>
     </ModalShell>
@@ -67,12 +82,15 @@ export function AskModal({
   request,
   pendingCount,
   now,
+  busy = false,
   onSubmit,
   onCancel,
 }: {
   request: AskUserRequest;
   pendingCount: number;
   now: number;
+  /** 应答提交中：禁用按钮，防止双击重复应答。 */
+  busy?: boolean;
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;
 }) {
@@ -161,16 +179,16 @@ export function AskModal({
         ))}
       </div>
       <div className="modal-actions">
-        <button type="button" className="btn btn-danger-ghost" onClick={onCancel}>
+        <button type="button" className="btn btn-danger-ghost" disabled={busy} onClick={onCancel}>
           取消
         </button>
         <button
           type="button"
           className="btn btn-primary"
-          disabled={!complete}
+          disabled={!complete || busy}
           onClick={() => onSubmit(answers)}
         >
-          提交
+          {busy ? t('permission.busy') : '提交'}
         </button>
       </div>
     </ModalShell>

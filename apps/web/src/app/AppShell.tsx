@@ -73,6 +73,7 @@ export function AppShell() {
     stale,
     permissions,
     asks,
+    responding,
     now,
     retry,
     dismissError,
@@ -589,6 +590,7 @@ export function AppShell() {
             request={asks[0]}
             pendingCount={asks.length}
             now={now}
+            busy={responding.has(asks[0].requestId)}
             onSubmit={(answers) => void respondAsk(asks[0]?.requestId ?? '', answers)}
             onCancel={() => void respondAsk(asks[0]?.requestId ?? '', [])}
           />
@@ -597,6 +599,7 @@ export function AppShell() {
             request={permissions[0]}
             pendingCount={permissions.length}
             now={now}
+            busy={responding.has(permissions[0].requestId)}
             onDecide={(decision, remember) =>
               void respondPermission(permissions[0]?.requestId ?? '', decision, remember)
             }

@@ -475,6 +475,35 @@
   overflow-wrap: anywhere;
 }
 
+/* 思考流：弱化、可折叠，与正文分开渲染。 */
+.reasoning-block {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.reasoning-summary {
+  padding: 6px 10px;
+  color: var(--faint);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reasoning-summary:hover {
+  color: var(--muted);
+}
+
+.reasoning-text {
+  padding: 6px 10px 8px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .row {
   display: grid;
   grid-template-columns: max-content max-content minmax(0, 1fr);
