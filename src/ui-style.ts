@@ -13,9 +13,9 @@
  */
 
 /** 暗金主色（与 TUI theme 的 brand 一致） */
-export const DARK_GOLD = '#d08a3a';
-/** 暗金亮色（标题/强调） */
-export const DARK_GOLD_BRIGHT = '#e8a94c';
+export const DARK_GOLD = '#c2a273';
+/** 暗金强调色：与主色同值，强调靠 `BOLD`（与 TUI 用 `bold + theme.brand` 的做法一致） */
+export const DARK_GOLD_BRIGHT = '#c2a273';
 
 const RESET = '\x1b[0m';
 const BOLD = '\x1b[1m';
