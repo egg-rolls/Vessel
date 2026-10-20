@@ -26,9 +26,9 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 ## 状态
 
-**alpha。当前开发线 `release/0.12.0`（基线 `release/0.11.0`），未发布。** 0.1 ~ 0.12 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.12 的 gateway 生命周期（`vessel gateway start|stop|status|restart|reload|install-service`）、`gateway.reload` 热重载、`vessel update` 自更新与 CLI 暗金样式已实现；同时并入 0.11.1 的权限交互、思考流与 `agent.cwd` 修复（0.11.1 不单独发布）。本文只写已合入当前分支的行为。
+**alpha。当前开发线 `release/0.13.0`（基线 `release/0.12.0`），未发布。** 0.1 ~ 0.13 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.13 的双状态栏（`Ctrl+T` / `Ctrl+G` / `Ctrl+R`、`ui.statusBars`）与权限生命周期（默认不超时、`<dataDir>/interactions-<tenant>.json` 持久化、Web 内联权限）已实现；同时并入 0.12.1 的 TUI 小修（0.12.1 不单独发布）。0.12 的 gateway 生命周期、`gateway.reload`、`vessel update` 与 CLI 暗金样式继续有效。本文只写已合入当前分支的行为。
 
-**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.12.0`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
+**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.13.0`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
 
 **语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 内可直接 `/settings language <zh-CN|en>` 切换并写回用户配置（`VESSEL_LANG` 仍最高）；TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 控制台的壳层与 Settings 已支持 zh-CN / en（语言选择在 Settings → Appearance，存 `localStorage['vessel.ui.language']`，初始跟随 `navigator.language`）；未覆盖的功能页回退中文。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
@@ -110,6 +110,7 @@ vessel config init                   # 生成 ~/.vessel/config.yaml 模板（不
 vessel config show --sources         # 合并后的脱敏配置与来源
 vessel config set ui.language en     # 写用户配置 ui.language（zh-CN | en）
 vessel config set ui.showReasoning true   # 显示思考过程（默认 false）
+vessel config set ui.statusBars both      # 状态栏：top | bottom | both | none
 vessel config set agent.cwd ~/project     # 默认工作目录（bash / read / edit）
 vessel plugin list                   # 仓库 / 用户 / 项目插件目录
 vessel plugin install <path>         # 安装本地插件目录
@@ -128,6 +129,8 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 - `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
 - 输入里的 `@路径` 会在发送前展开为注入消息，界面上以引用块显示，用户原文保持不变。
 - 进入 REPL 前默认清屏（仅 TTY）；想保留终端历史时在配置里设 `ui.clearOnStart: false`。
+- 状态栏：上栏显示状态、模型、context、时长与路径 + branch；运行态下栏显示权限档位、bash / 子 agent 计数、session 入口、tenant 与 queue。`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume`。显隐写回用户配置 `ui.statusBars`（YAML `status_bars: top|bottom|both|none`）；`VESSEL_STATUS_BARS` 只作启动初值。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
+- 权限确认默认一直等待应答或取消，不按时间自动失败；`Esc` / `Ctrl+C` 取消本轮并 abort。等待中的请求在 gateway 重启后视为已结束（`run_ended`）。
 
 ## 架构
 
@@ -354,7 +357,7 @@ observability:
 
 ## 数据、trace 与租户
 
-- 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；每个 tenant 在 `tenants/<id>/` 下独立存放 `sessions/`、`runs/`、`events/` 与 `tenant.json`。
+- 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；每个 tenant 在 `tenants/<id>/` 下独立存放 `sessions/`、`runs/`、`events/` 与 `tenant.json`。gateway 的权限交互记录写在数据根下的 `interactions-<tenant>.json`（`0600` 原子写，含 `pending` / `answered` / `orphaned`）。
 - 默认 `session.backend: file`；sqlite 仍可用。旧 `.vessel/sessions.db` 不会自动迁移：先跑 `vessel migrate --from sqlite --to file-v2`（默认 dry-run），确认后加 `--apply`。详见 [MIGRATION.md](docs/operations/MIGRATION.md)。
 - trace 默认开启 `full`，按 30 天 / 1000 runs / 1 GiB prune；`metadata` 只留计数与状态。详见 [TRACE.md](docs/operations/TRACE.md)。
 - tenant 解析：`--tenant` > `VESSEL_TENANT` > `tenant.default` > `default`；gateway 用 `serve.tokens` 发放 tenant token，`serve.token` 仅 0.4 兼容。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。
@@ -375,8 +378,8 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 - 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`，不写 `localStorage`、不进 URL query。
 - 可用 `VESSEL_GATEWAY_TOKEN` 固定 token；优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。未设置时每次启动自动生成。
-- 功能：运行提交/取消、事件时间线、会话列表、工具列表、权限弹窗、ask_user 表单；按 `hello.features` 显示 MCP server / interrupted run / workflow / metrics / 飞书面板。
-- 权限弹窗按事件时间计算 120s 有效期，重连 / 刷新不会复活旧请求；服务端返回 `not_found` 时弹窗关闭并提示。`ui.showReasoning: true` 时思考过程折叠显示（默认关闭）。
+- 功能：运行提交/取消、事件时间线、会话列表、工具列表、run 内联权限卡片、ask_user 表单；按 `hello.features` 显示 MCP server / interrupted run / workflow / metrics / 飞书面板。
+- 权限卡片内联在所属 run 卡片中，跨 session 的待处理请求由顶部条提示；其他端应答 / 过期 / run 结束会自动收起。权限等待默认不超时，应答返回 `expired` 表示已过期，`run_ended` 表示 run 已结束；`not_found` 仅表示请求从未存在。`ask_user` 仍是全局弹窗，按事件时间计算 120s 有效期。`ui.showReasoning: true` 时思考过程折叠显示（默认关闭）。
 - 助手文本 Markdown 渲染（代码块 / 列表 / 表格 / 链接）；`sessions.search` 服务端全文检索（返回 snippet，前端 150ms 防抖并保留本地过滤兜底）；`tool.call.started` 带 `args`、`tool.call.completed` 带 `result`（上限 8 KiB，超出截断标记），事件卡可折叠、失败默认展开。
 - 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/workflows*`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/team/*`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13 / §15 / §16。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
@@ -434,8 +437,8 @@ team:
 
 ## 发布与更新
 
-- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.12 均未发布，1.0 前不发布。
-- 当前 `release/0.12.0` 只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
+- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.13 均未发布，1.0 前不发布。
+- 当前 `release/0.13.0` 只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
 - npm 分发名为 **`vessel-agent`**（bin 仍是 `vessel`），18 个可发布子包使用 **`@vessel-agent/*`** scope；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）。子包带 `files: ["src"]` 与 `license` / `repository` / `engines`，根包排除 `node_modules` 并包含 `apps/web/dist`；tarball 安装 smoke 已在 0.10 实现，0.11 起按 `@vessel-agent/*` 覆盖安装（POSIX / Node 22，Windows 跳过）。
 - **不提供独立二进制**（ADR-006）。
 - `vessel update --check` 读取 Release 的 `latest.json`，只提示版本与安装命令；当前仓库不生成 `latest.json`。
@@ -456,7 +459,7 @@ team:
 - **npm 分发** —— 根包名 `vessel-agent`，子包 scope `@vessel-agent/*`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已在 0.10 实现、0.11 按新 scope 验证，但发布决定在 1。
 - **独立二进制 / 二进制自替换更新** —— 不做（ADR-006 继续有效）；0.12 的 `vessel update` 只对 npm / bun 全局安装执行包级更新，不下载或替换二进制，也不改源码工作区。
 - **Web 全量本地化** —— Web 壳层（导航 / 面包屑 / Settings / Appearance / 通用按钮）已支持 zh-CN / en；功能页未覆盖文案回退中文，命令数据输出保持英文，不能宣称全量本地化。
-- **版本发布** —— 0.1 ~ 0.12 均未发布；发布决定在 1。
+- **版本发布** —— 0.1 ~ 0.13 均未发布；发布决定在 1。
 
 ## 文档索引
 

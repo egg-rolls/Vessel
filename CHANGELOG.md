@@ -3,6 +3,57 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.13.0] - 2026-10-20
+
+> 0.13.0（基于 `release/0.13.0`，未发布）：TUI 双状态栏与权限生命周期重构；同时并入 0.12.1 的 TUI 小修（0.12.1 不单独发布）。权限等待默认不超时，pending / answered / orphaned 记录持久化到 `<dataDir>/interactions-<tenant>.json`；Web 权限改为 run 卡片内联应答。
+
+### Added
+
+- **TUI 运行态下栏 `BottomBar`**：与上栏同宽（`PanelFrame`），单行展示 `perm ask · N auto`（等待时改为 `waiting <tool>`）、`bash N`、`sub N`、`sess <短ID> · Ctrl+R`、tenant 与 queue。宽度分级：`<40` 列不渲染；`40–59` 显示 perm / bash / sub；`60–99` 增加 session；`>=100` 增加 tenant / queue。空间不足时按固定顺序从右到左丢弃 `tenant → queue → session → sub → auto`，`perm` / `bash` 保留。
+- **状态栏显隐配置**：`ui.statusBars: top|bottom|both|none`（YAML `status_bars`），`vessel config set ui.statusBars <值>` 持久化到用户配置；`VESSEL_STATUS_BARS` 提供启动初始覆盖。下栏默认在 `rows >= 18` 时显示，手动切换结果写回 YAML，写回失败不回滚本次会话显示。
+- **状态栏快捷键**：`Ctrl+T` 切换上栏、`Ctrl+G` 切换下栏、`Ctrl+R` 打开 `/resume` picker；快捷键在独占弹窗打开时仍可恢复栏位，并会覆盖 `ink-text-input` 插入的控制字符。
+- **权限请求关联字段**：`tool.permission.request` 增加 `session_id` / `tool_call_id` / `deadline_at` / `source`（additive）；只有显式正数超时才写 `deadline_at`。
+- **权限记录持久化**：`packages/serve/src/interactions-store.ts` 按 tenant 写 `<dataDir>/interactions-<tenant>.json`，状态为 `pending` / `answered` / `orphaned`，原子写且权限 `0600`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`。
+- **Web 内联权限**：删除全局权限遮罩，`PermissionCard` 内联在 `RunCard` 中；跨 session 的待处理请求由顶部待处理条提示。其他端应答或过期时自动收起卡片。
+- **RPC 错误码 `expired` / `run_ended`**：过期请求返回 `expired`；run 已结束或记录已 `orphaned` 时返回 `run_ended`，不再伪装成 `not_found`。canonical 方法总数仍为 38。
+
+### Changed
+
+- **上栏不再查询会话数**：删除 `N sess` 与每帧 `session.list()` 调用；路径在预算不足时中间省略（保留根与末两级目录），空闲且仍溢出时以 marquee 滚动（140ms / 格，首尾各停 1.2s），branch 固定在最右（超过 24 格尾部截断）。
+- **下栏吸收 hint 行**：下栏显示时底部快捷键提示并入 `PanelFrame`，行预算净增 2 行；独占 overlay 打开时下栏让位，终端 `<40` 列按未渲染计入行预算。
+- **权限等待默认不超时**：权限请求一直等待应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才产生 `PermissionTimeoutError`。取消抛 `PermissionAbortedError`（`permission_cancelled`，`name: AbortError`），不再误报 `permission_timeout`。
+- **serve 不再按 TTL sweep pending**：pending 的失效由 run 终态与进程重启决定，不做时间淘汰；run 结束时同 run 的 pending 全部清出并持久化为 `orphaned`。重复应答幂等返回首次结果；同一请求以不同决定重答返回 `conflict`。
+- **Web 权限语义**：权限卡片不再按 120s TTL 丢弃；`ask_user` 弹窗仍按事件时间计算有效期。权限应答支持 `once` / `session` / `always`，`permission.respond` 的 `remember` 保留为 `always` 兼容写法。
+- **CLI / TUI 品牌色统一**：TUI `theme.brand` 与 CLI `src/ui-style.ts` 主色统一为 `#c2a273`；CLI 标题与分组用同色 + `BOLD` 强调，不再使用 `#d08a3a` / `#e8a94c`。
+- **斜杠提示宽度**：`computeDialogWidth = max(1, columns - 4)`，移除 72 列上限；`InlineAutocomplete` 订阅 `useWindowSize`，resize 后立即重排。
+- **`/exit` 退出提示**：Ink unmount 并清理最后一帧后输出 `Goodbye!`；`Ctrl+C` 退出行为不变，简单模式不变。
+
+### Fixed
+
+- **0.12.1 TUI 小修并入**：窄 / 宽终端下斜杠提示不再被固定 72 列截断；弹窗跟随终端宽度；启动头 / wordmark / tagline 与 CLI 样式使用同一品牌色。
+- **状态栏路径截断**：路径按显示列计算，CJK / emoji 不再被 `.slice` 截成半个字符；超长路径不再挤掉 branch。
+- **状态栏会话计数陈旧**：删除上栏 `N sess` 后不再依赖可能过期的会话列表；session 入口改由下栏短 ID + `Ctrl+R` 提供。
+- **权限卡片跨端残留**：其他端应答、请求过期或 run 结束后的旧卡片会被收起；迟到应答收到 `run_ended` 时提示「run 已结束」而不是静默失败。
+- **权限取消被误报为超时**：abort 优先于超时判定，取消不再产生 `permission_timeout` 或留下“等待中”卡片。
+- **Web 刷新后权限恢复**：应答/终态记录随事件重放恢复卡片状态；持久化记录用于跨重启的幂等与 `run_ended` 语义。
+
+### Security
+
+- **权限记录文件**：`<dataDir>/interactions-<tenant>.json` 走 `atomicWrite` 并显式 `0600`；tenant 名只接受 `[A-Za-z0-9._-]`，不安全名称不落盘。
+- **持久化损坏不阻断启动**：交互记录文件不可读 / 损坏时向 stderr 报错并按空集处理，不删除原文件。
+- **跨 tenant 应答拒绝**：`permission.respond` 校验请求产生时的 tenant，不匹配返回 `not_found`，不跨 tenant 泄漏请求状态。
+- **记录上限不淘汰 pending**：有界记录清理只淘汰最旧的 `answered` / `orphaned`，pending 始终保留。
+
+### Known limitations
+
+- **`allow session` 尚未生效**：core 的 `PermissionPolicy` 只读取 `remember`（等价 `always`），`session` 范围目前等同 `once`；需后续在 core 增加 session 级批准集合。
+- **无 `interactions.pending` RPC**：Web 刷新后的待处理恢复依赖事件重放缓冲（默认 10000 条），超出缓冲的旧请求可能无法恢复；未提供独立 pending 查询方法。
+- **`ask_user` 仍是全局弹窗**：本版本只把权限请求改为 run 内联；提问仍走 `AskModal` 与事件时间 TTL。
+- **状态栏写回失败不提示**：手动切换会写回 YAML，写入失败只保持本次会话显示，不向用户弹出错误。
+- **`VESSEL_STATUS_BARS` 只是初始值**：环境变量不随手动切换改变，也不写入配置；两者同时存在时 env 优先于 `ui.statusBars`。
+- **验证范围**：Windows 全量门禁 `3226 pass / 2 skip / 0 fail`（`VESSEL_VALIDATE_RESULTS=1`）；POSIX（oven/bun + 持久缓存）`3228 pass / 0 fail`，build 与 Web build 通过；typecheck / biome / check-deps / check-docs / check-rpc-methods 均为 0。
+- 0.13.0 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.12.0] - 2026-10-20
 
 > 0.12.0（基于 `release/0.12.0`，未发布）：Gateway 生命周期与热重载 + CLI 暗金样式与自更新；同时并入 0.11.1 的权限交互、思考流与默认工作目录修复（0.11.1 不单独发布）。gateway 常驻、服务注册与 `gateway.reload` 都需显式命令触发，不随启动自动改本机配置。
