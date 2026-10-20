@@ -205,6 +205,11 @@ export interface GatewayOptions {
   allowedOrigins?: string[];
   /** 心跳间隔（毫秒，默认 15000） */
   heartbeatMs?: number;
+  /**
+   * 0.13 Addendum A：权限交互持久化目录（`<dataDir>`）。
+   * 缺省 = 不落盘；asm 启动 gateway 时传入。
+   */
+  interactionsDir?: string;
   /** WS 首帧鉴权超时（毫秒，默认 5000） */
   authTimeoutMs?: number;
   /**
@@ -630,6 +635,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     defaultTenantId,
     maxQueue,
     maxRuns: MAX_RUNS,
+    ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
   const runs = engine.runs;
   const queue = engine.queue;
@@ -2475,7 +2481,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       case 'payload_too_large':
         return code === 'quota_exceeded' ? 429 : 413;
       case 'expired':
-        // 410 Gone：请求存在过，但已过期/已取消（DECISION-024 §2.2）。
+      case 'run_ended':
+        // 410 Gone：请求存在过，但已过期/已取消/所属 run 已结束。
         return 410;
       case 'internal':
         return 500;
@@ -3101,10 +3108,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }, heartbeatMs);
   (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
-  // 清理过期的交互请求；1s 粒度保证 `tool.permission.expired` 不滞后于 deadline。
+  // 只清理 ask 的内存记录；权限 pending 不再按时间过期（Addendum A）。
   const permissionSweeper = setInterval(() => {
     engine.sweep();
-  }, 1_000);
+  }, 30_000);
   (permissionSweeper as { unref?: () => void }).unref?.();
 
   /** 关闭时等待 active run 的上限（0.10 R2-18） */

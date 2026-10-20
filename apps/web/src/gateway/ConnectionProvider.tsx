@@ -15,11 +15,14 @@ import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import {
   enqueueInteraction,
+  enqueuePermission,
   expireInteractions,
   interactionExpiredMessage,
   interactionExpiresAt,
+  interactionRunEndedMessage,
   isExpiredError,
   isNotFoundError,
+  isRunEndedError,
   permissionFromEvent,
   removeInteraction,
   SubmitGuard,
@@ -221,7 +224,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const addPermission = (event: RunEvent) => {
       const request = permissionFromEvent(event);
       if (!request) return;
-      setPermissions((prev) => enqueueInteraction(prev, request, Date.now()));
+      // 权限不按时间过期；刷新/重连时靠事件重放重建（Addendum A §4）。
+      setPermissions((prev) => enqueuePermission(prev, request));
     };
 
     /** response / expired 事件：无论是否本端应答，都收起对应卡片。 */
@@ -360,25 +364,18 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     };
   }, [client, token, connectSeq, targetTenantId, eventStore, reportConnectError, toast]);
 
-  // 交互相应倒计时（仅在有等待确认时）。
+  // ask 的倒计时/超时保留；权限请求默认无限等待（Addendum A）。
   useEffect(() => {
-    if (permissions.length === 0 && asks.length === 0) return;
+    if (asks.length === 0) return;
     const id = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(id);
-  }, [permissions.length, asks.length]);
+  }, [asks.length]);
 
   useEffect(() => {
-    const expiredPermission = permissions.some((item) => item.expiresAt <= now);
-    const expiredAsk = asks.some((item) => item.expiresAt <= now);
-    if (!expiredPermission && !expiredAsk) return;
-    toast.info(
-      expiredPermission
-        ? '权限请求已超时，run 可能已失败；请检查时间线或重新发送。'
-        : '提问请求已超时，run 可能已失败；请检查时间线或重新发送。',
-    );
-    setPermissions((prev) => expireInteractions(prev, now));
+    if (!asks.some((item) => item.expiresAt <= now)) return;
+    toast.info('提问请求已超时，run 可能已失败；请检查时间线或重新发送。');
     setAsks((prev) => expireInteractions(prev, now));
-  }, [now, permissions, asks, toast]);
+  }, [now, asks, toast]);
 
   const connect = useCallback(
     (options: ConnectionOptions): boolean => {
@@ -454,8 +451,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         await client.respondPermission(requestId, decision, scope);
         setPermissions((prev) => removeInteraction(prev, requestId));
       } catch (error) {
+        if (isRunEndedError(error)) {
+          // 点击允许时 run 已结束：明确提示，不显示“未允许”。
+          setPermissions((prev) => removeInteraction(prev, requestId));
+          toast.info(interactionRunEndedMessage());
+          return;
+        }
         if (isNotFoundError(error) || isExpiredError(error)) {
-          // 服务端已丢弃 / 已过期 / 已随 run 取消：移除卡片并提示，不重试。
+          // 服务端已丢弃 / 已过期：移除卡片并提示，不重试。
           setPermissions((prev) => removeInteraction(prev, requestId));
           toast.info(interactionExpiredMessage());
           return;

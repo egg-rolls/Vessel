@@ -9,6 +9,11 @@
 
 import { randomUUID } from 'node:crypto';
 import type { ContextManager, EventStream, RunEvent, RunnableAgent } from '@vessel-agent/core';
+import {
+  InteractionsStore,
+  type StoredInteraction,
+  type StoredInteractionStatus,
+} from './interactions-store.js';
 import type { RunStatus } from './protocol.js';
 import { RpcError } from './rpc.js';
 
@@ -33,20 +38,13 @@ export interface PendingPermission {
   tool: string;
   input: unknown;
   ts: number;
-  /** epoch ms；事件缺省时按 `ts + interactionTtlMs` 推导 */
-  deadline_at: number;
+  /**
+   * 事件携带的 deadline_at（兼容保留）；Addendum A 起**不再作为过期依据**。
+   */
+  deadline_at?: number;
   session_id?: string;
   tool_call_id?: string;
   source?: string;
-}
-
-/** 已应答请求的幂等结果（保留期内重复应答返回它）。 */
-export interface PermissionOutcome {
-  run_id: string;
-  tenant_id: string;
-  decision: 'allow' | 'deny';
-  scope: PermissionScope;
-  ts: number;
 }
 
 /** `permission.respond` 的结果（additive）。 */
@@ -76,10 +74,13 @@ export interface RunEngineOptions {
   defaultTenantId: string;
   maxQueue?: number;
   maxRuns?: number;
-  /** 缺省 120s，与 core 的 ask/权限超时对齐 */
+  /** ask 请求的内存 TTL（权限请求不再按时间过期）。 */
   interactionTtlMs?: number;
-  /** 已应答结果保留期（幂等查询），缺省 10min。 */
-  answeredTtlMs?: number;
+  /**
+   * 权限交互持久化目录；缺省 = 不落盘。
+   * 由 gateway 注入 `<dataDir>`（Addendum A §2）。
+   */
+  interactionsDir?: string;
 }
 
 /** 共享运行引擎 */
@@ -89,6 +90,8 @@ export interface RunEngine {
   readonly coreToJob: Map<string, string>;
   readonly pendingPermissions: Map<string, PendingPermission>;
   readonly pendingAsks: Map<string, PendingAsk>;
+  /** requestId → 持久化交互记录（pending / answered / orphaned）。 */
+  readonly interactionRecords: Map<string, StoredInteraction>;
   /** durable resume / workflow resume 在途占位 */
   readonly resumedRuns: Set<string>;
   readonly resumedWorkflows: Set<string>;
@@ -118,7 +121,7 @@ export interface RunEngine {
   releaseResume(runId: string): void;
   reserveWorkflowResume(runId: string): boolean;
   releaseWorkflowResume(runId: string): void;
-  /** 清理过期交互请求 */
+  /** 清理过期的 ask 记录；权限请求不按时间过期（Addendum A）。 */
   sweep(now?: number): void;
 }
 
@@ -143,19 +146,20 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
   const maxQueue = options.maxQueue ?? 100;
   const maxRuns = options.maxRuns ?? 200;
   const interactionTtlMs = options.interactionTtlMs ?? 120_000;
-  const answeredTtlMs = options.answeredTtlMs ?? 600_000;
-  /** 幂等表上限（防止长时间进程无界增长）。 */
-  const OUTCOME_LIMIT = 1000;
+  /** 记录上限（防止长时间进程无界增长）；淘汰优先 answered/orphaned。 */
+  const MAX_RECORDS = 2000;
 
   const runs = new Map<string, RunRecord>();
   const queue: RunRecord[] = [];
   const coreToJob = new Map<string, string>();
   const pendingPermissions = new Map<string, PendingPermission>();
   const pendingAsks = new Map<string, PendingAsk>();
-  /** requestId → 第一次应答的结果（有界 + TTL）。 */
-  const answeredPermissions = new Map<string, PermissionOutcome>();
-  /** requestId → 过期/取消时间（迟到应答返回 `expired`）。 */
-  const expiredPermissions = new Map<string, { tenant_id: string; ts: number }>();
+  /** requestId → 持久化交互记录（唯一事实源，pending 表只是索引）。 */
+  const interactionRecords = new Map<string, StoredInteraction>();
+  const interactionsStore =
+    options.interactionsDir !== undefined && options.interactionsDir !== ''
+      ? new InteractionsStore(options.interactionsDir)
+      : undefined;
   const activeByTenant = new Map<string, number>();
   const resumedRuns = new Set<string>();
   const resumedWorkflows = new Set<string>();
@@ -343,34 +347,48 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     return defaultTenantId;
   }
 
-  /** 记录过期/取消，供迟到应答返回 `expired`（有界）。 */
-  function rememberExpired(requestId: string, tenantId: string, ts: number): void {
-    expiredPermissions.set(requestId, { tenant_id: tenantId, ts });
-    while (expiredPermissions.size > OUTCOME_LIMIT) {
-      const first = expiredPermissions.keys().next();
-      if (first.done || first.value === requestId) break;
-      expiredPermissions.delete(first.value);
+  /** 记录有界：先淘汰最旧的 answered/orphaned，绝不淘汰 pending。 */
+  function rememberRecord(record: StoredInteraction): void {
+    interactionRecords.set(record.requestId, record);
+    if (interactionRecords.size <= MAX_RECORDS) return;
+    for (const [id, item] of interactionRecords) {
+      if (interactionRecords.size <= MAX_RECORDS) break;
+      if (item.status !== 'pending') interactionRecords.delete(id);
     }
   }
 
-  /** 记录第一次应答结果，供幂等重放（有界；TTL 在读取/sweep 时检查）。 */
-  function rememberAnswered(requestId: string, outcome: PermissionOutcome): void {
-    answeredPermissions.set(requestId, outcome);
-    while (answeredPermissions.size > OUTCOME_LIMIT) {
-      const first = answeredPermissions.keys().next();
-      if (first.done || first.value === requestId) break;
-      answeredPermissions.delete(first.value);
-    }
+  /** 重写某个 tenant 的全部记录；写失败只记 stderr（RPC 不因此失败）。 */
+  function persistTenant(tenantId: string): void {
+    if (!interactionsStore) return;
+    const records = [...interactionRecords.values()]
+      .filter((record) => record.tenant_id === tenantId)
+      .sort((a, b) => a.created_at - b.created_at);
+    void interactionsStore.save(tenantId, records);
   }
 
-  function pruneInteractions(now: number): void {
-    for (const [id, outcome] of answeredPermissions) {
-      if (now - outcome.ts > answeredTtlMs) answeredPermissions.delete(id);
-    }
-    for (const [id, expired] of expiredPermissions) {
-      if (now - expired.ts > answeredTtlMs) expiredPermissions.delete(id);
-    }
+  function persistTenants(tenantIds: ReadonlySet<string>): void {
+    for (const tenantId of tenantIds) persistTenant(tenantId);
   }
+
+  /**
+   * 启动时加载持久化记录（Addendum A §2）。
+   *
+   * 本进程尚未执行任何 run，因此加载到的 `pending` 一定没有对应 run：
+   * 标记为 `orphaned`，应答返回 `run_ended`，不假装可执行。
+   */
+  function hydrateInteractions(): void {
+    if (!interactionsStore) return;
+    const changedTenants = new Set<string>();
+    for (const loaded of interactionsStore.loadAllSync()) {
+      const record: StoredInteraction =
+        loaded.status === 'pending' ? { ...loaded, status: 'orphaned' as const } : loaded;
+      if (record.status !== loaded.status) changedTenants.add(record.tenant_id);
+      interactionRecords.set(record.requestId, record);
+    }
+    persistTenants(changedTenants);
+  }
+
+  hydrateInteractions();
 
   function handleEvent(event: RunEvent): void {
     if (event.type === 'run.started' && active && !active.core_run_id) {
@@ -386,29 +404,47 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           typeof event.ts === 'number' && Number.isFinite(event.ts) && event.ts > 0
             ? event.ts
             : now;
+        const tenantId = eventTenantId(event);
+        const tool = typeof data.tool === 'string' ? data.tool : 'tool';
+        const sessionId =
+          typeof data.session_id === 'string' && data.session_id.length > 0
+            ? data.session_id
+            : undefined;
+        const toolCallId =
+          typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
+            ? data.tool_call_id
+            : undefined;
         const deadlineAt =
           typeof data.deadline_at === 'number' &&
           Number.isFinite(data.deadline_at) &&
           data.deadline_at > 0
             ? data.deadline_at
-            : eventTs + interactionTtlMs;
+            : undefined;
         pendingPermissions.set(requestId, {
           run_id: event.run_id,
-          tenant_id: eventTenantId(event),
-          tool: typeof data.tool === 'string' ? data.tool : 'tool',
+          tenant_id: tenantId,
+          tool,
           input: data.input,
           ts: eventTs,
-          deadline_at: deadlineAt,
-          ...(typeof data.session_id === 'string' && data.session_id.length > 0
-            ? { session_id: data.session_id }
-            : {}),
-          ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
-            ? { tool_call_id: data.tool_call_id }
-            : {}),
+          ...(deadlineAt !== undefined ? { deadline_at: deadlineAt } : {}),
+          ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           ...(typeof data.source === 'string' && data.source.length > 0
             ? { source: data.source }
             : {}),
         });
+        rememberRecord({
+          requestId,
+          run_id: event.run_id,
+          tenant_id: tenantId,
+          ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
+          tool,
+          input: data.input,
+          created_at: eventTs,
+          status: 'pending',
+        });
+        persistTenant(tenantId);
       }
     }
     if (event.type === 'ask.user.requested') {
@@ -433,13 +469,19 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           active.usage = data.usage as RunStatus['usage'];
         }
       }
-      // run 终态：pending 全部清掉（不只 asks），迟到应答返回 expired。
+      // run 终态：pending 全部清掉（不只 asks），持久化为 orphaned；
+      // 迟到应答返回 run_ended，不再假装可以继续（Addendum A §2）。
+      const terminalTenants = new Set<string>();
       for (const [id, pending] of pendingPermissions) {
-        if (pending.run_id === event.run_id) {
-          pendingPermissions.delete(id);
-          rememberExpired(id, pending.tenant_id, event.ts);
+        if (pending.run_id !== event.run_id) continue;
+        pendingPermissions.delete(id);
+        const record = interactionRecords.get(id);
+        if (record) {
+          rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
+          terminalTenants.add(record.tenant_id);
         }
       }
+      persistTenants(terminalTenants);
       for (const [id, pending] of pendingAsks) {
         if (pending.run_id === event.run_id) pendingAsks.delete(id);
       }
@@ -477,44 +519,53 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
         tenant_id: pending.tenant_id,
       });
       pendingPermissions.delete(requestId);
-      rememberAnswered(requestId, {
-        run_id: pending.run_id,
-        tenant_id: pending.tenant_id,
-        decision,
-        scope: resolvedScope,
-        ts: now,
+      const record = interactionRecords.get(requestId);
+      rememberRecord({
+        ...(record ?? {
+          requestId,
+          run_id: pending.run_id,
+          tenant_id: pending.tenant_id,
+          tool: pending.tool,
+          input: pending.input,
+          created_at: pending.ts,
+        }),
+        status: 'answered',
+        answer: { decision, scope: resolvedScope, answered_at: now },
       });
+      persistTenant(pending.tenant_id);
       return { ok: true, decision, scope: resolvedScope };
     }
 
     // 幂等：首次应答生效，重复应答返回上次结果（不发布新事件）。
-    const answered = answeredPermissions.get(requestId);
-    if (answered) {
-      if (tenantId !== undefined && answered.tenant_id !== tenantId) {
+    const record = interactionRecords.get(requestId);
+    if (record) {
+      if (tenantId !== undefined && record.tenant_id !== tenantId) {
         throw new RpcError('not_found', `Permission request not found: ${requestId}`);
       }
-      if (Date.now() - answered.ts > answeredTtlMs) {
-        answeredPermissions.delete(requestId);
-      } else if (answered.decision !== decision) {
-        throw new RpcError(
-          'conflict',
-          `Permission request already answered as ${answered.decision}: ${requestId}`,
-        );
-      } else {
-        return { ok: true, decision, scope: answered.scope, duplicate: true };
+      if (record.status === 'answered' && record.answer) {
+        if (record.answer.decision !== decision) {
+          throw new RpcError(
+            'conflict',
+            `Permission request already answered as ${record.answer.decision}: ${requestId}`,
+          );
+        }
+        return {
+          ok: true,
+          decision,
+          scope: record.answer.scope,
+          duplicate: true,
+        };
       }
-    }
-
-    // 已过期 / 已随 run 终态取消：迟到应答返回 expired（DECISION-024 §2.2）。
-    const expired = expiredPermissions.get(requestId);
-    if (expired) {
-      if (tenantId !== undefined && expired.tenant_id !== tenantId) {
-        throw new RpcError('not_found', `Permission request not found: ${requestId}`);
-      }
-      if (Date.now() - expired.ts <= answeredTtlMs) {
-        throw new RpcError('expired', `Permission request expired: ${requestId}`);
-      }
-      expiredPermissions.delete(requestId);
+      // run 已终止 / 进程重启后找不到 run：明确告知，不伪装成 not_found。
+      throw new RpcError(
+        'run_ended',
+        `Run has ended; permission request is no longer valid: ${requestId}`,
+        {
+          status: record.status === 'pending' ? 'orphaned' : record.status,
+          run_id: record.run_id,
+          requestId,
+        },
+      );
     }
 
     throw new RpcError('not_found', `Permission request not found: ${requestId}`);
@@ -564,29 +615,14 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     resumedWorkflows.delete(runId);
   }
 
+  /**
+   * 仅清理 ask 的内存记录。
+   * Addendum A：权限 pending **不再按时间过期**，只由 run 终态清理。
+   */
   function sweep(now = Date.now()): void {
-    for (const [id, pending] of pendingPermissions) {
-      if (now < pending.deadline_at) continue;
-      // 过期不能静默删除：先发事件，让所有端的卡片收起（DECISION-024 §2.2）。
-      pendingPermissions.delete(id);
-      rememberExpired(id, pending.tenant_id, now);
-      events.publish({
-        type: 'tool.permission.expired',
-        run_id: pending.run_id,
-        data: {
-          requestId: id,
-          tool: pending.tool,
-          ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
-          ...(pending.tool_call_id !== undefined ? { tool_call_id: pending.tool_call_id } : {}),
-        },
-        ts: now,
-        tenant_id: pending.tenant_id,
-      });
-    }
     for (const [id, pending] of pendingAsks) {
       if (now - pending.ts > interactionTtlMs) pendingAsks.delete(id);
     }
-    pruneInteractions(now);
   }
 
   function list(tenantId: string, opts: { sessionId?: string; status?: string } = {}): RunStatus[] {
@@ -603,6 +639,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     coreToJob,
     pendingPermissions,
     pendingAsks,
+    interactionRecords,
     resumedRuns,
     resumedWorkflows,
     get active() {

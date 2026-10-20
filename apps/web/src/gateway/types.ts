@@ -139,7 +139,11 @@ export interface AskUserRequest {
 /** 权限应答范围（DECISION-024 §2.1）。 */
 export type PermissionScope = 'once' | 'session' | 'always';
 
-/** 待答权限请求（tool.permission.request，0.13 增加关联字段）。 */
+/**
+ * 待答权限请求（tool.permission.request，0.13 增加关联字段）。
+ *
+ * Addendum A：权限等待默认不超时，因此没有 `expiresAt`；卡片只保留事件时间用于排序。
+ */
 export interface PermissionRequest {
   requestId: string;
   tool: string;
@@ -149,10 +153,8 @@ export interface PermissionRequest {
   sessionId?: string;
   toolCallId?: string;
   source?: string;
-  /** 事件时间（排序 / 缺省 TTL 基准）。 */
+  /** 事件时间（同一 run 多请求排序）。 */
   requestedAt: number;
-  /** 截止时间；优先取事件 `deadline_at`，缺失按 `event.ts + TTL`。 */
-  expiresAt: number;
 }
 
 /** 运行状态（/v1/runs/:id、run.get；durable checkpoint 是其中的超集） */

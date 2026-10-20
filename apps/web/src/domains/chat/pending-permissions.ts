@@ -12,19 +12,17 @@ export function currentSessionId(sessionId: string | undefined): string | null {
 }
 
 /**
- * 返回不归属当前视图的未过期请求。
+ * 返回不归属当前视图的请求（权限请求不再按时间过期）。
  * 非 chat 页面全部算“其他视图”；chat 已选会话时只排除同 session 的请求。
  */
 export function pendingPermissionsOutsideView(
   permissions: readonly PermissionRequest[],
   view: { domain: string; sessionId?: string },
-  now: number,
 ): PermissionRequest[] {
-  const live = permissions.filter((item) => item.expiresAt > now);
-  if (view.domain !== 'chat') return live;
+  if (view.domain !== 'chat') return [...permissions];
   const current = currentSessionId(view.sessionId);
-  if (!current) return live;
-  return live.filter((item) => item.sessionId !== current);
+  if (!current) return [...permissions];
+  return permissions.filter((item) => item.sessionId !== current);
 }
 
 /** 跳转目标：优先会话，其次运行详情。 */

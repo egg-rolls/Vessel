@@ -1,10 +1,29 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import { createRunEngine, type RunEngine } from '../src/run-engine';
 
-function setup(interactionTtlMs = 120_000) {
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function makeDir(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'vessel-interactions-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
+function setup(interactionsDir?: string) {
   const events = new MemoryEventStream();
-  const engine = createRunEngine({ events, defaultTenantId: 'default', interactionTtlMs });
+  const engine = createRunEngine({
+    events,
+    defaultTenantId: 'default',
+    ...(interactionsDir !== undefined ? { interactionsDir } : {}),
+  });
   const seen: RunEvent[] = [];
   events.subscribe((event) => {
     seen.push(event);
@@ -42,28 +61,60 @@ function codeOf(run: () => unknown): string | undefined {
   return undefined;
 }
 
+function storePath(dir: string, tenant = 'default'): string {
+  return join(dir, `interactions-${tenant}.json`);
+}
+
+interface StoreFile {
+  version: number;
+  interactions: Array<Record<string, unknown>>;
+}
+
+function readStore(dir: string, tenant = 'default'): StoreFile | null {
+  const path = storePath(dir, tenant);
+  if (!existsSync(path)) return null;
+  return JSON.parse(readFileSync(path, 'utf8')) as StoreFile;
+}
+
+async function waitForStore(
+  dir: string,
+  predicate: (file: StoreFile | null) => boolean,
+): Promise<StoreFile | null> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const file = readStore(dir);
+    if (predicate(file)) return file;
+    await Bun.sleep(10);
+  }
+  return readStore(dir);
+}
+
 describe('run engine permission lifecycle', () => {
-  it('captures session / tool_call / source and derives deadline from event time', () => {
+  it('captures session / tool_call / source and keeps deadline_at only as metadata', () => {
     const { engine } = setup();
     const ts = Date.now();
-    requestPermission(engine, {}, ts);
-    const pending = engine.pendingPermissions.get('perm-1');
-    expect(pending).toMatchObject({
+    requestPermission(engine, { deadline_at: ts + 1 }, ts);
+    expect(engine.pendingPermissions.get('perm-1')).toMatchObject({
       run_id: 'run-1',
       tenant_id: 'default',
       tool: 'bash',
       session_id: 'session-1',
       tool_call_id: 'call-1',
       source: 'runtime',
-      deadline_at: ts + 120_000,
+      deadline_at: ts + 1,
     });
   });
 
-  it('uses explicit deadline_at when the event provides one', () => {
-    const { engine } = setup();
-    const ts = Date.now();
-    requestPermission(engine, { deadline_at: ts + 5_000 }, ts);
-    expect(engine.pendingPermissions.get('perm-1')?.deadline_at).toBe(ts + 5_000);
+  it('does not expire pending permissions over time (Addendum A)', () => {
+    const { engine, seen } = setup();
+    const now = Date.now();
+    requestPermission(engine, { deadline_at: now + 1 }, now);
+
+    engine.sweep(now + 10_000_000);
+    expect(engine.pendingPermissions.has('perm-1')).toBe(true);
+    expect(seen.some((event) => event.type === 'tool.permission.expired')).toBe(false);
+
+    const result = engine.respondPermission('perm-1', 'allow', false, undefined, 'once');
+    expect(result).toEqual({ ok: true, decision: 'allow', scope: 'once' });
   });
 
   it('treats a repeated response as idempotent and rejects a conflicting decision', () => {
@@ -82,12 +133,10 @@ describe('run engine permission lifecycle', () => {
       scope: 'session',
     });
 
-    // 重复点击（同 decision）返回上次结果，不再发事件。
     const repeat = engine.respondPermission('perm-1', 'allow', false);
     expect(repeat).toEqual({ ok: true, decision: 'allow', scope: 'session', duplicate: true });
     expect(responses()).toHaveLength(1);
 
-    // 与第一次不同的 decision 视为冲突。
     expect(codeOf(() => engine.respondPermission('perm-1', 'deny', false))).toBe('conflict');
   });
 
@@ -100,41 +149,16 @@ describe('run engine permission lifecycle', () => {
     expect(response?.data).toMatchObject({ remember: true, scope: 'always' });
   });
 
-  it('publishes tool.permission.expired when the deadline passes and rejects late answers', () => {
-    const { engine, seen } = setup();
-    const now = Date.now();
-    requestPermission(engine, { deadline_at: now + 1_000 }, now);
-
-    engine.sweep(now + 999);
-    expect(engine.pendingPermissions.has('perm-1')).toBe(true);
-
-    engine.sweep(now + 1_000);
-    expect(engine.pendingPermissions.has('perm-1')).toBe(false);
-    const expired = seen.filter((event) => event.type === 'tool.permission.expired');
-    expect(expired).toHaveLength(1);
-    expect(expired[0]?.run_id).toBe('run-1');
-    expect(expired[0]?.tenant_id).toBe('default');
-    expect(expired[0]?.data).toMatchObject({
-      requestId: 'perm-1',
-      tool: 'bash',
-      session_id: 'session-1',
-      tool_call_id: 'call-1',
-    });
-
-    expect(codeOf(() => engine.respondPermission('perm-1', 'allow', false))).toBe('expired');
-    // 第二次迟到应答仍然是 expired，而不是退回 not_found。
-    expect(codeOf(() => engine.respondPermission('perm-1', 'deny', false))).toBe('expired');
-  });
-
-  it('clears pending permissions on every terminal run event', () => {
+  it('clears pending permissions on every terminal run event and returns run_ended', () => {
     for (const type of ['run.completed', 'run.failed', 'run.cancelled'] as const) {
       const { engine } = setup();
       requestPermission(engine, { requestId: `${type}-perm` });
       engine.handleEvent({ type, run_id: 'run-1', ts: Date.now(), data: {} });
       expect(engine.pendingPermissions.size).toBe(0);
       expect(codeOf(() => engine.respondPermission(`${type}-perm`, 'allow', false))).toBe(
-        'expired',
+        'run_ended',
       );
+      expect(engine.interactionRecords.get(`${type}-perm`)?.status).toBe('orphaned');
     }
   });
 
@@ -153,5 +177,83 @@ describe('run engine permission lifecycle', () => {
     engine.respondPermission('perm-1', 'allow', false);
     engine.respondPermission('perm-1', 'allow', false);
     expect(seen.filter((event) => event.type === 'tool.permission.response')).toHaveLength(1);
+  });
+});
+
+describe('interaction persistence (Addendum A)', () => {
+  it('persists pending, rewrites on terminal, and reports orphaned after reload', async () => {
+    const dir = makeDir();
+    const first = setup(dir);
+    requestPermission(first.engine, {}, 1_000);
+
+    const pendingFile = await waitForStore(
+      dir,
+      (file) => file?.interactions.some((item) => item.status === 'pending') === true,
+    );
+    expect(pendingFile?.interactions[0]).toMatchObject({
+      requestId: 'perm-1',
+      run_id: 'run-1',
+      tenant_id: 'default',
+      session_id: 'session-1',
+      tool_call_id: 'call-1',
+      tool: 'bash',
+      status: 'pending',
+    });
+
+    // 进程重启：新 engine 加载同一目录，旧 pending 没有对应 run → orphaned。
+    const second = setup(dir);
+    expect(second.engine.pendingPermissions.size).toBe(0);
+    expect(second.engine.interactionRecords.get('perm-1')?.status).toBe('orphaned');
+    expect(codeOf(() => second.engine.respondPermission('perm-1', 'allow', false))).toBe(
+      'run_ended',
+    );
+
+    const orphanedFile = await waitForStore(
+      dir,
+      (file) => file?.interactions[0]?.status === 'orphaned',
+    );
+    expect(orphanedFile?.interactions[0]?.status).toBe('orphaned');
+  });
+
+  it('persists answered results so a reload is still idempotent', async () => {
+    const dir = makeDir();
+    const first = setup(dir);
+    requestPermission(first.engine, {}, 2_000);
+    first.engine.respondPermission('perm-1', 'allow', false, undefined, 'always');
+
+    const answeredFile = await waitForStore(
+      dir,
+      (file) => file?.interactions[0]?.status === 'answered',
+    );
+    expect(answeredFile?.interactions[0]?.answer).toMatchObject({
+      decision: 'allow',
+      scope: 'always',
+    });
+
+    const second = setup(dir);
+    const repeat = second.engine.respondPermission('perm-1', 'allow', false);
+    expect(repeat).toEqual({ ok: true, decision: 'allow', scope: 'always', duplicate: true });
+    expect(codeOf(() => second.engine.respondPermission('perm-1', 'deny', false))).toBe('conflict');
+  });
+
+  it('writes 0600 files on POSIX', async () => {
+    if (process.platform === 'win32') return;
+    const dir = makeDir();
+    const { engine } = setup(dir);
+    requestPermission(engine);
+    await waitForStore(dir, (file) => file !== null);
+    expect(statSync(storePath(dir)).mode & 0o777).toBe(0o600);
+  });
+
+  it('removes pending records from disk when the run reaches a terminal state', async () => {
+    const dir = makeDir();
+    const { engine } = setup(dir);
+    requestPermission(engine);
+    await waitForStore(dir, (file) => file?.interactions[0]?.status === 'pending');
+
+    engine.handleEvent({ type: 'run.cancelled', run_id: 'run-1', ts: Date.now(), data: {} });
+    const file = await waitForStore(dir, (item) => item?.interactions[0]?.status === 'orphaned');
+    expect(file?.interactions[0]?.status).toBe('orphaned');
+    expect(file?.interactions.some((item) => item.status === 'pending')).toBe(false);
   });
 });

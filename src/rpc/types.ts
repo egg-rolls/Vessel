@@ -29,7 +29,9 @@ export type RpcErrorCode =
   // 0.12：可选能力未注入（DECISION-023 §2.3）。
   | 'not_supported'
   // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。
-  | 'expired';
+  | 'expired'
+  // 0.13 Addendum A：run 已结束 / 重启后找不到 run。
+  | 'run_ended';
 
 /** 成功响应 */
 export interface RpcSuccessResponse {
@@ -100,6 +102,7 @@ const RPC_ERROR_CODES = new Set<RpcErrorCode>([
   'internal',
   'not_supported',
   'expired',
+  'run_ended',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

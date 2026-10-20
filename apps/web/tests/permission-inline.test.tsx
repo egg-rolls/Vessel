@@ -18,7 +18,6 @@ function permission(overrides: Partial<PermissionRequest> = {}): PermissionReque
     sessionId: 'session-1',
     toolCallId: 'call-1',
     requestedAt: 1_000,
-    expiresAt: 10_000,
     ...overrides,
   };
 }
@@ -36,7 +35,6 @@ describe('inline permission card', () => {
         cancelling={false}
         onCancel={() => {}}
         permissions={[permission()]}
-        permissionNow={7_500}
         permissionBusy={new Set()}
         onDecidePermission={() => {}}
       />,
@@ -46,15 +44,16 @@ describe('inline permission card', () => {
     expect(markup).toContain('data-request-id="perm-1"');
     expect(markup).toContain('bash');
     expect(markup).toContain('ls -la');
-    // 倒计时来自 deadline_at - now（2.5s → ceil 3s）。
-    expect(markup).toContain('3s');
+    // Addendum A：不再显示倒计时/过期。
+    expect(markup).not.toContain('permission-card expired');
+    expect(markup).not.toContain('remaining');
     // 四个动作都在卡片内。
     expect(markup.split('<button').length - 1).toBeGreaterThanOrEqual(4);
     // 不再渲染全局权限 Modal。
     expect(markup).not.toContain('permission-modal');
   });
 
-  test('disables every action once the deadline passed', () => {
+  test('disables actions only while the answer is submitting', () => {
     const markup = renderToStaticMarkup(
       <RunCard
         group={runningGroup()}
@@ -62,11 +61,11 @@ describe('inline permission card', () => {
         cancelling={false}
         onCancel={() => {}}
         permissions={[permission()]}
-        permissionNow={10_000}
+        permissionBusy={new Set(['perm-1'])}
         onDecidePermission={() => {}}
       />,
     );
-    expect(markup).toContain('permission-card expired');
+    expect(markup).toContain('permission-card');
     expect(markup).toContain('disabled');
   });
 
@@ -104,15 +103,13 @@ describe('cross-session pending bar', () => {
 });
 
 describe('pendingPermissionsOutsideView', () => {
-  const now = 5_000;
-
   test('hides requests of the current session on chat', () => {
     const items = [
       permission({ requestId: 'same', sessionId: 'session-1' }),
       permission({ requestId: 'other', sessionId: 'session-2' }),
     ];
     expect(
-      pendingPermissionsOutsideView(items, { domain: 'chat', sessionId: 'session-1' }, now).map(
+      pendingPermissionsOutsideView(items, { domain: 'chat', sessionId: 'session-1' }).map(
         (item) => item.requestId,
       ),
     ).toEqual(['other']);
@@ -120,19 +117,16 @@ describe('pendingPermissionsOutsideView', () => {
 
   test('treats a new/draft chat as having no visible run', () => {
     const items = [permission({ requestId: 'same', sessionId: 'session-1' })];
-    expect(pendingPermissionsOutsideView(items, { domain: 'chat', sessionId: 'new' }, now)).toEqual(
+    expect(pendingPermissionsOutsideView(items, { domain: 'chat', sessionId: 'new' })).toEqual(
       items,
     );
   });
 
-  test('on non-chat pages every live request is outside the view', () => {
-    const items = [
-      permission({ requestId: 'live', expiresAt: 6_000 }),
-      permission({ requestId: 'expired', expiresAt: 5_000 }),
-    ];
+  test('on non-chat pages every pending request is outside the view (no expiry)', () => {
+    const items = [permission({ requestId: 'a' }), permission({ requestId: 'b', requestedAt: 1 })];
     expect(
-      pendingPermissionsOutsideView(items, { domain: 'runs' }, now).map((item) => item.requestId),
-    ).toEqual(['live']);
+      pendingPermissionsOutsideView(items, { domain: 'runs' }).map((item) => item.requestId),
+    ).toEqual(['a', 'b']);
   });
 
   test('jumps to the session when known, otherwise to the run detail', () => {

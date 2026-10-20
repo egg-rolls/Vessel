@@ -109,8 +109,8 @@ export function AppShell() {
   // 权限改用 RunCard 内联；ask 本批仍走全局 Modal（DECISION-024 §1.3）。
   const modalOpen = Boolean(asks[0] || pendingAction || helpOpen);
   const otherPending = useMemo(
-    () => pendingPermissionsOutsideView(permissions, route, now),
-    [permissions, route, now],
+    () => pendingPermissionsOutsideView(permissions, route),
+    [permissions, route],
   );
   const openPending = useCallback(
     (request: (typeof otherPending)[number]) => navigate(pendingPermissionTarget(request)),

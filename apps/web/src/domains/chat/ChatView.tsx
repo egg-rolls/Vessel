@@ -78,7 +78,6 @@ export function ChatView({
     features,
     permissions,
     responding,
-    now,
     respondPermission,
   } = useConnection();
   const toast = useToast();
@@ -847,7 +846,6 @@ export function ChatView({
                   }
                   onCancel={(value) => void handleCancel(value)}
                   permissions={permissionsByRun.get(group.runId) ?? NO_PERMISSIONS}
-                  permissionNow={now}
                   permissionBusy={responding}
                   onDecidePermission={(requestId, decision, scope) =>
                     void respondPermission(requestId, decision, scope)

@@ -74,7 +74,6 @@ export function RunCard({
   hideInput = false,
   onCancel,
   permissions = [],
-  permissionNow = 0,
   permissionBusy,
   onDecidePermission,
 }: {
@@ -86,7 +85,6 @@ export function RunCard({
   onCancel: (group: RunGroup) => void;
   /** 该 run 的待答权限（跨 session 的由顶部条提示）。 */
   permissions?: readonly PermissionRequest[];
-  permissionNow?: number;
   permissionBusy?: ReadonlySet<string>;
   onDecidePermission?: (
     requestId: string,
@@ -119,7 +117,6 @@ export function RunCard({
     () => [...permissions].sort((a, b) => a.requestedAt - b.requestedAt),
     [permissions],
   );
-  const cardNow = permissionNow > 0 ? permissionNow : Date.now();
 
   return (
     <div className={`run-card ${status}`}>
@@ -175,7 +172,6 @@ export function RunCard({
             <PermissionCard
               key={request.requestId}
               request={request}
-              now={cardNow}
               busy={permissionBusy?.has(request.requestId) ?? false}
               onDecide={(decision, scope) => onDecidePermission(request.requestId, decision, scope)}
             />

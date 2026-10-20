@@ -94,7 +94,9 @@ export type ProtocolErrorCode =
   | 'quota_exceeded'
   | 'conflict'
   // 0.13：权限/交互请求已过期或已取消（DECISION-024 §2.2）。
-  | 'expired';
+  | 'expired'
+  // 0.13 Addendum A：run 已结束 / 重启后找不到 run。
+  | 'run_ended';
 
 export interface ProtocolError {
   code: ProtocolErrorCode;
