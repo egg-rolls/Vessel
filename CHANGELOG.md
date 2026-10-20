@@ -3,6 +3,67 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.8.4] - 2026-10-20
+
+> 0.8.4（基于 `release/0.8.4`，未发布）：TUI 可见问题修复——重复 key、ANSI 控制序列、Markdown 归档与 resize。全部改动在展示层，core / 工具的原始返回值不变。版本号由 1 在集成线统一写入。
+
+### Added
+
+- `packages/tui/src/utils/sanitize-terminal-text.ts`：纯函数 `sanitizeTerminalText()`（CSI / OSC / ESC / C0 / DEL / C1 清洗，`\r\n` 与 `\r` 归一为 `\n`）。
+- `packages/tui/src/utils/text-layout.ts`：纯函数 `lineKey(index)`。
+- `packages/tui/src/repl/use-repl-state.ts`：`HistoryItem`（`{ text, markdown? }`）。
+- 新增 ADR-061。
+
+### Fixed
+
+- **React duplicate key**：`TextViewer` / `QuickHelp` / `QueuePreview` / `ToolTrail` 的列表 key 从“累计字符偏移”改为按行下标（`lineKey(index)`）；连续空行或重复文本不再产生相同 key。
+- **ANSI 控制序列破坏布局**：新增纯函数 `sanitizeTerminalText()`，去除 CSI / OSC / 其它 ESC / C0 / DEL / C1，保留 `\n` / `\t`，并把 `\r\n` 与 `\r` 归一为 `\n`；`TextViewer`、`ToolTrail`、`StreamOutput` 与命令输出归档在渲染前清洗。
+- **Markdown 归档回退成源码**：流式完成后历史项带 `markdown: true`，`<Static>` 继续用 `<MarkdownText>` 渲染；命令输出与用户输入仍按纯文本渲染。
+- **resize 不生效**：`ink-repl.tsx` 改用 Ink `useWindowSize()` 订阅 `columns` / `rows`（`useStdout()` 不订阅 resize）；弹窗 / 面板宽度与 live 行数随窗口即时变化，矮终端（`<15` 行）隐藏 live 并只提示一次。
+
+### Changed
+
+- TUI 历史从 `string[]` 改为 `HistoryItem[]`（`{ text, markdown? }`）；`appendHistory` / `appendHistoryLines` 支持 `markdown` 标志。
+- `VIEW_MAX_WIDTH` 从 110 提到 160；live 行数上限随终端高度增长（`MINIMAL_ROW_CAP = 5`）。
+- 根布局不设固定 `height`：固定高度会让 Ink 每帧 `clearTerminal`，在 Windows / PowerShell 下造成历史、流式输出与底栏互相覆盖。
+- 新增纯函数测试（`sanitize-terminal-text` / `text-layout` / `repl-state` / `layout`），全部在 `packages/tui` 内独立运行，不依赖 `mock.module` 的进程级状态。
+
+### Known limitations
+
+- ANSI 清洗只在展示层：gateway / headless / web / 插件仍拿到工具的原始文本（含控制序列）。
+- TUI 不再显示原始 ANSI 颜色；`sanitizeTerminalText()` 只做清洗，不做宽度重排。
+- Markdown 历史项比纯文本更占内存与渲染成本；`<Static>` 一旦写入不会重绘，窗口变宽后已归档内容按原宽度换行。
+- Windows 真终端的 resize 行为仍需人工验证；`<15` 行的终端不显示流式 live 区。
+- i18n 只在设计文档中，未实现。
+
+## [0.8.3] - 2026-10-20
+
+> 0.8 Wave 2B2A（基于 `release/0.8.3`，未发布）：Gateway 方法表按域拆分、CLI 一次性命令改为有序注册表。纯结构重构，无协议、无行为变化。版本号由 1 在集成线统一写入。
+
+### Added
+
+- **Gateway 方法模块**：新增 `packages/serve/src/gateway/errors.ts`（`MethodError`）与 `packages/serve/src/gateway/methods/`：`common.ts`（`tenantParamSchema` / `stringParam` / `checkpointBelongsToTenant`）、`config.ts`（`createConfigMethods` / `createToolMethods` / `createPluginsMethods`）、`evals.ts`、`feishu.ts`、`interactions.ts`、`mcp.ts`、`observability.ts`（`createEventsMethods` / `createMetricsMethods` / `createTraceMethods`）、`runs.ts`、`sessions.ts`、`tenants.ts`、`workflow.ts`（`createWorkflowMethods` / `parseWorkflowInputs`）。
+- **CLI 命令注册表**：新增 `src/commands/registry.ts`，导出 `CliCommand`（`name` / `match(args)` / `run(args, ctx)`）、有序数组 `cliCommands` 与 `matchCommand(args)`；覆盖 `tools` / `update` / `resume-run-list` / `workflow` / `eval` / `config` / `tenant` / `migrate` / `trace` / `plugin` / `doctor` 11 条命令。
+- 新增 ADR-059 / ADR-060。
+
+### Changed
+
+- `packages/serve/src/gateway.ts` 从约 4000 行降到 3002 行，只保留选项校验、缓冲 / 连接状态、HTTP / WS 路由与鉴权顺序；方法表用 `...createXxxMethods(deps)` 组装后交给 `defineMethods`。
+- `events.subscribe` 仍留在 `gateway.ts`（依赖连接类型与事件缓冲游标），其余方法全部移入 domain 模块。
+- `src/cli.ts` 删除约 153 行顶层 `if` 链，只解析全局参数 → `matchCommand` → 执行 → 统一 `exitCode`；REPL / serve / headless 路径不变。
+- `MethodError` 独立成文件，保证拆分后 handler 与 legacy 错误处理仍命中同一个 `instanceof`。
+
+### Fixed
+
+- 无用户可见修复。本节只记录本次消除的结构性问题：方法定义与路由 / 连接状态混在单文件、新增 RPC 方法需在巨型数组中插入；一次性命令的命中顺序与退出码处理散落在 `if` 链各分支、单个命令无法独立测试。
+
+### Known limitations
+
+- 拆分只改变文件组织：方法名、`params_schema`、返回形状、协议错误码与鉴权顺序完全不变。
+- 方法表不再能在一个屏幕内读完；domain 间共享逻辑必须显式放进 `common.ts`，否则会重复。
+- CLI 注册表的顺序即语义：宽泛的 `match` 放在前面会遮蔽后面的命令；`--help` / `--version` 仍在入口处先行处理，不进入注册表。
+- 注册表只覆盖一次性命令；REPL / serve / headless 的入口选择未抽象。
+
 ## [0.8.2] - 2026-10-19
 
 > 0.8 Wave 2B1（基于 `release/0.8.2`，未发布）：统一工具执行管道，关闭 workflow / delegate 的权限与检查旁路。版本号由 1 在集成线统一写入。
