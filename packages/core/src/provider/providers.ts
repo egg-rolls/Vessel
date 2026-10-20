@@ -430,9 +430,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
       const choice = parsed.choices?.[0];
       const delta = choice?.delta;
 
-      // thinking 模式：思维链只累积，不回调 onChunk（不进事件流/TUI）
+      // thinking 模式：始终累积（下一轮请求 / 持久化需要）。
+      // 0.11.1：仅在显式 include_reasoning 时把增量回调节为 reasoning_delta；
+      // 默认不回调，与 0.11.0 完全一致（思维链不进事件流/TUI）。
       if (delta?.reasoning_content) {
         acc.appendReasoning(delta.reasoning_content);
+        if (req.include_reasoning === true) {
+          onChunk({ type: 'reasoning_delta', delta: delta.reasoning_content });
+        }
       }
 
       if (delta?.content) {

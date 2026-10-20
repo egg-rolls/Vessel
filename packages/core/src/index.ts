@@ -55,6 +55,7 @@ export {
   createToolPipeline,
   createToolPipelineFor,
   MemoryPluginHost,
+  PermissionTimeoutError,
   type ToolPipeline,
   type ToolPipelineDeps,
   type ToolPipelineFactoryDeps,

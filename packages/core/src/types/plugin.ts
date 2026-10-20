@@ -100,6 +100,11 @@ export interface AgentRuntimeOptions {
   /** 0.5：所属 tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
   tenantId?: string;
   /**
+   * 0.11.1：是否把思维的流式增量（`reasoning_delta`）经 `llm.stream.chunk` 发布。
+   * 默认 false（显式 opt-in）；false 时请求 / 事件与 0.11.0 完全一致。
+   */
+  includeReasoning?: boolean;
+  /**
    * 0.10：诊断日志 sink；缺省 noop。
    * 未注入且设置了 `VESSEL_DEBUG` 时，runtime 兜底为 stderr logger（level=debug）。
    */
