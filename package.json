@@ -1,6 +1,6 @@
 {
   "name": "vessel-agent",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Vessel — an embeddable, provider-agnostic multi-agent runtime and CLI harness",
   "license": "MIT",
   "type": "module",
@@ -51,11 +51,11 @@
   ],
   "dependencies": {
     "@promptctl/rich-js": "^0.10.0",
-    "@vessel-agent/config": "0.10.0",
-    "@vessel-agent/core": "0.10.0",
-    "@vessel-agent/permission": "0.10.0",
-    "@vessel-agent/serve": "0.10.0",
-    "@vessel-agent/tui": "0.10.0",
+    "@vessel-agent/config": "0.11.0",
+    "@vessel-agent/core": "0.11.0",
+    "@vessel-agent/permission": "0.11.0",
+    "@vessel-agent/serve": "0.11.0",
+    "@vessel-agent/tui": "0.11.0",
     "yaml": "^2.9.0"
   }
 }
