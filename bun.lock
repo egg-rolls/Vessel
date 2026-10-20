@@ -6,6 +6,11 @@
       "name": "vessel",
       "dependencies": {
         "@promptctl/rich-js": "^0.6.0",
+        "@vessel/config": "workspace:*",
+        "@vessel/core": "workspace:*",
+        "@vessel/permission": "workspace:*",
+        "@vessel/serve": "workspace:*",
+        "@vessel/tui": "workspace:*",
         "yaml": "^2.9.0",
       },
       "devDependencies": {
@@ -17,7 +22,7 @@
     },
     "packages/config": {
       "name": "@vessel/config",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -27,14 +32,14 @@
     },
     "packages/core": {
       "name": "@vessel/core",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "devDependencies": {
         "typescript": "^7.0.2",
       },
     },
     "packages/permission": {
       "name": "@vessel/permission",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -44,7 +49,7 @@
     },
     "packages/serve": {
       "name": "@vessel/serve",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -54,7 +59,7 @@
     },
     "packages/tui": {
       "name": "@vessel/tui",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@types/react": "^19.2.17",
         "@vessel/config": "workspace:*",
@@ -73,7 +78,7 @@
     },
     "plugins/evals/harness": {
       "name": "@vessel/evals",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
         "yaml": "^2.9.0",
@@ -84,7 +89,7 @@
     },
     "plugins/im/feishu": {
       "name": "@vessel/feishu",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@larksuiteoapi/node-sdk": "^1.76.0",
         "@vessel/core": "workspace:*",
@@ -95,7 +100,7 @@
     },
     "plugins/mcp/client": {
       "name": "@vessel/mcp-client",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -105,7 +110,7 @@
     },
     "plugins/observability/hook-logging": {
       "name": "@vessel/hook-logging",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -115,7 +120,7 @@
     },
     "plugins/provider/anthropic": {
       "name": "@vessel/provider-anthropic",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -125,7 +130,7 @@
     },
     "plugins/provider/openai": {
       "name": "@vessel/provider-openai",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -135,7 +140,7 @@
     },
     "plugins/security/guardrail-pii": {
       "name": "@vessel/guardrail-pii",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -145,7 +150,7 @@
     },
     "plugins/security/redact-secrets": {
       "name": "@vessel/redact-secrets",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -155,7 +160,7 @@
     },
     "plugins/security/tool-policy": {
       "name": "@vessel/tool-policy",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -165,7 +170,7 @@
     },
     "plugins/tools/basic-tools": {
       "name": "@vessel/basic-tools",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
         "@vessel/permission": "workspace:*",
@@ -176,7 +181,7 @@
     },
     "plugins/tools/delegate-task": {
       "name": "@vessel/delegate-task",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -186,7 +191,7 @@
     },
     "plugins/tools/team": {
       "name": "@vessel/team",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
       },
@@ -196,7 +201,7 @@
     },
     "plugins/workflow/engine": {
       "name": "@vessel/workflow",
-      "version": "0.5.0",
+      "version": "0.8.5",
       "dependencies": {
         "@vessel/core": "workspace:*",
         "yaml": "^2.9.0",
