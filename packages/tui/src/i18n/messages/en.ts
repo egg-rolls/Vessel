@@ -62,7 +62,6 @@ export const en: Record<MessageKey, string> = {
   'confirm.no': '[N]o',
   'confirm.always': '[A]lways',
   'confirm.hint': '←→ select · enter confirm · y/n/a quick · esc deny',
-  'confirm.secondsLeft': '{count}s left',
 
   // ── ask-user dialog ──
   'ask.customOption': 'Type your own answer',
@@ -233,8 +232,6 @@ export const en: Record<MessageKey, string> = {
   // ── permission ──
   'permission.question': 'Allow tool "{tool}" to run?',
   'permission.questionMcp': 'Allow tool "{tool}" from MCP server "{server}" to run?',
-  'permission.timeout': '⚠ Permission request timed out (120s); tool call was cancelled.',
-  'permission.expired': '⚠ Permission request expired (120s); ignored.',
   'permission.sessionOnly':
     'ℹ "{tool}" is approved for this session; config write-back is unavailable.',
   'permission.persisted': '✓ "{tool}" added to permission.auto_approve (effective after restart).',

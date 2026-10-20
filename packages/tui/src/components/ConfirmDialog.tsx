@@ -6,11 +6,11 @@
  * - 默认选中 **No**（Enter 不盲批准）；
  * - 展示工具入参摘要（例如 bash 的 command），否则用户不知道自己批准了什么；
  * - Esc = 拒绝；
- * - 显示与 core 一致的 120s 超时倒计时。
+ * - 不显示倒计时、不自动过期：等待用户应答或 Esc/Ctrl+C 取消（DECISION-024 Addendum A）。
  */
 
 import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { computeDialogWidth } from '../utils/dialog.js';
@@ -23,8 +23,6 @@ interface ConfirmDialogProps {
   details?: string[];
   /** 初始选中项，默认 'n' */
   defaultChoice?: ConfirmChoice;
-  /** 超时时间点（epoch ms）；传入则显示倒计时 */
-  expiresAt?: number;
   onConfirm: (answer: ConfirmChoice) => void;
 }
 
@@ -54,7 +52,6 @@ export function ConfirmDialog({
   question,
   details = [],
   defaultChoice = 'n',
-  expiresAt,
   onConfirm,
 }: ConfirmDialogProps) {
   const { stdout } = useStdout();
@@ -62,16 +59,6 @@ export function ConfirmDialog({
   const windowSize = useWindowSize();
   const width = computeDialogWidth(windowSize.columns > 0 ? windowSize.columns : stdout.columns);
   const [selected, setSelected] = useState<ConfirmChoice>(defaultChoice);
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    if (expiresAt === undefined) return;
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, [expiresAt]);
-
-  const remainingSeconds =
-    expiresAt !== undefined ? Math.max(0, Math.ceil((expiresAt - now) / 1000)) : null;
 
   useInput((inputChar, key) => {
     if (key.leftArrow) {
@@ -170,12 +157,7 @@ export function ConfirmDialog({
       </Box>
 
       <Box marginTop={1}>
-        <Text color={theme.faint}>
-          {t('confirm.hint')}
-          {remainingSeconds !== null
-            ? ` · ${t('confirm.secondsLeft', { count: remainingSeconds })}`
-            : ''}
-        </Text>
+        <Text color={theme.faint}>{t('confirm.hint')}</Text>
       </Box>
     </Box>
   );
