@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "vessel",
+      "name": "vessel-agent",
       "dependencies": {
         "@promptctl/rich-js": "^0.6.0",
         "@vessel/config": "0.9.0",
