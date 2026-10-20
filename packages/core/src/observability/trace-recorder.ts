@@ -76,7 +76,8 @@ export interface FileTraceRecorderOptions {
   /** 每 run 队列上限；默认 10000；0 = 不限 */
   maxPendingEvents?: number;
   /**
-   * 是否把 `llm.stream.chunk` 落盘；默认 false（0.10 R2-14）。
+   * 是否把流式 chunk 落盘；默认 false（0.10 R2-14）。
+   * 匹配 `llm.stream.chunk` 及带前缀的转发形式（如 `subagent.llm.stream.chunk`）。
    * 实时事件仍照常发布，只是不写 trace。
    */
   includeStreamChunks?: boolean;
@@ -90,6 +91,14 @@ function resolveMaxPending(value?: number): number {
 
 function truncate(value: unknown, max: number): string | undefined {
   return typeof value === 'string' ? value.slice(0, max) : undefined;
+}
+
+/**
+ * 流式 chunk 事件：`llm.stream.chunk` 或 `<prefix>.llm.stream.chunk`
+ * （0.14：subagent / 转发后的前缀也必须按同一开关过滤，否则会绕过 trace 策略）。
+ */
+function isStreamChunkEvent(type: string): boolean {
+  return type === 'llm.stream.chunk' || type.endsWith('.llm.stream.chunk');
 }
 
 /** metadata 档投影：先脱敏，再丢弃消息/参数/结果 */
@@ -177,7 +186,8 @@ export class FileTraceRecorder implements TraceRecorder {
     if (this.closed || this.level === 'off') return;
     // 0.10 R2-14：流式 chunk 数量大、逐片落盘性价比低，完整内容已在
     // `llm.request` / `llm.response`；实时事件发布不受影响，默认不进 trace。
-    if (!this.includeStreamChunks && event.type === 'llm.stream.chunk') return;
+    // 0.14：带前缀的转发事件（如 `subagent.llm.stream.chunk`）同样过滤。
+    if (!this.includeStreamChunks && isStreamChunkEvent(event.type)) return;
     if (!this.validRunId(event.run_id)) {
       this.emitWriteFailure(event.run_id, new Error('invalid_run_id'));
       return;

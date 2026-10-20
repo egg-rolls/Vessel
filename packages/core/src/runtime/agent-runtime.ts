@@ -27,6 +27,7 @@ import type { RunState, SessionBackend } from '../types/session.js';
 export type { RunOptions } from '../types/run.js';
 
 import type { ToolCall } from '../types/tool.js';
+import { toErrorEnvelope } from './error-envelope.js';
 import { GuardrailRunner } from './guardrail-runner.js';
 import { HookRunner } from './hook-runner.js';
 import {
@@ -324,6 +325,8 @@ export class AgentRuntime {
       startedAt: now,
       stats: createUsageStats(now),
       context: this.context,
+      // 0.14 P0：错误 envelope 的阶段来源；输入 guardrail / 进入 loop 后会被更新。
+      phase: 'input',
     };
     this.activeRun = execution;
     this.activeRunControl = {
@@ -572,6 +575,12 @@ export class AgentRuntime {
 
     // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
     const permissionTimeout = outcome.error instanceof PermissionTimeoutError;
+    // 0.14 P0：结构化错误 envelope 只附加到 run.failed；run.cancelled 保持原形状。
+    const envelope = cancelled
+      ? {}
+      : toErrorEnvelope(outcome.error, {
+          ...(execution.phase !== undefined ? { phase: execution.phase } : {}),
+        });
     this.publishEvent({
       type: cancelled ? 'run.cancelled' : 'run.failed',
       run_id: runId,
@@ -581,6 +590,7 @@ export class AgentRuntime {
         error: errorMessage,
         duration_ms: Date.now() - startedAt,
         ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
+        ...envelope,
         // 权限超时（DECISION-022 §2.2）：失败原因显式标注，供 UI / 观测区分
         ...(!cancelled && permissionTimeout ? { reason: 'permission_timeout' } : {}),
       },
@@ -934,6 +944,8 @@ export class AgentRuntime {
 
         // 执行工具调用：连续的 concurrencySafe 只读工具并批发车（0.6.1 P1），
         // 其余按原顺序串行；结果始终按原调用顺序写回上下文。
+        // 0.14 P0：工具阶段的失败（含管道错误）按 tool 归类。
+        execution.phase = 'tool';
         let cursor = 0;
         while (cursor < prepared.length) {
           const first = prepared[cursor];
@@ -1035,6 +1047,8 @@ export class AgentRuntime {
     let retried = false;
 
     while (true) {
+      // 0.14 P0：provider / 流式错误按 llm 阶段归类。
+      execution.phase = 'llm';
       // 调试元信息（0.10 R2-13）：只记数量/工具名/token 估算，绝不输出 prompt 正文
       this.logger.debug('llm request', {
         run_id: runId,
@@ -1151,6 +1165,9 @@ export class AgentRuntime {
       toolName: string;
       startTime: number;
       errorMessage: string;
+      /** 原始错误；缺省时用 errorMessage 构造，仅按文本分类 */
+      error?: unknown;
+      details?: Record<string, unknown>;
     },
   ): Promise<string> {
     // OnError hook 已由 HookRunner 隔离；这里再兜底，工具失败不得升级为 run 失败（C2）。
@@ -1175,6 +1192,12 @@ export class AgentRuntime {
         ts: Date.now(),
       });
     }
+    // 0.14 P0：保留原 error 文本，追加结构化 envelope（tool 阶段）。
+    const envelope = toErrorEnvelope(opts.error ?? opts.errorMessage, {
+      phase: 'tool',
+      category: 'tool',
+      details: { tool_name: opts.toolName, ...opts.details },
+    });
     this.publishEvent({
       type: 'tool.call.failed',
       run_id: execution.runId,
@@ -1184,6 +1207,7 @@ export class AgentRuntime {
         tool_name: opts.toolName,
         error: opts.errorMessage,
         duration_ms: Date.now() - opts.startTime,
+        ...envelope,
       },
       ts: Date.now(),
     });
@@ -1221,6 +1245,7 @@ export class AgentRuntime {
           toolName,
           startTime: entry.startedAt,
           errorMessage: entry.failureMessage,
+          error: entry.failureMessage,
         }),
       };
     }
@@ -1253,6 +1278,7 @@ export class AgentRuntime {
             toolName,
             startTime: entry.startedAt,
             errorMessage: result.error ?? result.content,
+            error: result.error ?? result.content,
           }),
         };
       }
@@ -1286,6 +1312,7 @@ export class AgentRuntime {
           toolName,
           startTime: entry.startedAt,
           errorMessage: errorText(error),
+          error,
         }),
       };
     }
@@ -1443,13 +1470,20 @@ export class AgentRuntime {
       ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
     };
 
+    // 0.14 P0：checkpoint 写失败按 checkpoint 阶段归类；成功后恢复原阶段。
+    const previousPhase = execution.phase;
+    execution.phase = 'checkpoint';
     try {
       await this.runStore.save(checkpoint);
     } catch (saveError) {
-      if (bestEffort) return;
+      if (bestEffort) {
+        execution.phase = previousPhase;
+        return;
+      }
       const detail = saveError instanceof Error ? saveError.message : String(saveError);
       throw new Error(`run_checkpoint_failed: ${detail}`);
     }
+    execution.phase = previousPhase;
 
     this.publishEvent({
       type: 'run.checkpoint',

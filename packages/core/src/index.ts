@@ -62,6 +62,7 @@ export {
   type ToolPipelineOptions,
   type ToolPipelineResult,
   type ToolPipelineStages,
+  toErrorEnvelope,
 } from './runtime/index.js';
 // 会话后端
 export {

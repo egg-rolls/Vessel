@@ -3,6 +3,7 @@
  * @module @vessel-agent/core/events
  */
 
+import type { ErrorEnvelope } from './error.js';
 import type { StreamChunk } from './provider.js';
 
 /** 基础事件 payload */
@@ -61,7 +62,7 @@ export interface ToolCallCompletedPayload extends BaseEventPayload {
 }
 
 /** 工具调用失败事件 payload */
-export interface ToolCallFailedPayload extends BaseEventPayload {
+export interface ToolCallFailedPayload extends BaseEventPayload, Partial<ErrorEnvelope> {
   run_id: string;
   tool_call_id: string;
   tool_name: string;
@@ -93,7 +94,7 @@ export interface RunCompletedPayload extends BaseEventPayload {
 }
 
 /** Run 失败事件 payload */
-export interface RunFailedPayload extends BaseEventPayload {
+export interface RunFailedPayload extends BaseEventPayload, Partial<ErrorEnvelope> {
   run_id: string;
   session_id?: string;
   error: string;
