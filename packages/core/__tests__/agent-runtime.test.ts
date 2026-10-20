@@ -839,6 +839,8 @@ describe('真实 token 语义（C-04）', () => {
   it('使用本次请求 token 而非累计值，不误触发 compact', async () => {
     let compacted = 0;
     const context = new MemoryContextManager({
+      // 显式钉住旧默认预算，回归场景不随全局默认值变化而失效
+      maxTokens: 4096,
       onCompact: () => {
         compacted++;
       },

@@ -140,6 +140,27 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
     expect(context.messages.some((m) => m.content.startsWith('[Auto Compact'))).toBe(true);
   });
 
+  it('defaults the context budget to 1,000,000 tokens', async () => {
+    const budgets: number[] = [];
+    const context = new MemoryContextManager({
+      autoCompact: true,
+      summarizer: async (_messages, options) => {
+        budgets.push(options.maxTokens);
+        return 'DEFAULT BUDGET';
+      },
+    });
+    seed(context);
+
+    await context.compactAsync();
+    expect(budgets).toEqual([1_000_000]);
+
+    // 默认阈值 0.8：800k 以下不触发，超过才压缩
+    context.updateRealTokens(799_999);
+    expect(await context.autoCompactAsync()).toBe(0);
+    context.updateRealTokens(800_001);
+    expect(await context.autoCompactAsync()).toBeGreaterThan(0);
+  });
+
   it('autoCompactAsync only runs above the threshold', async () => {
     let calls = 0;
     const context = new MemoryContextManager({

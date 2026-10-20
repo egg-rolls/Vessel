@@ -31,7 +31,7 @@ export class MemoryContextManager implements ContextManager {
 
   constructor(config: ContextConfig = {}) {
     this.config = {
-      maxTokens: config.maxTokens ?? 4096,
+      maxTokens: config.maxTokens ?? 1_000_000,
       maxMessages: config.maxMessages ?? 100,
       autoCompact: config.autoCompact ?? true,
       compactThreshold: config.compactThreshold ?? 0.8,
@@ -129,7 +129,7 @@ export class MemoryContextManager implements ContextManager {
       if (this.config.summarizer) {
         try {
           summary = await this.config.summarizer(plan.toSummarize, {
-            maxTokens: this.config.maxTokens ?? 4096,
+            maxTokens: this.config.maxTokens ?? 1_000_000,
           });
         } catch {
           // 摘要失败不应中断 run：退回占位符。
@@ -215,7 +215,7 @@ export class MemoryContextManager implements ContextManager {
 
   private shouldCompact(): boolean {
     const threshold = this.config.compactThreshold ?? 0.8;
-    const max = this.config.maxTokens ?? 4096;
+    const max = this.config.maxTokens ?? 1_000_000;
     return this.tokenCount > max * threshold;
   }
 }
