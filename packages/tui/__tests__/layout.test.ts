@@ -3,6 +3,7 @@ import {
   computeLiveLayout,
   type LiveMode,
   queuePreviewRows,
+  STATUS_BAR_ROWS,
   showsQuickHint,
   viewCapacity,
   viewChromeRows,
@@ -84,10 +85,10 @@ describe('computeLiveLayout', () => {
 
   it('24/20/15/11/10 行的容量扣除 chrome 与状态栏', () => {
     const cases = [
-      { rows: 24, mode: 'normal' as LiveMode, picker: 14, view: 14 },
-      { rows: 20, mode: 'normal' as LiveMode, picker: 10, view: 10 },
-      { rows: 15, mode: 'compact' as LiveMode, picker: 5, view: 5 },
-      { rows: 11, mode: 'minimal' as LiveMode, picker: 4, view: 4 },
+      { rows: 24, mode: 'normal' as LiveMode, picker: 12, view: 12 },
+      { rows: 20, mode: 'normal' as LiveMode, picker: 8, view: 8 },
+      { rows: 15, mode: 'compact' as LiveMode, picker: 3, view: 3 },
+      { rows: 11, mode: 'minimal' as LiveMode, picker: 2, view: 2 },
       { rows: 10, mode: 'hidden' as LiveMode, picker: 0, view: 0 },
     ];
     for (const expected of cases) {
@@ -146,18 +147,25 @@ describe('computeLiveLayout', () => {
     }
   });
 
-  it('队列行数从 live 预算扣除，矮终端仍保留输入行', () => {
+  it('队列行数（含边框）从 live 预算扣除', () => {
     expect(computeLiveLayout(15, 0).liveMaxHeight).toBe(3);
     expect(computeLiveLayout(15, 3).liveMaxHeight).toBe(1);
     expect(computeLiveLayout(11, 3).liveMaxHeight).toBe(0);
     expect(computeLiveLayout(24, 5).liveMaxHeight).toBe(6);
   });
 
-  it('queuePreviewRows：0 条 0 行，>3 条加尾行，矮终端 1 行', () => {
+  it('queuePreviewRows：0 条 0 行，>3 条加尾行，含 2 行边框', () => {
     expect(queuePreviewRows(0, 24)).toBe(0);
-    expect(queuePreviewRows(2, 24)).toBe(3);
-    expect(queuePreviewRows(5, 24)).toBe(5);
-    expect(queuePreviewRows(5, 10)).toBe(1);
+    expect(queuePreviewRows(2, 24)).toBe(5);
+    expect(queuePreviewRows(5, 24)).toBe(7);
+    expect(queuePreviewRows(5, 10)).toBe(3);
+  });
+
+  it('状态栏边框占 3 行；80x24 加框后 live 仍为正且不溢出', () => {
+    expect(STATUS_BAR_ROWS).toBe(3);
+    const layout = computeLiveLayout(24);
+    expect(layout.liveMaxHeight).toBeGreaterThan(0);
+    expect(viewChromeRows(layout.mode, 'view') + layout.viewMaxRows).toBeLessThanOrEqual(24);
   });
 
   it('hintRows 只在 >=18 行出现', () => {

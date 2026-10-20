@@ -204,6 +204,18 @@ export interface PermissionsControl {
   path?(): string;
 }
 
+// ── 0.11：设置控制面（tui 定义结构，asm 写用户 YAML） ──
+
+/**
+ * 用户设置读写（DECISION-021 §3.2）。
+ * 未注入时 `/settings` 只读展示当前 locale，不提供切换。
+ */
+export interface ReplSettingsControl {
+  language: 'zh-CN' | 'en';
+  /** 写入用户配置 `ui.language`；返回后由调用方立即 setLocale */
+  setLanguage(locale: 'zh-CN' | 'en'): Promise<void>;
+}
+
 // ── 0.5 F3：统一 RPC 入口与 tenant（tui 定义结构，asm 注入实现） ──
 
 /** 冻结错误码集合（DECISION-010 §2.3 / Addendum A-3 §10.2） */
@@ -375,4 +387,9 @@ export interface ReplContext {
 
   /** 权限持久化写回；未注入时 "always" 只在当前进程生效 */
   permissions?: PermissionsControl;
+
+  // ── 0.11 设置控制面（asm 注入；未注入时 /settings 只读） ──
+
+  /** 界面语言读写；写入用户配置 ui.language */
+  settings?: ReplSettingsControl;
 }

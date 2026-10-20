@@ -30,8 +30,8 @@ export interface LiveLayout {
   notice: string | null;
 }
 
-/** 状态栏固定占 1 行；视图/picker 打开时输入行不渲染，因此不扣输入行 */
-export const STATUS_BAR_ROWS = 1;
+/** 状态栏 = PanelFrame 上边框 + 内容 1 行 + 下边框，固定占 3 行 */
+export const STATUS_BAR_ROWS = 3;
 
 /**
  * normal / compact 每屏 chrome：
@@ -58,8 +58,11 @@ const MINIMAL_CHROME_ROWS: Record<ViewRowKind, number> = {
  */
 const NORMAL_ROW_MIN = 20;
 const NORMAL_ROW_MAX = 60;
-/** minimal 数据行封顶（设计 §4.2：3–5 行） */
-const MINIMAL_ROW_CAP = 5;
+/**
+ * minimal 数据行封顶（设计 §4.2：3–5 行）。
+ * 状态栏加框后占 3 行；封顶取 3，保证 14 行（minimal）→15 行（compact）容量不回落。
+ */
+const MINIMAL_ROW_CAP = 3;
 
 function normalizeRows(rows: number): number {
   return Math.max(1, Math.floor(Number.isFinite(rows) ? rows : 1));
@@ -120,13 +123,14 @@ export function showsQuickHint(rows: number): boolean {
 }
 
 /**
- * 纯函数：队列预览行数。
+ * 纯函数：队列预览行数（含 PanelFrame 上下边框 2 行）。
  * rows<12 只显示一行；否则标题 + 最多 3 条 + 「…and N more」。
  */
 export function queuePreviewRows(queuedCount: number, rows: number): number {
   if (!Number.isFinite(queuedCount) || queuedCount <= 0) return 0;
-  if (normalizeRows(rows) < 12) return 1;
-  return 1 + Math.min(3, Math.floor(queuedCount)) + (queuedCount > 3 ? 1 : 0);
+  const frameRows = 2;
+  if (normalizeRows(rows) < 12) return frameRows + 1;
+  return frameRows + 1 + Math.min(3, Math.floor(queuedCount)) + (queuedCount > 3 ? 1 : 0);
 }
 
 /**

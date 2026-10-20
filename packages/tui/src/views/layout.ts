@@ -18,8 +18,6 @@ import type { ViewColumn } from './types.js';
 
 export { displayWidth, fitCell, padToWidth, truncateToWidth, wrapToWidth };
 
-/** 视图最大宽度（含边框）；宽屏保留可读性上限 */
-export const VIEW_MAX_WIDTH = 160;
 /** 左右预留列数，避免贴边 */
 export const VIEW_HORIZONTAL_MARGIN = 2;
 /** 列间距（固定 2 空格） */
@@ -41,11 +39,11 @@ export const XL_COLUMNS = 120;
 
 export type WidthClass = 'xs' | 'sm' | 'md' | 'lg';
 
-/** 纯函数：视图宽度 `max(1, min(columns - 2, 160))` */
+/** 纯函数：视图宽度 `max(1, columns - 2)`；宽屏不再封顶 */
 export function viewWidth(columns: number | undefined): number {
   const cols =
     columns !== undefined && Number.isFinite(columns) && columns > 0 ? Math.floor(columns) : 80;
-  return Math.max(1, Math.min(cols - VIEW_HORIZONTAL_MARGIN, VIEW_MAX_WIDTH));
+  return Math.max(1, cols - VIEW_HORIZONTAL_MARGIN);
 }
 
 /** 内容区宽度 = 视图宽度 - 边框 2 - 左右 padding 2 */

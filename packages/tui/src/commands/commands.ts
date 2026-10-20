@@ -48,6 +48,7 @@ import {
   type SessionMessageLike,
   sessionsCommand,
 } from './sessions-command.js';
+import { settingsCommand } from './settings-command.js';
 import { tenantCommand } from './tenant-command.js';
 import { traceCommand } from './trace-command.js';
 import { workflowsCommand } from './workflows-command.js';
@@ -86,6 +87,11 @@ export interface CommandResult {
   nextState?: Partial<ReplState>;
   /** /clear 等需要 REPL 层清屏的命令置 true（替代硬编码字符串匹配） */
   clearScreen?: boolean;
+  /**
+   * 命令已切换运行中 locale（/settings language）。
+   * Ink 层据此重建命令注册表并重渲染，让状态栏 / 弹窗 / help 立即跟随。
+   */
+  localeChanged?: boolean;
   /** /runs resume：命令已启动恢复，REPL 层接管运行态（runStart/runEnd、取消、流式） */
   resumeRun?: DurableRunHandle;
   /** /workflows run|resume：命令已启动，REPL 层接管运行态与取消 */
@@ -245,6 +251,7 @@ export function createCommands(): CommandRegistry {
   reg.register(feishuCommand());
   reg.register(capabilitiesCommand());
   reg.register(configCommand());
+  reg.register(settingsCommand());
   reg.register(tenantCommand());
   reg.register(traceCommand());
   reg.register(sessionsCommand());

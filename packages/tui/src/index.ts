@@ -145,6 +145,11 @@ export {
 } from './error-classifier.js';
 export { formatPermissionQuestion, type ToolOrigin } from './renderer/tool-confirm.js';
 // Ink 版本（React 组件式 UI）
+export {
+  CLEAR_ON_START_SEQUENCE,
+  maybeClearOnStart,
+  shouldClearOnStart,
+} from './repl/clear-on-start.js';
 export { startInkRepl } from './repl/ink-repl.js';
 export {
   computeLiveLayout,
@@ -163,6 +168,7 @@ export {
 export {
   buildSessionSummary,
   buildStartupHeader,
+  frameStartupLines,
   type SessionSummaryFacts,
   STARTUP_TAGLINE,
   type StartupHeaderInput,
@@ -191,6 +197,7 @@ export type {
   MetricsSnapshotLike,
   PermissionsControl,
   ReplContext,
+  ReplSettingsControl,
   RpcClientLike,
   RpcErrorCodeLike,
   RpcErrorLike,
@@ -244,7 +251,6 @@ export {
   resolveColumns,
   scrollWindow,
   TABLE_PREFIX_WIDTH,
-  VIEW_MAX_WIDTH,
   viewContentWidth,
   viewWidth,
   widthClass,

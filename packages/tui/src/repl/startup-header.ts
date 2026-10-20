@@ -14,9 +14,11 @@
  * 启动头写入 <Static>，不占每帧 live 预算。
  */
 
+import { buildBorderParts } from '../components/PanelFrame.js';
 import { t } from '../i18n/index.js';
 import { formatModelLabel, shortSessionId } from '../utils/display-labels.js';
-import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
+import { displayWidth, padToWidth, truncateToWidth } from '../utils/text-layout.js';
+import { viewWidth } from '../views/layout.js';
 
 /** R0 §2.2 的 5 行块字，最宽 48 列 */
 export const WORDMARK_5: readonly string[] = [
@@ -85,8 +87,26 @@ function versionLine(version?: string): string {
   return version.startsWith('v') ? `VESSEL · ${version}` : `VESSEL · v${version}`;
 }
 
-/** 纯函数：生成启动头行（空数组 = 隐藏） */
-export function buildStartupHeader(input: StartupHeaderInput): string[] {
+/**
+ * 纯函数：把启动头包进单线 PanelFrame（与 StatusBar / QueuePreview 同款 round 边框）。
+ * 每行按 viewWidth - 4 截断并补齐，总宽恒定 = viewWidth(columns)。
+ */
+export function frameStartupLines(lines: string[], columns: number): string[] {
+  if (lines.length === 0) return [];
+  const width = viewWidth(columns);
+  const inner = Math.max(1, width - 4);
+  const top = buildBorderParts(width, undefined, 'round', 'top');
+  const bottom = buildBorderParts(width, undefined, 'round', 'bottom');
+  const body = lines.map((line) => `│ ${padToWidth(truncateToWidth(line, inner), inner)} │`);
+  return [
+    `${top.lead}${top.fill}${top.tail}`,
+    ...body,
+    `${bottom.lead}${bottom.fill}${bottom.tail}`,
+  ];
+}
+
+/** 纯函数：未加框的启动头行（内部实现；对外统一走 buildStartupHeader） */
+function buildStartupHeaderBody(input: StartupHeaderInput): string[] {
   const columns = normalize(input.columns, 80);
   const rows = normalize(input.rows, 24);
   const summary = input.summary
@@ -120,4 +140,9 @@ export function buildStartupHeader(input: StartupHeaderInput): string[] {
   if (rows >= 10) return [versionLine(input.version)];
 
   return [];
+}
+
+/** 纯函数：生成启动头行（含单线边框；空数组 = 隐藏） */
+export function buildStartupHeader(input: StartupHeaderInput): string[] {
+  return frameStartupLines(buildStartupHeaderBody(input), normalize(input.columns, 80));
 }
