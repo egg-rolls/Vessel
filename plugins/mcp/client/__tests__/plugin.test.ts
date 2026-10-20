@@ -2,13 +2,29 @@
  * 插件级行为：多 server 隔离、生命周期、控制面、命名冲突。
  */
 
-import { describe, expect, it, spyOn } from 'bun:test';
+import { describe, expect, it } from 'bun:test';
 import { fileURLToPath } from 'node:url';
 import { MemoryEventStream, MemoryPluginHost, type ToolContext } from '@vessel/core';
 import { createMcpPlugin } from '../src/plugin';
 import { McpPluginError, type McpServerConfig } from '../src/types';
 
 const FIXTURE = fileURLToPath(new URL('./fixtures/mock-stdio-server.ts', import.meta.url));
+
+/** 捕获结构化 stderr 告警 */
+function captureStderr(): { lines: string[]; restore: () => void } {
+  const lines: string[] = [];
+  const original = process.stderr.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    lines.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  return {
+    lines,
+    restore: () => {
+      process.stderr.write = original;
+    },
+  };
+}
 
 function stdioServer(overrides: Partial<McpServerConfig> = {}): McpServerConfig {
   return {
@@ -277,23 +293,78 @@ describe('createMcpPlugin', () => {
       inputSchema: { type: 'object', properties: {} },
       handler: async () => 'original',
     });
-    const warn = spyOn(console, 'warn').mockImplementation(() => {});
-    const plugin = createMcpPlugin({ servers: [stdioServer()] });
+    const events = new MemoryEventStream();
+    const capture = captureStderr();
+    const plugin = createMcpPlugin({ servers: [stdioServer()], events });
     try {
       await plugin.install(host);
 
-      const collisions = warn.mock.calls
-        .map((call) => String(call[0]))
-        .filter((line) => line.includes('mcp__mock__echo'));
-      expect(collisions).toHaveLength(1);
-      expect(collisions[0]).toContain('server "mock"');
-      expect(collisions[0]).toContain('existing tool is kept');
+      const warnings = capture.lines
+        .filter((line) => line.includes('mcp__mock__echo'))
+        .map(
+          (line) =>
+            JSON.parse(line) as {
+              level: string;
+              message: string;
+              fields: Record<string, unknown>;
+            },
+        );
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatchObject({
+        level: 'warn',
+        fields: { server: 'mock', tool: 'mcp__mock__echo' },
+      });
+      expect(warnings[0]?.message).toContain('existing tool is kept');
+
+      const event = events
+        .getHistory()
+        .find(
+          (item) =>
+            item.type === 'mcp.warning' &&
+            (item.data as { tool?: string }).tool === 'mcp__mock__echo',
+        );
+      expect(event?.data).toMatchObject({ server: 'mock', tool: 'mcp__mock__echo' });
 
       expect(await host.getTool('mcp__mock__echo')?.handler({}, makeContext())).toBe('original');
       expect(host.getTool('mcp__mock__add')).toBeDefined();
     } finally {
+      capture.restore();
       await plugin.close();
-      warn.mockRestore();
+    }
+  });
+
+  it('告警写 stderr / mcp.warning 事件时不含 URL 凭据与密钥', async () => {
+    const events = new MemoryEventStream();
+    const capture = captureStderr();
+    const plugin = createMcpPlugin({
+      servers: [
+        {
+          name: 'sk-abcdefghijklmnop',
+          transport: 'http',
+          // 无效端口让 URL 解析失败，错误正文会回显完整 URL
+          url: 'http://user:pass@example.com:99999/mcp?token=supersecret',
+        },
+      ],
+      events,
+    });
+    const host = new MemoryPluginHost();
+    try {
+      await plugin.install(host);
+      const text = capture.lines.join('\n');
+      expect(text).toContain('MCP server configuration is invalid');
+      expect(text).not.toContain('abcdefghijklmnop');
+      expect(text).not.toContain('pass@');
+      expect(text).not.toContain('supersecret');
+
+      const warning = events.getHistory().find((event) => event.type === 'mcp.warning');
+      expect(warning).toBeDefined();
+      const serialized = JSON.stringify(warning?.data);
+      expect(serialized).not.toContain('abcdefghijklmnop');
+      expect(serialized).not.toContain('pass@');
+      expect(serialized).not.toContain('supersecret');
+    } finally {
+      capture.restore();
+      await plugin.close();
     }
   });
 });

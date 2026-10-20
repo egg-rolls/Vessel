@@ -6,6 +6,7 @@
 
 import type { EventStream, PluginHost, ToolDefinition } from '@vessel/core';
 import { formatError } from './json-rpc.js';
+import { sanitizeLogText, warnMcp } from './logging.js';
 import { exposedToolName } from './naming.js';
 import { McpServerConnection } from './server-connection.js';
 import {
@@ -72,6 +73,20 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     });
   }
 
+  /** 结构化告警：stderr + mcp.warning 事件；事件字段同样去掉 URL 内嵌凭据 */
+  function warn(server: string, message: string, fields: Record<string, unknown> = {}): void {
+    warnMcp(server, message, fields);
+    const safeFields: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(fields)) {
+      safeFields[key] = typeof value === 'string' ? sanitizeLogText(value) : value;
+    }
+    publish('mcp.warning', {
+      server: sanitizeLogText(server),
+      warning: sanitizeLogText(message),
+      ...safeFields,
+    });
+  }
+
   function registerTools(pluginHost: PluginHost, entry: ServerEntry): void {
     const connection = entry.connection;
     if (!connection) return;
@@ -83,9 +98,10 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
       if (pluginHost.getTool(exposed) !== undefined) {
         // 同一插件的重复重连不算冲突；与既有工具（含其它 server）碰撞才告警
         if (!entry.registered.includes(exposed)) {
-          console.warn(
-            `Skipping MCP tool "${exposed}" from server "${entry.config.name}": ` +
-              'a tool with this name is already registered; the existing tool is kept',
+          warn(
+            entry.config.name,
+            'Skipping MCP tool: a tool with this name is already registered; the existing tool is kept',
+            { tool: exposed },
           );
         }
         continue;
@@ -120,9 +136,10 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
     const register = (definition: ToolDefinition): void => {
       if (pluginHost.getTool(definition.name) !== undefined) {
         if (!entry.registered.includes(definition.name)) {
-          console.warn(
-            `Skipping MCP tool "${definition.name}" from server "${entry.config.name}": ` +
-              'a tool with this name is already registered; the existing tool is kept',
+          warn(
+            entry.config.name,
+            'Skipping MCP tool: a tool with this name is already registered; the existing tool is kept',
+            { tool: definition.name },
           );
         }
         return;
@@ -179,6 +196,9 @@ export function createMcpPlugin(options: McpPluginOptions): McpClientPlugin {
 
     for (const entry of entries) {
       if (entry.configError !== undefined) {
+        warn(entry.config.name, 'MCP server configuration is invalid', {
+          error: entry.configError,
+        });
         publish('mcp.server.failed', {
           server: entry.config.name,
           transport: entry.config.transport,

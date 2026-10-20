@@ -7,6 +7,7 @@
 
 import type { EventStream } from '@vessel/core';
 import { formatError, isRecord, JsonRpcError, McpTransportError } from './json-rpc.js';
+import { warnMcp } from './logging.js';
 import { createTransport } from './transport.js';
 import type {
   McpPromptDef,
@@ -100,17 +101,19 @@ export class McpServerConnection {
       this.toolList = await this.listAllTools(transport);
       if (this.supportsResources) {
         this.resourceList = await this.listAllResources(transport).catch((error: unknown) => {
-          console.warn(
-            `MCP server "${this.config.name}" resources/list failed: ${formatError(error)}`,
-          );
+          this.warn('MCP resources/list failed', {
+            capability: 'resources',
+            error: formatError(error),
+          });
           return [];
         });
       }
       if (this.supportsPrompts) {
         this.promptList = await this.listAllPrompts(transport).catch((error: unknown) => {
-          console.warn(
-            `MCP server "${this.config.name}" prompts/list failed: ${formatError(error)}`,
-          );
+          this.warn('MCP prompts/list failed', {
+            capability: 'prompts',
+            error: formatError(error),
+          });
           return [];
         });
       }
@@ -128,6 +131,7 @@ export class McpServerConnection {
     } catch (error) {
       this.state = 'failed';
       this.error = formatError(error);
+      this.warn('MCP server connection failed', { error: this.error });
       this.publish('mcp.server.failed', {
         server: this.config.name,
         transport: this.config.transport,
@@ -264,9 +268,9 @@ export class McpServerConnection {
     this.protocolVersion = result.protocolVersion;
     if (isRecord(result.capabilities)) this.capabilities = result.capabilities;
     if (!KNOWN_PROTOCOL_VERSIONS.has(result.protocolVersion)) {
-      console.warn(
-        `MCP server "${this.config.name}" negotiated unsupported protocol version "${result.protocolVersion}"; continuing`,
-      );
+      this.warn('MCP server negotiated an unsupported protocol version; continuing', {
+        protocolVersion: result.protocolVersion,
+      });
     }
 
     if (isRecord(result.serverInfo)) {
@@ -317,7 +321,9 @@ export class McpServerConnection {
         if (!isRecord(item)) continue;
         const name = typeof item.name === 'string' ? item.name : '';
         if (name === '') {
-          console.warn(`MCP server "${this.config.name}" returned a tool without a name; skipping`);
+          this.warn('MCP server returned a tool without a name; skipping', {
+            capability: 'tools',
+          });
           continue;
         }
         if (seen.has(name)) continue;
@@ -332,16 +338,17 @@ export class McpServerConnection {
       const next = result.nextCursor;
       if (typeof next !== 'string' || next === '') break;
       if (next === cursor) {
-        console.warn(
-          `MCP server "${this.config.name}" returned a repeating tools cursor; stopping`,
-        );
+        this.warn('MCP server returned a repeating tools cursor; stopping', {
+          capability: 'tools',
+        });
         break;
       }
       cursor = next;
       if (page === MAX_TOOL_PAGES - 1) {
-        console.warn(
-          `MCP server "${this.config.name}" exceeded ${MAX_TOOL_PAGES} tool pages; stopping`,
-        );
+        this.warn('MCP server exceeded the tool page limit; stopping', {
+          capability: 'tools',
+          max_pages: MAX_TOOL_PAGES,
+        });
       }
     }
 
@@ -474,6 +481,17 @@ export class McpServerConnection {
       },
       runId,
     );
+  }
+
+  /** 结构化告警：stderr 总是写；有事件总线时同时发 mcp.warning */
+  private warn(message: string, fields: Record<string, unknown> = {}): void {
+    warnMcp(this.config.name, message, fields);
+    this.publish('mcp.warning', {
+      server: this.config.name,
+      transport: this.config.transport,
+      warning: message,
+      ...fields,
+    });
   }
 
   private publish(type: string, data: Record<string, unknown>, runId?: string): void {

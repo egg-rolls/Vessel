@@ -58,6 +58,85 @@ describe('withRetry (anthropic)', () => {
     ).rejects.toThrow(/user cancelled/);
     expect(calls).toBe(1);
   });
+
+  it('onRetry 记录每次重试的 attempt / delay / status', async () => {
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat() {
+        calls += 1;
+        if (calls === 1) throw new Error('Anthropic API error: 429 - rate limited');
+        if (calls === 2) throw new Error('Anthropic API error: 503 - unavailable');
+        return OK;
+      },
+    };
+    const events: Array<{
+      attempt: number;
+      delayMs: number;
+      status?: number;
+      errorName: string;
+      provider?: string;
+    }> = [];
+
+    const wrapped = withRetry(provider, {
+      maxRetries: 3,
+      baseDelayMs: 5,
+      jitter: 0,
+      sleep: async () => {},
+      provider: 'anthropic',
+      onRetry: (event) => events.push(event),
+    });
+
+    await wrapped.chat({ messages: [], model: 'm' });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      attempt: 1,
+      delayMs: 5,
+      status: 429,
+      errorName: 'Error',
+      provider: 'anthropic',
+    });
+    expect(events[1]).toMatchObject({ attempt: 2, delayMs: 10, status: 503 });
+  });
+
+  it('未注入 onRetry 时写结构化 stderr，且不含错误正文', async () => {
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat() {
+        calls += 1;
+        if (calls === 1) {
+          throw new Error('Anthropic API error: 529 - overloaded sk-abcdefghijklmnop');
+        }
+        return OK;
+      },
+    };
+    const lines: string[] = [];
+    const originalWrite = process.stderr.write;
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      lines.push(typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+
+    try {
+      const wrapped = withRetry(provider, {
+        maxRetries: 1,
+        baseDelayMs: 1,
+        jitter: 0,
+        sleep: async () => {},
+      });
+      await wrapped.chat({ messages: [], model: 'm' });
+    } finally {
+      process.stderr.write = originalWrite;
+    }
+
+    const line = lines.find((entry) => entry.includes('provider retry'));
+    if (line === undefined) throw new Error('retry log line not found');
+    expect(JSON.parse(line)).toMatchObject({
+      level: 'warn',
+      message: 'provider retry',
+      fields: { attempt: 1, status: 529, error_name: 'Error' },
+    });
+    expect(line).not.toContain('abcdefghijklmnop');
+  });
 });
 
 describe('provider-anthropic 插件装配重试', () => {

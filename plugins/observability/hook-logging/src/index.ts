@@ -2,7 +2,8 @@
  * @vessel/hook-logging - 日志 Hook 插件
  * @module @vessel/hook-logging
  *
- * 记录 Agent 运行过程中的所有操作日志
+ * 记录 Agent 运行过程中的所有操作日志。默认写 stderr（stdout 留给命令结果），
+ * 可注入 sink 替换输出目标；不记录 payload / 完整 ctx。
  */
 
 import type { Hook, HookContext, Plugin, PluginHost } from '@vessel/core';
@@ -23,6 +24,8 @@ export interface LoggingHookConfig {
   maxEntries?: number;
   /** 自定义日志格式器 */
   formatter?: (entry: LogEntry) => string;
+  /** 输出 sink；缺省写 stderr（一行一条）。注入后不再写 stderr */
+  sink?: (line: string) => void;
 }
 
 /** 默认保留条数 */
@@ -91,6 +94,7 @@ export class LoggingHook implements Hook {
       includeRunId: config.includeRunId ?? true,
       maxEntries: config.maxEntries ?? DEFAULT_MAX_ENTRIES,
       formatter: config.formatter,
+      sink: config.sink,
     };
   }
 
@@ -131,7 +135,16 @@ export class LoggingHook implements Hook {
       ? this.config.formatter(safeEntry)
       : this.formatEntry(safeEntry);
 
-    console.log(formatted);
+    try {
+      if (this.config.sink) {
+        this.config.sink(formatted);
+      } else {
+        // stdout 只放 UX/结果/JSON；诊断日志固定走 stderr
+        process.stderr.write(`${formatted}\n`);
+      }
+    } catch {
+      // 日志 sink 故障不得影响 hook / run
+    }
   }
 
   /**

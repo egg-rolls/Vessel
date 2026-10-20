@@ -7,7 +7,7 @@
 
 import type { Plugin, PluginHost } from '@vessel/core';
 import { OpenAICompatibleProvider } from '@vessel/core';
-import { resolveRetryOptions, withRetry } from './retry.js';
+import { type RetryEvent, type RetryOptions, resolveRetryOptions, withRetry } from './retry.js';
 import { withTimeout } from './timeout.js';
 
 /** E1：插件级配置（core Plugin 类型尚未声明第二参数时的窄类型） */
@@ -34,6 +34,18 @@ function normalizeBaseUrl(url: string): string {
   return url.replace(/\/+$/, '');
 }
 
+/** 兼容 core factory 的 snake_case 与程序化注入的 camelCase */
+function readTimeoutMs(config: Record<string, unknown>): number | undefined {
+  const value = config.timeout_ms ?? config.timeoutMs;
+  return typeof value === 'number' ? value : undefined;
+}
+
+/** 程序化注入的重试观测回调（YAML 配置无法携带函数） */
+function readRetryHook(config: Record<string, unknown>): ((event: RetryEvent) => void) | undefined {
+  const hook = config.on_retry ?? config.onRetry;
+  return typeof hook === 'function' ? (hook as (event: RetryEvent) => void) : undefined;
+}
+
 const plugin: Plugin = {
   name: 'provider-openai',
   install(host: PluginHost, options?: ProviderPluginOptions) {
@@ -51,11 +63,11 @@ const plugin: Plugin = {
           temperature: c.temperature as number | undefined,
           max_tokens: c.max_tokens as number | undefined,
         });
+        const retryOptions: RetryOptions = { ...resolveRetryOptions(c), provider: p.name };
+        const onRetry = readRetryHook(c);
+        if (onRetry) retryOptions.onRetry = onRetry;
         // timeout 在外层：总时限覆盖全部重试与退避
-        return withTimeout(
-          withRetry(provider, resolveRetryOptions(c)),
-          c.timeout_ms as number | undefined,
-        );
+        return withTimeout(withRetry(provider, retryOptions), readTimeoutMs(c));
       });
     }
   },

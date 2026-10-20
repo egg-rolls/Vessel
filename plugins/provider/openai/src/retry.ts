@@ -5,7 +5,12 @@
  * 与 timeout 组合时放在内层：外层 timeout 是整个请求（含重试）的总时限。
  */
 
-import type { ChatRequest, LLMProvider, LLMResponse } from '@vessel/core';
+import {
+  type ChatRequest,
+  createStderrLogger,
+  type LLMProvider,
+  type LLMResponse,
+} from '@vessel/core';
 
 /** 默认重试次数（不含首次请求） */
 export const DEFAULT_MAX_RETRIES = 3;
@@ -16,6 +21,20 @@ export const DEFAULT_RETRY_MAX_DELAY_MS = 30_000;
 /** 默认抖动比例：实际延迟在 ±jitter 区间内随机 */
 export const DEFAULT_RETRY_JITTER = 0.2;
 
+/** 一次重试的可观测记录；不含错误正文 / 请求体，避免泄漏凭据 */
+export interface RetryEvent {
+  /** 即将进行的第 N 次重试（1 基，不含首次请求） */
+  attempt: number;
+  maxRetries: number;
+  delayMs: number;
+  /** 触发重试的 HTTP 状态码（能从错误中解析时） */
+  status?: number;
+  /** 错误类型名（不记录 message） */
+  errorName: string;
+  /** provider 名（如 openai / anthropic） */
+  provider?: string;
+}
+
 export interface RetryOptions {
   /** 重试次数（不含首次）；<= 0 关闭重试 */
   maxRetries?: number;
@@ -25,6 +44,32 @@ export interface RetryOptions {
   jitter?: number;
   /** 测试注入点：默认 setTimeout */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** 重试观测回调；缺省写结构化 stderr。抛错会被吞掉 */
+  onRetry?: (event: RetryEvent) => void;
+  /** 日志/回调里的 provider 标识 */
+  provider?: string;
+}
+
+const retryLogger = createStderrLogger();
+
+/** 记录一次重试；观测失败不得改变重试语义 */
+function recordRetry(options: RetryOptions, event: RetryEvent): void {
+  try {
+    if (options.onRetry) {
+      options.onRetry(event);
+      return;
+    }
+    retryLogger.warn('provider retry', {
+      attempt: event.attempt,
+      max_retries: event.maxRetries,
+      delay_ms: event.delayMs,
+      ...(event.status !== undefined ? { status: event.status } : {}),
+      error_name: event.errorName,
+      ...(event.provider !== undefined ? { provider: event.provider } : {}),
+    });
+  } catch {
+    // 日志 sink / 回调故障不得影响重试
+  }
 }
 
 /** 从配置读取有限数字 */
@@ -142,7 +187,17 @@ export function withRetry(provider: LLMProvider, options: RetryOptions = {}): LL
           if (req.signal?.aborted) throw abortError(req.signal);
           if (emitted) throw error;
           if (attempt >= maxRetries || !isRetryableError(error)) throw error;
-          await sleep(delayFor(attempt, timing), req.signal);
+          const delayMs = delayFor(attempt, timing);
+          const status = statusOf(error);
+          recordRetry(options, {
+            attempt: attempt + 1,
+            maxRetries,
+            delayMs,
+            ...(status !== undefined ? { status } : {}),
+            errorName: error instanceof Error ? error.name : typeof error,
+            ...(options.provider !== undefined ? { provider: options.provider } : {}),
+          });
+          await sleep(delayMs, req.signal);
           attempt += 1;
         }
       }
