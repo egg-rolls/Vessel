@@ -5,6 +5,7 @@
 
 export type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
 export { AgentRuntime } from './agent-runtime.js';
+export { toErrorEnvelope } from './error-envelope.js';
 export { PermissionTimeoutError } from './permission-policy.js';
 export { MemoryPluginHost } from './plugin-host.js';
 export {

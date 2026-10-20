@@ -267,6 +267,37 @@ describe('FileTraceRecorder hardening (0.10 R2-14)', () => {
     expect(included.map((e) => e.type)).toEqual(['llm.stream.chunk']);
   });
 
+  it('filters prefixed forwarded stream chunks with the same switch (0.14)', async () => {
+    const dir = tempDir();
+    const recorder = new FileTraceRecorder({ dir });
+    recorder.append(event('r1', 'run.started'));
+    recorder.append(event('r1', 'llm.stream.chunk', { chunk: { type: 'text_delta', delta: 'a' } }));
+    recorder.append(
+      event('r1', 'subagent.llm.stream.chunk', { chunk: { type: 'text_delta', delta: 'b' } }),
+    );
+    recorder.append(
+      event('r1', 'agent.subagent.llm.stream.chunk', { chunk: { type: 'text_delta', delta: 'c' } }),
+    );
+    recorder.append(event('r1', 'run.completed'));
+    await recorder.flush();
+    await recorder.close();
+
+    const defaults = await readEvents(join(dir, 'r1.jsonl'));
+    expect(defaults.map((e) => e.type)).toEqual(['run.started', 'run.completed']);
+
+    const optedDir = tempDir();
+    const opted = new FileTraceRecorder({ dir: optedDir, includeStreamChunks: true });
+    opted.append(event('r2', 'llm.stream.chunk', { chunk: { type: 'text_delta', delta: 'a' } }));
+    opted.append(
+      event('r2', 'subagent.llm.stream.chunk', { chunk: { type: 'text_delta', delta: 'b' } }),
+    );
+    await opted.flush();
+    await opted.close();
+
+    const included = await readEvents(join(optedDir, 'r2.jsonl'));
+    expect(included.map((e) => e.type)).toEqual(['llm.stream.chunk', 'subagent.llm.stream.chunk']);
+  });
+
   it('creates trace files owner-only (mode 600 on POSIX)', async () => {
     if (process.platform === 'win32') return; // Windows 不受 mode 约束；由 POSIX CI 覆盖
     const dir = tempDir();

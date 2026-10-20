@@ -97,6 +97,11 @@ describe('权限超时致命化', () => {
     expect(failed?.data).toMatchObject({
       reason: 'permission_timeout',
       error: expect.stringContaining('timed out'),
+      // 0.14 P0（DECISION-025 §1.2）：结构化 envelope 为 additive 字段
+      error_code: 'permission_timeout',
+      category: 'permission',
+      phase: 'permission',
+      retryable: false,
     });
   });
 

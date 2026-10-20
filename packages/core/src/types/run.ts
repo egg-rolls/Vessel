@@ -4,6 +4,7 @@
  */
 
 import type { ContextManager } from './context.js';
+import type { ErrorPhase } from './error.js';
 import type { UsageStats } from './limits.js';
 import type { Message } from './provider.js';
 
@@ -24,6 +25,11 @@ export interface RunExecution {
   startedAt: number;
   stats: UsageStats;
   context: ContextManager;
+  /**
+   * 当前执行阶段（0.14 P0，内部使用）：失败时供 `toErrorEnvelope` 标注 `phase`。
+   * 调用方不应依赖该字段的实时性。
+   */
+  phase?: ErrorPhase;
 }
 
 /**
