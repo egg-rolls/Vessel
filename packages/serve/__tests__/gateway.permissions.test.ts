@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MemoryEventStream, MemoryPluginHost } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { RunStatus } from '../src/protocol';
 import { createGateway, createRuntime, TestWs, ToolCallingProvider, waitUntil } from './helpers';
 
 /** 构造带 danger_tool 的 gateway；工具无 checkPermission，走 runtime 默认 'ask' */
-async function makePermissionGateway() {
+async function makePermissionGateway(interactionsDir?: string) {
   const events = new MemoryEventStream();
   const pluginHost = new MemoryPluginHost();
   const state = { executed: false };
@@ -24,7 +27,12 @@ async function makePermissionGateway() {
     provider: new ToolCallingProvider('danger_tool'),
     permission: { default: 'ask' },
   });
-  const gw = createGateway({ events, runtime, pluginHost });
+  const gw = createGateway({
+    events,
+    runtime,
+    pluginHost,
+    ...(interactionsDir !== undefined ? { interactionsDir } : {}),
+  });
   return { events, gw, state };
 }
 
@@ -178,6 +186,34 @@ describe('gateway permissions', () => {
     // WS legacy 路径把 invalid_params 映射为 0.4 的 invalid_request。
     expect(message).toContain('invalid_request');
     expect(message).toContain('scope');
+  });
+
+  it('persists pending interactions when interactionsDir is configured', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vessel-gateway-interactions-'));
+    try {
+      const { gw } = await makePermissionGateway(dir);
+      gateways.push(gw);
+      const client = await connect(gw);
+
+      await submit(gw, 'please run');
+      const request = await client.nextEvent('tool.permission.request');
+      expect(typeof request.requestId).toBe('string');
+
+      const path = join(dir, 'interactions-default.json');
+      await waitUntil(
+        () => existsSync(path) && readFileSync(path, 'utf8').includes('"status": "pending"'),
+      );
+      const file = JSON.parse(readFileSync(path, 'utf8')) as {
+        interactions: Array<Record<string, unknown>>;
+      };
+      expect(file.interactions[0]).toMatchObject({
+        requestId: request.requestId,
+        tool: 'danger_tool',
+        status: 'pending',
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns not_found for an unknown permission request id', async () => {
