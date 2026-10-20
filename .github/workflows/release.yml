@@ -81,15 +81,25 @@ jobs:
             exit 1
           fi
 
-      # 发布干跑：任何检查失败都会让 verify job 失败，publish-npm 依赖它，
-      # 因此不会进入 npm publish。
-      - name: Release dry run
-        run: bun run scripts/release-dry-run.ts
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      # 根 tarball 的 files 包含 apps/web/dist；dist 被 .gitignore 忽略，
+      # 因此发布前必须先构建，否则 tarball 里没有 Web 控制台。
+      - name: Build web console
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      # 发布干跑：任何检查失败都会让 verify job 失败，publish-npm 依赖它，
+      # 因此不会进入 npm publish。
+      - name: Release dry run
+        run: bun run scripts/release-dry-run.ts
 
       # 安装解析 smoke：18 个子包 + 根 tarball 真正装到临时目录并运行
       # `vessel --version` / `vessel --tools`（mock，无 Key，不发布）。
@@ -133,6 +143,16 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      # 根 tarball 的 files 包含 apps/web/dist；publish-npm 是独立 checkout，
+      # 必须在这里重新构建，否则发布出去的根包缺少 Web 控制台。
+      - name: Build web console
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
 
       - name: Publish public packages
         shell: bash

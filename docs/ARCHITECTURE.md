@@ -1794,7 +1794,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 - **根包**：`package.json` 的 `name` 为 `vessel-agent`，bin 仍是 `vessel`；根 `files` 排除 `**/node_modules/**`、`__tests__`、`*.test.ts(x)`，并包含 `apps/web/dist`。
 - **子包**：18 个可发布子包统一 `files: ["src"]` + `license` / `repository` / `engines`。
-- **安装 smoke**：`scripts/smoke-install.ts` 对 18 个子包 + 根 tarball 执行 `npm pack`，用本地 `file:` `overrides` 安装并运行 `vessel --version` / `VESSEL_MOCK=1 vessel --tools`。CI 的 `install-smoke` job 与 `release.yml` 的 `verify` 都会执行；POSIX / Node 22，Windows 默认跳过。
+- **安装 smoke**：`scripts/smoke-install.ts` 对 18 个子包 + 根 tarball 执行 `npm pack`，用本地 `file:` `overrides` 安装并运行 `vessel --version` / `VESSEL_MOCK=1 vessel --tools`。根包打包前必须已有 `apps/web/dist/index.html`，且根 tarball 的文件清单必须包含它；CI 的 `install-smoke` job、`release.yml` 的 `verify` 与 `publish-npm` 都先构建 Web 控制台。POSIX / Node 22，Windows 默认跳过。
 - **发布顺序**：`core → permission → config → serve → tui → plugins`，最后发布根包 `vessel-agent`；`verify` 失败则不进入 `publish-npm`。
 
 ### 29.5 CLI 本地化
@@ -1811,4 +1811,4 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - provider 插件没有事件总线，重试观测只能通过 `onRetry` 或 stderr，不发布 core 事件。
 - 安装 smoke 只在 POSIX / Node 22 运行；Windows 安装未验证。
 - CLI 本地化不覆盖命令数据输出；Web 前端未本地化。
-- 版本号 bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍是上一版本。
+- 0.10.0 仍未 tag、未 `npm publish`、未合并 `main`；根包与子包已 bump 到 `0.10.0`。

@@ -28,7 +28,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 **alpha。当前开发线 `release/0.10.0`（基线 `release/0.9.0 = 23261b3`），未发布。** 0.1 ~ 0.10 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.10 的发版硬化（安全 / 配置 / 首启 / 错误呈现 / 可观测 / 打包 / 语言）已实现；本文只写已合入当前分支的行为。
 
-**包结构**（bun workspaces monorepo）：`@vessel/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前为 `0.9.0`（0.10.0 的 bump 由 1 在集成线统一写入），各包 manifest 同步，不在文档里维护副本。
+**包结构**（bun workspaces monorepo）：`@vessel/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前为 `0.10.0`，各包 manifest 同步，不在文档里维护副本。
 
 **语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 前端未本地化。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   buildOverrides,
+  checkRootIncludesWeb,
   checkToolsOutput,
   checkVersionOutput,
   orderPackages,
@@ -8,6 +9,7 @@ import {
   parsePackOutput,
   type SmokePackage,
   type TarballInfo,
+  WEB_DIST_ENTRY,
 } from '../smoke-install';
 
 function pkg(path: string, name = `@vessel/${path}`): SmokePackage {
@@ -73,6 +75,42 @@ describe('parsePackOutput', () => {
 
   it('rejects entries without name/version/filename', () => {
     expect(() => parsePackOutput(JSON.stringify([{ name: 'x' }]))).toThrow(/missing/);
+  });
+
+  it('keeps the reported file list when present', () => {
+    const [entry] = parsePackOutput(
+      JSON.stringify([
+        {
+          name: 'vessel-agent',
+          version: '0.10.0',
+          filename: 'vessel-agent-0.10.0.tgz',
+          files: [{ path: 'package.json' }, { path: WEB_DIST_ENTRY }],
+        },
+      ]),
+    );
+    expect(entry?.files).toEqual(['package.json', WEB_DIST_ENTRY]);
+  });
+
+  it('rejects a malformed files list', () => {
+    expect(() =>
+      parsePackOutput(
+        JSON.stringify([{ name: 'x', version: '1.0.0', filename: 'x.tgz', files: [{ size: 1 }] }]),
+      ),
+    ).toThrow(/files\[\]\.path/);
+  });
+});
+
+describe('checkRootIncludesWeb', () => {
+  it('accepts a root tarball containing the web entry', () => {
+    expect(checkRootIncludesWeb(['package.json', WEB_DIST_ENTRY])).toBeNull();
+  });
+
+  it('rejects a root tarball without the web entry', () => {
+    expect(checkRootIncludesWeb(['package.json'])).toContain(WEB_DIST_ENTRY);
+  });
+
+  it('rejects a missing file list', () => {
+    expect(checkRootIncludesWeb(undefined)).toContain('did not report a file list');
   });
 });
 
