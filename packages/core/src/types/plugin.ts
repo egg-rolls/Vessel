@@ -99,4 +99,9 @@ export interface AgentRuntimeOptions {
   agentId?: string;
   /** 0.5：所属 tenant；事件 / RunState / RunCheckpoint 在缺失时补齐 */
   tenantId?: string;
+  /**
+   * 0.10：诊断日志 sink；缺省 noop。
+   * 未注入且设置了 `VESSEL_DEBUG` 时，runtime 兜底为 stderr logger（level=debug）。
+   */
+  logger?: import('../logging.js').Logger;
 }

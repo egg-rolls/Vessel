@@ -26,6 +26,25 @@ describe('default trace redactor (0.5 E7)', () => {
     expect((data.list as Array<Record<string, unknown>>)[1]?.ok).toBe('keep');
   });
 
+  it('redacts Bearer / JWT / AWS AccessKey strings (0.10 R2-14)', () => {
+    const result = redactor.redact(
+      event({
+        bearer: 'Authorization: Bearer abcdefghijklmnop.qrstu',
+        jwt: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abcdefghijklmnop',
+        aws: 'AKIAIOSFODNN7EXAMPLE',
+        asia: 'ASIAIOSFODNN7EXAMPLE',
+        ordinary: 'Bearer of good news',
+      }),
+    );
+    const data = result.data as Record<string, unknown>;
+    expect(data.bearer).toBe('***');
+    expect(data.jwt).toBe('***');
+    expect(data.aws).toBe('***');
+    expect(data.asia).toBe('***');
+    // 低置信度文本保持原样（Bearer 后不足 8 个 token 字符）
+    expect(data.ordinary).toBe('Bearer of good news');
+  });
+
   it('redacts sk- prefixed strings', () => {
     const result = redactor.redact(event({ value: 'sk-abcdef123456', text: 'healthy' }));
     const data = result.data as Record<string, unknown>;

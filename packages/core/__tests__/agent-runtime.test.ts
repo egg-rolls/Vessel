@@ -1091,10 +1091,13 @@ describe('中断与限额（C-09）', () => {
     const runPromise = runtime.run('go', undefined, { signal: controller.signal });
     await toolStarted;
 
-    expect(toolSignal).toBe(controller.signal);
+    // 0.10 R2-18：signal 由 runtime 内部 controller 承载（与调用方 signal 桥接），
+    // 不再是同一个对象；契约是“外部 abort 必须传播到工具”。
+    expect(toolSignal?.aborted).toBe(false);
     controller.abort('stop');
 
     await expect(runPromise).rejects.toThrow('stop');
     expect(toolAborted).toBe(true);
+    expect(toolSignal?.aborted).toBe(true);
   });
 });

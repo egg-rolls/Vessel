@@ -85,11 +85,16 @@ export class RunAlreadyRunningError extends RunResumeError {
 }
 
 /**
- * @internal Host 关闭导致的取消 reason。
+ * @internal 非用户取消的 reason。
  * AgentRuntime 据此把 checkpoint 写成 `interrupted`（可恢复），
  * 其他取消 reason 一律写 `cancelled`。
+ *
+ * 0.10 R2-18：`AgentRuntime.interrupt('shutdown' | 'timeout')` 使用同名字符串；
+ * `interrupt('user')` 不在集合内 → cancelled。
  */
 export const RUN_INTERRUPT_REASONS: ReadonlySet<string> = new Set([
   'agent closed',
   'scheduler closed',
+  'shutdown',
+  'timeout',
 ]);

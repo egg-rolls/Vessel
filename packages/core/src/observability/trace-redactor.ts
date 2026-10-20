@@ -2,7 +2,7 @@
  * 默认 trace 脱敏（0.5 F2 / DECISION-010 §2.2、E7）
  *
  * - 键名匹配 api_key|apikey|token|secret|password|authorization|app_secret → `***`
- * - 字符串匹配 `sk-` 前缀 → `***`
+ * - 字符串匹配 `sk-` / `Bearer <token>` / JWT / AWS AccessKey → `***`
  * - `app_id` 保留前 4 位 + `***`
  * - deep clone，不修改原事件；深度上限 8；WeakSet 防环
  *
@@ -13,8 +13,21 @@ import type { RunEvent } from '../types/event.js';
 import type { TraceRedactor } from '../types/trace.js';
 
 const SENSITIVE_KEY = /api[_-]?key|token|secret|password|authorization|app_secret/i;
-const SECRET_STRING = /(^|\s)sk-[A-Za-z0-9_-]{4,}/;
+/**
+ * 字符串里的凭据模式（0.10 R2-14）：sk-、Bearer、JWT、AWS AccessKey。
+ * 最小模式，只覆盖高置信度前缀，避免把普通文本整段打码。
+ */
+const SECRET_PATTERNS: readonly RegExp[] = [
+  /(^|\s)sk-[A-Za-z0-9_-]{4,}/,
+  /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/i,
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/,
+  /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/,
+];
 const MAX_DEPTH = 8;
+
+function isSecretString(value: string): boolean {
+  return SECRET_PATTERNS.some((pattern) => pattern.test(value));
+}
 
 /** `app_id` / `appId` / `APP_ID` 归一化为 `appid` */
 function isAppIdKey(key: string): boolean {
@@ -23,7 +36,7 @@ function isAppIdKey(key: string): boolean {
 
 function redactValue(value: unknown, depth: number, seen: WeakSet<object>): unknown {
   if (typeof value === 'string') {
-    return SECRET_STRING.test(value) ? '***' : value;
+    return isSecretString(value) ? '***' : value;
   }
   if (typeof value !== 'object' || value === null) return value;
   if (depth >= MAX_DEPTH) return '[redacted]';

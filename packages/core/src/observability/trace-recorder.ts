@@ -18,6 +18,11 @@ import { createDefaultTraceRedactor } from './trace-redactor.js';
 
 const DEFAULT_MAX_PENDING_EVENTS = 10_000;
 const SEQ_TAIL_BYTES = 64 * 1024;
+/**
+ * trace 含 prompt / 工具结果，只允许属主读写（0.10 R2-14）。
+ * `mode` 只在创建文件时生效；既有文件的权限不被改写。
+ */
+const TRACE_FILE_MODE = 0o600;
 const FAILURE_EVENT_COOLDOWN_MS = 1_000;
 const TERMINAL_EVENTS = new Set(['run.completed', 'run.failed', 'run.cancelled']);
 const METADATA_KEYS = [
@@ -70,6 +75,11 @@ export interface FileTraceRecorderOptions {
   flushOnTerminal?: boolean;
   /** 每 run 队列上限；默认 10000；0 = 不限 */
   maxPendingEvents?: number;
+  /**
+   * 是否把 `llm.stream.chunk` 落盘；默认 false（0.10 R2-14）。
+   * 实时事件仍照常发布，只是不写 trace。
+   */
+  includeStreamChunks?: boolean;
   now?: () => number;
 }
 
@@ -132,6 +142,7 @@ export class FileTraceRecorder implements TraceRecorder {
   private readonly tenantId?: string;
   private readonly flushOnTerminal: boolean;
   private readonly maxPendingEvents: number;
+  private readonly includeStreamChunks: boolean;
   private readonly now: () => number;
   private readonly runs = new Map<string, RunTraceState>();
 
@@ -147,6 +158,7 @@ export class FileTraceRecorder implements TraceRecorder {
     this.tenantId = options.tenantId;
     this.flushOnTerminal = options.flushOnTerminal ?? true;
     this.maxPendingEvents = resolveMaxPending(options.maxPendingEvents);
+    this.includeStreamChunks = options.includeStreamChunks ?? false;
     this.now = options.now ?? (() => Date.now());
     if (options.events) this.attach(options.events);
   }
@@ -163,6 +175,9 @@ export class FileTraceRecorder implements TraceRecorder {
   /** 非阻塞入队 */
   append(event: RunEvent): void {
     if (this.closed || this.level === 'off') return;
+    // 0.10 R2-14：流式 chunk 数量大、逐片落盘性价比低，完整内容已在
+    // `llm.request` / `llm.response`；实时事件发布不受影响，默认不进 trace。
+    if (!this.includeStreamChunks && event.type === 'llm.stream.chunk') return;
     if (!this.validRunId(event.run_id)) {
       this.emitWriteFailure(event.run_id, new Error('invalid_run_id'));
       return;
@@ -332,7 +347,10 @@ export class FileTraceRecorder implements TraceRecorder {
 
       if (state.needsLeadingNewline) {
         state.needsLeadingNewline = false;
-        await appendFile(this.filePath(runId), '\n', 'utf8');
+        await appendFile(this.filePath(runId), '\n', {
+          encoding: 'utf8',
+          mode: TRACE_FILE_MODE,
+        });
       }
 
       while (state.queue.length > 0) {
@@ -340,7 +358,10 @@ export class FileTraceRecorder implements TraceRecorder {
         if (event === undefined) break;
         try {
           const prepared = this.prepare(event, state);
-          await appendFile(this.filePath(runId), `${JSON.stringify(prepared)}\n`, 'utf8');
+          await appendFile(this.filePath(runId), `${JSON.stringify(prepared)}\n`, {
+            encoding: 'utf8',
+            mode: TRACE_FILE_MODE,
+          });
           state.written += 1;
         } catch (error) {
           state.failed += 1;
@@ -389,7 +410,10 @@ export class FileTraceRecorder implements TraceRecorder {
     };
     try {
       await this.ensureDir();
-      await appendFile(this.filePath(runId), `${JSON.stringify(marker)}\n`, 'utf8');
+      await appendFile(this.filePath(runId), `${JSON.stringify(marker)}\n`, {
+        encoding: 'utf8',
+        mode: TRACE_FILE_MODE,
+      });
     } catch (error) {
       state.failed += 1;
       this.emitWriteFailure(runId, error);

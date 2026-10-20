@@ -4,15 +4,17 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { estimateMessagesTokens } from '../context/context-manager.js';
 import { MemoryLimitChecker } from '../limits/index.js';
+import { createStderrLogger, type Logger, noopLogger } from '../logging.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
-import type { ChatRequest, LLMProvider, Message } from '../types/provider.js';
-import type { RunExecution, RunOptions } from '../types/run.js';
+import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../types/provider.js';
+import type { RunExecution, RunInterruptReason, RunOptions } from '../types/run.js';
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';
 import {
   RUN_INTERRUPT_REASONS,
@@ -51,6 +53,50 @@ function createUsageStats(startTime: number): UsageStats {
 /** 错误文本（事件/持久化统一口径） */
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * context-overflow 的通用文案 / 错误码（0.10 R2-17）。
+ * 不绑定厂商名：只认状态码 400 + 可识别的描述。
+ */
+const CONTEXT_OVERFLOW_PATTERNS: readonly RegExp[] = [
+  /context[_ ]length/i,
+  /context window/i,
+  /maximum context/i,
+  /prompt is too long/i,
+  /input is too long/i,
+  /too many tokens/i,
+  /token limit/i,
+  /request too large/i,
+];
+
+/** 从错误对象读取 HTTP 状态码（status / statusCode / httpStatus / response.status） */
+function readHttpStatus(error: Record<string, unknown>): number | undefined {
+  for (const key of ['status', 'statusCode', 'httpStatus']) {
+    const value = error[key];
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+  }
+  const response = error.response;
+  if (typeof response === 'object' && response !== null) {
+    const status = (response as Record<string, unknown>).status;
+    if (typeof status === 'number' && Number.isFinite(status)) return status;
+  }
+  return undefined;
+}
+
+/**
+ * provider 报 context-overflow 时返回 true（0.10 R2-17）。
+ * 判定条件：400（结构化状态或 message 中的状态）且 message / code 命中通用模式。
+ */
+function isContextOverflowError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const record = error as Record<string, unknown>;
+  const message = error instanceof Error ? error.message : String(record.message ?? '');
+  const code = typeof record.code === 'string' ? record.code : '';
+  const has400 = readHttpStatus(record) === 400 || /(^|\D)400(\D|$)/.test(message);
+  if (!has400) return false;
+  const haystack = `${message}\n${code}`;
+  return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(haystack));
 }
 
 /** 预处理后的工具调用（0.6.1 P1：安全批次并发） */
@@ -114,6 +160,17 @@ export class AgentRuntime {
    * 同步占位、`finally` 清空；已有值时新的 run()/resume() 立即 `run_already_running`。
    */
   private activeRun?: RunExecution;
+  /**
+   * 当前 run 的中断控制（0.10 R2-18）：`interrupt()` 与调用方 `opts.signal`
+   * 汇合到同一个内部 AbortController；随 active run 创建 / 释放。
+   */
+  private activeRunControl?: {
+    execution: RunExecution;
+    controller: AbortController;
+    cleanups: Array<() => void>;
+  };
+  /** 0.10 R2-14：诊断日志；缺省 noop（`VESSEL_DEBUG` 时兜底 stderr） */
+  private readonly logger: Logger;
 
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -128,6 +185,9 @@ export class AgentRuntime {
     this.pluginConfigs = opts.pluginConfigs;
     this.agentId = opts.agentId;
     this.tenantId = opts.tenantId;
+    this.logger =
+      opts.logger ??
+      (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
     this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
 
@@ -258,11 +318,64 @@ export class AgentRuntime {
       context: this.context,
     };
     this.activeRun = execution;
+    this.activeRunControl = {
+      execution,
+      controller: new AbortController(),
+      cleanups: [],
+    };
     return execution;
   }
 
   private endExecution(execution: RunExecution): void {
     if (this.activeRun === execution) this.activeRun = undefined;
+    if (this.activeRunControl?.execution === execution) {
+      for (const cleanup of this.activeRunControl.cleanups) cleanup();
+      this.activeRunControl = undefined;
+    }
+  }
+
+  /**
+   * 中止当前 active run（0.10 R2-18）。
+   *
+   * - `shutdown` / `timeout`：checkpoint 落 `interrupted`（可 `--resume-run`）；
+   * - `user`：按用户取消处理，checkpoint 落 `cancelled`；
+   * - 无 active run 或已中止：no-op（幂等）。
+   *
+   * 只负责发中断；调用方应 await 自己的 run()/resume() promise 确认终态。
+   */
+  interrupt(reason: RunInterruptReason = 'user'): void {
+    const control = this.activeRunControl;
+    if (!control || control.controller.signal.aborted) return;
+    this.logger.info('run interrupt requested', {
+      run_id: control.execution.runId,
+      reason,
+    });
+    control.controller.abort(reason);
+  }
+
+  /**
+   * 把调用方 signal 桥接到当前 run 的内部 controller（0.10 R2-18）。
+   * 外部 reason 原样透传，保持既有 cancelled / interrupted 语义。
+   */
+  private executionSignal(
+    execution: RunExecution,
+    external?: AbortSignal,
+  ): AbortSignal | undefined {
+    const control =
+      this.activeRunControl?.execution === execution ? this.activeRunControl : undefined;
+    if (!control) return external;
+
+    const signal = control.controller.signal;
+    if (!external) return signal;
+    if (external.aborted) {
+      if (!signal.aborted) control.controller.abort(external.reason);
+      return signal;
+    }
+
+    const onAbort = (): void => control.controller.abort(external.reason);
+    external.addEventListener('abort', onAbort, { once: true });
+    control.cleanups.push(() => external.removeEventListener('abort', onAbort));
+    return signal;
   }
 
   /** run() 的主体：调用方已持有 execution 槽位。 */
@@ -272,7 +385,8 @@ export class AgentRuntime {
     opts?: RunOptions,
   ): Promise<string> {
     const { runId, sessionId, createdAt } = execution;
-    const signal = opts?.signal;
+    // 外部 signal 与 interrupt() 的内部 controller 统一成一个 signal（0.10 R2-18）
+    const signal = this.executionSignal(execution, opts?.signal);
 
     // 切换到当前会话的 Context
     this.context.setSessionId(sessionId);
@@ -507,12 +621,12 @@ export class AgentRuntime {
    * - run id 保持不变，返回值语义与 run() 一致。
    */
   async resume(runId: string, opts?: RunOptions): Promise<string> {
-    const signal = opts?.signal;
     if (!this.runStore) throw new RunResumeError('run_store_required', runId);
     if (this.resuming.has(runId)) throw new RunAlreadyRunningError(runId);
 
     // 与 run() 共用单 run 守卫；同步占位，避免两次不同 run 的并发 resume。
     const execution = this.beginExecution(runId, '');
+    const signal = this.executionSignal(execution, opts?.signal);
     this.resuming.add(runId);
     try {
       const checkpoint = await this.runStore.load(runId);
@@ -650,61 +764,14 @@ export class AgentRuntime {
         },
       }));
 
-      // 调试日志（仅在 VESSEL_DEBUG 环境变量设置时输出）
-      if (process.env.VESSEL_DEBUG) {
-        console.log(
-          '[Debug] Tools:',
-          toolSchemas.length,
-          toolSchemas.map((t) => t.function.name),
-        );
-      }
-
-      // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）
-      this.publishEvent({
-        type: 'llm.request',
-        run_id: runId,
-        data: {
-          run_id: runId,
-          messages: this.stripReasoning(messages),
-          tools: toolSchemas,
-        },
-        ts: Date.now(),
-      });
-
-      // 增加请求计数
-      this.limitChecker.incrementRequest(stats);
-
-      // 调用 LLM
-      const request: ChatRequest = {
+      // 调用 LLM（context-overflow 时强制压缩一次并重试一次，0.10 R2-17）
+      const response = await this.chatWithOverflowRetry(execution, {
         messages,
-        model: this.model,
-        tools: toolSchemas.length > 0 ? toolSchemas : undefined,
-        session_id: sessionId,
-        // AbortSignal——Provider 透传给 fetch()，支持 Esc 中断（Hermes/Claude Code 模式）
-        signal,
-        // 流式（ADR-007）：始终提供 stream + on_chunk。支持流式的 Provider 边收边经回调吐增量，
-        // loop 在此发布 LlmStreamChunk 事件供 TUI 订阅渲染；不支持流式的 Provider 忽略字段、
-        // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
-        stream: true,
-        on_chunk: (chunk) => {
-          this.publishEvent({
-            type: 'llm.stream.chunk',
-            run_id: runId,
-            data: { run_id: runId, chunk },
-            ts: Date.now(),
-          });
-        },
-      };
-
-      // 调试日志（仅在 VESSEL_DEBUG 环境变量设置时输出）
-      if (process.env.VESSEL_DEBUG) {
-        console.log('[Debug] Messages sent to AI:');
-        for (const msg of messages) {
-          console.log(`  [${msg.role}]: ${msg.content?.substring(0, 100)}...`);
-        }
-      }
-
-      const response = await this.provider.chat(request);
+        tools: toolSchemas,
+        sessionId,
+        ...(signal !== undefined ? { signal } : {}),
+        rebuildMessages: () => this.buildRequestMessages(injectedSystem || undefined),
+      });
 
       // 更新 token 使用量
       if (response.usage) {
@@ -933,6 +1000,103 @@ export class AgentRuntime {
         );
         return response.content;
       }
+    }
+  }
+
+  /**
+   * 调用 provider，并在 context-overflow（400）时强制压缩一次后重试一次（0.10 R2-17）。
+   *
+   * 每次真实请求都递增 request 计数并发布 `llm.request`（重试请求看到的是压缩后的上下文）。
+   * 第二次仍失败则原样抛出，不包装 provider 错误。
+   */
+  private async chatWithOverflowRetry(
+    execution: RunExecution,
+    args: {
+      messages: Message[];
+      tools: NonNullable<ChatRequest['tools']>;
+      sessionId: string;
+      signal?: AbortSignal;
+      rebuildMessages: () => Message[];
+    },
+  ): Promise<LLMResponse> {
+    const { runId, stats } = execution;
+    let messages = args.messages;
+    let retried = false;
+
+    while (true) {
+      // 调试元信息（0.10 R2-13）：只记数量/工具名/token 估算，绝不输出 prompt 正文
+      this.logger.debug('llm request', {
+        run_id: runId,
+        message_count: messages.length,
+        tool_names: args.tools.map((tool) => tool.function.name),
+        estimated_tokens: estimateMessagesTokens(messages),
+      });
+
+      // 发布 LLM 请求事件（事件里剔除 reasoning_content，避免思维链泄漏到 TUI/观测）
+      this.publishEvent({
+        type: 'llm.request',
+        run_id: runId,
+        data: {
+          run_id: runId,
+          messages: this.stripReasoning(messages),
+          tools: args.tools,
+        },
+        ts: Date.now(),
+      });
+
+      // 增加请求计数
+      this.limitChecker.incrementRequest(stats);
+
+      const request: ChatRequest = {
+        messages,
+        model: this.model,
+        tools: args.tools.length > 0 ? args.tools : undefined,
+        session_id: args.sessionId,
+        // AbortSignal——Provider 透传给 fetch()，支持 Esc 中断（Hermes/Claude Code 模式）
+        signal: args.signal,
+        // 流式（ADR-007）：始终提供 stream + on_chunk。支持流式的 Provider 边收边经回调吐增量，
+        // loop 在此发布 LlmStreamChunk 事件供 TUI 订阅渲染；不支持流式的 Provider 忽略字段、
+        // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
+        stream: true,
+        on_chunk: (chunk) => {
+          this.publishEvent({
+            type: 'llm.stream.chunk',
+            run_id: runId,
+            data: { run_id: runId, chunk },
+            ts: Date.now(),
+          });
+        },
+      };
+
+      this.logger.debug('llm call', {
+        run_id: runId,
+        message_count: messages.length,
+        estimated_tokens: estimateMessagesTokens(messages),
+      });
+
+      try {
+        return await this.provider.chat(request);
+      } catch (error) {
+        if (retried || !isContextOverflowError(error)) throw error;
+        retried = true;
+        const removed = await this.forceCompact();
+        messages = args.rebuildMessages();
+        this.logger.warn('context overflow; compacted and retrying once', {
+          run_id: runId,
+          removed_messages: removed,
+          error: errorText(error),
+        });
+      }
+    }
+  }
+
+  /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */
+  private async forceCompact(): Promise<number> {
+    try {
+      if (this.context.compactAsync) return await this.context.compactAsync();
+      return this.context.compact();
+    } catch {
+      return 0;
     }
   }
 
