@@ -1,6 +1,6 @@
 {
   "name": "@vessel/hook-logging",
-  "version": "0.8.2",
+  "version": "0.8.4",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
