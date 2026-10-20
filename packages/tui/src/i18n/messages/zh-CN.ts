@@ -60,7 +60,6 @@ export const zhCN = {
   'confirm.no': '[N]o',
   'confirm.always': '[A]lways',
   'confirm.hint': '←→ select · enter confirm · y/n/a quick · esc deny',
-  'confirm.secondsLeft': '{count}s left',
 
   // ── ask-user dialog ──
   'ask.customOption': '输入你自己的答案',
@@ -231,8 +230,6 @@ export const zhCN = {
   // ── permission ──
   'permission.question': 'Allow tool "{tool}" to run?',
   'permission.questionMcp': 'Allow tool "{tool}" from MCP server "{server}" to run?',
-  'permission.timeout': '⚠ Permission request timed out (120s); tool call was cancelled.',
-  'permission.expired': '⚠ 权限请求已过期（120s），已忽略。',
   'permission.sessionOnly':
     'ℹ "{tool}" is approved for this session; config write-back is unavailable.',
   'permission.persisted': '✓ "{tool}" added to permission.auto_approve (effective after restart).',

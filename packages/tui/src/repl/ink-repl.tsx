@@ -66,13 +66,7 @@ import {
   queuePreviewRows,
   STATUS_BAR_ROWS,
 } from './layout.js';
-import {
-  decidePermissionAnswer,
-  decidePermissionRequest,
-  PERMISSION_TIMEOUT_MS,
-  PermissionTimeoutController,
-  permissionExpiresAt,
-} from './permission-timeout.js';
+import { PermissionPendingController } from './permission-pending.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { useRuntimeCounters } from './runtime-counters.js';
@@ -108,21 +102,12 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   const state = ui.repl;
 
   /**
-   * 权限弹窗超时控制器（与 core 的 120s 对齐）。
-   * 按 requestId 记录已答，避免旧计时器在用户已答后继续追加超时提示。
+   * 权限确认挂起状态（DECISION-024 Addendum A）：没有超时计时器。
+   * 弹窗一直等待，直到用户应答、Esc/Ctrl+C 取消并 abort、工具失败或 run 终态。
    */
-  const permissionTimeoutRef = useRef<PermissionTimeoutController | null>(null);
-  if (permissionTimeoutRef.current === null) {
-    permissionTimeoutRef.current = new PermissionTimeoutController({
-      timeoutMs: PERMISSION_TIMEOUT_MS,
-      onTimeout: (requestId) => {
-        dispatch({ type: 'clearPermissionForRequest', requestId });
-        dispatch({
-          type: 'appendHistory',
-          line: t('permission.timeout'),
-        });
-      },
-    });
+  const permissionPendingRef = useRef<PermissionPendingController | null>(null);
+  if (permissionPendingRef.current === null) {
+    permissionPendingRef.current = new PermissionPendingController();
   }
   /** 订阅回调里读取最新 overlay（不随 effect 重建订阅） */
   const permissionOverlayRef = useRef(ui.permissionOverlay);
@@ -343,22 +328,14 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
     };
   }, [ctx, dispatch, stdout]);
 
-  // 权限确认请求（ADR-029）：展示弹窗 + 120s 超时兜底 + run 结束/工具失败清理。
-  // core 的 waitFor 超时后只发 tool.call.failed，不会发 response；不清理会留下永久弹窗。
+  // 权限确认请求（ADR-029）：展示弹窗；不做超时，只由应答/取消/失败/run 终态关闭。
   useEffect(() => {
     const unsubscribe = ctx.events.subscribe((rawEvent) => {
       const event = asTuiEvent(rawEvent);
       switch (event.type) {
         case 'tool.permission.request': {
           const requestId = event.data.requestId;
-          // 0.11.1（DECISION-022 §2.1）：用事件时间计算过期点；事件延迟送达时
-          // 不能重新补满 120s。已过期请求不加入弹窗队列。
-          const expiresAt = permissionExpiresAt(event.ts);
-          if (decidePermissionRequest(event.ts) === 'expired') {
-            dispatch({ type: 'appendHistory', line: t('permission.expired') });
-            break;
-          }
-          permissionTimeoutRef.current?.startAt(requestId, expiresAt);
+          permissionPendingRef.current?.start(requestId);
           dispatch({
             type: 'setPermissionOverlay',
             overlay: {
@@ -366,7 +343,6 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
               run_id: event.run_id,
               toolName: event.data.tool,
               input: event.data.input,
-              expiresAt,
             },
           });
           break;
@@ -378,8 +354,8 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
             overlay.run_id === event.run_id &&
             overlay.toolName === event.data.tool_name
           ) {
-            // 当前等待确认的工具已失败：标记已答并取消计时器。
-            permissionTimeoutRef.current?.answer(overlay.requestId);
+            // 当前等待确认的工具已失败：标记已答并关闭弹窗。
+            permissionPendingRef.current?.answer(overlay.requestId);
           }
           dispatch({
             type: 'clearPermissionForTool',
@@ -391,10 +367,10 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
         case 'run.completed':
         case 'run.failed':
         case 'run.cancelled': {
-          // run 终态：弹窗会关闭，计时器也必须停止，避免 120s 后误报超时。
+          // run 终态：弹窗随之关闭。
           const overlay = permissionOverlayRef.current;
           if (overlay && overlay.run_id === event.run_id) {
-            permissionTimeoutRef.current?.answer(overlay.requestId);
+            permissionPendingRef.current?.answer(overlay.requestId);
           }
           dispatch({ type: 'clearPermissionForRun', runId: event.run_id });
           break;
@@ -404,7 +380,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       }
     });
     return () => {
-      permissionTimeoutRef.current?.dispose();
+      permissionPendingRef.current?.dispose();
       unsubscribe();
     };
   }, [ctx.events, dispatch]);
@@ -728,7 +704,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
    * Ctrl+C 的统一语义：
    * - idle → 退出；
    * - 运行中 → 先解除可能阻塞 run 的交互（权限 waitFor / ask_user waitFor），
-   *   再 abort；否则 waitFor 会让 run 卡到 120s 超时才结束。
+   *   再 abort；否则权限 waitFor 会让 run 一直挂起。
    */
   const cancelOrExit = useCallback(() => {
     // idle -> 退出；cancelling 时再次 Ctrl+C -> 强制退出（工具可能还在跑）
@@ -737,16 +713,14 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       return;
     }
     if (ui.permissionOverlay && markPermissionSubmitted(ui.permissionOverlay.requestId)) {
-      permissionTimeoutRef.current?.answer(ui.permissionOverlay.requestId);
-      // 已过期的请求不再发布 response（core 的 waitFor 已超时，重发只会制造噪音）。
-      if (decidePermissionAnswer(ui.permissionOverlay.expiresAt) !== 'expired') {
-        ctx.events.publish({
-          type: 'tool.permission.response',
-          run_id: ui.permissionOverlay.run_id,
-          data: { requestId: ui.permissionOverlay.requestId, decision: 'deny' },
-          ts: Date.now(),
-        });
-      }
+      // 取消/abort 立即关闭弹窗并回 deny（权限不再等待超时）。
+      permissionPendingRef.current?.answer(ui.permissionOverlay.requestId);
+      ctx.events.publish({
+        type: 'tool.permission.response',
+        run_id: ui.permissionOverlay.run_id,
+        data: { requestId: ui.permissionOverlay.requestId, decision: 'deny' },
+        ts: Date.now(),
+      });
       dispatch({ type: 'clearPermissionForRequest', requestId: ui.permissionOverlay.requestId });
     }
     if (ui.askUserActive && ui.askUserRequestId) {
@@ -941,15 +915,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       if (!overlay) return;
       // 0.11.1：同一请求只提交一次（重复 Enter / 快速按键不再发布第二条 response）。
       if (!markPermissionSubmitted(overlay.requestId)) return;
-      // 先标记已答并停表：即使旧回调已排队，也不能再追加超时提示。
-      permissionTimeoutRef.current?.answer(overlay.requestId);
-
-      // 0.11.1（DECISION-022 §2.1）：已过期的弹窗只关闭并提示，不重试、不发布 response。
-      if (decidePermissionAnswer(overlay.expiresAt) === 'expired') {
-        dispatch({ type: 'setPermissionOverlay', overlay: null });
-        dispatch({ type: 'appendHistory', line: t('permission.expired') });
-        return;
-      }
+      permissionPendingRef.current?.answer(overlay.requestId);
 
       const always = answer === 'always';
       ctx.events.publish({
@@ -1292,7 +1258,6 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
             )}
             details={summarizeToolInput(ui.permissionOverlay.toolName, ui.permissionOverlay.input)}
             defaultChoice="n"
-            expiresAt={ui.permissionOverlay.expiresAt}
             onConfirm={handlePermission}
           />
         </Box>

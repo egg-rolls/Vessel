@@ -19,7 +19,6 @@ function withPermission(state: ReplUiState, requestId = 'req-1'): ReplUiState {
       run_id: 'run-1',
       toolName: 'bash',
       input: { command: 'ls' },
-      expiresAt: Date.now() + 120_000,
     },
   });
 }
