@@ -17,6 +17,11 @@ export interface PluginInstallOptions {
   config?: Record<string, unknown>;
 }
 
+/** `init` 的上下文（0.9 生命周期 v2）；只暴露宿主，不引入配置/事件依赖 */
+export interface PluginInitContext {
+  host: PluginHost;
+}
+
 /** Plugin 接口 */
 export interface Plugin {
   name: string;
@@ -24,6 +29,19 @@ export interface Plugin {
   description?: string;
   /** 第二个参数可选：旧的 `install(host)` 实现与调用继续合法（E1） */
   install(host: PluginHost, options?: PluginInstallOptions): void | Promise<void>;
+  /** 所有插件 install 成功后按安装顺序调用；异常被隔离在单个插件内（0.9） */
+  init?(ctx: PluginInitContext): void | Promise<void>;
+  /** `AgentRuntime.dispose()` 时按逆安装顺序调用；best-effort（0.9） */
+  dispose?(): void | Promise<void>;
+}
+
+/**
+ * 一次插件安装的注册记录（0.9）。
+ * `commit()` 丢弃记录；`rollback()` 撤销本次记录的注册条目。
+ */
+export interface PluginInstallScope {
+  commit(): void;
+  rollback(): void;
 }
 
 /** PluginHost 接口 */
@@ -38,6 +56,11 @@ export interface PluginHost {
   getHooks(): Hook[];
   listTools(): ToolDefinition[];
   listProviders(): string[];
+  /**
+   * 可选：记录一次插件安装的注册，用于安装失败时回滚（0.9）。
+   * 不支持回滚的自定义宿主可以不实现。
+   */
+  beginPluginInstall?(pluginName: string): PluginInstallScope;
 }
 
 /** 默认权限策略（ADR-029：未声明 checkPermission 的工具用此默认判定） */

@@ -324,7 +324,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
       this.members.delete(id);
       this.handles.delete(id);
       unsubscribeEvents?.();
-      runtime?.dispose();
+      await runtime?.dispose();
       throw error;
     } finally {
       this.spawning.delete(id);
@@ -544,7 +544,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     }
     record.active?.cancel('agent closed');
     record.unsubscribeEvents();
-    record.runtime.dispose();
+    await record.runtime.dispose();
     record.state = 'closed';
     this.members.delete(record.id);
     this.handles.delete(record.id);
