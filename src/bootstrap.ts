@@ -17,6 +17,7 @@ import {
 import {
   AgentRuntime,
   type AgentStatus,
+  type Logger,
   MemoryContextManager,
   MemoryPluginHost,
   MemorySessionBackend,
@@ -56,6 +57,8 @@ import {
   resumeError,
   routeResume,
 } from './durable-wiring';
+import { t } from './i18n';
+import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
@@ -76,6 +79,7 @@ import {
 } from './rpc/index';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
+import { reportShutdownFailure } from './shutdown-report';
 import { createTenantControl } from './tenant-command';
 import { acquireTenantLock, type TenantLock, TenantLockError, withTenantLock } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
@@ -171,6 +175,11 @@ export interface BootstrapOptions {
    * 配置错误时的退出码：默认 1（0.3 行为）；`--feishu` 传 2（Addendum C/D）。
    */
   configErrorExitCode?: number;
+  /**
+   * 诊断 logger（0.10 R2-14）。CLI / serve 注入同一个 stderr logger；
+   * 嵌入方缺省时由 bootstrap 按环境变量创建。
+   */
+  logger?: Logger;
 }
 
 export interface BootstrapResult {
@@ -306,6 +315,8 @@ async function bootstrapConnect(input: {
   headless: boolean;
   /** 0.6：显式 tenant（--tenant / VESSEL_TENANT）才把 tenant_id 合并进请求。 */
   tenantExplicit: boolean;
+  /** 0.10 R2-14：诊断 logger（与 bootstrap 共用） */
+  logger: Logger;
   /** 0.6.1：显式 session id（`--session` / `-r <id>`） */
   sessionId?: string;
   /** 0.6.1：`-c/--continue`；经 sessions.list 选择最近的非空会话 */
@@ -339,11 +350,11 @@ async function bootstrapConnect(input: {
     try {
       ca = await Bun.file(caPath).text();
     } catch {
-      console.error(`Cannot read CA file: ${caPath}`);
+      console.error(t('connect.caUnreadable', { path: caPath }));
       process.exit(1);
     }
     if (ca.trim() === '') {
-      console.error(`CA file is empty: ${caPath}`);
+      console.error(t('connect.caEmpty', { path: caPath }));
       process.exit(1);
     }
   }
@@ -451,9 +462,10 @@ async function bootstrapConnect(input: {
       await rpc.request('sessions.get', { session_id: input.resumeSessionId });
     } catch (error) {
       console.error(
-        `Cannot resume session "${input.resumeSessionId}": ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        t('connect.resumeFailed', {
+          id: input.resumeSessionId,
+          detail: error instanceof Error ? error.message : String(error),
+        }),
       );
       process.exit(1);
     }
@@ -482,13 +494,15 @@ async function bootstrapConnect(input: {
         );
       const latest = sessions[0];
       if (!latest) {
-        console.error('No sessions to continue.');
+        console.error(t('common.noSessions'));
         process.exit(1);
       }
       resolvedSessionId = latest.session_id;
     } catch (error) {
       console.error(
-        `Cannot list sessions: ${error instanceof Error ? error.message : String(error)}`,
+        t('connect.listFailed', {
+          detail: error instanceof Error ? error.message : String(error),
+        }),
       );
       process.exit(1);
     }
@@ -594,8 +608,14 @@ async function bootstrapConnect(input: {
     unsubscribeInteractions();
     try {
       await client.close();
-    } catch {
-      // best-effort
+    } catch (error) {
+      reportShutdownFailure({
+        events,
+        logger: input.logger,
+        step: 'client.close',
+        error,
+        tenantId: effectiveTenantId,
+      });
     }
   };
 
@@ -662,6 +682,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     registerAskUser = interactive,
     configErrorExitCode = 1,
   } = options;
+  // 0.10 R2-14：诊断日志只写 stderr；嵌入方 / CLI 可注入自己的 sink。
+  const logger = options.logger ?? createCliLogger();
 
   // ── 加载配置 ────────────────────────────────────
   // 单一 resolver：CLI 覆盖层（含旧式 connectToken/caFile）只在这里进入。
@@ -718,6 +740,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       url: connectUrl,
       headless,
       tenantExplicit,
+      logger,
       ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
       ...(options.continueLatest === true ? { continueLatest: true } : {}),
       ...(options.resumeSessionId !== undefined
@@ -728,7 +751,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   }
 
   if (!useMock && !interactive && !resolveEffectiveApiKey(config)) {
-    console.error('No API key configured. Run `vessel` interactively first to set up.');
+    console.error(t('common.noApiKey'));
     process.exit(configErrorExitCode);
   }
 
@@ -797,6 +820,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     nodeId,
     sessionId: currentSessionId,
     createLoopbackTransport: true,
+    logger,
     writeTrace: localWrites,
     pruneTrace: false,
     ...(options.metricsFactory ? { metricsFactory: options.metricsFactory } : {}),
@@ -873,6 +897,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       systemPrompt,
       permission,
       ...(runStore ? { runStore } : {}),
+      logger,
     });
     return fallbackRuntime;
   };
@@ -1183,15 +1208,27 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     try {
       localDispatcher.dispose();
-    } catch {
-      // dispatcher 释放是 best-effort
+    } catch (error) {
+      reportShutdownFailure({
+        events: bundle.events,
+        logger,
+        step: 'dispatcher.dispose',
+        error,
+        tenantId,
+      });
     }
 
     // 0.9：dispose 返回 Promise（插件逆序清理）；等待完成，异常不外抛。
     try {
       await fallbackRuntime?.dispose();
-    } catch {
-      // 单 agent 回退 runtime 的清理同样是 best-effort
+    } catch (error) {
+      reportShutdownFailure({
+        events: bundle.events,
+        logger,
+        step: 'fallbackRuntime.dispose',
+        error,
+        tenantId,
+      });
     }
 
     // bundle 关闭顺序：feishu → workflow → metrics → MCP → host/runtime
@@ -1202,8 +1239,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     if (tenantLock) {
       try {
         await tenantLock.release();
-      } catch (e) {
-        console.warn(`⚠ Failed to release tenant lock: ${e instanceof Error ? e.message : e}`);
+      } catch (error) {
+        reportShutdownFailure({
+          events: bundle.events,
+          logger,
+          step: 'tenantLock.release',
+          error,
+          tenantId,
+        });
       }
     }
   };

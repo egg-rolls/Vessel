@@ -253,6 +253,11 @@ export interface TraceConfig {
   maxRuns?: number;
   /** 0 = 不限 */
   maxBytes?: number;
+  /**
+   * 是否把 `llm.stream.chunk` 落盘（0.10 R2-14）。
+   * 默认 false：实时事件仍发布，只是不写 trace（避免 trace 体积随流式输出暴涨）。
+   */
+  includeStreamChunks?: boolean;
 }
 
 /** tenant 级设置 */

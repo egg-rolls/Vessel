@@ -8,6 +8,7 @@
 import type { Message, RunnableAgent, SessionBackend } from '../packages/core/src/index';
 import { asTuiEvent } from '../packages/tui/src/types/events.js';
 import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
+import { t } from './i18n';
 
 export interface HeadlessOptions {
   /** 运行参数 */
@@ -56,7 +57,7 @@ export async function runHeadless(
   try {
     const input = (await readInput(options, session)).trim();
     if (!input) {
-      throw new CliError('No input.');
+      throw new CliError(t('common.noInput'));
     }
 
     console.error(`[vessel] ${provider.name} | ${provider.model} | session ${sessionId}`);

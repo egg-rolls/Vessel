@@ -53,6 +53,8 @@ export type TraceRecorderFactory = (opts: {
   dir: string;
   level: TraceLevel;
   redactor?: TraceRedactor;
+  /** 0.10 R2-14：是否记录 llm.stream.chunk（默认 false） */
+  includeStreamChunks?: boolean;
 }) => TraceRecorderLike;
 
 /** installTrace 选项 */
@@ -78,6 +80,7 @@ export function resolveTraceOptions(config: VesselConfig): Required<TraceConfig>
     retentionDays: trace?.retentionDays ?? DEFAULT_TRACE_OPTIONS.retentionDays,
     maxRuns: trace?.maxRuns ?? DEFAULT_TRACE_OPTIONS.maxRuns,
     maxBytes: trace?.maxBytes ?? DEFAULT_TRACE_OPTIONS.maxBytes,
+    includeStreamChunks: trace?.includeStreamChunks ?? DEFAULT_TRACE_OPTIONS.includeStreamChunks,
   };
 }
 
@@ -164,7 +167,12 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
 
   if (options.factory) {
     // 自定义 recorder 没有内置订阅：wiring 负责 tenant_id、脱敏与终态 flush。
-    recorder = options.factory({ dir, level: trace.level, redactor });
+    recorder = options.factory({
+      dir,
+      level: trace.level,
+      redactor,
+      includeStreamChunks: trace.includeStreamChunks,
+    });
     unsubscribes.push(
       options.events.subscribe((event) => {
         if (event.type.startsWith('trace.')) {
@@ -174,6 +182,9 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
           }
           return;
         }
+
+        // 自定义 recorder 与 core recorder 保持同一默认：流式分片默认不落盘。
+        if (!trace.includeStreamChunks && event.type === 'llm.stream.chunk') return;
 
         const withTenant: RunEvent =
           event.tenant_id === undefined ? { ...event, tenant_id: options.tenantId } : event;
@@ -197,6 +208,7 @@ export function installTrace(options: InstallTraceOptions): TraceControl | undef
       redactor,
       events: options.events,
       tenantId: options.tenantId,
+      includeStreamChunks: trace.includeStreamChunks,
     });
     unsubscribes.push(
       options.events.subscribe((event) => {

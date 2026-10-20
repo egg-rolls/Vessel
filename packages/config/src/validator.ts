@@ -810,7 +810,7 @@ function findNullPaths(value: unknown, path: string[]): string[] {
 
 /** 校验 trace 块（0.5） */
 function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): void {
-  const { enabled, level, retentionDays, maxRuns, maxBytes } = trace;
+  const { enabled, level, retentionDays, maxRuns, maxBytes, includeStreamChunks } = trace;
 
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     errors.push({
@@ -845,6 +845,13 @@ function validateTrace(trace: TraceConfig, errors: ConfigValidationError[]): voi
       path: 'trace.maxBytes',
       message: 'trace.maxBytes must be a non-negative integer (0 = unlimited)',
       value: maxBytes,
+    });
+  }
+  if (includeStreamChunks !== undefined && typeof includeStreamChunks !== 'boolean') {
+    errors.push({
+      path: 'trace.includeStreamChunks',
+      message: 'trace.includeStreamChunks must be a boolean',
+      value: includeStreamChunks,
     });
   }
 }
@@ -1823,7 +1830,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   observability: ['eventHistory', 'metrics'],
   ui: ['language'],
   tenant: ['default', 'tenants'],
-  trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes'],
+  trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };
 
 /** serve.tls 的已知键 */

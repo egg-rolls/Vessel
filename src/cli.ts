@@ -48,7 +48,7 @@ import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
 import { type BootstrapResult, bootstrap } from './bootstrap';
 import { parseArgs } from './cli-args';
 import { buildCliConfigOverrides } from './cli-overrides';
-import { matchCommand } from './commands/registry';
+import { applyCommandLocale, matchCommand } from './commands/registry';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
@@ -57,8 +57,11 @@ import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-com
 import { renderGatewayBanner } from './gateway-banner';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
+import { applyLocale, resolveLocale, setLocale, t } from './i18n';
+import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { createEventStream } from './observability-wiring';
+import { installProcessErrorHandlers } from './process-handlers';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import {
@@ -84,76 +87,69 @@ function align(rows: Array<[string, string]>, width: number): string {
   return rows.map(([cmd, desc]) => `  ${cmd.padEnd(width)}  ${desc}`).join('\n');
 }
 
-/** --help 输出：分组 + 对齐列，命令保持不变 */
+/** --help 输出：分组 + 对齐列，命令保持不变；描述跟随 locale。 */
 function printHelp(): void {
   const usage: Array<[string, string]> = [
-    ['vessel', '交互式 REPL（直进对话）'],
-    ['vessel demo', '无 Key 演示（真实工具调用与权限确认）'],
+    ['vessel', t('help.cmd.repl')],
+    ['vessel demo', t('help.cmd.demo')],
   ];
   const session: Array<[string, string]> = [
-    ['vessel -c', '续接最近的非空会话（--continue）'],
-    ['vessel -r <id>', '恢复指定会话（--resume）'],
-    ['vessel -r', '列出当前 tenant 的会话'],
-    ['vessel --session <id>', '指定会话（不校验存在）'],
+    ['vessel -c', t('help.cmd.continue')],
+    ['vessel -r <id>', t('help.cmd.resume')],
+    ['vessel -r', t('help.cmd.resumeList')],
+    ['vessel --session <id>', t('help.cmd.session')],
   ];
   const headless: Array<[string, string]> = [
-    ['vessel -p "<prompt>"', 'headless 单轮（--print / --run 同义）'],
-    ['vessel --run @path', 'headless：.json=多轮 seeding，其它=文本 prompt'],
-    ['echo "..." | vessel --run', 'headless 单轮（stdin）'],
-    ['vessel -c --run "..."', '续接最近会话并运行一轮'],
-    ['vessel --resume-run <runId>', '恢复中断的 durable run'],
+    ['vessel -p "<prompt>"', t('help.cmd.print')],
+    ['vessel --run @path', t('help.cmd.runFile')],
+    ['echo "..." | vessel --run', t('help.cmd.stdin')],
+    ['vessel -c --run "..."', t('help.cmd.continueRun')],
+    ['vessel --resume-run <runId>', t('help.cmd.resumeRun')],
   ];
-  const serve: Array<[string, string]> = [
-    ['vessel --serve 8642', '启动 HTTP/WS gateway（Web 控制台后端）'],
-  ];
+  const serve: Array<[string, string]> = [['vessel --serve 8642', t('help.cmd.serve')]];
   const capability: Array<[string, string]> = [
-    ['vessel workflow list', '列出 workflow runs'],
-    ['vessel workflow run <name>', '启动 workflow（workflow.dir 下解析）'],
-    ['vessel workflow show <id>', '查看步骤状态'],
-    ['vessel workflow resume <id>', '恢复 interrupted/failed/running'],
-    ['vessel workflow cancel <id>', '取消同进程 run'],
-    ['vessel eval <suite>', '离线评测'],
-    ['vessel eval <suite> --json --out <path>', '评测输出 JSON / 指定报告'],
-    ['vessel --feishu', '附加飞书渠道（可与 --serve / REPL 同用）'],
+    ['vessel workflow list', t('help.cmd.workflowList')],
+    ['vessel workflow run <name>', t('help.cmd.workflowRun')],
+    ['vessel workflow show <id>', t('help.cmd.workflowShow')],
+    ['vessel workflow resume <id>', t('help.cmd.workflowResume')],
+    ['vessel workflow cancel <id>', t('help.cmd.workflowCancel')],
+    ['vessel eval <suite>', t('help.cmd.eval')],
+    ['vessel eval <suite> --json --out <path>', t('help.cmd.evalOut')],
+    ['vessel --feishu', t('help.cmd.feishu')],
   ];
   const config: Array<[string, string]> = [
-    ['vessel --tenant <id> ...', '选择 tenant（也可用 VESSEL_TENANT）'],
-    [
-      'vessel --connect <url> --connect-token <t> --ca <pem> ...',
-      '连接 gateway（非回环必须 https；token 也可用 VESSEL_CONNECT_TOKEN）',
-    ],
-    ['vessel --serve --allowed-origin <origin>', '独立 Web 前端的 CORS/WS Origin 白名单'],
-    ['vessel config path', '打印用户/项目配置路径'],
-    ['vessel config init', '生成用户配置模板'],
-    ['vessel config show --sources', '查看脱敏配置与来源'],
+    ['vessel --tenant <id> ...', t('help.cmd.tenant')],
+    ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
+    ['vessel --serve --allowed-origin <origin>', t('help.cmd.origin')],
+    ['vessel config path', t('help.cmd.configPath')],
+    ['vessel config init', t('help.cmd.configInit')],
+    ['vessel config show --sources', t('help.cmd.configShow')],
   ];
   const tenant: Array<[string, string]> = [
-    ['vessel tenant list', '列出 tenant'],
-    ['vessel tenant get <id>', '查看 tenant 元数据'],
-    ['vessel tenant create <id>', '创建 tenant'],
-    ['vessel tenant update <id> --status disabled', '更新 tenant'],
+    ['vessel tenant list', t('help.cmd.tenantList')],
+    ['vessel tenant get <id>', t('help.cmd.tenantGet')],
+    ['vessel tenant create <id>', t('help.cmd.tenantCreate')],
+    ['vessel tenant update <id> --status disabled', t('help.cmd.tenantUpdate')],
   ];
   const plugins: Array<[string, string]> = [
-    ['vessel plugin list', '列出仓库/用户/项目/node_modules 插件'],
-    ['vessel plugin install <path> [--force]', '安装本地插件目录到 ~/.vessel/plugins'],
-    ['vessel plugin remove <name>', '从 ~/.vessel/plugins 移除插件'],
+    ['vessel plugin list', t('help.cmd.pluginList')],
+    ['vessel plugin install <path> [--force]', t('help.cmd.pluginInstall')],
+    ['vessel plugin remove <name>', t('help.cmd.pluginRemove')],
   ];
   const migrate: Array<[string, string]> = [
-    ['vessel migrate --from sqlite --to file-v2', '迁移（默认 dry-run）'],
-    ['vessel migrate --from file-v1 --to file-v2 --apply', '执行迁移'],
-    ['vessel trace prune --dry-run', '清理 trace（默认 dry-run）'],
+    ['vessel migrate --from sqlite --to file-v2', t('help.cmd.migrate')],
+    ['vessel migrate --from file-v1 --to file-v2 --apply', t('help.cmd.migrateApply')],
+    ['vessel trace prune --dry-run', t('help.cmd.tracePrune')],
   ];
-  const debug: Array<[string, string]> = [
-    ['VESSEL_MOCK=1 vessel --run "x"', 'mock 模式（不调 API）'],
-  ];
+  const debug: Array<[string, string]> = [['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')]];
   const meta: Array<[string, string]> = [
-    ['vessel doctor', '本机配置/环境自检'],
-    ['vessel --resume-run', '列出可恢复的 interrupted run'],
-    ['vessel update --check', '检查新版本（只提示，不自替换）'],
-    ['vessel update --channel beta', '检查预发布通道'],
-    ['vessel --version', '显示版本'],
-    ['vessel --tools', '列出已注册工具（不需要 API Key）'],
-    ['vessel --help', '显示本帮助'],
+    ['vessel doctor', t('help.cmd.doctor')],
+    ['vessel --resume-run', t('help.cmd.resumeRunList')],
+    ['vessel update --check', t('help.cmd.updateCheck')],
+    ['vessel update --channel beta', t('help.cmd.updateBeta')],
+    ['vessel --version', t('help.cmd.version')],
+    ['vessel --tools', t('help.cmd.tools')],
+    ['vessel --help', t('help.cmd.help')],
   ];
   const width = Math.max(
     ...[
@@ -173,39 +169,39 @@ function printHelp(): void {
 
   console.log(
     [
-      'Vessel CLI — 自组织 Agent Harness',
+      t('help.title'),
       '',
-      '  用法',
+      `  ${t('help.section.usage')}`,
       align(usage, width),
       '',
-      '  会话',
+      `  ${t('help.section.session')}`,
       align(session, width),
       '',
-      '  Headless 模式',
+      `  ${t('help.section.headless')}`,
       align(headless, width),
       '',
-      '  服务模式',
+      `  ${t('help.section.serve')}`,
       align(serve, width),
       '',
-      '  能力（0.4）',
+      `  ${t('help.section.capability')}`,
       align(capability, width),
       '',
-      '  配置（0.5）',
+      `  ${t('help.section.config')}`,
       align(config, width),
       '',
-      '  多租户（0.5）',
+      `  ${t('help.section.tenant')}`,
       align(tenant, width),
       '',
-      '  插件（0.6.1）',
+      `  ${t('help.section.plugins')}`,
       align(plugins, width),
       '',
-      '  迁移与 trace（0.5）',
+      `  ${t('help.section.migrate')}`,
       align(migrate, width),
       '',
-      '  调试',
+      `  ${t('help.section.debug')}`,
       align(debug, width),
       '',
-      '  其它',
+      `  ${t('help.section.other')}`,
       align(meta, width),
     ].join('\n'),
   );
@@ -226,11 +222,28 @@ function resolveStaticDir(): string | undefined {
  * --serve 启动 banner：对齐 box，含 gateway + 控制台提示。
  * 不打印任何 token（含前缀），也不在 URL 中拼接 token。
  */
+// ── 入口环境（locale / logger / 未捕获兜底）────────
+// locale 先按环境变量解析，保证解析错误与 --help 也跟随 VESSEL_LANG；
+// bootstrap 后再用 config.ui.language 重新应用（完整优先级）。
+setLocale(resolveLocale({ env: process.env }));
+const logger = createCliLogger();
+let activeResult: BootstrapResult | undefined;
+let activeEvents: EventStream | undefined;
+let activeCleanup: (() => Promise<void>) | undefined;
+installProcessErrorHandlers({
+  logger,
+  events: () => activeEvents,
+  shutdown: async () => {
+    if (activeCleanup) return activeCleanup();
+    await activeResult?.shutdown();
+  },
+});
+
 // ── argv 解析 ────────────────────────────────────
 
 const parsed = parseArgs(process.argv.slice(2));
 if (!parsed.ok) {
-  console.error(`${parsed.error}\nRun with --help for usage.`);
+  console.error(`${parsed.error}\n${t('common.helpHint')}`);
   // 用法/解析错误统一 exit 2（Addendum A §6），与运行期失败（exit 1）区分。
   process.exit(2);
 }
@@ -244,9 +257,7 @@ const resolvedScenario = demoRequested
   : resolveMockScenario(process.env.VESSEL_MOCK_SCENARIO);
 const mockScenario = resolvedScenario.name;
 if (useMock && !demoRequested && resolvedScenario.unknown !== undefined) {
-  console.error(
-    `Unknown VESSEL_MOCK_SCENARIO "${resolvedScenario.unknown}"; falling back to "echo".`,
-  );
+  console.error(t('cli.unknownMockScenario', { name: resolvedScenario.unknown }));
 }
 
 // 一次性命令在 bootstrap 之前短路：不加载 config / provider / gateway。
@@ -261,20 +272,17 @@ if (args.version) {
 // `vessel demo` 走现有 bootstrap / REPL 路径；非 TTY 无法交互，直接失败。
 if (demoRequested) {
   if (process.stdin.isTTY !== true) {
-    console.error(
-      '`vessel demo` needs an interactive terminal (TTY). ' +
-        'For a non-interactive check, run: VESSEL_MOCK=1 vessel --run "hello"',
-    );
+    console.error(t('demo.needsTty'));
     process.exit(1);
   }
   console.log(
     [
-      'Vessel demo (no API key required)',
-      '- The assistant will run one harmless bash command: echo vessel-demo-ok',
-      '- You will see the tool call, the permission prompt, and the final reply',
-      '- Press Ctrl+C to exit',
-      'Next: run `vessel config init` to add your API key, then `vessel` for a real session.',
-      'This demo uses an isolated data directory and does not read your existing sessions.',
+      t('demo.title'),
+      t('demo.line.command'),
+      t('demo.line.flow'),
+      t('demo.line.exit'),
+      t('demo.line.next'),
+      t('demo.line.isolated'),
     ].join('\n'),
   );
 }
@@ -282,12 +290,13 @@ if (demoRequested) {
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
 const command = matchCommand(args);
 if (command) {
+  await applyCommandLocale();
   process.exit((await command.run(args, { useMock })) ?? 0);
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
   if (args.connectArg !== null || (process.env.VESSEL_CONNECT ?? '').trim() !== '') {
-    console.error('--resume without an id requires a local session store (not with --connect).');
+    console.error(t('cli.resumeNeedsLocalStore'));
     process.exit(2);
   }
   process.exit(
@@ -378,8 +387,13 @@ const initialResult = await bootstrap({
       : {}),
   // `--feishu` 的配置错误按 Addendum C/D 使用 exit 2；0.3 入口保持 1。
   configErrorExitCode: args.feishu ? 2 : 1,
+  logger,
 });
 const { config } = initialResult;
+activeResult = initialResult;
+activeEvents = initialResult.ctx.events;
+// 完整 locale 优先级：VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN
+applyLocale((config.ui as { language?: string } | undefined)?.language);
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
 if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
@@ -416,10 +430,13 @@ if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
           ? { connect: process.env.VESSEL_CONNECT }
           : {}),
       configErrorExitCode: args.feishu ? 2 : 1,
+      logger,
     });
+    activeResult = result;
+    activeEvents = result.ctx.events;
     await runWithConfig(result);
   } else {
-    console.error('未配置 API Key，退出。');
+    console.error(t('common.noApiKeyExit'));
     process.exit(args.feishu ? 2 : 1);
   }
 } else {
@@ -454,7 +471,11 @@ async function runWithConfig(result: BootstrapResult) {
   // 0.6 A4：connect 模式下展示远端 node/tenant。headless 写 stderr，避免污染 stdout。
   if (result.remote) {
     const node = result.remote.nodeId ?? 'unknown';
-    const line = `Remote gateway: node=${node} tenant=${result.remote.tenantId} (${result.remote.endpoint})`;
+    const line = t('cli.remoteGateway', {
+      node,
+      tenant: result.remote.tenantId,
+      endpoint: result.remote.endpoint,
+    });
     if (headless) console.error(line);
     else console.log(line);
   }
@@ -484,7 +505,7 @@ async function runWithConfig(result: BootstrapResult) {
   if (args.feishu) {
     try {
       feishuChannel = await startFeishuChannel(result);
-      console.log(`Feishu channel connected (${feishuChannel.status().appIdMasked}).`);
+      console.log(t('cli.feishuConnected', { appId: feishuChannel.status().appIdMasked }));
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
       await result.shutdown();
@@ -562,6 +583,7 @@ async function runWithConfig(result: BootstrapResult) {
         headless,
         nodeId: result.nodeId,
         sharedEvents,
+        logger,
       });
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
@@ -805,6 +827,15 @@ async function runWithConfig(result: BootstrapResult) {
     console.log(`\n${renderGatewayBanner(gateway)}\n`);
   }
 
+  // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
+  activeCleanup = async () => {
+    gateway?.stop();
+    unsubSharedBridge?.();
+    unsubSharedBridge = undefined;
+    await tenantFactory?.closeAll();
+    await result.shutdown();
+  };
+
   let shutdownSignal: 'SIGINT' | 'SIGTERM' | undefined;
   const waitForSignal = async (): Promise<void> => {
     await new Promise<void>((resolve) => {
@@ -823,7 +854,7 @@ async function runWithConfig(result: BootstrapResult) {
 
   // 纯 serve 模式（--serve 且无 --run）：gateway 常驻，不进 REPL，直到 SIGINT/SIGTERM。
   if (gateway && !headless) {
-    console.log('Gateway 运行中… 按 Ctrl+C 停止。\n');
+    console.log(`${t('cli.gatewayRunning')}\n`);
     await waitForSignal();
   } else if (headless) {
     headlessExitCode = await runHeadless(runtime, ctx.session, {
@@ -834,7 +865,7 @@ async function runWithConfig(result: BootstrapResult) {
     });
   } else if (args.feishu && process.stdin.isTTY !== true) {
     // Addendum D §13.3：非 TTY + 无 --serve → 仅渠道前台，不启动 REPL。
-    console.log('Feishu channel running… 按 Ctrl+C 停止。\n');
+    console.log(`${t('cli.feishuRunning')}\n`);
     await waitForSignal();
   } else {
     // REPL 启动后台检查：只提示、每天最多一次、失败静默。
