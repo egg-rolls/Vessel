@@ -18,15 +18,20 @@ import { asTuiEvent, type TuiEvent } from '../types/events.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { MarkdownText } from './Markdown.js';
+import { ReasoningBlock } from './ReasoningBlock.js';
 import { SpinnerWithVerb } from './SpinnerWithVerb.js';
 import { useSpinnerState } from './StateTracker.js';
 import { groupSegments, ToolTrail } from './ToolTrail.js';
 
 // ── 类型 & 工厂 & 纯 reducer（导出供测试） ──
 
-/** 一个按时间顺序排列的输出片段：文本段落或工具调用卡片 */
+/**
+ * 一个按时间顺序排列的输出片段：正文段落、思考段落或工具调用卡片。
+ * 0.11.1（DECISION-022 §2.3）：reasoning 只用于实时展示，不进入归档。
+ */
 export type Segment =
   | { type: 'text'; id: string; text: string }
+  | { type: 'reasoning'; id: string; text: string }
   | {
       type: 'tool_call';
       id: string;
@@ -43,7 +48,20 @@ export function makeToolCallSegment(id: string, name: string, args: unknown): Se
   return { type: 'tool_call', id, name, arguments: args, status: 'running' };
 }
 
-/** 从 segments 中提取所有文本段落的拼接结果 */
+/**
+ * 前向兼容读取 reasoning delta（0.11.1）。
+ *
+ * core 的 `StreamChunk.type` 在 TUI 分支基线上还是旧 union；此处按结构读取，
+ * 避免 TUI 依赖 core 类型补丁的落地顺序。不是 reasoning chunk 时返回 null。
+ */
+export function readReasoningDelta(chunk: unknown): string | null {
+  if (typeof chunk !== 'object' || chunk === null) return null;
+  const record = chunk as { type?: unknown; delta?: unknown };
+  if (record.type !== 'reasoning_delta') return null;
+  return typeof record.delta === 'string' && record.delta.length > 0 ? record.delta : null;
+}
+
+/** 从 segments 中提取所有文本段落的拼接结果（reasoning 不算正文） */
 export function getResponseText(segs: Segment[]): string {
   return segs
     .filter((seg): seg is { type: 'text'; id: string; text: string } => seg.type === 'text')
@@ -91,7 +109,7 @@ export function limitSegments(segs: Segment[], options: LimitSegmentsOptions = {
   const maxSegments = Math.max(1, options.maxSegments ?? DEFAULT_MAX_SEGMENTS);
   const maxLines = Math.max(1, options.maxLines ?? DEFAULT_MAX_TEXT_LINES);
   return segs.slice(-maxSegments).map((seg) => {
-    if (seg.type !== 'text') return seg;
+    if (seg.type === 'tool_call') return seg;
     return options.expanded ? seg : { ...seg, text: tailLines(seg.text, maxLines) };
   });
 }
@@ -127,6 +145,7 @@ function editDiffText(args: unknown, maxLines: number): string {
  * 纯函数：把当前轮 segments 转成可归档到 history 的文本。
  *
  * - 文本段原样拼接；
+ * - reasoning 段丢弃（思考流只用于实时展示，不进入 Markdown 历史）；
  * - completed 工具段输出紧凑摘要（`✓ name (12ms)` + 结果尾部）；
  * - failed 工具段输出 `✗ name` + error。
  */
@@ -137,6 +156,7 @@ export function getTranscriptText(segs: Segment[], options: { full?: boolean } =
       if (seg.text) parts.push(sanitizeTerminalText(seg.text));
       continue;
     }
+    if (seg.type === 'reasoning') continue;
 
     if (seg.status === 'completed') {
       const duration = seg.duration !== undefined ? ` (${seg.duration}ms)` : '';
@@ -179,11 +199,11 @@ export function getCancelledTranscript(segs: Segment[], options: { full?: boolea
  * 纯函数：根据 RunEvent 计算新的 segments 数组。
  *
  * - `RunStarted` → 返回空数组（重置）
- * - `LlmStreamChunk` → 追加/合并 text segment
+ * - `LlmStreamChunk` → 追加/合并 text segment；reasoning_delta 追加/合并 reasoning segment
  * - `ToolCallStarted/Completed/Failed` → 追加/更新 tool_call segment
  * - 其他事件 → 返回原数组
  *
- * `nextId` 用于为新 text segment 生成唯一 key。
+ * `nextId` 用于为新 segment 生成唯一 key。
  */
 export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => string): Segment[] {
   switch (event.type) {
@@ -193,6 +213,14 @@ export function reduceSegments(prev: Segment[], event: TuiEvent, nextId: () => s
 
     case 'llm.stream.chunk': {
       const chunk = event.data.chunk;
+      const reasoning = readReasoningDelta(chunk);
+      if (reasoning) {
+        const last = prev.at(-1);
+        if (last?.type === 'reasoning') {
+          return [...prev.slice(0, -1), { ...last, text: last.text + reasoning }];
+        }
+        return [...prev, { type: 'reasoning', id: nextId(), text: reasoning }];
+      }
       const delta = chunk.delta;
       if (chunk.type === 'text_delta' && delta) {
         const last = prev.at(-1);
@@ -398,6 +426,10 @@ export function StreamOutput({
         group.type === 'text' ? (
           <Box key={`text-${group.segment.id}`}>
             <MarkdownText text={sanitizeTerminalText(group.segment.text)} />
+          </Box>
+        ) : group.type === 'reasoning' ? (
+          <Box key={`reasoning-${group.segment.id}`}>
+            <ReasoningBlock text={group.segment.text} />
           </Box>
         ) : (
           <Box

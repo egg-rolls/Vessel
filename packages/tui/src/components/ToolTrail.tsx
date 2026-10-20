@@ -17,9 +17,11 @@ import { toolDisplayRegistry } from './ToolDisplay.js';
 
 export type ToolSegment = Extract<Segment, { type: 'tool_call' }>;
 type TextSegment = Extract<Segment, { type: 'text' }>;
+type ReasoningSegment = Extract<Segment, { type: 'reasoning' }>;
 
 export type SegmentGroup =
   | { type: 'text'; segment: TextSegment }
+  | { type: 'reasoning'; segment: ReasoningSegment }
   | { type: 'tools'; segments: ToolSegment[] };
 
 export type TrailTone = 'ok' | 'warn' | 'danger' | 'muted' | 'faint';
@@ -55,6 +57,10 @@ export function groupSegments(segments: Segment[]): SegmentGroup[] {
       continue;
     }
     flush();
+    if (segment.type === 'reasoning') {
+      groups.push({ type: 'reasoning', segment });
+      continue;
+    }
     groups.push({ type: 'text', segment });
   }
   flush();
