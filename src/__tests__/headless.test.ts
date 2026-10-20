@@ -82,7 +82,7 @@ it('headless 失败时 exit 非零', async () => {
   // 不给 mock、不给 api key、headless -> 应 fail-fast 退出
   const { exitCode, stderr } = await runCli(['--run', 'hi'], { VESSEL_MOCK: '' });
   expect(exitCode).not.toBe(0);
-  expect(stderr).toContain('API Key');
+  expect(stderr.toLowerCase()).toContain('api key');
 });
 
 it('headless --run（无参）：从 stdin 读输入（--pipe 已折叠进 --run）', async () => {
