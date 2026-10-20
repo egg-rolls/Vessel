@@ -3,6 +3,65 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.10.0] - 2026-10-20
+
+> 0.10.0（基于 `release/0.10.0`，未发布）：发版硬化——首启与配置、上下文 / 运行时、日志与可观测、打包与分发、CLI 语言。新增能力都保留兼容路径；发布包名改为 `vessel-agent`，版本号由 1 在集成线统一写入。
+
+### Security
+
+- **trace 文件权限**：trace 文件以 `0600` 创建；`trace.includeStreamChunks` 默认 `false`，`llm.stream.chunk` 不再默认落盘（需要时显式开启）。
+- **配置来源脱敏**：`config show --sources` 中 `serve.tokens.<token>.*` 的 token 段与值替换为 `<set>` / `<set#N>`，`*.apiKey` / `*.token` 的来源值统一 `<set>`；不再输出解析后的密钥。
+- **`transport.token` 不再当 gateway admin**：远程 transport 的 token 只用于节点间认证，不能提升为 gateway 管理权限。
+- **诊断不写 stdout**：`VESSEL_DEBUG` 不再把 prompt 正文打印到 stdout；诊断日志统一走 stderr（stderr JSON），并默认经 trace redactor 脱敏。
+- **异常兜底不泄露原文**：`unhandledRejection` / `uncaughtException` 的 `process.error` 事件只带 `kind` 与脱敏后的 message，不带 stack / 原始对象；shutdown 失败同样只记录脱敏字段。
+- **hook-logging 默认 stderr**：hook 日志不再混入命令结果 / JSON 输出。
+
+### Added
+
+- **统一 API Key 解析**：`resolveEffectiveApiKey()` 统一处理 provider 级 key、`*_env` 与顶层 `apiKey`，各入口不再各读一套。
+- **首启诊断**：`config init` 生成的模板可直接启动，输出下一步提示；`--json` 下错误为结构化对象；CLI 统一错误 formatter。
+- **`Logger` 端口**（core）：`Logger` / `LogLevel` / `LoggerOptions` 类型 + `createStderrLogger()`（stderr JSON、级别阈值、redact）与 `noopLogger`；CLI / serve 通过 `createCliLogger()` 读取 `VESSEL_LOG_LEVEL`（`VESSEL_DEBUG` 非空等价 debug）。
+- **interrupt 原因**：`AgentRuntime.interrupt(reason?: 'shutdown' | 'timeout' | 'user')`，与 `RunOptions.signal` 合并为同一取消信号；`shutdown` / `timeout` 落 `interrupted` checkpoint，可 `--resume-run`。
+- **provider 超时与重试观测**：provider 插件默认 120s 请求超时（`timeout_ms`，`<=0` 关闭），超时抛 `ProviderTimeoutError`（`provider_timeout`）；重试通过 `onRetry` 回调输出结构化事件。
+- **MCP 告警结构化**：MCP server 连接 / 工具冲突告警写 stderr 并发布 `mcp.warning` 事件。
+- **CLI i18n**：`src/i18n/` 提供 zh-CN / en 两份 catalog（各 85 个 key）与 `t(key, params?)`；`--help`、一次性命令错误、默认空状态与 demo banner 走同一 locale 解析。
+- **安装解析 smoke**：`scripts/smoke-install.ts` 对 18 个子包 + 根 tarball 执行 `npm pack`，用本地 `file:` `overrides` 安装后运行 `vessel --version` / `VESSEL_MOCK=1 vessel --tools`；CI 新增 `install-smoke` job，`release.yml` 的 `verify` 同时跑发布干跑与安装 smoke。
+- **包元数据**：18 个子包补充 `files: ["src"]`、`license`、`repository`、`engines`；根包 `files` 排除 `**/node_modules/**` 并加入 `apps/web/dist`。
+
+### Changed
+
+- **配置优先级收窄**：legacy `default_provider` / `providers` 与新版 `provider:` 并存时新版优先，并对 legacy 键发 deprecation warning；legacy 仅作只读兼容。
+- **未知 provider 必须显式端点**：未注册 provider 且无 `provider.base_url` 时抛 `ProviderConfigError`（`provider_invalid`）；有 `base_url` 时按 OpenAI 兼容端点构造，并只向 stderr 打一次 info。
+- **YAML 错误不再静默**：YAML 解析错误 / 重复键转为带文件路径（与行号）的 validation error，不再回落默认配置。
+- **`context.maxMessages` 默认移除**：缺省时 core 按 `context.maxTokens` 推导安全条数上限；显式配置仍优先。
+- **上下文不再硬截断**：去掉 100 条硬截断；token 估算统一覆盖 `tool_calls` / `reasoning` / system 消息；超限先摘要，system 消息永不丢弃。
+- **400 context-overflow**：provider 返回 400 且命中 overflow 模式时，强制压缩一次并重试一次；压缩失败不覆盖原始错误。
+- **网关关闭**：`gateway.stop()` 幂等；先 `interrupt('shutdown')`，最多 drain active run 5s，再关连接 / HTTP；关闭顺序固定为 `stop → 取消订阅 / 关闭 transport → beforeClose → closeAll → shutdown`，serve 路径不再二次 drain。
+- **根包发布名**：根 `package.json` 为 `vessel-agent`，bin 仍是 `vessel`；`release.yml` 先发布 18 个子包（core → permission → config → serve → tui → plugins），最后发布根包。
+- **CLI 本地化范围**：默认 zh-CN，`VESSEL_LANG` 优先；TUI 与 CLI 共用同一优先级；命令的数据输出（会话 / trace / metrics / 成本等）保持英文。
+
+### Fixed
+
+- **未知 provider 静默回退**：不再猜测厂商默认端点；缺 model 的已知 provider 也 fail-fast，不全局回退 `gpt-4`。
+- **重复键被吞**：YAML 重复键与解析失败不再被当作空配置。
+- **上下文 100 条上限**：长对话不再因条数上限被截断。
+- **400 overflow 直接失败**：先压缩再重试一次。
+- **调试输出污染 stdout**：`VESSEL_DEBUG` 的 prompt 正文与日志移到 stderr，stdout 只留命令结果 / JSON。
+- **重复 drain**：serve 关闭时 gateway 与 bundle 不再各等一次 active run。
+- **provider 请求无超时**：默认 120s，避免挂死。
+- **`config show --sources` 泄露**：token / apiKey 来源值统一脱敏。
+
+### Known limitations
+
+- host 模式（直接使用 `PluginHost` 装配）不经过 `AgentRuntime.interrupt()`；durable run 与 workflow 的 drain 语义未在 host 模式覆盖。
+- 跨节点去重集合仍不持久化，只保证单 gateway 进程生命周期内 at-most-once；文档不宣称跨重启 exactly-once。
+- RPC 结果校验默认关闭，只有 `VESSEL_VALIDATE_RESULTS=1` 时生效；CI 的 Test step 固定开启。
+- provider 插件没有事件总线，重试观测只能通过 `onRetry` 回调或 stderr 日志，不会发布 core 事件。
+- 安装解析 smoke 只在 POSIX / Node 22 运行；Windows 的 npm `.cmd` bin shim 与 `file:` override 未验证，默认跳过。
+- CLI 本地化覆盖 `--help` / 错误 / 空状态 / demo banner；命令数据输出仍为英文，Web 前端未本地化。`--help` 在配置加载前短路，只能看到环境变量层。
+- `context.maxMessages` 缺省值由 core 按 token 预算推导；依赖旧默认条数的调用方需显式配置。
+- 版本号 bump 由 1 在集成线统一写入；本分支 `package.json` 在 bump 前仍是上一版本。
+
 ## [0.9.0] - 2026-10-20
 
 > 0.9.0（基于 `release/0.9.0`，未发布）：Wave 2B2B 收口——插件生命周期 v2、canonical RPC 方法的结果 schema、跨节点去重键（含进程代际 `incarnation`）。新增能力都保留默认兼容路径；版本号由 1 在集成线统一写入。

@@ -82,6 +82,10 @@
 | 065 | 插件生命周期 v2（init / dispose / 安装回滚） | accepted | 2026-10-20 | plugins, lifecycle, dispose, runtime | [ADR-065-plugin-lifecycle-v2.md](ADR-065-plugin-lifecycle-v2.md) |
 | 066 | canonical RPC 方法的结果 schema 与可选校验 | accepted | 2026-10-20 | rpc, schema, validation, protocol | [ADR-066-rpc-result-schemas.md](ADR-066-rpc-result-schemas.md) |
 | 067 | 跨节点去重键与进程代际 incarnation | accepted | 2026-10-20 | transport, dedup, multi-node, incarnation | [ADR-067-cross-node-dedup-keys.md](ADR-067-cross-node-dedup-keys.md) |
+| 068 | 配置与首启硬化（统一 Key 解析、provider 优先级与 fail-fast） | accepted | 2026-10-20 | config, provider, first-run, validation, security | [ADR-068-config-and-first-run-hardening.md](ADR-068-config-and-first-run-hardening.md) |
+| 069 | 日志端口与可观测（stderr 诊断、脱敏与进程级兜底） | accepted | 2026-10-20 | logging, observability, redaction, trace, process | [ADR-069-logging-port-and-observability.md](ADR-069-logging-port-and-observability.md) |
+| 070 | 关闭 drain 与 interrupt 原因（可恢复的 interrupted checkpoint） | accepted | 2026-10-20 | runtime, shutdown, interrupt, drain, gateway, durable | [ADR-070-shutdown-drain-and-interrupt-reasons.md](ADR-070-shutdown-drain-and-interrupt-reasons.md) |
+| 071 | 分发：vessel-agent 根包、子包 files 与安装解析 smoke | accepted | 2026-10-20 | distribution, packaging, npm, release, ci | [ADR-071-distribution-vessel-agent-and-install-smoke.md](ADR-071-distribution-vessel-agent-and-install-smoke.md) |
 
 ## 编写约定
 

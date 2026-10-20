@@ -1759,3 +1759,56 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `runs.get` 的 `result_schema` 是 `RunStatus` 与 durable checkpoint 的宽松超集，不是精确校验。
 - 结果校验默认关闭，只在 `VESSEL_VALIDATE_RESULTS=1` 时生效；CI 的 Test step 固定开启。
 - `sessions.list` 的四个可空字段只做存在性约束，不做类型校验。
+
+## 29. 0.10.0 发版硬化（已实现）
+
+> 状态：已合入 `release/0.10.0`（未发布）。决策见 [ADR-068](adr/ADR-068-config-and-first-run-hardening.md)、[ADR-069](adr/ADR-069-logging-port-and-observability.md)、[ADR-070](adr/ADR-070-shutdown-drain-and-interrupt-reasons.md)、[ADR-071](adr/ADR-071-distribution-vessel-agent-and-install-smoke.md)。四块改动都保留兼容路径：legacy 配置只读兼容，日志端口可替换，`interrupt()` 可选，发布包名变更不影响 bin。
+
+### 29.1 配置与首启
+
+- **Key 解析单源**：`resolveEffectiveApiKey()`（`packages/config/src/secrets.ts`）按 provider 级 `apiKey` / `*_env` → 顶层 `apiKey` 解析；bootstrap、eval、doctor 共用，不再各读一套。
+- **provider 优先级**：新版 `provider:` 块优先于 legacy `default_provider` / `providers`；两者并存时对 legacy 键发 deprecation warning，legacy 只读、不参与写入。
+- **未知 provider fail-fast**：未注册且无 `provider.baseUrl` → `ProviderConfigError`（`provider_invalid`）；有 `baseUrl` → OpenAI 兼容端点 + 一次性 stderr info。已知 provider 缺 model 也 fail-fast，不全局回退 `gpt-4`。
+- **YAML 错误**：解析失败 / 重复键 / 根节点类型错误转为带文件路径（解析错误带行号）的 validation error；只有 ENOENT 与空文档视为缺省，不静默降级。
+- **首启**：`config init` 模板可直接启动并输出下一步；`--json` 错误结构化；CLI 统一错误 formatter。
+- **来源脱敏**：`config show --sources` 对 `serve.tokens.<token>.*` 输出 `<set>` / `<set#N>`，对 `*.apiKey` / `*.token` 的来源值输出 `<set>`。
+- **默认值**：`context.maxMessages` 不再有默认值；缺省时 core 按 `context.maxTokens` 推导条数上限。`context.maxTokens` 仍默认 1,000,000（ADR-064）。
+
+### 29.2 上下文与运行时
+
+- **无硬截断**：删除 100 条消息硬上限；token 估算统一覆盖 `tool_calls` / `reasoning` / system 消息；超限先摘要，system 消息永不丢弃。
+- **overflow 重试**：provider 返回 400 且命中 context-overflow 模式时，强制压缩一次并重试一次；压缩失败不覆盖 provider 原始错误。
+- **interrupt 原因**：`AgentRuntime.interrupt(reason?: 'shutdown' | 'timeout' | 'user')`，与 `RunOptions.signal` 合并为同一取消信号；`shutdown` / `timeout` 落 `interrupted` checkpoint 并可 `--resume-run`，`user` 保持 `cancelled`。
+- **网关关闭**：`gateway.stop()` 幂等；先 `interrupt('shutdown')`，最多 5s 等 active run，再关 WS / HTTP。
+- **关闭顺序**：`await gateway.stop() → 取消共享流订阅 / 关闭 transport → beforeClose → closeAll → shutdown`；后两步传 `{ drain: false }`，serve 路径不重复 drain。顺序抽为 `shutdownServeStack()`（`src/shutdown-sequence.ts`）；无 gateway 的 headless / REPL 由 bundle 自己 drain。
+
+### 29.3 日志与可观测
+
+- **Logger 端口**（core）：`Logger` / `LogLevel` / `LogFields` / `LoggerOptions` 为纯类型；`createStderrLogger()` 输出一行一个 JSON 到 stderr，默认 `info`，message 与 fields 经 trace redactor，sink 失败静默；未注入时用 `noopLogger`。
+- **级别**：`VESSEL_LOG_LEVEL`（debug|info|warn|error，非法回退 info）；`VESSEL_DEBUG` 非空等价 debug。stdout 只留命令结果 / JSON / UX 输出。
+- **进程兜底**：`unhandledRejection` / `uncaughtException` → `logger.error` + `process.error`（只带 `kind` 与脱敏 message），设置退出码 1，限时 5s shutdown 后退出；重复触发只清理一次。shutdown 各步骤失败发 `shutdown.failed`（`step` / `error` / `tenant_id`）。
+- **插件侧**：provider 默认 120s 超时（`timeout_ms`，`<=0` 关闭），超时抛 `ProviderTimeoutError`（`provider_timeout`），重试经 `onRetry`；MCP 告警写 stderr 并发 `mcp.warning`；hook-logging 默认 stderr。
+- **trace**：文件以 `0600` 创建；`trace.includeStreamChunks` 默认 `false`，`llm.stream.chunk` 默认不落盘。
+
+### 29.4 打包与分发
+
+- **根包**：`package.json` 的 `name` 为 `vessel-agent`，bin 仍是 `vessel`；根 `files` 排除 `**/node_modules/**`、`__tests__`、`*.test.ts(x)`，并包含 `apps/web/dist`。
+- **子包**：18 个可发布子包统一 `files: ["src"]` + `license` / `repository` / `engines`。
+- **安装 smoke**：`scripts/smoke-install.ts` 对 18 个子包 + 根 tarball 执行 `npm pack`，用本地 `file:` `overrides` 安装并运行 `vessel --version` / `VESSEL_MOCK=1 vessel --tools`。CI 的 `install-smoke` job 与 `release.yml` 的 `verify` 都会执行；POSIX / Node 22，Windows 默认跳过。
+- **发布顺序**：`core → permission → config → serve → tui → plugins`，最后发布根包 `vessel-agent`；`verify` 失败则不进入 `publish-npm`。
+
+### 29.5 CLI 本地化
+
+- `src/i18n/` 提供 zh-CN / en 两份 catalog（各 85 个 key）与 `t(key, params?)`；优先级 `VESSEL_LANG > config.ui.language > LANG > LC_ALL > zh-CN`。
+- 覆盖 `--help`、一次性命令错误、默认空状态与 demo banner；命令的数据输出（会话 / trace / metrics / 成本等）保持英文，Web 前端未本地化。
+- `--help` 在配置加载前短路，只能看到环境变量层；其余 UI 在 bootstrap 后用 `config.ui.language` 重新解析。
+
+### 29.6 已知限制（0.10.0）
+
+- host 模式（直接使用 `PluginHost` 装配）不经过 `AgentRuntime.interrupt()`；durable run 与 workflow 的 drain 语义未覆盖。
+- 跨节点去重集合仍不持久化，只保证单 gateway 进程生命周期内 at-most-once。
+- RPC 结果校验默认关闭，只有 `VESSEL_VALIDATE_RESULTS=1` 时生效；CI 的 Test step 固定开启。
+- provider 插件没有事件总线，重试观测只能通过 `onRetry` 或 stderr，不发布 core 事件。
+- 安装 smoke 只在 POSIX / Node 22 运行；Windows 安装未验证。
+- CLI 本地化不覆盖命令数据输出；Web 前端未本地化。
+- 版本号 bump 由 1 在集成线统一写入；bump 前根 `package.json` 仍是上一版本。

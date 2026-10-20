@@ -26,11 +26,11 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 ## 状态
 
-**alpha。当前开发线 `release/0.10.0`（基线 `release/0.9.0 = 23261b3`），未发布。** 0.1 ~ 0.9 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.10 正在做发版硬化（安全 / 配置 / 首启 / 错误呈现 / 可观测 / 打包 / 语言）；本文只写已合入当前分支的行为，尚未完成的部分明确标注 **0.10 计划**。
+**alpha。当前开发线 `release/0.10.0`（基线 `release/0.9.0 = 23261b3`），未发布。** 0.1 ~ 0.10 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.10 的发版硬化（安全 / 配置 / 首启 / 错误呈现 / 可观测 / 打包 / 语言）已实现；本文只写已合入当前分支的行为。
 
-**包结构**（bun workspaces monorepo）：`@vessel/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前为 `0.9.0`，各包 manifest 同步，不在文档里维护副本。
+**包结构**（bun workspaces monorepo）：`@vessel/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel/config`、`@vessel/permission`、`@vessel/tui`、`@vessel/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前为 `0.9.0`（0.10.0 的 bump 由 1 在集成线统一写入），各包 manifest 同步，不在文档里维护副本。
 
-**语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 界面文案走 `t()`（zh-CN / en 两份 catalog），技术词、命令名、错误码与数据输出不翻译；CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 跟随同一 locale 属于 **0.10 计划**，因此 CLI 当前尚未全量本地化。详见 [CONFIG.md](docs/operations/CONFIG.md)。
+**语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 前端未本地化。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
 ## 快速开始
 
@@ -44,7 +44,7 @@ bun link            # 把根包的 bin 注册为全局 `vessel`
 vessel --version    # 读根 package.json
 ```
 
-之后本文统一用 `vessel`。不想全局链接时，在仓库根用 `bun run src/cli.ts`，参数完全相同。发布名计划为 `vessel-agent`（bin 仍是 `vessel`），打包形态与安装 smoke 属于 **0.10 计划**。
+之后本文统一用 `vessel`。不想全局链接时，在仓库根用 `bun run src/cli.ts`，参数完全相同。发布名为 `vessel-agent`（bin 仍是 `vessel`）；打包形态与安装解析 smoke 已在 0.10 实现，但**尚未发布**。
 
 ### ① 先跑起来看看（**不需要 API Key**）
 
@@ -420,9 +420,9 @@ team:
 
 ## 发布与更新
 
-- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.9 均未发布，1.0 前不发布。
-- 当前 `release/0.10.0` 只做发布干跑：`bun run scripts/release-dry-run.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
-- npm 分发名计划为 **`vessel-agent`**（bin 仍是 `vessel`）；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）；子包 `files` / 元数据与 tarball 安装 smoke 属于 **0.10 计划**。
+- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.10 均未发布，1.0 前不发布。
+- 当前 `release/0.10.0` 只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
+- npm 分发名为 **`vessel-agent`**（bin 仍是 `vessel`）；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）。18 个子包带 `files: ["src"]` 与 `license` / `repository` / `engines`，根包排除 `node_modules` 并包含 `apps/web/dist`；tarball 安装 smoke 已在 0.10 实现（POSIX / Node 22，Windows 跳过）。
 - **不提供独立二进制**（ADR-006）。
 - `vessel update --check` 读取 Release 的 `latest.json`，只提示版本与安装命令；**不下载、不自替换**。当前仓库不生成 `latest.json`。
 - 后台检查：交互 REPL 启动时每天最多一次；`update.autoCheck: false` 或 `VESSEL_NO_UPDATE_CHECK=1` 可关闭，失败静默。
@@ -438,10 +438,10 @@ team:
 - **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；只做文本、单 chat 单 session。
 - **微信（公众号 / 企业微信）** —— **不做**；个人微信无官方 API。
 - **per-tenant 跨节点 team** —— 未实现；跨节点 team 控制面为 default/admin-only。
-- **npm 分发** —— 计划名 `vessel-agent`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 属于 **0.10 计划**。
+- **npm 分发** —— 分发名 `vessel-agent`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已在 0.10 实现，但发布决定在 1。
 - **独立二进制 / 自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只做版本检查与提示。
-- **CLI / Web 全量本地化** —— TUI 文案已走 `t()`；CLI 的 `--help` / 错误 / 空状态 / demo banner 属于 **0.10 计划**，Web 前端未本地化。
-- **版本发布** —— 0.1 ~ 0.9 均未发布；发布决定在 1。
+- **Web 全量本地化** —— TUI 与 CLI 的 `--help` / 错误 / 空状态 / demo banner 已走同一 locale；Web 前端未本地化，命令数据输出保持英文。
+- **版本发布** —— 0.1 ~ 0.10 均未发布；发布决定在 1。
 
 ## 文档索引
 
