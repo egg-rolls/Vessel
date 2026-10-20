@@ -50,7 +50,7 @@
     "plugins/*/*"
   ],
   "dependencies": {
-    "@promptctl/rich-js": "^0.6.0",
+    "@promptctl/rich-js": "^0.10.0",
     "@vessel/config": "0.10.0",
     "@vessel/core": "0.10.0",
     "@vessel/permission": "0.10.0",
