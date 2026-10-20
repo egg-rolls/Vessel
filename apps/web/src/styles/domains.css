@@ -335,6 +335,13 @@
   padding: 12px 16px;
 }
 
+.run-permissions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 0 16px 12px;
+}
+
 .tool-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);

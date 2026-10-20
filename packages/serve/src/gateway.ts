@@ -205,6 +205,11 @@ export interface GatewayOptions {
   allowedOrigins?: string[];
   /** 心跳间隔（毫秒，默认 15000） */
   heartbeatMs?: number;
+  /**
+   * 0.13 Addendum A：权限交互持久化目录（`<dataDir>`）。
+   * 缺省 = 不落盘；asm 启动 gateway 时传入。
+   */
+  interactionsDir?: string;
   /** WS 首帧鉴权超时（毫秒，默认 5000） */
   authTimeoutMs?: number;
   /**
@@ -630,6 +635,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     defaultTenantId,
     maxQueue,
     maxRuns: MAX_RUNS,
+    ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
   const runs = engine.runs;
   const queue = engine.queue;
@@ -2474,6 +2480,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       case 'quota_exceeded':
       case 'payload_too_large':
         return code === 'quota_exceeded' ? 429 : 413;
+      case 'expired':
+      case 'run_ended':
+        // 410 Gone：请求存在过，但已过期/已取消/所属 run 已结束。
+        return 410;
       case 'internal':
         return 500;
       default:
@@ -2961,6 +2971,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
                 request_id: requestId,
                 decision,
                 ...(body.remember === true ? { remember: true } : {}),
+                ...(typeof body.scope === 'string' ? { scope: body.scope } : {}),
               },
               principal,
             ),
@@ -3097,7 +3108,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }, heartbeatMs);
   (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
-  // 清理过期的权限请求记录
+  // 只清理 ask 的内存记录；权限 pending 不再按时间过期（Addendum A）。
   const permissionSweeper = setInterval(() => {
     engine.sweep();
   }, 30_000);

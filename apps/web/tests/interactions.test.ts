@@ -1,14 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import {
   enqueueInteraction,
+  enqueuePermission,
   expireInteractions,
   INTERACTION_TTL_MS,
   interactionExpiresAt,
+  isExpiredError,
   isInteractionExpired,
   isNotFoundError,
+  isRunEndedError,
+  permissionFromEvent,
+  permissionRespondParams,
   removeInteraction,
   SubmitGuard,
 } from '../src/gateway/interactions';
+import type { RunEvent } from '../src/gateway/types';
 
 interface Item {
   requestId: string;
@@ -81,6 +87,92 @@ describe('expiry cleanup and not_found handling', () => {
   test('recognizes HTTP GatewayHttpError codes too', () => {
     expect(isNotFoundError({ code: 'not_found', message: 'gone' })).toBe(true);
     expect(isNotFoundError({ code: 'conflict', message: 'busy' })).toBe(false);
+  });
+});
+
+describe('permissionFromEvent (0.13)', () => {
+  const event = (data: Record<string, unknown>, ts = 1_000): RunEvent => ({
+    type: 'tool.permission.request',
+    run_id: 'run-1',
+    ts,
+    data,
+  });
+
+  test('maps association fields without an expiry deadline', () => {
+    const item = permissionFromEvent(
+      event({ requestId: 'perm-1', tool: 'bash', input: { cmd: 'ls' } }),
+      9_999,
+    );
+    expect(item).toMatchObject({
+      requestId: 'perm-1',
+      tool: 'bash',
+      runId: 'run-1',
+      requestedAt: 1_000,
+    });
+    expect(item).not.toHaveProperty('expiresAt');
+  });
+
+  test('keeps association fields and ignores legacy deadline_at', () => {
+    const item = permissionFromEvent(
+      event({
+        requestId: 'perm-1',
+        tool: 'bash',
+        session_id: 'session-9',
+        tool_call_id: 'call-3',
+        source: 'workflow',
+        deadline_at: 7_500,
+      }),
+    );
+    expect(item).toMatchObject({
+      sessionId: 'session-9',
+      toolCallId: 'call-3',
+      source: 'workflow',
+    });
+    expect(item).not.toHaveProperty('expiresAt');
+  });
+
+  test('accepts request_id for older emitters and drops events without an id', () => {
+    expect(permissionFromEvent(event({ request_id: 'legacy-1' }))?.requestId).toBe('legacy-1');
+    expect(permissionFromEvent(event({ tool: 'bash' }))).toBeNull();
+  });
+
+  test('never drops a permission request over time and dedupes by requestId', () => {
+    const item = permissionFromEvent(event({ requestId: 'perm-1' }));
+    expect(item).not.toBeNull();
+    if (!item) return;
+    const first = enqueuePermission([], item);
+    expect(first).toHaveLength(1);
+    // 重放/刷新：同一 requestId 不重复入队；不做过期过滤。
+    expect(enqueuePermission(first, { ...item, requestedAt: 99_999 })).toBe(first);
+  });
+});
+
+describe('expired / run-ended error + scope params (0.13)', () => {
+  test('recognizes expired over both WS and HTTP shapes', () => {
+    expect(isExpiredError(new Error('expired: Permission request expired'))).toBe(true);
+    expect(isExpiredError({ code: 'expired', message: 'gone' })).toBe(true);
+    expect(isExpiredError(new Error('not_found: missing'))).toBe(false);
+  });
+
+  test('recognizes run_ended as “run has ended”, not “not allowed”', () => {
+    expect(isRunEndedError(new Error('run_ended: Run has ended'))).toBe(true);
+    expect(
+      isRunEndedError({ code: 'run_ended', message: 'ended', details: { status: 'orphaned' } }),
+    ).toBe(true);
+    expect(isRunEndedError(new Error('expired: gone'))).toBe(false);
+  });
+
+  test('sends scope and keeps remember:true for always (old gateway compat)', () => {
+    expect(permissionRespondParams('allow', 'always')).toEqual({
+      decision: 'allow',
+      scope: 'always',
+      remember: true,
+    });
+    expect(permissionRespondParams('deny')).toEqual({ decision: 'deny', scope: 'once' });
+    expect(permissionRespondParams('allow', 'session')).toEqual({
+      decision: 'allow',
+      scope: 'session',
+    });
   });
 });
 

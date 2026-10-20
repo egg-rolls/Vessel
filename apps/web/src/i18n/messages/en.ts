@@ -109,5 +109,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // Permission / ask / reasoning stream (0.11.1)
   'permission.busy': 'Submitting…',
   'permission.expired': 'Request expired; removed from the pending list.',
+  // 0.13: inline permission card + cross-session hint
+  'permission.allowOnce': 'Allow once',
+  'permission.allowSession': 'Allow for session',
+  'permission.always': 'Always allow',
+  'permission.deny': 'Deny',
+  'permission.inline.waiting': 'Waiting for approval',
+  'permission.runEnded': 'The run has ended; this permission request is no longer valid.',
+  'permission.otherSessions': '{count} pending permission request(s) in other sessions',
+  'permission.goTo': 'Review',
   'chat.reasoning.summary': 'Thinking',
 };

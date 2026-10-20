@@ -26,7 +26,11 @@ export type RpcErrorCode =
   | 'conflict'
   | 'internal'
   // 0.12：注入的可选能力未提供（DECISION-023 §2.3，如未注入的 gateway.reload）。
-  | 'not_supported';
+  | 'not_supported'
+  // 0.13：交互请求已过期/已随 run 取消（DECISION-024 §2.2）。
+  | 'expired'
+  // 0.13 Addendum A：run 已结束 / 重启后找不到 run，权限请求失效。
+  | 'run_ended';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';
@@ -359,6 +363,8 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'conflict':
     case 'internal':
     case 'not_supported':
+    case 'expired':
+    case 'run_ended':
       return code;
     default:
       return null;

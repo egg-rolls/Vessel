@@ -5,6 +5,7 @@
  * `Date.now()`：重放/刷新后旧请求会被重新计时，点击时服务端已丢弃 → not_found。
  */
 import { t } from '../i18n';
+import type { PermissionRequest, PermissionScope, RunEvent } from './types';
 
 /** 与 gateway interaction TTL 对齐（DECISION-022 §2.1）。 */
 export const INTERACTION_TTL_MS = 120_000;
@@ -27,6 +28,53 @@ export function interactionExpiresAt(
   return base + ttl;
 }
 
+function validTimestamp(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value > 0;
+}
+
+/**
+ * `tool.permission.request` → 前端卡片模型。
+ *
+ * Addendum A：权限等待默认不超时，`deadline_at` 不再映射为过期时间；
+ * 关联字段缺失时保持 undefined（旧 gateway 兼容）。
+ */
+export function permissionFromEvent(event: RunEvent, now = Date.now()): PermissionRequest | null {
+  const data = event.data as {
+    requestId?: unknown;
+    request_id?: unknown;
+    tool?: unknown;
+    input?: unknown;
+    session_id?: unknown;
+    tool_call_id?: unknown;
+    source?: unknown;
+  };
+  const rawId = data.requestId ?? data.request_id;
+  if (typeof rawId !== 'string' || rawId.length === 0) return null;
+  return {
+    requestId: rawId,
+    tool: typeof data.tool === 'string' ? data.tool : 'tool',
+    input: data.input,
+    runId: event.run_id,
+    ...(typeof data.session_id === 'string' && data.session_id.length > 0
+      ? { sessionId: data.session_id }
+      : {}),
+    ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
+      ? { toolCallId: data.tool_call_id }
+      : {}),
+    ...(typeof data.source === 'string' && data.source.length > 0 ? { source: data.source } : {}),
+    requestedAt: validTimestamp(event.ts) ? event.ts : now,
+  };
+}
+
+/** 权限请求入队（无时间过期，只做 requestId 去重）。 */
+export function enqueuePermission<T extends { requestId: string }>(
+  prev: readonly T[],
+  item: T,
+): readonly T[] {
+  if (prev.some((entry) => entry.requestId === item.requestId)) return prev;
+  return [...prev, item];
+}
+
 /** 是否已过期（等于 TTL 边界也视为过期）。 */
 export function isInteractionExpired(item: Pick<Interaction, 'expiresAt'>, now: number): boolean {
   return item.expiresAt <= now;
@@ -46,8 +94,8 @@ export function enqueueInteraction<T extends Interaction>(
   return [...prev, item];
 }
 
-/** 移除指定请求（应答成功或服务端 not_found）。 */
-export function removeInteraction<T extends Interaction>(
+/** 移除指定请求（应答成功 / 服务端 not_found / 其他端已应答）。 */
+export function removeInteraction<T extends { requestId: string }>(
   prev: readonly T[],
   requestId: string,
 ): readonly T[] {
@@ -77,9 +125,50 @@ export function isNotFoundError(error: unknown): boolean {
   return error instanceof Error && error.message.startsWith('not_found:');
 }
 
+/**
+ * `expired` 错误：请求已过期 / 已随 run 取消（DECISION-024 §2.2）。
+ * 与 `not_found` 一样收起卡片；区别只在提示语义。
+ */
+export function isExpiredError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'expired') return true;
+  }
+  return error instanceof Error && error.message.startsWith('expired:');
+}
+
+/** `run_ended` / 持久化后找不到 run：权限请求已失效（不是“未允许”）。 */
+export function isRunEndedError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null) {
+    const code = (error as { code?: unknown }).code;
+    if (code === 'run_ended' || code === 'orphaned') return true;
+  }
+  return error instanceof Error && error.message.startsWith('run_ended:');
+}
+
 /** 过期/丢失请求的统一提示（ConnectionProvider 的 toast 与测试共用）。 */
 export function interactionExpiredMessage(): string {
   return t('permission.expired');
+}
+
+/** run 已结束的提示（Addendum A §4）。 */
+export function interactionRunEndedMessage(): string {
+  return t('permission.runEnded');
+}
+
+/**
+ * `permission.respond` 参数：`remember:true` 是旧 gateway 的 always 兼容写法。
+ * 取值为 `once` 时可省略，服务端缺省即 once。
+ */
+export function permissionRespondParams(
+  decision: 'allow' | 'deny',
+  scope: PermissionScope = 'once',
+): Record<string, unknown> {
+  return {
+    decision,
+    scope,
+    ...(scope === 'always' ? { remember: true } : {}),
+  };
 }
 
 /**

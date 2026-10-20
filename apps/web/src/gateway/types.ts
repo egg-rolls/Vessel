@@ -136,6 +136,27 @@ export interface AskUserRequest {
   expiresAt: number;
 }
 
+/** 权限应答范围（DECISION-024 §2.1）。 */
+export type PermissionScope = 'once' | 'session' | 'always';
+
+/**
+ * 待答权限请求（tool.permission.request，0.13 增加关联字段）。
+ *
+ * Addendum A：权限等待默认不超时，因此没有 `expiresAt`；卡片只保留事件时间用于排序。
+ */
+export interface PermissionRequest {
+  requestId: string;
+  tool: string;
+  input: unknown;
+  runId: string;
+  /** run 归属会话；旧 gateway 缺失时不参与跨 session 归类。 */
+  sessionId?: string;
+  toolCallId?: string;
+  source?: string;
+  /** 事件时间（同一 run 多请求排序）。 */
+  requestedAt: number;
+}
+
 /** 运行状态（/v1/runs/:id、run.get；durable checkpoint 是其中的超集） */
 export interface RunStatus {
   run_id: string;

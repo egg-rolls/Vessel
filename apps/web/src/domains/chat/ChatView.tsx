@@ -9,7 +9,7 @@ import { usePaletteEntities } from '../../components/PaletteEntities';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
-import type { SessionDetail, SessionInfo } from '../../gateway/types';
+import type { PermissionRequest, SessionDetail, SessionInfo } from '../../gateway/types';
 import { groupEvents, isGroupPersisted } from '../../state/events';
 import type { PaletteItem } from '../../state/palette';
 import {
@@ -35,6 +35,7 @@ import { Transcript } from './Transcript';
 const TRANSCRIPT_WINDOW = 50;
 const QUEUE_POLL_MS = 2000;
 const NOT_FOUND_MESSAGE = '会话不存在或已删除';
+const NO_PERMISSIONS: readonly PermissionRequest[] = [];
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
 
@@ -68,7 +69,17 @@ export function ChatView({
   sessionsOpen: boolean;
   onCloseSessions: () => void;
 }) {
-  const { client, hasToken, connectionState, epoch, retry, features } = useConnection();
+  const {
+    client,
+    hasToken,
+    connectionState,
+    epoch,
+    retry,
+    features,
+    permissions,
+    responding,
+    respondPermission,
+  } = useConnection();
   const toast = useToast();
   const snapshot = useEventSnapshot();
   const connected = connectionState === 'open' && hasToken;
@@ -318,6 +329,17 @@ export function ChatView({
     () => groupEvents(snapshot.entries, showInternal),
     [snapshot.entries, showInternal],
   );
+
+  // 权限请求按 run_id 挂到对应 RunCard；没匹配到 run 的由 AppShell 顶部条提示。
+  const permissionsByRun = useMemo(() => {
+    const map = new Map<string, PermissionRequest[]>();
+    for (const item of permissions) {
+      const list = map.get(item.runId);
+      if (list) list.push(item);
+      else map.set(item.runId, [item]);
+    }
+    return map;
+  }, [permissions]);
 
   const detailState = detailResource.state;
   const sessionDetail =
@@ -823,6 +845,11 @@ export function ChatView({
                     )
                   }
                   onCancel={(value) => void handleCancel(value)}
+                  permissions={permissionsByRun.get(group.runId) ?? NO_PERMISSIONS}
+                  permissionBusy={responding}
+                  onDecidePermission={(requestId, decision, scope) =>
+                    void respondPermission(requestId, decision, scope)
+                  }
                 />
               ))}
               {visibleQueued.map((item) => (
