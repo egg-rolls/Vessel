@@ -24,6 +24,7 @@ import type { WorkflowOutcome, WorkflowRunDetail, WorkflowRunSummary } from './c
 import { resolveDataDir } from './data-paths';
 import { resolveWorkflowDefinition } from './path-resolution';
 import { PluginLoader } from './plugin-loader';
+import { ui } from './ui-style';
 import { createWorkflowControlsAdapter, createWorkflowControlsOnly } from './workflow-wiring';
 
 export interface WorkflowCommandOptions {
@@ -68,10 +69,10 @@ function formatRun(run: WorkflowRunSummary): string {
 
 function printRunList(runs: WorkflowRunSummary[]): void {
   if (runs.length === 0) {
-    console.log('No workflow runs.');
+    console.log(ui.dim('No workflow runs.'));
     return;
   }
-  console.log(`Workflow runs (${runs.length}, newest first):`);
+  console.log(ui.section(`Workflow runs (${runs.length}, newest first):`));
   console.log(
     [
       'WORKFLOW RUN ID'.padEnd(36),
@@ -85,7 +86,7 @@ function printRunList(runs: WorkflowRunSummary[]): void {
 }
 
 function printRunDetail(run: WorkflowRunDetail): void {
-  console.log(`workflow ${run.workflow_run_id} [${run.status}] ${run.workflow_name}`);
+  console.log(ui.title(`workflow ${run.workflow_run_id} [${run.status}] ${run.workflow_name}`));
   console.log(`  definition: ${run.definition_path}`);
   const inputs = Object.entries(run.inputs);
   console.log(`  inputs: ${inputs.length === 0 ? '(none)' : ''}`);
@@ -146,7 +147,7 @@ async function runControlsOnly(
 
     // cancel
     await controls.cancel(cmd.workflowRunId);
-    console.log(`workflow ${cmd.workflowRunId}: cancel requested`);
+    console.log(ui.warn(`workflow ${cmd.workflowRunId}: cancel requested`));
     return 0;
   } catch (error) {
     console.error(errorMessage(error));
@@ -200,7 +201,7 @@ async function runWithRuntime(
       : 1;
   }
 
-  console.log(`workflow ${started.workflowRunId} started`);
+  console.log(ui.ok(`workflow ${started.workflowRunId} started`));
 
   let signal: 'SIGINT' | 'SIGTERM' | undefined;
   const onInterrupt = (): void => {
@@ -216,8 +217,9 @@ async function runWithRuntime(
 
   try {
     const outcome = await started.done;
-    if (outcome.error) console.error(outcome.error);
-    console.log(`workflow ${outcome.workflow_run_id}: ${outcome.status}`);
+    if (outcome.error) console.error(ui.err(outcome.error));
+    const outcomeLine = `workflow ${outcome.workflow_run_id}: ${outcome.status}`;
+    console.log(outcome.status === 'completed' ? ui.ok(outcomeLine) : ui.warn(outcomeLine));
 
     if (outcome.status === 'completed') return 0;
     if (outcome.status === 'failed') return 1;

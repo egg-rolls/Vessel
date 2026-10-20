@@ -22,6 +22,7 @@ import { formatConfigError, formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { t } from './i18n';
 import { isSettableConfigKey, isUiLanguage, setUserConfigValue } from './ui-settings';
+import { ui } from './ui-style';
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -150,7 +151,7 @@ export async function configInitCommand(
   }
   return {
     exitCode: 0,
-    stdout: [`created ${target}`, t('config.init.next')].join('\n'),
+    stdout: [ui.ok(`created ${target}`), t('config.init.next')].join('\n'),
     stderr: '',
   };
 }
@@ -216,7 +217,7 @@ export async function configSetCommand(
       stderr: '',
     };
   }
-  return { exitCode: 0, stdout: `${key} = ${String(parsed)} (${target})`, stderr: '' };
+  return { exitCode: 0, stdout: ui.ok(`${key} = ${String(parsed)} (${target})`), stderr: '' };
 }
 
 /** `vessel config show [--sources] [--json] [--tenant <id>]` */

@@ -16,6 +16,7 @@ import type { PluginCommandArgs } from './cli-args';
 import { declarativePluginEntries } from './plugin-config';
 import { defaultPluginRoots, PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { ui } from './ui-style';
 
 /** 与 CLI 解析一致的插件短名（防止路径穿越） */
 const PLUGIN_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -181,14 +182,14 @@ export async function runPluginCommand(
         };
       }
       if (rows.length === 0) {
-        return { exitCode: 0, stdout: 'No plugins found.', stderr: '' };
+        return { exitCode: 0, stdout: ui.dim('No plugins found.'), stderr: '' };
       }
 
       const nameWidth = Math.max(4, ...rows.map((row) => row.name.length));
       const sourceWidth = Math.max(6, ...rows.map((row) => row.source.length));
       const categoryWidth = Math.max(8, ...rows.map((row) => row.category.length));
       const lines = [
-        `Plugins (${rows.length}; user dir: ${userDir}):`,
+        ui.section(`Plugins (${rows.length}; user dir: ${userDir}):`),
         `  ${'NAME'.padEnd(nameWidth)}  ${'SOURCE'.padEnd(sourceWidth)}  ${'CATEGORY'.padEnd(categoryWidth)}  ${'VERSION'.padEnd(8)}  ENABLED`,
       ];
       for (const row of rows) {
@@ -255,7 +256,7 @@ export async function runPluginCommand(
       return {
         exitCode: 0,
         stdout: [
-          `Installed "${named.name}" -> ${destination}`,
+          ui.ok(`Installed "${named.name}" -> ${destination}`),
           configured === undefined
             ? 'Restart Vessel to load it (user plugins load by default when plugins: is absent).'
             : 'Restart Vessel after enabling it in plugins:.',
