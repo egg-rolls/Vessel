@@ -117,6 +117,40 @@ vessel plugin remove <name>
   `VESSEL_SESSION_BACKEND`（`file|sqlite|memory`）、`VESSEL_MODEL`（覆盖
   `provider.model`）。优先级仍为 `CLI > env > tenant overlay > project > user > default`。
 
+### 2.2 Provider 新旧键规则（0.10）
+
+新版配置只写一个 `provider:` 块：
+
+```yaml
+provider:
+  name: openai                      # 已注册的 provider 插件名
+  base_url: https://api.example.com/v1   # 自定义端点；OpenAI 兼容
+  api_key_env: VESSEL_API_KEY
+  model: deepseek-chat
+```
+
+legacy 键（仅兼容）：`default_provider` / `default_model` / `providers.<name>.{apiKey,baseUrl,model}`。
+
+1. **同层同时存在新版 `provider:` 与 legacy 键时，新版生效**；legacy 只读兼容。当前基线已保证新版优先；「并存时输出一次 deprecation warning」属于 **0.10 计划**。
+2. 只有 legacy 键时，映射为 `provider:` 形状后继续生效；映射与告警属于 **0.10 计划**（当前实现只做映射）。
+3. **未知 provider**：`provider.name` 不是已注册插件、且没有显式 `base_url` → `ProviderConfigError`，启动直接失败，不再静默按 OpenAI 兼容处理（**0.10 计划**）。
+4. **未知 provider + 显式 `base_url`** → 按 OpenAI-compatible 端点使用，输出一次 info（不是 warning）（**0.10 计划**）。
+5. 已注册 provider 缺 `model` → 启动失败（`provider_invalid`），不回退全局默认模型；未注册 provider 缺 `model` 同样要求显式配置。
+6. 密钥解析统一走 `provider.api_key_env` / `provider.apiKey`（见 §3）；不要写 `${VAR}` 插值。
+
+### 2.3 界面语言（`VESSEL_LANG` / `ui.language`）
+
+```yaml
+ui:
+  language: zh-CN        # zh-CN（默认）| en
+```
+
+- 默认 **zh-CN**；`VESSEL_LANG=en` 或 `ui.language: en` 切换英文。
+- 优先级：`VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`；每个值独立归一化（`zh` / `zh-*` / `zh_*` → `zh-CN`，`en` / `en-*` → `en`），非法值跳过该层，不报错。
+- locale 在进程启动时解析一次，运行中切换需重启。
+- **TUI 界面文案已接入 `t()`**（zh-CN / en 两份 catalog）。命令名、工具名、错误码、provider / 模型名不翻译；命令的数据输出（会话、trace、metrics、成本等）保持英文。
+- **CLI 的 `--help`、一次性命令错误、默认空状态、demo banner 跟随同一 locale 属于 0.10 计划**；Web 前端未本地化。CLI 当前**尚未全量本地化**，不要按已全量本地化使用。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：
@@ -145,6 +179,7 @@ principal 映射见 [ADR-049](../adr/ADR-049-multi-tenant-isolation.md)。
 vessel config path [--json]
 vessel config init [--force] [--json]
 vessel config show [--sources] [--json] [--tenant <id>]
+vessel doctor [--json]
 ```
 
 - `config path`：打印用户配置、项目配置与 `data_dir` 的实际路径和是否存在。
