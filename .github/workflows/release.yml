@@ -20,7 +20,7 @@ jobs:
   verify:
     name: Verify Release
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     outputs:
       version: ${{ steps.meta.outputs.version }}
       dist_tag: ${{ steps.meta.outputs.dist_tag }}
@@ -70,6 +70,32 @@ jobs:
       - name: Check versions and changelog
         run: bun run scripts/version.ts --check "${{ steps.meta.outputs.version }}"
 
+      # 根 CLI 的发布名固定为 vessel-agent（bin 仍是 vessel）；名称不符时
+      # 在发布任何包之前失败。
+      - name: Check root package name
+        shell: bash
+        run: |
+          name=$(node -p "require('./package.json').name")
+          if [ "$name" != "vessel-agent" ]; then
+            echo "root package name is '$name', expected 'vessel-agent' (bin stays 'vessel')" >&2
+            exit 1
+          fi
+
+      # 发布干跑：任何检查失败都会让 verify job 失败，publish-npm 依赖它，
+      # 因此不会进入 npm publish。
+      - name: Release dry run
+        run: bun run scripts/release-dry-run.ts
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 安装解析 smoke：18 个子包 + 根 tarball 真正装到临时目录并运行
+      # `vessel --version` / `vessel --tools`（mock，无 Key，不发布）。
+      - name: Install resolution smoke
+        run: bun run scripts/smoke-install.ts
+
   # ── 质量检查（发布前最后一道防线）───────────────
   quality:
     name: Quality Checks
@@ -84,7 +110,7 @@ jobs:
       - name: Run quality checks
         uses: ./.github/actions/quality
 
-  # ── npm 发布（库包 + 插件包；不含根 CLI）────────
+  # ── npm 发布（先 18 个子包，再根 CLI `vessel-agent`）──
   publish-npm:
     name: Publish to npm
     needs: [verify, quality]
@@ -148,6 +174,28 @@ jobs:
               npm publish --provenance --access public --tag "$DIST_TAG"
             )
           done
+
+      # 根 CLI 包依赖上面 18 个包，必须最后发布；发布名 `vessel-agent`，
+      # bin 仍是 `vessel`。名称不符时 fail-fast，避免把过渡名发到 npm。
+      - name: Publish root CLI package
+        shell: bash
+        run: |
+          set -euo pipefail
+          name=$(node -p "require('./package.json').name")
+          if [ "$name" != "vessel-agent" ]; then
+            echo "root package name is '$name', expected 'vessel-agent' (bin stays 'vessel')" >&2
+            exit 1
+          fi
+
+          if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+            echo "skip $name@$VERSION (already published)"
+            exit 0
+          fi
+
+          echo "publishing $name@$VERSION"
+          npm pkg set repository.type=git
+          npm pkg set repository.url="git+https://github.com/${GITHUB_REPOSITORY}.git"
+          npm publish --provenance --access public --tag "$DIST_TAG"
 
   # ── GitHub Release（notes + latest.json）─────────
   github-release:
