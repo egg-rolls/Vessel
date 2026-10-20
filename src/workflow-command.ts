@@ -19,6 +19,7 @@ import {
 } from '../packages/core/src/index';
 import { bootstrap } from './bootstrap';
 import type { WorkflowCommand } from './cli-args';
+import { formatConfigErrors } from './config-error-format';
 import type { WorkflowOutcome, WorkflowRunDetail, WorkflowRunSummary } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { resolveWorkflowDefinition } from './path-resolution';
@@ -247,10 +248,10 @@ export async function runWorkflowCommand(
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   };
-  const { config, validation, tenantId } = await loadConfig(loadOptions);
+  const { config, validation, tenantId, paths } = await loadConfig(loadOptions);
   printWarnings(validation.warnings);
   if (validation.errors.length > 0) {
-    for (const error of validation.errors) console.error(`✗ ${error.message}`);
+    console.error(formatConfigErrors(validation.errors, { paths }));
     return 2;
   }
   if (config.workflow?.enabled !== true) {

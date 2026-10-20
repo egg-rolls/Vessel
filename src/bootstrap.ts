@@ -11,6 +11,7 @@ import {
   DEFAULT_CONFIG,
   getUserConfigPath,
   loadConfig,
+  resolveEffectiveApiKey,
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
@@ -38,6 +39,7 @@ import {
   type LocalRpcDispatcher,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type {
   FeishuChannelLike,
@@ -674,14 +676,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
     ...(cliOverrides !== undefined ? { cliOverrides } : {}),
   });
-  const { config, validation, tenantId } = loaded;
+  const { config, validation, tenantId, paths: configPaths } = loaded;
 
   // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
   const nodeId =
     config.host?.nodeId ?? `vessel-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
 
   if (!useMock && validation.errors.length > 0) {
-    for (const e of validation.errors) console.error(`✗ ${e.message}`);
+    console.error(formatConfigErrors(validation.errors, { paths: configPaths }));
     process.exit(configErrorExitCode);
   }
 
@@ -725,7 +727,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
   }
 
-  if (!useMock && !interactive && !config.apiKey) {
+  if (!useMock && !interactive && !resolveEffectiveApiKey(config)) {
     console.error('No API key configured. Run `vessel` interactively first to set up.');
     process.exit(configErrorExitCode);
   }

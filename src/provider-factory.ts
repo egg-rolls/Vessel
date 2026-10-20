@@ -1,14 +1,20 @@
 /**
  * Provider 装配（0.4 从 bootstrap 抽出，供 eval --allow-network 复用）。
  *
- * 保持 0.3 语义：
+ * 0.10 语义：
  * - mock 模式返回 MemoryLLMProvider；
  * - provider 插件只 registerProvider；
- * - 未注册的 provider 按 OpenAI-compatible 处理并告警；
+ * - API Key 统一走 `resolveEffectiveApiKey()`（provider.apiKey / *_env / 顶层）；
+ * - 未注册 provider：有 `provider.baseUrl` → OpenAI 兼容 + 一次性 stderr info；
+ *   无 baseUrl → `ProviderConfigError`（fail-fast）；
  * - 已知 provider 缺 model 时 fail-fast（不全局回退 gpt-4）。
  */
 
-import { defaultModelForProvider, type VesselConfig } from '../packages/config/src/index';
+import {
+  defaultModelForProvider,
+  resolveEffectiveApiKey,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import {
   type LLMProvider,
   MemoryLLMProvider,
@@ -33,6 +39,23 @@ export class ProviderConfigError extends Error {
     super(message);
     this.name = 'ProviderConfigError';
   }
+}
+
+/** 未知 provider 的 OpenAI 兼容提示只打一次（进程内）。 */
+let unknownProviderNoticeShown = false;
+
+/** 测试重置一次性提示状态。 */
+export function resetUnknownProviderNotice(): void {
+  unknownProviderNoticeShown = false;
+}
+
+function notifyUnknownProvider(providerName: string, baseUrl: string, model: string): void {
+  if (unknownProviderNoticeShown) return;
+  unknownProviderNoticeShown = true;
+  process.stderr.write(
+    `[vessel] Provider "${providerName}" is not registered; using OpenAI-compatible endpoint ` +
+      `"${baseUrl}" (model: ${model}).\n`,
+  );
 }
 
 /** 构造 provider；`useMock` 时不需要 Key、不加载 provider 插件 */
@@ -68,11 +91,12 @@ export async function createProvider(
   }
 
   const providerBaseUrl = config.provider?.baseUrl ?? '';
+  const apiKey = resolveEffectiveApiKey(config);
   const factory = providerHost.getProvider(providerName);
   if (factory) {
     return {
       provider: factory({
-        api_key: config.apiKey ?? '',
+        api_key: apiKey ?? '',
         base_url: providerBaseUrl,
         model: providerModel,
         temperature: config.provider?.temperature,
@@ -85,13 +109,18 @@ export async function createProvider(
     };
   }
 
-  console.warn(
-    `Provider "${providerName}" not registered; treating as OpenAI-compatible` +
-      ` (base_url: ${providerBaseUrl || 'default'}, model: ${providerModel}).`,
-  );
+  // 未注册 + 无显式端点：不能猜厂商默认（DECISION-020 §R1.5）。
+  if (providerBaseUrl.trim() === '') {
+    throw new ProviderConfigError(
+      `Provider "${providerName}" is not registered and has no provider.baseUrl. ` +
+        'Use a registered provider or set provider.base_url for an OpenAI-compatible endpoint.',
+    );
+  }
+
+  notifyUnknownProvider(providerName, providerBaseUrl, providerModel);
   return {
     provider: new OpenAICompatibleProvider({
-      api_key: config.apiKey ?? '',
+      api_key: apiKey ?? '',
       base_url: providerBaseUrl,
       model: providerModel,
       temperature: config.provider?.temperature,

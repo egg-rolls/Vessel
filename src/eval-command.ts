@@ -9,6 +9,7 @@
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
 import { type LLMProvider, resolveTenantPaths, type TenantPaths } from '../packages/core/src/index';
 import type { EvalCommand } from './cli-args';
+import { formatConfigErrors } from './config-error-format';
 import type { EvalReport } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { executeEvalSuite } from './eval-wiring';
@@ -64,10 +65,10 @@ export async function runEvalCommand(
     ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
   };
-  const { config, validation, tenantId } = await loadConfig(loadOptions);
+  const { config, validation, tenantId, paths } = await loadConfig(loadOptions);
   sendWarnings(validation.warnings);
   if (validation.errors.length > 0) {
-    for (const error of validation.errors) console.error(`✗ ${error.message}`);
+    console.error(formatConfigErrors(validation.errors, { paths }));
     return 2;
   }
 

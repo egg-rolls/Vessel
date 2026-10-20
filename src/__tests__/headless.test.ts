@@ -146,7 +146,7 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
   }
 });
 
-it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 兼容，warn 不 exit 1', async () => {
+it('未注册的 provider（带 base_url）降级为 OpenAI 兼容，info 不 exit 1', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-custom-'));
   try {
     fs.mkdirSync(path.join(tmpDir, '.vessel'), { recursive: true });
@@ -167,7 +167,7 @@ it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 
     // 交互模式 + /exit：provider 构造是同步的，不触网；仅验证降级 warn + 正常进 REPL
     const { stdout, stderr, exitCode } = await runCli([], {}, '/exit\n', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stderr).toContain('treating as OpenAI-compatible');
+    expect(stderr).toContain('not registered; using OpenAI-compatible endpoint');
     expect(stdout).toContain('custom | test-model');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

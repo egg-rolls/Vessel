@@ -6,6 +6,7 @@
  */
 
 import { type ConfigLoadOptions, loadConfig } from '../packages/config/src/index';
+import { formatConfigErrors } from './config-error-format';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { previewOf } from './durable-wiring';
 import { closeRunStore, createRunStore } from './run-store-factory';
@@ -25,11 +26,11 @@ function clip(value: string, width: number): string {
 }
 
 export async function runResumeList(options: ConfigLoadOptions = {}): Promise<number> {
-  const { config, validation, tenantId } = await loadConfig(options);
+  const { config, validation, tenantId, paths } = await loadConfig(options);
 
   for (const warning of validation.warnings) console.warn(`⚠ ${warning.message}`);
   if (validation.errors.length > 0) {
-    for (const error of validation.errors) console.error(`✗ ${error.message}`);
+    console.error(formatConfigErrors(validation.errors, { paths }));
     return 1;
   }
 

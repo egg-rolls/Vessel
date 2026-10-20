@@ -103,11 +103,12 @@ export function resolveGatewayAuth(
     });
   }
 
-  // 旧单 token：serve.token > serve.token_env > transport.token > VESSEL_GATEWAY_TOKEN
+  // 旧单 token：serve.token > serve.token_env > VESSEL_GATEWAY_TOKEN。
+  // `transport.token` 只服务 transport 层，不再作为 gateway admin 凭据
+  // （DECISION-020 §R1.9）。
   const legacyToken =
     nonEmpty(config.serve?.token) ??
     nonEmpty(config.serve?.tokenEnv ? env[config.serve.tokenEnv] : undefined) ??
-    nonEmpty(config.transport?.token) ??
     nonEmpty(env.VESSEL_GATEWAY_TOKEN);
   if (legacyToken !== undefined) {
     candidates.push({

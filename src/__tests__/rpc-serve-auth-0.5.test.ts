@@ -312,6 +312,24 @@ describe('serve-auth (0.5)', () => {
     expect(result.auth.anonymous).toBeUndefined();
   });
 
+  it('transport.token 不再作为 gateway admin token', () => {
+    const loopback = resolveGatewayAuth(
+      { transport: { token: 'transport-only' } },
+      { hostname: '127.0.0.1', allowRemote: false, env: {} },
+    );
+    expect(loopback.ok).toBe(true);
+    if (loopback.ok) {
+      expect(loopback.auth.configured).toBe(false);
+      expect(loopback.auth.authenticate('transport-only')).toBeNull();
+    }
+
+    const remote = resolveGatewayAuth(
+      { transport: { token: 'transport-only' } },
+      { hostname: '0.0.0.0', allowRemote: true, env: {} },
+    );
+    expect(remote.ok).toBe(false);
+  });
+
   it('serve.tokens map 与 admin token', () => {
     const result = resolveGatewayAuth(
       {

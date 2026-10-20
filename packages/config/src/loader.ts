@@ -20,6 +20,7 @@ import type {
   ConfigSources,
   ConfigValidationError,
   ConfigValidationResult,
+  ConfigValidationWarning,
   ProviderConfig,
   UserConfig,
   VesselConfig,
@@ -143,18 +144,18 @@ export function getUserConfigPath(): string {
 
 /**
  * 从 YAML 文件加载并解析配置，做 snake→camel 映射。
- * 文件不存在、空文档（0 字节/纯空白/仅注释）或根节点不是对象时返回 fallback；
- * 解析失败时向上抛出。
+ * 文件不存在（ENOENT）、空文档（0 字节/纯空白/仅注释）或根节点不是对象时返回 fallback；
+ * 其它读取/解析错误向上抛出（DECISION-020 §R1.3：不得静默回落默认配置）。
  */
 async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
-  const file = Bun.file(filePath);
-  const exists = await file.exists();
-
-  if (!exists) {
-    return fallback;
+  let content: string;
+  try {
+    content = await Bun.file(filePath).text();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return fallback;
+    throw error;
   }
 
-  const content = await file.text();
   const parsed: unknown = parseYaml(content);
   // parseYaml('') / 纯空白 → null；标量/数组不是合法配置根节点。
   if (parsed === null || parsed === undefined || !isRecord(parsed)) {
@@ -163,12 +164,24 @@ async function loadYamlConfig<T>(filePath: string, fallback: T): Promise<T> {
   return snakeToCamel<T>(parsed, { preserveKey: preserveConfigMapKeys });
 }
 
-/** 读取原始顶层对象；文件不存在或解析失败时返回 {}（保持 0.4 容错行为）。 */
-async function loadRawConfig(filePath: string): Promise<Record<string, unknown>> {
+/** 把 YAML / IO 错误转成带文件路径（与行号）的校验错误。 */
+function configFileError(filePath: string, error: unknown): ConfigValidationError {
+  const message = error instanceof Error ? error.message : String(error);
+  // yaml 的 YAMLParseError.message 首行形如
+  // `Map keys must be unique at line 2, column 1:`，已包含位置。
+  const firstLine = message.split('\n', 1)[0] ?? 'Unknown parse error';
+  return { path: filePath, message: `YAML parse error: ${firstLine}` };
+}
+
+/** 读取原始顶层对象；只有 ENOENT 当缺省，其它读取/解析错误记入 validation。 */
+async function loadRawConfig(
+  filePath: string,
+): Promise<{ raw: Record<string, unknown>; error?: ConfigValidationError }> {
   try {
-    return await loadYamlConfig<Record<string, unknown>>(filePath, {});
-  } catch {
-    return {};
+    return { raw: await loadYamlConfig<Record<string, unknown>>(filePath, {}) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { raw: {} };
+    return { raw: {}, error: configFileError(filePath, error) };
   }
 }
 
@@ -440,6 +453,16 @@ function sanitizeTenantOverlay(overlay: Record<string, unknown>): Record<string,
   return result;
 }
 
+/** 用户配置中出现的 legacy provider 键（snake_case 名称，用于 warning）。 */
+function legacyProviderKeys(user: Record<string, unknown>): string[] {
+  const keys: string[] = [];
+  const has = (key: string): boolean => Object.hasOwn(user, key);
+  if (has('defaultProvider')) keys.push('default_provider');
+  if (has('defaultModel')) keys.push('default_model');
+  if (has('providers')) keys.push('providers');
+  return keys;
+}
+
 /**
  * 0.4 legacy 用户键 → VesselConfig 层。
  * 白名单：default_provider / default_model / providers（camelCase 等价）。
@@ -519,14 +542,29 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   const sources: ConfigSources = {};
   const overlayKeys: string[] = [];
   const preErrors: ConfigValidationError[] = [];
+  const preWarnings: ConfigValidationWarning[] = [];
 
   // 1. 默认配置（source=default）
   const config = applyLayerWithSources({} as VesselConfig, DEFAULT_CONFIG, 'default', sources);
 
   // 2. 用户层：legacy 映射 + 完整 config 键（source=user）
-  const rawUser = await loadRawConfig(userPath);
-  const legacyLayer = legacyUserLayer(rawUser);
-  applyLayerWithSources(config, legacyLayer, 'user', sources);
+  const userFile = await loadRawConfig(userPath);
+  if (userFile.error) preErrors.push(userFile.error);
+  const rawUser = userFile.raw;
+  // 同层出现新版 `provider:` 时 legacy 键整体忽略（DECISION-020 §R1.4）。
+  const hasNewProvider = isRecord(rawUser.provider);
+  const legacyKeys = legacyProviderKeys(rawUser);
+  if (!hasNewProvider) {
+    applyLayerWithSources(config, legacyUserLayer(rawUser), 'user', sources);
+  }
+  if (legacyKeys.length > 0) {
+    preWarnings.push({
+      path: 'provider',
+      message: hasNewProvider
+        ? `Legacy provider keys (${legacyKeys.join(', ')}) are ignored because "provider:" is configured in the same file.`
+        : `Legacy provider keys (${legacyKeys.join(', ')}) are deprecated; migrate to the "provider:" block.`,
+    });
+  }
 
   const fullUser = fullUserLayer(rawUser);
   const resolvedUser = resolveEnvRefsInLayer(fullUser, env);
@@ -535,7 +573,9 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
   preErrors.push(...resolvedUser.errors);
 
   // 3. 项目层：./vessel.yaml（source=project；_env 按层解析）
-  const rawProject = await loadRawConfig(projectPath);
+  const projectFile = await loadRawConfig(projectPath);
+  if (projectFile.error) preErrors.push(projectFile.error);
+  const rawProject = projectFile.raw;
   const resolvedProject = resolveEnvRefsInLayer(rawProject as Partial<VesselConfig>, env);
   applyLayerWithSources(config, resolvedProject.layer, 'project', sources);
   for (const key of Object.keys(resolvedProject.resolved)) sources[key] = 'env';
@@ -596,6 +636,7 @@ export async function loadConfig(options: ConfigLoadOptions = {}): Promise<Confi
     validation.errors.push(...preErrors);
     validation.valid = validation.errors.length === 0;
   }
+  if (preWarnings.length > 0) validation.warnings.push(...preWarnings);
 
   return {
     config,

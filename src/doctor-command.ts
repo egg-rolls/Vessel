@@ -12,7 +12,11 @@
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as path from 'node:path';
-import { loadConfig, type VesselConfig } from '../packages/config/src/index';
+import {
+  loadConfig,
+  resolveEffectiveApiKey,
+  type VesselConfig,
+} from '../packages/config/src/index';
 import type { DoctorCommandArgs } from './cli-args';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
@@ -88,20 +92,6 @@ function checkPort(host: string, port: number): Promise<'available' | 'in_use' |
   });
 }
 
-function providerKey(
-  config: VesselConfig,
-  env: Record<string, string | undefined>,
-): string | undefined {
-  const providerEnvName = nonEmpty(config.provider?.apiKeyEnv);
-  const apiKeyEnvName = nonEmpty(config.apiKeyEnv);
-  return (
-    nonEmpty(config.provider?.apiKey) ??
-    nonEmpty(config.apiKey) ??
-    (providerEnvName ? nonEmpty(env[providerEnvName]) : undefined) ??
-    (apiKeyEnvName ? nonEmpty(env[apiKeyEnvName]) : undefined)
-  );
-}
-
 /** 当前配置下会话文件/目录的实际路径（与 session-factory 对齐） */
 function sessionStoragePath(config: VesselConfig, tenantRoot: string): string {
   const backend = config.session?.backend ?? 'file';
@@ -142,7 +132,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     message: tenantId,
   });
 
-  const key = providerKey(config, env);
+  const key = resolveEffectiveApiKey(config, env);
   checks.push({
     name: 'provider',
     status: key ? 'ok' : 'fail',

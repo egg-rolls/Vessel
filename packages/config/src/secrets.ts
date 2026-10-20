@@ -108,6 +108,35 @@ export function resolveSecret(input: {
   return { state: 'set', value: resolvedValue, envRef };
 }
 
+/**
+ * provider 实际生效的 API Key。
+ *
+ * 优先级（DECISION-020 §R1.2 冻结）：
+ * `provider.apiKey` → `provider.apiKeyEnv` 解析值 → `config.apiKey` → `config.apiKeyEnv` 解析值。
+ * 空串 / 纯空白视为未设置。`loadConfig` 已把 `_env` 解析进同层明文值，此函数同时兜住
+ * 直接构造的配置（向导、测试、`doctor` 注入 env）。
+ *
+ * @param config 顶层配置（至少含 apiKey / apiKeyEnv / provider）
+ * @param env 环境变量来源（缺省 process.env）
+ */
+export function resolveEffectiveApiKey(
+  config: Pick<VesselConfig, 'apiKey' | 'apiKeyEnv' | 'provider'>,
+  env: EnvMap = process.env,
+): string | undefined {
+  const provider = config.provider;
+  return (
+    nonEmptySecret(provider?.apiKey) ??
+    nonEmptySecret(provider?.apiKeyEnv ? env[provider.apiKeyEnv] : undefined) ??
+    nonEmptySecret(config.apiKey) ??
+    nonEmptySecret(config.apiKeyEnv ? env[config.apiKeyEnv] : undefined)
+  );
+}
+
+/** 非空字符串（纯空白不算；返回值不 trim，避免改动密钥本身） */
+function nonEmptySecret(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
 /** 解析一对明文/间接字段（camelCase：valueKey / refKey）。 */
 function resolvePair(
   owner: Record<string, unknown>,
