@@ -650,6 +650,8 @@ async function runWithConfig(result: BootstrapResult) {
     } = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
+      // 0.13：pending/answered 权限持久化目录（DECISION-024 Addendum A）。
+      interactionsDir: dataDir,
       // 0.12：`gateway.reload`（serve 负责 RPC 形状/权限，asm 注入实际行为）。
       reload: createGatewayReload({
         // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
