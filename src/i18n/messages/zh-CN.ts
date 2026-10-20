@@ -45,7 +45,7 @@ export const zhCN = {
   'help.cmd.configPath': '打印用户/项目配置路径',
   'help.cmd.configInit': '生成用户配置模板',
   'help.cmd.configShow': '查看脱敏配置与来源',
-  'help.cmd.configSet': '写入用户配置（ui.language）',
+  'help.cmd.configSet': '写入用户配置（ui.language / ui.showReasoning / agent.cwd）',
   'help.cmd.tenantList': '列出 tenant',
   'help.cmd.tenantGet': '查看 tenant 元数据',
   'help.cmd.tenantCreate': '创建 tenant',
@@ -100,8 +100,10 @@ export const zhCN = {
   // ── config command ──
   'config.init.exists': '配置已存在于 {path}；使用 --force 覆盖',
   'config.init.next': 'next: 运行 `vessel` 配置 API Key，或运行 `vessel doctor` 验证环境。',
-  'config.set.unknownKey': '不支持的配置键 "{key}"；当前仅支持 ui.language',
+  'config.set.unknownKey': '不支持的配置键 "{key}"；支持 ui.language、ui.showReasoning、agent.cwd',
   'config.set.invalidLanguage': 'ui.language 只支持 "zh-CN" 或 "en"',
+  'config.set.invalidBoolean': 'ui.showReasoning 只支持 "true" 或 "false"',
+  'config.set.invalidPath': 'agent.cwd 必须是非空路径',
   'config.set.failed': '写入用户配置失败：{detail}',
 
   // ── update ──

@@ -71,6 +71,7 @@ import {
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
+import { withReasoning } from './reasoning';
 import {
   createHttpRpcClient,
   createLocalRpcClient,
@@ -897,20 +898,23 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const getSingleAgentRuntime = async (): Promise<RunnableAgent> => {
     if (!host) return activeRuntime;
     // host 模式下的非成员恢复：按需构造一个共享 port 的单 agent runtime。
-    fallbackRuntime ??= await AgentRuntime.create({
-      provider,
-      model: providerModel,
-      context,
-      events: runtimeEvents,
-      limits,
-      termination,
-      session,
-      pluginHost: finalPluginHost,
-      systemPrompt,
-      permission,
-      ...(runStore ? { runStore } : {}),
-      logger,
-    });
+    fallbackRuntime ??= await AgentRuntime.create(
+      // 0.11.1：思考流开关与主 runtime 保持一致（默认 false）。
+      withReasoning(config, {
+        provider,
+        model: providerModel,
+        context,
+        events: runtimeEvents,
+        limits,
+        termination,
+        session,
+        pluginHost: finalPluginHost,
+        systemPrompt,
+        permission,
+        ...(runStore ? { runStore } : {}),
+        logger,
+      }),
+    );
     return fallbackRuntime;
   };
 

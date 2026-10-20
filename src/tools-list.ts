@@ -15,6 +15,7 @@ import {
 } from '../packages/core/src/index';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
@@ -50,7 +51,7 @@ export async function listTools(): Promise<ToolsListing> {
   warnExternalPluginsOnce(selection.external);
   const pluginNames = selection.names;
 
-  const pluginConfigs = buildPluginConfigMap(config.plugins, declarative);
+  const pluginConfigs = buildPluginConfigMap(config.plugins, declarative, resolveAgentCwd(config));
   const host = new MemoryPluginHost();
   for (const name of pluginNames) {
     const plugin = await loader.load(name);

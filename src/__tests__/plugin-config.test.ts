@@ -84,6 +84,28 @@ describe('声明式 guardrails / hooks（0.6.1 P2）', () => {
     expect(buildPluginConfigMap(undefined, [])).toEqual({});
   });
 
+  it('agentCwd 仅作为 basic-tools 的 cwd 兜底，显式配置优先（0.11.1）', () => {
+    expect(buildPluginConfigMap(undefined, [], '/abs/work')).toEqual({
+      'basic-tools': { cwd: '/abs/work' },
+    });
+    expect(
+      buildPluginConfigMap(
+        [{ name: 'basic-tools', config: { allowed_roots: ['/abs'] } }],
+        [],
+        '/abs/work',
+      ),
+    ).toEqual({ 'basic-tools': { allowed_roots: ['/abs'], cwd: '/abs/work' } });
+    expect(
+      buildPluginConfigMap(
+        [{ name: 'basic-tools', config: { cwd: '/explicit' } }],
+        [],
+        '/abs/work',
+      ),
+    ).toEqual({ 'basic-tools': { cwd: '/explicit' } });
+    // 未设置 agent.cwd 时不注入
+    expect(buildPluginConfigMap([{ name: 'basic-tools' }], [])).toEqual({});
+  });
+
   it('显式 plugins[].config 覆盖声明式 config', () => {
     expect(
       pluginConfigFor(

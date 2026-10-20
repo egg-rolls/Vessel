@@ -322,7 +322,7 @@ function validateObservability(
   }
 }
 
-/** 校验 ui 块（0.8.5 language；0.11 clearOnStart） */
+/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning） */
 function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
   if (!isPlainObject(ui)) {
     errors.push({ path: 'ui', message: 'ui must be an object', value: ui });
@@ -340,6 +340,13 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       path: 'ui.clearOnStart',
       message: 'ui.clearOnStart must be a boolean',
       value: ui.clearOnStart,
+    });
+  }
+  if (ui.showReasoning !== undefined && typeof ui.showReasoning !== 'boolean') {
+    errors.push({
+      path: 'ui.showReasoning',
+      message: 'ui.showReasoning must be a boolean',
+      value: ui.showReasoning,
     });
   }
 }
@@ -1180,6 +1187,18 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       errors.push({ path: 'agent.name', message: 'Agent name must be a string', value: name });
     }
 
+    // 0.11.1：默认工作目录。只校验类型/非空；`~` 与相对路径由装配层解析。
+    if (
+      config.agent.cwd !== undefined &&
+      (typeof config.agent.cwd !== 'string' || config.agent.cwd.trim() === '')
+    ) {
+      errors.push({
+        path: 'agent.cwd',
+        message: 'agent.cwd must be a non-empty string',
+        value: config.agent.cwd,
+      });
+    }
+
     if (systemPrompt !== undefined && typeof systemPrompt !== 'string') {
       errors.push({
         path: 'agent.systemPrompt',
@@ -1806,7 +1825,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxTokens',
     'timeoutMs',
   ],
-  agent: ['name', 'systemPrompt', 'model', 'temperature', 'maxTokens'],
+  agent: ['name', 'systemPrompt', 'model', 'temperature', 'maxTokens', 'cwd'],
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove'],
   update: ['autoCheck', 'channel', 'source'],
@@ -1853,7 +1872,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxMembers',
   ],
   observability: ['eventHistory', 'metrics'],
-  ui: ['language', 'clearOnStart'],
+  ui: ['language', 'clearOnStart', 'showReasoning'],
   tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };

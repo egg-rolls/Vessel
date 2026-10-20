@@ -68,6 +68,7 @@ import {
   disposeMetrics,
   type MetricsFactory,
 } from './observability-wiring';
+import { resolveAgentCwd } from './path-resolution';
 import {
   buildPluginConfigMap,
   buildTeamMemberHost,
@@ -78,6 +79,7 @@ import {
 import { PluginLoader } from './plugin-loader';
 import { resolvePluginSelection, warnExternalPluginsOnce } from './plugin-selection';
 import { createProvider } from './provider-factory';
+import { withReasoning } from './reasoning';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionControl, type SessionControl } from './session-control';
@@ -440,7 +442,11 @@ export async function buildTenantRuntime(
     // ── 插件 ──────────────────────────────────────
     const declarativePlugins = declarativePluginEntries(config);
     /** E1：插件名 → 安装配置（显式 plugins[].config 覆盖声明式条目） */
-    const pluginConfigs = buildPluginConfigMap(config.plugins, declarativePlugins);
+    const pluginConfigs = buildPluginConfigMap(
+      config.plugins,
+      declarativePlugins,
+      resolveAgentCwd(config),
+    );
     const pluginSelection = resolvePluginSelection(
       loader,
       config.plugins,
@@ -670,25 +676,28 @@ export async function buildTenantRuntime(
 
     if (!runtime) {
       plugins.push(...(await buildFactoryPlugins(undefined, deferredTransport)));
-      agentRuntime = await AgentRuntime.create({
-        provider,
-        model: providerModel,
-        context,
-        events,
-        limits,
-        termination,
-        session,
-        // core 0.6.1：pluginConfigs 按名透传；本 worktree 的 core 尚未有该字段，
-        // 同时用 wrapper 绑定配置，保证 core 合并前后行为一致。
-        plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
-        systemPrompt,
-        permission,
-        ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
-        ...(runStore ? { runStore } : {}),
-        logger,
-      } as Parameters<typeof AgentRuntime.create>[0] & {
-        pluginConfigs?: Record<string, Record<string, unknown>>;
-      });
+      agentRuntime = await AgentRuntime.create(
+        // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
+        withReasoning(config, {
+          provider,
+          model: providerModel,
+          context,
+          events,
+          limits,
+          termination,
+          session,
+          // core 0.6.1：pluginConfigs 按名透传；本 worktree 的 core 尚未有该字段，
+          // 同时用 wrapper 绑定配置，保证 core 合并前后行为一致。
+          plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
+          systemPrompt,
+          permission,
+          ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
+          ...(runStore ? { runStore } : {}),
+          logger,
+        } as Parameters<typeof AgentRuntime.create>[0] & {
+          pluginConfigs?: Record<string, Record<string, unknown>>;
+        }),
+      );
       // 0.10 R2-18：包装 run/resume 以精确跟踪在跑 run（shutdown drain 用）。
       const originalRun = agentRuntime.run.bind(agentRuntime);
       agentRuntime.run = (input, sessionId, opts) =>

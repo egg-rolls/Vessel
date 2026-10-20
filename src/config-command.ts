@@ -21,7 +21,7 @@ import {
 import { formatConfigError, formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { t } from './i18n';
-import { isUiLanguage, setUserLanguage } from './ui-settings';
+import { isSettableConfigKey, isUiLanguage, setUserConfigValue } from './ui-settings';
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -156,28 +156,49 @@ export async function configInitCommand(
 }
 
 /**
- * `vessel config set ui.language <zh-CN|en> [--json]`（0.11）。
- * 只写用户配置的 `ui.language`；保留其它键。
+ * `vessel config set <key> <value> [--json]`（0.11；0.11.1 扩展键）。
+ * 支持 `ui.language` / `ui.showReasoning` / `agent.cwd`；只写用户配置，保留其它键。
  */
 export async function configSetCommand(
   key: string,
   value: string,
   options: ConfigSetOptions = {},
 ): Promise<ConfigCommandResult> {
-  if (key !== 'ui.language') {
+  if (!isSettableConfigKey(key)) {
     return { exitCode: 2, stdout: '', stderr: t('config.set.unknownKey', { key }) };
   }
-  if (!isUiLanguage(value)) {
+
+  let parsed: string | boolean = value;
+  if (key === 'ui.language') {
+    if (!isUiLanguage(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidLanguage', { value }),
+      };
+    }
+  } else if (key === 'ui.showReasoning') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (value.trim() === '') {
     return {
       exitCode: 2,
       stdout: '',
-      stderr: t('config.set.invalidLanguage', { value }),
+      stderr: t('config.set.invalidPath', { value }),
     };
+  } else {
+    parsed = value.trim();
   }
 
   const target = options.userConfigPath ?? getUserConfigPath();
   try {
-    await setUserLanguage(value, { configPath: target });
+    await setUserConfigValue(key, parsed, { configPath: target });
   } catch (error) {
     return {
       exitCode: 1,
@@ -191,11 +212,11 @@ export async function configSetCommand(
   if (options.json) {
     return {
       exitCode: 0,
-      stdout: JSON.stringify({ key: 'ui.language', value, path: target }),
+      stdout: JSON.stringify({ key, value: parsed, path: target }),
       stderr: '',
     };
   }
-  return { exitCode: 0, stdout: `ui.language = ${value} (${target})`, stderr: '' };
+  return { exitCode: 0, stdout: `${key} = ${String(parsed)} (${target})`, stderr: '' };
 }
 
 /** `vessel config show [--sources] [--json] [--tenant <id>]` */
