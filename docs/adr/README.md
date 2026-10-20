@@ -73,6 +73,9 @@
 | 056 | 持久化耐久性与损坏检测 | accepted | 2026-10-19 | storage, durability, corruption, files | [ADR-056-persistence-durability-and-corruption.md](ADR-056-persistence-durability-and-corruption.md) |
 | 057 | 配置单一 resolver | accepted | 2026-10-19 | config, cli, precedence, connect | [ADR-057-config-single-resolver.md](ADR-057-config-single-resolver.md) |
 | 058 | 统一工具执行管道 | accepted | 2026-10-19 | runtime, tools, permissions, workflow, delegate | [ADR-058-unified-tool-execution-pipeline.md](ADR-058-unified-tool-execution-pipeline.md) |
+| 059 | Gateway 方法表按域拆分为模块 | accepted | 2026-10-20 | gateway, rpc, refactor, modules | [ADR-059-gateway-method-modules.md](ADR-059-gateway-method-modules.md) |
+| 060 | CLI 一次性命令改用有序注册表 | accepted | 2026-10-20 | cli, commands, refactor, registry | [ADR-060-cli-command-registry.md](ADR-060-cli-command-registry.md) |
+| 061 | TUI 展示层修复（key / ANSI / Markdown / resize） | accepted | 2026-10-20 | tui, rendering, ansi, markdown, resize | [ADR-061-tui-display-layer-fixes.md](ADR-061-tui-display-layer-fixes.md) |
 
 ## 编写约定
 
