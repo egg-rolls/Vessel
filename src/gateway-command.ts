@@ -13,14 +13,23 @@
  */
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
-import type { GatewayCommand, GatewayInstallTarget } from './cli-args';
+import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
 import { resolveDataDir } from './data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import {
+  acquireGatewayInstanceLock,
+  type GatewayInstanceLock,
+  GatewayInstanceLockedError,
+} from './gateway/instance-lock';
+import {
   type CommandRunner,
+  DEFAULT_GATEWAY_INSTANCE,
+  type GatewayPidEntry,
   type GatewayPidRecord,
   gatewayPidPath,
   isProcessAlive,
+  listGatewayPidStates,
+  normalizeGatewayInstance,
   readGatewayPidState,
   removeGatewayPid,
   removeGatewayPidIfOwnedSync,
@@ -101,9 +110,110 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 解析启动实例：显式 instance > 显式 port（0 除外）> default（0.14） */
+export function deriveGatewayInstance(instance?: string, port?: number): string {
+  if (instance !== undefined) return normalizeGatewayInstance(instance);
+  if (port !== undefined && port !== 0) return String(port);
+  return DEFAULT_GATEWAY_INSTANCE;
+}
+
+function inspectOptions(options: { platform?: NodeJS.Platform; runCommand?: CommandRunner }): {
+  platform?: NodeJS.Platform;
+  runCommand?: CommandRunner;
+} {
+  return {
+    ...(options.platform !== undefined ? { platform: options.platform } : {}),
+    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+  };
+}
+
+/** 选择器解析结果 */
+export type GatewayTargetsResult =
+  | { ok: true; entries: GatewayPidEntry[]; all: boolean }
+  | { ok: false; error: string; code: 'multiple_instances' | 'invalid_selector' };
+
 /**
- * 前台 `gateway start` / `restart` 的启动前检查：
- * 运行中 → 拒绝；死 pid / 损坏文件 → 回收。
+ * 按 `--instance` / `--port` / `--all` 解析目标；无选择器时：
+ * 0 个实例 → 空；1 个 → 该实例；≥2 个 → `multiple_instances`。
+ */
+export async function resolveGatewayTargets(
+  dataDir: string,
+  selector: GatewaySelector,
+  options: { platform?: NodeJS.Platform; runCommand?: CommandRunner } = {},
+): Promise<GatewayTargetsResult> {
+  const entries = await listGatewayPidStates(dataDir, inspectOptions(options));
+
+  if (selector.all === true) return { ok: true, entries, all: true };
+
+  if (selector.instance !== undefined) {
+    let instance: string;
+    try {
+      instance = normalizeGatewayInstance(selector.instance);
+    } catch (error) {
+      return { ok: false, error: errorMessage(error), code: 'invalid_selector' };
+    }
+    return {
+      ok: true,
+      entries: entries.filter((entry) => entry.instance === instance),
+      all: false,
+    };
+  }
+
+  if (selector.port !== undefined) {
+    return {
+      ok: true,
+      entries: entries.filter(
+        (entry) =>
+          (entry.state.kind === 'running' || entry.state.kind === 'stale') &&
+          entry.state.record.port === selector.port,
+      ),
+      all: false,
+    };
+  }
+
+  if (entries.length >= 2) {
+    return {
+      ok: false,
+      code: 'multiple_instances',
+      error:
+        `multiple_instances: ${entries.length} gateway instances found ` +
+        `(${entries.map((entry) => entry.instance).join(', ')}). ` +
+        'Select one with --instance, --port, or --all.',
+    };
+  }
+  return { ok: true, entries, all: false };
+}
+
+/** 运行中的目标实例 */
+function runningTargets(entries: GatewayPidEntry[]): GatewayPidEntry[] {
+  return entries.filter((entry) => entry.state.kind === 'running');
+}
+
+/**
+ * 显式 node_id 与其它运行实例重复时拒绝（0.14）。
+ * 自动生成的 node_id 不在此检查范围。
+ */
+async function duplicateExplicitNodeId(
+  dataDir: string,
+  instance: string,
+  config: VesselConfig,
+  options: { platform?: NodeJS.Platform; runCommand?: CommandRunner },
+): Promise<GatewayPidEntry | undefined> {
+  const nodeId = config.host?.nodeId;
+  if (nodeId === undefined || nodeId === '') return undefined;
+  const entries = await listGatewayPidStates(dataDir, inspectOptions(options));
+  return entries.find(
+    (entry) =>
+      entry.instance !== instance &&
+      entry.state.kind === 'running' &&
+      entry.state.record.node_id === nodeId,
+  );
+}
+
+/**
+ * 前台 `gateway start` / `restart` / `--serve` 的启动前检查：
+ * 运行中 → 拒绝；死 pid / 损坏文件 → 回收；获取实例锁；
+ * 显式 node_id 与其它运行实例重复 → 拒绝。
  */
 export async function prepareForegroundGatewayStart(
   options: {
@@ -112,16 +222,24 @@ export async function prepareForegroundGatewayStart(
     env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
     runCommand?: CommandRunner;
+    instance?: string;
   } = {},
 ): Promise<
-  | { ok: true; dataDir: string; config: VesselConfig }
+  | {
+      ok: true;
+      dataDir: string;
+      config: VesselConfig;
+      instance: string;
+      lock: GatewayInstanceLock;
+    }
   | { ok: false; error: string; runningPid?: number }
 > {
   const config = options.config ?? (await loadConfig()).config;
   const dataDir = options.dataDir ?? resolveDataDir(config, options.env ?? process.env);
+  const instance = normalizeGatewayInstance(options.instance);
   const state = await readGatewayPidState(dataDir, {
-    ...(options.platform !== undefined ? { platform: options.platform } : {}),
-    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    instance,
+    ...inspectOptions(options),
   });
 
   if (state.kind === 'running') {
@@ -135,9 +253,33 @@ export async function prepareForegroundGatewayStart(
     };
   }
   if (state.kind !== 'absent') {
-    await removeGatewayPid(dataDir).catch(() => undefined);
+    await removeGatewayPid(dataDir, instance).catch(() => undefined);
   }
-  return { ok: true, dataDir, config };
+
+  const duplicate = await duplicateExplicitNodeId(dataDir, instance, config, options);
+  if (duplicate !== undefined) {
+    const owner = duplicate.state.kind === 'running' ? duplicate.state.record : undefined;
+    return {
+      ok: false,
+      error:
+        `duplicate_node_id: host.nodeId "${config.host?.nodeId}" is already used by ` +
+        `gateway instance "${duplicate.instance}"` +
+        (owner !== undefined ? ` (pid ${owner.pid})` : '') +
+        '. Set a unique host.nodeId per gateway.',
+      ...(owner !== undefined ? { runningPid: owner.pid } : {}),
+    };
+  }
+
+  let lock: GatewayInstanceLock;
+  try {
+    lock = await acquireGatewayInstanceLock({ dataDir, instance });
+  } catch (error) {
+    if (error instanceof GatewayInstanceLockedError) {
+      return { ok: false, error: error.message };
+    }
+    throw error;
+  }
+  return { ok: true, dataDir, config, instance, lock };
 }
 
 /** gateway 起来后写 PID，并注册退出清理（只删本进程持有的文件） */
@@ -147,7 +289,9 @@ export async function writeForegroundGatewayPid(options: {
   port: number;
   version?: string;
   nodeId?: string;
+  instance?: string;
 }): Promise<void> {
+  const instance = normalizeGatewayInstance(options.instance);
   const record: GatewayPidRecord = {
     pid: process.pid,
     started_at: new Date().toISOString(),
@@ -155,71 +299,184 @@ export async function writeForegroundGatewayPid(options: {
     port: options.port,
     version: options.version ?? readPackageVersion(),
     ...(options.nodeId !== undefined ? { node_id: options.nodeId } : {}),
+    ...(instance !== DEFAULT_GATEWAY_INSTANCE ? { instance } : {}),
   };
-  await writeGatewayPid(options.dataDir, record);
-  process.once('exit', () => removeGatewayPidIfOwnedSync(options.dataDir, process.pid));
+  await writeGatewayPid(options.dataDir, record, instance);
+  process.once('exit', () => removeGatewayPidIfOwnedSync(options.dataDir, process.pid, instance));
 }
 
 /** `gateway stop`（也供 cli.ts 的前台 restart 复用） */
 export async function stopGateway(
-  options: GatewayCommandDeps & { timeoutMs?: number } = {},
+  options: GatewayCommandDeps & {
+    timeoutMs?: number;
+    selector?: GatewaySelector;
+  } = {},
 ): Promise<number> {
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
   const timeoutMs = options.timeoutMs ?? 10_000;
   const sleep = options.sleep ?? sleepDefault;
+  const selector = options.selector ?? {};
 
-  const state = await readGatewayPidState(context.dataDir, {
+  const targets = await resolveGatewayTargets(context.dataDir, selector, {
     platform: context.platform,
     ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
   });
+  if (!targets.ok) {
+    printErr(ui.err(targets.error));
+    return 1;
+  }
 
-  if (state.kind !== 'running') {
-    if (state.kind !== 'absent') {
-      await removeGatewayPid(context.dataDir).catch(() => undefined);
+  // 选择器命中的 stale/invalid 文件直接回收；未选中的实例不动。
+  for (const entry of targets.entries) {
+    if (entry.state.kind === 'stale' || entry.state.kind === 'invalid') {
+      await removeGatewayPid(context.dataDir, entry.instance).catch(() => undefined);
     }
+  }
+
+  const running = runningTargets(targets.entries);
+  if (running.length === 0) {
     print(ui.info(t('gateway.notRunning')));
     return 0;
   }
 
-  const pid = state.record.pid;
-  if (pid === process.pid) {
-    printErr(ui.err(t('gateway.stopSelf')));
-    return 1;
-  }
-
-  try {
-    terminateProcess(pid, context.platform);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
-      printErr(ui.err(t('gateway.stopFailed', { pid, detail: errorMessage(error) })));
-      return 1;
+  let failed = false;
+  for (const entry of running) {
+    if (entry.state.kind !== 'running') continue;
+    const pid = entry.state.record.pid;
+    if (pid === process.pid) {
+      printErr(ui.err(t('gateway.stopSelf')));
+      failed = true;
+      continue;
     }
-  }
 
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isProcessAlive(pid)) {
-      await removeGatewayPid(context.dataDir).catch(() => undefined);
-      print(ui.ok(t('gateway.stopped', { pid })));
-      return 0;
+    try {
+      terminateProcess(pid, context.platform);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+        printErr(ui.err(t('gateway.stopFailed', { pid, detail: errorMessage(error) })));
+        failed = true;
+        continue;
+      }
     }
-    await sleep(100);
+
+    const deadline = Date.now() + timeoutMs;
+    let stopped = false;
+    while (Date.now() < deadline) {
+      if (!isProcessAlive(pid)) {
+        stopped = true;
+        break;
+      }
+      await sleep(100);
+    }
+
+    if (!stopped) {
+      printErr(ui.err(t('gateway.stopTimeout', { pid, timeout: `${timeoutMs}ms` })));
+      failed = true;
+      continue;
+    }
+    await removeGatewayPid(context.dataDir, entry.instance).catch(() => undefined);
+    print(ui.ok(t('gateway.stopped', { pid })));
   }
 
-  printErr(ui.err(t('gateway.stopTimeout', { pid, timeout: `${timeoutMs}ms` })));
-  return 1;
+  return failed ? 1 : 0;
 }
 
-/** `gateway status [--json]` */
+/** 单个实例的状态 JSON（0.14） */
+function instanceStatusJson(
+  entry: GatewayPidEntry,
+  config: VesselConfig,
+  now: () => number,
+): Record<string, unknown> {
+  const state = entry.state;
+  const tls = config.serve?.tls !== undefined;
+  if (state.kind === 'running') {
+    const record = state.record;
+    const uptimeSeconds = Math.floor((now() - Date.parse(record.started_at)) / 1000);
+    return {
+      instance: entry.instance,
+      running: true,
+      pid: record.pid,
+      host: record.host,
+      port: record.port,
+      url: gatewayBaseUrl(record, tls),
+      started_at: record.started_at,
+      uptime_seconds: Math.max(0, uptimeSeconds),
+      version: record.version,
+      ...(record.node_id !== undefined ? { node_id: record.node_id } : {}),
+      pid_file: entry.path,
+    };
+  }
+  return {
+    instance: entry.instance,
+    running: false,
+    pid_file: entry.path,
+    ...(state.kind === 'stale'
+      ? { stale: true, pid: state.record.pid, reason: state.reason }
+      : state.kind === 'invalid'
+        ? { reason: state.reason }
+        : {}),
+  };
+}
+
+/** `gateway status [--json] [--instance|--port|--all]` */
 export async function gatewayStatus(
-  options: GatewayCommandDeps & { json?: boolean } = {},
+  options: GatewayCommandDeps & { json?: boolean; selector?: GatewaySelector } = {},
 ): Promise<number> {
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
+  const printErr = options.printErr ?? console.error;
   const json = options.json === true;
   const now = options.now ?? Date.now;
+  const selector = options.selector ?? {};
+  const useSelection =
+    selector.instance !== undefined || selector.port !== undefined || selector.all === true;
+
+  if (useSelection) {
+    const targets = await resolveGatewayTargets(context.dataDir, selector, {
+      platform: context.platform,
+      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    });
+    if (!targets.ok) {
+      printErr(ui.err(targets.error));
+      return 1;
+    }
+    const entries = targets.entries;
+    const allRunning = entries.length > 0 && runningTargets(entries).length === entries.length;
+    if (json) {
+      print(
+        JSON.stringify(
+          {
+            as_of: new Date(now()).toISOString(),
+            instances: entries.map((entry) => instanceStatusJson(entry, context.config, now)),
+          },
+          null,
+          2,
+        ),
+      );
+      return allRunning ? 0 : 1;
+    }
+    print(ui.title(t('gateway.status.title')));
+    print(ui.rule(48));
+    if (entries.length === 0) {
+      print(ui.kv(t('gateway.status.status'), t('gateway.notRunning'), 10));
+      return 1;
+    }
+    for (const entry of entries) {
+      const status = instanceStatusJson(entry, context.config, now);
+      const stateText =
+        status.running === true ? ui.ok(t('gateway.running')) : t('gateway.notRunning');
+      print(
+        ui.kv(
+          entry.instance,
+          `${stateText}${status.url !== undefined ? `  ${String(status.url)}` : ''}`,
+          12,
+        ),
+      );
+    }
+    return allRunning ? 0 : 1;
+  }
 
   const state = await readGatewayPidState(context.dataDir, {
     platform: context.platform,
@@ -278,6 +535,7 @@ export async function gatewayStatus(
     print(
       JSON.stringify(
         {
+          instance: DEFAULT_GATEWAY_INSTANCE,
           running: true,
           pid: record.pid,
           host: record.host,
@@ -301,6 +559,7 @@ export async function gatewayStatus(
   print(ui.rule(48));
   const rows: Array<[string, string]> = [
     [t('gateway.status.status'), ui.ok(t('gateway.running'))],
+    [t('gateway.status.instance'), DEFAULT_GATEWAY_INSTANCE],
     [t('gateway.status.pid'), String(record.pid)],
     [t('gateway.status.address'), url],
     [t('gateway.status.uptime'), formatUptime(uptimeSeconds)],
@@ -317,19 +576,75 @@ export async function gatewayStatus(
   return 0;
 }
 
-/** `gateway reload [--scope ...]` */
+/** `gateway list [--json]`（0.14） */
+export async function gatewayList(
+  options: GatewayCommandDeps & { json?: boolean } = {},
+): Promise<number> {
+  const context = await resolveContext(options);
+  const print = options.print ?? console.log;
+  const json = options.json === true;
+  const now = options.now ?? Date.now;
+  const entries = await listGatewayPidStates(context.dataDir, {
+    platform: context.platform,
+    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+  });
+
+  if (json) {
+    print(
+      JSON.stringify(
+        {
+          as_of: new Date(now()).toISOString(),
+          instances: entries.map((entry) => instanceStatusJson(entry, context.config, now)),
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+
+  print(ui.title(t('gateway.list.title')));
+  print(ui.rule(48));
+  if (entries.length === 0) {
+    print(ui.info(t('gateway.list.empty')));
+    return 0;
+  }
+  for (const entry of entries) {
+    const status = instanceStatusJson(entry, context.config, now);
+    const running = status.running === true;
+    const detail = running
+      ? `${status.pid}  ${String(status.url)}`
+      : entry.state.kind === 'stale'
+        ? `stale (${entry.state.reason})`
+        : entry.state.kind === 'invalid'
+          ? `invalid (${entry.state.reason})`
+          : 'not running';
+    print(ui.kv(entry.instance, `${running ? ui.ok(t('gateway.running')) : detail}`, 12));
+    if (running) print(`  ${ui.dim(String(detail))}`);
+    print(`  ${ui.dim(entry.path)}`);
+  }
+  return 0;
+}
+
+/** `gateway reload [--scope ...] [--instance|--port|--all]` */
 export async function reloadGatewayCommand(
-  options: GatewayCommandDeps & { scopes?: string[] } = {},
+  options: GatewayCommandDeps & { scopes?: string[]; selector?: GatewaySelector } = {},
 ): Promise<number> {
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
+  const selector = options.selector ?? {};
 
-  const state = await readGatewayPidState(context.dataDir, {
+  const targets = await resolveGatewayTargets(context.dataDir, selector, {
     platform: context.platform,
     ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
   });
-  if (state.kind !== 'running') {
+  if (!targets.ok) {
+    printErr(ui.err(targets.error));
+    return 1;
+  }
+  const running = runningTargets(targets.entries);
+  if (running.length === 0) {
     printErr(ui.err(t('gateway.reloadNoGateway')));
     return 1;
   }
@@ -340,42 +655,73 @@ export async function reloadGatewayCommand(
     return 1;
   }
 
-  const result = await reloadGateway({
-    record: state.record,
-    token,
-    ...(options.scopes !== undefined ? { scopes: options.scopes } : {}),
-    tls: context.config.serve?.tls !== undefined,
-  });
-  if (!result.ok) {
-    printErr(ui.err(t('gateway.reloadFailed', { detail: result.error })));
-    return 1;
-  }
+  let failed = false;
+  for (const entry of running) {
+    if (entry.state.kind !== 'running') continue;
+    const prefix = running.length > 1 ? `[${entry.instance}] ` : '';
+    const result = await reloadGateway({
+      record: entry.state.record,
+      token,
+      ...(options.scopes !== undefined ? { scopes: options.scopes } : {}),
+      tls: context.config.serve?.tls !== undefined,
+    });
+    if (!result.ok) {
+      printErr(ui.err(`${prefix}${t('gateway.reloadFailed', { detail: result.error })}`));
+      failed = true;
+      continue;
+    }
 
-  print(
-    ui.ok(
-      t('gateway.reloaded', {
-        scopes: result.result.reloaded.length > 0 ? result.result.reloaded.join(', ') : '(none)',
-      }),
-    ),
-  );
-  if (result.result.requires_restart.length > 0) {
     print(
-      ui.warn(t('gateway.requiresRestart', { scopes: result.result.requires_restart.join(', ') })),
+      ui.ok(
+        `${prefix}${t('gateway.reloaded', {
+          scopes: result.result.reloaded.length > 0 ? result.result.reloaded.join(', ') : '(none)',
+        })}`,
+      ),
     );
+    if (result.result.requires_restart.length > 0) {
+      print(
+        ui.warn(
+          `${prefix}${t('gateway.requiresRestart', {
+            scopes: result.result.requires_restart.join(', '),
+          })}`,
+        ),
+      );
+    }
   }
-  return 0;
+  return failed ? 1 : 0;
 }
 
 async function startDaemonCommand(
-  options: GatewayCommandDeps & { port?: number; host?: string; daemonLog?: string },
+  options: GatewayCommandDeps & {
+    instance?: string;
+    port?: number;
+    host?: string;
+    daemonLog?: string;
+  },
 ): Promise<number> {
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
-  const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir);
+  const instance = deriveGatewayInstance(options.instance, options.port);
+  const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
+
+  const duplicate = await duplicateExplicitNodeId(context.dataDir, instance, context.config, {
+    platform: context.platform,
+    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+  });
+  if (duplicate !== undefined) {
+    printErr(
+      ui.err(
+        `duplicate_node_id: host.nodeId "${context.config.host?.nodeId}" is already used by ` +
+          `gateway instance "${duplicate.instance}". Set a unique host.nodeId per gateway.`,
+      ),
+    );
+    return 1;
+  }
 
   const result = await startGatewayDaemon({
     dataDir: context.dataDir,
+    instance,
     logPath,
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
@@ -466,6 +812,61 @@ async function uninstallServiceCommand(options: GatewayCommandDeps = {}): Promis
   return 0;
 }
 
+/** `gateway restart --daemon`（0.14：支持选择器与 --all） */
+async function restartDaemonCommand(
+  command: Extract<GatewayCommand, { kind: 'restart' }>,
+  deps: GatewayCommandDeps,
+): Promise<number> {
+  const context = await resolveContext(deps);
+  const printErr = deps.printErr ?? console.error;
+  const targets = await resolveGatewayTargets(context.dataDir, command, {
+    platform: context.platform,
+    ...(deps.runCommand !== undefined ? { runCommand: deps.runCommand } : {}),
+  });
+  if (!targets.ok) {
+    printErr(ui.err(targets.error));
+    return 1;
+  }
+  const running = runningTargets(targets.entries);
+
+  const stopCode = await stopGateway({ ...deps, selector: command });
+  if (stopCode !== 0) return stopCode;
+
+  if (command.all === true) {
+    if (running.length === 0) return startDaemonCommand({ ...deps });
+    let failed = false;
+    for (const entry of running) {
+      if (entry.state.kind !== 'running') continue;
+      const record = entry.state.record;
+      const code = await startDaemonCommand({
+        ...deps,
+        instance: entry.instance,
+        ...(record.port !== 0 ? { port: record.port } : {}),
+        host: record.host,
+      });
+      if (code !== 0) failed = true;
+    }
+    return failed ? 1 : 0;
+  }
+
+  const previous = running[0];
+  const previousRecord = previous?.state.kind === 'running' ? previous.state.record : undefined;
+  return startDaemonCommand({
+    ...deps,
+    ...(command.instance !== undefined
+      ? { instance: command.instance }
+      : previous !== undefined
+        ? { instance: previous.instance }
+        : {}),
+    ...(command.port !== undefined
+      ? { port: command.port }
+      : previousRecord !== undefined && previousRecord.port !== 0
+        ? { port: previousRecord.port }
+        : {}),
+    ...(previousRecord !== undefined ? { host: previousRecord.host } : {}),
+  });
+}
+
 /** 执行一次性 gateway 子命令，返回退出码 */
 export async function runGatewayCommand(
   command: GatewayCommand,
@@ -475,22 +876,23 @@ export async function runGatewayCommand(
     case 'start':
       return startDaemonCommand({
         ...deps,
+        ...(command.instance !== undefined ? { instance: command.instance } : {}),
         ...(command.port !== undefined ? { port: command.port } : {}),
         ...(command.host !== undefined ? { host: command.host } : {}),
         ...(command.log !== undefined ? { daemonLog: command.log } : {}),
       });
-    case 'restart': {
-      const stopCode = await stopGateway({ ...deps });
-      if (stopCode !== 0) return stopCode;
-      return startDaemonCommand({ ...deps });
-    }
+    case 'restart':
+      return restartDaemonCommand(command, deps);
     case 'stop':
-      return stopGateway({ ...deps, timeoutMs: command.timeoutMs });
+      return stopGateway({ ...deps, timeoutMs: command.timeoutMs, selector: command });
     case 'status':
-      return gatewayStatus({ ...deps, json: command.json });
+      return gatewayStatus({ ...deps, json: command.json, selector: command });
+    case 'list':
+      return gatewayList({ ...deps, json: command.json });
     case 'reload':
       return reloadGatewayCommand({
         ...deps,
+        selector: command,
         ...(command.scopes !== undefined ? { scopes: command.scopes } : {}),
       });
     case 'install-service':

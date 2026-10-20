@@ -55,10 +55,14 @@ import type { FeishuChannelLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import { createDurableFor } from './durable-wiring';
 import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-command';
+import type { GatewayInstanceLock } from './gateway/instance-lock';
+import { DEFAULT_GATEWAY_INSTANCE } from './gateway/pid';
 import { renderGatewayBanner } from './gateway-banner';
 import {
+  deriveGatewayInstance,
   isForegroundGatewayCommand,
   prepareForegroundGatewayStart,
+  resolveGatewayTargets,
   stopGateway,
   writeForegroundGatewayPid,
 } from './gateway-command';
@@ -118,10 +122,14 @@ function printHelp(): void {
   ];
   const serve: Array<[string, string]> = [['vessel --serve 8642', t('help.cmd.serve')]];
   const gateway: Array<[string, string]> = [
-    ['vessel gateway start [--daemon]', t('help.cmd.gatewayStart')],
-    ['vessel gateway stop [--timeout 10s]', t('help.cmd.gatewayStop')],
+    ['vessel status [--json]', t('help.cmd.status')],
+    ['vessel agents [--json]', t('help.cmd.agents')],
+    ['vessel errors [--json]', t('help.cmd.errors')],
+    ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
+    ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
+    ['vessel gateway stop [--instance <name>|--port N|--all]', t('help.cmd.gatewayStop')],
     ['vessel gateway status [--json]', t('help.cmd.gatewayStatus')],
-    ['vessel gateway restart [--daemon]', t('help.cmd.gatewayRestart')],
+    ['vessel gateway restart [--daemon] [--instance <name>|--all]', t('help.cmd.gatewayRestart')],
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
@@ -322,26 +330,57 @@ if (command) {
 // 0.12：`gateway start` / `gateway restart` 前台 = 现有 `--serve` 管线。
 // `--daemon` 及其它 gateway 子命令已由注册表处理。
 const foregroundGateway = args.gateway !== null && isForegroundGatewayCommand(args.gateway);
+let foregroundGatewayLock: GatewayInstanceLock | undefined;
+let foregroundGatewayInstance: string = DEFAULT_GATEWAY_INSTANCE;
 if (foregroundGateway && args.gateway !== null) {
   const gatewayArgs = args.gateway;
+  let targetInstance =
+    gatewayArgs.kind === 'start' || gatewayArgs.kind === 'restart'
+      ? gatewayArgs.instance
+      : undefined;
+  let targetPort = gatewayArgs.kind === 'start' ? gatewayArgs.port : undefined;
+  let targetHost = gatewayArgs.kind === 'start' ? gatewayArgs.host : undefined;
+
   if (gatewayArgs.kind === 'restart') {
-    const stopCode = await stopGateway({});
+    // 选择器命中的实例在停止前读取实际 port/host，用于原样重启。
+    const { config } = await loadConfig();
+    const targets = await resolveGatewayTargets(resolveDataDir(config), gatewayArgs);
+    const previous = targets.ok ? targets.entries[0] : undefined;
+    if (previous !== undefined) {
+      targetInstance = previous.instance;
+      if (previous.state.kind === 'running' || previous.state.kind === 'stale') {
+        targetPort = previous.state.record.port;
+        targetHost = previous.state.record.host;
+      }
+    }
+    const stopCode = await stopGateway({ selector: gatewayArgs });
     if (stopCode !== 0) process.exit(stopCode);
   }
-  const prepared = await prepareForegroundGatewayStart();
+
+  const instance = deriveGatewayInstance(targetInstance, targetPort);
+  const prepared = await prepareForegroundGatewayStart({ instance });
   if (!prepared.ok) {
     console.error(ui.err(prepared.error));
     process.exit(1);
   }
+  foregroundGatewayLock = prepared.lock;
+  foregroundGatewayInstance = prepared.instance;
+  process.once('exit', () => foregroundGatewayLock?.releaseSync());
   // 端口/主机缺省沿用 serve 配置；显式 flag 才进 CLI 覆盖层。
-  args.servePort =
-    gatewayArgs.kind === 'start' && gatewayArgs.port !== undefined
-      ? gatewayArgs.port
-      : DEFAULT_SERVE_PORT;
-  args.servePortExplicit = gatewayArgs.kind === 'start' && gatewayArgs.port !== undefined;
-  if (gatewayArgs.kind === 'start' && gatewayArgs.host !== undefined) {
-    args.serveHost = gatewayArgs.host;
+  args.servePort = targetPort ?? DEFAULT_SERVE_PORT;
+  args.servePortExplicit = gatewayArgs.kind === 'start' ? gatewayArgs.port !== undefined : true;
+  if (targetHost !== undefined) args.serveHost = targetHost;
+} else if (args.servePort !== null) {
+  // `--serve` 是 default 实例的前台别名：先准备（运行中拒绝 + 实例锁），
+  // 修复 0.12 直接覆盖 gateway.pid 的问题。
+  const prepared = await prepareForegroundGatewayStart({ instance: DEFAULT_GATEWAY_INSTANCE });
+  if (!prepared.ok) {
+    console.error(ui.err(prepared.error));
+    process.exit(1);
   }
+  foregroundGatewayLock = prepared.lock;
+  foregroundGatewayInstance = prepared.instance;
+  process.once('exit', () => foregroundGatewayLock?.releaseSync());
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
@@ -839,6 +878,7 @@ async function runWithConfig(result: BootstrapResult) {
         host: resolved.options.hostname,
         port: gateway.port,
         version: gatewayOptions.version,
+        instance: foregroundGatewayInstance,
         ...(result.nodeId ? { nodeId: result.nodeId } : {}),
       });
     } catch (error) {
@@ -934,6 +974,7 @@ async function runWithConfig(result: BootstrapResult) {
       },
       shutdown: (options) => result.shutdown(options),
     });
+    await foregroundGatewayLock?.release();
   };
 
   let shutdownSignal: 'SIGINT' | 'SIGTERM' | undefined;
@@ -999,8 +1040,8 @@ async function runWithConfig(result: BootstrapResult) {
       }
     }
   };
-  const finish = (beforeClose?: () => Promise<void>): Promise<void> =>
-    shutdownServeStack({
+  const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
+    await shutdownServeStack({
       gateway,
       unsubShared: () => {
         unsubSharedBridge?.();
@@ -1013,6 +1054,8 @@ async function runWithConfig(result: BootstrapResult) {
       },
       shutdown: (options) => result.shutdown(options),
     });
+    await foregroundGatewayLock?.release();
+  };
 
   // 0.4：有 workflow / 显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
   // 纯 0.3 serve 保持原来的自然退出（0）。

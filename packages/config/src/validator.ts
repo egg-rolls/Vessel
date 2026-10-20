@@ -299,12 +299,12 @@ function validateFeishu(feishu: FeishuConfig, errors: ConfigValidationError[]): 
   }
 }
 
-/** 校验 observability 块（0.4） */
+/** 校验 observability 块（0.4；0.14 showProcessErrors） */
 function validateObservability(
   observability: ObservabilityConfig,
   errors: ConfigValidationError[],
 ): void {
-  const { eventHistory, metrics } = observability;
+  const { eventHistory, metrics, showProcessErrors } = observability;
 
   if (eventHistory !== undefined && (!Number.isInteger(eventHistory) || eventHistory < 0)) {
     errors.push({
@@ -320,12 +320,25 @@ function validateObservability(
       value: metrics,
     });
   }
+  if (showProcessErrors !== undefined && typeof showProcessErrors !== 'boolean') {
+    errors.push({
+      path: 'observability.showProcessErrors',
+      message: 'observability.showProcessErrors must be a boolean',
+      value: showProcessErrors,
+    });
+  }
 }
 
 /** `ui.statusBars` 允许值（0.13） */
 const UI_STATUS_BARS: ReadonlySet<string> = new Set(['top', 'bottom', 'both', 'none']);
 
-/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars） */
+/** `ui.verbosity` 允许值（0.14） */
+const UI_VERBOSITY: ReadonlySet<string> = new Set(['minimal', 'normal', 'debug']);
+
+/** `ui.errorLevel` 允许值（0.14） */
+const UI_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
+
+/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13/0.14 可见性） */
 function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
   if (!isPlainObject(ui)) {
     errors.push({ path: 'ui', message: 'ui must be an object', value: ui });
@@ -360,6 +373,33 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       path: 'ui.statusBars',
       message: 'ui.statusBars must be one of "top", "bottom", "both", "none"',
       value: ui.statusBars,
+    });
+  }
+  if (
+    ui.verbosity !== undefined &&
+    (typeof ui.verbosity !== 'string' || !UI_VERBOSITY.has(ui.verbosity))
+  ) {
+    errors.push({
+      path: 'ui.verbosity',
+      message: 'ui.verbosity must be one of "minimal", "normal", "debug"',
+      value: ui.verbosity,
+    });
+  }
+  if (ui.showInternalEvents !== undefined && typeof ui.showInternalEvents !== 'boolean') {
+    errors.push({
+      path: 'ui.showInternalEvents',
+      message: 'ui.showInternalEvents must be a boolean',
+      value: ui.showInternalEvents,
+    });
+  }
+  if (
+    ui.errorLevel !== undefined &&
+    (typeof ui.errorLevel !== 'string' || !UI_ERROR_LEVELS.has(ui.errorLevel))
+  ) {
+    errors.push({
+      path: 'ui.errorLevel',
+      message: 'ui.errorLevel must be one of "user", "all"',
+      value: ui.errorLevel,
     });
   }
 }
@@ -1884,8 +1924,16 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxReplyChars',
     'maxMembers',
   ],
-  observability: ['eventHistory', 'metrics'],
-  ui: ['language', 'clearOnStart', 'showReasoning', 'statusBars'],
+  observability: ['eventHistory', 'metrics', 'showProcessErrors'],
+  ui: [
+    'language',
+    'clearOnStart',
+    'showReasoning',
+    'statusBars',
+    'verbosity',
+    'showInternalEvents',
+    'errorLevel',
+  ],
   tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };

@@ -22,19 +22,28 @@ export interface UpdateArgs {
 /** 支持的服务管理器（DECISION-023 §2.2） */
 export type GatewayInstallTarget = 'systemd' | 'launchd' | 'schtasks';
 
-/** `vessel gateway` 子命令（DECISION-023 §2.1，冻结契约） */
+/** gateway 实例选择器（0.14；三者互斥，all 单独使用） */
+export interface GatewaySelector {
+  instance?: string;
+  port?: number;
+  all?: boolean;
+}
+
+/** `vessel gateway` 子命令（DECISION-023 §2.1；0.14 增加多实例） */
 export type GatewayCommand =
   | {
       kind: 'start';
       daemon: boolean;
+      instance?: string;
       port?: number;
       host?: string;
       log?: string;
     }
-  | { kind: 'stop'; timeoutMs: number }
-  | { kind: 'status'; json: boolean }
-  | { kind: 'restart'; daemon: boolean }
-  | { kind: 'reload'; scopes?: string[] }
+  | ({ kind: 'stop'; timeoutMs: number } & GatewaySelector)
+  | ({ kind: 'status'; json: boolean } & GatewaySelector)
+  | { kind: 'list'; json: boolean }
+  | ({ kind: 'restart'; daemon: boolean } & GatewaySelector)
+  | ({ kind: 'reload'; scopes?: string[] } & GatewaySelector)
   | { kind: 'install-service'; target?: GatewayInstallTarget }
   | { kind: 'uninstall-service' };
 
@@ -69,7 +78,15 @@ export type ConfigCommandArgs =
   | { kind: 'show'; json: boolean; sources: boolean; tenantId?: string }
   | {
       kind: 'set';
-      key: 'ui.language' | 'ui.showReasoning' | 'ui.statusBars' | 'agent.cwd';
+      key:
+        | 'ui.language'
+        | 'ui.showReasoning'
+        | 'ui.statusBars'
+        | 'ui.verbosity'
+        | 'ui.showInternalEvents'
+        | 'ui.errorLevel'
+        | 'observability.showProcessErrors'
+        | 'agent.cwd';
       value: string;
       json: boolean;
     };
@@ -173,6 +190,12 @@ export interface CliArgs {
   doctorCommand: DoctorCommandArgs | null;
   /** 0.12：`vessel gateway ...` */
   gateway: GatewayCommand | null;
+  /** 0.14：`vessel status [--json]` */
+  statusCommand: { json: boolean } | null;
+  /** 0.14：`vessel agents [--json]` */
+  agentsCommand: { json: boolean } | null;
+  /** 0.14：`vessel errors [--json] [--limit N]` */
+  errorsCommand: { json: boolean; limit?: number } | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -227,6 +250,9 @@ export function parseArgs(argv: string[]): ParseResult {
     pluginCommand: null,
     doctorCommand: null,
     gateway: null,
+    statusCommand: null,
+    agentsCommand: null,
+    errorsCommand: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -263,6 +289,15 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'gateway' && i === 0) {
       return parseGatewayArgs(argv.slice(1), args);
+    }
+    if (a === 'status' && i === 0) {
+      return parseStatusArgs(argv.slice(1), args);
+    }
+    if (a === 'agents' && i === 0) {
+      return parseAgentsArgs(argv.slice(1), args);
+    }
+    if (a === 'errors' && i === 0) {
+      return parseErrorsArgs(argv.slice(1), args);
     }
     if (a === 'demo' && i === 0) {
       return parseDemoArgs(argv.slice(1), args);
@@ -898,7 +933,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       return {
         ok: false,
         error:
-          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|agent.cwd> <value> [--json]',
+          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|ui.verbosity|ui.showInternalEvents|ui.errorLevel|observability.showProcessErrors|agent.cwd> <value> [--json]',
       };
     }
     const [key = '', value = ''] = positional;
@@ -906,11 +941,18 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       key !== 'ui.language' &&
       key !== 'ui.showReasoning' &&
       key !== 'ui.statusBars' &&
+      key !== 'ui.verbosity' &&
+      key !== 'ui.showInternalEvents' &&
+      key !== 'ui.errorLevel' &&
+      key !== 'observability.showProcessErrors' &&
       key !== 'agent.cwd'
     ) {
       return {
         ok: false,
-        error: `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, ui.statusBars, agent.cwd)`,
+        error:
+          `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, ` +
+          'ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ' +
+          'observability.showProcessErrors, agent.cwd)',
       };
     }
     if (key === 'ui.language' && value !== 'zh-CN' && value !== 'en') {
@@ -921,6 +963,19 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
     }
     if (key === 'ui.statusBars' && !['top', 'bottom', 'both', 'none'].includes(value)) {
       return { ok: false, error: 'ui.statusBars must be "top", "bottom", "both" or "none"' };
+    }
+    if (key === 'ui.verbosity' && !['minimal', 'normal', 'debug'].includes(value)) {
+      return { ok: false, error: 'ui.verbosity must be "minimal", "normal" or "debug"' };
+    }
+    if (
+      (key === 'ui.showInternalEvents' || key === 'observability.showProcessErrors') &&
+      value !== 'true' &&
+      value !== 'false'
+    ) {
+      return { ok: false, error: `${key} must be "true" or "false"` };
+    }
+    if (key === 'ui.errorLevel' && value !== 'user' && value !== 'all') {
+      return { ok: false, error: 'ui.errorLevel must be "user" or "all"' };
     }
     if (key === 'agent.cwd' && value.trim() === '') {
       return { ok: false, error: 'agent.cwd must be a non-empty path' };
@@ -1333,6 +1388,70 @@ function readFlagValue(
   return { ok: true, value: next, next: index + 1 };
 }
 
+/** gateway 实例名（与 gateway/pid 的校验一致；解析层只做语法） */
+const GATEWAY_INSTANCE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
+function parseInstanceName(raw: string): string | null {
+  return GATEWAY_INSTANCE_RE.test(raw) ? raw : null;
+}
+
+/**
+ * 解析 stop/status/restart/reload 的选择器 flags。
+ * `matched=false` 表示当前 token 不是选择器，交给调用方继续处理。
+ */
+function parseGatewaySelectorArg(
+  rest: string[],
+  index: number,
+  selector: GatewaySelector,
+  command: string,
+): { ok: true; next: number; matched: boolean } | { ok: false; error: string } {
+  const a = rest[index] ?? '';
+  if (a === '--all') {
+    selector.all = true;
+    return { ok: true, next: index, matched: true };
+  }
+  if (a === '--instance') {
+    const value = readFlagValue(rest, index, '--instance');
+    if (!value.ok) return value;
+    const instance = parseInstanceName(value.value);
+    if (instance === null) {
+      return {
+        ok: false,
+        error: `Invalid --instance: ${value.value} (expected ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$)`,
+      };
+    }
+    selector.instance = instance;
+    return { ok: true, next: value.next, matched: true };
+  }
+  if (a === '--port') {
+    const value = readFlagValue(rest, index, '--port');
+    if (!value.ok) return value;
+    const port = parsePort(value.value);
+    if (port === null || port === 0) {
+      return {
+        ok: false,
+        error: `Invalid --port for gateway ${command}: ${value.value} (1-65535)`,
+      };
+    }
+    selector.port = port;
+    return { ok: true, next: value.next, matched: true };
+  }
+  return { ok: true, next: index, matched: false };
+}
+
+/** 选择器互斥检查；通过返回 null */
+function gatewaySelectorError(selector: GatewaySelector, command: string): string | null {
+  const selected = [
+    selector.instance !== undefined,
+    selector.port !== undefined,
+    selector.all === true,
+  ];
+  if (selected.filter(Boolean).length > 1) {
+    return `gateway ${command} accepts only one of --instance, --port, --all`;
+  }
+  return null;
+}
+
 /** `gateway start [--port N] [--host H] [--daemon] [--log <path>]` */
 function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
   const command: Extract<GatewayCommand, { kind: 'start' }> = { kind: 'start', daemon: false };
@@ -1345,6 +1464,20 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--daemon') {
       command.daemon = true;
+      continue;
+    }
+    if (a === '--instance') {
+      const value = readFlagValue(rest, i, '--instance');
+      if (!value.ok) return value;
+      const instance = parseInstanceName(value.value);
+      if (instance === null) {
+        return {
+          ok: false,
+          error: `Invalid --instance: ${value.value} (expected ^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$)`,
+        };
+      }
+      command.instance = instance;
+      i = value.next;
       continue;
     }
     if (a === '--port') {
@@ -1374,13 +1507,17 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
   }
 
   if (args.help) return { ok: true, args };
+  if (command.port === 0 && command.instance === undefined) {
+    return { ok: false, error: 'gateway start --port 0 requires --instance <name>' };
+  }
   args.gateway = command;
   return { ok: true, args };
 }
 
-/** `gateway stop [--timeout 10s]` */
+/** `gateway stop [--timeout 10s] [--instance N|--port N|--all]` */
 function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
   let timeoutMs = DEFAULT_STOP_TIMEOUT_MS;
+  const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
@@ -1398,15 +1535,52 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
+    const selected = parseGatewaySelectorArg(rest, i, selector, 'stop');
+    if (!selected.ok) return selected;
+    if (selected.matched) {
+      i = selected.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway stop: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.gateway = { kind: 'stop', timeoutMs };
+  const selectorError = gatewaySelectorError(selector, 'stop');
+  if (selectorError !== null) return { ok: false, error: selectorError };
+  args.gateway = { kind: 'stop', timeoutMs, ...selector };
   return { ok: true, args };
 }
 
-/** `gateway status [--json]` */
+/** `gateway status [--json] [--instance N|--port N|--all]` */
 function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  const selector: GatewaySelector = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    const selected = parseGatewaySelectorArg(rest, i, selector, 'status');
+    if (!selected.ok) return selected;
+    if (selected.matched) {
+      i = selected.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for gateway status: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  const selectorError = gatewaySelectorError(selector, 'status');
+  if (selectorError !== null) return { ok: false, error: selectorError };
+  args.gateway = { kind: 'status', json, ...selector };
+  return { ok: true, args };
+}
+
+/** `gateway list [--json]` */
+function parseGatewayList(rest: string[], args: CliArgs): ParseResult {
   let json = false;
   for (const a of rest) {
     if (a === '--help' || a === '-h') {
@@ -1417,17 +1591,19 @@ function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
       json = true;
       continue;
     }
-    return { ok: false, error: `Unknown argument for gateway status: ${a}` };
+    return { ok: false, error: `Unknown argument for gateway list: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.gateway = { kind: 'status', json };
+  args.gateway = { kind: 'list', json };
   return { ok: true, args };
 }
 
-/** `gateway restart [--daemon]` */
+/** `gateway restart [--daemon] [--instance N|--port N|--all]` */
 function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
   let daemon = false;
-  for (const a of rest) {
+  const selector: GatewaySelector = {};
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
       args.help = true;
       continue;
@@ -1436,16 +1612,28 @@ function parseGatewayRestart(rest: string[], args: CliArgs): ParseResult {
       daemon = true;
       continue;
     }
+    const selected = parseGatewaySelectorArg(rest, i, selector, 'restart');
+    if (!selected.ok) return selected;
+    if (selected.matched) {
+      i = selected.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway restart: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.gateway = { kind: 'restart', daemon };
+  const selectorError = gatewaySelectorError(selector, 'restart');
+  if (selectorError !== null) return { ok: false, error: selectorError };
+  if (selector.all === true && !daemon) {
+    return { ok: false, error: 'gateway restart --all requires --daemon' };
+  }
+  args.gateway = { kind: 'restart', daemon, ...selector };
   return { ok: true, args };
 }
 
-/** `gateway reload [--scope config,plugins]` */
+/** `gateway reload [--scope config,plugins] [--instance N|--port N|--all]` */
 function parseGatewayReload(rest: string[], args: CliArgs): ParseResult {
   let scopes: string[] | undefined;
+  const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
     if (a === '--help' || a === '-h') {
@@ -1466,10 +1654,22 @@ function parseGatewayReload(rest: string[], args: CliArgs): ParseResult {
       i = value.next;
       continue;
     }
+    const selected = parseGatewaySelectorArg(rest, i, selector, 'reload');
+    if (!selected.ok) return selected;
+    if (selected.matched) {
+      i = selected.next;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for gateway reload: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.gateway = { kind: 'reload', ...(scopes !== undefined ? { scopes } : {}) };
+  const selectorError = gatewaySelectorError(selector, 'reload');
+  if (selectorError !== null) return { ok: false, error: selectorError };
+  args.gateway = {
+    kind: 'reload',
+    ...(scopes !== undefined ? { scopes } : {}),
+    ...selector,
+  };
   return { ok: true, args };
 }
 
@@ -1522,7 +1722,7 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       ok: false,
       error:
         'Missing gateway subcommand ' +
-        '(start|stop|status|restart|reload|install-service|uninstall-service)',
+        '(start|stop|status|list|restart|reload|install-service|uninstall-service)',
     };
   }
 
@@ -1534,6 +1734,8 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
       return parseGatewayStop(tail, args);
     case 'status':
       return parseGatewayStatus(tail, args);
+    case 'list':
+      return parseGatewayList(tail, args);
     case 'restart':
       return parseGatewayRestart(tail, args);
     case 'reload':
@@ -1545,6 +1747,81 @@ function parseGatewayArgs(rest: string[], args: CliArgs): ParseResult {
     default:
       return { ok: false, error: `Unknown gateway subcommand: ${sub}` };
   }
+}
+
+// ── 0.14 status / agents / errors ─────────────────────
+
+/** `status [--json]` */
+function parseStatusArgs(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for status: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.statusCommand = { json };
+  return { ok: true, args };
+}
+
+/** `agents [--json]` */
+function parseAgentsArgs(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for agents: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.agentsCommand = { json };
+  return { ok: true, args };
+}
+
+/** `errors [--json] [--limit N]` */
+function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
+  let json = false;
+  let limit: number | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--limit') {
+      const value = readFlagValue(rest, i, '--limit');
+      if (!value.ok) return value;
+      if (!/^\d+$/.test(value.value)) {
+        return { ok: false, error: `Invalid --limit: ${value.value}` };
+      }
+      const parsed = Number.parseInt(value.value, 10);
+      if (parsed < 1 || parsed > 200) {
+        return { ok: false, error: `Invalid --limit: ${value.value} (1-200)` };
+      }
+      limit = parsed;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for errors: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.errorsCommand = { json, ...(limit !== undefined ? { limit } : {}) };
+  return { ok: true, args };
 }
 
 /** `doctor [--json]` */

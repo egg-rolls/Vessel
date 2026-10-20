@@ -79,6 +79,7 @@ describe('0.4 defaults', () => {
     expect(DEFAULT_OBSERVABILITY_OPTIONS).toEqual({
       eventHistory: 1000,
       metrics: true,
+      showProcessErrors: false,
     });
   });
 

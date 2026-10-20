@@ -23,8 +23,10 @@ import { resolveDataDir } from './data-paths';
 import { t } from './i18n';
 import {
   isSettableConfigKey,
+  isUiErrorLevel,
   isUiLanguage,
   isUiStatusBars,
+  isUiVerbosity,
   setUserConfigValue,
 } from './ui-settings';
 import { ui } from './ui-style';
@@ -189,7 +191,7 @@ export async function configSetCommand(
       return {
         exitCode: 2,
         stdout: '',
-        stderr: t('config.set.invalidBoolean', { value }),
+        stderr: t('config.set.invalidBoolean', { key, value }),
       };
     }
     parsed = value === 'true';
@@ -201,6 +203,40 @@ export async function configSetCommand(
         stderr: t('config.set.invalidStatusBars', { value }),
       };
     }
+  } else if (key === 'ui.verbosity') {
+    if (!isUiVerbosity(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidVerbosity', { value }),
+      };
+    }
+  } else if (key === 'ui.showInternalEvents') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
+  } else if (key === 'ui.errorLevel') {
+    if (!isUiErrorLevel(value)) {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidErrorLevel', { value }),
+      };
+    }
+  } else if (key === 'observability.showProcessErrors') {
+    if (value !== 'true' && value !== 'false') {
+      return {
+        exitCode: 2,
+        stdout: '',
+        stderr: t('config.set.invalidBoolean', { key, value }),
+      };
+    }
+    parsed = value === 'true';
   } else if (value.trim() === '') {
     return {
       exitCode: 2,

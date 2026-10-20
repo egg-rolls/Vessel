@@ -50,6 +50,9 @@ describe('parseArgs - 默认与 REPL', () => {
       pluginCommand: null,
       doctorCommand: null,
       gateway: null,
+      statusCommand: null,
+      agentsCommand: null,
+      errorsCommand: null,
     });
   });
 });
