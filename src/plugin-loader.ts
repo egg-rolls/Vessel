@@ -201,7 +201,8 @@ export function defaultPluginRoots(repoDir: string = PLUGINS_DIR): PluginRoot[] 
 }
 
 /**
- * 插件加载器。扫描结果缓存一次——插件目录在进程生命周期内不变。
+ * 插件加载器。扫描结果默认缓存（插件目录在进程生命周期内通常不变）；
+ * `gateway.reload` 可用 `refresh()` 让下一次 `list()` 重新扫描。
  */
 export class PluginLoader {
   private readonly roots: PluginRoot[];
@@ -215,6 +216,14 @@ export class PluginLoader {
     } else {
       this.roots = defaultPluginRoots(options.repoDir);
     }
+  }
+
+  /**
+   * 丢弃扫描缓存，下一次 `list()` 重新扫描插件目录（0.12 DECISION-023 §2.3）。
+   * 只影响目录发现：已安装插件、pluginHost 与正在跑的 run 不受影响。
+   */
+  refresh(): void {
+    this.cached = undefined;
   }
 
   /** 全部插件（含 provider 与工厂式），按名字排序；同名先出现者胜出 */

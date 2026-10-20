@@ -173,6 +173,8 @@ export interface TenantRuntimeBundle {
   metrics?: MetricsControlLike;
   redactor: TraceRedactor;
   sessionControl: SessionControl;
+  /** 本 bundle 使用的插件扫描器（0.12：`gateway.reload` 刷新缓存） */
+  pluginLoader: PluginLoader;
   plugins: Plugin[];
   mcpPlugin?: McpPluginLike;
   mcp?: McpControl;
@@ -948,6 +950,7 @@ export async function buildTenantRuntime(
       ...(metrics ? { metrics } : {}),
       redactor,
       sessionControl,
+      pluginLoader: loader,
       plugins,
       ...(mcpPlugin ? { mcpPlugin } : {}),
       ...(mcpControl ? { mcp: mcpControl } : {}),
@@ -1040,6 +1043,8 @@ export interface TenantRuntimeFactory {
   metricsFor(tenantId: string): MetricsControlLike | undefined;
   pluginsFor(tenantId: string): Array<{ name: string; enabled: boolean }> | undefined;
   bundleFor(tenantId: string): TenantRuntimeBundle | undefined;
+  /** 0.12：清空所有 tenant 的插件扫描缓存（下次 list() 重新扫描） */
+  refreshPlugins(): void;
   /** `drain: false`：调用方已 await gateway.stop()（已做 interrupt + 5s 等待） */
   closeAll(options?: { drain?: boolean }): Promise<void>;
 }
@@ -1201,6 +1206,11 @@ export async function createTenantRuntimeFactory(
         return listed;
       },
       bundleFor: (tenantId) => bundles.get(tenantId),
+      refreshPlugins: () => {
+        const loaders = new Set<PluginLoader>([loader]);
+        for (const bundle of bundles.values()) loaders.add(bundle.pluginLoader);
+        for (const pluginLoader of loaders) pluginLoader.refresh();
+      },
       closeAll: async (closeOptions: { drain?: boolean } = {}) => {
         if (closed) return;
         closed = true;
