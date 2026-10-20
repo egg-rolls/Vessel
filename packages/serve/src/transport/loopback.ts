@@ -10,6 +10,7 @@
  */
 
 import type { AgentMessage, AgentStatus, PeerInfo, Transport, Unsubscribe } from '@vessel/core';
+import { PROTOCOL_VERSION } from '../protocol.js';
 import { fromWireMessage, parseAddress, TeamProtocolError, toWireMessage } from '../team.js';
 import { PeerRegistry } from './registry.js';
 
@@ -232,7 +233,7 @@ export class LoopbackTransport implements Transport {
           Authorization: `Bearer ${this.options.token}`,
         },
         body: JSON.stringify({
-          protocol: 1,
+          protocol: PROTOCOL_VERSION,
           node_id: this.options.nodeId,
           message: toWireMessage(message),
         }),

@@ -16,6 +16,7 @@ import {
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { eventVisible } from '../../tenant.js';
 import { tenantParamSchema } from './common.js';
+import { metricsSnapshotSchema, runEventSchema } from './schemas.js';
 
 export interface ObservabilityMethodsDeps {
   defaultTenantId: string;
@@ -49,6 +50,13 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
           limit: { type: 'integer', minimum: 0, maximum: 500 },
           all_tenants: { type: 'boolean' },
           tenant_id: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['events'],
+        properties: {
+          events: { type: 'array', items: runEventSchema },
         },
       },
       handler: async (params, ctx) => {
@@ -104,6 +112,14 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
           tenant_id: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['metrics', 'source'],
+        properties: {
+          metrics: metricsSnapshotSchema,
+          source: { type: 'string', enum: ['live', 'trace'] },
+        },
+      },
       handler: async (params, ctx) => {
         const source = params.source === 'trace' ? 'trace' : 'live';
         if (source === 'trace') {
@@ -122,6 +138,11 @@ export function createMetricsMethods(deps: ObservabilityMethodsDeps): RpcMethodD
       name: 'metrics.reset',
       permission: 'write',
       params_schema: tenantParamSchema,
+      result_schema: {
+        type: 'object',
+        required: ['ok'],
+        properties: { ok: { type: 'boolean' } },
+      },
       handler: (_params, ctx) => {
         if (!metricsControl?.reset) {
           throw new RpcError('not_found', 'Metrics reset is not available');
@@ -147,6 +168,15 @@ export function createTraceMethods(deps: ObservabilityMethodsDeps): RpcMethodDef
           max_runs: { type: 'integer', minimum: 0 },
           max_bytes: { type: 'integer', minimum: 0 },
           tenant_id: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['deleted_runs', 'kept_runs', 'deleted_bytes'],
+        properties: {
+          deleted_runs: { type: 'integer' },
+          kept_runs: { type: 'integer' },
+          deleted_bytes: { type: 'integer' },
         },
       },
       handler: async (params, ctx) => {

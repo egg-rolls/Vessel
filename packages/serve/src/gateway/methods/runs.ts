@@ -10,6 +10,7 @@ import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import type { RunEngine, RunRecord } from '../../run-engine.js';
 import { mapTenantError, type TenantControlLike } from '../../tenant.js';
 import { checkpointBelongsToTenant, stringParam } from './common.js';
+import { runStatusSchema } from './schemas.js';
 
 export interface RunMethodsDeps {
   defaultTenantId: string;
@@ -78,6 +79,13 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           status: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['runs'],
+        properties: {
+          runs: { type: 'array', items: runStatusSchema },
+        },
+      },
       handler: (params, ctx) => {
         const sessionFilter = typeof params.session_id === 'string' ? params.session_id : undefined;
         const statusFilter = typeof params.status === 'string' ? params.status : undefined;
@@ -97,6 +105,11 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         type: 'object',
         required: ['run_id'],
         properties: { run_id: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['run'],
+        properties: { run: runStatusSchema },
       },
       handler: async (params, ctx) => {
         const runId = stringParam(params, 'run_id');
@@ -131,6 +144,18 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
           tenant_id: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['run_id', 'status'],
+        properties: {
+          run_id: { type: 'string' },
+          status: {
+            type: 'string',
+            enum: ['queued', 'running', 'completed', 'failed', 'cancelled'],
+          },
+          queue_position: { type: 'integer' },
+        },
+      },
       handler: async (params, ctx) => {
         requireRuntime(ctx.tenantId);
         await enforceConcurrentQuota(ctx.tenantId);
@@ -146,6 +171,11 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         required: ['run_id'],
         properties: { run_id: { type: 'string', minLength: 1 } },
       },
+      result_schema: {
+        type: 'object',
+        required: ['cancelled'],
+        properties: { cancelled: { type: 'boolean' } },
+      },
       handler: (params, ctx) => ({
         cancelled: cancelRun(stringParam(params, 'run_id'), ctx.tenantId),
       }),
@@ -157,6 +187,14 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         type: 'object',
         required: ['run_id'],
         properties: { run_id: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['run_id', 'status'],
+        properties: {
+          run_id: { type: 'string' },
+          status: { type: 'string', enum: ['queued'] },
+        },
       },
       handler: async (params, ctx) => {
         const durable = durableForTenant(ctx.tenantId);

@@ -33,6 +33,11 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           tenant_id: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['ok'],
+        properties: { ok: { type: 'boolean' } },
+      },
       handler: (params, ctx) => {
         const requestId = stringParam(params, 'request_id');
         const decision = params.decision;
@@ -54,6 +59,11 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           answers: { type: 'array' },
           tenant_id: { type: 'string' },
         },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['ok'],
+        properties: { ok: { type: 'boolean' } },
       },
       handler: (params, ctx) => {
         const answers = params.answers;

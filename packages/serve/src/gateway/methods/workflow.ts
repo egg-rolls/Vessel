@@ -16,6 +16,7 @@ import {
   type WorkflowGatewayOptions,
 } from '../../workflow.js';
 import { stringParam } from './common.js';
+import { workflowDetailSchema, workflowSummarySchema } from './schemas.js';
 
 export interface WorkflowMethodsDeps {
   /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found。 */
@@ -75,6 +76,13 @@ export function createWorkflowMethods(deps: WorkflowMethodsDeps): RpcMethodDefin
           tenant_id: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['workflows'],
+        properties: {
+          workflows: { type: 'array', items: workflowSummarySchema },
+        },
+      },
       handler: async (params, ctx) => {
         const workflows = requireWorkflows(ctx.tenantId);
         const rawStatus = typeof params.status === 'string' ? params.status : null;
@@ -113,6 +121,11 @@ export function createWorkflowMethods(deps: WorkflowMethodsDeps): RpcMethodDefin
           tenant_id: { type: 'string' },
         },
       },
+      result_schema: {
+        type: 'object',
+        required: ['workflow'],
+        properties: { workflow: workflowDetailSchema },
+      },
       handler: async (params, ctx) => {
         const workflows = requireWorkflows(ctx.tenantId);
         const id = stringParam(params, 'workflow_run_id');
@@ -138,6 +151,14 @@ export function createWorkflowMethods(deps: WorkflowMethodsDeps): RpcMethodDefin
           name: { type: 'string', minLength: 1, maxLength: 64 },
           inputs: { type: 'object' },
           tenant_id: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['workflow_run_id', 'status'],
+        properties: {
+          workflow_run_id: { type: 'string' },
+          status: { type: 'string', enum: ['queued'] },
         },
       },
       handler: async (params, ctx) => {
@@ -178,6 +199,14 @@ export function createWorkflowMethods(deps: WorkflowMethodsDeps): RpcMethodDefin
         properties: {
           workflow_run_id: { type: 'string', minLength: 1 },
           tenant_id: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['workflow_run_id', 'status'],
+        properties: {
+          workflow_run_id: { type: 'string' },
+          status: { type: 'string', enum: ['queued'] },
         },
       },
       handler: async (params, ctx) => {
@@ -222,6 +251,14 @@ export function createWorkflowMethods(deps: WorkflowMethodsDeps): RpcMethodDefin
         properties: {
           workflow_run_id: { type: 'string', minLength: 1 },
           tenant_id: { type: 'string' },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['workflow_run_id', 'status'],
+        properties: {
+          workflow_run_id: { type: 'string' },
+          status: { type: 'string', enum: ['cancelled'] },
         },
       },
       handler: async (params, ctx) => {

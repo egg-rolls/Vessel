@@ -8,6 +8,7 @@ import type { RunEvent } from '@vessel/core';
 import type { EventGap } from '../event-buffer.js';
 import {
   type NodeInfo,
+  PROTOCOL_VERSION,
   type ProtocolError,
   type ProtocolInfo,
   protocolError,
@@ -32,7 +33,7 @@ export interface EventFrameInput {
 
 export function eventFrame(input: EventFrameInput): ServerFrame {
   return {
-    v: 1,
+    v: PROTOCOL_VERSION,
     kind: 'event',
     node_id: eventSourceNodeId(input.event, input.nodeId),
     ts: input.ts ?? Date.now(),
@@ -59,7 +60,7 @@ export function helloFrame(input: HelloFrameInput): ServerFrame {
   // from_seq = 本次回放的第一条 seq；空缓冲时为 0（此时 latest_seq 也是 0）。
   // 已追平时为 since + 1（= latest + 1），表示「下一条期望序号」。
   return {
-    v: 1,
+    v: PROTOCOL_VERSION,
     kind: 'hello',
     node_id: input.nodeId,
     ts: input.ts ?? Date.now(),
@@ -79,7 +80,7 @@ export interface GapFrameInput {
 
 export function gapFrame(input: GapFrameInput): ServerFrame {
   return {
-    v: 1,
+    v: PROTOCOL_VERSION,
     kind: 'gap',
     node_id: input.nodeId,
     ts: input.ts ?? Date.now(),
@@ -97,7 +98,7 @@ export interface ResultFrameInput {
 
 export function resultFrame(input: ResultFrameInput): ServerFrame {
   return {
-    v: 1,
+    v: PROTOCOL_VERSION,
     kind: 'res',
     node_id: input.nodeId,
     ts: input.ts ?? Date.now(),
@@ -116,7 +117,7 @@ export interface ErrorFrameInput {
 
 export function errorFrame(input: ErrorFrameInput): ServerFrame {
   return {
-    v: 1,
+    v: PROTOCOL_VERSION,
     kind: 'res',
     node_id: input.nodeId,
     ts: input.ts ?? Date.now(),

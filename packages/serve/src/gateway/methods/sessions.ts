@@ -15,6 +15,7 @@ import {
 import { mapTenantError } from '../../tenant.js';
 import { MethodError } from '../errors.js';
 import { stringParam, tenantParamSchema } from './common.js';
+import { runStateSchema, sessionInfoSchema, sessionSearchHitSchema } from './schemas.js';
 
 export interface SessionMethodsDeps {
   defaultTenantId: string;
@@ -64,6 +65,13 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
       name: 'sessions.list',
       permission: 'read',
       params_schema: tenantParamSchema,
+      result_schema: {
+        type: 'object',
+        required: ['sessions'],
+        properties: {
+          sessions: { type: 'array', items: sessionInfoSchema },
+        },
+      },
       handler: (_params, ctx) => listSessions(ctx.tenantId),
     },
     {
@@ -73,6 +81,11 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         type: 'object',
         required: ['session_id'],
         properties: { session_id: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['session'],
+        properties: { session: runStateSchema },
       },
       handler: async (params, ctx) => {
         const backend = requireSession(ctx.tenantId);
@@ -90,6 +103,13 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         properties: {
           query: { type: 'string', minLength: 1, maxLength: 256 },
           limit: { type: 'integer', minimum: 1, maximum: MAX_SESSION_SEARCH_LIMIT },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['sessions'],
+        properties: {
+          sessions: { type: 'array', items: sessionSearchHitSchema },
         },
       },
       handler: async (params, ctx) => {
@@ -120,6 +140,15 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         required: ['session_id'],
         properties: { session_id: { type: 'string', minLength: 1 } },
       },
+      result_schema: {
+        type: 'object',
+        required: ['sessions_deleted', 'runs_deleted', 'events_deleted'],
+        properties: {
+          sessions_deleted: { type: 'integer' },
+          runs_deleted: { type: 'integer' },
+          events_deleted: { type: 'integer' },
+        },
+      },
       handler: async (params, ctx) => {
         if (!sessionData) {
           throw new RpcError('internal', 'deleteSessionData is not configured');
@@ -143,6 +172,14 @@ export function createSessionMethods(deps: SessionMethodsDeps): RpcMethodDefinit
         properties: {
           session_id: { type: 'string', minLength: 1 },
           title: { type: 'string', maxLength: 512 },
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['session_id', 'title'],
+        properties: {
+          session_id: { type: 'string' },
+          title: { type: 'string' },
         },
       },
       handler: async (params, ctx) => {

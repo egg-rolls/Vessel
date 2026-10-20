@@ -12,6 +12,7 @@ import {
   type TenantQuota,
 } from '../../tenant.js';
 import { stringParam } from './common.js';
+import { tenantInfoSchema } from './schemas.js';
 
 export interface TenantMethodsDeps {
   tenants?: TenantControlLike;
@@ -31,6 +32,13 @@ export function createTenantMethods(deps: TenantMethodsDeps): RpcMethodDefinitio
       name: 'tenants.list',
       permission: 'admin',
       params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: ['tenants'],
+        properties: {
+          tenants: { type: 'array', items: tenantInfoSchema },
+        },
+      },
       handler: async () => {
         if (!tenants) throw new RpcError('not_found', 'Tenant registry is not available');
         return { tenants: (await tenants.list()).map(tenantInfoOrThrow) };
@@ -43,6 +51,11 @@ export function createTenantMethods(deps: TenantMethodsDeps): RpcMethodDefinitio
         type: 'object',
         required: ['tenant_id'],
         properties: { tenant_id: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['tenant'],
+        properties: { tenant: tenantInfoSchema },
       },
       handler: async (params, ctx) => {
         if (!tenants) throw new RpcError('not_found', 'Tenant registry is not available');
@@ -66,6 +79,11 @@ export function createTenantMethods(deps: TenantMethodsDeps): RpcMethodDefinitio
           name: { type: 'string' },
           quota: { type: 'object' },
         },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['tenant'],
+        properties: { tenant: tenantInfoSchema },
       },
       handler: async (params) => {
         if (!tenants?.create) {
@@ -92,6 +110,11 @@ export function createTenantMethods(deps: TenantMethodsDeps): RpcMethodDefinitio
           status: { type: 'string', enum: ['active', 'disabled'] },
           quota: { type: 'object' },
         },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['tenant'],
+        properties: { tenant: tenantInfoSchema },
       },
       handler: async (params) => {
         if (!tenants?.update) {

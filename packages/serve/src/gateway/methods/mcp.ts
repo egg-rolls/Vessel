@@ -7,6 +7,7 @@
 import { type McpGatewayOptions, normalizeMcpServers } from '../../mcp.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { stringParam } from './common.js';
+import { stringListSchema } from './schemas.js';
 
 export interface McpMethodsDeps {
   mcp?: McpGatewayOptions;
@@ -19,6 +20,25 @@ export function createMcpMethods(deps: McpMethodsDeps): RpcMethodDefinition[] {
       name: 'mcp.list',
       permission: 'read',
       params_schema: { type: 'object' },
+      result_schema: {
+        type: 'object',
+        required: ['servers'],
+        properties: {
+          servers: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'status', 'tools'],
+              properties: {
+                name: { type: 'string' },
+                status: { type: 'string', enum: ['connected', 'failed', 'disabled'] },
+                tools: stringListSchema,
+                error: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
       handler: async () => {
         if (!mcp) throw new RpcError('not_found', 'MCP is not enabled');
         try {
@@ -35,6 +55,14 @@ export function createMcpMethods(deps: McpMethodsDeps): RpcMethodDefinition[] {
         type: 'object',
         required: ['name'],
         properties: { name: { type: 'string', minLength: 1 } },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['ok', 'tenant_id'],
+        properties: {
+          ok: { type: 'boolean' },
+          tenant_id: { type: 'string' },
+        },
       },
       handler: async (params, ctx) => {
         if (!mcp?.reconnect) {
