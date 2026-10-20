@@ -161,10 +161,16 @@ export class TestWs {
   /** 建立连接并发送首帧 auth */
   static async connect(
     gateway: Gateway,
-    opts: { token?: string | null; since?: number; tenantId?: string } = {},
+    opts: { token?: string | null; since?: number; tenantId?: string; origin?: string } = {},
   ): Promise<TestWs> {
     const wsUrl = `${gateway.url.replace(/^http/, 'ws')}/v1/events?since=${opts.since ?? 0}`;
-    const ws = new WebSocket(wsUrl);
+    // Bun 支持在构造器 options 里带 Origin，用于验证 upgrade 前的 allowlist。
+    const ws =
+      opts.origin === undefined
+        ? new WebSocket(wsUrl)
+        : new WebSocket(wsUrl, {
+            headers: { Origin: opts.origin },
+          } as unknown as string[]);
     const client = new TestWs(ws);
     await new Promise<void>((resolve, reject) => {
       ws.addEventListener('open', () => resolve(), { once: true });

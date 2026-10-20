@@ -309,6 +309,15 @@ export interface GatewayOptions {
   localOnly?: boolean;
 }
 
+/**
+ * 0.12 热重载可变的 gateway 配置（DECISION-023 §2.3）。
+ * 目前只有 `allowed_origins` 能在不重建 runtime / 连接的情况下替换。
+ */
+export interface GatewayReconfigureOptions {
+  /** 归一化后的 Origin 允许列表；缺省 = 保持不变。 */
+  allowedOrigins?: string[];
+}
+
 /** 网关实例 */
 export interface Gateway {
   port: number;
@@ -324,6 +333,11 @@ export interface Gateway {
    * 只设置一次；重复调用会替换 team 配置。
    */
   attachTeam(team: TeamGatewayOptions): void;
+  /**
+   * 0.12 热重载 `allowed_origins`：下一次请求起生效（CORS / Origin 校验 / CSP）。
+   * 不重建 SSE / WS 连接，也不改变已有连接的鉴权状态；非法列表抛错且保留旧值。
+   */
+  reconfigure(options: GatewayReconfigureOptions): void;
   /**
    * 进程内 dispatcher（与 asm `RpcDispatcher` 结构一致）。
    * asm 用它构造 `LocalRpcClient`；principal 缺省为本地 default/admin。
@@ -598,7 +612,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
   );
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
-  const allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
+  // 0.12：可被 `reconfigure()` 热替换；后续请求在读取点看到新值。
+  let allowedOrigins = normalizeAllowedOrigins(opts.allowedOrigins);
   const heartbeatMs = opts.heartbeatMs ?? 15_000;
   const authTimeoutMs = opts.authTimeoutMs ?? 5_000;
 
@@ -2608,6 +2623,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
     startTeamPolling();
   }
 
+  function reconfigure(next: GatewayReconfigureOptions): void {
+    // 先归一化再赋值：非法输入抛错时保留旧 allowlist（不做半更新）。
+    if (next.allowedOrigins !== undefined) {
+      allowedOrigins = normalizeAllowedOrigins(next.allowedOrigins);
+    }
+  }
+
   const serveOptions: Bun.Serve.Options<WsData> = {
     port: opts.port ?? DEFAULT_PORT,
     hostname,
@@ -3205,6 +3227,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     protocol: protocolInfo,
     tls: tlsMaterial !== undefined,
     attachTeam,
+    reconfigure,
     rpc: dispatcher.dispatch,
     manifest,
     stop() {
