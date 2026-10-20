@@ -25,7 +25,9 @@ export type RpcErrorCode =
   | 'tenant_locked'
   | 'quota_exceeded'
   | 'conflict'
-  | 'internal';
+  | 'internal'
+  // 0.12：可选能力未注入（DECISION-023 §2.3）。
+  | 'not_supported';
 
 /** 成功响应 */
 export interface RpcSuccessResponse {
@@ -94,6 +96,7 @@ const RPC_ERROR_CODES = new Set<RpcErrorCode>([
   'quota_exceeded',
   'conflict',
   'internal',
+  'not_supported',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -24,7 +24,9 @@ export type RpcErrorCode =
   | 'tenant_locked'
   | 'quota_exceeded'
   | 'conflict'
-  | 'internal';
+  | 'internal'
+  // 0.12：注入的可选能力未提供（DECISION-023 §2.3，如未注入的 gateway.reload）。
+  | 'not_supported';
 
 /** 方法权限（manifest 同名字段） */
 export type MethodPermission = 'read' | 'write' | 'admin';
@@ -356,6 +358,7 @@ function mapExternalErrorCode(code: unknown): RpcErrorCode | null {
     case 'quota_exceeded':
     case 'conflict':
     case 'internal':
+    case 'not_supported':
       return code;
     default:
       return null;
