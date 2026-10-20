@@ -146,7 +146,10 @@ it('mcp_servers 经 bootstrap 安装并在 /v1/mcp/servers 可见', async () => 
     };
     expect(health.protocol?.features).toContain('mcp-status');
 
-    const res = await fetch(`${gatewayUrl}/v1/mcp/servers?token=${token}`);
+    // 0.10：REST 只接受 Bearer；query token 仅保留给 SSE `/v1/events`。
+    const res = await fetch(`${gatewayUrl}/v1/mcp/servers`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       servers: Array<{ name: string; status: string; tools: string[] }>;
@@ -211,13 +214,18 @@ it('durable store/resume 注入 gateway：列表可见且 resume 返回 202', as
     };
     expect(health.protocol?.features).toContain('durable-resume');
 
-    const listRes = await fetch(`${gatewayUrl}/v1/durable/runs?status=interrupted&token=${token}`);
+    const authHeaders = { Authorization: `Bearer ${token}` };
+    // 0.10：REST 只接受 Bearer；业务 query 参数保留。
+    const listRes = await fetch(`${gatewayUrl}/v1/durable/runs?status=interrupted`, {
+      headers: authHeaders,
+    });
     expect(listRes.status).toBe(200);
     const listed = (await listRes.json()) as { runs: Array<{ run_id: string }> };
     expect(listed.runs.map((run) => run.run_id)).toContain('resume-gw');
 
-    const resumeRes = await fetch(`${gatewayUrl}/v1/durable/runs/resume-gw/resume?token=${token}`, {
+    const resumeRes = await fetch(`${gatewayUrl}/v1/durable/runs/resume-gw/resume`, {
       method: 'POST',
+      headers: authHeaders,
     });
     expect(resumeRes.status).toBe(202);
   } finally {
