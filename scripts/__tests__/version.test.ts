@@ -113,6 +113,74 @@ describe('applyVersion', () => {
       expect(pkg.version).toBe('0.2.0');
     });
   });
+
+  it('rewrites internal dependency versions and leaves external ones untouched', async () => {
+    await withTempRoot(async (root) => {
+      await writeJson(join(root, 'package.json'), {
+        name: 'vessel',
+        version: '0.1.0',
+        dependencies: {
+          '@vessel/core': '^0.1.0',
+          '@vessel/serve': 'workspace:*',
+          yaml: '^2.9.0',
+        },
+        devDependencies: {
+          '@vessel/config': 'workspace:*',
+          typescript: '^7.0.2',
+        },
+        peerDependencies: {
+          '@vessel/tui': '>=0.1.0',
+        },
+      });
+      await writeJson(join(root, 'packages/core/package.json'), {
+        name: '@vessel/core',
+        version: '0.1.0',
+        dependencies: {},
+      });
+
+      const changed = await applyVersion(root, '0.2.0');
+      expect(changed).toEqual(['package.json', 'packages/core/package.json']);
+
+      const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+        version: string;
+        dependencies: Record<string, string>;
+        devDependencies: Record<string, string>;
+        peerDependencies: Record<string, string>;
+      };
+      expect(pkg.version).toBe('0.2.0');
+      expect(pkg.dependencies['@vessel/core']).toBe('0.2.0');
+      expect(pkg.dependencies['@vessel/serve']).toBe('0.2.0');
+      expect(pkg.devDependencies['@vessel/config']).toBe('0.2.0');
+      expect(pkg.peerDependencies['@vessel/tui']).toBe('0.2.0');
+      expect(pkg.dependencies.yaml).toBe('^2.9.0');
+      expect(pkg.devDependencies.typescript).toBe('^7.0.2');
+    });
+  });
+
+  it('rewrites stale internal deps even when the version is already current', async () => {
+    await withTempRoot(async (root) => {
+      await writeJson(join(root, 'package.json'), {
+        name: 'vessel',
+        version: '0.2.0',
+        dependencies: { '@vessel/core': '^0.1.0' },
+      });
+      await writeJson(join(root, 'packages/core/package.json'), {
+        name: '@vessel/core',
+        version: '0.2.0',
+      });
+
+      const changed = await applyVersion(root, '0.2.0');
+      expect(changed).toEqual(['package.json']);
+
+      const pkg = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as {
+        dependencies: Record<string, string>;
+      };
+      expect(pkg.dependencies['@vessel/core']).toBe('0.2.0');
+
+      // 再跑一次应当幂等：没有需要改的内容。
+      expect(await applyVersion(root, '0.2.0')).toEqual([]);
+    });
+  });
 });
 
 describe('changelogHasVersion', () => {
