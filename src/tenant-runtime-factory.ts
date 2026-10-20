@@ -508,6 +508,10 @@ export async function buildTenantRuntime(
     const contextFactory = () => new MemoryContextManager(contextConfigFor(config, summarizer));
 
     if (isHostEnabled(config)) {
+      // 0.9 已知限制：host 模式把插件直接装到共享 PluginHost，成员 runtime 不再持有
+      // `plugins` 列表，因此 `AgentRuntime.dispose()`（插件逆序清理）触达不到这些插件。
+      // 本轮的关闭责任在宿主侧（bootstrap shutdown 只关 runtime/host），等 core 给出
+      // PluginHost/Host 级 dispose 接缝后再迁移；不要在此另造一套清理顺序。
       const hostPluginHost = new MemoryPluginHost();
       for (const plugin of plugins) {
         await installWithConfig(plugin, hostPluginHost, pluginConfigs[plugin.name]);
@@ -701,6 +705,12 @@ export async function buildTenantRuntime(
       if (closed) return;
       closed = true;
 
+      // 关闭顺序：feishu → workflow → metrics → MCP → host/runtime → trace
+      // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
+      // 0.9：workflow / MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
+      // `AgentRuntime.dispose()` 触达不到；它们的 dispose() 只是 close() 的
+      // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
+      // 而改安装顺序（DECISION-019 A）。
       await stopFeishuChannel(feishuChannel);
 
       if (workflowEngine) {

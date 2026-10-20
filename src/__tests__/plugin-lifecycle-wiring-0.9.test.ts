@@ -123,4 +123,83 @@ describe('tenant runtime 关闭路径（0.9 生命周期 v2）', () => {
     await bundle.close();
     expect(probe.disposed).toBe(1);
   });
+
+  it('工厂插件（MCP）由装配层关闭：close 被 await 且先于 runtime dispose', async () => {
+    const base = tmpDir();
+    const pluginsRoot = path.join(base, 'plugins');
+    writeProbePlugin(pluginsRoot);
+    const configPath = path.join(base, 'vessel.yaml');
+    fs.writeFileSync(
+      configPath,
+      [
+        'provider:',
+        '  name: openai',
+        '  model: gpt-4',
+        'plugins:',
+        '  - name: lifecycle-probe',
+        'mcp_servers:',
+        '  demo:',
+        '    transport: stdio',
+        '    command: node',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const loaded = await loadConfig({ configPath });
+    expect(loaded.validation.errors).toEqual([]);
+
+    let releaseMcp = () => {};
+    const mcpGate = new Promise<void>((resolve) => {
+      releaseMcp = resolve;
+    });
+    const mcpState = { installed: 0, started: false, closed: 0 };
+    const mcpModule = {
+      createMcpPlugin: () => ({
+        name: 'mcp-client',
+        install() {
+          mcpState.installed += 1;
+        },
+        close: async () => {
+          mcpState.started = true;
+          await mcpGate;
+          mcpState.closed += 1;
+        },
+        listServers: () => [],
+        getServer: () => undefined,
+      }),
+    };
+
+    const bundle = await buildTenantRuntime({
+      tenantId: 'default',
+      config: loaded.config,
+      tenantPaths: resolveTenantPaths(base, 'default'),
+      useMock: true,
+      loader: new PluginLoader({
+        roots: [{ dir: pluginsRoot, source: 'project', layout: 'flat' }],
+      }),
+      nodeId: 'node-test',
+      loadMcpModule: async () => mcpModule,
+    });
+
+    const probe = (globalThis as Record<string, unknown>)[PROBE_KEY] as ProbeState;
+    expect(mcpState.installed).toBe(1);
+
+    const closing = bundle.close();
+    await Bun.sleep(20);
+    // MCP close 被 await：它卡住时 runtime dispose 尚未开始。
+    expect(mcpState.started).toBe(true);
+    expect(mcpState.closed).toBe(0);
+    expect(probe.started).toBe(false);
+
+    releaseMcp();
+    await Bun.sleep(20);
+    // MCP 关闭完成后才轮到 runtime dispose（同样被 gate 卡住）。
+    expect(mcpState.closed).toBe(1);
+    expect(probe.started).toBe(true);
+    expect(probe.disposed).toBe(0);
+
+    probe.release();
+    await closing;
+    expect(probe.disposed).toBe(1);
+  });
 });
