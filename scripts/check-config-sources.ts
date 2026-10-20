@@ -258,7 +258,8 @@ export async function checkConfigSources(root: string): Promise<string[]> {
       issues,
       'explicit provider.apiKey source',
       sourceOf(explicitWins.snapshot, 'provider.apiKey'),
-      'user',
+      // 0.10 sources 脱敏：`*.apiKey` 的来源值也显示 `<set>`，不再暴露来源层。
+      '<set>',
     );
     expectEqual(
       issues,
