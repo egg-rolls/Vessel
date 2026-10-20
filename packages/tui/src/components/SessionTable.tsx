@@ -10,6 +10,7 @@
 import type { SessionInfo } from '@vessel/core';
 import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
 import { type ReactNode, useMemo, useState } from 'react';
+import { t } from '../i18n/index.js';
 import { type LiveMode, viewExtraRows } from '../repl/layout.js';
 import { theme } from '../theme.js';
 import { truncateToWidth } from '../utils/text-layout.js';
@@ -80,7 +81,6 @@ export function clampSelection(index: number, length: number): number {
 }
 
 const DEFAULT_MAX_ROWS = 20;
-const ACTIVE_DELETE_NOTICE = 'Cannot delete the current session; run /new first.';
 
 export function SessionTable({
   sessions,
@@ -228,7 +228,7 @@ export function SessionTable({
         if (intent.key === 'x') {
           if (!selectedRow) return;
           if (selectedRow.current) {
-            setNotice(ACTIVE_DELETE_NOTICE);
+            setNotice(t('session.cannotDeleteCurrent'));
             return;
           }
           setMode('confirm');
@@ -238,7 +238,9 @@ export function SessionTable({
         return;
       }
       case 'disabledAction':
-        setNotice(intent.reason === 'current' ? ACTIVE_DELETE_NOTICE : 'Select a session first.');
+        setNotice(
+          intent.reason === 'current' ? t('session.cannotDeleteCurrent') : t('session.selectFirst'),
+        );
         return;
       case 'submit': {
         // rename
@@ -249,9 +251,9 @@ export function SessionTable({
         void onRename(selectedRow.key, intent.value).then((result) => {
           if (result.ok) {
             setMode('browse');
-            setNotice(result.message ?? 'Renamed.');
+            setNotice(result.message ?? t('session.renamed'));
           } else {
-            setNotice(result.message ?? 'Rename failed.');
+            setNotice(result.message ?? t('session.renameFailed'));
           }
         });
         return;
@@ -267,10 +269,10 @@ export function SessionTable({
             const nextKey = keyAfterRemoval(rows, removed);
             setSelectedKey(nextKey);
             setMode('browse');
-            setNotice(result.message ?? 'Deleted.');
+            setNotice(result.message ?? t('session.deleted'));
           } else {
             setMode('browse');
-            setNotice(result.message ?? 'Delete failed.');
+            setNotice(result.message ?? t('session.deleteFailed'));
           }
         });
         return;
@@ -285,7 +287,9 @@ export function SessionTable({
       case 'beginForm':
       case 'reject':
         if (intent.type === 'reject') {
-          setNotice(intent.reason === 'empty-title' ? 'Title cannot be empty.' : 'Value required.');
+          setNotice(
+            intent.reason === 'empty-title' ? t('session.emptyTitle') : t('session.valueRequired'),
+          );
         }
         return;
     }
@@ -296,37 +300,41 @@ export function SessionTable({
     if (status === 'loading') {
       return (
         <Text color={theme.muted} wrap="truncate-end">
-          Resume: loading sessions… · esc close
+          {t('session.hidden.loading')}
         </Text>
       );
     }
     if (status === 'error') {
       return (
         <Text color={theme.danger} wrap="truncate-end">
-          Resume: failed to load sessions{onRetry ? ' · r retry' : ''} · esc close
+          {t('session.hidden.failed', {
+            retry: onRetry ? t('session.hidden.failedRetry') : '',
+          })}
         </Text>
       );
     }
     if (sessions.length === 0) {
       return (
         <Text color={theme.muted} wrap="truncate-end">
-          Resume: no sessions · esc close
+          {t('session.hidden.none')}
         </Text>
       );
     }
     if (rows.length === 0) {
       return (
         <Text color={theme.muted} wrap="truncate-end">
-          Resume: no matches · esc close
+          {t('session.hidden.noMatches')}
         </Text>
       );
     }
     const first = rows[0];
-    const more = rows.length > 1 ? ` · ${rows.length - 1} more` : '';
+    const more = rows.length > 1 ? t('session.more', { count: rows.length - 1 }) : '';
     return (
       <Text color={theme.muted} wrap="truncate-end">
-        Resume: {selectedRow?.cells.title ?? first?.cells.title ?? '-'}
-        {more} · resize for actions · esc close
+        {t('session.hidden.summary', {
+          title: selectedRow?.cells.title ?? first?.cells.title ?? '-',
+          more,
+        })}
       </Text>
     );
   }
@@ -334,9 +342,9 @@ export function SessionTable({
   if (status === 'loading') {
     return (
       <SelectionFrame heightMode={heightMode}>
-        <Text color={theme.muted}>Loading sessions…</Text>
+        <Text color={theme.muted}>{t('session.loading')}</Text>
         <Box marginTop={1}>
-          <Text color={theme.faint}>Esc to close</Text>
+          <Text color={theme.faint}>{t('session.escClose')}</Text>
         </Box>
       </SelectionFrame>
     );
@@ -346,13 +354,13 @@ export function SessionTable({
     return (
       <SelectionFrame heightMode={heightMode}>
         <Text bold color={theme.danger}>
-          Failed to load sessions
+          {t('session.failed')}
         </Text>
         <Box marginTop={1}>
-          <Text color={theme.muted}>{error ?? 'Unknown error.'}</Text>
+          <Text color={theme.muted}>{error ?? t('session.unknownError')}</Text>
         </Box>
         <Box marginTop={1}>
-          <Text color={theme.faint}>r retry · Esc to close</Text>
+          <Text color={theme.faint}>{t('session.retryClose')}</Text>
         </Box>
       </SelectionFrame>
     );
@@ -361,7 +369,7 @@ export function SessionTable({
   if (sessions.length === 0) {
     return (
       <SelectionFrame heightMode={heightMode}>
-        <EmptyState title="No sessions to resume." hint="Esc to close" />
+        <EmptyState title={t('session.empty')} hint={t('session.escClose')} />
       </SelectionFrame>
     );
   }
@@ -370,8 +378,8 @@ export function SessionTable({
     return (
       <SelectionFrame heightMode={heightMode}>
         <EmptyState
-          title="No matching sessions"
-          hint={filter ? `filter: "${filter}" · esc to clear filter` : 'esc close'}
+          title={t('session.noMatches')}
+          hint={filter ? t('session.noMatchesFilterHint', { filter }) : t('session.noMatchesHint')}
         />
       </SelectionFrame>
     );
@@ -385,8 +393,14 @@ export function SessionTable({
   const window = scrollWindow(rows.length, selectedIndex, capacity);
   const rangeVisible = rows.length > window.end - window.start;
   const rangeText = rangeVisible
-    ? `showing ${window.start + 1}-${window.end} of ${rows.length}${
-        rows.length !== sessions.length ? ` (filtered from ${sessions.length})` : ''
+    ? `${t('session.range', {
+        start: window.start + 1,
+        end: window.end,
+        total: rows.length,
+      })}${
+        rows.length !== sessions.length
+          ? t('session.rangeFiltered', { total: sessions.length })
+          : ''
       }`
     : null;
   const contentWidth = Math.max(1, viewContentWidth(terminalColumns) - TABLE_PREFIX_WIDTH);
@@ -397,13 +411,18 @@ export function SessionTable({
       <Box flexDirection="column" width={viewContentWidth(terminalColumns)}>
         <Box marginBottom={1}>
           <Text bold color={theme.brand}>
-            Resume session
+            {t('session.title')}
           </Text>
           {filter ? (
             <Text color={theme.warn}>
               {' '}
-              · filter:{' '}
-              {truncateToWidth(filter, Math.max(1, viewContentWidth(terminalColumns) - 34))}
+              ·{' '}
+              {t('session.filterPrompt', {
+                filter: truncateToWidth(
+                  filter,
+                  Math.max(1, viewContentWidth(terminalColumns) - 34),
+                ),
+              })}
               {mode === 'filter' ? '_' : ''}
             </Text>
           ) : null}
@@ -415,7 +434,7 @@ export function SessionTable({
           <DataTable
             view={{
               kind: 'table',
-              title: 'Resume session',
+              title: t('session.title'),
               columns: sessionColumns(terminalColumns),
               rows,
               actions,
@@ -431,18 +450,19 @@ export function SessionTable({
         {mode === 'confirm' && selectedSession ? (
           <Box flexDirection="column" marginTop={1}>
             <Text color={theme.danger} wrap="truncate-end">
-              Delete "{selectedSession.title || selectedSession.preview || '(untitled)'}"?{' '}
-              {String(selectedSession.message_count)} messages and related runs/events will be
-              removed.
+              {t('session.confirmDeleteBody', {
+                title: selectedSession.title || selectedSession.preview || t('session.untitled'),
+                count: selectedSession.message_count,
+              })}
             </Text>
-            <Text color={theme.faint}>[y] delete · [n] keep · esc cancel</Text>
+            <Text color={theme.faint}>{t('session.confirmDeleteHint')}</Text>
           </Box>
         ) : null}
 
         {mode === 'rename' ? (
           <Box marginTop={1}>
             <Text color={theme.warn}>
-              {'r Rename: '}
+              {t('session.renamePrefix')}
               {draft}
               <Text color={theme.faint}>▏</Text>
             </Text>
@@ -458,17 +478,17 @@ export function SessionTable({
         <Box marginTop={1}>
           {mode === 'filter' ? (
             <Text color={theme.faint}>
-              type to filter · enter keep · esc clear
+              {t('session.filterHint')}
               {selectedRow ? ` · ${shortSessionId(selectedRow.key)}` : ''}
             </Text>
           ) : mode === 'rename' ? (
-            <Text color={theme.faint}>enter save · esc cancel</Text>
+            <Text color={theme.faint}>{t('session.renameHint')}</Text>
           ) : mode === 'confirm' ? (
-            <Text color={theme.faint}>[y] delete · [n] keep · esc cancel</Text>
+            <Text color={theme.faint}>{t('session.confirmDeleteHint')}</Text>
           ) : (
             <KeyHints
               actions={enabledActions}
-              extra="↑↓/jk move"
+              extra={t('session.moveHint')}
               disabledKeys={disabledActionKeys}
             />
           )}

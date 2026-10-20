@@ -7,6 +7,7 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
+import { t } from '../i18n/index.js';
 import { formatRelativeTime } from '../utils/time.js';
 import type { TableView, ViewAction, ViewColumn, ViewRow } from './types.js';
 
@@ -39,7 +40,7 @@ export function shortSessionId(sessionId: string, max = 12): string {
 }
 
 function sessionTitle(session: SessionInfo): string {
-  return session.title || session.preview || '(untitled)';
+  return session.title || session.preview || t('session.untitled');
 }
 
 /** 纯函数：构造表格行（排序、current 标记、相对时间、消息数） */
@@ -55,7 +56,9 @@ export function buildSessionRows(
       current,
       ...(current ? { tone: 'ok' as const } : {}),
       cells: {
-        title: current ? `${sessionTitle(session)} (active)` : sessionTitle(session),
+        title: current
+          ? t('session.titleActive', { title: sessionTitle(session) })
+          : sessionTitle(session),
         id: session.session_id,
         shortId: shortSessionId(session.session_id),
         msgs: String(session.message_count),
@@ -98,17 +101,23 @@ export function sessionColumns(columns: number): ViewColumn[] {
 /** 会话选择器动作；x 对 current 不可用（not-current） */
 export function sessionPickerActions(): ViewAction[] {
   return [
-    { id: 'resume', key: 'enter', label: 'resume', enabled: 'selected' },
-    { id: 'rename', key: 'r', label: 'rename', enabled: 'selected', inputFrom: 'title' },
+    { id: 'resume', key: 'enter', label: t('session.action.resume'), enabled: 'selected' },
+    {
+      id: 'rename',
+      key: 'r',
+      label: t('session.action.rename'),
+      enabled: 'selected',
+      inputFrom: 'title',
+    },
     {
       id: 'delete',
       key: 'x',
-      label: 'delete',
+      label: t('session.action.delete'),
       tone: 'danger',
       enabled: 'not-current',
-      confirm: 'Delete "{name}"?',
+      confirm: t('session.action.confirmDelete'),
     },
-    { id: 'refresh', key: 'R', label: 'refresh', enabled: 'always' },
+    { id: 'refresh', key: 'R', label: t('session.action.refresh'), enabled: 'always' },
   ];
 }
 
@@ -134,12 +143,12 @@ export function buildSessionPickerView(input: SessionPickerInput): TableView {
 
   return {
     kind: 'table',
-    title: 'Resume session',
+    title: t('session.title'),
     columns: sessionColumns(input.columns ?? 80),
     rows,
     actions: sessionPickerActions(),
     ...(initialKey ? { initialKey } : {}),
-    emptyText: input.filter ? 'No matching sessions' : 'No sessions to resume.',
+    emptyText: input.filter ? t('session.noMatches') : t('session.empty'),
     meta: `${rows.length}${rows.length !== input.sessions.length ? `/${input.sessions.length}` : ''}`,
   };
 }

@@ -8,6 +8,7 @@
 
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import type { CommandEntry, CommandResult, ReplState } from './commands.js';
@@ -170,7 +171,7 @@ export async function runExportCommand(
 export function exportCommand(): CommandEntry {
   return {
     name: 'export',
-    description: '导出当前会话（Markdown/JSON）',
+    description: t('command.export.description'),
     usage: '/export [path] [--json] [--reasoning|--no-reasoning]',
     category: 'session',
     keywords: ['export', 'save', 'markdown', 'json'],

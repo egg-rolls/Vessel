@@ -8,6 +8,7 @@
  */
 
 import type { SessionInfo } from '@vessel/core';
+import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -335,7 +336,7 @@ export async function runSessionsCommand(
 export function sessionsCommand(): CommandEntry {
   return {
     name: 'sessions',
-    description: 'Deprecated: use /resume',
+    description: t('command.sessions.description'),
     usage: '/sessions (deprecated; use /resume)',
     category: 'session',
     hidden: true,

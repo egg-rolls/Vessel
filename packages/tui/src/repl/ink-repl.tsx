@@ -39,6 +39,7 @@ import { SubagentActivity } from '../components/SubagentActivity.js';
 import { shouldPageOutput, TextViewer } from '../components/TextViewer.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
+import { resolveLocale, setLocale, t } from '../i18n/index.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
@@ -91,7 +92,7 @@ function InkRepl({ ctx }: InkReplProps) {
         dispatch({ type: 'clearPermissionForRequest', requestId });
         dispatch({
           type: 'appendHistory',
-          line: '⚠ Permission request timed out (120s); tool call was cancelled.',
+          line: t('permission.timeout'),
         });
       },
     });
@@ -125,7 +126,7 @@ function InkRepl({ ctx }: InkReplProps) {
         // 有流式内容时，StreamOutput 已归档带「已取消」标注的正文；
         // 仅在没有内容可归档时补一条简短的取消提示。
         if (!streamCancellationArchivedRef.current) {
-          dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+          dispatch({ type: 'appendHistory', line: t('common.cancelled') });
         }
         streamCancellationArchivedRef.current = false;
       } else if (outcome.status === 'failed') {
@@ -362,7 +363,7 @@ function InkRepl({ ctx }: InkReplProps) {
         dispatch({ type: 'setInput', input: '' });
         dispatch({
           type: 'appendHistory',
-          line: `⏳ Queued (${ui.queuedInput.length + 1}): ${value}`,
+          line: t('repl.queued', { count: ui.queuedInput.length + 1, value }),
         });
         return;
       }
@@ -404,7 +405,9 @@ function InkRepl({ ctx }: InkReplProps) {
             const output = sanitizeTerminalText(result.output);
             if (shouldPageOutput(output)) {
               const name = value.trim().replace(/^\//, '').split(/\s+/)[0] ?? '';
-              const title = name ? `${name.charAt(0).toUpperCase()}${name.slice(1)}` : 'Output';
+              const title = name
+                ? `${name.charAt(0).toUpperCase()}${name.slice(1)}`
+                : t('common.output');
               dispatch({
                 type: 'openTextViewer',
                 title,
@@ -433,7 +436,7 @@ function InkRepl({ ctx }: InkReplProps) {
         const [cmdName = value] = value.trim().split(/\s+/);
         dispatch({
           type: 'appendHistory',
-          line: `Unknown command: ${cmdName}. Type /help for available commands.`,
+          line: t('repl.unknownCommand', { name: cmdName }),
         });
         return;
       }
@@ -454,7 +457,11 @@ function InkRepl({ ctx }: InkReplProps) {
         for (const ref of references) {
           dispatch({
             type: 'appendHistory',
-            line: `📎 @${ref.path} (${ref.bytes} bytes${ref.truncated ? ', truncated' : ''})`,
+            line: t('repl.fileReference', {
+              path: ref.path,
+              bytes: ref.bytes,
+              suffix: ref.truncated ? t('repl.fileTruncated') : '',
+            }),
           });
         }
         const outcome = await executeTurn({
@@ -466,7 +473,7 @@ function InkRepl({ ctx }: InkReplProps) {
           // 取消前已流出的内容由 StreamOutput 归档（含「已取消」标注）；
           // 没有内容时保留一条简短提示，避免用户以为什么都没发生。
           if (!streamCancellationArchivedRef.current) {
-            dispatch({ type: 'appendHistory', line: '⏹ Cancelled.' });
+            dispatch({ type: 'appendHistory', line: t('common.cancelled') });
           }
           streamCancellationArchivedRef.current = false;
         } else if (outcome.status === 'failed') {
@@ -595,7 +602,7 @@ function InkRepl({ ctx }: InkReplProps) {
       } else if (isRefresh) {
         dispatch({
           type: 'viewError',
-          message: (result.output ?? 'Refresh failed.').trim() || 'Refresh failed.',
+          message: (result.output ?? t('common.refreshFailed')).trim() || t('common.refreshFailed'),
           requestId,
         });
       } else if (result.output) {
@@ -808,7 +815,7 @@ function InkRepl({ ctx }: InkReplProps) {
         if (!control) {
           dispatch({
             type: 'appendHistory',
-            line: `ℹ "${overlay.toolName}" is approved for this session; config write-back is unavailable.`,
+            line: t('permission.sessionOnly', { tool: overlay.toolName }),
           });
         } else {
           void control
@@ -816,13 +823,16 @@ function InkRepl({ ctx }: InkReplProps) {
             .then(() => {
               dispatch({
                 type: 'appendHistory',
-                line: `✓ "${overlay.toolName}" added to permission.auto_approve (effective after restart).`,
+                line: t('permission.persisted', { tool: overlay.toolName }),
               });
             })
             .catch((error: unknown) => {
               dispatch({
                 type: 'appendHistory',
-                line: `⚠ Could not persist "${overlay.toolName}": ${formatRpcError(error)} (this session only).`,
+                line: t('permission.persistFailed', {
+                  tool: overlay.toolName,
+                  error: formatRpcError(error),
+                }),
               });
             });
         }
@@ -1180,8 +1190,11 @@ function InkRepl({ ctx }: InkReplProps) {
           <Box flexDirection="column" flexShrink={0}>
             <Text color={theme.warn}>
               {ui.run.phase === 'cancelling'
-                ? '◐ cancelling…'
-                : `◐ working… Esc to cancel · Ctrl+O ${ui.expandedOutput ? 'collapse' : 'expand'}${ui.expandedOutput ? ' (full output in scrollback)' : ''}`}
+                ? t('repl.cancelling')
+                : t('repl.working', {
+                    action: t(ui.expandedOutput ? 'repl.collapse' : 'repl.expand'),
+                    suffix: ui.expandedOutput ? t('repl.fullOutputHint') : '',
+                  })}
             </Text>
           </Box>
         )}
@@ -1189,7 +1202,7 @@ function InkRepl({ ctx }: InkReplProps) {
       {/* 底部快捷键提示（rows >= 18 才显示） */}
       {!exclusiveOverlayActive && layout.hintRows > 0 && (
         <Box flexShrink={0} paddingX={2}>
-          <Text color={theme.faint}>? quick help · Ctrl+O full transcript</Text>
+          <Text color={theme.faint}>{t('repl.bottomHint')}</Text>
         </Box>
       )}
 
@@ -1218,6 +1231,14 @@ function InkRepl({ ctx }: InkReplProps) {
  * - 非 TTY：使用简单的行模式（兼容管道输入）
  */
 export async function startInkRepl(ctx: ReplContext): Promise<void> {
+  const configLanguage = (ctx.config as { ui?: { language?: string } }).ui?.language;
+  setLocale(
+    resolveLocale({
+      env: process.env,
+      ...(configLanguage ? { configLanguage } : {}),
+    }),
+  );
+
   // 非 TTY 环境（如管道输入）使用简单的行模式
   if (!process.stdin.isTTY) {
     await runSimpleMode(ctx);
@@ -1247,9 +1268,9 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
     running: true,
   };
 
-  console.log(`Vessel  ·  ${ctx.provider.name} | ${ctx.provider.model}`);
-  console.log(`session: ${state.currentSessionId}`);
-  console.log('Type your message, or /help for commands.');
+  console.log(t('repl.simpleHeader', { provider: ctx.provider.name, model: ctx.provider.model }));
+  console.log(t('repl.simpleSession', { id: state.currentSessionId }));
+  console.log(t('repl.simplePrompt'));
   console.log(glyph.rule.repeat(48));
 
   // 启动横幅（simple mode 同样适用；headless / serve 不经过这里）
@@ -1314,7 +1335,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
         const abort = new AbortController();
         const outcome = await executeResume(result.resumeRun, abort);
         if (outcome.status === 'cancelled') {
-          console.log('⏹ Cancelled.');
+          console.log(t('common.cancelled'));
         } else if (outcome.status === 'failed') {
           console.error(formatClassifiedError(classifyError(outcome.error)));
         }
@@ -1326,7 +1347,7 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
       }
       if (!result.handled) {
         const name = trimmed.split(/\s+/)[0] ?? trimmed;
-        console.log(`Unknown command: ${name}. Type /help for available commands.`);
+        console.log(t('repl.unknownCommand', { name }));
       }
       continue;
     }

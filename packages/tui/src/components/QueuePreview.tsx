@@ -7,6 +7,7 @@
  */
 
 import { Box, Text } from 'ink';
+import { t } from '../i18n/index.js';
 import { theme } from '../theme.js';
 import { lineKey, truncateToWidth } from '../utils/text-layout.js';
 
@@ -57,8 +58,8 @@ export function formatQueuePreview(
 
   const header =
     editIndex === null
-      ? `queued (${queued.length})`
-      : `queued (${queued.length}) · editing ${editIndex + 1} · Ctrl+X delete · Esc cancel`;
+      ? t('queue.header', { count: queued.length })
+      : t('queue.headerEditing', { count: queued.length, index: editIndex + 1 });
   const lines: QueueLine[] = [{ text: header, tone: 'faint' }];
   const window = getQueueWindow(queued.length, editIndex);
   if (window.showLead) lines.push({ text: '  …', tone: 'faint' });
@@ -73,7 +74,10 @@ export function formatQueuePreview(
   }
 
   if (window.showTail) {
-    lines.push({ text: `  …and ${queued.length - window.end} more`, tone: 'faint' });
+    lines.push({
+      text: `  ${t('queue.more', { count: queued.length - window.end })}`,
+      tone: 'faint',
+    });
   }
   return lines;
 }

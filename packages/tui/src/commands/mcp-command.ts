@@ -6,6 +6,7 @@
  */
 
 import { classifyError, formatClassifiedError } from '../error-classifier.js';
+import { t } from '../i18n/index.js';
 import type { McpServerSummary, ReplContext } from '../repl-context.js';
 import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
 import type {
@@ -306,7 +307,7 @@ export async function runMcpViewAction(
 export function mcpCommand(): CommandEntry {
   return {
     name: 'mcp',
-    description: 'MCP servers: status / reconnect',
+    description: t('command.mcp.description'),
     usage: '/mcp [reconnect <name>]',
     category: 'inspect',
     keywords: ['server', 'reconnect'],

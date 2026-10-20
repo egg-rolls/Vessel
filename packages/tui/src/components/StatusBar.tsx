@@ -7,6 +7,7 @@
  */
 
 import { Box, Text, useStdout } from 'ink';
+import { t } from '../i18n/index.js';
 import { glyph, theme } from '../theme.js';
 import { formatDuration, formatModelLabel, formatTokenCount } from '../utils/display-labels.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -44,12 +45,18 @@ export interface StatusSegment {
   tone: StatusTone;
 }
 
-const STATUS_TEXT: Record<StatusKind, string> = {
-  idle: `${glyph.idle} idle`,
-  thinking: `${glyph.statusRunning} thinking`,
-  tool: `${glyph.statusRunning} tool`,
-  cancelling: `${glyph.running} cancelling`,
-};
+function statusText(kind: StatusKind): string {
+  switch (kind) {
+    case 'idle':
+      return t('status.idle', { glyph: glyph.idle });
+    case 'thinking':
+      return t('status.thinking', { glyph: glyph.statusRunning });
+    case 'tool':
+      return t('status.tool', { glyph: glyph.statusRunning });
+    case 'cancelling':
+      return t('status.cancelling', { glyph: glyph.running });
+  }
+}
 
 const STATUS_TONE: Record<StatusKind, StatusTone> = {
   idle: 'faint',
@@ -114,7 +121,7 @@ export function formatStatusRule(props: StatusRuleProps, columns: number): Statu
   const width = Math.max(1, Math.floor(Number.isFinite(columns) ? columns : 1));
   const max = Math.max(1, width - 4);
   const status: StatusSegment = {
-    text: STATUS_TEXT[props.status],
+    text: statusText(props.status),
     tone: STATUS_TONE[props.status],
   };
 
@@ -131,8 +138,11 @@ export function formatStatusRule(props: StatusRuleProps, columns: number): Statu
     parts.push({
       text:
         maxTokens !== undefined
-          ? `ctx ${formatTokenCount(used)}/${formatTokenCount(maxTokens)}`
-          : `ctx ${formatTokenCount(used)} tok`,
+          ? t('status.ctxWithMax', {
+              used: formatTokenCount(used),
+              max: formatTokenCount(maxTokens),
+            })
+          : t('status.ctxTokens', { used: formatTokenCount(used) }),
       tone: 'muted',
     });
     if (percent !== undefined) {
@@ -148,13 +158,13 @@ export function formatStatusRule(props: StatusRuleProps, columns: number): Statu
 
     if (props.compactions !== undefined && props.compactions > 0) {
       parts.push({
-        text: `cmp ${props.compactions}`,
+        text: t('status.compactions', { count: props.compactions }),
         tone: props.compactions >= 10 ? 'danger' : props.compactions >= 5 ? 'warn' : 'muted',
       });
     }
 
     if (props.sessions !== undefined && props.sessions > 0) {
-      parts.push({ text: `${props.sessions} sess`, tone: 'muted' });
+      parts.push({ text: t('status.sessions', { count: props.sessions }), tone: 'muted' });
     }
   }
 

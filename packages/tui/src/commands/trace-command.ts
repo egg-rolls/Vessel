@@ -8,6 +8,7 @@
  * 事件已在服务端脱敏，TUI 展示前再过一层 redactForDisplay。
  */
 
+import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatRpcError, redactForDisplay } from '../rpc.js';
 import { padToWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -371,7 +372,7 @@ export async function runTraceCommand(args: string[], ctx: ReplContext): Promise
 export function traceCommand(): CommandEntry {
   return {
     name: 'trace',
-    description: 'Show run events from trace (replay)',
+    description: t('command.trace.description'),
     usage: '/trace show <run_id> [--limit <n>] [--since-seq <n>] [--type <prefix>] [--json]',
     category: 'inspect',
     keywords: ['events', 'replay'],

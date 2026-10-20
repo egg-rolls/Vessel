@@ -14,6 +14,7 @@
 
 import { Box, Text, useInput } from 'ink';
 import { type ReactNode, useMemo, useState } from 'react';
+import { t } from '../i18n/index.js';
 import { viewExtraRows } from '../repl/layout.js';
 import { theme } from '../theme.js';
 import { truncateToWidth } from '../utils/text-layout.js';
@@ -102,22 +103,22 @@ export function hiddenSummary(envelope: ViewEnvelope): string {
   const { view } = envelope;
   if (view.kind === 'table') {
     const first = view.rows[0];
-    const label = first ? first.cells.title || first.cells.name || first.key : 'no items';
-    const more = view.rows.length > 1 ? ` · ${view.rows.length - 1} more` : '';
+    const label = first ? first.cells.title || first.cells.name || first.key : t('view.noItems');
+    const more = view.rows.length > 1 ? t('view.more', { count: view.rows.length - 1 }) : '';
     return `${view.title}: ${label}${more}`;
   }
   if (view.kind === 'list') {
     const first = view.items[0];
-    const more = view.items.length > 1 ? ` · ${view.items.length - 1} more` : '';
-    return `${view.title}: ${first?.label ?? 'no items'}${more}`;
+    const more = view.items.length > 1 ? t('view.more', { count: view.items.length - 1 }) : '';
+    return `${view.title}: ${first?.label ?? t('view.noItems')}${more}`;
   }
   return view.title;
 }
 
 function confirmHint(action: ViewAction | null): string {
-  if (!action) return 'esc cancel';
-  const tone = action.tone === 'danger' ? 'delete' : action.label;
-  return `[y] ${tone}  [n] keep  esc cancel`;
+  if (!action) return t('view.cancelHint');
+  const tone = action.tone === 'danger' ? t('session.action.delete') : action.label;
+  return t('view.confirmHint', { action: tone });
 }
 
 export function InteractiveViewHost({
@@ -329,8 +330,8 @@ export function InteractiveViewHost({
         const action = actions.find((candidate) => candidate.key === intent.key);
         setNotice(
           intent.reason === 'current'
-            ? `Cannot ${action?.label ?? 'do that'} the current item.`
-            : 'Select an item first.',
+            ? t('view.cannotCurrent', { action: action?.label ?? t('view.doThat') })
+            : t('view.selectFirst'),
         );
         return;
       }
@@ -357,7 +358,7 @@ export function InteractiveViewHost({
         onMode('form', draft);
         return;
       case 'reject':
-        setNotice(intent.reason === 'empty-title' ? 'Title cannot be empty.' : 'Value required.');
+        setNotice(intent.reason === 'empty-title' ? t('view.emptyTitle') : t('view.valueRequired'));
         return;
       case 'beginRename':
       case 'beginConfirm':
@@ -380,16 +381,20 @@ export function InteractiveViewHost({
     ? `showing ${rangeWindow.start + 1}-${rangeWindow.end} of ${itemCount}`
     : null;
   const titleParts = [titleLine(envelope)];
-  if (filter) titleParts.push(`filter: ${filter}${mode === 'filter' ? '_' : ''}`);
+  if (filter) {
+    titleParts.push(`${t('view.filterPrefix', { filter })}${mode === 'filter' ? '_' : ''}`);
+  }
   if (rangeText) titleParts.push(rangeText);
   const titleText = view.kind === 'detail' ? '' : titleParts.join(' · ');
   const moveHint =
-    itemCount > 0 ? `${heightMode === 'normal' ? '↑↓/jk/pgup/pgdn move' : '↑↓ move'}` : 'esc close';
+    itemCount > 0
+      ? t(heightMode === 'normal' ? 'view.moveHint' : 'view.moveHintCompact')
+      : t('view.escClose');
   const hintsText =
     mode === 'filter'
-      ? 'type to filter · enter keep · esc clear'
+      ? t('view.filterHint')
       : mode === 'rename'
-        ? 'enter save · esc cancel'
+        ? t('view.renameHint')
         : mode === 'confirm'
           ? confirmHint(pendingAction)
           : formatKeyHints(actions, moveHint, disabledActionKeys);
@@ -424,10 +429,10 @@ export function InteractiveViewHost({
     const retry = refresh ? `${refresh.key} retry · ` : '';
     const line =
       status === 'loading'
-        ? `Loading ${view.title}… · esc close`
+        ? t('view.loadingClose', { title: view.title })
         : status === 'error'
-          ? `${view.title} failed · ${retry}esc close`
-          : `${hiddenSummary(envelope)} · resize for actions · esc close`;
+          ? t('view.failedClose', { title: view.title, retry })
+          : t('view.hiddenSummary', { summary: hiddenSummary(envelope) });
     return (
       <Box flexDirection="column" width={contentWidth} flexShrink={0}>
         <Text color={status === 'error' ? theme.danger : theme.muted} wrap="truncate-end">
@@ -440,21 +445,21 @@ export function InteractiveViewHost({
   if (status === 'loading') {
     return renderFrame(
       titleLine(envelope),
-      'esc close',
-      <Text color={theme.muted}>Loading {view.title}…</Text>,
+      t('view.escClose'),
+      <Text color={theme.muted}>{t('view.loading', { title: view.title })}</Text>,
     );
   }
 
   if (status === 'error') {
     return renderFrame(
       titleLine(envelope),
-      `${refresh?.key ?? 'r'} retry · esc close`,
+      t('view.retryClose', { key: refresh?.key ?? 'r' }),
       <Box flexDirection="column">
         <Text bold color={theme.danger}>
-          Failed to load {view.title}
+          {t('view.failed', { title: view.title })}
         </Text>
         <Box marginTop={1}>
-          <Text color={theme.muted}>{error ?? 'Unknown error.'}</Text>
+          <Text color={theme.muted}>{error ?? t('view.unknownError')}</Text>
         </Box>
       </Box>,
     );
@@ -473,7 +478,7 @@ export function InteractiveViewHost({
           selectedKey={selectionKey}
           start={window.start}
           showHeader={showHeader}
-          emptyHint={filter ? 'esc to clear filter' : 'esc close'}
+          emptyHint={filter ? t('view.escToClearFilter') : t('view.escClose')}
         />
       ) : null}
 
@@ -504,7 +509,10 @@ export function InteractiveViewHost({
           ))}
           <Box marginTop={1}>
             <Text color={theme.faint}>
-              [y] {view.confirm.label} · [n] {view.cancel.label}
+              {t('view.confirmActions', {
+                confirm: view.confirm.label,
+                cancel: view.cancel.label,
+              })}
             </Text>
           </Box>
         </Box>
@@ -514,7 +522,7 @@ export function InteractiveViewHost({
       {mode === 'rename' ? (
         <Box marginTop={1}>
           <Text color={theme.warn}>
-            {'r Rename: '}
+            {t('view.renamePrefix')}
             {draft}
             <Text color={theme.faint}>▏</Text>
           </Text>
@@ -593,7 +601,7 @@ function ListBody({
   showHeader: boolean;
 }) {
   if (items.length === 0) {
-    return <EmptyState title={view.emptyText ?? 'No items.'} hint="esc close" />;
+    return <EmptyState title={view.emptyText ?? t('common.noItems')} hint={t('view.escClose')} />;
   }
   return (
     <Box flexDirection="column">
@@ -611,7 +619,7 @@ function ListBody({
             {`${selected ? '›' : item.current ? '●' : ' '} ${String(index + 1).padStart(2, ' ')}  ${item.label}`}
             {item.description ? ` — ${item.description}` : ''}
             {item.badge ? ` [${item.badge}]` : ''}
-            {item.current ? ' (active)' : ''}
+            {item.current ? t('view.active') : ''}
           </Text>
         );
       })}
