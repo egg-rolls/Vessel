@@ -31,6 +31,8 @@ function envFor(dir: string): Record<string, string> {
     HOME: dir,
     USERPROFILE: dir,
     VESSEL_DATA_DIR: path.join(dir, 'data'),
+    // 固定 token，供 `gateway reload` 的本地 RPC 鉴权（不打印、不进 URL）。
+    VESSEL_GATEWAY_TOKEN: 'e2e-gateway-token',
   };
 }
 
@@ -106,6 +108,34 @@ describe('vessel gateway lifecycle', () => {
       const after = await runCli(dir, ['gateway', 'status', '--json']);
       expect(after.exitCode).toBe(1);
       expect((JSON.parse(after.stdout) as { running: boolean }).running).toBe(false);
+    } finally {
+      await stopGateway(dir);
+    }
+  }, 60_000);
+
+  it('reload：plugins/config 热重载 + requires_restart 如实返回', async () => {
+    const dir = tmpDir();
+    try {
+      const start = await runCli(dir, ['gateway', 'start', '--daemon', '--port', '0']);
+      expect(start.exitCode).toBe(0);
+
+      const plugins = await runCli(dir, ['gateway', 'reload', '--scope', 'plugins']);
+      expect(plugins.exitCode).toBe(0);
+      expect(plugins.stdout).toContain('plugins');
+
+      const unchanged = await runCli(dir, ['gateway', 'reload', '--scope', 'config']);
+      expect(unchanged.exitCode).toBe(0);
+      expect(unchanged.stdout).toContain('config');
+
+      // 写入需要重启的字段：reload 必须如实放进 requires_restart。
+      fs.mkdirSync(path.join(dir, '.vessel'), { recursive: true });
+      fs.writeFileSync(
+        path.join(dir, '.vessel', 'config.yaml'),
+        ['provider:', '  name: openai', '  model: e2e-model', '  api_key: test-key', ''].join('\n'),
+      );
+      const changed = await runCli(dir, ['gateway', 'reload', '--scope', 'config']);
+      expect(changed.exitCode).toBe(0);
+      expect(changed.stdout).toContain('model');
     } finally {
       await stopGateway(dir);
     }

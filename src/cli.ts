@@ -24,6 +24,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildConfigSnapshot,
   isLoopbackHostname,
+  loadConfig,
   resolveEffectiveApiKey,
 } from '../packages/config/src/index';
 import {
@@ -61,6 +62,7 @@ import {
   stopGateway,
   writeForegroundGatewayPid,
 } from './gateway-command';
+import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
@@ -648,6 +650,25 @@ async function runWithConfig(result: BootstrapResult) {
     } = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
+      // 0.12：`gateway.reload`（serve 负责 RPC 形状/权限，asm 注入实际行为）。
+      reload: createGatewayReload({
+        // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
+        gateway: () => gateway as GatewayReconfigureTarget | null,
+        currentConfig: () => config,
+        reloadConfig: async () => {
+          const loaded = await loadConfig();
+          if (loaded.validation.errors.length > 0) {
+            throw new Error(
+              loaded.validation.errors.map((error) => `${error.path}: ${error.message}`).join('; '),
+            );
+          }
+          return loaded.config;
+        },
+        refreshPlugins: () => {
+          tenantFactory?.refreshPlugins();
+          result.bundle?.pluginLoader.refresh();
+        },
+      }),
       events: sharedEvents ?? ctx.events,
       session: ctx.session,
       runtime,

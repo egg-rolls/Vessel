@@ -73,6 +73,36 @@ it('load() 未知插件返回 null', async () => {
   expect(await new PluginLoader().load('does-not-exist')).toBeNull();
 });
 
+it('refresh() 清空扫描缓存，下一次 list() 重新扫描（0.12）', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-plugin-refresh-'));
+  const writePlugin = (name: string): void => {
+    const dir = path.join(root, 'cat', name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, 'package.json'),
+      JSON.stringify({ name: `@test/${name}`, version: '1.0.0', main: 'index.js' }),
+    );
+    fs.writeFileSync(path.join(dir, 'index.js'), 'export default {};');
+  };
+
+  try {
+    writePlugin('one');
+    const loader = new PluginLoader({
+      roots: [{ dir: root, source: 'user', layout: 'category' }],
+    });
+    expect(loader.list().map((d) => d.name)).toEqual(['one']);
+
+    writePlugin('two');
+    // 缓存仍然生效：不 refresh 看不到新插件目录
+    expect(loader.list().map((d) => d.name)).toEqual(['one']);
+
+    loader.refresh();
+    expect(loader.list().map((d) => d.name)).toEqual(['one', 'two']);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 it('defaultPluginRoots 顺序为 repo → project → user → node_modules（0.7.1）', () => {
   const roots = defaultPluginRoots();
   const sources = roots.map((root) => root.source);
