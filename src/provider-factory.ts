@@ -15,6 +15,7 @@ import {
   MemoryPluginHost,
   OpenAICompatibleProvider,
 } from '../packages/core/src/index';
+import { createScenarioProvider, type MockScenarioName } from './mock/scenarios';
 import type { PluginLoader } from './plugin-loader';
 
 export interface ResolvedProvider {
@@ -39,10 +40,11 @@ export async function createProvider(
   config: VesselConfig,
   loader: Pick<PluginLoader, 'getProviders' | 'load'>,
   useMock: boolean,
+  scenario?: MockScenarioName,
 ): Promise<ResolvedProvider> {
   if (useMock) {
     return {
-      provider: new MemoryLLMProvider(),
+      provider: scenario ? createScenarioProvider(scenario) : new MemoryLLMProvider(),
       providerName: 'mock',
       providerModel: 'mock-model',
       providerBaseUrl: 'memory',

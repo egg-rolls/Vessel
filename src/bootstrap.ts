@@ -5,6 +5,7 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
+import * as path from 'node:path';
 import {
   buildConfigSnapshot,
   DEFAULT_CONFIG,
@@ -54,6 +55,7 @@ import {
   routeResume,
 } from './durable-wiring';
 import type { McpControl } from './mcp-wiring';
+import type { MockScenarioName } from './mock/scenarios';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveWorkflowDefPathSync } from './path-resolution';
 import {
@@ -97,6 +99,10 @@ type ReplContextWithPermissions = ReplContext & {
 export interface BootstrapOptions {
   /** 使用 mock 模式 */
   useMock?: boolean;
+  /** mock 场景（仅 useMock）；缺省时走 MemoryLLMProvider */
+  mockScenario?: MockScenarioName;
+  /** 在解析后的 data_dir 下追加隔离子目录（`vessel demo` 用 `demo`） */
+  dataDirSubdir?: string;
   /** 会话 ID */
   sessionId?: string;
   /** 0.6.1：`-c/--continue`（仅 connect 模式由 bootstrapConnect 解析；本地由 CLI 解析） */
@@ -689,7 +695,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     process.exit(1);
   }
 
-  const dataDir = options.dataDir ?? resolveDataDir(config);
+  const resolvedDataDir = options.dataDir ?? resolveDataDir(config);
+  const dataDir = options.dataDirSubdir
+    ? path.join(resolvedDataDir, options.dataDirSubdir)
+    : resolvedDataDir;
   const tenantPaths = resolveTenantPaths(dataDir, tenantId);
   const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
   const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
@@ -779,6 +788,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantOverlayKeys: loaded.tenantOverlayKeys,
     ...(tenantLock ? { lock: tenantLock } : {}),
     useMock,
+    ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
     headless,
     registerAskUser,
     loader,

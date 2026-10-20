@@ -90,6 +90,8 @@ export interface DoctorCommandArgs {
 }
 
 export interface CliArgs {
+  /** `vessel demo`：无 Key 交互演示（mock + tools 场景） */
+  demo: boolean;
   /** null = 非 headless；'' = 从 stdin 读；非空 = 文本 prompt 或 @file */
   runArg: string | null;
   /** `--pipe` 隐藏别名，等价 `--run` 无参 */
@@ -164,6 +166,7 @@ function parsePort(raw: string): number | null {
  */
 export function parseArgs(argv: string[]): ParseResult {
   const args: CliArgs = {
+    demo: false,
     runArg: null,
     pipeMode: false,
     sessionArg: null,
@@ -227,6 +230,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'doctor' && i === 0) {
       return parseDoctorArgs(argv.slice(1), args);
+    }
+    if (a === 'demo' && i === 0) {
+      return parseDemoArgs(argv.slice(1), args);
     }
 
     switch (a) {
@@ -1178,6 +1184,19 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
   }
 
   return { ok: false, error: `Unknown plugin subcommand: ${sub}` };
+}
+
+/** `demo`：无参数（`--help` 由顶层处理） */
+function parseDemoArgs(rest: string[], args: CliArgs): ParseResult {
+  for (const a of rest) {
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for demo: ${a}` };
+  }
+  if (!args.help) args.demo = true;
+  return { ok: true, args };
 }
 
 /** `doctor [--json]` */

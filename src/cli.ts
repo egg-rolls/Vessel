@@ -53,6 +53,7 @@ import { feishuExitCode, signalExitCode, startFeishuChannel } from './feishu-com
 import { renderGatewayBanner } from './gateway-banner';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
+import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { createEventStream } from './observability-wiring';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
@@ -81,7 +82,10 @@ function align(rows: Array<[string, string]>, width: number): string {
 
 /** --help 输出：分组 + 对齐列，命令保持不变 */
 function printHelp(): void {
-  const usage: Array<[string, string]> = [['vessel', '交互式 REPL（直进对话）']];
+  const usage: Array<[string, string]> = [
+    ['vessel', '交互式 REPL（直进对话）'],
+    ['vessel demo', '无 Key 演示（真实工具调用与权限确认）'],
+  ];
   const session: Array<[string, string]> = [
     ['vessel -c', '续接最近的非空会话（--continue）'],
     ['vessel -r <id>', '恢复指定会话（--resume）'],
@@ -227,7 +231,19 @@ if (!parsed.ok) {
   process.exit(2);
 }
 const args = parsed.args;
-const useMock = process.env.VESSEL_MOCK === '1' || process.env.VESSEL_MOCK === 'true';
+const demoRequested = args.demo;
+const useMock =
+  demoRequested || process.env.VESSEL_MOCK === '1' || process.env.VESSEL_MOCK === 'true';
+// env 只在这里读一次；`vessel demo` 固定 tools，忽略 env 场景。
+const resolvedScenario = demoRequested
+  ? { name: 'tools' as MockScenarioName }
+  : resolveMockScenario(process.env.VESSEL_MOCK_SCENARIO);
+const mockScenario = resolvedScenario.name;
+if (useMock && !demoRequested && resolvedScenario.unknown !== undefined) {
+  console.error(
+    `Unknown VESSEL_MOCK_SCENARIO "${resolvedScenario.unknown}"; falling back to "echo".`,
+  );
+}
 
 // 一次性命令在 bootstrap 之前短路：不加载 config / provider / gateway。
 if (args.help) {
@@ -237,6 +253,26 @@ if (args.help) {
 if (args.version) {
   console.log(readPackageVersion());
   process.exit(0);
+}
+// `vessel demo` 走现有 bootstrap / REPL 路径；非 TTY 无法交互，直接失败。
+if (demoRequested) {
+  if (process.stdin.isTTY !== true) {
+    console.error(
+      '`vessel demo` needs an interactive terminal (TTY). ' +
+        'For a non-interactive check, run: VESSEL_MOCK=1 vessel --run "hello"',
+    );
+    process.exit(1);
+  }
+  console.log(
+    [
+      'Vessel demo (no API key required)',
+      '- The assistant will run one harmless bash command: echo vessel-demo-ok',
+      '- You will see the tool call, the permission prompt, and the final reply',
+      '- Press Ctrl+C to exit',
+      'Next: run `vessel config init` to add your API key, then `vessel` for a real session.',
+      'This demo uses an isolated data directory and does not read your existing sessions.',
+    ].join('\n'),
+  );
 }
 // 一次性命令注册表：按注册顺序命中第一个，执行后直接退出。
 // 命中后不进入 bootstrap / REPL / serve / headless 主流程。
@@ -320,6 +356,8 @@ const cliOverrides = buildCliConfigOverrides({
 // 引导应用启动
 const initialResult = await bootstrap({
   useMock,
+  mockScenario,
+  ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
   sessionId: resolvedSessionId,
   headless,
   interactive,
@@ -359,6 +397,8 @@ if (!useMock && interactive && !config.apiKey) {
     await initialResult.shutdown();
     const result = await bootstrap({
       useMock,
+      mockScenario,
+      ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
       sessionId: resolvedSessionId,
       headless,
       interactive,
@@ -514,6 +554,7 @@ async function runWithConfig(result: BootstrapResult) {
         config,
         ...(result.bundle ? { seededTenants: [result.bundle] } : {}),
         useMock,
+        mockScenario,
         headless,
         nodeId: result.nodeId,
         sharedEvents,

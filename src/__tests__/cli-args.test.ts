@@ -18,6 +18,7 @@ function err(argv: string[]) {
 describe('parseArgs - 默认与 REPL', () => {
   it('无参数进入 REPL', () => {
     expect(ok([])).toEqual({
+      demo: false,
       runArg: null,
       pipeMode: false,
       sessionArg: null,
