@@ -396,10 +396,15 @@ export interface PermissionConfig {
   autoApprove?: string[];
 }
 
-/** UI 配置（0.8.5） */
+/** UI 配置（0.8.5；0.11 增加 clearOnStart） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
   language?: string;
+  /**
+   * 进入交互 REPL 时是否发送 ANSI 清屏（默认 true）。
+   * 不写入默认配置；消费方按 `!== false` 处理。
+   */
+  clearOnStart?: boolean;
 }
 
 /** Vessel 配置 */

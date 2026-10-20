@@ -11,16 +11,71 @@ function tmpYaml(content: string): string {
   return file;
 }
 
+function missingUserConfig(): string {
+  return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-ui-')), 'missing.yaml');
+}
+
 describe('ui 配置', () => {
   it('配置文件含 ui.language 时不被当作未知键拒绝', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-ui-'));
     const result = await loadConfig({
       configPath: tmpYaml('ui:\n  language: en\n'),
-      userConfigPath: path.join(dir, 'missing.yaml'),
+      userConfigPath: missingUserConfig(),
       env: {},
     });
 
     expect(result.validation.errors).toEqual([]);
     expect(result.config.ui?.language).toBe('en');
+  });
+
+  it('ui.clear_on_start 映射为 clearOnStart 并接受布尔值', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  language: zh-CN\n  clear_on_start: false\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors).toEqual([]);
+    expect(result.config.ui).toEqual({ language: 'zh-CN', clearOnStart: false });
+  });
+
+  it('clearOnStart 非布尔时报错', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  clear_on_start: nope\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.valid).toBe(false);
+    expect(result.validation.errors.map((error) => error.path)).toContain('ui.clearOnStart');
+  });
+
+  it('ui 非对象时报错', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui: nope\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors.map((error) => error.path)).toContain('ui');
+  });
+
+  it('ui 未知键仍报错', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  clear_on_start: true\n  nope: 1\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors.map((error) => error.path)).toContain('ui.nope');
+  });
+
+  it('ui.language 非字符串时报错', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  language: 1\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors.map((error) => error.path)).toContain('ui.language');
   });
 });

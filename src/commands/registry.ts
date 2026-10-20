@@ -9,7 +9,12 @@
 import { loadConfig } from '../../packages/config/src/index';
 import type { CliArgs } from '../cli-args';
 import { runUpdateCommand } from '../cli-update';
-import { configInitCommand, configPathCommand, configShowCommand } from '../config-command';
+import {
+  configInitCommand,
+  configPathCommand,
+  configSetCommand,
+  configShowCommand,
+} from '../config-command';
 import { resolveDataDir } from '../data-paths';
 import { doctorCommand } from '../doctor-command';
 import { runEvalCommand } from '../eval-command';
@@ -139,6 +144,11 @@ export const cliCommands: readonly CliCommand[] = [
       if (command.kind === 'init') {
         return printCommandResult(
           await configInitCommand({ json: command.json, force: command.force }),
+        );
+      }
+      if (command.kind === 'set') {
+        return printCommandResult(
+          await configSetCommand(command.key, command.value, { json: command.json }),
         );
       }
       return printCommandResult(
