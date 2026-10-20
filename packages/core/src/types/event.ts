@@ -77,15 +77,6 @@ export interface GuardrailBlockedPayload extends BaseEventPayload {
   reason: string;
 }
 
-/** Guardrail 修改事件 payload */
-export interface GuardrailModifiedPayload extends BaseEventPayload {
-  run_id: string;
-  guardrail_name: string;
-  stage: string;
-  original: unknown;
-  modified: unknown;
-}
-
 /** Run 完成事件 payload */
 export interface RunCompletedPayload extends BaseEventPayload {
   run_id: string;
@@ -126,18 +117,30 @@ export type EventPayload =
   | ToolCallCompletedPayload
   | ToolCallFailedPayload
   | GuardrailBlockedPayload
-  | GuardrailModifiedPayload
   | RunCompletedPayload
   | RunFailedPayload
   | ErrorPayload
   | BaseEventPayload;
 
-/** Run 事件（ADR-030：type 为开放字符串协议，无事件名常量；核心事件名见 docs/specs/ADR.md ADR-027） */
+/** Run 事件（ADR-030：type 为开放字符串协议，无事件名常量；核心事件名见 docs/ADR.md ADR-027） */
 export interface RunEvent {
   type: string;
   run_id: string;
   data: EventPayload | Record<string, unknown>;
   ts: number;
+  /**
+   * 0.5：同一 run 内单调递增序号。实时内存事件允许缺省；
+   * trace 落盘时由 `FileTraceRecorder` 分配并持久化。
+   */
+  seq?: number;
+  /** 0.5：所属 tenant；缺省视为 `default` */
+  tenant_id?: string;
+  /**
+   * 0.6：事件来源节点。本节点直接产生的事件可不填；跨节点回灌 / 扇出时
+   * 由传输或 gateway 边界填充。消费方按 `(node_id, run_id)` 理解 seq，
+   * 按 `(node_id, seq)` 去重；没有全局序号。
+   */
+  node_id?: string;
 }
 
 /** 事件处理器 */

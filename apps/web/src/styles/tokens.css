@@ -1,0 +1,136 @@
+/* ─────────────────────────────────────────────────────────────
+   Vessel Web · Linen tokens
+   暖中性底、细线、留白、黄铜强调色。改版只增加结构 token，不换皮。
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: light;
+
+  --bg: #f4f1ec;
+  --surface: #fbfaf7;
+  --surface-2: #efece5;
+  --surface-3: #e9e5dc;
+  --ink: #23211d;
+  --muted: #605c54;
+  --faint: #6f6a61;
+  --line: #e3ded4;
+  --line-strong: #d2cabd;
+  --accent: #8a6a45;
+  --accent-ink: #6f5233;
+  --accent-soft: rgba(138, 106, 69, 0.1);
+  --accent-line: rgba(138, 106, 69, 0.35);
+  --ok: #52654a;
+  --ok-soft: rgba(95, 115, 87, 0.1);
+  --warn: #7d5a24;
+  --warn-soft: rgba(154, 116, 54, 0.1);
+  --danger: #8f4a40;
+  --danger-soft: rgba(162, 90, 80, 0.09);
+  --info: #5c6b78;
+  --info-soft: rgba(92, 107, 120, 0.1);
+  --shadow: 0 1px 2px rgba(35, 33, 29, 0.04), 0 12px 32px rgba(35, 33, 29, 0.06);
+  --shadow-lift: 0 2px 4px rgba(35, 33, 29, 0.05), 0 18px 48px rgba(35, 33, 29, 0.1);
+
+  --font-sans:
+    "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-serif:
+    "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
+  --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
+
+  --radius-sm: 9px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+
+  --text-xs: 10px;
+  --text-sm: 11.5px;
+  --text-body: 14px;
+  --text-list: 13px;
+  --text-title: 22px;
+
+  --appbar-h: 56px;
+  --nav-w: 256px;
+  --nav-w-collapsed: 56px;
+  --nav-w-rail: 64px;
+  --sessions-w: 280px;
+  --content-max: 1440px;
+
+  --row-h-session: 64px;
+  --row-h-tool: 36px;
+  --control-h: 32px;
+  --tracking-wide: 0.08em;
+  --motion-ui: 200ms;
+
+  /* 层级：nav < drawer/scrim < modal/palette < toast。drawer 内打开的确认框必须在抽屉之上。 */
+  --z-nav: 30;
+  --z-drawer: 60;
+  --z-modal: 70;
+  --z-palette: 75;
+  --z-toast: 80;
+  --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #171614;
+    --surface: #1f1d1a;
+    --surface-2: #26231f;
+    --surface-3: #2d2924;
+    --ink: #eae6de;
+    --muted: #a49d91;
+    --faint: #928b7f;
+    --line: #332f29;
+    --line-strong: #47413a;
+    --accent: #c2a273;
+    --accent-ink: #d8bd93;
+    --accent-soft: rgba(194, 162, 115, 0.12);
+    --accent-line: rgba(194, 162, 115, 0.38);
+    --ok: #8fa886;
+    --ok-soft: rgba(143, 168, 134, 0.12);
+    --warn: #c9a25e;
+    --warn-soft: rgba(201, 162, 94, 0.12);
+    --danger: #d08a7e;
+    --danger-soft: rgba(208, 138, 126, 0.12);
+    --info: #93a5b3;
+    --info-soft: rgba(147, 165, 179, 0.12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.32);
+    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 22px 56px rgba(0, 0, 0, 0.45);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #171614;
+  --surface: #1f1d1a;
+  --surface-2: #26231f;
+  --surface-3: #2d2924;
+  --ink: #eae6de;
+  --muted: #a49d91;
+  --faint: #928b7f;
+  --line: #332f29;
+  --line-strong: #47413a;
+  --accent: #c2a273;
+  --accent-ink: #d8bd93;
+  --accent-soft: rgba(194, 162, 115, 0.12);
+  --accent-line: rgba(194, 162, 115, 0.38);
+  --ok: #8fa886;
+  --ok-soft: rgba(143, 168, 134, 0.12);
+  --warn: #c9a25e;
+  --warn-soft: rgba(201, 162, 94, 0.12);
+  --danger: #d08a7e;
+  --danger-soft: rgba(208, 138, 126, 0.12);
+  --info: #93a5b3;
+  --info-soft: rgba(147, 165, 179, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.32);
+  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 22px 56px rgba(0, 0, 0, 0.45);
+}

@@ -1,256 +1,523 @@
 /**
- * 交互式会话选择器组件
- * 全屏交互式界面，支持搜索过滤、键盘导航、会话元数据展示
+ * 交互式会话选择器（/resume）
+ * @module @vessel/tui
+ *
+ * 保留既有导出名与 props（onSelect/onClose），内部改用 DataTable + 纯 session-picker：
+ * ↑↓/jk、PgUp/PgDn、Home/End、`/`/`f` 过滤、Enter 打开、`r` 重命名、`x` 删除（内联确认）。
+ * 选中项按 session_id 记录；任何高度都封顶（默认 20 行）。
  */
 
 import type { SessionInfo } from '@vessel/core';
-import { Box, Text, useInput } from 'ink';
-import { useEffect, useMemo, useState } from 'react';
+import { Box, Text, useInput, useStdout, useWindowSize } from 'ink';
+import { type ReactNode, useMemo, useState } from 'react';
+import { t } from '../i18n/index.js';
+import { type LiveMode, viewExtraRows } from '../repl/layout.js';
+import { theme } from '../theme.js';
+import { truncateToWidth } from '../utils/text-layout.js';
+import {
+  decideHiddenKey,
+  initialViewKeyState,
+  reduceViewKey,
+  type ViewIntent,
+  type ViewKey,
+  type ViewKeyState,
+} from '../views/keys.js';
+import {
+  resolveColumns,
+  scrollWindow,
+  TABLE_PREFIX_WIDTH,
+  viewContentWidth,
+  viewWidth,
+} from '../views/layout.js';
+import {
+  buildSessionRows,
+  clampSelectedKey,
+  filterSessions,
+  keyAfterRemoval,
+  selectedIndexForKey,
+  sessionColumns,
+  sessionPickerActions,
+  shortSessionId,
+} from '../views/session-picker.js';
+import type { ViewMode } from '../views/types.js';
+import { DataTable } from './DataTable.js';
+import { EmptyState } from './EmptyState.js';
+import { KeyHints } from './KeyHints.js';
 
-interface SessionTableProps {
+/** 删除/重命名回调的返回：ok=false 保留行并显示 message */
+export interface SessionPickerActionResult {
+  ok: boolean;
+  message?: string;
+}
+
+export interface SessionTableProps {
   sessions: SessionInfo[];
   currentSessionId?: string;
+  /** picker 数据加载状态；默认 ready，保持外部调用兼容 */
+  status?: 'loading' | 'ready' | 'error';
+  error?: string | null;
+  /** 可见会话行数上限；缺省 20（normal 也封顶） */
+  maxRows?: number;
+  /** 终端高度分档（normal/compact/minimal/hidden）；缺省 normal */
+  heightMode?: LiveMode;
+  /** 终端列数；缺省取 stdout.columns */
+  columns?: number;
+  onRetry?: () => void;
   onSelect: (id: string) => void;
   onClose: () => void;
-  onDelete: (id: string) => Promise<void>;
-  onHistory: (id: string) => Promise<void>;
+  /** 交互删除；缺省时 `x` 不启用 */
+  onDelete?: (id: string) => Promise<SessionPickerActionResult>;
+  /** 交互重命名；缺省时 `r` 不启用 */
+  onRename?: (id: string, title: string) => Promise<SessionPickerActionResult>;
 }
 
-/** 相对时间格式化（如 "2h ago", "3d ago"） */
-function formatRelativeTime(ts: number): string {
-  const now = Date.now();
-  const diff = now - ts;
-  if (diff < 0) return 'just now';
-
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days}d ago`;
-
-  const date = new Date(ts);
-  return date.toLocaleDateString();
+/**
+ * 纯函数：把选中索引钳制到 [0, len-1]。
+ * 空列表返回 0（不是 -1），避免 ↑↓ 后出现无效索引。
+ */
+export function clampSelection(index: number, length: number): number {
+  if (length <= 0) return 0;
+  return Math.min(Math.max(0, index), length - 1);
 }
 
-function truncate(str: string, max: number): string {
-  if (str.length <= max) return str;
-  return `${str.slice(0, max - 3)}...`;
-}
+const DEFAULT_MAX_ROWS = 20;
 
 export function SessionTable({
   sessions,
   currentSessionId,
+  status = 'ready',
+  error = null,
+  maxRows = DEFAULT_MAX_ROWS,
+  heightMode = 'normal',
+  columns,
+  onRetry,
   onSelect,
   onClose,
   onDelete,
-  onHistory,
+  onRename,
 }: SessionTableProps) {
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const [filterMode, setFilterMode] = useState(false);
-  const [filterText, setFilterText] = useState('');
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const { stdout } = useStdout();
+  // useStdout 不订阅 resize：优先 useWindowSize（props.columns 仍可覆盖）。
+  const windowSize = useWindowSize();
+  const terminalColumns =
+    columns ?? (windowSize.columns > 0 ? windowSize.columns : (stdout.columns ?? 80));
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+  const [mode, setMode] = useState<ViewMode>('browse');
+  const [draft, setDraft] = useState('');
+  const [notice, setNotice] = useState<string | null>(null);
 
-  const filteredSessions = useMemo(() => {
-    if (!filterText) return sessions;
-    const lower = filterText.toLowerCase();
-    return sessions.filter(
-      (s) =>
-        s.title?.toLowerCase().includes(lower) ||
-        s.preview?.toLowerCase().includes(lower) ||
-        s.branch?.toLowerCase().includes(lower) ||
-        s.session_id.toLowerCase().includes(lower),
-    );
-  }, [sessions, filterText]);
+  const filtered = useMemo(() => filterSessions(sessions, filter), [sessions, filter]);
+  const rows = useMemo(
+    () => buildSessionRows(filtered, currentSessionId),
+    [filtered, currentSessionId],
+  );
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset selection when filter changes
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [filterText]);
+  // 选中 key 失效（过滤/删除/刷新）时钳制到有效行，绝不指向不存在的 id。
+  const effectiveKey = clampSelectedKey(
+    rows,
+    selectedKey,
+    selectedIndexForKey(rows, selectedKey) >= 0 ? selectedIndexForKey(rows, selectedKey) : 0,
+  );
+  const selectedIndex = Math.max(0, selectedIndexForKey(rows, effectiveKey));
+  const selectedRow = rows[selectedIndex] ?? null;
+  const selectedSession = selectedRow
+    ? filtered.find((session) => session.session_id === selectedRow.key)
+    : undefined;
 
-  useInput((inputChar, key) => {
-    // Filter mode: type to filter
-    if (filterMode) {
-      if (key.escape) {
-        setFilterMode(false);
-        setFilterText('');
-        return;
-      }
-      if (key.return) {
-        setFilterMode(false);
-        return;
-      }
-      if (key.backspace || key.delete) {
-        setFilterText((prev) => prev.slice(0, -1));
-        return;
-      }
-      if (inputChar && !key.ctrl && !key.meta) {
-        setFilterText((prev) => prev + inputChar);
-        return;
-      }
-      return;
-    }
+  const actions = sessionPickerActions();
+  const enabledActions = actions.filter((action) => {
+    if (action.id === 'rename' && !onRename) return false;
+    if (action.id === 'delete' && !onDelete) return false;
+    return true;
+  });
+  const disabledActionKeys = actions
+    .filter((action) => action.id === 'delete' && selectedRow?.current === true)
+    .map((action) => action.key);
+  const actionKeys = enabledActions.map((action) => action.key);
 
-    // Normal mode
-    if (key.escape) {
-      onClose();
-      return;
-    }
-
-    if (key.return) {
-      if (filteredSessions.length > 0 && selectedIndex < filteredSessions.length) {
-        const selected = filteredSessions[selectedIndex];
-        if (selected) {
-          onSelect(selected.session_id);
-        }
-      }
-      return;
-    }
-
-    const selected = filteredSessions[selectedIndex];
-    if (selected && inputChar.toLowerCase() === 'd') {
-      if (deleteTarget === selected.session_id) {
-        void onDelete(selected.session_id);
-        setDeleteTarget(null);
-      } else {
-        setDeleteTarget(selected.session_id);
-      }
-      return;
-    }
-    if (selected && inputChar.toLowerCase() === 'h') {
-      void onHistory(selected.session_id);
-      return;
-    }
-
-    if (key.upArrow) {
-      setSelectedIndex((prev) => Math.max(0, prev - 1));
-      return;
-    }
-
-    if (key.downArrow) {
-      setSelectedIndex((prev) => Math.min(filteredSessions.length - 1, prev + 1));
-      return;
-    }
-
-    // Enter filter mode with / or f
-    if (inputChar === '/' || inputChar === 'f') {
-      setFilterMode(true);
-      setFilterText('');
-      return;
-    }
-
-    // Number quick-select (1-9)
-    const num = Number.parseInt(inputChar, 10);
-    if (!Number.isNaN(num) && num >= 1 && num <= filteredSessions.length) {
-      const selected = filteredSessions[num - 1];
-      if (selected) {
-        onSelect(selected.session_id);
-      }
-    }
+  const keyState: ViewKeyState = initialViewKeyState({
+    mode,
+    filter,
+    draft,
+    selectedIndex,
+    itemCount: rows.length,
+    pageSize: 5,
+    selectedCurrent: selectedRow?.current === true,
+    actionKeys,
+    disabledActionKeys,
   });
 
-  if (sessions.length === 0) {
+  useInput((inputChar, key) => {
+    // hidden（≤10 行）只显示一行摘要：除 Esc 与 error 态重试外一律不处理，
+    // 否则 x/y/r 会在看不到列表与确认提示的情况下静默删除/改名。
+    if (heightMode === 'hidden') {
+      const decision = decideHiddenKey(
+        { ...key, input: inputChar },
+        { status, refreshKeys: onRetry ? ['r'] : [] },
+      );
+      if (decision === 'close') onClose();
+      if (decision === 'refresh' && onRetry) onRetry();
+      return;
+    }
+
+    if (status === 'loading') {
+      if (key.escape) onClose();
+      return;
+    }
+    if (status === 'error') {
+      if (inputChar === 'r' && onRetry) onRetry();
+      if (key.escape) onClose();
+      return;
+    }
+
+    const inkKey: ViewKey = { ...key, input: inputChar };
+    const reduction = reduceViewKey(keyState, inkKey);
+    const next = reduction.state;
+
+    if (next.filter !== filter) setFilter(next.filter);
+    if (next.draft !== draft) setDraft(next.draft);
+    if (next.mode !== mode) setMode(next.mode);
+    if (reduction.intent.type !== 'noop') handleIntent(reduction.intent);
+  });
+
+  function handleIntent(intent: ViewIntent): void {
+    switch (intent.type) {
+      case 'noop':
+        return;
+      case 'close':
+        onClose();
+        return;
+      case 'moveSelection': {
+        const nextKey = rows[intent.index]?.key;
+        if (nextKey) setSelectedKey(nextKey);
+        return;
+      }
+      case 'quickSelect': {
+        const row = rows[intent.index];
+        if (row) {
+          setSelectedKey(row.key);
+          onSelect(row.key);
+        }
+        return;
+      }
+      case 'beginFilter':
+        setNotice(null);
+        setFilter('');
+        setMode('filter');
+        return;
+      case 'setFilter':
+        setFilter(intent.filter);
+        return;
+      case 'exitFilter':
+      case 'clearFilter':
+        setMode('browse');
+        if (intent.type === 'clearFilter') setFilter('');
+        return;
+      case 'action': {
+        setNotice(null);
+        if (intent.key === 'enter') {
+          if (selectedRow) onSelect(selectedRow.key);
+          return;
+        }
+        if (intent.key === 'r') {
+          setDraft(selectedSession?.title || selectedSession?.preview || '');
+          setMode('rename');
+          return;
+        }
+        if (intent.key === 'x') {
+          if (!selectedRow) return;
+          if (selectedRow.current) {
+            setNotice(t('session.cannotDeleteCurrent'));
+            return;
+          }
+          setMode('confirm');
+          return;
+        }
+        if (intent.key === 'R' && onRetry) onRetry();
+        return;
+      }
+      case 'disabledAction':
+        setNotice(
+          intent.reason === 'current' ? t('session.cannotDeleteCurrent') : t('session.selectFirst'),
+        );
+        return;
+      case 'submit': {
+        // rename
+        if (!onRename || !selectedRow) {
+          setMode('browse');
+          return;
+        }
+        void onRename(selectedRow.key, intent.value).then((result) => {
+          if (result.ok) {
+            setMode('browse');
+            setNotice(result.message ?? t('session.renamed'));
+          } else {
+            setNotice(result.message ?? t('session.renameFailed'));
+          }
+        });
+        return;
+      }
+      case 'submitConfirm': {
+        const removed = selectedRow?.key ?? null;
+        if (!intent.yes || !onDelete || !removed) {
+          setMode('browse');
+          return;
+        }
+        void onDelete(removed).then((result) => {
+          if (result.ok) {
+            const nextKey = keyAfterRemoval(rows, removed);
+            setSelectedKey(nextKey);
+            setMode('browse');
+            setNotice(result.message ?? t('session.deleted'));
+          } else {
+            setMode('browse');
+            setNotice(result.message ?? t('session.deleteFailed'));
+          }
+        });
+        return;
+      }
+      case 'cancelMode':
+        setMode('browse');
+        setDraft('');
+        return;
+      case 'focusField':
+      case 'beginRename':
+      case 'beginConfirm':
+      case 'beginForm':
+      case 'reject':
+        if (intent.type === 'reject') {
+          setNotice(
+            intent.reason === 'empty-title' ? t('session.emptyTitle') : t('session.valueRequired'),
+          );
+        }
+        return;
+    }
+  }
+
+  // < 11 行：只渲染一行摘要，绝不把输入行顶出屏幕。
+  if (heightMode === 'hidden') {
+    if (status === 'loading') {
+      return (
+        <Text color={theme.muted} wrap="truncate-end">
+          {t('session.hidden.loading')}
+        </Text>
+      );
+    }
+    if (status === 'error') {
+      return (
+        <Text color={theme.danger} wrap="truncate-end">
+          {t('session.hidden.failed', {
+            retry: onRetry ? t('session.hidden.failedRetry') : '',
+          })}
+        </Text>
+      );
+    }
+    if (sessions.length === 0) {
+      return (
+        <Text color={theme.muted} wrap="truncate-end">
+          {t('session.hidden.none')}
+        </Text>
+      );
+    }
+    if (rows.length === 0) {
+      return (
+        <Text color={theme.muted} wrap="truncate-end">
+          {t('session.hidden.noMatches')}
+        </Text>
+      );
+    }
+    const first = rows[0];
+    const more = rows.length > 1 ? t('session.more', { count: rows.length - 1 }) : '';
     return (
-      <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginY={1}>
-        <Text color="gray">No sessions to resume.</Text>
-        <Box marginTop={1}>
-          <Text color="gray">Esc to close</Text>
-        </Box>
-      </Box>
+      <Text color={theme.muted} wrap="truncate-end">
+        {t('session.hidden.summary', {
+          title: selectedRow?.cells.title ?? first?.cells.title ?? '-',
+          more,
+        })}
+      </Text>
     );
   }
 
-  const maxIdWidth = 28;
-  const maxPreviewWidth = 32;
-  const maxBranchWidth = 14;
+  if (status === 'loading') {
+    return (
+      <SelectionFrame heightMode={heightMode}>
+        <Text color={theme.muted}>{t('session.loading')}</Text>
+        <Box marginTop={1}>
+          <Text color={theme.faint}>{t('session.escClose')}</Text>
+        </Box>
+      </SelectionFrame>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <SelectionFrame heightMode={heightMode}>
+        <Text bold color={theme.danger}>
+          {t('session.failed')}
+        </Text>
+        <Box marginTop={1}>
+          <Text color={theme.muted}>{error ?? t('session.unknownError')}</Text>
+        </Box>
+        <Box marginTop={1}>
+          <Text color={theme.faint}>{t('session.retryClose')}</Text>
+        </Box>
+      </SelectionFrame>
+    );
+  }
+
+  if (sessions.length === 0) {
+    return (
+      <SelectionFrame heightMode={heightMode}>
+        <EmptyState title={t('session.empty')} hint={t('session.escClose')} />
+      </SelectionFrame>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <SelectionFrame heightMode={heightMode}>
+        <EmptyState
+          title={t('session.noMatches')}
+          hint={filter ? t('session.noMatchesFilterHint', { filter }) : t('session.noMatchesHint')}
+        />
+      </SelectionFrame>
+    );
+  }
+
+  const showHeader = heightMode === 'normal' || heightMode === 'compact';
+  // 确认/重命名/notice 会追加在数据行之后，必须先让出对应行数。
+  const extraRows = viewExtraRows(mode, notice !== null);
+  // 容量可以为 0：矮终端 + 确认/notice 时应隐藏数据行，而不是强行保留 1 行导致溢出。
+  const capacity = Math.max(0, maxRows - extraRows);
+  const window = scrollWindow(rows.length, selectedIndex, capacity);
+  const rangeVisible = rows.length > window.end - window.start;
+  const rangeText = rangeVisible
+    ? `${t('session.range', {
+        start: window.start + 1,
+        end: window.end,
+        total: rows.length,
+      })}${
+        rows.length !== sessions.length
+          ? t('session.rangeFiltered', { total: sessions.length })
+          : ''
+      }`
+    : null;
+  const contentWidth = Math.max(1, viewContentWidth(terminalColumns) - TABLE_PREFIX_WIDTH);
+  const resolved = resolveColumns(sessionColumns(terminalColumns), contentWidth, terminalColumns);
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="blue" paddingX={1} marginY={1}>
-      {/* Title */}
-      <Box marginBottom={1}>
-        <Text bold color="blue">
-          Resume Session
-        </Text>
-        {filterMode && (
-          <Text color="yellow">
-            {' '}
-            | Filter: {filterText}
-            <Text color="gray">_</Text>
+    <SelectionFrame heightMode={heightMode} width={viewWidth(terminalColumns)}>
+      <Box flexDirection="column" width={viewContentWidth(terminalColumns)}>
+        <Box marginBottom={1}>
+          <Text bold color={theme.brand}>
+            {t('session.title')}
           </Text>
-        )}
-        {filterText && !filterMode && <Text color="yellow"> | Filtered: "{filterText}"</Text>}
-      </Box>
-
-      {/* Header */}
-      <Box>
-        <Text color="gray" bold>
-          {'#  '}
-        </Text>
-        <Text color="gray" bold>
-          {'ID'.padEnd(maxIdWidth, ' ')}
-        </Text>
-        <Text color="gray" bold>
-          {'Msgs '}
-        </Text>
-        <Text color="gray" bold>
-          {'Time'.padEnd(12, ' ')}
-        </Text>
-        <Text color="gray" bold>
-          {'Branch'.padEnd(maxBranchWidth, ' ')}
-        </Text>
-        <Text color="gray" bold>
-          Preview
-        </Text>
-      </Box>
-
-      {/* Session list */}
-      {filteredSessions.map((s, i) => {
-        const isCurrent = s.session_id === currentSessionId;
-        const isSelected = i === selectedIndex;
-        const color = isSelected ? 'cyan' : isCurrent ? 'green' : 'white';
-        const timeColor = isSelected ? 'cyan' : 'gray';
-        const branchColor = isSelected ? 'cyan' : 'yellow';
-
-        return (
-          <Box key={s.session_id}>
-            <Text color={color} bold={isSelected}>
-              {isSelected ? '> ' : '  '}
-              {String(i + 1).padStart(2, '0')}
-            </Text>
-            <Text color={color} bold={isSelected}>
+          {filter ? (
+            <Text color={theme.warn}>
               {' '}
-              {truncate(s.session_id, maxIdWidth).padEnd(maxIdWidth, ' ')}
+              ·{' '}
+              {t('session.filterPrompt', {
+                filter: truncateToWidth(
+                  filter,
+                  Math.max(1, viewContentWidth(terminalColumns) - 34),
+                ),
+              })}
+              {mode === 'filter' ? '_' : ''}
             </Text>
-            <Text color={timeColor}>{String(s.message_count).padStart(4, ' ')} </Text>
-            <Text color={timeColor}>{formatRelativeTime(s.updated_at).padEnd(12, ' ')}</Text>
-            <Text color={branchColor}>
-              {truncate(s.branch || '-', maxBranchWidth).padEnd(maxBranchWidth, ' ')}
+          ) : null}
+          {/* 窗口指示折进标题行，避免在矮终端额外占 2 行 */}
+          {rangeText ? <Text color={theme.faint}> · {rangeText}</Text> : null}
+        </Box>
+
+        {capacity > 0 ? (
+          <DataTable
+            view={{
+              kind: 'table',
+              title: t('session.title'),
+              columns: sessionColumns(terminalColumns),
+              rows,
+              actions,
+            }}
+            columns={resolved}
+            rows={rows.slice(window.start, window.end)}
+            selectedKey={effectiveKey}
+            start={window.start}
+            showHeader={showHeader}
+          />
+        ) : null}
+
+        {mode === 'confirm' && selectedSession ? (
+          <Box flexDirection="column" marginTop={1}>
+            <Text color={theme.danger} wrap="truncate-end">
+              {t('session.confirmDeleteBody', {
+                title: selectedSession.title || selectedSession.preview || t('session.untitled'),
+                count: selectedSession.message_count,
+              })}
             </Text>
-            <Text color={timeColor}>
-              {' '}
-              {truncate(s.preview || s.title || '', maxPreviewWidth)}
-              {isCurrent ? ' (active)' : ''}
+            <Text color={theme.faint}>{t('session.confirmDeleteHint')}</Text>
+          </Box>
+        ) : null}
+
+        {mode === 'rename' ? (
+          <Box marginTop={1}>
+            <Text color={theme.warn}>
+              {t('session.renamePrefix')}
+              {draft}
+              <Text color={theme.faint}>▏</Text>
             </Text>
           </Box>
-        );
-      })}
+        ) : null}
 
-      {/* Footer hints */}
-      <Box marginTop={1}>
-        <Text color="gray">
-          {filterMode
-            ? 'Type to filter · Enter confirm · Esc clear filter'
-            : '↑↓ Navigate · Enter Resume · D Delete · H History · / Filter · Esc Cancel'}
-        </Text>
+        {notice ? (
+          <Box marginTop={1}>
+            <Text color={theme.warn}>! {notice}</Text>
+          </Box>
+        ) : null}
+
+        <Box marginTop={1}>
+          {mode === 'filter' ? (
+            <Text color={theme.faint}>
+              {t('session.filterHint')}
+              {selectedRow ? ` · ${shortSessionId(selectedRow.key)}` : ''}
+            </Text>
+          ) : mode === 'rename' ? (
+            <Text color={theme.faint}>{t('session.renameHint')}</Text>
+          ) : mode === 'confirm' ? (
+            <Text color={theme.faint}>{t('session.confirmDeleteHint')}</Text>
+          ) : (
+            <KeyHints
+              actions={enabledActions}
+              extra={t('session.moveHint')}
+              disabledKeys={disabledActionKeys}
+            />
+          )}
+        </Box>
       </Box>
-      {deleteTarget && (
-        <Text color="yellow">Press D again to permanently delete the selected session.</Text>
-      )}
+    </SelectionFrame>
+  );
+}
+
+function SelectionFrame({
+  children,
+  heightMode,
+  width,
+}: {
+  children: ReactNode;
+  heightMode: LiveMode;
+  width?: number;
+}) {
+  return (
+    <Box
+      flexDirection="column"
+      flexShrink={0}
+      borderStyle="single"
+      borderColor={theme.line}
+      paddingX={1}
+      marginY={heightMode === 'minimal' ? 0 : 1}
+      {...(width !== undefined ? { width } : {})}
+    >
+      {children}
     </Box>
   );
 }

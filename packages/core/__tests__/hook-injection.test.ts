@@ -1,15 +1,15 @@
 /**
  * BeforeLlm hook 注入消费测试（ADR-018）
  *
- * 验证 BeforeLlm hook 写入 ctx.system_prompt 的内容会进入 LLM 请求的 system 消息，
+ * 验证 BeforeLlm hook 写入 ctx.systemPrompt 的内容会进入 LLM 请求的 system 消息，
  * 且不污染 ContextManager 持久化的消息。
  */
 import { describe, expect, it } from 'bun:test';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
+import { MemoryPluginHost } from '../src/runtime/plugin-host';
 import { MemorySessionBackend } from '../src/session/session-backend';
-import { MemoryToolRegistry } from '../src/tools/tool-registry';
 import { GuardrailStage } from '../src/types/guardrail';
 import { type HookContext, HookType } from '../src/types/hook';
 import type { Plugin } from '../src/types/plugin';
@@ -28,7 +28,7 @@ class CapturingProvider implements LLMProvider {
   }
 }
 
-/** 注入 ctx.system_prompt 的插件（模拟 skills-loader / memory-project） */
+/** 注入 ctx.systemPrompt 的插件（模拟 skills / memory 注入） */
 function injectPlugin(prefix: string): Plugin {
   return {
     name: `test-inject-${prefix}`,
@@ -37,9 +37,7 @@ function injectPlugin(prefix: string): Plugin {
         name: `inject-${prefix}`,
         type: HookType.BeforeLlm,
         run: async (ctx: HookContext) => {
-          const ext = ctx as HookContext & { system_prompt?: string };
-          ext.system_prompt = `${prefix}\n${ext.system_prompt ?? ''}`;
-          return ctx;
+          ctx.systemPrompt = `${prefix}\n${ctx.systemPrompt ?? ''}`;
         },
       });
     },
@@ -52,7 +50,6 @@ async function buildRuntime(opts: { systemPrompt?: string; plugins: Plugin[] }) 
   const runtime = await AgentRuntime.create({
     provider,
     model: 'test',
-    tools: new MemoryToolRegistry(),
     context,
     events: new MemoryEventStream(),
     limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -148,7 +145,6 @@ function onErrorSpyPlugin(calls: Array<{ error: string; phase: string }>): Plugi
             error: String(ctx.error ?? ''),
             phase: String(ctx.phase ?? ''),
           });
-          return ctx;
         },
       });
     },
@@ -158,8 +154,8 @@ function onErrorSpyPlugin(calls: Array<{ error: string; phase: string }>): Plugi
 describe('OnError hook 触发（Issue #70）', () => {
   it('工具抛出异常时触发 OnError hook', async () => {
     const calls: Array<{ error: string; phase: string }> = [];
-    const tools = new MemoryToolRegistry();
-    tools.register({
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
       name: 'broken_tool',
       description: 'always throws',
       inputSchema: { type: 'object', properties: {} },
@@ -192,7 +188,7 @@ describe('OnError hook 触发（Issue #70）', () => {
     const runtime = await AgentRuntime.create({
       provider,
       model: 'test',
-      tools,
+      pluginHost,
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -220,7 +216,6 @@ describe('OnError hook 触发（Issue #70）', () => {
     const runtime = await AgentRuntime.create({
       provider,
       model: 'test',
-      tools: new MemoryToolRegistry(),
       context: new MemoryContextManager(),
       events: new MemoryEventStream(),
       limits: { requestLimit: 10, toolCallsLimit: 5 },
@@ -246,5 +241,78 @@ describe('OnError hook 触发（Issue #70）', () => {
     expect(calls.length).toBe(1);
     expect(calls[0]?.error).toContain('blocked by test');
     expect(calls[0]?.phase).toBe('run');
+  });
+});
+
+describe('Hook 阶段触发顺序（C-09）', () => {
+  it('BeforeLlm / AfterLlm / BeforeTool / AfterTool 按顺序触发', async () => {
+    const order: string[] = [];
+
+    const provider: LLMProvider = {
+      async chat(_req: ChatRequest): Promise<LLMResponse> {
+        if (order.filter((label) => label === 'before_llm').length === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls',
+            tool_calls: [
+              {
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'noop', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        return { content: 'done', finish_reason: 'stop' };
+      },
+    };
+
+    const hookPlugin: Plugin = {
+      name: 'stage-order',
+      install: (host) => {
+        const stages: Array<[HookType, string]> = [
+          [HookType.BeforeLlm, 'before_llm'],
+          [HookType.AfterLlm, 'after_llm'],
+          [HookType.BeforeTool, 'before_tool'],
+          [HookType.AfterTool, 'after_tool'],
+        ];
+        for (const [type, label] of stages) {
+          host.registerHook({
+            name: label,
+            type,
+            run: async () => {
+              order.push(label);
+            },
+          });
+        }
+        host.registerTool({
+          name: 'noop',
+          description: 'noop',
+          inputSchema: { type: 'object', properties: {} },
+          handler: async () => 'ok',
+        });
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test',
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+      plugins: [hookPlugin],
+    });
+
+    await runtime.run('hi');
+
+    expect(order).toEqual([
+      'before_llm',
+      'after_llm',
+      'before_tool',
+      'after_tool',
+      'before_llm',
+      'after_llm',
+    ]);
   });
 });

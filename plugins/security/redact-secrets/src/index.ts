@@ -16,138 +16,49 @@ import type {
   PluginHost,
 } from '@vessel/core';
 import { GuardrailStage } from '@vessel/core';
+import { BUILTIN_RULES, type RedactRule, type RedactSecretsConfig, redactText } from './rules.js';
 
-// ── 类型 ──────────────────────────────────────────
+export { createTraceRedactor } from './redactor.js';
+export type { RedactSecretsConfig } from './rules.js';
 
-/** 脱敏规则 */
-interface RedactRule {
-  /** 规则名称 */
-  name: string;
-  /** 正则表达式 */
-  pattern: RegExp;
-  /** 替换文本 */
-  replacement: string;
-  /** 在替换前是否保留前缀（如 "sk-"） */
-  keepPrefix?: number;
-  /** 在替换前是否保留后缀 */
-  keepSuffix?: number;
+/** E1：`install(host, {config})` 的窄类型（core 尚未声明第二参数） */
+export interface PluginInstallOptions {
+  config?: Record<string, unknown>;
 }
 
-/** 插件配置 */
-export interface RedactSecretsConfig {
-  /** 自定义额外规则 */
-  extraPatterns?: Array<{
-    name: string;
-    pattern: string;
-    replacement?: string;
-  }>;
-  /** 是否启用所有内置规则 */
-  enableBuiltin?: boolean;
+/** 类型守卫 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-// ── 内置规则 ──────────────────────────────────────
+/** 把 YAML 插件配置解析成 RedactSecretsConfig（非法正则跳过） */
+export function parseRedactSecretsConfig(value: unknown): RedactSecretsConfig {
+  if (!isRecord(value)) return {};
+  const parsed: RedactSecretsConfig = {};
+  if (typeof value.enableBuiltin === 'boolean') parsed.enableBuiltin = value.enableBuiltin;
 
-const BUILTIN_RULES: RedactRule[] = [
-  // OpenAI API Key: sk-...
-  {
-    name: 'openai-api-key',
-    pattern: /sk-(?:proj-)?[A-Za-z0-9_-]{20,}/g,
-    replacement: '***REDACTED***',
-    keepPrefix: 3,
-  },
-  // Anthropic API Key: sk-ant-...
-  {
-    name: 'anthropic-api-key',
-    pattern: /sk-ant-(?:api\d{2}-)?[A-Za-z0-9_-]{20,}/g,
-    replacement: '***REDACTED***',
-    keepPrefix: 7,
-  },
-  // Generic API Key pattern: key=xxxxx
-  {
-    name: 'generic-api-key',
-    pattern: /(?:api[_-]?key|apikey|api_secret)\s*[:=]\s*['"]?([A-Za-z0-9_-]{16,})['"]?/gi,
-    replacement: '***REDACTED***',
-  },
-  // Bearer token
-  {
-    name: 'bearer-token',
-    pattern: /bearer\s+[A-Za-z0-9_\-.=]{16,}/gi,
-    replacement: 'Bearer ***REDACTED***',
-  },
-  // JWT token
-  {
-    name: 'jwt-token',
-    pattern: /eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
-    replacement: '***JWT-REDACTED***',
-  },
-  // AWS Access Key
-  {
-    name: 'aws-access-key',
-    pattern: /AKIA[0-9A-Z]{16}/g,
-    replacement: '***AWS-KEY-REDACTED***',
-  },
-  // AWS Secret Key (heuristic)
-  {
-    name: 'aws-secret-key',
-    pattern: /(?:aws[_-]?secret|secret[_-]?key)\s*[:=]\s*['"]?([A-Za-z0-9/+=]{30,})['"]?/gi,
-    replacement: '***AWS-SECRET-REDACTED***',
-  },
-  // GitHub Personal Access Token
-  {
-    name: 'github-token',
-    pattern: /(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{36,}/g,
-    replacement: '***GITHUB-TOKEN-REDACTED***',
-  },
-  // Generic password field
-  {
-    name: 'password-field',
-    pattern: /(?:password|passwd|pwd)\s*[:=]\s*['"][^'"]+['"]/gi,
-    replacement: 'password: "***REDACTED***"',
-  },
-  // Private key header
-  {
-    name: 'private-key',
-    pattern:
-      /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/g,
-    replacement: '***PRIVATE-KEY-REDACTED***',
-  },
-  // Connection strings with credentials
-  {
-    name: 'connection-string',
-    pattern: /(?:mongodb|mysql|postgres|postgresql|redis):\/\/[^:]+:[^@]+@/gi,
-    replacement: '***CONNECTION-STRING-REDACTED***',
-  },
-];
-
-// ── 脱敏函数 ──────────────────────────────────────
-
-function applyRule(text: string, rule: RedactRule): string {
-  return text.replace(rule.pattern, (match) => {
-    if (rule.keepPrefix && match.length > rule.keepPrefix) {
-      const prefix = match.slice(0, rule.keepPrefix);
-      return prefix + rule.replacement;
+  if (Array.isArray(value.extraPatterns)) {
+    const extraPatterns: NonNullable<RedactSecretsConfig['extraPatterns']> = [];
+    for (const item of value.extraPatterns) {
+      if (!isRecord(item)) continue;
+      const name = item.name;
+      const pattern = item.pattern;
+      if (typeof name !== 'string' || typeof pattern !== 'string') continue;
+      try {
+        new RegExp(pattern, 'g');
+      } catch {
+        continue;
+      }
+      extraPatterns.push({
+        name,
+        pattern,
+        ...(typeof item.replacement === 'string' ? { replacement: item.replacement } : {}),
+      });
     }
-    if (rule.keepSuffix && match.length > rule.keepSuffix) {
-      const suffix = match.slice(-rule.keepSuffix);
-      return rule.replacement + suffix;
-    }
-    return rule.replacement;
-  });
-}
-
-function redactText(text: string, rules: RedactRule[]): { redacted: string; found: string[] } {
-  let result = text;
-  const found: string[] = [];
-
-  for (const rule of rules) {
-    const before = result;
-    result = applyRule(result, rule);
-    if (result !== before) {
-      found.push(rule.name);
-    }
+    parsed.extraPatterns = extraPatterns;
   }
 
-  return { redacted: result, found };
+  return parsed;
 }
 
 // ── Guardrail ─────────────────────────────────────
@@ -202,14 +113,15 @@ export function createRedactSecretsPlugin(config?: RedactSecretsConfig): Plugin 
     version: '0.1.0',
     description:
       'Secret redaction plugin — detects and redacts API keys, tokens, and passwords in tool results and outputs',
-    install(host: PluginHost) {
-      const enableBuiltin = config?.enableBuiltin ?? true;
+    install(host: PluginHost, options?: PluginInstallOptions) {
+      const merged = { ...(config ?? {}), ...parseRedactSecretsConfig(options?.config) };
+      const enableBuiltin = merged.enableBuiltin ?? true;
 
       // 组装规则
       const rules: RedactRule[] = enableBuiltin ? [...BUILTIN_RULES] : [];
 
-      if (config?.extraPatterns) {
-        for (const extra of config.extraPatterns) {
+      if (merged.extraPatterns) {
+        for (const extra of merged.extraPatterns) {
           rules.push({
             name: extra.name,
             pattern: new RegExp(extra.pattern, 'g'),

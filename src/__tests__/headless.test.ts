@@ -1,9 +1,8 @@
-import { Database } from 'bun:sqlite';
 /**
  * Headless 模式集成测试（bash 管道驱动 = loop engineering 入口）
  *
  * 用 Bun.spawn 跑真实 CLI 子进程，VESSEL_MOCK=1 用内存 Provider 保证确定性。
- * 隔离：cwd 用临时目录，避免污染真实 vessel.db。
+ * 隔离：cwd 用临时目录，避免污染真实 .vessel/sessions.db。
  */
 import { expect, it } from 'bun:test';
 import * as fs from 'node:fs';
@@ -48,6 +47,24 @@ it('headless --run：stdout 只放响应，exit 0', async () => {
   expect(stdout.trim()).toBe('Echo: hello');
 });
 
+it('--serve --run：run 结束后统一清理，不残留 tenant 锁（A2）', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-serve-run-'));
+  try {
+    const dataDir = path.join(tmpDir, 'data');
+    const { exitCode } = await runCli(
+      ['--run', 'hello', '--serve', '0'],
+      { VESSEL_MOCK: '1', VESSEL_DATA_DIR: dataDir },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(0);
+    // 锁由 bootstrap 的 shutdown 释放；提前 process.exit 会留下该文件。
+    expect(fs.existsSync(path.join(dataDir, 'tenants', 'default', '.lock'))).toBe(false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 it('headless --pipe：从 stdin 读输入', async () => {
   const { stdout, exitCode } = await runCli(['--pipe'], { VESSEL_MOCK: '1' }, 'from pipe');
   expect(exitCode).toBe(0);
@@ -65,7 +82,7 @@ it('headless 失败时 exit 非零', async () => {
   // 不给 mock、不给 api key、headless -> 应 fail-fast 退出
   const { exitCode, stderr } = await runCli(['--run', 'hi'], { VESSEL_MOCK: '' });
   expect(exitCode).not.toBe(0);
-  expect(stderr).toContain('API key');
+  expect(stderr.toLowerCase()).toContain('api key');
 });
 
 it('headless --run（无参）：从 stdin 读输入（--pipe 已折叠进 --run）', async () => {
@@ -102,7 +119,7 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
     fs.writeFileSync(path.join(tmpDir, 'conv.json'), JSON.stringify(messages));
     const { stdout, stderr, exitCode } = await runCli(
       ['--run', '@conv.json'],
-      { VESSEL_MOCK: '1' },
+      { VESSEL_MOCK: '1', VESSEL_DATA_DIR: path.join(tmpDir, 'data') },
       '',
       tmpDir,
     );
@@ -110,12 +127,15 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
     // 最后一条 user 作为本次输入
     expect(stdout.trim()).toBe('Echo: follow up');
     expect(stderr).toContain('[vessel]');
-    // 验证 seeding：session DB 含完整历史（seed 的前两条 + 本次 user + 响应）
-    const db = new Database(path.join(tmpDir, 'vessel.db'), { readonly: true });
-    const row = db.query('SELECT messages FROM sessions').get() as { messages: string } | null;
-    db.close();
-    if (!row) throw new Error('no session saved');
-    const saved = JSON.parse(row.messages) as Array<{ role: string; content: string }>;
+    // 验证 seeding：0.5 默认 file 后端，session 落在 tenant sessions 目录
+    const sessionsDir = path.join(tmpDir, 'data', 'tenants', 'default', 'sessions');
+    const files = fs.readdirSync(sessionsDir).filter((name) => name.endsWith('.json'));
+    const sessionFile = files[0];
+    if (!sessionFile) throw new Error('no session saved');
+    const state = JSON.parse(fs.readFileSync(path.join(sessionsDir, sessionFile), 'utf8')) as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    const saved = state.messages;
     const contents = saved.map((m) => m.content);
     expect(contents).toContain('first question');
     expect(contents).toContain('first answer');
@@ -126,7 +146,7 @@ it('headless --run @file.json：多轮 seeding，最后一条 user 作为输入�
   }
 });
 
-it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 兼容，warn 不 exit 1', async () => {
+it('未注册的 provider（带 base_url）降级为 OpenAI 兼容，info 不 exit 1', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-custom-'));
   try {
     fs.mkdirSync(path.join(tmpDir, '.vessel'), { recursive: true });
@@ -147,16 +167,181 @@ it('未注册的 provider（如 setup 向导产出的 custom）降级为 OpenAI 
     // 交互模式 + /exit：provider 构造是同步的，不触网；仅验证降级 warn + 正常进 REPL
     const { stdout, stderr, exitCode } = await runCli([], {}, '/exit\n', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stderr).toContain('treating as OpenAI-compatible');
+    expect(stderr).toContain('not registered; using OpenAI-compatible endpoint');
     expect(stdout).toContain('custom | test-model');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
 
-it('未知参数报错并 exit 1（不静默忽略）', async () => {
-  const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
+it('--version 打印根 package.json 版本，exit 0', async () => {
+  const rootVersion = (
+    JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8')) as {
+      version: string;
+    }
+  ).version;
+  const { stdout, exitCode } = await runCli(['--version'], {});
+  expect(exitCode).toBe(0);
+  expect(stdout.trim()).toBe(rootVersion);
+});
+
+it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => {
+  const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' });
+  expect(exitCode).toBe(0);
+  expect(stdout).toContain('Tools (4):');
+  for (const name of ['bash', 'read', 'edit', 'delegate_task']) {
+    expect(stdout).toContain(`- ${name}:`);
+  }
+  expect(stdout).toContain('ask_user (interactive only)');
+});
+
+it('--tools 在 team.enabled 时额外列出 5 个 team_* 工具', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
+    const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Tools (9):');
+    for (const name of ['team_spawn', 'team_send', 'team_inbox', 'team_status', 'team_cancel']) {
+      expect(stdout).toContain(`- ${name}:`);
+    }
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('host.enabled=true 时 headless mock 走 Host 路径且不触发回退', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-host-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'host:\n  enabled: true\n');
+    const { stdout, stderr, exitCode } = await runCli(
+      ['--run', 'hello'],
+      { VESSEL_MOCK: '1' },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe('Echo: hello');
+    expect(stderr).not.toContain('Host runtime unavailable');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('host + team + delegate 共用 Host 且无回退告警', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-host-team-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'vessel.yaml'),
+      'host:\n  enabled: true\nteam:\n  enabled: true\n',
+    );
+    const { stdout, stderr, exitCode } = await runCli(
+      ['--run', 'hello'],
+      { VESSEL_MOCK: '1' },
+      '',
+      tmpDir,
+    );
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe('Echo: hello');
+    expect(stderr).not.toContain('Host runtime unavailable');
+    expect(stderr).not.toContain('embedded in-process host');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('delegate.via_host 旧配置报未知键错误', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-viahost-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'delegate:\n  via_host: true\n');
+    // 不启用 mock：走真实校验路径（无 Key 也会先因配置错误退出）。
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], {}, '', tmpDir);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Unknown configuration key "delegate.viaHost"');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('team.max_members 旧配置报未知键错误', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-teammax-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'vessel.yaml'),
+      'team:\n  enabled: true\n  max_members: 4\n',
+    );
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], {}, '', tmpDir);
+    expect(exitCode).toBe(1);
+    expect(stderr).toContain('Unknown configuration key "team.maxMembers"');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('host 关闭 + team.enabled：告警并使用内嵌 Host', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-embed-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
+    const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stderr).toContain('internal in-process host');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('--run @missing.txt 报错 exit 1', async () => {
+  const { exitCode, stderr } = await runCli(['--run', '@definitely-missing.txt'], {
+    VESSEL_MOCK: '1',
+  });
   expect(exitCode).toBe(1);
+  expect(stderr).toContain('cannot read file');
+});
+
+it('--serve 非 TTY 且无 Key 时快速失败，不进首启向导', async () => {
+  const { exitCode, stderr } = await runCli(
+    ['--serve', '18643'],
+    { VESSEL_MOCK: '', VESSEL_LANG: 'en' },
+    ' ',
+  );
+  expect(exitCode).toBe(1);
+  expect(stderr).toContain('No API key configured');
+});
+
+it('update --check --json 走清单源并输出机器可读结果', async () => {
+  const server = Bun.serve({
+    port: 0,
+    fetch() {
+      return Response.json({ version: '9.9.9', channel: 'latest' });
+    },
+  });
+  try {
+    const rootVersion = (
+      JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf-8')) as {
+        version: string;
+      }
+    ).version;
+    const source = `http://127.0.0.1:${server.port}/latest.json`;
+    const { stdout, exitCode } = await runCli(['update', '--check', '--json'], {
+      VESSEL_UPDATE_SOURCE: source,
+    });
+    expect(exitCode).toBe(0);
+    const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      current: rootVersion,
+      latest: '9.9.9',
+      channel: 'latest',
+      up_to_date: false,
+    });
+    expect(String(parsed.install_hint)).toContain('vessel@9.9.9');
+  } finally {
+    server.stop();
+  }
+});
+
+it('未知参数报错并 exit 2（用法错误）', async () => {
+  const { exitCode, stderr } = await runCli(['--bogus'], { VESSEL_MOCK: '1' });
+  expect(exitCode).toBe(2);
   expect(stderr).toContain('Unknown argument');
 });
 

@@ -13,10 +13,16 @@
 
 import { describe, expect, it } from 'bun:test';
 import {
+  cancelTranscriptNotice,
+  DEFAULT_MAX_SEGMENTS,
+  getCancelledTranscript,
   getResponseText,
+  getTranscriptText,
+  limitSegments,
   makeToolCallSegment,
   reduceSegments,
   type Segment,
+  tailLines,
 } from '../src/components/StreamOutput.js';
 import { asTuiEvent } from '../src/types/events.js';
 
@@ -48,11 +54,11 @@ function toolStarted(id: string, name: string, args: unknown = {}) {
   });
 }
 
-function toolCompleted(id: string, durationMs = 42) {
+function toolCompleted(id: string, durationMs = 42, result = 'ok') {
   return asTuiEvent({
     type: 'tool.call.completed',
     run_id: 'r',
-    data: { tool_call_id: id, duration_ms: durationMs },
+    data: { tool_call_id: id, tool_name: 'read', duration_ms: durationMs, result },
     ts: 0,
   });
 }
@@ -103,13 +109,13 @@ describe('StreamOutput segment ordering', () => {
       let segs: Segment[] = [];
 
       segs = reduceSegments(segs, textDelta('Let me read the file.'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file', { path: '/test.txt' }), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read', { path: '/test.txt' }), nextId);
       segs = reduceSegments(segs, toolCompleted('tc1', 42), nextId);
       segs = reduceSegments(segs, textDelta('File contents: hello'), nextId);
 
       expect(segs).toHaveLength(3); // text, tool_call, text
       expect(segs[0]).toMatchObject({ type: 'text' });
-      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read_file' });
+      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read' });
       expect(segs[2]).toMatchObject({ type: 'text', text: 'File contents: hello' });
     });
 
@@ -134,14 +140,14 @@ describe('StreamOutput segment ordering', () => {
       let segs: Segment[] = [];
 
       segs = reduceSegments(segs, textDelta('Doing work...'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc2', 'write_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc2', 'edit'), nextId);
       segs = reduceSegments(segs, textDelta('Done.'), nextId);
 
       expect(segs).toHaveLength(4);
       expect(segs[0]).toMatchObject({ type: 'text' });
-      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read_file' });
-      expect(segs[2]).toMatchObject({ type: 'tool_call', name: 'write_file' });
+      expect(segs[1]).toMatchObject({ type: 'tool_call', name: 'read' });
+      expect(segs[2]).toMatchObject({ type: 'tool_call', name: 'edit' });
       expect(segs[3]).toMatchObject({ type: 'text', text: 'Done.' });
     });
 
@@ -149,7 +155,7 @@ describe('StreamOutput segment ordering', () => {
       const nextId = makeNextId();
       let segs: Segment[] = [];
 
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
       segs = reduceSegments(segs, toolStarted('tc2', 'search'), nextId);
       // tc2 先完成
       segs = reduceSegments(segs, toolCompleted('tc2', 10), nextId);
@@ -157,7 +163,7 @@ describe('StreamOutput segment ordering', () => {
       segs = reduceSegments(segs, toolCompleted('tc1', 50), nextId);
 
       expect(segs).toHaveLength(2);
-      expect(segs[0]).toMatchObject({ id: 'tc1', name: 'read_file', status: 'completed' });
+      expect(segs[0]).toMatchObject({ id: 'tc1', name: 'read', status: 'completed' });
       expect(segs[1]).toMatchObject({ id: 'tc2', name: 'search', status: 'completed' });
     });
   });
@@ -173,6 +179,20 @@ describe('StreamOutput segment ordering', () => {
 
       expect(segs).toHaveLength(0);
     });
+
+    it('RunResumed 清空所有分段（0.3 durable resume）', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+
+      segs = reduceSegments(segs, textDelta('Before resume'), nextId);
+      segs = reduceSegments(
+        segs,
+        asTuiEvent({ type: 'run.resumed', run_id: 'r', data: {}, ts: 0 }),
+        nextId,
+      );
+
+      expect(segs).toHaveLength(0);
+    });
   });
 
   describe('工具调用失败', () => {
@@ -181,32 +201,39 @@ describe('StreamOutput segment ordering', () => {
       let segs: Segment[] = [];
 
       segs = reduceSegments(segs, textDelta('Trying...'), nextId);
-      segs = reduceSegments(segs, toolStarted('tc1', 'read_file'), nextId);
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
       segs = reduceSegments(segs, toolFailed('tc1', 'File not found', 100), nextId);
       segs = reduceSegments(segs, textDelta('Sorry, failed.'), nextId);
 
       expect(segs).toHaveLength(3);
       expect(segs[1]).toMatchObject({
         type: 'tool_call',
-        name: 'read_file',
+        name: 'read',
         status: 'failed',
         error: 'File not found',
       });
     });
   });
 
-  describe('工厂函数', () => {
-    it('makeToolCallSegment 创建正确的 running 状态 segment', () => {
-      const seg = makeToolCallSegment('t1', 'search', { query: 'hello' });
-      expect(seg).toMatchObject({
+  describe('工具结果', () => {
+    it('completed 携带 result 字符串供 StreamOutput 渲染', () => {
+      const nextId = makeNextId();
+      let segs: Segment[] = [];
+      segs = reduceSegments(segs, toolStarted('tc1', 'read'), nextId);
+      segs = reduceSegments(segs, toolCompleted('tc1', 42, 'file contents'), nextId);
+
+      expect(segs).toHaveLength(1);
+      expect(segs[0]).toMatchObject({
         type: 'tool_call',
-        id: 't1',
-        name: 'search',
-        arguments: { query: 'hello' },
-        status: 'running',
+        id: 'tc1',
+        status: 'completed',
+        result: 'file contents',
+        duration: 42,
       });
     });
   });
+
+  describe('工厂函数', () => {});
 
   describe('getResponseText', () => {
     it('提取所有 text segment 的拼接文本', () => {
@@ -227,5 +254,162 @@ describe('StreamOutput segment ordering', () => {
 
       expect(getResponseText(segs)).toBe('');
     });
+  });
+});
+
+describe('tailLines', () => {
+  it('未超过行数时只 trim，不加省略提示', () => {
+    expect(tailLines('  a\nb  ', 4)).toBe('a\nb');
+  });
+
+  it('超过行数时保留末尾 maxLines 行并加提示', () => {
+    const text = 'l1\nl2\nl3\nl4\nl5';
+    expect(tailLines(text, 2)).toBe('…（前文已折叠）\nl4\nl5');
+  });
+
+  it('空文本 / maxLines<=0 返回空字符串', () => {
+    expect(tailLines('   ', 8)).toBe('');
+    expect(tailLines('a\nb', 0)).toBe('');
+  });
+});
+
+describe('limitSegments', () => {
+  function textSeg(id: string, text: string): Segment {
+    return { type: 'text', id, text };
+  }
+
+  it('只保留最后 maxSegments 段', () => {
+    const segs: Segment[] = [textSeg('t1', 'one'), textSeg('t2', 'two'), textSeg('t3', 'three')];
+    expect(limitSegments(segs, { maxSegments: 2 }).map((s) => s.id)).toEqual(['t2', 't3']);
+  });
+
+  it('默认保留 DEFAULT_MAX_SEGMENTS 段', () => {
+    const segs: Segment[] = Array.from({ length: DEFAULT_MAX_SEGMENTS + 2 }, (_, i) =>
+      textSeg(`t${i}`, `line ${i}`),
+    );
+    expect(limitSegments(segs)).toHaveLength(DEFAULT_MAX_SEGMENTS);
+    expect(limitSegments(segs)[0]?.id).toBe('t2');
+  });
+
+  it('文本段按行截断，工具段保持原样', () => {
+    const tool = makeToolCallSegment('c1', 'bash', { command: 'ls' });
+    const segs: Segment[] = [textSeg('t1', 'a\nb\nc\nd'), tool];
+
+    const limited = limitSegments(segs, { maxSegments: 6, maxLines: 2 });
+    expect(limited[0]).toMatchObject({ type: 'text', text: '…（前文已折叠）\nc\nd' });
+    expect(limited[1]).toEqual(tool);
+  });
+});
+
+describe('getTranscriptText', () => {
+  it('文本段原样拼接', () => {
+    const segs: Segment[] = [
+      { type: 'text', id: 't1', text: 'hello' },
+      { type: 'text', id: 't2', text: 'world' },
+    ];
+    expect(getTranscriptText(segs)).toBe('hello\nworld');
+  });
+
+  it('completed 工具段包含工具名、耗时与结果尾部', () => {
+    const segs: Segment[] = [
+      { type: 'text', id: 't1', text: 'Checking.' },
+      {
+        type: 'tool_call',
+        id: 'c1',
+        name: 'bash',
+        arguments: { command: 'ls' },
+        status: 'completed',
+        duration: 12,
+        result: 'a.txt\nb.txt',
+      },
+    ];
+    const transcript = getTranscriptText(segs);
+
+    expect(transcript).toContain('Checking.');
+    expect(transcript).toContain('bash');
+    expect(transcript).toContain('12ms');
+    expect(transcript).toContain('a.txt');
+    expect(transcript).toContain('b.txt');
+    expect(transcript.indexOf('bash')).toBeLessThan(transcript.indexOf('a.txt'));
+    expect(transcript.indexOf('a.txt')).toBeLessThan(transcript.indexOf('b.txt'));
+  });
+
+  it('failed 工具段包含失败标记、工具名与 error', () => {
+    const segs: Segment[] = [
+      {
+        type: 'tool_call',
+        id: 'c1',
+        name: 'bash',
+        arguments: {},
+        status: 'failed',
+        error: 'permission denied',
+      },
+    ];
+    const transcript = getTranscriptText(segs);
+
+    expect(transcript).toContain('✗');
+    expect(transcript).toContain('bash');
+    expect(transcript).toContain('permission denied');
+  });
+
+  it('超长工具结果只保留末尾 12 行', () => {
+    const result = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n');
+    const segs: Segment[] = [
+      {
+        type: 'tool_call',
+        id: 'c1',
+        name: 'bash',
+        arguments: {},
+        status: 'completed',
+        duration: 5,
+        result,
+      },
+    ];
+    const transcript = getTranscriptText(segs);
+    expect(transcript).toContain('…（前文已折叠）');
+    expect(transcript).toContain('line 9');
+    expect(transcript).toContain('line 20');
+    expect(transcript).not.toContain('line 8\n');
+    expect(transcript).not.toContain('line 1\n');
+  });
+
+  it('running 工具段被跳过', () => {
+    const segs: Segment[] = [makeToolCallSegment('c1', 'bash', { command: 'sleep 1' })];
+    expect(getTranscriptText(segs)).toBe('');
+  });
+});
+
+describe('getCancelledTranscript', () => {
+  it('取消时保留已流出的回答并追加“已取消”标注', () => {
+    let segs: Segment[] = [];
+    const nextId = makeNextId();
+    segs = reduceSegments(segs, textDelta('已经流出的部分回答'), nextId);
+
+    const transcript = getCancelledTranscript(segs);
+
+    expect(transcript).toContain('已经流出的部分回答');
+    expect(transcript).toContain(cancelTranscriptNotice());
+  });
+
+  it('没有内容时只返回取消标注', () => {
+    expect(getCancelledTranscript([])).toBe(cancelTranscriptNotice());
+  });
+
+  it('工具摘要同样被保留', () => {
+    const segs: Segment[] = [
+      {
+        type: 'tool_call',
+        id: 'c1',
+        name: 'read',
+        arguments: { path: 'a.md' },
+        status: 'completed',
+        duration: 3,
+        result: 'file body',
+      },
+    ];
+    const transcript = getCancelledTranscript(segs);
+    expect(transcript).toContain('✓ read');
+    expect(transcript).toContain('file body');
+    expect(transcript).toContain(cancelTranscriptNotice());
   });
 });

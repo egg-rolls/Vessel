@@ -40,13 +40,13 @@ function autoAnswer(events: MemoryEventStream, answers: ReturnType<typeof sample
   });
 }
 
+describe('formatChoicePrefix（NO_COLOR 焦点可见）', () => {});
+
 describe('createAskUserTool（事件流交互）', () => {
-  it('creates ask_user tool with default:true and interactive:true', () => {
+  it('creates ask_user tool with name + questions schema', () => {
     const tool = createAskUserTool();
 
     expect(tool.name).toBe('ask_user');
-    expect(tool.default).toBe(true);
-    expect(tool.interactive).toBe(true);
     expect(tool.inputSchema.required).toContain('questions');
   });
 

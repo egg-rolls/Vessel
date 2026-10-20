@@ -6,10 +6,18 @@
 import type { Message } from '../types/provider.js';
 import type { RunState, SessionBackend, SessionInfo } from '../types/session.js';
 
-/** 从首条用户消息派生 title/preview（照搬 Hermes list_sessions_rich 的 preview 语义） */
+/**
+ * 从首轮用户消息派生 title/preview（照搬 Hermes list_sessions_rich 的 preview 语义）。
+ *
+ * 取「首轮最后一条 user」而不是第一条：RunOptions.messages 的注入消息（文件/技能内容）
+ * 排在真实用户输入之前，第一条 user 往往是 `@file` 的包装内容（C-07）。
+ */
 export function deriveSessionMeta(messages: Message[]): { title: string; preview: string } {
-  const firstUser = messages.find((m) => m.role === 'user');
-  const raw = (firstUser?.content ?? '').toString().replace(/\s+/g, ' ').trim();
+  const firstAssistant = messages.findIndex((m) => m.role === 'assistant');
+  const firstTurn = firstAssistant === -1 ? messages : messages.slice(0, firstAssistant);
+  const turnUsers = firstTurn.filter((m) => m.role === 'user');
+  const userMessage = turnUsers[turnUsers.length - 1] ?? messages.find((m) => m.role === 'user');
+  const raw = (userMessage?.content ?? '').toString().replace(/\s+/g, ' ').trim();
   return {
     title: raw.slice(0, 40) || 'Untitled',
     preview: raw.slice(0, 60),
@@ -28,6 +36,9 @@ export function toSessionInfo(state: RunState): SessionInfo {
     updated_at: state.updated_at ?? state.completed_at ?? state.started_at,
     message_count: state.messages.length,
     branch: state.branch,
+    tenant_id: state.tenant_id,
+    ...(state.ended_at !== undefined ? { ended_at: state.ended_at } : {}),
+    ...(state.end_reason !== undefined ? { end_reason: state.end_reason } : {}),
   };
 }
 
@@ -79,7 +90,10 @@ export class MemorySessionBackend implements SessionBackend {
     return Array.from(this.sessions.values())
       .filter((s) => s.messages.length > 0)
       .map(toSessionInfo)
-      .sort((a, b) => b.updated_at - a.updated_at);
+      .sort((a, b) => {
+        if (a.updated_at !== b.updated_at) return b.updated_at - a.updated_at;
+        return a.session_id < b.session_id ? -1 : a.session_id > b.session_id ? 1 : 0;
+      });
   }
 
   /**

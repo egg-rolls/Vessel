@@ -8,9 +8,12 @@
  */
 
 export type {
+  CommandCategory,
   CommandEntry,
   CommandResult,
   ReplState,
+  ResumeResult,
+  ToolDetailMode,
 } from './commands/commands.js';
 export {
   CommandRegistry,
@@ -18,8 +21,20 @@ export {
   createCommands,
   doResume,
 } from './commands/commands.js';
+export {
+  type DeleteSessionOptions,
+  deleteSessionAction,
+  renameSessionAction,
+  runSessionsCommand,
+  SESSIONS_DEPRECATION,
+  sessionActionResult,
+  sessionsCommand,
+} from './commands/sessions-command.js';
 export { AskUserDialog } from './components/AskUserDialog.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
+export { DataTable, type DataTableProps } from './components/DataTable.js';
+export { DetailPanel, type DetailPanelProps } from './components/DetailPanel.js';
+export { EmptyState, type EmptyStateProps } from './components/EmptyState.js';
 export {
   type CommandEnterDecision,
   type CommandItem,
@@ -27,25 +42,239 @@ export {
   filterCommands,
   InlineAutocomplete,
 } from './components/InlineAutocomplete.js';
-export { SessionTable } from './components/SessionTable.js';
+export {
+  InteractiveViewHost,
+  type InteractiveViewHostProps,
+} from './components/InteractiveViewHost.js';
+export {
+  type IndicatorStyle,
+  indicatorFrame,
+  indicatorFrames,
+  indicatorInterval,
+  resolveIndicatorStyle,
+  THINKING_VERB_INTERVAL_MS,
+  THINKING_VERBS,
+  thinkingVerb,
+} from './components/indicator.js';
+export { formatKeyHints, KeyHints, type KeyHintsProps } from './components/KeyHints.js';
+export {
+  type BorderParts,
+  buildBorderParts,
+  PanelFrame,
+  type PanelFrameProps,
+  type PanelVariant,
+} from './components/PanelFrame.js';
+export {
+  formatQueuePreview,
+  getQueueWindow,
+  type QueueLine,
+  type QueueLineTone,
+  QueuePreview,
+  type QueuePreviewProps,
+  type QueueWindow,
+} from './components/QueuePreview.js';
+export { QuickHelp, type QuickHelpProps, shouldOpenQuickHelp } from './components/QuickHelp.js';
+export {
+  type SessionPickerActionResult,
+  SessionTable,
+  type SessionTableProps,
+} from './components/SessionTable.js';
+export {
+  minVerbDelayMs,
+  SpinnerWithVerb,
+  type SpinnerWithVerbProps,
+} from './components/SpinnerWithVerb.js';
+export {
+  reduceSpinnerState,
+  type SpinnerState,
+  type SpinnerVerb,
+  useSpinnerState,
+} from './components/StateTracker.js';
 // Ink 组件
-export { StatusBar } from './components/StatusBar.js';
+export {
+  contextBar,
+  contextTone,
+  formatStatusRule,
+  StatusBar,
+  type StatusKind,
+  type StatusRuleProps,
+  type StatusSegment,
+  type StatusTone,
+} from './components/StatusBar.js';
 export { StreamOutput } from './components/StreamOutput.js';
+export {
+  reduceSubagentState,
+  SubagentActivity,
+  type SubagentState,
+} from './components/SubagentActivity.js';
+export {
+  pagerRows,
+  shouldPageOutput,
+  TextViewer,
+  type TextViewerProps,
+} from './components/TextViewer.js';
+export {
+  DEFAULT_TOOL_DISPLAY,
+  type DisplayOptions,
+  type ToolDisplayDefinition,
+  ToolDisplayRegistry,
+  type ToolTrailLine,
+  toolDisplayRegistry,
+} from './components/ToolDisplay.js';
+export {
+  buildTrail,
+  groupSegments,
+  type SegmentGroup,
+  type ToolSegment,
+  ToolTrail,
+  type TrailLine,
+  type TrailTone,
+  type TrailView,
+} from './components/ToolTrail.js';
+export {
+  reduceUpdateState,
+  UpdateBanner,
+  type UpdateBannerState,
+} from './components/UpdateBanner.js';
 // 错误分类器
-export { type ClassifiedError, classifyError, type ErrorCategory } from './error-classifier.js';
+export {
+  type ClassifiedError,
+  classifyError,
+  type ErrorCategory,
+  formatClassifiedError,
+} from './error-classifier.js';
+export { formatPermissionQuestion, type ToolOrigin } from './renderer/tool-confirm.js';
 // Ink 版本（React 组件式 UI）
 export { startInkRepl } from './repl/ink-repl.js';
-export type { ReplContext } from './repl-context.js';
+export {
+  computeLiveLayout,
+  type LiveLayout,
+  type LiveMode,
+  queuePreviewRows,
+  showsQuickHint,
+} from './repl/layout.js';
+export {
+  executeResume,
+  executeTurn,
+  executeWorkflow,
+  type TurnOutcome,
+  type WorkflowTurnOutcome,
+} from './repl/run-turn.js';
+export {
+  buildSessionSummary,
+  buildStartupHeader,
+  type SessionSummaryFacts,
+  STARTUP_TAGLINE,
+  type StartupHeaderInput,
+  WORDMARK_5,
+} from './repl/startup-header.js';
+export {
+  buildStartupNotice,
+  loadStartupFacts,
+  loadStartupNotice,
+  type StartupFacts,
+  type StartupNoticeInput,
+} from './repl/startup-notice.js';
+export type {
+  CapabilityManifestLike,
+  CapabilityMethodLike,
+  CapabilityPluginLike,
+  CapabilityToolLike,
+  DurableRunHandle,
+  DurableRunOutcome,
+  DurableRunSummary,
+  DurableRunsControl,
+  FeishuControlLike,
+  FeishuStatusLike,
+  McpControl,
+  McpServerSummary,
+  MetricsSnapshotLike,
+  PermissionsControl,
+  ReplContext,
+  RpcClientLike,
+  RpcErrorCodeLike,
+  RpcErrorLike,
+  RpcEventNotificationLike,
+  TenantInfoLike,
+  TenantQuotaLike,
+  TenantSummaryLike,
+  WorkflowOutcomeLike,
+  WorkflowRunDetailLike,
+  WorkflowRunHandle,
+  WorkflowRunStatusLike,
+  WorkflowRunSummaryLike,
+  WorkflowStartResultLike,
+  WorkflowStepStatusLike,
+  WorkflowStepSummaryLike,
+  WorkflowsControl,
+} from './repl-context.js';
 export {
   buildBanner,
   buildSessionTable,
   divider,
   infoPanel,
 } from './rich-renderer.js';
-export type { SseBridge } from './sse-bridge.js';
-// SSE Bridge
-export { startSseBridge } from './sse-bridge.js';
+export {
+  formatRpcError,
+  isRpcError,
+  isRpcErrorCode,
+  RPC_ERROR_CODES,
+  readRpcCode,
+  redactForDisplay,
+} from './rpc.js';
+export {
+  type CompletionWaiter,
+  type PollOptions,
+  pollRunCompletion,
+  type RunCompletionOutcome,
+  type RunCompletionStatus,
+  type WorkflowCompletionOutcome,
+  type WorkflowCompletionStatus,
+  waitForRunCompletion,
+  waitForWorkflowCompletion,
+} from './rpc-events.js';
 // Git 工具
 export { getCurrentGitBranch } from './utils/git.js';
+// 命令视图（CommandView）纯数据与渲染工具
+export {
+  COLUMN_GAP,
+  formatTableHeader,
+  formatTableRow,
+  priorityThreshold,
+  resolveColumns,
+  scrollWindow,
+  TABLE_PREFIX_WIDTH,
+  VIEW_MAX_WIDTH,
+  viewContentWidth,
+  viewWidth,
+  widthClass,
+} from './views/layout.js';
+export { type RenderTextOptions, renderViewAsText } from './views/render-text.js';
+export {
+  buildSessionPickerView,
+  buildSessionRows,
+  filterSessions as filterSessionsForPicker,
+  sessionColumns,
+  sessionPickerActions,
+  sortSessionsForPicker,
+} from './views/session-picker.js';
+export type {
+  CommandView,
+  ConfirmView,
+  DetailField,
+  DetailSection,
+  DetailView,
+  FormField,
+  FormView,
+  ListView,
+  TableView,
+  ViewAction,
+  ViewActionInvocation,
+  ViewColumn,
+  ViewEnvelope,
+  ViewMode,
+  ViewRow,
+  ViewTone,
+} from './views/types.js';
 export type { SetupWizardConfig } from './wizard/setup-wizard.js';
 export { runSetupWizard, SetupWizard } from './wizard/setup-wizard.js';

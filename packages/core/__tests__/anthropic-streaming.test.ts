@@ -146,4 +146,25 @@ describe('AnthropicProvider streaming', () => {
     expect(response.finish_reason).toBe('stop');
     expect(response.usage?.total_tokens).toBe(3);
   });
+
+  it('非流式 max_tokens -> finish=length（C-06，与流式一致）', async () => {
+    globalThis.fetch = (async () =>
+      new Response(
+        JSON.stringify({
+          content: [{ type: 'text', text: 'truncated' }],
+          stop_reason: 'max_tokens',
+          usage: { input_tokens: 2, output_tokens: 3 },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      )) as unknown as typeof fetch;
+
+    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    const response = await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-test',
+    } as ChatRequest);
+
+    expect(response.content).toBe('truncated');
+    expect(response.finish_reason).toBe('length');
+  });
 });

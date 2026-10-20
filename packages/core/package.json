@@ -1,11 +1,31 @@
 {
   "name": "@vessel/core",
-  "version": "0.1.0",
+  "version": "0.10.0",
   "type": "module",
   "main": "src/index.ts",
   "types": "src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./context": "./src/context/index.ts",
+    "./kernel": "./src/kernel/index.ts",
+    "./observability": "./src/observability/index.ts",
+    "./policy": "./src/runtime/policy/index.ts",
+    "./provider": "./src/provider/index.ts",
+    "./session": "./src/session/index.ts",
+    "./transport": "./src/transport/index.ts",
+    "./types": "./src/types/index.ts"
+  },
+  "files": [
+    "src"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/egg-rolls/Vessel.git",
+    "directory": "packages/core"
+  },
+  "engines": {
+    "bun": ">=1.3.9"
   },
   "scripts": {
     "test": "bun test",

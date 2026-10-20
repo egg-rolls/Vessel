@@ -5,9 +5,10 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import type { AgentRuntime, Message, SessionBackend } from '../packages/core/src/index';
+import type { Message, RunnableAgent, SessionBackend } from '../packages/core/src/index';
 import { asTuiEvent } from '../packages/tui/src/types/events.js';
 import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
+import { t } from './i18n';
 
 export interface HeadlessOptions {
   /** 运行参数 */
@@ -29,13 +30,14 @@ class CliError extends Error {
 }
 
 /**
- * 运行 headless 模式
+ * 运行 headless 模式。
+ * @returns 退出码（0 成功 / 1 失败）；清理与 process.exit 由 cli 统一处理。
  */
 export async function runHeadless(
-  runtime: AgentRuntime,
+  runtime: RunnableAgent,
   session: SessionBackend,
   options: HeadlessOptions,
-): Promise<void> {
+): Promise<number> {
   const { sessionId, provider } = options;
 
   // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
@@ -55,7 +57,7 @@ export async function runHeadless(
   try {
     const input = (await readInput(options, session)).trim();
     if (!input) {
-      throw new CliError('No input.');
+      throw new CliError(t('common.noInput'));
     }
 
     console.error(`[vessel] ${provider.name} | ${provider.model} | session ${sessionId}`);
@@ -63,13 +65,11 @@ export async function runHeadless(
     const branch = await getCurrentGitBranch();
     const resp = await runtime.run(input, sessionId, { branch });
     console.log(resp);
-    runtime.dispose?.();
-    process.exit(0);
+    return 0;
   } catch (e) {
     const msg = e instanceof CliError ? e.message : `Error: ${e instanceof Error ? e.message : e}`;
     console.error(msg);
-    runtime.dispose?.();
-    process.exit(1);
+    return 1;
   }
 }
 
@@ -88,7 +88,11 @@ async function readInput(options: HeadlessOptions, session: SessionBackend): Pro
     if (filePath.endsWith('.json')) {
       return seedFromMessagesFile(filePath, sessionId, session);
     }
-    return Bun.file(filePath).text();
+    try {
+      return await Bun.file(filePath).text();
+    } catch {
+      throw new CliError(`Error: cannot read file "${filePath}".`);
+    }
   }
   return runArg ?? '';
 }

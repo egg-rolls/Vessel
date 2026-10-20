@@ -1,0 +1,207 @@
+import { describe, expect, test } from 'bun:test';
+import type { RunEvent, SessionDetail } from '../src/gateway/types';
+import {
+  type EventMeta,
+  EventStore,
+  MAX_EVENTS_PER_RUN,
+  MAX_EVENTS_TOTAL,
+} from '../src/state/event-store';
+import { buildGroup, groupEvents, isGroupPersisted, type StoredEvent } from '../src/state/events';
+
+function event(runId: string, type: string, data: Record<string, unknown> = {}, ts = 1): RunEvent {
+  return { type, run_id: runId, data, ts };
+}
+
+function stored(
+  runId: string,
+  type: string,
+  seq: number,
+  data: Record<string, unknown> = {},
+  ts = 1,
+): StoredEvent {
+  return { event: event(runId, type, data, ts), seq };
+}
+
+describe('buildGroup', () => {
+  test('merges text deltas and captures run lifecycle fields', () => {
+    const entries: StoredEvent[] = [
+      stored('r1', 'run.started', 1, { input: 'hi', session_id: 's1' }, 100),
+      stored('r1', 'llm.stream.chunk', 2, { chunk: { type: 'text_delta', delta: 'Hel' } }, 101),
+      stored('r1', 'llm.stream.chunk', 3, { chunk: { type: 'text_delta', delta: 'lo' } }, 102),
+      stored('r1', 'tool.call.started', 4, { tool_name: 'bash' }, 103),
+      stored('r1', 'llm.stream.chunk', 5, { chunk: { type: 'finish' } }, 104),
+      stored('r1', 'run.completed', 6, { output: 'Hello', duration_ms: 42, iterations: 2 }, 105),
+    ];
+    const group = buildGroup('r1', entries);
+    expect(group.input).toBe('hi');
+    expect(group.sessionId).toBe('s1');
+    expect(group.status).toBe('completed');
+    expect(group.output).toBe('Hello');
+    expect(group.durationMs).toBe(42);
+    expect(group.iterations).toBe(2);
+    const texts = group.items
+      .filter((item): item is { kind: 'text'; text: string; key: string } => item.kind === 'text')
+      .map((item) => item.text);
+    expect(texts).toEqual(['Hello']);
+    expect(group.items.some((item) => item.kind === 'event')).toBe(true);
+  });
+
+  test('records failed and cancelled terminal states', () => {
+    expect(buildGroup('r1', [stored('r1', 'run.failed', 1, { error: 'boom' })]).status).toBe(
+      'failed',
+    );
+    expect(buildGroup('r1', [stored('r1', 'run.cancelled', 1)]).status).toBe('cancelled');
+  });
+});
+
+describe('groupEvents', () => {
+  test('hides internal and subagent events by default', () => {
+    const entries = [
+      stored('r1', 'run.started', 1, {}, 10),
+      stored('r1', 'llm.request', 2, {}, 11),
+      stored('child', 'subagent.started', 3, {}, 12),
+      stored('r1', 'error', 4, { error: 'x' }, 13),
+    ];
+    const groups = groupEvents(entries, false);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.items.filter((item) => item.kind === 'event')).toHaveLength(1);
+  });
+
+  test('showInternal keeps internal events and groups by run', () => {
+    const entries = [
+      stored('r1', 'run.started', 1, {}, 10),
+      stored('r2', 'run.started', 2, {}, 5),
+      stored('r1', 'llm.request', 3, {}, 11),
+    ];
+    const groups = groupEvents(entries, true);
+    expect(groups.map((group) => group.runId)).toEqual(['r2', 'r1']);
+    const items = groups.find((group) => group.runId === 'r1')?.items ?? [];
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind === 'event' ? items[0].event.type : '').toBe('llm.request');
+  });
+});
+
+describe('isGroupPersisted', () => {
+  const group = {
+    ...buildGroup('r1', []),
+    status: 'completed' as const,
+    input: 'hi',
+    output: 'done',
+  };
+  const detail = (messages: SessionDetail['messages']): SessionDetail => ({
+    session_id: 's1',
+    messages,
+  });
+
+  test('requires both user input and final output in history', () => {
+    expect(isGroupPersisted(group, detail([]))).toBe(false);
+    expect(isGroupPersisted(group, detail([{ role: 'user', content: 'hi' }]))).toBe(false);
+    expect(
+      isGroupPersisted(
+        group,
+        detail([
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'done' },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  test('does not hide incomplete runs or empty output', () => {
+    expect(
+      isGroupPersisted(
+        { ...group, status: 'running' },
+        detail([
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'done' },
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      isGroupPersisted(
+        { ...group, output: undefined },
+        detail([
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'done' },
+        ]),
+      ),
+    ).toBe(false);
+  });
+});
+
+function meta(seq: number, jobId?: string): EventMeta {
+  return { seq, ...(jobId ? { jobId } : {}) };
+}
+
+describe('EventStore', () => {
+  test('deduplicates out-of-order and repeated seq values', () => {
+    const store = new EventStore(0);
+    expect(store.push(event('r1', 'run.started'), meta(5))).toBe(true);
+    expect(store.push(event('r1', 'run.started'), meta(5))).toBe(false);
+    expect(store.push(event('r1', 'run.started'), meta(4))).toBe(false);
+    store.flush();
+    expect(store.getSnapshot().entries).toHaveLength(1);
+    expect(store.currentSeq).toBe(5);
+  });
+
+  test('caps each run and marks it truncated', () => {
+    const store = new EventStore(0);
+    const total = MAX_EVENTS_PER_RUN + 5;
+    for (let seq = 1; seq <= total; seq += 1) {
+      store.push(event('r1', 'llm.stream.chunk'), meta(seq));
+    }
+    store.flush();
+    const snapshot = store.getSnapshot();
+    expect(snapshot.entries).toHaveLength(MAX_EVENTS_PER_RUN);
+    expect(snapshot.truncatedRuns.has('r1')).toBe(true);
+    expect(snapshot.entries.at(-1)?.seq).toBe(total);
+  });
+
+  test('caps the total buffer by dropping the oldest events', () => {
+    const store = new EventStore(0);
+    const runs = 6;
+    let seq = 0;
+    for (let run = 0; run < runs; run += 1) {
+      for (let index = 0; index < MAX_EVENTS_PER_RUN; index += 1) {
+        seq += 1;
+        store.push(event(`run-${run}`, 'llm.stream.chunk'), meta(seq));
+      }
+    }
+    store.flush();
+    const snapshot = store.getSnapshot();
+    expect(snapshot.entries).toHaveLength(MAX_EVENTS_TOTAL);
+    expect(snapshot.truncatedRuns.has('run-0')).toBe(true);
+    expect(snapshot.entries.at(-1)?.seq).toBe(runs * MAX_EVENTS_PER_RUN);
+  });
+
+  test('reset clears entries and resumes from the requested seq', () => {
+    const store = new EventStore(0);
+    store.push(event('r1', 'run.started'), meta(3));
+    store.reset(10);
+    const snapshot = store.getSnapshot();
+    expect(snapshot.entries).toHaveLength(0);
+    expect(snapshot.lastSeq).toBe(10);
+    expect(snapshot.truncatedRuns.size).toBe(0);
+    expect(store.push(event('r1', 'run.started'), meta(9))).toBe(false);
+    expect(store.push(event('r1', 'run.started'), meta(11))).toBe(true);
+  });
+
+  test('notifies subscribers with a new snapshot version', () => {
+    const store = new EventStore(0);
+    let calls = 0;
+    const off = store.subscribe(() => {
+      calls += 1;
+    });
+    store.push(event('r1', 'run.started'), meta(1));
+    store.flush();
+    expect(calls).toBe(1);
+    const first = store.getSnapshot();
+    store.push(event('r1', 'run.completed'), meta(2));
+    store.flush();
+    expect(calls).toBe(2);
+    expect(store.getSnapshot().version).toBeGreaterThan(first.version);
+    off();
+    store.flush();
+    expect(calls).toBe(2);
+  });
+});

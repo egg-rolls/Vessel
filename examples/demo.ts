@@ -9,8 +9,8 @@ import {
   MemoryContextManager,
   MemoryEventStream,
   MemoryLLMProvider,
+  MemoryPluginHost,
   MemorySessionBackend,
-  MemoryToolRegistry,
   type RunEvent,
 } from '../packages/core/src/index';
 
@@ -20,11 +20,11 @@ async function main() {
   // 1. 创建 Provider
   const provider = new MemoryLLMProvider();
 
-  // 2. 创建工具注册表
-  const tools = new MemoryToolRegistry();
+  // 2. 创建插件宿主（工具的唯一注册表）
+  const host = new MemoryPluginHost();
 
   // 注册天气工具
-  tools.register({
+  host.registerTool({
     name: 'get_weather',
     description: 'Get weather information for a city',
     inputSchema: {
@@ -49,7 +49,7 @@ async function main() {
   const runtime = await AgentRuntime.create({
     provider,
     model: 'gpt-4',
-    tools,
+    pluginHost: host,
     context,
     events,
     limits: {

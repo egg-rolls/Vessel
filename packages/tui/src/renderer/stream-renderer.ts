@@ -2,10 +2,13 @@
  * 流式渲染器（egg-rolls 基础版）
  * @module @vessel/tui
  *
+ * @deprecated 已废弃——与 React 版 `components/StreamOutput.tsx` 同构并存，
+ * 双渲染器造成维护负担。Ink TTY 模式统一走 StreamOutput（React），
+ * 本 ANSI 版仅保留供既有单元测试覆盖，不再接入任何渲染路径。
+ *
  * 订阅 EventStream，token-by-token 打印 LlmStreamChunk.text_delta；
  * 打印工具调用卡片；RunCompleted 收尾换行。
  * REPL 用 didStreamLastRun() 判断是否需要兜底打印 run() 返回值（非流式 provider）。
- * emma 后续替换为 token 动画 + spinner + 富文本，订阅同一事件流。
  */
 
 import type {

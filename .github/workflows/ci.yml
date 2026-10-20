@@ -2,14 +2,35 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, 'release/**']
   push:
-    branches: [main]
+    branches: [main, 'release/**']
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
-  # ── 常规质量检查（PR + main push 都跑）─────────
+  # ── 质量门禁（PR + main/release push）─────────────
   quality:
     name: Quality Checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run quality checks
+        uses: ./.github/actions/quality
+
+  # ── 架构依赖方向（R8b；subpath 冒烟就绪前不设 required）──
+  architecture:
+    name: Architecture
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -20,30 +41,41 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
 
-      - name: Run linting
-        run: bun run lint
+      - name: Check dependency direction
+        run: bun run scripts/check-deps.ts
 
-      - name: Run type checking
-        run: bun run typecheck
+      - name: Smoke subpath exports
+        run: bun run scripts/smoke-subpaths.ts
 
-      - name: Run tests
-        run: bun test
+      - name: Check docs consistency
+        run: bun run scripts/check-docs.ts
 
-      - name: Build packages
-        run: bun run build
+      - name: Check RPC method table
+        run: bun run scripts/check-rpc-methods.ts
 
-  # ── 冒烟测试（仅 main push 后跑，PR 不跑）─────
-  smoke:
-    name: Smoke Tests
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Check version consistency
+        run: bun run scripts/version.ts --check
+
+  # ── 离线集成：MCP / gateway / 0.4 能力（0.3 + 0.4）──
+  # MCP 用本地 mock server（stdio fixture / 127.0.0.1:0），
+  # TLS 用本地自签证书；workflow / evals / feishu 均用 mock，不依赖外网。
+  offline-integration:
+    name: Offline Integration
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: quality
+    timeout-minutes: 12
 
     steps:
       - name: Checkout code
@@ -52,16 +84,387 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
 
       - name: Install dependencies
-        run: bun install
+        run: bun install --frozen-lockfile
+
+      - name: MCP client offline tests
+        run: bun test plugins/mcp/client
+
+      - name: Gateway remote/TLS offline tests
+        run: bun test packages/serve
+
+      - name: Workflow offline tests
+        run: bun test plugins/workflow/engine
+
+      - name: Evals offline tests
+        run: bun test plugins/evals/harness
+
+      - name: Feishu offline tests
+        run: bun test plugins/im/feishu
+
+      # Core metrics / event history / prune / hardening tests.
+      # Broad directory keeps this stable while core names the new test files.
+      - name: Core observability and stability tests
+        run: bun test packages/core
+
+      - name: Config sources matrix
+        run: bun run scripts/check-config-sources.ts
+
+      - name: Trace smoke
+        run: bun run scripts/check-trace.ts
+
+  # ── 0.6 跨节点专项（ubuntu；非 required）──────────
+  multi-node:
+    name: Multi Node
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Remote transport and registry
+        run: >-
+          bun test
+          src/__tests__/remote-transport-0.6.test.ts
+          src/__tests__/remote-transport-e2e-0.6.test.ts
+          src/__tests__/team-wiring.test.ts
+          src/__tests__/transport-factory.test.ts
+          packages/core/__tests__/transport-port-remote.test.ts
+          plugins/tools/team/__tests__/routing.test.ts
+          packages/serve/__tests__/gateway.team-remote.test.ts
+
+  # ── 0.6 TLS / CA 专项（ubuntu；非 required）────────
+  tls-ca:
+    name: TLS CA
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Gateway TLS and remote auth
+        run: >-
+          bun test
+          packages/serve/__tests__/gateway.tls.test.ts
+          packages/serve/__tests__/gateway.remote.test.ts
+
+      - name: Remote client CA and connect e2e
+        run: >-
+          bun test
+          src/__tests__/connect-e2e-0.6.test.ts
+          src/__tests__/rpc-remote-0.6.test.ts
+          packages/config/__tests__/zero-six-remote.test.ts
+
+  # ── 0.6 独立前端 / CORS 专项（ubuntu；非 required）──
+  frontend-cors:
+    name: Frontend CORS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Gateway Origin and tenant override
+        run: >-
+          bun test
+          packages/serve/__tests__/gateway.origin.test.ts
+          packages/serve/__tests__/gateway.ws-tenant.test.ts
+
+      - name: Runtime gateway URL
+        run: bun test apps/web/tests/gatewayUrl.test.ts
+
+  # ── 发布干跑：PR + release/**（0.4，不发布、不上传）──
+  release-dry-run:
+    name: Release Dry Run
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/release/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Packs each public package to an OS temp dir and validates it.
+      # Never publishes, uploads, tags, or touches main.
+      - name: Release dry run
+        run: bun run scripts/release-dry-run.ts
+
+  # ── 安装解析 smoke：18 个子包 + 根 tarball（ubuntu；不发布）──
+  install-smoke:
+    name: Install Smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/heads/release/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      # 根 tarball 的 files 包含 apps/web/dist（被 .gitignore 忽略），
+      # 必须先构建，smoke 才能断言根包内含 Web 控制台。
+      - name: Build web console
+        working-directory: apps/web
+        run: |
+          npm ci
+          npm run build
+
+      # npm pack 全部 18 个可发布包 + 根 tarball，临时工程用 overrides 指向
+      # 本地 tarball 安装，然后运行 `vessel --version` / `vessel --tools`。
+      - name: Install resolution smoke
+        run: bun run scripts/smoke-install.ts
+
+  # ── 跨平台（PR 只跑 ubuntu，main/release 跑全矩阵）──
+  cross-platform:
+    name: Cross Platform (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # PR 只跑 ubuntu；main / release/** 跑全矩阵
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest","windows-latest","macos-latest"]') }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # 根 `bun test` 会扫 apps/web/tests；apps/web 不在根 workspaces 里，
+      # 必须先装它自己的依赖（react 等），否则测试文件按 error 计。
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Run type checking
+        run: bun run typecheck
+
+      # 0.9：开启 canonical RPC 结果校验，防止 result_schema 与实现漂移。
+      - name: Run tests
+        env:
+          VESSEL_VALIDATE_RESULTS: "1"
+        run: bun test
+
+  # ── Web 控制台构建 ───────────────────────────────
+  web:
+    name: Web Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build web console
+        working-directory: apps/web
+        run: npm run build
+
+  # ── examples（上轮盲区：不在 typecheck 覆盖内）────
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck examples
+        run: bunx tsc -p examples/tsconfig.json --noEmit
+
+      - name: Run examples
+        run: bun run demo
+
+  # ── 冒烟测试（仅 main/release push 后跑）──────────
+  smoke:
+    name: Smoke Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: quality
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release/'))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Cache Bun install
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: CLI --version
+        run: bun run src/cli.ts --version
+
+      - name: CLI --tools
+        run: VESSEL_MOCK=1 bun run src/cli.ts --tools
 
       - name: headless mock 模式
         run: VESSEL_MOCK=1 bun run src/cli.ts --run "hello"
 
       - name: headless 管道模式
         run: echo "hello" | VESSEL_MOCK=1 bun run src/cli.ts --run
+
+      - name: headless @file 模式
+        run: VESSEL_MOCK=1 bun run src/cli.ts --run @examples/demo.ts
 
       - name: 交互模式 /exit
         run: echo "/exit" | VESSEL_MOCK=1 bun run src/cli.ts

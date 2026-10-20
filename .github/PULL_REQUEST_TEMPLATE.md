@@ -1,22 +1,11 @@
-<!-- PR 标题格式：<type>(<scope>): <简短描述> #<issue-number> -->
-<!-- 示例：fix(core): AgentRuntime 改用静态工厂方法 #17 -->
-
+<!-- 标题格式：<type>(<scope>): <简短描述> -->
 ## 变更说明
-<!-- 这个 PR 做了什么、为什么 -->
-
-## 变更类型
-- [ ] feat
-- [ ] fix
-- [ ] docs
-- [ ] refactor
-- [ ] test
-- [ ] chore
+<!-- 做了什么、为什么 -->
 
 ## 检查清单
-- [ ] 已读 [AGENTS.md](../AGENTS.md) §6 能力分层决策树，新能力分类正确（core / 插件 / 应用层）
-- [ ] 未触碰 core 红线（AGENTS.md §4）；若改 core 已附 ADR（ADR-012）
-- [ ] 未引入 LangChain 或重依赖进 core
-- [ ] 补了测试，`bun test` 通过
-- [ ] `bun run lint` / `bun run typecheck` / `bun run build` 通过
-- [ ] 更新了相关文档（SPEC / ADR / ROADMAP / CLAUDE / PLUGINS）
-- [ ] 未在文档中吹未实现能力（反幻觉纪律）
+- [ ] `bun test` / `bun run typecheck` / `bunx @biomejs/biome ci .` 全过
+- [ ] CI 全绿（`quality` / `cross-platform` / `web` / `examples` / `smoke` 按触发条件）
+- [ ] 新能力已按 [AGENTS.md](AGENTS.md) 分层（core / 插件 / 应用层），拿不准的做成了插件
+- [ ] 影响 CI / 发布 / 文件规范时，已同步 [docs/operations/](docs/operations/) 与 [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)
+- [ ] 未引重依赖、未加第二套扩展机制、未在文档里吹未实现的能力
+- [ ] 未包含 handoff / plan / report / 临时脚本等个人侧产物

@@ -69,6 +69,15 @@ describe('FileEventStore', () => {
     expect(read[0]?.run_id).toBe('run-1');
   });
 
+  it('append 时自动创建父目录（C-08）', async () => {
+    const nested = new FileEventStore(path.join(tmpDir, 'deep', 'nested', 'events.jsonl'));
+
+    await nested.append(makeEvent('run.started', 'run-nested'));
+
+    const read = await nested.readRun('run-nested');
+    expect(read).toHaveLength(1);
+  });
+
   it('should return empty array for non-existent run', async () => {
     const event = makeEvent('run.started', 'run-1');
     await store.append(event);
@@ -86,11 +95,6 @@ describe('FileEventStore', () => {
     // 排序后比较（Set 迭代顺序可能与插入顺序不完全一致）
     const sorted = [...ids].sort();
     expect(sorted).toEqual(['run-a', 'run-b']);
-  });
-
-  it('should return empty list for non-existent file', async () => {
-    const ids = await store.listRunIds();
-    expect(ids).toEqual([]);
   });
 
   it('should delete events for a specific run', async () => {

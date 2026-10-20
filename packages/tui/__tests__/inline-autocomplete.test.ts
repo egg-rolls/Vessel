@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import {
   type CommandItem,
+  DISCOVERY_PRIORITY,
   decideCommandEnter,
   filterCommands,
+  getVisibleCommandWindow,
+  MAX_VISIBLE_COMMANDS,
+  sortCommandsForDiscovery,
 } from '../src/components/InlineAutocomplete.js';
 
 /** 构造测试用命令列表 */
@@ -35,6 +39,88 @@ describe('filterCommands', () => {
     const filtered = filterCommands(sampleCommands(), 'resume');
     expect(filtered[0]?.name).toBe('/resume');
     expect(filtered.map((c) => c.name)).toContain('/help');
+  });
+});
+
+/** 窗口不变量：选中项可见、长度不超上限、边界落在 [0,total]。 */
+function expectValidWindow(total: number, selected: number, maxVisible: number): void {
+  const { start, end } = getVisibleCommandWindow(total, selected, maxVisible);
+
+  expect(start).toBeGreaterThanOrEqual(0);
+  expect(end).toBeLessThanOrEqual(total);
+  expect(end).toBeGreaterThan(start);
+  expect(end - start).toBeLessThanOrEqual(Math.min(maxVisible, total));
+  expect(selected).toBeGreaterThanOrEqual(start);
+  expect(selected).toBeLessThan(end);
+}
+
+describe('sortCommandsForDiscovery', () => {
+  it('空 filter 时 /resume 置顶，常用命令占首屏前五位', () => {
+    const commands: CommandItem[] = [
+      { name: '/tools', description: '工具' },
+      { name: '/plugins', description: '插件' },
+      { name: '/resume', description: '会话' },
+      { name: '/help', description: '帮助' },
+      { name: '/new', description: '新会话' },
+      { name: '/history', description: '历史' },
+      { name: '/clear', description: '清屏' },
+      { name: '/exit', description: '退出' },
+    ];
+
+    const sorted = filterCommands(commands, '');
+    expect(sorted.slice(0, 5).map((cmd) => cmd.name)).toEqual([...DISCOVERY_PRIORITY]);
+    // 其余保持注册顺序
+    expect(sorted.slice(5).map((cmd) => cmd.name)).toEqual(['/tools', '/plugins', '/exit']);
+    expect(sorted).toHaveLength(commands.length);
+  });
+
+  it('非首屏命令保持原有相对顺序', () => {
+    const commands: CommandItem[] = [
+      { name: '/runs', description: '运行' },
+      { name: '/config', description: '配置' },
+      { name: '/metrics', description: '指标' },
+    ];
+    expect(sortCommandsForDiscovery(commands).map((cmd) => cmd.name)).toEqual([
+      '/runs',
+      '/config',
+      '/metrics',
+    ]);
+  });
+
+  it('带 filter 时保持相关度排序（不强行置顶）', () => {
+    const filtered = filterCommands(sampleCommands(), 'resume');
+    // /resume 是命令名匹配，/help 只是描述匹配；优先级不应打乱相关度
+    expect(filtered[0]?.name).toBe('/resume');
+  });
+});
+
+describe('getVisibleCommandWindow', () => {
+  it('条目不超过上限时覆盖全部', () => {
+    for (const [total, selected] of [
+      [3, 0],
+      [8, 7],
+    ] as const) {
+      expect(getVisibleCommandWindow(total, selected)).toEqual({ start: 0, end: total });
+    }
+  });
+
+  it('选中项始终落在可见窗口内且窗口不超上限', () => {
+    for (const selected of [0, 2, 10, 19]) {
+      expectValidWindow(20, selected, MAX_VISIBLE_COMMANDS);
+    }
+  });
+
+  it('选中最后一项时窗口贴住末尾', () => {
+    expect(getVisibleCommandWindow(20, 19).end).toBe(20);
+  });
+
+  it('空列表 / 非法上限返回空窗口', () => {
+    expect(getVisibleCommandWindow(0, 0)).toEqual({ start: 0, end: 0 });
+    expect(getVisibleCommandWindow(5, 0, 0)).toEqual({ start: 0, end: 0 });
+  });
+
+  it('自定义窗口大小同样满足窗口不变量', () => {
+    expectValidWindow(10, 8, 4);
   });
 });
 

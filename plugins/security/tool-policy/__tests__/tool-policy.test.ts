@@ -1,6 +1,15 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { GuardrailStage, MemoryPluginHost } from '@vessel/core';
-import { createToolPolicyPlugin, toolPolicyPlugin } from '../src/index';
+import {
+  AgentRuntime,
+  GuardrailStage,
+  MemoryContextManager,
+  MemoryEventStream,
+  MemoryLLMProvider,
+  MemoryPluginHost,
+  type Plugin,
+  type ToolDefinition,
+} from '@vessel/core';
+import { createToolPolicyPlugin, type PluginInstallOptions, toolPolicyPlugin } from '../src/index';
 
 describe('tool-policy 插件（P2）', () => {
   let host: MemoryPluginHost;
@@ -112,7 +121,7 @@ describe('tool-policy 插件（P2）', () => {
     expect(r2.allowed).toBe(true);
   });
 
-  it('enableWildcards 参数不影响匹配行为（当前实现）', async () => {
+  it('enableWildcards: false 时按字面量匹配', async () => {
     const noWildcardHost = new MemoryPluginHost();
     createToolPolicyPlugin({
       mode: 'denylist',
@@ -122,8 +131,6 @@ describe('tool-policy 插件（P2）', () => {
     const g = noWildcardHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
 
-    // 注意：当前实现中 enableWildcards 参数未被使用
-    // 通配符匹配始终启用
     const r1 = await g.check(
       { name: 'mcp__server__tool' },
       {
@@ -131,10 +138,9 @@ describe('tool-policy 插件（P2）', () => {
         stage: GuardrailStage.ToolCall,
       },
     );
-    // 由于通配符匹配始终启用，mcp__server__tool 会匹配 mcp__*
-    expect(r1.allowed).toBe(false);
+    expect(r1.allowed).toBe(true);
 
-    // 精确匹配
+    // 字面量精确匹配仍然生效
     const r2 = await g.check(
       { name: 'mcp__*' },
       {
@@ -143,6 +149,51 @@ describe('tool-policy 插件（P2）', () => {
       },
     );
     expect(r2.allowed).toBe(false);
+  });
+
+  it('通配符中的正则元字符按字面量处理', async () => {
+    const hostWithMeta = new MemoryPluginHost();
+    createToolPolicyPlugin({
+      mode: 'denylist',
+      tools: ['tool.(v2)*'],
+    }).install(hostWithMeta);
+    const g = hostWithMeta.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    // `.` 不应当作任意字符：toolXv2abc 不应被拦截
+    const r1 = await g.check(
+      { name: 'toolXv2abc' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(r1.allowed).toBe(true);
+
+    // 字面量 `tool.(v2)` 前缀命中
+    const r2 = await g.check(
+      { name: 'tool.(v2)beta' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(r2.allowed).toBe(false);
+  });
+
+  it('runtime 传入的是 ToolCall（function.name），不是 { name }', async () => {
+    const denyHost = new MemoryPluginHost();
+    createToolPolicyPlugin({
+      mode: 'denylist',
+      tools: ['danger_tool'],
+    }).install(denyHost);
+    const g = denyHost.getGuardrails()[0];
+    if (!g) throw new Error('guardrail not registered');
+
+    const r = await g.check(
+      {
+        id: 'tc1',
+        type: 'function',
+        function: { name: 'danger_tool', arguments: '{}' },
+      },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(r.allowed).toBe(false);
+    expect(r.reason).toContain('danger_tool');
   });
 
   it('自定义阻断消息', async () => {
@@ -166,28 +217,44 @@ describe('tool-policy 插件（P2）', () => {
     expect(r.reason).toContain('安全策略拦截');
   });
 
-  it('工具名从上下文中获取', async () => {
-    const g = host.getGuardrails()[0];
+  it('install 传入 plugins[].config 时生效（E1）', async () => {
+    const configHost = new MemoryPluginHost();
+    (toolPolicyPlugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(
+      configHost,
+      { config: { mode: 'allowlist', tools: ['read'], block_message: 'YAML 策略：' } },
+    );
+    const g = configHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
-    const r = await g.check({}, {
-      run_id: 'r1',
-      stage: GuardrailStage.ToolCall,
-      ...{ tool_name: 'test_tool' },
-    } as Parameters<typeof g.check>[1]);
-    expect(r.allowed).toBe(true);
+
+    const allowed = await g.check(
+      { name: 'read' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(allowed.allowed).toBe(true);
+
+    const blocked = await g.check(
+      { name: 'bash' },
+      { run_id: 'r1', stage: GuardrailStage.ToolCall },
+    );
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.reason).toContain('YAML 策略');
   });
 
-  it('空工具名放行', async () => {
-    const g = host.getGuardrails()[0];
+  it('install 配置覆盖工厂配置（工厂默认 denylist，运行时改 allowlist）', async () => {
+    const configHost = new MemoryPluginHost();
+    const plugin = createToolPolicyPlugin({ mode: 'denylist', tools: ['read'] });
+    (plugin.install as (h: MemoryPluginHost, o?: PluginInstallOptions) => void)(configHost, {
+      config: { mode: 'allowlist', tools: ['read'] },
+    });
+    const g = configHost.getGuardrails()[0];
     if (!g) throw new Error('guardrail not registered');
-    const r = await g.check(
-      {},
-      {
-        run_id: 'r1',
-        stage: GuardrailStage.ToolCall,
-      },
-    );
-    expect(r.allowed).toBe(true);
+
+    expect(
+      (await g.check({ name: 'read' }, { run_id: 'r1', stage: GuardrailStage.ToolCall })).allowed,
+    ).toBe(true);
+    expect(
+      (await g.check({ name: 'bash' }, { run_id: 'r1', stage: GuardrailStage.ToolCall })).allowed,
+    ).toBe(false);
   });
 
   it('多个工具在黑名单中', async () => {
@@ -218,5 +285,95 @@ describe('tool-policy 插件（P2）', () => {
       },
     );
     expect(rSafe.allowed).toBe(true);
+  });
+});
+
+/** 构造一个只注册指定工具的插件 */
+function toolPlugin(tool: ToolDefinition): Plugin {
+  return {
+    name: 'test-tools',
+    install(host) {
+      host.registerTool(tool);
+    },
+  };
+}
+
+/** 让 provider 对指定输入返回一次 tool_call */
+function callTool(provider: MemoryLLMProvider, input: string, toolName: string): void {
+  provider.setResponse(input, {
+    content: '',
+    finish_reason: 'tool_calls',
+    tool_calls: [
+      {
+        id: 'tc-1',
+        type: 'function',
+        function: { name: toolName, arguments: '{}' },
+      },
+    ],
+  });
+}
+
+describe('tool-policy 与 runtime 集成', () => {
+  it('经 AgentRuntime 的真实 tool_call 被拦截后折回工具错误，run 继续', async () => {
+    const provider = new MemoryLLMProvider();
+    callTool(provider, 'CALL_DANGER', 'danger_tool');
+
+    let handlerCalled = false;
+    const dangerTool: ToolDefinition = {
+      name: 'danger_tool',
+      description: 'danger',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        handlerCalled = true;
+        return 'should not run';
+      },
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: {},
+      termination: { maxIterations: 5 },
+      plugins: [
+        toolPlugin(dangerTool),
+        createToolPolicyPlugin({ mode: 'denylist', tools: ['danger_tool'] }),
+      ],
+    });
+
+    const result = await runtime.run('CALL_DANGER');
+    expect(handlerCalled).toBe(false);
+    expect(result).toContain('blocked by guardrail');
+    expect(result).toContain('danger_tool');
+    expect(result).not.toContain('should not run');
+  });
+
+  it('未命中策略的工具照常执行', async () => {
+    const provider = new MemoryLLMProvider();
+    callTool(provider, 'CALL_SAFE', 'safe_tool');
+    // 工具执行后，模型看到 tool 消息会回显其内容并结束
+    const safeTool: ToolDefinition = {
+      name: 'safe_tool',
+      description: 'safe',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'safe-result',
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      context: new MemoryContextManager(),
+      events: new MemoryEventStream(),
+      limits: {},
+      termination: { maxIterations: 5 },
+      plugins: [
+        toolPlugin(safeTool),
+        createToolPolicyPlugin({ mode: 'denylist', tools: ['danger_tool'] }),
+      ],
+    });
+
+    const result = await runtime.run('CALL_SAFE');
+    expect(result).toBe('safe-result');
   });
 });

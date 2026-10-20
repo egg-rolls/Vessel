@@ -1,0 +1,6 @@
+/* 样式入口：保持 Linen 视觉语言，按职责拆分，禁止再堆回单文件。 */
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/layout.css";
+@import "./styles/components.css";
+@import "./styles/domains.css";

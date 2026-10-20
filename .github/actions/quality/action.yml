@@ -1,0 +1,55 @@
+name: Quality Checks
+description: Install dependencies and run lint, typecheck, tests, and build.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: 1.3.9
+
+    - name: Cache Bun install
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-bun-
+
+    - name: Install dependencies
+      shell: bash
+      run: bun install --frozen-lockfile
+
+    # 根 `bun test` 会扫 apps/web/tests；apps/web 不在根 workspaces 里，
+    # 必须先装它自己的依赖（react 等），否则测试文件按 error 计。
+    - name: Setup Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: 22
+        cache: npm
+        cache-dependency-path: apps/web/package-lock.json
+
+    - name: Install web dependencies
+      shell: bash
+      working-directory: apps/web
+      run: npm ci
+
+    - name: Lint
+      shell: bash
+      run: bun run lint
+
+    - name: Typecheck
+      shell: bash
+      run: bun run typecheck
+
+    # 0.9：开启 canonical RPC 结果校验，防止 result_schema 与实现漂移。
+    - name: Test
+      shell: bash
+      env:
+        VESSEL_VALIDATE_RESULTS: "1"
+      run: bun test
+
+    - name: Build
+      shell: bash
+      run: bun run build

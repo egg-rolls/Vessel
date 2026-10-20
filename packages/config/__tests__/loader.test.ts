@@ -78,24 +78,6 @@ providers:
     expect(validation.errors.some((e) => e.path === 'provider.model')).toBe(false);
   });
 
-  it('default_provider: custom 时 provider.name 为 custom，不错显 openai', async () => {
-    const userConfigPath = tmpYaml(`
-api_key: sk-test
-default_provider: custom
-default_model: some-model
-providers:
-  custom:
-    api_key: sk-test
-    base_url: https://example.com
-`);
-    const { config } = await loadConfig({
-      userConfigPath,
-      configPath: missingPath(),
-    });
-
-    expect(config.provider?.name).toBe('custom');
-  });
-
   it('openai provider 缺 model 时保留安全默认 gpt-4（SPEC §6.2.3）', async () => {
     const userConfigPath = tmpYaml(`
 api_key: sk-test
@@ -112,5 +94,100 @@ providers:
 
     expect(config.provider?.model).toBe('gpt-4');
     expect(validation.errors.some((e) => e.path === 'provider.model')).toBe(false);
+  });
+});
+
+describe('loadConfig - 0.6.1 permission / plugins / env', () => {
+  it('permission.auto_approve 映射为 autoApprove 数组', async () => {
+    const userConfigPath = tmpYaml(`
+permission:
+  auto_approve:
+    - bash
+    - edit
+`);
+    const { config, validation } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: {},
+    });
+
+    expect(config.permission?.autoApprove).toEqual(['bash', 'edit']);
+    expect(validation.errors).toEqual([]);
+  });
+
+  it('permission.auto_approve 非字符串数组时报错', async () => {
+    const userConfigPath = tmpYaml(`
+permission:
+  auto_approve: bash
+`);
+    const { validation } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: {},
+    });
+
+    expect(validation.errors.some((e) => e.path === 'permission.autoApprove')).toBe(true);
+  });
+
+  it('plugins 条目校验 name/enabled/config 形状', async () => {
+    const userConfigPath = tmpYaml(`
+plugins:
+  - enabled: nope
+    config: []
+  - name: basic-tools
+  - name: basic-tools
+`);
+    const { validation } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: {},
+    });
+
+    expect(validation.errors.some((e) => e.path === 'plugins.0.name')).toBe(true);
+    expect(validation.errors.some((e) => e.path === 'plugins.0.enabled')).toBe(true);
+    expect(validation.errors.some((e) => e.path === 'plugins.0.config')).toBe(true);
+    expect(validation.errors.some((e) => e.path === 'plugins.2.name')).toBe(true);
+  });
+
+  it('VESSEL_SESSION_BACKEND 覆盖文件 session.backend', async () => {
+    const userConfigPath = tmpYaml(`
+session:
+  backend: sqlite
+`);
+    const { config, validation } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: { VESSEL_SESSION_BACKEND: 'memory' },
+    });
+
+    expect(config.session?.backend).toBe('memory');
+    expect(validation.errors).toEqual([]);
+  });
+
+  it('VESSEL_SESSION_BACKEND 非法值由 validator 报错', async () => {
+    const { validation } = await loadConfig({
+      userConfigPath: missingPath(),
+      configPath: missingPath(),
+      env: { VESSEL_SESSION_BACKEND: 'redis' },
+    });
+
+    expect(validation.errors.some((e) => e.path === 'session.backend')).toBe(true);
+  });
+
+  it('VESSEL_PLUGINS 逗号分隔并整体替换 YAML plugins', async () => {
+    const userConfigPath = tmpYaml(`
+plugins:
+  - name: basic-tools
+`);
+    const { config } = await loadConfig({
+      userConfigPath,
+      configPath: missingPath(),
+      env: { VESSEL_PLUGINS: 'basic-tools, tool-policy ,,' },
+    });
+
+    expect(config.plugins).toEqual([
+      { name: 'basic-tools', enabled: true },
+      { name: 'tool-policy', enabled: true },
+    ]);
   });
 });

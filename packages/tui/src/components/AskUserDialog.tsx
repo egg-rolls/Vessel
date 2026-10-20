@@ -16,21 +16,39 @@
  */
 
 import type { EventStream } from '@vessel/core';
-import { Box, type Key, Text, useInput } from 'ink';
+import { Box, type Key, Text, useInput, useStdout, useWindowSize } from 'ink';
 import TextInput from 'ink-text-input';
 import { useCallback, useEffect, useState } from 'react';
+import { t } from '../i18n/index.js';
 import type { AskUserAnswer, AskUserQuestion, AskUserRequestedData } from '../renderer/ask-user.js';
+import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
+import { computeDialogWidth } from '../utils/dialog.js';
 
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
   events: EventStream;
-  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键） */
-  onActiveChange?: (active: boolean) => void;
+  /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键、Ctrl+C 主动解除 waitFor） */
+  onActiveChange?: (active: boolean, requestId?: string, runId?: string) => void;
 }
 
-/** 每个选择题末尾默认追加的自定义输入选项 */
-const CUSTOM_OPTION = '输入你自己的答案';
+/** 每个选择题末尾默认追加的自定义输入选项（内部哨兵，不直接展示） */
+const CUSTOM_OPTION = '__vessel_custom_answer__';
+
+function optionLabel(option: string): string {
+  return option === CUSTOM_OPTION ? t('ask.customOption') : option;
+}
+
+/** ESC 控制字符（不用正则：避免 lint/suspicious/noControlCharactersInRegex） */
+const ESC_CHAR = String.fromCharCode(0x1b);
+
+/**
+ * ink-text-input 不忽略 Esc，会把 ESC 序列插进值里；弹窗自己用 Esc 取消/退出输入，
+ * 因此在这里统一剥掉控制字符（同样适用于 Ctrl+L 之类的残留）。
+ */
+function sanitizeTypedValue(value: string): string {
+  return value.split(ESC_CHAR).join('');
+}
 
 interface AnswerState {
   selected: Set<string>;
@@ -40,6 +58,20 @@ interface AnswerState {
 /** 活跃请求状态 */
 interface ActivePrompt extends AskUserRequestedData {
   run_id: string;
+}
+
+/**
+ * 选项前缀：焦点标记必须是非颜色字形，NO_COLOR 下仍可见。
+ * 多选时与 `[✓]/[ ]` 组合，并保持各选项前缀等宽（5 列），避免文字错位。
+ */
+export function formatChoicePrefix(
+  focused: boolean,
+  selected: boolean,
+  multiSelect: boolean,
+): string {
+  const focusMark = focused ? '▶' : ' ';
+  if (!multiSelect) return focusMark;
+  return `${focusMark} ${selected ? '[✓]' : '[ ]'}`;
 }
 
 // ── 子组件：顶部 Tab 行 ──────────────────────────
@@ -56,18 +88,18 @@ function QuestionTabs({
   isAnswered: (i: number) => boolean;
 }) {
   return (
-    <Box marginBottom={1}>
+    <Box marginBottom={1} flexWrap="wrap">
       {questions.map((q, i) => {
         const isCurrent = i === currentIndex && !isReview;
         const done = isAnswered(i);
         return (
           <Text
             key={q.header}
-            backgroundColor={isCurrent ? 'cyan' : undefined}
-            color={done ? 'green' : isCurrent ? 'black' : 'gray'}
+            backgroundColor={isCurrent ? theme.selectedBg : undefined}
+            color={done ? theme.ok : isCurrent ? theme.brand : theme.faint}
             bold={isCurrent}
           >
-            {` ${done ? '✓' : '○'} ${q.header} `}
+            {` ${done ? glyph.done : glyph.idle} ${q.header} `}
           </Text>
         );
       })}
@@ -93,8 +125,8 @@ function ReviewPage({
   return (
     <Box flexDirection="column">
       <Box marginBottom={1}>
-        <Text bold color="cyan">
-          📋 Review Your Answers
+        <Text bold color={theme.brand}>
+          {t('ask.reviewTitle')}
         </Text>
       </Box>
       {questions.map((q, i) => {
@@ -105,15 +137,17 @@ function ReviewPage({
               {i + 1}. <Text bold>{q.header}</Text>
               {done ? `: ${resolveAnswer(i)}` : ''}
             </Text>
-            {!done && <Text color="yellow"> (未回答)</Text>}
+            {!done && <Text color={theme.warn}> {t('ask.unanswered')}</Text>}
           </Box>
         );
       })}
       <Box marginTop={1}>
         {unansweredCount > 0 ? (
-          <Text color="yellow">⚠ {notice || `还有 ${unansweredCount} 个问题未回答`}</Text>
+          <Text color={theme.warn}>
+            ⚠ {notice || t('ask.unansweredCount', { count: unansweredCount })}
+          </Text>
         ) : (
-          <Text color="gray">[Enter] 确认提交 · [Esc] 返回修改</Text>
+          <Text color={theme.faint}>{t('ask.reviewFooter')}</Text>
         )}
       </Box>
     </Box>
@@ -147,21 +181,21 @@ function ChoiceOptions({
         const focused = i === selectIndex;
         const isSelected = selected.has(opt);
         const isCustom = opt === CUSTOM_OPTION;
-        const prefix = multiSelect ? (isSelected ? '[✓]' : '[ ]') : focused ? '▶' : ' ';
+        const prefix = formatChoicePrefix(focused, isSelected, multiSelect);
 
         // 自定义输入项：聚焦时该行本身就是输入框（placeholder 暗灰提示）
         if (isCustom && customFocus) {
           return (
             <Box key={opt} flexDirection="row">
               <Text
-                backgroundColor={focused ? 'cyan' : undefined}
-                color={focused ? 'black' : isSelected ? 'green' : undefined}
+                backgroundColor={focused ? theme.selectedBg : undefined}
+                color={focused ? theme.brand : isSelected ? theme.ok : undefined}
                 bold={focused || isSelected}
               >
                 {` ${prefix}`}
               </Text>
               <TextInput
-                placeholder="输入你自己的答案"
+                placeholder={t('ask.customOption')}
                 value={custom}
                 onChange={onCustomChange}
                 onSubmit={onCustomSubmit}
@@ -173,8 +207,8 @@ function ChoiceOptions({
         // 自定义输入项：已填内容时在同一行展示答案
         if (isCustom && custom.trim()) {
           return (
-            <Text key={opt} color="green" bold>
-              {` ${prefix} 你的答案: ${custom.trim()}`}
+            <Text key={opt} color={theme.ok} bold>
+              {` ${prefix} ${t('ask.yourAnswer', { answer: custom.trim() })}`}
             </Text>
           );
         }
@@ -182,11 +216,11 @@ function ChoiceOptions({
         return (
           <Text
             key={opt}
-            backgroundColor={focused ? 'cyan' : undefined}
-            color={focused ? 'black' : isSelected ? 'green' : undefined}
+            backgroundColor={focused ? theme.selectedBg : undefined}
+            color={focused ? theme.brand : isSelected ? theme.ok : undefined}
             bold={focused || isSelected}
           >
-            {` ${prefix} ${opt}`}
+            {` ${prefix} ${optionLabel(opt)}`}
           </Text>
         );
       })}
@@ -197,6 +231,10 @@ function ChoiceOptions({
 // ── 主组件 ───────────────────────────────────────
 
 export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
+  const { stdout } = useStdout();
+  // useStdout 不订阅 resize：优先 useWindowSize，保证弹窗宽度即时跟随窗口。
+  const windowSize = useWindowSize();
+  const width = computeDialogWidth(windowSize.columns > 0 ? windowSize.columns : stdout.columns);
   const [prompt, setPrompt] = useState<ActivePrompt | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [view, setView] = useState<'question' | 'review'>('question');
@@ -221,9 +259,24 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
     return unsubscribe;
   }, [events]);
 
-  // 通知父组件激活状态（隐藏输入框、拦截按键）
+  // run 结束 / ask_user 工具失败时清空弹窗，避免 run 已结束但界面残留
   useEffect(() => {
-    onActiveChange?.(prompt !== null);
+    const unsubscribe = events.subscribe((rawEvent) => {
+      const event = asTuiEvent(rawEvent);
+      if (event.type === 'run.completed' || event.type === 'run.failed') {
+        setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
+        return;
+      }
+      if (event.type === 'tool.call.failed' && event.data.tool_name === 'ask_user') {
+        setPrompt((current) => (current && current.run_id === event.run_id ? null : current));
+      }
+    });
+    return unsubscribe;
+  }, [events]);
+
+  // 通知父组件激活状态（隐藏输入框、拦截按键、Ctrl+C 解除 waitFor）
+  useEffect(() => {
+    onActiveChange?.(prompt !== null, prompt?.requestId, prompt?.run_id);
   }, [prompt, onActiveChange]);
 
   const questions = prompt?.questions ?? [];
@@ -352,7 +405,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
     (key: Key) => {
       if (key.return) {
         if (unansweredCount === 0) submit();
-        else setNotice(`还有 ${unansweredCount} 个问题未回答，请按 Esc 返回补充`);
+        else setNotice(t('ask.unansweredNotice', { count: unansweredCount }));
       } else if (key.escape) {
         setView('question');
         setNotice('');
@@ -471,7 +524,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   // ── 自定义输入 / 开放式输入提交 ──────────────────
   const handleCustomSubmit = useCallback(
     (value: string) => {
-      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: value }));
+      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: sanitizeTypedValue(value) }));
       setCustomFocus(false);
       commitAndAdvance();
     },
@@ -480,7 +533,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
 
   const handleFreeSubmit = useCallback(
     (value: string) => {
-      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: value }));
+      updateAnswer(currentIndex, (prev) => ({ ...prev, custom: sanitizeTypedValue(value) }));
       commitAndAdvance();
     },
     [currentIndex, updateAnswer, commitAndAdvance],
@@ -492,13 +545,21 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   const currentAnswer = answers[currentIndex] ?? { selected: new Set<string>(), custom: '' };
 
   return (
-    <Box flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1} marginY={1}>
+    <Box
+      flexDirection="column"
+      borderStyle="single"
+      borderColor={theme.line}
+      paddingX={1}
+      marginY={1}
+      width={width}
+      overflow="hidden"
+    >
       {/* 标题行：标题 + 进度 */}
       <Box justifyContent="space-between" marginBottom={1}>
-        <Text bold color="cyan">
-          ❓ Agent Question
+        <Text bold color={theme.brand}>
+          {t('ask.questionTitle')}
         </Text>
-        <Text color="gray">
+        <Text color={theme.muted}>
           {currentIndex + 1} / {total}
         </Text>
       </Box>
@@ -521,7 +582,7 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
       ) : (
         <Box flexDirection="column">
           <Box marginBottom={1}>
-            <Text>{question.question}</Text>
+            <Text wrap="wrap">{question.question}</Text>
           </Box>
 
           {/* 选择题 */}
@@ -533,16 +594,20 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
               multiSelect={question.multi_select ?? false}
               selectIndex={selectIndex}
               customFocus={customFocus}
-              onCustomChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+              onCustomChange={(v) =>
+                updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
+              }
               onCustomSubmit={handleCustomSubmit}
             />
           ) : (
             /* 开放式输入 */
             <Box>
-              <Text color="cyan">{'> '}</Text>
+              <Text color={theme.brand}>{`${glyph.pointer} `}</Text>
               <TextInput
                 value={currentAnswer.custom}
-                onChange={(v) => updateAnswer(currentIndex, (p) => ({ ...p, custom: v }))}
+                onChange={(v) =>
+                  updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
+                }
                 onSubmit={handleFreeSubmit}
               />
             </Box>
@@ -551,12 +616,10 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
           {/* 底部提示 */}
           <Box marginTop={1}>
             {customFocus || !isChoice ? (
-              <Text color="gray">Enter 提交 · Tab 切换问题 · Esc 取消</Text>
+              <Text color={theme.faint}>{t('ask.hintSubmit')}</Text>
             ) : (
-              <Text color="gray">
-                {question.multi_select
-                  ? 'Space 勾选/取消 · Enter 提交 · Tab/←→ 切换问题 · Esc 取消'
-                  : '↑↓ 选择 · Enter 确认 · Tab/←→ 切换问题 · Esc 取消'}
+              <Text color={theme.faint}>
+                {question.multi_select ? t('ask.hintMulti') : t('ask.hintSingle')}
               </Text>
             )}
           </Box>

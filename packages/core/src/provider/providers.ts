@@ -86,6 +86,8 @@ type OpenAiStreamChunk = {
   choices?: Array<{
     delta?: {
       content?: string;
+      /** thinking 模式思维链增量（DeepSeek 等）；只累积，不进入事件流 */
+      reasoning_content?: string;
       tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -263,7 +265,7 @@ export class OpenAICompatibleProvider implements LLMProvider {
         };
       }
       if (msg.role === 'assistant' && msg.tool_calls) {
-        // 助手消息包含工具调用
+        // 助手消息包含工具调用；thinking 模式必须回传 reasoning_content
         return {
           role: 'assistant',
           content: msg.content,
@@ -275,6 +277,14 @@ export class OpenAICompatibleProvider implements LLMProvider {
               arguments: tc.function.arguments,
             },
           })),
+          ...(msg.reasoning_content ? { reasoning_content: msg.reasoning_content } : {}),
+        };
+      }
+      if (msg.role === 'assistant' && msg.reasoning_content) {
+        return {
+          role: 'assistant',
+          content: msg.content,
+          reasoning_content: msg.reasoning_content,
         };
       }
       // 普通消息
@@ -318,6 +328,8 @@ export class OpenAICompatibleProvider implements LLMProvider {
       choices: Array<{
         message: {
           content: string | null;
+          /** thinking 模式思维链（DeepSeek 等） */
+          reasoning_content?: string;
           tool_calls?: Array<{
             id: string;
             type: 'function';
@@ -355,6 +367,9 @@ export class OpenAICompatibleProvider implements LLMProvider {
       tool_calls: toolCalls,
       finish_reason: choice.finish_reason,
       usage: data.usage,
+      ...(choice.message.reasoning_content
+        ? { reasoning_content: choice.message.reasoning_content }
+        : {}),
     };
   }
 
@@ -414,6 +429,11 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
       const choice = parsed.choices?.[0];
       const delta = choice?.delta;
+
+      // thinking 模式：思维链只累积，不回调 onChunk（不进事件流/TUI）
+      if (delta?.reasoning_content) {
+        acc.appendReasoning(delta.reasoning_content);
+      }
 
       if (delta?.content) {
         acc.appendText(delta.content);
@@ -604,7 +624,13 @@ export class AnthropicProvider implements LLMProvider {
     return {
       content,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
-      finish_reason: data.stop_reason === 'tool_use' ? 'tool_calls' : 'stop',
+      // 与流式分支保持一致：max_tokens 是截断（length），不是正常结束（C-06）
+      finish_reason:
+        data.stop_reason === 'tool_use'
+          ? 'tool_calls'
+          : data.stop_reason === 'max_tokens'
+            ? 'length'
+            : 'stop',
       usage: {
         prompt_tokens: data.usage.input_tokens,
         completion_tokens: data.usage.output_tokens,

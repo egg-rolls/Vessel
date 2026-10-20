@@ -15,6 +15,18 @@ export interface Message {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   name?: string;
+  /**
+   * 思维链内容（OpenAI 兼容的 thinking 模式，如 DeepSeek）。
+   * 只存在于 assistant 消息：Provider 返回后由 runtime 原样保存，
+   * 下一次请求必须回传，否则 API 会拒绝（reasoning_content required）。
+   * 不发送到 TUI / 事件流，避免泄漏思维链。
+   */
+  reasoning_content?: string;
+  /**
+   * 消息写入时间（Unix ms，0.6.1 P2）。可选：旧数据缺失时消费者降级。
+   * runtime 在加入上下文时补齐；Provider 适配层忽略该字段。
+   */
+  timestamp?: number;
 }
 
 /** 使用量 */
@@ -72,6 +84,8 @@ export interface LLMResponse {
   tool_calls?: ToolCall[];
   finish_reason: FinishReason;
   usage?: Usage;
+  /** 思维链内容（thinking 模式）；存在时 runtime 写入 assistant 消息并在下一轮回传 */
+  reasoning_content?: string;
 }
 
 /** LLM Provider 接口 */

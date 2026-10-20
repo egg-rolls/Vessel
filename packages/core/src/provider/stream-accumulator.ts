@@ -23,6 +23,8 @@ interface ToolCallEntry {
 
 export class StreamAccumulator {
   private content = '';
+  /** thinking 模式思维链：只累积、不回传 TUI/事件（不泄漏） */
+  private reasoningContent = '';
   private toolCallsMap = new Map<number, ToolCallEntry>();
   private finishReason: FinishReason = 'stop';
 
@@ -52,6 +54,11 @@ export class StreamAccumulator {
   appendText(delta: string): void {
     this.content += delta;
     this.onChunk({ type: 'text_delta', delta });
+  }
+
+  /** 累积思维链增量。刻意不调用 onChunk——思维链不进入事件流/TUI。 */
+  appendReasoning(delta: string): void {
+    this.reasoningContent += delta;
   }
 
   // ── 工具调用 ──────────────────────────────────────
@@ -133,11 +140,15 @@ export class StreamAccumulator {
 
     this.onChunk({ type: 'finish', finish_reason: this.finishReason, usage });
 
-    return {
+    const response: LLMResponse = {
       content: this.content,
       tool_calls: toolCalls,
       finish_reason: this.finishReason,
       usage,
     };
+    if (this.reasoningContent) {
+      response.reasoning_content = this.reasoningContent;
+    }
+    return response;
   }
 }

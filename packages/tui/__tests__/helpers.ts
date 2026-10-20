@@ -6,20 +6,20 @@ import type { ToolDefinition } from '@vessel/core';
 import {
   MemoryContextManager,
   MemoryEventStream,
+  MemoryPluginHost,
   MemorySessionBackend,
-  MemoryToolRegistry,
 } from '@vessel/core';
 import type { ReplState } from '../src/commands/commands.js';
 import type { ReplContext } from '../src/repl-context.js';
 
 export function makeCtx(overrides: Partial<ReplContext> = {}): ReplContext {
-  const tools = new MemoryToolRegistry();
+  const pluginHost = new MemoryPluginHost();
   const session = new MemorySessionBackend();
   const context = new MemoryContextManager();
   const events = new MemoryEventStream();
   return {
     runtime: {} as ReplContext['runtime'],
-    tools,
+    pluginHost,
     session,
     events,
     context,
@@ -44,7 +44,7 @@ export function makeState(sessionId: string): ReplState {
 }
 
 export function registerSampleTool(ctx: ReplContext, def: ToolDefinition): void {
-  ctx.tools.register(def);
+  ctx.pluginHost.registerTool(def);
 }
 
 /** 捕获 console.log / console.error 输出，返回还原函数与累计行 */

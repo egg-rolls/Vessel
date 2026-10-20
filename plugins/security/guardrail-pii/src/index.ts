@@ -30,6 +30,56 @@ export interface PIIGuardrailConfig {
   maskingStrategy?: 'full' | 'partial' | 'hash';
 }
 
+/** E1：`install(host, {config})` 的窄类型（core 尚未声明第二参数） */
+export interface PluginInstallOptions {
+  config?: Record<string, unknown>;
+}
+
+/** 类型守卫 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** 把 YAML 插件配置解析成 PIIGuardrailConfig（pattern 支持字符串或 RegExp） */
+export function parsePiiGuardrailConfig(value: unknown): PIIGuardrailConfig {
+  if (!isRecord(value)) return {};
+  const parsed: PIIGuardrailConfig = {};
+  for (const key of ['detectEmail', 'detectPhone', 'detectSSN', 'detectCreditCard'] as const) {
+    if (typeof value[key] === 'boolean') parsed[key] = value[key];
+  }
+  if (
+    value.maskingStrategy === 'full' ||
+    value.maskingStrategy === 'partial' ||
+    value.maskingStrategy === 'hash'
+  ) {
+    parsed.maskingStrategy = value.maskingStrategy;
+  }
+
+  if (Array.isArray(value.customPatterns)) {
+    const customPatterns: NonNullable<PIIGuardrailConfig['customPatterns']> = [];
+    for (const item of value.customPatterns) {
+      if (!isRecord(item) || typeof item.name !== 'string') continue;
+      let pattern: RegExp | undefined;
+      if (item.pattern instanceof RegExp) {
+        pattern = new RegExp(item.pattern.source, item.pattern.flags);
+      } else if (typeof item.pattern === 'string') {
+        const rawFlags = typeof item.flags === 'string' ? item.flags : '';
+        // 非全局正则在 detect() 的 exec 循环里不会前进
+        const flags = rawFlags.includes('g') ? rawFlags : `${rawFlags}g`;
+        try {
+          pattern = new RegExp(item.pattern, flags);
+        } catch {
+          pattern = undefined;
+        }
+      }
+      if (pattern !== undefined) customPatterns.push({ name: item.name, pattern });
+    }
+    parsed.customPatterns = customPatterns;
+  }
+
+  return parsed;
+}
+
 /** 默认配置 */
 const DEFAULT_CONFIG: PIIGuardrailConfig = {
   detectEmail: true,
@@ -45,6 +95,21 @@ interface PiiDetection {
   value: string;
   start: number;
   end: number;
+}
+
+/**
+ * 按位置排序并消除重叠：后出现的重叠片段直接丢弃。
+ * 重叠区间若同时替换会互相破坏索引，宁少遮一个也不能遮错位置。
+ */
+function resolveOverlaps(detections: PiiDetection[]): PiiDetection[] {
+  const sorted = [...detections].sort((a, b) => a.start - b.start || b.end - a.end);
+  const result: PiiDetection[] = [];
+  for (const detection of sorted) {
+    const previous = result[result.length - 1];
+    if (previous && detection.start < previous.end) continue;
+    result.push(detection);
+  }
+  return result;
 }
 
 /**
@@ -64,7 +129,7 @@ class PiiDetector {
     const detections: PiiDetection[] = [];
 
     if (this.config.detectEmail) {
-      const pattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g;
+      const pattern = /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g;
       let match = pattern.exec(text);
       while (match !== null) {
         detections.push({
@@ -136,7 +201,7 @@ class PiiDetector {
       }
     }
 
-    return detections;
+    return resolveOverlaps(detections);
   }
 
   /**
@@ -221,15 +286,21 @@ export class PIIGuardrail implements Guardrail {
 }
 
 /**
- * PII Guardrail 插件
+ * 创建 PII Guardrail 插件
  */
-export const piiGuardrailPlugin: Plugin = {
-  name: 'guardrail-pii',
-  version: '0.1.0',
-  description: 'PII detection and masking guardrail',
-  install(host: PluginHost) {
-    host.registerGuardrail(new PIIGuardrail());
-  },
-};
+export function createPiiGuardrailPlugin(config?: PIIGuardrailConfig): Plugin {
+  return {
+    name: 'guardrail-pii',
+    version: '0.1.0',
+    description: 'PII detection and masking guardrail',
+    install(host: PluginHost, options?: PluginInstallOptions) {
+      const merged = { ...(config ?? {}), ...parsePiiGuardrailConfig(options?.config) };
+      host.registerGuardrail(new PIIGuardrail(merged));
+    },
+  };
+}
+
+/** 默认实例——现有调用方无需改动 */
+export const piiGuardrailPlugin: Plugin = createPiiGuardrailPlugin();
 
 export default piiGuardrailPlugin;
