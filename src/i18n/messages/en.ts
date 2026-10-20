@@ -48,6 +48,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.configPath': 'print user/project config paths',
   'help.cmd.configInit': 'generate a user config template',
   'help.cmd.configShow': 'show redacted config and sources',
+  'help.cmd.configSet': 'write a user setting (ui.language)',
   'help.cmd.tenantList': 'list tenants',
   'help.cmd.tenantGet': 'show tenant metadata',
   'help.cmd.tenantCreate': 'create a tenant',
@@ -106,6 +107,9 @@ export const en: Record<MessageKey, string> = {
   'config.init.exists': 'config already exists at {path}; use --force to overwrite',
   'config.init.next':
     'next: run `vessel` to configure your API key, or `vessel doctor` to verify the setup.',
+  'config.set.unknownKey': 'Unsupported config key "{key}"; only ui.language is supported',
+  'config.set.invalidLanguage': 'ui.language must be "zh-CN" or "en"',
+  'config.set.failed': 'Failed to write user config: {detail}',
 
   // ── update ──
   'update.invalidChannel':

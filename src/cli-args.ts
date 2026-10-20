@@ -41,11 +41,12 @@ export interface EvalCommand {
   allowNetwork: boolean;
 }
 
-/** `config` 子命令（0.5） */
+/** `config` 子命令（0.5；0.11 增加 set） */
 export type ConfigCommandArgs =
   | { kind: 'path'; json: boolean }
   | { kind: 'init'; json: boolean; force: boolean }
-  | { kind: 'show'; json: boolean; sources: boolean; tenantId?: string };
+  | { kind: 'show'; json: boolean; sources: boolean; tenantId?: string }
+  | { kind: 'set'; key: 'ui.language'; value: 'zh-CN' | 'en'; json: boolean };
 
 /** `tenant` 子命令（0.5） */
 export type TenantCommandArgs =
@@ -838,6 +839,41 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
   let force = false;
   let sources = false;
   let tenantId: string | undefined;
+
+  // 0.11：`config set ui.language <zh-CN|en> [--json]`
+  if (sub === 'set') {
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for config set: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    if (positional.length !== 2) {
+      return {
+        ok: false,
+        error: 'Usage: vessel config set ui.language <zh-CN|en> [--json]',
+      };
+    }
+    const [key, value] = positional;
+    if (key !== 'ui.language') {
+      return { ok: false, error: `Unsupported config key: ${key} (supported: ui.language)` };
+    }
+    if (value !== 'zh-CN' && value !== 'en') {
+      return { ok: false, error: 'ui.language must be "zh-CN" or "en"' };
+    }
+    args.configCommand = { kind: 'set', key, value, json };
+    return { ok: true, args };
+  }
 
   for (let i = 0; i < tail.length; i++) {
     const a = tail[i] ?? '';

@@ -21,6 +21,7 @@ import {
 import { formatConfigError, formatConfigErrors } from './config-error-format';
 import { resolveDataDir } from './data-paths';
 import { t } from './i18n';
+import { isUiLanguage, setUserLanguage } from './ui-settings';
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -54,6 +55,12 @@ export interface ConfigShowOptions {
   configPath?: string;
   userConfigPath?: string;
   env?: EnvMap;
+}
+
+/** `config set` 选项（0.11） */
+export interface ConfigSetOptions {
+  json?: boolean;
+  userConfigPath?: string;
 }
 
 /**
@@ -146,6 +153,49 @@ export async function configInitCommand(
     stdout: [`created ${target}`, t('config.init.next')].join('\n'),
     stderr: '',
   };
+}
+
+/**
+ * `vessel config set ui.language <zh-CN|en> [--json]`（0.11）。
+ * 只写用户配置的 `ui.language`；保留其它键。
+ */
+export async function configSetCommand(
+  key: string,
+  value: string,
+  options: ConfigSetOptions = {},
+): Promise<ConfigCommandResult> {
+  if (key !== 'ui.language') {
+    return { exitCode: 2, stdout: '', stderr: t('config.set.unknownKey', { key }) };
+  }
+  if (!isUiLanguage(value)) {
+    return {
+      exitCode: 2,
+      stdout: '',
+      stderr: t('config.set.invalidLanguage', { value }),
+    };
+  }
+
+  const target = options.userConfigPath ?? getUserConfigPath();
+  try {
+    await setUserLanguage(value, { configPath: target });
+  } catch (error) {
+    return {
+      exitCode: 1,
+      stdout: '',
+      stderr: t('config.set.failed', {
+        detail: error instanceof Error ? error.message : String(error),
+      }),
+    };
+  }
+
+  if (options.json) {
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({ key: 'ui.language', value, path: target }),
+      stderr: '',
+    };
+  }
+  return { exitCode: 0, stdout: `ui.language = ${value} (${target})`, stderr: '' };
 }
 
 /** `vessel config show [--sources] [--json] [--tenant <id>]` */

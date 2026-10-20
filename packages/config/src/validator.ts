@@ -322,6 +322,28 @@ function validateObservability(
   }
 }
 
+/** 校验 ui 块（0.8.5 language；0.11 clearOnStart） */
+function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
+  if (!isPlainObject(ui)) {
+    errors.push({ path: 'ui', message: 'ui must be an object', value: ui });
+    return;
+  }
+  if (ui.language !== undefined && typeof ui.language !== 'string') {
+    errors.push({
+      path: 'ui.language',
+      message: 'ui.language must be a string',
+      value: ui.language,
+    });
+  }
+  if (ui.clearOnStart !== undefined && typeof ui.clearOnStart !== 'boolean') {
+    errors.push({
+      path: 'ui.clearOnStart',
+      message: 'ui.clearOnStart must be a boolean',
+      value: ui.clearOnStart,
+    });
+  }
+}
+
 /** mcpServers 中单个 server 的已知键 */
 const MCP_SERVER_KEYS = [
   'transport',
@@ -1723,6 +1745,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   if (config.feishu) validateFeishu(config.feishu, errors);
   if (config.observability) validateObservability(config.observability, errors);
 
+  // 校验 ui（0.8.5 language；0.11 clearOnStart）
+  if (config.ui !== undefined) validateUi(config.ui as unknown as Record<string, unknown>, errors);
+
   // guardrails / hooks 由装配层映射为同名插件的安装配置（0.6.1），
   // 不再产生「声明但未应用」警告。
 
@@ -1828,7 +1853,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxMembers',
   ],
   observability: ['eventHistory', 'metrics'],
-  ui: ['language'],
+  ui: ['language', 'clearOnStart'],
   tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };

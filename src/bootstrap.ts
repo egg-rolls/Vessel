@@ -84,6 +84,7 @@ import { createTenantControl } from './tenant-command';
 import { acquireTenantLock, type TenantLock, TenantLockError, withTenantLock } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
+import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
 import { adaptWorkflowsControl } from './workflow-wiring';
 
@@ -100,6 +101,8 @@ interface PermissionsControlLike {
 
 type ReplContextWithPermissions = ReplContext & {
   permissions?: PermissionsControlLike;
+  /** 0.11 DECISION-021 §3.2：语言设置控制面 */
+  settings?: ReplSettingsControlLike;
 };
 
 export interface BootstrapOptions {
@@ -318,6 +321,8 @@ async function bootstrapConnect(input: {
   tenantExplicit: boolean;
   /** 0.10 R2-14：诊断 logger（与 bootstrap 共用） */
   logger: Logger;
+  /** 0.11：本地用户配置路径（ui.language 写回；缺省 getUserConfigPath()） */
+  userConfigPath?: string;
   /** 0.6.1：显式 session id（`--session` / `-r <id>`） */
   sessionId?: string;
   /** 0.6.1：`-c/--continue`；经 sessions.list 选择最近的非空会话 */
@@ -620,7 +625,7 @@ async function bootstrapConnect(input: {
     }
   };
 
-  const ctx: ReplContext = {
+  const ctx: ReplContextWithPermissions = {
     runtime,
     pluginHost,
     session,
@@ -639,6 +644,11 @@ async function bootstrapConnect(input: {
     rpc,
     tenant: { tenant_id: effectiveTenantId, data_dir: input.tenantPaths.root },
     config: input.config,
+    // 0.11：connect 模式同样允许写本地用户配置（远端不受影响）。
+    settings: createReplSettings({
+      configPath: input.userConfigPath ?? getUserConfigPath(),
+      configLanguage: input.config.ui?.language,
+    }),
     version: readPackageVersion(),
     newSessionId,
     onExit: () => {
@@ -742,6 +752,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       headless,
       tenantExplicit,
       logger,
+      ...(options.userConfigPath !== undefined ? { userConfigPath: options.userConfigPath } : {}),
       ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
       ...(options.continueLatest === true ? { continueLatest: true } : {}),
       ...(options.resumeSessionId !== undefined
@@ -1272,6 +1283,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     version: readPackageVersion(),
     // 0.6.1：TUI "always" 与 /permissions 的用户 YAML 写回面。
     permissions: permissionsControl,
+    // 0.11：TUI /settings 的语言写回面（同一用户 YAML）。
+    settings: createReplSettings({
+      configPath: permissionConfigPath,
+      configLanguage: config.ui?.language,
+    }),
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),
     ...(runs ? { runs } : {}),
