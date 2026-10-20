@@ -219,7 +219,7 @@ export function resolveWorkflowDefPathSync(config: VesselConfig, name: string): 
 
   try {
     const dir = resolveWorkflowDir(config);
-    const dirReal = realpathSync(dir);
+    const dirReal = realpathSync.native(dir);
     const matches: string[] = [];
     for (const extension of DEFINITION_EXTENSIONS) {
       const candidate = path.join(dir, `${name}.${extension}`);
@@ -231,7 +231,7 @@ export function resolveWorkflowDefPathSync(config: VesselConfig, name: string): 
     }
     if (matches.length !== 1) return undefined;
 
-    const fileReal = realpathSync(matches[0] as string);
+    const fileReal = realpathSync.native(matches[0] as string);
     const rel = path.relative(dirReal, fileReal);
     if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return undefined;
     return fileReal;
