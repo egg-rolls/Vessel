@@ -69,6 +69,7 @@ import {
   runSessionList,
   validateResumeSessionId,
 } from './session-resume';
+import { shutdownServeStack } from './shutdown-sequence';
 import { planTeamWiring } from './team-wiring';
 import { createTenantControl } from './tenant-command';
 import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
@@ -828,12 +829,19 @@ async function runWithConfig(result: BootstrapResult) {
   }
 
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
+  // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
-    gateway?.stop();
-    unsubSharedBridge?.();
-    unsubSharedBridge = undefined;
-    await tenantFactory?.closeAll();
-    await result.shutdown();
+    await shutdownServeStack({
+      gateway,
+      unsubShared: () => {
+        unsubSharedBridge?.();
+        unsubSharedBridge = undefined;
+      },
+      closeTenants: async (options) => {
+        await tenantFactory?.closeAll(options);
+      },
+      shutdown: (options) => result.shutdown(options),
+    });
   };
 
   let shutdownSignal: 'SIGINT' | 'SIGTERM' | undefined;
@@ -882,34 +890,47 @@ async function runWithConfig(result: BootstrapResult) {
     await startInkRepl(ctx);
   }
 
-  gateway?.stop();
-  unsubSharedBridge?.();
-  unsubSharedBridge = undefined;
-  if (result.transport) {
-    try {
-      await result.transport.close();
-    } catch {
-      // 关闭注册表失败不阻断退出
+  // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）→ 退订/关 transport
+  // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
+  const closeTransport = async (): Promise<void> => {
+    if (result.transport) {
+      try {
+        await result.transport.close();
+      } catch {
+        // 关闭注册表失败不阻断退出
+      }
+    } else if (teamTransport) {
+      try {
+        await teamTransport.close();
+      } catch {
+        // 关闭注册表失败不阻断退出
+      }
     }
-  } else if (teamTransport) {
-    try {
-      await teamTransport.close();
-    } catch {
-      // 关闭注册表失败不阻断退出
-    }
-  }
+  };
+  const finish = (beforeClose?: () => Promise<void>): Promise<void> =>
+    shutdownServeStack({
+      gateway,
+      unsubShared: () => {
+        unsubSharedBridge?.();
+        unsubSharedBridge = undefined;
+      },
+      closeTransport,
+      ...(beforeClose ? { beforeClose } : {}),
+      closeTenants: async (options) => {
+        await tenantFactory?.closeAll(options);
+      },
+      shutdown: (options) => result.shutdown(options),
+    });
 
   // 0.4：有 workflow / 显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
   // 纯 0.3 serve 保持原来的自然退出（0）。
   if (shutdownSignal && (result.workflows || args.feishu)) {
-    if (result.workflows) await result.interruptWorkflows();
-    await tenantFactory?.closeAll();
-    await result.shutdown();
+    await finish(async () => {
+      if (result.workflows) await result.interruptWorkflows();
+    });
     process.exit(signalExitCode(shutdownSignal));
   }
-  await tenantFactory?.closeAll();
-
-  await result.shutdown();
+  await finish();
 
   // A2：清理完成后再落 headless 退出码（其余模式保持自然退出 0）。
   if (headlessExitCode !== undefined) process.exitCode = headlessExitCode;

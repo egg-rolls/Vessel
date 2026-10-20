@@ -183,7 +183,11 @@ export interface TenantRuntimeBundle {
     systemPrompt?: string;
   }) => Promise<AgentStatus>;
   lock?: TenantLock;
-  close(): Promise<void>;
+  /**
+   * 幂等关闭。`drain: false` 用于调用方已先 `await gateway.stop()` 的场景：
+   * gateway 已完成 interrupt('shutdown') + 5s 等待，避免重复限时等待。
+   */
+  close(options?: { drain?: boolean }): Promise<void>;
 }
 
 /** 内部：锁所有权 */
@@ -824,12 +828,13 @@ export async function buildTenantRuntime(
       }
     };
 
-    const close = async (): Promise<void> => {
+    const close = async (options: { drain?: boolean } = {}): Promise<void> => {
       if (closed) return;
       closed = true;
 
       // 先中断 / 等待在跑 run，再进入关闭顺序。
-      await drain();
+      // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
+      if (options.drain !== false) await drain();
 
       // 关闭顺序：feishu → workflow → metrics → MCP → host/runtime → trace
       // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
@@ -1026,7 +1031,8 @@ export interface TenantRuntimeFactory {
   metricsFor(tenantId: string): MetricsControlLike | undefined;
   pluginsFor(tenantId: string): Array<{ name: string; enabled: boolean }> | undefined;
   bundleFor(tenantId: string): TenantRuntimeBundle | undefined;
-  closeAll(): Promise<void>;
+  /** `drain: false`：调用方已 await gateway.stop()（已做 interrupt + 5s 等待） */
+  closeAll(options?: { drain?: boolean }): Promise<void>;
 }
 
 /** `status` 缺省视为 active；包含显式 default tenant（隐式配置）。 */
@@ -1186,14 +1192,14 @@ export async function createTenantRuntimeFactory(
         return listed;
       },
       bundleFor: (tenantId) => bundles.get(tenantId),
-      closeAll: async () => {
+      closeAll: async (closeOptions: { drain?: boolean } = {}) => {
         if (closed) return;
         closed = true;
         // 逆序关闭本工厂构建的 tenant；seed 由调用方关闭。
         const entries = [...bundles.entries()].filter(([id]) => owned.has(id)).reverse();
         for (const [, bundle] of entries) {
           try {
-            await bundle.close();
+            await bundle.close(closeOptions);
           } catch (error) {
             console.warn(
               `⚠ Failed to close tenant "${bundle.tenantId}": ${

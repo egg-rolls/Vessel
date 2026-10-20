@@ -245,8 +245,9 @@ export interface BootstrapResult {
   /**
    * 幂等关闭：MCP close → Host/runtime dispose → RunStore close。
    * 新代码应 await 本函数；`cleanup()` 仅供旧调用点兼容。
+   * `drain: false`：调用方已 `await gateway.stop()`，避免重复限时等待。
    */
-  shutdown: () => Promise<void>;
+  shutdown: (options?: { drain?: boolean }) => Promise<void>;
   cleanup: () => void;
 }
 
@@ -601,7 +602,7 @@ async function bootstrapConnect(input: {
     },
   };
 
-  const shutdown = async (): Promise<void> => {
+  const shutdown = async (_options?: { drain?: boolean }): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
     unsubscribe();
@@ -1195,7 +1196,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
   };
 
-  const shutdown = async (): Promise<void> => {
+  const shutdown = async (shutdownOptions: { drain?: boolean } = {}): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
 
@@ -1233,7 +1234,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     // bundle 关闭顺序：feishu → workflow → metrics → MCP → host/runtime
     // → trace → runStore → session；锁由 bootstrap 在最后释放。
-    await bundle.close();
+    await bundle.close(shutdownOptions);
 
     // 锁最后释放。
     if (tenantLock) {
