@@ -25,6 +25,7 @@ import {
 } from '../commands/sessions-command.js';
 import { formatWorkflowOutcome } from '../commands/workflows-command.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
+import { BottomBar } from '../components/BottomBar.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import {
   type CommandItem,
@@ -58,7 +59,13 @@ import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
 import { maybeClearOnStart } from './clear-on-start.js';
 import { failureFallbackAction, failureViewerTitle } from './error-archive.js';
-import { computeLiveLayout, queuePreviewRows } from './layout.js';
+import {
+  BOTTOM_BAR_ROWS,
+  computeLiveLayout,
+  defaultBottomBarVisible,
+  queuePreviewRows,
+  STATUS_BAR_ROWS,
+} from './layout.js';
 import {
   decidePermissionAnswer,
   decidePermissionRequest,
@@ -68,8 +75,17 @@ import {
 } from './permission-timeout.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
+import { useRuntimeCounters } from './runtime-counters.js';
 import { buildStartupHeader } from './startup-header.js';
 import { buildStartupNotice, loadStartupFacts, loadStartupNotice } from './startup-notice.js';
+import {
+  applyStatusBarToggle,
+  matchStatusBarHotkey,
+  resolveInitialStatusBars,
+  type StatusBarsValue,
+  type StatusBarsVisibility,
+  statusBarsVisibility,
+} from './status-format.js';
 import { useStatusMetrics } from './status-metrics.js';
 import { useReplState } from './use-repl-state.js';
 
@@ -130,6 +146,55 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   const streamCancellationArchivedRef = useRef(false);
   /** 本轮失败是否已由 StreamOutput 归档（失败只产生一条历史项） */
   const streamFailureArchivedRef = useRef(false);
+
+  // ── 0.13 上/下栏显隐 ──────────────────────────────
+  // 初始值：VESSEL_STATUS_BARS > ui.statusBars > 自动（上栏开、下栏 rows>=18）。
+  // 手动切换后本次进程内优先；写回 YAML 由 ctx.settings.setStatusBars（asm 注入）完成。
+  const initialStatusBars = useMemo(
+    () =>
+      resolveInitialStatusBars({
+        env: process.env.VESSEL_STATUS_BARS,
+        config: (ctx.config as unknown as { ui?: { statusBars?: unknown } }).ui?.statusBars,
+      }),
+    [ctx.config],
+  );
+  const initialVisibility: StatusBarsVisibility | null =
+    initialStatusBars.value !== undefined ? statusBarsVisibility(initialStatusBars.value) : null;
+  const [topOverride, setTopOverride] = useState<boolean | null>(null);
+  const [bottomOverride, setBottomOverride] = useState<boolean | null>(null);
+  /** 本次会话内 "always" 批准的工具（配置快照之外，立即计入 auto 数） */
+  const [sessionAlways, setSessionAlways] = useState<ReadonlySet<string>>(() => new Set());
+
+  const persistStatusBars = useCallback(
+    (value: StatusBarsValue) => {
+      const settings = ctx.settings;
+      const setter = settings?.setStatusBars;
+      if (!settings || !setter) return;
+      // 写回失败不回滚界面：本次会话仍按用户选择显示。
+      void setter.call(settings, value).catch(() => {});
+    },
+    [ctx.settings],
+  );
+
+  // 窗口尺寸在热键处理前计算，保证 overlay 打开时也能即时恢复/隐藏栏位。
+  const windowSize = useWindowSize();
+  const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
+  const terminalColumns = windowSize.columns > 0 ? windowSize.columns : (stdout.columns ?? 80);
+  // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
+  const exclusiveOverlayActive =
+    ui.view !== null ||
+    state.showResumePicker ||
+    ui.permissionOverlay !== null ||
+    ui.askUserActive ||
+    ui.quickHelpOpen ||
+    ui.textViewer !== null;
+  const showTop = topOverride ?? initialVisibility?.top ?? true;
+  const showBottom =
+    bottomOverride ?? initialVisibility?.bottom ?? defaultBottomBarVisible(terminalRows);
+  // 独占 overlay（view / picker / permission / ask-user / help / pager）显示时下栏让位；
+  // 终端过窄（<40 列）时 formatBottomBar 不渲染，行预算也不能白扣。
+  const bottomBarVisible = showBottom && !exclusiveOverlayActive;
+  const bottomBarRendered = bottomBarVisible && terminalColumns >= 40;
 
   // locale 切换后重建注册表：help / autocomplete 的 description 由 t() 在创建时求值。
   // biome-ignore lint/correctness/useExhaustiveDependencies: localeVersion is not read in the factory, only used to invalidate
@@ -715,6 +780,22 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       return;
     }
 
+    // Ctrl+T / Ctrl+G：切换上/下栏。放在 overlay 早退之前，弹窗打开时也能恢复栏位。
+    // ink-text-input 会把 Ctrl 字符插入输入框：切换后必须覆盖回当前输入并重置光标。
+    const statusBarsHotkey = matchStatusBarHotkey(inputChar, key);
+    if (statusBarsHotkey === 'toggleTop' || statusBarsHotkey === 'toggleBottom') {
+      const result = applyStatusBarToggle(
+        { top: showTop, bottom: showBottom },
+        statusBarsHotkey === 'toggleTop' ? 'top' : 'bottom',
+      );
+      setTopOverride(result.visibility.top);
+      setBottomOverride(result.visibility.bottom);
+      persistStatusBars(result.value);
+      dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      return;
+    }
+
     // quick help / pager 独占焦点；按键由组件自己处理
     if (ui.quickHelpOpen || ui.textViewer) return;
 
@@ -723,6 +804,16 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
 
     // 命令视图打开时，键盘完全交给 InteractiveViewHost（单一焦点）。
     if (ui.view) return;
+
+    // Ctrl+R：打开 /resume picker（下栏 session 入口）。与 Ctrl+L/O 同法覆盖被插入的字符。
+    if (statusBarsHotkey === 'openSessions') {
+      dispatch({ type: 'setInput', input: ui.input });
+      dispatch({ type: 'bumpCaret' });
+      if (!state.showResumePicker) {
+        dispatch({ type: 'patchRepl', patch: { showResumePicker: true, pendingResume: false } });
+      }
+      return;
+    }
 
     // 队列编辑独占 ↑↓ / Esc / Ctrl+X；其余键继续交给 TextInput。
     if (ui.queueEditIndex !== null) {
@@ -876,6 +967,13 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
 
       // "always" 同时写回用户 YAML（跨进程）；未注入写回接口时降级为本次会话。
       if (always) {
+        // 下栏 auto 计数：配置快照不会随本次批准刷新，用会话集合补上。
+        setSessionAlways((prev) => {
+          if (prev.has(overlay.toolName)) return prev;
+          const next = new Set(prev);
+          next.add(overlay.toolName);
+          return next;
+        });
         const control = ctx.permissions;
         if (!control) {
           dispatch({
@@ -957,26 +1055,27 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   // 根 Box 不再设置 height —— 固定 height 会让 Ink 判定为 fullscreen 并每帧 clearTerminal，
   // 在 Windows/PowerShell 下会导致历史、流式输出和底栏互相覆盖。
   // Ink 的 resize 只重算 Yoga 并序列化现有树，不会重跑 React render；
-  // 用 useWindowSize 订阅 resize，保证矮终端分级能即时生效。
-  const windowSize = useWindowSize();
-  const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
-  // useStdout 不订阅 resize；列宽同样走 useWindowSize，保证弹窗/面板随窗口变化。
-  const terminalColumns = windowSize.columns > 0 ? windowSize.columns : (stdout.columns ?? 80);
-  // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
-  const exclusiveOverlayActive =
-    ui.view !== null ||
-    state.showResumePicker ||
-    ui.permissionOverlay !== null ||
-    ui.askUserActive ||
-    ui.quickHelpOpen ||
-    ui.textViewer !== null;
+  // 窗口尺寸在热键处理前用 useWindowSize 订阅，保证矮终端分级能即时生效。
   const queueRows = exclusiveOverlayActive
     ? 0
     : queuePreviewRows(ui.queuedInput.length, terminalRows);
-  const layout = computeLiveLayout(terminalRows, queueRows);
+  const layout = computeLiveLayout(terminalRows, queueRows, {
+    topRows: showTop ? STATUS_BAR_ROWS : 0,
+    bottomRows: bottomBarRendered ? BOTTOM_BAR_ROWS : 0,
+  });
   const runActive = ui.run.phase !== 'idle';
   const spinner = useSpinnerState(ctx.events);
   const metrics = useStatusMetrics(ctx, state.currentSessionId, ui.run.phase);
+  const runtimeCounters = useRuntimeCounters(ctx.events);
+  // auto 数 = 启动配置的 auto_approve + 本次会话 "always"；ask_user 由运行时永远免确认，不计入。
+  const autoApproveCount = useMemo(() => {
+    const names = new Set<string>([
+      ...(ctx.config.permission?.autoApprove ?? []),
+      ...sessionAlways,
+    ]);
+    names.delete('ask_user');
+    return names.size;
+  }, [ctx.config.permission, sessionAlways]);
   const [turnStartedAt, setTurnStartedAt] = useState<number | null>(null);
   useEffect(() => {
     setTurnStartedAt(ui.run.phase === 'running' ? Date.now() : null);
@@ -1008,16 +1107,20 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
     <Box flexDirection="column">
       {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
       <Box flexDirection="column" flexShrink={0}>
-        <StatusBar
-          status={statusKind}
-          model={ctx.provider.model}
-          context={metrics.context}
-          {...(durationMs !== undefined ? { durationMs } : {})}
-          compactions={state.compactions ?? 0}
-          {...(metrics.sessions !== undefined ? { sessions: metrics.sessions } : {})}
-          cwd={metrics.cwd}
-          {...(metrics.branch ? { branch: metrics.branch } : {})}
-        />
+        {showTop && (
+          <StatusBar
+            status={statusKind}
+            model={ctx.provider.model}
+            context={metrics.context}
+            {...(durationMs !== undefined ? { durationMs } : {})}
+            compactions={state.compactions ?? 0}
+            cwd={metrics.cwd}
+            {...(metrics.home !== undefined ? { home: metrics.home } : {})}
+            {...(metrics.branch ? { branch: metrics.branch } : {})}
+            columns={terminalColumns}
+            marqueeAllowed={!exclusiveOverlayActive}
+          />
+        )}
         {/* overlay 打开时隐藏更新横幅：高度预算只给状态栏留了 1 行 */}
         {!exclusiveOverlayActive && layout.mode !== 'minimal' && layout.mode !== 'hidden' && (
           <UpdateBanner events={ctx.events} />
@@ -1285,8 +1388,23 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
           </Box>
         )}
 
-      {/* 底部快捷键提示（rows >= 18 才显示） */}
-      {!exclusiveOverlayActive && layout.hintRows > 0 && (
+      {/* 运行态下栏（独占 overlay 时隐藏；吸收原 hint 行） */}
+      {bottomBarRendered && (
+        <BottomBar
+          columns={terminalColumns}
+          autoApproveCount={autoApproveCount}
+          {...(ui.permissionOverlay ? { waitingTool: ui.permissionOverlay.toolName } : {})}
+          bashCount={runtimeCounters.bash}
+          subagentCount={runtimeCounters.subagents}
+          currentSessionId={state.currentSessionId}
+          {...(ctx.tenant?.tenant_id ? { tenantId: ctx.tenant.tenant_id } : {})}
+          queuedCount={ui.queuedInput.length}
+          queuePreviewVisible={ui.queuedInput.length > 0}
+        />
+      )}
+
+      {/* 底部快捷键提示（无下栏且 rows >= 18 时显示；下栏已吸收该行） */}
+      {!bottomBarRendered && !exclusiveOverlayActive && layout.hintRows > 0 && (
         <Box flexShrink={0} paddingX={2}>
           <Text color={theme.faint}>{t('repl.bottomHint')}</Text>
         </Box>

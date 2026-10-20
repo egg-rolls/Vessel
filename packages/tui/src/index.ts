@@ -31,6 +31,7 @@ export {
   sessionsCommand,
 } from './commands/sessions-command.js';
 export { AskUserDialog } from './components/AskUserDialog.js';
+export { BottomBar, type BottomBarProps } from './components/BottomBar.js';
 export { ConfirmDialog } from './components/ConfirmDialog.js';
 export { DataTable, type DataTableProps } from './components/DataTable.js';
 export { DetailPanel, type DetailPanelProps } from './components/DetailPanel.js';
@@ -152,7 +153,9 @@ export {
 } from './repl/clear-on-start.js';
 export { startInkRepl } from './repl/ink-repl.js';
 export {
+  BOTTOM_BAR_ROWS,
   computeLiveLayout,
+  defaultBottomBarVisible,
   type LiveLayout,
   type LiveMode,
   queuePreviewRows,
@@ -165,6 +168,12 @@ export {
   type TurnOutcome,
   type WorkflowTurnOutcome,
 } from './repl/run-turn.js';
+export {
+  INITIAL_RUNTIME_COUNTERS,
+  type RuntimeCounters,
+  reduceRuntimeCounters,
+  useRuntimeCounters,
+} from './repl/runtime-counters.js';
 export {
   buildSessionSummary,
   buildStartupHeader,
@@ -181,6 +190,25 @@ export {
   type StartupFacts,
   type StartupNoticeInput,
 } from './repl/startup-notice.js';
+export {
+  applyStatusBarToggle,
+  type BottomBarData,
+  fitSegments,
+  formatBottomBar,
+  formatPathLabel,
+  MARQUEE_PAUSE_MS,
+  MARQUEE_TICK_MS,
+  marqueeOffset,
+  marqueeWindow,
+  matchStatusBarHotkey,
+  middleEllipsisPath,
+  parseStatusBars,
+  resolveInitialStatusBars,
+  type StatusBarsValue,
+  type StatusBarsVisibility,
+  statusBarsValue,
+  statusBarsVisibility,
+} from './repl/status-format.js';
 export type {
   CapabilityManifestLike,
   CapabilityMethodLike,

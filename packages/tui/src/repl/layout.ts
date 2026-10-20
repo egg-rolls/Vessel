@@ -33,6 +33,40 @@ export interface LiveLayout {
 /** 状态栏 = PanelFrame 上边框 + 内容 1 行 + 下边框，固定占 3 行 */
 export const STATUS_BAR_ROWS = 3;
 
+/** 运行态下栏与上栏同构：PanelFrame 3 行；显示时吸收原底部 hint 行（净增 2） */
+export const BOTTOM_BAR_ROWS = 3;
+
+export interface ChromeRows {
+  /** 上栏可见行数；缺省 3（保持旧调用行为） */
+  topRows?: number;
+  /** 下栏可见行数；缺省 0（旧调用没有下栏；显示时传 3） */
+  bottomRows?: number;
+}
+
+function chromeOf(options: ChromeRows | undefined): { top: number; bottom: number } {
+  const top = Math.max(
+    0,
+    Math.floor(
+      Number.isFinite(options?.topRows) ? (options?.topRows ?? STATUS_BAR_ROWS) : STATUS_BAR_ROWS,
+    ),
+  );
+  const bottom = Math.max(
+    0,
+    Math.floor(Number.isFinite(options?.bottomRows) ? (options?.bottomRows ?? 0) : 0),
+  );
+  return { top, bottom };
+}
+
+/**
+ * 纯函数：下栏默认显隐（自动规则）。
+ * rows >= 18 且非 minimal/hidden 时默认显示；手动切换优先由调用方处理。
+ */
+export function defaultBottomBarVisible(rows: number): boolean {
+  const height = normalizeRows(rows);
+  const mode = modeForHeight(height);
+  return height >= 18 && mode !== 'minimal' && mode !== 'hidden';
+}
+
 /**
  * normal / compact 每屏 chrome：
  * marginY 2 + 边框 2 + 标题 2（行 + marginBottom）+ 表头 1 + 按键提示 2（marginTop + 行）。
@@ -79,11 +113,17 @@ function modeForHeight(height: number): LiveMode {
  * 纯函数：数据行容量 = 终端行数 - 状态栏 - chrome，再按模式封顶。
  * hidden 不渲染数据行，返回 0。
  */
-export function viewCapacity(rows: number, mode: LiveMode, kind: ViewRowKind = 'view'): number {
+export function viewCapacity(
+  rows: number,
+  mode: LiveMode,
+  kind: ViewRowKind = 'view',
+  options: Pick<ChromeRows, 'topRows'> = {},
+): number {
   if (mode === 'hidden') return 0;
   const height = normalizeRows(rows);
+  const { top } = chromeOf(options);
   const chrome = mode === 'minimal' ? MINIMAL_CHROME_ROWS[kind] : NORMAL_CHROME_ROWS[kind];
-  const available = height - STATUS_BAR_ROWS - chrome;
+  const available = height - top - chrome;
   const cap =
     mode === 'minimal'
       ? MINIMAL_ROW_CAP
@@ -91,11 +131,16 @@ export function viewCapacity(rows: number, mode: LiveMode, kind: ViewRowKind = '
   return Math.max(1, Math.min(cap, available));
 }
 
-/** 纯函数：chrome + 状态栏占用的行数（测试用于断言 chrome + 容量 ≤ 终端行数） */
-export function viewChromeRows(mode: LiveMode, kind: ViewRowKind = 'view'): number {
+/** 纯函数：chrome + 上栏占用的行数（测试用于断言 chrome + 容量 ≤ 终端行数） */
+export function viewChromeRows(
+  mode: LiveMode,
+  kind: ViewRowKind = 'view',
+  options: Pick<ChromeRows, 'topRows'> = {},
+): number {
   if (mode === 'hidden') return 0;
+  const { top } = chromeOf(options);
   const chrome = mode === 'minimal' ? MINIMAL_CHROME_ROWS[kind] : NORMAL_CHROME_ROWS[kind];
-  return chrome + STATUS_BAR_ROWS;
+  return chrome + top;
 }
 
 /** 内联确认提示预留行数（marginTop + 单行文案 + 按键行；文案强制 truncate） */
@@ -135,27 +180,35 @@ export function queuePreviewRows(queuedCount: number, rows: number): number {
 
 /**
  * 纯函数：按终端行数计算 live 预算。
- * `queueRows` 与底部 hint 行都从 live 区扣除，保证输入行不被挤掉。
+ * `queueRows`、上/下栏与底部 hint 行都从 live 区扣除，保证输入行不被挤掉。
+ * 下栏显示时吸收 hint 行（`hintRows = 0`），所以净增 `BOTTOM_BAR_ROWS - 1 = 2` 行。
  */
-export function computeLiveLayout(rows: number, queueRows = 0): LiveLayout {
+export function computeLiveLayout(
+  rows: number,
+  queueRows = 0,
+  options: ChromeRows = {},
+): LiveLayout {
   const height = normalizeRows(rows);
   const mode = modeForHeight(height);
   const low = mode === 'minimal' || mode === 'hidden';
+  const { top, bottom } = chromeOf(options);
   const queue = Math.max(0, Math.floor(Number.isFinite(queueRows) ? queueRows : 0));
-  const hintRows = showsQuickHint(height) ? 1 : 0;
-  const extra = queue + hintRows;
+  const hintRows = showsQuickHint(height) && bottom === 0 ? 1 : 0;
+  // base 9 = 输入行 / 运行态提示 / 边距等（不含状态栏）；12/14 的旧常量即 base + STATUS_BAR_ROWS。
+  const base = 9;
+  const extra = queue + hintRows + top + bottom;
 
   return {
     mode,
-    liveMaxHeight: low ? 0 : Math.max(1, height - 12 - extra),
+    liveMaxHeight: low ? 0 : Math.max(1, height - base - extra),
     streamMaxLines: low
       ? 0
       : mode === 'compact'
-        ? Math.max(1, height - 12 - extra)
-        : Math.max(3, height - 14 - extra),
-    autocompleteMax: mode === 'normal' ? 8 : low ? 3 : Math.max(3, height - 14 - extra),
-    pickerMaxRows: viewCapacity(height, mode, 'picker'),
-    viewMaxRows: viewCapacity(height, mode, 'view'),
+        ? Math.max(1, height - base - extra)
+        : Math.max(3, height - base - 2 - extra),
+    autocompleteMax: mode === 'normal' ? 8 : low ? 3 : Math.max(3, height - base - 2 - extra),
+    pickerMaxRows: viewCapacity(height, mode, 'picker', { topRows: top }),
+    viewMaxRows: viewCapacity(height, mode, 'view', { topRows: top }),
     hintRows,
     notice: low ? t('layout.lowHeight') : null,
   };

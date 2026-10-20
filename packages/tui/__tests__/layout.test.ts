@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 import {
+  BOTTOM_BAR_ROWS,
   computeLiveLayout,
+  defaultBottomBarVisible,
   type LiveMode,
   queuePreviewRows,
   STATUS_BAR_ROWS,
@@ -184,5 +186,63 @@ describe('computeLiveLayout', () => {
         expect(notice).toBeNull();
       }
     }
+  });
+});
+
+describe('0.13 下栏行预算', () => {
+  it('BOTTOM_BAR_ROWS = 3；默认显隐按 rows >= 18', () => {
+    expect(BOTTOM_BAR_ROWS).toBe(3);
+    expect(defaultBottomBarVisible(17)).toBe(false);
+    expect(defaultBottomBarVisible(18)).toBe(true);
+    expect(defaultBottomBarVisible(24)).toBe(true);
+  });
+
+  it('下栏吸收 hint 行，净增 2 行', () => {
+    const without = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS, bottomRows: 0 });
+    const withBar = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS, bottomRows: 3 });
+    expect(without.hintRows).toBe(1);
+    expect(withBar.hintRows).toBe(0);
+    expect(without.liveMaxHeight - withBar.liveMaxHeight).toBe(2);
+    expect(withBar.liveMaxHeight).toBe(9);
+  });
+
+  it('80x15 手动强制下栏时 live 降到 1', () => {
+    const layout = computeLiveLayout(15, 0, { topRows: STATUS_BAR_ROWS, bottomRows: 3 });
+    expect(layout.mode).toBe('compact');
+    expect(layout.liveMaxHeight).toBe(1);
+  });
+
+  it('隐藏上栏把 3 行还给 live / 视图容量', () => {
+    const shown = computeLiveLayout(24, 0, { topRows: 3, bottomRows: 0 });
+    const hidden = computeLiveLayout(24, 0, { topRows: 0, bottomRows: 0 });
+    expect(hidden.liveMaxHeight - shown.liveMaxHeight).toBe(3);
+    expect(viewCapacity(24, 'normal', 'view', { topRows: 0 })).toBe(
+      viewCapacity(24, 'normal', 'view', { topRows: 3 }) + 3,
+    );
+    expect(viewChromeRows('normal', 'view', { topRows: 0 })).toBe(9);
+  });
+
+  it('两栏同时可见时 chrome + 容量仍不超过终端行数', () => {
+    for (const rows of [18, 20, 24, 40]) {
+      for (const topRows of [0, STATUS_BAR_ROWS]) {
+        // overlay 打开时下栏隐藏，视图容量只扣上栏。
+        const capacity = viewCapacity(rows, computeLiveLayout(rows).mode, 'view', { topRows });
+        expect(
+          viewChromeRows(computeLiveLayout(rows).mode, 'view', { topRows }) + capacity,
+        ).toBeLessThanOrEqual(rows);
+      }
+      const layout = computeLiveLayout(rows, 0, {
+        topRows: STATUS_BAR_ROWS,
+        bottomRows: BOTTOM_BAR_ROWS,
+      });
+      // 非 overlay chrome：上栏 3 + 下栏 3 + 输入 1 + 运行提示 1 + 边距等；live 必须为正。
+      expect(layout.liveMaxHeight).toBeGreaterThan(0);
+    }
+  });
+
+  it('旧调用（无 options）保持 0.12 行为', () => {
+    expect(computeLiveLayout(24).liveMaxHeight).toBe(11);
+    expect(computeLiveLayout(24).hintRows).toBe(1);
+    expect(computeLiveLayout(15).liveMaxHeight).toBe(3);
   });
 });

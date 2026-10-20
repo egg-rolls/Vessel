@@ -214,6 +214,11 @@ export interface ReplSettingsControl {
   language: 'zh-CN' | 'en';
   /** 写入用户配置 `ui.language`；返回后由调用方立即 setLocale */
   setLanguage(locale: 'zh-CN' | 'en'): Promise<void>;
+  /**
+   * 0.13：写入用户配置 `ui.status_bars`（YAML）。
+   * asm 未注入该方法时，栏位切换只保留在本次会话内。
+   */
+  setStatusBars?(value: 'top' | 'bottom' | 'both' | 'none'): Promise<void>;
 }
 
 // ── 0.5 F3：统一 RPC 入口与 tenant（tui 定义结构，asm 注入实现） ──

@@ -13,7 +13,6 @@ const base: StatusRuleProps = {
   context: { used: 12400, max: 64000 },
   durationMs: 102000,
   compactions: 3,
-  sessions: 2,
   cwd: '~/work/vessel',
   branch: '0.7-tui',
 };
@@ -81,6 +80,59 @@ describe('formatStatusRule', () => {
 
     expect(text).toContain('ctx 900 tok');
     expect(text).not.toContain('[');
+  });
+
+  it('上栏不再渲染 session 总数；100 列显示路径与 branch', () => {
+    const text = line(base, 100);
+
+    expect(text).not.toContain('sess');
+    expect(text).toContain('~/work/vessel');
+    expect(text).toContain('0.7-tui');
+    expect(displayWidth(text)).toBeLessThanOrEqual(94);
+  });
+
+  it('长路径中间省略，branch 固定最右', () => {
+    const text = line({ ...base, cwd: '~/work/projects/very/long/vessel/packages/tui' }, 100);
+
+    expect(text).toContain('…/packages/tui');
+    expect(text.endsWith('0.7-tui')).toBe(true);
+    expect(text).not.toContain('/very/long');
+    expect(displayWidth(text)).toBeLessThanOrEqual(94);
+  });
+
+  it('CJK 长路径按显示宽度做中间省略', () => {
+    const text = line({ ...base, cwd: '~/项目/文档/深层/终端/vessel' }, 100);
+
+    expect(text).toContain('…/终端/vessel');
+    expect(text).toContain('0.7-tui');
+    expect(displayWidth(text)).toBeLessThanOrEqual(94);
+  });
+
+  it('空闲 + marqueeOffset 时滚动路径，branch 仍固定最右', () => {
+    const props = { ...base, status: 'idle' as const, cwd: '~/work/projects/very/long/vessel' };
+    const atZero = line({ ...props, marqueeOffset: 0 }, 100);
+    const scrolled = line({ ...props, marqueeOffset: 12 }, 100);
+
+    expect(atZero).toContain('…');
+    expect(atZero.endsWith('0.7-tui')).toBe(true);
+    expect(scrolled).not.toBe(atZero);
+    expect(displayWidth(atZero)).toBeLessThanOrEqual(94);
+    expect(displayWidth(scrolled)).toBeLessThanOrEqual(94);
+  });
+
+  it('运行中即使传入 marqueeOffset 也冻结为中间省略', () => {
+    const text = line(
+      {
+        ...base,
+        status: 'tool',
+        cwd: '~/work/projects/very/long/vessel/packages/tui',
+        marqueeOffset: 40,
+      },
+      100,
+    );
+
+    expect(text).toContain('…/packages/tui');
+    expect(text).toContain('0.7-tui');
   });
 });
 

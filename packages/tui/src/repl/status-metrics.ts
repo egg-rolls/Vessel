@@ -6,7 +6,6 @@
 import { useEffect, useState } from 'react';
 import { estimateContextUsage } from '../commands/context-command.js';
 import type { ReplContext } from '../repl-context.js';
-import { formatCwd } from '../utils/display-labels.js';
 import { getCurrentGitBranch } from '../utils/git.js';
 import type { RunPhase } from './use-repl-state.js';
 
@@ -41,15 +40,17 @@ export function useNowTick(active: boolean, intervalMs = 1000): number {
 
 export interface StatusMetricsResult {
   context: ContextUsageDisplay;
-  sessions: number | undefined;
+  /** 原始 cwd；由状态栏按预算格式化（不再预截断到 40 格） */
   cwd: string;
+  /** home 前缀；状态栏把 cwd 折叠为 `~` */
+  home: string | undefined;
   branch: string | undefined;
   now: number;
 }
 
 /**
  * 状态规则数据：context 在阶段变化与运行 tick 时重算；
- * session 数在 mount / 新会话 / resume 后重算；失败静默隐藏。
+ * 分支只取一次；失败静默隐藏。0.13 起不再扫描 `session.list()`。
  */
 export function useStatusMetrics(
   ctx: ReplContext,
@@ -57,7 +58,6 @@ export function useStatusMetrics(
   phase: RunPhase,
 ): StatusMetricsResult {
   const [context, setContext] = useState<ContextUsageDisplay>(() => readContextUsage(ctx));
-  const [sessions, setSessions] = useState<number | undefined>(undefined);
   const [branch, setBranch] = useState<string | undefined>(undefined);
   const [cwd] = useState(() => process.cwd());
   const [home] = useState(() => process.env.HOME ?? process.env.USERPROFILE);
@@ -67,22 +67,6 @@ export function useStatusMetrics(
   useEffect(() => {
     setContext(readContextUsage(ctx));
   }, [ctx, currentSessionId, phase, now]);
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: refresh session count on session switch
-  useEffect(() => {
-    let cancelled = false;
-    ctx.session
-      .list()
-      .then((ids) => {
-        if (!cancelled) setSessions(ids.length);
-      })
-      .catch(() => {
-        if (!cancelled) setSessions(undefined);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [ctx, currentSessionId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,8 +80,8 @@ export function useStatusMetrics(
 
   return {
     context,
-    sessions,
-    cwd: formatCwd(cwd, home),
+    cwd,
+    home,
     branch,
     now,
   };
