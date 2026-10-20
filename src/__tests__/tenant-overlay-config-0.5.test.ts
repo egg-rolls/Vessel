@@ -130,7 +130,8 @@ provider:
     expect(snapshot.schema_version).toBe(1);
     expect(snapshot.config.apiKey).toBe('<set>');
     expect(result.stdout).not.toContain('sk-user-secret');
-    expect(snapshot.sources.apiKey).toBe('user');
+    // 敏感键的来源值按 DECISION-020 §R1.1 显示 `<set>`。
+    expect(snapshot.sources.apiKey).toBe('<set>');
     expect(snapshot.sources['provider.model']).toBe('user');
     expect(snapshot.paths.user).toBe(userConfigPath);
     expect(snapshot.tenant_id).toBe('default');

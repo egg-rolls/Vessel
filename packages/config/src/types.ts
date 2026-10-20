@@ -363,13 +363,19 @@ export type ConfigSource = 'cli' | 'env' | 'project' | 'user' | 'default';
 /** 叶子键（camelCase 点路径）→ 来源 */
 export type ConfigSources = Record<string, ConfigSource>;
 
+/**
+ * 脱敏后的来源映射：敏感路径（`serve.tokens.*` / `*.apiKey` / `*.token`）
+ * 的值是 `<set>` 而不是来源标签。
+ */
+export type RedactedConfigSources = Record<string, ConfigSource | '<set>'>;
+
 /** 配置快照（A-3 §10.6；web 使用结构镜像或注入，不 import 本包） */
 export interface ConfigSnapshot {
   schema_version: 1;
   /** 已脱敏 */
   config: VesselConfig;
-  /** 基础层来源 */
-  sources: ConfigSources;
+  /** 基础层来源（敏感路径已脱敏） */
+  sources: RedactedConfigSources;
   paths: { user: string; project: string };
   tenant_id?: string;
   /** tenant overlay 命中的叶子键；不伪造第 6 种 source */

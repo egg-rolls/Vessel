@@ -34,6 +34,8 @@ function configFor(nodeId: string, peersDir: string, token: string): string {
     `  node_id: ${nodeId}`,
     'team:',
     '  enabled: true',
+    'serve:',
+    `  token: ${token}`,
     'transport:',
     '  kind: loopback',
     `  token: ${token}`,

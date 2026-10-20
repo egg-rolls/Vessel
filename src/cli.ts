@@ -21,7 +21,11 @@
 
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { buildConfigSnapshot, isLoopbackHostname } from '../packages/config/src/index';
+import {
+  buildConfigSnapshot,
+  isLoopbackHostname,
+  resolveEffectiveApiKey,
+} from '../packages/config/src/index';
 import {
   type EventStream,
   pruneTrace,
@@ -378,7 +382,7 @@ const initialResult = await bootstrap({
 const { config } = initialResult;
 
 // 首启向导（仅真正交互的 REPL；serve-only / 管道无 TTY 时已由 bootstrap 快速失败）
-if (!useMock && interactive && !config.apiKey) {
+if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
   const userConfig = await runSetupWizard();
   if (userConfig.apiKey) {
     config.apiKey = userConfig.apiKey;

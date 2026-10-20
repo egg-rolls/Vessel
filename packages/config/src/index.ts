@@ -41,6 +41,7 @@ export {
 export {
   type ResolveEnvRefsResult,
   redactConfig,
+  resolveEffectiveApiKey,
   resolveEnvRefsInLayer,
   resolveSecret,
   type SecretState,
@@ -49,6 +50,7 @@ export {
 export {
   type BuildConfigSnapshotInput,
   buildConfigSnapshot,
+  redactSourcePaths,
 } from './sources.js';
 export * from './types.js';
 export { deepMerge } from './utils.js';
