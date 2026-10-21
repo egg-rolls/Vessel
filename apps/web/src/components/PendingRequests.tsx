@@ -44,7 +44,6 @@ export function PendingRequestsPanel({
   permissions = [],
   asks = [],
   responding,
-  now = Date.now(),
   showSession = false,
   className = '',
   onDecidePermission,
@@ -57,8 +56,6 @@ export function PendingRequestsPanel({
   asks?: readonly AskUserRequest[];
   /** 正在提交应答的 requestId：按钮据此禁用。 */
   responding: ReadonlySet<string>;
-  /** ask 倒计时用的当前时间。 */
-  now?: number;
   /** 跨会话面板显示归属 session；当前会话内不需要。 */
   showSession?: boolean;
   className?: string;
@@ -72,7 +69,7 @@ export function PendingRequestsPanel({
   if (permissions.length === 0 && asks.length === 0) return null;
 
   const sortedPermissions = [...permissions].sort((a, b) => a.requestedAt - b.requestedAt);
-  const sortedAsks = [...asks].sort((a, b) => a.expiresAt - b.expiresAt);
+  const sortedAsks = [...asks].sort((a, b) => a.requestedAt - b.requestedAt);
   const total = permissions.length + asks.length;
 
   return (
@@ -107,7 +104,6 @@ export function PendingRequestsPanel({
             <AskCard
               request={request}
               pendingCount={sortedAsks.length}
-              now={now}
               busy={responding.has(request.requestId)}
               onSubmit={(answers) => onRespondAsk(request.requestId, answers)}
               onCancel={() => onRespondAsk(request.requestId, [])}

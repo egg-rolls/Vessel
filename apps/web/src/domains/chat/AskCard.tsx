@@ -23,8 +23,6 @@ export function AskCard({
 }: {
   request: AskUserRequest;
   pendingCount?: number;
-  /** 保留以兼容调用方；提问已不再倒计时 / 过期。 */
-  now?: number;
   busy?: boolean;
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;

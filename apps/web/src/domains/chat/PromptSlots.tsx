@@ -63,21 +63,19 @@ export function PermissionPrompt({
 export function AskPrompt({
   request,
   more = 0,
-  now,
   busy = false,
   onSubmit,
   onCancel,
 }: {
   request: AskUserRequest;
   more?: number;
-  now: number;
   busy?: boolean;
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;
 }) {
   return (
     <PromptShell label={t('chat.prompt.question')} more={more}>
-      <AskCard request={request} now={now} busy={busy} onSubmit={onSubmit} onCancel={onCancel} />
+      <AskCard request={request} busy={busy} onSubmit={onSubmit} onCancel={onCancel} />
     </PromptShell>
   );
 }

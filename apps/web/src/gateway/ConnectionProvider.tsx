@@ -18,7 +18,6 @@ import {
   askFromEvent,
   enqueueInteraction,
   enqueuePermission,
-  expireInteractions,
   interactionExpiredMessage,
   interactionRunEndedMessage,
   isExpiredError,
@@ -77,7 +76,6 @@ export interface ConnectionContextValue {
   asks: readonly AskUserRequest[];
   /** 正在提交应答的 requestId；UI 据此禁用按钮，避免双击重复提交。 */
   responding: ReadonlySet<string>;
-  now: number;
   connect: (options: ConnectionOptions) => boolean;
   disconnect: () => void;
   clearToken: () => void;
@@ -158,7 +156,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [permissions, setPermissions] = useState<readonly PermissionRequest[]>([]);
   const [asks, setAsks] = useState<readonly AskUserRequest[]>([]);
   const [responding, setResponding] = useState<ReadonlySet<string>>(() => new Set());
-  const [now, setNow] = useState(() => Date.now());
   const [connectSeq, setConnectSeq] = useState(0);
   const submitGuard = useRef(new SubmitGuard());
   const permissionsRef = useRef<readonly PermissionRequest[]>(permissions);
@@ -256,7 +253,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const sessionId = sessionIdForRun(eventStore.getSnapshot().entries, event.run_id);
       const request = askFromEvent(event, sessionId);
       if (!request) return;
-      setAsks((prev) => enqueueInteraction(prev, request, Date.now()));
+      setAsks((prev) => enqueueInteraction(prev, request));
     };
 
     /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */
@@ -367,19 +364,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       client.close();
     };
   }, [client, token, connectSeq, targetTenantId, eventStore, reportConnectError, toast]);
-
-  // ask 的倒计时/超时保留；权限请求默认无限等待（Addendum A）。
-  useEffect(() => {
-    if (asks.length === 0) return;
-    const id = window.setInterval(() => setNow(Date.now()), 1000);
-    return () => window.clearInterval(id);
-  }, [asks.length]);
-
-  useEffect(() => {
-    if (!asks.some((item) => item.expiresAt <= now)) return;
-    toast.info('提问请求已超时，run 可能已失败；请检查时间线或重新发送。');
-    setAsks((prev) => expireInteractions(prev, now));
-  }, [now, asks, toast]);
 
   const connect = useCallback(
     (options: ConnectionOptions): boolean => {
@@ -528,7 +512,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       permissions,
       asks,
       responding,
-      now,
       connect,
       disconnect,
       clearToken: disconnect,
@@ -557,7 +540,6 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       permissions,
       asks,
       responding,
-      now,
       connect,
       disconnect,
       retry,

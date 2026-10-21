@@ -68,7 +68,7 @@ describe('ask card (composer slot)', () => {
         request={{
           requestId: 'ask-1',
           runId: 'run-1',
-          expiresAt: Number.POSITIVE_INFINITY,
+          requestedAt: 1_000,
           questions: [{ header: 'Q', question: 'Which?' }],
         }}
         onSubmit={() => {}}
@@ -89,11 +89,14 @@ describe('nextPending (serial order)', () => {
     expect(nextPending([later, earlier], [])?.request.requestId).toBe('earlier');
   });
 
-  test('compares asks by arrival time derived from expiresAt', () => {
-    const earlyAsk = ask({ requestId: 'early-ask', expiresAt: 1_000 + 120_000 });
+  test('compares asks and permissions by requestedAt', () => {
+    const earlyAsk = ask({ requestId: 'early-ask', requestedAt: 1_000 });
     const latePermission = permission({ requestId: 'late-perm', requestedAt: 2_000 });
     expect(nextPending([latePermission], [earlyAsk])?.kind).toBe('ask');
     expect(nextPending([latePermission], [earlyAsk])?.request.requestId).toBe('early-ask');
+
+    const earlyPermission = permission({ requestId: 'early-perm', requestedAt: 500 });
+    expect(nextPending([earlyPermission], [earlyAsk])?.kind).toBe('permission');
   });
 
   test('returns null when nothing is pending', () => {
@@ -171,7 +174,7 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
     questions: [{ header: 'Pick', question: 'Which one?' }],
     runId: 'run-1',
     sessionId: 'session-1',
-    expiresAt: 2_000,
+    requestedAt: 2_000,
     ...overrides,
   };
 }
@@ -179,7 +182,7 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
 describe('ask prompt (composer slot)', () => {
   test('replaces the input box with the ask card instead of a global modal', () => {
     const markup = renderToStaticMarkup(
-      <AskPrompt request={ask()} now={1_000} onSubmit={() => {}} onCancel={() => {}} />,
+      <AskPrompt request={ask()} onSubmit={() => {}} onCancel={() => {}} />,
     );
 
     expect(markup).toContain('prompt-slot');
@@ -195,7 +198,7 @@ describe('ask prompt (composer slot)', () => {
 
   test('disables submission until every question has an answer', () => {
     const markup = renderToStaticMarkup(
-      <AskPrompt request={ask()} now={1_000} onSubmit={() => {}} onCancel={() => {}} />,
+      <AskPrompt request={ask()} onSubmit={() => {}} onCancel={() => {}} />,
     );
     expect(markup).toContain('btn-primary');
     expect(markup).toContain('disabled');

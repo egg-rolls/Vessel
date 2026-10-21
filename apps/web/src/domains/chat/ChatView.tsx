@@ -93,7 +93,6 @@ export function ChatView({
     permissions,
     asks,
     responding,
-    now,
     respondPermission,
     respondAsk,
   } = useConnection();
@@ -1077,7 +1076,6 @@ export function ChatView({
           <AskPrompt
             request={pendingPrompt.request}
             more={pendingMore}
-            now={now}
             busy={responding.has(pendingPrompt.request.requestId)}
             onSubmit={(answers) => handleRespondAsk(pendingPrompt.request.requestId, answers)}
             onCancel={() => handleRespondAsk(pendingPrompt.request.requestId, [])}

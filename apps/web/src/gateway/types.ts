@@ -135,7 +135,8 @@ export interface AskUserRequest {
   requestId: string;
   questions: AskUserQuestion[];
   runId: string;
-  expiresAt: number;
+  /** 事件时间（缺失回退收到时间）；只用于与权限请求混排，不表示过期。 */
+  requestedAt: number;
   /** 0.15 additive：由 run.started 反查的归属会话；旧流缺失时不参与跨 session 归类。 */
   sessionId?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
@@ -148,7 +149,7 @@ export type PermissionScope = 'once' | 'session' | 'always';
 /**
  * 待答权限请求（tool.permission.request，0.13 增加关联字段）。
  *
- * Addendum A：权限等待默认不超时，因此没有 `expiresAt`；卡片只保留事件时间用于排序。
+ * Addendum A / 0.18：权限等待默认不超时，因此没有过期字段；卡片只保留事件时间用于排序。
  */
 export interface PermissionRequest {
   requestId: string;

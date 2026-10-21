@@ -1,15 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  ASK_EXPIRES_AT_NEVER,
   askFromEvent,
   enqueueInteraction,
   enqueuePermission,
-  expireInteractions,
-  INTERACTION_TTL_MS,
   interactionAgentId,
-  interactionExpiresAt,
   isExpiredError,
-  isInteractionExpired,
   isNotFoundError,
   isRunEndedError,
   permissionFromEvent,
@@ -21,63 +16,28 @@ import type { RunEvent } from '../src/gateway/types';
 
 interface Item {
   requestId: string;
-  expiresAt: number;
 }
 
-describe('interactionExpiresAt', () => {
-  test('computes expiry from the event timestamp, not from receive time', () => {
-    const eventTs = 1_000_000;
-    expect(interactionExpiresAt(eventTs, INTERACTION_TTL_MS, 9_999_999)).toBe(
-      eventTs + INTERACTION_TTL_MS,
-    );
-  });
-
-  test('falls back to now when the event timestamp is missing or invalid', () => {
-    expect(interactionExpiresAt(undefined, 120_000, 5_000)).toBe(125_000);
-    expect(interactionExpiresAt(Number.NaN, 120_000, 5_000)).toBe(125_000);
-    expect(interactionExpiresAt(0, 120_000, 5_000)).toBe(125_000);
-  });
-});
-
-describe('permission replay guard', () => {
-  test('drops a replayed request whose event time is already past the TTL', () => {
-    const eventTs = 1_000;
-    const replayNow = eventTs + INTERACTION_TTL_MS + 1;
-    const item: Item = { requestId: 'perm-old', expiresAt: interactionExpiresAt(eventTs) };
-    expect(enqueueInteraction([], item, replayNow)).toHaveLength(0);
-  });
-
-  test('keeps a request that is still inside the TTL window', () => {
-    const eventTs = 1_000;
-    const replayNow = eventTs + INTERACTION_TTL_MS - 1;
-    const item: Item = { requestId: 'perm-live', expiresAt: interactionExpiresAt(eventTs) };
-    const queue = enqueueInteraction([], item, replayNow);
+describe('interaction queue (0.18: no TTL)', () => {
+  test('never drops a request over time', () => {
+    const item: Item = { requestId: 'perm-old' };
+    const queue = enqueueInteraction([], item);
     expect(queue).toHaveLength(1);
-    expect(queue[0]?.expiresAt).toBe(eventTs + INTERACTION_TTL_MS);
-    expect(isInteractionExpired(item, replayNow)).toBe(false);
+    expect(queue[0]).toBe(item);
   });
 
   test('does not enqueue the same requestId twice', () => {
-    const item: Item = { requestId: 'perm-1', expiresAt: 10_000 };
-    const once = enqueueInteraction([], item, 1_000);
-    const twice = enqueueInteraction(once, { ...item, expiresAt: 20_000 }, 1_000);
+    const item: Item = { requestId: 'perm-1' };
+    const once = enqueueInteraction([], item);
+    const twice = enqueueInteraction(once, { ...item });
     expect(twice).toBe(once);
     expect(twice).toHaveLength(1);
   });
 });
 
-describe('expiry cleanup and not_found handling', () => {
-  test('removes only expired queue entries', () => {
-    const queue: Item[] = [
-      { requestId: 'old', expiresAt: 900 },
-      { requestId: 'edge', expiresAt: 1_000 },
-      { requestId: 'new', expiresAt: 1_001 },
-    ];
-    expect(expireInteractions(queue, 1_000).map((item) => item.requestId)).toEqual(['new']);
-  });
-
+describe('not_found handling', () => {
   test('not_found removes the popup entry, other errors keep it', () => {
-    const queue: Item[] = [{ requestId: 'perm-1', expiresAt: 10_000 }];
+    const queue: Item[] = [{ requestId: 'perm-1' }];
     const notFound = new Error('not_found: Permission request not found');
     expect(isNotFoundError(notFound)).toBe(true);
     expect(removeInteraction(queue, 'perm-1')).toHaveLength(0);
@@ -112,7 +72,6 @@ describe('permissionFromEvent (0.13)', () => {
       runId: 'run-1',
       requestedAt: 1_000,
     });
-    expect(item).not.toHaveProperty('expiresAt');
   });
 
   test('keeps association fields and ignores legacy deadline_at', () => {
@@ -131,7 +90,6 @@ describe('permissionFromEvent (0.13)', () => {
       toolCallId: 'call-3',
       source: 'workflow',
     });
-    expect(item).not.toHaveProperty('expiresAt');
   });
 
   test('accepts request_id for older emitters and drops events without an id', () => {
@@ -175,7 +133,7 @@ describe('askFromEvent (0.17)', () => {
     data,
   });
 
-  test('maps questions, session and agentId; asks never expire (0.18)', () => {
+  test('maps questions, session, agentId and the event requestedAt', () => {
     const item = askFromEvent(
       event({
         requestId: 'ask-1',
@@ -189,11 +147,22 @@ describe('askFromEvent (0.17)', () => {
       runId: 'run-1',
       sessionId: 'session-1',
       agentId: 'delegate-9',
-      expiresAt: ASK_EXPIRES_AT_NEVER,
+      requestedAt: 1_000,
     });
-    // 很久以后也不会被过期清理淘汰。
-    expect(isInteractionExpired(item as Item, 9_999_999_999)).toBe(false);
-    expect(expireInteractions([item as Item], 9_999_999_999)).toHaveLength(1);
+  });
+
+  test('falls back to now when the event timestamp is missing', () => {
+    const item = askFromEvent(
+      {
+        type: 'ask.user.requested',
+        run_id: 'run-1',
+        ts: 0,
+        data: { requestId: 'ask-2', questions: [{ question: 'Q' }] },
+      },
+      undefined,
+      5_000,
+    );
+    expect(item?.requestedAt).toBe(5_000);
   });
 
   test('keeps old streams working and rejects malformed payloads', () => {

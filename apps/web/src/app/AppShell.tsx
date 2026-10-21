@@ -80,7 +80,6 @@ export function AppShell() {
     permissions,
     asks,
     responding,
-    now,
     respondPermission,
     respondAsk,
     retry,
@@ -521,7 +520,6 @@ export function AppShell() {
             permissions={otherPending}
             asks={otherAsks}
             responding={responding}
-            now={now}
             showSession
             onDecidePermission={(requestId, decision, scope) => {
               void respondPermission(requestId, decision, scope);

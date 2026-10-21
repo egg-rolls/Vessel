@@ -23,7 +23,7 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
     questions: [{ header: 'Pick', question: 'Which one?' }],
     runId: 'run-1',
     sessionId: 'session-1',
-    expiresAt: 2_000,
+    requestedAt: 2_000,
     ...overrides,
   };
 }
@@ -161,7 +161,6 @@ describe('AppShell fallback panel (cross-session / no sessionId)', () => {
         title="待处理"
         asks={[ask({ sessionId: undefined })]}
         responding={new Set()}
-        now={1_000}
         onDecidePermission={() => {}}
         onRespondAsk={() => {}}
       />,
