@@ -17,6 +17,16 @@ import {
 import type { RunStatus } from './protocol.js';
 import { RpcError } from './rpc.js';
 
+/** `run.failed` envelope 的子集；只保存可公开字段。 */
+export interface RunErrorMeta {
+  error_code?: string;
+  category?: string;
+  phase?: string;
+  retryable?: boolean;
+  http_status?: number;
+  details?: Record<string, unknown>;
+}
+
 /** 网关级运行记录 */
 export interface RunRecord extends RunStatus {
   input: string;
@@ -25,6 +35,8 @@ export interface RunRecord extends RunStatus {
   resolveDone: () => void;
   /** run 归属 tenant */
   tenant_id: string;
+  /** 0.15 E6：终态错误 envelope（来自 run.failed 事件）。 */
+  error_meta?: RunErrorMeta;
 }
 
 /** 权限应答 scope（DECISION-024 §2.1）。 */
@@ -134,6 +146,34 @@ function makeDone(): { done: Promise<void>; resolveDone: () => void } {
 }
 
 /** 创建共享运行引擎 */
+/** 从 run.failed data 中取 envelope；缺失/非法值不推断。 */
+export function errorMetaOf(data: unknown): RunErrorMeta | undefined {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) return undefined;
+  const source = data as Record<string, unknown>;
+  const meta: RunErrorMeta = {};
+  if (typeof source.error_code === 'string' && source.error_code.length > 0) {
+    meta.error_code = source.error_code;
+  }
+  if (typeof source.category === 'string' && source.category.length > 0) {
+    meta.category = source.category;
+  }
+  if (typeof source.phase === 'string' && source.phase.length > 0) {
+    meta.phase = source.phase;
+  }
+  if (typeof source.retryable === 'boolean') meta.retryable = source.retryable;
+  if (typeof source.http_status === 'number' && Number.isFinite(source.http_status)) {
+    meta.http_status = source.http_status;
+  }
+  if (
+    typeof source.details === 'object' &&
+    source.details !== null &&
+    !Array.isArray(source.details)
+  ) {
+    meta.details = source.details as Record<string, unknown>;
+  }
+  return Object.keys(meta).length > 0 ? meta : undefined;
+}
+
 export function createRunEngine(options: RunEngineOptions): RunEngine {
   const {
     events,
@@ -218,6 +258,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       ...(record.started_at !== undefined ? { started_at: record.started_at } : {}),
       ...(record.completed_at !== undefined ? { completed_at: record.completed_at } : {}),
       ...(queuePosition(record) !== undefined ? { queue_position: queuePosition(record) } : {}),
+      ...(record.error_meta ?? {}),
     };
   }
 
@@ -463,10 +504,14 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       event.type === 'run.failed' ||
       event.type === 'run.cancelled'
     ) {
-      if (active && active.core_run_id === event.run_id) {
+      if (active && (active.core_run_id === event.run_id || active.run_id === event.run_id)) {
         const data = event.data as Record<string, unknown>;
         if (data.usage && typeof data.usage === 'object') {
           active.usage = data.usage as RunStatus['usage'];
+        }
+        if (event.type === 'run.failed') {
+          const meta = errorMetaOf(data);
+          if (meta) active.error_meta = meta;
         }
       }
       // run 终态：pending 全部清掉（不只 asks），持久化为 orphaned；

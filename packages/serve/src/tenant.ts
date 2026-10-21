@@ -74,8 +74,17 @@ export interface ConfigSnapshotLike {
 }
 
 /** asm 注入的配置视图（已脱敏） */
+/** 0.15：`config.set` 的写入请求；只允许白名单键（方法层校验）。 */
+export interface ConfigSetRequest {
+  tenantId: string;
+  key: string;
+  value: string | boolean;
+}
+
 export interface ConfigGatewayOptionsLike {
   snapshot(tenantId: string): Promise<ConfigSnapshotLike> | ConfigSnapshotLike;
+  /** 可写用户配置；未注入时 `config.set` 返回 not_found。 */
+  set?(request: ConfigSetRequest): Promise<void> | void;
 }
 
 /** quota 超限；asm/core 可抛出同 code 错误 */

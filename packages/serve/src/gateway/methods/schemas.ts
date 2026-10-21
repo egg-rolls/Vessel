@@ -37,6 +37,13 @@ export const runStatusSchema = {
     },
     output: { type: 'string' },
     error: { type: 'string' },
+    // 0.14 / 0.15 E6：run.failed envelope（additive）。
+    error_code: { type: 'string' },
+    category: { type: 'string' },
+    phase: { type: 'string' },
+    retryable: { type: 'boolean' },
+    http_status: { type: 'integer' },
+    details: { type: 'object' },
     usage: usageSchema,
     started_at: { type: 'number' },
     completed_at: { type: 'number' },
@@ -134,6 +141,89 @@ export const agentInfoSchema = {
     current_tool: { type: 'string' },
     session_id: { type: 'string' },
     usage: usageSchema,
+  },
+};
+
+/** agents.tree 节点（0.15 E5）：AgentCard + children_ids。 */
+export const agentCardSchema = {
+  type: 'object',
+  required: ['id', 'depth', 'state', 'children_count', 'children_ids'],
+  properties: {
+    ...agentInfoSchema.properties,
+    task: { type: 'string' },
+    node_id: { type: 'string' },
+    queue_position: { type: 'integer', minimum: 1 },
+    wait_reason: { type: 'string' },
+    context_used: { type: 'integer', minimum: 0 },
+    context_max: { type: 'integer', minimum: 0 },
+    children_count: { type: 'integer', minimum: 0 },
+    last_seen: { type: 'number' },
+    artifact_refs: stringListSchema,
+    children_ids: stringListSchema,
+  },
+};
+
+/** tasks.list / tasks.get 条目（0.15 E5，只读派生）。 */
+export const taskEntrySchema = {
+  type: 'object',
+  required: ['id', 'title', 'assignee', 'status', 'artifact_refs', 'since'],
+  properties: {
+    id: { type: 'string' },
+    title: { type: 'string' },
+    assignee: { type: 'string' },
+    status: {
+      type: 'string',
+      enum: ['queued', 'running', 'completed', 'failed', 'cancelled'],
+    },
+    parent_task: { type: 'string' },
+    artifact_refs: stringListSchema,
+    since: { type: 'number' },
+  },
+};
+
+const schedulerStatsSchema = {
+  type: 'object',
+  required: ['queued', 'running', 'completed', 'failed', 'cancelled'],
+  properties: {
+    queued: { type: 'integer' },
+    running: { type: 'integer' },
+    completed: { type: 'integer' },
+    failed: { type: 'integer' },
+    cancelled: { type: 'integer' },
+  },
+};
+
+const schedulerRunSchema = {
+  type: 'object',
+  required: ['run_id', 'status'],
+  properties: {
+    run_id: { type: 'string' },
+    agent_id: { type: 'string' },
+    session_id: { type: 'string' },
+    status: { type: 'string' },
+    queue_position: { type: 'integer' },
+    queued_at: { type: 'number' },
+    started_at: { type: 'number' },
+    wait_reason: { type: 'string' },
+  },
+};
+
+/** health.get 的 runtime 快照（0.15 E6）。 */
+export const runtimeSnapshotSchema = {
+  type: 'object',
+  required: ['scheduler'],
+  properties: {
+    active_run_id: { type: 'string' },
+    scheduler: {
+      type: 'object',
+      required: ['as_of', 'queued', 'running', 'stats'],
+      properties: {
+        as_of: { type: 'number' },
+        queued: { type: 'array', items: schedulerRunSchema },
+        running: { type: 'array', items: schedulerRunSchema },
+        stats: schedulerStatsSchema,
+      },
+    },
   },
 };
 

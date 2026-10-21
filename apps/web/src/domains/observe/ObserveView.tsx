@@ -16,15 +16,22 @@ import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import type { EvalReport } from '../../gateway/types';
+import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { DiagnosticsView } from './DiagnosticsView';
+import { TasksView } from './TasksView';
 
 type ObserveRoute = Extract<Route, { domain: 'observe' }>;
 type Tab = ObserveRoute['tab'];
 
-const TABS: readonly { id: Tab; label: string }[] = [
-  { id: 'metrics', label: '指标' },
-  { id: 'evals', label: '评测' },
-];
+function observeTabs(): readonly { id: Tab; label: string }[] {
+  return [
+    { id: 'metrics', label: t('observe.tab.metrics') },
+    { id: 'evals', label: t('observe.tab.evals') },
+    { id: 'diagnostics', label: t('observe.tab.diagnostics') },
+    { id: 'tasks', label: t('observe.tab.tasks') },
+  ];
+}
 
 const EVAL_SUITES_KEY = 'vessel.eval-suites';
 const EVAL_CASE_PAGE = 100;
@@ -46,24 +53,32 @@ export function ObserveView({
   route: ObserveRoute;
   navigate: (route: Route) => void;
 }) {
+  useLocale();
   const { tenantId } = useConnection();
   return (
     <div className="domain-view">
       <PageHeader
-        title="可观测"
-        description="指标（计数）与评测（离线质量）。事件记录在运行详情中查看。"
+        title={t('observe.title')}
+        description={t('observe.description')}
         tenantId={tenantId}
       />
       <SegmentedTabs
-        label="可观测分区"
-        tabs={TABS}
+        label={t('observe.tabsLabel')}
+        tabs={observeTabs()}
         value={route.tab}
         onChange={(tab) => navigate({ domain: 'observe', tab })}
         panelId="observe-panel"
       />
-      <div className="domain-content" id="observe-panel" role="tabpanel" aria-label="可观测内容">
+      <div
+        className="domain-content"
+        id="observe-panel"
+        role="tabpanel"
+        aria-label={t('observe.panelLabel')}
+      >
         {route.tab === 'metrics' && <MetricsPanel />}
         {route.tab === 'evals' && <EvalsPanel />}
+        {route.tab === 'diagnostics' && <DiagnosticsView />}
+        {route.tab === 'tasks' && <TasksView />}
       </div>
     </div>
   );

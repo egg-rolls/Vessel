@@ -15,13 +15,64 @@ import {
 } from '../../rpc.js';
 import type { TeamGatewayOptions } from '../../team.js';
 import type { ConfigGatewayOptionsLike } from '../../tenant.js';
-import { tenantParamSchema } from './common.js';
-import { stringListSchema } from './schemas.js';
+import { stringParam, tenantParamSchema } from './common.js';
+import { runtimeSnapshotSchema, stringListSchema } from './schemas.js';
+
+/** `config.set` 可写键（与 CLI `vessel config set` 的白名单一致）。 */
+const BOOLEAN_KEYS: ReadonlySet<string> = new Set([
+  'ui.showReasoning',
+  'ui.showInternalEvents',
+  'ui.askUser',
+  'observability.showProcessErrors',
+]);
+
+const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
+  'ui.language': ['zh-CN', 'en'],
+  'ui.statusBars': ['top', 'bottom', 'both', 'none'],
+  'ui.verbosity': ['minimal', 'normal', 'debug'],
+  'ui.errorLevel': ['user', 'all'],
+};
+
+const SETTABLE_KEYS: ReadonlySet<string> = new Set([
+  ...BOOLEAN_KEYS,
+  ...Object.keys(ENUM_KEYS),
+  'agent.cwd',
+]);
+
+/** 返回规范化后的值；非法键/值抛 invalid_params。 */
+function normalizeConfigValue(key: string, raw: unknown): string | boolean {
+  if (!SETTABLE_KEYS.has(key)) {
+    throw new RpcError('invalid_params', `Unsupported config key: ${key}`, { key });
+  }
+  if (BOOLEAN_KEYS.has(key)) {
+    if (typeof raw === 'boolean') return raw;
+    if (raw === 'true') return true;
+    if (raw === 'false') return false;
+    throw new RpcError('invalid_params', `${key} must be true or false`, { key });
+  }
+  if (typeof raw !== 'string') {
+    throw new RpcError('invalid_params', `${key} must be a string`, { key });
+  }
+  const allowed = ENUM_KEYS[key];
+  if (allowed !== undefined) {
+    if (!allowed.includes(raw)) {
+      throw new RpcError('invalid_params', `${key} must be one of ${allowed.join(', ')}`, { key });
+    }
+    return raw;
+  }
+  const value = raw.trim();
+  if (value.length === 0) {
+    throw new RpcError('invalid_params', `${key} must not be empty`, { key });
+  }
+  return value;
+}
 
 export interface ConfigMethodsDeps {
   defaultTenantId: string;
   version?: string;
   config?: ConfigGatewayOptionsLike;
+  /** health.get 的 runtime 快照（0.15 E6）。 */
+  runtimeSnapshot(tenantId: string): Record<string, unknown>;
   /** 方法表在组装完成后才有值；handler 调用时解析。 */
   methodTable(): RpcMethodTable;
   toolDescriptionsForTenant(tenantId: string): Array<{ name: string; description?: string }>;
@@ -50,6 +101,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
     nodeInfo,
     startedAt,
     getTeam,
+    runtimeSnapshot,
   } = deps;
 
   function configControl(): ConfigGatewayOptionsLike {
@@ -73,6 +125,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           'started_at',
           'tenant_id',
           'team',
+          'runtime',
         ],
         properties: {
           status: { type: 'string', enum: ['ok'] },
@@ -133,6 +186,8 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
               transport: { type: 'string' },
             },
           },
+          /** 0.15 E6：active run 与 scheduler 快照。 */
+          runtime: runtimeSnapshotSchema,
         },
       },
       handler: (_params, ctx) => {
@@ -145,6 +200,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           node: nodeInfo(),
           started_at: startedAt,
           tenant_id: ctx.tenantId,
+          runtime: runtimeSnapshot(ctx.tenantId),
           team: team
             ? {
                 enabled: true,
@@ -246,6 +302,50 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
             ? { tenant_overlay_keys: snapshot.tenant_overlay_keys }
             : {}),
         };
+      },
+    },
+    {
+      name: 'config.set',
+      permission: 'write',
+      params_schema: {
+        type: 'object',
+        required: ['key', 'value'],
+        properties: {
+          key: { type: 'string', minLength: 1 },
+          // 布尔键接受 boolean，其余键接受 string；具体校验在 handler。
+          value: {},
+        },
+      },
+      result_schema: {
+        type: 'object',
+        required: ['ok', 'key', 'value'],
+        properties: {
+          ok: { type: 'boolean' },
+          key: { type: 'string' },
+          value: {},
+        },
+      },
+      handler: async (params, ctx) => {
+        // 用户配置是进程级的；非 default tenant 不得跨租户改写。
+        if (ctx.tenantId !== deps.defaultTenantId) {
+          throw new RpcError('forbidden', 'config.set is only available for the default tenant');
+        }
+        const control = configControl();
+        if (typeof control.set !== 'function') {
+          throw new RpcError('not_found', 'Config write is not available');
+        }
+        const key = stringParam(params, 'key');
+        const value = normalizeConfigValue(key, params.value);
+        try {
+          await control.set({ tenantId: ctx.tenantId, key, value });
+        } catch (error) {
+          if (error instanceof RpcError) throw error;
+          throw new RpcError(
+            'internal',
+            error instanceof Error ? error.message : 'Config write failed',
+          );
+        }
+        return { ok: true, key, value };
       },
     },
     {

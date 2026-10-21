@@ -57,6 +57,15 @@ export function resolveUiVisibility(source: unknown): UiVisibility {
   };
 }
 
+/** `observability.showProcessErrors`；缺失/非法 → false（0.14 行为）。 */
+export function resolveShowProcessErrors(source: unknown): boolean {
+  if (!isRecord(source)) return false;
+  const config = isRecord(source.config) ? source.config : source;
+  const observability = isRecord(config.observability) ? config.observability : undefined;
+  const value = observability?.showProcessErrors ?? observability?.show_process_errors;
+  return value === true;
+}
+
 /** debug 或显式 showInternalEvents 时展示 L3 内部事件。 */
 export function showsInternalEvents(visibility: UiVisibility): boolean {
   return visibility.showInternalEvents || visibility.verbosity === 'debug';

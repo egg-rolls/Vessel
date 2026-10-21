@@ -7,7 +7,7 @@
 import type { RunnableAgent } from '@vessel-agent/core';
 import { type DurableGatewayOptions, isResumableStatus } from '../../durable.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
-import type { RunEngine, RunRecord } from '../../run-engine.js';
+import { errorMetaOf, type RunEngine, type RunRecord } from '../../run-engine.js';
 import { mapTenantError, type TenantControlLike } from '../../tenant.js';
 import { checkpointBelongsToTenant, stringParam } from './common.js';
 import { runStatusSchema } from './schemas.js';
@@ -25,6 +25,28 @@ export interface RunMethodsDeps {
   activeCount(tenantId: string): number;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
+}
+
+/**
+ * durable checkpoint 的 additive 归一：
+ * - `started_at` 缺失时用 `created_at`；
+ * - envelope 可能在顶层或 `metadata.error_meta|error_envelope|envelope`。
+ */
+export function normalizeDurableRun(run: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...run };
+  if (out.started_at === undefined && typeof out.created_at === 'number') {
+    out.started_at = out.created_at;
+  }
+  if (out.error_code !== undefined) return out;
+  const metadata = out.metadata;
+  if (typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)) {
+    const record = metadata as Record<string, unknown>;
+    for (const key of ['error_meta', 'error_envelope', 'envelope']) {
+      const meta = errorMetaOf(record[key]);
+      if (meta) return { ...out, ...meta };
+    }
+  }
+  return out;
 }
 
 export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
@@ -129,7 +151,7 @@ export function createRunMethods(deps: RunMethodsDeps): RpcMethodDefinition[] {
         if (!checkpoint || !checkpointBelongsToTenant(checkpoint, ctx.tenantId)) {
           throw new RpcError('not_found', `Run not found: ${runId}`);
         }
-        return { run: checkpoint };
+        return { run: normalizeDurableRun(checkpoint as unknown as Record<string, unknown>) };
       },
     },
     {

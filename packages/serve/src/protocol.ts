@@ -192,6 +192,13 @@ export interface RunStatus {
   started_at?: number;
   completed_at?: number;
   queue_position?: number;
+  /** 0.14 / 0.15 E6：run.failed 结构化 envelope（additive）。 */
+  error_code?: string;
+  category?: string;
+  phase?: string;
+  retryable?: boolean;
+  http_status?: number;
+  details?: Record<string, unknown>;
 }
 
 /** 工具公开信息（不含 handler） */

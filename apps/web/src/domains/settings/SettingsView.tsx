@@ -8,6 +8,7 @@ import { AppearanceView } from './AppearanceView';
 import { CapabilitiesView } from './CapabilitiesView';
 import { ConfigView } from './ConfigView';
 import { ConnectionForm } from './ConnectionForm';
+import { DisplaySettingsView } from './DisplaySettingsView';
 import { NodesPanel } from './NodesPanel';
 import { TenantsView } from './TenantsView';
 
@@ -21,6 +22,7 @@ const TAB_IDS: readonly SettingsTab[] = [
   'capabilities',
   'tenants',
   'appearance',
+  'display',
 ];
 
 export function SettingsView({
@@ -63,6 +65,7 @@ export function SettingsView({
         {route.tab === 'capabilities' && <CapabilitiesView />}
         {route.tab === 'tenants' && <TenantsView />}
         {route.tab === 'appearance' && <AppearanceView />}
+        {route.tab === 'display' && <DisplaySettingsView />}
       </div>
     </div>
   );
