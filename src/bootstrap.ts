@@ -40,6 +40,7 @@ import {
   type LocalRpcDispatcher,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { mapDelegateToolAlias } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type {
@@ -938,7 +939,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+    // 0.16：agent 可用时旧 delegate_task 免确认规则映射到 agent。
+    autoApprove: mapDelegateToolAlias(
+      [...(config.permission?.autoApprove ?? []), 'ask_user'],
+      config.agent?.enabled ?? !headless,
+    ),
   };
 
   // ── Durable resume（0.3）─────────────────────────
@@ -963,7 +968,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         pluginHost: finalPluginHost,
         systemPrompt,
         permission,
-        selfCard: ownerSelfCard(config, providerModel, { askUser: registerAskUser }),
+        selfCard: ownerSelfCard(config, providerModel, {
+          askUser: registerAskUser,
+          headless,
+        }),
         ...(runStore ? { runStore } : {}),
         logger,
       }),

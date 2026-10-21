@@ -1,7 +1,8 @@
 /**
  * `--tools` 的工具清单——不构造 AgentRuntime、不需要 API Key。
  *
- * 输出口径固定为 headless 口径（4 个）：bash / edit / read / delegate_task。
+ * 输出口径固定为 headless 口径：默认 4 个（bash / edit / read / delegate_task）；
+ * `agent.enabled: true` 时 delegate_task 换成 canonical `agent`（0.16）。
  * `ask_user` 仅在交互 REPL（TTY）或 gateway / serve 下注册（见 cli.ts / bootstrap.ts），
  * 因此一次性命令里不列出，由调用方在末尾注明。
  */
@@ -15,6 +16,11 @@ import {
 } from '../packages/core/src/index';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import {
+  type AgentTeamPluginOptions,
+  resolveAgentWiring,
+  toAgentTeamPluginOptions,
+} from './agent-wiring';
 import { resolveAgentCwd } from './path-resolution';
 import { buildPluginConfigMap, declarativePluginEntries, installWithConfig } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -60,9 +66,12 @@ export async function listTools(): Promise<ToolsListing> {
     }
   }
 
+  // `--tools` 是一次性只读命令：按 headless 口径解析 agent 开关。
+  const agentWiring = resolveAgentWiring(config, { headless: true });
+
   // delegate_task 是工厂式插件，需装配层注入 provider 工厂；列工具不会调用它。
   const pluginNamesWithFactories = [...pluginNames];
-  if (config.delegate?.enabled !== false) {
+  if (agentWiring.delegateEnabled) {
     const delegate = createDelegateTaskPlugin({
       providerFactory: () => new MemoryLLMProvider(),
       tenantId,
@@ -87,26 +96,28 @@ export async function listTools(): Promise<ToolsListing> {
     pluginNamesWithFactories.push(delegate.name);
   }
 
-  // team 原型同样必须显式 opt-in；启用后 `--tools` 会多出 5 个 team_* 工具。
-  if (config.team?.enabled === true) {
+  // agent 工具依赖 team 引擎；旧 team.enabled 仍可单独开启。
+  if (agentWiring.teamEngine) {
     // ext 0.3：team 必须注入 core RuntimeHost（插件不再自带内嵌 Host）。
     const teamHost = await createRuntime({ pluginHost: host });
     try {
-      const team = createTeamPlugin({
+      const teamOptions: Parameters<typeof createTeamPlugin>[0] & AgentTeamPluginOptions = {
         providerFactory: () => new MemoryLLMProvider(),
         tenantId,
-        model: config.team.model ?? config.provider?.model ?? 'mock-model',
+        model: config.team?.model ?? config.provider?.model ?? 'mock-model',
         events: new MemoryEventStream(),
         host: teamHost,
-        ownerId: config.team.ownerId,
-        memberLimits: config.team.memberLimits,
-        memberTermination: config.team.memberTermination
+        ownerId: config.team?.ownerId,
+        memberLimits: config.team?.memberLimits,
+        memberTermination: config.team?.memberTermination
           ? {
               maxIterations: config.team.memberTermination.maxIterations ?? 10,
               maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
             }
           : undefined,
-      });
+        ...toAgentTeamPluginOptions(config, agentWiring),
+      };
+      const team = createTeamPlugin(teamOptions);
       await team.install(host);
       pluginNamesWithFactories.push(team.name);
     } finally {

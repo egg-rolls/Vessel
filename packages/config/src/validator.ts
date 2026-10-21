@@ -1287,6 +1287,33 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       }
     }
 
+    // 0.16：canonical agent 工具与成员回复策略。非法值拒绝，不静默回退默认。
+    if (config.agent.enabled !== undefined && typeof config.agent.enabled !== 'boolean') {
+      errors.push({
+        path: 'agent.enabled',
+        message: 'agent.enabled must be a boolean',
+        value: config.agent.enabled,
+      });
+    }
+    const visibility = config.agent.defaultVisibility;
+    if (visibility !== undefined && !['private', 'team', 'tenant'].includes(visibility)) {
+      errors.push({
+        path: 'agent.defaultVisibility',
+        message: 'agent.defaultVisibility must be "private", "team" or "tenant"',
+        value: visibility,
+      });
+    }
+    if (
+      config.agent.followReplies !== undefined &&
+      typeof config.agent.followReplies !== 'boolean'
+    ) {
+      errors.push({
+        path: 'agent.followReplies',
+        message: 'agent.followReplies must be a boolean',
+        value: config.agent.followReplies,
+      });
+    }
+
     // 0.1.0 只有 systemPrompt 被消费——其余字段明确警告，不静默忽略。
     for (const key of ['name', 'temperature', 'maxTokens'] as const) {
       if (config.agent[key] !== undefined) {
@@ -1725,7 +1752,14 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
 
   // 校验 team（0.1.0 显式 opt-in，默认关闭）
   if (config.team) {
-    const { enabled, ownerId, model, memberLimits, memberTermination } = config.team;
+    const { enabled, ownerId, model, memberLimits, memberTermination, legacyTools } = config.team;
+    if (legacyTools !== undefined && typeof legacyTools !== 'boolean') {
+      errors.push({
+        path: 'team.legacyTools',
+        message: 'team.legacyTools must be a boolean',
+        value: legacyTools,
+      });
+    }
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
         path: 'team.enabled',
@@ -1904,7 +1938,17 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'maxTokens',
     'timeoutMs',
   ],
-  agent: ['name', 'systemPrompt', 'model', 'temperature', 'maxTokens', 'cwd'],
+  agent: [
+    'name',
+    'systemPrompt',
+    'model',
+    'temperature',
+    'maxTokens',
+    'cwd',
+    'enabled',
+    'defaultVisibility',
+    'followReplies',
+  ],
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove'],
   update: ['autoCheck', 'channel', 'source'],
@@ -1923,7 +1967,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   host: ['enabled', 'nodeId', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
   transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs', 'nodes'],
-  team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination'],
+  team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination', 'legacyTools'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: [
     'hostname',

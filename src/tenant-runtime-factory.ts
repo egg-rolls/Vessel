@@ -47,6 +47,13 @@ import {
 } from '../packages/core/src/index';
 import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
 import { createTeamPlugin } from '../plugins/tools/team/src/index';
+import { createOwnerReplyInjector } from './agent-reply-injection';
+import {
+  type AgentTeamPluginOptions,
+  mapDelegateToolAlias,
+  resolveAgentWiring,
+  toAgentTeamPluginOptions,
+} from './agent-wiring';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -370,11 +377,17 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer) {
 export function resolveRuntimePermission(
   config: VesselConfig,
   headless: boolean,
+  options: { agentEnabled?: boolean } = {},
 ): RuntimePermissionConfig {
+  // 0.16：canonical agent 可用时，旧配置里的 delegate_task 免确认规则改指 agent。
+  const autoApprove = mapDelegateToolAlias(
+    [...(config.permission?.autoApprove ?? []), 'ask_user'],
+    options.agentEnabled === true,
+  );
   return {
     default: headless ? 'allow' : 'ask',
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
+    autoApprove,
   };
 }
 
@@ -633,6 +646,8 @@ export async function buildTenantRuntime(
     const staticPluginCount = plugins.length;
 
     let internalTeamHost: RuntimeHost | undefined;
+    /** team 引擎实际使用的 Host：owner inbox 注入从同一个 Host 读取 */
+    let teamInboxHost: RuntimeHost | undefined;
     let deferredTransport = options.transport;
     if (
       deferredTransport === undefined &&
@@ -644,14 +659,20 @@ export async function buildTenantRuntime(
       deferredTransport = new DeferredTransport();
     }
 
+    // 0.16：canonical agent 工具 / team 引擎 / legacy/delegate 的装配决策。
+    const agentWiring = resolveAgentWiring(config, { headless });
     // runtime / delegate / workflow 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
-    const permission = resolveRuntimePermission(config, headless);
+    const permission = resolveRuntimePermission(config, headless, {
+      agentEnabled: agentWiring.agentEnabled,
+    });
 
     const buildFactoryPlugins = async (
       runtimeHost?: RuntimeHost,
       transport?: DeferredTransport,
     ): Promise<Plugin[]> => {
-      const plan = planFactoryPlugins(config, runtimeHost !== undefined);
+      const plan = planFactoryPlugins(config, runtimeHost !== undefined, {
+        agentEnabled: agentWiring.agentEnabled,
+      });
       for (const warning of plan.warnings) console.warn(`⚠ ${warning}`);
 
       const factory: Plugin[] = [];
@@ -679,31 +700,32 @@ export async function buildTenantRuntime(
           internalTeamHost ??= await createRuntime({ session });
           teamHost = internalTeamHost;
         }
+        teamInboxHost = teamHost;
 
-        factory.push(
-          createTeamPlugin({
-            providerFactory: () => provider,
-            tenantId,
-            model: config.team?.model ?? providerModel,
-            events: runtimeHost?.events ?? events,
-            host: teamHost,
-            ...(transport
-              ? {
-                  transport,
-                  nodeId: options.nodeId,
-                  ownerRef: `${options.nodeId}:${config.team?.ownerId ?? 'owner'}`,
-                }
-              : {}),
-            ownerId: config.team?.ownerId,
-            memberLimits: config.team?.memberLimits,
-            memberTermination: config.team?.memberTermination
-              ? {
-                  maxIterations: config.team.memberTermination.maxIterations ?? 10,
-                  maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
-                }
-              : undefined,
-          }),
-        );
+        const teamOptions: Parameters<typeof createTeamPlugin>[0] & AgentTeamPluginOptions = {
+          providerFactory: () => provider,
+          tenantId,
+          model: config.team?.model ?? providerModel,
+          events: runtimeHost?.events ?? events,
+          host: teamHost,
+          ...(transport
+            ? {
+                transport,
+                nodeId: options.nodeId,
+                ownerRef: `${options.nodeId}:${config.team?.ownerId ?? 'owner'}`,
+              }
+            : {}),
+          ownerId: config.team?.ownerId,
+          memberLimits: config.team?.memberLimits,
+          memberTermination: config.team?.memberTermination
+            ? {
+                maxIterations: config.team.memberTermination.maxIterations ?? 10,
+                maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
+              }
+            : undefined,
+          ...toAgentTeamPluginOptions(config, agentWiring),
+        };
+        factory.push(createTeamPlugin(teamOptions));
       }
       return factory;
     };
@@ -762,6 +784,7 @@ export async function buildTenantRuntime(
           permission,
           selfCard: ownerSelfCard(config, providerModel, {
             askUser: options.registerAskUser === true,
+            headless,
           }),
         },
         sessionId: options.sessionId ?? crypto.randomUUID(),
@@ -830,6 +853,7 @@ export async function buildTenantRuntime(
           // 0.15 E9：主 agent 的 Self Card（成员由 delegate 轨负责）。
           selfCard: ownerSelfCard(config, providerModel, {
             askUser: options.registerAskUser === true,
+            headless,
           }),
           ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
           ...(runStore ? { runStore } : {}),
@@ -857,6 +881,20 @@ export async function buildTenantRuntime(
       enabled: options.sessionLocks ?? backend !== 'memory',
     });
     const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
+
+    // 0.16 E5：owner inbox → 父 turn 注入。core 合并 ctx.messages 前写入不会生效，
+    // 但游标与事件仍保持正确，合并后无需再改装配层。
+    const ownerInboxHost = host ?? teamInboxHost;
+    if (agentWiring.agentEnabled && ownerInboxHost) {
+      const injector = createOwnerReplyInjector({
+        host: ownerInboxHost,
+        ownerId: config.team?.ownerId ?? 'owner',
+        events,
+        tenantId,
+        followReplies: agentWiring.followReplies,
+      });
+      finalPluginHost.registerHook(injector.hook);
+    }
 
     // ── Trace ─────────────────────────────────────
     const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));

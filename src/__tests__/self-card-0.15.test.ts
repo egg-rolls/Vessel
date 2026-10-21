@@ -19,12 +19,17 @@ import { knownOwnerToolNames, ownerSelfCard } from '../self-card';
 describe('owner self card', () => {
   it('lists only tools that the default owner runtime registers', () => {
     const config: VesselConfig = {};
-    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit', 'delegate_task']);
-    expect(knownOwnerToolNames({ ...config, delegate: { enabled: false } })).toEqual([
+    // 0.16：交互入口默认 agent，headless 仍保留 delegate_task。
+    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit', 'agent']);
+    expect(knownOwnerToolNames(config, { headless: true })).toEqual([
       'bash',
       'read',
       'edit',
+      'delegate_task',
     ]);
+    expect(
+      knownOwnerToolNames({ ...config, agent: { enabled: false }, delegate: { enabled: false } }),
+    ).toEqual(['bash', 'read', 'edit']);
   });
 
   it('adds ask_user only for interactive entries and ui.askUser !== false', () => {
@@ -35,7 +40,7 @@ describe('owner self card', () => {
     expect(knownOwnerToolNames({}, { askUser: false })).not.toContain('ask_user');
   });
 
-  it('adds team tools only when team is enabled', () => {
+  it('adds team tools only when team is enabled and legacyTools is on', () => {
     const tools = knownOwnerToolNames({ team: { enabled: true } });
     expect(tools).toEqual(
       expect.arrayContaining([
@@ -45,6 +50,9 @@ describe('owner self card', () => {
         'team_status',
         'team_cancel',
       ]),
+    );
+    expect(knownOwnerToolNames({ team: { enabled: true, legacyTools: false } })).not.toContain(
+      'team_spawn',
     );
   });
 
