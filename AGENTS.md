@@ -35,6 +35,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.14.2 状态**：质量硬化（基于 `release/0.14.2`，未随版本发布）：`Message.compaction_summary`（additive）标记压缩摘要，摘要改为 `role: 'system'` 并插在基底 system 之后、其它消息之前，应用新压缩时移除旧摘要（同时最多一条），请求组装只把非摘要 system 当基底 system；`AnthropicProvider` 收集全部 system 消息并用空行合并（流式 / 非流式共用），摘要不再静默丢失；`bash` 在 `checkPermission` 与执行前匹配命令文本里的内置凭据 denylist，命中返回 `deny` / `path_denied`（best-effort，不是沙箱）。决策见 ADR-083。
 - **0.14.3 状态**：限额可见性与 provider 错误（基于 `release/0.14.3`，未随版本发布）：限额命中（使用量限额或终止策略 `maxIterations` / `maxRuntimeSeconds`）时发布一次 `limit.blocked`（`error_code: 'limit_blocked'` + `scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false` / `run_id` / `session_id`）并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本（`Usage limits exceeded: ...` / `Termination policy triggered: ...`）并附 `limit_blocked` envelope 与完整 `details`。`LimitBlock` 的 key 共七个：五个使用量 key 加 `max_iterations` / `max_runtime`。默认 `limits.inputTokensLimit` 100,000 → 1,000,000、`termination.maxIterations` 20 → 50（`maxRuntimeSeconds` 300、`requestLimit` 100、`toolCallsLimit` 50 不变）。core 新增 `ProviderHttpError`（`status` / `body` / `retryAfterMs`），OpenAI / Anthropic 的流式与非流式非 2xx 均抛该错误；provider retry 在 429 读 `Retry-After`（受 `maxDelayMs` 截断），402 不重试。决策见 ADR-084。
 - **0.14.4 状态**：上下文压缩质量（基于 `release/0.14.4`，未随版本发布）：压缩保留区改按 token 预算 `context.maxTokens × 0.3` 从最新消息向前累计，同时受条数上限 `maxKept = max(2, messageCap - systemCount - 1)` 约束（`messageCap` 取显式 `context.maxMessages`，缺省 `max(100, floor(maxTokens / 100))`），token 或条数任一超限都触发摘要，两者都未超时不压缩；保留边界为 `tool` 时回退到对应 `assistant(tool_calls)`，配对完整性优先于条数上限（可能略超）。摘要 transcript 渲染 `assistant` 的 `[tool_call:<name>] <arguments>` 与 `tool` 的 `[tool:<id>] <content>`，单条 12,000 字符截断、不含 `reasoning_content`；输入按 `min(48_000, max(2_000, floor(context.maxTokens / 8)))` 分块，单块一次摘要、多块 N 次 partial（≤1024）+ 1 次 reduce（≤2048），块失败写占位继续、reduce 失败拼接截断、全部失败返回空串由 core 回退占位摘要。决策见 ADR-085。
+- **0.15.0 状态**：透明化与多实例安全（基于 `release/0.15.0`，未随版本发布）：core 新增 `context.compacted`（`auto|overflow|manual`，`removed/remaining/reason`）、`agent.limit.warning`（80%，每 run 每 key 一次）、`agent.queue.entered/left`（`position` 从 1 起）；`AgentSnapshot` / `RunSnapshot` / `SchedulerSnapshot.queued[]` 补 `nodeId` / `task` / `waitReason` / `contextUsed` / `contextMax` / `childrenCount` / `lastSeen`；`AgentRuntimeOptions.selfCard` + `AgentSpec.selfCard` 把 Self Card（≤400 tokens）注入 systemPrompt。ext 的 delegate 事件补 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path` 与 `result_ref`，孙 agent 走 `delegate.allow_nested`（默认 false）/ `delegate.max_descendants`（默认 16）；`edit` 纳入 `evaluatePath`，`bash` 命令文本同时匹配自定义 `deny_paths`。asm 引入 tenant 双层锁（file 默认 shared `.members/<pid>-<nonce>.json`，sqlite / `--exclusive` 走 `.lock`）与 session/run 写锁（`conflict` + `session_locked`），interactions 按实例落 `<dataDir>` 或 `<dataDir>/instances/<instance>`；新增 `--data-dir`、`port_in_use`、`doctor --deep`、`logs tail`、`gateway status --rpc`、`config.set` 与主 agent Self Card。tui / web 消费 `agents.tree`、`tasks.*`、`health.get` runtime 快照与 `/status` 队列 / 预警 / 压缩。canonical 方法 40 → 44。决策见 ADR-086。
 
 ## 代码风格与硬规矩
 
@@ -49,7 +50,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - 不留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。
 - **单 run 守卫与统一终态**（0.8，ADR-054）：同一个 `AgentRuntime` 同时只允许一个 active run。`run()` / `resume()` 必须经 `beginExecution` 占位、`finalizeRun` 收尾；不要绕开 `activeRun`，也不要另写一份终态持久化 / 事件发布路径。第二个 run 抛 `run_already_running`（`RunAlreadyRunningError`）。
 - **插件异常必须隔离**（0.8，ADR-054）：Hook 抛错发 `hook.failed` + `hook.error` 后继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `guardrail_error`，发 `guardrail.error`），不得让插件异常以原始异常形式冒泡；随后仍按该阶段的 blocked 语义执行。
-- **工具路径边界**（0.8，ADR-055）：`read` / `bash cwd` 统一走 basic-tools 的 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`，`allowed_roots` 只把越界降级为 `ask`，`deny_paths` 只能追加。比较必须基于 realpath（含最近已存在祖先），不要用未解析的字符串前缀。0.14.2 起 `bash` 另在命令文本里匹配同一组内置 denylist（`~` / `$HOME` / `${HOME}` / 绝对路径写法，归一大小写与 `/`、`\`）：`checkPermission` 命中返回 `deny`，执行前复查返回 `path_denied`。**这是 best-effort 字符串匹配，不是沙箱**——`cd` 后的相对路径、变量拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%` 仍可能绕过；自定义 `deny_paths` 不参与文本匹配。
+- **工具路径边界**（0.8，ADR-055）：`read` / `bash cwd` 统一走 basic-tools 的 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`，`allowed_roots` 只把越界降级为 `ask`，`deny_paths` 只能追加。比较必须基于 realpath（含最近已存在祖先），不要用未解析的字符串前缀。0.14.2 起 `bash` 另在命令文本里匹配同一组内置 denylist（`~` / `$HOME` / `${HOME}` / 绝对路径写法，归一大小写与 `/`、`\`）：`checkPermission` 命中返回 `deny`，执行前复查返回 `path_denied`。0.15 起自定义 `deny_paths` 也参与该文本匹配（同样按 `~` / `$HOME` / `${HOME}` / 绝对路径 / 相对路径展开）。**这是 best-effort 字符串匹配，不是沙箱**——`cd` 后的相对路径、变量拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%` 仍可能绕过。
 - **持久化写入**（0.8.1，ADR-056）：session / checkpoint 一律走 `atomicWrite`，默认 `durable: true`（temp fsync → rename → 尽力目录 fsync）；不要直写最终路径，不要吞掉 `AtomicWriteError`。只有临时文件或测试才显式 `durable: false`。
 - **损坏检测**（0.8.1，ADR-056）：文件存在但不可读 / JSON 损坏一律抛 `SessionCorruptError`，不得当成“不存在”返回 `null`；否则下一次 save 会覆盖原文件。删除同样先 `load()`，损坏时抛错不 unlink；只有 `listRich()` 允许逐项降级跳过。
 - **配置层序与单一 resolver**（0.8.1，ADR-057）：层序固定 `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并。CLI flag 必须经 `buildCliConfigOverrides()` → `cliOverrides`；serve / connect 不得自行读 argv 或 `process.env`。`defaults` 仅为 deprecated 兼容层。
@@ -92,6 +93,12 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **provider 429 读 Retry-After、402 不重试**（0.14.3，ADR-084）：`ProviderHttpError` 必须保留 `status` / `body` / `retryAfterMs` 与 `<Provider> API error: <status> - <body>` 文本，不得改成裸状态码；429 优先按错误字段或 `retry-after` 头退避（受 `maxDelayMs` 截断、不加抖动），402（额度耗尽）与其它 4xx 不重试；5xx / 网络错误保持指数退避。openai 与 anthropic 两份 `retry.ts` 必须保持一致。
 - **压缩保留同时受 token 与 maxMessages 约束、tool 配对不得切断**（0.14.4，ADR-085）：保留预算固定 `maxTokens × 0.3`，从最新非 system 消息向前累计 `estimateMessageTokens`，至少保留 2 条；保留条数同时受 `maxKept = max(2, messageCap - systemCount - 1)` 约束，token 或条数任一超限都触发摘要，都未超时不压缩。保留区第一条是 `tool` 时必须回退到持有对应 `tool_call_id` 的 `assistant(tool_calls)`；配对完整性优先于条数上限，回退后可能略超 `maxMessages`，不得为凑条数制造孤立 `tool`。
 - **摘要 transcript 必须含 tool_calls、输入分块、失败不得丢整段摘要**（0.14.4，ADR-085）：摘要输入必须渲染 `assistant` 的 `[tool_call:<name>] <arguments>` 与 `tool` 的 `[tool:<id>] <content>`，单条 12,000 字符截断，`reasoning_content` 不进入摘要；按 `min(48_000, max(2_000, floor(context.maxTokens / 8)))` 分块，单块一次摘要、多块 N 次 partial（≤1024）+ 1 次 reduce（≤2048）。单块失败写 `[partial summary unavailable: chunk N]` 继续，reduce 失败按序拼接并截断，全部失败返回空串由 core 回退占位摘要——不得因一块失败丢弃已成功的 partial 或整段摘要。
+- **透明化事件形状冻结**（0.15，ADR-086）：`context.compacted` 只能带 `{run_id, session_id, removed, remaining, reason}`，`reason` 只取 `auto|overflow|manual`，`removed === 0` 不发；`agent.limit.warning` 固定 `threshold: 0.8`、每 run 每 key 一次，达到硬上限后交给 `limit.blocked`、不得重复预警；`agent.queue.entered/left` 的 `position` 从 1 起，只有真正在队列中停留过的任务才有进出事件。事件名保持开放字符串，不新增常量 / 枚举。
+- **快照只填已知字段**（0.15，ADR-086）：`AgentSnapshot` / `RunSnapshot` / `SchedulerSnapshot` 的新字段都 additive；Host 读不到时留 `undefined`，不得伪造 `childrenCount` / `waitReason` / `contextUsed`。`WaitReason` 只能取 `capacity|per_agent_serial|paused|dependency|quota`，core 只产出前两个。
+- **Self Card 每次 run 只注入一次**（0.15，ADR-086）：`selfCard` 在 run 开始（含 resume）生成，追加到 systemPrompt，按 `estimateTokens` 截断到 400；不写持久化 session；`before_llm` hook 改写后 Card 不得重复出现。MCP 工具在连接前不可知，不写入 Card；child 的 Card 继承父级限额，不放大。
+- **delegate 关联字段与孙 agent 默认关闭**（0.15，ADR-086）：`subagent.delegate.*` 与转发的 `subagent.*` / bridge 事件必须带 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path`，完成 / 失败带 `result_ref: {kind:'run', id}`；嵌套转发保留内层 `delegate_path`，外层不得覆盖。`delegate.allow_nested` 默认 `false`，`delegate.max_descendants` 默认 `16`（按根树计数，根不计入）；开启后嵌套实例必须新建 Host，不得复用父 run 占用的注入 Host。`deny` 模式或显式 `disallowed` 含 `delegate_task` 时不得放开。
+- **多实例锁分层**（0.15，ADR-086）：file / memory 后端用 shared tenant 锁（`.members/<pid>-<nonce>.json`），sqlite / `--exclusive` 用 exclusive `.lock`；发布后必须复查另一侧。session / run 写锁固定 `.locks/sessions|runs/<sha16>.lock`（`0600`），冲突主码 `conflict` + `session_locked` / `run_locked`；不得新增 RPC 主码或用锁文件之外的机制做单写者。interactions 按实例落 `<dataDir>` 或 `<dataDir>/instances/<instance>`。
+- **新 RPC 方法维持 44 方法表**（0.15，ADR-086）：`agents.tree` / `tasks.list` / `tasks.get` / `config.set` 已冻结；`tasks.*` 只读派生、不持久化，`config.set` 只写白名单键且仅 default tenant。`health.get` 的 `runtime`、`runs.*` 的 envelope 与 `started_at`、`events.list` 的 redactor + 8 KiB 裁剪都属 additive，不得改已有字段语义。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -103,7 +110,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.14.4` → `0.14.4-<role>`（`release/0.1` ~ `release/0.14.3` 已冻结；工作树沿用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.14.4 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.15.0` → `0.15-<role>`（`release/0.1` ~ `release/0.14.4` 已冻结；工作树 `worktrees/0.15-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.15.0 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -119,6 +126,11 @@ bun run src/cli.ts update --check               # 检查新版本（只提示）
 bun run src/cli.ts update                       # 按安装形态自更新（npm / bun 全局；默认确认）
 bun run src/cli.ts gateway start --daemon       # 后台启动 gateway（PID + 日志）
 bun run src/cli.ts gateway status --json        # 运行态（纯 JSON）
+bun run src/cli.ts gateway status --rpc         # 经 RPC 查询 health + 队列计数
+bun run src/cli.ts doctor --deep                # 额外只读查询本地 gateway
+bun run src/cli.ts logs tail --lines 100        # 本地 gateway 日志尾部
+bun run src/cli.ts --data-dir /srv/vessel ...   # 覆盖 data_dir（CLI > env > config）
+bun run src/cli.ts --exclusive ...              # 强制 tenant 单写者锁
 bun run src/cli.ts gateway reload --scope config,plugins  # 热重载（其余字段需重启）
 bun run src/cli.ts gateway stop                 # 停止（默认等待 10s）
 bun run src/cli.ts config path                  # YAML 路径 + data_dir
@@ -190,7 +202,7 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别让 Host 与成员 runtime 同时写同一个 run 的 checkpoint（唯一写者是 `AgentRuntime`，Host store 优先）。
 - 别在同一 runtime 上并发跑多个 run（守卫会拒绝）；需要并行就用多个 runtime（Host 的“一 agent 一 runtime”）。
 - 别靠 hook / guardrail 抛异常来终止 run：hook 异常被隔离，guardrail 异常按 fail-closed 转成 `guardrail_error`。要阻断就返回 `allowed: false`，要停止就 abort。
-- 别把内置凭据 denylist 改成 `ask` 或做成可移除；也别把 `allowed_roots` 当沙箱——`bash` 只校验 `cwd`，`edit` 未纳入边界。
+- 别把内置凭据 denylist 改成 `ask` 或做成可移除；也别把 `allowed_roots` 当沙箱——`bash` 只校验 `cwd`，命令文本检查是 best-effort 字符串匹配。`read` / `edit` 都走 `evaluatePath`，不要给 `edit` 另开一条绕过边界的写路径。
 - 别在 headless 分支里提前 `process.exit` 跳过 gateway / tenant / transport / shutdown 清理。
 - 别把“文件存在但损坏”当成“文件不存在”：覆盖或删除损坏的 session / tenant run 会关闭唯一恢复窗口。
 - 别在 `serve-config` / `bootstrapConnect` / 其他入口自行合并 argv 或 `process.env`；新增 CLI flag 必须加入 `buildCliConfigOverrides()`。

@@ -189,7 +189,7 @@ ui:
 ### 2.6 权限生命周期持久化（0.13，ADR-079）
 
 - **默认等待**：交互模式下应用层把默认策略设为 `ask`，请求一直等待，不受时间限制；应用层不设置 `timeoutMs`。只有宿主（core 嵌入方）显式传入正数 `RuntimePermissionConfig.timeoutMs` 才超时。
-- **持久化文件**：`<dataDir>/interactions-<tenant>.json`，`0600` 原子写，记录 `pending` / `answered` / `orphaned`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
+- **持久化文件**：default 实例为 `<dataDir>/interactions-<tenant>.json`，命名实例为 `<dataDir>/instances/<instance>/interactions-<tenant>.json`（目录 `0700`），`0600` 原子写，记录 `pending` / `answered` / `orphaned`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
 - **终态与幂等**：run 进入 `completed` / `failed` / `cancelled` 时，同 run 的 pending 清出并持久化为 `orphaned`。重复应答返回首次结果（`duplicate: true`）；不同决定返回 `conflict`；`orphaned` 返回 `run_ended`；不存在返回 `not_found`。有界清理只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **关联字段**：`tool.permission.request` 带 `session_id` / `tool_call_id` / `source`；只有显式超时才带 `deadline_at`。
 - **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；没有 `interactions.pending` RPC，刷新恢复依赖事件重放缓冲；`ask_user` 提问卡仍按事件时间 120s 过期，未接入持久化交互记录。
@@ -243,6 +243,33 @@ termination:
 - **tool 配对**：保留区第一条是 `tool` 时，边界回退到对应的 `assistant(tool_calls)`，避免压缩后出现孤立 `tool`。配对完整性优先于条数上限，保留数可能略超 `max_messages`。
 - **摘要输入**：`assistant` 的工具调用渲染为 `[tool_call:<name>] <arguments>`，`tool` 结果渲染为 `[tool:<id>] <content>`；单条超过 12,000 字符截断，`reasoning_content` 不进入摘要。输入按 `min(48_000, max(2_000, floor(max_tokens / 8)))` 估算 token 分块；单块一次摘要，多块逐块 partial 后再 reduce。某块失败只写占位标记并继续，全部失败时回退 `[Auto Compact: N older messages summarized. Continuing...]`，不中断 run。
 
+### 2.10 delegate 与孙 agent（0.15，ADR-086）
+
+```yaml
+delegate:
+  enabled: true
+  max_depth: 3
+  allow_nested: false       # 子 agent 是否可继续 delegate
+  max_descendants: 16       # 单次根委派树的后代上限（正整数）
+```
+
+- **`delegate.allow_nested`**（默认 `false`）：`false` 时 child host 不注册 `delegate_task`，孙 agent 不可用；显式 `true` 才为 child 创建独立 delegate 实例。它只是 opt-in 开关，不会放大权限或限额。
+- **`delegate.max_descendants`**（默认 `16`，必须为正整数）：按**单次根委派树**计数，根 delegate 本身不计入；达到上限后新的嵌套委派返回错误文本。只有 `allow_nested: true` 时生效。
+- **仍然禁止的情况**：`delegate.permissionMode: 'deny'`，或显式把 `delegate_task` 写进 `delegate.disallowed`；这两种情况下即使 `allow_nested: true` 也不放开。`delegate.max_depth` 仍是独立约束，两个上限同时生效。
+- **child 继承**：父级 resolved 权限、`limits` 与 `termination` 原样继承，不放大；child 的 Self Card 在 run 开始时注入 systemPrompt（≤400 tokens）。嵌套实例使用独立 Host，避免复用父 run 占用的调度槽。
+
+### 2.11 多实例锁、数据根与交互记录（0.15，ADR-086）
+
+- **tenant 锁分层**：
+  - `shared`（file / memory 后端默认）：`tenants/<t>/.members/<pid>-<nonce>.json`，每进程一个租约，多个进程可共存；保证的是 session 级单写者。
+  - `exclusive`（sqlite 后端、显式 `--exclusive`、migrate / tenant / trace prune）：`tenants/<t>/.lock`，整租户单写者，冲突返回 `tenant_locked`。
+  - stale 规则：死 pid、不可解析超过 5s、跨主机超过 24h 自动回收；回收持 `<lock>.reclaim` 守卫（守卫超过 10s 可清理）。
+- **session / run 写锁**：`tenants/<t>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`（`0600`，内容含 `pid` / `started_at` / `host`）。同一 session 的第二个写者得到 `conflict`，消息前缀 `session_locked:`；run resume 冲突前缀 `run_locked:`。同进程重复获取用引用计数消化。
+- **`--data-dir <path>`**：全局覆盖 `data_dir`，优先级 `CLI > env > config`。一次性命令（doctor / logs / gateway status 等）同样按该根目录解析。`VESSEL_DATA_DIR` 仍是 env 层写法，不要写进项目 YAML。
+- **interactions 按实例隔离**：default 实例仍写 `<dataDir>/interactions-<tenant>.json`；命名实例写 `<dataDir>/instances/<instance>/interactions-<tenant>.json`，同一 dataDir 的多实例不再互相覆盖。
+- **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
+- **已知限制**：shared 锁不阻止两个进程写同一 tenant 的不同 session；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：
@@ -280,8 +307,13 @@ vessel config set ui.errorLevel <user|all> [--json]
 vessel config set ui.askUser <true|false> [--json]
 vessel config set observability.showProcessErrors <true|false> [--json]
 vessel config set agent.cwd <path> [--json]
-vessel doctor [--json]
+vessel doctor [--deep] [--json]
+vessel logs tail [--json] [--lines N] [--instance <name>]
 ```
+
+- `vessel --data-dir <path> ...`（全局）覆盖 `data_dir`；`--exclusive` 强制 tenant 单写者锁。两者同样适用于一次性命令。
+- `vessel doctor --deep`：在原有本地检查之外，只读查询本地 gateway 的 `health.get` / `mcp.list`，报告 attach / runtime / MCP 实际状态；不启动 gateway、不改配置。没有本地 gateway 时记为 info，不算失败。
+- `vessel logs tail`：只读 `<dataDir>/logs/gateway.log`（default）与 `gateway-<instance>.log`（命名实例），默认 50 行，`--lines` 上限 10,000；不跟随、不轮转，日志不存在时退出 1。
 
 - `config path`：打印用户配置、项目配置与 `data_dir` 的实际路径和是否存在。
 - `config init`：把内嵌模板写到用户配置；默认不覆盖已有文件，`--force` 才覆盖。
@@ -291,13 +323,18 @@ vessel doctor [--json]
   `tenant_overlay_keys`。**有校验错误时 exit 1**。
 - `config.get` / `config.sources`（RPC）与 `config show` 一样，永不输出解析后的
   密钥值，只输出 `"<set>"` / `"<unset>"`。
+- `config.set`（RPC，0.15）：只写用户配置、只接受白名单键（`ui.language` /
+  `ui.statusBars` / `ui.verbosity` / `ui.errorLevel` / `ui.showReasoning` /
+  `ui.showInternalEvents` / `ui.askUser` / `observability.showProcessErrors` /
+  `agent.cwd`），值非法返回 `invalid_params`；非 default tenant 返回 `forbidden`。写入同样
+  原子、`0600`、保留其它键。
 
 ### 4.1 Gateway 生命周期与配置生效（0.12）
 
 ```bash
 vessel gateway start [--daemon] [--port <n>] [--host <h>] [--log <path>]
 vessel gateway stop [--timeout 10s]
-vessel gateway status [--json]
+vessel gateway status [--json] [--rpc]
 vessel gateway restart [--daemon]
 vessel gateway reload [--scope config,plugins]
 vessel gateway install-service [--systemd|--launchd|--schtasks]
@@ -306,6 +343,8 @@ vessel gateway uninstall-service
 
 - `--serve` 是前台 `vessel gateway start` 的别名；常驻部署用 `start --daemon` 或 `install-service`。
 - 运行态以 `<dataDir>/gateway.pid`（`0600`）为准；daemon 日志在 `<dataDir>/logs/gateway.log`（`0600`）。`status --json` 只输出 JSON。
+- `gateway status --rpc`：经 RPC 只读查询 `health.get` 与由 `runs.list` 派生的队列计数（queued / running），不 attach runtime；`--json` 输出 `{ as_of, rpc: true, instances }`。任一实例查询失败时退出 1。
+- 命名实例的交互记录与 PID / 日志一样按实例隔离（见 §2.11）；`vessel logs tail --instance <name>` 读对应日志。
 - `reload` 只热更新 plugins 扫描缓存与 `serve.allowed_origins`；provider / model / agent / permission / TLS / token / port 的变更会出现在 `requires_restart`，必须重启。未知 scope 或读取失败返回非 0。
 - `install-service` / `uninstall-service` 只在显式执行时注册当前平台的**用户级**服务（systemd user / LaunchAgent / Windows 登录计划任务），不随启动自动修改本机。
 
@@ -318,6 +357,9 @@ vessel gateway uninstall-service
 | 项目 YAML 报密钥 | 项目配置出现密钥字段 | 移到用户配置的 `_env` 或 env |
 | `tenant overlay` 报禁止块 | 覆盖了 `data_dir` / `trace` / `serve` / `tenant` / `update` | 改到项目或用户层 |
 | token 401 | 已配置 token 但请求未带，或 token 不在 `serve.tokens` | 检查 `serve.tokens` / `serve.token` / `VESSEL_GATEWAY_TOKEN` |
+| `tenant_locked` | 另一个进程持有 exclusive tenant 锁（sqlite / `--exclusive` / 迁移） | 停掉占用进程；file 后端确认是否需要 `--exclusive`；或改用 `--connect` |
+| `session_locked` / `run_locked`（RPC `conflict`） | 另一个进程正在写同一 session / run | 停掉占用进程；锁文件在 `tenants/<t>/.locks/`，stale 规则见 §2.11 |
+| `port_in_use` | gateway 端口已被占用 | 换 `--port` / `--instance`，或停掉占用端口的进程 |
 
 ## 6. 内置多租户执行（A-6）
 
@@ -329,7 +371,7 @@ plugin host + plugins / trace recorder / metrics collector / redactor / sessionC
 ```
 
 - 每个 tenant 独立 `EventStream`；runtime 事件先进入该流，再桥接到 gateway 共享流（事件带 `tenant_id`）。
-- 每个 active tenant 持有自己的 writer lock；启动失败必须回滚已获取的锁，shutdown 全部释放；锁冲突返回 `tenant_locked`。
+- 每个 active tenant 持有自己的租约：file / memory 后端为 shared `.members/` 租约（多进程共存），sqlite / `--exclusive` 为 exclusive `.lock`。启动失败必须回滚已获取的锁，shutdown 全部释放；exclusive 冲突返回 `tenant_locked`，session / run 写冲突返回 `conflict` + `session_locked` / `run_locked`。
 - `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
 - 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
 - 每个 tenant bundle 还构建 workflow / feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。

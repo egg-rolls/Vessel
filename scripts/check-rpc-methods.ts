@@ -27,6 +27,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'capabilities.list': 'read',
   'config.get': 'read',
   'config.sources': 'read',
+  // 0.15（DECISION-030）：Web Settings 白名单写回。
+  'config.set': 'write',
   'sessions.list': 'read',
   'sessions.get': 'read',
   'sessions.search': 'read',
@@ -40,6 +42,10 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   // 0.14 P0（DECISION-025 §1.4）：agents 注册表。
   'agents.list': 'read',
   'agents.get': 'read',
+  // 0.15（DECISION-030 E5）：canonical agent 树与只读任务板。
+  'agents.tree': 'read',
+  'tasks.list': 'read',
+  'tasks.get': 'read',
   'events.list': 'read',
   'events.subscribe': 'read',
   'tools.list': 'read',

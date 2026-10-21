@@ -810,9 +810,9 @@ serve:
 |---|---|---|---|
 | `bash` | `{ command, cwd?, timeout_ms? }` | `ask`；cwd 命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `Bun.spawn(['bash','-c',command])`。超时默认 120s；输出超 2000 行时保留头 1000 + 尾 1000 并标注省略行数；超时返回明确错误文本而非抛异常 |
 | `read` | `{ path, offset?, limit? }` | `allow`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | 带行号返回（从 1 开始）。`limit` 默认 2000 行；截断时标注总行数与继续读的方式 |
-| `edit` | `{ path, old_string, new_string, replace_all? }` | `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
+| `edit` | `{ path, old_string, new_string, replace_all? }` | `ask`；命中 denylist → `deny`；配置 `allowed_roots` 后越界 → `ask` | `old_string` 必须**精确匹配且唯一**；不唯一时报错并说明匹配次数，未匹配时报错；`replace_all: true` 才允许多处替换 |
 
-**路径边界（0.8，ADR-055）**：`read` / `bash cwd` 先按真实路径（`realpath`；不存在的路径取最近已存在祖先）判定，`..` 与 symlink 不能绕过。内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）命中即 `deny`；插件 `config.allowed_roots` 非空时越界为 `ask`，`config.deny_paths` 追加到内置列表。默认 `allowed_roots` 为空 = 不限制根，行为与 0.7 兼容。`bash` 只校验 `cwd`，命令本身仍可访问其它路径；`edit` 未纳入该边界——这不是沙箱。
+**路径边界（0.8，ADR-055；0.15 覆盖 `edit`）**：`read` / `edit` / `bash cwd` 先按真实路径（`realpath`；不存在的路径取最近已存在祖先）判定，`..` 与 symlink 不能绕过。内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）命中即 `deny`；插件 `config.allowed_roots` 非空时越界为 `ask`，`config.deny_paths` 追加到内置列表。默认 `allowed_roots` 为空 = 不限制根，行为与 0.7 兼容。`bash` 只校验 `cwd`，命令本身仍可访问其它路径——这不是沙箱。
 
 **被判死的工具，以及为什么**：
 
@@ -999,7 +999,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources`；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1008,6 +1008,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `capabilities.list` | read |
 | `config.get` | read |
 | `config.sources` | read |
+| `config.set` | write |
 | `sessions.list` | read |
 | `sessions.get` | read |
 | `sessions.search` | read |
@@ -1020,6 +1021,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `runs.resume` | write |
 | `agents.list` | read |
 | `agents.get` | read |
+| `agents.tree` | read |
+| `tasks.list` | read |
+| `tasks.get` | read |
 | `events.list` | read |
 | `events.subscribe` | read |
 | `tools.list` | read |
@@ -1046,7 +1050,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `gateway.reload` | admin |
 <!-- rpc-methods:end -->
 
-0.14 起 canonical 方法总数 **40**（39 个 domain 方法 + `events.subscribe`）；0.14 新增 `agents.list` / `agents.get`（0.12 时为 38）。
+0.15 起 canonical 方法总数 **44**（43 个 domain 方法 + `events.subscribe`）；0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
@@ -1534,7 +1538,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 - 单 run 守卫是**进程内、每 runtime** 的；跨进程并发仍靠 tenant 写锁与 durable 唯一写者约定。
 - `finalizeRun` 持久化失败只发 `run.finalize.failed`，不重试、不补偿。
-- 路径边界不是沙箱：`bash` 只校验 `cwd`，命令本身可访问其它路径；`edit` 未纳入边界；内置 denylist 不能通过配置移除，只能追加。
+- 路径边界不是沙箱：`bash` 只校验 `cwd`，命令本身可访问其它路径；`read` / `edit` 走 `evaluatePath`（0.15 起 `edit` 纳入）；内置 denylist 不能通过配置移除，只能追加。
 - Web 的 seq 回放会清空本地事件存储并从头重放；大历史下重放成本随事件数增长。
 - `coreToJob` 在 run 终态后才清理；终态事件与清理之间仍有短暂窗口。
 
@@ -1744,7 +1748,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 28.2 协议 result schema
 
-- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个 = 43 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
@@ -2054,11 +2058,11 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 34.3 bash 命令文本 denylist：边界与绕过面
 
-- **检查点**：`checkPermission` 命中内置 denylist 直接返回 `deny`（不走用户 `ask`）；`runBash` 执行前复查，命中返回带错误码 `path_denied` 的拒绝文本。
-- **匹配集合**：内置 denylist `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`；每条展开为 `~/<suffix>`、`$HOME/<suffix>`、`${HOME}/<suffix>`、`<os.homedir()>/<suffix>` 四种写法。比较前把 `\` 视为 `/` 并统一小写。
+- **检查点**：`checkPermission` 命中 denylist 直接返回 `deny`（不走用户 `ask`）；`runBash` 执行前复查，命中返回带错误码 `path_denied` 的拒绝文本。
+- **匹配集合**：内置 denylist `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml` 加上配置的 `deny_paths`（0.15 起参与文本匹配）。每条按写法展开：`~/<suffix>`、`$HOME/<suffix>`、`${HOME}/<suffix>`、`<os.homedir()>/<suffix>`；`~` 展开为 `~` / `$HOME` / `${HOME}` / home 目录；绝对路径同时匹配原名与 `path.normalize`；相对路径按进程 cwd 解析。比较前把 `\` 视为 `/` 并统一小写。
 - **边界判定**：命中后要求下一字符不是 `\w`、`.`、`-`，避免 `~/.sshd` 被当作 `~/.ssh`。
-- **不是沙箱**：只做归一化字符串匹配，不做 shell 解析。`cd` 后的相对路径、变量赋值 / 拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%`、子进程自行读取等仍可绕过；不能把它当隔离边界。
-- **自定义 `deny_paths` 不参与文本匹配**：任意子串会误伤普通命令。`read` / `edit` / `bash cwd` 的 realpath 边界（ADR-055）不变，本检查只覆盖命令文本里写出的路径。
+- **不是沙箱**：只做归一化字符串匹配，不做 shell 解析。`cd` 后的相对路径、变量赋值 / 拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%`、子进程自行读取等仍可绕过；不能把它当隔离边界。自定义 `deny_paths` 同理，误报/漏报都可能。
+- **realpath 边界覆盖 read / edit / bash cwd**（0.15）：`edit` 与 `read` 共用 `evaluatePath`（内置 denylist 硬 `deny`、`allowed_roots` 越界降级 `ask`，配置 `deny_paths` 只能追加）；`bash` 只校验 `cwd`。命令文本检查是另一道 best-effort 字符串匹配，不替代 realpath 边界。
 
 ## 35. 0.14.3 限额可见性与 provider 错误/重试（已实现）
 
@@ -2185,3 +2189,73 @@ interface LimitBlock {
 - token 估算是字符近似（ASCII 0.25 / CJK 0.5 token 每字符），不是 provider 精确计数；保留量与块边界会有偏差。
 - 配对回退可使保留数略超 `maxMessages`。
 - 摘要质量仍是 best-effort：不跨块重试，不延后补摘要，不评估摘要质量。
+
+## 37. 0.15.0 透明化与多实例安全（已实现）
+
+> 状态：已合入 `release/0.15.0`（未发布）。决策见 [ADR-086](adr/ADR-086-transparency-and-multi-instance-safety.md)。
+
+### 37.1 透明化事件
+
+三个事件名都是开放字符串（不新增常量 / 枚举），payload 为冻结形状：
+
+| 事件 | data | 发布时机 |
+|---|---|---|
+| `context.compacted` | `{ run_id, session_id, removed, remaining, reason }` | 压缩实际移除消息后；`removed > 0` 才发。`reason` 取 `auto` / `overflow` / `manual` |
+| `agent.limit.warning` | `{ scope, key, current, max, source, threshold, hint }` | 每 run 每 key 一次；`current >= max × 0.8` 且 `< max` |
+| `agent.queue.entered` / `agent.queue.left` | `{ agent_id, run_id, position, wait_reason, since }` | Scheduler 入队 / 出队且配置了事件流 |
+
+- **`context.compacted`**：`auto` 来自每轮请求前的 `autoCompactAsync`；`overflow` 来自 provider 400 context-overflow 后的一次强制压缩；`manual` 来自 `AgentRuntime.compactContext()`（TUI `/compact` 使用）。`remaining` 是压缩后的 `context.messages.length`，不是 token 数。压缩失败或 `removed === 0` 时不发事件。
+- **`agent.limit.warning`**：判定由纯函数 `evaluateLimitWarnings(stats, limits, termination, threshold)` 完成，`threshold` 固定 `0.8`；已达到硬上限的 key 不再预警（交给 `limit.blocked`）。`source` 是 camelCase 配置路径（如 `limits.inputTokensLimit`），`hint` 是一句可执行建议。预警不改变执行，不带 `retryable`。
+- **`agent.queue.entered/left`**：`position` 从 1 起（core 队首为 1）；`wait_reason` core 只产出 `capacity` / `per_agent_serial`，`paused` / `dependency` / `quota` 预留给上层调度实现。直接启动（未在队列停留）的任务没有 `entered`，也就不发 `left`。事件仅在 `SchedulerOptions.events` 注入时发布，缺省不发、不改变调度；`tenantId` 只用于盖章。
+
+### 37.2 快照与队列
+
+- `RunSnapshot.waitReason?: WaitReason`；`SchedulerSnapshot.queued[].waitReason`；`WaitReason = 'capacity' | 'per_agent_serial' | 'paused' | 'dependency' | 'quota'`。
+- `AgentSnapshot` additive 字段：`nodeId?`、`sessionId`、`task?: { id, title? }`、`waitReason?`、`contextUsed?`、`contextMax?`、`childrenCount?`、`lastSeen?`。`InProcessRuntimeHost` 从 `transport.nodeId`、成员 `context.tokenCount` / `context.maxTokens`、`spec.metadata.task` 与 `lastSeen` 填充；不维护父子关系时 `childrenCount` 缺省。
+- 快照仍是纯 JSON；`AgentSnapshot.task` 在 RPC 边界只输出标题（`hostTaskOf`），不泄漏完整 metadata。
+- `SchedulerSnapshot` 由 `scheduler.snapshot?()` 提供；自定义 Scheduler 缺省时 Host 降级为成员 active run 摘要。
+
+### 37.3 Self Card
+
+- `AgentRuntimeOptions.selfCard?: SelfCardOptions`：`{ role, parent_id?, depth, model, tools, limits, context, how_to_ask? }`。`AgentSpec.selfCard` 由 Host 透传给成员 runtime（additive）。
+- 渲染发生在 run 开始（`composeRunSystemPrompt`）与 resume 开始，每次 run 生成一次；文本以 `[Self Card]` 开头，逐行 `role` / `parent` / `depth` / `model` / `tools` / `limits` / `context` / `how to ask for help`。
+- 上限按 `estimateTokens` 截断到 **400 tokens**（二分截断，不报错）。Card 追加在注入的 `systemPrompt` 之后；`before_llm` hook 仍以「基底 + Card」为基底，改写时整体替换且 Card 只出现一次。Card 不写入持久化 session（run 结束后清空 `runSystemPrompt`）。
+- 主 agent 的 Card 由装配层构造：只描述已知会注册的工具（`bash` / `read` / `edit`，按配置补 `delegate_task` / `ask_user` / `team_*`）；MCP 工具在连接前不可知，不写入。`delegate_task` 的 child 由 ext 构造 `role: 'delegate'`，`limits` / `termination` 原样继承、不放大。
+
+### 37.4 多实例锁与交互记录
+
+- **tenant 双层锁**（`src/tenant-lock.ts`）：
+  - `exclusive`：`tenants/<t>/.lock`，单写者；sqlite 后端、`--exclusive`、migrate / tenant / trace prune 使用。
+  - `shared`：`tenants/<t>/.members/<pid>-<nonce>.json`，每进程一个租约；file / memory 后端默认。
+  - 发布后必须复查另一侧（shared 查 `.lock`，exclusive 扫 `.members/`），保证晚发布方被看见；stale 规则统一（死 pid、不可解析超过 5s、跨主机超过 24h；回收守卫超过 10s），释放要求 `pid + started_at + host` 全等。
+- **session / run 写锁**（`src/session-lock.ts`）：`tenants/<t>/.locks/sessions/<sha16(session_id)>.lock` 与 `.locks/runs/<sha16(run_id)>.lock`，内容 `{ pid, started_at, host, session_id | run_id }`，`0600` 原子发布。同进程重复获取用引用计数消化；跨进程冲突抛 `SessionLockedError`，RPC 主码 `conflict`，消息前缀 `session_locked:` / `run_locked:`。
+  - `run()` 取 session 锁，`resume()` 取 run 锁（`withSessionWriteLock`）；bootstrap 的 Host resume 另外直接取 run 锁。显式指定 session 的 REPL / headless 持进程级 session 锁；`--serve` 不在空闲时持长锁，gateway 每次 run 取锁。
+- **interactions 按实例隔离**：default 实例仍写 `<dataDir>/interactions-<tenant>.json`；命名实例写 `<dataDir>/instances/<instance>/interactions-<tenant>.json`（目录 `0700`）。同一 dataDir 的多实例不再互相覆盖 PID / 交互记录。
+- **数据根与端口**：全局 `--data-dir <path>` 覆盖 `data_dir`（CLI > env > config）；端口被占用时 gateway 以 `port_in_use` 退出 1，且不写 PID 文件。
+
+### 37.5 delegate 关联与嵌套
+
+- delegate 事件（`subagent.delegate.started/completed/failed`，以及转发的 `subagent.*` 与 bridge 交互事件）补充关联字段：`tool_call_id`、`parent_session_id`、`parent_delegate_id`、`delegate_path`。`delegate_path` 是从根到当前 delegate 的 id 数组；嵌套转发保留自带 path，不被外层覆盖。
+- `subagent.delegate.completed/failed` 的 data 带 `result_ref: { kind: 'run', id }`（失败路径在能拿到 child run id 时也带）。`result_ref` 只指回 child run，不内联结果正文。
+- **孙 agent opt-in**：`delegate.allow_nested`（默认 `false`）/ `delegate.max_descendants`（默认 `16`，正整数）。`allow_nested: false` 时 child host 不注册 `delegate_task`；开启后为 child 新建独立 delegate 工具实例（独立 `baseDepth` / path / 后代计数），且 **child 新建 Host**——父 run 正占用注入 Host 的调度槽，复用会死锁。`max_descendants` 按根 delegate 树计数，根 delegate 本身不计入；达到上限返回错误文本。`permissionMode: 'deny'` 或显式把 `delegate_task` 写进 `disallowed` 时，即使 `allow_nested: true` 也不放开。
+- child 继承父级 resolved 权限与限额，不放大；bridge 模式事件补 `delegate_path`。
+- **路径边界**：`edit` 与 `read` 共用 `evaluatePath`（内置 denylist 硬 `deny`、`allowed_roots` 越界降级 `ask`）；`bash` 命令文本同时匹配内置 denylist 与配置 `deny_paths`（仍为 best-effort）。
+
+### 37.6 RPC 与前端消费
+
+- canonical 方法 40 → **44**：新增 `agents.tree`、`tasks.list`、`tasks.get`（read）与 `config.set`（write）。
+  - `agents.tree`：`{ nodes: [AgentCard & { children_ids, children_count }], as_of }`；按 depth / started_at / id 排序，`children_ids` 只指向同一次结果中存在的节点。
+  - `tasks.list` / `tasks.get`：只读派生自 `task.*` / `agent.task.*` / `team.task.*` 与 delegate 事件，不持久化；状态收敛为 `queued|running|completed|failed|cancelled`，未知 id 返回 `not_found`。
+  - `config.set`：只接受白名单键（`ui.language` / `ui.statusBars` / `ui.verbosity` / `ui.errorLevel` / `ui.showReasoning` / `ui.showInternalEvents` / `ui.askUser` / `observability.showProcessErrors` / `agent.cwd`）；非 default tenant 返回 `forbidden`，未知键/值返回 `invalid_params`。
+- `health.get` 增加 `runtime: { active_run_id?, scheduler: { as_of, queued[], running[], stats } }`；Host 快照优先，否则由 run 引擎派生。
+- `runs.list` / `runs.get` 透出错误 envelope 字段（`error_code` / `category` / `phase` / `retryable` / `http_status?` / `details?`）与 `started_at`；durable checkpoint 缺 `started_at` 时用 `created_at`，envelope 可从 `metadata.error_meta|error_envelope|envelope` 归一。
+- `events.list` 读路径与实时流一致：先 redactor，再按 8 KiB 裁剪工具参数 / 结果（`capToolEvent`）。
+- 前端：TUI `/status` 展示队列 / 预警 / 最近压缩，`/agents tree` 树形视图，`/settings errorLevel|verbosity` 写回，`/compact` 走 `runtime.compactContext()`；Web 新增 Diagnostics / Tasks / Display 页，使用 canonical `agents.tree` / `tasks.*` / `config.set`。
+
+### 37.7 已知限制
+
+- `agent.limit.warning` 的 `max_runtime` 用 wall clock 估算，run 结束后不再更新；同一 key 只预警一次，阈值变化不会重发。
+- `childrenCount` 依赖上层建立父子关系；core Host 不维护时缺省。`tasks.*` 只在进程内派生，重启丢失，不是持久任务账本。
+- shared tenant 锁允许多进程共存（file 后端），它保证的是「每 session 单写者」，不是整个 tenant 的单写者；需要独占时用 `--exclusive` 或 sqlite。
+- Self Card 是估算 token 截断，不保证 provider 精确 400 tokens；MCP 工具名不进入 Card。
+- 孙 agent 仍受 `maxDepth` 与 `max_descendants` 双重约束；不使用注入 Host 的嵌套实例会额外创建一个进程内 Host。
