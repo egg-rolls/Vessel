@@ -1,21 +1,26 @@
 /**
- * 0.17 A3c：owner 队列注入与权限事件接线。
+ * 0.17 A3c：owner 队列注入与权限 bridge 接线。
  *
- * 守：成员 turn 排空 owner 队列（成员继承父 hooks）、无消息时改写请求形状、
- * 关闭后 hook 继续注入、bridge 权限事件字段破坏现有 TUI 权限卡片。
+ * 守：成员 turn 排空 owner 队列（成员继承父 hooks）、owner 被 pump 空跑、
+ * 无消息时改写请求形状、关闭后 hook 继续注入、bridge 权限事件字段破坏现有
+ * TUI 权限卡片、父级应答没有回灌成员。
  */
 
 import { describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { HookContext, LLMProvider, RunEvent } from '../../packages/core/src/index';
+import type {
+  AgentRuntimeOptions,
+  HookContext,
+  LLMProvider,
+  RunEvent,
+} from '../../packages/core/src/index';
 import { MemoryEventStream, MemoryPluginHost } from '../../packages/core/src/index';
 import { asTuiEvent } from '../../packages/tui/src/types/events';
 import {
   AGENT_OWNER_INJECTION_HOOK,
   createAgentOwnerInjector,
-  createOwnerMessageSource,
   type OwnerQueueMessage,
   ownerMessageToMessage,
 } from '../agent-owner-injection';
@@ -58,6 +63,42 @@ function wiringOptions(
     model: 'mock-model',
     ...overrides,
   };
+}
+
+/** 不跑真实 provider 的成员 runtime；只回显输入或执行测试自定义逻辑 */
+function fakeRuntimeFactory(
+  onRun?: (options: AgentRuntimeOptions, input: string) => Promise<string>,
+): NonNullable<AgentServiceWiringOptions['runtimeFactory']> {
+  return async (options) => ({
+    events: options.events,
+    pluginHost: options.pluginHost ?? new MemoryPluginHost(),
+    async run(input) {
+      const text = typeof input === 'string' ? input : input.content;
+      return onRun ? onRun(options, text) : `echo:${text}`;
+    },
+    async dispose() {},
+  });
+}
+
+async function waitForState(
+  service: { list(filter: { viewer: string }): Promise<Array<{ id: string; state: string }>> },
+  memberId: string,
+  state: string,
+): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const members = await service.list({ viewer: 'main' });
+    if (members.find((member) => member.id === memberId)?.state === state) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  const members = await service.list({ viewer: 'main' });
+  throw new Error(
+    `member ${memberId} did not reach ${state}: ${JSON.stringify(members.map((m) => [m.id, m.state]))}`,
+  );
+}
+
+function cleanup(dataDir: string): void {
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 }
 
 describe('agent owner injection 0.17', () => {
@@ -175,38 +216,28 @@ describe('agent owner injection 0.17', () => {
     expect(ctx.messages).toBeUndefined();
   });
 
-  it('owner message source tolerates a service without takeMessages (agent track not merged)', async () => {
-    const source = createOwnerMessageSource({});
-    expect(await source.takeMessages('main')).toEqual([]);
-
-    const service = {
-      items: [message()],
-      takeMessages(this: { items: OwnerQueueMessage[] }) {
-        return this.items.splice(0);
-      },
-    };
-    const bound = createOwnerMessageSource(service);
-    expect(await bound.takeMessages('main')).toHaveLength(1);
-    expect(await bound.takeMessages('main')).toEqual([]);
-  });
-
-  it('passes permissionMode and parentEvents through member runtime options', () => {
+  it('passes permissionMode, parentEvents and onPermissionState to member runtime options', () => {
     const pluginHost = new MemoryPluginHost();
     const events = new MemoryEventStream();
+    const states: string[] = [];
     const bridge = buildMemberRuntimeOptions(
       wiringOptions(pluginHost, '/tmp/unused', {
         permissionMode: 'bridge',
         parentEvents: events,
       }),
+      (memberId, state) => states.push(`${memberId}:${state}`),
     );
     expect(bridge.permissionMode).toBe('bridge');
     expect(bridge.parentEvents).toBe(events);
+    bridge.onPermissionState?.('m1', 'waiting');
+    expect(states).toEqual(['m1:waiting']);
 
     const headless = buildMemberRuntimeOptions(
       wiringOptions(pluginHost, '/tmp/unused', { permissionMode: 'allow' }),
     );
     expect(headless.permissionMode).toBe('allow');
     expect('parentEvents' in headless).toBe(false);
+    expect('onPermissionState' in headless).toBe(false);
   });
 
   it('registers the hook once per host and stops it on wiring dispose', async () => {
@@ -226,7 +257,118 @@ describe('agent owner injection 0.17', () => {
       second.injector.dispose();
       expect(named()).toHaveLength(1);
     } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
+      cleanup(dataDir);
+    }
+  });
+
+  it('end-to-end: member final text queues to owner and injects once', async () => {
+    const pluginHost = new MemoryPluginHost();
+    const dataDir = tmpDir();
+    try {
+      const wiring = await createAgentServiceWiring(
+        wiringOptions(pluginHost, dataDir, {
+          runtimeFactory: fakeRuntimeFactory((_options, input) =>
+            Promise.resolve(`reply:${input}`),
+          ),
+        }),
+      );
+      const member = await wiring.service.new({ name: 'worker', parentId: 'main' });
+      await wiring.service.send({ to: member.id, content: 'hello' });
+      await waitForState(wiring.service, member.id, 'completed');
+
+      // owner 是 external owner：pump 不消费，状态保持 idle，消息留在队列。
+      const owner = (await wiring.service.list({ viewer: 'main' })).find(
+        (entry) => entry.id === 'main',
+      );
+      expect(owner?.state).toBe('idle');
+
+      const hook = pluginHost.getHooks().find((entry) => entry.name === AGENT_OWNER_INJECTION_HOOK);
+      if (!hook) throw new Error('owner injection hook missing');
+
+      const ctx = hookContext();
+      await hook.run(ctx);
+      expect(ctx.messages).toEqual([
+        {
+          role: 'user',
+          name: `agent:${member.id}`,
+          content: 'reply:hello',
+          timestamp: expect.any(Number),
+        },
+      ]);
+
+      // 每轮只排空一次：下一轮不再注入同一回复
+      const next = hookContext();
+      await hook.run(next);
+      expect(next.messages).toBeUndefined();
+      expect(await wiring.service.takeMessages('main')).toEqual([]);
+      wiring.injector.dispose();
+    } finally {
+      cleanup(dataDir);
+    }
+  });
+
+  it('end-to-end: bridge request reaches parentEvents and the response resumes the member', async () => {
+    const pluginHost = new MemoryPluginHost();
+    const parentEvents = new MemoryEventStream();
+    const dataDir = tmpDir();
+    const requests: RunEvent[] = [];
+
+    parentEvents.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      requests.push(event);
+      const data = event.data as Record<string, unknown>;
+      parentEvents.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: { requestId: data.requestId, decision: 'allow' },
+        ts: Date.now(),
+      });
+    });
+
+    const runtimeFactory = fakeRuntimeFactory(async (options, _input) => {
+      // 先注册等待，再发请求：父级应答可能同步回灌。
+      const decided = options.events.waitFor('tool.permission.response', {
+        requestId: 'req-1',
+        timeout: 2_000,
+      });
+      options.events.publish({
+        type: 'tool.permission.request',
+        run_id: 'member-run-1',
+        data: { requestId: 'req-1', tool: 'bash', input: { command: 'ls' } },
+        ts: Date.now(),
+      });
+      const answer = (await decided) as { decision?: string } | undefined;
+      return `decision:${answer?.decision ?? 'none'}`;
+    });
+
+    try {
+      const wiring = await createAgentServiceWiring(
+        wiringOptions(pluginHost, dataDir, {
+          permissionMode: 'bridge',
+          parentEvents,
+          runtimeFactory,
+        }),
+      );
+      const member = await wiring.service.new({ name: 'worker', parentId: 'main' });
+      await wiring.service.send({ to: member.id, content: 'run' });
+      await waitForState(wiring.service, member.id, 'completed');
+
+      expect(requests).toHaveLength(1);
+      const data = requests[0]?.data as Record<string, unknown>;
+      expect(data.agent_id).toBe(member.id);
+      expect(data.session_id).toBe(member.id);
+      expect(data.parent_session_id).toBe('main');
+      expect(data.delegate_path).toEqual(['main', member.id]);
+      expect(data.tool).toBe('bash');
+      expect(data.request_id).toBe('req-1');
+
+      // 成员收到父级应答并完成；最终文本进入 owner 队列
+      const replies = await wiring.service.takeMessages('main');
+      expect(replies).toHaveLength(1);
+      expect(replies[0]?.content).toBe('decision:allow');
+      wiring.injector.dispose();
+    } finally {
+      cleanup(dataDir);
     }
   });
 
@@ -258,19 +400,5 @@ describe('agent owner injection 0.17', () => {
     expect(additive.session_id).toBe('member-1');
     expect(additive.tool_call_id).toBe('call-1');
     expect(additive.delegate_path).toEqual(['main', 'member-1']);
-  });
-
-  it('falls back to a no-op source when the wired service has no owner inbox', async () => {
-    const pluginHost = new MemoryPluginHost();
-    const dataDir = tmpDir();
-    try {
-      const wiring = await createAgentServiceWiring(wiringOptions(pluginHost, dataDir));
-      const ctx = hookContext();
-      await wiring.injector.hook.run(ctx);
-      expect(ctx.messages).toBeUndefined();
-      wiring.injector.dispose();
-    } finally {
-      fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
-    }
   });
 });

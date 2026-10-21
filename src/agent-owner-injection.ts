@@ -1,9 +1,8 @@
 /**
  * owner 消息队列 → 父 turn 的 BeforeLlm 注入（0.17 A3c）。
  *
- * AgentService 把成员回复排进 owner 队列；`takeMessages(ownerId)` 由 agent 轨
- * （packages/agent）提供。本模块只依赖结构类型，agent 包尚未合并该方法时
- * hook 保持空转（返回 `[]`），不改变请求形状。
+ * AgentService 把成员回复排进 owner 队列；owner 是 external owner，`pump()`
+ * 不会消费它，只能由父 turn 的 BeforeLlm 调 `takeMessages(ownerId)` 排空。
  *
  * 约束：
  * - 注入消息固定 `role:'user'`、`name:'agent:<id>'`、`timestamp:<原消息 ts>`，
@@ -30,10 +29,7 @@ export interface OwnerQueueMessage {
   ts: number;
 }
 
-/**
- * `AgentService.takeMessages` 的结构依赖。
- * 合并后 `AgentService` 直接满足；未合并时由入口层探测方法是否存在。
- */
+/** `AgentService.takeMessages` 的结构子集（测试可注入 fake） */
 export interface OwnerMessageSource {
   takeMessages(
     memberId: string,
@@ -71,20 +67,6 @@ export function ownerMessageToMessage(message: OwnerQueueMessage): Message {
     name: `agent:${message.from}`,
     content: message.content,
     timestamp: message.ts,
-  };
-}
-
-/**
- * 把 AgentService 包成 `OwnerMessageSource`。
- * agent 轨未合并 `takeMessages` 时返回空数组（hook 不改请求）。
- */
-export function createOwnerMessageSource(service: object): OwnerMessageSource {
-  return {
-    takeMessages(memberId) {
-      const take = (service as Partial<OwnerMessageSource>).takeMessages;
-      if (typeof take !== 'function') return [];
-      return take.call(service, memberId);
-    },
   };
 }
 
