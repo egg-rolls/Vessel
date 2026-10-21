@@ -5,12 +5,16 @@
  * 必须在下一轮请求里原样回传。同时思维链不得进入事件流 / TUI。
  */
 import { afterEach, describe, expect, it } from 'bun:test';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
 import { OpenAICompatibleProvider } from '../src/provider/providers';
 import { StreamAccumulator } from '../src/provider/stream-accumulator';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
+import { SessionEventLog } from '../src/session/session-event-log';
 import { SQLiteSessionBackend } from '../src/session/sqlite-backend';
 import type { ChatRequest, LLMResponse, Message, StreamChunk } from '../src/types/provider';
 import type { ToolDefinition } from '../src/types/tool';
@@ -272,20 +276,11 @@ describe('runtime reasoning_content 生命周期', () => {
     );
     expect(secondRequestToolAssistant?.reasoning_content).toBe('SECRET-THINK');
 
-    // 0.18：llm.request / context.changed 仍不携带思维链；
-    // 唯一真相源 `llm.response` 的 `reasoning` 字段保留（UI 按开关展示）。
-    const history = events.getHistory();
-    const requestsAndContext = history.filter(
-      (event) => event.type === 'llm.request' || event.type === 'context.changed',
-    );
-    const requestDump = JSON.stringify(requestsAndContext);
-    expect(requestDump).not.toContain('SECRET-THINK');
-    expect(requestDump).not.toContain('FINAL-THINK');
-
-    const reasoning = history
-      .filter((event) => event.type === 'llm.response')
-      .map((event) => (event.data as { reasoning?: string }).reasoning);
-    expect(reasoning).toEqual(['SECRET-THINK', 'FINAL-THINK']);
+    // ADR-077：对外发布的事件（含 trace）不得携带思维链。
+    // 0.18 只把 reasoning 写进会话事件日志（用于 resume），不进入 publish。
+    const dumped = JSON.stringify(events.getHistory());
+    expect(dumped).not.toContain('SECRET-THINK');
+    expect(dumped).not.toContain('FINAL-THINK');
   });
 
   it('includeReasoning 透传 include_reasoning（默认请求形状不变）', async () => {
@@ -372,7 +367,6 @@ describe('runtime reasoning_content 生命周期', () => {
       termination: { maxIterations: 10 },
     });
     expect(await disabled.run('hi')).toBe('answer');
-    // 0.18：默认不发布 reasoning_delta，但 llm.response 作为真相源保留 reasoning。
     expect(
       defaultEvents
         .getHistory()
@@ -380,11 +374,47 @@ describe('runtime reasoning_content 生命周期', () => {
         .map((event) => (event.data as { chunk: StreamChunk }).chunk)
         .every((chunk) => chunk.type !== 'reasoning_delta'),
     ).toBe(true);
-    const responseReasoning = defaultEvents
-      .getHistory()
-      .filter((event) => event.type === 'llm.response')
-      .map((event) => (event.data as { reasoning?: string }).reasoning);
-    expect(responseReasoning).toEqual(['SECRET-THINK']);
+    // 对外事件同样不携带 reasoning（只进事件日志）。
+    expect(JSON.stringify(defaultEvents.getHistory())).not.toContain('SECRET-THINK');
+  });
+
+  it('reasoning 只写入会话事件日志，不进入对外事件 / trace（0.18）', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'vessel-reasoning-log-'));
+    const log = new SessionEventLog({ dir, durable: false });
+    try {
+      const events = new MemoryEventStream();
+      const runtime = await AgentRuntime.create({
+        provider: {
+          chat: async (): Promise<LLMResponse> => ({
+            content: 'answer',
+            finish_reason: 'stop',
+            reasoning_content: 'SECRET-THINK',
+          }),
+        },
+        model: 'm',
+        pluginHost: new MemoryPluginHost(),
+        context: new MemoryContextManager(),
+        events,
+        limits: { requestLimit: 10, toolCallsLimit: 5 },
+        termination: { maxIterations: 10 },
+        eventLog: log,
+      });
+      await runtime.run('hi', 's1', { runId: 'run-1' });
+
+      // 对外发布（trace 订阅同一流）不含 reasoning
+      expect(JSON.stringify(events.getHistory())).not.toContain('SECRET-THINK');
+      // 唯一真相源保留，供 resume 重建 assistant 的 reasoning_content
+      const persisted = await log.read('s1');
+      const response = persisted.find((event) => event.type === 'llm.response');
+      expect(response).toBeDefined();
+      expect(
+        response === undefined ? undefined : (response.data as { reasoning?: string }).reasoning,
+      ).toBe('SECRET-THINK');
+      await runtime.dispose();
+    } finally {
+      await log.close();
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it('session 持久化与恢复保留 reasoning_content', async () => {

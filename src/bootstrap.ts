@@ -45,6 +45,7 @@ import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
+import { type ConnectRunStart, waitForConnectedRun } from './connect-run-wait';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -103,6 +104,9 @@ import { adaptWorkflowsControl } from './workflow-wiring';
  * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。
  * 合并 tui 后可改为 `import type { PermissionsControl } from '@vessel-agent/tui'`。
  */
+/** `--connect --run` 缺省终态等待上限（10 分钟）；测试可覆盖。 */
+const DEFAULT_CONNECT_RUN_TIMEOUT_MS = 10 * 60_000;
+
 interface PermissionsControlLike {
   list(): Promise<string[]>;
   add(toolName: string): Promise<void>;
@@ -169,6 +173,10 @@ export interface BootstrapOptions {
   caFile?: string;
   /** 0.5：测试注入 data_dir（缺省 config.dataDir → VESSEL_DATA_DIR → 默认值） */
   dataDir?: string;
+  /** 0.18：connect 模式 run 的终态等待上限（缺省 10 分钟；测试注入） */
+  connectRunTimeoutMs?: number;
+  /** 0.18：connect 模式 `runs.get` 轮询间隔（缺省 1000ms；测试注入） */
+  connectRunPollMs?: number;
   /** 0.5：trace recorder 工厂（测试） */
   traceFactory?: TraceRecorderFactory;
   /** 0.5：额外 trace redactor（ext redact-secrets） */
@@ -345,6 +353,9 @@ async function bootstrapConnect(input: {
   continueLatest?: boolean;
   /** 0.6.1：`-r <id>`；先用 sessions.get 校验存在 */
   resumeSessionId?: string;
+  /** 0.18：run 终态等待上限 / 轮询间隔（测试注入） */
+  connectRunTimeoutMs?: number;
+  connectRunPollMs?: number;
   rpcClientFactory?: (opts: {
     baseUrl: string;
     token: string;
@@ -604,47 +615,9 @@ async function bootstrapConnect(input: {
 
   /**
    * 0.17 P0：`runs.start` 只返回排队信封（`{run_id,status}`），不是最终输出。
-   * 这里等待对应 run 的 `run.completed` / `run.failed` / `run.cancelled`：
-   * - 先订阅再调用 runs.start，极快 run 的 `run.started` / 终态也不会漏；
-   * - WS 事件在客户端只保留 event（不含 `job_id`），因此用
-   *   `run.started.data.session_id + input` 匹配本次请求，并用 `runs.get(job_id)`
-   *   的 `core_run_id` 做权威确认；
-   * - 成功返回完整 `output`（Message 不降级为 `String(content)`）；
-   * - 失败抛错，由 headless 以非 0 退出。
+   * 终态等待逻辑（事件匹配 + runs.get 确认 + 轮询 + 超时）在
+   * `connect-run-wait.ts`，便于单测“终态事件不投递”场景。
    */
-  const TERMINAL_RUN_EVENT_TYPES: ReadonlySet<string> = new Set([
-    'run.completed',
-    'run.failed',
-    'run.cancelled',
-  ]);
-  const terminalResultOf = (event: RunEvent): string => {
-    const data = isRecordValue(event.data) ? event.data : {};
-    if (event.type === 'run.completed') {
-      return typeof data.output === 'string' ? data.output : '';
-    }
-    const message =
-      typeof data.error === 'string' && data.error.length > 0
-        ? data.error
-        : event.type === 'run.cancelled'
-          ? 'Run cancelled'
-          : 'Run failed';
-    throw Object.assign(new Error(message), {
-      code: typeof data.error_code === 'string' ? data.error_code : 'run_failed',
-      run_id: event.run_id,
-    });
-  };
-  const errorFromRecord = (record: Record<string, unknown>): Error => {
-    const message =
-      typeof record.error === 'string' && record.error.length > 0
-        ? record.error
-        : record.status === 'cancelled'
-          ? 'Run cancelled'
-          : 'Run failed';
-    return Object.assign(new Error(message), {
-      code: typeof record.error_code === 'string' ? record.error_code : 'run_failed',
-    });
-  };
-
   const runtime: RunnableAgent = {
     events,
     pluginHost,
@@ -652,143 +625,31 @@ async function bootstrapConnect(input: {
       // Message 原样使用（content 已是 string）；不做 String(content) 降级。
       const prompt = typeof inputValue === 'string' ? inputValue : inputValue.content;
       const targetSession = sessionId ?? currentSessionId;
-      const terminalByRun = new Map<string, RunEvent>();
-      const candidates = new Set<string>();
-      let coreRunId: string | undefined;
-      let startedUnsub: (() => void) | undefined;
-
-      const matchStarted = (event: RunEvent): boolean => {
-        if (event.type !== 'run.started') return false;
-        const data = isRecordValue(event.data) ? event.data : {};
-        const eventSession = typeof data.session_id === 'string' ? data.session_id : undefined;
-        if (eventSession !== undefined && eventSession !== targetSession) return false;
-        const eventInput = typeof data.input === 'string' ? data.input : undefined;
-        return eventInput === undefined || eventInput === prompt;
-      };
-      const bufferedUnsub = events.subscribe((event) => {
-        if (matchStarted(event)) candidates.add(event.run_id);
-        if (TERMINAL_RUN_EVENT_TYPES.has(event.type) && !terminalByRun.has(event.run_id)) {
-          terminalByRun.set(event.run_id, event);
-        }
-      });
-
-      try {
-        const result = await rpc.request<unknown>('runs.start', {
-          input: prompt,
-          session_id: targetSession,
-          ...(opts?.messages ? { messages: opts.messages } : {}),
-        });
-
-        // 旧 gateway 兼容：直接返回文本 / `{result}` 时原样返回。
-        if (typeof result === 'string') return result;
-        if (!isRecordValue(result) || typeof result.run_id !== 'string') {
-          if (isRecordValue(result) && typeof result.result === 'string') return result.result;
-          throw new Error('runs.start returned no run_id');
-        }
-        const jobId = result.run_id;
-
-        return await new Promise<string>((resolve, reject) => {
-          let settled = false;
-          const cleanup = (): void => {
-            try {
-              startedUnsub?.();
-            } catch {
-              // ignore
-            }
-            opts?.signal?.removeEventListener('abort', onAbort);
-          };
-          const settle = (fn: () => void): void => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            fn();
-          };
-          const settleFromEvent = (event: RunEvent): void => {
-            settle(() => {
-              try {
-                resolve(terminalResultOf(event));
-              } catch (error) {
-                reject(error);
-              }
-            });
-          };
-          const settleFromRecord = (record: Record<string, unknown>): void => {
-            if (record.status === 'completed') {
-              settle(() => resolve(typeof record.output === 'string' ? record.output : ''));
-            } else if (record.status === 'failed' || record.status === 'cancelled') {
-              settle(() => reject(errorFromRecord(record)));
-            }
-          };
-          /** 用权威 `runs.get` 确认 core_run_id / 终态 */
-          const refreshJob = async (): Promise<void> => {
-            if (settled) return;
-            try {
-              const record = await rpc.request<unknown>('runs.get', { run_id: jobId });
-              if (!isRecordValue(record) || settled) return;
-              if (typeof record.core_run_id === 'string') {
-                coreRunId = record.core_run_id;
-                candidates.add(coreRunId);
-              }
-              settleFromRecord(record);
-              if (settled) return;
-              const terminal = coreRunId !== undefined ? terminalByRun.get(coreRunId) : undefined;
-              if (terminal) {
-                settleFromEvent(terminal);
-                return;
-              }
-            } catch {
-              // runs.get 不可用（旧 gateway / 权限）：继续靠事件匹配。
-            }
-          };
-          const trySettleFromEvents = (): void => {
-            if (settled) return;
-            const direct = coreRunId !== undefined ? terminalByRun.get(coreRunId) : undefined;
-            if (direct) {
-              settleFromEvent(direct);
-              return;
-            }
-            for (const runId of candidates) {
-              const terminal = terminalByRun.get(runId);
-              if (terminal) {
-                coreRunId = runId;
-                settleFromEvent(terminal);
-                return;
-              }
-            }
-          };
-          const onAbort = (): void => {
-            settle(() => reject(opts?.signal?.reason ?? new Error('Run cancelled')));
-          };
-
-          startedUnsub = events.subscribe((event) => {
-            if (matchStarted(event)) {
-              candidates.add(event.run_id);
-              void refreshJob();
-            }
-            if (!TERMINAL_RUN_EVENT_TYPES.has(event.type)) return;
-            if (event.run_id === coreRunId || candidates.has(event.run_id)) {
-              terminalByRun.set(event.run_id, event);
-              settleFromEvent(event);
-            } else {
-              // 未知 run 的终态：交给 runs.get 判断是否属于本 job。
-              terminalByRun.set(event.run_id, event);
-              void refreshJob();
-            }
+      return await waitForConnectedRun({
+        events,
+        prompt,
+        sessionId: targetSession,
+        timeoutMs: input.connectRunTimeoutMs ?? DEFAULT_CONNECT_RUN_TIMEOUT_MS,
+        ...(input.connectRunPollMs !== undefined ? { pollIntervalMs: input.connectRunPollMs } : {}),
+        ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        start: async (): Promise<ConnectRunStart> => {
+          const result = await rpc.request<unknown>('runs.start', {
+            input: prompt,
+            session_id: targetSession,
+            ...(opts?.messages ? { messages: opts.messages } : {}),
           });
-
-          if (opts?.signal?.aborted) {
-            onAbort();
-            return;
+          // 旧 gateway 兼容：直接返回文本 / `{result}` 时原样返回。
+          if (typeof result === 'string') return { kind: 'legacy', text: result };
+          if (!isRecordValue(result) || typeof result.run_id !== 'string') {
+            if (isRecordValue(result) && typeof result.result === 'string') {
+              return { kind: 'legacy', text: result.result };
+            }
+            throw new Error('runs.start returned no run_id');
           }
-          opts?.signal?.addEventListener('abort', onAbort, { once: true });
-
-          // 先扫一遍 run 前缓冲，再向服务端确认一次（可能已 running/终态）。
-          trySettleFromEvents();
-          void refreshJob();
-        });
-      } finally {
-        bufferedUnsub();
-      }
+          return { kind: 'job', jobId: result.run_id };
+        },
+        getRun: (jobId) => rpc.request<unknown>('runs.get', { run_id: jobId }),
+      });
     },
     dispose() {
       unsubscribe();
@@ -956,6 +817,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ...(options.continueLatest === true ? { continueLatest: true } : {}),
       ...(options.resumeSessionId !== undefined
         ? { resumeSessionId: options.resumeSessionId }
+        : {}),
+      ...(options.connectRunTimeoutMs !== undefined
+        ? { connectRunTimeoutMs: options.connectRunTimeoutMs }
+        : {}),
+      ...(options.connectRunPollMs !== undefined
+        ? { connectRunPollMs: options.connectRunPollMs }
         : {}),
       ...(options.rpcClientFactory ? { rpcClientFactory: options.rpcClientFactory } : {}),
     });

@@ -190,8 +190,12 @@ export interface SessionEventLogPort {
   ): Promise<SessionEventRecord[]>;
   /** 最近一次**已落盘**的 seq；未初始化/未写入返回 undefined */
   lastPersistedSeq(sessionId: string): number | undefined;
+  /** 从磁盘读取最后 seq（不需要已打开的 writer；实现可缺省） */
+  lastSeq?(sessionId: string): Promise<number | undefined>;
   /** 等待该 session（缺省全部）的写入队列排空 */
   flush(sessionId?: string): Promise<void>;
+  /** 关闭并移除该 session 的写句柄（run 结束 / idle 回收；实现可缺省） */
+  release?(sessionId: string): Promise<void>;
   /** 合并写会话索引（best-effort；实现可缺省） */
   updateIndex?(sessionId: string, patch: SessionIndexPatch): Promise<void>;
 }

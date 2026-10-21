@@ -23,6 +23,7 @@ export {
   SessionCorruptError,
 } from './file-backend.js';
 export {
+  mergeHistoryProjection,
   type ProjectableEvent,
   projectMessages,
 } from './project-messages.js';

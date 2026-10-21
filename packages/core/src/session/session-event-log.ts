@@ -13,12 +13,18 @@
  * 崩溃恢复：文件尾部若残留半行（无换行结尾），初始化为 append 前先截断到
  * 最后一个完整换行，避免新记录粘在半行后面。
  *
- * 单写者：同一进程内按 session 串行；跨进程由上层 tenant / session 写锁保证。
+ * 单写者与轮换：
+ * - 同一进程内按 session 串行；
+ * - 跨进程必须由上层 tenant / session 写锁串行化（本类不做进程间互斥）；
+ * - 为防轮换写者复用 seq，每次 append 前 `stat` 文件：大小与上次写后不一致时
+ *   重读文件尾并把 `assignedSeq` 单调抬到实际最后 seq；文件被删除则抛
+ *   `session_event_log_deleted`，不静默写进已删除的 inode；
+ * - 无锁并发写不受支持（stat 检查不能消除同时写入的竞争）。
  *
  * @module @vessel-agent/core/session
  */
 
-import type { Dirent } from 'node:fs';
+import { createReadStream, type Dirent } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { chmod, mkdir, open, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -64,11 +70,18 @@ export interface SessionEventLogOptions {
   logger?: Logger;
   /** 每条 fsync；缺省 true（测试可关） */
   durable?: boolean;
+  /**
+   * 同时保持打开的写句柄上限（LRU）。超过时关闭最久未使用的 writer；
+   * 下次 append 会重新打开并从文件尾恢复 seq。缺省 32。
+   */
+  maxOpenWriters?: number;
 }
 
 /** 尾部恢复时读取的最大窗口序列（先小后大，最后扫全文件） */
 const TAIL_WINDOW_BYTES = 64 * 1024;
 const TAIL_WINDOW_MAX = 4 * 1024 * 1024;
+/** 同时保持打开的 writer 上限 */
+const DEFAULT_MAX_OPEN_WRITERS = 32;
 
 interface WriterState {
   sessionId: string;
@@ -82,8 +95,24 @@ interface WriterState {
   persistedSeq: number;
   /** 已落盘事件数（与 persistedSeq 同步；seq 连续） */
   persistedCount: number;
+  /** 上次写成功后预期的文件字节数；用于发现其它写者/删除 */
+  expectedSize: number;
+  /** 最近一次使用时间（LRU 关闭） */
+  lastUsed: number;
   handle?: FileHandle;
   closed: boolean;
+}
+
+/** 事件日志写入目标已被删除（不静默重建） */
+export class SessionEventLogDeletedError extends Error {
+  readonly code = 'session_event_log_deleted' as const;
+  readonly sessionId: string;
+
+  constructor(sessionId: string) {
+    super(`session_event_log_deleted: ${sessionId}`);
+    this.name = 'SessionEventLogDeletedError';
+    this.sessionId = sessionId;
+  }
 }
 
 function isNotFound(error: unknown): boolean {
@@ -185,6 +214,7 @@ export class SessionEventLog {
   private readonly dir: string;
   private readonly logger: Logger;
   private readonly durable: boolean;
+  private readonly maxOpenWriters: number;
   private readonly writers = new Map<string, WriterState>();
   private closed = false;
 
@@ -195,6 +225,10 @@ export class SessionEventLog {
     this.dir = options.dir;
     this.logger = options.logger ?? noopLogger;
     this.durable = options.durable ?? true;
+    this.maxOpenWriters = Math.max(
+      1,
+      Math.floor(options.maxOpenWriters ?? DEFAULT_MAX_OPEN_WRITERS),
+    );
   }
 
   /** 会话目录是否存在（删除一致性检查/索引列表用） */
@@ -220,6 +254,8 @@ export class SessionEventLog {
     const state = this.getOrCreateWriter(input.session_id);
     const task = state.queue.then(async () => {
       await state.ready;
+      await this.syncWithFile(state);
+      state.lastUsed = Date.now();
       const seq = state.assignedSeq + 1;
       state.assignedSeq = seq;
       const record: SessionEventRecord = {
@@ -233,10 +269,12 @@ export class SessionEventLog {
       };
       const handle = state.handle;
       if (!handle) throw new Error('session_event_log_unavailable');
-      await handle.write(`${JSON.stringify(record)}\n`);
+      const line = `${JSON.stringify(record)}\n`;
+      const written = await handle.write(line);
       if (this.durable) await handle.sync();
       state.persistedSeq = seq;
       state.persistedCount += 1;
+      state.expectedSize += written.bytesWritten;
       return record;
     });
     state.queue = task.then(
@@ -246,10 +284,62 @@ export class SessionEventLog {
     return task;
   }
 
+  /**
+   * 重新对齐文件尾（拿锁后 / 轮换写者时调用）。
+   * 不等待此前入队的 append；调用方应先保证没有在途写入。
+   */
+  async refresh(sessionId: string): Promise<void> {
+    const state = this.writers.get(sessionId);
+    if (!state) return;
+    await state.ready;
+    await state.queue;
+    await this.syncWithFile(state);
+  }
+
+  /**
+   * 关闭并移除该 session 的写句柄（run 结束 / idle 回收）。
+   * 下次 append 会重新打开并从文件尾恢复 seq。幂等。
+   */
+  async release(sessionId: string): Promise<void> {
+    const state = this.writers.get(sessionId);
+    if (!state) return;
+    await state.queue;
+    await state.ready.catch(() => {});
+    try {
+      await state.handle?.close();
+    } catch {
+      // 已关闭
+    }
+    state.handle = undefined;
+    state.closed = true;
+    this.writers.delete(sessionId);
+  }
+
   /** 最近一次已落盘的 seq（不等待队列） */
   lastPersistedSeq(sessionId: string): number | undefined {
     const state = this.writers.get(sessionId);
     return state !== undefined && state.persistedSeq > 0 ? state.persistedSeq : undefined;
+  }
+
+  /** 从磁盘读取最后 seq（没有 writer 也能用；文件不存在/为空返回 undefined） */
+  async lastSeq(sessionId: string): Promise<number | undefined> {
+    const state = this.writers.get(sessionId);
+    if (state) {
+      await state.ready.catch(() => {});
+      await state.queue;
+      if (state.persistedSeq > 0) return state.persistedSeq;
+    }
+    const path = sessionEventsFilePath(this.dir, sessionId);
+    let size: number;
+    try {
+      size = (await stat(path)).size;
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    }
+    if (size <= 0) return undefined;
+    const last = await recoverLastSeq(path, size);
+    return last > 0 ? last : undefined;
   }
 
   /** 等待写入队列排空；sessionId 缺省等待全部 */
@@ -278,14 +368,6 @@ export class SessionEventLog {
     }
 
     const path = sessionEventsFilePath(this.dir, sessionId);
-    let content: string;
-    try {
-      content = await readFile(path, 'utf8');
-    } catch (error) {
-      if (isNotFound(error)) return [];
-      throw error;
-    }
-
     const since = typeof opts.sinceSeq === 'number' ? Math.floor(opts.sinceSeq) : undefined;
     const limit =
       typeof opts.limit === 'number' && Number.isFinite(opts.limit)
@@ -295,16 +377,49 @@ export class SessionEventLog {
 
     const result: SessionEventRecord[] = [];
     let malformed = 0;
-    for (const line of content.split('\n')) {
-      if (line.trim() === '') continue;
-      const record = parseRecord(line);
-      if (record === null) {
-        malformed += 1;
-        continue;
+    // 流式读取：避免把大 session 的整份 NDJSON 读进内存。
+    // 设置 encoding 后 Node 的 Readable 内部用 StringDecoder，跨 chunk 的多字节字符安全。
+    const stream = createReadStream(path, { encoding: 'utf8' });
+    let buffer = '';
+    try {
+      for await (const chunk of stream) {
+        buffer += chunk;
+        let newline = buffer.indexOf('\n');
+        while (newline >= 0) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (line.trim() !== '') {
+            const record = parseRecord(line);
+            if (record === null) {
+              malformed += 1;
+            } else if (since === undefined || record.seq > since) {
+              result.push(record);
+              if (limit !== undefined && result.length >= limit) {
+                buffer = '';
+                break;
+              }
+            }
+          }
+          newline = buffer.indexOf('\n');
+        }
+        if (limit !== undefined && result.length >= limit) break;
       }
-      if (since !== undefined && record.seq <= since) continue;
-      result.push(record);
-      if (limit !== undefined && result.length >= limit) break;
+      // 文件末尾没有换行的残行（崩溃残留）按坏行处理。
+      if (buffer.trim() !== '') {
+        const record = parseRecord(buffer);
+        if (record === null) malformed += 1;
+        else if (
+          (since === undefined || record.seq > since) &&
+          (limit === undefined || result.length < limit)
+        ) {
+          result.push(record);
+        }
+      }
+    } catch (error) {
+      if (isNotFound(error)) return [];
+      throw error;
+    } finally {
+      stream.destroy();
     }
     if (malformed > 0) {
       this.logger.warn('session event log skipped malformed lines', {
@@ -451,7 +566,37 @@ export class SessionEventLog {
     // 保证 read/flush/lastPersistedSeq 的查找键一致。
     const key = sessionId;
     const state = this.writers.get(key);
-    if (state) return state;
+    if (state) {
+      state.lastUsed = Date.now();
+      return state;
+    }
+
+    // 句柄上限：关闭最久未使用的 writer（fire-and-forget；其队列排空后关句柄）。
+    if (this.writers.size >= this.maxOpenWriters) {
+      let victimKey: string | undefined;
+      let victim: WriterState | undefined;
+      for (const [candidateKey, candidate] of this.writers) {
+        if (candidateKey === key) continue;
+        if (victim === undefined || candidate.lastUsed < victim.lastUsed) {
+          victimKey = candidateKey;
+          victim = candidate;
+        }
+      }
+      if (victimKey !== undefined && victim !== undefined) {
+        this.writers.delete(victimKey);
+        void (async () => {
+          await victim.queue;
+          await victim.ready.catch(() => {});
+          try {
+            await victim.handle?.close();
+          } catch {
+            // ignore
+          }
+          victim.handle = undefined;
+          victim.closed = true;
+        })();
+      }
+    }
 
     // ready 在下面赋值；queue 先建立为空链，append 总是 await ready。
     const created: WriterState = {
@@ -461,6 +606,8 @@ export class SessionEventLog {
       assignedSeq: 0,
       persistedSeq: 0,
       persistedCount: 0,
+      expectedSize: 0,
+      lastUsed: Date.now(),
       closed: false,
     };
     created.ready = this.initWriter(created).catch(async (error: unknown) => {
@@ -477,6 +624,44 @@ export class SessionEventLog {
     created.ready.catch(() => {});
     this.writers.set(key, created);
     return created;
+  }
+
+  /**
+   * append 前与磁盘对齐：其它进程写过 / 文件被删除 / 尾部有半行。
+   * - 文件被删除且本 writer 曾写过 → 抛 `SessionEventLogDeletedError`，不复活；
+   * - 大小变化 → 截断半行、重读最后 seq 并单调抬高，重开句柄（防旧 inode）。
+   */
+  private async syncWithFile(state: WriterState): Promise<void> {
+    const path = sessionEventsFilePath(this.dir, state.sessionId);
+    let size: number;
+    try {
+      size = (await stat(path)).size;
+    } catch (error) {
+      if (!isNotFound(error)) throw error;
+      if (state.expectedSize > 0) throw new SessionEventLogDeletedError(state.sessionId);
+      await mkdir(sessionDirPath(this.dir, state.sessionId), { recursive: true });
+      state.handle = await open(path, 'a', 0o600);
+      state.expectedSize = 0;
+      return;
+    }
+
+    if (size === state.expectedSize) return;
+
+    const truncatedSize = await truncatePartialTail(path, size);
+    const last = await recoverLastSeq(path, truncatedSize);
+    if (last > state.assignedSeq) {
+      state.assignedSeq = last;
+      state.persistedSeq = Math.max(state.persistedSeq, last);
+      state.persistedCount = Math.max(state.persistedCount, last);
+    }
+    state.expectedSize = truncatedSize;
+    // 文件可能被替换（删除后重建），旧句柄指向旧 inode；重开 append 句柄。
+    try {
+      await state.handle?.close();
+    } catch {
+      // ignore
+    }
+    state.handle = await open(path, 'a', 0o600);
   }
 
   private async initWriter(state: WriterState): Promise<void> {
@@ -505,6 +690,8 @@ export class SessionEventLog {
       // Windows 无 POSIX mode
     }
     state.handle = handle;
+    state.expectedSize = size;
+    state.lastUsed = Date.now();
   }
 }
 

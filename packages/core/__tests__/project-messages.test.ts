@@ -1,5 +1,10 @@
 ﻿import { describe, expect, it } from 'bun:test';
-import { type ProjectableEvent, projectMessages } from '../src/session/project-messages.js';
+import {
+  mergeHistoryProjection,
+  type ProjectableEvent,
+  projectMessages,
+} from '../src/session/project-messages.js';
+import type { Message } from '../src/types/provider.js';
 
 function userEvent(content: string, ts = 1000): ProjectableEvent {
   return {
@@ -123,6 +128,25 @@ describe('projectMessages（0.18 纯函数投影）', () => {
     expect(projectMessages(events)).toEqual([
       { role: 'user', content: 'file ctx', name: 'agent:a', timestamp: 800 },
       { role: 'user', content: 'question', timestamp: 1000 },
+    ]);
+  });
+
+  it('mergeHistoryProjection：按尾部重叠去重（旧数据无 derived）', () => {
+    const cached: Message[] = [
+      { role: 'system', content: 'sys', timestamp: 1 },
+      { role: 'user', content: 'q', timestamp: 2 },
+      { role: 'assistant', content: 'a', timestamp: 3 },
+    ];
+    const projected: Message[] = [
+      { role: 'user', content: 'q', timestamp: 999 },
+      { role: 'assistant', content: 'a', timestamp: 998 },
+      { role: 'user', content: 'q2', timestamp: 997 },
+    ];
+    expect(mergeHistoryProjection(cached, projected)).toEqual([
+      { role: 'system', content: 'sys', timestamp: 1 },
+      { role: 'user', content: 'q', timestamp: 2 },
+      { role: 'assistant', content: 'a', timestamp: 3 },
+      { role: 'user', content: 'q2', timestamp: 997 },
     ]);
   });
 

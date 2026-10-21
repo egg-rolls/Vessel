@@ -2,7 +2,7 @@
 import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SessionEventLog } from '../src/session/session-event-log.js';
+import { SessionEventLog, SessionEventLogDeletedError } from '../src/session/session-event-log.js';
 import { sessionDirPath, sessionEventsFilePath } from '../src/tenant/tenant-paths.js';
 
 const dirs: string[] = [];
@@ -115,6 +115,56 @@ describe('SessionEventLog（0.18 事件溯源）', () => {
       );
       const content = await readFile(sessionEventsFilePath(dir, 's1'), 'utf8');
       expect(content.trimEnd().split('\n')).toHaveLength(50);
+    } finally {
+      await log.close();
+    }
+  });
+
+  it('轮换写者（两个实例交替写）不会复用 seq', async () => {
+    const dir = await tempDir();
+    const first = new SessionEventLog({ dir, durable: false });
+    const second = new SessionEventLog({ dir, durable: false });
+    try {
+      expect((await first.append(input('s1', 'a'))).seq).toBe(1);
+      // second 初始化时从文件尾恢复 → 2
+      expect((await second.append(input('s1', 'b'))).seq).toBe(2);
+      // first 的 expectedSize 已过期；append 前 stat 发现变化并抬高 seq → 3
+      expect((await first.append(input('s1', 'c'))).seq).toBe(3);
+      expect((await second.append(input('s1', 'd'))).seq).toBe(4);
+      expect((await first.append(input('s1', 'e'))).seq).toBe(5);
+
+      const records = await first.read('s1');
+      expect(records.map((record) => record.seq)).toEqual([1, 2, 3, 4, 5]);
+      expect(new Set(records.map((record) => record.seq)).size).toBe(5);
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
+
+  it('release 关闭句柄后再次 append 会重新恢复 seq', async () => {
+    const dir = await tempDir();
+    const log = new SessionEventLog({ dir, durable: false });
+    try {
+      expect((await log.append(input('s1', 'a'))).seq).toBe(1);
+      await log.release('s1');
+      expect(log.lastPersistedSeq('s1')).toBeUndefined();
+      expect((await log.append(input('s1', 'b'))).seq).toBe(2);
+    } finally {
+      await log.close();
+    }
+  });
+
+  it('文件被外部删除后 append 抛错，不静默写回已删除 inode（POSIX）', async () => {
+    if (process.platform === 'win32') return; // Windows 不允许删除打开中的文件
+    const dir = await tempDir();
+    const log = new SessionEventLog({ dir, durable: false });
+    try {
+      await log.append(input('s1', 'a'));
+      await rm(sessionDirPath(dir, 's1'), { recursive: true, force: true });
+      await expect(log.append(input('s1', 'b'))).rejects.toBeInstanceOf(
+        SessionEventLogDeletedError,
+      );
     } finally {
       await log.close();
     }

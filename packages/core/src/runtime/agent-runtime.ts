@@ -14,7 +14,7 @@ import {
   MemoryLimitChecker,
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
-import { projectMessages } from '../session/project-messages.js';
+import { mergeHistoryProjection, projectMessages } from '../session/project-messages.js';
 import { deriveSessionMeta } from '../session/session-backend.js';
 import type { ContextCompactedReason, ContextManager } from '../types/context.js';
 import type { ErrorEnvelope } from '../types/error.js';
@@ -790,6 +790,16 @@ export class AgentRuntime {
         error: errorText(error),
       });
     }
+    // P2：run 结束关闭该 session 的写句柄，避免长进程每会话永久占用一个 FD。
+    // 下次 run/append 会重新打开并从文件尾恢复 seq。
+    try {
+      await this.eventLog.release?.(runState.session_id);
+    } catch (error) {
+      this.logger.warn('session event log release failed', {
+        session_id: runState.session_id,
+        error: errorText(error),
+      });
+    }
   }
 
   /**
@@ -1044,24 +1054,31 @@ export class AgentRuntime {
         );
       }
 
-      // 发布 LLM 响应事件（0.18：reasoning / usage / finish_reason 都进日志，
-      // 不再只存在于 Message；`llm.stream.chunk` 不落盘）
-      this.publishEvent({
-        type: 'llm.response',
+      // 0.18：reasoning 只写入会话事件日志（resume 需要），**不进入对外发布的事件**。
+      // ADR-077：默认不把思维链发给 UI / trace；TUI 仅在 includeReasoning=true 时
+      // 通过 `llm.stream.chunk` 的 reasoning_delta 展示。
+      const publishedLlmData = {
         run_id: runId,
-        data: {
+        session_id: sessionId,
+        content: response.content,
+        tool_calls: response.tool_calls,
+        finish_reason: response.finish_reason,
+        usage: response.usage,
+      };
+      this.publishEvent(
+        {
+          type: 'llm.response',
           run_id: runId,
-          session_id: sessionId,
-          content: response.content,
-          ...(response.reasoning_content !== undefined
-            ? { reasoning: response.reasoning_content }
-            : {}),
-          tool_calls: response.tool_calls,
-          finish_reason: response.finish_reason,
-          usage: response.usage,
+          data: publishedLlmData,
+          ts: Date.now(),
         },
-        ts: Date.now(),
-      });
+        {
+          persistData:
+            response.reasoning_content !== undefined
+              ? { ...publishedLlmData, reasoning: response.reasoning_content }
+              : publishedLlmData,
+        },
+      );
 
       // 执行 AfterLlm 钩子
       await this.hooks.run(HookType.AfterLlm, hookCtx);
@@ -1822,7 +1839,7 @@ export class AgentRuntime {
     if (!this.runStore) return;
 
     if (this.eventLog) await this.flushEventLogWrites();
-    const eventCursor = this.eventLog?.lastPersistedSeq(execution.sessionId);
+    const eventCursor = await this.currentEventCursor(execution.sessionId);
 
     const { runId, sessionId, createdAt, stats, branch } = execution;
     const checkpoint: RunCheckpoint = {
@@ -1840,6 +1857,8 @@ export class AgentRuntime {
       metadata: {
         tool_calls_count: stats.toolCallsCount,
         ...(branch !== undefined ? { branch } : {}),
+        // 0.18：checkpoint 不再带 messages；durable 列表的 preview 从这里取。
+        preview: deriveSessionMeta(this.context.messages).preview,
       },
       ...(this.agentId !== undefined ? { agent_id: this.agentId } : {}),
       ...(error !== undefined ? { error } : {}),
@@ -1890,11 +1909,44 @@ export class AgentRuntime {
       sessionState = await this.session.load(sessionId);
     }
 
+    const cached = sessionState?.messages?.length ? sessionState.messages : undefined;
+    const derived = cached !== undefined ? sessionState?.derived_upto_seq : undefined;
+    // 有缓存且知道派生态 → 只读增量；否则必须全量投影（旧 sqlite 行没有该列）。
+    const needFullProjection = cached === undefined || typeof derived !== 'number';
+
     let events: Awaited<ReturnType<SessionEventLogPort['read']>> = [];
     if (this.eventLog) {
       try {
         await this.eventLog.flush(sessionId);
-        events = await this.eventLog.read(sessionId);
+        events = await this.eventLog.read(
+          sessionId,
+          needFullProjection ? {} : { sinceSeq: derived },
+        );
+        // 一致性校验（P2）：checkpoint 游标 / session 派生游标不得超前于日志。
+        const lastSeq = await this.eventLog.lastSeq?.(sessionId);
+        const checkpointCursor = checkpoint.event_cursor;
+        if (
+          typeof checkpointCursor === 'number' &&
+          checkpointCursor > 0 &&
+          (lastSeq === undefined || lastSeq < checkpointCursor)
+        ) {
+          this.logger.warn('session event log is behind checkpoint', {
+            session_id: sessionId,
+            event_cursor: checkpointCursor,
+            last_seq: lastSeq,
+          });
+        }
+        if (
+          typeof derived === 'number' &&
+          derived > 0 &&
+          (lastSeq === undefined || lastSeq < derived)
+        ) {
+          this.logger.warn('session cache is ahead of event log', {
+            session_id: sessionId,
+            derived_upto_seq: derived,
+            last_seq: lastSeq,
+          });
+        }
       } catch (error) {
         this.logger.warn('session event log read failed during resume', {
           session_id: sessionId,
@@ -1903,15 +1955,16 @@ export class AgentRuntime {
       }
     }
 
-    if (sessionState?.messages?.length) {
-      const history = structuredClone(sessionState.messages);
-      const derived = sessionState.derived_upto_seq;
-      if (typeof derived === 'number' && events.length > 0) {
-        // 只重放缓存之后的增量：崩溃在工具轮中间时，tool 结果就在这段里。
-        const projected = projectMessages(events.filter((event) => event.seq > derived));
+    if (cached !== undefined) {
+      const history = structuredClone(cached);
+      const projected = projectMessages(events);
+      if (typeof derived === 'number') {
+        // 增量：tail 严格在缓存之后，直接追加；崩溃在工具轮中间时 tool 结果在这里。
         if (projected.length > 0) history.push(...projected);
+        return history;
       }
-      return history;
+      // 旧数据（无 derived）：全量投影可能与缓存重叠，按尾部重叠去重后追加。
+      return projected.length > 0 ? mergeHistoryProjection(history, projected) : history;
     }
 
     if (events.length > 0) {
@@ -1938,7 +1991,7 @@ export class AgentRuntime {
   private async updateSessionIndex(runState: RunState): Promise<void> {
     if (!this.eventLog?.updateIndex) return;
     await this.flushEventLogWrites();
-    const cursor = this.eventLog.lastPersistedSeq(runState.session_id);
+    const cursor = await this.currentEventCursor(runState.session_id);
     let stored: RunState | null = null;
     if (this.session) {
       try {
@@ -1961,13 +2014,25 @@ export class AgentRuntime {
     });
   }
 
+  /** 当前会话已落盘的事件游标（内存优先，否则读文件尾） */
+  private async currentEventCursor(sessionId: string): Promise<number | undefined> {
+    if (!this.eventLog) return undefined;
+    const inMemory = this.eventLog.lastPersistedSeq(sessionId);
+    if (inMemory !== undefined) return inMemory;
+    try {
+      return await this.eventLog.lastSeq?.(sessionId);
+    } catch {
+      return undefined;
+    }
+  }
+
   /** 保存 session 快照，并发布 `session.saved` */
   private async saveSession(runState: RunState): Promise<void> {
     if (!this.session) return;
     if (this.eventLog) {
       // 先等待已入队事件落盘，再记录缓存覆盖到的 seq；resume 只重放之后的增量。
       await this.flushEventLogWrites();
-      const cursor = this.eventLog.lastPersistedSeq(runState.session_id);
+      const cursor = await this.currentEventCursor(runState.session_id);
       if (cursor !== undefined) runState.derived_upto_seq = cursor;
     }
     await this.session.save(runState);
@@ -2010,7 +2075,7 @@ export class AgentRuntime {
    * 由于落盘是异步的，事件会在 microtask/IO 完成后到达订阅者；run 终态
    * 返回前会 `flushEventLogWrites()`，调用方 await run() 后事件历史完整。
    */
-  protected publishEvent(event: RunEvent): void {
+  protected publishEvent(event: RunEvent, options?: { persistData?: unknown }): void {
     const stamped =
       this.tenantId !== undefined && event.tenant_id === undefined
         ? { ...event, tenant_id: this.tenantId }
@@ -2025,7 +2090,7 @@ export class AgentRuntime {
       return;
     }
 
-    this.enqueuePersistedEvent(stamped, true);
+    this.enqueuePersistedEvent(stamped, true, options?.persistData);
   }
 
   /** harness / 插件直接发布的事件：只补落盘，不二次发布（避免回环） */
@@ -2055,7 +2120,7 @@ export class AgentRuntime {
    * 所有写入按调用顺序串行（日志内部按 session 排队），publish 在 append
    * 成功/失败后执行，因此对外可见顺序始终与 seq 顺序一致。
    */
-  private enqueuePersistedEvent(event: RunEvent, publish: boolean): void {
+  private enqueuePersistedEvent(event: RunEvent, publish: boolean, persistData?: unknown): void {
     const log = this.eventLog;
     if (!log) return;
     const sessionId = this.resolveEventSessionId(event);
@@ -2070,7 +2135,7 @@ export class AgentRuntime {
         run_id: event.run_id,
         type: event.type,
         ts: event.ts,
-        data: event.data,
+        data: persistData ?? event.data,
       })
       .then(
         () => {

@@ -24,6 +24,8 @@ interface SessionRow {
   updated_at: number | null;
   branch: string | null;
   tenant_id: string | null;
+  /** 0.18：messages 投影缓存覆盖到的事件 seq */
+  derived_upto_seq: number | null;
 }
 
 /** listRich 查询行形状（含派生列 message_count） */
@@ -91,7 +93,8 @@ export class SQLiteSessionBackend implements SessionBackend {
         preview TEXT,
         updated_at INTEGER,
         branch TEXT,
-        tenant_id TEXT
+        tenant_id TEXT,
+        derived_upto_seq INTEGER
       )
     `);
     // ALTER TABLE 无 IF NOT EXISTS，逐列 try/catch（已存在则静默）
@@ -100,6 +103,8 @@ export class SQLiteSessionBackend implements SessionBackend {
     this.ensureColumn('updated_at', 'INTEGER');
     this.ensureColumn('branch', 'TEXT');
     this.ensureColumn('tenant_id', 'TEXT');
+    // 0.18：旧库补列；NULL 表示该行没有派生游标（resume 走全量投影去重回退）
+    this.ensureColumn('derived_upto_seq', 'INTEGER');
   }
 
   /** 为旧库补列（列已存在时静默忽略） */
@@ -142,6 +147,9 @@ export class SQLiteSessionBackend implements SessionBackend {
       updated_at: row.updated_at || undefined,
       branch: row.branch || undefined,
       tenant_id: row.tenant_id || undefined,
+      ...(typeof row.derived_upto_seq === 'number' && Number.isFinite(row.derived_upto_seq)
+        ? { derived_upto_seq: row.derived_upto_seq }
+        : {}),
     };
   }
 
@@ -160,8 +168,8 @@ export class SQLiteSessionBackend implements SessionBackend {
 
     const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO sessions
-        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, preview, updated_at, branch, tenant_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (session_id, run_id, messages, started_at, completed_at, status, usage, error, title, preview, updated_at, branch, tenant_id, derived_upto_seq)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     stmt.run(
@@ -178,6 +186,7 @@ export class SQLiteSessionBackend implements SessionBackend {
       updatedAt,
       effective.branch || null,
       effective.tenant_id || null,
+      typeof effective.derived_upto_seq === 'number' ? effective.derived_upto_seq : null,
     );
   }
 

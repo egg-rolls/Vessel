@@ -177,6 +177,8 @@ describe('AgentRuntime checkpoint（C1）', () => {
     });
     // 0.18 C2：checkpoint 不再保存完整 messages；历史由 session + 事件日志重建。
     expect(first?.messages).toEqual([]);
+    // 0.18：durable 列表的 preview 来自 checkpoint metadata（不再读 messages）
+    expect(store.saves.at(-1)?.metadata?.preview).toBe('hello');
     expect(store.saves.at(-1)?.status).toBe('completed');
 
     const checkpointEvents = events.getHistory().filter((event) => event.type === 'run.checkpoint');

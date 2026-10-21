@@ -84,6 +84,7 @@ export {
   FileSessionBackend,
   MemoryRunStore,
   MemorySessionBackend,
+  mergeHistoryProjection,
   type ProjectableEvent,
   type PruneRunsOptions,
   type PruneRunsResult,

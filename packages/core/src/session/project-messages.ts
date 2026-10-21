@@ -209,3 +209,51 @@ export function projectMessages(events: Iterable<ProjectableEvent>): Message[] {
 
   return messages;
 }
+
+/** 消息内容签名（忽略 timestamp：事件时间与上下文写入时间会有毫秒差） */
+function messageSignature(message: Message): string {
+  return [
+    message.role,
+    message.content,
+    message.tool_call_id ?? '',
+    message.name ?? '',
+    (message.tool_calls ?? [])
+      .map((call) => `${call.id}:${call.function.name}:${call.function.arguments}`)
+      .join('|'),
+    message.compaction_summary === true ? '1' : '0',
+  ].join('\u0000');
+}
+
+/**
+ * 合并「session 缓存」与「事件全量投影」（0.18）。
+ *
+ * 用于旧数据没有 `derived_upto_seq`（无法只重放增量）时：
+ * 找到缓存尾部与投影头部的最大重叠 k，只追加 `projected.slice(k)`；
+ * 系统消息与压缩摘要只来自缓存（事件日志不含它们）。
+ *
+ * 无任何重叠时：缓存不短于投影 → 认为缓存更新，原样返回；否则拼接
+ * （宁可多一条也不丢历史）。
+ */
+export function mergeHistoryProjection(cached: Message[], projected: Message[]): Message[] {
+  if (projected.length === 0) return cached;
+  const cachedBody = cached.filter((message) => message.role !== 'system');
+  const max = Math.min(cachedBody.length, projected.length);
+  for (let overlap = max; overlap > 0; overlap -= 1) {
+    const tail = cachedBody.slice(cachedBody.length - overlap);
+    let matches = true;
+    for (let index = 0; index < overlap; index += 1) {
+      const cachedMessage = tail[index];
+      const projectedMessage = projected[index];
+      if (
+        cachedMessage === undefined ||
+        projectedMessage === undefined ||
+        messageSignature(cachedMessage) !== messageSignature(projectedMessage)
+      ) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches) return [...cached, ...projected.slice(overlap)];
+  }
+  return cachedBody.length >= projected.length ? cached : [...cached, ...projected];
+}
