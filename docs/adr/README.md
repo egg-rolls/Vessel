@@ -98,6 +98,7 @@
 | 081 | Host 对等与可序列化快照 | accepted | 2026-10-21 | runtime, host, scheduler, resume, snapshot, tools, display | [ADR-081-host-parity-and-serializable-snapshot.md](ADR-081-host-parity-and-serializable-snapshot.md) |
 | 082 | ask_user 注册策略与 Web 聊天渲染/可见性 | accepted | 2026-10-21 | ask-user, tools, gateway, cli, web, rendering, visibility, i18n | [ADR-082-ask-user-registration-and-web-chat.md](ADR-082-ask-user-registration-and-web-chat.md) |
 | 083 | 0.14.2 质量硬化——压缩摘要与 bash 凭据路径 | accepted | 2026-10-21 | compaction, context, provider, anthropic, thinking, tools, security, deny-list | [ADR-083-compaction-summary-and-bash-command-denylist.md](ADR-083-compaction-summary-and-bash-command-denylist.md) |
+| 084 | 0.14.3 限额可见性与 provider 错误/重试 | accepted | 2026-10-21 | limits, usage, events, error-envelope, observability, provider, retry, http | [ADR-084-limit-visibility-and-provider-errors.md](ADR-084-limit-visibility-and-provider-errors.md) |
 
 ## 编写约定
 

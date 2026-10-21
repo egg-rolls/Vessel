@@ -405,6 +405,8 @@ interface TerminationPolicy {
 }
 ```
 
+0.14.3（ADR-084）：使用量上限的判定拆成纯函数 `evaluateUsageLimits(stats, limits): LimitBlock | null`，返回首个命中的 `LimitBlock`（`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`）；`MemoryLimitChecker.checkLimits` 只是 `evaluateUsageLimits(...) === null`。终止策略（`maxIterations` / `maxRuntimeSeconds`）不属于 `LimitBlock`，仍由 `checkTermination` 判定。事件与 envelope 契约见 §35。
+
 ### 5.7 `Guardrail`（`types/guardrail.ts`）
 
 ```ts
@@ -2057,3 +2059,68 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - **边界判定**：命中后要求下一字符不是 `\w`、`.`、`-`，避免 `~/.sshd` 被当作 `~/.ssh`。
 - **不是沙箱**：只做归一化字符串匹配，不做 shell 解析。`cd` 后的相对路径、变量赋值 / 拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%`、子进程自行读取等仍可绕过；不能把它当隔离边界。
 - **自定义 `deny_paths` 不参与文本匹配**：任意子串会误伤普通命令。`read` / `edit` / `bash cwd` 的 realpath 边界（ADR-055）不变，本检查只覆盖命令文本里写出的路径。
+
+## 35. 0.14.3 限额可见性与 provider 错误/重试（已实现）
+
+> 状态：已合入 `release/0.14.3`（未发布）。决策见 [ADR-084](adr/ADR-084-limit-visibility-and-provider-errors.md)。
+
+### 35.1 `LimitBlock` 与 `limit.blocked`
+
+`LimitBlock` 是使用量限额命中的冻结形状，事件与 error envelope 共用：
+
+```ts
+type LimitBlockKey =
+  | 'request_limit'
+  | 'tool_calls_limit'
+  | 'input_tokens_limit'
+  | 'output_tokens_limit'
+  | 'total_cost_limit';
+
+interface LimitBlock {
+  scope: 'run';
+  key: LimitBlockKey;
+  current: number;
+  max: number;
+  source: string;      // 配置键路径，如 limits.inputTokensLimit
+  hint: string;        // 一句可执行建议
+  retryable: false;
+}
+```
+
+- 判定由 core 纯函数 `evaluateUsageLimits(stats, limits)` 完成，顺序固定 request → tool calls → input tokens → output tokens → total cost，返回首个命中项；`MemoryLimitChecker.checkLimits` 复用该函数。
+- 命中时 `AgentRuntime` **发布一次** `limit.blocked`（开放字符串事件名），data 为 `{ error_code: 'limit_blocked', ...LimitBlock, run_id, session_id }`，随后抛 `LimitExceededError`（`code: 'limit_blocked'`，`details` 为同一 `LimitBlock`）。错误文本保留前缀 `Usage limits exceeded: <key> (current N >= max M, <source>)`。
+- `run.failed` 保留原 `error` 文本，附加 `error_code: 'limit_blocked'` / `category: 'internal'` / `phase: 'run'` / `retryable: false` / `details: <LimitBlock>`；envelope 规则见 §33（只增不改）。
+- 终止策略（`maxIterations` / `maxRuntimeSeconds`）仍抛普通 `Error('Termination policy triggered: ...')`，不发布 `limit.blocked`，也不带结构化 `details`。
+
+### 35.2 默认限额与终止值
+
+| 配置键 | 默认值 | 含义 |
+|---|---|---|
+| `limits.requestLimit` | 100 | 单 run 的 LLM 请求次数上限 |
+| `limits.toolCallsLimit` | 50 | 单 run 的工具调用次数上限 |
+| `limits.inputTokensLimit` | 1,000,000 | 单 run 累计输入 token 上限（0.14.3 由 100,000 提高，与 `context.maxTokens` 对齐） |
+| `limits.outputTokensLimit` | 50,000 | 单 run 累计输出 token 上限 |
+| `limits.totalCostLimit` | 未设置 | 单 run 累计成本上限；缺省不限制 |
+| `termination.maxIterations` | 50 | 迭代上限（0.14.3 由 20 提高） |
+| `termination.maxRuntimeSeconds` | 300 | 单 run 墙钟超时 |
+
+- `termination.maxIterations` 与 `limits.requestLimit` 都按 `stats.requestCount` 计数，但语义与判定顺序不同：每轮先判终止策略（普通错误），再判使用量限额（`limit.blocked`）。默认 `maxIterations` 50 < `requestLimit` 100，因此默认配置下先触发终止策略；只有把 `maxIterations` 调高或把 `requestLimit` 调低时才会命中 `request_limit`。
+- 无新增配置键；tenant overlay 仍可覆盖 `limits` / `termination`。
+
+### 35.3 `ProviderHttpError`、`Retry-After` 与 402
+
+- core 导出 `ProviderHttpError`（`status` / `body` / `retryAfterMs?`）与 `parseRetryAfterMs(header)`。message 保持 `<Provider> API error: <status> - <body>`，不破坏既有日志与文本分类。
+- OpenAI 兼容与 Anthropic 的流式 / 非流式共 4 处非 2xx 全部改抛该错误；`retryAfterMs` 从 `retry-after` 头解析（纯数字按秒、HTTP date 按当前时间差，非法 / 空值返回 `undefined`）。
+- `run.failed` 的 envelope 从错误对象的 `status` 读取 `http_status`；`retryAfterMs` 不进入 envelope。
+- `provider-openai` / `provider-anthropic` 的 `withRetry` 分类：
+  - 可重试：429、500–599、网络类错误（`fetch failed` / `ECONNRESET` / `ETIMEDOUT` 等）。
+  - 不重试：402（额度耗尽）、其它 4xx、`AbortError`；流式已输出分片后也不重试。
+  - 429 且能读到建议值时，按 `retryAfterMs` / `retry_after_ms`（毫秒）→ `retryAfter` / `retry_after`（秒）→ `retry-after` 头的顺序取值，结果受 `retry_max_delay_ms` 截断、不加抖动。
+  - 无建议值或非 429 时保持原指数退避 + 抖动（`retry_base_delay_ms`、`retry_max_delay_ms`、`retry_jitter`）。
+
+### 35.4 已知限制（0.14.3）
+
+- 终止策略超限无结构化信号；如需区分，调用方只能匹配错误文本。
+- `run.failed` 不透出建议退避时间，`retryAfterMs` 只在 provider 适配层可见。
+- 第三方 provider 若既无 `status` 字段也不匹配 `... API error: <status>` 文本，仍按原有文本分类。
+- `Retry-After` 只影响 429；402 直接失败，不尝试等待后重试。
