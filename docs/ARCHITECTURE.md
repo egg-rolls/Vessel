@@ -897,7 +897,7 @@ vessel --feishu
 
 ## 13. Gateway 协议与 Web 控制台（0.1.0 起；0.3 扩展）
 
-`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。`apps/web` 是配套的浏览器控制台。
+`packages/serve` 是 **EventStream 的消费者**（与 TUI 的 StreamRenderer 同构）：把 runtime 事件广播为 WS / SSE，并提供 `/v1` 控制端点；**不改 core、不经过 PluginHost**。0.18 起不再有共享事件流：gateway 只读取注入的 `TenantEventHub`，由 hub 对各 tenant 的运行时流 fan-in（见 ADR-089）。`apps/web` 是配套的浏览器控制台。
 
 ### 13.1 协议 `vessel.gateway/1`
 

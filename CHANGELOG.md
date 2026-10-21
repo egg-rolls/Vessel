@@ -14,17 +14,20 @@
 - **Web 扁平会话流**：删除 `RunCard` / `RunSection`，实时内容直接平铺进同一条会话流（`StreamItems`）；权限 / ask 用 Composer 槽位三态互斥（`Composer` / `Permission` / `Ask`），多 pending 串行，槽位高度自适应；停止按钮在 Composer；排队为流末尾 notice；失败 / 取消内联 `stream-notice`。
 - **`vessel completion bash|zsh|fish|powershell`**：打印可直接 source / 加载的静态补全脚本；单一数据源 `src/completion-spec.ts`，registry 一致性由测试守护；不启动 runtime、不联网。
 - **`interactions.list`**：tenant 作用域只读 RPC，参数 `{session_id?, run_id?, status?, limit?}`；返回 `pending` / `answered` / `orphaned` 权限与内存 pending ask（`kind: 'ask'` + `questions`）；canonical RPC 44 → **45**。
+- **`TenantEventHub`**：`@vessel-agent/serve` 新增事件扇入面，各 tenant 用 `register(tenantId, stream)` 接入；hub 负责全局单调 `seq`、环形缓冲、`since` / `gap` 回放，并提供 raw 与脱敏后两条订阅。hub 不暴露 `publish`。
 
 ### Changed
 
+- **BREAKING（嵌入方）**：删除共享事件流。`GatewayOptions.events` / `LocalRpcOptions.events` 改为 `hub: TenantEventHub`（可用 `createGatewayEventHub({ streams })` 构造）；`RunEngineOptions.events` 删除，`tenantEventsFor` 必填。`maxHistory` 移到 hub 选项。协议 / 帧 / `events.subscribe` / `events.list` / `seq` / 跨节点去重语义不变。
 - **TUI**：用户输入使用暗金背景；渲染高度不变量；live 仍走内存 `EventStream`，历史走事件日志。
-- **Web**：滚动容器不再压缩流内块（`.conversation-scroll > * { flex: 0 0 auto }`）；权限 / ask 不再使用全局遮罩。
+- **Web**：滚动容器不再压缩流内块（`.conversation-scroll > * { flex: 0 0 auto }`）；权限 / ask 不再使用全局遮罩；提问不再有过期字段，`AskUserRequest.requestedAt` 用于排序（与权限混排），`expiresAt` / `INTERACTION_TTL_MS` / 倒计时 / `now` prop 链删除。
 - **CI / 测试**：Windows 进程探测 3s → 15s；headless stdin `await write/end` + 30s；workflow cancel 改为有界等待。
-- **`ask_user` 默认无限等待**：取消 120s 自动超时（`createAskUserTool()` 不再传超时），等待绑定 run 的 `AbortSignal`，abort / cancel 返回明确的取消文案；显式 `timeout` 只保留给测试与调用方。Web / TUI 提问卡片去掉倒计时与过期提示，Web 的 `expiresAt` 固定为 `Infinity`（不再自动移除）。
+- **`ask_user` 默认无限等待**：取消 120s 自动超时（`createAskUserTool()` 不再传超时），等待绑定 run 的 `AbortSignal`，abort / cancel 返回明确的取消文案；显式 `timeout` 只保留给测试与调用方。Web / TUI 提问卡片去掉倒计时与过期提示。
+- **交互 pending 只由状态收口**：`interactionTtlMs` / `RunEngine.sweep()` / gateway 30s 定时器删除；权限与 ask 的 pending 只由应答 / run 终态 / abort 清理。
 
 ### Fixed
 
-- **交互应答投递**：`permission.respond` / `ask.respond` 之前只发布到 gateway 共享流，而 tenant 的 runtime / 工具等待的是各自的 runtime 事件流，导致用户点“允许”或提交回答后模型只收到超时结果。现在网关通过 `tenantEventsFor` 解析归属 tenant，应答直接发布到该 tenant 的运行时流（缺失时回退共享流，不双发）；tenant→shared 桥继续把事件转发给 Web。
+- **交互应答投递**：`permission.respond` / `ask.respond` 之前只发布到 gateway 共享流，而 tenant 的 runtime / 工具等待的是各自的 runtime 事件流，导致用户点“允许”或提交回答后模型只收到超时结果。现在 gateway 通过 `TenantEventHub` 拿到归属 tenant 的运行时流，应答只发布到那里（流缺失返回 `run_ended`，不回退共享流）；Web 仍通过 hub 的广播看到事件。
 - `health.get`、`/v1/health` 与 `hello` 的 `node` 字段按 tenant 隔离（0.17.1 线）。
 - `SessionEventLog` LRU 淘汰竞态；derived 覆盖、read 排序、connect 关联；D2 跨模块内部 import。
 - `serve` durable preview 优先使用 checkpoint `metadata.preview`。
