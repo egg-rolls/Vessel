@@ -61,7 +61,7 @@ describe('MemoryContextManager', () => {
   });
 
   it('summarizes instead of silently slicing when maxMessages is exceeded', () => {
-    const contextWithLimit = new MemoryContextManager({ maxMessages: 5 });
+    const contextWithLimit = new MemoryContextManager({ maxMessages: 5, maxTokens: 20 });
 
     for (let i = 0; i < 10; i++) {
       contextWithLimit.add({
@@ -116,6 +116,7 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
   it('falls back to the placeholder when the summarizer fails or returns empty', async () => {
     const failing = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => {
         throw new Error('provider down');
       },
@@ -126,6 +127,7 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
 
     const empty = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => '   ',
     });
     seed(empty);
@@ -134,7 +136,7 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
   });
 
   it('keeps the placeholder path when no summarizer is configured', async () => {
-    const context = new MemoryContextManager({ autoCompact: false });
+    const context = new MemoryContextManager({ autoCompact: false, maxTokens: 20 });
     seed(context);
 
     expect(await context.compactAsync()).toBeGreaterThan(0);
@@ -151,6 +153,8 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
       },
     });
     seed(context);
+    // 默认保留预算 = 1M × 0.3 = 300k；单条 300k token 的消息才能把它顶出去。
+    context.add({ role: 'user', content: 'x'.repeat(1_200_000) });
 
     await context.compactAsync();
     expect(budgets).toEqual([1_000_000]);
@@ -158,8 +162,10 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
     // 默认阈值 0.8：800k 以下不触发，超过才压缩
     context.updateRealTokens(799_999);
     expect(await context.autoCompactAsync()).toBe(0);
+    context.add({ role: 'user', content: 'y'.repeat(1_200_000) });
     context.updateRealTokens(800_001);
     expect(await context.autoCompactAsync()).toBeGreaterThan(0);
+    expect(budgets).toEqual([1_000_000, 1_000_000]);
   });
 
   it('autoCompactAsync only runs above the threshold', async () => {
@@ -203,6 +209,7 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
     });
     const context = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => {
         await gate;
         return 'SESSION A SUMMARY';
@@ -230,6 +237,7 @@ describe('MemoryContextManager summarizer (0.6.1 E3)', () => {
     });
     const context = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => {
         await gate;
         return 'LATE SUMMARY';
@@ -289,6 +297,7 @@ describe('MemoryContextManager long sessions (0.4 C2)', () => {
   it('bounds a 10k message session with summaries instead of hard slicing', () => {
     const context = new MemoryContextManager({
       maxMessages: 100,
+      maxTokens: 400,
       autoCompact: false,
     });
 
@@ -330,6 +339,7 @@ describe('MemoryContextManager token budget (0.10 R1-10)', () => {
     const summarized: string[] = [];
     const context = new MemoryContextManager({
       maxMessages: 100,
+      maxTokens: 400,
       summarizer: async (messages) => {
         summarized.push(...messages.map((message) => message.content));
         return 'SUMMARY: early context retained';
@@ -358,6 +368,7 @@ describe('MemoryContextManager token budget (0.10 R1-10)', () => {
     let calls = 0;
     const context = new MemoryContextManager({
       maxMessages: 5,
+      maxTokens: 20,
       autoCompact: false,
       summarizer: async () => {
         calls += 1;
@@ -404,6 +415,7 @@ describe('MemoryContextManager token budget (0.10 R1-10)', () => {
     const compactions: Array<{ removed: number; remaining: number }> = [];
     const context = new MemoryContextManager({
       maxMessages: 5,
+      maxTokens: 20,
       autoCompact: false,
       onCompact: (removed, remaining) => compactions.push({ removed, remaining }),
     });
@@ -465,6 +477,7 @@ describe('MemoryContextManager compaction summary shape (0.14.2 F1)', () => {
   it('keeps the summary out of the assistant role so thinking providers accept the request', async () => {
     const context = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => 'SUMMARY',
     });
     context.add({ role: 'system', content: 'SYSTEM PROMPT' });
@@ -485,6 +498,7 @@ describe('MemoryContextManager compaction summary shape (0.14.2 F1)', () => {
     let round = 0;
     const context = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => {
         round += 1;
         return `SUMMARY ${round}`;
@@ -505,6 +519,7 @@ describe('MemoryContextManager compaction summary shape (0.14.2 F1)', () => {
   it('keeps reasoning_content on an assistant(tool_calls) retained by compaction', async () => {
     const context = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => 'SUMMARY',
     });
     seedUsers(context, 0, 6);
@@ -526,6 +541,7 @@ describe('MemoryContextManager compaction summary shape (0.14.2 F1)', () => {
   it('keeps retained tool results paired with their assistant tool_calls after compaction', async () => {
     const context = new MemoryContextManager({
       autoCompact: false,
+      maxTokens: 20,
       summarizer: async () => 'SUMMARY',
     });
     seedUsers(context, 0, 6);
@@ -550,5 +566,105 @@ describe('MemoryContextManager compaction summary shape (0.14.2 F1)', () => {
     for (const message of messages.filter((m) => m.role === 'tool')) {
       expect(calledIds.has(message.tool_call_id ?? '')).toBe(true);
     }
+  });
+});
+
+describe('MemoryContextManager retention by token budget (0.14.4)', () => {
+  it('keeps the retained tail within maxTokens × 0.3 instead of a fixed message count', async () => {
+    const context = new MemoryContextManager({
+      maxTokens: 100,
+      autoCompact: false,
+      summarizer: async () => 'SUMMARY',
+    });
+    context.add({ role: 'user', content: 'o'.repeat(400) }); // 100 tokens, older than the tail
+    for (const char of ['a', 'b', 'c', 'd', 'e', 'f']) {
+      context.add({ role: 'user', content: char.repeat(40) }); // 10 tokens each
+    }
+
+    await context.compactAsync();
+
+    const retained = context.messages.filter((message) => message.role !== 'system');
+    expect(retained.map((message) => message.content)).toEqual([
+      'd'.repeat(40),
+      'e'.repeat(40),
+      'f'.repeat(40),
+    ]);
+    expect(estimateMessagesTokens(retained)).toBeLessThanOrEqual(30);
+  });
+
+  it('retains the two newest messages even when the newest alone exceeds the budget', async () => {
+    const context = new MemoryContextManager({
+      maxTokens: 100,
+      autoCompact: false,
+      summarizer: async () => 'SUMMARY',
+    });
+    context.add({ role: 'user', content: 'o'.repeat(40) });
+    context.add({ role: 'user', content: 'x'.repeat(400) }); // 100 tokens > 30 budget
+    context.add({ role: 'user', content: 'y'.repeat(40) }); // 10 tokens
+
+    await context.compactAsync();
+
+    const retained = context.messages.filter((message) => message.role !== 'system');
+    expect(retained.map((message) => message.content)).toEqual(['x'.repeat(400), 'y'.repeat(40)]);
+  });
+
+  it('moves a tool boundary back to its assistant(tool_calls) so no orphan tool survives', async () => {
+    const context = new MemoryContextManager({
+      maxTokens: 100,
+      autoCompact: false,
+      summarizer: async () => 'SUMMARY',
+    });
+    context.add({ role: 'user', content: 'o'.repeat(400) }); // summarized
+    context.add({
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'call-1',
+          type: 'function',
+          function: { name: 'bash', arguments: 'a'.repeat(40) },
+        },
+      ],
+    });
+    context.add({ role: 'tool', tool_call_id: 'call-1', content: 'RESULT' });
+    context.add({ role: 'user', content: 'd'.repeat(40) });
+    context.add({ role: 'assistant', content: 'e'.repeat(40) });
+
+    await context.compactAsync();
+
+    const messages = context.messages;
+    const toolIndex = messages.findIndex((message) => message.role === 'tool');
+    expect(toolIndex).toBeGreaterThan(0);
+    expect(messages[toolIndex - 1]?.role).toBe('assistant');
+    expect(messages[toolIndex - 1]?.tool_calls?.[0]?.id).toBe('call-1');
+    const calledIds = new Set(
+      messages.flatMap((message) => (message.tool_calls ?? []).map((call) => call.id)),
+    );
+    for (const message of messages.filter((m) => m.role === 'tool')) {
+      expect(calledIds.has(message.tool_call_id ?? '')).toBe(true);
+    }
+  });
+
+  it('does not compact when every non-system message fits the retention budget', async () => {
+    let calls = 0;
+    const context = new MemoryContextManager({
+      maxTokens: 100,
+      autoCompact: false,
+      summarizer: async () => {
+        calls += 1;
+        return 'SUMMARY';
+      },
+    });
+    for (const content of ['a'.repeat(20), 'b'.repeat(20), 'c'.repeat(20)]) {
+      context.add({ role: 'user', content });
+    }
+
+    expect(await context.compactAsync()).toBe(0);
+    expect(calls).toBe(0);
+    expect(context.messages.map((message) => message.content)).toEqual([
+      'a'.repeat(20),
+      'b'.repeat(20),
+      'c'.repeat(20),
+    ]);
   });
 });

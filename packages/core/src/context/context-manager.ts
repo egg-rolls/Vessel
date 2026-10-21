@@ -128,7 +128,8 @@ export class MemoryContextManager implements ContextManager {
   }
 
   /**
-   * 压缩上下文。保留 system + 最近 ~30% 消息，移除中间并注入摘要。
+   * 压缩上下文。保留 system + 最近的非 system 消息（token 预算 maxTokens × 0.3），
+   * 移除中间并注入摘要。
    * @returns 本次移除的消息数（0 = 未压缩）
    */
   compact(): number {
@@ -212,19 +213,56 @@ export class MemoryContextManager implements ContextManager {
     return this.sessionMessages.has(sessionId);
   }
 
-  /** 计算本次压缩范围：保留 system + 最近 ~30% 非 system 消息 */
+  /**
+   * 计算本次压缩范围：system 始终保留；其余按 token 预算（maxTokens × 0.3）
+   * 从最新消息向前保留，至少 2 条，且保留区不以孤立 tool 消息开头。
+   */
   private planCompaction(): CompactionPlan | null {
     const sessionId = this.currentSessionId;
     const msgs = this.sessionMessages.get(sessionId) || [];
-    if (msgs.length <= 2) return null;
-
     const nonSystem = msgs.filter((m) => m.role !== 'system');
-    const keepCount = Math.max(2, Math.floor(nonSystem.length * 0.3));
-    if (nonSystem.length <= keepCount) return null;
+    // 非 system 少于 3 条时没有可摘要消息（至少保留 2 条）。
+    if (nonSystem.length < 3) return null;
 
+    const budget = (this.config.maxTokens ?? 1_000_000) * 0.3;
+    let keepStart = nonSystem.length - 1;
+    let keptTokens = 0;
+    let kept = 0;
+    for (let i = nonSystem.length - 1; i >= 0; i -= 1) {
+      const message = nonSystem[i];
+      if (!message) break;
+      const cost = estimateMessageTokens(message);
+      // 超出预算即停止；最新 2 条无论如何保留。
+      if (kept >= 2 && keptTokens + cost > budget) break;
+      keptTokens += cost;
+      kept += 1;
+      keepStart = i;
+    }
+
+    // 孤立 tool 消息会因缺少对应的 assistant(tool_calls) 被 provider 拒绝，
+    // 把边界回退到该 tool 的 assistant，直到边界不再是 tool。
+    while (keepStart > 0 && nonSystem[keepStart]?.role === 'tool') {
+      const toolCallId = nonSystem[keepStart]?.tool_call_id;
+      let ownerIndex = -1;
+      for (let i = keepStart - 1; i >= 0; i -= 1) {
+        const candidate = nonSystem[i];
+        if (
+          candidate?.role === 'assistant' &&
+          (candidate.tool_calls ?? []).some((call) => call.id === toolCallId)
+        ) {
+          ownerIndex = i;
+          break;
+        }
+      }
+      // 找不到 owner 说明历史本身不完整，继续前移也无法配对。
+      if (ownerIndex < 0) break;
+      keepStart = ownerIndex;
+    }
+
+    if (keepStart === 0) return null;
     return {
       sessionId,
-      toSummarize: nonSystem.slice(0, nonSystem.length - keepCount),
+      toSummarize: nonSystem.slice(0, keepStart),
     };
   }
 
