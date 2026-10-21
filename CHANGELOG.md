@@ -3,6 +3,51 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.17.0] - 2026-10-21
+
+> 0.17.0（基于 `release/0.17.0`，未发布）：AgentService 成为唯一的成员能力层并独立成包（`packages/agent`）；模型工具面收敛到内置 `agent`（`new` / `send` / `close` / `list`，支持 batch），REPL 作为 owner 暴露 loopback 控制端点，CLI 新增 `vessel agent new|send|close|list`；删除 `team_*` / `delegate_task` 模型工具、`team` / `delegate-task` 插件与 `team.*` / `delegate.*` 配置。未 tag、未 `npm publish`、未合并 `main`。
+
+### Added
+
+- **`packages/agent`（AgentService）**：`new` / `send` / `close` / `list` 与 `subscribe`；`send` 入队即返回，同一成员同时只有一轮在跑，其余消息 FIFO 排队。成员与 session 1:1（`session_id === id`），注册表记录 `owner` / `visibility` / `state` / `current_tool` / `last_seen` / `usage`；状态机 `created` → `idle` ↔ `running` → `waiting_permission` / `completed` / `failed` / `cancelled` → `closed`，`stale` 表示进程 / owner 不可达。
+- **快照与恢复**：状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，版本 1）；只存成员状态，不存消息队列。重启后非终态成员一律恢复为 `stale`，终态保持原值；未处理消息丢失。
+- **owner 外部队列**：REPL 主 agent 通过 `attachOwner` 注册为 external owner，其消息队列只由父 turn 的 `BeforeLlm` 调 `takeMessages(ownerId)` 排空；`pump` 永不执行 owner 队列。注入消息固定 `role: 'user'`、`name: 'agent:<id>'`、`timestamp` 取原消息时间。
+- **内置 `agent` 工具**：唯一模型 schema，动作 `new` / `send` / `close` / `list`；`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回 `{results:[...]}`，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。**不提供** `wait` / `inbox` / `status` / `cancel` 模型工具。
+- **REPL owner 控制端点**：交互 REPL 启动 AgentService 后监听 `127.0.0.1:0`，记录原子写入 `<dataDir>/agent-owner.json`（`0600`，`{pid,host,port,token,started_at,tenant_id}`）；只接受 loopback Host 与 Bearer token，方法 `agent.new` / `agent.send` / `agent.close` / `agent.list`。
+- **`vessel agent` CLI**：`vessel agent new <name?> | send <member> <content> | close <member...> | list [--json]`，经 owner 记录 attach；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。
+- **Web 兜底操作面**：Composer 上方显示当前会话内未匹配到 `RunCard` 的待处理权限 / ask；其他会话或无 `sessionId` 的请求进入顶部非模态面板，复用同一张 `PermissionCard` / `AskCard`，不恢复全局遮罩。面包屑显示 `agent` / `run` / `session` 短 id。
+- **Web 流式占位**：`RunCard` 在运行中显示 `liveText` / `liveReasoning`，尚无内容时显示运行中空态占位，不再看起来像空卡片。
+
+### Changed
+
+- **工具面**：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 为 4（+`agent`）；交互 REPL / serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 为 5。`delegate_task` 与 `team_*` 不再注册。
+- **装配**：`agent.enabled` 是唯一开关（缺省 `false`），交互 / headless 一致；启用后注册内置 `agent` 工具、启动 AgentService 并尝试启动 owner 端点。同一 `dataDir` 已有 owner 时第二个 REPL 仍可用进程内工具，CLI attach 保持原 owner。
+- **配置迁移**：成员 `permissionMode` / `readOnlyTools` / `limits` / `termination` 从 `delegate.*` 移入 `agent.*`；`agent.ownerId` 指定 root owner（默认 `main`）。
+- **tui**：`/agents` 继续只读派生（`ctx.events.getHistory()`），成员事件来自 AgentService（`agent.spawned` / `agent.turn.*` / `agent.closed`）；有效限额改读 `config.agent.*`。
+- **`/v1/team/*` 传输协议**：协议文件与 gateway 方法保留，但 0.17 没有生产装配，不再有模型工具入口；后续 Phase B 可复用。
+
+### Removed
+
+- 删除 `plugins/tools/team` 与 `plugins/tools/delegate-task` 及其测试；删除 `team_*`（spawn / send / inbox / status / cancel）与 `delegate_task` 模型工具。
+- 删除 `TeamConfig` / `DelegateConfig`、`team.*` / `delegate.*` 配置键、team / delegate 装配与 `team-wiring` / 工厂插件路径；tenant overlay 不再接受 `team` / `delegate` 块。
+- 删除 `agent-reply-injection`（旧 owner inbox 轮询路径）与 `team.legacyTools` 兼容开关。
+
+### Fixed
+
+- external owner 的消息不再被 `pump` 消费：成员回复只经父 turn 的 `BeforeLlm` 注入，避免 owner 队列被成员 runtime 抢走。
+- bridge 权限请求补 `request_id` 别名，父窗口可按同一 `requestId` 应答 `permission.respond` / `ask.respond`。
+- Web 权限 / ask 请求没有匹配 `RunCard` 时不再无处可操作；运行中的空 `RunCard` 不再显示为空白。
+
+### Known limitations
+
+- Phase B 未做：Gateway 作为 owner 或 attach 代理、Web 跨 owner 转发、durable outbox、跨节点写路径。
+- CLI 依赖本机 REPL owner；没有 REPL 进程时 `vessel agent ...` 返回 `agent_owner_unavailable`，不会自动启动 gateway。
+- 消息队列只在内存：进程重启后未处理消息丢失，非终态成员恢复为 `stale`，不能继续 `send`。
+- `agent.followReplies` 仍只是配置 / 事件字段：回复在父会话下一次 `BeforeLlm` 时注入，不会自动开启新的父 turn。
+- `close` 只支持本机成员；跨节点释放返回错误。
+- `/v1/team/*` 协议保留但没有生产装配，不代表 team 控制面仍可用。
+- canonical RPC 仍为 **44**，本版本不新增方法。
+
 ## [0.16.0] - 2026-10-21
 
 > 0.16.0（基于 `release/0.16.0`，未发布）：统一 agent 工具 Phase A——模型工具面收敛到单个 `agent`（`spawn` / `send` / `close`），session 即成员，成员回复经 `BeforeLlm` 注入父 turn，权限请求桥接到父窗口；`team_*` 与 `delegate_task` 兼容保留一个版本。未 tag、未 `npm publish`、未合并 `main`。

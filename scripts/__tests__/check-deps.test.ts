@@ -198,7 +198,7 @@ describe('D5: non-core packages do not reach into core internals', () => {
   it('fails for @vessel-agent/core internal paths', async () => {
     await withFixture(
       {
-        'plugins/tools/team/src/x.ts': "import { run } from '@vessel-agent/core/src/index.js';\n",
+        'packages/agent/src/x.ts': "import { run } from '@vessel-agent/core/src/index.js';\n",
       },
       async (root) => {
         expect(rules(await checkDependencies(root))).toContain('D5');
@@ -209,7 +209,7 @@ describe('D5: non-core packages do not reach into core internals', () => {
   it('allows the public package entry', async () => {
     await withFixture(
       {
-        'plugins/tools/team/src/x.ts': "import { AgentRuntime } from '@vessel-agent/core';\n",
+        'packages/agent/src/x.ts': "import { AgentRuntime } from '@vessel-agent/core';\n",
       },
       async (root) => {
         expect(await checkDependencies(root)).toEqual([]);

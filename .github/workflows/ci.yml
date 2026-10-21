@@ -154,10 +154,8 @@ jobs:
           bun test
           src/__tests__/remote-transport-0.6.test.ts
           src/__tests__/remote-transport-e2e-0.6.test.ts
-          src/__tests__/team-wiring.test.ts
           src/__tests__/transport-factory.test.ts
           packages/core/__tests__/transport-port-remote.test.ts
-          plugins/tools/team/__tests__/routing.test.ts
           packages/serve/__tests__/gateway.team-remote.test.ts
 
   # ── 0.6 TLS / CA 专项（ubuntu；非 required）────────

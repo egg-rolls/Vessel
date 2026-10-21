@@ -27,7 +27,7 @@
 - **durable 端点**：`/v1/durable/*` 接收 token principal；list 只返回当前 tenant 的 run；非 default tenant 且没有 per-tenant store 时返回 `forbidden`；resume 要求 `write` 及以上。
 - **team REST 角色**：复用 `ROLE_RANK`；`GET /v1/team/*` 允许 `read`，spawn / send / cancel / close 要求 `write` / `admin`。default tenant 的只读 token 不再能变更 team。
 - **跨节点事件**：回灌时丢弃 `event.node_id === 本机 node_id` 的帧；双向 / 网状拓扑不再回声放大。静态节点表仍建议按单向父端订阅配置。
-- **远端 spawn**：复用 `buildChildHost`（剔除 `team_*`），并传入 `memberLimits` / `memberTermination`，与本机 spawn 的隔离和限额一致。
+- **远端 spawn（0.6.1 行为，已随 0.17 删除）**：当时复用 `buildChildHost`（剔除 `team_*`）并传入成员限额；0.17 起成员生命周期只走 `packages/agent`，跨节点写路径留待 Phase B。
 
 ## 2. 证书与 CA
 
@@ -68,7 +68,7 @@ connect:
 
 ## 3. 两机配置
 
-以下示例：`node-a` 是父端（跑 team / 发起跨节点调度），`node-b` 是远端执行节点。
+以下示例：`node-a` 是父端（配置静态节点表并订阅远端事件），`node-b` 是远端执行节点。跨节点 team 模型工具已在 0.17 删除，本节的 team 仅是保留的传输协议。
 
 ### 3.1 node-b：暴露 TLS gateway
 
@@ -89,9 +89,6 @@ serve:
   # 只有独立前端需要；同源访问可省略
   allowed_origins:
     - https://console.example.com
-
-team:
-  enabled: true
 ```
 
 ```bash
@@ -106,7 +103,7 @@ bun run src/cli.ts --serve 8642 --serve-host 0.0.0.0 --allow-remote \
 
 - `host.node_id` 必须唯一，且与父端 `transport.nodes[].id` 一致。
 - 非回环必须 `allow_remote: true` + token + TLS；否则启动失败。
-- 跨节点 team 的 token 必须映射到 **default tenant** 或 **admin**；非 default tenant 的 token 调用 team 控制面返回 403。
+- 保留的跨节点 team 控制面（`/v1/team/*`）的 token 必须映射到 **default tenant** 或 **admin**；非 default tenant 的 token 调用返回 403。0.17 没有 team 生产装配，模型侧不存在 `team_*` 工具。
 - 多租户部署可用 `serve.tokens`：
 
 ```yaml
@@ -138,15 +135,12 @@ bun run src/cli.ts --connect https://node-b.example.com:8642 \
 - admin 可用 `--tenant <id>` 显式覆盖；非 admin 指定其它 tenant 会被拒绝。
 - connect 模式不获取本地 tenant 写锁，也不写本地 store / trace。
 
-### 3.3 node-a：跨节点 transport 与 team
+### 3.3 node-a：跨节点 transport
 
 ```yaml
 # ~/.vessel/config.yaml（node-a）
 host:
   node_id: node-a
-
-team:
-  enabled: true
 
 transport:
   kind: remote
@@ -157,23 +151,8 @@ transport:
       ca_file: /etc/vessel/ca.pem
 ```
 
-```bash
-export NODE_B_TOKEN='<node-b-token>'
-VESSEL_MOCK=1 bun run src/cli.ts   # team_* 工具在 team.enabled: true 时注册
-```
-
-工具用法（5 个 `team_*` 只增加可选 `node`，协议不变）：
-
-```text
-team_spawn  { "node": "node-b", "name": "worker" }
-team_status { "node": "node-b" }                  # 列出远端节点成员
-team_status { "member": "node-b:worker" }         # 查看远端成员
-team_send   { "to": "node-b:worker", "kind": "task", "content": "..." }
-team_inbox  { "member": "node-b:owner", "cursor": "..." }
-team_cancel { "member": "node-b:worker" }
-```
-
-- 成员地址支持 `node:agent`；不带 node 前缀时按本机处理。
+- `transport.kind: remote` + 静态 `transport.nodes[]` 仍用于跨节点事件回灌与节点健康。
+- **跨节点 team 工具已删除**：0.17 没有 `team_*` / `delegate_task` 模型工具，也没有 team 生产装配；`/v1/team/*` 传输协议文件与 gateway 方法保留，供 Phase B 复用。本文不再提供 team 工具调用示例。
 - 节点心跳：`GET /v1/team/agents`（失败回退 `/health`），默认 5s；状态 `healthy` / `unreachable`，展示 TTL 15s。
 - 跨节点事件：父端订阅 `wss://<node>/v1/events`，按 `node:incarnation:run_id:seq` 去重后回灌（无 `run_id` 写 `-`；对端 `incarnation` 变化或 seq 回退只清该来源节点的键）。`seq` 按 `(node_id, run_id)` 解释，没有全局序；去重集合只在进程内，不跨重启。
 
@@ -242,16 +221,13 @@ gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由 gateway 按
 | mixed content | HTTPS 页面连 `http://` gateway | gateway 改用 HTTPS |
 | 连接成功但不断 `gap` | 事件缓冲被截断（默认 10000） | 客户端按 `to_seq` 带 `since` 重连；降低事件速率或调用方自建持久化 |
 | `peer_unreachable` / `timeout` | 节点不可达、URL / 防火墙错误 | `curl --cacert ca.pem https://<node>/health`；检查 `transport.nodes[].url` 与端口 |
-| `peer_not_found` | 目标 node id 不在静态表 | 检查 `transport.nodes[].id` 与 `node:agent` 前缀 |
-| `no_spawn` | 远端 gateway 没有 spawn 处理器 | 远端 `team.enabled: true` 且 gateway 装配了 team |
-| `/health` 显示 healthy 但 team 调用失败 | `/health` 只是兜底探针 | 以 `/v1/team/agents` 与实际调用为准 |
-| spawn 返回首次结果 | `request_id` 进程内去重（上限 1000） | 每次新 spawn 用新的 `request_id`；去重不跨重启 |
+| `peer_not_found` | 目标 node id 不在静态表 | 检查 `transport.nodes[].id` |
 
 ## 6. 已知限制
 
 - 无全局事件序、无分布式锁、无跨机 durable、无跨机 workflow 编排；workflow / 飞书控制面仍只走 default tenant。
 - `request_id` 去重是进程内 Map，不跨重启；同 key 不同参数返回首次结果。
-- `spawn` 不自动重试；`status` / `inbox` 超时或不可达最多幂等重试一次；结果回投失败只发 `team.transport.error`。
+- 保留的 team 传输（`/v1/team/*`）在 0.17 没有生产装配，也没有模型工具入口；原 spawn / status / inbox 语义与重试规则留待 Phase B。
 - `transport.nodes[]` 是静态表；0.6 不做自动发现。
 - 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
 - 监听 `0.0.0.0` 时 banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；实际访问需换成真实 IP / 域名（并匹配证书 SAN）。
@@ -269,8 +245,7 @@ VESSEL_CONNECT_TOKEN='<token>' bun run src/cli.ts \
   --connect https://node-b.example.com:8642 \
   --ca /etc/vessel/ca.pem --run "hello"
 
-# 3. 跨节点 team（需要 team.enabled: true 与 transport.kind: remote）
-#    在 REPL 中执行 team_status { "node": "node-b" }
+# 3. 跨节点 team 工具在 0.17 已删除；transport.kind: remote 仍可验证事件回灌与节点健康
 
 # 4. 离线门禁
 bun test src/__tests__/connect-e2e-0.6.test.ts

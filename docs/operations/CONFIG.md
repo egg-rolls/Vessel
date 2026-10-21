@@ -70,8 +70,8 @@ serve:
 ```
 
 tenant overlay 允许的顶层块：`provider / agent / context / limits / termination /
-session / plugins / workflow / evals / feishu / tools / mcp_servers / delegate /
-team / host / scheduler / transport / quota`。禁止 `data_dir / trace / serve /
+session / plugins / workflow / evals / feishu / tools / mcp_servers /
+host / scheduler / transport / quota`。禁止 `data_dir / trace / serve /
 tenant / update`；未知块直接报错。合并规则：对象深合并、数组整体替换、map
 （`mcp_servers`）按 key 合并、`null` 拒绝。`plugins` 是**数组**，按整层替换，
 不按 `name` 合并。
@@ -243,22 +243,7 @@ termination:
 - **tool 配对**：保留区第一条是 `tool` 时，边界回退到对应的 `assistant(tool_calls)`，避免压缩后出现孤立 `tool`。配对完整性优先于条数上限，保留数可能略超 `max_messages`。
 - **摘要输入**：`assistant` 的工具调用渲染为 `[tool_call:<name>] <arguments>`，`tool` 结果渲染为 `[tool:<id>] <content>`；单条超过 12,000 字符截断，`reasoning_content` 不进入摘要。输入按 `min(48_000, max(2_000, floor(max_tokens / 8)))` 估算 token 分块；单块一次摘要，多块逐块 partial 后再 reduce。某块失败只写占位标记并继续，全部失败时回退 `[Auto Compact: N older messages summarized. Continuing...]`，不中断 run。
 
-### 2.10 delegate 与孙 agent（0.15，ADR-086）
-
-```yaml
-delegate:
-  enabled: true
-  max_depth: 3
-  allow_nested: false       # 子 agent 是否可继续 delegate
-  max_descendants: 16       # 单次根委派树的后代上限（正整数）
-```
-
-- **`delegate.allow_nested`**（默认 `false`）：`false` 时 child host 不注册 `delegate_task`，孙 agent 不可用；显式 `true` 才为 child 创建独立 delegate 实例。它只是 opt-in 开关，不会放大权限或限额。
-- **`delegate.max_descendants`**（默认 `16`，必须为正整数）：按**单次根委派树**计数，根 delegate 本身不计入；达到上限后新的嵌套委派返回错误文本。只有 `allow_nested: true` 时生效。
-- **仍然禁止的情况**：`delegate.permissionMode: 'deny'`，或显式把 `delegate_task` 写进 `delegate.disallowed`；这两种情况下即使 `allow_nested: true` 也不放开。`delegate.max_depth` 仍是独立约束，两个上限同时生效。
-- **child 继承**：父级 resolved 权限、`limits` 与 `termination` 原样继承，不放大；child 的 Self Card 在 run 开始时注入 systemPrompt（≤400 tokens）。嵌套实例使用独立 Host，避免复用父 run 占用的调度槽。
-
-### 2.11 多实例锁、数据根与交互记录（0.15，ADR-086）
+### 2.10 多实例锁、数据根与交互记录（0.15，ADR-086）
 
 - **tenant 锁分层**：
   - `shared`（file / memory 后端默认）：`tenants/<t>/.members/<pid>-<nonce>.json`，每进程一个租约，多个进程可共存；保证的是 session 级单写者。
@@ -270,30 +255,30 @@ delegate:
 - **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
 - **已知限制**：shared 锁不阻止两个进程写同一 tenant 的不同 session；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
 
-### 2.12 统一 agent 工具（0.16，ADR-087）
+### 2.11 AgentService 与成员（0.17，ADR-088）
 
 ```yaml
 agent:
-  enabled: true              # 交互默认 true；headless / --run 默认 false
+  enabled: false             # 默认 false；交互与 headless 一致
+  owner_id: main             # root owner 成员 id
   default_visibility: private   # private | team | tenant
   follow_replies: false      # 目前只作为配置 / 事件字段，不自动续跑父 turn
-
-team:
-  legacy_tools: true         # 默认 true，保留一个版本；false 时模型看不到 team_*
-
-delegate:
-  permission_mode: bridge    # 成员权限模式：bridge | allow | deny
+  permission_mode: bridge    # bridge | allow | deny；缺省交互 bridge、headless allow
   read_only_tools: [read]    # deny 模式保留的工具
+  model: gpt-4               # 可选：成员默认模型
+  # limits / termination 缺省继承顶层；cwd 见 §2.4
 ```
 
-- **`agent.enabled`**（交互缺省 `true`、headless 缺省 `false`）：是否注册 canonical `agent` 工具（`spawn` / `send` / `close`）。显式值在两个方向都生效。`agent` 可用 = `agent.enabled` 生效 **或** `team.enabled: true`（team 插件构造时总会注册 `agent`）；可用后不再注册 `delegate_task`。`team` 引擎随 `agent` 一起构造。
-- **`agent.default_visibility`**（默认 `private`）：`spawn` 未显式传 `visibility` 时的成员可见性。`private` 仅 owner 可寻址；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
-- **`agent.follow_replies`**（默认 `false`）：当前只写入 `agent.reply.injected` 事件并参与装配；回复在父会话下一次 `BeforeLlm` 时注入，不会被实现成阻塞等待或自动新 turn。
-- **`team.legacy_tools`**（默认 `true`）：是否注册 legacy `team_*` 5 个工具。设为 `false` 后不再注册任何 `team_*`；`agent` 可用时模型工具面只剩 `agent`。`delegate_task` 旧代码不删除。
-- **`delegate.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限请求弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `delegate.read_only_tools`（默认 `['read']`）。这是成员 `permissionMode` 的配置来源。
-- **`delegate_task` 旧配置名**：`agent` 可用时，`permission.autoApprove` 与 `delegate.disallowed` 里的 `delegate_task` 会映射为 `agent`；未启用 `agent` 时保持原名。
-- **工具数（实测）**：`--tools`（非 TTY）默认 4（`bash` / `read` / `edit` / `delegate_task`，team 未构造）；`team.enabled: true` 或 `agent.enabled: true` 9（3 + `agent` + 5 个 `team_*`）；同条件 + `team.legacy_tools: false` 4（3 + `agent`）。真交互 REPL（TTY）再 +`ask_user`，对应 5 / 10 / 5。
-- **已知限制**：legacy `team_spawn` 成员不进入新注册表；`close` 只支持本机成员；`stale` 未自动产生。canonical RPC 仍为 44，本版本不新增方法。
+- **`agent.enabled`**（默认 `false`）：唯一开关。启用后注册内置 `agent` 工具（`new` / `send` / `close` / `list`，支持 batch），启动 AgentService，并在交互 REPL 中尝试启动 loopback owner 端点。
+- **`agent.owner_id`**（默认 `main`）：root owner（REPL 主 agent）的成员 id；owner 队列由父 turn 的 `BeforeLlm` 排空，不再另起 pump。
+- **`agent.default_visibility`**（默认 `private`）：`new` 未显式传 `visibility` 时的成员可见性。`private` 仅 owner 可寻址；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
+- **`agent.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限 / ask 弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `agent.read_only_tools`（默认 `['read']`）。无父事件流时 bridge 退化为 deny，不死等。
+- **`agent.follow_replies`**（默认 `false`）：回复在下一次 `BeforeLlm` 注入父会话；不会自动开启新的父 turn。
+- **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
+- **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
+- **工具数（实测）**：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4（+`agent`）；真交互 REPL（TTY）或 gateway/serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
+- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|close|list [--json]` 经该记录 attach。
+- **已知限制**：消息队列只在内存，重启丢失未处理消息，非终态成员恢复为 `stale`；`close` 只支持本机成员；canonical RPC 仍为 44。
 
 ## 3. 密钥与 `_env`
 
@@ -334,7 +319,13 @@ vessel config set observability.showProcessErrors <true|false> [--json]
 vessel config set agent.cwd <path> [--json]
 vessel doctor [--deep] [--json]
 vessel logs tail [--json] [--lines N] [--instance <name>]
+vessel agent new [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
+vessel agent send <member> <content...> [--json]
+vessel agent close <member...> [--json]
+vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 ```
+
+- `vessel agent ...` 经 `<dataDir>/agent-owner.json` attach 到交互 REPL 的 owner；没有 owner 时 `agent_owner_unavailable`，`--tenant` 与 owner 不一致时 `agent_owner_tenant_mismatch`。命令只做参数映射，生命周期全在 owner。
 
 - `vessel --data-dir <path> ...`（全局）覆盖 `data_dir`；`--exclusive` 强制 tenant 单写者锁。两者同样适用于一次性命令。
 - `vessel doctor --deep`：在原有本地检查之外，只读查询本地 gateway 的 `health.get` / `mcp.list`，报告 attach / runtime / MCP 实际状态；不启动 gateway、不改配置。没有本地 gateway 时记为 info，不算失败。
@@ -369,7 +360,7 @@ vessel gateway uninstall-service
 - `--serve` 是前台 `vessel gateway start` 的别名；常驻部署用 `start --daemon` 或 `install-service`。
 - 运行态以 `<dataDir>/gateway.pid`（`0600`）为准；daemon 日志在 `<dataDir>/logs/gateway.log`（`0600`）。`status --json` 只输出 JSON。
 - `gateway status --rpc`：经 RPC 只读查询 `health.get` 与由 `runs.list` 派生的队列计数（queued / running），不 attach runtime；`--json` 输出 `{ as_of, rpc: true, instances }`。任一实例查询失败时退出 1。
-- 命名实例的交互记录与 PID / 日志一样按实例隔离（见 §2.11）；`vessel logs tail --instance <name>` 读对应日志。
+- 命名实例的交互记录与 PID / 日志一样按实例隔离（见 §2.10）；`vessel logs tail --instance <name>` 读对应日志。
 - `reload` 只热更新 plugins 扫描缓存与 `serve.allowed_origins`；provider / model / agent / permission / TLS / token / port 的变更会出现在 `requires_restart`，必须重启。未知 scope 或读取失败返回非 0。
 - `install-service` / `uninstall-service` 只在显式执行时注册当前平台的**用户级**服务（systemd user / LaunchAgent / Windows 登录计划任务），不随启动自动修改本机。
 
@@ -383,7 +374,7 @@ vessel gateway uninstall-service
 | `tenant overlay` 报禁止块 | 覆盖了 `data_dir` / `trace` / `serve` / `tenant` / `update` | 改到项目或用户层 |
 | token 401 | 已配置 token 但请求未带，或 token 不在 `serve.tokens` | 检查 `serve.tokens` / `serve.token` / `VESSEL_GATEWAY_TOKEN` |
 | `tenant_locked` | 另一个进程持有 exclusive tenant 锁（sqlite / `--exclusive` / 迁移） | 停掉占用进程；file 后端确认是否需要 `--exclusive`；或改用 `--connect` |
-| `session_locked` / `run_locked`（RPC `conflict`） | 另一个进程正在写同一 session / run | 停掉占用进程；锁文件在 `tenants/<t>/.locks/`，stale 规则见 §2.11 |
+| `session_locked` / `run_locked`（RPC `conflict`） | 另一个进程正在写同一 session / run | 停掉占用进程；锁文件在 `tenants/<t>/.locks/`，stale 规则见 §2.10 |
 | `port_in_use` | gateway 端口已被占用 | 换 `--port` / `--instance`，或停掉占用端口的进程 |
 
 ## 6. 内置多租户执行（A-6）

@@ -84,6 +84,7 @@ Vessel\                                    # 共享侧（git）
 │       └── CI-CD.md                       # CI / 用户侧 CD / 自动更新
 ├── packages\
 │   ├── core\                              # D1
+│   ├── agent\                             # D1/D3 成员能力层（AgentService）
 │   ├── config\                            # D3
 │   ├── permission\                        # D3
 │   ├── tui\                               # D4
@@ -153,6 +154,7 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 |---|---|---|
 | `main` | 总协调（1），不是事业部 | 无独占代码路径；管 handoff / 合并 / 裁决 |
 | `core` | D1 内核 | `packages/core/**` |
+| `agent` | D1/D3 成员能力层 | `packages/agent/**` |
 | `ext` | D2 能力生态 | `plugins/**` |
 | `asm` | D3 装配与配置 | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json` |
 | `tui` | D4 终端产品 | `packages/tui/**` |
@@ -167,17 +169,17 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 | 分支 | 用途 | 谁写 | 生命周期 |
 |---|---|---|---|
 | `main` | 稳定主干，始终可发布 | 只有 1 合并 `release/*` / `hotfix/*` | 永久 |
-| `release/0.16.0` | 0.16.x 集成分支（当前开发基线） | 1 | 该 minor 线存续 |
-| `0.16-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
+| `release/0.17.0` | 0.17.x 集成分支（当前开发基线） | 1 | 该 minor 线存续 |
+| `0.17-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
 | `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N | 合并后删除 |
 | `hotfix/<slug>` | 线上紧急修复，从 `main` 拉出 | 1 指派 | 合并后删除 |
 
-- **版本周期**：目标版本 `0.16.0` → 集成分支 `release/0.16.0`（从 `release/0.15.1` 拉出）→ 角色分支 `0.16-<role>` → worktree `worktrees/0.16-<role>`。
-- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/1.0`；补丁周期用 `release/0.16.x` + `0.16-<role>`。
+- **版本周期**：目标版本 `0.17.0` → 集成分支 `release/0.17.0`（从 `release/0.16.0` 拉出）→ 角色分支 `0.17-<role>` → worktree `worktrees/0.17-<role>`。
+- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/1.0`；补丁周期用 `release/0.17.x` + `0.17-<role>`。
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
-- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.16.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
-- **基线**：`release/0.16.0` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.16.0 只干跑，不打 tag）。
+- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.17.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
+- **基线**：`release/0.17.0` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.17.0 只干跑，不打 tag）。
 
 ### 4.3 文件命名
 
@@ -258,7 +260,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 - **触发**：push tag `v*`（稳定版）或 `v*-beta.*`（预发布）。不用分支名触发发布——分支管开发，tag 管发布。
 - **发布前检查**：tag 在 `main` 上；tag 与所有 package 版本一致；CI 全绿；`CHANGELOG.md` 已更新。
-- **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。先发 18 个子包（core → permission → config → serve → tui → plugins），最后发根包 `vessel-agent`；0.11 起子包 scope 为 `@vessel-agent/*`，发布账号需对该组织有写权限。
+- **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。先发 17 个子包（core → permission → config → agent → serve → tui → plugins），最后发根包 `vessel-agent`；0.11 起子包 scope 为 `@vessel-agent/*`，发布账号需对该组织有写权限。
 - **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.13.0 无二进制与 sha256（且 0.13 不触发发布）。
 - **回滚**：不删 tag、不 force-push；发新 patch，或用 revert commit 回退 `main`。
 - **共享侧工作树**：除当前任务改动外，`git status` 必须干净，无未跟踪垃圾。
@@ -288,7 +290,7 @@ N 在自己的分支提交（只含共享侧成品）
 | `architecture`（ubuntu） | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
 | `offline-integration`（ubuntu） | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网 |
 | `release-dry-run`（ubuntu） | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag |
-| `install-smoke`（ubuntu） | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；18 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
+| `install-smoke`（ubuntu） | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；17 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
 | `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
 | `web` | `apps/web`：`npm ci` → `npm run build` |
 | `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供） |
@@ -303,7 +305,7 @@ N 在自己的分支提交（只含共享侧成品）
 
 1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本；`verify` 跑 `release-dry-run` 与 `smoke-install`，任一失败则不进入发布。
 2. 复跑 quality（发布前再验一次）。
-3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。先发 18 个 `@vessel-agent/*` 子包，最后发根 CLI `vessel-agent`（bin 仍是 `vessel`）。
+3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。先发 17 个 `@vessel-agent/*` 子包，最后发根 CLI `vessel-agent`（bin 仍是 `vessel`）。
 4. 创建 GitHub Release：自动 notes + `latest.json`（0.11.0 的 `assets` 为空）。
 5. **不构建二进制**（ADR-006 继续有效）；后续再评估。
 6. 发布失败不自动重试；修版本后重新打 tag（旧 tag 保留，不覆盖）。

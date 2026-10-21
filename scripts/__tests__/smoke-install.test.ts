@@ -129,12 +129,11 @@ describe('checkVersionOutput', () => {
 
 describe('checkToolsOutput', () => {
   const output = [
-    'Tools (4):',
+    'Tools (3):',
     '  - bash: run commands',
     '  - read: read files',
     '  - edit: edit files',
-    '  - delegate_task: delegate',
-    'ask_user (interactive only)',
+    'ask_user (interactive REPL / gateway only)',
   ].join('\n');
 
   it('accepts the default tool set', () => {

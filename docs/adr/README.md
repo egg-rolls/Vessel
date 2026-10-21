@@ -102,6 +102,7 @@
 | 085 | 0.14.4 上下文压缩质量：token 保留与分块摘要 | accepted | 2026-10-21 | compaction, context, summarizer, chunking, tools | [ADR-085-compaction-retention-and-chunked-summary.md](ADR-085-compaction-retention-and-chunked-summary.md) |
 | 086 | 0.15.0 透明化与多实例安全 | accepted | 2026-10-21 | observability, events, snapshot, queue, self-card, delegate, locking, multi-instance, rpc | [ADR-086-transparency-and-multi-instance-safety.md](ADR-086-transparency-and-multi-instance-safety.md) |
 | 087 | 0.16.0 统一 agent 工具（Phase A） | accepted | 2026-10-21 | agent, tools, session, registry, permission, events, config, compatibility | [ADR-087-unified-agent-tool-phase-a.md](ADR-087-unified-agent-tool-phase-a.md) |
+| 088 | 0.17.0 AgentService 独立成包与执行内核分层 | accepted | 2026-10-21 | agent, service, package, lifecycle, queue, snapshot, owner, permission, cli | [ADR-088-agent-service-package.md](ADR-088-agent-service-package.md) |
 
 ## 编写约定
 
