@@ -5,6 +5,7 @@ import {
   buildAgentSelfCard,
   formatAgentDetail,
   formatAgentList,
+  formatAgentTree,
 } from '../src/commands/agents-command.js';
 import { createCommands } from '../src/commands/commands.js';
 import { setLocale } from '../src/i18n/index.js';
@@ -49,6 +50,94 @@ describe('/agents', () => {
     expect(result.output).toContain('run-parent');
     expect(result.output).toContain('running');
     expect(result.output).toContain('bash');
+  });
+
+  it('renders the dispatch tree with depth indentation and child counts', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(
+      ev('subagent.delegate.started', 'run-parent', { delegateId: 'd1', depth: 0 }, 1000),
+    );
+    ctx.events.publish(
+      ev(
+        'subagent.delegate.started',
+        'run-parent',
+        { delegateId: 'd2', depth: 1, parent_delegate_id: 'd1' },
+        1100,
+      ),
+    );
+    ctx.events.publish(
+      ev(
+        'subagent.delegate.started',
+        'run-parent',
+        { delegateId: 'd3', depth: 2, parent_delegate_id: 'd2' },
+        1200,
+      ),
+    );
+
+    const result = await createCommands().execute('/agents tree', ctx, makeState('s1'));
+    expect(result.output).toContain('Subagents · tree (3)');
+    const lines = (result.output ?? '').split('\n');
+    const lineOf = (id: string): string | undefined =>
+      lines.find((line) => line.trimStart().startsWith(`${id} `));
+    expect(lineOf('d1')?.startsWith('  d1')).toBe(true);
+    expect(lineOf('d2')?.startsWith('    d2')).toBe(true);
+    expect(lineOf('d3')?.startsWith('      d3')).toBe(true);
+
+    const tree = formatAgentTree(buildAgentRegistry(ctx.events.getHistory()), 2000);
+    const treeLine = (id: string): string | undefined =>
+      tree.split('\n').find((line) => line.trimStart().startsWith(`${id} `));
+    expect(treeLine('d2')).toMatch(/ 1\s+\S+$/);
+    expect(treeLine('d3')).toMatch(/ 0\s+\S+$/);
+  });
+
+  it('shows node_id / task / queue / result_ref in the detail view', async () => {
+    const ctx = makeCtx();
+    const commands = createCommands();
+    ctx.events.publish(
+      ev('subagent.delegate.started', 'run-parent', {
+        delegateId: 'd1',
+        node_id: 'node-1',
+        task: 'inspect repo',
+      }),
+    );
+    ctx.events.publish(
+      ev(
+        'agent.queue.entered',
+        'run-parent',
+        { agent_id: 'd1', position: 3, wait_reason: 'capacity' },
+        1100,
+      ),
+    );
+    ctx.events.publish(
+      ev(
+        'subagent.delegate.completed',
+        'run-parent',
+        { delegateId: 'd1', result_ref: 'msg-42' },
+        1200,
+      ),
+    );
+
+    const result = await commands.execute('/agents d1', ctx, makeState('s1'));
+    expect(result.output).toContain('node_id');
+    expect(result.output).toContain('node-1');
+    expect(result.output).toContain('inspect repo');
+    expect(result.output).toContain('pos 3 · capacity');
+    expect(result.output).toContain('result_ref');
+    expect(result.output).toContain('msg-42');
+  });
+
+  it('marks absent node_id / task / queue / result_ref as unknown', async () => {
+    const ctx = makeCtx();
+    ctx.events.publish(ev('subagent.delegate.started', 'run-parent', { delegateId: 'd1' }));
+
+    const result = await createCommands().execute('/agents d1', ctx, makeState('s1'));
+    const lineOf = (label: string): string | undefined =>
+      (result.output ?? '').split('\n').find((line) => line.trimStart().startsWith(`${label} `));
+    expect(lineOf('node_id')?.trimEnd().endsWith('unknown')).toBe(true);
+    expect(lineOf('task')?.trimEnd().endsWith('unknown')).toBe(true);
+    expect(lineOf('queue')?.trimEnd().endsWith('unknown')).toBe(true);
+    expect(lineOf('result_ref')?.trimEnd().endsWith('unknown')).toBe(true);
   });
 
   it('shows one node via exact id and unique prefix', async () => {

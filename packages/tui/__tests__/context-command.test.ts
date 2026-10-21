@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 import type { ContextManager, Message } from '@vessel-agent/core';
+import { createCommands } from '../src/commands/commands.js';
 import {
   compactSessionContext,
   estimateContextUsage,
   estimateTokens,
   formatContextReport,
 } from '../src/commands/context-command.js';
+import { makeCtx, makeState } from './helpers.js';
 
 describe('estimateContextUsage', () => {
   const messages: Message[] = [
@@ -74,6 +76,41 @@ function fakeContext(
 }
 
 describe('compactSessionContext', () => {
+  it('/compact 优先走 runtime.compactContext（context.compacted 的发布入口）', async () => {
+    let runtimeCalls = 0;
+    let contextCalls = 0;
+    const context = fakeContext([{ role: 'user', content: 'a' }], {
+      compactAsync: async () => {
+        contextCalls += 1;
+        return 1;
+      },
+    });
+    const ctx = makeCtx({
+      context,
+      runtime: {
+        compactContext: async () => {
+          runtimeCalls += 1;
+          return 1;
+        },
+      } as never,
+    });
+
+    const result = await createCommands().execute('/compact', ctx, makeState('s1'));
+
+    expect(runtimeCalls).toBe(1);
+    expect(contextCalls).toBe(0);
+    expect(result.output).toContain('Compacted 1 message');
+    expect(result.output).toContain('context.compacted published');
+  });
+
+  it('runtime 没有 compactContext 时回退 compactAsync', async () => {
+    const context = fakeContext([{ role: 'user', content: 'a' }], {
+      compactAsync: async () => 1,
+    });
+    const outcome = await compactSessionContext(context, undefined, {});
+    expect(outcome.mode).toBe('async');
+  });
+
   it('优先 compactAsync，并把压缩后的 messages 交给持久化', async () => {
     const after: Message[] = [{ role: 'assistant', content: 'summary' }];
     const context = fakeContext(
