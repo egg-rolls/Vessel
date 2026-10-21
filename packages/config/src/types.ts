@@ -48,6 +48,9 @@ export interface TerminationConfig {
   maxRuntimeSeconds?: number;
 }
 
+/** 成员可见性（0.16；默认 private） */
+export type AgentVisibility = 'private' | 'team' | 'tenant';
+
 /** Agent 配置 */
 export interface AgentConfig {
   name?: string;
@@ -55,6 +58,16 @@ export interface AgentConfig {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  /**
+   * 是否注册 canonical `agent` 工具（0.16）。
+   * 缺省由入口决定：交互 REPL / serve 为 true，headless / `--run` 为 false。
+   * 显式 false 在交互入口也关闭；显式 true 在 headless 也开启。
+   */
+  enabled?: boolean;
+  /** spawn 成员的默认可见性（0.16；默认 private） */
+  defaultVisibility?: AgentVisibility;
+  /** 成员回复是否允许触发父级新一轮（0.16；默认 false） */
+  followReplies?: boolean;
   /**
    * 默认工作目录（0.11.1，DECISION-022 §2.4）。
    * 支持 `~`；相对路径按进程 cwd 解析为绝对路径（由装配层解析，validator 只校验类型）。
@@ -369,6 +382,11 @@ export interface ConnectConfig {
 export interface TeamConfig {
   /** true 才构造 createTeamPlugin（默认 false；进程内原型） */
   enabled?: boolean;
+  /**
+   * 是否注册 `team_*` 旧工具（0.16；默认 true，保留一个版本）。
+   * false 时 canonical 工具面只剩 `agent` 一个 schema。
+   */
+  legacyTools?: boolean;
   /** owner（主 agent）成员 ID（默认 'owner'） */
   ownerId?: string;
   /** 成员默认模型；缺省沿用主 model */

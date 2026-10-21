@@ -13,13 +13,18 @@ import type { SelfCardOptions } from '../packages/core/src/index';
 /** 推断当前入口已知会注册的工具名。 */
 export function knownOwnerToolNames(
   config: VesselConfig,
-  options: { askUser?: boolean } = {},
+  options: { askUser?: boolean; headless?: boolean } = {},
 ): string[] {
   const names = ['bash', 'read', 'edit'];
-  // delegate-task 默认启用（配置显式 enabled:false 才关闭）。
-  if (config.delegate?.enabled !== false) names.push('delegate_task');
+  // 0.16：agent 可用时只声明 canonical 工具；否则回退 legacy delegate_task。
+  const agentEnabled = config.agent?.enabled ?? options.headless !== true;
+  if (agentEnabled) {
+    names.push('agent');
+  } else if (config.delegate?.enabled !== false) {
+    names.push('delegate_task');
+  }
   if (options.askUser === true && config.ui?.askUser !== false) names.push('ask_user');
-  if (config.team?.enabled === true) {
+  if (config.team?.enabled === true && config.team?.legacyTools !== false) {
     names.push('team_spawn', 'team_send', 'team_inbox', 'team_status', 'team_cancel');
   }
   return names;
@@ -29,14 +34,14 @@ export function knownOwnerToolNames(
 export function ownerSelfCard(
   config: VesselConfig,
   model: string,
-  options: { askUser?: boolean } = {},
+  options: { askUser?: boolean; headless?: boolean } = {},
 ): SelfCardOptions {
   const askUser = options.askUser === true && config.ui?.askUser !== false;
   return {
     role: 'owner',
     depth: 0,
     model,
-    tools: knownOwnerToolNames(config, { askUser }),
+    tools: knownOwnerToolNames(config, { askUser, headless: options.headless }),
     limits: {
       ...(config.limits ?? {}),
       ...(config.termination?.maxIterations !== undefined
