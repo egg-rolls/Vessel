@@ -27,6 +27,7 @@ import {
   type AgentStatus,
   createDefaultTraceRedactor,
   type EventStream,
+  estimateTokens,
   type LLMProvider,
   type Logger,
   MemoryContextManager,
@@ -209,29 +210,142 @@ function tenantSessionsDbPath(tenantRoot: string): string {
 /** core 0.6.1 E3 的 summarizer 形状（本 worktree 的 core 尚未导出该类型） */
 type ContextSummarizer = (messages: Message[], options: { maxTokens: number }) => Promise<string>;
 
+/** 单条消息渲染上限（字符）；超出只保留前缀，避免单条工具结果独占分块预算。 */
+const SUMMARIZER_MAX_MESSAGE_CHARS = 12_000;
+const SUMMARIZER_MAX_CHUNK_TOKENS = 48_000;
+const SUMMARIZER_MIN_CHUNK_TOKENS = 2_000;
+const SUMMARIZER_PARTIAL_MAX_TOKENS = 1024;
+const SUMMARIZER_REDUCE_MAX_TOKENS = 2048;
+
+const SUMMARY_SYSTEM_PROMPT =
+  'Summarize the conversation for context compaction. Preserve decisions, file paths, tool names and results, and open tasks. Output only the summary.';
+const PARTIAL_SYSTEM_PROMPT =
+  'Summarize this part of a longer conversation for context compaction. Preserve decisions, file paths, tool names and results, and open tasks. Output only the partial summary.';
+const REDUCE_SYSTEM_PROMPT =
+  'Combine the ordered partial summaries into one conversation summary for context compaction. Preserve decisions, file paths, tool names and results, and open tasks. Output only the final summary.';
+
 /**
- * 用当前 provider 生成真实上下文摘要（0.6.1 E3）。
- * 失败由 core 捕获并回退占位符；这里不吞错，便于测试/观测。
+ * 渲染一条消息。`reasoning_content` 不进入摘要（与事件流一致）。
+ * tool 结果与 assistant 的工具调用必须带上标识，否则摘要丢失工具名/参数。
+ */
+function renderSummarizerMessage(message: Message): string {
+  const content = message.content ?? '';
+  let rendered: string;
+  if (message.role === 'tool') {
+    rendered = `[tool:${message.tool_call_id ?? ''}] ${content}`;
+  } else if (message.role === 'assistant') {
+    const calls = (message.tool_calls ?? []).map(
+      (call) => `[tool_call:${call.function?.name ?? ''}] ${call.function?.arguments ?? ''}`,
+    );
+    rendered = [`[assistant] ${content}`, ...calls].join('\n');
+  } else {
+    rendered = `[${message.role}] ${content}`;
+  }
+  return rendered.length > SUMMARIZER_MAX_MESSAGE_CHARS
+    ? `${rendered.slice(0, SUMMARIZER_MAX_MESSAGE_CHARS)}\n[truncated]`
+    : rendered;
+}
+
+/** 按渲染后文本的估算 token 分组；单条超出预算时独占一块。 */
+function chunkSummarizerTranscript(rendered: string[], budget: number): string[][] {
+  const chunks: string[][] = [];
+  let current: string[] = [];
+  let currentTokens = 0;
+  for (const text of rendered) {
+    const tokens = estimateTokens(text);
+    if (current.length > 0 && currentTokens + tokens > budget) {
+      chunks.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    current.push(text);
+    currentTokens += tokens;
+  }
+  if (current.length > 0) chunks.push(current);
+  return chunks;
+}
+
+/** 截断到估算 token 预算（预算按 token，字符数不固定）。 */
+function truncateToTokenBudget(text: string, maxTokens: number): string {
+  if (estimateTokens(text) <= maxTokens) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateTokens(text.slice(0, mid)) <= maxTokens) low = mid;
+    else high = mid - 1;
+  }
+  return text.slice(0, low);
+}
+
+/**
+ * 用当前 provider 生成真实上下文摘要（0.6.1 E3，0.14.4 分块）。
+ *
+ * 单块：一次摘要调用（输出 ≤ max(128, min(context.maxTokens, 2048))）。
+ * 多块：每块一次部分摘要（≤1024），再 reduce 一次（≤2048）。
+ * 分块失败写占位标记继续；reduce 失败拼接部分摘要；全部失败返回空串，
+ * 由 core 回退占位摘要。
  */
 export function createContextSummarizer(provider: LLMProvider, model: string): ContextSummarizer {
-  return async (messages, options) => {
-    const transcript = messages
-      .map((message) => `[${message.role}] ${message.content}`)
-      .join('\n\n');
+  const summarize = async (system: string, user: string, maxTokens: number): Promise<string> => {
     const response = await provider.chat({
       model,
       messages: [
-        {
-          role: 'system',
-          content:
-            'Summarize the conversation for context compaction. Preserve decisions, file paths, tool results, and open tasks. Output only the summary.',
-        },
-        { role: 'user', content: transcript },
+        { role: 'system', content: system },
+        { role: 'user', content: user },
       ],
-      max_tokens: Math.max(128, Math.min(options.maxTokens, 2048)),
+      max_tokens: maxTokens,
       temperature: 0,
     });
     return typeof response.content === 'string' ? response.content : '';
+  };
+
+  return async (messages, options) => {
+    const rendered = messages.map(renderSummarizerMessage);
+    const chunkBudget = Math.min(
+      SUMMARIZER_MAX_CHUNK_TOKENS,
+      Math.max(SUMMARIZER_MIN_CHUNK_TOKENS, Math.floor(options.maxTokens / 8)),
+    );
+    const chunks = chunkSummarizerTranscript(rendered, chunkBudget);
+    if (chunks.length === 0) return '';
+
+    const maxOutputTokens = Math.max(
+      128,
+      Math.min(options.maxTokens, SUMMARIZER_REDUCE_MAX_TOKENS),
+    );
+
+    if (chunks.length === 1) {
+      try {
+        return await summarize(
+          SUMMARY_SYSTEM_PROMPT,
+          chunks[0]?.join('\n\n') ?? '',
+          maxOutputTokens,
+        );
+      } catch {
+        return '';
+      }
+    }
+
+    const partials: string[] = [];
+    let succeeded = 0;
+    for (const [index, chunk] of chunks.entries()) {
+      try {
+        partials.push(
+          await summarize(PARTIAL_SYSTEM_PROMPT, chunk.join('\n\n'), SUMMARIZER_PARTIAL_MAX_TOKENS),
+        );
+        succeeded += 1;
+      } catch {
+        partials.push(`[partial summary unavailable: chunk ${index + 1}]`);
+      }
+    }
+    if (succeeded === 0) return '';
+
+    const joined = partials.join('\n\n');
+    try {
+      return await summarize(REDUCE_SYSTEM_PROMPT, joined, maxOutputTokens);
+    } catch {
+      return truncateToTokenBudget(joined, maxOutputTokens);
+    }
   };
 }
 
