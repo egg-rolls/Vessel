@@ -1,5 +1,5 @@
 /**
- * 0.16 `agent` 工具：spawn / send / close、消息不阻塞、成员不串消息、
+ * 0.16 `agent` 工具：spawn / send / close、batch、消息不阻塞、成员不串消息、
  * visibility 拒绝、权限桥、legacyTools 开关、close 幂等。
  * 全部进程内、fake Host，不联网。
  */
@@ -270,6 +270,103 @@ describe('agent spawn/send/close', () => {
   });
 });
 
+describe('agent batch', () => {
+  it('spawn batch 按输入顺序返回逐条结果，单条失败不吞其它条目', async () => {
+    const { host, tool } = setup();
+    const raw = await tool.handler(
+      {
+        action: 'spawn',
+        members: [{ name: 'a' }, { visibility: 'public' }, { name: 'c' }],
+      },
+      makeContext(),
+    );
+    const payload = parse<{
+      results: Array<{ ok: boolean; status?: { name?: string }; error?: string }>;
+    }>(raw);
+    expect(payload.results.map((entry) => entry.ok)).toEqual([true, false, true]);
+    expect(payload.results[0]?.status?.name).toBe('a');
+    expect(payload.results[1]?.error).toContain('invalid visibility');
+    expect(payload.results[2]?.status?.name).toBe('c');
+    expect(host.spawns).toHaveLength(2);
+  });
+
+  it('send batch 逐条投递，失败条目不影响后续', async () => {
+    const { host, tool } = setup();
+    const a = parse<{ id: string }>(
+      await tool.handler({ action: 'spawn', name: 'a' }, makeContext()),
+    );
+    const b = parse<{ id: string }>(
+      await tool.handler({ action: 'spawn', name: 'b' }, makeContext()),
+    );
+
+    const raw = await tool.handler(
+      {
+        action: 'send',
+        messages: [
+          { to: a.id, content: 'one' },
+          { to: 'missing', content: 'x' },
+          { to: b.id, content: 'two' },
+        ],
+      },
+      makeContext(),
+    );
+    const payload = parse<{
+      results: Array<{ ok: boolean; status?: { message_id: string }; error?: string }>;
+    }>(raw);
+    expect(payload.results.map((entry) => entry.ok)).toEqual([true, false, true]);
+    expect(payload.results[1]?.error).toContain('unknown team member');
+    expect(payload.results[0]?.status?.message_id).not.toBe('');
+    expect(
+      host.sent.filter((message) => message.kind === 'task').map((message) => message.content),
+    ).toEqual(['one', 'two']);
+
+    host.finish(a.id, 'ra');
+    host.finish(b.id, 'rb');
+    await waitFor(() =>
+      host.sent.filter((message) => message.kind === 'result').length === 2 ? true : undefined,
+    );
+  });
+
+  it('close batch 逐条释放，未知成员只失败该条', async () => {
+    const { host, tool } = setup();
+    const a = parse<{ id: string }>(await tool.handler({ action: 'spawn' }, makeContext()));
+    const b = parse<{ id: string }>(await tool.handler({ action: 'spawn' }, makeContext()));
+    const handleA = host.handles.get(a.id) as FakeHandle;
+    const handleB = host.handles.get(b.id) as FakeHandle;
+
+    const raw = await tool.handler(
+      { action: 'close', members: [a.id, 'missing', b.id] },
+      makeContext(),
+    );
+    const payload = parse<{
+      results: Array<{ ok: boolean; status?: { state: string }; error?: string }>;
+    }>(raw);
+    expect(payload.results.map((entry) => entry.ok)).toEqual([true, false, true]);
+    expect(payload.results[0]?.status?.state).toBe('closed');
+    expect(payload.results[1]?.error).toContain('unknown team member');
+    expect(handleA.closeCalls).toBe(1);
+    expect(handleB.closeCalls).toBe(1);
+  });
+
+  it('单条字段与 batch 同时给时整体拒绝，不执行任何条目', async () => {
+    const { host, tool } = setup();
+    expect(
+      await tool.handler({ action: 'spawn', name: 'x', members: [{ name: 'y' }] }, makeContext()),
+    ).toContain('not both');
+    expect(
+      await tool.handler(
+        { action: 'send', to: 'x', content: 'y', messages: [{ to: 'x', content: 'y' }] },
+        makeContext(),
+      ),
+    ).toContain('not both');
+    expect(
+      await tool.handler({ action: 'close', member: 'x', members: ['x'] }, makeContext()),
+    ).toContain('not both');
+    expect(host.spawns).toHaveLength(0);
+    expect(host.sent).toHaveLength(0);
+  });
+});
+
 describe('member visibility / tenant 寻址', () => {
   function record(overrides: Partial<MemberRecord>): MemberRecord {
     return {
@@ -380,19 +477,19 @@ describe('权限桥', () => {
 });
 
 describe('legacyTools 开关', () => {
-  it('默认同时注册 agent 与 5 个 team_*', () => {
+  it('默认隐藏 5 个 team_*，工具面只有 agent', () => {
     const { pluginHost } = setup();
+    expect(pluginHost.listTools().map((tool) => tool.name)).toEqual(['agent']);
+  });
+
+  it('legacyTools=true 恢复 5 个 team_*', () => {
+    const { pluginHost } = setup({ legacyTools: true });
     expect(
       pluginHost
         .listTools()
         .map((tool) => tool.name)
         .sort(),
     ).toEqual(['agent', 'team_cancel', 'team_inbox', 'team_send', 'team_spawn', 'team_status']);
-  });
-
-  it('legacyTools=false 时只有 agent', () => {
-    const { pluginHost } = setup({ legacyTools: false });
-    expect(pluginHost.listTools().map((tool) => tool.name)).toEqual(['agent']);
   });
 
   it('成员工具面不含 agent（不能 spawn 兄弟）', async () => {

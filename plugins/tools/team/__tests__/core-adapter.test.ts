@@ -369,6 +369,7 @@ describe('R4 工具面快照', () => {
       providerFactory: () => new MemoryLLMProvider(),
       model: 'm',
       host: new CoreInProcessRuntimeHost(),
+      legacyTools: true,
     }).install(host);
 
     const snapshot = host.listTools().map((tool) => ({
@@ -393,6 +394,8 @@ describe('R4 工具面快照', () => {
           'action',
           'content',
           'member',
+          'members',
+          'messages',
           'model',
           'name',
           'system_prompt',
@@ -409,6 +412,7 @@ describe('R4 工具面快照', () => {
       providerFactory: () => new MemoryLLMProvider(),
       model: 'm',
       host: new CoreInProcessRuntimeHost(),
+      legacyTools: true,
     }).install(host);
 
     const spawnRaw = await toolOf(host, 'team_spawn').handler({ name: 'w' }, makeContext());

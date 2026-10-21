@@ -71,7 +71,7 @@ export interface TeamPluginOptions {
   memberTermination?: TerminationPolicy;
   /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
   tenantId?: string;
-  /** 0.16：同时注册 legacy `team_*` 工具（默认 true，保留一个版本） */
+  /** 0.16.1：同时注册 legacy `team_*` 工具（默认 false，显式 true 才恢复） */
   legacyTools?: boolean;
   /** 0.16：spawn 的默认可见性（默认 private） */
   defaultVisibility?: MemberVisibility;
@@ -375,7 +375,7 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
     ownerId,
     memberLimits: options.memberLimits,
     memberTermination: options.memberTermination,
-    legacyTools: options.legacyTools ?? true,
+    legacyTools: options.legacyTools ?? false,
     defaultVisibility: options.defaultVisibility ?? 'private',
     permissionMode: options.permissionMode ?? 'bridge',
     readOnlyTools: options.readOnlyTools ?? ['read'],

@@ -52,6 +52,40 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** 单条 batch 结果：成功带该动作的返回体，失败带错误文本 */
+type BatchEntryResult = { ok: true; status: unknown } | { ok: false; error: string };
+
+/** 按输入顺序把 allSettled 转成逐条结果；单条失败不影响其它条目 */
+function settleBatch(settled: PromiseSettledResult<unknown>[]): BatchEntryResult[] {
+  return settled.map((item) =>
+    item.status === 'fulfilled'
+      ? { ok: true as const, status: item.value }
+      : { ok: false as const, error: errorText(item.reason) },
+  );
+}
+
+/** 读取 batch 数组参数；非数组或空数组直接拒绝 */
+function readBatch(record: Record<string, unknown>, key: string, action: string): unknown[] {
+  const value = record[key];
+  if (!Array.isArray(value)) throw new Error(`agent ${action} ${key} must be an array`);
+  if (value.length === 0) throw new Error(`agent ${action} ${key} must not be empty`);
+  return value;
+}
+
+/** 单条字段与 batch 字段不能同时给 */
+function assertExclusive(
+  record: Record<string, unknown>,
+  singles: readonly string[],
+  batch: string,
+  action: string,
+): void {
+  if (singles.some((key) => record[key] !== undefined)) {
+    throw new Error(
+      `agent ${action}: pass either single ${singles.join('/')} or ${batch}, not both`,
+    );
+  }
+}
+
 /** agent 工具的事件/端口依赖 */
 export interface AgentToolOptions {
   port: TeamHostPort;
@@ -236,12 +270,48 @@ export function makeAgentTool(options: AgentToolOptions): ToolDefinition {
     return { state: 'closed' };
   }
 
+  async function spawnBatch(entries: unknown[], ctx: ToolContext): Promise<BatchEntryResult[]> {
+    const settled = await Promise.allSettled(
+      entries.map((entry) =>
+        isRecord(entry)
+          ? spawn(entry, ctx)
+          : Promise.reject(new Error('agent spawn members entries must be objects')),
+      ),
+    );
+    return settleBatch(settled);
+  }
+
+  async function sendBatch(entries: unknown[]): Promise<BatchEntryResult[]> {
+    const settled = await Promise.allSettled(
+      entries.map((entry) =>
+        isRecord(entry)
+          ? send(entry)
+          : Promise.reject(new Error('agent send messages entries must be objects')),
+      ),
+    );
+    return settleBatch(settled);
+  }
+
+  async function closeBatch(entries: unknown[]): Promise<BatchEntryResult[]> {
+    const settled = await Promise.allSettled(
+      entries.map((entry) =>
+        typeof entry === 'string' && entry !== ''
+          ? close({ member: entry })
+          : Promise.reject(new Error('agent close members entries must be non-empty strings')),
+      ),
+    );
+    return settleBatch(settled);
+  }
+
   return {
     name: 'agent',
     description:
       'Manage team members. action=spawn creates a member session and returns its status; ' +
       'action=send queues a message to a member and returns immediately (no wait); ' +
-      'action=close releases a member (idempotent).',
+      'action=close releases a member (idempotent). ' +
+      'Batch: spawn/close accept `members` and send accepts `messages`; entries run in ' +
+      'parallel and return {results:[{ok,status?|error?}]} in input order. ' +
+      'A failed entry does not cancel the others; do not mix single fields with a batch.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -261,6 +331,15 @@ export function makeAgentTool(options: AgentToolOptions): ToolDefinition {
         to: { type: 'string', description: 'send: member id or session id' },
         content: { type: 'string', description: 'send: message text' },
         member: { type: 'string', description: 'close: member id or session id' },
+        members: {
+          type: 'array',
+          description:
+            'spawn: [{name?, model?, system_prompt?, visibility?}]; close: [member id or session id]',
+        },
+        messages: {
+          type: 'array',
+          description: 'send: [{to, content}]',
+        },
       },
       required: ['action'],
     },
@@ -268,9 +347,38 @@ export function makeAgentTool(options: AgentToolOptions): ToolDefinition {
       const record = isRecord(args) ? args : {};
       const action = readString(record, 'action');
       try {
-        if (action === 'spawn') return JSON.stringify(await spawn(record, ctx));
-        if (action === 'send') return JSON.stringify(await send(record));
-        if (action === 'close') return JSON.stringify(await close(record));
+        if (action === 'spawn') {
+          if (record.members !== undefined) {
+            assertExclusive(
+              record,
+              ['name', 'model', 'system_prompt', 'visibility'],
+              'members',
+              'spawn',
+            );
+            return JSON.stringify({
+              results: await spawnBatch(readBatch(record, 'members', 'spawn'), ctx),
+            });
+          }
+          return JSON.stringify(await spawn(record, ctx));
+        }
+        if (action === 'send') {
+          if (record.messages !== undefined) {
+            assertExclusive(record, ['to', 'content'], 'messages', 'send');
+            return JSON.stringify({
+              results: await sendBatch(readBatch(record, 'messages', 'send')),
+            });
+          }
+          return JSON.stringify(await send(record));
+        }
+        if (action === 'close') {
+          if (record.members !== undefined) {
+            assertExclusive(record, ['member', 'to'], 'members', 'close');
+            return JSON.stringify({
+              results: await closeBatch(readBatch(record, 'members', 'close')),
+            });
+          }
+          return JSON.stringify(await close(record));
+        }
         return 'Error: agent requires action spawn|send|close';
       } catch (error) {
         return `Error: ${errorText(error)}`;
