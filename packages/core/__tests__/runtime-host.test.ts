@@ -1173,4 +1173,47 @@ describe('Host 对等修复（0.14.1）', () => {
 
     await host.close();
   });
+
+  it('AgentSpec.selfCard 透传给成员 runtime options', async () => {
+    const seen: AgentRuntimeOptions[] = [];
+    const host = new InProcessRuntimeHost({
+      runtimeFactory: async (options) => {
+        seen.push(options);
+        return AgentRuntime.create(options);
+      },
+    });
+    const selfCard = {
+      role: 'worker',
+      parent_id: 'root',
+      depth: 1,
+      model: 'm',
+      tools: ['bash'],
+      limits: { requestLimit: 5 },
+      context: { max: 1000 },
+      how_to_ask: 'Message the parent agent.',
+    };
+
+    await host.spawn({ id: 'child', provider: new MemoryLLMProvider(), model: 'm', selfCard });
+
+    expect(seen[0]?.selfCard).toEqual(selfCard);
+
+    await host.close();
+  });
+
+  it('AgentSpec 未设置 selfCard 时不传给成员 runtime options', async () => {
+    const seen: AgentRuntimeOptions[] = [];
+    const host = new InProcessRuntimeHost({
+      runtimeFactory: async (options) => {
+        seen.push(options);
+        return AgentRuntime.create(options);
+      },
+    });
+
+    await host.spawn({ id: 'plain', provider: new MemoryLLMProvider(), model: 'm' });
+
+    expect(seen[0]).toBeDefined();
+    expect(seen[0] !== undefined && 'selfCard' in seen[0]).toBe(false);
+
+    await host.close();
+  });
 });

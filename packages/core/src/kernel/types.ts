@@ -10,7 +10,7 @@
 import type { ContextManager } from '../types/context.js';
 import type { EventHandler, EventStream, Unsubscribe } from '../types/event.js';
 import type { TerminationPolicy, UsageLimits } from '../types/limits.js';
-import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
+import type { PluginHost, RuntimePermissionConfig, SelfCardOptions } from '../types/plugin.js';
 import type { LLMProvider, Message, Usage } from '../types/provider.js';
 import type { RunInterruptReason, RunOptions } from '../types/run.js';
 import type { RunStore } from '../types/run-store.js';
@@ -51,6 +51,8 @@ export interface AgentSpec {
   metadata?: Record<string, unknown>;
   /** 0.5：成员所属 tenant；缺省继承 Host 的 tenantId */
   tenantId?: string;
+  /** 0.15 E9：成员 Self Card；Ext 为 delegate 子成员设置，缺省不注入 */
+  selfCard?: SelfCardOptions;
 }
 
 /** 限额作用域（F3）；0.2 R1 只消费 run，agent/host 由 R2 接 */

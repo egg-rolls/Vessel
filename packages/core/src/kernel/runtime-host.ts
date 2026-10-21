@@ -309,6 +309,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
         ...(this.pluginConfigs !== undefined ? { pluginConfigs: this.pluginConfigs } : {}),
         ...(this.logger !== undefined ? { logger: this.logger } : {}),
         ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
+        ...(resolved.selfCard !== undefined ? { selfCard: resolved.selfCard } : {}),
         agentId: id,
       });
 
