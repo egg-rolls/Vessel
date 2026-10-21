@@ -1,7 +1,8 @@
 /**
  * 0.5.4 P2-2：POSIX 下 shutdown 释放全部 tenant 锁。
  *
- * 真实 CLI + `--serve 0`，两个 tenant；SIGINT 后：
+ * 真实 CLI + `--serve 0 --exclusive`（file 后端默认 shared `.members/`，
+ * 只有 exclusive 才用 `.lock`），两个 tenant；SIGINT 后：
  * - 无 workflow：自然退出 0，两个 `.lock` 都被删除；
  * - 启用 workflow：走 130 退出路径，`.lock` 同样被删除。
  *
@@ -85,7 +86,7 @@ function twoTenantConfig(extra: string[] = []): string {
 }
 
 function startServe(dir: string) {
-  return Bun.spawn([process.execPath, cliPath, '--serve', '0'], {
+  return Bun.spawn([process.execPath, cliPath, '--serve', '0', '--exclusive'], {
     cwd: dir,
     env: { ...process.env, VESSEL_MOCK: '1', USERPROFILE: dir, HOME: dir },
     stdout: 'pipe',

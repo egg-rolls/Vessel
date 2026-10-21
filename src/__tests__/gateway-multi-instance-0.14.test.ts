@@ -51,7 +51,10 @@ const runningRunner: CommandRunner = async () => ({
   stderr: '',
 });
 
-const inspect = { platform: 'linux' as const, runCommand: runningRunner };
+// Linux 下 inspectProcess 先读 /proc/<pid>/cmdline，必须注入，否则真实读取覆盖 mock。
+const readCmdline = async () => 'bun /repo/src/cli.ts gateway start --instance web';
+
+const inspect = { platform: 'linux' as const, runCommand: runningRunner, readCmdline };
 
 function record(overrides: Partial<GatewayPidRecord> = {}): GatewayPidRecord {
   return {
@@ -223,6 +226,7 @@ describe('0.14 foreground prepare', () => {
       config: {},
       platform: 'linux',
       runCommand: runningRunner,
+      readCmdline,
     });
     expect(prepared.ok).toBe(true);
     if (prepared.ok) await prepared.lock.release();
@@ -237,6 +241,7 @@ describe('0.14 foreground prepare', () => {
       config: {},
       platform: 'linux',
       runCommand: runningRunner,
+      readCmdline,
     });
     expect(prepared.ok).toBe(false);
     if (!prepared.ok) expect(prepared.error).toContain('already running');
@@ -251,6 +256,7 @@ describe('0.14 foreground prepare', () => {
       config: { host: { nodeId: 'node-1' } },
       platform: 'linux',
       runCommand: runningRunner,
+      readCmdline,
     });
     expect(prepared.ok).toBe(false);
     if (!prepared.ok) expect(prepared.error).toContain('duplicate_node_id');

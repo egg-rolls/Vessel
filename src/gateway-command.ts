@@ -28,6 +28,7 @@ import {
   type GatewayPidEntry,
   type GatewayPidRecord,
   gatewayPidPath,
+  type InspectProcessOptions,
   isProcessAlive,
   listGatewayPidStates,
   normalizeGatewayInstance,
@@ -122,13 +123,11 @@ export function deriveGatewayInstance(instance?: string, port?: number): string 
   return DEFAULT_GATEWAY_INSTANCE;
 }
 
-function inspectOptions(options: { platform?: NodeJS.Platform; runCommand?: CommandRunner }): {
-  platform?: NodeJS.Platform;
-  runCommand?: CommandRunner;
-} {
+function inspectOptions(options: InspectProcessOptions): InspectProcessOptions {
   return {
     ...(options.platform !== undefined ? { platform: options.platform } : {}),
     ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    ...(options.readCmdline !== undefined ? { readCmdline: options.readCmdline } : {}),
   };
 }
 
@@ -202,7 +201,7 @@ async function duplicateExplicitNodeId(
   dataDir: string,
   instance: string,
   config: VesselConfig,
-  options: { platform?: NodeJS.Platform; runCommand?: CommandRunner },
+  options: InspectProcessOptions,
 ): Promise<GatewayPidEntry | undefined> {
   const nodeId = config.host?.nodeId;
   if (nodeId === undefined || nodeId === '') return undefined;
@@ -227,6 +226,7 @@ export async function prepareForegroundGatewayStart(
     env?: Record<string, string | undefined>;
     platform?: NodeJS.Platform;
     runCommand?: CommandRunner;
+    readCmdline?: (pid: number) => Promise<string | undefined>;
     instance?: string;
   } = {},
 ): Promise<
