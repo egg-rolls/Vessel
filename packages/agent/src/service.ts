@@ -641,6 +641,8 @@ export class AgentServiceImpl implements AgentService {
       agent_id: member.id,
       session_id: member.sessionId,
       ...(member.parentId !== undefined ? { parent_id: member.parentId } : {}),
+      visibility: member.visibility,
+      ...(member.name !== undefined ? { name: member.name } : {}),
       ...extra,
       ts: this.now(),
     };
@@ -771,6 +773,7 @@ export class AgentServiceImpl implements AgentService {
         outcome,
         message_id: message.id,
         ...(failure !== undefined ? { reason: failure } : {}),
+        ...(outcome === 'completed' && result?.usage !== undefined ? { usage: result.usage } : {}),
       },
     );
 

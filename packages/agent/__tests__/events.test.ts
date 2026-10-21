@@ -22,11 +22,14 @@ afterEach(async () => {
 
 describe('AgentService events', () => {
   it('emits spawned, queued, turn.started and turn.completed once per send', async () => {
-    const { service } = makeService();
+    const { service, runtime } = makeService();
+    runtime.handler = async () => ({
+      usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+    });
     const seen: AgentEvent[] = [];
     service.subscribe((event) => seen.push(event));
 
-    const member = await service.new({ visibility: 'team' });
+    const member = await service.new({ name: 'worker', visibility: 'team' });
     await service.send({ to: member.id, content: 'hi' });
     await settle();
 
@@ -36,15 +39,38 @@ describe('AgentService events', () => {
       'agent.turn.started',
       'agent.turn.completed',
     ]);
-    const [, queued, started, completed] = seen;
+    const [spawned, queued, started, completed] = seen;
+    expect(spawned?.visibility).toBe('team');
+    expect(spawned?.name).toBe('worker');
     expect(queued?.agent_id).toBe(member.id);
     expect(queued?.session_id).toBe(member.id);
     expect(typeof queued?.message_id).toBe('string');
     expect(queued?.from).toBe('main');
+    expect(queued?.visibility).toBe('team');
+    expect(queued?.name).toBe('worker');
     expect(started?.state).toBe('running');
     expect(completed?.state).toBe('completed');
     expect(completed?.outcome).toBe('completed');
+    expect(completed?.visibility).toBe('team');
+    expect(completed?.name).toBe('worker');
+    expect(completed?.usage?.total_tokens).toBe(7);
     expect(typeof completed?.ts).toBe('number');
+  });
+
+  it('omits turn.completed usage when the runtime returns none', async () => {
+    const { service } = makeService();
+    const seen: AgentEvent[] = [];
+    service.subscribe((event) => seen.push(event));
+
+    const member = await service.new({ visibility: 'team' });
+    await service.send({ to: member.id, content: 'hi' });
+    await settle();
+
+    const completed = seen.find((event) => event.type === 'agent.turn.completed');
+    expect(completed).toBeDefined();
+    expect('usage' in (completed as AgentEvent)).toBe(false);
+    // 未命名成员不伪造 name
+    expect('name' in (completed as AgentEvent)).toBe(false);
   });
 
   it('a failing turn emits agent.turn.failed with the reason', async () => {
