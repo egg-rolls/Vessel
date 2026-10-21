@@ -14,6 +14,13 @@ export {
   toMemberStatus,
   toRuntimeMember,
 } from './registry.js';
+export {
+  createInProcessMemberRuntime,
+  InProcessMemberRuntime,
+  type InProcessMemberRuntimeOptions,
+  type MemberRunnableAgent,
+  type MemberRuntimePermissionMode,
+} from './runtime.js';
 export { AgentServiceImpl, createAgentService } from './service.js';
 export {
   AGENT_SNAPSHOT_VERSION,
