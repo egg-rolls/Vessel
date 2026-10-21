@@ -81,7 +81,8 @@ async function printTools(): Promise<void> {
   for (const w of warnings) console.warn(`⚠ ${w}`);
   console.log(ui.section(`Tools (${tools.length}):`));
   for (const t of tools) console.log(`  - ${t.name}: ${t.description}`);
-  console.log('ask_user (interactive only)');
+  // 0.15：--tools 是一次性命令，仍按 headless 口径；ask_user 只在交互 REPL / gateway 注册。
+  console.log('ask_user (interactive REPL / gateway only)');
 }
 
 /**

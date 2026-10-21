@@ -120,7 +120,6 @@ function printHelp(): void {
     ['vessel -c --run "..."', t('help.cmd.continueRun')],
     ['vessel --resume-run <runId>', t('help.cmd.resumeRun')],
   ];
-  const serve: Array<[string, string]> = [['vessel --serve 8642', t('help.cmd.serve')]];
   const gateway: Array<[string, string]> = [
     ['vessel status [--json]', t('help.cmd.status')],
     ['vessel agents [--json]', t('help.cmd.agents')],
@@ -147,7 +146,6 @@ function printHelp(): void {
   const config: Array<[string, string]> = [
     ['vessel --tenant <id> ...', t('help.cmd.tenant')],
     ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
-    ['vessel --serve --allowed-origin <origin>', t('help.cmd.origin')],
     ['vessel config path', t('help.cmd.configPath')],
     ['vessel config init', t('help.cmd.configInit')],
     ['vessel config show --sources', t('help.cmd.configShow')],
@@ -185,7 +183,6 @@ function printHelp(): void {
       ...usage,
       ...session,
       ...headless,
-      ...serve,
       ...gateway,
       ...capability,
       ...config,
@@ -210,9 +207,6 @@ function printHelp(): void {
       '',
       `  ${ui.section(t('help.section.headless'))}`,
       align(headless, width),
-      '',
-      `  ${ui.section(t('help.section.serve'))}`,
-      align(serve, width),
       '',
       `  ${ui.section(t('help.section.gateway'))}`,
       align(gateway, width),
@@ -373,6 +367,8 @@ if (foregroundGateway && args.gateway !== null) {
 } else if (args.servePort !== null) {
   // `--serve` 是 default 实例的前台别名：先准备（运行中拒绝 + 实例锁），
   // 修复 0.12 直接覆盖 gateway.pid 的问题。
+  // 0.15：help 不再列出；保留解析并提示改用 `vessel gateway start`。
+  console.error(t('cli.serveDeprecated'));
   const prepared = await prepareForegroundGatewayStart({ instance: DEFAULT_GATEWAY_INSTANCE });
   if (!prepared.ok) {
     console.error(ui.err(prepared.error));
@@ -439,6 +435,10 @@ const headless =
 const serveRequested = servePort !== null;
 const entersRepl = !headless && !serveRequested;
 const interactive = entersRepl && process.stdin.isTTY === true;
+// 0.15：交互 REPL 或 gateway/serve 才有 ask_user 应答者；
+// `--run` / headless / 管道一律不注册（否则只能等 120s 超时）。
+// `ui.askUser: false` 在 bootstrap / tenant factory 内按配置关闭。
+const askUserClient = interactive || (serveRequested && !headless);
 
 // ── 主流程 ──────────────────────────────────────
 
@@ -463,7 +463,7 @@ const initialResult = await bootstrap({
   sessionId: resolvedSessionId,
   headless,
   interactive,
-  registerAskUser: interactive,
+  registerAskUser: askUserClient,
   acquireLock: true,
   cliOverrides,
   ...(continueLatest ? { continueLatest: true } : {}),
@@ -509,7 +509,7 @@ if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
       sessionId: resolvedSessionId,
       headless,
       interactive,
-      registerAskUser: interactive,
+      registerAskUser: askUserClient,
       acquireLock: true,
       cliOverrides,
       ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
@@ -671,6 +671,8 @@ async function runWithConfig(result: BootstrapResult) {
         mockScenario,
         headless,
         nodeId: result.nodeId,
+        // 0.15：非 default tenant 同样注册 ask_user；每个 tenant 的 ui.askUser 再单独关闭。
+        registerAskUser: askUserClient,
         sharedEvents,
         logger,
       });

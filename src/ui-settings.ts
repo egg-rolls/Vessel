@@ -3,7 +3,8 @@
  *
  * 写用户配置 `~/.vessel/config.yaml` 的已知键（YAML snake_case）：
  * 0.11 只有 `ui.language`；0.11.1 增加 `ui.showReasoning` 与 `agent.cwd`；
- * 0.13 增加 `ui.statusBars`（YAML `ui.status_bars`）。
+ * 0.13 增加 `ui.statusBars`（YAML `ui.status_bars`）；0.14 增加可见性键；
+ * 0.15 增加 `ui.askUser`（YAML `ui.ask_user`）。
  * 复用 `permission-store` 的写入风格：YAML parse/stringify、同目录临时文件 + rename、
  * 临时文件 0600；只改目标键，根对象与目标块的其它键保留。
  *
@@ -150,6 +151,7 @@ export type SettableConfigKey =
   | 'ui.verbosity'
   | 'ui.showInternalEvents'
   | 'ui.errorLevel'
+  | 'ui.askUser'
   | 'observability.showProcessErrors'
   | 'agent.cwd';
 
@@ -167,6 +169,7 @@ const CONFIG_SET_TARGETS: Readonly<Record<SettableConfigKey, ConfigSetTarget>> =
   'ui.verbosity': { block: 'ui', yamlKey: 'verbosity' },
   'ui.showInternalEvents': { block: 'ui', yamlKey: 'show_internal_events' },
   'ui.errorLevel': { block: 'ui', yamlKey: 'error_level' },
+  'ui.askUser': { block: 'ui', yamlKey: 'ask_user' },
   'observability.showProcessErrors': {
     block: 'observability',
     yamlKey: 'show_process_errors',
@@ -206,6 +209,9 @@ export async function setUserConfigValue(
   }
   if (key === 'ui.errorLevel' && !isUiErrorLevel(value)) {
     throw new Error(`invalid_error_level: ${JSON.stringify(value)}`);
+  }
+  if (key === 'ui.askUser' && typeof value !== 'boolean') {
+    throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);
   }
   if (key === 'observability.showProcessErrors' && typeof value !== 'boolean') {
     throw new Error(`invalid_boolean: ${JSON.stringify(value)}`);

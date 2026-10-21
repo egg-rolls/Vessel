@@ -126,7 +126,10 @@ export interface BootstrapOptions {
    * 非交互（headless / serve-only / 管道）时无 Key 必须快速失败，不能进首启向导。
    */
   interactive?: boolean;
-  /** 是否注册 ask_user（默认 = interactive；headless 下注册只会让 waitFor 超时） */
+  /**
+   * 是否注册 ask_user（默认 = interactive；headless 下注册只会让 waitFor 超时）。
+   * 最终还会被 `ui.askUser: false` 关闭；CLI 在 gateway/serve 模式下显式传 true。
+   */
   registerAskUser?: boolean;
   /** 项目配置文件路径（默认 ./vessel.yaml）；嵌入/测试用 */
   configPath?: string;
@@ -831,7 +834,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     useMock,
     ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
     headless,
-    registerAskUser,
+    // 0.15：显式 ui.askUser=false 关闭；无客户端的入口不会传 true。
+    registerAskUser: registerAskUser && config.ui?.askUser !== false,
     loader,
     nodeId,
     sessionId: currentSessionId,

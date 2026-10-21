@@ -416,7 +416,7 @@ export type UiVerbosity = 'minimal' | 'normal' | 'debug';
 /** 错误展示层级（0.14；默认 user） */
 export type UiErrorLevel = 'user' | 'all';
 
-/** UI 配置（0.8.5；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars；0.14 可见性） */
+/** UI 配置（0.8.5；0.11 clearOnStart；0.11.1 showReasoning；0.13 statusBars；0.14 可见性；0.15 askUser） */
 export interface UiConfig {
   /** UI 语言；'zh-CN' | 'en'，非法值由消费方归一化回退 */
   language?: string;
@@ -450,6 +450,14 @@ export interface UiConfig {
    * YAML 键为 `status_bars`；非法值由 validator 拒绝，不做静默回退。
    */
   statusBars?: UiStatusBars;
+  /**
+   * 是否注册 `ask_user` 工具（0.15；YAML 键 `ask_user`）。
+   *
+   * 默认由入口决定：交互 REPL（TTY）与 `gateway start` / `--serve` 为 true，
+   * `--run` / headless / 管道为 false。显式 `false` 关闭；显式 `true` 也不会在
+   * 无客户端的 headless 入口注册（否则只能等 120s 超时）。
+   */
+  askUser?: boolean;
 }
 
 /** Vessel 配置 */

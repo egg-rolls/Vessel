@@ -41,7 +41,7 @@ export async function runHeadless(
   const { sessionId, provider } = options;
 
   // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
-  // 避免 waitFor 超时挂起；ask_user 仅交互模式注册（见 bootstrap），靠超时返回错误兜底。
+  // 避免 waitFor 超时挂起；ask_user 在 headless 下不注册（见 bootstrap），靠超时返回错误兜底。
   runtime.events.subscribe((rawEvent) => {
     const event = asTuiEvent(rawEvent);
     if (event.type === 'tool.permission.request') {

@@ -13,7 +13,6 @@ export const en: Record<MessageKey, string> = {
   'help.section.usage': 'Usage',
   'help.section.session': 'Sessions',
   'help.section.headless': 'Headless',
-  'help.section.serve': 'Serve',
   'help.section.gateway': 'Gateway lifecycle (0.12)',
   'help.section.capability': 'Capabilities (0.4)',
   'help.section.config': 'Configuration (0.5)',
@@ -33,7 +32,6 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.stdin': 'single headless turn (stdin)',
   'help.cmd.continueRun': 'continue the latest session and run one turn',
   'help.cmd.resumeRun': 'resume an interrupted durable run',
-  'help.cmd.serve': 'start the HTTP/WS gateway (Web console backend)',
   'help.cmd.status': 'local runtime / attach / gateway instances at a glance',
   'help.cmd.agents': 'list agents via agents.list (local gateway or --connect)',
   'help.cmd.errors': 'recent run/tool errors (diagnostics in errorLevel: all)',
@@ -53,16 +51,15 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.workflowCancel': 'cancel an in-process run',
   'help.cmd.eval': 'offline evaluation',
   'help.cmd.evalOut': 'write evaluation JSON / choose the report path',
-  'help.cmd.feishu': 'attach the Feishu channel (usable with --serve / REPL)',
+  'help.cmd.feishu': 'attach the Feishu channel (usable with gateway start / REPL)',
   'help.cmd.tenant': 'select a tenant (or use VESSEL_TENANT)',
   'help.cmd.connect':
     'connect to a gateway (non-loopback requires https; token via VESSEL_CONNECT_TOKEN)',
-  'help.cmd.origin': 'CORS/WS Origin allowlist for the standalone Web frontend',
   'help.cmd.configPath': 'print user/project config paths',
   'help.cmd.configInit': 'generate a user config template',
   'help.cmd.configShow': 'show redacted config and sources',
   'help.cmd.configSet':
-    'write a user setting (ui.language, ui.showReasoning, ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, observability.showProcessErrors, agent.cwd)',
+    'write a user setting (ui.language, ui.showReasoning, ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, observability.showProcessErrors, agent.cwd)',
   'help.cmd.tenantList': 'list tenants',
   'help.cmd.tenantGet': 'show tenant metadata',
   'help.cmd.tenantCreate': 'create a tenant',
@@ -111,6 +108,8 @@ export const en: Record<MessageKey, string> = {
   'cli.feishuConnected': 'Feishu channel connected ({appId}).',
   'cli.gatewayRunning': 'Gateway running… press Ctrl+C to stop.',
   'cli.feishuRunning': 'Feishu channel running… press Ctrl+C to stop.',
+  'cli.serveDeprecated':
+    '--serve is deprecated; use `vessel gateway start` (foreground) or `vessel gateway start --daemon`.',
 
   // ── connect ──
   'connect.caUnreadable': 'Cannot read CA file: {path}',
@@ -123,7 +122,7 @@ export const en: Record<MessageKey, string> = {
   'config.init.next':
     'next: run `vessel` to configure your API key, or `vessel doctor` to verify the setup.',
   'config.set.unknownKey':
-    'Unsupported config key "{key}"; supported keys: ui.language, ui.showReasoning, ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, observability.showProcessErrors, agent.cwd',
+    'Unsupported config key "{key}"; supported keys: ui.language, ui.showReasoning, ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, observability.showProcessErrors, agent.cwd',
   'config.set.invalidLanguage': 'ui.language must be "zh-CN" or "en"',
   'config.set.invalidBoolean': '{key} must be "true" or "false"',
   'config.set.invalidStatusBars': 'ui.statusBars must be "top", "bottom", "both" or "none"',

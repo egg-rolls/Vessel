@@ -111,4 +111,26 @@ describe('ui 配置', () => {
     expect(result.validation.valid).toBe(false);
     expect(result.validation.errors.map((error) => error.path)).toContain('ui.statusBars');
   });
+
+  it('ui.ask_user 映射为 askUser 并接受布尔值（0.15）', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  ask_user: false\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.errors).toEqual([]);
+    expect(result.config.ui).toEqual({ askUser: false });
+  });
+
+  it('ui.askUser 非布尔时报错（0.15）', async () => {
+    const result = await loadConfig({
+      configPath: tmpYaml('ui:\n  ask_user: nope\n'),
+      userConfigPath: missingUserConfig(),
+      env: {},
+    });
+
+    expect(result.validation.valid).toBe(false);
+    expect(result.validation.errors.map((error) => error.path)).toContain('ui.askUser');
+  });
 });
