@@ -481,11 +481,21 @@ export class AnthropicProvider implements LLMProvider {
   private apiKey: string;
   private baseUrl: string;
   private model: string;
+  private temperature?: number;
+  private maxTokens?: number;
 
-  constructor(config: { api_key: string; base_url?: string; model?: string }) {
+  constructor(config: {
+    api_key: string;
+    base_url?: string;
+    model?: string;
+    temperature?: number;
+    max_tokens?: number;
+  }) {
     this.apiKey = config.api_key;
     this.baseUrl = config.base_url ?? 'https://api.anthropic.com';
     this.model = config.model ?? 'claude-3-opus-20240229';
+    this.temperature = config.temperature;
+    this.maxTokens = config.max_tokens;
   }
 
   /**
@@ -583,7 +593,8 @@ export class AnthropicProvider implements LLMProvider {
 
     const body = {
       model: req.model ?? this.model,
-      max_tokens: req.max_tokens ?? 4096,
+      temperature: req.temperature ?? this.temperature,
+      max_tokens: req.max_tokens ?? this.maxTokens ?? 4096,
       messages,
       system: systemContent,
       tools: req.tools?.map((t) => ({
@@ -681,7 +692,8 @@ export class AnthropicProvider implements LLMProvider {
   ): Promise<LLMResponse> {
     const streamBody = {
       model: req.model ?? this.model,
-      max_tokens: req.max_tokens ?? 4096,
+      temperature: req.temperature ?? this.temperature,
+      max_tokens: req.max_tokens ?? this.maxTokens ?? 4096,
       messages,
       system: systemContent,
       tools: req.tools?.map((t) => ({

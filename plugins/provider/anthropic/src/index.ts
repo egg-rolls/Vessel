@@ -49,6 +49,8 @@ const plugin: Plugin = {
         api_key: c.api_key as string,
         base_url: baseUrl,
         model,
+        temperature: c.temperature as number | undefined,
+        max_tokens: c.max_tokens as number | undefined,
       });
       const retryOptions: RetryOptions = { ...resolveRetryOptions(c), provider: 'anthropic' };
       const onRetry = readRetryHook(c);

@@ -45,9 +45,15 @@ function mockJson(payload: unknown, captured: Captured[] = []): void {
 }
 
 /** 默认 200 SSE 响应 */
-function mockSse(chunks: string[]): void {
+function mockSse(chunks: string[], captured: Captured[] = []): void {
   const encoder = new TextEncoder();
-  globalThis.fetch = (async () => {
+  globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+    captured.push({
+      url: String(input),
+      body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      signal: init?.signal ?? undefined,
+    });
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
@@ -179,6 +185,38 @@ describe('provider-anthropic 请求形状', () => {
       role: 'user',
       content: [{ type: 'tool_result', tool_use_id: 'tc1', content: 'sunny' }],
     });
+  });
+
+  it('配置的 temperature / max_tokens 不会在流式或非流式请求体里被丢弃', async () => {
+    const captured: Captured[] = [];
+    mockJson(TEXT_RESPONSE, captured);
+    const provider = factoryFor()({
+      api_key: 'k',
+      model: 'claude-test',
+      temperature: 0.3,
+      max_tokens: 321,
+      timeout_ms: 0,
+    });
+
+    await provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'claude-test' });
+    expect(captured[0]?.body.temperature).toBe(0.3);
+    expect(captured[0]?.body.max_tokens).toBe(321);
+
+    mockSse(
+      [
+        `event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n`,
+        `event: message_stop\ndata: {"type":"message_stop"}\n\n`,
+      ],
+      captured,
+    );
+    await provider.chat({
+      messages: [{ role: 'user', content: 'hi' }],
+      model: 'claude-test',
+      stream: true,
+      on_chunk: () => {},
+    });
+    expect(captured[1]?.body.temperature).toBe(0.3);
+    expect(captured[1]?.body.max_tokens).toBe(321);
   });
 });
 
