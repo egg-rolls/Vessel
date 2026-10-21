@@ -798,11 +798,11 @@ serve:
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
 | `delegate_task` | 默认注册；`delegate.enabled: false` 时关闭（工具变为 3 个）。权限模式：交互 `bridge`、headless `allow`、可配 `deny`（保留 `read_only_tools`） |
-| `ask_user` | 仅「实际进入 REPL 且 stdin 是 TTY」；serve / headless / 管道不注册 |
+| `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭（0.14.1） |
 | `team_*`（spawn / send / inbox / status / cancel） | 仅 `team.enabled: true`（默认关闭）。进程内原型；0.2 起共用 core Host |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：**默认 4 / 交互 REPL 5 / 启用 team 9**；配置 MCP 后为 **4 + N 个 MCP 工具**（N 由 server 提供，0.3 不写死总数）。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：**默认 4 / 交互 REPL 或 gateway-serve 5 / 启用 team 9**；配置 MCP 后为 **4 + N 个 MCP 工具**（N 由 server 提供，0.3 不写死总数）。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive or gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -1961,3 +1961,72 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `ask_user` 仍是全局弹窗与 120s 事件时间 TTL；本版本只把权限请求改为 run 内联。
 - 状态栏显隐写回失败不提示用户；`VESSEL_STATUS_BARS` 只是启动初值，不随手动切换改变。
 - Windows 全量门禁 `3226 pass / 2 skip / 0 fail`（`VESSEL_VALIDATE_RESULTS=1`）；POSIX `3228 pass / 0 fail`，build / Web build 通过；0.13.0 仍未 tag / `npm publish` / 合并 `main`。
+
+## 33. 0.14 / 0.14.1 可观察性、控制面与 Host 对等（已实现）
+
+> 状态：已合入 `release/0.14.1`（未发布；0.14.0 不单独 bump，本节同时覆盖 0.14.0 P0 与 0.14.1 / 0.15 折叠内容）。决策见 [ADR-080](adr/ADR-080-observability-control-plane-and-gateway-instances.md)、[ADR-081](adr/ADR-081-host-parity-and-serializable-snapshot.md)、[ADR-082](adr/ADR-082-ask-user-registration-and-web-chat.md)。本节修订 §32.3 / §32.5 中「`ask_user` 仍是全局弹窗」的描述。
+
+### 33.1 可观察性契约
+
+- **trace 流式过滤**：`trace.includeStreamChunks` 默认 `false`；过滤同时匹配 `llm.stream.chunk` 与 `<prefix>.llm.stream.chunk`（如 `subagent.llm.stream.chunk`），带前缀的转发事件不能绕过 trace 策略。实时事件发布不受影响。
+- **结构化错误 envelope**：`run.failed` / `tool.call.failed` 保留原 `error` 文本，并展开 `error_code` / `category` / `phase` / `retryable`，可识别时附 `http_status`，调用方可通过 `details` 补充非敏感信息。`category` ∈ `provider|tool|permission|config|gateway|internal`；`phase` ∈ `input|llm|tool|permission|finalize|checkpoint|shutdown|run`。envelope 不携带 prompt / reasoning / 完整工具结果。
+- **可见性配置**：
+  - `ui.verbosity: minimal|normal|debug`（默认 `normal`）——Web 信息层级，见 §33.7。
+  - `ui.showInternalEvents: boolean`（默认 `false`）——TUI `/errors` 与 Web 的 L3 内部事件。
+  - `ui.errorLevel: user|all`（默认 `user`）——TUI `/errors` 与 `vessel errors`；`all` 追加 internal / process 级。
+  - `observability.showProcessErrors: boolean`（默认 `false`）——`process.error` / `shutdown.failed` 等进入 `vessel errors`。
+  - 四个键都支持 `vessel config set`，YAML 分别为 `verbosity` / `show_internal_events` / `error_level` / `show_process_errors`；非法值由 validator 拒绝，不静默回退。
+
+### 33.2 只读控制面 CLI
+
+- **`vessel status [--json]`**：一屏输出本地配置、`<dataDir>` 下全部 gateway 实例（instance / running / pid / host / port / url / uptime / version / node_id / pid_file）与控制面 attach 状态（local / remote、tenant、clients、latest_seq、当前 run / session、queue）。只读：不 bootstrap、不取 tenant 写锁、不输出密钥。
+- **`vessel agents [--json]`**：调用 canonical `agents.list`；本地优先 attach 运行中的 gateway，否则用 `--connect`。输出 agent 注册表字段，不启动 / 取消任何 agent。
+- **`vessel errors [--json] [--limit N]`**：最近错误摘要，默认 20 条、上限 200。默认只含 `run.failed` / `tool.call.failed` / `agent.run.failed`；`ui.errorLevel: all` 或 `observability.showProcessErrors: true` 时追加 `process.error` / `shutdown.failed` / `hook.error` / `plugin.error`。本地读 trace，`--connect` 时走 `events.list`；不输出 stack 与密钥。
+- 三者的人类输出走 `src/ui-style.ts`；`--json` 为纯 JSON、无 ANSI。
+
+### 33.3 gateway 多实例 A
+
+- **键**：`(dataDir, instance)`。`instance` 匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`；default 实例名为 `default`。
+- **文件**：default → `<dataDir>/gateway.pid`、`logs/gateway.log`；命名实例 → `<dataDir>/gateway-<instance>.pid`、`logs/gateway-<instance>.log`。实例锁统一为 `<dataDir>/gateway-<instance>.lock`（JSON `{pid, started_at, host}`，`atomicWrite` + `0600`；目录 `0700`）。PID 记录新增可选 `instance`（additive）。
+- **命令**：`vessel gateway list [--json]` 列出全部实例；`start` 接受 `--instance <name>` / `--port <n>`；`stop` / `status` / `reload` / `restart` 额外接受 `--all`。选择器三者互斥；`restart --all` 必须同时带 `--daemon`。`gateway start --port 0` 必须同时给 `--instance`。
+- **选择器优先级**：显式 `--instance` > 显式 `--port`（用 PID 记录里的端口匹配）> default。无选择器时：0 个实例 → 空结果，1 个 → 该实例，≥2 个 → `multiple_instances`，不猜目标。
+- **node_id**：显式 `host.nodeId` 与其它运行实例重复时，启动前拒绝（`duplicate_node_id` 并指出占用实例与 pid）；自动生成的 node_id 不参与检查。
+- **`--serve`**：从 `--help` 移除，保留为 default 实例的前台隐藏兼容别名，启动时向 stderr 打印弃用提示；新入口统一为 `vessel gateway start`。
+
+### 33.4 Host 对等与可序列化快照
+
+- **per-run session**：`RunOptions.sessionId` 由 `AgentHandle.run` 消费，覆盖成员默认 session；`ScheduledTask.sessionId` 仍可由自定义 Scheduler 改写。单 agent `AgentRuntime.run(input, sessionId, opts)` 继续以显式参数为准，不读该字段。
+- **取消原因**：`AgentHandle.cancel(runId?, reason?)` 与 `RuntimeHost.cancel(id, runId?, reason?)` 接受 `RunInterruptReason`；reason 经 `AbortSignal.reason` 传给成员 runtime，`agent.run.cancelled` 仅在 reason 为字符串时写入。语义同 0.13：`shutdown` / `timeout` → interrupted checkpoint，`user` / 未传 → cancelled。
+- **resume 经 Scheduler**：`Host.resume(runId, opts?)` 用 `ScheduledTask.runId` 固定 run id，经 `scheduler.submit` 排队，受 `maxConcurrency` / `perAgentSerial` 约束；`opts.signal` 可取消排队或运行。`resuming` 集合在 submit 失败、队列取消与 handle 结算时释放；重复 run id 被拒绝。
+- **快照**：`RuntimeHost.snapshot?()` 返回 `HostSnapshot { asOf, agents, runs, scheduler }`；`AgentSnapshot` 含 id / name? / state / sessionId / currentRunId? / toolNames / lastError? / startedAt? / queuePosition?；`RunSnapshot` 含 runId / agentId / sessionId / state / queuePosition? / queuedAt? / startedAt?；`SchedulerSnapshot` 含 asOf / queued / running / stats。全部为纯 JSON，可安全序列化；`Scheduler.snapshot` 可选，未实现时 Host 降级为成员 active run 摘要。
+- **Host 透传**：`RuntimeOptions.pluginConfigs` / `logger` / `includeReasoning` 原样传给每个成员 runtime。
+- **镜像事件**：Host 合成的 `agent.run.*` 事件带 `mirror_of_run_id`（等于被镜像的 run id），用于与成员 runtime 的具体事件对齐。
+
+### 33.5 ToolDefinition.display
+
+- `display?: { label?: string; kind?: 'command'|'file'|'search'|'generic' }`（0.14.1，additive）。`PluginHost.listTools()` 原样透出，供 UI 在通用回退之上增强展示。
+- 不进入 LLM 工具 schema，不参与权限 / 执行判定；未知 `kind` 按 `generic` 处理。当前 `tools.list` RPC 的结果 schema 尚未包含该字段。
+
+### 33.6 ask_user 注册策略
+
+- **注册**：交互 REPL（stdin 为 TTY）与 `gateway start` / `--serve` 注册；`--run` / headless / 管道不注册。
+- **关闭**：`ui.askUser: false`（YAML `ui.ask_user`）按入口与 tenant 关闭；显式 `true` 也不能让无客户端的 headless 入口注册（否则只能等 120s 超时）。
+- **配置**：`vessel config set ui.askUser <true|false>`；validator 只接受布尔。未配置时保持入口默认，不写默认值。
+- **Web**：提问内联到所属 `RunCard`（`AskCard`），删除全局 `AskModal`；提交走既有 `ask.respond`，不新增 RPC；其他端应答 / 过期 / run 终态时收起。提问有效期仍按事件时间 `event.ts + 120s`，不复用权限的无限等待。
+
+### 33.7 Web 聊天渲染与信息层级
+
+- **工具卡**：单行 header + 输入 / 输出 / 变更 / 错误分区；20 行或 8KB 折叠预览，200KB 分段加载，复制按钮；失败自动展开，并复用 `tool.call.failed` 的结构化 `errorMeta`。
+- **思考气泡**：`reasoning_delta` 合并为独立可折叠块，记录起止时间；12 行上限；流式展开、结束后折叠；与正文严格分离。
+- **流式性能**：`EventGroupCache` 只并入新增条目并只重建受影响的 `RunGroup`；`RunCard` 使用 `memo` 与稳定回调；渲染组上限 200；滚动跟随节流 100ms。截断 / reset / gap 或可见性设置变化时整表重建。
+- **信息层级**：`minimal` 只保留正文、失败工具与 run 终态（隐藏成功工具卡、思考、时间元数据）；`normal` 为 L1 + 折叠 L2；`debug` 等同 `showInternalEvents: true` 且显示 L3 原始事件。`showInternalEvents` 与 `debug` 取“或”；`errorLevel: all` 放开 internal / process 级错误；缺失 / 非法值回退 `normal` / `false` / `user`。
+- **i18n**：新增文案同时进入 zh-CN 与 en 两份 catalog。
+
+### 33.8 已知限制（0.14 / 0.14.1）
+
+- `HostSnapshot` 不持久化、不可用于跨进程恢复；不是 RPC 控制面。
+- `ToolDefinition.display` 尚未进入 `tools.list` RPC，也未在 TUI / Web 全面消费；当前 UI 仍保留按工具名的回退。
+- gateway 多实例只覆盖同机同 `dataDir` 的本地实例；不做跨实例调度、故障转移、日志轮转或每实例独立配置。
+- `--serve` 仍可用但不保证长期保留；脚本应迁移到 `vessel gateway start`。
+- 提问仍是 120s 事件时间 TTL，未接入权限的持久化交互记录。
+- 0.14.0 不单独 bump：其 P0 内容与 0.14.1 / 0.15 一并写入 CHANGELOG 的 `0.14.1` 段；未 tag / `npm publish` / 合并 `main`。

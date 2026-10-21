@@ -171,7 +171,7 @@ agent:
 - **`agent.cwd`**：`bash` 未显式传 `cwd` 时使用该目录；`read` / `edit` 的相对路径按它解析。支持 `~`，相对路径按进程 cwd 解析为绝对路径；未配置 / 空串等价于不设置。优先级固定为 **工具参数 `cwd` > `agent.cwd` > `process.cwd()`**。
 - **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。
 - **CLI 写配置**：`vessel config set agent.cwd <path>`；空值被拒绝。与 `ui.language` 一样只改用户配置、保留其它键、`0600` 原子写。
-- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 弹窗仍按事件时间推导 `event.ts + 120s`；权限卡片不再按 TTL 丢弃。详见 §2.6。
+- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 提问卡仍按事件时间推导 `event.ts + 120s`；权限卡片不再按 TTL 丢弃。详见 §2.6。
 
 ### 2.5 状态栏与显隐（0.13，ADR-078）
 
@@ -192,7 +192,27 @@ ui:
 - **持久化文件**：`<dataDir>/interactions-<tenant>.json`，`0600` 原子写，记录 `pending` / `answered` / `orphaned`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
 - **终态与幂等**：run 进入 `completed` / `failed` / `cancelled` 时，同 run 的 pending 清出并持久化为 `orphaned`。重复应答返回首次结果（`duplicate: true`）；不同决定返回 `conflict`；`orphaned` 返回 `run_ended`；不存在返回 `not_found`。有界清理只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **关联字段**：`tool.permission.request` 带 `session_id` / `tool_call_id` / `source`；只有显式超时才带 `deadline_at`。
-- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；没有 `interactions.pending` RPC，刷新恢复依赖事件重放缓冲；`ask_user` 仍是全局弹窗。
+- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；没有 `interactions.pending` RPC，刷新恢复依赖事件重放缓冲；`ask_user` 提问卡仍按事件时间 120s 过期，未接入持久化交互记录。
+
+### 2.7 可见性与 ask_user（0.14 / 0.14.1，ADR-080 / ADR-082）
+
+```yaml
+ui:
+  verbosity: normal            # minimal | normal | debug；Web 信息层级
+  show_internal_events: false  # TUI /errors 与 Web 的 L3 内部事件
+  error_level: user            # user | all；TUI /errors 与 vessel errors
+  ask_user: true               # 入口默认；显式 false 关闭 ask_user
+observability:
+  show_process_errors: false   # process/shutdown 错误进入 vessel errors
+```
+
+- **`ui.verbosity`**（默认 `normal`）：Web 的 `minimal` / `normal` / `debug` 三级可见性；`debug` 等同 `showInternalEvents: true` 并显示 L3 原始事件。缺失 / 非法值回退 `normal`。
+- **`ui.showInternalEvents`**（默认 `false`）：TUI `/errors` 与 Web 展示内部事件；与 `verbosity: debug` 取“或”。
+- **`ui.errorLevel`**（默认 `user`）：`all` 时 `/errors` 与 `vessel errors` 追加 internal / process 级错误。
+- **`observability.showProcessErrors`**（默认 `false`）：让 `process.error` / `shutdown.failed` 等进入 `vessel errors`。
+- **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口与 tenant 关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，有效期仍为事件时间 `event.ts + 120s`。
+- **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
+- **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
 ## 3. 密钥与 `_env`
 
@@ -225,6 +245,11 @@ vessel config show [--sources] [--json] [--tenant <id>]
 vessel config set ui.language <zh-CN|en> [--json]
 vessel config set ui.showReasoning <true|false> [--json]
 vessel config set ui.statusBars <top|bottom|both|none> [--json]
+vessel config set ui.verbosity <minimal|normal|debug> [--json]
+vessel config set ui.showInternalEvents <true|false> [--json]
+vessel config set ui.errorLevel <user|all> [--json]
+vessel config set ui.askUser <true|false> [--json]
+vessel config set observability.showProcessErrors <true|false> [--json]
 vessel config set agent.cwd <path> [--json]
 vessel doctor [--json]
 ```

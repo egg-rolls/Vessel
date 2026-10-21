@@ -3,6 +3,60 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.14.1] - 2026-10-21
+
+> 0.14.1（基于 `release/0.14.1`，未发布）：0.14.0 不单独 bump，本段合并记录 0.14.0 P0 与 0.14.1 / 0.15 折叠内容——可观察性与控制面、gateway 多实例 A、Host 对等与快照、ask_user 注册与 Web 聊天收口。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
+
+### Added
+
+- **结构化错误 envelope**：`run.failed` / `tool.call.failed` 在保留原 `error` 文本的同时增加 `error_code` / `category` / `phase` / `retryable`，可从错误对象或消息识别时附 `http_status`，调用方可给非敏感 `details`；分类固定为 `provider|tool|permission|config|gateway|internal`。
+- **可见性配置**：`ui.verbosity: minimal|normal|debug`（默认 `normal`）、`ui.showInternalEvents`（默认 `false`）、`ui.errorLevel: user|all`（默认 `user`）、`observability.showProcessErrors`（默认 `false`）；四个键都支持 `vessel config set`（YAML `verbosity` / `show_internal_events` / `error_level` / `show_process_errors`），非法值由 validator 拒绝。
+- **只读控制面 CLI**：`vessel status [--json]`（本地配置、全部 gateway 实例、控制面 attach 状态）、`vessel agents [--json]`（canonical `agents.list`）、`vessel errors [--json] [--limit N]`（默认 20、上限 200，本地读 trace / `--connect` 走 `events.list`）。三者都不 bootstrap、不取 tenant 写锁、不输出密钥。
+- **canonical `agents.list` / `agents.get`**：agent 注册表 RPC，canonical 方法总数 38 → 40；两者带 `result_schema`。
+- **gateway 多实例 A**：PID / 日志 / 实例锁以 `(dataDir, instance)` 为键（default 为 `gateway.pid` / `gateway.log`，命名实例为 `gateway-<instance>.pid` / `gateway-<instance>.log`；实例锁 `gateway-<instance>.lock`）。新增 `vessel gateway list [--json]`；`start` 接受 `--instance` / `--port`，`stop` / `status` / `reload` / `restart` 额外接受 `--all`（与前者互斥；`restart --all` 必须带 `--daemon`）。实例名匹配 `^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`。
+- **TUI 有效限制与 Self Card**：`/status` 增加 limits / budget / limit blocked 段（`as_of` 保留，idle 用量显示 `-`）；`/agents <id>` 增加 Self Card（as_of、tools（显式 > seen > unknown）、delegate 限制、剩余预算、最新 limit block）；`/errors` 对 `limit_blocked` 附 `[scope/key current/max · source · hint]`。
+- **Host 对等**：`RunOptions.sessionId` 支持 per-run session；`AgentHandle.cancel` / `RuntimeHost.cancel` 接受 `RunInterruptReason`；`Host.resume(runId, opts?)` 经 Scheduler 排队（`ScheduledTask.runId` 保持 run id）；新增纯 JSON `HostSnapshot` / `AgentSnapshot` / `RunSnapshot` / `SchedulerSnapshot` 与 `snapshot()`；`pluginConfigs` / `logger` / `includeReasoning` 透传成员 runtime；合成 `agent.run.*` 事件带 `mirror_of_run_id`。
+- **`ToolDefinition.display`**：可选 `{ label?, kind?: 'command'|'file'|'search'|'generic' }`，`listTools()` 原样透出；additive，不进入 LLM schema。
+- **ask_user 注册扩展**：交互 REPL（TTY）与 `gateway start` / `--serve` 注册；`ui.ask_user`（`ui.askUser`）显式 `false` 按入口与 tenant 关闭；`vessel config set ui.askUser <true|false>` 可持久化。
+- **Web 聊天渲染**：Codex 式工具卡（单行 header + 输入 / 输出 / 变更 / 错误分区、20 行 / 8KB 折叠、200KB 分段加载、复制、失败自动展开）；思考气泡（起止时间、12 行上限、流式展开 / 结束折叠、正文分离）；ask_user 内联到 `RunCard`，删除全局 `AskModal`；跨 session 顶部条同时汇总权限与提问；`ui.verbosity` 驱动 minimal / normal / debug 三级可见性。
+
+### Changed
+
+- **trace 流式过滤覆盖前缀**：`trace.includeStreamChunks=false`（默认）时，`llm.stream.chunk` 与 `<prefix>.llm.stream.chunk` 一律不落 trace；实时事件发布不变。
+- **`--serve` 弃用**：从 `--help` 移除，保留为 default 实例的前台隐藏兼容别名，启动时向 stderr 打印弃用提示；新入口统一为 `vessel gateway start`。
+- **errors 展示层级**：默认只含 run / tool / agent 级错误；`ui.errorLevel: all` 或 `observability.showProcessErrors: true` 时追加 process / shutdown / hook / plugin 级。
+- **gateway 启动校验**：显式 `host.nodeId` 与其它运行实例重复时启动前拒绝（`duplicate_node_id`）；`gateway start --port 0` 必须同时给 `--instance`；无选择器且存在多个实例时返回 `multiple_instances`，不猜目标。
+- **Web 流式性能**：`EventGroupCache` 按 run 增量并入并只重建受影响的 `RunGroup`；`RunCard` 使用 `memo` 与稳定回调；渲染组上限 200；滚动跟随节流 100ms。
+- **TUI `/errors`**：有效级别 = 显式参数 > `ui.errorLevel` > `user`；`ui.showInternalEvents: true` 也会放开 internal 级。
+
+### Fixed
+
+- **Host 多 agent 复用默认 session**：`AgentHandle.run` 现在按 `RunOptions.sessionId` 为每个 run 选择 session，不再把成员默认 session 串到所有 run；单 agent 仍以显式 `sessionId` 参数为准。
+- **resume 绕过并发 / 串行约束**：`Host.resume` 改经 Scheduler 排队，遵守 `maxConcurrency` / `perAgentSerial`；`resuming` 锁在 submit 失败、队列取消与 handle 结算时释放。
+- **Host 丢失取消原因**：取消现在把 `RunInterruptReason` 透传到成员 runtime，`agent.run.cancelled` 可带 `reason`。
+- **Host 未透传配置**：成员 runtime 现在继承 `pluginConfigs` / `logger` / `includeReasoning`。
+- **带前缀流式事件绕过 trace 策略**：`subagent.llm.stream.chunk` 等转发事件按同一开关过滤。
+- **Web 流式 token 触发整树重渲染**：增量 group cache + memo 后只更新受影响的 run 卡片。
+- **多实例事件去重键冲突**：显式 `node_id` 跨运行实例重复时拒绝启动，避免 `(node, incarnation, run_id, seq)` 键碰撞。
+
+### Security
+
+- **实例锁文件**：`<dataDir>/gateway-<instance>.lock` 使用 `atomicWrite` + `0600`，目录 `0700`；实例名只接受安全字符集，非法名称拒绝。
+- **跨实例 node_id 唯一**：显式 `host.nodeId` 不得与其它运行实例重复，拒绝信息只含实例名与 pid。
+- **错误 envelope 不含敏感内容**：只携带分类 / 阶段 / 可重试性 / HTTP 状态与非敏感 `details`，不写 prompt、reasoning 或完整工具结果。
+- **无客户端不注册 ask_user**：`--run` / headless / 管道不注册提问工具，避免无应答方时挂起；`ui.askUser: false` 可供嵌入方显式关闭。
+- **默认不暴露内部事件**：`ui.showInternalEvents` / `observability.showProcessErrors` 默认关闭，`/errors` 与 `vessel errors` 默认只显示用户级错误。
+
+### Known limitations
+
+- **快照不持久化**：`HostSnapshot` 只反映当前进程内存，不能用于跨进程恢复或迁移；它不是 RPC 方法。
+- **`display` 尚未全面消费**：`tools.list` 结果未包含 `display`，TUI / Web 仍保留按工具名的回退展示。
+- **多实例只覆盖本地**：同机同 `dataDir` 的实例各自启动；不做跨实例调度、故障转移、负载均衡、日志轮转或每实例独立配置。
+- **`--serve` 兼容期**：仍可用但不保证长期保留；脚本应迁移到 `vessel gateway start`。
+- **提问仍按 120s 过期**：`ask_user` 使用事件时间 `event.ts + 120s`，未接入权限的持久化交互记录与无限等待语义。
+- **验证范围**：定向测试覆盖 error envelope、trace 过滤、可见性配置、控制面命令、gateway 多实例、Host / Scheduler / durable resume、TUI limits 与 Web 渲染 / 缓存；全量门禁由 1 在收口时执行，本文档不声明具体通过数。
+- 0.14.1 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.13.0] - 2026-10-20
 
 > 0.13.0（基于 `release/0.13.0`，未发布）：TUI 双状态栏与权限生命周期重构；同时并入 0.12.1 的 TUI 小修（0.12.1 不单独发布）。权限等待默认不超时，pending / answered / orphaned 记录持久化到 `<dataDir>/interactions-<tenant>.json`；Web 权限改为 run 卡片内联应答。
