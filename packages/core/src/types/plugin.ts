@@ -153,4 +153,9 @@ export interface AgentRuntimeOptions {
   logger?: import('./logging.js').Logger;
   /** 0.15 E9：Self Card；缺省不注入，行为不变 */
   selfCard?: SelfCardOptions;
+  /**
+   * 0.18：会话事件日志（唯一真相源）。提供时 runtime 在发布每个事实事件前
+   * 先追加落盘（`llm.stream.chunk` 等派生事件除外）；缺省不落盘，行为与 0.17 一致。
+   */
+  eventLog?: import('./event.js').SessionEventLogPort;
 }

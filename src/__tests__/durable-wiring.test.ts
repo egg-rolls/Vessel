@@ -132,10 +132,11 @@ describe('loadResumableCheckpoint', () => {
     }
   });
 
-  it('空 messages → run_not_resumable', async () => {
+  it('空 messages 允许通过：历史由 runtime 从 session + 事件日志重建（0.18）', async () => {
     const store = await storeWith(checkpoint({ messages: [] }));
-    await expect(loadResumableCheckpoint(store, 'run-1')).rejects.toMatchObject({
-      code: 'run_not_resumable',
+    expect(await loadResumableCheckpoint(store, 'run-1')).toMatchObject({
+      run_id: 'run-1',
+      messages: [],
     });
   });
 

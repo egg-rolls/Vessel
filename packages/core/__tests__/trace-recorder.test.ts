@@ -298,6 +298,19 @@ describe('FileTraceRecorder hardening (0.10 R2-14)', () => {
     expect(included.map((e) => e.type)).toEqual(['llm.stream.chunk', 'subagent.llm.stream.chunk']);
   });
 
+  it('session.deleted 不写孤儿 jsonl（0.18 C7）', async () => {
+    const dir = tempDir();
+    const recorder = new FileTraceRecorder({ dir });
+    recorder.append(event('session-1', 'session.deleted', { session_id: 'session-1' }));
+    await recorder.flush();
+    await recorder.close();
+
+    await expect(readFile(join(dir, 'session-1.jsonl'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    expect(await readdir(dir).catch(() => [])).toEqual([]);
+  });
+
   it('creates trace files owner-only (mode 600 on POSIX)', async () => {
     if (process.platform === 'win32') return; // Windows 不受 mode 约束；由 POSIX CI 覆盖
     const dir = tempDir();

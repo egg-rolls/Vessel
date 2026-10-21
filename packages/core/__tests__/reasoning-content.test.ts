@@ -206,7 +206,7 @@ describe('StreamAccumulator reasoning', () => {
 });
 
 describe('runtime reasoning_content 生命周期', () => {
-  it('上下文保留、下一轮请求回传、事件不泄漏', async () => {
+  it('上下文保留、下一轮请求回传、请求事件不泄漏、llm.response 保留 reasoning', async () => {
     const captured: Message[][] = [];
     let calls = 0;
     const provider = {
@@ -272,10 +272,20 @@ describe('runtime reasoning_content 生命周期', () => {
     );
     expect(secondRequestToolAssistant?.reasoning_content).toBe('SECRET-THINK');
 
-    // 事件流（llm.request / context.changed 等）不泄漏思维链
-    const dumped = JSON.stringify(events.getHistory());
-    expect(dumped).not.toContain('SECRET-THINK');
-    expect(dumped).not.toContain('FINAL-THINK');
+    // 0.18：llm.request / context.changed 仍不携带思维链；
+    // 唯一真相源 `llm.response` 的 `reasoning` 字段保留（UI 按开关展示）。
+    const history = events.getHistory();
+    const requestsAndContext = history.filter(
+      (event) => event.type === 'llm.request' || event.type === 'context.changed',
+    );
+    const requestDump = JSON.stringify(requestsAndContext);
+    expect(requestDump).not.toContain('SECRET-THINK');
+    expect(requestDump).not.toContain('FINAL-THINK');
+
+    const reasoning = history
+      .filter((event) => event.type === 'llm.response')
+      .map((event) => (event.data as { reasoning?: string }).reasoning);
+    expect(reasoning).toEqual(['SECRET-THINK', 'FINAL-THINK']);
   });
 
   it('includeReasoning 透传 include_reasoning（默认请求形状不变）', async () => {
@@ -362,7 +372,7 @@ describe('runtime reasoning_content 生命周期', () => {
       termination: { maxIterations: 10 },
     });
     expect(await disabled.run('hi')).toBe('answer');
-    expect(JSON.stringify(defaultEvents.getHistory())).not.toContain('SECRET-THINK');
+    // 0.18：默认不发布 reasoning_delta，但 llm.response 作为真相源保留 reasoning。
     expect(
       defaultEvents
         .getHistory()
@@ -370,6 +380,11 @@ describe('runtime reasoning_content 生命周期', () => {
         .map((event) => (event.data as { chunk: StreamChunk }).chunk)
         .every((chunk) => chunk.type !== 'reasoning_delta'),
     ).toBe(true);
+    const responseReasoning = defaultEvents
+      .getHistory()
+      .filter((event) => event.type === 'llm.response')
+      .map((event) => (event.data as { reasoning?: string }).reasoning);
+    expect(responseReasoning).toEqual(['SECRET-THINK']);
   });
 
   it('session 持久化与恢复保留 reasoning_content', async () => {

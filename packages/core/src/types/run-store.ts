@@ -7,6 +7,7 @@
  * @module @vessel-agent/core/session
  */
 
+import type { ErrorEnvelope } from './error.js';
 import type { Message } from './provider.js';
 
 /** 一次 run 的持久化检查点 */
@@ -15,7 +16,15 @@ export interface RunCheckpoint {
   session_id: string;
   agent_id?: string;
   status: 'running' | 'interrupted' | 'completed' | 'failed' | 'cancelled';
+  /**
+   * 0.18：不再写完整对话历史（唯一真相源是会话事件日志）。
+   * 新 checkpoint 写 `[]`；旧文件仍可能有 messages，读取侧按 legacy 回退。
+   */
   messages: Message[];
+  /** 0.18：checkpoint 覆盖到的会话事件 seq（唯一真相源游标） */
+  event_cursor?: number;
+  /** 0.18：失败终态的结构化错误 envelope（与 run.failed 一致） */
+  error_envelope?: ErrorEnvelope;
   usage?: {
     prompt_tokens: number;
     completion_tokens: number;

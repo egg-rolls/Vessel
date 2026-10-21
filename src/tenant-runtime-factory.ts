@@ -41,6 +41,7 @@ import {
   type RuntimePermissionConfig,
   resolveTenantPaths,
   type SessionBackend,
+  SessionEventLog,
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
@@ -169,6 +170,8 @@ export interface TenantRuntimeBundle {
   host?: RuntimeHost;
   agentRuntime?: AgentRuntime;
   runStore?: RunStore;
+  /** 0.18：会话事件日志（唯一真相源）；memory 后端或只读执行面不创建 */
+  eventLog?: SessionEventLog;
   trace?: TraceControl;
   metrics?: MetricsControlLike;
   redactor: TraceRedactor;
@@ -502,12 +505,19 @@ export async function buildTenantRuntime(
       tenantSessionsDbPath: tenantSessionsDbPath(tenantPaths.root),
       tenantId,
     });
+    // 0.18：事件日志按 tenant 的 sessions 目录落盘（`sessions/<id>/events.ndjson`）。
+    // 仅在本地写意图 + 持久化后端时创建；memory 后端/只读执行面保持零磁盘写入。
+    const eventLog =
+      options.writeTrace === true && backend !== 'memory'
+        ? new SessionEventLog({ dir: tenantPaths.sessions_dir, tenantId, logger })
+        : undefined;
     const sessionControl = createSessionControl({
       session,
       paths: tenantPaths,
       events,
       tenantId,
       ...(runStore ? { runStore } : {}),
+      ...(eventLog ? { eventLog } : {}),
     });
 
     // ── 插件 ──────────────────────────────────────
@@ -629,6 +639,7 @@ export async function buildTenantRuntime(
         },
         sessionId: options.sessionId ?? crypto.randomUUID(),
         ...(runStore ? { runStore } : {}),
+        ...(eventLog ? { eventLog } : {}),
         ...(hostEvents ? { events: hostEvents } : {}),
         contextFactory,
       });
@@ -666,6 +677,7 @@ export async function buildTenantRuntime(
           }),
           ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
           ...(runStore ? { runStore } : {}),
+          ...(eventLog ? { eventLog } : {}),
           logger,
         } as Parameters<typeof AgentRuntime.create>[0] & {
           pluginConfigs?: Record<string, Record<string, unknown>>;
@@ -878,6 +890,14 @@ export async function buildTenantRuntime(
 
       await closeRunStore(runStore, (error) => report('runStore.close', error));
 
+      if (eventLog) {
+        try {
+          await eventLog.close();
+        } catch (error) {
+          report('eventLog.close', error);
+        }
+      }
+
       try {
         session.close?.();
       } catch (error) {
@@ -916,6 +936,7 @@ export async function buildTenantRuntime(
       ...(host ? { host } : {}),
       ...(agentRuntime ? { agentRuntime } : {}),
       ...(runStore ? { runStore } : {}),
+      ...(eventLog ? { eventLog } : {}),
       ...(trace ? { trace } : {}),
       ...(metrics ? { metrics } : {}),
       redactor,

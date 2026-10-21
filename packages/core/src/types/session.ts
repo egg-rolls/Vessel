@@ -34,6 +34,15 @@ export interface RunState {
   ended_at?: number;
   /** 0.6.1 P2：结束原因（由写入方定义，如 new / resume / exit） */
   end_reason?: string;
+  /**
+   * 0.18（additive）：`messages` 投影缓存已覆盖到的会话事件 seq。
+   * resume 时只重放 `seq > derived_upto_seq` 的事件来补齐崩溃期间的增量；
+   * 旧数据缺失时按「messages 即完整历史」处理。
+   *
+   * `messages` 仍是投影缓存，唯一真相源是 `sessions/<id>/events.ndjson`；
+   * 彻底移除缓存留待 0.18 后续阶段。
+   */
+  derived_upto_seq?: number;
 }
 
 /** 会话摘要（listRich 返回，照搬 Hermes list_sessions_rich 的字段集，简化） */

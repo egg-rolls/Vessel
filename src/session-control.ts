@@ -14,6 +14,7 @@ import {
   type EventStream,
   type RunStore,
   type SessionBackend,
+  type SessionEventLog,
   type TenantPaths,
 } from '../packages/core/src/index';
 
@@ -45,6 +46,7 @@ export type DeleteSessionDataFn = (
     runStore?: RunStore;
     events?: EventStream;
     tenantId?: string;
+    eventLog?: SessionEventLog;
   },
 ) => Promise<SessionDeleteResult>;
 
@@ -62,6 +64,8 @@ export interface CreateSessionControlOptions {
   /** 传入后 core 会发 `session.deleted`（带 tenant_id 与计数） */
   events?: EventStream;
   tenantId?: string;
+  /** 0.18：删除会话时同目录清理事件日志（events.ndjson + index.json） */
+  eventLog?: SessionEventLog;
   deleteSessionData?: DeleteSessionDataFn;
 }
 
@@ -74,6 +78,7 @@ function defaultDeleteSessionData(
     runStore?: RunStore;
     events?: EventStream;
     tenantId?: string;
+    eventLog?: SessionEventLog;
   },
 ): Promise<DeleteSessionDataResult> {
   return coreDeleteSessionData(sessionId, {
@@ -82,6 +87,7 @@ function defaultDeleteSessionData(
     ...(opts.runStore ? { runStore: opts.runStore } : {}),
     ...(opts.events ? { events: opts.events } : {}),
     ...(opts.tenantId !== undefined ? { tenantId: opts.tenantId } : {}),
+    ...(opts.eventLog ? { eventLog: opts.eventLog } : {}),
   });
 }
 
@@ -105,6 +111,7 @@ export function createSessionControl(options: CreateSessionControlOptions): Sess
         ...(options.runStore ? { runStore: options.runStore } : {}),
         ...(options.events ? { events: options.events } : {}),
         ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+        ...(options.eventLog ? { eventLog: options.eventLog } : {}),
       });
     },
   };

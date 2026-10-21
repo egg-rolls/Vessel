@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import type { EventStream } from '../types/event.js';
 import type { RunStore } from '../types/run-store.js';
 import type { SessionBackend } from '../types/session.js';
+import { removeLegacySessionTrace, type SessionEventLog } from './session-event-log.js';
 
 const PAGE_LIMIT = 200;
 const MAX_PAGES = 10_000;
@@ -45,6 +46,11 @@ export interface DeleteSessionDataOptions {
   traceDir?: string;
   events?: EventStream;
   tenantId?: string;
+  /**
+   * 0.18：会话事件日志。提供时删除 `sessions/<id>/` 整个目录
+   * （events.ndjson + index.json），并先关闭写句柄（Windows 必需）。
+   */
+  eventLog?: SessionEventLog;
 }
 
 /** 删除计数（A-4 §11.3 + 1 追加：sessions_deleted 为 0/1） */
@@ -63,10 +69,15 @@ export async function deleteSessionData(
     throw new Error('invalid_session_id: session_id must be a non-empty string');
   }
 
-  const { session, runStore, traceDir, events, tenantId } = options;
+  const { session, runStore, traceDir, events, tenantId, eventLog } = options;
+
+  // 0.18：先读一次会话（损坏时抛 SessionCorruptError，不静默删除），
+  // 用于区分「真正存在」与「不存在」——后者 sessions_deleted 必须为 0。
+  const existingSession = await session.load(sessionId);
 
   // 冲突前置检查：分页遍历该 session 的全部 run，不只看第一页（0.8.1）。
   // 不删除任何东西。
+  let hasRuns = false;
   if (runStore) {
     const running: string[] = [];
     const interrupted: string[] = [];
@@ -74,6 +85,7 @@ export async function deleteSessionData(
 
     for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex += 1) {
       const page = await runStore.list({ session_id: sessionId, limit: PAGE_LIMIT, offset });
+      if (page.length > 0) hasRuns = true;
       for (const checkpoint of page) {
         if (checkpoint.status === 'running') running.push(checkpoint.run_id);
         else if (checkpoint.status === 'interrupted') interrupted.push(checkpoint.run_id);
@@ -87,11 +99,20 @@ export async function deleteSessionData(
     }
   }
 
+  // 0.18：事件日志目录也是「会话存在」的一部分（可能 session 文件已迁移/缺失）。
+  const hasEventLog = eventLog !== undefined ? await eventLog.hasSession(sessionId) : false;
+  const existed = existingSession !== null || hasRuns || hasEventLog;
+
   await session.delete(sessionId);
-  const sessionsDeleted = 1;
+  const sessionsDeleted = existed ? 1 : 0;
 
   let runsDeleted = 0;
   let eventsDeleted = 0;
+
+  // 0.18：删除整个会话目录（先关句柄）。不存在时 no-op。
+  if (eventLog !== undefined) {
+    await eventLog.deleteSession(sessionId);
+  }
 
   if (runStore) {
     for (let pageIndex = 0; pageIndex < MAX_PAGES; pageIndex += 1) {
@@ -112,6 +133,12 @@ export async function deleteSessionData(
         }
       }
     }
+  }
+
+  // 0.5 的 session.deleted 曾以 sessionId 当 run_id 落成 `<sessionId>.jsonl`；
+  // 这里顺手清掉，避免「删除反而留下孤儿文件」。
+  if (traceDir !== undefined) {
+    if (await removeLegacySessionTrace(traceDir, sessionId)) eventsDeleted += 1;
   }
 
   if (events) {

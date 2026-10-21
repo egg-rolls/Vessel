@@ -27,6 +27,7 @@ import type {
   RuntimePermissionConfig,
   SelfCardOptions,
   SessionBackend,
+  SessionEventLogPort,
   TerminationPolicy,
   Transport,
   UsageLimits,
@@ -69,6 +70,8 @@ export interface CreateHostRuntimeOptions {
   events?: EventBus;
   /** 0.3 durable：Host 成员的 checkpoint store（Host 优先，单写者为成员 runtime） */
   runStore?: RunStore;
+  /** 0.18：会话事件日志（唯一真相源），透传给每个成员 runtime */
+  eventLog?: SessionEventLogPort;
   /** createRuntime 之后、spawn owner 之前调用（装配层注入插件用） */
   beforeSpawn?: (host: RuntimeHost) => void | Promise<void>;
   /** 测试注入口；缺省动态 import kernel */
@@ -105,6 +108,7 @@ export async function tryCreateHostRuntime(
       ...(options.transport ? { transport: options.transport } : {}),
       ...(options.events ? { events: options.events } : {}),
       ...(options.runStore ? { runStore: options.runStore } : {}),
+      ...(options.eventLog ? { eventLog: options.eventLog } : {}),
       scheduler: resolveScheduler(config),
       limits: resolveLimits(config, owner),
       defaults: {

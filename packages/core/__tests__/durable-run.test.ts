@@ -175,7 +175,8 @@ describe('AgentRuntime checkpoint（C1）', () => {
       status: 'running',
       iteration: 0,
     });
-    expect(first?.messages.some((message) => message.content === 'hello')).toBe(true);
+    // 0.18 C2：checkpoint 不再保存完整 messages；历史由 session + 事件日志重建。
+    expect(first?.messages).toEqual([]);
     expect(store.saves.at(-1)?.status).toBe('completed');
 
     const checkpointEvents = events.getHistory().filter((event) => event.type === 'run.checkpoint');
@@ -225,14 +226,9 @@ describe('AgentRuntime checkpoint（C1）', () => {
       (checkpoint) => checkpoint.status === 'running' && checkpoint.iteration === 1,
     );
     expect(toolRound).toBeDefined();
-    expect(
-      toolRound?.messages.some((message) => message.role === 'assistant' && message.tool_calls),
-    ).toBe(true);
-    expect(
-      toolRound?.messages.some(
-        (message) => message.role === 'tool' && message.content === 'tool-result',
-      ),
-    ).toBe(true);
+    // 0.18 C2：工具轮进度只写 iteration / event_cursor，不再复制历史。
+    expect(toolRound?.messages).toEqual([]);
+    expect(toolRound?.iteration).toBe(1);
 
     const final = store.saves.at(-1);
     expect(final?.status).toBe('completed');
@@ -360,9 +356,11 @@ describe('AgentRuntime.resume（C1）', () => {
     expect(final?.run_id).toBe('run-resume');
     expect(final?.session_id).toBe('session-1');
     expect(final?.iteration).toBe(3);
-    expect(final?.messages.some((message) => message.content === 'resumed-done')).toBe(true);
-
-    expect((await session.load('session-1'))?.status).toBe('completed');
+    // 0.18 C2：历史在 session 缓存（投影）中，不在 checkpoint。
+    expect(final?.messages).toEqual([]);
+    const savedSession = await session.load('session-1');
+    expect(savedSession?.status).toBe('completed');
+    expect(savedSession?.messages.some((message) => message.content === 'resumed-done')).toBe(true);
   });
 
   it('resume interrupted 也可恢复；iteration 连续触发 termination', async () => {

@@ -14,8 +14,11 @@ import {
   MemoryLimitChecker,
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
+import { projectMessages } from '../session/project-messages.js';
+import { deriveSessionMeta } from '../session/session-backend.js';
 import type { ContextCompactedReason, ContextManager } from '../types/context.js';
-import type { EventStream, RunEvent } from '../types/event.js';
+import type { ErrorEnvelope } from '../types/error.js';
+import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
@@ -67,6 +70,41 @@ function createUsageStats(startTime: number): UsageStats {
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 0.18：不写会话事件日志的派生/观测事件。
+ *
+ * 唯一真相源只保留事实（用户输入、LLM 响应、工具调用、权限、终态）；
+ * 流式增量、请求快照、消息镜像、checkpoint 进度与插件生命周期都可重建，
+ * 落盘只会放大体积并制造第二份事实。
+ */
+const NON_PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'llm.stream.chunk',
+  'llm.request',
+  'context.changed',
+  'session.saved',
+  'run.checkpoint',
+  'session.deleted',
+  'session.log.failed',
+  'plugin.loaded',
+  'plugin.failed',
+  'plugin.init.failed',
+  'plugin.dispose.failed',
+]);
+
+/**
+ * 由 harness / 插件直接发布到事件流、但必须落盘的交互事件。
+ * runtime 在事件流上观察它们（本身不再二次发布，避免回环）。
+ */
+const OBSERVED_PERSISTED_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'tool.permission.response',
+  'ask.user.requested',
+  'ask.user.answered',
+]);
 
 /**
  * context-overflow 的通用文案 / 错误码（0.10 R2-17）。
@@ -259,6 +297,14 @@ export class AgentRuntime {
   };
   /** 0.10 R2-14：诊断日志；缺省 noop（`VESSEL_DEBUG` 时兜底 stderr） */
   private readonly logger: Logger;
+  /** 0.18：会话事件日志（唯一写者；append → publish） */
+  private readonly eventLog?: SessionEventLogPort;
+  /** 0.18：观察 harness 直接发布的交互事件（permission/ask response） */
+  private readonly eventLogUnsubscribe?: Unsubscribe;
+  /** 在途的事件日志写入（含 publish 回调），run 终态前等待 */
+  private readonly pendingEventLogWrites = new Set<Promise<void>>();
+  /** 每个 run 只报告一次落盘失败，避免刷屏 */
+  private eventLogFailureReported = false;
 
   private constructor(opts: AgentRuntimeOptions) {
     this.provider = opts.provider;
@@ -275,9 +321,14 @@ export class AgentRuntime {
     this.agentId = opts.agentId;
     this.tenantId = opts.tenantId;
     this.includeReasoning = opts.includeReasoning === true;
+    this.eventLog = opts.eventLog;
     this.logger =
       opts.logger ??
       (process.env.VESSEL_DEBUG ? createStderrLogger({ level: 'debug' }) : noopLogger);
+    if (this.eventLog) {
+      // 交互应答由 harness / 插件直接发布；runtime 只补落盘，不二次发布。
+      this.eventLogUnsubscribe = this.events.subscribe((event) => this.persistObservedEvent(event));
+    }
     // 依赖倒置（ADR-033）：LimitChecker / PluginHost 可注入，默认 Memory 实现
     this.limitChecker = opts.limitChecker ?? new MemoryLimitChecker();
 
@@ -285,7 +336,13 @@ export class AgentRuntime {
     this.pluginHost = opts.pluginHost ?? new MemoryPluginHost();
 
     // 编排器（ADR-033）：权限策略 / guardrail / hook 各自独立，AgentRuntime 只协调。
-    this.permissionPolicy = new PermissionPolicy(this.events, opts.permission, opts.tenantId);
+    // 0.18：权限请求经 runtime 的 publishEvent，才能保证先落盘再发布。
+    this.permissionPolicy = new PermissionPolicy(
+      this.events,
+      opts.permission,
+      opts.tenantId,
+      (event) => this.publishEvent(event),
+    );
     this.guardrails = new GuardrailRunner(this.pluginHost, this.events, opts.tenantId);
     this.hooks = new HookRunner(this.pluginHost, this.events, opts.tenantId);
     this.toolPipeline = createToolPipeline({
@@ -416,6 +473,7 @@ export class AgentRuntime {
       cleanups: [],
     };
     this.warnedLimitKeys.clear();
+    this.eventLogFailureReported = false;
     // 0.16 E5：BeforeLlm 注入去重按 run 重置
     this.injectedMessageKeys.clear();
     this.injectedMessageRefs = new WeakSet();
@@ -546,6 +604,12 @@ export class AgentRuntime {
     try {
       // 注入消息（C5）：core 不解释其语义（skill / 附件 / 引用文件……），先于用户输入写入并持久化
       for (const injected of opts?.messages ?? []) {
+        this.publishEvent({
+          type: 'message.injected',
+          run_id: runId,
+          data: { run_id: runId, session_id: sessionId, message: injected },
+          ts: Date.now(),
+        });
         this.addContext(injected, runId);
       }
 
@@ -568,9 +632,19 @@ export class AgentRuntime {
       // 添加（可能被 guardrail 改写后的）用户消息到上下文
       this.addContext(effectiveUser, runId);
 
+      // 0.18：用户输入是唯一真相源的一部分（run.started.input 是改写前文本，
+      // 不能单独用于恢复）。记录实际写入上下文的消息原文。
+      this.publishEvent({
+        type: 'user.message',
+        run_id: runId,
+        data: { run_id: runId, session_id: sessionId, message: effectiveUser },
+        ts: Date.now(),
+      });
+
       // 初始状态保存真实上下文（恢复历史 + 注入 + 用户输入），运行中崩溃不再丢历史（C-02）
       runState.messages = this.context.messages;
       await this.saveSession(runState);
+      await this.updateSessionIndexBestEffort(runState);
 
       // durable checkpoint：run 开始（用户消息已写入上下文）
       await this.writeCheckpoint(execution, 'running');
@@ -623,6 +697,7 @@ export class AgentRuntime {
         },
         ts: Date.now(),
       });
+      await this.finishEventLog(runState);
       return;
     }
 
@@ -660,17 +735,25 @@ export class AgentRuntime {
 
     await this.saveSession(runState);
 
-    // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
-    await this.writeCheckpoint(execution, this.failureCheckpointStatus(signal), errorMessage, true);
-
     // 用户显式取消发 run.cancelled；Host 关闭/中断与普通失败保持 run.failed
     const permissionTimeout = outcome.error instanceof PermissionTimeoutError;
     // 0.14 P0：结构化错误 envelope 只附加到 run.failed；run.cancelled 保持原形状。
-    const envelope = cancelled
-      ? {}
+    const envelope: ErrorEnvelope | undefined = cancelled
+      ? undefined
       : toErrorEnvelope(outcome.error, {
           ...(execution.phase !== undefined ? { phase: execution.phase } : {}),
         });
+
+    // durable checkpoint：失败 / 取消 / 中断（best-effort，不覆盖原始错误）
+    await this.writeCheckpoint(
+      execution,
+      this.failureCheckpointStatus(signal),
+      errorMessage,
+      true,
+      envelope,
+    );
+
+    const partial = execution.partialContent;
     this.publishEvent({
       type: cancelled ? 'run.cancelled' : 'run.failed',
       run_id: runId,
@@ -680,12 +763,33 @@ export class AgentRuntime {
         error: errorMessage,
         duration_ms: Date.now() - startedAt,
         ...(cancelled && typeof signal?.reason === 'string' ? { reason: signal.reason } : {}),
-        ...envelope,
+        ...(envelope ?? {}),
+        ...(envelope !== undefined ? { error_envelope: envelope } : {}),
+        // 0.18：中断时已流出的文本（可还原用户看到的半截回答）
+        ...(typeof partial === 'string' && partial.length > 0 ? { partial_content: partial } : {}),
         // 权限超时（DECISION-022 §2.2）：失败原因显式标注，供 UI / 观测区分
         ...(!cancelled && permissionTimeout ? { reason: 'permission_timeout' } : {}),
       },
       ts: Date.now(),
     });
+    await this.finishEventLog(runState);
+  }
+
+  /**
+   * 0.18：终态收尾——等待事件日志落盘，然后 best-effort 更新会话索引。
+   * 成功/失败路径共用；日志失败不覆盖 run 终态。
+   */
+  private async finishEventLog(runState: RunState): Promise<void> {
+    if (!this.eventLog) return;
+    await this.flushEventLogWrites();
+    try {
+      await this.updateSessionIndex(runState);
+    } catch (error) {
+      this.logger.warn('session index update failed', {
+        session_id: runState.session_id,
+        error: errorText(error),
+      });
+    }
   }
 
   /**
@@ -711,6 +815,8 @@ export class AgentRuntime {
         },
         ts: Date.now(),
       });
+      // 终态写入失败时仍等待已入队的事件落盘，避免调用方看到 run 结束后日志缺尾。
+      await this.flushEventLogWrites();
     }
   }
 
@@ -745,10 +851,6 @@ export class AgentRuntime {
       if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
         throw new RunResumeError('run_not_resumable', runId, checkpoint.status);
       }
-      if (checkpoint.messages.length === 0) {
-        throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
-      }
-
       const sessionId = checkpoint.session_id;
       execution.sessionId = sessionId;
       execution.createdAt = checkpoint.created_at;
@@ -769,14 +871,22 @@ export class AgentRuntime {
         startTime: execution.startedAt,
       };
 
-      // checkpoint 的历史是恢复的唯一权威来源
-      this.context.clear();
-      this.context.setSessionId(sessionId);
-      for (const message of checkpoint.messages) {
-        this.addContext(message, runId);
-      }
+      // 0.18：session 缓存 + 事件日志是恢复来源；checkpoint.messages 只作
+      // legacy 回退（旧文件）。禁止用较旧的 checkpoint 覆盖较新的 session。
       // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
       this.runSystemPrompt = this.composeRunSystemPrompt();
+      const history = await this.loadResumeHistory(sessionId, checkpoint);
+      if (history.length === 0) {
+        throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
+      }
+      this.context.clear();
+      this.context.setSessionId(sessionId);
+      if (!history.some((message) => message.role === 'system') && this.runSystemPrompt) {
+        this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
+      }
+      for (const message of history) {
+        this.addContext(message, runId);
+      }
 
       const runState: RunState = {
         run_id: runId,
@@ -790,6 +900,7 @@ export class AgentRuntime {
           : {}),
       };
       await this.saveSession(runState);
+      await this.updateSessionIndexBestEffort(runState);
 
       // 标记已被接管（唯一写者：AgentRuntime）
       await this.writeCheckpoint(execution, 'running');
@@ -933,13 +1044,18 @@ export class AgentRuntime {
         );
       }
 
-      // 发布 LLM 响应事件
+      // 发布 LLM 响应事件（0.18：reasoning / usage / finish_reason 都进日志，
+      // 不再只存在于 Message；`llm.stream.chunk` 不落盘）
       this.publishEvent({
         type: 'llm.response',
         run_id: runId,
         data: {
           run_id: runId,
+          session_id: sessionId,
           content: response.content,
+          ...(response.reasoning_content !== undefined
+            ? { reasoning: response.reasoning_content }
+            : {}),
           tool_calls: response.tool_calls,
           finish_reason: response.finish_reason,
           usage: response.usage,
@@ -1051,6 +1167,7 @@ export class AgentRuntime {
             run_id: runId,
             data: {
               run_id: runId,
+              session_id: sessionId,
               tool_call_id: toolCall.id,
               tool_name: toolName,
               arguments: failureMessage !== undefined ? toolCall.function.arguments : args,
@@ -1174,6 +1291,8 @@ export class AgentRuntime {
     while (true) {
       // 0.14 P0：provider / 流式错误按 llm 阶段归类。
       execution.phase = 'llm';
+      // 0.18：每次请求重置部分输出；中断时把已流出的文本写进终态 partial_content。
+      execution.partialContent = '';
       // 调试元信息（0.10 R2-13）：只记数量/工具名/token 估算，绝不输出 prompt 正文
       this.logger.debug('llm request', {
         run_id: runId,
@@ -1211,6 +1330,9 @@ export class AgentRuntime {
         // 退化为整段返回（无 chunk 事件，无副作用）。chat() 仍返回完整 LLMResponse。
         stream: true,
         on_chunk: (chunk) => {
+          if (chunk.type === 'text_delta' && typeof chunk.delta === 'string') {
+            execution.partialContent = `${execution.partialContent ?? ''}${chunk.delta}`;
+          }
           this.publishEvent({
             type: 'llm.stream.chunk',
             run_id: runId,
@@ -1339,6 +1461,7 @@ export class AgentRuntime {
   }
 
   private async disposeRuntime(): Promise<void> {
+    this.eventLogUnsubscribe?.();
     for (let i = this.installedPlugins.length - 1; i >= 0; i -= 1) {
       const plugin = this.installedPlugins[i] as Plugin;
       if (plugin.dispose === undefined) continue;
@@ -1353,6 +1476,7 @@ export class AgentRuntime {
         });
       }
     }
+    await this.flushEventLogWrites();
     this.session?.close?.();
   }
 
@@ -1369,6 +1493,8 @@ export class AgentRuntime {
       errorMessage: string;
       /** 原始错误；缺省时用 errorMessage 构造，仅按文本分类 */
       error?: unknown;
+      /** 本次调用实际使用的参数（additive，便于日志还原工具卡） */
+      arguments?: unknown;
       details?: Record<string, unknown>;
     },
   ): Promise<string> {
@@ -1405,11 +1531,14 @@ export class AgentRuntime {
       run_id: execution.runId,
       data: {
         run_id: execution.runId,
+        session_id: execution.sessionId,
         tool_call_id: opts.toolCallId,
         tool_name: opts.toolName,
+        ...(opts.arguments !== undefined ? { arguments: opts.arguments } : {}),
         error: opts.errorMessage,
         duration_ms: Date.now() - opts.startTime,
         ...envelope,
+        error_envelope: envelope,
       },
       ts: Date.now(),
     });
@@ -1448,6 +1577,7 @@ export class AgentRuntime {
           startTime: entry.startedAt,
           errorMessage: entry.failureMessage,
           error: entry.failureMessage,
+          arguments: entry.args,
         }),
       };
     }
@@ -1481,6 +1611,7 @@ export class AgentRuntime {
             startTime: entry.startedAt,
             errorMessage: result.error ?? result.content,
             error: result.error ?? result.content,
+            arguments: result.input,
           }),
         };
       }
@@ -1491,8 +1622,10 @@ export class AgentRuntime {
         run_id: runId,
         data: {
           run_id: runId,
+          session_id: sessionId,
           tool_call_id: toolCall.id,
           tool_name: toolName,
+          arguments: entry.args,
           result: result.content,
           duration_ms: Date.now() - entry.startedAt,
         },
@@ -1515,6 +1648,7 @@ export class AgentRuntime {
           startTime: entry.startedAt,
           errorMessage: errorText(error),
           error,
+          arguments: entry.args,
         }),
       };
     }
@@ -1535,6 +1669,16 @@ export class AgentRuntime {
         if (this.injectedMessageRefs.has(message)) continue;
         this.injectedMessageRefs.add(message);
       }
+      this.publishEvent({
+        type: 'message.injected',
+        run_id: runId,
+        data: {
+          run_id: runId,
+          session_id: this.context.getSessionId(),
+          message,
+        },
+        ts: Date.now(),
+      });
       this.addContext(message, runId);
     }
   }
@@ -1673,15 +1817,22 @@ export class AgentRuntime {
     status: RunCheckpoint['status'],
     error?: string,
     bestEffort = false,
+    errorEnvelope?: ErrorEnvelope,
   ): Promise<void> {
     if (!this.runStore) return;
+
+    if (this.eventLog) await this.flushEventLogWrites();
+    const eventCursor = this.eventLog?.lastPersistedSeq(execution.sessionId);
 
     const { runId, sessionId, createdAt, stats, branch } = execution;
     const checkpoint: RunCheckpoint = {
       run_id: runId,
       session_id: sessionId,
       status,
-      messages: structuredClone(this.context.messages),
+      // 0.18 C2：不再写完整 messages；历史由 session 缓存 + 事件日志重建。
+      messages: [],
+      ...(eventCursor !== undefined ? { event_cursor: eventCursor } : {}),
+      ...(errorEnvelope !== undefined ? { error_envelope: errorEnvelope } : {}),
       usage: this.usageFromStats(stats),
       iteration: stats.requestCount,
       created_at: createdAt || Date.now(),
@@ -1724,9 +1875,101 @@ export class AgentRuntime {
     });
   }
 
+  /**
+   * 0.18：恢复历史。优先级：
+   * 1) session 缓存（含压缩摘要等事件不可重建的消息）+ 事件日志中 `seq > derived_upto_seq` 的增量；
+   * 2) 事件日志完整投影；
+   * 3) 旧 checkpoint.messages（legacy 只读兼容）。
+   */
+  private async loadResumeHistory(
+    sessionId: string,
+    checkpoint: RunCheckpoint,
+  ): Promise<Message[]> {
+    let sessionState: RunState | null = null;
+    if (this.session) {
+      sessionState = await this.session.load(sessionId);
+    }
+
+    let events: Awaited<ReturnType<SessionEventLogPort['read']>> = [];
+    if (this.eventLog) {
+      try {
+        await this.eventLog.flush(sessionId);
+        events = await this.eventLog.read(sessionId);
+      } catch (error) {
+        this.logger.warn('session event log read failed during resume', {
+          session_id: sessionId,
+          error: errorText(error),
+        });
+      }
+    }
+
+    if (sessionState?.messages?.length) {
+      const history = structuredClone(sessionState.messages);
+      const derived = sessionState.derived_upto_seq;
+      if (typeof derived === 'number' && events.length > 0) {
+        // 只重放缓存之后的增量：崩溃在工具轮中间时，tool 结果就在这段里。
+        const projected = projectMessages(events.filter((event) => event.seq > derived));
+        if (projected.length > 0) history.push(...projected);
+      }
+      return history;
+    }
+
+    if (events.length > 0) {
+      const projected = projectMessages(events);
+      if (projected.length > 0) return projected;
+    }
+
+    return Array.isArray(checkpoint.messages) ? checkpoint.messages : [];
+  }
+
+  /** 0.18：best-effort 索引更新；永不向外抛 */
+  private async updateSessionIndexBestEffort(runState: RunState): Promise<void> {
+    try {
+      await this.updateSessionIndex(runState);
+    } catch (error) {
+      this.logger.warn('session index update failed', {
+        session_id: runState.session_id,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 0.18：best-effort 更新 `index.json` 元数据（失败只记日志，不影响 run） */
+  private async updateSessionIndex(runState: RunState): Promise<void> {
+    if (!this.eventLog?.updateIndex) return;
+    await this.flushEventLogWrites();
+    const cursor = this.eventLog.lastPersistedSeq(runState.session_id);
+    let stored: RunState | null = null;
+    if (this.session) {
+      try {
+        stored = await this.session.load(runState.session_id);
+      } catch (error) {
+        this.logger.warn('session load failed during index update', {
+          session_id: runState.session_id,
+          error: errorText(error),
+        });
+      }
+    }
+    const derived = deriveSessionMeta(runState.messages);
+    await this.eventLog.updateIndex(runState.session_id, {
+      status: runState.status,
+      title: runState.title ?? stored?.title ?? derived.title,
+      preview: runState.preview ?? stored?.preview ?? derived.preview,
+      started_at: runState.started_at,
+      updated_at: runState.completed_at ?? Date.now(),
+      ...(cursor !== undefined ? { event_count: cursor, derived_upto_seq: cursor } : {}),
+    });
+  }
+
   /** 保存 session 快照，并发布 `session.saved` */
   private async saveSession(runState: RunState): Promise<void> {
     if (!this.session) return;
+    if (this.eventLog) {
+      // 先等待已入队事件落盘，再记录缓存覆盖到的 seq；resume 只重放之后的增量。
+      await this.flushEventLogWrites();
+      const cursor = this.eventLog.lastPersistedSeq(runState.session_id);
+      if (cursor !== undefined) runState.derived_upto_seq = cursor;
+    }
     await this.session.save(runState);
     this.publishEvent({
       type: 'session.saved',
@@ -1758,14 +2001,137 @@ export class AgentRuntime {
   }
 
   /**
-   * 发布事件
-   * @param event 运行事件
+   * 发布事件（0.18：先落盘再发布）。
+   *
+   * - 事实事件：`eventLog.append()` → fsync 成功后才 `events.publish()`；
+   * - 派生/观测事件（见 `NON_PERSISTED_EVENT_TYPES`）直接发布；
+   * - 落盘失败不阻塞事件发布，但必须经 Logger 报告（每个 run 只报一次）。
+   *
+   * 由于落盘是异步的，事件会在 microtask/IO 完成后到达订阅者；run 终态
+   * 返回前会 `flushEventLogWrites()`，调用方 await run() 后事件历史完整。
    */
   protected publishEvent(event: RunEvent): void {
     const stamped =
       this.tenantId !== undefined && event.tenant_id === undefined
         ? { ...event, tenant_id: this.tenantId }
         : event;
-    this.events.publish(stamped);
+
+    if (
+      !this.eventLog ||
+      NON_PERSISTED_EVENT_TYPES.has(stamped.type) ||
+      !this.shouldPersistSessionEvent(stamped)
+    ) {
+      this.publishRaw(stamped);
+      return;
+    }
+
+    this.enqueuePersistedEvent(stamped, true);
+  }
+
+  /** harness / 插件直接发布的事件：只补落盘，不二次发布（避免回环） */
+  private persistObservedEvent(event: RunEvent): void {
+    if (!this.eventLog || !OBSERVED_PERSISTED_EVENT_TYPES.has(event.type)) return;
+    if (!this.shouldPersistSessionEvent(event)) return;
+    this.enqueuePersistedEvent(event, false);
+  }
+
+  /** 能否确定该事件属于某个 session（不能时就只发布、不落盘） */
+  private shouldPersistSessionEvent(event: RunEvent): boolean {
+    return this.resolveEventSessionId(event) !== undefined;
+  }
+
+  /** session_id 优先取 payload；否则用当前 active run 的 run_id 反查 */
+  private resolveEventSessionId(event: RunEvent): string | undefined {
+    const data = isRecordValue(event.data) ? event.data : undefined;
+    const fromData = data !== undefined ? data.session_id : undefined;
+    if (typeof fromData === 'string' && fromData.length > 0) return fromData;
+    const active = this.activeRun;
+    if (active !== undefined && active.runId === event.run_id) return active.sessionId;
+    return undefined;
+  }
+
+  /**
+   * 入队一次 append +（可选）发布。
+   * 所有写入按调用顺序串行（日志内部按 session 排队），publish 在 append
+   * 成功/失败后执行，因此对外可见顺序始终与 seq 顺序一致。
+   */
+  private enqueuePersistedEvent(event: RunEvent, publish: boolean): void {
+    const log = this.eventLog;
+    if (!log) return;
+    const sessionId = this.resolveEventSessionId(event);
+    if (sessionId === undefined) {
+      if (publish) this.publishRaw(event);
+      return;
+    }
+
+    const done = log
+      .append({
+        session_id: sessionId,
+        run_id: event.run_id,
+        type: event.type,
+        ts: event.ts,
+        data: event.data,
+      })
+      .then(
+        () => {
+          if (publish) this.publishRaw(event);
+        },
+        (error: unknown) => {
+          this.reportEventLogFailure(error, event, sessionId);
+          if (publish) this.publishRaw(event);
+        },
+      );
+    this.pendingEventLogWrites.add(done);
+    void done.then(() => {
+      this.pendingEventLogWrites.delete(done);
+    });
+  }
+
+  /** 落盘失败必须可见：Logger（不落盘事件日志本身，避免递归） */
+  private reportEventLogFailure(error: unknown, event: RunEvent, sessionId: string): void {
+    this.logger.error('session event log write failed', {
+      session_id: sessionId,
+      run_id: event.run_id,
+      type: event.type,
+      error: errorText(error),
+    });
+    if (this.eventLogFailureReported) return;
+    this.eventLogFailureReported = true;
+    try {
+      this.events.publish({
+        type: 'session.log.failed',
+        run_id: event.run_id,
+        data: {
+          session_id: sessionId,
+          run_id: event.run_id,
+          event_type: event.type,
+          error: errorText(error),
+        },
+        ts: Date.now(),
+        ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
+      });
+    } catch {
+      // 事件投递失败不得影响 run
+    }
+  }
+
+  /** 发布到内存事件流；订阅者异常不得从异步日志回调里冒泡成 unhandled rejection */
+  private publishRaw(event: RunEvent): void {
+    try {
+      this.events.publish(event);
+    } catch (error) {
+      this.logger.warn('event subscriber failed', {
+        run_id: event.run_id,
+        type: event.type,
+        error: errorText(error),
+      });
+    }
+  }
+
+  /** 等待所有已入队事件落盘并发布 */
+  private async flushEventLogWrites(): Promise<void> {
+    while (this.pendingEventLogWrites.size > 0) {
+      await Promise.allSettled([...this.pendingEventLogWrites]);
+    }
   }
 }

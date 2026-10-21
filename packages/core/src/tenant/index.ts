@@ -11,4 +11,11 @@ export {
   resolveTenantId,
   tenantRootPath,
 } from './resolve-tenant.js';
-export { resolveTenantPaths, type TenantPaths } from './tenant-paths.js';
+export {
+  encodeSessionDirName,
+  resolveTenantPaths,
+  sessionDirPath,
+  sessionEventsFilePath,
+  sessionIndexFilePath,
+  type TenantPaths,
+} from './tenant-paths.js';

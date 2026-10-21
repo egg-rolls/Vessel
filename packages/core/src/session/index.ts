@@ -23,6 +23,10 @@ export {
   SessionCorruptError,
 } from './file-backend.js';
 export {
+  type ProjectableEvent,
+  projectMessages,
+} from './project-messages.js';
+export {
   type PruneRunsOptions,
   type PruneRunsResult,
   pruneRuns,
@@ -33,6 +37,14 @@ export {
   MemorySessionBackend,
   toSessionInfo,
 } from './session-backend.js';
+export {
+  type ReadSessionEventsOptions,
+  removeLegacySessionTrace,
+  SessionEventLog,
+  type SessionEventLogOptions,
+  type SessionLogIndex,
+  sessionLogDirExists,
+} from './session-event-log.js';
 export {
   SQLiteSessionBackend,
   type SQLiteSessionBackendOptions,

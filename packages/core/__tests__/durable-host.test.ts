@@ -5,6 +5,8 @@ import { join } from 'node:path';
 import { createRuntime, InProcessRuntimeHost } from '../src/kernel/index';
 import { MemoryLLMProvider } from '../src/provider/providers';
 import { FileRunStore, MemoryRunStore } from '../src/session/run-store';
+import { MemorySessionBackend } from '../src/session/session-backend';
+import { SessionEventLog } from '../src/session/session-event-log';
 import type { ChatRequest, LLMProvider, LLMResponse } from '../src/types/provider';
 import type { RunCheckpoint, RunStore } from '../src/types/run-store';
 
@@ -212,7 +214,10 @@ describe('InProcessRuntimeHost durable（C1）', () => {
     const dir = await tempDir();
     const store = new CountingRunStore();
     const provider = new ControlledProvider();
-    const host = new InProcessRuntimeHost({ runStore: store });
+    // 0.18：checkpoint 不再带 messages；恢复依赖 session 缓存 + 事件日志。
+    const session = new MemorySessionBackend();
+    const eventLog = new SessionEventLog({ dir: join(dir, 'sessions'), durable: false });
+    const host = new InProcessRuntimeHost({ runStore: store, session, eventLog });
     const agent = await host.spawn({ id: 'worker', provider, model: 'm' });
 
     const started = provider.waitForRequest();
@@ -232,12 +237,13 @@ describe('InProcessRuntimeHost durable（C1）', () => {
     // 文件后端下用新 Host 实例恢复
     const fileStore = new FileRunStore({ dir });
     for (const saved of store.saves) await fileStore.save(saved);
-    const host2 = new InProcessRuntimeHost({ runStore: fileStore });
+    const host2 = new InProcessRuntimeHost({ runStore: fileStore, session, eventLog });
     await host2.spawn({ id: 'worker', provider: new StaticProvider('recovered'), model: 'm' });
     const resumed = await host2.resume(run.id);
     await expect(resumed.result).resolves.toBe('recovered');
     expect((await fileStore.load(run.id))?.status).toBe('completed');
     await host2.close();
+    await eventLog.close();
   });
 
   it('createRuntime 透传 runStore', async () => {

@@ -126,9 +126,8 @@ export async function loadResumableCheckpoint(
   if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
     throw resumeError('run_not_resumable', runId, checkpoint.status);
   }
-  if (!Array.isArray(checkpoint.messages) || checkpoint.messages.length === 0) {
-    throw resumeError('run_not_resumable', runId, 'empty checkpoint');
-  }
+  // 0.18：checkpoint 不再携带完整 messages；历史由 AgentRuntime 从
+  // session 缓存 + 会话事件日志重建。空历史仍由 runtime 返回稳定错误。
   return checkpoint;
 }
 

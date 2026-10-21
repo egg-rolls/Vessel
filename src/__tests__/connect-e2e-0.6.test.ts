@@ -3,7 +3,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MemoryEventStream, type RunEvent } from '../../packages/core/src/index';
+import {
+  AgentRuntime,
+  MemoryContextManager,
+  MemoryEventStream,
+  MemoryLLMProvider,
+  MemoryPluginHost,
+  type RunEvent,
+} from '../../packages/core/src/index';
 import { type Gateway, startGateway } from '../../packages/serve/src/gateway';
 import { type BootstrapResult, bootstrap } from '../bootstrap';
 
@@ -147,6 +154,62 @@ describe('connect e2e (0.6 A1/A2/A4)', () => {
     await waitFor(() => responses().length > 1);
     const echoed = responses()[1];
     expect(echoed?.data).toMatchObject({ requestId: 'perm-1', decision: 'allow' });
+  });
+
+  it('--connect --run 等待 run.completed 并返回完整输出（0.17 P0）', async () => {
+    const events = new MemoryEventStream();
+    const runtime = await AgentRuntime.create({
+      provider: new MemoryLLMProvider(),
+      model: 'test-model',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+    const gateway = startGateway({
+      events,
+      runtime,
+      port: 0,
+      hostname: '127.0.0.1',
+      token: 'connect-token',
+    });
+    gateways.push(gateway);
+    const result = await connect(gateway);
+
+    await expect(result.ctx.runtime.run('Hello', 'sess-connect')).resolves.toBe('Echo: Hello');
+    await runtime.dispose();
+  });
+
+  it('--connect --run 失败时抛错而非打印空行（0.17 P0）', async () => {
+    const events = new MemoryEventStream();
+    const runtime = await AgentRuntime.create({
+      provider: {
+        chat: async () => {
+          throw new Error('provider exploded');
+        },
+      },
+      model: 'test-model',
+      pluginHost: new MemoryPluginHost(),
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 10, toolCallsLimit: 5 },
+      termination: { maxIterations: 10 },
+    });
+    const gateway = startGateway({
+      events,
+      runtime,
+      port: 0,
+      hostname: '127.0.0.1',
+      token: 'connect-token',
+    });
+    gateways.push(gateway);
+    const result = await connect(gateway);
+
+    await expect(result.ctx.runtime.run('Hello', 'sess-connect-fail')).rejects.toThrow(
+      'provider exploded',
+    );
+    await runtime.dispose();
   });
 
   it('自签 CA 文件对 fetch 与 wss 都生效', async () => {

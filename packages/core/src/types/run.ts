@@ -30,6 +30,11 @@ export interface RunExecution {
    * 调用方不应依赖该字段的实时性。
    */
   phase?: ErrorPhase;
+  /**
+   * 0.18：本次 LLM 请求已流出的正文（内部使用）。
+   * run 中断/失败时写入终态事件的 `partial_content`；成功时忽略。
+   */
+  partialContent?: string;
 }
 
 /**

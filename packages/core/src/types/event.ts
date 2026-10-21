@@ -144,6 +144,58 @@ export interface RunEvent {
   node_id?: string;
 }
 
+/**
+ * 会话事件日志写入输入（0.18，唯一真相源）。
+ *
+ * `seq` 由日志按 session 单调分配；调用方不传。事件名保持开放字符串。
+ */
+export interface SessionEventInput {
+  session_id: string;
+  run_id: string;
+  type: string;
+  ts: number;
+  data: unknown;
+}
+
+/** 落盘后的会话事件记录（`events.ndjson` 单行） */
+export interface SessionEventRecord extends SessionEventInput {
+  v: 1;
+  seq: number;
+}
+
+/** 会话索引的 additive 字段（`index.json`；只放元数据，不放 messages） */
+export interface SessionIndexPatch {
+  title?: string;
+  preview?: string;
+  status?: 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted';
+  started_at?: number;
+  updated_at?: number;
+  event_count?: number;
+  derived_upto_seq?: number;
+}
+
+/**
+ * AgentRuntime 依赖的事件日志端口（0.18）。
+ *
+ * 只暴露 runtime 需要的部分；完整实现见 `@vessel-agent/core/session`
+ * 的 `SessionEventLog`（read / iterate / 索引 / 删除）。
+ */
+export interface SessionEventLogPort {
+  /** 追加一条事件；返回已分配 seq 的记录 */
+  append(input: SessionEventInput): Promise<SessionEventRecord>;
+  /** 读取事件（按 seq 升序）；`sinceSeq` 为排他游标 */
+  read(
+    sessionId: string,
+    opts?: { sinceSeq?: number; limit?: number },
+  ): Promise<SessionEventRecord[]>;
+  /** 最近一次**已落盘**的 seq；未初始化/未写入返回 undefined */
+  lastPersistedSeq(sessionId: string): number | undefined;
+  /** 等待该 session（缺省全部）的写入队列排空 */
+  flush(sessionId?: string): Promise<void>;
+  /** 合并写会话索引（best-effort；实现可缺省） */
+  updateIndex?(sessionId: string, patch: SessionIndexPatch): Promise<void>;
+}
+
 /** 事件处理器 */
 export type EventHandler = (event: RunEvent) => void | Promise<void>;
 

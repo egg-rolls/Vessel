@@ -184,6 +184,9 @@ export class FileTraceRecorder implements TraceRecorder {
   /** 非阻塞入队 */
   append(event: RunEvent): void {
     if (this.closed || this.level === 'off') return;
+    // 0.18 C7：删除会话的墓碑不得写成新的孤儿 run 文件（`<session_id>.jsonl`）。
+    // 删除结果仍作为实时事件广播；持久化由会话索引/事件日志负责。
+    if (event.type === 'session.deleted') return;
     // 0.10 R2-14：流式 chunk 数量大、逐片落盘性价比低，完整内容已在
     // `llm.request` / `llm.response`；实时事件发布不受影响，默认不进 trace。
     // 0.14：带前缀的转发事件（如 `subagent.llm.stream.chunk`）同样过滤。

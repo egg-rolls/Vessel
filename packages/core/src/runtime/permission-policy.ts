@@ -5,7 +5,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { EventStream } from '../types/event.js';
+import type { EventStream, RunEvent } from '../types/event.js';
 import type { RuntimePermissionConfig } from '../types/plugin.js';
 import type { ToolContext, ToolDefinition } from '../types/tool.js';
 
@@ -56,12 +56,16 @@ export class PermissionPolicy {
   private approved: Set<string>;
   /** 显式正数超时；undefined = 无限等待（Addendum A） */
   private readonly timeoutMs?: number;
+  /** 事件发布出口（0.18：AgentRuntime 注入以先落盘再发布；缺省直接发布） */
+  private readonly emit: (event: RunEvent) => void;
 
   constructor(
     private events: EventStream,
     config?: RuntimePermissionConfig,
     private readonly tenantId?: string,
+    emit?: (event: RunEvent) => void,
   ) {
+    this.emit = emit ?? ((event) => this.events.publish(event));
     this.defaultDecision = config?.default ?? 'allow';
     this.autoApprove = new Set(config?.autoApprove ?? []);
     this.approved = new Set();
@@ -98,7 +102,7 @@ export class PermissionPolicy {
     if (decision === 'ask') {
       const requestId = randomUUID();
       const ts = Date.now();
-      this.events.publish({
+      this.emit({
         type: 'tool.permission.request',
         run_id: ctx.run_id,
         data: {

@@ -34,5 +34,6 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     ...(options.includeReasoning !== undefined
       ? { includeReasoning: options.includeReasoning }
       : {}),
+    ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
   });
 }

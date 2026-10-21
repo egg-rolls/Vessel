@@ -399,4 +399,6 @@ export interface RuntimeOptions {
   logger?: import('../types/logging.js').Logger;
   /** 0.14.1：透传给每个成员 runtime 的 reasoning 开关 */
   includeReasoning?: boolean;
+  /** 0.18：会话事件日志（唯一真相源）；透传给每个成员 runtime */
+  eventLog?: import('../types/event.js').SessionEventLogPort;
 }

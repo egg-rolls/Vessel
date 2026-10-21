@@ -17,7 +17,7 @@ import { MemoryEventStream } from '../events/event-stream.js';
 import { AgentRuntime } from '../runtime/agent-runtime.js';
 import { MemoryPluginHost } from '../runtime/plugin-host.js';
 import type { ContextManager } from '../types/context.js';
-import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
+import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
 import type { AgentRuntimeOptions, PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message, Usage } from '../types/provider.js';
@@ -99,6 +99,8 @@ export interface InProcessRuntimeHostOptions {
   logger?: Logger;
   /** 0.14.1：透传给每个成员 runtime 的 reasoning 开关 */
   includeReasoning?: boolean;
+  /** 0.18：会话事件日志（唯一真相源）；透传给每个成员 runtime */
+  eventLog?: SessionEventLogPort;
 }
 
 /** Agent id 合法字符集（A11） */
@@ -212,6 +214,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
   private readonly pluginConfigs?: Record<string, Record<string, unknown>>;
   private readonly logger?: Logger;
   private readonly includeReasoning?: boolean;
+  private readonly eventLog?: SessionEventLogPort;
   /** 同一 run 的并发 resume 锁（进程内） */
   private readonly resuming = new Set<string>();
   private closed = false;
@@ -230,6 +233,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.pluginConfigs = options.pluginConfigs;
     this.logger = options.logger;
     this.includeReasoning = options.includeReasoning;
+    this.eventLog = options.eventLog;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
@@ -310,6 +314,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
         ...(this.logger !== undefined ? { logger: this.logger } : {}),
         ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
         ...(resolved.selfCard !== undefined ? { selfCard: resolved.selfCard } : {}),
+        ...(this.eventLog !== undefined ? { eventLog: this.eventLog } : {}),
         agentId: id,
       });
 
@@ -524,8 +529,18 @@ export class InProcessRuntimeHost implements RuntimeHost {
       if (checkpoint.status !== 'running' && checkpoint.status !== 'interrupted') {
         throw new RunResumeError('run_not_resumable', runId, checkpoint.status);
       }
-      if (checkpoint.messages.length === 0) {
-        throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
+      // 0.18：messages 不再是 checkpoint 的必需内容；历史由成员 runtime
+      // 从 session 缓存 + 会话事件日志重建。这里提前判断三处都没有历史的情况，
+      // 保持 `host.resume()` 自身的稳定错误码（而不是排队后才失败）。
+      if ((checkpoint.messages?.length ?? 0) === 0) {
+        const hasSessionHistory = await this.hasSessionHistory(checkpoint);
+        const hasEventHistory =
+          !hasSessionHistory && this.eventLog
+            ? (await this.eventLog.read(checkpoint.session_id, { limit: 1 })).length > 0
+            : false;
+        if (!hasSessionHistory && !hasEventHistory) {
+          throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
+        }
       }
       if (!checkpoint.agent_id) {
         throw new RunResumeError('agent_not_found', runId, 'checkpoint has no agent_id');
@@ -567,6 +582,29 @@ export class InProcessRuntimeHost implements RuntimeHost {
       this.resuming.delete(runId);
       throw error;
     }
+  }
+
+  /** 0.18：checkpoint 无 messages 时，检查 session 缓存是否仍有历史（含成员命名空间） */
+  private async hasSessionHistory(checkpoint: {
+    session_id: string;
+    agent_id?: string;
+  }): Promise<boolean> {
+    if (!this.session) return false;
+    const candidates = [
+      checkpoint.session_id,
+      ...(checkpoint.agent_id !== undefined
+        ? [`${checkpoint.agent_id}/${checkpoint.session_id}`]
+        : []),
+    ];
+    for (const candidate of candidates) {
+      try {
+        const state = await this.session.load(candidate);
+        if (state !== null && state.messages.length > 0) return true;
+      } catch {
+        // 损坏/归属不明时交给 runtime 的 resume 报错；这里只做快速判定
+      }
+    }
+    return false;
   }
 
   async close(): Promise<void> {
