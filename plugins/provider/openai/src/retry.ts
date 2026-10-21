@@ -1,7 +1,8 @@
 /**
  * Provider 重试装饰器。
  *
- * 对 429 / 5xx / 网络错误做指数退避重试；调用方 abort 时立即停止。
+ * 对 429 / 5xx / 网络错误做指数退避重试；429 优先按错误上的 retry-after 退避；
+ * 402（额度耗尽）不重试；调用方 abort 时立即停止。
  * 与 timeout 组合时放在内层：外层 timeout 是整个请求（含重试）的总时限。
  */
 
@@ -101,11 +102,55 @@ function statusOf(error: unknown): number | undefined {
   return undefined;
 }
 
-/** 瞬时可重试错误：429 / 5xx / 网络类；abort 与 4xx 不重试 */
+/** 读有限数字字段（结构化错误可能是第三方 Error，字段按 unknown 处理） */
+function finiteField(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/** Headers 实例或普通对象里的头值；取不到返回 undefined */
+function headerValue(headers: unknown, name: string): unknown {
+  if (typeof headers !== 'object' || headers === null) return undefined;
+  if (typeof (headers as { get?: unknown }).get === 'function') {
+    return (headers as { get(name: string): unknown }).get(name);
+  }
+  const record = headers as Record<string, unknown>;
+  return record[name] ?? record[name.toLowerCase()];
+}
+
+/** retry-after 头转毫秒：裸数字按 HTTP 标准的秒，带 ms 后缀按毫秒 */
+function retryAfterHeaderMs(value: unknown): number | undefined {
+  if (typeof value === 'number') return Number.isFinite(value) ? value * 1000 : undefined;
+  if (typeof value !== 'string') return undefined;
+  const match = /^\s*(\d+(?:\.\d+)?)\s*(ms|s)?\s*$/i.exec(value);
+  if (match?.[1] === undefined) return undefined;
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return undefined;
+  return match[2]?.toLowerCase() === 'ms' ? amount : amount * 1000;
+}
+
+/**
+ * 从错误对象读取服务端建议的退避时间（毫秒）。
+ * 顺序：retryAfterMs / retry_after_ms（毫秒）→ retryAfter / retry_after（秒）→ retry-after 头。
+ */
+function retryAfterMsOf(error: unknown): number | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const record = error as Record<string, unknown>;
+  const direct = finiteField(record.retryAfterMs) ?? finiteField(record.retry_after_ms);
+  if (direct !== undefined) return Math.max(0, direct);
+  const seconds = finiteField(record.retryAfter) ?? finiteField(record.retry_after);
+  if (seconds !== undefined) return Math.max(0, seconds * 1000);
+  return retryAfterHeaderMs(headerValue(record.headers, 'retry-after'));
+}
+
+/** 瞬时可重试错误：429 / 5xx / 网络类；abort、402 与其它 4xx 不重试 */
 export function isRetryableError(error: unknown): boolean {
   if (error instanceof Error && error.name === 'AbortError') return false;
   const status = statusOf(error);
-  if (status !== undefined) return status === 429 || (status >= 500 && status <= 599);
+  if (status !== undefined) {
+    // 402 是额度耗尽，重试只会再消耗一次配额
+    if (status === 402) return false;
+    return status === 429 || (status >= 500 && status <= 599);
+  }
   if (!(error instanceof Error)) return false;
   return /fetch failed|network error|socket hang up|connection (?:reset|closed)|ECONNRESET|ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|EPIPE/i.test(
     error.message,
@@ -152,6 +197,18 @@ function delayFor(
   return Math.max(0, Math.round(exponential * factor));
 }
 
+/** 429 优先按 retry-after 退避（不加抖动），仍不超过 maxDelayMs */
+function retryAfterDelay(
+  error: unknown,
+  status: number | undefined,
+  maxDelayMs: number,
+): number | undefined {
+  if (status !== 429) return undefined;
+  const retryAfterMs = retryAfterMsOf(error);
+  if (retryAfterMs === undefined) return undefined;
+  return Math.min(Math.round(retryAfterMs), Math.max(0, maxDelayMs));
+}
+
 /** 包装 provider：可重试错误按指数退避重试，abort 立即停止 */
 export function withRetry(provider: LLMProvider, options: RetryOptions = {}): LLMProvider {
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -187,8 +244,9 @@ export function withRetry(provider: LLMProvider, options: RetryOptions = {}): LL
           if (req.signal?.aborted) throw abortError(req.signal);
           if (emitted) throw error;
           if (attempt >= maxRetries || !isRetryableError(error)) throw error;
-          const delayMs = delayFor(attempt, timing);
           const status = statusOf(error);
+          const delayMs =
+            retryAfterDelay(error, status, timing.maxDelayMs) ?? delayFor(attempt, timing);
           recordRetry(options, {
             attempt: attempt + 1,
             maxRetries,
