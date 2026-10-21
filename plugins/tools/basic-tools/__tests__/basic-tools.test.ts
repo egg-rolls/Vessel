@@ -826,3 +826,105 @@ describe('默认工作目录（cwd / working_dir）', () => {
     expect(await tool.handler({ command: 'echo x' }, makeContext())).toContain('不存在或不是目录');
   });
 });
+
+describe('edit 路径边界（0.15 E8）', () => {
+  it('edit 绕过边界会改写内置敏感路径或自定义 deny_paths 文件', async () => {
+    const builtin = path.join(homedir(), '.ssh', 'id_rsa');
+    const builtinTool = toolOf('edit');
+    expect(
+      await builtinTool.checkPermission?.(
+        { path: builtin, old_string: 'a', new_string: 'b' },
+        makeContext(),
+      ),
+    ).toBe('deny');
+    expect(
+      await builtinTool.handler({ path: builtin, old_string: 'a', new_string: 'b' }, makeContext()),
+    ).toContain('敏感路径拒绝列表');
+
+    const secretDir = path.join(workDir, 'edit-deny-dir');
+    mkdirSync(secretDir, { recursive: true });
+    const file = path.join(secretDir, 'token.txt');
+    writeFileSync(file, 'token\n', 'utf-8');
+    const tool = configuredTool('edit', { denyPaths: [secretDir] });
+
+    expect(
+      await tool.checkPermission?.(
+        { path: file, old_string: 'token', new_string: 'x' },
+        makeContext(),
+      ),
+    ).toBe('deny');
+    const result = await tool.handler(
+      { path: file, old_string: 'token', new_string: 'x' },
+      makeContext(),
+    );
+    expect(result).toContain('敏感路径拒绝列表');
+    expect(readFileSync(file, 'utf-8')).toBe('token\n');
+  });
+
+  it('edit 相对路径按 baseCwd 进入 allowed_roots，根外仍 ask', async () => {
+    const allowed = path.join(workDir, 'edit-allowed-root');
+    mkdirSync(allowed, { recursive: true });
+    writeFileSync(path.join(allowed, 'inside.txt'), 'inside\n', 'utf-8');
+    const outside = writeTemp('edit-outside-root.txt', 'outside\n');
+    const tool = configuredTool('edit', { allowedRoots: [allowed], cwd: allowed });
+
+    // 相对路径按 cwd 解析后落在根内：edit 仍需确认，自动应答后 allow
+    expect(
+      await tool.checkPermission?.(
+        { path: 'inside.txt', old_string: 'inside', new_string: 'x' },
+        makeAllowContext(),
+      ),
+    ).toBe('allow');
+    // 绝对路径在根外：ask（运行时再向用户确认）
+    expect(
+      await tool.checkPermission?.(
+        { path: outside, old_string: 'outside', new_string: 'x' },
+        makeContext(),
+      ),
+    ).toBe('ask');
+  });
+});
+
+describe('自定义 deny_paths 参与 bash 命令文本匹配（0.15 E8）', () => {
+  it('命令写出自定义敏感路径的绝对路径或 $HOME 写法时未命中', async () => {
+    const secretDir = path.join(workDir, 'cmd-secret-dir');
+    mkdirSync(secretDir, { recursive: true });
+    const tool = configuredTool('bash', { denyPaths: [secretDir] });
+
+    expect(
+      await tool.checkPermission?.(
+        {
+          command: `cat ${path.join(secretDir, 'token.txt')}`,
+        },
+        makeAllowContext(),
+      ),
+    ).toBe('deny');
+    const absolute = await tool.handler(
+      { command: `cat ${path.join(secretDir, 'token.txt')}` },
+      makeContext(),
+    );
+    expect(absolute).toContain('path_denied');
+    expect(absolute).not.toContain('退出码');
+
+    const homeTool = configuredTool('bash', { denyPaths: ['~/.vessel-e8-secret'] });
+    expect(
+      await homeTool.checkPermission?.(
+        { command: 'cat $HOME/.vessel-e8-secret/key' },
+        makeAllowContext(),
+      ),
+    ).toBe('deny');
+    expect(
+      await homeTool.handler({ command: 'cat ${HOME}/.vessel-e8-secret/key' }, makeContext()),
+    ).toContain('path_denied');
+  });
+
+  it('前缀相似的非敏感路径不被自定义 deny_paths 误伤', async () => {
+    const homeTool = configuredTool('bash', { denyPaths: ['~/.vessel-e8-secret'] });
+    const result = await homeTool.handler(
+      { command: 'echo ~/.vessel-e8-secret-backup' },
+      makeContext(),
+    );
+    expect(result).not.toContain('path_denied');
+    expect(result).toContain('退出码: 0');
+  });
+});
