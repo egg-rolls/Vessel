@@ -83,11 +83,11 @@ function readBatch(record: Record<string, unknown>, key: string, action: string)
 }
 
 /**
- * 只拷已知键并转 camelCase。
+ * 只拷已知键并转 camelCase；owner / parent 固定为工具的 owner，模型不能伪造。
  * 值不做类型校验：batch 要由 AgentService 逐条拒绝，不能在映射阶段整批抛错。
  */
-function mapNew(record: Record<string, unknown>): Record<string, unknown> {
-  const input: Record<string, unknown> = {};
+function mapNew(record: Record<string, unknown>, ownerId: string): Record<string, unknown> {
+  const input: Record<string, unknown> = { owner: ownerId, parentId: ownerId };
   if (record.name !== undefined) input.name = record.name;
   if (record.model !== undefined) input.model = record.model;
   if (record.system_prompt !== undefined) input.systemPrompt = record.system_prompt;
@@ -96,8 +96,8 @@ function mapNew(record: Record<string, unknown>): Record<string, unknown> {
 }
 
 /** 非对象条目原样交给 service，由它逐条拒绝 */
-function mapNewEntry(entry: unknown): unknown {
-  return isRecord(entry) ? mapNew(entry) : entry;
+function mapNewEntry(entry: unknown, ownerId: string): unknown {
+  return isRecord(entry) ? mapNew(entry, ownerId) : entry;
 }
 
 /** `from` 不暴露：工具调用者恒为 owner，模型不能伪造发送者 */
@@ -126,8 +126,19 @@ function readState(value: unknown): MemberState {
   return value as MemberState;
 }
 
+/** agent 工具选项 */
+export interface AgentToolOptions {
+  /** 调用者（root owner）id；成员 owner / parent 与 list viewer 都用它 */
+  ownerId?: string;
+}
+
 /** 构造内置 `agent` 工具；生命周期全部委托给 AgentService */
-export function createAgentTool(service: AgentService): ToolDefinition {
+export function createAgentTool(
+  service: AgentService,
+  options: AgentToolOptions = {},
+): ToolDefinition {
+  const ownerId = options.ownerId ?? DEFAULT_OWNER;
+
   return {
     name: 'agent',
     description:
@@ -186,13 +197,17 @@ export function createAgentTool(service: AgentService): ToolDefinition {
               'members',
               'new',
             );
-            const entries = readBatch(record, 'members', 'new').map(mapNewEntry);
+            const entries = readBatch(record, 'members', 'new').map((entry) =>
+              mapNewEntry(entry, ownerId),
+            );
             const result = await service.new({
               members: entries as unknown as NewMemberInput[],
             });
             return JSON.stringify(result);
           }
-          return JSON.stringify(await service.new(mapNew(record) as unknown as NewMemberInput));
+          return JSON.stringify(
+            await service.new(mapNew(record, ownerId) as unknown as NewMemberInput),
+          );
         }
 
         if (action === 'send') {
@@ -220,7 +235,7 @@ export function createAgentTool(service: AgentService): ToolDefinition {
 
         if (action === 'list') {
           // private 成员只有 owner 可见；工具调用者就是 owner
-          const filter: ListFilter = { viewer: DEFAULT_OWNER };
+          const filter: ListFilter = { viewer: ownerId };
           if (record.visibility !== undefined) {
             filter.visibility = readVisibility(record.visibility);
           }

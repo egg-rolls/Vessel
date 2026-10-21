@@ -24,9 +24,13 @@ function failureText(entry: BatchItemResult<unknown> | undefined): string {
   return entry !== undefined && !entry.ok ? entry.error : '';
 }
 
-function setup() {
+function setup(options: { ownerId?: string } = {}) {
   const made = makeService();
-  return { service: made.service, runtime: made.runtime, tool: createAgentTool(made.service) };
+  return {
+    service: made.service,
+    runtime: made.runtime,
+    tool: createAgentTool(made.service, options),
+  };
 }
 
 describe('agent tool', () => {
@@ -70,6 +74,35 @@ describe('agent tool', () => {
     expect(failureText(results[1])).toContain('invalid visibility');
     expect(results[2]?.ok ? results[2].status.name : undefined).toBe('third');
     expect(runtime.spawned.map((member) => member.name)).toEqual(['first', 'third']);
+    expect(runtime.spawned.map((member) => member.parent_id)).toEqual(['main', 'main']);
+  });
+
+  it('member final text is delivered back to the owner as a new turn', async () => {
+    const { service, runtime, tool } = setup();
+    await service.attachOwner({ id: 'main', visibility: 'team' });
+    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+    expect(created.parent_id).toBe('main');
+    runtime.handler = async (member) => (member.id === created.id ? { content: 'done' } : {});
+
+    await call(tool, { action: 'send', to: created.id, content: 'work' });
+    await settle();
+
+    const ownerTurns = runtime.turns.filter((turn) => turn.member.id === 'main');
+    expect(ownerTurns.map((turn) => turn.message.content)).toEqual(['done']);
+    expect(ownerTurns[0]?.message.from).toBe(created.id);
+  });
+
+  it('custom ownerId scopes new owner/parent and list visibility', async () => {
+    const { service, tool } = setup({ ownerId: 'boss' });
+    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+
+    expect(created.owner).toBe('boss');
+    expect(created.parent_id).toBe('boss');
+    expect(
+      parse<MemberStatus[]>(await call(tool, { action: 'list' })).map((entry) => entry.id),
+    ).toEqual([created.id]);
+    expect(await service.list({ viewer: 'main' })).toEqual([]);
+    expect((await service.list({ viewer: 'boss' })).map((entry) => entry.id)).toEqual([created.id]);
   });
 
   it('single send queues and returns queued/message_id without waiting for the turn', async () => {
@@ -146,13 +179,15 @@ describe('agent tool', () => {
     const made = makeService();
     const tool = createAgentTool(made.service);
     const member = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
-    const child = await made.service.new({ name: 'child', parentId: 'main', visibility: 'team' });
+    const child = await made.service.new({ name: 'child', parentId: 'grand', visibility: 'team' });
 
     const all = parse<MemberStatus[]>(await call(tool, { action: 'list' }));
     expect(all.map((entry) => entry.id).sort()).toEqual([member.id, child.id].sort());
-    expect(all.find((entry) => entry.id === member.id)?.parent_id).toBeUndefined();
+    expect(all.find((entry) => entry.id === member.id)?.parent_id).toBe('main');
 
-    const children = parse<MemberStatus[]>(await call(tool, { action: 'list', parent_id: 'main' }));
+    const children = parse<MemberStatus[]>(
+      await call(tool, { action: 'list', parent_id: 'grand' }),
+    );
     expect(children.map((entry) => entry.id)).toEqual([child.id]);
     expect(parse(await call(tool, { action: 'list', parent_id: 'other' }))).toEqual([]);
 
