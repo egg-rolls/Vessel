@@ -2,7 +2,7 @@
  * `--tools` 的工具清单——不构造 AgentRuntime、不需要 API Key。
  *
  * 输出口径固定为 headless 口径（4 个）：bash / edit / read / delegate_task。
- * `ask_user` 仅在「实际进入 REPL 且 stdin 是 TTY」时注册（见 cli.ts / bootstrap.ts），
+ * `ask_user` 仅在交互 REPL（TTY）或 gateway / serve 下注册（见 cli.ts / bootstrap.ts），
  * 因此一次性命令里不列出，由调用方在末尾注明。
  */
 

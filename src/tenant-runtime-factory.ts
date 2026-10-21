@@ -121,7 +121,10 @@ export interface BuildTenantRuntimeOptions {
   /** mock 场景（仅 useMock）；缺省时 provider-factory 走 MemoryLLMProvider */
   mockScenario?: MockScenarioName;
   headless?: boolean;
-  /** ask_user 仅交互 REPL 注册；serve / headless 必须 false */
+  /**
+   * ask_user：交互 REPL 与 serve/gateway 注册；headless / --run 不注册。
+   * `ui.askUser: false` 可关闭（0.15）。
+   */
   registerAskUser?: boolean;
   loader?: PluginLoader;
   nodeId: string;
@@ -488,7 +491,8 @@ export async function buildTenantRuntime(
       }
     }
 
-    if (options.registerAskUser === true) {
+    // 0.15：ui.askUser=false 按 tenant 关闭（overlay 生效）；无客户端入口不会传 true。
+    if (options.registerAskUser === true && config.ui?.askUser !== false) {
       const { createAskUserTool } = await import('../packages/tui/src/renderer/ask-user');
       plugins.push({
         name: 'ask-user',
@@ -1008,6 +1012,11 @@ export interface TenantRuntimeFactoryOptions {
   /** mock 场景（仅 useMock）；逐 tenant 透传 */
   mockScenario?: MockScenarioName;
   headless?: boolean;
+  /**
+   * 0.15：是否为每个 tenant 注册 ask_user（gateway / serve 有可交互客户端时为 true）。
+   * 每个 tenant 的 `ui.askUser: false` 仍会单独关闭。
+   */
+  registerAskUser?: boolean;
   loader?: PluginLoader;
   nodeId: string;
   /** gateway 共享事件流（所有 tenant 事件镜像到这里） */
@@ -1168,6 +1177,9 @@ export async function createTenantRuntimeFactory(
         ...(options.useMock !== undefined ? { useMock: options.useMock } : {}),
         ...(options.mockScenario !== undefined ? { mockScenario: options.mockScenario } : {}),
         ...(options.headless !== undefined ? { headless: options.headless } : {}),
+        ...(options.registerAskUser !== undefined
+          ? { registerAskUser: options.registerAskUser }
+          : {}),
         loader,
         nodeId: options.nodeId,
         ...(options.sharedEvents ? { sharedEvents: options.sharedEvents } : {}),

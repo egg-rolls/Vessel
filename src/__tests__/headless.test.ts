@@ -192,7 +192,7 @@ it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => 
   for (const name of ['bash', 'read', 'edit', 'delegate_task']) {
     expect(stdout).toContain(`- ${name}:`);
   }
-  expect(stdout).toContain('ask_user (interactive only)');
+  expect(stdout).toContain('ask_user (interactive REPL / gateway only)');
 });
 
 it('--tools 在 team.enabled 时额外列出 5 个 team_* 工具', async () => {

@@ -11,7 +11,6 @@ export const zhCN = {
   'help.section.usage': '用法',
   'help.section.session': '会话',
   'help.section.headless': 'Headless 模式',
-  'help.section.serve': '服务模式',
   'help.section.gateway': 'Gateway 生命周期（0.12）',
   'help.section.capability': '能力（0.4）',
   'help.section.config': '配置（0.5）',
@@ -31,7 +30,6 @@ export const zhCN = {
   'help.cmd.stdin': 'headless 单轮（stdin）',
   'help.cmd.continueRun': '续接最近会话并运行一轮',
   'help.cmd.resumeRun': '恢复中断的 durable run',
-  'help.cmd.serve': '启动 HTTP/WS gateway（Web 控制台后端）',
   'help.cmd.status': '一屏查看本地运行态 / attach / gateway 实例',
   'help.cmd.agents': '经 agents.list 列出 agent（本地 gateway 或 --connect）',
   'help.cmd.errors': '最近 run/tool 错误（errorLevel: all 时含诊断）',
@@ -50,15 +48,14 @@ export const zhCN = {
   'help.cmd.workflowCancel': '取消同进程 run',
   'help.cmd.eval': '离线评测',
   'help.cmd.evalOut': '评测输出 JSON / 指定报告',
-  'help.cmd.feishu': '附加飞书渠道（可与 --serve / REPL 同用）',
+  'help.cmd.feishu': '附加飞书渠道（可与 gateway start / REPL 同用）',
   'help.cmd.tenant': '选择 tenant（也可用 VESSEL_TENANT）',
   'help.cmd.connect': '连接 gateway（非回环必须 https；token 也可用 VESSEL_CONNECT_TOKEN）',
-  'help.cmd.origin': '独立 Web 前端的 CORS/WS Origin 白名单',
   'help.cmd.configPath': '打印用户/项目配置路径',
   'help.cmd.configInit': '生成用户配置模板',
   'help.cmd.configShow': '查看脱敏配置与来源',
   'help.cmd.configSet':
-    '写入用户配置（ui.language / ui.showReasoning / ui.statusBars / ui.verbosity / ui.showInternalEvents / ui.errorLevel / observability.showProcessErrors / agent.cwd）',
+    '写入用户配置（ui.language / ui.showReasoning / ui.statusBars / ui.verbosity / ui.showInternalEvents / ui.errorLevel / ui.askUser / observability.showProcessErrors / agent.cwd）',
   'help.cmd.tenantList': '列出 tenant',
   'help.cmd.tenantGet': '查看 tenant 元数据',
   'help.cmd.tenantCreate': '创建 tenant',
@@ -104,6 +101,8 @@ export const zhCN = {
   'cli.feishuConnected': '飞书渠道已连接（{appId}）。',
   'cli.gatewayRunning': 'Gateway 运行中… 按 Ctrl+C 停止。',
   'cli.feishuRunning': '飞书渠道运行中… 按 Ctrl+C 停止。',
+  'cli.serveDeprecated':
+    '--serve 已弃用；请改用 `vessel gateway start`（前台）或 `vessel gateway start --daemon`。',
 
   // ── connect ──
   'connect.caUnreadable': '无法读取 CA 文件：{path}',
@@ -115,7 +114,7 @@ export const zhCN = {
   'config.init.exists': '配置已存在于 {path}；使用 --force 覆盖',
   'config.init.next': 'next: 运行 `vessel` 配置 API Key，或运行 `vessel doctor` 验证环境。',
   'config.set.unknownKey':
-    '不支持的配置键 "{key}"；支持 ui.language、ui.showReasoning、ui.statusBars、ui.verbosity、ui.showInternalEvents、ui.errorLevel、observability.showProcessErrors、agent.cwd',
+    '不支持的配置键 "{key}"；支持 ui.language、ui.showReasoning、ui.statusBars、ui.verbosity、ui.showInternalEvents、ui.errorLevel、ui.askUser、observability.showProcessErrors、agent.cwd',
   'config.set.invalidLanguage': 'ui.language 只支持 "zh-CN" 或 "en"',
   'config.set.invalidBoolean': '{key} 只支持 "true" 或 "false"',
   'config.set.invalidStatusBars': 'ui.statusBars 只支持 "top"、"bottom"、"both" 或 "none"',

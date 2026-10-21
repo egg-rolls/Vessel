@@ -211,7 +211,7 @@ export async function configSetCommand(
         stderr: t('config.set.invalidVerbosity', { value }),
       };
     }
-  } else if (key === 'ui.showInternalEvents') {
+  } else if (key === 'ui.showInternalEvents' || key === 'ui.askUser') {
     if (value !== 'true' && value !== 'false') {
       return {
         exitCode: 2,

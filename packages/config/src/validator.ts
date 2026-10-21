@@ -338,7 +338,7 @@ const UI_VERBOSITY: ReadonlySet<string> = new Set(['minimal', 'normal', 'debug']
 /** `ui.errorLevel` 允许值（0.14） */
 const UI_ERROR_LEVELS: ReadonlySet<string> = new Set(['user', 'all']);
 
-/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13/0.14 可见性） */
+/** 校验 ui 块（0.8.5 language；0.11 clearOnStart；0.11.1 showReasoning；0.13/0.14 可见性；0.15 askUser） */
 function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]): void {
   if (!isPlainObject(ui)) {
     errors.push({ path: 'ui', message: 'ui must be an object', value: ui });
@@ -400,6 +400,13 @@ function validateUi(ui: Record<string, unknown>, errors: ConfigValidationError[]
       path: 'ui.errorLevel',
       message: 'ui.errorLevel must be one of "user", "all"',
       value: ui.errorLevel,
+    });
+  }
+  if (ui.askUser !== undefined && typeof ui.askUser !== 'boolean') {
+    errors.push({
+      path: 'ui.askUser',
+      message: 'ui.askUser must be a boolean',
+      value: ui.askUser,
     });
   }
 }
@@ -1933,6 +1940,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'verbosity',
     'showInternalEvents',
     'errorLevel',
+    'askUser',
   ],
   tenant: ['default', 'tenants'],
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],

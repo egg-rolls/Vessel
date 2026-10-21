@@ -154,6 +154,28 @@ describe('vessel config set（0.11）', () => {
     expect(fs.existsSync(configPath)).toBe(false);
   });
 
+  it('解析并写入 ui.askUser（0.15）', async () => {
+    const parsed = parseArgs(['config', 'set', 'ui.askUser', 'false']);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.args.configCommand).toEqual({
+        kind: 'set',
+        key: 'ui.askUser',
+        value: 'false',
+        json: false,
+      });
+    }
+    expect(parseArgs(['config', 'set', 'ui.askUser', 'yes']).ok).toBe(false);
+
+    fs.writeFileSync(configPath, 'ui:\n  language: en\n', 'utf-8');
+    const result = await configSetCommand('ui.askUser', 'false', {
+      userConfigPath: configPath,
+    });
+    expect(result.exitCode).toBe(0);
+    const root = parseYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    expect(root.ui).toEqual({ language: 'en', ask_user: false });
+  });
+
   it('解析新键与非法值（0.11.1）', () => {
     const showReasoning = parseArgs(['config', 'set', 'ui.showReasoning', 'false']);
     expect(showReasoning.ok).toBe(true);

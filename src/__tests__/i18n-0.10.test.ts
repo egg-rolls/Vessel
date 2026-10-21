@@ -87,7 +87,9 @@ it('--help 默认中文（既有文案逐字保留）', async () => {
   expect(exitCode).toBe(0);
   expect(stdout).toContain('Vessel CLI — 自组织 Agent Harness');
   expect(stdout).toContain('用法');
-  expect(stdout).toContain('启动 HTTP/WS gateway（Web 控制台后端）');
+  expect(stdout).toContain('前台启动 gateway');
+  // 0.15：--serve 已从 help 移除，只作为隐藏兼容别名。
+  expect(stdout).not.toContain('--serve');
 });
 
 it('VESSEL_LANG=en --help 输出英文', async () => {
@@ -98,8 +100,9 @@ it('VESSEL_LANG=en --help 输出英文', async () => {
   expect(exitCode).toBe(0);
   expect(stdout).toContain('Vessel CLI — self-organizing agent harness');
   expect(stdout).toContain('Usage');
-  expect(stdout).toContain('start the HTTP/WS gateway (Web console backend)');
+  expect(stdout).toContain('start in the foreground');
   expect(stdout).not.toContain('用法');
+  expect(stdout).not.toContain('--serve');
 });
 
 it('headless 空输入：默认中文，VESSEL_LANG=en 英文', async () => {

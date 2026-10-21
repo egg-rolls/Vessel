@@ -85,6 +85,7 @@ export type ConfigCommandArgs =
         | 'ui.verbosity'
         | 'ui.showInternalEvents'
         | 'ui.errorLevel'
+        | 'ui.askUser'
         | 'observability.showProcessErrors'
         | 'agent.cwd';
       value: string;
@@ -933,7 +934,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       return {
         ok: false,
         error:
-          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|ui.verbosity|ui.showInternalEvents|ui.errorLevel|observability.showProcessErrors|agent.cwd> <value> [--json]',
+          'Usage: vessel config set <ui.language|ui.showReasoning|ui.statusBars|ui.verbosity|ui.showInternalEvents|ui.errorLevel|ui.askUser|observability.showProcessErrors|agent.cwd> <value> [--json]',
       };
     }
     const [key = '', value = ''] = positional;
@@ -944,6 +945,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       key !== 'ui.verbosity' &&
       key !== 'ui.showInternalEvents' &&
       key !== 'ui.errorLevel' &&
+      key !== 'ui.askUser' &&
       key !== 'observability.showProcessErrors' &&
       key !== 'agent.cwd'
     ) {
@@ -951,7 +953,7 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
         ok: false,
         error:
           `Unsupported config key: ${key} (supported: ui.language, ui.showReasoning, ` +
-          'ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ' +
+          'ui.statusBars, ui.verbosity, ui.showInternalEvents, ui.errorLevel, ui.askUser, ' +
           'observability.showProcessErrors, agent.cwd)',
       };
     }
@@ -968,7 +970,9 @@ function parseConfigArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: 'ui.verbosity must be "minimal", "normal" or "debug"' };
     }
     if (
-      (key === 'ui.showInternalEvents' || key === 'observability.showProcessErrors') &&
+      (key === 'ui.showInternalEvents' ||
+        key === 'ui.askUser' ||
+        key === 'observability.showProcessErrors') &&
       value !== 'true' &&
       value !== 'false'
     ) {
