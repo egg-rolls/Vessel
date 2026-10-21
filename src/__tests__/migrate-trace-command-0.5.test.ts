@@ -1,11 +1,16 @@
 import { Database } from 'bun:sqlite';
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, setDefaultTimeout } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { type RunCheckpoint, resolveTenantPaths } from '../../packages/core/src/index';
 import { migrateCommand } from '../migrate-command';
 import { tracePruneCommand } from '../trace-command';
+
+// 迁移走 durable atomicWrite（temp fsync + rename）。Windows CI 上杀毒扫描
+// 偶尔会让单次 fsync 卡住数秒，默认 5s 的 per-test 超时会把偶发 I/O 停顿
+// 误报成失败；这里给足余量（本地通常 <100ms）。
+setDefaultTimeout(30_000);
 
 const tempDirs: string[] = [];
 

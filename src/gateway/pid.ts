@@ -104,25 +104,45 @@ export function gatewayPidPath(dataDir: string, instance?: string): string {
   return path.join(dataDir, gatewayPidFileName(instance));
 }
 
+/** 默认命令超时（ps / schtasks 等短命令） */
+export const COMMAND_TIMEOUT_MS = 3000;
+
+/**
+ * 进程探测超时（Windows WMI 查询）。
+ *
+ * 冷启动 PowerShell + Get-CimInstance 在空闲机器上约 1s；CI 的 Windows runner
+ * 上受并发与杀毒扫描影响经常超过 3s。超时会被当成“读不到命令行”，进而把
+ * 存活的 gateway 判成 stale（`gateway status` 退出 1），因此这里单独放宽。
+ */
+export const PROCESS_PROBE_TIMEOUT_MS = 15_000;
+
+/** 构造带超时的命令执行器（失败统一归一为 exitCode 1） */
+export function createCommandRunner(timeoutMs: number = COMMAND_TIMEOUT_MS): CommandRunner {
+  return async (argv) => {
+    try {
+      const proc = Bun.spawn(argv, {
+        stdin: 'ignore',
+        stdout: 'pipe',
+        stderr: 'pipe',
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { exitCode, stdout, stderr };
+    } catch {
+      return { exitCode: 1, stdout: '', stderr: '' };
+    }
+  };
+}
+
 /** 默认命令执行器：Bun.spawn + 3s 超时 */
-export const defaultCommandRunner: CommandRunner = async (argv) => {
-  try {
-    const proc = Bun.spawn(argv, {
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      signal: AbortSignal.timeout(3000),
-    });
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ]);
-    return { exitCode, stdout, stderr };
-  } catch {
-    return { exitCode: 1, stdout: '', stderr: '' };
-  }
-};
+export const defaultCommandRunner: CommandRunner = createCommandRunner();
+
+/** 进程探测执行器：更宽松的超时，避免慢 WMI 查询把存活进程判成 stale */
+const defaultProcessProbeRunner: CommandRunner = createCommandRunner(PROCESS_PROBE_TIMEOUT_MS);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -194,7 +214,8 @@ export async function inspectProcess(
   if (!isProcessAlive(pid)) return { alive: false };
 
   const platform = options.platform ?? process.platform;
-  const runCommand = options.runCommand ?? defaultCommandRunner;
+  // 未注入执行器时，进程探测用更宽松的超时（Windows 的 WMI 查询可能很慢）。
+  const runCommand = options.runCommand ?? defaultProcessProbeRunner;
   let commandLine: string | undefined;
 
   if (platform === 'linux') {
