@@ -9,9 +9,10 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { AnthropicProvider } from '../src/provider/providers';
 import type { ChatRequest, StreamChunk } from '../src/types/provider';
 
-function mockFetchSse(sseChunks: string[]): void {
+function mockFetchSse(sseChunks: string[], sink?: { body?: Record<string, unknown> }): void {
   const encoder = new TextEncoder();
-  globalThis.fetch = (async () => {
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    if (sink) sink.body = JSON.parse(String(init?.body)) as Record<string, unknown>;
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         for (const chunk of sseChunks) {
@@ -23,6 +24,16 @@ function mockFetchSse(sseChunks: string[]): void {
     return new Response(stream, {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
+    });
+  }) as unknown as typeof fetch;
+}
+
+function mockFetchJson(payload: unknown, sink?: { body?: Record<string, unknown> }): void {
+  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+    if (sink) sink.body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(JSON.stringify(payload), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
     });
   }) as unknown as typeof fetch;
 }
@@ -166,5 +177,83 @@ describe('AnthropicProvider streaming', () => {
 
     expect(response.content).toBe('truncated');
     expect(response.finish_reason).toBe('length');
+  });
+});
+
+describe('AnthropicProvider system messages', () => {
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  const mergedMessages = [
+    { role: 'system' as const, content: 'BASE PROMPT' },
+    { role: 'system' as const, content: 'COMPACTION SUMMARY', compaction_summary: true },
+    { role: 'user' as const, content: 'hi' },
+  ];
+
+  it('drops the compaction summary when multiple system messages are not merged', async () => {
+    const sink: { body?: Record<string, unknown> } = {};
+    mockFetchJson(
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      sink,
+    );
+
+    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    await provider.chat({ messages: mergedMessages, model: 'claude-test' } as ChatRequest);
+
+    expect(sink.body?.system).toContain('BASE PROMPT');
+    expect(sink.body?.system).toContain('COMPACTION SUMMARY');
+  });
+
+  it('changes the system field when there is a single system message', async () => {
+    const sink: { body?: Record<string, unknown> } = {};
+    mockFetchJson(
+      {
+        content: [{ type: 'text', text: 'ok' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      },
+      sink,
+    );
+
+    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    await provider.chat({
+      messages: [
+        { role: 'system', content: 'BASE PROMPT' },
+        { role: 'user', content: 'hi' },
+      ],
+      model: 'claude-test',
+    } as ChatRequest);
+
+    expect(sink.body?.system).toBe('BASE PROMPT');
+  });
+
+  it('drops the merged system text on the streaming path', async () => {
+    const sink: { body?: Record<string, unknown> } = {};
+    mockFetchSse(
+      [
+        `event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":1}}}\n\n`,
+        `event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n`,
+        `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}\n\n`,
+        `event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n`,
+        `event: message_stop\ndata: {"type":"message_stop"}\n\n`,
+      ],
+      sink,
+    );
+
+    const provider = new AnthropicProvider({ api_key: 'sk-ant-test', model: 'claude-test' });
+    await provider.chat({
+      messages: mergedMessages,
+      model: 'claude-test',
+      stream: true,
+      on_chunk: () => undefined,
+    } as ChatRequest);
+
+    expect(sink.body?.system).toContain('BASE PROMPT');
+    expect(sink.body?.system).toContain('COMPACTION SUMMARY');
   });
 });

@@ -556,19 +556,25 @@ export class AnthropicProvider implements LLMProvider {
       }
     }
 
-    const systemMessage = req.messages.find((m) => m.role === 'system');
+    // Anthropic 只有单个 system 字段：多条 system（基底 prompt + 压缩摘要）必须合并，
+    // 只取第一条会让后续 system 消息静默丢失。
+    const systemContent =
+      req.messages
+        .filter((m) => m.role === 'system')
+        .map((m) => m.content)
+        .join('\n\n') || undefined;
 
     // 流式分支：stream=true 且提供 on_chunk 时走 SSE，边收边回调，最终返回拼装好的 LLMResponse。
     // 非流式（无 on_chunk 或 stream=false）落入下方既有整段逻辑，行为不变。
     if (req.stream && req.on_chunk) {
-      return await this.streamChat(url, messages, systemMessage?.content, req, req.on_chunk);
+      return await this.streamChat(url, messages, systemContent, req, req.on_chunk);
     }
 
     const body = {
       model: req.model ?? this.model,
       max_tokens: req.max_tokens ?? 4096,
       messages,
-      system: systemMessage?.content,
+      system: systemContent,
       tools: req.tools?.map((t) => ({
         name: t.function.name,
         description: t.function.description,
