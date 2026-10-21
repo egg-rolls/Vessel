@@ -183,6 +183,15 @@ export class RoutingTeamHost implements TeamHostPort {
     }
   }
 
+  /** 0.16：close 只支持本机成员；跨节点释放不在 Phase A 范围 */
+  async closeMember(id: string): Promise<void> {
+    const parsed = parseAgentAddress(id);
+    if (parsed.nodeId !== undefined && parsed.nodeId !== this.nodeId) {
+      throw new Error(`remote member close is not supported: ${id}`);
+    }
+    await this.local.closeMember(parsed.agentId);
+  }
+
   async status(id?: string, node?: string): Promise<AgentStatus | AgentStatus[]> {
     if (id === undefined) {
       if (node === undefined || node === this.nodeId) return this.local.status();

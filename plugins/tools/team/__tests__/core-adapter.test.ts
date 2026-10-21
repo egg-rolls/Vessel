@@ -363,7 +363,7 @@ describe('R4 生命周期与事件（F7/F8）', () => {
 });
 
 describe('R4 工具面快照', () => {
-  it('5 个工具名/必填项/属性保持不变', () => {
+  it('agent + 5 个 legacy 工具名/必填项/属性保持不变', () => {
     const host = new MemoryPluginHost();
     createTeamPlugin({
       providerFactory: () => new MemoryLLMProvider(),
@@ -386,6 +386,20 @@ describe('R4 工具面快照', () => {
       { name: 'team_inbox', required: [], properties: ['cursor', 'member', 'node'] },
       { name: 'team_status', required: [], properties: ['member', 'node'] },
       { name: 'team_cancel', required: ['member'], properties: ['member', 'node'] },
+      {
+        name: 'agent',
+        required: ['action'],
+        properties: [
+          'action',
+          'content',
+          'member',
+          'model',
+          'name',
+          'system_prompt',
+          'to',
+          'visibility',
+        ],
+      },
     ]);
   });
 
