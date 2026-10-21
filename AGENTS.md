@@ -9,7 +9,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **语言/运行时**：TypeScript + Bun。
 - **monorepo**：bun workspaces。`packages/{core,config,tui,serve,permission}` + `plugins/` + `apps/web`。
 - **形态**：`@vessel-agent/core` 是库（零 UI 依赖，可嵌入）；TUI / serve / web 是应用层外壳。
-- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个。默认运行期 4 个（+ `delegate_task`）；`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册（该入口为 5；headless/`--run` 不注册，`ui.askUser: false` 可关闭）；`team_*` 5 个仅在 `team.enabled: true` 时注册（共 9）；配置 `mcp_servers` 后额外注册 `mcp__<server>__<tool>`（数量动态，4 + N）。别急着加第四个能力工具。
+- **工具集**：能力工具只有 `bash` / `read` / `edit` 三个。0.16 起交互入口（REPL / serve）默认用 canonical `agent`（`spawn` / `send` / `close`）替代 `delegate_task`；headless / `--run` 默认仍是 `bash` / `read` / `edit` / `delegate_task`（4 个）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册；`team_*` 5 个在 team 引擎构造（`team.enabled` 或 `agent` 可用）且 `team.legacyTools` 为 true（默认）时注册；配置 `mcp_servers` 后额外注册 `mcp__<server>__<tool>`（数量动态）。实测：headless 默认 4；headless + `agent.enabled: true` 9；交互默认 10；`team.legacyTools: false` 时 headless 4、交互 5。别急着加第四个能力工具。
 - **状态**：alpha，pre-MVP。未实现的能力一律标注，不写进正文。
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
 - **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
@@ -37,6 +37,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.14.4 状态**：上下文压缩质量（基于 `release/0.14.4`，未随版本发布）：压缩保留区改按 token 预算 `context.maxTokens × 0.3` 从最新消息向前累计，同时受条数上限 `maxKept = max(2, messageCap - systemCount - 1)` 约束（`messageCap` 取显式 `context.maxMessages`，缺省 `max(100, floor(maxTokens / 100))`），token 或条数任一超限都触发摘要，两者都未超时不压缩；保留边界为 `tool` 时回退到对应 `assistant(tool_calls)`，配对完整性优先于条数上限（可能略超）。摘要 transcript 渲染 `assistant` 的 `[tool_call:<name>] <arguments>` 与 `tool` 的 `[tool:<id>] <content>`，单条 12,000 字符截断、不含 `reasoning_content`；输入按 `min(48_000, max(2_000, floor(context.maxTokens / 8)))` 分块，单块一次摘要、多块 N 次 partial（≤1024）+ 1 次 reduce（≤2048），块失败写占位继续、reduce 失败拼接截断、全部失败返回空串由 core 回退占位摘要。决策见 ADR-085。
 - **0.15.0 状态**：透明化与多实例安全（基于 `release/0.15.0`，未随版本发布）：core 新增 `context.compacted`（`auto|overflow|manual`，`removed/remaining/reason`）、`agent.limit.warning`（80%，每 run 每 key 一次）、`agent.queue.entered/left`（`position` 从 1 起）；`AgentSnapshot` / `RunSnapshot` / `SchedulerSnapshot.queued[]` 补 `nodeId` / `task` / `waitReason` / `contextUsed` / `contextMax` / `childrenCount` / `lastSeen`；`AgentRuntimeOptions.selfCard` + `AgentSpec.selfCard` 把 Self Card（≤400 tokens）注入 systemPrompt。ext 的 delegate 事件补 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path` 与 `result_ref`，孙 agent 走 `delegate.allow_nested`（默认 false）/ `delegate.max_descendants`（默认 16）；`edit` 纳入 `evaluatePath`，`bash` 命令文本同时匹配自定义 `deny_paths`。asm 引入 tenant 双层锁（file 默认 shared `.members/<pid>-<nonce>.json`，sqlite / `--exclusive` 走 `.lock`）与 session/run 写锁（`conflict` + `session_locked`），interactions 按实例落 `<dataDir>` 或 `<dataDir>/instances/<instance>`；新增 `--data-dir`、`port_in_use`、`doctor --deep`、`logs tail`、`gateway status --rpc`、`config.set` 与主 agent Self Card。tui / web 消费 `agents.tree`、`tasks.*`、`health.get` runtime 快照与 `/status` 队列 / 预警 / 压缩。canonical 方法 40 → 44。决策见 ADR-086。
 - **0.15.1 状态**：Web 性能补丁（基于 `release/0.15.1`，未随版本发布）：移除 `.modal-backdrop` 的 `backdrop-filter: blur(6px)` 与 `.appbar` 的 `backdrop-filter: blur(12px)`；遮罩改为 `ink 55%` 半透明底色，应用栏改为不透明 `--surface`。`backdrop-filter` 会为全屏/动画层强制额外合成与重采样，Edge / Chromium 在滚动、输入和流式文本时容易掉帧；不再使用模糊，层级靠边框与阴影表达。
+- **0.16.0 状态**：统一 agent 工具 Phase A（基于 `release/0.16.0`，未随版本发布）：模型工具面收敛到唯一 `agent` schema（`spawn` / `send` / `close`，`send` 入队即返回，无 `wait` / `inbox` / `status` / `cancel`）；session 即成员（`session_id === agent_id`，注册表记录 `visibility` / `owner` / `state` / `last_seen` / `usage`，状态机含 `created` / `idle` / `running` / `waiting_permission` / `completed` / `failed` / `cancelled` / `closed` / `stale`）；成员回复经 owner inbox 排空写入 core `HookContext.messages`（`BeforeLlm` 注入，`name: 'agent:<id>'`，游标与稳定键去重）；成员 `permissionMode` 为 `bridge` / `allow` / `deny`（缺省交互 bridge、headless allow），bridge 请求补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 后弹到父窗口，应答沿用 `permission.respond` / `ask.respond`。`team.legacyTools` 默认 true（保留一个版本），`agent` 可用时不再注册 `delegate_task`，旧配置名映射为 `agent`。canonical RPC 仍 44。决策见 ADR-087。
 
 ## 代码风格与硬规矩
 
@@ -100,6 +101,12 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **delegate 关联字段与孙 agent 默认关闭**（0.15，ADR-086）：`subagent.delegate.*` 与转发的 `subagent.*` / bridge 事件必须带 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path`，完成 / 失败带 `result_ref: {kind:'run', id}`；嵌套转发保留内层 `delegate_path`，外层不得覆盖。`delegate.allow_nested` 默认 `false`，`delegate.max_descendants` 默认 `16`（按根树计数，根不计入）；开启后嵌套实例必须新建 Host，不得复用父 run 占用的注入 Host。`deny` 模式或显式 `disallowed` 含 `delegate_task` 时不得放开。
 - **多实例锁分层**（0.15，ADR-086）：file / memory 后端用 shared tenant 锁（`.members/<pid>-<nonce>.json`），sqlite / `--exclusive` 用 exclusive `.lock`；发布后必须复查另一侧。session / run 写锁固定 `.locks/sessions|runs/<sha16>.lock`（`0600`），冲突主码 `conflict` + `session_locked` / `run_locked`；不得新增 RPC 主码或用锁文件之外的机制做单写者。interactions 按实例落 `<dataDir>` 或 `<dataDir>/instances/<instance>`。
 - **新 RPC 方法维持 44 方法表**（0.15，ADR-086）：`agents.tree` / `tasks.list` / `tasks.get` / `config.set` 已冻结；`tasks.*` 只读派生、不持久化，`config.set` 只写白名单键且仅 default tenant。`health.get` 的 `runtime`、`runs.*` 的 envelope 与 `started_at`、`events.list` 的 redactor + 8 KiB 裁剪都属 additive，不得改已有字段语义。
+- **唯一 `agent` schema**（0.16，ADR-087）：模型工具面只注册一个 `agent`，动作固定 `spawn` / `send` / `close`；`send` 入队即返回，不得阻塞等待结果。`agent` 可用时不得再注册 `delegate_task`；不得新增 `wait` / `inbox` / `status` / `cancel` 模型工具——等待的语义是结束这一轮、回复作为新 turn 到达。`team_*` 只按 `team.legacyTools` 隐藏，不删除代码。
+- **session 即成员**（0.16，ADR-087）：`spawn` 的成员与 session 1:1（`session_id === agent_id`），`to` / `member` 两 id 都可寻址。注册表记录 `visibility` / `owner` / `state` / `last_seen` / `usage`；`private` 仅 owner 可见，跨 tenant 不可寻址；未注册 session 不是成员。
+- **成员状态机与事件**（0.16，ADR-087）：状态取 `created|idle|running|waiting_permission|completed|failed|cancelled|closed|stale`，与 `agents.tree` / `agents.list` 同名同义；`close` 后到达的 run 终态不得覆盖 `closed`。事件名保持开放字符串，成员事件的 `run_id` 用成员 id，不新增常量 / 枚举。
+- **权限 bridge**（0.16，ADR-087）：成员 `permissionMode` 为 `bridge|allow|deny`，缺省交互 `bridge`、headless `allow`；bridge 请求必须补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 并弹到父窗口，应答沿用 `permission.respond` / `ask.respond`；父流与 Host 流同源时不得重复转发。`deny` 只复制 `delegate.readOnlyTools`（默认 `['read']`）。
+- **legacy 别名**（0.16，ADR-087）：`team.legacyTools` 默认 `true`（保留一个版本）；`delegate_task` 只做配置别名（在 `permission.autoApprove` / `delegate.disallowed` 中映射为 `agent`），不注册第二个 schema；legacy `team_spawn` 成员不进入新注册表。
+- **BeforeLlm 注入只增不改**（0.16，ADR-087）：`HookContext.messages` 是 additive 注入位；runtime 只写入一次，按 `name` / `timestamp` 稳定键或对象引用去重，每个 run 重置；未写时不改变请求形状。`agent.followReplies` 目前只作为配置 / 事件字段，不得实现成阻塞等待或隐藏的 `wait`。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -111,7 +118,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.15.1` → `0.15-<role>`（`release/0.1` ~ `release/0.15.0` 已冻结；工作树 `worktrees/0.15-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.15.1 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.16.0` → `0.16-<role>`（`release/0.1` ~ `release/0.15.1` 已冻结；工作树 `worktrees/0.16-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.16.0 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
@@ -190,6 +197,7 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别在 core 里引用 `tui` / `config` / `plugins`（依赖方向是单向的）。
 - 别为了加能力去改 loop 或扩接口——先证明 Tool / Hook / Guardrail / 事件都做不到。
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
+- 别给模型加 `wait` / `inbox` / `status` / `cancel`；也别把成员回复做成需要轮询的收件箱。等待就是结束这一轮，回复作为新 turn 到达。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
 - 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户已进 core（`tenant` 解析/隔离原语），0.6 的跨机器远程 / 跨节点 transport 已在装配层实现（core 只加可选字段）；team 仍默认 off、显式 opt-in。
 - 0.5 默认 `session.backend: file`；不要删除 sqlite 后端，也不要在检测到 legacy 数据时自动迁移——只提示 `vessel migrate`。

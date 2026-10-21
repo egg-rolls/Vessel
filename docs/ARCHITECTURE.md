@@ -2259,3 +2259,76 @@ interface LimitBlock {
 - shared tenant 锁允许多进程共存（file 后端），它保证的是「每 session 单写者」，不是整个 tenant 的单写者；需要独占时用 `--exclusive` 或 sqlite。
 - Self Card 是估算 token 截断，不保证 provider 精确 400 tokens；MCP 工具名不进入 Card。
 - 孙 agent 仍受 `maxDepth` 与 `max_descendants` 双重约束；不使用注入 Host 的嵌套实例会额外创建一个进程内 Host。
+
+## 38. 0.16.0 统一 agent 工具（Phase A）（已实现）
+
+> 状态：已合入 `release/0.16.0`（未发布）。决策见 [ADR-087](adr/ADR-087-unified-agent-tool-phase-a.md)。
+
+### 38.1 工具面与装配
+
+- 模型侧只保留**一个** `agent` schema，动作固定 `spawn` / `send` / `close`：
+  - `spawn` 创建 session 并注册成员，返回成员状态；`name` / `model` / `system_prompt` / `visibility` 可选。
+  - `send` 入队即返回 `{ queued: true, message_id }`，不阻塞、不等待结果；消息上限 64 KiB（UTF-8）。
+  - `close` 释放成员，返回 `{ state: 'closed' }`，重复调用幂等。
+- **没有** `wait` / `inbox` / `status` / `cancel` 模型工具。等待的语义是「结束这一轮，回复作为新 turn 到达」；`agents.tree` / `agents.list` 与取消路径属于 UI / CLI / 控制面。
+- 装配决策在 `src/agent-wiring.ts`（纯函数）：
+  - 交互 REPL / serve 默认 `agent.enabled: true`；headless / `--run` 默认 `false`。显式 `agent.enabled` 覆盖入口默认。
+  - `agent` 可用时不注册 `delegate_task`；`team_*` 只受 `team.legacyTools` 控制（默认 `true`，保留一个版本）。
+  - `agent` 可用时 `delegate_task` 旧配置名在 `permission.autoApprove` 与 `delegate.disallowed` 中映射为 `agent`；未启用时不映射。
+  - `agent` 依赖 team 引擎，因此交互默认会构造 team 插件；`team.enabled: true` 仍可单独开启 legacy team。
+- 实测工具数（Phase A 现状）：
+  - headless 默认 **4**：`bash` / `read` / `edit` / `delegate_task`。
+  - headless + `agent.enabled: true` **9**：3 + `agent` + 5 个 `team_*`。
+  - headless + `agent.enabled: true` + `team.legacyTools: false` **4**：3 + `agent`。
+  - 交互 REPL 默认 **10**：3 + `ask_user` + `agent` + 5 个 `team_*`；`team.legacyTools: false` 时为 5（多出的 1 个是 `ask_user`）。
+
+### 38.2 session 即成员
+
+- `spawn` 新建的成员与 session 1:1（`session_id === agent_id`）；`send` 的 `to` 与 `close` 的 `member` 都可用成员 id 或 session id 寻址。
+- `MemberRegistry`（`plugins/tools/team/src/registry.ts`）记录：`id` / `session_id` / `name?` / `parent_id?` / `parent_session_id?` / `owner` / `visibility` / `permission_mode` / `tenant_id?` / `state` / `current_tool?` / `last_seen?` / `usage?`。注册表只存身份与状态，不持有 runtime 对象；执行仍走 `TeamHostPort`。
+- 对外成员状态（`MemberStatus`）使用 snake_case：`id` / `session_id` / `name?` / `parent_id?` / `visibility` / `state` / `current_tool?` / `last_seen?` / `usage?`。与 `agents.tree` / `agents.list` 的 `state` 同名同义。
+- 可见性：`private`（默认，仅 owner）/ `team` / `tenant`；跨 tenant 不可寻址，`private` 只允许 owner。Phase A 中 `team` 与 `tenant` 在本机同一 tenant 内等价。
+- 只有注册成员可被 `agent.send` 寻址；未注册 session 仍是普通本地会话。`close` 只关闭注册成员，不删除 session 数据。
+
+### 38.3 生命周期与事件
+
+状态机：
+
+| 状态 | 进入条件 |
+|---|---|
+| `created` | `spawn` 接受，成员写入注册表 |
+| `idle` | `port.spawn` 完成 |
+| `running` | `send` 入队，或收到成员 turn 开始 |
+| `waiting_permission` | 成员工具调用进入权限等待（bridge） |
+| `completed` / `failed` / `cancelled` | 成员上一轮 run 终态 |
+| `closed` | `agent.close`；先取消当前 turn，再释放成员 |
+| `stale` | 定义位：进程 / owner 不可达（Phase A 不自动产生） |
+
+- 成员事件为开放字符串：`agent.spawned`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`。事件的 `run_id` 固定为成员 id。
+- `send` 先发 `agent.message.queued`（`{ agent_id, message_id, from, to, kind }`）；成员 run 开始时发 `agent.turn.started`（`{ agent_id, run_id, session_id }`）；终态发对应 `agent.turn.*`（`failed` 附 `error`）。
+- `close` 后到达的 run 终态不得把 `closed` 覆盖掉；未知 / 已关闭 / 不可见成员返回错误文本，不静默丢弃。
+
+### 38.4 父 turn 注入
+
+- core：`HookContext.messages?: Message[]`（additive）。runtime 在 `BeforeLlm` hook 之后、组装请求之前调用 `appendInjectedMessages()`，按返回顺序把消息写入上下文一次；后续迭代直接从上下文可见。
+- 去重：有 `name` 或 `timestamp` 时按稳定键（`name` / `timestamp` / `role` / `tool_call_id` / `tool_calls[].id` / `content`）去重；两者都缺失时按对象引用去重。集合按 run 重置。未写 `messages` 时请求形状不变。
+- 装配层：`createOwnerReplyInjector()` 注册 `BeforeLlm` hook，从 owner inbox 排空未消费回复：
+  - 映射为 `role: 'user'`、`name: 'agent:<id>'`、内容 `[agent <id>] <content>`、`timestamp` 取原消息时间；过滤 owner 自己发出的消息。
+  - 游标由注入器持有并随排空推进；同一回复跨轮只注入一次。注入成功发 `agent.reply.injected`（`{ owner_id, count, message_ids, follow_replies }`）。
+  - inbox 读取失败发 `agent.reply.inject_failed`（`{ owner_id, error }`）并返回空数组，父 turn 继续。
+- `followReplies` 目前只是配置与事件字段：回复在父会话下一次 `BeforeLlm` 时注入；它不主动开启新的父 turn。
+
+### 38.5 权限 bridge
+
+- 成员 `permission_mode` 是注册表一等属性：`bridge` / `allow` / `deny`。缺省交互 `bridge`、headless `allow`；显式 `delegate.permissionMode` 优先。
+- `bridge`：成员权限请求在 Host 聚合流上补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` / `state: 'waiting_permission'`（`tool` / `input` / `source` 沿用原字段），发 `agent.permission.requested` 到父事件流；父窗口用既有内联权限卡应答（`permission.respond` / `ask.respond`），应答回灌后成员回到 `running` 并发 `agent.permission.responded`。父流与 Host 流是同一条时不重复转发原始请求，避免两张卡。
+- `allow`：成员复制到的工具一律自动放行（`checkPermission: 'allow'`）。headless 成员使用该模式，不会等待无人应答的桥接请求。
+- `deny`：只向成员复制 `delegate.readOnlyTools`（默认 `['read']`）。
+- 成员宿主不再复制 `team_*` 与 `agent` 工具，避免成员继续 spawn / 发消息；Phase A 不支持嵌套成员。
+
+### 38.6 兼容、配置与限制
+
+- 配置键：`agent.enabled` / `agent.defaultVisibility`（`private|team|tenant`，默认 `private`）/ `agent.followReplies`（默认 `false`）；`team.legacyTools`（默认 `true`）。均做类型与枚举校验，非法值拒绝而不是静默回退。
+- 兼容：`team_*` 5 个工具默认仍注册；`delegate_task` 代码保留，`agent` 可用时只做配置别名映射。`team_*` 创建的 legacy 成员不进入新注册表，`agent.send` 不能寻址它们。
+- canonical RPC 仍为 **44**，本版本不新增方法。
+- 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；显式 `team.enabled: true` 的 headless 装配仍可能同时注册 `delegate_task` 与 `agent`；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。
