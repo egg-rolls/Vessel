@@ -1039,6 +1039,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `tenants.update` | admin |
 | `permission.respond` | write |
 | `ask.respond` | write |
+| `interactions.list` | read |
 | `workflow.list` | read |
 | `workflow.get` | read |
 | `workflow.start` | write |
@@ -1050,7 +1051,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `gateway.reload` | admin |
 <!-- rpc-methods:end -->
 
-0.15 起 canonical 方法总数 **44**（43 个 domain 方法 + `events.subscribe`）；0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40）。
+0.18 起 canonical 方法总数 **45**（44 个 domain 方法 + `events.subscribe`）；0.18 新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。

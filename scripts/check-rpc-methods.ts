@@ -61,6 +61,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'tenants.update': 'admin',
   'permission.respond': 'write',
   'ask.respond': 'write',
+  // 0.18：刷新后读取 pending / answered / orphaned 交互（只读）。
+  'interactions.list': 'read',
   'workflow.list': 'read',
   'workflow.get': 'read',
   'workflow.start': 'write',
