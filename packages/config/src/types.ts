@@ -383,8 +383,8 @@ export interface TeamConfig {
   /** true 才构造 createTeamPlugin（默认 false；进程内原型） */
   enabled?: boolean;
   /**
-   * 是否注册 `team_*` 旧工具（0.16；默认 true，保留一个版本）。
-   * false 时 canonical 工具面只剩 `agent` 一个 schema。
+   * 是否注册 `team_*` 旧工具（0.16；默认 false，仅显式 true 注册）。
+   * 默认关闭时 canonical 工具面只剩 `agent` 一个 schema。
    */
   legacyTools?: boolean;
   /** owner（主 agent）成员 ID（默认 'owner'） */
