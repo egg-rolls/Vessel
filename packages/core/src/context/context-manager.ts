@@ -122,6 +122,11 @@ export class MemoryContextManager implements ContextManager {
     return estimateMessagesTokens(this.sessionMessages.get(this.currentSessionId) || []);
   }
 
+  /** 0.15：上下文 token 预算上限（快照 context_max 使用） */
+  get maxTokens(): number {
+    return this.config.maxTokens ?? 1_000_000;
+  }
+
   /** 用 LLM 返回的真实 token 数替代估算 */
   updateRealTokens(total: number): void {
     this.realTokens = total;

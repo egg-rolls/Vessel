@@ -36,4 +36,5 @@ export type {
   SchedulerStats,
   Transport,
   TransportRequest,
+  WaitReason,
 } from './types.js';

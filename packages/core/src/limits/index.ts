@@ -7,9 +7,16 @@ export type {
   LimitBlock,
   LimitBlockKey,
   LimitChecker,
+  LimitWarning,
   TerminationPolicy,
   UsageLimits,
   UsageStats,
 } from '../types/limits.js';
-export { evaluateTermination, evaluateUsageLimits, MemoryLimitChecker } from './limit-checker.js';
+export {
+  evaluateLimitWarnings,
+  evaluateTermination,
+  evaluateUsageLimits,
+  LIMIT_WARNING_THRESHOLD,
+  MemoryLimitChecker,
+} from './limit-checker.js';
 export { LimitExceededError } from './limit-error.js';

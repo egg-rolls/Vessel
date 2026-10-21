@@ -35,6 +35,23 @@ export interface LimitBlock {
   retryable: false;
 }
 
+/**
+ * 预警形状（0.15 E2）：已到阈值、未到硬上限的限制。
+ * 与 `LimitBlock` 不同，不带 `retryable`——预警不改变执行。
+ */
+export interface LimitWarning {
+  scope: 'run';
+  key: LimitBlockKey;
+  current: number;
+  max: number;
+  /** 配置来源，例如 `limits.inputTokensLimit` */
+  source: string;
+  /** 触发预警的比例（0.15 固定 0.8） */
+  threshold: number;
+  /** 一句可执行建议 */
+  hint: string;
+}
+
 /** 终止策略 */
 export interface TerminationPolicy {
   maxIterations: number;

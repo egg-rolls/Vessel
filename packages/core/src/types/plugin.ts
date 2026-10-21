@@ -77,6 +77,42 @@ export interface RuntimePermissionConfig {
   timeoutMs?: number;
 }
 
+/** Self Card 的有效限额（0.15 E9）：键名与 UsageLimits / TerminationPolicy 一致 */
+export interface SelfCardLimits {
+  requestLimit?: number;
+  toolCallsLimit?: number;
+  inputTokensLimit?: number;
+  outputTokensLimit?: number;
+  totalCostLimit?: number;
+  maxIterations?: number;
+  maxRuntimeSeconds?: number;
+}
+
+/** Self Card 的上下文预算（0.15 E9） */
+export interface SelfCardContext {
+  /** token 预算上限 */
+  max: number;
+  /** 已用 token；run 开始时由 runtime 用 context.tokenCount 补齐 */
+  used?: number;
+}
+
+/**
+ * 0.15 E9：注入 systemPrompt 的 Self Card（≤400 tokens）。
+ * 顶层字段名按冻结契约（`parent_id` / `how_to_ask`）；缺省不注入。
+ */
+export interface SelfCardOptions {
+  role: string;
+  parent_id?: string;
+  depth: number;
+  model: string;
+  /** 可调用工具名 */
+  tools: string[];
+  limits: SelfCardLimits;
+  context: SelfCardContext;
+  /** 如何请求人工帮助 */
+  how_to_ask?: string;
+}
+
 /** AgentRuntime 配置 */
 export interface AgentRuntimeOptions {
   provider: import('./provider.js').LLMProvider;
@@ -115,4 +151,6 @@ export interface AgentRuntimeOptions {
    * 未注入且设置了 `VESSEL_DEBUG` 时，runtime 兜底为 stderr logger（level=debug）。
    */
   logger?: import('./logging.js').Logger;
+  /** 0.15 E9：Self Card；缺省不注入，行为不变 */
+  selfCard?: SelfCardOptions;
 }
