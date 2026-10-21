@@ -93,6 +93,12 @@ describe('basic-tools 插件（注册）', () => {
     expect(createBasicTools().length).toBe(3);
   });
 
+  it('read 可进入并行批次；有副作用的 bash / edit 不并行', () => {
+    expect(toolOf('read').concurrencySafe).toBe(true);
+    expect(toolOf('bash').concurrencySafe).not.toBe(true);
+    expect(toolOf('edit').concurrencySafe).not.toBe(true);
+  });
+
   it('bash / edit 声明 checkPermission（危险操作），read 直接 allow', async () => {
     expect(typeof toolOf('bash').checkPermission).toBe('function');
     expect(typeof toolOf('edit').checkPermission).toBe('function');

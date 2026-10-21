@@ -87,7 +87,9 @@ function toolOf(host: MemoryPluginHost, name: string): ToolDefinition {
 /** 创建装了 team 插件的 host（team 必须注入 core Host） */
 function teamHost(options: Omit<Parameters<typeof createTeamPlugin>[0], 'host'>): MemoryPluginHost {
   const host = new MemoryPluginHost();
-  createTeamPlugin({ ...options, host: new CoreInProcessRuntimeHost() }).install(host);
+  createTeamPlugin({ legacyTools: true, ...options, host: new CoreInProcessRuntimeHost() }).install(
+    host,
+  );
   return host;
 }
 
@@ -145,6 +147,7 @@ describe('buildChildHost（供 asm 远端 spawn 复用）', () => {
       providerFactory: () => new MemoryLLMProvider(),
       model: 'test-model',
       host: coreHost,
+      legacyTools: true,
       memberLimits: { requestLimit: 7, toolCallsLimit: 3 },
       memberTermination: { maxIterations: 2, maxRuntimeSeconds: 30 },
     }).install(pluginHost);

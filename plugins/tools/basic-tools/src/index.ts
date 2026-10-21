@@ -836,7 +836,8 @@ function createReadTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
       },
       required: ['path'],
     },
-    // 只读操作无副作用；但敏感路径 deny、配置 allowed_roots 后越界 ask
+    // 只读操作无副作用；敏感路径 deny、配置 allowed_roots 后越界 ask
+    concurrencySafe: true,
     checkPermission: async (input) => {
       if (!isRecord(input)) return 'allow';
       const inputPath = readString(input, 'path');
