@@ -14,9 +14,8 @@
   gap: 12px;
   height: var(--appbar-h);
   padding: 0 20px;
-  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  background: var(--surface);
   border-bottom: 1px solid var(--line);
-  backdrop-filter: blur(12px);
 }
 
 .brand {

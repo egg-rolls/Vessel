@@ -3,6 +3,14 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.15.1] - 2026-10-21
+
+> 0.15.1（基于 `release/0.15.1`，未发布）：Web 性能修复——移除全屏遮罩与应用栏的 `backdrop-filter` 模糊。
+
+### Fixed
+
+- **Web 模糊卡顿**：移除 `.modal-backdrop` 的 `backdrop-filter: blur(6px)` 与 `.appbar` 的 `blur(12px)`；遮罩改为更实的半透明底色（ink 55%），应用栏改为不透明 `--surface`。`backdrop-filter` 在 Edge / Chromium 上会为全屏或动画层强制额外合成与重采样，滚动、输入和流式文本时容易掉帧；去掉模糊后保留边框与层级阴影。
+
 ## [0.15.0] - 2026-10-21
 
 > 0.15.0（基于 `release/0.15.0`，未发布）：透明化与多实例安全——压缩 / 限额预警 / 队列事件、agent 树与任务板、Self Card 注入、delegate 关联与孙 agent opt-in、tenant 双层锁与 session 写锁。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。

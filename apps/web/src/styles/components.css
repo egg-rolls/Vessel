@@ -835,8 +835,7 @@
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: color-mix(in srgb, var(--ink) 32%, transparent);
-  backdrop-filter: blur(6px);
+  background: color-mix(in srgb, var(--ink) 55%, transparent);
   animation: fade-in 0.16s var(--ease);
 }
 
