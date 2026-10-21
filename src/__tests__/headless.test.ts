@@ -195,10 +195,43 @@ it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => 
   expect(stdout).toContain('ask_user (interactive REPL / gateway only)');
 });
 
-it('--tools 在 team.enabled 时只列 agent 与 5 个 team_*，不再列 delegate_task', async () => {
+it('--tools 在 team.enabled 且未开 legacyTools 时只列 agent 与能力工具', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-'));
   try {
     fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
+    const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Tools (4):');
+    expect(stdout).toContain('- agent:');
+    expect(stdout).not.toContain('- delegate_task:');
+    expect(stdout).not.toContain('- team_spawn:');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('--tools 在 agent.enabled 且未开 legacyTools 时同样只列 agent', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-agent-only-'));
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'agent:\n  enabled: true\n');
+    const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('Tools (4):');
+    expect(stdout).toContain('- agent:');
+    expect(stdout).not.toContain('- delegate_task:');
+    expect(stdout).not.toContain('- team_spawn:');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('--tools 在 team.enabled + legacyTools 显式 true 时恢复 5 个 team_*', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-legacy-'));
+  try {
+    fs.writeFileSync(
+      path.join(tmpDir, 'vessel.yaml'),
+      'team:\n  enabled: true\n  legacy_tools: true\n',
+    );
     const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
     expect(exitCode).toBe(0);
     expect(stdout).toContain('Tools (9):');

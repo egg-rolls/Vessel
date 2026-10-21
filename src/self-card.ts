@@ -25,7 +25,7 @@ export function knownOwnerToolNames(
     names.push('delegate_task');
   }
   if (options.askUser === true && config.ui?.askUser !== false) names.push('ask_user');
-  if (config.team?.enabled === true && config.team?.legacyTools !== false) {
+  if (config.team?.enabled === true && config.team?.legacyTools === true) {
     names.push('team_spawn', 'team_send', 'team_inbox', 'team_status', 'team_cancel');
   }
   return names;

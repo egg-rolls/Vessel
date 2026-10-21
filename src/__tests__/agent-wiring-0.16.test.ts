@@ -42,17 +42,21 @@ describe('resolveAgentWiring', () => {
     expect(interactiveOff.delegateEnabled).toBe(true);
   });
 
-  it('defaults visibility to private and keeps legacyTools on', () => {
+  it('defaults visibility to private and hides legacyTools unless explicitly enabled', () => {
     const plan = resolveAgentWiring({}, { headless: false });
     expect(plan.defaultVisibility).toBe('private');
-    expect(plan.legacyTools).toBe(true);
+    expect(plan.legacyTools).toBe(false);
 
     const configured = resolveAgentWiring(
-      { agent: { defaultVisibility: 'tenant' }, team: { legacyTools: false } },
+      { agent: { defaultVisibility: 'tenant' }, team: { legacyTools: true } },
       { headless: false },
     );
     expect(configured.defaultVisibility).toBe('tenant');
-    expect(configured.legacyTools).toBe(false);
+    expect(configured.legacyTools).toBe(true);
+
+    expect(
+      resolveAgentWiring({ team: { legacyTools: false } }, { headless: false }).legacyTools,
+    ).toBe(false);
   });
 
   it('maps member permission mode by entry and config', () => {

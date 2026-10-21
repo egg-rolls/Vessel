@@ -40,9 +40,10 @@ describe('owner self card', () => {
     expect(knownOwnerToolNames({}, { askUser: false })).not.toContain('ask_user');
   });
 
-  it('adds team tools only when team is enabled and legacyTools is on', () => {
-    const tools = knownOwnerToolNames({ team: { enabled: true } });
-    expect(tools).toEqual(
+  it('adds team tools only when legacyTools is explicitly true', () => {
+    expect(knownOwnerToolNames({ team: { enabled: true } })).not.toContain('team_spawn');
+    const legacy = knownOwnerToolNames({ team: { enabled: true, legacyTools: true } });
+    expect(legacy).toEqual(
       expect.arrayContaining([
         'team_spawn',
         'team_send',

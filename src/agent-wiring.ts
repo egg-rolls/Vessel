@@ -4,7 +4,7 @@
  * 纯函数，便于测试：
  * - 交互入口（REPL / serve）默认注册 `agent`，headless 默认关闭；
  * - `agent` 可用时不再注册 `delegate_task`（配置里的旧名映射为 `agent`）；
- * - `team_*` 只受 `team.legacyTools` 控制，默认保留一个版本。
+ * - `team_*` 只受 `team.legacyTools` 控制；默认隐藏，显式 `true` 才注册。
  *
  * @module vessel/agent-wiring
  */
@@ -27,7 +27,7 @@ export interface AgentWiringPlan {
   agentEnabled: boolean;
   /** 需要构造 team 引擎（agent 工具依赖成员注册表；或旧 team.enabled） */
   teamEngine: boolean;
-  /** 注册 `team_*` 旧工具（默认 true） */
+  /** 注册 `team_*` 旧工具（默认 false，显式 true 才注册） */
   legacyTools: boolean;
   /** 注册 `delegate_task`（agent 可用时为 false） */
   delegateEnabled: boolean;
@@ -69,7 +69,7 @@ export function resolveAgentWiring(config: VesselConfig, input: AgentWiringInput
   return {
     agentEnabled,
     teamEngine: agentEnabled,
-    legacyTools: config.team?.legacyTools !== false,
+    legacyTools: config.team?.legacyTools === true,
     delegateEnabled: config.delegate?.enabled !== false && !agentEnabled,
     defaultVisibility: config.agent?.defaultVisibility ?? 'private',
     followReplies: config.agent?.followReplies === true,
