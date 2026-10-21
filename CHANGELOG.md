@@ -3,6 +3,37 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.18.0] - 2026-10-21
+
+> 0.18.0（基于 `release/0.18.0`，未发布）：会话事件日志成为唯一真相源；TUI 历史结构化并从事件日志恢复；Web 会话流扁平化、权限 / ask 内联到 Composer；新增 `vessel completion` 与只读 RPC `interactions.list`。未 tag、未 `npm publish`。
+
+### Added
+
+- **会话事件日志**：`sessions/<id>/events.ndjson` 作为唯一真相源；runtime 先 append + fsync 再 publish；checkpoint 只存 `messages: []` + `event_cursor`；resume 用 session 缓存 + `seq > derived_upto_seq` 增量；删除与损坏检测保持一致。reasoning 只持久化，不发布 / 不进 trace。
+- **TUI 结构化历史**：`UiItem` / `ToolCallView` 取代纯文本历史；每种事件有独立样式；`/resume` 优先从 `EventLogReadPort` 读取，无日志或读失败回退 messages 并标「不完整」，超过 200 条截断提示；Markdown 表格 / 嵌套列表 / 去围栏；权限 / ask / agent / error / limit 内联；`/clear` 走 Ink `clear()`。
+- **Web 扁平会话流**：删除 `RunCard` / `RunSection`，实时内容直接平铺进同一条会话流（`StreamItems`）；权限 / ask 用 Composer 槽位三态互斥（`Composer` / `Permission` / `Ask`），多 pending 串行，槽位高度自适应；停止按钮在 Composer；排队为流末尾 notice；失败 / 取消内联 `stream-notice`。
+- **`vessel completion bash|zsh|fish|powershell`**：打印可直接 source / 加载的静态补全脚本；单一数据源 `src/completion-spec.ts`，registry 一致性由测试守护；不启动 runtime、不联网。
+- **`interactions.list`**：tenant 作用域只读 RPC，参数 `{session_id?, run_id?, status?, limit?}`；返回 `pending` / `answered` / `orphaned` 权限与内存 pending ask（`kind: 'ask'` + `questions`）；canonical RPC 44 → **45**。
+
+### Changed
+
+- **TUI**：用户输入使用暗金背景；渲染高度不变量；live 仍走内存 `EventStream`，历史走事件日志。
+- **Web**：滚动容器不再压缩流内块（`.conversation-scroll > * { flex: 0 0 auto }`）；权限 / ask 不再使用全局遮罩。
+- **CI / 测试**：Windows 进程探测 3s → 15s；headless stdin `await write/end` + 30s；workflow cancel 改为有界等待。
+
+### Fixed
+
+- `health.get`、`/v1/health` 与 `hello` 的 `node` 字段按 tenant 隔离（0.17.1 线）。
+- `SessionEventLog` LRU 淘汰竞态；derived 覆盖、read 排序、connect 关联；D2 跨模块内部 import。
+- `serve` durable preview 优先使用 checkpoint `metadata.preview`。
+- Web 长 run 滚动、权限槽位三态、连续 pending、停止按钮。
+
+### Known limitations
+
+- Track A P3 未做：win32 deleted 用例覆盖；`updateIndex` 会为空 session 重建目录；`read(limit)` 仍整文件读；`session.renamed` 未接事件；压缩摘要不可由事件重建。
+- **Web hydration 待实现**：连接 / 刷新 / 选会话后尚未调用 `interactions.list` 合并进 Composer 槽位。
+- Bun 1.3.9 下 `gateway.stop()` 在曾有 WS 连接的 gateway 上可能不 settle（测试沿用 `void gw.stop()`）。
+
 ## [0.17.0] - 2026-10-21
 
 > 0.17.0（基于 `release/0.17.0`，未发布）：AgentService 成为唯一的成员能力层并独立成包（`packages/agent`）；模型工具面收敛到内置 `agent`（`new` / `send` / `close` / `list`，支持 batch），REPL 作为 owner 暴露 loopback 控制端点，CLI 新增 `vessel agent new|send|close|list`；删除 `team_*` / `delegate_task` 模型工具、`team` / `delegate-task` 插件与 `team.*` / `delegate.*` 配置。未 tag、未 `npm publish`、未合并 `main`。
