@@ -1,16 +1,29 @@
 /**
- * 子 agent 注册表：从事件流纯 reducer 派生（0.14 P0）。
+ * 子 agent 注册表：从事件流纯 reducer 派生（0.14 P0 / 0.17 成员事件）。
  * @module @vessel-agent/tui
  *
  * 数据源只有 `EventStream.getHistory()` 中的开放字符串事件；字段全部按
  * snake_case / camelCase 双拼读取，缺字段时降级，不推断父子关系。
+ * 同时兼容 0.17 AgentService 的 `agent.*` 事件与 0.15 转发的 `subagent.*`。
  * 节点字段与 canonical `agents.list` 对齐：
- * `id / role / parent_id / depth / state / current_tool / session_id`（+ 展示用扩展字段）。
+ * `id / role / parent_id / depth / state / visibility / current_tool / session_id`
+ * （+ 展示用扩展字段）。
  */
 
 import type { RunEvent } from '@vessel-agent/core';
 
-export type AgentState = 'running' | 'completed' | 'failed' | 'cancelled';
+export type AgentState =
+  | 'created'
+  | 'idle'
+  | 'running'
+  | 'waiting_permission'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'closed'
+  | 'stale';
+
+export type AgentVisibility = 'private' | 'team' | 'tenant';
 
 export interface AgentUsage {
   prompt_tokens?: number;
@@ -20,17 +33,21 @@ export interface AgentUsage {
 }
 
 export interface AgentNode {
-  /** delegateId；旧事件缺失时使用确定性合成 id，并置 degraded */
+  /** delegateId / agent_id；旧事件缺失时使用确定性合成 id，并置 degraded */
   id: string;
   role: string;
-  /** 父子 agent id（嵌套 delegate）；根子 agent 无此字段 */
+  /** 成员名（0.17 `agent.*` 事件可选字段） */
+  name?: string;
+  /** 父子 agent id（嵌套 delegate / 成员 parent_id）；根子 agent 无此字段 */
   parentId?: string;
-  /** 创建该子 agent 的父 run */
+  /** 创建该子 agent 的父 run；成员事件缺失时退到事件 run_id */
   parentRunId: string;
   /** 事件声明的层级（根 delegate 为 0） */
   depth: number;
   task?: string;
   state: AgentState;
+  /** 成员可见性（0.17）；事件未带时为 undefined，不推测 */
+  visibility?: AgentVisibility;
   currentTool?: string;
   childRunId?: string;
   sessionId?: string;
@@ -69,6 +86,7 @@ export interface AgentSummary {
   parent_id?: string;
   depth: number;
   state: AgentState;
+  visibility?: AgentVisibility;
   current_tool?: string;
   session_id?: string;
   result_ref?: string;
@@ -163,6 +181,90 @@ function errorTextOf(data: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+const MEMBER_STATES: ReadonlySet<string> = new Set([
+  'created',
+  'idle',
+  'running',
+  'waiting_permission',
+  'completed',
+  'failed',
+  'cancelled',
+  'closed',
+  'stale',
+]);
+
+const MEMBER_VISIBILITIES: ReadonlySet<string> = new Set(['private', 'team', 'tenant']);
+
+function memberStateOf(data: Record<string, unknown>): AgentState | undefined {
+  const state = readString(data, 'state');
+  return state !== undefined && MEMBER_STATES.has(state) ? (state as AgentState) : undefined;
+}
+
+function memberVisibilityOf(data: Record<string, unknown>): AgentVisibility | undefined {
+  const visibility = readString(data, 'visibility', 'member_visibility', 'memberVisibility');
+  return visibility !== undefined && MEMBER_VISIBILITIES.has(visibility)
+    ? (visibility as AgentVisibility)
+    : undefined;
+}
+
+/** closed / stale 是成员终态；后到的 turn 事件不得覆盖 */
+function isFrozenMemberState(state: AgentState): boolean {
+  return state === 'closed' || state === 'stale';
+}
+
+function applyMemberIdentity(node: AgentNode, data: Record<string, unknown>): AgentNode {
+  const name = readString(data, 'name', 'member_name', 'memberName');
+  const parentId = readString(data, 'parent_id', 'parentId');
+  const sessionId = readString(data, 'session_id', 'sessionId');
+  const visibility = memberVisibilityOf(data);
+  return {
+    ...node,
+    ...(name !== undefined ? { name } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(visibility !== undefined ? { visibility } : {}),
+  };
+}
+
+function memberNodeFromEvent(
+  event: RunEvent,
+  data: Record<string, unknown>,
+  id: string,
+): AgentNode {
+  const task = readString(data, 'task', 'prompt');
+  return applyMemberIdentity(
+    {
+      id,
+      role: readString(data, 'role', 'agent_role') ?? 'agent',
+      // 成员事件的 run_id 是成员 id，不是父 run；没有父时留空，不伪造。
+      parentRunId: readString(data, 'parent_run_id', 'parentRunId') ?? '',
+      depth: readNumber(data, 'depth') ?? 0,
+      ...(task !== undefined ? { task } : {}),
+      state: memberStateOf(data) ?? 'created',
+      startedAt: event.ts,
+    },
+    data,
+  );
+}
+
+/** 更新已有节点（可选从事件补建）；终态默认不被 turn/permission 事件改写。 */
+function updateMemberNode(
+  nodes: AgentNode[],
+  event: RunEvent,
+  data: Record<string, unknown>,
+  id: string,
+  update: (node: AgentNode) => AgentNode,
+  opts: { create?: boolean; allowFrozen?: boolean } = {},
+): AgentNode[] {
+  const existing = findNode(nodes, id);
+  if (existing) {
+    if (!opts.allowFrozen && isFrozenMemberState(existing.state)) return nodes;
+    return replaceNode(nodes, update(applyMemberIdentity(existing, data)));
+  }
+  if (opts.create !== true) return nodes;
+  return trimNodes([...nodes, update(memberNodeFromEvent(event, data, id))]);
+}
+
 /**
  * 纯 reducer：折叠单个事件。
  * 顶层 `run.*` 只用于收敛父 run 结束时仍在运行的子 agent。
@@ -175,6 +277,142 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
   const delegateId = delegateIdOf(data);
 
   switch (base) {
+    case 'agent.spawned': {
+      if (delegateId === undefined) return nodes;
+      const usage = readUsage(data);
+      return updateMemberNode(
+        nodes,
+        event,
+        data,
+        delegateId,
+        (node) => ({
+          ...node,
+          state: memberStateOf(data) ?? 'idle',
+          ...(usage !== undefined ? { usage } : {}),
+        }),
+        { create: true, allowFrozen: true },
+      );
+    }
+
+    case 'agent.turn.started': {
+      if (delegateId === undefined) return nodes;
+      return updateMemberNode(
+        nodes,
+        event,
+        data,
+        delegateId,
+        (node) => {
+          const {
+            endedAt: _endedAt,
+            durationMs: _durationMs,
+            error: _error,
+            currentTool: _currentTool,
+            ...rest
+          } = node;
+          return { ...rest, state: 'running' };
+        },
+        { create: true },
+      );
+    }
+
+    case 'agent.turn.completed':
+    case 'agent.turn.failed':
+    case 'agent.turn.cancelled': {
+      if (delegateId === undefined) return nodes;
+      const fallback: AgentState =
+        base === 'agent.turn.failed'
+          ? 'failed'
+          : base === 'agent.turn.cancelled'
+            ? 'cancelled'
+            : 'completed';
+      const usage = readUsage(data);
+      const error = base === 'agent.turn.failed' ? errorTextOf(data) : undefined;
+      return updateMemberNode(
+        nodes,
+        event,
+        data,
+        delegateId,
+        (node) => {
+          const { currentTool: _currentTool, ...rest } = node;
+          return {
+            ...rest,
+            state: memberStateOf(data) ?? fallback,
+            endedAt: event.ts,
+            ...(usage !== undefined ? { usage } : {}),
+            ...(error !== undefined ? { error } : {}),
+          };
+        },
+        { create: true },
+      );
+    }
+
+    case 'agent.permission.requested': {
+      if (delegateId === undefined) return nodes;
+      const tool = readString(data, 'tool', 'tool_name', 'toolName');
+      return updateMemberNode(
+        nodes,
+        event,
+        data,
+        delegateId,
+        (node) => ({
+          ...node,
+          state: 'waiting_permission',
+          ...(tool !== undefined ? { currentTool: tool } : {}),
+        }),
+        { create: true },
+      );
+    }
+
+    case 'agent.permission.responded': {
+      if (delegateId === undefined) return nodes;
+      return updateMemberNode(nodes, event, data, delegateId, (node) => {
+        const { currentTool: _currentTool, ...rest } = node;
+        return { ...rest, state: memberStateOf(data) ?? 'running' };
+      });
+    }
+
+    case 'agent.closed': {
+      if (delegateId === undefined) return nodes;
+      return updateMemberNode(
+        nodes,
+        event,
+        data,
+        delegateId,
+        (node) => {
+          const { currentTool: _currentTool, ...rest } = node;
+          return { ...rest, state: 'closed', endedAt: event.ts };
+        },
+        { create: true, allowFrozen: true },
+      );
+    }
+
+    case 'agent.stale': {
+      if (delegateId === undefined) return nodes;
+      // 快照恢复的 stale 早于任何 spawned；closed 仍是更高优先级的终态。
+      const existing = findNode(nodes, delegateId);
+      if (existing?.state === 'closed') return nodes;
+      return updateMemberNode(
+        nodes,
+        event,
+        data,
+        delegateId,
+        (node) => {
+          const { currentTool: _currentTool, ...rest } = node;
+          return { ...rest, state: 'stale', endedAt: event.ts };
+        },
+        { create: true, allowFrozen: true },
+      );
+    }
+
+    case 'agent.message.queued': {
+      if (delegateId === undefined) return nodes;
+      const state = memberStateOf(data);
+      return updateMemberNode(nodes, event, data, delegateId, (node) => ({
+        ...node,
+        ...(state !== undefined ? { state } : {}),
+      }));
+    }
+
     case 'agent.queue.entered': {
       if (delegateId === undefined) return nodes;
       const position = readNumber(data, 'position', 'queue_position', 'queuePosition');
@@ -435,6 +673,7 @@ export function toAgentSummary(node: AgentNode): AgentSummary {
     ...(node.parentId !== undefined ? { parent_id: node.parentId } : {}),
     depth: node.depth,
     state: node.state,
+    ...(node.visibility !== undefined ? { visibility: node.visibility } : {}),
     ...(node.currentTool !== undefined ? { current_tool: node.currentTool } : {}),
     ...(node.sessionId !== undefined ? { session_id: node.sessionId } : {}),
     ...(node.resultRef !== undefined ? { result_ref: node.resultRef } : {}),

@@ -68,7 +68,8 @@ function toolLabel(node: AgentNode): string {
 
 function parentLabel(node: AgentNode): string {
   // 列表列已是 PARENT；父 delegate id 优先，根节点退到父 run id。
-  return shortId(node.parentId ?? node.parentRunId);
+  const parent = node.parentId ?? node.parentRunId;
+  return parent.length > 0 ? shortId(parent) : '-';
 }
 
 /** 队列字段缺失时显示 unknown；不把“不在队列”伪装成 pos 0。 */
@@ -240,11 +241,13 @@ export function formatAgentDetail(
   lines.push(
     detailLine(
       t('agents.label.parent'),
-      node.parentId ?? t('agents.parentRun', { id: node.parentRunId }),
+      node.parentId ??
+        (node.parentRunId.length > 0 ? t('agents.parentRun', { id: node.parentRunId }) : unknown),
     ),
   );
   lines.push(detailLine(t('agents.label.depth'), String(node.depth)));
   lines.push(detailLine(t('agents.label.state'), stateLabel(node)));
+  lines.push(detailLine(t('agents.label.visibility'), node.visibility ?? unknown));
   lines.push(detailLine(t('agents.label.session'), node.sessionId ?? '-'));
   lines.push(detailLine(t('agents.label.run'), node.childRunId ?? '-'));
   lines.push(detailLine(t('agents.label.task'), node.task ? oneLine(node.task) : unknown));

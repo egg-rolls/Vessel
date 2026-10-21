@@ -202,4 +202,115 @@ describe('agent registry reducer', () => {
     expect(sorted[0]?.id).toBe(`d${MAX_AGENT_NODES + 4}`);
     expect(sorted.at(-1)?.id).toBe('d5');
   });
+
+  it('creates an idle member node from agent.spawned with visibility', () => {
+    const nodes = buildAgentRegistry([
+      ev(
+        'agent.spawned',
+        'm1',
+        {
+          agent_id: 'm1',
+          session_id: 's1',
+          parent_id: 'main',
+          visibility: 'team',
+          state: 'idle',
+        },
+        1000,
+      ),
+    ]);
+
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0]).toMatchObject({
+      id: 'm1',
+      role: 'agent',
+      sessionId: 's1',
+      parentId: 'main',
+      visibility: 'team',
+      state: 'idle',
+    });
+  });
+
+  it('tracks turn state and does not leave current_tool behind after completion', () => {
+    let nodes = buildAgentRegistry([
+      ev('agent.spawned', 'm1', { agent_id: 'm1', state: 'idle' }, 1000),
+    ]);
+    nodes = reduceAgentRegistry(
+      nodes,
+      ev('agent.turn.started', 'm1', { agent_id: 'm1', state: 'running' }, 1100),
+    );
+    expect(nodes[0]?.state).toBe('running');
+
+    nodes = reduceAgentRegistry(
+      nodes,
+      ev(
+        'agent.permission.requested',
+        'm1',
+        { agent_id: 'm1', state: 'waiting_permission', tool: 'bash' },
+        1200,
+      ),
+    );
+    expect(nodes[0]).toMatchObject({ state: 'waiting_permission', currentTool: 'bash' });
+
+    nodes = reduceAgentRegistry(
+      nodes,
+      ev('agent.permission.responded', 'm1', { agent_id: 'm1', state: 'running' }, 1300),
+    );
+    expect(nodes[0]?.state).toBe('running');
+    expect(nodes[0]?.currentTool).toBeUndefined();
+
+    nodes = reduceAgentRegistry(
+      nodes,
+      ev(
+        'agent.turn.completed',
+        'm1',
+        { agent_id: 'm1', state: 'completed', usage: { total_tokens: 15 } },
+        1400,
+      ),
+    );
+    expect(nodes[0]).toMatchObject({
+      state: 'completed',
+      endedAt: 1400,
+      usage: { total_tokens: 15 },
+    });
+  });
+
+  it('keeps closed and stale members from being revived by late turn events', () => {
+    const closed = buildAgentRegistry([
+      ev('agent.spawned', 'm1', { agent_id: 'm1', state: 'idle' }, 1000),
+      ev('agent.closed', 'm1', { agent_id: 'm1', state: 'closed' }, 1100),
+      ev('agent.turn.failed', 'm1', { agent_id: 'm1', state: 'failed', reason: 'late' }, 1200),
+    ]);
+    expect(closed[0]?.state).toBe('closed');
+    expect(closed[0]?.error).toBeUndefined();
+
+    const stale = buildAgentRegistry([
+      ev('agent.stale', 'm2', { agent_id: 'm2', session_id: 's2', state: 'stale' }, 1000),
+      ev('agent.turn.started', 'm2', { agent_id: 'm2', state: 'running' }, 1100),
+    ]);
+    expect(stale[0]).toMatchObject({ id: 'm2', sessionId: 's2', state: 'stale' });
+  });
+
+  it('keeps legacy subagent nodes when agent.* events are also present', () => {
+    const nodes = buildAgentRegistry([
+      ev('subagent.delegate.started', 'run-parent', { delegateId: 'd1', depth: 0 }, 1000),
+      ev('agent.spawned', 'm1', { agent_id: 'm1', state: 'idle' }, 1100),
+    ]);
+
+    expect(nodes.map((node) => node.id)).toEqual(['d1', 'm1']);
+    expect(nodes[0]?.role).toBe('subagent');
+    expect(nodes[1]?.role).toBe('agent');
+  });
+
+  it('does not invent a member from core queue events without a spawn', () => {
+    const nodes = buildAgentRegistry([
+      ev(
+        'agent.queue.entered',
+        'r1',
+        { agent_id: 'ghost', position: 1, wait_reason: 'capacity' },
+        1000,
+      ),
+    ]);
+
+    expect(nodes).toHaveLength(0);
+  });
 });
