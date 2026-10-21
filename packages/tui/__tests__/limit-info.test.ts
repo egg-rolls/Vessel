@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import type { VesselConfig } from '@vessel-agent/config';
+import { DEFAULT_CONFIG, type VesselConfig } from '@vessel-agent/config';
 import type { RunEvent } from '@vessel-agent/core';
 import {
   findLatestLimitBlock,
@@ -19,13 +19,13 @@ function ev(type: string, runId: string, data: Record<string, unknown>, ts: numb
 describe('limit info reducer', () => {
   it('falls back to runtime defaults only for omitted config blocks', () => {
     expect(readEffectiveLimits(undefined)).toEqual({
-      maxIterations: 20,
-      maxRuntimeSeconds: 300,
-      requestLimit: 100,
-      toolCallsLimit: 50,
-      inputTokensLimit: 100000,
-      outputTokensLimit: 50000,
-      contextMaxTokens: 1_000_000,
+      maxIterations: DEFAULT_CONFIG.termination?.maxIterations,
+      maxRuntimeSeconds: DEFAULT_CONFIG.termination?.maxRuntimeSeconds,
+      requestLimit: DEFAULT_CONFIG.limits?.requestLimit,
+      toolCallsLimit: DEFAULT_CONFIG.limits?.toolCallsLimit,
+      inputTokensLimit: DEFAULT_CONFIG.limits?.inputTokensLimit,
+      outputTokensLimit: DEFAULT_CONFIG.limits?.outputTokensLimit,
+      contextMaxTokens: DEFAULT_CONFIG.context?.maxTokens,
     });
 
     const partial = readEffectiveLimits({
