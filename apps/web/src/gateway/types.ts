@@ -134,6 +134,8 @@ export interface AskUserRequest {
   questions: AskUserQuestion[];
   runId: string;
   expiresAt: number;
+  /** 0.15 additive：由 run.started 反查的归属会话；旧流缺失时不参与跨 session 归类。 */
+  sessionId?: string;
 }
 
 /** 权限应答范围（DECISION-024 §2.1）。 */

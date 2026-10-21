@@ -6,7 +6,7 @@ import {
   pendingPermissionTarget,
 } from '../src/domains/chat/pending-permissions';
 import { RunCard } from '../src/domains/chat/RunCard';
-import type { PermissionRequest } from '../src/gateway/types';
+import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 import type { RunGroup } from '../src/state/events';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -139,5 +139,90 @@ describe('pendingPermissionsOutsideView', () => {
       tab: 'live',
       runId: 'run-1',
     });
+  });
+});
+
+function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
+  return {
+    requestId: 'ask-1',
+    questions: [{ header: 'Pick', question: 'Which one?' }],
+    runId: 'run-1',
+    sessionId: 'session-1',
+    expiresAt: 2_000,
+    ...overrides,
+  };
+}
+
+describe('inline ask card', () => {
+  test('renders inside the matching RunCard instead of a global modal', () => {
+    const markup = renderToStaticMarkup(
+      <RunCard
+        group={runningGroup()}
+        cancelled={false}
+        cancelling={false}
+        onCancel={() => {}}
+        asks={[ask()]}
+        askBusy={new Set()}
+        now={1_000}
+        onSubmitAsk={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('run-asks');
+    expect(markup).toContain('ask-card');
+    expect(markup).toContain('data-request-id="ask-1"');
+    expect(markup).toContain('Which one?');
+    expect(markup).toContain('剩余 1s');
+    expect(markup).not.toContain('permission-modal');
+  });
+
+  test('disables submission until every question has an answer', () => {
+    const markup = renderToStaticMarkup(
+      <RunCard
+        group={runningGroup()}
+        cancelled={false}
+        cancelling={false}
+        onCancel={() => {}}
+        asks={[ask()]}
+        askBusy={new Set()}
+        now={1_000}
+        onSubmitAsk={() => {}}
+      />,
+    );
+    expect(markup).toContain('btn-primary');
+    expect(markup).toContain('disabled');
+  });
+
+  test('does not render an ask block when there are no pending questions', () => {
+    const markup = renderToStaticMarkup(
+      <RunCard group={runningGroup()} cancelled={false} cancelling={false} onCancel={() => {}} />,
+    );
+    expect(markup).not.toContain('ask-card');
+    expect(markup).not.toContain('run-asks');
+  });
+});
+
+describe('cross-session pending bar with asks', () => {
+  test('reports permission and ask counts separately with one jump action each', () => {
+    const markup = renderToStaticMarkup(
+      <PendingPermissionsBar
+        requests={[permission({ requestId: 'perm-a', sessionId: 'session-aaaaaaaa' })]}
+        asks={[ask({ requestId: 'ask-b', sessionId: 'session-bbbbbbbb' })]}
+        onOpen={() => {}}
+        onOpenAsk={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('其他会话有 1 个待处理权限请求');
+    expect(markup).toContain('其他会话有 1 个待处理提问');
+    expect(markup.split('<button').length - 1).toBe(2);
+  });
+
+  test('is absent when neither category has pending requests', () => {
+    expect(
+      renderToStaticMarkup(
+        <PendingPermissionsBar requests={[]} asks={[]} onOpen={() => {}} onOpenAsk={() => {}} />,
+      ),
+    ).toBe('');
   });
 });

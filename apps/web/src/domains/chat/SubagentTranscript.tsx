@@ -12,6 +12,7 @@ import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
 import { type ErrorVisibility, isEventVisible } from '../../state/error-visibility';
 import { buildGroup, type StoredEvent } from '../../state/events';
+import type { Verbosity } from '../../state/visibility';
 import { RunCard } from './RunCard';
 
 /** `subagent.<type>` → `<type>`；只归一 run / tool / llm 三类可渲染事件。 */
@@ -40,10 +41,12 @@ export function SubagentTranscript({
   agent,
   entries,
   errorLevel = 'user',
+  verbosity = 'normal',
 }: {
   agent: AgentNode;
   entries: readonly StoredEvent[];
   errorLevel?: ErrorVisibility;
+  verbosity?: Verbosity;
 }) {
   const childEntries = useMemo(
     () => childEntriesFor(entries, agent, errorLevel),
@@ -68,7 +71,13 @@ export function SubagentTranscript({
         </span>
       </div>
       {group ? (
-        <RunCard group={group} cancelled={false} cancelling={false} onCancel={() => undefined} />
+        <RunCard
+          group={group}
+          cancelled={false}
+          cancelling={false}
+          onCancel={() => undefined}
+          verbosity={verbosity}
+        />
       ) : (
         <p className="dim subagent-empty">{t('chat.subagents.emptyRun')}</p>
       )}

@@ -1,17 +1,26 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
-import type { PermissionRequest, PermissionScope } from '../../gateway/types';
+import type {
+  AskUserAnswer,
+  AskUserRequest,
+  PermissionRequest,
+  PermissionScope,
+} from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
+import type { Verbosity } from '../../state/visibility';
+import { AskCard } from './AskCard';
 import { EventRow } from './EventRow';
 import { PermissionCard } from './PermissionCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
+
+const REASONING_PREVIEW_LINES = 12;
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -31,13 +40,32 @@ export function runDetailHref(group: Pick<RunGroup, 'runId' | 'sessionId'>): str
  * 可折叠的思考过程块：流式期间默认展开，run 结束后自动折叠；
  * 用户手动切换后不再被自动开合打断。内容按纯文本渲染，不进入正文 Markdown。
  */
-function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean }) {
+function ReasoningBlock({
+  text,
+  streaming,
+  startedAt,
+  endedAt,
+}: {
+  text: string;
+  streaming: boolean;
+  startedAt?: number;
+  endedAt?: number;
+}) {
   const [open, setOpen] = useState(streaming);
   const [userToggled, setUserToggled] = useState(false);
+  const [showAll, setShowAll] = useState(false);
 
   useEffect(() => {
     if (!userToggled) setOpen(streaming);
   }, [streaming, userToggled]);
+
+  const lines = text.split('\n');
+  const clamped = lines.slice(0, REASONING_PREVIEW_LINES).join('\n');
+  const clampedVisible = !showAll && lines.length > REASONING_PREVIEW_LINES;
+  const seconds =
+    startedAt !== undefined && endedAt !== undefined && endedAt > startedAt
+      ? Math.max(1, Math.round((endedAt - startedAt) / 1000))
+      : undefined;
 
   return (
     <details
@@ -50,8 +78,21 @@ function ReasoningBlock({ text, streaming }: { text: string; streaming: boolean 
         setOpen(next);
       }}
     >
-      <summary className="reasoning-summary">{t('chat.reasoning.summary')}</summary>
-      <div className="reasoning-text">{text}</div>
+      <summary className="reasoning-summary">
+        {t('chat.reasoning.summary')}
+        {seconds !== undefined ? ` · ${seconds}s` : ''}
+        {streaming ? <span className="reasoning-live"> · {t('chat.reasoning.live')}</span> : null}
+      </summary>
+      <div className="reasoning-text">{clampedVisible ? clamped : text}</div>
+      {lines.length > REASONING_PREVIEW_LINES && (
+        <button
+          type="button"
+          className="link-btn reasoning-more"
+          onClick={() => setShowAll((value) => !value)}
+        >
+          {showAll ? t('chat.reasoning.collapse') : t('chat.reasoning.expand')}
+        </button>
+      )}
     </details>
   );
 }
@@ -68,7 +109,7 @@ export interface QueuedSubmission {
 }
 
 /** 单次 run 卡片：顶部 run.started 边界，底部 run.completed/run.failed 边界。 */
-export function RunCard({
+export const RunCard = memo(function RunCard({
   group,
   cancelled,
   cancelling,
@@ -77,6 +118,11 @@ export function RunCard({
   permissions = [],
   permissionBusy,
   onDecidePermission,
+  asks = [],
+  askBusy,
+  now = Date.now(),
+  onSubmitAsk,
+  verbosity = 'normal',
 }: {
   group: RunGroup;
   cancelled: boolean;
@@ -92,6 +138,12 @@ export function RunCard({
     decision: 'allow' | 'deny',
     scope: PermissionScope,
   ) => void;
+  /** 该 run 的内联 ask_user 请求（跨 session 的由顶部条提示）。 */
+  asks?: readonly AskUserRequest[];
+  askBusy?: ReadonlySet<string>;
+  now?: number;
+  onSubmitAsk?: (requestId: string, answers: AskUserAnswer[]) => void;
+  verbosity?: Verbosity;
 }) {
   const status =
     group.status === 'cancelled' || (cancelled && group.status === 'failed')
@@ -104,7 +156,17 @@ export function RunCard({
     .join('')
     .trim();
   const outputAlreadyShown = group.output !== undefined && inlineText.includes(group.output.trim());
-  const renderItems = useMemo(() => foldToolItems(group.items), [group.items]);
+  const renderItems = useMemo(() => {
+    const items = foldToolItems(group.items);
+    if (verbosity !== 'minimal') return items;
+    // minimal：只保留正文、失败工具与非工具事件（失败永不静默）。
+    return items.filter(
+      (item) =>
+        item.kind === 'text' ||
+        item.kind === 'event' ||
+        (item.kind === 'tool' && item.status === 'error'),
+    );
+  }, [group.items, verbosity]);
   // 只有最后一个思考块可能仍在流式输出；更早的块已经结束。
   const lastReasoningKey = useMemo(() => {
     for (let index = renderItems.length - 1; index >= 0; index -= 1) {
@@ -118,6 +180,8 @@ export function RunCard({
     () => [...permissions].sort((a, b) => a.requestedAt - b.requestedAt),
     [permissions],
   );
+  const sortedAsks = useMemo(() => [...asks].sort((a, b) => a.expiresAt - b.expiresAt), [asks]);
+  const showTimes = verbosity !== 'minimal';
 
   return (
     <div className={`run-card ${status}`}>
@@ -126,8 +190,12 @@ export function RunCard({
         <span className="mono run-id" title={group.runId}>
           {truncate(group.runId, 24)}
         </span>
-        {group.startedAt != null && <span className="dim">{formatTimestamp(group.startedAt)}</span>}
-        {group.sessionId && <span className="dim">session {truncate(group.sessionId, 16)}</span>}
+        {showTimes && group.startedAt != null && (
+          <span className="dim">{formatTimestamp(group.startedAt)}</span>
+        )}
+        {showTimes && group.sessionId && (
+          <span className="dim">session {truncate(group.sessionId, 16)}</span>
+        )}
         {group.status === 'running' && group.jobId && !cancelled && (
           <button
             type="button"
@@ -150,6 +218,8 @@ export function RunCard({
                 key={item.key}
                 text={item.text}
                 streaming={group.status === 'running' && item.key === lastReasoningKey}
+                startedAt={item.startedAt}
+                endedAt={item.endedAt}
               />
             );
           }
@@ -162,7 +232,9 @@ export function RunCard({
               <Markdown className="text-block" key={item.key} text={item.text} />
             );
           }
-          if (item.kind === 'tool') return <ToolCard key={item.key} card={item} />;
+          if (item.kind === 'tool') {
+            return <ToolCard key={item.key} card={item} verbosity={verbosity} />;
+          }
           return <EventRow key={item.key} event={item.event} />;
         })}
       </div>
@@ -180,13 +252,33 @@ export function RunCard({
         </div>
       )}
 
+      {sortedAsks.length > 0 && onSubmitAsk && (
+        <div className="run-asks">
+          {sortedAsks.map((request) => (
+            <AskCard
+              key={request.requestId}
+              request={request}
+              pendingCount={sortedAsks.length}
+              now={now}
+              busy={askBusy?.has(request.requestId) ?? false}
+              onSubmit={(answers) => onSubmitAsk(request.requestId, answers)}
+              onCancel={() => onSubmitAsk(request.requestId, [])}
+            />
+          ))}
+        </div>
+      )}
+
       {group.status === 'completed' && (
         <div className="run-footer completed">
           <div className="foot-meta">
             <StatusChip status="completed" />
-            {group.durationMs != null && <span className="dim">{group.durationMs}ms</span>}
-            {group.iterations != null && <span className="dim">{group.iterations} iters</span>}
-            {group.completedAt != null && (
+            {showTimes && group.durationMs != null && (
+              <span className="dim">{group.durationMs}ms</span>
+            )}
+            {showTimes && group.iterations != null && (
+              <span className="dim">{group.iterations} iters</span>
+            )}
+            {showTimes && group.completedAt != null && (
               <span className="dim">{formatTimestamp(group.completedAt)}</span>
             )}
           </div>
@@ -228,7 +320,7 @@ export function RunCard({
       )}
     </div>
   );
-}
+});
 
 /** 排队卡片：queued 阶段服务端不发事件，由提交响应 + 轮询驱动。 */
 export function QueuedCard({

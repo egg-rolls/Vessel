@@ -18,7 +18,14 @@ export interface StoredEvent {
 
 export type TimelineItem =
   | { kind: 'text'; text: string; key: string }
-  | { kind: 'reasoning'; text: string; key: string }
+  | {
+      kind: 'reasoning';
+      text: string;
+      key: string;
+      /** 首/末个 reasoning_delta 的事件时间，用于「思考过程 · Ns」。 */
+      startedAt?: number;
+      endedAt?: number;
+    }
   | { kind: 'event'; event: RunEvent; key: string };
 
 export interface RunGroup {
@@ -55,6 +62,8 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
   let textIndex = 0;
   let reasoningBuf = '';
   let reasoningIndex = 0;
+  let reasoningStartedAt: number | undefined;
+  let reasoningEndedAt: number | undefined;
   const flushText = () => {
     if (buf) {
       group.items.push({ kind: 'text', text: buf, key: `text-${runId}-${textIndex++}` });
@@ -67,8 +76,12 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         kind: 'reasoning',
         text: reasoningBuf,
         key: `reasoning-${runId}-${reasoningIndex++}`,
+        ...(reasoningStartedAt !== undefined ? { startedAt: reasoningStartedAt } : {}),
+        ...(reasoningEndedAt !== undefined ? { endedAt: reasoningEndedAt } : {}),
       });
       reasoningBuf = '';
+      reasoningStartedAt = undefined;
+      reasoningEndedAt = undefined;
     }
   };
   const flush = () => {
@@ -125,6 +138,8 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         } else if (chunk?.type === 'reasoning_delta' && chunk.delta) {
           // 思考流独立累积，绝不并入正文 Markdown。
           flushText();
+          if (reasoningStartedAt === undefined) reasoningStartedAt = ev.ts;
+          reasoningEndedAt = ev.ts;
           reasoningBuf += chunk.delta;
         } else if (chunk?.type === 'finish') {
           flush();
@@ -141,6 +156,22 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
 }
 
 /**
+ * 单条事件是否进入时间线分组。`groupEvents` 与增量缓存共用同一口径，
+ * 避免两套过滤规则漂移。
+ */
+export function isVisibleForGrouping(
+  entry: StoredEvent,
+  showInternal: boolean,
+  errorLevel: ErrorVisibility = 'user',
+): boolean {
+  if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) return false;
+  // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
+  if (!showInternal && entry.event.type.startsWith('subagent.')) return false;
+  if (isHiddenInternalError(entry.event.type, errorLevel, showInternal)) return false;
+  return true;
+}
+
+/**
  * 按 run_id 分组并按开始时间正序排列。
  * `errorLevel` 默认 `user`：internal 级错误只在 `all` 或展开内部事件时进入时间线。
  */
@@ -151,10 +182,7 @@ export function groupEvents(
 ): RunGroup[] {
   const byRun = new Map<string, StoredEvent[]>();
   for (const entry of entries) {
-    if (!showInternal && INTERNAL_EVENT_TYPES.has(entry.event.type)) continue;
-    // 子 agent 事件属于内部执行细节：默认不按 child run_id 拆成 raw JSON 卡片。
-    if (!showInternal && entry.event.type.startsWith('subagent.')) continue;
-    if (isHiddenInternalError(entry.event.type, errorLevel, showInternal)) continue;
+    if (!isVisibleForGrouping(entry, showInternal, errorLevel)) continue;
     const runId = entry.event.run_id;
     const list = byRun.get(runId);
     if (list) list.push(entry);

@@ -1,25 +1,29 @@
 import { useState } from 'react';
-import type { AskUserAnswer, AskUserRequest } from '../gateway/types';
-import { t } from '../i18n';
-import { ModalShell } from './Modal';
+import type { AskUserAnswer, AskUserRequest } from '../../gateway/types';
+import { t } from '../../i18n';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
 }
 
-/** ask_user：选项 + 自定义文本；空回答不可提交。 */
-export function AskModal({
+/**
+ * 内联 ask_user 卡片（0.15）：挂在所属 RunCard 内，与 PermissionCard 同一生命周期。
+ *
+ * - 提交中禁用全部按钮，防止双击；
+ * - 其他端应答 / 过期 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；
+ * - 提交走现有 `ask.respond`，不新增 RPC。
+ */
+export function AskCard({
   request,
-  pendingCount,
+  pendingCount = 1,
   now,
   busy = false,
   onSubmit,
   onCancel,
 }: {
   request: AskUserRequest;
-  pendingCount: number;
+  pendingCount?: number;
   now: number;
-  /** 应答提交中：禁用按钮，防止双击重复应答。 */
   busy?: boolean;
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;
@@ -27,6 +31,7 @@ export function AskModal({
   const [custom, setCustom] = useState<string[]>(() => request.questions.map(() => ''));
   const [selected, setSelected] = useState<string[][]>(() => request.questions.map(() => []));
   const remaining = Math.max(0, Math.ceil((request.expiresAt - now) / 1000));
+  const titleId = `ask-card-${request.requestId}`;
 
   const toggle = (index: number, option: string, multi: boolean) => {
     setSelected((prev) => {
@@ -55,18 +60,17 @@ export function AskModal({
   const complete = answers.every((answer) => answer.answer.length > 0);
 
   return (
-    <ModalShell
-      label="Agent 提问"
-      describedBy={`ask-summary-${request.requestId}`}
-      onClose={onCancel}
-      closeOnBackdrop={false}
-      className="permission-modal"
-    >
-      <h2 className="modal-title">Agent 提问</h2>
-      <div className="permission-meta dim" id={`ask-summary-${request.requestId}`}>
-        run {truncate(request.runId, 16)} · 剩余 {remaining}s
-        {pendingCount > 1 ? ` · 还有 ${pendingCount - 1} 个待处理` : ''}
+    <fieldset className="ask-card" aria-labelledby={titleId} data-request-id={request.requestId}>
+      <div className="ask-card-head" id={titleId}>
+        <span className="ask-card-title">{t('ask.title')}</span>
+        <span className="ask-card-meta dim mono">
+          run {truncate(request.runId, 16)} · {t('ask.remaining', { seconds: remaining })}
+        </span>
+        {pendingCount > 1 && (
+          <span className="dim">{t('ask.pendingMore', { count: pendingCount - 1 })}</span>
+        )}
       </div>
+
       <div className="ask-list">
         {request.questions.map((question, index) => (
           <div
@@ -85,6 +89,7 @@ export function AskModal({
                         type={question.multi_select ? 'checkbox' : 'radio'}
                         name={`ask-${request.requestId}-${index}`}
                         checked={picked}
+                        disabled={busy}
                         onChange={() => toggle(index, option, question.multi_select === true)}
                       />
                       <span>{option}</span>
@@ -96,6 +101,7 @@ export function AskModal({
             <input
               className="input"
               value={custom[index] ?? ''}
+              disabled={busy}
               onChange={(event) =>
                 setCustom((prev) => {
                   const next = [...prev];
@@ -103,14 +109,19 @@ export function AskModal({
                   return next;
                 })
               }
-              placeholder={question.options ? '或输入自定义回答' : '输入回答'}
+              placeholder={
+                question.options
+                  ? t('ask.customPlaceholder.options')
+                  : t('ask.customPlaceholder.open')
+              }
             />
           </div>
         ))}
       </div>
-      <div className="modal-actions">
+
+      <div className="ask-card-actions">
         <button type="button" className="btn btn-danger-ghost" disabled={busy} onClick={onCancel}>
-          取消
+          {t('common.cancel')}
         </button>
         <button
           type="button"
@@ -118,9 +129,9 @@ export function AskModal({
           disabled={!complete || busy}
           onClick={() => onSubmit(answers)}
         >
-          {busy ? t('permission.busy') : '提交'}
+          {busy ? t('permission.busy') : t('ask.submit')}
         </button>
       </div>
-    </ModalShell>
+    </fieldset>
   );
 }

@@ -9,10 +9,17 @@ import { usePaletteEntities } from '../../components/PaletteEntities';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
-import type { PermissionRequest, SessionDetail, SessionInfo } from '../../gateway/types';
+import type {
+  AskUserAnswer,
+  AskUserRequest,
+  PermissionRequest,
+  PermissionScope,
+  SessionDetail,
+  SessionInfo,
+} from '../../gateway/types';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
-import { resolveErrorLevel } from '../../state/error-visibility';
-import { groupEvents, isGroupPersisted } from '../../state/events';
+import { isGroupPersisted } from '../../state/events';
+import { EventGroupCache } from '../../state/group-cache';
 import type { PaletteItem } from '../../state/palette';
 import {
   filterSessions,
@@ -27,6 +34,7 @@ import {
   takeSessions,
 } from '../../state/sessions';
 import { useResource } from '../../state/useResource';
+import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
 import { QueuedCard, type QueuedSubmission, RunCard } from './RunCard';
@@ -39,6 +47,10 @@ const TRANSCRIPT_WINDOW = 50;
 const QUEUE_POLL_MS = 2000;
 const NOT_FOUND_MESSAGE = '会话不存在或已删除';
 const NO_PERMISSIONS: readonly PermissionRequest[] = [];
+const NO_ASKS: readonly AskUserRequest[] = [];
+/** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
+const MAX_LIVE_GROUPS = 200;
+const SCROLL_FOLLOW_MS = 100;
 
 type ChatRoute = Extract<Route, { domain: 'chat' }>;
 
@@ -80,8 +92,11 @@ export function ChatView({
     retry,
     features,
     permissions,
+    asks,
     responding,
+    now,
     respondPermission,
+    respondAsk,
   } = useConnection();
   const toast = useToast();
   const snapshot = useEventSnapshot();
@@ -111,7 +126,8 @@ export function ChatView({
   const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
-  const [showInternal, setShowInternal] = useState(false);
+  /** null = 跟随 `ui.showInternalEvents` / `ui.verbosity`；布尔值 = 本会话手动覆盖。 */
+  const [showInternalOverride, setShowInternalOverride] = useState<boolean | null>(null);
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
   const [renameSignal, setRenameSignal] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<SessionInfo | null>(null);
@@ -131,6 +147,8 @@ export function ChatView({
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const nearBottomRef = useRef(true);
+  const followTimer = useRef<number | undefined>(undefined);
+  const lastFollowAt = useRef(0);
   const drawerRef = useDrawerA11y({
     open: sessionsOpen,
     onClose: onCloseSessions,
@@ -165,19 +183,24 @@ export function ChatView({
     }
   }, [sessionsResource.state]);
 
-  // 0.14：错误可见性来自 `ui.errorLevel`；读取失败回退 user（0.13 行为）。
+  // 0.15：信息层级来自 `ui.verbosity` / `ui.showInternalEvents` / `ui.errorLevel`；
+  // 读取失败回退 0.13 行为（normal / 隐藏内部事件 / user）。
   const configResource = useResource({
     load: () => client.getConfig(),
     enabled: hasToken,
     deps: [epoch],
   });
-  const errorLevel = useMemo(
+  const visibility = useMemo(
     () =>
-      configResource.state.status === 'success'
-        ? resolveErrorLevel(configResource.state.data)
-        : 'user',
+      resolveUiVisibility(
+        configResource.state.status === 'success' ? configResource.state.data : null,
+      ),
     [configResource.state],
   );
+  const errorLevel = visibility.errorLevel;
+  const showInternal = showInternalOverride ?? showsInternalEvents(visibility);
+  const groupCache = useRef<EventGroupCache | null>(null);
+  if (!groupCache.current) groupCache.current = new EventGroupCache();
 
   // 服务端全文搜索：150ms debounce 后切换；旧 gateway/失败时保持本地过滤。
   useEffect(() => {
@@ -236,7 +259,13 @@ export function ChatView({
 
   // 抽屉的 Esc / Tab 圈 / 焦点返回 / body 滚动锁由 useDrawerA11y 统一处理。
 
-  useEffect(() => () => window.clearTimeout(refreshTimer.current), []);
+  useEffect(
+    () => () => {
+      window.clearTimeout(refreshTimer.current);
+      window.clearTimeout(followTimer.current);
+    },
+    [],
+  );
 
   // 删除确认前统计关联数据：消息数、live/durable runs、活动 run（服务端会拒绝删除活动会话）。
   useEffect(() => {
@@ -342,8 +371,9 @@ export function ChatView({
     setQueuedRuns((prev) => prev.filter((item) => !seenJobIds.has(item.runId)));
   }, [seenJobIds]);
 
+  // 按 run 增量缓存：50ms 快照只重建受影响的 run，未变化的 RunGroup 引用不变。
   const groups = useMemo(
-    () => groupEvents(snapshot.entries, showInternal, errorLevel),
+    () => groupCache.current?.group(snapshot.entries, showInternal, errorLevel) ?? [],
     [snapshot.entries, showInternal, errorLevel],
   );
 
@@ -366,6 +396,17 @@ export function ChatView({
     return map;
   }, [permissions]);
 
+  // ask_user 与权限同样按 run_id 内联；跨 session 的由 AppShell 顶部条提示。
+  const asksByRun = useMemo(() => {
+    const map = new Map<string, AskUserRequest[]>();
+    for (const item of asks) {
+      const list = map.get(item.runId);
+      if (list) list.push(item);
+      else map.set(item.runId, [item]);
+    }
+    return map;
+  }, [asks]);
+
   const detailState = detailResource.state;
   const sessionDetail =
     selectedId && 'data' in detailState && detailState.data?.session_id === selectedId
@@ -387,6 +428,10 @@ export function ChatView({
     () => (selectedId ? queuedRuns.filter((item) => item.sessionId === selectedId) : []),
     [queuedRuns, selectedId],
   );
+  // 单会话实时组上限：长会话只渲染最近 200 个 run，其余指向运行详情。
+  const hiddenLiveGroups = Math.max(0, visibleGroups.length - MAX_LIVE_GROUPS);
+  const renderedGroups =
+    hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
 
   // 终态/session.saved 后做一次精确刷新（150ms 合并）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 只在快照版本变化时扫描新增事件
@@ -505,15 +550,29 @@ export function ChatView({
   const hasTranscript = visibleTranscript.length > 0;
   const truncated = visibleGroups.some((group) => snapshot.truncatedRuns.has(group.runId));
 
-  // 接近底部时跟随新事件；上翻阅读时不拉回。
-  // snapshot.version 覆盖流式 token（run 分组数量不变，但文本持续增长）。
+  // 接近底部时跟随新事件；50ms 合批下再节流到 ~100ms，且不用 smooth scroll
+  // （流式 token 期间连续 smooth 会堆积动画）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: snapshot.version 是流式追加的显式触发器
   useEffect(() => {
-    if (visibleGroups.length === 0 && visibleQueued.length === 0) return;
-    if (nearBottomRef.current) {
-      bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    if (renderedGroups.length === 0 && visibleQueued.length === 0) return;
+    if (!nearBottomRef.current) return;
+    const nowMs = Date.now();
+    const remaining = SCROLL_FOLLOW_MS - (nowMs - lastFollowAt.current);
+    if (remaining <= 0) {
+      lastFollowAt.current = nowMs;
+      window.clearTimeout(followTimer.current);
+      followTimer.current = undefined;
+      bottomRef.current?.scrollIntoView({ block: 'end' });
+      return;
     }
-  }, [snapshot.version, visibleGroups.length, visibleQueued.length]);
+    if (followTimer.current !== undefined) return;
+    followTimer.current = window.setTimeout(() => {
+      followTimer.current = undefined;
+      if (!nearBottomRef.current) return;
+      lastFollowAt.current = Date.now();
+      bottomRef.current?.scrollIntoView({ block: 'end' });
+    }, remaining);
+  }, [snapshot.version, renderedGroups.length, visibleQueued.length]);
 
   // 切换会话/历史加载完成后直接展示最新内容。
   // biome-ignore lint/correctness/useExhaustiveDependencies: selectedId/sessionDetail 变化时跳到底部
@@ -585,26 +644,44 @@ export function ChatView({
     }
   };
 
-  const handleCancel = async (group: { jobId?: string }) => {
-    const jobId = group.jobId;
-    if (!jobId) return;
-    setCancelling((prev) => new Set(prev).add(jobId));
-    try {
-      const result = await client.cancelRun(jobId);
-      if (result.cancelled) {
-        setCancelledJobs((prev) => new Set(prev).add(jobId));
-        toast.success('已请求取消 run');
+  // 引用保持稳定：memo(RunCard) 依赖这几个回调，避免每个 token 让全部卡片重渲染。
+  const handleCancel = useCallback(
+    async (group: { jobId?: string }) => {
+      const jobId = group.jobId;
+      if (!jobId) return;
+      setCancelling((prev) => new Set(prev).add(jobId));
+      try {
+        const result = await client.cancelRun(jobId);
+        if (result.cancelled) {
+          setCancelledJobs((prev) => new Set(prev).add(jobId));
+          toast.success('已请求取消 run');
+        }
+      } catch (error) {
+        toast.error(errorMessage(error));
+      } finally {
+        setCancelling((prev) => {
+          const next = new Set(prev);
+          next.delete(jobId);
+          return next;
+        });
       }
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setCancelling((prev) => {
-        const next = new Set(prev);
-        next.delete(jobId);
-        return next;
-      });
-    }
-  };
+    },
+    [client, toast],
+  );
+
+  const handleDecidePermission = useCallback(
+    (requestId: string, decision: 'allow' | 'deny', scope: PermissionScope) => {
+      void respondPermission(requestId, decision, scope);
+    },
+    [respondPermission],
+  );
+
+  const handleRespondAsk = useCallback(
+    (requestId: string, answers: AskUserAnswer[]) => {
+      void respondAsk(requestId, answers);
+    },
+    [respondAsk],
+  );
 
   const handleCancelQueued = async (runId: string) => {
     setQueuedRuns((prev) =>
@@ -768,7 +845,7 @@ export function ChatView({
             }}
             onViewRuns={() => navigate({ domain: 'runs', tab: 'live', sessionId: selectedId })}
             showInternal={showInternal}
-            onToggleInternal={() => setShowInternal((value) => !value)}
+            onToggleInternal={() => setShowInternalOverride(!showInternal)}
             writesDisabled={!connected}
             agents={sessionAgents}
             activeAgentId={activeAgent?.id}
@@ -866,19 +943,25 @@ export function ChatView({
                   agent={activeAgent}
                   entries={snapshot.entries}
                   errorLevel={errorLevel}
+                  verbosity={visibility.verbosity}
                 />
               )}
 
-              {!activeAgent && visibleGroups.length > 0 && hasTranscript && (
+              {!activeAgent && renderedGroups.length > 0 && hasTranscript && (
                 <div className="divider-label">
                   <span>继续中</span>
                 </div>
               )}
-              {!activeAgent && visibleGroups.length > 0 && (
+              {!activeAgent && renderedGroups.length > 0 && (
                 <div className="timeline-hint dim">实时事件 · 按时间正序</div>
               )}
+              {!activeAgent && hiddenLiveGroups > 0 && (
+                <StaleNotice
+                  message={`已显示最近 ${MAX_LIVE_GROUPS} 个运行；更早的 ${hiddenLiveGroups} 个请在运行详情中查看。`}
+                />
+              )}
               {!activeAgent &&
-                visibleGroups.map((group) => (
+                renderedGroups.map((group) => (
                   <RunCard
                     key={group.runId}
                     group={group}
@@ -890,12 +973,15 @@ export function ChatView({
                         (message) => message.role === 'user' && message.content === group.input,
                       )
                     }
-                    onCancel={(value) => void handleCancel(value)}
+                    onCancel={handleCancel}
                     permissions={permissionsByRun.get(group.runId) ?? NO_PERMISSIONS}
                     permissionBusy={responding}
-                    onDecidePermission={(requestId, decision, scope) =>
-                      void respondPermission(requestId, decision, scope)
-                    }
+                    onDecidePermission={handleDecidePermission}
+                    asks={asksByRun.get(group.runId) ?? NO_ASKS}
+                    askBusy={responding}
+                    now={asksByRun.has(group.runId) ? now : undefined}
+                    onSubmitAsk={handleRespondAsk}
+                    verbosity={visibility.verbosity}
                   />
                 ))}
               {!activeAgent &&
