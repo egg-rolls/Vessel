@@ -56,6 +56,7 @@ describe('parseArgs - 默认与 REPL', () => {
       gateway: null,
       statusCommand: null,
       agentsCommand: null,
+      agentCommand: null,
       errorsCommand: null,
     });
   });

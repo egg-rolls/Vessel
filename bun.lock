@@ -6,6 +6,7 @@
       "name": "vessel-agent",
       "dependencies": {
         "@promptctl/rich-js": "^0.10.0",
+        "@vessel-agent/agent": "0.16.0",
         "@vessel-agent/config": "0.16.0",
         "@vessel-agent/core": "0.16.0",
         "@vessel-agent/permission": "0.16.0",

@@ -185,24 +185,25 @@ it('--version 打印根 package.json 版本，exit 0', async () => {
   expect(stdout.trim()).toBe(rootVersion);
 });
 
-it('--tools 列出 headless 口径的 4 个工具且不需要 Key', async () => {
+it('--tools 列出 headless 口径的 3 个能力工具且不需要 Key', async () => {
   const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' });
   expect(exitCode).toBe(0);
-  expect(stdout).toContain('Tools (4):');
-  for (const name of ['bash', 'read', 'edit', 'delegate_task']) {
+  expect(stdout).toContain('Tools (3):');
+  for (const name of ['bash', 'read', 'edit']) {
     expect(stdout).toContain(`- ${name}:`);
   }
+  expect(stdout).not.toContain('- delegate_task:');
   expect(stdout).toContain('ask_user (interactive REPL / gateway only)');
 });
 
-it('--tools 在 team.enabled 且未开 legacyTools 时只列 agent 与能力工具', async () => {
+it('--tools 在 team.enabled 时不再隐式提供 agent 或 team_*', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-'));
   try {
     fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
     const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('Tools (4):');
-    expect(stdout).toContain('- agent:');
+    expect(stdout).toContain('Tools (3):');
+    expect(stdout).not.toContain('- agent:');
     expect(stdout).not.toContain('- delegate_task:');
     expect(stdout).not.toContain('- team_spawn:');
   } finally {
@@ -210,7 +211,7 @@ it('--tools 在 team.enabled 且未开 legacyTools 时只列 agent 与能力工�
   }
 });
 
-it('--tools 在 agent.enabled 且未开 legacyTools 时同样只列 agent', async () => {
+it('--tools 在 agent.enabled 时同样列出 agent', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-agent-only-'));
   try {
     fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'agent:\n  enabled: true\n');
@@ -225,7 +226,7 @@ it('--tools 在 agent.enabled 且未开 legacyTools 时同样只列 agent', asyn
   }
 });
 
-it('--tools 在 team.enabled + legacyTools 显式 true 时恢复 5 个 team_*', async () => {
+it('--tools 不再因 legacyTools 恢复 team_*', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-legacy-'));
   try {
     fs.writeFileSync(
@@ -234,18 +235,8 @@ it('--tools 在 team.enabled + legacyTools 显式 true 时恢复 5 个 team_*', 
     );
     const { stdout, exitCode } = await runCli(['--tools'], { VESSEL_MOCK: '' }, '', tmpDir);
     expect(exitCode).toBe(0);
-    expect(stdout).toContain('Tools (9):');
-    for (const name of [
-      'agent',
-      'team_spawn',
-      'team_send',
-      'team_inbox',
-      'team_status',
-      'team_cancel',
-    ]) {
-      expect(stdout).toContain(`- ${name}:`);
-    }
-    expect(stdout).not.toContain('- delegate_task:');
+    expect(stdout).toContain('Tools (3):');
+    expect(stdout).not.toContain('- team_spawn:');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -314,18 +305,6 @@ it('team.max_members 旧配置报未知键错误', async () => {
     const { exitCode, stderr } = await runCli(['--run', 'hello'], {}, '', tmpDir);
     expect(exitCode).toBe(1);
     expect(stderr).toContain('Unknown configuration key "team.maxMembers"');
-  } finally {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  }
-});
-
-it('host 关闭 + team.enabled：告警并使用内嵌 Host', async () => {
-  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-team-embed-'));
-  try {
-    fs.writeFileSync(path.join(tmpDir, 'vessel.yaml'), 'team:\n  enabled: true\n');
-    const { exitCode, stderr } = await runCli(['--run', 'hello'], { VESSEL_MOCK: '1' }, '', tmpDir);
-    expect(exitCode).toBe(0);
-    expect(stderr).toContain('internal in-process host');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

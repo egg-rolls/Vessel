@@ -144,6 +144,11 @@ export interface BuildTenantRuntimeOptions {
   nodeId: string;
   /** host owner 的初始 sessionId；缺省随机 UUID（serve 每 tenant 独立） */
   sessionId?: string;
+  /**
+   * 0.17：入口由 AgentService 接管成员工具时，不构造旧 team / delegate 插件。
+   * 缺省 true（serve 在 A3c 之前仍走旧装配）。
+   */
+  legacyAgentPlugins?: boolean;
   /** team 晚绑定 transport（loopback/remote；仅本地主 tenant） */
   transport?: DeferredTransport;
   /** team + loopback/remote 时由本函数创建 DeferredTransport */
@@ -670,6 +675,8 @@ export async function buildTenantRuntime(
       runtimeHost?: RuntimeHost,
       transport?: DeferredTransport,
     ): Promise<Plugin[]> => {
+      // 0.17：bootstrap 由 AgentService 注册内置 agent 工具，旧 team/delegate 不再构造。
+      if (options.legacyAgentPlugins === false) return [];
       const plan = planFactoryPlugins(config, runtimeHost !== undefined, {
         agentEnabled: agentWiring.agentEnabled,
       });
@@ -885,7 +892,7 @@ export async function buildTenantRuntime(
     // 0.16 E5：owner inbox → 父 turn 注入。core 合并 ctx.messages 前写入不会生效，
     // 但游标与事件仍保持正确，合并后无需再改装配层。
     const ownerInboxHost = host ?? teamInboxHost;
-    if (agentWiring.agentEnabled && ownerInboxHost) {
+    if (options.legacyAgentPlugins !== false && agentWiring.agentEnabled && ownerInboxHost) {
       const injector = createOwnerReplyInjector({
         host: ownerInboxHost,
         ownerId: config.team?.ownerId ?? 'owner',
