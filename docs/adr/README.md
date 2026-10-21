@@ -94,6 +94,9 @@
 | 077 | 权限交互时效、思考流与 agent.cwd（0.11.1 修复并入 0.12.0） | accepted | 2026-10-20 | permission, timeout, reasoning, cwd, web, tui, interaction | [ADR-077-permission-reasoning-cwd.md](ADR-077-permission-reasoning-cwd.md) |
 | 078 | TUI 双状态栏、路径溢出与显隐持久化 | accepted | 2026-10-20 | tui, status-bar, layout, marquee, config, persistence | [ADR-078-dual-status-bars-and-path-overflow.md](ADR-078-dual-status-bars-and-path-overflow.md) |
 | 079 | 权限生命周期——默认等待、持久化与内联应答 | accepted | 2026-10-20 | permission, interaction, persistence, gateway, web, tui, lifecycle | [ADR-079-permission-lifecycle-persistence.md](ADR-079-permission-lifecycle-persistence.md) |
+| 080 | 0.14 可观察性、控制面与 gateway 多实例 A | accepted | 2026-10-21 | observability, trace, errors, config, cli, gateway, instances | [ADR-080-observability-control-plane-and-gateway-instances.md](ADR-080-observability-control-plane-and-gateway-instances.md) |
+| 081 | Host 对等与可序列化快照 | accepted | 2026-10-21 | runtime, host, scheduler, resume, snapshot, tools, display | [ADR-081-host-parity-and-serializable-snapshot.md](ADR-081-host-parity-and-serializable-snapshot.md) |
+| 082 | ask_user 注册策略与 Web 聊天渲染/可见性 | accepted | 2026-10-21 | ask-user, tools, gateway, cli, web, rendering, visibility, i18n | [ADR-082-ask-user-registration-and-web-chat.md](ADR-082-ask-user-registration-and-web-chat.md) |
 
 ## 编写约定
 
