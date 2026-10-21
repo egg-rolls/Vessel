@@ -46,7 +46,12 @@ import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
-import { type ConnectRunStart, waitForConnectedRun } from './connect-run-wait';
+import {
+  type ConnectResumeStart,
+  type ConnectRunStart,
+  waitForConnectedResumeTerminal,
+  waitForConnectedRun,
+} from './connect-run-wait';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -328,6 +333,33 @@ function isRunEventValue(value: unknown): value is RunEvent {
     typeof value.run_id === 'string' &&
     typeof value.ts === 'number'
   );
+}
+
+/**
+ * `runs.resume` 的 RPC 错误 → resume 稳定码（DECISION-033）。
+ * 未列出的错误归 `resume_failed`；错误消息不含 token。
+ */
+function resumeRpcError(error: unknown, runId: string): Error {
+  const code = (error as { code?: unknown } | null)?.code;
+  const details = (error as { details?: unknown } | null)?.details;
+  const legacy =
+    isRecordValue(details) && typeof details.legacy_code === 'string'
+      ? details.legacy_code
+      : undefined;
+  const mapped =
+    code === 'not_found'
+      ? 'run_not_found'
+      : code === 'forbidden'
+        ? 'forbidden'
+        : code === 'not_supported'
+          ? 'resume_unavailable'
+          : code === 'conflict' && legacy === 'run_not_resumable'
+            ? 'run_not_resumable'
+            : code === 'conflict' && legacy === 'run_already_running'
+              ? 'run_already_running'
+              : 'resume_failed';
+  const message = (error instanceof Error ? error.message : String(error)) || runId;
+  return Object.assign(new Error(message), { code: mapped });
 }
 
 /**
@@ -726,12 +758,47 @@ async function bootstrapConnect(input: {
     tenantPaths: input.tenantPaths,
     nodeId: input.nodeId,
     interruptWorkflows: async () => {},
-    resumeRun: async (runId) => {
-      const result = await rpc.request<unknown>('runs.resume', { run_id: runId });
-      const record = isRecordValue(result) ? result : {};
+    resumeRun: async (runId, opts) => {
+      const outcome = await waitForConnectedResumeTerminal({
+        events,
+        runId,
+        sessionId: currentSessionId,
+        timeoutMs: input.connectRunTimeoutMs ?? DEFAULT_CONNECT_RUN_TIMEOUT_MS,
+        ...(input.connectRunPollMs !== undefined ? { pollIntervalMs: input.connectRunPollMs } : {}),
+        ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        resume: async (): Promise<ConnectResumeStart> => {
+          let result: unknown;
+          try {
+            result = await rpc.request<unknown>('runs.resume', { run_id: runId });
+          } catch (error) {
+            throw resumeRpcError(error, runId);
+          }
+          if (typeof result === 'string') return { kind: 'legacy', text: result };
+          if (!isRecordValue(result)) {
+            throw Object.assign(new Error('runs.resume returned no result'), {
+              code: 'resume_failed',
+            });
+          }
+          if (typeof result.result === 'string') return { kind: 'legacy', text: result.result };
+          const returnedRunId = result.run_id;
+          if (typeof returnedRunId !== 'string' || returnedRunId === '') {
+            throw Object.assign(new Error('runs.resume returned no run_id'), {
+              code: 'resume_failed',
+            });
+          }
+          return {
+            kind: 'queued',
+            runId: returnedRunId,
+            ...(typeof result.session_id === 'string' && result.session_id !== ''
+              ? { sessionId: result.session_id }
+              : {}),
+          };
+        },
+        getRun: (targetRunId) => rpc.request<unknown>('runs.get', { run_id: targetRunId }),
+      });
       return {
-        sessionId: typeof record.session_id === 'string' ? record.session_id : currentSessionId,
-        result: typeof record.result === 'string' ? record.result : '',
+        sessionId: outcome.sessionId !== '' ? outcome.sessionId : currentSessionId,
+        result: outcome.output,
         mode: 'single-agent' as const,
       };
     },
