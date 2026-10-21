@@ -135,7 +135,7 @@ export interface BuildTenantRuntimeOptions {
   sessionId?: string;
   metricsFactory?: MetricsFactory;
   traceFactory?: TraceRecorderFactory;
-  /** 测试注入的 ext redactor */
+  /** 共享 / 注入的 ext redactor；缺省从 loader 加载 */
   redactor?: TraceRedactor;
   /** 诊断 logger（0.10 R2-14）；缺省 noop，CLI / serve 注入 stderr logger */
   logger?: Logger;
@@ -175,7 +175,10 @@ export interface TenantRuntimeBundle {
   eventLog?: SessionEventLog;
   trace?: TraceControl;
   metrics?: MetricsControlLike;
+  /** 组合后的 redactor（core 默认 + ext）；live hub / gateway 使用同一实例 */
   redactor: TraceRedactor;
+  /** 0.18：未组合的 ext redactor；factory 透传给所有 tenant（缺省无 ext） */
+  extRedactor?: TraceRedactor;
   sessionControl: SessionControl;
   /** 本 bundle 使用的插件扫描器（0.12：`gateway.reload` 刷新缓存） */
   pluginLoader: PluginLoader;
@@ -931,6 +934,7 @@ export async function buildTenantRuntime(
       ...(trace ? { trace } : {}),
       ...(metrics ? { metrics } : {}),
       redactor,
+      ...(extRedactor ? { extRedactor } : {}),
       sessionControl,
       pluginLoader: loader,
       plugins,

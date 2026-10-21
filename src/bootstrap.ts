@@ -1275,6 +1275,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.18：本地模式只有一个 tenant 流；dispatcher 与 gateway 共用同一个 hub。
   const localEventHub = createGatewayEventHub({
     streams: [{ tenantId, stream: runtimeEvents }],
+    // 0.18：live 与 trace 同源（bundle.redactor 已是 core+ext 组合实例）。
+    redactor: bundle.redactor,
   });
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,
