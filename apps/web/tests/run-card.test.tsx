@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ToastProvider } from '../src/components/ToastProvider';
 import { RunCard, runDetailHref } from '../src/domains/chat/RunCard';
-import type { RunGroup } from '../src/state/events';
+import { buildGroup, type RunGroup, type StoredEvent } from '../src/state/events';
 
 function failedGroup(error: string): RunGroup {
   return {
@@ -157,5 +157,80 @@ describe('RunCard verbosity', () => {
     expect(markup).toContain('failed-marker-tool');
     expect(markup).toContain('FAILED-TOOL-ERROR');
     expect(markup).toContain('ANSWER-MARKER');
+  });
+});
+
+describe('live streaming rendering (0.17)', () => {
+  function streamingGroup(overrides: Partial<RunGroup> = {}): RunGroup {
+    return {
+      runId: 'run-live',
+      sessionId: 'session-1',
+      status: 'running',
+      items: [],
+      ...overrides,
+    };
+  }
+
+  function render(group: RunGroup, verbosity: 'minimal' | 'normal' = 'normal') {
+    return renderToStaticMarkup(
+      <RunCard
+        group={group}
+        cancelled={false}
+        cancelling={false}
+        onCancel={() => {}}
+        verbosity={verbosity}
+      />,
+    );
+  }
+
+  test('renders unfinished liveText while items are still empty', () => {
+    const markup = render(streamingGroup({ liveText: 'partial answer' }));
+    expect(markup).toContain('live-text');
+    expect(markup).toContain('partial answer');
+    expect(markup).not.toContain('run-footer');
+  });
+
+  test('renders liveReasoning as a streaming thinking block', () => {
+    const markup = render(streamingGroup({ liveReasoning: 'live-thought' }));
+    expect(markup).toContain('reasoning-block');
+    expect(markup).toContain('live-thought');
+    expect(markup).toContain('reasoning-live');
+  });
+
+  test('minimal keeps live body text but hides live reasoning', () => {
+    const text = render(streamingGroup({ liveText: 'BODY-MARKER' }), 'minimal');
+    expect(text).toContain('BODY-MARKER');
+    const reasoning = render(streamingGroup({ liveReasoning: 'THINK-MARKER' }), 'minimal');
+    expect(reasoning).not.toContain('THINK-MARKER');
+  });
+
+  test('after finish the text appears once: flushed item, no live duplicate', () => {
+    const entries: StoredEvent[] = [
+      { event: { type: 'run.started', run_id: 'run-live', data: {}, ts: 100 }, seq: 1 },
+      {
+        event: {
+          type: 'llm.stream.chunk',
+          run_id: 'run-live',
+          data: { chunk: { type: 'text_delta', delta: 'Hello' } },
+          ts: 101,
+        },
+        seq: 2,
+      },
+      {
+        event: {
+          type: 'llm.stream.chunk',
+          run_id: 'run-live',
+          data: { chunk: { type: 'finish' } },
+          ts: 102,
+        },
+        seq: 3,
+      },
+    ];
+    const group = buildGroup('run-live', entries);
+    expect(group.liveText).toBeUndefined();
+    const markup = render(group);
+    expect(markup).toContain('Hello');
+    expect(markup.split('Hello').length - 1).toBe(1);
+    expect(markup).not.toContain('live-text');
   });
 });
