@@ -21,6 +21,7 @@
 import { randomUUID } from 'node:crypto';
 import type {
   AgentHandle,
+  AgentSpec,
   RuntimeHost as CoreRuntimeHost,
   EventStream,
   LLMProvider,
@@ -68,6 +69,31 @@ export interface DelegateResultRef {
   kind: 'run' | 'message' | 'file';
   id?: string;
   path?: string;
+}
+
+/** core 0.15 E9 Self Card 的字段子集（与 AgentRuntimeOptions.selfCard 同名） */
+interface DelegateSelfCard {
+  role: string;
+  parent_id?: string;
+  depth: number;
+  model: string;
+  tools: string[];
+  limits: {
+    requestLimit?: number;
+    toolCallsLimit?: number;
+    inputTokensLimit?: number;
+    outputTokensLimit?: number;
+    totalCostLimit?: number;
+    maxIterations?: number;
+    maxRuntimeSeconds?: number;
+  };
+  context: { max: number; used?: number };
+  how_to_ask?: string;
+}
+
+/** child 规格：selfCard 是 core 0.15 的 additive 字段，Host 透传后生效 */
+interface DelegateAgentSpec extends AgentSpec {
+  selfCard?: DelegateSelfCard;
 }
 
 /** 单个 delegate 根树的后代计数（嵌套实例共享同一对象） */
@@ -130,6 +156,8 @@ export interface DelegateTaskOptions {
   allowNested?: boolean;
   /** 0.15 E8：每个根 delegate 树的后代上限（默认 16，仅 allowNested 生效） */
   maxDescendants?: number;
+  /** 0.15 E9：child 的上下文预算上限（Self Card context.max；默认 1_000_000） */
+  contextMaxTokens?: number;
 }
 
 /** 解析后的插件配置（内部使用） */
@@ -154,6 +182,8 @@ interface ResolvedConfig {
   nestedEnabled: boolean;
   /** 0.15 E8：每个根树的后代上限。 */
   maxDescendants: number;
+  /** 0.15 E9：child 上下文预算上限（Self Card）。 */
+  contextMaxTokens: number;
   /** run_id → 递归深度；实例级（避免模块级可变状态跨 tenant 共享）。 */
   depthByRunId: Map<string, number>;
 }
@@ -231,6 +261,34 @@ function withTenant(event: RunEvent, tenantId: string | undefined): RunEvent {
   return { ...event, tenant_id: tenantId };
 }
 
+/** 构造 child 的 Self Card（0.15 E9）；limits/termination 原样继承，不放大。 */
+function buildSelfCard(
+  config: ResolvedConfig,
+  input: { depth: number; model: string; tools: string[]; parentId?: string },
+): DelegateSelfCard {
+  const limits: DelegateSelfCard['limits'] = {
+    ...config.limits,
+    ...(config.termination.maxIterations !== undefined
+      ? { maxIterations: config.termination.maxIterations }
+      : {}),
+    ...(config.termination.maxRuntimeSeconds !== undefined
+      ? { maxRuntimeSeconds: config.termination.maxRuntimeSeconds }
+      : {}),
+  };
+  return {
+    role: 'delegate',
+    ...(input.parentId !== undefined ? { parent_id: input.parentId } : {}),
+    depth: input.depth,
+    model: input.model,
+    tools: input.tools,
+    limits,
+    context: { max: config.contextMaxTokens },
+    how_to_ask: input.tools.includes('ask_user')
+      ? 'Use the ask_user tool to request human input.'
+      : 'This is a non-interactive run; state blockers in your final text.',
+  };
+}
+
 /** 取插件实例的 Host：注入优先，否则懒创建专用 Host 并复用 */
 function resolveHost(config: ResolvedConfig): CoreRuntimeHost {
   if (config.runtimeHost) return config.runtimeHost;
@@ -260,6 +318,8 @@ interface ChildTaskConfig {
   depthByRunId: Map<string, number>;
   /** child run id 由本函数回填，失败路径也要拿到 result_ref。 */
   childRun: { runId?: string };
+  /** 0.15 E9：child Self Card；Host 透传到 AgentRuntimeOptions。 */
+  selfCard: DelegateSelfCard;
   /** 嵌套实例自建 Host（父 run 正占用注入 Host 的调度槽，复用会死锁）。 */
   closeHost: boolean;
 }
@@ -352,7 +412,7 @@ async function runChildTask(
   const input = config.context ? `${config.task}\n\n附加背景：\n${config.context}` : config.task;
   let handle: AgentHandle | undefined;
   try {
-    handle = await config.host.spawn({
+    const spec: DelegateAgentSpec = {
       id: config.fields.delegateId,
       name: `delegate-${config.depth + 1}`,
       provider: config.providerFactory(),
@@ -364,7 +424,9 @@ async function runChildTask(
       // 0.8.2：继承父配置的默认权限策略；未注入时保持旧行为。
       permission: config.permission ?? { default: 'allow' },
       metadata: { ephemeral: true, depth: config.depth + 1 },
-    });
+      selfCard: config.selfCard,
+    };
+    handle = await config.host.spawn(spec);
 
     const runOptions: RunOptions | undefined =
       config.signal !== undefined ? { signal: config.signal } : undefined;
@@ -460,6 +522,12 @@ function makeDelegateTool(
         tree,
         ...(rootSessionId !== undefined ? { rootSessionId } : {}),
       });
+      const selfCard = buildSelfCard(config, {
+        depth: depth + 1,
+        model: config.model,
+        tools: childHost.listTools().map((tool) => tool.name),
+        ...(parentDelegateId !== undefined ? { parentId: parentDelegateId } : {}),
+      });
       const childRun: { runId?: string } = {};
       // 嵌套实例不能复用注入 Host：父 run 占着调度槽，子 run 会永远排队。
       const childRuntimeHost =
@@ -485,6 +553,7 @@ function makeDelegateTool(
           ...(config.tenantId !== undefined ? { tenantId: config.tenantId } : {}),
           depthByRunId: config.depthByRunId,
           childRun,
+          selfCard,
           closeHost: nesting !== undefined,
         });
         ctx.events.publish({
@@ -556,6 +625,7 @@ export function createDelegateTaskPlugin(options: DelegateTaskOptions): Plugin {
     maxDescendants: Number.isFinite(configuredMaxDescendants)
       ? Math.max(0, Math.floor(configuredMaxDescendants))
       : 16,
+    contextMaxTokens: options.contextMaxTokens ?? 1_000_000,
     ...(options.permission !== undefined ? { permission: options.permission } : {}),
     ...(options.runtimeHost !== undefined ? { runtimeHost: options.runtimeHost } : {}),
     ...(tenantId !== undefined ? { tenantId } : {}),
