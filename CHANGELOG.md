@@ -34,6 +34,7 @@
 
 ### Fixed
 
+- `health.get`、`/v1/health` 与 `hello` 的 `node` 字段按 tenant 过滤，不再泄漏其它 tenant 的 active run、session 与工具面。
 - external owner 的消息不再被 `pump` 消费：成员回复只经父 turn 的 `BeforeLlm` 注入，避免 owner 队列被成员 runtime 抢走。
 - bridge 权限请求补 `request_id` 别名，父窗口可按同一 `requestId` 应答 `permission.respond` / `ask.respond`。
 - Web 权限 / ask 请求没有匹配 `RunCard` 时不再无处可操作；运行中的空 `RunCard` 不再显示为空白。

@@ -82,7 +82,7 @@ export interface ConfigMethodsDeps {
   clientCount(): number;
   latestSeq(): number;
   protocolInfo: ProtocolInfo;
-  nodeInfo(): NodeInfo;
+  nodeInfo(tenantId?: string): NodeInfo;
   startedAt: number;
   getTeam(): TeamGatewayOptions | undefined;
 }
@@ -197,7 +197,7 @@ export function createConfigMethods(deps: ConfigMethodsDeps): RpcMethodDefinitio
           clients: clientCount(),
           latest_seq: latestSeq(),
           protocol: protocolInfo,
-          node: nodeInfo(),
+          node: nodeInfo(ctx.tenantId),
           started_at: startedAt,
           tenant_id: ctx.tenantId,
           runtime: runtimeSnapshot(ctx.tenantId),

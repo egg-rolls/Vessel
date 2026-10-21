@@ -23,7 +23,6 @@ import type {
   RunInterruptReason,
   RunnableAgent,
   SessionBackend,
-  ToolDefinition,
   TraceRedactor,
 } from '@vessel-agent/core';
 import { createDefaultTraceRedactor } from '@vessel-agent/core';
@@ -673,31 +672,59 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const pluginHost = (): PluginHost | undefined => opts.pluginHost ?? runtime?.pluginHost;
 
-  const listTools = (): ToolDefinition[] => {
-    try {
-      return pluginHost()?.listTools() ?? [];
-    } catch {
-      return [];
-    }
-  };
+  /**
+   * 节点公开信息。运行态字段按 tenant 派生：`status` / `current_run_id` /
+   * `current_session_id` 只反映该 tenant 的 active run，`capabilities.tools`
+   * 只来自该 tenant 的 plugin host。无 tenant 上下文（如匿名健康检查）时
+   * 一律按空闲 / 空工具面处理，不回落到全局或 default tenant。
+   * `node_id` / `pid` / `started_at` / `endpoint` / `role` 是进程级字段，可共享。
+   */
+  const nodeInfo = (tenantId?: string): NodeInfo => {
+    const snapshot = tenantId === undefined ? undefined : runtimeSnapshot(tenantId);
+    const scheduler =
+      typeof snapshot?.scheduler === 'object' && snapshot.scheduler !== null
+        ? (snapshot.scheduler as Record<string, unknown>)
+        : undefined;
+    const running = Array.isArray(scheduler?.running)
+      ? (scheduler.running as Array<Record<string, unknown>>)
+      : [];
+    const activeRunId =
+      typeof snapshot?.active_run_id === 'string' ? snapshot.active_run_id : undefined;
+    // active_run_id 只带 run；session 从同一 run 的 running 记录补齐。
+    const activeEntry =
+      activeRunId === undefined ? undefined : running.find((entry) => entry.run_id === activeRunId);
+    const current = activeEntry ?? running[0];
+    const currentRunId =
+      activeRunId ?? (typeof current?.run_id === 'string' ? current.run_id : undefined);
+    const currentSessionId =
+      typeof current?.session_id === 'string' ? current.session_id : undefined;
 
-  const nodeInfo = (): NodeInfo => ({
-    node_id: nodeId,
-    ...(opts.nodeName ? { name: opts.nodeName } : {}),
-    pid: process.pid,
-    started_at: startedAt,
-    endpoint: `${scheme}://${hostname}:${actualPort}`,
-    role: 'standalone',
-    status: engine.active ? 'busy' : 'idle',
-    ...(engine.active
-      ? { current_run_id: engine.active.run_id, current_session_id: engine.active.session_id }
-      : {}),
-    capabilities: {
-      tools: listTools().map((tool) => tool.name),
-      max_concurrency: 1,
-      protocol: PROTOCOL_VERSION,
-    },
-  });
+    let tools: string[] = [];
+    if (tenantId !== undefined) {
+      try {
+        tools = (pluginHostFor(tenantId)?.listTools() ?? []).map((tool) => tool.name);
+      } catch {
+        tools = [];
+      }
+    }
+
+    return {
+      node_id: nodeId,
+      ...(opts.nodeName ? { name: opts.nodeName } : {}),
+      pid: process.pid,
+      started_at: startedAt,
+      endpoint: `${scheme}://${hostname}:${actualPort}`,
+      role: 'standalone',
+      status: currentRunId === undefined ? 'idle' : 'busy',
+      ...(currentRunId !== undefined ? { current_run_id: currentRunId } : {}),
+      ...(currentSessionId !== undefined ? { current_session_id: currentSessionId } : {}),
+      capabilities: {
+        tools,
+        max_concurrency: 1,
+        protocol: PROTOCOL_VERSION,
+      },
+    };
+  };
 
   // ── 事件广播：分配 seq → 扇出 ──────────────────
 
@@ -722,7 +749,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 求值顺序与原实现一致：latest → ts → node → oldest。
     const latestSeq = buffer.latestSeq;
     const ts = Date.now();
-    const node = nodeInfo();
+    const node = nodeInfo(tenantId);
     return buildHelloFrame({
       nodeId,
       protocol: protocolInfo,
@@ -2850,11 +2877,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
               transport: team.transport?.kind ?? 'in-process',
             }
           : { enabled: false };
+        // 健康响应的 node 字段按该请求的 principal 作用域过滤；无凭据时为
+        // 匿名请求，不暴露任何 tenant 的运行态与工具面。
+        const principal = headerPrincipal(req);
         return json(
           {
             ...base,
             protocol: protocolInfo,
-            node: nodeInfo(),
+            node: nodeInfo(principal ? effectiveTenantId(principal) : undefined),
             started_at: startedAt,
             team: teamInfo,
           },
