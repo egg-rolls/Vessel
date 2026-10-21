@@ -162,11 +162,10 @@ jobs:
             packages/core
             packages/permission
             packages/config
+            packages/agent
             packages/serve
             packages/tui
             plugins/tools/basic-tools
-            plugins/tools/delegate-task
-            plugins/tools/team
             plugins/mcp/client
             plugins/workflow/engine
             plugins/evals/harness

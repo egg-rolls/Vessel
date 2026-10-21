@@ -657,9 +657,9 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `trace.enabled` / `level` / `retention_days` / `max_runs` / `max_bytes` | 缺省 true / `full` / 30 / 1000 / 1 GiB；`level` 为 `full`\|`metadata`\|`off`；`max_bytes: 0` = 不限 |
 | `session.backend` | `file`（0.5 默认）/ `sqlite`（0.4 默认，仍可用）/ `memory`；`storagePath` 对应 sqlite 文件或 file 目录 |
 | `update.autoCheck` / `channel` / `source` | 交互启动后台检查（默认 true）、`latest` / `beta`、自定义清单源 |
-| `delegate.enabled` / `maxDepth` / `disallowed` / `model` / `limits` / `termination` | `delegate_task` 接线；`enabled: false` 时默认工具变为 3 |
-| `delegate.permission_mode` | `bridge`（交互默认）/ `allow`（headless 默认）/ `deny`；`deny` 时保留 `read_only_tools`（默认 `["read"]`） |
-| `team.enabled` / `ownerId` / `model` / `memberLimits` / `memberTermination` | 进程内 team 原型；默认 false，必须显式开启；0.3 删除 `maxMembers`（Host 必填后无效果） |
+| `agent.enabled` / `ownerId` / `model` / `limits` / `termination` | AgentService 与内置 `agent` 工具；默认 false（0.17） |
+| `agent.defaultVisibility` / `permissionMode` / `readOnlyTools` | 成员可见性与权限模式：`bridge`（交互默认）/ `allow`（headless 默认）/ `deny`（保留 `readOnlyTools`，默认 `["read"]`）；0.17 |
+| `agent.followReplies` / `cwd` / `systemPrompt` | 回复注入策略（不自动续跑父 turn）/ 默认工作目录 / 主 agent systemPrompt |
 | `mcp_servers.<name>.*` | MCP server：`transport`（stdio/http）、`command`/`args`/`env`、`url`/`headers`、`enabled`、`connect_timeout_ms`、`tool_timeout_ms`、`tool_prefix`、`auto_approve_tools` |
 | `durable.enabled` / `backend` / `path` / `checkpoint_every` | 默认 false；`backend: file \| memory`；0.5 起 `path` 默认 `<data_dir>/tenants/<tenant_id>/runs`，显式配置优先但可逃出 tenant（启动 warn）；0.3 只接受 `checkpoint_every: iteration` |
 | `serve.hostname` / `port` / `allow_remote` / `tls.cert_file` / `tls.key_file` | 默认 `127.0.0.1:8642`、明文；非回环必须 `allow_remote: true`、token 非空**且 TLS cert/key 成对**（0.6 起强制） |
@@ -795,16 +795,15 @@ serve:
 
 ## 11. 工具集：三个能力工具，为什么这么少
 
-默认运行期 **4 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**，装配层注册 `delegate_task` 一个**接缝工具**。
+默认运行期 **3 个**工具：`plugins/tools/basic-tools` 提供 **`bash` / `read` / `edit`** 三个**能力工具**。`agent` 内置在 `packages/agent`，由 `agent.enabled: true` 注册（0.17）；`team_*` / `delegate_task` 已删除。
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `delegate_task` | 默认注册；`delegate.enabled: false` 时关闭（工具变为 3 个）。权限模式：交互 `bridge`、headless `allow`、可配 `deny`（保留 `read_only_tools`） |
+| `agent` | `agent.enabled: true`；动作 `new` / `send` / `close` / `list`（支持 batch）；权限模式与成员配置见 `agent.*`（0.17） |
 | `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭（0.14.1） |
-| `team_*`（spawn / send / inbox / status / cancel） | 仅 `team.enabled: true`（默认关闭）。进程内原型；0.2 起共用 core Host |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
-口径：**默认 4 / 交互 REPL 或 gateway-serve 5 / 启用 team 9**；配置 MCP 后为 **4 + N 个 MCP 工具**（N 由 server 提供，0.3 不写死总数）。`--tools` 一次性命令按 headless 口径列出 4 个，并注明 `ask_user (interactive or gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
+口径：**默认 3 / `agent.enabled: true` 4 / 交互 REPL 或 gateway-serve 4（+`ask_user`）/ 交互 + agent 5**；配置 MCP 后为 **3 + N 个 MCP 工具**（N 由 server 提供）。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需实际运行/连接后，经 REPL `/mcp` 或 gateway `GET /v1/mcp/servers` 查看。
 
 | 工具 | inputSchema | 权限 | 行为 |
 |---|---|---|---|
@@ -842,8 +841,9 @@ serve:
 | `src/bootstrap.ts` | config → provider → plugins → runtime → `ReplContext`；按配置构造 delegate / team / MCP，装配 session backend 与 RunStore；进程退出时关闭 MCP / Host / RunStore。0.8：`LocalRpcClient` 的 `onEvent` 订阅 `runtimeEvents`，以只读方式转发 `events.event`。0.8.1：接受 `cliOverrides` 并传给 loader；connect token / CA 只读 `config.connect` |
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
-| `src/factory-plugins.ts` | 工厂式插件（delegate / team / mcp-client）的接线决策；0.3 删除 `delegate.viaHost` |
-| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）。0.8.2：`resolveRuntimePermission` / `buildDelegateTaskOptions` 纯函数，runtime / delegate / workflow 共用同一份 resolved 权限 |
+| `src/agent-service-wiring.ts` / `src/agent-owner-injection.ts` | 0.17：把父 provider / PluginHost / 限额 / 事件流交给 AgentService；owner 队列经 `BeforeLlm` 注入 |
+| `src/agent-owner-server.ts` / `src/agent-owner-client.ts` | 0.17：REPL owner loopback 控制端点与 CLI attach |
+| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）；runtime / workflow 共用同一份 resolved 权限 |
 | `src/workflow-wiring.ts` | 配置 → workflow 引擎；0.8.2 起总是注入 `createToolPipelineFor({ pluginHost, events, permission, tenantId })` |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
 | `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
@@ -853,7 +853,7 @@ serve:
 | `src/rpc/http-client.ts` | `HttpRpcClient`：`POST /v1/rpc`、Bearer、可选 CA、WS 首帧 auth 与 `since` / `pong` / `gap` / 重连 |
 | `src/node-registry.ts` | 0.6 静态节点表：URL / token / CA 解析、心跳与 `healthy` / `unreachable` 状态 |
 | `src/remote-transport.ts` | 0.6 `kind:'remote'`：`send` / `request` / `peers`、远端事件订阅与 `(node_id, seq)` 去重 |
-| `src/team-wiring.ts` / `src/transport-factory.ts` | 按配置构造 in-process / loopback / remote transport；remote 节点与事件回灌接线 |
+| `src/transport-factory.ts` | 按配置构造 in-process / loopback / remote transport；remote 节点与事件回灌接线（0.17 起不再有 team 生产装配） |
 | `src/resume-command.ts` | `--resume-run` 无参：列出 interrupted run（只读，不需要 Key）。0.8：解析 tenant 后读 `<data_dir>/tenants/<id>/runs`（与执行面一致），并透传 `tenantId` |
 | `src/tools-list.ts` | `--tools` 的工具清单（不构造 runtime、不需要 Key） |
 | `src/headless-runner.ts` | headless 运行器 |
@@ -2263,6 +2263,7 @@ interface LimitBlock {
 ## 38. 0.16.0 统一 agent 工具（Phase A）（已实现）
 
 > 状态：已合入 `release/0.16.0`（未发布）。决策见 [ADR-087](adr/ADR-087-unified-agent-tool-phase-a.md)。
+> 0.17 起本节描述的 `team_*` / `delegate_task` 工具面与 `team.*` / `delegate.*` 配置已删除；当前实现见 [§39](#39-0170-agentservice-与成员能力层已实现)。
 
 ### 38.1 工具面与装配
 
@@ -2331,3 +2332,88 @@ interface LimitBlock {
 - 兼容：`team_*` 5 个工具默认仍注册；`delegate_task` 代码保留，`agent` 可用时只做配置别名映射。`team_*` 创建的 legacy 成员不进入新注册表，`agent.send` 不能寻址它们。
 - canonical RPC 仍为 **44**，本版本不新增方法。
 - 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。
+
+## 39. 0.17.0 AgentService 与成员能力层（已实现）
+
+> 状态：已合入 `release/0.17.0`（未发布）。决策见 [ADR-088](adr/ADR-088-agent-service-package.md)。
+
+### 39.1 分层与包边界
+
+```text
+入口（tui / src CLI / serve / apps/web）
+  → 能力层 packages/agent（AgentService）
+    → 执行内核 packages/core（AgentRuntime / Host / ToolPipeline / Permission）
+扩展层 plugins/**（tools / providers / workflow …）
+```
+
+- `packages/agent` 是成员能力的**唯一实现**：registry、生命周期、消息队列、可见性、owner 队列、回复投递、权限 bridge、snapshot 与内置 `agent` 工具。
+- `packages/core` 仍是领域无关执行内核，不知道 member / owner / visibility；成员执行经 `MemberRuntimePort` 注入。
+- 入口只做输入解析、AgentService 调用与事件渲染；不得复制 registry 或另写生命周期。
+- 依赖方向：入口 → agent → core；插件 → core / agent；core 不依赖 agent 或入口。`packages/agent` 只依赖 `@vessel-agent/core` 的公开入口。
+- `InProcessMemberRuntime` 是 Phase A 的执行内核适配：每个成员独占 `AgentRuntime` / `Context` / `EventStream`，工具从父 `PluginHost` 按白名单复制（默认 `bash` / `read` / `edit`），hooks / guardrails 一并继承；`agent`、`delegate_task` 与 `team_*` 永久排除，成员不能再分派。
+
+### 39.2 契约与 session 即成员
+
+- `AgentService`：`new` / `send` / `close` / `list`；另有 `subscribe`、`reply`、`takeMessages`、`notePermissionState`、`requestPermission`、`flushSnapshot` 供入口与执行内核使用。
+- `MemberStatus`（snake_case）：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `current_tool?` / `last_seen?` / `usage?`。
+- `new` 创建的成员与 session 1:1（`session_id === id`）；`send.to`、`close.member` 可用成员 id 或 session id。未注册 session 不是成员。
+- `send` 入队即返回 `{queued: true, message_id, state}`，不等待一轮结束；同一成员同时只有一轮在跑，其余消息 FIFO 排队。
+- 消息内容上限 64 KiB（UTF-8）；空 `to` / 空 `content` / 未知成员 / 已关闭 / `stale` / 不可见成员返回错误码或错误文本。
+- `close` 幂等：先取消当前轮，再释放执行内核；session 数据保留，后到的 run 终态不得覆盖 `closed`。
+- `visibility`：`private`（默认，仅 owner）/ `team` / `tenant`；跨 tenant 不可寻址。
+- 内置 `agent` 工具是唯一模型 schema，动作 `new` / `send` / `close` / `list`；`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回逐条结果，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。
+
+### 39.3 状态机、队列与快照
+
+| 状态 | 进入条件 |
+|---|---|
+| `created` | `new` 接受，成员写入注册表 |
+| `idle` | 执行内核 `spawn` 完成；owner attach 后 |
+| `running` | 一轮开始 |
+| `waiting_permission` | bridge 权限等待 |
+| `completed` / `failed` / `cancelled` | 上一轮终态 |
+| `closed` | `close`；不可再进入其它状态 |
+| `stale` | 进程重启后从 snapshot 恢复的非终态成员；不可 `send` |
+
+- 消息队列只在内存；状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，`version: 1`）。
+- 快照形状 `{version, tenant_id, updated_at, members: MemberStatus[]}`；只存成员状态，不存消息队列。版本不匹配 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
+- 重启后非终态成员一律标 `stale` 并发布 `agent.stale`；终态保持原值。未处理消息丢失。
+- 成员事件为开放字符串：`agent.spawned`、`agent.stale`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`；事件 `agent_id` 为成员 id。
+
+### 39.4 owner、外部队列与 CLI
+
+- REPL 启动 AgentService 后监听 `127.0.0.1:0` 的最小 HTTP 控制端点；记录原子写入 `<dataDir>/agent-owner.json`（`0600`）：`{pid, host, port, token, started_at, tenant_id}`。
+- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
+- 同一 `dataDir` 已有 owner 时，第二个 REPL 仍可用进程内工具；CLI attach 保持原 owner。owner 记录按 pid / token 清理，避免误删后继 owner。
+- `vessel agent new|send|close|list [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。
+- REPL 主 agent 通过 `attachOwner` 注册为 **external owner**：它的队列只由父 turn 的 `BeforeLlm` 调 `takeMessages(ownerId)` 排空，`pump` 永不执行 owner 队列；成员 runtime 也不得消费。注入消息固定 `role: 'user'`、`name: 'agent:<id>'`、`timestamp` 取原消息时间，内容原样。
+
+### 39.5 权限 bridge
+
+- 成员 `permissionMode`：`bridge` / `allow` / `deny`；缺省交互 `bridge`、headless `allow`。
+- `bridge`：成员的 `tool.permission.request` / `ask.user.requested` 补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 后转发到父事件流；父窗口用既有 `PermissionCard` / `AskCard` 应答（`permission.respond` / `ask.respond`），应答回灌成员事件流，成员回到 `running`。
+- 没有 `parentEvents` 时 bridge 退化为 `ask → deny`，不会永久等待无人应答的请求。
+- `allow`：成员复制到的工具一律放行。`deny`：只保留 `readOnlyTools`（默认 `['read']`）。
+- `waiting_permission` 由执行内核回调 `notePermissionState` 维护；`closed` / `stale` 上的迟到回调被忽略。
+
+### 39.6 入口适配
+
+- **tui**：`/agents` 只读消费 `ctx.events.getHistory()`，成员事件来自 AgentService；不启动 / 取消 agent。成员有效限额读 `config.agent.limits` / `config.agent.termination`。
+- **Web**：权限 / ask 仍内联在所属 `RunCard`；没有匹配 `RunCard` 的当前会话请求显示在 Composer 上方兜底，其他会话或无 `sessionId` 的请求进入顶部非模态面板，复用同一张卡片，不恢复全局遮罩。面包屑显示 `agent` / `run` / `session` 短 id。`RunCard` 运行中显示 `liveText` / `liveReasoning`，没有内容时显示运行中空态占位。
+- **CLI**：一次性命令 `vessel agent ...` 只做参数映射与渲染，生命周期全部在 owner。
+- **ask_user**：交互 REPL（TTY）或 gateway/serve 注册；headless / `--run` / 管道不注册，`ui.askUser: false` 可关闭。
+
+### 39.7 删除清单与兼容
+
+- 删除 `plugins/tools/team`、`plugins/tools/delegate-task` 及 `team_*`（spawn / send / inbox / status / cancel）与 `delegate_task` 模型工具。
+- 删除 `TeamConfig` / `DelegateConfig`、`team.*` / `delegate.*` 配置键、team / delegate 装配、`team-wiring` 与 `team.legacyTools` 兼容开关；tenant overlay 不再接受 `team` / `delegate` 块。
+- 删除旧 owner inbox 轮询路径；owner 回复统一经 `takeMessages` + `BeforeLlm` 注入。
+- `/v1/team/*` 传输协议文件与 gateway 方法保留，但 0.17 没有生产装配，也没有模型工具入口；Phase B 可复用。
+- canonical RPC 仍为 **44**，本版本不新增方法；owner 端点是本地控制传输，不进入 RPC 方法表。
+
+### 39.8 配置与限制
+
+- `agent.enabled`（默认 `false`）是唯一开关：启用后注册内置 `agent` 工具、启动 AgentService 并尝试启动 owner 端点。
+- 成员配置：`agent.defaultVisibility` / `agent.permissionMode` / `agent.readOnlyTools` / `agent.limits` / `agent.termination` / `agent.followReplies` / `agent.ownerId`。非法值与枚举拒绝，不静默回退。
+- 工具数：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4；交互 REPL / serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
+- 已知限制：Phase B 未做 Gateway attach / Web 跨 owner 代理 / durable outbox / 跨节点写路径；CLI 依赖本机 REPL owner；消息队列只在内存；`stale` 成员不能继续 `send`；`followReplies` 不自动开启新的父 turn；`close` 只支持本机成员。
