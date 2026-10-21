@@ -7,7 +7,7 @@
  * @module @vessel-agent/agent
  */
 
-import type { Logger, Usage } from '@vessel-agent/core';
+import type { EventStream, Logger, Usage } from '@vessel-agent/core';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
 export type MemberState =
@@ -59,11 +59,11 @@ export interface MemberRuntimeMember {
   system_prompt?: string;
 }
 
-/** 一轮执行的结局；缺省 completed */
+/** 一轮执行的结果 */
 export interface MemberTurnResult {
   /** 本轮最终文本；成员未显式 reply 时由 AgentService 自动投递给父成员 */
   content?: string;
-  outcome?: 'completed' | 'failed' | 'cancelled';
+  outcome?: TurnOutcome;
   usage?: Usage;
 }
 
@@ -114,6 +114,17 @@ export interface NewMemberInput {
 /** 批量创建（条目并行，逐条结果） */
 export interface NewBatchInput {
   members: NewMemberInput[];
+}
+
+/**
+ * 注册 root owner（REPL 主 agent）。不调用 runtime.spawn。
+ * 重复 attach 幂等；stale 记录恢复为 idle。
+ */
+export interface AttachOwnerInput {
+  id: string;
+  /** 缺省与 id 相同 */
+  sessionId?: string;
+  visibility?: MemberVisibility;
 }
 
 /** 发送参数；`to` 可传成员 id 或 session id */
@@ -184,6 +195,30 @@ export interface AgentSnapshotOptions {
   mode?: number;
 }
 
+/** 一轮的结局；缺省 completed */
+export type TurnOutcome = 'completed' | 'failed' | 'cancelled';
+
+/** 成员事件（开放字符串；字段 snake_case） */
+export interface AgentEvent {
+  type: string;
+  agent_id: string;
+  session_id?: string;
+  parent_id?: string;
+  state?: MemberState;
+  message_id?: string;
+  /** 消息来源（queued 事件） */
+  from?: string;
+  tool?: string;
+  outcome?: TurnOutcome;
+  reason?: string;
+  request_id?: string;
+  decision?: 'allow' | 'deny';
+  ts: number;
+}
+
+/** 事件监听器；抛错会被隔离，不影响服务行为 */
+export type AgentEventListener = (event: AgentEvent) => void;
+
 /** AgentService 构造参数 */
 export interface AgentServiceOptions {
   /** 一个实例只服务一个 tenant */
@@ -197,6 +232,8 @@ export interface AgentServiceOptions {
   logger?: Logger;
   snapshot?: AgentSnapshotOptions;
   permissionBridge?: PermissionBridge;
+  /** 可选的进程内事件流出口；同时仍可 subscribe */
+  events?: EventStream;
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */
@@ -226,6 +263,8 @@ export interface AgentService {
   // 接口里裸写 `new(...)` 会被解析为构造签名，必须加引号
   'new'(input: NewMemberInput): Promise<MemberStatus>;
   'new'(input: NewBatchInput): Promise<BatchResult<MemberStatus>>;
+  /** 注册 root owner；不 spawn，重复调用幂等 */
+  attachOwner(input: AttachOwnerInput): Promise<MemberStatus>;
   send(input: SendInput): Promise<SendResult>;
   send(input: SendBatchInput): Promise<BatchResult<SendResult>>;
   close(input: CloseInput): Promise<CloseResult>;
@@ -237,6 +276,8 @@ export interface AgentService {
   requestPermission(memberId: string, request: PermissionRequestInput): Promise<PermissionDecision>;
   /** 立即落盘待写快照（close 已自动等待；测试 / 收口用） */
   flushSnapshot(): Promise<void>;
+  /** 订阅成员事件；返回取消函数 */
+  subscribe(listener: AgentEventListener): () => void;
 }
 
 /** 缺省成员 owner / 发送者 */

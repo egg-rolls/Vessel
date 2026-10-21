@@ -46,7 +46,8 @@ const TRANSITIONS: Readonly<Record<MemberState, readonly MemberState[]>> = {
   failed: ['idle', 'closed', 'stale'],
   cancelled: ['idle', 'closed', 'stale'],
   closed: [],
-  stale: ['closed'],
+  // stale → idle 只由 attachOwner 显式复活 root owner；成员仍拒绝 send
+  stale: ['idle', 'closed'],
 };
 
 /** 是否为终态 */
@@ -147,6 +148,27 @@ export class MemberRegistry {
     } else {
       record.currentTool = undefined;
     }
+    return record;
+  }
+
+  /** 更新 root owner 的 session / visibility；新 session 与其它成员冲突时拒绝 */
+  updateIdentity(
+    id: string,
+    updates: { sessionId?: string; visibility?: MemberVisibility },
+  ): MemberRecord {
+    const record = this.byId.get(id);
+    if (!record) throw new AgentError('unknown_member', `unknown_member: ${id}`);
+    if (updates.sessionId !== undefined && updates.sessionId !== record.sessionId) {
+      const owner = this.bySession.get(updates.sessionId);
+      if (owner !== undefined && owner !== id) {
+        throw new AgentError('invalid_input', `duplicate session id: ${updates.sessionId}`);
+      }
+      this.bySession.delete(record.sessionId);
+      record.sessionId = updates.sessionId;
+      this.bySession.set(updates.sessionId, id);
+    }
+    if (updates.visibility !== undefined) record.visibility = updates.visibility;
+    record.lastSeen = this.now();
     return record;
   }
 

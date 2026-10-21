@@ -24,10 +24,13 @@ export {
 export {
   AgentError,
   type AgentErrorCode,
+  type AgentEvent,
+  type AgentEventListener,
   type AgentMessage,
   type AgentService,
   type AgentServiceOptions,
   type AgentSnapshotOptions,
+  type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
   type CloseBatchInput,
@@ -51,4 +54,5 @@ export {
   type SendBatchInput,
   type SendInput,
   type SendResult,
+  type TurnOutcome,
 } from './types.js';
