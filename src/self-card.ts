@@ -16,8 +16,9 @@ export function knownOwnerToolNames(
   options: { askUser?: boolean; headless?: boolean } = {},
 ): string[] {
   const names = ['bash', 'read', 'edit'];
-  // 0.16：agent 可用时只声明 canonical 工具；否则回退 legacy delegate_task。
-  const agentEnabled = config.agent?.enabled ?? options.headless !== true;
+  // 0.16：team 构造时总会注册 agent，因此只声明 canonical 工具；否则回退 delegate_task。
+  const agentEnabled =
+    (config.agent?.enabled ?? options.headless !== true) || config.team?.enabled === true;
   if (agentEnabled) {
     names.push('agent');
   } else if (config.delegate?.enabled !== false) {

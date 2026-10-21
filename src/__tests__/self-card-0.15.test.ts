@@ -54,6 +54,11 @@ describe('owner self card', () => {
     expect(knownOwnerToolNames({ team: { enabled: true, legacyTools: false } })).not.toContain(
       'team_spawn',
     );
+    // team 构造即注册 agent，声明里不能再出现 delegate_task。
+    expect(knownOwnerToolNames({ team: { enabled: true } }, { headless: true })).toContain('agent');
+    expect(knownOwnerToolNames({ team: { enabled: true } }, { headless: true })).not.toContain(
+      'delegate_task',
+    );
   });
 
   it('maps limits, context and headless how_to_ask', () => {

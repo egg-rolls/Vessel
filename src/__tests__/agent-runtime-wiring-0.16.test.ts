@@ -94,6 +94,21 @@ describe('agent runtime wiring', () => {
     }
   });
 
+  it('headless with team.enabled: keeps only agent, never delegate_task', async () => {
+    const bundle = await buildBundle({ team: { enabled: true } }, true);
+    try {
+      const tools = toolNames(bundle);
+      expect(tools).toHaveLength(6);
+      expect(tools).toContain('agent');
+      expect(tools).toContain('team_spawn');
+      expect(tools).not.toContain('delegate_task');
+      expect(pluginNames(bundle)).not.toContain('delegate-task');
+      expect(hookNames(bundle)).toContain('agent-reply-injection');
+    } finally {
+      await bundle.close();
+    }
+  });
+
   it('headless with agent.enabled: swaps delegate_task for agent and enables injection', async () => {
     const bundle = await buildBundle({ agent: { enabled: true } }, true);
     try {
