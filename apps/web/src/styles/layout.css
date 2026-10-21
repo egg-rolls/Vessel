@@ -575,6 +575,9 @@
 }
 
 .conversation-scroll > * {
+  /* 列向 flex 的 item 默认 flex-shrink:1；运行块带 overflow:hidden 时会被压到
+     容器高度以内并裁掉内容，容器因此不产生滚动。所有流内块必须按内容高度排布。 */
+  flex: 0 0 auto;
   width: 100%;
   max-width: 860px;
   margin-inline: auto;
