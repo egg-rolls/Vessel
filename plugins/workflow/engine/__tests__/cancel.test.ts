@@ -45,6 +45,27 @@ function slowBehavior(ms = 1000): (prompt: string, signal?: AbortSignal) => Prom
     });
 }
 
+/**
+ * 等待 N 个 agent 调用真正开始。
+ *
+ * cancel / interrupt 前必须确认步骤已进入 running：固定 sleep 在慢盘或高负载 CI 上
+ * 可能在 start() 的首次 run 落盘之前就到期，此时步骤仍是 pending，收口后按设计变成
+ * skipped，断言会随机失败。
+ */
+async function waitForAgentCalls(
+  host: ReturnType<typeof createFakeHost>,
+  count: number,
+  timeoutMs = 2000,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (host.runs.length < count) {
+    if (Date.now() >= deadline) {
+      throw new Error(`timed out waiting for ${count} agent calls (started: ${host.runs.length})`);
+    }
+    await delay(1);
+  }
+}
+
 async function createEngine(): Promise<{
   engine: ReturnType<typeof createWorkflowEngine>;
   file: string;
@@ -69,7 +90,7 @@ describe('workflow cancel', () => {
     host.setAgent('owner', slowBehavior());
 
     const started = await engine.start(file);
-    await delay(15);
+    await waitForAgentCalls(host, 2);
     await engine.cancel(started.workflowRunId);
     const outcome = await started.done;
 
@@ -122,7 +143,7 @@ describe('workflow cancel', () => {
     });
 
     const started = await engine.start(file);
-    await delay(15);
+    await waitForAgentCalls(host, 2);
     await engine.interruptAll('SIGINT');
     const outcome = await started.done;
     expect(outcome.status).toBe('interrupted');
