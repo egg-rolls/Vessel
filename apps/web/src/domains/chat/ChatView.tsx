@@ -6,6 +6,7 @@ import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { usePaletteEntities } from '../../components/PaletteEntities';
+import { PendingRequestsPanel } from '../../components/PendingRequests';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
@@ -17,6 +18,7 @@ import type {
   SessionDetail,
   SessionInfo,
 } from '../../gateway/types';
+import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
 import { isGroupPersisted } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
@@ -37,6 +39,7 @@ import { useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
+import { unmatchedPendingForSession } from './pending-permissions';
 import { QueuedCard, type QueuedSubmission, RunCard } from './RunCard';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
@@ -432,6 +435,26 @@ export function ChatView({
   const hiddenLiveGroups = Math.max(0, visibleGroups.length - MAX_LIVE_GROUPS);
   const renderedGroups =
     hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
+
+  // 兜底权限操作面（0.17）：RunCard 只覆盖时间线里实际渲染的 run。
+  // 子 agent 的 run、重放缺失 run.started、或超过渲染上限时，卡片仍挂不到任何 RunCard；
+  // 这些请求在 Composer 上方集中展示，避免“顶部条说有请求，点进来却无处可处理”。
+  const renderedRunIds = useMemo(
+    () => new Set(activeAgent ? [] : renderedGroups.map((group) => group.runId)),
+    [activeAgent, renderedGroups],
+  );
+  const sessionRunIds = useMemo(
+    () => new Set(visibleGroups.map((group) => group.runId)),
+    [visibleGroups],
+  );
+  const unmatchedPermissions = useMemo(
+    () => unmatchedPendingForSession(permissions, selectedId, renderedRunIds, sessionRunIds),
+    [permissions, selectedId, renderedRunIds, sessionRunIds],
+  );
+  const unmatchedAsks = useMemo(
+    () => unmatchedPendingForSession(asks, selectedId, renderedRunIds, sessionRunIds),
+    [asks, selectedId, renderedRunIds, sessionRunIds],
+  );
 
   // 终态/session.saved 后做一次精确刷新（150ms 合并）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 只在快照版本变化时扫描新增事件
@@ -1046,6 +1069,20 @@ export function ChatView({
             </button>
           )}
         </div>
+
+        {selectedId && (unmatchedPermissions.length > 0 || unmatchedAsks.length > 0) && (
+          <PendingRequestsPanel
+            className="pending-inline"
+            title={t('pending.inline.title')}
+            description={t('pending.inline.desc')}
+            permissions={unmatchedPermissions}
+            asks={unmatchedAsks}
+            responding={responding}
+            now={now}
+            onDecidePermission={handleDecidePermission}
+            onRespondAsk={handleRespondAsk}
+          />
+        )}
 
         <Composer
           value={input}

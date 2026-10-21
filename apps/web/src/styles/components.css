@@ -939,8 +939,87 @@
   color: var(--muted);
 }
 
-.pending-permissions-bar .link-btn {
+.pending-permissions-bar .link-btn:first-of-type {
   margin-left: auto;
+}
+
+/* 0.17：可操作的待处理面板（非模态，不恢复全局遮罩）。 */
+.pending-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+
+.pending-requests-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.pending-requests-title {
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.pending-requests-count {
+  font-size: 10.5px;
+}
+
+.pending-requests-desc {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.55;
+}
+
+.pending-requests-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 2px;
+}
+
+.pending-entry {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pending-entry-crumb {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+/* AppShell：其他会话 / 无 sessionId 的请求，展开后可操作。 */
+.pending-panel {
+  flex: none;
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  max-height: 46vh;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+/* ChatView：Composer 上方，容纳没有 RunCard 的请求。 */
+.pending-inline {
+  flex: none;
+  width: 100%;
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 4px clamp(16px, 4vw, 48px) 0;
+  max-height: 42vh;
+}
+
+.pending-inline .pending-requests-list {
+  max-height: 34vh;
 }
 
 .permission-meta {

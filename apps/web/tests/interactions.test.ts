@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  askFromEvent,
   enqueueInteraction,
   enqueuePermission,
   expireInteractions,
   INTERACTION_TTL_MS,
+  interactionAgentId,
   interactionExpiresAt,
   isExpiredError,
   isInteractionExpired,
@@ -144,6 +146,62 @@ describe('permissionFromEvent (0.13)', () => {
     expect(first).toHaveLength(1);
     // 重放/刷新：同一 requestId 不重复入队；不做过期过滤。
     expect(enqueuePermission(first, { ...item, requestedAt: 99_999 })).toBe(first);
+  });
+
+  test('maps subagent association fields without changing old streams', () => {
+    expect(
+      permissionFromEvent(event({ requestId: 'perm-1', delegate_id: 'delegate-1' }))?.agentId,
+    ).toBe('delegate-1');
+    expect(permissionFromEvent(event({ requestId: 'perm-2', agent_id: 'agent-1' }))?.agentId).toBe(
+      'agent-1',
+    );
+    expect(
+      permissionFromEvent(event({ requestId: 'perm-3', parent_delegate_id: 'parent-1' }))?.agentId,
+    ).toBe('parent-1');
+    // delegate 插件用 camelCase；内层 agent 优先于 parent。
+    expect(interactionAgentId({ delegateId: 'inner-1', parent_delegate_id: 'outer-1' })).toBe(
+      'inner-1',
+    );
+    expect(permissionFromEvent(event({ requestId: 'perm-4' }))).not.toHaveProperty('agentId');
+  });
+});
+
+describe('askFromEvent (0.17)', () => {
+  const event = (data: Record<string, unknown>, ts = 1_000): RunEvent => ({
+    type: 'ask.user.requested',
+    run_id: 'run-1',
+    ts,
+    data,
+  });
+
+  test('maps questions, session, expiry and agentId', () => {
+    const item = askFromEvent(
+      event({
+        requestId: 'ask-1',
+        questions: [{ header: 'Pick', question: 'Which?' }],
+        delegate_id: 'delegate-9',
+      }),
+      'session-1',
+    );
+    expect(item).toMatchObject({
+      requestId: 'ask-1',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      agentId: 'delegate-9',
+      expiresAt: 1_000 + INTERACTION_TTL_MS,
+    });
+  });
+
+  test('keeps old streams working and rejects malformed payloads', () => {
+    const legacy = askFromEvent(
+      event({ request_id: 'ask-legacy', questions: [{ question: 'Q' }] }),
+      undefined,
+    );
+    expect(legacy?.requestId).toBe('ask-legacy');
+    expect(legacy).not.toHaveProperty('sessionId');
+    expect(legacy).not.toHaveProperty('agentId');
+    expect(askFromEvent(event({ questions: [{ question: 'Q' }] }))).toBeNull();
+    expect(askFromEvent(event({ requestId: 'ask-3', questions: [] }))).toBeNull();
   });
 });
 

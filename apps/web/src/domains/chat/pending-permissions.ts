@@ -35,3 +35,24 @@ export function pendingPermissionTarget(
   if (request.sessionId) return { domain: 'chat', sessionId: request.sessionId };
   return { domain: 'runs', tab: 'live', runId: request.runId };
 }
+
+/**
+ * 当前会话里没能挂到 RunCard 的请求（0.17）。
+ *
+ * - 同一 session 的请求：只有对应 run 没有渲染成卡片时才算未匹配；
+ * - 旧流（请求缺 sessionId）：run 已由 `run.started` 反查到当前会话时同样纳入；
+ * - 其他 session / 无归属的信息交给 AppShell 的待处理面板。
+ */
+export function unmatchedPendingForSession<T extends SessionScoped>(
+  items: readonly T[],
+  sessionId: string | null,
+  renderedRunIds: ReadonlySet<string>,
+  sessionRunIds?: ReadonlySet<string>,
+): T[] {
+  if (!sessionId) return [];
+  return items.filter((item) => {
+    if (renderedRunIds.has(item.runId)) return false;
+    if (item.sessionId === sessionId) return true;
+    return item.sessionId === undefined && (sessionRunIds?.has(item.runId) ?? false);
+  });
+}

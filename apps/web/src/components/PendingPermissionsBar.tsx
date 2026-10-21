@@ -15,11 +15,16 @@ export function PendingPermissionsBar({
   asks = [],
   onOpen,
   onOpenAsk,
+  panelOpen = false,
+  onTogglePanel,
 }: {
   requests: readonly PermissionRequest[];
   asks?: readonly AskUserRequest[];
   onOpen: (request: PermissionRequest) => void;
   onOpenAsk?: (request: AskUserRequest) => void;
+  /** 非模态待处理面板是否展开（0.17）。 */
+  panelOpen?: boolean;
+  onTogglePanel?: () => void;
 }) {
   const first = requests[0];
   const firstAsk = asks[0];
@@ -43,6 +48,17 @@ export function PendingPermissionsBar({
       {firstAsk && (
         <button type="button" className="link-btn" onClick={() => openAsk(firstAsk)}>
           {t('ask.goTo')}
+        </button>
+      )}
+      {onTogglePanel && (
+        <button
+          type="button"
+          className="link-btn"
+          aria-expanded={panelOpen}
+          aria-controls="pending-requests-panel"
+          onClick={onTogglePanel}
+        >
+          {panelOpen ? t('pending.panel.collapse') : t('pending.panel.toggle')}
         </button>
       )}
     </div>

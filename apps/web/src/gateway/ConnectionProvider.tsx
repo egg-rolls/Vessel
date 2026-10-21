@@ -15,11 +15,11 @@ import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import type { StoredEvent } from '../state/events';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import {
+  askFromEvent,
   enqueueInteraction,
   enqueuePermission,
   expireInteractions,
   interactionExpiredMessage,
-  interactionExpiresAt,
   interactionRunEndedMessage,
   isExpiredError,
   isNotFoundError,
@@ -251,33 +251,12 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     };
 
     const addAsk = (event: RunEvent) => {
-      const d = event.data as { requestId?: unknown; questions?: unknown };
-      if (typeof d.requestId !== 'string' || !Array.isArray(d.questions)) return;
-      const requestId = d.requestId;
-      const questions = d.questions.filter(
-        (item): item is AskUserRequest['questions'][number] =>
-          Boolean(item) &&
-          typeof item === 'object' &&
-          typeof (item as { question?: unknown }).question === 'string',
-      );
-      if (questions.length === 0) return;
-      const expiresAt = interactionExpiresAt(event.ts);
       // ask 事件本身不带 session_id：从同一批事件里的 run.started 反查归属会话，
       // 供跨 session 待处理条跳转；查不到时退化为运行详情。
       const sessionId = sessionIdForRun(eventStore.getSnapshot().entries, event.run_id);
-      setAsks((prev) =>
-        enqueueInteraction(
-          prev,
-          {
-            requestId,
-            questions,
-            runId: event.run_id,
-            expiresAt,
-            ...(sessionId ? { sessionId } : {}),
-          },
-          Date.now(),
-        ),
-      );
+      const request = askFromEvent(event, sessionId);
+      if (!request) return;
+      setAsks((prev) => enqueueInteraction(prev, request, Date.now()));
     };
 
     /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */

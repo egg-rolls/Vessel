@@ -138,6 +138,8 @@ export interface AskUserRequest {
   expiresAt: number;
   /** 0.15 additive：由 run.started 反查的归属会话；旧流缺失时不参与跨 session 归类。 */
   sessionId?: string;
+  /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
+  agentId?: string;
 }
 
 /** 权限应答范围（DECISION-024 §2.1）。 */
@@ -157,6 +159,8 @@ export interface PermissionRequest {
   sessionId?: string;
   toolCallId?: string;
   source?: string;
+  /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
+  agentId?: string;
   /** 事件时间（同一 run 多请求排序）。 */
   requestedAt: number;
 }
