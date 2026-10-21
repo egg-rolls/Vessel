@@ -405,7 +405,7 @@ interface TerminationPolicy {
 }
 ```
 
-0.14.3（ADR-084）：使用量上限的判定拆成纯函数 `evaluateUsageLimits(stats, limits): LimitBlock | null`，返回首个命中的 `LimitBlock`（`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`）；`MemoryLimitChecker.checkLimits` 只是 `evaluateUsageLimits(...) === null`。终止策略（`maxIterations` / `maxRuntimeSeconds`）不属于 `LimitBlock`，仍由 `checkTermination` 判定。事件与 envelope 契约见 §35。
+0.14.3（ADR-084）：限额判定拆成两个纯函数——`evaluateUsageLimits(stats, limits)` 与 `evaluateTermination(stats, policy)`，都返回 `LimitBlock | null`（`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`）；`MemoryLimitChecker.checkLimits` / `checkTermination` 分别复用它们。终止策略命中同样产生 `LimitBlock`（key `max_iterations` / `max_runtime`）。事件与 envelope 契约见 §35。
 
 ### 5.7 `Guardrail`（`types/guardrail.ts`）
 
@@ -2066,7 +2066,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 35.1 `LimitBlock` 与 `limit.blocked`
 
-`LimitBlock` 是使用量限额命中的冻结形状，事件与 error envelope 共用：
+`LimitBlock` 是限额命中的冻结形状（使用量限额与终止策略共用），事件与 error envelope 共用：
 
 ```ts
 type LimitBlockKey =
@@ -2074,7 +2074,9 @@ type LimitBlockKey =
   | 'tool_calls_limit'
   | 'input_tokens_limit'
   | 'output_tokens_limit'
-  | 'total_cost_limit';
+  | 'total_cost_limit'
+  | 'max_iterations'
+  | 'max_runtime';
 
 interface LimitBlock {
   scope: 'run';
@@ -2087,10 +2089,13 @@ interface LimitBlock {
 }
 ```
 
-- 判定由 core 纯函数 `evaluateUsageLimits(stats, limits)` 完成，顺序固定 request → tool calls → input tokens → output tokens → total cost，返回首个命中项；`MemoryLimitChecker.checkLimits` 复用该函数。
-- 命中时 `AgentRuntime` **发布一次** `limit.blocked`（开放字符串事件名），data 为 `{ error_code: 'limit_blocked', ...LimitBlock, run_id, session_id }`，随后抛 `LimitExceededError`（`code: 'limit_blocked'`，`details` 为同一 `LimitBlock`）。错误文本保留前缀 `Usage limits exceeded: <key> (current N >= max M, <source>)`。
+- 判定由两个 core 纯函数完成：`evaluateUsageLimits(stats, limits)`（顺序固定 request → tool calls → input tokens → output tokens → total cost）与 `evaluateTermination(stats, policy)`（先 `max_iterations`，再 `max_runtime`），各自返回首个命中的 `LimitBlock`；`MemoryLimitChecker.checkLimits` / `checkTermination` 复用这两个函数。
+- 命中时 `AgentRuntime` **发布一次** `limit.blocked`（开放字符串事件名），data 为 `{ error_code: 'limit_blocked', ...LimitBlock, run_id, session_id }`，随后抛 `LimitExceededError`（`code: 'limit_blocked'`，`details` 为同一 `LimitBlock`）。两者走同一路径，先终止策略、后使用量限额。
+- 错误文本保留既有前缀，并携带 `current` / `max` / `source`：
+  - 使用量限额：`Usage limits exceeded: <key> (current N >= max M, <source>)`。
+  - 终止策略：`Termination policy triggered: <key> (current N >= max M, <source>)`；`max_iterations` 的 `current` 是 `requestCount`，`max_runtime` 的 `current` 是已运行秒数（保留到毫秒精度，可能为小数）。
 - `run.failed` 保留原 `error` 文本，附加 `error_code: 'limit_blocked'` / `category: 'internal'` / `phase: 'run'` / `retryable: false` / `details: <LimitBlock>`；envelope 规则见 §33（只增不改）。
-- 终止策略（`maxIterations` / `maxRuntimeSeconds`）仍抛普通 `Error('Termination policy triggered: ...')`，不发布 `limit.blocked`，也不带结构化 `details`。
+- 事件与 envelope 都使用同一 `LimitBlock`，不区分使用量 / 终止来源；调用方按 `key` / `source` 区分。
 
 ### 35.2 默认限额与终止值
 
@@ -2104,7 +2109,7 @@ interface LimitBlock {
 | `termination.maxIterations` | 50 | 迭代上限（0.14.3 由 20 提高） |
 | `termination.maxRuntimeSeconds` | 300 | 单 run 墙钟超时 |
 
-- `termination.maxIterations` 与 `limits.requestLimit` 都按 `stats.requestCount` 计数，但语义与判定顺序不同：每轮先判终止策略（普通错误），再判使用量限额（`limit.blocked`）。默认 `maxIterations` 50 < `requestLimit` 100，因此默认配置下先触发终止策略；只有把 `maxIterations` 调高或把 `requestLimit` 调低时才会命中 `request_limit`。
+- `termination.maxIterations` 与 `limits.requestLimit` 都按 `stats.requestCount` 计数，但语义与判定顺序不同：每轮先判终止策略（`max_iterations` / `max_runtime`，同样发布 `limit.blocked`），再判使用量限额。默认 `maxIterations` 50 < `requestLimit` 100，因此默认配置下先命中 `max_iterations`；只有把 `maxIterations` 调高或把 `requestLimit` 调低时才会命中 `request_limit`。
 - 无新增配置键；tenant overlay 仍可覆盖 `limits` / `termination`。
 
 ### 35.3 `ProviderHttpError`、`Retry-After` 与 402
@@ -2120,7 +2125,7 @@ interface LimitBlock {
 
 ### 35.4 已知限制（0.14.3）
 
-- 终止策略超限无结构化信号；如需区分，调用方只能匹配错误文本。
+- `max_runtime` 的 `current` 是已运行秒数（毫秒精度小数），不是整数；依赖整数展示的调用方需自行取整。
 - `run.failed` 不透出建议退避时间，`retryAfterMs` 只在 provider 适配层可见。
 - 第三方 provider 若既无 `status` 字段也不匹配 `... API error: <status>` 文本，仍按原有文本分类。
 - `Retry-After` 只影响 429；402 直接失败，不尝试等待后重试。

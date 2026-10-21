@@ -5,11 +5,11 @@
 
 ## [0.14.3] - 2026-10-21
 
-> 0.14.3（基于 `release/0.14.3`，未发布）：限额命中的可见性与结构化、默认预算调整、provider HTTP 错误与重试分类。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
+> 0.14.3（基于 `release/0.14.3`，未发布）：限额命中（含终止策略）的可见性与结构化、默认预算调整、provider HTTP 错误与重试分类。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
 
 ### Fixed
 
-- **限额命中不可见**：使用量上限命中时，runtime 发布一次 `limit.blocked` 事件（data 含 `error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`。`run.failed` 保留原 `error` 文本，同时附 `error_code: 'limit_blocked'` / `category: 'internal'` / `phase: 'run'` / `retryable: false` / `details: <LimitBlock>`。此前只抛 `Error('Usage limits exceeded')`，事件流与终端看不出命中了哪一项、当前值与上限。
+- **限额命中不可见**：限额命中（使用量上限或终止策略 `maxIterations` / `maxRuntimeSeconds`）时，runtime 发布一次 `limit.blocked` 事件（data 含 `error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`。`run.failed` 保留原 `error` 文本（`Usage limits exceeded: ...` 或 `Termination policy triggered: ...`），同时附 `error_code: 'limit_blocked'` / `category: 'internal'` / `phase: 'run'` / `retryable: false` / `details: <LimitBlock>`。此前只抛 `Error('Usage limits exceeded')` / `Error('Termination policy triggered: ...')`，事件流与终端看不出命中了哪一项、当前值与上限。
 - **默认输入 token 上限过低**：`limits.inputTokensLimit` 默认 100,000 → 1,000,000，与 `context.maxTokens` 的 1M 预算对齐；此前长上下文任务可能在压缩生效前被限额终止。
 - **默认最大迭代次数过低**：`termination.maxIterations` 默认 20 → 50；`maxRuntimeSeconds` 仍 300。
 - **Provider 非 2xx 丢失结构化信息**：OpenAI / Anthropic 的流式与非流式 4 处非 2xx 改抛 `ProviderHttpError`（`status` / `body` / `retryAfterMs`），message 仍为 `OpenAI API error: <status> - <body>` / `Anthropic API error: <status> - <body>`；错误 envelope 可从错误对象的 `status` 读取 `http_status`。
@@ -18,13 +18,13 @@
 
 ### Changed
 
-- **`LimitBlock` / `LimitExceededError` / `evaluateUsageLimits` 导出**（additive）：core 公开类型与纯函数，`MemoryLimitChecker.checkLimits` 复用同一判定；`limit.blocked` 仍是开放字符串事件名。
+- **`LimitBlock` / `LimitExceededError` / `evaluateUsageLimits` / `evaluateTermination` 导出**（additive）：core 公开类型与纯函数，`MemoryLimitChecker.checkLimits` / `checkTermination` 复用同一判定；`limit.blocked` 仍是开放字符串事件名。`LimitBlock.key` 共七个（五个使用量 key + `max_iterations` / `max_runtime`），两类限额共用事件与 envelope 形状。
 - **Provider 重试分类**：`withRetry` 只重试 429、5xx 与网络错误；其它 4xx（含 402）与 `AbortError` 不重试；流式已输出分片后不重试（不变）。
-- 无新增 canonical RPC 方法（仍 40），无新增配置键；终止策略（`maxIterations` / `maxRuntimeSeconds`）仍是独立错误，不产生 `LimitBlock`。
+- 无新增 canonical RPC 方法（仍 40），无新增配置键；终止策略与使用量限额共用 `limit.blocked` 与 `run.failed` envelope，判定顺序仍是先终止、后使用量。
 
 ### Known limitations
 
-- 终止策略超限（`maxIterations` / `maxRuntimeSeconds`）仍抛普通 `Error('Termination policy triggered: ...')`，不发布 `limit.blocked`、不带结构化 `details`。
+- `max_runtime` 的 `current` 是已运行秒数（毫秒精度小数），未做整数归一。
 - `retry-after` 只影响 429；402 与其它 4xx 直接失败。
 - `ProviderHttpError.retryAfterMs` 只在 provider 适配层可用；`run.failed` envelope 只透出 `http_status`，不透出建议退避时间。
 - 0.14.3 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
