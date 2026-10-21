@@ -36,6 +36,7 @@ import {
   DEFAULT_OWNER,
   type ListFilter,
   MAX_MESSAGE_BYTES,
+  type MemberPermissionState,
   type MemberState,
   type MemberStatus,
   type MemberTurnResult,
@@ -510,6 +511,56 @@ export class AgentServiceImpl implements AgentService {
     this.scheduleSnapshot();
     this.pump(parent.id);
     return { queued: true, message_id: message.id, to: parent.id };
+  }
+
+  /**
+   * 取走成员待处理消息（REPL owner 轮询）；FIFO、取走即删除，
+   * 不触发 pump / runTurn。limit 缺省取空队列。
+   */
+  async takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]> {
+    await this.ready;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      throw new AgentError('invalid_input', 'limit must be a positive integer');
+    }
+    const member = this.requireMember(memberId);
+    if (member.state === 'closed') {
+      throw new AgentError('member_closed', `member_closed: ${memberId}`);
+    }
+    if (member.state === 'stale') {
+      throw new AgentError('member_stale', `member_stale: ${memberId}`);
+    }
+    const queue = this.queueFor(member.id);
+    if (queue.closing) {
+      throw new AgentError('member_closed', `member_closed: ${memberId}`);
+    }
+    const count =
+      limit === undefined ? queue.pending.length : Math.min(limit, queue.pending.length);
+    const taken = queue.pending.splice(0, count);
+    if (taken.length > 0) this.registry.touch(member.id);
+    return taken;
+  }
+
+  /** bridge 执行内核上报的等待/恢复；closed / stale 与非法转移一律忽略，不抛错 */
+  notePermissionState(memberId: string, state: MemberPermissionState): void {
+    const member = this.registry.get(memberId);
+    if (!member || member.state === 'closed' || member.state === 'stale') return;
+    try {
+      if (state === 'waiting') {
+        if (member.state !== 'running') return;
+        this.registry.setState(member.id, 'waiting_permission');
+      } else {
+        if (member.state !== 'waiting_permission') return;
+        this.registry.setState(member.id, 'running');
+      }
+    } catch (error) {
+      this.logger.warn('agent.permission.state_failed', {
+        member_id: memberId,
+        state,
+        error: errorText(error),
+      });
+      return;
+    }
+    this.scheduleSnapshot();
   }
 
   async requestPermission(
