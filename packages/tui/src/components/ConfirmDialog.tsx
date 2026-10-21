@@ -23,6 +23,8 @@ interface ConfirmDialogProps {
   details?: string[];
   /** 初始选中项，默认 'n' */
   defaultChoice?: ConfirmChoice;
+  /** 行预算（overlay 打开时由 computeLiveLayout 给出）；过小时进入紧凑布局 */
+  maxRows?: number;
   onConfirm: (answer: ConfirmChoice) => void;
 }
 
@@ -52,6 +54,7 @@ export function ConfirmDialog({
   question,
   details = [],
   defaultChoice = 'n',
+  maxRows,
   onConfirm,
 }: ConfirmDialogProps) {
   const { stdout } = useStdout();
@@ -59,6 +62,12 @@ export function ConfirmDialog({
   const windowSize = useWindowSize();
   const width = computeDialogWidth(windowSize.columns > 0 ? windowSize.columns : stdout.columns);
   const [selected, setSelected] = useState<ConfirmChoice>(defaultChoice);
+
+  // 行预算：border 2 + marginY 2 + title 2 + question 2 + options 1 + hint 2 = 11
+  const compact = maxRows !== undefined && maxRows < 9;
+  const showHint = maxRows === undefined || maxRows >= 11;
+  const maxDetails = maxRows === undefined ? details.length : Math.max(0, maxRows - 11);
+  const visibleDetails = details.slice(0, maxDetails);
 
   useInput((inputChar, key) => {
     if (key.leftArrow) {
@@ -106,25 +115,25 @@ export function ConfirmDialog({
       borderStyle="single"
       borderColor={theme.line}
       paddingX={1}
-      marginY={1}
+      marginY={compact ? 0 : 1}
       width={width}
       overflow="hidden"
     >
-      <Box marginBottom={1}>
+      <Box marginBottom={compact ? 0 : 1}>
         <Text bold color={theme.warn}>
           {t('confirm.title')}
         </Text>
       </Box>
 
-      <Box marginBottom={1}>
-        <Text wrap="wrap">{question}</Text>
+      <Box marginBottom={compact ? 0 : 1}>
+        <Text wrap={compact ? 'truncate-end' : 'wrap'}>{question}</Text>
       </Box>
 
-      {details.length > 0 && (
+      {!compact && visibleDetails.length > 0 && (
         <Box flexDirection="column" marginBottom={1}>
-          {details.map((line, index) => (
+          {visibleDetails.map((line, index) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: details are a short immutable list
-            <Text key={index} color={theme.muted} wrap="wrap">
+            <Text key={index} color={theme.muted} wrap="truncate-end">
               {'  '}
               {line}
             </Text>
@@ -156,9 +165,11 @@ export function ConfirmDialog({
         </Text>
       </Box>
 
-      <Box marginTop={1}>
-        <Text color={theme.faint}>{t('confirm.hint')}</Text>
-      </Box>
+      {showHint && !compact ? (
+        <Box marginTop={1}>
+          <Text color={theme.faint}>{t('confirm.hint')}</Text>
+        </Box>
+      ) : null}
     </Box>
   );
 }

@@ -104,9 +104,9 @@ export {
 } from './components/StatusBar.js';
 export { StreamOutput } from './components/StreamOutput.js';
 export {
-  reduceSubagentState,
+  buildSubagentLines,
+  MAX_SUBAGENT_LINES,
   SubagentActivity,
-  type SubagentState,
 } from './components/SubagentActivity.js';
 export {
   pagerRows,
@@ -116,22 +116,30 @@ export {
 } from './components/TextViewer.js';
 export {
   DEFAULT_TOOL_DISPLAY,
-  type DisplayOptions,
+  makeToolCallView,
   type ToolDisplayDefinition,
   ToolDisplayRegistry,
-  type ToolTrailLine,
   toolDisplayRegistry,
 } from './components/ToolDisplay.js';
 export {
   buildTrail,
-  groupSegments,
-  type SegmentGroup,
-  type ToolSegment,
   ToolTrail,
   type TrailLine,
   type TrailTone,
   type TrailView,
 } from './components/ToolTrail.js';
+export {
+  buildToolCard,
+  formatDuration,
+  formatTokens,
+  type ItemTone,
+  type ToolCardLine,
+  type ToolCardOptions,
+  type ToolCardView,
+  toneColor,
+  UiItemView,
+  type UiItemViewProps,
+} from './components/UiItemView.js';
 export {
   reduceUpdateState,
   UpdateBanner,
@@ -145,6 +153,16 @@ export {
   formatClassifiedError,
 } from './error-classifier.js';
 export { formatPermissionQuestion, type ToolOrigin } from './renderer/tool-confirm.js';
+export {
+  buildAgentRegistry,
+  buildAgentTree,
+  countActiveAgents,
+  matchAgents,
+  reduceAgentRegistry,
+  sortAgentNodes,
+  toAgentSummary,
+  useAgentRegistry,
+} from './repl/agent-registry.js';
 // Ink 版本（React 组件式 UI）
 export {
   CLEAR_ON_START_SEQUENCE,
@@ -158,9 +176,26 @@ export {
   defaultBottomBarVisible,
   type LiveLayout,
   type LiveMode,
+  OVERLAY_LIVE_ROWS,
+  type OverlayKind,
   queuePreviewRows,
   showsQuickHint,
 } from './repl/layout.js';
+export {
+  createUiProjection,
+  fullTextOfItem,
+  type PermissionDecision,
+  projectMessagesToUiItems,
+  projectUiItems,
+  type RunUsage,
+  readErrorEnvelope,
+  reduceUiProjection,
+  resetUiProjection,
+  type ToolCallStatus,
+  type ToolCallView,
+  type UiItem,
+  type UiProjectionState,
+} from './repl/project/ui-item.js';
 export {
   executeResume,
   executeTurn,

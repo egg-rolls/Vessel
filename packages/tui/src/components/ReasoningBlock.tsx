@@ -5,7 +5,7 @@
  * `llm.stream.chunk` 的 `reasoning_delta` 只在实时区以弱化样式显示：
  * - faint + italic，弱于正文；
  * - 纯文本渲染（不解析 Markdown），避免思考内容改变正文排版；
- * - 归档路径不包含 reasoning（见 StreamOutput.getTranscriptText）。
+ * - 0.18 起 reasoning 作为独立 `UiItem` 折叠成 1 行，完整内容经 Ctrl+O 取回。
  */
 
 import { Box, Text } from 'ink';

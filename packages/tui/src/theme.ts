@@ -36,6 +36,10 @@ export interface Theme {
   selectedBg: string | undefined;
   /** 彩色选中底上的前景（亮底用深色墨，保证对比度） */
   selectedInk: string | undefined;
+  /** 用户输入块背景（比 brand 更暗的暗金；NO_COLOR 下为 undefined） */
+  userBg: string | undefined;
+  /** 用户输入块前景 */
+  userInk: string | undefined;
   /** 状态规则 / 分节线 */
   rule: string | undefined;
   /** badge、选中强调 */
@@ -61,6 +65,8 @@ const TRUECOLOR_THEME: Theme = {
   line: '#4a453d',
   selectedBg: '#3a352d',
   selectedInk: '#1c1a17',
+  userBg: '#2f2a22',
+  userInk: '#e3d8c6',
   rule: '#4a453d',
   badge: '#c2a273',
   panel: '#4a453d',
@@ -83,6 +89,8 @@ const ANSI16_THEME: Theme = {
   line: 'gray',
   selectedBg: 'black',
   selectedInk: 'black',
+  userBg: 'black',
+  userInk: 'white',
   rule: 'gray',
   badge: 'yellowBright',
   panel: 'gray',
@@ -105,6 +113,8 @@ const NO_COLOR_THEME: Theme = {
   line: undefined,
   selectedBg: undefined,
   selectedInk: undefined,
+  userBg: undefined,
+  userInk: undefined,
   rule: undefined,
   badge: undefined,
   panel: undefined,

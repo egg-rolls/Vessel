@@ -1,73 +1,59 @@
 import { describe, expect, it } from 'bun:test';
-import { reduceSubagentState, type SubagentState } from '../src/components/SubagentActivity.js';
-import type { TuiEvent } from '../src/types/events.js';
+import { buildSubagentLines, MAX_SUBAGENT_LINES } from '../src/components/SubagentActivity.js';
+import type { AgentNode } from '../src/repl/agent-registry.js';
 
-const initial: SubagentState = { status: 'idle', active: 0 };
-
-function event(type: string, data: unknown, run_id = 'run-1'): TuiEvent {
-  return { type, run_id, data, ts: 1 } as unknown as TuiEvent;
+function node(overrides: Partial<AgentNode> & { id: string }): AgentNode {
+  return {
+    role: 'agent',
+    parentRunId: 'r1',
+    depth: 0,
+    state: 'running',
+    startedAt: 1,
+    ...overrides,
+  };
 }
 
-describe('reduceSubagentState', () => {
-  it('delegate.started -> running 并记录 task', () => {
-    const state = reduceSubagentState(
-      initial,
-      event('subagent.delegate.started', { depth: 1, task: '查资料', hasContext: false }),
-    );
-    expect(state.status).toBe('running');
-    expect(state.active).toBe(1);
-    expect(state.task).toBe('查资料');
+describe('buildSubagentLines（agent-registry 派生）', () => {
+  it('只显示 running / waiting_permission', () => {
+    const lines = buildSubagentLines([
+      node({ id: 'a', state: 'running' }),
+      node({ id: 'b', state: 'completed' }),
+      node({ id: 'c', state: 'failed' }),
+      node({ id: 'd', state: 'waiting_permission' }),
+    ]);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain('agent d · waiting_permission');
+    expect(lines[1]).toContain('agent a · running');
   });
 
-  it('子 agent 工具开始 -> 更新 activity', () => {
-    let state = reduceSubagentState(
-      initial,
-      event('subagent.delegate.started', { depth: 1, task: 't', hasContext: false }),
-    );
-    state = reduceSubagentState(
-      state,
-      event('subagent.tool.call.started', {
-        run_id: 'run-1',
-        tool_call_id: 'c1',
-        tool_name: 'bash',
-        arguments: {},
-      }),
-    );
-    expect(state.activity).toBe('bash');
+  it('头行包含 agent <id> · state，并带当前工具与任务', () => {
+    const [line] = buildSubagentLines([
+      node({ id: 'a', state: 'running', currentTool: 'bash', task: '查资料' }),
+    ]);
+    expect(line).toContain('agent a · running');
+    expect(line).toContain('· bash');
+    expect(line).toContain('· 查资料');
   });
 
-  it('子 run 完成 -> completed；父 run 结束 -> idle', () => {
-    let state = reduceSubagentState(
-      initial,
-      event('subagent.delegate.started', { depth: 1, task: 't', hasContext: false }),
-    );
-    state = reduceSubagentState(state, event('subagent.run.completed', {}));
-    expect(state.status).toBe('completed');
-    expect(state.active).toBe(0);
-
-    state = reduceSubagentState(state, event('run.completed', {}));
-    expect(state.status).toBe('idle');
+  it('按 depth 树形缩进', () => {
+    const lines = buildSubagentLines([
+      node({ id: 'root', depth: 0, startedAt: 2 }),
+      node({ id: 'child', depth: 1, startedAt: 1 }),
+    ]);
+    expect(lines[0]).toContain('↳ agent root');
+    expect(lines[1]?.startsWith('  ↳')).toBe(true);
   });
 
-  it('子 run 失败 -> failed', () => {
-    let state = reduceSubagentState(
-      initial,
-      event('subagent.delegate.started', { depth: 1, task: 't', hasContext: false }),
+  it('最多显示 MAX_SUBAGENT_LINES 条，新节点在前', () => {
+    const nodes = Array.from({ length: 6 }, (_, index) =>
+      node({ id: `a${index}`, startedAt: index }),
     );
-    state = reduceSubagentState(state, event('subagent.run.failed', {}));
-    expect(state.status).toBe('failed');
+    const lines = buildSubagentLines(nodes);
+    expect(lines).toHaveLength(MAX_SUBAGENT_LINES);
+    expect(lines[0]).toContain('agent a5');
   });
 
-  it('父 run.started 重置活动', () => {
-    let state = reduceSubagentState(
-      initial,
-      event('subagent.delegate.started', { depth: 1, task: 't', hasContext: false }),
-    );
-    state = reduceSubagentState(state, event('run.started', {}));
-    expect(state).toEqual(initial);
-  });
-
-  it('未知事件不改变状态', () => {
-    expect(reduceSubagentState(initial, event('llm.stream.chunk', {}))).toBe(initial);
+  it('无活跃成员时返回空数组', () => {
+    expect(buildSubagentLines([node({ id: 'a', state: 'completed' })])).toEqual([]);
   });
 });

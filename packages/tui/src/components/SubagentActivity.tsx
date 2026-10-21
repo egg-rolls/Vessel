@@ -1,107 +1,57 @@
 /**
- * 子 agent 活动展示（delegate_task）
+ * 子 agent 活动展示（0.18：agent-registry 派生）
+ * @module @vessel-agent/tui
  *
- * delegate-task 插件已经把子 runtime 事件以 `subagent.*` 前缀转发到父事件流。
- * 本组件只折叠其中少量事件成一行活动提示；不展示子 agent 的 token 流，
- * 也不实现任何传输/队列（当前没有队列事件）。
+ * 数据源与下栏 `sub N` 相同：`agent.*` 事件经 `reduceAgentRegistry` 折叠。
+ * live 区只显示仍在运行的成员，行首树形缩进；已结束成员进入 history（agent item）。
  */
 
-import type { EventStream } from '@vessel-agent/core';
 import { Box, Text } from 'ink';
-import { useEffect, useState } from 'react';
+import type { AgentNode } from '../repl/agent-registry.js';
 import { theme } from '../theme.js';
-import { asTuiEvent, type TuiEvent } from '../types/events.js';
+import { lineKey } from '../utils/text-layout.js';
 
-export type SubagentStatus = 'idle' | 'running' | 'completed' | 'failed';
+/** live 区最多显示的成员行数 */
+export const MAX_SUBAGENT_LINES = 3;
 
-export interface SubagentState {
-  status: SubagentStatus;
-  /** 仍在运行的 delegate 数（按 delegate.started / subagent.run.completed 估算） */
-  active: number;
-  task?: string;
-  activity?: string;
+function isActive(node: AgentNode): boolean {
+  return node.state === 'running' || node.state === 'waiting_permission';
 }
-
-const INITIAL: SubagentState = { status: 'idle', active: 0 };
 
 function truncate(text: string, max: number): string {
-  return text.length <= max ? text : `${text.slice(0, max)}…`;
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length <= max ? oneLine : `${oneLine.slice(0, max)}…`;
 }
 
-export function reduceSubagentState(prev: SubagentState, event: TuiEvent): SubagentState {
-  switch (event.type) {
-    case 'run.started':
-      return INITIAL;
-
-    case 'subagent.delegate.started':
-      return {
-        status: 'running',
-        active: prev.active + 1,
-        task: event.data.task,
-        activity: undefined,
-      };
-
-    case 'subagent.tool.call.started':
-      return prev.status === 'running' ? { ...prev, activity: event.data.tool_name } : prev;
-
-    case 'subagent.run.completed': {
-      const active = Math.max(0, prev.active - 1);
-      return {
-        ...prev,
-        active,
-        status: active > 0 ? 'running' : 'completed',
-        activity: undefined,
-      };
-    }
-
-    case 'subagent.run.failed': {
-      const active = Math.max(0, prev.active - 1);
-      return {
-        ...prev,
-        active,
-        status: active > 0 ? 'running' : 'failed',
-        activity: undefined,
-      };
-    }
-
-    case 'run.completed':
-    case 'run.failed':
-      return INITIAL;
-
-    default:
-      return prev;
-  }
+/** 纯函数：活跃成员 -> live 活动行（树形缩进，新节点在前） */
+export function buildSubagentLines(
+  nodes: readonly AgentNode[],
+  max = MAX_SUBAGENT_LINES,
+): string[] {
+  const priority = (node: AgentNode): number => (node.state === 'waiting_permission' ? 1 : 0);
+  const active = nodes
+    .filter(isActive)
+    .sort((a, b) => priority(b) - priority(a) || b.startedAt - a.startedAt)
+    .slice(0, Math.max(1, max));
+  return active.map((node) => {
+    const indent = '  '.repeat(Math.max(0, Math.min(3, node.depth)));
+    const task = node.task ? ` · ${truncate(node.task, 40)}` : '';
+    const tool = node.currentTool ? ` · ${node.currentTool}` : '';
+    return `${indent}↳ agent ${node.id} · ${node.state}${tool}${task}`;
+  });
 }
 
-export function SubagentActivity({ events }: { events: EventStream }) {
-  const [state, setState] = useState<SubagentState>(INITIAL);
-
-  useEffect(() => {
-    const unsubscribe = events.subscribe((rawEvent) => {
-      setState((prev) => reduceSubagentState(prev, asTuiEvent(rawEvent)));
-    });
-    return unsubscribe;
-  }, [events]);
-
-  if (state.status === 'idle') return null;
-
-  if (state.status === 'running') {
-    const task = state.task ? truncate(state.task.replace(/\s+/g, ' '), 40) : 'subagent';
-    return (
-      <Box paddingX={1}>
-        <Text color={theme.brand} wrap="truncate">
-          ↳ {task}
-          {state.activity ? ` · ${state.activity}` : ''}
-        </Text>
-      </Box>
-    );
-  }
+export function SubagentActivity({ nodes }: { nodes: readonly AgentNode[] }) {
+  const lines = buildSubagentLines(nodes);
+  if (lines.length === 0) return null;
 
   return (
-    <Box paddingX={1}>
-      <Text color={state.status === 'completed' ? theme.ok : theme.danger}>
-        {state.status === 'completed' ? '✓ subagent finished' : '✗ subagent failed'}
-      </Text>
+    <Box flexDirection="column" paddingX={1}>
+      {lines.map((line, index) => (
+        <Text key={lineKey(index)} color={theme.info} wrap="truncate-end">
+          {line}
+        </Text>
+      ))}
     </Box>
   );
 }

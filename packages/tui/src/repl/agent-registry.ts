@@ -10,7 +10,8 @@
  * （+ 展示用扩展字段）。
  */
 
-import type { RunEvent } from '@vessel-agent/core';
+import type { EventStream, RunEvent } from '@vessel-agent/core';
+import { useEffect, useState } from 'react';
 
 export type AgentState =
   | 'created'
@@ -504,12 +505,15 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
     }
 
     case 'run.completed': {
-      if (!subagent || delegateId === undefined) return nodes;
-      return updateNode(nodes, delegateId, (node) => ({
-        ...node,
-        state: 'completed',
-        endedAt: event.ts,
-      }));
+      if (subagent && delegateId !== undefined) {
+        return updateNode(nodes, delegateId, (node) => ({
+          ...node,
+          state: 'completed',
+          endedAt: event.ts,
+        }));
+      }
+      // 顶层父 run 完成：仍在运行的成员不会再有终态事件，避免下栏 sub N 卡住。
+      return markParentRunEnded(nodes, event.run_id, 'completed', undefined, event.ts);
     }
 
     case 'run.failed': {
@@ -662,6 +666,27 @@ export function buildAgentTree(nodes: AgentNode[]): AgentTreeRow[] {
   for (const root of roots) visit(root, 0);
   for (const node of nodes) visit(node, 0);
   return rows;
+}
+
+/** 正在运行的成员数（running / waiting_permission） */
+export function countActiveAgents(nodes: readonly AgentNode[]): number {
+  return nodes.filter((node) => node.state === 'running' || node.state === 'waiting_permission')
+    .length;
+}
+
+/**
+ * 订阅事件流并增量维护注册表。
+ * `SubagentActivity` 与下栏 `sub N` 必须共用这一份派生，避免两套计数口径。
+ */
+export function useAgentRegistry(events: EventStream): AgentNode[] {
+  const [nodes, setNodes] = useState<AgentNode[]>([]);
+  useEffect(() => {
+    const unsubscribe = events.subscribe((rawEvent) => {
+      setNodes((prev) => reduceAgentRegistry(prev, rawEvent));
+    });
+    return unsubscribe;
+  }, [events]);
+  return nodes;
 }
 
 /** 与 canonical agents.list 对齐的摘要（parent_id/current_tool/session_id 为 snake_case） */

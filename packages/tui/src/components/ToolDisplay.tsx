@@ -1,102 +1,80 @@
 /**
- * 工具显示注册表（ADR-021）
+ * 工具显示注册表（ADR-021，0.18 收敛为 toView）
  * @module @vessel-agent/tui
  *
  * 不改 core：`ToolDefinition` 保持冻结。显示接口在 TUI 层单独定义。
- * 工具可注册自定义显示定义（userFacingName / activityDescription / 渲染函数），
- * 未注册的工具走 DEFAULT_TOOL_DISPLAY 默认渲染器。
+ * 0.18 起每个工具只提供 `toView(input, result, status): ToolCallView`
+ * （PLAN §4.2 冻结形状）与可选的 `renderDetail(view)`；旧的 4 个 render* 已删除。
  */
 
 import { Box, Text } from 'ink';
 import type { ReactNode } from 'react';
 import { t } from '../i18n/index.js';
+import type { ToolCallStatus, ToolCallView } from '../repl/project/ui-item.js';
 import { theme } from '../theme.js';
 import { condenseDiff, type DisplayDiffLine, diffLines } from '../utils/diff.js';
+import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { truncateToWidth } from '../utils/text-layout.js';
 
-/** 渲染选项（默认渲染器读这些字段） */
-export interface DisplayOptions {
-  /** 是否显示工具参数（默认 true） */
-  showArguments?: boolean;
-  /** 参数字符串最大长度（超出截断，默认 120） */
-  maxArgumentLength?: number;
-  /** Ctrl+O 展开态：工具结果保留更多行（默认 false） */
-  expanded?: boolean;
-}
-
-/** 单行 trail 摘要（R0 §4.4） */
-export interface ToolTrailLine {
-  label: string;
-  detail: string;
-}
-
-/** 工具显示定义（ADR-021 §2） */
+/** 工具显示定义（0.18：toView + 可选 renderDetail） */
 export interface ToolDisplayDefinition {
-  /** 用户可见名称；返回空串表示回退到原始 tool_name */
-  userFacingName(input: unknown): string;
-  /** Tool trail 单行摘要；未提供时用参数 JSON 摘要 */
-  getTrailLine?(
-    input: unknown,
-    result: string | undefined,
-    status: 'running' | 'completed' | 'failed',
-  ): ToolTrailLine;
-  /** 用户可见颜色（可选） */
-  userFacingColor?(input: unknown): string | undefined;
-  /** 工具调用消息渲染（React 节点） */
-  renderToolUseMessage(input: unknown, options: DisplayOptions): ReactNode;
+  /** 产出工具卡模型；id/name/args/status 由注册表再次校正 */
+  toView(input: unknown, result: string | undefined, status: ToolCallStatus): ToolCallView;
+  /** 展开态的富渲染（edit diff 等）；缺省由卡片渲染 result 原文 */
+  renderDetail?(view: ToolCallView): ReactNode;
   /** 活动描述（用于 SpinnerWithVerb 的 tool 态，如 "Reading src/foo.ts"） */
   getActivityDescription?(input: unknown): string | null;
-  /** 工具结果渲染（React 节点） */
-  renderToolResultMessage?(result: string, options: DisplayOptions): ReactNode;
-  /** 需要入参才能渲染结果时优先走这里（edit diff） */
-  renderToolResultMessageWithInput?(
-    input: unknown,
-    result: string,
-    options: DisplayOptions,
-  ): ReactNode;
-  /** 工具错误渲染（React 节点） */
-  renderToolUseErrorMessage?(error: string, options: DisplayOptions): ReactNode;
 }
 
-const DEFAULT_MAX_ARGUMENT_LENGTH = 120;
+/** 构造 ToolCallView 的公共壳（id 由投影层填写） */
+export function makeToolCallView(
+  name: string,
+  input: unknown,
+  result: string | undefined,
+  status: ToolCallStatus,
+  extra: Partial<ToolCallView> = {},
+): ToolCallView {
+  return {
+    id: '',
+    name,
+    args: input,
+    status,
+    title: name,
+    ...(result !== undefined ? { result: sanitizeTerminalText(result) } : {}),
+    ...extra,
+  };
+}
 
-/** 把工具参数摘要为单行文本（超长截断） */
+function asRecord(input: unknown): Record<string, unknown> {
+  return typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
+}
+
+function inputString(input: unknown, key: string): string {
+  const value = asRecord(input)[key];
+  return typeof value === 'string' ? value : '';
+}
+
+/** 单行化并截断（活动描述 / 参数摘要用） */
+function compact(text: string, max: number): string {
+  const oneLine = sanitizeTerminalText(text).replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max)}…` : oneLine;
+}
+
 function summarizeArguments(input: unknown, max: number): string {
   if (input === undefined || input === null) return '';
-  const json = JSON.stringify(input);
-  if (json.length <= max) return json;
-  return `${json.slice(0, max)}…`;
-}
-
-/** 把字符串摘要为单行文本（超长截断） */
-function truncateString(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return `${text.slice(0, max)}…`;
+  const json = typeof input === 'string' ? input : JSON.stringify(input);
+  return compact(json, max);
 }
 
 /**
- * 默认渲染器：未注册自定义显示的工具统一走这里。
- * 结果/错误渲染函数为必选（与可选接口区分），保证 StreamOutput 回退始终可用。
+ * 默认工具显示：未注册自定义显示的工具统一走这里。
  */
-export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition & {
-  renderToolResultMessage: NonNullable<ToolDisplayDefinition['renderToolResultMessage']>;
-  renderToolUseErrorMessage: NonNullable<ToolDisplayDefinition['renderToolUseErrorMessage']>;
-} = {
-  userFacingName: () => '',
-  renderToolUseMessage: (input, options) => {
-    const showArguments = options.showArguments !== false;
-    const max = options.maxArgumentLength ?? DEFAULT_MAX_ARGUMENT_LENGTH;
-    return (
-      <Text color={theme.muted}>{showArguments ? ` ${summarizeArguments(input, max)}` : ' …'}</Text>
-    );
-  },
+export const DEFAULT_TOOL_DISPLAY: ToolDisplayDefinition = {
+  toView: (input, result, status) =>
+    makeToolCallView('tool', input, result, status, {
+      subtitle: summarizeArguments(input, 60),
+    }),
   getActivityDescription: () => null,
-  getTrailLine: (input) => ({ label: '', detail: summarizeArguments(input, 60) }),
-  renderToolResultMessage: (result, options) => {
-    const max = options.maxArgumentLength ?? DEFAULT_MAX_ARGUMENT_LENGTH;
-    return <Text color={theme.muted}>{truncateString(result, max)}</Text>;
-  },
-  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 };
 
 /** 工具显示注册表（ADR-021 §3）：注册自定义显示，未注册走默认渲染器 */
@@ -114,97 +92,53 @@ export class ToolDisplayRegistry {
   get(name: string): ToolDisplayDefinition {
     return this.definitions.get(name) ?? DEFAULT_TOOL_DISPLAY;
   }
+
+  /** 产出工具卡模型；identity 字段以调用点为准，避免定义层伪造工具名 */
+  view(
+    name: string,
+    input: unknown,
+    result: string | undefined,
+    status: ToolCallStatus,
+  ): ToolCallView {
+    const view = this.get(name).toView(input, result, status);
+    return {
+      ...view,
+      id: '',
+      name,
+      args: input,
+      status,
+      title: view.title || name,
+    };
+  }
 }
 
 /** 默认单例：内置工具/第三方插件经它注册自定义显示 */
 export const toolDisplayRegistry = new ToolDisplayRegistry();
 
-// ── 内置工具显示（bash / read / edit / 接缝工具）──────────────
-
-function asRecord(input: unknown): Record<string, unknown> {
-  return typeof input === 'object' && input !== null ? (input as Record<string, unknown>) : {};
-}
-
-function inputString(input: unknown, key: string): string {
-  const value = asRecord(input)[key];
-  return typeof value === 'string' ? value : '';
-}
-
-/** 单行化并截断（活动描述用） */
-function compact(text: string, max: number): string {
-  return truncateString(text.replace(/\s+/g, ' ').trim(), max);
-}
-
-/** bash 结果实时视图保留的末尾行数（含退出码等关键行） */
-const BASH_RESULT_TAIL_LINES = 8;
-/** Ctrl+O 展开态保留的末尾行数（滚动回看走 scrollback 全文） */
-const BASH_RESULT_EXPANDED_LINES = 400;
-/** diff 单行展示宽度（CJK 安全截断） */
-const DIFF_LINE_MAX = 120;
-
-/**
- * 按行截断工具结果：保留末尾 `maxLines` 行，避免按字符切断行。
- * 截断时在顶部加一行提示。
- */
-export function tailResultLines(result: string, maxLines: number): string {
-  const trimmed = result.trim();
-  if (!trimmed || maxLines <= 0) return maxLines <= 0 ? '' : trimmed;
-  const lines = trimmed.split('\n');
-  if (lines.length <= maxLines) return trimmed;
-  return `${t('tool.truncated')}\n${lines.slice(-maxLines).join('\n')}`;
-}
+// ── 内置工具显示（bash / read / edit / ask_user）──────────────
 
 toolDisplayRegistry.register('bash', {
-  userFacingName: () => 'bash',
+  toView: (input, result, status) =>
+    makeToolCallView('bash', input, result, status, {
+      subtitle: compact(inputString(input, 'command'), 200),
+    }),
   getActivityDescription: (input) => {
     const command = inputString(input, 'command');
     return command
       ? t('tool.activity.running', { command: compact(command, 80) })
       : t('tool.activity.runningShell');
   },
-  getTrailLine: (input, result, status) => ({
-    label: 'bash',
-    detail: `${compact(inputString(input, 'command'), 60)}${
-      status === 'failed' ? `  ${t('tool.trail.failed')}` : result ? `  ${t('tool.pass')}` : ''
-    }`.trim(),
-  }),
-  renderToolUseMessage: (input) => {
-    const command = inputString(input, 'command');
-    return <Text color={theme.muted}>{command ? ` $ ${compact(command, 160)}` : ''}</Text>;
-  },
-  renderToolResultMessage: (result, options) => (
-    <Text color={theme.muted}>
-      {tailResultLines(
-        result,
-        options.expanded ? BASH_RESULT_EXPANDED_LINES : BASH_RESULT_TAIL_LINES,
-      )}
-    </Text>
-  ),
-  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 toolDisplayRegistry.register('read', {
-  userFacingName: () => 'read',
+  toView: (input, result, status) =>
+    makeToolCallView('read', input, result, status, {
+      subtitle: compact(inputString(input, 'path'), 200),
+    }),
   getActivityDescription: (input) => {
     const path = inputString(input, 'path');
     return path ? t('tool.activity.reading', { path }) : t('tool.activity.readingFile');
   },
-  getTrailLine: (input, result) => {
-    const path = inputString(input, 'path');
-    const lines = result ? result.split('\n').length : 0;
-    return {
-      label: 'read',
-      detail: lines > 0 ? `${path}  ${t('tool.lineCount', { count: lines })}` : path,
-    };
-  },
-  renderToolUseMessage: (input) => {
-    const path = inputString(input, 'path');
-    return <Text color={theme.muted}>{path ? ` ${path}` : ''}</Text>;
-  },
-  renderToolResultMessage: (result) => (
-    <Text color={theme.muted}>{t('tool.readLines', { count: result.split('\n').length })}</Text>
-  ),
-  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 /** 单行 diff 的行号列（4 位右对齐） */
@@ -224,7 +158,7 @@ function renderDiffLine(line: DisplayDiffLine, key: string): ReactNode {
     return (
       <Text key={key} color={theme.ok}>
         {`+ ${lineNumber(line.newLine)} │ `}
-        {truncateToWidth(line.text, DIFF_LINE_MAX)}
+        {truncateToWidth(line.text, 120)}
       </Text>
     );
   }
@@ -232,39 +166,31 @@ function renderDiffLine(line: DisplayDiffLine, key: string): ReactNode {
     return (
       <Text key={key} color={theme.danger}>
         {`- ${lineNumber(line.oldLine)} │ `}
-        {truncateToWidth(line.text, DIFF_LINE_MAX)}
+        {truncateToWidth(line.text, 120)}
       </Text>
     );
   }
   return (
     <Text key={key} color={theme.faint}>
       {`  ${lineNumber(line.oldLine)} │ `}
-      {truncateToWidth(line.text, DIFF_LINE_MAX)}
+      {truncateToWidth(line.text, 120)}
     </Text>
   );
 }
 
 /** edit 的结构化 diff：入参里的 old_string/new_string -> +/- 行与行号 */
-export function renderEditDiff(
-  input: unknown,
-  result: string,
-  options: DisplayOptions = {},
-): ReactNode {
+export function renderEditDiff(input: unknown, result: string, expanded = false): ReactNode {
   const oldText = inputString(input, 'old_string');
   const newText = inputString(input, 'new_string');
   if (!oldText && !newText) {
-    return (
-      <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
-    );
+    return <Text color={theme.muted}>{truncateToWidth(sanitizeTerminalText(result), 200)}</Text>;
   }
   const lines = condenseDiff(diffLines(oldText, newText), {
     context: 2,
-    maxLines: options.expanded ? 200 : 24,
+    maxLines: expanded ? 200 : 24,
   });
   if (lines.length === 0) {
-    return (
-      <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
-    );
+    return <Text color={theme.muted}>{truncateToWidth(sanitizeTerminalText(result), 200)}</Text>;
   }
   return (
     <Box flexDirection="column">
@@ -274,65 +200,38 @@ export function renderEditDiff(
 }
 
 toolDisplayRegistry.register('edit', {
-  userFacingName: () => 'edit',
-  getActivityDescription: (input) => {
-    const path = inputString(input, 'path');
-    return path ? t('tool.activity.editing', { path }) : t('tool.activity.editingFile');
-  },
-  getTrailLine: (input) => {
-    const path = inputString(input, 'path');
+  toView: (input, result, status) => {
+    const path = compact(inputString(input, 'path'), 200);
     const added = inputString(input, 'new_string')
       ? inputString(input, 'new_string').split('\n').length
       : 0;
     const removed = inputString(input, 'old_string')
       ? inputString(input, 'old_string').split('\n').length
       : 0;
-    return {
-      label: 'edit',
-      detail: added || removed ? `${path}  +${added} −${removed}` : path,
-    };
+    const delta = added || removed ? `+${added} −${removed}` : '';
+    const subtitle = [path, delta].filter((part) => part.length > 0).join('  ');
+    return makeToolCallView('edit', input, result, status, {
+      ...(subtitle ? { subtitle } : {}),
+    });
   },
-  renderToolUseMessage: (input) => {
-    const path = inputString(input, 'path');
-    return <Text color={theme.muted}>{path ? ` ${path}` : ''}</Text>;
-  },
-  renderToolResultMessage: (result, options) => (
-    <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 200)}</Text>
-  ),
-  renderToolResultMessageWithInput: (input, result, options) =>
-    renderEditDiff(input, result, options),
-  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
-});
-
-toolDisplayRegistry.register('delegate_task', {
-  userFacingName: () => 'delegate_task',
+  renderDetail: (view) => renderEditDiff(view.args, view.result ?? '', true),
   getActivityDescription: (input) => {
-    const task = inputString(input, 'task');
-    return task
-      ? t('tool.activity.delegating', { task: compact(task, 80) })
-      : t('tool.activity.delegatingTask');
+    const path = inputString(input, 'path');
+    return path ? t('tool.activity.editing', { path }) : t('tool.activity.editingFile');
   },
-  getTrailLine: (input) => ({
-    label: 'delegate',
-    detail: compact(inputString(input, 'task'), 60),
-  }),
-  renderToolUseMessage: (input) => {
-    const task = inputString(input, 'task');
-    return <Text color={theme.muted}>{task ? ` ${compact(task, 160)}` : ''}</Text>;
-  },
-  renderToolResultMessage: (result, options) => (
-    <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 300)}</Text>
-  ),
-  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });
 
 toolDisplayRegistry.register('ask_user', {
-  userFacingName: () => 'ask_user',
+  toView: (input, result, status) => {
+    const questions = asRecord(input).questions;
+    const first =
+      Array.isArray(questions) && typeof questions[0] === 'object' && questions[0] !== null
+        ? (questions[0] as { question?: unknown }).question
+        : undefined;
+    const subtitle = typeof first === 'string' ? compact(first, 120) : '';
+    return makeToolCallView('ask_user', input, result, status, {
+      ...(subtitle ? { subtitle } : {}),
+    });
+  },
   getActivityDescription: () => t('tool.activity.askingUser'),
-  getTrailLine: () => ({ label: 'ask_user', detail: '' }),
-  renderToolUseMessage: () => <Text color={theme.muted} />,
-  renderToolResultMessage: (result, options) => (
-    <Text color={theme.muted}>{truncateString(result, options.maxArgumentLength ?? 120)}</Text>
-  ),
-  renderToolUseErrorMessage: (error) => <Text color={theme.danger}>{error}</Text>,
 });

@@ -61,33 +61,51 @@ describe('resume picker reducer', () => {
   });
 });
 
-describe('history archive', () => {
-  it('appendHistory 支持 markdown 标记，默认纯文本', () => {
+describe('history archive（0.18：UiItem）', () => {
+  it('appendHistory 生成 command item，并分配单调 id', () => {
     let state = replUiReducer(initialReplUiState(ctx), { type: 'appendHistory', line: '# hi' });
-    state = replUiReducer(state, { type: 'appendHistory', line: '# hi', markdown: true });
-
-    expect(state.history).toEqual([{ text: '# hi' }, { text: '# hi', markdown: true }]);
-  });
-
-  it('appendHistoryLines 默认纯文本，可整体标记 markdown', () => {
-    let state = replUiReducer(initialReplUiState(ctx), {
-      type: 'appendHistoryLines',
-      lines: ['a', 'b'],
-    });
-    state = replUiReducer(state, {
-      type: 'appendHistoryLines',
-      lines: ['**c**'],
-      markdown: true,
-    });
+    state = replUiReducer(state, { type: 'appendHistory', line: 'second' });
 
     expect(state.history).toEqual([
-      { text: 'a' },
-      { text: 'b' },
-      { text: '**c**', markdown: true },
+      { item: { kind: 'command', id: 'h_1', text: '# hi' } },
+      { item: { kind: 'command', id: 'h_2', text: 'second' } },
     ]);
   });
 
-  it('brand tone 在归档后保留（启动头 / 能力提示暗金）', () => {
+  it('appendItem / appendItems 保留结构化 item', () => {
+    let state = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendItem',
+      item: { kind: 'user', text: 'hello', at: 1 },
+    });
+    state = replUiReducer(state, {
+      type: 'appendItems',
+      items: [
+        { kind: 'assistant', id: 'a1', text: 'hi', at: 2 },
+        { kind: 'run', id: 'r1', runId: 'run', status: 'completed', toolCount: 0 },
+      ],
+    });
+
+    expect(state.history).toEqual([
+      { item: { kind: 'user', id: 'h_1', text: 'hello', at: 1 } },
+      { item: { kind: 'assistant', id: 'a1', text: 'hi', at: 2 } },
+      { item: { kind: 'run', id: 'r1', runId: 'run', status: 'completed', toolCount: 0 } },
+    ]);
+    expect(state.itemSeq).toBe(1);
+  });
+
+  it('appendHistoryLines 按顺序生成 item', () => {
+    const state = replUiReducer(initialReplUiState(ctx), {
+      type: 'appendHistoryLines',
+      lines: ['a', 'b'],
+    });
+
+    expect(state.history).toEqual([
+      { item: { kind: 'command', id: 'h_1', text: 'a' } },
+      { item: { kind: 'command', id: 'h_2', text: 'b' } },
+    ]);
+  });
+
+  it('brand tone 映射为 command.tone=brand（启动头保留暗金）', () => {
     const state = replUiReducer(initialReplUiState(ctx), {
       type: 'appendHistoryLines',
       lines: ['wordmark', 'tagline'],
@@ -95,8 +113,8 @@ describe('history archive', () => {
     });
 
     expect(state.history).toEqual([
-      { text: 'wordmark', tone: 'brand' },
-      { text: 'tagline', tone: 'brand' },
+      { item: { kind: 'command', id: 'h_1', text: 'wordmark', tone: 'brand' } },
+      { item: { kind: 'command', id: 'h_2', text: 'tagline', tone: 'brand' } },
     ]);
   });
 
@@ -106,10 +124,14 @@ describe('history archive', () => {
       lines: ['a\x1b[31mb', '', 'c\r\nd'],
     });
 
-    expect(state.history).toEqual([{ text: 'ab' }, { text: '' }, { text: 'c\nd' }]);
+    expect(state.history.map((entry) => entry.item)).toEqual([
+      { kind: 'command', id: 'h_1', text: 'ab' },
+      { kind: 'command', id: 'h_2', text: '' },
+      { kind: 'command', id: 'h_3', text: 'c\nd' },
+    ]);
   });
 
-  it('error tone / fullText 在归档后保留，且不会复制成两条', () => {
+  it('error tone 使用 fullText 作为完整载荷，且不会复制成两条', () => {
     const state = replUiReducer(initialReplUiState(ctx), {
       type: 'appendHistory',
       line: '✗ [api] boom',
@@ -119,17 +141,17 @@ describe('history archive', () => {
 
     expect(state.history).toHaveLength(1);
     expect(state.history[0]).toEqual({
-      text: '✗ [api] boom',
-      tone: 'error',
-      fullText: '✗ [api] boom\nmore',
+      item: { kind: 'error', id: 'h_1', text: '✗ [api] boom\nmore' },
     });
   });
 
-  it('clearHistory 清空归档', () => {
+  it('clearHistory 清空归档但不回退 id 序号', () => {
     const filled = replUiReducer(initialReplUiState(ctx), {
       type: 'appendHistory',
       line: 'x',
     });
-    expect(replUiReducer(filled, { type: 'clearHistory' }).history).toEqual([]);
+    const cleared = replUiReducer(filled, { type: 'clearHistory' });
+    expect(cleared.history).toEqual([]);
+    expect(cleared.itemSeq).toBe(1);
   });
 });

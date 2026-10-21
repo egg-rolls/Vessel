@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { type AgentNode, countActiveAgents } from '../src/repl/agent-registry.js';
 import {
   INITIAL_RUNTIME_COUNTERS,
   type RuntimeCounters,
@@ -7,13 +8,7 @@ import {
 import type { TuiEvent } from '../src/types/events.js';
 
 function toolEvent(
-  type:
-    | 'tool.call.started'
-    | 'tool.call.completed'
-    | 'tool.call.failed'
-    | 'subagent.tool.call.started'
-    | 'subagent.tool.call.completed'
-    | 'subagent.tool.call.failed',
+  type: 'tool.call.started' | 'tool.call.completed' | 'tool.call.failed',
   toolName: string,
 ): TuiEvent {
   return {
@@ -43,19 +38,12 @@ function simpleEvent(
   } as unknown as TuiEvent;
 }
 
-function subagentEvent(
-  type: 'subagent.delegate.started' | 'subagent.run.completed' | 'subagent.run.failed',
-): TuiEvent {
-  return {
-    type,
-    run_id: 'r1',
-    ts: 1,
-    data: { run_id: 'r1', depth: 1, task: 't', hasContext: false },
-  } as unknown as TuiEvent;
-}
-
 function run(events: TuiEvent[]): RuntimeCounters {
   return events.reduce(reduceRuntimeCounters, INITIAL_RUNTIME_COUNTERS);
+}
+
+function node(id: string, state: AgentNode['state']): AgentNode {
+  return { id, role: 'agent', parentRunId: 'r1', depth: 0, state, startedAt: 1 };
 }
 
 describe('reduceRuntimeCounters', () => {
@@ -77,39 +65,8 @@ describe('reduceRuntimeCounters', () => {
     expect(run([toolEvent('tool.call.completed', 'bash')]).bash).toBe(0);
   });
 
-  it('子 agent 内部的 bash 同样计数', () => {
-    expect(
-      run([
-        toolEvent('subagent.tool.call.started', 'bash'),
-        toolEvent('subagent.tool.call.failed', 'bash'),
-      ]).bash,
-    ).toBe(0);
-    expect(
-      run([
-        toolEvent('subagent.tool.call.started', 'bash'),
-        toolEvent('subagent.tool.call.completed', 'bash'),
-        toolEvent('subagent.tool.call.started', 'bash'),
-      ]).bash,
-    ).toBe(1);
-  });
-
-  it('delegate started / subagent.run 终态估算子 agent 数', () => {
-    expect(run([subagentEvent('subagent.delegate.started')]).subagents).toBe(1);
-    expect(
-      run([
-        subagentEvent('subagent.delegate.started'),
-        subagentEvent('subagent.delegate.started'),
-        subagentEvent('subagent.run.completed'),
-      ]).subagents,
-    ).toBe(1);
-    expect(run([subagentEvent('subagent.run.failed')]).subagents).toBe(0);
-  });
-
   it('run 开始与终态一律清零（事件缺失也不卡住计数）', () => {
-    const leaked = run([
-      toolEvent('tool.call.started', 'bash'),
-      subagentEvent('subagent.delegate.started'),
-    ]);
+    const leaked = run([toolEvent('tool.call.started', 'bash')]);
     for (const type of [
       'run.started',
       'run.resumed',
@@ -124,14 +81,29 @@ describe('reduceRuntimeCounters', () => {
     }
   });
 
-  it('无关事件保持引用不变', () => {
-    const state = { bash: 1, subagents: 2 };
-    const event = {
-      type: 'llm.stream.chunk',
-      run_id: 'r1',
-      ts: 1,
-      data: {},
-    } as unknown as TuiEvent;
-    expect(reduceRuntimeCounters(state, event)).toBe(state);
+  it('未知事件不改变状态', () => {
+    const state = run([toolEvent('tool.call.started', 'bash')]);
+    expect(reduceRuntimeCounters(state, simpleEvent('run.resumed'))).toEqual({
+      bash: 0,
+      subagents: 0,
+    });
+  });
+});
+
+describe('countActiveAgents（与 SubagentActivity 共用 registry）', () => {
+  it('只统计 running / waiting_permission', () => {
+    expect(
+      countActiveAgents([
+        node('a', 'running'),
+        node('b', 'waiting_permission'),
+        node('c', 'completed'),
+        node('d', 'failed'),
+        node('e', 'closed'),
+      ]),
+    ).toBe(2);
+  });
+
+  it('空注册表为 0', () => {
+    expect(countActiveAgents([])).toBe(0);
   });
 });

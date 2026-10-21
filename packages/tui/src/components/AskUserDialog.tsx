@@ -28,6 +28,8 @@ import { computeDialogWidth } from '../utils/dialog.js';
 export interface AskUserDialogProps {
   /** 事件流——订阅 ask.user.requested，发布 ask.user.answered */
   events: EventStream;
+  /** 行预算（overlay 打开时由 computeLiveLayout 给出）；过小时进入紧凑布局 */
+  maxRows?: number;
   /** 激活状态变化回调（父组件用它隐藏输入框、拦截按键、Ctrl+C 主动解除 waitFor） */
   onActiveChange?: (active: boolean, requestId?: string, runId?: string) => void;
 }
@@ -230,7 +232,7 @@ function ChoiceOptions({
 
 // ── 主组件 ───────────────────────────────────────
 
-export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
+export function AskUserDialog({ events, maxRows, onActiveChange }: AskUserDialogProps) {
   const { stdout } = useStdout();
   // useStdout 不订阅 resize：优先 useWindowSize，保证弹窗宽度即时跟随窗口。
   const windowSize = useWindowSize();
@@ -544,18 +546,35 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
   if (!question) return null;
   const currentAnswer = answers[currentIndex] ?? { selected: new Set<string>(), custom: '' };
 
+  // 行预算：border 2 + marginY 2 + 标题 2 + tabs 2 + 问题 2 + 选项 n + 提示 2。
+  // 预算紧张时收起 tabs / 提示 / 边距，并对选项开窗（焦点项始终可见）。
+  const compact = maxRows !== undefined && maxRows < 12;
+  const optionBudget =
+    maxRows === undefined
+      ? (displayOptions?.length ?? 0)
+      : Math.max(2, maxRows - (compact ? 3 : 6));
+  let optionStart = 0;
+  if (displayOptions !== null && displayOptions.length > optionBudget) {
+    optionStart = Math.max(
+      0,
+      Math.min(displayOptions.length - optionBudget, selectIndex - Math.floor(optionBudget / 2)),
+    );
+  }
+  const visibleOptions =
+    displayOptions === null ? null : displayOptions.slice(optionStart, optionStart + optionBudget);
+
   return (
     <Box
       flexDirection="column"
       borderStyle="single"
       borderColor={theme.line}
       paddingX={1}
-      marginY={1}
+      marginY={compact ? 0 : 1}
       width={width}
       overflow="hidden"
     >
       {/* 标题行：标题 + 进度 */}
-      <Box justifyContent="space-between" marginBottom={1}>
+      <Box justifyContent="space-between" marginBottom={compact ? 0 : 1}>
         <Text bold color={theme.brand}>
           {t('ask.questionTitle')}
         </Text>
@@ -564,12 +583,14 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
         </Text>
       </Box>
 
-      <QuestionTabs
-        questions={questions}
-        currentIndex={currentIndex}
-        isReview={view === 'review'}
-        isAnswered={isAnswered}
-      />
+      {!compact && (
+        <QuestionTabs
+          questions={questions}
+          currentIndex={currentIndex}
+          isReview={view === 'review'}
+          isAnswered={isAnswered}
+        />
+      )}
 
       {view === 'review' ? (
         <ReviewPage
@@ -581,18 +602,18 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
         />
       ) : (
         <Box flexDirection="column">
-          <Box marginBottom={1}>
-            <Text wrap="wrap">{question.question}</Text>
+          <Box marginBottom={compact ? 0 : 1}>
+            <Text wrap={compact ? 'truncate-end' : 'wrap'}>{question.question}</Text>
           </Box>
 
           {/* 选择题 */}
-          {isChoice && displayOptions ? (
+          {isChoice && visibleOptions ? (
             <ChoiceOptions
-              options={displayOptions}
+              options={visibleOptions}
               selected={currentAnswer.selected}
               custom={currentAnswer.custom}
               multiSelect={question.multi_select ?? false}
-              selectIndex={selectIndex}
+              selectIndex={selectIndex - optionStart}
               customFocus={customFocus}
               onCustomChange={(v) =>
                 updateAnswer(currentIndex, (p) => ({ ...p, custom: sanitizeTypedValue(v) }))
@@ -614,15 +635,17 @@ export function AskUserDialog({ events, onActiveChange }: AskUserDialogProps) {
           )}
 
           {/* 底部提示 */}
-          <Box marginTop={1}>
-            {customFocus || !isChoice ? (
-              <Text color={theme.faint}>{t('ask.hintSubmit')}</Text>
-            ) : (
-              <Text color={theme.faint}>
-                {question.multi_select ? t('ask.hintMulti') : t('ask.hintSingle')}
-              </Text>
-            )}
-          </Box>
+          {!compact && (
+            <Box marginTop={1}>
+              {customFocus || !isChoice ? (
+                <Text color={theme.faint}>{t('ask.hintSubmit')}</Text>
+              ) : (
+                <Text color={theme.faint}>
+                  {question.multi_select ? t('ask.hintMulti') : t('ask.hintSingle')}
+                </Text>
+              )}
+            </Box>
+          )}
         </Box>
       )}
     </Box>

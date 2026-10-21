@@ -53,6 +53,7 @@ export function reduceSpinnerState(prev: SpinnerState, event: TuiEvent, now: num
 
     case 'run.completed':
     case 'run.failed':
+    case 'run.cancelled':
       return {
         verb: 'idle',
         lastThinkingMs: prev.startedAt !== undefined ? now - prev.startedAt : undefined,

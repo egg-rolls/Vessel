@@ -1,30 +1,18 @@
 /**
- * Tool trail（R0 §4.4）
+ * Tool trail（0.18：渲染 ToolCallView）
  * @module @vessel-agent/tui
  *
- * 一轮内连续工具调用聚合为一个 trail；文本段与工具段保持原顺序。
- * hidden / collapsed（默认）/ expanded 三态；归档路径不经过这里。
+ * 同一轮内连续工具调用可聚合为一个 trail（live 视图的紧凑形式）。
+ * history 不再经过这里：`<Static>` 按 `UiItem.kind === 'tool'` 逐项渲染完整工具卡。
  */
 
 import { Box, Text } from 'ink';
-import type { ToolDetailMode } from '../commands/commands.js';
 import { t } from '../i18n/index.js';
-import { theme } from '../theme.js';
-import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
+import type { ToolCallView } from '../repl/project/ui-item.js';
 import { lineKey } from '../utils/text-layout.js';
-import type { Segment } from './StreamOutput.js';
-import { toolDisplayRegistry } from './ToolDisplay.js';
+import { formatDuration, type ItemTone, toneColor } from './UiItemView.js';
 
-export type ToolSegment = Extract<Segment, { type: 'tool_call' }>;
-type TextSegment = Extract<Segment, { type: 'text' }>;
-type ReasoningSegment = Extract<Segment, { type: 'reasoning' }>;
-
-export type SegmentGroup =
-  | { type: 'text'; segment: TextSegment }
-  | { type: 'reasoning'; segment: ReasoningSegment }
-  | { type: 'tools'; segments: ToolSegment[] };
-
-export type TrailTone = 'ok' | 'warn' | 'danger' | 'muted' | 'faint';
+export type TrailTone = ItemTone;
 
 export interface TrailLine {
   text: string;
@@ -39,121 +27,66 @@ export interface TrailView {
 
 const EXPANDED_MAX = 8;
 
-/** 纯函数：只聚合连续工具段；文本段原样保留顺序 */
-export function groupSegments(segments: Segment[]): SegmentGroup[] {
-  const groups: SegmentGroup[] = [];
-  let tools: ToolSegment[] = [];
-
-  const flush = () => {
-    if (tools.length > 0) {
-      groups.push({ type: 'tools', segments: tools });
-      tools = [];
-    }
-  };
-
-  for (const segment of segments) {
-    if (segment.type === 'tool_call') {
-      tools.push(segment);
-      continue;
-    }
-    flush();
-    if (segment.type === 'reasoning') {
-      groups.push({ type: 'reasoning', segment });
-      continue;
-    }
-    groups.push({ type: 'text', segment });
+function detailText(view: ToolCallView): string {
+  const duration = formatDuration(view.durationMs);
+  const parts = [view.title, view.subtitle ?? '', duration ? `(${duration})` : ''].filter(
+    (part) => part.length > 0,
+  );
+  let text = parts.join('  ');
+  if (view.status === 'failed' && view.error) {
+    const firstLine = view.error.split('\n').find((line) => line.trim()) ?? '';
+    text += `  ${t('tool.trail.failedWith', { error: firstLine })}`;
   }
-  flush();
-  return groups;
+  return text;
 }
 
-function trailDuration(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(1)}s`;
-}
-
-function firstLine(text: string | undefined, max = 60): string {
-  const line = text?.split('\n').find((value) => value.trim()) ?? '';
-  return line.length > max ? `${line.slice(0, max)}…` : line;
-}
-
-function detailText(segment: ToolSegment): string {
-  const display = toolDisplayRegistry.get(segment.name);
-  const trail = display.getTrailLine?.(segment.arguments, segment.result, segment.status) ?? {
-    label: segment.name,
-    detail: '',
-  };
-  const label = trail.label || display.userFacingName(segment.arguments) || segment.name;
-  let text = trail.detail ? `${label}  ${trail.detail}` : label;
-  if (segment.status === 'failed') {
-    const error = firstLine(segment.error);
-    text += error ? `  ${t('tool.trail.failedWith', { error })}` : `  ${t('tool.trail.failed')}`;
-  }
-  return sanitizeTerminalText(text);
-}
-
-function lineTone(segment: ToolSegment): TrailTone {
-  if (segment.status === 'failed') return 'danger';
-  if (segment.status === 'running') return 'warn';
+function lineTone(view: ToolCallView): TrailTone {
+  if (view.status === 'failed') return 'danger';
+  if (view.status === 'running') return 'warn';
   return 'muted';
 }
 
 /** 纯函数：生成 trail 头与明细；hidden 返回 null */
-export function buildTrail(segments: ToolSegment[], mode: ToolDetailMode): TrailView | null {
-  if (mode === 'hidden' || segments.length === 0) return null;
+export function buildTrail(
+  views: ToolCallView[],
+  mode: 'hidden' | 'collapsed' | 'expanded',
+): TrailView | null {
+  if (mode === 'hidden' || views.length === 0) return null;
 
-  const failed = segments.some((segment) => segment.status === 'failed');
-  const running = segments.some((segment) => segment.status === 'running');
+  const failed = views.some((view) => view.status === 'failed');
+  const running = views.some((view) => view.status === 'running');
   const glyph = failed ? '✗' : running ? '●' : '✓';
   const headerTone: TrailTone = failed ? 'danger' : running ? 'warn' : 'ok';
-  const totalMs = segments.reduce(
-    (sum, segment) => sum + (segment.duration !== undefined ? segment.duration : 0),
+  const totalMs = views.reduce(
+    (sum, view) => sum + (view.durationMs !== undefined ? view.durationMs : 0),
     0,
   );
-  const suffix = totalMs > 0 ? ` · ${trailDuration(totalMs)}` : '';
-  const header = t('tool.trail.header', { glyph, count: segments.length, suffix });
+  const suffix = totalMs > 0 ? ` · ${formatDuration(totalMs)}` : '';
+  const header = t('tool.trail.header', { glyph, count: views.length, suffix });
 
-  const visible = mode === 'collapsed' ? segments.slice(-1) : segments.slice(-EXPANDED_MAX);
-  const hiddenCount = segments.length - visible.length;
+  const visible = mode === 'collapsed' ? views.slice(-1) : views.slice(-EXPANDED_MAX);
+  const hiddenCount = views.length - visible.length;
   const lines: TrailLine[] = [];
 
   if (mode === 'expanded' && hiddenCount > 0) {
     lines.push({ text: t('tool.trail.earlier', { count: hiddenCount }), tone: 'faint' });
   }
 
-  visible.forEach((segment, index) => {
+  visible.forEach((view, index) => {
     const last = index === visible.length - 1;
-    lines.push({
-      text: `${last ? '└─' : '├─'} ${detailText(segment)}`,
-      tone: lineTone(segment),
-    });
+    lines.push({ text: `${last ? '└─' : '├─'} ${detailText(view)}`, tone: lineTone(view) });
   });
 
   return { header, headerTone, lines };
 }
 
 interface ToolTrailProps {
-  segments: ToolSegment[];
-  mode: ToolDetailMode;
+  views: ToolCallView[];
+  mode: 'hidden' | 'collapsed' | 'expanded';
 }
 
-function toneColor(tone: TrailTone): string | undefined {
-  switch (tone) {
-    case 'ok':
-      return theme.ok;
-    case 'warn':
-      return theme.warn;
-    case 'danger':
-      return theme.danger;
-    case 'muted':
-      return theme.muted;
-    case 'faint':
-      return theme.faint;
-  }
-}
-
-export function ToolTrail({ segments, mode }: ToolTrailProps) {
-  const view = buildTrail(segments, mode);
+export function ToolTrail({ views, mode }: ToolTrailProps) {
+  const view = buildTrail(views, mode);
   if (!view) return null;
 
   return (

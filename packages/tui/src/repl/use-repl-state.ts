@@ -13,36 +13,39 @@ import type { ReplState } from '../commands/commands.js';
 import type { ReplContext } from '../repl-context.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import type { ViewAction, ViewEnvelope, ViewMode } from '../views/types.js';
+import type { UiItem } from './project/ui-item.js';
 
 /**
- * Static 归档项：`markdown` 为 true 时保持 Markdown 渲染，
- * 否则按纯文本输出（命令输出、用户输入、状态提示）。
+ * Static 归档项（0.18）：`item` 是唯一数据源；`rendered` 只是缓存，
+ * 任何时候都可以丢弃并按 `item` 重算。
  */
-export type HistoryTone = 'normal' | 'error' | 'brand';
-
 export interface HistoryItem {
-  text: string;
-  markdown?: boolean;
-  /** error 用 danger 色、brand 用暗金品牌色；普通正文保持默认色 */
-  tone?: HistoryTone;
-  /** 被截断时保留完整文本，Ctrl+O 用 TextViewer 打开 */
-  fullText?: string;
+  item: UiItem;
+  rendered?: string;
 }
 
-/** 纯函数：归档前清洗控制序列，避免 ANSI 破坏 scrollback 布局 */
-function toHistoryItem(
-  text: string,
-  markdown = false,
-  tone?: HistoryTone,
-  fullText?: string,
-): HistoryItem {
-  const safe = sanitizeTerminalText(text);
-  return {
-    text: safe,
-    ...(markdown ? { markdown: true } : {}),
-    ...(tone !== undefined ? { tone } : {}),
-    ...(fullText !== undefined ? { fullText: sanitizeTerminalText(fullText) } : {}),
-  };
+/** 归档输入：id 由 reducer 统一分配，避免调用点各自造 id */
+export type UiItemInput = UiItem extends infer T
+  ? T extends { id: string }
+    ? Omit<T, 'id'>
+    : never
+  : never;
+
+/** 兼容旧调用点的纯文本归档色调（brand = 启动头，error = 失败） */
+export type HistoryTone = 'normal' | 'error' | 'brand';
+
+/** 纯函数：把 UiItemInput 转成完整 UiItem（分配稳定 id） */
+function materialize(seq: number, input: UiItemInput): { item: UiItem; seq: number } {
+  const next = seq + 1;
+  return { item: { ...input, id: `h_${next}` } as UiItem, seq: next };
+}
+
+/** 纯函数：旧 appendHistory 语义 -> 结构化 item（id 由 reducer 分配） */
+function legacyItem(line: string, tone?: HistoryTone, fullText?: string): UiItemInput {
+  const text = sanitizeTerminalText(fullText ?? line);
+  if (tone === 'error') return { kind: 'error', text };
+  if (tone === 'brand') return { kind: 'command', text, tone: 'brand' };
+  return { kind: 'command', text };
 }
 
 /** 权限确认弹窗数据（ADR-029：tool.permission.request 载荷的展示态） */
@@ -94,6 +97,8 @@ export interface ReplUiState {
   repl: ReplState;
   input: string;
   history: HistoryItem[];
+  /** history item id 序号（纯 reducer 内自增） */
+  itemSeq: number;
   autocompleteIndex: number;
   resumeSessions: SessionInfo[];
   resumeStatus: ResumePickerStatus;
@@ -139,19 +144,19 @@ export interface ReplUiState {
 
 export type ReplUiAction =
   | { type: 'setInput'; input: string }
+  | { type: 'appendItem'; item: UiItemInput }
+  | { type: 'appendItems'; items: UiItem[] }
   | {
+      /** 兼容入口：纯文本 / 旧 tone；内部转成 command / error item */
       type: 'appendHistory';
       line: string;
-      markdown?: boolean;
       tone?: HistoryTone;
       fullText?: string;
     }
   | {
       type: 'appendHistoryLines';
       lines: string[];
-      markdown?: boolean;
       tone?: HistoryTone;
-      fullText?: string;
     }
   | { type: 'clearHistory' }
   | { type: 'setAutocompleteIndex'; index: number }
@@ -209,26 +214,35 @@ export function replUiReducer(state: ReplUiState, action: ReplUiAction): ReplUiS
     case 'setInput':
       // 手工编辑离开历史浏览；否则 ↑ 会从旧位置继续而不是最新一条。
       return { ...state, input: action.input, historyIndex: null, historyDraft: '' };
-    case 'appendHistory':
+    case 'appendItem': {
+      const { item, seq } = materialize(state.itemSeq, action.item);
+      return { ...state, itemSeq: seq, history: [...state.history, { item }] };
+    }
+    case 'appendItems': {
+      if (action.items.length === 0) return state;
       return {
         ...state,
-        history: [
-          ...state.history,
-          toHistoryItem(action.line, action.markdown === true, action.tone, action.fullText),
-        ],
+        history: [...state.history, ...action.items.map((item) => ({ item }))],
       };
-    case 'appendHistoryLines':
-      return action.lines.length === 0
-        ? state
-        : {
-            ...state,
-            history: [
-              ...state.history,
-              ...action.lines.map((line) =>
-                toHistoryItem(line, action.markdown === true, action.tone, action.fullText),
-              ),
-            ],
-          };
+    }
+    case 'appendHistory': {
+      const { item, seq } = materialize(
+        state.itemSeq,
+        legacyItem(action.line, action.tone, action.fullText),
+      );
+      return { ...state, itemSeq: seq, history: [...state.history, { item }] };
+    }
+    case 'appendHistoryLines': {
+      if (action.lines.length === 0) return state;
+      let seq = state.itemSeq;
+      const items: HistoryItem[] = [];
+      for (const line of action.lines) {
+        const materialized = materialize(seq, legacyItem(line, action.tone));
+        seq = materialized.seq;
+        items.push({ item: materialized.item });
+      }
+      return { ...state, itemSeq: seq, history: [...state.history, ...items] };
+    }
     case 'clearHistory':
       return { ...state, history: [] };
     case 'setAutocompleteIndex':
@@ -496,6 +510,7 @@ export function initialReplUiState(ctx: ReplContext): ReplUiState {
     },
     input: '',
     history: [],
+    itemSeq: 0,
     autocompleteIndex: 0,
     resumeSessions: [],
     resumeStatus: 'idle',

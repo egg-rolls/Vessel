@@ -2,18 +2,19 @@
  * 运行态计数器（0.13 下栏）：bash 运行数 / 子 agent 数。
  * @module @vessel-agent/tui
  *
- * 纯 reducer + Ink hook。事件缺失时也不能把计数永久卡住：
- * 每个 run 开始/终态（completed / failed / cancelled）一律清零。
+ * 0.18：子 agent 数改由 `agent-registry` 派生（与 SubagentActivity 同一份），
+ * 不再消费已无生产者的 `subagent.*`。bash 仍按 tool.call.* 计数；每个 run 终态清零。
  */
 
 import type { EventStream } from '@vessel-agent/core';
 import { useEffect, useState } from 'react';
 import { asTuiEvent, type TuiEvent } from '../types/events.js';
+import { type AgentNode, countActiveAgents } from './agent-registry.js';
 
 export interface RuntimeCounters {
   /** 正在运行的 bash 工具数（含子 agent 内部的 bash） */
   bash: number;
-  /** 正在运行的子 agent 数（按 delegate started / subagent.run 终态估算） */
+  /** 正在运行的子 agent 数（由 agent-registry 覆盖） */
   subagents: number;
 }
 
@@ -27,7 +28,7 @@ function isBash(toolName: string): boolean {
   return toolName === 'bash';
 }
 
-/** 纯函数：折叠单个事件 */
+/** 纯函数：折叠单个事件（bash 计数；子 agent 数由 registry 派生） */
 export function reduceRuntimeCounters(prev: RuntimeCounters, event: TuiEvent): RuntimeCounters {
   switch (event.type) {
     case 'run.started':
@@ -38,29 +39,22 @@ export function reduceRuntimeCounters(prev: RuntimeCounters, event: TuiEvent): R
       return INITIAL_RUNTIME_COUNTERS;
 
     case 'tool.call.started':
-    case 'subagent.tool.call.started':
       return isBash(event.data.tool_name) ? { ...prev, bash: prev.bash + 1 } : prev;
 
     case 'tool.call.completed':
     case 'tool.call.failed':
-    case 'subagent.tool.call.completed':
-    case 'subagent.tool.call.failed':
       return isBash(event.data.tool_name) ? { ...prev, bash: dec(prev.bash) } : prev;
-
-    case 'subagent.delegate.started':
-      return { ...prev, subagents: prev.subagents + 1 };
-
-    case 'subagent.run.completed':
-    case 'subagent.run.failed':
-      return { ...prev, subagents: dec(prev.subagents) };
 
     default:
       return prev;
   }
 }
 
-/** 订阅事件流，实时维护下栏计数 */
-export function useRuntimeCounters(events: EventStream): RuntimeCounters {
+/** 订阅事件流，实时维护下栏计数；子 agent 数取 agent-registry */
+export function useRuntimeCounters(
+  events: EventStream,
+  agents: readonly AgentNode[] = [],
+): RuntimeCounters {
   const [state, setState] = useState<RuntimeCounters>(INITIAL_RUNTIME_COUNTERS);
 
   useEffect(() => {
@@ -70,5 +64,6 @@ export function useRuntimeCounters(events: EventStream): RuntimeCounters {
     return unsubscribe;
   }, [events]);
 
-  return state;
+  const subagents = countActiveAgents(agents);
+  return state.subagents === subagents ? state : { ...state, subagents };
 }

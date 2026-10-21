@@ -301,6 +301,20 @@ describe('agent registry reducer', () => {
     expect(nodes[1]?.role).toBe('agent');
   });
 
+  it('marks still-running members completed when the parent run completes', () => {
+    const nodes = buildAgentRegistry([
+      ev(
+        'agent.spawned',
+        'root',
+        { agent_id: 'm1', state: 'running', parent_run_id: 'root' },
+        1000,
+      ),
+      ev('run.completed', 'root', {}, 1100),
+    ]);
+
+    expect(nodes[0]).toMatchObject({ id: 'm1', state: 'completed', endedAt: 1100 });
+  });
+
   it('does not invent a member from core queue events without a spawn', () => {
     const nodes = buildAgentRegistry([
       ev(

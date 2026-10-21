@@ -24,6 +24,7 @@
  */
 
 import { t } from '../i18n/index.js';
+import { projectMessagesToUiItems, type UiItem } from '../repl/project/ui-item.js';
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -86,8 +87,10 @@ export interface CommandResult {
   handled: boolean;
   /** 命令输出文本（调用方显示） */
   output?: string;
-  /** 需要写入终端 scrollback 的多行历史（/resume hydrate） */
+  /** 需要写入终端 scrollback 的多行历史（/resume hydrate 的纯文本兼容路径） */
   history?: string[];
+  /** 结构化历史项（Ink 主路径；优先于 `history`） */
+  items?: UiItem[];
   /** 命令请求的 state 变更（execute 统一应用到 state） */
   nextState?: Partial<ReplState>;
   /** /clear 等需要 REPL 层清屏的命令置 true（替代硬编码字符串匹配） */
@@ -151,8 +154,10 @@ export interface CommandEntry {
 /** 恢复会话结果（doResume 纯函数返回） */
 export interface ResumeResult {
   message: string;
-  /** 最近 N 条历史消息的展示行（供 Ink Static / simple 模式输出） */
+  /** 最近 N 条历史消息的纯文本展示行（simple 模式 / 兼容路径） */
   history?: string[];
+  /** 结构化历史项（Ink `<Static>` 的主路径） */
+  items?: UiItem[];
   nextState: Partial<ReplState>;
 }
 
@@ -395,10 +400,10 @@ function resumeCommand(): CommandEntry {
       if (!resolved.ok) {
         return { handled: true, output: `\n${resolved.message}\n` };
       }
-      const { message, history, nextState } = await doResume(ctx, resolved.sessionId, {
+      const { message, history, items, nextState } = await doResume(ctx, resolved.sessionId, {
         showReasoning: state.showReasoning ?? false,
       });
-      return { handled: true, output: message, history, nextState };
+      return { handled: true, output: message, history, items, nextState };
     },
   };
 }
@@ -422,11 +427,11 @@ export async function consumePendingResume(
     applyNextState(state, { pendingResume: false });
     return { handled: true, output };
   }
-  const { message, history, nextState } = await doResume(ctx, target.session_id, {
+  const { message, history, items, nextState } = await doResume(ctx, target.session_id, {
     showReasoning: state.showReasoning ?? false,
   });
   applyNextState(state, { ...nextState, pendingResume: false });
-  return { handled: true, output: message, history };
+  return { handled: true, output: message, history, items };
 }
 
 function escapeRegExp(text: string): string {
@@ -602,6 +607,9 @@ export async function doResume(
   return {
     message: `Resumed session "${sessionId}" (${messages.length} messages).`,
     history: formatResumeHistory(messages, options),
+    items: projectMessagesToUiItems(messages, {
+      showReasoning: options.showReasoning === true,
+    }),
     nextState: { currentSessionId: sessionId },
   };
 }

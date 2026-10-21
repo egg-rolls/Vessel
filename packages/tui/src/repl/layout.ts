@@ -16,6 +16,20 @@ export type LiveMode = 'normal' | 'compact' | 'minimal' | 'hidden';
 /** 视图行容量按 picker 或通用命令视图分别计算（当前 chrome 相同，保留区分） */
 export type ViewRowKind = 'picker' | 'view';
 
+/** 独占 overlay 种类；none 表示正常输入态 */
+export type OverlayKind = 'none' | 'permission' | 'ask' | 'picker' | 'view' | 'help' | 'pager';
+
+/** overlay 打开时 live 区折叠到的固定行数（不 display:none） */
+export const OVERLAY_LIVE_ROWS = 3;
+/** overlay 模式预留的安全行（保证动态区严格 < 终端行数） */
+export const OVERLAY_SAFETY_ROWS = 1;
+/** 权限弹窗固定行预算（边框 + 标题 + 问题 + 精简参数 + 选项 + 提示） */
+export const PERMISSION_OVERLAY_ROWS = 13;
+/** ask-user 弹窗固定行预算 */
+export const ASK_OVERLAY_ROWS = 14;
+/** quick help 固定行预算 */
+export const HELP_OVERLAY_ROWS = 14;
+
 export interface LiveLayout {
   mode: LiveMode;
   liveMaxHeight: number;
@@ -28,6 +42,16 @@ export interface LiveLayout {
   /** 底部快捷键提示占用行数（0/1） */
   hintRows: number;
   notice: string | null;
+  /** 当前 overlay 种类 */
+  overlay: OverlayKind;
+  /** overlay 内容行预算（含边框/标题）；none 为 0 */
+  overlayMaxRows: number;
+  /** 本次布局实际渲染的 live 行（overlay 打开时折叠为 OVERLAY_LIVE_ROWS） */
+  liveRenderRows: number;
+  /** 动态区总行数（上栏 + live + overlay + 输入/提示 + 队列 + 下栏） */
+  dynamicRows: number;
+  /** 硬约束：overlay 模式 dynamicRows < rows；普通模式 <= rows */
+  invariantOk: boolean;
 }
 
 /** 状态栏 = PanelFrame 上边框 + 内容 1 行 + 下边框，固定占 3 行 */
@@ -117,13 +141,15 @@ export function viewCapacity(
   rows: number,
   mode: LiveMode,
   kind: ViewRowKind = 'view',
-  options: Pick<ChromeRows, 'topRows'> = {},
+  options: { topRows?: number; reservedRows?: number } = {},
 ): number {
   if (mode === 'hidden') return 0;
   const height = normalizeRows(rows);
   const { top } = chromeOf(options);
   const chrome = mode === 'minimal' ? MINIMAL_CHROME_ROWS[kind] : NORMAL_CHROME_ROWS[kind];
-  const available = height - top - chrome;
+  const reserved = Math.max(0, Math.floor(options.reservedRows ?? 0));
+  const available = height - top - chrome - reserved;
+  if (available <= 0) return 0;
   const cap =
     mode === 'minimal'
       ? MINIMAL_ROW_CAP
@@ -186,30 +212,92 @@ export function queuePreviewRows(queuedCount: number, rows: number): number {
 export function computeLiveLayout(
   rows: number,
   queueRows = 0,
-  options: ChromeRows = {},
+  options: ChromeRows & { overlay?: OverlayKind } = {},
 ): LiveLayout {
   const height = normalizeRows(rows);
   const mode = modeForHeight(height);
   const low = mode === 'minimal' || mode === 'hidden';
   const { top, bottom } = chromeOf(options);
   const queue = Math.max(0, Math.floor(Number.isFinite(queueRows) ? queueRows : 0));
-  const hintRows = showsQuickHint(height) && bottom === 0 ? 1 : 0;
+  const overlay: OverlayKind = options.overlay ?? 'none';
+  const overlayActive = overlay !== 'none';
+  const hintRows = !overlayActive && showsQuickHint(height) && bottom === 0 ? 1 : 0;
+  // hidden 档打开 overlay 时让出上栏（ink-repl 同步隐藏），给弹窗留出最小高度。
+  const budgetTop = overlayActive && low ? 0 : top;
   // base 9 = 输入行 / 运行态提示 / 边距等（不含状态栏）；12/14 的旧常量即 base + STATUS_BAR_ROWS。
   const base = 9;
   const extra = queue + hintRows + top + bottom;
+  const liveMaxHeight = low ? 0 : Math.max(1, height - base - extra);
+
+  // overlay 模式：live 折叠为固定行数；pager/help 与紧凑终端的 picker/view
+  // 需要完整高度，进一步让出 live。
+  const pagerLike = overlay === 'pager' || overlay === 'help';
+  const fullHeightOverlay =
+    pagerLike || ((overlay === 'picker' || overlay === 'view') && height < 20);
+  const overlayLive =
+    overlayActive && !low
+      ? fullHeightOverlay
+        ? Math.min(OVERLAY_LIVE_ROWS, Math.max(0, height - budgetTop - (pagerLike ? 12 : 13)))
+        : OVERLAY_LIVE_ROWS
+      : 0;
+  // 预留 live + 安全行 + 1 行，保证动态区严格小于终端行数。
+  const viewReserve = overlayLive + OVERLAY_SAFETY_ROWS + 1;
+  const overlayAvailable = Math.max(0, height - budgetTop - overlayLive - OVERLAY_SAFETY_ROWS - 1);
+
+  // picker/view 的容量在 overlay 模式下要额外扣除 live 与安全行。
+  const reservedForView = overlay === 'picker' || overlay === 'view' ? viewReserve : 0;
+  const pickerMaxRows = viewCapacity(height, mode, 'picker', {
+    topRows: budgetTop,
+    reservedRows: reservedForView,
+  });
+  const viewMaxRows = viewCapacity(height, mode, 'view', {
+    topRows: budgetTop,
+    reservedRows: reservedForView,
+  });
+  const panelChrome = mode === 'minimal' ? MINIMAL_CHROME_ROWS.view : NORMAL_CHROME_ROWS.view;
+
+  let overlayMaxRows = 0;
+  if (overlay === 'permission') {
+    overlayMaxRows = Math.min(PERMISSION_OVERLAY_ROWS, overlayAvailable);
+  } else if (overlay === 'ask') {
+    overlayMaxRows = Math.min(ASK_OVERLAY_ROWS, overlayAvailable);
+  } else if (overlay === 'help') {
+    overlayMaxRows = Math.min(HELP_OVERLAY_ROWS, overlayAvailable);
+  } else if (overlay === 'pager') {
+    overlayMaxRows = overlayAvailable;
+  } else if (overlay === 'picker') {
+    overlayMaxRows = Math.min(panelChrome + pickerMaxRows, overlayAvailable);
+  } else if (overlay === 'view') {
+    overlayMaxRows = Math.min(panelChrome + viewMaxRows, overlayAvailable);
+  }
+
+  const liveRenderRows = overlayActive ? overlayLive : liveMaxHeight;
+  // hidden/minimal 没有输入区边距和运行提示，按更小的固定 chrome 估算。
+  const nonOverlayBase = low ? 4 : base;
+  const dynamicRows = overlayActive
+    ? budgetTop + bottom + queue + hintRows + overlayLive + overlayMaxRows + OVERLAY_SAFETY_ROWS
+    : top + bottom + queue + hintRows + liveMaxHeight + nonOverlayBase;
+  const invariantOk = overlayActive ? dynamicRows < height : dynamicRows <= height;
 
   return {
     mode,
-    liveMaxHeight: low ? 0 : Math.max(1, height - base - extra),
-    streamMaxLines: low
-      ? 0
-      : mode === 'compact'
-        ? Math.max(1, height - base - extra)
-        : Math.max(3, height - base - 2 - extra),
+    liveMaxHeight,
+    streamMaxLines: overlayActive
+      ? overlayLive
+      : low
+        ? 0
+        : mode === 'compact'
+          ? Math.max(1, height - base - extra)
+          : Math.max(3, height - base - 2 - extra),
     autocompleteMax: mode === 'normal' ? 8 : low ? 3 : Math.max(3, height - base - 2 - extra),
-    pickerMaxRows: viewCapacity(height, mode, 'picker', { topRows: top }),
-    viewMaxRows: viewCapacity(height, mode, 'view', { topRows: top }),
+    pickerMaxRows,
+    viewMaxRows,
     hintRows,
     notice: low ? t('layout.lowHeight') : null,
+    overlay,
+    overlayMaxRows,
+    liveRenderRows,
+    dynamicRows,
+    invariantOk,
   };
 }

@@ -246,3 +246,64 @@ describe('0.13 下栏行预算', () => {
     expect(computeLiveLayout(15).liveMaxHeight).toBe(3);
   });
 });
+
+describe('0.18 overlay 渲染不变量', () => {
+  const overlays = ['permission', 'ask', 'picker', 'view', 'help', 'pager'] as const;
+  const rowCases = [10, 15, 20, 24, 30, 40];
+
+  for (const rows of rowCases) {
+    for (const overlay of overlays) {
+      it(`${rows} rows × ${overlay}：动态区严格小于终端行数`, () => {
+        const layout = computeLiveLayout(rows, 0, {
+          topRows: STATUS_BAR_ROWS,
+          bottomRows: 0,
+          overlay,
+        });
+        expect(layout.overlay).toBe(overlay);
+        expect(layout.overlayMaxRows).toBeGreaterThan(0);
+        expect(layout.invariantOk).toBe(true);
+        expect(layout.dynamicRows).toBeLessThan(rows);
+      });
+    }
+  }
+
+  it('overlay 打开时 live 折叠为固定行数，而不是 0/隐藏（矮终端除外）', () => {
+    for (const rows of [20, 24, 30, 40]) {
+      for (const overlay of ['permission', 'ask', 'picker', 'view'] as const) {
+        const layout = computeLiveLayout(rows, 0, {
+          topRows: STATUS_BAR_ROWS,
+          overlay,
+        });
+        expect(layout.liveRenderRows).toBe(3);
+      }
+    }
+  });
+
+  it('pager/help 在紧凑终端让出 live 高度', () => {
+    const pager = computeLiveLayout(15, 0, { topRows: STATUS_BAR_ROWS, overlay: 'pager' });
+    expect(pager.liveRenderRows).toBe(0);
+    expect(pager.invariantOk).toBe(true);
+    const wide = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS, overlay: 'pager' });
+    expect(wide.liveRenderRows).toBe(3);
+  });
+
+  it('picker/view 容量扣除折叠 live，避免把底栏顶出屏幕', () => {
+    const base = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS });
+    const picker = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS, overlay: 'picker' });
+    expect(picker.pickerMaxRows).toBeLessThan(base.pickerMaxRows);
+    expect(picker.overlayMaxRows + picker.liveRenderRows + STATUS_BAR_ROWS).toBeLessThan(24);
+  });
+
+  it('状态栏 tick / marquee 不参与布局：同参数重复计算结果完全一致', () => {
+    const a = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS, overlay: 'permission' });
+    const b = computeLiveLayout(24, 0, { topRows: STATUS_BAR_ROWS, overlay: 'permission' });
+    expect(a).toEqual(b);
+    expect(a.dynamicRows).toBe(b.dynamicRows);
+  });
+
+  it('普通态动态区不超过终端行数', () => {
+    for (const rows of rowCases) {
+      expect(computeLiveLayout(rows, 0, { topRows: STATUS_BAR_ROWS }).invariantOk).toBe(true);
+    }
+  });
+});

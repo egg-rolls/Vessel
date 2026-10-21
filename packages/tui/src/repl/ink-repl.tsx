@@ -34,7 +34,6 @@ import {
   InlineAutocomplete,
 } from '../components/InlineAutocomplete.js';
 import { InteractiveViewHost } from '../components/InteractiveViewHost.js';
-import { MarkdownText } from '../components/Markdown.js';
 import { QueuePreview } from '../components/QueuePreview.js';
 import { QuickHelp, shouldOpenQuickHelp } from '../components/QuickHelp.js';
 import { SessionTable } from '../components/SessionTable.js';
@@ -43,6 +42,7 @@ import { StatusBar, type StatusKind } from '../components/StatusBar.js';
 import { StreamOutput } from '../components/StreamOutput.js';
 import { SubagentActivity } from '../components/SubagentActivity.js';
 import { shouldPageOutput, TextViewer } from '../components/TextViewer.js';
+import { UiItemView } from '../components/UiItemView.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { resolveLocale, setLocale, t } from '../i18n/index.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
@@ -57,16 +57,19 @@ import { summarizeToolInput } from '../utils/tool-input-summary.js';
 import { renderViewAsText } from '../views/render-text.js';
 import { viewContextKey } from '../views/selection.js';
 import type { ViewAction } from '../views/types.js';
+import { useAgentRegistry } from './agent-registry.js';
 import { maybeClearOnStart } from './clear-on-start.js';
 import { failureFallbackAction, failureViewerTitle } from './error-archive.js';
 import {
   BOTTOM_BAR_ROWS,
   computeLiveLayout,
   defaultBottomBarVisible,
+  type OverlayKind,
   queuePreviewRows,
   STATUS_BAR_ROWS,
 } from './layout.js';
 import { PermissionPendingController } from './permission-pending.js';
+import { fullTextOfItem, type UiItem } from './project/ui-item.js';
 import { loadResumeSessions } from './resume-picker.js';
 import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
 import { useRuntimeCounters } from './runtime-counters.js';
@@ -83,19 +86,48 @@ import {
 import { useStatusMetrics } from './status-metrics.js';
 import { useReplState } from './use-repl-state.js';
 
-/** 终端清屏：清可视区 + scrollback，并把光标移回左上 */
-const CLEAR_SCREEN_SEQUENCE = '\x1b[2J\x1b[3J\x1b[H';
+/** Ink 已清掉 live frame 后，再清 scrollback 并把光标移回左上 */
+const CLEAR_SCROLLBACK_SEQUENCE = '\x1b[3J\x1b[H';
+
+/** 纯函数：该 item 是否有值得进 pager 的完整载荷（Ctrl+O） */
+function shouldPageItem(item: UiItem): boolean {
+  switch (item.kind) {
+    case 'tool':
+      return Boolean(item.view.result || item.view.error);
+    case 'error':
+      return item.text.split('\n').length > 1 || item.text.length > 200;
+    case 'assistant':
+    case 'reasoning':
+      return item.text.split('\n').length > 3 || item.text.length > 240;
+    case 'notice':
+      return item.detail !== undefined || item.text.length > 240;
+    case 'command':
+      return item.text.length > 240 || (item.output?.length ?? 0) > 240;
+    case 'agent':
+      return item.task !== undefined || (item.children?.length ?? 0) > 0;
+    case 'permission':
+    case 'run':
+    case 'user':
+      return false;
+  }
+}
 
 interface InkReplProps {
   ctx: ReplContext;
   /** /exit 命令触发退出（区别于 Ctrl+C）；由 startInkRepl 决定是否补写 farewell */
   onExitCommand?: () => void;
+  /**
+   * /clear、Ctrl+L 的唯一清屏入口：由 startInkRepl 绑定到 Ink `render()` 返回实例的
+   * `clear()`（重置 previousLineCount），再写 `ESC[3J ESC[H`。
+   * 禁止在 Ink 挂载期间直接 stdout.write 清屏序列。
+   */
+  clearScreen: () => void;
 }
 
 /**
  * Ink REPL 主组件
  */
-function InkRepl({ ctx, onExitCommand }: InkReplProps) {
+function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
   const { exit } = useApp();
   const { stdout } = useStdout();
   const [ui, dispatch] = useReplState(ctx);
@@ -165,14 +197,22 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   const windowSize = useWindowSize();
   const terminalRows = windowSize.rows > 0 ? windowSize.rows : (stdout.rows ?? 24);
   const terminalColumns = windowSize.columns > 0 ? windowSize.columns : (stdout.columns ?? 80);
-  // 独占弹窗显示时隐藏实时流与底部预览，避免争抢 live frame 空间。
-  const exclusiveOverlayActive =
-    ui.view !== null ||
-    state.showResumePicker ||
-    ui.permissionOverlay !== null ||
-    ui.askUserActive ||
-    ui.quickHelpOpen ||
-    ui.textViewer !== null;
+  // 独占弹窗优先级：权限 > ask > picker > view > help > pager。
+  // 弹窗打开时 live 区不再 display:none，而是折叠到固定行数（见 computeLiveLayout）。
+  const overlayKind: OverlayKind = ui.permissionOverlay
+    ? 'permission'
+    : ui.askUserActive
+      ? 'ask'
+      : state.showResumePicker
+        ? 'picker'
+        : ui.view !== null
+          ? 'view'
+          : ui.quickHelpOpen
+            ? 'help'
+            : ui.textViewer !== null
+              ? 'pager'
+              : 'none';
+  const exclusiveOverlayActive = overlayKind !== 'none';
   const showTop = topOverride ?? initialVisibility?.top ?? true;
   const showBottom =
     bottomOverride ?? initialVisibility?.bottom ?? defaultBottomBarVisible(terminalRows);
@@ -204,7 +244,10 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
         // 有流式内容时，StreamOutput 已归档带「已取消」标注的正文；
         // 仅在没有内容可归档时补一条简短的取消提示。
         if (!streamCancellationArchivedRef.current) {
-          dispatch({ type: 'appendHistory', line: t('common.cancelled') });
+          dispatch({
+            type: 'appendItem',
+            item: { kind: 'notice', level: 'warn', text: t('common.cancelled') },
+          });
         }
         streamCancellationArchivedRef.current = false;
       } else if (outcome.status === 'failed') {
@@ -447,14 +490,21 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
         dispatch({ type: 'enqueueInput', value });
         dispatch({ type: 'setInput', input: '' });
         dispatch({
-          type: 'appendHistory',
-          line: t('repl.queued', { count: ui.queuedInput.length + 1, value }),
+          type: 'appendItem',
+          item: {
+            kind: 'notice',
+            level: 'info',
+            text: t('repl.queued', { count: ui.queuedInput.length + 1, value }),
+          },
         });
         return;
       }
 
       dispatch({ type: 'recordInput', value });
-      dispatch({ type: 'appendHistory', line: `› ${value}` });
+      dispatch({
+        type: 'appendItem',
+        item: { kind: 'user', text: value, at: Date.now() },
+      });
       dispatch({ type: 'setInput', input: '' });
 
       // 处理命令。命令是纯函数：execute 应用 nextState 到传入的 working 副本，
@@ -482,9 +532,10 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
             return;
           }
 
-          // 特殊处理 /clear - 清终端（含 scrollback）+ 历史记录 + 流式输出
+          // 特殊处理 /clear - 先走 Ink 实例的 clear()（重置 previousLineCount），
+          // 再清 scrollback；禁止在 Ink 挂载期间直接 stdout.write 清屏序列。
           if (result.clearScreen) {
-            stdout.write(CLEAR_SCREEN_SEQUENCE);
+            clearScreen();
             dispatch({ type: 'clearHistory' });
             dispatch({ type: 'bumpClearSignal' }); // 触发 StreamOutput 清空
           } else if (result.output) {
@@ -505,8 +556,11 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
               dispatch({ type: 'appendHistory', line: output });
             }
           }
-          if (result.history?.length) {
-            // /resume 等命令附带的历史展示行
+          if (result.items?.length) {
+            // /resume 等命令附带的结构化历史项
+            dispatch({ type: 'appendItems', items: result.items });
+          } else if (result.history?.length) {
+            // 纯文本兼容路径
             dispatch({ type: 'appendHistoryLines', lines: result.history });
           }
           if (result.nextState) {
@@ -522,8 +576,12 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
         // 未知命令：显示提示，不发 AI
         const [cmdName = value] = value.trim().split(/\s+/);
         dispatch({
-          type: 'appendHistory',
-          line: t('repl.unknownCommand', { name: cmdName }),
+          type: 'appendItem',
+          item: {
+            kind: 'notice',
+            level: 'warn',
+            text: t('repl.unknownCommand', { name: cmdName }),
+          },
         });
         return;
       }
@@ -540,16 +598,23 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
         // `@path` 引用展开（C10）：扫到的文件读为注入消息，用户原文不变
         const { messages, warnings, references } = collectFileReferences(value);
         for (const warning of warnings) {
-          dispatch({ type: 'appendHistory', line: warning });
+          dispatch({
+            type: 'appendItem',
+            item: { kind: 'notice', level: 'warn', text: warning },
+          });
         }
         for (const ref of references) {
           dispatch({
-            type: 'appendHistory',
-            line: t('repl.fileReference', {
-              path: ref.path,
-              bytes: ref.bytes,
-              suffix: ref.truncated ? t('repl.fileTruncated') : '',
-            }),
+            type: 'appendItem',
+            item: {
+              kind: 'notice',
+              level: 'info',
+              text: t('repl.fileReference', {
+                path: ref.path,
+                bytes: ref.bytes,
+                suffix: ref.truncated ? t('repl.fileTruncated') : '',
+              }),
+            },
           });
         }
         const outcome = await executeTurn({
@@ -561,7 +626,10 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
           // 取消前已流出的内容由 StreamOutput 归档（含「已取消」标注）；
           // 没有内容时保留一条简短提示，避免用户以为什么都没发生。
           if (!streamCancellationArchivedRef.current) {
-            dispatch({ type: 'appendHistory', line: t('common.cancelled') });
+            dispatch({
+              type: 'appendItem',
+              item: { kind: 'notice', level: 'warn', text: t('common.cancelled') },
+            });
           }
           streamCancellationArchivedRef.current = false;
         } else if (outcome.status === 'failed') {
@@ -588,10 +656,10 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       ui.run.phase,
       ui.queuedInput.length,
       ui.queueEditIndex,
-      stdout,
       dispatch,
       startResumeRun,
       startWorkflowRun,
+      clearScreen,
     ],
   );
 
@@ -750,7 +818,8 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
     }
 
     if (key.ctrl && inputChar === 'l') {
-      stdout.write(CLEAR_SCREEN_SEQUENCE);
+      // Ink clear() 先重置 previousLineCount，再清 scrollback（ADR/PLAN §6）。
+      clearScreen();
       // TextInput 不忽略 Ctrl+L，会先把 'l' 插进输入；用当前值覆盖并重置光标
       dispatch({ type: 'setInput', input: ui.input });
       dispatch({ type: 'bumpCaret' });
@@ -855,19 +924,22 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       return;
     }
 
-    // Ctrl+O：展开完整输出到 scrollback。TextInput 会把 Ctrl+O 当字符插入，需覆盖回去。
+    // Ctrl+O：任意 item 的完整载荷可进 pager；否则切换 live 区展开态。
+    // TextInput 会把 Ctrl+O 当字符插入，需覆盖回去。
     if (key.ctrl && inputChar === 'o') {
-      // 最近一条历史项因过长被截断时，用现有 pager 展示完整错误。
       const last = ui.history.at(-1);
-      if (ui.run.phase === 'idle' && last?.fullText) {
-        dispatch({
-          type: 'openTextViewer',
-          title: failureViewerTitle(),
-          lines: last.fullText.split('\n'),
-        });
-        dispatch({ type: 'setInput', input: ui.input });
-        dispatch({ type: 'bumpCaret' });
-        return;
+      if (ui.run.phase === 'idle' && last && shouldPageItem(last.item)) {
+        const full = fullTextOfItem(last.item);
+        if (full) {
+          dispatch({
+            type: 'openTextViewer',
+            title: last.item.kind === 'error' ? failureViewerTitle() : t('common.output'),
+            lines: full.split('\n'),
+          });
+          dispatch({ type: 'setInput', input: ui.input });
+          dispatch({ type: 'bumpCaret' });
+          return;
+        }
       }
       dispatch({ type: 'toggleExpanded' });
       dispatch({ type: 'setInput', input: ui.input });
@@ -948,25 +1020,37 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
         const control = ctx.permissions;
         if (!control) {
           dispatch({
-            type: 'appendHistory',
-            line: t('permission.sessionOnly', { tool: overlay.toolName }),
+            type: 'appendItem',
+            item: {
+              kind: 'notice',
+              level: 'info',
+              text: t('permission.sessionOnly', { tool: overlay.toolName }),
+            },
           });
         } else {
           void control
             .add(overlay.toolName)
             .then(() => {
               dispatch({
-                type: 'appendHistory',
-                line: t('permission.persisted', { tool: overlay.toolName }),
+                type: 'appendItem',
+                item: {
+                  kind: 'notice',
+                  level: 'info',
+                  text: t('permission.persisted', { tool: overlay.toolName }),
+                },
               });
             })
             .catch((error: unknown) => {
               dispatch({
-                type: 'appendHistory',
-                line: t('permission.persistFailed', {
-                  tool: overlay.toolName,
-                  error: formatRpcError(error),
-                }),
+                type: 'appendItem',
+                item: {
+                  kind: 'notice',
+                  level: 'warn',
+                  text: t('permission.persistFailed', {
+                    tool: overlay.toolName,
+                    error: formatRpcError(error),
+                  }),
+                },
               });
             });
         }
@@ -983,32 +1067,35 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
     [dispatch],
   );
 
-  // StreamOutput 完成回调：将 AI 响应归档到 history
+  // StreamOutput 完成回调：整轮结构化 items 归档到 history（不再压成字符串）
   const handleStreamComplete = useCallback(
-    (
-      responseText: string,
-      reason: 'completed' | 'failed' | 'cancelled',
-      options?: { tone?: 'normal' | 'error'; fullText?: string },
-    ) => {
+    (items: UiItem[], reason: 'completed' | 'failed' | 'cancelled') => {
       streamCancellationArchivedRef.current = reason === 'cancelled';
-      // 失败由 StreamOutput 单源归档，父组件不再重复追加。
+      // 失败由 StreamOutput 单源归档（error item + run summary），父组件不再重复追加。
       streamFailureArchivedRef.current = reason === 'failed';
-      // completed/cancelled 的正文保持 Markdown；失败项是纯文本 danger。
-      dispatch({
-        type: 'appendHistory',
-        line: responseText,
-        markdown: reason !== 'failed',
-        ...(options?.tone !== undefined ? { tone: options.tone } : {}),
-        ...(options?.fullText !== undefined ? { fullText: options.fullText } : {}),
-      });
+      if (items.length > 0) {
+        dispatch({ type: 'appendItems', items });
+        return;
+      }
+      if (reason === 'cancelled') {
+        dispatch({
+          type: 'appendItem',
+          item: { kind: 'notice', level: 'warn', text: t('common.cancelled') },
+        });
+      } else if (reason === 'failed') {
+        dispatch({
+          type: 'appendItem',
+          item: { kind: 'error', text: t('item.errorUnknown') },
+        });
+      }
     },
     [dispatch],
   );
 
-  // Ctrl+O：StreamOutput 把完整输出刷入 Static scrollback
+  // Ctrl+O：StreamOutput 把当前完整 items 刷入 Static scrollback
   const handleStreamFlush = useCallback(
-    (text: string) => {
-      dispatch({ type: 'appendHistory', line: text, markdown: true });
+    (items: UiItem[]) => {
+      dispatch({ type: 'appendItems', items });
     },
     [dispatch],
   );
@@ -1033,11 +1120,14 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
   const layout = computeLiveLayout(terminalRows, queueRows, {
     topRows: showTop ? STATUS_BAR_ROWS : 0,
     bottomRows: bottomBarRendered ? BOTTOM_BAR_ROWS : 0,
+    overlay: overlayKind,
   });
   const runActive = ui.run.phase !== 'idle';
   const spinner = useSpinnerState(ctx.events);
   const metrics = useStatusMetrics(ctx, state.currentSessionId, ui.run.phase);
-  const runtimeCounters = useRuntimeCounters(ctx.events);
+  // 子 agent 活动与下栏 sub N 共用同一份 agent-registry 派生（0.17 agent.* 事件）。
+  const agentNodes = useAgentRegistry(ctx.events);
+  const runtimeCounters = useRuntimeCounters(ctx.events, agentNodes);
   // auto 数 = 启动配置的 auto_approve + 本次会话 "always"；ask_user 由运行时永远免确认，不计入。
   const autoApproveCount = useMemo(() => {
     const names = new Set<string>([
@@ -1064,21 +1154,33 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       ? Math.max(0, metrics.now - turnStartedAt)
       : undefined;
   // minimal 档在 run 进行中保留 1 行进度；hidden 始终为 0。
-  const liveMaxHeight = layout.mode === 'minimal' && runActive ? 1 : layout.liveMaxHeight;
-  const streamMaxLines = layout.mode === 'minimal' && runActive ? 1 : layout.streamMaxLines;
+  // overlay 打开时 live 折叠到固定行数（OVERLAY_LIVE_ROWS），而不是 display:none。
+  const liveMaxHeight = exclusiveOverlayActive
+    ? layout.liveRenderRows
+    : layout.mode === 'minimal' && runActive
+      ? Math.min(1, layout.liveMaxHeight)
+      : layout.liveMaxHeight;
+  const streamMaxLines = exclusiveOverlayActive
+    ? Math.max(1, layout.liveRenderRows)
+    : layout.mode === 'minimal' && runActive
+      ? 1
+      : layout.streamMaxLines;
 
   // 矮终端降级只提示一次；写入 Static/scrollback，不占 live 行。
   useEffect(() => {
     if (!layout.notice || lowHeightNoticeShownRef.current) return;
     lowHeightNoticeShownRef.current = true;
-    dispatch({ type: 'appendHistory', line: `⚠ ${layout.notice}` });
+    dispatch({
+      type: 'appendItem',
+      item: { kind: 'notice', level: 'warn', text: layout.notice },
+    });
   }, [layout.notice, dispatch]);
 
   return (
     <Box flexDirection="column">
       {/* 状态栏（固定顶部） + 更新提示（asm 发布 update.available 时出现） */}
       <Box flexDirection="column" flexShrink={0}>
-        {showTop && (
+        {showTop && !(exclusiveOverlayActive && layout.mode === 'hidden') && (
           <StatusBar
             status={statusKind}
             model={ctx.provider.model}
@@ -1099,36 +1201,24 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
       </Box>
 
       {/* 已完成历史交给 Ink <Static>：直接写入终端 scrollback，不再参与每帧重绘。
-          key={clearSignal} 让 /clear 与 Ctrl+L 强制重挂载。 */}
+          key={clearSignal} 让 /clear 与 Ctrl+L 强制重挂载。每项按 item.kind 渲染。 */}
       <Static key={ui.clearSignal} items={ui.history}>
-        {(item, i) =>
-          item.markdown ? (
-            <Box key={`${i}-${ui.clearSignal}`} flexDirection="column">
-              <MarkdownText text={item.text} />
-            </Box>
-          ) : item.tone === 'error' ? (
-            <Text key={`${i}-${ui.clearSignal}`} color={theme.danger}>
-              {item.text}
-            </Text>
-          ) : item.tone === 'brand' ? (
-            <Text key={`${i}-${ui.clearSignal}`} color={theme.brand}>
-              {item.text}
-            </Text>
-          ) : (
-            <Text key={`${i}-${ui.clearSignal}`}>{item.text}</Text>
-          )
-        }
+        {(entry, i) => (
+          <Box key={`${i}-${ui.clearSignal}`} flexDirection="column">
+            <UiItemView item={entry.item} columns={terminalColumns} expanded={ui.expandedOutput} />
+          </Box>
+        )}
       </Static>
 
       {/* 实时区域：只显示当前轮流式输出 / 子 agent 活动，限制高度防止覆盖底栏。
-          独占弹窗显示时用 display="none" 隐藏（保持组件挂载，避免丢失本轮 segments）。 */}
-      {/* 即使 liveMaxHeight=0 也只 display:none，不卸载组件：
-          StreamOutput 仍订阅事件，run 完成时通过 onComplete 归档到 Static。 */}
+          独占弹窗打开时折叠到固定行数（OVERLAY_LIVE_ROWS），不再 display:none；
+          只有终端矮到 liveRenderRows=0 时才隐藏，但组件保持挂载（StreamOutput 仍在归档）。 */}
       <Box
         flexDirection="column"
         overflowY="hidden"
-        maxHeight={liveMaxHeight}
-        display={exclusiveOverlayActive || liveMaxHeight === 0 ? 'none' : 'flex'}
+        height={exclusiveOverlayActive && liveMaxHeight > 0 ? liveMaxHeight : undefined}
+        maxHeight={exclusiveOverlayActive ? undefined : liveMaxHeight}
+        display={liveMaxHeight === 0 ? 'none' : 'flex'}
       >
         <StreamOutput
           events={ctx.events}
@@ -1140,7 +1230,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
           onComplete={handleStreamComplete}
           detailMode={state.toolDetailMode ?? 'collapsed'}
         />
-        <SubagentActivity events={ctx.events} />
+        <SubagentActivity nodes={agentNodes} />
       </Box>
 
       {/* 底部固定区域：overlays + 输入框 + 补全框（flexShrink=0 防止被 Yoga 压缩） */}
@@ -1223,7 +1313,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
             }}
             onSelect={async (id) => {
               try {
-                const { message, history, nextState } = await doResume(ctx, id, {
+                const { message, items, nextState } = await doResume(ctx, id, {
                   showReasoning: state.showReasoning ?? false,
                 });
                 dispatch({
@@ -1232,9 +1322,12 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
                 });
                 dispatch({ type: 'setInput', input: '' });
                 dispatch({ type: 'patchRepl', patch: nextState });
-                dispatch({ type: 'appendHistory', line: message });
-                if (history?.length) {
-                  dispatch({ type: 'appendHistoryLines', lines: history });
+                dispatch({
+                  type: 'appendItem',
+                  item: { kind: 'command', text: message },
+                });
+                if (items?.length) {
+                  dispatch({ type: 'appendItems', items });
                 }
                 dispatch({ type: 'resumePickerReset' });
               } catch (error) {
@@ -1262,6 +1355,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
               ctx.mcp?.toolSource(ui.permissionOverlay.toolName) ?? null,
             )}
             details={summarizeToolInput(ui.permissionOverlay.toolName, ui.permissionOverlay.input)}
+            maxRows={layout.overlayMaxRows}
             defaultChoice="n"
             onConfirm={handlePermission}
           />
@@ -1270,7 +1364,11 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
 
       {/* ask-user 问答弹窗（自身订阅 ask.user.requested / 发布 answered） */}
       <Box flexDirection="column" flexShrink={0}>
-        <AskUserDialog events={ctx.events} onActiveChange={handleAskUserActive} />
+        <AskUserDialog
+          events={ctx.events}
+          maxRows={layout.overlayMaxRows}
+          onActiveChange={handleAskUserActive}
+        />
       </Box>
 
       {/* 队列预览（输入框上方；最多 3 条 + 尾行） */}
@@ -1292,7 +1390,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
           <Box flexDirection="column" flexShrink={0}>
             <QuickHelp
               columns={terminalColumns}
-              rows={terminalRows}
+              rows={Math.max(6, layout.overlayMaxRows)}
               onClose={() => dispatch({ type: 'setQuickHelp', open: false })}
             />
           </Box>
@@ -1305,7 +1403,7 @@ function InkRepl({ ctx, onExitCommand }: InkReplProps) {
             title={ui.textViewer.title}
             lines={ui.textViewer.lines}
             columns={terminalColumns}
-            rows={terminalRows}
+            rows={Math.max(7, layout.overlayMaxRows)}
             onClose={() => dispatch({ type: 'closeTextViewer' })}
           />
         </Box>
@@ -1429,14 +1527,22 @@ export async function startInkRepl(ctx: ReplContext): Promise<void> {
 
   // TTY 环境使用完整的 Ink UI
   let exitedViaCommand = false;
+  // /clear 与 Ctrl+L 必须先走 Ink 实例的 clear()（重置 previousLineCount），
+  // 再写 scrollback 清屏序列；不能在 Ink 挂载期间直接 stdout.write。
+  let clearScreen = () => {};
   const instance = render(
     <InkRepl
       ctx={ctx}
       onExitCommand={() => {
         exitedViaCommand = true;
       }}
+      clearScreen={() => clearScreen()}
     />,
   );
+  clearScreen = () => {
+    instance.clear();
+    process.stdout.write(CLEAR_SCROLLBACK_SEQUENCE);
+  };
   await instance.waitUntilExit();
   // /exit：Ink 已 unmount，先清掉最后一帧 live UI（状态栏 / 输入框 / 补全框），
   // 再单独写一次 Goodbye，避免被状态框和提示行夹住。Ctrl+C 退出不打印（保持原行为）。
