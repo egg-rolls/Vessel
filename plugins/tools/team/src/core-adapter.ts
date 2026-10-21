@@ -30,6 +30,8 @@ export interface TeamHostPort {
   deliver(message: TeamMessage): Promise<void>;
   inbox(id: string, cursor?: string): Promise<InboxPage>;
   cancel(id: string): Promise<void>;
+  /** 0.16：释放单个成员；未知/已释放的成员按幂等处理 */
+  closeMember(id: string): Promise<void>;
   /** node 省略时为本机；node 存在且成员 id 为本机简写时按该节点解析。0.6 additive */
   status(id?: string, node?: string): Promise<AgentStatus | AgentStatus[]>;
   close(): Promise<void>;
@@ -44,6 +46,7 @@ function toCoreSpec(spec: AgentSpec): CoreAgentSpec {
     model: spec.model,
     pluginHost: spec.pluginHost,
     ...(spec.systemPrompt !== undefined ? { systemPrompt: spec.systemPrompt } : {}),
+    ...(spec.sessionId !== undefined ? { sessionId: spec.sessionId } : {}),
     ...(spec.limits !== undefined ? { limits: { run: spec.limits } } : {}),
     ...(spec.termination !== undefined ? { termination: spec.termination } : {}),
   };
@@ -176,6 +179,14 @@ export class CoreHostAdapter implements TeamHostPort {
     const handle = this.host.get(id);
     if (!handle) throw new Error(`unknown team member: ${id}`);
     handle.cancel();
+  }
+
+  async closeMember(id: string): Promise<void> {
+    const handle = this.host.get(id);
+    this.handles.delete(id);
+    // 成员已被外部释放（或 close 重入）时保持幂等
+    if (!handle) return;
+    await handle.close();
   }
 
   async status(id?: string): Promise<AgentStatus | AgentStatus[]> {
