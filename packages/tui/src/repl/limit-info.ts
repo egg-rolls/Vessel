@@ -37,6 +37,22 @@ export interface UsageSnapshot {
   elapsedMs?: number;
 }
 
+/** 80% 预算预警（`agent.limit.warning`） */
+export interface LimitWarningInfo {
+  scope?: string;
+  key?: string;
+  current?: number | string;
+  max?: number | string;
+  source?: string;
+  /** 0.8 = 80% 预算 */
+  threshold?: number;
+  hint?: string;
+  ts: number;
+  eventType: string;
+  runId?: string;
+  agentId?: string;
+}
+
 /** 结构化限制命中信息（`limit_blocked` envelope） */
 export interface LimitBlockInfo {
   errorCode: 'limit_blocked';
@@ -92,6 +108,7 @@ interface AgentUsageSource {
 }
 
 const LIMIT_BLOCK_TYPE_RE = /(^|[._:-])limit[._:-]?blocked($|[._:-])/i;
+const LIMIT_WARNING_TYPE_RE = /(^|[._:-])limit[._:-]?warning($|[._:-])/i;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -492,6 +509,65 @@ export function findLatestLimitBlock(
   return undefined;
 }
 
+/**
+ * 从单个事件提取 80% 预算预警。
+ * 只认 `agent.limit.warning` / `limit.warning` 一类事件；不读 error envelope。
+ */
+export function readLimitWarning(event: RunEvent): LimitWarningInfo | undefined {
+  if (!LIMIT_WARNING_TYPE_RE.test(event.type)) return undefined;
+  const data = dataOf(event);
+  const scope = pickString([data], 'scope', 'limit_scope', 'limitScope');
+  const key = pickString([data], 'key', 'limit_key', 'limitKey');
+  const current = pickNumberLike([data], 'current', 'current_value', 'currentValue', 'used');
+  const max = pickNumberLike([data], 'max', 'max_value', 'maxValue', 'limit');
+  const source = pickString([data], 'source', 'config_source', 'configSource');
+  const threshold = readNumber(data, 'threshold');
+  const hint = pickString([data], 'hint', 'suggestion', 'retry_hint', 'retryHint');
+  const agentId = pickString([data], 'delegateId', 'delegate_id', 'agentId', 'agent_id');
+
+  return {
+    ...(scope !== undefined ? { scope } : {}),
+    ...(key !== undefined ? { key } : {}),
+    ...(current !== undefined ? { current } : {}),
+    ...(max !== undefined ? { max } : {}),
+    ...(source !== undefined ? { source } : {}),
+    ...(threshold !== undefined ? { threshold } : {}),
+    ...(hint !== undefined ? { hint } : {}),
+    ts: event.ts,
+    eventType: event.type,
+    ...(event.run_id !== undefined ? { runId: event.run_id } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
+  };
+}
+
+/**
+ * 每个 key 只保留最新一条预警（E2：每 run 每 key 一次）。
+ * key 缺失时按 scope 归组，避免同一事件类型刷屏。
+ */
+export function findLatestLimitWarnings(
+  events: RunEvent[],
+  filter: LimitBlockFilter = {},
+): LimitWarningInfo[] {
+  const runIds = new Set(filter.runIds ?? []);
+  const hasRunFilter = runIds.size > 0;
+  const hasAgentFilter = filter.agentId !== undefined;
+  const latest = new Map<string, LimitWarningInfo>();
+
+  for (const event of events) {
+    const warning = readLimitWarning(event);
+    if (!warning) continue;
+    if (hasRunFilter || hasAgentFilter) {
+      const runMatch = hasRunFilter && runIds.has(event.run_id);
+      const agentMatch = hasAgentFilter && warning.agentId === filter.agentId;
+      if (!runMatch && !agentMatch) continue;
+    }
+    const group = `${warning.scope ?? ''}\u0000${warning.key ?? ''}`;
+    latest.set(group, warning);
+  }
+
+  return [...latest.values()].sort((a, b) => a.ts - b.ts);
+}
+
 function left(max: number | undefined, used: number | undefined): number | undefined {
   if (max === undefined) return undefined;
   return Math.max(0, max - (used ?? 0));
@@ -537,5 +613,26 @@ export function formatLimitBlock(info: LimitBlockInfo): string {
   if (info.retryable !== undefined) {
     parts.push(info.retryable ? t('errors.retryable') : t('errors.notRetryable'));
   }
+  return parts.join(' · ');
+}
+
+/** 预警短文本：`scope/key current/max · 80% threshold · source · hint`。 */
+export function formatLimitWarning(info: LimitWarningInfo): string {
+  const unknown = t('limits.unknown');
+  const threshold =
+    info.threshold === undefined
+      ? unknown
+      : `${Math.round((info.threshold <= 1 ? info.threshold * 100 : info.threshold) * 10) / 10}%`;
+  const parts = [
+    t('limits.warningValue', {
+      scope: info.scope ?? unknown,
+      key: info.key ?? unknown,
+      current: info.current ?? unknown,
+      max: info.max ?? unknown,
+      threshold,
+    }),
+  ];
+  if (info.source !== undefined) parts.push(info.source);
+  if (info.hint !== undefined) parts.push(info.hint);
   return parts.join(' · ');
 }

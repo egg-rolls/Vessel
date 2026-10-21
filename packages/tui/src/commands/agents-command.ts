@@ -13,6 +13,7 @@ import { t } from '../i18n/index.js';
 import {
   type AgentNode,
   buildAgentRegistry,
+  buildAgentTree,
   matchAgents,
   sortAgentNodes,
 } from '../repl/agent-registry.js';
@@ -42,6 +43,8 @@ const DEPTH_WIDTH = 5;
 const STATE_WIDTH = 10;
 const TOOL_WIDTH = 16;
 const AGE_WIDTH = 8;
+const TREE_ID_WIDTH = 18;
+const CHILDREN_WIDTH = 8;
 
 function usage(): CommandResult {
   return { handled: true, output: `\n${t('agents.usage')}\n` };
@@ -66,6 +69,17 @@ function toolLabel(node: AgentNode): string {
 function parentLabel(node: AgentNode): string {
   // 列表列已是 PARENT；父 delegate id 优先，根节点退到父 run id。
   return shortId(node.parentId ?? node.parentRunId);
+}
+
+/** 队列字段缺失时显示 unknown；不把“不在队列”伪装成 pos 0。 */
+function queueLabel(node: AgentNode): string {
+  if (node.queuePosition === undefined && node.waitReason === undefined) {
+    return t('limits.unknown');
+  }
+  return t('agents.queueValue', {
+    position: node.queuePosition ?? t('limits.unknown'),
+    reason: node.waitReason ?? t('limits.unknown'),
+  });
 }
 
 function ageLabel(node: AgentNode, now: number): string {
@@ -115,6 +129,41 @@ export function formatAgentList(nodes: AgentNode[], now: number = Date.now()): s
   if (sorted.length > visible.length) {
     lines.push('');
     lines.push(t('agents.more', { count: sorted.length - visible.length }));
+  }
+  lines.push('');
+  return lines.join('\n');
+}
+
+/** 纯函数：树形文本（按 depth 缩进，children_count 由父子关系派生） */
+export function formatAgentTree(nodes: AgentNode[], now: number = Date.now()): string {
+  if (nodes.length === 0) {
+    return `\n${t('agents.empty')}\n${t('agents.emptyHint')}\n`;
+  }
+
+  const rows = buildAgentTree(nodes);
+  const lines = ['', t('agents.treeTitle', { count: rows.length })];
+  lines.push(
+    `  ${padToWidth(t('agents.columns.id'), TREE_ID_WIDTH)} ${padToWidth(
+      t('agents.columns.role'),
+      ROLE_WIDTH,
+    )} ${padToWidth(t('agents.columns.state'), STATE_WIDTH)} ${padToWidth(
+      t('agents.columns.tool'),
+      TOOL_WIDTH,
+    )} ${t('agents.columns.children')}`,
+  );
+
+  for (const row of rows) {
+    const indent = '  '.repeat(row.depth);
+    const id = row.node.degraded ? `${shortId(row.node.id)}*` : shortId(row.node.id);
+    lines.push(
+      `  ${indent}${padToWidth(id, TREE_ID_WIDTH)} ${padToWidth(
+        truncateToWidth(row.node.role, ROLE_WIDTH),
+        ROLE_WIDTH,
+      )} ${padToWidth(stateLabel(row.node), STATE_WIDTH)} ${padToWidth(
+        toolLabel(row.node),
+        TOOL_WIDTH,
+      )} ${padToWidth(String(row.childrenCount), CHILDREN_WIDTH)} ${ageLabel(row.node, now)}`,
+    );
   }
   lines.push('');
   return lines.join('\n');
@@ -183,8 +232,10 @@ export function formatAgentDetail(
   now: number = Date.now(),
   card?: AgentSelfCard,
 ): string {
+  const unknown = t('limits.unknown');
   const lines = ['', t('agents.summary.title', { id: node.id })];
   lines.push(detailLine(t('agents.label.id'), node.id));
+  lines.push(detailLine(t('agents.label.nodeId'), node.nodeId ?? unknown));
   lines.push(detailLine(t('agents.label.role'), node.role));
   lines.push(
     detailLine(
@@ -196,13 +247,14 @@ export function formatAgentDetail(
   lines.push(detailLine(t('agents.label.state'), stateLabel(node)));
   lines.push(detailLine(t('agents.label.session'), node.sessionId ?? '-'));
   lines.push(detailLine(t('agents.label.run'), node.childRunId ?? '-'));
-  lines.push(detailLine(t('agents.label.task'), node.task ? oneLine(node.task) : '-'));
+  lines.push(detailLine(t('agents.label.task'), node.task ? oneLine(node.task) : unknown));
+  lines.push(detailLine(t('agents.label.queue'), queueLabel(node)));
+  lines.push(detailLine(t('agents.label.resultRef'), node.resultRef ?? unknown));
   lines.push(
     detailLine(t('agents.label.tool'), node.currentTool ? oneLine(node.currentTool) : '-'),
   );
   lines.push(detailLine(t('agents.label.duration'), ageLabel(node, now)));
 
-  const unknown = t('limits.unknown');
   const toolsValue =
     card === undefined || card.tools === undefined
       ? unknown
@@ -317,12 +369,20 @@ export function agentsCommand(): CommandEntry {
   return {
     name: 'agents',
     description: t('command.agents.description'),
-    usage: '/agents [<id>|show <id>]',
+    usage: '/agents [tree|<id>|show <id>]',
     category: 'run',
     keywords: ['agents', 'subagent', 'delegate', 'delegates'],
     run: (args, ctx, _state) => {
       const now = Date.now();
       if (args.length === 0) return listAgents(ctx, now);
+
+      if (args[0] === 'tree') {
+        if (args.length > 1) return usage();
+        return {
+          handled: true,
+          output: formatAgentTree(buildAgentRegistry(ctx.events.getHistory()), now),
+        };
+      }
 
       if (args[0] === 'show') {
         const query = args[1];

@@ -15,7 +15,12 @@ import {
   type ErrorLevel,
   type ErrorLogEntry,
 } from '../repl/error-log.js';
-import { formatLimitBlock } from '../repl/limit-info.js';
+import {
+  findLatestLimitWarnings,
+  formatLimitBlock,
+  formatLimitWarning,
+  type LimitWarningInfo,
+} from '../repl/limit-info.js';
 import type { ReplContext } from '../repl-context.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { truncateToWidth } from '../utils/text-layout.js';
@@ -115,6 +120,14 @@ export function formatErrorList(entries: ErrorLogEntry[], level: ErrorLevel): st
   return lines.join('\n');
 }
 
+/** 纯函数：80% 预警段（每 key 一条；无预警时返回空数组） */
+export function formatLimitWarningsSection(warnings: LimitWarningInfo[]): string[] {
+  if (warnings.length === 0) return [];
+  const lines = ['', t('errors.warningsHeader', { count: warnings.length })];
+  for (const warning of warnings) lines.push(`  ${formatLimitWarning(warning)}`);
+  return lines;
+}
+
 function parseLevel(value: string | undefined): ErrorLevel | undefined {
   if (value === 'user' || value === 'all') return value;
   return undefined;
@@ -169,9 +182,15 @@ export function errorsCommand(): CommandEntry {
         includeInternal: resolved.includeInternal,
         limit: DEFAULT_ERROR_LIMIT,
       });
+      const warnings = findLatestLimitWarnings(events);
+      const warningLines = formatLimitWarningsSection(warnings);
+      const output = formatErrorList(entries, resolved.level);
       return {
         handled: true,
-        output: formatErrorList(entries, resolved.level),
+        output:
+          warningLines.length > 0
+            ? `${output.replace(/\n$/, '')}\n${warningLines.join('\n')}\n`
+            : output,
       };
     },
   };
