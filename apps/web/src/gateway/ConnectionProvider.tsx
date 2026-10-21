@@ -12,6 +12,7 @@ import {
 import { extractTokenFromHash } from '../app/router';
 import { useToast } from '../components/ToastProvider';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
+import type { StoredEvent } from '../state/events';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import {
   enqueueInteraction,
@@ -126,6 +127,17 @@ function initialGatewayUrl(): { url: string; error: string | null } {
 
 const initialTokenValue = consumeInitialToken();
 const initialGateway = initialGatewayUrl();
+
+/** 从已接收事件里反查 run 归属的 session（ask 事件不带 session_id）。 */
+function sessionIdForRun(entries: readonly StoredEvent[], runId: string): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const event = entries[index]?.event;
+    if (!event || event.run_id !== runId || event.type !== 'run.started') continue;
+    const sessionId = (event.data as { session_id?: unknown }).session_id;
+    return typeof sessionId === 'string' && sessionId.length > 0 ? sessionId : undefined;
+  }
+  return undefined;
+}
 
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
@@ -250,6 +262,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       );
       if (questions.length === 0) return;
       const expiresAt = interactionExpiresAt(event.ts);
+      // ask 事件本身不带 session_id：从同一批事件里的 run.started 反查归属会话，
+      // 供跨 session 待处理条跳转；查不到时退化为运行详情。
+      const sessionId = sessionIdForRun(eventStore.getSnapshot().entries, event.run_id);
       setAsks((prev) =>
         enqueueInteraction(
           prev,
@@ -258,10 +273,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
             questions,
             runId: event.run_id,
             expiresAt,
+            ...(sessionId ? { sessionId } : {}),
           },
           Date.now(),
         ),
       );
+    };
+
+    /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */
+    const removeAskByEvent = (event: RunEvent) => {
+      const data = event.data as { requestId?: unknown; request_id?: unknown };
+      const requestId = data.requestId ?? data.request_id;
+      if (typeof requestId !== 'string' || requestId.length === 0) return;
+      setAsks((prev) => removeInteraction(prev, requestId));
     };
 
     const offEvent = client.onEvent((event, meta) => {
@@ -270,6 +294,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (event.type === 'tool.permission.response') removeByEvent(event, false);
       if (event.type === 'tool.permission.expired') removeByEvent(event, true);
       if (event.type === 'ask.user.requested') addAsk(event);
+      if (event.type === 'ask.user.answered') removeAskByEvent(event);
       if (
         event.type === 'run.completed' ||
         event.type === 'run.failed' ||
@@ -480,7 +505,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         await client.respondAsk(requestId, answers);
         setAsks((prev) => removeInteraction(prev, requestId));
       } catch (error) {
-        if (isNotFoundError(error)) {
+        if (isRunEndedError(error)) {
+          // run 已结束：卡片失效，明确语义而不是“未作答”。
+          setAsks((prev) => removeInteraction(prev, requestId));
+          toast.info(interactionRunEndedMessage());
+          return;
+        }
+        if (isNotFoundError(error) || isExpiredError(error)) {
           setAsks((prev) => removeInteraction(prev, requestId));
           toast.info(interactionExpiredMessage());
           return;

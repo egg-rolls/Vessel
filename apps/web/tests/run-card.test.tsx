@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ToastProvider } from '../src/components/ToastProvider';
 import { RunCard, runDetailHref } from '../src/domains/chat/RunCard';
 import type { RunGroup } from '../src/state/events';
 
@@ -96,5 +97,65 @@ describe('runDetailHref', () => {
     expect(runDetailHref({ runId: 'r1', sessionId: 's 1' })).toBe(
       '#/runs?tab=live&run=r1&session=s+1',
     );
+  });
+});
+
+describe('RunCard verbosity', () => {
+  const mixedItems: RunGroup['items'] = [
+    { kind: 'reasoning', text: 'REASONING-MARKER', key: 'reasoning-1' },
+    {
+      kind: 'tool',
+      key: 'tool-done',
+      name: 'done-marker-tool',
+      status: 'done',
+      args: { command: 'ls' },
+      result: 'DONE-TOOL-RESULT',
+      startedAt: 1_700_000_000_000,
+    },
+    {
+      kind: 'tool',
+      key: 'tool-error',
+      name: 'failed-marker-tool',
+      status: 'error',
+      args: { command: 'false' },
+      error: 'FAILED-TOOL-ERROR',
+      startedAt: 1_700_000_000_000,
+    },
+    { kind: 'text', text: 'ANSWER-MARKER', key: 'text-1' },
+  ];
+
+  function group(verbosity: 'minimal' | 'normal') {
+    return (
+      <ToastProvider>
+        <RunCard
+          group={{
+            runId: 'run-1',
+            sessionId: 'session-1',
+            status: 'running',
+            items: mixedItems,
+          }}
+          cancelled={false}
+          cancelling={false}
+          onCancel={() => {}}
+          verbosity={verbosity}
+        />
+      </ToastProvider>
+    );
+  }
+
+  test('normal keeps reasoning and successful tool cards', () => {
+    const markup = renderToStaticMarkup(group('normal'));
+    expect(markup).toContain('REASONING-MARKER');
+    expect(markup).toContain('done-marker-tool');
+    expect(markup).toContain('ANSWER-MARKER');
+  });
+
+  test('minimal hides reasoning and successful tools but never hides failures', () => {
+    const markup = renderToStaticMarkup(group('minimal'));
+    expect(markup).not.toContain('REASONING-MARKER');
+    expect(markup).not.toContain('done-marker-tool');
+    expect(markup).toContain('failed-marker-tool');
+    expect(markup).toContain('FAILED-TOOL-ERROR');
+    expect(markup).toContain('ANSWER-MARKER');
   });
 });

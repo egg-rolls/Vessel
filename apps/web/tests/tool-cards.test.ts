@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   type ChatRenderItem,
+  editDiffOf,
   foldToolItems,
+  PREVIEW_LINES,
+  previewPayload,
   type ToolCardView,
+  toolSummary,
 } from '../src/domains/chat/tool-cards';
 import type { TimelineItem } from '../src/state/events';
 
@@ -169,5 +173,67 @@ describe('foldToolItems', () => {
       durationMs: 5,
       startedAt: 77,
     });
+  });
+});
+
+describe('toolSummary', () => {
+  test('uses the bash first line, paths and patterns instead of whole payloads', () => {
+    expect(toolSummary('bash', { command: 'cd repo\necho hi' })).toBe('cd repo');
+    expect(toolSummary('read', { path: '/tmp/a.ts' })).toBe('/tmp/a.ts');
+    expect(toolSummary('grep', { pattern: 'TODO' })).toBe('TODO');
+    expect(toolSummary('bash', 'echo raw')).toBe('echo raw');
+  });
+
+  test('falls back to the first scalar argument and compacts whitespace', () => {
+    expect(toolSummary('custom', { note: '  hello   world  ' })).toBe('hello world');
+    expect(toolSummary('custom', { empty: '', count: 3 })).toBe('3');
+  });
+});
+
+describe('previewPayload', () => {
+  test('keeps only 20 lines but preserves leading spaces', () => {
+    const lines = Array.from({ length: 100 }, (_, index) =>
+      index === 1 ? '  indented' : `line-${index}`,
+    );
+    const preview = previewPayload(lines.join('\n'));
+
+    expect(preview.preview.split('\n')).toHaveLength(PREVIEW_LINES);
+    expect(preview.preview).toContain('  indented');
+    expect(preview.preview).not.toContain('line-99');
+    expect(preview.truncated).toBe(true);
+    expect(preview.totalLines).toBe(100);
+  });
+
+  test('caps the preview at 8KB even for one huge line', () => {
+    const preview = previewPayload('x'.repeat(9000));
+    expect(preview.preview.length).toBe(8 * 1024);
+    expect(preview.truncated).toBe(true);
+  });
+
+  test('short payloads are not marked as truncated', () => {
+    expect(previewPayload('a\nb').truncated).toBe(false);
+  });
+});
+
+describe('editDiffOf', () => {
+  test('turns old_string/new_string into context, remove and add lines', () => {
+    const diff = editDiffOf({
+      path: 'src/a.ts',
+      old_string: 'keep\nold\ntail',
+      new_string: 'keep\nnew\ntail',
+    });
+
+    expect(diff?.path).toBe('src/a.ts');
+    expect(diff?.lines).toEqual([
+      { kind: 'context', text: 'keep' },
+      { kind: 'remove', text: 'old' },
+      { kind: 'add', text: 'new' },
+      { kind: 'context', text: 'tail' },
+    ]);
+  });
+
+  test('returns null for no-op edits and payloads without both strings', () => {
+    expect(editDiffOf({ old_string: 'same', new_string: 'same' })).toBeNull();
+    expect(editDiffOf({ path: 'x.ts' })).toBeNull();
   });
 });

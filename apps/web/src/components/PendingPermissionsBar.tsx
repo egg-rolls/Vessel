@@ -1,30 +1,50 @@
-import type { PermissionRequest } from '../gateway/types';
+import type { AskUserRequest, PermissionRequest } from '../gateway/types';
 import { t } from '../i18n';
 
 function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 12)}…` : value;
 }
 
-/** 当前视图外的待处理请求条：只提示 + 跳转，不打断当前对话。 */
+function targetOf(request: { sessionId?: string; runId: string }): string {
+  return request.sessionId ?? request.runId;
+}
+
+/** 当前视图外的待处理请求（权限 + 提问）条：只提示 + 跳转，不打断当前对话。 */
 export function PendingPermissionsBar({
   requests,
+  asks = [],
   onOpen,
+  onOpenAsk,
 }: {
   requests: readonly PermissionRequest[];
+  asks?: readonly AskUserRequest[];
   onOpen: (request: PermissionRequest) => void;
+  onOpenAsk?: (request: AskUserRequest) => void;
 }) {
   const first = requests[0];
-  if (!first) return null;
-  const labels = [...new Set(requests.map((item) => item.sessionId ?? item.runId))]
+  const firstAsk = asks[0];
+  if (!first && !firstAsk) return null;
+  const labels = [...new Set([...requests.map(targetOf), ...asks.map(targetOf)])]
     .slice(0, 2)
     .map(shortId);
+  const openAsk = onOpenAsk ?? (() => undefined);
   return (
     <div className="pending-permissions-bar" role="status">
-      <span>{t('permission.otherSessions', { count: requests.length })}</span>
+      {requests.length > 0 && (
+        <span>{t('permission.otherSessions', { count: requests.length })}</span>
+      )}
+      {asks.length > 0 && <span>{t('ask.otherSessions', { count: asks.length })}</span>}
       <span className="dim mono">{labels.join(', ')}</span>
-      <button type="button" className="link-btn" onClick={() => onOpen(first)}>
-        {t('permission.goTo')}
-      </button>
+      {first && (
+        <button type="button" className="link-btn" onClick={() => onOpen(first)}>
+          {t('permission.goTo')}
+        </button>
+      )}
+      {firstAsk && (
+        <button type="button" className="link-btn" onClick={() => openAsk(firstAsk)}>
+          {t('ask.goTo')}
+        </button>
+      )}
     </div>
   );
 }

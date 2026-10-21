@@ -4,7 +4,6 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
-import { AskModal } from '../components/PermissionModals';
 import { useToast } from '../components/ToastProvider';
 import { ChatView } from '../domains/chat/ChatView';
 import {
@@ -78,12 +77,9 @@ export function AppShell() {
     stale,
     permissions,
     asks,
-    responding,
-    now,
     retry,
     dismissError,
     dismissGap,
-    respondAsk,
   } = useConnection();
 
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -106,14 +102,19 @@ export function AppShell() {
   const routeKey = formatRoute(route);
   const lastEventVersion = useRef(-1);
 
-  // 权限改用 RunCard 内联；ask 本批仍走全局 Modal（DECISION-024 §1.3）。
-  const modalOpen = Boolean(asks[0] || pendingAction || helpOpen);
+  // 权限与提问都改为 RunCard 内联，跨 session 的只保留顶部提示条。
+  const modalOpen = Boolean(pendingAction || helpOpen);
   const otherPending = useMemo(
     () => pendingPermissionsOutsideView(permissions, route),
     [permissions, route],
   );
+  const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
   const openPending = useCallback(
     (request: (typeof otherPending)[number]) => navigate(pendingPermissionTarget(request)),
+    [navigate],
+  );
+  const openAsk = useCallback(
+    (request: (typeof otherAsks)[number]) => navigate(pendingPermissionTarget(request)),
     [navigate],
   );
   const viewportWidth = useViewportWidth();
@@ -482,8 +483,13 @@ export function AppShell() {
           </div>
         )}
 
-        {otherPending.length > 0 && (
-          <PendingPermissionsBar requests={otherPending} onOpen={openPending} />
+        {(otherPending.length > 0 || otherAsks.length > 0) && (
+          <PendingPermissionsBar
+            requests={otherPending}
+            asks={otherAsks}
+            onOpen={openPending}
+            onOpenAsk={openAsk}
+          />
         )}
 
         <div className="shell-body">
@@ -600,18 +606,6 @@ export function AppShell() {
             onCancel={() => setPendingAction(null)}
           />
         )}
-
-        {asks[0] ? (
-          <AskModal
-            key={asks[0].requestId}
-            request={asks[0]}
-            pendingCount={asks.length}
-            now={now}
-            busy={responding.has(asks[0].requestId)}
-            onSubmit={(answers) => void respondAsk(asks[0]?.requestId ?? '', answers)}
-            onCancel={() => void respondAsk(asks[0]?.requestId ?? '', [])}
-          />
-        ) : null}
       </div>
     </PaletteEntitiesProvider>
   );
