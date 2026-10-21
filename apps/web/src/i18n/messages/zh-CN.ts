@@ -116,6 +116,17 @@ export const messages = {
   'permission.runEnded': 'run 已结束，该权限请求已失效。',
   'permission.otherSessions': '其他会话有 {count} 个待处理权限请求',
   'permission.goTo': '前往处理',
+  // 0.17：无 RunCard 可挂时的兜底操作面
+  'pending.inline.title': '当前会话的待处理请求',
+  'pending.inline.desc': '这些请求没有匹配到时间线中的运行卡片，可直接在这里处理。',
+  'pending.panel.title': '其他会话 / 未归属的待处理请求',
+  'pending.panel.desc': '非模态面板；处理请求不会切换当前会话。',
+  'pending.panel.toggle': '展开处理',
+  'pending.panel.collapse': '收起',
+  'pending.count': '共 {count} 个',
+  'pending.agent': 'agent {id}',
+  'pending.run': 'run {id}',
+  'pending.session': 'session {id}',
   'chat.reasoning.summary': '思考过程',
   // 0.15：工具卡 / 思考流 / 内联提问
   'chat.reasoning.live': '流式',

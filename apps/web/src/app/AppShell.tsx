@@ -4,6 +4,7 @@ import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
+import { PendingRequestsPanel } from '../components/PendingRequests';
 import { useToast } from '../components/ToastProvider';
 import { ChatView } from '../domains/chat/ChatView';
 import {
@@ -78,6 +79,10 @@ export function AppShell() {
     stale,
     permissions,
     asks,
+    responding,
+    now,
+    respondPermission,
+    respondAsk,
     retry,
     dismissError,
     dismissGap,
@@ -98,6 +103,7 @@ export function AppShell() {
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [pendingAction, setPendingAction] = useState<PaletteItem | null>(null);
+  const [pendingPanelOpen, setPendingPanelOpen] = useState(false);
   const mainRef = useRef<HTMLElement | null>(null);
   const firstRoute = useRef(true);
   const routeKey = formatRoute(route);
@@ -118,6 +124,17 @@ export function AppShell() {
     (request: (typeof otherAsks)[number]) => navigate(pendingPermissionTarget(request)),
     [navigate],
   );
+  // 没有 sessionId 的请求无法通过跳转落到任何 RunCard，面板直接展开。
+  // 其他会话的请求保留顶部条，用户可展开非模态面板操作，不打断当前会话。
+  const pendingNeedsDirectAction =
+    otherPending.some((item) => !item.sessionId) || otherAsks.some((item) => !item.sessionId);
+  useEffect(() => {
+    if (otherPending.length === 0 && otherAsks.length === 0) {
+      setPendingPanelOpen(false);
+      return;
+    }
+    if (pendingNeedsDirectAction) setPendingPanelOpen(true);
+  }, [otherPending.length, otherAsks.length, pendingNeedsDirectAction]);
   const viewportWidth = useViewportWidth();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
   const navDrawerRef = useDrawerA11y({
@@ -490,6 +507,28 @@ export function AppShell() {
             asks={otherAsks}
             onOpen={openPending}
             onOpenAsk={openAsk}
+            panelOpen={pendingPanelOpen}
+            onTogglePanel={() => setPendingPanelOpen((value) => !value)}
+          />
+        )}
+
+        {pendingPanelOpen && (otherPending.length > 0 || otherAsks.length > 0) && (
+          <PendingRequestsPanel
+            id="pending-requests-panel"
+            className="pending-panel"
+            title={t('pending.panel.title')}
+            description={t('pending.panel.desc')}
+            permissions={otherPending}
+            asks={otherAsks}
+            responding={responding}
+            now={now}
+            showSession
+            onDecidePermission={(requestId, decision, scope) => {
+              void respondPermission(requestId, decision, scope);
+            }}
+            onRespondAsk={(requestId, answers) => {
+              void respondAsk(requestId, answers);
+            }}
           />
         )}
 

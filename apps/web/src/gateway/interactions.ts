@@ -5,7 +5,7 @@
  * `Date.now()`：重放/刷新后旧请求会被重新计时，点击时服务端已丢弃 → not_found。
  */
 import { t } from '../i18n';
-import type { PermissionRequest, PermissionScope, RunEvent } from './types';
+import type { AskUserRequest, PermissionRequest, PermissionScope, RunEvent } from './types';
 
 /** 与 gateway interaction TTL 对齐（DECISION-022 §2.1）。 */
 export const INTERACTION_TTL_MS = 120_000;
@@ -32,6 +32,28 @@ function validTimestamp(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
 }
 
+function stringField(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * 交互请求所属子 agent（0.17 additive）。
+ *
+ * 优先级：`delegate_id` / `delegateId`（delegate 插件转发的内层 agent 更精确）
+ * → `agent_id` / `agentId`（0.16 成员 bridge）→ `parent_delegate_id`（最后兜底）。
+ * 旧事件缺这些字段时返回 undefined，不改变原有行为。
+ */
+export function interactionAgentId(data: Record<string, unknown>): string | undefined {
+  return (
+    stringField(data.delegate_id) ??
+    stringField(data.delegateId) ??
+    stringField(data.agent_id) ??
+    stringField(data.agentId) ??
+    stringField(data.parent_delegate_id) ??
+    stringField(data.parentDelegateId)
+  );
+}
+
 /**
  * `tool.permission.request` → 前端卡片模型。
  *
@@ -50,6 +72,7 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
   };
   const rawId = data.requestId ?? data.request_id;
   if (typeof rawId !== 'string' || rawId.length === 0) return null;
+  const agentId = interactionAgentId(data);
   return {
     requestId: rawId,
     tool: typeof data.tool === 'string' ? data.tool : 'tool',
@@ -62,7 +85,45 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
       ? { toolCallId: data.tool_call_id }
       : {}),
     ...(typeof data.source === 'string' && data.source.length > 0 ? { source: data.source } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
     requestedAt: validTimestamp(event.ts) ? event.ts : now,
+  };
+}
+
+/**
+ * `ask.user.requested` → 前端卡片模型。
+ *
+ * 事件本身不带 session_id：由调用方从 `run.started` 反查后传入。
+ * 关联字段（agentId）与权限请求同一套映射；旧事件缺字段时保持 undefined。
+ */
+export function askFromEvent(
+  event: RunEvent,
+  sessionId?: string,
+  now = Date.now(),
+): AskUserRequest | null {
+  const data = event.data as {
+    requestId?: unknown;
+    request_id?: unknown;
+    questions?: unknown;
+  };
+  const rawId = data.requestId ?? data.request_id;
+  if (typeof rawId !== 'string' || rawId.length === 0) return null;
+  if (!Array.isArray(data.questions)) return null;
+  const questions = data.questions.filter(
+    (item): item is AskUserRequest['questions'][number] =>
+      Boolean(item) &&
+      typeof item === 'object' &&
+      typeof (item as { question?: unknown }).question === 'string',
+  );
+  if (questions.length === 0) return null;
+  const agentId = interactionAgentId(event.data);
+  return {
+    requestId: rawId,
+    questions,
+    runId: event.run_id,
+    expiresAt: interactionExpiresAt(event.ts, INTERACTION_TTL_MS, now),
+    ...(sessionId !== undefined && sessionId.length > 0 ? { sessionId } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
   };
 }
 

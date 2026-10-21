@@ -118,6 +118,18 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'permission.runEnded': 'The run has ended; this permission request is no longer valid.',
   'permission.otherSessions': '{count} pending permission request(s) in other sessions',
   'permission.goTo': 'Review',
+  // 0.17: fallback surface when no RunCard can own the request
+  'pending.inline.title': 'Pending requests in this session',
+  'pending.inline.desc':
+    'These requests have no matching run card in the timeline; you can act on them here.',
+  'pending.panel.title': 'Pending requests in other sessions / unattributed',
+  'pending.panel.desc': 'Non-modal panel; acting here does not switch the current session.',
+  'pending.panel.toggle': 'Show',
+  'pending.panel.collapse': 'Hide',
+  'pending.count': '{count} pending',
+  'pending.agent': 'agent {id}',
+  'pending.run': 'run {id}',
+  'pending.session': 'session {id}',
   'chat.reasoning.summary': 'Thinking',
   // 0.15: tool cards / reasoning stream / inline ask
   'chat.reasoning.live': 'Streaming',
