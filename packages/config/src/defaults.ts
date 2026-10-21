@@ -174,7 +174,7 @@ export const DEFAULT_CONFIG: VesselConfig = {
   limits: {
     requestLimit: 100,
     toolCallsLimit: 50,
-    inputTokensLimit: 100000,
+    inputTokensLimit: 1000000,
     outputTokensLimit: 50000,
   },
   termination: {
