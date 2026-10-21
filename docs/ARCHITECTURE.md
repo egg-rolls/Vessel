@@ -2032,3 +2032,28 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `--serve` 仍可用但不保证长期保留；脚本应迁移到 `vessel gateway start`。
 - 提问仍是 120s 事件时间 TTL，未接入权限的持久化交互记录。
 - 0.14.0 不单独 bump：其 P0 内容与 0.14.1 / 0.15 一并写入 CHANGELOG 的 `0.14.1` 段；未 tag / `npm publish` / 合并 `main`。
+
+## 34. 0.14.2 质量硬化：压缩摘要与 bash 凭据路径（已实现）
+
+> 状态：已合入 `release/0.14.2`（未发布）。决策见 [ADR-083](adr/ADR-083-compaction-summary-and-bash-command-denylist.md)。
+
+### 34.1 压缩摘要消息契约
+
+- `Message.compaction_summary?: boolean`（additive）：core 用于识别压缩摘要，Provider 适配层忽略。
+- 摘要消息写成 `role: 'system'` + `compaction_summary: true`，由 `MemoryContextManager.applyCompaction` 写入，位置固定在基底 system 消息之后、其它消息之前。
+- 应用新压缩时按对象引用移除摘要范围内消息，并移除已有 `compaction_summary`；任意时刻最多一条摘要。
+- 请求组装只把非摘要的 system 视为基底 system：上下文缺 system 时补回基底 system，hook 改写 system 也只改基底 system，摘要内容不被替换。
+- 动机：thinking 模式（如 DeepSeek）要求历史 assistant 消息回传 `reasoning_content`；摘要没有思维链，写成 assistant 会让压缩后的下一轮请求 400。
+
+### 34.2 Anthropic system 合并
+
+- Anthropic 请求只有单个 `system` 字段。`AnthropicProvider` 收集全部 `role: 'system'` 消息的 content，用空行（`\n\n`）连接成一个字符串，流式与非流式共用；没有 system 消息时传 `undefined`。
+- 单条 system 的输出与合并前逐字一致；OpenAI 兼容 provider 不合并（system 作为普通消息发送）。
+
+### 34.3 bash 命令文本 denylist：边界与绕过面
+
+- **检查点**：`checkPermission` 命中内置 denylist 直接返回 `deny`（不走用户 `ask`）；`runBash` 执行前复查，命中返回带错误码 `path_denied` 的拒绝文本。
+- **匹配集合**：内置 denylist `~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`；每条展开为 `~/<suffix>`、`$HOME/<suffix>`、`${HOME}/<suffix>`、`<os.homedir()>/<suffix>` 四种写法。比较前把 `\` 视为 `/` 并统一小写。
+- **边界判定**：命中后要求下一字符不是 `\w`、`.`、`-`，避免 `~/.sshd` 被当作 `~/.ssh`。
+- **不是沙箱**：只做归一化字符串匹配，不做 shell 解析。`cd` 后的相对路径、变量赋值 / 拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%`、子进程自行读取等仍可绕过；不能把它当隔离边界。
+- **自定义 `deny_paths` 不参与文本匹配**：任意子串会误伤普通命令。`read` / `edit` / `bash cwd` 的 realpath 边界（ADR-055）不变，本检查只覆盖命令文本里写出的路径。

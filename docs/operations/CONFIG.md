@@ -169,7 +169,7 @@ agent:
 
 - **`ui.showReasoning`**（默认 `false`）：只有显式 `true` 时，provider 返回的 `reasoning_content` 才转为 `reasoning_delta` 并经 `llm.stream.chunk` 发布；TUI / Web 折叠展示「思考过程」。`trace.includeStreamChunks` 仍默认 `false`，思考增量默认不落 trace。`vessel config set ui.showReasoning <true|false>` 写入用户配置。
 - **`agent.cwd`**：`bash` 未显式传 `cwd` 时使用该目录；`read` / `edit` 的相对路径按它解析。支持 `~`，相对路径按进程 cwd 解析为绝对路径；未配置 / 空串等价于不设置。优先级固定为 **工具参数 `cwd` > `agent.cwd` > `process.cwd()`**。
-- **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。
+- **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。0.14.2 起 `bash` 还会在命令文本中匹配内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`），命中直接拒绝（`path_denied`）；该检查只做字符串匹配、不是沙箱，任何配置都不能放宽或替换它。
 - **CLI 写配置**：`vessel config set agent.cwd <path>`；空值被拒绝。与 `ui.language` 一样只改用户配置、保留其它键、`0600` 原子写。
 - **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 提问卡仍按事件时间推导 `event.ts + 120s`；权限卡片不再按 TTL 丢弃。详见 §2.6。
 

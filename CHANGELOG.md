@@ -3,6 +3,33 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.14.2] - 2026-10-21
+
+> 0.14.2（基于 `release/0.14.2`，未发布）：两个缺陷修复——thinking 模型压缩后请求 400、bash 命令文本绕过内置凭据 denylist。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
+
+### Fixed
+
+- **thinking 模型压缩后 400**：压缩摘要改为 `role: 'system'` + `compaction_summary: true`，插在基底 system 消息之后、其它消息之前。此前摘要写成 `role: 'assistant'` 且不带 `reasoning_content`，thinking 模式（如 DeepSeek）下压缩后的下一轮请求被拒。
+- **旧摘要堆积**：应用新压缩时同时移除已有摘要，任意时刻最多一条。
+- **摘要被当成基底 system**：请求组装只把非摘要的 system 视为基底 system；上下文缺 system 时的补回与 hook 改写 system 都不再替换摘要内容。
+- **Anthropic 丢弃第二条 system**：`AnthropicProvider` 收集全部 system 消息并用空行合并后发送，流式与非流式共用；压缩摘要不再静默丢失，单条 system 与 OpenAI 兼容 provider 行为不变。
+- **bash 命令文本绕过凭据 denylist**：`bash` 在 `checkPermission`（直接 `deny`）与执行前（返回 `path_denied`）检查命令文本，命中内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）即拒绝。覆盖 `~`、`$HOME`、`${HOME}` 与绝对路径写法，比较前归一大小写与 `/`、`\`。
+
+### Changed
+
+- **`Message.compaction_summary`**（additive）：core 内部用于识别压缩摘要，Provider 适配层忽略；不新增 RPC 方法（canonical 仍 40），不新增配置键。
+- **bash 工具描述**：help 文本注明凭据路径会被拒绝，且该检查只匹配命令文本、不是沙箱。
+
+### Security
+
+- **命令文本检查不是沙箱**：只做归一化字符串匹配，不做 shell 解析。`cd` 后的相对路径、变量赋值 / 拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%` 等仍可能绕过，不能把它当作隔离边界。自定义 `deny_paths` 不参与文本匹配（任意子串会误伤普通命令）。
+
+### Known limitations
+
+- **摘要标记不迁移**：旧版本写入的 `role: 'assistant'` 摘要不带 `compaction_summary`，不会被识别为摘要，只在下一次压缩时被替换。
+- **Anthropic 合并无长度上限**：多条 system 合并后整体作为 `system` 字段发送，未按模型窗口单独截断。
+- 0.14.2 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.14.1] - 2026-10-21
 
 > 0.14.1（基于 `release/0.14.1`，未发布）：0.14.0 不单独 bump，本段合并记录 0.14.0 P0 与 0.14.1 / 0.15 折叠内容——可观察性与控制面、gateway 多实例 A、Host 对等与快照、ask_user 注册与 Web 聊天收口。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
