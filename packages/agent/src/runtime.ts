@@ -135,6 +135,11 @@ function readRequestId(data: unknown): string | undefined {
 /** 转发到父流前补齐成员归属字段；已有字段不覆盖 */
 function bridgeRequestData(event: RunEvent, member: MemberRuntimeMember): Record<string, unknown> {
   const data = isRecord(event.data) ? { ...event.data } : {};
+  // core 契约用 camelCase requestId；UI / 0.16 形状用 snake_case，别名 additive。
+  const requestId = readRequestId(data);
+  if (requestId !== undefined && typeof data.request_id !== 'string') {
+    data.request_id = requestId;
+  }
   data.agent_id = member.id;
   if (typeof data.session_id !== 'string') data.session_id = member.session_id;
   if (typeof data.parent_session_id !== 'string' && member.parent_id !== undefined) {

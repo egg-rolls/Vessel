@@ -444,6 +444,7 @@ describe('InProcessMemberRuntime permission bridge', () => {
     expect(data.agent_id).toBe('m1');
     expect(data.session_id).toBe('m1');
     expect(data.parent_session_id).toBe('main');
+    expect(data.request_id).toBe(data.requestId as string);
     expect(data.tool_call_id).toBe('call-1');
     expect(data.delegate_path).toEqual(['main', 'm1']);
     expect(data.tool).toBe('bash');
@@ -503,6 +504,7 @@ describe('InProcessMemberRuntime permission bridge', () => {
     const data = forwarded[0]?.data as Record<string, unknown>;
     expect(data.agent_id).toBe('m1');
     expect(data.parent_session_id).toBe('main');
+    expect(data.request_id).toBe('ask-1');
     expect(data.delegate_path).toEqual(['main', 'm1']);
     expect(data.tool).toBe('ask_user');
     expect(data.input).toEqual([{ header: 'h', question: 'q' }]);
