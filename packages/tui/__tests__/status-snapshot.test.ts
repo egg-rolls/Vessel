@@ -130,4 +130,82 @@ describe('status snapshot', () => {
     expect(text).toContain('idle');
     expect(text).toContain('0 input queued');
   });
+
+  it('shows effective limits, active usage, and unbounded budgets', () => {
+    setLocale('en');
+    const ctx = makeCtx({
+      config: {
+        termination: { maxIterations: 30 },
+        limits: {
+          requestLimit: 100,
+          toolCallsLimit: 50,
+          inputTokensLimit: 100000,
+          outputTokensLimit: 50000,
+        },
+        context: { maxTokens: 1000 },
+      } as VesselConfig,
+    });
+    ctx.events.publish(ev('run.started', 'r-active', {}, 1000));
+    ctx.events.publish(
+      ev(
+        'llm.response',
+        'r-active',
+        { usage: { prompt_tokens: 1200, completion_tokens: 300, total_tokens: 1500 } },
+        2000,
+      ),
+    );
+    ctx.events.publish(ev('tool.call.started', 'r-active', { tool_name: 'bash' }, 3000));
+
+    const text = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 61000));
+    expect(text).toContain('iterations 1/30');
+    expect(text).toContain('tools 1/50');
+    expect(text).toContain('runtime 1m00s/5m00s');
+    expect(text).toContain('in 1,200/100,000');
+    expect(text).toContain('out 300/50,000');
+    expect(text).toContain('ctx 0/1,000');
+    expect(text).toContain('cost unknown/unbounded');
+  });
+
+  it('keeps configured limits visible but marks usage absent when idle', () => {
+    setLocale('en');
+    const ctx = makeCtx({
+      config: { termination: { maxIterations: 30 }, context: { maxTokens: 1000 } } as VesselConfig,
+    });
+    const text = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 1000));
+    expect(text).toContain('iterations -/30');
+    expect(text).toContain('tools -/50');
+    expect(text).toContain('runtime -/5m00s');
+    expect(text).toContain('cost -/unbounded');
+    expect(text).not.toContain('limit blocked');
+  });
+
+  it('appends a limit block row only while its run is active', () => {
+    setLocale('en');
+    const ctx = makeCtx({ config: { context: { maxTokens: 1000 } } as VesselConfig });
+    ctx.events.publish(ev('run.started', 'r1', {}, 1000));
+    ctx.events.publish(
+      ev(
+        'agent.limit.blocked',
+        'r1',
+        {
+          scope: 'agent',
+          key: 'toolCallsLimit',
+          current: 50,
+          max: 50,
+          source: 'config.limits',
+          hint: 'raise limits.toolCallsLimit',
+        },
+        2000,
+      ),
+    );
+
+    const active = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 3000));
+    expect(active).toContain(
+      'limit blocked · agent/toolCallsLimit 50/50 · config.limits · raise limits.toolCallsLimit',
+    );
+
+    ctx.events.publish(ev('run.completed', 'r1', {}, 4000));
+    const done = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 5000));
+    expect(done).not.toContain('limit blocked');
+  });
 });

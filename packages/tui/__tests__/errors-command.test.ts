@@ -163,4 +163,66 @@ describe('/errors', () => {
     expect(formatted).toContain('line one line two');
     expect(formatted).not.toContain('\n');
   });
+
+  it('appends limit metadata to an error entry', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(
+      ev(
+        'run.failed',
+        'run-1',
+        {
+          error: 'Usage limits exceeded',
+          details: {
+            error_code: 'limit_blocked',
+            scope: 'run',
+            key: 'toolCallsLimit',
+            current: 50,
+            max: 50,
+            source: 'config.limits',
+            hint: 'raise limits.toolCallsLimit',
+          },
+        },
+        1000,
+      ),
+    );
+
+    const result = await createCommands().execute('/errors', ctx, makeState('s1'));
+    expect(result.output).toContain('Usage limits exceeded');
+    expect(result.output).toContain(
+      '[run/toolCallsLimit 50/50 · config.limits · raise limits.toolCallsLimit]',
+    );
+
+    const entry = collectRecentErrors(ctx.events.getHistory(), { includeInternal: false })[0];
+    expect(entry?.limit).toMatchObject({ key: 'toolCallsLimit', current: 50, max: 50 });
+  });
+
+  it('surfaces a bare limit.blocked event without fabricating a message', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(
+      ev(
+        'limit.blocked',
+        'run-2',
+        { scope: 'agent', key: 'maxIterations', current: 20, max: 20 },
+        1000,
+      ),
+    );
+
+    const result = await createCommands().execute('/errors', ctx, makeState('s1'));
+    expect(result.output).toContain('limit.blocked');
+    expect(result.output).toContain('limit blocked');
+    expect(result.output).toContain('[agent/maxIterations 20/20]');
+  });
+
+  it('leaves entries without a limit envelope byte-identical', () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(ev('tool.call.failed', 'run-3', { tool_name: 'bash', error: 'boom' }, 1000));
+
+    const entry = collectRecentErrors(ctx.events.getHistory(), { includeInternal: false })[0];
+    if (!entry) throw new Error('expected entry');
+    expect(entry.limit).toBeUndefined();
+    expect(formatErrorEntry(entry)).not.toContain('[');
+  });
 });

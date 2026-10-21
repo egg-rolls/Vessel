@@ -375,9 +375,18 @@ export const en: Record<MessageKey, string> = {
   'agents.label.usage': 'usage',
   'agents.label.error': 'error',
   'agents.label.degraded': 'note',
+  'agents.label.tools': 'tools',
+  'agents.label.limits': 'limits',
+  'agents.label.remaining': 'remaining',
+  'agents.label.blocked': 'blocked',
+  'agents.label.asOf': 'as_of',
+  'agents.toolsSeen': '(seen)',
   'agents.parentRun': 'run:{id}',
   'agents.degradedHint': 'Event has no delegateId; only the summary is available.',
   'agents.usageValue': '{total} tok (in {prompt} / out {completion})',
+  'agents.limitsValue': 'iterations {iterations} · tools {tools} · runtime {runtime}',
+  'agents.remainingValue': 'iterations {iterations} · tools {tools} · runtime {runtime}',
+  'agents.blockedValue': '{scope}/{key} {current}/{max}',
   'agents.state.running': 'running',
   'agents.state.completed': 'completed',
   'agents.state.failed': 'failed',
@@ -391,6 +400,8 @@ export const en: Record<MessageKey, string> = {
   'status.label.permissions': 'permissions',
   'status.label.queue': 'queue',
   'status.label.instance': 'instance',
+  'status.label.limits': 'limits',
+  'status.label.budget': 'budget',
   'status.runIdle': 'idle',
   'status.runActive': '● running · {id} · {elapsed}',
   'status.unknown': '?',
@@ -404,6 +415,15 @@ export const en: Record<MessageKey, string> = {
   'status.uptime': 'up {uptime}',
   'status.rpc': 'rpc',
   'status.embedded': 'embedded',
+  'status.limitsValue':
+    'iterations {iterations}/{maxIterations} · tools {tools}/{maxTools} · runtime {runtime}/{maxRuntime}',
+  'status.budgetValue':
+    'in {input}/{maxInput} · out {output}/{maxOutput} · ctx {context}/{maxContext} · cost {cost}/{maxCost}',
+  'status.limitBlocked': 'limit blocked · {value}',
+  'status.noUsage': '-',
+
+  'limits.unbounded': 'unbounded',
+  'limits.unknown': 'unknown',
 
   'errors.header': 'Recent errors ({level}, {count})',
   'errors.level.user': 'user',
@@ -418,6 +438,7 @@ export const en: Record<MessageKey, string> = {
   'errors.notRetryable': 'not retryable',
   'errors.location.run': 'run {id}',
   'errors.location.tool': 'tool {tool}',
+  'errors.limitBlocked': 'limit blocked',
 
   // ── command descriptions ──
   'command.capabilities.description': 'Show RPC capability manifest (methods / tools / plugins)',

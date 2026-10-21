@@ -362,9 +362,18 @@ export const zhCN = {
   'agents.label.usage': 'usage',
   'agents.label.error': 'error',
   'agents.label.degraded': 'note',
+  'agents.label.tools': 'tools',
+  'agents.label.limits': 'limits',
+  'agents.label.remaining': 'remaining',
+  'agents.label.blocked': 'blocked',
+  'agents.label.asOf': 'as_of',
+  'agents.toolsSeen': '(seen)',
   'agents.parentRun': 'run:{id}',
   'agents.degradedHint': '事件缺少 delegateId，只能展示摘要。',
   'agents.usageValue': '{total} tok（输入 {prompt} / 输出 {completion}）',
+  'agents.limitsValue': 'iterations {iterations} · tools {tools} · runtime {runtime}',
+  'agents.remainingValue': 'iterations {iterations} · tools {tools} · runtime {runtime}',
+  'agents.blockedValue': '{scope}/{key} {current}/{max}',
   'agents.state.running': 'running',
   'agents.state.completed': 'completed',
   'agents.state.failed': 'failed',
@@ -378,6 +387,8 @@ export const zhCN = {
   'status.label.permissions': 'permissions',
   'status.label.queue': 'queue',
   'status.label.instance': 'instance',
+  'status.label.limits': 'limits',
+  'status.label.budget': 'budget',
   'status.runIdle': 'idle',
   'status.runActive': '● running · {id} · {elapsed}',
   'status.unknown': '?',
@@ -391,6 +402,15 @@ export const zhCN = {
   'status.uptime': '已运行 {uptime}',
   'status.rpc': 'rpc',
   'status.embedded': 'embedded',
+  'status.limitsValue':
+    'iterations {iterations}/{maxIterations} · tools {tools}/{maxTools} · runtime {runtime}/{maxRuntime}',
+  'status.budgetValue':
+    'in {input}/{maxInput} · out {output}/{maxOutput} · ctx {context}/{maxContext} · cost {cost}/{maxCost}',
+  'status.limitBlocked': 'limit blocked · {value}',
+  'status.noUsage': '-',
+
+  'limits.unbounded': '∞',
+  'limits.unknown': 'unknown',
 
   'errors.header': '最近错误（{level}，{count}）',
   'errors.level.user': '用户级',
@@ -405,6 +425,7 @@ export const zhCN = {
   'errors.notRetryable': '不可重试',
   'errors.location.run': 'run {id}',
   'errors.location.tool': 'tool {tool}',
+  'errors.limitBlocked': 'limit blocked',
 
   // ── command descriptions ──
   'command.capabilities.description': 'Show RPC capability manifest (methods / tools / plugins)',

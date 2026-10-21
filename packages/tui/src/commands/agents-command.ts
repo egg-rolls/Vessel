@@ -7,6 +7,8 @@
  * current_tool / session_id；展示层只读，不启动/取消任何 agent。
  */
 
+import type { VesselConfig } from '@vessel-agent/config';
+import type { RunEvent } from '@vessel-agent/core';
 import { t } from '../i18n/index.js';
 import {
   type AgentNode,
@@ -14,6 +16,18 @@ import {
   matchAgents,
   sortAgentNodes,
 } from '../repl/agent-registry.js';
+import {
+  type EffectiveLimits,
+  findLatestLimitBlock,
+  formatLimitBlock,
+  type LimitBlockInfo,
+  type RemainingBudget,
+  readAgentTools,
+  readAgentUsage,
+  readDelegateLimits,
+  remainingBudget,
+} from '../repl/limit-info.js';
+import { formatSnapshotTime } from '../repl/status-snapshot.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatDuration, formatTokenCount } from '../utils/display-labels.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
@@ -110,8 +124,65 @@ function detailLine(label: string, value: string): string {
   return `  ${padToWidth(label, 12)} ${value}`;
 }
 
+/** Self Card 摘要：限制来自 delegate 有效配置，用量来自事件历史 */
+export interface AgentSelfCard {
+  asOf: number;
+  tools?: string[];
+  /** true = tools 来自已见工具，而不是事件显式声明 */
+  toolsSeen: boolean;
+  limits: EffectiveLimits;
+  remaining: RemainingBudget;
+  /** false = 没有任何用量事件，剩余预算显示 unknown */
+  usageObserved: boolean;
+  blocked?: LimitBlockInfo;
+}
+
+export function buildAgentSelfCard(
+  events: RunEvent[],
+  config: VesselConfig,
+  node: AgentNode,
+  now: number,
+): AgentSelfCard {
+  const limits = readDelegateLimits(config);
+  const usage = readAgentUsage(events, node, now);
+  const tools = readAgentTools(events, node);
+  const usageObserved =
+    node.usage !== undefined ||
+    node.endedAt !== undefined ||
+    usage.requests > 0 ||
+    usage.toolCalls > 0 ||
+    usage.totalTokens > 0;
+  const blocked = findLatestLimitBlock(events, {
+    runIds: node.childRunId !== undefined ? [node.childRunId] : [],
+    agentId: node.id,
+  });
+
+  return {
+    asOf: now,
+    ...(tools.tools !== undefined ? { tools: tools.tools } : {}),
+    toolsSeen: tools.seen,
+    limits,
+    remaining: remainingBudget(limits, usage),
+    usageObserved,
+    ...(blocked !== undefined ? { blocked } : {}),
+  };
+}
+
+function limitMax(max: number | undefined): string {
+  return max === undefined ? t('limits.unbounded') : String(max);
+}
+
+function remainingValue(value: number | undefined, duration = false): string {
+  if (value === undefined) return t('limits.unbounded');
+  return duration ? formatDuration(value) : String(value);
+}
+
 /** 纯函数：单节点摘要文本 */
-export function formatAgentDetail(node: AgentNode, now: number = Date.now()): string {
+export function formatAgentDetail(
+  node: AgentNode,
+  now: number = Date.now(),
+  card?: AgentSelfCard,
+): string {
   const lines = ['', t('agents.summary.title', { id: node.id })];
   lines.push(detailLine(t('agents.label.id'), node.id));
   lines.push(detailLine(t('agents.label.role'), node.role));
@@ -130,6 +201,39 @@ export function formatAgentDetail(node: AgentNode, now: number = Date.now()): st
     detailLine(t('agents.label.tool'), node.currentTool ? oneLine(node.currentTool) : '-'),
   );
   lines.push(detailLine(t('agents.label.duration'), ageLabel(node, now)));
+
+  const unknown = t('limits.unknown');
+  const toolsValue =
+    card === undefined || card.tools === undefined
+      ? unknown
+      : `${card.tools.map(oneLine).join(', ')}${card.toolsSeen ? ` ${t('agents.toolsSeen')}` : ''}`;
+  const limitsValue =
+    card === undefined
+      ? unknown
+      : t('agents.limitsValue', {
+          iterations: limitMax(card.limits.maxIterations),
+          tools: limitMax(card.limits.toolCallsLimit),
+          runtime:
+            card.limits.maxRuntimeSeconds !== undefined
+              ? formatDuration(card.limits.maxRuntimeSeconds * 1000)
+              : t('limits.unbounded'),
+        });
+  const remainingValueText =
+    card === undefined || !card.usageObserved
+      ? unknown
+      : t('agents.remainingValue', {
+          iterations: remainingValue(card.remaining.iterations),
+          tools: remainingValue(card.remaining.toolCalls),
+          runtime: remainingValue(card.remaining.runtimeMs, true),
+        });
+  const blockedValue =
+    card === undefined ? unknown : card.blocked ? formatLimitBlock(card.blocked) : '-';
+
+  lines.push(detailLine(t('agents.label.asOf'), card ? formatSnapshotTime(card.asOf) : unknown));
+  lines.push(detailLine(t('agents.label.tools'), toolsValue));
+  lines.push(detailLine(t('agents.label.limits'), limitsValue));
+  lines.push(detailLine(t('agents.label.remaining'), remainingValueText));
+  lines.push(detailLine(t('agents.label.blocked'), blockedValue));
 
   if (node.usage) {
     const total = node.usage.total_tokens ?? 0;
@@ -163,8 +267,21 @@ function listAgents(ctx: ReplContext, now: number): CommandResult {
   };
 }
 
+function detailResult(
+  events: RunEvent[],
+  config: VesselConfig,
+  node: AgentNode,
+  now: number,
+): CommandResult {
+  return {
+    handled: true,
+    output: formatAgentDetail(node, now, buildAgentSelfCard(events, config, node, now)),
+  };
+}
+
 function showAgent(ctx: ReplContext, query: string, now: number): CommandResult {
-  const nodes = buildAgentRegistry(ctx.events.getHistory());
+  const events = ctx.events.getHistory();
+  const nodes = buildAgentRegistry(events);
   if (nodes.length === 0) {
     return {
       handled: true,
@@ -175,12 +292,12 @@ function showAgent(ctx: ReplContext, query: string, now: number): CommandResult 
   const match = matchAgents(nodes, query);
   const exact = match.exact[0];
   if (exact) {
-    return { handled: true, output: formatAgentDetail(exact, now) };
+    return detailResult(events, ctx.config, exact, now);
   }
 
   if (match.prefix.length === 1) {
     const node = match.prefix[0];
-    if (node) return { handled: true, output: formatAgentDetail(node, now) };
+    if (node) return detailResult(events, ctx.config, node, now);
   }
   if (match.prefix.length > 1) {
     const candidates = sortAgentNodes(match.prefix)
