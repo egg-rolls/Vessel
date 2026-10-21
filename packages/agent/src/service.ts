@@ -123,6 +123,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly permissionBridge: AgentServiceOptions['permissionBridge'];
   private readonly snapshot: AgentSnapshotStore | undefined;
   private readonly queues = new Map<string, MemberQueue>();
+  /** external owner（REPL 主 agent）：队列由 takeMessages 消费，pump 永不执行 */
+  private readonly externalOwners = new Set<string>();
   private readonly listeners = new Set<AgentEventListener>();
   private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
@@ -255,6 +257,7 @@ export class AgentServiceImpl implements AgentService {
       }
       this.registry.updateIdentity(id, { sessionId, visibility });
       if (existing.state === 'stale') this.registry.setState(id, 'idle');
+      this.externalOwners.add(id);
       this.scheduleSnapshot();
       return toMemberStatus(existing);
     }
@@ -271,6 +274,7 @@ export class AgentServiceImpl implements AgentService {
     };
     this.registry.add(record);
     this.queueFor(id);
+    this.externalOwners.add(id);
     this.scheduleSnapshot();
     return toMemberStatus(record);
   }
@@ -685,10 +689,14 @@ export class AgentServiceImpl implements AgentService {
     return member;
   }
 
-  /** 有排队消息且无在跑轮次时启动下一轮；waiting_permission / closing 不推进 */
+  /**
+   * 有排队消息且无在跑轮次时启动下一轮；waiting_permission / closing 不推进。
+   * external owner 的消息只入队，由 REPL 通过 takeMessages 消费，不在这里起轮。
+   */
   private pump(memberId: string): void {
     const member = this.registry.get(memberId);
     if (!member) return;
+    if (this.externalOwners.has(memberId)) return;
     const queue = this.queueFor(memberId);
     if (queue.turnActive || queue.closing) return;
     if (member.state === 'created' || member.state === 'closed' || member.state === 'stale') return;

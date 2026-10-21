@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { AgentError, type MemberTurnResult, type NewMemberInput } from '../src/index.js';
+import {
+  AgentError,
+  type AgentEvent,
+  type MemberTurnResult,
+  type NewMemberInput,
+} from '../src/index.js';
 import { type Deferred, deferred, makeService, settle } from './helpers.js';
 
 describe('AgentService lifecycle', () => {
@@ -273,6 +278,46 @@ describe('AgentService owner inbox', () => {
     await expect(service.takeMessages(member.id)).rejects.toMatchObject({
       code: 'member_closed',
     });
+  });
+
+  it('external owner queue is never pumped and only leaves through takeMessages', async () => {
+    const { service, runtime } = makeService();
+    const events: AgentEvent[] = [];
+    service.subscribe((event) => events.push(event));
+    const owner = await service.attachOwner({ id: 'main' });
+    const member = await service.new({ visibility: 'team', parentId: owner.id });
+    runtime.handler = async (target) =>
+      target.id === member.id ? { content: 'auto' } : { content: 'owner-should-not-run' };
+
+    await service.send({ to: owner.id, content: 'direct' });
+    // owner 是 external：send 只入队，runTurn 一次都不跑
+    expect(runtime.turns).toHaveLength(0);
+    expect(
+      (await service.list({ viewer: 'main' })).find((entry) => entry.id === owner.id)?.state,
+    ).toBe('idle');
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'agent.message.queued' &&
+          event.agent_id === owner.id &&
+          event.from === 'main',
+      ),
+    ).toBe(true);
+
+    // 成员自动回复也进 owner 队列，pump 不得消费
+    await service.send({ to: member.id, content: 'work' });
+    await settle();
+    expect(runtime.turns.map((entry) => entry.member.id)).toEqual([member.id]);
+
+    const taken = await service.takeMessages(owner.id);
+    expect(taken.map((message) => message.content)).toEqual(['direct', 'auto']);
+    expect(await service.takeMessages(owner.id)).toEqual([]);
+    // 再触发 pump（新消息入队）也不会把 owner 队列交给 runtime
+    await service.send({ to: owner.id, content: 'again' });
+    expect(runtime.turns.map((entry) => entry.member.id)).toEqual([member.id]);
+    expect((await service.takeMessages(owner.id)).map((message) => message.content)).toEqual([
+      'again',
+    ]);
   });
 
   it('notePermissionState moves running -> waiting_permission -> running and ignores late states', async () => {

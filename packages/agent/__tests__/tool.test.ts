@@ -77,7 +77,7 @@ describe('agent tool', () => {
     expect(runtime.spawned.map((member) => member.parent_id)).toEqual(['main', 'main']);
   });
 
-  it('member final text is delivered back to the owner as a new turn', async () => {
+  it('member final text is delivered to the owner queue', async () => {
     const { service, runtime, tool } = setup();
     await service.attachOwner({ id: 'main', visibility: 'team' });
     const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
@@ -87,9 +87,10 @@ describe('agent tool', () => {
     await call(tool, { action: 'send', to: created.id, content: 'work' });
     await settle();
 
-    const ownerTurns = runtime.turns.filter((turn) => turn.member.id === 'main');
-    expect(ownerTurns.map((turn) => turn.message.content)).toEqual(['done']);
-    expect(ownerTurns[0]?.message.from).toBe(created.id);
+    expect(runtime.turns.filter((turn) => turn.member.id === 'main')).toEqual([]);
+    const queued = await service.takeMessages('main');
+    expect(queued.map((turn) => turn.content)).toEqual(['done']);
+    expect(queued[0]?.from).toBe(created.id);
   });
 
   it('custom ownerId scopes new owner/parent and list visibility', async () => {
