@@ -34,7 +34,9 @@ function missingPath(): string {
   return path.join(tempDir(), 'missing.yaml');
 }
 
-async function waitFor(predicate: () => boolean, timeoutMs = 3000): Promise<void> {
+// 等的是真实 gateway 进程内的事件（启动 + 鉴权 + RPC 往返）。CI 慢机上 3s
+// 偏紧，放宽到 10s；仍是有界轮询，不会掩盖挂死。
+async function waitFor(predicate: () => boolean, timeoutMs = 10000): Promise<void> {
   const started = Date.now();
   while (!predicate()) {
     if (Date.now() - started > timeoutMs) throw new Error('waitFor timed out');

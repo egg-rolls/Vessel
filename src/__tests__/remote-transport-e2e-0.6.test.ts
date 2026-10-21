@@ -125,7 +125,8 @@ describe('remote transport e2e (0.6 real gateway endpoints)', () => {
       data: {},
       ts: Date.now(),
     });
-    const deadline = Date.now() + 3000;
+    // 真实 WS 扇出；CI 慢机上 3s 偏紧，放宽到 10s（仍是有界轮询）。
+    const deadline = Date.now() + 10_000;
     while (!received.some((event) => event.run_id === 'run-1')) {
       if (Date.now() > deadline) throw new Error('timed out waiting for remote event');
       await Bun.sleep(10);

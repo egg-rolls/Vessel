@@ -4,10 +4,14 @@
  * 用 Bun.spawn 跑真实 CLI 子进程，VESSEL_MOCK=1 用内存 Provider 保证确定性。
  * 隔离：cwd 用临时目录，避免污染真实 .vessel/sessions.db。
  */
-import { expect, it } from 'bun:test';
+import { expect, it, setDefaultTimeout } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+
+// 每个用例都 spawn 真实 CLI 子进程（冷启动 + 配置加载 + provider 装配）。
+// 并行测试/CI 慢盘上单个用例偶发超过 bun test 默认的 5s，放宽到 30s。
+setDefaultTimeout(30_000);
 
 const repoRoot = path.resolve(import.meta.dir, '..', '..');
 const cliPath = path.join(repoRoot, 'src', 'cli.ts');
@@ -29,8 +33,10 @@ async function runCli(
     stdin: stdin ? 'pipe' : undefined,
   });
   if (stdin) {
-    proc.stdin.write(stdin);
-    proc.stdin.end();
+    // FileSink.write/end 在背压下返回 Promise；不 await 就 end 可能让子进程
+    // 读到 EOF 而没有数据（表现为 headless 报 noInput、退出 1）。
+    await proc.stdin.write(stdin);
+    await proc.stdin.end();
   }
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -86,8 +92,10 @@ it('headless 失败时 exit 非零', async () => {
 });
 
 it('headless --run（无参）：从 stdin 读输入（--pipe 已折叠进 --run）', async () => {
-  const { stdout, exitCode } = await runCli(['--run'], { VESSEL_MOCK: '1' }, 'from stdin');
-  expect(exitCode).toBe(0);
+  const { stdout, stderr, exitCode } = await runCli(['--run'], { VESSEL_MOCK: '1' }, 'from stdin');
+  // 用对象断言：失败时把 exitCode / stdout / stderr 一起打印，便于定位
+  // “stdin 为空”还是“启动失败”。
+  expect({ exitCode, stdout, stderr }).toMatchObject({ exitCode: 0 });
   expect(stdout.trim()).toBe('Echo: from stdin');
 });
 
