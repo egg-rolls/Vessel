@@ -3,7 +3,73 @@
  * @module @vessel-agent/core/limits
  */
 
-import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
+import type {
+  LimitBlock,
+  LimitChecker,
+  TerminationPolicy,
+  UsageLimits,
+  UsageStats,
+} from '../types/limits.js';
+
+/** 命中上限时的首个 key（与 checkLimits 的检查顺序一致） */
+export function evaluateUsageLimits(stats: UsageStats, limits: UsageLimits): LimitBlock | null {
+  if (limits.requestLimit !== undefined && stats.requestCount >= limits.requestLimit) {
+    return {
+      scope: 'run',
+      key: 'request_limit',
+      current: stats.requestCount,
+      max: limits.requestLimit,
+      source: 'limits.requestLimit',
+      hint: 'Increase limits.requestLimit or reduce the number of LLM requests.',
+      retryable: false,
+    };
+  }
+  if (limits.toolCallsLimit !== undefined && stats.toolCallsCount >= limits.toolCallsLimit) {
+    return {
+      scope: 'run',
+      key: 'tool_calls_limit',
+      current: stats.toolCallsCount,
+      max: limits.toolCallsLimit,
+      source: 'limits.toolCallsLimit',
+      hint: 'Increase limits.toolCallsLimit or reduce tool usage in the task.',
+      retryable: false,
+    };
+  }
+  if (limits.inputTokensLimit !== undefined && stats.inputTokens >= limits.inputTokensLimit) {
+    return {
+      scope: 'run',
+      key: 'input_tokens_limit',
+      current: stats.inputTokens,
+      max: limits.inputTokensLimit,
+      source: 'limits.inputTokensLimit',
+      hint: 'Increase limits.inputTokensLimit or compact the conversation history.',
+      retryable: false,
+    };
+  }
+  if (limits.outputTokensLimit !== undefined && stats.outputTokens >= limits.outputTokensLimit) {
+    return {
+      scope: 'run',
+      key: 'output_tokens_limit',
+      current: stats.outputTokens,
+      max: limits.outputTokensLimit,
+      source: 'limits.outputTokensLimit',
+      hint: 'Increase limits.outputTokensLimit or lower the per-request max_tokens.',
+      retryable: false,
+    };
+  }
+  if (limits.totalCostLimit !== undefined && stats.totalCost >= limits.totalCostLimit) {
+    return {
+      scope: 'run',
+      key: 'total_cost_limit',
+      current: stats.totalCost,
+      max: limits.totalCostLimit,
+      source: 'limits.totalCostLimit',
+      hint: 'Increase limits.totalCostLimit or use a cheaper model for this task.',
+      retryable: false,
+    };
+  }
+  return null;
+}
 
 /**
  * 限制检查器实现
@@ -16,22 +82,7 @@ export class MemoryLimitChecker implements LimitChecker {
    * @returns 是否超出限制
    */
   checkLimits(stats: UsageStats, limits: UsageLimits): boolean {
-    if (limits.requestLimit !== undefined && stats.requestCount >= limits.requestLimit) {
-      return false;
-    }
-    if (limits.toolCallsLimit !== undefined && stats.toolCallsCount >= limits.toolCallsLimit) {
-      return false;
-    }
-    if (limits.inputTokensLimit !== undefined && stats.inputTokens >= limits.inputTokensLimit) {
-      return false;
-    }
-    if (limits.outputTokensLimit !== undefined && stats.outputTokens >= limits.outputTokensLimit) {
-      return false;
-    }
-    if (limits.totalCostLimit !== undefined && stats.totalCost >= limits.totalCostLimit) {
-      return false;
-    }
-    return true;
+    return evaluateUsageLimits(stats, limits) === null;
   }
 
   /**

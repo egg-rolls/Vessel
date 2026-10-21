@@ -12,6 +12,7 @@ import type {
   Usage,
 } from '../types/provider.js';
 import type { ToolCall } from '../types/tool.js';
+import { ProviderHttpError, parseRetryAfterMs } from './errors.js';
 import { StreamAccumulator } from './stream-accumulator.js';
 
 /** SSE 事件（解析自 HTTP 流） */
@@ -321,7 +322,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      throw new ProviderHttpError(
+        'OpenAI',
+        response.status,
+        error,
+        parseRetryAfterMs(response.headers.get('retry-after')),
+      );
     }
 
     const data = (await response.json()) as {
@@ -410,7 +416,12 @@ export class OpenAICompatibleProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      throw new ProviderHttpError(
+        'OpenAI',
+        response.status,
+        error,
+        parseRetryAfterMs(response.headers.get('retry-after')),
+      );
     }
     if (!response.body) {
       throw new Error('OpenAI API returned no stream body');
@@ -595,7 +606,12 @@ export class AnthropicProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Anthropic API error: ${response.status} - ${error}`);
+      throw new ProviderHttpError(
+        'Anthropic',
+        response.status,
+        error,
+        parseRetryAfterMs(response.headers.get('retry-after')),
+      );
     }
 
     const data = (await response.json()) as {
@@ -689,7 +705,12 @@ export class AnthropicProvider implements LLMProvider {
 
     if (!response.ok) {
       const error = await response.text();
-      throw new Error(`Anthropic API error: ${response.status} - ${error}`);
+      throw new ProviderHttpError(
+        'Anthropic',
+        response.status,
+        error,
+        parseRetryAfterMs(response.headers.get('retry-after')),
+      );
     }
     if (!response.body) {
       throw new Error('Anthropic API returned no stream body');

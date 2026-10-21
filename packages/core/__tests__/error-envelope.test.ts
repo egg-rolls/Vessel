@@ -7,6 +7,8 @@
 import { describe, expect, it } from 'bun:test';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
+import { LimitExceededError } from '../src/limits/limit-error';
+import { ProviderHttpError } from '../src/provider/errors';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { toErrorEnvelope } from '../src/runtime/error-envelope';
 import { PermissionAbortedError, PermissionTimeoutError } from '../src/runtime/permission-policy';
@@ -145,6 +147,38 @@ describe('toErrorEnvelope', () => {
       category: 'internal',
       phase: 'checkpoint',
       retryable: true,
+    });
+  });
+
+  it('maps limit_blocked to internal/run and passes the block through as details', () => {
+    const block = {
+      scope: 'run' as const,
+      key: 'input_tokens_limit' as const,
+      current: 100235,
+      max: 100000,
+      source: 'limits.inputTokensLimit',
+      hint: 'Increase limits.inputTokensLimit or compact the conversation history.',
+      retryable: false as const,
+    };
+
+    expect(toErrorEnvelope(new LimitExceededError(block), { phase: 'llm' })).toEqual({
+      error_code: 'limit_blocked',
+      category: 'internal',
+      phase: 'run',
+      retryable: false,
+      details: { ...block },
+    });
+  });
+
+  it('reads http_status from ProviderHttpError instead of the message fallback', () => {
+    expect(
+      toErrorEnvelope(new ProviderHttpError('OpenAI', 429, 'slow down', 2000), { phase: 'llm' }),
+    ).toMatchObject({
+      error_code: 'provider_rate_limit',
+      category: 'provider',
+      phase: 'llm',
+      retryable: true,
+      http_status: 429,
     });
   });
 

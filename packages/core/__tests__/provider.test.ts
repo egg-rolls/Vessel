@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { MemoryLLMProvider, OpenAICompatibleProvider } from '../src/provider/providers';
+import { ProviderHttpError } from '../src/provider/errors';
+import {
+  AnthropicProvider,
+  MemoryLLMProvider,
+  OpenAICompatibleProvider,
+} from '../src/provider/providers';
 import type { ChatRequest, StreamChunk } from '../src/types/provider';
 
 describe('MemoryLLMProvider', () => {
@@ -235,6 +240,55 @@ describe('OpenAICompatibleProvider 错误与取消（C-09）', () => {
     ).rejects.toThrow('401');
   });
 
+  it('非流式 429 抛 ProviderHttpError 并解析 Retry-After 秒数', async () => {
+    globalThis.fetch = (async () =>
+      new Response('rate limited', {
+        status: 429,
+        headers: { 'retry-after': '2' },
+      })) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleProvider({ api_key: 'k', model: 'gpt-4' });
+
+    let thrown: unknown;
+    try {
+      await provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'gpt-4' });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ProviderHttpError);
+    const error = thrown as ProviderHttpError;
+    expect(error.status).toBe(429);
+    expect(error.body).toBe('rate limited');
+    expect(error.retryAfterMs).toBe(2000);
+    expect(error.message).toBe('OpenAI API error: 429 - rate limited');
+  });
+
+  it('流式非 2xx 抛 ProviderHttpError 且缺失 Retry-After 时为 undefined', async () => {
+    globalThis.fetch = (async () =>
+      new Response('upstream down', { status: 503 })) as unknown as typeof fetch;
+
+    const provider = new OpenAICompatibleProvider({ api_key: 'k', model: 'gpt-4' });
+
+    let thrown: unknown;
+    try {
+      await provider.chat({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'gpt-4',
+        stream: true,
+        on_chunk: () => undefined,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ProviderHttpError);
+    const error = thrown as ProviderHttpError;
+    expect(error.status).toBe(503);
+    expect(error.retryAfterMs).toBeUndefined();
+    expect(error.message).toBe('OpenAI API error: 503 - upstream down');
+  });
+
   it('把 req.signal 透传给 fetch', async () => {
     const controller = new AbortController();
     let received: AbortSignal | undefined;
@@ -257,5 +311,67 @@ describe('OpenAICompatibleProvider 错误与取消（C-09）', () => {
     });
 
     expect(received).toBe(controller.signal);
+  });
+});
+
+describe('AnthropicProvider 非 2xx 错误', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('非流式解析 Retry-After HTTP date', async () => {
+    const retryAt = new Date(Date.now() + 5000).toUTCString();
+    globalThis.fetch = (async () =>
+      new Response('overloaded', {
+        status: 429,
+        headers: { 'retry-after': retryAt },
+      })) as unknown as typeof fetch;
+
+    const provider = new AnthropicProvider({ api_key: 'k' });
+
+    let thrown: unknown;
+    try {
+      await provider.chat({ messages: [{ role: 'user', content: 'hi' }], model: 'claude' });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ProviderHttpError);
+    const error = thrown as ProviderHttpError;
+    expect(error.status).toBe(429);
+    expect(error.message).toBe('Anthropic API error: 429 - overloaded');
+    expect(error.retryAfterMs).toBeGreaterThan(0);
+    expect(error.retryAfterMs).toBeLessThanOrEqual(5000);
+  });
+
+  it('流式 402 抛 ProviderHttpError 且不解析非法 Retry-After', async () => {
+    globalThis.fetch = (async () =>
+      new Response('quota exhausted', {
+        status: 402,
+        headers: { 'retry-after': 'soon' },
+      })) as unknown as typeof fetch;
+
+    const provider = new AnthropicProvider({ api_key: 'k' });
+
+    let thrown: unknown;
+    try {
+      await provider.chat({
+        messages: [{ role: 'user', content: 'hi' }],
+        model: 'claude',
+        stream: true,
+        on_chunk: () => undefined,
+      });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(ProviderHttpError);
+    const error = thrown as ProviderHttpError;
+    expect(error.status).toBe(402);
+    expect(error.body).toBe('quota exhausted');
+    expect(error.retryAfterMs).toBeUndefined();
+    expect(error.message).toBe('Anthropic API error: 402 - quota exhausted');
   });
 });

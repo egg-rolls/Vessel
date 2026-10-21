@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
+import { LimitExceededError } from '../src/limits/limit-error';
 import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { MemoryPluginHost } from '../src/runtime/plugin-host';
@@ -1032,6 +1033,77 @@ describe('中断与限额（C-09）', () => {
     });
 
     await expect(runtime.run('loop')).rejects.toThrow('Usage limits exceeded');
+  });
+
+  it('limit.blocked 只发一次，run.failed 带 limit_blocked 与完整 details', async () => {
+    const events = new MemoryEventStream();
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'noop',
+      description: 'noop',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'ok',
+    });
+
+    const provider = {
+      chat: async () => ({
+        content: '',
+        finish_reason: 'tool_calls' as const,
+        tool_calls: [
+          { id: 'c1', type: 'function' as const, function: { name: 'noop', arguments: '{}' } },
+        ],
+      }),
+    };
+
+    const runtime = await AgentRuntime.create({
+      provider,
+      model: 'test-model',
+      pluginHost,
+      context: new MemoryContextManager(),
+      events,
+      limits: { requestLimit: 1 },
+      termination: { maxIterations: 10 },
+    });
+
+    let thrown: unknown;
+    try {
+      await runtime.run('loop');
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(LimitExceededError);
+    const block = (thrown as LimitExceededError).details;
+    expect(block).toMatchObject({
+      scope: 'run',
+      key: 'request_limit',
+      current: 1,
+      max: 1,
+      source: 'limits.requestLimit',
+      retryable: false,
+    });
+    expect(block.hint.length).toBeGreaterThan(0);
+
+    const history = events.getHistory();
+    const blockedEvents = history.filter((event) => event.type === 'limit.blocked');
+    expect(blockedEvents).toHaveLength(1);
+    const blocked = blockedEvents[0];
+    expect(blocked?.data).toMatchObject({ error_code: 'limit_blocked', ...block });
+    expect(blocked?.data.run_id).toBe(blocked?.run_id);
+    expect(typeof blocked?.data.session_id).toBe('string');
+    expect(blocked?.data.session_id).not.toBe('');
+
+    const failedEvents = history.filter((event) => event.type === 'run.failed');
+    expect(failedEvents).toHaveLength(1);
+    expect(failedEvents[0]?.data).toMatchObject({
+      error_code: 'limit_blocked',
+      category: 'internal',
+      phase: 'run',
+      retryable: false,
+      details: block,
+    });
+    expect(failedEvents[0]?.data.error).toContain('Usage limits exceeded');
+    expect(blocked?.data.session_id).toBe(failedEvents[0]?.data.session_id);
   });
 
   it('ToolContext.signal 注入并可响应取消（F10）', async () => {

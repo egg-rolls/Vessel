@@ -4,4 +4,5 @@
  */
 
 export type { ChatRequest, LLMProvider, LLMResponse, ProviderFactory } from '../types/provider.js';
+export { ProviderHttpError, parseRetryAfterMs } from './errors.js';
 export { AnthropicProvider, MemoryLLMProvider, OpenAICompatibleProvider } from './providers.js';
