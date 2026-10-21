@@ -3,6 +3,8 @@
  * @module @vessel-agent/core/hooks
  */
 
+import type { Message } from './provider.js';
+
 /** Hook 类型枚举 */
 export enum HookType {
   BeforeLlm = 'before_llm',
@@ -18,6 +20,12 @@ export interface HookContext {
   session_id?: string;
   /** BeforeLlm 注入位：hook 写这里，loop 在调用 LLM 前读取，作为本次请求的 system 消息 */
   systemPrompt?: string;
+  /**
+   * BeforeLlm 注入位（0.16 E5）：要追加到本次请求的消息，按顺序排在已有上下文之后。
+   * runtime 只写入上下文一次；同一批消息再次返回时按稳定标识（`name` / `timestamp`）
+   * 或对象引用去重。缺省不改变请求形状。
+   */
+  messages?: Message[];
   /** BeforeTool / AfterTool：当前工具名（0.6.1 P2） */
   tool?: string;
   /** BeforeTool / AfterTool：当前工具输入；BeforeTool 可经 HookResult.updatedInput 改写 */
