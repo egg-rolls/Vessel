@@ -790,6 +790,11 @@ async function runWithConfig(result: BootstrapResult) {
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
+            // 0.18：权限 / ask 应答必须回到该 tenant 的运行时流（工具在那里等），
+            // 只在找不到 tenant bundle 时回退共享流（引擎内部处理）。
+            tenantEventsFor: (tenantId: string) =>
+              tenantFactory?.bundleFor(tenantId)?.runtimeEvents ??
+              (tenantId === result.tenantId ? result.bundle?.runtimeEvents : undefined),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
             plugins: () => tenantFactory?.pluginsFor(result.tenantId) ?? [],

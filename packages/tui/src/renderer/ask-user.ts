@@ -97,12 +97,25 @@ function formatAnswers(answers: AskUserAnswer[]): string {
   return answers.map((a, i) => `${i + 1}. ${a.header}: ${a.answer}`).join('\n');
 }
 
-/** 发请求事件 + 事件流等回答；无 TUI 订阅者时 waitFor 超时返回错误（headless 兜底） */
+/**
+ * 等待回答的选项。
+ *
+ * 0.18：默认**无限等待**——没有 TUI / Web 订阅者时也一直等到应答或 abort，
+ * 不再用 120s 自动超时把 run 判失败。`timeout` 只保留给测试与显式调用方。
+ */
+export interface AskUserWaitOptions {
+  /** 显式超时（毫秒）；缺省 = 不超时 */
+  timeout?: number;
+  /** run 的取消信号：abort 时停止等待并返回明确的取消文案 */
+  signal?: AbortSignal;
+}
+
+/** 发请求事件 + 事件流等回答；应答 / 取消 / 显式超时三种收口 */
 async function promptFromEvents(
   events: EventStream,
   runId: string,
   questions: AskUserQuestion[],
-  timeoutMs: number,
+  wait: AskUserWaitOptions = {},
 ): Promise<string> {
   const requestId = randomUUID();
   events.publish({
@@ -115,7 +128,8 @@ async function promptFromEvents(
   try {
     const data = (await events.waitFor('ask.user.answered', {
       requestId,
-      timeout: timeoutMs,
+      ...(wait.timeout !== undefined ? { timeout: wait.timeout } : {}),
+      ...(wait.signal !== undefined ? { signal: wait.signal } : {}),
     })) as AskUserAnsweredData | undefined;
     const answers = data?.answers ?? [];
     if (answers.length === 0) {
@@ -123,6 +137,10 @@ async function promptFromEvents(
     }
     return formatAnswers(answers);
   } catch (error) {
+    // run 被取消 / abort：明确说明，不要伪装成超时（ADR-079 语义）。
+    if (wait.signal?.aborted === true || (error instanceof Error && error.name === 'AbortError')) {
+      return 'Error: ask_user was cancelled.';
+    }
     return `Error: ${error instanceof Error ? error.message : String(error)}`;
   }
 }
@@ -130,7 +148,7 @@ async function promptFromEvents(
 // ── 工具定义工厂 ──────────────────────────────────
 
 export interface CreateAskUserToolOptions {
-  /** 等待用户回答的超时（毫秒），默认 120s */
+  /** 显式等待超时（毫秒）；缺省 = 无限等待（0.18 起不再有 120s 自动超时） */
   timeout?: number;
 }
 
@@ -138,11 +156,9 @@ export interface CreateAskUserToolOptions {
  * 创建 ask_user 工具定义（普通工具对象，ADR-029）
  *
  * handler 通过事件流交互：发布 `ask.user.requested` → 等 `ask.user.answered` →
- * 返回回答。无前端订阅者时 waitFor 超时返回错误。
+ * 返回回答。默认一直等待，由应答 / abort（run 取消）/ run 终态收口。
  */
 export function createAskUserTool(opts: CreateAskUserToolOptions = {}): ToolDefinition {
-  const timeoutMs = opts.timeout ?? 120_000;
-
   return {
     name: 'ask_user',
     description: `Ask the user up to 4 questions during execution, with optional multiple-choice options and multi-select.
@@ -193,7 +209,10 @@ Do NOT use for trivial questions you can resolve yourself.`,
       const input = args as AskUserInput;
       const normalized = normalizeQuestions(input);
       if (typeof normalized === 'string') return normalized;
-      return promptFromEvents(ctx.events, ctx.run_id, normalized, timeoutMs);
+      return promptFromEvents(ctx.events, ctx.run_id, normalized, {
+        ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+      });
     },
   };
 }

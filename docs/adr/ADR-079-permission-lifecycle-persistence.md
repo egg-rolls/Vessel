@@ -25,3 +25,8 @@ tags: [permission, interaction, persistence, gateway, web, tui, lifecycle]
 - **后果**：权限等待不再因时间自动失败，run 不会因为人不在而进入失败态；用户必须显式应答或取消。gateway 重启后旧 pending 明确变成 `orphaned`，迟到应答得到 `run_ended`；重复点击是幂等的。代价是 `<dataDir>` 多一份 0600 的交互记录文件，且 Web 刷新恢复仍依赖事件重放缓冲。core 的 `allow session` 目前只被解析为应答字段，实际只读取 `remember`（等价 `always`），session 级批准尚未生效；`interactions.pending` RPC 未提供。实现变更必须同步更新 `packages/core/__tests__/permission-lifecycle.test.ts`、`packages/serve/__tests__/interactions-store.test.ts` 与 Web 交互测试。
 
 - **关联**：ADR-026（工具自描述权限）、ADR-029（交互暂停事件流）、ADR-036（Gateway 协议）、ADR-048（统一 RPC 方法表）、ADR-054（RunExecution 与失败隔离）、ADR-055（工具路径边界）、ADR-077（0.11.1 权限时效，本 ADR 修订其“超时致命”与 Web TTL 部分）；`packages/core/src/runtime/permission-policy.ts`、`packages/core/src/runtime/agent-runtime.ts`、`packages/serve/src/run-engine.ts`、`packages/serve/src/interactions-store.ts`、`packages/serve/src/gateway/methods/interactions.ts`、`apps/web/src/domains/chat/PermissionCard.tsx`、`apps/web/src/domains/chat/RunCard.tsx`、`apps/web/src/gateway/interactions.ts`。
+
+## Addendum（2026-10-21，0.18）
+
+- **应答投递**：`respondPermission` / `respondAsk` 必须发布到**所属 tenant 的运行时事件流**（gateway 新增 `tenantEventsFor` 注入），只有拿不到 tenant 流时才回退 gateway 共享流；不得双发（tenant→shared 桥会转发给 Web）。
+- **`ask_user` 去超时**：默认无限等待，`waitFor` 传 `ctx.signal`，abort 返回明确的取消文案而不是超时；Web / TUI 提问卡不再倒计时 / 过期，Web 的 `expiresAt` 固定为 `Infinity`。

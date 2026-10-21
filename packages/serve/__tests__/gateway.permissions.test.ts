@@ -62,6 +62,56 @@ describe('gateway permissions', () => {
     return (await res.json()) as { run_id: string };
   };
 
+  it('delivers an approval to the tenant runtime stream (0.18)', async () => {
+    // 生产装配：gateway 广播共享流，runtime 等的是 tenant 流；只有单向桥。
+    const shared = new MemoryEventStream();
+    const tenantEvents = new MemoryEventStream();
+    const unsubBridge = tenantEvents.subscribe((event) => {
+      shared.publish(event.tenant_id === undefined ? { ...event, tenant_id: 'default' } : event);
+    });
+
+    const pluginHost = new MemoryPluginHost();
+    const state = { executed: false };
+    pluginHost.registerTool({
+      name: 'danger_tool',
+      description: 'A tool that requires confirmation',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => {
+        state.executed = true;
+        return 'executed';
+      },
+    });
+    const runtime = await createRuntime({
+      events: tenantEvents,
+      pluginHost,
+      provider: new ToolCallingProvider('danger_tool'),
+      permission: { default: 'ask' },
+    });
+    const gw = createGateway({
+      events: shared,
+      runtime,
+      pluginHost,
+      tenantEventsFor: () => tenantEvents,
+    });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    await submit(gw, 'please run');
+    const request = await client.nextEvent('tool.permission.request');
+    const requestId = request.requestId as string;
+
+    const res = await fetch(`${gw.url}/v1/permissions/${requestId}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${gw.token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow', remember: false }),
+    });
+    expect(res.status).toBe(200);
+
+    await client.nextEvent('run.completed');
+    expect(state.executed).toBe(true);
+    unsubBridge();
+  });
+
   it('allows a tool after an explicit REST approval', async () => {
     const { gw, state } = await makePermissionGateway();
     gateways.push(gw);

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
+import { AskCard } from '../src/domains/chat/AskCard';
 import { AskPrompt, PermissionPrompt } from '../src/domains/chat/PromptSlots';
 import {
   nextPending,
@@ -57,6 +58,27 @@ describe('permission prompt (composer slot)', () => {
       <PermissionPrompt request={permission()} more={2} onDecide={() => {}} />,
     );
     expect(markup).toContain('还有 2 个待处理');
+  });
+});
+
+describe('ask card (composer slot)', () => {
+  test('has no countdown / expiry hint and keeps submit available (0.18)', () => {
+    const markup = renderToStaticMarkup(
+      <AskCard
+        request={{
+          requestId: 'ask-1',
+          runId: 'run-1',
+          expiresAt: Number.POSITIVE_INFINITY,
+          questions: [{ header: 'Q', question: 'Which?' }],
+        }}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(markup).toContain('ask-card');
+    expect(markup).not.toContain('剩余');
+    expect(markup).not.toContain('s left');
+    expect(markup).toContain('提交');
   });
 });
 
@@ -164,7 +186,9 @@ describe('ask prompt (composer slot)', () => {
     expect(markup).toContain('ask-card');
     expect(markup).toContain('data-request-id="ask-1"');
     expect(markup).toContain('Which one?');
-    expect(markup).toContain('剩余 1s');
+    // 0.18：提问不再倒计时 / 过期。
+    expect(markup).not.toContain('剩余');
+    expect(markup).not.toContain('ask-card expired');
     expect(markup).not.toContain('permission-modal');
     expect(markup).not.toContain('composer-input');
   });

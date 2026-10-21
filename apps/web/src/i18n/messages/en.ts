@@ -172,7 +172,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'ask.title': 'Agent question',
   'ask.goTo': 'Answer',
   'ask.otherSessions': '{count} pending question(s) in other sessions',
-  'ask.remaining': '{seconds}s left',
   'ask.pendingMore': '{count} more pending',
   'ask.submit': 'Submit',
   'ask.customPlaceholder.options': 'Or type a custom answer',

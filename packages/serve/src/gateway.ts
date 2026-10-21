@@ -304,6 +304,11 @@ export interface GatewayOptions {
   runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
   sessionFor?: (tenantId: string) => SessionBackend | undefined;
   contextFor?: (tenantId: string) => ContextManager | undefined;
+  /**
+   * tenant 运行时事件流（0.18）：权限 / ask 应答直接投递到该 tenant，
+   * 而不是只发到 `events`（gateway 共享流）。缺省回退 `events`。
+   */
+  tenantEventsFor?: (tenantId: string) => EventStream | undefined;
   pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;
@@ -633,6 +638,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...(context ? { context } : {}),
     ...(opts.runtimeFor ? { runtimeFor: opts.runtimeFor } : {}),
     ...(opts.contextFor ? { contextFor: opts.contextFor } : {}),
+    ...(opts.tenantEventsFor ? { tenantEventsFor: opts.tenantEventsFor } : {}),
     defaultTenantId,
     maxQueue,
     maxRuns: MAX_RUNS,
@@ -3301,7 +3307,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }, heartbeatMs);
   (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
-  // 只清理 ask 的内存记录；权限 pending 不再按时间过期（Addendum A）。
+  // ask / 权限 pending 默认都不按时间过期（0.18）；只有显式 TTL 时 sweep 才生效。
   const permissionSweeper = setInterval(() => {
     engine.sweep();
   }, 30_000);

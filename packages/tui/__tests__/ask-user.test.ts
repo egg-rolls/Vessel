@@ -192,7 +192,33 @@ describe('createAskUserTool（事件流交互）', () => {
     expect(result).toContain('Error');
   });
 
-  it('times out with error when no subscriber answers (headless fallback)', async () => {
+  it('waits without a timeout and returns as soon as the answer arrives (0.18)', async () => {
+    const events = new MemoryEventStream();
+    // 延迟应答：超过旧的短超时也仍应返回答案（证明默认没有自动超时）。
+    events.subscribe((event) => {
+      if (event.type !== 'ask.user.requested') return;
+      const data = event.data as unknown as { requestId: string };
+      setTimeout(() => {
+        events.publish({
+          type: 'ask.user.answered',
+          run_id: event.run_id,
+          data: { requestId: data.requestId, answers: sampleAnswers(['ESM', '生产']) },
+          ts: Date.now(),
+        });
+      }, 150);
+    });
+
+    const tool = createAskUserTool();
+    const result = await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events,
+    });
+
+    expect(result).toContain('1. 格式: ESM');
+  });
+
+  it('keeps an explicit timeout available for tests / callers', async () => {
     const events = new MemoryEventStream();
     const tool = createAskUserTool({ timeout: 50 });
     const result = await tool.handler(sampleQuestions(), {
@@ -203,5 +229,40 @@ describe('createAskUserTool（事件流交互）', () => {
 
     expect(result).toContain('Error');
     expect(result).toContain('Timed out');
+  });
+
+  it('returns a cancellation message when the run aborts', async () => {
+    const events = new MemoryEventStream();
+    const controller = new AbortController();
+    const tool = createAskUserTool();
+
+    const pending = tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events,
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    const result = await pending;
+    expect(result).toContain('Error');
+    expect(result).toContain('cancelled');
+    expect(result).not.toContain('Timed out');
+  });
+
+  it('rejects immediately when the signal is already aborted', async () => {
+    const events = new MemoryEventStream();
+    const controller = new AbortController();
+    controller.abort();
+    const tool = createAskUserTool();
+
+    const result = await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events,
+      signal: controller.signal,
+    });
+
+    expect(result).toContain('cancelled');
   });
 });

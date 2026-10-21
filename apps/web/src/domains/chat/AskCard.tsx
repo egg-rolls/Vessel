@@ -10,27 +10,27 @@ function truncate(value: string, length: number): string {
  * ask_user 卡片：由 AskPrompt 渲染在 Composer 槽位（替换输入框）。
  *
  * - 提交中禁用全部按钮，防止双击；
- * - 其他端应答 / 过期 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；
+ * - 其他端应答 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；
+ * - 0.18 起提问没有自动超时（不再显示倒计时），提交按钮常驻；
  * - 提交走现有 `ask.respond`，不新增 RPC。
  */
 export function AskCard({
   request,
   pendingCount = 1,
-  now,
   busy = false,
   onSubmit,
   onCancel,
 }: {
   request: AskUserRequest;
   pendingCount?: number;
-  now: number;
+  /** 保留以兼容调用方；提问已不再倒计时 / 过期。 */
+  now?: number;
   busy?: boolean;
   onSubmit: (answers: AskUserAnswer[]) => void;
   onCancel: () => void;
 }) {
   const [custom, setCustom] = useState<string[]>(() => request.questions.map(() => ''));
   const [selected, setSelected] = useState<string[][]>(() => request.questions.map(() => []));
-  const remaining = Math.max(0, Math.ceil((request.expiresAt - now) / 1000));
   const titleId = `ask-card-${request.requestId}`;
 
   const toggle = (index: number, option: string, multi: boolean) => {
@@ -63,9 +63,7 @@ export function AskCard({
     <fieldset className="ask-card" aria-labelledby={titleId} data-request-id={request.requestId}>
       <div className="ask-card-head" id={titleId}>
         <span className="ask-card-title">{t('ask.title')}</span>
-        <span className="ask-card-meta dim mono">
-          run {truncate(request.runId, 16)} · {t('ask.remaining', { seconds: remaining })}
-        </span>
+        <span className="ask-card-meta dim mono">run {truncate(request.runId, 16)}</span>
         {pendingCount > 1 && (
           <span className="dim">{t('ask.pendingMore', { count: pendingCount - 1 })}</span>
         )}

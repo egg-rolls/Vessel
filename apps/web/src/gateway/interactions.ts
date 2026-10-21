@@ -7,8 +7,20 @@
 import { t } from '../i18n';
 import type { AskUserRequest, PermissionRequest, PermissionScope, RunEvent } from './types';
 
-/** 与 gateway interaction TTL 对齐（DECISION-022 §2.1）。 */
+/**
+ * 历史上与 gateway interaction TTL 对齐的常量（DECISION-022 §2.1）。
+ *
+ * 0.18 起只用于旧数据 / 排序回推；ask 不再自动过期，权限请求本来就不按时间过期。
+ */
 export const INTERACTION_TTL_MS = 120_000;
+
+/**
+ * ask 的 `expiresAt` 哨兵：永不过期（0.18）。
+ *
+ * 保留 `expiresAt` 字段是为了不破坏既有类型（排序 / 旧数据兼容），
+ * 但取值改为正无穷，`expireInteractions` 与 `isInteractionExpired` 都不会淘汰它。
+ */
+export const ASK_EXPIRES_AT_NEVER = Number.POSITIVE_INFINITY;
 
 export interface Interaction {
   requestId: string;
@@ -95,11 +107,15 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
  *
  * 事件本身不带 session_id：由调用方从 `run.started` 反查后传入。
  * 关联字段（agentId）与权限请求同一套映射；旧事件缺字段时保持 undefined。
+ *
+ * 0.18：ask 不再按 120s 过期，`expiresAt` 固定为 `ASK_EXPIRES_AT_NEVER`；
+ * 卡片只由应答 / run 终态 / 其他端事件移除。
  */
 export function askFromEvent(
   event: RunEvent,
   sessionId?: string,
-  now = Date.now(),
+  // 保留第三参数以兼容调用方 / 测试；ask 不再由事件时间推导过期。
+  _now = Date.now(),
 ): AskUserRequest | null {
   const data = event.data as {
     requestId?: unknown;
@@ -121,7 +137,7 @@ export function askFromEvent(
     requestId: rawId,
     questions,
     runId: event.run_id,
-    expiresAt: interactionExpiresAt(event.ts, INTERACTION_TTL_MS, now),
+    expiresAt: ASK_EXPIRES_AT_NEVER,
     ...(sessionId !== undefined && sessionId.length > 0 ? { sessionId } : {}),
     ...(agentId !== undefined ? { agentId } : {}),
   };
@@ -165,7 +181,12 @@ export function removeInteraction<T extends { requestId: string }>(
     : prev;
 }
 
-/** 移除已过期项；保留项不变。 */
+/**
+ * 移除已过期项；保留项不变。
+ *
+ * 0.18：ask 的 `expiresAt` 是 `ASK_EXPIRES_AT_NEVER`，因此本函数不会淘汰 ask；
+ * 提问卡片只由应答 / run 终态 / 其他端事件收起。
+ */
 export function expireInteractions<T extends Pick<Interaction, 'expiresAt'>>(
   prev: readonly T[],
   now: number,

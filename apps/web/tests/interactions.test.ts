@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  ASK_EXPIRES_AT_NEVER,
   askFromEvent,
   enqueueInteraction,
   enqueuePermission,
@@ -174,7 +175,7 @@ describe('askFromEvent (0.17)', () => {
     data,
   });
 
-  test('maps questions, session, expiry and agentId', () => {
+  test('maps questions, session and agentId; asks never expire (0.18)', () => {
     const item = askFromEvent(
       event({
         requestId: 'ask-1',
@@ -188,8 +189,11 @@ describe('askFromEvent (0.17)', () => {
       runId: 'run-1',
       sessionId: 'session-1',
       agentId: 'delegate-9',
-      expiresAt: 1_000 + INTERACTION_TTL_MS,
+      expiresAt: ASK_EXPIRES_AT_NEVER,
     });
+    // 很久以后也不会被过期清理淘汰。
+    expect(isInteractionExpired(item as Item, 9_999_999_999)).toBe(false);
+    expect(expireInteractions([item as Item], 9_999_999_999)).toHaveLength(1);
   });
 
   test('keeps old streams working and rejects malformed payloads', () => {

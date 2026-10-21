@@ -168,7 +168,6 @@ export const messages = {
   'ask.title': 'Agent 提问',
   'ask.goTo': '前往回答',
   'ask.otherSessions': '其他会话有 {count} 个待处理提问',
-  'ask.remaining': '剩余 {seconds}s',
   'ask.pendingMore': '还有 {count} 个待处理',
   'ask.submit': '提交',
   'ask.customPlaceholder.options': '或输入自定义回答',
