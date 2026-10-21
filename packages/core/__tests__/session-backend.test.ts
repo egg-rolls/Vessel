@@ -212,6 +212,22 @@ describe('FileSessionBackend', () => {
     expect(sessions).toContain('session-3');
   });
 
+  it("tenant B's list does not expose tenant A's session ids", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'vessel-session-tenant-'));
+    try {
+      const a = new FileSessionBackend(dir, { tenantId: 'a' });
+      const b = new FileSessionBackend(dir, { tenantId: 'b' });
+      await a.save(createRunState('s-a'));
+      await b.save(createRunState('s-b'));
+
+      expect(await b.list()).toEqual(['s-b']);
+      expect((await b.listRich()).map((session) => session.session_id)).toEqual(['s-b']);
+      expect(await a.list()).toEqual(['s-a']);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('should return empty list for non-existent directory', async () => {
     const fresh = new FileSessionBackend('.vessel/nonexistent');
     const sessions = await fresh.list();

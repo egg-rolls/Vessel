@@ -278,11 +278,8 @@ export class FileSessionBackend implements SessionBackend {
     }
   }
 
-  /**
-   * 列出所有会话 ID
-   * @returns 会话 ID 数组（去后缀 .json 并解码）
-   */
-  async list(): Promise<string[]> {
+  /** 扫描目录内的会话 id（不做 tenant 过滤；list / listRich 共用） */
+  private async scanIds(): Promise<string[]> {
     await this.ensureDir();
 
     try {
@@ -304,6 +301,29 @@ export class FileSessionBackend implements SessionBackend {
   }
 
   /**
+   * 列出所有会话 ID
+   *
+   * tenant 模式下逐 id `load()`：只返回本 tenant 的会话，损坏项跳过
+   * （与 listRich 的降级一致），其它错误上抛。非 tenant 原样返回。
+   * @returns 会话 ID 数组（去后缀 .json 并解码）
+   */
+  async list(): Promise<string[]> {
+    const ids = await this.scanIds();
+    if (this.tenantId === undefined) return ids;
+
+    const visible: string[] = [];
+    for (const id of ids) {
+      try {
+        if ((await this.load(id)) !== null) visible.push(id);
+      } catch (error) {
+        if (error instanceof SessionCorruptError) continue;
+        throw error;
+      }
+    }
+    return visible;
+  }
+
+  /**
    * 列出会话摘要（含 title/preview/updated_at/message_count）
    *
    * 过滤空会话（message_count > 0），按 updated_at 倒序。
@@ -313,7 +333,7 @@ export class FileSessionBackend implements SessionBackend {
    * 不让整张列表失败；直接 `load()` 仍抛错，保证损坏文件不被覆盖。
    */
   async listRich(): Promise<SessionInfo[]> {
-    const ids = await this.list();
+    const ids = await this.scanIds();
     const results: SessionInfo[] = [];
 
     for (const id of ids) {
