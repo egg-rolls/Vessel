@@ -25,6 +25,7 @@ import type {
   RuntimeHost,
   RuntimeOptions,
   RuntimePermissionConfig,
+  SelfCardOptions,
   SessionBackend,
   TerminationPolicy,
   Transport,
@@ -51,6 +52,8 @@ export interface OwnerRuntimeSpec {
   limits: UsageLimits;
   termination: TerminationPolicy;
   permission?: RuntimePermissionConfig;
+  /** 0.15 E9：owner 的 Self Card（Host 透传到成员 runtime） */
+  selfCard?: SelfCardOptions;
 }
 
 export interface CreateHostRuntimeOptions {
@@ -176,6 +179,7 @@ function buildOwnerSpec(owner: OwnerRuntimeSpec, sessionId: string): AgentSpec {
     },
     termination: owner.termination,
     ...(owner.permission ? { permission: owner.permission } : {}),
+    ...(owner.selfCard !== undefined ? { selfCard: owner.selfCard } : {}),
   };
 }
 

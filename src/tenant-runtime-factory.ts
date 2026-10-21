@@ -417,6 +417,7 @@ export function buildDelegateTaskOptions(
     readOnlyTools: input.config.delegate?.readOnlyTools,
     allowNested: input.config.delegate?.allowNested ?? false,
     maxDescendants: input.config.delegate?.maxDescendants ?? 16,
+    contextMaxTokens: input.config.context?.maxTokens,
     permission: input.permission,
     ...(input.runtimeHost !== undefined ? { runtimeHost: input.runtimeHost } : {}),
   };
@@ -759,6 +760,9 @@ export async function buildTenantRuntime(
           limits,
           termination,
           permission,
+          selfCard: ownerSelfCard(config, providerModel, {
+            askUser: options.registerAskUser === true,
+          }),
         },
         sessionId: options.sessionId ?? crypto.randomUUID(),
         ...(runStore ? { runStore } : {}),

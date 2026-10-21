@@ -86,7 +86,11 @@ describe('buildDelegateTaskOptions', () => {
     expect(defaults.maxDescendants).toBe(16);
 
     const configured = buildDelegateTaskOptions({
-      config: { ...config, delegate: { allowNested: true, maxDescendants: 3 } },
+      config: {
+        ...config,
+        delegate: { allowNested: true, maxDescendants: 3 },
+        context: { maxTokens: 12_345 },
+      },
       providerFactory: () => new MemoryLLMProvider(),
       tenantId: 'acme',
       providerModel: 'mock-model',
@@ -95,5 +99,6 @@ describe('buildDelegateTaskOptions', () => {
     });
     expect(configured.allowNested).toBe(true);
     expect(configured.maxDescendants).toBe(3);
+    expect(configured.contextMaxTokens).toBe(12_345);
   });
 });

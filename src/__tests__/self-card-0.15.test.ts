@@ -7,6 +7,13 @@
 
 import { describe, expect, it } from 'bun:test';
 import type { VesselConfig } from '../../packages/config/src/index';
+import type {
+  ContextManager,
+  LLMProvider,
+  PluginHost,
+  SessionBackend,
+} from '../../packages/core/src/index';
+import { buildOwnerSpec } from '../runtime-factory';
 import { knownOwnerToolNames, ownerSelfCard } from '../self-card';
 
 describe('owner self card', () => {
@@ -67,5 +74,24 @@ describe('owner self card', () => {
     const card = ownerSelfCard({}, 'm', { askUser: true });
     expect(card.context.max).toBe(1_000_000);
     expect(card.how_to_ask).toContain('ask_user');
+  });
+
+  it('carries selfCard into the host owner AgentSpec', () => {
+    const selfCard = ownerSelfCard({}, 'm');
+    const spec = buildOwnerSpec(
+      {
+        id: 'owner',
+        provider: {} as LLMProvider,
+        model: 'm',
+        pluginHost: {} as PluginHost,
+        context: {} as ContextManager,
+        session: {} as SessionBackend,
+        limits: {},
+        termination: { maxIterations: 1 },
+        selfCard,
+      },
+      'session-1',
+    );
+    expect(spec.selfCard).toEqual(selfCard);
   });
 });
