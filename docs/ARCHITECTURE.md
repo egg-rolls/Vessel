@@ -2129,3 +2129,59 @@ interface LimitBlock {
 - `run.failed` 不透出建议退避时间，`retryAfterMs` 只在 provider 适配层可见。
 - 第三方 provider 若既无 `status` 字段也不匹配 `... API error: <status>` 文本，仍按原有文本分类。
 - `Retry-After` 只影响 429；402 直接失败，不尝试等待后重试。
+
+## 36. 0.14.4 上下文压缩质量：保留边界与分块摘要（已实现）
+
+> 状态：已合入 `release/0.14.4`（未发布）。决策见 [ADR-085](adr/ADR-085-compaction-retention-and-chunked-summary.md)。
+
+### 36.1 压缩触发
+
+- `MemoryContextManager.autoCompactAsync`：`tokenCount > maxTokens × compactThreshold`（默认 `0.8`）或消息条数超过 `messageCap` 时触发；`autoCompact: false` 时条数超限仍强制压缩。
+- `messageCap`：显式 `context.maxMessages` 优先；缺省 `max(100, floor(maxTokens / 100))`，只为兜住接近零 token 的短消息，不应先于 token 阈值触发。
+- 非 system 消息少于 3 条时不压缩（至少保留 2 条，没有可摘要内容）。
+
+### 36.2 保留边界算法
+
+`planCompaction` 同时计算两个边界，取更靠后的一个（保留更少）：
+
+1. **token 边界**：从最新非 system 消息向前累计 `estimateMessageTokens`（content + `reasoning_content` + name + 所有 `tool_calls` 的名称与参数），预算 `maxTokens × 0.3`。累计超预算即停止；最新 2 条非 system 消息无论如何保留。
+2. **条数边界**：`maxKept = max(2, messageCap - systemCount - 1)`。`systemCount` 是当前 system 消息数（旧摘要被新摘要替换，净数不变），`-1` 计入新摘要。
+3. 最终 `keepFrom = min(max(tokenBoundary, capBoundary), nonSystem.length - 2)`。`keepFrom === 0` 表示全部可容纳且未超条数上限，不压缩。
+4. `compactThreshold` / `autoCompact` / `summarizer` / `onCompact` 的形状不变。
+
+### 36.3 tool 配对保护
+
+- 保留区第一条是 `tool` 消息时，向前找到持有对应 `tool_call_id` 的 `assistant(tool_calls)`，把边界回退到该条；重复直到边界不是 `tool`。
+- 目的是避免压缩后出现孤立 `tool` 消息（provider 会拒绝）。**配对完整性优先于条数上限**，回退后保留数可能略超 `maxKept`。
+- 历史本身不完整（找不到 owner）时保持原边界，不继续前移。
+- 压缩后的消息顺序不变：`system` 消息在前，新摘要插在基底 system 之后、其它消息之前；旧摘要一并移除（ADR-083）。
+
+### 36.4 摘要 transcript 渲染
+
+摘要输入由 `renderSummarizerMessage` 逐条渲染后按空行拼接：
+
+| 角色 | 渲染 |
+|---|---|
+| `assistant` | `[assistant] <content>`，随后每条工具调用一行 `[tool_call:<name>] <arguments>` |
+| `tool` | `[tool:<tool_call_id>] <content>` |
+| 其它 | `[<role>] <content>` |
+
+- `reasoning_content` 不进入摘要（与事件流一致）。
+- 单条渲染超过 12,000 字符时截断为前 12,000 字符并追加 `\n[truncated]`，避免单条工具结果独占分块预算。
+
+### 36.5 分块与摘要调用
+
+- **块预算**：`min(48_000, max(2_000, floor(context.maxTokens / 8)))`，按渲染后文本的 `estimateTokens` 分组；单条超预算时独占一块。
+- **单块**：一次摘要调用，输出上限 `max(128, min(context.maxTokens, 2048))`。
+- **多块**：每块一次 partial 摘要（输出 ≤1024），partial 按块序拼接后一次 reduce（输出上限同上，≤2048）。
+- **失败回退**：
+  - partial 失败 → 写入 `[partial summary unavailable: chunk N]` 并继续后续块。
+  - reduce 失败 → 按序拼接 partial，截断到 reduce 的输出 token 预算。
+  - 全部 partial 失败或单块失败 → 返回空串，由 core 回退占位摘要 `[Auto Compact: N older messages summarized. Continuing...]`。
+  - 摘要失败不中断 run。
+
+### 36.6 已知限制
+
+- token 估算是字符近似（ASCII 0.25 / CJK 0.5 token 每字符），不是 provider 精确计数；保留量与块边界会有偏差。
+- 配对回退可使保留数略超 `maxMessages`。
+- 摘要质量仍是 best-effort：不跨块重试，不延后补摘要，不评估摘要质量。
