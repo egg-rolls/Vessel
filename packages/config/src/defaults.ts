@@ -178,7 +178,7 @@ export const DEFAULT_CONFIG: VesselConfig = {
     outputTokensLimit: 50000,
   },
   termination: {
-    maxIterations: 20,
+    maxIterations: 50,
     maxRuntimeSeconds: 300,
   },
   session: {
