@@ -47,6 +47,40 @@ describe('reduceUiProjection：assistant / reasoning', () => {
     expect(state.items[1]).toMatchObject({ kind: 'assistant', text: 'answer' });
   });
 
+  it('流式已显示的正文在 llm.response 到达时被再追加一遍', () => {
+    const state = fold([textDelta('Hello'), event('llm.response', { content: 'Hello' })]);
+    const assistants = state.items.filter((item) => item.kind === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ kind: 'assistant', text: 'Hello' });
+  });
+
+  it('非流式 provider 只有 llm.response 时正文被去重逻辑吞掉', () => {
+    const state = fold([event('llm.response', { content: 'Hello' })]);
+    const assistants = state.items.filter((item) => item.kind === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ kind: 'assistant', text: 'Hello' });
+  });
+
+  it('取消时 partial_content 与已流出正文重复', () => {
+    const state = fold([
+      textDelta('part'),
+      event('run.cancelled', { run_id: 'r1', partial_content: 'part', duration_ms: 5 }),
+    ]);
+    const assistants = state.items.filter((item) => item.kind === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ kind: 'assistant', text: 'part' });
+  });
+
+  it('reasoning_delta 后持久化 reasoning 不重复', () => {
+    const state = fold([
+      reasoningDelta('think'),
+      event('llm.response', { reasoning: 'think', content: 'answer' }),
+    ]);
+    const reasoning = state.items.filter((item) => item.kind === 'reasoning');
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]).toMatchObject({ kind: 'reasoning', text: 'think' });
+  });
+
   it('工具调用后的正文另起一个 assistant item', () => {
     const state = fold([
       textDelta('first'),
