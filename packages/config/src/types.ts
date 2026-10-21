@@ -114,6 +114,10 @@ export interface DelegateConfig {
   permissionMode?: 'bridge' | 'allow' | 'deny';
   /** deny 模式下保留的只读工具（默认 ['read']） */
   readOnlyTools?: string[];
+  /** 0.15：允许子 agent 再委派（YAML allow_nested；默认 false） */
+  allowNested?: boolean;
+  /** 0.15：单次委派的后代上限（YAML max_descendants；默认 16） */
+  maxDescendants?: number;
 }
 
 /** Host 配置（0.2；默认关闭，关闭时走 0.1 单 agent 路径） */

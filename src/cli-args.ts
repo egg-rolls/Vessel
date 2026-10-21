@@ -40,7 +40,7 @@ export type GatewayCommand =
       log?: string;
     }
   | ({ kind: 'stop'; timeoutMs: number } & GatewaySelector)
-  | ({ kind: 'status'; json: boolean } & GatewaySelector)
+  | ({ kind: 'status'; json: boolean; rpc?: boolean } & GatewaySelector)
   | { kind: 'list'; json: boolean }
   | ({ kind: 'restart'; daemon: boolean } & GatewaySelector)
   | ({ kind: 'reload'; scopes?: string[] } & GatewaySelector)
@@ -129,9 +129,19 @@ export type PluginCommandArgs =
   | { kind: 'install'; path: string; force: boolean }
   | { kind: 'remove'; name: string; yes: boolean };
 
-/** `doctor` 子命令（0.6.1） */
+/** `doctor` 子命令（0.6.1；0.15 增加 --deep） */
 export interface DoctorCommandArgs {
   json: boolean;
+  /** 仅显式给出 `--deep` 时存在（additive） */
+  deep?: boolean;
+}
+
+/** `logs` 子命令（0.15） */
+export interface LogsCommandArgs {
+  kind: 'tail';
+  json: boolean;
+  lines: number;
+  instance?: string;
 }
 
 export interface CliArgs {
@@ -189,6 +199,12 @@ export interface CliArgs {
   pluginCommand: PluginCommandArgs | null;
   /** 0.6.1：`vessel doctor` */
   doctorCommand: DoctorCommandArgs | null;
+  /** 0.15：`vessel logs tail` */
+  logsCommand: LogsCommandArgs | null;
+  /** 0.15：全局 `--data-dir <path>`；null = 未指定 */
+  dataDirArg: string | null;
+  /** 0.15：全局 `--exclusive` 强制 tenant 单写者锁 */
+  exclusive: boolean;
   /** 0.12：`vessel gateway ...` */
   gateway: GatewayCommand | null;
   /** 0.14：`vessel status [--json]` */
@@ -250,6 +266,9 @@ export function parseArgs(argv: string[]): ParseResult {
     trace: null,
     pluginCommand: null,
     doctorCommand: null,
+    logsCommand: null,
+    dataDirArg: null,
+    exclusive: false,
     gateway: null,
     statusCommand: null,
     agentsCommand: null,
@@ -287,6 +306,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'doctor' && i === 0) {
       return parseDoctorArgs(argv.slice(1), args);
+    }
+    if (a === 'logs' && i === 0) {
+      return parseLogsArgs(argv.slice(1), args);
     }
     if (a === 'gateway' && i === 0) {
       return parseGatewayArgs(argv.slice(1), args);
@@ -419,6 +441,18 @@ export function parseArgs(argv: string[]): ParseResult {
         i++;
         break;
       }
+      case '--data-dir': {
+        const next = argv[i + 1];
+        if (next === undefined || next.startsWith('-') || next.trim() === '') {
+          return { ok: false, error: 'Missing value for --data-dir' };
+        }
+        args.dataDirArg = next;
+        i++;
+        break;
+      }
+      case '--exclusive':
+        args.exclusive = true;
+        break;
       case '--connect': {
         const next = argv[i + 1];
         if (next === undefined || next.startsWith('-') || next.trim() === '') {
@@ -1470,6 +1504,11 @@ function parseGatewayStart(rest: string[], args: CliArgs): ParseResult {
       command.daemon = true;
       continue;
     }
+    if (a === '--exclusive') {
+      // 0.15：daemon 父进程把全局 flag 透传给子进程。
+      args.exclusive = true;
+      continue;
+    }
     if (a === '--instance') {
       const value = readFlagValue(rest, i, '--instance');
       if (!value.ok) return value;
@@ -1557,6 +1596,7 @@ function parseGatewayStop(rest: string[], args: CliArgs): ParseResult {
 /** `gateway status [--json] [--instance N|--port N|--all]` */
 function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
   let json = false;
+  let rpc = false;
   const selector: GatewaySelector = {};
   for (let i = 0; i < rest.length; i++) {
     const a = rest[i] ?? '';
@@ -1566,6 +1606,10 @@ function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
     }
     if (a === '--json') {
       json = true;
+      continue;
+    }
+    if (a === '--rpc') {
+      rpc = true;
       continue;
     }
     const selected = parseGatewaySelectorArg(rest, i, selector, 'status');
@@ -1579,7 +1623,7 @@ function parseGatewayStatus(rest: string[], args: CliArgs): ParseResult {
   if (args.help) return { ok: true, args };
   const selectorError = gatewaySelectorError(selector, 'status');
   if (selectorError !== null) return { ok: false, error: selectorError };
-  args.gateway = { kind: 'status', json, ...selector };
+  args.gateway = { kind: 'status', json, ...(rpc ? { rpc: true } : {}), ...selector };
   return { ok: true, args };
 }
 
@@ -1828,9 +1872,10 @@ function parseErrorsArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `doctor [--json]` */
+/** `doctor [--json] [--deep]` */
 function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
   let json = false;
+  let deep = false;
   for (const a of rest) {
     if (a === '--help' || a === '-h') {
       args.help = true;
@@ -1840,9 +1885,63 @@ function parseDoctorArgs(rest: string[], args: CliArgs): ParseResult {
       json = true;
       continue;
     }
+    if (a === '--deep') {
+      deep = true;
+      continue;
+    }
     return { ok: false, error: `Unknown argument for doctor: ${a}` };
   }
   if (args.help) return { ok: true, args };
-  args.doctorCommand = { json };
+  args.doctorCommand = { json, ...(deep ? { deep: true } : {}) };
+  return { ok: true, args };
+}
+
+/** `logs tail [--json] [--lines N] [--instance <name>]` */
+function parseLogsArgs(rest: string[], args: CliArgs): ParseResult {
+  if (rest[0] !== 'tail') {
+    return { ok: false, error: 'Usage: vessel logs tail [--json] [--lines N]' };
+  }
+  let json = false;
+  let lines = 50;
+  let instance: string | undefined;
+  for (let i = 1; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--lines' || a === '-n') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (!/^\d+$/.test(value.value)) {
+        return { ok: false, error: `Invalid --lines: ${value.value}` };
+      }
+      const parsed = Number.parseInt(value.value, 10);
+      if (parsed < 1 || parsed > 10_000) {
+        return { ok: false, error: `Invalid --lines: ${value.value} (1-10000)` };
+      }
+      lines = parsed;
+      i = value.next;
+      continue;
+    }
+    if (a === '--instance') {
+      const value = readFlagValue(rest, i, '--instance');
+      if (!value.ok) return value;
+      const parsed = parseInstanceName(value.value);
+      if (parsed === null) {
+        return { ok: false, error: `Invalid --instance: ${value.value}` };
+      }
+      instance = parsed;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for logs tail: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.logsCommand = { kind: 'tail', json, lines, ...(instance !== undefined ? { instance } : {}) };
   return { ok: true, args };
 }

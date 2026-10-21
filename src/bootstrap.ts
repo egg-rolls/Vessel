@@ -78,11 +78,19 @@ import {
   normalizeConnectUrl,
   type RpcClient,
 } from './rpc/index';
+import { ownerSelfCard } from './self-card';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
+import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
 import { reportShutdownFailure } from './shutdown-report';
 import { createTenantControl } from './tenant-command';
-import { acquireTenantLock, type TenantLock, TenantLockError, withTenantLock } from './tenant-lock';
+import {
+  acquireTenantLock,
+  type TenantLock,
+  TenantLockError,
+  type TenantLockMode,
+  withTenantLock,
+} from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
@@ -149,6 +157,8 @@ export interface BootstrapOptions {
    * CLI 的 run/REPL/serve/feishu 入口传 true。
    */
   acquireLock?: boolean;
+  /** 0.15：`--exclusive` 强制 tenant 单写者锁（默认 file 后端 shared） */
+  exclusive?: boolean;
   /** 0.5：`--connect <url>` / VESSEL_CONNECT；设置时不加锁、不写本地 store */
   connect?: string;
   /** 0.6：`--connect-token`（最高优先级；不回显） */
@@ -655,6 +665,12 @@ async function bootstrapConnect(input: {
       ...(input.config.ui?.statusBars !== undefined
         ? { configStatusBars: input.config.ui.statusBars }
         : {}),
+      ...(input.config.ui?.errorLevel !== undefined
+        ? { configErrorLevel: input.config.ui.errorLevel }
+        : {}),
+      ...(input.config.ui?.verbosity !== undefined
+        ? { configVerbosity: input.config.ui.verbosity }
+        : {}),
     }),
     version: readPackageVersion(),
     newSessionId,
@@ -774,14 +790,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     process.exit(configErrorExitCode);
   }
 
-  // ── tenant 写锁（0.5）───────────────────────────
+  // ── tenant 写锁（0.5；0.15 双层锁）──────────────
   // 默认由调用方按写意图传入 acquireLock；connect 模式已在上面短路。
+  // file / memory 后端 shared（多实例共存），sqlite 或 --exclusive 走单写者。
+  const sessionBackend = config.session?.backend ?? 'file';
+  const tenantLockMode: TenantLockMode =
+    options.exclusive === true || sessionBackend === 'sqlite' ? 'exclusive' : 'shared';
   let tenantLock: TenantLock | undefined;
   if (options.acquireLock === true) {
     try {
       tenantLock = await acquireTenantLock({
         tenantDir: tenantPaths.root,
         tenantId,
+        mode: tenantLockMode,
         ...(options.clock ? { now: options.clock } : {}),
       });
     } catch (error) {
@@ -823,6 +844,30 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ).external,
   );
   let currentSessionId = sessionId ?? newSessionId();
+  // 0.15：REPL / headless 对显式会话持进程级写锁（`--continue` / `-r` / `--session`）。
+  // serve-only 不持长锁：gateway 每次 run 取锁，避免空闲实例挡住其它前端。
+  let processSessionLock: SessionLock | undefined;
+  if (
+    options.sessionId !== undefined &&
+    sessionBackend !== 'memory' &&
+    (interactive === true || headless === true)
+  ) {
+    try {
+      processSessionLock = await acquireSessionLock({
+        tenantDir: tenantPaths.root,
+        kind: 'session',
+        id: options.sessionId,
+        ...(options.clock ? { now: options.clock } : {}),
+      });
+      process.once('exit', () => processSessionLock?.releaseSync());
+    } catch (error) {
+      if (error instanceof SessionLockedError) {
+        console.error(error.message);
+        process.exit(1);
+      }
+      throw error;
+    }
+  }
   const bundle = await buildTenantRuntime({
     tenantId,
     config,
@@ -918,6 +963,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         pluginHost: finalPluginHost,
         systemPrompt,
         permission,
+        selfCard: ownerSelfCard(config, providerModel, { askUser: registerAskUser }),
         ...(runStore ? { runStore } : {}),
         logger,
       }),
@@ -935,16 +981,33 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     const checkpoint = await loadResumableCheckpoint(runStore, runId);
     const route = routeResume(checkpoint, host, ownerId);
+    // 0.15: one writer per run across processes (host.resume bypasses the runtime wrapper).
+    const runLock = await acquireSessionLock({
+      tenantDir: tenantPaths.root,
+      kind: 'run',
+      id: runId,
+      ...(options.clock ? { now: options.clock } : {}),
+    });
 
     if (route === 'host' && host?.resume) {
       // agent_not_found 等错误原样上报，不回退（避免与 Host 内的 run 双跑）。
-      const handle = await host.resume(runId);
+      let handle: Awaited<ReturnType<typeof host.resume>>;
+      try {
+        handle = await host.resume(runId);
+      } catch (error) {
+        await runLock.release();
+        throw error;
+      }
       let cancelled = false;
-      const done = handle.result.then(
-        (message) => ({ status: 'completed' as const, message }),
-        (error) =>
-          cancelled ? { status: 'cancelled' as const } : { status: 'failed' as const, error },
-      );
+      const done = handle.result
+        .then(
+          (message) => ({ status: 'completed' as const, message }),
+          (error) =>
+            cancelled ? { status: 'cancelled' as const } : { status: 'failed' as const, error },
+        )
+        .finally(() => {
+          void runLock.release();
+        });
       return {
         runId,
         sessionId: handle.sessionId ?? checkpoint.session_id,
@@ -959,18 +1022,23 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     const resumeRuntime = await getSingleAgentRuntime();
     if (typeof resumeRuntime.resume !== 'function') {
+      await runLock.release();
       throw resumeError('resume_unavailable', runId, 'runtime does not support resume');
     }
 
     const controller = new AbortController();
     const promise = resumeRuntime.resume(runId, { ...opts, signal: controller.signal });
-    const done = promise.then(
-      (message) => ({ status: 'completed' as const, message }),
-      (error) =>
-        controller.signal.aborted
-          ? { status: 'cancelled' as const }
-          : { status: 'failed' as const, error },
-    );
+    const done = promise
+      .then(
+        (message) => ({ status: 'completed' as const, message }),
+        (error) =>
+          controller.signal.aborted
+            ? { status: 'cancelled' as const }
+            : { status: 'failed' as const, error },
+      )
+      .finally(() => {
+        void runLock.release();
+      });
 
     return {
       runId,
@@ -1016,7 +1084,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     events: runtimeEvents,
     session,
-    runtime: activeRuntime,
+    // 0.15: local RPC runs also take the session write lock.
+    runtime: bundle.runtime,
     context,
     pluginHost: finalPluginHost,
     ...(localAuth.ok ? { auth: localAuth.auth } : {}),
@@ -1108,7 +1177,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     },
     redactor: bundle.redactor,
     runtimeFor: (requestedTenant: string) =>
-      requestedTenant === tenantId ? activeRuntime : undefined,
+      requestedTenant === tenantId ? bundle.runtime : undefined,
     sessionFor: (requestedTenant: string) => (requestedTenant === tenantId ? session : undefined),
     contextFor: (requestedTenant: string) => (requestedTenant === tenantId ? context : undefined),
     pluginHostFor: (requestedTenant: string) =>
@@ -1258,7 +1327,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // → trace → runStore → session；锁由 bootstrap 在最后释放。
     await bundle.close(shutdownOptions);
 
-    // 锁最后释放。
+    // 锁最后释放（session 写锁先于 tenant 锁）。
+    if (processSessionLock) {
+      try {
+        await processSessionLock.release();
+      } catch (error) {
+        reportShutdownFailure({
+          events: bundle.events,
+          logger,
+          step: 'sessionLock.release',
+          error,
+          tenantId,
+        });
+      }
+    }
     if (tenantLock) {
       try {
         await tenantLock.release();
@@ -1277,7 +1359,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // ── ReplContext ─────────────────────────────────
   // 工具/插件的唯一来源是同一个 PluginHost（插件在 install() 里注册）。
   const ctx: ReplContextWithPermissions = {
-    runtime: activeRuntime,
+    runtime: bundle.runtime,
     pluginHost: finalPluginHost,
     session,
     events: runtimeEvents,
@@ -1299,6 +1381,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       configPath: permissionConfigPath,
       configLanguage: config.ui?.language,
       ...(config.ui?.statusBars !== undefined ? { configStatusBars: config.ui.statusBars } : {}),
+      ...(config.ui?.errorLevel !== undefined ? { configErrorLevel: config.ui.errorLevel } : {}),
+      ...(config.ui?.verbosity !== undefined ? { configVerbosity: config.ui.verbosity } : {}),
     }),
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),
@@ -1314,7 +1398,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   };
 
   return {
-    runtime: activeRuntime,
+    runtime: bundle.runtime,
     ctx,
     config,
     tenantId,

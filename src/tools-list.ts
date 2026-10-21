@@ -79,6 +79,8 @@ export async function listTools(): Promise<ToolsListing> {
       // `--tools` 是一次性命令，无 TUI 应答者：按 headless 口径 allow。
       permissionMode: config.delegate?.permissionMode ?? 'allow',
       readOnlyTools: config.delegate?.readOnlyTools,
+      allowNested: config.delegate?.allowNested ?? false,
+      maxDescendants: config.delegate?.maxDescendants ?? 16,
     });
     await delegate.install(host);
     pluginNamesWithFactories.push(delegate.name);

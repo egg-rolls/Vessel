@@ -262,11 +262,11 @@ it('serves two isolated tenants with per-tenant tokens', async () => {
     expect(baseUrl).toBeDefined();
     const url = baseUrl as string;
 
-    // 每个 active tenant 在自己的目录持锁。
-    const acmeLock = path.join(dir, '.vessel', 'data', 'tenants', 'acme', '.lock');
-    const workLock = path.join(dir, '.vessel', 'data', 'tenants', 'work', '.lock');
-    expect(fs.existsSync(acmeLock)).toBe(true);
-    expect(fs.existsSync(workLock)).toBe(true);
+    // file 后端默认 shared：每个 active tenant 在自己的 .members/ 下持租约。
+    const acmeMembers = path.join(dir, '.vessel', 'data', 'tenants', 'acme', '.members');
+    const workMembers = path.join(dir, '.vessel', 'data', 'tenants', 'work', '.members');
+    expect(fs.readdirSync(acmeMembers)).toHaveLength(1);
+    expect(fs.readdirSync(workMembers)).toHaveLength(1);
 
     // A6-13：gateway 注入 tenants registry。
     const tenantList = (await rpc(url, 'tok-admin', 'tenants.list', {})).result as {

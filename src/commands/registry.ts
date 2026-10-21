@@ -22,6 +22,7 @@ import { errorsCommand } from '../errors-command';
 import { runEvalCommand } from '../eval-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from '../gateway-command';
 import { applyLocale } from '../i18n';
+import { logsCommand } from '../logs-command';
 import { migrateCommand } from '../migrate-command';
 import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
@@ -243,13 +244,21 @@ export const cliCommands: readonly CliCommand[] = [
     },
   },
   {
+    name: 'logs',
+    match: (args) => args.logsCommand !== null,
+    run: async (args) => {
+      if (args.logsCommand === null) return 1;
+      return printCommandResult(await logsCommand(args.logsCommand));
+    },
+  },
+  {
     name: 'gateway',
     // 前台 start/restart 由 cli.ts 接进 --serve 管线，这里只处理一次性子命令。
     match: (args) => args.gateway !== null && !isForegroundGatewayCommand(args.gateway),
     run: async (args) => {
       const command = args.gateway;
       if (command === null) return 1;
-      return runGatewayCommand(command);
+      return runGatewayCommand(command, { exclusive: args.exclusive });
     },
   },
   {

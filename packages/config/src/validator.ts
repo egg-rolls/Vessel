@@ -1475,6 +1475,8 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       limits,
       permissionMode,
       readOnlyTools,
+      allowNested,
+      maxDescendants,
     } = config.delegate;
     if (enabled !== undefined && typeof enabled !== 'boolean') {
       errors.push({
@@ -1526,6 +1528,23 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
           value: readOnlyTools,
         });
       }
+    }
+    if (allowNested !== undefined && typeof allowNested !== 'boolean') {
+      errors.push({
+        path: 'delegate.allowNested',
+        message: 'delegate.allowNested must be a boolean',
+        value: allowNested,
+      });
+    }
+    if (
+      maxDescendants !== undefined &&
+      (!Number.isInteger(maxDescendants) || maxDescendants <= 0)
+    ) {
+      errors.push({
+        path: 'delegate.maxDescendants',
+        message: 'delegate.maxDescendants must be a positive integer',
+        value: maxDescendants,
+      });
     }
     if (limits) validateLimits('delegate.limits', limits, errors);
     if (termination) validateTermination('delegate.termination', termination, errors);
@@ -1898,6 +1917,8 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'limits',
     'permissionMode',
     'readOnlyTools',
+    'allowNested',
+    'maxDescendants',
   ],
   host: ['enabled', 'nodeId', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],

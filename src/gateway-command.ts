@@ -14,6 +14,7 @@
 
 import { loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { GatewayCommand, GatewayInstallTarget, GatewaySelector } from './cli-args';
+import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { resolveDataDir } from './data-paths';
 import { gatewayLogPath, startGatewayDaemon } from './gateway/daemon';
 import {
@@ -62,6 +63,10 @@ export interface GatewayCommandDeps {
   logPath?: string;
   print?: (line: string) => void;
   printErr?: (line: string) => void;
+  /** 0.15 测试注入：`status --rpc` 直接使用该 RPC 目标 */
+  rpcTarget?: ControlPlaneTarget;
+  /** 0.15：daemon 子进程透传 `--exclusive` */
+  exclusive?: boolean;
 }
 
 interface ResolvedContext {
@@ -422,8 +427,11 @@ function instanceStatusJson(
 
 /** `gateway status [--json] [--instance|--port|--all]` */
 export async function gatewayStatus(
-  options: GatewayCommandDeps & { json?: boolean; selector?: GatewaySelector } = {},
+  options: GatewayCommandDeps & { json?: boolean; selector?: GatewaySelector; rpc?: boolean } = {},
 ): Promise<number> {
+  if (options.rpc === true) {
+    return gatewayStatusRpc(options);
+  }
   const context = await resolveContext(options);
   const print = options.print ?? console.log;
   const printErr = options.printErr ?? console.error;
@@ -576,6 +584,183 @@ export async function gatewayStatus(
   return 0;
 }
 
+interface GatewayRpcView {
+  instance: string;
+  url: string;
+  ok: boolean;
+  error?: string;
+  health?: Record<string, unknown>;
+  queue?: { queued: number; running: number };
+}
+
+function isRecordValue(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+async function collectRpcView(
+  target: ControlPlaneTarget,
+  instance: string,
+): Promise<GatewayRpcView> {
+  const view: GatewayRpcView = { instance, url: target.baseUrl, ok: false };
+  try {
+    const health = await target.request<unknown>('health.get');
+    view.health = isRecordValue(health) ? health : {};
+    view.ok = true;
+  } catch (error) {
+    view.error = error instanceof Error ? error.message : String(error);
+  }
+  try {
+    const listed = await target.request<unknown>('runs.list');
+    const runs = isRecordValue(listed) && Array.isArray(listed.runs) ? listed.runs : [];
+    let queued = 0;
+    let running = 0;
+    for (const run of runs) {
+      if (!isRecordValue(run)) continue;
+      const status = run.status;
+      if (status === 'queued' || status === 'pending') queued += 1;
+      else if (status === 'running') running += 1;
+    }
+    view.queue = { queued, running };
+  } catch {
+    // runs.list 不可用时只报 health。
+  }
+  return view;
+}
+
+/** `gateway status --rpc [--json]`：查询 health / queue（只读，不 attach runtime）。 */
+async function gatewayStatusRpc(
+  options: GatewayCommandDeps & { json?: boolean; selector?: GatewaySelector },
+): Promise<number> {
+  const context = await resolveContext(options);
+  const print = options.print ?? console.log;
+  const printErr = options.printErr ?? console.error;
+  const json = options.json === true;
+  const selector = options.selector ?? {};
+  const targetOptions = {
+    config: context.config,
+    env: context.env,
+    dataDir: context.dataDir,
+    ...(options.platform !== undefined ? { platform: options.platform } : {}),
+    ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+  };
+  const views: GatewayRpcView[] = [];
+  const instances: string[] = [];
+
+  if (selector.all === true) {
+    const entries = await listGatewayPidStates(context.dataDir, {
+      ...(options.platform !== undefined ? { platform: options.platform } : {}),
+      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    });
+    for (const entry of entries) {
+      if (entry.state.kind !== 'running') continue;
+      instances.push(entry.instance);
+    }
+  } else if (selector.instance !== undefined) {
+    instances.push(selector.instance);
+  } else if (selector.port !== undefined) {
+    const targets = await resolveGatewayTargets(context.dataDir, selector, {
+      platform: context.platform,
+      ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
+    });
+    if (!targets.ok) {
+      printErr(ui.err(targets.error));
+      return 1;
+    }
+    for (const entry of targets.entries) {
+      if (entry.state.kind === 'running') instances.push(entry.instance);
+    }
+  }
+
+  if (options.rpcTarget !== undefined) {
+    views.push(await collectRpcView(options.rpcTarget, options.rpcTarget.instance ?? 'default'));
+  } else if (instances.length === 0) {
+    const resolved = await resolveControlPlaneTarget(targetOptions);
+    if (!resolved.ok) {
+      if (json) {
+        print(JSON.stringify({ rpc: true, ok: false, error: resolved.error }, null, 2));
+      } else {
+        printErr(ui.err(resolved.error));
+      }
+      return 1;
+    }
+    try {
+      views.push(await collectRpcView(resolved.target, resolved.target.instance ?? 'default'));
+    } finally {
+      await resolved.target.close().catch(() => undefined);
+    }
+  } else {
+    for (const instance of instances) {
+      const resolved = await resolveControlPlaneTarget({ ...targetOptions, instance });
+      if (!resolved.ok) {
+        views.push({
+          instance,
+          url: '',
+          ok: false,
+          error: resolved.error,
+        });
+        continue;
+      }
+      try {
+        views.push(await collectRpcView(resolved.target, instance));
+      } finally {
+        await resolved.target.close().catch(() => undefined);
+      }
+    }
+  }
+
+  const exitCode = views.length > 0 && views.every((view) => view.ok) ? 0 : 1;
+  if (json) {
+    const running = [...views].sort((a, b) => a.instance.localeCompare(b.instance));
+    print(
+      JSON.stringify(
+        { as_of: new Date(Date.now()).toISOString(), rpc: true, instances: running },
+        null,
+        2,
+      ),
+    );
+    return exitCode;
+  }
+
+  print(ui.title(t('gateway.status.title')));
+  print(ui.rule(48));
+  for (const view of views) {
+    const node = isRecordValue(view.health?.node) ? view.health.node : undefined;
+    const statusText =
+      node?.status !== undefined
+        ? String(node.status)
+        : view.health?.status !== undefined
+          ? String(view.health.status)
+          : '-';
+    print(
+      ui.kv(
+        view.instance,
+        view.ok
+          ? `${ui.ok(t('gateway.status.rpcOk'))}  ${view.url}`
+          : ui.err(t('gateway.status.rpcFailed', { error: view.error ?? 'unknown' })),
+        12,
+      ),
+    );
+    if (!view.ok) continue;
+    print(`  ${ui.kv(t('gateway.status.status'), statusText, 12)}`);
+    const nodeId = node?.node_id ?? view.health?.node_id;
+    if (nodeId !== undefined) print(`  ${ui.kv(t('gateway.status.node'), String(nodeId), 12)}`);
+    const currentRun = view.health?.current_run_id ?? node?.current_run_id;
+    if (currentRun !== undefined) {
+      print(`  ${ui.kv(t('gateway.status.currentRun'), String(currentRun), 12)}`);
+    }
+    if (view.queue !== undefined) {
+      print(
+        `  ${ui.kv(
+          t('gateway.status.queue'),
+          `${view.queue.queued} queued / ${view.queue.running} running`,
+          12,
+        )}`,
+      );
+    }
+  }
+  return exitCode;
+}
+
 /** `gateway list [--json]`（0.14） */
 export async function gatewayList(
   options: GatewayCommandDeps & { json?: boolean } = {},
@@ -725,6 +910,7 @@ async function startDaemonCommand(
     logPath,
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
+    ...(options.exclusive === true ? { exclusive: true } : {}),
     ...(options.spawn !== undefined ? { spawn: options.spawn } : {}),
     ...(options.sleep !== undefined ? { sleep: options.sleep } : {}),
     platform: context.platform,
@@ -886,7 +1072,7 @@ export async function runGatewayCommand(
     case 'stop':
       return stopGateway({ ...deps, timeoutMs: command.timeoutMs, selector: command });
     case 'status':
-      return gatewayStatus({ ...deps, json: command.json, selector: command });
+      return gatewayStatus({ ...deps, json: command.json, rpc: command.rpc, selector: command });
     case 'list':
       return gatewayList({ ...deps, json: command.json });
     case 'reload':

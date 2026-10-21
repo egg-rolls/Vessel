@@ -52,14 +52,28 @@ function baseOptions(dataDir: string) {
 }
 
 describe('bootstrap 0.5 - tenant / lock / paths', () => {
-  it('解析 tenantPaths、持有并释放 tenant 锁', async () => {
+  it('解析 tenantPaths、持有并释放 shared tenant 锁', async () => {
     const dataDir = tempDir();
     const result = await bootstrap(baseOptions(dataDir));
 
     const expected = resolveTenantPaths(dataDir, 'default');
     expect(result.tenantId).toBe('default');
     expect(result.tenantPaths).toEqual(expected);
-    expect(result.tenantLock).toBeDefined();
+    expect(result.tenantLock?.mode).toBe('shared');
+    // file 后端默认 shared：租约在 .members/，不写 .lock。
+    expect(fs.existsSync(expected.lock_file)).toBe(false);
+    expect(fs.readdirSync(path.join(expected.root, '.members'))).toHaveLength(1);
+
+    await result.shutdown();
+    expect(fs.readdirSync(path.join(expected.root, '.members'))).toEqual([]);
+  });
+
+  it('--exclusive 强制单写者 .lock', async () => {
+    const dataDir = tempDir();
+    const result = await bootstrap({ ...baseOptions(dataDir), exclusive: true });
+
+    const expected = resolveTenantPaths(dataDir, 'default');
+    expect(result.tenantLock?.mode).toBe('exclusive');
     expect(fs.existsSync(expected.lock_file)).toBe(true);
 
     await result.shutdown();

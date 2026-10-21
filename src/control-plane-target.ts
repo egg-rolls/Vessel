@@ -33,6 +33,8 @@ export interface ControlPlaneTargetOptions {
   config?: VesselConfig;
   env?: Record<string, string | undefined>;
   dataDir?: string;
+  /** 0.15：显式选择本地实例（`gateway status --rpc --instance`） */
+  instance?: string;
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
   requestTimeoutMs?: number;
@@ -156,38 +158,54 @@ export async function resolveControlPlaneTarget(
     ...(options.platform !== undefined ? { platform: options.platform } : {}),
     ...(options.runCommand !== undefined ? { runCommand: options.runCommand } : {}),
   });
+
+  async function localTarget(instance: string, record: GatewayPidRecord) {
+    const token = resolveGatewayToken(config, env) ?? '';
+    const tls = config.serve?.tls !== undefined;
+    const baseUrl = gatewayBaseUrl(record, tls);
+    const ca = tls
+      ? await readCa(nonEmpty(config.connect?.caFile) ?? nonEmpty(config.serve?.tls?.certFile))
+      : undefined;
+    const client: RpcClient & { close(): Promise<void> } = createHttpRpcClient({
+      baseUrl,
+      token,
+      subscribe: false,
+      requestTimeoutMs: timeoutMs,
+      ...(ca !== undefined ? { ca } : {}),
+    });
+    return {
+      ok: true as const,
+      config,
+      dataDir,
+      target: {
+        kind: 'local' as const,
+        baseUrl,
+        token,
+        instance,
+        record,
+        request: <T = unknown>(method: string, params?: unknown) =>
+          client.request<T>(method, params),
+        close: () => client.close(),
+      },
+    };
+  }
+
+  if (options.instance !== undefined) {
+    const match = entries.find((entry) => entry.instance === options.instance);
+    if (match === undefined || match.state.kind !== 'running') {
+      return {
+        ok: false,
+        error: `Gateway instance "${options.instance}" is not running.`,
+        code: 'no_gateway',
+      };
+    }
+    return localTarget(match.instance, match.state.record);
+  }
   const selected = selectLocalGatewayRecord(entries);
   if ('error' in selected) {
     return { ok: false, error: selected.error, code: selected.code };
   }
-
-  const token = resolveGatewayToken(config, env) ?? '';
-  const tls = config.serve?.tls !== undefined;
-  const baseUrl = gatewayBaseUrl(selected.record, tls);
-  const ca = tls
-    ? await readCa(nonEmpty(config.connect?.caFile) ?? nonEmpty(config.serve?.tls?.certFile))
-    : undefined;
-  const client: RpcClient & { close(): Promise<void> } = createHttpRpcClient({
-    baseUrl,
-    token,
-    subscribe: false,
-    requestTimeoutMs: timeoutMs,
-    ...(ca !== undefined ? { ca } : {}),
-  });
-  return {
-    ok: true,
-    config,
-    dataDir,
-    target: {
-      kind: 'local',
-      baseUrl,
-      token,
-      instance: selected.instance,
-      record: selected.record,
-      request: (method, params) => client.request(method, params),
-      close: () => client.close(),
-    },
-  };
+  return localTarget(selected.instance, selected.record);
 }
 
 /** PID 文件展示用（status 无 attach 时） */

@@ -155,3 +155,57 @@ describe('ui-settings（0.11 DECISION-021 §3.2）', () => {
     expect(settings.statusBars).toBeUndefined();
   });
 });
+
+describe('ui-settings 0.15 errorLevel / verbosity', () => {
+  let dir: string;
+  let configPath: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-ui-settings-015-'));
+    configPath = path.join(dir, 'config.yaml');
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('setErrorLevel / setVerbosity write YAML and keep other keys', async () => {
+    fs.writeFileSync(
+      configPath,
+      ['api_key: sk-test', 'ui:', '  language: en', '  clear_on_start: false', ''].join('\n'),
+      'utf-8',
+    );
+    const settings = createReplSettings({ configPath, env: {} });
+    await settings.setErrorLevel?.('all');
+    await settings.setVerbosity?.('debug');
+
+    const root = parseYaml(fs.readFileSync(configPath, 'utf-8')) as Record<string, unknown>;
+    expect(root.api_key).toBe('sk-test');
+    expect(root.ui).toEqual({
+      language: 'en',
+      clear_on_start: false,
+      error_level: 'all',
+      verbosity: 'debug',
+    });
+    expect(settings.errorLevel).toBe('all');
+    expect(settings.verbosity).toBe('debug');
+  });
+
+  it('rejects invalid values without writing the file', async () => {
+    const settings = createReplSettings({ configPath, env: {} });
+    await expect(settings.setErrorLevel?.('debug' as never)).rejects.toThrow('invalid_error_level');
+    await expect(settings.setVerbosity?.('loud' as never)).rejects.toThrow('invalid_verbosity');
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
+  it('falls back to undefined for invalid config values', () => {
+    const settings = createReplSettings({
+      configPath,
+      env: {},
+      configErrorLevel: 'debug',
+      configVerbosity: 'loud',
+    });
+    expect(settings.errorLevel).toBeUndefined();
+    expect(settings.verbosity).toBeUndefined();
+  });
+});

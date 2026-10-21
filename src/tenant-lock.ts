@@ -1,19 +1,25 @@
 /**
- * tenant 单写者锁（0.5 E15 / DECISION-010 §2.1、A-4 §11.6；0.7.1 P0-2 加固）
+ * tenant 双层锁（0.5 E15 / DECISION-010 §2.1、A-4 §11.6；0.15 双层锁）
  *
- * 锁文件（冻结）：
+ * 两种模式共用同一套 stale 规则：
+ *   exclusive: `tenants/<t>/.lock`（单写者；sqlite / migrate / tenant / trace prune）
+ *   shared:    `tenants/<t>/.members/<pid>-<nonce>.json`（每个进程一个租约；file 后端默认）
+ *
+ * 锁文件内容（冻结）：
  *   { "pid": 12345, "started_at": 1760000000000, "host": "machine-name" }
  *
  * 获取：
- * 1. 先在同目录写完整临时文件，再 `link(tmp, .lock)` 原子发布；
- *    不支持硬链接的文件系统回退到 `open(.lock, 'wx')` + write（空文件窗口由宽限兜底）。
- * 2. `EEXIST` 时读取 owner：
+ * 1. 先在同目录写完整临时文件，再 `link(tmp, 目标)` 原子发布；
+ *    不支持硬链接的文件系统回退到 `open(目标, 'wx')` + write（空文件窗口由宽限兜底）。
+ * 2. 发布后必须再检查另一侧（shared 查 `.lock`，exclusive 扫 `.members/`）；
+ *    这是「晚发布方必被看见」的保证来源，双方最坏同时失败，不会双持有。
+ * 3. 已有文件时读取 owner：
  *    - 不可解析 / 缺字段 → 以文件 mtime 为准，仅在超过 UNPARSEABLE_GRACE_MS 后判 stale；
  *    - pid 不存在（ESRCH）→ stale；
  *    - 同主机存活 pid → 永不过期（24h 不抢锁）；
  *    - 跨主机且 now - started_at > 24h → stale。
- * 3. stale 回收必须持 `(.lock).reclaim` 守卫，并在 unlink 前重新读取 owner；
- *    守卫超过 10s 视为 stale 可清理。回收后重试主循环（最多 2 次创建尝试）。
+ * 4. stale 回收必须持 `<目标>.reclaim` 守卫，并在 unlink 前重新读取 owner；
+ *    守卫超过 10s 视为 stale 可清理。
  *
  * 释放：仅当文件 pid + started_at + host 与持有者全等时才 unlink；失败 best-effort。
  *
@@ -23,10 +29,12 @@
 import { randomUUID } from 'node:crypto';
 import { readFileSync, unlinkSync } from 'node:fs';
 import {
+  chmod,
   type FileHandle,
   link,
   mkdir,
   open,
+  readdir,
   readFile,
   stat,
   unlink,
@@ -53,6 +61,9 @@ export interface TenantLockInfo {
   started_at: number;
   host: string;
 }
+
+/** 锁模式：shared 允许多进程共存；exclusive 单写者。缺省 exclusive（兼容旧调用）。 */
+export type TenantLockMode = 'shared' | 'exclusive';
 
 /** 锁被占用 */
 export class TenantLockError extends Error {
@@ -94,6 +105,8 @@ export interface AcquireTenantLockOptions {
   unparseableGraceMs?: number;
   /** 回收守卫 stale 阈值（测试可注入） */
   reclaimGuardStaleMs?: number;
+  /** 锁模式；缺省 exclusive */
+  mode?: TenantLockMode;
 }
 
 function isErrno(error: unknown, code: string): boolean {
@@ -193,7 +206,9 @@ async function reclaimGuardIsStale(
 async function publishLock(lockPath: string, content: string): Promise<void> {
   const tmpPath = `${lockPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tmpPath, content, { encoding: 'utf8', flag: 'wx' });
+    await writeFile(tmpPath, content, { encoding: 'utf8', flag: 'wx', mode: 0o600 });
+    // Windows 忽略 mode；best-effort chmod 保证 POSIX 上租约是 0600。
+    await chmod(tmpPath, 0o600).catch(() => undefined);
     try {
       await link(tmpPath, lockPath);
       return;
@@ -205,15 +220,127 @@ async function publishLock(lockPath: string, content: string): Promise<void> {
     await unlink(tmpPath).catch(() => {});
   }
 
-  const handle = await open(lockPath, 'wx');
+  const handle = await open(lockPath, 'wx', 0o600);
   try {
     await handle.writeFile(content, 'utf8');
+    await chmod(lockPath, 0o600).catch(() => undefined);
   } catch (error) {
     await handle.close();
     await unlink(lockPath).catch(() => {});
     throw error;
   }
   await handle.close();
+}
+
+/** members 目录（shared 租约） */
+function membersDir(tenantDir: string): string {
+  return join(tenantDir, '.members');
+}
+
+/**
+ * 扫描 `.members/`：清理 stale 租约，返回仍存活的 owner。
+ * 不可解析条目按 mtime 宽限；宽限内视为仍在写入。
+ */
+async function pruneMembers(params: {
+  tenantDir: string;
+  now: number;
+  isPidAlive: (pid: number) => boolean;
+  host: string;
+  graceMs: number;
+}): Promise<TenantLockInfo | undefined> {
+  const { tenantDir, now, isPidAlive, host, graceMs } = params;
+  const dir = membersDir(tenantDir);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (error) {
+    if (isErrno(error, 'ENOENT')) return undefined;
+    throw error;
+  }
+  let live: TenantLockInfo | undefined;
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const path = join(dir, name);
+    const info = await readLockInfo(path);
+    if (info === undefined) {
+      if (await unparseableLockIsStale(path, now, graceMs)) {
+        await unlink(path).catch((error: unknown) => {
+          if (!isErrno(error, 'ENOENT')) throw error;
+        });
+      } else if (live === undefined) {
+        // 宽限内不可解析：保守视为仍在写入，用 mtime 作为 started_at。
+        const stats = await stat(path).catch(() => undefined);
+        live = { pid: 0, started_at: stats?.mtimeMs ?? now, host };
+      }
+      continue;
+    }
+    if (isStale(info, now, isPidAlive, host)) {
+      await unlink(path).catch((error: unknown) => {
+        if (!isErrno(error, 'ENOENT')) throw error;
+      });
+      continue;
+    }
+    if (live === undefined) live = info;
+  }
+  return live;
+}
+
+/**
+ * shared 发布后的检查：`.lock` 不存在 → 成功；
+ * 存在但 stale → 回收一次后再检查；仍存在 → 冲突。
+ */
+async function ensureNoExclusiveLock(params: {
+  lockPath: string;
+  now: () => number;
+  isPidAlive: (pid: number) => boolean;
+  host: string;
+  graceMs: number;
+  guardStaleMs: number;
+}): Promise<{ ok: true } | { ok: false; owner?: TenantLockInfo }> {
+  const { lockPath, now, isPidAlive, host, graceMs, guardStaleMs } = params;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const info = await readLockInfo(lockPath);
+    if (info === undefined && !(await pathExists(lockPath))) return { ok: true };
+    if (info === undefined && !(await unparseableLockIsStale(lockPath, now(), graceMs))) {
+      return { ok: false };
+    }
+    if (info !== undefined && !isStale(info, now(), isPidAlive, host)) {
+      return { ok: false, owner: info };
+    }
+    const reclaim = await reclaimStaleLock({
+      lockPath,
+      now,
+      isPidAlive,
+      host,
+      graceMs,
+      guardStaleMs,
+    });
+    if (reclaim.outcome === 'not_stale') return { ok: false, owner: reclaim.owner };
+    if (reclaim.outcome === 'busy') return { ok: false, owner: info };
+  }
+  return { ok: false };
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await stat(filePath);
+    return true;
+  } catch (error) {
+    return !isErrno(error, 'ENOENT');
+  }
+}
+
+async function removeMember(memberPath: string, info: TenantLockInfo): Promise<void> {
+  const current = await readLockInfo(memberPath);
+  if (current === undefined) return;
+  if (
+    current.pid !== info.pid ||
+    current.started_at !== info.started_at ||
+    current.host !== info.host
+  ) {
+    return;
+  }
+  await unlink(memberPath).catch(() => {});
 }
 
 type ReclaimOutcome = 'reclaimed' | 'not_stale' | 'busy';
@@ -279,12 +406,14 @@ async function reclaimStaleLock(params: {
 /** 已获取的 tenant 锁 */
 export class TenantLock {
   readonly info: TenantLockInfo;
+  readonly mode: TenantLockMode;
   private readonly lockPath: string;
   private released = false;
 
-  constructor(lockPath: string, info: TenantLockInfo) {
+  constructor(lockPath: string, info: TenantLockInfo, mode: TenantLockMode = 'exclusive') {
     this.lockPath = lockPath;
     this.info = info;
+    this.mode = mode;
   }
 
   private matches(info: TenantLockInfo | undefined): boolean {
@@ -331,9 +460,7 @@ export class TenantLock {
  * @throws TenantLockError 锁被存活且未过期的进程持有
  */
 export async function acquireTenantLock(options: AcquireTenantLockOptions): Promise<TenantLock> {
-  await mkdir(options.tenantDir, { recursive: true });
-  const lockPath = join(options.tenantDir, '.lock');
-
+  const mode = options.mode ?? 'exclusive';
   const now = options.now ?? Date.now;
   const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
   const host = options.hostname ?? os.hostname();
@@ -346,12 +473,37 @@ export async function acquireTenantLock(options: AcquireTenantLockOptions): Prom
   };
   const content = `${JSON.stringify(info)}\n`;
 
+  if (mode === 'shared') {
+    await mkdir(membersDir(options.tenantDir), { recursive: true });
+    // 每个进程一个唯一租约；nonce 防止同 pid 同时持有两个 shared 锁。
+    const memberPath = join(membersDir(options.tenantDir), `${info.pid}-${randomUUID()}.json`);
+    await publishLock(memberPath, content);
+    let checked: Awaited<ReturnType<typeof ensureNoExclusiveLock>>;
+    try {
+      checked = await ensureNoExclusiveLock({
+        lockPath: join(options.tenantDir, '.lock'),
+        now,
+        isPidAlive,
+        host,
+        graceMs,
+        guardStaleMs,
+      });
+    } catch (error) {
+      await removeMember(memberPath, info);
+      throw error;
+    }
+    if (checked.ok) return new TenantLock(memberPath, info, 'shared');
+    await removeMember(memberPath, info);
+    throw new TenantLockError(options.tenantId, checked.owner);
+  }
+
+  await mkdir(options.tenantDir, { recursive: true });
+  const lockPath = join(options.tenantDir, '.lock');
   let lastOwner: TenantLockInfo | undefined;
 
   for (let attempt = 0; attempt < TENANT_LOCK_ACQUIRE_ATTEMPTS; attempt += 1) {
     try {
       await publishLock(lockPath, content);
-      return new TenantLock(lockPath, info);
     } catch (error) {
       if (!isErrno(error, 'EEXIST')) throw error;
 
@@ -375,7 +527,26 @@ export async function acquireTenantLock(options: AcquireTenantLockOptions): Prom
         throw new TenantLockError(options.tenantId, lastOwner);
       }
       // reclaimed → 重试主循环（下一轮原子创建）。
+      continue;
     }
+
+    // 发布后扫描 shared 租约：晚发布的 shared 会在自己的检查里看到这把锁。
+    let liveMember: TenantLockInfo | undefined;
+    try {
+      liveMember = await pruneMembers({
+        tenantDir: options.tenantDir,
+        now: now(),
+        isPidAlive,
+        host,
+        graceMs,
+      });
+    } catch (error) {
+      await removeMember(lockPath, info);
+      throw error;
+    }
+    if (liveMember === undefined) return new TenantLock(lockPath, info);
+    await removeMember(lockPath, info);
+    throw new TenantLockError(options.tenantId, liveMember);
   }
 
   throw new TenantLockError(options.tenantId, lastOwner);
