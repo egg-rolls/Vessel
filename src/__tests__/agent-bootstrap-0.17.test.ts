@@ -143,6 +143,37 @@ describe('agent bootstrap 0.17', () => {
     expect(members.find((member) => member.id === 'main')?.state).toBe('idle');
   });
 
+  it('member lifecycle events reach the parent event stream', async () => {
+    const { result } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
+    const service = result.agent?.service;
+    if (!service) throw new Error('agent service missing');
+
+    const seen: string[] = [];
+    const unsubscribe = result.ctx.events.subscribe((event) => {
+      if (event.type.startsWith('agent.')) seen.push(event.type);
+    });
+
+    const created = await service.new({ owner: 'main', parentId: 'main', name: 'worker' });
+    await service.send({ to: created.id, content: 'hi' });
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+      const members = await service.list({ viewer: 'main' });
+      if (members.find((member) => member.id === created.id)?.state === 'completed') break;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await service.close({ member: created.id });
+    unsubscribe();
+
+    expect(seen).toContain('agent.spawned');
+    expect(seen.some((type) => type.startsWith('agent.turn.'))).toBe(true);
+    expect(seen).toContain('agent.closed');
+  });
+
   it('headless default: no agent service and no legacy lifecycle tools', async () => {
     const { result } = await boot({ headless: true, interactive: false });
     expect(result.agent).toBeUndefined();
