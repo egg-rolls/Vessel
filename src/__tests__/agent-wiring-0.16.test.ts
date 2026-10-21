@@ -25,6 +25,13 @@ describe('resolveAgentWiring', () => {
     expect(plan.delegateEnabled).toBe(false);
   });
 
+  it('treats an explicitly constructed team as agent available and drops delegate_task', () => {
+    const plan = resolveAgentWiring({ team: { enabled: true } }, { headless: true });
+    expect(plan.agentEnabled).toBe(true);
+    expect(plan.teamEngine).toBe(true);
+    expect(plan.delegateEnabled).toBe(false);
+  });
+
   it('honors explicit agent.enabled in both directions', () => {
     const headlessOn = resolveAgentWiring({ agent: { enabled: true } }, { headless: true });
     expect(headlessOn.agentEnabled).toBe(true);
@@ -96,5 +103,11 @@ describe('planFactoryPlugins with agent', () => {
     const plan = planFactoryPlugins({}, false);
     expect(plan.delegate).toEqual({ enabled: true, useHost: false });
     expect(plan.team).toBeNull();
+  });
+
+  it('suppresses delegate_task whenever team is constructed', () => {
+    const plan = planFactoryPlugins({ team: { enabled: true } }, false, { headless: true });
+    expect(plan.delegate).toBeNull();
+    expect(plan.team).toEqual({ enabled: true, useHost: false });
   });
 });
