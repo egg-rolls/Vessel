@@ -18,8 +18,8 @@ tags: [agent, tools, session, registry, permission, events, config, compatibilit
   4. **成员状态机**：`created` → `idle` → `running` →（`completed` / `failed` / `cancelled`）→ `closed`；权限等待插入 `waiting_permission`；`stale` 为定义位，表示进程 / owner 不可达。状态与 `agents.tree` / `agents.list` 的 `state` 同名同义。
   5. **父 turn 注入**：core 的 `HookContext.messages?: Message[]`（additive）作为 `BeforeLlm` 注入位；runtime 在组装请求前把消息按返回顺序写入上下文一次，按 `name` / `timestamp` 稳定键或对象引用去重，每个 run 重置。装配层用 owner inbox 排空实现成员回复注入：回复映射为 `role: 'user'`、`name: 'agent:<id>'`、内容 `[agent <id>] <content>`，`timestamp` 取原消息时间；游标由注入器持有，同一回复跨轮不重复注入。
   6. **权限 bridge**：成员 `permissionMode` 取 `bridge` / `allow` / `deny`，成为注册表的一等属性，缺省交互 `bridge`、headless `allow`。成员的权限请求补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` / `state: 'waiting_permission'`（`tool` / `input` / `source` 沿用原请求字段）后转发到父事件流；应答沿用 `permission.respond` / `ask.respond`，回灌后成员回到 `running`。`deny` 模式只向成员复制 `readOnlyTools`（默认 `read`）。
-  7. **兼容一个版本**：`team.legacyTools` 默认 `true`，`team_*` 5 个工具仍在，但 `agent` 可用时不再注册 `delegate_task`；旧配置名 `delegate_task` 在 `permission.autoApprove` / `delegate.disallowed` 中映射为 `agent`。`team_*` 与 `delegate_task` 代码不删除，模型工具面按开关收敛。
-  8. **入口默认**：交互 REPL / serve 默认注册 `agent`（`agent.enabled` 缺省 true）；headless / `--run` 默认不注册（缺省 false），保留 `delegate_task`。显式 `agent.enabled` 在两个方向都生效。
+  7. **兼容一个版本**：`team.legacyTools` 默认 `true`，`team_*` 5 个工具仍在，但 `agent` 可用时不再注册 `delegate_task`；**`agent` 可用 = `agent.enabled` 生效或 `team.enabled: true`**（team 插件构造时总会注册 `agent`）。旧配置名 `delegate_task` 在 `permission.autoApprove` / `delegate.disallowed` 中映射为 `agent`。`team_*` 与 `delegate_task` 代码不删除，模型工具面按开关收敛。
+  8. **入口默认**：交互 REPL / serve 默认注册 `agent`（`agent.enabled` 缺省 true）；headless / `--run` 默认不注册（缺省 false），保留 `delegate_task`。显式 `agent.enabled` 在两个方向都生效；`team.enabled: true` 同样使 `agent` 可用，不再同时注册 `delegate_task`。
   9. **配置**：`agent.enabled` / `agent.defaultVisibility` / `agent.followReplies`、`team.legacyTools`；`followReplies` 目前只参与装配与 `agent.reply.injected` 事件，不自动续跑父 turn。
 
 - **冻结契约**：
@@ -44,14 +44,13 @@ tags: [agent, tools, session, registry, permission, events, config, compatibilit
   - 成员 `bridge` 权限请求出现在父事件流，应答回灌后成员回到 `running`；headless 成员默认 `allow`，不会等待无人应答的桥接请求。
   - `agent` 可用时工具表只出现一个 `agent` schema，不再出现 `delegate_task`；`delegate_task` 旧配置名在 `autoApprove` / `disallowed` 中映射到 `agent`。
   - `team.legacyTools: false` 时模型看不到任何 `team_*`。
-  - 实测工具数：headless 默认 **4**（`bash` / `read` / `edit` / `delegate_task`）；headless + `agent.enabled: true` **9**（3 + `agent` + 5 个 `team_*`）；`agent.enabled: true` + `team.legacyTools: false` **4**（3 + `agent`）；交互 REPL 默认 **10**（3 + `ask_user` + `agent` + 5 个 `team_*`）。
+  - 实测工具数（`--tools`，非 TTY）：默认 **4**（`bash` / `read` / `edit` / `delegate_task`，team 未构造）；`team.enabled: true` 或 `agent.enabled: true` **9**（3 + `agent` + 5 个 `team_*`）；同条件 + `team.legacyTools: false` **4**（3 + `agent`）。真交互 REPL（TTY）再 +`ask_user`，对应 **5 / 10 / 5**。
 
 - **已知限制**：
   - legacy `team_spawn` 创建的成员不进入新的成员注册表，`agent.send` 不能寻址它们；Phase A 只统一新 `agent.spawn` 路径。
   - `followReplies` 不触发新的父 turn：回复只在父会话下一次 `BeforeLlm` 时注入；没有父 turn 就没有自动消费。
   - `close` 只支持本机成员；跨节点释放返回错误。
   - `stale` 状态已定义，但 Phase A 没有自动标记逻辑；进程重启后的成员状态恢复不在本版本范围。
-  - 显式 `team.enabled: true` 的 headless 装配仍会同时注册 `delegate_task` 与 `agent`（legacy 路径）；入口默认口径不会出现两个 schema。
   - `allow` 模式对成员复制到的工具一律放行（`checkPermission: 'allow'`），不是按工具白名单逐项判定；需要收窄时用 `deny` + `readOnlyTools`。
 
 - **关联**：[ADR-037](ADR-037-modular-agent-runtime.md)（Host / runtime 边界）、[ADR-081](ADR-081-host-parity-and-serializable-snapshot.md)（Host 对等与快照）、[ADR-086](ADR-086-transparency-and-multi-instance-safety.md)（Self Card、delegate 关联字段、`agents.tree`）。

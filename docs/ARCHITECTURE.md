@@ -2273,14 +2273,13 @@ interface LimitBlock {
 - **没有** `wait` / `inbox` / `status` / `cancel` 模型工具。等待的语义是「结束这一轮，回复作为新 turn 到达」；`agents.tree` / `agents.list` 与取消路径属于 UI / CLI / 控制面。
 - 装配决策在 `src/agent-wiring.ts`（纯函数）：
   - 交互 REPL / serve 默认 `agent.enabled: true`；headless / `--run` 默认 `false`。显式 `agent.enabled` 覆盖入口默认。
-  - `agent` 可用时不注册 `delegate_task`；`team_*` 只受 `team.legacyTools` 控制（默认 `true`，保留一个版本）。
+  - `agent` 可用 = `agent.enabled` 生效 **或** `team.enabled: true`（team 插件构造时总会注册 `agent`）；可用时不注册 `delegate_task`，避免模型同时看到两个 schema。`team_*` 只受 `team.legacyTools` 控制（默认 `true`，保留一个版本）。
   - `agent` 可用时 `delegate_task` 旧配置名在 `permission.autoApprove` 与 `delegate.disallowed` 中映射为 `agent`；未启用时不映射。
   - `agent` 依赖 team 引擎，因此交互默认会构造 team 插件；`team.enabled: true` 仍可单独开启 legacy team。
 - 实测工具数（Phase A 现状）：
-  - headless 默认 **4**：`bash` / `read` / `edit` / `delegate_task`。
-  - headless + `agent.enabled: true` **9**：3 + `agent` + 5 个 `team_*`。
-  - headless + `agent.enabled: true` + `team.legacyTools: false` **4**：3 + `agent`。
-  - 交互 REPL 默认 **10**：3 + `ask_user` + `agent` + 5 个 `team_*`；`team.legacyTools: false` 时为 5（多出的 1 个是 `ask_user`）。
+  - `--tools`（非 TTY，headless 口径）默认 **4**：`bash` / `read` / `edit` / `delegate_task`（team 未构造）。
+  - `--tools` + `team.enabled: true` 或 `agent.enabled: true` **9**：3 + `agent` + 5 个 `team_*`；同条件 + `team.legacyTools: false` **4**：3 + `agent`。
+  - 真交互 REPL（TTY）在以上结果上再 +`ask_user`，对应 **5 / 10 / 5**。
 
 ### 38.2 session 即成员
 
@@ -2331,4 +2330,4 @@ interface LimitBlock {
 - 配置键：`agent.enabled` / `agent.defaultVisibility`（`private|team|tenant`，默认 `private`）/ `agent.followReplies`（默认 `false`）；`team.legacyTools`（默认 `true`）。均做类型与枚举校验，非法值拒绝而不是静默回退。
 - 兼容：`team_*` 5 个工具默认仍注册；`delegate_task` 代码保留，`agent` 可用时只做配置别名映射。`team_*` 创建的 legacy 成员不进入新注册表，`agent.send` 不能寻址它们。
 - canonical RPC 仍为 **44**，本版本不新增方法。
-- 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；显式 `team.enabled: true` 的 headless 装配仍可能同时注册 `delegate_task` 与 `agent`；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。
+- 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。

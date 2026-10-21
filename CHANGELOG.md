@@ -20,14 +20,15 @@
 ### Changed
 
 - **入口默认**：交互 REPL / serve 默认注册 `agent`；headless / `--run` 默认不注册，保留 `delegate_task`。显式 `agent.enabled` 在两个方向都生效。
-- **单一 schema**：`agent` 可用时不再注册 `delegate_task`；旧配置名 `delegate_task` 在 `permission.autoApprove` 与 `delegate.disallowed` 中映射为 `agent`。`team_*` 5 个工具默认仍注册，`team.legacyTools: false` 时全部隐藏。
+- **单一 schema**：`agent` 可用时不再注册 `delegate_task`。`agent` 可用 = `agent.enabled` 生效 **或** `team.enabled: true`（team 插件构造时总会注册 `agent`）。旧配置名 `delegate_task` 在 `permission.autoApprove` 与 `delegate.disallowed` 中映射为 `agent`。`team_*` 5 个工具默认仍注册，`team.legacyTools: false` 时全部隐藏。
 - **Self Card**：主 agent 的工具列表随入口与开关显示 `agent` 或 `delegate_task`，`team_*` 受 `team.legacyTools` 控制。
 - **team 插件**：版本 0.2.0；成员宿主不再复制 `team_*` 与 `agent` 工具，Phase A 不支持嵌套成员。
-- **工具数（实测）**：headless 默认 4；headless + `agent.enabled: true` 9；headless + `agent.enabled: true` + `team.legacyTools: false` 4；交互 REPL 默认 10（3 + `ask_user` + `agent` + 5 个 `team_*`）。
+- **工具数（实测）**：`--tools`（非 TTY）默认 4；`team.enabled: true` 或 `agent.enabled: true` 9（3 + `agent` + 5 个 `team_*`）；同条件 + `team.legacyTools: false` 4（3 + `agent`）。真交互 REPL（TTY）再 +`ask_user`，对应 5 / 10 / 5。
 - canonical RPC 仍为 **44**，本版本不新增方法。
 
 ### Fixed
 
+- **team 构造时不再注册 `delegate_task`**：`team.enabled: true` 此前会同时注册 `delegate_task` 与 `agent`，模型看到两个 schema；现在 `agent` 可用 = `agent.enabled` 生效或 `team.enabled: true`，可用时只保留 `agent`。
 - inbox 排空失败不再被静默吞掉：发 `agent.reply.inject_failed`（`{ owner_id, error }`）并让父 turn 继续，模型不会永远等一个已经失败的回复。
 - 父事件流与 Host 聚合流同源时不再重复转发权限请求与应答，避免父窗口出现两张权限卡。
 
@@ -37,7 +38,6 @@
 - `agent.followReplies` 目前只是配置 / 事件字段：回复在父会话下一次 `BeforeLlm` 时注入，不会自动开启新的父 turn。
 - `close` 只支持本机成员；跨节点释放返回错误。
 - `stale` 状态已定义，Phase A 没有自动标记逻辑；进程重启后的成员状态恢复不在本版本范围。
-- 显式 `team.enabled: true` 的 headless 装配仍可能同时注册 `delegate_task` 与 `agent`（legacy 路径）；入口默认口径只出现一个 schema。
 - `allow` 模式对成员复制到的工具一律放行，不是按工具白名单逐项判定。
 
 ## [0.15.1] - 2026-10-21
