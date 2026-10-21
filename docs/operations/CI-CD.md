@@ -85,7 +85,7 @@
 
 ### 1.3 0.9 Wave 2B2B 门禁
 
-- **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；canonical 方法（0.14 起 40 个；0.12 时为 38 个）的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
+- **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；canonical 方法（0.15 起 44 个；0.14 时为 40 个）的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
 - **插件生命周期**：插件卸载 / 释放相关测试覆盖 `init` 失败隔离、`dispose` 逆序、幂等与安装回滚；不要在测试里依赖插件释放顺序之外的全局状态。
 - **去重键**：跨节点测试覆盖 `incarnation` 代际变化、seq 回退与旧对端（缺 `incarnation` 按 `-`）；去重集合不跨进程持久化，测试不得断言重启后仍去重。
 - 全量测试在 Windows 与 POSIX（Docker）上均以同一 env 跑；Windows 的 `cross-platform` 与 ubuntu 的 `quality` 结果不一致时按环境差异排查，不要先关校验。
@@ -115,7 +115,7 @@
 - **权限生命周期**：`packages/core/__tests__/permission-lifecycle.test.ts` 覆盖默认无限等待、abort → `PermissionAbortedError`、显式正数 `timeoutMs` → `PermissionTimeoutError`、请求字段与 `deadline_at` 条件写入；`permission-timeout.test.ts` 保留显式超时回归。
 - **持久化**：`packages/serve/__tests__/run-engine-permissions.test.ts` 覆盖请求字段、无时间过期、重复应答幂等 / `conflict`、run 终态 `orphaned` / `run_ended`、tenant 作用域、`pending → orphaned` 重载与 POSIX `0600`；`gateway.permissions.test.ts` 覆盖 REST / WS 应答、`scope`、重复提交、配置 `interactionsDir` 时的落盘与未知 `requestId` 的 `not_found`。
 - **Web**：交互测试覆盖权限卡片内联、跨 session 待处理条、其他端 `response` / `expired` 收起、`expired` / `run_ended` toast；不得重新引入全局权限遮罩。
-- **结构门禁**：`bun run scripts/check-docs.ts` 校验 ADR 索引 / 链接与文档一致性；`check-rpc-methods` 断言 canonical 方法 40 个（0.14 新增 `agents.list` / `agents.get`），新增 `expired` / `run_ended` 不改变方法数。
+- **结构门禁**：`bun run scripts/check-docs.ts` 校验 ADR 索引 / 链接与文档一致性；`check-rpc-methods` 断言 canonical 方法 44 个（0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`），新增 `expired` / `run_ended` 不改变方法数。
 - **验证范围**：Windows 全量 `3226 pass / 2 skip / 0 fail`；POSIX（oven/bun + 持久缓存）`3228 pass / 0 fail`，build / Web build 通过。
 
 ## 2. Release（`.github/workflows/release.yml`）

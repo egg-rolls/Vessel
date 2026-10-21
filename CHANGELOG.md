@@ -3,6 +3,55 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.15.0] - 2026-10-21
+
+> 0.15.0（基于 `release/0.15.0`，未发布）：透明化与多实例安全——压缩 / 限额预警 / 队列事件、agent 树与任务板、Self Card 注入、delegate 关联与孙 agent opt-in、tenant 双层锁与 session 写锁。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
+
+### Added
+
+- **透明化事件**：`context.compacted`（`{run_id, session_id, removed, remaining, reason}`，`reason` 为 `auto|overflow|manual`，仅在 `removed > 0` 时发布）；`agent.limit.warning`（`{scope, key, current, max, source, threshold, hint}`，阈值固定 0.8，每 run 每 key 一次，达到硬上限后不再预警）；`agent.queue.entered/left`（`{agent_id, run_id, position, wait_reason, since}`，仅在 `SchedulerOptions.events` 注入时发布）。均为开放字符串事件名。
+- **快照字段**：`AgentSnapshot` 增加 `nodeId?` / `sessionId` / `task?` / `waitReason?` / `contextUsed?` / `contextMax?` / `childrenCount?` / `lastSeen?`；`RunSnapshot` 与 `SchedulerSnapshot.queued[]` 增加 `waitReason?`（`capacity|per_agent_serial|paused|dependency|quota`）。
+- **Self Card 注入**：`AgentRuntimeOptions.selfCard` 与 `AgentSpec.selfCard`（additive）；渲染 `role` / `parent_id?` / `depth` / `model` / `tools` / `limits` / `context` / `how_to_ask?`，追加到 systemPrompt，按 `estimateTokens` 截断到 400 tokens；每次 run（含 resume）生成一次，不写入持久化 session。主 agent 与 delegate child 各自构造。
+- **delegate 关联字段**：`subagent.delegate.*` 与转发的 `subagent.*` / bridge 交互事件补 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path`；`completed/failed` 补 `result_ref: {kind:'run', id}`。
+- **孙 agent opt-in**：`delegate.allow_nested`（默认 `false`）与 `delegate.max_descendants`（默认 `16`）；开启后 child 获得独立 delegate 工具实例并新建 Host，`max_descendants` 按根树计数，根 delegate 不计入；`permissionMode: 'deny'` 或显式 `disallowed` 含 `delegate_task` 时不放开。
+- **canonical RPC（40 → 44）**：`agents.tree`（AgentCard + `children_ids` / `children_count` + `as_of`）、`tasks.list` / `tasks.get`（只读派生，不持久化）、`config.set`（白名单键写回，仅 default tenant）。
+- **可观测面**：`health.get` 增加 `runtime: {active_run_id?, scheduler:{as_of, queued, running, stats}}`；`runs.list` / `runs.get` 透出错误 envelope 字段与 `started_at`；`events.list` 读路径先脱敏再按 8 KiB 裁剪工具参数 / 结果。
+- **TUI**：`/status` 展示队列、80% 预警与最近一次压缩；`/agents tree`；`/settings errorLevel|verbosity`；`/compact` 改走 `runtime.compactContext()`（`manual` 压缩事件）。
+- **Web**：Diagnostics / Tasks / Display 页；`GatewayClient` 增加 `agents.tree` / `tasks.*` / `config.set`。
+- **CLI / 运维**：全局 `--data-dir <path>` 与 `--exclusive`；`vessel doctor --deep`（只读查询本地 gateway 的 health / MCP）；`vessel logs tail [--json] [--lines N] [--instance <name>]`；`vessel gateway status --rpc`（health + runs 派生的队列计数）。
+
+### Changed
+
+- **tenant 双层锁**：`exclusive` 仍用 `tenants/<t>/.lock`（sqlite、`--exclusive`、migrate / tenant / trace prune）；file / memory 后端默认 `shared`，每进程写 `tenants/<t>/.members/<pid>-<nonce>.json`。两侧发布后互相复查；stale 规则统一（死 pid、不可解析 >5s、跨主机 >24h、回收守卫 >10s）。
+- **session / run 写锁**：`tenants/<t>/.locks/sessions/<sha16>.lock` 与 `.locks/runs/<sha16>.lock`（`0600`）；`run()` 取 session 锁、`resume()` 取 run 锁，Host resume 在 bootstrap 直接取 run 锁；显式 session 的 REPL / headless 持进程级锁，`--serve` 空闲时不持长锁。冲突为 `conflict` + `session_locked` / `run_locked`。
+- **interactions 按实例隔离**：default 仍是 `<dataDir>/interactions-<tenant>.json`；命名实例改为 `<dataDir>/instances/<instance>/interactions-<tenant>.json`。
+- **`edit` 纳入路径边界**：与 `read` 共用 `evaluatePath`（内置 denylist 硬 `deny`、`allowed_roots` 越界 `ask`）；执行前再复查一次。
+- **`deny_paths` 参与 bash 命令文本匹配**：内置 denylist 与自定义条目一起展开为 `~` / `$HOME` / `${HOME}` / 绝对路径 / 相对路径写法；仍是 best-effort 字符串匹配，不是沙箱。
+- **端口占用**：gateway 启动捕获 `EADDRINUSE`，以 `port_in_use` 退出 1，且不写 PID 文件。
+
+### Fixed
+
+- **同 dataDir 多实例覆盖交互记录**：命名实例此前与 default 共用 `interactions-<tenant>.json`，会互相覆盖 pending / answered；现按实例分目录。
+- **同 session 并发写**：多个进程可同时写同一 session / run；现由跨进程写锁拒绝第二写者，而不是静默覆盖。
+- **`edit` 绕过敏感路径**：此前 `edit` 不受 `evaluatePath` 约束，可改内置 denylist 中的文件；现与 `read` 同边界。
+- **自定义 `deny_paths` 不拦截命令文本**：此前只参与 realpath 边界，`bash` 命令文本里写出的自定义敏感路径不会被拒；现与内置 denylist 一并匹配。
+
+### Security
+
+- 同一 dataDir 的多实例不再互相覆盖 PID / interactions；session 级单写者由文件锁保证。
+- 孙 agent 默认关闭；开启后 child 继承父级 resolved 权限与限额，不放大；嵌套实例使用独立 Host，避免占用父 run 的调度槽。
+- `config.set` 仅 default tenant、仅白名单键；非 default tenant 返回 `forbidden`。
+- `events.list` 与实时流共用 redactor 与 8 KiB 裁剪，避免回放路径泄漏未裁剪的工具参数 / 结果。
+
+### Known limitations
+
+- shared tenant 锁允许多进程共存，保证的是「每 session 单写者」，不是整个 tenant 单写者；需要 tenant 独占时用 `--exclusive` 或 sqlite 后端。
+- `tasks.*` 与 agent 快照都是进程内派生：重启丢失，不是持久任务账本；`childrenCount` 依赖上层建立父子关系。
+- `agent.limit.warning` 的 `max_runtime` 用 wall clock 估算；同一 key 只预警一次，阈值变化不会重发。
+- Self Card 按 `estimateTokens` 近似截断，不保证 provider 精确 400 tokens；MCP 工具名在连接前不可知，不写入 Card。
+- `port_in_use` 是 CLI 退出语义，不是 canonical RPC 错误码；`vessel logs tail` 只读本地日志，不跟随、不轮转。
+- 0.15.0 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.14.4] - 2026-10-21
 
 > 0.14.4（基于 `release/0.14.4`，未发布）：上下文压缩质量硬化——保留区改按 token 预算且同时受条数上限约束，保留边界不切断 tool 配对；摘要输入渲染工具调用、按 token 分块并逐块容错。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
