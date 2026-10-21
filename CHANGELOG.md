@@ -3,6 +3,32 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.14.4] - 2026-10-21
+
+> 0.14.4（基于 `release/0.14.4`，未发布）：上下文压缩质量硬化——保留区改按 token 预算且同时受条数上限约束，保留边界不切断 tool 配对；摘要输入渲染工具调用、按 token 分块并逐块容错。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
+
+### Changed
+
+- **压缩保留区改按 token 预算**：`MemoryContextManager.planCompaction` 不再按「最近 30% 消息条数」划分，而是从最新非 system 消息向前累计 `estimateMessageTokens`，上限为 `context.maxTokens × 0.3`；最新 2 条非 system 消息无论如何保留。非 system 少于 3 条时不压缩。
+- **保留区同时受条数上限约束**：保留条数还须满足 `maxKept = max(2, messageCap - systemCount - 1)`，其中 `messageCap` 取显式 `context.maxMessages`，缺省为 `max(100, floor(maxTokens / 100))`。token 或条数任一超限都触发摘要；两者都未超时不压缩。自动压缩仍由 `tokenCount > maxTokens × 0.8` 或消息条数超过 `messageCap` 触发。
+- **摘要 transcript 渲染工具调用**：摘要输入不再是 `<role> content` 的平铺，`assistant` 渲染为 `[assistant] <content>` 并逐条追加 `[tool_call:<name>] <arguments>`，`tool` 渲染为 `[tool:<id>] <content>`，其它角色为 `[<role>] <content>`；`reasoning_content` 不进入摘要。单条渲染超过 12,000 字符截断并追加 `[truncated]`。
+- **摘要输入按 token 分块**：块预算为 `min(48_000, max(2_000, floor(context.maxTokens / 8)))`，按渲染后文本的估算 token 分组，单条超预算时独占一块。单块走一次摘要（输出 ≤ `max(128, min(context.maxTokens, 2048))`）；多块每块一次 partial（输出 ≤1024），再 reduce 一次（输出 ≤2048）。
+- **摘要逐块容错**：某块 partial 失败写入 `[partial summary unavailable: chunk N]` 并继续；reduce 失败按序拼接 partial 并截断到输出预算；全部 partial 失败返回空串，由 core 回退占位摘要。摘要失败仍不中断 run。
+- 无新增配置键；`context.maxMessages` 缺省推导规则不变。
+
+### Fixed
+
+- **保留边界可能切断 tool 配对**：保留区第一条是 `tool` 消息时，边界回退到持有对应 `tool_call_id` 的 `assistant(tool_calls)`，避免压缩后出现孤立 `tool` 被 provider 拒绝。配对完整性优先于条数上限，回退后保留数可能略超 `maxMessages`；找不到 owner 时保持原边界。
+- **摘要丢失工具名 / 参数 / 结果**：此前摘要输入只含消息 `content`，`assistant` 的 `tool_calls` 与 `tool` 消息的调用标识全部丢失，摘要无法指认执行过什么。渲染 `[tool_call:<name>] <arguments>` 与 `[tool:<id>] <content>` 后，工具上下文进入摘要。
+- **单次摘要输入超出预算**：此前整段 transcript 一次性发送，长会话的单次摘要请求可能过大且失败即丢整段摘要。分块后每块独立摘要，单块失败只影响该块。
+
+### Known limitations
+
+- **token 估算是字符近似**：保留预算、分块与截断都用 `estimateTokens`（ASCII 0.25 / CJK 0.5 token 每字符），不是 provider 精确计数；边界附近的保留量会有偏差。
+- **配对回退可超条数上限**：为保证 `assistant(tool_calls)` / `tool` 配对，保留数可能略多于 `maxKept`；历史本身不完整（找不到 owner）时不强行前移。
+- **摘要质量仍是 best-effort**：所有块失败时只留下 `[Auto Compact: N older messages summarized. Continuing...]` 占位，不重试、不延后到下一轮。
+- 0.14.4 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.14.3] - 2026-10-21
 
 > 0.14.3（基于 `release/0.14.3`，未发布）：限额命中（含终止策略）的可见性与结构化、默认预算调整、provider HTTP 错误与重试分类。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
