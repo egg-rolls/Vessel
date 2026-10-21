@@ -30,7 +30,10 @@ export interface DurableCheckpointLike {
   session_id: string;
   agent_id?: string;
   status: DurableRunStatus;
+  /** 0.18 起 core 只写 `[]`；新 checkpoint 的预览在 `metadata.preview`。 */
   messages?: Array<{ role?: string; content?: string }>;
+  /** 0.18：checkpoint 附加数据；`preview` 为 session 上下文派生的预览。 */
+  metadata?: Record<string, unknown>;
   iteration?: number;
   updated_at: number;
   /** 0.5：所属 tenant；缺省视为 default */
@@ -92,14 +95,32 @@ export function parseLimit(raw: string | null): number | null {
   return value;
 }
 
-/** 取最后一条非空文本消息，截断 120 字符 */
-function previewOf(checkpoint: DurableCheckpointLike): string | undefined {
+/** preview 的最大长度（线上冻结语义） */
+const PREVIEW_MAX_LENGTH = 120;
+
+function truncatePreview(value: string): string {
+  return value.length > PREVIEW_MAX_LENGTH ? value.slice(0, PREVIEW_MAX_LENGTH) : value;
+}
+
+/**
+ * 取预览：0.18 起优先 `metadata.preview`（core 只写这个，messages 可能为 `[]`）；
+ * 缺失 / 非字符串 / 空串时回退到 legacy 的 messages 逻辑。
+ */
+export function previewOf(checkpoint: DurableCheckpointLike): string | undefined {
+  const metadata = checkpoint.metadata;
+  if (typeof metadata === 'object' && metadata !== null && !Array.isArray(metadata)) {
+    const fromMetadata = metadata.preview;
+    if (typeof fromMetadata === 'string' && fromMetadata.trim() !== '') {
+      return truncatePreview(fromMetadata);
+    }
+  }
+
   const messages = checkpoint.messages;
   if (!Array.isArray(messages)) return undefined;
   for (let index = messages.length - 1; index >= 0; index--) {
     const content = messages[index]?.content;
     if (typeof content === 'string' && content.length > 0) {
-      return content.length > 120 ? content.slice(0, 120) : content;
+      return truncatePreview(content);
     }
   }
   return undefined;

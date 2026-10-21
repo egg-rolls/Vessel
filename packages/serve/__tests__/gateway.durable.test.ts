@@ -1,7 +1,13 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel-agent/core';
-import type { DurableCheckpointLike, DurableRunStatus, DurableStoreLike } from '../src/durable';
+import {
+  type DurableCheckpointLike,
+  type DurableRunStatus,
+  type DurableStoreLike,
+  toRunSummary,
+} from '../src/durable';
 import type { Gateway } from '../src/gateway';
+import { normalizeDurableRun } from '../src/gateway/methods/runs';
 import { createGateway, sleep } from './helpers';
 
 interface ListCall {
@@ -137,6 +143,23 @@ describe('gateway durable endpoints', () => {
     expect(longRun?.preview).toHaveLength(120);
     const emptyRun = body.runs.find((run) => run.run_id === 'run-empty');
     expect(emptyRun?.preview).toBeUndefined();
+  });
+
+  it('prefers metadata.preview when core writes empty messages (0.18)', async () => {
+    const store = makeStore([
+      checkpoint('run-meta', {
+        messages: [],
+        metadata: { preview: 'derived from session context' },
+      }),
+    ]);
+    const gw = start(store);
+
+    const body = (await (
+      await fetch(`${gw.url}/v1/durable/runs`, { headers: auth(gw) })
+    ).json()) as {
+      runs: Array<{ run_id: string; preview?: string }>;
+    };
+    expect(body.runs[0]?.preview).toBe('derived from session context');
   });
 
   it('forwards status/session_id/limit and supports comma-separated status', async () => {
@@ -458,5 +481,52 @@ describe('gateway durable endpoints', () => {
       headers: auth(gw),
     });
     expect(getResume.status).toBe(405);
+  });
+});
+
+describe('durable preview derivation (0.18)', () => {
+  const base = {
+    run_id: 'r1',
+    session_id: 's1',
+    status: 'interrupted' as const,
+    updated_at: 1,
+  };
+
+  it('prefers metadata.preview over messages', () => {
+    const summary = toRunSummary({
+      ...base,
+      metadata: { preview: 'from meta' },
+      messages: [{ role: 'assistant', content: 'from messages' }],
+    });
+    expect(summary.preview).toBe('from meta');
+  });
+
+  it('keeps the 120-character truncation for metadata previews', () => {
+    const summary = toRunSummary({ ...base, metadata: { preview: 'y'.repeat(200) } });
+    expect(summary.preview).toHaveLength(120);
+  });
+
+  it('falls back to messages when metadata.preview is missing, empty, or not a string', () => {
+    const messages = [{ role: 'assistant', content: 'legacy preview' }];
+    for (const metadata of [undefined, {}, { preview: 42 }, { preview: '' }, { preview: '   ' }]) {
+      const summary = toRunSummary({ ...base, messages, ...(metadata ? { metadata } : {}) });
+      expect(summary.preview).toBe('legacy preview');
+    }
+  });
+
+  it('omits preview when neither source is usable', () => {
+    const summary = toRunSummary({ ...base, messages: [] });
+    expect(summary.preview).toBeUndefined();
+    expect('preview' in summary).toBe(false);
+  });
+
+  it('lifts metadata.preview for runs.get when the checkpoint messages are empty', () => {
+    const normalized = normalizeDurableRun({
+      ...base,
+      messages: [],
+      metadata: { preview: 'resume me' },
+    });
+    expect(normalized.preview).toBe('resume me');
+    expect(normalized.messages).toEqual([]);
   });
 });

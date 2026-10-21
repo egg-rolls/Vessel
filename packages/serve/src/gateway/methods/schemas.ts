@@ -51,6 +51,8 @@ export const runStatusSchema = {
     // durable checkpoint 字段
     agent_id: { type: 'string' },
     messages: { type: 'array' },
+    // 0.18：durable runs.get 从 metadata.preview / messages 派生的预览。
+    preview: { type: 'string' },
     iteration: { type: 'integer' },
     updated_at: { type: 'number' },
     tenant_id: { type: 'string' },

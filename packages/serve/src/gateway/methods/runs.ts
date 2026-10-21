@@ -5,7 +5,12 @@
  */
 
 import type { RunnableAgent } from '@vessel-agent/core';
-import { type DurableGatewayOptions, isResumableStatus } from '../../durable.js';
+import {
+  type DurableCheckpointLike,
+  type DurableGatewayOptions,
+  isResumableStatus,
+  previewOf,
+} from '../../durable.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { errorMetaOf, type RunEngine, type RunRecord } from '../../run-engine.js';
 import { mapTenantError, type TenantControlLike } from '../../tenant.js';
@@ -30,12 +35,17 @@ export interface RunMethodsDeps {
 /**
  * durable checkpoint 的 additive 归一：
  * - `started_at` 缺失时用 `created_at`；
+ * - 0.18：`preview` 缺失时按 `metadata.preview` / legacy messages 派生；
  * - envelope 可能在顶层或 `metadata.error_meta|error_envelope|envelope`。
  */
 export function normalizeDurableRun(run: Record<string, unknown>): Record<string, unknown> {
   const out = { ...run };
   if (out.started_at === undefined && typeof out.created_at === 'number') {
     out.started_at = out.created_at;
+  }
+  if (out.preview === undefined) {
+    const preview = previewOf(out as unknown as DurableCheckpointLike);
+    if (preview !== undefined) out.preview = preview;
   }
   if (out.error_code !== undefined) return out;
   const metadata = out.metadata;
