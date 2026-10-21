@@ -335,9 +335,11 @@ export function SessionList({
                                 <span
                                   className="session-pending-badge"
                                   title={t('chat.session.pending', { count: pendingCount })}
-                                  aria-label={t('chat.session.pending', { count: pendingCount })}
                                 >
-                                  {pendingCount}
+                                  <span aria-hidden="true">{pendingCount}</span>
+                                  <span className="sr-only">
+                                    {t('chat.session.pending', { count: pendingCount })}
+                                  </span>
                                 </span>
                               )}
                               <StatusChip status={session.status} />

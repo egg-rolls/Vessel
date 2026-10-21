@@ -14,7 +14,7 @@ function prettyInput(input: unknown): string {
 }
 
 /**
- * 内联权限卡片：挂在对应 RunCard 内，不再使用全局遮罩（DECISION-024 §2.4）。
+ * 权限卡片：渲染在 Composer 槽位（PendingComposer），不再使用全局遮罩（DECISION-024 §2.4）。
  *
  * Addendum A：权限等待默认不超时，因此不显示倒计时/过期；按钮只在提交中禁用。
  */

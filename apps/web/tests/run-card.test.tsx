@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ToastProvider } from '../src/components/ToastProvider';
-import { RunCard, runDetailHref } from '../src/domains/chat/RunCard';
+import { RunSection, runDetailHref } from '../src/domains/chat/RunSection';
 import { buildGroup, type RunGroup, type StoredEvent } from '../src/state/events';
 
 function failedGroup(error: string): RunGroup {
@@ -16,10 +16,10 @@ function failedGroup(error: string): RunGroup {
 
 const LONG_ERROR = `quota_exceeded: provider rejected the request\n第二行保持原样\n${'x'.repeat(300)}\n尾端标记-END`;
 
-describe('RunCard failed footer', () => {
+describe('RunSection failed footer', () => {
   test('renders the full error in an expandable details body', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
+      <RunSection
         group={failedGroup(LONG_ERROR)}
         cancelled={false}
         cancelling={false}
@@ -42,7 +42,7 @@ describe('RunCard failed footer', () => {
 
   test('keeps short errors visible and does not add a bogus hint', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
+      <RunSection
         group={failedGroup('boom')}
         cancelled={false}
         cancelling={false}
@@ -55,10 +55,10 @@ describe('RunCard failed footer', () => {
   });
 });
 
-describe('RunCard error metadata', () => {
+describe('RunSection error metadata', () => {
   test('renders additive code/category/phase chips and retryable hint', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
+      <RunSection
         group={{
           ...failedGroup('boom'),
           errorMeta: {
@@ -80,7 +80,7 @@ describe('RunCard error metadata', () => {
 
   test('leaves 0.13 markup unchanged when metadata is absent', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
+      <RunSection
         group={failedGroup('boom')}
         cancelled={false}
         cancelling={false}
@@ -100,7 +100,7 @@ describe('runDetailHref', () => {
   });
 });
 
-describe('RunCard verbosity', () => {
+describe('RunSection verbosity', () => {
   const mixedItems: RunGroup['items'] = [
     { kind: 'reasoning', text: 'REASONING-MARKER', key: 'reasoning-1' },
     {
@@ -127,7 +127,7 @@ describe('RunCard verbosity', () => {
   function group(verbosity: 'minimal' | 'normal') {
     return (
       <ToastProvider>
-        <RunCard
+        <RunSection
           group={{
             runId: 'run-1',
             sessionId: 'session-1',
@@ -173,7 +173,7 @@ describe('live streaming rendering (0.17)', () => {
 
   function render(group: RunGroup, verbosity: 'minimal' | 'normal' = 'normal') {
     return renderToStaticMarkup(
-      <RunCard
+      <RunSection
         group={group}
         cancelled={false}
         cancelling={false}
@@ -248,7 +248,7 @@ describe('running placeholder (0.17)', () => {
 
   function render(value: RunGroup, verbosity: 'minimal' | 'normal' = 'normal') {
     return renderToStaticMarkup(
-      <RunCard
+      <RunSection
         group={value}
         cancelled={false}
         cancelling={false}

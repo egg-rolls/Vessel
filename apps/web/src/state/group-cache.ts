@@ -3,7 +3,7 @@
  *
  * EventStore 每 50ms 发一次新快照；`entries` 在未截断时只追加、条目对象不变。
  * 这里只把**新增条目**并入对应 run 的 bucket，并且只对受影响的 run 重跑
- * `buildGroup`；未变化的 `RunGroup` 保持引用不变，配合 `memo(RunCard)`
+ * `buildGroup`；未变化的 `RunGroup` 保持引用不变，配合 `memo(RunSection)`
  * 避免流式 token 触发整棵树重渲染。
  *
  * 截断（总数上限/reset/gap）会让首条或中段条目变化，此时整表重建。

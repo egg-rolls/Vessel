@@ -15,6 +15,7 @@ import type {
   SessionDetail,
   SessionInfo,
 } from '../../gateway/types';
+import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
 import { isGroupPersisted } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
@@ -35,9 +36,9 @@ import { useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
-import { pendingForSession } from './pending-permissions';
 import { PendingComposer } from './PendingComposer';
-import { QueuedCard, type QueuedSubmission, RunCard } from './RunCard';
+import { pendingForSession } from './pending-permissions';
+import { QueuedSection, type QueuedSubmission, RunSection } from './RunSection';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
 import { SubagentTranscript } from './SubagentTranscript';
@@ -409,7 +410,7 @@ export function ChatView({
   const renderedGroups =
     hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
 
-  // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到 RunCard 或页面顶部。
+  // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到运行段或页面顶部。
   // 缺 sessionId 的旧流请求按 run 归属补判；run 终态时 ConnectionProvider 会清掉请求。
   const sessionRunIds = useMemo(
     () => new Set(visibleGroups.map((group) => group.runId)),
@@ -654,7 +655,7 @@ export function ChatView({
     }
   };
 
-  // 引用保持稳定：memo(RunCard) 依赖这几个回调，避免每个 token 让全部卡片重渲染。
+  // 引用保持稳定：memo(RunSection) 依赖这几个回调，避免每个 token 让全部运行段重渲染。
   const handleCancel = useCallback(
     async (group: { jobId?: string }) => {
       const jobId = group.jobId;
@@ -958,22 +959,17 @@ export function ChatView({
                 />
               )}
 
-              {!activeAgent && renderedGroups.length > 0 && hasTranscript && (
-                <div className="divider-label">
-                  <span>继续中</span>
-                </div>
-              )}
-              {!activeAgent && renderedGroups.length > 0 && (
-                <div className="timeline-hint dim">实时事件 · 按时间正序</div>
-              )}
               {!activeAgent && hiddenLiveGroups > 0 && (
                 <StaleNotice
-                  message={`已显示最近 ${MAX_LIVE_GROUPS} 个运行；更早的 ${hiddenLiveGroups} 个请在运行详情中查看。`}
+                  message={t('chat.run.hiddenEarlier', {
+                    shown: MAX_LIVE_GROUPS,
+                    hidden: hiddenLiveGroups,
+                  })}
                 />
               )}
               {!activeAgent &&
                 renderedGroups.map((group) => (
-                  <RunCard
+                  <RunSection
                     key={group.runId}
                     group={group}
                     cancelled={group.jobId ? cancelledJobs.has(group.jobId) : false}
@@ -990,7 +986,7 @@ export function ChatView({
                 ))}
               {!activeAgent &&
                 visibleQueued.map((item) => (
-                  <QueuedCard
+                  <QueuedSection
                     key={item.runId}
                     item={item}
                     onCancel={(runId) => void handleCancelQueued(runId)}

@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
+import { PendingComposer } from '../src/domains/chat/PendingComposer';
 import {
   pendingPermissionsOutsideView,
   pendingPermissionTarget,
 } from '../src/domains/chat/pending-permissions';
-import { PendingComposer } from '../src/domains/chat/PendingComposer';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {

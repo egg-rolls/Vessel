@@ -7,7 +7,7 @@ function truncate(value: string, length: number): string {
 }
 
 /**
- * 内联 ask_user 卡片（0.15）：挂在所属 RunCard 内，与 PermissionCard 同一生命周期。
+ * ask_user 卡片：与 PermissionCard 一起渲染在 Composer 槽位（PendingComposer）。
  *
  * - 提交中禁用全部按钮，防止双击；
  * - 其他端应答 / 过期 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；

@@ -893,7 +893,7 @@
   width: min(620px, 100%);
 }
 
-/* 0.13：内联权限卡片（挂在 RunCard 内，不再用全局遮罩）。 */
+/* 权限卡片：渲染在 Composer 槽位（PendingComposer）或 AppShell 面板内，不用全局遮罩。 */
 .permission-card {
   display: flex;
   flex-direction: column;
@@ -1006,20 +1006,6 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
   background: var(--surface);
-}
-
-/* ChatView：Composer 上方，容纳没有 RunCard 的请求。 */
-.pending-inline {
-  flex: none;
-  width: 100%;
-  max-width: 860px;
-  margin: 0 auto;
-  padding: 4px clamp(16px, 4vw, 48px) 0;
-  max-height: 42vh;
-}
-
-.pending-inline .pending-requests-list {
-  max-height: 34vh;
 }
 
 .permission-meta {

@@ -118,7 +118,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'permission.runEnded': 'The run has ended; this permission request is no longer valid.',
   'permission.otherSessions': '{count} pending permission request(s) in other sessions',
   'permission.goTo': 'Review',
-  // 0.17: fallback surface when no RunCard can own the request
+  // 0.17: AppShell panel for other-session / unattributed requests
   'pending.inline.title': 'Pending requests in this session',
   'pending.inline.desc':
     'These requests have no matching run card in the timeline; you can act on them here.',
@@ -133,11 +133,26 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.18: current-session pending lives in the Composer slot; other sessions only show a count.
   'chat.pending.label': 'Pending requests',
   'chat.pending.title': 'Waiting for your approval',
-  'chat.pending.hint': 'The composer returns after you respond',
+  'chat.pending.hint': 'The composer returns after all requests are answered',
   'chat.session.pending': '{count} pending request(s)',
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
   'chat.run.waiting': 'Generating…',
+  // 0.18: a run is a segment of the same conversation stream (thin divider + shared message styles)
+  'chat.run.label': 'Run {id}',
+  'chat.run.cancel': 'Cancel run',
+  'chat.run.cancelling': 'Cancelling…',
+  'chat.run.cancelQueue': 'Cancel queued run',
+  'chat.run.queuedPosition': 'Queued · position {position}',
+  'chat.run.queuedUnknown': 'Queued · position unknown',
+  'chat.run.cancelled': 'Cancelled',
+  'chat.run.detail': 'View run details',
+  'chat.run.noError': '(no error details)',
+  'chat.run.expand': 'Show',
+  'chat.run.retryable': 'Retryable',
+  'chat.run.iterations': '{count} iters',
+  'chat.run.hiddenEarlier':
+    'Showing the latest {shown} runs; open run details for the earlier {hidden}.',
   // 0.15: tool cards / reasoning stream / inline ask
   'chat.reasoning.live': 'Streaming',
   'chat.reasoning.expand': 'Show all',

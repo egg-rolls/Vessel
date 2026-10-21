@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
-import { formatTimestamp } from '../../format';
+import { formatClock, formatTimestamp } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
@@ -100,8 +100,30 @@ export interface QueuedSubmission {
   cancelled: boolean;
 }
 
-/** 单次 run 卡片：顶部 run.started 边界，底部 run.completed/run.failed 边界。 */
-export const RunCard = memo(function RunCard({
+function UserBubble({ text, ts }: { text: string; ts?: number }) {
+  const clock = formatClock(ts);
+  return (
+    <div className="msg msg-user">
+      <div className="msg-bubble">
+        {text}
+        {clock && (
+          <time className="msg-time" dateTime={new Date(ts ?? 0).toISOString()}>
+            {clock}
+          </time>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 会话流里的一个 run 段（0.18）。
+ *
+ * run 不再是独立卡片：顶部只有一条细分割线（状态 / 时间 / run id / 取消），
+ * 正文、思考、工具与错误和历史消息共用同一套消息样式，和 `Transcript`
+ * 一起组成一条按时间正序的对话流。
+ */
+export const RunSection = memo(function RunSection({
   group,
   cancelled,
   cancelling,
@@ -153,19 +175,21 @@ export const RunCard = memo(function RunCard({
     group.status === 'running' && verbosity !== 'minimal' ? group.liveReasoning : undefined;
   const errorHint = describeGatewayErrorText(group.error);
   const showTimes = verbosity !== 'minimal';
+  const showWaiting =
+    group.status === 'running' && !liveText && !group.liveReasoning && renderItems.length === 0;
 
   return (
-    <div className={`run-card ${status}`}>
-      <div className="run-header">
+    <section
+      className={`run-section ${status}`}
+      aria-label={t('chat.run.label', { id: group.runId })}
+    >
+      <div className="run-divider">
         <StatusChip status={status} />
         <span className="mono run-id" title={group.runId}>
           {truncate(group.runId, 24)}
         </span>
         {showTimes && group.startedAt != null && (
           <span className="dim">{formatTimestamp(group.startedAt)}</span>
-        )}
-        {showTimes && group.sessionId && (
-          <span className="dim">session {truncate(group.sessionId, 16)}</span>
         )}
         {group.status === 'running' && group.jobId && !cancelled && (
           <button
@@ -174,14 +198,14 @@ export const RunCard = memo(function RunCard({
             onClick={() => onCancel(group)}
             disabled={cancelling}
           >
-            {cancelling ? '取消中…' : '取消 run'}
+            {cancelling ? t('chat.run.cancelling') : t('chat.run.cancel')}
           </button>
         )}
       </div>
 
-      {group.input && !hideInput && <div className="run-input">{group.input}</div>}
+      {group.input && !hideInput && <UserBubble text={group.input} ts={group.startedAt} />}
 
-      <div className="run-items">
+      <div className="run-stream">
         {renderItems.map((item) => {
           if (item.kind === 'reasoning') {
             return (
@@ -195,12 +219,14 @@ export const RunCard = memo(function RunCard({
             );
           }
           if (item.kind === 'text') {
-            return group.status === 'running' || status === 'running' ? (
-              <div className="text-block" key={item.key}>
-                {item.text}
+            return (
+              <div className="msg msg-assistant" key={item.key}>
+                {group.status === 'running' ? (
+                  <div className="msg-text">{item.text}</div>
+                ) : (
+                  <Markdown className="msg-text" text={item.text} />
+                )}
               </div>
-            ) : (
-              <Markdown className="text-block" key={item.key} text={item.text} />
             );
           }
           if (item.kind === 'tool') {
@@ -209,74 +235,77 @@ export const RunCard = memo(function RunCard({
           return <EventRow key={item.key} event={item.event} />;
         })}
         {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
-        {liveText && <div className="text-block live-text">{liveText}</div>}
-        {group.status === 'running' &&
-          !liveText &&
-          !group.liveReasoning &&
-          renderItems.length === 0 && (
-            <div className="run-waiting dim" role="status">
-              <span className="run-waiting-dot" aria-hidden="true" />
-              {t('chat.run.waiting')}
-            </div>
-          )}
+        {liveText && (
+          <div className="msg msg-assistant">
+            <div className="msg-text live-text">{liveText}</div>
+          </div>
+        )}
+        {showWaiting && (
+          <div className="run-waiting dim" role="status">
+            <span className="run-waiting-dot" aria-hidden="true" />
+            {t('chat.run.waiting')}
+          </div>
+        )}
       </div>
 
       {group.status === 'completed' && (
-        <div className="run-footer completed">
-          <div className="foot-meta">
+        <>
+          {group.output && !outputAlreadyShown && (
+            <div className="msg msg-assistant">
+              <Markdown className="msg-text" text={group.output} />
+            </div>
+          )}
+          <div className="run-summary completed">
             <StatusChip status="completed" />
             {showTimes && group.durationMs != null && (
               <span className="dim">{group.durationMs}ms</span>
             )}
             {showTimes && group.iterations != null && (
-              <span className="dim">{group.iterations} iters</span>
+              <span className="dim">{t('chat.run.iterations', { count: group.iterations })}</span>
             )}
             {showTimes && group.completedAt != null && (
               <span className="dim">{formatTimestamp(group.completedAt)}</span>
             )}
           </div>
-          {group.output && !outputAlreadyShown && (
-            <Markdown className="run-output" text={group.output} />
-          )}
-        </div>
+        </>
       )}
       {group.status === 'failed' && status === 'failed' && (
-        <div className="run-footer failed">
+        <div className="run-summary failed">
           <StatusChip status="failed" />
           {formatErrorMeta(group.errorMeta) && (
             <span className="error-meta mono">
               {formatErrorMeta(group.errorMeta)}
-              {group.errorMeta?.retryable === true ? ' · 可重试' : ''}
+              {group.errorMeta?.retryable === true ? ` · ${t('chat.run.retryable')}` : ''}
             </span>
           )}
           <details className="run-error">
             <summary className="run-error-summary">
               <span className="run-error-preview">
-                {group.error ? truncate(group.error, 240) : '（无错误详情）'}
+                {group.error ? truncate(group.error, 240) : t('chat.run.noError')}
               </span>
               {group.error !== undefined && group.error.length > 240 && (
-                <span className="run-error-toggle">展开</span>
+                <span className="run-error-toggle">{t('chat.run.expand')}</span>
               )}
             </summary>
-            <pre className="run-error-body">{group.error || '（无错误详情）'}</pre>
+            <pre className="run-error-body">{group.error || t('chat.run.noError')}</pre>
           </details>
           {errorHint && <p className="run-error-hint">{errorHint}</p>}
           <a className="btn btn-small run-detail-link" href={runDetailHref(group)}>
-            查看运行详情
+            {t('chat.run.detail')}
           </a>
         </div>
       )}
       {status === 'cancelled' && (
-        <div className="run-footer cancelled">
+        <div className="run-summary cancelled">
           <StatusChip status="cancelled" />
         </div>
       )}
-    </div>
+    </section>
   );
 });
 
-/** 排队卡片：queued 阶段服务端不发事件，由提交响应 + 轮询驱动。 */
-export function QueuedCard({
+/** 排队段：queued 阶段服务端不发事件，由提交响应 + 轮询驱动。 */
+export function QueuedSection({
   item,
   onCancel,
 }: {
@@ -285,11 +314,16 @@ export function QueuedCard({
 }) {
   const status = item.cancelled ? 'cancelled' : 'queued';
   const position =
-    item.queuePosition != null ? `排队中 · 第 ${item.queuePosition} 位` : '排队中 · 位置未知';
+    item.queuePosition != null
+      ? t('chat.run.queuedPosition', { position: item.queuePosition })
+      : t('chat.run.queuedUnknown');
   return (
-    <div className={`run-card ${status}`}>
-      <div className="run-header">
-        <StatusChip status={status} label={item.cancelled ? '已取消' : position} />
+    <section
+      className={`run-section ${status}`}
+      aria-label={t('chat.run.label', { id: item.runId })}
+    >
+      <div className="run-divider">
+        <StatusChip status={status} label={item.cancelled ? t('chat.run.cancelled') : position} />
         <span className="mono run-id" title={item.runId}>
           {truncate(item.runId, 24)}
         </span>
@@ -300,11 +334,11 @@ export function QueuedCard({
             onClick={() => onCancel(item.runId)}
             disabled={item.cancelling}
           >
-            {item.cancelling ? '取消中…' : '取消排队'}
+            {item.cancelling ? t('chat.run.cancelling') : t('chat.run.cancelQueue')}
           </button>
         )}
       </div>
-      <div className="run-input">{item.input}</div>
-    </div>
+      <UserBubble text={item.input} ts={item.submittedAt} />
+    </section>
   );
 }

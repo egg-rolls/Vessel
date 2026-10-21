@@ -109,7 +109,7 @@ export function AppShell() {
   const routeKey = formatRoute(route);
   const lastEventVersion = useRef(-1);
 
-  // 权限与提问都改为 RunCard 内联，跨 session 的只保留顶部提示条。
+  // 当前会话的权限/提问在 ChatView 的 Composer 槽位处理；其他会话只保留顶部提示条。
   const modalOpen = Boolean(pendingAction || helpOpen);
   const otherPending = useMemo(
     () => pendingPermissionsOutsideView(permissions, route),
@@ -124,7 +124,7 @@ export function AppShell() {
     (request: (typeof otherAsks)[number]) => navigate(pendingPermissionTarget(request)),
     [navigate],
   );
-  // 没有 sessionId 的请求无法通过跳转落到任何 RunCard，面板直接展开。
+  // 没有 sessionId 的请求无法通过跳转落到任何会话，面板直接展开。
   // 其他会话的请求保留顶部条，用户可展开非模态面板操作，不打断当前会话。
   const pendingNeedsDirectAction =
     otherPending.some((item) => !item.sessionId) || otherAsks.some((item) => !item.sessionId);

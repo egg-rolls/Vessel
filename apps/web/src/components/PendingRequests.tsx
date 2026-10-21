@@ -33,9 +33,9 @@ function PendingCrumb({
 /**
  * 可操作的待处理请求列表（0.17 兜底面板）。
  *
- * - ChatView 用它显示当前会话里没有匹配到 RunCard 的请求；
- * - AppShell 用它显示其他会话 / 无 sessionId 的请求。
- * 两者都复用 RunCard 内的同一张 PermissionCard / AskCard，不恢复全局遮罩。
+ * - AppShell 用它展开其他会话 / 无 sessionId 的请求；
+ * - 当前会话的请求由 ChatView 的 PendingComposer 在 Composer 槽位处理。
+ * 两者都复用同一张 PermissionCard / AskCard，不恢复全局遮罩。
  */
 export function PendingRequestsPanel({
   id,

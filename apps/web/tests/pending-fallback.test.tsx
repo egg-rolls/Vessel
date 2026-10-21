@@ -2,10 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import { PendingRequestsPanel } from '../src/components/PendingRequests';
-import {
-  pendingForSession,
-  unmatchedPendingForSession,
-} from '../src/domains/chat/pending-permissions';
+import { pendingForSession } from '../src/domains/chat/pending-permissions';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -53,51 +50,12 @@ describe('pendingForSession (composer slot)', () => {
   });
 });
 
-describe('unmatchedPendingForSession', () => {
-  test('keeps same-session requests whose run has no RunCard', () => {
-    const items = [permission({ runId: 'run-missing' })];
-    expect(
-      unmatchedPendingForSession(items, 'session-1', new Set(['run-rendered'])).map(
-        (item) => item.runId,
-      ),
-    ).toEqual(['run-missing']);
-  });
-
-  test('drops requests that are already rendered inside a RunCard (no duplicate)', () => {
-    const items = [permission({ runId: 'run-rendered' })];
-    expect(unmatchedPendingForSession(items, 'session-1', new Set(['run-rendered']))).toEqual([]);
-  });
-
-  test('drops other-session requests; AppShell handles them', () => {
-    const items = [permission({ runId: 'run-2', sessionId: 'session-2' })];
-    expect(unmatchedPendingForSession(items, 'session-1', new Set())).toEqual([]);
-  });
-
-  test('keeps legacy requests without sessionId when run.started maps the run here', () => {
-    const items = [permission({ runId: 'run-1', sessionId: undefined })];
-    expect(
-      unmatchedPendingForSession(items, 'session-1', new Set(), new Set(['run-1'])),
-    ).toHaveLength(1);
-  });
-
-  test('ignores legacy requests whose run cannot be attributed to this session', () => {
-    const items = [permission({ runId: 'run-9', sessionId: undefined })];
-    expect(unmatchedPendingForSession(items, 'session-1', new Set(), new Set(['run-1']))).toEqual(
-      [],
-    );
-  });
-
-  test('returns nothing without a selected session', () => {
-    expect(unmatchedPendingForSession([permission()], null, new Set())).toEqual([]);
-  });
-});
-
-describe('ChatView fallback panel (above the Composer)', () => {
+describe('PendingRequestsPanel (shared non-modal cards)', () => {
   test('renders an unmatched permission with tool, input and decision actions', () => {
     const markup = renderToStaticMarkup(
       <PendingRequestsPanel
-        className="pending-inline"
-        title="当前会话的待处理请求"
+        className="pending-panel"
+        title="待处理请求"
         permissions={[permission()]}
         responding={new Set()}
         onDecidePermission={() => {}}
@@ -105,7 +63,7 @@ describe('ChatView fallback panel (above the Composer)', () => {
       />,
     );
 
-    expect(markup).toContain('pending-inline');
+    expect(markup).toContain('pending-panel');
     expect(markup).toContain('permission-card');
     expect(markup).toContain('data-request-id="perm-1"');
     expect(markup).toContain('bash');

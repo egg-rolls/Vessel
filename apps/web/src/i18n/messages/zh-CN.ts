@@ -116,7 +116,7 @@ export const messages = {
   'permission.runEnded': 'run 已结束，该权限请求已失效。',
   'permission.otherSessions': '其他会话有 {count} 个待处理权限请求',
   'permission.goTo': '前往处理',
-  // 0.17：无 RunCard 可挂时的兜底操作面
+  // 0.17：AppShell 里其他会话 / 未归属请求的操作面
   'pending.inline.title': '当前会话的待处理请求',
   'pending.inline.desc': '这些请求没有匹配到时间线中的运行卡片，可直接在这里处理。',
   'pending.panel.title': '其他会话 / 未归属的待处理请求',
@@ -130,11 +130,25 @@ export const messages = {
   // 0.18：当前会话的 pending 固定在 Composer 槽位；其他会话只在列表上计数。
   'chat.pending.label': '待处理请求',
   'chat.pending.title': '需要你的确认',
-  'chat.pending.hint': '处理后自动回到输入框',
+  'chat.pending.hint': '全部处理完后自动回到输入框',
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
   'chat.run.waiting': '正在思考…',
+  // 0.18：run 作为会话流里的一段（细分割线 + 统一消息样式）
+  'chat.run.label': '运行 {id}',
+  'chat.run.cancel': '取消 run',
+  'chat.run.cancelling': '取消中…',
+  'chat.run.cancelQueue': '取消排队',
+  'chat.run.queuedPosition': '排队中 · 第 {position} 位',
+  'chat.run.queuedUnknown': '排队中 · 位置未知',
+  'chat.run.cancelled': '已取消',
+  'chat.run.detail': '查看运行详情',
+  'chat.run.noError': '（无错误详情）',
+  'chat.run.expand': '展开',
+  'chat.run.retryable': '可重试',
+  'chat.run.iterations': '{count} iters',
+  'chat.run.hiddenEarlier': '已显示最近 {shown} 个运行；更早的 {hidden} 个请在运行详情中查看。',
   // 0.15：工具卡 / 思考流 / 内联提问
   'chat.reasoning.live': '流式',
   'chat.reasoning.expand': '展开全文',
