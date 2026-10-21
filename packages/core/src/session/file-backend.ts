@@ -49,6 +49,13 @@ function isNotFound(error: unknown): boolean {
 /** 单个文件的读取结果；ENOENT 之外的可读/解析错误直接抛 SessionCorruptError */
 type ReadStateResult = { found: true; state: RunState } | { found: false };
 
+/** 归属 tenant：缺失记 default；非对象 JSON 不读取字段 */
+function ownerOf(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return 'default';
+  const tenantId = (value as { tenant_id?: unknown }).tenant_id;
+  return tenantId === undefined || tenantId === null ? 'default' : String(tenantId);
+}
+
 export class FileSessionBackend implements SessionBackend {
   private readonly basePath: string;
   private readonly tenantId?: string;
@@ -180,6 +187,8 @@ export class FileSessionBackend implements SessionBackend {
     await this.ensureDir();
 
     const effective = this.applyTenant(state);
+    await this.assertWritableOwner(sessionId);
+
     const meta = deriveSessionMeta(effective.messages);
     const title = effective.title ?? meta.title;
     const preview = effective.preview ?? meta.preview;
@@ -209,6 +218,34 @@ export class FileSessionBackend implements SessionBackend {
     if (this.tenantId === undefined) return false;
     if (typeof state !== 'object' || state === null) return true;
     return (state.tenant_id ?? 'default') !== this.tenantId;
+  }
+
+  /**
+   * 写前校验磁盘归属：primary 存在时只认它；primary 缺失才查 legacy
+   * （否则新建 primary 会永久遮蔽他人 legacy 会话）。
+   * 损坏文件由 readStateFile 抛 SessionCorruptError，不覆盖。
+   */
+  private async assertWritableOwner(sessionId: string): Promise<void> {
+    if (this.tenantId === undefined) return;
+
+    const primaryPath = this.filePath(sessionId);
+    const primary = await this.readStateFile(primaryPath);
+    if (primary.found) {
+      if (this.isForeign(primary.state)) {
+        throw new Error(
+          `tenant_mismatch: session ${sessionId} belongs to ${ownerOf(primary.state)}`,
+        );
+      }
+      return;
+    }
+
+    const legacyPath = this.legacyFilePath(sessionId);
+    if (legacyPath === undefined || legacyPath === primaryPath) return;
+
+    const legacy = await this.readStateFile(legacyPath);
+    if (legacy.found && this.isForeign(legacy.state)) {
+      throw new Error(`tenant_mismatch: session ${sessionId} belongs to ${ownerOf(legacy.state)}`);
+    }
   }
 
   /**
