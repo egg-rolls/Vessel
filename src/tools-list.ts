@@ -81,6 +81,7 @@ export async function listTools(): Promise<ToolsListing> {
       readOnlyTools: config.delegate?.readOnlyTools,
       allowNested: config.delegate?.allowNested ?? false,
       maxDescendants: config.delegate?.maxDescendants ?? 16,
+      contextMaxTokens: config.context?.maxTokens,
     });
     await delegate.install(host);
     pluginNamesWithFactories.push(delegate.name);
