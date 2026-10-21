@@ -24,7 +24,7 @@
  */
 
 import { t } from '../i18n/index.js';
-import { projectMessagesToUiItems, type UiItem } from '../repl/project/ui-item.js';
+import { projectMessagesToUiItems, projectUiItems, type UiItem } from '../repl/project/ui-item.js';
 import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
@@ -593,8 +593,122 @@ export function formatResumeHistory(
   return lines;
 }
 
+// ── 结构化历史 -> 纯文本（simple mode / 非 TTY） ─────────
+
+/** resume 事件日志历史最多渲染的 item 数（大日志保护） */
+const RESUME_HISTORY_ITEMS = 200;
+
+function clipHistoryBlock(text: string): string {
+  return text.length > RESUME_HISTORY_MESSAGE_CHARS
+    ? `${text.slice(0, RESUME_HISTORY_MESSAGE_CHARS)}…`
+    : text;
+}
+
+/** 写一个多行块：首行带角色标签，续行与竖线对齐。 */
+function pushHistoryBlock(lines: string[], label: string, text: string): void {
+  const [first = '', ...rest] = clipHistoryBlock(text).split('\n');
+  lines.push(`  ${label} │ ${first}`);
+  for (const line of rest) lines.push(`       │ ${line}`);
+}
+
+function toolItemText(item: Extract<UiItem, { kind: 'tool' }>): string[] {
+  const view = item.view;
+  const header = [view.title, view.subtitle]
+    .filter((part): part is string => part !== undefined && part.length > 0)
+    .join(' · ');
+  const parts = [`${header}${view.status === 'completed' ? '' : ` [${view.status}]`}`];
+  if (view.args !== undefined) {
+    const args = typeof view.args === 'string' ? view.args : JSON.stringify(view.args);
+    if (args) parts.push(`args: ${args}`);
+  }
+  if (view.result !== undefined) parts.push(view.result);
+  if (view.error !== undefined) parts.push(`! ${view.error}`);
+  if (view.permission !== undefined) parts.push(`permission: ${view.permission.decision}`);
+  return parts;
+}
+
+/**
+ * 纯函数：把结构化历史项转成可写入终端 scrollback 的纯文本行。
+ * simple mode / 非 TTY 使用；绝不 `console.log` 对象。
+ */
+export function formatUiItemsAsText(items: UiItem[]): string[] {
+  if (items.length === 0) return [];
+  const lines: string[] = ['', `── history · ${items.length} items ──`, ''];
+  for (const item of items) {
+    switch (item.kind) {
+      case 'user':
+        pushHistoryBlock(lines, 'you ', item.text);
+        break;
+      case 'assistant':
+        pushHistoryBlock(lines, 'ai  ', item.text);
+        break;
+      case 'reasoning':
+        pushHistoryBlock(lines, 'ai  ', `[reasoning] ${item.text}`);
+        break;
+      case 'tool':
+        for (const [index, part] of toolItemText(item).entries()) {
+          pushHistoryBlock(lines, index === 0 ? 'tool' : '    ', part);
+        }
+        break;
+      case 'permission':
+        pushHistoryBlock(lines, 'perm', `${item.tool} · ${item.decision}`);
+        break;
+      case 'agent':
+        pushHistoryBlock(
+          lines,
+          'sub ',
+          `agent ${item.agentId} · ${item.state}${item.task !== undefined ? ` · ${item.task}` : ''}`,
+        );
+        break;
+      case 'notice':
+        pushHistoryBlock(lines, 'note', item.text);
+        if (item.detail !== undefined) pushHistoryBlock(lines, '    ', item.detail);
+        break;
+      case 'error':
+        pushHistoryBlock(lines, 'err ', item.text);
+        break;
+      case 'run': {
+        const parts = [
+          t(`item.run.${item.status}`),
+          t('item.run.tools', { count: item.toolCount }),
+        ];
+        if (item.durationMs !== undefined) parts.push(`${item.durationMs}ms`);
+        pushHistoryBlock(lines, 'run ', parts.join(' · '));
+        break;
+      }
+      case 'command':
+        pushHistoryBlock(lines, 'cmd ', item.text);
+        if (item.output !== undefined) pushHistoryBlock(lines, '    ', item.output);
+        break;
+    }
+  }
+  return lines;
+}
+
+/**
+ * 从事件日志重建 resume 历史。
+ * 返回 undefined 表示不可用（未注入 / 读取失败 / 空日志 / 投影为空），调用方回退 messages。
+ */
+async function loadEventLogHistory(
+  ctx: ReplContext,
+  sessionId: string,
+  showReasoning: boolean,
+): Promise<UiItem[] | undefined> {
+  if (!ctx.eventLog) return undefined;
+  try {
+    const events = await ctx.eventLog.read(sessionId);
+    if (events.length === 0) return undefined;
+    const items = projectUiItems({ events, showReasoning });
+    return items.length > 0 ? items : undefined;
+  } catch {
+    // 日志缺失 / 损坏 / 权限错误：静默回退，notice 由调用方标注。
+    return undefined;
+  }
+}
+
 /** 实际切会话：清 context -> 通知壳 -> 下次 run() 自动载入历史。
- *  纯函数：只返回确认消息 + 历史展示行 + 请求的 state 变更，不直接改 state、不打印。 */
+ *  纯函数：只返回确认消息 + 历史展示行 + 请求的 state 变更，不直接改 state、不打印。
+ *  历史优先来自会话事件日志；不可用时回退 session messages 并标注“不完整”。 */
 export async function doResume(
   ctx: ReplContext,
   sessionId: string,
@@ -602,14 +716,46 @@ export async function doResume(
 ): Promise<ResumeResult> {
   ctx.context.clear();
   ctx.onSessionChange(sessionId);
-  const loaded = await getSessionState(ctx, sessionId);
-  const messages = loaded?.messages ?? [];
+  const showReasoning = options.showReasoning === true;
+
+  const logItems = await loadEventLogHistory(ctx, sessionId, showReasoning);
+  let messages: SessionMessageLike[] = [];
+  let items: UiItem[];
+  if (logItems !== undefined) {
+    items = logItems;
+    // 仅用于确认消息的计数；日志是权威，读取失败不影响历史展示。
+    messages = (await getSessionState(ctx, sessionId).catch(() => null))?.messages ?? [];
+  } else {
+    messages = (await getSessionState(ctx, sessionId))?.messages ?? [];
+    items = projectMessagesToUiItems(messages, { showReasoning });
+  }
+
+  const notices: UiItem[] = [];
+  if (logItems === undefined) {
+    notices.push({
+      kind: 'notice',
+      id: 'history_snapshot',
+      level: 'warn',
+      text: t('history.incomplete'),
+    });
+  }
+
+  let rendered = items;
+  if (rendered.length > RESUME_HISTORY_ITEMS) {
+    rendered = rendered.slice(-RESUME_HISTORY_ITEMS);
+    notices.push({
+      kind: 'notice',
+      id: 'history_omitted',
+      level: 'info',
+      text: t('history.itemsOmitted', { count: RESUME_HISTORY_ITEMS }),
+    });
+  }
+
+  const historyItems = [...notices, ...rendered];
   return {
     message: `Resumed session "${sessionId}" (${messages.length} messages).`,
-    history: formatResumeHistory(messages, options),
-    items: projectMessagesToUiItems(messages, {
-      showReasoning: options.showReasoning === true,
-    }),
+    history: formatUiItemsAsText(historyItems),
+    items: historyItems,
     nextState: { currentSessionId: sessionId },
   };
 }

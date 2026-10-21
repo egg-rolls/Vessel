@@ -235,6 +235,31 @@ export interface ReplSettingsControl {
   setVerbosity?(value: ReplVerbosity): Promise<void>;
 }
 
+// ── 0.18：会话事件日志读取面（tui 定义结构，asm 注入实现） ──
+
+/**
+ * 会话事件日志记录的最小形状（`SessionEventLog.read()` 的返回可直接满足）。
+ * `data` 保持 unknown：TUI 只在投影边界按事件 type 收窄。
+ */
+export interface SessionEventRecordLike {
+  seq: number;
+  ts: number;
+  type: string;
+  run_id: string;
+  data: unknown;
+}
+
+/**
+ * TUI 只需要 `read`：resume / 启动历史重建从事件日志读取。
+ * 不 import 具体实现（`SessionEventLog`），connect 模式无本地日志时保持 undefined。
+ */
+export interface EventLogReadPort {
+  read(
+    sessionId: string,
+    opts?: { sinceSeq?: number; limit?: number },
+  ): Promise<readonly SessionEventRecordLike[]>;
+}
+
 // ── 0.5 F3：统一 RPC 入口与 tenant（tui 定义结构，asm 注入实现） ──
 
 /** 冻结错误码集合（DECISION-010 §2.3 / Addendum A-3 §10.2） */
@@ -406,6 +431,12 @@ export interface ReplContext {
 
   /** 权限持久化写回；未注入时 "always" 只在当前进程生效 */
   permissions?: PermissionsControl;
+
+  /**
+   * 0.18：会话事件日志（唯一真相源）读取面。
+   * 本地 bootstrap 注入；connect / memory 后端不注入，resume 回退到 session messages。
+   */
+  eventLog?: EventLogReadPort;
 
   // ── 0.11 设置控制面（asm 注入；未注入时 /settings 只读） ──
 

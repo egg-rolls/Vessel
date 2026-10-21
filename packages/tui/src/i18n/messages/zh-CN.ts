@@ -170,6 +170,8 @@ export const zhCN = {
   'item.run.cancelled': '已取消',
   'item.run.tools': '{count} 个工具',
   'item.run.tokens': '{tokens} tok',
+  'history.incomplete': '历史来自 session 快照（不完整）',
+  'history.itemsOmitted': '较早的历史已省略（仅显示最近 {count} 项）',
   'common.cancelled': '⏹ Cancelled.',
   'common.output': 'Output',
   'common.refreshFailed': 'Refresh failed.',

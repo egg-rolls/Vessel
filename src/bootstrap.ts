@@ -1512,6 +1512,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     version: readPackageVersion(),
     // 0.6.1：TUI "always" 与 /permissions 的用户 YAML 写回面。
     permissions: permissionsControl,
+    // 0.18：resume 历史从会话事件日志重建；memory / 只读执行面没有日志时保持 undefined。
+    ...(eventLog ? { eventLog } : {}),
     // 0.11：TUI /settings 的语言写回面（同一用户 YAML）；0.13 增加状态栏位置。
     settings: createReplSettings({
       configPath: permissionConfigPath,

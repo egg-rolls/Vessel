@@ -13,9 +13,9 @@
 
 import type {
   GuardrailBlockedPayload,
+  LlmResponsePayload,
   LlmStreamChunkPayload,
   RunCompletedPayload,
-  RunEvent,
   RunFailedPayload,
   RunStartedPayload,
   ToolCallCompletedPayload,
@@ -80,6 +80,22 @@ export interface CompactedEventData extends Record<string, unknown> {
   reason?: 'auto' | 'overflow' | 'manual';
 }
 
+/** `user.message` 载荷（0.18 事件日志；message 为实际写入上下文的用户消息） */
+export interface UserMessageData extends Record<string, unknown> {
+  message?: unknown;
+}
+
+/**
+ * 事件投影只依赖的最小形状：`RunEvent` 与 `SessionEventRecord` 都满足。
+ * 事件日志记录的 `data` 是 unknown，投影边界按 type 收窄。
+ */
+export interface RunEventLike {
+  type: string;
+  run_id: string;
+  data: unknown;
+  ts: number;
+}
+
 /** 未识别事件：类型上可见，默认忽略（不丢进 data 盲转） */
 export interface TuiUnknownEvent {
   type: 'unknown';
@@ -93,18 +109,27 @@ export interface TuiUnknownEvent {
 /** TUI 订阅的事件（core 事件 + 交互暂停事件 + 成员事件），type 字面量做判别符 */
 export type TuiEvent =
   | { type: 'run.started'; run_id: string; data: RunStartedPayload; ts: number }
+  /** 0.18：事件日志中的用户原文（run.started.input 是 guardrail 改写前文本） */
+  | { type: 'user.message'; run_id: string; data: UserMessageData; ts: number }
+  /** 0.18：事件日志中的 assistant 回合（content / tool_calls / reasoning） */
+  | { type: 'llm.response'; run_id: string; data: LlmResponsePayload; ts: number }
   | { type: 'llm.stream.chunk'; run_id: string; data: LlmStreamChunkPayload; ts: number }
   | { type: 'tool.call.started'; run_id: string; data: ToolCallStartedPayload; ts: number }
   | { type: 'tool.call.completed'; run_id: string; data: ToolCallCompletedPayload; ts: number }
   | { type: 'tool.call.failed'; run_id: string; data: ToolCallFailedPayload; ts: number }
   | { type: 'guardrail.blocked'; run_id: string; data: GuardrailBlockedPayload; ts: number }
   | { type: 'run.completed'; run_id: string; data: RunCompletedPayload; ts: number }
-  | { type: 'run.failed'; run_id: string; data: RunFailedPayload; ts: number }
+  | {
+      type: 'run.failed';
+      run_id: string;
+      data: RunFailedPayload & { partial_content?: string };
+      ts: number;
+    }
   /** 用户主动取消：载荷形状与 failed 一致，可选携带取消原因 */
   | {
       type: 'run.cancelled';
       run_id: string;
-      data: RunFailedPayload & { reason?: string };
+      data: RunFailedPayload & { reason?: string; partial_content?: string };
       ts: number;
     }
   /** durable resume 开始（core 开放事件；TUI 当作一次新的运行开始处理） */
@@ -147,6 +172,8 @@ export type TuiEvent =
 /** 已知事件名（用于订阅边界判定；未知事件走 `{ type: 'unknown' }`）。 */
 export const KNOWN_TUI_EVENT_TYPES: ReadonlySet<string> = new Set([
   'run.started',
+  'user.message',
+  'llm.response',
   'llm.stream.chunk',
   'tool.call.started',
   'tool.call.completed',
@@ -188,7 +215,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * 已知事件集中盲转（只承诺 type↔payload 映射）；未识别事件映射到显式 unknown 分支，
  * 不再把任意 `event.data as {...}` 的假设扩散到消费方。
  */
-export function asTuiEvent(event: RunEvent): TuiEvent {
+export function asTuiEvent(event: RunEventLike): TuiEvent {
   if (!KNOWN_TUI_EVENT_TYPES.has(event.type)) {
     return {
       type: 'unknown',
@@ -198,7 +225,7 @@ export function asTuiEvent(event: RunEvent): TuiEvent {
       ts: event.ts,
     };
   }
-  return event as TuiEvent;
+  return event as unknown as TuiEvent;
 }
 
 /** 事件名是否在 TUI 已知集合内 */

@@ -172,6 +172,8 @@ export const en: Record<MessageKey, string> = {
   'item.run.cancelled': 'cancelled',
   'item.run.tools': '{count} tools',
   'item.run.tokens': '{tokens} tok',
+  'history.incomplete': 'History restored from the session snapshot (incomplete).',
+  'history.itemsOmitted': 'Earlier history omitted (showing the last {count} items).',
   'common.cancelled': '⏹ Cancelled.',
   'common.output': 'Output',
   'common.refreshFailed': 'Refresh failed.',

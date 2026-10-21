@@ -11,11 +11,16 @@
  * `sanitizeTerminalText()`；原始事件载荷不被改写。
  */
 
-import type { ErrorCategory, ErrorEnvelope, ErrorPhase, RunEvent } from '@vessel-agent/core';
+import type { ErrorCategory, ErrorEnvelope, ErrorPhase } from '@vessel-agent/core';
 import type { SessionMessageLike } from '../../commands/sessions-command.js';
 import { toolDisplayRegistry } from '../../components/ToolDisplay.js';
 import { t } from '../../i18n/index.js';
-import { asTuiEvent, type TuiEvent, type TuiUnknownEvent } from '../../types/events.js';
+import {
+  asTuiEvent,
+  type RunEventLike,
+  type TuiEvent,
+  type TuiUnknownEvent,
+} from '../../types/events.js';
 import { sanitizeTerminalText } from '../../utils/sanitize-terminal-text.js';
 
 export type ToolCallStatus = 'running' | 'completed' | 'failed';
@@ -280,6 +285,23 @@ function closeAssistant(state: UiProjectionState): UiProjectionState {
   };
 }
 
+/** 中断/失败终态携带的半截 assistant 文本（事件日志无 llm.stream.chunk） */
+function appendPartialAssistant(
+  state: UiProjectionState,
+  ts: number,
+  partial: string | undefined,
+): UiProjectionState {
+  if (partial === undefined) return state;
+  const text = safe(partial);
+  if (!text) return state;
+  const { id, seq } = nextId(state, 'assistant');
+  return {
+    ...state,
+    seq,
+    items: [...state.items, { kind: 'assistant', id, text, at: ts }],
+  };
+}
+
 /** 找到仍在运行、且工具名匹配的最新 tool item（permission.request 不带 tool_call_id） */
 function findRunningToolId(state: UiProjectionState, toolName: string): string | undefined {
   for (let index = state.items.length - 1; index >= 0; index--) {
@@ -308,6 +330,52 @@ export function reduceUiProjection(
         reasoningId: undefined,
         reasoningStartedAt: undefined,
       };
+    }
+
+    case 'user.message': {
+      const message = isRecord(event.data.message) ? event.data.message : undefined;
+      if (message?.role !== 'user') return state;
+      const text = safe(message.content);
+      if (!text) return state;
+      let next = closeReasoning(state, event.ts);
+      next = closeAssistant(next);
+      const { id, seq } = nextId(next, 'user');
+      return {
+        ...next,
+        seq,
+        items: [...next.items, { kind: 'user', id, text, at: event.ts }],
+      };
+    }
+
+    case 'llm.response': {
+      // 事件日志没有 llm.stream.chunk；assistant 文本来自持久化的 llm.response。
+      let next = closeReasoning(state, event.ts);
+      next = closeAssistant(next);
+      const reasoning = readString(event.data, 'reasoning');
+      if (reasoning !== undefined) {
+        const text = safe(reasoning);
+        if (text) {
+          const { id, seq } = nextId(next, 'reasoning');
+          next = {
+            ...next,
+            seq,
+            items: [...next.items, { kind: 'reasoning', id, text }],
+          };
+        }
+      }
+      const content = readString(event.data, 'content');
+      if (content !== undefined) {
+        const text = safe(content);
+        if (text) {
+          const { id, seq } = nextId(next, 'assistant');
+          next = {
+            ...next,
+            seq,
+            items: [...next.items, { kind: 'assistant', id, text, at: event.ts }],
+          };
+        }
+      }
+      return next;
     }
 
     case 'llm.stream.chunk': {
@@ -707,6 +775,7 @@ export function reduceUiProjection(
     case 'run.failed': {
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
+      next = appendPartialAssistant(next, event.ts, readString(event.data, 'partial_content'));
       const envelope = readErrorEnvelope(event.data, { category: 'internal', phase: 'run' });
       const { id: errorId, seq: errorSeq } = nextId(next, 'error');
       next = {
@@ -749,6 +818,7 @@ export function reduceUiProjection(
     case 'run.cancelled': {
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
+      next = appendPartialAssistant(next, event.ts, readString(event.data, 'partial_content'));
       const { id, seq } = nextId(next, 'run');
       return {
         ...next,
@@ -877,22 +947,26 @@ export function projectMessagesToUiItems(
 }
 
 export interface UiProjectionSource {
-  /** 当前数据源：EventStream / trace 回放事件 */
-  events?: readonly RunEvent[];
+  /** 当前数据源：EventStream / trace 回放 / 会话事件日志记录 */
+  events?: readonly RunEventLike[];
   /** 当前数据源：resume 的 session messages */
   messages?: readonly SessionMessageLike[];
   showReasoning?: boolean;
 }
 
 /**
- * 纯函数：投影入口。数据源切换只改这里（Phase 1 换成事件日志）。
+ * 纯函数：投影入口。数据源切换只改这里（事件日志 / EventStream / messages）。
  */
 export function projectUiItems(source: UiProjectionSource): UiItem[] {
   let state = createUiProjection();
   for (const raw of source.events ?? []) {
     state = reduceUiProjection(state, asTuiEvent(raw));
   }
-  const items = [...state.items];
+  // reasoning 只在显式开启时进入历史（事件日志的 llm.response 总是带 reasoning）。
+  const items =
+    source.showReasoning === true
+      ? [...state.items]
+      : state.items.filter((item) => item.kind !== 'reasoning');
   if (source.messages !== undefined && source.messages.length > 0) {
     items.push(
       ...projectMessagesToUiItems(source.messages, {
