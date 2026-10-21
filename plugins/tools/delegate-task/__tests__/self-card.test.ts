@@ -119,7 +119,8 @@ describe('delegate child Self Card（E9）', () => {
 
   it('context.max 用注入的 contextMaxTokens，而不是固定默认值', async () => {
     const { spec } = await runDelegate({ contextMaxTokens: 12_345 });
-    const selfCard = spec.selfCard as Record<string, unknown>;
+    const selfCard = spec.selfCard;
+    if (!selfCard) throw new Error('selfCard missing');
     expect(selfCard.context).toEqual({ max: 12_345 });
   });
 });
