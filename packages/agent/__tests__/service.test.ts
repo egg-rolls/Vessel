@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { AgentError, type MemberTurnResult, type NewMemberInput } from '../src/index.js';
+import {
+  AgentError,
+  type AgentEvent,
+  type MemberTurnResult,
+  type NewMemberInput,
+} from '../src/index.js';
 import { type Deferred, deferred, makeService, settle } from './helpers.js';
 
 describe('AgentService lifecycle', () => {
@@ -230,5 +235,107 @@ describe('AgentService replies', () => {
     const error = await service.reply(orphan.id, 'hello').catch((reason) => reason);
 
     expect((error as AgentError).code).toBe('no_parent');
+  });
+});
+
+describe('AgentService owner inbox', () => {
+  it('takeMessages drains queued messages in order without starting a turn or repeating', async () => {
+    const { service, runtime } = makeService();
+    const gate = deferred<MemberTurnResult>();
+    runtime.handler = () => gate.promise;
+    const member = await service.new({ visibility: 'team' });
+
+    await service.send({ to: member.id, content: 'first' });
+    await service.send({ to: member.id, content: 'second' });
+    await service.send({ to: member.id, content: 'third' });
+
+    const one = await service.takeMessages(member.id, 1);
+    expect(one.map((message) => message.content)).toEqual(['second']);
+    const rest = await service.takeMessages(member.id);
+    expect(rest.map((message) => message.content)).toEqual(['third']);
+    expect(await service.takeMessages(member.id)).toEqual([]);
+    // 取消息不触发 runTurn：仍只有进行中的第一轮
+    expect(runtime.turns).toHaveLength(1);
+
+    gate.resolve({});
+    await settle();
+    expect(runtime.turns).toHaveLength(1);
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('completed');
+  });
+
+  it('takeMessages validates limit and rejects closed / unknown members', async () => {
+    const { service } = makeService();
+    const member = await service.new({ visibility: 'team' });
+
+    await expect(service.takeMessages(member.id, 0)).rejects.toMatchObject({
+      code: 'invalid_input',
+    });
+    await expect(service.takeMessages('missing')).rejects.toMatchObject({
+      code: 'unknown_member',
+    });
+
+    await service.close({ member: member.id });
+    await expect(service.takeMessages(member.id)).rejects.toMatchObject({
+      code: 'member_closed',
+    });
+  });
+
+  it('external owner queue is never pumped and only leaves through takeMessages', async () => {
+    const { service, runtime } = makeService();
+    const events: AgentEvent[] = [];
+    service.subscribe((event) => events.push(event));
+    const owner = await service.attachOwner({ id: 'main' });
+    const member = await service.new({ visibility: 'team', parentId: owner.id });
+    runtime.handler = async (target) =>
+      target.id === member.id ? { content: 'auto' } : { content: 'owner-should-not-run' };
+
+    await service.send({ to: owner.id, content: 'direct' });
+    // owner 是 external：send 只入队，runTurn 一次都不跑
+    expect(runtime.turns).toHaveLength(0);
+    expect(
+      (await service.list({ viewer: 'main' })).find((entry) => entry.id === owner.id)?.state,
+    ).toBe('idle');
+    expect(
+      events.some(
+        (event) =>
+          event.type === 'agent.message.queued' &&
+          event.agent_id === owner.id &&
+          event.from === 'main',
+      ),
+    ).toBe(true);
+
+    // 成员自动回复也进 owner 队列，pump 不得消费
+    await service.send({ to: member.id, content: 'work' });
+    await settle();
+    expect(runtime.turns.map((entry) => entry.member.id)).toEqual([member.id]);
+
+    const taken = await service.takeMessages(owner.id);
+    expect(taken.map((message) => message.content)).toEqual(['direct', 'auto']);
+    expect(await service.takeMessages(owner.id)).toEqual([]);
+    // 再触发 pump（新消息入队）也不会把 owner 队列交给 runtime
+    await service.send({ to: owner.id, content: 'again' });
+    expect(runtime.turns.map((entry) => entry.member.id)).toEqual([member.id]);
+    expect((await service.takeMessages(owner.id)).map((message) => message.content)).toEqual([
+      'again',
+    ]);
+  });
+
+  it('notePermissionState moves running -> waiting_permission -> running and ignores late states', async () => {
+    const { service, runtime } = makeService();
+    const gate = deferred<MemberTurnResult>();
+    runtime.handler = () => gate.promise;
+    const member = await service.new({ visibility: 'team' });
+    await service.send({ to: member.id, content: 'work' });
+
+    service.notePermissionState(member.id, 'waiting');
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('waiting_permission');
+    service.notePermissionState(member.id, 'running');
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('running');
+
+    gate.resolve({});
+    await settle();
+    // 终态之后的迟到回调不得把成员拉回 waiting
+    service.notePermissionState(member.id, 'waiting');
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('completed');
   });
 });

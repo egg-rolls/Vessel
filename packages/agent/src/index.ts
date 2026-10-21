@@ -47,6 +47,7 @@ export {
   DEFAULT_OWNER,
   type ListFilter,
   MAX_MESSAGE_BYTES,
+  type MemberPermissionState,
   type MemberRuntimeMember,
   type MemberRuntimePort,
   type MemberState,

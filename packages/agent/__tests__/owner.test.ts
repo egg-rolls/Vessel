@@ -42,7 +42,7 @@ describe('root owner', () => {
     expect(runtime.turns.filter((entry) => entry.member.id === 'main')).toEqual([]);
   });
 
-  it('attached owner receives the automatic reply as a new turn', async () => {
+  it('attached owner queues the automatic reply until takeMessages drains it', async () => {
     const { service, runtime } = makeService();
     await service.attachOwner({ id: 'main', visibility: 'team' });
     const child = await service.new({ parentId: 'main', visibility: 'team' });
@@ -51,9 +51,11 @@ describe('root owner', () => {
     await service.send({ to: child.id, content: 'work' });
     await settle();
 
-    const ownerTurns = runtime.turns.filter((entry) => entry.member.id === 'main');
-    expect(ownerTurns.map((entry) => entry.message.content)).toEqual(['auto']);
-    expect(ownerTurns[0]?.message.from).toBe(child.id);
+    // owner 是 external：pump 不执行 runtime，消息留在队列等 REPL 取
+    expect(runtime.turns.filter((entry) => entry.member.id === 'main')).toEqual([]);
+    const queued = await service.takeMessages('main');
+    expect(queued.map((entry) => entry.content)).toEqual(['auto']);
+    expect(queued[0]?.from).toBe(child.id);
   });
 
   it('repeated attach is idempotent and updates visibility and session id', async () => {

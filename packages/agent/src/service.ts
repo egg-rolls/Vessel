@@ -36,6 +36,7 @@ import {
   DEFAULT_OWNER,
   type ListFilter,
   MAX_MESSAGE_BYTES,
+  type MemberPermissionState,
   type MemberState,
   type MemberStatus,
   type MemberTurnResult,
@@ -122,6 +123,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly permissionBridge: AgentServiceOptions['permissionBridge'];
   private readonly snapshot: AgentSnapshotStore | undefined;
   private readonly queues = new Map<string, MemberQueue>();
+  /** external owner（REPL 主 agent）：队列由 takeMessages 消费，pump 永不执行 */
+  private readonly externalOwners = new Set<string>();
   private readonly listeners = new Set<AgentEventListener>();
   private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
@@ -254,6 +257,7 @@ export class AgentServiceImpl implements AgentService {
       }
       this.registry.updateIdentity(id, { sessionId, visibility });
       if (existing.state === 'stale') this.registry.setState(id, 'idle');
+      this.externalOwners.add(id);
       this.scheduleSnapshot();
       return toMemberStatus(existing);
     }
@@ -270,6 +274,7 @@ export class AgentServiceImpl implements AgentService {
     };
     this.registry.add(record);
     this.queueFor(id);
+    this.externalOwners.add(id);
     this.scheduleSnapshot();
     return toMemberStatus(record);
   }
@@ -512,6 +517,56 @@ export class AgentServiceImpl implements AgentService {
     return { queued: true, message_id: message.id, to: parent.id };
   }
 
+  /**
+   * 取走成员待处理消息（REPL owner 轮询）；FIFO、取走即删除，
+   * 不触发 pump / runTurn。limit 缺省取空队列。
+   */
+  async takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]> {
+    await this.ready;
+    if (limit !== undefined && (!Number.isInteger(limit) || limit <= 0)) {
+      throw new AgentError('invalid_input', 'limit must be a positive integer');
+    }
+    const member = this.requireMember(memberId);
+    if (member.state === 'closed') {
+      throw new AgentError('member_closed', `member_closed: ${memberId}`);
+    }
+    if (member.state === 'stale') {
+      throw new AgentError('member_stale', `member_stale: ${memberId}`);
+    }
+    const queue = this.queueFor(member.id);
+    if (queue.closing) {
+      throw new AgentError('member_closed', `member_closed: ${memberId}`);
+    }
+    const count =
+      limit === undefined ? queue.pending.length : Math.min(limit, queue.pending.length);
+    const taken = queue.pending.splice(0, count);
+    if (taken.length > 0) this.registry.touch(member.id);
+    return taken;
+  }
+
+  /** bridge 执行内核上报的等待/恢复；closed / stale 与非法转移一律忽略，不抛错 */
+  notePermissionState(memberId: string, state: MemberPermissionState): void {
+    const member = this.registry.get(memberId);
+    if (!member || member.state === 'closed' || member.state === 'stale') return;
+    try {
+      if (state === 'waiting') {
+        if (member.state !== 'running') return;
+        this.registry.setState(member.id, 'waiting_permission');
+      } else {
+        if (member.state !== 'waiting_permission') return;
+        this.registry.setState(member.id, 'running');
+      }
+    } catch (error) {
+      this.logger.warn('agent.permission.state_failed', {
+        member_id: memberId,
+        state,
+        error: errorText(error),
+      });
+      return;
+    }
+    this.scheduleSnapshot();
+  }
+
   async requestPermission(
     memberId: string,
     request: PermissionRequestInput,
@@ -634,10 +689,14 @@ export class AgentServiceImpl implements AgentService {
     return member;
   }
 
-  /** 有排队消息且无在跑轮次时启动下一轮；waiting_permission / closing 不推进 */
+  /**
+   * 有排队消息且无在跑轮次时启动下一轮；waiting_permission / closing 不推进。
+   * external owner 的消息只入队，由 REPL 通过 takeMessages 消费，不在这里起轮。
+   */
   private pump(memberId: string): void {
     const member = this.registry.get(memberId);
     if (!member) return;
+    if (this.externalOwners.has(memberId)) return;
     const queue = this.queueFor(memberId);
     if (queue.turnActive || queue.closing) return;
     if (member.state === 'created' || member.state === 'closed' || member.state === 'stale') return;
