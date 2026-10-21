@@ -20,9 +20,11 @@ import {
 } from './internal.js';
 import type {
   RunHandle,
+  RunSnapshot,
   RunStatus,
   ScheduledTask,
   SchedulerOptions,
+  SchedulerSnapshot,
   SchedulerStats,
 } from './types.js';
 
@@ -30,6 +32,10 @@ interface QueueEntry {
   task: ScheduledTask;
   run: QueuedRunHandle;
   cancelled: boolean;
+  /** 入队时间（Unix ms） */
+  enqueuedAt: number;
+  /** 开始执行时间（Unix ms） */
+  startedAt?: number;
 }
 
 /** 排队中的 RunHandle：id 在入队时确定，运行后委托给真实 handle */
@@ -132,9 +138,17 @@ export class InProcessScheduler implements InternalScheduler {
     if (this.queue.length >= this.maxQueueSize) {
       throw new Error(`scheduler queue is full (max ${this.maxQueueSize})`);
     }
+    // 0.14.1：固定 runId 用于 resume；同一 id 不得同时排队 / 运行
+    if (task.runId !== undefined && this.hasRun(task.runId)) {
+      throw new Error(`run already scheduled: ${task.runId}`);
+    }
 
-    const run = new QueuedRunHandle(randomUUID(), task.agent.id, task.sessionId ?? 'default');
-    this.queue.push({ task, run, cancelled: false });
+    const run = new QueuedRunHandle(
+      task.runId ?? randomUUID(),
+      task.agent.id,
+      task.sessionId ?? 'default',
+    );
+    this.queue.push({ task, run, cancelled: false, enqueuedAt: Date.now() });
     this.drain();
     return run;
   }
@@ -164,6 +178,34 @@ export class InProcessScheduler implements InternalScheduler {
       failed: this.failed,
       cancelled: this.cancelled,
     };
+  }
+
+  /** 0.14.1：只读、可序列化的队列 / 运行快照 */
+  snapshot(): SchedulerSnapshot {
+    const asOf = Date.now();
+    const queued: RunSnapshot[] = [];
+    for (const entry of this.queue) {
+      if (entry.cancelled) continue;
+      queued.push({
+        runId: entry.run.id,
+        agentId: entry.task.agent.id,
+        sessionId: entry.run.sessionId,
+        state: 'queued',
+        queuePosition: queued.length + 1,
+        queuedAt: entry.enqueuedAt,
+      });
+    }
+
+    const running: RunSnapshot[] = [...this.active.values()].map((entry) => ({
+      runId: entry.run.id,
+      agentId: entry.task.agent.id,
+      sessionId: entry.run.sessionId,
+      state: 'running' as const,
+      queuedAt: entry.enqueuedAt,
+      ...(entry.startedAt !== undefined ? { startedAt: entry.startedAt } : {}),
+    }));
+
+    return { asOf, queued, running, stats: this.stats() };
   }
 
   async close(): Promise<void> {
@@ -226,6 +268,7 @@ export class InProcessScheduler implements InternalScheduler {
   /** 启动一个排队任务 */
   private async start(entry: QueueEntry): Promise<void> {
     const agentId = entry.task.agent.id;
+    entry.startedAt = Date.now();
     this.active.set(entry.run.id, entry);
     this.agentRunning.add(agentId);
     // F9：采用 task 上最终确定的 sessionId（自定义 Scheduler 可能改写）
@@ -256,6 +299,12 @@ export class InProcessScheduler implements InternalScheduler {
     }
 
     return task.agent.run(task.input, { ...task.opts, runId });
+  }
+
+  /** 是否已有同 id 的排队 / 运行项 */
+  private hasRun(runId: string): boolean {
+    if (this.active.has(runId)) return true;
+    return this.queue.some((entry) => entry.run.id === runId);
   }
 
   /** 结算：更新计数、释放槽位、继续 drain */

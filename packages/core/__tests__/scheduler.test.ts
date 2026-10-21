@@ -467,3 +467,62 @@ describe('Scheduler 并发不变量（0.4 C2）', () => {
     await scheduler.close();
   });
 });
+
+describe('固定 runId 与快照（0.14.1）', () => {
+  it('提交时固定 runId；同一 id 重复调度被拒绝', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 1 });
+    const blocking = new FakeRunHandle('pinned');
+    const run = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: 'x',
+      runId: 'pinned',
+      executor: () => Promise.resolve(blocking),
+    });
+    expect(run.id).toBe('pinned');
+
+    await expect(
+      scheduler.submit({
+        agent: { id: 'b' } as AgentHandle,
+        input: 'y',
+        runId: 'pinned',
+        executor: () => new Promise<RunHandle>(() => undefined),
+      }),
+    ).rejects.toThrow('run already scheduled');
+
+    blocking.finish();
+    await expect(run.result).resolves.toBe('done');
+    await scheduler.close();
+  });
+
+  it('snapshot：FIFO 排队位置、running 带 startedAt、可 JSON 往返', async () => {
+    const scheduler = new InProcessScheduler({ maxConcurrency: 1 });
+    const blocking = new FakeRunHandle('r1');
+    const first = await scheduler.submit({
+      agent: { id: 'a' } as AgentHandle,
+      input: '1',
+      executor: () => Promise.resolve(blocking),
+    });
+    const second = await scheduler.submit({
+      agent: { id: 'b' } as AgentHandle,
+      input: '2',
+      executor: () => new Promise<RunHandle>(() => undefined),
+    });
+    const third = await scheduler.submit({
+      agent: { id: 'c' } as AgentHandle,
+      input: '3',
+      executor: () => new Promise<RunHandle>(() => undefined),
+    });
+
+    const snapshot = scheduler.snapshot();
+    expect(snapshot.running.map((run) => run.runId)).toEqual([first.id]);
+    expect(typeof snapshot.running[0]?.startedAt).toBe('number');
+    expect(snapshot.queued.map((run) => run.runId)).toEqual([second.id, third.id]);
+    expect(snapshot.queued.map((run) => run.queuePosition)).toEqual([1, 2]);
+    expect(snapshot.stats).toMatchObject({ queued: 2, running: 1 });
+    expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);
+
+    blocking.finish();
+    await expect(first.result).resolves.toBe('done');
+    await scheduler.close();
+  });
+});

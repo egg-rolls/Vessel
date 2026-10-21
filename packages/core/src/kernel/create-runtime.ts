@@ -29,5 +29,10 @@ export async function createRuntime(options: RuntimeOptions = {}): Promise<Runti
     ...(options.transport ? { transport: options.transport } : {}),
     ...(options.runStore ? { runStore: options.runStore } : {}),
     ...(options.tenantId !== undefined ? { tenantId: options.tenantId } : {}),
+    ...(options.pluginConfigs !== undefined ? { pluginConfigs: options.pluginConfigs } : {}),
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+    ...(options.includeReasoning !== undefined
+      ? { includeReasoning: options.includeReasoning }
+      : {}),
   });
 }
