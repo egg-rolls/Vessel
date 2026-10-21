@@ -148,6 +148,12 @@ export {
   type TenantQuota,
   type TenantRole,
 } from './tenant.js';
+export {
+  createTenantEventHub,
+  type TenantEventHub,
+  type TenantEventHubOptions,
+  type TenantEventSource,
+} from './tenant-event-hub.js';
 export { capToolEvent, capToolPayload, TOOL_EVENT_PAYLOAD_LIMIT } from './tool-events.js';
 export {
   createLoopbackTransport,
