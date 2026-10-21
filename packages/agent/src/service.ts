@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { assertTenantId, type Logger, noopLogger } from '@vessel-agent/core';
+import { assertTenantId, type EventStream, type Logger, noopLogger } from '@vessel-agent/core';
 import {
   isTerminalState,
   type MemberRecord,
@@ -22,9 +22,12 @@ import {
 import { AgentSnapshotStore, snapshotPath } from './snapshot.js';
 import {
   AgentError,
+  type AgentEvent,
+  type AgentEventListener,
   type AgentMessage,
   type AgentService,
   type AgentServiceOptions,
+  type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
   type CloseBatchInput,
@@ -119,6 +122,9 @@ export class AgentServiceImpl implements AgentService {
   private readonly permissionBridge: AgentServiceOptions['permissionBridge'];
   private readonly snapshot: AgentSnapshotStore | undefined;
   private readonly queues = new Map<string, MemberQueue>();
+  private readonly listeners = new Set<AgentEventListener>();
+  private readonly tenantId: string;
+  private readonly eventStream: EventStream | undefined;
   private readonly ready: Promise<void>;
 
   constructor(options: AgentServiceOptions) {
@@ -136,6 +142,8 @@ export class AgentServiceImpl implements AgentService {
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? noopLogger;
     this.permissionBridge = options.permissionBridge;
+    this.tenantId = options.tenantId;
+    this.eventStream = options.events;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -167,7 +175,8 @@ export class AgentServiceImpl implements AgentService {
     let restored = 0;
     for (const status of members) {
       const record = recordFromStatus(status);
-      if (!isTerminalState(record.state)) record.state = 'stale';
+      const wasStale = !isTerminalState(record.state);
+      if (wasStale) record.state = 'stale';
       try {
         this.registry.add(record);
         restored += 1;
@@ -176,7 +185,9 @@ export class AgentServiceImpl implements AgentService {
           member_id: status.id,
           error: errorText(error),
         });
+        continue;
       }
+      if (wasStale) this.emit('agent.stale', record, { state: 'stale' });
     }
     if (restored > 0) this.scheduleSnapshot();
   }
@@ -221,6 +232,48 @@ export class AgentServiceImpl implements AgentService {
     return this.createOne(record);
   }
 
+  /**
+   * 注册 root owner（REPL 主 agent）。
+   * 不调用 runtime.spawn；stale 记录（快照恢复）回到 idle，closed 保持关闭。
+   */
+  async attachOwner(input: AttachOwnerInput): Promise<MemberStatus> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const id = readRequiredString(raw, 'id');
+    const sessionId = raw.sessionId === undefined ? id : readRequiredString(raw, 'sessionId');
+    const visibility = resolveVisibility(raw.visibility, 'private');
+
+    const existing = this.registry.get(id);
+    if (existing) {
+      if (existing.parentId !== undefined || existing.owner !== existing.id) {
+        throw new AgentError('invalid_input', `id belongs to a spawned member: ${id}`);
+      }
+      const sessionOwner = this.registry.resolve(sessionId);
+      if (sessionOwner !== undefined && sessionOwner.id !== id) {
+        throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
+      }
+      this.registry.updateIdentity(id, { sessionId, visibility });
+      if (existing.state === 'stale') this.registry.setState(id, 'idle');
+      this.scheduleSnapshot();
+      return toMemberStatus(existing);
+    }
+
+    if (this.registry.resolve(sessionId) !== undefined) {
+      throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
+    }
+    const record: MemberRecord = {
+      id,
+      sessionId,
+      owner: id,
+      visibility,
+      state: 'idle',
+    };
+    this.registry.add(record);
+    this.queueFor(id);
+    this.scheduleSnapshot();
+    return toMemberStatus(record);
+  }
+
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
     const visibility = resolveVisibility(input.visibility, 'private');
     const owner = input.owner === undefined ? DEFAULT_OWNER : readRequiredString(input, 'owner');
@@ -253,6 +306,7 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
     }
     this.registry.setState(id, 'idle');
+    this.emit('agent.spawned', record, { state: 'idle' });
     this.scheduleSnapshot();
     return toMemberStatus(record);
   }
@@ -318,6 +372,11 @@ export class AgentServiceImpl implements AgentService {
     const queue = this.queueFor(target.id);
     queue.pending.push(message);
     this.registry.touch(target.id);
+    this.emit('agent.message.queued', target, {
+      state: target.state,
+      message_id: message.id,
+      from,
+    });
     this.scheduleSnapshot();
     this.pump(target.id);
     return { queued: true, message_id: message.id, state: target.state };
@@ -370,6 +429,7 @@ export class AgentServiceImpl implements AgentService {
     // stale 成员没有可释放的运行时对象；直接关闭，避免对恢复成员调 dispose
     if (member.state === 'stale') {
       this.registry.setState(member.id, 'closed');
+      this.emit('agent.closed', member, { state: 'closed' });
       this.scheduleSnapshot();
       await this.flushSnapshot();
       return { state: 'closed' };
@@ -389,6 +449,7 @@ export class AgentServiceImpl implements AgentService {
     // cancel 期间执行内核仍可能完成本轮；closing 已置位，executeTurn 不会覆盖 closed
     this.registry.setState(member.id, 'closed');
     queue.pending.length = 0;
+    this.emit('agent.closed', member, { state: 'closed' });
     this.scheduleSnapshot();
 
     try {
@@ -441,6 +502,11 @@ export class AgentServiceImpl implements AgentService {
     };
     this.queueFor(parent.id).pending.push(message);
     this.registry.touch(parent.id);
+    this.emit('agent.message.queued', parent, {
+      state: parent.state,
+      message_id: message.id,
+      from: member.id,
+    });
     this.scheduleSnapshot();
     this.pump(parent.id);
     return { queued: true, message_id: message.id, to: parent.id };
@@ -457,6 +523,11 @@ export class AgentServiceImpl implements AgentService {
     }
 
     this.registry.setState(member.id, 'waiting_permission', request.tool);
+    this.emit('agent.permission.requested', member, {
+      state: 'waiting_permission',
+      tool: request.tool,
+      ...(request.requestId !== undefined ? { request_id: request.requestId } : {}),
+    });
     this.scheduleSnapshot();
 
     let decision: PermissionDecision;
@@ -474,12 +545,77 @@ export class AgentServiceImpl implements AgentService {
       this.registry.setState(member.id, 'running');
       this.scheduleSnapshot();
     }
+    if (current) {
+      this.emit('agent.permission.responded', current, {
+        state: current.state,
+        tool: request.tool,
+        decision: decision.decision,
+        ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
+        ...(request.requestId !== undefined ? { request_id: request.requestId } : {}),
+      });
+    }
     return decision;
   }
 
   async flushSnapshot(): Promise<void> {
     await this.ready;
     await this.snapshot?.flush();
+  }
+
+  subscribe(listener: AgentEventListener): () => void {
+    if (typeof listener !== 'function') {
+      throw new AgentError('invalid_input', 'listener must be a function');
+    }
+    this.listeners.add(listener);
+    let active = true;
+    return () => {
+      if (!active) return;
+      active = false;
+      this.listeners.delete(listener);
+    };
+  }
+
+  /** 发成员事件；监听器与 EventStream 异常都隔离，不影响服务行为 */
+  private emit(
+    type: string,
+    member: MemberRecord,
+    extra: Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> = {},
+  ): void {
+    if (this.listeners.size === 0 && this.eventStream === undefined) return;
+    const data: Omit<AgentEvent, 'type'> = {
+      agent_id: member.id,
+      session_id: member.sessionId,
+      ...(member.parentId !== undefined ? { parent_id: member.parentId } : {}),
+      ...extra,
+      ts: this.now(),
+    };
+    const event: AgentEvent = { type, ...data };
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger.warn('agent.listener.failed', {
+          agent_id: member.id,
+          error: errorText(error),
+        });
+      }
+    }
+    if (this.eventStream) {
+      try {
+        this.eventStream.publish({
+          type,
+          run_id: member.id,
+          data,
+          ts: data.ts,
+          tenant_id: this.tenantId,
+        });
+      } catch (error) {
+        this.logger.warn('agent.event.publish_failed', {
+          agent_id: member.id,
+          error: errorText(error),
+        });
+      }
+    }
   }
 
   /** 取队列；不存在则建 */
@@ -515,6 +651,7 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(memberId, 'running');
     queue.turnActive = true;
     queue.repliedThisTurn = false;
+    this.emit('agent.turn.started', member, { state: 'running', message_id: message.id });
     this.scheduleSnapshot();
     void this.executeTurn(member, message);
   }
@@ -523,45 +660,70 @@ export class AgentServiceImpl implements AgentService {
   private async executeTurn(member: MemberRecord, message: AgentMessage): Promise<void> {
     const queue = this.queueFor(member.id);
     let result: MemberTurnResult | undefined;
-    let failed = false;
+    let failure: string | undefined;
     try {
       result = await this.runtime.runTurn(toRuntimeMember(member), message);
     } catch (error) {
-      failed = true;
+      failure = errorText(error);
       // close 主动取消不是失败；按 error 记录会把正常关闭刷成告警
       if (queue.closing) {
         this.logger.debug('agent.turn.cancelled', { member_id: member.id });
       } else {
         this.logger.error('agent.turn.failed', {
           member_id: member.id,
-          error: errorText(error),
+          error: failure,
         });
       }
     }
     queue.turnActive = false;
 
     const current = this.registry.get(member.id);
+    if (!current) return;
     // close 已发生（或成员已被关闭）：后到的终态不得覆盖 closed
-    if (!current || queue.closing || current.state === 'closed' || current.state === 'stale')
+    if (queue.closing || current.state === 'closed' || current.state === 'stale') {
+      if (queue.closing) {
+        this.emit('agent.turn.cancelled', current, {
+          state: current.state,
+          outcome: 'cancelled',
+          reason: 'closed',
+          message_id: message.id,
+        });
+      }
       return;
+    }
 
     if (result?.usage !== undefined) this.registry.setUsage(member.id, result.usage);
 
-    const outcome = failed ? 'failed' : (result?.outcome ?? 'completed');
-    if (outcome === 'completed' && !queue.repliedThisTurn && nonEmpty(result?.content)) {
-      this.deliverToParent(current, result.content as string);
-    }
-
+    const outcome = failure !== undefined ? 'failed' : (result?.outcome ?? 'completed');
     const state: MemberState =
       outcome === 'failed' ? 'failed' : outcome === 'cancelled' ? 'cancelled' : 'completed';
     // 应答丢失时可能仍停在 waiting_permission；先回到 running 才能进终态
     if (current.state === 'waiting_permission') this.registry.setState(member.id, 'running');
     this.registry.setState(member.id, state);
+    this.emit(
+      outcome === 'failed'
+        ? 'agent.turn.failed'
+        : outcome === 'cancelled'
+          ? 'agent.turn.cancelled'
+          : 'agent.turn.completed',
+      current,
+      {
+        state,
+        outcome,
+        message_id: message.id,
+        ...(failure !== undefined ? { reason: failure } : {}),
+      },
+    );
+
+    if (outcome === 'completed' && !queue.repliedThisTurn && nonEmpty(result?.content)) {
+      this.deliverToParent(current, result.content as string);
+    }
+
     this.scheduleSnapshot();
     this.pump(member.id);
   }
 
-  /** 自动最终文本投递到父成员队列；父不存在时丢弃（主 agent 可能未注册） */
+  /** 自动最终文本投递到父成员队列；父不存在（owner 未 attach）时丢弃 */
   private deliverToParent(member: MemberRecord, content: string): void {
     if (!nonEmpty(member.parentId)) return;
     const parent = this.registry.resolve(member.parentId);
@@ -569,14 +731,20 @@ export class AgentServiceImpl implements AgentService {
     const parentQueue = this.queueFor(parent.id);
     if (parentQueue.closing) return;
 
-    parentQueue.pending.push({
+    const message: AgentMessage = {
       id: this.newId(),
       from: member.id,
       to: parent.id,
       content,
       ts: this.now(),
-    });
+    };
+    parentQueue.pending.push(message);
     this.registry.touch(parent.id);
+    this.emit('agent.message.queued', parent, {
+      state: parent.state,
+      message_id: message.id,
+      from: member.id,
+    });
     this.scheduleSnapshot();
     this.pump(parent.id);
   }
