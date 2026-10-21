@@ -216,6 +216,12 @@ export class SessionEventLog {
   private readonly durable: boolean;
   private readonly maxOpenWriters: number;
   private readonly writers = new Map<string, WriterState>();
+  /**
+   * LRU 淘汰后的 drain 链（key = session_id）。
+   * 新 writer 的 `ready` 必须排在同 session 的旧 drain 之后，否则会在旧队列
+   * 尚未落盘时重读文件尾，导致重复 seq。
+   */
+  private readonly draining = new Map<string, Promise<void>>();
   private closed = false;
 
   constructor(options: SessionEventLogOptions) {
@@ -329,6 +335,7 @@ export class SessionEventLog {
       await state.queue;
       if (state.persistedSeq > 0) return state.persistedSeq;
     }
+    await this.draining.get(sessionId)?.catch(() => {});
     const path = sessionEventsFilePath(this.dir, sessionId);
     let size: number;
     try {
@@ -347,9 +354,13 @@ export class SessionEventLog {
     if (sessionId !== undefined) {
       const state = this.writers.get(sessionId);
       if (state) await state.queue;
+      await this.draining.get(sessionId)?.catch(() => {});
       return;
     }
-    await Promise.all([...this.writers.values()].map((state) => state.queue));
+    await Promise.all([
+      ...[...this.writers.values()].map((state) => state.queue),
+      ...[...this.draining.values()].map((drain) => drain.catch(() => {})),
+    ]);
   }
 
   /**
@@ -366,6 +377,8 @@ export class SessionEventLog {
       await state.ready.catch(() => {});
       await state.queue;
     }
+    // 被 LRU 淘汰但仍在 drain 的同一 session：等它写完再读。
+    await this.draining.get(sessionId)?.catch(() => {});
 
     const path = sessionEventsFilePath(this.dir, sessionId);
     const since = typeof opts.sinceSeq === 'number' ? Math.floor(opts.sinceSeq) : undefined;
@@ -518,6 +531,8 @@ export class SessionEventLog {
    */
   async deleteSession(sessionId: string): Promise<boolean> {
     const existed = await this.hasSession(sessionId);
+    // 先等 LRU 淘汰留下的 drain 与当前 writer 队列，再删目录。
+    await this.draining.get(sessionId)?.catch(() => {});
     const state = this.writers.get(sessionId);
     if (state) {
       await state.queue;
@@ -540,6 +555,8 @@ export class SessionEventLog {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    await Promise.all([...this.draining.values()].map((drain) => drain.catch(() => {})));
+    this.draining.clear();
     await Promise.all(
       [...this.writers.values()].map(async (state) => {
         await state.queue;
@@ -579,7 +596,8 @@ export class SessionEventLog {
       }
       if (victimKey !== undefined && victim !== undefined) {
         this.writers.delete(victimKey);
-        void (async () => {
+        // 关键顺序：先登记 drain 链，再让同一 session 的新 writer 等待它。
+        const drain = (async () => {
           await victim.queue;
           await victim.ready.catch(() => {});
           try {
@@ -589,7 +607,11 @@ export class SessionEventLog {
           }
           victim.handle = undefined;
           victim.closed = true;
-        })();
+        })().catch(() => {});
+        this.draining.set(victimKey, drain);
+        void drain.then(() => {
+          if (this.draining.get(victimKey) === drain) this.draining.delete(victimKey);
+        });
       }
     }
 
@@ -605,9 +627,15 @@ export class SessionEventLog {
       lastUsed: Date.now(),
       closed: false,
     };
-    created.ready = this.initWriter(created).catch(async (error: unknown) => {
+    // 同一 session 的旧 writer 可能刚被 LRU 淘汰且仍在 drain：必须等它落盘，
+    // 再从文件尾恢复 seq，否则会与在途写分配出相同 seq。
+    const predecessor = this.draining.get(key);
+    created.ready = (async () => {
+      if (predecessor !== undefined) await predecessor;
+      await this.initWriter(created);
+    })().catch(async (error: unknown) => {
       // 初始化失败：保留首条错误供 append 抛出；关闭可能的句柄。
-      this.writers.delete(key);
+      if (this.writers.get(key) === created) this.writers.delete(key);
       try {
         await created.handle?.close();
       } catch {

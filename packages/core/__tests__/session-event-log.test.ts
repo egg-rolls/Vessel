@@ -142,6 +142,30 @@ describe('SessionEventLog（0.18 事件溯源）', () => {
     }
   });
 
+  it('LRU 淘汰 drain 期间重开同一 session 不会重复 seq（50 轮）', async () => {
+    const dir = await tempDir();
+    const log = new SessionEventLog({ dir, durable: false, maxOpenWriters: 1 });
+    try {
+      for (let round = 0; round < 50; round += 1) {
+        // 同一 session 两条在途写入
+        const first = log.append(input('s1', `a${round}`));
+        const second = log.append(input('s1', `b${round}`));
+        // 打开另一个 session 触发 LRU 淘汰 s1（drain 尚未完成）
+        const other = log.append(input('s2', `x${round}`));
+        // 立刻重开 s1（再次淘汰 s2）；新 writer 必须排在上一个 s1 drain 之后
+        const third = log.append(input('s1', `c${round}`));
+        await Promise.all([first, second, other, third]);
+      }
+
+      const seqs = (await log.read('s1')).map((record) => record.seq);
+      expect(new Set(seqs).size).toBe(seqs.length);
+      expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, index) => index + 1));
+      expect(seqs).toHaveLength(150);
+    } finally {
+      await log.close();
+    }
+  });
+
   it('release 关闭句柄后再次 append 会重新恢复 seq', async () => {
     const dir = await tempDir();
     const log = new SessionEventLog({ dir, durable: false });
