@@ -108,7 +108,7 @@ export class MemoryContextManager implements ContextManager {
       !this.config.summarizer &&
       (overflow || (this.config.autoCompact && this.shouldCompact()))
     ) {
-      this.compact();
+      this.compact(false);
     }
   }
 
@@ -132,8 +132,8 @@ export class MemoryContextManager implements ContextManager {
    * 移除中间并注入摘要。
    * @returns 本次移除的消息数（0 = 未压缩）
    */
-  compact(): number {
-    const plan = this.planCompaction();
+  compact(force = true): number {
+    const plan = this.planCompaction(force);
     if (!plan) return 0;
 
     this.applyCompaction(plan, placeholderSummary(plan.toSummarize.length));
@@ -145,12 +145,12 @@ export class MemoryContextManager implements ContextManager {
    * 0.6.1 E3：异步压缩。有 summarizer 时等待真实摘要；失败或空结果回退占位符。
    * 并发调用共享同一次压缩，避免重复摘要。
    */
-  async compactAsync(): Promise<number> {
+  async compactAsync(force = true): Promise<number> {
     const sessionId = this.currentSessionId;
     const inFlight = this.compaction;
     if (inFlight?.sessionId === sessionId) return inFlight.promise;
 
-    const plan = this.planCompaction();
+    const plan = this.planCompaction(force);
     if (!plan) return 0;
 
     const removed = plan.toSummarize.length;
@@ -189,7 +189,7 @@ export class MemoryContextManager implements ContextManager {
   async autoCompactAsync(): Promise<number> {
     const overflow = this.isOverMessageCap();
     if (!overflow && (!this.config.autoCompact || !this.shouldCompact())) return 0;
-    return this.compactAsync();
+    return this.compactAsync(false);
   }
 
   clear(): void {
@@ -217,7 +217,7 @@ export class MemoryContextManager implements ContextManager {
    * 计算本次压缩范围：system 始终保留；token 预算（maxTokens × 0.3）与
    * 条数上限共同决定边界，至少保留 2 条，且保留区不以孤立 tool 消息开头。
    */
-  private planCompaction(): CompactionPlan | null {
+  private planCompaction(force = false): CompactionPlan | null {
     const sessionId = this.currentSessionId;
     const msgs = this.sessionMessages.get(sessionId) || [];
     const nonSystem = msgs.filter((m) => m.role !== 'system');
@@ -245,6 +245,10 @@ export class MemoryContextManager implements ContextManager {
     const keepFromByCap = nonSystem.length - Math.min(nonSystem.length, maxKept);
     // 任一上限超限都要摘要：取更靠后的边界（保留更少），但不低于 2 条。
     let keepFrom = Math.min(Math.max(keepFromByTokens, keepFromByCap), nonSystem.length - 2);
+
+    // 手动 compact / overflow 重试强制推进：即使全部能装下，也至少摘要到只剩 2 条。
+    // autoCompact 传 false，避免在阈值未触发时无谓压缩。
+    if (force && keepFrom === 0) keepFrom = nonSystem.length - 2;
 
     // 孤立 tool 消息会因缺少对应的 assistant(tool_calls) 被 provider 拒绝，
     // 把边界回退到该 tool 的 assistant，直到边界不再是 tool。

@@ -658,7 +658,7 @@ describe('MemoryContextManager retention by token budget (0.14.4)', () => {
       context.add({ role: 'user', content });
     }
 
-    expect(await context.compactAsync()).toBe(0);
+    expect(await context.autoCompactAsync()).toBe(0);
     expect(calls).toBe(0);
     expect(context.messages.map((message) => message.content)).toEqual([
       'a'.repeat(20),
