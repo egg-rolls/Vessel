@@ -93,6 +93,9 @@ export interface PermissionDecision {
   reason?: string;
 }
 
+/** bridge 模式下成员处于/离开权限等待的阶段（执行内核回调 AgentService 用） */
+export type MemberPermissionState = 'waiting' | 'running';
+
 /** 权限 bridge 端口；由 owner 入口实现（UI / 端点），A1 不实现传输 */
 export interface PermissionBridge {
   request(
@@ -272,6 +275,13 @@ export interface AgentService {
   list(filter?: ListFilter): Promise<MemberStatus[]>;
   /** 成员显式回复父级；本轮自动最终文本随后被抑制 */
   reply(memberId: string, content: string): Promise<ReplyResult>;
+  /**
+   * 取走成员待处理消息（REPL owner 用）；FIFO，不触发 runTurn，不重复投递。
+   * limit 缺省取空队列。
+   */
+  takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]>;
+  /** 执行内核 bridge 上报的权限等待/恢复；只推进 waiting_permission ↔ running */
+  notePermissionState(memberId: string, state: MemberPermissionState): void;
   /** 权限等待：waiting_permission ↔ running；无 bridge 时 deny */
   requestPermission(memberId: string, request: PermissionRequestInput): Promise<PermissionDecision>;
   /** 立即落盘待写快照（close 已自动等待；测试 / 收口用） */

@@ -9,7 +9,10 @@ import {
   HookType,
   type LLMProvider,
   type LLMResponse,
+  type Logger,
+  MemoryEventStream,
   MemoryPluginHost,
+  type RunEvent,
   type ToolDefinition,
 } from '@vessel-agent/core';
 import {
@@ -354,5 +357,200 @@ describe('InProcessMemberRuntime', () => {
       context: { max: 12_000 },
       how_to_ask: 'This is a non-interactive run; state blockers in your final text.',
     });
+  });
+});
+
+/** 第一轮调用工具、第二轮把工具结果带进最终文本的 provider */
+function toolThenEchoProvider(toolName: string): {
+  providerFactory: () => LLMProvider;
+} {
+  let calls = 0;
+  return {
+    providerFactory: () => ({
+      async chat(req) {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls',
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function',
+                function: { name: toolName, arguments: '{}' },
+              },
+            ],
+          };
+        }
+        const toolMessage = [...req.messages].reverse().find((entry) => entry.role === 'tool');
+        return { content: `final:${toolMessage?.content ?? ''}`, finish_reason: 'stop' };
+      },
+    }),
+  };
+}
+
+/** 记录 warn 的 logger（bridge 缺失/降级断言用） */
+function warningLogger(): { warnings: string[]; logger: Logger } {
+  const warnings: string[] = [];
+  return {
+    warnings,
+    logger: {
+      debug: () => {},
+      info: () => {},
+      warn: (message: string) => {
+        warnings.push(message);
+      },
+      error: () => {},
+    },
+  };
+}
+
+describe('InProcessMemberRuntime permission bridge', () => {
+  it('forwards permission requests with member context and resumes on the parent response', async () => {
+    const parentEvents = new MemoryEventStream();
+    const states: string[] = [];
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permissionMode: 'bridge',
+      parentEvents,
+      onPermissionState: (memberId, state) => states.push(`${memberId}:${state}`),
+    });
+    const target = member({ parent_id: 'main' });
+    await runtime.spawn(target);
+
+    const forwarded: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      forwarded.push(event);
+      parentEvents.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: {
+          requestId: (event.data as Record<string, unknown>).requestId,
+          decision: 'allow',
+        },
+        ts: Date.now(),
+      });
+    });
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    expect(result.content).toBe('final:bash:ok');
+    expect(forwarded).toHaveLength(1);
+    const data = forwarded[0]?.data as Record<string, unknown>;
+    expect(data.agent_id).toBe('m1');
+    expect(data.session_id).toBe('m1');
+    expect(data.parent_session_id).toBe('main');
+    expect(data.request_id).toBe(data.requestId as string);
+    expect(data.tool_call_id).toBe('call-1');
+    expect(data.delegate_path).toEqual(['main', 'm1']);
+    expect(data.tool).toBe('bash');
+    expect(data.input).toEqual({});
+    expect(data.source).toBe('runtime');
+    expect(states).toEqual(['m1:waiting', 'm1:running']);
+  });
+
+  it('bridges ask_user questions to the parent and routes the answer back', async () => {
+    const parentEvents = new MemoryEventStream();
+    const askUser: ToolDefinition = {
+      name: 'ask_user',
+      description: 'ask the user',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async (_args, ctx) => {
+        const requestId = 'ask-1';
+        ctx.events.publish({
+          type: 'ask.user.requested',
+          run_id: ctx.run_id,
+          data: { requestId, questions: [{ header: 'h', question: 'q' }] },
+          ts: Date.now(),
+        });
+        const answered = (await ctx.events.waitFor('ask.user.answered', {
+          requestId,
+          timeout: 2_000,
+        })) as { answers?: { answer: string }[] } | undefined;
+        return `answered:${answered?.answers?.[0]?.answer ?? ''}`;
+      },
+    };
+    const { providerFactory } = toolThenEchoProvider('ask_user');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([askUser]),
+      extraTools: ['ask_user'],
+      permissionMode: 'bridge',
+      parentEvents,
+    });
+    const target = member({ parent_id: 'main' });
+    await runtime.spawn(target);
+
+    const forwarded: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      if (event.type !== 'ask.user.requested') return;
+      forwarded.push(event);
+      parentEvents.publish({
+        type: 'ask.user.answered',
+        run_id: event.run_id,
+        data: { requestId: 'ask-1', answers: [{ header: 'h', question: 'q', answer: 'yes' }] },
+        ts: Date.now(),
+      });
+    });
+
+    const result = await runtime.runTurn(target, message('ask'));
+
+    expect(result.content).toBe('final:answered:yes');
+    const data = forwarded[0]?.data as Record<string, unknown>;
+    expect(data.agent_id).toBe('m1');
+    expect(data.parent_session_id).toBe('main');
+    expect(data.request_id).toBe('ask-1');
+    expect(data.delegate_path).toEqual(['main', 'm1']);
+    expect(data.tool).toBe('ask_user');
+    expect(data.input).toEqual([{ header: 'h', question: 'q' }]);
+    expect(data.source).toBe('runtime');
+  });
+
+  it('bridge without parentEvents degrades to deny and logs a warning', async () => {
+    const { warnings, logger } = warningLogger();
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permissionMode: 'bridge',
+      logger,
+    });
+    const target = member();
+    await runtime.spawn(target);
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    expect(warnings).toContain('agent.member.permission_bridge_unavailable');
+    expect(warnings).toContain('agent.member.permission_ask_denied');
+    expect(result.content).toContain('denied');
+  });
+
+  it('keeps the A3a deny behavior when bridge is off, even with parentEvents', async () => {
+    const parentEvents = new MemoryEventStream();
+    const forwarded: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      forwarded.push(event);
+    });
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permissionMode: 'allow',
+      parentEvents,
+    });
+    const target = member();
+    await runtime.spawn(target);
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    expect(result.content).toContain('denied');
+    expect(forwarded).toHaveLength(0);
   });
 });
