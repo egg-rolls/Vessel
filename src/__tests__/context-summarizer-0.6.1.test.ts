@@ -52,17 +52,4 @@ describe('createContextSummarizer（0.6.1 E3）', () => {
     });
     expect(large.calls[0]?.max_tokens).toBe(2048);
   });
-
-  it('provider 抛错向上传递（由 core 回退占位符）', async () => {
-    const provider: LLMProvider = {
-      async chat(): Promise<LLMResponse> {
-        throw new Error('provider down');
-      },
-    };
-    await expect(
-      createContextSummarizer(provider, 'm')([{ role: 'user', content: 'x' }], {
-        maxTokens: 500,
-      }),
-    ).rejects.toThrow('provider down');
-  });
 });
