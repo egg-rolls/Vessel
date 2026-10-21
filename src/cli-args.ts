@@ -144,6 +144,35 @@ export interface LogsCommandArgs {
   instance?: string;
 }
 
+/** 成员可见性（CLI 语法层） */
+export type AgentVisibilityArg = 'private' | 'team' | 'tenant';
+
+/** 成员状态（CLI 语法层；与 MemberState 同名同义） */
+export type AgentStateArg =
+  | 'created'
+  | 'idle'
+  | 'running'
+  | 'waiting_permission'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'closed'
+  | 'stale';
+
+/** `vessel agent ...` 子命令（0.17 Phase A） */
+export type AgentCommand =
+  | {
+      kind: 'new';
+      json: boolean;
+      name?: string;
+      model?: string;
+      visibility?: AgentVisibilityArg;
+      systemPrompt?: string;
+    }
+  | { kind: 'send'; json: boolean; member: string; content: string }
+  | { kind: 'close'; json: boolean; members: string[] }
+  | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
+
 export interface CliArgs {
   /** `vessel demo`：无 Key 交互演示（mock + tools 场景） */
   demo: boolean;
@@ -211,6 +240,8 @@ export interface CliArgs {
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
+  /** 0.17：`vessel agent new|send|close|list` */
+  agentCommand: AgentCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
 }
@@ -272,6 +303,7 @@ export function parseArgs(argv: string[]): ParseResult {
     gateway: null,
     statusCommand: null,
     agentsCommand: null,
+    agentCommand: null,
     errorsCommand: null,
   };
 
@@ -318,6 +350,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'agents' && i === 0) {
       return parseAgentsArgs(argv.slice(1), args);
+    }
+    if (a === 'agent' && i === 0) {
+      return parseAgentArgs(argv.slice(1), args);
     }
     if (a === 'errors' && i === 0) {
       return parseErrorsArgs(argv.slice(1), args);
@@ -1835,6 +1870,176 @@ function parseAgentsArgs(rest: string[], args: CliArgs): ParseResult {
   if (args.help) return { ok: true, args };
   args.agentsCommand = { json };
   return { ok: true, args };
+}
+
+/** `agent new|send|close|list`（0.17 Phase A） */
+function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  const tail = rest.slice(1);
+
+  if (sub === 'new') {
+    let json = false;
+    let name: string | undefined;
+    let model: string | undefined;
+    let visibility: AgentVisibilityArg | undefined;
+    let systemPrompt: string | undefined;
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--name' || a === '--model' || a === '--visibility' || a === '--system-prompt') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
+        if (a === '--name') name = value.value;
+        else if (a === '--model') model = value.value;
+        else if (a === '--system-prompt') systemPrompt = value.value;
+        else {
+          if (value.value !== 'private' && value.value !== 'team' && value.value !== 'tenant') {
+            return {
+              ok: false,
+              error: `Invalid --visibility: ${value.value} (expected private|team|tenant)`,
+            };
+          }
+          visibility = value.value;
+        }
+        i = value.next;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for agent new: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.agentCommand = {
+      kind: 'new',
+      json,
+      ...(name !== undefined ? { name } : {}),
+      ...(model !== undefined ? { model } : {}),
+      ...(visibility !== undefined ? { visibility } : {}),
+      ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'send') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [member, ...contentParts] = positional;
+    if (member === undefined || member === '') {
+      return { ok: false, error: 'agent send requires <member> <content...>' };
+    }
+    const content = contentParts.join(' ');
+    if (content === '') {
+      return { ok: false, error: 'agent send requires non-empty <content...>' };
+    }
+    args.agentCommand = { kind: 'send', json, member, content };
+    return { ok: true, args };
+  }
+
+  if (sub === 'close') {
+    let json = false;
+    const members: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent close: ${a}` };
+      }
+      if (a !== '') members.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    if (members.length === 0) {
+      return { ok: false, error: 'agent close requires at least one <member>' };
+    }
+    args.agentCommand = { kind: 'close', json, members };
+    return { ok: true, args };
+  }
+
+  if (sub === 'list') {
+    let json = false;
+    let visibility: AgentVisibilityArg | undefined;
+    let state: AgentStateArg | undefined;
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--visibility' || a === '--state') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (a === '--visibility') {
+          if (value.value !== 'private' && value.value !== 'team' && value.value !== 'tenant') {
+            return {
+              ok: false,
+              error: `Invalid --visibility: ${value.value} (expected private|team|tenant)`,
+            };
+          }
+          visibility = value.value;
+        } else {
+          const states: readonly AgentStateArg[] = [
+            'created',
+            'idle',
+            'running',
+            'waiting_permission',
+            'completed',
+            'failed',
+            'cancelled',
+            'closed',
+            'stale',
+          ];
+          if (!states.includes(value.value as AgentStateArg)) {
+            return { ok: false, error: `Invalid --state: ${value.value}` };
+          }
+          state = value.value as AgentStateArg;
+        }
+        i = value.next;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for agent list: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.agentCommand = {
+      kind: 'list',
+      json,
+      ...(visibility !== undefined ? { visibility } : {}),
+      ...(state !== undefined ? { state } : {}),
+    };
+    return { ok: true, args };
+  }
+
+  return { ok: false, error: `Unknown agent subcommand: ${sub}` };
 }
 
 /** `errors [--json] [--limit N]` */

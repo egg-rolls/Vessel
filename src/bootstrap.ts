@@ -6,6 +6,7 @@
  */
 
 import * as path from 'node:path';
+import type { AgentService, MemberStatus } from '@vessel-agent/agent';
 import {
   buildConfigSnapshot,
   DEFAULT_CONFIG,
@@ -40,6 +41,8 @@ import {
   type LocalRpcDispatcher,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
+import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
+import { createAgentServiceWiring } from './agent-service-wiring';
 import { mapDelegateToolAlias } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
@@ -131,6 +134,11 @@ export interface BootstrapOptions {
   /** 是否为 headless 模式 */
   headless?: boolean;
   /**
+   * 0.17：本次 bootstrap 是否作为 gateway/serve 前台（`--serve` / `gateway start`）。
+   * serve 在 A3c 之前仍走旧 team/delegate 装配；REPL / headless 不再构造它们。
+   */
+  serve?: boolean;
+  /**
    * 是否实际进入交互式 REPL 且 stdin 是 TTY。
    * 非交互（headless / serve-only / 管道）时无 Key 必须快速失败，不能进首启向导。
    */
@@ -214,6 +222,17 @@ export interface BootstrapResult {
   tenantLock?: TenantLock;
   /** 0.5 A-6：本地 tenant 的执行面；connect 模式为 undefined */
   bundle?: TenantRuntimeBundle;
+  /**
+   * 0.17 Phase A：交互入口的 AgentService（含 loopback owner 端点）。
+   * headless 默认不启动；显式 `agent.enabled: true` 时存在。
+   */
+  agent?: {
+    service: AgentService;
+    owner: MemberStatus;
+    ownerId: string;
+    ownerServer?: AgentOwnerServer;
+    dispose: () => Promise<void>;
+  };
   /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
   trace?: TraceControl;
   /** 0.5：session rename/delete 控制面 */
@@ -869,10 +888,17 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       throw error;
     }
   }
+  // 0.17 Phase A：交互 REPL 默认由 AgentService 接管成员工具；headless 默认关闭。
+  // 显式 agent.enabled 双向生效；`team.enabled` 不再隐式启动新服务
+  // （serve 的旧 team 装配在 A3c 之前保持原样）。
+  const agentServiceEnabled = config.agent?.enabled ?? (interactive === true && !headless);
+  const legacyAgentPlugins = options.serve === true && !agentServiceEnabled;
+
   const bundle = await buildTenantRuntime({
     tenantId,
     config,
     tenantPaths,
+    legacyAgentPlugins,
     configSources: loaded.sources,
     configPaths: loaded.paths,
     tenantOverlayKeys: loaded.tenantOverlayKeys,
@@ -945,6 +971,57 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       config.agent?.enabled ?? !headless,
     ),
   };
+
+  // ── AgentService + REPL owner 端点（0.17 Phase A）──
+  let agentControl: BootstrapResult['agent'];
+  if (agentServiceEnabled) {
+    const wiring = await createAgentServiceWiring({
+      tenantId,
+      dataDir,
+      sessionId: currentSessionId,
+      pluginHost: finalPluginHost,
+      // provider 无跨请求状态；成员与父级共用同一实例。
+      providerFactory: () => provider,
+      model: config.agent?.model ?? providerModel,
+      limits,
+      termination,
+      ...(config.context?.maxTokens !== undefined
+        ? { contextMaxTokens: config.context.maxTokens }
+        : {}),
+      permission,
+      logger,
+    });
+    finalPluginHost.registerTool(wiring.tool);
+
+    let ownerServer: AgentOwnerServer | undefined;
+    try {
+      ownerServer = await startAgentOwnerServer({
+        service: wiring.service,
+        dataDir,
+        tenantId,
+        logger,
+      });
+    } catch (error) {
+      // 同一 dataDir 已有 owner 时第二个 REPL 仍可用进程内工具；
+      // CLI attach 保持在原 owner 上。
+      console.warn(
+        `⚠ agent owner endpoint unavailable: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    agentControl = {
+      service: wiring.service,
+      owner: wiring.owner,
+      ownerId: wiring.ownerId,
+      ...(ownerServer !== undefined ? { ownerServer } : {}),
+      dispose: async () => {
+        await ownerServer?.stop();
+        await wiring.service.flushSnapshot();
+      },
+    };
+  }
 
   // ── Durable resume（0.3）─────────────────────────
   // 路由按 checkpoint.agent_id：缺失/owner/宿主成员 → host.resume；
@@ -1306,6 +1383,19 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     }
     unsubPermissionPersist = undefined;
 
+    // 0.17：先停 owner 端点，CLI 不再有机会在 teardown 中途入队。
+    try {
+      await agentControl?.dispose();
+    } catch (error) {
+      reportShutdownFailure({
+        events: bundle.events,
+        logger,
+        step: 'agent.dispose',
+        error,
+        tenantId,
+      });
+    }
+
     try {
       localDispatcher.dispose();
     } catch (error) {
@@ -1412,6 +1502,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     tenantId,
     tenantPaths,
     bundle,
+    ...(agentControl !== undefined ? { agent: agentControl } : {}),
     ...(tenantLock ? { tenantLock } : {}),
     ...(trace ? { trace } : {}),
     sessionControl,

@@ -7,6 +7,7 @@
  */
 
 import { loadConfig } from '../../packages/config/src/index';
+import { runAgentCommand } from '../agent-command';
 import { agentsCommand } from '../agents-command';
 import type { CliArgs } from '../cli-args';
 import { runUpdateCommand } from '../cli-update';
@@ -273,6 +274,20 @@ export const cliCommands: readonly CliCommand[] = [
           connectToken: args.connectTokenArg,
           caFile: args.caArg,
           tenantId: args.tenantArg,
+        }),
+      );
+    },
+  },
+  {
+    name: 'agent',
+    match: (args) => args.agentCommand !== null,
+    run: async (args) => {
+      const command = args.agentCommand;
+      if (command === null) return 1;
+      return printCommandResult(
+        await runAgentCommand(command, {
+          dataDir: await resolveCommandDataDir(),
+          ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
         }),
       );
     },
