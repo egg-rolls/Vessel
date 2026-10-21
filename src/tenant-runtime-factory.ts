@@ -85,8 +85,9 @@ import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
 import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionBackend } from './session-factory';
+import { withSessionWriteLock } from './session-lock-runtime';
 import { reportShutdownFailure } from './shutdown-report';
-import { acquireTenantLock, type TenantLock } from './tenant-lock';
+import { acquireTenantLock, type TenantLock, type TenantLockMode } from './tenant-lock';
 import {
   composeTraceRedactors,
   installTrace,
@@ -111,6 +112,10 @@ export interface BuildTenantRuntimeOptions {
   /** 已持有的锁；缺省且 acquireLock=true 时由本函数获取并负责释放 */
   lock?: TenantLock;
   acquireLock?: boolean;
+  /** tenant 锁模式；缺省 file/memory 后端 shared，sqlite 后端 exclusive */
+  lockMode?: TenantLockMode;
+  /** session 写锁（0.15）；缺省 memory 后端关闭，其余开启 */
+  sessionLocks?: boolean;
   /**
    * 是否安装 trace（本地写意图）。false 时不创建 trace / 不写 events。
    * 默认 false：仅供 --serve 的只读执行面显式开启。
@@ -479,11 +484,15 @@ export async function buildTenantRuntime(
   const loader = options.loader ?? new PluginLoader();
   const logger = options.logger ?? noopLogger;
 
+  const backend = config.session?.backend ?? 'file';
+  const lockMode =
+    options.lockMode ?? (backend === 'sqlite' ? ('exclusive' as const) : ('shared' as const));
   let ownedLock: TenantLock | undefined;
   if (options.lock === undefined && options.acquireLock === true) {
     ownedLock = await acquireTenantLock({
       tenantDir: tenantPaths.root,
       tenantId,
+      mode: lockMode,
       ...(options.clock ? { now: options.clock } : {}),
     });
   }
@@ -831,6 +840,11 @@ export async function buildTenantRuntime(
     }
 
     const activeRuntime = runtime;
+    // 0.15：run/resume 的跨进程写锁。memory 后端不落盘，无需锁。
+    const lockedRuntime = withSessionWriteLock(activeRuntime, {
+      tenantDir: tenantPaths.root,
+      enabled: options.sessionLocks ?? backend !== 'memory',
+    });
     const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
 
     // ── Trace ─────────────────────────────────────
@@ -896,7 +910,7 @@ export async function buildTenantRuntime(
       tenantDir: tenantPaths.root,
       tenantId,
       permission,
-      ...(host ? { host } : { runtime: activeRuntime }),
+      ...(host ? { host } : { runtime: lockedRuntime }),
       loader,
       ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
     });
@@ -1060,7 +1074,7 @@ export async function buildTenantRuntime(
       session,
       context,
       pluginHost: finalPluginHost,
-      runtime: activeRuntime,
+      runtime: lockedRuntime,
       ...(host ? { host } : {}),
       ...(agentRuntime ? { agentRuntime } : {}),
       ...(runStore ? { runStore } : {}),
@@ -1143,6 +1157,8 @@ export interface TenantRuntimeFactoryOptions {
   clock?: () => number;
   /** 默认 true：serve 为每个 active tenant 持锁 */
   acquireLocks?: boolean;
+  /** 0.15：`--exclusive` 强制全部 tenant 用单写者锁 */
+  exclusive?: boolean;
   /** 默认 true：serve 安装每 tenant trace */
   writeTrace?: boolean;
   /**
@@ -1286,6 +1302,7 @@ export async function createTenantRuntimeFactory(
         configPaths: loaded.paths,
         tenantOverlayKeys: loaded.tenantOverlayKeys,
         acquireLock: acquireLocks,
+        ...(options.exclusive === true ? { lockMode: 'exclusive' as const } : {}),
         writeTrace,
         pruneTrace: writeTrace,
         ...(options.useMock !== undefined ? { useMock: options.useMock } : {}),

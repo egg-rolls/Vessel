@@ -16,6 +16,7 @@ import { executeEvalSuite } from './eval-wiring';
 import { createEventStream } from './observability-wiring';
 import { PluginLoader } from './plugin-loader';
 import { createProvider } from './provider-factory';
+import { acquireTenantLock, type TenantLock, TenantLockError } from './tenant-lock';
 import { installTrace, type TraceControl } from './trace-wiring';
 import { ui } from './ui-style';
 
@@ -103,6 +104,22 @@ export async function runEvalCommand(
     options.dataDir ?? resolveDataDir(config),
     tenantId,
   );
+  // eval 写 tenant trace / 报告：与 migrate / tenant / trace prune 一致走 exclusive。
+  let tenantLock: TenantLock | undefined;
+  try {
+    tenantLock = await acquireTenantLock({
+      tenantDir: tenantPaths.root,
+      tenantId,
+      mode: 'exclusive',
+    });
+  } catch (error) {
+    if (error instanceof TenantLockError) {
+      console.error(error.message);
+      return 1;
+    }
+    throw error;
+  }
+
   const events = createEventStream(config);
   const trace: TraceControl | undefined = installTrace({
     events,
@@ -144,5 +161,6 @@ export async function runEvalCommand(
         // trace 收尾失败不改变 eval 退出码
       }
     }
+    await tenantLock?.release().catch(() => undefined);
   }
 }

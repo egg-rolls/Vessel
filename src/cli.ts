@@ -73,6 +73,7 @@ import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { createEventStream } from './observability-wiring';
+import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
@@ -127,7 +128,7 @@ function printHelp(): void {
     ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
     ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
     ['vessel gateway stop [--instance <name>|--port N|--all]', t('help.cmd.gatewayStop')],
-    ['vessel gateway status [--json]', t('help.cmd.gatewayStatus')],
+    ['vessel gateway status [--json] [--rpc]', t('help.cmd.gatewayStatus')],
     ['vessel gateway restart [--daemon] [--instance <name>|--all]', t('help.cmd.gatewayRestart')],
     ['vessel gateway reload [--scope config,plugins]', t('help.cmd.gatewayReload')],
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
@@ -144,6 +145,8 @@ function printHelp(): void {
     ['vessel --feishu', t('help.cmd.feishu')],
   ];
   const config: Array<[string, string]> = [
+    ['vessel --data-dir <path> ...', t('help.cmd.dataDir')],
+    ['vessel --exclusive ...', t('help.cmd.exclusive')],
     ['vessel --tenant <id> ...', t('help.cmd.tenant')],
     ['vessel --connect <url> --connect-token <t> --ca <pem> ...', t('help.cmd.connect')],
     ['vessel config path', t('help.cmd.configPath')],
@@ -169,7 +172,8 @@ function printHelp(): void {
   ];
   const debug: Array<[string, string]> = [['VESSEL_MOCK=1 vessel --run "x"', t('help.cmd.mock')]];
   const meta: Array<[string, string]> = [
-    ['vessel doctor', t('help.cmd.doctor')],
+    ['vessel doctor [--deep]', t('help.cmd.doctor')],
+    ['vessel logs tail [--json] [--lines N]', t('help.cmd.logsTail')],
     ['vessel --resume-run', t('help.cmd.resumeRunList')],
     ['vessel update [--yes]', t('help.cmd.update')],
     ['vessel update --check', t('help.cmd.updateCheck')],
@@ -276,6 +280,10 @@ if (!parsed.ok) {
   process.exit(2);
 }
 const args = parsed.args;
+// 0.15: one-shot commands call loadConfig() without cliOverrides; mirror the
+// explicit --data-dir into the env layer so they resolve the same data root.
+// The main bootstrap path still passes it through buildCliConfigOverrides().
+if (args.dataDirArg !== null) process.env.VESSEL_DATA_DIR = args.dataDirArg;
 const demoRequested = args.demo;
 const useMock =
   demoRequested || process.env.VESSEL_MOCK === '1' || process.env.VESSEL_MOCK === 'true';
@@ -453,6 +461,7 @@ const cliOverrides = buildCliConfigOverrides({
   allowedOrigins: args.allowedOrigins,
   connectToken: args.connectTokenArg,
   caFile: args.caArg,
+  dataDir: args.dataDirArg,
 });
 
 // 引导应用启动
@@ -465,6 +474,7 @@ const initialResult = await bootstrap({
   interactive,
   registerAskUser: askUserClient,
   acquireLock: true,
+  exclusive: args.exclusive,
   cliOverrides,
   ...(continueLatest ? { continueLatest: true } : {}),
   ...(resumeSessionId !== undefined ? { resumeSessionId } : {}),
@@ -511,6 +521,7 @@ if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
       interactive,
       registerAskUser: askUserClient,
       acquireLock: true,
+      exclusive: args.exclusive,
       cliOverrides,
       ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       ...(args.connectArg !== null
@@ -673,6 +684,7 @@ async function runWithConfig(result: BootstrapResult) {
         nodeId: result.nodeId,
         // 0.15：非 default tenant 同样注册 ask_user；每个 tenant 的 ui.askUser 再单独关闭。
         registerAskUser: askUserClient,
+        ...(args.exclusive ? { exclusive: true } : {}),
         sharedEvents,
         logger,
       });
@@ -870,7 +882,20 @@ async function runWithConfig(result: BootstrapResult) {
         : {}),
     });
 
-    gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
+    try {
+      gateway = startGateway(Object.assign(gatewayOptions, controlPlane) as GatewayOptions);
+    } catch (error) {
+      if (isAddressInUse(error)) {
+        // 端口被外部进程占用：退出 1，且不写 PID 文件（实例锁随 exit 释放）。
+        console.error(
+          `port_in_use: ${resolved.options.hostname}:${resolved.options.port} is already in use. ` +
+            'Stop the other process or choose another --port/--instance.',
+        );
+        await result.shutdown();
+        process.exit(1);
+      }
+      throw error;
+    }
 
     // 0.12：PID 文件供 `gateway status/stop/restart/reload` 使用。
     // `gateway start` 写失败视为启动失败；`--serve` 保持兼容，只告警。

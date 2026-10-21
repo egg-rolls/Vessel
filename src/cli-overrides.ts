@@ -29,6 +29,8 @@ export interface CliConfigOverridesInput {
   connectToken?: string | null;
   /** `--ca` / `--connect-ca` */
   caFile?: string | null;
+  /** 0.15：全局 `--data-dir <path>`（CLI > env > config） */
+  dataDir?: string | null;
 }
 
 function nonEmpty(value: string | null | undefined): string | undefined {
@@ -63,8 +65,10 @@ export function buildCliConfigOverrides(input: CliConfigOverridesInput): Partial
   const caFile = nonEmpty(input.caFile);
   if (caFile !== undefined) connect.caFile = caFile;
 
+  const dataDir = nonEmpty(input.dataDir);
   return {
     ...(Object.keys(serve).length > 0 ? { serve } : {}),
     ...(Object.keys(connect).length > 0 ? { connect } : {}),
+    ...(dataDir !== undefined ? { dataDir } : {}),
   };
 }

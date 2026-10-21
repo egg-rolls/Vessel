@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { DEFAULT_SERVE_PORT, parseArgs } from '../cli-args';
+import { buildDaemonArgv } from '../gateway/daemon';
 
 /** 断言解析成功并返回 args */
 function ok(argv: string[]) {
@@ -49,6 +50,9 @@ describe('parseArgs - 默认与 REPL', () => {
       trace: null,
       pluginCommand: null,
       doctorCommand: null,
+      logsCommand: null,
+      dataDirArg: null,
+      exclusive: false,
       gateway: null,
       statusCommand: null,
       agentsCommand: null,
@@ -538,5 +542,48 @@ describe('parseArgs - plugin / doctor（0.6.1）', () => {
     expect(ok(['doctor']).doctorCommand).toEqual({ json: false });
     expect(ok(['doctor', '--json']).doctorCommand).toEqual({ json: true });
     expect(err(['doctor', '--bogus'])).toContain('Unknown argument');
+  });
+});
+
+describe('0.15 multi-instance flags', () => {
+  it('--data-dir is a global override', () => {
+    expect(ok(['--data-dir', '/srv/vessel']).dataDirArg).toBe('/srv/vessel');
+    expect(err(['--data-dir'])).toContain('Missing value for --data-dir');
+  });
+
+  it('--exclusive forces the tenant single-writer lock', () => {
+    expect(ok([]).exclusive).toBe(false);
+    expect(ok(['--exclusive']).exclusive).toBe(true);
+  });
+
+  it('doctor --deep is additive', () => {
+    expect(ok(['doctor', '--deep']).doctorCommand).toEqual({ json: false, deep: true });
+  });
+
+  it('gateway start --daemon --exclusive propagates to the child', () => {
+    const parsed = ok(['gateway', 'start', '--daemon', '--exclusive']);
+    expect(parsed.exclusive).toBe(true);
+    expect(parsed.gateway).toEqual({ kind: 'start', daemon: true });
+    const argv = buildDaemonArgv({ execPath: 'bun', entryPath: 'cli.ts', exclusive: true });
+    expect(argv).toContain('--exclusive');
+    expect(ok(argv.slice(2)).exclusive).toBe(true);
+  });
+
+  it('gateway status --rpc', () => {
+    expect(ok(['gateway', 'status', '--rpc']).gateway).toEqual({
+      kind: 'status',
+      json: false,
+      rpc: true,
+    });
+  });
+
+  it('logs tail parses json/lines/instance', () => {
+    expect(ok(['logs', 'tail']).logsCommand).toEqual({ kind: 'tail', json: false, lines: 50 });
+    expect(ok(['logs', 'tail', '--json', '--lines', '5', '--instance', 'web']).logsCommand).toEqual(
+      { kind: 'tail', json: true, lines: 5, instance: 'web' },
+    );
+    expect(err(['logs'])).toContain('Usage: vessel logs tail');
+    expect(err(['logs', 'tail', '--lines', '0'])).toContain('Invalid --lines');
+    expect(err(['logs', 'tail', '--bogus'])).toContain('Unknown argument');
   });
 });

@@ -118,9 +118,9 @@ describe('createTenantRuntimeFactory', () => {
       );
       expect(factory.pluginsFor('missing')).toBeUndefined();
 
-      // 每个 tenant 持有自己的 writer lock。
-      expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(true);
-      expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(true);
+      // file 后端默认 shared：每个 tenant 在 .members/ 下各有一个租约。
+      expect(fs.readdirSync(path.join(base, 'tenants', 'acme', '.members'))).toHaveLength(1);
+      expect(fs.readdirSync(path.join(base, 'tenants', 'work', '.members'))).toHaveLength(1);
 
       // 事件先进入本 tenant 流，再桥接到共享流并补 tenant_id。
       acme?.events.publish({
@@ -173,16 +173,16 @@ describe('createTenantRuntimeFactory', () => {
     try {
       expect(factory.tenantIds().sort()).toEqual(['acme', 'work']);
       expect(factory.runtimeFor('acme')).toBe(result.runtime);
-      expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(true);
+      expect(fs.readdirSync(path.join(base, 'tenants', 'acme', '.members'))).toHaveLength(1);
 
-      // work 由工厂构建并持锁；acme 的锁仍归 bootstrap。
-      expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(true);
+      // work 由工厂构建并持 shared 租约；acme 的租约仍归 bootstrap。
+      expect(fs.readdirSync(path.join(base, 'tenants', 'work', '.members'))).toHaveLength(1);
     } finally {
       await factory.closeAll();
     }
 
-    expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
-    expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(true);
+    expect(fs.readdirSync(path.join(base, 'tenants', 'work', '.members'))).toEqual([]);
+    expect(fs.readdirSync(path.join(base, 'tenants', 'acme', '.members'))).toHaveLength(1);
 
     await result.shutdown();
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);

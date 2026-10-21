@@ -39,6 +39,8 @@ export interface StartDaemonOptions {
   execPath?: string;
   /** 重复启动检查（缺省 true） */
   checkDuplicate?: boolean;
+  /** 0.15：把全局 `--exclusive` 传给子进程 */
+  exclusive?: boolean;
   platform?: NodeJS.Platform;
   runCommand?: CommandRunner;
 }
@@ -86,6 +88,7 @@ export function buildDaemonArgv(options: {
   instance?: string;
   port?: number;
   host?: string;
+  exclusive?: boolean;
 }): string[] {
   return [
     options.execPath,
@@ -95,6 +98,7 @@ export function buildDaemonArgv(options: {
     ...(options.instance !== undefined ? ['--instance', options.instance] : []),
     ...(options.port !== undefined ? ['--port', String(options.port)] : []),
     ...(options.host !== undefined ? ['--host', options.host] : []),
+    ...(options.exclusive === true ? ['--exclusive'] : []),
   ];
 }
 
@@ -155,6 +159,7 @@ export async function startGatewayDaemon(options: StartDaemonOptions): Promise<S
     ...(instance !== undefined ? { instance } : {}),
     ...(options.port !== undefined ? { port: options.port } : {}),
     ...(options.host !== undefined ? { host: options.host } : {}),
+    ...(options.exclusive === true ? { exclusive: true } : {}),
   });
   const spawn = options.spawn ?? Bun.spawn;
   const sleep = options.sleep ?? defaultSleep;

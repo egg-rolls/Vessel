@@ -4,7 +4,8 @@
  * 检查项：provider key / 配置校验 / data_dir 可写 / session 后端路径 /
  * 插件目录与启用项 / MCP server 形状 / serve 端口占用 / 可选能力开关。
  *
- * 不联网、不构造 runtime、不调用 provider；退出码 0 = 无失败项，1 = 有失败项。
+ * 默认不联网、不构造 runtime、不调用 provider；`--deep` 额外查询本地 gateway 的
+ * health / mcp 列表（只读 RPC）。退出码 0 = 无失败项，1 = 有失败项。
  *
  * @module vessel/doctor-command
  */
@@ -18,6 +19,7 @@ import {
   type VesselConfig,
 } from '../packages/config/src/index';
 import type { DoctorCommandArgs } from './cli-args';
+import { type ControlPlaneTarget, resolveControlPlaneTarget } from './control-plane-target';
 import { resolveDataDir, resolveTenantPaths } from './data-paths';
 import { declarativePluginEntries } from './plugin-config';
 import { PluginLoader } from './plugin-loader';
@@ -36,6 +38,8 @@ export interface DoctorOptions extends DoctorCommandArgs {
   configPath?: string;
   userConfigPath?: string;
   env?: Record<string, string | undefined>;
+  /** 测试注入：直接使用该 RPC 目标（不探测 PID / 建 HTTP） */
+  target?: ControlPlaneTarget;
 }
 
 type CheckStatus = 'ok' | 'warn' | 'fail' | 'info';
@@ -229,6 +233,86 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
             ? `${host}:${config.serve.port} already in use`
             : `${host}:${config.serve.port} check failed`,
     });
+  }
+
+  // --deep：只读查询本地 gateway（连接 / runtime / MCP 实际状态）。
+  if (options.deep === true) {
+    const targetResult = await resolveControlPlaneTarget({
+      config,
+      env,
+      dataDir,
+      ...(options.target !== undefined ? { target: options.target } : {}),
+    });
+    if (!targetResult.ok) {
+      checks.push({
+        name: 'attach',
+        status: 'info',
+        message: `no local gateway (${targetResult.error})`,
+      });
+    } else {
+      const target = targetResult.target;
+      try {
+        const health = await target.request<unknown>('health.get');
+        const record =
+          typeof health === 'object' && health !== null && !Array.isArray(health)
+            ? (health as Record<string, unknown>)
+            : {};
+        const node =
+          typeof record.node === 'object' && record.node !== null
+            ? (record.node as Record<string, unknown>)
+            : {};
+        checks.push({
+          name: 'attach',
+          status: 'ok',
+          message: `${target.baseUrl} (${target.instance ?? 'remote'})`,
+        });
+        const status = node.status ?? record.status;
+        const provider = record.provider ?? config.provider?.name;
+        const model = record.model ?? config.provider?.model;
+        checks.push({
+          name: 'runtime',
+          status: status === 'error' ? 'fail' : 'ok',
+          message:
+            `status=${String(status ?? 'unknown')} ` +
+            `provider=${String(provider ?? '-')} model=${String(model ?? '-')}` +
+            (record.current_run_id !== undefined
+              ? ` current_run=${String(record.current_run_id)}`
+              : ''),
+        });
+
+        const mcpConfigured = Object.keys(config.mcpServers ?? {}).filter(
+          (name) => config.mcpServers?.[name]?.enabled !== false,
+        ).length;
+        try {
+          const listed = await target.request<unknown>('mcp.list');
+          const servers =
+            typeof listed === 'object' &&
+            listed !== null &&
+            Array.isArray((listed as { servers?: unknown }).servers)
+              ? ((listed as { servers: unknown[] }).servers as unknown[])
+              : [];
+          checks.push({
+            name: 'mcp_rpc',
+            status: servers.length === mcpConfigured ? 'ok' : 'warn',
+            message: `${servers.length} server(s) via RPC / ${mcpConfigured} configured`,
+          });
+        } catch (error) {
+          checks.push({
+            name: 'mcp_rpc',
+            status: mcpConfigured > 0 ? 'warn' : 'info',
+            message: `unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      } catch (error) {
+        checks.push({
+          name: 'attach',
+          status: 'fail',
+          message: `${target.baseUrl}: ${error instanceof Error ? error.message : String(error)}`,
+        });
+      } finally {
+        await target.close().catch(() => undefined);
+      }
+    }
   }
 
   // 可选能力开关（信息项）
