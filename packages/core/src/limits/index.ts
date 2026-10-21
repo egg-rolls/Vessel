@@ -3,5 +3,13 @@
  * @module @vessel-agent/core/limits
  */
 
-export type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
-export { MemoryLimitChecker } from './limit-checker.js';
+export type {
+  LimitBlock,
+  LimitBlockKey,
+  LimitChecker,
+  TerminationPolicy,
+  UsageLimits,
+  UsageStats,
+} from '../types/limits.js';
+export { evaluateUsageLimits, MemoryLimitChecker } from './limit-checker.js';
+export { LimitExceededError } from './limit-error.js';

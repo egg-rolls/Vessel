@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { estimateMessagesTokens } from '../context/index.js';
-import { MemoryLimitChecker } from '../limits/index.js';
+import { evaluateUsageLimits, LimitExceededError, MemoryLimitChecker } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
@@ -751,8 +751,20 @@ export class AgentRuntime {
       }
 
       // 检查使用量限制（含 request_limit、tool_calls_limit、token/cost 预算）——硬上限
-      if (!this.limitChecker.checkLimits(stats, this.limits)) {
-        throw new Error('Usage limits exceeded');
+      const limitBlock = evaluateUsageLimits(stats, this.limits);
+      if (limitBlock) {
+        this.publishEvent({
+          type: 'limit.blocked',
+          run_id: runId,
+          data: {
+            error_code: 'limit_blocked',
+            ...limitBlock,
+            run_id: runId,
+            session_id: sessionId,
+          },
+          ts: Date.now(),
+        });
+        throw new LimitExceededError(limitBlock);
       }
 
       // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。

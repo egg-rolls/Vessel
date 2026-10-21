@@ -51,10 +51,19 @@ const CODE_META: Readonly<
   atomic_write_failed: { category: 'internal', retryable: true, phase: 'checkpoint' },
   invalid_tenant_id: { category: 'config', retryable: false, phase: 'input' },
   conflict: { category: 'internal', retryable: false, phase: 'input' },
+  limit_blocked: { category: 'internal', retryable: false, phase: 'run' },
 };
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 错误对象自带的结构化细节（如 `LimitExceededError.details`） */
+function readErrorDetails(error: unknown): Record<string, unknown> | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const details = (error as Record<string, unknown>).details;
+  if (typeof details !== 'object' || details === null || Array.isArray(details)) return undefined;
+  return details as Record<string, unknown>;
 }
 
 function readHttpStatus(error: unknown): number | undefined {
@@ -237,6 +246,8 @@ export function toErrorEnvelope(
 ): ErrorEnvelope {
   const message = errorMessage(error);
   const status = readHttpStatus(error);
+  // 错误对象自带 details 时原样传递（如 LimitExceededError）；显式 options 优先。
+  const details = options.details ?? readErrorDetails(error);
 
   // 1) 权限错误有稳定的类型语义，优先于调用方提示。
   if (error instanceof PermissionTimeoutError) {
@@ -247,7 +258,7 @@ export function toErrorEnvelope(
         phase: 'permission',
         retryable: false,
       },
-      options,
+      details,
     );
   }
   if (error instanceof PermissionAbortedError) {
@@ -258,7 +269,7 @@ export function toErrorEnvelope(
         phase: 'permission',
         retryable: false,
       },
-      options,
+      details,
     );
   }
 
@@ -271,7 +282,7 @@ export function toErrorEnvelope(
         phase: 'input',
         retryable: true,
       },
-      options,
+      details,
     );
   }
   if (error instanceof RunResumeError) {
@@ -282,7 +293,7 @@ export function toErrorEnvelope(
         phase: 'input',
         retryable: false,
       },
-      options,
+      details,
     );
   }
 
@@ -295,7 +306,7 @@ export function toErrorEnvelope(
         phase: 'checkpoint',
         retryable: true,
       },
-      options,
+      details,
     );
   }
 
@@ -308,7 +319,7 @@ export function toErrorEnvelope(
         phase: 'permission',
         retryable: false,
       },
-      options,
+      details,
     );
   }
 
@@ -323,7 +334,8 @@ export function toErrorEnvelope(
       : undefined;
 
   const category = resolveCategory(message, options, metadata);
-  const phase = options.phase ?? metadata?.phase ?? defaultPhase(category);
+  // 稳定 code 的 phase 优先于调用方提示（ToErrorEnvelopeOptions.phase 的覆盖语义）。
+  const phase = metadata?.phase ?? options.phase ?? defaultPhase(category);
 
   if (metadata && typeof genericCode === 'string') {
     return withDetails(
@@ -333,7 +345,7 @@ export function toErrorEnvelope(
         phase,
         retryable: metadata.retryable,
       },
-      options,
+      details,
     );
   }
 
@@ -376,12 +388,15 @@ export function toErrorEnvelope(
         ? { http_status: classification.http_status }
         : {}),
     },
-    options,
+    details,
   );
 }
 
 /** 只附加非空 details；envelope 其余字段保持扁平。 */
-function withDetails(envelope: ErrorEnvelope, options: ToErrorEnvelopeOptions): ErrorEnvelope {
-  if (options.details === undefined || Object.keys(options.details).length === 0) return envelope;
-  return { ...envelope, details: options.details };
+function withDetails(
+  envelope: ErrorEnvelope,
+  details: Record<string, unknown> | undefined,
+): ErrorEnvelope {
+  if (details === undefined || Object.keys(details).length === 0) return envelope;
+  return { ...envelope, details };
 }
