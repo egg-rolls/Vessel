@@ -13,10 +13,17 @@ export type Route =
       domain: 'integrations';
       tab: 'tools' | 'mcp' | 'channels';
     }
-  | { domain: 'observe'; tab: 'metrics' | 'evals' }
+  | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'tasks' }
   | {
       domain: 'settings';
-      tab: 'connection' | 'nodes' | 'config' | 'capabilities' | 'tenants' | 'appearance';
+      tab:
+        | 'connection'
+        | 'nodes'
+        | 'config'
+        | 'capabilities'
+        | 'tenants'
+        | 'appearance'
+        | 'display';
     };
 
 export type Domain = Route['domain'];
@@ -25,7 +32,7 @@ export const DEFAULT_ROUTE: Route = { domain: 'chat' };
 
 const RUN_TABS = new Set(['live', 'durable']);
 const INTEGRATION_TABS = new Set(['tools', 'mcp', 'channels']);
-const OBSERVE_TABS = new Set(['metrics', 'evals']);
+const OBSERVE_TABS = new Set(['metrics', 'evals', 'diagnostics', 'tasks']);
 const SETTINGS_TABS = new Set([
   'connection',
   'nodes',
@@ -33,6 +40,7 @@ const SETTINGS_TABS = new Set([
   'capabilities',
   'tenants',
   'appearance',
+  'display',
 ]);
 
 /** 安全解码：非法百分号编码时保留原值。 */
@@ -98,7 +106,7 @@ export function parseRoute(hash: string): Route {
       return { domain: 'integrations', tab };
     }
     case 'observe': {
-      const tab = pick<'metrics' | 'evals'>(
+      const tab = pick<'metrics' | 'evals' | 'diagnostics' | 'tasks'>(
         segments[1] ?? query.get('tab'),
         OBSERVE_TABS,
         'metrics',
@@ -107,7 +115,7 @@ export function parseRoute(hash: string): Route {
     }
     case 'settings': {
       const tab = pick<
-        'connection' | 'nodes' | 'config' | 'capabilities' | 'tenants' | 'appearance'
+        'connection' | 'nodes' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display'
       >(segments[1] ?? query.get('tab'), SETTINGS_TABS, 'connection');
       return { domain: 'settings', tab };
     }

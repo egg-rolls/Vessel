@@ -49,6 +49,35 @@ function nestedEvents(): StoredEvent[] {
   ];
 }
 
+describe('reduceAgents queue fields', () => {
+  test('applies agent.queue.entered and clears on leave', () => {
+    const base = [
+      stored('subagent.delegate.started', 'root', { delegateId: 'd1', task: 'research' }, 1),
+      stored(
+        'agent.queue.entered',
+        'root',
+        { agent_id: 'd1', position: 2, wait_reason: 'model_slot' },
+        2,
+      ),
+    ];
+    const queued = findAgent(reduceAgents(base), 'd1');
+    expect(queued).toMatchObject({
+      state: 'queued',
+      queuePosition: 2,
+      waitReason: 'model_slot',
+      lastSeen: 2,
+    });
+
+    const left = findAgent(
+      reduceAgents([...base, stored('agent.queue.left', 'root', { agent_id: 'd1' }, 3)]),
+      'd1',
+    );
+    expect(left).toMatchObject({ state: 'running', lastSeen: 3 });
+    expect(left?.queuePosition).toBeUndefined();
+    expect(left?.waitReason).toBeUndefined();
+  });
+});
+
 describe('reduceAgents', () => {
   test('derives nested nodes, session, usage and terminal state', () => {
     const nodes = reduceAgents(nestedEvents());

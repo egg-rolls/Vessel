@@ -30,6 +30,14 @@ export interface AgentNode {
   startedAt?: number;
   completedAt?: number;
   lastError?: string;
+  /** 0.15 E3/E4：队列与上下文可见字段。 */
+  nodeId?: string;
+  queuePosition?: number;
+  waitReason?: string;
+  contextUsed?: number;
+  contextMax?: number;
+  lastSeen?: number;
+  artifactRefs?: string[];
 }
 
 type MutableNode = AgentNode;
@@ -97,13 +105,48 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
     }
     if (seed.completedAt !== undefined) node.completedAt = seed.completedAt;
     if (seed.lastError !== undefined) node.lastError = seed.lastError;
+    if (seed.nodeId !== undefined && node.nodeId === undefined) node.nodeId = seed.nodeId;
+    if (seed.queuePosition !== undefined) node.queuePosition = seed.queuePosition;
+    if (seed.waitReason !== undefined) node.waitReason = seed.waitReason;
+    if (seed.contextUsed !== undefined) node.contextUsed = seed.contextUsed;
+    if (seed.contextMax !== undefined) node.contextMax = seed.contextMax;
+    if (seed.lastSeen !== undefined) {
+      node.lastSeen =
+        node.lastSeen === undefined ? seed.lastSeen : Math.max(node.lastSeen, seed.lastSeen);
+    }
+    if (seed.artifactRefs !== undefined) {
+      node.artifactRefs = [...new Set([...(node.artifactRefs ?? []), ...seed.artifactRefs])];
+    }
     return node;
   }
 
   function ingest(event: RunEvent): void {
     const type = event.type;
-    if (!type.startsWith('run.') && !type.startsWith('subagent.')) return;
+    if (!type.startsWith('run.') && !type.startsWith('subagent.') && !type.startsWith('agent.')) {
+      return;
+    }
     const data = isRecord(event.data) ? event.data : {};
+
+    if (type === 'agent.queue.entered' || type === 'agent.queue.left') {
+      const agentId = stringField(data, 'agent_id') ?? stringField(data, 'agentId');
+      if (!agentId) return;
+      const entered = type === 'agent.queue.entered';
+      const position = numberField(data, 'position');
+      const waitReason = stringField(data, 'wait_reason') ?? stringField(data, 'waitReason');
+      const node = ensure(agentId, {
+        state: entered ? 'queued' : 'running',
+        lastSeen: event.ts,
+      });
+      if (entered) {
+        if (position !== undefined && position >= 1) node.queuePosition = Math.floor(position);
+        if (waitReason !== undefined) node.waitReason = waitReason;
+      } else {
+        node.queuePosition = undefined;
+        node.waitReason = undefined;
+      }
+      return;
+    }
+    if (!type.startsWith('run.') && !type.startsWith('subagent.')) return;
 
     if (type === 'run.started' || type === 'run.completed' || type === 'run.failed') {
       const sessionId = stringField(data, 'session_id');
@@ -128,6 +171,8 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
         ...(task !== undefined ? { task } : {}),
         ...(sessionId !== undefined ? { sessionId } : {}),
         startedAt: event.ts,
+        lastSeen: event.ts,
+        ...(event.node_id !== undefined ? { nodeId: event.node_id } : {}),
       });
       return;
     }
@@ -144,6 +189,7 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
         role: 'subagent',
         state: failed ? 'failed' : 'completed',
         completedAt: event.ts,
+        lastSeen: event.ts,
         ...(usage !== undefined ? { usage } : {}),
         ...(failure !== undefined ? { lastError: failure } : {}),
       });
@@ -163,6 +209,7 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
       ensure(agentId, {
         role: 'subagent',
         state: 'running',
+        lastSeen: event.ts,
         ...(sessionId !== undefined ? { sessionId } : {}),
         ...(runId ? { runId } : {}),
       });
@@ -177,6 +224,7 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
         role: 'subagent',
         state: type === 'subagent.run.completed' ? 'completed' : 'cancelled',
         completedAt: event.ts,
+        lastSeen: event.ts,
         ...(sessionId !== undefined ? { sessionId } : {}),
         ...(usage !== undefined ? { usage } : {}),
       });
@@ -193,6 +241,7 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
         role: 'subagent',
         state: 'failed',
         completedAt: event.ts,
+        lastSeen: event.ts,
         ...(sessionId !== undefined ? { sessionId } : {}),
         ...(failure !== undefined ? { lastError: failure } : {}),
       });
@@ -204,6 +253,7 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
       const toolName = stringField(data, 'tool_name');
       ensure(agentId, {
         state: 'running',
+        lastSeen: event.ts,
         ...(toolName !== undefined ? { currentTool: toolName } : {}),
       });
       return;
@@ -211,6 +261,7 @@ export function reduceAgents(entries: readonly StoredEvent[]): AgentNode[] {
 
     if (type === 'subagent.tool.call.completed' || type === 'subagent.tool.call.failed') {
       const node = nodes.get(agentId);
+      if (node) node.lastSeen = Math.max(node.lastSeen ?? 0, event.ts);
       const toolName = stringField(data, 'tool_name');
       if (node && (toolName === undefined || node.currentTool === toolName)) {
         node.currentTool = undefined;

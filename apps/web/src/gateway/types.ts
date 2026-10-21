@@ -16,6 +16,8 @@ export interface RunEvent {
    * 实时 WS 事件通常没有该字段；分页时只能依赖 trace 事件。
    */
   seq?: number;
+  /** 0.6：事件来源节点（events.list 会返回；实时流可能缺省）。 */
+  node_id?: string;
 }
 
 /** LLM 流式 chunk（对应 core 的 StreamChunk） */
@@ -172,12 +174,93 @@ export interface RunStatus {
   started_at?: number;
   completed_at?: number;
   queue_position?: number;
+  /** 0.14 / 0.15 E6：run.failed 结构化 envelope（additive）。 */
+  error_code?: string;
+  category?: string;
+  phase?: string;
+  retryable?: boolean;
+  http_status?: number;
+  details?: Record<string, unknown>;
   /** durable checkpoint 字段（runs.get 对 durable run 返回）。 */
   agent_id?: string;
   iteration?: number;
   updated_at?: number;
   preview?: string;
   messages?: Message[];
+}
+
+/** agents.tree 节点（0.15 E5）。 */
+export interface AgentCard {
+  id: string;
+  role?: string;
+  parent_id?: string;
+  depth: number;
+  state: string;
+  current_tool?: string;
+  session_id?: string;
+  usage?: Usage;
+  task?: string;
+  node_id?: string;
+  queue_position?: number;
+  wait_reason?: string;
+  context_used?: number;
+  context_max?: number;
+  children_count: number;
+  children_ids: string[];
+  last_seen?: number;
+  artifact_refs?: string[];
+}
+
+export interface AgentsTreeResponse {
+  nodes: AgentCard[];
+  as_of: number;
+}
+
+/** tasks.list / tasks.get 条目（只读派生）。 */
+export interface TaskEntry {
+  id: string;
+  title: string;
+  assignee: string;
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+  parent_task?: string;
+  artifact_refs: string[];
+  since: number;
+}
+
+export interface TasksResponse {
+  tasks: TaskEntry[];
+}
+
+export interface TaskResponse {
+  task: TaskEntry;
+}
+
+/** health.get 的 runtime.scheduler 条目（0.15 E6）。 */
+export interface SchedulerRunSummary {
+  run_id: string;
+  agent_id?: string;
+  session_id?: string;
+  status: string;
+  queue_position?: number;
+  queued_at?: number;
+  started_at?: number;
+  wait_reason?: string;
+}
+
+export interface RuntimeHealth {
+  active_run_id?: string;
+  scheduler: {
+    as_of: number;
+    queued: SchedulerRunSummary[];
+    running: SchedulerRunSummary[];
+    stats: {
+      queued: number;
+      running: number;
+      completed: number;
+      failed: number;
+      cancelled: number;
+    };
+  };
 }
 
 /** durable run 摘要（GET /v1/durable/runs） */
@@ -408,6 +491,8 @@ export interface HealthResponse {
   started_at: number;
   tenant_id: string;
   team: HealthTeamStatus;
+  /** 0.15 E6：旧 gateway 可能缺省。 */
+  runtime?: RuntimeHealth;
 }
 
 export interface ConfigResponse {

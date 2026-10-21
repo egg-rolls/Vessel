@@ -12,6 +12,7 @@
 
 import { permissionRespondParams } from './interactions';
 import type {
+  AgentsTreeResponse,
   AskUserAnswer,
   CapabilityManifest,
   ConfigResponse,
@@ -46,6 +47,9 @@ import type {
   SessionDetail,
   SessionInfo,
   SessionSearchHit,
+  TaskEntry,
+  TaskResponse,
+  TasksResponse,
   TeamAgentsResponse,
   TeamPeersResponse,
   TenantInfo,
@@ -633,6 +637,30 @@ export class GatewayClient {
       'config.sources',
       tenantId !== undefined ? { tenant_id: tenantId } : {},
     );
+  }
+
+  /** 0.15：只写服务端白名单键；未注入 writer 时返回 not_found。 */
+  setConfigValue(
+    key: string,
+    value: string | boolean,
+  ): Promise<{ ok: boolean; key: string; value: string | boolean }> {
+    return this.rpc('config.set', { key, value });
+  }
+
+  listAgentsTree(
+    params: { session_id?: string; state?: string } = {},
+  ): Promise<AgentsTreeResponse> {
+    return this.rpc<AgentsTreeResponse>('agents.tree', params);
+  }
+
+  async listTasks(params: { status?: string; assignee?: string } = {}): Promise<TaskEntry[]> {
+    const body = await this.rpc<TasksResponse>('tasks.list', params);
+    return body.tasks ?? [];
+  }
+
+  async getTask(taskId: string): Promise<TaskEntry> {
+    const body = await this.rpc<TaskResponse>('tasks.get', { task_id: taskId });
+    return body.task;
   }
 
   async listTenants(): Promise<TenantInfo[]> {

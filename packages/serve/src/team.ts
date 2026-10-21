@@ -75,6 +75,8 @@ export interface TeamHostLike {
   inbox(id: string, cursor?: string): Promise<InboxPage>;
   send?(message: AgentMessage): Promise<void>;
   cancel(id: string, runId?: string): void;
+  /** 0.14.1 / 0.15 E3：只读快照；自定义 Host 可缺省。 */
+  snapshot?(): unknown;
 }
 
 /** 成员 spawn 注入（provider/model 由 asm/ext 提供） */

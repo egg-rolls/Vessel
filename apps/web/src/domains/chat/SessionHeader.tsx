@@ -56,6 +56,12 @@ function AgentTreeRow({
           {agentLabel(node)}
         </button>
         {node.currentTool && <span className="dim mono">{node.currentTool}</span>}
+        {node.queuePosition !== undefined && (
+          <span className="dim">
+            {t('chat.subagents.queuePosition', { position: node.queuePosition })}
+          </span>
+        )}
+        {node.waitReason && <span className="dim">{node.waitReason}</span>}
         {duration && <span className="dim">{duration}</span>}
         <details className="subagent-node-details">
           <summary>{t('chat.subagents.details')}</summary>
@@ -80,6 +86,41 @@ function AgentTreeRow({
               <>
                 <dt>usage</dt>
                 <dd>{usage}</dd>
+              </>
+            )}
+            {entry.children.length > 0 && (
+              <>
+                <dt>children</dt>
+                <dd>{entry.children.length}</dd>
+              </>
+            )}
+            {node.queuePosition !== undefined && (
+              <>
+                <dt>queue</dt>
+                <dd>
+                  {node.queuePosition}
+                  {node.waitReason ? ` · ${node.waitReason}` : ''}
+                </dd>
+              </>
+            )}
+            {node.contextUsed !== undefined && node.contextMax !== undefined && (
+              <>
+                <dt>context</dt>
+                <dd>
+                  {node.contextUsed} / {node.contextMax}
+                </dd>
+              </>
+            )}
+            {node.lastSeen !== undefined && (
+              <>
+                <dt>last seen</dt>
+                <dd>{formatTimestamp(node.lastSeen)}</dd>
+              </>
+            )}
+            {node.nodeId && (
+              <>
+                <dt>node</dt>
+                <dd className="mono">{node.nodeId}</dd>
               </>
             )}
             {node.lastError && (

@@ -7,7 +7,7 @@
  * @module @vessel-agent/serve
  */
 
-import type { RunEvent } from '@vessel-agent/core';
+import type { RunEvent, TraceRedactor } from '@vessel-agent/core';
 import {
   type MetricsProvider,
   type MetricsSnapshot,
@@ -15,11 +15,14 @@ import {
 } from '../../metrics.js';
 import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
 import { eventVisible } from '../../tenant.js';
+import { capToolEvent } from '../../tool-events.js';
 import { tenantParamSchema } from './common.js';
 import { metricsSnapshotSchema, runEventSchema } from './schemas.js';
 
 export interface ObservabilityMethodsDeps {
   defaultTenantId: string;
+  /** 与实时流相同的出站脱敏器（0.15 E6）。 */
+  redactor?: TraceRedactor;
   trace?: {
     prune?(options: Record<string, unknown>): Promise<unknown>;
     readEvents?(filter: Record<string, unknown>, tenantId?: string): Promise<RunEvent[]>;
@@ -34,7 +37,7 @@ export interface ObservabilityMethodsDeps {
 
 /** events.list */
 export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDefinition[] {
-  const { trace } = deps;
+  const { trace, redactor } = deps;
   return [
     {
       name: 'events.list',
@@ -78,7 +81,10 @@ export function createEventsMethods(deps: ObservabilityMethodsDeps): RpcMethodDe
         try {
           const events = await trace.readEvents(filter, ctx.tenantId);
           return {
-            events: events.filter((event) => eventVisible(event, ctx.tenantId, ctx.allTenants)),
+            // 读路径与实时流一致：先脱敏，再按 8 KiB 裁剪工具参数/结果。
+            events: events
+              .filter((event) => eventVisible(event, ctx.tenantId, ctx.allTenants))
+              .map((event) => capToolEvent(redactor ? redactor.redact(event) : event)),
           };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);

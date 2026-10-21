@@ -59,6 +59,7 @@ const SETTINGS_NAV: readonly { tab: SettingsTab; keywords: string[] }[] = [
   { tab: 'capabilities', keywords: ['capabilities', 'methods', 'plugins'] },
   { tab: 'tenants', keywords: ['tenant', 'quota', 'admin'] },
   { tab: 'appearance', keywords: ['theme', 'dark', 'light'] },
+  { tab: 'display', keywords: ['display', 'verbosity', 'errorLevel', 'settings'] },
 ];
 
 export function AppShell() {

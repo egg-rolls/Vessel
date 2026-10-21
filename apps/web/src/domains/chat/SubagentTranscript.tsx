@@ -63,6 +63,17 @@ export function SubagentTranscript({
         <StatusChip status={agent.state} />
         <strong className="subagent-summary-task">{agent.task?.trim() || agent.id}</strong>
         {agent.currentTool && <span className="dim mono">{agent.currentTool}</span>}
+        {agent.queuePosition !== undefined && (
+          <span className="dim">
+            {t('chat.subagents.queuePosition', { position: agent.queuePosition })}
+          </span>
+        )}
+        {agent.waitReason && <span className="dim">{agent.waitReason}</span>}
+        {agent.contextUsed !== undefined && agent.contextMax !== undefined && (
+          <span className="dim">
+            {t('chat.subagents.context', { used: agent.contextUsed, max: agent.contextMax })}
+          </span>
+        )}
         {agent.usage?.total_tokens !== undefined && (
           <span className="dim">{agent.usage.total_tokens} tok</span>
         )}

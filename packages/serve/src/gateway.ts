@@ -845,6 +845,143 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   // ── 运行队列 ───────────────────────────────────
 
+  /** 0.15 E6：health.get 的 runtime 快照；Host 快照优先，否则由 run 引擎派生。 */
+  function schedulerRunOf(
+    raw: unknown,
+    defaultStatus: 'queued' | 'running',
+  ): Record<string, unknown> | undefined {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return undefined;
+    const source = raw as Record<string, unknown>;
+    const runId = source.runId ?? source.run_id;
+    if (typeof runId !== 'string' || runId.length === 0) return undefined;
+    const agentId = source.agentId ?? source.agent_id;
+    const sessionId = source.sessionId ?? source.session_id;
+    const status = source.state ?? source.status;
+    const queuePosition = source.queuePosition ?? source.queue_position;
+    const queuedAt = source.queuedAt ?? source.queued_at;
+    const startedAt = source.startedAt ?? source.started_at;
+    const waitReason = source.waitReason ?? source.wait_reason;
+    return {
+      run_id: runId,
+      status: typeof status === 'string' && status.length > 0 ? status : defaultStatus,
+      ...(typeof agentId === 'string' ? { agent_id: agentId } : {}),
+      ...(typeof sessionId === 'string' ? { session_id: sessionId } : {}),
+      ...(typeof queuePosition === 'number' && Number.isFinite(queuePosition)
+        ? { queue_position: Math.floor(queuePosition) }
+        : {}),
+      ...(typeof queuedAt === 'number' && Number.isFinite(queuedAt) ? { queued_at: queuedAt } : {}),
+      ...(typeof startedAt === 'number' && Number.isFinite(startedAt)
+        ? { started_at: startedAt }
+        : {}),
+      ...(typeof waitReason === 'string' && waitReason.length > 0
+        ? { wait_reason: waitReason }
+        : {}),
+    };
+  }
+
+  function countOf(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0
+      ? Math.floor(value)
+      : 0;
+  }
+
+  function normalizeScheduler(raw: unknown): Record<string, unknown> {
+    const source =
+      typeof raw === 'object' && raw !== null && !Array.isArray(raw)
+        ? (raw as Record<string, unknown>)
+        : {};
+    const stats =
+      typeof source.stats === 'object' && source.stats !== null
+        ? (source.stats as Record<string, unknown>)
+        : {};
+    return {
+      as_of: typeof source.asOf === 'number' ? source.asOf : Date.now(),
+      queued: Array.isArray(source.queued)
+        ? source.queued
+            .map((item) => schedulerRunOf(item, 'queued'))
+            .filter((item): item is Record<string, unknown> => item !== undefined)
+        : [],
+      running: Array.isArray(source.running)
+        ? source.running
+            .map((item) => schedulerRunOf(item, 'running'))
+            .filter((item): item is Record<string, unknown> => item !== undefined)
+        : [],
+      stats: {
+        queued: countOf(stats.queued),
+        running: countOf(stats.running),
+        completed: countOf(stats.completed),
+        failed: countOf(stats.failed),
+        cancelled: countOf(stats.cancelled),
+      },
+    };
+  }
+
+  function runtimeSnapshot(tenantId: string): Record<string, unknown> {
+    const isDefault = tenantId === defaultTenantId;
+    let hostScheduler: unknown;
+    let hostActiveRunId: string | undefined;
+    try {
+      const snapshot = isDefault ? team?.host?.snapshot?.() : undefined;
+      if (typeof snapshot === 'object' && snapshot !== null) {
+        const record = snapshot as Record<string, unknown>;
+        hostScheduler = record.scheduler;
+        if (Array.isArray(record.runs)) {
+          const running = record.runs.find(
+            (run) =>
+              typeof run === 'object' &&
+              run !== null &&
+              (run as Record<string, unknown>).state === 'running',
+          );
+          const runId = running ? (running as Record<string, unknown>).runId : undefined;
+          if (typeof runId === 'string') hostActiveRunId = runId;
+        }
+      }
+    } catch {
+      hostScheduler = undefined;
+    }
+
+    if (hostScheduler !== undefined) {
+      const scheduler = normalizeScheduler(hostScheduler);
+      return {
+        ...(hostActiveRunId !== undefined ? { active_run_id: hostActiveRunId } : {}),
+        scheduler,
+      };
+    }
+
+    const tenantRuns = [...runs.values()].filter((record) => record.tenant_id === tenantId);
+    const queued = queue
+      .map((record, index) => ({ record, index }))
+      .filter(({ record }) => record.tenant_id === tenantId)
+      .map(({ record, index }) => ({
+        run_id: record.run_id,
+        session_id: record.session_id,
+        status: 'queued',
+        queue_position: index + 1,
+        ...(record.core_run_id !== undefined ? { agent_id: record.core_run_id } : {}),
+      }));
+    const running = tenantRuns
+      .filter((record) => record.status === 'running')
+      .map((record) => ({
+        run_id: record.run_id,
+        session_id: record.session_id,
+        status: 'running',
+        ...(record.core_run_id !== undefined ? { agent_id: record.core_run_id } : {}),
+        ...(record.started_at !== undefined ? { started_at: record.started_at } : {}),
+      }));
+    const stats = {
+      queued: tenantRuns.filter((record) => record.status === 'queued').length,
+      running: tenantRuns.filter((record) => record.status === 'running').length,
+      completed: tenantRuns.filter((record) => record.status === 'completed').length,
+      failed: tenantRuns.filter((record) => record.status === 'failed').length,
+      cancelled: tenantRuns.filter((record) => record.status === 'cancelled').length,
+    };
+    const activeId = engine.active?.tenant_id === tenantId ? engine.active : undefined;
+    return {
+      ...(activeId ? { active_run_id: activeId.run_id } : {}),
+      scheduler: { as_of: Date.now(), queued, running, stats },
+    };
+  }
+
   // ── 0.5 RPC 方法表（E10/E11；A-3 §10.1 v1.1） ──
   // 方法按域拆到 `gateway/methods/`；这里只负责组装，保持原方法顺序。
 
@@ -855,6 +992,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     defaultTenantId,
     version: opts.version,
     config: opts.config,
+    runtimeSnapshot,
     methodTable: () => methodTable,
     toolDescriptionsForTenant,
     pluginsForTenant,
@@ -868,6 +1006,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   };
   const observabilityMethodsDeps = {
     defaultTenantId,
+    redactor,
     trace: opts.trace,
     metricsControl: opts.metricsControl,
     metrics: opts.metrics,
@@ -954,6 +1093,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       registry: agentRegistry,
       host: () => team?.host,
       runs,
+      queue: () => queue,
       defaultTenantId,
     }),
   ];
