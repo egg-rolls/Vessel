@@ -152,6 +152,36 @@ describe('FileRunStore', () => {
     expect(await store.list()).toEqual([]);
   });
 
+  it("tenant B cannot overwrite tenant A's checkpoint with the same run id", async () => {
+    const dir = await tempDir();
+    const a = new FileRunStore({ dir, tenantId: 'a' });
+    const b = new FileRunStore({ dir, tenantId: 'b' });
+    await a.save(checkpoint({ messages: [{ role: 'user', content: 'checkpoint a' }] }));
+
+    const error = await b.save(checkpoint()).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('tenant_mismatch: checkpoint run-1 belongs to a');
+    const onDisk = JSON.parse(
+      await readFile(join(dir, `${encodeURIComponent('run-1')}.json`), 'utf8'),
+    ) as RunCheckpoint;
+    expect(onDisk.tenant_id).toBe('a');
+    expect(onDisk.messages[0]?.content).toBe('checkpoint a');
+  });
+
+  it('save over a corrupt checkpoint throws SessionCorruptError and keeps the bytes', async () => {
+    const dir = await tempDir();
+    const path = join(dir, 'broken.json');
+    await writeFile(path, '{ not json', 'utf8');
+    const store = new FileRunStore({ dir, tenantId: 'a' });
+
+    const error = await store.save(checkpoint({ run_id: 'broken' })).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(SessionCorruptError);
+    expect((error as SessionCorruptError).path).toContain('broken.json');
+    expect(await readFile(path, 'utf8')).toBe('{ not json');
+  });
+
   it('delete 后 load 为 null；不存在不抛', async () => {
     const store = new FileRunStore({ dir: await tempDir() });
     await store.save(checkpoint());

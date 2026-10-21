@@ -45,6 +45,15 @@ function isNotFound(error: unknown): boolean {
   );
 }
 
+/** 归属 tenant：缺失记 default */
+function ownerOf(checkpoint: RunCheckpoint): string {
+  const tenantId = (checkpoint as { tenant_id?: unknown }).tenant_id;
+  return tenantId === undefined || tenantId === null ? 'default' : String(tenantId);
+}
+
+/** 写前读取结果；tenant 模式下 ENOENT 之外的错误一律抛 SessionCorruptError */
+type StoredCheckpoint = { found: true; checkpoint: RunCheckpoint } | { found: false };
+
 /** 排序：updated_at 倒序，同值 run_id 升序 */
 function compareCheckpoints(a: RunCheckpoint, b: RunCheckpoint): number {
   if (b.updated_at !== a.updated_at) return b.updated_at - a.updated_at;
@@ -310,8 +319,45 @@ export class FileRunStore implements RunStore {
     return this.dirReady;
   }
 
+  /** 仅供 tenant 模式写前读取：损坏 / 形状非法抛 SessionCorruptError（与 load 一致） */
+  private async readStored(runId: string): Promise<StoredCheckpoint> {
+    const path = this.filePath(runId);
+
+    let content: string;
+    try {
+      content = await readFile(path, 'utf8');
+    } catch (error) {
+      if (isNotFound(error)) return { found: false };
+      throw new SessionCorruptError(path, error);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(content);
+    } catch (error) {
+      throw new SessionCorruptError(path, error);
+    }
+    if (!isRunCheckpoint(parsed)) {
+      throw new SessionCorruptError(path, new Error('invalid run checkpoint shape'));
+    }
+    return { found: true, checkpoint: parsed };
+  }
+
+  /** 写前拒绝覆盖其它 tenant 的既有 checkpoint */
+  private async assertWritableOwner(runId: string): Promise<void> {
+    if (this.tenantId === undefined) return;
+    const stored = await this.readStored(runId);
+    if (!stored.found) return;
+    if (this.isForeign(stored.checkpoint)) {
+      throw new Error(
+        `tenant_mismatch: checkpoint ${runId} belongs to ${ownerOf(stored.checkpoint)}`,
+      );
+    }
+  }
+
   private async writeCheckpoint(runId: string, checkpoint: RunCheckpoint): Promise<void> {
     await this.ensureDir();
+    await this.assertWritableOwner(runId);
     await atomicWrite(this.filePath(runId), JSON.stringify(checkpoint, null, 2));
   }
 }
