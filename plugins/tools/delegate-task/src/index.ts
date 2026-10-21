@@ -63,6 +63,39 @@ function normalizeTenantId(value: string | undefined): string | undefined {
 /** 子 agent 权限模式 */
 export type DelegatePermissionMode = 'bridge' | 'allow' | 'deny';
 
+/** delegate 结果引用（0.15 E8）：至少指回 child run */
+export interface DelegateResultRef {
+  kind: 'run' | 'message' | 'file';
+  id?: string;
+  path?: string;
+}
+
+/** 单个 delegate 根树的后代计数（嵌套实例共享同一对象） */
+interface DelegateTree {
+  rootId: string;
+  descendants: number;
+}
+
+/** 嵌套 delegate 实例的注入上下文（不得复用父闭包） */
+interface DelegateNesting {
+  /** 当前 agent（子/孙）的 depth */
+  baseDepth: number;
+  /** 根 → 当前 delegate 的路径 */
+  basePath: string[];
+  tree: DelegateTree;
+  /** 根会话，用于 parent_session_id */
+  rootSessionId?: string;
+}
+
+/** delegate 事件共用的关联字段 */
+interface DelegateFields {
+  delegateId: string;
+  delegatePath: string[];
+  toolCallId?: string;
+  parentSessionId?: string;
+  parentDelegateId?: string;
+}
+
 /** 插件配置（上层 bootstrap/插件构造时注入 provider 工厂 + model） */
 export interface DelegateTaskOptions {
   /** 子 provider 工厂：每次 spawn 临时成员时调用 */
@@ -93,6 +126,10 @@ export interface DelegateTaskOptions {
    * （例如 `{ default: 'ask' }` 不再静默放行无 checkPermission 的工具）。
    */
   permission?: RuntimePermissionConfig;
+  /** 0.15 E8：允许子 agent 继续 delegate（默认 false） */
+  allowNested?: boolean;
+  /** 0.15 E8：每个根 delegate 树的后代上限（默认 16，仅 allowNested 生效） */
+  maxDescendants?: number;
 }
 
 /** 解析后的插件配置（内部使用） */
@@ -113,6 +150,10 @@ interface ResolvedConfig {
   tenantId?: string;
   /** 0.8.2 Wave 2B1：子 agent 默认权限策略（未注入时沿用 `{default:'allow'}`）。 */
   permission?: RuntimePermissionConfig;
+  /** 0.15 E8：child 是否可再 delegate（deny 模式与显式 disallowed 下强制关闭）。 */
+  nestedEnabled: boolean;
+  /** 0.15 E8：每个根树的后代上限。 */
+  maxDescendants: number;
   /** run_id → 递归深度；实例级（避免模块级可变状态跨 tenant 共享）。 */
   depthByRunId: Map<string, number>;
 }
@@ -136,8 +177,15 @@ function withAutoAllow(tool: ToolDefinition): ToolDefinition {
 /**
  * 构建子 agent 的插件宿主：复制父 host 的工具 + guardrail + hook，
  * 按权限模式过滤/改写工具。
+ *
+ * 0.15 E8：allow_nested 开启时为 child 新建 delegate 工具实例（含独立
+ * baseDepth/rootId/descendants），不复用父工具闭包。
  */
-function buildChildHost(host: PluginHost, config: ResolvedConfig): MemoryPluginHost {
+function buildChildHost(
+  host: PluginHost,
+  config: ResolvedConfig,
+  nesting: DelegateNesting,
+): MemoryPluginHost {
   const childHost = new MemoryPluginHost();
 
   // 安全机制随工具一起继承，否则子 agent 成为绕过通道
@@ -154,13 +202,27 @@ function buildChildHost(host: PluginHost, config: ResolvedConfig): MemoryPluginH
     childHost.registerTool(tool);
   }
 
+  // 父 host 的 delegate_task 被白名单排除；嵌套开启时换成 child 专用实例。
+  if (config.nestedEnabled) childHost.registerTool(makeDelegateTool(childHost, config, nesting));
+
   return childHost;
 }
 
-/** 给转发事件补 delegateId，便于 TUI 在并发展示中区分不同子 agent */
-function withDelegateId(delegateId: string, data: unknown): Record<string, unknown> {
-  if (isRecord(data)) return { ...data, delegateId };
-  return { value: data, delegateId };
+/** 给事件补 delegate 关联字段；已有字段不覆盖（嵌套事件自带正确的 path）。 */
+function withDelegationContext(data: unknown, fields: DelegateFields): Record<string, unknown> {
+  const merged: Record<string, unknown> = isRecord(data) ? { ...data } : { value: data };
+  merged.delegateId = fields.delegateId;
+  if (fields.toolCallId !== undefined && merged.tool_call_id === undefined) {
+    merged.tool_call_id = fields.toolCallId;
+  }
+  if (fields.parentSessionId !== undefined && merged.parent_session_id === undefined) {
+    merged.parent_session_id = fields.parentSessionId;
+  }
+  if (fields.parentDelegateId !== undefined && merged.parent_delegate_id === undefined) {
+    merged.parent_delegate_id = fields.parentDelegateId;
+  }
+  if (merged.delegate_path === undefined) merged.delegate_path = fields.delegatePath;
+  return merged;
 }
 
 /** 重发事件时保留 seq/tenant_id；只补缺失的 tenant_id。 */
@@ -191,33 +253,51 @@ interface ChildTaskConfig {
   permissionMode: DelegatePermissionMode;
   /** 0.8.2：子 agent 默认权限策略；缺省沿用 `{default:'allow'}`。 */
   permission?: RuntimePermissionConfig;
-  delegateId: string;
+  fields: DelegateFields;
   depth: number;
   signal?: AbortSignal;
   tenantId?: string;
   depthByRunId: Map<string, number>;
+  /** child run id 由本函数回填，失败路径也要拿到 result_ref。 */
+  childRun: { runId?: string };
+  /** 嵌套实例自建 Host（父 run 正占用注入 Host 的调度槽，复用会死锁）。 */
+  closeHost: boolean;
 }
 
 /**
  * 在 Host 上 spawn 一个临时成员并跑完一次任务。
  * 事件转发 / 权限桥 / 深度映射都通过 Host 聚合流完成。
  */
-async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; usage: Usage }> {
+async function runChildTask(
+  config: ChildTaskConfig,
+): Promise<{ text: string; usage: Usage; runId?: string }> {
   const sameStream = config.parentEvents === config.host.events;
   const unsubscribers: Array<() => void> = [];
+  // sameStream 时自己转发的事件会回到本订阅；按对象身份防回环（嵌套事件必须继续上送）
+  const forwardedEvents = new WeakSet<object>();
   let childRunId: string | undefined;
 
   // Host 聚合流：转发运行事件、生命周期事件、交互请求；同时记录嵌套深度
   unsubscribers.push(
     config.host.events.subscribe((event) => {
-      // 防回环：sameStream 时我们也会把 subagent.* 写回同一流
-      if (event.type.startsWith('subagent.')) return;
+      if (forwardedEvents.has(event)) return;
 
       const data = isRecord(event.data) ? event.data : {};
-      if (data.agentId !== config.delegateId) return;
+      if (data.agentId !== config.fields.delegateId) return;
+
+      // 嵌套 delegate 已转发出的事件：保持单层 subagent. 前缀原样上送
+      if (event.type.startsWith('subagent.')) {
+        // 本实例自己发布的 delegate.started/completed/failed 不再二次转发
+        if (data.delegateId === config.fields.delegateId) return;
+        const forwarded: RunEvent = { ...event };
+        forwardedEvents.add(forwarded);
+        config.parentEvents.publish(withTenant(forwarded, config.tenantId));
+        return;
+      }
 
       if (event.type === 'run.started' && typeof data.run_id === 'string') {
         childRunId = data.run_id;
+        config.childRun.runId ??= data.run_id;
         config.depthByRunId.set(data.run_id, config.depth + 1);
       }
 
@@ -234,21 +314,24 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
 
       // A6：无论是否同一个流，都保证父流能看到 subagent.* + delegateId。
       // 保留原 envelope 的 seq/tenant_id（A-4 §11.1）。
-      config.parentEvents.publish(
-        withTenant(
-          {
-            ...event,
-            type: `subagent.${event.type}`,
-            data: withDelegateId(config.delegateId, event.data),
-          },
-          config.tenantId,
-        ),
-      );
+      const forwarded: RunEvent = {
+        ...event,
+        type: `subagent.${event.type}`,
+        data: withDelegationContext(event.data, config.fields),
+      };
+      forwardedEvents.add(forwarded);
+      config.parentEvents.publish(withTenant(forwarded, config.tenantId));
 
-      // 交互桥：dedicated Host 时用原名再送一份；sameStream 时原名已在流里
+      // 交互桥：dedicated Host 时用原名再送一份；sameStream 时原名已在流里。
+      // 0.15 E8：bridge 事件补 delegate_path，UI 才能挂到正确的子 agent 节点。
       if (sameStream || config.permissionMode !== 'bridge') return;
       if (event.type === 'tool.permission.request' || event.type === 'ask.user.requested') {
-        config.parentEvents.publish(withTenant(event, config.tenantId));
+        config.parentEvents.publish(
+          withTenant(
+            { ...event, data: withDelegationContext(event.data, config.fields) },
+            config.tenantId,
+          ),
+        );
       }
     }),
   );
@@ -270,7 +353,7 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
   let handle: AgentHandle | undefined;
   try {
     handle = await config.host.spawn({
-      id: config.delegateId,
+      id: config.fields.delegateId,
       name: `delegate-${config.depth + 1}`,
       provider: config.providerFactory(),
       model: config.model,
@@ -286,24 +369,37 @@ async function runChildTask(config: ChildTaskConfig): Promise<{ text: string; us
     const runOptions: RunOptions | undefined =
       config.signal !== undefined ? { signal: config.signal } : undefined;
     const run = await handle.run(input, runOptions);
+    config.childRun.runId ??= run.id;
     const text = await run.result;
-    return { text, usage: run.usage() ?? zeroUsage() };
+    return {
+      text,
+      usage: run.usage() ?? zeroUsage(),
+      ...(config.childRun.runId !== undefined ? { runId: config.childRun.runId } : {}),
+    };
   } finally {
     await handle?.close().catch(() => {});
     for (const unsubscribe of unsubscribers) unsubscribe();
     // 只清理本次 run 的深度映射，避免并发 delegate 互删
     if (childRunId !== undefined) config.depthByRunId.delete(childRunId);
+    if (config.closeHost) await config.host.close().catch(() => {});
   }
 }
 
-/** 构造 delegate_task 工具定义（闭包持有父 host，运行时取安全工具） */
-function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinition {
+/**
+ * 构造 delegate_task 工具定义（闭包持有父 host，运行时取安全工具）。
+ * `nesting` 存在时是 child 专用实例：深度/路径/后代计数由此注入，不复用父闭包。
+ */
+function makeDelegateTool(
+  host: PluginHost,
+  config: ResolvedConfig,
+  nesting?: DelegateNesting,
+): ToolDefinition {
   return {
     name: 'delegate_task',
     description:
       'Delegate a subtask to an ephemeral child agent on the runtime host and return only ' +
-      'its final text. The child runs with a safe tool whitelist (no recursive delegate_task) ' +
-      'and inherits guardrails/hooks.',
+      'its final text. The child runs with a safe tool whitelist and inherits ' +
+      'guardrails/hooks.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -313,7 +409,8 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
       required: ['task'],
     },
     handler: async (args: unknown, ctx: ToolContext) => {
-      const depth = config.depthByRunId.get(ctx.run_id) ?? 0;
+      const baseDepth = nesting?.baseDepth ?? 0;
+      const depth = config.depthByRunId.get(ctx.run_id) ?? baseDepth;
       if (depth >= config.maxDepth) {
         return `Error: delegate depth exceeded (max ${config.maxDepth})`;
       }
@@ -327,19 +424,51 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
       const context = readString(args, 'context');
       const delegateId = randomUUID();
       const startedAt = Date.now();
+      const basePath = nesting?.basePath ?? [];
+      const parentDelegateId = basePath.at(-1);
+      const rootSessionId = nesting?.rootSessionId ?? ctx.session_id;
+      const delegatePath = [...basePath, delegateId];
+
+      // 后代上限按根树计数；根 delegate 本身不计入 descendants。
+      const tree: DelegateTree = nesting?.tree ?? { rootId: delegateId, descendants: 0 };
+      if (nesting !== undefined) {
+        if (tree.descendants >= config.maxDescendants) {
+          return `Error: delegate descendants exceeded (max ${config.maxDescendants})`;
+        }
+        tree.descendants += 1;
+      }
+
+      const fields: DelegateFields = {
+        delegateId,
+        delegatePath,
+        ...(ctx.tool_call_id !== undefined ? { toolCallId: ctx.tool_call_id } : {}),
+        ...(rootSessionId !== undefined ? { parentSessionId: rootSessionId } : {}),
+        ...(parentDelegateId !== undefined ? { parentDelegateId } : {}),
+      };
 
       ctx.events.publish({
         type: 'subagent.delegate.started',
         run_id: ctx.run_id,
-        data: { depth, delegateId, task, hasContext: context.length > 0 },
+        data: withDelegationContext({ depth, task, hasContext: context.length > 0 }, fields),
         ts: startedAt,
         ...(config.tenantId !== undefined ? { tenant_id: config.tenantId } : {}),
       });
 
-      const childHost = buildChildHost(host, config);
+      const childHost = buildChildHost(host, config, {
+        baseDepth: depth + 1,
+        basePath: delegatePath,
+        tree,
+        ...(rootSessionId !== undefined ? { rootSessionId } : {}),
+      });
+      const childRun: { runId?: string } = {};
+      // 嵌套实例不能复用注入 Host：父 run 占着调度槽，子 run 会永远排队。
+      const childRuntimeHost =
+        nesting !== undefined
+          ? new CoreInProcessRuntimeHost({ maxMembers: config.maxConcurrentDelegates })
+          : resolveHost(config);
       try {
         const outcome = await runChildTask({
-          host: resolveHost(config),
+          host: childRuntimeHost,
           providerFactory: config.providerFactory,
           model: config.model,
           task,
@@ -350,21 +479,28 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
           termination: config.termination,
           permissionMode: config.permissionMode,
           ...(config.permission !== undefined ? { permission: config.permission } : {}),
-          delegateId,
+          fields,
           depth,
           signal: ctx.signal,
           ...(config.tenantId !== undefined ? { tenantId: config.tenantId } : {}),
           depthByRunId: config.depthByRunId,
+          childRun,
+          closeHost: nesting !== undefined,
         });
         ctx.events.publish({
           type: 'subagent.delegate.completed',
           run_id: ctx.run_id,
-          data: {
-            depth,
-            delegateId,
-            duration_ms: Date.now() - startedAt,
-            usage: outcome.usage,
-          },
+          data: withDelegationContext(
+            {
+              depth,
+              duration_ms: Date.now() - startedAt,
+              usage: outcome.usage,
+              ...(outcome.runId !== undefined
+                ? { result_ref: { kind: 'run', id: outcome.runId } satisfies DelegateResultRef }
+                : {}),
+            },
+            fields,
+          ),
           ts: Date.now(),
           ...(config.tenantId !== undefined ? { tenant_id: config.tenantId } : {}),
         });
@@ -374,12 +510,17 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
         ctx.events.publish({
           type: 'subagent.delegate.failed',
           run_id: ctx.run_id,
-          data: {
-            depth,
-            delegateId,
-            duration_ms: Date.now() - startedAt,
-            error: message,
-          },
+          data: withDelegationContext(
+            {
+              depth,
+              duration_ms: Date.now() - startedAt,
+              error: message,
+              ...(childRun.runId !== undefined
+                ? { result_ref: { kind: 'run', id: childRun.runId } satisfies DelegateResultRef }
+                : {}),
+            },
+            fields,
+          ),
           ts: Date.now(),
           ...(config.tenantId !== undefined ? { tenant_id: config.tenantId } : {}),
         });
@@ -392,17 +533,29 @@ function makeDelegateTool(host: PluginHost, config: ResolvedConfig): ToolDefinit
 /** 创建 delegate-task 插件（provider 工厂 + model 注入，上层构造时传入） */
 export function createDelegateTaskPlugin(options: DelegateTaskOptions): Plugin {
   const tenantId = normalizeTenantId(options.tenantId);
+  const permissionMode = options.permissionMode ?? 'bridge';
+  const disallowed = options.disallowed ?? DEFAULT_DISALLOWED;
+  const allowNested = options.allowNested === true;
+  // 默认白名单排除 delegate_task，是“默认关闭”的实现手段；allow_nested 显式开启时
+  // 只有用户显式把 delegate_task 写进 disallowed 才继续禁止。
+  const explicitNestedBan = options.disallowed?.includes('delegate_task') === true;
+  const configuredMaxDescendants = options.maxDescendants ?? 16;
   const config: ResolvedConfig = {
     depthByRunId: new Map<string, number>(),
     providerFactory: options.providerFactory,
     model: options.model,
     maxDepth: options.maxDepth ?? 3,
-    disallowed: options.disallowed ?? DEFAULT_DISALLOWED,
+    disallowed,
     limits: options.limits ?? {},
     termination: options.termination ?? { maxIterations: 10, maxRuntimeSeconds: 60 },
-    permissionMode: options.permissionMode ?? 'bridge',
+    permissionMode,
     readOnlyTools: options.readOnlyTools ?? ['read'],
     maxConcurrentDelegates: options.maxConcurrentDelegates ?? DEFAULT_MAX_CONCURRENT_DELEGATES,
+    // 默认禁止孙 agent；deny 模式与显式 disallowed 下即使 allow_nested 也不放开。
+    nestedEnabled: allowNested && permissionMode !== 'deny' && !explicitNestedBan,
+    maxDescendants: Number.isFinite(configuredMaxDescendants)
+      ? Math.max(0, Math.floor(configuredMaxDescendants))
+      : 16,
     ...(options.permission !== undefined ? { permission: options.permission } : {}),
     ...(options.runtimeHost !== undefined ? { runtimeHost: options.runtimeHost } : {}),
     ...(tenantId !== undefined ? { tenantId } : {}),
