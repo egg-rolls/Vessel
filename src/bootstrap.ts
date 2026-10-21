@@ -43,7 +43,7 @@ import {
 import type { ReplContext } from '../packages/tui/src/index';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
 import { createAgentServiceWiring } from './agent-service-wiring';
-import { mapDelegateToolAlias } from './agent-wiring';
+import { type MemberPermissionMode, mapDelegateToolAlias } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type {
@@ -975,6 +975,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
   let agentControl: BootstrapResult['agent'];
   if (agentServiceEnabled) {
+    // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
+    const memberPermissionMode: MemberPermissionMode =
+      config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge');
     const wiring = await createAgentServiceWiring({
       tenantId,
       dataDir,
@@ -989,6 +992,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),
       permission,
+      permissionMode: memberPermissionMode,
+      // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。
+      parentEvents: runtimeEvents,
       logger,
     });
     finalPluginHost.registerTool(wiring.tool);
@@ -1017,6 +1023,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       ownerId: wiring.ownerId,
       ...(ownerServer !== undefined ? { ownerServer } : {}),
       dispose: async () => {
+        // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
+        wiring.injector.dispose();
         await ownerServer?.stop();
         await wiring.service.flushSnapshot();
       },
