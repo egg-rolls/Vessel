@@ -102,6 +102,7 @@ import {
 } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
+import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
 import { adaptWorkflowsControl } from './workflow-wiring';
@@ -398,16 +399,13 @@ async function bootstrapConnect(input: {
   // P2：--connect 接受 ws:// / wss://（归一化为 http/https）。
   const connectUrl = normalizeConnectUrl(input.url);
 
-  // 连接 token / CA 全部来自 config loader 的单一结果：
-  // CLI（cliOverrides）> env（VESSEL_CONNECT_TOKEN / VESSEL_GATEWAY_TOKEN /
-  // VESSEL_CONNECT_CA）> project > user > default。此处不再读 argv / env。
-  // 旧版 fallback（serve.token / transport.token）仍作为配置层回退保留。
+  // 连接 token 与远程控制面共用 `resolveConnectToken`（DECISION-033）：
+  // connect 专用凭据 → gateway 凭据（serve.token / token_env / admin_token(_env) /
+  // VESSEL_GATEWAY_TOKEN / transport.token）。config loader 已合并 CLI / env / 文件层，
+  // 因此显式 token 取合并后的 config.connect.token——不能让裸 env 覆盖 `--connect-token`。
   // 永不打印。
   const token =
-    nonEmptyString(input.config.connect?.token) ??
-    nonEmptyString(input.config.serve?.token) ??
-    nonEmptyString(input.config.transport?.token) ??
-    '';
+    resolveConnectToken(input.config, { connectToken: input.config.connect?.token }) ?? '';
 
   // CA：只读文件，错误信息不带 token。
   const caPath = nonEmptyString(input.config.connect?.caFile);
