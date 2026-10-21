@@ -229,10 +229,10 @@ termination:
 ```
 
 - **默认值**（0.14.3）：`request_limit` 100、`tool_calls_limit` 50、`input_tokens_limit` 1,000,000（原 100,000，与 `context.maxTokens` 对齐）、`output_tokens_limit` 50,000；`max_iterations` 50（原 20）、`max_runtime_seconds` 300。`total_cost_limit` 无默认值。
-- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`，超限抛普通 `Error('Termination policy triggered: ...')`），再判使用量限额。使用量限额按 `current >= max` 判定，检查顺序固定 request → tool calls → input tokens → output tokens → total cost，首个命中生效。默认 `max_iterations` 50 先于 `request_limit` 100 触发；要提高请求次数的实际上限，两者需一起调整。
-- **命中行为**：发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit`）。
+- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`），再判使用量限额；两者都按 `current >= max` 判定、首个命中生效。使用量限额的检查顺序固定 request → tool calls → input tokens → output tokens → total cost；终止策略先 `max_iterations`、后 `max_runtime`。默认 `max_iterations` 50 先于 `request_limit` 100 触发；要提高请求次数的实际上限，两者需一起调整。
+- **命中行为**：两类限额走同一路径——发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit` / `termination.maxIterations`）；错误文本前缀分别为 `Usage limits exceeded: ...` 与 `Termination policy triggered: ...`。`max_runtime` 的 `current` 是已运行秒数（毫秒精度小数）。
 - **成本**：core 不为内置 provider 计价，`total_cost` 默认为 0；`total_cost_limit` 只在宿主显式调用 `LimitChecker.addCost()` 后才有意义。
-- **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。终止策略不属于 `LimitBlock`，`/errors` 只能看到普通错误文本。
+- **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。`LimitBlock.key` 固定为五个使用量 key 加 `max_iterations` / `max_runtime`。
 
 ## 3. 密钥与 `_env`
 
