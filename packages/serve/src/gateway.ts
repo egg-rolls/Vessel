@@ -305,10 +305,11 @@ export interface GatewayOptions {
   sessionFor?: (tenantId: string) => SessionBackend | undefined;
   contextFor?: (tenantId: string) => ContextManager | undefined;
   /**
-   * tenant 运行时事件流（0.18）：权限 / ask 应答直接投递到该 tenant，
-   * 而不是只发到 `events`（gateway 共享流）。缺省回退 `events`。
+   * 各 tenant 的运行时事件流（0.18）：engine 只观察这些流，应答也只投递到这里。
+   * 缺省 = `[{ tenantId: defaultTenantId, events }]`（本地 dispatcher / 单租户装配）。
+   * `events` 仍只负责出站广播投影，不再驱动 engine。
    */
-  tenantEventsFor?: (tenantId: string) => EventStream | undefined;
+  tenantEventSources?: () => ReadonlyArray<{ tenantId: string; events: EventStream }>;
   pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;
@@ -631,19 +632,57 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
 
+  /**
+   * 0.18：engine 只拿 per-tenant 流。`events` 是出站投影（serve 下是聚合流，
+   * 本地 dispatcher 下就是 default tenant 流），不再作为 engine 的事件源。
+   */
+  const tenantEventSources = opts.tenantEventSources?.() ?? [{ tenantId: defaultTenantId, events }];
+  const tenantEventsById = new Map<string, EventStream>(
+    tenantEventSources.map((source) => [source.tenantId, source.events]),
+  );
+  const tenantEventsFor = (tenantId: string): EventStream | undefined =>
+    tenantEventsById.get(tenantId);
+
   // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）
   const engine = createRunEngine({
-    events,
     ...(runtime ? { runtime } : {}),
     ...(context ? { context } : {}),
     ...(opts.runtimeFor ? { runtimeFor: opts.runtimeFor } : {}),
     ...(opts.contextFor ? { contextFor: opts.contextFor } : {}),
-    ...(opts.tenantEventsFor ? { tenantEventsFor: opts.tenantEventsFor } : {}),
+    tenantEventsFor,
     defaultTenantId,
     maxQueue,
     maxRuns: MAX_RUNS,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
+  /**
+   * engine 的请求观察面：只订阅 tenant 流（缺 tenant_id 时补齐）。
+   * 同一 EventStream 被多个 tenant 复用（测试 / 单 runtime 多 tenant）时只订阅一次，
+   * 避免同一事件重复进 engine。
+   */
+  const seenTenantStreams = new Set<EventStream>();
+  const unsubscribeTenantSources: Array<() => void> = [];
+  for (const { tenantId, events: source } of tenantEventSources) {
+    if (seenTenantStreams.has(source)) continue;
+    seenTenantStreams.add(source);
+    unsubscribeTenantSources.push(
+      source.subscribe((event: RunEvent) => {
+        try {
+          engine.handleEvent(
+            event.tenant_id === undefined || event.tenant_id === ''
+              ? { ...event, tenant_id: tenantId }
+              : event,
+          );
+        } catch (error) {
+          console.error(
+            `[vessel] gateway event plane: engine.handleEvent failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }),
+    );
+  }
   /**
    * 0.14 P0：agents 注册表。只吃实时事件；Host / run 记录由方法层合并。
    * 在事件订阅处 ingest 脱敏/裁剪后的副本，与广播保持一致。
@@ -847,9 +886,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     replayEventsTo(ws);
   }
 
-  /** 订阅 core 事件流：分配 seq、记录 run 映射与权限请求、广播 */
+  /**
+   * 订阅出站事件流（0.18：只做投影，不驱动 engine）：
+   * 脱敏 → 裁剪 → registry → 分配 seq → 广播 / team fan-out。
+   */
   const unsubscribe = events.subscribe((event: RunEvent) => {
-    engine.handleEvent(event);
     // 0.5：出站前统一脱敏（实时与回放都是脱敏后的副本；A-3 §10.3）
     // 0.6.1 E12：先脱敏再裁剪工具参数/结果，实时与回放保持一致。
     const safeEvent = capToolEvent(redactor.redact(event));
@@ -3307,12 +3348,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
       }, heartbeatMs);
   (heartbeat as { unref?: () => void } | undefined)?.unref?.();
 
-  // ask / 权限 pending 默认都不按时间过期（0.18）；只有显式 TTL 时 sweep 才生效。
-  const permissionSweeper = setInterval(() => {
-    engine.sweep();
-  }, 30_000);
-  (permissionSweeper as { unref?: () => void }).unref?.();
-
   /** 关闭时等待 active run 的上限（0.10 R2-18） */
   const SHUTDOWN_RUN_TIMEOUT_MS = 5_000;
 
@@ -3383,7 +3418,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   async function shutdown(): Promise<void> {
     if (heartbeat !== undefined) clearInterval(heartbeat);
-    clearInterval(permissionSweeper);
     if (teamPollTimer) clearInterval(teamPollTimer);
     teamPollTimer = undefined;
 
@@ -3411,6 +3445,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       unsubscribe();
     } catch (error) {
       reportStopError('unsubscribe events', error);
+    }
+    for (const stopTenantSource of unsubscribeTenantSources) {
+      try {
+        stopTenantSource();
+      } catch (error) {
+        reportStopError('unsubscribe tenant events', error);
+      }
     }
 
     closeWsClients();

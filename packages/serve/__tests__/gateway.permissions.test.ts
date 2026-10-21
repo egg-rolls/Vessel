@@ -91,7 +91,7 @@ describe('gateway permissions', () => {
       events: shared,
       runtime,
       pluginHost,
-      tenantEventsFor: () => tenantEvents,
+      tenantEventSources: () => [{ tenantId: 'default', events: tenantEvents }],
     });
     gateways.push(gw);
     const client = await connect(gw);

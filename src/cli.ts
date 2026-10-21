@@ -790,11 +790,20 @@ async function runWithConfig(result: BootstrapResult) {
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
-            // 0.18：权限 / ask 应答必须回到该 tenant 的运行时流（工具在那里等），
-            // 只在找不到 tenant bundle 时回退共享流（引擎内部处理）。
-            tenantEventsFor: (tenantId: string) =>
-              tenantFactory?.bundleFor(tenantId)?.runtimeEvents ??
-              (tenantId === result.tenantId ? result.bundle?.runtimeEvents : undefined),
+            // 0.18：engine 只观察 / 投递 tenant 运行时流；shared 只做出站投影。
+            // 工厂在 gateway 启动前已建好全部 active tenant，列表静态。
+            tenantEventSources: () => {
+              const ids = new Set(tenantFactory?.tenantIds() ?? []);
+              if (result.bundle) ids.add(result.tenantId);
+              const sources: Array<{ tenantId: string; events: EventStream }> = [];
+              for (const tenantId of ids) {
+                const bundle =
+                  tenantFactory?.bundleFor(tenantId) ??
+                  (tenantId === result.tenantId ? result.bundle : undefined);
+                if (bundle) sources.push({ tenantId, events: bundle.runtimeEvents });
+              }
+              return sources;
+            },
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
             plugins: () => tenantFactory?.pluginsFor(result.tenantId) ?? [],

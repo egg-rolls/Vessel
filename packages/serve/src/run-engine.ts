@@ -82,24 +82,18 @@ export interface PendingAsk {
 
 /** 引擎选项 */
 export interface RunEngineOptions {
-  events: EventStream;
   runtime?: RunnableAgent;
   context?: ContextManager;
   runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
   contextFor?: (tenantId: string) => ContextManager | undefined;
   /**
-   * tenant 运行时事件流（0.18）：权限 / ask 应答直接投递到这里，
-   * 而不是只发到 gateway 共享流。缺省回退 `events`（本地 dispatcher）。
+   * tenant 运行时事件流（0.18，必填）：权限 / ask 应答直接投递到这里。
+   * 引擎不持有任何共享 / 单流 `events`；找不到流说明 tenant / run 已结束。
    */
-  tenantEventsFor?: (tenantId: string) => EventStream | undefined;
+  tenantEventsFor: (tenantId: string) => EventStream | undefined;
   defaultTenantId: string;
   maxQueue?: number;
   maxRuns?: number;
-  /**
-   * ask 请求的内存 TTL（毫秒）。缺省 = **不按时间过期**（0.18 起与权限一致）；
-   * 只有显式正数才由 `sweep()` 淘汰，仅供测试 / 特殊调用方。
-   */
-  interactionTtlMs?: number;
   /**
    * 权限交互持久化目录；缺省 = 不落盘。
    * 由 gateway 注入 `<dataDir>`（Addendum A §2）。
@@ -145,8 +139,6 @@ export interface RunEngine {
   releaseResume(runId: string): void;
   reserveWorkflowResume(runId: string): boolean;
   releaseWorkflowResume(runId: string): void;
-  /** 清理 ask 记录；缺省不按时间过期（显式 `interactionTtlMs` 才启用）。 */
-  sweep(now?: number): void;
 }
 
 function makeDone(): { done: Promise<void>; resolveDone: () => void } {
@@ -188,7 +180,6 @@ export function errorMetaOf(data: unknown): RunErrorMeta | undefined {
 
 export function createRunEngine(options: RunEngineOptions): RunEngine {
   const {
-    events,
     runtime,
     context,
     runtimeFor: runtimeForOption,
@@ -198,7 +189,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
   } = options;
   const maxQueue = options.maxQueue ?? 100;
   const maxRuns = options.maxRuns ?? 200;
-  const interactionTtlMs = options.interactionTtlMs ?? 0;
   /** 记录上限（防止长时间进程无界增长）；淘汰优先 answered/orphaned。 */
   const MAX_RECORDS = 2000;
 
@@ -394,12 +384,17 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
    * 其次事件自带的 tenant_id，最后回退 default（P0-1）。
    */
   /**
-   * 应答投递目标（0.18）：优先该 tenant 的运行时流（工具 / 权限策略正在等它），
-   * 没有 tenant 流时才回退到引擎共享流。**只发一处**——tenant 流会经
-   * tenant→shared 桥转发给 Web，两边都发会造成重复。
+   * 应答投递目标（0.18）：只能是该 tenant 的运行时流（工具 / 权限策略正在等它）。
+   * 流不存在说明 tenant / run 已结束，明确拒绝而不是丢弃应答。
    */
   function answerStreamFor(tenantId: string): EventStream {
-    return tenantEventsFor?.(tenantId) ?? events;
+    const stream = tenantEventsFor(tenantId);
+    if (stream === undefined) {
+      throw new RpcError('run_ended', `Tenant event stream is no longer available: ${tenantId}`, {
+        tenant_id: tenantId,
+      });
+    }
+    return stream;
   }
 
   function eventTenantId(event: RunEvent): string {
@@ -691,18 +686,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     resumedWorkflows.delete(runId);
   }
 
-  /**
-   * 仅清理 ask 的内存记录。
-   * Addendum A / 0.18：权限与 ask 的 pending 默认都**不按时间过期**，
-   * 只由 run 终态 / 应答清理；只有显式 `interactionTtlMs > 0` 才启用 TTL。
-   */
-  function sweep(now = Date.now()): void {
-    if (interactionTtlMs <= 0) return;
-    for (const [id, pending] of pendingAsks) {
-      if (now - pending.ts > interactionTtlMs) pendingAsks.delete(id);
-    }
-  }
-
   function list(tenantId: string, opts: { sessionId?: string; status?: string } = {}): RunStatus[] {
     return [...runs.values()]
       .filter((record) => record.tenant_id === tenantId)
@@ -742,6 +725,5 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     releaseResume,
     reserveWorkflowResume,
     releaseWorkflowResume,
-    sweep,
   };
 }

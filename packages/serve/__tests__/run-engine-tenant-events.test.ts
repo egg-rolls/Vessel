@@ -1,23 +1,20 @@
 /**
  * 0.18：权限 / ask 应答必须投递到**该 tenant 的运行时事件流**。
  *
- * 生产装配里 gateway 用共享流（shared）出站，每个 tenant 的 runtime / 工具
- * 等的是自己的 runtimeEvents；只有 tenant→shared 单向桥。应答若只发到 shared，
- * 工具永远等不到（120s/永久挂起）。本测试模拟「两个 tenant 流 + 一个共享流」。
+ * 生产装配里每个 tenant 的 runtime / 工具等的是自己的 runtimeEvents；
+ * shared 只做出站投影。engine 只观察 tenant 流（Step 2），应答也只回到这里。
  */
 
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import { createRunEngine, type RunEngine } from '../src/run-engine';
 
-/** tenant → shared 的单向桥（与 cli / tenant-runtime-factory 的装配一致）。 */
-function bridge(from: EventStreamLike, to: MemoryEventStream, tenantId: string): () => void {
+/** tenant → shared 的出站桥（只服务 Web 投影，不驱动 engine）。 */
+function bridge(from: MemoryEventStream, to: MemoryEventStream, tenantId: string): () => void {
   return from.subscribe((event) => {
     to.publish(event.tenant_id === undefined ? { ...event, tenant_id: tenantId } : event);
   });
 }
-
-type EventStreamLike = MemoryEventStream;
 
 function collect(stream: MemoryEventStream): RunEvent[] {
   const seen: RunEvent[] = [];
@@ -27,26 +24,33 @@ function collect(stream: MemoryEventStream): RunEvent[] {
   return seen;
 }
 
+/** gateway Step 2 的接线：每个 tenant 流 → engine.handleEvent（补 tenant_id）。 */
+function observeTenant(stream: MemoryEventStream, tenantId: string, engine: RunEngine): () => void {
+  return stream.subscribe((event) => {
+    engine.handleEvent(
+      event.tenant_id === undefined || event.tenant_id === ''
+        ? { ...event, tenant_id: tenantId }
+        : event,
+    );
+  });
+}
+
 function setupWithTenants(tenantIds: readonly string[]) {
   const shared = new MemoryEventStream();
   const tenantStreams = new Map<string, MemoryEventStream>();
   for (const id of tenantIds) tenantStreams.set(id, new MemoryEventStream());
   const stops = [...tenantStreams].map(([id, stream]) => bridge(stream, shared, id));
   const engine = createRunEngine({
-    events: shared,
     defaultTenantId: 'default',
     tenantEventsFor: (tenantId) => tenantStreams.get(tenantId),
   });
-  // gateway 在 startGateway 里把共享流接到 engine.handleEvent；这里显式接同一根线。
-  stops.push(
-    shared.subscribe((event) => {
-      engine.handleEvent(event);
-    }),
-  );
+  for (const [id, stream] of tenantStreams) stops.push(observeTenant(stream, id, engine));
+  const tenantA = tenantStreams.get('tenant-a') as MemoryEventStream;
+  const tenantB = tenantStreams.get('tenant-b') as MemoryEventStream | undefined;
   const seen = {
     shared: collect(shared),
-    tenantA: collect(tenantStreams.get('tenant-a') as MemoryEventStream),
-    tenantB: collect(tenantStreams.get('tenant-b') as MemoryEventStream),
+    tenantA: collect(tenantA),
+    tenantB: tenantB === undefined ? [] : collect(tenantB),
   };
   const dispose = () => {
     for (const stop of stops) stop();
@@ -80,6 +84,15 @@ function answers(seen: RunEvent[]): RunEvent[] {
   return seen.filter((event) => event.type === 'ask.user.answered');
 }
 
+function codeOf(run: () => unknown): string | undefined {
+  try {
+    run();
+  } catch (error) {
+    return (error as { code?: string }).code;
+  }
+  return undefined;
+}
+
 describe('run engine answer delivery (0.18)', () => {
   it('delivers a permission answer to the owning tenant stream only', () => {
     const { tenantStreams, engine, seen, dispose } = setupWithTenants(['tenant-a', 'tenant-b']);
@@ -98,7 +111,7 @@ describe('run engine answer delivery (0.18)', () => {
     expect(responses(seen.tenantA)[0]?.tenant_id).toBe('tenant-a');
     // 另一个 tenant 不得收到。
     expect(responses(seen.tenantB)).toHaveLength(0);
-    // shared 经既有桥看到一次（Web 仍能收到），且没有重复发布。
+    // shared 经出站桥看到一次（Web 仍能收到），且没有重复发布。
     expect(responses(seen.shared)).toHaveLength(1);
     dispose();
   });
@@ -118,36 +131,36 @@ describe('run engine answer delivery (0.18)', () => {
     dispose();
   });
 
-  it('falls back to the engine stream when the tenant stream is unknown', () => {
-    const shared = new MemoryEventStream();
-    const seen = collect(shared);
+  it('rejects an answer when the tenant stream is gone instead of dropping it', () => {
+    const stream = new MemoryEventStream();
+    let available = true;
     const engine = createRunEngine({
-      events: shared,
       defaultTenantId: 'default',
-      tenantEventsFor: () => undefined,
+      tenantEventsFor: () => (available ? stream : undefined),
     });
-    shared.subscribe((event) => {
-      engine.handleEvent(event);
-    });
+    observeTenant(stream, 'default', engine);
 
-    requestPermissionOn(shared);
-    engine.respondPermission('perm-1', 'allow', false);
-    requestAskOn(shared);
-    engine.respondAsk('ask-1', [], undefined);
+    requestPermissionOn(stream);
+    available = false;
 
-    expect(responses(seen)).toHaveLength(1);
-    expect(answers(seen)).toHaveLength(1);
+    expect(codeOf(() => engine.respondPermission('perm-1', 'allow', false))).toBe('run_ended');
+    // pending 不因投递失败而消失，迟到的 tenant 流仍可重试。
+    expect(engine.pendingPermissions.has('perm-1')).toBe(true);
+    stream.publish({ type: 'run.failed', run_id: 'run-1', data: {}, ts: Date.now() });
+    expect(engine.pendingPermissions.size).toBe(0);
   });
 
   it('keeps run-terminal cleanup working with tenant streams', () => {
-    const { shared, tenantStreams, engine, seen, dispose } = setupWithTenants([
-      'tenant-a',
-      'tenant-b',
-    ]);
+    const { tenantStreams, engine, seen, dispose } = setupWithTenants(['tenant-a', 'tenant-b']);
     requestPermissionOn(tenantStreams.get('tenant-a') as MemoryEventStream);
     requestAskOn(tenantStreams.get('tenant-a') as MemoryEventStream);
 
-    shared.publish({ type: 'run.completed', run_id: 'run-1', data: {}, ts: Date.now() });
+    (tenantStreams.get('tenant-a') as MemoryEventStream).publish({
+      type: 'run.completed',
+      run_id: 'run-1',
+      data: {},
+      ts: Date.now(),
+    });
     expect(engine.pendingPermissions.size).toBe(0);
     expect(engine.pendingAsks.size).toBe(0);
     // 终态不发应答事件。
@@ -156,49 +169,28 @@ describe('run engine answer delivery (0.18)', () => {
     dispose();
   });
 
-  it('does not expire pending asks by default (0.18)', () => {
-    const shared = new MemoryEventStream();
-    const engine = createRunEngine({ events: shared, defaultTenantId: 'default' });
-    shared.subscribe((event) => {
-      engine.handleEvent(event);
-    });
+  it('keeps pending asks until an answer or a terminal event (no TTL)', () => {
+    const { tenantStreams, engine, dispose } = setupWithTenants(['tenant-a']);
+    const stream = tenantStreams.get('tenant-a') as MemoryEventStream;
+    requestAskOn(stream);
 
-    requestAskOn(shared);
-    engine.sweep(Date.now() + 10_000_000);
+    // 0.18：没有 TTL / sweep；时间流逝不淘汰 pending。
     expect(engine.pendingAsks.has('ask-1')).toBe(true);
-    // 仍然可以应答（没有被后台 sweep 悄悄删掉）。
     engine.respondAsk('ask-1', []);
-  });
-
-  it('honors an explicit interactionTtlMs when configured', () => {
-    const shared = new MemoryEventStream();
-    const engine = createRunEngine({
-      events: shared,
-      defaultTenantId: 'default',
-      interactionTtlMs: 1_000,
-    });
-    shared.subscribe((event) => {
-      engine.handleEvent(event);
-    });
-
-    requestAskOn(shared);
-    engine.sweep(Date.now() + 5_000);
     expect(engine.pendingAsks.has('ask-1')).toBe(false);
+    dispose();
   });
 
-  it('does not double-publish when a tenant stream is the engine stream', () => {
-    const shared = new MemoryEventStream();
-    const seen = collect(shared);
-    const engine: RunEngine = createRunEngine({
-      events: shared,
+  it('does not double-publish when the tenant stream is the same object', () => {
+    const stream = new MemoryEventStream();
+    const seen = collect(stream);
+    const engine = createRunEngine({
       defaultTenantId: 'default',
-      tenantEventsFor: () => shared,
+      tenantEventsFor: () => stream,
     });
-    shared.subscribe((event) => {
-      engine.handleEvent(event);
-    });
+    observeTenant(stream, 'default', engine);
 
-    requestAskOn(shared);
+    requestAskOn(stream);
     engine.respondAsk('ask-1', []);
 
     expect(answers(seen)).toHaveLength(1);

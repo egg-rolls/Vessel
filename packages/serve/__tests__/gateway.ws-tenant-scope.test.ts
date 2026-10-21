@@ -170,7 +170,18 @@ describe('legacy WS methods are tenant-scoped', () => {
       provider: new ToolCallingProvider('danger_tool'),
       permission: { default: 'ask' },
     });
-    const gw = createGateway({ events, auth: authFor(), runtimeFor: () => runtime, pluginHost });
+    const gw = createGateway({
+      events,
+      auth: authFor(),
+      runtimeFor: () => runtime,
+      pluginHost,
+      // 单 runtime 复用同一事件流；按 tenant 注册（gateway 会去重订阅）。
+      tenantEventSources: () => [
+        { tenantId: 'default', events },
+        { tenantId: 'a', events },
+        { tenantId: 'b', events },
+      ],
+    });
     gateways.push(gw);
     const a = await connect(gw, 'a');
     const b = await connect(gw, 'b');
@@ -219,7 +230,17 @@ describe('legacy WS methods are tenant-scoped', () => {
       provider: new ToolCallingProvider('ask_tool'),
       permission: { default: 'allow' },
     });
-    const gw = createGateway({ events, auth: authFor(), runtimeFor: () => runtime, pluginHost });
+    const gw = createGateway({
+      events,
+      auth: authFor(),
+      runtimeFor: () => runtime,
+      pluginHost,
+      tenantEventSources: () => [
+        { tenantId: 'default', events },
+        { tenantId: 'a', events },
+        { tenantId: 'b', events },
+      ],
+    });
     gateways.push(gw);
     const a = await connect(gw, 'a');
     const b = await connect(gw, 'b');

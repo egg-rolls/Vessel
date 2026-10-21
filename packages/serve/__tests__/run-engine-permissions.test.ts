@@ -20,7 +20,7 @@ function makeDir(): string {
 function setup(interactionsDir?: string) {
   const events = new MemoryEventStream();
   const engine = createRunEngine({
-    events,
+    tenantEventsFor: () => events,
     defaultTenantId: 'default',
     ...(interactionsDir !== undefined ? { interactionsDir } : {}),
   });
@@ -104,12 +104,12 @@ describe('run engine permission lifecycle', () => {
     });
   });
 
-  it('does not expire pending permissions over time (Addendum A)', () => {
+  it('keeps pending permissions until an answer or a terminal run event (Addendum A)', () => {
     const { engine, seen } = setup();
     const now = Date.now();
     requestPermission(engine, { deadline_at: now + 1 }, now);
 
-    engine.sweep(now + 10_000_000);
+    // 0.18：没有 TTL / sweep，时间流逝与 deadline_at 都不淘汰 pending。
     expect(engine.pendingPermissions.has('perm-1')).toBe(true);
     expect(seen.some((event) => event.type === 'tool.permission.expired')).toBe(false);
 

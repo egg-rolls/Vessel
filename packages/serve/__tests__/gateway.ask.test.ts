@@ -121,7 +121,7 @@ describe('gateway ask_user', () => {
       events: shared,
       runtime,
       pluginHost,
-      tenantEventsFor: () => tenantEvents,
+      tenantEventSources: () => [{ tenantId: 'default', events: tenantEvents }],
     });
     gateways.push(gw);
 

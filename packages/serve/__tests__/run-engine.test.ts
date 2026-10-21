@@ -44,7 +44,11 @@ describe('run engine coreToJob lifecycle', () => {
   test('maps core run ids while running and drops the mapping at terminal state', async () => {
     const events = new MemoryEventStream();
     const { agent, release } = gatedAgent(events);
-    const engine = createRunEngine({ events, runtime: agent, defaultTenantId: 'default' });
+    const engine = createRunEngine({
+      tenantEventsFor: () => events,
+      runtime: agent,
+      defaultTenantId: 'default',
+    });
 
     const { run_id } = engine.submitRun({ input: 'hello' });
     engine.handleEvent(started('core-1'));
@@ -60,7 +64,11 @@ describe('run engine coreToJob lifecycle', () => {
   test('does not accumulate mappings across sequential runs', async () => {
     const events = new MemoryEventStream();
     const { agent, release } = gatedAgent(events);
-    const engine = createRunEngine({ events, runtime: agent, defaultTenantId: 'default' });
+    const engine = createRunEngine({
+      tenantEventsFor: () => events,
+      runtime: agent,
+      defaultTenantId: 'default',
+    });
 
     for (let index = 0; index < 5; index += 1) {
       const { run_id } = engine.submitRun({ input: `run-${index}` });
@@ -77,7 +85,7 @@ describe('run engine coreToJob lifecycle', () => {
     const events = new MemoryEventStream();
     const { agent, release } = gatedAgent(events);
     const engine = createRunEngine({
-      events,
+      tenantEventsFor: () => events,
       runtime: agent,
       defaultTenantId: 'default',
       maxRuns: 1,
