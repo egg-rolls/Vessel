@@ -61,7 +61,7 @@ describe('MemoryContextManager', () => {
   });
 
   it('summarizes instead of silently slicing when maxMessages is exceeded', () => {
-    const contextWithLimit = new MemoryContextManager({ maxMessages: 5, maxTokens: 20 });
+    const contextWithLimit = new MemoryContextManager({ maxMessages: 5 });
 
     for (let i = 0; i < 10; i++) {
       contextWithLimit.add({
@@ -297,7 +297,6 @@ describe('MemoryContextManager long sessions (0.4 C2)', () => {
   it('bounds a 10k message session with summaries instead of hard slicing', () => {
     const context = new MemoryContextManager({
       maxMessages: 100,
-      maxTokens: 400,
       autoCompact: false,
     });
 
@@ -666,5 +665,25 @@ describe('MemoryContextManager retention by token budget (0.14.4)', () => {
       'b'.repeat(20),
       'c'.repeat(20),
     ]);
+  });
+
+  it('still compacts when only the message cap overflows and the token budget has room', async () => {
+    const context = new MemoryContextManager({
+      maxMessages: 5,
+      autoCompact: false,
+      summarizer: async () => 'CAP SUMMARY',
+    });
+    for (let i = 0; i < 10; i += 1) {
+      context.add({ role: 'user', content: `Message ${i}` });
+    }
+
+    // 10 条短消息远低于 1M × 0.3 的保留预算，只有条数上限要求压缩。
+    expect(context.tokenCount).toBeLessThan(1_000_000 * 0.3);
+    expect(context.messages).toHaveLength(10);
+
+    expect(await context.autoCompactAsync()).toBeGreaterThan(0);
+    expect(context.messages.length).toBeLessThanOrEqual(5);
+    expect(context.messages.at(-1)?.content).toBe('Message 9');
+    expect(context.messages.some((message) => message.content === 'CAP SUMMARY')).toBe(true);
   });
 });

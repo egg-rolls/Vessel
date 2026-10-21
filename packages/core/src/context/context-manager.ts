@@ -214,8 +214,8 @@ export class MemoryContextManager implements ContextManager {
   }
 
   /**
-   * 计算本次压缩范围：system 始终保留；其余按 token 预算（maxTokens × 0.3）
-   * 从最新消息向前保留，至少 2 条，且保留区不以孤立 tool 消息开头。
+   * 计算本次压缩范围：system 始终保留；token 预算（maxTokens × 0.3）与
+   * 条数上限共同决定边界，至少保留 2 条，且保留区不以孤立 tool 消息开头。
    */
   private planCompaction(): CompactionPlan | null {
     const sessionId = this.currentSessionId;
@@ -225,7 +225,7 @@ export class MemoryContextManager implements ContextManager {
     if (nonSystem.length < 3) return null;
 
     const budget = (this.config.maxTokens ?? 1_000_000) * 0.3;
-    let keepStart = nonSystem.length - 1;
+    let keepFromByTokens = nonSystem.length - 1;
     let keptTokens = 0;
     let kept = 0;
     for (let i = nonSystem.length - 1; i >= 0; i -= 1) {
@@ -236,15 +236,23 @@ export class MemoryContextManager implements ContextManager {
       if (kept >= 2 && keptTokens + cost > budget) break;
       keptTokens += cost;
       kept += 1;
-      keepStart = i;
+      keepFromByTokens = i;
     }
+
+    // 压缩后 system 条数 = systemCount（旧摘要被新摘要替换，净数不变）+ 1 条新摘要。
+    const systemCount = msgs.filter((m) => m.role === 'system').length;
+    const maxKept = Math.max(2, this.messageCap - systemCount - 1);
+    const keepFromByCap = nonSystem.length - Math.min(nonSystem.length, maxKept);
+    // 任一上限超限都要摘要：取更靠后的边界（保留更少），但不低于 2 条。
+    let keepFrom = Math.min(Math.max(keepFromByTokens, keepFromByCap), nonSystem.length - 2);
 
     // 孤立 tool 消息会因缺少对应的 assistant(tool_calls) 被 provider 拒绝，
     // 把边界回退到该 tool 的 assistant，直到边界不再是 tool。
-    while (keepStart > 0 && nonSystem[keepStart]?.role === 'tool') {
-      const toolCallId = nonSystem[keepStart]?.tool_call_id;
+    // 配对完整性优先于条数上限，回退后保留数可能略超 messageCap。
+    while (keepFrom > 0 && nonSystem[keepFrom]?.role === 'tool') {
+      const toolCallId = nonSystem[keepFrom]?.tool_call_id;
       let ownerIndex = -1;
-      for (let i = keepStart - 1; i >= 0; i -= 1) {
+      for (let i = keepFrom - 1; i >= 0; i -= 1) {
         const candidate = nonSystem[i];
         if (
           candidate?.role === 'assistant' &&
@@ -256,13 +264,13 @@ export class MemoryContextManager implements ContextManager {
       }
       // 找不到 owner 说明历史本身不完整，继续前移也无法配对。
       if (ownerIndex < 0) break;
-      keepStart = ownerIndex;
+      keepFrom = ownerIndex;
     }
 
-    if (keepStart === 0) return null;
+    if (keepFrom === 0) return null;
     return {
       sessionId,
-      toSummarize: nonSystem.slice(0, keepStart),
+      toSummarize: nonSystem.slice(0, keepFrom),
     };
   }
 
