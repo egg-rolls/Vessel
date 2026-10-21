@@ -243,6 +243,15 @@ export const RunCard = memo(function RunCard({
         })}
         {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
         {liveText && <div className="text-block live-text">{liveText}</div>}
+        {group.status === 'running' &&
+          !liveText &&
+          !group.liveReasoning &&
+          renderItems.length === 0 && (
+            <div className="run-waiting dim" role="status">
+              <span className="run-waiting-dot" aria-hidden="true" />
+              {t('chat.run.waiting')}
+            </div>
+          )}
       </div>
 
       {sortedPermissions.length > 0 && onDecidePermission && (

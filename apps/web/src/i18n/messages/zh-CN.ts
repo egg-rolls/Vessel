@@ -128,6 +128,8 @@ export const messages = {
   'pending.run': 'run {id}',
   'pending.session': 'session {id}',
   'chat.reasoning.summary': '思考过程',
+  // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
+  'chat.run.waiting': '正在思考…',
   // 0.15：工具卡 / 思考流 / 内联提问
   'chat.reasoning.live': '流式',
   'chat.reasoning.expand': '展开全文',

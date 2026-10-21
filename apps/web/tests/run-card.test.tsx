@@ -234,3 +234,53 @@ describe('live streaming rendering (0.17)', () => {
     expect(markup).not.toContain('live-text');
   });
 });
+
+describe('running placeholder (0.17)', () => {
+  function group(overrides: Partial<RunGroup> = {}): RunGroup {
+    return {
+      runId: 'run-wait',
+      sessionId: 'session-1',
+      status: 'running',
+      items: [],
+      ...overrides,
+    };
+  }
+
+  function render(value: RunGroup, verbosity: 'minimal' | 'normal' = 'normal') {
+    return renderToStaticMarkup(
+      <RunCard
+        group={value}
+        cancelled={false}
+        cancelling={false}
+        onCancel={() => {}}
+        verbosity={verbosity}
+      />,
+    );
+  }
+
+  test('shows a waiting placeholder when a running run has no content', () => {
+    const markup = render(group());
+    expect(markup).toContain('run-waiting');
+    expect(markup).toContain('正在思考…');
+  });
+
+  test('hides the placeholder once liveText or an item is visible', () => {
+    expect(render(group({ liveText: 'partial' }))).not.toContain('run-waiting');
+    const itemMarkup = render(group({ items: [{ kind: 'text', text: 'hello', key: 'text-1' }] }));
+    expect(itemMarkup).not.toContain('run-waiting');
+    expect(itemMarkup).toContain('hello');
+  });
+
+  test('hides the placeholder for live reasoning', () => {
+    expect(render(group({ liveReasoning: 'thinking' }))).not.toContain('run-waiting');
+  });
+
+  test('does not show the placeholder for terminal runs', () => {
+    expect(render(group({ status: 'completed' }))).not.toContain('run-waiting');
+    expect(render(group({ status: 'failed' }))).not.toContain('run-waiting');
+  });
+
+  test('minimal still shows the placeholder when nothing is visible', () => {
+    expect(render(group(), 'minimal')).toContain('run-waiting');
+  });
+});

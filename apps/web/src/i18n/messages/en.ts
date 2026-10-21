@@ -131,6 +131,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.run': 'run {id}',
   'pending.session': 'session {id}',
   'chat.reasoning.summary': 'Thinking',
+  // 0.17: placeholder while a run is running but has no visible content
+  'chat.run.waiting': 'Generating…',
   // 0.15: tool cards / reasoning stream / inline ask
   'chat.reasoning.live': 'Streaming',
   'chat.reasoning.expand': 'Show all',
