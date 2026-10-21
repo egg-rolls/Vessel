@@ -11,6 +11,7 @@ import { runAgentCommand } from '../agent-command';
 import { agentsCommand } from '../agents-command';
 import type { CliArgs } from '../cli-args';
 import { runUpdateCommand } from '../cli-update';
+import { runCompletionCommand } from '../completion-command';
 import {
   configInitCommand,
   configPathCommand,
@@ -92,6 +93,14 @@ async function printTools(): Promise<void> {
  * 顺序与迁移前 cli.ts 的短路顺序一致（help/version 在入口处先行处理）。
  */
 export const cliCommands: readonly CliCommand[] = [
+  {
+    name: 'completion',
+    match: (args) => args.completionCommand !== null,
+    run: async (args) => {
+      if (args.completionCommand === null) return 1;
+      return runCompletionCommand(args.completionCommand);
+    },
+  },
   {
     name: 'tools',
     match: (args) => args.tools,

@@ -17,6 +17,7 @@
 - **`vessel agent` CLI**：`vessel agent new <name?> | send <member> <content> | close <member...> | list [--json]`，经 owner 记录 attach；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。
 - **Web 兜底操作面**：Composer 上方显示当前会话内未匹配到 `RunCard` 的待处理权限 / ask；其他会话或无 `sessionId` 的请求进入顶部非模态面板，复用同一张 `PermissionCard` / `AskCard`，不恢复全局遮罩。面包屑显示 `agent` / `run` / `session` 短 id。
 - **Web 流式占位**：`RunCard` 在运行中显示 `liveText` / `liveReasoning`，尚无内容时显示运行中空态占位，不再看起来像空卡片。
+- **`vessel completion <bash|zsh|fish|powershell>`**：打印可直接 source / 加载的静态补全脚本，覆盖顶层命令、二级子命令与常用 flags；单一数据源 `src/completion-spec.ts`，`registry.ts` 一致性由测试守护。不启动 runtime、不联网；动态值（session / tenant / agent id）不写进脚本，留给 shell 默认文件补全。
 
 ### Changed
 

@@ -58,6 +58,7 @@ describe('parseArgs - 默认与 REPL', () => {
       agentsCommand: null,
       agentCommand: null,
       errorsCommand: null,
+      completionCommand: null,
     });
   });
 });

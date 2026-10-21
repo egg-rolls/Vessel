@@ -176,6 +176,7 @@ function printHelp(): void {
     ['vessel update --channel beta', t('help.cmd.updateBeta')],
     ['vessel --version', t('help.cmd.version')],
     ['vessel --tools', t('help.cmd.tools')],
+    ['vessel completion <shell>', t('help.cmd.completion')],
     ['vessel --help', t('help.cmd.help')],
   ];
   const width = Math.max(

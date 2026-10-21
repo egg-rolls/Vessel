@@ -81,6 +81,7 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.update': 'self-update (npm/bun global installs; --yes skips confirmation)',
   'help.cmd.version': 'print version',
   'help.cmd.tools': 'list registered tools (no API key needed)',
+  'help.cmd.completion': 'print a shell completion script (bash / zsh / fish / powershell)',
   'help.cmd.help': 'show this help',
 
   // ── common ──
@@ -215,4 +216,8 @@ export const en: Record<MessageKey, string> = {
   'errors.level': 'Level',
   'errors.empty': 'No recent errors.',
   'errors.recent': 'Recent errors ({count})',
+
+  // ── completion (0.18) ──
+  'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',
+  'completion.unknownShell': 'Unknown shell "{shell}".',
 };

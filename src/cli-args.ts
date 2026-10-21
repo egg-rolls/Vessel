@@ -6,6 +6,7 @@
  */
 
 import { allowedOriginError } from '../packages/config/src/index';
+import { type CompletionCommandArgs, isCompletionShell } from './completion-spec';
 
 /** `--serve` 省略端口时的默认值 */
 export const DEFAULT_SERVE_PORT = 8642;
@@ -244,6 +245,8 @@ export interface CliArgs {
   agentCommand: AgentCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
+  /** 0.18：`vessel completion <bash|zsh|fish|powershell>` */
+  completionCommand: CompletionCommandArgs | null;
 }
 
 export type ParseResult = { ok: true; args: CliArgs } | { ok: false; error: string };
@@ -305,6 +308,7 @@ export function parseArgs(argv: string[]): ParseResult {
     agentsCommand: null,
     agentCommand: null,
     errorsCommand: null,
+    completionCommand: null,
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -359,6 +363,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'demo' && i === 0) {
       return parseDemoArgs(argv.slice(1), args);
+    }
+    if (a === 'completion' && i === 0) {
+      return parseCompletionArgs(argv.slice(1), args);
     }
 
     switch (a) {
@@ -1402,6 +1409,30 @@ function parsePluginArgs(rest: string[], args: CliArgs): ParseResult {
   }
 
   return { ok: false, error: `Unknown plugin subcommand: ${sub}` };
+}
+
+/**
+ * `completion <bash|zsh|fish|powershell>`（0.18）。
+ * 无参数 / 未知 shell 不在这里报解析错误：交给命令打印用法并 exit 1。
+ */
+function parseCompletionArgs(rest: string[], args: CliArgs): ParseResult {
+  if (rest[0] === '--help' || rest[0] === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (rest.length > 1) {
+    return { ok: false, error: `Unexpected argument for completion: ${rest[1]}` };
+  }
+  const requested = rest[0];
+  if (requested === undefined) {
+    args.completionCommand = { shell: null, requested: null };
+    return { ok: true, args };
+  }
+  args.completionCommand = {
+    shell: isCompletionShell(requested) ? requested : null,
+    requested,
+  };
+  return { ok: true, args };
 }
 
 /** `demo`：无参数（`--help` 由顶层处理） */

@@ -77,6 +77,7 @@ export const zhCN = {
   'help.cmd.update': '自更新（npm/bun 全局安装；--yes 跳过确认）',
   'help.cmd.version': '显示版本',
   'help.cmd.tools': '列出已注册工具（不需要 API Key）',
+  'help.cmd.completion': '打印 shell 补全脚本（bash / zsh / fish / powershell）',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──
@@ -206,6 +207,10 @@ export const zhCN = {
   'errors.level': '层级',
   'errors.empty': '没有最近的错误。',
   'errors.recent': '最近错误（{count}）',
+
+  // ── completion（0.18）──
+  'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
+  'completion.unknownShell': '未知 shell "{shell}"。',
 } as const;
 
 /** CLI catalog 的 key 集合（en 必须一一对应） */
