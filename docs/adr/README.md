@@ -97,6 +97,7 @@
 | 080 | 0.14 可观察性、控制面与 gateway 多实例 A | accepted | 2026-10-21 | observability, trace, errors, config, cli, gateway, instances | [ADR-080-observability-control-plane-and-gateway-instances.md](ADR-080-observability-control-plane-and-gateway-instances.md) |
 | 081 | Host 对等与可序列化快照 | accepted | 2026-10-21 | runtime, host, scheduler, resume, snapshot, tools, display | [ADR-081-host-parity-and-serializable-snapshot.md](ADR-081-host-parity-and-serializable-snapshot.md) |
 | 082 | ask_user 注册策略与 Web 聊天渲染/可见性 | accepted | 2026-10-21 | ask-user, tools, gateway, cli, web, rendering, visibility, i18n | [ADR-082-ask-user-registration-and-web-chat.md](ADR-082-ask-user-registration-and-web-chat.md) |
+| 083 | 0.14.2 质量硬化——压缩摘要与 bash 凭据路径 | accepted | 2026-10-21 | compaction, context, provider, anthropic, thinking, tools, security, deny-list | [ADR-083-compaction-summary-and-bash-command-denylist.md](ADR-083-compaction-summary-and-bash-command-denylist.md) |
 
 ## 编写约定
 

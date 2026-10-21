@@ -32,6 +32,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.13.0 状态**：双状态栏与权限生命周期（基于 `release/0.13.0`，未随版本发布）：上栏删除 `N sess`，路径中间省略 + 空闲 marquee，branch 固定最右；新增运行态下栏 `BottomBar`（`perm ask · N auto` / `waiting <tool>`、`bash N`、`sub N`、`sess <短ID> · Ctrl+R`、tenant / queue），与上栏同宽，`<40` 列不渲染、`<18` 行自动隐藏，吸收 hint 行净增 2 行；`Ctrl+T` / `Ctrl+G` / `Ctrl+R`；`ui.statusBars: top|bottom|both|none`（YAML `status_bars`）持久化，`VESSEL_STATUS_BARS` 只作启动初始覆盖。权限等待默认不超时（只有显式正数 `timeoutMs` 才超时），abort 抛 `PermissionAbortedError`（`permission_cancelled`）；serve pending 不按 TTL sweep；`pending` / `answered` / `orphaned` 持久化到 `<dataDir>/interactions-<tenant>.json`（0600 原子写），重启后无 run → `orphaned`，重复应答幂等；Web 权限改为 `RunCard` 内联，错误码新增 `expired` / `run_ended`（canonical 仍 38）。同版本并入 0.12.1 TUI 小修（斜杠提示移除 72 列上限、`computeDialogWidth = cols-4`、`InlineAutocomplete` 订阅 resize、品牌色 `#c2a273`、`/exit` 后输出 Goodbye）；0.12.1 不单独发布。决策见 ADR-078 / 079。
 - **0.14.0 状态**：可观察性与控制面（基于 `release/0.14.1`，未随版本发布；0.14.0 不单独 bump）：trace 的 `includeStreamChunks=false` 同时过滤 `<prefix>.llm.stream.chunk`；`run.failed` / `tool.call.failed` 增加结构化 envelope（`error_code` / `category` / `phase` / `retryable` / `http_status?` / `details?`，additive）；`ui.verbosity` / `ui.showInternalEvents` / `ui.errorLevel` / `observability.showProcessErrors` 可配置并支持 `config set`；`vessel status|agents|errors` 只读控制面（本地 attach 或 `--connect`）；gateway 多实例 A（`(dataDir, instance)` PID / 日志 / 实例锁、`gateway list`、`--instance` / `--port` / `--all` 选择器、显式 node_id 跨实例拒绝）；canonical 新增 `agents.list` / `agents.get`（38 → 40）。决策见 ADR-080。
 - **0.14.1 状态**：Host 对等与 UI 收口（基于 `release/0.14.1`，未随版本发布）：Host 支持 per-run `RunOptions.sessionId`、`cancel(reason)`、resume 经 Scheduler 排队（`ScheduledTask.runId`）、纯 JSON `snapshot()`、`pluginConfigs` / `logger` / `includeReasoning` 透传、合成 `agent.run.*` 的 `mirror_of_run_id`；`ToolDefinition.display` additive 且不进 LLM schema；TUI `/status` 显示有效限制 / 预算、`/agents <id>` Self Card、`/errors` 附 `limit_blocked`；`ask_user` 在交互 REPL 或 gateway/serve 注册（headless/`--run` 不注册，`ui.ask_user: false` 关闭），`--serve` 从 help 移除并提示弃用；Web Codex 式工具卡 / 思考气泡、group-cache 流式增量、ask 内联、`ui.verbosity` 三级可见性。决策见 ADR-081 / 082。
+- **0.14.2 状态**：质量硬化（基于 `release/0.14.2`，未随版本发布）：`Message.compaction_summary`（additive）标记压缩摘要，摘要改为 `role: 'system'` 并插在基底 system 之后、其它消息之前，应用新压缩时移除旧摘要（同时最多一条），请求组装只把非摘要 system 当基底 system；`AnthropicProvider` 收集全部 system 消息并用空行合并（流式 / 非流式共用），摘要不再静默丢失；`bash` 在 `checkPermission` 与执行前匹配命令文本里的内置凭据 denylist，命中返回 `deny` / `path_denied`（best-effort，不是沙箱）。决策见 ADR-083。
 
 ## 代码风格与硬规矩
 
@@ -46,7 +47,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - 不留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。
 - **单 run 守卫与统一终态**（0.8，ADR-054）：同一个 `AgentRuntime` 同时只允许一个 active run。`run()` / `resume()` 必须经 `beginExecution` 占位、`finalizeRun` 收尾；不要绕开 `activeRun`，也不要另写一份终态持久化 / 事件发布路径。第二个 run 抛 `run_already_running`（`RunAlreadyRunningError`）。
 - **插件异常必须隔离**（0.8，ADR-054）：Hook 抛错发 `hook.failed` + `hook.error` 后继续后续 hook；`OnError` 始终 best-effort；Guardrail 的 `check()` 抛错按 fail-closed 处理（`allowed:false` + `guardrail_error`，发 `guardrail.error`），不得让插件异常以原始异常形式冒泡；随后仍按该阶段的 blocked 语义执行。
-- **工具路径边界**（0.8，ADR-055）：`read` / `bash cwd` 统一走 basic-tools 的 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`，`allowed_roots` 只把越界降级为 `ask`，`deny_paths` 只能追加。比较必须基于 realpath（含最近已存在祖先），不要用未解析的字符串前缀。
+- **工具路径边界**（0.8，ADR-055）：`read` / `bash cwd` 统一走 basic-tools 的 `evaluatePath`；内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`）是硬 `deny`，`allowed_roots` 只把越界降级为 `ask`，`deny_paths` 只能追加。比较必须基于 realpath（含最近已存在祖先），不要用未解析的字符串前缀。0.14.2 起 `bash` 另在命令文本里匹配同一组内置 denylist（`~` / `$HOME` / `${HOME}` / 绝对路径写法，归一大小写与 `/`、`\`）：`checkPermission` 命中返回 `deny`，执行前复查返回 `path_denied`。**这是 best-effort 字符串匹配，不是沙箱**——`cd` 后的相对路径、变量拼接、引号拆分、通配符、符号链接、`~root`、`%USERPROFILE%` 仍可能绕过；自定义 `deny_paths` 不参与文本匹配。
 - **持久化写入**（0.8.1，ADR-056）：session / checkpoint 一律走 `atomicWrite`，默认 `durable: true`（temp fsync → rename → 尽力目录 fsync）；不要直写最终路径，不要吞掉 `AtomicWriteError`。只有临时文件或测试才显式 `durable: false`。
 - **损坏检测**（0.8.1，ADR-056）：文件存在但不可读 / JSON 损坏一律抛 `SessionCorruptError`，不得当成“不存在”返回 `null`；否则下一次 save 会覆盖原文件。删除同样先 `load()`，损坏时抛错不 unlink；只有 `listRich()` 允许逐项降级跳过。
 - **配置层序与单一 resolver**（0.8.1，ADR-057）：层序固定 `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并。CLI flag 必须经 `buildCliConfigOverrides()` → `cliOverrides`；serve / connect 不得自行读 argv 或 `process.env`。`defaults` 仅为 deprecated 兼容层。
@@ -84,6 +85,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **Host 契约**（0.14.1，ADR-081）：per-run session 只由 `AgentHandle.run` 消费 `RunOptions.sessionId`，单 agent `run(input, sessionId)` 不读它；取消必须把 `RunInterruptReason` 经 `AbortSignal.reason` 透传；`resume` 必须经 Scheduler（用 `ScheduledTask.runId` 保持 run id），不得直连成员 runtime 绕过并发 / 串行；`snapshot()` 只返回可 JSON 序列化的数据；合成 `agent.run.*` 必须带 `mirror_of_run_id`。
 - **ask_user 注册按入口**（0.14.1，ADR-082）：交互 REPL（TTY）或 gateway/serve 才注册，`--run` / headless / 管道一律不注册；`ui.askUser: false` 必须能按入口与 tenant 关闭；不得让显式 `true` 在无客户端入口注册。`--serve` 只保留隐藏兼容别名，不得重新写回 `--help`。
 - **Web 可见性按配置渲染**（0.14.1，ADR-082）：`ui.verbosity` 决定 `minimal` / `normal` / `debug`；`minimal` 不得隐藏失败工具与 run 终态，`debug` 才显示 L3 原始事件；`debug` 与 `showInternalEvents: true` 取“或”；`errorLevel: all` 才放开 internal / process 级错误；缺失 / 非法值回退 `normal` / `false` / `user`。新增文案必须同时进 zh-CN 与 en catalog。
+- **压缩摘要必须是 system 且同时最多一条**（0.14.2，ADR-083）：摘要写成 `role: 'system'` + `compaction_summary: true`，插在基底 system 之后、其它消息之前；应用新压缩时必须移除旧摘要。请求组装（缺省补回、hook 改写 system）只认非摘要 system，不得替换摘要内容。不要写回 `role: 'assistant'`——thinking 模式要求 assistant 历史带 `reasoning_content`，否则下一轮请求 400。Anthropic 侧必须合并全部 system 消息，不得只取第一条。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。delegate / workflow 的接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
@@ -95,7 +97,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - 共享侧（本仓库）只放源码、测试、长期文档、CI；handoff / 计划 / 报告 / worktree 一律放个人侧，不提交。
 - 每个角色只写自己的独占路径；跨路径改动先与 1 协商。
-- 版本线：`main` → `release/0.14.1` → `0.14.1-<role>`（`release/0.1` ~ `release/0.13.0` 已冻结；工作树沿用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.14.1 只干跑，不 tag、不 publish、不合并 `main`。
+- 版本线：`main` → `release/0.14.2` → `0.14.2-<role>`（`release/0.1` ~ `release/0.14.1` 已冻结；工作树沿用 `worktrees/0.7-<role>`）；发布由 tag `v*` 触发，不由分支名触发。0.14.2 只干跑，不 tag、不 publish、不合并 `main`。
 
 ## 怎么跑
 
