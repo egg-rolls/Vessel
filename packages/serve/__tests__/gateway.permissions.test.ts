@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { MemoryEventStream, MemoryPluginHost } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import type { RunStatus } from '../src/protocol';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { createGateway, createRuntime, TestWs, ToolCallingProvider, waitUntil } from './helpers';
 
 /** 构造带 danger_tool 的 gateway；工具无 checkPermission，走 runtime 默认 'ask' */
@@ -63,12 +64,8 @@ describe('gateway permissions', () => {
   };
 
   it('delivers an approval to the tenant runtime stream (0.18)', async () => {
-    // 生产装配：gateway 广播共享流，runtime 等的是 tenant 流；只有单向桥。
-    const shared = new MemoryEventStream();
+    // runtime 只认识自己的 tenant 流；gateway 通过 hub 扇入并投递应答。
     const tenantEvents = new MemoryEventStream();
-    const unsubBridge = tenantEvents.subscribe((event) => {
-      shared.publish(event.tenant_id === undefined ? { ...event, tenant_id: 'default' } : event);
-    });
 
     const pluginHost = new MemoryPluginHost();
     const state = { executed: false };
@@ -88,10 +85,11 @@ describe('gateway permissions', () => {
       permission: { default: 'ask' },
     });
     const gw = createGateway({
-      events: shared,
+      hub: createGatewayEventHub({
+        streams: [{ tenantId: 'default', stream: tenantEvents }],
+      }),
       runtime,
       pluginHost,
-      tenantEventSources: () => [{ tenantId: 'default', events: tenantEvents }],
     });
     gateways.push(gw);
     const client = await connect(gw);
@@ -109,7 +107,6 @@ describe('gateway permissions', () => {
 
     await client.nextEvent('run.completed');
     expect(state.executed).toBe(true);
-    unsubBridge();
   });
 
   it('allows a tool after an explicit REST approval', async () => {

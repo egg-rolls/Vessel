@@ -2,9 +2,10 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import type { AgentStatus, InboxPage } from '@vessel-agent/core';
 import { MemoryEventStream } from '@vessel-agent/core';
 import type { DurableCheckpointLike, DurableStoreLike } from '../src/durable';
-import { type Gateway, startGateway } from '../src/gateway';
+import type { Gateway } from '../src/gateway';
 import type { TeamHostLike, TeamSpawnRequest } from '../src/team';
 import type { GatewayAuthLike } from '../src/tenant';
+import { startTestGateway as startGateway } from './helpers';
 
 const gateways: Gateway[] = [];
 

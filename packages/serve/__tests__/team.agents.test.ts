@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { AgentMessage, AgentStatus, InboxPage } from '@vessel-agent/core';
 import { MemoryEventStream } from '@vessel-agent/core';
-import { type Gateway, startGateway } from '../src/gateway';
+import type { Gateway } from '../src/gateway';
 import type { TeamHostLike, TeamSpawnRequest } from '../src/team';
+import { startTestGateway as startGateway } from './helpers';
 
 describe('gateway /v1/team agents & inbox', () => {
   const gateways: Gateway[] = [];

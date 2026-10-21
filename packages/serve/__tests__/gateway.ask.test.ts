@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream, MemoryPluginHost } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { createGateway, createRuntime, TestWs, ToolCallingProvider } from './helpers';
 
 describe('gateway ask_user', () => {
@@ -78,15 +79,9 @@ describe('gateway ask_user', () => {
     expect(state.answer).toBe('42');
   });
 
-  it('answers on the tenant runtime stream when it differs from the gateway stream (0.18)', async () => {
-    // 生产装配：gateway 广播共享流，runtime / 工具等的是 tenant 流；
-    // 只有 tenant → shared 单向桥。
-    const shared = new MemoryEventStream();
+  it('answers through the hub on the tenant runtime stream (0.18)', async () => {
+    // runtime / 工具只认识自己的 tenant 流；gateway 通过 hub 扇入并投递应答。
     const tenantEvents = new MemoryEventStream();
-    // 未鉴权的回环请求按 default tenant 处理，桥接补齐 tenant_id 保持一致。
-    const unsubBridge = tenantEvents.subscribe((event) => {
-      shared.publish(event.tenant_id === undefined ? { ...event, tenant_id: 'default' } : event);
-    });
 
     const pluginHost = new MemoryPluginHost();
     const state: { answer?: string } = {};
@@ -118,10 +113,11 @@ describe('gateway ask_user', () => {
       permission: { default: 'allow' },
     });
     const gw = createGateway({
-      events: shared,
+      hub: createGatewayEventHub({
+        streams: [{ tenantId: 'default', stream: tenantEvents }],
+      }),
       runtime,
       pluginHost,
-      tenantEventSources: () => [{ tenantId: 'default', events: tenantEvents }],
     });
     gateways.push(gw);
 
@@ -150,7 +146,6 @@ describe('gateway ask_user', () => {
 
     await client.nextEvent('run.completed');
     expect(state.answer).toBe('42');
-    unsubBridge();
   });
 
   it('supports ask.respond over WS and rejects unknown ids', async () => {

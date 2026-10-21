@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { RunState } from '@vessel-agent/core';
 import { MemoryEventStream, MemorySessionBackend } from '@vessel-agent/core';
-import { type Gateway, startGateway } from '../src/gateway';
+import type { Gateway } from '../src/gateway';
 import {
   DEFAULT_SESSION_SEARCH_LIMIT,
   findSessionSnippet,
@@ -10,6 +10,7 @@ import {
   parseSearchLimit,
 } from '../src/session-search';
 import type { GatewayAuthLike } from '../src/tenant';
+import { startTestGateway as startGateway } from './helpers';
 
 const gateways: Gateway[] = [];
 

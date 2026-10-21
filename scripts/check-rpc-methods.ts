@@ -16,8 +16,7 @@
 
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { MemoryEventStream } from '../packages/core/src/index';
-import { createLocalRpcDispatcher } from '../packages/serve/src/index';
+import { createGatewayEventHub, createLocalRpcDispatcher } from '../packages/serve/src/index';
 
 type Permission = 'read' | 'write' | 'admin';
 
@@ -163,7 +162,7 @@ export async function checkRpcMethods(root: string): Promise<MethodTableIssue[]>
     return [{ message: `${DOC_PATH} 缺少 ${BEGIN_MARKER} / ${END_MARKER} 标记表格` }];
   }
 
-  const dispatcher = createLocalRpcDispatcher({ events: new MemoryEventStream() });
+  const dispatcher = createLocalRpcDispatcher({ hub: createGatewayEventHub() });
   try {
     const manifest = dispatcher.manifest();
     const actual: Record<string, Permission> = {};

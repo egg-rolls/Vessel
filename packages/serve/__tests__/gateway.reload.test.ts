@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { MemoryEventStream } from '@vessel-agent/core';
-import type { Gateway } from '../src/gateway';
-import { type GatewayReloadResult, startGateway } from '../src/gateway';
+import type { Gateway, GatewayReloadResult } from '../src/gateway';
 import type { GatewayAuthLike } from '../src/tenant';
+import { startTestGateway as startGateway } from './helpers';
 
 const gateways: Gateway[] = [];
 const previousFlag = process.env.VESSEL_VALIDATE_RESULTS;

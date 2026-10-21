@@ -24,6 +24,7 @@ import {
 import { type Gateway, type GatewayOptions, startGateway } from '../src/gateway';
 import type { ServerFrame } from '../src/protocol';
 import type { TeamGatewayOptions } from '../src/team';
+import { createGatewayEventHub, type TenantEventHub } from '../src/tenant-event-hub';
 import { createLoopbackTransport, type LoopbackTransport } from '../src/transport/index';
 
 /** 创建一个 echo 式 runtime（MemoryLLMProvider 回显输入） */
@@ -48,11 +49,33 @@ export async function createRuntime(opts: {
   });
 }
 
+/**
+ * 测试专用 gateway 选项：保留 `events` / `maxHistory` 写法，内部包装成单 tenant hub。
+ * 生产 `GatewayOptions` 只接受 `hub`（0.18 breaking）。
+ */
+export type TestGatewayOptions = Omit<GatewayOptions, 'hub'> & {
+  hub?: TenantEventHub;
+  events?: EventStream;
+  maxHistory?: number;
+};
+
+/** 测试专用 startGateway：接受 `events` 并自动构造 hub */
+export function startTestGateway(overrides: TestGatewayOptions): Gateway {
+  const { events, hub, maxHistory, ...rest } = overrides;
+  const resolvedHub =
+    hub ??
+    createGatewayEventHub({
+      ...(events
+        ? { streams: [{ tenantId: rest.defaultTenantId ?? 'default', stream: events }] }
+        : {}),
+      ...(maxHistory !== undefined ? { maxHistory } : {}),
+    });
+  return startGateway({ ...rest, hub: resolvedHub });
+}
+
 /** 启动一个测试 gateway（port: 0） */
-export function createGateway(
-  overrides: Partial<GatewayOptions> & { events: EventStream },
-): Gateway {
-  return startGateway({
+export function createGateway(overrides: TestGatewayOptions): Gateway {
+  return startTestGateway({
     port: 0,
     ...overrides,
   });
@@ -314,7 +337,7 @@ export async function createTeamNode(options: TeamNodeOptions): Promise<{
   events: MemoryEventStream;
 }> {
   const events = new MemoryEventStream();
-  const gateway = startGateway({
+  const gateway = startTestGateway({
     events,
     port: 0,
     nodeId: options.nodeId,

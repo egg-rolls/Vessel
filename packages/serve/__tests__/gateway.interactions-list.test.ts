@@ -4,9 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemoryEventStream, MemoryPluginHost } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
-import { startGateway } from '../src/gateway';
 import type { GatewayAuthLike } from '../src/tenant';
-import { createGateway, createRuntime, TestWs, ToolCallingProvider, waitUntil } from './helpers';
+import {
+  createGateway,
+  createRuntime,
+  startTestGateway as startGateway,
+  TestWs,
+  ToolCallingProvider,
+  waitUntil,
+} from './helpers';
 
 interface ListedInteraction {
   kind: string;

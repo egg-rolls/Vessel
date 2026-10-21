@@ -17,7 +17,6 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import type {
   AgentMessage,
   ContextManager,
-  EventStream,
   PluginHost,
   RunEvent,
   RunInterruptReason,
@@ -39,7 +38,7 @@ import {
   toRunSummary,
 } from './durable.js';
 import type { EvalsGatewayOptions } from './evals.js';
-import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+import type { EventGap, SeqEvent } from './event-buffer.js';
 import type { FeishuGatewayOptions } from './feishu.js';
 import {
   buildContentSecurityPolicy,
@@ -149,7 +148,7 @@ import {
   type TenantControlLike,
   type TenantPrincipal,
 } from './tenant.js';
-import { capToolEvent } from './tool-events.js';
+import type { TenantEventHub } from './tenant-event-hub.js';
 import {
   dedupeWorkflowSummaries,
   isSafeWorkflowName,
@@ -174,8 +173,11 @@ export {
 
 /** 网关启动选项 */
 export interface GatewayOptions {
-  /** 事件流（必填）——广播源 */
-  events: EventStream;
+  /**
+   * tenant 事件扇入面（必填，0.18）：tenant 流是唯一事实源。
+   * 序号 / 缓冲 / 广播 / registry 都从 hub 读取；`maxHistory` 在 hub 上配置。
+   */
+  hub: TenantEventHub;
   /** 会话后端（可选）——/v1/sessions 数据源 */
   session?: SessionBackend;
   /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 AgentRuntime */
@@ -196,8 +198,6 @@ export interface GatewayOptions {
   nodeId?: string;
   /** 静态 web 目录（可选，托管 apps/web/dist） */
   staticDir?: string;
-  /** 事件环形缓冲容量（默认 10000） */
-  maxHistory?: number;
   /** 请求体上限（字节，默认 1 MiB） */
   maxBodyBytes?: number;
   /** 运行队列上限（默认 100） */
@@ -298,18 +298,16 @@ export interface GatewayOptions {
       events_deleted: number;
     }>;
   };
-  /** 出站事件脱敏；缺省 core 默认 redactor */
+  /**
+   * 方法层（`events.list` 等）脱敏；缺省 core 默认 redactor。
+   * 实时广播的脱敏由 hub 的 `map` 决定——自定义时应把同一实例传给
+   * `createGatewayEventHub({ redactor })`。
+   */
   redactor?: TraceRedactor;
   /** per-tenant 执行面（A-3 §10.4） */
   runtimeFor?: (tenantId: string) => RunnableAgent | undefined;
   sessionFor?: (tenantId: string) => SessionBackend | undefined;
   contextFor?: (tenantId: string) => ContextManager | undefined;
-  /**
-   * 各 tenant 的运行时事件流（0.18）：engine 只观察这些流，应答也只投递到这里。
-   * 缺省 = `[{ tenantId: defaultTenantId, events }]`（本地 dispatcher / 单租户装配）。
-   * `events` 仍只负责出站广播投影，不再驱动 engine。
-   */
-  tenantEventSources?: () => ReadonlyArray<{ tenantId: string; events: EventStream }>;
   pluginHostFor?: (tenantId: string) => PluginHost | undefined;
   /** 缺省 tenant（wildcard admin 未指定时使用） */
   defaultTenantId?: string;
@@ -407,7 +405,6 @@ const WS_BACKPRESSURE_LOW = 512 * 1024;
 
 const DEFAULT_PORT = 8642;
 const DEFAULT_HOSTNAME = '127.0.0.1';
-const DEFAULT_MAX_HISTORY = 10_000;
 const DEFAULT_MAX_BODY = 1024 * 1024;
 
 const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
@@ -484,7 +481,15 @@ async function readJsonBody(
 
 /** 启动本地服务网关 */
 export function startGateway(opts: GatewayOptions): Gateway {
-  const events = opts.events;
+  const hub = opts.hub;
+  if (
+    hub === undefined ||
+    typeof hub.subscribe !== 'function' ||
+    typeof hub.subscribeSequenced !== 'function' ||
+    typeof hub.register !== 'function'
+  ) {
+    throw new Error('hub must be a TenantEventHub.');
+  }
   const { session, runtime, context } = opts;
   const hostname = opts.hostname ?? DEFAULT_HOSTNAME;
   if (hostname.includes('/')) {
@@ -613,15 +618,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   /** 0.9 事务代际：进程启动时生成一次，随 hello / peer 记录传播（重启即变化）。 */
   const incarnation = randomUUID().replace(/-/g, '').slice(0, 12);
   const startedAt = Date.now();
-  // gateway 事件缓冲始终有界：缺省/0 = 10000；与 core MemoryEventStream 的
-  // `0 = unlimited` 语义无关（DECISION-009 §10.3.4）。
-  const configuredHistory = opts.maxHistory ?? DEFAULT_MAX_HISTORY;
-  if (!Number.isSafeInteger(configuredHistory) || configuredHistory < 0) {
-    throw new Error('maxHistory must be a non-negative integer.');
-  }
-  const buffer = new SeqEventBuffer(
-    configuredHistory === 0 ? DEFAULT_MAX_HISTORY : configuredHistory,
-  );
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
   // 0.12：可被 `reconfigure()` 热替换；后续请求在读取点看到新值。
@@ -632,57 +628,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
 
-  /**
-   * 0.18：engine 只拿 per-tenant 流。`events` 是出站投影（serve 下是聚合流，
-   * 本地 dispatcher 下就是 default tenant 流），不再作为 engine 的事件源。
-   */
-  const tenantEventSources = opts.tenantEventSources?.() ?? [{ tenantId: defaultTenantId, events }];
-  const tenantEventsById = new Map<string, EventStream>(
-    tenantEventSources.map((source) => [source.tenantId, source.events]),
-  );
-  const tenantEventsFor = (tenantId: string): EventStream | undefined =>
-    tenantEventsById.get(tenantId);
-
-  // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）
+  // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）。
+  // 0.18：engine 只拿 per-tenant 流；hub 负责把 tenant 事件扇入到这里。
   const engine = createRunEngine({
-    ...(runtime ? { runtime } : {}),
+    ...(runtime ? { runtime: runtime } : {}),
     ...(context ? { context } : {}),
     ...(opts.runtimeFor ? { runtimeFor: opts.runtimeFor } : {}),
     ...(opts.contextFor ? { contextFor: opts.contextFor } : {}),
-    tenantEventsFor,
+    tenantEventsFor: (tenantId) => hub.streamFor(tenantId),
     defaultTenantId,
     maxQueue,
     maxRuns: MAX_RUNS,
     ...(opts.interactionsDir !== undefined ? { interactionsDir: opts.interactionsDir } : {}),
   });
-  /**
-   * engine 的请求观察面：只订阅 tenant 流（缺 tenant_id 时补齐）。
-   * 同一 EventStream 被多个 tenant 复用（测试 / 单 runtime 多 tenant）时只订阅一次，
-   * 避免同一事件重复进 engine。
-   */
-  const seenTenantStreams = new Set<EventStream>();
-  const unsubscribeTenantSources: Array<() => void> = [];
-  for (const { tenantId, events: source } of tenantEventSources) {
-    if (seenTenantStreams.has(source)) continue;
-    seenTenantStreams.add(source);
-    unsubscribeTenantSources.push(
-      source.subscribe((event: RunEvent) => {
-        try {
-          engine.handleEvent(
-            event.tenant_id === undefined || event.tenant_id === ''
-              ? { ...event, tenant_id: tenantId }
-              : event,
-          );
-        } catch (error) {
-          console.error(
-            `[vessel] gateway event plane: engine.handleEvent failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-        }
-      }),
-    );
-  }
+  /** engine 的请求观察面：原始 tenant 事件（hub 隔离订阅者异常）。 */
+  const unsubscribeEngine = hub.subscribe((event) => {
+    engine.handleEvent(event);
+  });
   /**
    * 0.14 P0：agents 注册表。只吃实时事件；Host / run 记录由方法层合并。
    * 在事件订阅处 ingest 脱敏/裁剪后的副本，与广播保持一致。
@@ -792,7 +754,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   function helloFrame(fromSeq: number, tenantId?: string): ServerFrame {
     // 求值顺序与原实现一致：latest → ts → node → oldest。
-    const latestSeq = buffer.latestSeq;
+    const latestSeq = hub.latestSeq;
     const ts = Date.now();
     const node = nodeInfo(tenantId);
     return buildHelloFrame({
@@ -802,7 +764,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       incarnation,
       fromSeq,
       latestSeq,
-      oldestSeq: buffer.oldestSeq,
+      oldestSeq: hub.oldestSeq,
       tenantId,
       ts,
     });
@@ -875,9 +837,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   function replayEventsTo(ws: Ws): void {
-    const gap = buffer.gapFor(ws.data.since);
+    const gap = hub.gapFor(ws.data.since);
     if (gap) sendFrame(ws, gapFrame(gap));
-    for (const item of buffer.since(ws.data.since)) sendEventToWs(ws, item);
+    for (const item of hub.since(ws.data.since)) sendEventToWs(ws, item);
   }
 
   function replayTo(ws: Ws): void {
@@ -887,16 +849,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
 
   /**
-   * 订阅出站事件流（0.18：只做投影，不驱动 engine）：
-   * 脱敏 → 裁剪 → registry → 分配 seq → 广播 / team fan-out。
+   * 订阅 hub 的脱敏 / 裁剪后事件（0.18）：agent registry → 广播 / team fan-out。
+   * 序号由 hub 分配，回放与实时读同一份副本。
    */
-  const unsubscribe = events.subscribe((event: RunEvent) => {
-    // 0.5：出站前统一脱敏（实时与回放都是脱敏后的副本；A-3 §10.3）
-    // 0.6.1 E12：先脱敏再裁剪工具参数/结果，实时与回放保持一致。
-    const safeEvent = capToolEvent(redactor.redact(event));
+  const unsubscribe = hub.subscribeSequenced((item) => {
+    const { event: safeEvent, seq } = item;
     agentRegistry.ingest(safeEvent);
-    const seq = buffer.append(safeEvent);
-    broadcastEvent({ seq, event: safeEvent });
+    broadcastEvent(item);
 
     // R3：team 事件流（agent.* / team.*），可选按 agent_id 过滤
     if (isTeamEvent(safeEvent) && teamClients.size > 0) {
@@ -1072,7 +1031,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     pluginsForTenant,
     pluginHostFor,
     clientCount: () => sseClients.size + wsClients.size,
-    latestSeq: () => buffer.latestSeq,
+    latestSeq: () => hub.latestSeq,
     protocolInfo,
     nodeInfo,
     startedAt,
@@ -1138,7 +1097,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return {
           subscribed: true,
           from_seq: since + 1,
-          latest_seq: buffer.latestSeq,
+          latest_seq: hub.latestSeq,
           mode,
           ...(ctx.connection === 'http'
             ? { stream_url: `/v1/events?since=${since}${ctx.allTenants ? '&all_tenants=1' : ''}` }
@@ -1195,12 +1154,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     onResultInvalid: ({ method, path }) => {
       // 可观测性（DECISION-020 §R1.8）：只记 method/path，绝不打印结果 payload。
       console.warn('[vessel] rpc.result_invalid', { method, path });
-      events.publish({
-        type: 'rpc.result_invalid',
-        run_id: 'rpc',
-        data: { method, path },
-        ts: Date.now(),
-      });
+      publishDiagnostic('rpc.result_invalid', 'rpc', { method, path });
     },
   });
   let capabilityManifest: CapabilityManifest = dispatcher.manifest();
@@ -1574,9 +1528,23 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   // ── R3 team 端点 ───────────────────────────────
 
+  /**
+   * 诊断事件（0.18）：投 <default tenant> 流，保持既有“只有 default 可见”的行为。
+   * tenant 流不存在时直接丢弃——诊断失败不得影响主流程。
+   */
+  function publishDiagnostic(type: string, runId: string, data: Record<string, unknown>): void {
+    const stream = hub.streamFor(defaultTenantId);
+    if (!stream) return;
+    try {
+      stream.publish({ type, run_id: runId, data, ts: Date.now() });
+    } catch {
+      // 诊断事件 best-effort
+    }
+  }
+
   /** 发布 team/agent 事件（core 内部 camelCase；gateway 边界统一转 snake_case） */
   function publishTeamEvent(type: string, data: Record<string, unknown>): void {
-    events.publish({ type, run_id: 'team', data, ts: Date.now() });
+    publishDiagnostic(type, 'team', data);
   }
 
   function publishTeamError(error: unknown): void {
@@ -1713,7 +1681,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
           state = clientState;
           teamClients.set(ctrl, clientState);
           writeSse(ctrl, clientState, 'retry: 3000\n\n');
-          const latest = buffer.latestSeq;
+          const latest = hub.latestSeq;
           writeSse(
             ctrl,
             clientState,
@@ -1721,14 +1689,14 @@ export function startGateway(opts: GatewayOptions): Gateway {
               protocol: PROTOCOL_VERSION,
               node_id: nodeId,
               kind: 'team.hello',
-              from_seq: latest === 0 ? 0 : Math.max(since + 1, buffer.oldestSeq),
+              from_seq: latest === 0 ? 0 : Math.max(since + 1, hub.oldestSeq),
               latest_seq: latest,
             })}\n\n`,
           );
-          const gap = buffer.gapFor(since);
+          const gap = hub.gapFor(since);
           if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
           clientState.replay = {
-            cursor: Math.max(since + 1, buffer.oldestSeq),
+            cursor: Math.max(since + 1, hub.oldestSeq),
             batch: SSE_REPLAY_BATCH,
             accepts: (event) => {
               if (!isTeamEvent(event)) return false;
@@ -1747,12 +1715,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
               })}\n\n`;
             },
           };
-          if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
+          if (clientState.replay.cursor > hub.latestSeq) clientState.replay = undefined;
         },
         pull() {
           if (!controller || !state) return;
           state.unacked = 0;
-          pumpSseReplay(controller, state, buffer);
+          pumpSseReplay(controller, state, hub);
           flushSseGap(controller, state);
         },
         cancel() {
@@ -2922,7 +2890,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         const base = {
           status: 'ok',
           clients: sseClients.size + wsClients.size,
-          latest_seq: buffer.latestSeq,
+          latest_seq: hub.latestSeq,
         };
         if (path === '/health') return json(base, 200, extra);
         const teamInfo = team
@@ -3088,20 +3056,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
                 clientState,
                 `data: ${JSON.stringify(helloFrame(since, sseTenantId))}\n\n`,
               );
-              const gap = buffer.gapFor(since);
+              const gap = hub.gapFor(since);
               if (gap) writeSse(ctrl, clientState, clientState.encodeGap(gap));
               clientState.replay = {
-                cursor: Math.max(since + 1, buffer.oldestSeq),
+                cursor: Math.max(since + 1, hub.oldestSeq),
                 batch: SSE_REPLAY_BATCH,
                 accepts,
                 encode: (item) => `data: ${JSON.stringify(eventFrame(item))}\n\n`,
               };
-              if (clientState.replay.cursor > buffer.latestSeq) clientState.replay = undefined;
+              if (clientState.replay.cursor > hub.latestSeq) clientState.replay = undefined;
             },
             pull() {
               if (!controller || !state) return;
               state.unacked = 0;
-              pumpSseReplay(controller, state, buffer);
+              pumpSseReplay(controller, state, hub);
               flushSseGap(controller, state);
             },
             cancel() {
@@ -3446,12 +3414,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     } catch (error) {
       reportStopError('unsubscribe events', error);
     }
-    for (const stopTenantSource of unsubscribeTenantSources) {
-      try {
-        stopTenantSource();
-      } catch (error) {
-        reportStopError('unsubscribe tenant events', error);
-      }
+    try {
+      unsubscribeEngine();
+    } catch (error) {
+      reportStopError('unsubscribe engine events', error);
     }
 
     closeWsClients();

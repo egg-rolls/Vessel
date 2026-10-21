@@ -1,17 +1,21 @@
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { SeqEvent } from '../src/event-buffer';
-import { createTenantEventHub } from '../src/tenant-event-hub';
+import { createTenantEventHub, type TenantEventHubOptions } from '../src/tenant-event-hub';
 
 function event(type = 'run.started', runId = 'run-1', ts = 1): RunEvent {
   return { type, run_id: runId, data: {}, ts };
+}
+
+function makeHub(options: Omit<TenantEventHubOptions, 'map'> = {}) {
+  return createTenantEventHub({ ...options, map: (input) => input });
 }
 
 describe('TenantEventHub', () => {
   it('fans in tenant streams in arrival order with one global sequence', () => {
     const a = new MemoryEventStream();
     const b = new MemoryEventStream();
-    const hub = createTenantEventHub({
+    const hub = makeHub({
       streams: [
         { tenantId: 'a', stream: a },
         { tenantId: 'b', stream: b },
@@ -33,7 +37,7 @@ describe('TenantEventHub', () => {
 
   it('stamps a missing tenant_id without mutating the original event', () => {
     const stream = new MemoryEventStream();
-    const hub = createTenantEventHub({ streams: [{ tenantId: 'acme', stream }] });
+    const hub = makeHub({ streams: [{ tenantId: 'acme', stream }] });
     const original = event();
     const raw: RunEvent[] = [];
     hub.subscribe((item) => raw.push(item));
@@ -71,7 +75,7 @@ describe('TenantEventHub', () => {
 
   it('registers idempotently and rejects a different stream for the same tenant', () => {
     const stream = new MemoryEventStream();
-    const hub = createTenantEventHub();
+    const hub = makeHub();
     hub.register('acme', stream);
     hub.register('acme', stream);
 
@@ -85,9 +89,29 @@ describe('TenantEventHub', () => {
     hub.close();
   });
 
+  it('subscribes once when one stream backs several tenants', () => {
+    const stream = new MemoryEventStream();
+    const hub = makeHub({
+      streams: [
+        { tenantId: 'a', stream },
+        { tenantId: 'b', stream },
+      ],
+    });
+    const seen: SeqEvent[] = [];
+    hub.subscribeSequenced((item) => seen.push(item));
+
+    stream.publish(event());
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.event.tenant_id).toBe('a');
+    expect(hub.tenantIds).toEqual(['a', 'b']);
+    expect(hub.streamFor('b')).toBe(stream);
+    hub.close();
+  });
+
   it('stops delivering after unregister', () => {
     const stream = new MemoryEventStream();
-    const hub = createTenantEventHub();
+    const hub = makeHub();
     const unsubscribe = hub.register('acme', stream);
     const seen: SeqEvent[] = [];
     hub.subscribeSequenced((item) => seen.push(item));
@@ -103,7 +127,7 @@ describe('TenantEventHub', () => {
 
   it('replays since / gap / oldest over a bounded ring', () => {
     const stream = new MemoryEventStream();
-    const hub = createTenantEventHub({ streams: [{ tenantId: 'a', stream }], maxHistory: 3 });
+    const hub = makeHub({ streams: [{ tenantId: 'a', stream }], maxHistory: 3 });
     for (let index = 1; index <= 5; index += 1) stream.publish(event(`e${index}`));
 
     expect(hub.latestSeq).toBe(5);
@@ -116,14 +140,14 @@ describe('TenantEventHub', () => {
   });
 
   it('exposes no publish method', () => {
-    const hub = createTenantEventHub();
+    const hub = makeHub();
     expect('publish' in hub).toBe(false);
     hub.close();
   });
 
   it('isolates subscriber errors', () => {
     const stream = new MemoryEventStream();
-    const hub = createTenantEventHub({ streams: [{ tenantId: 'a', stream }] });
+    const hub = makeHub({ streams: [{ tenantId: 'a', stream }] });
     const received: RunEvent[] = [];
     hub.subscribe(() => {
       throw new Error('boom');
@@ -140,7 +164,7 @@ describe('TenantEventHub', () => {
 
   it('closes idempotently and rejects new registrations', () => {
     const stream = new MemoryEventStream();
-    const hub = createTenantEventHub({ streams: [{ tenantId: 'a', stream }] });
+    const hub = makeHub({ streams: [{ tenantId: 'a', stream }] });
     const seen: SeqEvent[] = [];
     hub.subscribeSequenced((item) => seen.push(item));
 

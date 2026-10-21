@@ -18,7 +18,8 @@ import {
   MemorySessionBackend,
 } from '@vessel-agent/core';
 import { isResumableStatus } from '../src/durable';
-import { type Gateway, startGateway } from '../src/gateway';
+import type { Gateway } from '../src/gateway';
+import { startTestGateway as startGateway } from './helpers';
 
 /** 挂起直到 signal abort 的 provider；可选在 abort 后延迟 reject 以验证 stop 等待。 */
 class ShutdownProvider implements LLMProvider {

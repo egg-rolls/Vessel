@@ -4,11 +4,16 @@ import type { Gateway } from '../src/gateway';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
 import type { TeamHostLike } from '../src/team';
 import type { GatewayAuthLike } from '../src/tenant';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { createGateway, createRuntime, SlowProvider } from './helpers';
 import { runDispatcher } from './rpc-test-utils';
 
 const dispatchers: LocalRpcDispatcher[] = [];
 const gateways: Gateway[] = [];
+
+function hubFor(events: MemoryEventStream) {
+  return createGatewayEventHub({ streams: [{ tenantId: 'default', stream: events }] });
+}
 
 afterEach(() => {
   for (const dispatcher of dispatchers.splice(0)) dispatcher.dispose();
@@ -85,7 +90,7 @@ async function postRpc(
 describe('agents RPC', () => {
   it('derives agents from subagent events and returns not_found for unknown ids', async () => {
     const events = new MemoryEventStream();
-    const dispatcher = createLocalRpcDispatcher({ events });
+    const dispatcher = createLocalRpcDispatcher({ hub: hubFor(events) });
     dispatchers.push(dispatcher);
 
     const started = event('subagent.delegate.started', 'root', {
@@ -131,7 +136,7 @@ describe('agents RPC', () => {
   it('prefers host member state and keeps derived depth/parent', async () => {
     const events = new MemoryEventStream();
     const dispatcher = createLocalRpcDispatcher({
-      events,
+      hub: hubFor(events),
       team: { nodeId: 'A', host: makeHost() },
     });
     dispatchers.push(dispatcher);
@@ -197,7 +202,7 @@ describe('agents RPC', () => {
   it('includes active runs when no host is configured', async () => {
     const events = new MemoryEventStream();
     const runtime = await createRuntime({ events, provider: new SlowProvider(300) });
-    const dispatcher = createLocalRpcDispatcher({ events, runtime });
+    const dispatcher = createLocalRpcDispatcher({ hub: hubFor(events), runtime });
     dispatchers.push(dispatcher);
 
     const started = (await runDispatcher(dispatcher.dispatch, 'runs.start', {
@@ -218,7 +223,7 @@ describe('agents RPC', () => {
 
   it('passes result schema validation', async () => {
     const events = new MemoryEventStream();
-    const dispatcher = createLocalRpcDispatcher({ events });
+    const dispatcher = createLocalRpcDispatcher({ hub: hubFor(events) });
     dispatchers.push(dispatcher);
     events.publish(
       event(

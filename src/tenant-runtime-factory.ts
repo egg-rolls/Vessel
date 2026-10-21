@@ -6,7 +6,7 @@
  *   trace / metrics / redactor / sessionControl / workflow / feishu / MCP。
  *
  * `createTenantRuntimeFactory()` 为 `--serve` 预构建全部 active tenant：
- * - 每个 tenant 独立 EventStream；事件桥接到 gateway 共享流并补 `tenant_id`；
+ * - 每个 tenant 独立 EventStream，构建时注册进 gateway 的 `TenantEventHub`；
  * - trace / metrics 只订阅本 tenant 流；
  * - 每个 tenant 持有自己的 writer lock；启动失败回滚已获取的锁。
  *
@@ -45,6 +45,7 @@ import {
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
+import type { TenantEventHub } from '../packages/serve/src/index';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -143,8 +144,8 @@ export interface BuildTenantRuntimeOptions {
   loadWorkflowModule?: () => Promise<unknown | null>;
   loadFeishuModule?: () => Promise<unknown | null>;
   feishuTransport?: unknown;
-  /** gateway 共享事件流；tenant 事件镜像到此处（补 tenant_id） */
-  sharedEvents?: EventStream;
+  /** 0.18：tenant 事件扇入面；每个 tenant 的运行时流在构建时注册。 */
+  hub?: TenantEventHub;
 }
 
 /** 一个 tenant 的完整执行面 */
@@ -487,18 +488,8 @@ export async function buildTenantRuntime(
       return promise;
     };
 
-    // 本 tenant 事件 → gateway 共享流（事件带 tenant_id；SSE/WS 过滤靠它）。
-    const unsubShared = options.sharedEvents
-      ? events.subscribe((event) => {
-          const withTenant =
-            event.tenant_id === undefined ? { ...event, tenant_id: tenantId } : event;
-          try {
-            options.sharedEvents?.publish(withTenant);
-          } catch {
-            // 共享流订阅者异常不影响 tenant 执行
-          }
-        })
-      : undefined;
+    // 0.18：本 tenant 的运行时流注册进 gateway 的事件扇入面。
+    const unregisterHub = options.hub?.register(tenantId, events);
 
     const session = createSessionBackend(config.session, {
       tenantSessionsDir: tenantPaths.sessions_dir,
@@ -905,7 +896,7 @@ export async function buildTenantRuntime(
       }
 
       unsubHostBridge?.();
-      unsubShared?.();
+      unregisterHub?.();
 
       if (ownedLock) {
         try {
@@ -1004,8 +995,8 @@ export interface TenantRuntimeFactoryOptions {
   registerAskUser?: boolean;
   loader?: PluginLoader;
   nodeId: string;
-  /** gateway 共享事件流（所有 tenant 事件镜像到这里） */
-  sharedEvents?: EventStream;
+  /** 0.18：所有 tenant 运行时流的扇入面 */
+  hub?: TenantEventHub;
   metricsFactory?: MetricsFactory;
   traceFactory?: TraceRecorderFactory;
   redactor?: TraceRedactor;
@@ -1170,7 +1161,7 @@ export async function createTenantRuntimeFactory(
           : {}),
         loader,
         nodeId: options.nodeId,
-        ...(options.sharedEvents ? { sharedEvents: options.sharedEvents } : {}),
+        ...(options.hub ? { hub: options.hub } : {}),
         ...(options.metricsFactory ? { metricsFactory: options.metricsFactory } : {}),
         ...(options.traceFactory ? { traceFactory: options.traceFactory } : {}),
         ...(options.redactor ? { redactor: options.redactor } : {}),

@@ -3,10 +3,9 @@ import { MemoryEventStream } from '@vessel-agent/core';
 import type { EvalReport } from '../src/evals';
 import type { FeishuStatus } from '../src/feishu';
 import type { Gateway } from '../src/gateway';
-import { startGateway } from '../src/gateway';
 import type { MetricsSnapshot } from '../src/metrics';
 import type { WorkflowGatewayOptions } from '../src/workflow';
-import { createGateway } from './helpers';
+import { createGateway, startTestGateway as startGateway } from './helpers';
 
 const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
 

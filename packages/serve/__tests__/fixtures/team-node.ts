@@ -8,9 +8,9 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentMessage, AgentStatus, InboxPage } from '@vessel-agent/core';
 import { MemoryEventStream } from '@vessel-agent/core';
-import { startGateway } from '../../src/index';
 import type { TeamHostLike } from '../../src/team';
 import { createLoopbackTransport } from '../../src/transport/index';
+import { startTestGateway as startGateway } from '../helpers';
 
 const nodeId = process.env.VESSEL_TEST_NODE_ID;
 const peersDir = process.env.VESSEL_TEST_PEERS_DIR;

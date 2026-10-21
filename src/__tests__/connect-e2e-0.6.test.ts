@@ -11,7 +11,8 @@ import {
   MemoryPluginHost,
   type RunEvent,
 } from '../../packages/core/src/index';
-import { type Gateway, startGateway } from '../../packages/serve/src/gateway';
+import { startTestGateway as startGateway } from '../../packages/serve/__tests__/helpers';
+import type { Gateway } from '../../packages/serve/src/gateway';
 import { type BootstrapResult, bootstrap } from '../bootstrap';
 
 const CERT = fileURLToPath(

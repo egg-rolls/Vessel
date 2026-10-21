@@ -20,7 +20,6 @@ describe('shutdownServeStack', () => {
           order.push('gateway.stopped');
         },
       },
-      unsubShared: () => order.push('unsub'),
       closeTransport: async () => {
         order.push('transport');
       },
@@ -40,7 +39,6 @@ describe('shutdownServeStack', () => {
     expect(order).toEqual([
       'gateway.stop',
       'gateway.stopped',
-      'unsub',
       'transport',
       'before',
       'closeTenants',

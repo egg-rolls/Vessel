@@ -37,11 +37,13 @@ import {
 } from '../packages/core/src/index';
 import {
   type ConfigSnapshotLike,
+  createGatewayEventHub,
   type DurableGatewayOptions,
   type Gateway,
   type GatewayOptions,
   type MetricsProvider,
   startGateway,
+  type TenantEventHub,
 } from '../packages/serve/src/index';
 import { startInkRepl } from '../packages/tui/src/index';
 import { runSetupWizard } from '../packages/tui/src/wizard/setup-wizard';
@@ -73,7 +75,6 @@ import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
-import { createEventStream } from './observability-wiring';
 import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { resolveGatewayAuth } from './serve-auth';
@@ -614,9 +615,8 @@ async function runWithConfig(result: BootstrapResult) {
   let gateway: Gateway | null = null;
   /** A-6：--serve 时除 bootstrap 默认 tenant 外的执行面 */
   let tenantFactory: TenantRuntimeFactory | undefined;
-  /** gateway 共享事件流：与任何 tenant 流分离，避免 trace 串租户 */
-  let sharedEvents: EventStream | undefined;
-  let unsubSharedBridge: (() => void) | undefined;
+  /** 0.18：tenant 事件流的唯一扇入面（shared 流已删除）。 */
+  let eventHub: TenantEventHub | undefined;
   if (servePort !== null) {
     // CLI flag 已由 loader 合并进 config.serve；这里只做补全与校验。
     const resolved = resolveServeOptions(config);
@@ -656,21 +656,13 @@ async function runWithConfig(result: BootstrapResult) {
     // A-6 §13.2：为每个 active tenant 构建独立执行面；默认 tenant 复用 bootstrap bundle。
     // 每个 tenant 持有自己的 writer lock；任一失败由工厂回滚并让进程退出。
     try {
-      // 共享流必须独立：若直接复用 ctx.events（默认 tenant 流），
-      // 其它 tenant 的事件桥接进来会污染默认 tenant 的 trace。
-      sharedEvents = createEventStream(config);
-      const seedEvents = result.bundle?.events;
-      if (seedEvents) {
-        unsubSharedBridge = seedEvents.subscribe((event) => {
-          const withTenant =
-            event.tenant_id === undefined ? { ...event, tenant_id: result.tenantId } : event;
-          try {
-            sharedEvents?.publish(withTenant);
-          } catch {
-            // 共享流订阅者异常不影响 tenant 执行
-          }
-        });
-      }
+      // 0.18：tenant 运行时流是唯一事件面。bootstrap 的默认 tenant bundle 由这里注册；
+      // 其余 tenant 由工厂在构建时注册。
+      eventHub = createGatewayEventHub({
+        ...(result.bundle
+          ? { streams: [{ tenantId: result.tenantId, stream: result.bundle.runtimeEvents }] }
+          : {}),
+      });
 
       tenantFactory = await createTenantRuntimeFactory({
         config,
@@ -682,11 +674,17 @@ async function runWithConfig(result: BootstrapResult) {
         // 0.15：非 default tenant 同样注册 ask_user；每个 tenant 的 ui.askUser 再单独关闭。
         registerAskUser: askUserClient,
         ...(args.exclusive ? { exclusive: true } : {}),
-        sharedEvents,
+        hub: eventHub,
         logger,
       });
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
+      await result.shutdown();
+      process.exit(1);
+    }
+
+    if (eventHub === undefined) {
+      console.error('Gateway event hub is not initialized.');
       await result.shutdown();
       process.exit(1);
     }
@@ -743,7 +741,7 @@ async function runWithConfig(result: BootstrapResult) {
           result.bundle?.pluginLoader.refresh();
         },
       }),
-      events: sharedEvents ?? ctx.events,
+      hub: eventHub,
       session: ctx.session,
       runtime,
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
@@ -790,20 +788,6 @@ async function runWithConfig(result: BootstrapResult) {
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
             sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
-            // 0.18：engine 只观察 / 投递 tenant 运行时流；shared 只做出站投影。
-            // 工厂在 gateway 启动前已建好全部 active tenant，列表静态。
-            tenantEventSources: () => {
-              const ids = new Set(tenantFactory?.tenantIds() ?? []);
-              if (result.bundle) ids.add(result.tenantId);
-              const sources: Array<{ tenantId: string; events: EventStream }> = [];
-              for (const tenantId of ids) {
-                const bundle =
-                  tenantFactory?.bundleFor(tenantId) ??
-                  (tenantId === result.tenantId ? result.bundle : undefined);
-                if (bundle) sources.push({ tenantId, events: bundle.runtimeEvents });
-              }
-              return sources;
-            },
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
             plugins: () => tenantFactory?.pluginsFor(result.tenantId) ?? [],
@@ -945,12 +929,10 @@ async function runWithConfig(result: BootstrapResult) {
   activeCleanup = async () => {
     await shutdownServeStack({
       gateway,
-      unsubShared: () => {
-        unsubSharedBridge?.();
-        unsubSharedBridge = undefined;
-      },
       closeTenants: async (options) => {
         await tenantFactory?.closeAll(options);
+        eventHub?.close();
+        eventHub = undefined;
       },
       shutdown: (options) => result.shutdown(options),
     });
@@ -1008,14 +990,12 @@ async function runWithConfig(result: BootstrapResult) {
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
     await shutdownServeStack({
       gateway,
-      unsubShared: () => {
-        unsubSharedBridge?.();
-        unsubSharedBridge = undefined;
-      },
       closeTransport: async () => {},
       ...(beforeClose ? { beforeClose } : {}),
       closeTenants: async (options) => {
         await tenantFactory?.closeAll(options);
+        eventHub?.close();
+        eventHub = undefined;
       },
       shutdown: (options) => result.shutdown(options),
     });

@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
-import { type Gateway, startGateway } from '../src/gateway';
+import type { Gateway } from '../src/gateway';
 import { normalizeDurableRun } from '../src/gateway/methods/runs';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
 import type { TeamHostLike } from '../src/team';
 import type { ConfigSnapshotLike, GatewayAuthLike } from '../src/tenant';
-import { createRuntime, SlowProvider } from './helpers';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
+import { createRuntime, SlowProvider, startTestGateway as startGateway } from './helpers';
 import { runDispatcher } from './rpc-test-utils';
 
 const dispatchers: LocalRpcDispatcher[] = [];
 const gateways: Gateway[] = [];
+
+function hubFor(events: MemoryEventStream) {
+  return createGatewayEventHub({ streams: [{ tenantId: 'default', stream: events }] });
+}
 
 afterEach(() => {
   for (const dispatcher of dispatchers.splice(0)) dispatcher.dispose();
@@ -56,7 +61,7 @@ function snapshot(): ConfigSnapshotLike {
 describe('agents.tree / tasks.* (0.15 E5)', () => {
   it('exposes children ids and queue fields without inventing nodes', async () => {
     const events = new MemoryEventStream();
-    const dispatcher = createLocalRpcDispatcher({ events });
+    const dispatcher = createLocalRpcDispatcher({ hub: hubFor(events) });
     dispatchers.push(dispatcher);
 
     events.publish(
@@ -161,7 +166,10 @@ describe('agents.tree / tasks.* (0.15 E5)', () => {
         ],
       }),
     };
-    const dispatcher = createLocalRpcDispatcher({ events, team: { nodeId: 'A', host } });
+    const dispatcher = createLocalRpcDispatcher({
+      hub: hubFor(events),
+      team: { nodeId: 'A', host },
+    });
     dispatchers.push(dispatcher);
 
     const tree = (await runDispatcher(dispatcher.dispatch, 'agents.tree')) as {
@@ -205,7 +213,7 @@ describe('health.get runtime (0.15 E6)', () => {
   it('reports queued/running runs from the engine', async () => {
     const events = new MemoryEventStream();
     const runtime = await createRuntime({ events, provider: new SlowProvider(300) });
-    const dispatcher = createLocalRpcDispatcher({ events, runtime });
+    const dispatcher = createLocalRpcDispatcher({ hub: hubFor(events), runtime });
     dispatchers.push(dispatcher);
 
     const empty = (await runDispatcher(dispatcher.dispatch, 'health.get')) as {
@@ -252,7 +260,7 @@ describe('runs error envelope (0.15 E6)', () => {
   it('stores run.failed envelope on the live record', async () => {
     const events = new MemoryEventStream();
     const runtime = await createRuntime({ events, provider: new SlowProvider(300) });
-    const dispatcher = createLocalRpcDispatcher({ events, runtime });
+    const dispatcher = createLocalRpcDispatcher({ hub: hubFor(events), runtime });
     dispatchers.push(dispatcher);
 
     const started = (await runDispatcher(dispatcher.dispatch, 'runs.start', { input: 'boom' })) as {
@@ -326,7 +334,7 @@ describe('events.list read path (0.15 E6)', () => {
     const events = new MemoryEventStream();
     const huge = 'x'.repeat(20 * 1024);
     const dispatcher = createLocalRpcDispatcher({
-      events,
+      hub: hubFor(events),
       trace: {
         readEvents: async () => [
           {
@@ -358,7 +366,7 @@ describe('config.set (0.15)', () => {
     const events = new MemoryEventStream();
     const writes: Array<{ key: string; value: string | boolean; tenantId: string }> = [];
     const dispatcher = createLocalRpcDispatcher({
-      events,
+      hub: hubFor(events),
       config: {
         snapshot,
         set: (request) => {
@@ -391,7 +399,7 @@ describe('config.set (0.15)', () => {
 
   it('returns not_found without a writer', async () => {
     const dispatcher = createLocalRpcDispatcher({
-      events: new MemoryEventStream(),
+      hub: createGatewayEventHub(),
       config: { snapshot },
     });
     dispatchers.push(dispatcher);

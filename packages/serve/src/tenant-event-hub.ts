@@ -14,8 +14,15 @@
  * @module @vessel-agent/serve/tenant-event-hub
  */
 
-import type { EventStream, RunEvent, Unsubscribe } from '@vessel-agent/core';
+import {
+  createDefaultTraceRedactor,
+  type EventStream,
+  type RunEvent,
+  type TraceRedactor,
+  type Unsubscribe,
+} from '@vessel-agent/core';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+import { capToolEvent } from './tool-events.js';
 
 /** 注册到 hub 的 tenant 流 */
 export interface TenantEventSource {
@@ -33,10 +40,16 @@ export interface TenantEventHubOptions {
    */
   maxHistory?: number;
   /**
-   * 入缓冲前的变换（gateway 传 `capToolEvent(redact(event))`）。
-   * 只影响 sequenced 订阅与回放，不影响 raw 订阅。
+   * 入缓冲前的变换（必填；gateway 传 `capToolEvent(redact(event))`）。
+   * 只影响 sequenced 订阅与回放，不影响 raw 订阅。必须返回新事件，不得原地修改。
    */
-  map?: (event: RunEvent) => RunEvent;
+  map: (event: RunEvent) => RunEvent;
+}
+
+/** 带默认脱敏 / 裁剪的 hub 选项（gateway / local dispatcher 的装配入口）。 */
+export interface GatewayEventHubOptions extends Omit<TenantEventHubOptions, 'map'> {
+  /** 缺省 = core 默认 redactor；应与 gateway 的 `redactor` 一致。 */
+  redactor?: TraceRedactor;
 }
 
 /** 事件扇入面（无 publish） */
@@ -79,7 +92,7 @@ function withTenantId(event: RunEvent, tenantId: string): RunEvent {
 }
 
 /** 创建事件扇入面 */
-export function createTenantEventHub(options: TenantEventHubOptions = {}): TenantEventHub {
+export function createTenantEventHub(options: TenantEventHubOptions): TenantEventHub {
   const configuredHistory = options.maxHistory ?? DEFAULT_MAX_HISTORY;
   if (!Number.isSafeInteger(configuredHistory) || configuredHistory < 0) {
     throw new Error('TenantEventHub maxHistory must be a non-negative integer.');
@@ -87,11 +100,14 @@ export function createTenantEventHub(options: TenantEventHubOptions = {}): Tenan
   const capacity = configuredHistory === 0 ? DEFAULT_MAX_HISTORY : configuredHistory;
   const buffer = new SeqEventBuffer(capacity);
 
-  interface Registration {
-    stream: EventStream;
+  /** 同一 EventStream 可被多个 tenant 复用（测试 / 单 runtime 多 tenant）：只订阅一次。 */
+  interface StreamSubscription {
     unsubscribe: Unsubscribe;
+    /** 注册顺序；首个 tenant 用于补齐事件缺失的 tenant_id。 */
+    tenants: string[];
   }
-  const registrations = new Map<string, Registration>();
+  const tenantStreams = new Map<string, EventStream>();
+  const streamSubscriptions = new Map<EventStream, StreamSubscription>();
   const rawHandlers = new Set<(event: RunEvent) => void>();
   const sequencedHandlers = new Set<(item: SeqEvent) => void>();
   let closed = false;
@@ -114,7 +130,7 @@ export function createTenantEventHub(options: TenantEventHubOptions = {}): Tenan
     let prepared: RunEvent;
     try {
       // map 必须返回新事件；这里不克隆第二次，避免掩盖原地修改。
-      prepared = options.map ? options.map(stamped) : stamped;
+      prepared = options.map(stamped);
     } catch (error) {
       reportHubError('map', error);
       return;
@@ -133,27 +149,37 @@ export function createTenantEventHub(options: TenantEventHubOptions = {}): Tenan
   function register(tenantId: string, stream: EventStream): Unsubscribe {
     assertOpen('register');
     if (!tenantId) throw new Error('TenantEventHub tenantId is required.');
-    const existing = registrations.get(tenantId);
+    const existing = tenantStreams.get(tenantId);
     if (existing) {
-      if (existing.stream === stream) return () => {};
+      if (existing === stream) return () => {};
       throw new Error(`TenantEventHub already registered a different stream for "${tenantId}".`);
     }
 
-    const registration: Registration = {
-      stream,
-      unsubscribe: () => {},
-    };
-    registration.unsubscribe = stream.subscribe((event) => {
-      fanIn(tenantId, event);
-    });
-    registrations.set(tenantId, registration);
+    tenantStreams.set(tenantId, stream);
+    let subscription = streamSubscriptions.get(stream);
+    if (subscription) {
+      subscription.tenants.push(tenantId);
+    } else {
+      const entry: StreamSubscription = { tenants: [tenantId], unsubscribe: () => {} };
+      entry.unsubscribe = stream.subscribe((event) => {
+        // 复用同一 stream 时，用首个注册的 tenant 补齐缺失的 tenant_id。
+        fanIn(entry.tenants[0] as string, event);
+      });
+      streamSubscriptions.set(stream, entry);
+      subscription = entry;
+    }
 
     return () => {
-      const current = registrations.get(tenantId);
-      if (current !== registration) return;
-      registrations.delete(tenantId);
+      if (tenantStreams.get(tenantId) !== stream) return;
+      tenantStreams.delete(tenantId);
+      const current = streamSubscriptions.get(stream);
+      if (!current) return;
+      const index = current.tenants.indexOf(tenantId);
+      if (index >= 0) current.tenants.splice(index, 1);
+      if (current.tenants.length > 0) return;
+      streamSubscriptions.delete(stream);
       try {
-        registration.unsubscribe();
+        current.unsubscribe();
       } catch (error) {
         reportHubError('unregister', error);
       }
@@ -179,14 +205,15 @@ export function createTenantEventHub(options: TenantEventHubOptions = {}): Tenan
   function close(): void {
     if (closed) return;
     closed = true;
-    for (const registration of registrations.values()) {
+    for (const subscription of streamSubscriptions.values()) {
       try {
-        registration.unsubscribe();
+        subscription.unsubscribe();
       } catch (error) {
         reportHubError('close source', error);
       }
     }
-    registrations.clear();
+    streamSubscriptions.clear();
+    tenantStreams.clear();
     rawHandlers.clear();
     sequencedHandlers.clear();
   }
@@ -197,9 +224,9 @@ export function createTenantEventHub(options: TenantEventHubOptions = {}): Tenan
 
   return {
     register,
-    streamFor: (tenantId) => registrations.get(tenantId)?.stream,
+    streamFor: (tenantId) => tenantStreams.get(tenantId),
     get tenantIds() {
-      return [...registrations.keys()];
+      return [...tenantStreams.keys()];
     },
     subscribe,
     subscribeSequenced,
@@ -213,4 +240,17 @@ export function createTenantEventHub(options: TenantEventHubOptions = {}): Tenan
     },
     close,
   };
+}
+
+/**
+ * gateway / local dispatcher 的装配入口：默认 redactor + 工具事件裁剪。
+ * 嵌入方若给 gateway 传了自定义 `redactor`，应把同一个实例也传到这里。
+ */
+export function createGatewayEventHub(options: GatewayEventHubOptions = {}): TenantEventHub {
+  const { redactor: providedRedactor, ...rest } = options;
+  const redactor = providedRedactor ?? createDefaultTraceRedactor();
+  return createTenantEventHub({
+    ...rest,
+    map: (event) => capToolEvent(redactor.redact(event)),
+  });
 }

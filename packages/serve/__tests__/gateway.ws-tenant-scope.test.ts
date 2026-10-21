@@ -6,6 +6,7 @@ import { MemoryEventStream, MemoryPluginHost, type RunEvent } from '@vessel-agen
 import type { Gateway } from '../src/gateway';
 import type { ProtocolError, ServerFrame } from '../src/protocol';
 import type { GatewayAuthLike } from '../src/tenant';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { createGateway, createRuntime, TestWs, ToolCallingProvider, waitUntil } from './helpers';
 
 const gateways: Gateway[] = [];
@@ -171,16 +172,17 @@ describe('legacy WS methods are tenant-scoped', () => {
       permission: { default: 'ask' },
     });
     const gw = createGateway({
-      events,
       auth: authFor(),
       runtimeFor: () => runtime,
       pluginHost,
-      // 单 runtime 复用同一事件流；按 tenant 注册（gateway 会去重订阅）。
-      tenantEventSources: () => [
-        { tenantId: 'default', events },
-        { tenantId: 'a', events },
-        { tenantId: 'b', events },
-      ],
+      // 单 runtime 复用同一事件流；hub 按 tenant 别名注册，只订阅一次。
+      hub: createGatewayEventHub({
+        streams: [
+          { tenantId: 'default', stream: events },
+          { tenantId: 'a', stream: events },
+          { tenantId: 'b', stream: events },
+        ],
+      }),
     });
     gateways.push(gw);
     const a = await connect(gw, 'a');
@@ -235,11 +237,13 @@ describe('legacy WS methods are tenant-scoped', () => {
       auth: authFor(),
       runtimeFor: () => runtime,
       pluginHost,
-      tenantEventSources: () => [
-        { tenantId: 'default', events },
-        { tenantId: 'a', events },
-        { tenantId: 'b', events },
-      ],
+      hub: createGatewayEventHub({
+        streams: [
+          { tenantId: 'default', stream: events },
+          { tenantId: 'a', stream: events },
+          { tenantId: 'b', stream: events },
+        ],
+      }),
     });
     gateways.push(gw);
     const a = await connect(gw, 'a');

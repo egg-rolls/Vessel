@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
-import { startGateway } from '../src/gateway';
+import { startTestGateway as startGateway } from './helpers';
 
 describe('gateway /v1/team/stream', () => {
   const gateways: Gateway[] = [];

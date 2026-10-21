@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
-import { startGateway } from '../src/gateway';
 import { toEventNotification } from '../src/rpc';
 import type { GatewayAuthLike } from '../src/tenant';
-import { sleep, TestWs } from './helpers';
+import { sleep, startTestGateway as startGateway, TestWs } from './helpers';
 
 const gateways: Gateway[] = [];
 

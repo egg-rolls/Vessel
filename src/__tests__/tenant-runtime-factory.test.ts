@@ -7,7 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
-import { MemoryEventStream } from '../../packages/core/src/index';
+import { createGatewayEventHub } from '../../packages/serve/src/index';
 import { bootstrap } from '../bootstrap';
 import {
   createTenantRuntimeFactory,
@@ -87,14 +87,14 @@ describe('createTenantRuntimeFactory', () => {
     const config = (await loadTenantRuntimeConfig('acme', { configPath }))?.config;
     expect(config).toBeDefined();
 
-    const shared = new MemoryEventStream();
+    const hub = createGatewayEventHub();
     const factory = await createTenantRuntimeFactory({
       config: config as VesselConfig,
       configPath,
       dataDir: base,
       useMock: true,
       nodeId: 'node-test',
-      sharedEvents: shared,
+      hub,
     });
 
     try {
@@ -122,7 +122,7 @@ describe('createTenantRuntimeFactory', () => {
       expect(fs.readdirSync(path.join(base, 'tenants', 'acme', '.members'))).toHaveLength(1);
       expect(fs.readdirSync(path.join(base, 'tenants', 'work', '.members'))).toHaveLength(1);
 
-      // 事件先进入本 tenant 流，再桥接到共享流并补 tenant_id。
+      // 事件先进入本 tenant 流，再扇入 hub 并补 tenant_id。
       acme?.events.publish({
         type: 'run.started',
         run_id: 'run-acme',
@@ -133,8 +133,10 @@ describe('createTenantRuntimeFactory', () => {
       expect(acme?.events.getHistory().some((event) => event.run_id === 'run-acme')).toBe(true);
       expect(work?.events.getHistory().some((event) => event.run_id === 'run-acme')).toBe(false);
 
-      const bridged = shared.getHistory().find((event) => event.run_id === 'run-acme');
-      expect(bridged?.tenant_id).toBe('acme');
+      const fannedIn = hub.since(0).find((item) => item.event.run_id === 'run-acme');
+      expect(fannedIn?.event.tenant_id).toBe('acme');
+      expect(hub.streamFor('acme')).toBe(acme?.events);
+      expect(hub.streamFor('work')).toBe(work?.events);
 
       // metrics 只订阅本 tenant 流。
       expect(acme?.metrics?.snapshot().runs.started).toBe(1);

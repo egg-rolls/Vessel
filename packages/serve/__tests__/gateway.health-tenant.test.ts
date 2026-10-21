@@ -7,9 +7,8 @@ import {
   MemoryPluginHost,
 } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
-import { startGateway } from '../src/gateway';
 import type { GatewayAuthLike } from '../src/tenant';
-import { createRuntime, SlowProvider, TestWs } from './helpers';
+import { createRuntime, SlowProvider, startTestGateway as startGateway, TestWs } from './helpers';
 
 const gateways: Gateway[] = [];
 const clients: TestWs[] = [];

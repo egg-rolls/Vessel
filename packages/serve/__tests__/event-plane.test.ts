@@ -1,15 +1,16 @@
 /**
- * 0.18 Step 2 守卫：engine 只观察 / 投递 tenant 流，shared 只是出站投影。
+ * 0.18 守卫：tenant 流是唯一事件面。
  *
- * gateway 不再从 shared 订阅里调用 engine.handleEvent；shared 上出现的
- * 交互请求不会被受理，也不会产生 pending。
+ * gateway 只从 `TenantEventHub` 观察事件；没有共享流、没有单流 `events` 选项，
+ * 也没有业务代码可以 publish 到扇入面（hub 不暴露 publish）。
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { MemoryEventStream, type RunEvent } from '@vessel-agent/core';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { runDispatcher } from './rpc-test-utils';
 
 const dispatchers: LocalRpcDispatcher[] = [];
@@ -27,22 +28,33 @@ function requestPermission(requestId: string): RunEvent {
   };
 }
 
-describe('gateway event plane (tenant streams drive the engine)', () => {
-  it('ignores interactions published only on the projection stream', async () => {
-    const shared = new MemoryEventStream();
+function sourceFiles(dir: string): string[] {
+  const files: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) files.push(...sourceFiles(path));
+    else if (entry.name.endsWith('.ts')) files.push(path);
+  }
+  return files;
+}
+
+describe('tenant event plane (0.18)', () => {
+  it('accepts interactions from tenant streams and never from an external projection', async () => {
     const tenant = new MemoryEventStream();
-    const dispatcher = createLocalRpcDispatcher({
-      events: shared,
-      tenantEventSources: () => [{ tenantId: 'default', events: tenant }],
+    const projection = new MemoryEventStream();
+    const hub = createGatewayEventHub({
+      streams: [{ tenantId: 'default', stream: tenant }],
     });
+    const dispatcher = createLocalRpcDispatcher({ hub });
     dispatchers.push(dispatcher);
 
-    shared.publish(requestPermission('perm-shared'));
+    // 外部流不属于 hub：即使发布请求也不会进 engine。
+    projection.publish(requestPermission('perm-projection'));
     const ignored = await dispatcher.dispatch({
       v: 1,
       id: crypto.randomUUID(),
       method: 'permission.respond',
-      params: { request_id: 'perm-shared', decision: 'allow' },
+      params: { request_id: 'perm-projection', decision: 'allow' },
     });
     expect(ignored.ok).toBe(false);
     if (!ignored.ok) expect(ignored.error.code).toBe('not_found');
@@ -54,7 +66,6 @@ describe('gateway event plane (tenant streams drive the engine)', () => {
     });
     expect(accepted).toMatchObject({ ok: true, decision: 'allow' });
 
-    // 应答只出现在 tenant 流；gateway 不再替 shared 补写。
     expect(
       tenant
         .getHistory()
@@ -64,15 +75,21 @@ describe('gateway event plane (tenant streams drive the engine)', () => {
             (event.data as { requestId?: string }).requestId === 'perm-tenant',
         ),
     ).toBe(true);
-    expect(shared.getHistory().some((event) => event.type === 'tool.permission.response')).toBe(
+    expect(projection.getHistory().some((event) => event.type === 'tool.permission.response')).toBe(
       false,
     );
   });
 
-  it('keeps the run engine free of single-stream and TTL options', () => {
-    const source = readFileSync(join(import.meta.dir, '..', 'src', 'run-engine.ts'), 'utf8');
-    expect(source).not.toContain('interactionTtlMs');
-    expect(source).not.toContain('sweep(');
-    expect(source).not.toMatch(/^\s*events: EventStream;/m);
+  it('keeps no shared-stream or single-stream leftovers in serve sources', () => {
+    const root = join(import.meta.dir, '..', 'src');
+    for (const file of sourceFiles(root)) {
+      const source = readFileSync(file, 'utf8');
+      expect(source).not.toContain('sharedEvents');
+      expect(source).not.toContain('tenantEventSources');
+      expect(source).not.toContain('interactionTtlMs');
+      expect(source).not.toContain('sweep(');
+      // 单流 GatewayOptions.events 已删除（事件变量名不在此守卫范围）。
+      expect(source).not.toMatch(/^\s*events: EventStream;$/m);
+    }
   });
 });

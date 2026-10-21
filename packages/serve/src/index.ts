@@ -149,7 +149,9 @@ export {
   type TenantRole,
 } from './tenant.js';
 export {
+  createGatewayEventHub,
   createTenantEventHub,
+  type GatewayEventHubOptions,
   type TenantEventHub,
   type TenantEventHubOptions,
   type TenantEventSource,

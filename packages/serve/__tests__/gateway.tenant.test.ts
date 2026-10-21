@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
-import { startGateway } from '../src/gateway';
 import type { GatewayAuthLike, TenantControlLike, TenantInfo } from '../src/tenant';
 import { QuotaExceededError } from '../src/tenant';
-import { createRuntime, SlowProvider } from './helpers';
+import { createRuntime, SlowProvider, startTestGateway as startGateway } from './helpers';
 
 const gateways: Gateway[] = [];
 

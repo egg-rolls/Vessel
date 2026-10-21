@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { AgentMessage, AgentStatus, RunEvent } from '../../packages/core/src/index';
 import { MemoryEventStream } from '../../packages/core/src/index';
-import { type Gateway, startGateway } from '../../packages/serve/src/gateway';
+import { startTestGateway as startGateway } from '../../packages/serve/__tests__/helpers';
+import type { Gateway } from '../../packages/serve/src/gateway';
 import { NodeRegistry } from '../node-registry';
 import { RemoteTransport } from '../remote-transport';
 

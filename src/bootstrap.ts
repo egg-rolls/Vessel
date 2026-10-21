@@ -36,6 +36,7 @@ import {
 } from '../packages/core/src/index';
 import {
   type ConfigSnapshotLike,
+  createGatewayEventHub,
   createLocalRpcDispatcher,
   type LocalRpcDispatcher,
 } from '../packages/serve/src/index';
@@ -1204,8 +1205,12 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     allowRemote: false,
     env: process.env,
   });
+  // 0.18：本地模式只有一个 tenant 流；dispatcher 与 gateway 共用同一个 hub。
+  const localEventHub = createGatewayEventHub({
+    streams: [{ tenantId, stream: runtimeEvents }],
+  });
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
-    events: runtimeEvents,
+    hub: localEventHub,
     session,
     // 0.15: local RPC runs also take the session write lock.
     runtime: bundle.runtime,
@@ -1441,6 +1446,18 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         events: bundle.events,
         logger,
         step: 'dispatcher.dispose',
+        error,
+        tenantId,
+      });
+    }
+
+    try {
+      localEventHub.close();
+    } catch (error) {
+      reportShutdownFailure({
+        events: bundle.events,
+        logger,
+        step: 'eventHub.close',
         error,
         tenantId,
       });

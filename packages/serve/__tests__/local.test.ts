@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { MemoryEventStream } from '@vessel-agent/core';
 import { createLocalRpcDispatcher, type LocalRpcDispatcher } from '../src/local';
 import type { CapabilityManifest } from '../src/rpc';
+import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { runDispatcher } from './rpc-test-utils';
 
 const dispatchers: LocalRpcDispatcher[] = [];
@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe('createLocalRpcDispatcher', () => {
   it('serves capabilities.list without listening on a port', async () => {
-    const dispatcher = createLocalRpcDispatcher({ events: new MemoryEventStream() });
+    const dispatcher = createLocalRpcDispatcher({ hub: createGatewayEventHub() });
     dispatchers.push(dispatcher);
     expect(typeof dispatcher.dispatch).toBe('function');
     expect(typeof dispatcher.manifest).toBe('function');
@@ -28,7 +28,7 @@ describe('createLocalRpcDispatcher', () => {
 
   it('serves sessions.list through the injected backend', async () => {
     const dispatcher = createLocalRpcDispatcher({
-      events: new MemoryEventStream(),
+      hub: createGatewayEventHub(),
       session: {
         async load() {
           return null;
@@ -61,7 +61,7 @@ describe('createLocalRpcDispatcher', () => {
 
   it('returns config.get with paths', async () => {
     const dispatcher = createLocalRpcDispatcher({
-      events: new MemoryEventStream(),
+      hub: createGatewayEventHub(),
       config: {
         snapshot: (tenantId) => ({
           schema_version: 1,
