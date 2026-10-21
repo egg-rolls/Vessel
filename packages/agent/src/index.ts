@@ -21,6 +21,7 @@ export {
   AgentSnapshotStore,
   snapshotPath,
 } from './snapshot.js';
+export { type AgentToolOptions, createAgentTool } from './tool.js';
 export {
   AgentError,
   type AgentErrorCode,
