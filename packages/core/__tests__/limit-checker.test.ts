@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from 'bun:test';
-import { evaluateUsageLimits, MemoryLimitChecker } from '../src/limits/limit-checker';
+import {
+  evaluateTermination,
+  evaluateUsageLimits,
+  MemoryLimitChecker,
+} from '../src/limits/limit-checker';
 import type { TerminationPolicy, UsageLimits, UsageStats } from '../src/types/limits';
 
 describe('evaluateUsageLimits', () => {
@@ -92,6 +96,61 @@ describe('evaluateUsageLimits', () => {
     stats.toolCallsCount = 5;
     expect(evaluateUsageLimits(stats, { requestLimit: 5, toolCallsLimit: 5 })?.key).toBe(
       'request_limit',
+    );
+  });
+});
+
+describe('evaluateTermination', () => {
+  let stats: UsageStats;
+
+  beforeEach(() => {
+    stats = {
+      requestCount: 0,
+      toolCallsCount: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      totalTokens: 0,
+      totalCost: 0,
+      startTime: Date.now(),
+    };
+  });
+
+  it('reports max_iterations with source and max when requests reach the cap', () => {
+    stats.requestCount = 50;
+
+    expect(evaluateTermination(stats, { maxIterations: 50 })).toMatchObject({
+      scope: 'run',
+      key: 'max_iterations',
+      current: 50,
+      max: 50,
+      source: 'termination.maxIterations',
+      retryable: false,
+    });
+    expect(evaluateTermination(stats, { maxIterations: 50 })?.hint.length).toBeGreaterThan(0);
+  });
+
+  it('reports max_runtime with source and elapsed seconds', () => {
+    stats.startTime = Date.now() - 2000;
+
+    const block = evaluateTermination(stats, { maxIterations: 100, maxRuntimeSeconds: 1 });
+    expect(block).toMatchObject({
+      scope: 'run',
+      key: 'max_runtime',
+      max: 1,
+      source: 'termination.maxRuntimeSeconds',
+      retryable: false,
+    });
+    expect(block?.current).toBeGreaterThanOrEqual(1);
+    expect(block?.hint.length).toBeGreaterThan(0);
+  });
+
+  it('returns null within budget and checks iterations before runtime', () => {
+    expect(evaluateTermination(stats, { maxIterations: 10 })).toBeNull();
+
+    stats.requestCount = 10;
+    stats.startTime = Date.now() - 5000;
+    expect(evaluateTermination(stats, { maxIterations: 10, maxRuntimeSeconds: 1 })?.key).toBe(
+      'max_iterations',
     );
   });
 });

@@ -25,7 +25,12 @@ export {
 // Kernel（0.2 R1：Host / Handles / Cancellation / EventBus / Transport port）
 export * from './kernel/index.js';
 // 限制检查器
-export { evaluateUsageLimits, LimitExceededError, MemoryLimitChecker } from './limits/index.js';
+export {
+  evaluateTermination,
+  evaluateUsageLimits,
+  LimitExceededError,
+  MemoryLimitChecker,
+} from './limits/index.js';
 // 日志端口（0.10 R2-14）：Logger / LogLevel / LogFields / LoggerOptions 经 ./types 导出
 export { createStderrLogger, noopLogger } from './logging.js';
 // Observability（0.4 C2 聚合 + 0.5 F2 trace）

@@ -11,5 +11,5 @@ export type {
   UsageLimits,
   UsageStats,
 } from '../types/limits.js';
-export { evaluateUsageLimits, MemoryLimitChecker } from './limit-checker.js';
+export { evaluateTermination, evaluateUsageLimits, MemoryLimitChecker } from './limit-checker.js';
 export { LimitExceededError } from './limit-error.js';
