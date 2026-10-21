@@ -253,7 +253,17 @@ export interface SchedulerOptions {
   maxQueueSize?: number;
   /** 同一成员串行（默认 true） */
   perAgentSerial?: boolean;
+  /** 0.15 E4：队列事件发布流；缺省不发（只读观测，不改变调度） */
+  events?: EventStream;
+  /** 0.15 E4：事件 tenant 盖章；缺省不写 */
+  tenantId?: string;
 }
+
+/**
+ * 0.15 E3/E4：队列等待原因。
+ * core 只产出 `capacity` / `per_agent_serial`；其余取值预留给上层调度实现。
+ */
+export type WaitReason = 'capacity' | 'per_agent_serial' | 'paused' | 'dependency' | 'quota';
 
 export interface SchedulerStats {
   queued: number;
@@ -271,13 +281,15 @@ export interface RunSnapshot {
   state: RunStatus;
   /** FIFO 队列位置（1 起；仅 queued 时有） */
   queuePosition?: number;
+  /** 等待原因（仅 queued 时有；0.15 E3） */
+  waitReason?: WaitReason;
   /** 入队时间（Unix ms） */
   queuedAt?: number;
   /** 开始执行时间（Unix ms；仅 running 时有） */
   startedAt?: number;
 }
 
-/** 一个成员的只读摘要（0.14.1，纯 JSON） */
+/** 一个成员的只读摘要（0.14.1，纯 JSON；0.15 E3 additive 字段） */
 export interface AgentSnapshot {
   id: string;
   name?: string;
@@ -291,6 +303,20 @@ export interface AgentSnapshot {
   startedAt?: number;
   /** 该成员排队中的位置（1 起） */
   queuePosition?: number;
+  /** 所属节点；Host 能提供 transport.nodeId 时填写 */
+  nodeId?: string;
+  /** 当前任务；来自 spec.metadata.task（Ext 可填） */
+  task?: { id: string; title?: string };
+  /** 排队等待原因（仅 queued 时有） */
+  waitReason?: WaitReason;
+  /** 上下文已用 token；实现能读取 context 时填写 */
+  contextUsed?: number;
+  /** 上下文 token 上限；ContextManager 提供 maxTokens 时填写 */
+  contextMax?: number;
+  /** 子 agent 数；Host 不维护父子关系时缺省 */
+  childrenCount?: number;
+  /** 最近活动时间（Unix ms） */
+  lastSeen?: number;
 }
 
 /** Scheduler 只读快照（0.14.1） */

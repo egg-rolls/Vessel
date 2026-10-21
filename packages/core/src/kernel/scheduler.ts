@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { EventStream } from '../types/event.js';
 import type { Usage } from '../types/provider.js';
 import {
   type InternalAgentHandle,
@@ -26,6 +27,7 @@ import type {
   SchedulerOptions,
   SchedulerSnapshot,
   SchedulerStats,
+  WaitReason,
 } from './types.js';
 
 interface QueueEntry {
@@ -36,6 +38,8 @@ interface QueueEntry {
   enqueuedAt: number;
   /** 开始执行时间（Unix ms） */
   startedAt?: number;
+  /** 已发布 `agent.queue.entered` 时的位置与原因；用于配对 `left` */
+  announced?: { position: number; waitReason: WaitReason };
 }
 
 /** 排队中的 RunHandle：id 在入队时确定，运行后委托给真实 handle */
@@ -122,6 +126,9 @@ export class InProcessScheduler implements InternalScheduler {
   private readonly maxConcurrency: number;
   private readonly maxQueueSize: number;
   private readonly perAgentSerial: boolean;
+  /** 0.15 E4：队列事件发布流；缺省不发 */
+  private readonly events?: EventStream;
+  private readonly tenantId?: string;
   private completed = 0;
   private failed = 0;
   private cancelled = 0;
@@ -131,6 +138,8 @@ export class InProcessScheduler implements InternalScheduler {
     this.maxConcurrency = Math.max(1, options.maxConcurrency ?? 1);
     this.maxQueueSize = Math.max(1, options.maxQueueSize ?? 100);
     this.perAgentSerial = options.perAgentSerial ?? true;
+    this.events = options.events;
+    this.tenantId = options.tenantId;
   }
 
   async submit(task: ScheduledTask): Promise<RunHandle> {
@@ -148,8 +157,11 @@ export class InProcessScheduler implements InternalScheduler {
       task.agent.id,
       task.sessionId ?? 'default',
     );
-    this.queue.push({ task, run, cancelled: false, enqueuedAt: Date.now() });
+    const entry: QueueEntry = { task, run, cancelled: false, enqueuedAt: Date.now() };
+    this.queue.push(entry);
     this.drain();
+    // drain 后仍在队列里才算真正进入等待；直接启动的任务不发 queue 事件。
+    this.announceEntered(entry);
     return run;
   }
 
@@ -164,6 +176,7 @@ export class InProcessScheduler implements InternalScheduler {
     if (index === -1) return false;
     const [entry] = this.queue.splice(index, 1);
     if (!entry) return false;
+    this.announceLeft(entry, index + 1);
     entry.cancelled = true;
     entry.run.cancel(reason);
     this.cancelled++;
@@ -192,6 +205,7 @@ export class InProcessScheduler implements InternalScheduler {
         sessionId: entry.run.sessionId,
         state: 'queued',
         queuePosition: queued.length + 1,
+        waitReason: this.waitReasonFor(entry),
         queuedAt: entry.enqueuedAt,
       });
     }
@@ -212,7 +226,11 @@ export class InProcessScheduler implements InternalScheduler {
     if (this.closed) return;
     this.closed = true;
 
-    for (const entry of this.queue.splice(0)) {
+    const remaining = this.queue.splice(0);
+    remaining.forEach((entry, index) => {
+      this.announceLeft(entry, index + 1);
+    });
+    for (const entry of remaining) {
       entry.cancelled = true;
       entry.run.cancel('scheduler closed');
       this.cancelled++;
@@ -234,6 +252,7 @@ export class InProcessScheduler implements InternalScheduler {
       const entry = this.queue[i];
       if (entry && entry.task.agent.id === agentId) {
         this.queue.splice(i, 1);
+        this.announceLeft(entry, i + 1);
         entry.cancelled = true;
         entry.run.cancel(reason ?? 'agent closed');
         this.cancelled++;
@@ -261,8 +280,63 @@ export class InProcessScheduler implements InternalScheduler {
       if (index === -1) break;
       const [entry] = this.queue.splice(index, 1);
       if (!entry) break;
+      this.announceLeft(entry, index + 1);
       void this.start(entry);
     }
+  }
+
+  /**
+   * 0.15 E4：该任务为何排队。
+   * 容量已满优先；其次同成员串行。core 不会产出 paused / dependency / quota。
+   */
+  private waitReasonFor(entry: QueueEntry): WaitReason {
+    if (this.active.size >= this.maxConcurrency) return 'capacity';
+    if (this.perAgentSerial && this.agentRunning.has(entry.task.agent.id)) {
+      return 'per_agent_serial';
+    }
+    return 'capacity';
+  }
+
+  /** 入队观测：只有 submit 后仍留在队列里的任务才发布 */
+  private announceEntered(entry: QueueEntry): void {
+    if (entry.cancelled || !this.events) return;
+    const index = this.queue.indexOf(entry);
+    if (index === -1) return;
+    const position = index + 1;
+    const waitReason = this.waitReasonFor(entry);
+    entry.announced = { position, waitReason };
+    this.publishQueueEvent('agent.queue.entered', entry, position, waitReason);
+  }
+
+  /** 出队观测：与 `entered` 配对；直接启动的任务没有 `entered`，也不发 `left` */
+  private announceLeft(entry: QueueEntry, position: number): void {
+    const announced = entry.announced;
+    if (!announced) return;
+    entry.announced = undefined;
+    this.publishQueueEvent('agent.queue.left', entry, position, announced.waitReason);
+  }
+
+  /** 队列事件 data 为冻结的 snake_case 形状（0.15 E4） */
+  private publishQueueEvent(
+    type: 'agent.queue.entered' | 'agent.queue.left',
+    entry: QueueEntry,
+    position: number,
+    waitReason: WaitReason,
+  ): void {
+    if (!this.events) return;
+    this.events.publish({
+      type,
+      run_id: entry.run.id,
+      data: {
+        agent_id: entry.task.agent.id,
+        run_id: entry.run.id,
+        position,
+        wait_reason: waitReason,
+        since: entry.enqueuedAt,
+      },
+      ts: Date.now(),
+      ...(this.tenantId !== undefined ? { tenant_id: this.tenantId } : {}),
+    });
   }
 
   /** 启动一个排队任务 */

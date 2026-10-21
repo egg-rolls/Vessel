@@ -26,8 +26,10 @@ export {
 export * from './kernel/index.js';
 // 限制检查器
 export {
+  evaluateLimitWarnings,
   evaluateTermination,
   evaluateUsageLimits,
+  LIMIT_WARNING_THRESHOLD,
   LimitExceededError,
   MemoryLimitChecker,
 } from './limits/index.js';
