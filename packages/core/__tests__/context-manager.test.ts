@@ -415,7 +415,9 @@ describe('MemoryContextManager token budget (0.10 R1-10)', () => {
     const messages = context.messages;
     expect(messages.length).toBeLessThanOrEqual(5);
     expect(messages[0]).toEqual({ role: 'system', content: 'SYSTEM PROMPT' });
-    expect(messages.filter((m) => m.role === 'system')).toHaveLength(1);
+    // 摘要也是 system，但不是基底 system：基底只能有一条，摘要另算。
+    expect(messages.filter((m) => m.role === 'system' && !m.compaction_summary)).toHaveLength(1);
+    expect(messages.filter((m) => m.compaction_summary)).toHaveLength(1);
     expect(messages.at(-1)?.content).toBe('Message 39');
     // 无 summarizer 时也不静默：占位摘要 + onCompact 通知都可见。
     expect(compactions.length).toBeGreaterThan(0);
@@ -450,5 +452,103 @@ describe('MemoryContextManager token budget (0.10 R1-10)', () => {
     expect(context.tokenCount).toBe(900);
     expect(await context.autoCompactAsync()).toBeGreaterThan(0);
     expect(calls).toBe(1);
+  });
+});
+
+describe('MemoryContextManager compaction summary shape (0.14.2 F1)', () => {
+  function seedUsers(context: MemoryContextManager, from: number, to: number): void {
+    for (let i = from; i < to; i += 1) {
+      context.add({ role: 'user', content: `Message ${i}` });
+    }
+  }
+
+  it('keeps the summary out of the assistant role so thinking providers accept the request', async () => {
+    const context = new MemoryContextManager({
+      autoCompact: false,
+      summarizer: async () => 'SUMMARY',
+    });
+    context.add({ role: 'system', content: 'SYSTEM PROMPT' });
+    seedUsers(context, 0, 10);
+
+    await context.compactAsync();
+
+    const messages = context.messages;
+    expect(messages[0]).toEqual({ role: 'system', content: 'SYSTEM PROMPT' });
+    // 摘要必须紧跟 system、位于其它消息之前，且不是 assistant（无 reasoning_content）。
+    expect(messages[1]?.role).toBe('system');
+    expect(messages[1]?.compaction_summary).toBe(true);
+    expect(messages[1]?.content).toBe('SUMMARY');
+    expect(messages.slice(2).every((m) => m.role !== 'system')).toBe(true);
+  });
+
+  it('drops the previous summary so only one compaction summary survives repeated compactions', async () => {
+    let round = 0;
+    const context = new MemoryContextManager({
+      autoCompact: false,
+      summarizer: async () => {
+        round += 1;
+        return `SUMMARY ${round}`;
+      },
+    });
+    context.add({ role: 'system', content: 'SYSTEM PROMPT' });
+    seedUsers(context, 0, 10);
+    await context.compactAsync();
+
+    seedUsers(context, 10, 13);
+    await context.compactAsync();
+
+    const summaries = context.messages.filter((m) => m.compaction_summary);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.content).toBe('SUMMARY 2');
+  });
+
+  it('keeps reasoning_content on an assistant(tool_calls) retained by compaction', async () => {
+    const context = new MemoryContextManager({
+      autoCompact: false,
+      summarizer: async () => 'SUMMARY',
+    });
+    seedUsers(context, 0, 6);
+    context.add({
+      role: 'assistant',
+      content: '',
+      reasoning_content: 'THINK',
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+    });
+    context.add({ role: 'tool', tool_call_id: 'call-1', content: 'RESULT' });
+
+    await context.compactAsync();
+
+    const assistant = context.messages.find((m) => m.role === 'assistant');
+    expect(assistant?.reasoning_content).toBe('THINK');
+    expect(assistant?.tool_calls?.[0]?.id).toBe('call-1');
+  });
+
+  it('keeps retained tool results paired with their assistant tool_calls after compaction', async () => {
+    const context = new MemoryContextManager({
+      autoCompact: false,
+      summarizer: async () => 'SUMMARY',
+    });
+    seedUsers(context, 0, 6);
+    context.add({
+      role: 'assistant',
+      content: '',
+      tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'bash', arguments: '{}' } }],
+    });
+    context.add({ role: 'tool', tool_call_id: 'call-1', content: 'RESULT' });
+
+    await context.compactAsync();
+
+    const messages = context.messages;
+    const assistantIndex = messages.findIndex((m) => m.role === 'assistant' && m.tool_calls);
+    expect(assistantIndex).toBeGreaterThanOrEqual(0);
+    expect(messages[assistantIndex + 1]).toEqual({
+      role: 'tool',
+      tool_call_id: 'call-1',
+      content: 'RESULT',
+    });
+    const calledIds = new Set(messages.flatMap((m) => (m.tool_calls ?? []).map((call) => call.id)));
+    for (const message of messages.filter((m) => m.role === 'tool')) {
+      expect(calledIds.has(message.tool_call_id ?? '')).toBe(true);
+    }
   });
 });

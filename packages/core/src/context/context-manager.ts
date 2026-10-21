@@ -231,12 +231,15 @@ export class MemoryContextManager implements ContextManager {
   /**
    * 应用压缩结果。按对象引用移除摘要范围内消息，因此 summarizer await 期间
    * 新加入的消息不会被丢弃；system 消息始终保留。
+   * 摘要写成 role=system + compaction_summary：thinking 模式下 assistant 消息
+   * 必须带 reasoning_content，摘要没有 → 下一轮请求会被 Provider 拒绝。
    */
   private applyCompaction(plan: CompactionPlan, summaryText: string): void {
-    const summary: Message = { role: 'assistant', content: summaryText };
+    const summary: Message = { role: 'system', content: summaryText, compaction_summary: true };
     const current = this.sessionMessages.get(plan.sessionId) ?? [];
     const removed = new Set(plan.toSummarize);
-    const remaining = current.filter((m) => !removed.has(m));
+    // 旧摘要一并移除，保证任意时刻最多一条摘要。
+    const remaining = current.filter((m) => !removed.has(m) && !m.compaction_summary);
     const systemMsgs = remaining.filter((m) => m.role === 'system');
     const others = remaining.filter((m) => m.role !== 'system');
     const next = [...systemMsgs, summary, ...others];

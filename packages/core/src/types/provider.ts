@@ -27,6 +27,10 @@ export interface Message {
    * runtime 在加入上下文时补齐；Provider 适配层忽略该字段。
    */
   timestamp?: number;
+  /**
+   * 压缩摘要标记：仅 core 内部用于识别摘要（role=system）。Provider 忽略该字段。
+   */
+  compaction_summary?: boolean;
 }
 
 /** 使用量 */

@@ -1329,7 +1329,9 @@ export class AgentRuntime {
     const messages = this.normalizeMessages(this.context.messages);
     const systemOverride =
       typeof injectedSystem === 'string' && injectedSystem ? injectedSystem : undefined;
-    const hasSystem = messages.some((m) => m.role === 'system');
+    // 压缩摘要也是 role=system：它不是基底 system，缺省补回与 hook 改写都不能替换它。
+    const isBaseSystem = (m: Message): boolean => m.role === 'system' && !m.compaction_summary;
+    const hasSystem = messages.some(isBaseSystem);
 
     // 上下文缺 system（trim / 恢复 / 失败会话）时，补回基底的或 hook 改写后的 system
     if (!hasSystem) {
@@ -1339,7 +1341,7 @@ export class AgentRuntime {
     if (!systemOverride || systemOverride === this.systemPrompt) {
       return messages;
     }
-    return messages.map((m) => (m.role === 'system' ? { ...m, content: systemOverride } : m));
+    return messages.map((m) => (isBaseSystem(m) ? { ...m, content: systemOverride } : m));
   }
 
   /**
