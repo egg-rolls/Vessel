@@ -21,6 +21,11 @@ interface CompactableContext extends ContextManager {
   compactWithSummary?(): Promise<number>;
 }
 
+/** 0.15 core：手动压缩并发布 `context.compacted（reason=manual）` 的入口 */
+interface CompactableRuntime {
+  compactContext?(): Promise<number>;
+}
+
 const DEFAULT_MAX_TOKENS = 4096;
 const DEFAULT_COMPACT_THRESHOLD = 0.8;
 
@@ -173,22 +178,27 @@ export async function runContextCommand(
 export interface CompactOutcome {
   removed: number;
   remaining: number;
-  /** async = core 0.6.1 入口；sync = 旧 core 占位摘要 */
-  mode: 'async' | 'sync';
+  /** runtime = 0.15 compactContext；async = core 0.6.1；sync = 旧 core 占位摘要 */
+  mode: 'runtime' | 'async' | 'sync';
   /** 会话快照是否写回（远端内存后端 load 为空时为 false） */
   persisted: boolean;
 }
 
-/** 纯适配：优先 compactAsync；同步 compact 也兼容 Promise 返回值 */
+/** 纯适配：优先 runtime.compactContext；否则 compactAsync；同步 compact 也兼容 Promise */
 export async function compactSessionContext(
   context: ContextManager,
   persist?: (messages: Message[]) => Promise<boolean>,
+  runtime?: unknown,
 ): Promise<CompactOutcome> {
   const candidate = context as CompactableContext;
+  const runtimeCandidate = runtime as CompactableRuntime | undefined;
   let removed = 0;
   let mode: CompactOutcome['mode'] = 'sync';
 
-  if (typeof candidate.compactAsync === 'function') {
+  if (typeof runtimeCandidate?.compactContext === 'function') {
+    removed = await runtimeCandidate.compactContext();
+    mode = 'runtime';
+  } else if (typeof candidate.compactAsync === 'function') {
     removed = await candidate.compactAsync();
     mode = 'async';
   } else if (typeof candidate.compactWithSummary === 'function') {
@@ -221,18 +231,22 @@ export async function runCompactCommand(
     return { handled: true, output: '\nNothing to compact (context is empty).\n' };
   }
 
-  const outcome = await compactSessionContext(ctx.context, async (messages) => {
-    try {
-      const saved = await ctx.session.load(state.currentSessionId);
-      if (!saved) return false;
-      saved.messages = messages;
-      saved.updated_at = Date.now();
-      await ctx.session.save(saved);
-      return true;
-    } catch (error) {
-      throw new Error(formatRpcError(error));
-    }
-  });
+  const outcome = await compactSessionContext(
+    ctx.context,
+    async (messages) => {
+      try {
+        const saved = await ctx.session.load(state.currentSessionId);
+        if (!saved) return false;
+        saved.messages = messages;
+        saved.updated_at = Date.now();
+        await ctx.session.save(saved);
+        return true;
+      } catch (error) {
+        throw new Error(formatRpcError(error));
+      }
+    },
+    ctx.runtime,
+  );
 
   if (outcome.removed === 0) {
     return {
@@ -242,9 +256,11 @@ export async function runCompactCommand(
   }
 
   const note =
-    outcome.mode === 'async'
-      ? 'core summary path'
-      : 'placeholder summary (no summarizer; core < 0.6.1)';
+    outcome.mode === 'runtime'
+      ? 'runtime compactContext (context.compacted published)'
+      : outcome.mode === 'async'
+        ? 'core summary path'
+        : 'placeholder summary (no summarizer; core < 0.6.1)';
   return {
     handled: true,
     nextState: { compactions: (state.compactions ?? 0) + 1 },
