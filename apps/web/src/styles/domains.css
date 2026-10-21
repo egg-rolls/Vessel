@@ -895,16 +895,17 @@
   opacity: 0.55;
 }
 
-/* 0.18：当前会话的待处理权限/提问占用 Composer 的底部槽位。 */
-.pending-slot {
+/* 0.18：pending 时用同尺寸提示卡替换 Composer；权限/提问共用同一外壳。 */
+.prompt-slot {
   width: 100%;
   max-width: 860px;
   margin-inline: auto;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 50vh;
-  padding: 10px 14px 12px;
+  /* 与 Composer 同宽同圆角；两种提示共用固定高度，串行切换时不引起页面跳动。 */
+  height: min(300px, 46vh);
+  padding: 9px 14px 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
   border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--line));
@@ -913,29 +914,44 @@
   box-shadow: var(--shadow);
 }
 
-.pending-slot-head {
+.prompt-slot-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 10px;
+  padding: 1px 0 2px;
+  background: var(--surface);
   font-size: 11px;
 }
 
-.pending-slot-title {
+/* 固定高度下长内容可滚动，但允许/拒绝/提交入口始终留在视野内。 */
+.prompt-slot .permission-card-actions,
+.prompt-slot .ask-card-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 8px;
+}
+
+.prompt-slot .permission-card-actions {
+  background: var(--surface-2);
+}
+
+.prompt-slot .ask-card-actions {
+  background: var(--bg);
+}
+
+.prompt-slot-kind {
   color: var(--ink);
   font-size: 12px;
 }
 
-.pending-slot-hint {
+.prompt-slot-hint {
   margin-left: auto;
   font-size: 10.5px;
-}
-
-.pending-slot-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-height: 0;
 }
 
 /* ── 运行详情 / 评测 ──────────────────────────────────── */

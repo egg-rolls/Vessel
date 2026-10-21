@@ -1,10 +1,13 @@
 /**
- * 跨 session 待处理权限的纯逻辑：判断哪些请求不在当前视图内。
+ * 待处理权限 / 提问的纯逻辑：归属、排序与 Composer 槽位的选择。
  *
- * 当前会话的权限/提问在 Composer 槽位处理（PendingComposer）；
+ * 当前会话的权限/提问在 Composer 槽位串行处理（PermissionPrompt / AskPrompt）；
  * 其他会话只在会话列表徽标与顶部条提示，绝不自动切换会话或弹出全局遮罩
  * （DECISION-024 §2.4）。
  */
+import { INTERACTION_TTL_MS } from '../../gateway/interactions';
+import type { AskUserRequest, PermissionRequest } from '../../gateway/types';
+
 interface SessionScoped {
   runId: string;
   sessionId?: string;
@@ -54,4 +57,33 @@ export function pendingForSession<T extends SessionScoped>(
       item.sessionId === sessionId ||
       (item.sessionId === undefined && sessionRunIds.has(item.runId)),
   );
+}
+
+export type NextPending =
+  | { kind: 'permission'; request: PermissionRequest }
+  | { kind: 'ask'; request: AskUserRequest };
+
+/**
+ * 串行处理：多个 pending 时只把最早的一条交给 Composer 槽位。
+ *
+ * 权限按 `requestedAt`；ask 的 `expiresAt = 事件时间 + TTL`，
+ * 回推事件时间后与权限统一比较。前一条被应答/移除后，下一次调用自然返回下一条。
+ */
+export function nextPending(
+  permissions: readonly PermissionRequest[],
+  asks: readonly AskUserRequest[],
+): NextPending | null {
+  let best: { at: number; next: NextPending } | null = null;
+  for (const request of permissions) {
+    if (!best || request.requestedAt < best.at) {
+      best = { at: request.requestedAt, next: { kind: 'permission', request } };
+    }
+  }
+  for (const request of asks) {
+    const at = request.expiresAt - INTERACTION_TTL_MS;
+    if (!best || at < best.at) {
+      best = { at, next: { kind: 'ask', request } };
+    }
+  }
+  return best?.next ?? null;
 }

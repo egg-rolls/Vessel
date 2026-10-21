@@ -7,7 +7,7 @@ function truncate(value: string, length: number): string {
 }
 
 /**
- * ask_user 卡片：与 PermissionCard 一起渲染在 Composer 槽位（PendingComposer）。
+ * ask_user 卡片：由 AskPrompt 渲染在 Composer 槽位（替换输入框）。
  *
  * - 提交中禁用全部按钮，防止双击；
  * - 其他端应答 / 过期 / run 终态由 ConnectionProvider 移除请求，卡片随之收起；

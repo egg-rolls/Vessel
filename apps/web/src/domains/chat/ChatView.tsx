@@ -36,8 +36,8 @@ import { useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
-import { PendingComposer } from './PendingComposer';
-import { pendingForSession } from './pending-permissions';
+import { AskPrompt, PermissionPrompt } from './PromptSlots';
+import { nextPending, pendingForSession } from './pending-permissions';
 import { QueuedSection, type QueuedSubmission, RunSection } from './RunSection';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
@@ -425,6 +425,12 @@ export function ChatView({
     [asks, selectedId, sessionRunIds],
   );
   const sessionPendingCount = sessionPermissions.length + sessionAsks.length;
+  // 串行处理：槽位一次只显示最早的一条，应答后自动切到下一条。
+  const pendingPrompt = useMemo(
+    () => nextPending(sessionPermissions, sessionAsks),
+    [sessionPermissions, sessionAsks],
+  );
+  const pendingMore = Math.max(0, sessionPendingCount - 1);
 
   // 会话列表徽标：其他会话的 pending 只计数，不渲染完整卡片。
   const pendingBySession = useMemo(() => {
@@ -1047,14 +1053,23 @@ export function ChatView({
           )}
         </div>
 
-        {pendingActive ? (
-          <PendingComposer
-            permissions={sessionPermissions}
-            asks={sessionAsks}
-            responding={responding}
+        {pendingPrompt && pendingPrompt.kind === 'permission' ? (
+          <PermissionPrompt
+            request={pendingPrompt.request}
+            more={pendingMore}
+            busy={responding.has(pendingPrompt.request.requestId)}
+            onDecide={(decision, scope) =>
+              handleDecidePermission(pendingPrompt.request.requestId, decision, scope)
+            }
+          />
+        ) : pendingPrompt && pendingPrompt.kind === 'ask' ? (
+          <AskPrompt
+            request={pendingPrompt.request}
+            more={pendingMore}
             now={now}
-            onDecidePermission={handleDecidePermission}
-            onRespondAsk={handleRespondAsk}
+            busy={responding.has(pendingPrompt.request.requestId)}
+            onSubmit={(answers) => handleRespondAsk(pendingPrompt.request.requestId, answers)}
+            onCancel={() => handleRespondAsk(pendingPrompt.request.requestId, [])}
           />
         ) : (
           <Composer

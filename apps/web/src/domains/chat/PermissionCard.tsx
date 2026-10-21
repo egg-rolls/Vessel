@@ -14,7 +14,8 @@ function prettyInput(input: unknown): string {
 }
 
 /**
- * 权限卡片：渲染在 Composer 槽位（PendingComposer），不再使用全局遮罩（DECISION-024 §2.4）。
+ * 权限卡片：由 PermissionPrompt 渲染在 Composer 槽位（替换输入框），不再使用全局遮罩
+ * （DECISION-024 §2.4）。
  *
  * Addendum A：权限等待默认不超时，因此不显示倒计时/过期；按钮只在提交中禁用。
  */

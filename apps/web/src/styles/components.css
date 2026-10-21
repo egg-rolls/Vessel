@@ -893,7 +893,7 @@
   width: min(620px, 100%);
 }
 
-/* 权限卡片：渲染在 Composer 槽位（PendingComposer）或 AppShell 面板内，不用全局遮罩。 */
+/* 权限卡片：渲染在 Composer 槽位（PermissionPrompt）或 AppShell 面板内，不用全局遮罩。 */
 .permission-card {
   display: flex;
   flex-direction: column;

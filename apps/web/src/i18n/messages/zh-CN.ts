@@ -127,10 +127,12 @@ export const messages = {
   'pending.agent': 'agent {id}',
   'pending.run': 'run {id}',
   'pending.session': 'session {id}',
-  // 0.18：当前会话的 pending 固定在 Composer 槽位；其他会话只在列表上计数。
-  'chat.pending.label': '待处理请求',
-  'chat.pending.title': '需要你的确认',
-  'chat.pending.hint': '全部处理完后自动回到输入框',
+  // 0.18：Composer 槽位的三种互斥状态；多个 pending 串行处理。
+  'chat.prompt.label': '对话输入槽位',
+  'chat.prompt.permission': '权限请求',
+  'chat.prompt.question': '需要你回答',
+  'chat.prompt.blocking': '对话已暂停，处理完继续',
+  'chat.prompt.more': '还有 {count} 个待处理',
   'chat.session.pending': '有 {count} 个待处理请求',
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）

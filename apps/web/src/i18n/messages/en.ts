@@ -130,10 +130,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.agent': 'agent {id}',
   'pending.run': 'run {id}',
   'pending.session': 'session {id}',
-  // 0.18: current-session pending lives in the Composer slot; other sessions only show a count.
-  'chat.pending.label': 'Pending requests',
-  'chat.pending.title': 'Waiting for your approval',
-  'chat.pending.hint': 'The composer returns after all requests are answered',
+  // 0.18: the Composer slot has three mutually exclusive states; pending requests are serial.
+  'chat.prompt.label': 'Conversation input slot',
+  'chat.prompt.permission': 'Permission request',
+  'chat.prompt.question': 'Answer required',
+  'chat.prompt.blocking': 'Conversation paused until resolved',
+  'chat.prompt.more': '{count} more pending',
   'chat.session.pending': '{count} pending request(s)',
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content

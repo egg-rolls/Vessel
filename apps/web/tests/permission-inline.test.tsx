@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
-import { PendingComposer } from '../src/domains/chat/PendingComposer';
+import { AskPrompt, PermissionPrompt } from '../src/domains/chat/PromptSlots';
 import {
+  nextPending,
   pendingPermissionsOutsideView,
   pendingPermissionTarget,
 } from '../src/domains/chat/pending-permissions';
@@ -21,19 +22,14 @@ function permission(overrides: Partial<PermissionRequest> = {}): PermissionReque
   };
 }
 
-describe('pending composer slot', () => {
-  test('renders the permission card where the composer would be', () => {
+describe('permission prompt (composer slot)', () => {
+  test('replaces the input box with the permission card', () => {
     const markup = renderToStaticMarkup(
-      <PendingComposer
-        permissions={[permission()]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
+      <PermissionPrompt request={permission()} onDecide={() => {}} />,
     );
 
     expect(markup).toContain('composer-area');
-    expect(markup).toContain('pending-slot');
+    expect(markup).toContain('prompt-slot');
     expect(markup).toContain('permission-card');
     expect(markup).toContain('data-request-id="perm-1"');
     expect(markup).toContain('bash');
@@ -41,7 +37,7 @@ describe('pending composer slot', () => {
     // Addendum A：不再显示倒计时/过期。
     expect(markup).not.toContain('permission-card expired');
     expect(markup).not.toContain('remaining');
-    // 四个动作都在卡片内。
+    // 四个动作都在卡片内（允许 once/session/always + 拒绝）。
     expect(markup.split('<button').length - 1).toBeGreaterThanOrEqual(4);
     // 不再渲染全局权限 Modal，也不再使用 Composer 输入框。
     expect(markup).not.toContain('permission-modal');
@@ -50,27 +46,36 @@ describe('pending composer slot', () => {
 
   test('disables actions only while the answer is submitting', () => {
     const markup = renderToStaticMarkup(
-      <PendingComposer
-        permissions={[permission()]}
-        responding={new Set(['perm-1'])}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
+      <PermissionPrompt request={permission()} busy onDecide={() => {}} />,
     );
     expect(markup).toContain('permission-card');
     expect(markup).toContain('disabled');
   });
 
-  test('renders nothing without pending requests (composer takes over)', () => {
-    expect(
-      renderToStaticMarkup(
-        <PendingComposer
-          responding={new Set()}
-          onDecidePermission={() => {}}
-          onRespondAsk={() => {}}
-        />,
-      ),
-    ).toBe('');
+  test('shows how many requests remain for serial handling', () => {
+    const markup = renderToStaticMarkup(
+      <PermissionPrompt request={permission()} more={2} onDecide={() => {}} />,
+    );
+    expect(markup).toContain('还有 2 个待处理');
+  });
+});
+
+describe('nextPending (serial order)', () => {
+  test('returns the earliest permission first', () => {
+    const later = permission({ requestId: 'later', requestedAt: 2_000 });
+    const earlier = permission({ requestId: 'earlier', requestedAt: 1_000 });
+    expect(nextPending([later, earlier], [])?.request.requestId).toBe('earlier');
+  });
+
+  test('compares asks by arrival time derived from expiresAt', () => {
+    const earlyAsk = ask({ requestId: 'early-ask', expiresAt: 1_000 + 120_000 });
+    const latePermission = permission({ requestId: 'late-perm', requestedAt: 2_000 });
+    expect(nextPending([latePermission], [earlyAsk])?.kind).toBe('ask');
+    expect(nextPending([latePermission], [earlyAsk])?.request.requestId).toBe('early-ask');
+  });
+
+  test('returns null when nothing is pending', () => {
+    expect(nextPending([], [])).toBeNull();
   });
 });
 
@@ -149,19 +154,13 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
   };
 }
 
-describe('pending composer slot with asks', () => {
-  test('renders the ask card in the composer slot instead of a global modal', () => {
+describe('ask prompt (composer slot)', () => {
+  test('replaces the input box with the ask card instead of a global modal', () => {
     const markup = renderToStaticMarkup(
-      <PendingComposer
-        asks={[ask()]}
-        responding={new Set()}
-        now={1_000}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
+      <AskPrompt request={ask()} now={1_000} onSubmit={() => {}} onCancel={() => {}} />,
     );
 
-    expect(markup).toContain('pending-slot');
+    expect(markup).toContain('prompt-slot');
     expect(markup).toContain('ask-card');
     expect(markup).toContain('data-request-id="ask-1"');
     expect(markup).toContain('Which one?');
@@ -172,13 +171,7 @@ describe('pending composer slot with asks', () => {
 
   test('disables submission until every question has an answer', () => {
     const markup = renderToStaticMarkup(
-      <PendingComposer
-        asks={[ask()]}
-        responding={new Set()}
-        now={1_000}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
+      <AskPrompt request={ask()} now={1_000} onSubmit={() => {}} onCancel={() => {}} />,
     );
     expect(markup).toContain('btn-primary');
     expect(markup).toContain('disabled');
