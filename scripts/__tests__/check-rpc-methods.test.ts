@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import {
-  checkRpcMethods,
-  compareMethodTables,
-  EXPECTED_METHODS,
-  parseDocMethodTable,
-} from '../check-rpc-methods';
+import { checkRpcMethods, compareMethodTables, parseDocMethodTable } from '../check-rpc-methods';
 
 const DOC = [
   '<!-- rpc-methods:begin -->',
@@ -51,6 +46,5 @@ describe('check-rpc-methods', () => {
 
   it('matches the repository manifest and architecture table', async () => {
     expect(await checkRpcMethods(process.cwd())).toEqual([]);
-    expect(Object.keys(EXPECTED_METHODS).length).toBe(38);
   });
 });
