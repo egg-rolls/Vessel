@@ -29,12 +29,13 @@ import type { FileHandle } from 'node:fs/promises';
 import { chmod, mkdir, open, readdir, readFile, rm, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { noopLogger } from '../logging.js';
+// D2：跨模块只允许从 barrel 导入（不得直接引用 tenant 的内部文件）。
 import {
   encodeSessionDirName,
   sessionDirPath,
   sessionEventsFilePath,
   sessionIndexFilePath,
-} from '../tenant/tenant-paths.js';
+} from '../tenant/index.js';
 import type { SessionEventInput, SessionEventRecord, SessionIndexPatch } from '../types/event.js';
 import type { Logger } from '../types/logging.js';
 import { atomicWrite } from './atomic-write.js';

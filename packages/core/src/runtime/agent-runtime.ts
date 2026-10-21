@@ -14,8 +14,8 @@ import {
   MemoryLimitChecker,
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
-import { mergeHistoryProjection, projectMessages } from '../session/project-messages.js';
-import { deriveSessionMeta } from '../session/session-backend.js';
+// D2：跨模块只允许从 barrel 导入（不得直接引用 session 的内部文件）。
+import { deriveSessionMeta, mergeHistoryProjection, projectMessages } from '../session/index.js';
 import type { ContextCompactedReason, ContextManager } from '../types/context.js';
 import type { ErrorEnvelope } from '../types/error.js';
 import type { EventStream, RunEvent, SessionEventLogPort, Unsubscribe } from '../types/event.js';
