@@ -553,26 +553,16 @@ export class AgentRuntime {
     // 不再无条件 clear() -- 那会丢多轮历史（debug-notes 当年为修累积 bug 的过度修复）。
     // 只在 context 为空时加载一次，不会累积。
     if (this.context.messages.length === 0) {
-      let restored = false;
-      if (this.session) {
-        const saved = await this.session.load(sessionId);
-        if (saved?.messages?.length) {
-          for (const m of saved.messages) {
-            this.addContext(m, runId);
-          }
-          restored = true;
-        }
-      }
       // 0.15 E9：Self Card 在 run 开始时生成一次；无 selfCard 时等于原 systemPrompt
       this.runSystemPrompt = this.composeRunSystemPrompt();
-      if (!restored && this.runSystemPrompt) {
-        this.addContext(
-          {
-            role: 'system',
-            content: this.runSystemPrompt,
-          },
-          runId,
-        );
+      // 0.18：新 run 也要重放 session 缓存之后的日志增量；否则 saveSession 会把
+      // 未进入上下文的事件标记成“已覆盖”（derived_upto_seq 超前）。
+      const history = await this.loadStoredHistory(sessionId);
+      if (!history.some((message) => message.role === 'system') && this.runSystemPrompt) {
+        this.addContext({ role: 'system', content: this.runSystemPrompt }, runId);
+      }
+      for (const message of history) {
+        this.addContext(message, runId);
       }
     } else {
       this.runSystemPrompt = this.composeRunSystemPrompt();
@@ -885,7 +875,7 @@ export class AgentRuntime {
       // legacy 回退（旧文件）。禁止用较旧的 checkpoint 覆盖较新的 session。
       // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
       this.runSystemPrompt = this.composeRunSystemPrompt();
-      const history = await this.loadResumeHistory(sessionId, checkpoint);
+      const history = await this.loadStoredHistory(sessionId, checkpoint);
       if (history.length === 0) {
         throw new RunResumeError('run_not_resumable', runId, 'empty checkpoint');
       }
@@ -909,12 +899,8 @@ export class AgentRuntime {
           ? { tenant_id: this.tenantId ?? checkpoint.tenant_id }
           : {}),
       };
-      await this.saveSession(runState);
-      await this.updateSessionIndexBestEffort(runState);
-
-      // 标记已被接管（唯一写者：AgentRuntime）
-      await this.writeCheckpoint(execution, 'running');
-
+      // 0.18：先发布 run.resumed，再 saveSession；否则 derived_upto_seq 会漏掉
+      // 这条事件（legacy checkpoint 复用 session 时尤其明显）。
       this.publishEvent({
         type: 'run.resumed',
         run_id: runId,
@@ -926,6 +912,12 @@ export class AgentRuntime {
         },
         ts: Date.now(),
       });
+
+      await this.saveSession(runState);
+      await this.updateSessionIndexBestEffort(runState);
+
+      // 标记已被接管（唯一写者：AgentRuntime）
+      await this.writeCheckpoint(execution, 'running');
 
       try {
         const response = await this.toolCallingLoop(execution, signal);
@@ -1895,14 +1887,17 @@ export class AgentRuntime {
   }
 
   /**
-   * 0.18：恢复历史。优先级：
+   * 0.18：恢复历史（run 启动 / resume 共用）。优先级：
    * 1) session 缓存（含压缩摘要等事件不可重建的消息）+ 事件日志中 `seq > derived_upto_seq` 的增量；
-   * 2) 事件日志完整投影；
-   * 3) 旧 checkpoint.messages（legacy 只读兼容）。
+   * 2) 事件日志完整投影（旧缓存无 derived 时做重叠去重）；
+   * 3) 旧 checkpoint.messages（仅 resume 的 legacy 只读兼容）。
+   *
+   * run() 也必须走这里：否则崩溃后新 run 只读缓存，saveSession 会把未重放的
+   * 尾段事件错误标记为已覆盖。
    */
-  private async loadResumeHistory(
+  private async loadStoredHistory(
     sessionId: string,
-    checkpoint: RunCheckpoint,
+    checkpoint?: RunCheckpoint,
   ): Promise<Message[]> {
     let sessionState: RunState | null = null;
     if (this.session) {
@@ -1924,7 +1919,7 @@ export class AgentRuntime {
         );
         // 一致性校验（P2）：checkpoint 游标 / session 派生游标不得超前于日志。
         const lastSeq = await this.eventLog.lastSeq?.(sessionId);
-        const checkpointCursor = checkpoint.event_cursor;
+        const checkpointCursor = checkpoint?.event_cursor;
         if (
           typeof checkpointCursor === 'number' &&
           checkpointCursor > 0 &&
@@ -1972,7 +1967,9 @@ export class AgentRuntime {
       if (projected.length > 0) return projected;
     }
 
-    return Array.isArray(checkpoint.messages) ? checkpoint.messages : [];
+    return checkpoint !== undefined && Array.isArray(checkpoint.messages)
+      ? checkpoint.messages
+      : [];
   }
 
   /** 0.18：best-effort 索引更新；永不向外抛 */

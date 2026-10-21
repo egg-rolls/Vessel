@@ -96,6 +96,13 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
   const terminalByRun = new Map<string, RunEvent>();
   const candidates = new Set<string>();
   let coreRunId: string | undefined;
+  /**
+   * `runs.get` 是否可用。可用时只信 job → core_run_id 的权威映射，
+   * 不再用 session+input 猜测（同 prompt 并发 run 会误收别人的终态）。
+   */
+  let authoritative = false;
+  /** 明确探测到 runs.get 不可用后才允许事件猜测兜底 */
+  let getRunUnavailable = false;
 
   const matchStarted = (event: RunEvent): boolean => {
     if (event.type !== 'run.started') return false;
@@ -162,11 +169,15 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
         try {
           raw = await getRun(jobId);
         } catch {
-          // 旧 gateway / 权限不足：继续靠事件匹配。
+          // 旧 gateway / 权限不足：允许退回 session+input 事件匹配。
+          if (!authoritative) getRunUnavailable = true;
+          trySettleFromEvents();
           return;
         }
         const record = unwrapRun(raw);
         if (record === undefined || settled) return;
+        authoritative = true;
+        getRunUnavailable = false;
         if (typeof record.core_run_id === 'string') {
           coreRunId = record.core_run_id;
           candidates.add(coreRunId);
@@ -183,6 +194,8 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
           settleFromEvent(direct);
           return;
         }
+        // 只有明确探测到 runs.get 不可用时，才退回 session+input 猜测。
+        if (!getRunUnavailable) return;
         for (const runId of candidates) {
           const terminal = terminalByRun.get(runId);
           if (terminal) {
@@ -203,12 +216,17 @@ export async function waitForConnectedRun(options: WaitForConnectedRunOptions): 
         }
         if (!TERMINAL_RUN_EVENT_TYPES.has(event.type)) return;
         terminalByRun.set(event.run_id, event);
-        if (event.run_id === coreRunId || candidates.has(event.run_id)) {
+        if (coreRunId !== undefined && event.run_id === coreRunId) {
           settleFromEvent(event);
-        } else {
-          // 未知 run 的终态：交给 runs.get 判断是否属于本 job。
-          void refreshRun();
+          return;
         }
+        if (getRunUnavailable && candidates.has(event.run_id)) {
+          // 旧 gateway（runs.get 不可用）：退回 session+input 匹配。
+          settleFromEvent(event);
+          return;
+        }
+        // 权威模式下先缓冲；runs.get 会给出本 job 的 core_run_id 或终态。
+        void refreshRun();
       });
 
       if (signal?.aborted) {

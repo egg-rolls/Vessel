@@ -8,6 +8,7 @@ import { AgentRuntime } from '../src/runtime/agent-runtime.js';
 import { MemoryPluginHost } from '../src/runtime/plugin-host.js';
 import { FileSessionBackend } from '../src/session/file-backend.js';
 import { FileRunStore } from '../src/session/run-store.js';
+import { MemorySessionBackend } from '../src/session/session-backend.js';
 import { SessionEventLog } from '../src/session/session-event-log.js';
 import type { LLMProvider, Message } from '../src/types/provider.js';
 import type { RunCheckpoint, RunStore } from '../src/types/run-store.js';
@@ -88,6 +89,79 @@ function toolCallProvider(): LLMProvider {
       throw new Error('simulated crash');
     },
   };
+}
+
+/** 播种“崩溃现场”：session 缓存 + running checkpoint + 已落盘事件 */
+async function seedCrash(opts: {
+  sessionsDir: string;
+  runsDir: string;
+  sessionId: string;
+  runId: string;
+  messages: Message[];
+  derived?: number;
+  events: Array<{ type: string; data: Record<string, unknown> }>;
+}): Promise<{ store: RunningOnlyRunStore; log: SessionEventLog }> {
+  const backend = new FileSessionBackend(opts.sessionsDir);
+  await backend.save({
+    run_id: opts.runId,
+    session_id: opts.sessionId,
+    messages: opts.messages,
+    started_at: 1,
+    status: 'running',
+    ...(opts.derived !== undefined ? { derived_upto_seq: opts.derived } : {}),
+  });
+  const store = new RunningOnlyRunStore(new FileRunStore({ dir: opts.runsDir }));
+  await store.save({
+    run_id: opts.runId,
+    session_id: opts.sessionId,
+    status: 'running',
+    messages: [],
+    created_at: 1,
+    updated_at: 2,
+  });
+  const log = new SessionEventLog({ dir: opts.sessionsDir, durable: false });
+  for (const event of opts.events) {
+    await log.append({
+      session_id: opts.sessionId,
+      run_id: opts.runId,
+      type: event.type,
+      ts: Date.now(),
+      data: event.data,
+    });
+  }
+  return { store, log };
+}
+
+function toolRoundEvents(runId: string, sessionId: string) {
+  return [
+    { type: 'run.started', data: { run_id: runId, session_id: sessionId, input: 'go' } },
+    {
+      type: 'user.message',
+      data: { run_id: runId, session_id: sessionId, message: { role: 'user', content: 'go' } },
+    },
+    {
+      type: 'llm.response',
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        content: 'calling',
+        finish_reason: 'tool_calls',
+        tool_calls: [
+          { id: 'call-1', type: 'function', function: { name: 'echo', arguments: '{}' } },
+        ],
+      },
+    },
+    {
+      type: 'tool.call.started',
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        tool_call_id: 'call-1',
+        tool_name: 'echo',
+        arguments: {},
+      },
+    },
+  ];
 }
 
 describe('resume 以 session + 事件日志为准（0.18 P0）', () => {
@@ -186,5 +260,171 @@ describe('resume 以 session + 事件日志为准（0.18 P0）', () => {
     await resumedLog.close();
     await crashRuntime.dispose();
     await resumeRuntime.dispose();
+  });
+
+  it('新 run 启动时重放崩溃尾段，derived_upto_seq 不超前（0.18 QA #1）', async () => {
+    const root = await tempDir();
+    const sessionsDir = join(root, 'sessions');
+    const runsDir = join(root, 'runs');
+    const { store, log } = await seedCrash({
+      sessionsDir,
+      runsDir,
+      sessionId: 'session-1',
+      runId: 'run-crash',
+      messages: [{ role: 'user', content: 'go' }],
+      derived: 2,
+      events: [
+        ...toolRoundEvents('run-crash', 'session-1'),
+        {
+          type: 'tool.call.completed',
+          data: {
+            run_id: 'run-crash',
+            session_id: 'session-1',
+            tool_call_id: 'call-1',
+            tool_name: 'echo',
+            result: 'tool-result',
+          },
+        },
+      ],
+    });
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'echo',
+      description: 'echo',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async () => 'tool-result',
+    });
+
+    try {
+      const seen: Message[][] = [];
+      const runtime = await AgentRuntime.create({
+        provider: {
+          async chat(req) {
+            seen.push(req.messages.map((message) => ({ ...message })));
+            return { content: 'next', finish_reason: 'stop' };
+          },
+        },
+        model: 'test-model',
+        context: new MemoryContextManager(),
+        events: new MemoryEventStream(),
+        limits: { requestLimit: 10, toolCallsLimit: 5 },
+        termination: { maxIterations: 10 },
+        pluginHost,
+        session: new FileSessionBackend(sessionsDir),
+        runStore: store,
+        eventLog: log,
+      });
+
+      await expect(runtime.run('continue', 'session-1', { runId: 'run-2' })).resolves.toBe('next');
+      // 新 run 必须看到崩溃前已落盘的工具结果，而不是只有缓存里的 user
+      expect(seen[0]?.map((message) => message.role)).toEqual([
+        'user',
+        'assistant',
+        'tool',
+        'user',
+      ]);
+      expect(seen[0]?.[2]).toMatchObject({ role: 'tool', content: 'tool-result' });
+
+      // 保存的 derived 必须覆盖已重放的工具事件（seq 5），且不得超过日志尾
+      const saved = await new FileSessionBackend(sessionsDir).load('session-1');
+      const lastSeq = await log.lastSeq('session-1');
+      const derived = saved?.derived_upto_seq ?? 0;
+      expect(derived).toBeGreaterThanOrEqual(5);
+      expect(derived).toBeLessThanOrEqual(lastSeq ?? 0);
+      await runtime.dispose();
+    } finally {
+      await log.close();
+    }
+  });
+
+  it('tool.call.started 与 completed 之间崩溃：resume 不丢该轮（降级为 assistant）', async () => {
+    const root = await tempDir();
+    const sessionsDir = join(root, 'sessions');
+    const runsDir = join(root, 'runs');
+    const { store, log } = await seedCrash({
+      sessionsDir,
+      runsDir,
+      sessionId: 'session-1',
+      runId: 'run-crash',
+      messages: [{ role: 'user', content: 'go' }],
+      derived: 2,
+      events: toolRoundEvents('run-crash', 'session-1'),
+    });
+    try {
+      const seen: Message[][] = [];
+      const runtime = await AgentRuntime.create({
+        provider: {
+          async chat(req) {
+            seen.push(req.messages.map((message) => ({ ...message })));
+            return { content: 'recovered', finish_reason: 'stop' };
+          },
+        },
+        model: 'test-model',
+        context: new MemoryContextManager(),
+        events: new MemoryEventStream(),
+        limits: { requestLimit: 10, toolCallsLimit: 5 },
+        termination: { maxIterations: 10 },
+        pluginHost: new MemoryPluginHost(),
+        session: new FileSessionBackend(sessionsDir),
+        runStore: store,
+        eventLog: log,
+      });
+
+      await expect(runtime.resume('run-crash')).resolves.toBe('recovered');
+      // 没有 tool 结果时 normalizeMessages 把 assistant(tool_calls) 降级为文本；
+      // 但这一轮不能整段丢失。
+      expect(seen[0]?.map((message) => message.role)).toEqual(['user', 'assistant']);
+      expect(seen[0]?.[1]).toMatchObject({ role: 'assistant', content: 'calling' });
+      await runtime.dispose();
+    } finally {
+      await log.close();
+    }
+  });
+
+  it('legacy checkpoint resume：run.resumed 先落盘，session derived 覆盖它（0.18 QA #2）', async () => {
+    const root = await tempDir();
+    const sessionsDir = join(root, 'sessions');
+    const runsDir = join(root, 'runs');
+    const session = new MemorySessionBackend();
+    const store = new RunningOnlyRunStore(new FileRunStore({ dir: runsDir }));
+    await store.save({
+      run_id: 'run-legacy',
+      session_id: 'session-legacy',
+      status: 'running',
+      messages: [
+        { role: 'system', content: 'sys' },
+        { role: 'user', content: 'prior' },
+        { role: 'assistant', content: 'answer' },
+      ],
+      created_at: 1,
+      updated_at: 2,
+    });
+    const log = new SessionEventLog({ dir: sessionsDir, durable: false });
+    try {
+      const runtime = await AgentRuntime.create({
+        provider: {
+          chat: async () => ({ content: 'resumed', finish_reason: 'stop' }),
+        },
+        model: 'test-model',
+        context: new MemoryContextManager(),
+        events: new MemoryEventStream(),
+        limits: { requestLimit: 10, toolCallsLimit: 5 },
+        termination: { maxIterations: 10 },
+        pluginHost: new MemoryPluginHost(),
+        session,
+        runStore: store,
+        eventLog: log,
+      });
+
+      await expect(runtime.resume('run-legacy')).resolves.toBe('resumed');
+      const events = await log.read('session-legacy');
+      const resumed = events.find((event) => event.type === 'run.resumed');
+      expect(resumed).toBeDefined();
+      const saved = await session.load('session-legacy');
+      expect(saved?.derived_upto_seq ?? 0).toBeGreaterThanOrEqual(resumed?.seq ?? 0);
+      await runtime.dispose();
+    } finally {
+      await log.close();
+    }
   });
 });

@@ -375,8 +375,22 @@ export class SessionEventLog {
         : undefined;
     if (limit === 0) return [];
 
-    const result: SessionEventRecord[] = [];
+    const collected: SessionEventRecord[] = [];
     let malformed = 0;
+    let foreign = 0;
+    const accept = (record: SessionEventRecord | null): void => {
+      if (record === null) {
+        malformed += 1;
+        return;
+      }
+      // 多写者/目录混用时文件里可能有别的 session 记录；必须按 session_id 过滤。
+      if (record.session_id !== sessionId) {
+        foreign += 1;
+        return;
+      }
+      if (since !== undefined && record.seq <= since) return;
+      collected.push(record);
+    };
     // 流式读取：避免把大 session 的整份 NDJSON 读进内存。
     // 设置 encoding 后 Node 的 Readable 内部用 StringDecoder，跨 chunk 的多字节字符安全。
     const stream = createReadStream(path, { encoding: 'utf8' });
@@ -386,48 +400,29 @@ export class SessionEventLog {
         buffer += chunk;
         let newline = buffer.indexOf('\n');
         while (newline >= 0) {
-          const line = buffer.slice(0, newline);
+          accept(parseRecord(buffer.slice(0, newline)));
           buffer = buffer.slice(newline + 1);
-          if (line.trim() !== '') {
-            const record = parseRecord(line);
-            if (record === null) {
-              malformed += 1;
-            } else if (since === undefined || record.seq > since) {
-              result.push(record);
-              if (limit !== undefined && result.length >= limit) {
-                buffer = '';
-                break;
-              }
-            }
-          }
           newline = buffer.indexOf('\n');
         }
-        if (limit !== undefined && result.length >= limit) break;
       }
       // 文件末尾没有换行的残行（崩溃残留）按坏行处理。
-      if (buffer.trim() !== '') {
-        const record = parseRecord(buffer);
-        if (record === null) malformed += 1;
-        else if (
-          (since === undefined || record.seq > since) &&
-          (limit === undefined || result.length < limit)
-        ) {
-          result.push(record);
-        }
-      }
+      if (buffer.trim() !== '') accept(parseRecord(buffer));
     } catch (error) {
       if (isNotFound(error)) return [];
       throw error;
     } finally {
       stream.destroy();
     }
-    if (malformed > 0) {
-      this.logger.warn('session event log skipped malformed lines', {
+    if (malformed > 0 || foreign > 0) {
+      this.logger.warn('session event log skipped invalid lines', {
         session_id: sessionId,
         malformed,
+        foreign,
       });
     }
-    return result;
+    // 文件行序在轮换写者下不保证与 seq 一致；对外承诺按 seq 升序。
+    collected.sort((a, b) => a.seq - b.seq);
+    return limit !== undefined ? collected.slice(0, limit) : collected;
   }
 
   /** 遍历事件；不传 sessionId 时遍历所有会话目录（按目录名排序） */

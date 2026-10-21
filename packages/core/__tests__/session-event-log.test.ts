@@ -1,5 +1,5 @@
 ﻿import { afterEach, describe, expect, it } from 'bun:test';
-import { appendFile, mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SessionEventLog, SessionEventLogDeletedError } from '../src/session/session-event-log.js';
@@ -165,6 +165,37 @@ describe('SessionEventLog（0.18 事件溯源）', () => {
       await expect(log.append(input('s1', 'b'))).rejects.toBeInstanceOf(
         SessionEventLogDeletedError,
       );
+    } finally {
+      await log.close();
+    }
+  });
+
+  it('read 按 seq 升序返回，并过滤其它 session_id 的记录', async () => {
+    const dir = await tempDir();
+    const log = new SessionEventLog({ dir, durable: false });
+    try {
+      const sessionDir = sessionDirPath(dir, 's1');
+      await mkdir(sessionDir, { recursive: true });
+      const line = (seq: number, sessionId = 's1') =>
+        `${JSON.stringify({
+          v: 1,
+          session_id: sessionId,
+          run_id: 'run-1',
+          seq,
+          ts: seq,
+          type: 'test.x',
+          data: { seq },
+        })}\n`;
+      // 轮换写者/坏文件：行序 3,1,2，并混入另一个 session 的记录
+      await writeFile(
+        sessionEventsFilePath(dir, 's1'),
+        `${line(3)}${line(1)}${line(99, 'other')}${line(2)}`,
+        'utf8',
+      );
+
+      expect((await log.read('s1')).map((record) => record.seq)).toEqual([1, 2, 3]);
+      expect((await log.read('s1', { limit: 2 })).map((record) => record.seq)).toEqual([1, 2]);
+      expect((await log.read('s1', { sinceSeq: 1 })).map((record) => record.seq)).toEqual([2, 3]);
     } finally {
       await log.close();
     }
