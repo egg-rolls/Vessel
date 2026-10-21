@@ -5,10 +5,34 @@
  * 0.1 的插件私有 `RuntimeHost` / `InProcessRuntimeHost` 兼容层已移除（ADR-037）。
  */
 
-import type { LLMProvider, PluginHost, TerminationPolicy, UsageLimits } from '@vessel-agent/core';
+import type {
+  LLMProvider,
+  PluginHost,
+  TerminationPolicy,
+  Usage,
+  UsageLimits,
+} from '@vessel-agent/core';
 
 /** 成员状态 */
 export type AgentState = 'idle' | 'running' | 'cancelled' | 'error' | 'closed';
+
+/** 0.16 成员状态（DECISION-031 E1）；与 `agents.tree` / `agents.list` 同名同义 */
+export type MemberState =
+  | 'created'
+  | 'idle'
+  | 'running'
+  | 'waiting_permission'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'closed'
+  | 'stale';
+
+/** 成员可见性：private 仅 owner；team / tenant 同 tenant 可寻址 */
+export type MemberVisibility = 'private' | 'team' | 'tenant';
+
+/** 成员权限模式：bridge 弹到父窗口；allow 自动放行；deny 只保留只读工具 */
+export type MemberPermissionMode = 'bridge' | 'allow' | 'deny';
 
 /** 消息类型（team 语义由插件声明；core 的 kind 是开放 string） */
 export type TeamMessageKind = 'message' | 'task' | 'result' | 'cancel';
@@ -36,6 +60,31 @@ export interface AgentSpec {
   systemPrompt?: string;
   limits?: UsageLimits;
   termination?: TerminationPolicy;
+  /** 0.16：成员默认 session id（session 即成员；缺省由 core 用 'default'） */
+  sessionId?: string;
+  /** 0.16：成员可见性（注册表使用；不传给 core） */
+  visibility?: MemberVisibility;
+  /** 0.16：成员权限模式（注册表/桥接使用；不传给 core） */
+  permissionMode?: MemberPermissionMode;
+  /** 0.16：父成员 id（注册表使用） */
+  parentId?: string;
+  /** 0.16：父 session id，权限桥的 parent_session_id */
+  parentSessionId?: string;
+  /** 0.16：成员 owner（spawn/close 权限；默认插件 ownerId） */
+  owner?: string;
+}
+
+/** 0.16 成员状态视图（E1） */
+export interface MemberStatus {
+  id: string;
+  session_id: string;
+  name?: string;
+  parent_id?: string;
+  visibility: MemberVisibility;
+  state: MemberState;
+  current_tool?: string;
+  last_seen?: number;
+  usage?: Usage;
 }
 
 /** 成员状态视图（保持 0.1 字段，不暴露 currentRunId） */

@@ -20,11 +20,21 @@ import type {
   UsageLimits,
 } from '@vessel-agent/core';
 import { MemoryPluginHost } from '@vessel-agent/core';
+import { installAgentObservers, makeAgentTool } from './agent.js';
 import { CoreHostAdapter, type TeamHostPort } from './core-adapter.js';
-import type { AgentStatus, TeamMessage, TeamMessageKind } from './host.js';
+import type {
+  AgentStatus,
+  MemberPermissionMode,
+  MemberVisibility,
+  TeamMessage,
+  TeamMessageKind,
+} from './host.js';
+import { MemberRegistry } from './registry.js';
 import { RoutingTeamHost } from './routing.js';
 
 export * from './host.js';
+export type { MemberRecord } from './registry.js';
+export { MemberRegistry, toMemberStatus } from './registry.js';
 
 /** 团队工具前缀：不给成员复制，防止成员继续 spawn/发消息 */
 const TEAM_TOOL_PREFIX = 'team_';
@@ -61,6 +71,14 @@ export interface TeamPluginOptions {
   memberTermination?: TerminationPolicy;
   /** 0.5：tenant 作用域（可选）；缺失不写 tenant_id。 */
   tenantId?: string;
+  /** 0.16：同时注册 legacy `team_*` 工具（默认 true，保留一个版本） */
+  legacyTools?: boolean;
+  /** 0.16：spawn 的默认可见性（默认 private） */
+  defaultVisibility?: MemberVisibility;
+  /** 0.16：成员默认权限模式（默认 bridge） */
+  permissionMode?: MemberPermissionMode;
+  /** 0.16：deny 模式保留的只读工具（默认 ['read']） */
+  readOnlyTools?: string[];
 }
 
 /** 解析后的配置 */
@@ -71,6 +89,10 @@ interface ResolvedConfig {
   ownerId: string;
   memberLimits?: UsageLimits;
   memberTermination?: TerminationPolicy;
+  legacyTools: boolean;
+  defaultVisibility: MemberVisibility;
+  permissionMode: MemberPermissionMode;
+  readOnlyTools: string[];
 }
 
 /** 类型守卫 */
@@ -90,17 +112,36 @@ function withNode(id: string, node: string): string {
   return `${node}:${id}`;
 }
 
+/** 成员宿主的权限模式选项（0.16） */
+export interface ChildHostOptions {
+  permissionMode?: MemberPermissionMode;
+  /** deny 模式保留的只读工具（默认 ['read']） */
+  readOnlyTools?: string[];
+}
+
+/** allow 模式：成员工具自动放行 */
+function withAutoAllow(tool: ToolDefinition): ToolDefinition {
+  return { ...tool, checkPermission: async () => 'allow' };
+}
+
 /**
- * 成员的插件宿主：复制工具（排除 team_*）、guardrail、hook。
- * 成员不能继续 delegate 团队能力，避免无限扩张。
+ * 成员的插件宿主：复制工具（排除 team_* / agent）、guardrail、hook。
+ * 成员不能继续 spawn 团队能力，避免无限扩张。
  * 对外导出供 asm 远端 spawn 复用，保证远端与本机成员工具面一致。
  */
-export function buildChildHost(host: PluginHost): MemoryPluginHost {
+export function buildChildHost(host: PluginHost, options: ChildHostOptions = {}): MemoryPluginHost {
   const childHost = new MemoryPluginHost();
   for (const guardrail of host.getGuardrails()) childHost.registerGuardrail(guardrail);
   for (const hook of host.getHooks()) childHost.registerHook(hook);
+  const readOnly = new Set(options.readOnlyTools ?? ['read']);
   for (const tool of host.listTools()) {
     if (tool.name.startsWith(TEAM_TOOL_PREFIX)) continue;
+    if (tool.name === 'agent') continue;
+    if (options.permissionMode === 'deny' && !readOnly.has(tool.name)) continue;
+    if (options.permissionMode === 'allow') {
+      childHost.registerTool(withAutoAllow(tool));
+      continue;
+    }
     childHost.registerTool(tool);
   }
   return childHost;
@@ -334,21 +375,67 @@ export function createTeamPlugin(options: TeamPluginOptions): Plugin {
     ownerId,
     memberLimits: options.memberLimits,
     memberTermination: options.memberTermination,
+    legacyTools: options.legacyTools ?? true,
+    defaultVisibility: options.defaultVisibility ?? 'private',
+    permissionMode: options.permissionMode ?? 'bridge',
+    readOnlyTools: options.readOnlyTools ?? ['read'],
   };
+  const registry = new MemberRegistry(tenantId);
+  // 未显式给父事件流时退回 Host 聚合流（agent.* 事件与 core 事件同源）
+  const parentEvents = options.events ?? options.host.events;
+  let disposeObservers: (() => void) | undefined;
 
   return {
     name: 'team',
-    version: '0.1.0',
-    description: 'agent team prototype: spawn / send / inbox / cancel / status (opt-in)',
+    version: '0.2.0',
+    description: 'agent team: agent(spawn/send/close) + legacy team_* registry (opt-in)',
     install(host: PluginHost) {
-      const tools: ToolDefinition[] = [
-        makeSpawnTool(host, config),
-        makeSendTool(config),
-        makeInboxTool(config),
-        makeStatusTool(config),
-        makeCancelTool(config),
-      ];
-      for (const tool of tools) host.registerTool(tool);
+      if (config.legacyTools) {
+        const legacy: ToolDefinition[] = [
+          makeSpawnTool(host, config),
+          makeSendTool(config),
+          makeInboxTool(config),
+          makeStatusTool(config),
+          makeCancelTool(config),
+        ];
+        for (const tool of legacy) host.registerTool(tool);
+      }
+
+      host.registerTool(
+        makeAgentTool({
+          port,
+          registry,
+          providerFactory: config.providerFactory,
+          model: config.model,
+          ownerId,
+          ...(tenantId !== undefined ? { tenantId } : {}),
+          events: parentEvents,
+          hostEvents: options.host.events,
+          buildHost: (permissionMode) =>
+            buildChildHost(host, {
+              permissionMode,
+              readOnlyTools: config.readOnlyTools,
+            }),
+          defaultVisibility: config.defaultVisibility,
+          permissionMode: config.permissionMode,
+          ...(config.memberLimits !== undefined ? { memberLimits: config.memberLimits } : {}),
+          ...(config.memberTermination !== undefined
+            ? { memberTermination: config.memberTermination }
+            : {}),
+        }),
+      );
+
+      disposeObservers?.();
+      disposeObservers = installAgentObservers({
+        registry,
+        events: parentEvents,
+        hostEvents: options.host.events,
+        ...(tenantId !== undefined ? { tenantId } : {}),
+      });
+    },
+    dispose() {
+      disposeObservers?.();
+      disposeObservers = undefined;
     },
   };
 }

@@ -115,6 +115,22 @@ function isContextOverflowError(error: unknown): boolean {
 /** Self Card token 上限（0.15 E9） */
 const SELF_CARD_TOKEN_LIMIT = 400;
 
+/**
+ * BeforeLlm 注入消息的稳定键（0.16 E5）。
+ * 有 `name` / `timestamp` 时按键去重；都缺失时返回 undefined，退回对象引用去重。
+ */
+function injectedMessageKey(message: Message): string | undefined {
+  if (message.name === undefined && message.timestamp === undefined) return undefined;
+  return [
+    message.name ?? '',
+    message.timestamp ?? '',
+    message.role,
+    message.tool_call_id ?? '',
+    message.tool_calls?.map((call) => call.id).join(',') ?? '',
+    message.content,
+  ].join('\u0000');
+}
+
 /** 按估算 token 截断（Self Card 上限） */
 function truncateToTokens(text: string, limit: number): string {
   if (estimateTokens(text) <= limit) return text;
@@ -204,6 +220,9 @@ export class AgentRuntime {
   private runSystemPrompt?: string;
   /** 0.15 E2：本 run 已预警的 limit key（每个 key 只发一次） */
   private readonly warnedLimitKeys = new Set<string>();
+  /** 0.16 E5：本 run 已注入的消息稳定键 / 对象引用（BeforeLlm 去重） */
+  private readonly injectedMessageKeys = new Set<string>();
+  private injectedMessageRefs = new WeakSet<Message>();
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
   private hooks: HookRunner;
@@ -397,6 +416,9 @@ export class AgentRuntime {
       cleanups: [],
     };
     this.warnedLimitKeys.clear();
+    // 0.16 E5：BeforeLlm 注入去重按 run 重置
+    this.injectedMessageKeys.clear();
+    this.injectedMessageRefs = new WeakSet();
     return execution;
   }
 
@@ -865,6 +887,10 @@ export class AgentRuntime {
         hookCtx.systemPrompt = baseSystemPrompt;
       }
       const beforeLlm = await this.hooks.run(HookType.BeforeLlm, hookCtx);
+
+      // 0.16 E5：BeforeLlm 注入的消息按返回顺序写入上下文一次（进入本次请求，
+      // 后续轮次直接从上下文可见；重复返回同一批消息不重复写入）。
+      this.appendInjectedMessages(runId, hookCtx.messages);
 
       // 组装本次请求的消息（持久化上下文 + BeforeLlm 注入的 system prompt）。
       // 0.6.1 P2：HookResult.additionalContext 追加在 systemPrompt 之后。
@@ -1491,6 +1517,25 @@ export class AgentRuntime {
           error,
         }),
       };
+    }
+  }
+
+  /**
+   * 消费 BeforeLlm 的 `ctx.messages`（0.16 E5）：逐条写入上下文一次。
+   * 已注入的消息按稳定键（`name` / `timestamp`）去重；两者都缺失时按对象引用去重。
+   */
+  private appendInjectedMessages(runId: string, messages: readonly Message[] | undefined): void {
+    if (!messages || messages.length === 0) return;
+    for (const message of messages) {
+      const key = injectedMessageKey(message);
+      if (key !== undefined) {
+        if (this.injectedMessageKeys.has(key)) continue;
+        this.injectedMessageKeys.add(key);
+      } else {
+        if (this.injectedMessageRefs.has(message)) continue;
+        this.injectedMessageRefs.add(message);
+      }
+      this.addContext(message, runId);
     }
   }
 
