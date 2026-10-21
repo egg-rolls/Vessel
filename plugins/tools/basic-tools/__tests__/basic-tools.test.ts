@@ -266,6 +266,72 @@ describe('bash', () => {
   });
 });
 
+describe('bash 命令文本 denylist（F2）', () => {
+  it('cat ~/.vessel/config.yaml 未被拒绝时命令会执行并可能读出密钥', async () => {
+    const result = await toolOf('bash').handler(
+      { command: 'cat ~/.vessel/config.yaml' },
+      makeContext(),
+    );
+    expect(result).toContain('path_denied');
+    expect(result).toContain('不是沙箱');
+    // 拒绝发生在执行前：没有退出码行
+    expect(result).not.toContain('退出码');
+  });
+
+  it('$HOME 写法的凭据路径绕过文本检查', async () => {
+    const result = await toolOf('bash').handler(
+      { command: 'cat $HOME/.vessel/config.yaml' },
+      makeContext(),
+    );
+    expect(result).toContain('path_denied');
+    expect(result).not.toContain('退出码');
+  });
+
+  it('绝对路径写法的凭据路径绕过文本检查', async () => {
+    const absolute = path.join(homedir(), '.ssh', 'id_rsa');
+    const result = await toolOf('bash').handler({ command: `echo ${absolute}` }, makeContext());
+    expect(result).toContain('path_denied');
+  });
+
+  it('Windows 分隔符与大小写写法绕过文本检查', async () => {
+    const tool = toolOf('bash');
+    expect(
+      await tool.checkPermission?.({ command: 'cat ~\\.SSH\\id_rsa' }, makeAllowContext()),
+    ).toBe('deny');
+  });
+
+  it('checkPermission 对命中命令直接 deny，执行前不进入用户确认', async () => {
+    const decision = await toolOf('bash').checkPermission?.(
+      { command: 'cat ~/.aws/credentials' },
+      makeAllowContext(),
+    );
+    expect(decision).toBe('deny');
+  });
+
+  it('普通命令被 denylist 误伤而拒绝执行', async () => {
+    writeFileSync(path.join(workDir, 'README.md'), 'readme-body\n', 'utf-8');
+    const result = await toolOf('bash').handler(
+      { command: 'cat ./README.md', cwd: workDir },
+      makeContext(),
+    );
+    expect(result).toContain('退出码: 0');
+    expect(result).toContain('readme-body');
+    expect(result).not.toContain('path_denied');
+  });
+
+  it('含 ~ 但不指向 denylist 的路径被误伤而拒绝', async () => {
+    const tool = toolOf('bash');
+    const notes = await tool.handler({ command: 'echo ~/notes.txt' }, makeContext());
+    expect(notes).not.toContain('path_denied');
+    expect(notes).toContain('退出码: 0');
+
+    // ~/.sshd 不是 ~/.ssh：前缀相似不应命中
+    const similar = await tool.handler({ command: 'echo ~/.sshd' }, makeContext());
+    expect(similar).not.toContain('path_denied');
+    expect(similar).toContain('退出码: 0');
+  });
+});
+
 describe('read', () => {
   it('返回带行号内容（行号从 1 开始）', async () => {
     const filePath = writeTemp('read-basic.txt', 'alpha\nbeta\ngamma\n');
