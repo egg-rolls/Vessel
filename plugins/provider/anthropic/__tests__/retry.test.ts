@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { type LLMProvider, MemoryPluginHost } from '@vessel-agent/core';
 import plugin, { type ProviderPluginOptions } from '../src/index';
-import { withRetry } from '../src/retry';
+import { isRetryableError, withRetry } from '../src/retry';
 
 const realFetch = globalThis.fetch;
 
@@ -34,6 +34,118 @@ describe('withRetry (anthropic)', () => {
 
     await expect(wrapped.chat({ messages: [], model: 'm' })).resolves.toEqual(OK);
     expect(calls).toBe(3);
+  });
+
+  it('429 优先按 retryAfterMs 退避，且不超过 maxDelayMs', async () => {
+    const capped = Object.assign(new Error('Anthropic API error: 429 - rate limited'), {
+      status: 429,
+      retryAfterMs: 5000,
+    });
+    const snake = Object.assign(new Error('Anthropic API error: 429 - rate limited'), {
+      status: 429,
+      retry_after_ms: 7,
+    });
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat() {
+        calls += 1;
+        const error = calls === 1 ? capped : calls === 2 ? snake : undefined;
+        if (error) throw error;
+        return OK;
+      },
+    };
+    const delays: number[] = [];
+    const wrapped = withRetry(provider, {
+      maxRetries: 3,
+      baseDelayMs: 10,
+      maxDelayMs: 1000,
+      jitter: 0,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    await expect(wrapped.chat({ messages: [], model: 'm' })).resolves.toEqual(OK);
+    expect(calls).toBe(3);
+    // 首次 5000 被 maxDelayMs 截断；第二次按秒级 snake 字段的毫秒值 7
+    expect(delays).toEqual([1000, 7]);
+  });
+
+  it('429 缺结构化退避字段时读取 retry-after 头（秒）', async () => {
+    const error = Object.assign(new Error('Anthropic API error: 429 - rate limited'), {
+      status: 429,
+      headers: { 'retry-after': '2' },
+    });
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat() {
+        calls += 1;
+        if (calls === 1) throw error;
+        return OK;
+      },
+    };
+    const delays: number[] = [];
+    const wrapped = withRetry(provider, {
+      maxRetries: 1,
+      baseDelayMs: 10,
+      jitter: 0,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    await wrapped.chat({ messages: [], model: 'm' });
+    expect(delays).toEqual([2000]);
+  });
+
+  it('402 额度耗尽不重试', async () => {
+    const quota = Object.assign(new Error('Anthropic API error: 402 - quota exceeded'), {
+      status: 402,
+    });
+    expect(isRetryableError(quota)).toBe(false);
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat() {
+        calls += 1;
+        throw quota;
+      },
+    };
+    const wrapped = withRetry(provider, {
+      maxRetries: 3,
+      baseDelayMs: 1,
+      jitter: 0,
+      sleep: async () => {},
+    });
+
+    await expect(wrapped.chat({ messages: [], model: 'm' })).rejects.toThrow(/quota exceeded/);
+    expect(calls).toBe(1);
+  });
+
+  it('503 不采用 retry-after，仍按指数退避', async () => {
+    const error = Object.assign(new Error('Anthropic API error: 503 - unavailable'), {
+      status: 503,
+      retryAfterMs: 60_000,
+    });
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat() {
+        calls += 1;
+        if (calls <= 2) throw error;
+        return OK;
+      },
+    };
+    const delays: number[] = [];
+    const wrapped = withRetry(provider, {
+      maxRetries: 3,
+      baseDelayMs: 10,
+      jitter: 0,
+      sleep: async (ms) => {
+        delays.push(ms);
+      },
+    });
+
+    await wrapped.chat({ messages: [], model: 'm' });
+    expect(delays).toEqual([10, 20]);
   });
 
   it('abort 后停止重试并抛出 abort 原因', async () => {
