@@ -1,7 +1,7 @@
 {
   "name": "@vessel-agent/web",
   "private": true,
-  "version": "0.17.0",
+  "version": "0.18.0",
   "type": "module",
   "description": "Vessel 本地 Web 控制台——连接 gateway 观察与控制 agent",
   "scripts": {
