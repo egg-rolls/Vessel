@@ -2,7 +2,10 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import { PendingRequestsPanel } from '../src/components/PendingRequests';
-import { unmatchedPendingForSession } from '../src/domains/chat/pending-permissions';
+import {
+  pendingForSession,
+  unmatchedPendingForSession,
+} from '../src/domains/chat/pending-permissions';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -27,6 +30,28 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
     ...overrides,
   };
 }
+
+describe('pendingForSession (composer slot)', () => {
+  test('keeps every request belonging to the current session', () => {
+    const items = [permission({ requestId: 'a' }), ask({ requestId: 'b' })];
+    expect(pendingForSession(items, 'session-1', new Set()).map((item) => item.requestId)).toEqual([
+      'a',
+      'b',
+    ]);
+  });
+
+  test('takes legacy requests whose run belongs to the current session', () => {
+    const items = [permission({ requestId: 'legacy', sessionId: undefined })];
+    expect(pendingForSession(items, 'session-1', new Set(['run-1']))).toHaveLength(1);
+  });
+
+  test('excludes other sessions, unattributable runs and drafts', () => {
+    const other = permission({ requestId: 'other', sessionId: 'session-2' });
+    const orphan = permission({ requestId: 'orphan', sessionId: undefined, runId: 'run-9' });
+    expect(pendingForSession([other, orphan], 'session-1', new Set(['run-1']))).toEqual([]);
+    expect(pendingForSession([permission()], null, new Set())).toEqual([]);
+  });
+});
 
 describe('unmatchedPendingForSession', () => {
   test('keeps same-session requests whose run has no RunCard', () => {

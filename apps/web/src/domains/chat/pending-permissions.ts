@@ -37,6 +37,25 @@ export function pendingPermissionTarget(
 }
 
 /**
+ * 当前会话内的待处理请求（0.18）：应答入口固定在 Composer 槽位。
+ *
+ * - 请求带 `sessionId` 时按会话归属；
+ * - 旧流 / ask 事件缺 `sessionId` 时，run 属于当前会话也算（`sessionRunIds`）。
+ */
+export function pendingForSession<T extends SessionScoped>(
+  items: readonly T[],
+  sessionId: string | null,
+  sessionRunIds: ReadonlySet<string>,
+): T[] {
+  if (!sessionId) return [];
+  return items.filter(
+    (item) =>
+      item.sessionId === sessionId ||
+      (item.sessionId === undefined && sessionRunIds.has(item.runId)),
+  );
+}
+
+/**
  * 当前会话里没能挂到 RunCard 的请求（0.17）。
  *
  * - 同一 session 的请求：只有对应 run 没有渲染成卡片时才算未匹配；

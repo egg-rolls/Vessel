@@ -5,9 +5,8 @@ import {
   pendingPermissionsOutsideView,
   pendingPermissionTarget,
 } from '../src/domains/chat/pending-permissions';
-import { RunCard } from '../src/domains/chat/RunCard';
+import { PendingComposer } from '../src/domains/chat/PendingComposer';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
-import type { RunGroup } from '../src/state/events';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
   return {
@@ -22,24 +21,19 @@ function permission(overrides: Partial<PermissionRequest> = {}): PermissionReque
   };
 }
 
-function runningGroup(): RunGroup {
-  return { runId: 'run-1', sessionId: 'session-1', status: 'running', items: [] };
-}
-
-describe('inline permission card', () => {
-  test('renders inside the matching RunCard instead of the global modal', () => {
+describe('pending composer slot', () => {
+  test('renders the permission card where the composer would be', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
-        group={runningGroup()}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
+      <PendingComposer
         permissions={[permission()]}
-        permissionBusy={new Set()}
+        responding={new Set()}
         onDecidePermission={() => {}}
+        onRespondAsk={() => {}}
       />,
     );
 
+    expect(markup).toContain('composer-area');
+    expect(markup).toContain('pending-slot');
     expect(markup).toContain('permission-card');
     expect(markup).toContain('data-request-id="perm-1"');
     expect(markup).toContain('bash');
@@ -49,32 +43,34 @@ describe('inline permission card', () => {
     expect(markup).not.toContain('remaining');
     // 四个动作都在卡片内。
     expect(markup.split('<button').length - 1).toBeGreaterThanOrEqual(4);
-    // 不再渲染全局权限 Modal。
+    // 不再渲染全局权限 Modal，也不再使用 Composer 输入框。
     expect(markup).not.toContain('permission-modal');
+    expect(markup).not.toContain('composer-input');
   });
 
   test('disables actions only while the answer is submitting', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
-        group={runningGroup()}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
+      <PendingComposer
         permissions={[permission()]}
-        permissionBusy={new Set(['perm-1'])}
+        responding={new Set(['perm-1'])}
         onDecidePermission={() => {}}
+        onRespondAsk={() => {}}
       />,
     );
     expect(markup).toContain('permission-card');
     expect(markup).toContain('disabled');
   });
 
-  test('does not render a permission block without pending requests', () => {
-    const markup = renderToStaticMarkup(
-      <RunCard group={runningGroup()} cancelled={false} cancelling={false} onCancel={() => {}} />,
-    );
-    expect(markup).not.toContain('permission-card');
-    expect(markup).not.toContain('run-permissions');
+  test('renders nothing without pending requests (composer takes over)', () => {
+    expect(
+      renderToStaticMarkup(
+        <PendingComposer
+          responding={new Set()}
+          onDecidePermission={() => {}}
+          onRespondAsk={() => {}}
+        />,
+      ),
+    ).toBe('');
   });
 });
 
@@ -153,52 +149,39 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
   };
 }
 
-describe('inline ask card', () => {
-  test('renders inside the matching RunCard instead of a global modal', () => {
+describe('pending composer slot with asks', () => {
+  test('renders the ask card in the composer slot instead of a global modal', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
-        group={runningGroup()}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
+      <PendingComposer
         asks={[ask()]}
-        askBusy={new Set()}
+        responding={new Set()}
         now={1_000}
-        onSubmitAsk={() => {}}
+        onDecidePermission={() => {}}
+        onRespondAsk={() => {}}
       />,
     );
 
-    expect(markup).toContain('run-asks');
+    expect(markup).toContain('pending-slot');
     expect(markup).toContain('ask-card');
     expect(markup).toContain('data-request-id="ask-1"');
     expect(markup).toContain('Which one?');
     expect(markup).toContain('剩余 1s');
     expect(markup).not.toContain('permission-modal');
+    expect(markup).not.toContain('composer-input');
   });
 
   test('disables submission until every question has an answer', () => {
     const markup = renderToStaticMarkup(
-      <RunCard
-        group={runningGroup()}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
+      <PendingComposer
         asks={[ask()]}
-        askBusy={new Set()}
+        responding={new Set()}
         now={1_000}
-        onSubmitAsk={() => {}}
+        onDecidePermission={() => {}}
+        onRespondAsk={() => {}}
       />,
     );
     expect(markup).toContain('btn-primary');
     expect(markup).toContain('disabled');
-  });
-
-  test('does not render an ask block when there are no pending questions', () => {
-    const markup = renderToStaticMarkup(
-      <RunCard group={runningGroup()} cancelled={false} cancelling={false} onCancel={() => {}} />,
-    );
-    expect(markup).not.toContain('ask-card');
-    expect(markup).not.toContain('run-asks');
   });
 });
 

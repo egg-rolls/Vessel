@@ -6,19 +6,15 @@ import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { usePaletteEntities } from '../../components/PaletteEntities';
-import { PendingRequestsPanel } from '../../components/PendingRequests';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
 import type {
   AskUserAnswer,
-  AskUserRequest,
-  PermissionRequest,
   PermissionScope,
   SessionDetail,
   SessionInfo,
 } from '../../gateway/types';
-import { t } from '../../i18n';
 import { agentsForSession, findAgent, reduceAgents } from '../../state/agents';
 import { isGroupPersisted } from '../../state/events';
 import { EventGroupCache } from '../../state/group-cache';
@@ -39,7 +35,8 @@ import { useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
-import { unmatchedPendingForSession } from './pending-permissions';
+import { pendingForSession } from './pending-permissions';
+import { PendingComposer } from './PendingComposer';
 import { QueuedCard, type QueuedSubmission, RunCard } from './RunCard';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
@@ -49,8 +46,6 @@ import { Transcript } from './Transcript';
 const TRANSCRIPT_WINDOW = 50;
 const QUEUE_POLL_MS = 2000;
 const NOT_FOUND_MESSAGE = '会话不存在或已删除';
-const NO_PERMISSIONS: readonly PermissionRequest[] = [];
-const NO_ASKS: readonly AskUserRequest[] = [];
 /** 单会话实时组上限：超出时只渲染最近这些 run，并提供运行详情入口。 */
 const MAX_LIVE_GROUPS = 200;
 const SCROLL_FOLLOW_MS = 100;
@@ -388,28 +383,6 @@ export function ChatView({
   );
   const activeAgent = selectedId && route.agent ? findAgent(sessionAgents, route.agent) : undefined;
 
-  // 权限请求按 run_id 挂到对应 RunCard；没匹配到 run 的由 AppShell 顶部条提示。
-  const permissionsByRun = useMemo(() => {
-    const map = new Map<string, PermissionRequest[]>();
-    for (const item of permissions) {
-      const list = map.get(item.runId);
-      if (list) list.push(item);
-      else map.set(item.runId, [item]);
-    }
-    return map;
-  }, [permissions]);
-
-  // ask_user 与权限同样按 run_id 内联；跨 session 的由 AppShell 顶部条提示。
-  const asksByRun = useMemo(() => {
-    const map = new Map<string, AskUserRequest[]>();
-    for (const item of asks) {
-      const list = map.get(item.runId);
-      if (list) list.push(item);
-      else map.set(item.runId, [item]);
-    }
-    return map;
-  }, [asks]);
-
   const detailState = detailResource.state;
   const sessionDetail =
     selectedId && 'data' in detailState && detailState.data?.session_id === selectedId
@@ -436,25 +409,39 @@ export function ChatView({
   const renderedGroups =
     hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
 
-  // 兜底权限操作面（0.17）：RunCard 只覆盖时间线里实际渲染的 run。
-  // 子 agent 的 run、重放缺失 run.started、或超过渲染上限时，卡片仍挂不到任何 RunCard；
-  // 这些请求在 Composer 上方集中展示，避免“顶部条说有请求，点进来却无处可处理”。
-  const renderedRunIds = useMemo(
-    () => new Set(activeAgent ? [] : renderedGroups.map((group) => group.runId)),
-    [activeAgent, renderedGroups],
-  );
+  // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到 RunCard 或页面顶部。
+  // 缺 sessionId 的旧流请求按 run 归属补判；run 终态时 ConnectionProvider 会清掉请求。
   const sessionRunIds = useMemo(
     () => new Set(visibleGroups.map((group) => group.runId)),
     [visibleGroups],
   );
-  const unmatchedPermissions = useMemo(
-    () => unmatchedPendingForSession(permissions, selectedId, renderedRunIds, sessionRunIds),
-    [permissions, selectedId, renderedRunIds, sessionRunIds],
+  const sessionPermissions = useMemo(
+    () => pendingForSession(permissions, selectedId, sessionRunIds),
+    [permissions, selectedId, sessionRunIds],
   );
-  const unmatchedAsks = useMemo(
-    () => unmatchedPendingForSession(asks, selectedId, renderedRunIds, sessionRunIds),
-    [asks, selectedId, renderedRunIds, sessionRunIds],
+  const sessionAsks = useMemo(
+    () => pendingForSession(asks, selectedId, sessionRunIds),
+    [asks, selectedId, sessionRunIds],
   );
+  const sessionPendingCount = sessionPermissions.length + sessionAsks.length;
+
+  // 会话列表徽标：其他会话的 pending 只计数，不渲染完整卡片。
+  const pendingBySession = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const item of [...permissions, ...asks]) {
+      if (!item.sessionId) continue;
+      counts.set(item.sessionId, (counts.get(item.sessionId) ?? 0) + 1);
+    }
+    return counts;
+  }, [permissions, asks]);
+
+  // 槽位从待处理切回输入框时把焦点还给 Composer。
+  const pendingActive = sessionPendingCount > 0;
+  const pendingWasActive = useRef(false);
+  useEffect(() => {
+    if (pendingWasActive.current && !pendingActive) setComposerFocus((value) => value + 1);
+    pendingWasActive.current = pendingActive;
+  }, [pendingActive]);
 
   // 终态/session.saved 后做一次精确刷新（150ms 合并）。
   // biome-ignore lint/correctness/useExhaustiveDependencies: 只在快照版本变化时扫描新增事件
@@ -810,6 +797,7 @@ export function ChatView({
           hiddenCount={sessionWindow.hiddenCount}
           selectedId={selectedId}
           draftActive={draftActive}
+          pendingBySession={pendingBySession}
           query={query}
           onQueryChange={setQuery}
           searchSnippets={activeServerSearch?.snippets}
@@ -997,13 +985,6 @@ export function ChatView({
                       )
                     }
                     onCancel={handleCancel}
-                    permissions={permissionsByRun.get(group.runId) ?? NO_PERMISSIONS}
-                    permissionBusy={responding}
-                    onDecidePermission={handleDecidePermission}
-                    asks={asksByRun.get(group.runId) ?? NO_ASKS}
-                    askBusy={responding}
-                    now={asksByRun.has(group.runId) ? now : undefined}
-                    onSubmitAsk={handleRespondAsk}
                     verbosity={visibility.verbosity}
                   />
                 ))}
@@ -1070,31 +1051,28 @@ export function ChatView({
           )}
         </div>
 
-        {selectedId && (unmatchedPermissions.length > 0 || unmatchedAsks.length > 0) && (
-          <PendingRequestsPanel
-            className="pending-inline"
-            title={t('pending.inline.title')}
-            description={t('pending.inline.desc')}
-            permissions={unmatchedPermissions}
-            asks={unmatchedAsks}
+        {pendingActive ? (
+          <PendingComposer
+            permissions={sessionPermissions}
+            asks={sessionAsks}
             responding={responding}
             now={now}
             onDecidePermission={handleDecidePermission}
             onRespondAsk={handleRespondAsk}
           />
+        ) : (
+          <Composer
+            value={input}
+            onChange={setInput}
+            onSubmit={() => void handleSend()}
+            submitting={submitting}
+            targetLabel={targetLabel}
+            hasToken={hasToken}
+            connected={connected}
+            onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
+            focusSignal={composerFocus}
+          />
         )}
-
-        <Composer
-          value={input}
-          onChange={setInput}
-          onSubmit={() => void handleSend()}
-          submitting={submitting}
-          targetLabel={targetLabel}
-          hasToken={hasToken}
-          connected={connected}
-          onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
-          focusSignal={composerFocus}
-        />
       </section>
 
       {deleteTarget && (

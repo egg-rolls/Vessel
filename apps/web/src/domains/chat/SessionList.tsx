@@ -5,6 +5,7 @@ import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
 import { formatTimestamp } from '../../format';
 import type { SessionInfo } from '../../gateway/types';
+import { t } from '../../i18n';
 import {
   groupSessionsByDay,
   normalizeSessionTitle,
@@ -28,6 +29,7 @@ export function SessionList({
   hiddenCount,
   selectedId,
   draftActive,
+  pendingBySession,
   query,
   onQueryChange,
   searchSnippets,
@@ -55,6 +57,8 @@ export function SessionList({
   hiddenCount: number;
   selectedId: string | null;
   draftActive: boolean;
+  /** 每个会话的待处理权限/提问数量；其他会话只显示徽标，不渲染卡片。 */
+  pendingBySession?: ReadonlyMap<string, number>;
   query: string;
   onQueryChange: (value: string) => void;
   /** 服务端搜索命中的片段；query 非空时优先展示。 */
@@ -261,6 +265,7 @@ export function SessionList({
                   const active = session.session_id === selectedId;
                   const editing = editingId === session.session_id;
                   const title = sessionTitle(session);
+                  const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
                   const snippet = query.trim()
                     ? searchSnippets?.get(session.session_id)
                     : undefined;
@@ -326,6 +331,15 @@ export function SessionList({
                               </span>
                             )}
                             <span className="session-meta">
+                              {pendingCount > 0 && (
+                                <span
+                                  className="session-pending-badge"
+                                  title={t('chat.session.pending', { count: pendingCount })}
+                                  aria-label={t('chat.session.pending', { count: pendingCount })}
+                                >
+                                  {pendingCount}
+                                </span>
+                              )}
                               <StatusChip status={session.status} />
                               <span>{session.message_count} 条</span>
                               <span className="dim">{formatTimestamp(session.updated_at)}</span>

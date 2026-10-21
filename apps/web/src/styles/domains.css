@@ -81,6 +81,24 @@
   overflow: hidden;
 }
 
+/* 0.18：其他会话的 pending 只在列表上计数，不渲染完整卡片。 */
+.session-pending-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 20%, var(--surface));
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1;
+}
+
 .session-row .action-menu {
   align-items: center;
   padding-right: 4px;
@@ -957,6 +975,49 @@
 
 .composer-input:disabled {
   opacity: 0.55;
+}
+
+/* 0.18：当前会话的待处理权限/提问占用 Composer 的底部槽位。 */
+.pending-slot {
+  width: 100%;
+  max-width: 860px;
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 50vh;
+  padding: 10px 14px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.pending-slot-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.pending-slot-title {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.pending-slot-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+}
+
+.pending-slot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
 }
 
 /* ── 运行详情 / 评测 ──────────────────────────────────── */

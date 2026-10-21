@@ -4,19 +4,11 @@ import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
 import { formatTimestamp } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
-import type {
-  AskUserAnswer,
-  AskUserRequest,
-  PermissionRequest,
-  PermissionScope,
-} from '../../gateway/types';
 import { t } from '../../i18n';
 import { formatErrorMeta } from '../../state/error-visibility';
 import type { RunGroup } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
-import { AskCard } from './AskCard';
 import { EventRow } from './EventRow';
-import { PermissionCard } from './PermissionCard';
 import { ToolCard } from './ToolCard';
 import { foldToolItems } from './tool-cards';
 
@@ -115,13 +107,6 @@ export const RunCard = memo(function RunCard({
   cancelling,
   hideInput = false,
   onCancel,
-  permissions = [],
-  permissionBusy,
-  onDecidePermission,
-  asks = [],
-  askBusy,
-  now = Date.now(),
-  onSubmitAsk,
   verbosity = 'normal',
 }: {
   group: RunGroup;
@@ -130,19 +115,6 @@ export const RunCard = memo(function RunCard({
   /** 历史消息里已经有同一条用户输入时，不再重复显示 run.input。 */
   hideInput?: boolean;
   onCancel: (group: RunGroup) => void;
-  /** 该 run 的待答权限（跨 session 的由顶部条提示）。 */
-  permissions?: readonly PermissionRequest[];
-  permissionBusy?: ReadonlySet<string>;
-  onDecidePermission?: (
-    requestId: string,
-    decision: 'allow' | 'deny',
-    scope: PermissionScope,
-  ) => void;
-  /** 该 run 的内联 ask_user 请求（跨 session 的由顶部条提示）。 */
-  asks?: readonly AskUserRequest[];
-  askBusy?: ReadonlySet<string>;
-  now?: number;
-  onSubmitAsk?: (requestId: string, answers: AskUserAnswer[]) => void;
   verbosity?: Verbosity;
 }) {
   const status =
@@ -180,11 +152,6 @@ export const RunCard = memo(function RunCard({
   const liveReasoning =
     group.status === 'running' && verbosity !== 'minimal' ? group.liveReasoning : undefined;
   const errorHint = describeGatewayErrorText(group.error);
-  const sortedPermissions = useMemo(
-    () => [...permissions].sort((a, b) => a.requestedAt - b.requestedAt),
-    [permissions],
-  );
-  const sortedAsks = useMemo(() => [...asks].sort((a, b) => a.expiresAt - b.expiresAt), [asks]);
   const showTimes = verbosity !== 'minimal';
 
   return (
@@ -253,35 +220,6 @@ export const RunCard = memo(function RunCard({
             </div>
           )}
       </div>
-
-      {sortedPermissions.length > 0 && onDecidePermission && (
-        <div className="run-permissions">
-          {sortedPermissions.map((request) => (
-            <PermissionCard
-              key={request.requestId}
-              request={request}
-              busy={permissionBusy?.has(request.requestId) ?? false}
-              onDecide={(decision, scope) => onDecidePermission(request.requestId, decision, scope)}
-            />
-          ))}
-        </div>
-      )}
-
-      {sortedAsks.length > 0 && onSubmitAsk && (
-        <div className="run-asks">
-          {sortedAsks.map((request) => (
-            <AskCard
-              key={request.requestId}
-              request={request}
-              pendingCount={sortedAsks.length}
-              now={now}
-              busy={askBusy?.has(request.requestId) ?? false}
-              onSubmit={(answers) => onSubmitAsk(request.requestId, answers)}
-              onCancel={() => onSubmitAsk(request.requestId, [])}
-            />
-          ))}
-        </div>
-      )}
 
       {group.status === 'completed' && (
         <div className="run-footer completed">
