@@ -63,9 +63,15 @@ describe('未知 provider fail-fast', () => {
 
       expect(first.provider).toBeInstanceOf(OpenAICompatibleProvider);
       expect(second.provider).toBeInstanceOf(OpenAICompatibleProvider);
-      expect(writes).toHaveLength(1);
-      expect(writes[0]).toContain('not registered; using OpenAI-compatible endpoint');
-      expect(writes[0]).toContain('http://127.0.0.1:1/v1');
+      // 未知 provider 提示与裸 fallback warning 各只打一次（两次 createProvider）。
+      const unknownNotices = writes.filter((line) =>
+        line.includes('not registered; using OpenAI-compatible endpoint'),
+      );
+      const bareFallbackWarnings = writes.filter((line) => line.includes('without retry/timeout'));
+      expect(unknownNotices).toHaveLength(1);
+      expect(bareFallbackWarnings).toHaveLength(1);
+      expect(unknownNotices[0]).toContain('http://127.0.0.1:1/v1');
+      expect(bareFallbackWarnings[0]).toContain('http://127.0.0.1:1/v1');
     } finally {
       process.stderr.write = original;
     }

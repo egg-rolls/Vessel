@@ -43,10 +43,13 @@ export class ProviderConfigError extends Error {
 
 /** 未知 provider 的 OpenAI 兼容提示只打一次（进程内）。 */
 let unknownProviderNoticeShown = false;
+/** openai 插件缺失时的裸 fallback warning 只打一次（进程内）。 */
+let bareFallbackNoticeShown = false;
 
 /** 测试重置一次性提示状态。 */
 export function resetUnknownProviderNotice(): void {
   unknownProviderNoticeShown = false;
+  bareFallbackNoticeShown = false;
 }
 
 function notifyUnknownProvider(providerName: string, baseUrl: string, model: string): void {
@@ -55,6 +58,17 @@ function notifyUnknownProvider(providerName: string, baseUrl: string, model: str
   process.stderr.write(
     `[vessel] Provider "${providerName}" is not registered; using OpenAI-compatible endpoint ` +
       `"${baseUrl}" (model: ${model}).\n`,
+  );
+}
+
+/** 裸 fallback 没有 withRetry/withTimeout；文案只含 provider 名与端点，不含密钥。 */
+function notifyBareFallback(providerName: string, baseUrl: string): void {
+  if (bareFallbackNoticeShown) return;
+  bareFallbackNoticeShown = true;
+  process.stderr.write(
+    `[vessel] Provider "${providerName}" fallback uses a bare OpenAI-compatible client ` +
+      `without retry/timeout (endpoint: "${baseUrl}"); install the provider-openai plugin ` +
+      'to enable retries and the default 120s timeout.\n',
   );
 }
 
@@ -118,6 +132,26 @@ export async function createProvider(
   }
 
   notifyUnknownProvider(providerName, providerBaseUrl, providerModel);
+  // 复用 openai 工厂，让未知 provider 与已知 provider 走同一层 withRetry/withTimeout。
+  const openaiFactory = providerHost.getProvider('openai');
+  if (openaiFactory) {
+    return {
+      provider: openaiFactory({
+        api_key: apiKey ?? '',
+        base_url: providerBaseUrl,
+        model: providerModel,
+        temperature: config.provider?.temperature,
+        max_tokens: config.provider?.maxTokens,
+        timeout_ms: config.provider?.timeoutMs,
+      }),
+      providerName,
+      providerModel,
+      providerBaseUrl,
+    };
+  }
+
+  // 损坏安装（provider-openai 缺失）：保留裸构造，但没有 retry/timeout。
+  notifyBareFallback(providerName, providerBaseUrl);
   return {
     provider: new OpenAICompatibleProvider({
       api_key: apiKey ?? '',
