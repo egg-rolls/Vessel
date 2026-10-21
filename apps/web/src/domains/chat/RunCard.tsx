@@ -175,6 +175,10 @@ export const RunCard = memo(function RunCard({
     }
     return undefined;
   }, [renderItems]);
+  // 0.17：流式尾部缓冲单独渲染；minimal 只隐藏思考流，正文仍然可见。
+  const liveText = group.status === 'running' ? group.liveText : undefined;
+  const liveReasoning =
+    group.status === 'running' && verbosity !== 'minimal' ? group.liveReasoning : undefined;
   const errorHint = describeGatewayErrorText(group.error);
   const sortedPermissions = useMemo(
     () => [...permissions].sort((a, b) => a.requestedAt - b.requestedAt),
@@ -237,6 +241,8 @@ export const RunCard = memo(function RunCard({
           }
           return <EventRow key={item.key} event={item.event} />;
         })}
+        {liveReasoning && <ReasoningBlock text={liveReasoning} streaming />}
+        {liveText && <div className="text-block live-text">{liveText}</div>}
       </div>
 
       {sortedPermissions.length > 0 && onDecidePermission && (

@@ -40,6 +40,7 @@ describe('EventGroupCache', () => {
     const firstB = first[1];
     expect(firstA?.runId).toBe('run-a');
     expect(firstB?.runId).toBe('run-b');
+    expect(firstA?.liveText).toBe('a1');
 
     const next = [...base, delta('run-a', 'a2', 120, 5)];
     const second = cache.group(next, false);
@@ -48,9 +49,9 @@ describe('EventGroupCache', () => {
     // 未变更的 run-b 保持同一引用；run-a 因新增 token 重建。
     expect(second[1]).toBe(firstB);
     expect(second[0]).not.toBe(firstA);
-    expect(second[0]?.items.some((item) => item.kind === 'text' && item.text === 'a1a2')).toBe(
-      true,
-    );
+    // 0.17：未 finish 的流式尾部留在 liveText，不 push 成 item。
+    expect(second[0]?.liveText).toBe('a1a2');
+    expect(second[0]?.items.some((item) => item.kind === 'text')).toBe(false);
     expect(cache.stats.rebuiltRuns).toBe(1);
     expect(cache.stats.reusedRuns).toBe(1);
     expect(cache.stats.appendedEntries).toBe(1);

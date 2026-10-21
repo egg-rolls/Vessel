@@ -44,6 +44,15 @@ export interface RunGroup {
   completedAt?: number;
   durationMs?: number;
   iterations?: number;
+  /**
+   * 0.17 additive：尚未 flush 的流式尾部缓冲。
+   *
+   * 流式期间不把每个 delta push 成 item（那会让 RunCard 每 token 重建）；
+   * 末尾未闭合的正文/思考通过 `liveText` / `liveReasoning` 直接渲染，
+   * 下一个事件 `flush()` 后清空，避免与 item 重复。
+   */
+  liveText?: string;
+  liveReasoning?: string;
   items: TimelineItem[];
 }
 
@@ -151,7 +160,10 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         group.items.push({ kind: 'event', event: ev, key: `ev-${entry.seq}` });
     }
   }
-  flush();
+  // 尾部仍在流式中的缓冲不 push 成 item：RunCard 直接渲染 liveText/liveReasoning。
+  // flush() 已清空的部分不会出现在这里，因此不会与 items 重复。
+  if (reasoningBuf) group.liveReasoning = reasoningBuf;
+  if (buf) group.liveText = buf;
   return group;
 }
 

@@ -54,6 +54,76 @@ describe('buildGroup', () => {
   });
 });
 
+describe('live streaming buffers (0.17)', () => {
+  test('keeps unfinished text deltas in liveText without pushing an item', () => {
+    const group = buildGroup('r1', [
+      stored('r1', 'run.started', 1, {}, 100),
+      stored('r1', 'llm.stream.chunk', 2, { chunk: { type: 'text_delta', delta: 'Hel' } }, 101),
+      stored('r1', 'llm.stream.chunk', 3, { chunk: { type: 'text_delta', delta: 'lo' } }, 102),
+    ]);
+    expect(group.status).toBe('running');
+    expect(group.liveText).toBe('Hello');
+    expect(group.items.some((item) => item.kind === 'text')).toBe(false);
+  });
+
+  test('finish flushes live text into an item and clears liveText', () => {
+    const group = buildGroup('r1', [
+      stored('r1', 'run.started', 1, {}, 100),
+      stored('r1', 'llm.stream.chunk', 2, { chunk: { type: 'text_delta', delta: 'Hello' } }, 101),
+      stored('r1', 'llm.stream.chunk', 3, { chunk: { type: 'finish' } }, 102),
+    ]);
+    expect(group.liveText).toBeUndefined();
+    const texts = group.items
+      .filter((item): item is { kind: 'text'; text: string; key: string } => item.kind === 'text')
+      .map((item) => item.text);
+    expect(texts).toEqual(['Hello']);
+  });
+
+  test('keeps unfinished reasoning deltas in liveReasoning and clears after finish', () => {
+    const entries = [
+      stored('r1', 'run.started', 1, {}, 100),
+      stored('r1', 'llm.stream.chunk', 2, { chunk: { type: 'reasoning_delta', delta: 'th' } }, 101),
+      stored(
+        'r1',
+        'llm.stream.chunk',
+        3,
+        { chunk: { type: 'reasoning_delta', delta: 'ink' } },
+        102,
+      ),
+    ];
+    const live = buildGroup('r1', entries);
+    expect(live.liveReasoning).toBe('think');
+    expect(live.items.some((item) => item.kind === 'reasoning')).toBe(false);
+
+    const flushed = buildGroup('r1', [
+      ...entries,
+      stored('r1', 'llm.stream.chunk', 4, { chunk: { type: 'finish' } }, 103),
+    ]);
+    expect(flushed.liveReasoning).toBeUndefined();
+    expect(
+      flushed.items.filter((item) => item.kind === 'reasoning').map((item) => item.text),
+    ).toEqual(['think']);
+  });
+
+  test('switching from reasoning to text flushes reasoning before the live body', () => {
+    const group = buildGroup('r1', [
+      stored(
+        'r1',
+        'llm.stream.chunk',
+        1,
+        { chunk: { type: 'reasoning_delta', delta: 'why' } },
+        100,
+      ),
+      stored('r1', 'llm.stream.chunk', 2, { chunk: { type: 'text_delta', delta: 'answer' } }, 101),
+    ]);
+    expect(group.liveReasoning).toBeUndefined();
+    expect(group.liveText).toBe('answer');
+    expect(
+      group.items.filter((item) => item.kind === 'reasoning').map((item) => item.text),
+    ).toEqual(['why']);
+  });
+});
+
 describe('groupEvents', () => {
   test('hides internal, subagent and internal-level errors by default', () => {
     const entries = [
