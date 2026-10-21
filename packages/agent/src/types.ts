@@ -207,6 +207,12 @@ export interface AgentEvent {
   agent_id: string;
   session_id?: string;
   parent_id?: string;
+  /** 成员可见性（/agents Self Card 用；spawned 等身份事件必带） */
+  visibility?: MemberVisibility;
+  /** 成员名（可选） */
+  name?: string;
+  /** 本轮 usage（turn.completed 有则带） */
+  usage?: Usage;
   state?: MemberState;
   message_id?: string;
   /** 消息来源（queued 事件） */
