@@ -23,7 +23,7 @@ export interface AgentWiringInput {
 }
 
 export interface AgentWiringPlan {
-  /** 注册 canonical `agent` 工具 */
+  /** canonical `agent` 工具可用（team 构造时总是注册） */
   agentEnabled: boolean;
   /** 需要构造 team 引擎（agent 工具依赖成员注册表；或旧 team.enabled） */
   teamEngine: boolean;
@@ -57,12 +57,18 @@ function resolveMemberPermissionMode(
   return delegate?.permissionMode ?? (headless ? 'allow' : 'bridge');
 }
 
-/** 解析 `agent` / `team` / `delegate` 的装配决策。 */
+/**
+ * 解析 `agent` / `team` / `delegate` 的装配决策。
+ *
+ * ext 构造 team 插件时总是注册 `agent`，因此 team.enabled 也会让 agent 可用；
+ * 只要 agent 可用就不注册 delegate_task，避免模型同时看到两个 schema。
+ */
 export function resolveAgentWiring(config: VesselConfig, input: AgentWiringInput): AgentWiringPlan {
-  const agentEnabled = config.agent?.enabled ?? !input.headless;
+  const agentRequested = config.agent?.enabled ?? !input.headless;
+  const agentEnabled = agentRequested || config.team?.enabled === true;
   return {
     agentEnabled,
-    teamEngine: agentEnabled || config.team?.enabled === true,
+    teamEngine: agentEnabled,
     legacyTools: config.team?.legacyTools !== false,
     delegateEnabled: config.delegate?.enabled !== false && !agentEnabled,
     defaultVisibility: config.agent?.defaultVisibility ?? 'private',
