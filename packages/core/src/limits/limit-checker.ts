@@ -5,11 +5,122 @@
 
 import type {
   LimitBlock,
+  LimitBlockKey,
   LimitChecker,
+  LimitWarning,
   TerminationPolicy,
   UsageLimits,
   UsageStats,
 } from '../types/limits.js';
+
+/** 预警阈值（0.15 E2）；硬上限仍由 evaluateUsageLimits / evaluateTermination 判定 */
+export const LIMIT_WARNING_THRESHOLD = 0.8;
+
+/** 单个 key 的预警判定：>= threshold × max 且 < max */
+function warningFor(
+  key: LimitBlockKey,
+  current: number,
+  max: number | undefined,
+  source: string,
+  hint: string,
+  threshold: number,
+): LimitWarning | null {
+  if (max === undefined || max <= 0) return null;
+  if (current >= max) return null;
+  if (current < max * threshold) return null;
+  return { scope: 'run', key, current, max, source, threshold, hint };
+}
+
+/**
+ * 0.15 E2：返回所有已到预警阈值的 key（每个 key 一条）。
+ * 只读判定，不改变执行；达到硬上限的 key 不再返回（交给 limit.blocked）。
+ */
+export function evaluateLimitWarnings(
+  stats: UsageStats,
+  limits: UsageLimits,
+  termination: TerminationPolicy,
+  threshold = LIMIT_WARNING_THRESHOLD,
+): LimitWarning[] {
+  const warnings: LimitWarning[] = [];
+  const push = (warning: LimitWarning | null): void => {
+    if (warning) warnings.push(warning);
+  };
+
+  push(
+    warningFor(
+      'request_limit',
+      stats.requestCount,
+      limits.requestLimit,
+      'limits.requestLimit',
+      'Increase limits.requestLimit or reduce the number of LLM requests.',
+      threshold,
+    ),
+  );
+  push(
+    warningFor(
+      'tool_calls_limit',
+      stats.toolCallsCount,
+      limits.toolCallsLimit,
+      'limits.toolCallsLimit',
+      'Increase limits.toolCallsLimit or reduce tool usage in the task.',
+      threshold,
+    ),
+  );
+  push(
+    warningFor(
+      'input_tokens_limit',
+      stats.inputTokens,
+      limits.inputTokensLimit,
+      'limits.inputTokensLimit',
+      'Increase limits.inputTokensLimit or compact the conversation history.',
+      threshold,
+    ),
+  );
+  push(
+    warningFor(
+      'output_tokens_limit',
+      stats.outputTokens,
+      limits.outputTokensLimit,
+      'limits.outputTokensLimit',
+      'Increase limits.outputTokensLimit or lower the per-request max_tokens.',
+      threshold,
+    ),
+  );
+  push(
+    warningFor(
+      'total_cost_limit',
+      stats.totalCost,
+      limits.totalCostLimit,
+      'limits.totalCostLimit',
+      'Increase limits.totalCostLimit or use a cheaper model for this task.',
+      threshold,
+    ),
+  );
+  push(
+    warningFor(
+      'max_iterations',
+      stats.requestCount,
+      termination.maxIterations,
+      'termination.maxIterations',
+      'Increase termination.maxIterations or reduce tool round-trips in the task.',
+      threshold,
+    ),
+  );
+  if (termination.maxRuntimeSeconds !== undefined) {
+    const elapsed = Math.round(((Date.now() - stats.startTime) / 1000) * 1000) / 1000;
+    push(
+      warningFor(
+        'max_runtime',
+        elapsed,
+        termination.maxRuntimeSeconds,
+        'termination.maxRuntimeSeconds',
+        'Increase termination.maxRuntimeSeconds or shorten the task.',
+        threshold,
+      ),
+    );
+  }
+  return warnings;
+}
 
 /** 命中上限时的首个 key（与 checkLimits 的检查顺序一致） */
 export function evaluateUsageLimits(stats: UsageStats, limits: UsageLimits): LimitBlock | null {

@@ -215,6 +215,32 @@ describe('/errors', () => {
     expect(result.output).toContain('[agent/maxIterations 20/20]');
   });
 
+  it('lists each 80% warning key once alongside the error log', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(
+      ev(
+        'agent.limit.warning',
+        'run-1',
+        { scope: 'run', key: 'inputTokensLimit', current: 800, max: 1000, threshold: 0.8 },
+        1000,
+      ),
+    );
+    ctx.events.publish(
+      ev(
+        'agent.limit.warning',
+        'run-1',
+        { scope: 'run', key: 'inputTokensLimit', current: 900, max: 1000, threshold: 0.8 },
+        1100,
+      ),
+    );
+
+    const result = await createCommands().execute('/errors', ctx, makeState('s1'));
+    expect(result.output).toContain('Limit warnings (1)');
+    expect(((result.output ?? '').match(/inputTokensLimit/g) ?? []).length).toBe(1);
+    expect(result.output).toContain('run/inputTokensLimit 900/1000');
+  });
+
   it('leaves entries without a limit envelope byte-identical', () => {
     setLocale('en');
     const ctx = makeCtx();

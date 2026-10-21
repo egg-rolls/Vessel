@@ -55,6 +55,7 @@ import type {
   SchedulerOptions,
   SchedulerSnapshot,
   Transport,
+  WaitReason,
 } from './types.js';
 
 /** Host 构造选项 */
@@ -109,12 +110,22 @@ interface MemberRecord {
   spec: AgentSpec;
   runtime: RunnableAgent;
   events: EventStream;
+  /** 成员独占上下文（快照 context_used / context_max 使用） */
+  context: ContextManager;
   state: AgentState;
   inbox: AgentMessage[];
   active?: InProcessRunHandle;
   unsubscribeEvents: Unsubscribe;
   lastError?: string;
+  /** 最近活动时间（Unix ms；0.15 E3） */
+  lastSeen: number;
   closed: boolean;
+}
+
+/** 队列快照里与成员相关的字段 */
+interface QueueInfo {
+  position?: number;
+  waitReason?: WaitReason;
 }
 
 /** 成员默认 session id（空串按 default） */
@@ -146,6 +157,18 @@ function readRequestId(data: unknown): string | undefined {
   if (typeof data !== 'object' || data === null) return undefined;
   const value = (data as Record<string, unknown>).requestId;
   return typeof value === 'string' ? value : undefined;
+}
+
+/** 从 spec.metadata.task 读取任务摘要（Ext 约定；形状不符则忽略） */
+function readTask(metadata: Record<string, unknown> | undefined): AgentSnapshot['task'] {
+  const value = metadata?.task;
+  if (typeof value !== 'object' || value === null) return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.id !== 'string' || record.id.length === 0) return undefined;
+  return {
+    id: record.id,
+    ...(typeof record.title === 'string' ? { title: record.title } : {}),
+  };
 }
 
 /** 从 run.completed 事件读取 usage（A9） */
@@ -210,7 +233,14 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
-    this.scheduler = options.scheduler ?? new InProcessScheduler(options.schedulerOptions);
+    // 0.15 E4：默认 Scheduler 复用 Host 事件总线发布队列事件（自定义 Scheduler 自行决定）
+    this.scheduler =
+      options.scheduler ??
+      new InProcessScheduler({
+        ...options.schedulerOptions,
+        events: options.schedulerOptions?.events ?? this.events,
+        ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
+      });
     this.maxMembers = Math.max(1, options.maxMembers ?? 8);
 
     // B4：Host 聚合子成员事件（含 tool.permission.request / ask.user.requested），
@@ -291,9 +321,11 @@ export class InProcessRuntimeHost implements RuntimeHost {
         spec: resolved,
         runtime,
         events: memberEvents,
+        context,
         state: 'idle',
         inbox: [],
         unsubscribeEvents: () => {},
+        lastSeen: Date.now(),
         closed: false,
       };
 
@@ -406,15 +438,17 @@ export class InProcessRuntimeHost implements RuntimeHost {
     const queued = schedulerSnapshot?.queued ?? [];
     const running = schedulerSnapshot?.running ?? [];
 
-    const queuePositions = new Map<string, number>();
+    const queueInfo = new Map<string, QueueInfo>();
     for (const entry of queued) {
-      if (entry.queuePosition !== undefined && !queuePositions.has(entry.agentId)) {
-        queuePositions.set(entry.agentId, entry.queuePosition);
-      }
+      if (queueInfo.has(entry.agentId)) continue;
+      queueInfo.set(entry.agentId, {
+        ...(entry.queuePosition !== undefined ? { position: entry.queuePosition } : {}),
+        ...(entry.waitReason !== undefined ? { waitReason: entry.waitReason } : {}),
+      });
     }
 
     const agents: AgentSnapshot[] = [...this.members.values()].map((record) =>
-      this.toAgentSnapshot(record, queuePositions.get(record.id)),
+      this.toAgentSnapshot(record, queueInfo.get(record.id) ?? {}),
     );
 
     // 自定义 Scheduler 不提供 snapshot 时，降级为成员 active run 摘要
@@ -445,12 +479,14 @@ export class InProcessRuntimeHost implements RuntimeHost {
   }
 
   /** 单个成员的快照视图（与 toStatus 同源，额外补 session / 时间） */
-  private toAgentSnapshot(record: MemberRecord, queuePosition?: number): AgentSnapshot {
+  private toAgentSnapshot(record: MemberRecord, queue: QueueInfo): AgentSnapshot {
     const snapshot: AgentSnapshot = {
       id: record.id,
       state: record.state,
       sessionId: record.active?.sessionId ?? defaultSessionId(record.spec),
       toolNames: record.runtime.pluginHost.listTools().map((tool) => tool.name),
+      lastSeen: record.lastSeen,
+      contextUsed: record.context.tokenCount,
     };
     if (record.name !== undefined) snapshot.name = record.name;
     if (record.active) {
@@ -458,7 +494,12 @@ export class InProcessRuntimeHost implements RuntimeHost {
       snapshot.startedAt = record.active.startedAt;
     }
     if (record.lastError !== undefined) snapshot.lastError = record.lastError;
-    if (queuePosition !== undefined) snapshot.queuePosition = queuePosition;
+    if (queue.position !== undefined) snapshot.queuePosition = queue.position;
+    if (queue.waitReason !== undefined) snapshot.waitReason = queue.waitReason;
+    if (this.transport?.nodeId !== undefined) snapshot.nodeId = this.transport.nodeId;
+    if (record.context.maxTokens !== undefined) snapshot.contextMax = record.context.maxTokens;
+    const task = readTask(record.spec.metadata);
+    if (task !== undefined) snapshot.task = task;
     return snapshot;
   }
 
@@ -589,6 +630,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     record.active = run;
     record.state = 'running';
     record.lastError = undefined;
+    record.lastSeen = Date.now();
 
     const removeAbortListener = this.bindRunSignal(run, opts?.signal);
 
@@ -639,6 +681,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     record.active = run;
     record.state = 'running';
     record.lastError = undefined;
+    record.lastSeen = Date.now();
 
     const removeAbortListener = this.bindRunSignal(run, opts?.signal);
     void this.executeResume(record, run, resume, opts, removeAbortListener);
@@ -695,6 +738,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
     eventType = 'agent.message.sent',
   ): void {
     record.inbox.push(message);
+    record.lastSeen = Date.now();
     this.publish(eventType, {
       agentId: record.id,
       messageId: message.id,
@@ -802,6 +846,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
       run.reject(error instanceof Error ? error : new Error(errorMessage));
     } finally {
       record.active = undefined;
+      record.lastSeen = Date.now();
       this.resuming.delete(run.id);
       removeAbortListener?.();
     }
@@ -871,6 +916,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
       run.reject(error instanceof Error ? error : new Error(errorMessage));
     } finally {
       record.active = undefined;
+      record.lastSeen = Date.now();
       removeAbortListener?.();
     }
   }

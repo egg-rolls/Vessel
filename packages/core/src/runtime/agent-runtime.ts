@@ -4,21 +4,23 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { estimateMessagesTokens } from '../context/index.js';
+import { estimateMessagesTokens, estimateTokens } from '../context/index.js';
 import {
+  evaluateLimitWarnings,
   evaluateTermination,
   evaluateUsageLimits,
+  LIMIT_WARNING_THRESHOLD,
   LimitExceededError,
   MemoryLimitChecker,
 } from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
-import type { ContextManager } from '../types/context.js';
+import type { ContextCompactedReason, ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
 import { GuardrailStage } from '../types/guardrail.js';
 import { type HookContext, HookType } from '../types/hook.js';
 import type { LimitChecker, TerminationPolicy, UsageLimits, UsageStats } from '../types/limits.js';
 import type { Logger } from '../types/logging.js';
-import type { AgentRuntimeOptions, Plugin, PluginHost } from '../types/plugin.js';
+import type { AgentRuntimeOptions, Plugin, PluginHost, SelfCardOptions } from '../types/plugin.js';
 import type { ChatRequest, LLMProvider, LLMResponse, Message } from '../types/provider.js';
 import type { RunExecution, RunInterruptReason, RunOptions } from '../types/run.js';
 import type { RunCheckpoint, RunStore } from '../types/run-store.js';
@@ -110,6 +112,54 @@ function isContextOverflowError(error: unknown): boolean {
   return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(haystack));
 }
 
+/** Self Card token 上限（0.15 E9） */
+const SELF_CARD_TOKEN_LIMIT = 400;
+
+/** 按估算 token 截断（Self Card 上限） */
+function truncateToTokens(text: string, limit: number): string {
+  if (estimateTokens(text) <= limit) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateTokens(text.slice(0, mid)) <= limit) low = mid;
+    else high = mid - 1;
+  }
+  return text.slice(0, low);
+}
+
+/** 有效限额渲染（run 开始时计数均为 0） */
+function formatSelfCardLimits(limits: SelfCardOptions['limits']): string {
+  const parts: string[] = [];
+  if (limits.requestLimit !== undefined) parts.push(`requests 0/${limits.requestLimit}`);
+  if (limits.toolCallsLimit !== undefined) parts.push(`tool calls 0/${limits.toolCallsLimit}`);
+  if (limits.inputTokensLimit !== undefined) {
+    parts.push(`input tokens 0/${limits.inputTokensLimit}`);
+  }
+  if (limits.outputTokensLimit !== undefined) {
+    parts.push(`output tokens 0/${limits.outputTokensLimit}`);
+  }
+  if (limits.totalCostLimit !== undefined) parts.push(`cost 0/${limits.totalCostLimit}`);
+  if (limits.maxIterations !== undefined) parts.push(`iterations 0/${limits.maxIterations}`);
+  if (limits.maxRuntimeSeconds !== undefined) {
+    parts.push(`runtime 0s/${limits.maxRuntimeSeconds}s`);
+  }
+  return parts.join(', ');
+}
+
+/** 生成 Self Card 文本（≤400 tokens） */
+function formatSelfCard(card: SelfCardOptions, contextUsed: number): string {
+  const lines = ['[Self Card]', `role: ${card.role}`];
+  if (card.parent_id !== undefined) lines.push(`parent: ${card.parent_id}`);
+  lines.push(`depth: ${card.depth}`, `model: ${card.model}`);
+  if (card.tools.length > 0) lines.push(`tools: ${card.tools.join(', ')}`);
+  const limits = formatSelfCardLimits(card.limits);
+  if (limits) lines.push(`limits: ${limits}`);
+  lines.push(`context: ${card.context.used ?? contextUsed}/${card.context.max} tokens`);
+  if (card.how_to_ask !== undefined) lines.push(`how to ask for help: ${card.how_to_ask}`);
+  return truncateToTokens(lines.join('\n'), SELF_CARD_TOKEN_LIMIT);
+}
+
 /** 预处理后的工具调用（0.6.1 P1：安全批次并发） */
 interface PreparedToolCall {
   toolCall: ToolCall;
@@ -148,6 +198,12 @@ export class AgentRuntime {
   private session?: SessionBackend;
   private limitChecker: LimitChecker;
   private systemPrompt?: string;
+  /** 0.15 E9：Self Card 选项；缺省不注入 */
+  private readonly selfCard?: SelfCardOptions;
+  /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；run 结束后清空 */
+  private runSystemPrompt?: string;
+  /** 0.15 E2：本 run 已预警的 limit key（每个 key 只发一次） */
+  private readonly warnedLimitKeys = new Set<string>();
   private permissionPolicy: PermissionPolicy;
   private guardrails: GuardrailRunner;
   private hooks: HookRunner;
@@ -194,6 +250,7 @@ export class AgentRuntime {
     this.termination = opts.termination;
     this.session = opts.session;
     this.systemPrompt = opts.systemPrompt;
+    this.selfCard = opts.selfCard;
     this.runStore = opts.runStore;
     this.pluginConfigs = opts.pluginConfigs;
     this.agentId = opts.agentId;
@@ -339,6 +396,7 @@ export class AgentRuntime {
       controller: new AbortController(),
       cleanups: [],
     };
+    this.warnedLimitKeys.clear();
     return execution;
   }
 
@@ -348,6 +406,7 @@ export class AgentRuntime {
       for (const cleanup of this.activeRunControl.cleanups) cleanup();
       this.activeRunControl = undefined;
     }
+    this.runSystemPrompt = undefined;
   }
 
   /**
@@ -424,15 +483,19 @@ export class AgentRuntime {
           restored = true;
         }
       }
-      if (!restored && this.systemPrompt) {
+      // 0.15 E9：Self Card 在 run 开始时生成一次；无 selfCard 时等于原 systemPrompt
+      this.runSystemPrompt = this.composeRunSystemPrompt();
+      if (!restored && this.runSystemPrompt) {
         this.addContext(
           {
             role: 'system',
-            content: this.systemPrompt,
+            content: this.runSystemPrompt,
           },
           runId,
         );
       }
+    } else {
+      this.runSystemPrompt = this.composeRunSystemPrompt();
     }
 
     // 准备用户消息
@@ -690,6 +753,8 @@ export class AgentRuntime {
       for (const message of checkpoint.messages) {
         this.addContext(message, runId);
       }
+      // 0.15 E9：resume 同样在 run 开始时生成一次 Self Card
+      this.runSystemPrompt = this.composeRunSystemPrompt();
 
       const runState: RunState = {
         run_id: runId,
@@ -750,6 +815,9 @@ export class AgentRuntime {
         throw new Error(signal.reason ?? 'Run cancelled');
       }
 
+      // 0.15 E2：80% 预警（每 run 每 key 一次，不改变执行）
+      this.publishLimitWarnings(execution);
+
       // 检查终止条件
       const terminationBlock = evaluateTermination(stats, this.termination);
       if (terminationBlock) {
@@ -786,13 +854,15 @@ export class AgentRuntime {
 
       // 0.6.1 E3：按阈值触发真实摘要压缩（旧 ContextManager 无此方法则跳过）。
       // 必须在组装请求前完成，保证本轮请求看到压缩后的历史。
-      await this.context.autoCompactAsync?.();
+      const compacted = await this.context.autoCompactAsync?.();
+      if (typeof compacted === 'number') this.publishCompacted(execution, compacted, 'auto');
 
       // 执行 BeforeLlm 钩子（hook 可往 ctx.systemPrompt 注入内容：skills / memory）
-      // 用 this.systemPrompt 作基底，hook 链 prepend 注入
+      // 用本次 run 的 systemPrompt（含 Self Card）作基底，hook 链 prepend 注入
       const hookCtx: HookContext = { run_id: runId, session_id: sessionId };
-      if (this.systemPrompt) {
-        hookCtx.systemPrompt = this.systemPrompt;
+      const baseSystemPrompt = this.runSystemPrompt ?? this.systemPrompt;
+      if (baseSystemPrompt) {
+        hookCtx.systemPrompt = baseSystemPrompt;
       }
       const beforeLlm = await this.hooks.run(HookType.BeforeLlm, hookCtx);
 
@@ -1135,7 +1205,7 @@ export class AgentRuntime {
       } catch (error) {
         if (retried || !isContextOverflowError(error)) throw error;
         retried = true;
-        const removed = await this.forceCompact();
+        const removed = await this.forceCompact(execution, 'overflow');
         messages = args.rebuildMessages();
         this.logger.warn('context overflow; compacted and retrying once', {
           run_id: runId,
@@ -1146,14 +1216,91 @@ export class AgentRuntime {
     }
   }
 
+  /**
+   * 0.15 E1：手动压缩上下文，并发布 `context.compacted`（reason=manual）。
+   * 供 harness 的 `/compact` 一类入口调用；直接调 ContextManager 不会产生事件。
+   * @returns 移除的消息数（0 = 未压缩）
+   */
+  async compactContext(): Promise<number> {
+    const removed = this.context.compactAsync
+      ? await this.context.compactAsync()
+      : this.context.compact();
+    this.publishCompacted(this.activeRun, removed, 'manual');
+    return removed;
+  }
+
   /** 强制压缩一次（overflow 重试用）；压缩失败不覆盖 provider 原始错误。 */
-  private async forceCompact(): Promise<number> {
+  private async forceCompact(
+    execution?: RunExecution,
+    reason: ContextCompactedReason = 'overflow',
+  ): Promise<number> {
     try {
-      if (this.context.compactAsync) return await this.context.compactAsync();
-      return this.context.compact();
+      const removed = this.context.compactAsync
+        ? await this.context.compactAsync()
+        : this.context.compact();
+      this.publishCompacted(execution, removed, reason);
+      return removed;
     } catch {
       return 0;
     }
+  }
+
+  /** 0.15 E1：removed>0 时发布 `context.compacted` */
+  private publishCompacted(
+    execution: RunExecution | undefined,
+    removed: number,
+    reason: ContextCompactedReason,
+  ): void {
+    if (removed <= 0) return;
+    const runId = execution?.runId ?? this.activeRun?.runId ?? 'manual';
+    const sessionId = execution?.sessionId ?? this.context.getSessionId();
+    this.publishEvent({
+      type: 'context.compacted',
+      run_id: runId,
+      data: {
+        run_id: runId,
+        session_id: sessionId,
+        removed,
+        remaining: this.context.messages.length,
+        reason,
+      },
+      ts: Date.now(),
+    });
+  }
+
+  /** 0.15 E2：每 run 每 key 只发一次预警（数据形状为冻结契约） */
+  private publishLimitWarnings(execution: RunExecution): void {
+    const warnings = evaluateLimitWarnings(
+      execution.stats,
+      this.limits,
+      this.termination,
+      LIMIT_WARNING_THRESHOLD,
+    );
+    for (const warning of warnings) {
+      if (this.warnedLimitKeys.has(warning.key)) continue;
+      this.warnedLimitKeys.add(warning.key);
+      this.publishEvent({
+        type: 'agent.limit.warning',
+        run_id: execution.runId,
+        data: {
+          scope: warning.scope,
+          key: warning.key,
+          current: warning.current,
+          max: warning.max,
+          source: warning.source,
+          threshold: warning.threshold,
+          hint: warning.hint,
+        },
+        ts: Date.now(),
+      });
+    }
+  }
+
+  /** 0.15 E9：本次 run 的 systemPrompt（含 Self Card）；缺省与 this.systemPrompt 相同 */
+  private composeRunSystemPrompt(): string | undefined {
+    if (!this.selfCard) return this.systemPrompt;
+    const card = formatSelfCard(this.selfCard, this.context.tokenCount);
+    return this.systemPrompt ? `${this.systemPrompt}\n\n${card}` : card;
   }
 
   /**
@@ -1366,8 +1513,10 @@ export class AgentRuntime {
     if (!hasSystem) {
       return systemOverride ? [{ role: 'system', content: systemOverride }, ...messages] : messages;
     }
-    // hook 未改写（或改写为空）时保持持久化 system 原样
-    if (!systemOverride || systemOverride === this.systemPrompt) {
+    // hook 未改写（或改写为空）且无 Self Card 时保持持久化 system 原样；
+    // Self Card 必须覆盖持久化的旧 system，且只出现一次。
+    const basePrompt = this.runSystemPrompt ?? this.systemPrompt;
+    if (!systemOverride || (systemOverride === basePrompt && !this.selfCard)) {
       return messages;
     }
     return messages.map((m) => (isBaseSystem(m) ? { ...m, content: systemOverride } : m));

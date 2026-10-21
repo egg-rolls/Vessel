@@ -34,6 +34,14 @@ export interface AgentNode {
   currentTool?: string;
   childRunId?: string;
   sessionId?: string;
+  /** canonical node_id（E3）；事件未带时为 undefined */
+  nodeId?: string;
+  /** 调度队列位置（E3/E4）；不在队列时为 undefined */
+  queuePosition?: number;
+  /** 等待原因（E3/E4）；不在队列时为 undefined */
+  waitReason?: string;
+  /** 产出引用（E8）；未提供时为 undefined */
+  resultRef?: string;
   startedAt: number;
   endedAt?: number;
   durationMs?: number;
@@ -43,18 +51,27 @@ export interface AgentNode {
   degraded?: boolean;
 }
 
+/** 树形展示行（children 数由注册表父子关系派生） */
+export interface AgentTreeRow {
+  node: AgentNode;
+  depth: number;
+  childrenCount: number;
+}
+
 /** 注册表保留上限：长会话只留最近的节点 */
 export const MAX_AGENT_NODES = 50;
 
 /** canonical agents.list 形状（展示层不直接用，便于与 web / RPC 对齐） */
 export interface AgentSummary {
   id: string;
+  node_id?: string;
   role: string;
   parent_id?: string;
   depth: number;
   state: AgentState;
   current_tool?: string;
   session_id?: string;
+  result_ref?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -158,6 +175,27 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
   const delegateId = delegateIdOf(data);
 
   switch (base) {
+    case 'agent.queue.entered': {
+      if (delegateId === undefined) return nodes;
+      const position = readNumber(data, 'position', 'queue_position', 'queuePosition');
+      const waitReason = readString(data, 'wait_reason', 'waitReason');
+      const nodeId = readString(data, 'node_id', 'nodeId');
+      return updateNode(nodes, delegateId, (node) => ({
+        ...node,
+        ...(position !== undefined ? { queuePosition: position } : {}),
+        ...(waitReason !== undefined ? { waitReason } : {}),
+        ...(nodeId !== undefined ? { nodeId } : {}),
+      }));
+    }
+
+    case 'agent.queue.left': {
+      if (delegateId === undefined) return nodes;
+      return updateNode(nodes, delegateId, (node) => {
+        const { queuePosition: _position, waitReason: _reason, ...rest } = node;
+        return rest;
+      });
+    }
+
     case 'delegate.started':
     case 'delegate_task.started': {
       const parentRunId = readString(data, 'run_id', 'parent_run_id') ?? event.run_id;
@@ -165,6 +203,9 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
         delegateId ??
         `delegate:${parentRunId}:${nodes.filter((node) => node.parentRunId === parentRunId).length}`;
       const parentId = readString(data, 'parent_delegate_id', 'parentDelegateId');
+      const nodeId = readString(data, 'node_id', 'nodeId');
+      const queuePosition = readNumber(data, 'queue_position', 'queuePosition');
+      const waitReason = readString(data, 'wait_reason', 'waitReason');
       const existing = findNode(nodes, id);
       const node: AgentNode = {
         id,
@@ -174,6 +215,9 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
         depth: readNumber(data, 'depth') ?? 0,
         ...(readString(data, 'task') !== undefined ? { task: readString(data, 'task') } : {}),
         state: 'running',
+        ...(nodeId !== undefined ? { nodeId } : {}),
+        ...(queuePosition !== undefined ? { queuePosition } : {}),
+        ...(waitReason !== undefined ? { waitReason } : {}),
         ...(readString(data, 'session_id', 'parent_session_id', 'parentSessionId') !== undefined
           ? {
               sessionId: readString(data, 'session_id', 'parent_session_id', 'parentSessionId'),
@@ -192,10 +236,12 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
     case 'run.started': {
       if (!subagent || delegateId === undefined) return nodes;
       const childRunId = readString(data, 'run_id') ?? event.run_id;
+      const nodeId = readString(data, 'node_id', 'nodeId');
       return updateNode(nodes, delegateId, (node) => ({
         ...node,
         state: 'running',
         childRunId,
+        ...(nodeId !== undefined ? { nodeId } : {}),
         ...(readString(data, 'session_id') !== undefined
           ? { sessionId: readString(data, 'session_id') }
           : {}),
@@ -257,12 +303,14 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
       if (delegateId === undefined) return nodes;
       const duration = readNumber(data, 'duration_ms', 'durationMs');
       const usage = readUsage(data);
+      const resultRef = readString(data, 'result_ref', 'resultRef');
       return updateNode(nodes, delegateId, (node) => ({
         ...node,
         state: 'completed',
         endedAt: event.ts,
         ...(duration !== undefined ? { durationMs: duration } : {}),
         ...(usage !== undefined ? { usage } : {}),
+        ...(resultRef !== undefined ? { resultRef } : {}),
       }));
     }
 
@@ -270,12 +318,14 @@ export function reduceAgentRegistry(nodes: AgentNode[], event: RunEvent): AgentN
       if (delegateId === undefined) return nodes;
       const duration = readNumber(data, 'duration_ms', 'durationMs');
       const error = errorTextOf(data);
+      const resultRef = readString(data, 'result_ref', 'resultRef');
       return updateNode(nodes, delegateId, (node) => ({
         ...node,
         state: 'failed',
         endedAt: event.ts,
         ...(duration !== undefined ? { durationMs: duration } : {}),
         ...(error !== undefined ? { error } : {}),
+        ...(resultRef !== undefined ? { resultRef } : {}),
       }));
     }
 
@@ -331,15 +381,62 @@ export function matchAgents(nodes: AgentNode[], query: string): AgentMatch {
   return { exact: [], prefix: nodes.filter((node) => node.id.startsWith(query)) };
 }
 
+/**
+ * 纯函数：按 parentId 组装树（父节点缺失的子节点提升为根）。
+ * 同级按 startedAt 升序；缩进取事件 depth 与结构深度的较大者，缺 depth 时不塌缩。
+ */
+export function buildAgentTree(nodes: AgentNode[]): AgentTreeRow[] {
+  const ids = new Set(nodes.map((node) => node.id));
+  const children = new Map<string, AgentNode[]>();
+  const roots: AgentNode[] = [];
+
+  for (const node of nodes) {
+    if (node.parentId !== undefined && node.parentId !== node.id && ids.has(node.parentId)) {
+      const list = children.get(node.parentId) ?? [];
+      list.push(node);
+      children.set(node.parentId, list);
+    } else {
+      roots.push(node);
+    }
+  }
+
+  const byStarted = (a: AgentNode, b: AgentNode): number => {
+    if (a.startedAt !== b.startedAt) return a.startedAt - b.startedAt;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  };
+  roots.sort(byStarted);
+  for (const list of children.values()) list.sort(byStarted);
+
+  const rows: AgentTreeRow[] = [];
+  const visited = new Set<string>();
+  const visit = (node: AgentNode, structuralDepth: number): void => {
+    if (visited.has(node.id)) return;
+    visited.add(node.id);
+    const kids = children.get(node.id) ?? [];
+    rows.push({
+      node,
+      depth: Math.max(0, node.depth, structuralDepth),
+      childrenCount: kids.length,
+    });
+    for (const child of kids) visit(child, structuralDepth + 1);
+  };
+
+  for (const root of roots) visit(root, 0);
+  for (const node of nodes) visit(node, 0);
+  return rows;
+}
+
 /** 与 canonical agents.list 对齐的摘要（parent_id/current_tool/session_id 为 snake_case） */
 export function toAgentSummary(node: AgentNode): AgentSummary {
   return {
     id: node.id,
+    ...(node.nodeId !== undefined ? { node_id: node.nodeId } : {}),
     role: node.role,
     ...(node.parentId !== undefined ? { parent_id: node.parentId } : {}),
     depth: node.depth,
     state: node.state,
     ...(node.currentTool !== undefined ? { current_tool: node.currentTool } : {}),
     ...(node.sessionId !== undefined ? { session_id: node.sessionId } : {}),
+    ...(node.resultRef !== undefined ? { result_ref: node.resultRef } : {}),
   };
 }

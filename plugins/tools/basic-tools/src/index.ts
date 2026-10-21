@@ -8,9 +8,9 @@
  * - `edit`：精确且唯一匹配的字符串替换，权限 ask
  *
  * 危险操作（bash / edit）经 `checkPermission` → `requestPermission` 等用户授权（ADR-029）。
- * `read` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
+ * `read` / `edit` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
  * 可选 `allowed_roots` 把越界访问降级为 ask。`..` 与符号链接按真实路径判定。
- * `bash` 另在命令文本里匹配内置 denylist 路径（0.14.2 F2）：命中即拒绝。
+ * `bash` 另在命令文本里匹配内置 denylist 与配置 `deny_paths`（0.14.2 F2 / 0.15）：命中即拒绝。
  * 这不是沙箱——只做字符串/规范化路径匹配，变量拼接、`cd`、符号链接等仍可能绕过。
  * 可选 `cwd`（0.11.1）提供默认工作目录：`bash` 未显式传 `cwd` 时使用它，
  * `read` / `edit` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
@@ -100,7 +100,7 @@ const DEFAULT_DENY_PATHS: readonly string[] = [
 export interface BasicToolsConfig {
   /** 配置后 read / bash cwd 必须落在任一 root 内；越界走 ask。空 = 不限制根 */
   allowedRoots?: string[];
-  /** 追加到内置 denylist 的敏感路径（前缀匹配） */
+  /** 追加到内置 denylist 的敏感路径（read/edit 路径边界 + bash 命令文本匹配） */
   denyPaths?: string[];
   /** 默认工作目录（支持 `~`；相对路径按进程 cwd 解析）。bash 未传 cwd、read/edit 相对路径使用 */
   cwd?: string;
@@ -236,6 +236,8 @@ interface PathBoundary {
   /** 允许的根；空数组 = 不限制根 */
   allowedRoots: string[];
   denyRoots: string[];
+  /** bash 命令文本匹配模式（内置 denylist + 配置 deny_paths） */
+  commandPatterns: readonly DeniedCommandPattern[];
 }
 
 /** 构造边界：内置 denylist 始终生效，配置项追加/合并 */
@@ -244,6 +246,7 @@ function buildPathBoundary(config: BasicToolsConfig): PathBoundary {
   return {
     allowedRoots: (config.allowedRoots ?? []).map((entry) => canonicalPath(expandHome(entry))),
     denyRoots: denyEntries.map((entry) => canonicalPath(expandHome(entry))),
+    commandPatterns: buildDeniedCommandPatterns(denyEntries),
   };
 }
 
@@ -274,35 +277,53 @@ function escapeRegExp(text: string): string {
 
 /** 一条 denylist 路径在命令文本里可能出现的写法：`~/`、`$HOME/`、`${HOME}/`、绝对路径 */
 function deniedPathSpellings(entry: string): string[] {
-  const suffix = entry.startsWith('~/') ? entry.slice(2) : entry;
-  return [
-    `~/${suffix}`,
-    `$HOME/${suffix}`,
-    `\${HOME}/${suffix}`,
-    path.join(os.homedir(), suffix),
-  ].map(normalizeCommandText);
+  const trimmed = entry.trim();
+  if (trimmed === '~') return ['~', '$HOME', '${HOME}', os.homedir()].map(normalizeCommandText);
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) {
+    const suffix = trimmed.slice(2);
+    return [
+      `~/${suffix}`,
+      `$HOME/${suffix}`,
+      `\${HOME}/${suffix}`,
+      path.join(os.homedir(), suffix),
+    ].map(normalizeCommandText);
+  }
+  if (path.isAbsolute(trimmed)) {
+    return [trimmed, path.normalize(trimmed)].map(normalizeCommandText);
+  }
+  // 相对路径按进程 cwd 解析（与 buildPathBoundary 的 expandHome 一致）
+  return [path.resolve(expandHomePrefix(trimmed))].map(normalizeCommandText);
+}
+
+/** 命令文本匹配模式（构造边界时算好，避免每条命令重复展开家目录） */
+interface DeniedCommandPattern {
+  entry: string;
+  pattern: RegExp;
 }
 
 /**
- * 内置 denylist 的命令文本匹配模式（启动时算好，避免每条命令重复展开家目录）。
+ * 为内置 denylist + 配置 `deny_paths` 生成命令文本匹配模式。
  * 命中后要求下一字符不是路径延续，避免把 `~/.sshd` 之类当作 `~/.ssh`。
  */
-const DENIED_COMMAND_PATTERNS: readonly { entry: string; pattern: RegExp }[] =
-  DEFAULT_DENY_PATHS.flatMap((entry) =>
+function buildDeniedCommandPatterns(entries: readonly string[]): DeniedCommandPattern[] {
+  return entries.flatMap((entry) =>
     deniedPathSpellings(entry).map((spelling) => ({
       entry,
       pattern: new RegExp(`${escapeRegExp(spelling)}(?![\\w.-])`),
     })),
   );
+}
 
 /**
- * 命令文本是否写出了内置敏感路径；命中返回对应 denylist 条目。
- * 只做字符串匹配，不做 shell 解析：`cd` 后再访问相对路径、变量拼接、符号链接等仍可绕过；
- * 自定义 `deny_paths` 不参与文本匹配（任意子串会误伤普通命令）。
+ * 命令文本是否写出了敏感路径；命中返回对应 denylist 条目。
+ * 只做字符串匹配，不做 shell 解析：`cd` 后再访问相对路径、变量拼接、符号链接等仍可绕过。
  */
-function findDeniedPathInCommand(command: string): string | undefined {
+function findDeniedPathInCommand(
+  command: string,
+  patterns: readonly DeniedCommandPattern[],
+): string | undefined {
   const normalized = normalizeCommandText(command);
-  for (const { entry, pattern } of DENIED_COMMAND_PATTERNS) {
+  for (const { entry, pattern } of patterns) {
     if (pattern.test(normalized)) return entry;
   }
   return undefined;
@@ -576,7 +597,7 @@ async function runBash(
   if (command.trim() === '') return '错误：command 不能为空';
 
   // 防御性检查：即使调用方绕过 checkPermission，命令文本命中 denylist 也不执行
-  const deniedEntry = findDeniedPathInCommand(command);
+  const deniedEntry = findDeniedPathInCommand(command, boundary.commandPatterns);
   if (deniedEntry !== undefined) return deniedCommandMessage(deniedEntry);
 
   const cwd = readString(args, 'cwd');
@@ -685,9 +706,9 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
       'Run a shell command in bash and return merged stdout/stderr with the exit code. ' +
       'Use it for everything that has no dedicated tool: finding/listing files, batch ' +
       'edits, git, builds, tests, HTTP requests. ' +
-      'Commands that spell out built-in credential paths (~/.ssh, ~/.aws, ~/.gnupg, ' +
-      '~/.vessel/config.yaml) are rejected. That check matches the command text only; ' +
-      'it is best-effort, not a sandbox.',
+      'Commands that spell out built-in or configured sensitive paths (~/.ssh, ~/.aws, ' +
+      '~/.gnupg, ~/.vessel/config.yaml and extra deny_paths) are rejected. That check matches ' +
+      'the command text only; it is best-effort, not a sandbox.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -706,7 +727,12 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
     checkPermission: async (input, ctx) => {
       if (isRecord(input)) {
         // 命令文本命中内置 denylist：与敏感 cwd 一样直接 deny，不走用户 ask
-        if (findDeniedPathInCommand(readString(input, 'command')) !== undefined) return 'deny';
+        if (
+          findDeniedPathInCommand(readString(input, 'command'), boundary.commandPatterns) !==
+          undefined
+        ) {
+          return 'deny';
+        }
         const cwd = readString(input, 'cwd');
         // 显式 cwd 优先；未传时按 baseCwd 做边界判定（baseCwd 不放宽 denylist / allowed_roots）
         const decision = evaluatePath(cwd === '' ? baseCwd.path : cwd, boundary);
@@ -844,7 +870,12 @@ function writeFileAtomic(absolutePath: string, content: string): void {
 }
 
 /** 精确且唯一匹配的字符串替换；多处替换必须显式 replace_all */
-function editFile(args: unknown, signal: AbortSignal | undefined, baseCwd: BaseCwd): string {
+function editFile(
+  args: unknown,
+  signal: AbortSignal | undefined,
+  boundary: PathBoundary,
+  baseCwd: BaseCwd,
+): string {
   if (signal?.aborted) return CANCELLED_TEXT;
   if (!isRecord(args)) return '错误：edit 需要 { path, old_string, new_string }';
   const inputPath = readString(args, 'path');
@@ -854,6 +885,10 @@ function editFile(args: unknown, signal: AbortSignal | undefined, baseCwd: BaseC
   if (oldString === '') return '错误：old_string 不能为空';
 
   const absolute = resolveToolPath(baseCwd.path, inputPath);
+  // 防御性检查：与 read 同一条边界；绕过 checkPermission 也不得改敏感路径
+  if (evaluatePath(absolute, boundary) === 'deny') {
+    return `错误：路径在敏感路径拒绝列表中：${inputPath}`;
+  }
   if (dependsOnBaseCwd(inputPath) && baseCwd.issue !== undefined) return baseCwd.issue;
   if (!existsSync(absolute)) return `错误：文件不存在：${inputPath}`;
 
@@ -903,8 +938,8 @@ function editFile(args: unknown, signal: AbortSignal | undefined, baseCwd: BaseC
   return `已替换 ${count} 处（${inputPath}）`;
 }
 
-/** 构造 edit 工具（相对路径按 baseCwd 解析；ADR-055 下 edit 仍不纳入路径边界） */
-function createEditTool(baseCwd: BaseCwd): ToolDefinition {
+/** 构造 edit 工具（相对路径按 baseCwd 解析；路径边界与 read 相同） */
+function createEditTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinition {
   return {
     name: 'edit',
     description:
@@ -923,8 +958,18 @@ function createEditTool(baseCwd: BaseCwd): ToolDefinition {
       },
       required: ['path', 'old_string', 'new_string'],
     },
-    checkPermission: async (input, ctx) => requestPermission(ctx, 'edit', input),
-    handler: async (args: unknown, ctx) => editFile(args, ctx.signal, baseCwd),
+    checkPermission: async (input, ctx) => {
+      if (isRecord(input)) {
+        const inputPath = readString(input, 'path');
+        if (inputPath !== '') {
+          // deny 直接拒绝；allowed_roots 越界返回 ask，由运行时确认
+          const decision = evaluatePath(resolveToolPath(baseCwd.path, inputPath), boundary);
+          if (decision !== 'allow') return decision;
+        }
+      }
+      return requestPermission(ctx, 'edit', input);
+    },
+    handler: async (args: unknown, ctx) => editFile(args, ctx.signal, boundary, baseCwd),
   };
 }
 
@@ -940,7 +985,7 @@ export function createBasicTools(config: BasicToolsConfig = {}): ToolDefinition[
   return [
     createBashTool(boundary, baseCwd),
     createReadTool(boundary, baseCwd),
-    createEditTool(baseCwd),
+    createEditTool(boundary, baseCwd),
   ];
 }
 

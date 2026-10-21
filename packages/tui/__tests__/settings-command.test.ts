@@ -80,6 +80,65 @@ describe('/settings', () => {
     expect(getLocale()).toBe('zh-CN');
   });
 
+  it('writes errorLevel and verbosity through injected settings', async () => {
+    const calls: string[] = [];
+    const ctx = makeCtx({
+      settings: {
+        language: 'zh-CN',
+        setLanguage: async () => undefined,
+        setErrorLevel: async (value) => {
+          calls.push(`errorLevel:${value}`);
+        },
+        setVerbosity: async (value) => {
+          calls.push(`verbosity:${value}`);
+        },
+      },
+    });
+
+    const level = await run('errorLevel all', ctx);
+    expect(level.output).toContain('all');
+    const verbosity = await run('verbosity debug', ctx);
+    expect(verbosity.output).toContain('debug');
+    expect(calls).toEqual(['errorLevel:all', 'verbosity:debug']);
+  });
+
+  it('rejects invalid errorLevel / verbosity without writing', async () => {
+    const calls: string[] = [];
+    const ctx = makeCtx({
+      settings: {
+        language: 'zh-CN',
+        setLanguage: async () => undefined,
+        setErrorLevel: async (value) => {
+          calls.push(`errorLevel:${value}`);
+        },
+        setVerbosity: async (value) => {
+          calls.push(`verbosity:${value}`);
+        },
+      },
+    });
+
+    const level = await run('errorLevel loud', ctx);
+    expect(level.output).toContain('loud');
+    const verbosity = await run('verbosity noisy', ctx);
+    expect(verbosity.output).toContain('noisy');
+    expect(calls).toEqual([]);
+  });
+
+  it('stays read-only when visibility setters are not injected', async () => {
+    setLocale('en');
+    const ctx = makeCtx({
+      settings: { language: 'zh-CN', setLanguage: async () => undefined },
+      config: { ui: { errorLevel: 'all', verbosity: 'debug' } } as never,
+    });
+
+    const shown = await run('', ctx);
+    expect(shown.output).toContain('all');
+    expect(shown.output).toContain('debug');
+
+    const result = await run('errorLevel user', ctx);
+    expect(result.output).toContain('read-only');
+  });
+
   it('未注入时切换请求不改变 locale', async () => {
     setLocale('zh-CN');
     const result = await run('language en');

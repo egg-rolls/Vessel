@@ -179,6 +179,91 @@ describe('status snapshot', () => {
     expect(text).not.toContain('limit blocked');
   });
 
+  it('appends the agent queue snapshot and the latest compaction', () => {
+    setLocale('en');
+    const ctx = makeCtx({ config: { context: { maxTokens: 1000 } } as VesselConfig });
+    ctx.events.publish(ev('run.started', 'r1', {}, 1000));
+    ctx.events.publish(
+      ev('subagent.delegate.started', 'run-parent', { delegateId: 'd-running', depth: 0 }, 1000),
+    );
+    ctx.events.publish(
+      ev(
+        'agent.queue.entered',
+        'run-parent',
+        { agent_id: 'd-wait', run_id: 'run-child', position: 1, wait_reason: 'capacity' },
+        1100,
+      ),
+    );
+    ctx.events.publish(
+      ev('context.compacted', 'r1', { removed: 1234, remaining: 5000, reason: 'auto' }, 1200),
+    );
+
+    const snapshot = buildStatusSnapshot(ctx, makeState('s1'), 2000);
+    expect(snapshot.agentQueue).toMatchObject({ queued: 1, running: 1 });
+    expect(snapshot.agentQueue.entries[0]).toMatchObject({
+      id: 'd-wait',
+      position: 1,
+      waitReason: 'capacity',
+    });
+    expect(snapshot.lastCompaction).toMatchObject({
+      removed: 1234,
+      remaining: 5000,
+      reason: 'auto',
+    });
+
+    const text = formatStatusSnapshot(snapshot);
+    expect(text).toContain('agent queue');
+    expect(text).toContain('1 queued · 1 running');
+    expect(text).toContain('d-wait · pos 1 · capacity');
+    expect(text).toContain('removed 1,234 · remaining 5,000 · auto');
+  });
+
+  it('shows the latest 80% warning once per key while its run is active', () => {
+    setLocale('en');
+    const ctx = makeCtx({ config: { context: { maxTokens: 1000 } } as VesselConfig });
+    ctx.events.publish(ev('run.started', 'r1', {}, 1000));
+    ctx.events.publish(
+      ev(
+        'agent.limit.warning',
+        'r1',
+        {
+          scope: 'run',
+          key: 'inputTokensLimit',
+          current: 800,
+          max: 1000,
+          source: 'config.limits',
+          threshold: 0.8,
+        },
+        1100,
+      ),
+    );
+    ctx.events.publish(
+      ev(
+        'agent.limit.warning',
+        'r1',
+        { scope: 'run', key: 'inputTokensLimit', current: 900, max: 1000, threshold: 0.8 },
+        1200,
+      ),
+    );
+    ctx.events.publish(
+      ev(
+        'agent.limit.warning',
+        'r1',
+        { scope: 'run', key: 'toolCallsLimit', current: 40, max: 50, threshold: 0.8 },
+        1300,
+      ),
+    );
+
+    const active = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 2000));
+    expect((active.match(/inputTokensLimit/g) ?? []).length).toBe(1);
+    expect(active).toContain('run/inputTokensLimit 900/1000 · 80% threshold');
+    expect(active).toContain('run/toolCallsLimit 40/50');
+
+    ctx.events.publish(ev('run.completed', 'r1', {}, 1500));
+    const done = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 2000));
+    expect(done).not.toContain('limit warning');
+  });
+
   it('appends a limit block row only while its run is active', () => {
     setLocale('en');
     const ctx = makeCtx({ config: { context: { maxTokens: 1000 } } as VesselConfig });

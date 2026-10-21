@@ -20,6 +20,9 @@ export type ContextSummarizer = (
   options: ContextSummaryOptions,
 ) => Promise<string>;
 
+/** `context.compacted` 的 reason（0.15 E1） */
+export type ContextCompactedReason = 'auto' | 'overflow' | 'manual';
+
 /** 上下文管理器接口 */
 export interface ContextManager {
   add(msg: Message): void;
@@ -38,6 +41,8 @@ export interface ContextManager {
   autoCompactAsync?(): Promise<number>;
   clear(): void;
   readonly tokenCount: number;
+  /** 0.15：上下文 token 预算上限；实现能提供时用于快照 `context_max`，否则缺省 */
+  readonly maxTokens?: number;
   setSessionId(sessionId: string): void;
   getSessionId(): string;
   /** 用 LLM 响应的真实 token 数替代估算（Auto Compact 使用） */

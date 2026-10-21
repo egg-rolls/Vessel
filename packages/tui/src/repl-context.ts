@@ -206,9 +206,15 @@ export interface PermissionsControl {
 
 // ── 0.11：设置控制面（tui 定义结构，asm 写用户 YAML） ──
 
+/** `ui.errorLevel` 允许值（0.15） */
+export type ReplErrorLevel = 'user' | 'all';
+
+/** `ui.verbosity` 允许值（0.15） */
+export type ReplVerbosity = 'minimal' | 'normal' | 'debug';
+
 /**
  * 用户设置读写（DECISION-021 §3.2）。
- * 未注入时 `/settings` 只读展示当前 locale，不提供切换。
+ * 未注入时 `/settings` 只读展示当前值，不提供切换。
  */
 export interface ReplSettingsControl {
   language: 'zh-CN' | 'en';
@@ -219,6 +225,14 @@ export interface ReplSettingsControl {
    * asm 未注入该方法时，栏位切换只保留在本次会话内。
    */
   setStatusBars?(value: 'top' | 'bottom' | 'both' | 'none'): Promise<void>;
+  /** 0.15：当前 `ui.errorLevel`；未提供时按 user */
+  errorLevel?: ReplErrorLevel;
+  /** 0.15：当前 `ui.verbosity`；未提供时按 normal */
+  verbosity?: ReplVerbosity;
+  /** 0.15：写入用户配置 `ui.errorLevel`（YAML `ui.error_level`） */
+  setErrorLevel?(value: ReplErrorLevel): Promise<void>;
+  /** 0.15：写入用户配置 `ui.verbosity`（YAML `ui.verbosity`） */
+  setVerbosity?(value: ReplVerbosity): Promise<void>;
 }
 
 // ── 0.5 F3：统一 RPC 入口与 tenant（tui 定义结构，asm 注入实现） ──

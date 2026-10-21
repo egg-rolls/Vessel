@@ -13,15 +13,20 @@ import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatDuration } from '../utils/display-labels.js';
 import { padToWidth } from '../utils/text-layout.js';
+import { buildAgentRegistry } from './agent-registry.js';
 import {
   type EffectiveLimits,
   findLatestLimitBlock,
+  findLatestLimitWarnings,
   formatLimitBlock,
+  formatLimitWarning,
   type LimitBlockInfo,
+  type LimitWarningInfo,
   readEffectiveLimits,
   readRunUsage,
   type UsageSnapshot,
 } from './limit-info.js';
+import { type AgentQueueSnapshot, readAgentQueue } from './queue-info.js';
 
 /** 与 config / core 一致的默认上下文预算（ADR-064） */
 const DEFAULT_CONTEXT_MAX_TOKENS = 1_000_000;
@@ -32,6 +37,16 @@ export interface StatusRun {
   runId?: string;
   sessionId?: string;
   startedAt?: number;
+}
+
+/** 最近一次 `context.compacted`（E1） */
+export interface CompactionSnapshot {
+  runId?: string;
+  sessionId?: string;
+  removed?: number;
+  remaining?: number;
+  reason?: string;
+  ts: number;
 }
 
 export interface StatusSnapshot {
@@ -46,8 +61,14 @@ export interface StatusSnapshot {
   usage?: UsageSnapshot;
   /** active run 最近一次限制命中 */
   limitBlock?: LimitBlockInfo;
+  /** active run 每个 key 最新一条 80% 预警 */
+  limitWarnings: LimitWarningInfo[];
   permissions: { autoApprove: string[]; pending: number };
   queue: { input: number };
+  /** agent 调度队列（E4；与输入队列独立） */
+  agentQueue: AgentQueueSnapshot;
+  /** 最近一次压缩；从未压缩时 undefined */
+  lastCompaction?: CompactionSnapshot;
   instance: {
     version?: string;
     tenantId: string;
@@ -127,6 +148,49 @@ export function countPendingPermissions(events: RunEvent[]): number {
   return pending.size;
 }
 
+function baseType(type: string): string {
+  let value = type;
+  while (value.startsWith('subagent.')) value = value.slice('subagent.'.length);
+  return value;
+}
+
+/** 最新一次 `context.compacted`；字段缺失保持 undefined（展示层显示 unknown）。 */
+export function findLatestCompaction(events: RunEvent[]): CompactionSnapshot | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (!event || baseType(event.type) !== 'context.compacted') continue;
+    const data = dataOf(event);
+    const value = (...keys: string[]): number | undefined => {
+      for (const key of keys) {
+        const raw = data[key];
+        if (typeof raw === 'number' && Number.isFinite(raw)) return raw;
+      }
+      return undefined;
+    };
+    const text = (...keys: string[]): string | undefined => {
+      for (const key of keys) {
+        const raw = data[key];
+        if (typeof raw === 'string' && raw.length > 0) return raw;
+      }
+      return undefined;
+    };
+    const runId = text('run_id', 'runId') ?? event.run_id;
+    const sessionId = text('session_id', 'sessionId');
+    const removed = value('removed');
+    const remaining = value('remaining');
+    const reason = text('reason');
+    return {
+      ...(runId !== undefined ? { runId } : {}),
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(removed !== undefined ? { removed } : {}),
+      ...(remaining !== undefined ? { remaining } : {}),
+      ...(reason !== undefined ? { reason } : {}),
+      ts: event.ts,
+    };
+  }
+  return undefined;
+}
+
 export function buildStatusSnapshot(
   ctx: ReplContext,
   state: ReplState,
@@ -143,6 +207,15 @@ export function buildStatusSnapshot(
   const usage = runId !== undefined ? readRunUsage(events, runId, now) : undefined;
   const limitBlock =
     runId !== undefined ? findLatestLimitBlock(events, { runIds: [runId] }) : undefined;
+  const limitWarnings =
+    runId !== undefined ? findLatestLimitWarnings(events, { runIds: [runId] }) : [];
+  const queued = readAgentQueue(events);
+  const queuedIds = new Set(queued.entries.map((entry) => entry.id));
+  const runningAgents = buildAgentRegistry(events).filter(
+    (node) => node.state === 'running' && !queuedIds.has(node.id),
+  ).length;
+  const agentQueue = { ...queued, running: runningAgents };
+  const lastCompaction = findLatestCompaction(events);
 
   return {
     asOf: now,
@@ -161,6 +234,7 @@ export function buildStatusSnapshot(
     limits: readEffectiveLimits(ctx.config),
     ...(usage !== undefined ? { usage } : {}),
     ...(limitBlock !== undefined ? { limitBlock } : {}),
+    limitWarnings,
     permissions: {
       autoApprove: [...autoApprove],
       pending: countPendingPermissions(events),
@@ -168,6 +242,8 @@ export function buildStatusSnapshot(
     queue: {
       input: state.queuedCount ?? 0,
     },
+    agentQueue,
+    ...(lastCompaction !== undefined ? { lastCompaction } : {}),
     instance: {
       ...(ctx.version !== undefined ? { version: ctx.version } : {}),
       tenantId: ctx.tenant?.tenant_id ?? 'default',
@@ -193,6 +269,10 @@ function groupNumber(value: number): string {
 
 function line(label: string, value: string): string {
   return `  ${padToWidth(label, LABEL_WIDTH)} ${value}`;
+}
+
+function continuation(value: string): string {
+  return `  ${' '.repeat(LABEL_WIDTH)} ${value}`;
 }
 
 function truncateList(values: string[], maxWidth: number): string {
@@ -313,6 +393,43 @@ export function formatStatusSnapshot(snapshot: StatusSnapshot): string {
     line(t('status.label.permissions'), permissionsValue),
     line(t('status.label.queue'), t('status.queueValue', { count: snapshot.queue.input })),
     line(t('status.label.instance'), instanceParts.join(' · ')),
+    line(
+      t('status.label.agentQueue'),
+      t('status.agentQueueValue', {
+        queued: snapshot.agentQueue.queued,
+        running: snapshot.agentQueue.running,
+      }),
+    ),
+    ...snapshot.agentQueue.entries.map((entry) =>
+      continuation(
+        t('status.agentQueueEntry', {
+          id: entry.id,
+          position: entry.position ?? t('limits.unknown'),
+          reason: entry.waitReason ?? t('limits.unknown'),
+        }),
+      ),
+    ),
+    ...snapshot.limitWarnings.map(
+      (warning) => `  ${t('status.limitWarning', { value: formatLimitWarning(warning) })}`,
+    ),
+    ...(snapshot.lastCompaction !== undefined
+      ? [
+          line(
+            t('status.label.compaction'),
+            t('status.compactionValue', {
+              removed:
+                snapshot.lastCompaction.removed !== undefined
+                  ? groupNumber(snapshot.lastCompaction.removed)
+                  : t('limits.unknown'),
+              remaining:
+                snapshot.lastCompaction.remaining !== undefined
+                  ? groupNumber(snapshot.lastCompaction.remaining)
+                  : t('limits.unknown'),
+              reason: snapshot.lastCompaction.reason ?? t('limits.unknown'),
+            }),
+          ),
+        ]
+      : []),
     '',
   ].join('\n');
 }
