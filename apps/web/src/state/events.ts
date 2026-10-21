@@ -138,6 +138,27 @@ export function buildGroup(runId: string, entries: readonly StoredEvent[]): RunG
         group.completedAt = ev.ts;
         continue;
       }
+      case 'user.message': {
+        // 持久化后的用户输入（可能已被 guardrail 改写）；不回退成 raw JSON 卡。
+        const d = ev.data as { message?: unknown; content?: unknown; session_id?: unknown };
+        const message =
+          typeof d.message === 'object' && d.message !== null && !Array.isArray(d.message)
+            ? (d.message as Record<string, unknown>)
+            : undefined;
+        if (
+          message?.role === 'user' &&
+          typeof message.content === 'string' &&
+          message.content.length > 0
+        ) {
+          group.input = message.content;
+        } else if (typeof d.content === 'string' && d.content.length > 0) {
+          group.input = d.content;
+        }
+        if (group.sessionId === undefined && typeof d.session_id === 'string') {
+          group.sessionId = d.session_id;
+        }
+        continue;
+      }
       case 'llm.stream.chunk': {
         const chunk = (ev.data as { chunk?: StreamChunk }).chunk;
         if (chunk?.type === 'text_delta' && chunk.delta) {

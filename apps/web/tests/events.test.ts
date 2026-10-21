@@ -124,6 +124,23 @@ describe('live streaming buffers (0.17)', () => {
   });
 });
 
+describe('user.message', () => {
+  test('user.message 被渲染成 raw JSON 卡且输入用改写前文本', () => {
+    const group = buildGroup('r1', [
+      stored('r1', 'run.started', 1, { input: 'raw' }, 100),
+      stored('r1', 'user.message', 2, { message: { role: 'user', content: 'rewritten' } }, 101),
+    ]);
+    expect(group.input).toBe('rewritten');
+    expect(group.items.some((item) => item.kind === 'event')).toBe(false);
+  });
+
+  test('旧日志只有 run.started 时用户输入丢失（未回退 input）', () => {
+    const group = buildGroup('r1', [stored('r1', 'run.started', 1, { input: 'raw' }, 100)]);
+    expect(group.input).toBe('raw');
+    expect(group.items.some((item) => item.kind === 'event')).toBe(false);
+  });
+});
+
 describe('groupEvents', () => {
   test('hides internal, subagent and internal-level errors by default', () => {
     const entries = [

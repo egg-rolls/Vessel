@@ -163,6 +163,8 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
   const streamCancellationArchivedRef = useRef(false);
   /** 本轮失败是否已由 StreamOutput 归档（失败只产生一条历史项） */
   const streamFailureArchivedRef = useRef(false);
+  /** 本轮普通消息原文；事件流在 user.message 之前失败时补一条 user item */
+  const pendingUserTextRef = useRef<string | undefined>(undefined);
 
   // ── 0.13 上/下栏显隐 ──────────────────────────────
   // 初始值：VESSEL_STATUS_BARS > ui.statusBars > 自动（上栏开、下栏 rows>=18）。
@@ -501,15 +503,16 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       }
 
       dispatch({ type: 'recordInput', value });
-      dispatch({
-        type: 'appendItem',
-        item: { kind: 'user', text: value, at: Date.now() },
-      });
       dispatch({ type: 'setInput', input: '' });
 
       // 处理命令。命令是纯函数：execute 应用 nextState 到传入的 working 副本，
       // Ink 层再用 result.nextState 做不可变合并（不直接改 React state 对象）。
       if (value.startsWith('/')) {
+        // 只有 slash 命令本地落 user item；普通消息由 user.message 事件渲染。
+        dispatch({
+          type: 'appendItem',
+          item: { kind: 'user', text: value, at: Date.now() },
+        });
         // registry 已统一兜底；这里再防一层，保证命令实现异常不会让 REPL 崩溃。
         let result: CommandResult;
         try {
@@ -592,6 +595,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       // signal 来自本轮 AbortController：Esc / 运行中 Ctrl+C 会中断它。
       const abort = new AbortController();
       streamFailureArchivedRef.current = false;
+      pendingUserTextRef.current = value;
       dispatch({ type: 'runStart', abort });
       try {
         const branch = await getCurrentGitBranch();
@@ -640,9 +644,17 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
         }
       } catch (error) {
         // 只可能是 run 之前的准备工作（git 分支、文件扫描）失败；没有 StreamOutput 归档。
+        const pending = pendingUserTextRef.current;
+        if (pending !== undefined) {
+          dispatch({
+            type: 'appendItem',
+            item: { kind: 'user', text: pending, at: Date.now() },
+          });
+        }
         const action = failureFallbackAction(false, error);
         if (action) dispatch(action);
       } finally {
+        pendingUserTextRef.current = undefined;
         dispatch({ type: 'runEnd' });
       }
     },
@@ -1073,6 +1085,18 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       streamCancellationArchivedRef.current = reason === 'cancelled';
       // 失败由 StreamOutput 单源归档（error item + run summary），父组件不再重复追加。
       streamFailureArchivedRef.current = reason === 'failed';
+      // run 在 user.message 之前失败（典型是 input guardrail 拦截）时事件里没有用户输入。
+      const pending = pendingUserTextRef.current;
+      if (
+        reason !== 'completed' &&
+        pending !== undefined &&
+        !items.some((item) => item.kind === 'user')
+      ) {
+        dispatch({
+          type: 'appendItem',
+          item: { kind: 'user', text: pending, at: Date.now() },
+        });
+      }
       if (items.length > 0) {
         dispatch({ type: 'appendItems', items });
         return;
