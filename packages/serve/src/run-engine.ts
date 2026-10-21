@@ -74,6 +74,10 @@ export interface PendingAsk {
   /** 请求产生时绑定的 tenant；应答必须来自同一 tenant（P0-1） */
   tenant_id: string;
   ts: number;
+  /** 关联 session（`ask.user.requested` 事件携带时记录，additive）。 */
+  session_id?: string;
+  /** 原始 questions；只用于 `interactions.list` 展示，不持久化。 */
+  questions?: unknown;
 }
 
 /** 引擎选项 */
@@ -492,10 +496,16 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       const data = event.data as Record<string, unknown>;
       const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
       if (requestId) {
+        const sessionId =
+          typeof data.session_id === 'string' && data.session_id.length > 0
+            ? data.session_id
+            : undefined;
         pendingAsks.set(requestId, {
           run_id: event.run_id,
           tenant_id: eventTenantId(event),
           ts: Date.now(),
+          ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(data.questions !== undefined ? { questions: data.questions } : {}),
         });
       }
     }

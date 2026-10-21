@@ -1105,7 +1105,15 @@ export function startGateway(opts: GatewayOptions): Gateway {
     ...createMcpMethods({ mcp: opts.mcp }),
     ...createTraceMethods(observabilityMethodsDeps),
     ...createTenantMethods({ tenants: opts.tenants }),
-    ...createInteractionMethods({ respondPermission, respondAsk }),
+    ...createInteractionMethods({
+      respondPermission,
+      respondAsk,
+      interactions: {
+        interactionRecords: engine.interactionRecords,
+        pendingPermissions: engine.pendingPermissions,
+        pendingAsks: engine.pendingAsks,
+      },
+    }),
     ...createWorkflowMethods({
       requireWorkflows,
       reserveWorkflowResume,
