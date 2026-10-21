@@ -10,6 +10,8 @@
  * 危险操作（bash / edit）经 `checkPermission` → `requestPermission` 等用户授权（ADR-029）。
  * `read` / `bash` 额外受路径边界约束（0.8 E1）：内置敏感路径 denylist 直接拒绝；
  * 可选 `allowed_roots` 把越界访问降级为 ask。`..` 与符号链接按真实路径判定。
+ * `bash` 另在命令文本里匹配内置 denylist 路径（0.14.2 F2）：命中即拒绝。
+ * 这不是沙箱——只做字符串/规范化路径匹配，变量拼接、`cd`、符号链接等仍可能绕过。
  * 可选 `cwd`（0.11.1）提供默认工作目录：`bash` 未显式传 `cwd` 时使用它，
  * `read` / `edit` 的相对路径按它解析；边界仍按解析后的绝对路径判定。
  */
@@ -256,6 +258,62 @@ function evaluatePath(target: string, boundary: PathBoundary): 'allow' | 'ask' |
     return 'ask';
   }
   return 'allow';
+}
+
+// ── bash 命令文本 denylist（0.14.2 F2，best-effort） ──
+
+/** 命令文本归一：大小写不敏感 + `\` 视作 `/`（Windows 两种分隔符都要命中） */
+function normalizeCommandText(text: string): string {
+  return text.replace(/\\/g, '/').toLowerCase();
+}
+
+/** 正则元字符转义 */
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** 一条 denylist 路径在命令文本里可能出现的写法：`~/`、`$HOME/`、`${HOME}/`、绝对路径 */
+function deniedPathSpellings(entry: string): string[] {
+  const suffix = entry.startsWith('~/') ? entry.slice(2) : entry;
+  return [
+    `~/${suffix}`,
+    `$HOME/${suffix}`,
+    `\${HOME}/${suffix}`,
+    path.join(os.homedir(), suffix),
+  ].map(normalizeCommandText);
+}
+
+/**
+ * 内置 denylist 的命令文本匹配模式（启动时算好，避免每条命令重复展开家目录）。
+ * 命中后要求下一字符不是路径延续，避免把 `~/.sshd` 之类当作 `~/.ssh`。
+ */
+const DENIED_COMMAND_PATTERNS: readonly { entry: string; pattern: RegExp }[] =
+  DEFAULT_DENY_PATHS.flatMap((entry) =>
+    deniedPathSpellings(entry).map((spelling) => ({
+      entry,
+      pattern: new RegExp(`${escapeRegExp(spelling)}(?![\\w.-])`),
+    })),
+  );
+
+/**
+ * 命令文本是否写出了内置敏感路径；命中返回对应 denylist 条目。
+ * 只做字符串匹配，不做 shell 解析：`cd` 后再访问相对路径、变量拼接、符号链接等仍可绕过；
+ * 自定义 `deny_paths` 不参与文本匹配（任意子串会误伤普通命令）。
+ */
+function findDeniedPathInCommand(command: string): string | undefined {
+  const normalized = normalizeCommandText(command);
+  for (const { entry, pattern } of DENIED_COMMAND_PATTERNS) {
+    if (pattern.test(normalized)) return entry;
+  }
+  return undefined;
+}
+
+/** 命令文本命中 denylist 时的拒绝文本；`path_denied` 是稳定可判定的错误码 */
+function deniedCommandMessage(entry: string): string {
+  return (
+    `错误：path_denied：bash 命令写出了敏感路径（${entry}），已拒绝执行。` +
+    '这是命令文本的字符串匹配，不是沙箱；变量拼接、cd、符号链接等仍可能绕过。'
+  );
 }
 
 /**
@@ -517,6 +575,10 @@ async function runBash(
   // 纯空白命令是无意义的一次调用，直接挡掉（否则白烧一轮）
   if (command.trim() === '') return '错误：command 不能为空';
 
+  // 防御性检查：即使调用方绕过 checkPermission，命令文本命中 denylist 也不执行
+  const deniedEntry = findDeniedPathInCommand(command);
+  if (deniedEntry !== undefined) return deniedCommandMessage(deniedEntry);
+
   const cwd = readString(args, 'cwd');
   if (cwd !== '' && !existsSync(cwd)) return `错误：cwd 不存在：${cwd}`;
   // 显式 cwd 优先；未传时落 baseCwd（未配置即进程 cwd）。
@@ -622,7 +684,10 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
     description:
       'Run a shell command in bash and return merged stdout/stderr with the exit code. ' +
       'Use it for everything that has no dedicated tool: finding/listing files, batch ' +
-      'edits, git, builds, tests, HTTP requests.',
+      'edits, git, builds, tests, HTTP requests. ' +
+      'Commands that spell out built-in credential paths (~/.ssh, ~/.aws, ~/.gnupg, ' +
+      '~/.vessel/config.yaml) are rejected. That check matches the command text only; ' +
+      'it is best-effort, not a sandbox.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -640,6 +705,8 @@ function createBashTool(boundary: PathBoundary, baseCwd: BaseCwd): ToolDefinitio
     },
     checkPermission: async (input, ctx) => {
       if (isRecord(input)) {
+        // 命令文本命中内置 denylist：与敏感 cwd 一样直接 deny，不走用户 ask
+        if (findDeniedPathInCommand(readString(input, 'command')) !== undefined) return 'deny';
         const cwd = readString(input, 'cwd');
         // 显式 cwd 优先；未传时按 baseCwd 做边界判定（baseCwd 不放宽 denylist / allowed_roots）
         const decision = evaluatePath(cwd === '' ? baseCwd.path : cwd, boundary);
