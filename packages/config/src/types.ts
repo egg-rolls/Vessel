@@ -58,16 +58,22 @@ export interface AgentConfig {
   model?: string;
   temperature?: number;
   maxTokens?: number;
-  /**
-   * 是否注册 canonical `agent` 工具（0.16）。
-   * 缺省由入口决定：交互 REPL / serve 为 true，headless / `--run` 为 false。
-   * 显式 false 在交互入口也关闭；显式 true 在 headless 也开启。
-   */
+  /** 是否注册 canonical `agent` 工具并启动 AgentService（默认 false） */
   enabled?: boolean;
-  /** spawn 成员的默认可见性（0.16；默认 private） */
+  /** spawn 成员的默认可见性（默认 private） */
   defaultVisibility?: AgentVisibility;
-  /** 成员回复是否允许触发父级新一轮（0.16；默认 false） */
+  /** 成员回复是否允许触发父级新一轮（默认 false） */
   followReplies?: boolean;
+  /** 成员限额；缺省继承顶层 limits */
+  limits?: UsageLimitsConfig;
+  /** 成员终止策略；缺省继承顶层 termination */
+  termination?: TerminationConfig;
+  /** 成员权限模式；缺省交互 bridge、headless allow */
+  permissionMode?: 'bridge' | 'allow' | 'deny';
+  /** deny 模式保留的只读工具（默认 ['read']） */
+  readOnlyTools?: string[];
+  /** 主 agent（owner）成员 ID（默认 main） */
+  ownerId?: string;
   /**
    * 默认工作目录（0.11.1，DECISION-022 §2.4）。
    * 支持 `~`；相对路径按进程 cwd 解析为绝对路径（由装配层解析，validator 只校验类型）。
@@ -109,28 +115,6 @@ export interface UpdateConfig {
   channel?: 'latest' | 'beta';
   /** 自定义清单源；缺省用 GitHub Release */
   source?: string;
-}
-
-/** 子 agent 分派配置（delegate_task） */
-export interface DelegateConfig {
-  /** false = 不注册 delegate_task（运行期工具变为 3 个） */
-  enabled?: boolean;
-  /** 最大 delegate 深度 */
-  maxDepth?: number;
-  /** 子 agent 禁用的工具名 */
-  disallowed?: string[];
-  /** 子 agent 模型；缺省沿用主 model */
-  model?: string;
-  termination?: TerminationConfig;
-  limits?: UsageLimitsConfig;
-  /** 子 agent 权限模式；缺省交互 bridge、headless allow */
-  permissionMode?: 'bridge' | 'allow' | 'deny';
-  /** deny 模式下保留的只读工具（默认 ['read']） */
-  readOnlyTools?: string[];
-  /** 0.15：允许子 agent 再委派（YAML allow_nested；默认 false） */
-  allowNested?: boolean;
-  /** 0.15：单次委派的后代上限（YAML max_descendants；默认 16） */
-  maxDescendants?: number;
 }
 
 /** Host 配置（0.2；默认关闭，关闭时走 0.1 单 agent 路径） */
@@ -378,23 +362,6 @@ export interface ConnectConfig {
   caFile?: string;
 }
 
-/** agent team 原型配置（0.1.0 显式 opt-in；默认关闭） */
-export interface TeamConfig {
-  /** true 才构造 createTeamPlugin（默认 false；进程内原型） */
-  enabled?: boolean;
-  /**
-   * 是否注册 `team_*` 旧工具（0.16；默认 false，仅显式 true 注册）。
-   * 默认关闭时 canonical 工具面只剩 `agent` 一个 schema。
-   */
-  legacyTools?: boolean;
-  /** owner（主 agent）成员 ID（默认 'owner'） */
-  ownerId?: string;
-  /** 成员默认模型；缺省沿用主 model */
-  model?: string;
-  memberLimits?: UsageLimitsConfig;
-  memberTermination?: TerminationConfig;
-}
-
 /** 配置来源（叶子级追踪） */
 export type ConfigSource = 'cli' | 'env' | 'project' | 'user' | 'default';
 
@@ -505,8 +472,6 @@ export interface VesselConfig {
   permission?: PermissionConfig;
   plugins?: PluginConfig[];
   update?: UpdateConfig;
-  delegate?: DelegateConfig;
-  team?: TeamConfig;
   host?: HostConfig;
   scheduler?: SchedulerConfig;
   transport?: TransportConfig;

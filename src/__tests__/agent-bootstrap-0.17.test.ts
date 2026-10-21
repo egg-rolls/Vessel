@@ -66,8 +66,28 @@ async function boot(options: {
 }
 
 describe('agent bootstrap 0.17', () => {
-  it('interactive: exposes bash/read/edit/agent and a live owner endpoint', async () => {
-    const { result, dataDir } = await boot({ headless: false, interactive: true });
+  it('interactive default: bash/read/edit/ask_user without the agent service', async () => {
+    const { result } = await boot({ headless: false, interactive: true });
+
+    expect(result.agent).toBeUndefined();
+    const tools = toolNames(result);
+    for (const name of ['bash', 'read', 'edit', 'ask_user']) {
+      expect(tools).toContain(name);
+    }
+    expect(tools).not.toContain('agent');
+    expect(tools.filter((name) => name.startsWith('team_'))).toEqual([]);
+    expect(tools).not.toContain('delegate_task');
+    const pluginNames = result.bundle?.plugins.map((plugin) => plugin.name) ?? [];
+    expect(pluginNames).not.toContain('team');
+    expect(pluginNames).not.toContain('delegate-task');
+  });
+
+  it('interactive with agent.enabled exposes agent and a live owner endpoint', async () => {
+    const { result, dataDir } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
 
     expect(result.agent).toBeDefined();
     expect(result.agent?.owner.id).toBe('main');
@@ -75,14 +95,9 @@ describe('agent bootstrap 0.17', () => {
     expect(owner?.map((member) => member.id)).toContain('main');
 
     const tools = toolNames(result);
-    for (const name of ['bash', 'read', 'edit', 'agent']) {
+    for (const name of ['bash', 'read', 'edit', 'ask_user', 'agent']) {
       expect(tools).toContain(name);
     }
-    expect(tools.filter((name) => name.startsWith('team_'))).toEqual([]);
-    expect(tools).not.toContain('delegate_task');
-    const pluginNames = result.bundle?.plugins.map((plugin) => plugin.name) ?? [];
-    expect(pluginNames).not.toContain('team');
-    expect(pluginNames).not.toContain('delegate-task');
 
     const record = await readAgentOwnerRecord(dataDir);
     expect(record?.pid).toBe(process.pid);
@@ -90,7 +105,11 @@ describe('agent bootstrap 0.17', () => {
   });
 
   it('CLI attach works through the started owner endpoint', async () => {
-    const { dataDir } = await boot({ headless: false, interactive: true });
+    const { dataDir } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
     const record = await readAgentOwnerRecord(dataDir);
     expect(record).not.toBeNull();
     if (!record) throw new Error('owner record missing');
@@ -101,7 +120,11 @@ describe('agent bootstrap 0.17', () => {
   });
 
   it('member auto-reply does not mark the REPL owner failed', async () => {
-    const { result } = await boot({ headless: false, interactive: true });
+    const { result } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
     const service = result.agent?.service;
     if (!service) throw new Error('agent service missing');
 
@@ -140,7 +163,11 @@ describe('agent bootstrap 0.17', () => {
   });
 
   it('shutdown stops the owner endpoint and removes the token file', async () => {
-    const { result, dataDir } = await boot({ headless: false, interactive: true });
+    const { result, dataDir } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
     const record = await readAgentOwnerRecord(dataDir);
     expect(record).not.toBeNull();
     expect(fs.existsSync(agentOwnerPath(dataDir))).toBe(true);

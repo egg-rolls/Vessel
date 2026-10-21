@@ -27,7 +27,7 @@ function fakeLoader(available: string[], externalNames: string[] = []): PluginLo
 
 describe('resolvePluginNames', () => {
   it('默认集排除 hook-logging 与工厂式插件', () => {
-    const loader = fakeLoader(['basic-tools', 'team', 'delegate-task', 'tool-policy']);
+    const loader = fakeLoader(['basic-tools', 'mcp-client', 'workflow', 'tool-policy']);
     expect(resolvePluginNames(loader, undefined, false)).toEqual(['basic-tools', 'tool-policy']);
   });
 
@@ -45,7 +45,7 @@ describe('resolvePluginNames', () => {
     expect(
       resolvePluginNames(
         loader,
-        [{ name: 'basic-tools' }, { name: 'team' }, { name: 'delegate-task' }],
+        [{ name: 'basic-tools' }, { name: 'mcp-client' }, { name: 'workflow' }],
         false,
       ),
     ).toEqual(['basic-tools']);

@@ -1,8 +1,8 @@
 /**
- * 0.17 装配面：入口决定是否构造旧 team / delegate 插件。
+ * 0.17 A4 执行面装配：任何入口都不再构造 team / delegate 插件。
  *
- * 守：bootstrap 已经由 AgentService 接管后仍然构造 team 插件（模型看到重复的
- * agent / team_* schema）；或反过来把 serve 的旧装配提前拆掉（A3c 之前 gateway 失去工具）。
+ * 故障形态：serve / headless 仍装配旧 team_* / delegate_task（模型看到与
+ * AgentService 重复的生命周期工具）。
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -28,11 +28,7 @@ function tmpDir(): string {
   return dir;
 }
 
-async function buildBundle(
-  config: VesselConfig,
-  headless: boolean,
-  legacyAgentPlugins?: boolean,
-): Promise<TenantRuntimeBundle> {
+async function buildBundle(config: VesselConfig, headless: boolean): Promise<TenantRuntimeBundle> {
   return buildTenantRuntime({
     tenantId: 'default',
     config: { plugins: [], ...config },
@@ -40,7 +36,6 @@ async function buildBundle(
     useMock: true,
     headless,
     nodeId: 'node-test',
-    ...(legacyAgentPlugins !== undefined ? { legacyAgentPlugins } : {}),
   });
 }
 
@@ -57,8 +52,8 @@ function toolNames(bundle: TenantRuntimeBundle): string[] {
 }
 
 describe('agent runtime wiring 0.17', () => {
-  it('bootstrap-style bundle does not construct team/delegate plugins', async () => {
-    const bundle = await buildBundle({ agent: { enabled: true } }, false, false);
+  it('does not construct team/delegate plugins with agent.enabled', async () => {
+    const bundle = await buildBundle({ agent: { enabled: true } }, false);
     try {
       expect(pluginNames(bundle)).not.toContain('team');
       expect(pluginNames(bundle)).not.toContain('delegate-task');
@@ -69,22 +64,23 @@ describe('agent runtime wiring 0.17', () => {
     }
   });
 
-  it('serve-style bundle keeps the legacy team assembly until A3c', async () => {
+  it('does not construct team/delegate plugins for interactive serve', async () => {
     const bundle = await buildBundle({}, false);
     try {
-      expect(toolNames(bundle)).toEqual(['agent']);
-      expect(pluginNames(bundle)).toContain('team');
-      expect(hookNames(bundle)).toContain('agent-reply-injection');
+      expect(pluginNames(bundle)).not.toContain('team');
+      expect(pluginNames(bundle)).not.toContain('delegate-task');
+      expect(toolNames(bundle)).toEqual([]);
     } finally {
       await bundle.close();
     }
   });
 
-  it('serve-style headless bundle keeps delegate_task until A4', async () => {
+  it('does not construct team/delegate plugins for headless', async () => {
     const bundle = await buildBundle({}, true);
     try {
-      expect(toolNames(bundle)).toEqual(['delegate_task']);
-      expect(pluginNames(bundle)).toContain('delegate-task');
+      expect(pluginNames(bundle)).not.toContain('team');
+      expect(pluginNames(bundle)).not.toContain('delegate-task');
+      expect(toolNames(bundle)).toEqual([]);
     } finally {
       await bundle.close();
     }

@@ -69,10 +69,7 @@ export interface CreateHostRuntimeOptions {
   events?: EventBus;
   /** 0.3 durable：Host 成员的 checkpoint store（Host 优先，单写者为成员 runtime） */
   runStore?: RunStore;
-  /**
-   * createRuntime 之后、spawn owner 之前调用。
-   * A5 用它把 delegate/team 工厂插件装到同一个 Host/PluginHost 上。
-   */
+  /** createRuntime 之后、spawn owner 之前调用（装配层注入插件用） */
   beforeSpawn?: (host: RuntimeHost) => void | Promise<void>;
   /** 测试注入口；缺省动态 import kernel */
   loadHostModule?: () => Promise<HostModule>;

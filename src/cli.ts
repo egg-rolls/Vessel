@@ -34,7 +34,6 @@ import {
   readTraceEvents,
   rebuildMetrics,
   resolveTenantPaths,
-  type Transport,
 } from '../packages/core/src/index';
 import {
   type ConfigSnapshotLike,
@@ -85,14 +84,9 @@ import {
   validateResumeSessionId,
 } from './session-resume';
 import { shutdownServeStack } from './shutdown-sequence';
-import { planTeamWiring } from './team-wiring';
 import { createTenantControl } from './tenant-command';
 import { createTenantRuntimeFactory, type TenantRuntimeFactory } from './tenant-runtime-factory';
-import {
-  resolveGatewayToken,
-  tryCreateLoopbackTransport,
-  tryCreateRemoteTransport,
-} from './transport-factory';
+import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
@@ -473,7 +467,6 @@ const initialResult = await bootstrap({
   ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
   sessionId: resolvedSessionId,
   headless,
-  serve: serveRequested,
   interactive,
   registerAskUser: askUserClient,
   acquireLock: true,
@@ -521,7 +514,6 @@ if (!useMock && interactive && !resolveEffectiveApiKey(config)) {
       ...(demoRequested ? { dataDirSubdir: 'demo' } : {}),
       sessionId: resolvedSessionId,
       headless,
-      serve: serveRequested,
       interactive,
       registerAskUser: askUserClient,
       acquireLock: true,
@@ -929,68 +921,6 @@ async function runWithConfig(result: BootstrapResult) {
     }
   }
 
-  // ── Team / transport 接线（A4；0.6 remote）────────────
-  // gateway 必须先启动：loopback 的 endpoint/token 来自实际监听端口；remote 使用静态 nodes。
-  const teamPlan = planTeamWiring({
-    config,
-    hasGateway: gateway !== null,
-    hasHost: Boolean(result.host),
-  });
-  for (const warning of teamPlan.warnings) console.warn(`⚠ ${warning}`);
-
-  let teamTransport: Transport | undefined;
-  if (gateway && teamPlan.attachToGateway && result.host) {
-    if (teamPlan.useLoopback) {
-      const loopback = await tryCreateLoopbackTransport({
-        config,
-        nodeId: result.nodeId,
-        endpoint: gateway.url,
-        gatewayToken: gateway.token,
-        // 发布本节点成员，远端才能用短 id 发现（qa P1-1）
-        agents: () => result.host?.list() ?? [],
-      });
-      if (loopback.ok) {
-        teamTransport = loopback.transport;
-        // team 插件已持有 DeferredTransport：这里绑定真实实现。
-        // 入站由 ext 的 RoutingTeamHost 单点处理（task 执行 / inbox / result / cancel），
-        // asm 不再注册 receive(host.send)，避免与 routing 双投递。
-        result.transport?.resolve(teamTransport);
-      } else {
-        result.transport?.fail(new Error(loopback.error));
-        console.warn(
-          `⚠ Loopback transport unavailable (${loopback.error}); team is in-process only.`,
-        );
-      }
-    } else if (teamPlan.useRemote) {
-      const remote = await tryCreateRemoteTransport({
-        config,
-        nodeId: result.nodeId,
-        // B4：远端事件带 origin node_id 回灌到 gateway 共享事件流。
-        onEvent: (event) => {
-          const sink = sharedEvents ?? ctx.events;
-          try {
-            sink.publish(event);
-          } catch {
-            // 事件订阅者异常不影响其它节点
-          }
-        },
-      });
-      if (remote.ok) {
-        teamTransport = remote.transport;
-        result.transport?.resolve(teamTransport);
-      } else {
-        result.transport?.fail(new Error(remote.error));
-        console.warn(`⚠ Remote transport unavailable (${remote.error}); team is in-process only.`);
-      }
-    }
-    gateway.attachTeam({
-      nodeId: result.nodeId,
-      ...(teamTransport ? { transport: teamTransport } : {}),
-      host: result.host,
-      ...(result.spawnAgent ? { spawn: result.spawnAgent } : {}),
-    });
-  }
-
   if (gateway) {
     console.log(`\n${renderGatewayBanner(gateway)}\n`);
   }
@@ -1058,23 +988,8 @@ async function runWithConfig(result: BootstrapResult) {
     await startInkRepl(ctx);
   }
 
-  // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）→ 退订/关 transport
+  // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
-  const closeTransport = async (): Promise<void> => {
-    if (result.transport) {
-      try {
-        await result.transport.close();
-      } catch {
-        // 关闭注册表失败不阻断退出
-      }
-    } else if (teamTransport) {
-      try {
-        await teamTransport.close();
-      } catch {
-        // 关闭注册表失败不阻断退出
-      }
-    }
-  };
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
     await shutdownServeStack({
       gateway,
@@ -1082,7 +997,7 @@ async function runWithConfig(result: BootstrapResult) {
         unsubSharedBridge?.();
         unsubSharedBridge = undefined;
       },
-      closeTransport,
+      closeTransport: async () => {},
       ...(beforeClose ? { beforeClose } : {}),
       closeTenants: async (options) => {
         await tenantFactory?.closeAll(options);

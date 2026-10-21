@@ -361,17 +361,6 @@ describe('未知键（含嵌套）', () => {
     expect(paths).toContain('mcpServers.demo.unknownKey');
   });
 
-  it('0.3 删除的旧键（delegate.viaHost / team.maxMembers）报未知键错误', async () => {
-    const file = tmpYaml('delegate:\n  via_host: true\nteam:\n  max_members: 4\n');
-    const { validation } = await loadConfig({
-      configPath: file,
-      userConfigPath: missingPath(),
-    });
-    const paths = validation.errors.map((e) => e.path);
-    expect(paths).toContain('delegate.viaHost');
-    expect(paths).toContain('team.maxMembers');
-  });
-
   it('findUnknownNestedKeys 只检查已知块', () => {
     const unknown = findUnknownNestedKeys({
       durable: { foo: 1 },

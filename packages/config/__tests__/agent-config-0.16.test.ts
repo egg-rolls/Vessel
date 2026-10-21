@@ -1,8 +1,8 @@
 /**
  * 0.16 agent 工具配置：YAML 映射与非法值拒绝。
  *
- * 故障形态：`default_visibility` / `follow_replies` / `legacy_tools` 拼写错误或
- * 非法值被静默忽略，装配层按默认值注册了错误的工具面。
+ * 故障形态：`default_visibility` / `permission_mode` / `read_only_tools` 拼写错误或
+ * 非法值被静默忽略，AgentService 按默认值注册了错误的成员设置。
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -32,8 +32,13 @@ describe('agent tool config', () => {
           '  enabled: true',
           '  default_visibility: team',
           '  follow_replies: true',
-          'team:',
-          '  legacy_tools: false',
+          '  owner_id: lead',
+          '  permission_mode: deny',
+          '  read_only_tools: [read, bash]',
+          '  limits:',
+          '    request_limit: 3',
+          '  termination:',
+          '    max_iterations: 4',
         ].join('\n'),
       ),
       userConfigPath: missingPath(),
@@ -42,7 +47,11 @@ describe('agent tool config', () => {
     expect(config.agent?.enabled).toBe(true);
     expect(config.agent?.defaultVisibility).toBe('team');
     expect(config.agent?.followReplies).toBe(true);
-    expect(config.team?.legacyTools).toBe(false);
+    expect(config.agent?.ownerId).toBe('lead');
+    expect(config.agent?.permissionMode).toBe('deny');
+    expect(config.agent?.readOnlyTools).toEqual(['read', 'bash']);
+    expect(config.agent?.limits).toEqual({ requestLimit: 3 });
+    expect(config.agent?.termination).toEqual({ maxIterations: 4 });
     expect(validation.errors).toEqual([]);
   });
 
@@ -55,11 +64,25 @@ describe('agent tool config', () => {
     expect(validation.errors.some((error) => error.path === 'agent.defaultVisibility')).toBe(true);
   });
 
-  it('rejects non-boolean enabled / follow_replies / legacy_tools', async () => {
+  it('rejects invalid permission_mode / read_only_tools / owner_id', async () => {
+    for (const [yaml, expected] of [
+      ['agent:\n  permission_mode: ask\n', 'agent.permissionMode'],
+      ['agent:\n  read_only_tools: read\n', 'agent.readOnlyTools'],
+      ['agent:\n  owner_id: 7\n', 'agent.ownerId'],
+    ] as const) {
+      const { validation } = await loadConfig({
+        configPath: tmpYaml(yaml),
+        userConfigPath: missingPath(),
+        env: {},
+      });
+      expect(validation.errors.some((error) => error.path === expected)).toBe(true);
+    }
+  });
+
+  it('rejects non-boolean enabled / follow_replies', async () => {
     for (const [yaml, expected] of [
       ['agent:\n  enabled: maybe\n', 'agent.enabled'],
       ['agent:\n  follow_replies: always\n', 'agent.followReplies'],
-      ['team:\n  legacy_tools: sometimes\n', 'team.legacyTools'],
     ] as const) {
       const { validation } = await loadConfig({
         configPath: tmpYaml(yaml),

@@ -1,12 +1,10 @@
 /**
- * 插件安装配置与成员宿主（0.6.1 E1/E10）。
+ * 插件安装配置（0.6.1 E1）。
  *
  * - E1：把 `plugins[].config` 透传到 `install(host, { config })`。core 的类型在
  *   0.6.1 才扩展为可选第二参，这里用窄局部 cast，保证与旧签名兼容。
  * - 声明式 `guardrails:` / `hooks:`（0.6.1）：条目名即插件名，config 合并到该插件的
  *   安装配置；显式 `plugins:` 项优先。
- * - E10：团队成员宿主**优先**复用 ext 导出的 `buildChildHost`（剔除 `team_*` 工具）；
- *   当前 ext 尚未导出该符号时，按同一规则本地兜底（合并后自动切换）。
  *
  * @module vessel/plugin-config
  */
@@ -17,13 +15,7 @@ import type {
   PluginConfig,
   VesselConfig,
 } from '../packages/config/src/index';
-import {
-  MemoryPluginHost,
-  type Plugin,
-  type PluginHost,
-  type PluginInitContext,
-} from '../packages/core/src/index';
-import * as teamPluginModule from '../plugins/tools/team/src/index';
+import type { Plugin, PluginHost, PluginInitContext } from '../packages/core/src/index';
 
 /** core 0.6.1 的 install 形状；旧签名只用第一个参数也能工作 */
 export type PluginInstallOptions = { config?: Record<string, unknown> };
@@ -31,9 +23,6 @@ type InstallWithOptions = (
   host: PluginHost,
   options?: PluginInstallOptions,
 ) => void | Promise<void>;
-
-/** 团队成员宿主要剔除的工具前缀 */
-const TEAM_TOOL_PREFIX = 'team_';
 
 /** 调用插件 install，并透传配置（无配置时保持旧调用形状） */
 export function installWithConfig(
@@ -140,23 +129,4 @@ export function pluginConfigFor(
     ...(explicit?.config ?? {}),
   };
   return Object.keys(config).length > 0 ? config : undefined;
-}
-
-/**
- * 团队成员插件宿主：优先使用 ext 导出的 `buildChildHost`；未导出时按相同规则兜底。
- * 成员不能继续调用 team_*，避免无限扩张。
- */
-export function buildTeamMemberHost(host: PluginHost): PluginHost {
-  const exported = (teamPluginModule as { buildChildHost?: (value: PluginHost) => PluginHost })
-    .buildChildHost;
-  if (typeof exported === 'function') return exported(host);
-
-  const child = new MemoryPluginHost();
-  for (const guardrail of host.getGuardrails()) child.registerGuardrail(guardrail);
-  for (const hook of host.getHooks()) child.registerHook(hook);
-  for (const tool of host.listTools()) {
-    if (tool.name.startsWith(TEAM_TOOL_PREFIX)) continue;
-    child.registerTool(tool);
-  }
-  return child;
 }

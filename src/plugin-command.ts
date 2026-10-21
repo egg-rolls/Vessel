@@ -142,8 +142,6 @@ async function readEnabledNames(options: PluginCommandOptions): Promise<{
   warnExternalPluginsOnce(selection.external);
   const names = new Set(selection.names);
   // 工厂式插件不进 PluginLoader 名单，但确有启用语义；列表按实际装配标注。
-  if (config.delegate?.enabled !== false) names.add('delegate-task');
-  if (config.team?.enabled === true) names.add('team');
   if (Object.values(config.mcpServers ?? {}).some((server) => server.enabled !== false)) {
     names.add('mcp-client');
   }

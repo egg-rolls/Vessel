@@ -318,7 +318,7 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
   // 可选能力开关（信息项）
   const capability = [
     config.host?.enabled === true ? 'host' : null,
-    config.team?.enabled === true ? 'team' : null,
+    config.agent?.enabled === true ? 'agent' : null,
     config.durable?.enabled === true ? 'durable' : null,
     config.workflow?.enabled === true ? 'workflow' : null,
     config.evals?.enabled === true ? 'evals' : null,
