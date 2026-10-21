@@ -137,19 +137,18 @@ export const messages = {
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
   'chat.run.waiting': '正在思考…',
-  // 0.18：run 作为会话流里的一段（细分割线 + 统一消息样式）
-  'chat.run.label': '运行 {id}',
-  'chat.run.cancel': '取消 run',
+  // 0.18：run 展开进会话流；停止在 Composer，失败/排队是内联 notice。
   'chat.run.cancelling': '取消中…',
   'chat.run.cancelQueue': '取消排队',
   'chat.run.queuedPosition': '排队中 · 第 {position} 位',
   'chat.run.queuedUnknown': '排队中 · 位置未知',
   'chat.run.cancelled': '已取消',
+  'chat.run.stop': '停止',
+  'chat.run.stopping': '停止中…',
   'chat.run.detail': '查看运行详情',
   'chat.run.noError': '（无错误详情）',
   'chat.run.expand': '展开',
   'chat.run.retryable': '可重试',
-  'chat.run.iterations': '{count} iters',
   'chat.run.hiddenEarlier': '已显示最近 {shown} 个运行；更早的 {hidden} 个请在运行详情中查看。',
   // 0.15：工具卡 / 思考流 / 内联提问
   'chat.reasoning.live': '流式',

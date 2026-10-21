@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ToastProvider } from '../src/components/ToastProvider';
-import { RunSection, runDetailHref } from '../src/domains/chat/RunSection';
+import { QueuedNotice, RunItems, runDetailHref } from '../src/domains/chat/StreamItems';
 import { buildGroup, type RunGroup, type StoredEvent } from '../src/state/events';
 
 function failedGroup(error: string): RunGroup {
@@ -16,16 +16,9 @@ function failedGroup(error: string): RunGroup {
 
 const LONG_ERROR = `quota_exceeded: provider rejected the request\n第二行保持原样\n${'x'.repeat(300)}\n尾端标记-END`;
 
-describe('RunSection failed footer', () => {
+describe('RunItems failure notice', () => {
   test('renders the full error in an expandable details body', () => {
-    const markup = renderToStaticMarkup(
-      <RunSection
-        group={failedGroup(LONG_ERROR)}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
-      />,
-    );
+    const markup = renderToStaticMarkup(<RunItems group={failedGroup(LONG_ERROR)} />);
 
     // 折叠入口 + 完整错误：字数超过 240 的部分只出现在展开后的 body。
     expect(markup).toContain('<details');
@@ -41,24 +34,17 @@ describe('RunSection failed footer', () => {
   });
 
   test('keeps short errors visible and does not add a bogus hint', () => {
-    const markup = renderToStaticMarkup(
-      <RunSection
-        group={failedGroup('boom')}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
-      />,
-    );
+    const markup = renderToStaticMarkup(<RunItems group={failedGroup('boom')} />);
     expect(markup).toContain('boom');
     expect(markup).not.toContain('run-error-hint');
     expect(markup).not.toContain('展开');
   });
 });
 
-describe('RunSection error metadata', () => {
+describe('RunItems error metadata', () => {
   test('renders additive code/category/phase chips and retryable hint', () => {
     const markup = renderToStaticMarkup(
-      <RunSection
+      <RunItems
         group={{
           ...failedGroup('boom'),
           errorMeta: {
@@ -68,9 +54,6 @@ describe('RunSection error metadata', () => {
             retryable: true,
           },
         }}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
       />,
     );
     expect(markup).toContain('error-meta');
@@ -79,14 +62,7 @@ describe('RunSection error metadata', () => {
   });
 
   test('leaves 0.13 markup unchanged when metadata is absent', () => {
-    const markup = renderToStaticMarkup(
-      <RunSection
-        group={failedGroup('boom')}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
-      />,
-    );
+    const markup = renderToStaticMarkup(<RunItems group={failedGroup('boom')} />);
     expect(markup).not.toContain('error-meta');
   });
 });
@@ -100,7 +76,7 @@ describe('runDetailHref', () => {
   });
 });
 
-describe('RunSection verbosity', () => {
+describe('RunItems verbosity', () => {
   const mixedItems: RunGroup['items'] = [
     { kind: 'reasoning', text: 'REASONING-MARKER', key: 'reasoning-1' },
     {
@@ -127,16 +103,13 @@ describe('RunSection verbosity', () => {
   function group(verbosity: 'minimal' | 'normal') {
     return (
       <ToastProvider>
-        <RunSection
+        <RunItems
           group={{
             runId: 'run-1',
             sessionId: 'session-1',
             status: 'running',
             items: mixedItems,
           }}
-          cancelled={false}
-          cancelling={false}
-          onCancel={() => {}}
           verbosity={verbosity}
         />
       </ToastProvider>
@@ -172,15 +145,7 @@ describe('live streaming rendering (0.17)', () => {
   }
 
   function render(group: RunGroup, verbosity: 'minimal' | 'normal' = 'normal') {
-    return renderToStaticMarkup(
-      <RunSection
-        group={group}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
-        verbosity={verbosity}
-      />,
-    );
+    return renderToStaticMarkup(<RunItems group={group} verbosity={verbosity} />);
   }
 
   test('renders unfinished liveText while items are still empty', () => {
@@ -247,15 +212,7 @@ describe('running placeholder (0.17)', () => {
   }
 
   function render(value: RunGroup, verbosity: 'minimal' | 'normal' = 'normal') {
-    return renderToStaticMarkup(
-      <RunSection
-        group={value}
-        cancelled={false}
-        cancelling={false}
-        onCancel={() => {}}
-        verbosity={verbosity}
-      />,
-    );
+    return renderToStaticMarkup(<RunItems group={value} verbosity={verbosity} />);
   }
 
   test('shows a waiting placeholder when a running run has no content', () => {
@@ -282,5 +239,47 @@ describe('running placeholder (0.17)', () => {
 
   test('minimal still shows the placeholder when nothing is visible', () => {
     expect(render(group(), 'minimal')).toContain('run-waiting');
+  });
+});
+
+describe('flat conversation stream (0.18)', () => {
+  test('run items render without run container, divider or summary', () => {
+    const markup = renderToStaticMarkup(
+      <RunItems
+        group={{
+          runId: 'run-flat',
+          sessionId: 's1',
+          status: 'completed',
+          items: [{ kind: 'text', text: 'FLAT-MARKER', key: 'text-1' }],
+        }}
+      />,
+    );
+    expect(markup).toContain('FLAT-MARKER');
+    expect(markup).toContain('msg-assistant');
+    expect(markup).not.toContain('run-section');
+    expect(markup).not.toContain('run-divider');
+    expect(markup).not.toContain('run-summary');
+  });
+
+  test('queued submission renders one lightweight notice', () => {
+    const markup = renderToStaticMarkup(
+      <QueuedNotice
+        item={{
+          runId: 'run-q',
+          sessionId: 's1',
+          input: 'QUEUED-MARKER',
+          queuePosition: 2,
+          submittedAt: 1_000,
+          cancelling: false,
+          cancelled: false,
+        }}
+        onCancel={() => {}}
+      />,
+    );
+    expect(markup).toContain('stream-notice');
+    expect(markup).toContain('排队中 · 第 2 位');
+    expect(markup).toContain('QUEUED-MARKER');
+    expect(markup).toContain('取消排队');
+    expect(markup).not.toContain('run-section');
   });
 });

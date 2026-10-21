@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { t } from '../../i18n';
 
 export function Composer({
   value,
@@ -11,6 +12,8 @@ export function Composer({
   connected,
   onOpenConnection,
   focusSignal = 0,
+  onStop,
+  stopping = false,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -23,6 +26,9 @@ export function Composer({
   onOpenConnection: () => void;
   /** 值变化时把焦点移入输入框（新建会话草稿）。 */
   focusSignal?: number;
+  /** 当前会话有 running run 时的停止入口（0.18，替代 run 卡片上的取消按钮）。 */
+  onStop?: () => void;
+  stopping?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const canSend = hasToken && connected && !disabled && !submitting && value.trim().length > 0;
@@ -53,7 +59,19 @@ export function Composer({
           <span className="composer-target" title={targetLabel}>
             {targetLabel}
           </span>
-          <span className="composer-hint dim">Enter 发送 · Shift+Enter 换行</span>
+          <span className="composer-meta-right">
+            {onStop && (
+              <button
+                type="button"
+                className="link-btn composer-stop"
+                onClick={onStop}
+                disabled={stopping}
+              >
+                {stopping ? t('chat.run.stopping') : t('chat.run.stop')}
+              </button>
+            )}
+            <span className="composer-hint dim">Enter 发送 · Shift+Enter 换行</span>
+          </span>
         </div>
         <div className="composer-row">
           <textarea

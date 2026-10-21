@@ -3,7 +3,7 @@
  *
  * `?agent=` 深链时显示：默认只给摘要（状态 / task / 当前工具 / usage），
  * 下方用 `buildGroup` 把 child run 的 `subagent.*` 事件归一成普通 run 事件，
- * 复用 `RunSection` 的文本 / tool card / 思考块渲染。
+ * 复用 `RunItems` 的文本 / tool card / 思考块渲染。
  */
 import { useMemo } from 'react';
 import { StatusChip } from '../../components/StatusChip';
@@ -13,7 +13,7 @@ import type { AgentNode } from '../../state/agents';
 import { type ErrorVisibility, isEventVisible } from '../../state/error-visibility';
 import { buildGroup, type StoredEvent } from '../../state/events';
 import type { Verbosity } from '../../state/visibility';
-import { RunSection } from './RunSection';
+import { RunItems } from './StreamItems';
 
 /** `subagent.<type>` → `<type>`；只归一 run / tool / llm 三类可渲染事件。 */
 export function normalizeChildEvent(event: RunEvent): RunEvent {
@@ -82,13 +82,7 @@ export function SubagentTranscript({
         </span>
       </div>
       {group ? (
-        <RunSection
-          group={group}
-          cancelled={false}
-          cancelling={false}
-          onCancel={() => undefined}
-          verbosity={verbosity}
-        />
+        <RunItems group={group} verbosity={verbosity} />
       ) : (
         <p className="dim subagent-empty">{t('chat.subagents.emptyRun')}</p>
       )}

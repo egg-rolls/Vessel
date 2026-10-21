@@ -89,14 +89,17 @@ export function Transcript({
   startIndex,
   hiddenCount,
   onLoadEarlier,
+  children,
 }: {
   messages: Message[];
   /** 窗口在完整可见消息里的起始下标，用于稳定 key。 */
   startIndex: number;
   hiddenCount: number;
   onLoadEarlier: () => void;
+  /** 实时 run 的展开项与排队 notice：与历史消息共享同一列表与间距。 */
+  children?: ReactNode;
 }) {
-  if (messages.length === 0) return null;
+  if (messages.length === 0 && !children) return null;
   return (
     <div className="transcript">
       {hiddenCount > 0 && (
@@ -105,6 +108,7 @@ export function Transcript({
         </button>
       )}
       {withDayGroups(messages, startIndex)}
+      {children}
     </div>
   );
 }

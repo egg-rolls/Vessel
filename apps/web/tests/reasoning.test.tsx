@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { RunSection } from '../src/domains/chat/RunSection';
+import { RunItems } from '../src/domains/chat/StreamItems';
 import { buildGroup, type StoredEvent } from '../src/state/events';
 
 function stored(
@@ -20,12 +20,7 @@ function chunk(seq: number, type: string, delta?: string): StoredEvent {
 
 function render(group: ReturnType<typeof buildGroup>, running = true): string {
   return renderToStaticMarkup(
-    <RunSection
-      group={{ ...group, status: running ? 'running' : group.status }}
-      cancelled={false}
-      cancelling={false}
-      onCancel={() => {}}
-    />,
+    <RunItems group={{ ...group, status: running ? 'running' : group.status }} />,
   );
 }
 
@@ -80,7 +75,7 @@ describe('buildGroup reasoning stream', () => {
   });
 });
 
-describe('RunSection reasoning block', () => {
+describe('RunItems reasoning block', () => {
   const group = buildGroup('r1', [
     stored(1, 'run.started', { input: 'q', session_id: 's1' }),
     chunk(2, 'reasoning_delta', 'private reasoning'),

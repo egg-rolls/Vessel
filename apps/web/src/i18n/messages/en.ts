@@ -140,19 +140,18 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
   'chat.run.waiting': 'Generating…',
-  // 0.18: a run is a segment of the same conversation stream (thin divider + shared message styles)
-  'chat.run.label': 'Run {id}',
-  'chat.run.cancel': 'Cancel run',
+  // 0.18: runs expand into the conversation stream; stop lives in the Composer.
   'chat.run.cancelling': 'Cancelling…',
   'chat.run.cancelQueue': 'Cancel queued run',
   'chat.run.queuedPosition': 'Queued · position {position}',
   'chat.run.queuedUnknown': 'Queued · position unknown',
   'chat.run.cancelled': 'Cancelled',
+  'chat.run.stop': 'Stop',
+  'chat.run.stopping': 'Stopping…',
   'chat.run.detail': 'View run details',
   'chat.run.noError': '(no error details)',
   'chat.run.expand': 'Show',
   'chat.run.retryable': 'Retryable',
-  'chat.run.iterations': '{count} iters',
   'chat.run.hiddenEarlier':
     'Showing the latest {shown} runs; open run details for the earlier {hidden}.',
   // 0.15: tool cards / reasoning stream / inline ask

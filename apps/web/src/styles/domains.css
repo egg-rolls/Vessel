@@ -267,63 +267,53 @@
   border-color: var(--line-strong);
 }
 
-/* ── Run 段（0.18：会话流里的细分割线 + 统一消息样式） ───── */
+/* ── 实时内容直接铺进会话流（0.18） ───────────────────── */
 
-.run-section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 2px 0 6px;
-}
-
-/* run 只在流里留一条细分割线：状态 / 时间 / run id / 取消。 */
-.run-divider {
+/* 失败 / 取消 / 排队：流里的一条轻量 notice，没有 run 容器或分割线。 */
+.stream-notice {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-  font-size: 10.5px;
-  color: var(--faint);
-}
-
-.run-divider .btn {
-  margin-left: auto;
-}
-
-.run-id {
-  color: var(--faint);
-  overflow-wrap: anywhere;
-}
-
-.run-stream {
-  display: flex;
-  flex-direction: column;
+  align-items: baseline;
   gap: 8px;
-}
-
-/* run 终态只是流末尾的一行摘要，不再有独立卡片外框。 */
-.run-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
+  padding: 6px 10px;
+  border-left: 2px solid var(--line-strong);
+  border-radius: 0 8px 8px 0;
+  background: var(--surface-2);
   font-size: 11.5px;
+  line-height: 1.55;
   color: var(--muted);
 }
 
-.run-summary.completed {
-  color: var(--ok);
-}
-
-.run-summary.failed {
+.stream-notice.failed {
+  border-left-color: var(--danger);
+  background: var(--danger-soft);
   color: var(--danger);
 }
 
-.run-summary.cancelled {
+.stream-notice.cancelled {
   color: var(--faint);
+}
+
+.stream-notice.queued {
+  border-left-color: color-mix(in srgb, var(--warn) 55%, var(--line));
+}
+
+.stream-notice .run-error,
+.stream-notice .run-error-hint {
+  flex: 1 1 100%;
+}
+
+.stream-notice-input {
+  min-width: 0;
+  flex: 1 1 240px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.stream-notice-action {
+  flex: none;
+  margin-left: auto;
 }
 
 /* 运行中但还没有任何可见内容时的低干扰占位（0.17）。 */
@@ -854,6 +844,23 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.composer-meta-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 0.18：停止入口在 Composer 区域，不再挂在 run 头部。 */
+.composer-stop {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.composer-stop:disabled {
+  opacity: 0.6;
 }
 
 .composer-hint {

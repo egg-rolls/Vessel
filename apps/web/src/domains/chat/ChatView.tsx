@@ -38,9 +38,9 @@ import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { nextPending, pendingForSession } from './pending-permissions';
-import { QueuedSection, type QueuedSubmission, RunSection } from './RunSection';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
+import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
 import { Transcript } from './Transcript';
 
@@ -410,6 +410,16 @@ export function ChatView({
   const renderedGroups =
     hiddenLiveGroups > 0 ? visibleGroups.slice(-MAX_LIVE_GROUPS) : visibleGroups;
 
+  // 0.18：停止入口固定在底部 Composer 区域，只对当前会话仍在跑的 run 出现。
+  const runningGroup = useMemo(
+    () =>
+      renderedGroups.find(
+        (group) => group.status === 'running' && group.jobId && !cancelledJobs.has(group.jobId),
+      ) ?? null,
+    [renderedGroups, cancelledJobs],
+  );
+  const stopBusy = runningGroup?.jobId ? cancelling.has(runningGroup.jobId) : false;
+
   // 0.18：当前会话的 pending 固定落在 Composer 槽位，不再挂到运行段或页面顶部。
   // 缺 sessionId 的旧流请求按 run 归属补判；run 终态时 ConnectionProvider 会清掉请求。
   const sessionRunIds = useMemo(
@@ -661,7 +671,7 @@ export function ChatView({
     }
   };
 
-  // 引用保持稳定：memo(RunSection) 依赖这几个回调，避免每个 token 让全部运行段重渲染。
+  // 引用保持稳定：memo(RunItems) 依赖这几个回调，避免每个 token 让全部实时项重渲染。
   const handleCancel = useCallback(
     async (group: { jobId?: string }) => {
       const jobId = group.jobId;
@@ -947,14 +957,49 @@ export function ChatView({
                 <StaleNotice message="部分更早的事件已从内存缓冲截断；完整记录请查看运行详情。" />
               )}
 
-              {hasTranscript && (
+              {!activeAgent && hiddenLiveGroups > 0 && (
+                <StaleNotice
+                  message={t('chat.run.hiddenEarlier', {
+                    shown: MAX_LIVE_GROUPS,
+                    hidden: hiddenLiveGroups,
+                  })}
+                />
+              )}
+
+              {/* 0.18：历史消息与实时 run 的展开项共享同一个列表，没有 run 边界。 */}
+              {hasTranscript ||
+              (!activeAgent && (renderedGroups.length > 0 || visibleQueued.length > 0)) ? (
                 <Transcript
                   messages={transcriptWindow.shown}
                   startIndex={transcriptStart}
                   hiddenCount={transcriptWindow.hiddenCount}
                   onLoadEarlier={() => setTranscriptLimit((value) => value + TRANSCRIPT_WINDOW)}
-                />
-              )}
+                >
+                  {!activeAgent &&
+                    renderedGroups.map((group) => (
+                      <RunItems
+                        key={group.runId}
+                        group={group}
+                        cancelled={group.jobId ? cancelledJobs.has(group.jobId) : false}
+                        hideInput={
+                          hasTranscript &&
+                          transcriptMessages.some(
+                            (message) => message.role === 'user' && message.content === group.input,
+                          )
+                        }
+                        verbosity={visibility.verbosity}
+                      />
+                    ))}
+                  {!activeAgent &&
+                    visibleQueued.map((item) => (
+                      <QueuedNotice
+                        key={item.runId}
+                        item={item}
+                        onCancel={(runId) => void handleCancelQueued(runId)}
+                      />
+                    ))}
+                </Transcript>
+              ) : null}
 
               {activeAgent && (
                 <SubagentTranscript
@@ -964,40 +1009,6 @@ export function ChatView({
                   verbosity={visibility.verbosity}
                 />
               )}
-
-              {!activeAgent && hiddenLiveGroups > 0 && (
-                <StaleNotice
-                  message={t('chat.run.hiddenEarlier', {
-                    shown: MAX_LIVE_GROUPS,
-                    hidden: hiddenLiveGroups,
-                  })}
-                />
-              )}
-              {!activeAgent &&
-                renderedGroups.map((group) => (
-                  <RunSection
-                    key={group.runId}
-                    group={group}
-                    cancelled={group.jobId ? cancelledJobs.has(group.jobId) : false}
-                    cancelling={group.jobId ? cancelling.has(group.jobId) : false}
-                    hideInput={
-                      hasTranscript &&
-                      transcriptMessages.some(
-                        (message) => message.role === 'user' && message.content === group.input,
-                      )
-                    }
-                    onCancel={handleCancel}
-                    verbosity={visibility.verbosity}
-                  />
-                ))}
-              {!activeAgent &&
-                visibleQueued.map((item) => (
-                  <QueuedSection
-                    key={item.runId}
-                    item={item}
-                    onCancel={(runId) => void handleCancelQueued(runId)}
-                  />
-                ))}
             </>
           ) : draftActive ? (
             <EmptyState
@@ -1082,6 +1093,8 @@ export function ChatView({
             connected={connected}
             onOpenConnection={() => navigate({ domain: 'settings', tab: 'connection' })}
             focusSignal={composerFocus}
+            onStop={connected && runningGroup ? () => void handleCancel(runningGroup) : undefined}
+            stopping={stopBusy}
           />
         )}
       </section>
