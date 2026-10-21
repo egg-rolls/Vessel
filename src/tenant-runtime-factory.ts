@@ -24,7 +24,6 @@ import {
 } from '../packages/config/src/index';
 import {
   AgentRuntime,
-  type AgentStatus,
   createDefaultTraceRedactor,
   type EventStream,
   estimateTokens,
@@ -45,23 +44,12 @@ import {
   type TenantPaths,
   type TraceRedactor,
 } from '../packages/core/src/index';
-import { createDelegateTaskPlugin } from '../plugins/tools/delegate-task/src/index';
-import { createTeamPlugin } from '../plugins/tools/team/src/index';
-import { createOwnerReplyInjector } from './agent-reply-injection';
-import {
-  type AgentTeamPluginOptions,
-  mapDelegateToolAlias,
-  resolveAgentWiring,
-  toAgentTeamPluginOptions,
-} from './agent-wiring';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
   WorkflowEngineLike,
 } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
-import { DeferredTransport } from './deferred-transport';
-import { planFactoryPlugins } from './factory-plugins';
 import {
   assertUniqueFeishuAppIds,
   createFeishuFromConfig,
@@ -79,7 +67,6 @@ import {
 import { resolveAgentCwd } from './path-resolution';
 import {
   buildPluginConfigMap,
-  buildTeamMemberHost,
   declarativePluginEntries,
   installWithConfig,
   withPluginConfig,
@@ -144,15 +131,6 @@ export interface BuildTenantRuntimeOptions {
   nodeId: string;
   /** host owner 的初始 sessionId；缺省随机 UUID（serve 每 tenant 独立） */
   sessionId?: string;
-  /**
-   * 0.17：入口由 AgentService 接管成员工具时，不构造旧 team / delegate 插件。
-   * 缺省 true（serve 在 A3c 之前仍走旧装配）。
-   */
-  legacyAgentPlugins?: boolean;
-  /** team 晚绑定 transport（loopback/remote；仅本地主 tenant） */
-  transport?: DeferredTransport;
-  /** team + loopback/remote 时由本函数创建 DeferredTransport */
-  createLoopbackTransport?: boolean;
   metricsFactory?: MetricsFactory;
   traceFactory?: TraceRecorderFactory;
   /** 测试注入的 ext redactor */
@@ -202,12 +180,6 @@ export interface TenantRuntimeBundle {
   mcp?: McpControl;
   workflows?: WorkflowEngineLike;
   feishu?: FeishuChannelLike;
-  transport?: DeferredTransport;
-  spawnAgent?: (request: {
-    name?: string;
-    model?: string;
-    systemPrompt?: string;
-  }) => Promise<AgentStatus>;
   lock?: TenantLock;
   /**
    * 幂等关闭。`drain: false` 用于调用方已先 `await gateway.stop()` 的场景：
@@ -378,66 +350,15 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer) {
   };
 }
 
-/** 0.8.2 Wave 2B1：runtime / delegate / workflow 共用的 resolved 权限配置。 */
+/** 0.8.2 Wave 2B1：runtime / workflow 共用的 resolved 权限配置。 */
 export function resolveRuntimePermission(
   config: VesselConfig,
   headless: boolean,
-  options: { agentEnabled?: boolean } = {},
 ): RuntimePermissionConfig {
-  // 0.16：canonical agent 可用时，旧配置里的 delegate_task 免确认规则改指 agent。
-  const autoApprove = mapDelegateToolAlias(
-    [...(config.permission?.autoApprove ?? []), 'ask_user'],
-    options.agentEnabled === true,
-  );
   return {
     default: headless ? 'allow' : 'ask',
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-    autoApprove,
-  };
-}
-
-/** delegate 工厂插件 options；ext 0.8.2 起识别 `permission`。 */
-export type DelegateTaskOptionsWithPermission = Parameters<typeof createDelegateTaskPlugin>[0] & {
-  permission: RuntimePermissionConfig;
-};
-
-export interface BuildDelegateTaskOptionsInput {
-  config: VesselConfig;
-  providerFactory: () => LLMProvider;
-  tenantId: string;
-  providerModel: string;
-  headless: boolean;
-  permission: RuntimePermissionConfig;
-  runtimeHost?: RuntimeHost;
-}
-
-/**
- * 构造 delegate 工厂插件 options（纯函数，便于测试）。
- * `permissionMode` 保持原逻辑：显式配置优先，否则交互 bridge / headless allow。
- */
-export function buildDelegateTaskOptions(
-  input: BuildDelegateTaskOptionsInput,
-): DelegateTaskOptionsWithPermission {
-  return {
-    providerFactory: input.providerFactory,
-    tenantId: input.tenantId,
-    model: input.config.delegate?.model ?? input.providerModel,
-    maxDepth: input.config.delegate?.maxDepth,
-    disallowed: input.config.delegate?.disallowed,
-    limits: input.config.delegate?.limits,
-    termination: input.config.delegate?.termination
-      ? {
-          maxIterations: input.config.delegate.termination.maxIterations ?? 10,
-          maxRuntimeSeconds: input.config.delegate.termination.maxRuntimeSeconds,
-        }
-      : undefined,
-    permissionMode: input.config.delegate?.permissionMode ?? (input.headless ? 'allow' : 'bridge'),
-    readOnlyTools: input.config.delegate?.readOnlyTools,
-    allowNested: input.config.delegate?.allowNested ?? false,
-    maxDescendants: input.config.delegate?.maxDescendants ?? 16,
-    contextMaxTokens: input.config.context?.maxTokens,
-    permission: input.permission,
-    ...(input.runtimeHost !== undefined ? { runtimeHost: input.runtimeHost } : {}),
+    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
   };
 }
 
@@ -648,94 +569,8 @@ export async function buildTenantRuntime(
         },
       });
     }
-    const staticPluginCount = plugins.length;
-
-    let internalTeamHost: RuntimeHost | undefined;
-    /** team 引擎实际使用的 Host：owner inbox 注入从同一个 Host 读取 */
-    let teamInboxHost: RuntimeHost | undefined;
-    let deferredTransport = options.transport;
-    if (
-      deferredTransport === undefined &&
-      options.createLoopbackTransport === true &&
-      isHostEnabled(config) &&
-      config.team?.enabled === true &&
-      (config.transport?.kind === 'loopback' || config.transport?.kind === 'remote')
-    ) {
-      deferredTransport = new DeferredTransport();
-    }
-
-    // 0.16：canonical agent 工具 / team 引擎 / legacy/delegate 的装配决策。
-    const agentWiring = resolveAgentWiring(config, { headless });
-    // runtime / delegate / workflow 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
-    const permission = resolveRuntimePermission(config, headless, {
-      agentEnabled: agentWiring.agentEnabled,
-    });
-
-    const buildFactoryPlugins = async (
-      runtimeHost?: RuntimeHost,
-      transport?: DeferredTransport,
-    ): Promise<Plugin[]> => {
-      // 0.17：bootstrap 由 AgentService 注册内置 agent 工具，旧 team/delegate 不再构造。
-      if (options.legacyAgentPlugins === false) return [];
-      const plan = planFactoryPlugins(config, runtimeHost !== undefined, {
-        agentEnabled: agentWiring.agentEnabled,
-      });
-      for (const warning of plan.warnings) console.warn(`⚠ ${warning}`);
-
-      const factory: Plugin[] = [];
-      if (plan.delegate) {
-        // 0.8.2 Wave 2B1：子 runtime 继承父 resolved 权限（default + autoApprove）。
-        factory.push(
-          createDelegateTaskPlugin(
-            buildDelegateTaskOptions({
-              config,
-              providerFactory: () => provider,
-              tenantId,
-              providerModel,
-              headless,
-              permission,
-              ...(plan.delegate.useHost && runtimeHost ? { runtimeHost } : {}),
-            }),
-          ),
-        );
-      }
-
-      if (plan.team) {
-        let teamHost = plan.team.useHost ? runtimeHost : undefined;
-        if (!teamHost) {
-          const { createRuntime } = await import('../packages/core/src/kernel/create-runtime.js');
-          internalTeamHost ??= await createRuntime({ session });
-          teamHost = internalTeamHost;
-        }
-        teamInboxHost = teamHost;
-
-        const teamOptions: Parameters<typeof createTeamPlugin>[0] & AgentTeamPluginOptions = {
-          providerFactory: () => provider,
-          tenantId,
-          model: config.team?.model ?? providerModel,
-          events: runtimeHost?.events ?? events,
-          host: teamHost,
-          ...(transport
-            ? {
-                transport,
-                nodeId: options.nodeId,
-                ownerRef: `${options.nodeId}:${config.team?.ownerId ?? 'owner'}`,
-              }
-            : {}),
-          ownerId: config.team?.ownerId,
-          memberLimits: config.team?.memberLimits,
-          memberTermination: config.team?.memberTermination
-            ? {
-                maxIterations: config.team.memberTermination.maxIterations ?? 10,
-                maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
-              }
-            : undefined,
-          ...toAgentTeamPluginOptions(config, agentWiring),
-        };
-        factory.push(createTeamPlugin(teamOptions));
-      }
-      return factory;
-    };
+    // runtime / workflow 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
+    const permission = resolveRuntimePermission(config, headless);
 
     // ── Runtime ───────────────────────────────────
     const limits = config.limits ?? DEFAULT_CONFIG.limits ?? {};
@@ -751,7 +586,6 @@ export async function buildTenantRuntime(
     let host: RuntimeHost | undefined;
     let agentRuntime: AgentRuntime | undefined;
     let selectedPluginHost: PluginHost | undefined;
-    let spawnAgent: TenantRuntimeBundle['spawnAgent'];
     let unsubHostBridge: (() => void) | undefined;
 
     const contextFactory = () => new MemoryContextManager(contextConfigFor(config, summarizer));
@@ -779,7 +613,7 @@ export async function buildTenantRuntime(
       const hostResult = await tryCreateHostRuntime({
         config,
         owner: {
-          id: config.team?.ownerId ?? 'owner',
+          id: config.agent?.ownerId ?? 'main',
           provider,
           model: providerModel,
           pluginHost: hostPluginHost,
@@ -791,49 +625,19 @@ export async function buildTenantRuntime(
           permission,
           selfCard: ownerSelfCard(config, providerModel, {
             askUser: options.registerAskUser === true,
-            headless,
           }),
         },
         sessionId: options.sessionId ?? crypto.randomUUID(),
         ...(runStore ? { runStore } : {}),
         ...(hostEvents ? { events: hostEvents } : {}),
         contextFactory,
-        beforeSpawn: async (createdHost) => {
-          const factoryPlugins = await buildFactoryPlugins(createdHost, deferredTransport);
-          for (const plugin of factoryPlugins) await plugin.install(hostPluginHost);
-          plugins.push(...factoryPlugins);
-        },
       });
 
       if (hostResult.ok) {
         runtime = hostResult.runtime;
         host = hostResult.host;
         selectedPluginHost = hostPluginHost;
-        const selectedHost = hostResult.host;
-        // E10：跨节点 spawn 与本机 spawn 使用同一成员隔离与限额。
-        const memberLimits = config.team?.memberLimits;
-        const memberTermination = config.team?.memberTermination
-          ? {
-              maxIterations: config.team.memberTermination.maxIterations ?? 10,
-              maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
-            }
-          : undefined;
-        spawnAgent = async (request) => {
-          const handle = await selectedHost.spawn({
-            provider,
-            model: request.model ?? providerModel,
-            // 成员不能反向调用 team_*（复用 ext 的 buildChildHost）。
-            pluginHost: buildTeamMemberHost(hostPluginHost),
-            ...(request.systemPrompt !== undefined ? { systemPrompt: request.systemPrompt } : {}),
-            ...(request.name !== undefined ? { name: request.name } : {}),
-            ...(memberLimits ? { limits: { run: memberLimits } } : {}),
-            ...(memberTermination ? { termination: memberTermination } : {}),
-          });
-          return handle.status();
-        };
       } else {
-        plugins.length = staticPluginCount;
-        deferredTransport = options.transport;
         console.warn(
           `⚠ Host runtime unavailable (${hostResult.error}); falling back to the single-agent runtime.`,
         );
@@ -841,7 +645,6 @@ export async function buildTenantRuntime(
     }
 
     if (!runtime) {
-      plugins.push(...(await buildFactoryPlugins(undefined, deferredTransport)));
       agentRuntime = await AgentRuntime.create(
         // 0.11.1：`ui.showReasoning` 显式 opt-in（默认 false，行为同 0.11.0）。
         withReasoning(config, {
@@ -857,10 +660,9 @@ export async function buildTenantRuntime(
           plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
           systemPrompt,
           permission,
-          // 0.15 E9：主 agent 的 Self Card（成员由 delegate 轨负责）。
+          // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）。
           selfCard: ownerSelfCard(config, providerModel, {
             askUser: options.registerAskUser === true,
-            headless,
           }),
           ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
           ...(runStore ? { runStore } : {}),
@@ -888,20 +690,6 @@ export async function buildTenantRuntime(
       enabled: options.sessionLocks ?? backend !== 'memory',
     });
     const finalPluginHost = selectedPluginHost ?? activeRuntime.pluginHost;
-
-    // 0.16 E5：owner inbox → 父 turn 注入。core 合并 ctx.messages 前写入不会生效，
-    // 但游标与事件仍保持正确，合并后无需再改装配层。
-    const ownerInboxHost = host ?? teamInboxHost;
-    if (options.legacyAgentPlugins !== false && agentWiring.agentEnabled && ownerInboxHost) {
-      const injector = createOwnerReplyInjector({
-        host: ownerInboxHost,
-        ownerId: config.team?.ownerId ?? 'owner',
-        events,
-        tenantId,
-        followReplies: agentWiring.followReplies,
-      });
-      finalPluginHost.registerHook(injector.hook);
-    }
 
     // ── Trace ─────────────────────────────────────
     const extRedactor = options.redactor ?? (await loadRedactSecrets(loader));
@@ -1075,12 +863,6 @@ export async function buildTenantRuntime(
         report('runtime.dispose', error);
       }
 
-      try {
-        if (internalTeamHost && internalTeamHost !== host) await internalTeamHost.close();
-      } catch (error) {
-        report('teamHost.close', error);
-      }
-
       if (trace) {
         try {
           await trace.flush();
@@ -1144,8 +926,6 @@ export async function buildTenantRuntime(
       ...(mcpControl ? { mcp: mcpControl } : {}),
       ...(workflowEngine ? { workflows: workflowEngine } : {}),
       ...(feishuChannel ? { feishu: feishuChannel } : {}),
-      ...(deferredTransport ? { transport: deferredTransport } : {}),
-      ...(spawnAgent ? { spawnAgent } : {}),
       ...(lock ? { lock } : {}),
       close,
     };

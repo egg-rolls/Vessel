@@ -233,13 +233,13 @@ describe('/agents', () => {
           key: 'toolCallsLimit',
           current: 4,
           max: 4,
-          source: 'config.delegate.limits',
+          source: 'config.agent.limits',
         },
         1400,
       ),
     ];
     const config = {
-      delegate: {
+      agent: {
         termination: { maxIterations: 5, maxRuntimeSeconds: 30 },
         limits: { toolCallsLimit: 4 },
       },
@@ -253,7 +253,7 @@ describe('/agents', () => {
     expect(detail).toContain('bash (seen)');
     expect(detail).toContain('iterations 5 · tools 4 · runtime 30s');
     expect(detail).toContain('iterations 4 · tools 3 · runtime 20s');
-    expect(detail).toContain('agent/toolCallsLimit 4/4 · config.delegate.limits');
+    expect(detail).toContain('agent/toolCallsLimit 4/4 · config.agent.limits');
   });
 
   it('prefers explicitly declared tools over tools already seen', () => {

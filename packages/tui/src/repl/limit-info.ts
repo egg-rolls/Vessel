@@ -21,7 +21,7 @@ export interface EffectiveLimits {
   outputTokensLimit?: number;
   totalCostLimit?: number;
   contextMaxTokens?: number;
-  /** delegate 最大嵌套深度（仅子 agent） */
+  /** 0.17 Phase A 无来源；保留字段兼容旧事件展示 */
   maxDepth?: number;
 }
 
@@ -256,18 +256,18 @@ export function readEffectiveLimits(config: VesselConfig | undefined): Effective
 }
 
 /**
- * 子 agent（delegate_task）有效限制。
- * 与 delegate 插件 / runtime-host 一致：
- * - `delegate.termination` 缺失 → 插件默认 10 次 / 60s（可嵌套，maxDepth 默认 3）；
- * - 显式存在 → `maxIterations ?? 10`，`maxRuntimeSeconds` 原样（缺省=无限制）；
- * - `delegate.limits` 缺失 → 无 usage 限制。
+ * 子 agent（AgentService 成员）有效限制。
+ * 成员设置来自 `agent.*`；缺省与 bootstrap 一致回退 DEFAULT_CONFIG。
+ * `maxDepth` 在 0.17 Phase A 没有来源，省略。
  */
 export function readDelegateLimits(config: VesselConfig | undefined): EffectiveLimits {
-  const delegate = config?.delegate;
-  const termination = delegate?.termination;
-  const limits = delegate?.limits ?? {};
-  const maxIterations = termination?.maxIterations ?? 10;
-  const maxRuntimeSeconds = termination ? termination.maxRuntimeSeconds : 60;
+  const agent = config?.agent;
+  const termination = agent?.termination;
+  const limits = agent?.limits ?? DEFAULT_CONFIG.limits ?? {};
+  const maxIterations =
+    termination?.maxIterations ?? DEFAULT_CONFIG.termination?.maxIterations ?? 20;
+  const maxRuntimeSeconds =
+    termination?.maxRuntimeSeconds ?? DEFAULT_CONFIG.termination?.maxRuntimeSeconds;
   return {
     maxIterations,
     ...(maxRuntimeSeconds !== undefined ? { maxRuntimeSeconds } : {}),
@@ -278,7 +278,6 @@ export function readDelegateLimits(config: VesselConfig | undefined): EffectiveL
       ? { outputTokensLimit: limits.outputTokensLimit }
       : {}),
     ...(limits.totalCostLimit !== undefined ? { totalCostLimit: limits.totalCostLimit } : {}),
-    maxDepth: delegate?.maxDepth ?? 3,
   };
 }
 

@@ -19,17 +19,18 @@ import { knownOwnerToolNames, ownerSelfCard } from '../self-card';
 describe('owner self card', () => {
   it('lists only tools that the default owner runtime registers', () => {
     const config: VesselConfig = {};
-    // 0.16：交互入口默认 agent，headless 仍保留 delegate_task。
-    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit', 'agent']);
-    expect(knownOwnerToolNames(config, { headless: true })).toEqual([
+    expect(knownOwnerToolNames(config)).toEqual(['bash', 'read', 'edit']);
+    expect(knownOwnerToolNames({ ...config, agent: { enabled: true } })).toEqual([
       'bash',
       'read',
       'edit',
-      'delegate_task',
+      'agent',
     ]);
-    expect(
-      knownOwnerToolNames({ ...config, agent: { enabled: false }, delegate: { enabled: false } }),
-    ).toEqual(['bash', 'read', 'edit']);
+    expect(knownOwnerToolNames({ ...config, agent: { enabled: false } })).toEqual([
+      'bash',
+      'read',
+      'edit',
+    ]);
   });
 
   it('adds ask_user only for interactive entries and ui.askUser !== false', () => {
@@ -38,28 +39,6 @@ describe('owner self card', () => {
       'ask_user',
     );
     expect(knownOwnerToolNames({}, { askUser: false })).not.toContain('ask_user');
-  });
-
-  it('adds team tools only when legacyTools is explicitly true', () => {
-    expect(knownOwnerToolNames({ team: { enabled: true } })).not.toContain('team_spawn');
-    const legacy = knownOwnerToolNames({ team: { enabled: true, legacyTools: true } });
-    expect(legacy).toEqual(
-      expect.arrayContaining([
-        'team_spawn',
-        'team_send',
-        'team_inbox',
-        'team_status',
-        'team_cancel',
-      ]),
-    );
-    expect(knownOwnerToolNames({ team: { enabled: true, legacyTools: false } })).not.toContain(
-      'team_spawn',
-    );
-    // team 构造即注册 agent，声明里不能再出现 delegate_task。
-    expect(knownOwnerToolNames({ team: { enabled: true } }, { headless: true })).toContain('agent');
-    expect(knownOwnerToolNames({ team: { enabled: true } }, { headless: true })).not.toContain(
-      'delegate_task',
-    );
   });
 
   it('maps limits, context and headless how_to_ask', () => {

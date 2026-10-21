@@ -61,7 +61,7 @@ export function isLoopbackHostname(host: string): boolean {
   return match?.slice(1).every((part) => Number(part) <= 255) === true;
 }
 
-/** 校验 limits 块（顶层与 delegate 子块共用） */
+/** 校验 limits 块（顶层与 agent 子块共用） */
 function validateLimits(
   prefix: string,
   limits: UsageLimitsConfig,
@@ -85,7 +85,7 @@ function validateLimits(
   }
 }
 
-/** 校验 termination 块（顶层与 delegate 子块共用） */
+/** 校验 termination 块（顶层与 agent 子块共用） */
 function validateTermination(
   prefix: string,
   termination: TerminationConfig,
@@ -833,8 +833,6 @@ export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
   'feishu',
   'tools',
   'mcpServers',
-  'delegate',
-  'team',
   'host',
   'scheduler',
   'transport',
@@ -1314,6 +1312,41 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
       });
     }
 
+    const agent = config.agent;
+    if (agent.limits) validateLimits('agent.limits', agent.limits, errors);
+    if (agent.termination) validateTermination('agent.termination', agent.termination, errors);
+    if (
+      agent.permissionMode !== undefined &&
+      agent.permissionMode !== 'bridge' &&
+      agent.permissionMode !== 'allow' &&
+      agent.permissionMode !== 'deny'
+    ) {
+      errors.push({
+        path: 'agent.permissionMode',
+        message: 'agent.permissionMode must be "bridge", "allow" or "deny"',
+        value: agent.permissionMode,
+      });
+    }
+    if (agent.readOnlyTools !== undefined) {
+      if (
+        !Array.isArray(agent.readOnlyTools) ||
+        agent.readOnlyTools.some((value) => typeof value !== 'string')
+      ) {
+        errors.push({
+          path: 'agent.readOnlyTools',
+          message: 'agent.readOnlyTools must be an array of strings',
+          value: agent.readOnlyTools,
+        });
+      }
+    }
+    if (agent.ownerId !== undefined && typeof agent.ownerId !== 'string') {
+      errors.push({
+        path: 'agent.ownerId',
+        message: 'agent.ownerId must be a string',
+        value: agent.ownerId,
+      });
+    }
+
     // 0.1.0 只有 systemPrompt 被消费——其余字段明确警告，不静默忽略。
     for (const key of ['name', 'temperature', 'maxTokens'] as const) {
       if (config.agent[key] !== undefined) {
@@ -1491,92 +1524,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 delegate
-  if (config.delegate) {
-    const {
-      enabled,
-      maxDepth,
-      disallowed,
-      model,
-      termination,
-      limits,
-      permissionMode,
-      readOnlyTools,
-      allowNested,
-      maxDescendants,
-    } = config.delegate;
-    if (enabled !== undefined && typeof enabled !== 'boolean') {
-      errors.push({
-        path: 'delegate.enabled',
-        message: 'delegate.enabled must be a boolean',
-        value: enabled,
-      });
-    }
-    if (maxDepth !== undefined && (!Number.isInteger(maxDepth) || maxDepth <= 0)) {
-      errors.push({
-        path: 'delegate.maxDepth',
-        message: 'delegate.maxDepth must be a positive integer',
-        value: maxDepth,
-      });
-    }
-    if (disallowed !== undefined) {
-      if (!Array.isArray(disallowed) || disallowed.some((v) => typeof v !== 'string')) {
-        errors.push({
-          path: 'delegate.disallowed',
-          message: 'delegate.disallowed must be an array of strings',
-          value: disallowed,
-        });
-      }
-    }
-    if (model !== undefined && typeof model !== 'string') {
-      errors.push({
-        path: 'delegate.model',
-        message: 'delegate.model must be a string',
-        value: model,
-      });
-    }
-    if (
-      permissionMode !== undefined &&
-      permissionMode !== 'bridge' &&
-      permissionMode !== 'allow' &&
-      permissionMode !== 'deny'
-    ) {
-      errors.push({
-        path: 'delegate.permissionMode',
-        message: 'delegate.permissionMode must be "bridge", "allow" or "deny"',
-        value: permissionMode,
-      });
-    }
-    if (readOnlyTools !== undefined) {
-      if (!Array.isArray(readOnlyTools) || readOnlyTools.some((v) => typeof v !== 'string')) {
-        errors.push({
-          path: 'delegate.readOnlyTools',
-          message: 'delegate.readOnlyTools must be an array of strings',
-          value: readOnlyTools,
-        });
-      }
-    }
-    if (allowNested !== undefined && typeof allowNested !== 'boolean') {
-      errors.push({
-        path: 'delegate.allowNested',
-        message: 'delegate.allowNested must be a boolean',
-        value: allowNested,
-      });
-    }
-    if (
-      maxDescendants !== undefined &&
-      (!Number.isInteger(maxDescendants) || maxDescendants <= 0)
-    ) {
-      errors.push({
-        path: 'delegate.maxDescendants',
-        message: 'delegate.maxDescendants must be a positive integer',
-        value: maxDescendants,
-      });
-    }
-    if (limits) validateLimits('delegate.limits', limits, errors);
-    if (termination) validateTermination('delegate.termination', termination, errors);
-  }
-
   // 校验 host（0.2；默认关闭）
   if (config.host) {
     const { enabled, nodeId, limits } = config.host;
@@ -1750,37 +1697,6 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 team（0.1.0 显式 opt-in，默认关闭）
-  if (config.team) {
-    const { enabled, ownerId, model, memberLimits, memberTermination, legacyTools } = config.team;
-    if (legacyTools !== undefined && typeof legacyTools !== 'boolean') {
-      errors.push({
-        path: 'team.legacyTools',
-        message: 'team.legacyTools must be a boolean',
-        value: legacyTools,
-      });
-    }
-    if (enabled !== undefined && typeof enabled !== 'boolean') {
-      errors.push({
-        path: 'team.enabled',
-        message: 'team.enabled must be a boolean',
-        value: enabled,
-      });
-    }
-    if (ownerId !== undefined && typeof ownerId !== 'string') {
-      errors.push({
-        path: 'team.ownerId',
-        message: 'team.ownerId must be a string',
-        value: ownerId,
-      });
-    }
-    if (model !== undefined && typeof model !== 'string') {
-      errors.push({ path: 'team.model', message: 'team.model must be a string', value: model });
-    }
-    if (memberLimits) validateLimits('team.memberLimits', memberLimits, errors);
-    if (memberTermination) validateTermination('team.memberTermination', memberTermination, errors);
-  }
-
   // 校验 mcpServers（0.3；map 键为 server 名）
   if (config.mcpServers !== undefined) {
     if (!isPlainObject(config.mcpServers)) {
@@ -1948,26 +1864,18 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'enabled',
     'defaultVisibility',
     'followReplies',
+    'limits',
+    'termination',
+    'permissionMode',
+    'readOnlyTools',
+    'ownerId',
   ],
   session: ['backend', 'storagePath', 'maxHistory'],
   permission: ['autoApprove'],
   update: ['autoCheck', 'channel', 'source'],
-  delegate: [
-    'enabled',
-    'maxDepth',
-    'disallowed',
-    'model',
-    'termination',
-    'limits',
-    'permissionMode',
-    'readOnlyTools',
-    'allowNested',
-    'maxDescendants',
-  ],
   host: ['enabled', 'nodeId', 'limits'],
   scheduler: ['maxConcurrency', 'maxQueueSize', 'perAgentSerial'],
   transport: ['kind', 'hostname', 'token', 'peersDir', 'heartbeatMs', 'peerTtlMs', 'nodes'],
-  team: ['enabled', 'ownerId', 'model', 'memberLimits', 'memberTermination', 'legacyTools'],
   durable: ['enabled', 'backend', 'path', 'checkpointEvery'],
   serve: [
     'hostname',
@@ -2078,8 +1986,6 @@ export const KNOWN_CONFIG_KEYS = [
   'permission',
   'plugins',
   'update',
-  'delegate',
-  'team',
   'host',
   'scheduler',
   'transport',

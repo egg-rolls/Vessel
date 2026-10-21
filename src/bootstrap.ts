@@ -17,7 +17,6 @@ import {
 } from '../packages/config/src/index';
 import {
   AgentRuntime,
-  type AgentStatus,
   type Logger,
   MemoryContextManager,
   MemoryPluginHost,
@@ -43,7 +42,7 @@ import {
 import type { ReplContext } from '../packages/tui/src/index';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
 import { createAgentServiceWiring } from './agent-service-wiring';
-import { type MemberPermissionMode, mapDelegateToolAlias } from './agent-wiring';
+import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
 import type {
@@ -52,7 +51,6 @@ import type {
   WorkflowEngineLike,
 } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
-import type { DeferredTransport } from './deferred-transport';
 import {
   type DurableRunHandleLike,
   type DurableRunsControlLike,
@@ -133,11 +131,6 @@ export interface BootstrapOptions {
   resumeSessionId?: string;
   /** 是否为 headless 模式 */
   headless?: boolean;
-  /**
-   * 0.17：本次 bootstrap 是否作为 gateway/serve 前台（`--serve` / `gateway start`）。
-   * serve 在 A3c 之前仍走旧 team/delegate 装配；REPL / headless 不再构造它们。
-   */
-  serve?: boolean;
   /**
    * 是否实际进入交互式 REPL 且 stdin 是 TTY。
    * 非交互（headless / serve-only / 管道）时无 Key 必须快速失败，不能进首启向导。
@@ -241,17 +234,6 @@ export interface BootstrapResult {
   host?: RuntimeHost;
   /** nodeId 唯一来源：config.host.nodeId，缺省进程内生成 */
   nodeId: string;
-  /** gateway /v1/team/agents 的 spawn 注入（仅 host 模式） */
-  spawnAgent?: (request: {
-    name?: string;
-    model?: string;
-    systemPrompt?: string;
-  }) => Promise<AgentStatus>;
-  /**
-   * team 的晚绑定 transport（仅 host + team + loopback/remote）。
-   * cli 在 gateway 启动、真实 transport 构造后调用 resolve/fail。
-   */
-  transport?: DeferredTransport;
   /** 0.3：MCP 控制面（未配置 mcp_servers 时为 undefined） */
   mcp?: McpControl;
   /** 0.3 durable：checkpoint store（durable 关闭时为 undefined） */
@@ -754,7 +736,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const { config, validation, tenantId, paths: configPaths } = loaded;
 
-  // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；team/transport/PeerInfo 共用。
+  // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；transport / PeerInfo 共用。
   const nodeId =
     config.host?.nodeId ?? `vessel-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
 
@@ -888,17 +870,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       throw error;
     }
   }
-  // 0.17 Phase A：交互 REPL 默认由 AgentService 接管成员工具；headless 默认关闭。
-  // 显式 agent.enabled 双向生效；`team.enabled` 不再隐式启动新服务
-  // （serve 的旧 team 装配在 A3c 之前保持原样）。
-  const agentServiceEnabled = config.agent?.enabled ?? (interactive === true && !headless);
-  const legacyAgentPlugins = options.serve === true && !agentServiceEnabled;
+  // 0.17 A4：成员工具只走 AgentService；显式 `agent.enabled: true` 才启动。
+  const agentPlan = resolveAgentWiring(config, { headless });
+  const agentServiceEnabled = agentPlan.agentEnabled;
 
   const bundle = await buildTenantRuntime({
     tenantId,
     config,
     tenantPaths,
-    legacyAgentPlugins,
     configSources: loaded.sources,
     configPaths: loaded.paths,
     tenantOverlayKeys: loaded.tenantOverlayKeys,
@@ -911,7 +890,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     loader,
     nodeId,
     sessionId: currentSessionId,
-    createLoopbackTransport: true,
     logger,
     writeTrace: localWrites,
     pruneTrace: false,
@@ -946,8 +924,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     runStore,
     workflows: workflowEngine,
     feishu: feishuChannel,
-    transport: deferredTransport,
-    spawnAgent,
   } = bundle;
 
   // MCP 控制面（bundle 内已安装；保留局部名以兼容后续注入）。
@@ -965,19 +941,22 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   const permission = {
     default: headless ? ('allow' as const) : ('ask' as const),
     // E7：配置持久化的 always 规则 + 运行时始终免确认的 ask_user。
-    // 0.16：agent 可用时旧 delegate_task 免确认规则映射到 agent。
-    autoApprove: mapDelegateToolAlias(
-      [...(config.permission?.autoApprove ?? []), 'ask_user'],
-      config.agent?.enabled ?? !headless,
-    ),
+    autoApprove: [...new Set([...(config.permission?.autoApprove ?? []), 'ask_user'])],
   };
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
   let agentControl: BootstrapResult['agent'];
   if (agentServiceEnabled) {
     // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
-    const memberPermissionMode: MemberPermissionMode =
-      config.delegate?.permissionMode ?? (headless ? 'allow' : 'bridge');
+    const memberPermissionMode: MemberPermissionMode = agentPlan.permissionMode;
+    const memberTermination =
+      agentPlan.termination !== undefined
+        ? {
+            maxIterations: agentPlan.termination.maxIterations ?? termination.maxIterations,
+            maxRuntimeSeconds:
+              agentPlan.termination.maxRuntimeSeconds ?? termination.maxRuntimeSeconds,
+          }
+        : termination;
     const wiring = await createAgentServiceWiring({
       tenantId,
       dataDir,
@@ -985,9 +964,10 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       pluginHost: finalPluginHost,
       // provider 无跨请求状态；成员与父级共用同一实例。
       providerFactory: () => provider,
-      model: config.agent?.model ?? providerModel,
-      limits,
-      termination,
+      model: agentPlan.model ?? providerModel,
+      limits: agentPlan.limits ?? limits,
+      termination: memberTermination,
+      ...(agentPlan.readOnlyTools !== undefined ? { readOnlyTools: agentPlan.readOnlyTools } : {}),
       ...(config.context?.maxTokens !== undefined
         ? { contextMaxTokens: config.context.maxTokens }
         : {}),
@@ -995,6 +975,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       permissionMode: memberPermissionMode,
       // 成员 bridge 请求 / 应答与 TUI 订阅的是同一条父事件流。
       parentEvents: runtimeEvents,
+      ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       logger,
     });
     finalPluginHost.registerTool(wiring.tool);
@@ -1034,7 +1015,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // ── Durable resume（0.3）─────────────────────────
   // 路由按 checkpoint.agent_id：缺失/owner/宿主成员 → host.resume；
   // 非宿主成员 → 单 agent AgentRuntime.resume（不注入合成消息）。
-  const ownerId = config.team?.ownerId ?? 'owner';
+  const ownerId = config.agent?.ownerId ?? 'main';
   let fallbackRuntime: AgentRuntime | undefined;
 
   const getSingleAgentRuntime = async (): Promise<RunnableAgent> => {
@@ -1055,7 +1036,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         permission,
         selfCard: ownerSelfCard(config, providerModel, {
           askUser: registerAskUser,
-          headless,
         }),
         ...(runStore ? { runStore } : {}),
         logger,
@@ -1516,8 +1496,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     sessionControl,
     host,
     nodeId,
-    spawnAgent,
-    transport: deferredTransport,
     mcp: mcpControl,
     runStore,
     runs,

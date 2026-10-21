@@ -160,15 +160,6 @@ describe('未知键与新增 schema', () => {
     expect(validation.errors.some((e) => e.path === 'update.channel')).toBe(true);
   });
 
-  it('delegate.max_depth 非正整数时报错', async () => {
-    const configPath = tmpYaml('delegate:\n  max_depth: 0\n');
-    const { validation } = await loadConfig({
-      configPath,
-      userConfigPath: missingPath(),
-    });
-    expect(validation.errors.some((e) => e.path === 'delegate.maxDepth')).toBe(true);
-  });
-
   it('session.backend 非枚举时报错', async () => {
     const configPath = tmpYaml('session:\n  backend: redis\n');
     const { validation } = await loadConfig({
@@ -191,38 +182,6 @@ describe('未知键与新增 schema', () => {
       userConfigPath: missingPath(),
     });
     expect(bad.validation.errors.some((e) => e.path === 'provider.timeoutMs')).toBe(true);
-  });
-
-  it('delegate.permission_mode / read_only_tools 校验', async () => {
-    const ok = await loadConfig({
-      configPath: tmpYaml('delegate:\n  permission_mode: deny\n  read_only_tools: [read, bash]\n'),
-      userConfigPath: missingPath(),
-    });
-    expect(ok.validation.errors).toHaveLength(0);
-    expect(ok.config.delegate?.permissionMode).toBe('deny');
-    expect(ok.config.delegate?.readOnlyTools).toEqual(['read', 'bash']);
-
-    const bad = await loadConfig({
-      configPath: tmpYaml('delegate:\n  permission_mode: ask\n'),
-      userConfigPath: missingPath(),
-    });
-    expect(bad.validation.errors.some((e) => e.path === 'delegate.permissionMode')).toBe(true);
-  });
-
-  it('team 块校验（enabled 显式 opt-in）', async () => {
-    const ok = await loadConfig({
-      configPath: tmpYaml('team:\n  enabled: true\n  owner_id: lead\n'),
-      userConfigPath: missingPath(),
-    });
-    expect(ok.validation.errors).toHaveLength(0);
-    expect(ok.config.team?.enabled).toBe(true);
-
-    // 0.3 删除 max_members：旧配置按未知键报错。
-    const bad = await loadConfig({
-      configPath: tmpYaml('team:\n  max_members: 0\n'),
-      userConfigPath: missingPath(),
-    });
-    expect(bad.validation.errors.some((e) => e.path === 'team.maxMembers')).toBe(true);
   });
 });
 

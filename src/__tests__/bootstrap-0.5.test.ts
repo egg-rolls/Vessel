@@ -602,36 +602,6 @@ describe('bootstrap 0.5 - rpc injection', () => {
   });
 });
 
-describe('bootstrap 0.6.1 - 团队远端 spawn 成员隔离（E10）', () => {
-  it('spawnAgent 使用 child host：成员看不到 team_* 工具', async () => {
-    const dataDir = tempDir();
-    const configPath = tmpYaml(`
-host:
-  enabled: true
-team:
-  enabled: true
-  member_limits:
-    tool_calls_limit: 1
-  member_termination:
-    max_iterations: 2
-`);
-    const result = await bootstrap({
-      ...baseOptions(dataDir),
-      configPath,
-    });
-
-    try {
-      expect(result.spawnAgent).toBeDefined();
-      const status = await result.spawnAgent?.({ name: 'worker' });
-      expect(status?.toolNames).toContain('bash');
-      expect(status?.toolNames ?? []).not.toContain('team_spawn');
-      expect(status?.toolNames ?? []).not.toContain('team_send');
-    } finally {
-      await result.shutdown();
-    }
-  });
-});
-
 describe('bootstrap 0.6.1 - 权限 always 持久化（E7）', () => {
   it('交互模式 remember:true 写回用户 YAML 的 permission.auto_approve', async () => {
     const dataDir = tempDir();

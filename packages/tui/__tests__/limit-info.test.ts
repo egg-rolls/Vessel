@@ -40,22 +40,21 @@ describe('limit info reducer', () => {
     expect(partial.contextMaxTokens).toBe(1_000_000);
   });
 
-  it('delegate limits never inherit the main agent termination when unset', () => {
-    expect(readDelegateLimits(undefined)).toEqual({
-      maxIterations: 10,
-      maxRuntimeSeconds: 60,
-      maxDepth: 3,
-    });
+  it('member limits come from agent.* and never inherit the top-level termination', () => {
+    const defaults = readDelegateLimits(undefined);
+    expect(defaults.maxIterations).toBe(DEFAULT_CONFIG.termination?.maxIterations);
+    expect(defaults.maxRuntimeSeconds).toBe(DEFAULT_CONFIG.termination?.maxRuntimeSeconds);
+    expect(defaults.requestLimit).toBe(DEFAULT_CONFIG.limits?.requestLimit);
 
     const explicitEmpty = readDelegateLimits({
       termination: { maxIterations: 99, maxRuntimeSeconds: 999 },
-      delegate: { termination: {}, limits: { requestLimit: 4 }, maxDepth: 7 },
+      agent: { termination: {}, limits: { requestLimit: 4 } },
     } as VesselConfig);
-    expect(explicitEmpty.maxIterations).toBe(10);
-    expect(explicitEmpty.maxRuntimeSeconds).toBeUndefined();
+    expect(explicitEmpty.maxIterations).toBe(DEFAULT_CONFIG.termination?.maxIterations ?? 20);
+    expect(explicitEmpty.maxRuntimeSeconds).toBe(DEFAULT_CONFIG.termination?.maxRuntimeSeconds);
     expect(explicitEmpty.requestLimit).toBe(4);
     expect(explicitEmpty.toolCallsLimit).toBeUndefined();
-    expect(explicitEmpty.maxDepth).toBe(7);
+    expect(explicitEmpty.maxDepth).toBeUndefined();
   });
 
   it('folds only the requested run and uses completed iterations as request fallback', () => {

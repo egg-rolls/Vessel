@@ -3,7 +3,6 @@
  *
  * 输出口径固定为 headless 口径：默认 3 个（bash / edit / read）；
  * `agent.enabled: true` 时额外列出 canonical `agent`（0.17）。
- * 旧 delegate_task / team_* 不再列出（A4 删除）。
  * `ask_user` 仅在交互 REPL（TTY）或 gateway / serve 下注册（见 cli.ts / bootstrap.ts），
  * 因此一次性命令里不列出，由调用方在末尾注明。
  */
@@ -61,7 +60,7 @@ export async function listTools(): Promise<ToolsListing> {
   }
 
   // `--tools` 是一次性只读命令：按 headless 口径；只有显式 agent.enabled 才列出
-  // canonical agent（`team.enabled` 不再隐式提供成员工具）。
+  // canonical agent。
   const agentEnabled = config.agent?.enabled === true;
 
   const pluginNamesWithFactories = [...pluginNames];

@@ -3,7 +3,6 @@ import type { VesselConfig } from '../../packages/config/src/index';
 import { MemoryPluginHost, type Plugin, type PluginHost } from '../../packages/core/src/index';
 import {
   buildPluginConfigMap,
-  buildTeamMemberHost,
   declarativePluginEntries,
   installWithConfig,
   pluginConfigFor,
@@ -115,21 +114,5 @@ describe('声明式 guardrails / hooks（0.6.1 P2）', () => {
       ),
     ).toEqual({ allow: ['edit'], deny: ['bash'] });
     expect(pluginConfigFor('tool-policy', undefined, [])).toBeUndefined();
-  });
-});
-
-describe('buildTeamMemberHost（0.6.1 E10）', () => {
-  function tool(name: string) {
-    return { name, description: name, inputSchema: {}, handler: async () => '' };
-  }
-
-  it('成员宿主排除 team_* 工具并保留其它工具', () => {
-    const host = fakeHost();
-    host.registerTool(tool('bash'));
-    host.registerTool(tool('team_spawn'));
-    host.registerTool(tool('team_send'));
-
-    const child = buildTeamMemberHost(host);
-    expect(child.listTools().map((entry) => entry.name)).toEqual(['bash']);
   });
 });

@@ -55,6 +55,8 @@ export interface AgentServiceWiringOptions {
   termination?: TerminationPolicy;
   contextMaxTokens?: number;
   permission?: RuntimePermissionConfig;
+  /** deny 模式保留的只读工具（默认 ['read']） */
+  readOnlyTools?: readonly string[];
   logger?: Logger;
   ownerId?: string;
   /**
@@ -97,6 +99,7 @@ export function buildMemberRuntimeOptions(
       : {}),
     ...(options.permission !== undefined ? { permission: options.permission } : {}),
     ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
+    ...(options.readOnlyTools !== undefined ? { readOnlyTools: options.readOnlyTools } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),

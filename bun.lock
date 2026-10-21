@@ -191,26 +191,6 @@
         "typescript": "^7.0.2",
       },
     },
-    "plugins/tools/delegate-task": {
-      "name": "@vessel-agent/delegate-task",
-      "version": "0.16.0",
-      "dependencies": {
-        "@vessel-agent/core": "0.10.0",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
-    "plugins/tools/team": {
-      "name": "@vessel-agent/team",
-      "version": "0.16.0",
-      "dependencies": {
-        "@vessel-agent/core": "0.10.0",
-      },
-      "devDependencies": {
-        "typescript": "^7.0.2",
-      },
-    },
     "plugins/workflow/engine": {
       "name": "@vessel-agent/workflow",
       "version": "0.16.0",
@@ -378,8 +358,6 @@
 
     "@vessel-agent/core": ["@vessel-agent/core@workspace:packages/core"],
 
-    "@vessel-agent/delegate-task": ["@vessel-agent/delegate-task@workspace:plugins/tools/delegate-task"],
-
     "@vessel-agent/evals": ["@vessel-agent/evals@workspace:plugins/evals/harness"],
 
     "@vessel-agent/feishu": ["@vessel-agent/feishu@workspace:plugins/im/feishu"],
@@ -399,8 +377,6 @@
     "@vessel-agent/redact-secrets": ["@vessel-agent/redact-secrets@workspace:plugins/security/redact-secrets"],
 
     "@vessel-agent/serve": ["@vessel-agent/serve@workspace:packages/serve"],
-
-    "@vessel-agent/team": ["@vessel-agent/team@workspace:plugins/tools/team"],
 
     "@vessel-agent/tool-policy": ["@vessel-agent/tool-policy@workspace:plugins/security/tool-policy"],
 

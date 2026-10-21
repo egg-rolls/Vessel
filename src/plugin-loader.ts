@@ -33,12 +33,10 @@ const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * 默认导出是**工厂函数**而非 Plugin 实例的插件——它们需要装配层注入运行时依赖
- * （如 delegate-task 需要 provider 工厂与 model），由 bootstrap 自行构造。
+ * 默认导出是**工厂函数**而非 Plugin 实例的插件——它们需要装配层注入运行时依赖，
+ * 由 bootstrap 自行构造。
  */
 export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
-  'delegate-task',
-  'team',
   'mcp-client',
   'workflow',
   'evals',

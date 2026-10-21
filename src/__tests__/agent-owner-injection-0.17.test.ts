@@ -10,11 +10,17 @@ import { describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import {
+  createInProcessMemberRuntime,
+  type MemberRuntimeMember,
+} from '../../packages/agent/src/index';
 import type {
   AgentRuntimeOptions,
   HookContext,
   LLMProvider,
+  Logger,
   RunEvent,
+  ToolDefinition,
 } from '../../packages/core/src/index';
 import { MemoryEventStream, MemoryPluginHost } from '../../packages/core/src/index';
 import { asTuiEvent } from '../../packages/tui/src/types/events';
@@ -370,6 +376,80 @@ describe('agent owner injection 0.17', () => {
     } finally {
       cleanup(dataDir);
     }
+  });
+
+  it('bridge without parentEvents degrades to deny (wiring options)', async () => {
+    const warnings: string[] = [];
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: (entry) => {
+        warnings.push(entry);
+      },
+      error: () => {},
+    };
+    const askTool: ToolDefinition = {
+      name: 'bash',
+      description: 'run a command',
+      inputSchema: { type: 'object', properties: {} },
+      checkPermission: async () => 'ask',
+      handler: async () => 'ok',
+    };
+    const host = new MemoryPluginHost();
+    host.registerTool(askTool);
+
+    let calls = 0;
+    const provider: LLMProvider = {
+      async chat(req) {
+        calls += 1;
+        if (calls === 1) {
+          return {
+            content: '',
+            finish_reason: 'tool_calls',
+            tool_calls: [
+              {
+                id: 'call-1',
+                type: 'function',
+                function: { name: 'bash', arguments: '{}' },
+              },
+            ],
+          };
+        }
+        const toolMessage = [...req.messages].reverse().find((entry) => entry.role === 'tool');
+        return { content: `final:${toolMessage?.content ?? ''}`, finish_reason: 'stop' };
+      },
+    };
+
+    // wiring 未传 parentEvents：bridge 无法转发，ask 必须按 deny 收口而不是挂起。
+    const memberRuntime = createInProcessMemberRuntime(
+      buildMemberRuntimeOptions(
+        wiringOptions(host, '/tmp/unused', {
+          permissionMode: 'bridge',
+          providerFactory: () => provider,
+          logger,
+        }),
+      ),
+    );
+    const member: MemberRuntimeMember = {
+      id: 'm1',
+      session_id: 'm1',
+      owner: 'main',
+      parent_id: 'main',
+      visibility: 'private',
+    };
+    await memberRuntime.spawn(member);
+    const result = await memberRuntime.runTurn(member, {
+      id: 'msg-1',
+      from: 'main',
+      to: 'm1',
+      content: 'run',
+      ts: 1,
+    });
+
+    expect(warnings).toContain('agent.member.permission_bridge_unavailable');
+    expect(warnings).toContain('agent.member.permission_ask_denied');
+    expect(result.content).toContain('denied');
+    await memberRuntime.dispose(member);
   });
 
   it('bridge permission request keeps existing TUI card fields', () => {
