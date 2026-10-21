@@ -66,10 +66,12 @@ import {
   stopGateway,
   writeForegroundGatewayPid,
 } from './gateway-command';
+import { createGatewayConfigSet } from './gateway-config-control';
 import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
 import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
+import { ensureInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
 import { type MockScenarioName, resolveMockScenario } from './mock/scenarios';
 import { createEventStream } from './observability-wiring';
@@ -698,13 +700,35 @@ async function runWithConfig(result: BootstrapResult) {
     // 0.6.1 P0-2：非 default tenant 只走 per-tenant runStore；
     // default tenant 由上面的 `durable` 提供（gateway 优先 opts.durable）。
     const durableFor = createDurableFor(tenantFactory, result.tenantId);
+    // 0.15：serve 的 config.set 写回面（对象变量避免对 ConfigGatewayOptionsLike 的
+    // 多余属性检查；serve 合入 0.15 后该字段会被正式识别）。
+    const tenantConfigControl = {
+      snapshot: (tenantId: string): ConfigSnapshotLike => {
+        const bundle = tenantFactory?.bundleFor(tenantId) ?? result.bundle;
+        if (!bundle) {
+          throw Object.assign(new Error(`forbidden: tenant "${tenantId}" is not configured`), {
+            code: 'forbidden',
+          });
+        }
+        return buildConfigSnapshot({
+          // A6-10：不向当前 tenant 暴露其它 tenant 的 overlay。
+          config: sanitizeConfigForSnapshot(bundle.config),
+          sources: bundle.configSources,
+          paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
+          tenantId,
+          tenantOverlayKeys: bundle.tenantOverlayKeys,
+        }) as unknown as ConfigSnapshotLike;
+      },
+      set: createGatewayConfigSet({ defaultTenantId: result.tenantId }),
+    };
     const gatewayOptions: GatewayOptions & {
       durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
     } = {
       // capabilities.list 需要真实版本；缺省会退化为 0.0.0。
       version: readPackageVersion(),
       // 0.13 Addendum A：权限交互持久化目录（serve 负责文件格式与原子写）。
-      interactionsDir: dataDir,
+      // 0.15：命名实例落到 <dataDir>/instances/<instance>，避免同 dataDir 互相覆盖。
+      interactionsDir: ensureInteractionsDir(dataDir, foregroundGatewayInstance),
       // 0.12：`gateway.reload`（serve 负责 RPC 形状/权限，asm 注入实际行为）。
       reload: createGatewayReload({
         // web 尚未合入 reconfigure 时该字段不存在；按结构化可选入口处理。
@@ -779,25 +803,7 @@ async function runWithConfig(result: BootstrapResult) {
               const metrics = tenantFactory?.metricsFor(tenantId);
               return metrics ? () => metrics.snapshot() : undefined;
             }) as unknown as (tenantId: string) => MetricsProvider,
-            config: {
-              snapshot: (tenantId: string) => {
-                const bundle = tenantFactory?.bundleFor(tenantId) ?? result.bundle;
-                if (!bundle) {
-                  throw Object.assign(
-                    new Error(`forbidden: tenant "${tenantId}" is not configured`),
-                    { code: 'forbidden' },
-                  );
-                }
-                return buildConfigSnapshot({
-                  // A6-10：不向当前 tenant 暴露其它 tenant 的 overlay。
-                  config: sanitizeConfigForSnapshot(bundle.config),
-                  sources: bundle.configSources,
-                  paths: bundle.configPaths ?? { user: '', project: 'vessel.yaml' },
-                  tenantId,
-                  tenantOverlayKeys: bundle.tenantOverlayKeys,
-                }) as unknown as ConfigSnapshotLike;
-              },
-            },
+            config: tenantConfigControl,
             trace: {
               readEvents: (filter: Record<string, unknown>, tenantId?: string) =>
                 readTraceEvents(

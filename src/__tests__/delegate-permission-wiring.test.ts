@@ -72,4 +72,28 @@ describe('buildDelegateTaskOptions', () => {
     expect(options.permissionMode).toBe('deny');
     expect(options.runtimeHost).toBe(runtimeHost);
   });
+
+  it('maps allowNested / maxDescendants with safe defaults', () => {
+    const defaults = buildDelegateTaskOptions({
+      config,
+      providerFactory: () => new MemoryLLMProvider(),
+      tenantId: 'acme',
+      providerModel: 'mock-model',
+      headless: false,
+      permission: resolveRuntimePermission(config, false),
+    });
+    expect(defaults.allowNested).toBe(false);
+    expect(defaults.maxDescendants).toBe(16);
+
+    const configured = buildDelegateTaskOptions({
+      config: { ...config, delegate: { allowNested: true, maxDescendants: 3 } },
+      providerFactory: () => new MemoryLLMProvider(),
+      tenantId: 'acme',
+      providerModel: 'mock-model',
+      headless: false,
+      permission: resolveRuntimePermission(config, false),
+    });
+    expect(configured.allowNested).toBe(true);
+    expect(configured.maxDescendants).toBe(3);
+  });
 });

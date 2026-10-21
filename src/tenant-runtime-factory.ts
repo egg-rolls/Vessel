@@ -83,6 +83,7 @@ import { createProvider } from './provider-factory';
 import { withReasoning } from './reasoning';
 import { closeRunStore, createRunStore } from './run-store-factory';
 import { isHostEnabled, tryCreateHostRuntime } from './runtime-factory';
+import { ownerSelfCard } from './self-card';
 import { createSessionControl, type SessionControl } from './session-control';
 import { createSessionBackend } from './session-factory';
 import { withSessionWriteLock } from './session-lock-runtime';
@@ -414,6 +415,8 @@ export function buildDelegateTaskOptions(
       : undefined,
     permissionMode: input.config.delegate?.permissionMode ?? (input.headless ? 'allow' : 'bridge'),
     readOnlyTools: input.config.delegate?.readOnlyTools,
+    allowNested: input.config.delegate?.allowNested ?? false,
+    maxDescendants: input.config.delegate?.maxDescendants ?? 16,
     permission: input.permission,
     ...(input.runtimeHost !== undefined ? { runtimeHost: input.runtimeHost } : {}),
   };
@@ -820,6 +823,10 @@ export async function buildTenantRuntime(
           plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
           systemPrompt,
           permission,
+          // 0.15 E9：主 agent 的 Self Card（成员由 delegate 轨负责）。
+          selfCard: ownerSelfCard(config, providerModel, {
+            askUser: options.registerAskUser === true,
+          }),
           ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
           ...(runStore ? { runStore } : {}),
           logger,

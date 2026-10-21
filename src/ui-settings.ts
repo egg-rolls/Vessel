@@ -23,6 +23,12 @@ import { type Locale, resolveLocale } from './i18n';
 /** 支持的 UI 语言（与 CLI / TUI catalog 一致） */
 export type UiLanguage = Locale;
 
+/** `ui.errorLevel`（0.15 TUI `/settings errorLevel`） */
+export type UiErrorLevel = 'user' | 'all';
+
+/** `ui.verbosity`（0.15 TUI `/settings verbosity`） */
+export type UiVerbosity = 'minimal' | 'normal' | 'debug';
+
 const SUPPORTED_LANGUAGES: ReadonlySet<string> = new Set(['zh-CN', 'en']);
 
 /** `ui.statusBars` 允许值（0.13） */
@@ -52,6 +58,14 @@ export interface ReplSettingsControlLike {
   statusBars: UiStatusBars | undefined;
   /** 写入用户配置 ui.status_bars；成功后就地更新 statusBars（0.13） */
   setStatusBars(value: UiStatusBars): Promise<void>;
+  /** 当前 ui.errorLevel；未配置时 undefined（0.15） */
+  errorLevel?: UiErrorLevel;
+  /** 写入用户配置 ui.error_level（0.15） */
+  setErrorLevel?(value: UiErrorLevel): Promise<void>;
+  /** 当前 ui.verbosity；未配置时 undefined（0.15） */
+  verbosity?: UiVerbosity;
+  /** 写入用户配置 ui.verbosity（0.15） */
+  setVerbosity?(value: UiVerbosity): Promise<void>;
 }
 
 /** `createReplSettings` 选项 */
@@ -62,6 +76,10 @@ export interface CreateReplSettingsOptions extends UiSettingsStoreOptions {
   configLanguage?: string;
   /** config.ui.statusBars；通常为已加载配置的值（0.13） */
   configStatusBars?: string;
+  /** config.ui.errorLevel（0.15） */
+  configErrorLevel?: string;
+  /** config.ui.verbosity（0.15） */
+  configVerbosity?: string;
 }
 
 /** 是否为受支持的 UI 语言 */
@@ -252,6 +270,12 @@ export function createReplSettings(
   let statusBars: UiStatusBars | undefined = isUiStatusBars(options.configStatusBars)
     ? options.configStatusBars
     : undefined;
+  let errorLevel: UiErrorLevel | undefined = isUiErrorLevel(options.configErrorLevel)
+    ? (options.configErrorLevel as UiErrorLevel)
+    : undefined;
+  let verbosity: UiVerbosity | undefined = isUiVerbosity(options.configVerbosity)
+    ? (options.configVerbosity as UiVerbosity)
+    : undefined;
   return {
     language: resolveLocale({
       env: options.env ?? process.env,
@@ -269,6 +293,28 @@ export function createReplSettings(
         configPath !== undefined ? { configPath } : {},
       );
       statusBars = value;
+    },
+    get errorLevel(): UiErrorLevel | undefined {
+      return errorLevel;
+    },
+    setErrorLevel: async (value: UiErrorLevel): Promise<void> => {
+      await setUserConfigValue(
+        'ui.errorLevel',
+        value,
+        configPath !== undefined ? { configPath } : {},
+      );
+      errorLevel = value;
+    },
+    get verbosity(): UiVerbosity | undefined {
+      return verbosity;
+    },
+    setVerbosity: async (value: UiVerbosity): Promise<void> => {
+      await setUserConfigValue(
+        'ui.verbosity',
+        value,
+        configPath !== undefined ? { configPath } : {},
+      );
+      verbosity = value;
     },
   };
 }

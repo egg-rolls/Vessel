@@ -78,6 +78,7 @@ import {
   normalizeConnectUrl,
   type RpcClient,
 } from './rpc/index';
+import { ownerSelfCard } from './self-card';
 import { resolveGatewayAuth } from './serve-auth';
 import type { SessionControl } from './session-control';
 import { acquireSessionLock, type SessionLock, SessionLockedError } from './session-lock';
@@ -664,6 +665,12 @@ async function bootstrapConnect(input: {
       ...(input.config.ui?.statusBars !== undefined
         ? { configStatusBars: input.config.ui.statusBars }
         : {}),
+      ...(input.config.ui?.errorLevel !== undefined
+        ? { configErrorLevel: input.config.ui.errorLevel }
+        : {}),
+      ...(input.config.ui?.verbosity !== undefined
+        ? { configVerbosity: input.config.ui.verbosity }
+        : {}),
     }),
     version: readPackageVersion(),
     newSessionId,
@@ -956,6 +963,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         pluginHost: finalPluginHost,
         systemPrompt,
         permission,
+        selfCard: ownerSelfCard(config, providerModel, { askUser: registerAskUser }),
         ...(runStore ? { runStore } : {}),
         logger,
       }),
@@ -1373,6 +1381,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       configPath: permissionConfigPath,
       configLanguage: config.ui?.language,
       ...(config.ui?.statusBars !== undefined ? { configStatusBars: config.ui.statusBars } : {}),
+      ...(config.ui?.errorLevel !== undefined ? { configErrorLevel: config.ui.errorLevel } : {}),
+      ...(config.ui?.verbosity !== undefined ? { configVerbosity: config.ui.verbosity } : {}),
     }),
     // 0.3 注入面：未启用时保持 undefined，既有行为不变。
     ...(mcpControl ? { mcp: mcpControl } : {}),
