@@ -9,6 +9,8 @@
  */
 
 import type { RunEvent } from '@vessel-agent/core';
+import { t } from '../i18n/index.js';
+import { type LimitBlockInfo, readLimitBlock } from './limit-info.js';
 
 export type ErrorLevel = 'user' | 'all';
 
@@ -27,6 +29,8 @@ export interface ErrorLogEntry {
   category?: string;
   phase?: string;
   retryable?: boolean;
+  /** `limit_blocked` envelope（存在时 /errors 追加短括号段） */
+  limit?: LimitBlockInfo;
 }
 
 export interface CollectErrorsOptions {
@@ -129,12 +133,15 @@ function toEntry(event: RunEvent, level: 'user' | 'internal'): ErrorLogEntry | n
     };
   }
 
-  const userLevel = USER_ERROR_TYPES.has(type) || USER_ERROR_TYPES.has(base);
+  const limit = readLimitBlock(event);
+  const userLevel = USER_ERROR_TYPES.has(type) || USER_ERROR_TYPES.has(base) || limit !== undefined;
   const internalLevel = isInternalError(type);
   if (level === 'user' && !userLevel) return null;
   if (level === 'internal' && !internalLevel) return null;
 
-  const message = messageOf(data);
+  const rawMessage = messageOf(data);
+  const message =
+    rawMessage.length === 0 && limit !== undefined ? t('errors.limitBlocked') : rawMessage;
   if (message.length === 0) return null;
 
   const sessionId = readString(data, 'session_id');
@@ -157,6 +164,7 @@ function toEntry(event: RunEvent, level: 'user' | 'internal'): ErrorLogEntry | n
     ...(category !== undefined ? { category } : {}),
     ...(phase !== undefined ? { phase } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
+    ...(limit !== undefined ? { limit } : {}),
   };
 }
 

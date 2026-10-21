@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+import type { VesselConfig } from '@vessel-agent/config';
 import type { RunEvent } from '@vessel-agent/core';
-import { formatAgentDetail, formatAgentList } from '../src/commands/agents-command.js';
+import {
+  buildAgentSelfCard,
+  formatAgentDetail,
+  formatAgentList,
+} from '../src/commands/agents-command.js';
 import { createCommands } from '../src/commands/commands.js';
 import { setLocale } from '../src/i18n/index.js';
 import { buildAgentRegistry } from '../src/repl/agent-registry.js';
@@ -111,5 +116,90 @@ describe('/agents', () => {
     const detail = formatAgentDetail(node, 3000);
     expect(detail).toContain('tool exploded');
     expect(detail).toContain('2s');
+  });
+
+  it('renders the Self Card with seen tools, delegate limits, remaining budget, and block', () => {
+    setLocale('en');
+    const events = [
+      ev(
+        'subagent.delegate.started',
+        'run-parent',
+        { delegateId: 'd1', depth: 0, task: 'inspect repo', session_id: 's1' },
+        1000,
+      ),
+      ev('subagent.run.started', 'run-child', { delegateId: 'd1' }, 1100),
+      ev('subagent.tool.call.started', 'run-child', { delegateId: 'd1', tool_name: 'bash' }, 1200),
+      ev(
+        'subagent.llm.response',
+        'run-child',
+        { delegateId: 'd1', usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 } },
+        1300,
+      ),
+      ev(
+        'subagent.limit.blocked',
+        'run-child',
+        {
+          delegateId: 'd1',
+          scope: 'agent',
+          key: 'toolCallsLimit',
+          current: 4,
+          max: 4,
+          source: 'config.delegate.limits',
+        },
+        1400,
+      ),
+    ];
+    const config = {
+      delegate: {
+        termination: { maxIterations: 5, maxRuntimeSeconds: 30 },
+        limits: { toolCallsLimit: 4 },
+      },
+    } as VesselConfig;
+    const node = buildAgentRegistry(events)[0];
+    if (!node) throw new Error('expected node');
+
+    const card = buildAgentSelfCard(events, config, node, 11_000);
+    const detail = formatAgentDetail(node, 11_000, card);
+    expect(detail).toContain('as_of');
+    expect(detail).toContain('bash (seen)');
+    expect(detail).toContain('iterations 5 · tools 4 · runtime 30s');
+    expect(detail).toContain('iterations 4 · tools 3 · runtime 20s');
+    expect(detail).toContain('agent/toolCallsLimit 4/4 · config.delegate.limits');
+  });
+
+  it('prefers explicitly declared tools over tools already seen', () => {
+    const events = [
+      ev(
+        'subagent.delegate.started',
+        'run-parent',
+        { delegateId: 'd2', depth: 0, tools: ['read', 'edit'] },
+        1000,
+      ),
+      ev('subagent.tool.call.started', 'run-parent', { delegateId: 'd2', tool_name: 'bash' }, 1100),
+    ];
+    const node = buildAgentRegistry(events)[0];
+    if (!node) throw new Error('expected node');
+
+    const detail = formatAgentDetail(
+      node,
+      2000,
+      buildAgentSelfCard(events, {} as VesselConfig, node, 2000),
+    );
+    expect(detail).toContain('read, edit');
+    expect(detail).not.toContain('bash (seen)');
+  });
+
+  it('keeps the list columns free of Self Card fields and defaults to unknown', () => {
+    const events = [ev('subagent.delegate.started', 'run-parent', { delegateId: 'd1' }, 1000)];
+    const node = buildAgentRegistry(events)[0];
+    if (!node) throw new Error('expected node');
+
+    const list = formatAgentList([node], 2000);
+    expect(list).not.toContain('as_of');
+    expect(list).not.toContain('remaining');
+
+    const detail = formatAgentDetail(node, 2000);
+    expect(detail).toContain('as_of');
+    expect(detail).toContain('unknown');
   });
 });

@@ -15,6 +15,7 @@ import {
   type ErrorLevel,
   type ErrorLogEntry,
 } from '../repl/error-log.js';
+import { formatLimitBlock } from '../repl/limit-info.js';
 import type { ReplContext } from '../repl-context.js';
 import { sanitizeTerminalText } from '../utils/sanitize-terminal-text.js';
 import { truncateToWidth } from '../utils/text-layout.js';
@@ -91,6 +92,7 @@ export function formatErrorEntry(entry: ErrorLogEntry): string {
     entry.type,
     ...(location.length > 0 ? [location.join(' · ')] : []),
     ...(meta !== undefined ? [meta] : []),
+    ...(entry.limit !== undefined ? [`[${formatLimitBlock(entry.limit)}]`] : []),
     message,
   ];
   return truncateToWidth(chunks.join('  '), ENTRY_MAX_WIDTH);

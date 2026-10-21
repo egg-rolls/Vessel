@@ -13,6 +13,15 @@ import { t } from '../i18n/index.js';
 import type { ReplContext } from '../repl-context.js';
 import { formatDuration } from '../utils/display-labels.js';
 import { padToWidth } from '../utils/text-layout.js';
+import {
+  type EffectiveLimits,
+  findLatestLimitBlock,
+  formatLimitBlock,
+  type LimitBlockInfo,
+  readEffectiveLimits,
+  readRunUsage,
+  type UsageSnapshot,
+} from './limit-info.js';
 
 /** 与 config / core 一致的默认上下文预算（ADR-064） */
 const DEFAULT_CONTEXT_MAX_TOKENS = 1_000_000;
@@ -31,6 +40,12 @@ export interface StatusSnapshot {
   sessionId: string;
   provider: { name: string; model: string; baseUrl: string };
   context: { used: number; max: number; messages: number };
+  /** 主 agent 有效限制（配置 + 运行默认） */
+  limits: EffectiveLimits;
+  /** active run 的已用量；idle 时 undefined（展示为 `-`） */
+  usage?: UsageSnapshot;
+  /** active run 最近一次限制命中 */
+  limitBlock?: LimitBlockInfo;
   permissions: { autoApprove: string[]; pending: number };
   queue: { input: number };
   instance: {
@@ -123,10 +138,15 @@ export function buildStatusSnapshot(
   const estimated = estimateContextUsage(messages, { maxTokens });
   const used = ctx.context.tokenCount > 0 ? ctx.context.tokenCount : estimated.totalTokens;
   const autoApprove = ctx.config.permission?.autoApprove ?? [];
+  const run = findActiveRun(events);
+  const runId = run.state === 'running' ? run.runId : undefined;
+  const usage = runId !== undefined ? readRunUsage(events, runId, now) : undefined;
+  const limitBlock =
+    runId !== undefined ? findLatestLimitBlock(events, { runIds: [runId] }) : undefined;
 
   return {
     asOf: now,
-    run: findActiveRun(events),
+    run,
     sessionId: state.currentSessionId,
     provider: {
       name: ctx.provider.name,
@@ -138,6 +158,9 @@ export function buildStatusSnapshot(
       max: maxTokens,
       messages: messages.length,
     },
+    limits: readEffectiveLimits(ctx.config),
+    ...(usage !== undefined ? { usage } : {}),
+    ...(limitBlock !== undefined ? { limitBlock } : {}),
     permissions: {
       autoApprove: [...autoApprove],
       pending: countPendingPermissions(events),
@@ -177,6 +200,21 @@ function truncateList(values: string[], maxWidth: number): string {
   return joined.length <= maxWidth ? joined : `${joined.slice(0, Math.max(0, maxWidth - 1))}…`;
 }
 
+/** 上限值：未配置 = unbounded（保持配置值可见，不推测） */
+function limitMax(max: number | undefined): string {
+  return max === undefined ? t('limits.unbounded') : groupNumber(max);
+}
+
+/** 已用值：idle 显示 `-`；运行中但事件没给字段时显示 unknown */
+function usedValue(running: boolean, used: number | undefined): string {
+  if (!running) return t('status.noUsage');
+  return used === undefined ? t('limits.unknown') : groupNumber(used);
+}
+
+function formatCost(value: number): string {
+  return value.toFixed(4);
+}
+
 /** 纯函数：快照 -> 一屏文本（label 全部走 t()） */
 export function formatStatusSnapshot(snapshot: StatusSnapshot): string {
   const { run } = snapshot;
@@ -198,6 +236,40 @@ export function formatStatusSnapshot(snapshot: StatusSnapshot): string {
     max: groupNumber(snapshot.context.max),
     percent,
     messages: snapshot.context.messages,
+  });
+
+  const usage = snapshot.usage;
+  const running = usage !== undefined;
+  const limitsValue = t('status.limitsValue', {
+    iterations: usedValue(running, usage?.requests),
+    maxIterations: limitMax(snapshot.limits.maxIterations),
+    tools: usedValue(running, usage?.toolCalls),
+    maxTools: limitMax(snapshot.limits.toolCallsLimit),
+    runtime:
+      running && usage?.elapsedMs !== undefined
+        ? formatDuration(usage.elapsedMs)
+        : t('status.noUsage'),
+    maxRuntime:
+      snapshot.limits.maxRuntimeSeconds !== undefined
+        ? formatDuration(snapshot.limits.maxRuntimeSeconds * 1000)
+        : t('limits.unbounded'),
+  });
+  const budgetValue = t('status.budgetValue', {
+    input: usedValue(running, usage?.promptTokens),
+    maxInput: limitMax(snapshot.limits.inputTokensLimit),
+    output: usedValue(running, usage?.completionTokens),
+    maxOutput: limitMax(snapshot.limits.outputTokensLimit),
+    context: groupNumber(snapshot.context.used),
+    maxContext: groupNumber(snapshot.context.max),
+    cost: running
+      ? usage?.totalCost !== undefined
+        ? formatCost(usage.totalCost)
+        : t('limits.unknown')
+      : t('status.noUsage'),
+    maxCost:
+      snapshot.limits.totalCostLimit !== undefined
+        ? formatCost(snapshot.limits.totalCostLimit)
+        : t('limits.unbounded'),
   });
 
   const tools = truncateList(snapshot.permissions.autoApprove, 48);
@@ -233,6 +305,11 @@ export function formatStatusSnapshot(snapshot: StatusSnapshot): string {
       `${snapshot.provider.name} · ${snapshot.provider.model} · ${snapshot.provider.baseUrl}`,
     ),
     line(t('status.label.context'), contextValue),
+    line(t('status.label.limits'), limitsValue),
+    line(t('status.label.budget'), budgetValue),
+    ...(snapshot.limitBlock !== undefined
+      ? [`  ${t('status.limitBlocked', { value: formatLimitBlock(snapshot.limitBlock) })}`]
+      : []),
     line(t('status.label.permissions'), permissionsValue),
     line(t('status.label.queue'), t('status.queueValue', { count: snapshot.queue.input })),
     line(t('status.label.instance'), instanceParts.join(' · ')),
