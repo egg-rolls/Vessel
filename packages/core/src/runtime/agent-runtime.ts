@@ -5,7 +5,12 @@
 
 import { randomUUID } from 'node:crypto';
 import { estimateMessagesTokens } from '../context/index.js';
-import { evaluateUsageLimits, LimitExceededError, MemoryLimitChecker } from '../limits/index.js';
+import {
+  evaluateTermination,
+  evaluateUsageLimits,
+  LimitExceededError,
+  MemoryLimitChecker,
+} from '../limits/index.js';
 import { createStderrLogger, noopLogger } from '../logging.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent } from '../types/event.js';
@@ -746,8 +751,20 @@ export class AgentRuntime {
       }
 
       // 检查终止条件
-      if (this.limitChecker.checkTermination(stats, this.termination)) {
-        throw new Error('Termination policy triggered: max iterations or runtime exceeded');
+      const terminationBlock = evaluateTermination(stats, this.termination);
+      if (terminationBlock) {
+        this.publishEvent({
+          type: 'limit.blocked',
+          run_id: runId,
+          data: {
+            error_code: 'limit_blocked',
+            ...terminationBlock,
+            run_id: runId,
+            session_id: sessionId,
+          },
+          ts: Date.now(),
+        });
+        throw new LimitExceededError(terminationBlock);
       }
 
       // 检查使用量限制（含 request_limit、tool_calls_limit、token/cost 预算）——硬上限

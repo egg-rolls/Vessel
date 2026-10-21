@@ -12,13 +12,15 @@ export interface UsageLimits {
   totalCostLimit?: number;
 }
 
-/** 命中的使用量上限 key */
+/** 命中的使用量 / 终止上限 key */
 export type LimitBlockKey =
   | 'request_limit'
   | 'tool_calls_limit'
   | 'input_tokens_limit'
   | 'output_tokens_limit'
-  | 'total_cost_limit';
+  | 'total_cost_limit'
+  | 'max_iterations'
+  | 'max_runtime';
 
 /** 命中的使用量上限（冻结形状：事件与 error envelope 共用） */
 export interface LimitBlock {

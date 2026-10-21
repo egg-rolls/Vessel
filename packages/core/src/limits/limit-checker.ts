@@ -71,6 +71,41 @@ export function evaluateUsageLimits(stats: UsageStats, limits: UsageLimits): Lim
   return null;
 }
 
+/** 命中的终止上限（与 evaluateUsageLimits 同形状，供事件 / envelope 复用） */
+export function evaluateTermination(
+  stats: UsageStats,
+  policy: TerminationPolicy,
+): LimitBlock | null {
+  if (stats.requestCount >= policy.maxIterations) {
+    return {
+      scope: 'run',
+      key: 'max_iterations',
+      current: stats.requestCount,
+      max: policy.maxIterations,
+      source: 'termination.maxIterations',
+      hint: 'Increase termination.maxIterations or reduce tool round-trips in the task.',
+      retryable: false,
+    };
+  }
+
+  if (policy.maxRuntimeSeconds !== undefined) {
+    const elapsed = Math.round(((Date.now() - stats.startTime) / 1000) * 1000) / 1000;
+    if (elapsed >= policy.maxRuntimeSeconds) {
+      return {
+        scope: 'run',
+        key: 'max_runtime',
+        current: elapsed,
+        max: policy.maxRuntimeSeconds,
+        source: 'termination.maxRuntimeSeconds',
+        hint: 'Increase termination.maxRuntimeSeconds or shorten the task.',
+        retryable: false,
+      };
+    }
+  }
+
+  return null;
+}
+
 /**
  * 限制检查器实现
  */
@@ -92,20 +127,7 @@ export class MemoryLimitChecker implements LimitChecker {
    * @returns 是否应该终止
    */
   checkTermination(stats: UsageStats, policy: TerminationPolicy): boolean {
-    // 检查最大迭代次数
-    if (stats.requestCount >= policy.maxIterations) {
-      return true;
-    }
-
-    // 检查最大运行时间
-    if (policy.maxRuntimeSeconds !== undefined) {
-      const elapsed = (Date.now() - stats.startTime) / 1000;
-      if (elapsed >= policy.maxRuntimeSeconds) {
-        return true;
-      }
-    }
-
-    return false;
+    return evaluateTermination(stats, policy) !== null;
   }
 
   /**
