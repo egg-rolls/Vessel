@@ -3,6 +3,32 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.14.3] - 2026-10-21
+
+> 0.14.3（基于 `release/0.14.3`，未发布）：限额命中的可见性与结构化、默认预算调整、provider HTTP 错误与重试分类。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。
+
+### Fixed
+
+- **限额命中不可见**：使用量上限命中时，runtime 发布一次 `limit.blocked` 事件（data 含 `error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`。`run.failed` 保留原 `error` 文本，同时附 `error_code: 'limit_blocked'` / `category: 'internal'` / `phase: 'run'` / `retryable: false` / `details: <LimitBlock>`。此前只抛 `Error('Usage limits exceeded')`，事件流与终端看不出命中了哪一项、当前值与上限。
+- **默认输入 token 上限过低**：`limits.inputTokensLimit` 默认 100,000 → 1,000,000，与 `context.maxTokens` 的 1M 预算对齐；此前长上下文任务可能在压缩生效前被限额终止。
+- **默认最大迭代次数过低**：`termination.maxIterations` 默认 20 → 50；`maxRuntimeSeconds` 仍 300。
+- **Provider 非 2xx 丢失结构化信息**：OpenAI / Anthropic 的流式与非流式 4 处非 2xx 改抛 `ProviderHttpError`（`status` / `body` / `retryAfterMs`），message 仍为 `OpenAI API error: <status> - <body>` / `Anthropic API error: <status> - <body>`；错误 envelope 可从错误对象的 `status` 读取 `http_status`。
+- **429 不读 Retry-After**：`provider-openai` / `provider-anthropic` 的 retry 在 429 时优先按错误上的 `retryAfterMs` / `retry_after_ms`（毫秒）、`retryAfter` / `retry_after`（秒）或 `retry-after` 头退避，受 `retry_max_delay_ms` 截断且不加抖动。
+- **402 被重试**：额度耗尽（402）不再重试，避免再消耗一次配额；5xx 与网络错误行为不变（指数退避 + 抖动）。
+
+### Changed
+
+- **`LimitBlock` / `LimitExceededError` / `evaluateUsageLimits` 导出**（additive）：core 公开类型与纯函数，`MemoryLimitChecker.checkLimits` 复用同一判定；`limit.blocked` 仍是开放字符串事件名。
+- **Provider 重试分类**：`withRetry` 只重试 429、5xx 与网络错误；其它 4xx（含 402）与 `AbortError` 不重试；流式已输出分片后不重试（不变）。
+- 无新增 canonical RPC 方法（仍 40），无新增配置键；终止策略（`maxIterations` / `maxRuntimeSeconds`）仍是独立错误，不产生 `LimitBlock`。
+
+### Known limitations
+
+- 终止策略超限（`maxIterations` / `maxRuntimeSeconds`）仍抛普通 `Error('Termination policy triggered: ...')`，不发布 `limit.blocked`、不带结构化 `details`。
+- `retry-after` 只影响 429；402 与其它 4xx 直接失败。
+- `ProviderHttpError.retryAfterMs` 只在 provider 适配层可用；`run.failed` envelope 只透出 `http_status`，不透出建议退避时间。
+- 0.14.3 仍未 tag、未 `npm publish`、未合并 `main`；manifest 版本由 1 在收口时统一写入。
+
 ## [0.14.2] - 2026-10-21
 
 > 0.14.2（基于 `release/0.14.2`，未发布）：两个缺陷修复——thinking 模型压缩后请求 400、bash 命令文本绕过内置凭据 denylist。以下均为已实现；未 tag、未 `npm publish`、未合并 `main`。

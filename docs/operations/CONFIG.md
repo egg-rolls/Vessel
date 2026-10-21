@@ -214,6 +214,26 @@ observability:
 - **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
 - **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
+### 2.8 限额与终止（0.14.3，ADR-084）
+
+```yaml
+limits:
+  request_limit: 100            # 单 run 的 LLM 请求次数上限
+  tool_calls_limit: 50          # 单 run 的工具调用次数上限
+  input_tokens_limit: 1000000   # 单 run 累计输入 token 上限
+  output_tokens_limit: 50000    # 单 run 累计输出 token 上限
+  # total_cost_limit: 1.5      # 单 run 累计成本上限；缺省不限制
+termination:
+  max_iterations: 50            # 迭代上限
+  max_runtime_seconds: 300      # 单 run 墙钟秒数上限
+```
+
+- **默认值**（0.14.3）：`request_limit` 100、`tool_calls_limit` 50、`input_tokens_limit` 1,000,000（原 100,000，与 `context.maxTokens` 对齐）、`output_tokens_limit` 50,000；`max_iterations` 50（原 20）、`max_runtime_seconds` 300。`total_cost_limit` 无默认值。
+- **判定**：每轮先判终止策略（`max_iterations` / `max_runtime_seconds`，超限抛普通 `Error('Termination policy triggered: ...')`），再判使用量限额。使用量限额按 `current >= max` 判定，检查顺序固定 request → tool calls → input tokens → output tokens → total cost，首个命中生效。默认 `max_iterations` 50 先于 `request_limit` 100 触发；要提高请求次数的实际上限，两者需一起调整。
+- **命中行为**：发布一次 `limit.blocked`（`error_code: 'limit_blocked'`、`scope` / `key` / `current` / `max` / `source` / `hint` / `retryable: false`、`run_id`、`session_id`），并抛 `LimitExceededError`；`run.failed` 保留原 `error` 文本，附同一结构化的 `details`。`source` 是对应的 camelCase 配置路径（如 `limits.inputTokensLimit`）。
+- **成本**：core 不为内置 provider 计价，`total_cost` 默认为 0；`total_cost_limit` 只在宿主显式调用 `LimitChecker.addCost()` 后才有意义。
+- **不新增配置键**：以上键均已存在，tenant overlay 可覆盖 `limits` / `termination`。终止策略不属于 `LimitBlock`，`/errors` 只能看到普通错误文本。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：
