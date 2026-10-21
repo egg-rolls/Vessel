@@ -12,7 +12,7 @@ import type { EventHandler, EventStream, Unsubscribe } from '../types/event.js';
 import type { TerminationPolicy, UsageLimits } from '../types/limits.js';
 import type { PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { LLMProvider, Message, Usage } from '../types/provider.js';
-import type { RunOptions } from '../types/run.js';
+import type { RunInterruptReason, RunOptions } from '../types/run.js';
 import type { RunStore } from '../types/run-store.js';
 import type { SessionBackend } from '../types/session.js';
 
@@ -125,7 +125,12 @@ export interface AgentHandle {
   run(input: string | Message, opts?: RunOptions): Promise<RunHandle>;
   send(message: AgentMessage): Promise<void>;
   inbox(cursor?: string): Promise<InboxPage>;
-  cancel(runId?: string): void;
+  /**
+   * 取消排队 / 运行中的 run。
+   * `reason` 复用 0.13 的中断语义：`shutdown` / `timeout` → interrupted checkpoint，
+   * `user`（或未传）→ cancelled；经 AbortSignal.reason 透传给成员 runtime。
+   */
+  cancel(runId?: string, reason?: RunInterruptReason): void;
   close(): Promise<void>;
 }
 
@@ -225,6 +230,11 @@ export interface ScheduledTask {
   agent: AgentHandle;
   /** 成员默认 session；R2 用于 RunHandle.sessionId */
   sessionId?: string;
+  /**
+   * 0.14.1（additive）：固定 run id。Host.resume 用它保持 `RunHandle.id` 与原 run 一致；
+   * 缺省由 Scheduler 生成。重复 id 的 submit 会被拒绝。
+   */
+  runId?: string;
   input: string | Message;
   opts?: RunOptions;
   /** 预留：0.2 只做 FIFO，不实现优先级 */
@@ -253,11 +263,59 @@ export interface SchedulerStats {
   cancelled: number;
 }
 
+/** 一次 run 的只读摘要（0.14.1，纯 JSON，可安全序列化） */
+export interface RunSnapshot {
+  runId: string;
+  agentId: string;
+  sessionId: string;
+  state: RunStatus;
+  /** FIFO 队列位置（1 起；仅 queued 时有） */
+  queuePosition?: number;
+  /** 入队时间（Unix ms） */
+  queuedAt?: number;
+  /** 开始执行时间（Unix ms；仅 running 时有） */
+  startedAt?: number;
+}
+
+/** 一个成员的只读摘要（0.14.1，纯 JSON） */
+export interface AgentSnapshot {
+  id: string;
+  name?: string;
+  state: AgentState;
+  /** 当前 run 的 session；空闲时为成员默认 session */
+  sessionId: string;
+  currentRunId?: string;
+  toolNames: string[];
+  lastError?: string;
+  /** 当前 run 开始时间（Unix ms） */
+  startedAt?: number;
+  /** 该成员排队中的位置（1 起） */
+  queuePosition?: number;
+}
+
+/** Scheduler 只读快照（0.14.1） */
+export interface SchedulerSnapshot {
+  asOf: number;
+  queued: RunSnapshot[];
+  running: RunSnapshot[];
+  stats: SchedulerStats;
+}
+
+/** Host 只读快照：agent / run / queue（0.14.1） */
+export interface HostSnapshot {
+  asOf: number;
+  agents: AgentSnapshot[];
+  runs: RunSnapshot[];
+  scheduler: SchedulerSnapshot;
+}
+
 /** 调度器契约（F2：R1 只冻结类型；R2 实现完整队列） */
 export interface Scheduler {
   submit(task: ScheduledTask): Promise<RunHandle>;
   cancel(runId: string, reason?: string): boolean;
   stats(): SchedulerStats;
+  /** 可选：只读快照；自定义 Scheduler 可不实现（Host 会降级） */
+  snapshot?(): SchedulerSnapshot;
   close(): Promise<void>;
 }
 
@@ -276,13 +334,16 @@ export interface RuntimeHost {
    */
   inbox(id: string, cursor?: string): Promise<InboxPage>;
   /** 生命周期便捷入口；委托给 AgentHandle.cancel */
-  cancel(id: string, runId?: string): void;
+  cancel(id: string, runId?: string, reason?: RunInterruptReason): void;
   close(): Promise<void>;
   /**
    * 从 durable checkpoint 恢复一次 run（additive）。
    * 恢复后 `RunHandle.id` 与原 `run_id` 相同；未配置 RunStore 的实现可不提供。
+   * 0.14.1：恢复经 Scheduler 排队，受并发 / 成员串行约束；`opts.signal` 可取消。
    */
-  resume?(runId: string): Promise<RunHandle>;
+  resume?(runId: string, opts?: RunOptions): Promise<RunHandle>;
+  /** 可选：agent / run / queue 的只读、可序列化快照（0.14.1） */
+  snapshot?(): HostSnapshot;
 }
 
 /**
@@ -304,4 +365,10 @@ export interface RuntimeOptions {
   runStore?: RunStore;
   /** 0.5：Host 级 tenant；成员 spec.tenantId 优先 */
   tenantId?: string;
+  /** 0.14.1：透传给每个成员 runtime 的插件安装配置 */
+  pluginConfigs?: Record<string, Record<string, unknown>>;
+  /** 0.14.1：透传给每个成员 runtime 的诊断 logger */
+  logger?: import('../types/logging.js').Logger;
+  /** 0.14.1：透传给每个成员 runtime 的 reasoning 开关 */
+  includeReasoning?: boolean;
 }

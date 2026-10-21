@@ -18,9 +18,10 @@ import { AgentRuntime } from '../runtime/agent-runtime.js';
 import { MemoryPluginHost } from '../runtime/plugin-host.js';
 import type { ContextManager } from '../types/context.js';
 import type { EventStream, RunEvent, Unsubscribe } from '../types/event.js';
+import type { Logger } from '../types/logging.js';
 import type { AgentRuntimeOptions, PluginHost, RuntimePermissionConfig } from '../types/plugin.js';
 import type { Message, Usage } from '../types/provider.js';
-import type { RunOptions } from '../types/run.js';
+import type { RunInterruptReason, RunOptions } from '../types/run.js';
 import type { RunStore } from '../types/run-store.js';
 import { RunResumeError } from '../types/run-store.js';
 import type { SessionBackend } from '../types/session.js';
@@ -36,19 +37,23 @@ import { AgentSessionScope } from './session-scope.js';
 import type {
   AgentHandle,
   AgentMessage,
+  AgentSnapshot,
   AgentSpec,
   AgentState,
   AgentStatus,
   EventBus,
+  HostSnapshot,
   InboxPage,
   Limits,
   RunHandle,
   RunnableAgent,
+  RunSnapshot,
   RunStatus,
   RuntimeHost,
   ScheduledTask,
   Scheduler,
   SchedulerOptions,
+  SchedulerSnapshot,
   Transport,
 } from './types.js';
 
@@ -87,6 +92,12 @@ export interface InProcessRuntimeHostOptions {
    * `Host.resume` 也用它加载 checkpoint。Host 自身不写 checkpoint。
    */
   runStore?: RunStore;
+  /** 0.14.1：透传给每个成员 runtime 的插件安装配置 */
+  pluginConfigs?: Record<string, Record<string, unknown>>;
+  /** 0.14.1：透传给每个成员 runtime 的诊断 logger */
+  logger?: Logger;
+  /** 0.14.1：透传给每个成员 runtime 的 reasoning 开关 */
+  includeReasoning?: boolean;
 }
 
 /** Agent id 合法字符集（A11） */
@@ -117,6 +128,11 @@ function withAgentId(data: unknown, agentId: string): Record<string, unknown> {
     return { ...(data as Record<string, unknown>), agentId };
   }
   return { value: data, agentId };
+}
+
+/** 从 abort reason 提取可序列化的取消原因；非字符串（如 DOMException）不写入事件 */
+function cancelReasonFields(signal: AbortSignal): Record<string, unknown> {
+  return typeof signal.reason === 'string' ? { reason: signal.reason } : {};
 }
 
 /** 解析收件箱游标；非法值按 0 */
@@ -170,6 +186,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
   readonly transport?: Transport;
   private readonly runStore?: RunStore;
   private readonly tenantId?: string;
+  private readonly pluginConfigs?: Record<string, Record<string, unknown>>;
+  private readonly logger?: Logger;
+  private readonly includeReasoning?: boolean;
   /** 同一 run 的并发 resume 锁（进程内） */
   private readonly resuming = new Set<string>();
   private closed = false;
@@ -185,6 +204,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
     this.transport = options.transport;
     this.runStore = options.runStore;
     this.tenantId = options.tenantId;
+    this.pluginConfigs = options.pluginConfigs;
+    this.logger = options.logger;
+    this.includeReasoning = options.includeReasoning;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     this.eventStreamFactory = options.eventStreamFactory ?? (() => new MemoryEventStream());
@@ -253,6 +275,10 @@ export class InProcessRuntimeHost implements RuntimeHost {
         // 0.3：Host 的 store 优先；checkpoint 单写者是成员 runtime
         ...(this.runStore ? { runStore: this.runStore } : {}),
         ...(tenantId !== undefined ? { tenantId } : {}),
+        // 0.14.1：Host 级配置透传（成员可覆写的更细粒度留后）
+        ...(this.pluginConfigs !== undefined ? { pluginConfigs: this.pluginConfigs } : {}),
+        ...(this.logger !== undefined ? { logger: this.logger } : {}),
+        ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
         agentId: id,
       });
 
@@ -367,19 +393,83 @@ export class InProcessRuntimeHost implements RuntimeHost {
     return this.readPage(this.extraInboxes.get(id) ?? [], cursor);
   }
 
-  cancel(id: string, runId?: string): void {
+  cancel(id: string, runId?: string, reason?: RunInterruptReason): void {
     const handle = this.handles.get(id);
     if (!handle) throw new Error(`unknown agent: ${id}`);
-    handle.cancel(runId);
+    handle.cancel(runId, reason);
+  }
+
+  /** 0.14.1：agent / run / queue 的只读快照（纯 JSON） */
+  snapshot(): HostSnapshot {
+    const schedulerSnapshot = this.scheduler.snapshot?.();
+    const asOf = schedulerSnapshot?.asOf ?? Date.now();
+    const queued = schedulerSnapshot?.queued ?? [];
+    const running = schedulerSnapshot?.running ?? [];
+
+    const queuePositions = new Map<string, number>();
+    for (const entry of queued) {
+      if (entry.queuePosition !== undefined && !queuePositions.has(entry.agentId)) {
+        queuePositions.set(entry.agentId, entry.queuePosition);
+      }
+    }
+
+    const agents: AgentSnapshot[] = [...this.members.values()].map((record) =>
+      this.toAgentSnapshot(record, queuePositions.get(record.id)),
+    );
+
+    // 自定义 Scheduler 不提供 snapshot 时，降级为成员 active run 摘要
+    const runs: RunSnapshot[] = schedulerSnapshot
+      ? [...running, ...queued]
+      : [...this.members.values()].flatMap((record): RunSnapshot[] => {
+          const active = record.active;
+          if (!active) return [];
+          return [
+            {
+              runId: active.id,
+              agentId: record.id,
+              sessionId: active.sessionId,
+              state: active.status(),
+              startedAt: active.startedAt,
+            },
+          ];
+        });
+
+    const scheduler: SchedulerSnapshot = schedulerSnapshot ?? {
+      asOf,
+      queued: [],
+      running: [],
+      stats: this.scheduler.stats(),
+    };
+
+    return { asOf, agents, runs, scheduler };
+  }
+
+  /** 单个成员的快照视图（与 toStatus 同源，额外补 session / 时间） */
+  private toAgentSnapshot(record: MemberRecord, queuePosition?: number): AgentSnapshot {
+    const snapshot: AgentSnapshot = {
+      id: record.id,
+      state: record.state,
+      sessionId: record.active?.sessionId ?? defaultSessionId(record.spec),
+      toolNames: record.runtime.pluginHost.listTools().map((tool) => tool.name),
+    };
+    if (record.name !== undefined) snapshot.name = record.name;
+    if (record.active) {
+      snapshot.currentRunId = record.active.id;
+      snapshot.startedAt = record.active.startedAt;
+    }
+    if (record.lastError !== undefined) snapshot.lastError = record.lastError;
+    if (queuePosition !== undefined) snapshot.queuePosition = queuePosition;
+    return snapshot;
   }
 
   /**
    * 从 durable checkpoint 恢复一次 run。
-   * - 不经 Scheduler（保持 run id 不变，DECISION-008 Addendum B §9.2 C）；
+   * - 0.14.1：经 Scheduler 排队，受 `maxConcurrency` / `perAgentSerial` 约束；
+   *   用 `ScheduledTask.runId` 保持 run id 不变（DECISION-008 Addendum B §9.2 C）；
    * - 成员必须先已 spawn，且当前没有 active run；
    * - checkpoint 由成员 runtime 继续写，Host 自身不写。
    */
-  async resume(runId: string): Promise<RunHandle> {
+  async resume(runId: string, opts?: RunOptions): Promise<RunHandle> {
     if (this.closed) throw new Error('runtime host is closed');
     if (!this.runStore) throw new RunResumeError('run_store_required', runId);
     if (this.resuming.has(runId)) throw new RunResumeError('run_already_running', runId);
@@ -412,12 +502,24 @@ export class InProcessRuntimeHost implements RuntimeHost {
         throw new RunResumeError('run_not_resumable', runId, 'runtime does not support resume');
       }
 
-      const run = new InProcessRunHandle(runId, record.id, checkpoint.session_id);
-      record.active = run;
-      record.state = 'running';
-      record.lastError = undefined;
+      const handle = this.handles.get(record.id);
+      if (!handle) throw new RunResumeError('agent_not_found', runId, record.id);
 
-      void this.executeResume(record, run, resume);
+      const task: ScheduledTask = {
+        agent: handle,
+        sessionId: checkpoint.session_id,
+        input: '',
+        ...(opts !== undefined ? { opts } : {}),
+        runId,
+        executor: (scheduledRunId) =>
+          this.startResumeInternal(record, scheduledRunId, checkpoint.session_id, resume, opts),
+      };
+
+      const run = await this.scheduler.submit(task);
+      const release = (): void => {
+        this.resuming.delete(runId);
+      };
+      void run.result.then(release, release);
       return run;
     } catch (error) {
       this.resuming.delete(runId);
@@ -452,9 +554,10 @@ export class InProcessRuntimeHost implements RuntimeHost {
     const handle = this.handles.get(record.id);
     if (!handle) return Promise.reject(new Error(`unknown agent: ${record.id}`));
 
+    // 0.14.1：per-run session 覆盖成员默认 session（Scheduler 仍可改写 task.sessionId）
     const task: ScheduledTask = {
       agent: handle,
-      sessionId: defaultSessionId(record.spec),
+      sessionId: opts?.sessionId ?? defaultSessionId(record.spec),
       input,
       opts,
     };
@@ -487,39 +590,70 @@ export class InProcessRuntimeHost implements RuntimeHost {
     record.state = 'running';
     record.lastError = undefined;
 
-    const externalSignal = opts?.signal;
-    let removeAbortListener: (() => void) | undefined;
-    if (externalSignal) {
-      if (externalSignal.aborted) {
-        run.cancel(externalSignal.reason);
-      } else {
-        const onAbort = () => run.cancel(externalSignal.reason);
-        externalSignal.addEventListener('abort', onAbort, { once: true });
-        // 长会话/网关可能复用同一个 AbortController；run 结束后必须移除监听，
-        // 否则监听器随 run 数量线性累积。
-        removeAbortListener = () => externalSignal.removeEventListener('abort', onAbort);
-      }
-    }
+    const removeAbortListener = this.bindRunSignal(run, opts?.signal);
 
     this.publish('agent.run.started', {
       agentId: record.id,
       runId: run.id,
       sessionId: run.sessionId,
+      mirror_of_run_id: run.id,
     });
 
     void this.executeRun(record, run, input, opts, removeAbortListener);
     return run;
   }
 
+  /**
+   * 0.14.1：把调用方 signal 桥接到本次 run。
+   * 长会话/网关可能复用同一个 AbortController；run 结束后必须移除监听，
+   * 否则监听器随 run 数量线性累积。
+   */
+  private bindRunSignal(run: InProcessRunHandle, signal?: AbortSignal): (() => void) | undefined {
+    if (!signal) return undefined;
+    if (signal.aborted) {
+      run.cancel(signal.reason);
+      return undefined;
+    }
+    const onAbort = (): void => run.cancel(signal.reason);
+    signal.addEventListener('abort', onAbort, { once: true });
+    return () => signal.removeEventListener('abort', onAbort);
+  }
+
+  /**
+   * 0.14.1：resume 的 Scheduler 执行入口。
+   * 与原 startRunInternal 相同地占住 `record.active`，但调用 runtime.resume。
+   */
+  private async startResumeInternal(
+    record: MemberRecord,
+    runId: string,
+    sessionId: string,
+    resume: (runId: string, opts?: RunOptions) => Promise<string>,
+    opts?: RunOptions,
+  ): Promise<RunHandle> {
+    if (record.closed) throw new Error(`agent is closed: ${record.id}`);
+    if (record.active) {
+      throw new Error(`agent "${record.id}" already has a running run`);
+    }
+
+    const run = new InProcessRunHandle(runId, record.id, sessionId);
+    record.active = run;
+    record.state = 'running';
+    record.lastError = undefined;
+
+    const removeAbortListener = this.bindRunSignal(run, opts?.signal);
+    void this.executeResume(record, run, resume, opts, removeAbortListener);
+    return run;
+  }
+
   /** @internal 由 AgentHandle.cancel() / Host.cancel() 调用 */
-  cancelRun(record: MemberRecord, runId?: string): void {
+  cancelRun(record: MemberRecord, runId?: string, reason?: RunInterruptReason): void {
     if (runId !== undefined) {
       if (record.active?.id === runId) {
-        record.active.cancel();
+        record.active.cancel(reason);
         return;
       }
       // 排队中的 run 由 Scheduler 持有
-      if (this.scheduler.cancel(runId)) return;
+      if (this.scheduler.cancel(runId, reason)) return;
       throw new Error(`run "${runId}" is not active for agent "${record.id}"`);
     }
 
@@ -527,9 +661,9 @@ export class InProcessRuntimeHost implements RuntimeHost {
     const internal = this.scheduler as Partial<InternalScheduler>;
     const cancelAgent = internal[kCancelAgentRuns];
     if (typeof cancelAgent === 'function') {
-      cancelAgent.call(this.scheduler, record.id, 'agent cancelled');
+      cancelAgent.call(this.scheduler, record.id, reason ?? 'agent cancelled');
     }
-    record.active?.cancel();
+    record.active?.cancel(reason);
   }
 
   /** @internal 由 AgentHandle.close() 调用 */
@@ -614,9 +748,11 @@ export class InProcessRuntimeHost implements RuntimeHost {
     record: MemberRecord,
     run: InProcessRunHandle,
     resume: (runId: string, opts?: RunOptions) => Promise<string>,
+    opts?: RunOptions,
+    removeAbortListener?: () => void,
   ): Promise<void> {
     try {
-      const text = await resume(run.id, { signal: run.signal });
+      const text = await resume(run.id, { ...opts, signal: run.signal });
 
       if (record.closed) {
         run.setStatus('cancelled');
@@ -631,6 +767,8 @@ export class InProcessRuntimeHost implements RuntimeHost {
           agentId: record.id,
           runId: run.id,
           sessionId: run.sessionId,
+          mirror_of_run_id: run.id,
+          ...cancelReasonFields(run.signal),
         });
         run.reject(new Error('run cancelled'));
         return;
@@ -643,6 +781,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
         runId: run.id,
         sessionId: run.sessionId,
         output: text,
+        mirror_of_run_id: run.id,
       });
       run.resolve(text);
     } catch (error) {
@@ -657,12 +796,14 @@ export class InProcessRuntimeHost implements RuntimeHost {
         agentId: record.id,
         runId: run.id,
         sessionId: run.sessionId,
-        ...(cancelled ? {} : { error: errorMessage }),
+        mirror_of_run_id: run.id,
+        ...(cancelled ? cancelReasonFields(run.signal) : { error: errorMessage }),
       });
       run.reject(error instanceof Error ? error : new Error(errorMessage));
     } finally {
       record.active = undefined;
       this.resuming.delete(run.id);
+      removeAbortListener?.();
     }
   }
 
@@ -695,6 +836,8 @@ export class InProcessRuntimeHost implements RuntimeHost {
           agentId: record.id,
           runId: run.id,
           sessionId: run.sessionId,
+          mirror_of_run_id: run.id,
+          ...cancelReasonFields(run.signal),
         });
         run.reject(new Error('run cancelled'));
         return;
@@ -707,6 +850,7 @@ export class InProcessRuntimeHost implements RuntimeHost {
         runId: run.id,
         sessionId: run.sessionId,
         output: text,
+        mirror_of_run_id: run.id,
       });
       run.resolve(text);
     } catch (error) {
@@ -721,7 +865,8 @@ export class InProcessRuntimeHost implements RuntimeHost {
         agentId: record.id,
         runId: run.id,
         sessionId: run.sessionId,
-        ...(cancelled ? {} : { error: errorMessage }),
+        mirror_of_run_id: run.id,
+        ...(cancelled ? cancelReasonFields(run.signal) : { error: errorMessage }),
       });
       run.reject(error instanceof Error ? error : new Error(errorMessage));
     } finally {
@@ -802,8 +947,8 @@ class InProcessAgentHandle implements InternalAgentHandle {
     return this.host.inbox(this.record.id, cursor);
   }
 
-  cancel(runId?: string): void {
-    this.host.cancelRun(this.record, runId);
+  cancel(runId?: string, reason?: RunInterruptReason): void {
+    this.host.cancelRun(this.record, runId, reason);
   }
 
   close(): Promise<void> {
@@ -814,6 +959,8 @@ class InProcessAgentHandle implements InternalAgentHandle {
 /** RunHandle 实现 */
 class InProcessRunHandle implements RunHandle {
   readonly result: Promise<string>;
+  /** 开始执行时间（Unix ms）；handle 只在真正执行时创建 */
+  readonly startedAt = Date.now();
 
   private current: RunStatus = 'running';
   private usageValue?: Usage;

@@ -31,6 +31,19 @@ export interface ToolContext {
 export type ToolHandler = (args: unknown, ctx: ToolContext) => Promise<string>;
 
 /**
+ * 工具展示元数据（0.14.1，additive，可序列化）。
+ *
+ * 仅供 Web/TUI 在通用回退之上做增强显示；不进入 LLM schema，
+ * 也不参与权限 / 执行判定。
+ */
+export interface ToolDisplay {
+  /** 人类可读短标签（例如 “Run tests”）；缺省由调用方回退到工具名 */
+  label?: string;
+  /** 展示分类；未知值由调用方按 `generic` 处理 */
+  kind?: 'command' | 'file' | 'search' | 'generic';
+}
+
+/**
  * 工具定义（ADR-026：自描述对象——权限判定下沉到工具节点）
  * 工具的唯一注册入口是 PluginHost（插件在 install 里 registerTool）。
  */
@@ -39,6 +52,8 @@ export interface ToolDefinition {
   description: string;
   inputSchema: Record<string, unknown>;
   handler: ToolHandler;
+  /** 0.14.1：可选展示元数据；不影响执行与 LLM schema */
+  display?: ToolDisplay;
   /** 超时毫秒数；缺省或 0 = 不限时 */
   timeout?: number;
   /**

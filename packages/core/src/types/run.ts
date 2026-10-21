@@ -48,6 +48,13 @@ export interface RunOptions {
    * 普通调用方不要设置；缺省由 AgentRuntime 生成。
    */
   runId?: string;
+  /**
+   * per-run session（0.14.1，additive）：多 agent Host 的 `AgentHandle.run` 用它
+   * 覆盖成员默认 session；`ScheduledTask.sessionId` 仍可被自定义 Scheduler 改写。
+   * 单 agent `AgentRuntime.run(input, sessionId, opts)` 继续以显式参数为准，
+   * 不消费该字段（避免双来源）。
+   */
+  sessionId?: string;
   /** AbortSignal——设置后可在外部中断 run()（Hermes/Claude Code 模式） */
   signal?: AbortSignal;
   /** 当前 git branch——app 层采集，core 透传存入 RunState.branch */

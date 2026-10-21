@@ -1045,3 +1045,132 @@ describe('spawn 并发名额预留（P1）', () => {
     await host.close();
   });
 });
+
+describe('Host 对等修复（0.14.1）', () => {
+  it('per-run session 覆盖成员默认 session，且不串到下一次 run', async () => {
+    const backend = new MemorySessionBackend();
+    const host = new InProcessRuntimeHost({ session: backend });
+    const provider = new MemoryLLMProvider();
+    const agent = await host.spawn({ id: 'a', provider, model: 'm' });
+
+    const alt = await agent.run('hello-alt', { sessionId: 'alt' });
+    expect(alt.sessionId).toBe('alt');
+    await alt.result;
+
+    const normal = await agent.run('hello-default');
+    expect(normal.sessionId).toBe('default');
+    await normal.result;
+
+    expect((await backend.list()).sort()).toEqual(['a/alt', 'a/default']);
+    const altMessages = JSON.stringify((await backend.load('a/alt'))?.messages);
+    const defaultMessages = JSON.stringify((await backend.load('a/default'))?.messages);
+    expect(altMessages).toContain('hello-alt');
+    expect(altMessages).not.toContain('hello-default');
+    expect(defaultMessages).toContain('hello-default');
+    expect(defaultMessages).not.toContain('hello-alt');
+
+    await host.close();
+  });
+
+  it('cancel reason 经 agent.run.cancelled 事件透出', async () => {
+    const provider = new ControlledProvider();
+    const host = new InProcessRuntimeHost();
+    const agent = await host.spawn({ id: 'worker', provider, model: 'm' });
+
+    const started = provider.waitForRequest();
+    const run = await agent.run('long');
+    await started;
+
+    host.cancel('worker', run.id, 'shutdown');
+    await expect(run.result).rejects.toThrow();
+
+    const cancelled = host.events
+      .getHistory()
+      .find((event) => event.type === 'agent.run.cancelled');
+    expect(cancelled?.data).toMatchObject({ runId: run.id, reason: 'shutdown' });
+
+    await host.close();
+  });
+
+  it('Host 合成 agent.run.* 带 mirror_of_run_id，可与成员 run.* 配对', async () => {
+    const host = new InProcessRuntimeHost();
+    const agent = await host.spawn({
+      id: 'worker',
+      provider: new MemoryLLMProvider(),
+      model: 'm',
+    });
+
+    const run = await agent.run('hi');
+    await run.result;
+
+    const history = host.events.getHistory();
+    const started = history.find((event) => event.type === 'agent.run.started');
+    const completed = history.find((event) => event.type === 'agent.run.completed');
+    expect(started?.data).toMatchObject({ mirror_of_run_id: run.id });
+    expect(completed?.data).toMatchObject({ mirror_of_run_id: run.id });
+    expect(history.some((event) => event.type === 'run.completed' && event.run_id === run.id)).toBe(
+      true,
+    );
+
+    await host.close();
+  });
+
+  it('snapshot 给出 FIFO 排队位置且可 JSON 往返', async () => {
+    const provider = new ControlledProvider();
+    const host = new InProcessRuntimeHost({ schedulerOptions: { maxConcurrency: 1 } });
+    const a = await host.spawn({ id: 'a', provider, model: 'm' });
+    const b = await host.spawn({ id: 'b', provider: new MemoryLLMProvider(), model: 'm' });
+
+    const started = provider.waitForRequest();
+    const runA = await a.run('hold');
+    await started;
+    const runB = await b.run('queued');
+
+    const snapshot = host.snapshot();
+    expect(snapshot.runs.find((run) => run.runId === runA.id)?.state).toBe('running');
+    expect(snapshot.runs.find((run) => run.runId === runB.id)).toMatchObject({
+      state: 'queued',
+      queuePosition: 1,
+    });
+    expect(snapshot.agents.find((agent) => agent.id === 'b')).toMatchObject({
+      queuePosition: 1,
+      sessionId: 'default',
+    });
+    expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);
+
+    provider.respond('done');
+    await expect(runA.result).resolves.toBe('done');
+    await expect(runB.result).resolves.toBe('Echo: queued');
+
+    await host.close();
+  });
+
+  it('Host 级 pluginConfigs / logger / includeReasoning 透传给成员 runtime', async () => {
+    const seen: AgentRuntimeOptions[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+    };
+    const host = new InProcessRuntimeHost({
+      pluginConfigs: { demo: { flag: true } },
+      logger,
+      includeReasoning: true,
+      runtimeFactory: async (options) => {
+        seen.push(options);
+        return AgentRuntime.create(options);
+      },
+    });
+
+    await host.spawn({ id: 'a', provider: new MemoryLLMProvider(), model: 'm' });
+
+    expect(seen[0]).toMatchObject({
+      pluginConfigs: { demo: { flag: true } },
+      logger,
+      includeReasoning: true,
+    });
+
+    await host.close();
+  });
+});

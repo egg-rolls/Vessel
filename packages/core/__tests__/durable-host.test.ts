@@ -304,3 +304,88 @@ describe('InProcessRuntimeHost durable（C1）', () => {
     await host.close();
   });
 });
+
+describe('resume 经 Scheduler 与取消原因（0.14.1）', () => {
+  it('resume 经 Scheduler 排队：并发满时 queued，槽位释放后才执行', async () => {
+    const store = new MemoryRunStore();
+    await store.save(checkpoint({ run_id: 'run-queued' }));
+
+    const blockerProvider = new ControlledProvider();
+    const host = new InProcessRuntimeHost({
+      runStore: store,
+      schedulerOptions: { maxConcurrency: 1 },
+    });
+    const blocker = await host.spawn({ id: 'blocker', provider: blockerProvider, model: 'm' });
+    await host.spawn({ id: 'worker', provider: new StaticProvider('resumed-later'), model: 'm' });
+
+    const started = blockerProvider.waitForRequest();
+    const blocking = await blocker.run('hold');
+    await started;
+
+    const resumed = await host.resume('run-queued');
+    expect(resumed.id).toBe('run-queued');
+    expect(resumed.status()).toBe('queued');
+    expect(host.scheduler.stats()).toMatchObject({ queued: 1, running: 1 });
+
+    blockerProvider.respond('released');
+    await expect(blocking.result).resolves.toBe('released');
+    await expect(resumed.result).resolves.toBe('resumed-later');
+    expect((await store.load('run-queued'))?.status).toBe('completed');
+
+    await host.close();
+  });
+
+  it('排队中的 resume 被取消后释放 resuming 锁（同一 run 可再次恢复）', async () => {
+    const store = new MemoryRunStore();
+    await store.save(checkpoint({ run_id: 'run-cancel-queued' }));
+
+    const blockerProvider = new ControlledProvider();
+    const host = new InProcessRuntimeHost({
+      runStore: store,
+      schedulerOptions: { maxConcurrency: 1 },
+    });
+    const blocker = await host.spawn({ id: 'blocker', provider: blockerProvider, model: 'm' });
+    await host.spawn({ id: 'worker', provider: new StaticProvider('second-try'), model: 'm' });
+
+    const started = blockerProvider.waitForRequest();
+    const blocking = await blocker.run('hold');
+    await started;
+
+    const first = await host.resume('run-cancel-queued');
+    expect(first.status()).toBe('queued');
+    host.cancel('worker', first.id, 'user');
+    await expect(first.result).rejects.toThrow();
+
+    const second = await host.resume('run-cancel-queued');
+    expect(second.status()).toBe('queued');
+
+    blockerProvider.respond('released');
+    await expect(blocking.result).resolves.toBe('released');
+    await expect(second.result).resolves.toBe('second-try');
+
+    await host.close();
+  });
+
+  it('shutdown 取消 → checkpoint interrupted；user → cancelled', async () => {
+    const store = new MemoryRunStore();
+    const provider = new ControlledProvider();
+    const host = new InProcessRuntimeHost({ runStore: store });
+    const agent = await host.spawn({ id: 'worker', provider, model: 'm' });
+
+    const started = provider.waitForRequest();
+    const run = await agent.run('long');
+    await started;
+    host.cancel('worker', run.id, 'shutdown');
+    await expect(run.result).rejects.toThrow();
+    expect((await store.load(run.id))?.status).toBe('interrupted');
+
+    const startedAgain = provider.waitForRequest();
+    const second = await agent.run('again');
+    await startedAgain;
+    host.cancel('worker', second.id, 'user');
+    await expect(second.result).rejects.toThrow();
+    expect((await store.load(second.id))?.status).toBe('cancelled');
+
+    await host.close();
+  });
+});
