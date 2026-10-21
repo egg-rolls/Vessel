@@ -293,4 +293,20 @@ describe('status snapshot', () => {
     const done = formatStatusSnapshot(buildStatusSnapshot(ctx, makeState('s1'), 5000));
     expect(done).not.toContain('limit blocked');
   });
+
+  it('counts agent.* turn members without marking the main run active', () => {
+    const ctx = makeCtx({ config: { context: { maxTokens: 1000 } } as VesselConfig });
+    ctx.events.publish(ev('agent.spawned', 'm1', { agent_id: 'm1', state: 'idle' }, 1000));
+    ctx.events.publish(ev('agent.turn.started', 'm1', { agent_id: 'm1', state: 'running' }, 1100));
+
+    const running = buildStatusSnapshot(ctx, makeState('s1'), 1200);
+    expect(running.run).toEqual({ state: 'idle' });
+    expect(running.agentQueue).toMatchObject({ queued: 0, running: 1 });
+
+    ctx.events.publish(
+      ev('agent.turn.completed', 'm1', { agent_id: 'm1', state: 'completed' }, 1300),
+    );
+    const done = buildStatusSnapshot(ctx, makeState('s1'), 1400);
+    expect(done.agentQueue.running).toBe(0);
+  });
 });

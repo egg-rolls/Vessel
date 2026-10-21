@@ -291,4 +291,78 @@ describe('/agents', () => {
     expect(detail).toContain('as_of');
     expect(detail).toContain('unknown');
   });
+
+  it('renders a Self Card from agent.* member events', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(
+      ev(
+        'agent.spawned',
+        'm1',
+        {
+          agent_id: 'm1',
+          session_id: 's1',
+          parent_id: 'main',
+          visibility: 'team',
+          state: 'idle',
+        },
+        1000,
+      ),
+    );
+    ctx.events.publish(ev('agent.turn.started', 'm1', { agent_id: 'm1', state: 'running' }, 1100));
+    ctx.events.publish(
+      ev(
+        'agent.permission.requested',
+        'm1',
+        { agent_id: 'm1', state: 'waiting_permission', tool: 'bash' },
+        1200,
+      ),
+    );
+
+    const result = await createCommands().execute('/agents m1', ctx, makeState('s1'));
+    expect(result.output).toContain('Subagent m1');
+    expect(result.output).toContain('waiting_permission');
+    expect(result.output).toContain('team');
+    expect(result.output).toContain('main');
+    expect(result.output).toContain('s1');
+    expect(result.output).toContain('bash');
+  });
+
+  it('shows usage from agent.turn.completed when the event carries it', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(ev('agent.spawned', 'm1', { agent_id: 'm1', state: 'idle' }, 1000));
+    ctx.events.publish(
+      ev(
+        'agent.turn.completed',
+        'm1',
+        {
+          agent_id: 'm1',
+          state: 'completed',
+          usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+        },
+        1200,
+      ),
+    );
+
+    const result = await createCommands().execute('/agents m1', ctx, makeState('s1'));
+    expect(result.output).toContain('completed');
+    expect(result.output).toContain('15 tok (in 10 / out 5)');
+  });
+
+  it('keeps the empty state when only non-member agent events exist', async () => {
+    setLocale('en');
+    const ctx = makeCtx();
+    ctx.events.publish(
+      ev(
+        'agent.queue.entered',
+        'r1',
+        { agent_id: 'ghost', position: 1, wait_reason: 'capacity' },
+        1000,
+      ),
+    );
+
+    const result = await createCommands().execute('/agents', ctx, makeState('s1'));
+    expect(result.output).toContain('No subagents in this session.');
+  });
 });
