@@ -72,25 +72,26 @@ export function resolveAgentWiring(config: VesselConfig, input: AgentWiringInput
   };
 }
 
-/** 传给 ext team 插件的 0.16 追加选项（ext 未合并前会被旧实现忽略）。 */
+/** 传给 ext team 插件的 0.16 选项（与 TeamPluginOptions 同名同义）。 */
 export interface AgentTeamPluginOptions {
-  /** 注册 canonical `agent` 工具 */
-  agentTool: boolean;
   /** 注册 `team_*` 旧工具 */
   legacyTools: boolean;
   defaultVisibility: AgentVisibility;
   permissionMode: MemberPermissionMode;
-  followReplies: boolean;
-  disallowed: string[];
+  /** deny 模式保留的只读工具 */
+  readOnlyTools?: string[];
 }
 
-export function toAgentTeamPluginOptions(plan: AgentWiringPlan): AgentTeamPluginOptions {
+export function toAgentTeamPluginOptions(
+  config: VesselConfig,
+  plan: AgentWiringPlan,
+): AgentTeamPluginOptions {
   return {
-    agentTool: plan.agentEnabled,
     legacyTools: plan.legacyTools,
     defaultVisibility: plan.defaultVisibility,
     permissionMode: plan.permissionMode,
-    followReplies: plan.followReplies,
-    disallowed: plan.disallowed,
+    ...(config.delegate?.readOnlyTools !== undefined
+      ? { readOnlyTools: config.delegate.readOnlyTools }
+      : {}),
   };
 }

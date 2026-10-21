@@ -47,10 +47,19 @@ function hookNames(bundle: TenantRuntimeBundle): string[] {
   return bundle.pluginHost.getHooks().map((hook) => hook.name);
 }
 
+function toolNames(bundle: TenantRuntimeBundle): string[] {
+  return bundle.pluginHost.listTools().map((tool) => tool.name);
+}
+
 describe('agent runtime wiring', () => {
-  it('interactive: builds team, skips delegate_task, registers reply injection', async () => {
+  it('interactive: exposes one agent schema, skips delegate_task, injects replies', async () => {
     const bundle = await buildBundle({}, false);
     try {
+      const tools = toolNames(bundle);
+      expect(tools).toHaveLength(6);
+      expect(tools.filter((name) => name === 'agent')).toHaveLength(1);
+      expect(tools).not.toContain('delegate_task');
+      expect(tools).toContain('team_spawn');
       expect(pluginNames(bundle)).toContain('team');
       expect(pluginNames(bundle)).not.toContain('delegate-task');
       expect(hookNames(bundle)).toContain('agent-reply-injection');
@@ -59,9 +68,24 @@ describe('agent runtime wiring', () => {
     }
   });
 
+  it('interactive with legacyTools=false: hides every team_* tool', async () => {
+    const bundle = await buildBundle({ team: { legacyTools: false } }, false);
+    try {
+      const tools = toolNames(bundle);
+      expect(tools).toHaveLength(1);
+      expect(tools).toContain('agent');
+      expect(tools.filter((name) => name.startsWith('team_'))).toEqual([]);
+    } finally {
+      await bundle.close();
+    }
+  });
+
   it('headless default: keeps delegate_task and does not register reply injection', async () => {
     const bundle = await buildBundle({}, true);
     try {
+      expect(toolNames(bundle)).toHaveLength(1);
+      expect(toolNames(bundle)).toContain('delegate_task');
+      expect(toolNames(bundle)).not.toContain('agent');
       expect(pluginNames(bundle)).toContain('delegate-task');
       expect(pluginNames(bundle)).not.toContain('team');
       expect(hookNames(bundle)).not.toContain('agent-reply-injection');
@@ -70,9 +94,12 @@ describe('agent runtime wiring', () => {
     }
   });
 
-  it('headless with agent.enabled: swaps delegate_task for team and enables injection', async () => {
+  it('headless with agent.enabled: swaps delegate_task for agent and enables injection', async () => {
     const bundle = await buildBundle({ agent: { enabled: true } }, true);
     try {
+      expect(toolNames(bundle)).toHaveLength(6);
+      expect(toolNames(bundle)).toContain('agent');
+      expect(toolNames(bundle)).not.toContain('delegate_task');
       expect(pluginNames(bundle)).toContain('team');
       expect(pluginNames(bundle)).not.toContain('delegate-task');
       expect(hookNames(bundle)).toContain('agent-reply-injection');

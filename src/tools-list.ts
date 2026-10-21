@@ -115,7 +115,7 @@ export async function listTools(): Promise<ToolsListing> {
               maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
             }
           : undefined,
-        ...toAgentTeamPluginOptions(agentWiring),
+        ...toAgentTeamPluginOptions(config, agentWiring),
       };
       const team = createTeamPlugin(teamOptions);
       await team.install(host);

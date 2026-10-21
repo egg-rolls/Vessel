@@ -702,8 +702,6 @@ export async function buildTenantRuntime(
         }
         teamInboxHost = teamHost;
 
-        // ext 0.16 尚未合并时，追加选项会被旧实现忽略（不会报错）；
-        // 合并后由 createTeamPlugin 消费 agentTool / legacyTools / permissionMode。
         const teamOptions: Parameters<typeof createTeamPlugin>[0] & AgentTeamPluginOptions = {
           providerFactory: () => provider,
           tenantId,
@@ -725,7 +723,7 @@ export async function buildTenantRuntime(
                 maxRuntimeSeconds: config.team.memberTermination.maxRuntimeSeconds,
               }
             : undefined,
-          ...toAgentTeamPluginOptions(agentWiring),
+          ...toAgentTeamPluginOptions(config, agentWiring),
         };
         factory.push(createTeamPlugin(teamOptions));
       }

@@ -31,12 +31,17 @@ export interface InjectedReply {
   message: Message;
 }
 
-/** 成员回复 → 模型消息：角色固定 user，名称标注来源成员。 */
-export function replyToMessage(reply: { from: string; content: string }): Message {
+/**
+ * 成员回复 → 模型消息：角色固定 user，名称标注来源成员。
+ * `timestamp` 取原消息时间：core E5 用 name+timestamp+content 去重，
+ * 同一回复重复 drain 时键必须不变（否则多轮里会重复注入）。
+ */
+export function replyToMessage(reply: { from: string; content: string; ts: number }): Message {
   return {
     role: 'user',
     name: `agent:${reply.from}`,
     content: `[agent ${reply.from}] ${reply.content}`,
+    timestamp: reply.ts,
   };
 }
 
@@ -96,8 +101,7 @@ export function createOwnerReplyInjector(options: OwnerReplyInjectionOptions): O
     async run(ctx) {
       const replies = await drain();
       if (replies.length === 0) return;
-      const existing = Array.isArray(ctx.messages) ? (ctx.messages as Message[]) : [];
-      ctx.messages = [...existing, ...replies.map((reply) => reply.message)];
+      ctx.messages = [...(ctx.messages ?? []), ...replies.map((reply) => reply.message)];
       publish('agent.reply.injected', ctx.run_id, {
         owner_id: options.ownerId,
         count: replies.length,

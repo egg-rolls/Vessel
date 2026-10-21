@@ -6,12 +6,7 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import type {
-  AgentMessage,
-  EventStream,
-  HookContext,
-  Message,
-} from '../../packages/core/src/index';
+import type { AgentMessage, EventStream, HookContext } from '../../packages/core/src/index';
 import {
   createOwnerReplyInjector,
   type ReplyInbox,
@@ -58,12 +53,20 @@ describe('owner reply injection', () => {
     const ctx: HookContext = { run_id: 'run-1' };
 
     await injector.hook.run(ctx);
-    const first = (ctx as { messages?: Message[] }).messages ?? [];
-    expect(first).toEqual([replyToMessage({ from: 'worker', content: 'done' })]);
+    const first = ctx.messages ?? [];
+    expect(first).toEqual([replyToMessage({ from: 'worker', content: 'done', ts: 1 })]);
+    expect(first[0]?.timestamp).toBe(1);
 
     await injector.hook.run(ctx);
-    const second = (ctx as { messages?: Message[] }).messages ?? [];
+    const second = ctx.messages ?? [];
     expect(second).toHaveLength(1);
+  });
+
+  it('keeps a stable name+timestamp key when the same reply is re-drained', () => {
+    const first = replyToMessage({ from: 'worker', content: 'done', ts: 1234 });
+    const second = replyToMessage({ from: 'worker', content: 'done', ts: 1234 });
+    expect(second).toEqual(first);
+    expect(first.name).toBe('agent:worker');
   });
 
   it('injects only new replies on the next turn', async () => {
@@ -72,7 +75,7 @@ describe('owner reply injection', () => {
     const injector = createOwnerReplyInjector({ host, ownerId: 'owner' });
     const firstCtx: HookContext = { run_id: 'run-1' };
     await injector.hook.run(firstCtx);
-    expect(((firstCtx as { messages?: Message[] }).messages ?? []).map((m) => m.content)).toEqual([
+    expect((firstCtx.messages ?? []).map((m) => m.content)).toEqual([
       '[agent a] one',
       '[agent b] two',
     ]);
@@ -80,9 +83,7 @@ describe('owner reply injection', () => {
     inbox.push(message('c', 'three'));
     const secondCtx: HookContext = { run_id: 'run-2' };
     await injector.hook.run(secondCtx);
-    expect(((secondCtx as { messages?: Message[] }).messages ?? []).map((m) => m.content)).toEqual([
-      '[agent c] three',
-    ]);
+    expect((secondCtx.messages ?? []).map((m) => m.content)).toEqual(['[agent c] three']);
   });
 
   it('does not echo the owner address back as a reply', async () => {
@@ -90,7 +91,7 @@ describe('owner reply injection', () => {
     const injector = createOwnerReplyInjector({ host, ownerId: 'owner' });
     const ctx: HookContext = { run_id: 'run-1' };
     await injector.hook.run(ctx);
-    expect((ctx as { messages?: Message[] }).messages).toBeUndefined();
+    expect(ctx.messages).toBeUndefined();
   });
 
   it('records an event and keeps the turn alive when the inbox read fails', async () => {
