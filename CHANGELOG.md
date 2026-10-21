@@ -3,6 +3,43 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.16.0] - 2026-10-21
+
+> 0.16.0（基于 `release/0.16.0`，未发布）：统一 agent 工具 Phase A——模型工具面收敛到单个 `agent`（`spawn` / `send` / `close`），session 即成员，成员回复经 `BeforeLlm` 注入父 turn，权限请求桥接到父窗口；`team_*` 与 `delegate_task` 兼容保留一个版本。未 tag、未 `npm publish`、未合并 `main`。
+
+### Added
+
+- **`agent` 工具**：唯一模型 schema，动作 `spawn` / `send` / `close`。`spawn` 创建 session 并注册成员，返回成员状态；`send` 入队即返回 `{ queued: true, message_id }`，不阻塞、不等待；`close` 幂等释放成员（`{ state: 'closed' }`）。**不提供** `wait` / `inbox` / `status` / `cancel` 模型工具。消息上限 64 KiB（UTF-8）。
+- **成员注册表**：`spawn` 的 session 与成员 1:1（`session_id === agent_id`），`to` / `member` 可用成员 id 或 session id。记录 `id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `permission_mode` / `state` / `current_tool?` / `last_seen?` / `usage?`；`visibility` 取 `private`（默认，仅 owner）/ `team` / `tenant`，跨 tenant 不可寻址。
+- **成员生命周期**：状态 `created` / `idle` / `running` / `waiting_permission` / `completed` / `failed` / `cancelled` / `closed` / `stale`；与 `agents.tree` / `agents.list` 的 `state` 同名同义。`close` 后到达的 run 终态不覆盖 `closed`。
+- **成员事件**（开放字符串）：`agent.spawned`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`。
+- **父 turn 注入**：core 新增 `HookContext.messages?: Message[]`（additive）；runtime 在 `BeforeLlm` 后把注入消息写入上下文一次，按 `name` / `timestamp` 稳定键或对象引用去重，每个 run 重置。装配层新增 owner inbox 注入器：回复映射为 `role: 'user'`、`name: 'agent:<id>'`、内容 `[agent <id>] <content>`，游标去重；发 `agent.reply.injected` / `agent.reply.inject_failed`。
+- **权限 bridge**：成员 `permission_mode` 成为注册表一等属性（`bridge` / `allow` / `deny`，缺省交互 `bridge`、headless `allow`）。bridge 请求补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` / `state: 'waiting_permission'`，应答沿用 `permission.respond` / `ask.respond`；`deny` 只复制 `delegate.readOnlyTools`（默认 `['read']`）。
+- **配置**：`agent.enabled` / `agent.defaultVisibility` / `agent.followReplies`、`team.legacyTools`；非法值与枚举值拒绝而不是静默回退。
+
+### Changed
+
+- **入口默认**：交互 REPL / serve 默认注册 `agent`；headless / `--run` 默认不注册，保留 `delegate_task`。显式 `agent.enabled` 在两个方向都生效。
+- **单一 schema**：`agent` 可用时不再注册 `delegate_task`。`agent` 可用 = `agent.enabled` 生效 **或** `team.enabled: true`（team 插件构造时总会注册 `agent`）。旧配置名 `delegate_task` 在 `permission.autoApprove` 与 `delegate.disallowed` 中映射为 `agent`。`team_*` 5 个工具默认仍注册，`team.legacyTools: false` 时全部隐藏。
+- **Self Card**：主 agent 的工具列表随入口与开关显示 `agent` 或 `delegate_task`，`team_*` 受 `team.legacyTools` 控制。
+- **team 插件**：版本 0.2.0；成员宿主不再复制 `team_*` 与 `agent` 工具，Phase A 不支持嵌套成员。
+- **工具数（实测）**：`--tools`（非 TTY）默认 4；`team.enabled: true` 或 `agent.enabled: true` 9（3 + `agent` + 5 个 `team_*`）；同条件 + `team.legacyTools: false` 4（3 + `agent`）。真交互 REPL（TTY）再 +`ask_user`，对应 5 / 10 / 5。
+- canonical RPC 仍为 **44**，本版本不新增方法。
+
+### Fixed
+
+- **team 构造时不再注册 `delegate_task`**：`team.enabled: true` 此前会同时注册 `delegate_task` 与 `agent`，模型看到两个 schema；现在 `agent` 可用 = `agent.enabled` 生效或 `team.enabled: true`，可用时只保留 `agent`。
+- inbox 排空失败不再被静默吞掉：发 `agent.reply.inject_failed`（`{ owner_id, error }`）并让父 turn 继续，模型不会永远等一个已经失败的回复。
+- 父事件流与 Host 聚合流同源时不再重复转发权限请求与应答，避免父窗口出现两张权限卡。
+
+### Known limitations
+
+- legacy `team_spawn` 创建的成员不进入新注册表，`agent.send` 不能寻址它们。
+- `agent.followReplies` 目前只是配置 / 事件字段：回复在父会话下一次 `BeforeLlm` 时注入，不会自动开启新的父 turn。
+- `close` 只支持本机成员；跨节点释放返回错误。
+- `stale` 状态已定义，Phase A 没有自动标记逻辑；进程重启后的成员状态恢复不在本版本范围。
+- `allow` 模式对成员复制到的工具一律放行，不是按工具白名单逐项判定。
+
 ## [0.15.1] - 2026-10-21
 
 > 0.15.1（基于 `release/0.15.1`，未发布）：Web 性能修复——移除全屏遮罩与应用栏的 `backdrop-filter` 模糊。

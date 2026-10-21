@@ -270,6 +270,31 @@ delegate:
 - **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
 - **已知限制**：shared 锁不阻止两个进程写同一 tenant 的不同 session；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
 
+### 2.12 统一 agent 工具（0.16，ADR-087）
+
+```yaml
+agent:
+  enabled: true              # 交互默认 true；headless / --run 默认 false
+  default_visibility: private   # private | team | tenant
+  follow_replies: false      # 目前只作为配置 / 事件字段，不自动续跑父 turn
+
+team:
+  legacy_tools: true         # 默认 true，保留一个版本；false 时模型看不到 team_*
+
+delegate:
+  permission_mode: bridge    # 成员权限模式：bridge | allow | deny
+  read_only_tools: [read]    # deny 模式保留的工具
+```
+
+- **`agent.enabled`**（交互缺省 `true`、headless 缺省 `false`）：是否注册 canonical `agent` 工具（`spawn` / `send` / `close`）。显式值在两个方向都生效。`agent` 可用 = `agent.enabled` 生效 **或** `team.enabled: true`（team 插件构造时总会注册 `agent`）；可用后不再注册 `delegate_task`。`team` 引擎随 `agent` 一起构造。
+- **`agent.default_visibility`**（默认 `private`）：`spawn` 未显式传 `visibility` 时的成员可见性。`private` 仅 owner 可寻址；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
+- **`agent.follow_replies`**（默认 `false`）：当前只写入 `agent.reply.injected` 事件并参与装配；回复在父会话下一次 `BeforeLlm` 时注入，不会被实现成阻塞等待或自动新 turn。
+- **`team.legacy_tools`**（默认 `true`）：是否注册 legacy `team_*` 5 个工具。设为 `false` 后不再注册任何 `team_*`；`agent` 可用时模型工具面只剩 `agent`。`delegate_task` 旧代码不删除。
+- **`delegate.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限请求弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `delegate.read_only_tools`（默认 `['read']`）。这是成员 `permissionMode` 的配置来源。
+- **`delegate_task` 旧配置名**：`agent` 可用时，`permission.autoApprove` 与 `delegate.disallowed` 里的 `delegate_task` 会映射为 `agent`；未启用 `agent` 时保持原名。
+- **工具数（实测）**：`--tools`（非 TTY）默认 4（`bash` / `read` / `edit` / `delegate_task`，team 未构造）；`team.enabled: true` 或 `agent.enabled: true` 9（3 + `agent` + 5 个 `team_*`）；同条件 + `team.legacy_tools: false` 4（3 + `agent`）。真交互 REPL（TTY）再 +`ask_user`，对应 5 / 10 / 5。
+- **已知限制**：legacy `team_spawn` 成员不进入新注册表；`close` 只支持本机成员；`stale` 未自动产生。canonical RPC 仍为 44，本版本不新增方法。
+
 ## 3. 密钥与 `_env`
 
 所有接受密钥的字段支持 `<field>_env`：
