@@ -104,7 +104,7 @@
   font-weight: 600;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--accent);
+  color: var(--accent-ink);
 }
 
 .ask-text {
@@ -242,4 +242,10 @@
 
 .shortcut-list dd {
   color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .more-item {
+    min-height: var(--touch-target);
+  }
 }

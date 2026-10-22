@@ -3,6 +3,7 @@
 /* 行间分组只靠父容器 gap，不再用分隔线。 */
 .session-scroll {
   gap: var(--space-2);
+  padding-top: var(--space-1);
 }
 
 .session-row {
@@ -43,6 +44,10 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.session-row.active .session-title {
+  color: var(--accent-ink);
 }
 
 .session-preview {
@@ -184,6 +189,12 @@
   padding: 0 2px;
 }
 
+/* 角色切换比同角色消息多一档间距（16 + 8）。 */
+.msg-user + .msg-assistant,
+.msg-assistant + .msg-user {
+  margin-top: var(--space-2);
+}
+
 .msg-text {
   line-height: 1.75;
   white-space: pre-wrap;
@@ -307,7 +318,6 @@
 .tool-card {
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
-  overflow: hidden;
 }
 
 .tool-card-header {
@@ -318,9 +328,14 @@
   min-height: var(--row-h-tool);
   padding: 0 10px;
   border: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
   background: transparent;
   color: var(--muted);
   text-align: left;
+}
+
+.tool-card-header:last-child {
+  border-radius: var(--radius-md);
 }
 
 .tool-card-header:hover {
@@ -394,6 +409,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 0 10px 10px;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .tool-section {
@@ -766,7 +782,6 @@
   border-radius: var(--radius-lg);
   background: var(--surface-raised);
   box-shadow: var(--elev-2);
-  transition: box-shadow 0.16s var(--ease);
 }
 
 .composer:focus-within {

@@ -51,7 +51,7 @@
 }
 
 .markdown a {
-  color: var(--accent);
+  color: var(--accent-ink);
   text-decoration: underline;
   text-underline-offset: 2px;
 }
@@ -84,7 +84,7 @@
   font-size: 9px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-  color: var(--faint);
+  color: var(--muted);
 }
 
 .md-code {
@@ -180,21 +180,15 @@
 .day-divider {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 10px;
   margin: 14px 0 10px;
+  padding-block: var(--space-1);
   font-family: var(--font-mono);
   font-size: 10px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--faint);
-}
-
-.day-divider::before,
-.day-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--line);
 }
 
 .session-day {
