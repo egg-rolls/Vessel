@@ -1,8 +1,9 @@
 /**
  * WS 广播摘要化（0.18 D7）。
  *
- * sequenced 广播与回放只携带摘要：完整 payload 仍在 raw fan-in、trace 与
- * 会话日志中，避免大消息撑爆 WS 帧与浏览器内存。
+ * sequenced 广播与回放只携带摘要：完整 payload 仍在 raw fan-in 与 trace 中
+ * （这两类事件属于 `NON_PERSISTED_EVENT_TYPES`，不进会话事件日志），
+ * 避免大消息撑爆 WS 帧与浏览器内存。
  *
  * 只处理 `llm.request` 与 `context.changed`；其他事件原样返回同一引用。
  * 不修改输入对象，目标事件返回新事件。
