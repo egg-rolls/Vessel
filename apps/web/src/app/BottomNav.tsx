@@ -9,7 +9,7 @@ import type { Route } from './router';
 
 const BOTTOM_DOMAINS = DOMAINS.filter((domain) => domain.id !== 'observe');
 
-/** <680px：底部 4 个主域 + More sheet（可观测 / 设置 / 连接身份）。 */
+/** <680px：底部 3 个主域 + More sheet（可观测 / 设置 / 连接身份）。 */
 export function BottomNav({ route, navigate }: { route: Route; navigate: (route: Route) => void }) {
   useLocale();
   const [moreOpen, setMoreOpen] = useState(false);

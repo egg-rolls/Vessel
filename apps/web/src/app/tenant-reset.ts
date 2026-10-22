@@ -16,7 +16,7 @@ export interface TenantResetPlan {
 
 export function tenantResetPlan(): TenantResetPlan {
   return {
-    // 回到 Chat 空态：会话/运行/工作流的选择都在 route 里，一并清空。
+    // 回到 Chat 空态：会话/运行的选择都在 route 里，一并清空。
     route: { domain: 'chat' },
     clearPaletteEntities: true,
     closePalette: true,

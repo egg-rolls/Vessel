@@ -23,7 +23,6 @@ const DESCRIPTIONS: Readonly<Record<string, string>> = {
   no_runtime: 'gateway 未配置运行 runtime。',
   durable_disabled: 'durable run 未启用。',
   mcp_disabled: 'MCP 未启用。',
-  workflow_disabled: 'workflow 未启用。',
   evals_disabled: 'evals 未启用。',
 };
 

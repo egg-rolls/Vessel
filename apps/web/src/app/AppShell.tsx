@@ -15,14 +15,12 @@ import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
-import { WorkflowsView } from '../domains/workflows/WorkflowsView';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav, primaryRoute } from './DomainNav';
-import { requestStartWorkflow } from './intents';
 import { defaultNavCollapsed, navModeForWidth, parseNavCollapsed } from './layout';
 import { DOMAINS, domainLabel, routeBreadcrumb, settingsTabLabel } from './nav';
 import { requestRefresh } from './refresh';
@@ -168,7 +166,7 @@ export function AppShell() {
     if (plan.closeSessionsDrawer) setChatSessionsOpen(false);
     if (plan.clearPendingAction) setPendingAction(null);
     if (plan.closePalette) setPaletteOpen(false);
-    // 旧租户的实体（会话/run/workflow/MCP）不能留在命令面板里。
+    // 旧租户的实体（会话/run/MCP）不能留在命令面板里。
     if (plan.clearPaletteEntities) setEntityMap(new Map());
     navigate(plan.route);
     toast.info('已切换租户；当前选择与事件缓冲已清空');
@@ -282,17 +280,6 @@ export function AppShell() {
           // 先回到 Chat 再进入 new，确保已在 new 时也会生成新的草稿 id。
           navigate({ domain: 'chat' });
           window.setTimeout(() => navigate({ domain: 'chat', sessionId: 'new' }), 0);
-        },
-      },
-      {
-        id: 'action-start-workflow',
-        group: 'action',
-        label: '启动 workflow',
-        keywords: ['workflow', 'start', '工作流'],
-        hint: '动作',
-        run: () => {
-          navigate({ domain: 'workflows' });
-          requestStartWorkflow();
         },
       },
       {
@@ -539,7 +526,6 @@ export function AppShell() {
               />
             )}
             {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
-            {route.domain === 'workflows' && <WorkflowsView route={route} navigate={navigate} />}
             {route.domain === 'integrations' && (
               <IntegrationsView route={route} navigate={navigate} />
             )}

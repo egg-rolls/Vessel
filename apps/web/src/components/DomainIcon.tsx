@@ -29,14 +29,6 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M9 7.4 12.6 10 9 12.6z" fill="currentColor" stroke="none" />
         </svg>
       );
-    case 'workflows':
-      return (
-        <svg {...common}>
-          <rect x="2.8" y="3.2" width="5" height="4" rx="1" />
-          <rect x="12.2" y="12.8" width="5" height="4" rx="1" />
-          <path d="M7.8 5.2h4.4v9.6h-2.2" />
-        </svg>
-      );
     case 'integrations':
       return (
         <svg {...common}>

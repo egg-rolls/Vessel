@@ -9,11 +9,10 @@ export interface DomainDef {
   id: Domain;
 }
 
-/** 5 个主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
+/** 4 个主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
 export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'chat' },
   { id: 'runs' },
-  { id: 'workflows' },
   { id: 'integrations' },
   { id: 'observe' },
 ];
@@ -25,7 +24,6 @@ export const NAV_GROUPS: readonly {
 }[] = [
   { id: 'chat', domains: ['chat'] },
   { id: 'observe', domains: ['runs', 'observe'] },
-  { id: 'workflows', domains: ['workflows'] },
   { id: 'integrations', domains: ['integrations'] },
 ];
 
@@ -57,8 +55,6 @@ export function routeBreadcrumb(route: Route): string {
         ? t('breadcrumb.runs.detailRun', { tab })
         : t('breadcrumb.runs.detail', { tab });
     }
-    case 'workflows':
-      return route.workflowId ? t('breadcrumb.workflows.detail') : t('breadcrumb.workflows');
     case 'integrations':
       return t(`breadcrumb.integrations.${route.tab}`);
     case 'observe':

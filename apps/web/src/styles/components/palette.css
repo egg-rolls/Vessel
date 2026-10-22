@@ -114,7 +114,6 @@
   font-size: 9.5px;
 }
 
-.start-workflow-dialog,
 .tenant-dialog {
   width: min(640px, 100%);
 }

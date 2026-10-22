@@ -4,13 +4,11 @@ import type {
   McpServerStatus,
   RunStatus,
   TenantInfo,
-  WorkflowRunSummary,
 } from '../src/gateway/types';
 import {
   buildMcpPaletteActions,
   buildRunPaletteActions,
   buildTenantPaletteActions,
-  buildWorkflowPaletteActions,
   PALETTE_ACTION_LIMIT,
   shortId,
 } from '../src/state/palette-actions';
@@ -21,22 +19,6 @@ function live(id: string, status: RunStatus['status'], sessionId = 's1'): RunSta
 
 function durable(id: string, status: DurableRunSummary['status']): DurableRunSummary {
   return { run_id: id, session_id: 's1', status, updated_at: 1 };
-}
-
-function workflow(
-  id: string,
-  status: WorkflowRunSummary['status'],
-  name = `wf-${id}`,
-): WorkflowRunSummary {
-  return {
-    workflow_run_id: id,
-    workflow_name: name,
-    status,
-    step_count: 2,
-    completed_steps: 1,
-    started_at: 1,
-    updated_at: 1,
-  };
 }
 
 function tenant(id: string, status: TenantInfo['status'] = 'active'): TenantInfo {
@@ -92,29 +74,6 @@ describe('buildRunPaletteActions', () => {
     });
     const opens = items.filter((item) => item.id.startsWith('run-open-live-'));
     expect(opens).toHaveLength(1);
-  });
-});
-
-describe('buildWorkflowPaletteActions', () => {
-  const callbacks = { open: () => undefined, resume: () => undefined, cancel: () => undefined };
-
-  test('resume/cancel follow the workflow state machine', () => {
-    const items = buildWorkflowPaletteActions({
-      workflows: [
-        workflow('w1', 'interrupted'),
-        workflow('w2', 'failed'),
-        workflow('w3', 'completed'),
-        workflow('w4', 'running'),
-      ],
-      ...callbacks,
-    });
-    const ids = items.map((item) => item.id);
-    expect(ids).toContain('workflow-resume-w1');
-    expect(ids).toContain('workflow-resume-w2');
-    expect(ids).not.toContain('workflow-resume-w3');
-    expect(ids).toContain('workflow-cancel-w4');
-    expect(ids).not.toContain('workflow-cancel-w3');
-    expect(items.find((item) => item.id === 'workflow-cancel-w4')?.danger).toBe(true);
   });
 });
 

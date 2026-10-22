@@ -56,12 +56,6 @@ import type {
   TenantInfo,
   TenantResponse,
   ToolInfo,
-  WorkflowCancelResponse,
-  WorkflowResponse,
-  WorkflowRunAccepted,
-  WorkflowRunDetail,
-  WorkflowRunSummary,
-  WorkflowsResponse,
 } from './types';
 import { toWebSocketBase } from './url';
 
@@ -726,41 +720,6 @@ export class GatewayClient {
     return body.tenant_id;
   }
 
-  // ── canonical workflow RPC（旧 REST 方法保留兼容）──
-
-  async listWorkflowsRpc(
-    params: { status?: string; limit?: number } = {},
-  ): Promise<WorkflowRunSummary[]> {
-    const body = await this.rpc<WorkflowsResponse>('workflow.list', params);
-    return body.workflows ?? [];
-  }
-
-  async getWorkflowRpc(id: string): Promise<WorkflowRunDetail> {
-    const body = await this.rpc<WorkflowResponse>('workflow.get', {
-      workflow_run_id: id,
-    });
-    return body.workflow;
-  }
-
-  startWorkflowRpc(name: string, inputs?: Record<string, string>): Promise<WorkflowRunAccepted> {
-    return this.rpc<WorkflowRunAccepted>('workflow.start', {
-      name,
-      ...(inputs && Object.keys(inputs).length > 0 ? { inputs } : {}),
-    });
-  }
-
-  resumeWorkflowRpc(id: string): Promise<WorkflowRunAccepted> {
-    return this.rpc<WorkflowRunAccepted>('workflow.resume', {
-      workflow_run_id: id,
-    });
-  }
-
-  cancelWorkflowRpc(id: string): Promise<WorkflowCancelResponse> {
-    return this.rpc<WorkflowCancelResponse>('workflow.cancel', {
-      workflow_run_id: id,
-    });
-  }
-
   /** metrics：优先 canonical `metrics.get`（可带 source），旧 gateway 回退 REST。 */
   async getMetricsSnapshot(source: 'live' | 'trace' = 'live'): Promise<{
     metrics: MetricsSnapshot;
@@ -867,47 +826,7 @@ export class GatewayClient {
     }
   }
 
-  // ── 0.4 REST（workflow / metrics / feishu / evals）──
-
-  async listWorkflows(
-    params: { status?: string; limit?: number } = {},
-  ): Promise<WorkflowRunSummary[]> {
-    const query = new URLSearchParams();
-    if (params.status) query.set('status', params.status);
-    if (params.limit !== undefined) query.set('limit', String(params.limit));
-    const suffix = query.toString();
-    const body = await this.httpJson<WorkflowsResponse>(
-      `/v1/workflows${suffix ? `?${suffix}` : ''}`,
-    );
-    return body.workflows ?? [];
-  }
-
-  async getWorkflow(id: string): Promise<WorkflowRunDetail> {
-    const body = await this.httpJson<WorkflowResponse>(`/v1/workflows/${encodeURIComponent(id)}`);
-    return body.workflow;
-  }
-
-  startWorkflow(name: string, inputs?: Record<string, string>): Promise<WorkflowRunAccepted> {
-    const payload: { name: string; inputs?: Record<string, string> } = { name };
-    if (inputs && Object.keys(inputs).length > 0) payload.inputs = inputs;
-    return this.httpJson<WorkflowRunAccepted>('/v1/workflows/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  }
-
-  resumeWorkflow(id: string): Promise<WorkflowRunAccepted> {
-    return this.httpJson<WorkflowRunAccepted>(`/v1/workflows/${encodeURIComponent(id)}/resume`, {
-      method: 'POST',
-    });
-  }
-
-  cancelWorkflow(id: string): Promise<WorkflowCancelResponse> {
-    return this.httpJson<WorkflowCancelResponse>(`/v1/workflows/${encodeURIComponent(id)}/cancel`, {
-      method: 'POST',
-    });
-  }
+  // ── 0.4 REST（metrics / feishu / evals）──
 
   async getMetrics(source: 'live' | 'trace' = 'live'): Promise<MetricsSnapshot> {
     return (await this.getMetricsSnapshot(source)).metrics;

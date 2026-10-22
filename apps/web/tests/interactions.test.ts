@@ -91,14 +91,14 @@ describe('permissionFromEvent (0.13)', () => {
         tool: 'bash',
         session_id: 'session-9',
         tool_call_id: 'call-3',
-        source: 'workflow',
+        source: 'member',
         deadline_at: 7_500,
       }),
     );
     expect(item).toMatchObject({
       sessionId: 'session-9',
       toolCallId: 'call-3',
-      source: 'workflow',
+      source: 'member',
     });
   });
 

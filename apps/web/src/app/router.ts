@@ -8,7 +8,6 @@
 export type Route =
   | { domain: 'chat'; sessionId?: string; agent?: string }
   | { domain: 'runs'; tab: 'live' | 'durable'; runId?: string; sessionId?: string }
-  | { domain: 'workflows'; workflowId?: string }
   | {
       domain: 'integrations';
       tab: 'tools' | 'mcp' | 'channels';
@@ -93,10 +92,6 @@ export function parseRoute(hash: string): Route {
         ...(sessionId ? { sessionId } : {}),
       };
     }
-    case 'workflows': {
-      const workflowId = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
-      return workflowId ? { domain: 'workflows', workflowId } : { domain: 'workflows' };
-    }
     case 'integrations': {
       const tab = pick<'tools' | 'mcp' | 'channels'>(
         segments[1] ?? query.get('tab'),
@@ -140,10 +135,6 @@ export function formatRoute(route: Route): string {
       if (route.sessionId) query.set('session', route.sessionId);
       return `#/runs?${query.toString()}`;
     }
-    case 'workflows':
-      return route.workflowId
-        ? `#/workflows/${encodeURIComponent(route.workflowId)}`
-        : '#/workflows';
     case 'integrations':
       return `#/integrations/${route.tab}`;
     case 'observe':
