@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import {
+  orphanedDismissIds,
   pendingBarSummary,
   pendingBarTarget,
   pendingForSession,
@@ -157,6 +158,15 @@ describe('compact pending bar', () => {
     expect(markup).not.toContain('拒绝');
     expect(markup).not.toContain('提交');
     expect(markup.split('<button').length - 1).toBe(1);
+  });
+
+  test('one close action dismisses every orphan in the bar', () => {
+    const items = [
+      orphaned({ requestId: 'orphan-1' }),
+      orphaned({ requestId: 'orphan-2' }),
+      orphaned({ requestId: 'orphan-3' }),
+    ];
+    expect(orphanedDismissIds(items)).toEqual(['orphan-1', 'orphan-2', 'orphan-3']);
   });
 
   test('bar is absent when nothing is pending', () => {

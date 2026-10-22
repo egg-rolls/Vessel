@@ -86,6 +86,11 @@ export function pendingBarSummary(
   };
 }
 
+/** 关闭动作的目标：bar 内全部 orphaned，不是只关最早一条。 */
+export function orphanedDismissIds(items: readonly { requestId: string }[]): string[] {
+  return items.map((item) => item.requestId);
+}
+
 /** 跳转目标：只有最早一条带非空 `sessionId` 才能落到会话；否则不提供跳转。 */
 export function pendingBarTarget(
   summary: PendingBarSummary,

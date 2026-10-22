@@ -137,6 +137,12 @@ export const messages = {
   'chat.prompt.more': '还有 {count} 个待处理',
   'chat.prompt.disconnected': '连接断开，恢复后可继续处理',
   'chat.restoringSession': '正在恢复上次会话…',
+  // 0.18：draft 欢迎页（背景式居中 hero，无卡片）。
+  'chat.welcome.brand': 'Vessel',
+  'chat.welcome.question': '今天想干啥？',
+  'chat.draft.title': '新会话',
+  'chat.draft.meta': '发送第一条消息后创建会话',
+  'chat.draft.pickSession': '从左侧选择会话，或新建一个',
   'pending.queue.permission': '权限 · {tool}',
   'pending.queue.ask': '提问 · 第 {index} 题',
   'chat.session.pending': '有 {count} 个待处理请求',

@@ -140,6 +140,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.prompt.more': '{count} more pending',
   'chat.prompt.disconnected': 'Disconnected; reconnect to continue',
   'chat.restoringSession': 'Restoring the last session…',
+  // 0.18: draft welcome (background-style centered hero, no card).
+  'chat.welcome.brand': 'Vessel',
+  'chat.welcome.question': 'What do you want to do today?',
+  'chat.draft.title': 'New session',
+  'chat.draft.meta': 'The session is created when you send the first message',
+  'chat.draft.pickSession': 'Pick a session on the left, or start a new one',
   'pending.queue.permission': 'Permission · {tool}',
   'pending.queue.ask': 'Question · Q{index}',
   'chat.session.pending': '{count} pending request(s)',

@@ -36,6 +36,7 @@ import {
 import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
+import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
 import { OrphanedNotices } from './OrphanedNotices';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
@@ -1017,9 +1018,11 @@ export function ChatView({
         ) : (
           <div className="conversation-head draft-head">
             <div className="conversation-heading">
-              <h2 className="conversation-title">{draftActive ? '新会话' : '会话'}</h2>
+              <h2 className="conversation-title">
+                {draftActive ? t('chat.draft.title') : t('nav.domain.chat')}
+              </h2>
               <div className="conversation-meta dim">
-                {draftActive ? '发送第一条消息后创建会话' : '从左侧选择会话，或新建一个'}
+                {draftActive ? t('chat.draft.meta') : t('chat.draft.pickSession')}
               </div>
             </div>
             <div className="conversation-actions">
@@ -1140,24 +1143,7 @@ export function ChatView({
               )}
             </>
           ) : draftActive ? (
-            <EmptyState
-              title="新会话已就绪。"
-              description="发送第一条消息开始；未发送就离开不会创建会话。"
-              action={
-                <div className="example-prompts">
-                  {['解释这个仓库的结构', '列出当前可用的工具及其用途'].map((example) => (
-                    <button
-                      key={example}
-                      type="button"
-                      className="example-prompt"
-                      onClick={() => setInput(example)}
-                    >
-                      {example}
-                    </button>
-                  ))}
-                </div>
-              }
-            />
+            <ChatWelcome />
           ) : restorePending ? (
             <LoadingState label={t('chat.restoringSession')} />
           ) : null}

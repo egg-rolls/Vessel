@@ -6,7 +6,10 @@ import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
 import { useToast } from '../components/ToastProvider';
 import { ChatView } from '../domains/chat/ChatView';
-import { pendingPermissionsOutsideView } from '../domains/chat/pending-permissions';
+import {
+  orphanedDismissIds,
+  pendingPermissionsOutsideView,
+} from '../domains/chat/pending-permissions';
 import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { ObserveView } from '../domains/observe/ObserveView';
@@ -121,7 +124,7 @@ export function AppShell() {
     [navigate],
   );
   const dismissPendingOrphans = useCallback(() => {
-    for (const item of otherOrphans) dismissOrphaned(item.requestId);
+    for (const requestId of orphanedDismissIds(otherOrphans)) dismissOrphaned(requestId);
   }, [dismissOrphaned, otherOrphans]);
   const viewportWidth = useViewportWidth();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
