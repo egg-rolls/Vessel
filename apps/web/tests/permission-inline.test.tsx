@@ -7,6 +7,7 @@ import {
   nextPending,
   pendingPermissionsOutsideView,
   pendingPermissionTarget,
+  pendingQueue,
 } from '../src/domains/chat/pending-permissions';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
@@ -101,6 +102,44 @@ describe('nextPending (serial order)', () => {
 
   test('returns null when nothing is pending', () => {
     expect(nextPending([], [])).toBeNull();
+  });
+});
+
+describe('pendingQueue (S3 queue)', () => {
+  test('splits one ask into one item per question with stable keys', () => {
+    const items = pendingQueue(
+      [],
+      [
+        ask({
+          requestId: 'ask-multi',
+          questions: [
+            { header: 'Q1', question: 'First?' },
+            { header: 'Q2', question: 'Second?' },
+            { header: 'Q3', question: 'Third?' },
+          ],
+        }),
+      ],
+    );
+
+    expect(items.map((item) => item.key)).toEqual(['ask-multi:0', 'ask-multi:1', 'ask-multi:2']);
+    expect(items.map((item) => (item.kind === 'ask' ? item.questionIndex : -1))).toEqual([0, 1, 2]);
+    expect(items.every((item) => item.kind === 'ask')).toBe(true);
+  });
+
+  test('prefers permissions on a requestedAt tie and sorts by requestId', () => {
+    const perm = permission({ requestId: 'perm-tie', requestedAt: 1_000 });
+    const sameTimeAsk = ask({ requestId: 'ask-tie', requestedAt: 1_000 });
+    expect(pendingQueue([perm], [sameTimeAsk]).map((item) => item.key)).toEqual([
+      'perm:perm-tie',
+      'ask-tie:0',
+    ]);
+
+    const first = permission({ requestId: 'perm-b', requestedAt: 2_000 });
+    const second = permission({ requestId: 'perm-a', requestedAt: 2_000 });
+    expect(pendingQueue([first, second], []).map((item) => item.key)).toEqual([
+      'perm:perm-a',
+      'perm:perm-b',
+    ]);
   });
 });
 
@@ -202,6 +241,30 @@ describe('ask prompt (composer slot)', () => {
     );
     expect(markup).toContain('btn-primary');
     expect(markup).toContain('disabled');
+  });
+
+  test('renders only the current question with progress and a next button', () => {
+    const markup = renderToStaticMarkup(
+      <AskPrompt
+        request={ask({
+          requestId: 'ask-multi',
+          questions: [
+            { header: 'Q1', question: 'First question?' },
+            { header: 'Q2', question: 'Second question?' },
+            { header: 'Q3', question: 'Third question?' },
+          ],
+        })}
+        onSubmit={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+
+    expect(markup).toContain('第 1 / 3 题');
+    expect(markup).toContain('下一题');
+    expect(markup).not.toContain('提交');
+    expect(markup).toContain('First question?');
+    expect(markup).not.toContain('Second question?');
+    expect(markup).not.toContain('Third question?');
   });
 });
 

@@ -1,0 +1,39 @@
+/* ── Bottom dock（0.18） ─────────────────────────────────
+   槽位底边距固定，内容高度自适应并向上生长；令牌见 tokens.css。 */
+
+.composer-area {
+  padding-bottom: calc(var(--dock-gap) + var(--dock-safe-bottom));
+}
+
+.composer {
+  max-width: var(--dock-width);
+}
+
+.composer-input {
+  max-height: var(--composer-input-max-h);
+}
+
+/* 焦点环只由 .composer:focus-within 承担，避免输入框与容器双层。 */
+.composer-input:focus,
+.composer-input:focus-visible {
+  box-shadow: none;
+}
+
+@media (max-width: 680px) {
+  .composer-area {
+    /* 左右与消息区一致（16px）；上下 8px；底部仍由 dock 令牌承担。 */
+    padding: 8px 16px calc(var(--dock-gap) + var(--dock-safe-bottom));
+  }
+}
+
+@media (pointer: coarse) {
+  .composer-row .btn,
+  .composer-stop {
+    min-height: var(--touch-target);
+  }
+
+  .composer-stop {
+    display: inline-flex;
+    align-items: center;
+  }
+}

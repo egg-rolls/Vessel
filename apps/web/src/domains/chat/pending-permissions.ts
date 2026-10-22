@@ -62,26 +62,84 @@ export type NextPending =
   | { kind: 'permission'; request: PermissionRequest }
   | { kind: 'ask'; request: AskUserRequest };
 
+/** 队列项：一条权限 = 1 项，一条 ask 按问题拆成多项（1 裁决）。 */
+export type PendingQueueItem =
+  | { kind: 'permission'; request: PermissionRequest; key: string }
+  | { kind: 'ask'; request: AskUserRequest; questionIndex: number; key: string };
+
+interface QueueSeed {
+  at: number;
+  /** 同时间戳时权限优先（0 = 权限，1 = ask）。 */
+  rank: number;
+  requestId: string;
+  kind: 'permission' | 'ask';
+  request: PermissionRequest | AskUserRequest;
+}
+
+function compareSeed(a: QueueSeed, b: QueueSeed): number {
+  if (a.at !== b.at) return a.at - b.at;
+  if (a.rank !== b.rank) return a.rank - b.rank;
+  if (a.requestId === b.requestId) return 0;
+  return a.requestId < b.requestId ? -1 : 1;
+}
+
 /**
- * 串行处理：多个 pending 时只把最早的一条交给 Composer 槽位。
+ * 队列顺序：`requestedAt` 升序 → 同时间戳权限优先于 ask → `requestId` 稳定排序。
  *
- * 权限与 ask 都按事件的 `requestedAt` 比较；前一条被应答 / 移除后，
- * 下一次调用自然返回下一条。
+ * 同一 ask 的多问题按 `questionIndex` 连续展开，key 为 `${requestId}:${questionIndex}`；
+ * 权限 key 为 `perm:${requestId}`。当前只渲染第一项，其余作为队列摘要。
+ */
+export function pendingQueue(
+  permissions: readonly PermissionRequest[],
+  asks: readonly AskUserRequest[],
+): PendingQueueItem[] {
+  const seeds: QueueSeed[] = [
+    ...permissions.map((request) => ({
+      at: request.requestedAt,
+      rank: 0,
+      requestId: request.requestId,
+      kind: 'permission' as const,
+      request,
+    })),
+    ...asks.map((request) => ({
+      at: request.requestedAt,
+      rank: 1,
+      requestId: request.requestId,
+      kind: 'ask' as const,
+      request,
+    })),
+  ];
+  seeds.sort(compareSeed);
+
+  return seeds.flatMap<PendingQueueItem>((seed) => {
+    if (seed.kind === 'permission') {
+      const request = seed.request as PermissionRequest;
+      return [{ kind: 'permission', request, key: `perm:${request.requestId}` }];
+    }
+    const request = seed.request as AskUserRequest;
+    // 空问题列表仍占一项，避免请求被静默跳过；正常 ask 至少有 1 题。
+    const count = Math.max(1, request.questions.length);
+    return Array.from({ length: count }, (_, questionIndex) => ({
+      kind: 'ask' as const,
+      request,
+      questionIndex,
+      key: `${request.requestId}:${questionIndex}`,
+    }));
+  });
+}
+
+/**
+ * 串行处理：多个 pending 时只把队列第一项交给 Composer 槽位。
+ *
+ * 排序由 `pendingQueue` 统一（权限优先 / 按 requestedAt / requestId 稳定）；
+ * 前一条被应答 / 移除后，下一次调用自然返回下一条。
  */
 export function nextPending(
   permissions: readonly PermissionRequest[],
   asks: readonly AskUserRequest[],
 ): NextPending | null {
-  let best: { at: number; next: NextPending } | null = null;
-  for (const request of permissions) {
-    if (!best || request.requestedAt < best.at) {
-      best = { at: request.requestedAt, next: { kind: 'permission', request } };
-    }
-  }
-  for (const request of asks) {
-    if (!best || request.requestedAt < best.at) {
-      best = { at: request.requestedAt, next: { kind: 'ask', request } };
-    }
-  }
-  return best?.next ?? null;
+  const first = pendingQueue(permissions, asks)[0];
+  if (!first) return null;
+  if (first.kind === 'permission') return { kind: 'permission', request: first.request };
+  return { kind: 'ask', request: first.request };
 }

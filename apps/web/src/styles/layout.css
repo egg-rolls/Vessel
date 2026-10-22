@@ -3,7 +3,11 @@
 .app-shell {
   display: flex;
   flex-direction: column;
+  /* 旧浏览器回退 100vh；支持 dvh 时跟随动态视口；有 visualViewport 时用 JS 写入的 --vvh。 */
+  height: 100vh;
+  /* biome-ignore lint/suspicious/noDuplicateProperties: 刻意的 dvh / visualViewport 回退链 */
   height: 100dvh;
+  height: var(--vvh, 100dvh);
   min-height: 0;
 }
 
@@ -571,7 +575,9 @@
   flex-direction: column;
   gap: 16px;
   padding: 20px clamp(16px, 4vw, 48px) 28px;
-  scroll-behavior: smooth;
+  /* 流式跟随与 dock 增高不做平滑（连续 smooth 会堆积动画）；
+     只有“回到底部”按钮显式使用 behavior: smooth。 */
+  scroll-behavior: auto;
 }
 
 .conversation-scroll > * {
@@ -625,7 +631,7 @@
 
 .composer-area {
   flex: none;
-  padding: 10px clamp(16px, 4vw, 48px) calc(16px + env(safe-area-inset-bottom));
+  padding: 10px clamp(16px, 4vw, 48px) calc(var(--dock-gap) + var(--dock-safe-bottom));
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 
@@ -815,8 +821,8 @@
   }
 
   .composer-area {
-    /* 底部导航自身处理 safe-area，避免双重留白。 */
-    padding: 8px 12px 8px;
+    /* safe-area 由 token 处理（--dock-safe-bottom）。 */
+    padding: 8px 12px calc(var(--dock-gap) + var(--dock-safe-bottom));
   }
 
   .page-header {
