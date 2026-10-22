@@ -19,6 +19,7 @@ interface ListedInteraction {
   request_id: string;
   run_id: string;
   session_id?: string;
+  parent_session_id?: string;
   tool_call_id?: string;
   tool?: string;
   input?: unknown;
@@ -33,6 +34,7 @@ const LISTED_KEYS = new Set([
   'request_id',
   'run_id',
   'session_id',
+  'parent_session_id',
   'tool_call_id',
   'tool',
   'input',
@@ -344,6 +346,111 @@ describe('interactions.list', () => {
       invalid = error instanceof Error ? error.message : String(error);
     }
     expect(invalid).toContain('limit');
+  });
+
+  it('exposes parent_session_id from persisted records and omits it for legacy records', async () => {
+    const dir = tempDir();
+    seedRecords(dir, 'default', [
+      seedRecord({
+        requestId: 'req-child',
+        session_id: 'member-session',
+        parent_session_id: 'parent-session',
+      }),
+      seedRecord({ requestId: 'req-legacy', session_id: 'legacy-session' }),
+    ]);
+
+    const gw = startGateway({ events: new MemoryEventStream(), port: 0, interactionsDir: dir });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    const listed = (await client.request('interactions.list', {})) as {
+      interactions: ListedInteraction[];
+    };
+    expect(listed.interactions).toHaveLength(2);
+
+    const child = listed.interactions.find((item) => item.request_id === 'req-child');
+    if (!child) throw new Error('expected req-child');
+    expectContracted(child);
+    expect(child.parent_session_id).toBe('parent-session');
+    expect(child.session_id).toBe('member-session');
+
+    // 旧文件没有该字段：不得凭空补 null / undefined。
+    const legacy = listed.interactions.find((item) => item.request_id === 'req-legacy');
+    if (!legacy) throw new Error('expected req-legacy');
+    expectContracted(legacy);
+    expect(legacy).not.toHaveProperty('parent_session_id');
+
+    // session_id 过滤仍只匹配 item.session_id，不匹配 parent。
+    const byParent = (await client.request('interactions.list', {
+      session_id: 'parent-session',
+    })) as { interactions: ListedInteraction[] };
+    expect(byParent.interactions).toEqual([]);
+  });
+
+  it('exposes parent_session_id from a live permission request event', async () => {
+    const events = new MemoryEventStream();
+    const pluginHost = new MemoryPluginHost();
+    pluginHost.registerTool({
+      name: 'bridge_tool',
+      description: 'Publishes a bridged permission request',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async (_args, ctx) => {
+        const requestId = crypto.randomUUID();
+        ctx.events.publish({
+          type: 'tool.permission.request',
+          run_id: ctx.run_id,
+          data: {
+            requestId,
+            tool: 'bridge_tool',
+            input: {},
+            session_id: 'member-session',
+            parent_session_id: 'parent-session',
+          },
+          ts: Date.now(),
+        });
+        await ctx.events.waitFor('tool.permission.response', { requestId, timeout: 5000 });
+        return 'answered';
+      },
+    });
+    const runtime = await createRuntime({
+      events,
+      pluginHost,
+      provider: new ToolCallingProvider('bridge_tool'),
+      permission: { default: 'allow' },
+    });
+    const gw = createGateway({ events, runtime, pluginHost });
+    gateways.push(gw);
+    const client = await connect(gw);
+
+    await submit(gw, 'bridge please');
+    const request = await client.nextEvent('tool.permission.request');
+
+    const pending = (await client.request('interactions.list', { status: 'pending' })) as {
+      interactions: ListedInteraction[];
+    };
+    const item = pending.interactions.find(
+      (entry) => entry.request_id === (request.requestId as string),
+    );
+    if (!item) throw new Error('expected a pending bridged permission');
+    expectContracted(item);
+    expect(item.session_id).toBe('member-session');
+    expect(item.parent_session_id).toBe('parent-session');
+    expect(item.status).toBe('pending');
+
+    await client.request('permission.respond', {
+      request_id: request.requestId,
+      decision: 'allow',
+    });
+    await client.nextEvent('run.completed');
+
+    const answered = (await client.request('interactions.list', {})) as {
+      interactions: ListedInteraction[];
+    };
+    expect(answered.interactions[0]).toMatchObject({
+      request_id: request.requestId as string,
+      parent_session_id: 'parent-session',
+      status: 'answered',
+    });
   });
 
   it('lists pending ask requests from memory with their questions', async () => {
