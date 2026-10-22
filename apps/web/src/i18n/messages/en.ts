@@ -119,16 +119,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'permission.collapse': 'Collapse to 12 lines',
   'permission.truncated': 'Arguments truncated (20,000 character limit)',
   'permission.runEnded': 'The run has ended; this permission request is no longer valid.',
-  'permission.otherSessions': '{count} pending permission request(s) in other sessions',
   'permission.goTo': 'Review',
+  // 0.18: cross-session pending collapses into one compact bar.
+  'pending.bar.summary': '{count} pending request(s) in other sessions',
+  'pending.bar.unresolved': 'No longer valid: the owning session was not found',
   // 0.17: AppShell panel for other-session / unattributed requests
   'pending.inline.title': 'Pending requests in this session',
   'pending.inline.desc':
     'These requests have no matching run card in the timeline; you can act on them here.',
-  'pending.panel.title': 'Pending requests in other sessions / unattributed',
-  'pending.panel.desc': 'Non-modal panel; acting here does not switch the current session.',
-  'pending.panel.toggle': 'Show',
-  'pending.panel.collapse': 'Hide',
   'pending.count': '{count} pending',
   'pending.agent': 'agent {id}',
   'pending.run': 'run {id}',
@@ -147,7 +145,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.18 H2: no-longer-valid interactions are notice + dismiss only, never answerable.
   'interaction.orphaned': 'No longer valid (run ended / process restarted)',
   'interaction.orphaned.label': '{count} no longer valid',
-  'interaction.orphaned.otherSessions': '{count} no longer valid in other sessions',
+  'interaction.orphaned.bar': '{count} no-longer-valid request(s)',
   'interaction.orphaned.listLabel': 'No-longer-valid interactions',
   'interaction.orphaned.metaTool': 'tool {tool}',
   'interaction.orphaned.metaAsk': 'ask',
@@ -185,7 +183,6 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.tool.showAll': 'Show all {total} lines',
   'ask.title': 'Agent question',
   'ask.goTo': 'Answer',
-  'ask.otherSessions': '{count} pending question(s) in other sessions',
   'ask.pendingMore': '{count} more pending',
   'ask.progress': 'Question {current} of {total}',
   'ask.next': 'Next',
