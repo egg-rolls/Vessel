@@ -97,6 +97,31 @@ export function resolveGatewayToken(
   );
 }
 
+/**
+ * 解析 `--connect` / 远程控制面使用的客户端凭据（0.18，DECISION-033）。
+ *
+ * 优先级（高 → 低）：
+ * `options.connectToken` → `VESSEL_CONNECT_TOKEN` → `config.connect.token` →
+ * `resolveGatewayToken(config, env)`。
+ * 空串视为未设置；永不读取 / 返回 `serve.tokens`。
+ * token 只返回给调用方，不打印、不进日志或错误消息。
+ */
+export function resolveConnectToken(
+  config: VesselConfig,
+  options: { connectToken?: string | null; env?: Record<string, string | undefined> } = {},
+): string | undefined {
+  const env = options.env ?? process.env;
+  const nonEmpty = (value: unknown): string | undefined =>
+    typeof value === 'string' && value.trim() !== '' ? value : undefined;
+
+  return (
+    nonEmpty(options.connectToken) ??
+    nonEmpty(env.VESSEL_CONNECT_TOKEN) ??
+    nonEmpty(config.connect?.token) ??
+    resolveGatewayToken(config, env)
+  );
+}
+
 /** 解析 peers 目录：支持 `~`；相对路径按进程 cwd 解析 */
 export function resolvePeersDir(input?: string): string {
   const raw = input && input.length > 0 ? input : DEFAULT_TRANSPORT_OPTIONS.peersDir;

@@ -22,7 +22,7 @@ import {
 import { gatewayBaseUrl } from './gateway/reload';
 import type { RpcClient } from './rpc';
 import { createHttpRpcClient, normalizeConnectUrl } from './rpc/http-client';
-import { resolveGatewayToken } from './transport-factory';
+import { resolveConnectToken, resolveGatewayToken } from './transport-factory';
 
 /** 解析选项 */
 export interface ControlPlaneTargetOptions {
@@ -125,13 +125,7 @@ export async function resolveControlPlaneTarget(
   const connectUrl = nonEmpty(options.connectUrl) ?? nonEmpty(env.VESSEL_CONNECT);
   if (connectUrl !== undefined) {
     const baseUrl = normalizeConnectUrl(connectUrl);
-    const token =
-      nonEmpty(options.connectToken) ??
-      nonEmpty(env.VESSEL_CONNECT_TOKEN) ??
-      nonEmpty(config.connect?.token) ??
-      nonEmpty(config.serve?.token) ??
-      nonEmpty(config.transport?.token) ??
-      '';
+    const token = resolveConnectToken(config, { connectToken: options.connectToken, env }) ?? '';
     const ca = await readCa(nonEmpty(options.caFile) ?? nonEmpty(config.connect?.caFile));
     const client: RpcClient & { close(): Promise<void> } = createHttpRpcClient({
       baseUrl,

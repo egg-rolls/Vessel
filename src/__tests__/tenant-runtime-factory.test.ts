@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
+import type { EventStream, TraceRedactor } from '../../packages/core/src/index';
 import { createGatewayEventHub } from '../../packages/serve/src/index';
 import { bootstrap } from '../bootstrap';
 import {
@@ -36,7 +37,36 @@ function writeConfig(base: string, body: string): { base: string; configPath: st
   return { base, configPath };
 }
 
-function twoTenantYaml(extraTenant?: string): string {
+interface TenantToolsYaml {
+  allow?: string[];
+  deny?: string[];
+}
+
+/** tenant 级 `tools:` 块（与 `status` / `config` 同级）。 */
+function tenantToolsLines(tools: TenantToolsYaml | undefined): string[] {
+  if (!tools) return [];
+  const lines = ['      tools:'];
+  if (tools.allow !== undefined) {
+    lines.push(
+      ...(tools.allow.length === 0
+        ? ['        allow: []']
+        : ['        allow:', ...tools.allow.map((name) => `          - ${name}`)]),
+    );
+  }
+  if (tools.deny !== undefined) {
+    lines.push(
+      ...(tools.deny.length === 0
+        ? ['        deny: []']
+        : ['        deny:', ...tools.deny.map((name) => `          - ${name}`)]),
+    );
+  }
+  return lines;
+}
+
+function twoTenantYaml(
+  extraTenant?: string,
+  tenantTools?: { acme?: TenantToolsYaml; work?: TenantToolsYaml },
+): string {
   return [
     'provider:',
     '  name: openai',
@@ -49,12 +79,42 @@ function twoTenantYaml(extraTenant?: string): string {
     '  tenants:',
     '    acme:',
     '      status: active',
+    ...tenantToolsLines(tenantTools?.acme),
     extraTenant ? '      config:' : '      config: {}',
     ...(extraTenant ? extraTenant.split('\n').map((line) => `        ${line}`) : []),
     '    work:',
     '      status: active',
+    ...tenantToolsLines(tenantTools?.work),
     '      config: {}',
   ].join('\n');
+}
+
+function toolNames(bundle: { pluginHost: { listTools(): Array<{ name: string }> } }): string[] {
+  return bundle.pluginHost.listTools().map((def) => def.name);
+}
+
+/** 只识别 GitHub token 的 fake ext redactor（core 默认不认识 ghp_）。 */
+const FAKE_GITHUB_MASK = '[REDACTED_GITHUB_TOKEN]';
+const fakeGithubRedactor: TraceRedactor = {
+  redact(event) {
+    return { ...event, data: maskGithubToken(event.data) as Record<string, unknown> };
+  },
+};
+
+function maskGithubToken(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/ghp_[A-Za-z0-9]+/g, FAKE_GITHUB_MASK);
+  }
+  if (Array.isArray(value)) return value.map(maskGithubToken);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+        key,
+        maskGithubToken(entry),
+      ]),
+    );
+  }
+  return value;
 }
 
 describe('listActiveTenantIds', () => {
@@ -148,6 +208,105 @@ describe('createTenantRuntimeFactory', () => {
     // shutdown 释放全部锁。
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);
     expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
+  });
+
+  it('live hub 对 ext 才能识别的 GitHub token 脱敏——事件里不出现 ghp_', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(base, twoTenantYaml());
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+      redactor: fakeGithubRedactor,
+    });
+
+    try {
+      const bundle = factory.bundleFor('acme');
+      expect(bundle).toBeDefined();
+      const hub = createGatewayEventHub({
+        streams: [{ tenantId: 'acme', stream: bundle?.events as EventStream }],
+        redactor: bundle?.redactor,
+      });
+      try {
+        bundle?.events.publish({
+          type: 'run.started',
+          run_id: 'run-ghp',
+          data: { input: 'use ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+          ts: 1,
+        });
+
+        const item = hub.since(0).find((entry) => entry.event.run_id === 'run-ghp');
+        expect(item).toBeDefined();
+        const serialized = JSON.stringify(item?.event);
+        expect(serialized).not.toContain('ghp_');
+        expect(serialized).toContain(FAKE_GITHUB_MASK);
+      } finally {
+        hub.close();
+      }
+    } finally {
+      await factory.closeAll();
+    }
+  });
+
+  it('所有 tenant 的 trace 与 live 使用同一 ext redactor 实例', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(base, twoTenantYaml());
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+      redactor: fakeGithubRedactor,
+    });
+
+    try {
+      const bundles = ['acme', 'work'].map((tenantId) => factory.bundleFor(tenantId));
+      for (const bundle of bundles) {
+        expect(bundle).toBeDefined();
+        expect(bundle?.extRedactor).toBe(fakeGithubRedactor);
+        const redacted = bundle?.redactor.redact({
+          type: 'run.started',
+          run_id: 'run-shared-ext',
+          data: { input: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+          ts: 1,
+        });
+        const serialized = JSON.stringify(redacted);
+        expect(serialized).not.toContain('ghp_');
+        expect(serialized).toContain(FAKE_GITHUB_MASK);
+      }
+
+      const work = factory.bundleFor('work');
+      const hub = createGatewayEventHub({
+        streams: [{ tenantId: 'work', stream: work?.events as EventStream }],
+        redactor: work?.redactor,
+      });
+      try {
+        work?.events.publish({
+          type: 'run.started',
+          run_id: 'run-work-ghp',
+          data: { input: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+          ts: 1,
+        });
+        const item = hub.since(0).find((entry) => entry.event.run_id === 'run-work-ghp');
+        expect(item).toBeDefined();
+        const serialized = JSON.stringify(item?.event);
+        expect(serialized).not.toContain('ghp_');
+        expect(serialized).toContain(FAKE_GITHUB_MASK);
+      } finally {
+        hub.close();
+      }
+    } finally {
+      await factory.closeAll();
+    }
   });
 
   it('reuses a bootstrap-seeded tenant without rebuilding or closing it', async () => {
@@ -281,5 +440,105 @@ describe('createTenantRuntimeFactory', () => {
     // acme 已建成，但失败时必须释放它的锁。
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);
     expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
+  });
+
+  it('tenant tools.deny keeps the denied tool out of the tenant host', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(
+      base,
+      twoTenantYaml(undefined, { acme: { deny: ['bash'] } }),
+    );
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+    });
+
+    try {
+      const acme = factory.bundleFor('acme');
+      const work = factory.bundleFor('work');
+      expect(acme).toBeDefined();
+      expect(work).toBeDefined();
+
+      expect(acme?.pluginHost.getTool('bash')).toBeUndefined();
+      expect(toolNames(acme as NonNullable<typeof acme>).sort()).toEqual(['edit', 'read']);
+      // 另一 tenant 未配置策略：工具面不变。
+      expect(work?.pluginHost.getTool('bash')).toBeDefined();
+      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual(['bash', 'edit', 'read']);
+    } finally {
+      await factory.closeAll();
+    }
+  });
+
+  it('tenant tools.allow limits the tenant host to listed tools', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(
+      base,
+      twoTenantYaml(undefined, { acme: { allow: ['read'] } }),
+    );
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+    });
+
+    try {
+      const acme = factory.bundleFor('acme');
+      const work = factory.bundleFor('work');
+      expect(acme?.pluginHost.getTool('read')).toBeDefined();
+      expect(acme?.pluginHost.getTool('bash')).toBeUndefined();
+      expect(acme?.pluginHost.getTool('edit')).toBeUndefined();
+      expect(toolNames(acme as NonNullable<typeof acme>)).toEqual(['read']);
+      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual(['bash', 'edit', 'read']);
+    } finally {
+      await factory.closeAll();
+    }
+  });
+
+  it('tenant tools.deny suppresses ask_user', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(
+      base,
+      twoTenantYaml(undefined, { acme: { deny: ['ask_user'] } }),
+    );
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      registerAskUser: true,
+      nodeId: 'node-test',
+    });
+
+    try {
+      const acme = factory.bundleFor('acme');
+      const work = factory.bundleFor('work');
+      expect(acme?.pluginHost.getTool('ask_user')).toBeUndefined();
+      expect(toolNames(acme as NonNullable<typeof acme>)).not.toContain('ask_user');
+      expect(toolNames(acme as NonNullable<typeof acme>).sort()).toEqual(['bash', 'edit', 'read']);
+      // 同一工厂内另一 tenant 仍拿到 ask_user。
+      expect(work?.pluginHost.getTool('ask_user')).toBeDefined();
+      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual([
+        'ask_user',
+        'bash',
+        'edit',
+        'read',
+      ]);
+    } finally {
+      await factory.closeAll();
+    }
   });
 });

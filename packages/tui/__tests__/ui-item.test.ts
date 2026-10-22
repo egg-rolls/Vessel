@@ -47,6 +47,40 @@ describe('reduceUiProjection：assistant / reasoning', () => {
     expect(state.items[1]).toMatchObject({ kind: 'assistant', text: 'answer' });
   });
 
+  it('流式已显示的正文在 llm.response 到达时被再追加一遍', () => {
+    const state = fold([textDelta('Hello'), event('llm.response', { content: 'Hello' })]);
+    const assistants = state.items.filter((item) => item.kind === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ kind: 'assistant', text: 'Hello' });
+  });
+
+  it('非流式 provider 只有 llm.response 时正文被去重逻辑吞掉', () => {
+    const state = fold([event('llm.response', { content: 'Hello' })]);
+    const assistants = state.items.filter((item) => item.kind === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ kind: 'assistant', text: 'Hello' });
+  });
+
+  it('取消时 partial_content 与已流出正文重复', () => {
+    const state = fold([
+      textDelta('part'),
+      event('run.cancelled', { run_id: 'r1', partial_content: 'part', duration_ms: 5 }),
+    ]);
+    const assistants = state.items.filter((item) => item.kind === 'assistant');
+    expect(assistants).toHaveLength(1);
+    expect(assistants[0]).toMatchObject({ kind: 'assistant', text: 'part' });
+  });
+
+  it('reasoning_delta 后持久化 reasoning 不重复', () => {
+    const state = fold([
+      reasoningDelta('think'),
+      event('llm.response', { reasoning: 'think', content: 'answer' }),
+    ]);
+    const reasoning = state.items.filter((item) => item.kind === 'reasoning');
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]).toMatchObject({ kind: 'reasoning', text: 'think' });
+  });
+
   it('工具调用后的正文另起一个 assistant item', () => {
     const state = fold([
       textDelta('first'),
@@ -296,6 +330,42 @@ describe('projectMessagesToUiItems（resume）', () => {
   it('showReasoning=false 时不回灌 reasoning', () => {
     const items = projectMessagesToUiItems(messages, { showReasoning: false });
     expect(items.map((item) => item.kind)).toEqual(['user', 'assistant', 'tool']);
+  });
+
+  it('resume 回退把 Error: 前缀的工具结果显示为 failed', () => {
+    const items = projectMessagesToUiItems([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'c1', function: { name: 'read', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'c1', name: 'read', content: 'Error: ENOENT' },
+    ]);
+    const tool = items.find((item) => item.kind === 'tool');
+    if (tool?.kind !== 'tool') throw new Error('expected tool');
+    expect(tool.view.status).toBe('failed');
+    expect(tool.view.result).toBe('Error: ENOENT');
+  });
+
+  it('正常结果被前缀判断误标 failed；孤立 tool 消息漏判', () => {
+    const paired = projectMessagesToUiItems([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'c1', function: { name: 'read', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'c1', name: 'read', content: 'ok' },
+    ]);
+    const pairedTool = paired.find((item) => item.kind === 'tool');
+    if (pairedTool?.kind !== 'tool') throw new Error('expected tool');
+    expect(pairedTool.view.status).toBe('completed');
+
+    const orphan = projectMessagesToUiItems([
+      { role: 'tool', tool_call_id: 'c2', name: 'read', content: 'Error: ENOENT' },
+    ]);
+    const orphanTool = orphan.find((item) => item.kind === 'tool');
+    if (orphanTool?.kind !== 'tool') throw new Error('expected tool');
+    expect(orphanTool.view.status).toBe('failed');
   });
 });
 

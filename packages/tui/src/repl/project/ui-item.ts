@@ -244,6 +244,11 @@ function makeToolView(
   return withTruncation({ ...view, id, name, args, status });
 }
 
+/** 回退视图用 core 的固定失败前缀判断 */
+function toolStatusFromContent(content: string | undefined): ToolCallStatus {
+  return content?.startsWith('Error: ') ? 'failed' : 'completed';
+}
+
 function updateItem(
   state: UiProjectionState,
   id: string,
@@ -349,10 +354,13 @@ export function reduceUiProjection(
 
     case 'llm.response': {
       // 事件日志没有 llm.stream.chunk；assistant 文本来自持久化的 llm.response。
+      // 已流式显示过的正文 / 思考不再追加，避免 live + 持久化各一份。
+      const streamedText = state.assistantId !== undefined;
+      const streamedReasoning = state.reasoningId !== undefined;
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
       const reasoning = readString(event.data, 'reasoning');
-      if (reasoning !== undefined) {
+      if (reasoning !== undefined && !streamedReasoning) {
         const text = safe(reasoning);
         if (text) {
           const { id, seq } = nextId(next, 'reasoning');
@@ -364,7 +372,7 @@ export function reduceUiProjection(
         }
       }
       const content = readString(event.data, 'content');
-      if (content !== undefined) {
+      if (content !== undefined && !streamedText) {
         const text = safe(content);
         if (text) {
           const { id, seq } = nextId(next, 'assistant');
@@ -420,7 +428,9 @@ export function reduceUiProjection(
 
     case 'tool.call.started': {
       const data = event.data;
-      const { id, seq } = nextId(state, 'tool');
+      // closeAssistant 收尾流式 item（清 streaming 标记），不只是丢引用。
+      const base = closeAssistant(state);
+      const { id, seq } = nextId(base, 'tool');
       const view = makeToolView(
         data.tool_name,
         data.tool_call_id,
@@ -429,12 +439,11 @@ export function reduceUiProjection(
         'running',
       );
       return {
-        ...state,
+        ...base,
         seq,
-        assistantId: undefined,
         runToolCount: state.runToolCount + 1,
         toolItemIds: { ...state.toolItemIds, [data.tool_call_id]: id },
-        items: [...state.items, { kind: 'tool', id, view }],
+        items: [...base.items, { kind: 'tool', id, view }],
       };
     }
 
@@ -773,9 +782,13 @@ export function reduceUiProjection(
     }
 
     case 'run.failed': {
+      // 已流出的半截正文不再用 partial_content 追加（否则重复）。
+      const streamedText = state.assistantId !== undefined;
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
-      next = appendPartialAssistant(next, event.ts, readString(event.data, 'partial_content'));
+      if (!streamedText) {
+        next = appendPartialAssistant(next, event.ts, readString(event.data, 'partial_content'));
+      }
       const envelope = readErrorEnvelope(event.data, { category: 'internal', phase: 'run' });
       const { id: errorId, seq: errorSeq } = nextId(next, 'error');
       next = {
@@ -816,9 +829,13 @@ export function reduceUiProjection(
     }
 
     case 'run.cancelled': {
+      // 已流出的半截正文不再用 partial_content 追加（否则重复）。
+      const streamedText = state.assistantId !== undefined;
       let next = closeReasoning(state, event.ts);
       next = closeAssistant(next);
-      next = appendPartialAssistant(next, event.ts, readString(event.data, 'partial_content'));
+      if (!streamedText) {
+        next = appendPartialAssistant(next, event.ts, readString(event.data, 'partial_content'));
+      }
       const { id, seq } = nextId(next, 'run');
       return {
         ...next,
@@ -900,7 +917,7 @@ export function projectMessagesToUiItems(
         message.tool_call_id ?? next('tool'),
         undefined,
         safe(message.content),
-        'completed',
+        toolStatusFromContent(message.content),
       );
       items.push({ kind: 'tool', id: next('tool'), view });
       continue;
@@ -938,7 +955,7 @@ export function projectMessagesToUiItems(
         call.id ?? next('tool'),
         parseToolArguments(call.function?.arguments),
         result !== undefined ? safe(result.content) : undefined,
-        'completed',
+        toolStatusFromContent(result?.content),
       );
       items.push({ kind: 'tool', id: next('tool'), view });
     }

@@ -19,7 +19,10 @@ import { join } from 'node:path';
 import {
   type ConfigSources,
   DEFAULT_CONFIG,
+  isTenantToolAllowed,
   loadConfig,
+  resolveTenantToolPolicy,
+  type TenantToolPolicy,
   type VesselConfig,
 } from '../packages/config/src/index';
 import {
@@ -27,6 +30,8 @@ import {
   createDefaultTraceRedactor,
   type EventStream,
   estimateTokens,
+  type Guardrail,
+  type Hook,
   type LLMProvider,
   type Logger,
   MemoryContextManager,
@@ -35,14 +40,18 @@ import {
   noopLogger,
   type Plugin,
   type PluginHost,
+  type PluginInstallScope,
+  type ProviderFactory,
   type RunnableAgent,
   type RunStore,
   type RuntimeHost,
   type RuntimePermissionConfig,
   resolveTenantPaths,
+  type SelfCardOptions,
   type SessionBackend,
   SessionEventLog,
   type TenantPaths,
+  type ToolDefinition,
   type TraceRedactor,
 } from '../packages/core/src/index';
 import type { TenantEventHub } from '../packages/serve/src/index';
@@ -135,7 +144,7 @@ export interface BuildTenantRuntimeOptions {
   sessionId?: string;
   metricsFactory?: MetricsFactory;
   traceFactory?: TraceRecorderFactory;
-  /** 测试注入的 ext redactor */
+  /** 共享 / 注入的 ext redactor；缺省从 loader 加载 */
   redactor?: TraceRedactor;
   /** 诊断 logger（0.10 R2-14）；缺省 noop，CLI / serve 注入 stderr logger */
   logger?: Logger;
@@ -175,7 +184,10 @@ export interface TenantRuntimeBundle {
   eventLog?: SessionEventLog;
   trace?: TraceControl;
   metrics?: MetricsControlLike;
+  /** 组合后的 redactor（core 默认 + ext）；live hub / gateway 使用同一实例 */
   redactor: TraceRedactor;
+  /** 0.18：未组合的 ext redactor；factory 透传给所有 tenant（缺省无 ext） */
+  extRedactor?: TraceRedactor;
   sessionControl: SessionControl;
   /** 本 bundle 使用的插件扫描器（0.12：`gateway.reload` 刷新缓存） */
   pluginLoader: PluginLoader;
@@ -199,6 +211,82 @@ function nonEmpty(value: unknown): string | undefined {
 
 function tenantSessionsDbPath(tenantRoot: string): string {
   return join(tenantRoot, 'sessions.db');
+}
+
+/**
+ * 0.18（DECISION-032 §1）：tenant 工具策略的 PluginHost 包装器。
+ *
+ * 只在注册边界过滤工具：被拒绝的工具既不进 `listTools()` / `getTool()`，
+ * 也不会被模型看到或执行。provider / hook / guardrail / 插件生命周期不变；
+ * `beginPluginInstall` 原样转发，安装失败回滚继续生效。
+ */
+export class TenantToolHost implements PluginHost {
+  private readonly inner: PluginHost;
+  private readonly policy: TenantToolPolicy | undefined;
+  /** 仅在内部 host 支持回滚时暴露；未支持时不冒充 */
+  beginPluginInstall?: (pluginName: string) => PluginInstallScope;
+
+  constructor(inner: PluginHost, policy?: TenantToolPolicy) {
+    this.inner = inner;
+    this.policy = policy;
+    const begin = inner.beginPluginInstall?.bind(inner);
+    if (begin) {
+      this.beginPluginInstall = (pluginName: string): PluginInstallScope => begin(pluginName);
+    }
+  }
+
+  registerTool(def: ToolDefinition): void {
+    if (!isTenantToolAllowed(def.name, this.policy)) return;
+    this.inner.registerTool(def);
+  }
+
+  registerProvider(name: string, factory: ProviderFactory): void {
+    this.inner.registerProvider(name, factory);
+  }
+
+  registerGuardrail(guardrail: Guardrail): void {
+    this.inner.registerGuardrail(guardrail);
+  }
+
+  registerHook(hook: Hook): void {
+    this.inner.registerHook(hook);
+  }
+
+  getTool(name: string): ToolDefinition | undefined {
+    return this.inner.getTool(name);
+  }
+
+  getProvider(name: string): ProviderFactory | undefined {
+    return this.inner.getProvider(name);
+  }
+
+  getGuardrails(): Guardrail[] {
+    return this.inner.getGuardrails();
+  }
+
+  getHooks(): Hook[] {
+    return this.inner.getHooks();
+  }
+
+  listTools(): ToolDefinition[] {
+    return this.inner.listTools();
+  }
+
+  listProviders(): string[] {
+    return this.inner.listProviders();
+  }
+}
+
+/** Self Card 的工具面只减不增：与 tenant policy 求交集（`src/self-card.ts` 不动）。 */
+function withTenantToolPolicy(
+  card: SelfCardOptions,
+  policy: TenantToolPolicy | undefined,
+): SelfCardOptions {
+  if (!policy) return card;
+  return {
+    ...card,
+    tools: card.tools.filter((name) => isTenantToolAllowed(name, policy)),
+  };
 }
 
 /** core 0.6.1 E3 的 summarizer 形状（本 worktree 的 core 尚未导出该类型） */
@@ -426,6 +514,8 @@ export async function buildTenantRuntime(
   options: BuildTenantRuntimeOptions,
 ): Promise<TenantRuntimeBundle> {
   const { tenantId, config, tenantPaths } = options;
+  // 0.18（DECISION-032 §1）：本 tenant 的工具策略在注册边界生效。
+  const toolPolicy = resolveTenantToolPolicy(config, tenantId);
   const useMock = options.useMock ?? false;
   const headless = options.headless ?? false;
   const loader = options.loader ?? new PluginLoader();
@@ -596,7 +686,7 @@ export async function buildTenantRuntime(
       // `plugins` 列表，因此 `AgentRuntime.dispose()`（插件逆序清理）触达不到这些插件。
       // 本轮的关闭责任在宿主侧（bootstrap shutdown 只关 runtime/host），等 core 给出
       // PluginHost/Host 级 dispose 接缝后再迁移；不要在此另造一套清理顺序。
-      const hostPluginHost = new MemoryPluginHost();
+      const hostPluginHost = new TenantToolHost(new MemoryPluginHost(), toolPolicy);
       for (const plugin of plugins) {
         await installWithConfig(plugin, hostPluginHost, pluginConfigs[plugin.name]);
       }
@@ -624,9 +714,12 @@ export async function buildTenantRuntime(
           limits,
           termination,
           permission,
-          selfCard: ownerSelfCard(config, providerModel, {
-            askUser: options.registerAskUser === true,
-          }),
+          selfCard: withTenantToolPolicy(
+            ownerSelfCard(config, providerModel, {
+              askUser: options.registerAskUser === true,
+            }),
+            toolPolicy,
+          ),
         },
         sessionId: options.sessionId ?? crypto.randomUUID(),
         ...(runStore ? { runStore } : {}),
@@ -662,10 +755,17 @@ export async function buildTenantRuntime(
           plugins: plugins.map((plugin) => withPluginConfig(plugin, pluginConfigs[plugin.name])),
           systemPrompt,
           permission,
-          // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）。
-          selfCard: ownerSelfCard(config, providerModel, {
-            askUser: options.registerAskUser === true,
-          }),
+          // 0.15 E9：主 agent 的 Self Card（成员由 AgentService 注入）；
+          // 0.18：tenant policy 只减不增。
+          selfCard: withTenantToolPolicy(
+            ownerSelfCard(config, providerModel, {
+              askUser: options.registerAskUser === true,
+            }),
+            toolPolicy,
+          ),
+          // 0.18（DECISION-032 §1.5）：非 host 路径同样经过滤器注册工具
+          // （AgentRuntime 不再自建 host）。
+          pluginHost: new TenantToolHost(new MemoryPluginHost(), toolPolicy),
           ...(Object.keys(pluginConfigs).length > 0 ? { pluginConfigs } : {}),
           ...(runStore ? { runStore } : {}),
           ...(eventLog ? { eventLog } : {}),
@@ -931,6 +1031,7 @@ export async function buildTenantRuntime(
       ...(trace ? { trace } : {}),
       ...(metrics ? { metrics } : {}),
       redactor,
+      ...(extRedactor ? { extRedactor } : {}),
       sessionControl,
       pluginLoader: loader,
       plugins,
