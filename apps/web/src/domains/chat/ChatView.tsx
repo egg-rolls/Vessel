@@ -4,6 +4,7 @@ import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
 import { useViewportWidth } from '../../app/useViewportWidth';
+import { useVisualViewport } from '../../app/useVisualViewport';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { usePaletteEntities } from '../../components/PaletteEntities';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
@@ -98,6 +99,8 @@ export function ChatView({
   } = useConnection();
   const toast = useToast();
   const snapshot = useEventSnapshot();
+  // 键盘弹出时把 visual viewport 尺寸写到根元素，供 dock 上限与外壳高度使用。
+  useVisualViewport();
   const connected = connectionState === 'open' && hasToken;
   const durableFeature = features.includes('durable-resume');
 
@@ -628,6 +631,27 @@ export function ChatView({
     const near = distance < 96;
     nearBottomRef.current = near;
     setNearBottom(near);
+  }, []);
+
+  // dock 增高 / 缩短（卡牌出现、切题、输入框变高）会改变滚动容器的高度：
+  // 用户原本贴底时保持贴底；已离开底部则不抢滚动位置。
+  useEffect(() => {
+    const element = scrollRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    let frame: number | undefined;
+    const observer = new ResizeObserver(() => {
+      if (!nearBottomRef.current) return;
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(() => {
+        frame = undefined;
+        element.scrollTop = element.scrollHeight;
+      });
+    });
+    observer.observe(element);
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, []);
 
   const scrollToBottom = useCallback(() => {

@@ -81,7 +81,7 @@
     56dvh,
     520px,
     calc(
-      100dvh -
+      var(--vvh, 100dvh) -
       var(--appbar-h) -
       var(--transcript-min-h) -
       var(--bottom-nav-h, 0px) -

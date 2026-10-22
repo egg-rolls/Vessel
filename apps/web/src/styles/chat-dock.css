@@ -21,7 +21,8 @@
 
 @media (max-width: 680px) {
   .composer-area {
-    padding: 8px 12px calc(var(--dock-gap) + var(--dock-safe-bottom));
+    /* 左右与消息区一致（16px）；上下 8px；底部仍由 dock 令牌承担。 */
+    padding: 8px 16px calc(var(--dock-gap) + var(--dock-safe-bottom));
   }
 }
 
