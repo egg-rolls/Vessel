@@ -30,6 +30,7 @@ select {
 }
 
 button {
+  border: 0;
   cursor: pointer;
 }
 
@@ -157,7 +158,22 @@ kbd,
   .menu,
   .palette,
   .ask-card,
-  .composer {
+  .composer,
+  .panel,
+  .stat,
+  .state-empty,
+  .state-loading,
+  .state-error,
+  .state-not-enabled,
+  .toast,
+  .prompt-slot,
+  .pending-permissions-bar,
+  .bottom-nav,
+  .tool-card,
+  .event-list,
+  .btn,
+  .input,
+  .status-chip {
     border: 1px solid CanvasText;
   }
 
