@@ -139,6 +139,8 @@ export interface AskUserRequest {
   requestedAt: number;
   /** 0.15 additive：由 run.started 反查的归属会话；旧流缺失时不参与跨 session 归类。 */
   sessionId?: string;
+  /** 成员 bridge 的父 chat（事件 `parent_session_id`）；旧事件缺失，缺失时回退 `sessionId`。 */
+  parentSessionId?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
   agentId?: string;
 }
@@ -158,6 +160,8 @@ export interface PermissionRequest {
   runId: string;
   /** run 归属会话；旧 gateway 缺失时不参与跨 session 归类。 */
   sessionId?: string;
+  /** 成员 bridge 的父 chat（事件 `parent_session_id`）；旧事件缺失，缺失时回退 `sessionId`。 */
+  parentSessionId?: string;
   toolCallId?: string;
   source?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */

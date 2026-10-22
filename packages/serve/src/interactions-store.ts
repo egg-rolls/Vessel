@@ -28,6 +28,8 @@ export interface StoredInteraction {
   run_id: string;
   tenant_id: string;
   session_id?: string;
+  /** 成员 bridge 请求的父会话（additive；旧文件缺失时继续可读）。 */
+  parent_session_id?: string;
   tool_call_id?: string;
   tool: string;
   input: unknown;
@@ -51,6 +53,7 @@ function parseRecord(value: unknown): StoredInteraction | null {
     run_id,
     tenant_id,
     session_id,
+    parent_session_id,
     tool_call_id,
     tool,
     input,
@@ -86,6 +89,9 @@ function parseRecord(value: unknown): StoredInteraction | null {
     run_id,
     tenant_id,
     ...(typeof session_id === 'string' && session_id.length > 0 ? { session_id } : {}),
+    ...(typeof parent_session_id === 'string' && parent_session_id.length > 0
+      ? { parent_session_id }
+      : {}),
     ...(typeof tool_call_id === 'string' && tool_call_id.length > 0 ? { tool_call_id } : {}),
     tool,
     input,

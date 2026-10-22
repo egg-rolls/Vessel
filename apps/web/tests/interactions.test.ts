@@ -133,6 +133,22 @@ describe('permissionFromEvent (0.13)', () => {
     );
     expect(permissionFromEvent(event({ requestId: 'perm-4' }))).not.toHaveProperty('agentId');
   });
+
+  test('keeps session_id and parent_session_id for member bridge requests', () => {
+    const item = permissionFromEvent(
+      event({
+        requestId: 'perm-1',
+        session_id: 'member-1',
+        parent_session_id: 'chat-1',
+      }),
+    );
+    expect(item).toMatchObject({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+
+    // 旧事件没有 parent_session_id：不得凭空生成该属性。
+    const legacy = permissionFromEvent(event({ requestId: 'perm-2', session_id: 'member-2' }));
+    expect(legacy?.sessionId).toBe('member-2');
+    expect(legacy).not.toHaveProperty('parentSessionId');
+  });
 });
 
 describe('askFromEvent (0.17)', () => {
@@ -183,6 +199,25 @@ describe('askFromEvent (0.17)', () => {
     expect(legacy).not.toHaveProperty('agentId');
     expect(askFromEvent(event({ questions: [{ question: 'Q' }] }))).toBeNull();
     expect(askFromEvent(event({ requestId: 'ask-3', questions: [] }))).toBeNull();
+  });
+
+  test('keeps the caller session and maps parent_session_id', () => {
+    const item = askFromEvent(
+      event({
+        requestId: 'ask-1',
+        questions: [{ question: 'Q' }],
+        parent_session_id: 'chat-1',
+      }),
+      'member-1',
+    );
+    expect(item).toMatchObject({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+
+    const legacy = askFromEvent(
+      event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }),
+      'member-1',
+    );
+    expect(legacy?.sessionId).toBe('member-1');
+    expect(legacy).not.toHaveProperty('parentSessionId');
   });
 });
 

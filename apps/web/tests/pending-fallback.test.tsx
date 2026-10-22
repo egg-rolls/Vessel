@@ -2,10 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import {
+  interactionSessionId,
   orphanedDismissIds,
   pendingBarSummary,
   pendingBarTarget,
   pendingForSession,
+  pendingPermissionsOutsideView,
 } from '../src/domains/chat/pending-permissions';
 import type { OrphanedInteraction } from '../src/gateway/interaction-hydration';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
@@ -181,5 +183,49 @@ describe('compact pending bar', () => {
         />,
       ),
     ).toBe('');
+  });
+});
+
+
+describe('member bridge grouping (parentSessionId)', () => {
+  test('interactionSessionId prefers the parent chat, then session, then undefined', () => {
+    expect(interactionSessionId({ sessionId: 'member-1', parentSessionId: 'chat-1' })).toBe(
+      'chat-1',
+    );
+    expect(interactionSessionId({ sessionId: 'session-1' })).toBe('session-1');
+    expect(interactionSessionId({})).toBeUndefined();
+  });
+
+  test('pendingForSession groups a member request under its parent chat', () => {
+    const member = permission({
+      requestId: 'member',
+      sessionId: 'member-1',
+      parentSessionId: 'chat-1',
+    });
+    expect(pendingForSession([member], 'chat-1', new Set())).toEqual([member]);
+    expect(pendingForSession([member], 'member-1', new Set())).toEqual([]);
+  });
+
+  test('pendingPermissionsOutsideView does not list parent-chat requests as other', () => {
+    const member = permission({
+      requestId: 'member',
+      sessionId: 'member-1',
+      parentSessionId: 'chat-1',
+    });
+    const other = permission({ requestId: 'other', sessionId: 'chat-2' });
+    expect(
+      pendingPermissionsOutsideView([member, other], {
+        domain: 'chat',
+        sessionId: 'chat-1',
+      }).map((item) => item.requestId),
+    ).toEqual(['other']);
+  });
+
+  test('asks use the same parent grouping', () => {
+    const memberAsk = ask({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+    expect(pendingForSession([memberAsk], 'chat-1', new Set())).toEqual([memberAsk]);
+    expect(
+      pendingPermissionsOutsideView([memberAsk], { domain: 'chat', sessionId: 'chat-1' }),
+    ).toEqual([]);
   });
 });

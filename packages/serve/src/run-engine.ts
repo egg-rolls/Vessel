@@ -55,6 +55,8 @@ export interface PendingPermission {
    */
   deadline_at?: number;
   session_id?: string;
+  /** 成员 bridge 请求的父会话（事件携带时记录，additive）。 */
+  parent_session_id?: string;
   tool_call_id?: string;
   source?: string;
 }
@@ -76,6 +78,8 @@ export interface PendingAsk {
   ts: number;
   /** 关联 session（`ask.user.requested` 事件携带时记录，additive）。 */
   session_id?: string;
+  /** 成员 bridge 请求的父会话（事件携带时记录，additive）。 */
+  parent_session_id?: string;
   /** 原始 questions；只用于 `interactions.list` 展示，不持久化。 */
   questions?: unknown;
 }
@@ -472,6 +476,10 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
             ? data.tool_call_id
             : undefined;
+        const parentSessionId =
+          typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+            ? data.parent_session_id
+            : undefined;
         const deadlineAt =
           typeof data.deadline_at === 'number' &&
           Number.isFinite(data.deadline_at) &&
@@ -486,6 +494,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           ts: eventTs,
           ...(deadlineAt !== undefined ? { deadline_at: deadlineAt } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           ...(typeof data.source === 'string' && data.source.length > 0
             ? { source: data.source }
@@ -496,6 +505,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           run_id: event.run_id,
           tenant_id: tenantId,
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           tool,
           input: data.input,
@@ -513,11 +523,16 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           typeof data.session_id === 'string' && data.session_id.length > 0
             ? data.session_id
             : undefined;
+        const parentSessionId =
+          typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+            ? data.parent_session_id
+            : undefined;
         pendingAsks.set(requestId, {
           run_id: event.run_id,
           tenant_id: eventTenantId(event),
           ts: Date.now(),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(data.questions !== undefined ? { questions: data.questions } : {}),
         });
       }

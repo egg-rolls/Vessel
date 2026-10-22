@@ -19,6 +19,7 @@ export interface ListedInteraction {
   request_id: string;
   run_id: string;
   session_id?: string;
+  parent_session_id?: string;
   tool_call_id?: string;
   tool?: string;
   input?: unknown;
@@ -34,6 +35,7 @@ export interface OrphanedInteraction {
   requestId: string;
   runId: string;
   sessionId?: string;
+  parentSessionId?: string;
   tool?: string;
   createdAt: number;
 }
@@ -91,6 +93,7 @@ function toOrphaned(item: ListedInteraction): OrphanedInteraction {
     runId: item.run_id,
     createdAt: item.created_at,
     ...(item.session_id ? { sessionId: item.session_id } : {}),
+    ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
     ...(item.tool !== undefined ? { tool: item.tool } : {}),
   };
 }
@@ -132,6 +135,7 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
         runId: item.run_id,
         requestedAt: item.created_at,
         ...(sessionId !== undefined ? { sessionId } : {}),
+        ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
         ...(item.tool_call_id !== undefined && item.tool_call_id.length > 0
           ? { toolCallId: item.tool_call_id }
           : {}),
@@ -148,6 +152,7 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
       runId: item.run_id,
       requestedAt: item.created_at,
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(item.parent_session_id ? { parentSessionId: item.parent_session_id } : {}),
     });
   }
 
