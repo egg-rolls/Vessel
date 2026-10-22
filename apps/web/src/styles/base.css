@@ -77,7 +77,7 @@ fieldset {
 ::-webkit-scrollbar-thumb {
   background: var(--line-strong);
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background-clip: padding-box;
 }
 
@@ -143,12 +143,28 @@ kbd,
   display: inline-block;
   padding: 1px 6px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+@media (forced-colors: active) {
+  .card,
+  .modal,
+  .menu,
+  .palette,
+  .ask-card,
+  .composer {
+    border: 1px solid CanvasText;
+  }
+
+  *:focus-visible {
+    outline: 2px solid CanvasText;
+    box-shadow: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

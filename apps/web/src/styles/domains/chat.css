@@ -12,7 +12,7 @@
 }
 
 .session-row:hover {
-  background: var(--surface-2);
+  background: var(--surface-sunken);
 }
 
 .session-row.active {
@@ -216,7 +216,7 @@
   padding: 7px 11px;
   border-left: 2px solid var(--line-strong);
   border-radius: 0 8px 8px 0;
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   font-size: 11.5px;
 }
 
@@ -258,7 +258,7 @@
   padding: 6px 10px;
   border-left: 2px solid var(--line-strong);
   border-radius: 0 8px 8px 0;
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   font-size: 11.5px;
   line-height: 1.55;
   color: var(--muted);
@@ -316,7 +316,7 @@
 .tool-card {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   overflow: hidden;
 }
 
@@ -338,7 +338,7 @@
 }
 
 .tool-card-header:hover {
-  background: var(--surface-3);
+  background: var(--surface-deep);
 }
 
 .tool-card-glyph {
@@ -545,7 +545,7 @@
 .reasoning-block {
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   color: var(--muted);
 }
 
@@ -775,7 +775,7 @@
   background: var(--surface);
   color: var(--muted);
   font-size: 11px;
-  box-shadow: var(--shadow);
+  box-shadow: var(--elev-2);
 }
 
 .to-bottom:hover {
@@ -793,7 +793,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--elev-2);
   transition:
     border-color 0.16s var(--ease),
     box-shadow 0.16s var(--ease);
@@ -802,7 +802,7 @@
 .composer:focus-within {
   border-color: var(--accent-line);
   box-shadow:
-    var(--shadow),
+    var(--elev-2),
     0 0 0 2px var(--accent);
 }
 
@@ -901,7 +901,7 @@
   border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--line));
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow);
+  box-shadow: var(--elev-2);
 }
 
 .prompt-slot-head {
@@ -927,7 +927,7 @@
 }
 
 .prompt-slot .permission-card-actions {
-  background: var(--surface-2);
+  background: var(--surface-sunken);
 }
 
 .prompt-slot .ask-card-actions {

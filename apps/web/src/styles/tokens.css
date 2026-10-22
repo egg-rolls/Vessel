@@ -8,8 +8,9 @@
 
   --bg: #f4f1ec;
   --surface: #fbfaf7;
-  --surface-2: #efece5;
-  --surface-3: #e9e5dc;
+  --surface-raised: #fffdfa;
+  --surface-sunken: #efece5;
+  --surface-deep: #e7e2d9;
   --ink: #23211d;
   --muted: #605c54;
   --faint: #6f6a61;
@@ -27,8 +28,13 @@
   --danger-soft: rgba(162, 90, 80, 0.09);
   --info: #5c6b78;
   --info-soft: rgba(92, 107, 120, 0.1);
-  --shadow: 0 1px 2px rgba(35, 33, 29, 0.04), 0 12px 32px rgba(35, 33, 29, 0.06);
-  --shadow-lift: 0 2px 4px rgba(35, 33, 29, 0.05), 0 18px 48px rgba(35, 33, 29, 0.1);
+  --elev-1: 0 1px 2px rgba(35, 33, 29, 0.04), 0 4px 12px rgba(35, 33, 29, 0.05);
+  --elev-2: 0 2px 4px rgba(35, 33, 29, 0.05), 0 10px 28px rgba(35, 33, 29, 0.08);
+  --elev-3: 0 4px 8px rgba(35, 33, 29, 0.06), 0 18px 48px rgba(35, 33, 29, 0.12);
+  --elev-4: 0 8px 16px rgba(35, 33, 29, 0.08), 0 28px 72px rgba(35, 33, 29, 0.16);
+  --elev-inset: inset 0 1px 2px rgba(35, 33, 29, 0.05);
+  --hover-tint: rgba(35, 33, 29, 0.04);
+  --press-tint: rgba(35, 33, 29, 0.08);
 
   --font-sans:
     "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -37,9 +43,12 @@
     "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 
-  --radius-sm: 9px;
-  --radius: 12px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   --space-1: 4px;
@@ -92,7 +101,6 @@
   --touch-target: 44px;
 
   /* 层级：nav < drawer/scrim < modal/palette < toast。drawer 内打开的确认框必须在抽屉之上。 */
-  --z-nav: 30;
   --z-drawer: 60;
   --z-modal: 70;
   --z-palette: 75;
@@ -105,8 +113,9 @@
     color-scheme: dark;
     --bg: #171614;
     --surface: #1f1d1a;
-    --surface-2: #26231f;
-    --surface-3: #2d2924;
+    --surface-raised: #262320;
+    --surface-sunken: #1a1917;
+    --surface-deep: #151412;
     --ink: #eae6de;
     --muted: #a49d91;
     --faint: #928b7f;
@@ -124,8 +133,13 @@
     --danger-soft: rgba(208, 138, 126, 0.12);
     --info: #93a5b3;
     --info-soft: rgba(147, 165, 179, 0.12);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.32);
-    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 22px 56px rgba(0, 0, 0, 0.45);
+    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
+    --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
+    --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
+    --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
+    --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+    --hover-tint: rgba(255, 255, 255, 0.06);
+    --press-tint: rgba(255, 255, 255, 0.09);
   }
 }
 
@@ -133,8 +147,9 @@
   color-scheme: dark;
   --bg: #171614;
   --surface: #1f1d1a;
-  --surface-2: #26231f;
-  --surface-3: #2d2924;
+  --surface-raised: #262320;
+  --surface-sunken: #1a1917;
+  --surface-deep: #151412;
   --ink: #eae6de;
   --muted: #a49d91;
   --faint: #928b7f;
@@ -152,8 +167,13 @@
   --danger-soft: rgba(208, 138, 126, 0.12);
   --info: #93a5b3;
   --info-soft: rgba(147, 165, 179, 0.12);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.32);
-  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 22px 56px rgba(0, 0, 0, 0.45);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
+  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
+  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
+  --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  --hover-tint: rgba(255, 255, 255, 0.06);
+  --press-tint: rgba(255, 255, 255, 0.09);
 }
 
 @media (max-width: 680px) {

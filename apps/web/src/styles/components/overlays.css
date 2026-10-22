@@ -28,7 +28,7 @@
   border: 1px solid var(--line-strong);
   border-radius: var(--radius-lg);
   background: var(--surface);
-  box-shadow: var(--shadow-lift);
+  box-shadow: var(--elev-3);
   animation: rise-in 0.2s var(--ease);
   overflow: auto;
 }
