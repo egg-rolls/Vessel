@@ -3,8 +3,9 @@
  *
  * - `--check`：只检查新版本（0.1 行为不变）；
  * - 无 `--check`：按安装形态自更新（0.12 DECISION-023 §2.4）：
- *   npm 全局 → `npm i -g vessel-agent@latest`；bun 全局 → `bun add -g`；
+ *   npm 全局 → `npm i -g vessel-agent@<latest|beta>`；bun 全局 → `bun add -g`；
  *   源码/开发模式 → 只提示 `git pull && bun install`，不改工作区。
+ *   安装目标按解析后的通道选择 dist-tag，beta 通道装 `vessel-agent@beta`。
  *
  * 默认先确认；`--yes` 跳过；非 TTY 无 `--yes` 直接失败。失败返回非 0。
  * 退出码：0 成功（含已最新 / dev 提示）、1 网络/清单/安装失败、2 参数/通道错误。
@@ -50,6 +51,10 @@ export interface UpdateCommandDeps {
   stdinIsTTY?: boolean;
   /** 强制安装形态（测试） */
   form?: InstallForm;
+  /** 配置加载（测试注入；缺省 loadConfig） */
+  loadConfig?: () => Promise<{
+    config: { update?: { channel?: UpdateChannel; source?: string } };
+  }>;
   print?: (line: string) => void;
   printErr?: (line: string) => void;
 }
@@ -124,7 +129,8 @@ export async function runSelfUpdate(
       ...(deps.entryPath !== undefined ? { entryPath: deps.entryPath } : {}),
       ...(deps.exists !== undefined ? { exists: deps.exists } : {}),
     });
-  const plan = buildInstallPlan(form);
+  const channel = options.channel ?? 'latest';
+  const plan = buildInstallPlan(form, channel);
 
   if (!plan.command) {
     const hint = plan.hint ?? 'git pull && bun install';
@@ -203,7 +209,7 @@ export async function runUpdateCommand(
   options: UpdateCommandOptions,
   deps: UpdateCommandDeps = {},
 ): Promise<number> {
-  const { config } = await loadConfig();
+  const { config } = await (deps.loadConfig ?? loadConfig)();
 
   const channel = resolveChannel(options.channel, config.update?.channel);
   if (!channel) {
@@ -212,7 +218,7 @@ export async function runUpdateCommand(
   }
 
   if (!options.check) {
-    return runSelfUpdate(options, deps);
+    return runSelfUpdate({ ...options, channel }, deps);
   }
 
   const current = readPackageVersion();
@@ -263,7 +269,7 @@ export async function runUpdateCommand(
 }
 
 /** CLI > VESSEL_CHANNEL > 配置 > latest；非法环境变量返回 null */
-function resolveChannel(
+export function resolveChannel(
   cliChannel: UpdateChannel | undefined,
   configChannel: UpdateChannel | undefined,
 ): UpdateChannel | null {
