@@ -1,7 +1,7 @@
 ---
 adr: 42
 title: workflow 引擎作为插件
-status: accepted
+status: superseded
 date: null
 related: [10, 12, 30, 34, 37, 39, 40]
 ---
