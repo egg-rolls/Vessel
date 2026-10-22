@@ -299,7 +299,7 @@
 .run-waiting-dot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent);
   animation: pulse 1.6s ease-in-out infinite;
 }
