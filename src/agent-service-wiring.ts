@@ -171,11 +171,8 @@ export async function createAgentServiceWiring(
     // owner 是 external owner：pump 不消费，只能由父 turn 排空。
     source: service,
     ownerId,
-    isMemberSession: async (sessionId) => {
-      if (sessionId === undefined) return false;
-      const members = await service.list();
-      return members.some((member) => member.id !== ownerId && member.session_id === sessionId);
-    },
+    isMemberSession: (sessionId) =>
+      sessionId === undefined ? false : service.hasMember(sessionId),
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     tenantId: options.tenantId,
   });

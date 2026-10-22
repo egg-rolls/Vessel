@@ -201,6 +201,40 @@ describe('agent owner injection 0.17', () => {
     expect(ctx.messages).toBeUndefined();
   });
 
+  it('identity check failure does not drain the owner queue (fail-closed)', async () => {
+    const events = new MemoryEventStream();
+    const published: RunEvent[] = [];
+    events.subscribe((event) => {
+      published.push(event);
+    });
+    let called = 0;
+    const injector = createAgentOwnerInjector({
+      ownerId: 'main',
+      events,
+      source: {
+        takeMessages() {
+          called += 1;
+          return [message()];
+        },
+      },
+      isMemberSession: () => {
+        throw new Error('identity unavailable');
+      },
+    });
+
+    const ctx = hookContext({ session_id: 'member-session' });
+    await injector.hook.run(ctx);
+
+    expect(called).toBe(0);
+    expect(ctx.messages).toBeUndefined();
+    const skipped = published.find((event) => event.type === 'agent.reply.inject_skipped');
+    expect(skipped?.data).toMatchObject({
+      owner_id: 'main',
+      reason: 'identity_check_failed',
+      error: 'identity unavailable',
+    });
+  });
+
   it('dispose stops injection and is idempotent', async () => {
     let called = 0;
     const injector = createAgentOwnerInjector({
@@ -306,6 +340,49 @@ describe('agent owner injection 0.17', () => {
       const next = hookContext();
       await hook.run(next);
       expect(next.messages).toBeUndefined();
+      expect(await wiring.service.takeMessages('main')).toEqual([]);
+      wiring.injector.dispose();
+    } finally {
+      cleanup(dataDir);
+    }
+  });
+
+  it('end-to-end: private member sessions keep the owner queue until the parent session drains it', async () => {
+    const pluginHost = new MemoryPluginHost();
+    const dataDir = tmpDir();
+    try {
+      const wiring = await createAgentServiceWiring(
+        wiringOptions(pluginHost, dataDir, {
+          runtimeFactory: fakeRuntimeFactory((_options, input) => Promise.resolve(`echo:${input}`)),
+        }),
+      );
+      // 默认 visibility 是 private：旧实现用无 viewer 的 list() 会把它们全过滤掉。
+      const first = await wiring.service.new({ name: 'a', parentId: 'main' });
+      const second = await wiring.service.new({ name: 'b', parentId: 'main' });
+      await wiring.service.send({ to: first.id, content: 'first' });
+      await wiring.service.send({ to: second.id, content: 'second' });
+      await waitForState(wiring.service, first.id, 'completed');
+      await waitForState(wiring.service, second.id, 'completed');
+
+      const hook = pluginHost.getHooks().find((entry) => entry.name === AGENT_OWNER_INJECTION_HOOK);
+      if (!hook) throw new Error('owner injection hook missing');
+
+      // 成员 turn（session_id === 成员 id）不得排空 owner 队列。
+      for (const member of [first, second]) {
+        const memberCtx = hookContext({ session_id: member.id });
+        await hook.run(memberCtx);
+        expect(memberCtx.messages).toBeUndefined();
+      }
+
+      // 父 turn 一次排空两条，来源与内容各自对应、不串线。
+      const parentCtx = hookContext();
+      await hook.run(parentCtx);
+      const injected = parentCtx.messages ?? [];
+      expect(injected).toHaveLength(2);
+      expect(Object.fromEntries(injected.map((entry) => [entry.name, entry.content]))).toEqual({
+        [`agent:${first.id}`]: 'echo:first',
+        [`agent:${second.id}`]: 'echo:second',
+      });
       expect(await wiring.service.takeMessages('main')).toEqual([]);
       wiring.injector.dispose();
     } finally {

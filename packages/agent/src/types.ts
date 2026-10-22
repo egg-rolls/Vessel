@@ -279,6 +279,11 @@ export interface AgentService {
   close(input: CloseInput): Promise<CloseResult>;
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
+  /**
+   * session 是否属于被 spawn 的成员；external owner 的 session 返回 false。
+   * O(1) 直查，不受 visibility 过滤。
+   */
+  hasMember(sessionId: string): Promise<boolean>;
   /** 成员显式回复父级；本轮自动最终文本随后被抑制 */
   reply(memberId: string, content: string): Promise<ReplyResult>;
   /**

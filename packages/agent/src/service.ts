@@ -475,6 +475,12 @@ export class AgentServiceImpl implements AgentService {
     return this.registry.list(filter).map(toMemberStatus);
   }
 
+  async hasMember(sessionId: string): Promise<boolean> {
+    await this.ready;
+    const record = this.registry.getBySession(sessionId);
+    return record !== undefined && !this.externalOwners.has(record.id);
+  }
+
   async reply(memberId: string, content: string): Promise<ReplyResult> {
     await this.ready;
     const text = readContent({ content }, 'content');
