@@ -80,6 +80,7 @@
 }
 
 .palette-option.active {
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 

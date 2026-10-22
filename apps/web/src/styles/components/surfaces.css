@@ -42,7 +42,7 @@
 .settings-section {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-6);
 }
 
 .diag-list {
@@ -113,6 +113,7 @@
 
 .data-table .row-active,
 .data-table tr.row-active {
+  color: var(--accent-ink);
   background: var(--accent-soft);
 }
 
