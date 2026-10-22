@@ -162,6 +162,10 @@ export const en: Record<MessageKey, string> = {
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.logPath': 'Log: {path}',
+  'gateway.webDistMissing':
+    'Web console assets are missing at {path}; run `bun run dev:web` for Vite dev, or build with `cd apps/web && npm run build`.',
+  'gateway.webDistStale':
+    'Web console assets may be stale: {index} is older than {source}; run `bun run build:web:watch` or rebuild.',
   'gateway.noToken':
     'No gateway token configured (serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN); cannot call the local RPC.',
   'gateway.reloadNoGateway': 'Gateway is not running; run `vessel gateway start` first.',

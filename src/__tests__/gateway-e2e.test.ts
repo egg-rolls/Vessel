@@ -20,6 +20,9 @@ const dirs: string[] = [];
 function tmpDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vessel-gateway-e2e-'));
   dirs.push(dir);
+  // 启动诊断会检查静态产物；给每个用例一个存在的 dist，避免 stderr 噪声。
+  fs.mkdirSync(path.join(dir, 'web-dist'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'web-dist', 'index.html'), '<!doctype html>');
   return dir;
 }
 
@@ -31,6 +34,7 @@ function envFor(dir: string): Record<string, string> {
     HOME: dir,
     USERPROFILE: dir,
     VESSEL_DATA_DIR: path.join(dir, 'data'),
+    VESSEL_STATIC_DIR: path.join(dir, 'web-dist'),
     // 固定 token，供 `gateway reload` 的本地 RPC 鉴权（不打印、不进 URL）。
     VESSEL_GATEWAY_TOKEN: 'e2e-gateway-token',
   };

@@ -154,6 +154,10 @@ export const zhCN = {
   'gateway.startFailed': 'Gateway 启动失败：{detail}',
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.logPath': '日志：{path}',
+  'gateway.webDistMissing':
+    'Web 控制台静态资源缺失：{path}。开发用 `bun run dev:web`；或构建 `cd apps/web && npm run build`。',
+  'gateway.webDistStale':
+    'Web 控制台静态资源可能已过期：{index} 旧于 {source}。用 `bun run build:web:watch` 或重新构建。',
   'gateway.noToken':
     '未配置 gateway token（serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN），无法调用本地 RPC。',
   'gateway.reloadNoGateway': 'Gateway 未运行；先执行 `vessel gateway start`。',

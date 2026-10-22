@@ -48,6 +48,7 @@ import { t } from './i18n';
 import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { readPackageVersion } from './version';
+import { inspectWebDist, webDistWarning } from './web-dist';
 
 /** 依赖注入（CLI 只用默认值；测试注入平台/路径/命令执行） */
 export interface GatewayCommandDeps {
@@ -889,6 +890,11 @@ async function startDaemonCommand(
   const printErr = options.printErr ?? console.error;
   const instance = deriveGatewayInstance(options.instance, options.port);
   const logPath = options.daemonLog ?? options.logPath ?? gatewayLogPath(context.dataDir, instance);
+
+  // 启动诊断：静态产物缺失/过期只提示，不改退出码。
+  const staticDir = context.env.VESSEL_STATIC_DIR;
+  const warning = webDistWarning(await inspectWebDist(staticDir ? { staticDir } : {}));
+  if (warning) printErr(ui.warn(warning));
 
   const duplicate = await duplicateExplicitNodeId(context.dataDir, instance, context.config, {
     platform: context.platform,

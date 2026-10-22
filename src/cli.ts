@@ -91,6 +91,7 @@ import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
+import { inspectWebDist, webDistWarning } from './web-dist';
 
 // ── 终端排版辅助 ─────────────────────────────────
 
@@ -383,6 +384,11 @@ if (foregroundGateway && args.gateway !== null) {
   foregroundGatewayLock = prepared.lock;
   foregroundGatewayInstance = prepared.instance;
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
+}
+// 启动诊断：静态产物缺失/过期只提示，不改退出码。
+if (foregroundGateway || args.servePort !== null) {
+  const warning = webDistWarning(await inspectWebDist());
+  if (warning) console.error(ui.warn(warning));
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
