@@ -393,6 +393,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
               run_id: event.run_id,
               toolName: event.data.tool,
               input: event.data.input,
+              ...(event.data.session_id !== undefined ? { session_id: event.data.session_id } : {}),
             },
           });
           break;
@@ -803,7 +804,13 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       ctx.events.publish({
         type: 'tool.permission.response',
         run_id: ui.permissionOverlay.run_id,
-        data: { requestId: ui.permissionOverlay.requestId, decision: 'deny' },
+        data: {
+          requestId: ui.permissionOverlay.requestId,
+          decision: 'deny',
+          ...(ui.permissionOverlay.session_id !== undefined
+            ? { session_id: ui.permissionOverlay.session_id }
+            : {}),
+        },
         ts: Date.now(),
       });
       dispatch({ type: 'clearPermissionForRequest', requestId: ui.permissionOverlay.requestId });
@@ -1015,6 +1022,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
           decision: answer === 'y' || always ? 'allow' : 'deny',
           // "always" → 记住批准（runtime 维护 approvedTools，后续同工具免确认）
           remember: always,
+          ...(overlay.session_id !== undefined ? { session_id: overlay.session_id } : {}),
         },
         ts: Date.now(),
       });

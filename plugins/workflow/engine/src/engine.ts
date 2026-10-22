@@ -737,7 +737,14 @@ class WorkflowEngineImpl implements WorkflowEngine {
         let result: ToolPipelineResult;
         try {
           result = await raceAbort(
-            this.toolPipeline.execute({ runId, sessionId: runId, toolCall, args, signal }),
+            this.toolPipeline.execute({
+              runId,
+              sessionId: runId,
+              toolCall,
+              args,
+              signal,
+              source: 'workflow',
+            }),
             signal,
           );
         } catch (error) {
@@ -771,6 +778,7 @@ class WorkflowEngineImpl implements WorkflowEngine {
         messages: [],
         events: this.events,
         signal,
+        source: 'workflow',
       };
 
       if (tool.checkPermission) {

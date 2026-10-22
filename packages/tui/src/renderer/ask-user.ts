@@ -18,12 +18,16 @@ import { t } from '../i18n/index.js';
 export interface AskUserRequestedData {
   requestId: string;
   questions: AskUserQuestion[];
+  /** 发起提问的会话 ID */
+  session_id?: string;
 }
 
 /** ask.user.answered 事件载荷（TUI 发布回答；answers 为空 = 用户取消） */
 export interface AskUserAnsweredData {
   requestId: string;
   answers: AskUserAnswer[];
+  /** 发起提问的会话 ID */
+  session_id?: string;
 }
 
 // ── 类型 ──────────────────────────────────────────
@@ -116,12 +120,17 @@ async function promptFromEvents(
   runId: string,
   questions: AskUserQuestion[],
   wait: AskUserWaitOptions = {},
+  sessionId?: string,
 ): Promise<string> {
   const requestId = randomUUID();
   events.publish({
     type: 'ask.user.requested',
     run_id: runId,
-    data: { requestId, questions } satisfies AskUserRequestedData,
+    data: {
+      requestId,
+      questions,
+      ...(sessionId !== undefined && sessionId !== '' ? { session_id: sessionId } : {}),
+    } satisfies AskUserRequestedData,
     ts: Date.now(),
   });
 
@@ -206,13 +215,23 @@ Do NOT use for trivial questions you can resolve yourself.`,
       required: ['questions'],
     },
     handler: async (args, ctx) => {
+      // workflow 运行没有 chat session，不能发布 ask.user.requested 等交互事件。
+      if (ctx.source === 'workflow') {
+        return 'Error: ask_user is not available in workflow runs; answer synchronously or remove the ask_user step.';
+      }
       const input = args as AskUserInput;
       const normalized = normalizeQuestions(input);
       if (typeof normalized === 'string') return normalized;
-      return promptFromEvents(ctx.events, ctx.run_id, normalized, {
-        ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
-        ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
-      });
+      return promptFromEvents(
+        ctx.events,
+        ctx.run_id,
+        normalized,
+        {
+          ...(opts.timeout !== undefined ? { timeout: opts.timeout } : {}),
+          ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),
+        },
+        ctx.session_id,
+      );
     },
   };
 }

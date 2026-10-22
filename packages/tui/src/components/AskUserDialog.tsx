@@ -378,7 +378,11 @@ export function AskUserDialog({ events, maxRows, onActiveChange }: AskUserDialog
       events.publish({
         type: 'ask.user.answered',
         run_id: promptRef.run_id,
-        data: { requestId: promptRef.requestId, answers: payload },
+        data: {
+          requestId: promptRef.requestId,
+          answers: payload,
+          ...(promptRef.session_id !== undefined ? { session_id: promptRef.session_id } : {}),
+        },
         ts: Date.now(),
       });
       setPrompt(null);

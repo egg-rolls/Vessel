@@ -55,6 +55,8 @@ export interface PermissionOverlay {
   toolName: string;
   /** 工具入参（弹窗展示用；可能是任意 JSON） */
   input: unknown;
+  /** 发起权限请求的会话 ID */
+  session_id?: string;
 }
 
 /** 单轮 run 的 UI 阶段 */

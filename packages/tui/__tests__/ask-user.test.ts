@@ -90,6 +90,32 @@ describe('createAskUserTool（事件流交互）', () => {
     expect(captured?.questions[0]).toMatchObject({ header: '格式', question: '用哪种模块格式？' });
   });
 
+  it('ask request drops session_id', async () => {
+    const events = new MemoryEventStream();
+    let captured: { requestId: string; session_id?: string } | undefined;
+
+    events.subscribe((event) => {
+      if (event.type !== 'ask.user.requested') return;
+      captured = event.data as unknown as typeof captured;
+      events.publish({
+        type: 'ask.user.answered',
+        run_id: event.run_id,
+        data: { requestId: captured?.requestId ?? '', answers: sampleAnswers(['ESM', '生产']) },
+        ts: Date.now(),
+      });
+    });
+
+    const tool = createAskUserTool();
+    await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      session_id: 'session-9',
+      messages: [],
+      events,
+    });
+
+    expect(captured?.session_id).toBe('session-9');
+  });
+
   it('handler normalizes missing header with a fallback', async () => {
     const events = new MemoryEventStream();
     events.subscribe((event) => {
@@ -229,6 +255,24 @@ describe('createAskUserTool（事件流交互）', () => {
 
     expect(result).toContain('Error');
     expect(result).toContain('Timed out');
+  });
+
+  it('workflow ask_user emits an interaction without a session', async () => {
+    const events = new MemoryEventStream();
+    // 若 workflow 守卫缺失，事件会被发布并在这里被应答；断言随后立即失败，
+    // 而不是让 handler 在无人应答时无限等待。
+    autoAnswer(events, sampleAnswers(['ESM', '生产']));
+
+    const tool = createAskUserTool();
+    const result = await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      messages: [],
+      events,
+      source: 'workflow',
+    });
+
+    expect(events.getHistory().map((event) => event.type)).not.toContain('ask.user.requested');
+    expect(result).toContain('workflow');
   });
 
   it('returns a cancellation message when the run aborts', async () => {

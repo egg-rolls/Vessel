@@ -25,11 +25,23 @@ export async function requestPermission(
   input: unknown,
   timeout = 30000,
 ): Promise<PermissionDecision> {
+  // workflow 运行没有 chat session，不能发交互请求：直接返回 'ask'，
+  // 由 PermissionPolicy 统一抛明确错误（提示改用 autoApprove / default=allow）。
+  if (ctx.source === 'workflow') return 'ask';
   const requestId = randomUUID();
   ctx.events.publish({
     type: 'tool.permission.request',
     run_id: ctx.run_id,
-    data: { requestId, tool, input },
+    data: {
+      requestId,
+      tool,
+      input,
+      ...(typeof ctx.session_id === 'string' && ctx.session_id.length > 0
+        ? { session_id: ctx.session_id }
+        : {}),
+      ...(ctx.tool_call_id ? { tool_call_id: ctx.tool_call_id } : {}),
+      source: ctx.source ?? 'runtime',
+    },
     ts: Date.now(),
   });
   try {

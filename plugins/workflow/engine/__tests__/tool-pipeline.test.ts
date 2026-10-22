@@ -5,7 +5,7 @@
  * - ToolCall guardrail 阻断时 handler 不执行；
  * - BeforeTool hook 的 updatedInput 传给 handler；
  * - tool.call.started / completed / failed 事件；
- * - pipeline 权限 ask 路径可用。
+ * - pipeline 权限 ask 在 workflow 中必须明确失败，不得发布交互权限事件。
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -200,7 +200,7 @@ steps:
     expect(typeof completedData.duration_ms).toBe('number');
   });
 
-  it('uses pipeline permission: default ask waits for tool.permission.response', async () => {
+  it('workflow tool step must not emit interactive permission (default ask fails explicitly)', async () => {
     let handlerCalls = 0;
     const harness = await createHarness({
       workflow: `
@@ -219,19 +219,16 @@ steps:
       },
     });
 
-    harness.events.subscribe((event) => {
-      if (event.type !== 'tool.permission.request') return;
-      const data = dataOf(event);
-      harness.events.publish({
-        type: 'tool.permission.response',
-        run_id: event.run_id,
-        data: { requestId: data.requestId, decision: 'allow' },
-        ts: Date.now(),
-      });
-    });
-
+    // 不发布 tool.permission.response：workflow 没有 chat session，不能等待交互。
     const outcome = await harness.run();
-    expect(outcome.status).toBe('completed');
-    expect(handlerCalls).toBe(1);
+    expect(outcome.status).toBe('failed');
+    expect(outcome.error ?? '').toContain('workflow');
+    expect(outcome.error ?? '').toContain('permission');
+    expect(handlerCalls).toBe(0);
+
+    const history = harness.events.getHistory();
+    const types = history.map((event) => event.type);
+    expect(types).not.toContain('tool.permission.request');
+    expect(types).not.toContain('tool.permission.response');
   });
 });

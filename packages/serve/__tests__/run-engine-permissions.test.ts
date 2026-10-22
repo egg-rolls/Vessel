@@ -131,6 +131,7 @@ describe('run engine permission lifecycle', () => {
       requestId: 'perm-1',
       decision: 'allow',
       scope: 'session',
+      session_id: 'session-1',
     });
 
     const repeat = engine.respondPermission('perm-1', 'allow', false);

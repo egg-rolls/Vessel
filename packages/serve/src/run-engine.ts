@@ -582,6 +582,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           decision,
           scope: resolvedScope,
           ...(resolvedScope === 'always' ? { remember: true } : {}),
+          ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
         },
         ts: now,
         tenant_id: pending.tenant_id,
@@ -651,7 +652,11 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     answerStreamFor(pending.tenant_id).publish({
       type: 'ask.user.answered',
       run_id: pending.run_id,
-      data: { requestId, answers },
+      data: {
+        requestId,
+        answers,
+        ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
+      },
       ts: Date.now(),
       tenant_id: pending.tenant_id,
     });
