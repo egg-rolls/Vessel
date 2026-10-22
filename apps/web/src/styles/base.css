@@ -121,9 +121,9 @@ fieldset {
   left: 8px;
   z-index: 100;
   padding: 8px 14px;
-  border: 1px solid var(--accent-line);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
   color: var(--ink);
   font-size: 12px;
   transform: translateY(-160%);
@@ -142,9 +142,9 @@ kbd,
 .kbd {
   display: inline-block;
   padding: 1px 6px;
-  border: 1px solid var(--line);
   border-radius: var(--radius-xs);
   background: var(--surface-sunken);
+  box-shadow: var(--elev-inset);
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.6;
