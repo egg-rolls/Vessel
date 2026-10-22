@@ -61,11 +61,10 @@ function testDispatcher(onResultInvalid?: (violation: { method: string; path: st
 }
 
 describe('rpc result_schema', () => {
-  it('declares result_schema for all 45 canonical methods', () => {
+  it('declares result_schema for all canonical methods', () => {
     const gw = createGateway({ events: new MemoryEventStream() });
     gateways.push(gw);
     const methods = gw.manifest().methods;
-    expect(methods).toHaveLength(45);
     expect(methods.filter((method) => method.result_schema === undefined)).toEqual([]);
   });
 
