@@ -81,13 +81,24 @@ async function fetchJson(
   timeoutMs: number,
 ): Promise<unknown> {
   const response = await fetchImpl(url, {
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', 'User-Agent': 'vessel-agent' },
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!response.ok) {
+    const rateLimited =
+      response.status === 429 ||
+      (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0');
+    if (rateLimited) {
+      throw new Error(`GitHub rate limit exceeded (HTTP ${response.status}) for ${url}`);
+    }
     throw new Error(`HTTP ${response.status} for ${url}`);
   }
-  return (await response.json()) as unknown;
+  const text = await response.text();
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    throw new Error(`Invalid JSON response from ${url}`);
+  }
 }
 
 /** 升级方式：提示包管理器命令，不做自替换（根包 `vessel-agent` 自 0.6.1 起可发布） */
