@@ -72,17 +72,13 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
 /**
  * `ask.user.requested` → 前端卡片模型。
  *
- * 事件本身不带 session_id：由调用方从 `run.started` 反查后传入。
+ * 事件必须自带 `session_id`（上游保证）；缺失就保持 undefined，Web 不反查、不补全。
  * 关联字段（agentId）与权限请求同一套映射；旧事件缺字段时保持 undefined。
  *
  * 0.18：ask 没有过期时间；`requestedAt` 取事件时间（缺失回退收到时间），
  * 只用于与权限请求混排。卡片由应答 / run 终态 / 其他端事件移除。
  */
-export function askFromEvent(
-  event: RunEvent,
-  sessionId?: string,
-  now = Date.now(),
-): AskUserRequest | null {
+export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest | null {
   const data = event.data as {
     requestId?: unknown;
     request_id?: unknown;
@@ -100,45 +96,16 @@ export function askFromEvent(
   );
   if (questions.length === 0) return null;
   const agentId = interactionAgentId(event.data);
-  // 事件自带的 session_id 优先；调用方反查值只作缺省回退。
-  const eventSessionId =
-    typeof data.session_id === 'string' && data.session_id.length > 0 ? data.session_id : undefined;
-  const resolvedSessionId =
-    eventSessionId ?? (sessionId !== undefined && sessionId.length > 0 ? sessionId : undefined);
   return {
     requestId: rawId,
     questions,
     runId: event.run_id,
     requestedAt: validTimestamp(event.ts) ? event.ts : now,
-    ...(resolvedSessionId !== undefined ? { sessionId: resolvedSessionId } : {}),
+    ...(typeof data.session_id === 'string' && data.session_id.length > 0
+      ? { sessionId: data.session_id }
+      : {}),
     ...(agentId !== undefined ? { agentId } : {}),
   };
-}
-
-export interface AskEventResolution {
-  request: AskUserRequest;
-  /** true = 事件与 fallback 都没有 sessionId，调用方应走 resolver。 */
-  needsSessionLookup: boolean;
-}
-
-/**
- * `ask.user.requested` → 卡片 + 是否需要后续 resolver。
- *
- * 事件自带的 `session_id` 存在时完全不调用 `resolveSession`；
- * 否则用 fallback，并据最终结果告诉调用方是否还要走 L3。
- */
-export function askRequestFromEvent(
-  event: RunEvent,
-  resolveSession?: () => string | undefined,
-  now = Date.now(),
-): AskEventResolution | null {
-  const data = event.data as { session_id?: unknown };
-  const eventSessionId =
-    typeof data.session_id === 'string' && data.session_id.length > 0 ? data.session_id : undefined;
-  const fallback = eventSessionId ?? resolveSession?.();
-  const request = askFromEvent(event, fallback, now);
-  if (!request) return null;
-  return { request, needsSessionLookup: request.sessionId === undefined };
 }
 
 /** 权限请求入队（无时间过期，只做 requestId 去重）。 */

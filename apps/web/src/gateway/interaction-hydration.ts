@@ -5,13 +5,7 @@
  * 合并约束：按 `requestId` 去重且事件先到者优先；`answered` / `orphaned` 为终态，
  * 移除同 id pending；settled id 不复活；list 缺席不删除现有卡片。
  */
-import type {
-  AskUserQuestion,
-  AskUserRequest,
-  PermissionRequest,
-  PermissionScope,
-  RunStatus,
-} from './types';
+import type { AskUserQuestion, AskUserRequest, PermissionRequest, PermissionScope } from './types';
 
 /** 镜像 serve `ListedInteraction`（packages/serve/src/gateway/methods/interactions.ts）。 */
 export interface ListedInteractionAnswer {
@@ -68,9 +62,6 @@ export interface HydrationSnapshot {
 export interface HydrationSources {
   pending: readonly ListedInteraction[];
   orphaned: readonly ListedInteraction[];
-  runs?: readonly RunStatus[];
-  /** 从已接收事件反查 run 归属（ConnectionProvider 的 sessionIdForRun）。 */
-  sessionForRun?: (runId: string) => string | undefined;
   settled?: ReadonlySet<string>;
   dismissed?: ReadonlySet<string>;
 }
@@ -92,33 +83,14 @@ function listedQuestions(value: unknown): AskUserQuestion[] | null {
   return questions.length > 0 ? questions : null;
 }
 
-/**
- * ask 事件不带 `session_id`：先查事件反查，再用 `runs.list` 按
- * `interaction.run_id === run.core_run_id` join（不能用 `run.run_id`）。
- */
-function resolveSessionId(
-  item: ListedInteraction,
-  runs: readonly RunStatus[],
-  sessionForRun?: (runId: string) => string | undefined,
-): string | undefined {
-  if (item.session_id) return item.session_id;
-  const fromEvents = sessionForRun?.(item.run_id);
-  if (fromEvents) return fromEvents;
-  return runs.find((run) => run.core_run_id === item.run_id)?.session_id;
-}
-
-function toOrphaned(
-  item: ListedInteraction,
-  runs: readonly RunStatus[],
-  sessionForRun?: (runId: string) => string | undefined,
-): OrphanedInteraction {
-  const sessionId = resolveSessionId(item, runs, sessionForRun);
+/** `interactions.list` 必须自带 session_id（上游保证）；缺失保持 undefined。 */
+function toOrphaned(item: ListedInteraction): OrphanedInteraction {
   return {
     kind: item.kind,
     requestId: item.request_id,
     runId: item.run_id,
     createdAt: item.created_at,
-    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(item.session_id ? { sessionId: item.session_id } : {}),
     ...(item.tool !== undefined ? { tool: item.tool } : {}),
   };
 }
@@ -127,12 +99,11 @@ function toOrphaned(
  * 把两次 list 的结果映射成可合并快照。
  *
  * `orphaned` 同时充当终态集合：同一 id 即使在 pending 结果里也按 orphaned 处理。
- * 缺 `session_id` 的 ask / permission 依次用 `sessionForRun`、`runs` 补全。
+ * 卡片归属只读 list 的 `session_id`；缺失保持 undefined，不做反查 / join。
  */
 export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnapshot {
   const settled = sources.settled ?? EMPTY_IDS;
   const dismissed = sources.dismissed ?? EMPTY_IDS;
-  const runs = sources.runs ?? [];
   const permissions: PermissionRequest[] = [];
   const asks: AskUserRequest[] = [];
   const orphaned: OrphanedInteraction[] = [];
@@ -143,15 +114,14 @@ export function buildHydrationSnapshot(sources: HydrationSources): HydrationSnap
     if (seen.has(item.request_id)) continue;
     if (settled.has(item.request_id) || dismissed.has(item.request_id)) continue;
     seen.add(item.request_id);
-    if (orphaned.length < ORPHANED_LIMIT)
-      orphaned.push(toOrphaned(item, runs, sources.sessionForRun));
+    if (orphaned.length < ORPHANED_LIMIT) orphaned.push(toOrphaned(item));
   }
 
   for (const item of sources.pending) {
     if (item.status !== 'pending' || !item.request_id) continue;
     // 同 id 已在 orphaned 终态集合里：pending 不覆盖终态。
     if (seen.has(item.request_id) || settled.has(item.request_id)) continue;
-    const sessionId = resolveSessionId(item, runs, sources.sessionForRun);
+    const sessionId = item.session_id;
 
     if (item.kind === 'permission') {
       seen.add(item.request_id);
@@ -191,7 +161,6 @@ export type InteractionAction =
   | { type: 'run-finished'; runId: string }
   | { type: 'hydrate'; snapshot: HydrationSnapshot; settled?: ReadonlySet<string> }
   | { type: 'dismiss-orphaned'; requestId: string }
-  | { type: 'resolve-run-session'; runId: string; sessionId: string }
   | { type: 'reset' };
 
 function removeById<T extends { requestId: string }>(
@@ -201,24 +170,6 @@ function removeById<T extends { requestId: string }>(
   return items.some((item) => item.requestId === requestId)
     ? items.filter((item) => item.requestId !== requestId)
     : items;
-}
-
-/**
- * 给同一 run 的条目补 `sessionId`；已有值不覆盖。
- * 全部无变化时返回原数组（调用方据此保留 state 引用）。
- */
-function fillSessionForRun<T extends { runId: string; sessionId?: string }>(
-  items: readonly T[],
-  runId: string,
-  sessionId: string,
-): readonly T[] {
-  let changed = false;
-  const next = items.map((item) => {
-    if (item.runId !== runId || item.sessionId !== undefined) return item;
-    changed = true;
-    return { ...item, sessionId };
-  });
-  return changed ? next : items;
 }
 
 function hasId(state: InteractionState, requestId: string): boolean {
@@ -263,16 +214,6 @@ export function interactionReducer(
     case 'dismiss-orphaned': {
       const orphaned = removeById(state.orphaned, action.requestId);
       return orphaned === state.orphaned ? state : { ...state, orphaned };
-    }
-    case 'resolve-run-session': {
-      if (!action.runId || !action.sessionId) return state;
-      const permissions = fillSessionForRun(state.permissions, action.runId, action.sessionId);
-      const asks = fillSessionForRun(state.asks, action.runId, action.sessionId);
-      const orphaned = fillSessionForRun(state.orphaned, action.runId, action.sessionId);
-      if (permissions === state.permissions && asks === state.asks && orphaned === state.orphaned) {
-        return state;
-      }
-      return { permissions, asks, orphaned };
     }
     case 'reset':
       return emptyInteractionState;

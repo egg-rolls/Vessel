@@ -5,14 +5,12 @@ import {
   DISMISSED_KEY_PREFIX,
   type DismissedStorage,
   emptyInteractionState,
-  type InteractionState,
   interactionReducer,
   type ListedInteraction,
   readDismissedIds,
 } from '../src/gateway/interaction-hydration';
 import {
   askFromEvent,
-  askRequestFromEvent,
   enqueueInteraction,
   enqueuePermission,
   interactionAgentId,
@@ -151,8 +149,8 @@ describe('askFromEvent (0.17)', () => {
         requestId: 'ask-1',
         questions: [{ header: 'Pick', question: 'Which?' }],
         delegate_id: 'delegate-9',
+        session_id: 'session-1',
       }),
-      'session-1',
     );
     expect(item).toMatchObject({
       requestId: 'ask-1',
@@ -161,17 +159,6 @@ describe('askFromEvent (0.17)', () => {
       agentId: 'delegate-9',
       requestedAt: 1_000,
     });
-    // 事件自带的 session_id 优先于调用方反查值。
-    expect(
-      askFromEvent(
-        event({
-          requestId: 'ask-conflict',
-          questions: [{ question: 'Q' }],
-          session_id: 'session-event',
-        }),
-        'session-fallback',
-      )?.sessionId,
-    ).toBe('session-event');
   });
 
   test('falls back to now when the event timestamp is missing', () => {
@@ -182,7 +169,6 @@ describe('askFromEvent (0.17)', () => {
         ts: 0,
         data: { requestId: 'ask-2', questions: [{ question: 'Q' }] },
       },
-      undefined,
       5_000,
     );
     expect(item?.requestedAt).toBe(5_000);
@@ -191,7 +177,6 @@ describe('askFromEvent (0.17)', () => {
   test('keeps old streams working and rejects malformed payloads', () => {
     const legacy = askFromEvent(
       event({ request_id: 'ask-legacy', questions: [{ question: 'Q' }] }),
-      undefined,
     );
     expect(legacy?.requestId).toBe('ask-legacy');
     expect(legacy).not.toHaveProperty('sessionId');
@@ -201,7 +186,7 @@ describe('askFromEvent (0.17)', () => {
   });
 });
 
-describe('askRequestFromEvent session resolution', () => {
+describe('askFromEvent session_id (event self-description)', () => {
   const event = (data: Record<string, unknown>, ts = 1_000): RunEvent => ({
     type: 'ask.user.requested',
     run_id: 'run-1',
@@ -209,46 +194,17 @@ describe('askRequestFromEvent session resolution', () => {
     data,
   });
 
-  test('ask event session_id wins and skips the resolver', () => {
-    let calls = 0;
-    const resolution = askRequestFromEvent(
+  test('reads session_id from the event payload', () => {
+    const request = askFromEvent(
       event({ requestId: 'ask-1', questions: [{ question: 'Q' }], session_id: 'session-event' }),
-      () => {
-        calls += 1;
-        return 'session-from-events';
-      },
     );
-
-    expect(resolution?.request.sessionId).toBe('session-event');
-    expect(calls).toBe(0);
-    expect(resolution?.needsSessionLookup).toBe(false);
+    expect(request?.sessionId).toBe('session-event');
   });
 
-  test('ask without session_id falls back to the event scan', () => {
-    let calls = 0;
-    const resolution = askRequestFromEvent(
-      event({ requestId: 'ask-1', questions: [{ question: 'Q' }] }),
-      () => {
-        calls += 1;
-        return 'session-from-events';
-      },
-    );
-
-    expect(calls).toBe(1);
-    expect(resolution?.request.sessionId).toBe('session-from-events');
-    expect(resolution?.needsSessionLookup).toBe(false);
-  });
-
-  test('ask without any session asks the caller to resolve', () => {
-    const resolution = askRequestFromEvent(
-      event({ requestId: 'ask-1', questions: [{ question: 'Q' }] }),
-      () => undefined,
-    );
-
-    expect(resolution?.request.sessionId).toBeUndefined();
-    expect(resolution?.needsSessionLookup).toBe(true);
-    // 非法 ask 仍然返回 null。
-    expect(askRequestFromEvent(event({ questions: [{ question: 'Q' }] }), () => 's')).toBeNull();
+  test('leaves session_id empty when the event omits it', () => {
+    const request = askFromEvent(event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }));
+    expect(request).not.toHaveProperty('sessionId');
+    // 纯映射没有 RPC / 反查入口：不会调用 runs.get 或 runs.list。
   });
 });
 
@@ -357,33 +313,37 @@ describe('interaction hydration', () => {
     });
   });
 
-  test('hydrated ask without session_id joins runs.list by core_run_id', () => {
-    const snapshot = buildHydrationSnapshot({
+  test('hydrated ask keeps its own session_id and stays unresolved without it', () => {
+    const withSession = buildHydrationSnapshot({
       pending: [
         {
           kind: 'ask',
           request_id: 'ask-1',
           run_id: 'core-run-1',
+          session_id: 'session-1',
           questions: [{ header: 'Pick', question: 'Which?' }],
           created_at: 2_000,
           status: 'pending',
         },
       ],
       orphaned: [],
-      runs: [
-        // 用 run_id join 会命中这条错误记录；正确实现必须看 core_run_id。
-        { run_id: 'core-run-1', core_run_id: 'other-run', session_id: 'wrong', status: 'running' },
+    });
+    expect(withSession.asks[0]?.sessionId).toBe('session-1');
+
+    const withoutSession = buildHydrationSnapshot({
+      pending: [
         {
-          run_id: 'job-1',
-          core_run_id: 'core-run-1',
-          session_id: 'session-1',
-          status: 'running',
+          kind: 'ask',
+          request_id: 'ask-2',
+          run_id: 'core-run-2',
+          questions: [{ header: 'Pick', question: 'Which?' }],
+          created_at: 3_000,
+          status: 'pending',
         },
       ],
+      orphaned: [],
     });
-
-    expect(snapshot.asks).toHaveLength(1);
-    expect(snapshot.asks[0]?.sessionId).toBe('session-1');
+    expect(withoutSession.asks[0]?.sessionId).toBeUndefined();
   });
 
   test('list result does not resurrect a request settled after the snapshot', () => {
@@ -475,60 +435,5 @@ describe('interaction hydration', () => {
     expect(snapshot.orphaned).toHaveLength(0);
     // dismiss 按 tenant 隔离：另一个 tenant 仍会看到该提示。
     expect(readDismissedIds(storage, 'tenant-b').has('perm-1')).toBe(false);
-  });
-});
-
-describe('resolve-run-session', () => {
-  test('resolve-run-session fills every request of the run in one action', () => {
-    const state: InteractionState = {
-      permissions: [
-        { requestId: 'perm-1', tool: 'bash', input: {}, runId: 'run-1', requestedAt: 1_000 },
-        { requestId: 'perm-2', tool: 'bash', input: {}, runId: 'run-1', requestedAt: 2_000 },
-        {
-          requestId: 'perm-known',
-          tool: 'bash',
-          input: {},
-          runId: 'run-1',
-          sessionId: 'session-old',
-          requestedAt: 3_000,
-        },
-        { requestId: 'perm-other', tool: 'bash', input: {}, runId: 'run-2', requestedAt: 4_000 },
-      ],
-      asks: [
-        {
-          requestId: 'ask-1',
-          questions: [{ header: 'Q', question: 'Which?' }],
-          runId: 'run-1',
-          requestedAt: 5_000,
-        },
-      ],
-      orphaned: [{ kind: 'permission', requestId: 'orphan-1', runId: 'run-1', createdAt: 6_000 }],
-    };
-
-    const next = interactionReducer(state, {
-      type: 'resolve-run-session',
-      runId: 'run-1',
-      sessionId: 'session-1',
-    });
-
-    // 同 run 的权限 / ask / orphaned 一次 action 全部补齐。
-    expect(next.permissions.map((item) => [item.requestId, item.sessionId])).toEqual([
-      ['perm-1', 'session-1'],
-      ['perm-2', 'session-1'],
-      ['perm-known', 'session-old'],
-      ['perm-other', undefined],
-    ]);
-    expect(next.asks[0]?.sessionId).toBe('session-1');
-    expect(next.orphaned[0]?.sessionId).toBe('session-1');
-    // 另一 run 不受影响。
-    expect(next.permissions[3]).toBe(state.permissions[3]);
-
-    // 重复 dispatch：三个列表都无变化时返回同一个 state 引用。
-    const again = interactionReducer(next, {
-      type: 'resolve-run-session',
-      runId: 'run-1',
-      sessionId: 'session-1',
-    });
-    expect(again).toBe(next);
   });
 });
