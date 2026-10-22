@@ -1074,6 +1074,7 @@ export function ChatView({
           />
         ) : pendingPrompt && pendingPrompt.kind === 'ask' ? (
           <AskPrompt
+            key={pendingPrompt.request.requestId}
             request={pendingPrompt.request}
             more={pendingMore}
             busy={responding.has(pendingPrompt.request.requestId)}
