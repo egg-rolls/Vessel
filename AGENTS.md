@@ -14,7 +14,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.2 状态**：多 agent Kernel（Host / Scheduler / Transport）与模块 subpath exports **已实现**（`release/0.2`，未随版本发布）；`AgentRuntime` 仍是单 agent loop，Host 不重写循环。边界见 [ADR-037](docs/adr/ADR-037-modular-agent-runtime.md) 与 [ARCHITECTURE §14](docs/ARCHITECTURE.md)。
 - **0.3 状态**：durable run、MCP 插件、远程监听 / TLS **已实现**（`release/0.3`，未随版本发布）；默认关闭 / 显式 opt-in。决策边界见 ADR-039 / 040 / 041。
 - **0.4 状态**：workflow、evals、飞书渠道、metrics / 事件历史 / pruneRuns **已实现**（`release/0.4`，未随版本发布）；三个能力全部是插件、默认关闭；0.4 只做发布干跑，不 tag / publish / 合并 `main`。决策边界见 ADR-042 / 043 / 044 / 045。
-- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为与 `--serve` 每 tenant 独立执行面 **已实现**；gateway 的 workflow / 飞书控制面仍只走 default tenant。微信不做。决策边界见 ADR-046 ~ ADR-050。
+- **0.5 状态**：文件优先存储、trace、统一 RPC 方法表 v1.1、多租户、YAML 主配置 **已实现**（`release/0.5`，未随版本发布）；默认 `session.backend: file`、trace 默认 `full`、tenant 缺省 `default`。插件 tenant 行为与 `--serve` 每 tenant 独立执行面 **已实现**；gateway 的飞书控制面仍只走 default tenant。微信不做。决策边界见 ADR-046 ~ ADR-050。
 - **0.6 状态**：F5 跨机器远程、独立前端与跨节点 team **已实现**（`release/0.6`，未随版本发布）：`--connect` 非回环强制 HTTPS + token/CA，`serve.allowed_origins`，`transport.kind: remote` 静态节点与 `(node_id, seq)` 事件去重。默认仍本机回环；跨节点 team 控制面 default/admin-only。决策边界见 ADR-051 ~ ADR-053。
 - **0.7.1 状态**：0.7 的 P0 加固补丁线（基于 `release/0.7`，未随版本发布）：legacy WS 方法统一按 principal/tenant 作用域执行；tenant 单写者锁修复回收 TOCTOU 与 24h 语义；外部插件仍默认加载但启动告警，并提供 `VESSEL_NO_EXTERNAL_PLUGINS=1` 显式 opt-out（P0-3 记为 **MITIGATED**，未关闭）。
 - **0.8.0 状态**：Wave 1 结构收口（基于 `release/0.8`，未随版本发布）：core 的 run 级状态收敛到 `RunExecution` + 单 run 守卫 `run_already_running`，`run()` / `resume()` 共用 `finalizeRun` 终态路径；hook 抛错发 `hook.error` 并继续，guardrail 抛错 fail-closed（`guardrail_error`）；本地 RPC `subscribe` 接线；headless 统一清理；`--resume-run` / `FileRunStore` 走 tenant 目录与归属校验；Web seq 回退重放、durable REST admin 显式 tenant；`read` / `bash cwd` 路径边界与内置凭据 denylist。决策见 ADR-054 / ADR-055。
@@ -39,6 +39,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **0.15.1 状态**：Web 性能补丁（基于 `release/0.15.1`，未随版本发布）：移除 `.modal-backdrop` 的 `backdrop-filter: blur(6px)` 与 `.appbar` 的 `backdrop-filter: blur(12px)`；遮罩改为 `ink 55%` 半透明底色，应用栏改为不透明 `--surface`。`backdrop-filter` 会为全屏/动画层强制额外合成与重采样，Edge / Chromium 在滚动、输入和流式文本时容易掉帧；不再使用模糊，层级靠边框与阴影表达。
 - **0.16.0 状态**：统一 agent 工具 Phase A（基于 `release/0.16.0`，未随版本发布）：模型工具面收敛到唯一 `agent` schema（`spawn` / `send` / `close`，`send` 入队即返回，无 `wait` / `inbox` / `status` / `cancel`）；session 即成员（`session_id === agent_id`，注册表记录 `visibility` / `owner` / `state` / `last_seen` / `usage`，状态机含 `created` / `idle` / `running` / `waiting_permission` / `completed` / `failed` / `cancelled` / `closed` / `stale`）；成员回复经 owner inbox 排空写入 core `HookContext.messages`（`BeforeLlm` 注入，`name: 'agent:<id>'`，游标与稳定键去重）；成员 `permissionMode` 为 `bridge` / `allow` / `deny`（缺省交互 bridge、headless allow），bridge 请求补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 后弹到父窗口，应答沿用 `permission.respond` / `ask.respond`。`team.legacyTools` 默认 true（保留一个版本），`agent` 可用时不再注册 `delegate_task`，旧配置名映射为 `agent`。canonical RPC 仍 44。决策见 ADR-087。
 - **0.17.0 状态**：AgentService 与成员能力层（基于 `release/0.17.0`，未随版本发布）：新增 `packages/agent`，作为 `new` / `send` / `close` / `list` 的唯一实现（registry、生命周期、消息队列、可见性、owner 队列、权限 bridge、snapshot）。内置 `agent` 工具是唯一模型 schema（动作 `new` / `send` / `close` / `list`，`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理）；不提供 `wait` / `inbox` / `status` / `cancel`。REPL 作为 owner 暴露 `127.0.0.1:0` loopback 控制端点（token 记录 `<dataDir>/agent-owner.json`，`0600`），`vessel agent new|send|close|list [--json]` attach 同一服务。删除 `plugins/tools/team`、`plugins/tools/delegate-task`、`team_*` / `delegate_task` 模型工具、`TeamConfig` / `DelegateConfig`、`team.*` / `delegate.*` 配置与装配；`/v1/team/*` 传输协议文件保留但无生产装配。工具面：默认 3；`agent.enabled` 4；交互 4（+`ask_user`）；交互 + `agent` 5。canonical RPC 仍 **44**。决策见 ADR-088。
+- **0.18.x 状态（2026-10-22）**：workflow 插件与产品面**已移除**（ADR-090，取代 ADR-042）：`plugins/workflow/**`、`workflow.*` RPC、`workflow` 配置、CLI `vessel workflow`、TUI `/workflows`、Web workflow 页面与事件消费全部删除；canonical RPC 45 → **40**。下方 0.4 / 0.5 / 0.8.2 的 workflow 描述是历史，不代表当前实现。
 - **0.18.0 状态**：交互可查询（基于 `release/0.18.0`，未随版本发布）：新增只读 canonical RPC `interactions.list`（permission `read`，tenant 作用域），供 Web 刷新后读取 `pending` / `answered` / `orphaned` 权限请求与内存 pending ask（`kind: 'ask'` + `questions`）；数据源为引擎已 hydrate 的 `interactionRecords`（内存 ∪ 磁盘、按 `requestId` 去重、内存状态优先）；重启后无 run 的 pending 以 `orphaned` 可见，迟到应答仍返回 `run_ended`。同版本修复交互应答投递：`permission.respond` / `ask.respond` 直接发布到所属 tenant 的 runtime 事件流；`ask_user` 取消 120s 自动超时，改为无限等待并由应答 / abort / run 终态收口，Web / TUI 提问卡片不再倒计时。同版本删除共享事件流：tenant 运行时流是唯一事件面，gateway 的 seq / 缓冲 / 广播 / registry 统一由 `TenantEventHub` fan-in；`GatewayOptions.events` 改为 `hub`（breaking），诊断事件投 default tenant 流；`interactionTtlMs` / `sweep` / 30s 定时器删除。canonical RPC 44 → **45**。
 
 ## 代码风格与硬规矩
@@ -48,7 +49,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **core 保持小**。core 里不出现业务概念（skills、记忆、资产、文档、代码审查、OCR、PDF、图片、向量、浏览器、IAM、计费）。
 - 不新增第二套扩展机制——一切走 `Plugin` + `PluginHost`。
 - 不新增事件名常量/枚举。事件名一律是开放字符串字面量，命名空间 `<domain>.<action>.<event>`。
-- workflow / evals / feishu 只做插件，不进 core；core 的 `dependencies` 保持为空。workflow 不注册模型工具；evals 默认离线，真实 provider 需 `config.evals.allowNetwork` + CLI `--allow-network` 双门控；飞书凭据只走 env/config，`app_secret` 永不打印。
+- evals / feishu 只做插件，不进 core；core 的 `dependencies` 保持为空。workflow 已移除，不得恢复；evals 默认离线，真实 provider 需 `config.evals.allowNetwork` + CLI `--allow-network` 双门控；飞书凭据只走 env/config，`app_secret` 永不打印。
 - 0.4 发布只做干跑：`scripts/release-dry-run.ts`；不 tag、不 publish、不合并 `main`。
 - 全异步。不写 sync-in-async（阻塞调用混进异步路径）。
 - 不留半成品 stub（`throw new NotImplementedError()` / 空实现进 core）。
@@ -58,7 +59,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **持久化写入**（0.8.1，ADR-056）：session / checkpoint 一律走 `atomicWrite`，默认 `durable: true`（temp fsync → rename → 尽力目录 fsync）；不要直写最终路径，不要吞掉 `AtomicWriteError`。只有临时文件或测试才显式 `durable: false`。
 - **损坏检测**（0.8.1，ADR-056）：文件存在但不可读 / JSON 损坏一律抛 `SessionCorruptError`，不得当成“不存在”返回 `null`；否则下一次 save 会覆盖原文件。删除同样先 `load()`，损坏时抛错不 unlink；只有 `listRich()` 允许逐项降级跳过。
 - **配置层序与单一 resolver**（0.8.1，ADR-057）：层序固定 `CLI > env > tenant overlay > project > user > default`，只在 `loadConfig()` 合并。CLI flag 必须经 `buildCliConfigOverrides()` → `cliOverrides`；serve / connect 不得自行读 argv 或 `process.env`。`defaults` 仅为 deprecated 兼容层。
-- **工具执行必须走统一 pipeline**（0.8.2，ADR-058）：任何入口都不得直调 `ToolDefinition.handler`（workflow 未注入 pipeline 的 deprecated 兼容路径除外）；走 `ToolPipeline`（阶段顺序 getTool → ToolCall guardrail → BeforeTool → permission（最终工具与参数）→ handler（timeout/signal）→ ToolResult guardrail → AfterTool）。权限必须在 guardrail/hook 改写之后判定；`tool.call.*` 由调用方发布，管道不发布。
+- **工具执行必须走统一 pipeline**（0.8.2，ADR-058）：任何入口都不得直调 `ToolDefinition.handler`；走 `ToolPipeline`（阶段顺序 getTool → ToolCall guardrail → BeforeTool → permission（最终工具与参数）→ handler（timeout/signal）→ ToolResult guardrail → AfterTool）。权限必须在 guardrail/hook 改写之后判定；`tool.call.*` 由调用方发布，管道不发布。
 - **新 RPC 方法进 domain 模块**（0.8.3，ADR-059）：新方法加到 `packages/serve/src/gateway/methods/<domain>.ts` 并导出 `createXxxMethods`，由 `gateway.ts` 展开组装；不要把方法表回灌 `gateway.ts`（`events.subscribe` 因依赖连接状态是例外）。方法名 / schema / 返回形状 / 错误码 / 鉴权顺序必须保持兼容。（以代码事实为准，改代码时同步改本节。）
 - **新一次性 CLI 子命令进注册表**（0.8.3，ADR-060）：加到 `src/commands/registry.ts` 的 `cliCommands`，实现 `match(args)` / `run(args, ctx)`；不要在 `cli.ts` 加新的 `if` 链。顺序即语义，宽泛的 `match` 会遮蔽后面的命令。（以代码事实为准，改代码时同步改本节。）
 - **TUI 展示层统一清洗与 key**（0.8.4，ADR-061）：渲染工具 / 命令文本前用 `sanitizeTerminalText()`，不要在 core / 工具层清洗（原始返回值必须保持原样）；列表 key 用 `lineKey(index)`，不要用文本内容或累计偏移。
@@ -112,7 +113,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **权限 bridge**（0.17，ADR-088）：成员 `permissionMode` 为 `bridge|allow|deny`，缺省交互 `bridge`、headless `allow`；bridge 请求必须补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 并弹到父窗口，应答沿用 `permission.respond` / `ask.respond`；父流与成员流同源时不得重复转发。`deny` 只复制 `agent.readOnlyTools`（默认 `['read']`）；无 `parentEvents` 时 bridge 退化为 deny，不得死等。
 - **snapshot 内存队列**（0.17，ADR-088）：registry 在内存，状态变化经节流合并原子写 `<dataDir>/agents/<tenant>.json`（`0600`，`version: 1`），只存成员状态；消息队列只在内存。重启后非终态成员标 `stale`、未处理消息丢失；不得把队列写进快照或声称 durable。
 - **BeforeLlm 注入只增不改**（0.16，ADR-087）：`HookContext.messages` 是 additive 注入位；runtime 只写入一次，按 `name` / `timestamp` 稳定键或对象引用去重，每个 run 重置；未写时不改变请求形状。`agent.followReplies` 目前只作为配置 / 事件字段，不得实现成阻塞等待或隐藏的 `wait`。
-- **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。成员 / workflow 的接线测试必须可独立运行。
+- **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。成员接线测试必须可独立运行。
 - 不给 core 加默认厂商 API Key / Base URL / 价格。Key 永远用户自备。
 - 引用文件路径前先确认它存在。本仓库已删除 `docs/specs/`、`docs/role/`、`docs/api/`、`docs/guides/`、`docs/dev/`、`processes/`、`legacy/`——指向它们的链接都是错的。
 - 文档只写已实现；规划项明确标注。不吹未实现的能力。
@@ -153,7 +154,6 @@ bun run src/cli.ts tenant list                  # tenant 元数据
 bun run src/cli.ts migrate --from sqlite --to file-v2   # 默认 dry-run
 bun run src/cli.ts trace prune --dry-run        # 查看将清理的 trace
 bun run demo                                    # 无 Key 跑核心示例
-bun run src/cli.ts workflow list                # workflow run 列表（controls-only 可用）
 bun run src/cli.ts eval smoke                   # eval suite（默认离线）
 bun run src/cli.ts --feishu                     # 前台运行飞书渠道（需 enabled + 凭据）
 bun run scripts/version.ts --check              # 版本一致性 + CHANGELOG 校验
@@ -205,7 +205,7 @@ CI 与发布流程见 [docs/operations/CI-CD.md](docs/operations/CI-CD.md)、[do
 - 别给模型再加一个能干的、能与 bash 等价的事的工具。
 - 别给模型加 `wait` / `inbox` / `status` / `cancel`；也别把成员回复做成需要轮询的收件箱。等待就是结束这一轮，回复作为新 turn 到达。
 - 别写 harness 层面的 skills 扫描 / 解析 / 注入通道——skills 就是文件，经消息进来。
-- 别把 MCP / workflow / evals / feishu 塞进 core（它们都是插件）；durable 只做 core 的 `RunStore` port；workflow 不注册模型工具；多租户已进 core（`tenant` 解析/隔离原语），0.6 的跨机器远程 / 跨节点 transport 已在装配层实现（core 只加可选字段）；team / delegate 模型工具与插件已在 0.17 删除，`/v1/team/*` 传输协议文件保留但无生产装配。
+- 别把 MCP / evals / feishu 塞进 core（它们都是插件）；workflow 已移除，不得恢复；durable 只做 core 的 `RunStore` port；多租户已进 core（`tenant` 解析/隔离原语），0.6 的跨机器远程 / 跨节点 transport 已在装配层实现（core 只加可选字段）；team / delegate 模型工具与插件已在 0.17 删除，`/v1/team/*` 传输协议文件保留但无生产装配。
 - 0.5 默认 `session.backend: file`；不要删除 sqlite 后端，也不要在检测到 legacy 数据时自动迁移——只提示 `vessel migrate`。
 - 别把 tenant overlay 写成能覆盖 CLI/env；优先级固定 `CLI > env > tenant overlay > project > user > default`。
 - 别绕开 RPC 方法表直接调内部实现；新增 canonical 方法必须发 addendum。

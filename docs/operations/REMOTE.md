@@ -225,7 +225,7 @@ gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由 gateway 按
 
 ## 6. 已知限制
 
-- 无全局事件序、无分布式锁、无跨机 durable、无跨机 workflow 编排；workflow / 飞书控制面仍只走 default tenant。
+- 无全局事件序、无分布式锁、无跨机 durable、无跨机编排；飞书控制面仍只走 default tenant。
 - `request_id` 去重是进程内 Map，不跨重启；同 key 不同参数返回首次结果。
 - 保留的 team 传输（`/v1/team/*`）在 0.17 没有生产装配，也没有模型工具入口；原 spawn / status / inbox 语义与重试规则留待 Phase B。
 - `transport.nodes[]` 是静态表；0.6 不做自动发现。
