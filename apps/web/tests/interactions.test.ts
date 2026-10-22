@@ -201,22 +201,21 @@ describe('askFromEvent (0.17)', () => {
     expect(askFromEvent(event({ requestId: 'ask-3', questions: [] }))).toBeNull();
   });
 
-  test('keeps the caller session and maps parent_session_id', () => {
+  test('maps session_id and parent_session_id from the event', () => {
     const item = askFromEvent(
       event({
         requestId: 'ask-1',
         questions: [{ question: 'Q' }],
+        session_id: 'member-1',
         parent_session_id: 'chat-1',
       }),
-      'member-1',
     );
     expect(item).toMatchObject({ sessionId: 'member-1', parentSessionId: 'chat-1' });
 
     const legacy = askFromEvent(
       event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }),
-      'member-1',
     );
-    expect(legacy?.sessionId).toBe('member-1');
+    expect(legacy).not.toHaveProperty('sessionId');
     expect(legacy).not.toHaveProperty('parentSessionId');
   });
 });
