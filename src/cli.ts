@@ -80,6 +80,11 @@ import { installProcessErrorHandlers } from './process-handlers';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
 import {
+  reconcileStaleSessions,
+  type SessionLivenessContext,
+  withLivenessRepair,
+} from './session-liveness';
+import {
   resolveContinueSessionId,
   runSessionList,
   validateResumeSessionId,
@@ -696,6 +701,39 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     const dataDir = resolveDataDir(config);
+    // 0.18：硬崩后 session 会永久停在 running（事件无终态）。启动 sweep + 读时兜底共用
+    // 同一修复函数；锁活着 → 跳过，绝不误杀其它实例的活 run / resume。
+    const livenessContextFor = (tenantId: string): SessionLivenessContext | undefined => {
+      const bundle =
+        tenantFactory?.bundleFor(tenantId) ??
+        (tenantId === result.tenantId ? result.bundle : undefined);
+      if (!bundle) return undefined;
+      return {
+        tenantDir: bundle.tenantPaths.root,
+        session: bundle.session,
+        ...(bundle.eventLog ? { eventLog: bundle.eventLog } : {}),
+        ...(bundle.runStore ? { runStore: bundle.runStore } : {}),
+        logger,
+      };
+    };
+    const livenessSessionFor = (tenantId: string) => {
+      const livenessContext = livenessContextFor(tenantId);
+      return livenessContext !== undefined
+        ? withLivenessRepair(livenessContext.session, livenessContext)
+        : undefined;
+    };
+    for (const tenantId of tenantFactory?.tenantIds() ?? []) {
+      const livenessContext = livenessContextFor(tenantId);
+      if (!livenessContext) continue;
+      const sweep = await reconcileStaleSessions(livenessContext);
+      if (sweep.repaired.length > 0 || sweep.errors.length > 0) {
+        logger.warn('session liveness sweep', {
+          tenant_id: tenantId,
+          repaired: sweep.repaired.length,
+          errors: sweep.errors.length,
+        });
+      }
+    }
     // 0.6.1 P0-2：非 default tenant 只走 per-tenant runStore；
     // default tenant 由上面的 `durable` 提供（gateway 优先 opts.durable）。
     const durableFor = createDurableFor(tenantFactory, result.tenantId);
@@ -750,7 +788,7 @@ async function runWithConfig(result: BootstrapResult) {
       hub: eventHub,
       // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
       ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
-      session: ctx.session,
+      session: livenessSessionFor(result.tenantId) ?? ctx.session,
       runtime,
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
       context: ctx.context,
@@ -794,7 +832,7 @@ async function runWithConfig(result: BootstrapResult) {
               ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
             }),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
-            sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
+            sessionFor: (tenantId: string) => livenessSessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
