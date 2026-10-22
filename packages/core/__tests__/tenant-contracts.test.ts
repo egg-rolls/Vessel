@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, it } from 'bun:test';
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { MemoryContextManager } from '../src/context/context-manager';
 import { MemoryEventStream } from '../src/events/event-stream';
@@ -10,7 +10,7 @@ import { MemoryLLMProvider } from '../src/provider/providers';
 import { AgentRuntime } from '../src/runtime/agent-runtime';
 import { GuardrailRunner } from '../src/runtime/guardrail-runner';
 import { PermissionPolicy } from '../src/runtime/permission-policy';
-import { FileSessionBackend } from '../src/session/file-backend';
+import { FileSessionBackend, SessionCorruptError } from '../src/session/file-backend';
 import { FileRunStore } from '../src/session/run-store';
 import { MemorySessionBackend, toSessionInfo } from '../src/session/session-backend';
 import { SQLiteSessionBackend } from '../src/session/sqlite-backend';
@@ -312,5 +312,68 @@ describe('SQLite tenant isolation (0.5 E4)', () => {
     const acme = new SQLiteSessionBackend(path, { tenantId: 'acme' });
     expect(await acme.load('old')).toBeNull();
     acme.close();
+  });
+});
+
+describe('file session backend tenant write guards (0.18 P0-3)', () => {
+  it("tenant B cannot overwrite tenant A's session file with the same session id", async () => {
+    const dir = tempDir();
+    const a = new FileSessionBackend(dir, { tenantId: 'a' });
+    const b = new FileSessionBackend(dir, { tenantId: 'b' });
+    await a.save({ ...runState('s1'), messages: [{ role: 'user', content: 'from a' }] });
+
+    const error = await b
+      .save({ ...runState('s1'), messages: [{ role: 'user', content: 'from b' }] })
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe('tenant_mismatch: session s1 belongs to a');
+    const onDisk = JSON.parse(
+      await readFile(join(dir, `${encodeURIComponent('s1')}.json`), 'utf8'),
+    ) as RunState;
+    expect(onDisk.tenant_id).toBe('a');
+    expect(onDisk.messages[0]?.content).toBe('from a');
+  });
+
+  it("tenant B cannot shadow tenant A's legacy session file", async () => {
+    const dir = tempDir();
+    await mkdir(dir, { recursive: true });
+    const id = 'legacy 会话';
+    const legacyPath = join(dir, `${id}.json`);
+    expect(encodeURIComponent(id)).not.toBe(id);
+    await writeFile(
+      legacyPath,
+      JSON.stringify({
+        ...runState(id),
+        tenant_id: 'a',
+        messages: [{ role: 'user', content: 'legacy a' }],
+      }),
+      'utf8',
+    );
+    const b = new FileSessionBackend(dir, { tenantId: 'b' });
+
+    const error = await b.save(runState(id)).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe(`tenant_mismatch: session ${id} belongs to a`);
+    const onDisk = JSON.parse(await readFile(legacyPath, 'utf8')) as RunState;
+    expect(onDisk.tenant_id).toBe('a');
+    expect(onDisk.messages[0]?.content).toBe('legacy a');
+    // 未创建编码路径的 primary 文件
+    expect(await readdir(dir)).toEqual([`${id}.json`]);
+  });
+
+  it('save over a corrupt session file throws SessionCorruptError and keeps the bytes', async () => {
+    const dir = tempDir();
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, 'broken.json');
+    await writeFile(path, '{ not json', 'utf8');
+    const backend = new FileSessionBackend(dir, { tenantId: 'a' });
+
+    const error = await backend.save(runState('broken')).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(SessionCorruptError);
+    expect((error as SessionCorruptError).path).toContain('broken.json');
+    expect(await readFile(path, 'utf8')).toBe('{ not json');
   });
 });

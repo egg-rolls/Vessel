@@ -36,7 +36,36 @@ function writeConfig(base: string, body: string): { base: string; configPath: st
   return { base, configPath };
 }
 
-function twoTenantYaml(extraTenant?: string): string {
+interface TenantToolsYaml {
+  allow?: string[];
+  deny?: string[];
+}
+
+/** tenant 级 `tools:` 块（与 `status` / `config` 同级）。 */
+function tenantToolsLines(tools: TenantToolsYaml | undefined): string[] {
+  if (!tools) return [];
+  const lines = ['      tools:'];
+  if (tools.allow !== undefined) {
+    lines.push(
+      ...(tools.allow.length === 0
+        ? ['        allow: []']
+        : ['        allow:', ...tools.allow.map((name) => `          - ${name}`)]),
+    );
+  }
+  if (tools.deny !== undefined) {
+    lines.push(
+      ...(tools.deny.length === 0
+        ? ['        deny: []']
+        : ['        deny:', ...tools.deny.map((name) => `          - ${name}`)]),
+    );
+  }
+  return lines;
+}
+
+function twoTenantYaml(
+  extraTenant?: string,
+  tenantTools?: { acme?: TenantToolsYaml; work?: TenantToolsYaml },
+): string {
   return [
     'provider:',
     '  name: openai',
@@ -49,12 +78,18 @@ function twoTenantYaml(extraTenant?: string): string {
     '  tenants:',
     '    acme:',
     '      status: active',
+    ...tenantToolsLines(tenantTools?.acme),
     extraTenant ? '      config:' : '      config: {}',
     ...(extraTenant ? extraTenant.split('\n').map((line) => `        ${line}`) : []),
     '    work:',
     '      status: active',
+    ...tenantToolsLines(tenantTools?.work),
     '      config: {}',
   ].join('\n');
+}
+
+function toolNames(bundle: { pluginHost: { listTools(): Array<{ name: string }> } }): string[] {
+  return bundle.pluginHost.listTools().map((def) => def.name);
 }
 
 describe('listActiveTenantIds', () => {
@@ -281,5 +316,105 @@ describe('createTenantRuntimeFactory', () => {
     // acme 已建成，但失败时必须释放它的锁。
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);
     expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
+  });
+
+  it('tenant tools.deny keeps the denied tool out of the tenant host', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(
+      base,
+      twoTenantYaml(undefined, { acme: { deny: ['bash'] } }),
+    );
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+    });
+
+    try {
+      const acme = factory.bundleFor('acme');
+      const work = factory.bundleFor('work');
+      expect(acme).toBeDefined();
+      expect(work).toBeDefined();
+
+      expect(acme?.pluginHost.getTool('bash')).toBeUndefined();
+      expect(toolNames(acme as NonNullable<typeof acme>).sort()).toEqual(['edit', 'read']);
+      // 另一 tenant 未配置策略：工具面不变。
+      expect(work?.pluginHost.getTool('bash')).toBeDefined();
+      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual(['bash', 'edit', 'read']);
+    } finally {
+      await factory.closeAll();
+    }
+  });
+
+  it('tenant tools.allow limits the tenant host to listed tools', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(
+      base,
+      twoTenantYaml(undefined, { acme: { allow: ['read'] } }),
+    );
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+    });
+
+    try {
+      const acme = factory.bundleFor('acme');
+      const work = factory.bundleFor('work');
+      expect(acme?.pluginHost.getTool('read')).toBeDefined();
+      expect(acme?.pluginHost.getTool('bash')).toBeUndefined();
+      expect(acme?.pluginHost.getTool('edit')).toBeUndefined();
+      expect(toolNames(acme as NonNullable<typeof acme>)).toEqual(['read']);
+      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual(['bash', 'edit', 'read']);
+    } finally {
+      await factory.closeAll();
+    }
+  });
+
+  it('tenant tools.deny suppresses ask_user', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(
+      base,
+      twoTenantYaml(undefined, { acme: { deny: ['ask_user'] } }),
+    );
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      registerAskUser: true,
+      nodeId: 'node-test',
+    });
+
+    try {
+      const acme = factory.bundleFor('acme');
+      const work = factory.bundleFor('work');
+      expect(acme?.pluginHost.getTool('ask_user')).toBeUndefined();
+      expect(toolNames(acme as NonNullable<typeof acme>)).not.toContain('ask_user');
+      expect(toolNames(acme as NonNullable<typeof acme>).sort()).toEqual(['bash', 'edit', 'read']);
+      // 同一工厂内另一 tenant 仍拿到 ask_user。
+      expect(work?.pluginHost.getTool('ask_user')).toBeDefined();
+      expect(toolNames(work as NonNullable<typeof work>).sort()).toEqual([
+        'ask_user',
+        'bash',
+        'edit',
+        'read',
+      ]);
+    } finally {
+      await factory.closeAll();
+    }
   });
 });

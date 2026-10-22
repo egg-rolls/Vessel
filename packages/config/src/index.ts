@@ -52,6 +52,11 @@ export {
   buildConfigSnapshot,
   redactSourcePaths,
 } from './sources.js';
+export {
+  isTenantToolAllowed,
+  resolveTenantToolPolicy,
+  type TenantToolPolicy,
+} from './tenant-tools.js';
 export * from './types.js';
 export { deepMerge } from './utils.js';
 export {
