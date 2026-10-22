@@ -1,3 +1,5 @@
+import { pendingBarSummary, pendingBarTarget } from '../domains/chat/pending-permissions';
+import type { OrphanedInteraction } from '../gateway/interaction-hydration';
 import type { AskUserRequest, PermissionRequest } from '../gateway/types';
 import { t } from '../i18n';
 
@@ -5,61 +7,58 @@ function shortId(value: string): string {
   return value.length > 12 ? `${value.slice(0, 12)}…` : value;
 }
 
-function targetOf(request: { sessionId?: string; runId: string }): string {
-  return request.sessionId ?? request.runId;
-}
-
-/** 当前视图外的待处理请求（权限 + 提问）条：只提示 + 跳转，不打断当前对话。 */
+/**
+ * 全局待处理 compact bar（0.18）：单条，不展开、不按会话分行。
+ *
+ * - pending：权限 + 提问合并计数，跳最早一条的所属会话；
+ *   最早一条无归属会话时只显示失效提示，不给死链。
+ * - orphaned：只提示 + 关闭（dismiss），不跳转、不提供应答。
+ */
 export function PendingPermissionsBar({
   requests,
   asks = [],
-  onOpen,
-  onOpenAsk,
-  panelOpen = false,
-  onTogglePanel,
+  orphaned = [],
+  onOpenSession,
+  onDismissOrphans,
 }: {
   requests: readonly PermissionRequest[];
   asks?: readonly AskUserRequest[];
-  onOpen: (request: PermissionRequest) => void;
-  onOpenAsk?: (request: AskUserRequest) => void;
-  /** 非模态待处理面板是否展开（0.17）。 */
-  panelOpen?: boolean;
-  onTogglePanel?: () => void;
+  /** 已失效交互：单独计数，不混入 pending 数量。 */
+  orphaned?: readonly OrphanedInteraction[];
+  onOpenSession: (sessionId: string) => void;
+  onDismissOrphans: () => void;
 }) {
-  const first = requests[0];
-  const firstAsk = asks[0];
-  if (!first && !firstAsk) return null;
-  const labels = [...new Set([...requests.map(targetOf), ...asks.map(targetOf)])]
-    .slice(0, 2)
-    .map(shortId);
-  const openAsk = onOpenAsk ?? (() => undefined);
+  const summary = pendingBarSummary(requests, asks);
+  const earliest = summary.earliest;
+  const target = pendingBarTarget(summary);
+  if (!earliest && orphaned.length === 0) return null;
+
   return (
     <div className="pending-permissions-bar" role="status">
-      {requests.length > 0 && (
-        <span>{t('permission.otherSessions', { count: requests.length })}</span>
+      {earliest && (
+        <>
+          <span>{t('pending.bar.summary', { count: summary.count })}</span>
+          <span className="dim mono">{t('pending.run', { id: shortId(earliest.runId) })}</span>
+          {target ? (
+            <button
+              type="button"
+              className="link-btn"
+              onClick={() => onOpenSession(target.sessionId)}
+            >
+              {t('permission.goTo')}
+            </button>
+          ) : (
+            <span className="dim">{t('pending.bar.unresolved')}</span>
+          )}
+        </>
       )}
-      {asks.length > 0 && <span>{t('ask.otherSessions', { count: asks.length })}</span>}
-      <span className="dim mono">{labels.join(', ')}</span>
-      {first && (
-        <button type="button" className="link-btn" onClick={() => onOpen(first)}>
-          {t('permission.goTo')}
-        </button>
-      )}
-      {firstAsk && (
-        <button type="button" className="link-btn" onClick={() => openAsk(firstAsk)}>
-          {t('ask.goTo')}
-        </button>
-      )}
-      {onTogglePanel && (
-        <button
-          type="button"
-          className="link-btn"
-          aria-expanded={panelOpen}
-          aria-controls="pending-requests-panel"
-          onClick={onTogglePanel}
-        >
-          {panelOpen ? t('pending.panel.collapse') : t('pending.panel.toggle')}
-        </button>
+      {orphaned.length > 0 && (
+        <>
+          <span>{t('interaction.orphaned.bar', { count: orphaned.length })}</span>
+          <button type="button" className="link-btn" onClick={onDismissOrphans}>
+            {t('common.close')}
+          </button>
+        </>
       )}
     </div>
   );

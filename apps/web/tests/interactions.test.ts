@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  addDismissedId,
+  buildHydrationSnapshot,
+  DISMISSED_KEY_PREFIX,
+  type DismissedStorage,
+  emptyInteractionState,
+  interactionReducer,
+  type ListedInteraction,
+  readDismissedIds,
+} from '../src/gateway/interaction-hydration';
+import {
   askFromEvent,
   enqueueInteraction,
   enqueuePermission,
@@ -12,7 +22,7 @@ import {
   removeInteraction,
   SubmitGuard,
 } from '../src/gateway/interactions';
-import type { RunEvent } from '../src/gateway/types';
+import type { PermissionRequest, RunEvent } from '../src/gateway/types';
 
 interface Item {
   requestId: string;
@@ -233,5 +243,173 @@ describe('SubmitGuard', () => {
   test('rejects an empty requestId', () => {
     const guard = new SubmitGuard();
     expect(guard.begin('')).toBe(false);
+  });
+});
+
+function listedPermission(overrides: Partial<ListedInteraction> = {}): ListedInteraction {
+  return {
+    kind: 'permission',
+    request_id: 'perm-1',
+    run_id: 'run-1',
+    session_id: 'session-1',
+    tool: 'bash',
+    input: { cmd: 'ls' },
+    created_at: 1_000,
+    status: 'pending',
+    ...overrides,
+  };
+}
+
+function memoryStorage(): DismissedStorage {
+  const data = new Map<string, string>();
+  return {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => {
+      data.set(key, value);
+    },
+  };
+}
+
+describe('interaction hydration', () => {
+  test('hydrated permission keeps session_id and created_at', () => {
+    const snapshot = buildHydrationSnapshot({
+      pending: [
+        listedPermission({
+          request_id: 'perm-1',
+          run_id: 'run-1',
+          session_id: 'session-1',
+          created_at: 1_700_000_000_000,
+        }),
+      ],
+      orphaned: [],
+    });
+
+    expect(snapshot.permissions).toHaveLength(1);
+    expect(snapshot.permissions[0]).toMatchObject({
+      requestId: 'perm-1',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      requestedAt: 1_700_000_000_000,
+    });
+  });
+
+  test('hydrated ask without session_id joins runs.list by core_run_id', () => {
+    const snapshot = buildHydrationSnapshot({
+      pending: [
+        {
+          kind: 'ask',
+          request_id: 'ask-1',
+          run_id: 'core-run-1',
+          questions: [{ header: 'Pick', question: 'Which?' }],
+          created_at: 2_000,
+          status: 'pending',
+        },
+      ],
+      orphaned: [],
+      runs: [
+        // 用 run_id join 会命中这条错误记录；正确实现必须看 core_run_id。
+        { run_id: 'core-run-1', core_run_id: 'other-run', session_id: 'wrong', status: 'running' },
+        {
+          run_id: 'job-1',
+          core_run_id: 'core-run-1',
+          session_id: 'session-1',
+          status: 'running',
+        },
+      ],
+    });
+
+    expect(snapshot.asks).toHaveLength(1);
+    expect(snapshot.asks[0]?.sessionId).toBe('session-1');
+  });
+
+  test('list result does not resurrect a request settled after the snapshot', () => {
+    const snapshot = buildHydrationSnapshot({
+      pending: [listedPermission()],
+      orphaned: [],
+    });
+    const request = snapshot.permissions[0];
+    expect(request).toBeDefined();
+    if (!request) return;
+
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request,
+    });
+    state = interactionReducer(state, { type: 'settle', requestId: 'perm-1' });
+    // 快照在结算前生成（settled 为空），应用时本端已结算：不能复活卡片。
+    state = interactionReducer(state, {
+      type: 'hydrate',
+      snapshot,
+      settled: new Set(['perm-1']),
+    });
+
+    expect(state.permissions).toHaveLength(0);
+  });
+
+  test('event and list with the same request_id render one card', () => {
+    const fromEvent: PermissionRequest = {
+      requestId: 'perm-1',
+      tool: 'bash',
+      input: { cmd: 'ls' },
+      runId: 'run-1',
+      sessionId: 'session-1',
+      requestedAt: 500,
+    };
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request: fromEvent,
+    });
+    const snapshot = buildHydrationSnapshot({
+      pending: [listedPermission({ created_at: 9_999 })],
+      orphaned: [],
+    });
+
+    state = interactionReducer(state, { type: 'hydrate', snapshot });
+
+    expect(state.permissions).toHaveLength(1);
+    // 事件先到：保留事件对象（含 agentId 等 list 没有的字段）。
+    expect(state.permissions[0]).toBe(fromEvent);
+  });
+
+  test('orphaned status removes the stale pending card', () => {
+    const request: PermissionRequest = {
+      requestId: 'perm-1',
+      tool: 'bash',
+      input: { cmd: 'ls' },
+      runId: 'run-1',
+      sessionId: 'session-1',
+      requestedAt: 500,
+    };
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request,
+    });
+    const snapshot = buildHydrationSnapshot({
+      pending: [],
+      orphaned: [listedPermission({ status: 'orphaned', created_at: 100 })],
+    });
+
+    state = interactionReducer(state, { type: 'hydrate', snapshot });
+
+    expect(state.permissions).toHaveLength(0);
+    expect(state.orphaned).toHaveLength(1);
+    expect(state.orphaned[0]?.requestId).toBe('perm-1');
+  });
+
+  test('dismissed orphaned id is filtered on the next hydration', () => {
+    const storage = memoryStorage();
+    addDismissedId(storage, 'tenant-a', 'perm-1');
+
+    expect(storage.getItem(`${DISMISSED_KEY_PREFIX}tenant-a`)).toBe('["perm-1"]');
+    const dismissed = readDismissedIds(storage, 'tenant-a');
+    const snapshot = buildHydrationSnapshot({
+      pending: [],
+      orphaned: [listedPermission({ status: 'orphaned' })],
+      dismissed,
+    });
+
+    expect(snapshot.orphaned).toHaveLength(0);
+    // dismiss 按 tenant 隔离：另一个 tenant 仍会看到该提示。
+    expect(readDismissedIds(storage, 'tenant-b').has('perm-1')).toBe(false);
   });
 });

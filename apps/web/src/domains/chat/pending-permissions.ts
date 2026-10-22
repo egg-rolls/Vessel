@@ -31,12 +31,72 @@ export function pendingPermissionsOutsideView<T extends SessionScoped>(
   return permissions.filter((item) => item.sessionId !== current);
 }
 
-/** 跳转目标：优先会话，其次运行详情。 */
-export function pendingPermissionTarget(
-  request: SessionScoped,
-): { domain: 'chat'; sessionId: string } | { domain: 'runs'; tab: 'live'; runId: string } {
-  if (request.sessionId) return { domain: 'chat', sessionId: request.sessionId };
-  return { domain: 'runs', tab: 'live', runId: request.runId };
+export interface PendingBarRequest {
+  kind: 'permission' | 'ask';
+  requestId: string;
+  runId: string;
+  sessionId?: string;
+  requestedAt: number;
+}
+
+export interface PendingBarSummary {
+  count: number;
+  earliest: PendingBarRequest | null;
+}
+
+/**
+ * compact bar 摘要：权限与提问合并计数（ask 不按问题数拆）。
+ *
+ * earliest 与 Composer 队列同序：`requestedAt` 升序 → 同时间权限优先 →
+ * `requestId` 稳定排序。
+ */
+export function pendingBarSummary(
+  permissions: readonly PermissionRequest[],
+  asks: readonly AskUserRequest[],
+): PendingBarSummary {
+  const seeds: QueueSeed[] = [
+    ...permissions.map((request) => ({
+      at: request.requestedAt,
+      rank: 0,
+      requestId: request.requestId,
+      kind: 'permission' as const,
+      request,
+    })),
+    ...asks.map((request) => ({
+      at: request.requestedAt,
+      rank: 1,
+      requestId: request.requestId,
+      kind: 'ask' as const,
+      request,
+    })),
+  ];
+  seeds.sort(compareSeed);
+  const first = seeds[0];
+  return {
+    count: permissions.length + asks.length,
+    earliest: first
+      ? {
+          kind: first.kind,
+          requestId: first.requestId,
+          runId: first.request.runId,
+          ...(first.request.sessionId !== undefined ? { sessionId: first.request.sessionId } : {}),
+          requestedAt: first.at,
+        }
+      : null,
+  };
+}
+
+/** 关闭动作的目标：bar 内全部 orphaned，不是只关最早一条。 */
+export function orphanedDismissIds(items: readonly { requestId: string }[]): string[] {
+  return items.map((item) => item.requestId);
+}
+
+/** 跳转目标：只有最早一条带非空 `sessionId` 才能落到会话；否则不提供跳转。 */
+export function pendingBarTarget(
+  summary: PendingBarSummary,
+): { domain: 'chat'; sessionId: string } | null {
+  const sessionId = summary.earliest?.sessionId;
+  return sessionId ? { domain: 'chat', sessionId } : null;
 }
 
 /**

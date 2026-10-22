@@ -10,6 +10,7 @@
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
+import type { ListedInteraction } from './interaction-hydration';
 import { permissionRespondParams } from './interactions';
 import type {
   AgentsTreeResponse,
@@ -501,9 +502,28 @@ export class GatewayClient {
   }
 
   /** 当前 gateway 进程内的 live runs（内存，无分页）。 */
-  async listRuns(params: { session_id?: string; status?: string } = {}): Promise<RunStatus[]> {
+  async listRuns(
+    params: { session_id?: string; status?: string; tenant_id?: string } = {},
+  ): Promise<RunStatus[]> {
     const body = await this.rpc<RunsResponse>('runs.list', params);
     return body.runs ?? [];
+  }
+
+  /** 0.18：读取 pending / answered / orphaned 交互（旧 gateway 无此方法时由调用方处理）。 */
+  async listInteractions(
+    params: {
+      session_id?: string;
+      run_id?: string;
+      status?: 'pending' | 'answered' | 'orphaned';
+      limit?: number;
+      tenant_id?: string;
+    } = {},
+  ): Promise<ListedInteraction[]> {
+    const body = await this.rpc<{ interactions?: ListedInteraction[] }>(
+      'interactions.list',
+      params,
+    );
+    return body.interactions ?? [];
   }
 
   /** canonical runs.get；失败时回退 legacy WS run.get（旧 gateway）。 */
