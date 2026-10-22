@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
   applyPaneResize,
+  chatWorkspaceWidth,
   clampPane,
   DEFAULT_PANE_LAYOUT,
+  fitChatWidth,
   parsePaneLayout,
 } from '../src/app/usePaneResize';
 
@@ -31,6 +33,20 @@ describe('clampPane', () => {
     expect(clampPane('nav', 256)).toBe(256);
     expect(clampPane('sessions', 200)).toBe(220);
     expect(clampPane('chat', 2000)).toBe(1200);
+  });
+});
+
+describe('fitChatWidth', () => {
+  test('shrinks to the workspace left after nav/sessions and restores when the window widens', () => {
+    // 900 - 256 - 280 - 48 = 316，低于下限时保持 560，避免手柄进入不可用区。
+    expect(chatWorkspaceWidth(900, 256, 280)).toBe(560);
+    expect(fitChatWidth(860, 900, 256, 280)).toBe(560);
+    // 1400 - 256 - 280 - 48 = 816：持久化的 1200 只显示为 816。
+    expect(chatWorkspaceWidth(1400, 256, 280)).toBe(816);
+    expect(fitChatWidth(1200, 1400, 256, 280)).toBe(816);
+    // 宽窗口恢复持久化值；超过上限仍受 1200 约束。
+    expect(fitChatWidth(860, 1920, 256, 280)).toBe(860);
+    expect(fitChatWidth(2000, 1920, 256, 280)).toBe(1200);
   });
 });
 

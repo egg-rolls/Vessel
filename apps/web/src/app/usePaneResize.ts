@@ -63,6 +63,21 @@ export function applyPaneResize(pane: PaneKey, start: number, deltaX: number): n
   return clampPane(pane, start + scale * deltaX);
 }
 
+/** 扣除 nav / sessions 与左右 padding 后，对话区还能给 chat 的宽度（下限 560）。 */
+export function chatWorkspaceWidth(viewportWidth: number, nav: number, sessions: number): number {
+  return Math.max(PANE_LIMITS.chat.min, viewportWidth - nav - sessions - PANE_CHROME_W);
+}
+
+/** 显示用 chat 宽度：不超过持久化值、上限与当前可用区；持久化值本身不变。 */
+export function fitChatWidth(
+  chat: number,
+  viewportWidth: number,
+  nav: number,
+  sessions: number,
+): number {
+  return Math.min(chat, PANE_LIMITS.chat.max, chatWorkspaceWidth(viewportWidth, nav, sessions));
+}
+
 export function parsePaneLayout(raw: string | null | undefined): PaneLayout {
   let parsed: unknown;
   try {
@@ -184,16 +199,27 @@ export function usePaneResize(): PaneResizeApi {
   );
 
   const disabled = useCallback(
-    (pane: PaneKey) => compact || viewportWidth <= PANE_LIMITS[pane].min,
-    [compact, viewportWidth],
+    (pane: PaneKey) => {
+      if (compact) return true;
+      if (pane === 'chat') {
+        // 可用区已被 nav / sessions 吃完时，居中手柄没有可拖拽的空间。
+        return (
+          chatWorkspaceWidth(viewportWidth, layout.nav, layout.sessions) <= PANE_LIMITS.chat.min
+        );
+      }
+      return viewportWidth <= PANE_LIMITS[pane].min;
+    },
+    [compact, viewportWidth, layout.nav, layout.sessions],
   );
 
   // 移动端 / 触屏只“显示”默认布局；持久化值保留，变宽后自动恢复。
   // 桌面端把 chat 夹到当前可用对话区，避免居中手柄落到可视区外；只影响显示值。
   const effectiveLayout = useMemo(() => {
     if (compact) return DEFAULT_PANE_LAYOUT;
-    const available = viewportWidth - layout.nav - layout.sessions - PANE_CHROME_W;
-    return { ...layout, chat: clampPane('chat', Math.min(layout.chat, available)) };
+    return {
+      ...layout,
+      chat: fitChatWidth(layout.chat, viewportWidth, layout.nav, layout.sessions),
+    };
   }, [compact, viewportWidth, layout]);
 
   return useMemo(
