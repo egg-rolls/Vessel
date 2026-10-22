@@ -136,7 +136,7 @@ describe('checkForUpdate', () => {
     });
     expect(result.upToDate).toBe(false);
     expect(result.latest).toBe('0.2.0');
-    expect(result.installHint).toContain('vessel@0.2.0');
+    expect(result.installHint).toContain('vessel-agent@0.2.0');
   });
 
   it('已是最新', async () => {
@@ -181,7 +181,7 @@ describe('cache', () => {
 
 describe('installHint', () => {
   it('给出包管理器命令，不做自替换', () => {
-    expect(installHint('0.2.0')).toContain('bun add -g vessel@0.2.0');
-    expect(installHint('0.2.0')).toContain('npm i -g vessel@0.2.0');
+    expect(installHint('0.2.0')).toContain('bun add -g vessel-agent@0.2.0');
+    expect(installHint('0.2.0')).toContain('npm i -g vessel-agent@0.2.0');
   });
 });
