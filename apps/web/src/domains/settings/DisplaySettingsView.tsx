@@ -127,6 +127,7 @@ export function DisplaySettingsView() {
                 </dt>
                 <dd>
                   <select
+                    className="input"
                     aria-label={setting.key}
                     value={options.includes(current) ? current : ''}
                     disabled={!connected || saving === setting.key || readOnly}

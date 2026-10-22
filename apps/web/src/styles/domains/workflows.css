@@ -3,8 +3,8 @@
 .step-timeline {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  margin-top: 10px;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
   list-style: none;
   padding: 0;
 }
@@ -12,58 +12,44 @@
 .step-item {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);
-  gap: 8px;
-  padding-bottom: 14px;
+  gap: var(--space-2);
+  padding-bottom: 0;
 }
 
 .step-rail {
-  position: relative;
   display: flex;
   justify-content: center;
   padding-top: 5px;
 }
 
-.step-rail::before {
-  content: "";
-  position: absolute;
-  top: 14px;
-  bottom: -14px;
-  width: 1px;
-  background: var(--line);
-}
-
-.step-item:last-child .step-rail::before {
-  display: none;
-}
-
 .step-dot {
   width: 9px;
   height: 9px;
-  border: 1px solid var(--line-strong);
   border-radius: 50%;
-  background: var(--surface);
+  background: var(--faint);
 }
 
 .step-completed .step-dot {
-  border-color: var(--ok);
   background: var(--ok);
 }
 
 .step-failed .step-dot {
-  border-color: var(--danger);
   background: var(--danger);
 }
 
 .step-running .step-dot {
-  border-color: var(--warn);
-  background: var(--warn-soft);
+  background: var(--warn);
+}
+
+.step-skipped .step-dot,
+.step-pending .step-dot {
+  background: var(--faint);
 }
 
 .step-body {
   min-width: 0;
   padding: 8px 11px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-md);
   background: var(--surface);
 }
 

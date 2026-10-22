@@ -325,7 +325,7 @@ function McpPanel() {
       ) : (
         <div className="card-grid">
           {servers.map((server) => (
-            <article className={`card mcp-card mcp-${server.status}`} key={server.name}>
+            <article className="card" key={server.name}>
               <div className="card-header">
                 <h3 className="card-title mono">{server.name}</h3>
                 <StatusChip status={server.status} />
