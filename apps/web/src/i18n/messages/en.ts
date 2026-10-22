@@ -147,6 +147,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.queue.permission': 'Permission · {tool}',
   'pending.queue.ask': 'Question · Q{index}',
   'chat.session.pending': '{count} pending request(s)',
+  'chat.session.copyId': 'Copy session ID',
+  'chat.session.copiedId': 'Session ID copied',
+  'chat.session.copyIdTitle': 'Copy session ID: {title}',
+  // 0.18: pane resize handles
+  'resize.nav': 'Resize navigation',
+  'resize.sessions': 'Resize session list',
+  'resize.chat': 'Resize conversation',
   // 0.18 H2: no-longer-valid interactions are notice + dismiss only, never answerable.
   'interaction.orphaned': 'No longer valid (run ended / process restarted)',
   'interaction.orphaned.label': '{count} no longer valid',

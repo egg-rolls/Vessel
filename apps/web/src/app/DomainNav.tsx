@@ -1,5 +1,6 @@
 import type { Ref } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
+import { ResizeHandle } from '../components/ResizeHandle';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
@@ -12,6 +13,7 @@ import {
   type PrimaryDomain,
 } from './nav';
 import type { Domain, Route } from './router';
+import type { PaneResizeApi } from './usePaneResize';
 
 export function primaryRoute(domain: Exclude<Domain, 'settings'>): Route {
   switch (domain) {
@@ -41,6 +43,7 @@ export function DomainNav({
   onClose,
   onToggleCollapsed,
   navRef,
+  panes,
 }: {
   route: Route;
   navigate: (route: Route) => void;
@@ -49,6 +52,7 @@ export function DomainNav({
   onClose?: () => void;
   onToggleCollapsed?: () => void;
   navRef?: Ref<HTMLElement>;
+  panes: PaneResizeApi;
 }) {
   useLocale();
   const { connectionState, hasToken, tenantId } = useConnection();
@@ -155,6 +159,14 @@ export function DomainNav({
           <span className="nav-label">{domainLabel('settings')}</span>
         </button>
       </div>
+      {mode === 'expanded' && !panes.disabled('nav') && (
+        <ResizeHandle
+          pane="nav"
+          api={panes}
+          label={t('resize.nav')}
+          className="resize-handle resize-handle-nav"
+        />
+      )}
     </nav>
   );
 }

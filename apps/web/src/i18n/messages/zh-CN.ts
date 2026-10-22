@@ -144,6 +144,13 @@ export const messages = {
   'pending.queue.permission': '权限 · {tool}',
   'pending.queue.ask': '提问 · 第 {index} 题',
   'chat.session.pending': '有 {count} 个待处理请求',
+  'chat.session.copyId': '复制会话 ID',
+  'chat.session.copiedId': '已复制会话 ID',
+  'chat.session.copyIdTitle': '复制会话 ID：{title}',
+  // 0.18：分栏拖拽手柄
+  'resize.nav': '调整导航宽度',
+  'resize.sessions': '调整会话列表宽度',
+  'resize.chat': '调整会话内容宽度',
   // 0.18 H2：已失效（run 结束 / 进程重启）交互只提示 + 关闭，不可应答。
   'interaction.orphaned': '已失效（run 已结束 / 进程重启）',
   'interaction.orphaned.label': '共 {count} 个已失效',

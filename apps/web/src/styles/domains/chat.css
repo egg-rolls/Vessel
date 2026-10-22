@@ -776,7 +776,7 @@
 
 .composer {
   width: 100%;
-  max-width: 860px;
+  max-width: var(--chat-content-w, 860px);
   margin-inline: auto;
   padding: 9px 14px 12px;
   border-radius: var(--radius-lg);
@@ -868,7 +868,7 @@
 /* 0.18：pending 时用同尺寸提示卡替换 Composer；权限/提问共用同一外壳。 */
 .prompt-slot {
   width: 100%;
-  max-width: 860px;
+  max-width: var(--chat-content-w, 860px);
   margin-inline: auto;
   display: flex;
   flex-direction: column;

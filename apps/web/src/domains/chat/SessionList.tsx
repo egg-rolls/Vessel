@@ -142,7 +142,7 @@ export function SessionList({
     }
     void navigator.clipboard
       .writeText(sessionId)
-      .then(() => toast.success('已复制会话 ID'))
+      .then(() => toast.success(t('chat.session.copiedId')))
       .catch((error: unknown) =>
         toast.error(error instanceof Error ? error.message : String(error)),
       );
@@ -358,7 +358,7 @@ export function SessionList({
                               },
                               {
                                 id: 'copy',
-                                label: '复制 ID',
+                                label: t('chat.session.copyId'),
                                 onSelect: () => copyId(session.session_id),
                               },
                               {

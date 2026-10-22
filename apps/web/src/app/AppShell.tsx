@@ -29,6 +29,7 @@ import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { tenantResetPlan } from './tenant-reset';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
+import { paneCssVars, usePaneResize } from './usePaneResize';
 import { useViewportWidth } from './useViewportWidth';
 
 type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
@@ -125,6 +126,7 @@ export function AppShell() {
     for (const requestId of orphanedDismissIds(otherOrphans)) dismissOrphaned(requestId);
   }, [dismissOrphaned, otherOrphans]);
   const viewportWidth = useViewportWidth();
+  const panes = usePaneResize();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
   const navDrawerRef = useDrawerA11y({
     open: navDrawerOpen,
@@ -401,7 +403,11 @@ export function AppShell() {
 
   return (
     <PaletteEntitiesProvider register={registerEntities}>
-      <div className={`app-shell nav-${navMode}`}>
+      <div
+        className={`app-shell nav-${navMode}`}
+        ref={panes.shellRef}
+        style={paneCssVars(panes.layout)}
+      >
         <button
           type="button"
           className="skip-link"
@@ -507,6 +513,7 @@ export function AppShell() {
             onClose={() => setNavDrawerOpen(false)}
             onToggleCollapsed={toggleNavCollapsed}
             navRef={navDrawerRef}
+            panes={panes}
           />
           {/* tenant 变化时整块重挂载：旧租户的 resource 缓存、会话副本与选中项全部丢弃。 */}
           <main
@@ -523,6 +530,7 @@ export function AppShell() {
                 navigate={navigate}
                 sessionsOpen={chatSessionsOpen}
                 onCloseSessions={closeSessions}
+                panes={panes}
               />
             )}
             {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}

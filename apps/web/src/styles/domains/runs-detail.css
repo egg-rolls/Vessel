@@ -39,8 +39,4 @@
   .session-row .icon-btn {
     opacity: 1;
   }
-
-  .conversation-actions .btn {
-    flex: 1 1 auto;
-  }
 }

@@ -3,10 +3,12 @@ import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
+import type { PaneResizeApi } from '../../app/usePaneResize';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import { useVisualViewport } from '../../app/useVisualViewport';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { usePaletteEntities } from '../../components/PaletteEntities';
+import { ResizeHandle } from '../../components/ResizeHandle';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
@@ -87,11 +89,13 @@ export function ChatView({
   navigate,
   sessionsOpen,
   onCloseSessions,
+  panes,
 }: {
   route: ChatRoute;
   navigate: (route: Route) => void;
   sessionsOpen: boolean;
   onCloseSessions: () => void;
+  panes: PaneResizeApi;
 }) {
   const {
     client,
@@ -139,8 +143,6 @@ export function ChatView({
   const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
-  /** null = 跟随 `ui.showInternalEvents` / `ui.verbosity`；布尔值 = 本会话手动覆盖。 */
-  const [showInternalOverride, setShowInternalOverride] = useState<boolean | null>(null);
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
   const [renameSignal, setRenameSignal] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<SessionInfo | null>(null);
@@ -278,7 +280,7 @@ export function ChatView({
     [configResource.state],
   );
   const errorLevel = visibility.errorLevel;
-  const showInternal = showInternalOverride ?? showsInternalEvents(visibility);
+  const showInternal = showsInternalEvents(visibility);
   const groupCache = useRef<EventGroupCache | null>(null);
   if (!groupCache.current) groupCache.current = new EventGroupCache();
 
@@ -975,6 +977,14 @@ export function ChatView({
           writesDisabled={!connected}
           renameSignal={renameSignal}
         />
+        {!panes.disabled('sessions') && (
+          <ResizeHandle
+            pane="sessions"
+            api={panes}
+            label={t('resize.sessions')}
+            className="resize-handle resize-handle-sessions"
+          />
+        )}
       </aside>
 
       {compact && sessionsOpen && (
@@ -992,25 +1002,20 @@ export function ChatView({
         inert={compact && sessionsOpen ? true : undefined}
       >
         <h1 className="sr-only">会话</h1>
+        {!panes.disabled('chat') && (
+          <ResizeHandle
+            pane="chat"
+            api={panes}
+            label={t('resize.chat')}
+            className="resize-handle resize-handle-chat"
+          />
+        )}
 
         {selectedId ? (
           <SessionHeader
             session={selectedSession ?? null}
             sessionId={selectedId}
             detail={sessionDetail}
-            refreshing={detailState.status === 'loading'}
-            onRefresh={detailResource.reload}
-            onRename={(title) => handleRename(selectedId, title)}
-            onDelete={() => {
-              if (selectedSession) {
-                setDeleteError(null);
-                setDeleteTarget(selectedSession);
-              }
-            }}
-            onViewRuns={() => navigate({ domain: 'runs', tab: 'live', sessionId: selectedId })}
-            showInternal={showInternal}
-            onToggleInternal={() => setShowInternalOverride(!showInternal)}
-            writesDisabled={!connected}
             agents={sessionAgents}
             activeAgentId={activeAgent?.id}
             onSelectAgent={(agentId) =>
@@ -1030,11 +1035,6 @@ export function ChatView({
               <div className="conversation-meta dim">
                 {draftActive ? t('chat.draft.meta') : t('chat.draft.pickSession')}
               </div>
-            </div>
-            <div className="conversation-actions">
-              <button type="button" className="btn btn-small" onClick={startNewSession}>
-                ＋ 新建会话
-              </button>
             </div>
           </div>
         )}
