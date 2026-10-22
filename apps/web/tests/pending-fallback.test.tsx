@@ -186,7 +186,6 @@ describe('compact pending bar', () => {
   });
 });
 
-
 describe('member bridge grouping (parentSessionId)', () => {
   test('interactionSessionId prefers the parent chat, then session, then undefined', () => {
     expect(interactionSessionId({ sessionId: 'member-1', parentSessionId: 'chat-1' })).toBe(

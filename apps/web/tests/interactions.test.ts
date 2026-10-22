@@ -212,9 +212,7 @@ describe('askFromEvent (0.17)', () => {
     );
     expect(item).toMatchObject({ sessionId: 'member-1', parentSessionId: 'chat-1' });
 
-    const legacy = askFromEvent(
-      event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }),
-    );
+    const legacy = askFromEvent(event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }));
     expect(legacy).not.toHaveProperty('sessionId');
     expect(legacy).not.toHaveProperty('parentSessionId');
   });
