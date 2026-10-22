@@ -662,6 +662,9 @@ async function runWithConfig(result: BootstrapResult) {
         ...(result.bundle
           ? { streams: [{ tenantId: result.tenantId, stream: result.bundle.runtimeEvents }] }
           : {}),
+        // 0.18：live hub 与 trace 同源；bundle.redactor 已是 core+ext 组合实例。
+        // 缺 bundle 是不可达的理论路径，保留 hub 默认 redactor。
+        ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
       });
 
       tenantFactory = await createTenantRuntimeFactory({
@@ -675,6 +678,8 @@ async function runWithConfig(result: BootstrapResult) {
         registerAskUser: askUserClient,
         ...(args.exclusive ? { exclusive: true } : {}),
         hub: eventHub,
+        // 0.18：所有 tenant 共用 default bundle 的 ext 实例（trace 与 live 同源）。
+        ...(result.bundle?.extRedactor ? { redactor: result.bundle.extRedactor } : {}),
         logger,
       });
     } catch (error) {
@@ -742,6 +747,8 @@ async function runWithConfig(result: BootstrapResult) {
         },
       }),
       hub: eventHub,
+      // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
+      ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
       session: ctx.session,
       runtime,
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管

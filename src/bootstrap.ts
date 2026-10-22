@@ -46,7 +46,12 @@ import { createAgentServiceWiring } from './agent-service-wiring';
 import { type MemberPermissionMode, resolveAgentWiring } from './agent-wiring';
 import { formatConfigErrors } from './config-error-format';
 import { sanitizeConfigForSnapshot } from './config-snapshot';
-import { type ConnectRunStart, waitForConnectedRun } from './connect-run-wait';
+import {
+  type ConnectResumeStart,
+  type ConnectRunStart,
+  waitForConnectedResumeTerminal,
+  waitForConnectedRun,
+} from './connect-run-wait';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -97,6 +102,7 @@ import {
 } from './tenant-lock';
 import { buildTenantRuntime, type TenantRuntimeBundle } from './tenant-runtime-factory';
 import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from './trace-wiring';
+import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
 import { adaptWorkflowsControl } from './workflow-wiring';
@@ -331,6 +337,33 @@ function isRunEventValue(value: unknown): value is RunEvent {
 }
 
 /**
+ * `runs.resume` 的 RPC 错误 → resume 稳定码（DECISION-033）。
+ * 未列出的错误归 `resume_failed`；错误消息不含 token。
+ */
+function resumeRpcError(error: unknown, runId: string): Error {
+  const code = (error as { code?: unknown } | null)?.code;
+  const details = (error as { details?: unknown } | null)?.details;
+  const legacy =
+    isRecordValue(details) && typeof details.legacy_code === 'string'
+      ? details.legacy_code
+      : undefined;
+  const mapped =
+    code === 'not_found'
+      ? 'run_not_found'
+      : code === 'forbidden'
+        ? 'forbidden'
+        : code === 'not_supported'
+          ? 'resume_unavailable'
+          : code === 'conflict' && legacy === 'run_not_resumable'
+            ? 'run_not_resumable'
+            : code === 'conflict' && legacy === 'run_already_running'
+              ? 'run_already_running'
+              : 'resume_failed';
+  const message = (error instanceof Error ? error.message : String(error)) || runId;
+  return Object.assign(new Error(message), { code: mapped });
+}
+
+/**
  * connect 模式（A-4 §11.6）：不获取 tenant 写锁、不写本地 store/trace。
  * 本地 session 使用内存后端；run 走 canonical `runs.start`。
  */
@@ -366,16 +399,13 @@ async function bootstrapConnect(input: {
   // P2：--connect 接受 ws:// / wss://（归一化为 http/https）。
   const connectUrl = normalizeConnectUrl(input.url);
 
-  // 连接 token / CA 全部来自 config loader 的单一结果：
-  // CLI（cliOverrides）> env（VESSEL_CONNECT_TOKEN / VESSEL_GATEWAY_TOKEN /
-  // VESSEL_CONNECT_CA）> project > user > default。此处不再读 argv / env。
-  // 旧版 fallback（serve.token / transport.token）仍作为配置层回退保留。
+  // 连接 token 与远程控制面共用 `resolveConnectToken`（DECISION-033）：
+  // connect 专用凭据 → gateway 凭据（serve.token / token_env / admin_token(_env) /
+  // VESSEL_GATEWAY_TOKEN / transport.token）。config loader 已合并 CLI / env / 文件层，
+  // 因此显式 token 取合并后的 config.connect.token——不能让裸 env 覆盖 `--connect-token`。
   // 永不打印。
   const token =
-    nonEmptyString(input.config.connect?.token) ??
-    nonEmptyString(input.config.serve?.token) ??
-    nonEmptyString(input.config.transport?.token) ??
-    '';
+    resolveConnectToken(input.config, { connectToken: input.config.connect?.token }) ?? '';
 
   // CA：只读文件，错误信息不带 token。
   const caPath = nonEmptyString(input.config.connect?.caFile);
@@ -726,12 +756,47 @@ async function bootstrapConnect(input: {
     tenantPaths: input.tenantPaths,
     nodeId: input.nodeId,
     interruptWorkflows: async () => {},
-    resumeRun: async (runId) => {
-      const result = await rpc.request<unknown>('runs.resume', { run_id: runId });
-      const record = isRecordValue(result) ? result : {};
+    resumeRun: async (runId, opts) => {
+      const outcome = await waitForConnectedResumeTerminal({
+        events,
+        runId,
+        sessionId: currentSessionId,
+        timeoutMs: input.connectRunTimeoutMs ?? DEFAULT_CONNECT_RUN_TIMEOUT_MS,
+        ...(input.connectRunPollMs !== undefined ? { pollIntervalMs: input.connectRunPollMs } : {}),
+        ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        resume: async (): Promise<ConnectResumeStart> => {
+          let result: unknown;
+          try {
+            result = await rpc.request<unknown>('runs.resume', { run_id: runId });
+          } catch (error) {
+            throw resumeRpcError(error, runId);
+          }
+          if (typeof result === 'string') return { kind: 'legacy', text: result };
+          if (!isRecordValue(result)) {
+            throw Object.assign(new Error('runs.resume returned no result'), {
+              code: 'resume_failed',
+            });
+          }
+          if (typeof result.result === 'string') return { kind: 'legacy', text: result.result };
+          const returnedRunId = result.run_id;
+          if (typeof returnedRunId !== 'string' || returnedRunId === '') {
+            throw Object.assign(new Error('runs.resume returned no run_id'), {
+              code: 'resume_failed',
+            });
+          }
+          return {
+            kind: 'queued',
+            runId: returnedRunId,
+            ...(typeof result.session_id === 'string' && result.session_id !== ''
+              ? { sessionId: result.session_id }
+              : {}),
+          };
+        },
+        getRun: (targetRunId) => rpc.request<unknown>('runs.get', { run_id: targetRunId }),
+      });
       return {
-        sessionId: typeof record.session_id === 'string' ? record.session_id : currentSessionId,
-        result: typeof record.result === 'string' ? record.result : '',
+        sessionId: outcome.sessionId !== '' ? outcome.sessionId : currentSessionId,
+        result: outcome.output,
         mode: 'single-agent' as const,
       };
     },
@@ -1208,6 +1273,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // 0.18：本地模式只有一个 tenant 流；dispatcher 与 gateway 共用同一个 hub。
   const localEventHub = createGatewayEventHub({
     streams: [{ tenantId, stream: runtimeEvents }],
+    // 0.18：live 与 trace 同源（bundle.redactor 已是 core+ext 组合实例）。
+    redactor: bundle.redactor,
   });
   const localDispatcher: LocalRpcDispatcher = createLocalRpcDispatcher({
     hub: localEventHub,

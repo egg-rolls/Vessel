@@ -5,6 +5,7 @@ import type { VesselConfig } from '../../packages/config/src/index';
 import type { Transport } from '../../packages/core/src/index';
 import {
   type LoopbackTransportOptionsLike,
+  resolveConnectToken,
   resolveGatewayToken,
   resolvePeersDir,
   tryCreateConfiguredTransport,
@@ -101,6 +102,69 @@ describe('resolveGatewayToken', () => {
           },
         },
         {},
+      ),
+    ).toBeUndefined();
+  });
+});
+
+describe('resolveConnectToken (0.18)', () => {
+  it('只配 serve.admin_token 时 connect 目标仍能取到凭据', () => {
+    expect(resolveConnectToken({ serve: { adminToken: 'admin-token' } }, { env: {} })).toBe(
+      'admin-token',
+    );
+    expect(
+      resolveConnectToken(
+        { serve: { adminTokenEnv: 'CP_ADMIN_TOKEN' } },
+        { env: { CP_ADMIN_TOKEN: 'admin-from-env' } },
+      ),
+    ).toBe('admin-from-env');
+  });
+
+  it('只配 serve.token_env 时 connect 目标从 env 取到 token', () => {
+    expect(
+      resolveConnectToken(
+        { serve: { tokenEnv: 'CP_GATEWAY_TOKEN' } },
+        { env: { CP_GATEWAY_TOKEN: 'gateway-from-env' } },
+      ),
+    ).toBe('gateway-from-env');
+    // env 变量未设置时不得把变量名当 token。
+    expect(resolveConnectToken({ serve: { tokenEnv: 'CP_GATEWAY_TOKEN' } }, { env: {} })).toBe(
+      undefined,
+    );
+  });
+
+  it('connect.token 覆盖 serve.token；VESSEL_CONNECT_TOKEN 覆盖 connect.token', () => {
+    const config: VesselConfig = {
+      connect: { token: 'connect-token' },
+      serve: { token: 'serve-token' },
+      transport: { token: 'transport-token' },
+    };
+    expect(resolveConnectToken(config, { env: {} })).toBe('connect-token');
+    expect(
+      resolveConnectToken(config, { env: { VESSEL_CONNECT_TOKEN: 'connect-env-token' } }),
+    ).toBe('connect-env-token');
+    expect(
+      resolveConnectToken(config, {
+        connectToken: 'explicit-token',
+        env: { VESSEL_CONNECT_TOKEN: 'connect-env-token' },
+      }),
+    ).toBe('explicit-token');
+    // 空串视为未设置，继续回退。
+    expect(resolveConnectToken(config, { connectToken: '', env: {} })).toBe('connect-token');
+  });
+
+  it('serve.tokens 永不被当作 gateway token', () => {
+    expect(
+      resolveConnectToken(
+        {
+          serve: {
+            tokens: {
+              'read-token': { role: 'read' },
+              'write-token': { role: 'write', tenantId: 'default' },
+            },
+          },
+        },
+        { env: {} },
       ),
     ).toBeUndefined();
   });

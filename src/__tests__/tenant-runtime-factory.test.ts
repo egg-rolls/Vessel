@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
+import type { EventStream, TraceRedactor } from '../../packages/core/src/index';
 import { createGatewayEventHub } from '../../packages/serve/src/index';
 import { bootstrap } from '../bootstrap';
 import {
@@ -90,6 +91,30 @@ function twoTenantYaml(
 
 function toolNames(bundle: { pluginHost: { listTools(): Array<{ name: string }> } }): string[] {
   return bundle.pluginHost.listTools().map((def) => def.name);
+}
+
+/** 只识别 GitHub token 的 fake ext redactor（core 默认不认识 ghp_）。 */
+const FAKE_GITHUB_MASK = '[REDACTED_GITHUB_TOKEN]';
+const fakeGithubRedactor: TraceRedactor = {
+  redact(event) {
+    return { ...event, data: maskGithubToken(event.data) as Record<string, unknown> };
+  },
+};
+
+function maskGithubToken(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/ghp_[A-Za-z0-9]+/g, FAKE_GITHUB_MASK);
+  }
+  if (Array.isArray(value)) return value.map(maskGithubToken);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+        key,
+        maskGithubToken(entry),
+      ]),
+    );
+  }
+  return value;
 }
 
 describe('listActiveTenantIds', () => {
@@ -183,6 +208,105 @@ describe('createTenantRuntimeFactory', () => {
     // shutdown 释放全部锁。
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);
     expect(fs.existsSync(path.join(base, 'tenants', 'work', '.lock'))).toBe(false);
+  });
+
+  it('live hub 对 ext 才能识别的 GitHub token 脱敏——事件里不出现 ghp_', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(base, twoTenantYaml());
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+      redactor: fakeGithubRedactor,
+    });
+
+    try {
+      const bundle = factory.bundleFor('acme');
+      expect(bundle).toBeDefined();
+      const hub = createGatewayEventHub({
+        streams: [{ tenantId: 'acme', stream: bundle?.events as EventStream }],
+        redactor: bundle?.redactor,
+      });
+      try {
+        bundle?.events.publish({
+          type: 'run.started',
+          run_id: 'run-ghp',
+          data: { input: 'use ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+          ts: 1,
+        });
+
+        const item = hub.since(0).find((entry) => entry.event.run_id === 'run-ghp');
+        expect(item).toBeDefined();
+        const serialized = JSON.stringify(item?.event);
+        expect(serialized).not.toContain('ghp_');
+        expect(serialized).toContain(FAKE_GITHUB_MASK);
+      } finally {
+        hub.close();
+      }
+    } finally {
+      await factory.closeAll();
+    }
+  });
+
+  it('所有 tenant 的 trace 与 live 使用同一 ext redactor 实例', async () => {
+    const base = tmpDir();
+    const { configPath } = writeConfig(base, twoTenantYaml());
+    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+    expect(loaded).toBeDefined();
+
+    const factory = await createTenantRuntimeFactory({
+      config: loaded?.config as VesselConfig,
+      configPath,
+      dataDir: base,
+      useMock: true,
+      nodeId: 'node-test',
+      redactor: fakeGithubRedactor,
+    });
+
+    try {
+      const bundles = ['acme', 'work'].map((tenantId) => factory.bundleFor(tenantId));
+      for (const bundle of bundles) {
+        expect(bundle).toBeDefined();
+        expect(bundle?.extRedactor).toBe(fakeGithubRedactor);
+        const redacted = bundle?.redactor.redact({
+          type: 'run.started',
+          run_id: 'run-shared-ext',
+          data: { input: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+          ts: 1,
+        });
+        const serialized = JSON.stringify(redacted);
+        expect(serialized).not.toContain('ghp_');
+        expect(serialized).toContain(FAKE_GITHUB_MASK);
+      }
+
+      const work = factory.bundleFor('work');
+      const hub = createGatewayEventHub({
+        streams: [{ tenantId: 'work', stream: work?.events as EventStream }],
+        redactor: work?.redactor,
+      });
+      try {
+        work?.events.publish({
+          type: 'run.started',
+          run_id: 'run-work-ghp',
+          data: { input: 'ghp_abcdefghijklmnopqrstuvwxyz0123456789' },
+          ts: 1,
+        });
+        const item = hub.since(0).find((entry) => entry.event.run_id === 'run-work-ghp');
+        expect(item).toBeDefined();
+        const serialized = JSON.stringify(item?.event);
+        expect(serialized).not.toContain('ghp_');
+        expect(serialized).toContain(FAKE_GITHUB_MASK);
+      } finally {
+        hub.close();
+      }
+    } finally {
+      await factory.closeAll();
+    }
   });
 
   it('reuses a bootstrap-seeded tenant without rebuilding or closing it', async () => {

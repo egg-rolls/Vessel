@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import type { VesselConfig } from '../../packages/config/src/index';
 import { resolveTenantPaths } from '../../packages/core/src/index';
 import { agentsCommand } from '../agents-command';
-import type { ControlPlaneTarget } from '../control-plane-target';
+import { type ControlPlaneTarget, resolveControlPlaneTarget } from '../control-plane-target';
 import { errorsCommand } from '../errors-command';
 import { RpcClientError } from '../rpc';
 import { statusCommand } from '../status-command';
@@ -41,6 +41,74 @@ function targetWith(
     close: async () => undefined,
   };
 }
+
+describe('resolveControlPlaneTarget remote token (0.18)', () => {
+  async function remoteToken(input: {
+    connectUrl: string;
+    config: VesselConfig;
+    env: Record<string, string | undefined>;
+    connectToken?: string;
+  }): Promise<string | undefined> {
+    const dir = tmpDir();
+    const result = await resolveControlPlaneTarget({
+      connectUrl: input.connectUrl,
+      ...(input.connectToken !== undefined ? { connectToken: input.connectToken } : {}),
+      config: input.config,
+      dataDir: dir,
+      env: input.env,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return undefined;
+    expect(result.target.kind).toBe('remote');
+    await result.target.close();
+    return result.target.token;
+  }
+
+  it('远程目标 token 走同一解析器（admin_token / token_env / 优先级）', async () => {
+    const url = 'https://gateway.example.com';
+
+    // 只配 serve.admin_token：远程 connect 也能取到凭据。
+    expect(
+      await remoteToken({
+        connectUrl: url,
+        config: { serve: { adminToken: 'admin-token' } },
+        env: {},
+      }),
+    ).toBe('admin-token');
+
+    // 只配 serve.token_env：从 env 取到 token。
+    expect(
+      await remoteToken({
+        connectUrl: url,
+        config: { serve: { tokenEnv: 'CP_GATEWAY_TOKEN' } },
+        env: { CP_GATEWAY_TOKEN: 'gateway-from-env' },
+      }),
+    ).toBe('gateway-from-env');
+
+    // connect.token 覆盖 serve.token；VESSEL_CONNECT_TOKEN 覆盖 connect.token；
+    // 显式 --connect-token 最高。
+    const config: VesselConfig = {
+      connect: { token: 'connect-token' },
+      serve: { token: 'serve-token' },
+    };
+    expect(await remoteToken({ connectUrl: url, config, env: {} })).toBe('connect-token');
+    expect(
+      await remoteToken({
+        connectUrl: url,
+        config,
+        env: { VESSEL_CONNECT_TOKEN: 'connect-env-token' },
+      }),
+    ).toBe('connect-env-token');
+    expect(
+      await remoteToken({
+        connectUrl: url,
+        config,
+        env: { VESSEL_CONNECT_TOKEN: 'connect-env-token' },
+        connectToken: 'explicit-token',
+      }),
+    ).toBe('explicit-token');
+  });
+});
 
 describe('vessel status (0.14)', () => {
   it('--json reports local state without ANSI or secrets', async () => {
