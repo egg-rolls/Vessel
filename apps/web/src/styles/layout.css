@@ -224,11 +224,19 @@
   flex: none;
   display: flex;
   align-items: center;
-  padding: 14px 20px 8px;
+  gap: 8px;
+  padding: 12px 16px 8px;
 }
 
-.nav-close {
+.nav-close,
+.nav-collapse {
   margin-left: auto;
+}
+
+.nav-brand .nav-collapse {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
 }
 
 .nav-brand-mark {
@@ -312,13 +320,14 @@
 
 .app-shell.nav-collapsed .nav-brand {
   justify-content: center;
+  gap: 2px;
   padding-inline: 0;
 }
 
-.app-shell.nav-collapsed .nav-conn,
-.app-shell.nav-collapsed .nav-tenant,
-.app-shell.nav-rail .nav-conn,
-.app-shell.nav-rail .nav-tenant,
+.app-shell.nav-collapsed .nav-collapse {
+  margin-left: 0;
+}
+
 .app-shell.nav-rail .nav-brand {
   display: none;
 }
@@ -348,42 +357,6 @@
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px calc(10px + env(safe-area-inset-bottom));
-}
-
-.nav-conn {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 4px 12px;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.nav-conn-open {
-  color: var(--ok);
-}
-
-.nav-conn-open .conn-dot {
-  background: var(--ok);
-}
-
-.nav-conn-connecting .conn-dot,
-.nav-conn-reconnecting .conn-dot {
-  background: var(--warn);
-}
-
-.nav-conn-error .conn-dot,
-.nav-conn-closed .conn-dot {
-  background: var(--danger);
-}
-
-.nav-tenant {
-  padding: 0 12px 6px;
-  font-size: 11px;
-  color: var(--faint);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .main-content {
@@ -507,12 +480,9 @@
 }
 
 .column-title {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 500;
-  letter-spacing: var(--tracking-wide);
-  text-transform: uppercase;
-  color: var(--faint);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .column-header .btn {
@@ -580,6 +550,14 @@
 
 .conversation-heading {
   min-width: 0;
+  flex: 1;
+}
+
+.conversation-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
 }
 
 .conversation-title {
@@ -588,6 +566,18 @@
   font-weight: 600;
   line-height: 1.3;
   overflow-wrap: anywhere;
+}
+
+.conversation-context {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.6;
+  white-space: nowrap;
 }
 
 .conversation-meta {

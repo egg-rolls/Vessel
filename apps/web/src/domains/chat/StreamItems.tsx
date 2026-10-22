@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react';
 import { formatRoute } from '../../app/router';
 import { Markdown } from '../../components/Markdown';
-import { StatusChip } from '../../components/StatusChip';
+import { StatusChip, StatusGlyph } from '../../components/StatusChip';
 import { formatClock } from '../../format';
 import { describeGatewayErrorText } from '../../gateway/errors';
 import { t } from '../../i18n';
@@ -122,7 +122,7 @@ function FailureNotice({ group }: { group: RunGroup }) {
   const hint = describeGatewayErrorText(group.error);
   return (
     <div className="stream-notice failed" role="alert">
-      <StatusChip status="failed" />
+      <StatusGlyph status="failed" />
       {meta && (
         <span className="error-meta mono">
           {meta}
@@ -256,7 +256,7 @@ export const RunItems = memo(function RunItems({
       {group.status === 'failed' && status === 'failed' && <FailureNotice group={group} />}
       {status === 'cancelled' && (
         <div className="stream-notice cancelled" role="status">
-          <StatusChip status="cancelled" />
+          <StatusGlyph status="cancelled" />
         </div>
       )}
     </>

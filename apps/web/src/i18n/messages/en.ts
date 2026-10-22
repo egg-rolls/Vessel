@@ -150,6 +150,14 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.session.copyId': 'Copy session ID',
   'chat.session.copiedId': 'Session ID copied',
   'chat.session.copyIdTitle': 'Copy session ID: {title}',
+  // 0.18 UX3: relative time + context length
+  'time.justNow': 'just now',
+  'time.minutesAgo': '{count}m ago',
+  'time.hoursAgo': '{count}h ago',
+  'time.hoursMinutesAgo': '{count}h{minutes}m ago',
+  'time.daysAgo': '{count}d ago',
+  'chat.context.tokens': '{used} tokens',
+  'chat.context.of': '{used} / {max}',
   // 0.18: pane resize handles
   'resize.nav': 'Resize navigation',
   'resize.sessions': 'Resize session list',

@@ -147,6 +147,14 @@ export const messages = {
   'chat.session.copyId': '复制会话 ID',
   'chat.session.copiedId': '已复制会话 ID',
   'chat.session.copyIdTitle': '复制会话 ID：{title}',
+  // 0.18 UX3：会话列表相对时间与会话头上下文长度
+  'time.justNow': '刚刚',
+  'time.minutesAgo': '{count} 分钟前',
+  'time.hoursAgo': '{count} 小时前',
+  'time.hoursMinutesAgo': '{count} 小时 {minutes} 分钟前',
+  'time.daysAgo': '{count} 天前',
+  'chat.context.tokens': '{used} tokens',
+  'chat.context.of': '{used} / {max}',
   // 0.18：分栏拖拽手柄
   'resize.nav': '调整导航宽度',
   'resize.sessions': '调整会话列表宽度',

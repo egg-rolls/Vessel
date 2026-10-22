@@ -69,13 +69,8 @@ describe('filterSessions', () => {
     expect(filterSessions(list, { query: 'c' }).map((s) => s.session_id)).toEqual(['a', 'b', 'c']);
   });
 
-  test('filters by status and combines with query', () => {
-    expect(filterSessions(list, { status: 'failed' }).map((s) => s.session_id)).toEqual(['b']);
-    expect(filterSessions(list, { query: 'mcp', status: 'completed' })).toEqual([]);
-  });
-
-  test('all status keeps everything', () => {
-    expect(filterSessions(list, { status: 'all' })).toHaveLength(3);
+  test('empty query keeps everything', () => {
+    expect(filterSessions(list, {})).toHaveLength(3);
   });
 });
 

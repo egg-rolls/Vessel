@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useToast } from './ToastProvider';
+import { Tooltip } from './Tooltip';
 
 async function copyText(text: string): Promise<void> {
   if (navigator.clipboard?.writeText) {
@@ -33,23 +34,25 @@ export function CopyButton({
   const [copied, setCopied] = useState(false);
 
   return (
-    <button
-      type="button"
-      className={className}
-      aria-label={label}
-      onClick={() => {
-        void copyText(text)
-          .then(() => {
-            setCopied(true);
-            toast.success(toastLabel);
-            window.setTimeout(() => setCopied(false), 1500);
-          })
-          .catch((error: unknown) => {
-            toast.error(error instanceof Error ? error.message : String(error));
-          });
-      }}
-    >
-      {copied ? '已复制' : label}
-    </button>
+    <Tooltip label={label}>
+      <button
+        type="button"
+        className={className}
+        aria-label={label}
+        onClick={() => {
+          void copyText(text)
+            .then(() => {
+              setCopied(true);
+              toast.success(toastLabel);
+              window.setTimeout(() => setCopied(false), 1500);
+            })
+            .catch((error: unknown) => {
+              toast.error(error instanceof Error ? error.message : String(error));
+            });
+        }}
+      >
+        {copied ? '已复制' : label}
+      </button>
+    </Tooltip>
   );
 }

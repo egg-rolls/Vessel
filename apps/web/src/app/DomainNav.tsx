@@ -1,7 +1,7 @@
 import type { Ref } from 'react';
 import { DomainIcon } from '../components/DomainIcon';
 import { ResizeHandle } from '../components/ResizeHandle';
-import { useConnection } from '../gateway/ConnectionProvider';
+import { IconButton, Tooltip } from '../components/Tooltip';
 import { t, useLocale } from '../i18n';
 import type { NavMode } from './layout';
 import {
@@ -55,20 +55,27 @@ export function DomainNav({
   panes: PaneResizeApi;
 }) {
   useLocale();
-  const { connectionState, hasToken, tenantId } = useConnection();
-  const connLabel = !hasToken
-    ? t('nav.conn.idle')
-    : connectionState === 'open'
-      ? t('nav.conn.online')
-      : connectionState === 'reconnecting'
-        ? t('nav.conn.reconnectingShort')
-        : connectionState === 'connecting'
-          ? t('nav.conn.connectingShort')
-          : t('nav.conn.closed');
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
+  const showCollapseToggle = mode === 'expanded' || mode === 'collapsed';
+  const collapseLabel = collapsed ? t('nav.expandNav') : t('nav.collapseNav');
   const drawerA11y = drawer ? { role: 'dialog' as const, 'aria-modal': open } : {};
+  const settingsLabel = domainLabel('settings');
+  const settingsButton = (
+    <button
+      type="button"
+      className={`nav-item ${route.domain === 'settings' ? 'active' : ''}`.trim()}
+      aria-current={route.domain === 'settings' ? 'page' : undefined}
+      aria-label={settingsLabel}
+      onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
+    >
+      <span className="nav-icon">
+        <DomainIcon domain="settings" />
+      </span>
+      <span className="nav-label">{settingsLabel}</span>
+    </button>
+  );
 
   return (
     <nav
@@ -84,15 +91,26 @@ export function DomainNav({
         <span className="nav-brand-mark" aria-hidden="true">
           V
         </span>
+        {showCollapseToggle && (
+          <IconButton
+            className="nav-collapse"
+            label={collapseLabel}
+            aria-label={collapseLabel}
+            aria-expanded={!collapsed}
+            onClick={onToggleCollapsed}
+          >
+            {collapsed ? '»' : '«'}
+          </IconButton>
+        )}
         {drawer && (
-          <button
-            type="button"
-            className="icon-btn nav-close"
+          <IconButton
+            className="nav-close"
+            label={t('nav.closeNav')}
             aria-label={t('nav.closeNav')}
             onClick={onClose}
           >
             ×
-          </button>
+          </IconButton>
         )}
       </div>
       <div className="nav-list">
@@ -102,62 +120,35 @@ export function DomainNav({
             {group.domains.map((domainId) => {
               const domain = domainDef(domainId);
               const active = isDomainActive(route, domain.id);
-              return (
+              const label = domainLabel(domain.id);
+              const button = (
                 <button
                   key={domain.id}
                   type="button"
                   className={`nav-item ${active ? 'active' : ''}`.trim()}
                   aria-current={active ? 'page' : undefined}
-                  aria-label={domainLabel(domain.id)}
-                  title={domainLabel(domain.id)}
+                  aria-label={label}
                   onClick={() => navigate(primaryRoute(domain.id))}
                 >
                   <span className="nav-icon">
                     <DomainIcon domain={domain.id} />
                   </span>
-                  <span className="nav-label">{domainLabel(domain.id)}</span>
+                  <span className="nav-label">{label}</span>
                 </button>
+              );
+              return collapsed ? (
+                <Tooltip key={domain.id} label={label}>
+                  {button}
+                </Tooltip>
+              ) : (
+                button
               );
             })}
           </div>
         ))}
       </div>
       <div className="nav-footer">
-        <div className={`nav-conn nav-conn-${hasToken ? connectionState : 'idle'}`}>
-          <span className="conn-dot" aria-hidden="true" />
-          <span className="nav-label">{connLabel}</span>
-        </div>
-        <div className="nav-tenant nav-label" title={t('nav.tenantCurrent')}>
-          <span className="mono">{tenantId ?? '—'}</span>
-        </div>
-        {(mode === 'expanded' || mode === 'collapsed') && (
-          <button
-            type="button"
-            className="nav-item nav-collapse"
-            aria-label={collapsed ? t('nav.expandNav') : t('nav.collapseNav')}
-            aria-expanded={!collapsed}
-            title={collapsed ? t('nav.expandNav') : t('nav.collapseNav')}
-            onClick={onToggleCollapsed}
-          >
-            <span className="nav-icon" aria-hidden="true">
-              {collapsed ? '»' : '«'}
-            </span>
-            <span className="nav-label">{t('nav.collapsed')}</span>
-          </button>
-        )}
-        <button
-          type="button"
-          className={`nav-item ${route.domain === 'settings' ? 'active' : ''}`.trim()}
-          aria-current={route.domain === 'settings' ? 'page' : undefined}
-          aria-label={domainLabel('settings')}
-          title={domainLabel('settings')}
-          onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-        >
-          <span className="nav-icon">
-            <DomainIcon domain="settings" />
-          </span>
-          <span className="nav-label">{domainLabel('settings')}</span>
-        </button>
+        {collapsed ? <Tooltip label={settingsLabel}>{settingsButton}</Tooltip> : settingsButton}
       </div>
       {mode === 'expanded' && !panes.disabled('nav') && (
         <ResizeHandle

@@ -57,6 +57,38 @@ export function statusLabel(raw: string | undefined): string {
   return ALIASES[raw] ? STATUS_META[ALIASES[raw]].label : raw;
 }
 
+/**
+ * Icon-only 状态胶囊：只保留字形与语义色。
+ * `completed` 默认不渲染（列表里大量已完成会话会把噪音放大）。
+ */
+export function StatusGlyph({
+  status,
+  showCompleted = false,
+  label,
+}: {
+  status: string | undefined;
+  /** 为 true 时也渲染 completed。 */
+  showCompleted?: boolean;
+  /** 覆盖 aria-label / title；默认用状态文案。 */
+  label?: string;
+}) {
+  const kind = normalizeStatus(status);
+  if (kind === 'completed' && !showCompleted) return null;
+  const meta = STATUS_META[kind];
+  const text = label ?? statusLabel(status);
+  return (
+    <span
+      className={`status-glyph-only tone-${meta.tone}`}
+      data-status={kind}
+      role="img"
+      aria-label={text}
+      title={text}
+    >
+      {meta.glyph}
+    </span>
+  );
+}
+
 export function StatusChip({
   status,
   label,

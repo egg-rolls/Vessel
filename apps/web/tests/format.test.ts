@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { formatTimestamp } from '../src/format';
+import { formatTimestamp, formatTokenCount, relativeTime } from '../src/format';
 
 /** Build an epoch-ms value from local calendar components. */
 function localTs(
@@ -65,5 +65,52 @@ describe('formatTimestamp', () => {
     for (const item of cases) {
       expect(formatTimestamp(item.ts, { now: item.now, withMs: item.withMs })).toBe(item.expected);
     }
+  });
+});
+
+describe('relativeTime', () => {
+  const now = 1_000_000_000_000;
+
+  test('returns null for missing or invalid timestamps', () => {
+    expect(relativeTime(undefined, now)).toBeNull();
+    expect(relativeTime(Number.NaN, now)).toBeNull();
+  });
+
+  test('sub-minute and future timestamps fall back to just now', () => {
+    expect(relativeTime(now - 59_999, now)).toEqual({ key: 'time.justNow' });
+    expect(relativeTime(now + 1, now)).toEqual({ key: 'time.justNow' });
+  });
+
+  test('splits elapsed time into minutes, hours and days', () => {
+    expect(relativeTime(now - 5 * 60_000, now)).toEqual({
+      key: 'time.minutesAgo',
+      params: { count: 5 },
+    });
+    expect(relativeTime(now - 60 * 60_000, now)).toEqual({
+      key: 'time.hoursAgo',
+      params: { count: 1 },
+    });
+    expect(relativeTime(now - (60 + 14) * 60_000, now)).toEqual({
+      key: 'time.hoursMinutesAgo',
+      params: { count: 1, minutes: 14 },
+    });
+    expect(relativeTime(now - 3 * 86_400_000, now)).toEqual({
+      key: 'time.daysAgo',
+      params: { count: 3 },
+    });
+  });
+});
+
+describe('formatTokenCount', () => {
+  test('keeps sub-thousand values raw and abbreviates larger ones', () => {
+    expect(formatTokenCount(999)).toBe('999');
+    expect(formatTokenCount(1_000)).toBe('1K');
+    expect(formatTokenCount(784_400)).toBe('784.4K');
+    expect(formatTokenCount(1_000_000)).toBe('1M');
+  });
+
+  test('returns an empty string for invalid values', () => {
+    expect(formatTokenCount(Number.NaN)).toBe('');
+    expect(formatTokenCount(-1)).toBe('');
   });
 });

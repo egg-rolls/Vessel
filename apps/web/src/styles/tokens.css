@@ -34,6 +34,7 @@
   --elev-inset: inset 0 1px 2px rgba(35, 33, 29, 0.05);
   --hover-tint: rgba(35, 33, 29, 0.04);
   --press-tint: rgba(35, 33, 29, 0.08);
+  --scrim: rgba(20, 18, 15, 0.55);
 
   --font-sans:
     "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -70,7 +71,7 @@
   --sessions-w: 280px;
   --content-max: 1440px;
 
-  --row-h-session: 64px;
+  --row-h-session: 56px;
   --row-h-tool: 36px;
   --control-h: 32px;
   --tracking-wide: 0.08em;
@@ -102,6 +103,7 @@
   --z-modal: 70;
   --z-palette: 75;
   --z-toast: 80;
+  --z-tooltip: 90;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 }
 
@@ -136,6 +138,7 @@
     --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
     --hover-tint: rgba(255, 255, 255, 0.06);
     --press-tint: rgba(255, 255, 255, 0.09);
+    --scrim: rgba(0, 0, 0, 0.65);
   }
 }
 
@@ -169,6 +172,7 @@
   --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   --hover-tint: rgba(255, 255, 255, 0.06);
   --press-tint: rgba(255, 255, 255, 0.09);
+  --scrim: rgba(0, 0, 0, 0.65);
 }
 
 @media (max-width: 680px) {

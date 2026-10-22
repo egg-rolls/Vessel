@@ -286,6 +286,9 @@
 - 行本身：透明底 + 圆角；hover 加 ink 4%；当前项 `--accent-soft`。
 - 元信息用 `--muted` / `--faint` 和更小字号，不靠描边区分。
 - 列表容器不加卡片外框；列表就是内容本身。
+- **一条信息只出现一次**：状态用标题前的 `StatusGlyph`，时间用相对时间放在标题行右侧；不再单独占一行写“状态 / 条数 / 时间”。
+- 已完成状态不渲染 glyph；只有异常/进行中状态需要视觉标记。
+- 会话列表默认两行（标题 + 预览），行高 `--row-h-session: 56px`；删除消息条数、ID、绝对时间等可从详情得到的字段。
 
 ### 7.3 会话流
 
@@ -326,7 +329,7 @@
 
 ### 7.8 浮层
 
-- Modal / 命令面板：L4，`--elev-4` + `--radius-xl`；遮罩用 ink 55% 半透明，**不用 blur**。
+- Modal / 命令面板：L4，`--elev-4` + `--radius-xl`；遮罩统一用 `--scrim`（浅色 `rgba(20,18,15,0.55)` / 暗色 `rgba(0,0,0,0.65)`），**不用 blur**，不写第二套遮罩色。
 - Popover / 菜单：L3，`--elev-3` + `--radius-lg`。
 - Toast：L4，`--elev-3`，语义色 soft 底 + 图标。
 - 浮层与触发元素之间用 gap，不用连线/箭头边框。
@@ -336,6 +339,31 @@
 - 空态：低对比底色块 + 说明 + 一个主操作；不用虚线框。
 - 错误：danger soft 底 + 图标 + 可执行建议；不用红描边。
 - 加载：骨架用 `--surface-sunken`；不要闪动边框。
+
+### 7.10 Tooltip / IconButton（L3）
+
+- 所有 icon-only 按钮必须同时有 `aria-label` 与 Tooltip；不再依赖原生 `title`。
+- Tooltip：hover / focus 300ms 后显示；portal 到 `body`；优先上方，空间不足翻到下方；小三角指向锚点；Esc / blur / pointerleave 关闭。
+- 表面：`--surface-raised` + `--elev-2` + `--radius-sm`，无 border；文字 11px，最大宽度 240px；`role="tooltip"`，触发元素通过 `aria-describedby` 关联。
+- `prefers-reduced-motion: reduce` 时不做进出动画。
+- IconButton 统一渲染 `.icon-btn` + Tooltip，不新增第三套圆角/阴影/尺寸。
+- Tooltip 文案区分：用户可见动作走 i18n；命令名、快捷键、技术词保持原文。
+
+### 7.11 StatusGlyph（icon-only 状态）
+
+- 会话列表与运行流用 icon-only glyph 表达状态；文本由 `aria-label` / `title` 兜底，不依赖颜色单独传达。
+- running：16px 圆形，`--info-soft` 底 + `--info` 字形（◐），可保留轻脉冲。
+- cancelled：`--surface-sunken` 底 + `--faint` 字形（–）。
+- failed / error：`--danger-soft` 底 + `--danger` 字形（✗）。
+- completed 默认**不渲染**；数据表等需要显式全量状态时传 `showCompleted`。
+- 其他状态沿用对应 tone；glyph 放在标题/标签之前，不额外占行。
+
+### 7.12 时间与上下文长度的写法
+
+- 会话列表用相对时间：`<1m` 显示“刚刚 / just now”，`<1h` 显示 `5m ago` / `5 分钟前`，`<24h` 显示 `1h14m ago` / `1 小时 14 分钟前`，更早显示 `3d ago` / `3 天前`；未来时间回退为“刚刚”。
+- 纯函数负责取值（key + 参数），文案走 zh-CN / en 两份 i18n catalog。
+- 会话头只显示上下文长度：`784.4K`；`<1000` 显示原始数字（`123`）；tooltip 写 `784.4K tokens` 或 `784.4K / 1M`。
+- 上下文长度放在标题行右侧，不再重复消息条数 / 更新时间 / 会话 ID；标题点击复制 ID 的行为保留。
 
 ---
 

@@ -25,11 +25,9 @@ import { EventGroupCache } from '../../state/group-cache';
 import type { PaletteItem } from '../../state/palette';
 import {
   filterSessions,
-  matchesSessionStatus,
   removeSessionFromList,
   renameSessionInList,
   SESSION_PAGE_SIZE,
-  type SessionStatusFilter,
   selectionAfterDelete,
   sessionTitle,
   sortSessions,
@@ -136,7 +134,6 @@ export function ChatView({
     ids: Set<string>;
     snippets: Map<string, string>;
   } | null>(null);
-  const [status, setStatus] = useState<SessionStatusFilter>('all');
   const [renderLimit, setRenderLimit] = useState(SESSION_PAGE_SIZE);
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -473,6 +470,39 @@ export function ChatView({
   );
   const activeAgent = selectedId && route.agent ? findAgent(sessionAgents, route.agent) : undefined;
 
+  // 会话头上下文长度：agents.tree 主 agent 的 context_used；运行中 5s 轮询。
+  const sessionRunning =
+    selectedId !== null &&
+    (sessions.some(
+      (session) => session.session_id === selectedId && session.status === 'running',
+    ) ||
+      sessionAgents.some((node) => node.state === 'running'));
+  const contextResource = useResource<{
+    sessionId: string;
+    used: number;
+    max?: number;
+  } | null>({
+    load: async () => {
+      if (!selectedId) return null;
+      const tree = await client.listAgentsTree({ session_id: selectedId });
+      const main = tree.nodes
+        .filter((node) => node.id === selectedId || node.session_id === selectedId)
+        .sort((a, b) => a.depth - b.depth)[0];
+      if (!main || main.context_used === undefined) return null;
+      return {
+        sessionId: selectedId,
+        used: main.context_used,
+        ...(main.context_max !== undefined ? { max: main.context_max } : {}),
+      };
+    },
+    enabled: hasToken && Boolean(selectedId),
+    ...(sessionRunning ? { pollMs: 5000 } : {}),
+    deps: [selectedId, epoch, sessionRunning],
+  });
+  const contextData = resourceData(contextResource.state);
+  const contextUsage =
+    selectedId && contextData?.sessionId === selectedId ? contextData : undefined;
+
   const detailState = detailResource.state;
   const sessionDetail =
     selectedId && 'data' in detailState && detailState.data?.session_id === selectedId
@@ -660,18 +690,15 @@ export function ChatView({
   const filteredSessions = useMemo(() => {
     // 服务端命中的会话可能只在消息正文里匹配，不能再叠加本地 title/preview 过滤。
     if (activeServerSearch) {
-      return sortedSessions.filter(
-        (session) =>
-          activeServerSearch.ids.has(session.session_id) && matchesSessionStatus(session, status),
-      );
+      return sortedSessions.filter((session) => activeServerSearch.ids.has(session.session_id));
     }
-    return filterSessions(sortedSessions, { query: debouncedQuery, status });
-  }, [activeServerSearch, sortedSessions, debouncedQuery, status]);
+    return filterSessions(sortedSessions, { query: debouncedQuery });
+  }, [activeServerSearch, sortedSessions, debouncedQuery]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 查询/过滤变化时回到第一页
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 查询变化时回到第一页
   useEffect(() => {
     setRenderLimit(SESSION_PAGE_SIZE);
-  }, [debouncedQuery, status]);
+  }, [debouncedQuery]);
 
   const sessionWindow = takeSessions(filteredSessions, renderLimit);
   const selectedSession = selectedId
@@ -947,8 +974,6 @@ export function ChatView({
       >
         <SessionList
           sessions={sessionWindow.shown}
-          filteredCount={filteredSessions.length}
-          totalCount={sortedSessions.length}
           hiddenCount={sessionWindow.hiddenCount}
           selectedId={selectedId}
           draftActive={draftActive}
@@ -956,8 +981,6 @@ export function ChatView({
           query={query}
           onQueryChange={setQuery}
           searchSnippets={activeServerSearch?.snippets}
-          status={status}
-          onStatusChange={setStatus}
           loading={sessionsResource.state.status === 'loading'}
           error={sessionsResource.state.status === 'error' ? sessionsResource.state.error : null}
           onRetry={sessionsResource.reload}
@@ -1016,6 +1039,7 @@ export function ChatView({
             session={selectedSession ?? null}
             sessionId={selectedId}
             detail={sessionDetail}
+            contextUsage={contextUsage}
             agents={sessionAgents}
             activeAgentId={activeAgent?.id}
             onSelectAgent={(agentId) =>

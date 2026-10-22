@@ -29,8 +29,8 @@
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 3px;
-  padding: 8px 6px 8px 12px;
+  gap: 2px;
+  padding: 6px 6px 6px 12px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
@@ -39,11 +39,28 @@
 }
 
 .session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
-  white-space: nowrap;
+}
+
+.session-title-text {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .session-row.active .session-title {
@@ -64,17 +81,6 @@
   border-radius: 3px;
   background: var(--accent-soft);
   color: inherit;
-}
-
-.session-meta {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 10.5px;
-  color: var(--faint);
-  white-space: nowrap;
-  overflow: hidden;
 }
 
 /* 0.18：其他会话的 pending 只在列表上计数，不渲染完整卡片。 */

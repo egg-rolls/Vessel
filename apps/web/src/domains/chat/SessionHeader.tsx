@@ -1,6 +1,7 @@
 import { StatusChip } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { formatTimestamp } from '../../format';
+import { Tooltip } from '../../components/Tooltip';
+import { formatTimestamp, formatTokenCount } from '../../format';
 import type { SessionDetail, SessionInfo } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
@@ -156,10 +157,13 @@ export function SessionHeader({
   agents = [],
   activeAgentId,
   onSelectAgent,
+  contextUsage,
 }: {
   session: SessionInfo | null;
   sessionId: string;
   detail: SessionDetail | null;
+  /** 上下文用量；由 ChatView 轮询 `agents.tree` 注入。 */
+  contextUsage?: { used: number; max?: number };
   /** 0.14：当前会话的子 agent（由 `subagent.*` 事件派生）。 */
   agents?: readonly AgentNode[];
   /** `?agent=` 深链选中的子 agent。 */
@@ -171,6 +175,14 @@ export function SessionHeader({
   const tree = agentTree(agents);
   const running = agents.filter((node) => node.state === 'running').length;
   const activeChain = activeAgentId ? agentBreadcrumb(agents, activeAgentId) : [];
+  const contextLabel = contextUsage
+    ? contextUsage.max !== undefined
+      ? t('chat.context.of', {
+          used: formatTokenCount(contextUsage.used),
+          max: formatTokenCount(contextUsage.max),
+        })
+      : t('chat.context.tokens', { used: formatTokenCount(contextUsage.used) })
+    : '';
 
   const copySessionId = () => {
     if (!navigator.clipboard?.writeText) {
@@ -188,33 +200,32 @@ export function SessionHeader({
   return (
     <div className="conversation-head">
       <div className="conversation-heading">
-        {/* biome-ignore lint/a11y/useSemanticElements: title stays an h2; clicking it copies the session id */}
-        <h2
-          className="conversation-title"
-          // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: title stays an h2; clicking it copies the session id
-          role="button"
-          tabIndex={0}
-          aria-label={t('chat.session.copyIdTitle', { title })}
-          title={t('chat.session.copyId')}
-          onClick={copySessionId}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter' || event.key === ' ') {
-              event.preventDefault();
-              copySessionId();
-            }
-          }}
-        >
-          {session ? title : truncate(title, 42)}
-        </h2>
-        <div className="conversation-meta dim">
-          {session && <StatusChip status={session.status} />}
-          {session ? (
-            <span>
-              {session.message_count} 条消息
-              {session.updated_at ? ` · 更新于 ${formatTimestamp(session.updated_at)}` : ''}
-            </span>
-          ) : (
-            <span>会话历史</span>
+        <div className="conversation-title-row">
+          <Tooltip label={t('chat.session.copyId')}>
+            {/* biome-ignore lint/a11y/useSemanticElements: title stays an h2; clicking it copies the session id */}
+            <h2
+              className="conversation-title"
+              // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: title stays an h2; clicking it copies the session id
+              role="button"
+              tabIndex={0}
+              aria-label={t('chat.session.copyIdTitle', { title })}
+              onClick={copySessionId}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  copySessionId();
+                }
+              }}
+            >
+              {session ? title : truncate(title, 42)}
+            </h2>
+          </Tooltip>
+          {contextUsage && (
+            <Tooltip label={contextLabel}>
+              <span className="conversation-context" role="img" aria-label={contextLabel}>
+                {formatTokenCount(contextUsage.used)}
+              </span>
+            </Tooltip>
           )}
         </div>
         {activeAgentId && (
