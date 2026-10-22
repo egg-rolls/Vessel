@@ -280,7 +280,7 @@ it('update --check --json 走清单源并输出机器可读结果', async () => 
       channel: 'latest',
       up_to_date: false,
     });
-    expect(String(parsed.install_hint)).toContain('vessel@9.9.9');
+    expect(String(parsed.install_hint)).toContain('vessel-agent@9.9.9');
   } finally {
     server.stop();
   }

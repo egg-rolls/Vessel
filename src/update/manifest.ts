@@ -76,7 +76,7 @@ export function platformAssetKey(
  * 解析清单 URL：
  * - 显式 `.json` 源：直接使用（测试与自建镜像）；
  * - latest：`<source>/releases/latest/download/latest.json`；
- * - beta：返回 GitHub releases API 地址，由调用方挑选最新预发布资产。
+ * - beta：GitHub 仓库走 releases API（JSON），其它源保留网页地址（镜像兼容）。
  */
 export function resolveManifestUrl(source: string, channel: UpdateChannel): string {
   const base = source.replace(/\/+$/, '');
@@ -84,7 +84,30 @@ export function resolveManifestUrl(source: string, channel: UpdateChannel): stri
   if (channel === 'latest') {
     return `${base}/releases/latest/download/latest.json`;
   }
+  const repo = githubRepoPath(base);
+  if (repo) return `https://api.github.com/repos/${repo}/releases`;
   return `${base}/releases?per_page=20`;
+}
+
+/** github.com 仓库基址 → `owner/repo`；非 GitHub 或路径不足返回 null */
+function githubRepoPath(base: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(base);
+  } catch {
+    return null;
+  }
+  if (url.hostname !== 'github.com' && url.hostname !== 'www.github.com') return null;
+
+  const segments = url.pathname.split('/').filter(Boolean);
+  if (segments.length < 2) return null;
+
+  const owner = segments[0];
+  const rawRepo = segments[1];
+  if (!owner || !rawRepo) return null;
+  const repo = rawRepo.replace(/\.git$/, '');
+  if (!repo) return null;
+  return `${owner}/${repo}`;
 }
 
 /** 从 GitHub releases 响应中挑选最新预发布版本的 latest.json 资产 URL */
