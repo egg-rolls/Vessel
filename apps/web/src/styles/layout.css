@@ -187,7 +187,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   background: var(--surface);
-  transition: width var(--motion-ui) var(--ease);
 }
 
 .app-shell.nav-collapsed .domain-nav {
