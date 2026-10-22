@@ -453,8 +453,14 @@ export function ChatView({
 
   // 按 run 增量缓存：50ms 快照只重建受影响的 run，未变化的 RunGroup 引用不变。
   const groups = useMemo(
-    () => groupCache.current?.group(snapshot.entries, showInternal, errorLevel) ?? [],
-    [snapshot.entries, showInternal, errorLevel],
+    () =>
+      groupCache.current?.group(
+        snapshot.entries,
+        showInternal,
+        errorLevel,
+        snapshot.truncatedSince,
+      ) ?? [],
+    [snapshot.entries, showInternal, errorLevel, snapshot.truncatedSince],
   );
 
   // 0.14：子 agent 树与 `?agent=` 深链（纯事件派生，不新增 RPC）。
