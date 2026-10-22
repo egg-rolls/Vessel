@@ -10,11 +10,26 @@ import type { AskUserRequest, PermissionRequest } from '../../gateway/types';
 interface SessionScoped {
   runId: string;
   sessionId?: string;
+  /** 成员 bridge 的父 chat；存在时归类 / 跳转都按父 chat，而非成员 session。 */
+  parentSessionId?: string;
 }
 
 /** 当前视图可见的会话；`new` 是草稿，不算任何已有会话。 */
 export function currentSessionId(sessionId: string | undefined): string | null {
   return sessionId && sessionId !== 'new' ? sessionId : null;
+}
+
+/**
+ * 交互请求归属的 chat 会话（0.18）：成员 bridge 的请求属于父 chat。
+ *
+ * 有 `parentSessionId` 时优先返回父 chat；否则回退 `sessionId`
+ * （缺失时交给调用方按 run 兜底）。旧事件没有 parent，行为与之前完全一致。
+ */
+export function interactionSessionId(item: {
+  sessionId?: string;
+  parentSessionId?: string;
+}): string | undefined {
+  return item.parentSessionId ?? item.sessionId;
 }
 
 /**
@@ -28,14 +43,15 @@ export function pendingPermissionsOutsideView<T extends SessionScoped>(
   if (view.domain !== 'chat') return [...permissions];
   const current = currentSessionId(view.sessionId);
   if (!current) return [...permissions];
-  return permissions.filter((item) => item.sessionId !== current);
+  return permissions.filter((item) => interactionSessionId(item) !== current);
 }
 
-/** 跳转目标：优先会话，其次运行详情。 */
+/** 跳转目标：优先会话（成员 bridge 跳父 chat），其次运行详情。 */
 export function pendingPermissionTarget(
   request: SessionScoped,
 ): { domain: 'chat'; sessionId: string } | { domain: 'runs'; tab: 'live'; runId: string } {
-  if (request.sessionId) return { domain: 'chat', sessionId: request.sessionId };
+  const sessionId = interactionSessionId(request);
+  if (sessionId) return { domain: 'chat', sessionId };
   return { domain: 'runs', tab: 'live', runId: request.runId };
 }
 
@@ -51,11 +67,10 @@ export function pendingForSession<T extends SessionScoped>(
   sessionRunIds: ReadonlySet<string>,
 ): T[] {
   if (!sessionId) return [];
-  return items.filter(
-    (item) =>
-      item.sessionId === sessionId ||
-      (item.sessionId === undefined && sessionRunIds.has(item.runId)),
-  );
+  return items.filter((item) => {
+    const scope = interactionSessionId(item);
+    return scope === sessionId || (scope === undefined && sessionRunIds.has(item.runId));
+  });
 }
 
 export type NextPending =

@@ -46,6 +46,7 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
     tool?: unknown;
     input?: unknown;
     session_id?: unknown;
+    parent_session_id?: unknown;
     tool_call_id?: unknown;
     source?: unknown;
   };
@@ -59,6 +60,9 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
     runId: event.run_id,
     ...(typeof data.session_id === 'string' && data.session_id.length > 0
       ? { sessionId: data.session_id }
+      : {}),
+    ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+      ? { parentSessionId: data.parent_session_id }
       : {}),
     ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
       ? { toolCallId: data.tool_call_id }
@@ -87,6 +91,7 @@ export function askFromEvent(
     requestId?: unknown;
     request_id?: unknown;
     questions?: unknown;
+    parent_session_id?: unknown;
   };
   const rawId = data.requestId ?? data.request_id;
   if (typeof rawId !== 'string' || rawId.length === 0) return null;
@@ -105,6 +110,9 @@ export function askFromEvent(
     runId: event.run_id,
     requestedAt: validTimestamp(event.ts) ? event.ts : now,
     ...(sessionId !== undefined && sessionId.length > 0 ? { sessionId } : {}),
+    ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+      ? { parentSessionId: data.parent_session_id }
+      : {}),
     ...(agentId !== undefined ? { agentId } : {}),
   };
 }

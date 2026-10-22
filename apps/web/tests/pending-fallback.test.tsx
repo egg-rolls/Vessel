@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import { PendingRequestsPanel } from '../src/components/PendingRequests';
-import { pendingForSession } from '../src/domains/chat/pending-permissions';
+import {
+  interactionSessionId,
+  pendingForSession,
+  pendingPermissionsOutsideView,
+  pendingPermissionTarget,
+} from '../src/domains/chat/pending-permissions';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -47,6 +52,65 @@ describe('pendingForSession (composer slot)', () => {
     const orphan = permission({ requestId: 'orphan', sessionId: undefined, runId: 'run-9' });
     expect(pendingForSession([other, orphan], 'session-1', new Set(['run-1']))).toEqual([]);
     expect(pendingForSession([permission()], null, new Set())).toEqual([]);
+  });
+});
+
+describe('member bridge grouping (parentSessionId)', () => {
+  test('interactionSessionId prefers the parent chat, then session, then undefined', () => {
+    expect(interactionSessionId({ sessionId: 'member-1', parentSessionId: 'chat-1' })).toBe(
+      'chat-1',
+    );
+    expect(interactionSessionId({ sessionId: 'session-1' })).toBe('session-1');
+    expect(interactionSessionId({})).toBeUndefined();
+  });
+
+  test('pendingPermissionTarget jumps to the parent chat, else session, else run', () => {
+    expect(
+      pendingPermissionTarget(permission({ sessionId: 'member-1', parentSessionId: 'chat-1' })),
+    ).toEqual({ domain: 'chat', sessionId: 'chat-1' });
+    expect(pendingPermissionTarget(permission())).toEqual({
+      domain: 'chat',
+      sessionId: 'session-1',
+    });
+    expect(pendingPermissionTarget(permission({ sessionId: undefined }))).toEqual({
+      domain: 'runs',
+      tab: 'live',
+      runId: 'run-1',
+    });
+  });
+
+  test('pendingForSession groups a member request under its parent chat', () => {
+    const member = permission({
+      requestId: 'member',
+      sessionId: 'member-1',
+      parentSessionId: 'chat-1',
+    });
+    expect(pendingForSession([member], 'chat-1', new Set())).toEqual([member]);
+    // 成员 session 不匹配父 chat：不能只按成员 session 归到别处。
+    expect(pendingForSession([member], 'member-1', new Set())).toEqual([]);
+  });
+
+  test('pendingPermissionsOutsideView does not list parent-chat requests as other', () => {
+    const member = permission({
+      requestId: 'member',
+      sessionId: 'member-1',
+      parentSessionId: 'chat-1',
+    });
+    const other = permission({ requestId: 'other', sessionId: 'chat-2' });
+    expect(
+      pendingPermissionsOutsideView([member, other], {
+        domain: 'chat',
+        sessionId: 'chat-1',
+      }).map((item) => item.requestId),
+    ).toEqual(['other']);
+  });
+
+  test('asks use the same parent grouping', () => {
+    const memberAsk = ask({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+    expect(pendingForSession([memberAsk], 'chat-1', new Set())).toEqual([memberAsk]);
+    expect(
+      pendingPermissionsOutsideView([memberAsk], { domain: 'chat', sessionId: 'chat-1' }),
+    ).toEqual([]);
   });
 });
 
