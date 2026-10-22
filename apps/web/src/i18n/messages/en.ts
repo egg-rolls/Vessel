@@ -139,6 +139,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'chat.prompt.blocking': 'Conversation paused until resolved',
   'chat.prompt.more': '{count} more pending',
   'chat.prompt.disconnected': 'Disconnected; reconnect to continue',
+  'chat.restoringSession': 'Restoring the last session…',
   'pending.queue.permission': 'Permission · {tool}',
   'pending.queue.ask': 'Question · Q{index}',
   'chat.session.pending': '{count} pending request(s)',

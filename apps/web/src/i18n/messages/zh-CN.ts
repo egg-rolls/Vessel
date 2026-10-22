@@ -136,6 +136,7 @@ export const messages = {
   'chat.prompt.blocking': '对话已暂停，处理完继续',
   'chat.prompt.more': '还有 {count} 个待处理',
   'chat.prompt.disconnected': '连接断开，恢复后可继续处理',
+  'chat.restoringSession': '正在恢复上次会话…',
   'pending.queue.permission': '权限 · {tool}',
   'pending.queue.ask': '提问 · 第 {index} 题',
   'chat.session.pending': '有 {count} 个待处理请求',

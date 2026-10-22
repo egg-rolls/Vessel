@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CommandPalette } from '../components/CommandPalette';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
@@ -7,6 +7,7 @@ import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
 import { useToast } from '../components/ToastProvider';
 import { ChatView } from '../domains/chat/ChatView';
 import { pendingPermissionsOutsideView } from '../domains/chat/pending-permissions';
+import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
@@ -66,6 +67,7 @@ export function AppShell() {
   const {
     connectionState,
     hasToken,
+    tenantId,
     tenantEpoch,
     eventStore,
     lastError,
@@ -130,6 +132,7 @@ export function AppShell() {
     returnFocusId: 'nav-toggle',
   });
   const tenantEpochRef = useRef(tenantEpoch);
+  const tenantClearEpochRef = useRef(tenantEpoch);
 
   const registerEntities = useCallback((source: string, items: readonly PaletteItem[]) => {
     setEntityMap((prev) => {
@@ -145,6 +148,14 @@ export function AppShell() {
     });
   }, []);
   const entities = useMemo(() => [...entityMap.values()].flat(), [entityMap]);
+
+  // layout effect 先于 ChatView 的 passive 记录 effect：避免旧会话写进新 tenant key。
+  useLayoutEffect(() => {
+    if (tenantEpoch === tenantClearEpochRef.current) return;
+    tenantClearEpochRef.current = tenantEpoch;
+    // 新 tenant 不自动恢复旧选择；存储 key 本身也按 tenant 隔离。
+    clearLastSession(browserSessionStorage(), tenantId);
+  }, [tenantEpoch, tenantId]);
 
   // 切 tenant：清空选择后回到 Chat 空态（事件缓冲已在 ConnectionProvider 重置）。
   useEffect(() => {

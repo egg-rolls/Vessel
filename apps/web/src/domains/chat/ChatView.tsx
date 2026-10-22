@@ -33,7 +33,7 @@ import {
   sortSessions,
   takeSessions,
 } from '../../state/sessions';
-import { useResource } from '../../state/useResource';
+import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
@@ -44,6 +44,13 @@ import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
 import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
+import {
+  browserSessionStorage,
+  clearLastSession,
+  decideSessionRestore,
+  readLastSession,
+  writeLastSession,
+} from './session-selection';
 import { Transcript } from './Transcript';
 
 const TRANSCRIPT_WINDOW = 50;
@@ -90,8 +97,8 @@ export function ChatView({
     hasToken,
     connectionState,
     epoch,
-    retry,
     features,
+    tenantId,
     permissions,
     asks,
     orphaned,
@@ -148,6 +155,7 @@ export function ChatView({
   const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
   const [nearBottom, setNearBottom] = useState(true);
   const [composerFocus, setComposerFocus] = useState(0);
+  const [restorePending, setRestorePending] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -195,6 +203,64 @@ export function ChatView({
       setSessions(sortSessions(sessionsResource.state.data));
     }
   }, [sessionsResource.state]);
+
+  /** null = 列表尚未加载（或加载失败），此时不能判定记录失效。 */
+  const knownSessionIds = useMemo(() => {
+    const known = resourceData(sessionsResource.state);
+    return known ? known.map((session) => session.session_id) : null;
+  }, [sessionsResource.state]);
+  const sessionsUnavailable =
+    sessionsResource.state.status === 'error' && resourceData(sessionsResource.state) === undefined;
+
+  // 只记录真实会话；`new` / 无选择不写。
+  useEffect(() => {
+    if (!selectedId) return;
+    writeLastSession(browserSessionStorage(), tenantId, selectedId);
+  }, [tenantId, selectedId]);
+
+  // 路由变成真实 id / `new` 后决策必为 keep，不会重复导航。
+  useEffect(() => {
+    if (!hasToken) {
+      setRestorePending(false);
+      return;
+    }
+    // 坑：sessions.list 可能先于 hello 返回；tenant 未知时读 key 会落到 default，
+    // 从而把真实 tenant 的记录判成不存在。
+    if (!tenantId) {
+      // gateway 不可达时 hello 永不返回：不要在会话区永久显示“恢复中”。
+      setRestorePending(connectionState === 'idle' || connectionState === 'connecting');
+      return;
+    }
+    const decision = decideSessionRestore({
+      routeSessionId: route.sessionId,
+      storedSessionId: readLastSession(browserSessionStorage(), tenantId),
+      knownSessionIds,
+    });
+    if (decision.kind === 'keep') {
+      setRestorePending(false);
+      return;
+    }
+    if (decision.kind === 'wait') {
+      // 列表失败且无缓存：放弃自动恢复，但保留记录供下次进入重试。
+      setRestorePending(!sessionsUnavailable);
+      return;
+    }
+    setRestorePending(false);
+    if (decision.kind === 'restore') {
+      navigate({ domain: 'chat', sessionId: decision.sessionId });
+      return;
+    }
+    if (decision.clear) clearLastSession(browserSessionStorage(), tenantId);
+    navigate({ domain: 'chat', sessionId: 'new' });
+  }, [
+    hasToken,
+    tenantId,
+    connectionState,
+    route.sessionId,
+    knownSessionIds,
+    navigate,
+    sessionsUnavailable,
+  ]);
 
   // 0.15：信息层级来自 `ui.verbosity` / `ui.showInternalEvents` / `ui.errorLevel`；
   // 读取失败回退 0.13 行为（normal / 隐藏内部事件 / user）。
@@ -407,6 +473,13 @@ export function ChatView({
   const hydrateError = detailState.status === 'error' && !sessionDetail ? detailState.error : null;
   const hydrateStale = detailState.status === 'error' && sessionDetail ? detailState.error : null;
   const hydrating = Boolean(selectedId) && detailState.status === 'loading' && !sessionDetail;
+
+  // 已删除的会话不能再被记录恢复；只清记录，不改变当前错误页。
+  useEffect(() => {
+    if (hydrateError !== NOT_FOUND_MESSAGE || !selectedId) return;
+    const storage = browserSessionStorage();
+    if (readLastSession(storage, tenantId) === selectedId) clearLastSession(storage, tenantId);
+  }, [hydrateError, selectedId, tenantId]);
 
   const visibleGroups = useMemo(() => {
     if (!selectedId) return [];
@@ -825,10 +898,14 @@ export function ChatView({
     try {
       const result = await client.deleteSession(deleteTarget.session_id);
       const next = selectionAfterDelete(selectedId, draftId, deleteTarget.session_id);
+      const storage = browserSessionStorage();
+      if (readLastSession(storage, tenantId) === deleteTarget.session_id) {
+        clearLastSession(storage, tenantId);
+      }
       setSessions((list) => removeSessionFromList(list, deleteTarget.session_id));
       setDeleteTarget(null);
       if (next.selectedId === null && next.draftId === null) {
-        navigate({ domain: 'chat' });
+        navigate({ domain: 'chat', sessionId: 'new' });
       }
       toast.success(`已删除会话（runs: ${result.runs_deleted}, events: ${result.events_deleted}）`);
       sessionsResource.reload();
@@ -1081,33 +1158,9 @@ export function ChatView({
                 </div>
               }
             />
-          ) : (
-            <EmptyState
-              title={connected ? '还没有选择会话。' : '正在连接 gateway…'}
-              description={
-                connected
-                  ? '新建会话，或从会话列表打开已有会话。'
-                  : connectionState === 'reconnecting'
-                    ? '连接已断开，正在重连。'
-                    : '连接成功后会显示会话列表。'
-              }
-              action={
-                connected ? (
-                  <button type="button" className="btn btn-primary" onClick={startNewSession}>
-                    新建会话
-                  </button>
-                ) : connectionState === 'reconnecting' ||
-                  connectionState === 'closed' ||
-                  connectionState === 'error' ? (
-                  <button type="button" className="btn" onClick={retry}>
-                    立即重试
-                  </button>
-                ) : (
-                  <LoadingState label="正在连接…" rows={1} />
-                )
-              }
-            />
-          )}
+          ) : restorePending ? (
+            <LoadingState label={t('chat.restoringSession')} />
+          ) : null}
           <div ref={bottomRef} />
           {!nearBottom && (
             <button type="button" className="to-bottom" onClick={scrollToBottom}>
