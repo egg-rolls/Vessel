@@ -93,6 +93,7 @@ export function ChatView({
     features,
     permissions,
     asks,
+    hydrateInteractions,
     responding,
     respondPermission,
     respondAsk,
@@ -170,6 +171,14 @@ export function ChatView({
       setDraftId(null);
     }
   }, [draftActive, draftId]);
+
+  // 选中会话 / 重连后从服务端补回 pending 交互（浏览器刷新不会重放旧 WS 事件）。
+  // ConnectionProvider 的 [epoch, hasToken] effect 负责连接 / 刷新，这里补“切会话”。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch 是重连后的显式刷新触发器
+  useEffect(() => {
+    if (!selectedId || !connected) return;
+    void hydrateInteractions();
+  }, [selectedId, connected, epoch, hydrateInteractions]);
 
   // 会话列表：有 token 就加载（重连期间走 HTTP RPC），15s 轮询；本地副本支持乐观重命名。
   const sessionsResource = useResource({

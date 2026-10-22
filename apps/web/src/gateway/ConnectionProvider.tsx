@@ -5,6 +5,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   useSyncExternalStore,
@@ -15,16 +16,21 @@ import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import type { StoredEvent } from '../state/events';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
 import {
+  addDismissedId,
+  buildHydrationSnapshot,
+  emptyInteractionState,
+  interactionReducer,
+  type OrphanedInteraction,
+  readDismissedIds,
+} from './interaction-hydration';
+import {
   askFromEvent,
-  enqueueInteraction,
-  enqueuePermission,
   interactionExpiredMessage,
   interactionRunEndedMessage,
   isExpiredError,
   isNotFoundError,
   isRunEndedError,
   permissionFromEvent,
-  removeInteraction,
   SubmitGuard,
 } from './interactions';
 import { planHelloSeq } from './seq-replay';
@@ -35,6 +41,7 @@ import type {
   PermissionRequest,
   PermissionScope,
   RunEvent,
+  RunStatus,
 } from './types';
 import { checkGatewayUrl, GATEWAY_URL_KEY, resolveInitialGatewayUrl } from './url';
 
@@ -74,6 +81,12 @@ export interface ConnectionContextValue {
   closeCode: number | null;
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
+  /** 已失效（run 结束 / 进程重启）的交互；只用于提示，不可应答。 */
+  orphaned: readonly OrphanedInteraction[];
+  /** 从 `interactions.list` 补回 pending / orphaned；失败静默，不阻塞聊天。 */
+  hydrateInteractions: () => Promise<void>;
+  /** 关闭失效提示并写入本 tenant 的 dismiss 集合。 */
+  dismissOrphaned: (requestId: string) => void;
   /** 正在提交应答的 requestId；UI 据此禁用按钮，避免双击重复提交。 */
   responding: ReadonlySet<string>;
   connect: (options: ConnectionOptions) => boolean;
@@ -95,6 +108,15 @@ const ConnectionContext = createContext<ConnectionContextValue | null>(null);
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** localStorage 在隐私模式下访问也可能抛错：读写都由 hydration 模块 try/catch 兜底。 */
+function browserStorage(): Storage | null {
+  try {
+    return typeof window === 'undefined' ? null : window.localStorage;
+  } catch {
+    return null;
+  }
 }
 
 /** 首次 token：先处理 `#token=`，再读 sessionStorage。该函数必须在路由初始化前调用。 */
@@ -153,19 +175,97 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [epoch, setEpoch] = useState(0);
   const [tenantEpoch, setTenantEpoch] = useState(0);
-  const [permissions, setPermissions] = useState<readonly PermissionRequest[]>([]);
-  const [asks, setAsks] = useState<readonly AskUserRequest[]>([]);
+  const [interactions, dispatchInteraction] = useReducer(interactionReducer, emptyInteractionState);
+  const { permissions, asks, orphaned } = interactions;
+  const interactionsRef = useRef(interactions);
+  interactionsRef.current = interactions;
   const [responding, setResponding] = useState<ReadonlySet<string>>(() => new Set());
   const [connectSeq, setConnectSeq] = useState(0);
   const submitGuard = useRef(new SubmitGuard());
-  const permissionsRef = useRef<readonly PermissionRequest[]>(permissions);
-  permissionsRef.current = permissions;
+  /** 已结算 id：应答成功 / 终态事件 / run 终态 / dismiss；有界 Map（上限 500）。 */
+  const settledRef = useRef(new Map<string, number>());
+  /** hydration 世代：只有最新一次请求能落地。 */
+  const hydrationGenerationRef = useRef(0);
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
   const tenantIdRef = useRef<string | null>(null);
   tenantIdRef.current = tenantId;
   const tokenRef = useRef(token);
   tokenRef.current = token;
+  const hasToken = token.trim().length > 0;
+
+  const recordSettled = useCallback((requestId: string) => {
+    if (!requestId) return;
+    const settled = settledRef.current;
+    // delete 再 set：让重放 / 重复结算的 id 也保持在 Map 尾部的“最新”位置。
+    settled.delete(requestId);
+    settled.set(requestId, Date.now());
+    while (settled.size > 500) {
+      const oldest = settled.keys().next().value;
+      if (oldest === undefined) break;
+      settled.delete(oldest);
+    }
+  }, []);
+
+  /**
+   * 从 `interactions.list` 补回刷新 / 重连 / 选会话后丢失的卡片。
+   *
+   * 并行拉 pending + orphaned（都显式带 hello tenant）；只有 pending 仍缺 session
+   * 时才再调 `runs.list`。任何失败都只影响本轮 hydration，不 toast、不阻塞。
+   */
+  const hydrateInteractions = useCallback(async (): Promise<void> => {
+    if (client.connectionState !== 'open') return;
+    const tokenAtStart = tokenRef.current;
+    if (!tokenAtStart.trim()) return;
+    const tenantAtStart = tenantIdRef.current ?? undefined;
+    const clientAtStart = client;
+    const generation = hydrationGenerationRef.current + 1;
+    hydrationGenerationRef.current = generation;
+    const stillCurrent = () =>
+      hydrationGenerationRef.current === generation &&
+      client === clientAtStart &&
+      tokenRef.current === tokenAtStart &&
+      (tenantIdRef.current ?? undefined) === tenantAtStart;
+    const tenantParam = tenantAtStart !== undefined ? { tenant_id: tenantAtStart } : {};
+
+    const [pendingResult, orphanedResult] = await Promise.allSettled([
+      client.listInteractions({ status: 'pending', limit: 100, ...tenantParam }),
+      client.listInteractions({ status: 'orphaned', limit: 100, ...tenantParam }),
+    ]);
+    if (!stillCurrent()) return;
+
+    // 旧 gateway（method_not_allowed / not_found）与其他失败都按空结果处理。
+    const pending = pendingResult.status === 'fulfilled' ? pendingResult.value : [];
+    const orphanedListed = orphanedResult.status === 'fulfilled' ? orphanedResult.value : [];
+    const sessionForRun = (runId: string) =>
+      sessionIdForRun(eventStore.getSnapshot().entries, runId);
+
+    let runs: RunStatus[] = [];
+    if (pending.some((item) => !item.session_id && !sessionForRun(item.run_id))) {
+      try {
+        runs = await client.listRuns(tenantParam);
+      } catch {
+        runs = [];
+      }
+      if (!stillCurrent()) return;
+    }
+
+    const settled = new Set(settledRef.current.keys());
+    const snapshot = buildHydrationSnapshot({
+      pending,
+      orphaned: orphanedListed,
+      runs,
+      sessionForRun,
+      settled,
+      dismissed: readDismissedIds(browserStorage(), tenantAtStart ?? 'default'),
+    });
+    if (!stillCurrent()) return;
+    dispatchInteraction({
+      type: 'hydrate',
+      snapshot,
+      settled: new Set(settledRef.current.keys()),
+    });
+  }, [client, eventStore]);
 
   const reportConnectError = useCallback(
     (error: unknown) => {
@@ -216,8 +316,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setConnectionState('idle');
       setHello(null);
       setTenantId(null);
-      setPermissions([]);
-      setAsks([]);
+      dispatchInteraction({ type: 'reset' });
+      settledRef.current.clear();
+      hydrationGenerationRef.current += 1;
       setReconnectAttempt(0);
       return;
     }
@@ -233,8 +334,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     const addPermission = (event: RunEvent) => {
       const request = permissionFromEvent(event);
       if (!request) return;
-      // 权限不按时间过期；刷新/重连时靠事件重放重建（Addendum A §4）。
-      setPermissions((prev) => enqueuePermission(prev, request));
+      // 权限不按时间过期；刷新/重连时靠事件重放 + interactions.list 重建。
+      if (settledRef.current.has(request.requestId)) return;
+      dispatchInteraction({ type: 'permission-request', request });
     };
 
     /** response / expired 事件：无论是否本端应答，都收起对应卡片。 */
@@ -242,8 +344,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const data = event.data as { requestId?: unknown; request_id?: unknown };
       const requestId = data.requestId ?? data.request_id;
       if (typeof requestId !== 'string' || requestId.length === 0) return;
-      const wasPending = permissionsRef.current.some((item) => item.requestId === requestId);
-      setPermissions((prev) => removeInteraction(prev, requestId));
+      const wasPending = interactionsRef.current.permissions.some(
+        (item) => item.requestId === requestId,
+      );
+      recordSettled(requestId);
+      dispatchInteraction({ type: 'settle', requestId });
       if (expired && wasPending) toast.info(interactionExpiredMessage());
     };
 
@@ -253,7 +358,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const sessionId = sessionIdForRun(eventStore.getSnapshot().entries, event.run_id);
       const request = askFromEvent(event, sessionId);
       if (!request) return;
-      setAsks((prev) => enqueueInteraction(prev, request));
+      if (settledRef.current.has(request.requestId)) return;
+      dispatchInteraction({ type: 'ask-request', request });
     };
 
     /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */
@@ -261,7 +367,8 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       const data = event.data as { requestId?: unknown; request_id?: unknown };
       const requestId = data.requestId ?? data.request_id;
       if (typeof requestId !== 'string' || requestId.length === 0) return;
-      setAsks((prev) => removeInteraction(prev, requestId));
+      recordSettled(requestId);
+      dispatchInteraction({ type: 'settle', requestId });
     };
 
     const offEvent = client.onEvent((event, meta) => {
@@ -276,8 +383,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         event.type === 'run.failed' ||
         event.type === 'run.cancelled'
       ) {
-        setPermissions((prev) => prev.filter((item) => item.runId !== event.run_id));
-        setAsks((prev) => prev.filter((item) => item.runId !== event.run_id));
+        // run 终态：同 run 的 pending 一律结算，避免 hydration 把它们复活。
+        for (const item of interactionsRef.current.permissions) {
+          if (item.runId === event.run_id) recordSettled(item.requestId);
+        }
+        for (const item of interactionsRef.current.asks) {
+          if (item.runId === event.run_id) recordSettled(item.requestId);
+        }
+        dispatchInteraction({ type: 'run-finished', runId: event.run_id });
       }
     });
 
@@ -304,10 +417,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       setHello(info);
       setTenantId(nextTenant ?? null);
       if (previousTenant && nextTenant && previousTenant !== nextTenant) {
-        // 切租户：旧事件/选择绝不能带到新租户。
+        // 切租户：旧事件 / 交互 / settled / 在途 hydration 绝不能带到新租户。
         eventStore.reset(0);
-        setPermissions([]);
-        setAsks([]);
+        dispatchInteraction({ type: 'reset' });
+        settledRef.current.clear();
+        hydrationGenerationRef.current += 1;
         setTenantEpoch((value) => value + 1);
       }
       setTokenError(null);
@@ -363,7 +477,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(retryTimer);
       client.close();
     };
-  }, [client, token, connectSeq, targetTenantId, eventStore, reportConnectError, toast]);
+  }, [
+    client,
+    token,
+    connectSeq,
+    targetTenantId,
+    eventStore,
+    reportConnectError,
+    recordSettled,
+    toast,
+  ]);
+
+  // 连接 / 刷新 / 重连成功后补回 pending / orphaned（epoch 只在 hello 后递增）。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch 是 hello 后的显式刷新触发器
+  useEffect(() => {
+    if (!hasToken) return;
+    void hydrateInteractions();
+  }, [epoch, hasToken, hydrateInteractions]);
 
   const connect = useCallback(
     (options: ConnectionOptions): boolean => {
@@ -437,17 +567,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       updateResponding(requestId, true);
       try {
         await client.respondPermission(requestId, decision, scope);
-        setPermissions((prev) => removeInteraction(prev, requestId));
+        recordSettled(requestId);
+        dispatchInteraction({ type: 'settle', requestId });
       } catch (error) {
         if (isRunEndedError(error)) {
           // 点击允许时 run 已结束：明确提示，不显示“未允许”。
-          setPermissions((prev) => removeInteraction(prev, requestId));
+          recordSettled(requestId);
+          dispatchInteraction({ type: 'settle', requestId });
           toast.info(interactionRunEndedMessage());
           return;
         }
         if (isNotFoundError(error) || isExpiredError(error)) {
           // 服务端已丢弃 / 已过期：移除卡片并提示，不重试。
-          setPermissions((prev) => removeInteraction(prev, requestId));
+          recordSettled(requestId);
+          dispatchInteraction({ type: 'settle', requestId });
           toast.info(interactionExpiredMessage());
           return;
         }
@@ -457,7 +590,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         updateResponding(requestId, false);
       }
     },
-    [client, toast, updateResponding],
+    [client, recordSettled, toast, updateResponding],
   );
 
   const respondAsk = useCallback(
@@ -466,16 +599,19 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       updateResponding(requestId, true);
       try {
         await client.respondAsk(requestId, answers);
-        setAsks((prev) => removeInteraction(prev, requestId));
+        recordSettled(requestId);
+        dispatchInteraction({ type: 'settle', requestId });
       } catch (error) {
         if (isRunEndedError(error)) {
           // run 已结束：卡片失效，明确语义而不是“未作答”。
-          setAsks((prev) => removeInteraction(prev, requestId));
+          recordSettled(requestId);
+          dispatchInteraction({ type: 'settle', requestId });
           toast.info(interactionRunEndedMessage());
           return;
         }
         if (isNotFoundError(error) || isExpiredError(error)) {
-          setAsks((prev) => removeInteraction(prev, requestId));
+          recordSettled(requestId);
+          dispatchInteraction({ type: 'settle', requestId });
           toast.info(interactionExpiredMessage());
           return;
         }
@@ -485,7 +621,17 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         updateResponding(requestId, false);
       }
     },
-    [client, toast, updateResponding],
+    [client, recordSettled, toast, updateResponding],
+  );
+
+  const dismissOrphaned = useCallback(
+    (requestId: string) => {
+      if (!requestId) return;
+      recordSettled(requestId);
+      dispatchInteraction({ type: 'dismiss-orphaned', requestId });
+      addDismissedId(browserStorage(), tenantIdRef.current ?? 'default', requestId);
+    },
+    [recordSettled],
   );
 
   const value = useMemo<ConnectionContextValue>(
@@ -499,7 +645,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       nodeLabel: hello?.node.name ?? hello?.node.node_id?.slice(0, 12) ?? '',
       gatewayUrl,
       token,
-      hasToken: token.trim().length > 0,
+      hasToken,
       gatewayError,
       tokenError,
       lastError,
@@ -511,6 +657,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       closeCode: client.closedWithCode,
       permissions,
       asks,
+      orphaned,
+      hydrateInteractions,
+      dismissOrphaned,
       responding,
       connect,
       disconnect,
@@ -530,6 +679,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       tenantId,
       gatewayUrl,
       token,
+      hasToken,
       gatewayError,
       tokenError,
       lastError,
@@ -539,6 +689,9 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       tenantEpoch,
       permissions,
       asks,
+      orphaned,
+      hydrateInteractions,
+      dismissOrphaned,
       responding,
       connect,
       disconnect,
