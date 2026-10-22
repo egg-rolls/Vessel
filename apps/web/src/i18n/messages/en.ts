@@ -132,6 +132,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.session': 'session {id}',
   // 0.18: the Composer slot has three mutually exclusive states; pending requests are serial.
   'chat.prompt.label': 'Conversation input slot',
+  'chat.composer.input': 'Message input',
   'chat.prompt.permission': 'Permission request',
   'chat.prompt.question': 'Answer required',
   'chat.prompt.blocking': 'Conversation paused until resolved',

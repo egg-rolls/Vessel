@@ -625,7 +625,7 @@
 
 .composer-area {
   flex: none;
-  padding: 10px clamp(16px, 4vw, 48px) calc(16px + env(safe-area-inset-bottom));
+  padding: 10px clamp(16px, 4vw, 48px) calc(var(--dock-gap) + var(--dock-safe-bottom));
   background: linear-gradient(transparent, var(--bg) 30%);
 }
 
@@ -815,8 +815,8 @@
   }
 
   .composer-area {
-    /* 底部导航自身处理 safe-area，避免双重留白。 */
-    padding: 8px 12px 8px;
+    /* safe-area 由 token 处理（--dock-safe-bottom）。 */
+    padding: 8px 12px calc(var(--dock-gap) + var(--dock-safe-bottom));
   }
 
   .page-header {

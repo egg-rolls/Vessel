@@ -1,5 +1,7 @@
 import { useEffect, useRef } from 'react';
+import { AutoGrowTextarea, Button } from '../../components/ui';
 import { t } from '../../i18n';
+import { ChatDock } from './ChatDock';
 
 export function Composer({
   value,
@@ -31,20 +33,33 @@ export function Composer({
   stopping?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const mountedRef = useRef(true);
+  const wasSubmittingRef = useRef(submitting);
+  const compositionEndRef = useRef(0);
   const canSend = hasToken && connected && !disabled && !submitting && value.trim().length > 0;
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (focusSignal > 0) inputRef.current?.focus();
   }, [focusSignal]);
 
-  // 输入框随内容增高（最多 160px / 34dvh）。
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 输入变化时重算高度
+  // 发送结束后把焦点还给输入框；用户已把焦点移走时不抢。
   useEffect(() => {
-    const element = inputRef.current;
-    if (!element) return;
-    element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, 160)}px`;
-  }, [value]);
+    if (wasSubmittingRef.current && !submitting && mountedRef.current) {
+      const active = document.activeElement;
+      const focusLeftInput =
+        active === document.body ||
+        (active instanceof Element && active.closest('.composer-row') !== null);
+      if (focusLeftInput && hasToken && connected && !disabled) inputRef.current?.focus();
+    }
+    wasSubmittingRef.current = submitting;
+  }, [submitting, hasToken, connected, disabled]);
 
   const placeholder = !hasToken
     ? '请先在设置 → 连接中配置 gateway token'
@@ -53,7 +68,7 @@ export function Composer({
       : '输入 prompt';
 
   return (
-    <footer className="composer-area">
+    <ChatDock>
       <div className="composer">
         <div className="composer-meta">
           <span className="composer-target" title={targetLabel}>
@@ -74,38 +89,40 @@ export function Composer({
           </span>
         </div>
         <div className="composer-row">
-          <textarea
+          <AutoGrowTextarea
             ref={inputRef}
             className="composer-input"
             rows={1}
             value={value}
             onChange={(event) => onChange(event.target.value)}
+            onCompositionEnd={() => {
+              compositionEndRef.current = Date.now();
+            }}
             onKeyDown={(event) => {
               if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                 event.preventDefault();
+                // Safari 在 compositionend 后可能再补一个 Enter：时间窗内只阻止默认行为。
+                if (Date.now() - compositionEndRef.current < 50) return;
                 if (canSend) onSubmit();
               }
             }}
             placeholder={placeholder}
             disabled={!hasToken || !connected || submitting || disabled}
             spellCheck={false}
+            aria-label={t('chat.composer.input')}
+            enterKeyHint="send"
           />
           {!hasToken || !connected ? (
-            <button type="button" className="btn btn-primary" onClick={onOpenConnection}>
+            <Button variant="primary" onClick={onOpenConnection}>
               配置连接
-            </button>
+            </Button>
           ) : (
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={onSubmit}
-              disabled={!canSend}
-            >
+            <Button variant="primary" onClick={onSubmit} disabled={!canSend}>
               {submitting ? '发送中' : '发送'}
-            </button>
+            </Button>
           )}
         </div>
       </div>
-    </footer>
+    </ChatDock>
   );
 }

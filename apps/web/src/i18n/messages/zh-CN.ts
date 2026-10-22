@@ -129,6 +129,7 @@ export const messages = {
   'pending.session': 'session {id}',
   // 0.18：Composer 槽位的三种互斥状态；多个 pending 串行处理。
   'chat.prompt.label': '对话输入槽位',
+  'chat.composer.input': '输入 prompt',
   'chat.prompt.permission': '权限请求',
   'chat.prompt.question': '需要你回答',
   'chat.prompt.blocking': '对话已暂停，处理完继续',
