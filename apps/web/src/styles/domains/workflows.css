@@ -1,0 +1,101 @@
+/* ── workflow 步骤时间线 ─────────────────────────────── */
+
+.step-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin-top: 10px;
+  list-style: none;
+  padding: 0;
+}
+
+.step-item {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  padding-bottom: 14px;
+}
+
+.step-rail {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  padding-top: 5px;
+}
+
+.step-rail::before {
+  content: "";
+  position: absolute;
+  top: 14px;
+  bottom: -14px;
+  width: 1px;
+  background: var(--line);
+}
+
+.step-item:last-child .step-rail::before {
+  display: none;
+}
+
+.step-dot {
+  width: 9px;
+  height: 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+}
+
+.step-completed .step-dot {
+  border-color: var(--ok);
+  background: var(--ok);
+}
+
+.step-failed .step-dot {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.step-running .step-dot {
+  border-color: var(--warn);
+  background: var(--warn-soft);
+}
+
+.step-body {
+  min-width: 0;
+  padding: 8px 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.step-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+}
+
+.step-index {
+  color: var(--faint);
+}
+
+.step-id {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.step-times {
+  margin-top: 4px;
+  font-size: 10.5px;
+}
+
+.step-output {
+  margin-top: 6px;
+}
+
+.step-output summary {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  cursor: pointer;
+}

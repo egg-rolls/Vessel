@@ -1,0 +1,33 @@
+/* ── 小屏表格降列 ─────────────────────────────────────── */
+
+@media (max-width: 680px) {
+  .form-grid,
+  .start-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .data-table .col-session,
+  .data-table .col-meta,
+  .data-table .col-optional {
+    display: none;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 7px 6px;
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .modal {
+    padding: 18px;
+  }
+
+  .toast-region {
+    right: 12px;
+    bottom: calc(70px + env(safe-area-inset-bottom));
+    width: calc(100vw - 24px);
+  }
+}

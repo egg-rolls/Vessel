@@ -1,0 +1,125 @@
+/* 0.14: subagent tree / transcript / error metadata */
+
+.subagent-tree {
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.subagent-tree-summary,
+.subagent-node-details > summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.subagent-tree-list,
+.subagent-children {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.subagent-row-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+
+.subagent-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.subagent-link.active {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+.subagent-node-details {
+  flex-basis: 100%;
+  padding-left: 4px;
+}
+
+.subagent-details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 10px;
+  margin: 4px 0;
+  font-size: 11px;
+}
+
+.subagent-details dt {
+  color: var(--faint);
+}
+
+.subagent-details dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.subagent-breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+
+.btn-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn-link.active {
+  font-weight: 600;
+}
+
+.subagent-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.subagent-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-line);
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+
+.subagent-summary-task {
+  overflow-wrap: anywhere;
+}
+
+.subagent-summary-id {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.subagent-empty {
+  margin: 0;
+  font-size: 12px;
+}
+
+.error-meta {
+  color: var(--danger);
+  font-size: 11px;
+}
