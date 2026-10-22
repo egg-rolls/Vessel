@@ -19,7 +19,6 @@ import type {
   TraceConfig,
   UsageLimitsConfig,
   VesselConfig,
-  WorkflowConfig,
 } from './types.js';
 
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
@@ -109,53 +108,6 @@ function validateTermination(
         value: maxRuntimeSeconds,
       });
     }
-  }
-}
-
-/** 校验 workflow 块（0.4） */
-function validateWorkflow(workflow: WorkflowConfig, errors: ConfigValidationError[]): void {
-  const { enabled, dir, path, maxParallel, stepTimeoutMs } = workflow;
-
-  if (enabled !== undefined && typeof enabled !== 'boolean') {
-    errors.push({
-      path: 'workflow.enabled',
-      message: 'workflow.enabled must be a boolean',
-      value: enabled,
-    });
-  }
-  if (dir !== undefined && (typeof dir !== 'string' || dir.trim() === '')) {
-    errors.push({
-      path: 'workflow.dir',
-      message: 'workflow.dir must be a non-empty string',
-      value: dir,
-    });
-  }
-  if (path !== undefined && (typeof path !== 'string' || path.trim() === '')) {
-    errors.push({
-      path: 'workflow.path',
-      message: 'workflow.path must be a non-empty string',
-      value: path,
-    });
-  }
-  if (
-    maxParallel !== undefined &&
-    (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 8)
-  ) {
-    errors.push({
-      path: 'workflow.maxParallel',
-      message: 'workflow.maxParallel must be an integer between 1 and 8',
-      value: maxParallel,
-    });
-  }
-  if (
-    stepTimeoutMs !== undefined &&
-    (!Number.isInteger(stepTimeoutMs) || stepTimeoutMs < 1 || stepTimeoutMs > 86400000)
-  ) {
-    errors.push({
-      path: 'workflow.stepTimeoutMs',
-      message: 'workflow.stepTimeoutMs must be an integer between 1 and 86400000',
-      value: stepTimeoutMs,
-    });
   }
 }
 
@@ -828,7 +780,6 @@ export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
   'session',
   'permission',
   'plugins',
-  'workflow',
   'evals',
   'feishu',
   'tools',
@@ -1787,8 +1738,7 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 0.4 四块；块缺省时不做任何事（保持 0.3 行为）。
-  if (config.workflow) validateWorkflow(config.workflow, errors);
+  // 校验 0.4 块；块缺省时不做任何事（保持 0.3 行为）。
   if (config.evals) validateEvals(config.evals, errors);
   if (config.feishu) validateFeishu(config.feishu, errors);
   if (config.observability) validateObservability(config.observability, errors);
@@ -1890,7 +1840,6 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'adminTokenEnv',
   ],
   connect: ['token', 'tokenEnv', 'caFile'],
-  workflow: ['enabled', 'dir', 'path', 'maxParallel', 'stepTimeoutMs'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
     'enabled',
@@ -1993,7 +1942,6 @@ export const KNOWN_CONFIG_KEYS = [
   'mcpServers',
   'durable',
   'serve',
-  'workflow',
   'evals',
   'feishu',
   'observability',

@@ -114,9 +114,8 @@ export interface RunEngine {
   readonly pendingAsks: Map<string, PendingAsk>;
   /** requestId → 持久化交互记录（pending / answered / orphaned）。 */
   readonly interactionRecords: Map<string, StoredInteraction>;
-  /** durable resume / workflow resume 在途占位 */
+  /** durable resume 在途占位 */
   readonly resumedRuns: Set<string>;
-  readonly resumedWorkflows: Set<string>;
   readonly active: RunRecord | null;
   activeSessionId: string;
   /** 由 gateway 的 EventStream 订阅或本地 dispatcher 的订阅调用 */
@@ -141,8 +140,6 @@ export interface RunEngine {
   respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
-  reserveWorkflowResume(runId: string): boolean;
-  releaseWorkflowResume(runId: string): void;
 }
 
 function makeDone(): { done: Promise<void>; resolveDone: () => void } {
@@ -209,7 +206,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       : undefined;
   const activeByTenant = new Map<string, number>();
   const resumedRuns = new Set<string>();
-  const resumedWorkflows = new Set<string>();
 
   let active: RunRecord | null = null;
   let activeSessionId = 'default';
@@ -698,14 +694,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     resumedRuns.delete(runId);
   }
 
-  function reserveWorkflowResume(runId: string): boolean {
-    return reserveInto(resumedWorkflows, runId);
-  }
-
-  function releaseWorkflowResume(runId: string): void {
-    resumedWorkflows.delete(runId);
-  }
-
   function list(tenantId: string, opts: { sessionId?: string; status?: string } = {}): RunStatus[] {
     return [...runs.values()]
       .filter((record) => record.tenant_id === tenantId)
@@ -722,7 +710,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     pendingAsks,
     interactionRecords,
     resumedRuns,
-    resumedWorkflows,
     get active() {
       return active;
     },
@@ -743,7 +730,5 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     respondAsk,
     reserveResume,
     releaseResume,
-    reserveWorkflowResume,
-    releaseWorkflowResume,
   };
 }

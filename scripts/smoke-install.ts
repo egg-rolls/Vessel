@@ -45,7 +45,6 @@ export const PUBLISH_ORDER = [
   'packages/tui',
   'plugins/tools/basic-tools',
   'plugins/mcp/client',
-  'plugins/workflow/engine',
   'plugins/evals/harness',
   'plugins/im/feishu',
   'plugins/provider/openai',

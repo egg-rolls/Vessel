@@ -99,13 +99,6 @@ export class PermissionPolicy {
     if (decision === 'deny') {
       throw new Error(`Tool "${tool.name}" execution denied by permission policy`);
     }
-    // 0.18：workflow 没有 chat session，不能产生交互权限请求；明确报错而不是
-    // 用 workflow_run_id 冒充 session_id 后无限等待。提示改为非交互配置。
-    if (decision === 'ask' && ctx.source === 'workflow') {
-      throw new Error(
-        `Interactive permission is required for tool "${tool.name}" but workflow runs have no chat session; add it to permission.autoApprove or set permission.default to allow`,
-      );
-    }
     if (decision === 'ask') {
       const requestId = randomUUID();
       const ts = Date.now();

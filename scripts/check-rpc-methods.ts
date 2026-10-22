@@ -62,11 +62,6 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'ask.respond': 'write',
   // 0.18：刷新后读取 pending / answered / orphaned 交互（只读）。
   'interactions.list': 'read',
-  'workflow.list': 'read',
-  'workflow.get': 'read',
-  'workflow.start': 'write',
-  'workflow.resume': 'write',
-  'workflow.cancel': 'write',
   'evals.latest': 'read',
   'evals.run': 'write',
   'feishu.status': 'read',

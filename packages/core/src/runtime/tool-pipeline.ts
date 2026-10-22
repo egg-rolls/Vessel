@@ -1,7 +1,7 @@
 /**
  * 统一工具执行管道（0.8.2 Wave 2B1）。
  *
- * AgentRuntime、workflow `type: tool`、delegate 子 runtime 共用同一套工具执行语义：
+ * AgentRuntime、delegate 子 runtime 共用同一套工具执行语义：
  * ToolCall guardrail → BeforeTool hook → 权限判定（最终工具与参数）
  * → handler（timeout/abort）→ ToolResult guardrail → AfterTool hook。
  *
@@ -54,7 +54,7 @@ export interface ToolPipelineOptions {
   /** 工具上下文中的消息快照；未提供时为空数组 */
   messages?: Message[];
   /** 权限请求来源（0.13）；缺省 `runtime` */
-  source?: 'runtime' | 'workflow' | 'host';
+  source?: 'runtime' | 'host';
   stages?: ToolPipelineStages;
 }
 

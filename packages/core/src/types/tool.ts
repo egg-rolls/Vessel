@@ -21,10 +21,10 @@ export interface ToolContext {
   /** 当前 run 的 AbortSignal（F10）；工具可用它响应取消 */
   signal?: AbortSignal;
   /**
-   * 权限请求来源（0.13）：管道默认 `runtime`；workflow / host 装配方可显式覆盖。
+   * 权限请求来源（0.13）：管道默认 `runtime`；host 装配方可显式覆盖。
    * 仅用于事件关联，不参与权限判定。
    */
-  source?: 'runtime' | 'workflow' | 'host';
+  source?: 'runtime' | 'host';
 }
 
 /** 工具处理函数 */

@@ -174,20 +174,6 @@ export interface DurableConfig {
   checkpointEvery?: 'iteration';
 }
 
-/** Workflow 配置（0.4；默认关闭） */
-export interface WorkflowConfig {
-  /** true 才构造 workflow 引擎（默认 false） */
-  enabled?: boolean;
-  /** 定义文件目录（默认 ./workflows） */
-  dir?: string;
-  /** run 状态存储目录（默认 ~/.vessel/workflows） */
-  path?: string;
-  /** 最大并行步骤数（默认 2；1..8） */
-  maxParallel?: number;
-  /** 单 step 超时毫秒（默认 300000；1..86400000） */
-  stepTimeoutMs?: number;
-}
-
 /** Eval harness 配置（0.4；默认关闭、默认离线） */
 export interface EvalsConfig {
   /** true 才允许 CLI eval（默认 false） */
@@ -483,8 +469,6 @@ export interface VesselConfig {
   durable?: DurableConfig;
   /** 0.3：gateway 监听与 TLS */
   serve?: ServeConfig;
-  /** 0.4：声明式 workflow 编排 */
-  workflow?: WorkflowConfig;
   /** 0.4：eval harness */
   evals?: EvalsConfig;
   /** 0.4：飞书渠道 */
