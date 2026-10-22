@@ -25,7 +25,7 @@ import {
   readDismissedIds,
 } from './interaction-hydration';
 import {
-  askFromEvent,
+  askRequestFromEvent,
   interactionExpiredMessage,
   interactionRunEndedMessage,
   isExpiredError,
@@ -413,14 +413,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     };
 
     const addAsk = (event: RunEvent) => {
-      // ask 事件本身不带 session_id：先查 L1 / 从 run.started 反查（L2），
-      // 供跨 session 待处理条跳转；查不到时后台走 L3。
-      const sessionId = sessionResolver.resolveSync(event.run_id);
-      const request = askFromEvent(event, sessionId);
-      if (!request) return;
+      // 事件自带 session_id 时直接使用；否则查 L1 / 从 run.started 反查（L2），
+      // 仍查不到时后台走 L3。
+      const resolution = askRequestFromEvent(event, () =>
+        sessionResolver.resolveSync(event.run_id),
+      );
+      if (!resolution) return;
+      const { request, needsSessionLookup } = resolution;
       if (settledRef.current.has(request.requestId)) return;
       dispatchInteraction({ type: 'ask-request', request });
-      if (!request.sessionId) void sessionResolver.lookup(request.runId);
+      if (needsSessionLookup) void sessionResolver.lookup(request.runId);
     };
 
     /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */

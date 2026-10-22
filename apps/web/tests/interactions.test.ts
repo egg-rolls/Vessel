@@ -12,6 +12,7 @@ import {
 } from '../src/gateway/interaction-hydration';
 import {
   askFromEvent,
+  askRequestFromEvent,
   enqueueInteraction,
   enqueuePermission,
   interactionAgentId,
@@ -160,6 +161,17 @@ describe('askFromEvent (0.17)', () => {
       agentId: 'delegate-9',
       requestedAt: 1_000,
     });
+    // 事件自带的 session_id 优先于调用方反查值。
+    expect(
+      askFromEvent(
+        event({
+          requestId: 'ask-conflict',
+          questions: [{ question: 'Q' }],
+          session_id: 'session-event',
+        }),
+        'session-fallback',
+      )?.sessionId,
+    ).toBe('session-event');
   });
 
   test('falls back to now when the event timestamp is missing', () => {
@@ -186,6 +198,57 @@ describe('askFromEvent (0.17)', () => {
     expect(legacy).not.toHaveProperty('agentId');
     expect(askFromEvent(event({ questions: [{ question: 'Q' }] }))).toBeNull();
     expect(askFromEvent(event({ requestId: 'ask-3', questions: [] }))).toBeNull();
+  });
+});
+
+describe('askRequestFromEvent session resolution', () => {
+  const event = (data: Record<string, unknown>, ts = 1_000): RunEvent => ({
+    type: 'ask.user.requested',
+    run_id: 'run-1',
+    ts,
+    data,
+  });
+
+  test('ask event session_id wins and skips the resolver', () => {
+    let calls = 0;
+    const resolution = askRequestFromEvent(
+      event({ requestId: 'ask-1', questions: [{ question: 'Q' }], session_id: 'session-event' }),
+      () => {
+        calls += 1;
+        return 'session-from-events';
+      },
+    );
+
+    expect(resolution?.request.sessionId).toBe('session-event');
+    expect(calls).toBe(0);
+    expect(resolution?.needsSessionLookup).toBe(false);
+  });
+
+  test('ask without session_id falls back to the event scan', () => {
+    let calls = 0;
+    const resolution = askRequestFromEvent(
+      event({ requestId: 'ask-1', questions: [{ question: 'Q' }] }),
+      () => {
+        calls += 1;
+        return 'session-from-events';
+      },
+    );
+
+    expect(calls).toBe(1);
+    expect(resolution?.request.sessionId).toBe('session-from-events');
+    expect(resolution?.needsSessionLookup).toBe(false);
+  });
+
+  test('ask without any session asks the caller to resolve', () => {
+    const resolution = askRequestFromEvent(
+      event({ requestId: 'ask-1', questions: [{ question: 'Q' }] }),
+      () => undefined,
+    );
+
+    expect(resolution?.request.sessionId).toBeUndefined();
+    expect(resolution?.needsSessionLookup).toBe(true);
+    // 非法 ask 仍然返回 null。
+    expect(askRequestFromEvent(event({ questions: [{ question: 'Q' }] }), () => 's')).toBeNull();
   });
 });
 

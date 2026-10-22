@@ -87,6 +87,7 @@ export function askFromEvent(
     requestId?: unknown;
     request_id?: unknown;
     questions?: unknown;
+    session_id?: unknown;
   };
   const rawId = data.requestId ?? data.request_id;
   if (typeof rawId !== 'string' || rawId.length === 0) return null;
@@ -99,14 +100,45 @@ export function askFromEvent(
   );
   if (questions.length === 0) return null;
   const agentId = interactionAgentId(event.data);
+  // 事件自带的 session_id 优先；调用方反查值只作缺省回退。
+  const eventSessionId =
+    typeof data.session_id === 'string' && data.session_id.length > 0 ? data.session_id : undefined;
+  const resolvedSessionId =
+    eventSessionId ?? (sessionId !== undefined && sessionId.length > 0 ? sessionId : undefined);
   return {
     requestId: rawId,
     questions,
     runId: event.run_id,
     requestedAt: validTimestamp(event.ts) ? event.ts : now,
-    ...(sessionId !== undefined && sessionId.length > 0 ? { sessionId } : {}),
+    ...(resolvedSessionId !== undefined ? { sessionId: resolvedSessionId } : {}),
     ...(agentId !== undefined ? { agentId } : {}),
   };
+}
+
+export interface AskEventResolution {
+  request: AskUserRequest;
+  /** true = 事件与 fallback 都没有 sessionId，调用方应走 resolver。 */
+  needsSessionLookup: boolean;
+}
+
+/**
+ * `ask.user.requested` → 卡片 + 是否需要后续 resolver。
+ *
+ * 事件自带的 `session_id` 存在时完全不调用 `resolveSession`；
+ * 否则用 fallback，并据最终结果告诉调用方是否还要走 L3。
+ */
+export function askRequestFromEvent(
+  event: RunEvent,
+  resolveSession?: () => string | undefined,
+  now = Date.now(),
+): AskEventResolution | null {
+  const data = event.data as { session_id?: unknown };
+  const eventSessionId =
+    typeof data.session_id === 'string' && data.session_id.length > 0 ? data.session_id : undefined;
+  const fallback = eventSessionId ?? resolveSession?.();
+  const request = askFromEvent(event, fallback, now);
+  if (!request) return null;
+  return { request, needsSessionLookup: request.sessionId === undefined };
 }
 
 /** 权限请求入队（无时间过期，只做 requestId 去重）。 */
