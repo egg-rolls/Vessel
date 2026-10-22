@@ -37,7 +37,7 @@ import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
-import { nextPending, pendingForSession } from './pending-permissions';
+import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
 import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
@@ -433,13 +433,25 @@ export function ChatView({
     () => pendingForSession(asks, selectedId, sessionRunIds),
     [asks, selectedId, sessionRunIds],
   );
-  const sessionPendingCount = sessionPermissions.length + sessionAsks.length;
-  // 串行处理：槽位一次只显示最早的一条，应答后自动切到下一条。
-  const pendingPrompt = useMemo(
-    () => nextPending(sessionPermissions, sessionAsks),
+  // 串行处理：队列按 requestedAt 排序，ask 按问题拆项；槽位只渲染第一项。
+  const pendingItems = useMemo(
+    () => pendingQueue(sessionPermissions, sessionAsks),
     [sessionPermissions, sessionAsks],
   );
-  const pendingMore = Math.max(0, sessionPendingCount - 1);
+  const pendingItem = pendingItems[0] ?? null;
+  // 队列摘要：活动卡之后的至多 3 项（权限 · tool / 提问 · 第 n 题）。
+  // 不 memo：locale 变化时标签必须跟着重算。
+  const queueChips = pendingItems.slice(1, 4).map((item) =>
+    item.kind === 'permission'
+      ? {
+          key: item.key,
+          label: t('pending.queue.permission', { tool: item.request.tool }),
+        }
+      : {
+          key: item.key,
+          label: t('pending.queue.ask', { index: item.questionIndex + 1 }),
+        },
+  );
 
   // 会话列表徽标：其他会话的 pending 只计数，不渲染完整卡片。
   const pendingBySession = useMemo(() => {
@@ -452,7 +464,7 @@ export function ChatView({
   }, [permissions, asks]);
 
   // 槽位从待处理切回输入框时把焦点还给 Composer。
-  const pendingActive = sessionPendingCount > 0;
+  const pendingActive = pendingItems.length > 0;
   const pendingWasActive = useRef(false);
   useEffect(() => {
     if (pendingWasActive.current && !pendingActive) setComposerFocus((value) => value + 1);
@@ -1063,23 +1075,32 @@ export function ChatView({
           )}
         </div>
 
-        {pendingPrompt && pendingPrompt.kind === 'permission' ? (
+        {pendingItem && pendingItem.kind === 'permission' ? (
           <PermissionPrompt
-            request={pendingPrompt.request}
-            more={pendingMore}
-            busy={responding.has(pendingPrompt.request.requestId)}
+            key={pendingItem.request.requestId}
+            request={pendingItem.request}
+            more={pendingItems.length - 1}
+            busy={responding.has(pendingItem.request.requestId)}
+            connected={connected}
+            onStop={connected && runningGroup ? () => void handleCancel(runningGroup) : undefined}
+            stopping={stopBusy}
+            queue={queueChips}
             onDecide={(decision, scope) =>
-              handleDecidePermission(pendingPrompt.request.requestId, decision, scope)
+              handleDecidePermission(pendingItem.request.requestId, decision, scope)
             }
           />
-        ) : pendingPrompt && pendingPrompt.kind === 'ask' ? (
+        ) : pendingItem && pendingItem.kind === 'ask' ? (
           <AskPrompt
-            key={pendingPrompt.request.requestId}
-            request={pendingPrompt.request}
-            more={pendingMore}
-            busy={responding.has(pendingPrompt.request.requestId)}
-            onSubmit={(answers) => handleRespondAsk(pendingPrompt.request.requestId, answers)}
-            onCancel={() => handleRespondAsk(pendingPrompt.request.requestId, [])}
+            key={pendingItem.request.requestId}
+            request={pendingItem.request}
+            otherPending={Math.max(0, pendingItems.length - pendingItem.request.questions.length)}
+            busy={responding.has(pendingItem.request.requestId)}
+            connected={connected}
+            onStop={connected && runningGroup ? () => void handleCancel(runningGroup) : undefined}
+            stopping={stopBusy}
+            queue={queueChips}
+            onSubmit={(answers) => handleRespondAsk(pendingItem.request.requestId, answers)}
+            onCancel={() => handleRespondAsk(pendingItem.request.requestId, [])}
           />
         ) : (
           <Composer

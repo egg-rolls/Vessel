@@ -1,0 +1,99 @@
+/* ── Prompt dock（0.18 S2/S3） ─────────────────────────────
+   替换式卡牌：槽位是唯一表面，卡内只负责布局；head 吸顶、actions 吸底。
+   高度只设上限（--dock-max-h），超出后由槽位统一滚动。 */
+
+.prompt-slot {
+  max-width: var(--dock-width);
+  max-height: var(--dock-max-h);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* 单层表面：卡牌不再自带第二层边框 / 内距 / 背景。 */
+.prompt-slot .permission-card,
+.prompt-slot .ask-card {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+/* head 吸顶、actions 吸底，背景与槽位一致，避免透出滚动内容。 */
+.prompt-slot .prompt-slot-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+.prompt-slot .permission-card-actions,
+.prompt-slot .ask-card-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: var(--surface);
+}
+
+/* 长内容只由槽位滚动，取消卡内第二层滚动。 */
+.prompt-slot .permission-input {
+  max-height: none;
+  overflow: visible;
+}
+
+.prompt-slot .ask-list {
+  max-height: none;
+  overflow: visible;
+}
+
+/* 队列摘要：活动卡之后的最多 3 项。 */
+.prompt-queue {
+  display: flex;
+  flex-basis: 100%;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.prompt-queue-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+/* 卡头的停止入口：与 Composer 的 stop 同一回调。 */
+.prompt-slot-stop {
+  align-self: center;
+  font-size: var(--text-xs);
+}
+
+/* 断线提示（卡上方）。 */
+.prompt-slot .prompt-slot-hint.err {
+  margin-left: 0;
+  color: var(--danger);
+  font-size: var(--text-xs);
+}
+
+/* 长权限参数的折叠 / 截断标记。 */
+.prompt-slot .permission-expand,
+.prompt-slot .permission-truncated {
+  align-self: flex-start;
+  font-size: var(--text-xs);
+}
+
+.prompt-slot .permission-truncated {
+  color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .prompt-slot .btn,
+  .prompt-slot .ask-option,
+  .prompt-slot .link-btn {
+    min-height: var(--touch-target);
+  }
+}
