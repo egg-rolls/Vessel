@@ -45,15 +45,16 @@ function AgentTreeRow({
     <li className="subagent-row">
       <div className="subagent-row-main" style={{ paddingLeft: `${node.depth * 12}px` }}>
         <StatusChip status={node.state} />
-        <button
-          type="button"
-          className={`subagent-link ${node.id === activeAgentId ? 'active' : ''}`.trim()}
-          aria-pressed={node.id === activeAgentId}
-          title={node.id}
-          onClick={() => onSelectAgent?.(node.id)}
-        >
-          {agentLabel(node)}
-        </button>
+        <Tooltip label={node.id}>
+          <button
+            type="button"
+            className={`subagent-link ${node.id === activeAgentId ? 'active' : ''}`.trim()}
+            aria-pressed={node.id === activeAgentId}
+            onClick={() => onSelectAgent?.(node.id)}
+          >
+            {agentLabel(node)}
+          </button>
+        </Tooltip>
         {node.currentTool && <span className="dim mono">{node.currentTool}</span>}
         {node.queuePosition !== undefined && (
           <span className="dim">

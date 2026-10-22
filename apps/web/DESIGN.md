@@ -330,6 +330,7 @@
 ### 7.8 浮层
 
 - Modal / 命令面板：L4，`--elev-4` + `--radius-xl`；遮罩统一用 `--scrim`（浅色 `rgba(20,18,15,0.55)` / 暗色 `rgba(0,0,0,0.65)`），**不用 blur**，不写第二套遮罩色。
+- 关闭按钮固定在弹窗右上（相对 `.modal` 定位），长内容只在内部 `.modal-body-scroll` 滚动，按钮不随内容滚走。
 - Popover / 菜单：L3，`--elev-3` + `--radius-lg`。
 - Toast：L4，`--elev-3`，语义色 soft 底 + 图标。
 - 浮层与触发元素之间用 gap，不用连线/箭头边框。
@@ -346,6 +347,7 @@
 - Tooltip：hover / focus 300ms 后显示；portal 到 `body`；优先上方，空间不足翻到下方；小三角指向锚点；Esc / blur / pointerleave 关闭。
 - 表面：`--surface-raised` + `--elev-2` + `--radius-sm`，无 border；文字 11px，最大宽度 240px；`role="tooltip"`，触发元素通过 `aria-describedby` 关联。
 - `prefers-reduced-motion: reduce` 时不做进出动画。
+- Esc 分层：tooltip 可见时只关 tooltip（阻止事件冒泡），不再关闭其下的 modal / 命令面板；tooltip 未开时 Esc 仍由下层处理。
 - IconButton 统一渲染 `.icon-btn` + Tooltip，不新增第三套圆角/阴影/尺寸。
 - Tooltip 文案区分：用户可见动作走 i18n；命令名、快捷键、技术词保持原文。
 

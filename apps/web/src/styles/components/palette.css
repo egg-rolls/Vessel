@@ -10,6 +10,12 @@
   z-index: var(--z-palette);
 }
 
+/* 面板自身不滚动：结果列表滚动，输入行与 footer 固定。 */
+.palette .modal-body-scroll {
+  gap: 0;
+  overflow: hidden;
+}
+
 .palette-input-row {
   display: flex;
   align-items: center;

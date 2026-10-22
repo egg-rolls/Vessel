@@ -3,7 +3,7 @@ import { ActionMenu } from '../../components/ActionMenu';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { IconButton } from '../../components/Tooltip';
+import { IconButton, Tooltip } from '../../components/Tooltip';
 import { relativeTime } from '../../format';
 import type { SessionInfo } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
@@ -263,19 +263,20 @@ export function SessionList({
                             aria-current={active ? 'true' : undefined}
                             onClick={() => onSelect(session.session_id)}
                           >
-                            <span className="session-title" title={title}>
+                            <span className="session-title">
                               <StatusGlyph status={session.status} />
-                              <span className="session-title-text">{title}</span>
+                              <Tooltip label={title}>
+                                <span className="session-title-text">{title}</span>
+                              </Tooltip>
                               {pendingCount > 0 && (
-                                <span
-                                  className="session-pending-badge"
-                                  title={t('chat.session.pending', { count: pendingCount })}
-                                >
-                                  <span aria-hidden="true">{pendingCount}</span>
-                                  <span className="sr-only">
-                                    {t('chat.session.pending', { count: pendingCount })}
+                                <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
+                                  <span className="session-pending-badge">
+                                    <span aria-hidden="true">{pendingCount}</span>
+                                    <span className="sr-only">
+                                      {t('chat.session.pending', { count: pendingCount })}
+                                    </span>
                                   </span>
-                                </span>
+                                </Tooltip>
                               )}
                               {relative && (
                                 <span className="session-time">

@@ -92,7 +92,7 @@ export function ModalShell({
         aria-label={label}
         aria-describedby={describedBy}
       >
-        {children}
+        <div className="modal-body-scroll">{children}</div>
         {closeLabel ? (
           <IconButton className="modal-close" label={closeLabel} onClick={onClose}>
             ×

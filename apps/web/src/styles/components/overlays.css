@@ -31,7 +31,17 @@
   background: var(--surface-raised);
   box-shadow: var(--elev-4);
   animation: rise-in 0.2s var(--ease);
-  overflow: auto;
+  /* 关闭按钮定位在本层，不随内容滚动。 */
+  overflow: hidden;
+}
+
+.modal-body-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .modal-title {

@@ -126,7 +126,10 @@ export function Tooltip({
   useEffect(() => {
     if (!visible) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') close();
+      if (event.key !== 'Escape') return;
+      // Esc 先只关 tooltip；阻止事件到达同时打开的 modal。
+      event.stopPropagation();
+      close();
     };
     document.addEventListener('keydown', onKeyDown, true);
     window.addEventListener('scroll', close, true);

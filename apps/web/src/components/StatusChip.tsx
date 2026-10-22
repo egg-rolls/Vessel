@@ -1,5 +1,6 @@
 /** 统一状态展示：字形 + 文本 + 颜色（颜色只是增强）。 */
 import type { StatusKind } from '../gateway/types';
+import { Tooltip } from './Tooltip';
 
 export interface StatusMeta {
   glyph: string;
@@ -77,15 +78,16 @@ export function StatusGlyph({
   const meta = STATUS_META[kind];
   const text = label ?? statusLabel(status);
   return (
-    <span
-      className={`status-glyph-only tone-${meta.tone}`}
-      data-status={kind}
-      role="img"
-      aria-label={text}
-      title={text}
-    >
-      {meta.glyph}
-    </span>
+    <Tooltip label={text}>
+      <span
+        className={`status-glyph-only tone-${meta.tone}`}
+        data-status={kind}
+        role="img"
+        aria-label={text}
+      >
+        {meta.glyph}
+      </span>
+    </Tooltip>
   );
 }
 
@@ -101,16 +103,15 @@ export function StatusChip({
 }) {
   const kind = normalizeStatus(status);
   const meta = STATUS_META[kind];
+  const text = label ?? statusLabel(status);
   return (
-    <span
-      className={`status-chip tone-${meta.tone}`}
-      data-status={kind}
-      title={title ?? statusLabel(status)}
-    >
-      <span className="status-glyph" aria-hidden="true">
-        {meta.glyph}
+    <Tooltip label={title ?? statusLabel(status)}>
+      <span className={`status-chip tone-${meta.tone}`} data-status={kind}>
+        <span className="status-glyph" aria-hidden="true">
+          {meta.glyph}
+        </span>
+        <span>{text}</span>
       </span>
-      <span>{label ?? statusLabel(status)}</span>
-    </span>
+    </Tooltip>
   );
 }
