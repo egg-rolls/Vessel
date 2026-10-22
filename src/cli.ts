@@ -832,7 +832,8 @@ async function runWithConfig(result: BootstrapResult) {
               ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
             }),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
-            sessionFor: (tenantId: string) => livenessSessionFor(tenantId),
+            sessionFor: (tenantId: string) =>
+              livenessSessionFor(tenantId) ?? tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
