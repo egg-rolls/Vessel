@@ -124,7 +124,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'permission.goTo': 'Review',
   // 0.18: cross-session pending collapses into one compact bar.
   'pending.bar.summary': '{count} pending request(s) in other sessions',
-  'pending.bar.unresolved': 'No longer valid: the owning session was not found',
+  'pending.bar.unresolved': 'Owning session not found',
   // 0.17: AppShell panel for other-session / unattributed requests
   'pending.inline.title': 'Pending requests in this session',
   'pending.inline.desc':
@@ -154,7 +154,7 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   // 0.18 H2: no-longer-valid interactions are notice + dismiss only, never answerable.
   'interaction.orphaned': 'No longer valid (run ended / process restarted)',
   'interaction.orphaned.label': '{count} no longer valid',
-  'interaction.orphaned.bar': '{count} no-longer-valid request(s)',
+  'interaction.orphaned.bar': 'Request no longer valid ({count})',
   'interaction.orphaned.listLabel': 'No-longer-valid interactions',
   'interaction.orphaned.metaTool': 'tool {tool}',
   'interaction.orphaned.metaAsk': 'ask',

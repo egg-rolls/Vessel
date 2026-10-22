@@ -132,7 +132,7 @@ describe('compact pending bar', () => {
     );
 
     expect(markup).toContain('其他会话有 2 个待处理请求');
-    expect(markup).toContain('无法定位所属会话，请求已失效');
+    expect(markup).toContain('无法定位所属会话');
     expect(markup).not.toContain('前往处理');
     expect(markup).not.toContain('<button');
     expect(pendingBarTarget(pendingBarSummary(permissions, asks))).toBeNull();
@@ -148,7 +148,7 @@ describe('compact pending bar', () => {
       />,
     );
 
-    expect(markup).toContain('有 2 个已失效请求');
+    expect(markup).toContain('请求已失效（共 2 个）');
     expect(markup).toContain('关闭');
     // 只读：不跳转、不复用可应答卡片。
     expect(markup).not.toContain('前往处理');

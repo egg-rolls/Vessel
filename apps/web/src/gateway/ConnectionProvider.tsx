@@ -35,6 +35,7 @@ import {
   SubmitGuard,
 } from './interactions';
 import { planHelloSeq } from './seq-replay';
+import { SessionResolver } from './session-resolver';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -170,6 +171,17 @@ function sessionIdForRun(entries: readonly StoredEvent[], runId: string): string
   return undefined;
 }
 
+/** core run id → gateway job id：run.started 的帧元数据（`runs.get` 只认后者）。 */
+function jobIdForRun(entries: readonly StoredEvent[], runId: string): string | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    const event = entry?.event;
+    if (!event || event.run_id !== runId || event.type !== 'run.started') continue;
+    return entry?.jobId;
+  }
+  return undefined;
+}
+
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const eventStore = useMemo(() => new EventStore(), []);
@@ -201,6 +213,23 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const hydrationGenerationRef = useRef(0);
 
   const client = useMemo(() => new GatewayClient(gatewayUrl), [gatewayUrl]);
+  /**
+   * 权限 / ask 的 session 解析：L1 LRU → L2 事件反查 → L3 canonical runs.get。
+   * L3 入参必须是 gateway job id（run.started 的帧元数据），core id 直接查会 404。
+   */
+  const sessionResolver = useMemo(
+    () =>
+      new SessionResolver({
+        sessionForRun: (runId) => sessionIdForRun(eventStore.getSnapshot().entries, runId),
+        jobForRun: (runId) => jobIdForRun(eventStore.getSnapshot().entries, runId),
+        lookupRun: (jobId) => client.getRunCanonical(jobId),
+        onResolved: (runId, sessionId) =>
+          dispatchInteraction({ type: 'resolve-run-session', runId, sessionId }),
+      }),
+    [client, eventStore],
+  );
+  // client / tenant 换代后，旧 resolver 的在途 L3 响应不得再回调 UI。
+  useEffect(() => () => sessionResolver.reset(), [sessionResolver]);
   const tenantIdRef = useRef<string | null>(null);
   tenantIdRef.current = tenantId;
   const tokenRef = useRef(token);
@@ -250,8 +279,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     // 旧 gateway（method_not_allowed / not_found）与其他失败都按空结果处理。
     const pending = pendingResult.status === 'fulfilled' ? pendingResult.value : [];
     const orphanedListed = orphanedResult.status === 'fulfilled' ? orphanedResult.value : [];
-    const sessionForRun = (runId: string) =>
-      sessionIdForRun(eventStore.getSnapshot().entries, runId);
+    const sessionForRun = (runId: string) => sessionResolver.resolveSync(runId);
 
     let runs: RunStatus[] = [];
     if (pending.some((item) => !item.session_id && !sessionForRun(item.run_id))) {
@@ -261,13 +289,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         runs = [];
       }
       if (!stillCurrent()) return;
+      // L1 批量预热（session + core→job），避免逐条 RPC。
+      sessionResolver.prewarm(runs);
     }
 
     const settled = new Set(settledRef.current.keys());
     const snapshot = buildHydrationSnapshot({
       pending,
       orphaned: orphanedListed,
-      runs,
       sessionForRun,
       settled,
       dismissed: readDismissedIds(browserStorage(), tenantAtStart ?? 'default'),
@@ -278,7 +307,20 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       snapshot,
       settled: new Set(settledRef.current.keys()),
     });
-  }, [client, eventStore]);
+
+    // 仍无归属的 run：异步走 L3（同 run 共享 promise），不阻塞 hydration。
+    const unresolvedRuns = new Set<string>();
+    for (const item of snapshot.permissions) {
+      if (!item.sessionId) unresolvedRuns.add(item.runId);
+    }
+    for (const item of snapshot.asks) {
+      if (!item.sessionId) unresolvedRuns.add(item.runId);
+    }
+    for (const item of snapshot.orphaned) {
+      if (!item.sessionId) unresolvedRuns.add(item.runId);
+    }
+    for (const runId of unresolvedRuns) void sessionResolver.lookup(runId);
+  }, [client, sessionResolver]);
 
   const reportConnectError = useCallback(
     (error: unknown) => {
@@ -332,6 +374,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       dispatchInteraction({ type: 'reset' });
       settledRef.current.clear();
       hydrationGenerationRef.current += 1;
+      sessionResolver.reset();
       setReconnectAttempt(0);
       return;
     }
@@ -349,7 +392,11 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       if (!request) return;
       // 权限不按时间过期；刷新/重连时靠事件重放 + interactions.list 重建。
       if (settledRef.current.has(request.requestId)) return;
-      dispatchInteraction({ type: 'permission-request', request });
+      const sessionId = request.sessionId ?? sessionResolver.resolveSync(request.runId);
+      const enriched = sessionId !== undefined ? { ...request, sessionId } : request;
+      dispatchInteraction({ type: 'permission-request', request: enriched });
+      // L1/L2 都没有：后台走 L3，解析到后由 reducer 回填同 run 的全部卡片。
+      if (!enriched.sessionId) void sessionResolver.lookup(request.runId);
     };
 
     /** response / expired 事件：无论是否本端应答，都收起对应卡片。 */
@@ -366,13 +413,14 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     };
 
     const addAsk = (event: RunEvent) => {
-      // ask 事件本身不带 session_id：从同一批事件里的 run.started 反查归属会话，
-      // 供跨 session 待处理条跳转；查不到时退化为运行详情。
-      const sessionId = sessionIdForRun(eventStore.getSnapshot().entries, event.run_id);
+      // ask 事件本身不带 session_id：先查 L1 / 从 run.started 反查（L2），
+      // 供跨 session 待处理条跳转；查不到时后台走 L3。
+      const sessionId = sessionResolver.resolveSync(event.run_id);
       const request = askFromEvent(event, sessionId);
       if (!request) return;
       if (settledRef.current.has(request.requestId)) return;
       dispatchInteraction({ type: 'ask-request', request });
+      if (!request.sessionId) void sessionResolver.lookup(request.runId);
     };
 
     /** 其他端应答（ask.user.answered）：静默收起对应卡片。 */
@@ -386,6 +434,13 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
 
     const offEvent = client.onEvent((event, meta) => {
       if (!eventStore.push(event, meta)) return;
+      if (event.type === 'run.started') {
+        const sessionId = (event.data as { session_id?: unknown }).session_id;
+        if (typeof sessionId === 'string' && sessionId.length > 0) {
+          // L1 写入 + core→job 映射；后续 permission / ask 无需再查 RPC。
+          sessionResolver.observe(event.run_id, sessionId, meta.jobId);
+        }
+      }
       if (event.type === 'tool.permission.request') addPermission(event);
       if (event.type === 'tool.permission.response') removeByEvent(event, false);
       if (event.type === 'tool.permission.expired') removeByEvent(event, true);
@@ -435,6 +490,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
         dispatchInteraction({ type: 'reset' });
         settledRef.current.clear();
         hydrationGenerationRef.current += 1;
+        sessionResolver.reset();
         setTenantEpoch((value) => value + 1);
       }
       setTokenError(null);
@@ -496,6 +552,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
     connectSeq,
     targetTenantId,
     eventStore,
+    sessionResolver,
     reportConnectError,
     recordSettled,
     toast,

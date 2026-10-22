@@ -191,6 +191,7 @@ export type InteractionAction =
   | { type: 'run-finished'; runId: string }
   | { type: 'hydrate'; snapshot: HydrationSnapshot; settled?: ReadonlySet<string> }
   | { type: 'dismiss-orphaned'; requestId: string }
+  | { type: 'resolve-run-session'; runId: string; sessionId: string }
   | { type: 'reset' };
 
 function removeById<T extends { requestId: string }>(
@@ -200,6 +201,24 @@ function removeById<T extends { requestId: string }>(
   return items.some((item) => item.requestId === requestId)
     ? items.filter((item) => item.requestId !== requestId)
     : items;
+}
+
+/**
+ * 给同一 run 的条目补 `sessionId`；已有值不覆盖。
+ * 全部无变化时返回原数组（调用方据此保留 state 引用）。
+ */
+function fillSessionForRun<T extends { runId: string; sessionId?: string }>(
+  items: readonly T[],
+  runId: string,
+  sessionId: string,
+): readonly T[] {
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.runId !== runId || item.sessionId !== undefined) return item;
+    changed = true;
+    return { ...item, sessionId };
+  });
+  return changed ? next : items;
 }
 
 function hasId(state: InteractionState, requestId: string): boolean {
@@ -244,6 +263,16 @@ export function interactionReducer(
     case 'dismiss-orphaned': {
       const orphaned = removeById(state.orphaned, action.requestId);
       return orphaned === state.orphaned ? state : { ...state, orphaned };
+    }
+    case 'resolve-run-session': {
+      if (!action.runId || !action.sessionId) return state;
+      const permissions = fillSessionForRun(state.permissions, action.runId, action.sessionId);
+      const asks = fillSessionForRun(state.asks, action.runId, action.sessionId);
+      const orphaned = fillSessionForRun(state.orphaned, action.runId, action.sessionId);
+      if (permissions === state.permissions && asks === state.asks && orphaned === state.orphaned) {
+        return state;
+      }
+      return { permissions, asks, orphaned };
     }
     case 'reset':
       return emptyInteractionState;

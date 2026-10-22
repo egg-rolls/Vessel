@@ -122,7 +122,7 @@ export const messages = {
   'permission.goTo': '前往处理',
   // 0.18：跨会话待处理收敛为一条 compact bar。
   'pending.bar.summary': '其他会话有 {count} 个待处理请求',
-  'pending.bar.unresolved': '无法定位所属会话，请求已失效',
+  'pending.bar.unresolved': '无法定位所属会话',
   // 0.17：AppShell 里其他会话 / 未归属请求的操作面
   'pending.inline.title': '当前会话的待处理请求',
   'pending.inline.desc': '这些请求没有匹配到时间线中的运行卡片，可直接在这里处理。',
@@ -151,7 +151,7 @@ export const messages = {
   // 0.18 H2：已失效（run 结束 / 进程重启）交互只提示 + 关闭，不可应答。
   'interaction.orphaned': '已失效（run 已结束 / 进程重启）',
   'interaction.orphaned.label': '共 {count} 个已失效',
-  'interaction.orphaned.bar': '有 {count} 个已失效请求',
+  'interaction.orphaned.bar': '请求已失效（共 {count} 个）',
   'interaction.orphaned.listLabel': '已失效的交互',
   'interaction.orphaned.metaTool': '工具 {tool}',
   'interaction.orphaned.metaAsk': '提问',

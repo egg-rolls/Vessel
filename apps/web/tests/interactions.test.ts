@@ -5,6 +5,7 @@ import {
   DISMISSED_KEY_PREFIX,
   type DismissedStorage,
   emptyInteractionState,
+  type InteractionState,
   interactionReducer,
   type ListedInteraction,
   readDismissedIds,
@@ -411,5 +412,60 @@ describe('interaction hydration', () => {
     expect(snapshot.orphaned).toHaveLength(0);
     // dismiss 按 tenant 隔离：另一个 tenant 仍会看到该提示。
     expect(readDismissedIds(storage, 'tenant-b').has('perm-1')).toBe(false);
+  });
+});
+
+describe('resolve-run-session', () => {
+  test('resolve-run-session fills every request of the run in one action', () => {
+    const state: InteractionState = {
+      permissions: [
+        { requestId: 'perm-1', tool: 'bash', input: {}, runId: 'run-1', requestedAt: 1_000 },
+        { requestId: 'perm-2', tool: 'bash', input: {}, runId: 'run-1', requestedAt: 2_000 },
+        {
+          requestId: 'perm-known',
+          tool: 'bash',
+          input: {},
+          runId: 'run-1',
+          sessionId: 'session-old',
+          requestedAt: 3_000,
+        },
+        { requestId: 'perm-other', tool: 'bash', input: {}, runId: 'run-2', requestedAt: 4_000 },
+      ],
+      asks: [
+        {
+          requestId: 'ask-1',
+          questions: [{ header: 'Q', question: 'Which?' }],
+          runId: 'run-1',
+          requestedAt: 5_000,
+        },
+      ],
+      orphaned: [{ kind: 'permission', requestId: 'orphan-1', runId: 'run-1', createdAt: 6_000 }],
+    };
+
+    const next = interactionReducer(state, {
+      type: 'resolve-run-session',
+      runId: 'run-1',
+      sessionId: 'session-1',
+    });
+
+    // 同 run 的权限 / ask / orphaned 一次 action 全部补齐。
+    expect(next.permissions.map((item) => [item.requestId, item.sessionId])).toEqual([
+      ['perm-1', 'session-1'],
+      ['perm-2', 'session-1'],
+      ['perm-known', 'session-old'],
+      ['perm-other', undefined],
+    ]);
+    expect(next.asks[0]?.sessionId).toBe('session-1');
+    expect(next.orphaned[0]?.sessionId).toBe('session-1');
+    // 另一 run 不受影响。
+    expect(next.permissions[3]).toBe(state.permissions[3]);
+
+    // 重复 dispatch：三个列表都无变化时返回同一个 state 引用。
+    const again = interactionReducer(next, {
+      type: 'resolve-run-session',
+      runId: 'run-1',
+      sessionId: 'session-1',
+    });
+    expect(again).toBe(next);
   });
 });
