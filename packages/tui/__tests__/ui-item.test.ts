@@ -331,6 +331,42 @@ describe('projectMessagesToUiItems（resume）', () => {
     const items = projectMessagesToUiItems(messages, { showReasoning: false });
     expect(items.map((item) => item.kind)).toEqual(['user', 'assistant', 'tool']);
   });
+
+  it('resume 回退把 Error: 前缀的工具结果显示为 failed', () => {
+    const items = projectMessagesToUiItems([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'c1', function: { name: 'read', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'c1', name: 'read', content: 'Error: ENOENT' },
+    ]);
+    const tool = items.find((item) => item.kind === 'tool');
+    if (tool?.kind !== 'tool') throw new Error('expected tool');
+    expect(tool.view.status).toBe('failed');
+    expect(tool.view.result).toBe('Error: ENOENT');
+  });
+
+  it('正常结果被前缀判断误标 failed；孤立 tool 消息漏判', () => {
+    const paired = projectMessagesToUiItems([
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'c1', function: { name: 'read', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'c1', name: 'read', content: 'ok' },
+    ]);
+    const pairedTool = paired.find((item) => item.kind === 'tool');
+    if (pairedTool?.kind !== 'tool') throw new Error('expected tool');
+    expect(pairedTool.view.status).toBe('completed');
+
+    const orphan = projectMessagesToUiItems([
+      { role: 'tool', tool_call_id: 'c2', name: 'read', content: 'Error: ENOENT' },
+    ]);
+    const orphanTool = orphan.find((item) => item.kind === 'tool');
+    if (orphanTool?.kind !== 'tool') throw new Error('expected tool');
+    expect(orphanTool.view.status).toBe('failed');
+  });
 });
 
 describe('projectUiItems / fullTextOfItem', () => {

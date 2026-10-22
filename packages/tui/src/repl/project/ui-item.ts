@@ -244,6 +244,11 @@ function makeToolView(
   return withTruncation({ ...view, id, name, args, status });
 }
 
+/** 回退视图用 core 的固定失败前缀判断 */
+function toolStatusFromContent(content: string | undefined): ToolCallStatus {
+  return content?.startsWith('Error: ') ? 'failed' : 'completed';
+}
+
 function updateItem(
   state: UiProjectionState,
   id: string,
@@ -912,7 +917,7 @@ export function projectMessagesToUiItems(
         message.tool_call_id ?? next('tool'),
         undefined,
         safe(message.content),
-        'completed',
+        toolStatusFromContent(message.content),
       );
       items.push({ kind: 'tool', id: next('tool'), view });
       continue;
@@ -950,7 +955,7 @@ export function projectMessagesToUiItems(
         call.id ?? next('tool'),
         parseToolArguments(call.function?.arguments),
         result !== undefined ? safe(result.content) : undefined,
-        'completed',
+        toolStatusFromContent(result?.content),
       );
       items.push({ kind: 'tool', id: next('tool'), view });
     }
