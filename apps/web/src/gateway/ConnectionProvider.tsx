@@ -14,6 +14,7 @@ import { useToast } from '../components/ToastProvider';
 import { EventStore, type EventStoreSnapshot } from '../state/event-store';
 import type { StoredEvent } from '../state/events';
 import { type ConnectionState, GatewayClient, GatewayHttpError } from './client';
+import { resolveConnectionSeed } from './dev-auth';
 import {
   askFromEvent,
   enqueueInteraction,
@@ -60,6 +61,8 @@ export interface ConnectionContextValue {
   gatewayUrl: string;
   token: string;
   hasToken: boolean;
+  /** 是否由开发代理注入鉴权（占位 token，不持久化、不展示）。 */
+  devProxyAuth: boolean;
   gatewayError: string | null;
   tokenError: string | null;
   lastError: string | null;
@@ -124,7 +127,15 @@ function initialGatewayUrl(): { url: string; error: string | null } {
 }
 
 const initialTokenValue = consumeInitialToken();
-const initialGateway = initialGatewayUrl();
+const initialSeed = resolveConnectionSeed({
+  dev: import.meta.env.DEV === true,
+  proxyFlag: import.meta.env.VITE_DEV_PROXY_AUTH as string | undefined,
+  explicitToken: initialTokenValue,
+  storedUrl: localStorage.getItem(GATEWAY_URL_KEY),
+  envUrl: import.meta.env.VITE_GATEWAY_URL as string | undefined,
+});
+// 代理模式强制同源：不读 VITE_GATEWAY_URL，也不走 localStorage。
+const initialGateway = initialSeed.devProxyAuth ? { url: '', error: null } : initialGatewayUrl();
 
 /** 从已接收事件里反查 run 归属的 session（ask 事件不带 session_id）。 */
 function sessionIdForRun(entries: readonly StoredEvent[], runId: string): string | undefined {
@@ -140,7 +151,9 @@ function sessionIdForRun(entries: readonly StoredEvent[], runId: string): string
 export function ConnectionProvider({ children }: { children: ReactNode }) {
   const toast = useToast();
   const eventStore = useMemo(() => new EventStore(), []);
-  const [token, setToken] = useState(initialTokenValue);
+  const [token, setToken] = useState(initialSeed.token);
+  // 进程内常量：初始化后不再切换模式（切模式需要刷新页面）。
+  const { devProxyAuth } = initialSeed;
   const [targetTenantId, setTargetTenantId] = useState<string | undefined>();
   const [gatewayUrl, setGatewayUrl] = useState(initialGateway.url);
   const [gatewayError, setGatewayError] = useState<string | null>(initialGateway.error);
@@ -500,6 +513,7 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
       gatewayUrl,
       token,
       hasToken: token.trim().length > 0,
+      devProxyAuth,
       gatewayError,
       tokenError,
       lastError,

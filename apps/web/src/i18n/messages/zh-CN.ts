@@ -76,6 +76,8 @@ export const messages = {
   'settings.tab.capabilities': '能力清单',
   'settings.tab.tenants': '租户',
   'settings.tab.appearance': '外观',
+  'settings.connection.devProxyNotice':
+    '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 
   // Appearance
   'appearance.theme.title': '主题',

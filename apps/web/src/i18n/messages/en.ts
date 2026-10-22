@@ -77,6 +77,8 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.tab.capabilities': 'Capabilities',
   'settings.tab.tenants': 'Tenants',
   'settings.tab.appearance': 'Appearance',
+  'settings.connection.devProxyNotice':
+    'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 
   // Appearance
   'appearance.theme.title': 'Theme',
