@@ -3,9 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { MemoryEventStream } from '../../packages/core/src/index';
+import { startTestGateway } from '../../packages/serve/__tests__/helpers';
 import type { DurableCheckpointLike } from '../../packages/serve/src/durable';
 import type { Gateway } from '../../packages/serve/src/gateway';
-import { startTestGateway } from '../../packages/serve/__tests__/helpers';
 import { type BootstrapResult, bootstrap } from '../bootstrap';
 
 const cleanups: Array<() => void> = [];
