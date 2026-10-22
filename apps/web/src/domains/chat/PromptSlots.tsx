@@ -191,8 +191,9 @@ export function AskPrompt({
   );
   const currentAnswered = question
     ? current.selected.length > 0 || current.custom.trim().length > 0
-    : true;
-  const allAnswered = answers.every((answer) => answer.answer.length > 0);
+    : false;
+  const allAnswered =
+    request.questions.length > 0 && answers.every((answer) => answer.answer.length > 0);
   const isLast = questionIndex >= request.questions.length - 1;
   const remainingQuestions = Math.max(0, request.questions.length - questionIndex - 1);
 
@@ -238,7 +239,7 @@ export function AskPrompt({
       onStop={onStop}
       stopping={stopping}
       connected={connected}
-      queue={queue}
+      queue={queue?.slice(questionIndex, questionIndex + 3)}
     >
       <AskQuestionCard
         request={request}

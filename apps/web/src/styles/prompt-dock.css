@@ -10,6 +10,11 @@
   overscroll-behavior: contain;
 }
 
+/* 程序化聚焦卡容器时必须可见；槽位自身 box-shadow 会覆盖全局 focus ring。 */
+.prompt-slot:focus {
+  box-shadow: var(--shadow), var(--focus-ring);
+}
+
 /* 单层表面：卡牌不再自带第二层边框 / 内距 / 背景。 */
 .prompt-slot .permission-card,
 .prompt-slot .ask-card {

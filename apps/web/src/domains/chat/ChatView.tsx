@@ -442,9 +442,9 @@ export function ChatView({
     [sessionPermissions, sessionAsks],
   );
   const pendingItem = pendingItems[0] ?? null;
-  // 队列摘要：活动卡之后的至多 3 项（权限 · tool / 提问 · 第 n 题）。
+  // 队列摘要：活动项之后的标签；ask 内部按当前 questionIndex 再偏移（PromptSlots）。
   // 不 memo：locale 变化时标签必须跟着重算。
-  const queueChips = pendingItems.slice(1, 4).map((item) =>
+  const queueChips = pendingItems.slice(1, 13).map((item) =>
     item.kind === 'permission'
       ? {
           key: item.key,
@@ -1117,7 +1117,10 @@ export function ChatView({
           <AskPrompt
             key={pendingItem.request.requestId}
             request={pendingItem.request}
-            otherPending={Math.max(0, pendingItems.length - pendingItem.request.questions.length)}
+            otherPending={Math.max(
+              0,
+              pendingItems.length - Math.max(1, pendingItem.request.questions.length),
+            )}
             busy={responding.has(pendingItem.request.requestId)}
             connected={connected}
             onStop={connected && runningGroup ? () => void handleCancel(runningGroup) : undefined}
