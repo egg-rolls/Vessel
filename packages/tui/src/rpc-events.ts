@@ -1,28 +1,21 @@
 /**
- * 长任务完成追踪（0.5 / Q2：事件驱动）
+ * run 完成追踪（0.5 / Q2：事件驱动）
  * @module @vessel-agent/tui
  *
- * RPC 的 workflow.start|resume 与 runs.resume 只返回 id，不返回 Promise：
- * - 终态由 `run.completed|failed|cancelled` / `workflow.completed|failed|cancelled|interrupted`
- *   事件判定（A-3 §10.3 + A-4 §11.1）；
+ * RPC 的 runs.resume 只返回 id，不返回 Promise：
+ * - 终态由 `run.completed|failed|cancelled` 事件判定（A-3 §10.3）；
  * - `runs.get` 轮询作为兜底。
  *
- * 事件 payload 的最小字段：`run_id`（或 `data.run_id`）/ `workflow_run_id`
- * （或 `data.workflow_run_id`）与事件类型；缺字段时忽略该条事件。
+ * 事件 payload 的最小字段：`run_id`（或 `data.run_id`）与事件类型；
+ * 缺字段时忽略该条事件。
  */
 
 import type { RpcClientLike, RpcEventNotificationLike } from './repl-context.js';
 
 export type RunCompletionStatus = 'completed' | 'failed' | 'cancelled';
-export type WorkflowCompletionStatus = 'completed' | 'failed' | 'cancelled' | 'interrupted';
 
 export interface RunCompletionOutcome {
   status: RunCompletionStatus;
-  error?: unknown;
-}
-
-export interface WorkflowCompletionOutcome {
-  status: WorkflowCompletionStatus;
   error?: unknown;
 }
 
@@ -45,13 +38,6 @@ const RUN_TERMINAL_EVENTS: Readonly<Record<string, RunCompletionStatus>> = {
   'run.cancelled': 'cancelled',
 };
 
-const WORKFLOW_TERMINAL_EVENTS: Readonly<Record<string, WorkflowCompletionStatus>> = {
-  'workflow.completed': 'completed',
-  'workflow.failed': 'failed',
-  'workflow.cancelled': 'cancelled',
-  'workflow.interrupted': 'interrupted',
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -59,7 +45,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 interface ParsedEvent {
   type: string;
   runId?: string;
-  workflowRunId?: string;
   data: Record<string, unknown>;
 }
 
@@ -75,14 +60,7 @@ function parseEvent(notification: RpcEventNotificationLike): ParsedEvent | null 
       : typeof data.run_id === 'string'
         ? data.run_id
         : undefined;
-  const workflowRunId =
-    typeof data.workflow_run_id === 'string'
-      ? data.workflow_run_id
-      : typeof event.run_id === 'string'
-        ? event.run_id
-        : undefined;
-
-  return { type: event.type, runId, workflowRunId, data };
+  return { type: event.type, runId, data };
 }
 
 function readError(data: Record<string, unknown>): unknown {
@@ -125,52 +103,6 @@ export function waitForRunCompletion(
     const event = parseEvent(notification);
     if (!event || event.runId !== runId) return;
     const status = RUN_TERMINAL_EVENTS[event.type];
-    if (!status) return;
-
-    const error = readError(event.data);
-    finish(error === undefined ? { status } : { status, error });
-  });
-
-  signal?.addEventListener('abort', onAbort, { once: true });
-  return { done, stop: () => finish({ status: 'cancelled' }) };
-}
-
-/**
- * 等待单个 workflow run 的终态。workflow_run_id 不匹配的事件会被忽略。
- * signal abort 或 stop() 时返回 `{ status: 'cancelled' }`。
- */
-export function waitForWorkflowCompletion(
-  rpc: RpcClientLike,
-  workflowRunId: string,
-  signal?: AbortSignal,
-): CompletionWaiter<WorkflowCompletionOutcome> {
-  let settled = false;
-  let unsubscribe: () => void = () => undefined;
-  let resolveDone: (outcome: WorkflowCompletionOutcome) => void = () => undefined;
-
-  const finish = (outcome: WorkflowCompletionOutcome): void => {
-    if (settled) return;
-    settled = true;
-    unsubscribe();
-    signal?.removeEventListener('abort', onAbort);
-    resolveDone(outcome);
-  };
-
-  const onAbort = (): void => finish({ status: 'cancelled' });
-
-  const done = new Promise<WorkflowCompletionOutcome>((resolve) => {
-    resolveDone = resolve;
-  });
-
-  if (signal?.aborted) {
-    finish({ status: 'cancelled' });
-    return { done, stop: () => finish({ status: 'cancelled' }) };
-  }
-
-  unsubscribe = rpc.subscribe((notification) => {
-    const event = parseEvent(notification);
-    if (!event || event.workflowRunId !== workflowRunId) return;
-    const status = WORKFLOW_TERMINAL_EVENTS[event.type];
     if (!status) return;
 
     const error = readError(event.data);

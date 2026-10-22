@@ -109,24 +109,7 @@ describe('0.3 durable / MCP 稳定错误码', () => {
   });
 });
 
-describe('0.4 workflow / feishu 稳定错误码', () => {
-  it('Error.code 与 message 两种载体都识别', () => {
-    const byCode = (code: string) => Object.assign(new Error('failed'), { code });
-    expect(classifyError(byCode('workflow_not_found')).category).toBe('not_found');
-    expect(classifyError(byCode('workflow_invalid')).category).toBe('invalid');
-    expect(classifyError(byCode('workflow_already_running')).category).toBe('conflict');
-    expect(classifyError(byCode('workflow_not_resumable')).category).toBe('not_resumable');
-    expect(classifyError(byCode('workflow_cancelled')).category).toBe('cancelled');
-    expect(classifyError(byCode('workflow_disabled')).category).toBe('disabled');
-
-    expect(classifyError(new Error('workflow_not_found: wf_1')).category).toBe('not_found');
-    expect(classifyError(new Error('workflow_invalid: bad template')).category).toBe('invalid');
-    expect(classifyError(new Error('workflow_already_running')).category).toBe('conflict');
-    expect(classifyError(new Error('workflow_not_resumable')).category).toBe('not_resumable');
-    expect(classifyError(new Error('workflow_cancelled')).category).toBe('cancelled');
-    expect(classifyError(new Error('workflow_disabled')).category).toBe('disabled');
-  });
-
+describe('0.4 feishu 稳定错误码', () => {
   it('feishu 稳定错误码', () => {
     expect(classifyError(new Error('channel_disabled')).category).toBe('disabled');
     expect(classifyError(new Error('channel_not_connected')).category).toBe('network');
@@ -134,18 +117,7 @@ describe('0.4 workflow / feishu 稳定错误码', () => {
   });
 
   it('hint 按错误码给出', () => {
-    expect(classifyError(new Error('workflow_invalid')).hint).toContain('workflow 定义无效');
     expect(classifyError(new Error('channel_auth_failed')).hint).toContain('app_id');
-    expect(classifyError(new Error('workflow_cancelled')).hint).toBeUndefined();
-  });
-
-  it('formatClassifiedError 使用新标签', () => {
-    expect(formatClassifiedError(classifyError(new Error('workflow_invalid')))).toContain(
-      '[invalid]',
-    );
-    expect(formatClassifiedError(classifyError(new Error('workflow_cancelled')))).toBe(
-      '⏹ Cancelled.',
-    );
   });
 });
 
@@ -179,7 +151,5 @@ describe('0.5 RPC 冻结错误码', () => {
 
   it('既有 0.3 / 0.4 长码不被短码抢先', () => {
     expect(classifyError(byCode('run_not_found')).category).toBe('not_found');
-    expect(classifyError(byCode('workflow_not_found')).category).toBe('not_found');
-    expect(classifyError(byCode('workflow_already_running')).category).toBe('conflict');
   });
 });

@@ -39,7 +39,7 @@ const MANIFEST: CapabilityManifestLike = {
   ],
   tools: [{ name: 'bash', description: 'Run a shell command' }],
   plugins: [
-    { name: 'workflow', enabled: true },
+    { name: 'demo', enabled: true },
     { name: 'feishu', enabled: false },
   ],
 };

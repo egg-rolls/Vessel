@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { RpcClientLike, RpcEventNotificationLike } from '../src/repl-context.js';
-import {
-  pollRunCompletion,
-  waitForRunCompletion,
-  waitForWorkflowCompletion,
-} from '../src/rpc-events.js';
+import { pollRunCompletion, waitForRunCompletion } from '../src/rpc-events.js';
 
 interface FakeRpc {
   rpc: RpcClientLike;
@@ -87,46 +83,6 @@ describe('waitForRunCompletion', () => {
     controller.abort();
     await expect(waiter.done).resolves.toEqual({ status: 'cancelled' });
     expect(fake.subscriberCount()).toBe(0);
-  });
-});
-
-describe('waitForWorkflowCompletion', () => {
-  it('匹配 data.workflow_run_id 的终态', async () => {
-    const fake = makeFakeRpc();
-    const waiter = waitForWorkflowCompletion(fake.rpc, 'wf_1');
-
-    fake.emit({ type: 'workflow.step.completed', run_id: 'wf_2', data: {} });
-    fake.emit({
-      type: 'workflow.completed',
-      run_id: 'wf_1',
-      data: { workflow_run_id: 'wf_1' },
-    });
-
-    await expect(waiter.done).resolves.toEqual({ status: 'completed' });
-    expect(fake.subscriberCount()).toBe(0);
-  });
-
-  it('workflow.failed / workflow.interrupted 终态', async () => {
-    const failed = makeFakeRpc();
-    const failedWaiter = waitForWorkflowCompletion(failed.rpc, 'wf_1');
-    failed.emit({
-      type: 'workflow.failed',
-      run_id: 'wf_1',
-      data: { workflow_run_id: 'wf_1', error: 'step failed' },
-    });
-    await expect(failedWaiter.done).resolves.toEqual({
-      status: 'failed',
-      error: 'step failed',
-    });
-
-    const interrupted = makeFakeRpc();
-    const interruptedWaiter = waitForWorkflowCompletion(interrupted.rpc, 'wf_1');
-    interrupted.emit({
-      type: 'workflow.interrupted',
-      run_id: 'wf_1',
-      data: { workflow_run_id: 'wf_1' },
-    });
-    await expect(interruptedWaiter.done).resolves.toEqual({ status: 'interrupted' });
   });
 });
 

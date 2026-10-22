@@ -34,13 +34,7 @@ const STABLE_ERROR_CODES = [
   'mcp_disabled',
   'mcp_server_not_found',
   'mcp_server_disabled',
-  // 0.4：workflow / feishu 稳定错误码（DECISION-009 §5.1.4 / §5.3.4）
-  'workflow_not_found',
-  'workflow_invalid',
-  'workflow_already_running',
-  'workflow_not_resumable',
-  'workflow_cancelled',
-  'workflow_disabled',
+  // 0.4：feishu 稳定错误码（DECISION-009 §5.3.4）
   'channel_disabled',
   'channel_not_connected',
   'channel_auth_failed',
@@ -131,38 +125,6 @@ export function classifyError(error: unknown): ClassifiedError {
           category: 'disabled',
           message: msg,
           hint: t('error.hint.mcpDisabled'),
-        };
-      case 'workflow_not_found':
-        return {
-          category: 'not_found',
-          message: msg,
-          hint: t('error.hint.workflowNotFound'),
-        };
-      case 'workflow_invalid':
-        return {
-          category: 'invalid',
-          message: msg,
-          hint: t('error.hint.workflowInvalid'),
-        };
-      case 'workflow_already_running':
-        return {
-          category: 'conflict',
-          message: msg,
-          hint: t('error.hint.workflowAlreadyRunning'),
-        };
-      case 'workflow_not_resumable':
-        return {
-          category: 'not_resumable',
-          message: msg,
-          hint: t('error.hint.workflowNotResumable'),
-        };
-      case 'workflow_cancelled':
-        return { category: 'cancelled', message: msg };
-      case 'workflow_disabled':
-        return {
-          category: 'disabled',
-          message: msg,
-          hint: t('error.hint.workflowDisabled'),
         };
       case 'channel_disabled':
         return {

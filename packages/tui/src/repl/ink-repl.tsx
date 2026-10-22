@@ -23,7 +23,6 @@ import {
   renameSessionAction,
   sessionActionResult,
 } from '../commands/sessions-command.js';
-import { formatWorkflowOutcome } from '../commands/workflows-command.js';
 import { AskUserDialog } from '../components/AskUserDialog.js';
 import { BottomBar } from '../components/BottomBar.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
@@ -46,7 +45,7 @@ import { UiItemView } from '../components/UiItemView.js';
 import { UpdateBanner } from '../components/UpdateBanner.js';
 import { resolveLocale, setLocale, t } from '../i18n/index.js';
 import { formatPermissionQuestion } from '../renderer/tool-confirm.js';
-import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
+import type { DurableRunHandle, ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { glyph, theme } from '../theme.js';
 import { asTuiEvent } from '../types/events.js';
@@ -71,7 +70,7 @@ import {
 import { PermissionPendingController } from './permission-pending.js';
 import { fullTextOfItem, type UiItem } from './project/ui-item.js';
 import { loadResumeSessions } from './resume-picker.js';
-import { executeResume, executeTurn, executeWorkflow } from './run-turn.js';
+import { executeResume, executeTurn } from './run-turn.js';
 import { useRuntimeCounters } from './runtime-counters.js';
 import { buildStartupHeader } from './startup-header.js';
 import { buildStartupNotice, loadStartupFacts, loadStartupNotice } from './startup-notice.js';
@@ -263,28 +262,6 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
     [dispatch],
   );
 
-  /** /workflows run|resume 与视图动作共用的运行态接管。 */
-  const startWorkflowRun = useCallback(
-    async (handle: WorkflowRunHandle) => {
-      const abort = new AbortController();
-      streamFailureArchivedRef.current = false;
-      dispatch({ type: 'runStart', abort });
-      const outcome = await executeWorkflow(handle, abort);
-      // 失败且 StreamOutput 已归档错误时，不再追加 workflow summary（避免同屏两条）。
-      const suppress = outcome.status === 'failed' && streamFailureArchivedRef.current;
-      streamFailureArchivedRef.current = false;
-      if (!suppress) {
-        dispatch({
-          type: 'appendHistory',
-          line: formatWorkflowOutcome(handle.workflowRunId, outcome),
-          ...(outcome.status === 'failed' ? { tone: 'error' as const } : {}),
-        });
-      }
-      dispatch({ type: 'runEnd' });
-    },
-    [dispatch],
-  );
-
   // 预计算的命令列表（用于内联补全）；hidden alias（/sessions）不出现
   const allCommands = useMemo<CommandItem[]>(() => {
     return commands.visibleList().map((entry) => ({
@@ -359,7 +336,6 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
             ...(ctx.tenant ? { tenantId: ctx.tenant.tenant_id } : {}),
             mcpCount: facts.mcpServers?.length ?? 0,
             interruptedRuns: facts.interruptedRuns?.length ?? 0,
-            interruptedWorkflows: facts.interruptedWorkflows?.length ?? 0,
             feishuConnected: facts.feishu?.connected ?? false,
           },
         });
@@ -572,8 +548,6 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
           }
           // /runs resume：复用既有运行态（runStart/runEnd），Esc / Ctrl+C 走同一取消路径。
           if (result.resumeRun) await startResumeRun(result.resumeRun);
-          // /workflows run|resume：阻塞等待 done；Esc / Ctrl+C 走同一 abort -> cancel(id)。
-          if (result.workflowRun) await startWorkflowRun(result.workflowRun);
           return;
         }
 
@@ -671,7 +645,6 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       ui.queueEditIndex,
       dispatch,
       startResumeRun,
-      startWorkflowRun,
       clearScreen,
     ],
   );
@@ -717,8 +690,8 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
    * 视图动作：路由回产生该视图的命令（registry.dispatchViewAction）。
    *
    * - refresh 进入 loading 态；失败时进入 error 态（可 r 重试），不会卡在 loading。
-   * - resume/cancel 等动作返回 `resumeRun` / `workflowRun` 时，先关闭视图再接管运行态
-   *   （与 /runs resume、/workflows run|resume 同一条路径）。
+   * - resume/cancel 等动作返回 `resumeRun` 时，先关闭视图再接管运行态
+   *   （与 /runs resume 同一条路径）。
    * - 其它动作成功返回 output 时按 toast 追加一行，视图保持打开。
    */
   const handleViewAction = useCallback(
@@ -751,11 +724,10 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       if (result.nextState) dispatch({ type: 'patchRepl', patch: result.nextState });
 
       // 运行态接管：视图让位给正常 run 生命周期（先保留 "Resuming..." 状态行）。
-      if (result.resumeRun || result.workflowRun) {
+      if (result.resumeRun) {
         if (result.output) dispatch({ type: 'appendHistory', line: result.output });
         closeView();
-        if (result.resumeRun) await startResumeRun(result.resumeRun);
-        if (result.workflowRun) await startWorkflowRun(result.workflowRun);
+        await startResumeRun(result.resumeRun);
         return;
       }
 
@@ -776,7 +748,7 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
         dispatch({ type: 'appendHistory', line: result.output });
       }
     },
-    [ui.view, commands, ctx, state, dispatch, closeView, startResumeRun, startWorkflowRun],
+    [ui.view, commands, ctx, state, dispatch, closeView, startResumeRun],
   );
 
   /** 只取消当前 run（不退出进程） */
@@ -1678,11 +1650,6 @@ async function runSimpleMode(ctx: ReplContext): Promise<void> {
         } else if (outcome.status === 'failed') {
           console.error(formatClassifiedError(classifyError(outcome.error)));
         }
-      }
-      if (result.workflowRun) {
-        const abort = new AbortController();
-        const outcome = await executeWorkflow(result.workflowRun, abort);
-        console.log(formatWorkflowOutcome(result.workflowRun.workflowRunId, outcome));
       }
       if (!result.handled) {
         const name = trimmed.split(/\s+/)[0] ?? trimmed;

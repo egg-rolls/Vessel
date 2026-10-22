@@ -215,10 +215,6 @@ Do NOT use for trivial questions you can resolve yourself.`,
       required: ['questions'],
     },
     handler: async (args, ctx) => {
-      // workflow 运行没有 chat session，不能发布 ask.user.requested 等交互事件。
-      if (ctx.source === 'workflow') {
-        return 'Error: ask_user is not available in workflow runs; answer synchronously or remove the ask_user step.';
-      }
       const input = args as AskUserInput;
       const normalized = normalizeQuestions(input);
       if (typeof normalized === 'string') return normalized;
