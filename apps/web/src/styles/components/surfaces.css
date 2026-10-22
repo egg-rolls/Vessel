@@ -2,9 +2,10 @@
 
 .panel {
   padding: 16px 18px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
 }
 
 .panel-header {
@@ -80,7 +81,7 @@
 .data-table {
   width: 100%;
   border-collapse: collapse;
-  background: var(--surface);
+  background: var(--surface-raised);
   font-size: 12px;
 }
 
@@ -88,7 +89,6 @@
 .data-table td {
   height: 36px;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--line);
   text-align: left;
   vertical-align: middle;
   overflow-wrap: anywhere;
@@ -98,7 +98,7 @@
   position: sticky;
   top: 0;
   z-index: 1;
-  background: var(--surface);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 10px;
   font-weight: 500;
@@ -107,12 +107,8 @@
   color: var(--faint);
 }
 
-.data-table tr:last-child td {
-  border-bottom: 0;
-}
-
 .data-table tbody tr:hover {
-  background: var(--surface-sunken);
+  background: var(--hover-tint);
 }
 
 .data-table .row-active,
@@ -134,8 +130,8 @@
   height: 4px;
   margin-left: 8px;
   overflow: hidden;
-  border-radius: 999px;
-  background: var(--surface-deep);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
   vertical-align: middle;
 }
 
@@ -157,9 +153,16 @@
   flex-direction: column;
   gap: 6px;
   padding: 14px 16px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
+}
+
+.panel .card,
+.panel .panel {
+  background: var(--surface-sunken);
+  box-shadow: none;
 }
 
 .card-header {
@@ -182,11 +185,6 @@
   color: var(--muted);
 }
 
-.card-tools {
-  font-size: 10.5px;
-  overflow-wrap: anywhere;
-}
-
 .card .btn {
   align-self: flex-start;
   margin-top: 4px;
@@ -204,9 +202,10 @@
   flex-direction: column;
   gap: 2px;
   padding: 12px 14px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-md);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-1);
 }
 
 .stat-value {

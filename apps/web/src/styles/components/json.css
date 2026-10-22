@@ -2,9 +2,9 @@
 
 .json-view {
   margin-top: 6px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--surface-sunken);
 }
 
 .json-view summary {
@@ -19,7 +19,6 @@
   margin: 0;
   padding: 10px 12px;
   overflow: auto;
-  border-top: 1px solid var(--line);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.55;

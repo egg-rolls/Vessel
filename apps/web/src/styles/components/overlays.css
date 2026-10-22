@@ -25,10 +25,10 @@
   flex-direction: column;
   gap: 10px;
   padding: 22px;
-  border: 1px solid var(--line-strong);
-  border-radius: var(--radius-lg);
-  background: var(--surface);
-  box-shadow: var(--elev-3);
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-4);
   animation: rise-in 0.2s var(--ease);
   overflow: auto;
 }
@@ -60,8 +60,4 @@
 
 .confirm-dialog {
   width: min(480px, 100%);
-}
-
-.permission-modal {
-  width: min(620px, 100%);
 }

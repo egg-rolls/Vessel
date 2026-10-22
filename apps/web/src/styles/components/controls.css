@@ -6,22 +6,25 @@
   justify-content: center;
   gap: 6px;
   padding: 7px 13px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--muted);
+  background: var(--surface-sunken);
+  color: var(--ink);
   font-size: 12px;
   letter-spacing: 0.02em;
   white-space: nowrap;
   transition:
     color 0.16s var(--ease),
-    border-color 0.16s var(--ease),
     background 0.16s var(--ease);
 }
 
 .btn:hover:not(:disabled) {
-  color: var(--ink);
-  border-color: var(--line-strong);
+  background-image: linear-gradient(var(--hover-tint), var(--hover-tint));
+}
+
+.btn:active:not(:disabled) {
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
+  box-shadow: var(--elev-inset);
 }
 
 .btn:disabled {
@@ -30,37 +33,45 @@
 
 .btn.active {
   color: var(--accent-ink);
-  border-color: var(--accent-line);
   background: var(--accent-soft);
 }
 
 .btn-primary {
   color: var(--surface);
-  border-color: var(--accent);
   background: var(--accent);
 }
 
 .btn-primary:hover:not(:disabled) {
   color: var(--surface);
-  border-color: var(--accent-ink);
   background: var(--accent-ink);
+}
+
+.btn-primary:active:not(:disabled) {
+  background-color: var(--accent-ink);
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
 }
 
 .btn-danger {
   color: var(--surface);
-  border-color: var(--danger);
   background: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(var(--hover-tint), var(--hover-tint)), var(--danger);
+}
+
+.btn-danger:active:not(:disabled) {
+  background-color: var(--danger);
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
 }
 
 .btn-danger-ghost {
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
   background: transparent;
 }
 
 .btn-danger-ghost:hover:not(:disabled) {
   color: var(--danger);
-  border-color: var(--danger);
   background: var(--danger-soft);
 }
 
@@ -76,8 +87,8 @@
   justify-content: center;
   width: 30px;
   height: 30px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  border: 0;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--faint);
   font-size: 15px;
@@ -85,7 +96,7 @@
 }
 
 .icon-btn:hover:not(:disabled) {
-  border-color: var(--line);
+  background: var(--hover-tint);
   color: var(--ink);
 }
 
@@ -108,16 +119,16 @@
   align-self: center;
   margin: 8px auto 0;
   padding: 7px 14px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
   color: var(--muted);
   font-size: 11px;
 }
 
 .load-more:hover {
   color: var(--ink);
-  border-color: var(--line-strong);
+  background: linear-gradient(var(--hover-tint), var(--hover-tint)), var(--surface-sunken);
 }
 
 /* ── 表单 ─────────────────────────────────────────────── */
@@ -126,14 +137,13 @@
   width: 100%;
   min-width: 0;
   padding: 8px 11px;
-  border: 1px solid var(--line);
+  border: 0;
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-sunken);
   color: var(--ink);
   font-size: 12.5px;
-  transition:
-    border-color 0.16s var(--ease),
-    background 0.16s var(--ease);
+  transition: background 0.16s var(--ease);
+  box-shadow: var(--elev-inset);
 }
 
 .input::placeholder {
@@ -142,18 +152,18 @@
 
 .input:focus {
   outline: none;
-  border-color: var(--accent-line);
+  box-shadow: var(--focus-ring);
 }
 
 .input.invalid {
-  border-color: var(--danger);
   background: var(--danger-soft);
+  color: var(--danger);
 }
 
 .search-input {
   height: var(--control-h);
   padding-block: 0;
-  background: var(--bg);
+  background: var(--surface-sunken);
 }
 
 .field {
@@ -239,19 +249,11 @@
 .form-error {
   margin-top: 10px;
   padding: 8px 11px;
-  border: 1px solid color-mix(in srgb, var(--danger) 30%, var(--line));
+  border: 0;
   border-radius: var(--radius-sm);
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 12px;
-}
-
-.start-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) max-content;
-  gap: 10px;
-  align-items: end;
-  margin-top: 8px;
 }
 
 /* ── 状态 chip（字形 + 文本 + 颜色） ─────────────────── */
@@ -261,8 +263,9 @@
   align-items: center;
   gap: 5px;
   padding: 1px 8px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.03em;
@@ -279,26 +282,27 @@
 }
 
 .status-chip.tone-ok {
+  background: var(--ok-soft);
   color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 30%, var(--line));
 }
 
 .status-chip.tone-info {
+  background: var(--info-soft);
   color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, var(--line));
 }
 
 .status-chip.tone-warn {
+  background: var(--warn-soft);
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
 }
 
 .status-chip.tone-danger {
+  background: var(--danger-soft);
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 30%, var(--line));
 }
 
 .status-chip.tone-muted {
+  background: var(--surface-sunken);
   color: var(--faint);
 }
 
@@ -306,8 +310,9 @@
   display: inline-block;
   margin-left: 6px;
   padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--muted);
@@ -316,8 +321,9 @@
 .perm-badge {
   display: inline-block;
   padding: 0 7px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 10.5px;
   color: var(--faint);
@@ -325,23 +331,23 @@
 }
 
 .perm-read {
+  background: var(--info-soft);
   color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 30%, var(--line));
 }
 
 .perm-write {
+  background: var(--warn-soft);
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
 }
 
 .perm-admin {
+  background: var(--danger-soft);
   color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 30%, var(--line));
 }
 
 .perm-warn {
+  background: var(--warn-soft);
   color: var(--warn);
-  border-color: color-mix(in srgb, var(--warn) 30%, var(--line));
 }
 
 /* ── Segmented / 过滤 ─────────────────────────────────── */
@@ -352,16 +358,16 @@
   max-width: 100%;
   margin-top: 14px;
   padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface);
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
   overflow-x: auto;
 }
 
 .segment {
   padding: 6px 12px;
   border: 0;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--muted);
   font-size: 12px;
@@ -370,6 +376,7 @@
 
 .segment:hover {
   color: var(--ink);
+  background: var(--hover-tint);
 }
 
 .segment.active {
@@ -398,8 +405,8 @@
 
 .filter-chip {
   padding: 4px 10px;
-  border: 1px solid transparent;
-  border-radius: 999px;
+  border: 0;
+  border-radius: var(--radius-pill);
   background: transparent;
   color: var(--faint);
   font-size: 11px;
@@ -408,11 +415,10 @@
 
 .filter-chip:hover {
   color: var(--ink);
-  border-color: var(--line);
+  background: var(--hover-tint);
 }
 
 .filter-chip.active {
   color: var(--accent-ink);
-  border-color: var(--accent-line);
   background: var(--accent-soft);
 }
