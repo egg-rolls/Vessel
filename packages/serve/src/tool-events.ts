@@ -17,22 +17,26 @@ export const TOOL_EVENT_PAYLOAD_LIMIT = 8 * 1024;
 export const TRUNCATED_MARKER = '... [truncated]';
 
 const encoder = new TextEncoder();
+const decoder = new TextDecoder();
 
-function utf8Length(value: string): number {
-  return encoder.encode(value).length;
-}
+/** 截断标记的 UTF-8 字节数（模块级预算，不用每次重新编码） */
+const TRUNCATED_MARKER_BYTES = encoder.encode(TRUNCATED_MARKER).length;
 
-/** 按 UTF-8 字节截断，返回不超过 maxBytes 的前缀 */
-function truncateUtf8(value: string, maxBytes: number): string {
+/**
+ * 按 UTF-8 字节截断，返回不超过 maxBytes 的前缀。
+ * 只对已编码的字节做一次游标回退：从 `end = maxBytes` 起，遇到续字节
+ * （`10xxxxxx`）就左移，直到落在字符起始边界，再解码 `[0, end)`。
+ * 不做逐字符 slice + 重新 encode 的循环。
+ */
+function truncateUtf8(bytes: Uint8Array, maxBytes: number): string {
   if (maxBytes <= 0) return '';
-  if (utf8Length(value) <= maxBytes) return value;
-  let end = Math.min(value.length, maxBytes);
-  let result = value.slice(0, end);
-  while (end > 0 && utf8Length(result) > maxBytes) {
+  let end = Math.min(bytes.length, maxBytes);
+  while (end > 0) {
+    const byte = bytes[end];
+    if (byte === undefined || (byte & 0xc0) !== 0x80) break;
     end -= 1;
-    result = value.slice(0, end);
   }
-  return result;
+  return decoder.decode(bytes.subarray(0, end));
 }
 
 /** 序列化值；循环引用等异常退化为 String() */
@@ -60,19 +64,20 @@ export interface CappedValue {
  */
 export function capToolPayload(value: unknown): CappedValue {
   const serialized = serialize(value);
-  const bytes = utf8Length(serialized);
-  if (bytes <= TOOL_EVENT_PAYLOAD_LIMIT) {
-    return { value, truncated: false, bytes };
+  // 一次编码：长度判断与截断共用同一份字节
+  const encoded = encoder.encode(serialized);
+  if (encoded.length <= TOOL_EVENT_PAYLOAD_LIMIT) {
+    return { value, truncated: false, bytes: encoded.length };
   }
-  const budget = TOOL_EVENT_PAYLOAD_LIMIT - utf8Length(TRUNCATED_MARKER);
-  const preview = `${truncateUtf8(serialized, budget)}${TRUNCATED_MARKER}`;
+  const budget = TOOL_EVENT_PAYLOAD_LIMIT - TRUNCATED_MARKER_BYTES;
+  const preview = `${truncateUtf8(encoded, budget)}${TRUNCATED_MARKER}`;
   if (typeof value === 'string') {
-    return { value: preview, truncated: true, bytes };
+    return { value: preview, truncated: true, bytes: encoded.length };
   }
   return {
     value: { truncated: true, preview },
     truncated: true,
-    bytes,
+    bytes: encoded.length,
   };
 }
 

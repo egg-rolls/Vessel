@@ -13,6 +13,23 @@ function event(type: string, data: Record<string, unknown>): RunEvent {
 
 const byteLength = (value: string) => new TextEncoder().encode(value).length;
 
+const TRUNCATION_BUDGET = TOOL_EVENT_PAYLOAD_LIMIT - byteLength(TRUNCATED_MARKER);
+
+const fatalDecoder = new TextDecoder('utf-8', { fatal: true });
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** 断言截断结果：不超限、带 marker、无 U+FFFD、marker 前缀是完整字符 */
+function expectCleanTruncation(value: string): string {
+  expect(value.endsWith(TRUNCATED_MARKER)).toBe(true);
+  expect(byteLength(value)).toBeLessThanOrEqual(TOOL_EVENT_PAYLOAD_LIMIT);
+  expect(value.includes('�')).toBe(false);
+  expect(LONE_SURROGATE.test(value)).toBe(false);
+  const prefix = value.slice(0, value.length - TRUNCATED_MARKER.length);
+  expect(() => fatalDecoder.decode(new TextEncoder().encode(prefix))).not.toThrow();
+  return prefix;
+}
+
 describe('capToolPayload', () => {
   it('keeps small values untouched and preserves type', () => {
     const args = { command: 'ls', timeout: 1000 };
@@ -52,6 +69,37 @@ describe('capToolPayload', () => {
     const result = capToolPayload(long);
     expect(result.truncated).toBe(true);
     expect(byteLength(result.value as string)).toBeLessThanOrEqual(TOOL_EVENT_PAYLOAD_LIMIT);
+  });
+
+  it('cuts a CJK character straddling the budget on a UTF-8 boundary', () => {
+    const long = `${'a'.repeat(TRUNCATION_BUDGET - 1)}汉${'b'.repeat(100)}`;
+    const result = capToolPayload(long);
+    expect(result.truncated).toBe(true);
+    const prefix = expectCleanTruncation(result.value as string);
+    // 3 字节字符的起始位置正好在预算边界上，回退 1 字节后整字符被丢弃
+    expect(prefix).toBe('a'.repeat(TRUNCATION_BUDGET - 1));
+  });
+
+  it('cuts a 4-byte emoji straddling the budget without lone surrogates', () => {
+    for (const lead of [0, 1, 2]) {
+      const long = `${'a'.repeat(TRUNCATION_BUDGET - 1 - lead)}😀${'b'.repeat(100)}`;
+      const result = capToolPayload(long);
+      expect(result.truncated).toBe(true);
+      const prefix = expectCleanTruncation(result.value as string);
+      expect(prefix).toBe('a'.repeat(TRUNCATION_BUDGET - 1 - lead));
+    }
+  });
+
+  it('truncates ~1MB of CJK well under the generous bound', () => {
+    const long = '汉'.repeat(350_000);
+    expect(byteLength(long)).toBeGreaterThan(1_000_000);
+    let best = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < 5; i += 1) {
+      const start = performance.now();
+      capToolPayload(long);
+      best = Math.min(best, performance.now() - start);
+    }
+    expect(best).toBeLessThan(100);
   });
 });
 
