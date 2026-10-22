@@ -37,6 +37,7 @@ import { useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
 import { Composer } from './Composer';
+import { OrphanedNotices } from './OrphanedNotices';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
@@ -93,7 +94,9 @@ export function ChatView({
     features,
     permissions,
     asks,
+    orphaned,
     hydrateInteractions,
+    dismissOrphaned,
     responding,
     respondPermission,
     respondAsk,
@@ -444,6 +447,11 @@ export function ChatView({
   const sessionAsks = useMemo(
     () => pendingForSession(asks, selectedId, sessionRunIds),
     [asks, selectedId, sessionRunIds],
+  );
+  // 失效交互不参与串行槽位 / 队列 / 待处理计数，只在 Composer 上方提示。
+  const sessionOrphans = useMemo(
+    () => pendingForSession(orphaned, selectedId, sessionRunIds),
+    [orphaned, selectedId, sessionRunIds],
   );
   // 串行处理：队列按 requestedAt 排序，ask 按问题拆项；槽位只渲染第一项。
   const pendingItems = useMemo(
@@ -1107,6 +1115,8 @@ export function ChatView({
             </button>
           )}
         </div>
+
+        <OrphanedNotices items={sessionOrphans} onDismiss={dismissOrphaned} />
 
         {pendingItem && pendingItem.kind === 'permission' ? (
           <PermissionPrompt

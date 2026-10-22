@@ -102,3 +102,47 @@
     min-height: var(--touch-target);
   }
 }
+
+/* ── 已失效交互（0.18 H2） ────────────────────────────────
+   非阻塞提示：不进 Composer 串行槽位、不计入待处理数量；
+   只占一条轻量行，宽度跟随 dock。 */
+.orphan-notices {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  width: 100%;
+  max-width: var(--dock-width);
+  margin: 0 auto var(--space-2);
+}
+
+.orphan-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+.orphan-notice-text {
+  color: var(--faint);
+}
+
+.orphan-notice-meta {
+  font-size: var(--text-xs);
+  color: var(--faint);
+}
+
+.orphan-notice-close {
+  margin-left: auto;
+}
+
+@media (pointer: coarse) {
+  .orphan-notice-close {
+    min-height: var(--touch-target);
+  }
+}

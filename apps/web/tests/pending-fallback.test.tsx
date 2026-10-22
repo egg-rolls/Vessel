@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import { PendingRequestsPanel } from '../src/components/PendingRequests';
 import { pendingForSession } from '../src/domains/chat/pending-permissions';
+import type { OrphanedInteraction } from '../src/gateway/interaction-hydration';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -24,6 +25,18 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
     runId: 'run-1',
     sessionId: 'session-1',
     requestedAt: 2_000,
+    ...overrides,
+  };
+}
+
+function orphaned(overrides: Partial<OrphanedInteraction> = {}): OrphanedInteraction {
+  return {
+    kind: 'permission',
+    requestId: 'orphan-1',
+    runId: 'run-9',
+    sessionId: undefined,
+    tool: 'bash',
+    createdAt: 500,
     ...overrides,
   };
 }
@@ -170,6 +183,62 @@ describe('AppShell fallback panel (cross-session / no sessionId)', () => {
     expect(markup).toContain('提交');
     expect(markup).toContain('取消');
     expect(markup).not.toContain('permission-modal');
+  });
+
+  test('unattributed orphaned item is dismissible in the fallback panel', () => {
+    const dismissed: string[] = [];
+    const markup = renderToStaticMarkup(
+      <PendingRequestsPanel
+        id="pending-requests-panel"
+        title="其他会话 / 未归属的待处理请求"
+        showSession
+        orphaned={[orphaned()]}
+        responding={new Set()}
+        onDecidePermission={() => {}}
+        onRespondAsk={() => {}}
+        onDismissOrphaned={(requestId) => dismissed.push(requestId)}
+      />,
+    );
+
+    expect(markup).toContain('id="pending-requests-panel"');
+    expect(markup).toContain('orphan-notice');
+    expect(markup).toContain('已失效（run 已结束 / 进程重启）');
+    expect(markup).toContain('关闭');
+    // 只读：不复用可应答卡片，也没有 allow / deny / submit。
+    expect(markup).not.toContain('permission-card');
+    expect(markup).not.toContain('ask-card');
+    expect(markup).not.toContain('本次允许');
+    expect(markup).not.toContain('拒绝');
+    expect(markup).not.toContain('提交');
+    expect(dismissed).toEqual([]);
+  });
+
+  test('pending count excludes orphaned items', () => {
+    const markup = renderToStaticMarkup(
+      <PendingRequestsPanel
+        title="待处理"
+        permissions={[permission()]}
+        orphaned={[orphaned({ requestId: 'orphan-2' })]}
+        responding={new Set()}
+        onDecidePermission={() => {}}
+        onRespondAsk={() => {}}
+      />,
+    );
+    expect(markup).toContain('共 1 个');
+    expect(markup).not.toContain('共 2 个');
+    expect(markup).toContain('共 1 个已失效');
+  });
+
+  test('the bar renders for orphaned only and counts them separately', () => {
+    const markup = renderToStaticMarkup(
+      <PendingPermissionsBar requests={[]} orphaned={[orphaned()]} onOpen={() => {}} />,
+    );
+    expect(markup).toContain('其他会话有 1 个已失效');
+    expect(markup).not.toContain('待处理权限请求');
+    expect(markup).not.toContain('待处理提问');
+
+    const empty = renderToStaticMarkup(<PendingPermissionsBar requests={[]} onOpen={() => {}} />);
+    expect(empty).toBe('');
   });
 
   test('the bar exposes a non-modal panel toggle only when wired', () => {

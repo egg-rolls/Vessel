@@ -141,6 +141,13 @@ export const messages = {
   'pending.queue.permission': '权限 · {tool}',
   'pending.queue.ask': '提问 · 第 {index} 题',
   'chat.session.pending': '有 {count} 个待处理请求',
+  // 0.18 H2：已失效（run 结束 / 进程重启）交互只提示 + 关闭，不可应答。
+  'interaction.orphaned': '已失效（run 已结束 / 进程重启）',
+  'interaction.orphaned.label': '共 {count} 个已失效',
+  'interaction.orphaned.otherSessions': '其他会话有 {count} 个已失效',
+  'interaction.orphaned.listLabel': '已失效的交互',
+  'interaction.orphaned.metaTool': '工具 {tool}',
+  'interaction.orphaned.metaAsk': '提问',
   'chat.reasoning.summary': '思考过程',
   // 0.17：运行中但暂无可见内容的占位（不隐藏失败/终态）
   'chat.run.waiting': '正在思考…',

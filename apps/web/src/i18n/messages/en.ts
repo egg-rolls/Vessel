@@ -144,6 +144,13 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'pending.queue.permission': 'Permission · {tool}',
   'pending.queue.ask': 'Question · Q{index}',
   'chat.session.pending': '{count} pending request(s)',
+  // 0.18 H2: no-longer-valid interactions are notice + dismiss only, never answerable.
+  'interaction.orphaned': 'No longer valid (run ended / process restarted)',
+  'interaction.orphaned.label': '{count} no longer valid',
+  'interaction.orphaned.otherSessions': '{count} no longer valid in other sessions',
+  'interaction.orphaned.listLabel': 'No-longer-valid interactions',
+  'interaction.orphaned.metaTool': 'tool {tool}',
+  'interaction.orphaned.metaAsk': 'ask',
   'chat.reasoning.summary': 'Thinking',
   // 0.17: placeholder while a run is running but has no visible content
   'chat.run.waiting': 'Generating…',

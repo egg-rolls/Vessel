@@ -1,3 +1,4 @@
+import type { OrphanedInteraction } from '../gateway/interaction-hydration';
 import type { AskUserRequest, PermissionRequest } from '../gateway/types';
 import { t } from '../i18n';
 
@@ -13,6 +14,7 @@ function targetOf(request: { sessionId?: string; runId: string }): string {
 export function PendingPermissionsBar({
   requests,
   asks = [],
+  orphaned = [],
   onOpen,
   onOpenAsk,
   panelOpen = false,
@@ -20,6 +22,8 @@ export function PendingPermissionsBar({
 }: {
   requests: readonly PermissionRequest[];
   asks?: readonly AskUserRequest[];
+  /** 已失效交互：单独计数，不混入 pending 数量。 */
+  orphaned?: readonly OrphanedInteraction[];
   onOpen: (request: PermissionRequest) => void;
   onOpenAsk?: (request: AskUserRequest) => void;
   /** 非模态待处理面板是否展开（0.17）。 */
@@ -28,8 +32,10 @@ export function PendingPermissionsBar({
 }) {
   const first = requests[0];
   const firstAsk = asks[0];
-  if (!first && !firstAsk) return null;
-  const labels = [...new Set([...requests.map(targetOf), ...asks.map(targetOf)])]
+  if (!first && !firstAsk && orphaned.length === 0) return null;
+  const labels = [
+    ...new Set([...requests.map(targetOf), ...asks.map(targetOf), ...orphaned.map(targetOf)]),
+  ]
     .slice(0, 2)
     .map(shortId);
   const openAsk = onOpenAsk ?? (() => undefined);
@@ -39,6 +45,9 @@ export function PendingPermissionsBar({
         <span>{t('permission.otherSessions', { count: requests.length })}</span>
       )}
       {asks.length > 0 && <span>{t('ask.otherSessions', { count: asks.length })}</span>}
+      {orphaned.length > 0 && (
+        <span>{t('interaction.orphaned.otherSessions', { count: orphaned.length })}</span>
+      )}
       <span className="dim mono">{labels.join(', ')}</span>
       {first && (
         <button type="button" className="link-btn" onClick={() => onOpen(first)}>

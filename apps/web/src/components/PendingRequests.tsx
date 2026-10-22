@@ -1,5 +1,7 @@
 import { AskCard } from '../domains/chat/AskCard';
+import { OrphanedNoticeRow } from '../domains/chat/OrphanedNotices';
 import { PermissionCard } from '../domains/chat/PermissionCard';
+import type { OrphanedInteraction } from '../gateway/interaction-hydration';
 import type {
   AskUserAnswer,
   AskUserRequest,
@@ -43,17 +45,21 @@ export function PendingRequestsPanel({
   description,
   permissions = [],
   asks = [],
+  orphaned = [],
   responding,
   showSession = false,
   className = '',
   onDecidePermission,
   onRespondAsk,
+  onDismissOrphaned,
 }: {
   id?: string;
   title: string;
   description?: string;
   permissions?: readonly PermissionRequest[];
   asks?: readonly AskUserRequest[];
+  /** 已失效交互：只读提示 + 关闭，不复用可应答卡片。 */
+  orphaned?: readonly OrphanedInteraction[];
   /** 正在提交应答的 requestId：按钮据此禁用。 */
   responding: ReadonlySet<string>;
   /** 跨会话面板显示归属 session；当前会话内不需要。 */
@@ -65,18 +71,28 @@ export function PendingRequestsPanel({
     scope: PermissionScope,
   ) => void;
   onRespondAsk: (requestId: string, answers: AskUserAnswer[]) => void;
+  onDismissOrphaned?: (requestId: string) => void;
 }) {
-  if (permissions.length === 0 && asks.length === 0) return null;
+  if (permissions.length === 0 && asks.length === 0 && orphaned.length === 0) return null;
 
   const sortedPermissions = [...permissions].sort((a, b) => a.requestedAt - b.requestedAt);
   const sortedAsks = [...asks].sort((a, b) => a.requestedAt - b.requestedAt);
+  // orphaned 单独展示，不进入 pending 计数。
   const total = permissions.length + asks.length;
+  const dismissOrphaned = onDismissOrphaned ?? (() => undefined);
 
   return (
     <section id={id} className={`pending-requests ${className}`.trim()} aria-label={title}>
       <div className="pending-requests-head">
         <span className="pending-requests-title">{title}</span>
-        <span className="pending-requests-count dim">{t('pending.count', { count: total })}</span>
+        {total > 0 && (
+          <span className="pending-requests-count dim">{t('pending.count', { count: total })}</span>
+        )}
+        {orphaned.length > 0 && (
+          <span className="pending-requests-count dim">
+            {t('interaction.orphaned.label', { count: orphaned.length })}
+          </span>
+        )}
       </div>
       {description && <p className="pending-requests-desc dim">{description}</p>}
       <div className="pending-requests-list">
@@ -108,6 +124,14 @@ export function PendingRequestsPanel({
               onSubmit={(answers) => onRespondAsk(request.requestId, answers)}
               onCancel={() => onRespondAsk(request.requestId, [])}
             />
+          </div>
+        ))}
+        {orphaned.map((item) => (
+          <div className="pending-entry" key={`orphan-${item.requestId}`}>
+            {showSession && item.sessionId && (
+              <PendingCrumb runId={item.runId} sessionId={item.sessionId} />
+            )}
+            <OrphanedNoticeRow item={item} onDismiss={dismissOrphaned} />
           </div>
         ))}
       </div>

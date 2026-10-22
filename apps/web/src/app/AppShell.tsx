@@ -79,6 +79,8 @@ export function AppShell() {
     stale,
     permissions,
     asks,
+    orphaned,
+    dismissOrphaned,
     responding,
     respondPermission,
     respondAsk,
@@ -115,6 +117,10 @@ export function AppShell() {
     [permissions, route],
   );
   const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
+  const otherOrphans = useMemo(
+    () => pendingPermissionsOutsideView(orphaned, route),
+    [orphaned, route],
+  );
   const openPending = useCallback(
     (request: (typeof otherPending)[number]) => navigate(pendingPermissionTarget(request)),
     [navigate],
@@ -126,14 +132,16 @@ export function AppShell() {
   // 没有 sessionId 的请求无法通过跳转落到任何会话，面板直接展开。
   // 其他会话的请求保留顶部条，用户可展开非模态面板操作，不打断当前会话。
   const pendingNeedsDirectAction =
-    otherPending.some((item) => !item.sessionId) || otherAsks.some((item) => !item.sessionId);
+    otherPending.some((item) => !item.sessionId) ||
+    otherAsks.some((item) => !item.sessionId) ||
+    otherOrphans.some((item) => !item.sessionId);
   useEffect(() => {
-    if (otherPending.length === 0 && otherAsks.length === 0) {
+    if (otherPending.length === 0 && otherAsks.length === 0 && otherOrphans.length === 0) {
       setPendingPanelOpen(false);
       return;
     }
     if (pendingNeedsDirectAction) setPendingPanelOpen(true);
-  }, [otherPending.length, otherAsks.length, pendingNeedsDirectAction]);
+  }, [otherPending.length, otherAsks.length, otherOrphans.length, pendingNeedsDirectAction]);
   const viewportWidth = useViewportWidth();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
   const navDrawerRef = useDrawerA11y({
@@ -500,10 +508,11 @@ export function AppShell() {
           </div>
         )}
 
-        {(otherPending.length > 0 || otherAsks.length > 0) && (
+        {(otherPending.length > 0 || otherAsks.length > 0 || otherOrphans.length > 0) && (
           <PendingPermissionsBar
             requests={otherPending}
             asks={otherAsks}
+            orphaned={otherOrphans}
             onOpen={openPending}
             onOpenAsk={openAsk}
             panelOpen={pendingPanelOpen}
@@ -511,24 +520,27 @@ export function AppShell() {
           />
         )}
 
-        {pendingPanelOpen && (otherPending.length > 0 || otherAsks.length > 0) && (
-          <PendingRequestsPanel
-            id="pending-requests-panel"
-            className="pending-panel"
-            title={t('pending.panel.title')}
-            description={t('pending.panel.desc')}
-            permissions={otherPending}
-            asks={otherAsks}
-            responding={responding}
-            showSession
-            onDecidePermission={(requestId, decision, scope) => {
-              void respondPermission(requestId, decision, scope);
-            }}
-            onRespondAsk={(requestId, answers) => {
-              void respondAsk(requestId, answers);
-            }}
-          />
-        )}
+        {pendingPanelOpen &&
+          (otherPending.length > 0 || otherAsks.length > 0 || otherOrphans.length > 0) && (
+            <PendingRequestsPanel
+              id="pending-requests-panel"
+              className="pending-panel"
+              title={t('pending.panel.title')}
+              description={t('pending.panel.desc')}
+              permissions={otherPending}
+              asks={otherAsks}
+              orphaned={otherOrphans}
+              responding={responding}
+              showSession
+              onDecidePermission={(requestId, decision, scope) => {
+                void respondPermission(requestId, decision, scope);
+              }}
+              onRespondAsk={(requestId, answers) => {
+                void respondAsk(requestId, answers);
+              }}
+              onDismissOrphaned={dismissOrphaned}
+            />
+          )}
 
         <div className="shell-body">
           <DomainNav
