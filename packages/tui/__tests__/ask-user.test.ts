@@ -90,6 +90,32 @@ describe('createAskUserTool（事件流交互）', () => {
     expect(captured?.questions[0]).toMatchObject({ header: '格式', question: '用哪种模块格式？' });
   });
 
+  it('ask request drops session_id', async () => {
+    const events = new MemoryEventStream();
+    let captured: { requestId: string; session_id?: string } | undefined;
+
+    events.subscribe((event) => {
+      if (event.type !== 'ask.user.requested') return;
+      captured = event.data as unknown as typeof captured;
+      events.publish({
+        type: 'ask.user.answered',
+        run_id: event.run_id,
+        data: { requestId: captured?.requestId ?? '', answers: sampleAnswers(['ESM', '生产']) },
+        ts: Date.now(),
+      });
+    });
+
+    const tool = createAskUserTool();
+    await tool.handler(sampleQuestions(), {
+      run_id: 'r1',
+      session_id: 'session-9',
+      messages: [],
+      events,
+    });
+
+    expect(captured?.session_id).toBe('session-9');
+  });
+
   it('handler normalizes missing header with a fallback', async () => {
     const events = new MemoryEventStream();
     events.subscribe((event) => {

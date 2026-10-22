@@ -219,9 +219,11 @@ steps:
       },
     });
 
+    let permissionData: Record<string, unknown> | undefined;
     harness.events.subscribe((event) => {
       if (event.type !== 'tool.permission.request') return;
       const data = dataOf(event);
+      permissionData = data;
       harness.events.publish({
         type: 'tool.permission.response',
         run_id: event.run_id,
@@ -233,5 +235,7 @@ steps:
     const outcome = await harness.run();
     expect(outcome.status).toBe('completed');
     expect(handlerCalls).toBe(1);
+    // workflow 没有真实 session，沿用既有语义把 session_id 填成 workflow_run_id。
+    expect(permissionData?.session_id).toBe(outcome.workflow_run_id);
   });
 });
