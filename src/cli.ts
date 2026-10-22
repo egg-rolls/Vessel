@@ -69,7 +69,7 @@ import {
 } from './gateway-command';
 import { createGatewayConfigSet } from './gateway-config-control';
 import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
-import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
+import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
@@ -133,11 +133,6 @@ function printHelp(): void {
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
   ];
   const capability: Array<[string, string]> = [
-    ['vessel workflow list', t('help.cmd.workflowList')],
-    ['vessel workflow run <name>', t('help.cmd.workflowRun')],
-    ['vessel workflow show <id>', t('help.cmd.workflowShow')],
-    ['vessel workflow resume <id>', t('help.cmd.workflowResume')],
-    ['vessel workflow cancel <id>', t('help.cmd.workflowCancel')],
     ['vessel eval <suite>', t('help.cmd.eval')],
     ['vessel eval <suite> --json --out <path>', t('help.cmd.evalOut')],
     ['vessel --feishu', t('help.cmd.feishu')],
@@ -874,18 +869,11 @@ async function runWithConfig(result: BootstrapResult) {
     const controlPlane = buildGatewayControlPlane({
       config,
       ...(result.metrics ? { metrics: result.metrics } : {}),
-      ...(result.workflows ? { workflows: result.workflows } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
-      // 0.5.4 P2-1：非 default tenant 使用自己的 workflow / feishu 实例。
+      // 0.5.4 P2-1：非 default tenant 使用自己的 feishu 实例。
       // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
       ...(tenantFactory
         ? {
-            workflowsFor: (tenantId: string) => {
-              const bundle = tenantFactory?.bundleFor(tenantId);
-              return bundle?.workflows
-                ? buildWorkflowControlPlane(bundle.workflows, bundle.config)
-                : undefined;
-            },
             feishuFor: (tenantId: string) => {
               const feishu = tenantFactory?.bundleFor(tenantId)?.feishu;
               return feishu ? { status: () => feishu.status() } : undefined;
@@ -1015,12 +1003,10 @@ async function runWithConfig(result: BootstrapResult) {
     await foregroundGatewayLock?.release();
   };
 
-  // 0.4：有 workflow / 显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
+  // 0.4：显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
   // 纯 0.3 serve 保持原来的自然退出（0）。
-  if (shutdownSignal && (result.workflows || args.feishu)) {
-    await finish(async () => {
-      if (result.workflows) await result.interruptWorkflows();
-    });
+  if (shutdownSignal && args.feishu) {
+    await finish();
     process.exit(signalExitCode(shutdownSignal));
   }
   await finish();

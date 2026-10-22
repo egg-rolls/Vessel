@@ -403,7 +403,6 @@ describe('createTenantRuntimeFactory', () => {
 
   it('rolls back already-built tenants when a later tenant fails', async () => {
     const base = tmpDir();
-    const missingWorkflowDir = path.join(base, 'missing-workflows').replaceAll('\\', '/');
     const { configPath } = writeConfig(
       base,
       [
@@ -419,23 +418,37 @@ describe('createTenantRuntimeFactory', () => {
         '    work:',
         '      status: active',
         '      config:',
-        '        workflow:',
+        '        feishu:',
         '          enabled: true',
-        `          dir: ${missingWorkflowDir}`,
+        '          app_id: cli_work',
+        '          app_secret_env: VESSEL_TEST_WORK_SECRET',
       ].join('\n'),
     );
-    const loaded = await loadTenantRuntimeConfig('acme', { configPath });
-    expect(loaded).toBeDefined();
 
-    await expect(
-      createTenantRuntimeFactory({
-        config: loaded?.config as VesselConfig,
-        configPath,
-        dataDir: base,
-        useMock: true,
-        nodeId: 'node-test',
-      }),
-    ).rejects.toMatchObject({ code: 'workflow_invalid' });
+    const savedSecret = process.env.VESSEL_TEST_WORK_SECRET;
+    process.env.VESSEL_TEST_WORK_SECRET = 'secret_work';
+    try {
+      const loaded = await loadTenantRuntimeConfig('acme', { configPath });
+      expect(loaded).toBeDefined();
+
+      await expect(
+        createTenantRuntimeFactory({
+          config: loaded?.config as VesselConfig,
+          configPath,
+          dataDir: base,
+          useMock: true,
+          nodeId: 'node-test',
+          loadFeishuModule: async () => ({
+            createFeishuPlugin: () => {
+              throw new Error('later tenant build failed');
+            },
+          }),
+        }),
+      ).rejects.toThrow('later tenant build failed');
+    } finally {
+      if (savedSecret === undefined) delete process.env.VESSEL_TEST_WORK_SECRET;
+      else process.env.VESSEL_TEST_WORK_SECRET = savedSecret;
+    }
 
     // acme 已建成，但失败时必须释放它的锁。
     expect(fs.existsSync(path.join(base, 'tenants', 'acme', '.lock'))).toBe(false);

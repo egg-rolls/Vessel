@@ -36,7 +36,6 @@ describe('parseArgs - 默认与 REPL', () => {
       version: false,
       tools: false,
       update: null,
-      workflow: null,
       eval: null,
       feishu: false,
       tenantArg: null,
@@ -251,106 +250,9 @@ describe('parseArgs - 未知参数', () => {
     expect(err(['--bogus'])).toContain('Unknown argument: --bogus');
   });
 
-  it('workflow / eval 只允许出现在位置 0', () => {
-    expect(err(['--run', 'x', 'workflow'])).toContain('Unknown argument: workflow');
+  it('eval 只允许出现在位置 0；workflow 不再是子命令', () => {
     expect(err(['--run', 'x', 'eval'])).toContain('Unknown argument: eval');
-  });
-});
-
-describe('parseArgs - workflow', () => {
-  it('workflow run 解析 target 与重复 --input', () => {
-    const args = ok(['workflow', 'run', 'release-check', '--input', 'a=1', '--input', 'b=x=y']);
-    expect(args.workflow).toEqual({
-      kind: 'run',
-      target: 'release-check',
-      inputs: { a: '1', b: 'x=y' },
-    });
-  });
-
-  it('workflow run 重复 key 后者覆盖', () => {
-    const args = ok(['workflow', 'run', 'x', '--input', 'a=1', '--input', 'a=2']);
-    expect(args.workflow).toEqual({ kind: 'run', target: 'x', inputs: { a: '2' } });
-  });
-
-  it('workflow run 允许空 value', () => {
-    const args = ok(['workflow', 'run', 'x', '--input', 'a=']);
-    expect(args.workflow).toEqual({ kind: 'run', target: 'x', inputs: { a: '' } });
-  });
-
-  it('workflow run 缺 target / 非法 input 报错', () => {
-    expect(err(['workflow', 'run'])).toContain('Missing workflow definition');
-    expect(err(['workflow', 'run', 'x', '--input'])).toContain('Missing value for --input');
-    expect(err(['workflow', 'run', 'x', '--input', 'bad'])).toContain('expected key=value');
-    expect(err(['workflow', 'run', 'x', '--input', '=v'])).toContain('expected key=value');
-    expect(err(['workflow', 'run', 'x', '--input', '1a=v'])).toContain('Invalid --input key');
-  });
-
-  it('workflow run 未知 flag / 多余位置参数报错', () => {
-    expect(err(['workflow', 'run', 'x', '--bogus'])).toContain('Unknown argument: --bogus');
-    expect(err(['workflow', 'run', 'x', 'y'])).toContain('Unexpected argument: y');
-  });
-
-  it('workflow list 缺省无 status/limit', () => {
-    expect(ok(['workflow', 'list']).workflow).toEqual({ kind: 'list' });
-  });
-
-  it('workflow list 解析 status / limit', () => {
-    expect(ok(['workflow', 'list', '--status', 'completed', '--limit', '200']).workflow).toEqual({
-      kind: 'list',
-      status: 'completed',
-      limit: 200,
-    });
-    expect(ok(['workflow', 'list', '--limit', '1']).workflow).toEqual({
-      kind: 'list',
-      limit: 1,
-    });
-  });
-
-  it('workflow list 非法 status / limit 报错', () => {
-    expect(err(['workflow', 'list', '--status', 'unknown'])).toContain('Invalid workflow status');
-    expect(err(['workflow', 'list', '--limit', '0'])).toContain('--limit must be');
-    expect(err(['workflow', 'list', '--limit', '201'])).toContain('--limit must be');
-    expect(err(['workflow', 'list', '--limit', 'abc'])).toContain('Invalid value for --limit');
-    expect(err(['workflow', 'list', '--status'])).toContain('Missing value for --status');
-  });
-
-  it('workflow list 未知 flag / 位置参数报错', () => {
-    expect(err(['workflow', 'list', '--bogus'])).toContain('Unknown argument: --bogus');
-    expect(err(['workflow', 'list', 'extra'])).toContain('Unknown argument: extra');
-  });
-
-  it('workflow show / resume / cancel 解析 id', () => {
-    expect(ok(['workflow', 'show', 'wf_1']).workflow).toEqual({
-      kind: 'show',
-      workflowRunId: 'wf_1',
-    });
-    expect(ok(['workflow', 'resume', 'wf_2']).workflow).toEqual({
-      kind: 'resume',
-      workflowRunId: 'wf_2',
-    });
-    expect(ok(['workflow', 'cancel', 'wf_3']).workflow).toEqual({
-      kind: 'cancel',
-      workflowRunId: 'wf_3',
-    });
-  });
-
-  it('workflow show / resume / cancel 缺 id 或多参数报错', () => {
-    expect(err(['workflow', 'show'])).toContain('Missing workflowRunId');
-    expect(err(['workflow', 'resume'])).toContain('Missing workflowRunId');
-    expect(err(['workflow', 'cancel'])).toContain('Missing workflowRunId');
-    expect(err(['workflow', 'show', 'a', 'b'])).toContain('Unexpected argument: b');
-    expect(err(['workflow', 'show', '--bogus'])).toContain('Unknown argument: --bogus');
-  });
-
-  it('未知 workflow 子命令 / 空子命令报错', () => {
-    expect(err(['workflow'])).toContain('Missing workflow subcommand');
-    expect(err(['workflow', 'bogus'])).toContain('Unknown workflow subcommand');
-  });
-
-  it('workflow 的 --help 走主帮助', () => {
-    expect(ok(['workflow', 'run', '--help']).help).toBe(true);
-    expect(ok(['workflow', 'list', '-h']).help).toBe(true);
-    expect(ok(['workflow', 'show', 'wf_1', '--help']).help).toBe(true);
+    expect(err(['workflow', 'list'])).toContain('Unknown argument: workflow');
   });
 });
 

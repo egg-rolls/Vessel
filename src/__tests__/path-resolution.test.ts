@@ -6,16 +6,10 @@ import type { VesselConfig } from '../../packages/config/src/index';
 import {
   expandHome,
   isSafeSuiteName,
-  isSafeWorkflowName,
   resolveAgentCwd,
   resolveEvalSuite,
   resolveEvalsDir,
   resolveEvalsOutDir,
-  resolveWorkflowDefinition,
-  resolveWorkflowDefPath,
-  resolveWorkflowDefPathSync,
-  resolveWorkflowDir,
-  resolveWorkflowStorePath,
 } from '../path-resolution';
 import { canonicalPath } from './path-helpers';
 
@@ -74,147 +68,10 @@ describe('resolveAgentCwd（0.11.1）', () => {
 });
 
 describe('config path resolution', () => {
-  it('resolves workflow dir / store path against cwd', () => {
-    expect(resolveWorkflowDir({ workflow: { dir: './wf' } })).toBe(path.resolve('./wf'));
-    expect(resolveWorkflowStorePath({ workflow: { path: './runs' } })).toBe(path.resolve('./runs'));
-    expect(resolveWorkflowDir({})).toBe(path.resolve('./workflows'));
-    expect(resolveWorkflowStorePath({})).toBe(path.join(os.homedir(), '.vessel/workflows'));
-  });
-
   it('resolves evals dir / out dir', () => {
     expect(resolveEvalsDir({ evals: { dir: './suites' } })).toBe(path.resolve('./suites'));
     expect(resolveEvalsOutDir({ evals: { outDir: './out' } })).toBe(path.resolve('./out'));
     expect(resolveEvalsOutDir({})).toBe(path.join(os.homedir(), '.vessel/evals'));
-  });
-});
-
-describe('workflow definition resolution', () => {
-  it('resolves name.yaml / name.yml / name.json', async () => {
-    for (const extension of ['yaml', 'yml', 'json']) {
-      const dir = tmpDir();
-      const file = path.join(dir, `demo.${extension}`);
-      write(file);
-      const result = await resolveWorkflowDefinition(config({ workflow: { dir } }), 'demo');
-      expect(result).toEqual({ ok: true, path: canonicalPath(file) });
-    }
-  });
-
-  it('rejects multiple matching definitions', async () => {
-    const dir = tmpDir();
-    write(path.join(dir, 'demo.yaml'));
-    write(path.join(dir, 'demo.yml'));
-
-    const result = await resolveWorkflowDefinition(config({ workflow: { dir } }), 'demo');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe('workflow_invalid');
-      expect(result.error).toContain('multiple definitions');
-    }
-  });
-
-  it('reports not found for an unknown name', async () => {
-    const dir = tmpDir();
-    const result = await resolveWorkflowDefinition(config({ workflow: { dir } }), 'missing');
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.code).toBe('workflow_not_found');
-      expect(result.error).toContain('missing');
-    }
-  });
-
-  it('resolves a relative path against workflow.dir', async () => {
-    const dir = tmpDir();
-    write(path.join(dir, 'nested', 'demo.yaml'));
-
-    const result = await resolveWorkflowDefinition(
-      config({ workflow: { dir } }),
-      'nested/demo.yaml',
-    );
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.path).toBe(canonicalPath(path.join(dir, 'nested', 'demo.yaml')));
-    }
-  });
-
-  it('allows an absolute path', async () => {
-    const dir = tmpDir();
-    const file = path.join(dir, 'absolute.yaml');
-    write(file);
-
-    const result = await resolveWorkflowDefinition(config(), file);
-    expect(result.ok).toBe(true);
-  });
-
-  it('rejects .. escape', async () => {
-    const base = tmpDir();
-    const outside = path.join(base, 'outside.yaml');
-    write(outside);
-    const workflowDir = path.join(base, 'wf');
-    fs.mkdirSync(workflowDir);
-
-    const result = await resolveWorkflowDefinition(
-      config({ workflow: { dir: workflowDir } }),
-      '../outside.yaml',
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.code).toBe('workflow_invalid');
-  });
-
-  it('rejects unsafe single-segment names', async () => {
-    const dir = tmpDir();
-    expect((await resolveWorkflowDefinition(config({ workflow: { dir } }), 'a.b')).ok).toBe(false);
-    expect((await resolveWorkflowDefinition(config({ workflow: { dir } }), '..')).ok).toBe(false);
-  });
-
-  it('resolveWorkflowDefPath only accepts safe names', async () => {
-    const dir = tmpDir();
-    write(path.join(dir, 'demo.yaml'));
-    const cfg = config({ workflow: { dir } });
-
-    await expect(resolveWorkflowDefPath(cfg, 'demo')).resolves.toBe(
-      canonicalPath(path.join(dir, 'demo.yaml')),
-    );
-    await expect(resolveWorkflowDefPath(cfg, '../demo')).resolves.toBeUndefined();
-    await expect(resolveWorkflowDefPath(cfg, 'a/b')).resolves.toBeUndefined();
-    await expect(resolveWorkflowDefPath(cfg, 'missing')).resolves.toBeUndefined();
-  });
-
-  it('sync resolver matches the async safe-name rules', () => {
-    const dir = tmpDir();
-    write(path.join(dir, 'demo.yaml'));
-    const cfg = config({ workflow: { dir } });
-
-    expect(resolveWorkflowDefPathSync(cfg, 'demo')).toBe(
-      canonicalPath(path.join(dir, 'demo.yaml')),
-    );
-    expect(resolveWorkflowDefPathSync(cfg, '../demo')).toBeUndefined();
-    expect(resolveWorkflowDefPathSync(cfg, 'a/b')).toBeUndefined();
-    expect(resolveWorkflowDefPathSync(cfg, 'missing')).toBeUndefined();
-
-    write(path.join(dir, 'dup.yaml'));
-    write(path.join(dir, 'dup.json'));
-    expect(resolveWorkflowDefPathSync(cfg, 'dup')).toBeUndefined();
-  });
-
-  it('rejects a symlink escaping workflow.dir when possible', async () => {
-    const dir = tmpDir();
-    const workflowDir = path.join(dir, 'wf');
-    fs.mkdirSync(workflowDir);
-    const outside = path.join(dir, 'outside.yaml');
-    write(outside);
-
-    try {
-      fs.symlinkSync(outside, path.join(workflowDir, 'link.yaml'));
-    } catch {
-      // Windows without symlink privilege: skip the escape assertion.
-      return;
-    }
-
-    const result = await resolveWorkflowDefinition(
-      config({ workflow: { dir: workflowDir } }),
-      'link.yaml',
-    );
-    expect(result.ok).toBe(false);
   });
 });
 
@@ -245,10 +102,10 @@ describe('eval suite resolution', () => {
 
 describe('safe names', () => {
   it('accepts [A-Za-z0-9_-]{1,64}', () => {
-    expect(isSafeWorkflowName('a_b-c9')).toBe(true);
-    expect(isSafeWorkflowName('a.b')).toBe(false);
-    expect(isSafeWorkflowName('a/b')).toBe(false);
-    expect(isSafeWorkflowName('')).toBe(false);
+    expect(isSafeSuiteName('a_b-c9')).toBe(true);
+    expect(isSafeSuiteName('a.b')).toBe(false);
+    expect(isSafeSuiteName('a/b')).toBe(false);
+    expect(isSafeSuiteName('')).toBe(false);
     expect(isSafeSuiteName('smoke-1')).toBe(true);
   });
 });

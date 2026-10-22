@@ -38,7 +38,6 @@ import {
 import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
-import { runWorkflowCommand } from '../workflow-command';
 
 export interface CliCommandContext {
   /** `VESSEL_MOCK=1|true` */
@@ -124,18 +123,6 @@ export const cliCommands: readonly CliCommand[] = [
       runResumeList({
         ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       }),
-  },
-  {
-    name: 'workflow',
-    match: (args) => args.workflow !== null,
-    run: async (args, ctx) => {
-      const command = args.workflow;
-      if (command === null) return 1;
-      return runWorkflowCommand(command, {
-        useMock: ctx.useMock,
-        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-      });
-    },
   },
   {
     name: 'eval',

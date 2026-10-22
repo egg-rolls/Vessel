@@ -169,9 +169,7 @@ describe('completion scripts - 覆盖范围', () => {
     const zsh = renderCompletionScript('zsh');
     expect(zsh).toContain('(latest beta)');
     expect(zsh).toContain('(active disabled)');
-    expect(zsh).toContain('(pending running completed failed cancelled interrupted)');
     const bash = renderCompletionScript('bash');
-    expect(bash).toContain("'workflow list|--status'");
     expect(bash).toContain("'gateway reload|--scope'");
   });
 });

@@ -48,22 +48,6 @@ export type GatewayCommand =
   | { kind: 'install-service'; target?: GatewayInstallTarget }
   | { kind: 'uninstall-service' };
 
-/** `workflow` 子命令的状态过滤值（DECISION-009 §5.1.3） */
-export type WorkflowRunStatusArg =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'interrupted';
-
-export type WorkflowCommand =
-  | { kind: 'run'; target: string; inputs: Record<string, string> }
-  | { kind: 'list'; status?: WorkflowRunStatusArg; limit?: number }
-  | { kind: 'show'; workflowRunId: string }
-  | { kind: 'resume'; workflowRunId: string }
-  | { kind: 'cancel'; workflowRunId: string };
-
 export interface EvalCommand {
   target: string;
   json: boolean;
@@ -204,8 +188,6 @@ export interface CliArgs {
   tools: boolean;
   /** `vessel update ...` 子命令 */
   update: UpdateArgs | null;
-  /** `vessel workflow ...` 子命令 */
-  workflow: WorkflowCommand | null;
   /** `vessel eval ...` 子命令 */
   eval: EvalCommand | null;
   /** 0.4：附加开关；只与 run/pipe/resume/tools/version/help 互斥 */
@@ -286,7 +268,6 @@ export function parseArgs(argv: string[]): ParseResult {
     version: false,
     tools: false,
     update: null,
-    workflow: null,
     eval: null,
     feishu: false,
     tenantArg: null,
@@ -314,13 +295,10 @@ export function parseArgs(argv: string[]): ParseResult {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
 
-    // `update` / `workflow` / `eval` / `config` / `tenant` / `migrate` / `trace`
+    // `update` / `eval` / `config` / `tenant` / `migrate` / `trace`
     // 只允许作为第一个参数（子命令），其余位置按未知参数处理。
     if (a === 'update' && i === 0) {
       return parseUpdateArgs(argv.slice(1), args);
-    }
-    if (a === 'workflow' && i === 0) {
-      return parseWorkflowArgs(argv.slice(1), args);
     }
     if (a === 'eval' && i === 0) {
       return parseEvalArgs(argv.slice(1), args);
@@ -710,187 +688,7 @@ function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-// ── 0.4 workflow / eval 子命令 ───────────────────
-
-const WORKFLOW_STATUSES: ReadonlySet<string> = new Set([
-  'pending',
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-  'interrupted',
-]);
-
-const MAX_WORKFLOW_LIMIT = 200;
-const INPUT_KEY_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
-
-/** 解析 `workflow` 子命令 */
-function parseWorkflowArgs(rest: string[], args: CliArgs): ParseResult {
-  const sub = rest[0];
-  if (sub === '--help' || sub === '-h') {
-    args.help = true;
-    return { ok: true, args };
-  }
-  if (sub === undefined) {
-    return {
-      ok: false,
-      error: 'Missing workflow subcommand (run|list|show|resume|cancel)',
-    };
-  }
-
-  const tail = rest.slice(1);
-  switch (sub) {
-    case 'run':
-      return parseWorkflowRun(tail, args);
-    case 'list':
-      return parseWorkflowList(tail, args);
-    case 'show':
-    case 'resume':
-    case 'cancel':
-      return parseWorkflowId(sub, tail, args);
-    default:
-      return { ok: false, error: `Unknown workflow subcommand: ${sub}` };
-  }
-}
-
-/** `workflow run <name-or-path> [--input key=value]...` */
-function parseWorkflowRun(rest: string[], args: CliArgs): ParseResult {
-  let target: string | undefined;
-  const inputs: Record<string, string> = {};
-
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a === '--input') {
-      const next = rest[i + 1];
-      if (next === undefined || next.startsWith('-')) {
-        return { ok: false, error: 'Missing value for --input' };
-      }
-      const eq = next.indexOf('=');
-      if (eq <= 0) {
-        return { ok: false, error: `Invalid --input "${next}" (expected key=value)` };
-      }
-      const key = next.slice(0, eq);
-      if (!INPUT_KEY_RE.test(key)) {
-        return { ok: false, error: `Invalid --input key "${key}"` };
-      }
-      inputs[key] = next.slice(eq + 1);
-      i++;
-      continue;
-    }
-    if (a.startsWith('-')) {
-      return { ok: false, error: `Unknown argument: ${a}` };
-    }
-    if (target !== undefined) {
-      return { ok: false, error: `Unexpected argument: ${a}` };
-    }
-    target = a;
-  }
-
-  // `--help` 优先：与 update --help 一致，允许没有位置参数。
-  if (args.help) return { ok: true, args };
-
-  if (target === undefined || target.trim() === '') {
-    return { ok: false, error: 'Missing workflow definition (name or path)' };
-  }
-
-  args.workflow = { kind: 'run', target, inputs };
-  return { ok: true, args };
-}
-
-/** `workflow list [--status <s>] [--limit <n>]` */
-function parseWorkflowList(rest: string[], args: CliArgs): ParseResult {
-  let status: WorkflowRunStatusArg | undefined;
-  let limit: number | undefined;
-
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a === '--status') {
-      const next = rest[i + 1];
-      if (next === undefined || next.startsWith('-')) {
-        return { ok: false, error: 'Missing value for --status' };
-      }
-      if (!WORKFLOW_STATUSES.has(next)) {
-        return {
-          ok: false,
-          error:
-            `Invalid workflow status: ${next} ` +
-            '(expected pending|running|completed|failed|cancelled|interrupted)',
-        };
-      }
-      status = next as WorkflowRunStatusArg;
-      i++;
-      continue;
-    }
-    if (a === '--limit') {
-      const next = rest[i + 1];
-      if (next === undefined || !/^\d+$/.test(next)) {
-        return { ok: false, error: `Invalid value for --limit: ${next ?? ''}` };
-      }
-      const parsed = Number.parseInt(next, 10);
-      if (parsed < 1 || parsed > MAX_WORKFLOW_LIMIT) {
-        return {
-          ok: false,
-          error: `--limit must be an integer between 1 and ${MAX_WORKFLOW_LIMIT}`,
-        };
-      }
-      limit = parsed;
-      i++;
-      continue;
-    }
-    return { ok: false, error: `Unknown argument: ${a}` };
-  }
-
-  args.workflow = {
-    kind: 'list',
-    ...(status !== undefined ? { status } : {}),
-    ...(limit !== undefined ? { limit } : {}),
-  };
-  return { ok: true, args };
-}
-
-/** `workflow show|resume|cancel <workflowRunId>` */
-function parseWorkflowId(
-  sub: 'show' | 'resume' | 'cancel',
-  rest: string[],
-  args: CliArgs,
-): ParseResult {
-  let workflowRunId: string | undefined;
-
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a.startsWith('-')) {
-      return { ok: false, error: `Unknown argument: ${a}` };
-    }
-    if (workflowRunId !== undefined) {
-      return { ok: false, error: `Unexpected argument: ${a}` };
-    }
-    workflowRunId = a;
-  }
-
-  if (args.help) return { ok: true, args };
-
-  if (workflowRunId === undefined || workflowRunId.trim() === '') {
-    return { ok: false, error: `Missing workflowRunId for workflow ${sub}` };
-  }
-
-  args.workflow = { kind: sub, workflowRunId };
-  return { ok: true, args };
-}
+// ── 0.4 eval 子命令 ───────────────────
 
 /** `eval <suite-name-or-path> [--json] [--out <path>] [--filter <tag>]... [--allow-network]` */
 function parseEvalArgs(rest: string[], args: CliArgs): ParseResult {

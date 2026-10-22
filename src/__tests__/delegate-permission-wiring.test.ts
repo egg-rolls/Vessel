@@ -1,5 +1,5 @@
 /**
- * 0.8.2 Wave 2B1：runtime / workflow 共用的 resolved 权限。
+ * 0.8.2 Wave 2B1：runtime resolved 权限。
  *
  * 只测纯函数，不 mock 模块。
  */
