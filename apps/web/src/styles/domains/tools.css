@@ -1,14 +1,9 @@
 /* ── tool call 折叠行 ─────────────────────────────────── */
 
 .tool-call {
-  border: 1px solid var(--line);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
   margin: 4px 0;
-}
-
-.tool-call.failed {
-  border-color: color-mix(in srgb, var(--danger) 40%, var(--line));
 }
 
 .tool-call-head {
@@ -26,7 +21,7 @@
 }
 
 .tool-call-head:hover {
-  background: var(--surface-sunken);
+  background: var(--hover-tint);
 }
 
 .tool-call-name {
@@ -43,7 +38,6 @@
   flex-direction: column;
   gap: 8px;
   padding: 8px 10px 10px 20px;
-  border-top: 1px solid var(--line);
 }
 
 .tool-call-field {
@@ -54,9 +48,8 @@
 
 .tool-call-field .json-body {
   margin: 0;
-  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--surface-deep);
   max-height: 240px;
 }
 
@@ -69,4 +62,10 @@
   font-size: 10.5px;
   color: var(--muted);
   cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .tool-card-header {
+    min-height: var(--touch-target);
+  }
 }

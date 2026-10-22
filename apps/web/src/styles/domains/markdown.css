@@ -71,16 +71,15 @@
 .md-code-block {
   position: relative;
   margin: 0 0 0.7em;
-  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--surface-sunken);
   overflow: hidden;
 }
 
 .md-code-lang {
   display: block;
   padding: 4px 10px;
-  border-bottom: 1px solid var(--line);
+  background: var(--surface-deep);
   font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 0.08em;
@@ -109,7 +108,6 @@
 
 .md-quote {
   padding: 2px 0 2px 10px;
-  border-left: 2px solid var(--line-strong);
   color: var(--muted);
 }
 
@@ -126,14 +124,18 @@
 .md-table th,
 .md-table td {
   padding: 5px 9px;
-  border: 1px solid var(--line);
   text-align: left;
   vertical-align: top;
 }
 
 .md-table th {
   background: var(--surface-sunken);
+  color: var(--faint);
   font-weight: 600;
+}
+
+.md-table tbody tr:hover {
+  background: var(--hover-tint);
 }
 
 .md-hr {
@@ -223,9 +225,8 @@
   margin: 6px 0 0;
   padding: 8px 10px;
   overflow: auto;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--bg);
+  border-radius: var(--radius-sm);
+  background: var(--surface-deep);
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.55;
