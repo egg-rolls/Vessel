@@ -359,7 +359,7 @@
 - 保留并收编：`--shadow` / `--shadow-lift` 先映射到 `--elev-2` / `--elev-3`，迁移结束后删除。
 - 浅色/暗色两份必须同时定义；`[data-theme="dark"]` 与 `prefers-color-scheme` 两份不能漂移。
 - 组件 CSS 只引用令牌，不写 hex、不写 `rgba()` 字面量（阴影令牌除外）。
-- 原子层 `ui.css` 只提供 `Surface` / `Stack` / `Badge` / `Field` 等语义类；业务样式留在各域 CSS。
+- 不保留未使用的原子组件；当前只保留被实际调用的 `Button` / `AutoGrowTextarea`。业务样式留在各域 CSS。
 
 ---
 
