@@ -22,20 +22,31 @@ export interface EventMeta {
 
 export interface EventStoreSnapshot {
   entries: readonly StoredEvent[];
+  /** 累计被裁剪过的 run（自首次 flush 起）。 */
   truncatedRuns: ReadonlySet<string>;
+  /** 自上一次快照以来被裁剪过的 run；group-cache 用它做局部重建。 */
+  truncatedSince: ReadonlySet<string>;
   /** 最近一次通知时的 seq；重连/hello 判断用。 */
   lastSeq: number;
   version: number;
 }
 
 function emptySnapshot(): EventStoreSnapshot {
-  return { entries: [], truncatedRuns: new Set(), lastSeq: 0, version: 0 };
+  return {
+    entries: [],
+    truncatedRuns: new Set(),
+    truncatedSince: new Set(),
+    lastSeq: 0,
+    version: 0,
+  };
 }
 
 export class EventStore {
   private entries: StoredEvent[] = [];
   private runCounts = new Map<string, number>();
   private truncated = new Set<string>();
+  /** 待发布到下一份快照的裁剪增量；flush 后清空。 */
+  private truncatedSince = new Set<string>();
   private lastSeq = 0;
   private version = 0;
   private listeners = new Set<() => void>();
@@ -78,6 +89,7 @@ export class EventStore {
       if (index >= 0) this.entries.splice(index, 1);
       this.runCounts.set(runId, count - 1);
       this.truncated.add(runId);
+      this.truncatedSince.add(runId);
     }
 
     // 总上限：从最旧开始丢。
@@ -89,6 +101,7 @@ export class EventStore {
       if (remaining <= 0) this.runCounts.delete(removedRun);
       else this.runCounts.set(removedRun, remaining);
       this.truncated.add(removedRun);
+      this.truncatedSince.add(removedRun);
     }
 
     this.scheduleNotify();
@@ -100,11 +113,13 @@ export class EventStore {
     this.entries = [];
     this.runCounts.clear();
     this.truncated.clear();
+    this.truncatedSince.clear();
     this.lastSeq = nextSeq;
     this.version += 1;
     this.snapshot = {
       entries: [],
       truncatedRuns: new Set(),
+      truncatedSince: new Set(),
       lastSeq: nextSeq,
       version: this.version,
     };
@@ -120,9 +135,12 @@ export class EventStore {
       // 复制数组：entries 在 push 中原地追加，复用引用会让 memo 消费者永远看到旧视图。
       entries: [...this.entries],
       truncatedRuns: new Set(this.truncated),
+      truncatedSince: new Set(this.truncatedSince),
       lastSeq: this.lastSeq,
       version: this.version,
     };
+    // 增量只对下一份快照有效；消费后即使没有新事件也不重复报告。
+    this.truncatedSince.clear();
     this.notify();
   }
 

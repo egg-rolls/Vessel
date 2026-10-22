@@ -307,6 +307,30 @@ describe('EventStore', () => {
     expect(snapshot.entries.at(-1)?.seq).toBe(runs * MAX_EVENTS_PER_RUN);
   });
 
+  test('truncatedSince is a per-snapshot delta, cleared by flush and reset', () => {
+    const store = new EventStore(0);
+    const total = MAX_EVENTS_PER_RUN + 1;
+    for (let seq = 1; seq <= total; seq += 1) {
+      store.push(event('r1', 'llm.stream.chunk'), meta(seq));
+    }
+    store.flush();
+    expect(store.getSnapshot().truncatedSince.has('r1')).toBe(true);
+    expect(store.getSnapshot().truncatedRuns.has('r1')).toBe(true);
+
+    // 没有新裁剪的下一份快照：增量集合为空，累计集合保留。
+    store.flush();
+    expect(store.getSnapshot().truncatedSince.size).toBe(0);
+    expect(store.getSnapshot().truncatedRuns.has('r1')).toBe(true);
+
+    // 未发布的裁剪在 reset 后也不得泄漏到下一份快照。
+    store.push(event('r1', 'llm.stream.chunk'), meta(total + 1));
+    store.reset();
+    expect(store.getSnapshot().truncatedSince.size).toBe(0);
+    store.push(event('r1', 'run.started'), meta(1));
+    store.flush();
+    expect(store.getSnapshot().truncatedSince.size).toBe(0);
+  });
+
   test('reset clears entries and resumes from the requested seq', () => {
     const store = new EventStore(0);
     store.push(event('r1', 'run.started'), meta(3));
