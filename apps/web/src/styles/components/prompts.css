@@ -5,14 +5,8 @@
   gap: 8px;
   margin: 0;
   padding: 12px 14px;
-  border: 1px solid color-mix(in srgb, var(--warn) 42%, var(--line));
-  border-radius: var(--radius-sm);
-  background: var(--surface-sunken);
-}
-
-.permission-card.expired {
-  border-color: var(--line);
-  opacity: 0.7;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
 }
 
 .permission-card-head {
@@ -37,11 +31,21 @@
   gap: 10px;
   margin: 0 16px 8px;
   padding: 8px 12px;
-  border: 1px solid color-mix(in srgb, var(--warn) 35%, var(--line));
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--warn) 8%, var(--surface));
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
   font-size: 11.5px;
   color: var(--muted);
+}
+
+/* 阻塞语义：warn 圆点 + 文字，不用软底铺满。 */
+.pending-permissions-bar::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
 }
 
 .pending-permissions-bar .link-btn:last-of-type {
@@ -55,8 +59,7 @@
 .permission-tool {
   align-self: flex-start;
   padding: 3px 10px;
-  border: 1px solid var(--accent-line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--accent-soft);
   color: var(--accent-ink);
   font-size: 11.5px;
@@ -67,9 +70,8 @@
   padding: 12px 14px;
   max-height: 38vh;
   overflow: auto;
-  border: 1px solid var(--line);
   border-radius: var(--radius-sm);
-  background: var(--bg);
+  background: var(--surface-sunken);
   font-family: var(--font-mono);
   font-size: 11.5px;
   line-height: 1.55;
@@ -92,9 +94,8 @@
   flex-direction: column;
   gap: 8px;
   padding: 13px;
-  border: 1px solid var(--line);
   border-radius: var(--radius-md);
-  background: var(--bg);
+  background: var(--surface-sunken);
 }
 
 .ask-header {
@@ -123,15 +124,19 @@
   align-items: center;
   gap: 7px;
   padding: 6px 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
   font-size: 12px;
   cursor: pointer;
 }
 
+.ask-option:hover {
+  background: var(--hover-tint);
+}
+
 .ask-option.picked {
-  border-color: var(--accent-line);
   background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 
 .ask-option input {
