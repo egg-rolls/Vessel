@@ -36,6 +36,7 @@ export {
   normalizeEvalReport,
 } from './evals.js';
 export { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+export { BROADCAST_PREVIEW_LIMIT, summarizeBroadcastEvent } from './event-summary.js';
 export {
   type FeishuGatewayOptions,
   type FeishuStatus,

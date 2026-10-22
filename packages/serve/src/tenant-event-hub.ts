@@ -22,6 +22,7 @@ import {
   type Unsubscribe,
 } from '@vessel-agent/core';
 import { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+import { summarizeBroadcastEvent } from './event-summary.js';
 import { capToolEvent } from './tool-events.js';
 
 /** 注册到 hub 的 tenant 流 */
@@ -251,6 +252,7 @@ export function createGatewayEventHub(options: GatewayEventHubOptions = {}): Ten
   const redactor = providedRedactor ?? createDefaultTraceRedactor();
   return createTenantEventHub({
     ...rest,
-    map: (event) => capToolEvent(redactor.redact(event)),
+    // 顺序：脱敏 → 工具 payload 裁剪 → 广播摘要（raw fan-in 不经此 map）。
+    map: (event) => summarizeBroadcastEvent(capToolEvent(redactor.redact(event))),
   });
 }
