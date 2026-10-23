@@ -231,6 +231,18 @@ function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
 /** Team / federation team id 字符集（slug 结果；含哈希后缀）。 */
 const TEAM_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/** federation peer 允许的键（camelCase；YAML snake 已由 loader 转换）。 */
+const FEDERATION_PEER_KEYS = new Set([
+  'nodeId',
+  'teamId',
+  'url',
+  'tokenEnv',
+  'caFile',
+  'direction',
+  'localTeamId',
+  'token',
+]);
+
 /**
  * 校验 federation 块（S7；全局，tenant overlay 不允许）。
  *
@@ -278,6 +290,14 @@ function validateFederation(
       return;
     }
     const peer = raw as Record<string, unknown>;
+
+    for (const key of Object.keys(peer)) {
+      if (FEDERATION_PEER_KEYS.has(key)) continue;
+      errors.push({
+        path: `${base}.${key}`,
+        message: `${base}.${key} is not a valid federation peer key`,
+      });
+    }
 
     if (peer.token !== undefined) {
       errors.push({

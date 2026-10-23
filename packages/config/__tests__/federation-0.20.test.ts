@@ -80,4 +80,10 @@ describe('federation config', () => {
     (config.federation?.peers?.[0] as unknown as { direction?: string }).direction = 'sideways';
     expect(paths(config)).toContain('federation.peers[0].direction');
   });
+
+  it('rejects unknown peer keys instead of silently ignoring them', () => {
+    const config = withPeer();
+    (config.federation?.peers?.[0] as unknown as { localteamid?: string }).localteamid = 'lab';
+    expect(paths(config)).toContain('federation.peers[0].localteamid');
+  });
 });
