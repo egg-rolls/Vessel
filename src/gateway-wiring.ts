@@ -7,6 +7,7 @@
 
 import type { VesselConfig } from '../packages/config/src/index';
 import type {
+  FederationGatewayOptions,
   HubControlLike,
   HubTeamScopeLike,
   NodeTokenControlLike,
@@ -14,6 +15,7 @@ import type {
 } from '../packages/serve/src/index';
 import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { latestEvalReport } from './eval-wiring';
+import { resolveFederationOptions } from './federation-config';
 import { PluginLoader } from './plugin-loader';
 
 /** gateway `feishu` 注入面（与 packages/serve FeishuGatewayOptions 结构一致） */
@@ -45,6 +47,11 @@ export interface GatewayControlPlaneOptions {
   nodeTokens?: NodeTokenControlLike;
   /** S5：session → team 归属（gateway `hubTeamScope` 选项）。 */
   teamScope?: HubTeamScopeLike;
+  /**
+   * S7：节点身份（`resolveNodeId()` 的结果）。
+   * 仅当 `config.federation.enabled === true` 且本字段存在时注入 federation。
+   */
+  nodeId?: string;
 }
 
 /** 只包含实际启用的控制面；未启用时不出现在对象里 */
@@ -73,6 +80,17 @@ export function buildGatewayControlPlane(
   if (options.hubControl) controlPlane.hubControl = options.hubControl;
   if (options.nodeTokens) controlPlane.nodeTokens = options.nodeTokens;
   if (options.teamScope) controlPlane.hubTeamScope = options.teamScope;
+
+  // S7：仅在显式启用且已知节点身份时注入。缺 token 的 peer 由 resolver 丢弃
+  // （fail closed）；这里不打印 token / env，也不因缺失 token 报错。
+  if (options.config.federation?.enabled === true && options.nodeId !== undefined) {
+    const resolved = resolveFederationOptions({
+      federation: options.config.federation,
+      nodeId: options.nodeId,
+    });
+    const federation: FederationGatewayOptions = resolved.options;
+    controlPlane.federation = federation;
+  }
 
   const evalsEnabled = options.evalsEnabled ?? options.config.evals?.enabled === true;
   if (evalsEnabled) {

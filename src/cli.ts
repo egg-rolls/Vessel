@@ -942,6 +942,7 @@ async function runWithConfig(result: BootstrapResult) {
     // 冻结形状；合并后可直接写进 GatewayOptions。
     const controlPlane = buildGatewayControlPlane({
       config,
+      nodeId: result.nodeId,
       ...(result.metrics ? { metrics: result.metrics } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
       // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。
