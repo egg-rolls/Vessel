@@ -245,6 +245,7 @@ export const en: Record<MessageKey, string> = {
   'hub.empty.tokens': 'No tokens.',
   'hub.watch.closed': 'hub watch connection closed.',
   'hub.error.joinCodeMissing': 'Provide --code, --code-env, or set hub.joinCodeEnv.',
+  'hub.error.invalidCa': 'Cannot read CA file: {path}',
   'hub.error.hubUrlMissing': 'Specify the hub URL or set hub.url.',
   'hub.error.httpsRequired': 'Non-loopback hub URLs require https.',
   'hub.error.invalidPublicUrl': 'Invalid public URL.',

@@ -681,10 +681,12 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         try {
           await nodeControl.credentials.revokePairing(pairingId);
         } catch (error) {
+          // 吊销失败不得删目录：token 仍有效，节点可能重新连回来。
           logger?.warn('hub.server.revoke_failed', {
             pairing_id: pairingId,
             error: error instanceof Error ? error.message : String(error),
           });
+          return errorResponse('revoke_failed', 'failed to revoke node token', 500, extra);
         }
       }
     }

@@ -61,3 +61,4 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 - **数据面归属**：`data_plane: 'direct' | 'unreachable'` 由 `public_url ?? url` 派生，客户端据此区分“控制面健康”与“正文可达”。NAT 节点若没有 `public_url`（隧道 / 反向代理），浏览器无法直连拉取正文；hub 仍不代理、不落盘任何正文。
 - **单 hub 限制**：一个 node 进程 / data dir 只加入一个 hub（单份 `hub-node.json`）；多 hub 需要多个 data dir / 进程。S5.1 不做自动发现、多 hub 联邦、token 自动刷新或 mTLS。
 - **收口**：canonical 仍为 **47**，不新增 RPC 方法、不改任何 manifest、版本线仍 0.19；既有 hub → node（`vessel hub pair` / `vessel hub node add` / `/v1/hub/control`）行为不变。
+- **上文 S5 Addendum 的“node → hub 出站仍为 S5.1、运行时拒绝 `direction: node`”已被本节取代**：`vessel hub start` 仍只接受 `direction: hub`（hub 进程不扮演 node），而 gateway 的 `hub.direction: node` 现在启动节点出站。该历史句子只描述 S5 当时的状态。

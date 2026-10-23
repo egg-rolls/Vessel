@@ -223,9 +223,20 @@ describe('parseHubArgs', () => {
 
   it('parses join-code', () => {
     expect(
-      parsed(['hub', 'join-code', '--tenant', 'alpha', '--ttl', '120', '--json']).hubCommand,
+      parsed([
+        'hub',
+        'join-code',
+        '--data-dir',
+        '/tmp/hub-data',
+        '--tenant',
+        'alpha',
+        '--ttl',
+        '120',
+        '--json',
+      ]).hubCommand,
     ).toEqual({
       kind: 'join-code',
+      dataDir: '/tmp/hub-data',
       json: true,
       tenant: 'alpha',
       ttl: 120,
@@ -466,6 +477,38 @@ describe('runHubCommand - join-code', () => {
 
 describe('runHubCommand - join', () => {
   const config: VesselConfig = { host: { nodeId: 'node-1' }, hub: { direction: 'node' } };
+
+  it('passes --ca to the join HTTP request', async () => {
+    await withTempDir(async (dir) => {
+      const caPath = path.join(dir, 'hub-ca.pem');
+      fs.writeFileSync(caPath, '-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n');
+      let tlsCa: string | undefined;
+      const fetchImpl = (async (_input: string, init?: RequestInit & { tls?: { ca: string } }) => {
+        tlsCa = init?.tls?.ca;
+        return Response.json(joinResponse());
+      }) as unknown as typeof fetch;
+
+      const code = await runHubCommand(
+        {
+          kind: 'join',
+          hubUrl: 'https://hub.example:8643',
+          code: 'ABCD-EFGH',
+          caFile: caPath,
+          json: true,
+        },
+        {
+          config,
+          dataDir: dir,
+          createSecretStore: () => createMemorySecretStore(),
+          gatewayStatus: async () => ({ running: false }),
+          fetchImpl,
+          print: () => undefined,
+        },
+      );
+      expect(code).toBe(0);
+      expect(tlsCa).toContain('BEGIN CERTIFICATE');
+    });
+  });
 
   it('stores the token in SecretStore and writes a token-free hub-node.json', async () => {
     await withTempDir(async (dir) => {

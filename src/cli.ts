@@ -147,7 +147,10 @@ function printHelp(): void {
     ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
     ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
     ['vessel hub pair [--tenant ID] [--ttl N]', t('help.cmd.hubPair')],
-    ['vessel hub join-code [--tenant ID] [--ttl N] [--json]', t('help.cmd.hubJoinCode')],
+    [
+      'vessel hub join-code [--data-dir DIR] [--tenant ID] [--ttl N] [--json]',
+      t('help.cmd.hubJoinCode'),
+    ],
     ['vessel hub join [<hub-url>] --code <CODE> [--data-dir DIR]', t('help.cmd.hubJoin')],
     ['vessel hub node add <url> --code <CODE>', t('help.cmd.hubNodeAdd')],
     ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],

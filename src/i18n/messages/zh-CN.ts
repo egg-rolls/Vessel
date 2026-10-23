@@ -236,6 +236,7 @@ export const zhCN = {
   'hub.empty.tokens': '没有 token。',
   'hub.watch.closed': 'hub watch 连接已关闭。',
   'hub.error.joinCodeMissing': '请提供 --code、--code-env，或设置 hub.joinCodeEnv。',
+  'hub.error.invalidCa': '无法读取 CA 文件：{path}',
   'hub.error.hubUrlMissing': '请指定 hub URL 或设置 hub.url。',
   'hub.error.httpsRequired': '非回环 hub URL 必须使用 https。',
   'hub.error.invalidPublicUrl': '无效的 public URL。',

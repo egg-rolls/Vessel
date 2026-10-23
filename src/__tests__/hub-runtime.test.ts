@@ -397,6 +397,41 @@ describe('startHubRuntime inbound hooks', () => {
       });
       expect(harness.registry()?.get('node-4:tenant-1')?.last_error).toBeUndefined();
 
+      // 跨重连旧快照：registry 已有 revision 3，revision 2 必须丢弃。
+      inbound.hooks.onSnapshot('node-4:tenant-1', {
+        node_id: 'node-4',
+        hub_id: HUB_ID,
+        incarnation: 'inc-9',
+        revision: 2,
+        observed_at: 999,
+        truncated: false,
+        counts: { teams: 0, agents: 0, live_agents: 0 },
+        teams: [],
+        agents: [],
+      });
+      expect(harness.registry()?.get('node-4:tenant-1')).toMatchObject({
+        revision: 3,
+        last_seen: 1234,
+      });
+
+      // incarnation 变化：即使 revision 回绕也必须接受。
+      inbound.hooks.onSnapshot('node-4:tenant-1', {
+        node_id: 'node-4',
+        hub_id: HUB_ID,
+        incarnation: 'inc-10',
+        revision: 1,
+        observed_at: 2000,
+        truncated: false,
+        counts: { teams: 0, agents: 0, live_agents: 0 },
+        teams: [],
+        agents: [],
+      });
+      expect(harness.registry()?.get('node-4:tenant-1')).toMatchObject({
+        incarnation: 'inc-10',
+        revision: 1,
+        last_seen: 2000,
+      });
+
       inbound.hooks.onStatus('node-4:tenant-1', 'unreachable', 'disconnected');
       expect(harness.registry()?.get('node-4:tenant-1')).toMatchObject({
         status: 'unreachable',

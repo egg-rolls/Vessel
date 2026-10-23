@@ -195,7 +195,7 @@ export type HubCommand =
   | { kind: 'directory'; hubUrl?: string; tokenEnv?: string; json: boolean }
   | { kind: 'watch'; hubUrl?: string; tokenEnv?: string }
   | { kind: 'pair'; dataDir?: string; tenant?: string; ttl?: number }
-  | { kind: 'join-code'; tenant?: string; ttl?: number; json: boolean }
+  | { kind: 'join-code'; dataDir?: string; tenant?: string; ttl?: number; json: boolean }
   | {
       kind: 'join';
       hubUrl?: string;
@@ -2379,6 +2379,7 @@ function parseHubPair(rest: string[], args: CliArgs): ParseResult {
 
 /** `hub join-code [--tenant] [--ttl] [--json]`（hub 侧，S5.1） */
 function parseHubJoinCode(rest: string[], args: CliArgs): ParseResult {
+  let dataDir: string | undefined;
   let tenant: string | undefined;
   let ttl: number | undefined;
   let json = false;
@@ -2392,10 +2393,11 @@ function parseHubJoinCode(rest: string[], args: CliArgs): ParseResult {
       json = true;
       continue;
     }
-    if (a === '--tenant' || a === '--ttl') {
+    if (a === '--data-dir' || a === '--tenant' || a === '--ttl') {
       const value = readFlagValue(rest, i, a);
       if (!value.ok) return value;
-      if (a === '--tenant') tenant = value.value;
+      if (a === '--data-dir') dataDir = value.value;
+      else if (a === '--tenant') tenant = value.value;
       else {
         const parsed = parseHubTtl(value.value, 60, 3600);
         if (parsed === null) {
@@ -2412,6 +2414,7 @@ function parseHubJoinCode(rest: string[], args: CliArgs): ParseResult {
   args.hubCommand = {
     kind: 'join-code',
     json,
+    ...(dataDir !== undefined ? { dataDir } : {}),
     ...(tenant !== undefined ? { tenant } : {}),
     ...(ttl !== undefined ? { ttl } : {}),
   };

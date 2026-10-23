@@ -218,6 +218,8 @@ function responseFailure(status: number, body: unknown): HubCommandFailure {
   return new HubCommandFailure(`http_${status}`, `HTTP ${status}`);
 }
 
+type FetchInit = RequestInit & { tls?: { ca: string } };
+
 async function requestJson(
   deps: HubCommandDeps,
   url: string,
@@ -225,6 +227,7 @@ async function requestJson(
     method?: string;
     token?: string;
     body?: unknown;
+    tls?: { ca: string };
   } = {},
 ): Promise<unknown> {
   const fetchImpl = deps.fetchImpl ?? fetch;
@@ -233,14 +236,17 @@ async function requestJson(
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   (timer as { unref?: () => void }).unref?.();
 
+  const init: FetchInit = {
+    method: options.method ?? (hasBody ? 'POST' : 'GET'),
+    headers: makeHeaders(options.token, hasBody),
+    ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
+    signal: controller.signal,
+  };
+  if (options.tls !== undefined) init.tls = options.tls;
+
   let response: Response;
   try {
-    response = await fetchImpl(url, {
-      method: options.method ?? (hasBody ? 'POST' : 'GET'),
-      headers: makeHeaders(options.token, hasBody),
-      ...(hasBody ? { body: JSON.stringify(options.body) } : {}),
-      signal: controller.signal,
-    });
+    response = await fetchImpl(url, init as RequestInit);
   } catch (error) {
     const aborted = controller.signal.aborted;
     throw new HubCommandFailure(
@@ -586,9 +592,9 @@ async function pairCommand(
   return 0;
 }
 
-/** hub 侧 data dir：`config.hub.dataDir`（展开）否则 `~/.vessel/hub`。 */
-function hubJoinCodeDataDir(config: VesselConfig): string {
-  const configured = config.hub?.dataDir ?? DEFAULT_HUB_DATA_DIR;
+/** hub 侧 data dir：显式 `--data-dir` > `config.hub.dataDir` > `~/.vessel/hub`。 */
+function hubJoinCodeDataDir(config: VesselConfig, explicit?: string): string {
+  const configured = explicit ?? config.hub?.dataDir ?? DEFAULT_HUB_DATA_DIR;
   return path.resolve(expandHome(configured));
 }
 
@@ -597,7 +603,7 @@ async function joinCodeCommand(
   deps: HubCommandDeps,
   config: VesselConfig,
 ): Promise<number> {
-  const dataDir = hubJoinCodeDataDir(config);
+  const dataDir = hubJoinCodeDataDir(config, command.dataDir);
   const hubId = await resolveNodeId({ dataDir });
   const tenantId = command.tenant ?? config.tenant?.default ?? 'default';
   const ttl = command.ttl ?? config.hub?.pairingTtlSeconds;
@@ -773,6 +779,18 @@ async function joinCommand(
   const publicUrl =
     command.publicUrl !== undefined ? normalizeJoinPublicUrl(command.publicUrl) : undefined;
 
+  // join 本身可能走私有 CA；与 hub 侧 `node add` 一样把 CA 传给 fetch。
+  let tls: { ca: string } | undefined;
+  if (command.caFile !== undefined) {
+    try {
+      const ca = await Bun.file(command.caFile).text();
+      if (ca.trim() === '') throw new Error('empty ca');
+      tls = { ca };
+    } catch {
+      throw new HubCommandFailure('invalid_ca', t('hub.error.invalidCa', { path: command.caFile }));
+    }
+  }
+
   const body = await requestJson(deps, `${hubUrl}/v1/hub/join`, {
     method: 'POST',
     body: {
@@ -782,6 +800,7 @@ async function joinCommand(
       tenant_id: tenantId,
       ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
     },
+    ...(tls !== undefined ? { tls } : {}),
   });
   const joined = parseJoinResponse(body, nodeId, tenantId);
 

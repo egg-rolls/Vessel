@@ -271,7 +271,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
       { name: 'watch', flags: ['--hub-url', '--token-env'] },
       { name: 'pair', flags: ['--data-dir', '--tenant', '--ttl'] },
-      { name: 'join-code', flags: ['--tenant', '--ttl', '--json'] },
+      { name: 'join-code', flags: ['--data-dir', '--tenant', '--ttl', '--json'] },
       {
         name: 'join',
         flags: ['--code', '--code-env', '--tenant', '--public-url', '--ca', '--data-dir', '--json'],
