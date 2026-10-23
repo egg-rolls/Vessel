@@ -166,6 +166,8 @@ async function peersCommand(
   for (const issue of issues) {
     if (issue.reason === 'missing_token') {
       console.error(ui.warn(`federation peer ${issue.peer}: token env is not set`));
+    } else if (issue.reason === 'self_peer') {
+      console.error(ui.warn(`federation peer ${issue.peer}: node id equals this node (skipped)`));
     } else {
       console.error(ui.warn(`federation peer ${issue.peer}: invalid config (skipped)`));
     }

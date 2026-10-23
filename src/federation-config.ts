@@ -35,6 +35,7 @@ export interface FederationRuntimeOptions {
 
 export type FederationResolutionIssue =
   | { peer: string; reason: 'missing_token' }
+  | { peer: string; reason: 'self_peer' }
   | { peer: string; reason: 'invalid_config' };
 
 const DEFAULT_MAX_HOPS = 4;
@@ -77,6 +78,11 @@ export function resolveFederationOptions(input: {
       typeof peer.tokenEnv !== 'string'
     ) {
       issues.push({ peer: label, reason: 'invalid_config' });
+      return;
+    }
+    // node.json 解析出的本机身份这里才可知；自指 peer 直接丢弃（fail closed）。
+    if (peer.nodeId === input.nodeId) {
+      issues.push({ peer: label, reason: 'self_peer' });
       return;
     }
     const token = env[peer.tokenEnv];
