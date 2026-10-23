@@ -14,7 +14,7 @@ import type { EventStream, Logger } from '../packages/core/src/index';
 export interface ShutdownFailureInput {
   events?: EventStream;
   logger: Logger;
-  /** 清理步骤名，如 `workflow.close` / `trace.flush` / `tenantLock.release` */
+  /** 清理步骤名，如 `trace.flush` / `tenantLock.release` */
   step: string;
   error: unknown;
   tenantId?: string;

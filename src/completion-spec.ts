@@ -125,9 +125,19 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--name',
   '--model',
   '--system-prompt',
+  '--workspace',
+  '--mention',
   '--from',
   '--to',
   '--source',
+  '--hub-url',
+  '--token-env',
+  '--team',
+  '--ttl',
+  '--code',
+  '--alias',
+  '--token-id',
+  '--admin-token-env',
 ];
 
 /** 值可省略的 flag（`--resume` 无 id = 列出会话） */
@@ -139,15 +149,6 @@ export const OPTIONAL_VALUE_FLAGS: readonly string[] = [
   '-r',
   '--resume-run',
   '--serve',
-];
-
-const WORKFLOW_STATUSES: readonly string[] = [
-  'pending',
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-  'interrupted',
 ];
 
 const AGENT_STATES: readonly string[] = [
@@ -180,21 +181,6 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     registryName: 'update',
     flags: ['--check', '--channel', '--json', '--force', '--yes', '-y'],
     flagValues: { '--channel': ['latest', 'beta'] },
-  },
-  {
-    token: 'workflow',
-    registryName: 'workflow',
-    subcommands: [
-      { name: 'run', flags: ['--input'] },
-      {
-        name: 'list',
-        flags: ['--status', '--limit'],
-        flagValues: { '--status': WORKFLOW_STATUSES },
-      },
-      { name: 'show' },
-      { name: 'resume' },
-      { name: 'cancel' },
-    ],
   },
   {
     token: 'eval',
@@ -272,6 +258,28 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'uninstall-service' },
     ],
   },
+  {
+    token: 'hub',
+    registryName: 'hub',
+    subcommands: [
+      {
+        name: 'start',
+        flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+      },
+      { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
+      { name: 'watch', flags: ['--hub-url', '--token-env'] },
+      { name: 'pair', flags: ['--data-dir', '--tenant', '--ttl'] },
+      {
+        name: 'node',
+        flags: ['--code', '--alias', '--ca', '--hub-url', '--json'],
+      },
+      {
+        name: 'token',
+        flags: ['--team', '--ttl', '--admin-token-env', '--token-id', '--json'],
+      },
+      { name: 'data-token', flags: ['--team', '--hub-url', '--token-env', '--ttl'] },
+    ],
+  },
   { token: 'status', registryName: 'status', flags: ['--json'] },
   { token: 'agents', registryName: 'agents', flags: ['--json'] },
   {
@@ -280,16 +288,28 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'new',
-        flags: ['--json', '--name', '--model', '--visibility', '--system-prompt'],
+        flags: ['--json', '--name', '--model', '--visibility', '--system-prompt', '--workspace'],
         flagValues: { '--visibility': AGENT_VISIBILITIES },
       },
       { name: 'send', flags: ['--json'] },
+      { name: 'dispatch', flags: ['--json'] },
+      { name: 'rotate', flags: ['--json', '--startup', '--handoff'] },
       { name: 'close', flags: ['--json'] },
       {
         name: 'list',
         flags: ['--json', '--visibility', '--state'],
         flagValues: { '--visibility': AGENT_VISIBILITIES, '--state': AGENT_STATES },
       },
+    ],
+  },
+  {
+    token: 'team',
+    registryName: 'team',
+    subcommands: [
+      { name: 'list', flags: ['--json', '--help'] },
+      { name: 'get', flags: ['--json', '--limit', '--help'] },
+      { name: 'post', flags: ['--json', '--mention', '--help'] },
+      { name: 'members', flags: ['--json', '--help'] },
     ],
   },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },

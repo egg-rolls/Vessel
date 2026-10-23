@@ -62,16 +62,21 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'ask.respond': 'write',
   // 0.18：刷新后读取 pending / answered / orphaned 交互（只读）。
   'interactions.list': 'read',
-  'workflow.list': 'read',
-  'workflow.get': 'read',
-  'workflow.start': 'write',
-  'workflow.resume': 'write',
-  'workflow.cancel': 'write',
   'evals.latest': 'read',
   'evals.run': 'write',
   'feishu.status': 'read',
   // 0.12（DECISION-023 §2.3）：热重载，admin-only。
   'gateway.reload': 'admin',
+  // 0.19 S3：本地 Team 控制面。canonical 是复数 `teams.*`；
+  // legacy `team.*`（单数）前缀仍视为 legacy-only，两者无关。
+  'teams.list': 'read',
+  'teams.get': 'read',
+  'teams.post': 'write',
+  'teams.members': 'write',
+  // 0.19 S5：hub 控制面。exchange 换短期 control token；revoke / list 只允许 admin。
+  'auth.exchange': 'write',
+  'auth.revoke': 'admin',
+  'auth.tokens': 'admin',
 };
 
 const LEGACY_PREFIXES = ['team.', 'durable.'] as const;

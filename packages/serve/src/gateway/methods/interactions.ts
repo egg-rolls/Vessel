@@ -4,12 +4,18 @@
  * @module @vessel-agent/serve
  */
 
+import type { HubTeamScopeLike } from '../../hub-control.js';
 import type {
   StoredInteraction,
   StoredInteractionAnswer,
   StoredInteractionStatus,
 } from '../../interactions-store.js';
-import { RpcError, type RpcMethodDefinition } from '../../rpc.js';
+import {
+  isTeamScopedPrincipal,
+  RpcError,
+  type RpcMethodContext,
+  type RpcMethodDefinition,
+} from '../../rpc.js';
 import type {
   PendingAsk,
   PendingPermission,
@@ -43,6 +49,11 @@ export interface InteractionMethodsDeps {
   ): PermissionRespondResult;
   respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
   interactions: InteractionSources;
+  /**
+   * S5：control token 的 session → team 归属映射。
+   * 缺失或无法判定时，team-scoped principal 一律 fail-closed。
+   */
+  teamScope?: HubTeamScopeLike;
 }
 
 /** `interactions.list` 的单条结果（Web 端消费契约）。 */
@@ -51,6 +62,8 @@ export interface ListedInteraction {
   request_id: string;
   run_id: string;
   session_id?: string;
+  /** 成员 bridge 请求的父会话（additive，缺失时不输出该 key）。 */
+  parent_session_id?: string;
   tool_call_id?: string;
   tool?: string;
   input?: unknown;
@@ -77,6 +90,7 @@ const interactionItemSchema = {
     request_id: { type: 'string' },
     run_id: { type: 'string' },
     session_id: { type: 'string' },
+    parent_session_id: { type: 'string' },
     tool_call_id: { type: 'string' },
     tool: { type: 'string' },
     // input / questions 是模型给出的任意 JSON；校验器不支持 arbitrary，留空即可。
@@ -111,6 +125,9 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
       request_id: record.requestId,
       run_id: record.run_id,
       ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
+      ...(record.parent_session_id !== undefined
+        ? { parent_session_id: record.parent_session_id }
+        : {}),
       ...(record.tool_call_id !== undefined ? { tool_call_id: record.tool_call_id } : {}),
       tool: record.tool,
       input: record.input,
@@ -126,6 +143,9 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
       request_id: requestId,
       run_id: pending.run_id,
       ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
+      ...(pending.parent_session_id !== undefined
+        ? { parent_session_id: pending.parent_session_id }
+        : {}),
       ...(pending.tool_call_id !== undefined ? { tool_call_id: pending.tool_call_id } : {}),
       tool: pending.tool,
       input: pending.input,
@@ -140,6 +160,7 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
       request_id: requestId,
       run_id: ask.run_id,
       ...(ask.session_id !== undefined ? { session_id: ask.session_id } : {}),
+      ...(ask.parent_session_id !== undefined ? { parent_session_id: ask.parent_session_id } : {}),
       ...(ask.questions !== undefined ? { questions: ask.questions } : {}),
       created_at: ask.ts,
       status: 'pending',
@@ -165,7 +186,33 @@ function parseListLimit(value: unknown): number {
 }
 
 export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMethodDefinition[] {
-  const { respondPermission, respondAsk, interactions } = deps;
+  const { respondPermission, respondAsk, interactions, teamScope } = deps;
+
+  /** 请求所属 session；记录不存在或没有 session 时返回 undefined。 */
+  function sessionForRequest(requestId: string): string | undefined {
+    const record = interactions.interactionRecords.get(requestId);
+    if (record !== undefined) return record.session_id;
+    const pending = interactions.pendingPermissions.get(requestId);
+    if (pending !== undefined) return pending.session_id;
+    const ask = interactions.pendingAsks.get(requestId);
+    if (ask !== undefined) return ask.session_id;
+    return undefined;
+  }
+
+  /**
+   * team-scoped control token 的请求归属检查。
+   * 找不到记录 / 无 session / 映射不可用 / 不属于该 team 一律 `forbidden`，
+   * 不区分 `not_found`，避免泄漏请求存在性。
+   */
+  function assertTeamAccess(requestId: string, principal: RpcMethodContext['principal']): void {
+    if (!isTeamScopedPrincipal(principal)) return;
+    const sessionId = sessionForRequest(requestId);
+    const team = sessionId === undefined ? undefined : teamScope?.teamForSession(sessionId);
+    if (team === undefined || team !== principal.team_id) {
+      throw new RpcError('forbidden', 'Request is not accessible to this team');
+    }
+  }
+
   return [
     {
       name: 'permission.respond',
@@ -206,6 +253,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         if (rawScope !== undefined && !PERMISSION_SCOPES.has(rawScope as PermissionScope)) {
           throw new RpcError('invalid_params', "scope must be 'once', 'session' or 'always'");
         }
+        assertTeamAccess(rawRequestId, ctx.principal);
         return respondPermission(
           rawRequestId,
           decision,
@@ -237,7 +285,9 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         if (!Array.isArray(answers)) {
           throw new RpcError('invalid_params', 'answers must be an array');
         }
-        respondAsk(stringParam(params, 'request_id'), answers, ctx.tenantId);
+        const requestId = stringParam(params, 'request_id');
+        assertTeamAccess(requestId, ctx.principal);
+        respondAsk(requestId, answers, ctx.tenantId);
         return { ok: true };
       },
     },
@@ -279,12 +329,21 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         const runId =
           typeof params.run_id === 'string' && params.run_id.length > 0 ? params.run_id : undefined;
         const limit = parseListLimit(params.limit);
-        const items = collectInteractions(interactions, ctx.tenantId).filter(
+        let items = collectInteractions(interactions, ctx.tenantId).filter(
           (item) =>
             (rawStatus === undefined || item.status === rawStatus) &&
             (sessionId === undefined || item.session_id === sessionId) &&
             (runId === undefined || item.run_id === runId),
         );
+        if (isTeamScopedPrincipal(ctx.principal)) {
+          // 映射缺失 / 无法判定 → 空列表（fail-closed）。
+          const teamId = ctx.principal.team_id;
+          items = items.filter(
+            (item) =>
+              item.session_id !== undefined &&
+              teamScope?.teamForSession(item.session_id) === teamId,
+          );
+        }
         // 最新在前；同时间戳按 request_id 稳定排序。
         items.sort((a, b) =>
           a.created_at === b.created_at

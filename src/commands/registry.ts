@@ -6,7 +6,7 @@
  * 主 REPL / serve / headless 路径不经过这里。
  */
 
-import { loadConfig } from '../../packages/config/src/index';
+import { loadConfig, type VesselConfig } from '../../packages/config/src/index';
 import { runAgentCommand } from '../agent-command';
 import { agentsCommand } from '../agents-command';
 import type { CliArgs } from '../cli-args';
@@ -23,12 +23,14 @@ import { doctorCommand } from '../doctor-command';
 import { errorsCommand } from '../errors-command';
 import { runEvalCommand } from '../eval-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from '../gateway-command';
+import { runHubCommand } from '../hub-command';
 import { applyLocale } from '../i18n';
 import { logsCommand } from '../logs-command';
 import { migrateCommand } from '../migrate-command';
 import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
 import { statusCommand } from '../status-command';
+import { runTeamCommand } from '../team-command';
 import {
   tenantCreateCommand,
   tenantGetCommand,
@@ -38,11 +40,12 @@ import {
 import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
-import { runWorkflowCommand } from '../workflow-command';
 
 export interface CliCommandContext {
   /** `VESSEL_MOCK=1|true` */
   useMock: boolean;
+  /** 已解析配置（入口可注入；hub 等命令缺省自行 loadConfig）。 */
+  config?: VesselConfig;
 }
 
 export interface CliCommand {
@@ -124,18 +127,6 @@ export const cliCommands: readonly CliCommand[] = [
       runResumeList({
         ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
       }),
-  },
-  {
-    name: 'workflow',
-    match: (args) => args.workflow !== null,
-    run: async (args, ctx) => {
-      const command = args.workflow;
-      if (command === null) return 1;
-      return runWorkflowCommand(command, {
-        useMock: ctx.useMock,
-        ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
-      });
-    },
   },
   {
     name: 'eval',
@@ -272,6 +263,17 @@ export const cliCommands: readonly CliCommand[] = [
     },
   },
   {
+    name: 'hub',
+    match: (args) => args.hubCommand !== null && args.hubCommand !== undefined,
+    run: async (args, ctx) => {
+      const command = args.hubCommand;
+      if (command === null || command === undefined) return 1;
+      return runHubCommand(command, {
+        ...(ctx.config !== undefined ? { config: ctx.config } : {}),
+      });
+    },
+  },
+  {
     name: 'status',
     match: (args) => args.statusCommand !== null,
     run: async (args) => {
@@ -295,6 +297,20 @@ export const cliCommands: readonly CliCommand[] = [
       if (command === null) return 1;
       return printCommandResult(
         await runAgentCommand(command, {
+          dataDir: await resolveCommandDataDir(),
+          ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+        }),
+      );
+    },
+  },
+  {
+    name: 'team',
+    match: (args) => args.teamCommand !== null,
+    run: async (args) => {
+      const command = args.teamCommand;
+      if (command === null) return 1;
+      return printCommandResult(
+        await runTeamCommand(command, {
           dataDir: await resolveCommandDataDir(),
           ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
         }),

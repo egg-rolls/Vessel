@@ -604,7 +604,7 @@ async function runBash(
   if (cwd !== '' && !existsSync(cwd)) return `错误：cwd 不存在：${cwd}`;
   // 显式 cwd 优先；未传时落 baseCwd（未配置即进程 cwd）。
   const effectiveCwd = cwd === '' ? baseCwd.path : cwd;
-  // 防御性检查：即使调用方绕过 checkPermission（如 workflow 直接调 handler），
+  // 防御性检查：即使调用方绕过 checkPermission 直接调 handler，
   // 敏感路径的 cwd 仍然拒绝；allowed_roots 的越界由 checkPermission 走 ask。
   if (evaluatePath(effectiveCwd, boundary) === 'deny') {
     return `错误：cwd 在敏感路径拒绝列表中：${effectiveCwd}`;

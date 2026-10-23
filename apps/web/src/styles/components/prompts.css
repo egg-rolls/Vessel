@@ -1,0 +1,251 @@
+/* 权限卡片：渲染在 Composer 槽位（PermissionPrompt）或 AppShell 面板内，不用全局遮罩。 */
+.permission-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.permission-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.permission-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* 跨 session 待处理条：只提示，不打断当前对话。 */
+.pending-permissions-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 8px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 阻塞语义：warn 圆点 + 文字，不用软底铺满。 */
+.pending-permissions-bar::before {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--warn);
+}
+
+.pending-permissions-bar .link-btn:last-of-type {
+  margin-left: auto;
+}
+
+.permission-meta {
+  font-size: 11px;
+}
+
+.permission-tool {
+  align-self: flex-start;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 11.5px;
+}
+
+.permission-input {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 38vh;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 52vh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.ask-question {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 13px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.ask-header {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-ink);
+}
+
+.ask-text {
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.ask-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ask-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ask-option:hover {
+  background: var(--hover-tint);
+}
+
+.ask-option.picked {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.ask-option input {
+  accent-color: var(--accent);
+}
+
+.action-menu {
+  position: relative;
+  flex: none;
+  display: inline-flex;
+}
+
+.menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 160px;
+  padding: var(--space-1);
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-3);
+}
+
+.menu-item {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+
+.menu-item:hover:not(:disabled) {
+  background: var(--hover-tint);
+}
+
+.menu-item.danger {
+  color: var(--danger);
+}
+
+.menu-item.danger:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.more-sheet {
+  width: min(420px, 100%);
+  align-self: center;
+  margin-top: auto;
+  margin-bottom: 0;
+  border: 0;
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-sm);
+}
+
+.more-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.more-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink);
+  font-size: 13px;
+  text-align: left;
+}
+
+.more-item:hover {
+  background: var(--hover-tint);
+}
+
+.more-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: var(--space-2);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.shortcut-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 6px 0;
+  font-size: 12.5px;
+}
+
+.shortcut-list dt {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.shortcut-list dd {
+  color: var(--muted);
+}
+
+@media (pointer: coarse) {
+  .more-item {
+    min-height: var(--touch-target);
+  }
+}

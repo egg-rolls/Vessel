@@ -1,0 +1,934 @@
+/* ── 会话列表 ─────────────────────────────────────────── */
+
+/* 行间分组只靠父容器 gap，不再用分隔线。 */
+.session-scroll {
+  gap: var(--space-2);
+  padding-top: var(--space-1);
+}
+
+.session-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  min-height: var(--row-h-session);
+  border-radius: var(--radius-sm);
+  transition: background 0.16s var(--ease);
+}
+
+.session-row:hover {
+  background: var(--hover-tint);
+}
+
+.session-row.active {
+  background: var(--accent-soft);
+}
+
+.session-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 6px 6px 6px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+}
+
+.session-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.session-title-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-time {
+  flex: none;
+  margin-left: auto;
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.session-row.active .session-title {
+  color: var(--accent-ink);
+}
+
+.session-preview {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.session-preview mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: var(--accent-soft);
+  color: inherit;
+}
+
+/* 0.18：其他会话的 pending 只在列表上计数，不渲染完整卡片。 */
+.session-pending-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--warn-soft);
+  color: var(--warn);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1;
+}
+
+.session-row .action-menu {
+  align-items: center;
+  padding-right: 4px;
+}
+
+.session-row .icon-btn {
+  opacity: 0;
+}
+
+.session-row:hover .icon-btn,
+.session-row:focus-within .icon-btn {
+  opacity: 1;
+}
+
+.session-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 8px;
+}
+
+.session-rename .input {
+  font-size: 12.5px;
+}
+
+.header-rename {
+  min-width: min(420px, 60vw);
+  padding: 0;
+}
+
+.conversation-title-input {
+  font-family: var(--font-serif);
+  font-size: 20px;
+  padding: 4px 8px;
+}
+
+.session-id {
+  overflow-wrap: anywhere;
+}
+
+/* ── 对话 / 历史消息 ──────────────────────────────────── */
+
+.transcript {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 6px 0 10px;
+}
+
+.load-earlier {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.load-earlier:hover {
+  background: var(--hover-tint);
+  color: var(--ink);
+}
+
+.msg {
+  max-width: 100%;
+}
+
+.msg-role {
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.msg-user {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.msg-bubble {
+  max-width: 78%;
+  padding: 11px 15px;
+  border-radius: var(--radius-lg) var(--radius-lg) 4px var(--radius-lg);
+  background: var(--accent-soft);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg-assistant {
+  padding: 0 2px;
+}
+
+/* 角色切换比同角色消息多一档间距（16 + 8）。 */
+.msg-user + .msg-assistant,
+.msg-assistant + .msg-user {
+  margin-top: var(--space-2);
+}
+
+.msg-text {
+  line-height: 1.75;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.msg-toolcall {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 7px 11px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: 11.5px;
+}
+
+.msg-tool {
+  margin-left: 2px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.msg-tool .msg-role {
+  margin-bottom: 4px;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.msg-tool-result {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── 实时内容直接铺进会话流（0.18） ───────────────────── */
+
+/* 失败 / 取消 / 排队：流里的一条轻量 notice，没有 run 容器或分割线。 */
+.stream-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+/* 状态圆点只是辅助，语义仍由文本与 StatusChip 承担。 */
+.stream-notice::before {
+  content: "";
+  flex: none;
+  align-self: center;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+
+.stream-notice.failed {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.stream-notice.cancelled {
+  color: var(--faint);
+}
+
+.stream-notice.queued {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.stream-notice .run-error,
+.stream-notice .run-error-hint {
+  flex: 1 1 100%;
+}
+
+.stream-notice-input {
+  min-width: 0;
+  flex: 1 1 240px;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.stream-notice-action {
+  flex: none;
+  margin-left: auto;
+}
+
+/* 运行中但还没有任何可见内容时的低干扰占位（0.17）。 */
+.run-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.run-waiting-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.tool-card {
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.tool-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: var(--row-h-tool);
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+}
+
+.tool-card-header:last-child {
+  border-radius: var(--radius-md);
+}
+
+.tool-card-header:hover {
+  background: var(--hover-tint);
+}
+
+.tool-card-glyph {
+  flex: none;
+  font-size: 10px;
+}
+
+.tool-card-glyph.tone-info {
+  color: var(--info);
+}
+
+.tool-card-glyph.tone-ok {
+  color: var(--ok);
+}
+
+.tool-card-glyph.tone-warn {
+  color: var(--warn);
+}
+
+.tool-card-glyph.tone-danger {
+  color: var(--danger);
+}
+
+.tool-card-glyph.tone-muted {
+  color: var(--faint);
+}
+
+.tool-card[data-status="running"] .tool-card-glyph {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.tool-card-name {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.tool-card-args {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.tool-card-duration {
+  flex: none;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.tool-card-chevron {
+  flex: none;
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.tool-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 10px 10px;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+}
+
+.tool-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.tool-section-label {
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.tool-section-body {
+  max-height: 320px;
+  margin: 0;
+  padding: var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-deep);
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-section-head .tool-section-label {
+  padding: 0;
+}
+
+.tool-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tool-section-toggle:hover .tool-section-label {
+  color: var(--muted);
+}
+
+.tool-section-meta {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--faint);
+}
+
+.tool-section-copy {
+  margin-right: 8px;
+  font-size: 10px;
+}
+
+.tool-section-preview {
+  max-height: 220px;
+  opacity: 0.85;
+}
+
+.tool-section-more {
+  margin: 0 8px 6px;
+  font-size: 10.5px;
+}
+
+.tool-section-debug {
+  padding: 4px 8px 6px;
+  font-size: 9.5px;
+  color: var(--faint);
+}
+
+.tool-diff {
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.diff-line {
+  display: block;
+}
+
+.diff-add {
+  color: var(--ok);
+}
+
+.diff-remove {
+  color: var(--danger);
+}
+
+.diff-context {
+  color: var(--faint);
+}
+
+.tool-meta-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 2px 10px;
+  margin: 4px 8px 6px;
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.tool-meta-list dt {
+  color: var(--muted);
+}
+
+.tool-meta-list dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.tool-card-note {
+  font-size: 10.5px;
+  color: var(--warn);
+}
+
+/* 思考流：弱化、可折叠，与正文分开渲染。 */
+.reasoning-block {
+  color: var(--muted);
+}
+
+.reasoning-summary {
+  padding: 6px 10px;
+  color: var(--faint);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.reasoning-summary:hover {
+  color: var(--muted);
+}
+
+.reasoning-text {
+  padding: 6px 10px 8px;
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.reasoning-live {
+  color: var(--info);
+}
+
+.reasoning-more {
+  margin: 0 10px 8px;
+  font-size: 10.5px;
+}
+
+/* ask_user：与 permission-card 一样渲染在 Composer 槽位。 */
+.ask-card {
+  margin: 0;
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+}
+
+.ask-card-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.ask-card-title {
+  font-size: 11.5px;
+  color: var(--ink);
+}
+
+.ask-card-meta {
+  font-size: 10px;
+}
+
+.ask-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr);
+  align-items: baseline;
+  gap: 9px;
+  padding: 3px 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.event-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.row .ts {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+}
+
+.type-tag {
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 17px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.type-tag.tag-tool-start {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.type-tag.tag-tool-done {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.type-tag.tag-tool-fail,
+.type-tag.tag-error {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.type-tag.tag-guard {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.type-tag.tag-llm {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.type-tag.tag-raw {
+  color: var(--muted);
+}
+
+.row.tag-tool-start,
+.row.tag-tool-done,
+.row.tag-tool-fail {
+  margin-left: 10px;
+  padding-left: 12px;
+}
+
+/* 失败 run：摘要保留 240 字截断，展开后显示完整错误（保留换行）。 */
+.run-error {
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.run-error-summary {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  cursor: pointer;
+  list-style: none;
+}
+
+.run-error-summary::-webkit-details-marker {
+  display: none;
+}
+
+.run-error-preview {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.run-error-toggle {
+  flex: none;
+  font-size: 10px;
+  opacity: 0.8;
+}
+
+.run-error[open] .run-error-toggle {
+  display: none;
+}
+
+.run-error-body {
+  max-height: 320px;
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--surface-deep);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.run-error-hint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.run-detail-link {
+  margin-left: auto;
+  text-decoration: none;
+}
+
+.run-output {
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ── 滚动 / 回到底部 ─────────────────────────────────── */
+
+.to-bottom {
+  position: sticky;
+  bottom: 8px;
+  align-self: center;
+  width: max-content;
+  margin-inline: auto;
+  padding: 7px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-raised);
+  color: var(--muted);
+  font-size: 11px;
+  box-shadow: var(--elev-2);
+}
+
+.to-bottom:hover {
+  background: var(--hover-tint);
+  color: var(--ink);
+}
+
+/* ── Composer ─────────────────────────────────────────── */
+
+.composer {
+  width: 100%;
+  max-width: var(--chat-content-w, 860px);
+  margin-inline: auto;
+  padding: 9px 14px 12px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
+}
+
+.composer:focus-within {
+  box-shadow: var(--elev-2), var(--focus-ring);
+}
+
+.composer-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 6px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
+.composer-target {
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.composer-meta-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* 0.18：停止入口在 Composer 区域，不再挂在 run 头部。 */
+.composer-stop {
+  font-size: 11px;
+  color: var(--danger);
+}
+
+.composer-stop:disabled {
+  opacity: 0.6;
+}
+
+.composer-hint {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+}
+
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.composer-input {
+  flex: 1;
+  min-height: 24px;
+  max-height: min(160px, 34dvh);
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--ink);
+  resize: none;
+  overflow-y: auto;
+}
+
+.composer-input:focus,
+.composer-input:focus-visible {
+  outline: none;
+}
+
+.composer-input::placeholder {
+  color: var(--faint);
+}
+
+.composer-input:disabled {
+  opacity: 0.55;
+}
+
+/* 0.18：pending 时用同尺寸提示卡替换 Composer；权限/提问共用同一外壳。 */
+.prompt-slot {
+  width: 100%;
+  max-width: var(--chat-content-w, 860px);
+  margin-inline: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  /* 与 Composer 同宽同圆角；内容自适应：短权限贴近输入框高度，
+     长 args / 多问题 ask 向上扩展，超过上限后在槽位内部滚动。 */
+  height: auto;
+  min-height: 64px;
+  max-height: min(300px, 46vh);
+  padding: 9px 14px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--radius-lg);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
+}
+
+.prompt-slot:focus {
+  box-shadow: var(--elev-2), var(--focus-ring);
+}
+
+.prompt-slot-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 1px 0 2px;
+  background: var(--surface-raised);
+  font-size: 11px;
+}
+
+/* 固定高度下长内容可滚动，但允许/拒绝/提交入口始终留在视野内。 */
+.prompt-slot .permission-card-actions,
+.prompt-slot .ask-card-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding-top: 8px;
+}
+
+.prompt-slot .permission-card-actions,
+.prompt-slot .ask-card-actions {
+  background: var(--surface-raised);
+}
+
+.prompt-slot-kind {
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.prompt-slot-hint {
+  margin-left: auto;
+  font-size: 10.5px;
+}

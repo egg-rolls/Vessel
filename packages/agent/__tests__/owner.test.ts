@@ -86,7 +86,7 @@ describe('root owner', () => {
     expect((error as AgentError).code).toBe('invalid_input');
   });
 
-  it('snapshot keeps the owner and attach restores it from stale to idle', async () => {
+  it('snapshot keeps the owner and attach restores it from gone to live', async () => {
     const dataDir = await tempDir();
     const first = makeService({ dataDir });
     await first.service.attachOwner({ id: 'main', visibility: 'team' });
@@ -94,10 +94,12 @@ describe('root owner', () => {
 
     const second = makeService({ dataDir });
     const [before] = await second.service.list({ viewer: 'main' });
-    expect(before?.state).toBe('stale');
+    expect(before?.state).toBe('idle');
+    expect(before?.presence).toBe('gone');
 
     const restored = await second.service.attachOwner({ id: 'main', visibility: 'team' });
     expect(restored.state).toBe('idle');
+    expect(restored.presence).toBe('live');
     expect(second.runtime.spawned).toEqual([]);
     expect((await second.service.list({ viewer: 'main' }))[0]?.state).toBe('idle');
   });

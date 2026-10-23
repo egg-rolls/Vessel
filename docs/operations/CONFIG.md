@@ -70,7 +70,7 @@ serve:
 ```
 
 tenant overlay 允许的顶层块：`provider / agent / context / limits / termination /
-session / plugins / workflow / evals / feishu / tools / mcp_servers /
+session / plugins / evals / feishu / tools / mcp_servers /
 host / scheduler / transport / quota`。禁止 `data_dir / trace / serve /
 tenant / update`；未知块直接报错。合并规则：对象深合并、数组整体替换、map
 （`mcp_servers`）按 key 合并、`null` 拒绝。`plugins` 是**数组**，按整层替换，
@@ -171,7 +171,7 @@ agent:
 - **`agent.cwd`**：`bash` 未显式传 `cwd` 时使用该目录；`read` / `edit` 的相对路径按它解析。支持 `~`，相对路径按进程 cwd 解析为绝对路径；未配置 / 空串等价于不设置。优先级固定为 **工具参数 `cwd` > `agent.cwd` > `process.cwd()`**。
 - **边界不变**：`agent.cwd` 只提供默认目录，不放宽内置 denylist 或 `allowed_roots`；越界仍按原有 `deny` / `ask` 语义处理。配置的目录不存在时，工具在调用时返回明确错误，不静默回退到进程 cwd。0.14.2 起 `bash` 还会在命令文本中匹配内置 denylist（`~/.ssh`、`~/.aws`、`~/.gnupg`、`~/.vessel/config.yaml`），命中直接拒绝（`path_denied`）；该检查只做字符串匹配、不是沙箱，任何配置都不能放宽或替换它。
 - **CLI 写配置**：`vessel config set agent.cwd <path>`；空值被拒绝。与 `ui.language` 一样只改用户配置、保留其它键、`0600` 原子写。
-- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 提问卡仍按事件时间推导 `event.ts + 120s`；权限卡片不再按 TTL 丢弃。详见 §2.6。
+- **权限时效**（0.13 修订，ADR-079）：权限等待默认不超时，直到应答、取消或 abort；只有 core 显式配置正数 `RuntimePermissionConfig.timeoutMs` 才抛 `PermissionTimeoutError`（`permission_timeout`）并让 run 失败。abort 抛 `PermissionAbortedError`（`permission_cancelled`）。`ask_user` 与权限请求一样默认无限等待，由应答 / abort / run 终态收口，提问卡片不再倒计时。详见 §2.6。
 
 ### 2.5 状态栏与显隐（0.13，ADR-078）
 
@@ -192,7 +192,7 @@ ui:
 - **持久化文件**：default 实例为 `<dataDir>/interactions-<tenant>.json`，命名实例为 `<dataDir>/instances/<instance>/interactions-<tenant>.json`（目录 `0700`），`0600` 原子写，记录 `pending` / `answered` / `orphaned`。gateway 启动时加载；重启后仍为 `pending` 的记录转 `orphaned`（本进程没有对应 run）。文件损坏 / 不可读只向 stderr 报错并按空集处理，不删除原文件。
 - **终态与幂等**：run 进入 `completed` / `failed` / `cancelled` 时，同 run 的 pending 清出并持久化为 `orphaned`。重复应答返回首次结果（`duplicate: true`）；不同决定返回 `conflict`；`orphaned` 返回 `run_ended`；不存在返回 `not_found`。有界清理只淘汰最旧的 `answered` / `orphaned`，pending 不淘汰。
 - **关联字段**：`tool.permission.request` 带 `session_id` / `tool_call_id` / `source`；只有显式超时才带 `deadline_at`。
-- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；没有 `interactions.pending` RPC，刷新恢复依赖事件重放缓冲；`ask_user` 提问卡仍按事件时间 120s 过期，未接入持久化交互记录。
+- **已知限制**：core 只读取 `remember`（等价 `always`），`allow session` 目前等同 `once`；`interactions.list` 可只读查询 pending / answered / orphaned 权限与内存 pending ask，但 pending ask 仍只在内存；`ask_user` 默认无限等待，不按时间过期。
 
 ### 2.7 可见性与 ask_user（0.14 / 0.14.1，ADR-080 / ADR-082）
 
@@ -210,7 +210,7 @@ observability:
 - **`ui.showInternalEvents`**（默认 `false`）：TUI `/errors` 与 Web 展示内部事件；与 `verbosity: debug` 取“或”。
 - **`ui.errorLevel`**（默认 `user`）：`all` 时 `/errors` 与 `vessel errors` 追加 internal / process 级错误。
 - **`observability.showProcessErrors`**（默认 `false`）：让 `process.error` / `shutdown.failed` 等进入 `vessel errors`。
-- **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口与 tenant 关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，有效期仍为事件时间 `event.ts + 120s`。
+- **`ui.ask_user`**（入口默认）：交互 REPL（TTY）或 gateway/serve 才注册；`--run` / headless / 管道不注册；显式 `false` 按入口与 tenant 关闭，显式 `true` 也不能让无客户端入口注册。提问卡内联在 Web `RunCard`，默认无限等待，由应答 / abort / run 终态收口。
 - **校验**：枚举与布尔值非法时由 validator 拒绝，不做静默回退；四个键都支持 `vessel config set`。
 - **CLI 写配置**：`vessel config set ui.verbosity <minimal|normal|debug>`、`ui.showInternalEvents <true|false>`、`ui.errorLevel <user|all>`、`ui.askUser <true|false>`、`observability.showProcessErrors <true|false>`；与其它键一样只改用户配置、保留其它键、`0600` 原子写。
 
@@ -255,7 +255,7 @@ termination:
 - **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
 - **已知限制**：shared 锁不阻止两个进程写同一 tenant 的不同 session；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
 
-### 2.11 AgentService 与成员（0.17，ADR-088）
+### 2.11 AgentService 与成员（0.17，ADR-088；0.19 S1/S2 修订见 ADR-091 / ADR-092）
 
 ```yaml
 agent:
@@ -269,16 +269,61 @@ agent:
   # limits / termination 缺省继承顶层；cwd 见 §2.4
 ```
 
-- **`agent.enabled`**（默认 `false`）：唯一开关。启用后注册内置 `agent` 工具（`new` / `send` / `close` / `list`，支持 batch），启动 AgentService，并在交互 REPL 中尝试启动 loopback owner 端点。
+- **`agent.enabled`**（默认 `false`）：唯一开关。启用后注册内置 `agent` 工具（owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`，支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner），启动 AgentService，并在交互 REPL 中尝试启动 loopback owner 端点。
 - **`agent.owner_id`**（默认 `main`）：root owner（REPL 主 agent）的成员 id；owner 队列由父 turn 的 `BeforeLlm` 排空，不再另起 pump。
-- **`agent.default_visibility`**（默认 `private`）：`new` 未显式传 `visibility` 时的成员可见性。`private` 仅 owner 可寻址；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
+- **`agent.default_visibility`**（默认 `private`）：`new` 未显式传 `visibility` 时的成员可见性。绑定 Team 且未显式指定时缺省为 `team`（0.19 S3），unbound 保持 `private`；`private` 仅 owner 可寻址，且不写 Team 日志；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
 - **`agent.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限 / ask 弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `agent.read_only_tools`（默认 `['read']`）。无父事件流时 bridge 退化为 deny，不死等。
 - **`agent.follow_replies`**（默认 `false`）：回复在下一次 `BeforeLlm` 注入父会话；不会自动开启新的父 turn。
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
 - **工具数（实测）**：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4（+`agent`）；真交互 REPL（TTY）或 gateway/serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
-- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|close|list [--json]` 经该记录 attach。
-- **已知限制**：消息队列只在内存，重启丢失未处理消息，非终态成员恢复为 `stale`；`close` 只支持本机成员；canonical RPC 仍为 44。
+- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
+- **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
+- **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 为 **47**（见 §2.13）。
+
+### 2.12 Team 声明（0.19 S3，ADR-091）
+
+```yaml
+teams:
+  - name: alpha                  # 可选；缺省由装配层决定
+    workspace: ~/work/alpha      # 必填；归一化后精确匹配
+    handoff_path: ~/work/alpha/HANDOFF.md   # 可选；只存，S3 不消费
+    policy: {}                   # 原样保留；S3 只存不执行
+```
+
+- **全局配置**；tenant overlay **不允许** `teams`（validator 拒绝，loader 丢弃）。
+- 校验：必须是数组；每项对象；`workspace` 非空；归一化（展开 `~`、`path.resolve`，Windows 忽略大小写）后重复声明 → validation error；`name` / `handoff_path` 非空；`policy` 为普通对象。
+- 声明只**补写缺失**的 `<dataDir>/teams/<tenant>/<team_id>/team.json`；不创建 Agent，不覆盖已有 `name` / `policy`，与已有文件冲突只 warning。
+- **默认绑定**：`new` 无显式 workspace 时，只有带 `name` 的 Agent 才绑定；workspace 必须与声明归一化后精确相等；多个声明命中 → 不绑定 + warning。显式 `--workspace` 但无 name → `invalid_input('team binding requires a name')`。
+- 绑定后默认 visibility `team`；unbound 保持 `private`。Team 只是 roster / 只写日志 / 定向寻址的分组，**不是 cwd 或安全边界**（成员仍共享父工具 cwd）。
+- roster 由 Agent 记录的 `team_id + membership` 派生，不单独持久化；`online_count = present && presence === 'live'`；`body_history` 透传（≤20）。
+- 无 `@` 的 post / reply / system **只写日志、不产生 run**；`@` 用结构化 agent id，先写日志再 dispatch。private 成员不写日志、不可被 `@`。
+- canonical：`teams.list` / `teams.get`（read）、`teams.post` / `teams.members`（write）；未注入或 tenant 不匹配返回 `not_found`。
+
+### 2.13 Hub 控制面（0.19 S5，ADR-093）
+
+```yaml
+hub:
+  data_dir: ~/.vessel/hub        # 必须与全局 data_dir 不同
+  direction: hub                 # 当前只支持 hub；node 是 S5.1（未实现）
+  listen: { hostname: 127.0.0.1, port: 8643 }
+  allow_remote: false
+  tls: { cert_file: ..., key_file: ... }   # 非回环必填，且 cert/key 成对
+  allowed_origins: [https://console.example]
+  token_env: VESSEL_HUB_TOKEN    # 非回环必须非空
+  allow_file_secrets: false      # true 才允许 Linux AES-GCM 文件回退
+  pairing_ttl_seconds: 300       # 60–3600
+```
+
+- `hub` 是 **全局块**；tenant overlay 不允许。`hub.data_dir` 与全局 `data_dir` 相同 → validation error `hub_data_dir_conflict`。
+- `direction` 只支持 `hub`（hub 主动拨号节点）；`node`（node → hub 出站 / NAT）是 **S5.1，未实现**，运行时会拒绝。
+- 非回环 `hub.listen.hostname` 必须 `allow_remote: true` + TLS cert/key + 非空 `token_env`；不提供 `--insecure`。
+- `hub` 不接受明文 `token`，只允许 `token_env`（hub 自己的读 token）。节点 control token **只走 SecretStore**，不写 YAML / `registry.json`。
+- `allow_file_secrets`（默认 `false`）：平台 SecretStore（DPAPI / Keychain / libsecret）不可用时，只有显式 `true` 才退到 AES-256-GCM 文件；否则 fail-closed。
+- `pairing_ttl_seconds`（默认 300，范围 60–3600）：一次性配对码有效期；码只存 hash、先烧后用。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 合并后总数为 **47**（46 个 domain 方法 + `events.subscribe`）。
+- **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
+- **已知限制**：S5 只做 hub → node 拨号；node → hub 出站（NAT）为 S5.1，跨节点 A2A 为 S7，均未实现。hub 只前台运行，不做 daemon / 系统服务注册；Web 当前不消费 hub 目录 / data token。
 
 ## 3. 密钥与 `_env`
 
@@ -321,9 +366,29 @@ vessel doctor [--deep] [--json]
 vessel logs tail [--json] [--lines N] [--instance <name>]
 vessel agent new [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
 vessel agent send <member> <content...> [--json]
+vessel agent dispatch <to> <content...> [--json]
+vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]
 vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
+vessel team list [--json]
+vessel team get <team_id> [--limit N] [--json]
+vessel team post <team_id> <content...> [--mention <name|id>]... [--json]
+vessel team members <team_id> add|remove <member> [--json]
+vessel hub start [--host <h>] [--port <p>] [--data-dir <hubDir>] [--allow-remote]
+vessel hub directory [--hub-url <url>] [--json]
+vessel hub watch [--hub-url <url>]
+vessel hub pair [--tenant <id>] [--ttl <s>]
+vessel hub node add <url> --code <CODE> [--alias <name>]
+vessel hub node list [--json]
+vessel hub node remove <pairing_id>
+vessel hub token exchange <node-url> --team <team_id> [--json]
+vessel hub token revoke <node-url> --token-id <id>
+vessel hub token list <node-url> [--json]
+vessel hub data-token <pairing_id> --team <team_id> [--json]
 ```
+
+- `vessel team ...` 经 owner 端点（`from = ownerId`、viewer 可见 private）；`team post` 的 `--mention` 先在同 Team roster 内解析为 agent id，日志写成功但任一投递失败时退出 1。
+- `vessel hub ...` 管理与探针命令直连 hub / 节点；`hub pair` 在节点侧生成一次性码，`hub node add` 在 hub 侧纳入节点；token 明文只在 `token exchange` 的响中出现一次，不写日志。
 
 - `vessel agent ...` 经 `<dataDir>/agent-owner.json` attach 到交互 REPL 的 owner；没有 owner 时 `agent_owner_unavailable`，`--tenant` 与 owner 不一致时 `agent_owner_tenant_mismatch`。命令只做参数映射，生命周期全在 owner。
 
@@ -390,9 +455,9 @@ plugin host + plugins / trace recorder / metrics collector / redactor / sessionC
 - 每个 active tenant 持有自己的租约：file / memory 后端为 shared `.members/` 租约（多进程共存），sqlite / `--exclusive` 为 exclusive `.lock`。启动失败必须回滚已获取的锁，shutdown 全部释放；exclusive 冲突返回 `tenant_locked`，session / run 写冲突返回 `conflict` + `session_locked` / `run_locked`。
 - `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
 - 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
-- 每个 tenant bundle 还构建 workflow / feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。
+- 每个 tenant bundle 还构建 feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。
 - **状态**：ext 插件 tenant 行为、web A-6.3 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 per-tenant 执行接线**均已实现**。
-- **已知限制**：gateway 的 workflow / 飞书控制面仍只走 default tenant（A-6 §13.3 方法表未包含 per-tenant 变体）。
+- **已知限制**：gateway 的飞书控制面仍只走 default tenant（A-6 §13.3 方法表未包含 per-tenant 变体）。
 
 ## 7. 示例：多租户部署
 

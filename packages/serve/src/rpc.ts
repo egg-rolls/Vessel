@@ -7,6 +7,7 @@
  * @module @vessel-agent/serve/rpc
  */
 
+import type { PrincipalScope } from '@vessel-agent/config';
 import type { RunEvent } from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from './protocol.js';
 
@@ -85,7 +86,18 @@ export class RpcError extends Error {
 /** 单次分发的上下文 */
 export interface RpcMethodContext {
   /** 由 token 解析出的 principal；tenant_id 可为 '*'（admin token） */
-  principal: { tenant_id: string; role: MethodPermission };
+  principal: {
+    tenant_id: string;
+    role: MethodPermission;
+    /** S5：动态 token 的 scope；静态 token 缺省 */
+    scope?: PrincipalScope;
+    /** S5：control token 的 team 限制 */
+    team_id?: string;
+    /** S5：吊销 / 关闭 WS 用 */
+    token_id?: string;
+    /** S5：token 绑定的 hub */
+    hub_id?: string;
+  };
   /** 本次请求实际作用的目标 tenant（admin 可显式指定） */
   tenantId: string;
   isAdmin: boolean;
@@ -202,6 +214,55 @@ export interface RpcDispatcherHandle {
 
 /** 角色等级；REST 控制面与 RPC 方法表共用，避免第二套权限判断。 */
 export const ROLE_RANK: Record<MethodPermission, number> = { read: 1, write: 2, admin: 3 };
+
+/**
+ * S5：动态 token scope 的方法白名单。
+ *
+ * 规则在 rank 检查**之前**应用；`admin` 与缺省 scope（静态 token）保持原
+ * rank 语义不变。不新增 role 字符串，也不改 `ROLE_RANK`。
+ */
+const VIEW_SCOPE_METHODS: ReadonlySet<string> = new Set(['health.get', 'capabilities.list']);
+const EXCHANGE_SCOPE_METHODS: ReadonlySet<string> = new Set(['auth.exchange']);
+const CONTROL_SCOPE_METHODS: ReadonlySet<string> = new Set([
+  'health.get',
+  'capabilities.list',
+  'teams.list',
+  'teams.get',
+  'teams.post',
+  'events.subscribe',
+  'interactions.list',
+  'permission.respond',
+  'ask.respond',
+]);
+
+/** scope 的方法白名单；返回 null 表示沿用 rank 检查（admin / 缺省）。 */
+function scopeAllowlist(scope: PrincipalScope | undefined): ReadonlySet<string> | null {
+  switch (scope) {
+    case 'view':
+      return VIEW_SCOPE_METHODS;
+    case 'exchange':
+      return EXCHANGE_SCOPE_METHODS;
+    case 'control':
+      return CONTROL_SCOPE_METHODS;
+    default:
+      return null;
+  }
+}
+
+/**
+ * S5：principal 是否为按 team 收窄的 control token。
+ * 只有 `scope === 'control'` 且带非空 `team_id` 时成立；调用方据此做
+ * team 过滤，映射不可用时 fail-closed。
+ */
+export function isTeamScopedPrincipal(
+  principal: Pick<RpcMethodContext['principal'], 'scope' | 'team_id'>,
+): boolean {
+  return (
+    principal.scope === 'control' &&
+    typeof principal.team_id === 'string' &&
+    principal.team_id.length > 0
+  );
+}
 
 /** principal 是否达到所需权限（未知角色按 read 处理）。 */
 export function hasPermission(
@@ -404,6 +465,16 @@ export function createRpcDispatcher(options: CreateRpcDispatcherOptions): RpcDis
       ctx = makeContext(method, params, principal, connection);
     } catch (error) {
       return failure(id, toErrorBody(error));
+    }
+
+    // S5：动态 token scope 白名单先于 rank 检查；admin / 缺省 scope 不受影响。
+    const allowlist = scopeAllowlist(principal.scope);
+    if (allowlist !== null && !allowlist.has(method.name)) {
+      return failure(id, {
+        code: 'forbidden',
+        message: `Method ${method.name} is not allowed for scope ${principal.scope}`,
+        details: { method: method.name, scope: principal.scope },
+      });
     }
 
     const rank = ROLE_RANK[principal.role] ?? 1;

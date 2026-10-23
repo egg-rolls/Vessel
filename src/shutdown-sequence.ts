@@ -16,7 +16,7 @@ export interface ShutdownSequenceOptions {
   /** null/undefined = 未启动 gateway（headless / REPL），此时 bundle 自己 drain */
   gateway?: { stop(): Promise<void> } | null;
   closeTransport?: () => Promise<void>;
-  /** gateway 关闭后、tenant 关闭前（如 workflow interrupt） */
+  /** gateway 关闭后、tenant 关闭前 */
   beforeClose?: () => Promise<void>;
   closeTenants: (options?: { drain?: boolean }) => Promise<void>;
   shutdown: (options?: { drain?: boolean }) => Promise<void>;

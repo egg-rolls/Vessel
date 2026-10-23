@@ -3,10 +3,12 @@ import { RAIL_MAX_WIDTH } from '../../app/layout';
 import { useRefreshSignal } from '../../app/refresh';
 import type { Route } from '../../app/router';
 import { useDrawerA11y } from '../../app/useDrawerA11y';
+import type { PaneResizeApi } from '../../app/usePaneResize';
 import { useViewportWidth } from '../../app/useViewportWidth';
 import { useVisualViewport } from '../../app/useVisualViewport';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { usePaletteEntities } from '../../components/PaletteEntities';
+import { ResizeHandle } from '../../components/ResizeHandle';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection, useEventSnapshot } from '../../gateway/ConnectionProvider';
@@ -23,26 +25,33 @@ import { EventGroupCache } from '../../state/group-cache';
 import type { PaletteItem } from '../../state/palette';
 import {
   filterSessions,
-  matchesSessionStatus,
   removeSessionFromList,
   renameSessionInList,
   SESSION_PAGE_SIZE,
-  type SessionStatusFilter,
   selectionAfterDelete,
   sessionTitle,
   sortSessions,
   takeSessions,
 } from '../../state/sessions';
-import { useResource } from '../../state/useResource';
+import { resourceData, useResource } from '../../state/useResource';
 import { resolveUiVisibility, showsInternalEvents } from '../../state/visibility';
 import { windowTail } from '../../transcript';
+import { ChatWelcome } from './ChatWelcome';
 import { Composer } from './Composer';
+import { OrphanedNotices } from './OrphanedNotices';
 import { AskPrompt, PermissionPrompt } from './PromptSlots';
 import { pendingForSession, pendingQueue } from './pending-permissions';
 import { SessionHeader } from './SessionHeader';
 import { SessionList } from './SessionList';
 import { QueuedNotice, type QueuedSubmission, RunItems } from './StreamItems';
 import { SubagentTranscript } from './SubagentTranscript';
+import {
+  browserSessionStorage,
+  clearLastSession,
+  decideSessionRestore,
+  readLastSession,
+  writeLastSession,
+} from './session-selection';
 import { Transcript } from './Transcript';
 
 const TRANSCRIPT_WINDOW = 50;
@@ -78,21 +87,26 @@ export function ChatView({
   navigate,
   sessionsOpen,
   onCloseSessions,
+  panes,
 }: {
   route: ChatRoute;
   navigate: (route: Route) => void;
   sessionsOpen: boolean;
   onCloseSessions: () => void;
+  panes: PaneResizeApi;
 }) {
   const {
     client,
     hasToken,
     connectionState,
     epoch,
-    retry,
     features,
+    tenantId,
     permissions,
     asks,
+    orphaned,
+    hydrateInteractions,
+    dismissOrphaned,
     responding,
     respondPermission,
     respondAsk,
@@ -120,15 +134,12 @@ export function ChatView({
     ids: Set<string>;
     snippets: Map<string, string>;
   } | null>(null);
-  const [status, setStatus] = useState<SessionStatusFilter>('all');
   const [renderLimit, setRenderLimit] = useState(SESSION_PAGE_SIZE);
   const [input, setInput] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [queuedRuns, setQueuedRuns] = useState<QueuedSubmission[]>([]);
   const [cancelling, setCancelling] = useState<Set<string>>(new Set());
   const [cancelledJobs, setCancelledJobs] = useState<Set<string>>(new Set());
-  /** null = 跟随 `ui.showInternalEvents` / `ui.verbosity`；布尔值 = 本会话手动覆盖。 */
-  const [showInternalOverride, setShowInternalOverride] = useState<boolean | null>(null);
   const [transcriptLimit, setTranscriptLimit] = useState(TRANSCRIPT_WINDOW);
   const [renameSignal, setRenameSignal] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<SessionInfo | null>(null);
@@ -144,6 +155,7 @@ export function ChatView({
   const compact = useViewportWidth() <= RAIL_MAX_WIDTH;
   const [nearBottom, setNearBottom] = useState(true);
   const [composerFocus, setComposerFocus] = useState(0);
+  const [restorePending, setRestorePending] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -171,6 +183,14 @@ export function ChatView({
     }
   }, [draftActive, draftId]);
 
+  // 选中会话 / 重连后从服务端补回 pending 交互（浏览器刷新不会重放旧 WS 事件）。
+  // ConnectionProvider 的 [epoch, hasToken] effect 负责连接 / 刷新，这里补“切会话”。
+  // biome-ignore lint/correctness/useExhaustiveDependencies: epoch 是重连后的显式刷新触发器
+  useEffect(() => {
+    if (!selectedId || !connected) return;
+    void hydrateInteractions();
+  }, [selectedId, connected, epoch, hydrateInteractions]);
+
   // 会话列表：有 token 就加载（重连期间走 HTTP RPC），15s 轮询；本地副本支持乐观重命名。
   const sessionsResource = useResource({
     load: () => client.listSessions(),
@@ -183,6 +203,64 @@ export function ChatView({
       setSessions(sortSessions(sessionsResource.state.data));
     }
   }, [sessionsResource.state]);
+
+  /** null = 列表尚未加载（或加载失败），此时不能判定记录失效。 */
+  const knownSessionIds = useMemo(() => {
+    const known = resourceData(sessionsResource.state);
+    return known ? known.map((session) => session.session_id) : null;
+  }, [sessionsResource.state]);
+  const sessionsUnavailable =
+    sessionsResource.state.status === 'error' && resourceData(sessionsResource.state) === undefined;
+
+  // 只记录真实会话；`new` / 无选择不写。
+  useEffect(() => {
+    if (!selectedId) return;
+    writeLastSession(browserSessionStorage(), tenantId, selectedId);
+  }, [tenantId, selectedId]);
+
+  // 路由变成真实 id / `new` 后决策必为 keep，不会重复导航。
+  useEffect(() => {
+    if (!hasToken) {
+      setRestorePending(false);
+      return;
+    }
+    // 坑：sessions.list 可能先于 hello 返回；tenant 未知时读 key 会落到 default，
+    // 从而把真实 tenant 的记录判成不存在。
+    if (!tenantId) {
+      // gateway 不可达时 hello 永不返回：不要在会话区永久显示“恢复中”。
+      setRestorePending(connectionState === 'idle' || connectionState === 'connecting');
+      return;
+    }
+    const decision = decideSessionRestore({
+      routeSessionId: route.sessionId,
+      storedSessionId: readLastSession(browserSessionStorage(), tenantId),
+      knownSessionIds,
+    });
+    if (decision.kind === 'keep') {
+      setRestorePending(false);
+      return;
+    }
+    if (decision.kind === 'wait') {
+      // 列表失败且无缓存：放弃自动恢复，但保留记录供下次进入重试。
+      setRestorePending(!sessionsUnavailable);
+      return;
+    }
+    setRestorePending(false);
+    if (decision.kind === 'restore') {
+      navigate({ domain: 'chat', sessionId: decision.sessionId });
+      return;
+    }
+    if (decision.clear) clearLastSession(browserSessionStorage(), tenantId);
+    navigate({ domain: 'chat', sessionId: 'new' });
+  }, [
+    hasToken,
+    tenantId,
+    connectionState,
+    route.sessionId,
+    knownSessionIds,
+    navigate,
+    sessionsUnavailable,
+  ]);
 
   // 0.15：信息层级来自 `ui.verbosity` / `ui.showInternalEvents` / `ui.errorLevel`；
   // 读取失败回退 0.13 行为（normal / 隐藏内部事件 / user）。
@@ -199,7 +277,7 @@ export function ChatView({
     [configResource.state],
   );
   const errorLevel = visibility.errorLevel;
-  const showInternal = showInternalOverride ?? showsInternalEvents(visibility);
+  const showInternal = showsInternalEvents(visibility);
   const groupCache = useRef<EventGroupCache | null>(null);
   if (!groupCache.current) groupCache.current = new EventGroupCache();
 
@@ -374,8 +452,14 @@ export function ChatView({
 
   // 按 run 增量缓存：50ms 快照只重建受影响的 run，未变化的 RunGroup 引用不变。
   const groups = useMemo(
-    () => groupCache.current?.group(snapshot.entries, showInternal, errorLevel) ?? [],
-    [snapshot.entries, showInternal, errorLevel],
+    () =>
+      groupCache.current?.group(
+        snapshot.entries,
+        showInternal,
+        errorLevel,
+        snapshot.truncatedSince,
+      ) ?? [],
+    [snapshot.entries, showInternal, errorLevel, snapshot.truncatedSince],
   );
 
   // 0.14：子 agent 树与 `?agent=` 深链（纯事件派生，不新增 RPC）。
@@ -386,6 +470,39 @@ export function ChatView({
   );
   const activeAgent = selectedId && route.agent ? findAgent(sessionAgents, route.agent) : undefined;
 
+  // 会话头上下文长度：agents.tree 主 agent 的 context_used；运行中 5s 轮询。
+  const sessionRunning =
+    selectedId !== null &&
+    (sessions.some(
+      (session) => session.session_id === selectedId && session.status === 'running',
+    ) ||
+      sessionAgents.some((node) => node.state === 'running'));
+  const contextResource = useResource<{
+    sessionId: string;
+    used: number;
+    max?: number;
+  } | null>({
+    load: async () => {
+      if (!selectedId) return null;
+      const tree = await client.listAgentsTree({ session_id: selectedId });
+      const main = tree.nodes
+        .filter((node) => node.id === selectedId || node.session_id === selectedId)
+        .sort((a, b) => a.depth - b.depth)[0];
+      if (!main || main.context_used === undefined) return null;
+      return {
+        sessionId: selectedId,
+        used: main.context_used,
+        ...(main.context_max !== undefined ? { max: main.context_max } : {}),
+      };
+    },
+    enabled: hasToken && Boolean(selectedId),
+    ...(sessionRunning ? { pollMs: 5000 } : {}),
+    deps: [selectedId, epoch, sessionRunning],
+  });
+  const contextData = resourceData(contextResource.state);
+  const contextUsage =
+    selectedId && contextData?.sessionId === selectedId ? contextData : undefined;
+
   const detailState = detailResource.state;
   const sessionDetail =
     selectedId && 'data' in detailState && detailState.data?.session_id === selectedId
@@ -395,6 +512,13 @@ export function ChatView({
   const hydrateError = detailState.status === 'error' && !sessionDetail ? detailState.error : null;
   const hydrateStale = detailState.status === 'error' && sessionDetail ? detailState.error : null;
   const hydrating = Boolean(selectedId) && detailState.status === 'loading' && !sessionDetail;
+
+  // 已删除的会话不能再被记录恢复；只清记录，不改变当前错误页。
+  useEffect(() => {
+    if (hydrateError !== NOT_FOUND_MESSAGE || !selectedId) return;
+    const storage = browserSessionStorage();
+    if (readLastSession(storage, tenantId) === selectedId) clearLastSession(storage, tenantId);
+  }, [hydrateError, selectedId, tenantId]);
 
   const visibleGroups = useMemo(() => {
     if (!selectedId) return [];
@@ -435,6 +559,11 @@ export function ChatView({
   const sessionAsks = useMemo(
     () => pendingForSession(asks, selectedId, sessionRunIds),
     [asks, selectedId, sessionRunIds],
+  );
+  // 失效交互不参与串行槽位 / 队列 / 待处理计数，只在 Composer 上方提示。
+  const sessionOrphans = useMemo(
+    () => pendingForSession(orphaned, selectedId, sessionRunIds),
+    [orphaned, selectedId, sessionRunIds],
   );
   // 串行处理：队列按 requestedAt 排序，ask 按问题拆项；槽位只渲染第一项。
   const pendingItems = useMemo(
@@ -561,18 +690,15 @@ export function ChatView({
   const filteredSessions = useMemo(() => {
     // 服务端命中的会话可能只在消息正文里匹配，不能再叠加本地 title/preview 过滤。
     if (activeServerSearch) {
-      return sortedSessions.filter(
-        (session) =>
-          activeServerSearch.ids.has(session.session_id) && matchesSessionStatus(session, status),
-      );
+      return sortedSessions.filter((session) => activeServerSearch.ids.has(session.session_id));
     }
-    return filterSessions(sortedSessions, { query: debouncedQuery, status });
-  }, [activeServerSearch, sortedSessions, debouncedQuery, status]);
+    return filterSessions(sortedSessions, { query: debouncedQuery });
+  }, [activeServerSearch, sortedSessions, debouncedQuery]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 查询/过滤变化时回到第一页
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 查询变化时回到第一页
   useEffect(() => {
     setRenderLimit(SESSION_PAGE_SIZE);
-  }, [debouncedQuery, status]);
+  }, [debouncedQuery]);
 
   const sessionWindow = takeSessions(filteredSessions, renderLimit);
   const selectedSession = selectedId
@@ -808,10 +934,14 @@ export function ChatView({
     try {
       const result = await client.deleteSession(deleteTarget.session_id);
       const next = selectionAfterDelete(selectedId, draftId, deleteTarget.session_id);
+      const storage = browserSessionStorage();
+      if (readLastSession(storage, tenantId) === deleteTarget.session_id) {
+        clearLastSession(storage, tenantId);
+      }
       setSessions((list) => removeSessionFromList(list, deleteTarget.session_id));
       setDeleteTarget(null);
       if (next.selectedId === null && next.draftId === null) {
-        navigate({ domain: 'chat' });
+        navigate({ domain: 'chat', sessionId: 'new' });
       }
       toast.success(`已删除会话（runs: ${result.runs_deleted}, events: ${result.events_deleted}）`);
       sessionsResource.reload();
@@ -844,8 +974,6 @@ export function ChatView({
       >
         <SessionList
           sessions={sessionWindow.shown}
-          filteredCount={filteredSessions.length}
-          totalCount={sortedSessions.length}
           hiddenCount={sessionWindow.hiddenCount}
           selectedId={selectedId}
           draftActive={draftActive}
@@ -853,8 +981,6 @@ export function ChatView({
           query={query}
           onQueryChange={setQuery}
           searchSnippets={activeServerSearch?.snippets}
-          status={status}
-          onStatusChange={setStatus}
           loading={sessionsResource.state.status === 'loading'}
           error={sessionsResource.state.status === 'error' ? sessionsResource.state.error : null}
           onRetry={sessionsResource.reload}
@@ -874,6 +1000,14 @@ export function ChatView({
           writesDisabled={!connected}
           renameSignal={renameSignal}
         />
+        {!panes.disabled('sessions') && (
+          <ResizeHandle
+            pane="sessions"
+            api={panes}
+            label={t('resize.sessions')}
+            className="resize-handle resize-handle-sessions"
+          />
+        )}
       </aside>
 
       {compact && sessionsOpen && (
@@ -891,25 +1025,21 @@ export function ChatView({
         inert={compact && sessionsOpen ? true : undefined}
       >
         <h1 className="sr-only">会话</h1>
+        {!panes.disabled('chat') && (
+          <ResizeHandle
+            pane="chat"
+            api={panes}
+            label={t('resize.chat')}
+            className="resize-handle resize-handle-chat"
+          />
+        )}
 
         {selectedId ? (
           <SessionHeader
             session={selectedSession ?? null}
             sessionId={selectedId}
             detail={sessionDetail}
-            refreshing={detailState.status === 'loading'}
-            onRefresh={detailResource.reload}
-            onRename={(title) => handleRename(selectedId, title)}
-            onDelete={() => {
-              if (selectedSession) {
-                setDeleteError(null);
-                setDeleteTarget(selectedSession);
-              }
-            }}
-            onViewRuns={() => navigate({ domain: 'runs', tab: 'live', sessionId: selectedId })}
-            showInternal={showInternal}
-            onToggleInternal={() => setShowInternalOverride(!showInternal)}
-            writesDisabled={!connected}
+            contextUsage={contextUsage}
             agents={sessionAgents}
             activeAgentId={activeAgent?.id}
             onSelectAgent={(agentId) =>
@@ -923,15 +1053,12 @@ export function ChatView({
         ) : (
           <div className="conversation-head draft-head">
             <div className="conversation-heading">
-              <h2 className="conversation-title">{draftActive ? '新会话' : '会话'}</h2>
+              <h2 className="conversation-title">
+                {draftActive ? t('chat.draft.title') : t('nav.domain.chat')}
+              </h2>
               <div className="conversation-meta dim">
-                {draftActive ? '发送第一条消息后创建会话' : '从左侧选择会话，或新建一个'}
+                {draftActive ? t('chat.draft.meta') : t('chat.draft.pickSession')}
               </div>
-            </div>
-            <div className="conversation-actions">
-              <button type="button" className="btn btn-small" onClick={startNewSession}>
-                ＋ 新建会话
-              </button>
             </div>
           </div>
         )}
@@ -1046,51 +1173,10 @@ export function ChatView({
               )}
             </>
           ) : draftActive ? (
-            <EmptyState
-              title="新会话已就绪。"
-              description="发送第一条消息开始；未发送就离开不会创建会话。"
-              action={
-                <div className="example-prompts">
-                  {['解释这个仓库的结构', '列出当前可用的工具及其用途'].map((example) => (
-                    <button
-                      key={example}
-                      type="button"
-                      className="example-prompt"
-                      onClick={() => setInput(example)}
-                    >
-                      {example}
-                    </button>
-                  ))}
-                </div>
-              }
-            />
-          ) : (
-            <EmptyState
-              title={connected ? '还没有选择会话。' : '正在连接 gateway…'}
-              description={
-                connected
-                  ? '新建会话，或从会话列表打开已有会话。'
-                  : connectionState === 'reconnecting'
-                    ? '连接已断开，正在重连。'
-                    : '连接成功后会显示会话列表。'
-              }
-              action={
-                connected ? (
-                  <button type="button" className="btn btn-primary" onClick={startNewSession}>
-                    新建会话
-                  </button>
-                ) : connectionState === 'reconnecting' ||
-                  connectionState === 'closed' ||
-                  connectionState === 'error' ? (
-                  <button type="button" className="btn" onClick={retry}>
-                    立即重试
-                  </button>
-                ) : (
-                  <LoadingState label="正在连接…" rows={1} />
-                )
-              }
-            />
-          )}
+            <ChatWelcome />
+          ) : restorePending ? (
+            <LoadingState label={t('chat.restoringSession')} />
+          ) : null}
           <div ref={bottomRef} />
           {!nearBottom && (
             <button type="button" className="to-bottom" onClick={scrollToBottom}>
@@ -1098,6 +1184,8 @@ export function ChatView({
             </button>
           )}
         </div>
+
+        <OrphanedNotices items={sessionOrphans} onDismiss={dismissOrphaned} />
 
         {pendingItem && pendingItem.kind === 'permission' ? (
           <PermissionPrompt

@@ -174,20 +174,6 @@ export interface DurableConfig {
   checkpointEvery?: 'iteration';
 }
 
-/** Workflow 配置（0.4；默认关闭） */
-export interface WorkflowConfig {
-  /** true 才构造 workflow 引擎（默认 false） */
-  enabled?: boolean;
-  /** 定义文件目录（默认 ./workflows） */
-  dir?: string;
-  /** run 状态存储目录（默认 ~/.vessel/workflows） */
-  path?: string;
-  /** 最大并行步骤数（默认 2；1..8） */
-  maxParallel?: number;
-  /** 单 step 超时毫秒（默认 300000；1..86400000） */
-  stepTimeoutMs?: number;
-}
-
 /** Eval harness 配置（0.4；默认关闭、默认离线） */
 export interface EvalsConfig {
   /** true 才允许 CLI eval（默认 false） */
@@ -245,10 +231,21 @@ export interface ServeTlsConfig {
 /** gateway principal 角色 */
 export type PrincipalRole = 'read' | 'write' | 'admin';
 
+/** S5：节点动态 token 的 scope（additive；静态 token 缺省） */
+export type PrincipalScope = 'view' | 'exchange' | 'control' | 'admin';
+
 /** 由 token 解析出的 principal（A-3 §10.4 冻结：snake_case tenant_id） */
 export interface Principal {
   tenant_id: string;
   role: PrincipalRole;
+  /** S5：动态 token 的 scope；静态 token 缺省 */
+  scope?: PrincipalScope;
+  /** S5：control token 的 team 限制 */
+  team_id?: string;
+  /** S5：吊销 / 关闭 WS 用 */
+  token_id?: string;
+  /** S5：token 绑定的 hub */
+  hub_id?: string;
 }
 
 /** serve token 条目（A-3 §10.4；键为原始 token，永不打印） */
@@ -360,6 +357,57 @@ export interface ConnectConfig {
   tokenEnv?: string;
   /** 自签/私有 CA 文件（PEM） */
   caFile?: string;
+}
+
+/**
+ * Team 声明（0.19 S3）。
+ *
+ * 全局配置；tenant overlay 不允许声明 `teams`。
+ */
+export interface TeamConfigInput {
+  /** Team 名；可选，缺省由装配层决定 */
+  name?: string;
+  /**
+   * Team 工作区路径（必填）。
+   * validator 只做 trim + `path.resolve` 归一化去重；存值保持 trim 后的原文，
+   * `~` 展开由装配层负责。
+   */
+  workspace: string;
+  /** 启动嘱托 / handoff 文件路径（可选） */
+  handoffPath?: string;
+  /** Team 策略；原样保留，由消费方解释 */
+  policy?: Record<string, unknown>;
+}
+
+/** S5：hub TLS 配置；cert/key 必须成对 */
+export interface HubTlsConfig {
+  certFile?: string;
+  keyFile?: string;
+}
+
+/** S5：hub 监听地址 */
+export interface HubListenConfig {
+  hostname?: string;
+  port?: number;
+}
+
+/**
+ * S5：hub 控制面配置。
+ *
+ * - `dataDir` 必须与 gateway 的 `dataDir` 不同；
+ * - `direction` 当前只支持 `'hub'`（node → hub 是 S5.1）；
+ * - `token` 明文不接受，只允许 `tokenEnv` / SecretStore。
+ */
+export interface HubConfig {
+  dataDir?: string;
+  direction?: 'hub' | 'node';
+  listen?: HubListenConfig;
+  allowRemote?: boolean;
+  tls?: HubTlsConfig;
+  allowedOrigins?: string[];
+  tokenEnv?: string;
+  allowFileSecrets?: boolean;
+  pairingTtlSeconds?: number;
 }
 
 /** 配置来源（叶子级追踪） */
@@ -483,8 +531,8 @@ export interface VesselConfig {
   durable?: DurableConfig;
   /** 0.3：gateway 监听与 TLS */
   serve?: ServeConfig;
-  /** 0.4：声明式 workflow 编排 */
-  workflow?: WorkflowConfig;
+  /** S5：hub 控制面 */
+  hub?: HubConfig;
   /** 0.4：eval harness */
   evals?: EvalsConfig;
   /** 0.4：飞书渠道 */
@@ -493,6 +541,8 @@ export interface VesselConfig {
   observability?: ObservabilityConfig;
   /** 0.8.5：UI 语言 */
   ui?: UiConfig;
+  /** 0.19 S3：全局 Team 声明；tenant overlay 不允许覆盖 */
+  teams?: TeamConfigInput[];
 }
 
 /** 配置加载选项 */

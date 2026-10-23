@@ -1,19 +1,109 @@
 import { describe, expect, it } from 'bun:test';
 import { MemoryEventStream, type ToolContext, type ToolDefinition } from '@vessel-agent/core';
 import {
+  type AgentService,
+  type AgentTeamService,
+  type AgentToolOptions,
   type BatchItemResult,
   createAgentTool,
+  type DispatchInput,
+  type DispatchResult,
   type MemberStatus,
-  type SendResult,
+  type TeamAgentSendInput,
+  type TeamAgentSendResult,
+  type TeamMemberSummary,
+  type TeamPostInput,
+  type TeamPostResult,
 } from '../src/index.js';
 import { makeService, settle } from './helpers.js';
 
-function makeContext(): ToolContext {
-  return { run_id: 'tool-test', messages: [], events: new MemoryEventStream() };
+interface TeamRecorder {
+  identify: string[];
+  listForCaller: string[];
+  post: TeamPostInput[];
+  send: TeamAgentSendInput[];
+}
+
+/** 记录调用的假 TeamService；identify 按契约注释返回 team_id（类型暂未声明） */
+function makeTeam(roster: TeamMemberSummary[] = []): {
+  team: AgentTeamService;
+  calls: TeamRecorder;
+} {
+  const calls: TeamRecorder = { identify: [], listForCaller: [], post: [], send: [] };
+  const team: AgentTeamService = {
+    tenantId: 'default',
+    async list() {
+      return [];
+    },
+    async get() {
+      return undefined;
+    },
+    async roster() {
+      return roster;
+    },
+    async post(input) {
+      calls.post.push(input);
+      return {
+        message_id: 'msg-1',
+        team_id: input.team_id,
+        kind: 'post',
+        mentions: [],
+        delivered: [],
+        ts: 123,
+      };
+    },
+    async members() {
+      return undefined;
+    },
+    async send(input) {
+      calls.send.push(input);
+      return {
+        status: 'queued',
+        resolved_to: input.to,
+        message_id: 'msg-2',
+        resolution: 'live',
+        logged: false,
+      };
+    },
+    async listForCaller(sessionId) {
+      calls.listForCaller.push(sessionId);
+      return roster;
+    },
+    async identify(sessionId) {
+      calls.identify.push(sessionId);
+      return {
+        agent_id: 'worker',
+        name: 'worker',
+        session_id: sessionId,
+        membership: 'present',
+        presence: 'live',
+        visibility: 'team',
+        state: 'idle',
+        epoch: 0,
+        team_id: 'team-1',
+      } as unknown as TeamMemberSummary;
+    },
+    subscribe: () => () => {},
+    dispose() {},
+  };
+  return { team, calls };
+}
+
+function makeContext(sessionId?: string): ToolContext {
+  return {
+    run_id: 'tool-test',
+    messages: [],
+    events: new MemoryEventStream(),
+    ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+  };
 }
 
 async function call(tool: ToolDefinition, args: unknown): Promise<string> {
   return tool.handler(args, makeContext());
+}
+
+async function callAs(tool: ToolDefinition, args: unknown, sessionId: string): Promise<string> {
+  return tool.handler(args, makeContext(sessionId));
 }
 
 function parse<T>(text: string): T {
@@ -24,7 +114,7 @@ function failureText(entry: BatchItemResult<unknown> | undefined): string {
   return entry !== undefined && !entry.ok ? entry.error : '';
 }
 
-function setup(options: { ownerId?: string } = {}) {
+function setup(options: AgentToolOptions = {}) {
   const made = makeService();
   return {
     service: made.service,
@@ -106,17 +196,18 @@ describe('agent tool', () => {
     expect((await service.list({ viewer: 'boss' })).map((entry) => entry.id)).toEqual([created.id]);
   });
 
-  it('single send queues and returns queued/message_id without waiting for the turn', async () => {
+  it('single send dispatches and returns queued/message_id without waiting for the turn', async () => {
     const { runtime, tool } = setup();
     const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
 
-    const result = parse<SendResult>(
+    const result = parse<DispatchResult>(
       await call(tool, { action: 'send', to: created.id, content: 'do work' }),
     );
 
-    expect(result.queued).toBe(true);
+    expect(result.status).toBe('queued');
+    if (result.status !== 'queued') throw new Error('expected queued dispatch');
     expect(typeof result.message_id).toBe('string');
-    expect(result.state).toBe('running');
+    expect(result.resolution).toBe('live');
     await settle();
     expect(runtime.turns.map((turn) => turn.message.content)).toEqual(['do work']);
   });
@@ -126,7 +217,7 @@ describe('agent tool', () => {
     const first = parse<MemberStatus>(await call(tool, { action: 'new', name: 'a' }));
     const second = parse<MemberStatus>(await call(tool, { action: 'new', name: 'b' }));
 
-    const { results } = parse<{ results: BatchItemResult<SendResult>[] }>(
+    const { results } = parse<{ results: BatchItemResult<DispatchResult>[] }>(
       await call(tool, {
         action: 'send',
         messages: [
@@ -237,7 +328,7 @@ describe('agent tool', () => {
     );
   });
 
-  it('schema exposes only new/send/close/list lifecycle actions', async () => {
+  it('schema exposes the lifecycle actions plus rotate', async () => {
     const made = makeService();
     const tool = createAgentTool(made.service);
     const schema = tool.inputSchema as {
@@ -252,16 +343,20 @@ describe('agent tool', () => {
       'send',
       'close',
       'list',
+      'rotate',
+      'post',
     ]);
     expect(Object.keys(schema.properties).sort()).toEqual([
       'action',
       'content',
+      'handoff_path',
       'member',
       'members',
       'messages',
       'model',
       'name',
       'parent_id',
+      'startup_prompt',
       'state',
       'system_prompt',
       'to',
@@ -270,5 +365,216 @@ describe('agent tool', () => {
     expect(`${tool.description} ${JSON.stringify(schema)}`).not.toMatch(
       /\b(wait|inbox|status|cancel)\b/i,
     );
+  });
+
+  it('member body callers can rotate but cannot use new or close', async () => {
+    const made = makeService();
+    await made.service.attachOwner({ id: 'main', sessionId: 'owner-session' });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+
+    const member = parse<MemberStatus>(
+      await callAs(tool, { action: 'new', name: 'worker' }, 'owner-session'),
+    );
+
+    const rotated = await callAs(
+      tool,
+      { action: 'rotate', startup_prompt: 'continue' },
+      member.session_id,
+    );
+    expect(rotated).toContain('"status":"rotated"');
+    expect(rotated).toContain('rotation committed; finish the current turn');
+    expect(rotated).not.toContain('continue"');
+
+    for (const args of [
+      { action: 'new', name: 'nope' },
+      { action: 'close', member: member.id },
+    ]) {
+      expect(await callAs(tool, args, member.session_id)).toBe(
+        'Error: invalid_input: agent bodies may only use rotate|post|send|list',
+      );
+    }
+
+    // 没有注入 team 时，成员侧的 send / list 明确报错而不是回落到 owner 路径。
+    expect(await callAs(tool, { action: 'send', to: member.id, content: 'x' }, 'body-2')).toBe(
+      'Error: invalid_input: send requires a team service',
+    );
+    expect(await callAs(tool, { action: 'list' }, 'body-2')).toBe(
+      'Error: invalid_input: list requires a team service',
+    );
+  });
+
+  it('owner send uses the unified dispatch path instead of strict send', async () => {
+    const made = makeService();
+    const dispatched: DispatchInput[] = [];
+    const dispatch = made.service.dispatch.bind(made.service);
+    made.service.dispatch = async (input) => {
+      dispatched.push(input);
+      return dispatch(input);
+    };
+    let strictSendCalls = 0;
+    made.service.send = (async () => {
+      strictSendCalls += 1;
+      throw new Error('strict send must not be used');
+    }) as unknown as AgentService['send'];
+
+    const tool = createAgentTool(made.service);
+    const created = parse<MemberStatus>(await call(tool, { action: 'new', name: 'worker' }));
+
+    const result = parse<DispatchResult>(
+      await call(tool, { action: 'send', to: created.id, content: 'go' }),
+    );
+
+    expect(result.status).toBe('queued');
+    expect(dispatched).toEqual([{ to: created.id, content: 'go', from: 'main' }]);
+    expect(strictSendCalls).toBe(0);
+  });
+
+  it('body send goes through team.send with the caller session and never touches AgentService', async () => {
+    const made = makeService();
+    const { team, calls } = makeTeam();
+    let serviceTouched = 0;
+    made.service.send = (async () => {
+      serviceTouched += 1;
+      throw new Error('strict send must not be used');
+    }) as unknown as AgentService['send'];
+    const dispatch = made.service.dispatch.bind(made.service);
+    made.service.dispatch = async (input) => {
+      serviceTouched += 1;
+      return dispatch(input);
+    };
+
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+      team,
+    });
+
+    const result = parse<TeamAgentSendResult>(
+      await callAs(tool, { action: 'send', to: 'worker', content: 'hi' }, 'body-session'),
+    );
+
+    expect(result.status).toBe('queued');
+    expect(calls.send).toEqual([{ from_session_id: 'body-session', to: 'worker', content: 'hi' }]);
+    expect(serviceTouched).toBe(0);
+  });
+
+  it('body list uses listForCaller and post writes the team log without mentions or dispatch', async () => {
+    const made = makeService();
+    const roster: TeamMemberSummary[] = [
+      {
+        agent_id: 'worker',
+        name: 'worker',
+        session_id: 'body-session',
+        membership: 'present',
+        presence: 'live',
+        visibility: 'team',
+        state: 'idle',
+        epoch: 0,
+      },
+      {
+        agent_id: 'other',
+        name: 'other',
+        session_id: 'body-other',
+        membership: 'present',
+        presence: 'live',
+        visibility: 'private',
+        state: 'running',
+        epoch: 0,
+      },
+    ];
+    const { team, calls } = makeTeam(roster);
+    let dispatched = 0;
+    made.service.dispatch = async () => {
+      dispatched += 1;
+      throw new Error('list/post must not dispatch');
+    };
+
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+      team,
+    });
+
+    const listed = parse<TeamMemberSummary[]>(
+      await callAs(
+        tool,
+        { action: 'list', visibility: 'team', state: 'idle', parent_id: 'ignored' },
+        'body-session',
+      ),
+    );
+    expect(calls.listForCaller).toEqual(['body-session']);
+    expect(listed.map((entry) => entry.agent_id)).toEqual(['worker']);
+
+    const posted = parse<TeamPostResult>(
+      await callAs(tool, { action: 'post', content: 'status update' }, 'body-session'),
+    );
+    expect(posted.message_id).toBe('msg-1');
+    expect(calls.identify).toEqual(['body-session']);
+    expect(calls.post).toEqual([{ team_id: 'team-1', content: 'status update', from: 'worker' }]);
+    expect('mentions' in (calls.post[0] ?? {})).toBe(false);
+    expect(dispatched).toBe(0);
+  });
+
+  it('batch send maps a rejected dispatch to an error entry without aborting the others', async () => {
+    const made = makeService();
+    const order: string[] = [];
+    made.service.dispatch = async (input) => {
+      order.push(input.to);
+      if (input.to === 'bad') {
+        return { status: 'rejected', code: 'agent_left', reason: 'agent_left: bad' };
+      }
+      return {
+        status: 'queued',
+        message_id: `msg-${input.to}`,
+        resolved_to: input.to,
+        resolution: 'live',
+      };
+    };
+
+    const tool = createAgentTool(made.service);
+    const { results } = parse<{ results: BatchItemResult<DispatchResult>[] }>(
+      await call(tool, {
+        action: 'send',
+        messages: [
+          { to: 'a', content: 'x' },
+          { to: 'bad', content: 'y' },
+          { to: 'c', content: 'z' },
+        ],
+      }),
+    );
+
+    expect(results.map((entry) => entry.ok)).toEqual([true, false, true]);
+    expect(failureText(results[1])).toContain('agent_left');
+    expect(order).toEqual(['a', 'bad', 'c']);
+  });
+
+  it('owner keeps new/send/close/list', async () => {
+    const made = makeService();
+    await made.service.attachOwner({ id: 'main', sessionId: 'owner-session' });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+
+    const created = parse<MemberStatus>(
+      await callAs(tool, { action: 'new', name: 'plain' }, 'owner-session'),
+    );
+    expect(created.owner).toBe('main');
+    expect(
+      parse<DispatchResult>(
+        await callAs(tool, { action: 'send', to: created.id, content: 'work' }, 'owner-session'),
+      ).status,
+    ).toBe('queued');
+    expect(
+      parse(await callAs(tool, { action: 'close', member: created.id }, 'owner-session')),
+    ).toEqual({ state: 'closed' });
+    expect(
+      parse<MemberStatus[]>(await callAs(tool, { action: 'list' }, 'owner-session')).map(
+        (entry) => entry.id,
+      ),
+    ).toContain(created.id);
   });
 });

@@ -44,11 +44,6 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
-  'help.cmd.workflowList': 'list workflow runs',
-  'help.cmd.workflowRun': 'start a workflow (resolved under workflow.dir)',
-  'help.cmd.workflowShow': 'show step status',
-  'help.cmd.workflowResume': 'resume interrupted/failed/running',
-  'help.cmd.workflowCancel': 'cancel an in-process run',
   'help.cmd.eval': 'offline evaluation',
   'help.cmd.evalOut': 'write evaluation JSON / choose the report path',
   'help.cmd.feishu': 'attach the Feishu channel (usable with gateway start / REPL)',
@@ -82,6 +77,11 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.version': 'print version',
   'help.cmd.tools': 'list registered tools (no API key needed)',
   'help.cmd.completion': 'print a shell completion script (bash / zsh / fish / powershell)',
+  'help.cmd.team': 'team messages and members (owner)',
+  'help.cmd.teamList': 'list teams',
+  'help.cmd.teamGet': 'show team members and recent messages',
+  'help.cmd.teamPost': 'post a team message (without mentions it is logged only)',
+  'help.cmd.teamMembers': 'add or remove a team member',
   'help.cmd.help': 'show this help',
 
   // ── common ──
@@ -162,6 +162,10 @@ export const en: Record<MessageKey, string> = {
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.logPath': 'Log: {path}',
+  'gateway.webDistMissing':
+    'Web console assets are missing at {path}; run `bun run dev:web` for Vite dev, or build with `cd apps/web && npm run build`.',
+  'gateway.webDistStale':
+    'Web console assets may be stale: {index} is older than {source}; run `bun run build:web:watch` or rebuild.',
   'gateway.noToken':
     'No gateway token configured (serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN); cannot call the local RPC.',
   'gateway.reloadNoGateway': 'Gateway is not running; run `vessel gateway start` first.',
@@ -216,6 +220,28 @@ export const en: Record<MessageKey, string> = {
   'errors.level': 'Level',
   'errors.empty': 'No recent errors.',
   'errors.recent': 'Recent errors ({count})',
+
+  // ── hub (S5) ──
+  'help.section.hub': 'Hub control plane (S5)',
+  'help.cmd.hubStart': 'start the hub in the foreground; --allow-remote needs TLS and tokenEnv',
+  'help.cmd.hubDirectory': 'read the hub directory (paired nodes and status)',
+  'help.cmd.hubWatch': 'subscribe to hub directory and pointer events (Ctrl+C exits)',
+  'help.cmd.hubPair': 'generate a one-time pairing code for a node',
+  'help.cmd.hubNodeAdd': 'register a node with the hub using a one-time code',
+  'help.cmd.hubNodeList': 'list nodes paired with the hub',
+  'help.cmd.hubNodeRemove': 'remove a pairing from the hub',
+  'help.cmd.hubTokenExchange': 'exchange a short-lived team control token directly with a node',
+  'help.cmd.hubTokenRevoke': 'revoke a node token',
+  'help.cmd.hubTokenList': 'list node token metadata',
+  'help.cmd.hubDataToken': 'exchange a short-lived team control token through the hub',
+  'hub.error.envMissing': 'Environment variable {env} is not set.',
+  'hub.error.invalidUrl': 'Invalid URL.',
+  'hub.error.invalidResponse': 'The service returned an unrecognized response.',
+  'hub.error.requestFailed': 'Request failed: {detail}',
+  'hub.error.timeout': 'Request timed out ({ms}ms).',
+  'hub.empty.nodes': 'No paired nodes.',
+  'hub.empty.tokens': 'No tokens.',
+  'hub.watch.closed': 'hub watch connection closed.',
 
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',

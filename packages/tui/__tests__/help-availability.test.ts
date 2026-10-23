@@ -11,7 +11,6 @@ describe('/help availability markers', () => {
     expect(output).toContain('/capabilities');
     expect(output).toContain('(RPC required)');
     expect(output).toContain('(durable disabled)');
-    expect(output).toContain('(workflows disabled)');
     expect(output).toContain('(not configured)');
     expect(output).toContain('(not enabled)');
     // hidden alias 仍不出现

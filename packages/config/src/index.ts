@@ -19,7 +19,6 @@ export {
   DEFAULT_TENANT_ID,
   DEFAULT_TRACE_OPTIONS,
   DEFAULT_TRANSPORT_OPTIONS,
-  DEFAULT_WORKFLOW_OPTIONS,
   defaultModelForProvider,
   PROVIDER_DEFAULT_MODELS,
 } from './defaults.js';
@@ -72,5 +71,6 @@ export {
   TENANT_OVERLAY_FORBIDDEN_KEYS,
   type UnknownNestedKey,
   validateConfig,
+  validateHubSettings,
   validateServeSettings,
 } from './validator.js';

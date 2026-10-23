@@ -1,12 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
 import { AskCard } from '../src/domains/chat/AskCard';
 import { AskPrompt, PermissionPrompt } from '../src/domains/chat/PromptSlots';
 import {
   nextPending,
   pendingPermissionsOutsideView,
-  pendingPermissionTarget,
   pendingQueue,
 } from '../src/domains/chat/pending-permissions';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
@@ -143,30 +141,6 @@ describe('pendingQueue (S3 queue)', () => {
   });
 });
 
-describe('cross-session pending bar', () => {
-  test('counts and names requests outside the current session', () => {
-    const markup = renderToStaticMarkup(
-      <PendingPermissionsBar
-        requests={[
-          permission({ requestId: 'perm-a', sessionId: 'session-abcdefghijk' }),
-          permission({ requestId: 'perm-b', sessionId: 'session-2', runId: 'run-2' }),
-        ]}
-        onOpen={() => {}}
-      />,
-    );
-    expect(markup).toContain('pending-permissions-bar');
-    expect(markup).toContain('2');
-    expect(markup).toContain('session-abcd');
-    expect(markup).toContain('link-btn');
-  });
-
-  test('is absent when there is nothing pending', () => {
-    expect(renderToStaticMarkup(<PendingPermissionsBar requests={[]} onOpen={() => {}} />)).toBe(
-      '',
-    );
-  });
-});
-
 describe('pendingPermissionsOutsideView', () => {
   test('hides requests of the current session on chat', () => {
     const items = [
@@ -192,18 +166,6 @@ describe('pendingPermissionsOutsideView', () => {
     expect(
       pendingPermissionsOutsideView(items, { domain: 'runs' }).map((item) => item.requestId),
     ).toEqual(['a', 'b']);
-  });
-
-  test('jumps to the session when known, otherwise to the run detail', () => {
-    expect(pendingPermissionTarget(permission())).toEqual({
-      domain: 'chat',
-      sessionId: 'session-1',
-    });
-    expect(pendingPermissionTarget(permission({ sessionId: undefined }))).toEqual({
-      domain: 'runs',
-      tab: 'live',
-      runId: 'run-1',
-    });
   });
 });
 
@@ -265,30 +227,5 @@ describe('ask prompt (composer slot)', () => {
     expect(markup).toContain('First question?');
     expect(markup).not.toContain('Second question?');
     expect(markup).not.toContain('Third question?');
-  });
-});
-
-describe('cross-session pending bar with asks', () => {
-  test('reports permission and ask counts separately with one jump action each', () => {
-    const markup = renderToStaticMarkup(
-      <PendingPermissionsBar
-        requests={[permission({ requestId: 'perm-a', sessionId: 'session-aaaaaaaa' })]}
-        asks={[ask({ requestId: 'ask-b', sessionId: 'session-bbbbbbbb' })]}
-        onOpen={() => {}}
-        onOpenAsk={() => {}}
-      />,
-    );
-
-    expect(markup).toContain('其他会话有 1 个待处理权限请求');
-    expect(markup).toContain('其他会话有 1 个待处理提问');
-    expect(markup.split('<button').length - 1).toBe(2);
-  });
-
-  test('is absent when neither category has pending requests', () => {
-    expect(
-      renderToStaticMarkup(
-        <PendingPermissionsBar requests={[]} asks={[]} onOpen={() => {}} onOpenAsk={() => {}} />,
-      ),
-    ).toBe('');
   });
 });

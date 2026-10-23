@@ -14,6 +14,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import type { UpdateChannel } from './manifest';
 
 /** 安装形态 */
 export type InstallForm = 'npm' | 'bun' | 'dev' | 'unknown';
@@ -29,7 +30,12 @@ export interface DetectInstallFormOptions {
 }
 
 /** 更新目标包（根包发布名） */
-export const UPDATE_PACKAGE = 'vessel-agent@latest';
+export const UPDATE_PACKAGE = 'vessel-agent';
+
+/** 按通道拼接安装规格：beta 走 npm dist-tag `beta`，其余走 `latest` */
+export function updatePackageSpec(channel: UpdateChannel = 'latest'): string {
+  return `${UPDATE_PACKAGE}@${channel === 'beta' ? 'beta' : 'latest'}`;
+}
 
 /** 显式覆盖（CI / 非常规安装布局） */
 const FORM_OVERRIDES: ReadonlySet<string> = new Set(['npm', 'bun', 'dev']);
@@ -108,8 +114,12 @@ export interface InstallPlan {
 }
 
 /** 按形态给出安装命令或提示（不执行） */
-export function buildInstallPlan(form: InstallForm): InstallPlan {
-  if (form === 'npm') return { form, command: ['npm', 'i', '-g', UPDATE_PACKAGE] };
-  if (form === 'bun') return { form, command: ['bun', 'add', '-g', UPDATE_PACKAGE] };
+export function buildInstallPlan(
+  form: InstallForm,
+  channel: UpdateChannel = 'latest',
+): InstallPlan {
+  const spec = updatePackageSpec(channel);
+  if (form === 'npm') return { form, command: ['npm', 'i', '-g', spec] };
+  if (form === 'bun') return { form, command: ['bun', 'add', '-g', spec] };
   return { form, hint: 'git pull && bun install' };
 }

@@ -10,6 +10,7 @@
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
+import type { ListedInteraction } from './interaction-hydration';
 import { permissionRespondParams } from './interactions';
 import type {
   AgentsTreeResponse,
@@ -51,16 +52,13 @@ import type {
   TaskResponse,
   TasksResponse,
   TeamAgentsResponse,
+  TeamDetail,
   TeamPeersResponse,
+  TeamPostResult,
+  TeamSummary,
   TenantInfo,
   TenantResponse,
   ToolInfo,
-  WorkflowCancelResponse,
-  WorkflowResponse,
-  WorkflowRunAccepted,
-  WorkflowRunDetail,
-  WorkflowRunSummary,
-  WorkflowsResponse,
 } from './types';
 import { toWebSocketBase } from './url';
 
@@ -501,9 +499,28 @@ export class GatewayClient {
   }
 
   /** 当前 gateway 进程内的 live runs（内存，无分页）。 */
-  async listRuns(params: { session_id?: string; status?: string } = {}): Promise<RunStatus[]> {
+  async listRuns(
+    params: { session_id?: string; status?: string; tenant_id?: string } = {},
+  ): Promise<RunStatus[]> {
     const body = await this.rpc<RunsResponse>('runs.list', params);
     return body.runs ?? [];
+  }
+
+  /** 0.18：读取 pending / answered / orphaned 交互（旧 gateway 无此方法时由调用方处理）。 */
+  async listInteractions(
+    params: {
+      session_id?: string;
+      run_id?: string;
+      status?: 'pending' | 'answered' | 'orphaned';
+      limit?: number;
+      tenant_id?: string;
+    } = {},
+  ): Promise<ListedInteraction[]> {
+    const body = await this.rpc<{ interactions?: ListedInteraction[] }>(
+      'interactions.list',
+      params,
+    );
+    return body.interactions ?? [];
   }
 
   /** canonical runs.get；失败时回退 legacy WS run.get（旧 gateway）。 */
@@ -706,41 +723,6 @@ export class GatewayClient {
     return body.tenant_id;
   }
 
-  // ── canonical workflow RPC（旧 REST 方法保留兼容）──
-
-  async listWorkflowsRpc(
-    params: { status?: string; limit?: number } = {},
-  ): Promise<WorkflowRunSummary[]> {
-    const body = await this.rpc<WorkflowsResponse>('workflow.list', params);
-    return body.workflows ?? [];
-  }
-
-  async getWorkflowRpc(id: string): Promise<WorkflowRunDetail> {
-    const body = await this.rpc<WorkflowResponse>('workflow.get', {
-      workflow_run_id: id,
-    });
-    return body.workflow;
-  }
-
-  startWorkflowRpc(name: string, inputs?: Record<string, string>): Promise<WorkflowRunAccepted> {
-    return this.rpc<WorkflowRunAccepted>('workflow.start', {
-      name,
-      ...(inputs && Object.keys(inputs).length > 0 ? { inputs } : {}),
-    });
-  }
-
-  resumeWorkflowRpc(id: string): Promise<WorkflowRunAccepted> {
-    return this.rpc<WorkflowRunAccepted>('workflow.resume', {
-      workflow_run_id: id,
-    });
-  }
-
-  cancelWorkflowRpc(id: string): Promise<WorkflowCancelResponse> {
-    return this.rpc<WorkflowCancelResponse>('workflow.cancel', {
-      workflow_run_id: id,
-    });
-  }
-
   /** metrics：优先 canonical `metrics.get`（可带 source），旧 gateway 回退 REST。 */
   async getMetricsSnapshot(source: 'live' | 'trace' = 'live'): Promise<{
     metrics: MetricsSnapshot;
@@ -780,6 +762,29 @@ export class GatewayClient {
 
   listTeamAgents(): Promise<TeamAgentsResponse> {
     return this.httpJson<TeamAgentsResponse>('/v1/team/agents');
+  }
+
+  // ── Team（0.19 S6，node-local；canonical `teams.*`）──
+  // 只走 HTTP rpc()，不做 legacy `/v1/team/*` 回退；`teams.*` 不依赖 WS 在线。
+
+  async listTeams(): Promise<TeamSummary[]> {
+    const body = await this.rpc<{ teams?: TeamSummary[] }>('teams.list');
+    return body.teams ?? [];
+  }
+
+  getTeam(teamId: string, opts?: { limit?: number }): Promise<TeamDetail> {
+    return this.rpc<TeamDetail>('teams.get', {
+      team_id: teamId,
+      ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
+    });
+  }
+
+  postTeam(input: {
+    team_id: string;
+    content: string;
+    mentions?: string[];
+  }): Promise<TeamPostResult> {
+    return this.rpc<TeamPostResult>('teams.post', input);
   }
 
   // ── 0.3 REST（durable / MCP）──────────────────
@@ -847,47 +852,7 @@ export class GatewayClient {
     }
   }
 
-  // ── 0.4 REST（workflow / metrics / feishu / evals）──
-
-  async listWorkflows(
-    params: { status?: string; limit?: number } = {},
-  ): Promise<WorkflowRunSummary[]> {
-    const query = new URLSearchParams();
-    if (params.status) query.set('status', params.status);
-    if (params.limit !== undefined) query.set('limit', String(params.limit));
-    const suffix = query.toString();
-    const body = await this.httpJson<WorkflowsResponse>(
-      `/v1/workflows${suffix ? `?${suffix}` : ''}`,
-    );
-    return body.workflows ?? [];
-  }
-
-  async getWorkflow(id: string): Promise<WorkflowRunDetail> {
-    const body = await this.httpJson<WorkflowResponse>(`/v1/workflows/${encodeURIComponent(id)}`);
-    return body.workflow;
-  }
-
-  startWorkflow(name: string, inputs?: Record<string, string>): Promise<WorkflowRunAccepted> {
-    const payload: { name: string; inputs?: Record<string, string> } = { name };
-    if (inputs && Object.keys(inputs).length > 0) payload.inputs = inputs;
-    return this.httpJson<WorkflowRunAccepted>('/v1/workflows/run', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-  }
-
-  resumeWorkflow(id: string): Promise<WorkflowRunAccepted> {
-    return this.httpJson<WorkflowRunAccepted>(`/v1/workflows/${encodeURIComponent(id)}/resume`, {
-      method: 'POST',
-    });
-  }
-
-  cancelWorkflow(id: string): Promise<WorkflowCancelResponse> {
-    return this.httpJson<WorkflowCancelResponse>(`/v1/workflows/${encodeURIComponent(id)}/cancel`, {
-      method: 'POST',
-    });
-  }
+  // ── 0.4 REST（metrics / feishu / evals）──
 
   async getMetrics(source: 'live' | 'trace' = 'live'): Promise<MetricsSnapshot> {
     return (await this.getMetricsSnapshot(source)).metrics;

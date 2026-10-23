@@ -32,3 +32,11 @@ tags: [security, tls, cors, tenancy]
 - **跨节点事件来源抑制**：回灌时丢弃 `event.node_id === 本机 node_id` 的帧；事件来源仍由 token + TLS 边界信任，不引入逐事件签名。
 - **远端 spawn 隔离**：远端 `team_spawn` 复用 `buildChildHost`（剔除 `team_*`）并传 `memberLimits` / `memberTermination`，与本机 spawn 一致。
 - 以上均为对既有安全基线的补齐，不改变 §1–§9 的 TLS / Origin / WS 首帧 / 请求体上限规则。
+
+## Addendum（0.19 / S5 hub 控制面）
+
+- **hub token 绑定 `hub_id`**：节点签发的 `view` / `exchange` token 记录持久化 `hub_id`；`/v1/hub/control` 首帧的 `auth.hub_id` 必须存在且与 token 绑定值一致，否则 4401 关闭。token 被另一个 hub 复用是显式失败，不是静默放行。
+- **SecretStore 落盘**：hub 侧的 `view` / `exchange` token 只进 `SecretStore`（DPAPI / Keychain / `secret-tool` / AES-GCM fallback），不写明文 YAML；节点侧只存 `sha256(token)`，明文仅在签发响应中出现一次。
+- **不引入 mTLS / 逐事件签名**：hub ↔ node 仍是 bearer token + TLS/WSS 基线；不新增客户端证书，也不对每个事件单独签名。信任边界与 §1–§9 相同。
+- **浏览器 data token 只放 `sessionStorage`**：S6 落地浏览器 data token 时仍只放 `sessionStorage`，不放 localStorage、不进 URL query；本条延续 §7，不是新增规则。
+- 以上不改变 ADR-053 §1–§10 的 TLS / Origin / WS 首帧 / 请求体上限结论。

@@ -1,9 +1,21 @@
 /* 样式入口：保持 Linen 视觉语言，按职责拆分，禁止再堆回单文件。 */
 @import "./styles/tokens.css";
 @import "./styles/base.css";
-@import "./styles/ui.css";
 @import "./styles/layout.css";
-@import "./styles/components.css";
-@import "./styles/domains.css";
+@import "./styles/components/controls.css";
+@import "./styles/components/surfaces.css";
+@import "./styles/components/feedback.css";
+@import "./styles/components/overlays.css";
+@import "./styles/components/prompts.css";
+@import "./styles/components/palette.css";
+@import "./styles/components/json.css";
+@import "./styles/components/responsive.css";
+@import "./styles/domains/chat.css";
+@import "./styles/domains/runs.css";
+@import "./styles/domains/tools.css";
+@import "./styles/domains/runs-detail.css";
+@import "./styles/domains/markdown.css";
+@import "./styles/domains/subagent.css";
 @import "./styles/chat-dock.css";
 @import "./styles/prompt-dock.css";
+@import "./styles/team.css";

@@ -80,7 +80,7 @@ vessel migrate --from sqlite --to file-v2 --tenant acme --json
 4. `--apply` 写入；记录输出计数。
 5. **回读验证**：
    - `vessel tenant list` 确认 tenant 存在；
-   - `vessel workflow list` / TUI 会话列表确认 session 可见；
+   - TUI 会话列表确认 session 可见；
    - 对关键 run 执行 `runs.get` 或 resume，确认消息与状态完整。
 6. 确认无误后再考虑停用旧目录；**不要**在验证前删除源。
 

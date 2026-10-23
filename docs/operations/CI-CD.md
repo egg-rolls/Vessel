@@ -1,8 +1,8 @@
 # CI / CD 手册
 
 > 维护者：`gov`。分支模型与发布规则见 [FILE-MANAGEMENT.md](../FILE-MANAGEMENT.md)。
-> 当前开发线：0.14.1（基线 `release/0.14.1`；manifest 版本由 1 在收口时统一写入，未 tag / 未 publish / 未合并 `main`）。
-> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 / 0.6 / 0.7 / 0.7.1 / 0.8.0 / 0.8.1 / 0.8.2 / 0.8.3 / 0.8.4 / 0.8.5 / 0.8.6 / 0.8.7 / 0.9.0 / 0.10.0 / 0.11.0 / 0.12.0 / 0.13.0 / 0.14.0 / 0.14.1 只做发布干跑。0.10 起发布前置增加安装解析 smoke；0.11 起子包使用 `@vessel-agent/*` scope。**不发布独立二进制**（ADR-006 继续有效）。
+> 当前开发线：0.19（集成分支 `0.19-integration`；manifest 版本由 1 在收口时统一写入，未 tag / 未 publish / 未合并 `main`）。
+> 0.1.0 / 0.2 / 0.3.0 / 0.4.0 均未发布；0.5 ~ 0.19 各版本只做发布干跑。0.10 起发布前置增加安装解析 smoke；0.11 起子包使用 `@vessel-agent/*` scope。**不发布独立二进制**（ADR-006 继续有效）。
 
 ## 1. CI（`.github/workflows/ci.yml`）
 
@@ -22,12 +22,12 @@
 | `cross-platform` | matrix：ubuntu / windows / macos | `bun install --frozen-lockfile` → Node 22 + `apps/web` `npm ci` → `bun run typecheck` → `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；**PR 只跑 ubuntu**，`main` / `release/**` 跑全矩阵 |
 | `web` | ubuntu-latest | `apps/web`：`npm ci` → `npm run build`（Node 22，npm cache） |
 | `architecture` | ubuntu-latest | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
-| `offline-integration` | ubuntu-latest | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/workflow/engine` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；MCP 用本地 mock server，TLS 用本地自签证书，workflow / evals / feishu / config / trace 均用 mock 或临时目录，**不依赖外网** |
+| `offline-integration` | ubuntu-latest | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；MCP 用本地 mock server，TLS 用本地自签证书，evals / feishu / config / trace 均用 mock 或临时目录，**不依赖外网** |
 | `multi-node` | ubuntu-latest | 0.6 跨节点专项（**非 required**）：remote transport / registry / team routing / 事件回灌测试；不启动真实多机，使用本地两个 gateway |
 | `tls-ca` | ubuntu-latest | 0.6 TLS/CA 专项（**非 required**）：`packages/serve` TLS/remote 测试 + `connect-e2e-0.6` / `rpc-remote-0.6`；使用仓库内自签 fixture |
 | `frontend-cors` | ubuntu-latest | 0.6 独立前端专项（**非 required**）：`gateway.origin` / `gateway.ws-tenant` + `apps/web/tests/gatewayUrl.test.ts` |
 | `release-dry-run` | ubuntu-latest | **仅 PR + `release/**` push**：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，**不上传、不 publish、不 tag** |
-| `install-smoke` | ubuntu-latest | **仅 PR + `release/**` push**：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；`npm pack` 17 个子包 + 根 tarball，用本地 `overrides` 安装后运行 `vessel --version` / `vessel --tools`（mock，无 Key），并断言根 tarball 含 `apps/web/dist/index.html`；**不上传、不 publish、不 tag**；Windows 默认跳过 |
+| `install-smoke` | ubuntu-latest | **仅 PR + `release/**` push**：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；`npm pack` 16 个子包 + 根 tarball，用本地 `overrides` 安装后运行 `vessel --version` / `vessel --tools`（mock，无 Key），并断言根 tarball 含 `apps/web/dist/index.html`；**不上传、不 publish、不 tag**；Windows 默认跳过 |
 | `examples` | ubuntu-latest | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（关闭上轮 typecheck 盲区） |
 | `smoke` | ubuntu-latest | 仅 `main` / `release/**` push：`--version`、`--tools`、headless 文本、stdin、`@file`、`/help`、`/exit`（除 `--version` 外均带 `VESSEL_MOCK=1`） |
 
@@ -63,7 +63,7 @@
 - 命令：`bun run scripts/release-dry-run.ts`（详细检查项与退出码见
   [RELEASE.md §2.1](RELEASE.md)）。
 - 目标版本 = 根 `package.json` 版本：`0.10.0` → `0.11.0`（manifest 由 1 在收口时统一 bump；文档不维护版本副本）。
-- 0.11 起 17 个子包名为 `@vessel-agent/*`；`release-dry-run` 会校验包名与内部精确版本。
+- 0.11 起可发布子包名为 `@vessel-agent/*`（workflow 移除后为 16 个）；`release-dry-run` 会校验包名与内部精确版本。
 - 打包到 runner 的 OS 临时目录并在结束后清理；**不上传 artifact、不登录 npm、
   不创建 tag、不发布**。
 - 若报 `internal_dependency_version`，说明 `bun.lock` 与 manifest 版本不一致；
@@ -73,7 +73,7 @@
 
 - 触发：与 `release-dry-run` 相同（`pull_request` + `release/**` push）。
 - 命令：`bun run scripts/smoke-install.ts`（详见 [RELEASE.md §2.2](RELEASE.md)）。
-- 覆盖：17 个可发布包 + 根 tarball 的 `npm pack`、本地 `file:` `overrides`
+- 覆盖：16 个可发布包 + 根 tarball 的 `npm pack`、本地 `file:` `overrides`
   安装解析、`vessel --version`、`VESSEL_MOCK=1 vessel --tools`，以及根 tarball
   必须包含 `apps/web/dist/index.html`。
 - **前置构建**：`dist/` 被 `.gitignore` 忽略，job 必须先执行 Node 22 +
@@ -85,14 +85,14 @@
 
 ### 1.3 0.9 Wave 2B2B 门禁
 
-- **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；canonical 方法（0.15 起 44 个；0.14 时为 40 个）的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
+- **结果校验固定开启**：`quality` 复用的 `.github/actions/quality` 的 Test step 与 `cross-platform` 的 `Run tests` 都带 `VESSEL_VALIDATE_RESULTS=1`；canonical 方法（0.19 起 47 个；0.18 移除 workflow 后 40 个、移除前 45；0.15 起 44；0.14 时为 40）的 `result_schema` 与实现漂移会让对应 job 失败。运行时默认不校验，因此本地复跑相关测试时需要自己设置该变量。
 - **插件生命周期**：插件卸载 / 释放相关测试覆盖 `init` 失败隔离、`dispose` 逆序、幂等与安装回滚；不要在测试里依赖插件释放顺序之外的全局状态。
 - **去重键**：跨节点测试覆盖 `incarnation` 代际变化、seq 回退与旧对端（缺 `incarnation` 按 `-`）；去重集合不跨进程持久化，测试不得断言重启后仍去重。
 - 全量测试在 Windows 与 POSIX（Docker）上均以同一 env 跑；Windows 的 `cross-platform` 与 ubuntu 的 `quality` 结果不一致时按环境差异排查，不要先关校验。
 
 ### 1.4 0.10 发版硬化门禁
 
-- **安装解析 smoke**：`install-smoke` job 与 `release.yml` 的 `verify` 都执行 `scripts/smoke-install.ts`；两者都先构建 `apps/web`（Node 22 + `npm ci` + `npm run build`）。smoke 在打包根包前检查 `apps/web/dist/index.html`，并断言根 tarball 的文件清单包含它；缺 Web 时 `npm pack` 仍会成功，只有该断言能发现。改 17 个子包或根包 manifest 的 `files` / 依赖版本后必须本地跑一次。失败时先看 `npm pack` 内容与 `file:` overrides 解析，不要靠放宽断言绕过。
+- **安装解析 smoke**：`install-smoke` job 与 `release.yml` 的 `verify` 都执行 `scripts/smoke-install.ts`；两者都先构建 `apps/web`（Node 22 + `npm ci` + `npm run build`）。smoke 在打包根包前检查 `apps/web/dist/index.html`，并断言根 tarball 的文件清单包含它；缺 Web 时 `npm pack` 仍会成功，只有该断言能发现。改 16 个子包或根包 manifest 的 `files` / 依赖版本后必须本地跑一次。失败时先看 `npm pack` 内容与 `file:` overrides 解析，不要靠放宽断言绕过。
 - **配置与首启**：`src/__tests__/config-hardening-0.10.test.ts` 覆盖未知 provider 无 `base_url` 的 `ProviderConfigError`、legacy provider 优先级与 deprecation、YAML 错误与来源脱敏；改 `packages/config` 或 `src/provider-factory.ts` 后定向复跑。
 - **日志不污染 stdout**：`packages/core/__tests__/runtime-logging.test.ts`、`src/__tests__/runtime-0.10.test.ts` 守卫 Logger 级别 / 脱敏、`process.error` / `shutdown.failed`。任何诊断输出都必须写 stderr；headless / `--json` 的输出断言失败时先查 `console.log`。
 - **关闭与 interrupt**：`packages/serve/__tests__/gateway.shutdown.test.ts`、`src/__tests__/shutdown-sequence-0.10.test.ts` 覆盖 `gateway.stop()` 幂等、5s drain、固定关闭顺序与不重复 drain；`packages/core/__tests__/runtime-overflow-interrupt.test.ts` 覆盖 interrupt 原因与 400 overflow 重试。
@@ -115,7 +115,7 @@
 - **权限生命周期**：`packages/core/__tests__/permission-lifecycle.test.ts` 覆盖默认无限等待、abort → `PermissionAbortedError`、显式正数 `timeoutMs` → `PermissionTimeoutError`、请求字段与 `deadline_at` 条件写入；`permission-timeout.test.ts` 保留显式超时回归。
 - **持久化**：`packages/serve/__tests__/run-engine-permissions.test.ts` 覆盖请求字段、无时间过期、重复应答幂等 / `conflict`、run 终态 `orphaned` / `run_ended`、tenant 作用域、`pending → orphaned` 重载与 POSIX `0600`；`gateway.permissions.test.ts` 覆盖 REST / WS 应答、`scope`、重复提交、配置 `interactionsDir` 时的落盘与未知 `requestId` 的 `not_found`。
 - **Web**：交互测试覆盖权限卡片内联、跨 session 待处理条、其他端 `response` / `expired` 收起、`expired` / `run_ended` toast；不得重新引入全局权限遮罩。
-- **结构门禁**：`bun run scripts/check-docs.ts` 校验 ADR 索引 / 链接与文档一致性；`check-rpc-methods` 断言 canonical 方法 44 个（0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`），新增 `expired` / `run_ended` 不改变方法数。
+- **结构门禁**：`bun run scripts/check-docs.ts` 校验 ADR 索引 / 链接与文档一致性；`check-rpc-methods` 断言 canonical 方法 47 个（0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`；0.18 新增 `interactions.list` 并移除 `workflow.*`；0.19 S3 新增 `teams.*`、S5 新增 `auth.*`），新增 `expired` / `run_ended` 不改变方法数。
 - **验证范围**：Windows 全量 `3226 pass / 2 skip / 0 fail`；POSIX（oven/bun + 持久缓存）`3228 pass / 0 fail`，build / Web build 通过。
 
 ## 2. Release（`.github/workflows/release.yml`）
@@ -133,14 +133,14 @@
    - `bun run scripts/version.ts --check <version>`：所有可发布包版本一致，且 `CHANGELOG.md` 含 `## [<version>]`。
    - Node 22 + `apps/web` 的 `npm ci` / `npm run build`：根 tarball 的 `files` 含 `apps/web/dist`，而 `dist/` 被忽略，必须先构建。
    - `bun run scripts/release-dry-run.ts`：tarball 内容 / 版本 / 禁止文件检查。
-   - `bun run scripts/smoke-install.ts`：17 个子包 + 根 tarball 的安装解析与运行 smoke，并断言根 tarball 含 `apps/web/dist/index.html`。
+   - `bun run scripts/smoke-install.ts`：16 个子包 + 根 tarball 的安装解析与运行 smoke，并断言根 tarball 含 `apps/web/dist/index.html`。
    - **任一步失败即停止，`publish-npm` 不会执行。**
 2. `quality`：复用 `.github/actions/quality`，发布前再验一次。
 3. `publish-npm`
    - 独立 checkout，先执行 Node 22 + `apps/web` 的 `npm ci` / `npm run build`，确保根 tarball 含 Web 控制台。
-   - **先发布 17 个子包**，顺序固定：`core` → `permission` → `config` → `agent` → `serve` → `tui` → `plugins`
-     （5 个库包 + 13 个插件包，含 `@vessel-agent/team` 与 `@vessel-agent/mcp-client`）。
-   - **最后发布根 CLI `vessel-agent`**（依赖前 17 个包的精确版本；bin 仍是 `vessel`）。
+   - **先发布 16 个子包**，顺序固定：`core` → `permission` → `config` → `agent` → `serve` → `tui` → `plugins`
+     （6 个库包 + 10 个插件包，含 `@vessel-agent/agent` 与 `@vessel-agent/mcp-client`；`@vessel-agent/team` 已在 0.17 删除，workflow 插件已在 0.18 删除）。
+   - **最后发布根 CLI `vessel-agent`**（依赖前 16 个包的精确版本；bin 仍是 `vessel`）。
      根 `package.json` 的 `name` 不是 `vessel-agent` 时 fail-fast。
    - 稳定版 dist-tag `latest`；预发布（tag 含 `-`）dist-tag `beta`。
    - `npm publish --provenance --access public`（OIDC provenance）。

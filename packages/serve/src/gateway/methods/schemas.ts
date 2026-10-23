@@ -229,6 +229,49 @@ export const runtimeSnapshotSchema = {
   },
 };
 
+/** S5：节点签发的一次性 token（auth.exchange 结果）。明文只在本次响应中出现。 */
+export const issuedNodeTokenSchema = {
+  type: 'object',
+  required: ['token', 'token_id', 'scope', 'tenant_id', 'node_id', 'expires_at'],
+  properties: {
+    token: { type: 'string' },
+    token_id: { type: 'string' },
+    scope: { type: 'string', enum: ['view', 'exchange', 'control', 'admin'] },
+    tenant_id: { type: 'string' },
+    node_id: { type: 'string' },
+    team_id: { type: 'string' },
+    hub_id: { type: 'string' },
+    pairing_id: { type: 'string' },
+    expires_at: { type: 'number' },
+  },
+};
+
+/** S5：token 元数据；永不含 token / hash。 */
+export const nodeTokenMetaSchema = {
+  type: 'object',
+  required: ['token_id', 'scope', 'tenant_id', 'issued_by', 'created_at', 'expires_at'],
+  properties: {
+    token_id: { type: 'string' },
+    scope: { type: 'string', enum: ['view', 'exchange', 'control', 'admin'] },
+    tenant_id: { type: 'string' },
+    hub_id: { type: 'string' },
+    team_id: { type: 'string' },
+    issued_by: { type: 'string' },
+    created_at: { type: 'number' },
+    expires_at: { type: 'number' },
+    revoked_at: { type: 'number' },
+  },
+};
+
+/** S5：auth.tokens 结果。 */
+export const nodeTokenMetaListSchema = {
+  type: 'object',
+  required: ['tokens'],
+  properties: {
+    tokens: { type: 'array', items: nodeTokenMetaSchema },
+  },
+};
+
 export const tenantInfoSchema = {
   type: 'object',
   required: ['tenant_id', 'status', 'created_at'],
@@ -364,78 +407,120 @@ export const evalReportSchema = {
   },
 };
 
-export const workflowSummarySchema = {
+// ── 0.19 S3：本地 Team 控制面（canonical teams.*） ──
+// 未列入 required 的字段（name / team_id / handoff_path / system_event）都是可选的。
+
+/** teams.list / teams.get 的 `team`（TeamSummary）。 */
+export const teamSummarySchema = {
   type: 'object',
-  required: [
-    'workflow_run_id',
-    'workflow_name',
-    'status',
-    'step_count',
-    'completed_steps',
-    'started_at',
-    'updated_at',
-  ],
+  required: ['team_id', 'name', 'tenant_id', 'member_count', 'online_count', 'created_at'],
   properties: {
-    workflow_run_id: { type: 'string' },
-    workflow_name: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: ['pending', 'running', 'completed', 'failed', 'cancelled', 'interrupted'],
-    },
-    step_count: { type: 'integer' },
-    completed_steps: { type: 'integer' },
-    started_at: { type: 'number' },
-    updated_at: { type: 'number' },
-    error: { type: 'string' },
+    team_id: { type: 'string' },
+    name: { type: 'string' },
+    tenant_id: { type: 'string' },
+    workspace: { type: 'string' },
+    handoff_path: { type: 'string' },
+    policy: { type: 'object' },
+    member_count: { type: 'integer', minimum: 0 },
+    online_count: { type: 'integer', minimum: 0 },
+    created_at: { type: 'number' },
   },
 };
 
-export const workflowStepSchema = {
+/** 已退役 Body（0.19 S6 additive）。 */
+export const agentBodyHistoryEntrySchema = {
   type: 'object',
-  required: ['id', 'type', 'status', 'attempts'],
+  required: ['session_id', 'epoch', 'started_at', 'retired_at'],
   properties: {
-    id: { type: 'string' },
-    type: { type: 'string', enum: ['agent', 'tool'] },
-    status: {
-      type: 'string',
-      enum: ['pending', 'running', 'completed', 'failed', 'skipped', 'cancelled'],
-    },
-    attempts: { type: 'integer' },
+    session_id: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
     started_at: { type: 'number' },
-    finished_at: { type: 'number' },
-    error: { type: 'string' },
-    output_preview: { type: 'string' },
+    retired_at: { type: 'number' },
   },
 };
 
-export const workflowDetailSchema = {
+/** teams.get 的 roster 条目（TeamMemberSummary）；name / body_history 可缺失。 */
+export const teamMemberSchema = {
   type: 'object',
-  required: [
-    'workflow_run_id',
-    'workflow_name',
-    'status',
-    'step_count',
-    'completed_steps',
-    'started_at',
-    'updated_at',
-    'definition_path',
-    'inputs',
-    'steps',
-  ],
+  required: ['agent_id', 'session_id', 'membership', 'presence', 'visibility', 'state', 'epoch'],
   properties: {
-    workflow_run_id: { type: 'string' },
-    workflow_name: { type: 'string' },
-    status: {
-      type: 'string',
-      enum: ['pending', 'running', 'completed', 'failed', 'cancelled', 'interrupted'],
-    },
-    step_count: { type: 'integer' },
-    completed_steps: { type: 'integer' },
-    started_at: { type: 'number' },
-    updated_at: { type: 'number' },
-    error: { type: 'string' },
-    definition_path: { type: 'string' },
-    inputs: { type: 'object' },
-    steps: { type: 'array', items: workflowStepSchema },
+    agent_id: { type: 'string' },
+    name: { type: 'string' },
+    session_id: { type: 'string' },
+    team_id: { type: 'string' },
+    membership: { type: 'string', enum: ['present', 'left'] },
+    presence: { type: 'string', enum: ['live', 'gone'] },
+    visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
+    state: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
+    body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
+  },
+};
+
+/** teams.get 的最近消息（TeamLogEntry）。 */
+export const teamMessageSchema = {
+  type: 'object',
+  required: ['message_id', 'team_id', 'from', 'to', 'mentions', 'content', 'ts', 'kind'],
+  properties: {
+    message_id: { type: 'string' },
+    team_id: { type: 'string' },
+    from: { type: 'string' },
+    to: stringListSchema,
+    mentions: stringListSchema,
+    content: { type: 'string' },
+    ts: { type: 'number' },
+    kind: { type: 'string', enum: ['post', 'mention', 'system', 'reply'] },
+    system_event: { type: 'string', enum: ['join', 'leave', 'rotate', 'archive'] },
+  },
+};
+
+/** teams.post 的逐条投递结果（TeamDelivery）。 */
+export const teamDeliverySchema = {
+  type: 'object',
+  required: ['agent_id', 'status'],
+  properties: {
+    agent_id: { type: 'string' },
+    status: { type: 'string', enum: ['queued', 'rejected', 'error'] },
+    message_id: { type: 'string' },
+    resolution: { type: 'string', enum: ['live', 'resumed', 'rotating'] },
+    code: { type: 'string' },
+    reason: { type: 'string' },
+  },
+};
+
+/** teams.post 结果（TeamPostResult）。 */
+export const teamPostResultSchema = {
+  type: 'object',
+  required: ['message_id', 'team_id', 'kind', 'mentions', 'delivered', 'ts'],
+  properties: {
+    message_id: { type: 'string' },
+    team_id: { type: 'string' },
+    kind: { type: 'string', enum: ['post', 'mention', 'system'] },
+    mentions: stringListSchema,
+    delivered: { type: 'array', items: teamDeliverySchema },
+    ts: { type: 'number' },
+  },
+};
+
+/** teams.members 结果（TeamMembersResult）。 */
+export const teamMembersResultSchema = {
+  type: 'object',
+  required: ['team_id', 'action', 'agent_id', 'membership'],
+  properties: {
+    team_id: { type: 'string' },
+    action: { type: 'string', enum: ['add', 'remove'] },
+    agent_id: { type: 'string' },
+    membership: { type: 'string', enum: ['present', 'left'] },
+  },
+};
+
+/** teams.get 结果（TeamDetail）。 */
+export const teamDetailSchema = {
+  type: 'object',
+  required: ['team', 'members', 'messages'],
+  properties: {
+    team: teamSummarySchema,
+    members: { type: 'array', items: teamMemberSchema },
+    messages: { type: 'array', items: teamMessageSchema },
   },
 };

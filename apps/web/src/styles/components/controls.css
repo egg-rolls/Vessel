@@ -1,0 +1,464 @@
+/* ── 按钮 ─────────────────────────────────────────────── */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 13px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  transition:
+    color 0.16s var(--ease),
+    background 0.16s var(--ease);
+}
+
+.btn:hover:not(:disabled) {
+  background-image: linear-gradient(var(--hover-tint), var(--hover-tint));
+}
+
+.btn:active:not(:disabled) {
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
+  box-shadow: var(--elev-inset);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.btn.active {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.btn-primary {
+  color: var(--surface);
+  background: var(--accent);
+}
+
+.btn-primary:hover:not(:disabled) {
+  color: var(--surface);
+  background: var(--accent-ink);
+}
+
+.btn-primary:active:not(:disabled) {
+  background-color: var(--accent-ink);
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
+}
+
+.btn-danger {
+  color: var(--surface);
+  background: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: linear-gradient(var(--hover-tint), var(--hover-tint)), var(--danger);
+}
+
+.btn-danger:active:not(:disabled) {
+  background-color: var(--danger);
+  background-image: linear-gradient(var(--press-tint), var(--press-tint));
+}
+
+.btn-danger-ghost {
+  color: var(--danger);
+  background: transparent;
+}
+
+.btn-danger-ghost:hover:not(:disabled) {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.btn-small {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.icon-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--hover-tint);
+  color: var(--ink);
+}
+
+.link-btn {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: inherit;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-btn:hover {
+  color: var(--accent-ink);
+}
+
+.load-more {
+  align-self: center;
+  margin: 8px auto 0;
+  padding: 7px 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.load-more:hover {
+  color: var(--ink);
+  background: linear-gradient(var(--hover-tint), var(--hover-tint)), var(--surface-sunken);
+}
+
+/* ── 表单 ─────────────────────────────────────────────── */
+
+.input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 11px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-sunken);
+  color: var(--ink);
+  font-size: 12.5px;
+  transition: background 0.16s var(--ease);
+  box-shadow: var(--elev-inset);
+}
+
+.input::placeholder {
+  color: var(--faint);
+}
+
+.input:focus {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.input.invalid {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.search-input {
+  height: var(--control-h);
+  padding-block: 0;
+  background: var(--surface-sunken);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.field-hint {
+  font-size: 10.5px;
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+
+.field-error {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--danger);
+}
+
+.input-compact {
+  width: auto;
+  max-width: 220px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+
+.switch-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+}
+
+.kv-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.kv-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr) max-content;
+  gap: 6px;
+  align-items: center;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
+.chip-row .perm-badge {
+  font-size: 10px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  margin-top: 12px;
+}
+
+.form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.form-error {
+  margin-top: 10px;
+  padding: 8px 11px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 12px;
+}
+
+/* ── 状态 chip（字形 + 文本 + 颜色） ─────────────────── */
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.status-glyph {
+  font-size: 10px;
+}
+
+.status-chip[data-status="running"] .status-glyph {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.status-chip.tone-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.status-chip.tone-info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.status-chip.tone-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.status-chip.tone-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.status-chip.tone-muted {
+  background: var(--surface-sunken);
+  color: var(--faint);
+}
+
+/* icon-only 状态：文字只走 aria-label / title，不占行宽。 */
+.status-glyph-only {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.status-glyph-only.tone-ok {
+  background: var(--ok-soft);
+  color: var(--ok);
+}
+
+.status-glyph-only.tone-info {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.status-glyph-only.tone-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.status-glyph-only.tone-danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.status-glyph-only[data-status="running"] {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.count-pill {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+}
+
+.perm-badge {
+  display: inline-block;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--faint);
+  white-space: nowrap;
+}
+
+.perm-read {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.perm-write {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+.perm-admin {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.perm-warn {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
+/* ── Segmented / 过滤 ─────────────────────────────────── */
+
+.segmented {
+  display: inline-flex;
+  gap: 2px;
+  max-width: 100%;
+  margin-top: 14px;
+  padding: 5px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  overflow-x: auto;
+}
+
+.segment {
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.segment:hover {
+  color: var(--ink);
+  background: var(--hover-tint);
+}
+
+.segment.active {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.filter-bar .search-input {
+  flex: 1 1 240px;
+  max-width: 420px;
+}
+
+.filter-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.filter-chip {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--faint);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.filter-chip:hover {
+  color: var(--ink);
+  background: var(--hover-tint);
+}
+
+.filter-chip.active {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}

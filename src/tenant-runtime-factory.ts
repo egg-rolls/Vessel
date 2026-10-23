@@ -3,7 +3,7 @@
  *
  * `buildTenantRuntime()` 构造一个 tenant 的独立 bundle：
  *   config / provider / session / runStore / context / pluginHost + plugins /
- *   trace / metrics / redactor / sessionControl / workflow / feishu / MCP。
+ *   trace / metrics / redactor / sessionControl / feishu / MCP。
  *
  * `createTenantRuntimeFactory()` 为 `--serve` 预构建全部 active tenant：
  * - 每个 tenant 独立 EventStream，构建时注册进 gateway 的 `TenantEventHub`；
@@ -55,11 +55,7 @@ import {
   type TraceRedactor,
 } from '../packages/core/src/index';
 import type { TenantEventHub } from '../packages/serve/src/index';
-import type {
-  FeishuChannelLike,
-  MetricsControlLike,
-  WorkflowEngineLike,
-} from './control-plane-types';
+import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import {
   assertUniqueFeishuAppIds,
@@ -101,7 +97,6 @@ import {
   type TraceControl,
   type TraceRecorderFactory,
 } from './trace-wiring';
-import { createWorkflowFromConfig } from './workflow-wiring';
 
 /** 构造一个 tenant 执行面的输入 */
 export interface BuildTenantRuntimeOptions {
@@ -150,7 +145,6 @@ export interface BuildTenantRuntimeOptions {
   logger?: Logger;
   clock?: () => number;
   loadMcpModule?: () => Promise<unknown | null>;
-  loadWorkflowModule?: () => Promise<unknown | null>;
   loadFeishuModule?: () => Promise<unknown | null>;
   feishuTransport?: unknown;
   /** 0.18：tenant 事件扇入面；每个 tenant 的运行时流在构建时注册。 */
@@ -194,7 +188,6 @@ export interface TenantRuntimeBundle {
   plugins: Plugin[];
   mcpPlugin?: McpPluginLike;
   mcp?: McpControl;
-  workflows?: WorkflowEngineLike;
   feishu?: FeishuChannelLike;
   lock?: TenantLock;
   /**
@@ -442,7 +435,7 @@ function contextConfigFor(config: VesselConfig, summarizer: ContextSummarizer) {
   };
 }
 
-/** 0.8.2 Wave 2B1：runtime / workflow 共用的 resolved 权限配置。 */
+/** 0.8.2 Wave 2B1：runtime 共用的 resolved 权限配置。 */
 export function resolveRuntimePermission(
   config: VesselConfig,
   headless: boolean,
@@ -660,7 +653,7 @@ export async function buildTenantRuntime(
         },
       });
     }
-    // runtime / workflow 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
+    // runtime 共用的 resolved 权限配置（0.8.2 Wave 2B1）。
     const permission = resolveRuntimePermission(config, headless);
 
     // ── Runtime ───────────────────────────────────
@@ -849,19 +842,7 @@ export async function buildTenantRuntime(
       }
     }
 
-    // ── Workflow / Feishu / Metrics ───────────────
-    const workflowEngine = await createWorkflowFromConfig({
-      config,
-      events,
-      pluginHost: finalPluginHost,
-      tenantDir: tenantPaths.root,
-      tenantId,
-      permission,
-      ...(host ? { host } : { runtime: lockedRuntime }),
-      loader,
-      ...(options.loadWorkflowModule ? { loadModule: options.loadWorkflowModule } : {}),
-    });
-
+    // ── Feishu / Metrics ───────────────
     const feishuChannel = await createFeishuFromConfig({
       config,
       provider,
@@ -926,21 +907,13 @@ export async function buildTenantRuntime(
       // serve 路径已由 gateway.stop() 完成 drain，调用方传 drain:false 避免二次 5s。
       if (options.drain !== false) await drain();
 
-      // 关闭顺序：feishu → workflow → metrics → MCP → host/runtime → trace
+      // 关闭顺序：feishu → metrics → MCP → host/runtime → trace
       // → runStore → session。全部 await，异常逐段隔离，后续步骤仍会执行。
-      // 0.9：workflow / MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
-      // `AgentRuntime.dispose()` 触达不到；它们的 dispose() 只是 close() 的
+      // 0.9：MCP 是工厂式插件，不在 runtime 的 `plugins` 数组里，
+      // `AgentRuntime.dispose()` 触达不到；它的 dispose() 只是 close() 的
       // 幂等别名（ext 0.9），因此这里保留显式 close —— 不要为接 dispose
       // 而改安装顺序（DECISION-019 A）。
       await stopFeishuChannel(feishuChannel, (error) => report('feishu.stop', error));
-
-      if (workflowEngine) {
-        try {
-          await workflowEngine.close();
-        } catch (error) {
-          report('workflow.close', error);
-        }
-      }
 
       disposeMetrics(metrics);
 
@@ -1037,7 +1010,6 @@ export async function buildTenantRuntime(
       plugins,
       ...(mcpPlugin ? { mcpPlugin } : {}),
       ...(mcpControl ? { mcp: mcpControl } : {}),
-      ...(workflowEngine ? { workflows: workflowEngine } : {}),
       ...(feishuChannel ? { feishu: feishuChannel } : {}),
       ...(lock ? { lock } : {}),
       close,
@@ -1116,7 +1088,6 @@ export interface TenantRuntimeFactoryOptions {
    */
   seededTenants?: TenantRuntimeBundle[];
   loadMcpModule?: () => Promise<unknown | null>;
-  loadWorkflowModule?: () => Promise<unknown | null>;
   loadFeishuModule?: () => Promise<unknown | null>;
 }
 
@@ -1269,7 +1240,6 @@ export async function createTenantRuntimeFactory(
         ...(options.logger ? { logger: options.logger } : {}),
         ...(options.clock ? { clock: options.clock } : {}),
         ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
-        ...(options.loadWorkflowModule ? { loadWorkflowModule: options.loadWorkflowModule } : {}),
         ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
       });
       bundles.set(tenantId, bundle);

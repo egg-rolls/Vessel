@@ -15,7 +15,7 @@ const info: UpdateAvailableData = {
   current: '0.1.0',
   latest: '0.1.1',
   channel: 'latest',
-  installHint: 'npm i -g vessel@latest',
+  installHint: 'npm i -g vessel-agent@latest',
 };
 
 describe('reduceUpdateState', () => {

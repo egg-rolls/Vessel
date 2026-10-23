@@ -1,5 +1,5 @@
 /**
- * `vessel agent new|send|close|list`（0.17 Phase A）。
+ * `vessel agent new|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate）。
  *
  * 只做参数映射与渲染；生命周期全部在 REPL owner 的 AgentService。
  * `--json` 原样输出端点结果，人类输出走 ui-style，错误码进 stderr。
@@ -45,6 +45,9 @@ function statusView(value: unknown): MemberStatus | undefined {
 
 function formatStatus(status: MemberStatus): string {
   const lines = [`${ui.symbol('ok')} ${ui.brand(status.id)} ${status.state}`];
+  if (status.presence !== undefined) lines.push(ui.kv('presence', status.presence));
+  if (status.membership !== undefined) lines.push(ui.kv('membership', status.membership));
+  if (status.epoch !== undefined) lines.push(ui.kv('epoch', String(status.epoch)));
   lines.push(ui.kv('session', status.session_id));
   if (status.name !== undefined) lines.push(ui.kv('name', status.name));
   lines.push(ui.kv('visibility', status.visibility));
@@ -58,7 +61,8 @@ function formatList(statuses: MemberStatus[]): string {
   const lines = [ui.section(`Agents (${statuses.length}):`)];
   for (const status of statuses) {
     const name = status.name !== undefined ? `  ${status.name}` : '';
-    lines.push(`  ${status.id}  ${status.state}  ${status.visibility}${name}`);
+    const presence = status.presence ?? '-';
+    lines.push(`  ${status.id}  ${status.state}  ${presence}  ${status.visibility}${name}`);
   }
   return lines.join('\n');
 }
@@ -91,11 +95,28 @@ function methodParams(command: AgentCommand): {
         ...(command.model !== undefined ? { model: command.model } : {}),
         ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
         ...(command.systemPrompt !== undefined ? { system_prompt: command.systemPrompt } : {}),
+        ...(command.workspace !== undefined ? { workspace: command.workspace } : {}),
       },
     };
   }
   if (command.kind === 'send') {
     return { method: 'agent.send', params: { to: command.member, content: command.content } };
+  }
+  if (command.kind === 'dispatch') {
+    return {
+      method: 'agent.dispatch',
+      params: { to: command.to, content: command.content },
+    };
+  }
+  if (command.kind === 'rotate') {
+    return {
+      method: 'agent.rotate',
+      params: {
+        to: command.to,
+        startup_prompt: command.startupPrompt,
+        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+      },
+    };
   }
   if (command.kind === 'close') {
     return { method: 'agent.close', params: { members: command.members } };
@@ -117,6 +138,24 @@ function humanOutput(command: AgentCommand, result: unknown): string {
   if (command.kind === 'send') {
     if (isRecord(result) && typeof result.message_id === 'string') {
       return `${ui.symbol('ok')} queued ${result.message_id} → ${command.member} (${String(result.state ?? '')})`;
+    }
+    return JSON.stringify(result, null, 2);
+  }
+  if (command.kind === 'dispatch') {
+    if (isRecord(result) && result.status === 'queued' && typeof result.message_id === 'string') {
+      return `queued ${result.message_id} -> ${String(result.resolved_to)} (${String(result.resolution)})`;
+    }
+    if (isRecord(result) && result.status === 'rejected') {
+      return `${String(result.code)}: ${String(result.reason)}`;
+    }
+    return JSON.stringify(result, null, 2);
+  }
+  if (command.kind === 'rotate') {
+    if (isRecord(result) && result.status === 'rotated') {
+      return `rotated ${String(result.agent_id)} epoch ${String(result.epoch)} ${String(result.from_session_id)} -> ${String(result.to_session_id)}`;
+    }
+    if (isRecord(result) && result.status === 'failed') {
+      return `${String(result.code)}: ${String(result.reason)}`;
     }
     return JSON.stringify(result, null, 2);
   }
@@ -154,7 +193,10 @@ export async function runAgentCommand(
       ...(options.fetchImpl !== undefined ? { fetchImpl: options.fetchImpl } : {}),
     });
     const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
-    return { exitCode: 0, stdout, stderr: '' };
+    const rejected =
+      (command.kind === 'dispatch' && isRecord(result) && result.status === 'rejected') ||
+      (command.kind === 'rotate' && isRecord(result) && result.status === 'failed');
+    return { exitCode: rejected ? 1 : 0, stdout, stderr: '' };
   } catch (error) {
     return failure(error);
   }

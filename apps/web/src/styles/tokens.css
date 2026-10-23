@@ -8,27 +8,33 @@
 
   --bg: #f4f1ec;
   --surface: #fbfaf7;
-  --surface-2: #efece5;
-  --surface-3: #e9e5dc;
+  --surface-raised: #fffdfa;
+  --surface-sunken: #efece5;
+  --surface-deep: #e7e2d9;
   --ink: #23211d;
   --muted: #605c54;
   --faint: #6f6a61;
   --line: #e3ded4;
   --line-strong: #d2cabd;
-  --accent: #8a6a45;
+  --accent: #866641;
   --accent-ink: #6f5233;
-  --accent-soft: rgba(138, 106, 69, 0.1);
-  --accent-line: rgba(138, 106, 69, 0.35);
-  --ok: #52654a;
+  --accent-soft: rgba(134, 102, 65, 0.1);
+  --ok: #4c5f44;
   --ok-soft: rgba(95, 115, 87, 0.1);
-  --warn: #7d5a24;
+  --warn: #77541f;
   --warn-soft: rgba(154, 116, 54, 0.1);
   --danger: #8f4a40;
   --danger-soft: rgba(162, 90, 80, 0.09);
-  --info: #5c6b78;
-  --info-soft: rgba(92, 107, 120, 0.1);
-  --shadow: 0 1px 2px rgba(35, 33, 29, 0.04), 0 12px 32px rgba(35, 33, 29, 0.06);
-  --shadow-lift: 0 2px 4px rgba(35, 33, 29, 0.05), 0 18px 48px rgba(35, 33, 29, 0.1);
+  --info: #4f5d68;
+  --info-soft: rgba(79, 93, 104, 0.1);
+  --elev-1: 0 1px 2px rgba(35, 33, 29, 0.04), 0 4px 12px rgba(35, 33, 29, 0.05);
+  --elev-2: 0 2px 4px rgba(35, 33, 29, 0.05), 0 10px 28px rgba(35, 33, 29, 0.08);
+  --elev-3: 0 4px 8px rgba(35, 33, 29, 0.06), 0 18px 48px rgba(35, 33, 29, 0.12);
+  --elev-4: 0 8px 16px rgba(35, 33, 29, 0.08), 0 28px 72px rgba(35, 33, 29, 0.16);
+  --elev-inset: inset 0 1px 2px rgba(35, 33, 29, 0.05);
+  --hover-tint: rgba(35, 33, 29, 0.04);
+  --press-tint: rgba(35, 33, 29, 0.08);
+  --scrim: rgba(20, 18, 15, 0.55);
 
   --font-sans:
     "Inter", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -37,9 +43,12 @@
     "Iowan Old Style", "Palatino Linotype", "Songti SC", "Noto Serif SC", Georgia, serif;
   --font-mono: "JetBrains Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
 
-  --radius-sm: 9px;
-  --radius: 12px;
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
   --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
   --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
 
   --space-1: 4px;
@@ -49,12 +58,10 @@
   --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
-  --space-12: 48px;
 
   --text-xs: 10px;
   --text-sm: 11.5px;
   --text-body: 14px;
-  --text-list: 13px;
   --text-title: 22px;
 
   --appbar-h: 56px;
@@ -62,9 +69,13 @@
   --nav-w-collapsed: 56px;
   --nav-w-rail: 64px;
   --sessions-w: 280px;
+  --team-list-w: 280px;
+  --team-members-w: 272px;
+  --team-avatar: 28px;
+  --team-notice-max: 720px;
   --content-max: 1440px;
 
-  --row-h-session: 64px;
+  --row-h-session: 56px;
   --row-h-tool: 36px;
   --control-h: 32px;
   --tracking-wide: 0.08em;
@@ -92,11 +103,11 @@
   --touch-target: 44px;
 
   /* 层级：nav < drawer/scrim < modal/palette < toast。drawer 内打开的确认框必须在抽屉之上。 */
-  --z-nav: 30;
   --z-drawer: 60;
   --z-modal: 70;
   --z-palette: 75;
   --z-toast: 80;
+  --z-tooltip: 90;
   --focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
 }
 
@@ -105,8 +116,9 @@
     color-scheme: dark;
     --bg: #171614;
     --surface: #1f1d1a;
-    --surface-2: #26231f;
-    --surface-3: #2d2924;
+    --surface-raised: #2b2723;
+    --surface-sunken: #1a1917;
+    --surface-deep: #151412;
     --ink: #eae6de;
     --muted: #a49d91;
     --faint: #928b7f;
@@ -115,17 +127,22 @@
     --accent: #c2a273;
     --accent-ink: #d8bd93;
     --accent-soft: rgba(194, 162, 115, 0.12);
-    --accent-line: rgba(194, 162, 115, 0.38);
     --ok: #8fa886;
     --ok-soft: rgba(143, 168, 134, 0.12);
     --warn: #c9a25e;
     --warn-soft: rgba(201, 162, 94, 0.12);
     --danger: #d08a7e;
-    --danger-soft: rgba(208, 138, 126, 0.12);
+    --danger-soft: rgba(208, 138, 126, 0.11);
     --info: #93a5b3;
     --info-soft: rgba(147, 165, 179, 0.12);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.32);
-    --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 22px 56px rgba(0, 0, 0, 0.45);
+    --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
+    --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
+    --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
+    --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
+    --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+    --hover-tint: rgba(255, 255, 255, 0.06);
+    --press-tint: rgba(255, 255, 255, 0.09);
+    --scrim: rgba(0, 0, 0, 0.65);
   }
 }
 
@@ -133,8 +150,9 @@
   color-scheme: dark;
   --bg: #171614;
   --surface: #1f1d1a;
-  --surface-2: #26231f;
-  --surface-3: #2d2924;
+  --surface-raised: #2b2723;
+  --surface-sunken: #1a1917;
+  --surface-deep: #151412;
   --ink: #eae6de;
   --muted: #a49d91;
   --faint: #928b7f;
@@ -143,17 +161,22 @@
   --accent: #c2a273;
   --accent-ink: #d8bd93;
   --accent-soft: rgba(194, 162, 115, 0.12);
-  --accent-line: rgba(194, 162, 115, 0.38);
   --ok: #8fa886;
   --ok-soft: rgba(143, 168, 134, 0.12);
   --warn: #c9a25e;
   --warn-soft: rgba(201, 162, 94, 0.12);
   --danger: #d08a7e;
-  --danger-soft: rgba(208, 138, 126, 0.12);
+  --danger-soft: rgba(208, 138, 126, 0.11);
   --info: #93a5b3;
   --info-soft: rgba(147, 165, 179, 0.12);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 14px 36px rgba(0, 0, 0, 0.32);
-  --shadow-lift: 0 2px 4px rgba(0, 0, 0, 0.35), 0 22px 56px rgba(0, 0, 0, 0.45);
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.32), 0 4px 12px rgba(0, 0, 0, 0.22);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.36), 0 10px 28px rgba(0, 0, 0, 0.3);
+  --elev-3: 0 4px 8px rgba(0, 0, 0, 0.4), 0 18px 48px rgba(0, 0, 0, 0.42);
+  --elev-4: 0 8px 16px rgba(0, 0, 0, 0.45), 0 28px 72px rgba(0, 0, 0, 0.55);
+  --elev-inset: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  --hover-tint: rgba(255, 255, 255, 0.06);
+  --press-tint: rgba(255, 255, 255, 0.09);
+  --scrim: rgba(0, 0, 0, 0.65);
 }
 
 @media (max-width: 680px) {

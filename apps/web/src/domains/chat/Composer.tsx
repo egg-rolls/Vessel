@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { Tooltip } from '../../components/Tooltip';
 import { AutoGrowTextarea, Button } from '../../components/ui';
 import { t } from '../../i18n';
 import { ChatDock } from './ChatDock';
@@ -71,9 +72,9 @@ export function Composer({
     <ChatDock>
       <div className="composer">
         <div className="composer-meta">
-          <span className="composer-target" title={targetLabel}>
-            {targetLabel}
-          </span>
+          <Tooltip label={targetLabel}>
+            <span className="composer-target">{targetLabel}</span>
+          </Tooltip>
           <span className="composer-meta-right">
             {onStop && (
               <button

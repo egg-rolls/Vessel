@@ -1,8 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { PendingPermissionsBar } from '../src/components/PendingPermissionsBar';
-import { PendingRequestsPanel } from '../src/components/PendingRequests';
-import { pendingForSession } from '../src/domains/chat/pending-permissions';
+import {
+  interactionSessionId,
+  orphanedDismissIds,
+  pendingBarSummary,
+  pendingBarTarget,
+  pendingForSession,
+  pendingPermissionsOutsideView,
+} from '../src/domains/chat/pending-permissions';
+import type { OrphanedInteraction } from '../src/gateway/interaction-hydration';
 import type { AskUserRequest, PermissionRequest } from '../src/gateway/types';
 
 function permission(overrides: Partial<PermissionRequest> = {}): PermissionRequest {
@@ -24,6 +31,18 @@ function ask(overrides: Partial<AskUserRequest> = {}): AskUserRequest {
     runId: 'run-1',
     sessionId: 'session-1',
     requestedAt: 2_000,
+    ...overrides,
+  };
+}
+
+function orphaned(overrides: Partial<OrphanedInteraction> = {}): OrphanedInteraction {
+  return {
+    kind: 'permission',
+    requestId: 'orphan-1',
+    runId: 'run-9',
+    sessionId: undefined,
+    tool: 'bash',
+    createdAt: 500,
     ...overrides,
   };
 }
@@ -50,144 +69,162 @@ describe('pendingForSession (composer slot)', () => {
   });
 });
 
-describe('PendingRequestsPanel (shared non-modal cards)', () => {
-  test('renders an unmatched permission with tool, input and decision actions', () => {
+describe('compact pending bar', () => {
+  test('bar counts permissions and asks together and jumps to the earliest owning session', () => {
+    const permissions = [
+      permission({
+        requestId: 'perm-late',
+        runId: 'run-perm',
+        sessionId: 'session-perm',
+        requestedAt: 3_000,
+      }),
+    ];
+    const asks = [
+      ask({
+        requestId: 'ask-early',
+        runId: 'run-ask',
+        sessionId: 'session-ask',
+        requestedAt: 1_000,
+        questions: [
+          { header: 'Q1', question: 'First?' },
+          { header: 'Q2', question: 'Second?' },
+        ],
+      }),
+    ];
     const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        className="pending-panel"
-        title="待处理请求"
-        permissions={[permission()]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
+      <PendingPermissionsBar
+        requests={permissions}
+        asks={asks}
+        onOpenSession={() => {}}
+        onDismissOrphans={() => {}}
       />,
     );
 
-    expect(markup).toContain('pending-panel');
-    expect(markup).toContain('permission-card');
-    expect(markup).toContain('data-request-id="perm-1"');
-    expect(markup).toContain('bash');
-    expect(markup).toContain('ls -la');
-    // once / session / always / deny 四个动作。
-    expect(markup).toContain('本次允许');
-    expect(markup).toContain('本会话允许');
-    expect(markup).toContain('始终允许');
-    expect(markup).toContain('拒绝');
-    // 不恢复全局遮罩。
-    expect(markup).not.toContain('permission-modal');
+    // ask 按条计数，不按问题数拆；两类合并成一条 bar。
+    expect(markup).toContain('其他会话有 2 个待处理请求');
+    // 最早一条（ask）的 run 短 id，而不是权限的。
+    expect(markup).toContain('run run-ask');
+    expect(markup).not.toContain('run run-perm');
+    expect(markup).toContain('前往处理');
+    expect(pendingBarTarget(pendingBarSummary(permissions, asks))).toEqual({
+      domain: 'chat',
+      sessionId: 'session-ask',
+    });
   });
 
-  test('shows the agent breadcrumb from agentId', () => {
+  test('bar shows an invalid hint without a jump when the earliest request has no session', () => {
+    const permissions = [
+      permission({ requestId: 'perm-unowned', runId: 'run-unowned', sessionId: undefined }),
+    ];
+    const asks = [
+      ask({
+        requestId: 'ask-owned',
+        runId: 'run-owned',
+        sessionId: 'session-2',
+        requestedAt: 2_000,
+      }),
+    ];
     const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        title="待处理"
-        permissions={[permission({ agentId: 'delegate-abcdefghijklmnop' })]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
+      <PendingPermissionsBar
+        requests={permissions}
+        asks={asks}
+        onOpenSession={() => {}}
+        onDismissOrphans={() => {}}
       />,
     );
-    expect(markup).toContain('agent delegate-abc…');
-    expect(markup).toContain('run run-1');
+
+    expect(markup).toContain('其他会话有 2 个待处理请求');
+    expect(markup).toContain('无法定位所属会话');
+    expect(markup).not.toContain('前往处理');
+    expect(markup).not.toContain('<button');
+    expect(pendingBarTarget(pendingBarSummary(permissions, asks))).toBeNull();
   });
 
-  test('renders old streams without agentId (no breadcrumb, no crash)', () => {
+  test('bar dismisses orphaned items without jump or decision buttons', () => {
     const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        title="待处理"
-        permissions={[permission()]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
+      <PendingPermissionsBar
+        requests={[]}
+        orphaned={[orphaned(), orphaned({ requestId: 'orphan-2' })]}
+        onOpenSession={() => {}}
+        onDismissOrphans={() => {}}
       />,
     );
-    expect(markup).toContain('permission-card');
-    expect(markup).not.toContain('agent ');
+
+    expect(markup).toContain('请求已失效（共 2 个）');
+    expect(markup).toContain('关闭');
+    // 只读：不跳转、不复用可应答卡片。
+    expect(markup).not.toContain('前往处理');
+    expect(markup).not.toContain('permission-card');
+    expect(markup).not.toContain('ask-card');
+    expect(markup).not.toContain('本次允许');
+    expect(markup).not.toContain('拒绝');
+    expect(markup).not.toContain('提交');
+    expect(markup.split('<button').length - 1).toBe(1);
   });
 
-  test('disables actions while a request is submitting', () => {
-    const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        title="待处理"
-        permissions={[permission()]}
-        responding={new Set(['perm-1'])}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
-    );
-    expect(markup).toContain('disabled');
+  test('one close action dismisses every orphan in the bar', () => {
+    const items = [
+      orphaned({ requestId: 'orphan-1' }),
+      orphaned({ requestId: 'orphan-2' }),
+      orphaned({ requestId: 'orphan-3' }),
+    ];
+    expect(orphanedDismissIds(items)).toEqual(['orphan-1', 'orphan-2', 'orphan-3']);
+  });
+
+  test('bar is absent when nothing is pending', () => {
+    expect(
+      renderToStaticMarkup(
+        <PendingPermissionsBar
+          requests={[]}
+          asks={[]}
+          orphaned={[]}
+          onOpenSession={() => {}}
+          onDismissOrphans={() => {}}
+        />,
+      ),
+    ).toBe('');
   });
 });
 
-describe('AppShell fallback panel (cross-session / no sessionId)', () => {
-  test('renders a request without sessionId as an actionable card', () => {
-    const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        id="pending-requests-panel"
-        className="pending-panel"
-        title="其他会话 / 未归属的待处理请求"
-        showSession
-        permissions={[permission({ sessionId: undefined })]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
+describe('member bridge grouping (parentSessionId)', () => {
+  test('interactionSessionId prefers the parent chat, then session, then undefined', () => {
+    expect(interactionSessionId({ sessionId: 'member-1', parentSessionId: 'chat-1' })).toBe(
+      'chat-1',
     );
-    expect(markup).toContain('id="pending-requests-panel"');
-    expect(markup).toContain('pending-panel');
-    expect(markup).toContain('permission-card');
-    expect(markup).toContain('data-request-id="perm-1"');
-    expect(markup).not.toContain('permission-modal');
+    expect(interactionSessionId({ sessionId: 'session-1' })).toBe('session-1');
+    expect(interactionSessionId({})).toBeUndefined();
   });
 
-  test('shows the owning session for cross-session requests', () => {
-    const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        title="待处理"
-        showSession
-        permissions={[permission({ agentId: 'agent-1' })]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
-    );
-    expect(markup).toContain('session session-1');
-    expect(markup).toContain('agent agent-1');
+  test('pendingForSession groups a member request under its parent chat', () => {
+    const member = permission({
+      requestId: 'member',
+      sessionId: 'member-1',
+      parentSessionId: 'chat-1',
+    });
+    expect(pendingForSession([member], 'chat-1', new Set())).toEqual([member]);
+    expect(pendingForSession([member], 'member-1', new Set())).toEqual([]);
   });
 
-  test('renders asks in the fallback panel with submit/cancel', () => {
-    const markup = renderToStaticMarkup(
-      <PendingRequestsPanel
-        title="待处理"
-        asks={[ask({ sessionId: undefined })]}
-        responding={new Set()}
-        onDecidePermission={() => {}}
-        onRespondAsk={() => {}}
-      />,
-    );
-    expect(markup).toContain('ask-card');
-    expect(markup).toContain('Which one?');
-    expect(markup).toContain('提交');
-    expect(markup).toContain('取消');
-    expect(markup).not.toContain('permission-modal');
+  test('pendingPermissionsOutsideView does not list parent-chat requests as other', () => {
+    const member = permission({
+      requestId: 'member',
+      sessionId: 'member-1',
+      parentSessionId: 'chat-1',
+    });
+    const other = permission({ requestId: 'other', sessionId: 'chat-2' });
+    expect(
+      pendingPermissionsOutsideView([member, other], {
+        domain: 'chat',
+        sessionId: 'chat-1',
+      }).map((item) => item.requestId),
+    ).toEqual(['other']);
   });
 
-  test('the bar exposes a non-modal panel toggle only when wired', () => {
-    const withToggle = renderToStaticMarkup(
-      <PendingPermissionsBar
-        requests={[permission({ sessionId: undefined })]}
-        onOpen={() => {}}
-        panelOpen
-        onTogglePanel={() => {}}
-      />,
-    );
-    expect(withToggle).toContain('aria-controls="pending-requests-panel"');
-    expect(withToggle).toContain('aria-expanded="true"');
-    expect(withToggle).toContain('收起');
-
-    const withoutToggle = renderToStaticMarkup(
-      <PendingPermissionsBar requests={[permission()]} onOpen={() => {}} />,
-    );
-    expect(withoutToggle).not.toContain('aria-controls');
+  test('asks use the same parent grouping', () => {
+    const memberAsk = ask({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+    expect(pendingForSession([memberAsk], 'chat-1', new Set())).toEqual([memberAsk]);
+    expect(
+      pendingPermissionsOutsideView([memberAsk], { domain: 'chat', sessionId: 'chat-1' }),
+    ).toEqual([]);
   });
 });

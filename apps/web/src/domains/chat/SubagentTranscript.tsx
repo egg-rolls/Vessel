@@ -7,6 +7,7 @@
  */
 import { useMemo } from 'react';
 import { StatusChip } from '../../components/StatusChip';
+import { Tooltip } from '../../components/Tooltip';
 import type { RunEvent } from '../../gateway/types';
 import { t } from '../../i18n';
 import type { AgentNode } from '../../state/agents';
@@ -77,9 +78,9 @@ export function SubagentTranscript({
         {agent.usage?.total_tokens !== undefined && (
           <span className="dim">{agent.usage.total_tokens} tok</span>
         )}
-        <span className="mono dim subagent-summary-id" title={agent.id}>
-          {agent.id}
-        </span>
+        <Tooltip label={agent.id}>
+          <span className="mono dim subagent-summary-id">{agent.id}</span>
+        </Tooltip>
       </div>
       {group ? (
         <RunItems group={group} verbosity={verbosity} />

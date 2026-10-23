@@ -77,7 +77,7 @@ export function TasksView() {
         ) : taskRows.length === 0 ? (
           <EmptyState title={t('observe.tasks.empty')} />
         ) : (
-          <table className="table">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>{t('observe.tasks.col.id')}</th>

@@ -1,5 +1,6 @@
 /** 统一状态展示：字形 + 文本 + 颜色（颜色只是增强）。 */
 import type { StatusKind } from '../gateway/types';
+import { Tooltip } from './Tooltip';
 
 export interface StatusMeta {
   glyph: string;
@@ -31,6 +32,7 @@ const ALIASES: Record<string, StatusKind> = {
   pass: 'completed',
   ok: 'completed',
   active: 'running',
+  waiting_permission: 'waiting',
   idle: 'pending',
   on: 'connected',
   off: 'disabled',
@@ -57,6 +59,39 @@ export function statusLabel(raw: string | undefined): string {
   return ALIASES[raw] ? STATUS_META[ALIASES[raw]].label : raw;
 }
 
+/**
+ * Icon-only 状态胶囊：只保留字形与语义色。
+ * `completed` 默认不渲染（列表里大量已完成会话会把噪音放大）。
+ */
+export function StatusGlyph({
+  status,
+  showCompleted = false,
+  label,
+}: {
+  status: string | undefined;
+  /** 为 true 时也渲染 completed。 */
+  showCompleted?: boolean;
+  /** 覆盖 aria-label / title；默认用状态文案。 */
+  label?: string;
+}) {
+  const kind = normalizeStatus(status);
+  if (kind === 'completed' && !showCompleted) return null;
+  const meta = STATUS_META[kind];
+  const text = label ?? statusLabel(status);
+  return (
+    <Tooltip label={text}>
+      <span
+        className={`status-glyph-only tone-${meta.tone}`}
+        data-status={kind}
+        role="img"
+        aria-label={text}
+      >
+        {meta.glyph}
+      </span>
+    </Tooltip>
+  );
+}
+
 export function StatusChip({
   status,
   label,
@@ -69,16 +104,15 @@ export function StatusChip({
 }) {
   const kind = normalizeStatus(status);
   const meta = STATUS_META[kind];
+  const text = label ?? statusLabel(status);
   return (
-    <span
-      className={`status-chip tone-${meta.tone}`}
-      data-status={kind}
-      title={title ?? statusLabel(status)}
-    >
-      <span className="status-glyph" aria-hidden="true">
-        {meta.glyph}
+    <Tooltip label={title ?? statusLabel(status)}>
+      <span className={`status-chip tone-${meta.tone}`} data-status={kind}>
+        <span className="status-glyph" aria-hidden="true">
+          {meta.glyph}
+        </span>
+        <span>{text}</span>
       </span>
-      <span>{label ?? statusLabel(status)}</span>
-    </span>
+    </Tooltip>
   );
 }

@@ -25,7 +25,7 @@
 
 import { t } from '../i18n/index.js';
 import { projectMessagesToUiItems, projectUiItems, type UiItem } from '../repl/project/ui-item.js';
-import type { DurableRunHandle, ReplContext, WorkflowRunHandle } from '../repl-context.js';
+import type { DurableRunHandle, ReplContext } from '../repl-context.js';
 import { formatRpcError } from '../rpc.js';
 import { displayWidth, truncateToWidth } from '../utils/text-layout.js';
 import type { DetailView, ListView, ViewActionInvocation, ViewEnvelope } from '../views/types.js';
@@ -55,7 +55,6 @@ import { settingsCommand } from './settings-command.js';
 import { statusCommand } from './status-command.js';
 import { tenantCommand } from './tenant-command.js';
 import { traceCommand } from './trace-command.js';
-import { workflowsCommand } from './workflows-command.js';
 
 // ── 类型 ──────────────────────────────────────────
 
@@ -102,8 +101,6 @@ export interface CommandResult {
   localeChanged?: boolean;
   /** /runs resume：命令已启动恢复，REPL 层接管运行态（runStart/runEnd、取消、流式） */
   resumeRun?: DurableRunHandle;
-  /** /workflows run|resume：命令已启动，REPL 层接管运行态与取消 */
-  workflowRun?: WorkflowRunHandle;
   /**
    * Ink 模式下打开交互视图；simple mode 忽略并打印 `output`
    * （`output` 仍是契约，缺失时 fallback 到 `renderViewAsText(view)`）。
@@ -264,7 +261,6 @@ export function createCommands(): CommandRegistry {
   reg.register(resumeCommand());
   reg.register(mcpCommand());
   reg.register(runsCommand());
-  reg.register(workflowsCommand());
   reg.register(metricsCommand());
   reg.register(feishuCommand());
   reg.register(capabilitiesCommand());
@@ -312,7 +308,7 @@ function renderHelp(reg: CommandRegistry, ctx: ReplContext): string {
     lines.push(`${CATEGORY_LABEL[category]}:`);
     for (const entry of entries) {
       const usage = entry.usage || `/${entry.name}`;
-      // usage 必须完整可读：只用空格补齐，绝不截断（/trace、/workflows 的用法很长）。
+      // usage 必须完整可读：只用空格补齐，绝不截断（/trace 的用法很长）。
       const padded = usage + ' '.repeat(Math.max(0, 30 - displayWidth(usage)));
       const unavailable =
         entry.available && !entry.available(ctx)

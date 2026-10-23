@@ -374,3 +374,122 @@ describe('未知键（含嵌套）', () => {
     ]);
   });
 });
+
+describe('0.19 S3 teams 校验', () => {
+  it('接受合法声明，所有可选字段可省略', () => {
+    expect(
+      errorsOf({
+        teams: [
+          {
+            name: 'alpha',
+            workspace: './alpha',
+            handoffPath: './alpha/handoff.md',
+            policy: { visibility: 'team' },
+          },
+          { workspace: '/tmp/beta' },
+        ],
+      }),
+    ).toEqual([]);
+  });
+
+  it('teams 必须是数组，条目必须是对象', () => {
+    const paths = pathsOf({
+      teams: [['not-an-object']],
+    } as unknown as VesselConfig);
+    expect(paths).toContain('teams[0]');
+
+    const notArray = pathsOf({ teams: { workspace: './x' } } as unknown as VesselConfig);
+    expect(notArray).toContain('teams');
+  });
+
+  it('workspace 必填且必须是非空字符串', () => {
+    const paths = pathsOf({
+      teams: [{ name: 'a' }, { workspace: '   ' }, { workspace: 42 }],
+    } as unknown as VesselConfig);
+    expect(paths).toContain('teams[0].workspace');
+    expect(paths).toContain('teams[1].workspace');
+    expect(paths).toContain('teams[2].workspace');
+  });
+
+  it('name / handoffPath 可选，但存在时必须是非空字符串', () => {
+    const paths = pathsOf({
+      teams: [{ workspace: './x', name: '', handoffPath: '  ' }],
+    });
+    expect(paths).toContain('teams[0].name');
+    expect(paths).toContain('teams[0].handoffPath');
+  });
+
+  it('policy 必须是对象', () => {
+    for (const policy of ['strict', ['a'], 1]) {
+      const paths = pathsOf({
+        teams: [{ workspace: './x', policy }],
+      } as unknown as VesselConfig);
+      expect(paths).toContain('teams[0].policy');
+    }
+  });
+
+  it('归一化（trim + path.resolve）后重复的 workspace 报错', () => {
+    const first = path.join(process.cwd(), 'team-dup');
+    const errors = errorsOf({
+      teams: [
+        { workspace: `  ${first}  ` },
+        // 相对路径按 cwd 解析，归一化后与上一条相同。
+        { workspace: 'team-dup' },
+      ],
+    });
+    expect(errors.map((e) => e.path)).toContain('teams[1].workspace');
+    expect(errors.some((e) => e.message.includes('duplicate team workspace'))).toBe(true);
+  });
+
+  it('不同 workspace 不误报重复', () => {
+    expect(errorsOf({ teams: [{ workspace: './a' }, { workspace: './b' }] })).toEqual([]);
+  });
+
+  it('YAML snake_case 映射到 handoffPath', async () => {
+    const file = tmpYaml(
+      [
+        'teams:',
+        '  - name: alpha',
+        '    workspace: ./alpha',
+        '    handoff_path: ./alpha/handoff.md',
+        '    policy:',
+        '      max_members: 4',
+      ].join('\n'),
+    );
+    const { config, validation } = await loadConfig({
+      configPath: file,
+      userConfigPath: missingPath(),
+    });
+    expect(validation.errors).toEqual([]);
+    expect(config.teams).toEqual([
+      {
+        name: 'alpha',
+        workspace: './alpha',
+        handoffPath: './alpha/handoff.md',
+        policy: { maxMembers: 4 },
+      },
+    ]);
+  });
+
+  it('tenant overlay 不允许声明 teams（白名单拒绝 + 合并时丢弃）', async () => {
+    const user = tmpYaml(
+      [
+        'tenant:',
+        '  default: acme',
+        '  tenants:',
+        '    acme:',
+        '      config:',
+        '        teams:',
+        '          - workspace: ./leak',
+      ].join('\n'),
+    );
+    const { config, validation } = await loadConfig({
+      userConfigPath: user,
+      configPath: missingPath(),
+    });
+    const error = validation.errors.find((e) => e.path === 'tenant.tenants.acme.config.teams');
+    expect(error).toBeDefined();
+    expect(error?.message).toContain('not allowed in a tenant config overlay');
+    expect(config.teams).toBeUndefined();
+  });
+});

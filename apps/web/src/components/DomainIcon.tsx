@@ -22,19 +22,20 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M3.5 4.5h13v9h-7l-4 3v-3h-2z" />
         </svg>
       );
+    case 'team':
+      return (
+        <svg {...common}>
+          <circle cx="7.5" cy="7" r="2.6" />
+          <path d="M3.2 16.2c0-2.4 1.9-4.2 4.3-4.2s4.3 1.8 4.3 4.2" />
+          <circle cx="14.2" cy="8" r="1.9" />
+          <path d="M12.8 12.5c1.9.3 3.3 1.8 3.3 3.7" />
+        </svg>
+      );
     case 'runs':
       return (
         <svg {...common}>
           <circle cx="10" cy="10" r="6.5" />
           <path d="M9 7.4 12.6 10 9 12.6z" fill="currentColor" stroke="none" />
-        </svg>
-      );
-    case 'workflows':
-      return (
-        <svg {...common}>
-          <rect x="2.8" y="3.2" width="5" height="4" rx="1" />
-          <rect x="12.2" y="12.8" width="5" height="4" rx="1" />
-          <path d="M7.8 5.2h4.4v9.6h-2.2" />
         </svg>
       );
     case 'integrations':

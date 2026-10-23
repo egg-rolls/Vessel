@@ -198,7 +198,7 @@ loop:
 ### 3.3 关键约束
 
 - **工具只能从 `PluginHost` 拿。** 循环里没有第二张表。装配层要么在 `plugins` 里传 Plugin（插件 `install` 时 `registerTool`），要么直接注入 `pluginHost`。
-- **工具调用统一走 `ToolPipeline`**（0.8.2，ADR-058）：`AgentRuntime`、workflow `type: tool` 与 delegate 共用同一阶段顺序；handler 只由管道调用，由它套 `tool.timeout` 与 `ctx.signal`——handler 直调会让 `timeout` 与权限判定失效。权限判定发生在 ToolCall guardrail / BeforeTool 的改写之后，针对最终工具与参数。
+- **工具调用统一走 `ToolPipeline`**（0.8.2，ADR-058）：`AgentRuntime` 与 delegate 共用同一阶段顺序；handler 只由管道调用，由它套 `tool.timeout` 与 `ctx.signal`——handler 直调会让 `timeout` 与权限判定失效。权限判定发生在 ToolCall guardrail / BeforeTool 的改写之后，针对最终工具与参数。
 - **工具失败不终止 run**。错误变成 `role: tool` 消息回到上下文，模型自己纠。非法 tool arguments JSON 也走这条路径（解析一次、发 `tool.call.failed`、折回错误文本）。
 - **发给 Provider 的消息始终是合法序列**：`buildRequestMessages` 在输出前丢弃孤儿 `role: tool`、把不完整 `tool_calls` 轮次降级为普通 assistant 文本，并在上下文缺 system 时补回基底 `systemPrompt`。归一化只影响本次请求，不改 `ContextManager` 的持久化记录。
 - **Guardrail `replacement` 四阶段生效**：Input（改写持久化的用户消息）、Output（改写返回值与持久化 assistant 消息）、ToolCall（改写实际执行的调用，先于 assistant 消息写入）、ToolResult（改写事件、上下文与返回值）；非法类型按未改写处理。
@@ -362,7 +362,7 @@ interface ToolDefinition {
 
 工具是**自描述对象**：权限判定与超时随工具走，不集中在 runtime 的一张策略表里。core 里**没有 `ToolRegistry` 接口**——唯一的工具注册表是 `PluginHost` / `MemoryPluginHost`。
 
-工具的实际执行统一走 `ToolPipeline`（0.8.2，ADR-058）：`getTool` → ToolCall guardrail → BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→ ToolResult guardrail → AfterTool hook（仅成功）。`ToolPipelineStages` 可关闭调用方已在外层处理的阶段；`AgentRuntime`（含 delegate 子 runtime）关闭 guardrail/BeforeTool/AfterTool，只复用 permission / handler / ToolResult，workflow 使用默认全开。
+工具的实际执行统一走 `ToolPipeline`（0.8.2，ADR-058）：`getTool` → ToolCall guardrail → BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→ ToolResult guardrail → AfterTool hook（仅成功）。`ToolPipelineStages` 可关闭调用方已在外层处理的阶段；`AgentRuntime`（含 delegate 子 runtime）关闭 guardrail/BeforeTool/AfterTool，只复用 permission / handler / ToolResult。
 
 ### 5.5 `SessionBackend`（`types/session.ts`）
 
@@ -597,7 +597,6 @@ plugins/
 ├── tools/delegate-task/     → delegate_task（工厂式）
 ├── tools/team/              → team_* 5 个（工厂式；默认不加载，team.enabled 才构造）
 ├── mcp/client/              → MCP client（工厂式；配置 mcp_servers 才构造）
-├── workflow/engine/         → @vessel-agent/workflow（工厂式；workflow.enabled 才构造）
 ├── evals/harness/           → @vessel-agent/evals（工厂式；asm 直接调用库，不注册工具）
 ├── im/feishu/               → @vessel-agent/feishu（工厂式；--feishu 才启动）
 ├── security/guardrail-pii/  → 输入输出 PII 脱敏
@@ -607,7 +606,7 @@ plugins/
 └── provider/{openai,anthropic}/
 ```
 
-共 **13 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team`、`mcp-client`、`workflow`、`evals` 与 `feishu`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；workflow 要求 `workflow.enabled: true`；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。0.8.2（ADR-058）起，装配层给 delegate 注入父级 resolved 权限，并给 workflow 注入统一的 `ToolPipeline`——workflow 的 `type: tool` 不再直调 handler。
+共 **12 个插件包**。规则：`plugins/<category>/<name>/package.json` + `src/index.ts` 存在即注册，**无需改代码、无需构建步骤**；`src/index.ts` 的默认导出须是 `Plugin`（含 `install()`）。目录形态不是 Plugin 的（例如默认导出是工厂函数、需要装配层注入依赖）列在 `FACTORY_PLUGINS` 里，由装配层自行构造——目前是 `delegate-task`、`team`、`mcp-client`、`evals` 与 `feishu`。`team` 还要求 `team.enabled: true` 显式 opt-in；MCP 要求至少一个 `mcp_servers` 条目；evals 由 CLI 直接调用；feishu 只有显式 `--feishu` 才启动。`PluginLoader` 的默认集与 `plugins:` 显式列表都会过滤它们。0.8.2（ADR-058）起，装配层给 delegate 注入父级 resolved 权限。
 
 `PluginLoader` 的接口：
 
@@ -667,7 +666,6 @@ loader 把 YAML 的 snake_case 映射成 TS 的 camelCase（ADR-019）。校验�
 | `connect.token` / `token_env` / `ca_file` | `--connect` 客户端 token 与 CA；token 优先级 CLI > env（`VESSEL_CONNECT_TOKEN`，缺失时回退 `VESSEL_GATEWAY_TOKEN`；`token_env` 由 loader 在 env 层解析）> config（0.6；0.8.1 统一经 loader，`--ca` 对应 `VESSEL_CONNECT_CA`） |
 | `transport.kind` / `transport.nodes[]` | `in-process` / `loopback` / `remote`；`remote` 时静态节点 `{ id, url, token?, token_env?, ca_file? }`，无自动发现（0.6） |
 | `serve.token` / `serve.token_env` / `serve.tokens` / `serve.admin_token` | 0.5：`serve.token` 为 default/admin 兼容单 token；`serve.tokens` 为 token → `{tenant_id, role}`；`serve.admin_token` 为 `*`/admin；解析顺序见 ADR-050 |
-| `workflow.enabled` / `dir` / `path` / `max_parallel` / `step_timeout_ms` | 默认 false；`dir` 默认 `./workflows`、`path` 默认 `~/.vessel/workflows`；`max_parallel` 1..8（默认 2）；`step_timeout_ms` 1..86400000（默认 300000）。`enabled: true` 且 `dir` 不存在 → 启动失败 |
 | `evals.enabled` / `dir` / `out_dir` / `allow_network` | 默认 false / `./evals` / `~/.vessel/evals` / false；`allow_network: true` 仍需 CLI `--allow-network` |
 | `feishu.enabled` / `app_id` / `app_secret` / `domain` / `allowed_chat_ids` / `session_prefix` / `reply_timeout_ms` / `max_reply_chars` / `max_members` | 默认 false；env `VESSEL_FEISHU_APP_ID` / `VESSEL_FEISHU_APP_SECRET` 优先；`max_members` 1..64（默认 8）；**`agent_id` 已删除，严格按未知键拒绝** |
 | `observability.event_history` / `metrics` | `event_history` 缺省 1000，显式 0 = 不限制，>0 = 环形缓冲；块缺省时不注入 metrics，块存在时 `metrics` 默认 true |
@@ -707,7 +705,7 @@ serve:
 
 **注意**：`vessel.yaml` 的 `tools:` 声明段已删除（连同 `ToolConfig` 类型）。从前"用户在配置里声明一个 shell/http 工具"这条路径没有了——有了 `bash` 之后，加能力就是写文件 + 跑命令。
 
-0.4 的四个新块**全缺省时行为与 0.3 一致**：不构造 workflow 引擎、CLI `eval` 不可用、不启动飞书、不注入 metrics；`event_history` 仍为 1000。严格校验：类型、范围、未知键；`feishu.enabled: true` 且（env + config）无凭据 → 启动失败；`workflow.enabled: true` 且 `dir` 不存在 → 启动失败（`path` 不存在则创建）；`evals.allowNetwork: true` 不自动开启 CLI flag。
+0.4 的四个新块**全缺省时行为与 0.3 一致**：CLI `eval` 不可用、不启动飞书、不注入 metrics；`event_history` 仍为 1000。严格校验：类型、范围、未知键；`feishu.enabled: true` 且（env + config）无凭据 → 启动失败；`evals.allowNetwork: true` 不自动开启 CLI flag。
 
 0.5 新增 `data_dir` / `tenant` / `trace` 与 `serve.tokens` / `serve.admin_token`。缺省行为：`session.backend = file`、`durable.path = <tenant>/runs`、trace 默认开启 `full`（30 天 / 1000 runs / 1 GiB）、tenant 缺省 `default`。用户配置未知键仍是 error；legacy 白名单仅 `default_provider` / `default_model` / `providers`。项目 `vessel.yaml` 出现密钥、tenant overlay 出现禁止块或 `null`、`config show` 校验失败均直接报错（exit 1）。
 
@@ -754,7 +752,6 @@ serve:
 | `ask.user.requested` / `ask.user.answered` | 工具 → TUI → 工具 | ask_user 交互暂停 |
 | `mcp.server.connected` / `mcp.server.failed` / `mcp.server.disconnected` | MCP 插件 → 观测 | server 生命周期（失败隔离） |
 | `mcp.tool.called` / `mcp.tool.failed` | MCP 插件 → 观测 | MCP 工具调用 |
-| `workflow.started` / `workflow.step.started` / `workflow.step.completed` / `workflow.step.failed` / `workflow.completed` / `workflow.failed` / `workflow.cancelled` / `workflow.interrupted` / `workflow.resumed` | workflow 插件 → 观测 | 编排生命周期；**没有 `workflow.step.skipped`**，skipped 只在 run 详情与计数中 |
 | `channel.feishu.connected` / `channel.feishu.disconnected` / `channel.feishu.message.received` / `channel.feishu.reply.sent` / `channel.feishu.error` | 飞书插件 → 观测 | 渠道生命周期与消息 |
 | `session.saved` / `session.deleted` | core → 观测 | 会话持久化（0.5） |
 | `config.loaded` | asm → 观测 | 只记来源与键名，不记密钥值（0.5） |
@@ -791,7 +788,7 @@ serve:
 - **脱敏**：trace 写入前与 gateway 出站前都过 `TraceRedactor`；默认按键名与 `sk-` 前缀替换，`app_id` 只留前 4 位 + `***`。0.5 **不**对 run checkpoint、eval 报告、飞书回复脱敏（resume / 展示需要完整内容）；POSIX 下 0600 best-effort。
 - **读取与重建**：`readTraceEvents(traceDir, filter)` 默认 limit 50、最大 500，按 `(seq ?? ts)` 升序，跳过损坏行；`rebuildMetrics(traceDir)` 返回与实时 `MetricsSnapshot` 同形状，`updated_at = max(ts)`。
 - **取消**：显式用户取消只发 `run.cancelled`，不再同时发 `run.failed`；Host 关闭/中断仍发 `run.failed`。0.8 起 `run()` 与 `resume()` 共用 `finalizeRun`，resume 的用户取消同样发 `run.cancelled`（ADR-054）。因此 `metrics.runs.cancelled` 在 0.5+ 可能非 0。
-- **事件归属**：core 发 `session.saved/deleted`、`hook.*`、`run.cancelled`、`installPlugin` 的 `plugin.*`；asm 发 `config.loaded` 与 `PluginLoader` 的 `plugin.loaded/failed`；ext 发 `workflow.*` / `eval.*` / `feishu.*` / `mcp.*` / `subagent.*`。
+- **事件归属**：core 发 `session.saved/deleted`、`hook.*`、`run.cancelled`、`installPlugin` 的 `plugin.*`；asm 发 `config.loaded` 与 `PluginLoader` 的 `plugin.loaded/failed`；ext 发 `eval.*` / `feishu.*` / `mcp.*` / `subagent.*`。
 
 ## 11. 工具集：三个能力工具，为什么这么少
 
@@ -799,7 +796,7 @@ serve:
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `agent` | `agent.enabled: true`；动作 `new` / `send` / `close` / `list`（支持 batch）；权限模式与成员配置见 `agent.*`（0.17） |
+| `agent` | `agent.enabled: true`；owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner）；权限模式与成员配置见 `agent.*`（0.17；rotate 见 0.19 S2；Team 动作见 0.19 S3） |
 | `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭（0.14.1） |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
@@ -825,7 +822,7 @@ serve:
 
 > MCP 不是「能力工具」，而是把外部工具接进 `PluginHost` 的插件（ADR-039）；它不占基础工具名额，也不改变「三个能力工具」的判据。
 
-**0.4 的 workflow / evals / feishu 不注册模型工具**，工具口径不变（默认 4 / 交互 5 / team 9 / 4 + N MCP）。workflow 的入口只有 CLI / TUI / gateway；模型不能触发任意路径的 workflow 定义（ADR-042）。
+**0.4 的 evals / feishu 不注册模型工具**，工具口径不变（默认 4 / 交互 5 / team 9 / 4 + N MCP）。
 
 判据只有一条：**能被其他工具替代的工具，就不该存在**。工具越多，模型的选错空间越大；真正的通用原语只有"执行一条命令"，其余都是它的特化。
 
@@ -833,8 +830,8 @@ serve:
 
 | 文件 | 职责 |
 |---|---|
-| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `workflow` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导。0.8：headless 只记录退出码，不提前 `process.exit`，统一走 gateway / tenantFactory / transport / shutdown 清理后再落 `process.exitCode` |
-| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `workflow` / `eval` 子命令与 `--feishu` 附加开关；0.6 解析 `--connect` / `--connect-token` / `--ca`（别名 `--connect-ca`）/ `--allowed-origin`（可重复，需 `--serve`） |
+| `src/cli.ts` | 入口分发：REPL（默认）/ `--run`（唯一 headless 入口：有参=文本或 `@file`，无参=stdin）/ `--serve` / `--resume-run` / `--version` / `--tools` / `update` / `eval` / `--feishu`；非交互且无 Key 时快速失败，不进首启向导。0.8：headless 只记录退出码，不提前 `process.exit`，统一走 gateway / tenantFactory / transport / shutdown 清理后再落 `process.exitCode` |
+| `src/cli-args.ts` | 纯参数解析（语法与互斥），无副作用；`--serve` 默认端口 8642；`--resume-run` 与 `--run` / `--serve` / `--tools` / 位置式输入互斥；0.4 解析 `eval` 子命令与 `--feishu` 附加开关；0.6 解析 `--connect` / `--connect-token` / `--ca`（别名 `--connect-ca`）/ `--allowed-origin`（可重复，需 `--serve`） |
 | `src/cli-overrides.ts` | 0.8.1：把**显式** CLI flag 组装成 `Partial<VesselConfig>`（serve / connect / TLS / allowed-origins），作为 loader 的最高优先级层；未给出的字段不写入 |
 | `src/cli-update.ts` | `update [--check] [--channel latest\|beta] [--json] [--force]`：只读检查与提示 |
 | `src/update/` | 更新清单解析、GitHub 通道选择、24h 缓存、后台检查、semver 比较；不自替换 |
@@ -842,9 +839,13 @@ serve:
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
 | `src/agent-service-wiring.ts` / `src/agent-owner-injection.ts` | 0.17：把父 provider / PluginHost / 限额 / 事件流交给 AgentService；owner 队列经 `BeforeLlm` 注入 |
-| `src/agent-owner-server.ts` / `src/agent-owner-client.ts` | 0.17：REPL owner loopback 控制端点与 CLI attach |
-| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）；runtime / workflow 共用同一份 resolved 权限 |
-| `src/workflow-wiring.ts` | 配置 → workflow 引擎；0.8.2 起总是注入 `createToolPipelineFor({ pluginHost, events, permission, tenantId })` |
+| `src/agent-owner-server.ts` / `src/agent-owner-client.ts` | 0.17：REPL owner loopback 控制端点与 CLI attach；0.19 S3 增加 `team.list|get|post|members` 私有方法 |
+| `src/team-command.ts` | 0.19 S3：`vessel team list|get|post|members [--json]` 的参数映射与渲染；成员名在 CLI 层解析为 agent id |
+| `src/hub-command.ts` | 0.19 S5：`vessel hub start|directory|watch|pair|node|token|data-token` 的参数映射与渲染 |
+| `src/hub/` | 0.19 S5：hub 独立前台进程（`runtime` / `server` / `registry` / `control-client` / `secret-store` / `token-broker` / `client-protocol` / `types`） |
+| `src/hub-wiring.ts` / `src/node-token-store.ts` / `src/node-token-control.ts` / `src/hub-pairing.ts` | 0.19 S5：`HubControlLike` / `TeamScopeLike` 投影、节点 token 表（只存 hash）、`auth.exchange|revoke|tokens` 与一次性配对码 |
+| `src/gateway-wiring.ts` | 0.15 / 0.19：`buildGatewayControlPlane` 透传 `teams` / `hubControl` / `teamScope` / `nodeTokens` |
+| `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）；runtime 共用同一份 resolved 权限 |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
 | `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
 | `src/durable-wiring.ts` | checkpoint / resume 的装配适配：Host 成员优先，其次单 agent runtime |
@@ -861,28 +862,20 @@ serve:
 **0.4 CLI / TUI 入口**：
 
 ```text
-vessel workflow run <name-or-path> [--input key=value]...
-vessel workflow list [--status <status>] [--limit <n>]
-vessel workflow show <workflowRunId>
-vessel workflow resume <workflowRunId>
-vessel workflow cancel <workflowRunId>
 
 vessel eval <suite-name-or-path> [--json] [--out <path>] [--filter <tag>] [--allow-network]
 
 vessel --feishu
 ```
 
-- `workflow` / `eval` 是位置 0 的子命令；未知子命令 → parse error（退出码 2）。
-- `workflow list` / `show` / `cancel` 允许 controls-only（无 host/runtime）；
-  `start` / `resume` 缺后端 → `workflow_disabled`，exit 2。
+- `eval` 是位置 0 的子命令；未知子命令 → parse error（退出码 2）。
 - `eval` 的报告写盘由 `@vessel-agent/evals/report.ts` 负责，asm 只传 `outDir` / `--out`。
 - `--feishu` 是附加开关：TTY + 无 `--serve` → REPL + 渠道；非 TTY + 无 `--serve` →
   仅渠道前台；`--serve` → gateway + 渠道。与 `--run` / `--pipe` / `--resume-run` /
   `--tools` / `--version` / `--help` 互斥。
-- TUI：`/workflows [list|run|show|resume|cancel]`、`/metrics`、`/feishu`；
-  启动横幅只在存在 interrupted workflow run 或飞书已连接时追加一行。
+- TUI：`/metrics`、`/feishu`；启动横幅只在飞书已连接时追加一行。
 
-**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 0.3 的 `mcp` / `runs` 控制面适配器与 0.4 的 `workflows` / `metrics` / `feishu` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
+**REPL 的职责边界**：`ReplContext` 携带 `runtime`、`pluginHost`、`session`、`events`、`context`，以及 0.3 的 `mcp` / `runs` 控制面适配器与 0.4 的 `metrics` / `feishu` 控制面适配器。`/tools` 与 `/plugins` 从 `runtime.pluginHost` 读——不再有第二个只为展示而存在的 host。`@路径` 的展开也发生在这里（见 §4）。
 
 **用户可见行为（0.3.0；0.4 见上）**：
 
@@ -929,11 +922,6 @@ vessel --feishu
 | `POST /v1/durable/runs/:runId/resume` | 202 `{run_id, status:'queued'}`；未启用/不支持 resume → `durable_disabled`（0.3） |
 | `GET /v1/mcp/servers` | `{servers:[{name,status,tools,error?}]}`；未注入 → `mcp_disabled`（0.3） |
 | `GET /v1/metrics` | `{metrics: MetricsSnapshot}`；未注入 → `metrics_disabled`（0.4） |
-| `GET /v1/workflows?status=&limit=` | `{workflows: WorkflowRunSummary[]}`；未注入 → `workflow_disabled`（0.4） |
-| `GET /v1/workflows/:id` | `{workflow: WorkflowRunDetail}`；不存在 → 404 `workflow_not_found`（0.4） |
-| `POST /v1/workflows/run` | `{name, inputs?}` → 202 `{workflow_run_id, status:'queued'}`；name 只在 `workflow.dir` 下解析（0.4） |
-| `POST /v1/workflows/:id/resume` | 202 `{workflow_run_id, status:'queued'}`（0.4） |
-| `POST /v1/workflows/:id/cancel` | 202 `{workflow_run_id, status:'cancelled'}`；已完成/失败 → 409 `workflow_invalid`；已取消幂等 202（0.4） |
 | `GET /v1/channels/feishu` | `{channel: FeishuStatus}`；未注入 → `channel_disabled`（0.4） |
 | `GET /v1/evals/latest?suite=` | `{report: EvalReport}`；无报告 → 404 `eval_not_found`（0.4） |
 | `POST /v1/team/agents` | 跨节点 spawn；`request_id` 幂等去重（进程内 LRU 1000）；缺 spawn 注入 → `no_spawn`（0.6） |
@@ -946,7 +934,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 0.3 新增稳定错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `durable_disabled` / `mcp_disabled`；`hello.features` 按实际启用增加 `durable-resume` / `mcp-status` / `tls`。
 
-0.4 新增稳定错误码（additive）：`metrics_disabled` / `workflow_disabled` / `workflow_not_found` / `workflow_invalid` / `workflow_already_running` / `workflow_not_resumable` / `channel_disabled` / `eval_not_found`；`hello.features` 按实际启用增加 `workflow` / `evals` / `feishu` / `metrics`。HTTP 映射：404 `*_not_found`；409 `*_already_running` / `*_not_resumable` / not cancellable；503 `*_disabled`；400 `invalid_request`。`queued` 只是 gateway 接受态，不是 `WorkflowRunStatus`。`workflow_cancelled` 不加入协议错误码，控制面抛该码时映射为 409 `workflow_invalid`。
+0.4 新增稳定错误码（additive）：`metrics_disabled` / `channel_disabled` / `eval_not_found`；`hello.features` 按实际启用增加 `evals` / `feishu` / `metrics`。HTTP 映射：404 `*_not_found`；503 `*_disabled`；400 `invalid_request`。
 
 ### 13.3 G1：权限与 ask_user 桥
 
@@ -990,7 +978,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **独立前端（0.6）**：可把 `apps/web/dist` 部署到任意静态站点；服务端配置 `serve.allowed_origins` 允许该 Origin（CORS + WS upgrade），浏览器需信任 gateway 证书。同源部署仍由 gateway 托管 `dist`。
 - 功能：运行提交/取消、时间线、会话列表、工具端点、权限弹窗、ask_user 表单。
 - 0.3：按 `hello.features` 显示 **MCP server 面板**（`mcp-status`）与 **interrupted run 面板**（`durable-resume`），可触发 durable resume；未启用的 feature 不显示面板。面板 10s 刷新。
-- 0.4：按 `hello.features` 显示 **workflow 面板**（列表 / 详情 / 启动 / resume / cancel）、**metrics 快照**与 **飞书状态**（`workflow` / `metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
+- 0.4：按 `hello.features` 显示 **metrics 快照**与 **飞书状态**（`metrics` / `feishu`）；evals 只做 `GET /v1/evals/latest`，不做面板。
 - 开发：`cd apps/web && npm run dev`（Vite 代理 `/v1` 与 `/health` 到 `127.0.0.1:8642`，`changeOrigin:false` 保持同源）；生产：gateway 托管 `dist`。
 - 已知限制：单 runtime / 单 context，并发固定 1（队列上限 100）；运行与事件历史在内存，重启丢失；无自动化浏览器测试。
 - 0.6.1：Markdown 渲染、`sessions.search` 全文检索、工具事件 `args` / `result` 折叠，见 §18.6。
@@ -999,7 +987,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）；`teams.list|get|post|members`（S3）；`auth.exchange` / `auth.revoke` / `auth.tokens`（S5 hub 控制面）。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1040,24 +1028,26 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `permission.respond` | write |
 | `ask.respond` | write |
 | `interactions.list` | read |
-| `workflow.list` | read |
-| `workflow.get` | read |
-| `workflow.start` | write |
-| `workflow.resume` | write |
-| `workflow.cancel` | write |
 | `evals.latest` | read |
 | `evals.run` | write |
 | `feishu.status` | read |
 | `gateway.reload` | admin |
+| `teams.list` | read |
+| `teams.get` | read |
+| `teams.post` | write |
+| `teams.members` | write |
+| `auth.exchange` | write |
+| `auth.revoke` | admin |
+| `auth.tokens` | admin |
 <!-- rpc-methods:end -->
 
-0.18 起 canonical 方法总数 **45**（44 个 domain 方法 + `events.subscribe`）；0.18 新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
+0.19 S3 + S5 起 canonical 方法总数 **47**（46 个 domain 方法 + `events.subscribe`）。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
 - **events**：`events.list` 支持 `run_id` / `since_seq` / `since_ts` / `types` / `type_prefix` / `limit`（默认 50、最大 500），按 `(seq ?? ts)` 升序。`events.subscribe` 支持 `since`（gateway wire seq）/ `since_ts` / `run_id` / `types` / `all_tenants`（仅 admin）。RPC 回调为 `{ method: 'events.event', params: RunEvent }`；WS 旧 `{ kind: 'event', event }` 不变。
 - **manifest**：`capabilities.list` 返回 `{ version, config_schema_version: 1, methods: [{ name, params_schema?, result_schema?, permission }], tools, plugins }`；只含 canonical 方法。A-6.3：manifest 按 `ctx.tenantId` 生成，tools / plugins 取 `pluginHostFor` / `pluginsFor`（缺省回退全局）；`trace.readEvents(filter, tenantId)` 与 `sessionData.deleteSessionData(sessionId, tenantId)` 由 web 传入当前 tenant，asm 已按 tenant 路由到对应的 trace 目录与 session backend。
-- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。0.8：本地 `subscribe()` 由装配层桥接到 `runtimeEvents`（每条 `RunEvent` 包成 `{ method: 'events.event', params }`），是只读旁路，不写回事件流；`/runs resume`、`/workflows run|resume` 因此能收到终态而不是挂起。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、不写本地 store / trace；回环可明文，非回环必须 HTTPS + token。未设置时用 `LocalRpcClient` 并取锁。
+- **客户端**：`RpcClient` 有 `request()` + `subscribe()`；`LocalRpcClient` / `HttpRpcClient`。CLI/TUI 不绕开方法表。0.8：本地 `subscribe()` 由装配层桥接到 `runtimeEvents`（每条 `RunEvent` 包成 `{ method: 'events.event', params }`），是只读旁路，不写回事件流；`/runs resume` 因此能收到终态而不是挂起。`--connect <url>` / `VESSEL_CONNECT` 使用 `HttpRpcClient`、不取 tenant 写锁、不写本地 store / trace；回环可明文，非回环必须 HTTPS + token。未设置时用 `LocalRpcClient` 并取锁。
 - **远程客户端（0.6）**：token 解析顺序 `--connect-token` > env（`VESSEL_CONNECT_TOKEN` / `connect.token_env`）> `connect.token`；CA 用 `--ca` / `connect.ca_file`。建连后 `health.get` 取远端 tenant / node；显式 `--tenant` 才把 `tenant_id` 合并进请求（admin 覆盖），否则由 token principal 决定。connect 模式下 `permission.respond` / `ask.respond` 经 RPC 回远端；TUI / headless 同路径。
 - **tenant**：token → principal（`serve.token`→default/admin、`serve.tokens` 按条目、`serve.admin_token`→`*`/admin、回环无 token→default/admin）；非 admin 指定其它 tenant → `forbidden`；跨 tenant 读取 → `not_found`；一个 gateway 服务 N tenant（工厂缺省时非 default tenant `forbidden`）。0.8：durable REST 端点允许 admin 通过 query `tenant_id` 或 `X-Vessel-Tenant` 显式指定 tenant，两处同时出现且不一致 → 400；其余角色仍按 principal 作用域。
 - **错误码**：方法级错误一律 `ok:false`，HTTP 200；冻结集合 `unauthorized` / `forbidden` / `not_found` / `invalid_params` / `tenant_locked` / `quota_exceeded` / `conflict` / `internal` / `not_supported`（0.12：可选能力未注入）。旧路径保留 0.4 错误码映射。
@@ -1114,7 +1104,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 - **定位**：Vessel 是可嵌入的**多 agent 平台 runtime**；TUI / CLI / Web / Gateway 是参考 harness 外壳，只消费 runtime 的 SDK 与事件。
 - **分层**：`Contracts ← Kernel ← Modules ← SDK ← Shells`；`Plugins` 只依赖 Contracts / 公开 API，经 `PluginHost` 在运行期 install。依赖方向单向，并由 CI 自动检查。
 - **Module ≠ Plugin**：Module 是编译期/构造期边界（一个 port 一个实现）；Plugin 仍是唯一运行期扩展机制。**不引入 `ModuleHost` / `ModuleRegistry` / 第二套扩展机制。**
-- **0.2 非目标（0.3–0.6 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；0.4 以插件实现 workflow / evals / 飞书；0.5 实现多租户；0.6 实现跨机器远程与跨节点 transport；单二进制仍非目标。
+- **0.2 非目标（0.3–0.6 已部分重启）**：0.2 不做 durable execution / workflow / evals / MCP / 多租户 / 远程监听 / TLS / 跨机器调度 / 单二进制主分发。0.3 已实现 durable / MCP / 远程监听 / TLS；0.4 以插件实现 workflow / evals / 飞书（workflow 已于 2026-10-22 移除，ADR-090）；0.5 实现多租户；0.6 实现跨机器远程与跨节点 transport；单二进制仍非目标。
 
 ### 14.2 Kernel（已实现）
 
@@ -1170,50 +1160,11 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 ## 15. 0.4 能力层（release/0.4，未发布）
 
-> 0.4 的主题是「可编排、可评测、可观测、可对话」。三个能力全部是**插件**，
-> core 只新增可观测性/稳定性原语；决策见 ADR-042 / 043 / 044 / 045。
-> 默认全部关闭；四个新配置块缺省时行为与 0.3 一致。
+> 0.4 的主题是「可编排、可评测、可观测、可对话」。两个能力（evals / 飞书）全部是**插件**；workflow 已于 2026-10-22 移除（ADR-090）。
+> core 只新增可观测性/稳定性原语；决策见 ADR-043 / 044 / 045（ADR-042 已由 ADR-090 取代）。
+> 默认全部关闭；三个新配置块（evals / 飞书 / metrics）缺省时行为与 0.3 一致。
 
-### 15.1 Workflow（`@vessel-agent/workflow`）
-
-- **位置与形态**：`plugins/workflow/engine/`，工厂式插件（`FACTORY_PLUGINS` 短名
-  `workflow`），由 asm 构造；**不是 core 模块**。
-- **定义**：YAML/JSON；步骤 `type: agent | tool`，`depends_on` 形成 DAG；
-  模板只做字符串插值（`{{inputs.*}}`、`{{steps.<id>.output|status}}`、
-  `{{workflow.name}}`），不做表达式/脚本求值。环依赖、未知依赖/变量/工具/成员 = 定义错误。
-- **执行**：依赖满足的步骤并行，上限 `min(定义值, workflow.max_parallel)`；
-  单 agent 回退强制串行。`type: agent` 调 `host.get(agent).run(prompt)`。
-  0.8.2 起（ADR-058）`type: tool` 走统一的 `ToolPipeline`：ToolCall guardrail →
-  BeforeTool hook → 权限（最终工具与参数）→ handler（timeout + signal）→
-  ToolResult guardrail → AfterTool hook，并发布
-  `tool.call.started|completed|failed`（`run_id` 为 workflow run id）；权限 `ask`
-  经 `tool.permission.request` 等待应答（0.13 起默认不超时；只有显式正数 `timeoutMs` 才超时），`deny` 拒绝。
-  未注入 `toolPipeline` 的旧嵌入路径仍直接调 handler（deprecated）。
-- **状态与持久化**：run id `wf_<uuid>`；workflow 状态 `pending | running |
-  completed | failed | cancelled | interrupted`；step 状态 `pending | running |
-  completed | failed | skipped | cancelled`。一 run 一 JSON（`workflow.path`），
-  temp + rename 原子写；检查点：workflow 开始、每 step 开始/结束、workflow 结束；
-  run JSON 保存完整定义快照。**只要有 step 最终 failed，workflow 终态为 failed**
-  （即使 `on_error: continue`）。
-- **resume**：允许 `interrupted | failed | running`；`completed | cancelled` →
-  `workflow_not_resumable`。跳过 `completed` / `skipped`；`running` / `pending` /
-  `failed` 重置为 `pending` 并重跑；**不保证 step 幂等**。
-- **cancel / interrupt**：`cancel()` → `cancelled`（running step `cancelled`、
-  pending step `skipped`），不可 resume；SIGINT/SIGTERM → `interrupted`，可 resume。
-  0.4 `workflow cancel` 只支持同进程，对非本进程 run 返回 `workflow_not_found`。
-- **controls-only**：`workflow list` / `show` / `cancel` 允许只构造 store 侧引擎，
-  `host` / `runtime` 缺省；`start` / `resume` 两者都缺省 → `workflow_disabled`，exit 2。
-- **会话**：agent step 使用 Host 中已存在的成员，不为每个 run 新建成员；同一成员的
-  多次 workflow run 共享 session，Host 默认 `perAgentSerial` 串行化。单 agent 回退
-  由 asm 为每次 run 生成 `workflow:<run_id>`。workflow 级会话隔离不在 0.4 承诺。
-- **入口**：CLI / TUI `/workflows` / gateway `/v1/workflows*`；**不注册模型工具**。
-- **错误码**：`workflow_not_found` / `workflow_invalid` / `workflow_already_running` /
-  `workflow_not_resumable` / `workflow_cancelled` / `workflow_disabled`。
-- **事件**：`workflow.*`（开放字符串）；**没有 `workflow.step.skipped`**。
-- **退出码**：0 成功；1 workflow failed；2 参数/配置错误 / `workflow_disabled`；
-  130 用户 cancel / SIGINT；143 SIGTERM。
-
-### 15.2 Evals（`@vessel-agent/evals`）
+### 15.1 Evals（`@vessel-agent/evals`）
 
 - **位置与形态**：`plugins/evals/harness/`；库 + 运行器，加入 `FACTORY_PLUGINS`
   仅为阻止被当作普通插件扫描；**不注册工具**；asm CLI 直接调用库函数。
@@ -1233,7 +1184,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
   `evals.enabled: false` → `eval_invalid`（消息注明 disabled），exit 2。
 - **入口**：CLI `vessel eval`；gateway 只读 `GET /v1/evals/latest`；不做面板。
 
-### 15.3 飞书（`@vessel-agent/feishu`）
+### 15.2 飞书（`@vessel-agent/feishu`）
 
 - **位置与形态**：`plugins/im/feishu/`，工厂式插件；官方 SDK 只在该插件包，
   core 依赖保持为空；所有网络交互藏在 `FeishuTransport` 后，测试/CI 用 mock。
@@ -1257,10 +1208,10 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
   `channel_not_connected` / `channel_auth_failed`；事件 `channel.feishu.*`。
 - **退出码**：配置错误 2；运行期连接/SDK 失败 1；SIGINT 130；SIGTERM 143。
 
-### 15.4 边界
+### 15.3 边界
 
-- 0.4 **不注册** `run_workflow` 或任何 workflow/eval/feishu 工具；工具口径不变。
-- 不做 workflow 可视化编辑器、多租户、跨机器编排、飞书富媒体/卡片/thread/多机器人/
+- 0.4 **不注册** 任何 eval/feishu 工具；工具口径不变。
+- 不做多租户、跨机器编排、飞书富媒体/卡片/thread/多机器人/
   OAuth、个人微信。微信公众号/企业微信留 0.5 评估。
 - 0.4 **不 tag、不 publish、不合并 `main`**；只做发布干跑。
 
@@ -1318,10 +1269,6 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 ### 16.6 已知限制（0.4）
 
-- workflow resume 不保证 step 幂等，重跑可能重复副作用。
-- workflow `type: tool` 在 0.4 绕过 runtime 的 guardrail / hook；0.8.2 起已统一到工具执行管道（ADR-058），详见 §15.1。
-- workflow agent step 共享 Host 成员 session，无 workflow 级会话隔离。
-- workflow 单 agent 回退时并行退化为串行；`cancel` 只支持同进程。
 - 飞书只支持文本、单 chat 单 session；不做 thread 区分与富媒体。
 - `MetricsCollector` 是进程内聚合，不持久化；多 Host 不合并。
 - `pruneRuns` 是 helper，不自动调度。
@@ -1361,7 +1308,7 @@ session 快照与 run checkpoint 使用同目录 temp + rename；Windows 失败�
 
 ### 17.5 tenant 隔离与 quota
 
-解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为已由 ext 合入（每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）。A-6 的 web 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 `--serve` per-tenant 执行面（config / provider / session / run store / context / PluginHost / trace / metrics / redactor / sessionControl、独立 EventStream、per-tenant writer lock）**均已实现**。disabled / 未配置 tenant → `forbidden`，锁冲突 → `tenant_locked`。已知限制：gateway 的 workflow / 飞书控制面仍只走 default tenant。
+解析顺序：显式 `RuntimeOptions.tenantId` → `--tenant` → `VESSEL_TENANT` → `tenant.default` → `default`。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。tenant overlay 优先级 `CLI > env > tenant overlay > project > user > default`；允许块与禁止块见 ADR-049。quota 超限返回 `quota_exceeded` 且不落半成品；跨 tenant 读取 `not_found`；`status: disabled` 拒绝写，0.5 不做 `--purge`。一个 gateway 可服务 N 个 tenant，但非 default tenant 需要显式工厂。插件 tenant 行为已由 ext 合入（每 tenant 独立实例、不追加 `tenants/<id>`、`eval.run.*` 事件、按 tenant 合并插件配置）。A-6 的 web 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 `--serve` per-tenant 执行面（config / provider / session / run store / context / PluginHost / trace / metrics / redactor / sessionControl、独立 EventStream、per-tenant writer lock）**均已实现**。disabled / 未配置 tenant → `forbidden`，锁冲突 → `tenant_locked`。已知限制：gateway 的飞书控制面仍只走 default tenant。
 
 0.8 补充（ADR-054 / ADR-055）：`FileRunStore` 的 `delete()` 在 tenant 模式下先校验 checkpoint 归属，foreign / 缺失一律 no-op，跨 tenant 删除不再可能；`--resume-run` 与执行面使用同一个 `<data_dir>/tenants/<id>/runs`；durable REST 让 admin 用 query `tenant_id` 或 `X-Vessel-Tenant` 显式跨 tenant（两者不一致 → 400）。工具路径边界与 tenant 无关，但同一 denylist 保护所有 tenant 的宿主凭据。
 
@@ -1516,7 +1463,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 20.3 装配与配置（A1–A5）
 
-- **本地 RPC subscribe**：`src/bootstrap.ts` 给 `createLocalRpcClient` 传入 `onEvent`，订阅 `runtimeEvents` 并以 `{ method:'events.event', params }` 转发。只读旁路，不重复发布事件。`/runs resume`、`/workflows run|resume` 不再挂起。
+- **本地 RPC subscribe**：`src/bootstrap.ts` 给 `createLocalRpcClient` 传入 `onEvent`，订阅 `runtimeEvents` 并以 `{ method:'events.event', params }` 转发。只读旁路，不重复发布事件。`/runs resume` 不再挂起。
 - **headless 清理**：`src/cli.ts` 的 headless 分支只记录退出码，不再提前 `process.exit`；跳出后统一执行 gateway / `tenantFactory.closeAll()` / transport / `result.shutdown()` 清理，最后设置 `process.exitCode`。`--serve --run` 退出后不残留 tenant 锁。
 - **env provider 合并**：`packages/config/src/loader.ts` 只在显式 `VESSEL_PROVIDER` 时写 `provider.name`；`VESSEL_MODEL` / `VESSEL_BASE_URL` / `VESSEL_PROVIDER_API_KEY` 只合并对应字段，不再把项目里的 `provider.name` 覆盖成 `openai`。
 - **`--resume-run` 目录**：读取 `<data_dir>/tenants/<id>/runs`，与执行面一致，并透传 `tenantId`。
@@ -1584,16 +1531,13 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 - `packages/core/src/runtime/tool-pipeline.ts` 导出 `createToolPipeline` / `createToolPipelineFor` / `ToolPipeline` / `ToolPipelineOptions` / `ToolPipelineStages` / `ToolPipelineResult`（根入口与 `@vessel-agent/core/runtime`）。
 - 阶段顺序：`getTool` → ToolCall guardrail → BeforeTool hook → **permission（最终工具与参数）** → handler（timeout + `ctx.signal`）→ ToolResult guardrail → AfterTool hook（仅成功）。guardrail 改写工具名/参数后重新查找工具并解析参数；BeforeTool 的 `updatedInput` 同样在权限判定前生效。
-- `ToolPipelineStages` 可关闭调用方已在外层处理的阶段（默认全开）。`AgentRuntime`（包括 delegate 子 runtime）关闭 ToolCall guardrail / BeforeTool / AfterTool，仅复用 permission、handler 超时与 ToolResult guardrail；workflow 使用默认全开。
-- 管道不发布 `tool.call.*`；由 `AgentRuntime` / workflow 引擎各自发布，避免重复。
-- **workflow**：`WorkflowEngineOptions.toolPipeline?`；asm 的 `createWorkflowFromConfig` 总是注入 `createToolPipelineFor({ pluginHost, events, permission, tenantId })`。`type: tool` 走管道并发布 `tool.call.started|completed|failed`（payload 含 `workflow_run_id` / `tool_call_id` / `tool_name`）；未注入时保留旧直接 handler 路径（deprecated）。
+- `ToolPipelineStages` 可关闭调用方已在外层处理的阶段（默认全开）。`AgentRuntime`（包括 delegate 子 runtime）关闭 ToolCall guardrail / BeforeTool / AfterTool，仅复用 permission、handler 超时与 ToolResult guardrail。
+- 管道不发布 `tool.call.*`；由 `AgentRuntime` 发布，避免重复。
 - **delegate**：`DelegateTaskOptions.permission?`；子 runtime 继承父级 `default` + `autoApprove`，缺省仍 `{ default: 'allow' }`。`permissionMode: 'allow'` 继续显式覆盖（`withAutoAllow`），`deny` 在注册前过滤工具，`bridge` 保留工具自带 `checkPermission`。
-- **装配**：`resolveRuntimePermission(config, headless)` / `buildDelegateTaskOptions()` 为纯函数；runtime / delegate / workflow 共用同一份 resolved 权限（交互 `ask`、headless `allow`，`ask_user` 始终 auto-approve）。
+- **装配**：`resolveRuntimePermission(config, headless)` / `buildDelegateTaskOptions()` 为纯函数；runtime / delegate 共用同一份 resolved 权限（交互 `ask`、headless `allow`，`ask_user` 始终 auto-approve）。
 
 ### 22.2 已知限制（0.8.2）
 
-- 直接构造 workflow 引擎且不注入 `toolPipeline` 的第三方嵌入方仍走旧直接 handler 路径，需要自行迁移。
-- workflow 中的权限 `ask` 会发布 `tool.permission.request` 并等待应答；0.13 起默认不超时（只有显式正数 `timeoutMs` 才超时），无应答方时会一直等待，不会静默放行。
 - 关闭阶段由调用方负责语义正确性；禁用 ToolResult guardrail 会让未检查的结果直接写回上下文。
 - 管道只统一执行语义，不改变 `ToolDefinition` / `PermissionPolicy` / guardrail / hook 的接口。
 
@@ -1606,7 +1550,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - `packages/serve/src/gateway.ts` 从约 4000 行降到 3002 行，只负责选项校验、事件缓冲 / 连接状态、HTTP / WS 路由、SSE 与鉴权顺序。
 - 方法表按 domain 移到 `packages/serve/src/gateway/methods/`，每个文件导出 `createXxxMethods(deps): RpcMethodDefinition[]`：
   - `config.ts`：`createConfigMethods` / `createToolMethods` / `createPluginsMethods`；
-  - `sessions.ts` / `runs.ts` / `tenants.ts` / `interactions.ts` / `workflow.ts` / `evals.ts` / `mcp.ts` / `feishu.ts`；
+  - `sessions.ts` / `runs.ts` / `tenants.ts` / `interactions.ts` / `evals.ts` / `mcp.ts` / `feishu.ts`；
   - `observability.ts`：`createEventsMethods` / `createMetricsMethods` / `createTraceMethods`；
   - `common.ts`：`tenantParamSchema` / `stringParam` / `checkpointBelongsToTenant` 等共享纯函数与常量。
 - `gateway.ts` 用 `...createXxxMethods(deps)` 按拆分前顺序展开，再 `defineMethods(rpcMethods)`；`events.subscribe` 仍留在 gateway（依赖连接类型与事件缓冲游标）。
@@ -1616,7 +1560,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 ### 23.2 CLI 命令注册表（ADR-060）
 
 - 新增 `src/commands/registry.ts`：`CliCommand`（`name` / `match(args)` / `run(args, ctx)`）、有序数组 `cliCommands`、`matchCommand(args)`（首个命中即停）。
-- 覆盖 11 条一次性命令：`tools` / `update` / `resume-run-list` / `workflow` / `eval` / `config` / `tenant` / `migrate` / `trace` / `plugin` / `doctor`；顺序与迁移前 `if` 链的短路顺序一致。
+- 覆盖 10 条一次性命令：`tools` / `update` / `resume-run-list` / `eval` / `config` / `tenant` / `migrate` / `trace` / `plugin` / `doctor`；顺序与迁移前 `if` 链的短路顺序一致。
 - `src/cli.ts` 删除约 153 行顶层 `if` 链，只解析全局参数 → `matchCommand` → 执行 → 统一设置 `exitCode`；REPL / `--serve` / headless 路径不经过注册表，清理流程不变。
 - 命令上下文 `CliCommandContext` 目前只含 `useMock`；一次性命令输出统一经 `printCommandResult({ exitCode, stdout, stderr })`。
 
@@ -1685,7 +1629,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
   - `tools` / `permissions`：首轮返回一次 `bash` tool_call（`echo vessel-demo-ok`，不写文件、不联网），收到 role=tool 的消息后以固定文本收尾；两者共用实现，交互 REPL 下是否弹权限确认由权限层决定。
   - `error`：`chat()` 抛固定错误，用于演示错误路径。
   - `multi-turn`：返回 `Turn N: <输入>`，N 为消息历史中的 user 条数。
-- provider factory：`createProvider(..., useMock, scenario?)` 在 `useMock` 时若收到 `scenario` 用 `createScenarioProvider()`，否则仍用 `MemoryLLMProvider`（eval / workflow 等未透传场景的调用方保持原行为）。
+- provider factory：`createProvider(..., useMock, scenario?)` 在 `useMock` 时若收到 `scenario` 用 `createScenarioProvider()`，否则仍用 `MemoryLLMProvider`（eval 等未透传场景的调用方保持原行为）。
 
 ### 26.2 `VESSEL_MOCK_SCENARIO`
 
@@ -1702,7 +1646,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 ### 26.4 已知限制（0.8.6）
 
 - demo 需要交互式 TTY；CI 与非交互环境只能用 `VESSEL_MOCK=1 ... --run`。
-- evals 与 workflow 未接入场景 provider，仍是各自固定的 mock 行为。
+- evals 未接入场景 provider，仍是各自固定的 mock 行为。
 - web / gateway 没有 demo 入口；场景只在 CLI 装配路径可达。
 - demo 引导与 CLI 输出保持英文，不在 0.8.5 i18n 范围内。
 
@@ -1744,12 +1688,12 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - **安装 → 初始化**：`AgentRuntime.create()` 先逐个 `install()`，全部成功后再按安装顺序调用 `init()`。`init` 抛错只发 `plugin.init.failed`（`{ name, error }`）并继续，不使 runtime 构造失败。
 - **安装回滚**：`PluginHost.beginPluginInstall?(name)` 返回 `{ commit, rollback }`。安装成功 `commit()` 并发布 `plugin.loaded`（`{ name, version? }`）；失败 `rollback()` 该插件本次注册的 tool / provider / guardrail / hook，然后发布 `plugin.failed` 并重抛——安装阶段仍是 fail-fast。
 - **释放**：`AgentRuntime.dispose()` 按逆安装顺序 best-effort 调用 `dispose()`，异常只发 `plugin.dispose.failed`；Promise 缓存保证幂等；最后关闭 session。
-- **装配层**：bootstrap / CLI / serve 的 shutdown 链 `await` runtime 释放；MCP client 与 workflow engine 是工厂式插件，由装配层显式 close，二者自身 `dispose()` 幂等；其余 11 个仓库插件没有需要释放的资源。
+- **装配层**：bootstrap / CLI / serve 的 shutdown 链 `await` runtime 释放；MCP client 是工厂式插件，由装配层显式 close，自身 `dispose()` 幂等；其余仓库插件没有需要释放的资源。
 - **包装**：`withPluginConfig` 保留 `init` / `dispose`，配置包装不会丢失生命周期钩子。
 
 ### 28.2 协议 result schema
 
-- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个 = 43 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval / workflow 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens` 后为 **47** 个 = 46 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
@@ -1767,7 +1711,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 - 去重不持久化；重启后可能重复投递，跨重启 exactly-once 需消费端自行持久化幂等键。
 - host 模式直接使用 `PluginHost` 装配时绕过生命周期 v2，不保证 `init` / `dispose`。
-- 工厂式插件（MCP client、workflow engine）由装配层关闭，不走 `Plugin.dispose` 自动路径。
+- 工厂式插件（MCP client）由装配层关闭，不走 `Plugin.dispose` 自动路径。
 - `runs.get` 的 `result_schema` 是 `RunStatus` 与 durable checkpoint 的宽松超集，不是精确校验。
 - 结果校验默认关闭，只在 `VESSEL_VALIDATE_RESULTS=1` 时生效；CI 的 Test step 固定开启。
 - `sessions.list` 的四个可空字段只做存在性约束，不做类型校验。
@@ -1817,7 +1761,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 29.6 已知限制（0.10.0）
 
-- host 模式（直接使用 `PluginHost` 装配）不经过 `AgentRuntime.interrupt()`；durable run 与 workflow 的 drain 语义未覆盖。
+- host 模式（直接使用 `PluginHost` 装配）不经过 `AgentRuntime.interrupt()`；durable run 的 drain 语义未覆盖。
 - 跨节点去重集合仍不持久化，只保证单 gateway 进程生命周期内 at-most-once。
 - RPC 结果校验默认关闭，只有 `VESSEL_VALIDATE_RESULTS=1` 时生效；CI 的 Test step 固定开启。
 - provider 插件没有事件总线，重试观测只能通过 `onRetry` 或 stderr，不发布 core 事件。
@@ -2334,9 +2278,10 @@ interface LimitBlock {
 - canonical RPC 仍为 **44**，本版本不新增方法。
 - 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。
 
-## 39. 0.17.0 AgentService 与成员能力层（已实现）
+## 39. 0.17.0 AgentService 与成员能力层（已实现；0.19 S1/S2 修订见 §40，S3 修订见 §41）
 
 > 状态：已合入 `release/0.17.0`（未发布）。决策见 [ADR-088](adr/ADR-088-agent-service-package.md)。
+> 本节描述 0.17 当时的行为；0.19 S3 起成员 `agent` 动作扩为 `rotate|post|send|list`、owner `send` 走 dispatch，以 §41 为准。
 
 ### 39.1 分层与包边界
 
@@ -2344,25 +2289,25 @@ interface LimitBlock {
 入口（tui / src CLI / serve / apps/web）
   → 能力层 packages/agent（AgentService）
     → 执行内核 packages/core（AgentRuntime / Host / ToolPipeline / Permission）
-扩展层 plugins/**（tools / providers / workflow …）
+扩展层 plugins/**（tools / providers …）
 ```
 
 - `packages/agent` 是成员能力的**唯一实现**：registry、生命周期、消息队列、可见性、owner 队列、回复投递、权限 bridge、snapshot 与内置 `agent` 工具。
 - `packages/core` 仍是领域无关执行内核，不知道 member / owner / visibility；成员执行经 `MemberRuntimePort` 注入。
 - 入口只做输入解析、AgentService 调用与事件渲染；不得复制 registry 或另写生命周期。
 - 依赖方向：入口 → agent → core；插件 → core / agent；core 不依赖 agent 或入口。`packages/agent` 只依赖 `@vessel-agent/core` 的公开入口。
-- `InProcessMemberRuntime` 是 Phase A 的执行内核适配：每个成员独占 `AgentRuntime` / `Context` / `EventStream`，工具从父 `PluginHost` 按白名单复制（默认 `bash` / `read` / `edit`），hooks / guardrails 一并继承；`agent`、`delegate_task` 与 `team_*` 永久排除，成员不能再分派。
+- `InProcessMemberRuntime` 是 Phase A 的执行内核适配：每个 **Body** 独占 `AgentRuntime` / `Context` / `EventStream`（entries 以 `session_id` 为键；rotate 窗口内同一成员可暂时同时存在旧 / 新两个 Body runtime，但不并发 run），工具从父 `PluginHost` 按白名单复制（默认 `bash` / `read` / `edit` / `agent`），hooks / guardrails 一并继承；成员侧 `agent` schema 只保留 `rotate`（只能 rotate 自己），`delegate_task` 与 `team_*` 永久排除，成员不能 spawn / send / dispatch。
 
 ### 39.2 契约与 session 即成员
 
-- `AgentService`：`new` / `send` / `close` / `list`；另有 `subscribe`、`reply`、`takeMessages`、`notePermissionState`、`requestPermission`、`flushSnapshot` 供入口与执行内核使用。
-- `MemberStatus`（snake_case）：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `current_tool?` / `last_seen?` / `usage?`。
-- `new` 创建的成员与 session 1:1（`session_id === id`）；`send.to`、`close.member` 可用成员 id 或 session id。未注册 session 不是成员。
-- `send` 入队即返回 `{queued: true, message_id, state}`，不等待一轮结束；同一成员同时只有一轮在跑，其余消息 FIFO 排队。
-- 消息内容上限 64 KiB（UTF-8）；空 `to` / 空 `content` / 未知成员 / 已关闭 / `stale` / 不可见成员返回错误码或错误文本。
+- `AgentService`：`new` / `send` / `dispatch` / `rotate` / `close` / `list`；另有 `subscribe`、`reply`、`takeMessages`、`notePermissionState`、`noteMemberEvent`、`isMemberBody`、`requestPermission`、`flushSnapshot` 供入口与执行内核使用。`dispatch` 是统一投递入口（0.19，见 §40.4）；`rotate` 见 §40.5。
+- `MemberStatus`（snake_case）：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `presence?` / `membership?` / `epoch?` / `current_tool?` / `last_seen?` / `usage?`。
+- `new` 创建的成员**初始**与 session 1:1（`session_id === id`）；rotate 后 `MemberStatus.session_id` 为当前 Body 的 session，旧 Body 保留在 `body_history`。`send.to`、`close.member` 可用成员 id 或**当前 Body** 的 session；退役 Body 的 session 不再作为投递目标。未注册 session 不是成员。名字只由 `membership === 'present'` 的成员占用，`left` 后可复用（0.19）。
+- `send` 入队即返回 `{queued: true, message_id, state}`，不等待一轮结束；同一成员同时只有一轮在跑，其余消息 FIFO 排队。strict `send` 对 `presence === 'gone'` 返回 `member_stale`，不自动 resume。
+- 消息内容上限 64 KiB（UTF-8）；空 `to` / 空 `content` / 未知成员 / 已关闭 / gone / 不可见成员返回错误码或错误文本。
 - `close` 幂等：先取消当前轮，再释放执行内核；session 数据保留，后到的 run 终态不得覆盖 `closed`。
 - `visibility`：`private`（默认，仅 owner）/ `team` / `tenant`；跨 tenant 不可寻址。
-- 内置 `agent` 工具是唯一模型 schema，动作 `new` / `send` / `close` / `list`；`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回逐条结果，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。
+- 内置 `agent` 工具是唯一模型 schema，owner 动作 `new` / `send` / `close` / `list` / `rotate`；成员侧只暴露 `rotate`，且只能 rotate 自己。`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回逐条结果，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。
 
 ### 39.3 状态机、队列与快照
 
@@ -2374,19 +2319,19 @@ interface LimitBlock {
 | `waiting_permission` | bridge 权限等待 |
 | `completed` / `failed` / `cancelled` | 上一轮终态 |
 | `closed` | `close`；不可再进入其它状态 |
-| `stale` | 进程重启后从 snapshot 恢复的非终态成员；不可 `send` |
+| `stale` | 仅旧数据只读兼容，0.19 起不再写入；只允许 `stale → closed` |
 
-- 消息队列只在内存；状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，`version: 1`）。
-- 快照形状 `{version, tenant_id, updated_at, members: MemberStatus[]}`；只存成员状态，不存消息队列。版本不匹配 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
-- 重启后非终态成员一律标 `stale` 并发布 `agent.stale`；终态保持原值。未处理消息丢失。
-- 成员事件为开放字符串：`agent.spawned`、`agent.stale`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`；事件 `agent_id` 为成员 id。
+- 消息队列只在内存；状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，0.19 起写 `version: 2`）。
+- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `body_history`（≤20，只记已退役 Body）/ `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
+- 重启后非 `left` 成员统一 `state='idle'` + `presence='gone'`；`left` / `closed` 成员保持 `closed + left + gone`。未处理消息丢失。
+- 成员事件为开放字符串：`agent.spawned`、`agent.resumed`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`、`agent.rotating` / `agent.rotated` / `agent.rotate.failed`、`agent.retired`、`agent.reply.stale`；`agent.stale` 仅作兼容事件（payload `{state:'idle', presence:'gone'}`）。事件 `agent_id` 为成员 id。rotate 后的旧 Body 终态是配对的 `agent.turn.*`，带 `stale: true`，不写 Agent state / usage，也不投递父队列。
 
 ### 39.4 owner、外部队列与 CLI
 
 - REPL 启动 AgentService 后监听 `127.0.0.1:0` 的最小 HTTP 控制端点；记录原子写入 `<dataDir>/agent-owner.json`（`0600`）：`{pid, host, port, token, started_at, tenant_id}`。
-- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
+- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.rotate` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
 - 同一 `dataDir` 已有 owner 时，第二个 REPL 仍可用进程内工具；CLI attach 保持原 owner。owner 记录按 pid / token 清理，避免误删后继 owner。
-- `vessel agent new|send|close|list [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。
+- `vessel agent new|send|dispatch|close|list|rotate [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。`dispatch <to> <content...>` 输出 `DispatchResult`，`queued` 退出 0、`rejected` 退出 1；`rotate <to> --startup <text> [--handoff <path>]` 输出 `RotateResult`，`rotated` 退出 0、`failed` 退出 1。
 - REPL 主 agent 通过 `attachOwner` 注册为 **external owner**：它的队列只由父 turn 的 `BeforeLlm` 调 `takeMessages(ownerId)` 排空，`pump` 永不执行 owner 队列；成员 runtime 也不得消费。注入消息固定 `role: 'user'`、`name: 'agent:<id>'`、`timestamp` 取原消息时间，内容原样。
 
 ### 39.5 权限 bridge
@@ -2395,7 +2340,7 @@ interface LimitBlock {
 - `bridge`：成员的 `tool.permission.request` / `ask.user.requested` 补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 后转发到父事件流；父窗口用既有 `PermissionCard` / `AskCard` 应答（`permission.respond` / `ask.respond`），应答回灌成员事件流，成员回到 `running`。
 - 没有 `parentEvents` 时 bridge 退化为 `ask → deny`，不会永久等待无人应答的请求。
 - `allow`：成员复制到的工具一律放行。`deny`：只保留 `readOnlyTools`（默认 `['read']`）。
-- `waiting_permission` 由执行内核回调 `notePermissionState` 维护；`closed` / `stale` 上的迟到回调被忽略。
+- `waiting_permission` 由执行内核回调 `notePermissionState` 维护；AgentService 只接受**当前运行 Body**（`queue.activeBodySession === session_id`）的回调，旧 Body 的迟到回调以及 `closed` / `presence === 'gone'` 上的回调都会被忽略；`requestPermission` 对非当前 Body 直接返回 deny（`body_not_active`）。
 
 ### 39.6 入口适配
 
@@ -2417,4 +2362,124 @@ interface LimitBlock {
 - `agent.enabled`（默认 `false`）是唯一开关：启用后注册内置 `agent` 工具、启动 AgentService 并尝试启动 owner 端点。
 - 成员配置：`agent.defaultVisibility` / `agent.permissionMode` / `agent.readOnlyTools` / `agent.limits` / `agent.termination` / `agent.followReplies` / `agent.ownerId`。非法值与枚举拒绝，不静默回退。
 - 工具数：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4；交互 REPL / serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
-- 已知限制：Phase B 未做 Gateway attach / Web 跨 owner 代理 / durable outbox / 跨节点写路径；CLI 依赖本机 REPL owner；消息队列只在内存；`stale` 成员不能继续 `send`；`followReplies` 不自动开启新的父 turn；`close` 只支持本机成员。
+- 已知限制：Phase B 未做 Gateway attach / Web 跨 owner 代理 / durable outbox / 跨节点写路径；CLI 依赖本机 REPL owner；消息队列只在内存；`presence === 'gone'` 的成员不能严格 `send`（`member_stale`），但 dispatch 会先 resume；`followReplies` 不自动开启新的父 turn；`close` 只支持本机成员。
+
+## 40. 0.19.0 Agent / Body 内核（S1+S2，已实现）
+
+> 状态：S1 分支 `0.19-s1-agent-body`、S2 分支 `0.19-s2-rotate`，均未随版本发布。S1 决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)，S2 见 [ADR-092](adr/ADR-092-agent-rotate-and-epoch-fencing.md)。rotate 已实现（§40.5）；Team / hub / Web Team 分别见 §41 / §42 / §43。**未实现**：fork、S4 权限 only-human 与 budget / `conversation_id`、S5.1 node → hub 出站、S7 跨节点 A2A。
+
+### 40.1 节点身份
+
+- `<dataDir>/node.json` 固定 `{node_id, created_at}`，0600 原子写；`src/node-identity.ts` 的 `resolveNodeId()` 是唯一入口。
+- 优先级：`config.host.nodeId` > 文件 > 首次生成 `randomUUID()` 并写回。配置优先时只比较并在不一致时告警，不改写文件。
+- 文件损坏 / 字段非法抛 `node_identity_corrupt`，不静默换身份；首次写后重读，磁盘值优先（并发首启）。
+- `incarnation` 仍每进程独立，只用于事件去重（ADR-067）；同一 `dataDir` 的多个 `--instance` 共用 `node_id`。
+
+### 40.2 Agent 记录与快照 v2
+
+- 持久化记录 `PersistedAgentRecord`：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `membership` / `model?` / `system_prompt?` / `current_body?` / `body_history?` / `forked_from?` / `current_tool?` / `last_seen?` / `usage?`。`session_id` 仍是第一具 Body 的兼容字段，当前 Body 看 `current_body.session_id`。
+- `body_id ≡ session_id`；`epoch` 只在 `current_body` 内，DTO 的 `epoch` 由它派生。首具 Body `epoch = 0`。
+- 写 `version: 2`；读 v1 / v2。v1 缺省 `membership = state === 'closed' ? 'left' : 'present'`，`current_body` 由 service 补齐。首次写 v2 前备份 `<tenant>.json.v1.bak`。
+- `presence` / `rotation` 不持久化；消息队列只在内存。
+
+### 40.3 三层状态
+
+| 层 | 值 | 写入者 | 持久化 |
+|---|---|---|---|
+| membership | `present` / `left` | `new` / `close`；0.19 S3 起 Team roster 的 `members add/remove` 也写入（`reinstate` / `close`） | 是 |
+| presence | `live` / `gone` | spawn / 重启加载 / close / dispose | 否 |
+| engine | `created` / `idle` / `running` / `waiting_permission` / `completed` / `failed` / `cancelled` / `closed` | AgentService + engine | 加载时重置 |
+
+- 派生不存储：`canAccept = present && live && stable`、`needsResume = present && gone`、`rotating = present && rotation === 'rotating'`。
+- 重启规则：`left` / `closed` → `closed + left + gone`；其余 → `idle + present + gone`。`stale` 不再写入。
+- `attachOwner` 与 0.19 S3 的 `AgentService.reinstate`（roster add 专用，保留当前 Body、`presence='gone'`、不 spawn）是仅有的两条 `left → present` 人力路径；`closed → idle` 不得走普通 `setState`。
+- `rotation` 由 `AgentService.rotate` 写入：切换期间为 `rotating`，所有出口恢复 `stable`；`pump` 在 rotating 时不启动新 run，`dispatch` / `send` 入队等待。
+
+### 40.4 Body 存储与 dispatch
+
+- 成员 engine 注入 tenant `SessionBackend` 与 `eventLog`（`packages/agent/src/runtime.ts` → `src/agent-service-wiring.ts` → `src/bootstrap.ts`）；同一 `session_id` 跨进程续接历史。S1 不做 `AgentSessionScope`，成员会话会出现在 `sessions.list`。
+- `dispatch({to, content, from?})` 的 `to` 解析 id → session_id → 唯一 name；同名多个 present 返回 `invalid_input`。
+- 分支：`left` / `closed` / closing → `rejected agent_left`；`rotating` → 入队 `rotating`；`live` → 入队 `live`；`gone` → single-flight resume 后入队 `resumed`；resume 失败 `resume_failed`；不可见 `not_visible`。
+- strict `send` 不 resume：`left` → `member_closed`，`gone` → `member_stale`。0.19 S3 起 `agent` 工具的 `send` 走 dispatch（成员走 `TeamService.send`）；strict `service.send` 只保留给 owner 端点 / CLI。
+
+### 40.5 rotate 与 epoch fencing
+
+- **入口**：`AgentService.rotate`；owner 端点 `agent.rotate`；CLI `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`；`agent` 工具 `action: rotate`（成员只能自换）。S2 不新增 canonical 方法；当前方法表见 §13.7。
+- **前置**：只换活身体（`presence !== 'live'` → `body_not_live`）；`left` / `closed` / closing → `agent_left`；并发 rotate → `rotating`；external owner → `owner_not_rotatable`；工具路径 `from_session_id` 必须等于当前 Body session，否则 `not_current_body`。
+- **切换**：新 Body 新 `session_id`、`epoch + 1`，按 Agent 配置 spawn。顺序：spawn → 旧指针进 `body_history`（≤20）→ `setCurrentBody` → `scheduleSnapshot()` → `await flushSnapshot()`（返回 boolean，无 snapshot 时 `true`）→ 启动嘱托 `unshift` → `rotated` → `rotation = stable` → `pump`。
+- **失败**：spawn 失败 / 快照写失败 → 指针与 `body_history` 回滚、dispose 新 engine、`rotation` 回 `stable`、不插入启动嘱托、返回 `rotate_failed`；不 fork、不自动重试。flush 已提交后的 close 竞态不回滚指针。
+- **排队**：rotating 期间 `dispatch` / `send` 入队；切换后顺序为启动嘱托 → rotate 前队列 → rotating 期间新队列，全部由新 Body 处理。
+- **epoch fencing**：`pump` 捕获 `activeBodySession`；旧轮结束后若不再是当前 Body，发带 `stale: true` 的配对 `agent.turn.*`、`agent.reply.stale`，dispose 旧 engine、发 `agent.retired`；不写 Agent state / usage，不 `deliverToParent`。
+- **寻址与快照**：`entries` 按 `session_id` 键；`bySession` 跟随 `current_body`；`MemberStatus.session_id` / 默认事件 session 报当前 Body；`body_history` 有界持久化，快照仍 v2。
+- **成员工具**：`agent` 在成员默认工具白名单内，schema 暴露 `rotate` / `post` / `send` / `list`（0.19 S3；`rotate` 只能自换，`new` / `close` 只给 owner）；成员 `permission.autoApprove` 追加 `agent`，service 的 `from_session_id` 比较是 rotate 的最终闸门。
+- **预警与权限**：`agent.limit.warning` 经 `onMemberEvent` 回到 service，按当前 Body session 去重后作为下一轮系统消息；`notePermissionState` / `requestPermission` 按当前运行 Body session fencing。
+
+## 41. 0.19.0 Team（S3，已实现）
+
+> 状态：分支 `0.19-s3-team`，未随版本发布。决策与 Addendum 见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)。
+
+### 41.1 存储与数据模型
+
+- 实现位于 `packages/agent`：`team-store.ts`（元数据）、`team-log.ts`（只追加日志）、`team-slug.ts`（workspace 归一化 / slug）、`team-service.ts`（编排）。
+- `<dataDir>/teams/<tenant>/<team_id>/team.json`：`{v:1, team_id, name, tenant_id, workspace, handoff_path?, policy, created_at}`，`atomicWrite` 0600。`team_id` 由 workspace 目录名生成 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。
+- `<dataDir>/teams/<tenant>/<team_id>/log.ndjson`：每行一条 `TeamLogEntry`（`message_id` / `team_id` / `from` / `to[]` / `mentions[]` / `content` / `ts` / `kind` / `system_event?`），串行只追加、有界读（尾部窗口）、坏行跳过；**不是消息队列**。
+- `team_id` 在 Agent 记录上 additive 持久化；roster 不单独落盘，由 `team_id + membership === 'present'` 从 Agent 记录派生。`online_count` 由 `present && presence === 'live'` 派生；`body_history` 直接透传 Agent 记录（≤20）。
+- 绑定：显式 `--workspace` 或配置 `teams:` 声明（归一化后精确匹配）才会绑定；默认绑定只对带 `name` 的 Agent 生效。绑定后未显式指定时 visibility 缺省 `team`；unbound 保持 `private`。Agent 不支持跨 Team 迁移。
+
+### 41.2 消息与投递
+
+- **无 `@` 的 post / reply / system 绝不产生 run**：TeamService 不持有 AgentService 队列，`pump` 仍是唯一 run 起点。
+- `@` 使用结构化 `mentions: string[]`（agent id），不从正文解析；先写日志再逐条 `dispatch`，日志写失败不产生任何 run。逐条结果以 `delivered[]` 返回（`queued` / `rejected` / `error`），一条失败不影响其它条目，也不回滚日志。
+- 系统消息 `join` / `leave` / `archive` / `rotate` 由 TeamService 订阅 `agent.*` 写入；TeamService 是唯一写入点。`TeamService.subscribe` 只对外发 `{team_id, kind, message_id?}`，**不含正文**（供 hub 投影指针）。
+- 成员完成一轮、有最终文本且 `team_id` 非空时，AgentService 发 `agent.reply.posted`；TeamService 追加 `kind:'reply'` 日志（≤64 KiB，超限截断标记），**不 dispatch**；`message_id` 与事件一致。`agent.turn.completed` 仍不带正文。
+
+### 41.3 生命周期、可见性与 RPC
+
+- `teams.members action=add` 调用 `AgentService.reinstate`：`left` / `closed` → `present + idle + gone`，保留 `current_body` / `body_history` / 原 session，不 spawn；下一次 dispatch 才 resume。`action=remove` 复用 `close`：dispose 当前 Body、保留 session 与历史（归档不删）。
+- private 成员 fail-closed：`onAgentEvent` 只接受 `visibility === 'team' | 'tenant'`；private 成员的 id / 名字 / 回复不写日志、不可被 `@`（owner 路径 `team_private_member`，canonical 路径 `unknown_member`）。根 owner（`owner === id`）例外。
+- canonical `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write）由 `TeamControlLike` 结构化注入；`packages/serve` 不依赖 `@vessel-agent/agent`。未注入 / tenant 不匹配返回 `not_found`；0.19 S3 只有 default tenant 的 AgentService 注入 `teams.*`，其他 tenant 返回 `not_found`。canonical 是复数 `teams.*`，与 legacy `/v1/team/*`（单数前缀）无关。
+- `vessel team list|get|post|members [--json]` 经 owner 端点；owner 端点是 `from = ownerId`、`viewer = ownerId`（private 可见），canonical 为 `from = 'human'`、无 viewer。
+
+## 42. 0.19.0 Hub 控制面（S5，已实现；S5.1 未实现）
+
+> 状态：分支 `0.19-s5-hub`，未随版本发布。决策见 [ADR-093](adr/ADR-093-hub-control-plane.md)。
+
+### 42.1 形态与协议
+
+- hub 是 app 层独立前台进程：`vessel hub start [--host] [--port] [--data-dir] [--allow-remote] [--tls-cert/--tls-key]`，实现位于 `src/hub/`，不新增 package、不启动 runtime / AgentService / TenantEventHub。
+- 节点侧：`POST /v1/hub/pair`（一次性配对码）与 WSS `/v1/hub/control`（协议 `vessel.hub/1`）。帧统一带 `dialer: 'hub' | 'node'`；**S5 只实现 hub → node 拨号**，节点收到 `dialer !== 'hub'` 以 4400 关闭。node → hub 出站 / NAT 是 S5.1，未实现。
+- hub 侧：`GET /health`、`GET /v1/hub/directory`、`GET|DELETE /v1/hub/nodes/:pairing_id`、`POST /v1/hub/nodes`（配对 / 移除节点只接受回环 peer）、`GET /v1/hub/events`（WS：`hello` / `snapshot` / `pointer` / `ping`）、`POST /v1/hub/data-token`。
+- hub 与节点必须使用不同 `data_dir`，相同则 `hub_data_dir_conflict`。
+
+### 42.2 目录、指针与不代理正文
+
+- 目录持久化 `<hubDataDir>/registry.json`（0600 原子写、250ms debounce），主键 `pairing_id = node_id:tenant_id`；记录 `status`（`connecting|healthy|unreachable|incompatible|unauthorized`）、`last_seen`、`incarnation` / `revision`、计数与 Team / Agent 元数据。上限 500 teams / 2000 agents，超限置 `truncated: true`。
+- 指针固定 `{node_id, team_id, request_id?, reason, ts}`；只在线推送、不持久化、不排队，消费方按 `ts` 超过 60 秒丢弃。客户端收到指针后**直连节点**拉取正文。
+- hub **不代理、不落盘**消息正文 / transcript / system prompt / workspace / session 内容 / 事件 payload / tool 结果。`HubControlLike.snapshot` 只返回白名单投影；`TeamService.subscribe` 只带 id。
+- 快照按 `(incarnation, revision)` 比较：incarnation 变化无条件接受并重置 revision；同一 incarnation 下旧 revision 丢弃。
+
+### 42.3 配对、scope 与密钥
+
+- 一次性配对码只存 `sha256`、默认 300 秒、消费时先原子写 `used_at`；配对签发 `view` + `exchange` 两枚 token（默认 30 天、可吊销）。节点侧 `<dataDir>/hub-tokens.json` 只存 `sha256(token)` 与元数据，明文只在签发响应出现一次。
+- scope 为 `view | exchange | control | admin`，映射既有 `read / write / admin` rank，不新增 role。`view` 只读目录 / 健康；`exchange` 只能调用 `auth.exchange`；`control` 走节点控制面白名单（events / interactions / permission / ask / teams read + post）；`admin` 走既有 admin 面。
+- token 记录绑定 `hub_id`；`/v1/hub/control` 首帧 `hub_id` 必须与记录一致。吊销 `auth.revoke` 关闭匹配 `token_id` 的已建 WS，新 HTTP 请求重新鉴权。
+- hub 的 `view` / `exchange` token 走 `SecretStore`（Windows DPAPI / macOS Keychain / Linux libsecret）；仅当 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器，否则 fail-closed。不写明文 YAML / `registry.json`。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后 40，S3 + S5 合并后 canonical 总数 **47**。
+
+### 42.4 team-scoped token 收窄
+
+- `control` token 的 `team_id` 由 principal 携带；`teams.*` handler 在调用前比对，不匹配一律 `not_found`（不泄漏跨 team 存在性）。
+- `teams.list` 只返回 token 自己的 team；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`，只保留展示元数据。`teams.get` 的 `members` / `messages` 属 data plane，不脱敏。
+- 事件订阅按 session → team 映射过滤；无法判定归属的事件丢弃（fail closed）。
+
+## 43. 0.19.0 Web Team 群聊（S6，已实现）
+
+> 状态：分支 `0.19-s6-web-team`，未随版本发布。只改 `apps/web/**`，消费 S3 / S5 契约。
+
+- 路由：`#/team`（列表）、`#/team/<teamId>`（群聊 + 成员侧栏）、`#/team/<teamId>/members/<memberId>`（成员详情 / Body 历史）、`?body=<sessionId>`（旧 Body 只读 transcript）。
+- 数据源：`teams.list` / `teams.get` / `teams.post`（HTTP RPC）；`teams.get` 只有 `limit`（默认 100、最大 1000），没有游标；Web 通过增大 `limit` “加载更早”，并明确显示截断上限。
+- 群聊：`post` / `mention` / `system` / `reply` 四类；系统消息按 `system_event` 渲染灰条；`kind:'reply'` 与轮询结果按 `message_id` 去重，事件只做即时插入 / 刷新，轮询仍是权威源。
+- `@` 补全只从当前 Team `present` roster 取，提交结构化 `mentions: [agent_id]`；正文里的 `@` 不解析。private 成员不在 canonical roster 中，不可 `@`。
+- 成员侧栏 / 详情：`presence`（`live|gone`）、engine state（`waiting_permission` 映射为「等批准」）、epoch、当前 Body 与 `body_history`。Body 历史优先消费服务端 `body_history`；字段缺失才回退事件观察并标注“本次页面会话”。
+- `TeamSummary.online_count` 直接用服务端派生字段；缺失显示 `—`，不客户端反推。attention 只做权限 / ask 计数与跳转，权限卡片仍在所属 `RunCard`，不恢复全局遮罩。
+- Web 只暴露 `teams.list|get|post`；`teams.members` add / remove 仍走 CLI / owner 端点。Web 当前不消费 hub 目录 / data token，跨节点 Team 属 S7。

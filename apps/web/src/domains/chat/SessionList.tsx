@@ -1,31 +1,17 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
 import { ActionMenu } from '../../components/ActionMenu';
 import { EmptyState, ErrorState, LoadingState, StaleNotice } from '../../components/States';
-import { StatusChip } from '../../components/StatusChip';
+import { StatusGlyph } from '../../components/StatusChip';
 import { useToast } from '../../components/ToastProvider';
-import { formatTimestamp } from '../../format';
+import { IconButton, Tooltip } from '../../components/Tooltip';
+import { relativeTime } from '../../format';
 import type { SessionInfo } from '../../gateway/types';
-import { t } from '../../i18n';
-import {
-  groupSessionsByDay,
-  normalizeSessionTitle,
-  type SessionStatusFilter,
-  sessionTitle,
-} from '../../state/sessions';
+import { t, useLocale } from '../../i18n';
+import { groupSessionsByDay, normalizeSessionTitle, sessionTitle } from '../../state/sessions';
 import { highlightSegments } from './highlight';
-
-const STATUS_FILTERS: readonly { id: SessionStatusFilter; label: string }[] = [
-  { id: 'all', label: '全部' },
-  { id: 'running', label: '运行中' },
-  { id: 'completed', label: '已完成' },
-  { id: 'failed', label: '失败' },
-  { id: 'cancelled', label: '已取消' },
-];
 
 export function SessionList({
   sessions,
-  filteredCount,
-  totalCount,
   hiddenCount,
   selectedId,
   draftActive,
@@ -33,8 +19,6 @@ export function SessionList({
   query,
   onQueryChange,
   searchSnippets,
-  status,
-  onStatusChange,
   loading,
   error,
   onRetry,
@@ -52,8 +36,6 @@ export function SessionList({
   renameSignal,
 }: {
   sessions: readonly SessionInfo[];
-  filteredCount: number;
-  totalCount: number;
   hiddenCount: number;
   selectedId: string | null;
   draftActive: boolean;
@@ -63,8 +45,6 @@ export function SessionList({
   onQueryChange: (value: string) => void;
   /** 服务端搜索命中的片段；query 非空时优先展示。 */
   searchSnippets?: ReadonlyMap<string, string>;
-  status: SessionStatusFilter;
-  onStatusChange: (value: SessionStatusFilter) => void;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
@@ -83,6 +63,7 @@ export function SessionList({
   /** 命令面板触发当前会话行内重命名；每次递增。 */
   renameSignal: number;
 }) {
+  useLocale();
   const toast = useToast();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
@@ -142,33 +123,23 @@ export function SessionList({
     }
     void navigator.clipboard
       .writeText(sessionId)
-      .then(() => toast.success('已复制会话 ID'))
+      .then(() => toast.success(t('chat.session.copiedId')))
       .catch((error: unknown) =>
         toast.error(error instanceof Error ? error.message : String(error)),
       );
   };
 
-  const filterLabel = STATUS_FILTERS.find((item) => item.id === status)?.label ?? '全部';
-
   return (
     <div className="session-column">
       <div className="column-header">
         <h2 className="column-title">会话</h2>
-        <span className="count-pill">
-          {query.trim() || status !== 'all' ? `${filteredCount}/${totalCount}` : totalCount}
-        </span>
         <button type="button" className="btn btn-small btn-primary" onClick={onNew}>
           ＋ 新建
         </button>
         {compact && (
-          <button
-            type="button"
-            className="icon-btn"
-            aria-label="关闭会话列表"
-            onClick={onCloseDrawer}
-          >
+          <IconButton label={t('nav.closeSessions')} onClick={onCloseDrawer}>
             ×
-          </button>
+          </IconButton>
         )}
       </div>
 
@@ -182,20 +153,6 @@ export function SessionList({
           aria-label="搜索会话"
           spellCheck={false}
         />
-        <fieldset className="filter-chips">
-          <legend className="sr-only">按状态过滤会话</legend>
-          {STATUS_FILTERS.map((filter) => (
-            <button
-              key={filter.id}
-              type="button"
-              className={`filter-chip ${filter.id === status ? 'active' : ''}`.trim()}
-              aria-pressed={filter.id === status}
-              onClick={() => onStatusChange(filter.id)}
-            >
-              {filter.label}
-            </button>
-          ))}
-        </fieldset>
       </div>
 
       <div className="session-scroll">
@@ -222,15 +179,6 @@ export function SessionList({
               action={
                 <button type="button" className="btn" onClick={() => onQueryChange('')}>
                   清除搜索
-                </button>
-              }
-            />
-          ) : status !== 'all' ? (
-            <EmptyState
-              title={`没有${filterLabel}的会话。`}
-              action={
-                <button type="button" className="btn" onClick={() => onStatusChange('all')}>
-                  显示全部
                 </button>
               }
             />
@@ -266,6 +214,7 @@ export function SessionList({
                   const editing = editingId === session.session_id;
                   const title = sessionTitle(session);
                   const pendingCount = pendingBySession?.get(session.session_id) ?? 0;
+                  const relative = relativeTime(session.updated_at);
                   const snippet = query.trim()
                     ? searchSnippets?.get(session.session_id)
                     : undefined;
@@ -314,8 +263,29 @@ export function SessionList({
                             aria-current={active ? 'true' : undefined}
                             onClick={() => onSelect(session.session_id)}
                           >
-                            <span className="session-title" title={title}>
-                              {title}
+                            <span className="session-title">
+                              <StatusGlyph status={session.status} />
+                              <Tooltip label={title}>
+                                <span className="session-title-text">{title}</span>
+                              </Tooltip>
+                              {pendingCount > 0 && (
+                                <Tooltip label={t('chat.session.pending', { count: pendingCount })}>
+                                  <span className="session-pending-badge">
+                                    <span aria-hidden="true">{pendingCount}</span>
+                                    <span className="sr-only">
+                                      {t('chat.session.pending', { count: pendingCount })}
+                                    </span>
+                                  </span>
+                                </Tooltip>
+                              )}
+                              {relative && (
+                                <span className="session-time">
+                                  {t(
+                                    relative.key,
+                                    'params' in relative ? relative.params : undefined,
+                                  )}
+                                </span>
+                              )}
                             </span>
                             {preview && (
                               <span className="session-preview">
@@ -330,22 +300,6 @@ export function SessionList({
                                   : preview}
                               </span>
                             )}
-                            <span className="session-meta">
-                              {pendingCount > 0 && (
-                                <span
-                                  className="session-pending-badge"
-                                  title={t('chat.session.pending', { count: pendingCount })}
-                                >
-                                  <span aria-hidden="true">{pendingCount}</span>
-                                  <span className="sr-only">
-                                    {t('chat.session.pending', { count: pendingCount })}
-                                  </span>
-                                </span>
-                              )}
-                              <StatusChip status={session.status} />
-                              <span>{session.message_count} 条</span>
-                              <span className="dim">{formatTimestamp(session.updated_at)}</span>
-                            </span>
                           </button>
                           <ActionMenu
                             label={`会话 ${title} 的操作`}
@@ -358,7 +312,7 @@ export function SessionList({
                               },
                               {
                                 id: 'copy',
-                                label: '复制 ID',
+                                label: t('chat.session.copyId'),
                                 onSelect: () => copyId(session.session_id),
                               },
                               {

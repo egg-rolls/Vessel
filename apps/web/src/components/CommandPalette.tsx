@@ -1,5 +1,6 @@
 // biome-ignore-all lint/a11y/useSemanticElements: custom combobox requires a listbox, not a native select
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { t } from '../i18n';
 import {
   filterPaletteItems,
   groupPaletteItems,
@@ -55,7 +56,12 @@ export function CommandPalette({
   };
 
   return (
-    <ModalShell label="命令面板" onClose={onClose} className="palette">
+    <ModalShell
+      label="命令面板"
+      onClose={onClose}
+      closeLabel={t('common.close')}
+      className="palette"
+    >
       <div className="palette-input-row">
         <span className="palette-prefix" aria-hidden="true">
           ⌘K

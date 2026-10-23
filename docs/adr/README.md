@@ -56,7 +56,7 @@
 | 039 | MCP client 作为插件接入 | accepted | - | - | [ADR-039-mcp-client-as-plugin.md](ADR-039-mcp-client-as-plugin.md) |
 | 040 | Durable run——RunStore port、checkpoint 与 resume | accepted | - | - | [ADR-040-durable-run-store-checkpoint-resume.md](ADR-040-durable-run-store-checkpoint-resume.md) |
 | 041 | 远程监听与 TLS（显式 opt-in） | accepted | - | - | [ADR-041-remote-listen-and-tls.md](ADR-041-remote-listen-and-tls.md) |
-| 042 | workflow 引擎作为插件 | accepted | - | - | [ADR-042-workflow-engine-as-plugin.md](ADR-042-workflow-engine-as-plugin.md) |
+| 042 | workflow 引擎作为插件 | superseded | - | - | [ADR-042-workflow-engine-as-plugin.md](ADR-042-workflow-engine-as-plugin.md) |
 | 043 | evals harness（默认离线） | accepted | - | - | [ADR-043-evals-harness-offline.md](ADR-043-evals-harness-offline.md) |
 | 044 | 飞书渠道（插件 + 官方 SDK 隔离） | accepted | - | - | [ADR-044-feishu-channel-plugin.md](ADR-044-feishu-channel-plugin.md) |
 | 045 | 0.4 可观测性与稳定性 | accepted | - | - | [ADR-045-0-4-observability-and-stability.md](ADR-045-0-4-observability-and-stability.md) |
@@ -104,6 +104,10 @@
 | 087 | 0.16.0 统一 agent 工具（Phase A） | accepted | 2026-10-21 | agent, tools, session, registry, permission, events, config, compatibility | [ADR-087-unified-agent-tool-phase-a.md](ADR-087-unified-agent-tool-phase-a.md) |
 | 088 | 0.17.0 AgentService 独立成包与执行内核分层 | accepted | 2026-10-21 | agent, service, package, lifecycle, queue, snapshot, owner, permission, cli | [ADR-088-agent-service-package.md](ADR-088-agent-service-package.md) |
 | 089 | 0.18.0 tenant 事件流是唯一事件面（TenantEventHub） | accepted | 2026-10-21 | event, gateway, tenant, multi-tenant, hub, breaking | [ADR-089-tenant-event-hub.md](ADR-089-tenant-event-hub.md) |
+| 090 | 移除 workflow 插件与产品面 | accepted | 2026-10-22 | workflow, plugin, removal, breaking | [ADR-090-remove-workflow-plugin.md](ADR-090-remove-workflow-plugin.md) |
+| 091 | 0.19.0 Agent / Body 内核（S1）：节点身份、presence 与 dispatch | accepted | 2026-10-23 | agent, body, presence, membership, dispatch, snapshot, node-identity, session, tenancy | [ADR-091-agent-body-and-presence.md](ADR-091-agent-body-and-presence.md) |
+| 092 | 0.19.0 Agent rotate 与 epoch fencing（S2） | accepted | 2026-10-23 | agent, body, rotate, epoch, fencing, snapshot, session, permission, cli | [ADR-092-agent-rotate-and-epoch-fencing.md](ADR-092-agent-rotate-and-epoch-fencing.md) |
+| 093 | Hub 控制面（S5） | accepted | 2026-10-23 | hub, control-plane, directory, pairing, scoped-token, secret-store | [ADR-093-hub-control-plane.md](ADR-093-hub-control-plane.md) |
 
 ## 编写约定
 

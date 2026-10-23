@@ -29,7 +29,16 @@ export async function requestPermission(
   ctx.events.publish({
     type: 'tool.permission.request',
     run_id: ctx.run_id,
-    data: { requestId, tool, input },
+    data: {
+      requestId,
+      tool,
+      input,
+      ...(typeof ctx.session_id === 'string' && ctx.session_id.length > 0
+        ? { session_id: ctx.session_id }
+        : {}),
+      ...(ctx.tool_call_id ? { tool_call_id: ctx.tool_call_id } : {}),
+      source: ctx.source ?? 'runtime',
+    },
     ts: Date.now(),
   });
   try {

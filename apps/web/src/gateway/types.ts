@@ -139,6 +139,8 @@ export interface AskUserRequest {
   requestedAt: number;
   /** 0.15 additive：由 run.started 反查的归属会话；旧流缺失时不参与跨 session 归类。 */
   sessionId?: string;
+  /** 成员 bridge 的父 chat（事件 `parent_session_id`）；旧事件缺失，缺失时回退 `sessionId`。 */
+  parentSessionId?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
   agentId?: string;
 }
@@ -158,6 +160,8 @@ export interface PermissionRequest {
   runId: string;
   /** run 归属会话；旧 gateway 缺失时不参与跨 session 归类。 */
   sessionId?: string;
+  /** 成员 bridge 的父 chat（事件 `parent_session_id`）；旧事件缺失，缺失时回退 `sessionId`。 */
+  parentSessionId?: string;
   toolCallId?: string;
   source?: string;
   /** 0.17 additive：发起请求的子 agent（delegate_id / agent_id）；旧流缺失。 */
@@ -219,6 +223,86 @@ export interface AgentCard {
 export interface AgentsTreeResponse {
   nodes: AgentCard[];
   as_of: number;
+}
+
+// ── Team（0.19 S6，node-local） ─────────────────────
+// 契约来自个人侧 PLAN-0.19-s3-team 与 S6 R1；字段只增不改。
+
+/** 已退役 Body；S3 `TeamMember.body_history?`。 */
+export interface TeamBodyHistoryEntry {
+  session_id: string;
+  epoch: number;
+  started_at: number;
+  retired_at: number;
+}
+
+/** teams.list 元素 / teams.get.team。 */
+export interface TeamSummary {
+  team_id: string;
+  name: string;
+  tenant_id: string;
+  /** 旧 gateway / 缺失 workspace 的 Team 不返回该字段；UI 显示 —。 */
+  workspace?: string;
+  member_count: number;
+  /** S3 R1：present && live；缺失时显示 —。 */
+  online_count?: number;
+  handoff_path?: string;
+  policy?: Record<string, unknown>;
+  created_at: number;
+}
+
+/** teams.get.members 元素。 */
+export interface TeamMember {
+  agent_id: string;
+  name?: string;
+  session_id?: string;
+  membership: 'present' | 'left';
+  presence: 'live' | 'gone';
+  visibility: 'private' | 'team' | 'tenant';
+  state?: string;
+  epoch?: number;
+  /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
+  body_history?: TeamBodyHistoryEntry[];
+}
+
+/** Team 日志条目；kind:'reply' 由 S3 R1 新增。 */
+export interface TeamMessage {
+  message_id: string;
+  team_id: string;
+  from: string;
+  to: string[];
+  mentions: string[];
+  content: string;
+  ts: number;
+  kind: 'post' | 'mention' | 'system' | 'reply';
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive';
+}
+
+/** teams.post 的逐条投递结果。 */
+export interface TeamDelivery {
+  agent_id: string;
+  status: 'queued' | 'rejected' | 'error';
+  message_id?: string;
+  resolution?: 'live' | 'resumed' | 'rotating';
+  code?: string;
+  reason?: string;
+}
+
+/** teams.post 结果（不包裹）。 */
+export interface TeamPostResult {
+  message_id: string;
+  team_id: string;
+  kind: 'post' | 'mention' | 'system';
+  mentions: string[];
+  delivered: TeamDelivery[];
+  ts: number;
+}
+
+/** teams.get 结果。 */
+export interface TeamDetail {
+  team: TeamSummary;
+  members: TeamMember[];
+  messages: TeamMessage[];
 }
 
 /** tasks.list / tasks.get 条目（只读派生）。 */
@@ -295,70 +379,6 @@ export interface McpServerStatus {
 
 export interface McpServersResponse {
   servers: McpServerStatus[];
-}
-
-/** workflow 状态（与 DECISION-009 §5.1.3 一致） */
-export type WorkflowRunStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'interrupted';
-
-export type WorkflowStepStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'skipped'
-  | 'cancelled';
-
-/** workflow run 摘要（GET /v1/workflows） */
-export interface WorkflowRunSummary {
-  workflow_run_id: string;
-  workflow_name: string;
-  status: WorkflowRunStatus;
-  step_count: number;
-  completed_steps: number;
-  started_at: number;
-  updated_at: number;
-  error?: string;
-}
-
-export interface WorkflowStepSummary {
-  id: string;
-  type: 'agent' | 'tool';
-  status: WorkflowStepStatus;
-  attempts: number;
-  started_at?: number;
-  finished_at?: number;
-  error?: string;
-  output_preview?: string;
-}
-
-export interface WorkflowRunDetail extends WorkflowRunSummary {
-  definition_path: string;
-  inputs: Record<string, string>;
-  steps: WorkflowStepSummary[];
-}
-
-export interface WorkflowsResponse {
-  workflows: WorkflowRunSummary[];
-}
-
-export interface WorkflowResponse {
-  workflow: WorkflowRunDetail;
-}
-
-export interface WorkflowRunAccepted {
-  workflow_run_id: string;
-  status: 'queued';
-}
-
-export interface WorkflowCancelResponse {
-  workflow_run_id: string;
-  status: 'cancelled';
 }
 
 /** 进程内聚合快照（GET /v1/metrics） */

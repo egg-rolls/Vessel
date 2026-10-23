@@ -99,8 +99,14 @@ export function createAgentOwnerInjector(options: AgentOwnerInjectionOptions): A
       if (options.isMemberSession) {
         try {
           if (await options.isMemberSession(ctx.session_id)) return;
-        } catch {
-          // 判定失败时按父 turn 处理（不因诊断失败丢消息）
+        } catch (error) {
+          // 判定失败时不得排空：无法证明这是父 turn，按成员 turn fail-closed。
+          publish('agent.reply.inject_skipped', ctx.run_id, {
+            owner_id: options.ownerId,
+            reason: 'identity_check_failed',
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return;
         }
       }
 

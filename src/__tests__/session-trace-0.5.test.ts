@@ -10,7 +10,7 @@ import {
   resolveTenantPaths,
 } from '../../packages/core/src/index';
 import { resolveTenantPaths as asmTenantPaths } from '../data-paths';
-import { resolveEvalsOutDir, resolveWorkflowStorePath } from '../path-resolution';
+import { resolveEvalsOutDir } from '../path-resolution';
 import { resolveDurableOptions } from '../run-store-factory';
 import { createSessionBackend } from '../session-factory';
 import { installTrace, resolveTraceOptions } from '../trace-wiring';
@@ -58,17 +58,12 @@ describe('durable 默认路径 (0.5)', () => {
   });
 });
 
-describe('workflow / evals tenant 最终路径 (0.5)', () => {
+describe('evals tenant 最终路径 (0.5)', () => {
   it('缺省落到 tenant 目录，显式配置优先', () => {
     const tenantDir = path.resolve('/tenant/acme');
-    expect(resolveWorkflowStorePath({}, { tenantDir })).toBe(path.join(tenantDir, 'workflows'));
     expect(resolveEvalsOutDir({}, { tenantDir })).toBe(path.join(tenantDir, 'evals'));
 
-    const customWf = path.resolve('/custom/wf');
     const customEvals = path.resolve('/custom/evals');
-    expect(resolveWorkflowStorePath({ workflow: { path: customWf } }, { tenantDir })).toBe(
-      customWf,
-    );
     expect(resolveEvalsOutDir({ evals: { outDir: customEvals } }, { tenantDir })).toBe(customEvals);
   });
 });

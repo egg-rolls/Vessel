@@ -4,7 +4,8 @@
  * - 文件：`<dataDir>/agent-owner.json`，JSON
  *   `{pid, host, port, token, started_at, tenant_id}`，原子写 0600；
  * - 只监听 127.0.0.1（缺省 :0），校验 Host 防 DNS rebinding；
- * - 端点只是传输：`agent.new/send/close/list` 全部委托 AgentService。
+ * - 端点只是传输：`agent.new/send/close/list/dispatch/rotate` 委托 AgentService，
+ *   `team.list/get/post/members` 委托 TeamService（0.19 S3）。
  *
  * @module vessel/agent-owner-server
  */
@@ -13,7 +14,17 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { AgentService, NewBatchInput, NewMemberInput, SendInput } from '@vessel-agent/agent';
+import type {
+  AgentService,
+  AgentTeamService,
+  DispatchInput,
+  NewBatchInput,
+  NewMemberInput,
+  RotateInput,
+  SendInput,
+  TeamMembersInput,
+  TeamPostInput,
+} from '@vessel-agent/agent';
 import type { Logger } from '@vessel-agent/core';
 import { isProcessAlive } from './gateway/pid';
 
@@ -24,7 +35,17 @@ export const AGENT_OWNER_FILE = 'agent-owner.json';
 export const AGENT_OWNER_MAX_BODY_BYTES = 1024 * 1024;
 
 /** 端点方法名（冻结形状） */
-export type AgentOwnerMethod = 'agent.new' | 'agent.send' | 'agent.close' | 'agent.list';
+export type AgentOwnerMethod =
+  | 'agent.new'
+  | 'agent.send'
+  | 'agent.close'
+  | 'agent.list'
+  | 'agent.dispatch'
+  | 'agent.rotate'
+  | 'team.list'
+  | 'team.get'
+  | 'team.post'
+  | 'team.members';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {
@@ -156,6 +177,8 @@ export interface AgentOwnerServer {
 
 export interface StartAgentOwnerServerOptions {
   service: AgentService;
+  /** 0.19 S3：CLI `vessel team ...` 的私有端点 */
+  team: AgentTeamService;
   dataDir: string;
   tenantId: string;
   /** 缺省 127.0.0.1 */
@@ -205,7 +228,100 @@ function mapNewEntry(entry: Record<string, unknown>, ownerId: string): Record<st
   if (entry.model !== undefined) input.model = entry.model;
   if (entry.system_prompt !== undefined) input.systemPrompt = entry.system_prompt;
   if (entry.visibility !== undefined) input.visibility = entry.visibility;
+  // 0.19 S3：CLI `agent new --workspace` 显式绑定 Team。
+  if (entry.workspace !== undefined) input.workspace = entry.workspace;
   return input;
+}
+
+function invalidInput(method: string, message: string): AgentOwnerError {
+  return new AgentOwnerError('invalid_input', `${method}: ${message}`, 400);
+}
+
+/** 最小参数校验：非空字符串 */
+function requireString(method: string, params: Record<string, unknown>, key: string): string {
+  const value = params[key];
+  if (typeof value !== 'string' || value === '') {
+    throw invalidInput(method, `${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function readMentions(method: string, params: Record<string, unknown>): string[] | undefined {
+  const mentions = params.mentions;
+  if (mentions === undefined) return undefined;
+  if (!Array.isArray(mentions) || !mentions.every((mention) => typeof mention === 'string')) {
+    throw invalidInput(method, 'mentions must be an array of strings');
+  }
+  return mentions as string[];
+}
+
+function readLimit(method: string, params: Record<string, unknown>): number | undefined {
+  const limit = params.limit;
+  if (limit === undefined) return undefined;
+  if (typeof limit !== 'number' || !Number.isFinite(limit)) {
+    throw invalidInput(method, 'limit must be a number');
+  }
+  return limit;
+}
+
+/** `team.*` 私有方法 → TeamService；unknown team 统一 404 */
+async function dispatchTeam(
+  team: AgentTeamService,
+  ownerId: string,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<unknown> {
+  switch (method) {
+    case 'team.list':
+      return team.list({ viewer: ownerId });
+    case 'team.get': {
+      const teamId = requireString(method, params, 'team_id');
+      const limit = readLimit(method, params);
+      const detail = await team.get(teamId, {
+        viewer: ownerId,
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      if (detail === undefined) {
+        throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);
+      }
+      return detail;
+    }
+    case 'team.post': {
+      const teamId = requireString(method, params, 'team_id');
+      const content = requireString(method, params, 'content');
+      const mentions = readMentions(method, params);
+      return team.post({
+        team_id: teamId,
+        content,
+        ...(mentions !== undefined ? { mentions } : {}),
+        from: ownerId,
+      } satisfies TeamPostInput);
+    }
+    case 'team.members': {
+      const teamId = requireString(method, params, 'team_id');
+      const action = params.action;
+      if (action !== 'add' && action !== 'remove') {
+        throw invalidInput(method, 'action must be add or remove');
+      }
+      const member = requireString(method, params, 'member');
+      const result = await team.members({
+        team_id: teamId,
+        action,
+        member,
+        from: ownerId,
+      } satisfies TeamMembersInput);
+      if (result === undefined) {
+        throw new AgentOwnerError('team_not_found', `team_not_found: ${teamId}`, 404);
+      }
+      return result;
+    }
+    default:
+      throw new AgentOwnerError(
+        'agent_owner_unknown_method',
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.post|team.members)`,
+        404,
+      );
+  }
 }
 
 function mapNewBatch(params: Record<string, unknown>, ownerId: string): NewBatchInput {
@@ -240,10 +356,14 @@ function mapSendBatch(params: Record<string, unknown>, ownerId: string): SendInp
 /** 端点方法 → AgentService；错误在 handler 外层统一映射 */
 async function dispatch(
   service: AgentService,
+  team: AgentTeamService,
   ownerId: string,
   method: string,
   params: Record<string, unknown>,
 ): Promise<unknown> {
+  if (method.startsWith('team.')) {
+    return dispatchTeam(team, ownerId, method, params);
+  }
   switch (method) {
     case 'agent.new':
       if (params.members !== undefined) return service.new(mapNewBatch(params, ownerId));
@@ -269,10 +389,24 @@ async function dispatch(
       if (params.parent_id !== undefined) filter.parentId = params.parent_id;
       return service.list(filter as Parameters<AgentService['list']>[0]);
     }
+    case 'agent.dispatch':
+      return service.dispatch({
+        ...(params.to !== undefined ? { to: params.to } : {}),
+        ...(params.content !== undefined ? { content: params.content } : {}),
+        from: ownerId,
+      } as DispatchInput);
+    case 'agent.rotate':
+      // 人类路径不带 from_session_id：CLI / owner 端点可换任意可见 Agent。
+      return service.rotate({
+        ...(params.to !== undefined ? { to: params.to } : {}),
+        ...(params.startup_prompt !== undefined ? { startup_prompt: params.startup_prompt } : {}),
+        ...(params.handoff_path !== undefined ? { handoff_path: params.handoff_path } : {}),
+        from: ownerId,
+      } as RotateInput);
     default:
       throw new AgentOwnerError(
         'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list)`,
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate)`,
         404,
       );
   }
@@ -368,7 +502,13 @@ export async function startAgentOwnerServer(
         const params = isRecord(body.params) ? body.params : {};
 
         try {
-          const result = await dispatch(options.service, ownerId, body.method, params);
+          const result = await dispatch(
+            options.service,
+            options.team,
+            ownerId,
+            body.method,
+            params,
+          );
           return jsonResponse(200, { ok: true, result });
         } catch (error) {
           const mapped = errorStatus(error);

@@ -91,6 +91,8 @@ describe('agent bootstrap 0.17', () => {
 
     expect(result.agent).toBeDefined();
     expect(result.agent?.owner.id).toBe('main');
+    expect(result.agent?.team).toBeDefined();
+    expect(await result.agent?.team.list()).toEqual([]);
     const owner = await result.agent?.service.list({ viewer: 'main' });
     expect(owner?.map((member) => member.id)).toContain('main');
 
@@ -117,6 +119,26 @@ describe('agent bootstrap 0.17', () => {
     const listed = await callAgentOwner(record, 'agent.list');
     expect(Array.isArray(listed)).toBe(true);
     expect((listed as Array<{ id: string }>).map((member) => member.id)).toContain('main');
+  });
+
+  it('wires the real TeamService into the hub snapshot', async () => {
+    const { result, dataDir } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
+    const agent = result.agent;
+    if (!agent) throw new Error('agent control missing');
+
+    const created = await agent.service.new({
+      name: 'a1',
+      workspace: path.join(dataDir, 'alpha'),
+    });
+    const snapshot = await agent.hubControl?.snapshot('default');
+
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.teams.map((team) => team.team_id)).toContain('alpha');
+    expect(snapshot?.agents.some((member) => member.agent_id === created.id)).toBe(true);
   });
 
   it('member auto-reply does not mark the REPL owner failed', async () => {
@@ -191,6 +213,21 @@ describe('agent bootstrap 0.17', () => {
     });
     expect(result.agent).toBeDefined();
     expect(toolNames(result)).toContain('agent');
+  });
+
+  it('agent dispose tears down the team subscription and log chain without throwing', async () => {
+    const { result } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
+    const agent = result.agent;
+    if (!agent) throw new Error('agent control missing');
+
+    await expect(agent.dispose()).resolves.toBeUndefined();
+    // dispose 后 store 仍可读；再次 dispose 也必须幂等。
+    expect(await agent.team.list()).toEqual([]);
+    await expect(agent.dispose()).resolves.toBeUndefined();
   });
 
   it('shutdown stops the owner endpoint and removes the token file', async () => {

@@ -13,6 +13,9 @@ export function EmptyState({
 }) {
   return (
     <div className="state-empty">
+      <span className="state-icon" aria-hidden="true">
+        ○
+      </span>
       <p className="state-title">{title}</p>
       {description && <p className="state-desc">{description}</p>}
       {action && <div className="state-action">{action}</div>}
@@ -49,6 +52,9 @@ export function ErrorState({
 }) {
   return (
     <div className="state-error" role="alert">
+      <span className="state-icon" aria-hidden="true">
+        !
+      </span>
       <p className="state-title">{t('common.loadFailed')}</p>
       <p className="state-desc mono">{message}</p>
       {(onRetry || action) && (
@@ -79,6 +85,9 @@ export function NotEnabledState({
 }) {
   return (
     <div className="state-not-enabled">
+      <span className="state-icon" aria-hidden="true">
+        ?
+      </span>
       <p className="state-title">{title}</p>
       {reason && <p className="state-desc">{reason}</p>}
       {hint && <p className="state-hint mono">{hint}</p>}
@@ -91,6 +100,9 @@ export function NotEnabledState({
 export function StaleNotice({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="stale-notice" role="status">
+      <span className="state-icon" aria-hidden="true">
+        !
+      </span>
       <span>{message}</span>
       {onRetry && (
         <button type="button" className="link-btn" onClick={onRetry}>

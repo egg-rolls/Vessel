@@ -12,10 +12,13 @@
 import {
   type AgentMessage,
   type AgentService,
+  type AgentTeamService,
   createAgentService,
   createAgentTool,
   createInProcessMemberRuntime,
+  createTeamService,
   DEFAULT_OWNER,
+  FileTeamStore,
   type InProcessMemberRuntimeOptions,
   type MemberPermissionState,
   type MemberRunnableAgent,
@@ -24,6 +27,8 @@ import {
   type MemberRuntimePort,
   type MemberStatus,
   type MemberTurnResult,
+  type TeamDeclaration,
+  type TeamStore,
 } from '@vessel-agent/agent';
 import type {
   AgentRuntimeOptions,
@@ -31,6 +36,7 @@ import type {
   LLMProvider,
   Logger,
   PluginHost,
+  RunEvent,
   RuntimePermissionConfig,
   TerminationPolicy,
   ToolDefinition,
@@ -67,11 +73,22 @@ export interface AgentServiceWiringOptions {
   parentEvents?: EventStream;
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
   permissionMode?: MemberRuntimePermissionMode;
+  /** tenant SessionBackend；成员 Body 用同一份存储按 session_id 续接历史 */
+  session?: AgentRuntimeOptions['session'];
+  /** tenant SessionEventLog；与父入口同源（缺省不落 trace） */
+  eventLog?: AgentRuntimeOptions['eventLog'];
   /**
    * 测试接缝：覆盖成员 AgentRuntime 构造。缺省 `AgentRuntime.create`；
    * bridge / owner 队列的端到端测试用 fake runtime，不调真实 provider。
    */
   runtimeFactory?: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
+  /** 0.19 S3：全局配置声明的 Team；只补写缺失的 team.json */
+  teamDeclarations?: readonly TeamDeclaration[];
+  /**
+   * 0.19 S3：`new` 未显式传 workspace 时的默认 Team workspace。
+   * 仅当声明与 `agent.cwd` 归一化后精确相等时提供。
+   */
+  defaultWorkspace?: string;
 }
 
 export interface AgentServiceWiring {
@@ -79,6 +96,10 @@ export interface AgentServiceWiring {
   tool: ToolDefinition;
   owner: MemberStatus;
   ownerId: string;
+  /** 0.19 S3：Team 能力层（owner 端点 / gateway 注入 / agent 工具共用） */
+  team: AgentTeamService;
+  /** Team 文件存储；dispose 时需 flush（内部字段） */
+  teamStore: TeamStore;
   /** 父 turn 的 owner 队列注入；关闭时停止 hook（PluginHost 无反注册） */
   injector: AgentOwnerInjector;
 }
@@ -86,8 +107,18 @@ export interface AgentServiceWiring {
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
 export function buildMemberRuntimeOptions(
   options: AgentServiceWiringOptions,
-  onPermissionState?: (memberId: string, state: MemberPermissionState) => void,
+  onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void,
+  onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
 ): InProcessMemberRuntimeOptions {
+  // 成员 Body 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
+  // 因此 member runtime 免确认该工具；owner 侧权限不变。
+  const permission =
+    options.permission !== undefined
+      ? {
+          ...options.permission,
+          autoApprove: [...new Set([...(options.permission.autoApprove ?? []), 'agent'])],
+        }
+      : undefined;
   return {
     providerFactory: options.providerFactory,
     model: options.model,
@@ -97,14 +128,17 @@ export function buildMemberRuntimeOptions(
     ...(options.contextMaxTokens !== undefined
       ? { contextMaxTokens: options.contextMaxTokens }
       : {}),
-    ...(options.permission !== undefined ? { permission: options.permission } : {}),
+    ...(permission !== undefined ? { permission } : {}),
     ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
     ...(options.readOnlyTools !== undefined ? { readOnlyTools: options.readOnlyTools } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),
     ...(onPermissionState !== undefined ? { onPermissionState } : {}),
+    ...(onMemberEvent !== undefined ? { onMemberEvent } : {}),
     ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
+    ...(options.session !== undefined ? { session: options.session } : {}),
+    ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     tenantId: options.tenantId,
   };
 }
@@ -148,34 +182,54 @@ export async function createAgentServiceWiring(
   // 用晚绑定避免循环依赖。
   let serviceRef: AgentService | undefined;
   const innerRuntime = createInProcessMemberRuntime(
-    buildMemberRuntimeOptions(options, (memberId, state) =>
-      serviceRef?.notePermissionState(memberId, state),
+    buildMemberRuntimeOptions(
+      options,
+      (memberId, sessionId, state) => serviceRef?.notePermissionState(memberId, sessionId, state),
+      (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
     ),
   );
   const runtime = new OwnerAwareMemberRuntime(innerRuntime, ownerId);
+
+  // Team 元数据必须先于 AgentService 就绪：`new` 的 ensure / seed 都经 TeamBinder。
+  const teamStore = new FileTeamStore({
+    dataDir: options.dataDir,
+    tenantId: options.tenantId,
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+  });
+  await teamStore.ready();
+  await teamStore.seed(options.teamDeclarations ?? []);
 
   const service = createAgentService({
     tenantId: options.tenantId,
     dataDir: options.dataDir,
     runtime,
+    defaultModel: options.model,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
+    ...(options.defaultWorkspace !== undefined
+      ? { defaultWorkspace: options.defaultWorkspace }
+      : {}),
+    teamBinder: teamStore,
     snapshot: { enabled: true },
   });
   serviceRef = service;
   const owner = await service.attachOwner({ id: ownerId, sessionId: options.sessionId });
+  const team = createTeamService({
+    tenantId: options.tenantId,
+    agent: service,
+    store: teamStore,
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+  });
 
   // 成员 runtime 复制父 PluginHost 的 hooks；只有父 turn 才能排空 owner 队列。
   const injector = createAgentOwnerInjector({
     // owner 是 external owner：pump 不消费，只能由父 turn 排空。
     source: service,
     ownerId,
-    isMemberSession: async (sessionId) => {
-      if (sessionId === undefined) return false;
-      const members = await service.list();
-      return members.some((member) => member.id !== ownerId && member.session_id === sessionId);
-    },
+    // 当前 Body、正在跑的旧 Body、已退役 Body 与 rotate 目标都算成员 Body；
+    // 由 service 统一判定，owner 的 Body 不算。
+    isMemberSession: (sessionId) => sessionId !== undefined && service.isMemberBody(sessionId),
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     tenantId: options.tenantId,
   });
@@ -186,9 +240,11 @@ export async function createAgentServiceWiring(
 
   return {
     service,
-    tool: createAgentTool(service, { ownerId }),
+    tool: createAgentTool(service, { ownerId, ownerSessionId: options.sessionId, team }),
     owner,
     ownerId,
+    team,
+    teamStore,
     injector,
   };
 }

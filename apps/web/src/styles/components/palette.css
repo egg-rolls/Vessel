@@ -1,0 +1,137 @@
+/* ── 命令面板 ─────────────────────────────────────────── */
+
+.palette {
+  width: min(680px, 100%);
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  align-self: flex-start;
+  margin-top: 8vh;
+  z-index: var(--z-palette);
+}
+
+/* 面板自身不滚动：结果列表滚动，输入行与 footer 固定。 */
+.palette .modal-body-scroll {
+  gap: 0;
+  overflow: hidden;
+}
+
+.palette-input-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 52px 14px 16px;
+  background: var(--surface-sunken);
+}
+
+.palette-prefix {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+
+.palette-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 14px;
+  color: var(--ink);
+}
+
+.palette-input:focus {
+  outline: none;
+}
+
+.palette-input::placeholder {
+  color: var(--faint);
+}
+
+.palette-results {
+  max-height: min(52vh, 420px);
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.palette-group {
+  padding: 4px 0;
+}
+
+.palette-group-title {
+  padding: 6px 10px 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+.palette-option {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.palette-option:hover {
+  background: var(--hover-tint);
+}
+
+.palette-option.active {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.palette-label {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.palette-hint {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--faint);
+}
+
+.palette-empty {
+  padding: 20px 12px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.palette-danger {
+  flex: none;
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+
+.tenant-dialog {
+  width: min(640px, 100%);
+}
+
+.palette-footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 16px;
+  background: var(--surface-sunken);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--faint);
+}

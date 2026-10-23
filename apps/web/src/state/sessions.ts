@@ -5,8 +5,6 @@ import type { SessionInfo } from '../gateway/types';
 export const MAX_SESSION_TITLE = 512;
 export const SESSION_PAGE_SIZE = 50;
 
-export type SessionStatusFilter = 'all' | 'running' | 'completed' | 'failed' | 'cancelled';
-
 /** 会话排序：updated_at 倒序，同值 session_id 升序（与 TUI 一致）。 */
 export function sortSessions(list: readonly SessionInfo[]): SessionInfo[] {
   return [...list].sort((a, b) => {
@@ -28,25 +26,17 @@ export function normalizeSessionTitle(raw: string): string | null {
   return title;
 }
 
-/** 会话状态过滤（未知状态归入 all，不隐藏）。 */
-export function matchesSessionStatus(session: SessionInfo, filter: SessionStatusFilter): boolean {
-  if (filter === 'all') return true;
-  return session.status === filter;
-}
-
 export interface SessionFilter {
   query?: string;
-  status?: SessionStatusFilter;
 }
 
 /** 大小写不敏感地匹配 title / preview / session_id。 */
 export function filterSessions(
   list: readonly SessionInfo[],
-  { query = '', status = 'all' }: SessionFilter = {},
+  { query = '' }: SessionFilter = {},
 ): SessionInfo[] {
   const needle = query.trim().toLowerCase();
   return list.filter((session) => {
-    if (!matchesSessionStatus(session, status)) return false;
     if (!needle) return true;
     return [session.title, session.preview, session.session_id].some((value) =>
       (value ?? '').toLowerCase().includes(needle),

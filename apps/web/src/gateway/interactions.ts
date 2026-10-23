@@ -46,6 +46,7 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
     tool?: unknown;
     input?: unknown;
     session_id?: unknown;
+    parent_session_id?: unknown;
     tool_call_id?: unknown;
     source?: unknown;
   };
@@ -60,6 +61,9 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
     ...(typeof data.session_id === 'string' && data.session_id.length > 0
       ? { sessionId: data.session_id }
       : {}),
+    ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+      ? { parentSessionId: data.parent_session_id }
+      : {}),
     ...(typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
       ? { toolCallId: data.tool_call_id }
       : {}),
@@ -72,21 +76,19 @@ export function permissionFromEvent(event: RunEvent, now = Date.now()): Permissi
 /**
  * `ask.user.requested` → 前端卡片模型。
  *
- * 事件本身不带 session_id：由调用方从 `run.started` 反查后传入。
+ * 事件必须自带 `session_id`（上游保证）；缺失就保持 undefined，Web 不反查、不补全。
  * 关联字段（agentId）与权限请求同一套映射；旧事件缺字段时保持 undefined。
  *
  * 0.18：ask 没有过期时间；`requestedAt` 取事件时间（缺失回退收到时间），
  * 只用于与权限请求混排。卡片由应答 / run 终态 / 其他端事件移除。
  */
-export function askFromEvent(
-  event: RunEvent,
-  sessionId?: string,
-  now = Date.now(),
-): AskUserRequest | null {
+export function askFromEvent(event: RunEvent, now = Date.now()): AskUserRequest | null {
   const data = event.data as {
     requestId?: unknown;
     request_id?: unknown;
     questions?: unknown;
+    session_id?: unknown;
+    parent_session_id?: unknown;
   };
   const rawId = data.requestId ?? data.request_id;
   if (typeof rawId !== 'string' || rawId.length === 0) return null;
@@ -104,7 +106,12 @@ export function askFromEvent(
     questions,
     runId: event.run_id,
     requestedAt: validTimestamp(event.ts) ? event.ts : now,
-    ...(sessionId !== undefined && sessionId.length > 0 ? { sessionId } : {}),
+    ...(typeof data.session_id === 'string' && data.session_id.length > 0
+      ? { sessionId: data.session_id }
+      : {}),
+    ...(typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+      ? { parentSessionId: data.parent_session_id }
+      : {}),
     ...(agentId !== undefined ? { agentId } : {}),
   };
 }

@@ -6,7 +6,14 @@
  */
 
 import * as path from 'node:path';
-import type { AgentService, MemberStatus } from '@vessel-agent/agent';
+import {
+  type AgentService,
+  type AgentTeamService,
+  type MemberStatus,
+  normalizeWorkspace,
+  type TeamDeclaration,
+  workspaceKey,
+} from '@vessel-agent/agent';
 import {
   buildConfigSnapshot,
   DEFAULT_CONFIG,
@@ -38,7 +45,10 @@ import {
   type ConfigSnapshotLike,
   createGatewayEventHub,
   createLocalRpcDispatcher,
+  type HubControlLike,
+  type HubTeamScopeLike,
   type LocalRpcDispatcher,
+  type NodeTokenControlLike,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
@@ -52,11 +62,7 @@ import {
   waitForConnectedResumeTerminal,
   waitForConnectedRun,
 } from './connect-run-wait';
-import type {
-  FeishuChannelLike,
-  MetricsControlLike,
-  WorkflowEngineLike,
-} from './control-plane-types';
+import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import {
   type DurableRunHandleLike,
@@ -66,12 +72,14 @@ import {
   resumeError,
   routeResume,
 } from './durable-wiring';
+import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
+import { resolveNodeId } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
-import { resolveWorkflowDefPathSync } from './path-resolution';
+import { resolveAgentCwd } from './path-resolution';
 import {
   addAutoApproveRule,
   listAutoApproveRules,
@@ -105,7 +113,6 @@ import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from '
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
-import { adaptWorkflowsControl } from './workflow-wiring';
 
 /**
  * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。
@@ -198,8 +205,7 @@ export interface BootstrapOptions {
   }) => RpcClient & { close(): Promise<void> };
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
-  /** 0.4 测试注入口：workflow / feishu 模块加载器 */
-  loadWorkflowModule?: () => Promise<unknown | null>;
+  /** 0.4 测试注入口：feishu 模块加载器 */
   loadFeishuModule?: () => Promise<unknown | null>;
   /** 0.4 测试/示例注入口：飞书 mock transport */
   feishuTransport?: unknown;
@@ -236,9 +242,17 @@ export interface BootstrapResult {
    */
   agent?: {
     service: AgentService;
+    /** 0.19 S3：Team 能力层（gateway `teams.*` 与 owner 端点共用） */
+    team: AgentTeamService;
     owner: MemberStatus;
     ownerId: string;
     ownerServer?: AgentOwnerServer;
+    /** S5：hub 目录投影（未启用 agent 时为 undefined）。 */
+    hubControl?: HubControlLike;
+    /** S5：team-scoped token 的 session 归属。 */
+    teamScope?: HubTeamScopeLike;
+    /** S5：节点 token 控制面（同时供 resolveGatewayAuth 使用）。 */
+    nodeTokens?: NodeTokenControlLike;
     dispose: () => Promise<void>;
   };
   /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
@@ -255,14 +269,10 @@ export interface BootstrapResult {
   runStore?: RunStore;
   /** 0.3 durable：TUI `/runs` 控制面（durable 关闭时为 undefined） */
   runs?: DurableRunsControlLike;
-  /** 0.4：workflow 引擎（路径版 controls + close/interruptAll）；未启用为 undefined */
-  workflows?: WorkflowEngineLike;
   /** 0.4：飞书渠道（enabled 时构造，不自动 start）；未启用为 undefined */
   feishu?: FeishuChannelLike;
   /** 0.4：metrics 控制面；observability 块缺省或 metrics:false 时为 undefined */
   metrics?: MetricsControlLike;
-  /** 0.4：SIGINT/SIGTERM 时调用 workflow.interruptAll()（落 interrupted） */
-  interruptWorkflows: () => Promise<void>;
   /**
    * 恢复一次 run 并等待完成（CLI `--resume-run` 使用）。
    * 失败抛带稳定 code 的错误：run_not_found / run_not_resumable /
@@ -755,7 +765,6 @@ async function bootstrapConnect(input: {
     ...(remote !== undefined ? { remote } : {}),
     tenantPaths: input.tenantPaths,
     nodeId: input.nodeId,
-    interruptWorkflows: async () => {},
     resumeRun: async (runId, opts) => {
       const outcome = await waitForConnectedResumeTerminal({
         events,
@@ -808,6 +817,42 @@ async function bootstrapConnect(input: {
 }
 
 /**
+ * 0.19 S3：配置声明 → `new` 的默认 Team workspace。
+ *
+ * 只做**归一化后的精确相等**匹配（不是前缀 / 祖先）；没有 `agent.cwd` 时用进程 cwd。
+ * 0 个命中 → undefined；多个命中 → warning + undefined；恰好 1 个 → 归一化 workspace。
+ */
+export function resolveDefaultTeamWorkspace(
+  config: VesselConfig,
+  declarations: readonly TeamDeclaration[],
+  logger?: Logger,
+): string | undefined {
+  let cwdKey: string;
+  try {
+    cwdKey = workspaceKey(normalizeWorkspace(resolveAgentCwd(config) ?? process.cwd()));
+  } catch (error) {
+    logger?.warn('team.declaration.invalid', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+
+  const matches = declarations.filter((declaration) => {
+    try {
+      return workspaceKey(normalizeWorkspace(declaration.workspace)) === cwdKey;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length > 1) {
+    logger?.warn('team.declaration.ambiguous_default', { count: matches.length });
+    return undefined;
+  }
+  const match = matches[0];
+  return match === undefined ? undefined : normalizeWorkspace(match.workspace);
+}
+
+/**
  * 引导应用启动
  */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
@@ -837,10 +882,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const { config, validation, tenantId, paths: configPaths } = loaded;
 
-  // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；transport / PeerInfo 共用。
-  const nodeId =
-    config.host?.nodeId ?? `vessel-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
-
   if (!useMock && validation.errors.length > 0) {
     console.error(formatConfigErrors(validation.errors, { paths: configPaths }));
     process.exit(configErrorExitCode);
@@ -861,6 +902,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ? path.join(resolvedDataDir, options.dataDirSubdir)
     : resolvedDataDir;
   const tenantPaths = resolveTenantPaths(dataDir, tenantId);
+
+  // nodeId 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；transport / PeerInfo 共用。
+  const nodeId = await resolveNodeId({
+    ...(config.host?.nodeId !== undefined ? { configNodeId: config.host.nodeId } : {}),
+    dataDir,
+    logger,
+  });
   const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
   const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
 
@@ -1005,7 +1053,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(options.redactor ? { redactor: options.redactor } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
-    ...(options.loadWorkflowModule ? { loadWorkflowModule: options.loadWorkflowModule } : {}),
     ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
     ...(options.feishuTransport !== undefined ? { feishuTransport: options.feishuTransport } : {}),
   }).catch((error: unknown) => {
@@ -1030,7 +1077,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     metrics,
     runStore,
     eventLog,
-    workflows: workflowEngine,
     feishu: feishuChannel,
   } = bundle;
 
@@ -1054,6 +1100,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
   let agentControl: BootstrapResult['agent'];
+  // S5：节点 token 控制面在 agent 未启用时保持 undefined（行为不变）。
+  let nodeTokens: NodeTokenControlLike | undefined;
   if (agentServiceEnabled) {
     // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
     const memberPermissionMode: MemberPermissionMode = agentPlan.permissionMode;
@@ -1065,6 +1113,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
               agentPlan.termination.maxRuntimeSeconds ?? termination.maxRuntimeSeconds,
           }
         : termination;
+    // 0.19 S3：配置声明（camelCase → TeamDeclaration 的 snake_case）+ 默认 workspace。
+    const teamDeclarations: TeamDeclaration[] = (config.teams ?? []).map((team) => ({
+      ...(team.name !== undefined ? { name: team.name } : {}),
+      workspace: team.workspace,
+      ...(team.handoffPath !== undefined ? { handoff_path: team.handoffPath } : {}),
+      ...(team.policy !== undefined ? { policy: team.policy } : {}),
+    }));
+    const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
     const wiring = await createAgentServiceWiring({
       tenantId,
       dataDir,
@@ -1085,20 +1141,31 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       parentEvents: runtimeEvents,
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       logger,
-      // 0.18：成员 run 与父级共用同一事件日志（唯一真相源）。
-      ...(eventLog
-        ? {
-            runtimeFactory: (runtimeOptions: Parameters<typeof AgentRuntime.create>[0]) =>
-              AgentRuntime.create({ ...runtimeOptions, eventLog }),
-          }
-        : {}),
+      // 成员 Body 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
+      session,
+      ...(eventLog !== undefined ? { eventLog } : {}),
+      teamDeclarations,
+      ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
     });
     finalPluginHost.registerTool(wiring.tool);
+
+    // S5：hub 目录投影 + team 归属 + 节点 token 控制面。
+    const hubRuntime = await createHubRuntime({
+      service: wiring.service,
+      // S6：真实 TeamService 作为 hub 指针源（只带 team_id / kind / message_id）。
+      teamSource: wiring.team,
+      dataDir,
+      tenantId,
+      nodeId,
+      logger,
+    });
+    nodeTokens = hubRuntime.nodeTokens;
 
     let ownerServer: AgentOwnerServer | undefined;
     try {
       ownerServer = await startAgentOwnerServer({
         service: wiring.service,
+        team: wiring.team,
         dataDir,
         tenantId,
         logger,
@@ -1115,13 +1182,20 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     agentControl = {
       service: wiring.service,
+      team: wiring.team,
       owner: wiring.owner,
       ownerId: wiring.ownerId,
       ...(ownerServer !== undefined ? { ownerServer } : {}),
+      hubControl: hubRuntime.hubControl,
+      teamScope: hubRuntime.teamScope,
+      nodeTokens: hubRuntime.nodeTokens,
       dispose: async () => {
         // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
         wiring.injector.dispose();
         await ownerServer?.stop();
+        // Team 退订后再 flush 日志写链，避免关闭期间又追加系统消息。
+        wiring.team.dispose();
+        await wiring.teamStore.flush();
         await wiring.service.flushSnapshot();
       },
     };
@@ -1269,6 +1343,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     hostname: '127.0.0.1',
     allowRemote: false,
     env: process.env,
+    // S5：静态 token 未命中时再查节点动态 token；未启用 agent 时无动态面。
+    ...(nodeTokens !== undefined ? { tokenStore: nodeTokens } : {}),
   });
   // 0.18：本地模式只有一个 tenant 流；dispatcher 与 gateway 共用同一个 hub。
   const localEventHub = createGatewayEventHub({
@@ -1393,19 +1469,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }
       : {}),
     ...(mcpControl ? { mcp: { listServers: () => mcpControl.list() } } : {}),
-    ...(workflowEngine
-      ? {
-          workflows: {
-            ...adaptWorkflowsControl(workflowEngine, config),
-            resolveDefinition: (name: string) => resolveWorkflowDefPathSync(config, name),
-          },
-        }
-      : {}),
     ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
   });
-  // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume` 与
-  // `/workflows run|resume` 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时
-  // 订阅是 no-op，命令会一直挂起。通知只再分发，不写回事件流。
+  // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`
+  // 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时订阅是 no-op，命令会一直挂起。
+  // 通知只再分发，不写回事件流。
   const localRpcClient = createLocalRpcClient({
     dispatch: localDispatcher.dispatch,
     onEvent: (handler) =>
@@ -1472,16 +1540,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
 
-  /** SIGINT/SIGTERM：workflow 在跑 run 落 interrupted（不是用户 cancel） */
-  const interruptWorkflows = async (): Promise<void> => {
-    if (!workflowEngine) return;
-    try {
-      await workflowEngine.interruptAll();
-    } catch (e) {
-      console.warn(`⚠ Failed to interrupt workflows: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-
   const shutdown = async (shutdownOptions: { drain?: boolean } = {}): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -1543,7 +1601,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       });
     }
 
-    // bundle 关闭顺序：feishu → workflow → metrics → MCP → host/runtime
+    // bundle 关闭顺序：feishu → metrics → MCP → host/runtime
     // → trace → runStore → session；锁由 bootstrap 在最后释放。
     await bundle.close(shutdownOptions);
 
@@ -1610,7 +1668,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(mcpControl ? { mcp: mcpControl } : {}),
     ...(runs ? { runs } : {}),
     // 0.4 注入面：未启用时保持 undefined。
-    ...(workflowEngine ? { workflows: adaptWorkflowsControl(workflowEngine, config) } : {}),
     ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
     ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
     newSessionId,
@@ -1635,10 +1692,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     mcp: mcpControl,
     runStore,
     runs,
-    workflows: workflowEngine,
     feishu: feishuChannel,
     metrics,
-    interruptWorkflows,
     resumeRun,
     shutdown,
     cleanup: () => {

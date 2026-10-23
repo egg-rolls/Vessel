@@ -69,7 +69,7 @@ import {
 } from './gateway-command';
 import { createGatewayConfigSet } from './gateway-config-control';
 import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
-import { buildGatewayControlPlane, buildWorkflowControlPlane } from './gateway-wiring';
+import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
@@ -79,6 +79,11 @@ import { isAddressInUse } from './port-in-use';
 import { installProcessErrorHandlers } from './process-handlers';
 import { resolveGatewayAuth } from './serve-auth';
 import { checkTlsFiles, resolveServeOptions } from './serve-config';
+import {
+  reconcileStaleSessions,
+  type SessionLivenessContext,
+  withLivenessRepair,
+} from './session-liveness';
 import {
   resolveContinueSessionId,
   runSessionList,
@@ -91,6 +96,7 @@ import { resolveGatewayToken } from './transport-factory';
 import { ui } from './ui-style';
 import { scheduleUpdateCheck } from './update/background';
 import { readPackageVersion } from './version';
+import { inspectWebDist, webDistWarning } from './web-dist';
 
 // ── 终端排版辅助 ─────────────────────────────────
 
@@ -121,6 +127,10 @@ function printHelp(): void {
   const gateway: Array<[string, string]> = [
     ['vessel status [--json]', t('help.cmd.status')],
     ['vessel agents [--json]', t('help.cmd.agents')],
+    ['vessel team list [--json]', t('help.cmd.teamList')],
+    ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
+    ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],
+    ['vessel team members <team_id> add|remove <member>', t('help.cmd.teamMembers')],
     ['vessel errors [--json]', t('help.cmd.errors')],
     ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
     ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
@@ -131,12 +141,20 @@ function printHelp(): void {
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
   ];
+  const hub: Array<[string, string]> = [
+    ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
+    ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
+    ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
+    ['vessel hub pair [--tenant ID] [--ttl N]', t('help.cmd.hubPair')],
+    ['vessel hub node add <url> --code <CODE>', t('help.cmd.hubNodeAdd')],
+    ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
+    ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
+    ['vessel hub token exchange <node-url> --team <id>', t('help.cmd.hubTokenExchange')],
+    ['vessel hub token revoke <node-url> --token-id <id>', t('help.cmd.hubTokenRevoke')],
+    ['vessel hub token list <node-url>', t('help.cmd.hubTokenList')],
+    ['vessel hub data-token <pairing_id> --team <id>', t('help.cmd.hubDataToken')],
+  ];
   const capability: Array<[string, string]> = [
-    ['vessel workflow list', t('help.cmd.workflowList')],
-    ['vessel workflow run <name>', t('help.cmd.workflowRun')],
-    ['vessel workflow show <id>', t('help.cmd.workflowShow')],
-    ['vessel workflow resume <id>', t('help.cmd.workflowResume')],
-    ['vessel workflow cancel <id>', t('help.cmd.workflowCancel')],
     ['vessel eval <suite>', t('help.cmd.eval')],
     ['vessel eval <suite> --json --out <path>', t('help.cmd.evalOut')],
     ['vessel --feishu', t('help.cmd.feishu')],
@@ -186,6 +204,7 @@ function printHelp(): void {
       ...session,
       ...headless,
       ...gateway,
+      ...hub,
       ...capability,
       ...config,
       ...tenant,
@@ -212,6 +231,9 @@ function printHelp(): void {
       '',
       `  ${ui.section(t('help.section.gateway'))}`,
       align(gateway, width),
+      '',
+      `  ${ui.section(t('help.section.hub'))}`,
+      align(hub, width),
       '',
       `  ${ui.section(t('help.section.capability'))}`,
       align(capability, width),
@@ -383,6 +405,11 @@ if (foregroundGateway && args.gateway !== null) {
   foregroundGatewayLock = prepared.lock;
   foregroundGatewayInstance = prepared.instance;
   process.once('exit', () => foregroundGatewayLock?.releaseSync());
+}
+// 启动诊断：静态产物缺失/过期只提示，不改退出码。
+if (foregroundGateway || args.servePort !== null) {
+  const warning = webDistWarning(await inspectWebDist());
+  if (warning) console.error(ui.warn(warning));
 }
 // `-r/--resume` 无 id：列出当前 tenant 的会话（connect 模式无法本地列出）。
 if (args.resumeArg === '') {
@@ -637,6 +664,7 @@ async function runWithConfig(result: BootstrapResult) {
     const authResult = resolveGatewayAuth(config, {
       hostname: resolved.options.hostname,
       allowRemote: resolved.options.allowRemote,
+      ...(result.agent?.nodeTokens !== undefined ? { tokenStore: result.agent.nodeTokens } : {}),
     });
     if (!authResult.ok) {
       console.error(authResult.error);
@@ -695,6 +723,39 @@ async function runWithConfig(result: BootstrapResult) {
     }
 
     const dataDir = resolveDataDir(config);
+    // 0.18：硬崩后 session 会永久停在 running（事件无终态）。启动 sweep + 读时兜底共用
+    // 同一修复函数；锁活着 → 跳过，绝不误杀其它实例的活 run / resume。
+    const livenessContextFor = (tenantId: string): SessionLivenessContext | undefined => {
+      const bundle =
+        tenantFactory?.bundleFor(tenantId) ??
+        (tenantId === result.tenantId ? result.bundle : undefined);
+      if (!bundle) return undefined;
+      return {
+        tenantDir: bundle.tenantPaths.root,
+        session: bundle.session,
+        ...(bundle.eventLog ? { eventLog: bundle.eventLog } : {}),
+        ...(bundle.runStore ? { runStore: bundle.runStore } : {}),
+        logger,
+      };
+    };
+    const livenessSessionFor = (tenantId: string) => {
+      const livenessContext = livenessContextFor(tenantId);
+      return livenessContext !== undefined
+        ? withLivenessRepair(livenessContext.session, livenessContext)
+        : undefined;
+    };
+    for (const tenantId of tenantFactory?.tenantIds() ?? []) {
+      const livenessContext = livenessContextFor(tenantId);
+      if (!livenessContext) continue;
+      const sweep = await reconcileStaleSessions(livenessContext);
+      if (sweep.repaired.length > 0 || sweep.errors.length > 0) {
+        logger.warn('session liveness sweep', {
+          tenant_id: tenantId,
+          repaired: sweep.repaired.length,
+          errors: sweep.errors.length,
+        });
+      }
+    }
     // 0.6.1 P0-2：非 default tenant 只走 per-tenant runStore；
     // default tenant 由上面的 `durable` 提供（gateway 优先 opts.durable）。
     const durableFor = createDurableFor(tenantFactory, result.tenantId);
@@ -749,7 +810,7 @@ async function runWithConfig(result: BootstrapResult) {
       hub: eventHub,
       // 0.18：events.list 的二次脱敏与 live hub / trace 同源（ext 幂等）。
       ...(result.bundle ? { redactor: result.bundle.redactor } : {}),
-      session: ctx.session,
+      session: livenessSessionFor(result.tenantId) ?? ctx.session,
       runtime,
       // web 控制台需要的装配面：会话切换 clear 上下文、工具清单、静态站点托管
       context: ctx.context,
@@ -793,7 +854,8 @@ async function runWithConfig(result: BootstrapResult) {
               ...(config.tenant?.tenants ? { configured: config.tenant.tenants } : {}),
             }),
             runtimeFor: (tenantId: string) => tenantFactory?.runtimeFor(tenantId),
-            sessionFor: (tenantId: string) => tenantFactory?.sessionFor(tenantId),
+            sessionFor: (tenantId: string) =>
+              livenessSessionFor(tenantId) ?? tenantFactory?.sessionFor(tenantId),
             contextFor: (tenantId: string) => tenantFactory?.contextFor(tenantId),
             pluginHostFor: (tenantId: string) => tenantFactory?.pluginHostFor(tenantId),
             pluginsFor: (tenantId: string) => tenantFactory?.pluginsFor(tenantId) ?? [],
@@ -868,18 +930,17 @@ async function runWithConfig(result: BootstrapResult) {
     const controlPlane = buildGatewayControlPlane({
       config,
       ...(result.metrics ? { metrics: result.metrics } : {}),
-      ...(result.workflows ? { workflows: result.workflows } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
-      // 0.5.4 P2-1：非 default tenant 使用自己的 workflow / feishu 实例。
+      // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。
+      ...(result.agent?.team ? { teams: result.agent.team } : {}),
+      // S5：hub 目录投影 / 动态 token / session→team 归属。
+      ...(result.agent?.hubControl ? { hubControl: result.agent.hubControl } : {}),
+      ...(result.agent?.nodeTokens ? { nodeTokens: result.agent.nodeTokens } : {}),
+      ...(result.agent?.teamScope ? { teamScope: result.agent.teamScope } : {}),
+      // 0.5.4 P2-1：非 default tenant 使用自己的 feishu 实例。
       // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
       ...(tenantFactory
         ? {
-            workflowsFor: (tenantId: string) => {
-              const bundle = tenantFactory?.bundleFor(tenantId);
-              return bundle?.workflows
-                ? buildWorkflowControlPlane(bundle.workflows, bundle.config)
-                : undefined;
-            },
             feishuFor: (tenantId: string) => {
               const feishu = tenantFactory?.bundleFor(tenantId)?.feishu;
               return feishu ? { status: () => feishu.status() } : undefined;
@@ -1009,12 +1070,10 @@ async function runWithConfig(result: BootstrapResult) {
     await foregroundGatewayLock?.release();
   };
 
-  // 0.4：有 workflow / 显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
+  // 0.4：显式 --feishu 时，SIGINT/SIGTERM 走 130/143；
   // 纯 0.3 serve 保持原来的自然退出（0）。
-  if (shutdownSignal && (result.workflows || args.feishu)) {
-    await finish(async () => {
-      if (result.workflows) await result.interruptWorkflows();
-    });
+  if (shutdownSignal && args.feishu) {
+    await finish();
     process.exit(signalExitCode(shutdownSignal));
   }
   await finish();

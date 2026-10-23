@@ -17,7 +17,7 @@ const MANIFEST: CapabilityManifestLike = {
   ],
   tools: [{ name: 'bash', description: 'Run a shell command' }, { name: 'read' }],
   plugins: [
-    { name: 'workflow', enabled: true },
+    { name: 'demo', enabled: true },
     { name: 'feishu', enabled: false },
   ],
 };
@@ -54,7 +54,7 @@ describe('/capabilities', () => {
 
     const plugins = await runCapabilitiesCommand(['plugins'], makeCtx({ rpc: makeRpc(MANIFEST) }));
     expect(plugins.output).toContain('  feishu (disabled)');
-    expect(plugins.output).toContain('  workflow (enabled)');
+    expect(plugins.output).toContain('  demo (enabled)');
   });
 
   it('未知参数给 usage', async () => {

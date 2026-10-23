@@ -36,7 +36,6 @@ describe('parseArgs - 默认与 REPL', () => {
       version: false,
       tools: false,
       update: null,
-      workflow: null,
       eval: null,
       feishu: false,
       tenantArg: null,
@@ -57,6 +56,7 @@ describe('parseArgs - 默认与 REPL', () => {
       statusCommand: null,
       agentsCommand: null,
       agentCommand: null,
+      teamCommand: null,
       errorsCommand: null,
       completionCommand: null,
     });
@@ -251,106 +251,9 @@ describe('parseArgs - 未知参数', () => {
     expect(err(['--bogus'])).toContain('Unknown argument: --bogus');
   });
 
-  it('workflow / eval 只允许出现在位置 0', () => {
-    expect(err(['--run', 'x', 'workflow'])).toContain('Unknown argument: workflow');
+  it('eval 只允许出现在位置 0；workflow 不再是子命令', () => {
     expect(err(['--run', 'x', 'eval'])).toContain('Unknown argument: eval');
-  });
-});
-
-describe('parseArgs - workflow', () => {
-  it('workflow run 解析 target 与重复 --input', () => {
-    const args = ok(['workflow', 'run', 'release-check', '--input', 'a=1', '--input', 'b=x=y']);
-    expect(args.workflow).toEqual({
-      kind: 'run',
-      target: 'release-check',
-      inputs: { a: '1', b: 'x=y' },
-    });
-  });
-
-  it('workflow run 重复 key 后者覆盖', () => {
-    const args = ok(['workflow', 'run', 'x', '--input', 'a=1', '--input', 'a=2']);
-    expect(args.workflow).toEqual({ kind: 'run', target: 'x', inputs: { a: '2' } });
-  });
-
-  it('workflow run 允许空 value', () => {
-    const args = ok(['workflow', 'run', 'x', '--input', 'a=']);
-    expect(args.workflow).toEqual({ kind: 'run', target: 'x', inputs: { a: '' } });
-  });
-
-  it('workflow run 缺 target / 非法 input 报错', () => {
-    expect(err(['workflow', 'run'])).toContain('Missing workflow definition');
-    expect(err(['workflow', 'run', 'x', '--input'])).toContain('Missing value for --input');
-    expect(err(['workflow', 'run', 'x', '--input', 'bad'])).toContain('expected key=value');
-    expect(err(['workflow', 'run', 'x', '--input', '=v'])).toContain('expected key=value');
-    expect(err(['workflow', 'run', 'x', '--input', '1a=v'])).toContain('Invalid --input key');
-  });
-
-  it('workflow run 未知 flag / 多余位置参数报错', () => {
-    expect(err(['workflow', 'run', 'x', '--bogus'])).toContain('Unknown argument: --bogus');
-    expect(err(['workflow', 'run', 'x', 'y'])).toContain('Unexpected argument: y');
-  });
-
-  it('workflow list 缺省无 status/limit', () => {
-    expect(ok(['workflow', 'list']).workflow).toEqual({ kind: 'list' });
-  });
-
-  it('workflow list 解析 status / limit', () => {
-    expect(ok(['workflow', 'list', '--status', 'completed', '--limit', '200']).workflow).toEqual({
-      kind: 'list',
-      status: 'completed',
-      limit: 200,
-    });
-    expect(ok(['workflow', 'list', '--limit', '1']).workflow).toEqual({
-      kind: 'list',
-      limit: 1,
-    });
-  });
-
-  it('workflow list 非法 status / limit 报错', () => {
-    expect(err(['workflow', 'list', '--status', 'unknown'])).toContain('Invalid workflow status');
-    expect(err(['workflow', 'list', '--limit', '0'])).toContain('--limit must be');
-    expect(err(['workflow', 'list', '--limit', '201'])).toContain('--limit must be');
-    expect(err(['workflow', 'list', '--limit', 'abc'])).toContain('Invalid value for --limit');
-    expect(err(['workflow', 'list', '--status'])).toContain('Missing value for --status');
-  });
-
-  it('workflow list 未知 flag / 位置参数报错', () => {
-    expect(err(['workflow', 'list', '--bogus'])).toContain('Unknown argument: --bogus');
-    expect(err(['workflow', 'list', 'extra'])).toContain('Unknown argument: extra');
-  });
-
-  it('workflow show / resume / cancel 解析 id', () => {
-    expect(ok(['workflow', 'show', 'wf_1']).workflow).toEqual({
-      kind: 'show',
-      workflowRunId: 'wf_1',
-    });
-    expect(ok(['workflow', 'resume', 'wf_2']).workflow).toEqual({
-      kind: 'resume',
-      workflowRunId: 'wf_2',
-    });
-    expect(ok(['workflow', 'cancel', 'wf_3']).workflow).toEqual({
-      kind: 'cancel',
-      workflowRunId: 'wf_3',
-    });
-  });
-
-  it('workflow show / resume / cancel 缺 id 或多参数报错', () => {
-    expect(err(['workflow', 'show'])).toContain('Missing workflowRunId');
-    expect(err(['workflow', 'resume'])).toContain('Missing workflowRunId');
-    expect(err(['workflow', 'cancel'])).toContain('Missing workflowRunId');
-    expect(err(['workflow', 'show', 'a', 'b'])).toContain('Unexpected argument: b');
-    expect(err(['workflow', 'show', '--bogus'])).toContain('Unknown argument: --bogus');
-  });
-
-  it('未知 workflow 子命令 / 空子命令报错', () => {
-    expect(err(['workflow'])).toContain('Missing workflow subcommand');
-    expect(err(['workflow', 'bogus'])).toContain('Unknown workflow subcommand');
-  });
-
-  it('workflow 的 --help 走主帮助', () => {
-    expect(ok(['workflow', 'run', '--help']).help).toBe(true);
-    expect(ok(['workflow', 'list', '-h']).help).toBe(true);
-    expect(ok(['workflow', 'show', 'wf_1', '--help']).help).toBe(true);
+    expect(err(['workflow', 'list'])).toContain('Unknown argument: workflow');
   });
 });
 
@@ -544,6 +447,112 @@ describe('parseArgs - plugin / doctor（0.6.1）', () => {
     expect(ok(['doctor']).doctorCommand).toEqual({ json: false });
     expect(ok(['doctor', '--json']).doctorCommand).toEqual({ json: true });
     expect(err(['doctor', '--bogus'])).toContain('Unknown argument');
+  });
+});
+
+describe('parseArgs - team (0.19 S3)', () => {
+  it('team 无子命令 / --help 走主帮助', () => {
+    expect(ok(['team']).help).toBe(true);
+    expect(ok(['team', '--help']).help).toBe(true);
+    expect(ok(['team', 'post', '--help']).help).toBe(true);
+    expect(ok(['team', '--help']).teamCommand).toBeNull();
+  });
+
+  it('team list [--json]', () => {
+    expect(ok(['team', 'list']).teamCommand).toEqual({ kind: 'list', json: false });
+    expect(ok(['team', 'list', '--json']).teamCommand).toEqual({ kind: 'list', json: true });
+  });
+
+  it('team get <team_id> [--limit N] [--json]', () => {
+    expect(ok(['team', 'get', 'alpha']).teamCommand).toEqual({
+      kind: 'get',
+      teamId: 'alpha',
+      json: false,
+    });
+    expect(ok(['team', 'get', 'alpha', '--limit', '5', '--json']).teamCommand).toEqual({
+      kind: 'get',
+      teamId: 'alpha',
+      limit: 5,
+      json: true,
+    });
+  });
+
+  it('team post 合并正文并收集多个 --mention', () => {
+    expect(
+      ok(['team', 'post', 'alpha', 'hello', 'team', '--mention', 'a1', '--mention', 'a2'])
+        .teamCommand,
+    ).toEqual({
+      kind: 'post',
+      teamId: 'alpha',
+      content: 'hello team',
+      mentions: ['a1', 'a2'],
+      json: false,
+    });
+    expect(ok(['team', 'post', 'alpha', 'status']).teamCommand).toEqual({
+      kind: 'post',
+      teamId: 'alpha',
+      content: 'status',
+      mentions: [],
+      json: false,
+    });
+  });
+
+  it('team members <team_id> add|remove <member> [--json]', () => {
+    expect(ok(['team', 'members', 'alpha', 'add', 'a1']).teamCommand).toEqual({
+      kind: 'members',
+      teamId: 'alpha',
+      action: 'add',
+      member: 'a1',
+      json: false,
+    });
+    expect(ok(['team', 'members', 'alpha', 'remove', 'a1', '--json']).teamCommand).toEqual({
+      kind: 'members',
+      teamId: 'alpha',
+      action: 'remove',
+      member: 'a1',
+      json: true,
+    });
+  });
+
+  it('team 非法参数报错', () => {
+    expect(err(['team', 'bogus'])).toContain('Unknown team subcommand');
+    expect(err(['team', 'list', '--bogus'])).toContain('Unknown argument');
+    expect(err(['team', 'get'])).toContain('team get requires <team_id>');
+    expect(err(['team', 'get', 'a', 'b'])).toContain('Unknown argument');
+    expect(err(['team', 'get', 'alpha', '--limit', '0'])).toContain('Invalid --limit');
+    expect(err(['team', 'get', 'alpha', '--limit', 'abc'])).toContain('Invalid --limit');
+    expect(err(['team', 'get', 'alpha', '--limit'])).toContain('Missing value for --limit');
+    expect(err(['team', 'post', 'alpha'])).toContain('team post requires');
+    expect(err(['team', 'post', 'alpha', 'hi', '--mention'])).toContain(
+      'Missing value for --mention',
+    );
+    expect(err(['team', 'members', 'alpha', 'add'])).toContain('team members requires');
+    expect(err(['team', 'members', 'alpha', 'bogus', 'a1'])).toContain(
+      'Invalid team members action',
+    );
+    expect(err(['team', 'members', 'alpha', 'add', 'a1', 'extra'])).toContain('Unknown argument');
+  });
+});
+
+describe('parseArgs - agent new workspace (0.19 S3)', () => {
+  it('--workspace 进入 new 变体', () => {
+    expect(ok(['agent', 'new', '--workspace', '/tmp/alpha']).agentCommand).toEqual({
+      kind: 'new',
+      json: false,
+      workspace: '/tmp/alpha',
+    });
+    expect(
+      ok(['agent', 'new', '--name', 'a1', '--workspace', '/tmp/alpha', '--json']).agentCommand,
+    ).toEqual({
+      kind: 'new',
+      json: true,
+      name: 'a1',
+      workspace: '/tmp/alpha',
+    });
+  });
+
+  it('--workspace 缺值报错', () => {
+    expect(err(['agent', 'new', '--workspace'])).toContain('Missing value for --workspace');
   });
 });
 

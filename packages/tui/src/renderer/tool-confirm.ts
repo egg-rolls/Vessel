@@ -16,6 +16,8 @@ export interface ToolPermissionRequestedData {
   requestId: string;
   tool: string;
   input: unknown;
+  /** 发起权限请求的会话 ID */
+  session_id?: string;
 }
 
 /** tool.permission.response 事件载荷（TUI 发布用户决定；remember=true 表示"始终允许"） */
@@ -23,6 +25,8 @@ export interface ToolPermissionDecidedData {
   requestId: string;
   decision: 'allow' | 'deny';
   remember?: boolean;
+  /** 发起权限请求的会话 ID */
+  session_id?: string;
 }
 
 /** MCP 工具来源（由注入的 McpControl.toolSource 提供） */

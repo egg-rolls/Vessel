@@ -48,22 +48,6 @@ export type GatewayCommand =
   | { kind: 'install-service'; target?: GatewayInstallTarget }
   | { kind: 'uninstall-service' };
 
-/** `workflow` 子命令的状态过滤值（DECISION-009 §5.1.3） */
-export type WorkflowRunStatusArg =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'interrupted';
-
-export type WorkflowCommand =
-  | { kind: 'run'; target: string; inputs: Record<string, string> }
-  | { kind: 'list'; status?: WorkflowRunStatusArg; limit?: number }
-  | { kind: 'show'; workflowRunId: string }
-  | { kind: 'resume'; workflowRunId: string }
-  | { kind: 'cancel'; workflowRunId: string };
-
 export interface EvalCommand {
   target: string;
   json: boolean;
@@ -169,10 +153,76 @@ export type AgentCommand =
       model?: string;
       visibility?: AgentVisibilityArg;
       systemPrompt?: string;
+      /** 0.19 S3：显式 workspace → 隐式建 / 复用 Team 并绑定 */
+      workspace?: string;
     }
   | { kind: 'send'; json: boolean; member: string; content: string }
+  | { kind: 'dispatch'; json: boolean; to: string; content: string }
+  | {
+      kind: 'rotate';
+      json: boolean;
+      to: string;
+      startupPrompt: string;
+      handoffPath?: string;
+    }
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
+
+/** `vessel team ...` 子命令（0.19 S3；owner 私有端点） */
+export type TeamCommand =
+  | { kind: 'list'; json: boolean }
+  | { kind: 'get'; teamId: string; limit?: number; json: boolean }
+  | { kind: 'post'; teamId: string; content: string; mentions: string[]; json: boolean }
+  | {
+      kind: 'members';
+      teamId: string;
+      action: 'add' | 'remove';
+      member: string;
+      json: boolean;
+    };
+
+/** `vessel hub ...` 子命令（S5） */
+export type HubCommand =
+  | {
+      kind: 'start';
+      host?: string;
+      port?: number;
+      dataDir?: string;
+      allowRemote?: boolean;
+      tlsCert?: string;
+      tlsKey?: string;
+    }
+  | { kind: 'directory'; hubUrl?: string; tokenEnv?: string; json: boolean }
+  | { kind: 'watch'; hubUrl?: string; tokenEnv?: string }
+  | { kind: 'pair'; dataDir?: string; tenant?: string; ttl?: number }
+  | {
+      kind: 'node-add';
+      url: string;
+      code: string;
+      alias?: string;
+      ca?: string;
+      hubUrl?: string;
+    }
+  | { kind: 'node-list'; hubUrl?: string; json: boolean }
+  | { kind: 'node-remove'; pairingId: string; hubUrl?: string }
+  | {
+      kind: 'token-exchange';
+      nodeUrl: string;
+      teamId: string;
+      ttl?: number;
+      adminTokenEnv?: string;
+      json: boolean;
+    }
+  | { kind: 'token-revoke'; nodeUrl: string; tokenId: string; adminTokenEnv?: string }
+  | { kind: 'token-list'; nodeUrl: string; adminTokenEnv?: string; json: boolean }
+  | {
+      kind: 'data-token';
+      pairingId: string;
+      teamId: string;
+      hubUrl?: string;
+      tokenEnv?: string;
+      ttl?: number;
+    };
 
 export interface CliArgs {
   /** `vessel demo`：无 Key 交互演示（mock + tools 场景） */
@@ -204,8 +254,6 @@ export interface CliArgs {
   tools: boolean;
   /** `vessel update ...` 子命令 */
   update: UpdateArgs | null;
-  /** `vessel workflow ...` 子命令 */
-  workflow: WorkflowCommand | null;
   /** `vessel eval ...` 子命令 */
   eval: EvalCommand | null;
   /** 0.4：附加开关；只与 run/pipe/resume/tools/version/help 互斥 */
@@ -241,8 +289,12 @@ export interface CliArgs {
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
-  /** 0.17：`vessel agent new|send|close|list` */
+  /** 0.17：`vessel agent new|send|close|list|dispatch|rotate` */
   agentCommand: AgentCommand | null;
+  /** 0.19 S3：`vessel team list|get|post|members` */
+  teamCommand: TeamCommand | null;
+  /** S5：`vessel hub ...`；缺省 null（可选以兼容既有 parseArgs 快照测试） */
+  hubCommand?: HubCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
   /** 0.18：`vessel completion <bash|zsh|fish|powershell>` */
@@ -286,7 +338,6 @@ export function parseArgs(argv: string[]): ParseResult {
     version: false,
     tools: false,
     update: null,
-    workflow: null,
     eval: null,
     feishu: false,
     tenantArg: null,
@@ -307,6 +358,7 @@ export function parseArgs(argv: string[]): ParseResult {
     statusCommand: null,
     agentsCommand: null,
     agentCommand: null,
+    teamCommand: null,
     errorsCommand: null,
     completionCommand: null,
   };
@@ -314,13 +366,10 @@ export function parseArgs(argv: string[]): ParseResult {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] ?? '';
 
-    // `update` / `workflow` / `eval` / `config` / `tenant` / `migrate` / `trace`
+    // `update` / `eval` / `config` / `tenant` / `migrate` / `trace`
     // 只允许作为第一个参数（子命令），其余位置按未知参数处理。
     if (a === 'update' && i === 0) {
       return parseUpdateArgs(argv.slice(1), args);
-    }
-    if (a === 'workflow' && i === 0) {
-      return parseWorkflowArgs(argv.slice(1), args);
     }
     if (a === 'eval' && i === 0) {
       return parseEvalArgs(argv.slice(1), args);
@@ -357,6 +406,12 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'agent' && i === 0) {
       return parseAgentArgs(argv.slice(1), args);
+    }
+    if (a === 'team' && i === 0) {
+      return parseTeamArgs(argv.slice(1), args);
+    }
+    if (a === 'hub' && i === 0) {
+      return parseHubArgs(argv.slice(1), args);
     }
     if (a === 'errors' && i === 0) {
       return parseErrorsArgs(argv.slice(1), args);
@@ -710,187 +765,7 @@ function parseUpdateArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-// ── 0.4 workflow / eval 子命令 ───────────────────
-
-const WORKFLOW_STATUSES: ReadonlySet<string> = new Set([
-  'pending',
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-  'interrupted',
-]);
-
-const MAX_WORKFLOW_LIMIT = 200;
-const INPUT_KEY_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
-
-/** 解析 `workflow` 子命令 */
-function parseWorkflowArgs(rest: string[], args: CliArgs): ParseResult {
-  const sub = rest[0];
-  if (sub === '--help' || sub === '-h') {
-    args.help = true;
-    return { ok: true, args };
-  }
-  if (sub === undefined) {
-    return {
-      ok: false,
-      error: 'Missing workflow subcommand (run|list|show|resume|cancel)',
-    };
-  }
-
-  const tail = rest.slice(1);
-  switch (sub) {
-    case 'run':
-      return parseWorkflowRun(tail, args);
-    case 'list':
-      return parseWorkflowList(tail, args);
-    case 'show':
-    case 'resume':
-    case 'cancel':
-      return parseWorkflowId(sub, tail, args);
-    default:
-      return { ok: false, error: `Unknown workflow subcommand: ${sub}` };
-  }
-}
-
-/** `workflow run <name-or-path> [--input key=value]...` */
-function parseWorkflowRun(rest: string[], args: CliArgs): ParseResult {
-  let target: string | undefined;
-  const inputs: Record<string, string> = {};
-
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a === '--input') {
-      const next = rest[i + 1];
-      if (next === undefined || next.startsWith('-')) {
-        return { ok: false, error: 'Missing value for --input' };
-      }
-      const eq = next.indexOf('=');
-      if (eq <= 0) {
-        return { ok: false, error: `Invalid --input "${next}" (expected key=value)` };
-      }
-      const key = next.slice(0, eq);
-      if (!INPUT_KEY_RE.test(key)) {
-        return { ok: false, error: `Invalid --input key "${key}"` };
-      }
-      inputs[key] = next.slice(eq + 1);
-      i++;
-      continue;
-    }
-    if (a.startsWith('-')) {
-      return { ok: false, error: `Unknown argument: ${a}` };
-    }
-    if (target !== undefined) {
-      return { ok: false, error: `Unexpected argument: ${a}` };
-    }
-    target = a;
-  }
-
-  // `--help` 优先：与 update --help 一致，允许没有位置参数。
-  if (args.help) return { ok: true, args };
-
-  if (target === undefined || target.trim() === '') {
-    return { ok: false, error: 'Missing workflow definition (name or path)' };
-  }
-
-  args.workflow = { kind: 'run', target, inputs };
-  return { ok: true, args };
-}
-
-/** `workflow list [--status <s>] [--limit <n>]` */
-function parseWorkflowList(rest: string[], args: CliArgs): ParseResult {
-  let status: WorkflowRunStatusArg | undefined;
-  let limit: number | undefined;
-
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a === '--status') {
-      const next = rest[i + 1];
-      if (next === undefined || next.startsWith('-')) {
-        return { ok: false, error: 'Missing value for --status' };
-      }
-      if (!WORKFLOW_STATUSES.has(next)) {
-        return {
-          ok: false,
-          error:
-            `Invalid workflow status: ${next} ` +
-            '(expected pending|running|completed|failed|cancelled|interrupted)',
-        };
-      }
-      status = next as WorkflowRunStatusArg;
-      i++;
-      continue;
-    }
-    if (a === '--limit') {
-      const next = rest[i + 1];
-      if (next === undefined || !/^\d+$/.test(next)) {
-        return { ok: false, error: `Invalid value for --limit: ${next ?? ''}` };
-      }
-      const parsed = Number.parseInt(next, 10);
-      if (parsed < 1 || parsed > MAX_WORKFLOW_LIMIT) {
-        return {
-          ok: false,
-          error: `--limit must be an integer between 1 and ${MAX_WORKFLOW_LIMIT}`,
-        };
-      }
-      limit = parsed;
-      i++;
-      continue;
-    }
-    return { ok: false, error: `Unknown argument: ${a}` };
-  }
-
-  args.workflow = {
-    kind: 'list',
-    ...(status !== undefined ? { status } : {}),
-    ...(limit !== undefined ? { limit } : {}),
-  };
-  return { ok: true, args };
-}
-
-/** `workflow show|resume|cancel <workflowRunId>` */
-function parseWorkflowId(
-  sub: 'show' | 'resume' | 'cancel',
-  rest: string[],
-  args: CliArgs,
-): ParseResult {
-  let workflowRunId: string | undefined;
-
-  for (let i = 0; i < rest.length; i++) {
-    const a = rest[i] ?? '';
-
-    if (a === '--help' || a === '-h') {
-      args.help = true;
-      continue;
-    }
-    if (a.startsWith('-')) {
-      return { ok: false, error: `Unknown argument: ${a}` };
-    }
-    if (workflowRunId !== undefined) {
-      return { ok: false, error: `Unexpected argument: ${a}` };
-    }
-    workflowRunId = a;
-  }
-
-  if (args.help) return { ok: true, args };
-
-  if (workflowRunId === undefined || workflowRunId.trim() === '') {
-    return { ok: false, error: `Missing workflowRunId for workflow ${sub}` };
-  }
-
-  args.workflow = { kind: sub, workflowRunId };
-  return { ok: true, args };
-}
+// ── 0.4 eval 子命令 ───────────────────
 
 /** `eval <suite-name-or-path> [--json] [--out <path>] [--filter <tag>]... [--allow-network]` */
 function parseEvalArgs(rest: string[], args: CliArgs): ParseResult {
@@ -1903,7 +1778,7 @@ function parseAgentsArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `agent new|send|close|list`（0.17 Phase A） */
+/** `agent new|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -1918,6 +1793,7 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
     let model: string | undefined;
     let visibility: AgentVisibilityArg | undefined;
     let systemPrompt: string | undefined;
+    let workspace: string | undefined;
     for (let i = 0; i < tail.length; i++) {
       const a = tail[i] ?? '';
       if (a === '--help' || a === '-h') {
@@ -1928,13 +1804,20 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         json = true;
         continue;
       }
-      if (a === '--name' || a === '--model' || a === '--visibility' || a === '--system-prompt') {
+      if (
+        a === '--name' ||
+        a === '--model' ||
+        a === '--visibility' ||
+        a === '--system-prompt' ||
+        a === '--workspace'
+      ) {
         const value = readFlagValue(tail, i, a);
         if (!value.ok) return value;
         if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
         if (a === '--name') name = value.value;
         else if (a === '--model') model = value.value;
         else if (a === '--system-prompt') systemPrompt = value.value;
+        else if (a === '--workspace') workspace = value.value;
         else {
           if (value.value !== 'private' && value.value !== 'team' && value.value !== 'tenant') {
             return {
@@ -1957,6 +1840,7 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       ...(model !== undefined ? { model } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
     };
     return { ok: true, args };
   }
@@ -1985,6 +1869,82 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: 'agent send requires non-empty <content...>' };
     }
     args.agentCommand = { kind: 'send', json, member, content };
+    return { ok: true, args };
+  }
+
+  if (sub === 'dispatch') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent dispatch: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [to, ...contentParts] = positional;
+    const content = contentParts.join(' ');
+    if (to === undefined || to === '' || content === '') {
+      return { ok: false, error: 'agent dispatch requires <to> <content...>' };
+    }
+    args.agentCommand = { kind: 'dispatch', json, to, content };
+    return { ok: true, args };
+  }
+
+  if (sub === 'rotate') {
+    let json = false;
+    let startupPrompt: string | undefined;
+    let handoffPath: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--startup' || a === '--handoff') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (a === '--startup') startupPrompt = value.value;
+        else handoffPath = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent rotate: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [to, extra] = positional;
+    if (to === undefined || to === '') {
+      return { ok: false, error: 'agent rotate requires <to>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for agent rotate: ${extra}` };
+    }
+    if (startupPrompt === undefined || startupPrompt === '') {
+      return { ok: false, error: 'agent rotate requires non-empty --startup <text>' };
+    }
+    args.agentCommand = {
+      kind: 'rotate',
+      json,
+      to,
+      startupPrompt,
+      ...(handoffPath !== undefined ? { handoffPath } : {}),
+    };
     return { ok: true, args };
   }
 
@@ -2071,6 +2031,746 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   }
 
   return { ok: false, error: `Unknown agent subcommand: ${sub}` };
+}
+
+/**
+ * `team list|get|post|members`（0.19 S3）。
+ * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
+ */
+function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  const tail = rest.slice(1);
+
+  if (sub === 'list') {
+    let json = false;
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for team list: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.teamCommand = { kind: 'list', json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'get') {
+    let json = false;
+    let limit: number | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--limit') {
+        const value = readFlagValue(tail, i, '--limit');
+        if (!value.ok) return value;
+        if (!/^\d+$/.test(value.value) || Number.parseInt(value.value, 10) <= 0) {
+          return { ok: false, error: `Invalid --limit: ${value.value}` };
+        }
+        limit = Number.parseInt(value.value, 10);
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for team get: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, extra] = positional;
+    if (teamId === undefined || teamId === '') {
+      return { ok: false, error: 'team get requires <team_id>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team get: ${extra}` };
+    }
+    args.teamCommand = {
+      kind: 'get',
+      teamId,
+      ...(limit !== undefined ? { limit } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'post') {
+    let json = false;
+    const mentions: string[] = [];
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--mention') {
+        const value = readFlagValue(tail, i, '--mention');
+        if (!value.ok) return value;
+        if (value.value === '') {
+          return { ok: false, error: 'Invalid --mention: empty value' };
+        }
+        mentions.push(value.value);
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for team post: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, ...contentParts] = positional;
+    const content = contentParts.join(' ');
+    if (teamId === undefined || teamId === '' || content === '') {
+      return { ok: false, error: 'team post requires <team_id> <content...>' };
+    }
+    args.teamCommand = { kind: 'post', teamId, content, mentions, json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'members') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for team members: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, action, member, extra] = positional;
+    if (teamId === undefined || action === undefined || member === undefined) {
+      return { ok: false, error: 'team members requires <team_id> add|remove <member>' };
+    }
+    if (action !== 'add' && action !== 'remove') {
+      return {
+        ok: false,
+        error: `Invalid team members action: ${action} (expected add|remove)`,
+      };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team members: ${extra}` };
+    }
+    args.teamCommand = { kind: 'members', teamId, action, member, json };
+    return { ok: true, args };
+  }
+
+  return { ok: false, error: `Unknown team subcommand: ${sub}` };
+}
+
+// ── S5 hub 子命令 ─────────────────────────────────
+
+const HUB_ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
+
+function parseHubTtl(raw: string, min: number, max: number): number | null {
+  if (!/^\d+$/.test(raw)) return null;
+  const value = Number.parseInt(raw, 10);
+  if (!Number.isFinite(value) || value < min || value > max) return null;
+  return value;
+}
+
+function parseHubEnvName(
+  raw: string,
+  flag: string,
+): { ok: true; value: string } | { ok: false; error: string } {
+  if (!HUB_ENV_NAME_RE.test(raw)) {
+    return { ok: false, error: `Invalid ${flag}: expected an environment variable name` };
+  }
+  return { ok: true, value: raw };
+}
+
+/** `hub start [--host --port --data-dir --allow-remote --tls-cert --tls-key]` */
+function parseHubStart(rest: string[], args: CliArgs): ParseResult {
+  const command: Extract<HubCommand, { kind: 'start' }> = { kind: 'start' };
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--allow-remote') {
+      command.allowRemote = true;
+      continue;
+    }
+    if (
+      a === '--host' ||
+      a === '--port' ||
+      a === '--data-dir' ||
+      a === '--tls-cert' ||
+      a === '--tls-key'
+    ) {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--port') {
+        const port = parsePort(value.value);
+        if (port === null) return { ok: false, error: `Invalid port for --port: ${value.value}` };
+        command.port = port;
+      } else if (a === '--host') {
+        command.host = value.value;
+      } else if (a === '--data-dir') {
+        command.dataDir = value.value;
+      } else if (a === '--tls-cert') {
+        command.tlsCert = value.value;
+      } else {
+        command.tlsKey = value.value;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub start: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  if ((command.tlsCert === undefined) !== (command.tlsKey === undefined)) {
+    return { ok: false, error: 'hub start requires both --tls-cert and --tls-key' };
+  }
+  args.hubCommand = command;
+  return { ok: true, args };
+}
+
+/** `hub directory [--hub-url] [--token-env] [--json]` */
+function parseHubDirectory(rest: string[], args: CliArgs): ParseResult {
+  let hubUrl: string | undefined;
+  let tokenEnv: string | undefined;
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--hub-url' || a === '--token-env') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--hub-url') hubUrl = value.value;
+      else {
+        const envName = parseHubEnvName(value.value, '--token-env');
+        if (!envName.ok) return envName;
+        tokenEnv = envName.value;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub directory: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.hubCommand = {
+    kind: 'directory',
+    json,
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+    ...(tokenEnv !== undefined ? { tokenEnv } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub watch [--hub-url] [--token-env]` */
+function parseHubWatch(rest: string[], args: CliArgs): ParseResult {
+  let hubUrl: string | undefined;
+  let tokenEnv: string | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--hub-url' || a === '--token-env') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--hub-url') hubUrl = value.value;
+      else {
+        const envName = parseHubEnvName(value.value, '--token-env');
+        if (!envName.ok) return envName;
+        tokenEnv = envName.value;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub watch: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.hubCommand = {
+    kind: 'watch',
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+    ...(tokenEnv !== undefined ? { tokenEnv } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub pair [--data-dir] [--tenant] [--ttl]` */
+function parseHubPair(rest: string[], args: CliArgs): ParseResult {
+  let dataDir: string | undefined;
+  let tenant: string | undefined;
+  let ttl: number | undefined;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--data-dir' || a === '--tenant' || a === '--ttl') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--data-dir') dataDir = value.value;
+      else if (a === '--tenant') tenant = value.value;
+      else {
+        const parsed = parseHubTtl(value.value, 60, 3600);
+        if (parsed === null) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (60-3600 seconds)` };
+        }
+        ttl = parsed;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub pair: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.hubCommand = {
+    kind: 'pair',
+    ...(dataDir !== undefined ? { dataDir } : {}),
+    ...(tenant !== undefined ? { tenant } : {}),
+    ...(ttl !== undefined ? { ttl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub node add <url> --code <CODE> [--alias] [--ca] [--hub-url]` */
+function parseHubNodeAdd(rest: string[], args: CliArgs): ParseResult {
+  let code: string | undefined;
+  let alias: string | undefined;
+  let ca: string | undefined;
+  let hubUrl: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--code' || a === '--alias' || a === '--ca' || a === '--hub-url') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--code') code = value.value;
+      else if (a === '--alias') alias = value.value;
+      else if (a === '--ca') ca = value.value;
+      else hubUrl = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) return { ok: false, error: `Unknown argument for hub node add: ${a}` };
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  const [url, extra] = positional;
+  if (url === undefined || url === '') return { ok: false, error: 'hub node add requires <url>' };
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub node add: ${extra}` };
+  }
+  if (code === undefined || code === '') {
+    return { ok: false, error: 'hub node add requires --code <CODE>' };
+  }
+  args.hubCommand = {
+    kind: 'node-add',
+    url,
+    code,
+    ...(alias !== undefined ? { alias } : {}),
+    ...(ca !== undefined ? { ca } : {}),
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub node list [--hub-url] [--json]` */
+function parseHubNodeList(rest: string[], args: CliArgs): ParseResult {
+  let hubUrl: string | undefined;
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--hub-url') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      hubUrl = value.value;
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub node list: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.hubCommand = { kind: 'node-list', json, ...(hubUrl !== undefined ? { hubUrl } : {}) };
+  return { ok: true, args };
+}
+
+/** `hub node remove <pairing_id> [--hub-url]` */
+function parseHubNodeRemove(rest: string[], args: CliArgs): ParseResult {
+  let hubUrl: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--hub-url') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      hubUrl = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub node remove: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  const [pairingId, extra] = positional;
+  if (pairingId === undefined || pairingId === '') {
+    return { ok: false, error: 'hub node remove requires <pairing_id>' };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub node remove: ${extra}` };
+  }
+  args.hubCommand = {
+    kind: 'node-remove',
+    pairingId,
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub token exchange <node-url> --team <id> [--ttl] [--admin-token-env] [--json]` */
+function parseHubTokenExchange(rest: string[], args: CliArgs): ParseResult {
+  let teamId: string | undefined;
+  let ttl: number | undefined;
+  let adminTokenEnv: string | undefined;
+  let json = false;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--team' || a === '--ttl' || a === '--admin-token-env') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--team') teamId = value.value;
+      else if (a === '--admin-token-env') {
+        const envName = parseHubEnvName(value.value, '--admin-token-env');
+        if (!envName.ok) return envName;
+        adminTokenEnv = envName.value;
+      } else {
+        const parsed = parseHubTtl(value.value, 1, 86_400);
+        if (parsed === null) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (1-86400 seconds)` };
+        }
+        ttl = parsed;
+      }
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub token exchange: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  const [nodeUrl, extra] = positional;
+  if (nodeUrl === undefined || nodeUrl === '') {
+    return { ok: false, error: 'hub token exchange requires <node-url>' };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub token exchange: ${extra}` };
+  }
+  if (teamId === undefined || teamId === '') {
+    return { ok: false, error: 'hub token exchange requires --team <id>' };
+  }
+  args.hubCommand = {
+    kind: 'token-exchange',
+    nodeUrl,
+    teamId,
+    json,
+    ...(ttl !== undefined ? { ttl } : {}),
+    ...(adminTokenEnv !== undefined ? { adminTokenEnv } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub token revoke <node-url> --token-id <id> [--admin-token-env]` */
+function parseHubTokenRevoke(rest: string[], args: CliArgs): ParseResult {
+  let tokenId: string | undefined;
+  let adminTokenEnv: string | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--token-id' || a === '--admin-token-env') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--token-id') tokenId = value.value;
+      else {
+        const envName = parseHubEnvName(value.value, '--admin-token-env');
+        if (!envName.ok) return envName;
+        adminTokenEnv = envName.value;
+      }
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub token revoke: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  const [nodeUrl, extra] = positional;
+  if (nodeUrl === undefined || nodeUrl === '') {
+    return { ok: false, error: 'hub token revoke requires <node-url>' };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub token revoke: ${extra}` };
+  }
+  if (tokenId === undefined || tokenId === '') {
+    return { ok: false, error: 'hub token revoke requires --token-id <id>' };
+  }
+  args.hubCommand = {
+    kind: 'token-revoke',
+    nodeUrl,
+    tokenId,
+    ...(adminTokenEnv !== undefined ? { adminTokenEnv } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub token list <node-url> [--admin-token-env] [--json]` */
+function parseHubTokenList(rest: string[], args: CliArgs): ParseResult {
+  let adminTokenEnv: string | undefined;
+  let json = false;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--admin-token-env') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      const envName = parseHubEnvName(value.value, '--admin-token-env');
+      if (!envName.ok) return envName;
+      adminTokenEnv = envName.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub token list: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  const [nodeUrl, extra] = positional;
+  if (nodeUrl === undefined || nodeUrl === '') {
+    return { ok: false, error: 'hub token list requires <node-url>' };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub token list: ${extra}` };
+  }
+  args.hubCommand = {
+    kind: 'token-list',
+    nodeUrl,
+    json,
+    ...(adminTokenEnv !== undefined ? { adminTokenEnv } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub data-token <pairing_id> --team <id> [--hub-url] [--token-env] [--ttl]` */
+function parseHubDataToken(rest: string[], args: CliArgs): ParseResult {
+  let teamId: string | undefined;
+  let hubUrl: string | undefined;
+  let tokenEnv: string | undefined;
+  let ttl: number | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--team' || a === '--hub-url' || a === '--token-env' || a === '--ttl') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--team') teamId = value.value;
+      else if (a === '--hub-url') hubUrl = value.value;
+      else if (a === '--token-env') {
+        const envName = parseHubEnvName(value.value, '--token-env');
+        if (!envName.ok) return envName;
+        tokenEnv = envName.value;
+      } else {
+        const parsed = parseHubTtl(value.value, 1, 86_400);
+        if (parsed === null) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (1-86400 seconds)` };
+        }
+        ttl = parsed;
+      }
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub data-token: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+  const [pairingId, extra] = positional;
+  if (pairingId === undefined || pairingId === '') {
+    return { ok: false, error: 'hub data-token requires <pairing_id>' };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub data-token: ${extra}` };
+  }
+  if (teamId === undefined || teamId === '') {
+    return { ok: false, error: 'hub data-token requires --team <id>' };
+  }
+  args.hubCommand = {
+    kind: 'data-token',
+    pairingId,
+    teamId,
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+    ...(tokenEnv !== undefined ? { tokenEnv } : {}),
+    ...(ttl !== undefined ? { ttl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub node <add|list|remove>` */
+function parseHubNodeArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return { ok: false, error: 'Missing hub node subcommand (add|list|remove)' };
+  }
+  const tail = rest.slice(1);
+  switch (sub) {
+    case 'add':
+      return parseHubNodeAdd(tail, args);
+    case 'list':
+      return parseHubNodeList(tail, args);
+    case 'remove':
+      return parseHubNodeRemove(tail, args);
+    default:
+      return { ok: false, error: `Unknown hub node subcommand: ${sub}` };
+  }
+}
+
+/** `hub token <exchange|revoke|list>` */
+function parseHubTokenArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return { ok: false, error: 'Missing hub token subcommand (exchange|revoke|list)' };
+  }
+  const tail = rest.slice(1);
+  switch (sub) {
+    case 'exchange':
+      return parseHubTokenExchange(tail, args);
+    case 'revoke':
+      return parseHubTokenRevoke(tail, args);
+    case 'list':
+      return parseHubTokenList(tail, args);
+    default:
+      return { ok: false, error: `Unknown hub token subcommand: ${sub}` };
+  }
+}
+
+/** `hub <subcommand>` 分发 */
+function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === '--help' || sub === '-h') {
+    args.help = true;
+    args.hubCommand = null;
+    return { ok: true, args };
+  }
+  if (sub === undefined) {
+    return {
+      ok: false,
+      error: 'Missing hub subcommand (start|directory|watch|pair|node|token|data-token)',
+    };
+  }
+  const tail = rest.slice(1);
+  switch (sub) {
+    case 'start':
+      return parseHubStart(tail, args);
+    case 'directory':
+      return parseHubDirectory(tail, args);
+    case 'watch':
+      return parseHubWatch(tail, args);
+    case 'pair':
+      return parseHubPair(tail, args);
+    case 'node':
+      return parseHubNodeArgs(tail, args);
+    case 'token':
+      return parseHubTokenArgs(tail, args);
+    case 'data-token':
+      return parseHubDataToken(tail, args);
+    default:
+      return { ok: false, error: `Unknown hub subcommand: ${sub}` };
+  }
 }
 
 /** `errors [--json] [--limit N]` */

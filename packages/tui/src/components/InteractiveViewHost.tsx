@@ -221,7 +221,7 @@ export function InteractiveViewHost({
 
       if (status === 'error') {
         const refresh = actions.find((action) => action.id === 'refresh');
-        // 刷新键由视图声明（runs/metrics 用 r，workflows/mcp 用 g）；r 作为兼容兜底。
+        // 刷新键由视图声明（runs/metrics 用 r，mcp 用 g）；r 作为兼容兜底。
         if (refresh && (inputChar === refresh.key || inputChar === 'r')) {
           setNotice(null);
           onAction(refresh, selectionKey);

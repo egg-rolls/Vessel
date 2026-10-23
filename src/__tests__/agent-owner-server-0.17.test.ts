@@ -10,7 +10,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { AgentService, MemberStatus } from '@vessel-agent/agent';
+import type { AgentService, AgentTeamService, MemberStatus } from '@vessel-agent/agent';
 import {
   AGENT_OWNER_MAX_BODY_BYTES,
   type AgentOwnerServer,
@@ -46,6 +46,11 @@ interface Calls {
   send: unknown[];
   close: unknown[];
   list: unknown[];
+  rotate: unknown[];
+  teamList: unknown[];
+  teamGet: unknown[];
+  teamPost: unknown[];
+  teamMembers: unknown[];
 }
 
 function fakeService(calls: Calls): AgentService {
@@ -74,15 +79,76 @@ function fakeService(calls: Calls): AgentService {
       calls.list.push(filter);
       return [status('m1')];
     },
+    rotate: async (input: unknown) => {
+      calls.rotate.push(input);
+      return {
+        status: 'rotated',
+        agent_id: 'm1',
+        from_session_id: 'old-session',
+        to_session_id: 'new-session',
+        epoch: 2,
+      };
+    },
     reply: async () => ({ queued: true, message_id: 'r1', to: 'main' }),
+    identify: async () => undefined,
+    reinstate: async (input: unknown) => {
+      calls.new.push(input);
+      return status('m1');
+    },
     requestPermission: async () => ({ decision: 'deny' }),
     flushSnapshot: async () => {},
     subscribe: () => () => {},
   } as unknown as AgentService;
 }
 
+function fakeTeam(calls: Calls, overrides: Record<string, unknown> = {}): AgentTeamService {
+  return {
+    tenantId: 'default',
+    list: async (options: unknown) => {
+      calls.teamList.push(options);
+      return [];
+    },
+    get: async (teamId: string, options: unknown) => {
+      calls.teamGet.push([teamId, options]);
+      return { team: { team_id: teamId }, members: [], messages: [] };
+    },
+    roster: async () => [],
+    post: async (input: unknown) => {
+      calls.teamPost.push(input);
+      return {
+        message_id: 'tm1',
+        team_id: 'alpha',
+        kind: 'post',
+        mentions: [],
+        delivered: [],
+        ts: 1,
+      };
+    },
+    members: async (input: unknown) => {
+      calls.teamMembers.push(input);
+      return { team_id: 'alpha', action: 'add', agent_id: 'm1', membership: 'present' };
+    },
+    send: async () => ({ status: 'error', logged: false }),
+    listForCaller: async () => [],
+    identify: async () => undefined,
+    subscribe: () => () => {},
+    dispose: () => {},
+    ...overrides,
+  } as unknown as AgentTeamService;
+}
+
 function emptyCalls(): Calls {
-  return { new: [], send: [], close: [], list: [] };
+  return {
+    new: [],
+    send: [],
+    close: [],
+    list: [],
+    rotate: [],
+    teamList: [],
+    teamGet: [],
+    teamPost: [],
+    teamMembers: [],
+  };
 }
 
 async function post(
@@ -109,6 +175,7 @@ describe('agent owner server', () => {
     const calls = emptyCalls();
     const server = await startAgentOwnerServer({
       service: fakeService(calls),
+      team: fakeTeam(calls),
       dataDir: tmpDir(),
       tenantId: 'default',
     });
@@ -127,6 +194,7 @@ describe('agent owner server', () => {
     const calls = emptyCalls();
     const server = await startAgentOwnerServer({
       service: fakeService(calls),
+      team: fakeTeam(calls),
       dataDir: tmpDir(),
       tenantId: 'default',
     });
@@ -134,7 +202,13 @@ describe('agent owner server', () => {
 
     await post(server, {
       method: 'agent.new',
-      params: { name: 'worker', system_prompt: 'be brief', owner: 'spoofed', parentId: 'x' },
+      params: {
+        name: 'worker',
+        system_prompt: 'be brief',
+        owner: 'spoofed',
+        parentId: 'x',
+        workspace: '/tmp/team-alpha',
+      },
     });
     await post(server, { method: 'agent.send', params: { to: 'm1', content: 'hi' } });
     await post(server, { method: 'agent.close', params: { members: ['m1'] } });
@@ -145,6 +219,7 @@ describe('agent owner server', () => {
       systemPrompt: 'be brief',
       owner: 'main',
       parentId: 'main',
+      workspace: '/tmp/team-alpha',
     });
     expect(calls.new[0]).not.toHaveProperty('system_prompt');
     expect(calls.send[0]).toMatchObject({ to: 'm1', content: 'hi', from: 'main' });
@@ -152,10 +227,40 @@ describe('agent owner server', () => {
     expect(calls.list[0]).toEqual({ viewer: 'main', visibility: 'private' });
   });
 
+  it('maps agent.rotate to owner-scoped service.rotate without from_session_id', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    await post(server, {
+      method: 'agent.rotate',
+      params: { to: 'worker', startup_prompt: 'go', handoff_path: 'h.md' },
+    });
+    await post(server, {
+      method: 'agent.rotate',
+      params: { to: 'worker', startup_prompt: 'go' },
+    });
+
+    expect(calls.rotate[0]).toEqual({
+      to: 'worker',
+      startup_prompt: 'go',
+      handoff_path: 'h.md',
+      from: 'main',
+    });
+    expect(calls.rotate[0]).not.toHaveProperty('from_session_id');
+    expect(calls.rotate[1]).toEqual({ to: 'worker', startup_prompt: 'go', from: 'main' });
+  });
+
   it('rejects a body above the payload limit before dispatch', async () => {
     const calls = emptyCalls();
     const server = await startAgentOwnerServer({
       service: fakeService(calls),
+      team: fakeTeam(calls),
       dataDir: tmpDir(),
       tenantId: 'default',
     });
@@ -182,6 +287,7 @@ describe('agent owner server', () => {
     } as unknown as AgentService;
     const server = await startAgentOwnerServer({
       service,
+      team: fakeTeam(emptyCalls()),
       dataDir: tmpDir(),
       tenantId: 'default',
     });
@@ -198,6 +304,7 @@ describe('agent owner server', () => {
   it('returns a stable code for unknown methods', async () => {
     const server = await startAgentOwnerServer({
       service: fakeService(emptyCalls()),
+      team: fakeTeam(emptyCalls()),
       dataDir: tmpDir(),
       tenantId: 'default',
     });
@@ -209,6 +316,93 @@ describe('agent owner server', () => {
       ok: false,
       error: { code: 'agent_owner_unknown_method' },
     });
+  });
+
+  it('maps team methods with the owner as viewer and from', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    await post(server, { method: 'team.list', params: {} });
+    await post(server, { method: 'team.get', params: { team_id: 'alpha', limit: 5 } });
+    await post(server, {
+      method: 'team.post',
+      params: { team_id: 'alpha', content: 'hello', mentions: ['m1'] },
+    });
+    await post(server, {
+      method: 'team.members',
+      params: { team_id: 'alpha', action: 'add', member: 'm1' },
+    });
+
+    expect(calls.teamList[0]).toEqual({ viewer: 'main' });
+    expect(calls.teamGet[0]).toEqual(['alpha', { viewer: 'main', limit: 5 }]);
+    expect(calls.teamPost[0]).toEqual({
+      team_id: 'alpha',
+      content: 'hello',
+      mentions: ['m1'],
+      from: 'main',
+    });
+    expect(calls.teamMembers[0]).toEqual({
+      team_id: 'alpha',
+      action: 'add',
+      member: 'm1',
+      from: 'main',
+    });
+  });
+
+  it('returns 404 for an unknown team', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls, {
+        get: async () => undefined,
+        members: async () => undefined,
+      }),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    const get = await post(server, { method: 'team.get', params: { team_id: 'missing' } });
+    expect(get.status).toBe(404);
+    expect(get.body).toMatchObject({ ok: false, error: { code: 'team_not_found' } });
+
+    const members = await post(server, {
+      method: 'team.members',
+      params: { team_id: 'missing', action: 'add', member: 'm1' },
+    });
+    expect(members.status).toBe(404);
+    expect(members.body).toMatchObject({ ok: false, error: { code: 'team_not_found' } });
+  });
+
+  it('rejects invalid team parameters with 400', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    const action = await post(server, {
+      method: 'team.members',
+      params: { team_id: 'alpha', action: 'promote', member: 'm1' },
+    });
+    expect(action.status).toBe(400);
+    expect(action.body).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+
+    const teamId = await post(server, { method: 'team.get', params: { team_id: 42 } });
+    expect(teamId.status).toBe(400);
+    expect(teamId.body).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+
+    expect(calls.teamMembers).toHaveLength(0);
+    expect(calls.teamGet).toHaveLength(0);
   });
 
   it('accepts only loopback Host headers (DNS rebinding)', () => {
@@ -232,6 +426,7 @@ describe('agent owner server', () => {
 
     const server = await startAgentOwnerServer({
       service: fakeService(emptyCalls()),
+      team: fakeTeam(emptyCalls()),
       dataDir,
       tenantId: 'default',
     });
@@ -250,6 +445,7 @@ describe('agent owner server', () => {
     const dataDir = tmpDir();
     const server = await startAgentOwnerServer({
       service: fakeService(emptyCalls()),
+      team: fakeTeam(emptyCalls()),
       dataDir,
       tenantId: 'default',
     });

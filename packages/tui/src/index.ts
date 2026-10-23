@@ -199,9 +199,7 @@ export {
 export {
   executeResume,
   executeTurn,
-  executeWorkflow,
   type TurnOutcome,
-  type WorkflowTurnOutcome,
 } from './repl/run-turn.js';
 export {
   INITIAL_RUNTIME_COUNTERS,
@@ -270,15 +268,6 @@ export type {
   TenantInfoLike,
   TenantQuotaLike,
   TenantSummaryLike,
-  WorkflowOutcomeLike,
-  WorkflowRunDetailLike,
-  WorkflowRunHandle,
-  WorkflowRunStatusLike,
-  WorkflowRunSummaryLike,
-  WorkflowStartResultLike,
-  WorkflowStepStatusLike,
-  WorkflowStepSummaryLike,
-  WorkflowsControl,
 } from './repl-context.js';
 export {
   buildBanner,
@@ -300,10 +289,7 @@ export {
   pollRunCompletion,
   type RunCompletionOutcome,
   type RunCompletionStatus,
-  type WorkflowCompletionOutcome,
-  type WorkflowCompletionStatus,
   waitForRunCompletion,
-  waitForWorkflowCompletion,
 } from './rpc-events.js';
 // Git 工具
 export { getCurrentGitBranch } from './utils/git.js';

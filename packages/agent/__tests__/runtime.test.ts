@@ -151,7 +151,47 @@ describe('InProcessMemberRuntime', () => {
     expect(secondHistory.some((content) => content.includes('alpha'))).toBe(false);
   });
 
-  it('member runtime hides agent, team_* and delegate_task even when explicitly allowed', async () => {
+  it('spawns the same member id on two Bodies and addresses each by session', async () => {
+    const runtime = makeRuntime();
+    const oldBody = member({ id: 'm1', session_id: 'body-old' });
+    const newBody = member({ id: 'm1', session_id: 'body-new' });
+    await runtime.spawn(oldBody);
+    await runtime.spawn(newBody);
+
+    expect((await runtime.runTurn(oldBody, message('alpha', 'body-old'))).content).toBe(
+      'echo:alpha',
+    );
+    expect((await runtime.runTurn(newBody, message('beta', 'body-new'))).content).toBe('echo:beta');
+
+    await runtime.dispose(oldBody);
+    await expect(runtime.runTurn(oldBody, message('late', 'body-old'))).rejects.toThrow(
+      /not spawned/,
+    );
+    expect((await runtime.runTurn(newBody, message('gamma', 'body-new'))).content).toBe(
+      'echo:gamma',
+    );
+  });
+
+  it('forwards only agent.limit.warning to onMemberEvent with the Body session', async () => {
+    const captured: AgentRuntimeOptions[] = [];
+    const calls: Array<{ memberId: string; sessionId: string; type: string }> = [];
+    const runtime = makeRuntime({
+      runtimeFactory: capturingRuntimeFactory(captured),
+      onMemberEvent: (memberId, sessionId, event) => {
+        calls.push({ memberId, sessionId, type: event.type });
+      },
+    });
+    await runtime.spawn(member({ id: 'm1', session_id: 'body-a' }));
+
+    const events = captured[0]?.events;
+    if (!events) throw new Error('spawn did not capture an event stream');
+    events.publish({ type: 'run.completed', run_id: 'r1', data: {}, ts: 1 });
+    events.publish({ type: 'agent.limit.warning', run_id: 'r1', data: {}, ts: 2 });
+
+    expect(calls).toEqual([{ memberId: 'm1', sessionId: 'body-a', type: 'agent.limit.warning' }]);
+  });
+
+  it('member runtime hides team_* and delegate_task but can expose agent', async () => {
     const captured: AgentRuntimeOptions[] = [];
     const names = ['bash', 'read', 'edit', 'agent', 'team_spawn', 'delegate_task', 'ask_user'];
     const runtime = makeRuntime({
@@ -162,7 +202,7 @@ describe('InProcessMemberRuntime', () => {
     await runtime.spawn(member());
 
     const toolNames = (captured[0]?.pluginHost?.listTools() ?? []).map((tool) => tool.name).sort();
-    expect(toolNames).toEqual(['ask_user', 'bash', 'edit', 'read']);
+    expect(toolNames).toEqual(['agent', 'ask_user', 'bash', 'edit', 'read']);
   });
 
   it('member run drops parent hooks or guardrails', async () => {
@@ -217,6 +257,109 @@ describe('InProcessMemberRuntime', () => {
       'edit',
       'read',
     ]);
+  });
+
+  it('exposes agent to members in allow / bridge mode and hides it in deny mode', async () => {
+    const tools = ['agent', 'bash', 'edit', 'read'].map((name) => makeTool(name));
+
+    const allowCaptured: AgentRuntimeOptions[] = [];
+    const allowRuntime = makeRuntime({
+      pluginHost: makeHost(tools),
+      runtimeFactory: capturingRuntimeFactory(allowCaptured),
+    });
+    await allowRuntime.spawn(member({ session_id: 'allow-body' }));
+    const allowNames = (allowCaptured[0]?.pluginHost?.listTools() ?? []).map((tool) => tool.name);
+    expect(allowNames).toContain('agent');
+
+    const bridgeCaptured: AgentRuntimeOptions[] = [];
+    const bridgeRuntime = makeRuntime({
+      pluginHost: makeHost(tools),
+      permissionMode: 'bridge',
+      parentEvents: new MemoryEventStream(),
+      runtimeFactory: capturingRuntimeFactory(bridgeCaptured),
+    });
+    await bridgeRuntime.spawn(member({ session_id: 'bridge-body' }));
+    const bridgeNames = (bridgeCaptured[0]?.pluginHost?.listTools() ?? []).map((tool) => tool.name);
+    expect(bridgeNames).toContain('agent');
+
+    const denyCaptured: AgentRuntimeOptions[] = [];
+    const denyRuntime = makeRuntime({
+      pluginHost: makeHost(tools),
+      permissionMode: 'deny',
+      runtimeFactory: capturingRuntimeFactory(denyCaptured),
+    });
+    await denyRuntime.spawn(member({ session_id: 'deny-body' }));
+    const denyNames = (denyCaptured[0]?.pluginHost?.listTools() ?? []).map((tool) => tool.name);
+    expect(denyNames).not.toContain('agent');
+    expect(denyNames).toEqual(['read']);
+  });
+
+  it('exposes the agent tool to members with rotate/post/send/list and keeps other schemas', async () => {
+    const readSchema = {
+      type: 'object',
+      properties: { path: { type: 'string' } },
+      required: ['path'],
+    };
+    const agentTool: ToolDefinition = {
+      name: 'agent',
+      description: 'owner lifecycle tool',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          action: { type: 'string', enum: ['new', 'send', 'close', 'list', 'rotate'] },
+          to: { type: 'string', description: 'send / rotate target' },
+          startup_prompt: { type: 'string' },
+          handoff_path: { type: 'string' },
+          name: { type: 'string' },
+        },
+        required: ['action'],
+      },
+      handler: async () => 'agent:ok',
+    };
+    const readTool: ToolDefinition = {
+      name: 'read',
+      description: 'read tool',
+      inputSchema: readSchema,
+      handler: async () => 'read:ok',
+    };
+
+    const captured: AgentRuntimeOptions[] = [];
+    const allowRuntime = makeRuntime({
+      pluginHost: makeHost([agentTool, readTool]),
+      runtimeFactory: capturingRuntimeFactory(captured),
+    });
+    await allowRuntime.spawn(member({ session_id: 'allow-agent-body' }));
+
+    const bridgeCaptured: AgentRuntimeOptions[] = [];
+    const bridgeRuntime = makeRuntime({
+      pluginHost: makeHost([agentTool, readTool]),
+      permissionMode: 'bridge',
+      parentEvents: new MemoryEventStream(),
+      runtimeFactory: capturingRuntimeFactory(bridgeCaptured),
+    });
+    await bridgeRuntime.spawn(member({ session_id: 'bridge-agent-body' }));
+
+    for (const stream of [captured, bridgeCaptured]) {
+      const tools = stream[0]?.pluginHost?.listTools() ?? [];
+      const selectedAgent = tools.find((tool) => tool.name === 'agent');
+      const schema = selectedAgent?.inputSchema as {
+        properties: Record<string, { enum?: string[] }>;
+        required: string[];
+      };
+      expect(schema.properties.action?.enum).toEqual(['rotate', 'post', 'send', 'list']);
+      expect(schema.required).toEqual(['action']);
+      expect(Object.keys(schema.properties).sort()).toEqual([
+        'action',
+        'content',
+        'handoff_path',
+        'messages',
+        'startup_prompt',
+        'state',
+        'to',
+        'visibility',
+      ]);
+      expect(tools.find((tool) => tool.name === 'read')?.inputSchema).toBe(readSchema);
+    }
   });
 
   it('an ask from a tool checkPermission is denied instead of waiting for a missing bridge', async () => {
@@ -416,7 +559,8 @@ describe('InProcessMemberRuntime permission bridge', () => {
       pluginHost: makeHost([makeTool('bash', 'ask')]),
       permissionMode: 'bridge',
       parentEvents,
-      onPermissionState: (memberId, state) => states.push(`${memberId}:${state}`),
+      onPermissionState: (memberId, sessionId, state) =>
+        states.push(`${memberId}:${sessionId}:${state}`),
     });
     const target = member({ parent_id: 'main' });
     await runtime.spawn(target);
@@ -450,7 +594,7 @@ describe('InProcessMemberRuntime permission bridge', () => {
     expect(data.tool).toBe('bash');
     expect(data.input).toEqual({});
     expect(data.source).toBe('runtime');
-    expect(states).toEqual(['m1:waiting', 'm1:running']);
+    expect(states).toEqual(['m1:m1:waiting', 'm1:m1:running']);
   });
 
   it('bridges ask_user questions to the parent and routes the answer back', async () => {

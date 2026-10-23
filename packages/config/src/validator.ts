@@ -3,6 +3,8 @@
  * @module @vessel-agent/config
  */
 
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';
 import type {
   ConfigValidationError,
@@ -10,16 +12,17 @@ import type {
   ConfigValidationWarning,
   EvalsConfig,
   FeishuConfig,
+  HubConfig,
   ObservabilityConfig,
   ServeConfig,
   ServeTokenEntry,
+  TeamConfigInput,
   TenantConfig,
   TenantSettings,
   TerminationConfig,
   TraceConfig,
   UsageLimitsConfig,
   VesselConfig,
-  WorkflowConfig,
 } from './types.js';
 
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
@@ -112,53 +115,6 @@ function validateTermination(
   }
 }
 
-/** 校验 workflow 块（0.4） */
-function validateWorkflow(workflow: WorkflowConfig, errors: ConfigValidationError[]): void {
-  const { enabled, dir, path, maxParallel, stepTimeoutMs } = workflow;
-
-  if (enabled !== undefined && typeof enabled !== 'boolean') {
-    errors.push({
-      path: 'workflow.enabled',
-      message: 'workflow.enabled must be a boolean',
-      value: enabled,
-    });
-  }
-  if (dir !== undefined && (typeof dir !== 'string' || dir.trim() === '')) {
-    errors.push({
-      path: 'workflow.dir',
-      message: 'workflow.dir must be a non-empty string',
-      value: dir,
-    });
-  }
-  if (path !== undefined && (typeof path !== 'string' || path.trim() === '')) {
-    errors.push({
-      path: 'workflow.path',
-      message: 'workflow.path must be a non-empty string',
-      value: path,
-    });
-  }
-  if (
-    maxParallel !== undefined &&
-    (!Number.isInteger(maxParallel) || maxParallel < 1 || maxParallel > 8)
-  ) {
-    errors.push({
-      path: 'workflow.maxParallel',
-      message: 'workflow.maxParallel must be an integer between 1 and 8',
-      value: maxParallel,
-    });
-  }
-  if (
-    stepTimeoutMs !== undefined &&
-    (!Number.isInteger(stepTimeoutMs) || stepTimeoutMs < 1 || stepTimeoutMs > 86400000)
-  ) {
-    errors.push({
-      path: 'workflow.stepTimeoutMs',
-      message: 'workflow.stepTimeoutMs must be an integer between 1 and 86400000',
-      value: stepTimeoutMs,
-    });
-  }
-}
-
 /** 校验 evals 块（0.4） */
 function validateEvals(evals: EvalsConfig, errors: ConfigValidationError[]): void {
   const { enabled, dir, outDir, allowNetwork } = evals;
@@ -187,6 +143,77 @@ function validateEvals(evals: EvalsConfig, errors: ConfigValidationError[]): voi
       value: allowNetwork,
     });
   }
+}
+
+/**
+ * teams 去重键（0.19 S3）：trim 后 `path.resolve`；仅 win32 忽略大小写。
+ * 不做 `~` 展开——validator 没有该 helper，展开留给装配层。
+ */
+function teamWorkspaceKey(workspace: string): string {
+  const resolved = path.resolve(workspace.trim());
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/** 校验 teams 块（0.19 S3；全局配置，tenant overlay 不允许） */
+function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
+  if (!Array.isArray(teams)) {
+    errors.push({ path: 'teams', message: 'teams must be an array' });
+    return;
+  }
+
+  const seen = new Set<string>();
+  teams.forEach((raw, index) => {
+    const prefix = `teams[${index}]`;
+    if (!isPlainObject(raw)) {
+      errors.push({ path: prefix, message: 'team entry must be an object' });
+      return;
+    }
+    const team = raw as Partial<TeamConfigInput>;
+
+    if (typeof team.workspace !== 'string' || team.workspace.trim() === '') {
+      errors.push({
+        path: `${prefix}.workspace`,
+        message: 'team workspace must be a non-empty string',
+        value: team.workspace,
+      });
+    } else {
+      const key = teamWorkspaceKey(team.workspace);
+      if (seen.has(key)) {
+        errors.push({
+          path: `${prefix}.workspace`,
+          message: `duplicate team workspace "${team.workspace.trim()}"`,
+          value: team.workspace.trim(),
+        });
+      } else {
+        seen.add(key);
+      }
+    }
+
+    if (team.name !== undefined && (typeof team.name !== 'string' || team.name.trim() === '')) {
+      errors.push({
+        path: `${prefix}.name`,
+        message: 'team name must be a non-empty string',
+        value: team.name,
+      });
+    }
+    if (
+      team.handoffPath !== undefined &&
+      (typeof team.handoffPath !== 'string' || team.handoffPath.trim() === '')
+    ) {
+      errors.push({
+        path: `${prefix}.handoffPath`,
+        message: 'team handoffPath must be a non-empty string',
+        value: team.handoffPath,
+      });
+    }
+    if (team.policy !== undefined && !isPlainObject(team.policy)) {
+      errors.push({
+        path: `${prefix}.policy`,
+        message: 'team policy must be an object',
+        value: team.policy,
+      });
+    }
+  });
 }
 
 /** 校验 feishu 块（0.4；0.4 已移除单 agent_id） */
@@ -800,6 +827,232 @@ export function validateServeSettings(
   return errors;
 }
 
+/** 展开 `~` 并解析为绝对路径（用于 hub data dir 冲突检查）。 */
+function comparablePath(value: string): string {
+  const expanded =
+    value === '~'
+      ? os.homedir()
+      : value.startsWith('~/') || value.startsWith('~\\')
+        ? path.join(os.homedir(), value.slice(2))
+        : value;
+  const resolved = path.resolve(expanded);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function isNonEmptyStringValue(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+/**
+ * 校验 hub 块（S5；schema 层，文件存在性由启动前检查）。
+ *
+ * hub 只支持 `direction: 'hub'`；node → hub 在 S5.1。非回环必须同时满足
+ * `allowRemote=true`、TLS cert/key 成对、非空 `tokenEnv`（fail-closed）。
+ */
+export function validateHubSettings(
+  hub: HubConfig,
+  errors: ConfigValidationError[] = [],
+  globalDataDir?: string,
+): ConfigValidationError[] {
+  const {
+    dataDir,
+    direction,
+    listen,
+    allowRemote,
+    tls,
+    allowedOrigins,
+    tokenEnv,
+    allowFileSecrets,
+    pairingTtlSeconds,
+  } = hub as unknown as Record<string, unknown>;
+
+  if (dataDir !== undefined) {
+    if (!isNonEmptyStringValue(dataDir)) {
+      errors.push({
+        path: 'hub.dataDir',
+        message: 'hub.dataDir must be a non-empty string',
+        value: dataDir,
+      });
+    } else if (dataDir.includes('\0')) {
+      errors.push({ path: 'hub.dataDir', message: 'hub.dataDir must not contain NUL' });
+    } else if (
+      isNonEmptyStringValue(globalDataDir) &&
+      comparablePath(dataDir) === comparablePath(globalDataDir)
+    ) {
+      errors.push({
+        path: 'hub.data_dir',
+        message: 'hub_data_dir_conflict: hub.dataDir must differ from dataDir',
+      });
+    }
+  }
+
+  if (direction !== undefined && direction !== 'hub' && direction !== 'node') {
+    errors.push({
+      path: 'hub.direction',
+      message: 'hub.direction must be "hub" or "node"',
+      value: direction,
+    });
+  }
+
+  let listenHostname: unknown;
+  if (listen !== undefined) {
+    if (!isPlainObject(listen)) {
+      errors.push({ path: 'hub.listen', message: 'hub.listen must be an object' });
+    } else {
+      listenHostname = listen.hostname;
+      if (listen.hostname !== undefined) {
+        const invalid =
+          typeof listen.hostname !== 'string' ||
+          listen.hostname.trim() === '' ||
+          /\s/.test(listen.hostname) ||
+          listen.hostname.includes('/') ||
+          listen.hostname.includes('://');
+        if (invalid) {
+          errors.push({
+            path: 'hub.listen.hostname',
+            message: 'hub.listen.hostname must be a host name or IP address (no scheme or path)',
+            value: listen.hostname,
+          });
+        }
+      }
+      if (
+        listen.port !== undefined &&
+        (typeof listen.port !== 'number' ||
+          !Number.isInteger(listen.port) ||
+          listen.port < 0 ||
+          listen.port > 65535)
+      ) {
+        errors.push({
+          path: 'hub.listen.port',
+          message: 'hub.listen.port must be an integer between 0 and 65535',
+          value: listen.port,
+        });
+      }
+    }
+  }
+
+  if (allowRemote !== undefined && typeof allowRemote !== 'boolean') {
+    errors.push({
+      path: 'hub.allowRemote',
+      message: 'hub.allowRemote must be a boolean',
+      value: allowRemote,
+    });
+  }
+
+  let tlsComplete = false;
+  if (tls !== undefined) {
+    if (!isPlainObject(tls)) {
+      errors.push({ path: 'hub.tls', message: 'hub.tls must be an object' });
+    } else {
+      const certValid = tls.certFile === undefined || isNonEmptyStringValue(tls.certFile);
+      const keyValid = tls.keyFile === undefined || isNonEmptyStringValue(tls.keyFile);
+      if (!certValid) {
+        errors.push({
+          path: 'hub.tls.certFile',
+          message: 'hub.tls.certFile must be a non-empty string',
+        });
+      }
+      if (!keyValid) {
+        errors.push({
+          path: 'hub.tls.keyFile',
+          message: 'hub.tls.keyFile must be a non-empty string',
+        });
+      }
+      const hasCert = tls.certFile !== undefined;
+      const hasKey = tls.keyFile !== undefined;
+      if (hasCert !== hasKey) {
+        errors.push({
+          path: 'hub.tls',
+          message: 'hub.tls requires both certFile and keyFile',
+        });
+      }
+      tlsComplete = isNonEmptyStringValue(tls.certFile) && isNonEmptyStringValue(tls.keyFile);
+    }
+  }
+
+  if (allowedOrigins !== undefined) {
+    if (!Array.isArray(allowedOrigins)) {
+      errors.push({
+        path: 'hub.allowedOrigins',
+        message: 'hub.allowedOrigins must be an array of origins',
+      });
+    } else {
+      allowedOrigins.forEach((origin, index) => {
+        const message =
+          typeof origin === 'string' ? allowedOriginError(origin) : 'origin must be a string';
+        if (message !== null) {
+          errors.push({
+            path: `hub.allowedOrigins[${index}]`,
+            message: `hub.allowedOrigins[${index}] ${message}`,
+            value: origin,
+          });
+        }
+      });
+    }
+  }
+
+  if (tokenEnv !== undefined && typeof tokenEnv !== 'string') {
+    errors.push({
+      path: 'hub.tokenEnv',
+      message: 'hub.tokenEnv must be a string',
+      value: tokenEnv,
+    });
+  } else {
+    validateEnvName('hub.tokenEnv', tokenEnv, errors);
+  }
+
+  if (allowFileSecrets !== undefined && typeof allowFileSecrets !== 'boolean') {
+    errors.push({
+      path: 'hub.allowFileSecrets',
+      message: 'hub.allowFileSecrets must be a boolean',
+      value: allowFileSecrets,
+    });
+  }
+
+  if (
+    pairingTtlSeconds !== undefined &&
+    (typeof pairingTtlSeconds !== 'number' ||
+      !Number.isInteger(pairingTtlSeconds) ||
+      pairingTtlSeconds < 60 ||
+      pairingTtlSeconds > 3600)
+  ) {
+    errors.push({
+      path: 'hub.pairingTtlSeconds',
+      message: 'hub.pairingTtlSeconds must be an integer between 60 and 3600',
+      value: pairingTtlSeconds,
+    });
+  }
+
+  if (isNonEmptyStringValue(listenHostname) && !isLoopbackHostname(listenHostname)) {
+    if (allowRemote !== true) {
+      errors.push({
+        path: 'hub.allowRemote',
+        message:
+          `Refusing to listen on non-loopback hostname "${listenHostname}": ` +
+          'set hub.allowRemote=true to expose the hub.',
+        value: allowRemote,
+      });
+    } else {
+      if (!tlsComplete) {
+        errors.push({
+          path: 'hub.tls',
+          message:
+            `Refusing to expose non-loopback hub "${listenHostname}" without TLS: ` +
+            'set hub.tls.certFile and hub.tls.keyFile.',
+        });
+      }
+      if (!isNonEmptyStringValue(tokenEnv)) {
+        errors.push({
+          path: 'hub.tokenEnv',
+          message: 'Remote hub requires a non-empty hub.tokenEnv resolved from the environment',
+        });
+      }
+    }
+  }
+
+  return errors;
+}
+
 /** tenant id 是否合法（除正则外显式拒绝路径穿越） */
 export function isValidTenantId(value: string): boolean {
   if (value === '.' || value === '..') return false;
@@ -828,7 +1081,6 @@ export const TENANT_OVERLAY_ALLOWED_KEYS: readonly string[] = [
   'session',
   'permission',
   'plugins',
-  'workflow',
   'evals',
   'feishu',
   'tools',
@@ -844,9 +1096,12 @@ export const TENANT_OVERLAY_FORBIDDEN_KEYS: readonly string[] = [
   'dataDir',
   'trace',
   'serve',
+  'hub',
   'connect',
   'tenant',
   'update',
+  // 0.19 S3：Team 声明是全局配置，tenant overlay 不开放。
+  'teams',
 ];
 
 /** 顶层密钥字段（YAML camelCase 路径）；只返回路径，不返回任何值。 */
@@ -1751,6 +2006,15 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     validateServeSettings(config.serve, errors);
   }
 
+  // 校验 hub（S5；data dir 必须独立）
+  if (config.hub !== undefined) {
+    if (!isPlainObject(config.hub)) {
+      errors.push({ path: 'hub', message: 'hub must be an object' });
+    } else {
+      validateHubSettings(config.hub as HubConfig, errors, config.dataDir);
+    }
+  }
+
   // 校验 connect（0.6；客户端 token/CA）
   if (config.connect !== undefined) {
     if (!isPlainObject(config.connect)) {
@@ -1787,14 +2051,16 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
     }
   }
 
-  // 校验 0.4 四块；块缺省时不做任何事（保持 0.3 行为）。
-  if (config.workflow) validateWorkflow(config.workflow, errors);
+  // 校验 0.4 块；块缺省时不做任何事（保持 0.3 行为）。
   if (config.evals) validateEvals(config.evals, errors);
   if (config.feishu) validateFeishu(config.feishu, errors);
   if (config.observability) validateObservability(config.observability, errors);
 
   // 校验 ui（0.8.5 language；0.11 clearOnStart）
   if (config.ui !== undefined) validateUi(config.ui as unknown as Record<string, unknown>, errors);
+
+  // 校验 teams（0.19 S3；全局，tenant overlay 不允许）
+  if (config.teams !== undefined) validateTeams(config.teams, errors);
 
   // guardrails / hooks 由装配层映射为同名插件的安装配置（0.6.1），
   // 不再产生「声明但未应用」警告。
@@ -1890,7 +2156,17 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'adminTokenEnv',
   ],
   connect: ['token', 'tokenEnv', 'caFile'],
-  workflow: ['enabled', 'dir', 'path', 'maxParallel', 'stepTimeoutMs'],
+  hub: [
+    'dataDir',
+    'direction',
+    'listen',
+    'allowRemote',
+    'tls',
+    'allowedOrigins',
+    'tokenEnv',
+    'allowFileSecrets',
+    'pairingTtlSeconds',
+  ],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
     'enabled',
@@ -1919,8 +2195,11 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   trace: ['enabled', 'level', 'retentionDays', 'maxRuns', 'maxBytes', 'includeStreamChunks'],
 };
 
-/** serve.tls 的已知键 */
+/** serve.tls / hub.tls 的已知键 */
 const KNOWN_TLS_KEYS = ['certFile', 'keyFile'] as const;
+
+/** hub.listen 的已知键 */
+const KNOWN_HUB_LISTEN_KEYS = ['hostname', 'port'] as const;
 
 export interface UnknownNestedKey {
   /** 完整路径（camelCase），如 `durable.foo` */
@@ -1949,6 +2228,25 @@ export function findUnknownNestedKeys(config: Record<string, unknown>): UnknownN
     for (const key of Object.keys(tls)) {
       if (!KNOWN_TLS_KEYS.includes(key as (typeof KNOWN_TLS_KEYS)[number])) {
         unknown.push({ path: `serve.tls.${key}`, key, block: 'serve.tls' });
+      }
+    }
+  }
+
+  if (isPlainObject(config.hub)) {
+    const hubTls = config.hub.tls;
+    if (isPlainObject(hubTls)) {
+      for (const key of Object.keys(hubTls)) {
+        if (!KNOWN_TLS_KEYS.includes(key as (typeof KNOWN_TLS_KEYS)[number])) {
+          unknown.push({ path: `hub.tls.${key}`, key, block: 'hub.tls' });
+        }
+      }
+    }
+    const hubListen = config.hub.listen;
+    if (isPlainObject(hubListen)) {
+      for (const key of Object.keys(hubListen)) {
+        if (!(KNOWN_HUB_LISTEN_KEYS as readonly string[]).includes(key)) {
+          unknown.push({ path: `hub.listen.${key}`, key, block: 'hub.listen' });
+        }
       }
     }
   }
@@ -1993,9 +2291,10 @@ export const KNOWN_CONFIG_KEYS = [
   'mcpServers',
   'durable',
   'serve',
-  'workflow',
+  'hub',
   'evals',
   'feishu',
   'observability',
   'ui',
+  'teams',
 ];

@@ -41,11 +41,6 @@ export const zhCN = {
   'help.cmd.gatewayReload': '热重载 config / plugins，不重启进程',
   'help.cmd.gatewayInstall': '注册登录自启（systemd / launchd / schtasks）',
   'help.cmd.gatewayUninstall': '移除系统服务注册',
-  'help.cmd.workflowList': '列出 workflow runs',
-  'help.cmd.workflowRun': '启动 workflow（workflow.dir 下解析）',
-  'help.cmd.workflowShow': '查看步骤状态',
-  'help.cmd.workflowResume': '恢复 interrupted/failed/running',
-  'help.cmd.workflowCancel': '取消同进程 run',
   'help.cmd.eval': '离线评测',
   'help.cmd.evalOut': '评测输出 JSON / 指定报告',
   'help.cmd.feishu': '附加飞书渠道（可与 gateway start / REPL 同用）',
@@ -78,6 +73,11 @@ export const zhCN = {
   'help.cmd.version': '显示版本',
   'help.cmd.tools': '列出已注册工具（不需要 API Key）',
   'help.cmd.completion': '打印 shell 补全脚本（bash / zsh / fish / powershell）',
+  'help.cmd.team': '团队消息与成员（owner）',
+  'help.cmd.teamList': '列出 Team',
+  'help.cmd.teamGet': '查看 Team 成员与最近消息',
+  'help.cmd.teamPost': '发一条团队消息（无 @ 时只记日志，不唤醒 Agent）',
+  'help.cmd.teamMembers': '添加 / 移除 Team 成员',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──
@@ -154,6 +154,10 @@ export const zhCN = {
   'gateway.startFailed': 'Gateway 启动失败：{detail}',
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.logPath': '日志：{path}',
+  'gateway.webDistMissing':
+    'Web 控制台静态资源缺失：{path}。开发用 `bun run dev:web`；或构建 `cd apps/web && npm run build`。',
+  'gateway.webDistStale':
+    'Web 控制台静态资源可能已过期：{index} 旧于 {source}。用 `bun run build:web:watch` 或重新构建。',
   'gateway.noToken':
     '未配置 gateway token（serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN），无法调用本地 RPC。',
   'gateway.reloadNoGateway': 'Gateway 未运行；先执行 `vessel gateway start`。',
@@ -207,6 +211,28 @@ export const zhCN = {
   'errors.level': '层级',
   'errors.empty': '没有最近的错误。',
   'errors.recent': '最近错误（{count}）',
+
+  // ── hub（S5）──
+  'help.section.hub': 'Hub 控制面（S5）',
+  'help.cmd.hubStart': '前台启动 hub；--allow-remote 需要 TLS 与 tokenEnv',
+  'help.cmd.hubDirectory': '读取 hub 目录（配对节点与状态）',
+  'help.cmd.hubWatch': '订阅 hub 目录与指针事件（Ctrl+C 退出）',
+  'help.cmd.hubPair': '生成节点侧一次性配对码',
+  'help.cmd.hubNodeAdd': '用一次性码向 hub 注册节点',
+  'help.cmd.hubNodeList': '列出 hub 已配对节点',
+  'help.cmd.hubNodeRemove': '从 hub 移除配对',
+  'help.cmd.hubTokenExchange': '直连节点换取 team 短期 control token',
+  'help.cmd.hubTokenRevoke': '吊销节点 token',
+  'help.cmd.hubTokenList': '列出节点 token 元数据',
+  'help.cmd.hubDataToken': '经 hub 为 team 换取短期 control token',
+  'hub.error.envMissing': '环境变量 {env} 未设置。',
+  'hub.error.invalidUrl': '无效的 URL。',
+  'hub.error.invalidResponse': '服务返回了无法识别的响应。',
+  'hub.error.requestFailed': '请求失败：{detail}',
+  'hub.error.timeout': '请求超时（{ms}ms）。',
+  'hub.empty.nodes': '没有已配对节点。',
+  'hub.empty.tokens': '没有 token。',
+  'hub.watch.closed': 'hub watch 连接已关闭。',
 
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',

@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { ActionMenu } from '../../components/ActionMenu';
-import { CopyButton } from '../../components/CopyButton';
 import { StatusChip } from '../../components/StatusChip';
-import { formatTimestamp } from '../../format';
+import { useToast } from '../../components/ToastProvider';
+import { Tooltip } from '../../components/Tooltip';
+import { formatTimestamp, formatTokenCount } from '../../format';
 import type { SessionDetail, SessionInfo } from '../../gateway/types';
 import { t } from '../../i18n';
 import {
@@ -11,7 +10,7 @@ import {
   agentBreadcrumb,
   agentTree,
 } from '../../state/agents';
-import { normalizeSessionTitle, sessionTitle } from '../../state/sessions';
+import { sessionTitle } from '../../state/sessions';
 
 function truncate(value: string, length: number): string {
   return value.length > length ? `${value.slice(0, length)}…` : value;
@@ -46,15 +45,16 @@ function AgentTreeRow({
     <li className="subagent-row">
       <div className="subagent-row-main" style={{ paddingLeft: `${node.depth * 12}px` }}>
         <StatusChip status={node.state} />
-        <button
-          type="button"
-          className={`subagent-link ${node.id === activeAgentId ? 'active' : ''}`.trim()}
-          aria-pressed={node.id === activeAgentId}
-          title={node.id}
-          onClick={() => onSelectAgent?.(node.id)}
-        >
-          {agentLabel(node)}
-        </button>
+        <Tooltip label={node.id}>
+          <button
+            type="button"
+            className={`subagent-link ${node.id === activeAgentId ? 'active' : ''}`.trim()}
+            aria-pressed={node.id === activeAgentId}
+            onClick={() => onSelectAgent?.(node.id)}
+          >
+            {agentLabel(node)}
+          </button>
+        </Tooltip>
         {node.currentTool && <span className="dim mono">{node.currentTool}</span>}
         {node.queuePosition !== undefined && (
           <span className="dim">
@@ -155,121 +155,79 @@ export function SessionHeader({
   session,
   sessionId,
   detail,
-  refreshing,
-  onRefresh,
-  onRename,
-  onDelete,
-  onViewRuns,
-  showInternal,
-  onToggleInternal,
-  writesDisabled,
   agents = [],
   activeAgentId,
   onSelectAgent,
+  contextUsage,
 }: {
   session: SessionInfo | null;
   sessionId: string;
   detail: SessionDetail | null;
-  refreshing: boolean;
-  onRefresh: () => void;
-  onRename: (title: string) => Promise<boolean>;
-  onDelete: () => void;
-  onViewRuns: () => void;
-  showInternal: boolean;
-  onToggleInternal: () => void;
-  /** 断线时禁用重命名/删除。 */
-  writesDisabled: boolean;
+  /** 上下文用量；由 ChatView 轮询 `agents.tree` 注入。 */
+  contextUsage?: { used: number; max?: number };
   /** 0.14：当前会话的子 agent（由 `subagent.*` 事件派生）。 */
   agents?: readonly AgentNode[];
   /** `?agent=` 深链选中的子 agent。 */
   activeAgentId?: string;
   onSelectAgent?: (id: string | undefined) => void;
 }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const committing = useRef(false);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const toast = useToast();
   const title = session ? sessionTitle(session) : detail?.title?.trim() || sessionId;
   const tree = agentTree(agents);
   const running = agents.filter((node) => node.state === 'running').length;
   const activeChain = activeAgentId ? agentBreadcrumb(agents, activeAgentId) : [];
+  const contextLabel = contextUsage
+    ? contextUsage.max !== undefined
+      ? t('chat.context.of', {
+          used: formatTokenCount(contextUsage.used),
+          max: formatTokenCount(contextUsage.max),
+        })
+      : t('chat.context.tokens', { used: formatTokenCount(contextUsage.used) })
+    : '';
 
-  useEffect(() => {
-    if (!editing) return;
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, [editing]);
-
-  const start = () => {
-    setDraft(title);
-    setEditing(true);
-    setError(null);
-  };
-
-  const commit = async () => {
-    if (committing.current) return;
-    const next = normalizeSessionTitle(draft);
-    if (!next) {
-      setError('标题不能为空，且不超过 512 个字符');
+  const copySessionId = () => {
+    if (!navigator.clipboard?.writeText) {
+      toast.error('当前环境不支持剪贴板');
       return;
     }
-    committing.current = true;
-    const ok = await onRename(next);
-    committing.current = false;
-    if (ok) setEditing(false);
-    else setError('重命名失败，请重试');
+    void navigator.clipboard
+      .writeText(sessionId)
+      .then(() => toast.success(t('chat.session.copiedId')))
+      .catch((error: unknown) =>
+        toast.error(error instanceof Error ? error.message : String(error)),
+      );
   };
 
   return (
     <div className="conversation-head">
       <div className="conversation-heading">
-        {editing ? (
-          <div className="session-rename header-rename">
-            <input
-              ref={inputRef}
-              className="input conversation-title-input"
-              value={draft}
-              aria-label="会话标题"
-              onFocus={(event) => event.currentTarget.select()}
-              onChange={(event) => {
-                setDraft(event.target.value);
-                setError(null);
-              }}
+        <div className="conversation-title-row">
+          <Tooltip label={t('chat.session.copyId')}>
+            {/* biome-ignore lint/a11y/useSemanticElements: title stays an h2; clicking it copies the session id */}
+            <h2
+              className="conversation-title"
+              // biome-ignore lint/a11y/noNoninteractiveElementToInteractiveRole: title stays an h2; clicking it copies the session id
+              role="button"
+              tabIndex={0}
+              aria-label={t('chat.session.copyIdTitle', { title })}
+              onClick={copySessionId}
               onKeyDown={(event) => {
-                if (event.key === 'Enter') {
+                if (event.key === 'Enter' || event.key === ' ') {
                   event.preventDefault();
-                  void commit();
-                } else if (event.key === 'Escape') {
-                  event.preventDefault();
-                  setEditing(false);
+                  copySessionId();
                 }
               }}
-              onBlur={() => void commit()}
-            />
-            {error && (
-              <span className="field-error" role="alert">
-                {error}
+            >
+              {session ? title : truncate(title, 42)}
+            </h2>
+          </Tooltip>
+          {contextUsage && (
+            <Tooltip label={contextLabel}>
+              <span className="conversation-context" role="img" aria-label={contextLabel}>
+                {formatTokenCount(contextUsage.used)}
               </span>
-            )}
-          </div>
-        ) : (
-          <h2 className="conversation-title">{session ? title : truncate(title, 42)}</h2>
-        )}
-        <div className="conversation-meta dim">
-          {session && <StatusChip status={session.status} />}
-          {session ? (
-            <span>
-              {session.message_count} 条消息
-              {session.updated_at ? ` · 更新于 ${formatTimestamp(session.updated_at)}` : ''}
-            </span>
-          ) : (
-            <span>会话历史</span>
+            </Tooltip>
           )}
-          <span className="mono session-id" title={sessionId}>
-            {truncate(sessionId, 20)}
-          </span>
-          <CopyButton text={sessionId} label="复制 ID" toast="已复制会话 ID" />
         </div>
         {activeAgentId && (
           <nav className="subagent-breadcrumb" aria-label={t('chat.subagents.title')}>
@@ -309,38 +267,6 @@ export function SessionHeader({
             </ul>
           </details>
         )}
-      </div>
-
-      <div className="conversation-actions">
-        <button type="button" className="btn btn-small" onClick={onViewRuns}>
-          查看运行
-        </button>
-        <button
-          type="button"
-          className={`btn btn-small ${showInternal ? 'active' : ''}`.trim()}
-          aria-pressed={showInternal}
-          title="显示 context.changed / session.saved / llm.* 等内部事件"
-          onClick={onToggleInternal}
-        >
-          内部事件
-        </button>
-        <button type="button" className="btn btn-small" onClick={onRefresh} disabled={refreshing}>
-          {refreshing ? '刷新中…' : '刷新历史'}
-        </button>
-        <ActionMenu
-          label="会话操作"
-          items={[
-            { id: 'rename', label: '重命名', disabled: writesDisabled, onSelect: start },
-            { id: 'runs', label: '查看运行', onSelect: onViewRuns },
-            {
-              id: 'delete',
-              label: '删除会话',
-              danger: true,
-              disabled: writesDisabled,
-              onSelect: onDelete,
-            },
-          ]}
-        />
       </div>
     </div>
   );

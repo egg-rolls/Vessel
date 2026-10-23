@@ -22,7 +22,7 @@ const MANIFEST: CapabilityManifest = {
     { name: 'read', description: 'Read a file' },
   ],
   plugins: [
-    { name: 'workflow', enabled: true },
+    { name: 'evals', enabled: true },
     { name: 'feishu', enabled: false },
   ],
 };
@@ -66,10 +66,10 @@ describe('filterCapabilities', () => {
       filterCapabilities(MANIFEST, { tab: 'tools', query: 'file' }).tools.map((tool) => tool.name),
     ).toEqual(['read']);
     expect(
-      filterCapabilities(MANIFEST, { tab: 'plugins', query: 'WORK' }).plugins.map(
+      filterCapabilities(MANIFEST, { tab: 'plugins', query: 'EVA' }).plugins.map(
         (plugin) => plugin.name,
       ),
-    ).toEqual(['workflow']);
+    ).toEqual(['evals']);
   });
 
   test('empty result is representable', () => {

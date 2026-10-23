@@ -58,8 +58,13 @@ import {
   resultFrame,
   eventSourceNodeId as sourceNodeId,
 } from './gateway/frames.js';
+import { createHubControlRoute, type HubControlConnectionState } from './gateway/hub-control.js';
+import { createHubPairingRoute } from './gateway/hub-pairing.js';
 import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
+import { createAuthMethods } from './gateway/methods/auth.js';
+import type { HubControlLike, HubTeamScopeLike } from './hub-control.js';
+import type { NodeTokenControlLike } from './node-token-control.js';
 
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
@@ -80,8 +85,8 @@ import {
 } from './gateway/methods/observability.js';
 import { createRunMethods } from './gateway/methods/runs.js';
 import { createSessionMethods } from './gateway/methods/sessions.js';
+import { createTeamMethods } from './gateway/methods/teams.js';
 import { createTenantMethods } from './gateway/methods/tenants.js';
-import { createWorkflowMethods, parseWorkflowInputs } from './gateway/methods/workflow.js';
 import {
   flushSseGap,
   pumpSseReplay,
@@ -110,6 +115,7 @@ import {
   createRpcDispatcher,
   defineMethods,
   hasPermission,
+  isTeamScopedPrincipal,
   type RpcDispatcher,
   RpcError,
   type RpcErrorBody,
@@ -135,6 +141,7 @@ import {
   toWirePeer,
   type WireAgentStatus,
 } from './team.js';
+import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
   DEFAULT_TENANT_ID,
@@ -149,18 +156,6 @@ import {
   type TenantPrincipal,
 } from './tenant.js';
 import type { TenantEventHub } from './tenant-event-hub.js';
-import {
-  dedupeWorkflowSummaries,
-  isSafeWorkflowName,
-  MAX_WORKFLOW_LIMIT,
-  parseWorkflowLimit,
-  parseWorkflowStatus,
-  sortWorkflowSummaries,
-  toWireWorkflowDetail,
-  toWireWorkflowSummary,
-  type WorkflowGatewayOptions,
-  type WorkflowRunStatus,
-} from './workflow.js';
 
 // 公开导出保持不变：这些辅助函数仍可从 `@vessel-agent/serve/gateway` 导入。
 export {
@@ -178,6 +173,18 @@ export interface GatewayOptions {
    * 序号 / 缓冲 / 广播 / registry 都从 hub 读取；`maxHistory` 在 hub 上配置。
    */
   hub: TenantEventHub;
+  /**
+   * S5：hub 控制面投影；缺省 = `/v1/hub/control` 返回 404。
+   * 投影只含白名单元数据，不承载 RunEvent / 正文 / session_id。
+   */
+  hubControl?: HubControlLike;
+  /** S5：节点 scoped token 控制面（auth.* / `/v1/hub/pair`）；缺省端点关闭。 */
+  nodeTokens?: NodeTokenControlLike;
+  /**
+   * S5：control token 的 session → team 归属映射。
+   * 缺失或无法判定时，team-scoped 的交互 / 事件访问 fail-closed。
+   */
+  hubTeamScope?: HubTeamScopeLike;
   /** 会话后端（可选）——/v1/sessions 数据源 */
   session?: SessionBackend;
   /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 AgentRuntime */
@@ -237,14 +244,6 @@ export interface GatewayOptions {
   durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
   /** MCP server 状态注入；缺省 = MCP 端点关闭 */
   mcp?: McpGatewayOptions;
-  /** workflow 控制面注入；缺省 = `/v1/workflows*` 返回 workflow_disabled */
-  workflows?: WorkflowGatewayOptions;
-  /**
-   * 0.5.4：per-tenant workflow 控制面。
-   * default tenant 先用 `workflows`，再 fallback 本工厂；
-   * 非 default tenant 只走本工厂，绝不回退全局实例。
-   */
-  workflowsFor?: (tenantId: string) => WorkflowGatewayOptions | undefined;
   /** metrics 快照注入；缺省 = `/v1/metrics` 返回 metrics_disabled */
   metrics?: MetricsProvider;
   /** 飞书渠道状态注入；缺省 = `/v1/channels/feishu` 返回 channel_disabled */
@@ -266,6 +265,11 @@ export interface GatewayOptions {
   config?: ConfigGatewayOptionsLike;
   /** tenant registry / quota（asm 注入） */
   tenants?: TenantControlLike;
+  /**
+   * 0.19 S3：本地 Team 控制面（app 注入 AgentTeamService）。
+   * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
+   */
+  teams?: TeamControlLike;
   /** plugins.list 数据源（全局） */
   plugins?: () => Array<{ name: string; enabled: boolean }>;
   /** 0.5 A-6.3：per-tenant plugins.list / capabilities.list；缺省回退 `plugins` */
@@ -349,6 +353,11 @@ export interface Gateway {
    */
   reconfigure(options: GatewayReconfigureOptions): void;
   /**
+   * S5：关闭持有该 token_id 的 WS（事件连接 + hub control）；返回关闭数。
+   * HTTP 每请求重新鉴权，吊销后自然失效；该方法是 live WS 的收口。
+   */
+  closeByTokenId(tokenId: string): number;
+  /**
    * 进程内 dispatcher（与 asm `RpcDispatcher` 结构一致）。
    * asm 用它构造 `LocalRpcClient`；principal 缺省为本地 default/admin。
    */
@@ -381,6 +390,11 @@ interface WsData {
   /** events.subscribe 过滤 */
   runId?: string;
   types?: string[];
+  /**
+   * S5：`/v1/hub/control` 连接状态。存在时该 WS **不是**事件连接，
+   * 不进入 `wsClients`，因此不会收到 RunEvent。
+   */
+  hubControl?: HubControlConnectionState;
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
@@ -565,24 +579,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.mcp !== undefined && typeof opts.mcp.listServers !== 'function') {
     throw new Error('mcp.listServers must be a function.');
   }
-  if (opts.workflows !== undefined) {
-    const required = [
-      'listRuns',
-      'getRun',
-      'start',
-      'resume',
-      'cancel',
-      'resolveDefinition',
-    ] as const;
-    for (const key of required) {
-      if (typeof opts.workflows[key] !== 'function') {
-        throw new Error(`workflows.${key} must be a function.`);
-      }
-    }
-  }
-  if (opts.workflowsFor !== undefined && typeof opts.workflowsFor !== 'function') {
-    throw new Error('workflowsFor must be a function.');
-  }
   if (opts.metrics !== undefined && typeof opts.metrics !== 'function') {
     throw new Error('metrics must be a function.');
   }
@@ -595,12 +591,25 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.evals !== undefined && typeof opts.evals.latest !== 'function') {
     throw new Error('evals.latest must be a function.');
   }
+  if (opts.hubControl !== undefined) {
+    if (
+      typeof opts.hubControl.snapshot !== 'function' ||
+      typeof opts.hubControl.subscribe !== 'function'
+    ) {
+      throw new Error('hubControl must provide snapshot() and subscribe().');
+    }
+  }
+  if (opts.nodeTokens !== undefined && typeof opts.nodeTokens.mintPairingTokens !== 'function') {
+    throw new Error('nodeTokens.mintPairingTokens must be a function.');
+  }
+  if (opts.hubTeamScope !== undefined && typeof opts.hubTeamScope.teamForSession !== 'function') {
+    throw new Error('hubTeamScope.teamForSession must be a function.');
+  }
 
   const features = [...BASE_FEATURES];
   if (opts.durable?.store && opts.durable.resume) features.push('durable-resume');
   if (opts.mcp) features.push('mcp-status');
   if (tlsMaterial) features.push('tls');
-  if (opts.workflows || opts.workflowsFor) features.push('workflow');
   if (opts.evals) features.push('evals');
   if (opts.feishu || opts.feishuFor) features.push('feishu');
   if (opts.metrics) features.push('metrics');
@@ -617,6 +626,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
   /** 0.9 事务代际：进程启动时生成一次，随 hello / peer 记录传播（重启即变化）。 */
   const incarnation = randomUUID().replace(/-/g, '').slice(0, 12);
+  /**
+   * S5：hub control / pairing 路由。hub control 连接独立于 `wsClients`，
+   * 由路由自己的心跳与订阅管理；未注入时端点返回 404。
+   */
+  const hubControlRoute = createHubControlRoute({
+    ...(opts.hubControl !== undefined ? { hubControl: opts.hubControl } : {}),
+    ...(opts.auth !== undefined ? { auth: opts.auth } : {}),
+    legacyToken: token,
+    nodeId,
+    incarnation,
+    defaultTenantId,
+    ...(opts.authTimeoutMs !== undefined ? { authTimeoutMs: opts.authTimeoutMs } : {}),
+  });
+  const hubPairingRoute = createHubPairingRoute({
+    ...(opts.nodeTokens !== undefined ? { nodeTokens: opts.nodeTokens } : {}),
+  });
   const startedAt = Date.now();
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
@@ -627,6 +652,30 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
+
+  /** S5：token 吊销时关闭 live WS；HTTP 请求不缓存 principal，无需处理。 */
+  function closeByTokenId(tokenId: string): number {
+    let closed = 0;
+    for (const ws of [...wsClients]) {
+      if (ws.data.principal?.token_id !== tokenId) continue;
+      try {
+        ws.close(4401, 'token revoked');
+      } catch {
+        // best-effort
+      }
+      wsClients.delete(ws);
+      closed += 1;
+    }
+    closed += hubControlRoute.closeByTokenId(tokenId);
+    return closed;
+  }
+
+  const unsubscribeTokenRevoke =
+    opts.nodeTokens !== undefined && typeof opts.nodeTokens.onRevoke === 'function'
+      ? opts.nodeTokens.onRevoke((tokenId) => {
+          closeByTokenId(tokenId);
+        })
+      : undefined;
 
   // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）。
   // 0.18：engine 只拿 per-tenant 流；hub 负责把 tenant 事件扇入到这里。
@@ -663,8 +712,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * Addendum A §2：首个调用成功，后续（含重复）一律 run_already_running。
    */
   const resumedRuns = new Set<string>();
-  /** workflow resume 在途占位（同一 run 只允许一个），LRU 上限 1000 */
-  const resumedWorkflows = new Set<string>();
 
   /** R3 team 状态（默认关闭） */
   let team: TeamGatewayOptions | undefined = opts.team;
@@ -801,7 +848,29 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (!eventVisible(event, ws.data.tenantId, ws.data.allTenants)) return false;
     if (ws.data.runId !== undefined && event.run_id !== ws.data.runId) return false;
     if (ws.data.types !== undefined && !ws.data.types.includes(event.type)) return false;
+    // S5：control token 只接收映射到本 team 的事件；无法判定 → 丢弃。
+    const principal = ws.data.principal;
+    if (principal !== undefined && isTeamScopedPrincipal(principal)) {
+      const sessionId = eventSessionId(event);
+      if (sessionId === undefined) return false;
+      if (opts.hubTeamScope?.teamForSession(sessionId) !== principal.team_id) return false;
+    }
     return true;
+  }
+
+  /**
+   * 事件所属 session：优先读 `event.session_id`（S5 契约），
+   * 缺省回落到 `event.data.session_id`。两者都没有 → undefined（fail-closed）。
+   */
+  function eventSessionId(event: RunEvent): string | undefined {
+    const direct = (event as { session_id?: unknown }).session_id;
+    if (typeof direct === 'string' && direct.length > 0) return direct;
+    const data = event.data;
+    if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+      const nested = (data as Record<string, unknown>).session_id;
+      if (typeof nested === 'string' && nested.length > 0) return nested;
+    }
+    return undefined;
   }
 
   function sendEventToWs(ws: Ws, item: SeqEvent): void {
@@ -1049,7 +1118,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const rpcMethods: RpcMethodDefinition[] = [
     // 顺序与拆分前一致：health → capabilities → config → sessions → runs →
     // events.list → events.subscribe → tools/plugins → metrics → mcp → trace →
-    // tenants → interactions → workflow → evals → feishu → gateway。
+    // tenants → interactions → evals → feishu → gateway。
     ...createConfigMethods(configMethodsDeps),
     ...createSessionMethods({ defaultTenantId, sessionFor, sessionData: opts.sessionData }),
     ...createRunMethods({
@@ -1119,11 +1188,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         pendingPermissions: engine.pendingPermissions,
         pendingAsks: engine.pendingAsks,
       },
-    }),
-    ...createWorkflowMethods({
-      requireWorkflows,
-      reserveWorkflowResume,
-      releaseWorkflowResume,
+      ...(opts.hubTeamScope !== undefined ? { teamScope: opts.hubTeamScope } : {}),
     }),
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
@@ -1136,6 +1201,13 @@ export function startGateway(opts: GatewayOptions): Gateway {
       runs,
       queue: () => queue,
       defaultTenantId,
+    }),
+    // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
+    ...createTeamMethods({ teams: opts.teams }),
+    // 0.19 S5：auth.exchange / auth.revoke / auth.tokens（additive，排在表尾）。
+    ...createAuthMethods({
+      ...(opts.nodeTokens !== undefined ? { nodeTokens: opts.nodeTokens } : {}),
+      ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
     }),
   ];
 
@@ -1409,14 +1481,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return opts.pluginHostFor?.(tenantId);
   }
 
-  /** per-tenant workflow 控制面；非 default 绝不回退全局实例 */
-  function workflowsForTenant(tenantId: string): WorkflowGatewayOptions | undefined {
-    if (tenantId === defaultTenantId) {
-      return opts.workflows ?? opts.workflowsFor?.(tenantId);
-    }
-    return opts.workflowsFor?.(tenantId);
-  }
-
   /** per-tenant 飞书渠道；非 default 绝不回退全局实例 */
   function feishuForTenant(tenantId: string): FeishuGatewayOptions | undefined {
     if (tenantId === defaultTenantId) {
@@ -1459,16 +1523,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
     const requested = queryTenant ?? headerTenant;
     return restTenantScope(principal, requested === null ? {} : { tenant_id: requested }, extra);
-  }
-
-  /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
-  function requireWorkflows(tenantId: string): WorkflowGatewayOptions {
-    const resolved = workflowsForTenant(tenantId);
-    if (resolved !== undefined) return resolved;
-    if (tenantId !== defaultTenantId) {
-      throw new RpcError('forbidden', `Workflow control is not configured for tenant: ${tenantId}`);
-    }
-    throw new RpcError('not_found', 'Workflow control is not enabled');
   }
 
   /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
@@ -2259,62 +2313,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  // ── 0.4 workflow / metrics / feishu / evals 端点 ──
+  // ── 0.4 metrics / feishu / evals 端点 ──
 
   const methodNotAllowed = (extra: Record<string, string>): Response =>
     errorJson('method_not_allowed', 'Method not allowed', 405, extra);
-
-  /** workflow 控制面错误 → HTTP；未知 code 一律 500，不泄露内部堆栈 */
-  function workflowErrorResponse(error: unknown, extra: Record<string, string>): Response {
-    const code = (error as { code?: unknown }).code;
-    const message = error instanceof Error ? error.message : String(error);
-    switch (code) {
-      case 'workflow_not_found':
-        return errorJson('workflow_not_found', message, 404, extra);
-      case 'workflow_invalid':
-        return errorJson('workflow_invalid', message, 400, extra);
-      case 'workflow_already_running':
-        return errorJson('workflow_already_running', message, 409, extra);
-      case 'workflow_not_resumable':
-        return errorJson('workflow_not_resumable', message, 409, extra);
-      case 'workflow_cancelled':
-        // 不新增协议码（DECISION-009 §10.3.7）
-        return errorJson('workflow_invalid', message, 409, extra);
-      case 'workflow_disabled':
-        return errorJson('workflow_disabled', message, 503, extra);
-      case 'forbidden':
-        return errorJson('forbidden', message, 403, extra);
-      default:
-        return errorJson('internal', 'Workflow operation failed', 500, extra);
-    }
-  }
-
-  /** 原子占位：同一 workflow run 同时只允许一个 resume */
-  function reserveWorkflowResume(runId: string): boolean {
-    if (resumedWorkflows.has(runId)) return false;
-    resumedWorkflows.add(runId);
-    while (resumedWorkflows.size > 1000) {
-      const first = resumedWorkflows.keys().next();
-      if (first.done) break;
-      if (first.value === runId) break;
-      resumedWorkflows.delete(first.value);
-    }
-    return true;
-  }
-
-  function releaseWorkflowResume(runId: string): void {
-    resumedWorkflows.delete(runId);
-  }
-
-  function decodeWorkflowId(raw: string): string | null {
-    let id: string;
-    try {
-      id = decodeURIComponent(raw);
-    } catch {
-      return null;
-    }
-    return id.length > 0 && id.length <= 256 ? id : null;
-  }
 
   /** REST 适配：解析 query/body 的 tenant_id；错误转 HTTP */
   function restTenantScope(
@@ -2340,240 +2342,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function tenantQuery(url: URL): Record<string, unknown> {
     const raw = url.searchParams.get('tenant_id');
     return raw === null ? {} : { tenant_id: raw };
-  }
-
-  /** 非 default tenant 未配置 → 403；default 保持 0.4 workflow_disabled */
-  function workflowUnavailable(tenantId: string, extra: Record<string, string>): Response {
-    if (tenantId !== defaultTenantId) {
-      return errorJson(
-        'forbidden',
-        `Workflow control is not configured for tenant: ${tenantId}`,
-        403,
-        extra,
-      );
-    }
-    return errorJson('workflow_disabled', 'Workflow control is not enabled', 503, extra);
-  }
-
-  /** `/v1/workflows*`：列表 / 详情 / 启动 / 恢复 / 取消 */
-  async function handleWorkflows(
-    req: Request,
-    url: URL,
-    path: string,
-    extra: Record<string, string>,
-    principal: TenantPrincipal,
-  ): Promise<Response | null> {
-    if (path !== '/v1/workflows' && !path.startsWith('/v1/workflows/')) return null;
-
-    if (path === '/v1/workflows') {
-      if (req.method !== 'GET') return methodNotAllowed(extra);
-      const scope = restTenantScope(principal, tenantQuery(url), extra);
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      const rawStatus = url.searchParams.get('status');
-      const status: WorkflowRunStatus | null = parseWorkflowStatus(rawStatus);
-      if (rawStatus !== null && status === null) {
-        return errorJson('invalid_request', 'Invalid workflow status filter', 400, extra);
-      }
-      const limit = parseWorkflowLimit(url.searchParams.get('limit'));
-      if (limit === null) {
-        return errorJson(
-          'invalid_request',
-          `limit must be an integer between 1 and ${MAX_WORKFLOW_LIMIT}`,
-          400,
-          extra,
-        );
-      }
-      try {
-        const runs = await workflows.listRuns({
-          ...(status !== null ? { status } : {}),
-          limit,
-        });
-        const summaries = runs
-          .map((run) => toWireWorkflowSummary(run))
-          .filter((run): run is NonNullable<typeof run> => run !== null);
-        return json(
-          {
-            workflows: sortWorkflowSummaries(dedupeWorkflowSummaries(summaries)).slice(0, limit),
-          },
-          200,
-          extra,
-        );
-      } catch (error) {
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    if (path === '/v1/workflows/run') {
-      if (req.method !== 'POST') return methodNotAllowed(extra);
-      const body = await readJsonBody(req, maxBodyBytes, extra);
-      if (body instanceof Response) return body;
-      const scope = restTenantScope(
-        principal,
-        body.tenant_id === undefined ? {} : { tenant_id: body.tenant_id },
-        extra,
-      );
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      const rawName = body.name;
-      if (typeof rawName !== 'string' || rawName.trim().length === 0) {
-        return errorJson('invalid_request', 'name is required', 400, extra);
-      }
-      const name = rawName.trim();
-      if (!isSafeWorkflowName(name)) {
-        return errorJson('workflow_invalid', 'Invalid workflow name', 400, extra);
-      }
-      const inputs = parseWorkflowInputs(body.inputs);
-      if (inputs === null) {
-        return errorJson(
-          'invalid_request',
-          'inputs must be a flat string map (max 64 entries)',
-          400,
-          extra,
-        );
-      }
-      let definitionPath: string | undefined;
-      try {
-        definitionPath = workflows.resolveDefinition(name);
-      } catch {
-        return errorJson('internal', 'Failed to resolve workflow definition', 500, extra);
-      }
-      if (definitionPath === undefined) {
-        return errorJson('workflow_not_found', `Workflow not found: ${name}`, 404, extra);
-      }
-      try {
-        const started = await workflows.start(definitionPath, {
-          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-        });
-        return json({ workflow_run_id: started.workflowRunId, status: 'queued' }, 202, extra);
-      } catch (error) {
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    const match = path.match(/^\/v1\/workflows\/([^/]+)(?:\/(resume|cancel))?$/);
-    if (!match) return errorJson('not_found', `Not found: ${path}`, 404, extra);
-    const workflowRunId = decodeWorkflowId(match[1] ?? '');
-    if (workflowRunId === null) {
-      return errorJson('invalid_request', 'Invalid workflow run id', 400, extra);
-    }
-    const action = match[2];
-
-    if (action === 'resume') {
-      if (req.method !== 'POST') return methodNotAllowed(extra);
-      const scope = restTenantScope(principal, tenantQuery(url), extra);
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      // 占位必须在任何 await 之前，保证并发 resume 只有一个通过。
-      if (!reserveWorkflowResume(workflowRunId)) {
-        return errorJson(
-          'workflow_already_running',
-          `Workflow run is already resuming: ${workflowRunId}`,
-          409,
-          extra,
-        );
-      }
-      try {
-        const run = await workflows.getRun(workflowRunId);
-        if (!run) {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson(
-            'workflow_not_found',
-            `Workflow run not found: ${workflowRunId}`,
-            404,
-            extra,
-          );
-        }
-        const summary = toWireWorkflowSummary(run);
-        if (!summary) {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson('internal', 'Invalid workflow run payload', 500, extra);
-        }
-        if (summary.status === 'running') {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson(
-            'workflow_already_running',
-            `Workflow run is already running: ${workflowRunId}`,
-            409,
-            extra,
-          );
-        }
-        if (summary.status === 'completed' || summary.status === 'cancelled') {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson(
-            'workflow_not_resumable',
-            `Workflow run is not resumable: ${workflowRunId}`,
-            409,
-            extra,
-          );
-        }
-        const resumed = await workflows.resume(workflowRunId);
-        // done 恰好 resolve 一次；不阻塞 HTTP 响应。
-        void resumed.done
-          .finally(() => releaseWorkflowResume(workflowRunId))
-          .catch(() => undefined);
-        return json({ workflow_run_id: resumed.workflowRunId, status: 'queued' }, 202, extra);
-      } catch (error) {
-        releaseWorkflowResume(workflowRunId);
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    if (action === 'cancel') {
-      if (req.method !== 'POST') return methodNotAllowed(extra);
-      const scope = restTenantScope(principal, tenantQuery(url), extra);
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      try {
-        const run = await workflows.getRun(workflowRunId);
-        if (!run) {
-          return errorJson(
-            'workflow_not_found',
-            `Workflow run not found: ${workflowRunId}`,
-            404,
-            extra,
-          );
-        }
-        const summary = toWireWorkflowSummary(run);
-        if (!summary) return errorJson('internal', 'Invalid workflow run payload', 500, extra);
-        if (summary.status === 'cancelled') {
-          return json({ workflow_run_id: workflowRunId, status: 'cancelled' }, 202, extra);
-        }
-        if (summary.status === 'completed' || summary.status === 'failed') {
-          return errorJson('workflow_invalid', 'Run is not cancellable', 409, extra);
-        }
-        await workflows.cancel(workflowRunId);
-        return json({ workflow_run_id: workflowRunId, status: 'cancelled' }, 202, extra);
-      } catch (error) {
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    if (req.method !== 'GET') return methodNotAllowed(extra);
-    const scope = restTenantScope(principal, tenantQuery(url), extra);
-    if (scope instanceof Response) return scope;
-    const workflows = workflowsForTenant(scope.tenantId);
-    if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-    try {
-      const run = await workflows.getRun(workflowRunId);
-      if (!run) {
-        return errorJson(
-          'workflow_not_found',
-          `Workflow run not found: ${workflowRunId}`,
-          404,
-          extra,
-        );
-      }
-      const detail = toWireWorkflowDetail(run);
-      if (!detail) return errorJson('internal', 'Invalid workflow run payload', 500, extra);
-      return json({ workflow: detail }, 200, extra);
-    } catch (error) {
-      return workflowErrorResponse(error, extra);
-    }
   }
 
   /** `/v1/metrics`：只读快照 */
@@ -2669,15 +2437,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return 403;
       case 'not_found':
       case 'run_not_found':
-      case 'workflow_not_found':
       case 'eval_not_found':
         return 404;
       case 'method_not_allowed':
         return 405;
       case 'conflict':
       case 'run_already_running':
-      case 'workflow_already_running':
-      case 'workflow_not_resumable':
       case 'tenant_locked':
         return 409;
       case 'busy':
@@ -2916,7 +2681,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
         );
       }
 
+      // S5：hub 配对。一次性 code 即凭据，在 Bearer 校验之前处理。
+      const hubPairingResponse = await hubPairingRoute.handle(
+        req,
+        url,
+        extra,
+        srv.requestIP(req)?.address,
+      );
+      if (hubPairingResponse !== undefined) return hubPairingResponse;
+
       const isWebSocket = (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket';
+
+      // S5：hub control WS（独立订阅；不进入 wsClients）。
+      const hubControlResult = hubControlRoute.handle(req, url, srv, extra);
+      if (hubControlResult === 'upgraded') return;
+      if (hubControlResult !== undefined) return hubControlResult;
 
       // WS：/v1/events（/ws 为 0.1.0 兼容别名）。
       // ADR-053：token 不进 URL/query，只接受首帧 `{kind:'auth',token,since}`。
@@ -3003,9 +2782,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const mcpResponse = await handleMcp(req, path, extra, principal);
       if (mcpResponse) return mcpResponse;
 
-      // 0.4：workflow / metrics / feishu / evals（未注入 → 稳定错误码）
-      const workflowsResponse = await handleWorkflows(req, url, path, extra, principal);
-      if (workflowsResponse) return workflowsResponse;
+      // 0.4：metrics / feishu / evals（未注入 → 稳定错误码）
       const metricsResponse = await handleMetrics(req, path, extra, principal);
       if (metricsResponse) return metricsResponse;
       const feishuResponse = await handleFeishu(req, url, path, extra, principal);
@@ -3247,6 +3024,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     websocket: {
       data: {} as WsData,
       open(ws) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.open(ws);
+          return;
+        }
         ws.data.alive = true;
         if (ws.data.authed) {
           replayTo(ws);
@@ -3259,13 +3040,25 @@ export function startGateway(opts: GatewayOptions): Gateway {
         timer.unref?.();
       },
       message(ws, message) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.message(ws, message);
+          return;
+        }
         void handleWsMessage(ws, message);
       },
       close(ws) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.close(ws);
+          return;
+        }
         if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
         wsClients.delete(ws);
       },
       pong(ws) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.pong(ws);
+          return;
+        }
         ws.data.alive = true;
       },
     },
@@ -3420,7 +3213,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       reportStopError('unsubscribe engine events', error);
     }
 
+    unsubscribeTokenRevoke?.();
     closeWsClients();
+    hubControlRoute.stop();
     closeSseClients(sseClients);
     closeSseClients(teamClients);
     knownPeers.clear();
@@ -3445,6 +3240,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     tls: tlsMaterial !== undefined,
     attachTeam,
     reconfigure,
+    closeByTokenId,
     rpc: dispatcher.dispatch,
     manifest,
     stop() {

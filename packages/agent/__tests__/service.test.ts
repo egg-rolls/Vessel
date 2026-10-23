@@ -320,6 +320,18 @@ describe('AgentService owner inbox', () => {
     ]);
   });
 
+  it('hasMember is true for private member sessions and false for the external owner session', async () => {
+    const { service } = makeService();
+    const member = await service.new({ visibility: 'private' });
+
+    expect(await service.hasMember(member.session_id)).toBe(true);
+
+    await service.attachOwner({ id: 'main', sessionId: 'session-parent' });
+    expect(await service.hasMember('session-parent')).toBe(false);
+    expect(await service.hasMember('main')).toBe(false);
+    expect(await service.hasMember('missing')).toBe(false);
+  });
+
   it('notePermissionState moves running -> waiting_permission -> running and ignores late states', async () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();
@@ -327,15 +339,15 @@ describe('AgentService owner inbox', () => {
     const member = await service.new({ visibility: 'team' });
     await service.send({ to: member.id, content: 'work' });
 
-    service.notePermissionState(member.id, 'waiting');
+    service.notePermissionState(member.id, member.session_id, 'waiting');
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('waiting_permission');
-    service.notePermissionState(member.id, 'running');
+    service.notePermissionState(member.id, member.session_id, 'running');
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('running');
 
     gate.resolve({});
     await settle();
     // 终态之后的迟到回调不得把成员拉回 waiting
-    service.notePermissionState(member.id, 'waiting');
+    service.notePermissionState(member.id, member.session_id, 'waiting');
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('completed');
   });
 });

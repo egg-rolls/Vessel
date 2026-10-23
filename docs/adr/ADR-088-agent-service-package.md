@@ -59,3 +59,15 @@ tags: [agent, service, package, lifecycle, queue, snapshot, owner, permission, c
   - `/v1/team/*` 协议保留不等于 team 控制面可用。
 
 - **关联**：[ADR-037](ADR-037-modular-agent-runtime.md)（Host / runtime 边界）、[ADR-081](ADR-081-host-parity-and-serializable-snapshot.md)（Host 对等与快照）、[ADR-086](ADR-086-transparency-and-multi-instance-safety.md)（Self Card、`agents.tree`）、[ADR-087](ADR-087-unified-agent-tool-phase-a.md)（0.16 统一工具 Phase A）。
+
+## Addendum（0.19，ADR-091）
+
+> 0.19 S1 修订了本文的状态、快照、投递与持久化字段；其余决策（分层、唯一实现、可见性、owner 队列、权限 bridge、owner 端点）仍有效。完整实现见 [ADR-091](ADR-091-agent-body-and-presence.md)。
+
+- **投递入口**：`AgentService` 新增 `dispatch({to, content, from?})`。`to` 按 id → session_id → 唯一 name 解析；live / rotating 入队，gone 先 single-flight resume 再入队，left / resume 失败 / 不可见返回 `rejected`（`agent_left` / `resume_failed` / `not_visible`）。strict `send` 保留原语义与错误码（`member_closed` / `member_stale`），不 resume；S1 的 `agent` 工具 `send` 仍走 strict send。
+- **三层状态**：`membership`（`present|left`，持久化）/ `presence`（`live|gone`，进程内）/ engine 状态。`stale` 不再写入，只作旧数据只读兼容（转移仅 `stale → closed`）；`MemberStatus` additive 增加 `presence?` / `membership?` / `epoch?`。重启后非 `left` 成员统一 `state: 'idle'` + `presence: 'gone'`，不再按 terminal 推断；`agent.stale` 仅作兼容事件（payload `{state: 'idle', presence: 'gone'}`），成功 resume 发 `agent.resumed`。
+- **快照**：写 `version: 2`，读取兼容 v1；首次写 v2 前把 v1 备份为 `<tenant>.json.v1.bak`，备份失败则放弃写。`members` 改为 `PersistedAgentRecord[]`，持久化 `membership` / `model` / `system_prompt` / `current_body` / `forked_from`；`presence` / `rotation` 仍不落盘，消息队列仍只在内存。
+- **注册表**：除身份与状态外，还保存 `model` / `systemPrompt` / `currentBody` / `forkedFrom`；仍不持有 runtime 对象。`new` 的 `name` 只对 `membership === 'present'` 强制 tenant 内唯一，`left` 名字可复用。`attachOwner` 是唯一 `left → present` 例外，必须完整恢复 `live + idle` 并补齐 `current_body`。
+- **Body 存储**：成员 engine 注入 tenant `SessionBackend` 与 `eventLog`，同一 `session_id` 可跨进程续接历史。S1 不使用 `AgentSessionScope`，成员会话会出现在 `sessions.list`。
+- **入口**：owner 端点新增 `agent.dispatch`，CLI 新增 `vessel agent dispatch`；canonical RPC 方法表不变（仍 45）。
+- **未变更**：`packages/agent` 仍是唯一成员能力实现；`packages/core` 仍不知道 member / owner / visibility；owner 外部队列、权限 bridge、`private` 可见性规则与 `/v1/team/*` 无生产装配的结论不变。

@@ -4,37 +4,9 @@ import type { EvalReport } from '../src/evals';
 import type { FeishuStatus } from '../src/feishu';
 import type { Gateway } from '../src/gateway';
 import type { MetricsSnapshot } from '../src/metrics';
-import type { WorkflowGatewayOptions } from '../src/workflow';
 import { createGateway, startTestGateway as startGateway } from './helpers';
 
 const BASE_FEATURES = ['events.replay', 'permissions', 'tools', 'static', 'runs.async'];
-
-function workflows(): WorkflowGatewayOptions {
-  return {
-    async listRuns() {
-      return [];
-    },
-    async getRun() {
-      return null;
-    },
-    async start() {
-      return {
-        workflowRunId: 'wf_1',
-        done: Promise.resolve({ workflow_run_id: 'wf_1', status: 'completed' as const }),
-      };
-    },
-    async resume() {
-      return {
-        workflowRunId: 'wf_1',
-        done: Promise.resolve({ workflow_run_id: 'wf_1', status: 'completed' as const }),
-      };
-    },
-    async cancel() {},
-    resolveDefinition() {
-      return undefined;
-    },
-  };
-}
 
 const metrics = (): MetricsSnapshot => ({
   runs: { started: 0, completed: 0, failed: 0, cancelled: 0 },
@@ -70,22 +42,15 @@ describe('gateway feature advertisement', () => {
     expect(gw.protocol.features).toEqual(BASE_FEATURES);
   });
 
-  it('adds workflow, evals, feishu and metrics in a stable order', () => {
+  it('adds evals, feishu and metrics in a stable order', () => {
     const gw = createGateway({
       events: new MemoryEventStream(),
-      workflows: workflows(),
       evals,
       feishu,
       metrics,
     });
     gateways.push(gw);
-    expect(gw.protocol.features).toEqual([
-      ...BASE_FEATURES,
-      'workflow',
-      'evals',
-      'feishu',
-      'metrics',
-    ]);
+    expect(gw.protocol.features).toEqual([...BASE_FEATURES, 'evals', 'feishu', 'metrics']);
   });
 
   it('advertises only injected capabilities individually', () => {

@@ -47,6 +47,12 @@ export interface SessionLockInfo {
   run_id?: string;
 }
 
+/** 只读锁探针（0.18 session liveness）：不创建 / 改写 / 删除文件 */
+export interface SessionLockInspection {
+  state: 'absent' | 'live' | 'stale' | 'unparseable';
+  info?: SessionLockInfo;
+}
+
 /** 锁被其它进程持有 */
 export class SessionLockedError extends Error {
   /** RPC 主码（gateway / local dispatcher 只认 conflict / forbidden 等既有码） */
@@ -336,6 +342,48 @@ export async function acquireSessionLock(options: AcquireSessionLockOptions): Pr
   }
 
   throw new SessionLockedError(options.kind, options.id, await readLockInfo(lockPath));
+}
+
+/**
+ * 只读检查一把 session / run 写锁的状态（0.18 session liveness）。
+ *
+ * - `absent`：文件不存在（ENOENT）
+ * - `live`：可解析且未过期
+ * - `stale`：可解析且过期；或不可解析但已过宽限（可回收）
+ * - `unparseable`：文件存在、不可解析且仍在宽限内（保守视为写入中）
+ *
+ * 不创建、不改写、不删除任何文件。
+ */
+export async function inspectSessionLock(
+  tenantDir: string,
+  kind: SessionLockKind,
+  id: string,
+  options: {
+    now?: () => number;
+    hostname?: string;
+    isPidAlive?: (pid: number) => boolean;
+    unparseableGraceMs?: number;
+  } = {},
+): Promise<SessionLockInspection> {
+  const lockPath = sessionLockPath(tenantDir, kind, id);
+  const now = options.now ?? Date.now;
+  const info = await readLockInfo(lockPath);
+  if (info !== undefined) {
+    const isPidAlive = options.isPidAlive ?? defaultIsPidAlive;
+    const host = options.hostname ?? os.hostname();
+    return { state: isStale(info, now(), isPidAlive, host) ? 'stale' : 'live', info };
+  }
+  const graceMs = options.unparseableGraceMs ?? SESSION_LOCK_UNPARSEABLE_GRACE_MS;
+  const pastGrace = await unparseableIsStale(lockPath, now(), graceMs);
+  let exists = false;
+  try {
+    await stat(lockPath);
+    exists = true;
+  } catch (error) {
+    if (!isErrno(error, 'ENOENT')) throw error;
+  }
+  if (!exists) return { state: 'absent' };
+  return { state: pastGrace ? 'stale' : 'unparseable' };
 }
 
 /**

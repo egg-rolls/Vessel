@@ -72,12 +72,13 @@ export async function listTools(): Promise<ToolsListing> {
   const pluginNamesWithFactories = [...pluginNames];
   if (agentEnabled) {
     // 只注册工具 schema；不 spawn 成员、不落 snapshot。
+    const model = config.agent?.model ?? config.provider?.model ?? 'mock-model';
     const runtime = createInProcessMemberRuntime({
       providerFactory: () => new MemoryLLMProvider(),
-      model: config.agent?.model ?? config.provider?.model ?? 'mock-model',
+      model,
       pluginHost: host,
     });
-    const service = createAgentService({ tenantId, runtime });
+    const service = createAgentService({ tenantId, runtime, defaultModel: model });
     host.registerTool(createAgentTool(service, { ownerId: 'main' }));
     pluginNamesWithFactories.push('agent');
   }

@@ -2,18 +2,24 @@ import { describe, expect, it } from 'bun:test';
 import {
   AgentError,
   canTransition,
-  isTerminalState,
   type MemberRecord,
   MemberRegistry,
+  toMemberStatus,
+  toPersistedRecord,
+  toRuntimeMember,
 } from '../src/index.js';
 
 function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
   return {
     id: 'm1',
     sessionId: 'm1',
+    bodyHistory: [],
     owner: 'main',
     visibility: 'private',
     state: 'idle',
+    presence: 'live',
+    membership: 'present',
+    rotation: 'stable',
     ...overrides,
   };
 }
@@ -59,12 +65,28 @@ describe('MemberRegistry state machine', () => {
     );
     expect(registry.get('m1')?.id).toBe('m1');
   });
+});
 
-  it('treats only completed / failed / cancelled / closed as terminal', () => {
-    expect(isTerminalState('running')).toBe(false);
-    expect(isTerminalState('waiting_permission')).toBe(false);
-    expect(isTerminalState('stale')).toBe(false);
-    expect(isTerminalState('completed')).toBe(true);
-    expect(isTerminalState('closed')).toBe(true);
+describe('MemberRegistry team fields', () => {
+  it('passes team_id through status / persisted records only, and ignores unknown ids', () => {
+    const registry = new MemberRegistry(() => 1);
+    registry.add(record());
+
+    registry.setTeamId('m1', 'team-alpha');
+    const stored = registry.get('m1');
+    expect(stored?.teamId).toBe('team-alpha');
+    if (stored === undefined) throw new Error('member missing');
+    expect(toMemberStatus(stored).team_id).toBe('team-alpha');
+    expect(toPersistedRecord(stored).team_id).toBe('team-alpha');
+    expect(toRuntimeMember(stored)).not.toHaveProperty('team_id');
+
+    registry.setMembership('m1', 'left');
+    expect(registry.get('m1')?.membership).toBe('left');
+
+    // 未知成员静默忽略（与 setPresence 一致）
+    registry.setTeamId('missing', 'team-beta');
+    registry.setMembership('missing', 'present');
+    expect(registry.size).toBe(1);
+    expect(registry.get('m1')?.membership).toBe('left');
   });
 });

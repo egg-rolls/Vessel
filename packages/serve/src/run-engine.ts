@@ -55,6 +55,8 @@ export interface PendingPermission {
    */
   deadline_at?: number;
   session_id?: string;
+  /** 成员 bridge 请求的父会话（事件携带时记录，additive）。 */
+  parent_session_id?: string;
   tool_call_id?: string;
   source?: string;
 }
@@ -76,6 +78,8 @@ export interface PendingAsk {
   ts: number;
   /** 关联 session（`ask.user.requested` 事件携带时记录，additive）。 */
   session_id?: string;
+  /** 成员 bridge 请求的父会话（事件携带时记录，additive）。 */
+  parent_session_id?: string;
   /** 原始 questions；只用于 `interactions.list` 展示，不持久化。 */
   questions?: unknown;
 }
@@ -110,9 +114,8 @@ export interface RunEngine {
   readonly pendingAsks: Map<string, PendingAsk>;
   /** requestId → 持久化交互记录（pending / answered / orphaned）。 */
   readonly interactionRecords: Map<string, StoredInteraction>;
-  /** durable resume / workflow resume 在途占位 */
+  /** durable resume 在途占位 */
   readonly resumedRuns: Set<string>;
-  readonly resumedWorkflows: Set<string>;
   readonly active: RunRecord | null;
   activeSessionId: string;
   /** 由 gateway 的 EventStream 订阅或本地 dispatcher 的订阅调用 */
@@ -137,8 +140,6 @@ export interface RunEngine {
   respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
-  reserveWorkflowResume(runId: string): boolean;
-  releaseWorkflowResume(runId: string): void;
 }
 
 function makeDone(): { done: Promise<void>; resolveDone: () => void } {
@@ -205,7 +206,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       : undefined;
   const activeByTenant = new Map<string, number>();
   const resumedRuns = new Set<string>();
-  const resumedWorkflows = new Set<string>();
 
   let active: RunRecord | null = null;
   let activeSessionId = 'default';
@@ -472,6 +472,10 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
             ? data.tool_call_id
             : undefined;
+        const parentSessionId =
+          typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+            ? data.parent_session_id
+            : undefined;
         const deadlineAt =
           typeof data.deadline_at === 'number' &&
           Number.isFinite(data.deadline_at) &&
@@ -486,6 +490,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           ts: eventTs,
           ...(deadlineAt !== undefined ? { deadline_at: deadlineAt } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           ...(typeof data.source === 'string' && data.source.length > 0
             ? { source: data.source }
@@ -496,6 +501,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           run_id: event.run_id,
           tenant_id: tenantId,
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           tool,
           input: data.input,
@@ -513,11 +519,16 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           typeof data.session_id === 'string' && data.session_id.length > 0
             ? data.session_id
             : undefined;
+        const parentSessionId =
+          typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
+            ? data.parent_session_id
+            : undefined;
         pendingAsks.set(requestId, {
           run_id: event.run_id,
           tenant_id: eventTenantId(event),
           ts: Date.now(),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+          ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(data.questions !== undefined ? { questions: data.questions } : {}),
         });
       }
@@ -582,6 +593,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           decision,
           scope: resolvedScope,
           ...(resolvedScope === 'always' ? { remember: true } : {}),
+          ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
         },
         ts: now,
         tenant_id: pending.tenant_id,
@@ -651,7 +663,11 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     answerStreamFor(pending.tenant_id).publish({
       type: 'ask.user.answered',
       run_id: pending.run_id,
-      data: { requestId, answers },
+      data: {
+        requestId,
+        answers,
+        ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
+      },
       ts: Date.now(),
       tenant_id: pending.tenant_id,
     });
@@ -678,14 +694,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     resumedRuns.delete(runId);
   }
 
-  function reserveWorkflowResume(runId: string): boolean {
-    return reserveInto(resumedWorkflows, runId);
-  }
-
-  function releaseWorkflowResume(runId: string): void {
-    resumedWorkflows.delete(runId);
-  }
-
   function list(tenantId: string, opts: { sessionId?: string; status?: string } = {}): RunStatus[] {
     return [...runs.values()]
       .filter((record) => record.tenant_id === tenantId)
@@ -702,7 +710,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     pendingAsks,
     interactionRecords,
     resumedRuns,
-    resumedWorkflows,
     get active() {
       return active;
     },
@@ -723,7 +730,5 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     respondAsk,
     reserveResume,
     releaseResume,
-    reserveWorkflowResume,
-    releaseWorkflowResume,
   };
 }

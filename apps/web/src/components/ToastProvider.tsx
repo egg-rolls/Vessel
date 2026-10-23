@@ -27,6 +27,11 @@ export interface ToastApi {
 const ToastContext = createContext<ToastApi | null>(null);
 const AUTO_DISMISS_MS = 4000;
 const MAX_VISIBLE = 5;
+const TOAST_GLYPH: Record<ToastKind, string> = {
+  success: '✓',
+  error: '✗',
+  info: 'i',
+};
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [items, setItems] = useState<ToastItem[]>([]);
@@ -79,6 +84,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             className={`toast toast-${item.kind}`}
             role={item.kind === 'error' ? 'alert' : 'status'}
           >
+            <span className="toast-icon" aria-hidden="true">
+              {TOAST_GLYPH[item.kind]}
+            </span>
             <span className="toast-message">{item.message}</span>
             <button
               type="button"

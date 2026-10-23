@@ -36,6 +36,7 @@ export {
   normalizeEvalReport,
 } from './evals.js';
 export { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
+export { BROADCAST_PREVIEW_LIMIT, summarizeBroadcastEvent } from './event-summary.js';
 export {
   type FeishuGatewayOptions,
   type FeishuStatus,
@@ -43,12 +44,49 @@ export {
   normalizeFeishuStatus,
 } from './feishu.js';
 export {
+  corsHeaders,
+  hostAllowed,
+  isWildcardHostname,
+  loadTlsMaterial,
+  normalizeAllowedOrigins,
+  originAllowed,
+} from './gateway/auth.js';
+export {
   type GatewayReloadResult,
   RELOAD_SCOPES,
   type ReloadScope,
 } from './gateway/methods/admin.js';
 export type { Gateway, GatewayOptions, GatewayReconfigureOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
+export {
+  HUB_MAX_AGENTS,
+  HUB_MAX_TEAMS,
+  type HubAgentMeta,
+  type HubControlChange,
+  type HubControlLike,
+  type HubNodeSnapshotInput,
+  type HubPointerInput,
+  type HubPointerReason,
+  type HubTeamMeta,
+  type HubTeamScopeLike,
+} from './hub-control.js';
+export {
+  HUB_PROTOCOL,
+  type HubAuthFrame,
+  type HubClientFrame,
+  type HubDialer,
+  type HubHelloFrame,
+  type HubPingFrame,
+  type HubPointerFrame,
+  type HubPongFrame,
+  type HubServerFrame,
+  type HubSnapshotFrame,
+  isHubDialer,
+  isHubProtocol,
+  parseHubAgentMeta,
+  parseHubPointerReason,
+  parseHubTeamMeta,
+} from './hub-protocol.js';
 export {
   createLocalRpcDispatcher,
   type LocalRpcDispatcher,
@@ -67,6 +105,20 @@ export {
   type MetricsSnapshot,
   normalizeMetricsSnapshot,
 } from './metrics.js';
+export {
+  CONTROL_TOKEN_DEFAULT_TTL_S,
+  CONTROL_TOKEN_MAX_TTL_S,
+  type ExchangeTokenInput,
+  type IssuedNodeToken,
+  type MintPairingTokensInput,
+  type NodeTokenAuthenticator,
+  type NodeTokenControlLike,
+  type NodeTokenMeta,
+  type NodeTokenScope,
+  PAIRING_TOKEN_TTL_MS,
+  type PairingTokenPair,
+  type RevokeTokenResult,
+} from './node-token-control.js';
 export {
   type ClientFrame,
   type NodeInfo,
@@ -125,6 +177,16 @@ export {
   type WireAgentStatus,
   type WirePeerInfo,
 } from './team.js';
+export type {
+  TeamControlLike,
+  TeamDeliveryLike,
+  TeamDetailLike,
+  TeamMemberLike,
+  TeamMembersResultLike,
+  TeamMessageLike,
+  TeamPostResultLike,
+  TeamSummaryLike,
+} from './team-control.js';
 export {
   type ConfigGatewayOptionsLike,
   type ConfigSnapshotLike,
@@ -169,25 +231,3 @@ export {
   PeerTransportError,
   type PeerTransportErrorCode,
 } from './transport/index.js';
-export {
-  DEFAULT_WORKFLOW_LIMIT,
-  dedupeWorkflowSummaries,
-  isSafeWorkflowName,
-  MAX_OUTPUT_PREVIEW,
-  MAX_WORKFLOW_LIMIT,
-  parseWorkflowLimit,
-  parseWorkflowStatus,
-  sortWorkflowSummaries,
-  toWireWorkflowDetail,
-  toWireWorkflowSummary,
-  WORKFLOW_RUN_STATUSES,
-  WORKFLOW_STEP_STATUSES,
-  type WorkflowControlsLike,
-  type WorkflowGatewayOptions,
-  type WorkflowOutcome,
-  type WorkflowRunDetail,
-  type WorkflowRunStatus,
-  type WorkflowRunSummary,
-  type WorkflowStepStatus,
-  type WorkflowStepSummary,
-} from './workflow.js';

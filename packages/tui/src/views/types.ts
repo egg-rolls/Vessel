@@ -104,7 +104,7 @@ export interface DetailView {
   sections: DetailSection[];
   actions?: ViewAction[];
   /**
-   * 详情对应的实体 key（如 workflow_run_id / tenant_id / tool name）。
+   * 详情对应的实体 key（如 run_id / tenant_id / tool name）。
    * 详情没有行选中，viewAction 用它作为 `selectionKey` 的等价物。
    */
   key?: string;

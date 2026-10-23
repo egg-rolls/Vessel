@@ -3,8 +3,7 @@
  *
  * 真实 CLI + `--serve 0 --exclusive`（file 后端默认 shared `.members/`，
  * 只有 exclusive 才用 `.lock`），两个 tenant；SIGINT 后：
- * - 无 workflow：自然退出 0，两个 `.lock` 都被删除；
- * - 启用 workflow：走 130 退出路径，`.lock` 同样被删除。
+ * SIGINT 后自然退出 0，两个 `.lock` 都被删除。
  *
  * Windows 没有 POSIX 信号语义，整组 skip；需在 POSIX CI 执行。
  */
@@ -66,7 +65,7 @@ function tenantLockPath(dir: string, tenantId: string): string {
   return path.join(dir, '.vessel', 'data', 'tenants', tenantId, '.lock');
 }
 
-function twoTenantConfig(extra: string[] = []): string {
+function twoTenantConfig(): string {
   return [
     'provider:',
     '  name: openai',
@@ -80,7 +79,6 @@ function twoTenantConfig(extra: string[] = []): string {
     '    work:',
     '      status: active',
     '      config: {}',
-    ...extra,
     '',
   ].join('\n');
 }
@@ -114,43 +112,7 @@ it.skipIf(process.platform === 'win32')(
 
       expect(fs.existsSync(acmeLock)).toBe(false);
       expect(fs.existsSync(workLock)).toBe(false);
-      // 无 workflow / --feishu：shutdown 后自然退出。
       expect(exitCode).toBe(0);
-    } finally {
-      proc.kill();
-      await proc.exited;
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
-  },
-  30000,
-);
-
-it.skipIf(process.platform === 'win32')(
-  'SIGINT exits 130 and releases every tenant lock when workflow is enabled',
-  async () => {
-    const dir = tmpDir();
-    const defs = path.join(dir, 'workflow-defs');
-    fs.mkdirSync(defs, { recursive: true });
-    const acmeLock = tenantLockPath(dir, 'acme');
-    const workLock = tenantLockPath(dir, 'work');
-    writeFile(
-      path.join(dir, 'vessel.yaml'),
-      twoTenantConfig(['workflow:', '  enabled: true', `  dir: ${defs}`]),
-    );
-
-    const proc = startServe(dir);
-    try {
-      const output = await waitForOutput(proc, /Gateway\s+http/);
-      expect(output).toMatch(/Gateway\s+http/);
-      expect(fs.existsSync(acmeLock)).toBe(true);
-      expect(fs.existsSync(workLock)).toBe(true);
-
-      proc.kill('SIGINT');
-      const exitCode = await proc.exited;
-
-      expect(exitCode).toBe(130);
-      expect(fs.existsSync(acmeLock)).toBe(false);
-      expect(fs.existsSync(workLock)).toBe(false);
     } finally {
       proc.kill();
       await proc.exited;

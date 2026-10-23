@@ -1316,6 +1316,7 @@ export class AgentRuntime {
         run_id: runId,
         data: {
           run_id: runId,
+          session_id: args.sessionId,
           messages: this.stripReasoning(messages),
           tools: args.tools,
         },
@@ -1795,6 +1796,9 @@ export class AgentRuntime {
       run_id: runId,
       data: {
         run_id: runId,
+        ...(this.activeRun?.sessionId !== undefined
+          ? { session_id: this.activeRun.sessionId }
+          : {}),
         // 持久化保留 reasoning_content；事件里剔除，避免思维链泄漏到 TUI/观测
         message: this.stripReasoningFromMessage(stamped),
         message_count: this.context.messages.length,
