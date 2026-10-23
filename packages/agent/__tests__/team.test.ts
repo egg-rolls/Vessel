@@ -298,8 +298,9 @@ describe('TeamService roster projections and agent replies', () => {
     await settle();
 
     expect(agent.dispatches).toHaveLength(0);
-    const reply = store.logs.find((entry) => entry.kind === 'reply');
-    expect(reply).toMatchObject({
+    const replies = store.logs.filter((entry) => entry.kind === 'reply');
+    expect(replies).toHaveLength(1);
+    expect(replies[0]).toMatchObject({
       message_id: 'reply-1',
       team_id: 'alpha',
       from: 'a',
@@ -420,10 +421,26 @@ describe('TeamService private members', () => {
       content: 'visible',
       ts: 6,
     });
+    // private / team 的 leave 共用同一过滤；无 visibility 的事件按不可见处理。
+    agent.emit({
+      type: 'agent.closed',
+      agent_id: 'p',
+      team_id: 'alpha',
+      visibility: 'private',
+      ts: 7,
+    });
+    agent.emit({
+      type: 'agent.closed',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 8,
+    });
+    agent.emit({ type: 'agent.spawned', agent_id: 'a', team_id: 'alpha', ts: 9 });
     await settle();
 
     const system = store.logs.filter((entry) => entry.kind === 'system');
-    expect(system.map((entry) => entry.system_event)).toEqual(['join', 'rotate']);
+    expect(system.map((entry) => entry.system_event)).toEqual(['join', 'rotate', 'leave']);
     expect(system.every((entry) => entry.to[0] === 'a')).toBe(true);
 
     const replies = store.logs.filter((entry) => entry.kind === 'reply');
