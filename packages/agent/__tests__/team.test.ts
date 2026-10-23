@@ -433,6 +433,18 @@ describe('TeamService conversation propagation', () => {
       content: 'budget override conv_budget turns null -> 5',
     });
   });
+
+  it('budget status for an unknown conversation is not_found', async () => {
+    const { service, agent } = makeTeamHarness();
+    agent.budgetImpl = async () => ({
+      action: 'status',
+      team_id: 'alpha',
+      conversations: [],
+    });
+    await expect(
+      service.budget({ team_id: 'alpha', conversation_id: 'conv_missing' }),
+    ).rejects.toMatchObject({ code: 'team_conversation_not_found' });
+  });
 });
 
 describe('TeamService log write failure', () => {
