@@ -83,6 +83,7 @@ function makeTeam(roster: TeamMemberSummary[] = []): {
         team_id: 'team-1',
       } as unknown as TeamMemberSummary;
     },
+    subscribe: () => () => {},
     dispose() {},
   };
   return { team, calls };

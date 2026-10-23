@@ -237,7 +237,8 @@ export interface TeamSummary {
   team_id: string;
   name: string;
   tenant_id: string;
-  workspace: string;
+  /** 旧 gateway / 缺失 workspace 的 Team 不返回该字段；UI 显示 —。 */
+  workspace?: string;
   member_count: number;
   /** S3 R1：present && live；缺失时显示 —。 */
   online_count?: number;

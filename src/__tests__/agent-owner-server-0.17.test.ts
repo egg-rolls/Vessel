@@ -131,6 +131,7 @@ function fakeTeam(calls: Calls, overrides: Record<string, unknown> = {}): AgentT
     send: async () => ({ status: 'error', logged: false }),
     listForCaller: async () => [],
     identify: async () => undefined,
+    subscribe: () => () => {},
     dispose: () => {},
     ...overrides,
   } as unknown as AgentTeamService;

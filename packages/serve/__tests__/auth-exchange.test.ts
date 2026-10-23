@@ -7,6 +7,7 @@ import type {
   RevokeTokenResult,
 } from '../src/node-token-control';
 import { RpcError, type RpcMethodContext, type RpcMethodDefinition } from '../src/rpc';
+import type { TeamControlLike, TeamSummaryLike } from '../src/team-control';
 
 type Principal = RpcMethodContext['principal'];
 
@@ -76,12 +77,63 @@ function makeControl(
   return { control, exchangeCalls, revokeCalls, listCalls: () => listCount };
 }
 
-function methodMap(control?: NodeTokenControlLike): Map<string, RpcMethodDefinition> {
+const defaultTeam: TeamSummaryLike = {
+  team_id: 'team-1',
+  name: 'Team One',
+  tenant_id: 'tenant-a',
+  workspace: '/work/team-1',
+  policy: {},
+  member_count: 1,
+  online_count: 1,
+  created_at: 1_700_000_000_000,
+};
+
+interface TeamsHarness {
+  teams: TeamControlLike;
+  getCalls: Array<{ teamId: string; options?: { viewer?: string; limit?: number } }>;
+}
+
+/** 假的 Team 控制面；默认只认识 `team-1`。 */
+function makeTeams(
+  options: { tenantId?: string; known?: Set<string>; getError?: unknown } = {},
+): TeamsHarness {
+  const getCalls: TeamsHarness['getCalls'] = [];
+  const known = options.known ?? new Set(['team-1']);
+  const teams: TeamControlLike = {
+    tenantId: options.tenantId ?? 'tenant-a',
+    async list() {
+      return [];
+    },
+    async get(teamId, getOptions) {
+      getCalls.push({ teamId, ...(getOptions !== undefined ? { options: getOptions } : {}) });
+      if (options.getError !== undefined) throw options.getError;
+      if (!known.has(teamId)) return undefined;
+      return { team: { ...defaultTeam, team_id: teamId }, members: [], messages: [] };
+    },
+    async post() {
+      throw new Error('post is not used by auth methods');
+    },
+    async members() {
+      return undefined;
+    },
+  };
+  return { teams, getCalls };
+}
+
+/**
+ * `teamsOverride`：`undefined` = 注入默认假 Team（成功路径）；
+ * `null` = 完全不注入 teams（缺控制面路径）。
+ */
+function methodMap(
+  control?: NodeTokenControlLike,
+  teamsOverride?: TeamControlLike | null,
+): Map<string, RpcMethodDefinition> {
+  const teams = teamsOverride === null ? undefined : (teamsOverride ?? makeTeams().teams);
   return new Map(
-    createAuthMethods(control === undefined ? {} : { nodeTokens: control }).map((method) => [
-      method.name,
-      method,
-    ]),
+    createAuthMethods({
+      ...(control === undefined ? {} : { nodeTokens: control }),
+      ...(teams === undefined ? {} : { teams }),
+    }).map((method) => [method.name, method]),
   );
 }
 
@@ -161,6 +213,88 @@ describe('auth.exchange', () => {
     expect(harness.exchangeCalls[0]?.input).toEqual({ team_id: 'team-1', ttl_s: 600 });
   });
 
+  it('returns not_found for an unknown team and never signs a token', async () => {
+    const harness = makeControl();
+    const teamHarness = makeTeams();
+    const methods = methodMap(harness.control, teamHarness.teams);
+
+    await expectRpcCode(
+      call(methods, 'auth.exchange', { team_id: 'team-404' }, makeCtx(exchangePrincipal)),
+      'not_found',
+    );
+    expect(teamHarness.getCalls).toHaveLength(1);
+    expect(teamHarness.getCalls[0]?.teamId).toBe('team-404');
+    expect(harness.exchangeCalls).toHaveLength(0);
+  });
+
+  it('maps a team_not_found error from the control plane to not_found', async () => {
+    const harness = makeControl();
+    const teamHarness = makeTeams({
+      getError: Object.assign(new Error('missing'), { code: 'team_not_found' }),
+    });
+    const methods = methodMap(harness.control, teamHarness.teams);
+
+    await expectRpcCode(
+      call(methods, 'auth.exchange', { team_id: 'team-1' }, makeCtx(exchangePrincipal)),
+      'not_found',
+    );
+    expect(harness.exchangeCalls).toHaveLength(0);
+  });
+
+  it('passes through non team_not_found errors unchanged', async () => {
+    const harness = makeControl();
+    const teamHarness = makeTeams({ getError: new RpcError('conflict', 'corrupt team store') });
+    const methods = methodMap(harness.control, teamHarness.teams);
+
+    await expectRpcCode(
+      call(methods, 'auth.exchange', { team_id: 'team-1' }, makeCtx(exchangePrincipal)),
+      'conflict',
+    );
+    expect(harness.exchangeCalls).toHaveLength(0);
+  });
+
+  it('returns not_found when team control is not injected', async () => {
+    const harness = makeControl();
+    const methods = methodMap(harness.control, null);
+
+    await expectRpcCode(
+      call(methods, 'auth.exchange', { team_id: 'team-1' }, makeCtx(exchangePrincipal)),
+      'not_found',
+    );
+    expect(harness.exchangeCalls).toHaveLength(0);
+  });
+
+  it('returns not_found when the team control tenant does not match', async () => {
+    const harness = makeControl();
+    const teamHarness = makeTeams({ tenantId: 'tenant-b' });
+    const methods = methodMap(harness.control, teamHarness.teams);
+
+    await expectRpcCode(
+      call(methods, 'auth.exchange', { team_id: 'team-1' }, makeCtx(exchangePrincipal)),
+      'not_found',
+    );
+    expect(teamHarness.getCalls).toHaveLength(0);
+    expect(harness.exchangeCalls).toHaveLength(0);
+  });
+
+  it('calls exchange exactly once for an existing team', async () => {
+    const harness = makeControl();
+    const teamHarness = makeTeams();
+    const methods = methodMap(harness.control, teamHarness.teams);
+
+    await call(
+      methods,
+      'auth.exchange',
+      { team_id: 'team-1', ttl_s: 600 },
+      makeCtx(exchangePrincipal),
+    );
+
+    expect(teamHarness.getCalls).toHaveLength(1);
+    expect(teamHarness.getCalls[0]?.options).toEqual({ limit: 1 });
+    expect(harness.exchangeCalls).toHaveLength(1);
+    expect(harness.exchangeCalls[0]?.input).toEqual({ team_id: 'team-1', ttl_s: 600 });
+  });
+
   it('always returns control scope even when params ask for another scope', async () => {
     const harness = makeControl();
     const methods = methodMap(harness.control);
@@ -209,8 +343,10 @@ describe('auth.exchange', () => {
     expect(scoped.scope).toBe('control');
     expect(scoped.tenant_id).toBe('tenant-a');
 
+    // 静态 admin 的 ctx.tenantId 是 default，Team 控制面必须位于同一 tenant。
+    const wildcardMethods = methodMap(harness.control, makeTeams({ tenantId: 'default' }).teams);
     const wildcard = await call(
-      methods,
+      wildcardMethods,
       'auth.exchange',
       { team_id: 'team-1' },
       makeCtx(staticAdmin),

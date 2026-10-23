@@ -1,11 +1,28 @@
 import { describe, expect, it } from 'bun:test';
-import type { AgentEvent, AgentService, ListFilter, MemberStatus } from '@vessel-agent/agent';
+import {
+  type AgentEvent,
+  type AgentService,
+  type CloseInput,
+  createTeamService,
+  type DispatchInput,
+  type ListFilter,
+  type MemberStatus,
+  type ReinstateInput,
+  type TeamLogEntry,
+  type TeamRecord,
+  type TeamStore,
+} from '@vessel-agent/agent';
 import {
   HUB_MAX_AGENTS,
   HUB_MAX_TEAMS,
   type HubControlChange,
 } from '../../packages/serve/src/index';
-import { createHubControl, createTeamScope, type HubTeamSourceLike } from '../hub-wiring';
+import {
+  createHubControl,
+  createTeamScope,
+  type HubTeamEventLike,
+  type HubTeamSourceLike,
+} from '../hub-wiring';
 
 /** fake 成员：只有投影读取的字段是必需语义，其余字段原样存在用于验证不透传。 */
 interface FakeMember extends Record<string, unknown> {
@@ -140,7 +157,7 @@ describe('createHubControl.snapshot', () => {
   });
 
   it('projects team metadata from an optional teamSource and tracks last_active', async () => {
-    let teamListener: ((event: unknown) => void) | undefined;
+    let teamListener: ((event: HubTeamEventLike) => void) | undefined;
     const teamSource: HubTeamSourceLike = {
       list: async () => [
         {
@@ -169,16 +186,16 @@ describe('createHubControl.snapshot', () => {
     const changes: HubControlChange[] = [];
     hub.subscribe('tenant-a', (change) => changes.push(change));
     await flushMicrotasks();
-    teamListener?.({ type: 'team.message', team_id: 't1' });
+    teamListener?.({ kind: 'post', team_id: 't1' });
 
     // message_id 作为 request_id；正文 / body_history 绝不进入指针。
     teamListener?.({
-      type: 'team.message',
+      kind: 'post',
       team_id: 't1',
       message_id: 'm1',
       content: 'secret-body',
       body_history: [{ session_id: 's1', content: 'secret-body' }],
-    });
+    } as HubTeamEventLike);
     expect(changes.at(-1)).toEqual({
       pointers: [{ team_id: 't1', reason: 'team.message', ts: 1234, request_id: 'm1' }],
     });
@@ -275,6 +292,144 @@ describe('createHubControl.subscribe', () => {
     emit({ type: 'agent.closed', agent_id: 'unbound', ts: 2 });
 
     expect(changes).toEqual([{ directoryChanged: true }, { directoryChanged: true }]);
+  });
+});
+
+describe('createHubControl with a real TeamService', () => {
+  function makeTeamFixture() {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const members: MemberStatus[] = [
+      {
+        id: 'a1',
+        session_id: 'a1',
+        owner: 'main',
+        visibility: 'team',
+        state: 'idle',
+        membership: 'present',
+        presence: 'live',
+        team_id: 'alpha',
+      },
+    ];
+    const record: TeamRecord = {
+      v: 1,
+      team_id: 'alpha',
+      name: 'alpha',
+      tenant_id: 'default',
+      workspace: '/ws/alpha',
+      policy: {},
+      created_at: 1,
+    };
+    const store: TeamStore = {
+      async ensureForWorkspace() {
+        return record;
+      },
+      async seed() {},
+      get(teamId: string) {
+        return teamId === 'alpha' ? record : undefined;
+      },
+      list() {
+        return [record];
+      },
+      async readLog(): Promise<TeamLogEntry[]> {
+        return [];
+      },
+      async appendLog(_entry: TeamLogEntry) {},
+      async flush() {},
+    };
+    let dispatchCount = 0;
+    const agent = {
+      async list(_filter: ListFilter = {}) {
+        return members;
+      },
+      async identify(_id: string) {
+        return undefined;
+      },
+      async dispatch(input: DispatchInput) {
+        dispatchCount += 1;
+        return {
+          status: 'queued' as const,
+          message_id: `d-${dispatchCount}`,
+          resolved_to: input.to,
+          resolution: 'live' as const,
+        };
+      },
+      async reinstate(input: ReinstateInput) {
+        const target = members.find((member) => member.id === input.to);
+        if (target === undefined) throw new Error(`unknown_member: ${input.to}`);
+        target.team_id = input.team_id;
+        target.membership = 'present';
+        return target;
+      },
+      async close(input: CloseInput) {
+        const id = input.member ?? input.to;
+        const target = members.find((member) => member.id === id);
+        if (target !== undefined) {
+          target.membership = 'left';
+          target.state = 'closed';
+          target.presence = 'gone';
+        }
+        return { state: 'closed' as const };
+      },
+      subscribe(listener: (event: AgentEvent) => void) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    };
+    const service = agent as unknown as AgentService;
+    const teamService = createTeamService({ tenantId: 'default', agent: service, store });
+    return {
+      service,
+      teamService,
+      emit(event: AgentEvent): void {
+        for (const listener of [...listeners]) listener(event);
+      },
+    };
+  }
+
+  it('maps real post / reply / roster events to content-free hub pointers', async () => {
+    const { service, teamService, emit } = makeTeamFixture();
+    const hub = createHubControl({ service, teamSource: teamService, now: () => 5000 });
+    const changes: HubControlChange[] = [];
+    const unsubscribe = hub.subscribe('tenant-a', (change) => changes.push(change));
+    await flushMicrotasks();
+
+    const posted = await teamService.post({ team_id: 'alpha', content: 'SECRET-BODY' });
+    const pointers = (): NonNullable<HubControlChange['pointers']> =>
+      changes.flatMap((change) => change.pointers ?? []);
+    expect(
+      pointers().filter(
+        (pointer) => pointer.reason === 'team.message' && pointer.request_id === posted.message_id,
+      ),
+    ).toHaveLength(1);
+    expect(JSON.stringify(changes)).not.toContain('SECRET-BODY');
+
+    emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a1',
+      session_id: 'a1',
+      team_id: 'alpha',
+      visibility: 'team',
+      message_id: 'm-reply',
+      content: 'SECRET-REPLY',
+      ts: 10,
+    });
+    await flushMicrotasks();
+    expect(
+      pointers().some(
+        (pointer) => pointer.reason === 'team.message' && pointer.request_id === 'm-reply',
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(changes)).not.toContain('SECRET-REPLY');
+
+    const before = changes.length;
+    await teamService.members({ team_id: 'alpha', action: 'remove', member: 'a1' });
+    expect(changes.slice(before).some((change) => change.directoryChanged === true)).toBe(true);
+    expect(JSON.stringify(changes)).not.toContain('SECRET-REPLY');
+
+    unsubscribe();
+    teamService.dispose();
   });
 });
 

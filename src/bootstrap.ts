@@ -1165,6 +1165,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     // S5：hub 目录投影 + team 归属 + 节点 token 控制面。
     const hubRuntime = await createHubRuntime({
       service: wiring.service,
+      // S6：真实 TeamService 作为 hub 指针源（只带 team_id / kind / message_id）。
+      teamSource: wiring.team,
       dataDir,
       tenantId,
       nodeId,

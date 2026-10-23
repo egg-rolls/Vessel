@@ -121,6 +121,26 @@ describe('agent bootstrap 0.17', () => {
     expect((listed as Array<{ id: string }>).map((member) => member.id)).toContain('main');
   });
 
+  it('wires the real TeamService into the hub snapshot', async () => {
+    const { result, dataDir } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
+    const agent = result.agent;
+    if (!agent) throw new Error('agent control missing');
+
+    const created = await agent.service.new({
+      name: 'a1',
+      workspace: path.join(dataDir, 'alpha'),
+    });
+    const snapshot = await agent.hubControl?.snapshot('default');
+
+    expect(snapshot).toBeDefined();
+    expect(snapshot?.teams.map((team) => team.team_id)).toContain('alpha');
+    expect(snapshot?.agents.some((member) => member.agent_id === created.id)).toBe(true);
+  });
+
   it('member auto-reply does not mark the REPL owner failed', async () => {
     const { result } = await boot({
       headless: false,

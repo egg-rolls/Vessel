@@ -1,6 +1,134 @@
 import { describe, expect, it } from 'bun:test';
-import { type DispatchResult, TeamError } from '../src/index.js';
+import { type DispatchResult, TeamError, type TeamServiceEvent } from '../src/index.js';
 import { makeMember, makeTeamHarness, settle } from './helpers.js';
+
+describe('TeamService events', () => {
+  it('emits post / mention with message_id and never leaks content', async () => {
+    const { service } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+    const events: TeamServiceEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    const posted = await service.post({ team_id: 'alpha', content: 'SECRET-BODY' });
+    const mentioned = await service.post({
+      team_id: 'alpha',
+      content: 'SECRET-MENTION',
+      mentions: ['a'],
+    });
+
+    expect(events).toEqual([
+      { team_id: 'alpha', kind: 'post', message_id: posted.message_id },
+      { team_id: 'alpha', kind: 'mention', message_id: mentioned.message_id },
+    ]);
+    expect(JSON.stringify(events)).not.toContain('SECRET-BODY');
+    expect(JSON.stringify(events)).not.toContain('SECRET-MENTION');
+  });
+
+  it('emits reply with the event message_id and no content', async () => {
+    const { service, agent } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+    const events: TeamServiceEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      session_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      message_id: 'reply-1',
+      content: 'SECRET-REPLY',
+      ts: 10,
+    });
+    await settle();
+
+    expect(events).toEqual([{ team_id: 'alpha', kind: 'reply', message_id: 'reply-1' }]);
+    expect(JSON.stringify(events)).not.toContain('SECRET-REPLY');
+  });
+
+  it('emits a system event with the generated message_id', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+    const events: TeamServiceEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 1,
+    });
+    await settle();
+
+    const system = store.logs.find((entry) => entry.kind === 'system');
+    expect(system).toBeDefined();
+    expect(events).toEqual([{ team_id: 'alpha', kind: 'system', message_id: system?.message_id }]);
+  });
+
+  it('emits roster for members add and remove', async () => {
+    const { service, agent } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'a1', name: 'a1', team_id: 'alpha' }),
+        makeMember({ id: 'a2', name: 'a2' }),
+      ],
+    });
+    const events: TeamServiceEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    await service.members({ team_id: 'alpha', action: 'add', member: 'a2' });
+    await service.members({ team_id: 'alpha', action: 'remove', member: 'a1' });
+    await settle();
+
+    // remove 的 agent.closed 还会写一条 system 日志；roster 只断言添加 / 移除两类。
+    expect(events.filter((event) => event.kind === 'roster')).toEqual([
+      { team_id: 'alpha', kind: 'roster' },
+      { team_id: 'alpha', kind: 'roster' },
+    ]);
+    expect(agent.reinstates).toHaveLength(1);
+    expect(agent.closes).toEqual(['a1']);
+  });
+
+  it('never emits when the log append fails', async () => {
+    const { service, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+    store.appendError = new Error('disk full');
+    const events: TeamServiceEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    let postError: unknown;
+    try {
+      await service.post({ team_id: 'alpha', content: 'go', mentions: ['a'] });
+    } catch (error) {
+      postError = error;
+    }
+
+    expect(postError).toBeInstanceOf(TeamError);
+    expect((postError as TeamError).code).toBe('team_log_write_failed');
+    expect(events).toEqual([]);
+  });
+
+  it('stops emitting after unsubscribe and tolerates listener errors', async () => {
+    const { service } = makeTeamHarness();
+    const events: TeamServiceEvent[] = [];
+    const unsubscribe = service.subscribe((event) => events.push(event));
+    service.subscribe(() => {
+      throw new Error('listener boom');
+    });
+
+    await service.post({ team_id: 'alpha', content: 'first' });
+    unsubscribe();
+    await service.post({ team_id: 'alpha', content: 'second' });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]?.kind).toBe('post');
+    expect(events[0]?.message_id).toBeDefined();
+  });
+});
 
 describe('TeamService.post', () => {
   it('writes exactly one log entry for a post without mentions and never dispatches', async () => {

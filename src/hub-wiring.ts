@@ -25,7 +25,6 @@ import {
   type HubControlLike,
   type HubNodeSnapshotInput,
   type HubPointerInput,
-  type HubPointerReason,
   type HubTeamMeta,
   type HubTeamScopeLike,
   type NodeTokenControlLike,
@@ -42,11 +41,15 @@ const AGENT_STATE_EVENTS = new Set([
   'agent.retired',
 ]);
 
-/** teamSource 事件 → hub 指针原因（只映射这两种）。 */
-const TEAM_POINTER_REASONS: Readonly<Record<string, HubPointerReason>> = {
-  'team.message': 'team.message',
-  'team.roster': 'team.roster',
-};
+/** teamSource 里表示“日志已写入”的 kind；roster 单独处理。 */
+const TEAM_MESSAGE_KINDS = new Set(['post', 'mention', 'reply', 'system']);
+
+/** TeamService 事件的最小形状（只读指针字段，绝不读正文）。 */
+export interface HubTeamEventLike {
+  team_id?: string;
+  kind?: string;
+  message_id?: string;
+}
 
 /**
  * S3 Team 服务的结构化端口。S3 未合入时不注入；这里不 import S3 类型。
@@ -54,7 +57,7 @@ const TEAM_POINTER_REASONS: Readonly<Record<string, HubPointerReason>> = {
  */
 export interface HubTeamSourceLike {
   list(): Promise<readonly unknown[]>;
-  subscribe?(listener: (event: unknown) => void): () => void;
+  subscribe?(listener: (event: HubTeamEventLike) => void): () => void;
 }
 
 export interface CreateHubControlOptions {
@@ -283,38 +286,38 @@ export function createHubControl(options: CreateHubControlOptions): HubControlLi
     let unsubscribeTeams: (() => void) | undefined;
     if (teamSource?.subscribe !== undefined) {
       try {
-        unsubscribeTeams = teamSource.subscribe((event: unknown) => {
+        unsubscribeTeams = teamSource.subscribe((event) => {
           if (disposed) return;
-          if (typeof event !== 'object' || event === null) return;
-          const record = event as { type?: unknown; team_id?: unknown };
-          const type = readString(record.type);
-          if (type === undefined) return;
-          const reason = TEAM_POINTER_REASONS[type];
-          if (reason === undefined) return;
-          const teamId = readString(record.team_id);
+          const kind = readString(event.kind);
+          if (kind === undefined) return;
+          const teamId = readString(event.team_id);
           const change: HubControlChange = {};
-          // roster 改变成员 / 计数，目录需要重新 snapshot；message 只发指针。
-          if (reason === 'team.roster') change.directoryChanged = true;
-          if (teamId !== undefined) {
+          if (kind === 'roster') {
+            // roster 改变成员 / 计数，目录需要重新 snapshot。
+            change.directoryChanged = true;
+            if (teamId !== undefined) {
+              const ts = clock();
+              lastActive.set(teamId, ts);
+              change.pointers = [{ team_id: teamId, reason: 'team.roster', ts }];
+            }
+          } else if (TEAM_MESSAGE_KINDS.has(kind)) {
+            // message 只发指针；request_id 来自 message_id，绝不带正文。
+            if (teamId === undefined) return;
             const ts = clock();
+            const requestId = readString(event.message_id);
             lastActive.set(teamId, ts);
-            // team.message 只带 message_id 作为 request_id；绝不带正文。
-            const requestId =
-              reason === 'team.message'
-                ? (readString((record as { message_id?: unknown }).message_id) ??
-                  readString((record as { request_id?: unknown }).request_id))
-                : undefined;
             const pointer: HubPointerInput = {
               team_id: teamId,
-              reason,
+              reason: 'team.message',
               ts,
               ...(requestId !== undefined ? { request_id: requestId } : {}),
             };
             change.pointers = [pointer];
+          } else {
+            // 未知 / 缺失 kind：忽略。
+            return;
           }
-          if (change.directoryChanged === true || change.pointers !== undefined) {
-            emit(listener, change);
-          }
+          emit(listener, change);
         });
       } catch (error) {
         logger?.warn('hub.control.team_subscribe_failed', { error: errorMessage(error) });

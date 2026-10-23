@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryEventStream } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
+import { createTeamMethods } from '../src/gateway/methods/teams';
 import { createLocalRpcDispatcher } from '../src/local';
-import { RpcError } from '../src/rpc';
+import { RpcError, type RpcMethodContext } from '../src/rpc';
 import type {
   TeamControlLike,
   TeamDeliveryLike,
@@ -13,7 +14,7 @@ import type {
   TeamPostResultLike,
   TeamSummaryLike,
 } from '../src/team-control';
-import type { GatewayAuthLike } from '../src/tenant';
+import type { GatewayAuthLike, TenantPrincipal } from '../src/tenant';
 import { createGatewayEventHub } from '../src/tenant-event-hub';
 import { createGateway, startTestGateway as startGateway } from './helpers';
 
@@ -31,6 +32,17 @@ const summary: TeamSummaryLike = {
   member_count: 1,
   online_count: 1,
   created_at: 1000,
+};
+
+const bravoSummary: TeamSummaryLike = {
+  team_id: 'team-bravo',
+  name: 'Bravo',
+  tenant_id: 'default',
+  workspace: '/tmp/bravo',
+  policy: { allowFork: true },
+  member_count: 0,
+  online_count: 0,
+  created_at: 1001,
 };
 
 const member: TeamMemberLike = {
@@ -74,6 +86,12 @@ const detail: TeamDetailLike = {
   messages: [message, reply],
 };
 
+const bravoDetail: TeamDetailLike = {
+  team: bravoSummary,
+  members: [],
+  messages: [],
+};
+
 class FakeTeamControl implements TeamControlLike {
   readonly tenantId: string;
   /** 任意一次调用抛出的异常（测试错误映射）。 */
@@ -97,13 +115,15 @@ class FakeTeamControl implements TeamControlLike {
   async list(options?: ListOptions): Promise<TeamSummaryLike[]> {
     this.calls.list.push(options);
     this.maybeFail();
-    return [summary];
+    return [summary, bravoSummary];
   }
 
   async get(teamId: string, options?: GetOptions): Promise<TeamDetailLike | undefined> {
     this.calls.get.push({ teamId, options });
     this.maybeFail();
-    return teamId === summary.team_id ? detail : undefined;
+    if (teamId === summary.team_id) return detail;
+    if (teamId === bravoSummary.team_id) return bravoDetail;
+    return undefined;
   }
 
   async post(input: PostInput): Promise<TeamPostResultLike> {
@@ -213,6 +233,30 @@ function authForRoles(): GatewayAuthLike {
   };
 }
 
+/** P0：team-scoped control token 与 admin 的对照映射。 */
+function authForTeamScope(): GatewayAuthLike {
+  const entries: Record<string, TenantPrincipal> = {
+    'control-a': {
+      tenant_id: 'default',
+      role: 'write',
+      scope: 'control',
+      team_id: 'team-alpha',
+    },
+    'control-missing': {
+      tenant_id: 'default',
+      role: 'write',
+      scope: 'control',
+      team_id: 'team-missing',
+    },
+    'admin-token': { tenant_id: 'default', role: 'admin' },
+  };
+  return {
+    configured: true,
+    legacyToken: 'legacy',
+    authenticate: (token) => (token === null ? null : (entries[token] ?? null)),
+  };
+}
+
 const gateways: Gateway[] = [];
 const previousFlag = process.env.VESSEL_VALIDATE_RESULTS;
 
@@ -259,8 +303,8 @@ describe('teams.* with an injected control', () => {
 
     const listed = await dispatchOk(gateway, 'teams.list');
     const teams = listed.teams as TeamSummaryLike[];
-    expect(teams).toHaveLength(1);
-    expect(teams[0]?.team_id).toBe('team-alpha');
+    expect(teams).toHaveLength(2);
+    expect(teams.map((team) => team.team_id)).toEqual(['team-alpha', 'team-bravo']);
 
     const got = (await dispatchOk(gateway, 'teams.get', {
       team_id: 'team-alpha',
@@ -423,5 +467,123 @@ describe('teams.* with an injected control', () => {
       'writer',
     );
     expect(allowedPost.ok).toBe(true);
+  });
+});
+
+describe('teams.* with a team-scoped control token', () => {
+  it('confines RPC teams.* to the token team and redacts workspace / policy', async () => {
+    const fake = new FakeTeamControl();
+    const gateway = startGateway({
+      events: new MemoryEventStream(),
+      port: 0,
+      token: 'legacy',
+      auth: authForTeamScope(),
+      teams: fake,
+    });
+    gateways.push(gateway);
+
+    const deniedGet = await rpcHttp(
+      gateway,
+      envelope('get-bravo', 'teams.get', { team_id: 'team-bravo' }),
+      'control-a',
+    );
+    expect(deniedGet.ok).toBe(false);
+    expect(deniedGet.error?.code).toBe('not_found');
+    expect(fake.calls.get).toEqual([]);
+
+    const deniedPost = await rpcHttp(
+      gateway,
+      envelope('post-bravo', 'teams.post', { team_id: 'team-bravo', content: 'nope' }),
+      'control-a',
+    );
+    expect(deniedPost.ok).toBe(false);
+    expect(deniedPost.error?.code).toBe('not_found');
+    expect(fake.calls.post).toEqual([]);
+
+    const allowedGet = await rpcHttp(
+      gateway,
+      envelope('get-alpha', 'teams.get', { team_id: 'team-alpha' }),
+      'control-a',
+    );
+    expect(allowedGet.ok).toBe(true);
+
+    const scopedList = await rpcHttp(gateway, envelope('list-a', 'teams.list'), 'control-a');
+    expect(scopedList.ok).toBe(true);
+    const scopedTeams = (scopedList.result as { teams: TeamSummaryLike[] }).teams;
+    expect(scopedTeams.map((team) => team.team_id)).toEqual(['team-alpha']);
+
+    // 不存在的 team 作用域：list 空数组，get 仍按 not_found（不泄漏存在性）。
+    const missingList = await rpcHttp(
+      gateway,
+      envelope('list-missing', 'teams.list'),
+      'control-missing',
+    );
+    expect(missingList.ok).toBe(true);
+    expect((missingList.result as { teams: TeamSummaryLike[] }).teams).toEqual([]);
+    const getCallsBefore = fake.calls.get.length;
+    const missingGet = await rpcHttp(
+      gateway,
+      envelope('get-missing', 'teams.get', { team_id: 'team-alpha' }),
+      'control-missing',
+    );
+    expect(missingGet.ok).toBe(false);
+    expect(missingGet.error?.code).toBe('not_found');
+    expect(fake.calls.get).toHaveLength(getCallsBefore);
+
+    const adminList = await rpcHttp(gateway, envelope('list-admin', 'teams.list'), 'admin-token');
+    expect(adminList.ok).toBe(true);
+    const adminTeams = (adminList.result as { teams: TeamSummaryLike[] }).teams;
+    expect(adminTeams.map((team) => team.team_id)).toEqual(['team-alpha', 'team-bravo']);
+
+    for (const payload of [scopedList.result, allowedGet.result]) {
+      const serialized = JSON.stringify(payload);
+      expect(serialized).not.toContain('workspace');
+      expect(serialized).not.toContain('policy');
+      expect(serialized).not.toContain('/tmp/alpha');
+      expect(serialized).not.toContain('allowFork');
+    }
+
+    const adminSerialized = JSON.stringify(adminList.result);
+    expect(adminSerialized).toContain('workspace');
+    expect(adminSerialized).toContain('policy');
+    expect(adminSerialized).toContain('/tmp/alpha');
+    expect(adminSerialized).toContain('allowFork');
+  });
+
+  it('enforces the team check in teams.members when the dispatcher is bypassed', async () => {
+    const fake = new FakeTeamControl();
+    const members = createTeamMethods({ teams: fake }).find(
+      (method) => method.name === 'teams.members',
+    );
+    if (members === undefined) throw new Error('teams.members is missing');
+
+    const ctx: RpcMethodContext = {
+      principal: {
+        tenant_id: 'default',
+        role: 'write',
+        scope: 'control',
+        team_id: 'team-alpha',
+      },
+      tenantId: 'default',
+      isAdmin: false,
+      allTenants: false,
+      connection: 'local',
+    };
+    const invoke = async (teamId: string): Promise<unknown> =>
+      members.handler({ team_id: teamId, action: 'add', member: 'agent-1' }, ctx);
+
+    const failure = await invoke('team-bravo').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(RpcError);
+    expect((failure as RpcError).code).toBe('not_found');
+    expect(fake.calls.members).toEqual([]);
+
+    const result = (await invoke('team-alpha')) as TeamMembersResultLike;
+    expect(result.team_id).toBe('team-alpha');
+    expect(fake.calls.members).toEqual([
+      { team_id: 'team-alpha', action: 'add', member: 'agent-1', from: 'human' },
+    ]);
   });
 });

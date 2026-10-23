@@ -109,6 +109,7 @@ export {
   type TeamPostResult,
   type TeamRecord,
   type TeamRosterOptions,
+  type TeamServiceEvent,
   type TeamStore,
   type TeamSummary,
   type TeamSystemEvent,

@@ -17,6 +17,7 @@ import type {
   NodeTokenMeta,
 } from '../../node-token-control.js';
 import { RpcError, type RpcMethodContext, type RpcMethodDefinition } from '../../rpc.js';
+import type { TeamControlLike } from '../../team-control.js';
 import { stringParam } from './common.js';
 import { issuedNodeTokenSchema, nodeTokenMetaListSchema } from './schemas.js';
 
@@ -26,6 +27,8 @@ const TTL_MAX_S = 86_400;
 
 export interface AuthMethodsDeps {
   nodeTokens?: NodeTokenControlLike;
+  /** 注入的 Team 控制面；缺失时 exchange 仍返回 not_found，不签 token。 */
+  teams?: TeamControlLike;
 }
 
 /** exchange：scope 为 exchange/admin，或静态 admin token（无 scope）。 */
@@ -41,6 +44,15 @@ function isAdminPrincipal(principal: RpcMethodContext['principal']): boolean {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+/** TeamService 在团队缺失时抛 `team_not_found`；映射为 canonical not_found。 */
+function isTeamNotFoundError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: unknown }).code === 'team_not_found'
+  );
 }
 
 /** 只白名单构造响应，避免实现方附带的敏感字段透出。 */
@@ -88,7 +100,7 @@ function toTokenMeta(meta: NodeTokenMeta): NodeTokenMeta {
 }
 
 export function createAuthMethods(deps: AuthMethodsDeps): RpcMethodDefinition[] {
-  const { nodeTokens } = deps;
+  const { nodeTokens, teams } = deps;
 
   function requireNodeTokens(): NodeTokenControlLike {
     if (!nodeTokens) throw new RpcError('not_found', 'Node token control is not available');
@@ -131,6 +143,22 @@ export function createAuthMethods(deps: AuthMethodsDeps): RpcMethodDefinition[] 
               `ttl_s must be an integer between ${TTL_MIN_S} and ${TTL_MAX_S}`,
             );
           }
+        }
+        // 只为真实存在的 Team 签 token：缺控制面 / tenant 不匹配 / 团队缺失一律 not_found。
+        if (teams === undefined || teams.tenantId !== tenantId) {
+          throw new RpcError('not_found', 'Team control is not available');
+        }
+        let detail: Awaited<ReturnType<TeamControlLike['get']>>;
+        try {
+          detail = await teams.get(teamId, { limit: 1 });
+        } catch (error) {
+          if (isTeamNotFoundError(error)) {
+            throw new RpcError('not_found', `Team not found: ${teamId}`);
+          }
+          throw error;
+        }
+        if (detail === undefined) {
+          throw new RpcError('not_found', `Team not found: ${teamId}`);
         }
         const issued = await control.exchange(
           { ...ctx.principal, tenant_id: tenantId },

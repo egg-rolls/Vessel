@@ -8,8 +8,13 @@
  * @module @vessel-agent/serve
  */
 
-import { RpcError, type RpcMethodContext, type RpcMethodDefinition } from '../../rpc.js';
-import type { TeamControlLike } from '../../team-control.js';
+import {
+  isTeamScopedPrincipal,
+  RpcError,
+  type RpcMethodContext,
+  type RpcMethodDefinition,
+} from '../../rpc.js';
+import type { TeamControlLike, TeamSummaryLike } from '../../team-control.js';
 import { stringParam } from './common.js';
 import {
   stringListSchema,
@@ -33,6 +38,40 @@ function requireTeamControl(
     throw new RpcError('not_found', 'Team control is not available');
   }
   return teams;
+}
+
+/**
+ * team-scoped control token 的作用域 team；非 team-scoped（静态 / admin / 其他
+ * scope）返回 undefined，沿用完整视图。
+ */
+function teamScopeOf(ctx: RpcMethodContext): string | undefined {
+  return isTeamScopedPrincipal(ctx.principal) ? ctx.principal.team_id : undefined;
+}
+
+/**
+ * 请求的 team_id 必须落在 token 的 team 作用域内。
+ * 在调用 `control.get/post/members` 之前执行：不泄漏跨 team 存在性，也不产生副作用。
+ */
+function assertTeamScope(scope: string | undefined, teamId: string): void {
+  if (scope !== undefined && teamId !== scope) {
+    throw new RpcError('not_found', `Team not found: ${teamId}`);
+  }
+}
+
+/**
+ * team-scoped token 的元数据白名单：去掉 `workspace` / `policy`。
+ * 只用于 `teams.list` / `teams.get.team`；`members` / `messages` 属于 data plane，不脱敏。
+ */
+function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
+  return {
+    team_id: team.team_id,
+    name: team.name,
+    tenant_id: team.tenant_id,
+    ...(team.handoff_path !== undefined ? { handoff_path: team.handoff_path } : {}),
+    member_count: team.member_count,
+    online_count: team.online_count,
+    created_at: team.created_at,
+  };
 }
 
 /**
@@ -75,7 +114,14 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         try {
           const control = requireTeamControl(teams, ctx);
           // canonical RPC 无 viewer：private 成员不可见（由 TeamService 过滤）。
-          return { teams: await control.list() };
+          const listed = await control.list();
+          const scope = teamScopeOf(ctx);
+          if (scope === undefined) return { teams: listed };
+          return {
+            teams: listed
+              .filter((team) => team.team_id === scope)
+              .map((team) => redactTeamSummary(team)),
+          };
         } catch (error) {
           return mapTeamError(error);
         }
@@ -97,10 +143,13 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         try {
           const control = requireTeamControl(teams, ctx);
           const teamId = stringParam(params, 'team_id');
+          const scope = teamScopeOf(ctx);
+          assertTeamScope(scope, teamId);
           const limit = typeof params.limit === 'number' ? params.limit : undefined;
           const detail = await control.get(teamId, limit === undefined ? undefined : { limit });
           if (!detail) throw new RpcError('not_found', `Team not found: ${teamId}`);
-          return detail;
+          if (scope === undefined) return detail;
+          return { ...detail, team: redactTeamSummary(detail.team) };
         } catch (error) {
           return mapTeamError(error);
         }
@@ -123,6 +172,7 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         try {
           const control = requireTeamControl(teams, ctx);
           const teamId = stringParam(params, 'team_id');
+          assertTeamScope(teamScopeOf(ctx), teamId);
           const content = stringParam(params, 'content');
           const mentions = Array.isArray(params.mentions)
             ? params.mentions.filter((item): item is string => typeof item === 'string')
@@ -151,6 +201,8 @@ export function createTeamMethods(deps: TeamMethodsDeps): RpcMethodDefinition[] 
         try {
           const control = requireTeamControl(teams, ctx);
           const teamId = stringParam(params, 'team_id');
+          // control scope 不在 dispatcher 白名单里能到 members，但这里仍做纵深防御。
+          assertTeamScope(teamScopeOf(ctx), teamId);
           const action = params.action;
           if (action !== 'add' && action !== 'remove') {
             throw new RpcError('invalid_params', 'action must be add or remove');

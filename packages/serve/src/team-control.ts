@@ -13,9 +13,11 @@ export interface TeamSummaryLike {
   team_id: string;
   name: string;
   tenant_id: string;
-  workspace: string;
+  /** team-scoped control token 不含此字段（白名单脱敏）。 */
+  workspace?: string;
   handoff_path?: string;
-  policy: Record<string, unknown>;
+  /** team-scoped control token 不含此字段（白名单脱敏）。 */
+  policy?: Record<string, unknown>;
   member_count: number;
   /** present && presence === 'live'；从 roster 派生，不持久化 */
   online_count: number;

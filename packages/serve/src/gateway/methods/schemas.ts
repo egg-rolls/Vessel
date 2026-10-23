@@ -489,15 +489,7 @@ export const workflowDetailSchema = {
 /** teams.list / teams.get 的 `team`（TeamSummary）。 */
 export const teamSummarySchema = {
   type: 'object',
-  required: [
-    'team_id',
-    'name',
-    'tenant_id',
-    'workspace',
-    'member_count',
-    'online_count',
-    'created_at',
-  ],
+  required: ['team_id', 'name', 'tenant_id', 'member_count', 'online_count', 'created_at'],
   properties: {
     team_id: { type: 'string' },
     name: { type: 'string' },

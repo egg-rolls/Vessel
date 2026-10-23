@@ -1254,6 +1254,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     // 0.19 S5：auth.exchange / auth.revoke / auth.tokens（additive，排在表尾）。
     ...createAuthMethods({
       ...(opts.nodeTokens !== undefined ? { nodeTokens: opts.nodeTokens } : {}),
+      ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
     }),
   ];
 

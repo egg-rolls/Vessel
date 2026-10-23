@@ -671,6 +671,15 @@ export interface TeamStore extends TeamBinder {
   flush(): Promise<void>;
 }
 
+/** TeamService 事件（指针用途）：绝不含正文。 */
+export interface TeamServiceEvent {
+  team_id: string;
+  /** 日志写入类别，或 roster 变更 */
+  kind: 'post' | 'mention' | 'reply' | 'system' | 'roster';
+  /** 日志写入成功后的 message_id；roster 事件缺省 */
+  message_id?: string;
+}
+
 /** Team 能力层（AgentService 之上的 roster / 日志 / 定向投递） */
 export interface AgentTeamService {
   readonly tenantId: string;
@@ -686,6 +695,8 @@ export interface AgentTeamService {
   listForCaller(sessionId: string): Promise<TeamMemberSummary[]>;
   /** body session -> 成员（含 team_id） */
   identify(sessionId: string): Promise<TeamMemberSummary | undefined>;
+  /** 订阅日志写入 / roster 变更事件（只带指针，不含正文）；返回取消函数 */
+  subscribe(listener: (event: TeamServiceEvent) => void): () => void;
   dispose(): void;
 }
 

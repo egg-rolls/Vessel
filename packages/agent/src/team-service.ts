@@ -36,6 +36,7 @@ import {
   type TeamPostResult,
   type TeamRecord,
   type TeamRosterOptions,
+  type TeamServiceEvent,
   type TeamStore,
   type TeamSummary,
   type TeamSystemEvent,
@@ -95,6 +96,8 @@ export class DefaultTeamService implements AgentTeamService {
   private readonly newId: () => string;
   private readonly logger: Logger;
   private readonly unsubscribe: () => void;
+  /** 指针事件监听者；绝不含正文（Web hub 用） */
+  private readonly listeners = new Set<(event: TeamServiceEvent) => void>();
   /** members remove 期间的标记：把该次 agent.closed 写成 archive 而不是 leave */
   private readonly archiveInFlight = new Set<string>();
   private disposed = false;
@@ -263,6 +266,7 @@ export class DefaultTeamService implements AgentTeamService {
     } catch (error) {
       throw new TeamError('team_log_write_failed', errorText(error));
     }
+    this.emit({ team_id: input.team_id, kind, message_id: messageId });
 
     // 3. 日志已落盘后再并行投递；单条失败不影响其它条目。
     const dispatched = await Promise.all(
@@ -314,6 +318,7 @@ export class DefaultTeamService implements AgentTeamService {
         throw new TeamError('invalid_input', `duplicate member name: ${target.name}`);
       }
       await this.agent.reinstate({ to: target.id, team_id: input.team_id, from });
+      this.emit({ team_id: input.team_id, kind: 'roster' });
       return {
         team_id: input.team_id,
         action: 'add',
@@ -331,6 +336,7 @@ export class DefaultTeamService implements AgentTeamService {
     } finally {
       this.archiveInFlight.delete(target.id);
     }
+    this.emit({ team_id: input.team_id, kind: 'roster' });
     return {
       team_id: input.team_id,
       action: 'remove',
@@ -468,10 +474,38 @@ export class DefaultTeamService implements AgentTeamService {
     }
   }
 
+  subscribe(listener: (event: TeamServiceEvent) => void): () => void {
+    if (this.disposed) return () => undefined;
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.listeners.clear();
     this.unsubscribe();
+  }
+
+  /**
+   * 指针事件：只带 team_id / kind / message_id，绝不含正文。
+   * 监听者异常被隔离，不影响日志与生命周期。
+   */
+  private emit(event: TeamServiceEvent): void {
+    if (this.disposed) return;
+    for (const listener of [...this.listeners]) {
+      try {
+        listener(event);
+      } catch (error) {
+        this.logger.warn('team.event.listener_failed', {
+          team_id: event.team_id,
+          kind: event.kind,
+          error: errorText(error),
+        });
+      }
+    }
   }
 
   private async listVisible(viewer?: string): Promise<MemberStatus[]> {
@@ -581,7 +615,8 @@ export class DefaultTeamService implements AgentTeamService {
     // id / name / reply into the team log. Fail closed for unknown visibility.
     if (event.visibility !== 'team' && event.visibility !== 'tenant') return;
 
-    if (event.team_id === undefined || event.team_id.length === 0) return;
+    const teamId = event.team_id;
+    if (teamId === undefined || teamId.length === 0) return;
 
     // 0.19 S6：成员完成一轮的最终文本。AgentService 只发事件；TeamService 是
     // 唯一日志写入点，且**不 dispatch / 不唤醒任何人**。message_id 与事件一致，
@@ -590,7 +625,7 @@ export class DefaultTeamService implements AgentTeamService {
       if (typeof event.content !== 'string' || event.content.length === 0) return;
       const entry: TeamLogEntry = {
         message_id: event.message_id ?? this.newId(),
-        team_id: event.team_id,
+        team_id: teamId,
         from: event.agent_id,
         to: [],
         mentions: [],
@@ -598,13 +633,18 @@ export class DefaultTeamService implements AgentTeamService {
         ts: event.ts,
         kind: 'reply',
       };
-      this.store.appendLog(entry).catch((error: unknown) => {
-        this.logger.warn('team.reply_message.failed', {
-          team_id: event.team_id,
-          agent_id: event.agent_id,
-          error: errorText(error),
+      this.store
+        .appendLog(entry)
+        .then(() => {
+          this.emit({ team_id: teamId, kind: 'reply', message_id: entry.message_id });
+        })
+        .catch((error: unknown) => {
+          this.logger.warn('team.reply_message.failed', {
+            team_id: teamId,
+            agent_id: event.agent_id,
+            error: errorText(error),
+          });
         });
-      });
       return;
     }
 
@@ -612,7 +652,7 @@ export class DefaultTeamService implements AgentTeamService {
     if (systemEvent === undefined) return;
     const entry: TeamLogEntry = {
       message_id: this.newId(),
-      team_id: event.team_id,
+      team_id: teamId,
       from: 'system',
       to: [event.agent_id],
       mentions: [],
@@ -621,14 +661,19 @@ export class DefaultTeamService implements AgentTeamService {
       kind: 'system',
       system_event: systemEvent,
     };
-    this.store.appendLog(entry).catch((error: unknown) => {
-      this.logger.warn('team.system_message.failed', {
-        team_id: event.team_id,
-        agent_id: event.agent_id,
-        system_event: systemEvent,
-        error: errorText(error),
+    this.store
+      .appendLog(entry)
+      .then(() => {
+        this.emit({ team_id: teamId, kind: 'system', message_id: entry.message_id });
+      })
+      .catch((error: unknown) => {
+        this.logger.warn('team.system_message.failed', {
+          team_id: teamId,
+          agent_id: event.agent_id,
+          system_event: systemEvent,
+          error: errorText(error),
+        });
       });
-    });
   }
 
   private systemEventFor(event: AgentEvent): TeamSystemEvent | undefined {

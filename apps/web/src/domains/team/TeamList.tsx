@@ -37,13 +37,13 @@ export interface TeamListProps {
   initialError?: { message: string; code?: string };
 }
 
-function matchesQuery(team: TeamSummary, query: string): boolean {
+export function matchesQuery(team: TeamSummary, query: string): boolean {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
   return (
     team.name.toLowerCase().includes(needle) ||
     team.team_id.toLowerCase().includes(needle) ||
-    team.workspace.toLowerCase().includes(needle)
+    (team.workspace?.toLowerCase().includes(needle) ?? false)
   );
 }
 

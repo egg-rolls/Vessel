@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemberDetail } from '../src/domains/team/MemberDetail';
 import { TeamChat } from '../src/domains/team/TeamChat';
-import { TeamList } from '../src/domains/team/TeamList';
+import { matchesQuery, TeamList } from '../src/domains/team/TeamList';
 import type {
   SessionDetail,
   TeamDetail,
@@ -196,6 +196,24 @@ describe('TeamList', () => {
     expect(markup).toContain('/work/core');
     expect(markup).toContain(t('team.list.memberCount', { count: 3 }));
     expect(markup).toContain(t('team.list.onlineCount', { count: 1 }));
+  });
+
+  test('tolerates a team without workspace and keeps search working', () => {
+    const withoutWorkspace: TeamSummary = {
+      team_id: 'core',
+      name: 'Core Team',
+      tenant_id: 'default',
+      member_count: 3,
+      created_at: 1_700_000_000_000,
+    };
+
+    const markup = renderList({ initialTeams: [withoutWorkspace] });
+    expect(markup).toContain('team-list-item');
+    expect(markup).toContain('—');
+
+    expect(matchesQuery(summary, '/work/core')).toBe(true);
+    expect(matchesQuery(withoutWorkspace, 'core')).toBe(true);
+    expect(matchesQuery(withoutWorkspace, '/work')).toBe(false);
   });
 
   test('shows an em dash when online_count is missing', () => {
