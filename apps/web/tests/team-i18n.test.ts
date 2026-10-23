@@ -23,9 +23,7 @@ describe('Team i18n catalog', () => {
   test('zh-CN and en expose the same Team key set', () => {
     const enTeamKeys = Object.keys(en).filter(
       (key) =>
-        key.startsWith('team.') ||
-        key === 'nav.domain.team' ||
-        key.startsWith('breadcrumb.team'),
+        key.startsWith('team.') || key === 'nav.domain.team' || key.startsWith('breadcrumb.team'),
     );
     expect(TEAM_KEYS.length).toBeGreaterThan(0);
     expect(enTeamKeys.sort()).toEqual([...TEAM_KEYS].sort());

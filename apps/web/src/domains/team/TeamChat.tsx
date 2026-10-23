@@ -40,7 +40,7 @@ import { type MentionChip, memberDisplayName, mentionIds, shortAgentId } from '.
 import { TeamComposer } from './TeamComposer';
 import { TeamMemberSidebar } from './TeamMemberSidebar';
 import { TeamTranscript } from './TeamTranscript';
-import { buildTeamRows, matchWrittenMessage, shouldFetchTeam, type LocalSend } from './team-send';
+import { buildTeamRows, type LocalSend, matchWrittenMessage, shouldFetchTeam } from './team-send';
 import { DEFAULT_LIMIT, nextLimitFor, teamWindowFlags } from './team-window';
 
 const TEAM_POLL_MS = 4_000;

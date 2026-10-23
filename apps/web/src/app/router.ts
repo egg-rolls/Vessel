@@ -127,9 +127,7 @@ export function parseRoute(hash: string): Route {
           ? decodeSegment(segments[3])
           : undefined;
       const bodyId =
-        memberId && query.get('body') !== null
-          ? decodeSegment(query.get('body') ?? '')
-          : undefined;
+        memberId && query.get('body') !== null ? decodeSegment(query.get('body') ?? '') : undefined;
       return {
         domain: 'team',
         teamId,

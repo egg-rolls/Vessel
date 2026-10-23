@@ -52,7 +52,11 @@ describe('buildTeamRows', () => {
         deliveries: [{ agent_id: 'agent-alpha', status: 'rejected', code: 'agent_left' }],
       }),
     ];
-    const rows = buildTeamRows([message({ message_id: 'm-1', content: 'hello', ts: 5 })], sends, TEAM);
+    const rows = buildTeamRows(
+      [message({ message_id: 'm-1', content: 'hello', ts: 5 })],
+      sends,
+      TEAM,
+    );
     expect(rows).toHaveLength(1);
     expect(rows[0]?.message_id).toBe('m-1');
     expect(rows[0]?.sendStatus).toBe('sent');
@@ -95,7 +99,13 @@ describe('matchWrittenMessage', () => {
   test('matches content + mentions after the attempt timestamp', () => {
     const history = [
       message({ message_id: 'old', content: 'hello', ts: 1 }),
-      message({ message_id: 'new', content: 'hello', ts: 10, mentions: ['agent-alpha'], kind: 'mention' }),
+      message({
+        message_id: 'new',
+        content: 'hello',
+        ts: 10,
+        mentions: ['agent-alpha'],
+        kind: 'mention',
+      }),
     ];
     expect(matchWrittenMessage(history, 'hello', ['agent-alpha'], 5)?.message_id).toBe('new');
     expect(matchWrittenMessage(history, 'hello', ['agent-alpha'], 11)).toBeUndefined();
