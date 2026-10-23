@@ -14,8 +14,8 @@ import type { FederationConfig, FederationPeerConfig } from '../packages/config/
 export type FederationDirection = 'in' | 'out' | 'both';
 
 export interface FederationRuntimePeer {
-  node_id: string;
-  team_id: string;
+  nodeId: string;
+  teamId: string;
   direction: FederationDirection;
   localTeamId?: string;
   url?: string;
@@ -40,8 +40,8 @@ export type FederationResolutionIssue =
 const DEFAULT_MAX_HOPS = 4;
 
 function peerLabel(peer: FederationPeerConfig, index: number): string {
-  const node = typeof peer.node_id === 'string' ? peer.node_id : `#${index}`;
-  const team = typeof peer.team_id === 'string' ? peer.team_id : '?';
+  const node = typeof peer.nodeId === 'string' ? peer.nodeId : `#${index}`;
+  const team = typeof peer.teamId === 'string' ? peer.teamId : '?';
   return `${node}:${team}`;
 }
 
@@ -72,8 +72,8 @@ export function resolveFederationOptions(input: {
     }
     const label = peerLabel(peer, index);
     if (
-      typeof peer.node_id !== 'string' ||
-      typeof peer.team_id !== 'string' ||
+      typeof peer.nodeId !== 'string' ||
+      typeof peer.teamId !== 'string' ||
       typeof peer.tokenEnv !== 'string'
     ) {
       issues.push({ peer: label, reason: 'invalid_config' });
@@ -87,8 +87,8 @@ export function resolveFederationOptions(input: {
     const direction: FederationDirection =
       peer.direction === 'in' || peer.direction === 'out' ? peer.direction : 'both';
     const resolved: FederationRuntimePeer = {
-      node_id: peer.node_id,
-      team_id: peer.team_id,
+      nodeId: peer.nodeId,
+      teamId: peer.teamId,
       direction,
       tokenEnv: peer.tokenEnv,
       token,

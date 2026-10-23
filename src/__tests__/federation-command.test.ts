@@ -47,8 +47,8 @@ function config(
       enabled: overrides.enabled ?? true,
       peers: overrides.peers ?? [
         {
-          node_id: 'node-b',
-          team_id: 'beta',
+          nodeId: 'node-b',
+          teamId: 'beta',
           url: 'http://127.0.0.1:1',
           tokenEnv: 'PEER_TOKEN',
           direction: 'out',
@@ -135,13 +135,13 @@ describe('runFederationCommand', () => {
         config: config({
           peers: [
             {
-              node_id: 'node-b',
-              team_id: 'beta',
+              nodeId: 'node-b',
+              teamId: 'beta',
               url: 'http://127.0.0.1:1',
               tokenEnv: 'PEER_TOKEN',
               direction: 'out',
             },
-            { node_id: 'node-c', team_id: 'gamma', tokenEnv: 'MISSING_TOKEN', direction: 'in' },
+            { nodeId: 'node-c', teamId: 'gamma', tokenEnv: 'MISSING_TOKEN', direction: 'in' },
           ],
         }),
         env: { PEER_TOKEN: SEA_TOKEN },
@@ -201,8 +201,8 @@ describe('runFederationCommand', () => {
         config: config({
           peers: [
             {
-              node_id: 'node-b',
-              team_id: 'beta',
+              nodeId: 'node-b',
+              teamId: 'beta',
               url: mock.url,
               tokenEnv: 'PEER_TOKEN',
               direction: 'out',
@@ -240,8 +240,8 @@ describe('runFederationCommand', () => {
         config: config({
           peers: [
             {
-              node_id: 'node-b',
-              team_id: 'beta',
+              nodeId: 'node-b',
+              teamId: 'beta',
               url: mock.url,
               tokenEnv: 'PEER_TOKEN',
               direction: 'out',
@@ -340,8 +340,8 @@ describe('runFederationCommand', () => {
         config: config({
           peers: [
             {
-              node_id: 'node-b',
-              team_id: 'beta',
+              nodeId: 'node-b',
+              teamId: 'beta',
               url: mock.url,
               tokenEnv: 'PEER_TOKEN',
               direction: 'out',

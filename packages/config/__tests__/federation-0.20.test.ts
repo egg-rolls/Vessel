@@ -8,8 +8,8 @@ function paths(config: VesselConfig): string[] {
 
 function peer(overrides: Partial<FederationPeerConfig> = {}): FederationPeerConfig {
   return {
-    node_id: 'office',
-    team_id: 'research',
+    nodeId: 'office',
+    teamId: 'research',
     url: 'https://office.example:7321',
     tokenEnv: 'VESSEL_FED_OFFICE',
     ...overrides,
@@ -38,16 +38,16 @@ describe('federation config', () => {
     expect(paths(config)).toContain('federation.peers[0].token');
   });
 
-  it('rejects duplicate (node_id, team_id) peers', () => {
+  it('rejects duplicate (nodeId, teamId) peers', () => {
     const config: VesselConfig = {
       federation: { enabled: true, peers: [peer(), peer()] },
     };
-    expect(paths(config)).toContain('federation.peers[1].team_id');
+    expect(paths(config)).toContain('federation.peers[1].teamId');
   });
 
   it('rejects a peer that points at this node', () => {
     const config = withPeer({}, { host: { nodeId: 'office' } });
-    expect(paths(config)).toContain('federation.peers[0].node_id');
+    expect(paths(config)).toContain('federation.peers[0].nodeId');
   });
 
   it('requires url when direction includes outbound', () => {

@@ -382,13 +382,14 @@ export interface TeamConfigInput {
 /**
  * S7：跨节点 team ↔ team 的 peer 声明（全局配置）。
  *
- * - `node_id` / `team_id` 是对端身份；`localTeamId` 只用于入站映射。
+ * - `nodeId` / `teamId` 是对端身份；`localTeamId` 只用于入站映射。
  * - `tokenEnv` 必填；明文 token 不接受。
  * - `url` 在 `direction` 含 `out` 时必填；非回环必须 https。
+ * - YAML 写 `node_id` / `team_id` / `local_team_id`，loader 递归转 camelCase。
  */
 export interface FederationPeerConfig {
-  node_id: string;
-  team_id: string;
+  nodeId: string;
+  teamId: string;
   url?: string;
   tokenEnv: string;
   caFile?: string;

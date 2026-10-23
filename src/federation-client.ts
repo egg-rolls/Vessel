@@ -108,8 +108,8 @@ function findOutboundPeer(
 ): FederationRuntimePeer | undefined {
   return options.peers.find(
     (peer) =>
-      peer.node_id === to.node_id &&
-      peer.team_id === to.team_id &&
+      peer.nodeId === to.node_id &&
+      peer.teamId === to.team_id &&
       (peer.direction === 'out' || peer.direction === 'both'),
   );
 }
@@ -119,7 +119,7 @@ function resolveEndpoint(peer: FederationRuntimePeer): string {
   if (peer.url === undefined || peer.url === '') {
     throw new FederationClientError(
       'federation_invalid_config',
-      `federation peer ${peer.node_id}:${peer.team_id} has no url`,
+      `federation peer ${peer.nodeId}:${peer.teamId} has no url`,
     );
   }
   let parsed: URL;
@@ -128,13 +128,13 @@ function resolveEndpoint(peer: FederationRuntimePeer): string {
   } catch {
     throw new FederationClientError(
       'federation_invalid_config',
-      `federation peer ${peer.node_id}:${peer.team_id} url is not a valid http(s) URL`,
+      `federation peer ${peer.nodeId}:${peer.teamId} url is not a valid http(s) URL`,
     );
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
     throw new FederationClientError(
       'federation_invalid_config',
-      `federation peer ${peer.node_id}:${peer.team_id} url must be http(s)`,
+      `federation peer ${peer.nodeId}:${peer.teamId} url must be http(s)`,
     );
   }
   return `${peer.url}${FEDERATION_MESSAGES_PATH}`;
@@ -254,7 +254,7 @@ export async function postFederation(
     } catch {
       throw new FederationClientError(
         'federation_invalid_config',
-        `cannot read CA file for ${peer.node_id}:${peer.team_id}`,
+        `cannot read CA file for ${peer.nodeId}:${peer.teamId}`,
       );
     }
     init.tls = { ca };
@@ -269,7 +269,7 @@ export async function postFederation(
     return {
       status: 'rejected',
       code: 'federation_peer_unreachable',
-      reason: `cannot reach federation peer ${peer.node_id}:${peer.team_id}: ${detail}`,
+      reason: `cannot reach federation peer ${peer.nodeId}:${peer.teamId}: ${detail}`,
     };
   }
 

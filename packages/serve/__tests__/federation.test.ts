@@ -93,7 +93,7 @@ function federationOptions(
     enabled: true,
     nodeId: LOCAL_NODE,
     maxHops: 4,
-    peers: [{ node_id: REMOTE_NODE, team_id: TEAM, direction: 'both', token: PEER_TOKEN }],
+    peers: [{ nodeId: REMOTE_NODE, teamId: TEAM, direction: 'both', token: PEER_TOKEN }],
     ...overrides,
   };
 }
@@ -185,7 +185,7 @@ describe('federation inbound route (S7.1)', () => {
   it('rejects a peer whose direction does not include inbound', async () => {
     const teams = new FakeTeams();
     const federation = federationOptions({
-      peers: [{ node_id: REMOTE_NODE, team_id: TEAM, direction: 'out', token: PEER_TOKEN }],
+      peers: [{ nodeId: REMOTE_NODE, teamId: TEAM, direction: 'out', token: PEER_TOKEN }],
     });
     const { gateway } = start({ federation, teams });
 
@@ -244,7 +244,7 @@ describe('federation inbound route (S7.1)', () => {
   it('detects a message claiming to originate from this node', async () => {
     const teams = new FakeTeams();
     const federation = federationOptions({
-      peers: [{ node_id: LOCAL_NODE, team_id: TEAM, direction: 'both', token: PEER_TOKEN }],
+      peers: [{ nodeId: LOCAL_NODE, teamId: TEAM, direction: 'both', token: PEER_TOKEN }],
     });
     const { gateway } = start({ federation, teams });
 
@@ -321,8 +321,8 @@ describe('federation inbound route (S7.1)', () => {
     const federation = federationOptions({
       peers: [
         {
-          node_id: REMOTE_NODE,
-          team_id: 'research',
+          nodeId: REMOTE_NODE,
+          teamId: 'research',
           direction: 'both',
           localTeamId: 'lab',
           token: PEER_TOKEN,

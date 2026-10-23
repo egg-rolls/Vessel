@@ -623,11 +623,11 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
     for (const peer of federation.peers) {
       if (
-        typeof peer.node_id !== 'string' ||
-        typeof peer.team_id !== 'string' ||
+        typeof peer.nodeId !== 'string' ||
+        typeof peer.teamId !== 'string' ||
         typeof peer.token !== 'string'
       ) {
-        throw new Error('federation peers must provide node_id, team_id, and token.');
+        throw new Error('federation peers must provide nodeId, teamId, and token.');
       }
     }
   }

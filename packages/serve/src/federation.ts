@@ -52,12 +52,12 @@ const IDENTITY_KEYS = new Set(['node_id', 'team_id']);
 
 export type FederationDirection = 'in' | 'out' | 'both';
 
-/** 已解析 token 的入站 peer（`direction` 缺省 both 由 resolver 补齐）。 */
+/** 已解析 token 的入站 peer（camelCase 与 config loader 一致）。 */
 export interface FederationGatewayPeer {
-  node_id: string;
-  team_id: string;
+  nodeId: string;
+  teamId: string;
   direction: FederationDirection;
-  /** 仅出站映射用；入站不改写目标 Team（S7.1 以 `to.team_id` 为准）。 */
+  /** 入站落点（本机 Team id）；缺省 = `teamId`。 */
   localTeamId?: string;
   /** 内存 token：只用于定长比较，不序列化 / 不打印。 */
   token: string;
@@ -369,8 +369,8 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         publish('federation.rejected', {
           direction: 'in',
           code: 'federation_not_allowed',
-          peer_node: peer.node_id,
-          peer_team: peer.team_id,
+          peer_node: peer.nodeId,
+          peer_team: peer.teamId,
         });
         return errorJson(
           'federation_not_allowed',
@@ -386,8 +386,8 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         publish('federation.rejected', {
           direction: 'in',
           code: 'federation_invalid',
-          peer_node: peer.node_id,
-          peer_team: peer.team_id,
+          peer_node: peer.nodeId,
+          peer_team: peer.teamId,
         });
         return errorJson('federation_invalid', 'Invalid federation message', 400, extra);
       }
@@ -398,17 +398,17 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         publish('federation.rejected', {
           direction: 'in',
           code: 'federation_invalid',
-          peer_node: peer.node_id,
-          peer_team: peer.team_id,
+          peer_node: peer.nodeId,
+          peer_team: peer.teamId,
         });
         return errorJson('federation_invalid', 'Invalid federation message', 400, extra);
       }
-      if (claimedFrom.node_id !== peer.node_id || claimedFrom.team_id !== peer.team_id) {
+      if (claimedFrom.node_id !== peer.nodeId || claimedFrom.team_id !== peer.teamId) {
         publish('federation.rejected', {
           direction: 'in',
           code: 'federation_not_allowed',
-          peer_node: peer.node_id,
-          peer_team: peer.team_id,
+          peer_node: peer.nodeId,
+          peer_team: peer.teamId,
         });
         return errorJson(
           'federation_not_allowed',
@@ -424,20 +424,20 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         publish('federation.rejected', {
           direction: 'in',
           code: 'federation_invalid',
-          peer_node: peer.node_id,
-          peer_team: peer.team_id,
+          peer_node: peer.nodeId,
+          peer_team: peer.teamId,
         });
         return errorJson('federation_invalid', 'Invalid federation message', 400, extra);
       }
 
       const peerDetail = {
-        peer_node: peer.node_id,
-        peer_team: peer.team_id,
+        peer_node: peer.nodeId,
+        peer_team: peer.teamId,
         hop: message.hop,
       };
 
       // 6. 落点由 peer 配置决定（DECISION-036 §3.1/§3.3）；报文不得指定任意本机 Team。
-      const localTeamId = peer.localTeamId ?? peer.team_id;
+      const localTeamId = peer.localTeamId ?? peer.teamId;
       if (message.to.team_id !== localTeamId) {
         publish('federation.rejected', {
           direction: 'in',

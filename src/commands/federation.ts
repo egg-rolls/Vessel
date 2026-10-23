@@ -67,8 +67,8 @@ function configuredPeers(
   for (const peer of configured) {
     if (!isRecord(peer)) continue;
     if (
-      typeof peer.node_id !== 'string' ||
-      typeof peer.team_id !== 'string' ||
+      typeof peer.nodeId !== 'string' ||
+      typeof peer.teamId !== 'string' ||
       typeof peer.tokenEnv !== 'string'
     ) {
       continue;
@@ -76,8 +76,8 @@ function configuredPeers(
     const direction = peer.direction === 'in' || peer.direction === 'out' ? peer.direction : 'both';
     const token = env[peer.tokenEnv];
     const view: PeerView = {
-      node_id: peer.node_id,
-      team_id: peer.team_id,
+      node_id: peer.nodeId,
+      team_id: peer.teamId,
       direction,
       token_env: peer.tokenEnv,
       token_set: typeof token === 'string' && token !== '',

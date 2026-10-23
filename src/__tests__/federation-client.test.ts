@@ -43,8 +43,8 @@ function startServer(handler: (captured: Captured) => Response | Promise<Respons
 
 function peer(overrides: Partial<FederationRuntimePeer> = {}): FederationRuntimePeer {
   return {
-    node_id: 'node-b',
-    team_id: 'beta',
+    nodeId: 'node-b',
+    teamId: 'beta',
     direction: 'out',
     tokenEnv: 'PEER_TOKEN',
     token: 'secret-token-value',

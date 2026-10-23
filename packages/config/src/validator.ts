@@ -287,29 +287,29 @@ function validateFederation(
     }
 
     let nodeId: string | undefined;
-    if (typeof peer.node_id !== 'string' || !NODE_ID_RE.test(peer.node_id)) {
+    if (typeof peer.nodeId !== 'string' || !NODE_ID_RE.test(peer.nodeId)) {
       errors.push({
-        path: `${base}.node_id`,
+        path: `${base}.nodeId`,
         message: `${base}.node_id must match ${NODE_ID_RE.source}`,
       });
     } else {
-      nodeId = peer.node_id;
-      if (hostNodeId !== undefined && peer.node_id === hostNodeId) {
+      nodeId = peer.nodeId;
+      if (hostNodeId !== undefined && peer.nodeId === hostNodeId) {
         errors.push({
-          path: `${base}.node_id`,
+          path: `${base}.nodeId`,
           message: `${base}.node_id must not equal this node's node_id`,
         });
       }
     }
 
     let teamId: string | undefined;
-    if (typeof peer.team_id !== 'string' || !TEAM_ID_RE.test(peer.team_id)) {
+    if (typeof peer.teamId !== 'string' || !TEAM_ID_RE.test(peer.teamId)) {
       errors.push({
-        path: `${base}.team_id`,
+        path: `${base}.teamId`,
         message: `${base}.team_id must match ${TEAM_ID_RE.source}`,
       });
     } else {
-      teamId = peer.team_id;
+      teamId = peer.teamId;
     }
 
     if (
@@ -366,7 +366,7 @@ function validateFederation(
       const key = `${nodeId}\u0000${teamId}`;
       if (seen.has(key)) {
         errors.push({
-          path: `${base}.team_id`,
+          path: `${base}.teamId`,
           message: `duplicate federation peer "${nodeId}:${teamId}"`,
         });
       } else {
