@@ -3,6 +3,14 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.19.1] - 2026-10-23
+
+> 0.19.1（基于 `main`，未发布）：headless `--resume-run` 权限挂起修复。未 tag、未 `npm publish`。
+
+### Fixed
+
+- **`--resume-run` 权限挂起**：headless resume 没有安装权限自动应答，首个 `tool.permission.request` 后 policy 无限等待。现在 `runHeadless` 与 resume 分支共用 `installHeadlessPermissionAutoAllow`，仅 headless 安装、`finally` 退订；TTY resume 仍由用户应答。同一 tool call 的重复 permission request（P2）随根因一并消除。
+
 ## [0.19.0] - 2026-10-23
 
 > 0.19.0（基于 `main`，**未发布**）：0.18 累积线（session liveness、workflow 移除、Web 设计系统、dev DX、update、interaction delivery）与 0.19 的 Agent/Body、Team、Hub、Web Team、权限/预算合并。未 tag、未 `npm publish`。
