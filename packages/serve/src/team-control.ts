@@ -121,6 +121,8 @@ export interface TeamBudgetResultLike {
   action: 'status' | 'override';
   conversation_id?: string;
   conversations?: ConversationBudgetStatusLike[];
+  /** 单会话 status 时的视图（additive；与 conversations[0] 同形） */
+  status?: ConversationBudgetStatusLike;
   previous_max?: number | null;
   max?: number | null;
 }

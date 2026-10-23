@@ -1036,12 +1036,13 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `teams.get` | read |
 | `teams.post` | write |
 | `teams.members` | write |
+| `teams.budget` | write |
 | `auth.exchange` | write |
 | `auth.revoke` | admin |
 | `auth.tokens` | admin |
 <!-- rpc-methods:end -->
 
-0.19 S3 + S5 起 canonical 方法总数 **47**（46 个 domain 方法 + `events.subscribe`）。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
+0.19 S3 + S5 + S4 起 canonical 方法总数 **48**（47 个 domain 方法 + `events.subscribe`）。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S4 新增 `teams.budget`（`write`，`status|override`），同样由 `TeamControlLike` 注入；它**不在** team-scoped control token 白名单，未注入时返回 `not_found`。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
@@ -1693,7 +1694,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 
 ### 28.2 协议 result schema
 
-- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens` 后为 **47** 个 = 46 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
+- **覆盖**：canonical 方法全部带 `result_schema`（0.9 时 37 个 = 36 个 domain 方法 + `events.subscribe`；0.12 增加 `gateway.reload` 后为 38 个 = 37 个 domain 方法 + `events.subscribe`；0.14 增加 `agents.list` / `agents.get` 后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.15 增加 `agents.tree` / `tasks.list` / `tasks.get` / `config.set` 后为 44 个；0.18 增加 `interactions.list` 后为 45 个；2026-10-22 移除 workflow 的 5 个方法后为 40 个 = 39 个 domain 方法 + `events.subscribe`；0.19 S3 增加 `teams.list` / `teams.get` / `teams.post` / `teams.members`、S5 增加 `auth.exchange` / `auth.revoke` / `auth.tokens`、S4 增加 `teams.budget` 后为 **48** 个 = 47 个 domain 方法 + `events.subscribe`）；复用片段在 `packages/serve/src/gateway/methods/schemas.ts`（`runStatusSchema`、`runStateSchema`、`sessionInfoSchema`、`usageSchema`、`tenantInfoSchema`、`runEventSchema`、`metricsSnapshotSchema`、eval 片段）。
 - **支持子集**：`object` / `array` / `string` / `number` / `integer` / `boolean` + `required` / `properties` / `items` / `enum` / `minLength` / `maxLength` / `minimum` / `maximum`；不使用 `oneOf` / `$ref` / `additionalProperties`，不新增依赖。
 - **校验**：仅当 `VESSEL_VALIDATE_RESULTS=1` 时在 RPC 分发层校验；违反返回 `internal`（details 仅 `method` / `path`）并发布 `rpc.result_invalid`。默认关闭，生产热路径不变。
 - **版本单源**：`PROTOCOL_VERSION`（`packages/serve/src/protocol.ts`）是唯一常量，`RPC_VERSION` 为兼容别名；HTTP / WS / `hello` / team / transport 不再硬编码 `1`。
@@ -2464,7 +2465,7 @@ interface LimitBlock {
 - scope 为 `view | exchange | control | admin`，映射既有 `read / write / admin` rank，不新增 role。`view` 只读目录 / 健康；`exchange` 只能调用 `auth.exchange`；`control` 走节点控制面白名单（events / interactions / permission / ask / teams read + post）；`admin` 走既有 admin 面。
 - token 记录绑定 `hub_id`；`/v1/hub/control` 首帧 `hub_id` 必须与记录一致。吊销 `auth.revoke` 关闭匹配 `token_id` 的已建 WS，新 HTTP 请求重新鉴权。
 - hub 的 `view` / `exchange` token 走 `SecretStore`（Windows DPAPI / macOS Keychain / Linux libsecret）；仅当 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器，否则 fail-closed。不写明文 YAML / `registry.json`。
-- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后 40，S3 + S5 合并后 canonical 总数 **47**。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后 40，S3 + S5 + S4（`teams.budget`）合并后 canonical 总数 **48**。
 
 ### 42.4 team-scoped token 收窄
 

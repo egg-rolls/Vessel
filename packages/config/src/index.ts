@@ -52,6 +52,12 @@ export {
   redactSourcePaths,
 } from './sources.js';
 export {
+  parseTeamPolicy,
+  TeamPolicyError,
+  type TeamPolicyIssue,
+  validateTeamPolicy,
+} from './team-policy.js';
+export {
   isTenantToolAllowed,
   resolveTenantToolPolicy,
   type TenantToolPolicy,

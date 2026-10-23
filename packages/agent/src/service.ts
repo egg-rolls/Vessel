@@ -18,6 +18,7 @@ import {
   noopLogger,
   type RunEvent,
 } from '@vessel-agent/core';
+import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
   type MemberRecord,
   MemberRegistry,
@@ -37,6 +38,8 @@ import {
   type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
+  type BudgetBlockReason,
+  type BudgetCheckResult,
   type BudgetOverrideInput,
   type BudgetOverview,
   type BudgetStatusInput,
@@ -82,7 +85,16 @@ interface MemberQueue {
   closing: boolean;
   /** `${session_id}|${key}`；rotate 成功 / close 时清空 */
   warnedSignals: Set<string>;
+  /** 接收侧被预算挡下的 conversation（只作 bookkeeping，override / release 时清） */
+  budgetHold: Set<string>;
 }
+
+/** 事件 extra 允许预算字段（开放字符串事件，不在 AgentEvent 里加常量） */
+type AgentEventExtra = Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> &
+  Record<string, unknown>;
+
+/** 预算拒绝结果的窄类型 */
+type BudgetBlockedCheck = Extract<BudgetCheckResult, { ok: false }>;
 
 /** rotate 窗口内的旧 / 新 Body 身份（agentId → state） */
 interface RotationState {
@@ -183,6 +195,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly defaultWorkspace: string | undefined;
   private readonly teamBinder: TeamBinder | undefined;
   private readonly budgetPort: ConversationBudgetPort | undefined;
+  /** 进程内 blocked 事件去重（每个 conversation 一次；release / override 清） */
+  private readonly blockedBudgetEvents = new Set<string>();
   private readonly ready: Promise<void>;
 
   constructor(options: AgentServiceOptions) {
@@ -503,7 +517,19 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
 
-    return this.enqueueMessage(target, content, from);
+    const conversationId = this.resolveConversationId(input.conversation_id);
+    // 状态 / 可见性检查在前，预算检查在后：被拒绝的投递不预留 hop。
+    const check = this.checkDelivery(target, from, conversationId);
+    if (!check.ok) {
+      this.emitBudgetBlocked(target, check, {
+        conversation_id: conversationId,
+        from,
+        to: target.id,
+        phase: 'enqueue',
+      });
+      throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
+    }
+    return this.enqueueMessage(target, content, from, conversationId);
   }
 
   /** 唯一入队实现：send / dispatch / reply 之外的入队路径都走这里 */
@@ -511,6 +537,7 @@ export class AgentServiceImpl implements AgentService {
     target: MemberRecord,
     content: string,
     from: string,
+    conversationId: string | undefined,
     kind?: AgentMessage['kind'],
   ): SendResult {
     const message: AgentMessage = {
@@ -519,6 +546,7 @@ export class AgentServiceImpl implements AgentService {
       to: target.id,
       content,
       ts: this.now(),
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       ...(kind !== undefined ? { kind } : {}),
     };
     const queue = this.queueFor(target.id);
@@ -528,10 +556,20 @@ export class AgentServiceImpl implements AgentService {
       state: target.state,
       message_id: message.id,
       from,
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
     });
     this.scheduleSnapshot();
     this.pump(target.id);
     return { queued: true, message_id: message.id, state: target.state };
+  }
+
+  /** 显式 id 先校验；缺省由人类入口生成 `conv_<id>` */
+  private resolveConversationId(value: unknown): string {
+    if (value === undefined) return generateConversationId(this.newId);
+    if (!isValidConversationId(value)) {
+      throw new AgentError('invalid_input', 'invalid conversation_id');
+    }
+    return value;
   }
 
   /**
@@ -557,22 +595,30 @@ export class AgentServiceImpl implements AgentService {
     if (this.queueFor(target.id).closing) {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
+
+    const conversationId = this.resolveConversationId(input.conversation_id);
     if (target.rotation === 'rotating') {
-      const result = this.enqueueMessage(target, content, from);
+      const rejected = this.budgetBeforeEnqueue(target, from, conversationId);
+      if (rejected !== undefined) return rejected;
+      const result = this.enqueueMessage(target, content, from, conversationId);
       return {
         status: 'queued',
         message_id: result.message_id,
         resolved_to: target.id,
         resolution: 'rotating',
+        conversation_id: conversationId,
       };
     }
     if (target.presence === 'live') {
-      const result = this.enqueueMessage(target, content, from);
+      const rejected = this.budgetBeforeEnqueue(target, from, conversationId);
+      if (rejected !== undefined) return rejected;
+      const result = this.enqueueMessage(target, content, from, conversationId);
       return {
         status: 'queued',
         message_id: result.message_id,
         resolved_to: target.id,
         resolution: 'live',
+        conversation_id: conversationId,
       };
     }
 
@@ -591,12 +637,37 @@ export class AgentServiceImpl implements AgentService {
     ) {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
-    const result = this.enqueueMessage(current, content, from);
+    // resume 后、入队前检查（检查与入队之间没有 await）
+    const rejected = this.budgetBeforeEnqueue(current, from, conversationId);
+    if (rejected !== undefined) return rejected;
+    const result = this.enqueueMessage(current, content, from, conversationId);
     return {
       status: 'queued',
       message_id: result.message_id,
       resolved_to: current.id,
       resolution: 'resumed',
+      conversation_id: conversationId,
+    };
+  }
+
+  /** 发送侧预算检查：通过返回 undefined，拒绝时发 blocked 事件并给出 DispatchResult */
+  private budgetBeforeEnqueue(
+    target: MemberRecord,
+    from: string,
+    conversationId: string,
+  ): DispatchResult | undefined {
+    const check = this.checkDelivery(target, from, conversationId);
+    if (check.ok) return undefined;
+    this.emitBudgetBlocked(target, check, {
+      conversation_id: conversationId,
+      from,
+      to: target.id,
+      phase: 'enqueue',
+    });
+    return {
+      status: 'rejected',
+      code: this.budgetCode(check.reason),
+      reason: `${check.reason}: ${check.dimension}`,
     };
   }
 
@@ -825,12 +896,16 @@ export class AgentServiceImpl implements AgentService {
       for (let i = queue.pending.length - 1; i >= 0; i--) {
         if (queue.pending[i]?.kind === 'limit_warning') queue.pending.splice(i, 1);
       }
+      // rotate startup 是系统消息：不计 hop，但运行起来算一次 turn；继承触发 rotate 的会话。
+      const startupConversationId =
+        queue.activeConversationId ?? generateConversationId(this.newId);
       queue.pending.unshift({
         id: this.newId(),
         from: 'system',
         to: target.id,
         content: startupPrompt + (handoffPath !== undefined ? `\n\n[handoff: ${handoffPath}]` : ''),
         ts: this.now(),
+        conversation_id: startupConversationId,
       });
       queue.warnedSignals.clear();
       this.emitForSession('agent.rotated', target, toSessionId, {
@@ -912,6 +987,8 @@ export class AgentServiceImpl implements AgentService {
     queue.closing = true;
     queue.pending.length = 0;
     queue.warnedSignals.clear();
+    queue.budgetHold.clear();
+    queue.activeConversationId = undefined;
 
     const activeSession = queue.activeBodySession;
     const currentSession = member.currentBody?.session_id ?? member.sessionId;
@@ -998,6 +1075,7 @@ export class AgentServiceImpl implements AgentService {
       const queue = this.queueFor(target.id);
       queue.closing = false;
       queue.pending.length = 0;
+      queue.budgetHold.clear();
     }
 
     this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
@@ -1051,23 +1129,24 @@ export class AgentServiceImpl implements AgentService {
 
     // 本轮已显式回复 → 抑制自动最终文本
     this.queueFor(member.id).repliedThisTurn = true;
-    const message: AgentMessage = {
-      id: this.newId(),
-      from: member.id,
-      to: parent.id,
-      content: text,
-      ts: this.now(),
-    };
-    this.queueFor(parent.id).pending.push(message);
-    this.registry.touch(parent.id);
-    this.emit('agent.message.queued', parent, {
-      state: parent.state,
-      message_id: message.id,
-      from: member.id,
-    });
-    this.scheduleSnapshot();
-    this.pump(parent.id);
-    return { queued: true, message_id: message.id, to: parent.id };
+    // 回复归到触发它的成员 turn；没有在跑轮次时生成新会话。
+    const conversationId =
+      this.queueFor(member.id).activeConversationId ?? generateConversationId(this.newId);
+    // external owner 不参与预算；父成员回复是 agent→agent 投递，走发送侧检查。
+    if (!this.externalOwners.has(parent.id)) {
+      const check = this.checkDelivery(parent, member.id, conversationId);
+      if (!check.ok) {
+        this.emitBudgetBlocked(parent, check, {
+          conversation_id: conversationId,
+          from: member.id,
+          to: parent.id,
+          phase: 'enqueue',
+        });
+        throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
+      }
+    }
+    const result = this.enqueueMessage(parent, text, member.id, conversationId);
+    return { queued: true, message_id: result.message_id, to: parent.id };
   }
 
   /**
@@ -1156,7 +1235,9 @@ export class AgentServiceImpl implements AgentService {
       `[system] Context/usage limit warning: ${key} is at ${current}/${max} (>= ${threshold}). ` +
       'If your context is nearly full, write a handoff and call agent.rotate with ' +
       'startup_prompt (and handoff_path if you wrote one) to continue in a fresh body.';
-    this.enqueueMessage(record, text, 'system', 'limit_warning');
+    // 系统提示继承当前 turn 的会话；事件迟到时也不能丢分组。
+    const conversationId = queue.activeConversationId ?? generateConversationId(this.newId);
+    this.enqueueMessage(record, text, 'system', conversationId, 'limit_warning');
   }
 
   /** 该 session 是否属于某个非 owner 成员的 Body（当前 / 在跑 / 已退役 / rotate 目标）。 */
@@ -1187,6 +1268,21 @@ export class AgentServiceImpl implements AgentService {
     }
     if ('dimension' in input) {
       const result = this.budgetPort.override(input);
+      // override 只能由人触发：清 hold、重新 pump 受影响 Agent，并发审计事件。
+      const released = this.budgetPort.release(input.conversation_id);
+      this.blockedBudgetEvents.delete(input.conversation_id);
+      for (const agentId of released) {
+        this.queues.get(agentId)?.budgetHold.delete(input.conversation_id);
+        this.pump(agentId);
+      }
+      this.publishTeamBudgetEvent(input.team_id, 'team.budget.override', {
+        conversation_id: input.conversation_id,
+        dimension: input.dimension,
+        previous_max: result.previous_max,
+        max: result.max,
+        by: 'human',
+        via: input.via,
+      });
       return { action: 'override', team_id: input.team_id, ...result };
     }
     return {
@@ -1194,6 +1290,93 @@ export class AgentServiceImpl implements AgentService {
       team_id: input.team_id,
       conversations: this.budgetPort.status(input),
     };
+  }
+
+  /** conversation 预算检查 + 通过后的告警收集 */
+  private checkDelivery(
+    target: MemberRecord,
+    from: string,
+    conversationId: string,
+  ): BudgetCheckResult {
+    if (this.budgetPort === undefined) return { ok: true };
+    const check = this.budgetPort.checkDelivery({
+      conversation_id: conversationId,
+      ...(target.teamId !== undefined ? { team_id: target.teamId } : {}),
+      from,
+      to: target.id,
+    });
+    if (check.ok) this.emitBudgetWarnings(target, conversationId, 'enqueue');
+    return check;
+  }
+
+  private emitBudgetWarnings(
+    member: MemberRecord,
+    conversationId: string,
+    phase: 'enqueue' | 'turn_start',
+  ): void {
+    const warnings = this.budgetPort?.takeWarnings?.(conversationId) ?? [];
+    for (const warning of warnings) {
+      this.emit('team.budget.warning', member, {
+        conversation_id: conversationId,
+        ...(warning.team_id !== undefined
+          ? { team_id: warning.team_id }
+          : member.teamId !== undefined
+            ? { team_id: member.teamId }
+            : {}),
+        dimension: warning.dimension,
+        current: warning.current,
+        max: warning.max,
+        threshold: warning.threshold,
+        phase,
+      });
+    }
+  }
+
+  private emitBudgetBlocked(
+    member: MemberRecord,
+    check: BudgetBlockedCheck,
+    extra: {
+      conversation_id: string;
+      message_id?: string;
+      from?: string;
+      to?: string;
+      phase: 'enqueue' | 'turn_start';
+    },
+  ): void {
+    this.emit('team.budget.blocked', member, {
+      conversation_id: extra.conversation_id,
+      ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+      dimension: check.dimension,
+      current: check.current,
+      max: check.max,
+      reason: check.reason,
+      phase: extra.phase,
+      ...(extra.message_id !== undefined ? { message_id: extra.message_id } : {}),
+      ...(extra.from !== undefined ? { from: extra.from } : {}),
+      ...(extra.to !== undefined ? { to: extra.to } : {}),
+      ...(check.retry_after_ts !== undefined ? { retry_after_ts: check.retry_after_ts } : {}),
+    });
+  }
+
+  /** 无成员归属的团队级预算事件（override / team-level blocked） */
+  private publishTeamBudgetEvent(
+    teamId: string,
+    type: string,
+    data: Record<string, unknown>,
+  ): void {
+    if (this.eventStream === undefined) return;
+    const payload: Record<string, unknown> = { team_id: teamId, ...data, ts: this.now() };
+    try {
+      this.eventStream.publish({
+        type,
+        run_id: `team:${teamId}`,
+        data: payload,
+        ts: payload.ts as number,
+        tenant_id: this.tenantId,
+      });
+    } catch (error) {
+      this.logger.warn('agent.event.publish_failed', { team_id: teamId, error: errorText(error) });
+    }
   }
 
   async flushSnapshot(): Promise<boolean> {
@@ -1216,11 +1399,7 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /** 发成员事件（默认用当前 Body 的 session）；监听器与 EventStream 异常都隔离 */
-  private emit(
-    type: string,
-    member: MemberRecord,
-    extra: Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> = {},
-  ): void {
+  private emit(type: string, member: MemberRecord, extra: AgentEventExtra = {}): void {
     this.emitForSession(type, member, member.currentBody?.session_id ?? member.sessionId, extra);
   }
 
@@ -1232,10 +1411,10 @@ export class AgentServiceImpl implements AgentService {
     type: string,
     member: MemberRecord,
     sessionId: string,
-    extra: Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> = {},
+    extra: AgentEventExtra = {},
   ): void {
     if (this.listeners.size === 0 && this.eventStream === undefined) return;
-    const data: Omit<AgentEvent, 'type'> = {
+    const data: Omit<AgentEvent, 'type'> & Record<string, unknown> = {
       agent_id: member.id,
       session_id: sessionId,
       ...(member.parentId !== undefined ? { parent_id: member.parentId } : {}),
@@ -1246,7 +1425,7 @@ export class AgentServiceImpl implements AgentService {
       ...extra,
       ts: this.now(),
     };
-    const event: AgentEvent = { type, ...data };
+    const event = { type, ...data } as AgentEvent;
     for (const listener of [...this.listeners]) {
       try {
         listener(event);
@@ -1285,6 +1464,7 @@ export class AgentServiceImpl implements AgentService {
         repliedThisTurn: false,
         closing: false,
         warnedSignals: new Set(),
+        budgetHold: new Set(),
       };
       this.queues.set(memberId, queue);
     }
@@ -1331,8 +1511,46 @@ export class AgentServiceImpl implements AgentService {
     if (queue.turnActive || queue.closing) return;
     if (member.state === 'created' || member.state === 'closed') return;
     if (member.state === 'waiting_permission') return;
-    const message = queue.pending.shift();
-    if (!message) return;
+    if (queue.pending.length === 0) return;
+
+    // 起轮时捕获 Body 身份：轮末指针可能已被 rotate 切走。
+    const runtimeMember = toRuntimeMember(member);
+    const capturedEpoch = member.currentBody?.epoch ?? 0;
+
+    // 扫描第一条可运行消息：被挡的会话留在原位置，不阻塞同一 Agent 的其它会话。
+    let selected = -1;
+    const blocked: Array<{ index: number; message: AgentMessage; check: BudgetCheckResult }> = [];
+    for (let index = 0; index < queue.pending.length; index += 1) {
+      const candidate = queue.pending[index];
+      if (candidate === undefined) continue;
+      const check = this.checkTurnStart(member, candidate, runtimeMember.session_id);
+      if (check.ok) {
+        selected = index;
+        break;
+      }
+      blocked.push({ index, message: candidate, check });
+    }
+
+    if (selected < 0) {
+      this.holdBlockedMessages(member, queue, blocked);
+      return;
+    }
+
+    const [message] = queue.pending.splice(selected, 1);
+    if (message === undefined) return;
+    const conversationId = message.conversation_id;
+    if (conversationId !== undefined) {
+      this.budgetPort?.noteTurnStarted({
+        conversation_id: conversationId,
+        ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+        agent_id: member.id,
+        message_id: message.id,
+      });
+      queue.budgetHold.delete(conversationId);
+      this.blockedBudgetEvents.delete(conversationId);
+      this.budgetPort?.clearHold?.(conversationId, member.id);
+      this.emitBudgetWarnings(member, conversationId, 'turn_start');
+    }
 
     if (member.state === 'completed' || member.state === 'failed' || member.state === 'cancelled') {
       this.registry.setState(memberId, 'idle');
@@ -1340,14 +1558,76 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(memberId, 'running');
     queue.turnActive = true;
     queue.repliedThisTurn = false;
-    queue.activeConversationId = message.conversation_id;
-    // 起轮时捕获 Body 身份：轮末指针可能已被 rotate 切走。
-    const runtimeMember = toRuntimeMember(member);
-    const capturedEpoch = member.currentBody?.epoch ?? 0;
+    queue.activeConversationId = conversationId;
     queue.activeBodySession = runtimeMember.session_id;
-    this.emit('agent.turn.started', member, { state: 'running', message_id: message.id });
+    this.emit('agent.turn.started', member, {
+      state: 'running',
+      message_id: message.id,
+      ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+    });
     this.scheduleSnapshot();
     void this.executeTurn(member, message, runtimeMember, capturedEpoch);
+  }
+
+  /** 预算 block reason -> 稳定错误码（mismatch / unavailable 不折叠成 exceeded） */
+  private budgetCode(
+    reason: BudgetBlockReason,
+  ): 'budget_exceeded' | 'budget_unavailable' | 'conversation_team_mismatch' {
+    return reason === 'budget_unavailable' || reason === 'conversation_team_mismatch'
+      ? reason
+      : 'budget_exceeded';
+  }
+
+  /** 接收侧检查：无预算端口 / 消息无会话时视为可运行 */
+  private checkTurnStart(
+    member: MemberRecord,
+    message: AgentMessage,
+    sessionId: string,
+  ): BudgetCheckResult {
+    const conversationId = message.conversation_id;
+    if (this.budgetPort === undefined || conversationId === undefined) return { ok: true };
+    return this.budgetPort.canStartTurn({
+      conversation_id: conversationId,
+      ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+      agent_id: member.id,
+      session_id: sessionId,
+      message_id: message.id,
+    });
+  }
+
+  /**
+   * 所有排队消息都被挡：保留消息（不 shift），持久化 blocked，发一次 blocked 事件。
+   */
+  private holdBlockedMessages(
+    member: MemberRecord,
+    queue: MemberQueue,
+    blocked: Array<{ index: number; message: AgentMessage; check: BudgetCheckResult }>,
+  ): void {
+    const reported = new Set<string>();
+    for (const entry of blocked) {
+      const check = entry.check;
+      if (check.ok) continue;
+      const conversationId = entry.message.conversation_id;
+      if (conversationId === undefined) continue;
+      queue.budgetHold.add(conversationId);
+      this.budgetPort?.noteHold?.(conversationId, member.id);
+      this.budgetPort?.noteTurnBlocked?.({
+        conversation_id: conversationId,
+        ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+        dimension: check.dimension,
+        reason: check.reason,
+      });
+      if (reported.has(conversationId) || this.blockedBudgetEvents.has(conversationId)) continue;
+      reported.add(conversationId);
+      this.blockedBudgetEvents.add(conversationId);
+      this.emitBudgetBlocked(member, check, {
+        conversation_id: conversationId,
+        message_id: entry.message.id,
+        from: entry.message.from,
+        to: member.id,
+        phase: 'turn_start',
+      });
+    }
   }
 
   /**
@@ -1362,6 +1642,7 @@ export class AgentServiceImpl implements AgentService {
     capturedEpoch: number,
   ): Promise<void> {
     const queue = this.queueFor(member.id);
+    const conversationId = queue.activeConversationId ?? message.conversation_id;
     let result: MemberTurnResult | undefined;
     let failure: string | undefined;
     try {
@@ -1380,6 +1661,17 @@ export class AgentServiceImpl implements AgentService {
     }
     queue.turnActive = false;
     queue.activeConversationId = undefined;
+
+    // turn 完成（含失败 / 取消 / 旧 Body）都记 tokens 与活动时间，并强制落盘。
+    if (conversationId !== undefined) {
+      this.budgetPort?.noteTurnFinished({
+        conversation_id: conversationId,
+        ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+        agent_id: member.id,
+        message_id: message.id,
+        ...(result?.usage !== undefined ? { usage: result.usage } : {}),
+      });
+    }
 
     const current = this.registry.get(member.id);
     // 旧 Body：指针已切走。成对发终态（stale），但不写 registry / usage，也不投递父队列。
@@ -1414,6 +1706,9 @@ export class AgentServiceImpl implements AgentService {
             message_id: message.id,
             body_id: runtimeMember.session_id,
             stale: true,
+            ...(message.conversation_id !== undefined
+              ? { conversation_id: message.conversation_id }
+              : {}),
             ...(failure !== undefined ? { reason: failure } : {}),
           },
         );
@@ -1470,6 +1765,7 @@ export class AgentServiceImpl implements AgentService {
         state,
         outcome,
         message_id: message.id,
+        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
         ...(failure !== undefined ? { reason: failure } : {}),
         ...(outcome === 'completed' && result?.usage !== undefined ? { usage: result.usage } : {}),
       },
@@ -1481,19 +1777,27 @@ export class AgentServiceImpl implements AgentService {
       this.emit('agent.reply.posted', current, {
         message_id: this.newId(),
         content: truncateMessageContent(result.content as string),
+        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
       });
     }
 
     if (outcome === 'completed' && !queue.repliedThisTurn && nonEmpty(result?.content)) {
-      this.deliverToParent(current, result.content as string);
+      this.deliverToParent(current, result.content as string, conversationId);
     }
 
     this.scheduleSnapshot();
     this.pump(member.id);
   }
 
-  /** 自动最终文本投递到父成员队列；父不存在（owner 未 attach）时丢弃 */
-  private deliverToParent(member: MemberRecord, content: string): void {
+  /**
+   * 自动最终文本投递到父成员队列；父不存在（owner 未 attach）时丢弃。
+   * 父是 external owner 时不参与预算；父是成员时被挡只发事件、不进 turn 收尾。
+   */
+  private deliverToParent(
+    member: MemberRecord,
+    content: string,
+    conversationId: string | undefined,
+  ): void {
     if (!nonEmpty(member.parentId)) return;
     const parent = this.registry.resolve(member.parentId);
     if (
@@ -1507,22 +1811,20 @@ export class AgentServiceImpl implements AgentService {
     const parentQueue = this.queueFor(parent.id);
     if (parentQueue.closing) return;
 
-    const message: AgentMessage = {
-      id: this.newId(),
-      from: member.id,
-      to: parent.id,
-      content,
-      ts: this.now(),
-    };
-    parentQueue.pending.push(message);
-    this.registry.touch(parent.id);
-    this.emit('agent.message.queued', parent, {
-      state: parent.state,
-      message_id: message.id,
-      from: member.id,
-    });
-    this.scheduleSnapshot();
-    this.pump(parent.id);
+    if (conversationId !== undefined && !this.externalOwners.has(parent.id)) {
+      const check = this.checkDelivery(parent, member.id, conversationId);
+      if (!check.ok) {
+        this.emitBudgetBlocked(parent, check, {
+          conversation_id: conversationId,
+          from: member.id,
+          to: parent.id,
+          phase: 'enqueue',
+        });
+        return;
+      }
+    }
+
+    this.enqueueMessage(parent, content, member.id, conversationId);
   }
 
   private scheduleSnapshot(): void {

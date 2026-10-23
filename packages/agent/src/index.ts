@@ -7,6 +7,20 @@
  */
 
 export {
+  ConversationBudget,
+  type ConversationBudgetOptions,
+  generateConversationId,
+  isValidConversationId,
+  resolveBudgetLimits,
+} from './conversation-budget.js';
+export {
+  CONVERSATION_STORE_VERSION,
+  ConversationStore,
+  type ConversationStoreOptions,
+  conversationsPath,
+  type StoredConversation,
+} from './conversation-store.js';
+export {
   canTransition,
   type MemberRecord,
   MemberRegistry,
@@ -67,9 +81,11 @@ export {
   type BudgetOverrideResult,
   type BudgetOverview,
   type BudgetStatusInput,
+  type BudgetTurnBlockedInput,
   type BudgetTurnFinishedInput,
   type BudgetTurnInput,
   type BudgetTurnStartedInput,
+  type BudgetWarning,
   type CloseBatchInput,
   type CloseInput,
   type CloseResult,

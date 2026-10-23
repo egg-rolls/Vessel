@@ -171,7 +171,11 @@ export type MemberPermissionState = 'waiting' | 'running';
 
 export type BudgetDimension = 'hops' | 'turns' | 'tokens' | 'wall_clock' | 'cycle';
 
-export type BudgetBlockReason = 'budget_exceeded' | 'cycle_detected' | 'budget_unavailable';
+export type BudgetBlockReason =
+  | 'budget_exceeded'
+  | 'cycle_detected'
+  | 'budget_unavailable'
+  | 'conversation_team_mismatch';
 
 /** 有向边计数（环检测用；最多 32 条，按 last_ts 淘汰） */
 export interface ConversationBudgetEdge {
@@ -211,6 +215,24 @@ export type BudgetCheckResult =
       max: number | null;
       retry_after_ts?: number;
     };
+
+/** 80% 预警（进程内待发布）；service 经端口取走 */
+export interface BudgetWarning {
+  conversation_id: string;
+  team_id?: string;
+  dimension: Exclude<BudgetDimension, 'cycle'>;
+  current: number;
+  max: number;
+  threshold: number;
+}
+
+/** receiver-side turn 被挡时持久化的 blocked 状态 */
+export interface BudgetTurnBlockedInput {
+  conversation_id: string;
+  team_id?: string;
+  dimension: BudgetDimension;
+  reason: BudgetBlockReason;
+}
 
 export interface BudgetDeliveryInput {
   conversation_id: string;
@@ -280,6 +302,11 @@ export interface ConversationBudgetPort {
   override(input: BudgetOverrideInput): BudgetOverrideResult;
   /** 清除该会话的接收侧 hold；返回需要重新 pump 的 agent id */
   release(conversationId: string): string[];
+  /** 可选：service 发布预警 / 记账 receiver-side hold（实现可按需提供） */
+  takeWarnings?(conversationId: string): BudgetWarning[];
+  noteHold?(conversationId: string, agentId: string): void;
+  clearHold?(conversationId: string, agentId: string): void;
+  noteTurnBlocked?(input: BudgetTurnBlockedInput): void;
   flush(): Promise<void>;
 }
 
@@ -358,7 +385,8 @@ export type DispatchResult =
         | 'resume_failed'
         | 'not_visible'
         | 'budget_exceeded'
-        | 'budget_unavailable';
+        | 'budget_unavailable'
+        | 'conversation_team_mismatch';
       reason: string;
     };
 
@@ -557,7 +585,8 @@ export type AgentErrorCode =
   | 'spawn_failed'
   | 'invalid_state_transition'
   | 'budget_exceeded'
-  | 'budget_unavailable';
+  | 'budget_unavailable'
+  | 'conversation_team_mismatch';
 
 /** AgentService 错误；code 稳定，message 供人读 */
 export class AgentError extends Error {

@@ -69,6 +69,18 @@ const PERMISSION_RESPONSE_EVENTS: ReadonlySet<string> = new Set([
   'ask.user.answered',
 ]);
 
+/** team policy 的无人值守权限配置（与 config 同形，避免 agent 反向依赖 config） */
+export interface MemberPermissionPolicy {
+  unattended?: 'hold' | 'deny-after';
+  denyAfterSeconds?: number;
+}
+
+/** bridge 内待答请求；deny-after 只挂在有 parentEvents 的桥上 */
+interface PendingBridgeRequest {
+  kind: 'permission' | 'ask';
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 /** 成员 runtime 额外需要的中断能力（AgentRuntime 已实现） */
 export interface MemberRunnableAgent extends RunnableAgent {
   interrupt?(reason?: RunInterruptReason): void;
@@ -88,6 +100,13 @@ export interface InProcessMemberRuntimeOptions {
   readOnlyTools?: readonly string[];
   /** 缺省 allow；deny 只保留只读工具；bridge 需配合 parentEvents */
   permissionMode?: MemberRuntimePermissionMode;
+  /**
+   * 有 team_id 的成员强制 bridge（忽略全局 `allow`）；缺省开启。
+   * 无 parentEvents 时仍走 fail-closed 的 ask → deny。
+   */
+  forceBridgeForTeams?: boolean;
+  /** 按成员所属 team 解析无人值守策略；只影响 bridge 内的 deny-after 定时器 */
+  permissionPolicy?: (teamId: string | undefined) => MemberPermissionPolicy | undefined;
   /** allow / bridge 模式的权限配置（autoApprove / default / timeoutMs） */
   permission?: RuntimePermissionConfig;
   /**
@@ -123,8 +142,8 @@ interface MemberRuntimeEntry {
   events: MemoryEventStream;
   /** bridge 订阅取消函数（dispose 时回收） */
   unsubscribers: Array<() => void>;
-  /** 已转发给父级、尚未应答的 requestId */
-  pendingPermissions: Set<string>;
+  /** 已转发给父级、尚未应答的 requestId；deny-after 的 deadline 随条目清理 */
+  pendingPermissions: Map<string, PendingBridgeRequest>;
   /** 是否已通过 onPermissionState 报过 waiting（避免重复回调） */
   waiting: boolean;
 }
@@ -147,6 +166,9 @@ function bridgeRequestData(event: RunEvent, member: MemberRuntimeMember): Record
     data.request_id = requestId;
   }
   data.agent_id = member.id;
+  if (typeof data.team_id !== 'string' && typeof member.team_id === 'string' && member.team_id) {
+    data.team_id = member.team_id;
+  }
   if (typeof data.session_id !== 'string') data.session_id = member.session_id;
   if (typeof data.parent_session_id !== 'string' && member.parent_id !== undefined) {
     data.parent_session_id = member.parent_id;
@@ -242,6 +264,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly allowedTools: ReadonlySet<string>;
   private readonly readOnlyTools: ReadonlySet<string>;
   private readonly permissionMode: MemberRuntimePermissionMode;
+  private readonly forceBridgeForTeams: boolean;
+  private readonly permissionPolicy?: (
+    teamId: string | undefined,
+  ) => MemberPermissionPolicy | undefined;
   private readonly permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
   private readonly onPermissionState?: (
@@ -269,6 +295,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.allowedTools = new Set([...DEFAULT_ALLOWED_TOOLS, ...(options.extraTools ?? [])]);
     this.readOnlyTools = new Set(options.readOnlyTools ?? DEFAULT_READ_ONLY_TOOLS);
     this.permissionMode = options.permissionMode ?? 'allow';
+    this.forceBridgeForTeams = options.forceBridgeForTeams !== false;
+    this.permissionPolicy = options.permissionPolicy;
     this.permission = options.permission;
     this.parentEvents = options.parentEvents;
     this.onPermissionState = options.onPermissionState;
@@ -300,7 +328,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       throw new Error(`member runtime model is required: ${member.id}`);
     }
 
-    const tools = this.selectTools().map((tool) => this.restrictPermissions(tool, member.id));
+    const mode = this.effectivePermissionMode(member);
+    const tools = this.selectTools(mode).map((tool) =>
+      this.restrictPermissions(tool, member.id, mode),
+    );
     const pluginHost = new MemoryPluginHost();
     for (const hook of this.pluginHost?.getHooks() ?? []) pluginHost.registerHook(hook);
     for (const guardrail of this.pluginHost?.getGuardrails() ?? []) {
@@ -333,7 +364,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       runtime,
       events,
       unsubscribers: [],
-      pendingPermissions: new Set(),
+      pendingPermissions: new Map(),
       waiting: false,
     };
     this.entries.set(member.session_id, entry);
@@ -354,7 +385,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         }),
       );
     }
-    if (this.permissionMode === 'bridge' && this.parentEvents !== undefined) {
+    if (mode === 'bridge' && this.parentEvents !== undefined) {
       this.attachBridge(member, entry);
     }
   }
@@ -389,11 +420,11 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       throw error;
     } finally {
       unsubscribe();
-      // 取消 / 失败时可能仍停在等待：清掉挂起请求并把状态还回 running，
+      // 取消 / 失败时可能仍停在等待：清掉挂起请求与 deadline，把状态还回 running，
       // 让 AgentService 能正常进入终态（应答随后到达时已无人等待）。
+      this.clearPending(entry);
       if (entry.waiting) {
         entry.waiting = false;
-        entry.pendingPermissions.clear();
         this.notifyPermissionState(member.id, member.session_id, 'running');
       }
     }
@@ -410,7 +441,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.entries.delete(member.session_id);
     for (const unsubscribe of entry.unsubscribers) unsubscribe();
     entry.unsubscribers.length = 0;
-    entry.pendingPermissions.clear();
+    this.clearPending(entry);
     await entry.runtime.dispose();
   }
 
@@ -427,20 +458,25 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         if (!PERMISSION_REQUEST_EVENTS.has(event.type)) return;
         if (this.entries.get(member.session_id) !== entry) return;
 
+        const kind = event.type === 'ask.user.requested' ? 'ask' : 'permission';
         const requestId = readRequestId(event.data);
-        if (requestId !== undefined) entry.pendingPermissions.add(requestId);
+        if (requestId !== undefined) entry.pendingPermissions.set(requestId, { kind });
         if (!entry.waiting) {
           entry.waiting = true;
           this.notifyPermissionState(member.id, member.session_id, 'waiting');
         }
+        const data = bridgeRequestData(event, member);
         const forwarded: RunEvent = {
           ...event,
-          data: bridgeRequestData(event, member),
+          data,
           ...(this.tenantId !== undefined && event.tenant_id === undefined
             ? { tenant_id: this.tenantId }
             : {}),
         };
         parentEvents.publish(forwarded);
+        if (requestId !== undefined) {
+          this.scheduleDenyAfter(member, entry, requestId, kind, forwarded);
+        }
       }),
     );
 
@@ -450,15 +486,132 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         if (this.entries.get(member.session_id) !== entry) return;
 
         const requestId = readRequestId(event.data);
-        if (requestId === undefined || !entry.pendingPermissions.delete(requestId)) return;
+        if (requestId === undefined) return;
+        const pending = entry.pendingPermissions.get(requestId);
+        if (pending === undefined) return;
+
+        // only-human：缺 answered_by 视为 legacy human；policy 只接受 deny_after。
+        const data = isRecord(event.data) ? event.data : {};
+        const answeredBy = data.answered_by;
+        if (
+          answeredBy !== undefined &&
+          answeredBy !== 'human' &&
+          !(answeredBy === 'policy' && data.policy === 'deny_after')
+        ) {
+          this.logger.warn('agent.member.permission_response_dropped', {
+            member_id: member.id,
+            session_id: member.session_id,
+            request_id: requestId,
+            answered_by: answeredBy,
+            policy: data.policy,
+          });
+          return;
+        }
+
+        entry.pendingPermissions.delete(requestId);
+        if (pending.timer !== undefined) clearTimeout(pending.timer);
         // 原样交给成员事件流，由 core 按 requestId 路由回发起请求的 waitFor。
         entry.events.publish(event);
-        if (entry.pendingPermissions.size === 0 && entry.waiting) {
-          entry.waiting = false;
-          this.notifyPermissionState(member.id, member.session_id, 'running');
-        }
+        this.noteBridgeSettled(member, entry);
       }),
     );
+  }
+
+  /**
+   * 非空 team_id 的成员把全局 allow 提升为 bridge；显式 deny 保持只读工具，
+   * 不因 Team 绑定放宽。缺 parentEvents 时仍由 ask → deny 收口。
+   */
+  private effectivePermissionMode(member: MemberRuntimeMember): MemberRuntimePermissionMode {
+    if (
+      this.forceBridgeForTeams &&
+      this.permissionMode === 'allow' &&
+      typeof member.team_id === 'string' &&
+      member.team_id.length > 0
+    ) {
+      return 'bridge';
+    }
+    return this.permissionMode;
+  }
+
+  private clearPending(entry: MemberRuntimeEntry): void {
+    for (const pending of entry.pendingPermissions.values()) {
+      if (pending.timer !== undefined) clearTimeout(pending.timer);
+    }
+    entry.pendingPermissions.clear();
+  }
+
+  private noteBridgeSettled(member: MemberRuntimeMember, entry: MemberRuntimeEntry): void {
+    if (entry.pendingPermissions.size === 0 && entry.waiting) {
+      entry.waiting = false;
+      this.notifyPermissionState(member.id, member.session_id, 'running');
+    }
+  }
+
+  /**
+   * team 显式 deny-after 的单次 deadline；hold / 缺失 / 非法秒数都不建定时器。
+   * 到期后把 normal response 同时交给成员流（解除等待）与父流（RunEngine 审计）。
+   */
+  private scheduleDenyAfter(
+    member: MemberRuntimeMember,
+    entry: MemberRuntimeEntry,
+    requestId: string,
+    kind: 'permission' | 'ask',
+    forwarded: RunEvent,
+  ): void {
+    // 定时器只能由 bridge 创建；没有父流就没有人端，走既有的 ask → deny。
+    if (this.parentEvents === undefined) return;
+    const policy = this.permissionPolicy?.(member.team_id);
+    if (policy?.unattended !== 'deny-after') return;
+    const seconds = policy.denyAfterSeconds;
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) return;
+
+    const timer = setTimeout(
+      () => {
+        if (this.entries.get(member.session_id) !== entry) return;
+        const pending = entry.pendingPermissions.get(requestId);
+        if (pending === undefined || pending.kind !== kind) return;
+        entry.pendingPermissions.delete(requestId);
+        const data = isRecord(forwarded.data) ? forwarded.data : {};
+        const sessionId =
+          typeof data.session_id === 'string' && data.session_id.length > 0
+            ? data.session_id
+            : undefined;
+        const responseData =
+          kind === 'ask'
+            ? {
+                requestId,
+                answers: [],
+                ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+                answered_by: 'policy',
+                answered_via: 'policy',
+                policy: 'deny_after',
+              }
+            : {
+                requestId,
+                decision: 'deny',
+                scope: 'once',
+                ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+                answered_by: 'policy',
+                answered_via: 'policy',
+                policy: 'deny_after',
+                reason: 'deny_after',
+              };
+        const tenantId = forwarded.tenant_id ?? this.tenantId;
+        const response: RunEvent = {
+          type: kind === 'ask' ? 'ask.user.answered' : 'tool.permission.response',
+          run_id: forwarded.run_id,
+          data: responseData,
+          ts: Date.now(),
+          ...(tenantId !== undefined ? { tenant_id: tenantId } : {}),
+        };
+        entry.events.publish(response);
+        this.parentEvents?.publish(response);
+        this.noteBridgeSettled(member, entry);
+      },
+      Math.round(seconds * 1000),
+    );
+    // 不能 unref：Bun 在只剩 unref 定时器的 await 上会直接退出/不触发 deadline。
+    entry.pendingPermissions.set(requestId, { kind, timer });
   }
 
   private notifyPermissionState(
@@ -478,10 +631,10 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   /** 按模式与白名单从父宿主挑工具 */
-  private selectTools(): ToolDefinition[] {
+  private selectTools(mode: MemberRuntimePermissionMode): ToolDefinition[] {
     const parent = this.pluginHost;
     if (!parent) return [];
-    const denyFilter = this.permissionMode === 'deny';
+    const denyFilter = mode === 'deny';
     const selected: ToolDefinition[] = [];
     for (const tool of parent.listTools()) {
       if (isExcludedTool(tool.name)) continue;
@@ -500,14 +653,18 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
    * bridge 关闭 / 缺失时按 deny 收口并记日志，避免 run 永久等待应答。
    * 工具没有 checkPermission 时用权限配置的 default（ask 同样按上述规则处理）。
    */
-  private restrictPermissions(tool: ToolDefinition, memberId: string): ToolDefinition {
+  private restrictPermissions(
+    tool: ToolDefinition,
+    memberId: string,
+    mode: MemberRuntimePermissionMode,
+  ): ToolDefinition {
     const check = tool.checkPermission;
     return {
       ...tool,
       checkPermission: async (input, ctx) => {
         const decision = check ? await check(input, ctx) : this.fallbackDecision(tool.name);
         if (decision !== 'ask') return decision;
-        if (this.permissionMode === 'bridge' && this.parentEvents !== undefined) return 'ask';
+        if (mode === 'bridge' && this.parentEvents !== undefined) return 'ask';
         this.logger.warn('agent.member.permission_ask_denied', {
           member_id: memberId,
           tool: tool.name,

@@ -382,6 +382,8 @@ export function AskUserDialog({ events, maxRows, onActiveChange }: AskUserDialog
           requestId: promptRef.requestId,
           answers: payload,
           ...(promptRef.session_id !== undefined ? { session_id: promptRef.session_id } : {}),
+          answered_by: 'human',
+          answered_via: 'tui',
         },
         ts: Date.now(),
       });

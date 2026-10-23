@@ -697,4 +697,179 @@ describe('InProcessMemberRuntime permission bridge', () => {
     expect(result.content).toContain('denied');
     expect(forwarded).toHaveLength(0);
   });
+
+  it('forces bridge for team members and drops agent-originated answers', async () => {
+    const parentEvents = new MemoryEventStream();
+    const { warnings, logger } = warningLogger();
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      // 全局 allow 被 team 成员覆盖：只有 bridge（人端）能应答。
+      permissionMode: 'allow',
+      parentEvents,
+      logger,
+    });
+    const target = member({ parent_id: 'main', team_id: 'team-1' });
+    await runtime.spawn(target);
+
+    const forwarded: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      if (event.type !== 'tool.permission.request') return;
+      forwarded.push(event);
+      const requestId = (event.data as Record<string, unknown>).requestId;
+      parentEvents.publish({
+        type: 'tool.permission.response',
+        run_id: event.run_id,
+        data: { requestId, decision: 'deny', answered_by: 'agent' },
+        ts: Date.now(),
+      });
+      setTimeout(() => {
+        parentEvents.publish({
+          type: 'tool.permission.response',
+          run_id: event.run_id,
+          data: { requestId, decision: 'allow', answered_by: 'human', answered_via: 'tui' },
+          ts: Date.now(),
+        });
+      }, 10);
+    });
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    // agent 的 deny 被丢弃；human 的 allow 才生效。
+    expect(result.content).toBe('final:bash:ok');
+    expect(forwarded).toHaveLength(1);
+    const forwardedData = forwarded[0]?.data as Record<string, unknown> | undefined;
+    expect(forwardedData?.team_id).toBe('team-1');
+    expect(warnings).toContain('agent.member.permission_response_dropped');
+  });
+
+  it('fires team deny-after once with policy attribution', async () => {
+    const parentEvents = new MemoryEventStream();
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permissionMode: 'bridge',
+      parentEvents,
+      permissionPolicy: (teamId) =>
+        teamId === 'team-1' ? { unattended: 'deny-after', denyAfterSeconds: 0.02 } : undefined,
+    });
+    const target = member({ team_id: 'team-1' });
+    await runtime.spawn(target);
+
+    const responses: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      if (event.type === 'tool.permission.response') responses.push(event);
+    });
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    expect(result.content).toContain('denied');
+    expect(responses).toHaveLength(1);
+    expect(responses[0]?.data).toMatchObject({
+      decision: 'deny',
+      scope: 'once',
+      answered_by: 'policy',
+      answered_via: 'policy',
+      policy: 'deny_after',
+      reason: 'deny_after',
+    });
+    await Bun.sleep(40);
+    expect(responses).toHaveLength(1);
+  });
+
+  it('publishes empty answers for ask deny-after', async () => {
+    const parentEvents = new MemoryEventStream();
+    const askUser: ToolDefinition = {
+      name: 'ask_user',
+      description: 'ask the user',
+      inputSchema: { type: 'object', properties: {} },
+      handler: async (_args, ctx) => {
+        const requestId = 'ask-1';
+        ctx.events.publish({
+          type: 'ask.user.requested',
+          run_id: ctx.run_id,
+          data: { requestId, questions: [{ header: 'h', question: 'q' }] },
+          ts: Date.now(),
+        });
+        const answered = (await ctx.events.waitFor('ask.user.answered', {
+          requestId,
+          timeout: 2_000,
+        })) as { answers?: { answer: string }[] } | undefined;
+        return `answered:${answered?.answers?.[0]?.answer ?? ''}`;
+      },
+    };
+    const { providerFactory } = toolThenEchoProvider('ask_user');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([askUser]),
+      extraTools: ['ask_user'],
+      permissionMode: 'bridge',
+      parentEvents,
+      permissionPolicy: () => ({ unattended: 'deny-after', denyAfterSeconds: 0.02 }),
+    });
+    const target = member({ team_id: 'team-1' });
+    await runtime.spawn(target);
+
+    const answers: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      if (event.type === 'ask.user.answered') answers.push(event);
+    });
+
+    const result = await runtime.runTurn(target, message('ask'));
+
+    expect(result.content).toBe('final:answered:');
+    expect(answers).toHaveLength(1);
+    expect(answers[0]?.data).toMatchObject({
+      answers: [],
+      answered_by: 'policy',
+      answered_via: 'policy',
+      policy: 'deny_after',
+    });
+  });
+
+  it('never schedules a deadline for hold', async () => {
+    const parentEvents = new MemoryEventStream();
+    const { providerFactory } = toolThenEchoProvider('bash');
+    const runtime = createInProcessMemberRuntime({
+      providerFactory,
+      model: 'default-model',
+      pluginHost: makeHost([makeTool('bash', 'ask')]),
+      permissionMode: 'bridge',
+      parentEvents,
+      // 提供秒数也不算：unattended=hold 时不得建定时器。
+      permissionPolicy: () => ({ unattended: 'hold', denyAfterSeconds: 0.01 }),
+    });
+    const target = member({ team_id: 'team-1' });
+    await runtime.spawn(target);
+
+    const policyResponses: RunEvent[] = [];
+    parentEvents.subscribe((event) => {
+      if (event.type === 'tool.permission.request') {
+        const requestId = (event.data as Record<string, unknown>).requestId;
+        setTimeout(() => {
+          parentEvents.publish({
+            type: 'tool.permission.response',
+            run_id: event.run_id,
+            data: { requestId, decision: 'allow' },
+            ts: Date.now(),
+          });
+        }, 40);
+        return;
+      }
+      if (event.type === 'tool.permission.response') {
+        const data = event.data as Record<string, unknown>;
+        if (data.answered_by === 'policy') policyResponses.push(event);
+      }
+    });
+
+    const result = await runtime.runTurn(target, message('run bash'));
+
+    expect(result.content).toBe('final:bash:ok');
+    expect(policyResponses).toHaveLength(0);
+  });
 });

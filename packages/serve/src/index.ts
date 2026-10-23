@@ -178,6 +178,9 @@ export {
   type WirePeerInfo,
 } from './team.js';
 export type {
+  BudgetDimensionLike,
+  ConversationBudgetStatusLike,
+  TeamBudgetResultLike,
   TeamControlLike,
   TeamDeliveryLike,
   TeamDetailLike,

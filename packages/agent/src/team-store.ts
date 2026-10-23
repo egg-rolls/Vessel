@@ -19,7 +19,7 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import type { TeamPolicy } from '@vessel-agent/config';
+import { parseTeamPolicy, type TeamPolicy } from '@vessel-agent/config';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import { TeamLogWriter } from './team-log.js';
 import { normalizeWorkspace, teamIdForWorkspace, workspaceKey } from './team-slug.js';
@@ -236,10 +236,19 @@ export class FileTeamStore implements TeamStore {
     return record ? cloneRecord(record) : undefined;
   }
 
-  /** 0.19 S4；解析器由 team-policy 提供，非法子结构在解析时忽略 */
+  /** 0.19 S4：手改非法 policy 只 warning + 返回 undefined，Team 仍可用。 */
   policy(teamId: string): TeamPolicy | undefined {
     const record = this.teams.get(teamId);
-    return record ? (record.policy as TeamPolicy) : undefined;
+    if (!record) return undefined;
+    try {
+      return parseTeamPolicy(record.policy);
+    } catch (error) {
+      this.logger.warn('team.policy.invalid', {
+        team_id: teamId,
+        error: errorMessage(error),
+      });
+      return undefined;
+    }
   }
 
   list(): TeamRecord[] {

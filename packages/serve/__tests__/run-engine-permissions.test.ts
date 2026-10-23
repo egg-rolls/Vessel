@@ -52,6 +52,26 @@ function requestPermission(
   });
 }
 
+function requestAsk(
+  engine: RunEngine,
+  overrides: Record<string, unknown> = {},
+  ts = Date.now(),
+): void {
+  engine.handleEvent({
+    type: 'ask.user.requested',
+    run_id: 'run-1',
+    ts,
+    data: {
+      requestId: 'ask-1',
+      questions: [{ header: 'h', question: 'q' }],
+      session_id: 'session-1',
+      agent_id: 'm1',
+      team_id: 'team-1',
+      ...overrides,
+    },
+  });
+}
+
 function codeOf(run: () => unknown): string | undefined {
   try {
     run();
@@ -256,5 +276,93 @@ describe('interaction persistence (Addendum A)', () => {
     const file = await waitForStore(dir, (item) => item?.interactions[0]?.status === 'orphaned');
     expect(file?.interactions[0]?.status).toBe('orphaned');
     expect(file?.interactions.some((item) => item.status === 'pending')).toBe(false);
+  });
+});
+
+describe('ask lifecycle (0.19 S4)', () => {
+  it('persists asks as interactions and applies duplicate / conflict / run_ended', () => {
+    const { engine, seen } = setup();
+    requestAsk(engine);
+
+    const record = engine.interactionRecords.get('ask-1');
+    expect(record).toMatchObject({
+      kind: 'ask',
+      tool: 'ask_user',
+      status: 'pending',
+      agent_id: 'm1',
+      team_id: 'team-1',
+    });
+    expect(record?.input).toEqual([{ header: 'h', question: 'q' }]);
+    expect(engine.pendingAsks.has('ask-1')).toBe(true);
+
+    const answers = [{ header: 'h', question: 'q', answer: 'yes' }];
+    const first = engine.respondAsk('ask-1', answers, undefined, {
+      answered_by: 'human',
+      answered_via: 'rpc',
+    });
+    expect(first).toMatchObject({ ok: true, answered_by: 'human', answered_via: 'rpc' });
+    expect(engine.pendingAsks.has('ask-1')).toBe(false);
+    expect(seen.find((event) => event.type === 'ask.user.answered')?.data).toMatchObject({
+      answered_by: 'human',
+      answered_via: 'rpc',
+    });
+    expect(engine.interactionRecords.get('ask-1')?.answer).toMatchObject({
+      answers,
+      answered_by: 'human',
+      answered_via: 'rpc',
+    });
+    expect(typeof engine.interactionRecords.get('ask-1')?.answer?.latency_ms).toBe('number');
+
+    // 结构相同（key 顺序不同）仍是重复应答。
+    const duplicate = engine.respondAsk('ask-1', [{ question: 'q', answer: 'yes', header: 'h' }]);
+    expect(duplicate.duplicate).toBe(true);
+    expect(codeOf(() => engine.respondAsk('ask-1', [{ header: 'h', answer: 'no' }]))).toBe(
+      'conflict',
+    );
+
+    requestAsk(engine, { requestId: 'ask-2' });
+    engine.handleEvent({ type: 'run.completed', run_id: 'run-1', ts: Date.now(), data: {} });
+    expect(engine.interactionRecords.get('ask-2')?.status).toBe('orphaned');
+    expect(codeOf(() => engine.respondAsk('ask-2', []))).toBe('run_ended');
+    expect(codeOf(() => engine.respondAsk('missing', []))).toBe('not_found');
+  });
+});
+
+describe('member turn terminal cleanup', () => {
+  it('orphans pending interactions by agent and session, not run_id', () => {
+    for (const type of [
+      'agent.turn.completed',
+      'agent.turn.failed',
+      'agent.turn.cancelled',
+      'agent.closed',
+    ] as const) {
+      const { engine } = setup();
+      // 两条记录共用 run_id：按 run_id 清理会误伤 m2。
+      requestPermission(engine, {
+        requestId: 'm1-perm',
+        agent_id: 'm1',
+        session_id: 's1',
+      });
+      requestPermission(engine, {
+        requestId: 'm2-perm',
+        agent_id: 'm2',
+        session_id: 's2',
+      });
+      requestAsk(engine, { requestId: 'm1-ask', agent_id: 'm1', session_id: 's1' });
+
+      engine.handleEvent({
+        type,
+        run_id: 'm1',
+        ts: Date.now(),
+        data: { agent_id: 'm1', session_id: 's1' },
+      });
+
+      expect(engine.interactionRecords.get('m1-perm')?.status).toBe('orphaned');
+      expect(engine.interactionRecords.get('m1-ask')?.status).toBe('orphaned');
+      expect(engine.interactionRecords.get('m2-perm')?.status).toBe('pending');
+      expect(engine.pendingPermissions.has('m1-perm')).toBe(false);
+      expect(engine.pendingPermissions.has('m2-perm')).toBe(true);
+      expect(codeOf(() => engine.respondPermission('m1-perm', 'allow', false))).toBe('run_ended');
+    }
   });
 });

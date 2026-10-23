@@ -5,6 +5,9 @@ import {
   type AgentMessage,
   type AgentService,
   type AgentServiceOptions,
+  type BudgetOverrideInput,
+  type BudgetOverview,
+  type BudgetStatusInput,
   type CloseInput,
   type CloseResult,
   createAgentService,
@@ -143,6 +146,12 @@ export class FakeTeamAgent {
   dispatchImpl: ((input: DispatchInput) => DispatchResult | Promise<DispatchResult>) | undefined;
   listError: Error | undefined;
   emitOnClose = true;
+  /** 成员 send 继承的当前会话（agentId → conversation_id） */
+  readonly currentConversations = new Map<string, string>();
+  /** budget() 的替身；未设置时抛错（与无端口一致） */
+  budgetImpl:
+    | ((input: BudgetStatusInput | BudgetOverrideInput) => BudgetOverview | Promise<BudgetOverview>)
+    | undefined;
   private readonly listeners = new Set<AgentEventListener>();
 
   constructor(
@@ -175,6 +184,15 @@ export class FakeTeamAgent {
       resolved_to: input.to,
       resolution: 'live',
     };
+  }
+
+  currentConversation(agentId: string): string | undefined {
+    return this.currentConversations.get(agentId);
+  }
+
+  async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
+    if (this.budgetImpl === undefined) throw new Error('budget unavailable');
+    return this.budgetImpl(input);
   }
 
   async reinstate(input: ReinstateInput): Promise<MemberStatus> {
