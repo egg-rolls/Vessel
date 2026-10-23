@@ -458,6 +458,7 @@ async function dispatch(
         ...(params.conversation_id !== undefined
           ? { conversation_id: params.conversation_id }
           : {}),
+        ...(params.allow_fork !== undefined ? { allow_fork: params.allow_fork } : {}),
         from: ownerId,
       } as DispatchInput);
     case 'agent.rotate':

@@ -63,6 +63,7 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   archive: 'agent archived',
   rotate: 'agent rotated body',
   budget_override: 'budget limit overridden',
+  fork: 'agent forked',
 };
 
 const NOOP_LOGGER: Logger = {
@@ -783,6 +784,8 @@ export class DefaultTeamService implements AgentTeamService {
         return this.archiveInFlight.has(event.agent_id) ? 'archive' : 'leave';
       case 'agent.rotated':
         return 'rotate';
+      case 'agent.forked':
+        return 'fork';
       default:
         return undefined;
     }

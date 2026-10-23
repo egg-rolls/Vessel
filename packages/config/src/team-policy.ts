@@ -320,6 +320,14 @@ function normalizeTeamPolicy(policy: unknown, issues: TeamPolicyIssue[]): TeamPo
 
   const result: TeamPolicy = {};
   for (const [key, value] of Object.entries(policy)) {
+    if (key === 'allowFork' || key === 'allow_fork') {
+      if (typeof value !== 'boolean') {
+        issues.push({ field: 'allowFork', message: 'policy.allowFork must be a boolean' });
+        continue;
+      }
+      result.allowFork = value;
+      continue;
+    }
     if (key === 'permission') {
       if (!isRecord(value)) {
         issues.push({ field: 'permission', message: 'policy.permission must be an object' });

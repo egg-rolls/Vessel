@@ -57,6 +57,7 @@ function makeBudgetHarness(policy: TeamPolicy | undefined): BudgetHarness {
       policy: {},
       created_at: 1,
     }),
+    get: () => undefined,
   };
   let counter = 0;
   const service = createAgentService({

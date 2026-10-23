@@ -157,7 +157,7 @@ export type AgentCommand =
       workspace?: string;
     }
   | { kind: 'send'; json: boolean; member: string; content: string }
-  | { kind: 'dispatch'; json: boolean; to: string; content: string }
+  | { kind: 'dispatch'; json: boolean; to: string; content: string; allowFork?: boolean }
   | {
       kind: 'rotate';
       json: boolean;
@@ -1898,6 +1898,7 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
 
   if (sub === 'dispatch') {
     let json = false;
+    let allowFork: boolean | undefined;
     const positional: string[] = [];
     for (const a of tail) {
       if (a === '--help' || a === '-h') {
@@ -1906,6 +1907,10 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       }
       if (a === '--json') {
         json = true;
+        continue;
+      }
+      if (a === '--allow-fork') {
+        allowFork = true;
         continue;
       }
       if (a.startsWith('-')) {
@@ -1919,7 +1924,13 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
     if (to === undefined || to === '' || content === '') {
       return { ok: false, error: 'agent dispatch requires <to> <content...>' };
     }
-    args.agentCommand = { kind: 'dispatch', json, to, content };
+    args.agentCommand = {
+      kind: 'dispatch',
+      json,
+      to,
+      content,
+      ...(allowFork !== undefined ? { allowFork } : {}),
+    };
     return { ok: true, args };
   }
 

@@ -57,7 +57,7 @@ export interface TeamMessageLike {
   content: string;
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override';
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork';
   /** 0.19 S4 会话分组；旧日志缺省 */
   conversation_id?: string;
 }
@@ -74,7 +74,7 @@ export interface TeamDeliveryLike {
   agent_id: string;
   status: 'queued' | 'rejected' | 'error';
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
   code?: string;
   reason?: string;
 }

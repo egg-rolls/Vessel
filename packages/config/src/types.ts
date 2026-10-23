@@ -409,6 +409,8 @@ export interface TeamBudgetPolicy {
 export interface TeamPolicy {
   permission?: TeamPermissionPolicy;
   budget?: TeamBudgetPolicy;
+  /** 0.20：dispatch 在 resume 失败后是否允许 fork；缺省 false（手改别名 `allow_fork`） */
+  allowFork?: boolean;
   [key: string]: unknown;
 }
 

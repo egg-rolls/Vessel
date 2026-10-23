@@ -275,7 +275,7 @@ export interface TeamMessage {
   content: string;
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive';
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'fork';
 }
 
 /** teams.post 的逐条投递结果。 */
@@ -283,7 +283,7 @@ export interface TeamDelivery {
   agent_id: string;
   status: 'queued' | 'rejected' | 'error';
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
   code?: string;
   reason?: string;
 }
