@@ -473,7 +473,7 @@ export const teamMessageSchema = {
     // 0.19 S4：人工预算 override 的系统记录。
     system_event: {
       type: 'string',
-      enum: ['join', 'leave', 'rotate', 'archive', 'budget_override'],
+      enum: ['join', 'leave', 'rotate', 'archive', 'budget_override', 'fork'],
     },
     // 0.19 S4：会话分组；旧日志缺省。
     conversation_id: { type: 'string' },
@@ -488,7 +488,7 @@ export const teamDeliverySchema = {
     agent_id: { type: 'string' },
     status: { type: 'string', enum: ['queued', 'rejected', 'error'] },
     message_id: { type: 'string' },
-    resolution: { type: 'string', enum: ['live', 'resumed', 'rotating'] },
+    resolution: { type: 'string', enum: ['live', 'resumed', 'rotating', 'forked'] },
     code: { type: 'string' },
     reason: { type: 'string' },
   },

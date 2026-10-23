@@ -355,10 +355,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'team.system.archive': 'The Team was archived',
   'team.system.rotate': '{name} rotated to a new Body',
   'team.system.rotateFailed': '{name} failed to rotate its Body',
+  'team.system.fork': 'agent forked',
   'team.system.unknown': 'Team system event',
 
   'team.delivery.queued': 'Queued',
   'team.delivery.queuedRotating': 'Waiting for Body rotation',
+  'team.delivery.queuedForked': 'Forked and queued',
   'team.delivery.rejected': 'Rejected',
   'team.delivery.error': 'Delivery failed',
   'team.delivery.retry': 'Send again',
