@@ -347,10 +347,12 @@ export const messages = {
   'team.system.archive': 'Team 已归档',
   'team.system.rotate': '{name} 更换了 Body',
   'team.system.rotateFailed': '{name} 更换 Body 失败',
+  'team.system.fork': 'agent 已 fork',
   'team.system.unknown': 'Team 系统事件',
 
   'team.delivery.queued': '排队中',
   'team.delivery.queuedRotating': '等待 Body 轮换',
+  'team.delivery.queuedForked': '已 fork 并排队',
   'team.delivery.rejected': '已拒绝',
   'team.delivery.error': '投递失败',
   'team.delivery.retry': '再次发送',

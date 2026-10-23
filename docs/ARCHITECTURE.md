@@ -1042,7 +1042,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `auth.tokens` | admin |
 <!-- rpc-methods:end -->
 
-0.19 S3 + S5 + S4 起 canonical 方法总数 **48**（47 个 domain 方法 + `events.subscribe`）。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S4 新增 `teams.budget`（`write`，`status|override`），同样由 `TeamControlLike` 注入；它**不在** team-scoped control token 白名单，未注入时返回 `not_found`。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与 ask；0.19 S4 起 ask 也持久化）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
+0.19 S3 + S5 + S4 起 canonical 方法总数 **48**（47 个 domain 方法 + `events.subscribe`）；0.20 的 fork 与跨节点 federation 不新增 canonical，仍为 **48**。0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.19 S4 新增 `teams.budget`（`write`，`status|override`），同样由 `TeamControlLike` 注入；它**不在** team-scoped control token 白名单，未注入时返回 `not_found`。0.19 S5 新增 `auth.exchange`（`write`）、`auth.revoke` / `auth.tokens`（`admin`），用于 hub 控制面的短期 token 交换与吊销。0.18 移除 workflow 的 5 个方法（`workflow.list|start|get|resume|cancel`，ADR-090），并新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与 ask；0.19 S4 起 ask 也持久化）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
@@ -2538,3 +2538,37 @@ interface LimitBlock {
   - `team.budget.override`：`dimension` / `previous_max` / `max` / `by: 'human'` / `via: 'cli'|'api'`。
 - WS team-scoped 过滤：`data.team_id` 优先匹配 principal；没有 team_id 才回退 `session_id → teamForSession`；两者都没有 → 丢弃。预算事件没有 session，必须靠 `team_id` 放行。
 - hub 不投影预算；Web S4 只收事件不渲染（S6 预算 UI 未实现）。
+
+## 45. 0.20.0 fork 与跨节点 federation（已实现）
+
+### 45.1 fork
+
+- `AgentService.dispatch` 在 `presence === 'gone'` 且 resume 失败后，按
+  `teams[].policy.allowFork`（缺省 false）或显式 `allow_fork`（仅 owner / CLI）执行 fork。
+  不新增 `agent` 工具动作、不新增 canonical RPC；rotate 失败不自动 fork。
+- 新 Agent：新 id / name / session，`epoch = 0`、`body_history = []`、`forked_from = 源`；
+  继承 owner / parent / visibility / team / model；prompt = 源 prompt + 绝对 handoff 路径；
+  不带历史。原 Agent 保持 `present + gone`。
+- private 源、无 Team、无 `handoff_path`、`already_forked` → `resume_failed` 且零写入；
+  spawn 失败 → `fork_failed`；spawn 期间源被关闭 → 回收并 `agent_left`。
+- 事件：`agent.forked {from,to,team_id}` + Team `system_event: 'fork'`。父级已
+  left / closed / gone 时回复发 `agent.reply.dropped`，不入队。
+- 快照仍 v2；`DispatchResult.resolution` 增加 `'forked'`。详见
+  [ADR-091 Addendum](adr/ADR-091-agent-body-and-presence.md)。
+
+### 45.2 跨节点 federation（team ↔ team）
+
+- 默认关闭；全局 `federation.peers[]` 显式 allowlist，wire 只含 `(node_id, team_id)`。
+  入站 `POST /v1/federation/messages`，出站 `vessel federation post|peers`；
+  hub 不在数据面。详见 [ADR-094](adr/ADR-094-federation-team-to-team.md)。
+- 严格解析、peer bearer（`tokenEnv`）、非回环 https、hop 上界、自指环拒绝、进程内去重。
+- 入站默认只写 Team 日志（0 run）；`teams[].policy.federation.accept = 'members'`
+  才对本机 present 非 private 成员 fan-out。
+- v1 固定 default tenant；不新增 canonical RPC；legacy `/v1/team/*` / `RemoteTransport` /
+  `NodeRegistry` 冻结，禁止新增调用方。
+
+### 45.3 canonical 与边界
+
+- 0.20 新增 fork 与 federation 传输面，但**不新增 canonical 方法**，方法表仍 **48**
+  （47 个 domain 方法 + `events.subscribe`）。
+- `packages/serve` 仍不依赖 `@vessel-agent/agent`；`packages/core` 不出现 Team / federation 概念。

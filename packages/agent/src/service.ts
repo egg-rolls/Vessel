@@ -11,6 +11,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isAbsolute, join, normalize } from 'node:path';
 import {
   assertTenantId,
   type EventStream,
@@ -104,6 +105,11 @@ interface RotationState {
   toEpoch: number;
 }
 
+/** 0.20 fork 结果：成功带新记录；失败带稳定 code 与 `code: reason` 文本 */
+type ForkOutcome =
+  | { ok: true; member: MemberRecord }
+  | { ok: false; code: 'fork_not_allowed' | 'fork_failed' | 'agent_left'; reason: string };
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -183,6 +189,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly queues = new Map<string, MemberQueue>();
   /** gone 成员的 single-flight resume；同一 id 并发 dispatch 只 spawn 一次 */
   private readonly resuming = new Map<string, Promise<void>>();
+  /** 同一源成员的 single-flight fork；并发只 spawn 一个新 Agent */
+  private readonly forking = new Map<string, Promise<ForkOutcome>>();
   /** 进行中的 rotate（agentId → 旧 / 新 Body）；只在内存 */
   private readonly rotations = new Map<string, RotationState>();
   /** external owner（REPL 主 agent）：队列由 takeMessages 消费，pump 永不执行 */
@@ -194,6 +202,7 @@ export class AgentServiceImpl implements AgentService {
   /** `new` 未显式传 workspace 时的默认 workspace；无配置声明时为 undefined */
   private readonly defaultWorkspace: string | undefined;
   private readonly teamBinder: TeamBinder | undefined;
+  private readonly teamPolicy: AgentServiceOptions['teamPolicy'];
   private readonly budgetPort: ConversationBudgetPort | undefined;
   /** 进程内 blocked 事件去重（每个 conversation 一次；release / override 清） */
   private readonly blockedBudgetEvents = new Set<string>();
@@ -220,6 +229,7 @@ export class AgentServiceImpl implements AgentService {
       ? options.defaultWorkspace
       : undefined;
     this.teamBinder = options.teamBinder;
+    this.teamPolicy = options.teamPolicy;
     this.budgetPort = options.budget;
 
     const dataDir = options.dataDir;
@@ -451,19 +461,172 @@ export class AgentServiceImpl implements AgentService {
     const systemPrompt = optionalString(input.systemPrompt);
     if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
 
+    try {
+      await this.spawnRecord(record);
+    } catch (error) {
+      throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
+    }
+    this.emit('agent.spawned', record, { state: 'idle', presence: 'live' });
+    return toMemberStatus(record);
+  }
+
+  /**
+   * 创建路径共用的 spawn / 回滚骨架（createOne 与 fork）。
+   * registry.add → runtime.spawn；失败移除新增记录与队列后重抛，成功 idle + live。
+   * 事件由调用方在各自的前置检查之后再发（fork 的源复查必须先于事件）。
+   */
+  private async spawnRecord(record: MemberRecord): Promise<void> {
     this.registry.add(record);
     try {
       await this.runtime.spawn(toRuntimeMember(record));
     } catch (error) {
-      this.registry.remove(id);
-      this.queues.delete(id);
-      throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
+      this.registry.remove(record.id);
+      this.queues.delete(record.id);
+      throw error;
     }
-    this.registry.setState(id, 'idle');
-    this.registry.setPresence(id, 'live');
-    this.emit('agent.spawned', record, { state: 'idle', presence: 'live' });
+    this.registry.setState(record.id, 'idle');
+    this.registry.setPresence(record.id, 'live');
     this.scheduleSnapshot();
-    return toMemberStatus(record);
+  }
+
+  /**
+   * 0.20 fork：resume 失败后的兜底。single-flight（同一源并发只 spawn 一次）。
+   *
+   * 失败一律显式且零写入：源记录不动，registry 不留新记录，不发事件。
+   * 成功时源仍保持 present + gone；新 Agent 不继承历史 / body_history。
+   */
+  private async ensureForked(sourceId: string): Promise<ForkOutcome> {
+    const inflight = this.forking.get(sourceId);
+    if (inflight) return inflight;
+    const promise = this.forkOne(sourceId);
+    this.forking.set(sourceId, promise);
+    try {
+      return await promise;
+    } finally {
+      if (this.forking.get(sourceId) === promise) this.forking.delete(sourceId);
+    }
+  }
+
+  private async forkOne(sourceId: string): Promise<ForkOutcome> {
+    const source = this.registry.get(sourceId);
+    // fork 不是复活路径：left / closed / 正在关闭一律 agent_left。
+    if (
+      source === undefined ||
+      source.membership === 'left' ||
+      source.state === 'closed' ||
+      this.queueFor(sourceId).closing
+    ) {
+      return { ok: false, code: 'agent_left', reason: `agent_left: ${sourceId}` };
+    }
+    // fork 必须显式可见；private 成员永不写 Team 日志。
+    if (source.visibility === 'private') {
+      return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: private' };
+    }
+    const teamId = source.teamId;
+    if (teamId === undefined || this.teamBinder === undefined) {
+      return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
+    }
+    const team = this.teamBinder.get(teamId);
+    if (team === undefined) {
+      return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_team' };
+    }
+    const handoffPath = team.handoff_path;
+    if (!nonEmpty(handoffPath)) {
+      return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: no_handoff' };
+    }
+
+    // 用现有 forked_from 自描述去重，不新增源侧指针、不写源记录。
+    const existingFork = this.registry
+      .all()
+      .find((record) => record.forkedFrom === sourceId && record.membership === 'present');
+    if (existingFork !== undefined) {
+      return {
+        ok: false,
+        code: 'fork_not_allowed',
+        reason: `fork_not_allowed: already_forked:${existingFork.id}`,
+      };
+    }
+
+    const name = this.forkNameFor(source.name ?? source.id, teamId);
+    if (name === undefined) {
+      return { ok: false, code: 'fork_not_allowed', reason: 'fork_not_allowed: name_exhausted' };
+    }
+
+    const id = this.newId();
+    if (!nonEmpty(id) || this.registry.resolve(id) !== undefined) {
+      return { ok: false, code: 'fork_failed', reason: 'fork_failed: session_id_collision' };
+    }
+
+    // workspace 的真相源是 TeamRecord；成员 runtime 无 cwd，handoff 必须是绝对路径。
+    const handoff = isAbsolute(handoffPath)
+      ? normalize(handoffPath)
+      : normalize(join(team.workspace, handoffPath));
+    const basePrompt = source.systemPrompt?.trimEnd();
+    const systemPrompt = nonEmpty(basePrompt)
+      ? `${basePrompt}\n\nHandoff: ${handoff}`
+      : `Handoff: ${handoff}`;
+
+    const record: MemberRecord = {
+      id,
+      sessionId: id,
+      name,
+      owner: source.owner,
+      visibility: source.visibility,
+      state: 'created',
+      presence: 'gone',
+      membership: 'present',
+      teamId,
+      rotation: 'stable',
+      currentBody: { session_id: id, epoch: 0, started_at: this.now() },
+      bodyHistory: [],
+      forkedFrom: source.id,
+      systemPrompt,
+    };
+    if (source.parentId !== undefined) record.parentId = source.parentId;
+    if (source.model !== undefined) record.model = source.model;
+    else if (this.defaultModel !== undefined) record.model = this.defaultModel;
+
+    try {
+      await this.spawnRecord(record);
+    } catch (error) {
+      return { ok: false, code: 'fork_failed', reason: `fork_failed: ${errorText(error)}` };
+    }
+
+    // spawn 期间源可能已被 close：踢人不得凭空产生新 Agent。
+    // 复查必须先于 agent.forked：否则日志会出现一条无法回滚的 fork。
+    const currentSource = this.registry.get(source.id);
+    if (
+      currentSource === undefined ||
+      currentSource.membership === 'left' ||
+      currentSource.state === 'closed' ||
+      this.queueFor(source.id).closing
+    ) {
+      await this.disposeBody(toRuntimeMember(record));
+      this.registry.remove(record.id);
+      this.queues.delete(record.id);
+      this.scheduleSnapshot();
+      return { ok: false, code: 'agent_left', reason: `agent_left: ${sourceId}` };
+    }
+
+    this.emit('agent.forked', record, {
+      state: 'idle',
+      presence: 'live',
+      from: source.id,
+      to: record.id,
+    });
+    return { ok: true, member: record };
+  }
+
+  /** `base-fork` → `base-fork-2..100`；同 Team present 占用才跳过。耗尽返回 undefined。 */
+  private forkNameFor(base: string, teamId: string): string | undefined {
+    for (let index = 1; index <= 100; index += 1) {
+      const candidate = index === 1 ? `${base}-fork` : `${base}-fork-${index}`;
+      const occupied = this.registry
+        .findByName(candidate)
+        .some((record) => record.membership === 'present' && record.teamId === teamId);
+      if (!occupied) return candidate;
+    }
+    return undefined;
   }
 
   async send(input: SendInput): Promise<SendResult>;
@@ -629,7 +792,35 @@ export class AgentServiceImpl implements AgentService {
     try {
       await this.ensureResumed(target.id);
     } catch (error) {
-      return { status: 'rejected', code: 'resume_failed', reason: errorText(error) };
+      // resume 失败：只有显式/team policy 允许且满足 fork 前置时才兜底；不得静默降级。
+      if (!this.resolveAllowFork(target, raw.allow_fork)) {
+        return { status: 'rejected', code: 'resume_failed', reason: errorText(error) };
+      }
+      const fork = await this.ensureForked(target.id);
+      if (!fork.ok) {
+        if (fork.code === 'agent_left') {
+          return { status: 'rejected', code: 'agent_left', reason: fork.reason };
+        }
+        if (fork.code === 'fork_failed') {
+          return { status: 'rejected', code: 'fork_failed', reason: fork.reason };
+        }
+        // fork_not_allowed：没有发生 fork，仍按 resume 失败显式拒绝。
+        return { status: 'rejected', code: 'resume_failed', reason: fork.reason };
+      }
+      const forked = this.registry.get(fork.member.id);
+      if (forked === undefined || forked.membership === 'left' || forked.state === 'closed') {
+        return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
+      }
+      const rejectedFork = this.budgetBeforeEnqueue(forked, from, conversationId, originTeamId);
+      if (rejectedFork !== undefined) return rejectedFork;
+      const forkedResult = this.enqueueMessage(forked, content, from, conversationId);
+      return {
+        status: 'queued',
+        message_id: forkedResult.message_id,
+        resolved_to: forked.id,
+        resolution: 'forked',
+        conversation_id: conversationId,
+      };
     }
     // resume 期间成员可能已被 close：复查后拒绝，不把消息投进已关闭成员
     const current = this.registry.get(target.id);
@@ -706,6 +897,21 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', `ambiguous name: ${to} candidates: ${candidates}`);
     }
     return visible[0];
+  }
+
+  /**
+   * fork 开关：显式 `allow_fork` 优先（只由 owner / CLI 传入）；
+   * 缺省看目标 Team 的 `policy.allowFork`，再缺省 false。
+   */
+  private resolveAllowFork(target: MemberRecord, explicit: unknown): boolean {
+    if (explicit !== undefined) {
+      if (typeof explicit !== 'boolean') {
+        throw new AgentError('invalid_input', 'allow_fork must be a boolean');
+      }
+      return explicit;
+    }
+    if (target.teamId === undefined) return false;
+    return this.teamPolicy?.(target.teamId)?.allowFork === true;
   }
 
   /**
@@ -1819,6 +2025,7 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 自动最终文本投递到父成员队列；父不存在（owner 未 attach）时丢弃。
+   * 父已 left / closed / gone 时显式发 `agent.reply.dropped`（不静默、不入队、不重试）。
    * 父是 external owner 时不参与预算；父是成员时被挡只发事件、不进 turn 收尾。
    */
   private deliverToParent(
@@ -1828,12 +2035,15 @@ export class AgentServiceImpl implements AgentService {
   ): void {
     if (!nonEmpty(member.parentId)) return;
     const parent = this.registry.resolve(member.parentId);
-    if (
-      !parent ||
-      parent.membership === 'left' ||
-      parent.state === 'closed' ||
-      parent.presence === 'gone'
-    ) {
+    if (!parent) return;
+    if (parent.membership === 'left' || parent.state === 'closed' || parent.presence === 'gone') {
+      const reason =
+        parent.membership === 'left'
+          ? 'parent_left'
+          : parent.state === 'closed'
+            ? 'parent_closed'
+            : 'parent_gone';
+      this.emit('agent.reply.dropped', member, { to: parent.id, reason });
       return;
     }
     const parentQueue = this.queueFor(parent.id);

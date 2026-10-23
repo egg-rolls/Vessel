@@ -38,6 +38,16 @@ export {
 export { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js';
 export { BROADCAST_PREVIEW_LIMIT, summarizeBroadcastEvent } from './event-summary.js';
 export {
+  createFederationRoute,
+  FEDERATION_MESSAGES_PATH,
+  FEDERATION_PROTOCOL,
+  type FederationDirection,
+  type FederationGatewayOptions,
+  type FederationGatewayPeer,
+  type FederationRoute,
+  type FederationRouteOptions,
+} from './federation.js';
+export {
   type FeishuGatewayOptions,
   type FeishuStatus,
   maskAppId,

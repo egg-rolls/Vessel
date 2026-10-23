@@ -137,6 +137,11 @@ function printHelp(): void {
       'vessel team budget override <team_id> --conversation <id> --dimension <d> --max <n|unlimited>',
       t('help.cmd.teamBudgetOverride'),
     ],
+    [
+      'vessel federation post <node>:<team> <content...> --from-team <team_id>',
+      t('help.cmd.federationPost'),
+    ],
+    ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
     ['vessel errors [--json]', t('help.cmd.errors')],
     ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
     ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
@@ -949,6 +954,7 @@ async function runWithConfig(result: BootstrapResult) {
     // 冻结形状；合并后可直接写进 GatewayOptions。
     const controlPlane = buildGatewayControlPlane({
       config,
+      nodeId: result.nodeId,
       ...(result.metrics ? { metrics: result.metrics } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
       // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。

@@ -128,6 +128,10 @@ class FakeTeamBinder implements TeamBinder {
       created_at: 1,
     };
   }
+
+  get(_teamId: string): TeamRecord | undefined {
+    return undefined;
+  }
 }
 
 describe('AgentService team binding', () => {

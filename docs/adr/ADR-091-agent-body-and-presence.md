@@ -109,3 +109,33 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 - **事件**：`team.budget.warning`（`team_id` / `conversation_id` / `dimension` / `current` / `max` / `threshold` / `phase`）、`team.budget.blocked`（再加 `reason` / `retry_after_ts?`）、`team.budget.override`（`dimension` / `previous_max` / `max` / `by: 'human'` / `via`）。所有事件必带 `team_id`；不带正文 / tool input / prompt。
 - **`teams.budget` canonical（48）**：`permission: 'write'`，`status | override`，由 `TeamControlLike.budget` 注入；未注入返回 `not_found`。**不进** `CONTROL_SCOPE_METHODS`，team-scoped control token 调用返回 `forbidden`。override 只能抬高当前限额或 `null` 清除，只对已存在的 conversation 生效；审计写 Team 日志 system 记录（`budget_override`）并发布 `team.budget.override`。owner 端点 `team.budget` 与 CLI `vessel team budget` 同步实现。S4 合并后 canonical 为 **48**；上面 S5/S6 Addendum 的 47 是 S4 之前的计数。
 - **未实现**：billing / 价格表 / `max_cost` 执行、agent 审批人、`allow-after`、跨节点 hop / 预算（S7）、hub 预算投影、Web 预算 UI（S6）、持久化消息队列、unbound / root turn 预算。
+
+## Addendum（0.20 fork）
+
+> fork 已实现。本节只追加当前事实，不改写上面 S1 / S2 / S3 / S4 当时的结论。
+
+- **唯一触发点**：`AgentService.dispatch` 在目标 `presence === 'gone'` 且 resume 失败后，
+  按开关尝试 fork；`live` / `rotating` 正常投递，`left` 直接 `agent_left`。
+  **不新增 `agent` 工具动作，不新增 canonical RPC**（仍 48）。rotate 失败不自动 fork。
+- **开关**：`teams[].policy.allowFork`（缺省 false；手写 YAML 别名 `allow_fork`）。
+  `DispatchInput.allow_fork` 显式值优先，但只有 owner 端点 / CLI 能传；成员 `send` 与
+  `agent` 工具永不暴露该参数。
+- **新 Agent 形状**：新 `agent_id` / 新 name（`<base>-fork`，同 Team present 冲突则
+  `-fork-2..100`）/ 新 `session_id`（第一具 Body 与 id 相同）；`epoch = 0`、
+  `body_history = []`、`forked_from = 源 id`；继承 owner / parent_id / visibility / team_id / model。
+- **prompt 与历史**：`system_prompt` = 源 prompt + `\n\nHandoff: <绝对路径>`（相对路径按
+  `TeamRecord.workspace` 解析）；只拼路径，不读文件；不复制 session 消息与 Body 历史。
+- **失败语义（全部零写入）**：private 源、无 Team、无 `handoff_path`、已有 present fork
+  → `resume_failed`（reason 指明原因）；fork 自身 spawn 失败 → `fork_failed`；
+  spawn 期间源被 close / left → 回收新 Agent 并 `agent_left`。源记录始终不变，
+  仍保持 `present + gone`。
+- **并发与去重**：源维度 single-flight（`Map<sourceId, Promise>`）；`already_forked`
+  通过扫描现有 `forked_from + present` 判定，不新增源侧指针。
+- **可见性**：private 源拒绝 fork（private 成员永不写 Team 日志，fork 会得到不可见的新 Agent）；
+  `agent.forked {from,to,team_id}` + Team `system_event: 'fork'` 各一条；日志写失败只 warning。
+- **父级回复**：父 Agent 已 `left` / `closed` / `gone` 时发 `agent.reply.dropped`
+  （`parent_left|parent_closed|parent_gone`），不入队、不重试；父不存在仍静默返回。
+- **预算**：fork 成功后对新 Agent 做发送侧预算检查；预算拒绝时 fork 已存在但本次消息不投递
+  （不回滚、不关闭新 Agent）。
+- **兼容**：快照仍 v2，无迁移；`DispatchResult.resolution` 增加 `'forked'`，
+  rejected code 增加 `'fork_failed'`；`TeamSystemEvent` 增加 `'fork'`（开放字符串值）。

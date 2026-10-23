@@ -105,7 +105,11 @@ function methodParams(command: AgentCommand): {
   if (command.kind === 'dispatch') {
     return {
       method: 'agent.dispatch',
-      params: { to: command.to, content: command.content },
+      params: {
+        to: command.to,
+        content: command.content,
+        ...(command.allowFork !== undefined ? { allow_fork: command.allowFork } : {}),
+      },
     };
   }
   if (command.kind === 'rotate') {

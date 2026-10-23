@@ -39,6 +39,7 @@ import {
 } from './durable.js';
 import type { EvalsGatewayOptions } from './evals.js';
 import type { EventGap, SeqEvent } from './event-buffer.js';
+import { createFederationRoute, type FederationGatewayOptions } from './federation.js';
 import type { FeishuGatewayOptions } from './feishu.js';
 import {
   buildContentSecurityPolicy,
@@ -270,6 +271,11 @@ export interface GatewayOptions {
    * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
    */
   teams?: TeamControlLike;
+  /**
+   * S7：跨节点 federation 入站面（asm 归一化后注入，含已解析 peer token）。
+   * 缺省 / `enabled: false` = `/v1/federation/messages` 返回 404。
+   */
+  federation?: FederationGatewayOptions;
   /** plugins.list 数据源（全局） */
   plugins?: () => Array<{ name: string; enabled: boolean }>;
   /** 0.5 A-6.3：per-tenant plugins.list / capabilities.list；缺省回退 `plugins` */
@@ -604,6 +610,26 @@ export function startGateway(opts: GatewayOptions): Gateway {
   }
   if (opts.hubTeamScope !== undefined && typeof opts.hubTeamScope.teamForSession !== 'function') {
     throw new Error('hubTeamScope.teamForSession must be a function.');
+  }
+  if (opts.federation !== undefined) {
+    const federation = opts.federation;
+    if (
+      typeof federation.enabled !== 'boolean' ||
+      typeof federation.nodeId !== 'string' ||
+      !Number.isFinite(federation.maxHops) ||
+      !Array.isArray(federation.peers)
+    ) {
+      throw new Error('federation must provide enabled, nodeId, maxHops, and peers.');
+    }
+    for (const peer of federation.peers) {
+      if (
+        typeof peer.nodeId !== 'string' ||
+        typeof peer.teamId !== 'string' ||
+        typeof peer.token !== 'string'
+      ) {
+        throw new Error('federation peers must provide nodeId, teamId, and token.');
+      }
+    }
   }
 
   const features = [...BASE_FEATURES];
@@ -1622,6 +1648,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
       message: error instanceof Error ? error.message : String(error),
     });
   }
+
+  /**
+   * S7：federation 入站路由。独立 peer bearer，必须在 `principalForRequest`
+   * 之前处理——gateway 用户 token 不得通过 federation 鉴权。
+   */
+  const federationRoute = createFederationRoute({
+    ...(opts.federation !== undefined ? { federation: opts.federation } : {}),
+    ...(opts.teams !== undefined ? { teams: opts.teams } : {}),
+    publish: publishTeamEvent,
+  });
 
   /** TeamProtocolError / PeerTransportError → HTTP */
   function teamErrorResponse(error: unknown, extra: Record<string, string>): Response {
@@ -2711,6 +2747,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const hubControlResult = hubControlRoute.handle(req, url, srv, extra);
       if (hubControlResult === 'upgraded') return;
       if (hubControlResult !== undefined) return hubControlResult;
+
+      // S7：federation 入站（独立 peer bearer；非该路径返回 null）。
+      const federationResponse = await federationRoute.handle(req, extra);
+      if (federationResponse !== null) return federationResponse;
 
       // WS：/v1/events（/ws 为 0.1.0 兼容别名）。
       // ADR-053：token 不进 URL/query，只接受首帧 `{kind:'auth',token,since}`。

@@ -3,6 +3,41 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.20.0] - 2026-10-23
+
+> 0.20.0（基于 `main` 0.19.1，未发布）：fork 与跨节点 team ↔ team federation。未 tag、未 `npm publish`。
+
+### Added
+
+- **fork**：`dispatch` 在 `gone + resume` 失败后，按 `teams[].policy.allowFork`（缺省 false）
+  或 owner / CLI 显式 `allow_fork` 创建新 Agent（新 id / name / session、`epoch=0`、
+  `forked_from=源`、不带历史、prompt 带绝对 handoff 路径）。private / 无 Team / 无 handoff /
+  `already_forked` 一律 `resume_failed` 且零写入；spawn 失败 `fork_failed`；
+  事件 `agent.forked` + Team `system_event:'fork'`；父级 gone 的回复发 `agent.reply.dropped`。
+  不新增 `agent` 工具动作、不新增 canonical RPC。
+- **跨节点 federation（team ↔ team）**：全局 `federation:` 显式 peer allowlist；
+  入站 `POST /v1/federation/messages`，出站 `vessel federation post|peers`；
+  wire 只含 `(node_id, team_id)`，严格解析；peer bearer（`tokenEnv`）、非回环 https、
+  hop 上界、自指环拒绝、进程内去重。入站默认只写 Team 日志（0 run）；
+  `teams[].policy.federation.accept = 'members'` 才对本机 present 非 private 成员 fan-out。
+  事件 `federation.received` / `federation.rejected`；出站一次性进程结果走 CLI JSON / exit。
+
+### Changed
+
+- `DispatchResult.resolution` 增加 `'forked'`，rejected code 增加 `'fork_failed'`；
+  `TeamSystemEvent` 增加 `'fork'`；`TeamPolicy` 增加 `allowFork` 与 `federation`。
+- canonical 方法表仍 **48**；快照仍 v2，无迁移。
+- legacy `/v1/team/*`、`RemoteTransport`、`NodeRegistry`、`transport-factory` 冻结，
+  禁止新增调用方；删除另立切片。
+
+### Known limitations
+
+- v1 固定 `default` tenant；多 tenant federation 非目标。
+- 无自动中继：hop 恒为 1，只作防御上界；无离线队列 / 重试 / 跨重启 exactly-once。
+- 真实成员 fan-out 只有单测覆盖；回环探针 roster 为空。
+- 入站鉴权为每 peer bearer + https/caFile；v1 不做 mTLS / 自动轮换。
+- 预算拒绝发生在 fork 创建之后：可能出现新 fork 但本次消息未投递。
+
 ## [0.19.1] - 2026-10-23
 
 > 0.19.1（基于 `main`，未发布）：headless `--resume-run` 权限挂起修复。未 tag、未 `npm publish`。

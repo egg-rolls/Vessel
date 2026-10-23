@@ -10,6 +10,7 @@
 import type {
   TeamBudgetCyclePolicy,
   TeamBudgetPolicy,
+  TeamFederationPolicy,
   TeamPermissionPolicy,
   TeamPolicy,
 } from './types.js';
@@ -311,6 +312,36 @@ function normalizeBudget(
   return result;
 }
 
+const FEDERATION_KEYS = new Set(['accept']);
+
+/** S7.2：只接受 `accept`，缺省不写（消费方按 `log` 处理）。 */
+function normalizeFederation(
+  input: Record<string, unknown>,
+  issues: TeamPolicyIssue[],
+): TeamFederationPolicy {
+  for (const key of Object.keys(input)) {
+    if (FEDERATION_KEYS.has(key)) continue;
+    issues.push({
+      field: `federation.${key}`,
+      message: `policy.federation.${key} is not a valid key`,
+    });
+  }
+
+  const result: TeamFederationPolicy = {};
+  if (!Object.hasOwn(input, 'accept')) return result;
+
+  const accept = input.accept;
+  if (accept === 'log' || accept === 'members') {
+    result.accept = accept;
+  } else {
+    issues.push({
+      field: 'federation.accept',
+      message: 'policy.federation.accept must be "log" or "members"',
+    });
+  }
+  return result;
+}
+
 function normalizeTeamPolicy(policy: unknown, issues: TeamPolicyIssue[]): TeamPolicy {
   if (policy === undefined || policy === null) return {};
   if (!isRecord(policy)) {
@@ -320,6 +351,14 @@ function normalizeTeamPolicy(policy: unknown, issues: TeamPolicyIssue[]): TeamPo
 
   const result: TeamPolicy = {};
   for (const [key, value] of Object.entries(policy)) {
+    if (key === 'allowFork' || key === 'allow_fork') {
+      if (typeof value !== 'boolean') {
+        issues.push({ field: 'allowFork', message: 'policy.allowFork must be a boolean' });
+        continue;
+      }
+      result.allowFork = value;
+      continue;
+    }
     if (key === 'permission') {
       if (!isRecord(value)) {
         issues.push({ field: 'permission', message: 'policy.permission must be an object' });
@@ -334,6 +373,14 @@ function normalizeTeamPolicy(policy: unknown, issues: TeamPolicyIssue[]): TeamPo
         continue;
       }
       result.budget = normalizeBudget(value, issues);
+      continue;
+    }
+    if (key === 'federation') {
+      if (!isRecord(value)) {
+        issues.push({ field: 'federation', message: 'policy.federation must be an object' });
+        continue;
+      }
+      result.federation = normalizeFederation(value, issues);
       continue;
     }
     // 顶层其它键保持原样（S3 兼容）。

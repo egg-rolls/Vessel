@@ -12,6 +12,7 @@ import type {
   ConfigValidationResult,
   ConfigValidationWarning,
   EvalsConfig,
+  FederationConfig,
   FeishuConfig,
   HubConfig,
   ObservabilityConfig,
@@ -222,6 +223,174 @@ function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
             message: issue.message,
           });
         }
+      }
+    }
+  });
+}
+
+/** Team / federation team id 字符集（slug 结果；含哈希后缀）。 */
+const TEAM_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+/** federation peer 允许的键（camelCase；YAML snake 已由 loader 转换）。 */
+const FEDERATION_PEER_KEYS = new Set([
+  'nodeId',
+  'teamId',
+  'url',
+  'tokenEnv',
+  'caFile',
+  'direction',
+  'localTeamId',
+  'token',
+]);
+
+/**
+ * 校验 federation 块（S7；全局，tenant overlay 不允许）。
+ *
+ * 默认拒绝：未知字段不参与放行；明文 `token` 明确拒绝，只接受 `tokenEnv`。
+ */
+function validateFederation(
+  federation: unknown,
+  errors: ConfigValidationError[],
+  hostNodeId: string | undefined,
+): void {
+  if (!isPlainObject(federation)) {
+    errors.push({ path: 'federation', message: 'federation must be an object' });
+    return;
+  }
+  const { enabled, maxHops, peers } = federation as Partial<FederationConfig>;
+
+  if (enabled !== undefined && typeof enabled !== 'boolean') {
+    errors.push({
+      path: 'federation.enabled',
+      message: 'federation.enabled must be a boolean',
+      value: enabled,
+    });
+  }
+  if (
+    maxHops !== undefined &&
+    (typeof maxHops !== 'number' || !Number.isInteger(maxHops) || maxHops < 1 || maxHops > 16)
+  ) {
+    errors.push({
+      path: 'federation.maxHops',
+      message: 'federation.maxHops must be an integer between 1 and 16',
+      value: maxHops,
+    });
+  }
+  if (peers === undefined) return;
+  if (!Array.isArray(peers)) {
+    errors.push({ path: 'federation.peers', message: 'federation.peers must be an array' });
+    return;
+  }
+
+  const seen = new Set<string>();
+  peers.forEach((raw, index) => {
+    const base = `federation.peers[${index}]`;
+    if (!isPlainObject(raw)) {
+      errors.push({ path: base, message: `${base} must be an object` });
+      return;
+    }
+    const peer = raw as Record<string, unknown>;
+
+    for (const key of Object.keys(peer)) {
+      if (FEDERATION_PEER_KEYS.has(key)) continue;
+      errors.push({
+        path: `${base}.${key}`,
+        message: `${base}.${key} is not a valid federation peer key`,
+      });
+    }
+
+    if (peer.token !== undefined) {
+      errors.push({
+        path: `${base}.token`,
+        message: `${base}.token is not allowed; use tokenEnv`,
+      });
+    }
+
+    let nodeId: string | undefined;
+    if (typeof peer.nodeId !== 'string' || !NODE_ID_RE.test(peer.nodeId)) {
+      errors.push({
+        path: `${base}.nodeId`,
+        message: `${base}.node_id must match ${NODE_ID_RE.source}`,
+      });
+    } else {
+      nodeId = peer.nodeId;
+      if (hostNodeId !== undefined && peer.nodeId === hostNodeId) {
+        errors.push({
+          path: `${base}.nodeId`,
+          message: `${base}.node_id must not equal this node's node_id`,
+        });
+      }
+    }
+
+    let teamId: string | undefined;
+    if (typeof peer.teamId !== 'string' || !TEAM_ID_RE.test(peer.teamId)) {
+      errors.push({
+        path: `${base}.teamId`,
+        message: `${base}.team_id must match ${TEAM_ID_RE.source}`,
+      });
+    } else {
+      teamId = peer.teamId;
+    }
+
+    if (
+      peer.localTeamId !== undefined &&
+      (typeof peer.localTeamId !== 'string' || !TEAM_ID_RE.test(peer.localTeamId))
+    ) {
+      errors.push({
+        path: `${base}.localTeamId`,
+        message: `${base}.localTeamId must match ${TEAM_ID_RE.source}`,
+      });
+    }
+
+    const direction = peer.direction;
+    if (
+      direction !== undefined &&
+      direction !== 'in' &&
+      direction !== 'out' &&
+      direction !== 'both'
+    ) {
+      errors.push({
+        path: `${base}.direction`,
+        message: `${base}.direction must be "in", "out", or "both"`,
+      });
+    }
+    const needsUrl = direction !== 'in';
+    if (peer.url === undefined) {
+      if (needsUrl) {
+        errors.push({
+          path: `${base}.url`,
+          message: `${base}.url is required when direction includes out`,
+        });
+      }
+    } else if (typeof peer.url !== 'string' || peer.url.trim() === '') {
+      errors.push({ path: `${base}.url`, message: `${base}.url must be a non-empty string` });
+    } else {
+      const message = federationUrlError(peer.url);
+      if (message !== null) errors.push({ path: `${base}.url`, message: `${base}.url ${message}` });
+    }
+
+    if (typeof peer.tokenEnv !== 'string' || peer.tokenEnv === '') {
+      errors.push({ path: `${base}.tokenEnv`, message: `${base}.tokenEnv is required` });
+    } else {
+      validateEnvName(`${base}.tokenEnv`, peer.tokenEnv, errors);
+    }
+
+    if (
+      peer.caFile !== undefined &&
+      (typeof peer.caFile !== 'string' || peer.caFile.trim() === '')
+    ) {
+      errors.push({ path: `${base}.caFile`, message: `${base}.caFile must be a non-empty string` });
+    }
+
+    if (nodeId !== undefined && teamId !== undefined) {
+      const key = `${nodeId}\u0000${teamId}`;
+      if (seen.has(key)) {
+        errors.push({
+          path: `${base}.teamId`,
+          message: `duplicate federation peer "${nodeId}:${teamId}"`,
+        });
+      } else {
+        seen.add(key);
       }
     }
   });
@@ -621,8 +790,8 @@ export function allowedOriginError(value: string): string | null {
   return null;
 }
 
-/** 0.6：校验节点 URL（与 HttpRpcClient 的 baseUrl 规则一致）。 */
-function nodeUrlError(value: string): string | null {
+/** 绝对 http(s) base URL 规则；`label` 只用于错误文案。 */
+function absoluteBaseUrlError(value: string, label: string): string | null {
   let url: URL;
   try {
     url = new URL(value);
@@ -636,9 +805,19 @@ function nodeUrlError(value: string): string | null {
   if (url.pathname !== '/' && url.pathname !== '') return 'must not contain a path';
   if (url.search !== '' || url.hash !== '') return 'must not contain query or hash';
   if (!isLoopbackHostname(url.hostname) && url.protocol !== 'https:') {
-    return 'non-loopback nodes must use https';
+    return `non-loopback ${label} must use https`;
   }
   return null;
+}
+
+/** 0.6：校验节点 URL（与 HttpRpcClient 的 baseUrl 规则一致）。 */
+function nodeUrlError(value: string): string | null {
+  return absoluteBaseUrlError(value, 'nodes');
+}
+
+/** S7：federation peer URL；与节点 URL 同规则。 */
+function federationUrlError(value: string): string | null {
+  return absoluteBaseUrlError(value, 'federation peers');
 }
 
 /** S5.1：校验 node 侧 hub URL（绝对 http(s)、无 userinfo / path / query / hash、非回环须 https）。 */
@@ -2137,6 +2316,11 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   // 校验 teams（0.19 S3；全局，tenant overlay 不允许）
   if (config.teams !== undefined) validateTeams(config.teams, errors);
 
+  // 校验 federation（S7；全局，tenant overlay 不允许）
+  if (config.federation !== undefined) {
+    validateFederation(config.federation, errors, config.host?.nodeId);
+  }
+
   // guardrails / hooks 由装配层映射为同名插件的安装配置（0.6.1），
   // 不再产生「声明但未应用」警告。
 
@@ -2245,6 +2429,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'allowFileSecrets',
     'pairingTtlSeconds',
   ],
+  federation: ['enabled', 'maxHops', 'peers'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
     'enabled',
@@ -2375,4 +2560,5 @@ export const KNOWN_CONFIG_KEYS = [
   'observability',
   'ui',
   'teams',
+  'federation',
 ];

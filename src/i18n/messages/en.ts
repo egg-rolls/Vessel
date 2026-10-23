@@ -84,6 +84,9 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.teamMembers': 'add or remove a team member',
   'help.cmd.teamBudget': 'show conversation budget and blocked state',
   'help.cmd.teamBudgetOverride': 'raise or clear the budget limit of one conversation',
+  'help.cmd.federationPost':
+    'deliver a message to an allowlisted remote team (log-only by default)',
+  'help.cmd.federationPeers': 'list federation peers and whether their tokens are set',
   'help.cmd.help': 'show this help',
 
   // ── common ──
@@ -257,6 +260,21 @@ export const en: Record<MessageKey, string> = {
   'hub.join.lastStatus': 'status: {status}',
   'hub.joinCode.code': 'join code: {code}',
   'hub.joinCode.expiresAt': 'expires at: {at}',
+
+  // ── federation (0.20 S7.1) ──
+  'federation.error.invalidFromTeam': 'Invalid --from-team: {id}',
+  'federation.error.teamNotFound': 'Local Team not found: {team} ({path})',
+  'federation.post.delivered': 'delivered {messageId} to {peer} (hop {hop})',
+  'federation.post.deduplicated': 'peer deduplicated {messageId} to {peer} (hop {hop})',
+  'federation.post.rejected': 'delivery rejected: {code}: {reason}',
+  'federation.peers.title': 'Federation ({state})',
+  'federation.peers.enabled': 'enabled',
+  'federation.peers.disabled': 'disabled',
+  'federation.peers.empty': 'No peers configured.',
+  'federation.peers.row':
+    '  {node}  {team}  direction={direction}  token_env={tokenEnv}  token={token}',
+  'federation.peers.tokenSet': 'set',
+  'federation.peers.tokenUnset': 'missing',
 
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',

@@ -374,6 +374,11 @@ export interface DispatchInput {
    * 成员 send / reply / owner dispatch 不传，由发送者或目标推导。
    */
   origin_team_id?: string;
+  /**
+   * 0.20：本次投递是否允许在 resume 失败后 fork 新 Agent。
+   * 缺省看 team policy `allowFork`（默认关闭）；显式值覆盖 policy。
+   */
+  allow_fork?: boolean;
 }
 
 /** dispatch 结果：queued 表示已入队；rejected 是明确的业务拒绝 */
@@ -382,7 +387,7 @@ export type DispatchResult =
       status: 'queued';
       message_id: string;
       resolved_to: string;
-      resolution: 'live' | 'resumed' | 'rotating';
+      resolution: 'live' | 'resumed' | 'rotating' | 'forked';
       /** 0.19 S4；实现始终返回，类型保持 additive */
       conversation_id?: string;
     }
@@ -391,6 +396,7 @@ export type DispatchResult =
       code:
         | 'agent_left'
         | 'resume_failed'
+        | 'fork_failed'
         | 'not_visible'
         | 'budget_exceeded'
         | 'budget_unavailable'
@@ -542,6 +548,8 @@ export interface AgentEvent {
   message_id?: string;
   /** 消息来源（queued 事件） */
   from?: string;
+  /** 事件目标（0.20 `agent.forked` / `agent.reply.dropped`；与 from 成对） */
+  to?: string;
   tool?: string;
   outcome?: TurnOutcome;
   reason?: string;
@@ -695,7 +703,7 @@ export interface TeamDeclaration {
   policy?: Record<string, unknown>;
 }
 
-export type TeamSystemEvent = 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override';
+export type TeamSystemEvent = 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override' | 'fork';
 
 /** 只追加团队日志的一行 */
 export interface TeamLogEntry {
@@ -754,7 +762,7 @@ export interface TeamDelivery {
   agent_id: string;
   status: 'queued' | 'rejected' | 'error';
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
   code?: string;
   reason?: string;
 }
@@ -821,7 +829,7 @@ export interface TeamAgentSendResult {
   status: 'queued' | 'rejected' | 'error';
   resolved_to?: string;
   message_id?: string;
-  resolution?: 'live' | 'resumed' | 'rotating';
+  resolution?: 'live' | 'resumed' | 'rotating' | 'forked';
   code?: string;
   reason?: string;
   /** 是否写入了同 Team 的 mention 日志 */
@@ -838,6 +846,8 @@ export interface TeamBinder {
     handoff_path?: string;
     policy?: Record<string, unknown>;
   }): Promise<TeamRecord>;
+  /** 0.20 fork：只读 TeamRecord（workspace / handoff_path）；不存在返回 undefined */
+  get(teamId: string): TeamRecord | undefined;
 }
 
 export interface TeamStore extends TeamBinder {

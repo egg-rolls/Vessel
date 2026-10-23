@@ -21,6 +21,7 @@ const SYSTEM_KEYS: Record<string, string> = {
   leave: 'team.system.leave',
   archive: 'team.system.archive',
   rotate: 'team.system.rotate',
+  fork: 'team.system.fork',
 };
 
 function truncate(value: string, length: number): string {
@@ -54,7 +55,9 @@ function DeliveryNotes({ deliveries }: { deliveries: readonly TeamDelivery[] }) 
           ○{' '}
           {delivery.resolution === 'rotating'
             ? t('team.delivery.queuedRotating')
-            : t('team.delivery.queued')}
+            : delivery.resolution === 'forked'
+              ? t('team.delivery.queuedForked')
+              : t('team.delivery.queued')}
           <span className="mono"> · {delivery.agent_id}</span>
         </span>
       ))}
