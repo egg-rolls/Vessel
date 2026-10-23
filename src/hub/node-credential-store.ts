@@ -261,12 +261,13 @@ export async function createHubNodeCredentialStore(
     });
   }
 
-  async function revokePairing(pairingId: string): Promise<number> {
+  async function revokePairing(pairingId: string, exceptTokenId?: string): Promise<number> {
     return enqueue(async () => {
       const revokedAt = now();
       const changedIds: string[] = [];
       const next = records.map((record) => {
         if (record.pairing_id !== pairingId || record.revoked_at !== undefined) return record;
+        if (exceptTokenId !== undefined && record.token_id === exceptTokenId) return record;
         changedIds.push(record.token_id);
         return { ...record, revoked_at: revokedAt };
       });

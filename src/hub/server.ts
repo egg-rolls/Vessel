@@ -314,6 +314,13 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   const nodeControl = options.nodeControl;
   const inbound: HubNodeInbound | undefined =
     nodeControl !== undefined ? createHubNodeInbound(nodeControl) : undefined;
+  // 吊销 token 时立即关闭持有它的入站 WS（remove / re-join 都走这里）。
+  const unsubscribeRevoke =
+    nodeControl !== undefined
+      ? nodeControl.credentials.onRevoke((tokenId) => {
+          inbound?.closeByTokenId(tokenId);
+        })
+      : undefined;
   const clock = options.now ?? Date.now;
 
   if (config.direction !== undefined && config.direction !== 'hub') {
@@ -602,6 +609,17 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       return errorResponse('pairing_failed', 'invalid pairing response', 502, extra);
     }
 
+    // 同一 pairing 不能同时有两种方向；node-dial 记录必须先 remove。
+    const existing = registry.get(pairing.pairing_id);
+    if (existing !== undefined && (existing.direction ?? 'hub') !== 'hub') {
+      return errorResponse(
+        'pairing_exists_other_direction',
+        'pairing already exists with direction "node"',
+        409,
+        extra,
+      );
+    }
+
     await secretStore.set(pairingSecretKey(pairing.pairing_id, 'view'), pairing.view_token);
     await secretStore.set(pairingSecretKey(pairing.pairing_id, 'exchange'), pairing.exchange_token);
 
@@ -845,6 +863,16 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         error: error instanceof Error ? error.message : String(error),
       });
       return errorResponse('internal', 'Join failed', 500, extra);
+    }
+
+    // 重新 join：保留刚签发的 token，吊销该 pairing 的旧 token（并关闭旧连接）。
+    try {
+      await nodeControl.credentials.revokePairing(pairingId, issued.token_id);
+    } catch (error) {
+      logger?.warn('hub.server.revoke_previous_failed', {
+        pairing_id: pairingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     try {
@@ -1180,6 +1208,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         directoryTimer = undefined;
       }
       unsubscribe();
+      unsubscribeRevoke?.();
       for (const ws of [...wsClients]) {
         try {
           ws.close(1001, 'hub stopping');

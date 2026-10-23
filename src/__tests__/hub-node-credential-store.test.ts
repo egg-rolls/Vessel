@@ -142,6 +142,11 @@ describe('hub node credential store', () => {
     expect(await store.revokePairing(PAIRING)).toBe(0);
     expect(notified).toEqual([one.token_id, two.token_id]);
     expect(await store.revokePairing('missing-pairing')).toBe(0);
+
+    // re-join：保留刚签发的一枚，只吊销旧 token。
+    const three = await store.issue(issueInput());
+    expect(await store.revokePairing(PAIRING, three.token_id)).toBe(0);
+    expect(store.authenticate(three.token)).not.toBeNull();
   });
 
   it('persists only the token hash, never the plaintext token', async () => {

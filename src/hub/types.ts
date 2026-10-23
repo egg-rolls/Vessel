@@ -193,8 +193,8 @@ export interface HubNodeCredentialStoreLike {
   revoke(
     tokenId: string,
   ): Promise<{ token_id: string; revoked_at: number; changed: boolean } | null>;
-  /** 吊销某个 pairing 的所有 token；返回实际变更数。 */
-  revokePairing(pairingId: string): Promise<number>;
+  /** 吊销某个 pairing 的所有 token（可保留刚签发的一枚）；返回实际变更数。 */
+  revokePairing(pairingId: string, exceptTokenId?: string): Promise<number>;
   list(): HubNodeTokenRecord[];
   onRevoke(listener: (tokenId: string) => void): () => void;
 }

@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { isLoopbackHostname, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { HubCommand } from './cli-args';
 import { expandHome, resolveDataDir } from './data-paths';
-import { readGatewayPidState } from './gateway/pid';
+import { listGatewayPidStates } from './gateway/pid';
 import { createHubJoinStore } from './hub/join-store';
 import {
   HUB_NODE_STATE_FILE,
@@ -729,7 +729,10 @@ async function waitForJoinStatus(
     if (deps.gatewayStatus !== undefined) {
       running = (await deps.gatewayStatus()).running;
     } else {
-      running = (await readGatewayPidState(dataDir)).kind === 'running';
+      // 任一实例在运行即可；`--port` 会让 PID 文件带实例后缀。
+      running = (await listGatewayPidStates(dataDir)).some(
+        (entry) => entry.state.kind === 'running',
+      );
     }
   } catch {
     running = false;
