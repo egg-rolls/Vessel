@@ -62,6 +62,10 @@
   --nav-w-collapsed: 56px;
   --nav-w-rail: 64px;
   --sessions-w: 280px;
+  --team-list-w: 280px;
+  --team-members-w: 272px;
+  --team-avatar: 28px;
+  --team-notice-max: 720px;
   --content-max: 1440px;
 
   --row-h-session: 64px;

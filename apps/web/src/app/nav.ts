@@ -9,9 +9,10 @@ export interface DomainDef {
   id: Domain;
 }
 
-/** 5 个主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
+/** 6 个主领域；Settings 固定在底部（D1）。label 走 i18n，随 locale 变化。 */
 export const DOMAINS: readonly (DomainDef & { id: PrimaryDomain })[] = [
   { id: 'chat' },
+  { id: 'team' },
   { id: 'runs' },
   { id: 'workflows' },
   { id: 'integrations' },
@@ -23,7 +24,7 @@ export const NAV_GROUPS: readonly {
   id: string;
   domains: readonly PrimaryDomain[];
 }[] = [
-  { id: 'chat', domains: ['chat'] },
+  { id: 'chat', domains: ['chat', 'team'] },
   { id: 'observe', domains: ['runs', 'observe'] },
   { id: 'workflows', domains: ['workflows'] },
   { id: 'integrations', domains: ['integrations'] },
@@ -56,6 +57,13 @@ export function routeBreadcrumb(route: Route): string {
       return route.runId
         ? t('breadcrumb.runs.detailRun', { tab })
         : t('breadcrumb.runs.detail', { tab });
+    }
+    case 'team': {
+      const teamId = 'teamId' in route ? route.teamId : undefined;
+      if (!teamId) return t('breadcrumb.team');
+      return 'memberId' in route && route.memberId
+        ? t('breadcrumb.team.member')
+        : t('breadcrumb.team.chat');
     }
     case 'workflows':
       return route.workflowId ? t('breadcrumb.workflows.detail') : t('breadcrumb.workflows');
