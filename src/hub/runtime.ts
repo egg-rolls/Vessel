@@ -5,7 +5,9 @@
  * 接在一起；配置校验、CLI 参数解析和网络协议分别留在各自模块。
  *
  * - hub data dir 必须与 gateway data dir 不同（`hub_data_dir_conflict`）；
- * - 启动时按 registry 记录恢复 view token 并重连；
+ * - 启动时按 registry 记录恢复 view token 并重连；`direction:'node'` 的记录只标
+ *   `unreachable` 等待节点重连，不读 view token、不拨号；
+ * - 两个入站端口工厂（join / credentials）同时注入时才装配 `nodeControl`；
  * - registry 删除 pairing 时同步关闭 control client；
  * - `stop()` 幂等：关连接 → 停服务 → flush 目录。
  *
@@ -39,9 +41,18 @@ import {
   type HubNodeConnection,
   type HubServer,
 } from './server';
+import { createHubSnapshotPolicy } from './snapshot-policy';
 import { createHubTokenBroker, type HubTokenBrokerOptions } from './token-broker';
 import {
+  type HubJoinStoreLike,
+  type HubNodeCredentialStoreLike,
+  type HubNodeInboundDeps,
+  type HubNodeInboundHooks,
+  type HubNodeJoinedInput,
+  type HubNodePointer,
   type HubNodeRecord,
+  type HubNodeSnapshot,
+  type HubNodeStatus,
   type HubTokenBrokerLike,
   pairingSecretKey,
   type SecretStore,
@@ -58,6 +69,10 @@ export interface HubRuntimeFactories {
   createTokenBroker?: (options: HubTokenBrokerOptions) => HubTokenBrokerLike;
   createControlClient?: (options: HubControlClientOptions) => HubControlClient;
   createServer?: (options: CreateHubServerOptions) => HubServer;
+  /** hub 侧 join code 端口；与 `createNodeCredentials` 同时提供才启用入站。 */
+  createJoinStore?: () => HubJoinStoreLike;
+  /** hub 侧 node token 端口；与 `createJoinStore` 同时提供才启用入站。 */
+  createNodeCredentials?: () => Promise<HubNodeCredentialStoreLike>;
 }
 
 export interface StartHubRuntimeOptions {
@@ -207,6 +222,113 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     server?.publishDirectory();
   }
 
+  // ---- node → hub 入站 hooks（S5.1）----
+
+  function onInboundSnapshot(pairingId: string, snapshot: HubNodeSnapshot): void {
+    // 跨重连的旧包必须丢弃：用 registry 里已持久化的代际 / revision 种子化。
+    const before = registry.get(pairingId);
+    if (before !== undefined) {
+      const policy = createHubSnapshotPolicy({
+        ...(before.incarnation !== undefined ? { incarnation: before.incarnation } : {}),
+        ...(before.revision !== undefined ? { revision: before.revision } : {}),
+      });
+      if (!policy.accept(snapshot.incarnation, snapshot.revision)) {
+        logger?.debug?.('hub.runtime.stale_inbound_snapshot', {
+          pairing_id: pairingId,
+          revision: snapshot.revision,
+          last_revision: before.revision,
+        });
+        return;
+      }
+    }
+    patchRecord(pairingId, {
+      status: 'healthy',
+      last_seen: snapshot.observed_at,
+      incarnation: snapshot.incarnation,
+      revision: snapshot.revision,
+      truncated: snapshot.truncated,
+      counts: snapshot.counts,
+      teams: snapshot.teams,
+      agents: snapshot.agents,
+      last_error: undefined,
+    });
+    server?.publishDirectory();
+  }
+
+  function onInboundPointer(pointer: HubNodePointer): void {
+    server?.publishPointer({
+      node_id: pointer.node_id,
+      team_id: pointer.team_id,
+      reason: pointer.reason,
+      request_id: pointer.request_id,
+      ts: pointer.ts,
+    });
+  }
+
+  function onInboundStatus(pairingId: string, status: HubNodeStatus, error?: string): void {
+    patchRecord(
+      pairingId,
+      status === 'healthy'
+        ? { status, last_error: undefined }
+        : { status, last_error: error ?? status },
+    );
+    server?.publishDirectory();
+  }
+
+  /** join 成功：建立（或覆盖）direction:'node' 目录记录；data_plane 由 registry 派生。 */
+  function onJoined(input: HubNodeJoinedInput): void {
+    const record: HubNodeRecord = {
+      pairing_id: input.pairing_id,
+      node_id: input.node_id,
+      tenant_id: input.tenant_id,
+      direction: 'node',
+      node_token_id: input.node_token_id,
+      status: 'connecting',
+      truncated: false,
+      counts: { teams: 0, agents: 0, live_agents: 0 },
+      teams: [],
+      agents: [],
+    };
+    if (input.public_url !== undefined) {
+      record.url = input.public_url;
+      record.public_url = input.public_url;
+    }
+    if (input.alias !== undefined) record.alias = input.alias;
+    registry.upsert(record);
+    server?.publishDirectory();
+  }
+
+  /** auth 成功：registry 记录缺失时重建最小记录；已存在则绝不覆盖。 */
+  function onAuthenticated(input: {
+    pairing_id: string;
+    node_id: string;
+    tenant_id: string;
+    node_token_id: string;
+  }): void {
+    if (registry.get(input.pairing_id) !== undefined) return;
+    registry.upsert({
+      pairing_id: input.pairing_id,
+      node_id: input.node_id,
+      tenant_id: input.tenant_id,
+      direction: 'node',
+      node_token_id: input.node_token_id,
+      status: 'connecting',
+      truncated: false,
+      counts: { teams: 0, agents: 0, live_agents: 0 },
+      teams: [],
+      agents: [],
+    });
+    server?.publishDirectory();
+  }
+
+  const inboundHooks: HubNodeInboundHooks = {
+    onSnapshot: onInboundSnapshot,
+    onPointer: onInboundPointer,
+    onStatus: onInboundStatus,
+    onJoined,
+    onAuthenticated,
+  };
+
   function closeClient(pairingId: string): void {
     const client = clients.get(pairingId);
     if (client === undefined) return;
@@ -218,7 +340,9 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
   const connectNode: HubConnectNode = (
     record: HubNodeRecord,
     viewToken: string,
-  ): HubNodeConnection => {
+  ): HubNodeConnection | undefined => {
+    // node 拨号的 pairing 由入站连接管理；hub 不反向拨号。
+    if (record.direction === 'node') return undefined;
     closeClient(record.pairing_id);
     const client = createClient({
       record,
@@ -239,8 +363,26 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     };
   };
 
+  // 只有两个端口都注入时才启用 node 入站；否则 join 端点保持 404。
+  let nodeControl: HubNodeInboundDeps | undefined;
+  if (factories.createJoinStore !== undefined && factories.createNodeCredentials !== undefined) {
+    const joinStore = factories.createJoinStore();
+    const credentials = await factories.createNodeCredentials();
+    nodeControl = {
+      hubId,
+      joinStore,
+      credentials,
+      hooks: inboundHooks,
+      ...(logger ? { logger } : {}),
+      now: clock,
+    };
+  }
+
   const createServer = factories.createServer ?? createHubServer;
-  server = createServer({
+  // `nodeControl` 由 M-I2 的 server 路由消费；此处按扩展选项传递，缺省为 undefined。
+  const serverOptions: CreateHubServerOptions & {
+    nodeControl?: HubNodeInboundDeps;
+  } = {
     config: (config.hub ?? {}) as HubConfig,
     hubId,
     registry,
@@ -249,15 +391,26 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     connectNode,
     ...(logger ? { logger } : {}),
     now: clock,
-  });
+    nodeControl,
+  };
+  server = createServer(serverOptions);
 
   // 启动恢复：上次的 healthy 不可信，先全部标 unreachable；再逐条读 view token。
+  // node 拨号的记录不读 secret、不拨号，等待节点重连。
   let directoryChanged = false;
   for (const record of registry.list()) {
-    patchRecord(record.pairing_id, { status: 'unreachable', last_error: 'reconnecting' });
+    if (record.direction === 'node') {
+      patchRecord(record.pairing_id, {
+        status: 'unreachable',
+        last_error: 'waiting_for_node',
+      });
+    } else {
+      patchRecord(record.pairing_id, { status: 'unreachable', last_error: 'reconnecting' });
+    }
     directoryChanged = true;
   }
   for (const record of registry.list()) {
+    if (record.direction === 'node') continue;
     let viewToken: string | undefined;
     try {
       viewToken = await secretStore.get(pairingSecretKey(record.pairing_id, 'view'));

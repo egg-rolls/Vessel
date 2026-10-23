@@ -248,13 +248,23 @@ export interface HubNodeJoinedInput {
   alias?: string;
 }
 
+/** 入站 auth 成功；用于确保目录里存在该 pairing（registry 丢失时重建）。 */
+export interface HubNodeAuthenticatedInput {
+  pairing_id: string;
+  node_id: string;
+  tenant_id: string;
+  node_token_id: string;
+}
+
 /** hub 入站连接的状态回调；由 runtime 提供。 */
 export interface HubNodeInboundHooks {
   onSnapshot(pairingId: string, snapshot: HubNodeSnapshot): void;
   onPointer(pointer: HubNodePointer): void;
   onStatus(pairingId: string, status: HubNodeStatus, error?: string): void;
   /** join 成功；由 runtime 构造并 upsert 目录记录。 */
-  onJoined?(input: HubNodeJoinedInput): void;
+  onJoined(input: HubNodeJoinedInput): void;
+  /** auth 成功；记录已存在时不得覆盖其元数据。 */
+  onAuthenticated?(input: HubNodeAuthenticatedInput): void;
 }
 
 /** `/v1/hub/node-control` 的依赖。 */
