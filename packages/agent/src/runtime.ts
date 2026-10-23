@@ -97,7 +97,7 @@ export interface InProcessMemberRuntimeOptions {
    */
   parentEvents?: EventStream;
   /** bridge 模式下成员进入/离开权限等待时回调（入口层接 AgentService 状态） */
-  onPermissionState?: (memberId: string, state: MemberPermissionState) => void;
+  onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void;
   /** 成员引擎事件回流（当前只转发 agent.limit.warning） */
   onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void;
   limits?: UsageLimits;
@@ -227,7 +227,11 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly permissionMode: MemberRuntimePermissionMode;
   private readonly permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
-  private readonly onPermissionState?: (memberId: string, state: MemberPermissionState) => void;
+  private readonly onPermissionState?: (
+    memberId: string,
+    sessionId: string,
+    state: MemberPermissionState,
+  ) => void;
   private readonly onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void;
   private readonly limits: UsageLimits;
   private readonly termination: TerminationPolicy;
@@ -373,7 +377,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       if (entry.waiting) {
         entry.waiting = false;
         entry.pendingPermissions.clear();
-        this.notifyPermissionState(member.id, 'running');
+        this.notifyPermissionState(member.id, member.session_id, 'running');
       }
     }
   }
@@ -410,7 +414,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         if (requestId !== undefined) entry.pendingPermissions.add(requestId);
         if (!entry.waiting) {
           entry.waiting = true;
-          this.notifyPermissionState(member.id, 'waiting');
+          this.notifyPermissionState(member.id, member.session_id, 'waiting');
         }
         const forwarded: RunEvent = {
           ...event,
@@ -434,18 +438,23 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
         entry.events.publish(event);
         if (entry.pendingPermissions.size === 0 && entry.waiting) {
           entry.waiting = false;
-          this.notifyPermissionState(member.id, 'running');
+          this.notifyPermissionState(member.id, member.session_id, 'running');
         }
       }),
     );
   }
 
-  private notifyPermissionState(memberId: string, state: MemberPermissionState): void {
+  private notifyPermissionState(
+    memberId: string,
+    sessionId: string,
+    state: MemberPermissionState,
+  ): void {
     try {
-      this.onPermissionState?.(memberId, state);
+      this.onPermissionState?.(memberId, sessionId, state);
     } catch (error) {
       this.logger.warn('agent.member.permission_state_callback_failed', {
         member_id: memberId,
+        session_id: sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
     }

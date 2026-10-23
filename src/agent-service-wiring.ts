@@ -91,7 +91,7 @@ export interface AgentServiceWiring {
 /** 构造成员 runtime 选项（导出便于测试选项传递，不直接构造 runtime） */
 export function buildMemberRuntimeOptions(
   options: AgentServiceWiringOptions,
-  onPermissionState?: (memberId: string, state: MemberPermissionState) => void,
+  onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void,
   onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
 ): InProcessMemberRuntimeOptions {
   // 成员 Body 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
@@ -168,7 +168,7 @@ export async function createAgentServiceWiring(
   const innerRuntime = createInProcessMemberRuntime(
     buildMemberRuntimeOptions(
       options,
-      (memberId, state) => serviceRef?.notePermissionState(memberId, state),
+      (memberId, sessionId, state) => serviceRef?.notePermissionState(memberId, sessionId, state),
       (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
     ),
   );

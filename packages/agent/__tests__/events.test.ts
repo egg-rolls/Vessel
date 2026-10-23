@@ -150,7 +150,10 @@ describe('AgentService events', () => {
     const member = await service.new({ visibility: 'team' });
     await service.send({ to: member.id, content: 'work' });
 
-    const pending = service.requestPermission(member.id, { requestId: 'req-1', tool: 'bash' });
+    const pending = service.requestPermission(member.id, member.session_id, {
+      requestId: 'req-1',
+      tool: 'bash',
+    });
     await settle();
     const requested = seen.find((event) => event.type === 'agent.permission.requested');
     expect(requested?.tool).toBe('bash');

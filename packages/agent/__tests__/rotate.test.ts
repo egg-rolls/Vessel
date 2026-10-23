@@ -211,4 +211,95 @@ describe('AgentService rotate', () => {
     gate.resolve({});
     await settle();
   });
+
+  it('permission state from a retired body cannot block the new body', async () => {
+    const { service, runtime } = makeService();
+    const gate = deferred<MemberTurnResult>();
+    const nextGate = deferred<MemberTurnResult>();
+    runtime.handler = async (_member, message) => {
+      if (message.content === 'work') return gate.promise;
+      if (message.content === 'next') return nextGate.promise;
+      return {};
+    };
+
+    const member = await service.new({ visibility: 'team' });
+    const oldSession = member.session_id;
+    await service.send({ to: member.id, content: 'work' });
+
+    const rotated = await service.rotate({ to: member.id, startup_prompt: 'fresh' });
+    expect(rotated.status).toBe('rotated');
+    if (rotated.status !== 'rotated') return;
+
+    gate.resolve({});
+    await settle();
+
+    const newTurns = () =>
+      runtime.turns
+        .filter((turn) => turn.member.session_id === rotated.to_session_id)
+        .map((turn) => turn.message.content);
+    expect(newTurns()).toEqual(['fresh']);
+
+    // 新 Body 正在跑：旧 Body 的迟到 waiting 不得改写当前 state。
+    await service.send({ to: member.id, content: 'next' });
+    await settle();
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('running');
+    service.notePermissionState(member.id, oldSession, 'waiting');
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('running');
+
+    nextGate.resolve({});
+    await settle();
+    expect(newTurns()).toEqual(['fresh', 'next']);
+  });
+
+  it('a stale turn ending in waiting_permission does not block the new body', async () => {
+    const { service, runtime } = makeService();
+    const gate = deferred<MemberTurnResult>();
+    runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
+
+    const member = await service.new({ visibility: 'team' });
+    const oldSession = member.session_id;
+    await service.send({ to: member.id, content: 'work' });
+    service.notePermissionState(member.id, oldSession, 'waiting');
+    expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('waiting_permission');
+
+    const rotated = await service.rotate({ to: member.id, startup_prompt: 'fresh' });
+    expect(rotated.status).toBe('rotated');
+    if (rotated.status !== 'rotated') return;
+
+    gate.resolve({});
+    await settle();
+
+    const status = (await service.list({ viewer: 'main' }))[0];
+    expect(status?.session_id).toBe(rotated.to_session_id);
+    expect(status?.state).not.toBe('waiting_permission');
+    expect(
+      runtime.turns
+        .filter((turn) => turn.member.session_id === rotated.to_session_id)
+        .map((turn) => turn.message.content),
+    ).toContain('fresh');
+  });
+
+  it('drops a pending old-body limit warning when rotating', async () => {
+    const { service, runtime } = makeService();
+    const gate = deferred<MemberTurnResult>();
+    runtime.handler = async (_member, message) => (message.content === 'work' ? gate.promise : {});
+
+    const member = await service.new({ visibility: 'team' });
+    const oldSession = member.session_id;
+    await service.send({ to: member.id, content: 'work' });
+    service.noteMemberEvent(member.id, oldSession, warning('input_tokens'));
+
+    const rotated = await service.rotate({ to: member.id, startup_prompt: 'fresh' });
+    expect(rotated.status).toBe('rotated');
+    if (rotated.status !== 'rotated') return;
+
+    gate.resolve({});
+    await settle();
+
+    const contents = runtime.turns
+      .filter((turn) => turn.member.session_id === rotated.to_session_id)
+      .map((turn) => turn.message.content);
+    expect(contents[0]).toBe('fresh');
+    expect(contents.some((content) => content.includes('Context/usage limit warning'))).toBe(false);
+  });
 });

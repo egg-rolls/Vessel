@@ -555,7 +555,8 @@ describe('InProcessMemberRuntime permission bridge', () => {
       pluginHost: makeHost([makeTool('bash', 'ask')]),
       permissionMode: 'bridge',
       parentEvents,
-      onPermissionState: (memberId, state) => states.push(`${memberId}:${state}`),
+      onPermissionState: (memberId, sessionId, state) =>
+        states.push(`${memberId}:${sessionId}:${state}`),
     });
     const target = member({ parent_id: 'main' });
     await runtime.spawn(target);
@@ -589,7 +590,7 @@ describe('InProcessMemberRuntime permission bridge', () => {
     expect(data.tool).toBe('bash');
     expect(data.input).toEqual({});
     expect(data.source).toBe('runtime');
-    expect(states).toEqual(['m1:waiting', 'm1:running']);
+    expect(states).toEqual(['m1:m1:waiting', 'm1:m1:running']);
   });
 
   it('bridges ask_user questions to the parent and routes the answer back', async () => {

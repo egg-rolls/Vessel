@@ -238,12 +238,12 @@ describe('agent owner injection 0.17', () => {
         permissionMode: 'bridge',
         parentEvents: events,
       }),
-      (memberId, state) => states.push(`${memberId}:${state}`),
+      (memberId, sessionId, state) => states.push(`${memberId}:${sessionId}:${state}`),
     );
     expect(bridge.permissionMode).toBe('bridge');
     expect(bridge.parentEvents).toBe(events);
-    bridge.onPermissionState?.('m1', 'waiting');
-    expect(states).toEqual(['m1:waiting']);
+    bridge.onPermissionState?.('m1', 'body-1', 'waiting');
+    expect(states).toEqual(['m1:body-1:waiting']);
 
     const headless = buildMemberRuntimeOptions(
       wiringOptions(pluginHost, '/tmp/unused', { permissionMode: 'allow' }),

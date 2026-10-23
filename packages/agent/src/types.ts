@@ -103,6 +103,8 @@ export interface AgentMessage {
   to: string;
   content: string;
   ts: number;
+  /** 系统提示类别；rotate 成功时移除 limit_warning，避免旧 Body 的预警发给新 Body */
+  kind?: 'limit_warning';
 }
 
 /** 传给执行内核的成员身份（不携带 registry 状态） */
@@ -430,8 +432,8 @@ export interface AgentService {
    * limit 缺省取空队列。
    */
   takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]>;
-  /** 执行内核 bridge 上报的权限等待/恢复；只推进 waiting_permission ↔ running */
-  notePermissionState(memberId: string, state: MemberPermissionState): void;
+  /** 执行内核 bridge 上报的权限等待/恢复；只接受当前运行 Body 的回调 */
+  notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void;
   /** 成员引擎事件回流（装配用）；当前只处理当前 Body 的 agent.limit.warning */
   noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void;
   /**
@@ -439,8 +441,12 @@ export interface AgentService {
    * 已退役 Body 或 rotate 目标 Body 都算。owner 的 Body 不算。
    */
   isMemberBody(sessionId: string): boolean;
-  /** 权限等待：waiting_permission ↔ running；无 bridge 时 deny */
-  requestPermission(memberId: string, request: PermissionRequestInput): Promise<PermissionDecision>;
+  /** 权限等待：waiting_permission ↔ running；无 bridge 时 deny；只接受当前运行 Body */
+  requestPermission(
+    memberId: string,
+    sessionId: string,
+    request: PermissionRequestInput,
+  ): Promise<PermissionDecision>;
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
   /** 订阅成员事件；返回取消函数 */

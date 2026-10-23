@@ -463,13 +463,19 @@ export class AgentServiceImpl implements AgentService {
   }
 
   /** 唯一入队实现：send / dispatch / reply 之外的入队路径都走这里 */
-  private enqueueMessage(target: MemberRecord, content: string, from: string): SendResult {
+  private enqueueMessage(
+    target: MemberRecord,
+    content: string,
+    from: string,
+    kind?: AgentMessage['kind'],
+  ): SendResult {
     const message: AgentMessage = {
       id: this.newId(),
       from,
       to: target.id,
       content,
       ts: this.now(),
+      ...(kind !== undefined ? { kind } : {}),
     };
     const queue = this.queueFor(target.id);
     queue.pending.push(message);
@@ -771,6 +777,10 @@ export class AgentServiceImpl implements AgentService {
         return { status: 'failed', code: 'rotate_failed', reason: 'snapshot_write_failed' };
       }
 
+      // 旧 Body 的 80% 预警不得发给新 Body；按 kind 移除，不匹配正文前缀。
+      for (let i = queue.pending.length - 1; i >= 0; i--) {
+        if (queue.pending[i]?.kind === 'limit_warning') queue.pending.splice(i, 1);
+      }
       queue.pending.unshift({
         id: this.newId(),
         from: 'system',
@@ -976,10 +986,12 @@ export class AgentServiceImpl implements AgentService {
     return taken;
   }
 
-  /** bridge 执行内核上报的等待/恢复；closed / gone 与非法转移一律忽略，不抛错 */
-  notePermissionState(memberId: string, state: MemberPermissionState): void {
+  /** bridge 执行内核上报的等待/恢复；只接受当前运行 Body，旧 Body 的迟到回调丢弃 */
+  notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void {
     const member = this.registry.get(memberId);
     if (!member || member.state === 'closed' || member.presence === 'gone') return;
+    const queue = this.queueFor(memberId);
+    if (!queue.turnActive || queue.activeBodySession !== sessionId) return;
     try {
       if (state === 'waiting') {
         if (member.state !== 'running') return;
@@ -991,6 +1003,7 @@ export class AgentServiceImpl implements AgentService {
     } catch (error) {
       this.logger.warn('agent.permission.state_failed', {
         member_id: memberId,
+        session_id: sessionId,
         state,
         error: errorText(error),
       });
@@ -1032,7 +1045,7 @@ export class AgentServiceImpl implements AgentService {
       `[system] Context/usage limit warning: ${key} is at ${current}/${max} (>= ${threshold}). ` +
       'If your context is nearly full, write a handoff and call agent.rotate with ' +
       'startup_prompt (and handoff_path if you wrote one) to continue in a fresh body.';
-    this.enqueueMessage(record, text, 'system');
+    this.enqueueMessage(record, text, 'system', 'limit_warning');
   }
 
   /** 该 session 是否属于某个非 owner 成员的 Body（当前 / 在跑 / 已退役 / rotate 目标）。 */
@@ -1054,16 +1067,21 @@ export class AgentServiceImpl implements AgentService {
 
   async requestPermission(
     memberId: string,
+    sessionId: string,
     request: PermissionRequestInput,
   ): Promise<PermissionDecision> {
     await this.ready;
     const member = this.requireMember(memberId);
+    const queue = this.queueFor(memberId);
+    if (!queue.turnActive || queue.activeBodySession !== sessionId) {
+      return { decision: 'deny', reason: `body_not_active: ${sessionId}` };
+    }
     if (member.state !== 'running' && member.state !== 'waiting_permission') {
       return { decision: 'deny', reason: `member_not_running: ${member.state}` };
     }
 
     this.registry.setState(member.id, 'waiting_permission', request.tool);
-    this.emit('agent.permission.requested', member, {
+    this.emitForSession('agent.permission.requested', member, sessionId, {
       state: 'waiting_permission',
       tool: request.tool,
       ...(request.requestId !== undefined ? { request_id: request.requestId } : {}),
@@ -1086,7 +1104,7 @@ export class AgentServiceImpl implements AgentService {
       this.scheduleSnapshot();
     }
     if (current) {
-      this.emit('agent.permission.responded', current, {
+      this.emitForSession('agent.permission.responded', current, sessionId, {
         state: current.state,
         tool: request.tool,
         decision: decision.decision,
@@ -1281,6 +1299,18 @@ export class AgentServiceImpl implements AgentService {
     const current = this.registry.get(member.id);
     // 旧 Body：指针已切走。成对发终态（stale），但不写 registry / usage，也不投递父队列。
     if (current?.currentBody?.session_id !== runtimeMember.session_id) {
+      // 先同步收口旧 Body 的运行态，再允许任何 await / 新轮启动：
+      // 否则残留 waiting_permission 会让 pump 永远挡住新 Body。
+      if (queue.activeBodySession === runtimeMember.session_id) queue.activeBodySession = undefined;
+      if (current !== undefined && current.membership !== 'left' && current.state !== 'closed') {
+        if (current.state === 'waiting_permission') {
+          this.registry.setState(member.id, 'running');
+        }
+        if (current.state === 'running') {
+          this.registry.setState(member.id, 'idle');
+        }
+        this.scheduleSnapshot();
+      }
       if (current !== undefined) {
         const outcome = failure !== undefined ? 'failed' : (result?.outcome ?? 'completed');
         const state: MemberState =
@@ -1317,7 +1347,6 @@ export class AgentServiceImpl implements AgentService {
           reason: disposed ? 'rotation' : 'dispose_failed',
         });
       }
-      if (queue.activeBodySession === runtimeMember.session_id) queue.activeBodySession = undefined;
       this.pump(member.id);
       return;
     }

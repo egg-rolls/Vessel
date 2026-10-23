@@ -327,15 +327,15 @@ describe('AgentService owner inbox', () => {
     const member = await service.new({ visibility: 'team' });
     await service.send({ to: member.id, content: 'work' });
 
-    service.notePermissionState(member.id, 'waiting');
+    service.notePermissionState(member.id, member.session_id, 'waiting');
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('waiting_permission');
-    service.notePermissionState(member.id, 'running');
+    service.notePermissionState(member.id, member.session_id, 'running');
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('running');
 
     gate.resolve({});
     await settle();
     // 终态之后的迟到回调不得把成员拉回 waiting
-    service.notePermissionState(member.id, 'waiting');
+    service.notePermissionState(member.id, member.session_id, 'waiting');
     expect((await service.list({ viewer: 'main' }))[0]?.state).toBe('completed');
   });
 });
