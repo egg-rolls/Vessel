@@ -202,6 +202,7 @@ export class FakeTeamAgent {
           type: 'agent.closed',
           agent_id: target.id,
           team_id: target.team_id,
+          visibility: target.visibility,
           ts: this.now(),
         });
       }

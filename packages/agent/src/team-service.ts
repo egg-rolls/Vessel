@@ -161,6 +161,15 @@ export class DefaultTeamService implements AgentTeamService {
     const from = input.from ?? DEFAULT_OWNER;
     const mentions = dedupe(input.mentions ?? []);
 
+    // Team 日志对 team 可见：private roster 成员不能作为 post 的 actor。
+    // 根 owner 的 `owner === id`，不属 roster，仍允许（见 isPrivateRosterMember）。
+    if (from !== 'human') {
+      const actor = await this.agent.identify(from);
+      if (actor !== undefined && isPrivateRosterMember(actor)) {
+        throw new TeamError('team_private_member', `team_private_member: ${from}`);
+      }
+    }
+
     // 1. 只做校验与解析，不产生任何 dispatch。
     const visible = await this.listVisible(from);
     const byId = new Map(visible.map((status) => [status.id, status]));
@@ -179,6 +188,18 @@ export class DefaultTeamService implements AgentTeamService {
             status: 'error',
             code: 'unknown_member',
             reason: `unknown_member: ${mention}`,
+          },
+        });
+        continue;
+      }
+      if (isPrivateRosterMember(target)) {
+        // private 成员不能被 @，其 id 也不得进入日志的 to / mentions。
+        slots.push({
+          delivery: {
+            agent_id: target.id,
+            status: 'error',
+            code: 'team_private_member',
+            reason: `team_private_member: ${target.id}`,
           },
         });
         continue;
@@ -360,6 +381,18 @@ export class DefaultTeamService implements AgentTeamService {
     if (!resolved.ok) return resolved.result;
     const target = resolved.target;
 
+    // Team 日志对 team 可见：private roster 成员不能作为 send 目标，直接拒绝。
+    const targetStatus =
+      target === undefined ? undefined : visible.find((status) => status.id === target.agent_id);
+    if (targetStatus !== undefined && isPrivateRosterMember(targetStatus)) {
+      return {
+        status: 'error',
+        code: 'team_private_member',
+        reason: `team_private_member: ${targetStatus.id}`,
+        logged: false,
+      };
+    }
+
     // 有 Team 的调用者：name 只在同 Team roster 内解析；未命中不得把原始 name
     // 交给 tenant 全局 dispatch（否则会绕过 roster 解析到别的 Team）。
     if (caller.team_id !== undefined && target === undefined) {
@@ -372,7 +405,13 @@ export class DefaultTeamService implements AgentTeamService {
     }
 
     let logged = false;
-    if (target !== undefined && caller.team_id !== undefined && target.team_id === caller.team_id) {
+    // private 调用者同样不得写 Team 日志（消息本身仍可 dispatch，只是不留痕）。
+    if (
+      target !== undefined &&
+      caller.team_id !== undefined &&
+      target.team_id === caller.team_id &&
+      !isPrivateRosterMember(caller)
+    ) {
       const entry: TeamLogEntry = {
         message_id: this.newId(),
         team_id: caller.team_id,
@@ -540,6 +579,10 @@ export class DefaultTeamService implements AgentTeamService {
   private onAgentEvent(event: AgentEvent): void {
     if (event.team_id === undefined || event.team_id.length === 0) return;
 
+    // Team 日志对 team 可见：private 成员永不写入（join / leave / archive / rotate /
+    // reply 全部拦在这里）。真实 AgentService 事件始终携带 visibility；缺省按不可见处理。
+    if (event.visibility === undefined || event.visibility === 'private') return;
+
     // 0.19 S6：成员完成一轮的最终文本。AgentService 只发事件；TeamService 是
     // 唯一日志写入点，且**不 dispatch / 不唤醒任何人**。message_id 与事件一致，
     // 供 Web 按 id 合并。
@@ -653,6 +696,14 @@ function truncateReplyContent(content: string): string {
     used += size;
   }
   return out + marker;
+}
+
+/**
+ * private roster 成员判定：`owner === id` 是根 owner（人类），不属 roster，保持放行。
+ * Team 日志对 team 可见，这类成员不得作为 actor / mention / send 目标，也不写日志。
+ */
+function isPrivateRosterMember(status: MemberStatus): boolean {
+  return status.visibility === 'private' && status.owner !== status.id;
 }
 
 /** 按首次出现顺序去重 */

@@ -98,16 +98,34 @@ describe('TeamService system messages', () => {
       members: [makeMember({ id: 'a1', name: 'a1', team_id: 'alpha' })],
     });
 
-    agent.emit({ type: 'agent.spawned', agent_id: 'a1', team_id: 'alpha', ts: 1 });
-    agent.emit({ type: 'agent.spawned', agent_id: 'unbound', ts: 2 });
-    agent.emit({ type: 'agent.rejoined', agent_id: 'unbound-2', ts: 3 });
-    agent.emit({ type: 'agent.rotated', agent_id: 'a1', team_id: 'alpha', ts: 4 });
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'a1',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 1,
+    });
+    agent.emit({ type: 'agent.spawned', agent_id: 'unbound', visibility: 'team', ts: 2 });
+    agent.emit({ type: 'agent.rejoined', agent_id: 'unbound-2', visibility: 'team', ts: 3 });
+    agent.emit({
+      type: 'agent.rotated',
+      agent_id: 'a1',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 4,
+    });
     await settle();
 
     // members remove 期间 agent.closed 应写成 archive；其余 closed 是 leave。
     await service.members({ team_id: 'alpha', action: 'remove', member: 'a1' });
     await settle();
-    agent.emit({ type: 'agent.closed', agent_id: 'other', team_id: 'alpha', ts: 5 });
+    agent.emit({
+      type: 'agent.closed',
+      agent_id: 'other',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 5,
+    });
     await settle();
 
     const system = store.logs.filter((log) => log.kind === 'system');
@@ -272,6 +290,7 @@ describe('TeamService roster projections and agent replies', () => {
       agent_id: 'a',
       session_id: 'a',
       team_id: 'alpha',
+      visibility: 'team',
       message_id: 'reply-1',
       content: 'final answer',
       ts: 10,
@@ -300,6 +319,7 @@ describe('TeamService roster projections and agent replies', () => {
       agent_id: 'a',
       session_id: 'a',
       team_id: 'alpha',
+      visibility: 'team',
       message_id: 'reply-big',
       content: 'x'.repeat(70 * 1024),
       ts: 11,
@@ -310,5 +330,203 @@ describe('TeamService roster projections and agent replies', () => {
     expect(reply).toBeDefined();
     expect(Buffer.byteLength(reply?.content ?? '', 'utf8')).toBeLessThanOrEqual(64 * 1024);
     expect(reply?.content.endsWith('[truncated]')).toBe(true);
+  });
+
+  it('writes no reply log when the event has no team_id', async () => {
+    const { agent, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+
+    // 同一事件有 team_id 才写；无 team_id 不写（反向可验证）。
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      session_id: 'a',
+      visibility: 'team',
+      message_id: 'reply-unbound',
+      content: 'unbound',
+      ts: 12,
+    });
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      session_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      message_id: 'reply-bound',
+      content: 'bound',
+      ts: 13,
+    });
+    await settle();
+
+    expect(store.logs.map((entry) => entry.message_id)).toEqual(['reply-bound']);
+  });
+});
+
+describe('TeamService private members', () => {
+  it('never writes system or reply logs for private roster members', async () => {
+    const { agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'p', team_id: 'alpha', visibility: 'private' }),
+        makeMember({ id: 'a', team_id: 'alpha', visibility: 'team' }),
+      ],
+    });
+
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'p',
+      team_id: 'alpha',
+      visibility: 'private',
+      ts: 1,
+    });
+    agent.emit({
+      type: 'agent.spawned',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 2,
+    });
+    agent.emit({
+      type: 'agent.rotated',
+      agent_id: 'p',
+      team_id: 'alpha',
+      visibility: 'private',
+      ts: 3,
+    });
+    agent.emit({
+      type: 'agent.rotated',
+      agent_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      ts: 4,
+    });
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'p',
+      session_id: 'p',
+      team_id: 'alpha',
+      visibility: 'private',
+      message_id: 'reply-p',
+      content: 'secret',
+      ts: 5,
+    });
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      session_id: 'a',
+      team_id: 'alpha',
+      visibility: 'team',
+      message_id: 'reply-a',
+      content: 'visible',
+      ts: 6,
+    });
+    await settle();
+
+    const system = store.logs.filter((entry) => entry.kind === 'system');
+    expect(system.map((entry) => entry.system_event)).toEqual(['join', 'rotate']);
+    expect(system.every((entry) => entry.to[0] === 'a')).toBe(true);
+
+    const replies = store.logs.filter((entry) => entry.kind === 'reply');
+    expect(replies.map((entry) => entry.message_id)).toEqual(['reply-a']);
+    expect(replies.every((entry) => entry.from === 'a')).toBe(true);
+
+    // private 成员 id / 名字 / 回复不得出现在 Team 日志的任何位置。
+    expect(store.logs.every((entry) => entry.from !== 'p')).toBe(true);
+    expect(
+      store.logs.every((entry) => !entry.to.includes('p') && !entry.mentions.includes('p')),
+    ).toBe(true);
+    expect(
+      store.logs.every(
+        (entry) =>
+          entry.from !== 'p' &&
+          !entry.to.some((id) => id.includes('p')) &&
+          !entry.mentions.some((id) => id.includes('p')),
+      ),
+    ).toBe(true);
+    expect(store.logs.some((entry) => entry.message_id === 'reply-p')).toBe(false);
+  });
+
+  it('rejects a private mention and excludes it from the log', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'p', team_id: 'alpha', visibility: 'private', owner: 'main' }),
+        makeMember({ id: 'a', team_id: 'alpha', visibility: 'team' }),
+      ],
+    });
+
+    const result = await service.post({
+      team_id: 'alpha',
+      content: 'hi',
+      mentions: ['p', 'a'],
+      from: 'main',
+    });
+
+    const deliveryP = result.delivered.find((delivery) => delivery.agent_id === 'p');
+    expect(deliveryP?.status).toBe('error');
+    expect(deliveryP?.code).toBe('team_private_member');
+
+    const deliveryA = result.delivered.find((delivery) => delivery.agent_id === 'a');
+    expect(deliveryA?.status).toBe('queued');
+
+    // 其它 mention 继续；private 目标不进入 resolved / 日志 / dispatch。
+    expect(result.mentions).toEqual(['a']);
+    expect(store.logs).toHaveLength(1);
+    expect(store.logs[0]?.to).toEqual(['a']);
+    expect(store.logs[0]?.mentions).toEqual(['a']);
+    expect(agent.dispatches.map((dispatch) => dispatch.to)).toEqual(['a']);
+    expect(JSON.stringify(store.logs)).not.toContain('"p"');
+  });
+
+  it('rejects posts whose actor is a private roster member', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'p', team_id: 'alpha', visibility: 'private', owner: 'main' }),
+        makeMember({ id: 'a', team_id: 'alpha', visibility: 'team' }),
+      ],
+    });
+
+    let postError: unknown;
+    try {
+      await service.post({ team_id: 'alpha', content: 'secret', mentions: ['a'], from: 'p' });
+    } catch (error) {
+      postError = error;
+    }
+
+    expect(postError).toBeInstanceOf(TeamError);
+    expect((postError as TeamError).code).toBe('team_private_member');
+    expect(store.logs).toHaveLength(0);
+    expect(agent.dispatches).toHaveLength(0);
+  });
+
+  it('does not log sends from a private member (dispatch still proceeds)', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'p', team_id: 'alpha', visibility: 'private', owner: 'main' }),
+        makeMember({ id: 'a', team_id: 'alpha', visibility: 'team' }),
+      ],
+    });
+
+    const sent = await service.send({ from_session_id: 'p', to: 'a', content: 'hi' });
+
+    expect(sent.status).toBe('queued');
+    expect(sent.logged).toBe(false);
+    expect(store.logs).toHaveLength(0);
+    expect(agent.dispatches.map((dispatch) => dispatch.to)).toEqual(['a']);
+  });
+
+  it('keeps the root owner (owner === id) allowed as a post actor', async () => {
+    const { service, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'main', owner: 'main', visibility: 'private' }),
+        makeMember({ id: 'a', team_id: 'alpha', visibility: 'team' }),
+      ],
+    });
+
+    const result = await service.post({ team_id: 'alpha', content: 'owner note', from: 'main' });
+
+    expect(result.kind).toBe('post');
+    expect(store.logs).toHaveLength(1);
+    expect(store.logs[0]?.from).toBe('main');
+    expect(store.logs[0]?.team_id).toBe('alpha');
   });
 });
