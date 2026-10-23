@@ -362,6 +362,26 @@ export interface ConnectConfig {
   caFile?: string;
 }
 
+/**
+ * Team 声明（0.19 S3）。
+ *
+ * 全局配置；tenant overlay 不允许声明 `teams`。
+ */
+export interface TeamConfigInput {
+  /** Team 名；可选，缺省由装配层决定 */
+  name?: string;
+  /**
+   * Team 工作区路径（必填）。
+   * validator 只做 trim + `path.resolve` 归一化去重；存值保持 trim 后的原文，
+   * `~` 展开由装配层负责。
+   */
+  workspace: string;
+  /** 启动嘱托 / handoff 文件路径（可选） */
+  handoffPath?: string;
+  /** Team 策略；原样保留，由消费方解释 */
+  policy?: Record<string, unknown>;
+}
+
 /** 配置来源（叶子级追踪） */
 export type ConfigSource = 'cli' | 'env' | 'project' | 'user' | 'default';
 
@@ -493,6 +513,8 @@ export interface VesselConfig {
   observability?: ObservabilityConfig;
   /** 0.8.5：UI 语言 */
   ui?: UiConfig;
+  /** 0.19 S3：全局 Team 声明；tenant overlay 不允许覆盖 */
+  teams?: TeamConfigInput[];
 }
 
 /** 配置加载选项 */

@@ -3,6 +3,7 @@
  * @module @vessel-agent/config
  */
 
+import * as path from 'node:path';
 import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';
 import type {
   ConfigValidationError,
@@ -13,6 +14,7 @@ import type {
   ObservabilityConfig,
   ServeConfig,
   ServeTokenEntry,
+  TeamConfigInput,
   TenantConfig,
   TenantSettings,
   TerminationConfig,
@@ -187,6 +189,77 @@ function validateEvals(evals: EvalsConfig, errors: ConfigValidationError[]): voi
       value: allowNetwork,
     });
   }
+}
+
+/**
+ * teams 去重键（0.19 S3）：trim 后 `path.resolve`；仅 win32 忽略大小写。
+ * 不做 `~` 展开——validator 没有该 helper，展开留给装配层。
+ */
+function teamWorkspaceKey(workspace: string): string {
+  const resolved = path.resolve(workspace.trim());
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/** 校验 teams 块（0.19 S3；全局配置，tenant overlay 不允许） */
+function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
+  if (!Array.isArray(teams)) {
+    errors.push({ path: 'teams', message: 'teams must be an array' });
+    return;
+  }
+
+  const seen = new Set<string>();
+  teams.forEach((raw, index) => {
+    const prefix = `teams[${index}]`;
+    if (!isPlainObject(raw)) {
+      errors.push({ path: prefix, message: 'team entry must be an object' });
+      return;
+    }
+    const team = raw as Partial<TeamConfigInput>;
+
+    if (typeof team.workspace !== 'string' || team.workspace.trim() === '') {
+      errors.push({
+        path: `${prefix}.workspace`,
+        message: 'team workspace must be a non-empty string',
+        value: team.workspace,
+      });
+    } else {
+      const key = teamWorkspaceKey(team.workspace);
+      if (seen.has(key)) {
+        errors.push({
+          path: `${prefix}.workspace`,
+          message: `duplicate team workspace "${team.workspace.trim()}"`,
+          value: team.workspace.trim(),
+        });
+      } else {
+        seen.add(key);
+      }
+    }
+
+    if (team.name !== undefined && (typeof team.name !== 'string' || team.name.trim() === '')) {
+      errors.push({
+        path: `${prefix}.name`,
+        message: 'team name must be a non-empty string',
+        value: team.name,
+      });
+    }
+    if (
+      team.handoffPath !== undefined &&
+      (typeof team.handoffPath !== 'string' || team.handoffPath.trim() === '')
+    ) {
+      errors.push({
+        path: `${prefix}.handoffPath`,
+        message: 'team handoffPath must be a non-empty string',
+        value: team.handoffPath,
+      });
+    }
+    if (team.policy !== undefined && !isPlainObject(team.policy)) {
+      errors.push({
+        path: `${prefix}.policy`,
+        message: 'team policy must be an object',
+        value: team.policy,
+      });
+    }
+  });
 }
 
 /** 校验 feishu 块（0.4；0.4 已移除单 agent_id） */
@@ -847,6 +920,8 @@ export const TENANT_OVERLAY_FORBIDDEN_KEYS: readonly string[] = [
   'connect',
   'tenant',
   'update',
+  // 0.19 S3：Team 声明是全局配置，tenant overlay 不开放。
+  'teams',
 ];
 
 /** 顶层密钥字段（YAML camelCase 路径）；只返回路径，不返回任何值。 */
@@ -1796,6 +1871,9 @@ export function validateConfig(config: VesselConfig): ConfigValidationResult {
   // 校验 ui（0.8.5 language；0.11 clearOnStart）
   if (config.ui !== undefined) validateUi(config.ui as unknown as Record<string, unknown>, errors);
 
+  // 校验 teams（0.19 S3；全局，tenant overlay 不允许）
+  if (config.teams !== undefined) validateTeams(config.teams, errors);
+
   // guardrails / hooks 由装配层映射为同名插件的安装配置（0.6.1），
   // 不再产生「声明但未应用」警告。
 
@@ -1998,4 +2076,5 @@ export const KNOWN_CONFIG_KEYS = [
   'feishu',
   'observability',
   'ui',
+  'teams',
 ];

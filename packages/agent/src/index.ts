@@ -28,6 +28,21 @@ export {
   AgentSnapshotStore,
   snapshotPath,
 } from './snapshot.js';
+export { createTeamService, DefaultTeamService, type TeamServiceOptions } from './team-service.js';
+export {
+  normalizeWorkspace,
+  slugifyWorkspace,
+  teamIdForWorkspace,
+  workspaceKey,
+} from './team-slug.js';
+export {
+  FileTeamStore,
+  type FileTeamStoreOptions,
+  teamDirPath,
+  teamLogPath,
+  teamMetadataPath,
+  teamsDirPath,
+} from './team-store.js';
 export { type AgentToolOptions, createAgentTool } from './tool.js';
 export {
   type AgentBodyHistoryEntry,
@@ -40,6 +55,7 @@ export {
   type AgentService,
   type AgentServiceOptions,
   type AgentSnapshotOptions,
+  type AgentTeamService,
   type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
@@ -68,11 +84,33 @@ export {
   type PermissionDecision,
   type PermissionRequestInput,
   type PersistedAgentRecord,
+  type ReinstateInput,
   type ReplyResult,
   type RotateInput,
   type RotateResult,
   type SendBatchInput,
   type SendInput,
   type SendResult,
+  type TeamAgentSendInput,
+  type TeamAgentSendResult,
+  type TeamBinder,
+  type TeamDeclaration,
+  type TeamDelivery,
+  type TeamDetail,
+  TeamError,
+  type TeamErrorCode,
+  type TeamGetOptions,
+  type TeamListOptions,
+  type TeamLogEntry,
+  type TeamMemberSummary,
+  type TeamMembersInput,
+  type TeamMembersResult,
+  type TeamPostInput,
+  type TeamPostResult,
+  type TeamRecord,
+  type TeamRosterOptions,
+  type TeamStore,
+  type TeamSummary,
+  type TeamSystemEvent,
   type TurnOutcome,
 } from './types.js';

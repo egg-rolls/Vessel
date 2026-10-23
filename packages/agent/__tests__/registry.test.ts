@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'bun:test';
-import { AgentError, canTransition, type MemberRecord, MemberRegistry } from '../src/index.js';
+import {
+  AgentError,
+  canTransition,
+  type MemberRecord,
+  MemberRegistry,
+  toMemberStatus,
+  toPersistedRecord,
+  toRuntimeMember,
+} from '../src/index.js';
 
 function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
   return {
@@ -56,5 +64,29 @@ describe('MemberRegistry state machine', () => {
       /duplicate member id/,
     );
     expect(registry.get('m1')?.id).toBe('m1');
+  });
+});
+
+describe('MemberRegistry team fields', () => {
+  it('passes team_id through status / persisted records only, and ignores unknown ids', () => {
+    const registry = new MemberRegistry(() => 1);
+    registry.add(record());
+
+    registry.setTeamId('m1', 'team-alpha');
+    const stored = registry.get('m1');
+    expect(stored?.teamId).toBe('team-alpha');
+    if (stored === undefined) throw new Error('member missing');
+    expect(toMemberStatus(stored).team_id).toBe('team-alpha');
+    expect(toPersistedRecord(stored).team_id).toBe('team-alpha');
+    expect(toRuntimeMember(stored)).not.toHaveProperty('team_id');
+
+    registry.setMembership('m1', 'left');
+    expect(registry.get('m1')?.membership).toBe('left');
+
+    // 未知成员静默忽略（与 setPresence 一致）
+    registry.setTeamId('missing', 'team-beta');
+    registry.setMembership('missing', 'present');
+    expect(registry.size).toBe(1);
+    expect(registry.get('m1')?.membership).toBe('left');
   });
 });

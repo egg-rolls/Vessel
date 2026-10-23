@@ -177,10 +177,19 @@ function isExcludedTool(name: string): boolean {
   return EXCLUDED_TOOL_NAMES.has(name) || name.startsWith('team_');
 }
 
-/** 成员侧 agent 工具只保留的 rotate 参数 */
+/** 成员侧 agent 工具可用的动作（new / close 只给 owner） */
+const MEMBER_AGENT_ACTIONS: readonly string[] = ['rotate', 'post', 'send', 'list'];
+
+/** 成员侧 agent 工具的可见参数；父级 schema 有同名字段时沿用父级定义 */
 const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>> = {
-  action: { type: 'string', enum: ['rotate'], description: 'rotate' },
-  to: { type: 'string', description: 'rotate: member id or current body session id' },
+  action: {
+    type: 'string',
+    enum: [...MEMBER_AGENT_ACTIONS],
+    description: 'rotate | post | send | list',
+  },
+  to: { type: 'string', description: 'send: member id or session id; rotate: target agent' },
+  content: { type: 'string', description: 'send/post: message text' },
+  messages: { type: 'array', description: 'send: [{to, content}]' },
   startup_prompt: {
     type: 'string',
     description: 'rotate: required first message for the new body',
@@ -189,16 +198,22 @@ const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>>
     type: 'string',
     description: 'rotate: optional handoff path appended to the first message',
   },
+  state: { type: 'string', description: 'list: filter by member state' },
+  visibility: {
+    type: 'string',
+    enum: ['private', 'team', 'tenant'],
+    description: 'list: filter by visibility',
+  },
 };
 
 /** 同一个 agent 工具，按成员能力收窄 schema（handler / checkPermission 原样保留） */
 function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   const schema = isRecord(tool.inputSchema) ? tool.inputSchema : {};
   const source = isRecord(schema.properties) ? schema.properties : {};
-  // 无论父级 schema 有几种 action，成员侧只暴露 rotate
+  // 无论父级 schema 有几种 action，成员侧只暴露 rotate/post/send/list
   const properties: Record<string, unknown> = {
     action: isRecord(source.action)
-      ? { ...source.action, enum: ['rotate'] }
+      ? { ...source.action, enum: [...MEMBER_AGENT_ACTIONS] }
       : MEMBER_AGENT_PROPERTIES.action,
   };
   for (const [key, fallback] of Object.entries(MEMBER_AGENT_PROPERTIES)) {
@@ -207,12 +222,14 @@ function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
   return {
     ...tool,
     description:
-      'Rotate your own body. A body may only rotate itself; startup_prompt is required ' +
-      '(the first message for the new body) and handoff_path is optional.',
+      'Member actions: rotate (rotate your own body; startup_prompt is required and ' +
+      'handoff_path is optional), post (append to your team log only; nobody is notified), ' +
+      'send (dispatch a message to a member), list (list the caller-visible roster). ' +
+      'new and close are owner-only.',
     inputSchema: {
       ...schema,
       properties,
-      required: ['action', 'startup_prompt'],
+      required: ['action'],
     },
   };
 }

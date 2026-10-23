@@ -66,6 +66,8 @@ export interface MemberStatus {
   membership?: MemberMembership;
   /** 当前 Body 的 epoch（由 current_body 派生） */
   epoch?: number;
+  /** 所属 Team（0.19 S3；unbound 时缺省） */
+  team_id?: string;
 }
 
 /**
@@ -85,6 +87,8 @@ export interface PersistedAgentRecord {
   /** 最后已知 engine 状态（重启后按 membership 重置） */
   state: MemberState;
   membership: MemberMembership;
+  /** 所属 Team（0.19 S3；unbound 时缺省） */
+  team_id?: string;
   model?: string;
   system_prompt?: string;
   current_body?: AgentBodyPointer;
@@ -172,6 +176,11 @@ export interface NewMemberInput {
   visibility?: MemberVisibility;
   parentId?: string;
   owner?: string;
+  /**
+   * 0.19 S3：显式 workspace（只有 CLI 能传；模型工具不能伪造）。
+   * 首个绑定该 workspace 的 Agent 隐式创建 Team；无 name 时拒绝绑定。
+   */
+  workspace?: string;
 }
 
 /** 批量创建（条目并行，逐条结果） */
@@ -264,6 +273,20 @@ export type RotateResult =
       reason: string;
     };
 
+/**
+ * roster add（0.19 S3）：把 Agent 绑定到 Team 并恢复 present。
+ * 不 spawn、不新建 session；保留 current_body / body_history。
+ * 这是继 `attachOwner` 之后第二条人力 `left → present` 路径。
+ */
+export interface ReinstateInput {
+  /** agent id | 当前 Body session | 唯一 name */
+  to: string;
+  /** 目标 Team；unbound Agent 在此写入 */
+  team_id: string;
+  /** 可见性判定；缺省 DEFAULT_OWNER */
+  from?: string;
+}
+
 /** 关闭参数 */
 export interface CloseInput {
   member?: string;
@@ -332,6 +355,8 @@ export interface AgentEvent {
   visibility?: MemberVisibility;
   /** 成员名（可选） */
   name?: string;
+  /** 所属 Team（0.19 S3；unbound / system 事件可能缺省） */
+  team_id?: string;
   /** 本轮 usage（turn.completed 有则带） */
   usage?: Usage;
   state?: MemberState;
@@ -379,6 +404,13 @@ export interface AgentServiceOptions {
   events?: EventStream;
   /** 创建成员未显式指定 model 时使用的“有效 model”（落库，供 resume 使用） */
   defaultModel?: string;
+  /**
+   * 0.19 S3：`new` 未显式传 workspace 时的默认 workspace。
+   * 仅由“配置声明命中 agent.cwd”提供；无声明时为 undefined（保持 unbound）。
+   */
+  defaultWorkspace?: string;
+  /** 0.19 S3：Team 绑定端口；缺失时 `new` 永远 unbound */
+  teamBinder?: TeamBinder;
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */
@@ -422,6 +454,11 @@ export interface AgentService {
    * 失败保持旧指针，不自动 fork / 重试。
    */
   rotate(input: RotateInput): Promise<RotateResult>;
+  /**
+   * roster add：绑定 Team 并把 `left` 恢复为 `present`（不 spawn、不新建 session）。
+   * 只由人力入口（teams.members add / owner 端点）调用。
+   */
+  reinstate(input: ReinstateInput): Promise<MemberStatus>;
   close(input: CloseInput): Promise<CloseResult>;
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
@@ -432,6 +469,11 @@ export interface AgentService {
    * limit 缺省取空队列。
    */
   takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]>;
+  /**
+   * 当前 Body session -> 成员状态；忽略可见性。
+   * 只由 TeamService / agent 工具做调用者身份解析，不向模型暴露。
+   */
+  identify(sessionId: string): Promise<MemberStatus | undefined>;
   /** 执行内核 bridge 上报的权限等待/恢复；只接受当前运行 Body 的回调 */
   notePermissionState(memberId: string, sessionId: string, state: MemberPermissionState): void;
   /** 成员引擎事件回流（装配用）；当前只处理当前 Body 的 agent.limit.warning */
@@ -451,6 +493,217 @@ export interface AgentService {
   flushSnapshot(): Promise<boolean>;
   /** 订阅成员事件；返回取消函数 */
   subscribe(listener: AgentEventListener): () => void;
+}
+
+// ─── Team（0.19 S3）────────────────────────────────────────────
+
+/** Team 元数据（`<dataDir>/teams/<tenant>/<team_id>/team.json`） */
+export interface TeamRecord {
+  v: 1;
+  /** slug(workspace basename)；创建后不可变 */
+  team_id: string;
+  name: string;
+  tenant_id: string;
+  /** 归一化绝对路径；Team 的唯一 workspace 来源 */
+  workspace: string;
+  handoff_path?: string;
+  /** S3 只存不执行 */
+  policy: Record<string, unknown>;
+  created_at: number;
+}
+
+/** 配置声明（全局配置；tenant overlay 不开放） */
+export interface TeamDeclaration {
+  name?: string;
+  workspace: string;
+  handoff_path?: string;
+  policy?: Record<string, unknown>;
+}
+
+export type TeamSystemEvent = 'join' | 'leave' | 'rotate' | 'archive';
+
+/** 只追加团队日志的一行 */
+export interface TeamLogEntry {
+  message_id: string;
+  team_id: string;
+  /** 'system' | owner id | 成员 agent id | 'human' */
+  from: string;
+  /** 投递目标 agent id（无 @ 时为空） */
+  to: string[];
+  /** 结构化 agent id；与正文里的 @ 无关 */
+  mentions: string[];
+  content: string;
+  ts: number;
+  kind: 'post' | 'mention' | 'system';
+  system_event?: TeamSystemEvent;
+}
+
+/** roster 条目（由 Agent 记录派生，不单独持久化） */
+export interface TeamMemberSummary {
+  agent_id: string;
+  name?: string;
+  session_id: string;
+  /** 所属 Team（unbound 时缺省） */
+  team_id?: string;
+  membership: MemberMembership;
+  presence: MemberPresence;
+  visibility: MemberVisibility;
+  state: MemberState;
+  epoch: number;
+}
+
+export interface TeamSummary {
+  team_id: string;
+  name: string;
+  tenant_id: string;
+  workspace: string;
+  handoff_path?: string;
+  policy: Record<string, unknown>;
+  member_count: number;
+  created_at: number;
+}
+
+export interface TeamDetail {
+  team: TeamSummary;
+  members: TeamMemberSummary[];
+  messages: TeamLogEntry[];
+}
+
+export interface TeamDelivery {
+  agent_id: string;
+  status: 'queued' | 'rejected' | 'error';
+  message_id?: string;
+  resolution?: 'live' | 'resumed' | 'rotating';
+  code?: string;
+  reason?: string;
+}
+
+export interface TeamPostInput {
+  team_id: string;
+  content: string;
+  /** 结构化 agent id；不从正文解析 */
+  mentions?: string[];
+  from?: string;
+}
+
+export interface TeamPostResult {
+  message_id: string;
+  team_id: string;
+  kind: 'post' | 'mention' | 'system';
+  mentions: string[];
+  delivered: TeamDelivery[];
+  ts: number;
+}
+
+export interface TeamMembersInput {
+  team_id: string;
+  action: 'add' | 'remove';
+  member: string;
+  from?: string;
+}
+
+export interface TeamMembersResult {
+  team_id: string;
+  action: 'add' | 'remove';
+  agent_id: string;
+  membership: MemberMembership;
+}
+
+export interface TeamListOptions {
+  viewer?: string;
+}
+
+export interface TeamGetOptions {
+  viewer?: string;
+  /** 最近消息条数；缺省 100，最大 1000 */
+  limit?: number;
+}
+
+export interface TeamRosterOptions {
+  viewer?: string;
+}
+
+/** 成员 Body 的 A2A send（agent 工具用）；from 由 session 解析，模型不能伪造 */
+export interface TeamAgentSendInput {
+  from_session_id: string;
+  to: string;
+  content: string;
+}
+
+export interface TeamAgentSendResult {
+  status: 'queued' | 'rejected' | 'error';
+  resolved_to?: string;
+  message_id?: string;
+  resolution?: 'live' | 'resumed' | 'rotating';
+  code?: string;
+  reason?: string;
+  /** 是否写入了同 Team 的 mention 日志 */
+  logged: boolean;
+}
+
+/** Team 元数据 + 只追加日志的存储端口（文件实现见 team-store.ts） */
+export interface TeamBinder {
+  ensureForWorkspace(input: {
+    workspace: string;
+    name?: string;
+    handoff_path?: string;
+    policy?: Record<string, unknown>;
+  }): Promise<TeamRecord>;
+}
+
+export interface TeamStore extends TeamBinder {
+  /** 配置声明：只补写缺失的 team.json，不创建 Agent、不覆盖已有字段 */
+  seed(declarations: readonly TeamDeclaration[]): Promise<void>;
+  get(teamId: string): TeamRecord | undefined;
+  list(): TeamRecord[];
+  readLog(teamId: string, options?: { limit?: number }): Promise<TeamLogEntry[]>;
+  /** 串行追加；失败抛出 */
+  appendLog(entry: TeamLogEntry): Promise<void>;
+  /** 等待串行写链落盘（关闭 / 测试用） */
+  flush(): Promise<void>;
+}
+
+/** Team 能力层（AgentService 之上的 roster / 日志 / 定向投递） */
+export interface AgentTeamService {
+  readonly tenantId: string;
+  list(options?: TeamListOptions): Promise<TeamSummary[]>;
+  get(teamId: string, options?: TeamGetOptions): Promise<TeamDetail | undefined>;
+  roster(teamId: string, options?: TeamRosterOptions): Promise<TeamMemberSummary[]>;
+  post(input: TeamPostInput): Promise<TeamPostResult>;
+  /** 未知 Team 返回 undefined；业务失败抛 TeamError */
+  members(input: TeamMembersInput): Promise<TeamMembersResult | undefined>;
+  /** 成员 Body 的 A2A send */
+  send(input: TeamAgentSendInput): Promise<TeamAgentSendResult>;
+  /** 成员 Body 的 list：有 Team 只返回同 Team roster；无 Team 返回自己的可见成员 */
+  listForCaller(sessionId: string): Promise<TeamMemberSummary[]>;
+  /** body session -> 成员（含 team_id） */
+  identify(sessionId: string): Promise<TeamMemberSummary | undefined>;
+  dispose(): void;
+}
+
+/** Team 层稳定错误码（RPC / CLI 据此映射） */
+export type TeamErrorCode =
+  | 'team_not_found'
+  | 'team_log_write_failed'
+  | 'team_binding_requires_name'
+  | 'team_already_in_team'
+  | 'team_not_member'
+  | 'team_private_member'
+  | 'team_no_team'
+  | 'team_self_mention'
+  | 'team_owner_not_rosterable'
+  | 'unknown_member'
+  | 'invalid_input'
+  | 'not_visible';
+
+export class TeamError extends Error {
+  readonly code: TeamErrorCode;
+
+  constructor(code: TeamErrorCode, message: string) {
+    super(message);
+    this.name = 'TeamError';
+    this.code = code;
+  }
 }
 
 /** 缺省成员 owner / 发送者 */

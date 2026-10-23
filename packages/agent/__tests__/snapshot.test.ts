@@ -235,6 +235,30 @@ describe('Agent snapshot', () => {
     expect(record?.body_history).toEqual(bodyHistory);
   });
 
+  it('round-trips team_id without changing the snapshot version', async () => {
+    const dataDir = await tempDir();
+    const path = snapshotPath(dataDir, 'default');
+    const store = new AgentSnapshotStore(path, 'default');
+
+    const written = await store.write([
+      baseRecord({ team_id: 'team-alpha' }),
+      baseRecord({ id: 'unbound', session_id: 'unbound' }),
+    ]);
+    expect(written).toBe(true);
+
+    const file = JSON.parse(await readFile(path, 'utf8')) as {
+      version: number;
+      members: { id: string; team_id?: string }[];
+    };
+    expect(file.version).toBe(AGENT_SNAPSHOT_VERSION);
+    expect(file.version).toBe(2);
+
+    const loaded = await store.load();
+    const byId = new Map(loaded.map((record) => [record.id, record]));
+    expect(byId.get('member')?.team_id).toBe('team-alpha');
+    expect(byId.get('unbound')?.team_id).toBeUndefined();
+  });
+
   it('skips invalid body_history entries individually and keeps the valid ones', async () => {
     const dataDir = await tempDir();
     const path = snapshotPath(dataDir, 'default');

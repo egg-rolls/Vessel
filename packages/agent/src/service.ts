@@ -56,12 +56,14 @@ import {
   type PermissionDecision,
   type PermissionRequestInput,
   type PersistedAgentRecord,
+  type ReinstateInput,
   type ReplyResult,
   type RotateInput,
   type RotateResult,
   type SendBatchInput,
   type SendInput,
   type SendResult,
+  type TeamBinder,
 } from './types.js';
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
@@ -141,6 +143,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     state,
     presence: 'gone',
     membership: status.membership,
+    ...(status.team_id !== undefined ? { teamId: status.team_id } : {}),
     rotation: 'stable',
     currentBody,
     bodyHistory: status.body_history ?? [],
@@ -173,6 +176,9 @@ export class AgentServiceImpl implements AgentService {
   private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
   private readonly defaultModel: string | undefined;
+  /** `new` 未显式传 workspace 时的默认 workspace；无配置声明时为 undefined */
+  private readonly defaultWorkspace: string | undefined;
+  private readonly teamBinder: TeamBinder | undefined;
   private readonly ready: Promise<void>;
 
   constructor(options: AgentServiceOptions) {
@@ -193,6 +199,10 @@ export class AgentServiceImpl implements AgentService {
     this.tenantId = options.tenantId;
     this.eventStream = options.events;
     this.defaultModel = options.defaultModel;
+    this.defaultWorkspace = nonEmpty(options.defaultWorkspace)
+      ? options.defaultWorkspace
+      : undefined;
+    this.teamBinder = options.teamBinder;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -270,7 +280,8 @@ export class AgentServiceImpl implements AgentService {
         record.systemPrompt !== undefined ||
         record.visibility !== undefined ||
         record.parentId !== undefined ||
-        record.owner !== undefined
+        record.owner !== undefined ||
+        record.workspace !== undefined
       ) {
         throw new AgentError(
           'invalid_input',
@@ -357,16 +368,44 @@ export class AgentServiceImpl implements AgentService {
   }
 
   private async createOne(input: Record<string, unknown>): Promise<MemberStatus> {
-    const visibility = resolveVisibility(input.visibility, 'private');
     const owner = input.owner === undefined ? DEFAULT_OWNER : readRequiredString(input, 'owner');
     const id = this.newId();
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
 
     const name = optionalString(input.name);
-    // 名称只由 present 成员占用：left 的名字可复用；检查与 add 之间不得有 await。
+    // 显式 workspace 只由 CLI 传入；默认 workspace 来自配置声明。
+    const explicitWorkspace =
+      input.workspace === undefined ? undefined : readRequiredString(input, 'workspace');
+    const workspace = explicitWorkspace ?? this.defaultWorkspace;
+    let teamId: string | undefined;
+    if (workspace !== undefined && name !== undefined) {
+      if (this.teamBinder === undefined) {
+        throw new AgentError('invalid_input', 'team binding is not configured');
+      }
+      // Team ensure 必须在名字检查 / registry.add 之前完成（F7：之后不得有 await）。
+      const team = await this.teamBinder.ensureForWorkspace({ workspace, name });
+      teamId = team.team_id;
+    } else if (explicitWorkspace !== undefined) {
+      // 默认 workspace 无名字时保持 unbound；显式 workspace 无名字则拒绝绑定。
+      throw new AgentError('invalid_input', 'team binding requires a name');
+    }
+
+    // 绑定 Team 且调用方未显式指定 visibility 时缺省 team；否则沿用 private。
+    const visibility =
+      teamId !== undefined && input.visibility === undefined
+        ? 'team'
+        : resolveVisibility(input.visibility, 'private');
+
+    // 名称只由 present 成员占用：同 Team 内唯一；unbound 沿用 tenant 全扫。
+    // 检查与 add 之间不得有 await。
     if (
       name !== undefined &&
-      this.registry.findByName(name).some((record) => record.membership === 'present')
+      this.registry
+        .findByName(name)
+        .some(
+          (record) =>
+            record.membership === 'present' && (teamId === undefined || record.teamId === teamId),
+        )
     ) {
       throw new AgentError('invalid_input', `duplicate member name: ${name}`);
     }
@@ -385,6 +424,7 @@ export class AgentServiceImpl implements AgentService {
       bodyHistory: [],
     };
     if (name !== undefined) record.name = name;
+    if (teamId !== undefined) record.teamId = teamId;
     const parentId = optionalString(input.parentId);
     if (parentId !== undefined) record.parentId = parentId;
     // 落“有效 model”：未显式指定时用 wiring 默认值，resume 才不会回流到空
@@ -908,9 +948,70 @@ export class AgentServiceImpl implements AgentService {
     return { state: 'closed' };
   }
 
+  /**
+   * roster add：绑定 Team 并把 `left` / `closed` 恢复为 `present`。
+   *
+   * 这是继 `attachOwner` 之后**第二条人力 `left → present` 路径**：只由 roster 管理
+   * （teams.members add / owner 端点）调用，engine 与普通投递路径都不能复活成员。
+   * `closed → idle` 不能走普通 `setState`（TRANSITIONS.closed 为空数组），因此与
+   * `attachOwner` 一样直接写 state。不 spawn、不新建 session，Body / 历史全部保留；
+   * 下一次 dispatch 才由 single-flight resume 拉起 engine。
+   */
+  async reinstate(input: ReinstateInput): Promise<MemberStatus> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const to = readRequiredString(raw, 'to');
+    const teamId = readRequiredString(raw, 'team_id');
+    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+
+    const target = this.resolveDispatchTarget(to, from);
+    if (target === undefined || !this.registry.canView(target, from)) {
+      throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
+    }
+    if (this.externalOwners.has(target.id) || target.owner === target.id) {
+      throw new AgentError('invalid_input', 'owner_not_rosterable');
+    }
+    if (target.teamId !== undefined && target.teamId !== teamId) {
+      throw new AgentError('invalid_input', `already_in_team: ${target.teamId}`);
+    }
+
+    const stillPresent = target.membership === 'present' && target.state !== 'closed';
+    if (stillPresent && target.teamId === teamId) {
+      return toMemberStatus(target);
+    }
+
+    if (stillPresent) {
+      // 已 present 只是未绑定：只补 team_id，不改 state / presence，也不清队列。
+      this.registry.setTeamId(target.id, teamId);
+    } else {
+      this.registry.setTeamId(target.id, teamId);
+      this.registry.setMembership(target.id, 'present');
+      // 专用路径：closed 没有普通状态转移；与 attachOwner 并列的第二条人工复活路径。
+      target.state = 'idle';
+      this.registry.setPresence(target.id, 'gone');
+      // close 会置 queue.closing / 清空 pending；复活后必须清掉 closing，
+      // 否则下一次 dispatch 会被当成 agent_left。
+      const queue = this.queueFor(target.id);
+      queue.closing = false;
+      queue.pending.length = 0;
+    }
+
+    this.emit('agent.rejoined', target, { state: target.state, presence: target.presence });
+    this.scheduleSnapshot();
+    return toMemberStatus(target);
+  }
+
   async list(filter: ListFilter = {}): Promise<MemberStatus[]> {
     await this.ready;
     return this.registry.list(filter).map(toMemberStatus);
+  }
+
+  /** 当前 Body session（或成员 id）→ 状态；忽略可见性，退役 Body 不再命中 */
+  async identify(sessionId: string): Promise<MemberStatus | undefined> {
+    await this.ready;
+    if (!nonEmpty(sessionId)) return undefined;
+    const record = this.registry.resolve(sessionId);
+    return record === undefined ? undefined : toMemberStatus(record);
   }
 
   async reply(memberId: string, content: string): Promise<ReplyResult> {
@@ -1160,6 +1261,8 @@ export class AgentServiceImpl implements AgentService {
       ...(member.parentId !== undefined ? { parent_id: member.parentId } : {}),
       visibility: member.visibility,
       ...(member.name !== undefined ? { name: member.name } : {}),
+      // S3：spawned / closed / rotated / retired / rejoined 等身份事件都带 team_id
+      ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
       ...extra,
       ts: this.now(),
     };

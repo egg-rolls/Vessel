@@ -133,6 +133,9 @@ function parseMember(value: unknown): PersistedAgentRecord | undefined {
   };
   const name = optionalString(value.name);
   if (name !== undefined) record.name = name;
+  // 0.19 S3：additive 字段；仍写 version 2（旧二进制忽略未知键）
+  const teamId = optionalString(value.team_id);
+  if (teamId !== undefined) record.team_id = teamId;
   const parentId = optionalString(value.parent_id);
   if (parentId !== undefined) record.parent_id = parentId;
   const model = optionalString(value.model);

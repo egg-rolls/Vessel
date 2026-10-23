@@ -42,6 +42,8 @@ export interface MemberRecord {
   presence: MemberPresence;
   /** 归属；持久化 */
   membership: MemberMembership;
+  /** 所属 Team（0.19 S3）；unbound 时缺省，持久化 */
+  teamId?: string;
   /** Body 轮换相位；不持久化 */
   rotation: MemberRotation;
   currentBody?: AgentBodyPointer;
@@ -87,6 +89,7 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     state: record.state,
     presence: record.presence,
     membership: record.membership,
+    ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     epoch: record.currentBody?.epoch ?? 0,
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
@@ -103,6 +106,7 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     visibility: record.visibility,
     state: record.state,
     membership: record.membership,
+    ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     ...(record.model !== undefined ? { model: record.model } : {}),
@@ -233,6 +237,18 @@ export class MemberRegistry {
   setPresence(id: string, presence: MemberPresence): void {
     const record = this.byId.get(id);
     if (record) record.presence = presence;
+  }
+
+  /** 所属 Team；缺失成员静默忽略（与 setPresence 一致） */
+  setTeamId(id: string, teamId: string): void {
+    const record = this.byId.get(id);
+    if (record) record.teamId = teamId;
+  }
+
+  /** 归属；缺失成员静默忽略（reinstate 用，绕过 closed: [] 状态机） */
+  setMembership(id: string, membership: MemberMembership): void {
+    const record = this.byId.get(id);
+    if (record) record.membership = membership;
   }
 
   /** 当前 Body 指针；不改变第一具 Body 的 sessionId，但迁移 session 寻址键 */

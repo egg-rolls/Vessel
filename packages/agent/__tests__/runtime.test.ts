@@ -294,7 +294,7 @@ describe('InProcessMemberRuntime', () => {
     expect(denyNames).toEqual(['read']);
   });
 
-  it('exposes the agent tool to members with only the rotate action and keeps other schemas', async () => {
+  it('exposes the agent tool to members with rotate/post/send/list and keeps other schemas', async () => {
     const readSchema = {
       type: 'object',
       properties: { path: { type: 'string' } },
@@ -346,13 +346,17 @@ describe('InProcessMemberRuntime', () => {
         properties: Record<string, { enum?: string[] }>;
         required: string[];
       };
-      expect(schema.properties.action?.enum).toEqual(['rotate']);
-      expect(schema.required).toContain('startup_prompt');
+      expect(schema.properties.action?.enum).toEqual(['rotate', 'post', 'send', 'list']);
+      expect(schema.required).toEqual(['action']);
       expect(Object.keys(schema.properties).sort()).toEqual([
         'action',
+        'content',
         'handoff_path',
+        'messages',
         'startup_prompt',
+        'state',
         'to',
+        'visibility',
       ]);
       expect(tools.find((tool) => tool.name === 'read')?.inputSchema).toBe(readSchema);
     }

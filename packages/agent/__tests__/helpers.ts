@@ -1,12 +1,26 @@
 import {
+  type AgentEvent,
+  type AgentEventListener,
   type AgentMessage,
   type AgentService,
   type AgentServiceOptions,
+  type CloseInput,
+  type CloseResult,
   createAgentService,
+  type DispatchInput,
+  type DispatchResult,
+  type ListFilter,
   type MemberRuntimeMember,
   type MemberRuntimePort,
+  type MemberStatus,
   type MemberTurnResult,
+  type ReinstateInput,
+  type TeamDeclaration,
+  type TeamLogEntry,
+  type TeamRecord,
+  type TeamStore,
 } from '../src/index.js';
+import { createTeamService, type DefaultTeamService } from '../src/team-service.js';
 
 export interface Deferred<T> {
   promise: Promise<T>;
@@ -81,4 +95,205 @@ export function makeService(overrides: Partial<AgentServiceOptions> = {}): {
     ...overrides,
   });
   return { service, runtime };
+}
+
+/** 构造 MemberStatus（只填测试关心的字段；其余给稳定默认值） */
+export function makeMember(overrides: Partial<MemberStatus> & { id: string }): MemberStatus {
+  return {
+    id: overrides.id,
+    session_id: overrides.session_id ?? overrides.id,
+    owner: overrides.owner ?? 'main',
+    visibility: overrides.visibility ?? 'team',
+    state: overrides.state ?? 'idle',
+    presence: overrides.presence ?? 'live',
+    membership: overrides.membership ?? 'present',
+    epoch: overrides.epoch ?? 0,
+    ...(overrides.name !== undefined ? { name: overrides.name } : {}),
+    ...(overrides.parent_id !== undefined ? { parent_id: overrides.parent_id } : {}),
+    ...(overrides.team_id !== undefined ? { team_id: overrides.team_id } : {}),
+  };
+}
+
+/** 构造 TeamRecord；未指定的字段给稳定默认值 */
+export function makeTeam(teamId: string, overrides: Partial<TeamRecord> = {}): TeamRecord {
+  return {
+    v: 1,
+    team_id: teamId,
+    name: teamId,
+    tenant_id: 'default',
+    workspace: `/workspace/${teamId}`,
+    policy: {},
+    created_at: 1,
+    ...overrides,
+  };
+}
+
+/**
+ * TeamService 用的假 AgentService：只实现 TeamService 依赖的方法
+ * （list / identify / dispatch / reinstate / close / subscribe），其余经 cast 忽略。
+ * close 默认同步发 agent.closed，供 archive / leave 系统消息测试。
+ */
+export class FakeTeamAgent {
+  readonly members: MemberStatus[];
+  readonly dispatches: DispatchInput[] = [];
+  readonly closes: string[] = [];
+  readonly reinstates: ReinstateInput[] = [];
+  dispatchImpl: ((input: DispatchInput) => DispatchResult | Promise<DispatchResult>) | undefined;
+  listError: Error | undefined;
+  emitOnClose = true;
+  private readonly listeners = new Set<AgentEventListener>();
+
+  constructor(
+    members: MemberStatus[] = [],
+    private readonly now: () => number = Date.now,
+  ) {
+    this.members = [...members];
+  }
+
+  async list(filter: ListFilter = {}): Promise<MemberStatus[]> {
+    if (this.listError !== undefined) throw this.listError;
+    return this.members.filter((member) => {
+      if (member.visibility !== 'private') return true;
+      return filter.viewer !== undefined && filter.viewer === member.owner;
+    });
+  }
+
+  async identify(sessionId: string): Promise<MemberStatus | undefined> {
+    return this.members.find(
+      (member) => member.session_id === sessionId || member.id === sessionId,
+    );
+  }
+
+  async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    this.dispatches.push(input);
+    if (this.dispatchImpl !== undefined) return this.dispatchImpl(input);
+    return {
+      status: 'queued',
+      message_id: `dispatch-${this.dispatches.length}`,
+      resolved_to: input.to,
+      resolution: 'live',
+    };
+  }
+
+  async reinstate(input: ReinstateInput): Promise<MemberStatus> {
+    this.reinstates.push(input);
+    const target = this.members.find(
+      (member) => member.id === input.to || member.session_id === input.to,
+    );
+    if (target === undefined) throw new Error(`unknown_member: ${input.to}`);
+    target.team_id = input.team_id;
+    target.membership = 'present';
+    target.state = 'idle';
+    return target;
+  }
+
+  async close(input: CloseInput): Promise<CloseResult> {
+    const id = input.member ?? input.to;
+    if (id === undefined) throw new Error('close requires member');
+    this.closes.push(id);
+    const target = this.members.find((member) => member.id === id || member.session_id === id);
+    if (target !== undefined) {
+      target.membership = 'left';
+      target.state = 'closed';
+      target.presence = 'gone';
+      if (this.emitOnClose && target.team_id !== undefined) {
+        this.emit({
+          type: 'agent.closed',
+          agent_id: target.id,
+          team_id: target.team_id,
+          ts: this.now(),
+        });
+      }
+    }
+    return { state: 'closed' };
+  }
+
+  subscribe(listener: AgentEventListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  emit(event: AgentEvent): void {
+    for (const listener of [...this.listeners]) listener(event);
+  }
+
+  get listenerCount(): number {
+    return this.listeners.size;
+  }
+}
+
+/** 内存 TeamStore：读写同步落内存，可注入 append 失败 */
+export class MemoryTeamStore implements TeamStore {
+  readonly records: TeamRecord[];
+  readonly logs: TeamLogEntry[] = [];
+  appendError: Error | undefined;
+
+  constructor(records: TeamRecord[] = []) {
+    this.records = [...records];
+  }
+
+  async ensureForWorkspace(input: {
+    workspace: string;
+    name?: string;
+    handoff_path?: string;
+    policy?: Record<string, unknown>;
+  }): Promise<TeamRecord> {
+    const existing = this.records.find((record) => record.workspace === input.workspace);
+    if (existing !== undefined) return existing;
+    const record = makeTeam(input.name ?? 'workspace', { workspace: input.workspace });
+    this.records.push(record);
+    return record;
+  }
+
+  async seed(_declarations: readonly TeamDeclaration[]): Promise<void> {}
+
+  get(teamId: string): TeamRecord | undefined {
+    return this.records.find((record) => record.team_id === teamId);
+  }
+
+  list(): TeamRecord[] {
+    return [...this.records];
+  }
+
+  async readLog(teamId: string, options: { limit?: number } = {}): Promise<TeamLogEntry[]> {
+    const entries = this.logs.filter((entry) => entry.team_id === teamId);
+    return options.limit === undefined ? entries : entries.slice(-options.limit);
+  }
+
+  async appendLog(entry: TeamLogEntry): Promise<void> {
+    if (this.appendError !== undefined) throw this.appendError;
+    this.logs.push(entry);
+  }
+
+  async flush(): Promise<void> {}
+}
+
+export interface TeamHarness {
+  service: DefaultTeamService;
+  agent: FakeTeamAgent;
+  store: MemoryTeamStore;
+}
+
+/** 组装 DefaultTeamService + 假 AgentService + 内存 TeamStore */
+export function makeTeamHarness(
+  options: {
+    members?: MemberStatus[];
+    teams?: TeamRecord[];
+    now?: () => number;
+    newId?: () => string;
+  } = {},
+): TeamHarness {
+  const agent = new FakeTeamAgent(options.members ?? [], options.now);
+  const store = new MemoryTeamStore(options.teams ?? [makeTeam('alpha'), makeTeam('beta')]);
+  let counter = 0;
+  const service = createTeamService({
+    tenantId: 'default',
+    agent: agent as unknown as AgentService,
+    store,
+    now: options.now,
+    newId: options.newId ?? (() => `team-${++counter}`),
+  });
+  return { service, agent, store };
 }
