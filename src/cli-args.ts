@@ -398,7 +398,6 @@ export function parseArgs(argv: string[]): ParseResult {
     agentsCommand: null,
     agentCommand: null,
     teamCommand: null,
-    federationCommand: null,
     errorsCommand: null,
     completionCommand: null,
   };
