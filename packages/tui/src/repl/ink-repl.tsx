@@ -779,6 +779,8 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
         data: {
           requestId: ui.permissionOverlay.requestId,
           decision: 'deny',
+          answered_by: 'human',
+          answered_via: 'tui',
           ...(ui.permissionOverlay.session_id !== undefined
             ? { session_id: ui.permissionOverlay.session_id }
             : {}),
@@ -791,7 +793,12 @@ function InkRepl({ ctx, onExitCommand, clearScreen }: InkReplProps) {
       ctx.events.publish({
         type: 'ask.user.answered',
         run_id: ui.askUserRunId ?? '',
-        data: { requestId: ui.askUserRequestId, answers: [] },
+        data: {
+          requestId: ui.askUserRequestId,
+          answers: [],
+          answered_by: 'human',
+          answered_via: 'tui',
+        },
         ts: Date.now(),
       });
     }

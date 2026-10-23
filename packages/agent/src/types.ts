@@ -237,6 +237,8 @@ export interface BudgetTurnBlockedInput {
 export interface BudgetDeliveryInput {
   conversation_id: string;
   team_id?: string;
+  /** true 表示 team_id 是显式 origin 声明；跨 Team 回复不设，沿用已存 origin */
+  origin_explicit?: boolean;
   from: string;
   to: string;
   message_id?: string;
@@ -367,6 +369,11 @@ export interface DispatchInput {
   from?: string;
   /** 会话分组；缺省生成（0.19 S4） */
   conversation_id?: string;
+  /**
+   * 显式 origin team（TeamService.post 用）；与已存 conversation 的 team 不一致时拒绝。
+   * 成员 send / reply / owner dispatch 不传，由发送者或目标推导。
+   */
+  origin_team_id?: string;
 }
 
 /** dispatch 结果：queued 表示已入队；rejected 是明确的业务拒绝 */
@@ -881,6 +888,7 @@ export interface AgentTeamService {
 /** Team 层稳定错误码（RPC / CLI 据此映射） */
 export type TeamErrorCode =
   | 'team_not_found'
+  | 'team_conversation_not_found'
   | 'team_log_write_failed'
   | 'team_binding_requires_name'
   | 'team_already_in_team'

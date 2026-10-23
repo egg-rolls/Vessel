@@ -518,14 +518,16 @@ export class AgentServiceImpl implements AgentService {
     }
 
     const conversationId = this.resolveConversationId(input.conversation_id);
+    const teamId = this.resolveOriginTeam(from, target);
     // 状态 / 可见性检查在前，预算检查在后：被拒绝的投递不预留 hop。
-    const check = this.checkDelivery(target, from, conversationId);
+    const check = this.checkDelivery(target, from, conversationId, teamId);
     if (!check.ok) {
       this.emitBudgetBlocked(target, check, {
         conversation_id: conversationId,
         from,
         to: target.id,
         phase: 'enqueue',
+        ...(teamId !== undefined ? { teamId } : {}),
       });
       throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
     }
@@ -597,8 +599,12 @@ export class AgentServiceImpl implements AgentService {
     }
 
     const conversationId = this.resolveConversationId(input.conversation_id);
+    const originTeamId =
+      raw.origin_team_id === undefined
+        ? undefined
+        : readRequiredString(raw, 'origin_team_id');
     if (target.rotation === 'rotating') {
-      const rejected = this.budgetBeforeEnqueue(target, from, conversationId);
+      const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
       if (rejected !== undefined) return rejected;
       const result = this.enqueueMessage(target, content, from, conversationId);
       return {
@@ -610,7 +616,7 @@ export class AgentServiceImpl implements AgentService {
       };
     }
     if (target.presence === 'live') {
-      const rejected = this.budgetBeforeEnqueue(target, from, conversationId);
+      const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
       if (rejected !== undefined) return rejected;
       const result = this.enqueueMessage(target, content, from, conversationId);
       return {
@@ -638,7 +644,7 @@ export class AgentServiceImpl implements AgentService {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
     // resume 后、入队前检查（检查与入队之间没有 await）
-    const rejected = this.budgetBeforeEnqueue(current, from, conversationId);
+    const rejected = this.budgetBeforeEnqueue(current, from, conversationId, originTeamId);
     if (rejected !== undefined) return rejected;
     const result = this.enqueueMessage(current, content, from, conversationId);
     return {
@@ -655,14 +661,23 @@ export class AgentServiceImpl implements AgentService {
     target: MemberRecord,
     from: string,
     conversationId: string,
+    originTeamId?: string,
   ): DispatchResult | undefined {
-    const check = this.checkDelivery(target, from, conversationId);
+    const teamId = originTeamId ?? this.resolveOriginTeam(from, target);
+    const check = this.checkDelivery(
+      target,
+      from,
+      conversationId,
+      teamId,
+      originTeamId !== undefined,
+    );
     if (check.ok) return undefined;
     this.emitBudgetBlocked(target, check, {
       conversation_id: conversationId,
       from,
       to: target.id,
       phase: 'enqueue',
+      ...(teamId !== undefined ? { teamId } : {}),
     });
     return {
       status: 'rejected',
@@ -1134,13 +1149,15 @@ export class AgentServiceImpl implements AgentService {
       this.queueFor(member.id).activeConversationId ?? generateConversationId(this.newId);
     // external owner 不参与预算；父成员回复是 agent→agent 投递，走发送侧检查。
     if (!this.externalOwners.has(parent.id)) {
-      const check = this.checkDelivery(parent, member.id, conversationId);
+      const teamId = this.resolveOriginTeam(member.id, parent);
+      const check = this.checkDelivery(parent, member.id, conversationId, teamId);
       if (!check.ok) {
         this.emitBudgetBlocked(parent, check, {
           conversation_id: conversationId,
           from: member.id,
           to: parent.id,
           phase: 'enqueue',
+          ...(teamId !== undefined ? { teamId } : {}),
         });
         throw new AgentError(this.budgetCode(check.reason), `${check.reason}: ${check.dimension}`);
       }
@@ -1281,7 +1298,7 @@ export class AgentServiceImpl implements AgentService {
         previous_max: result.previous_max,
         max: result.max,
         by: 'human',
-        via: input.via,
+        via: input.via ?? 'api',
       });
       return { action: 'override', team_id: input.team_id, ...result };
     }
@@ -1292,20 +1309,29 @@ export class AgentServiceImpl implements AgentService {
     };
   }
 
+  /** 发送者所属 Team 优先；human / owner 无 Team 时退回目标 Team */
+  private resolveOriginTeam(from: string, target: MemberRecord): string | undefined {
+    return this.registry.resolve(from)?.teamId ?? target.teamId;
+  }
+
   /** conversation 预算检查 + 通过后的告警收集 */
   private checkDelivery(
     target: MemberRecord,
     from: string,
     conversationId: string,
+    teamId?: string,
+    originExplicit = false,
   ): BudgetCheckResult {
     if (this.budgetPort === undefined) return { ok: true };
+    const resolvedTeamId = teamId ?? this.resolveOriginTeam(from, target);
     const check = this.budgetPort.checkDelivery({
       conversation_id: conversationId,
-      ...(target.teamId !== undefined ? { team_id: target.teamId } : {}),
+      ...(resolvedTeamId !== undefined ? { team_id: resolvedTeamId } : {}),
+      ...(originExplicit ? { origin_explicit: true } : {}),
       from,
       to: target.id,
     });
-    if (check.ok) this.emitBudgetWarnings(target, conversationId, 'enqueue');
+    if (check.ok) this.emitBudgetWarnings(target, conversationId, 'enqueue', resolvedTeamId);
     return check;
   }
 
@@ -1313,16 +1339,16 @@ export class AgentServiceImpl implements AgentService {
     member: MemberRecord,
     conversationId: string,
     phase: 'enqueue' | 'turn_start',
+    teamIdOverride?: string,
   ): void {
     const warnings = this.budgetPort?.takeWarnings?.(conversationId) ?? [];
     for (const warning of warnings) {
+      const teamId = teamIdOverride ?? warning.team_id ?? member.teamId;
+      // team.budget.* 契约要求 team_id；unbound 会话没有团队事件面，只保留拒绝结果。
+      if (teamId === undefined) continue;
       this.emit('team.budget.warning', member, {
         conversation_id: conversationId,
-        ...(warning.team_id !== undefined
-          ? { team_id: warning.team_id }
-          : member.teamId !== undefined
-            ? { team_id: member.teamId }
-            : {}),
+        team_id: teamId,
         dimension: warning.dimension,
         current: warning.current,
         max: warning.max,
@@ -1341,11 +1367,15 @@ export class AgentServiceImpl implements AgentService {
       from?: string;
       to?: string;
       phase: 'enqueue' | 'turn_start';
+      teamId?: string;
     },
   ): void {
+    const teamId = extra.teamId ?? member.teamId;
+    // team.budget.* 契约要求 team_id；unbound 会话没有团队事件面，只保留拒绝结果。
+    if (teamId === undefined) return;
     this.emit('team.budget.blocked', member, {
       conversation_id: extra.conversation_id,
-      ...(member.teamId !== undefined ? { team_id: member.teamId } : {}),
+      team_id: teamId,
       dimension: check.dimension,
       current: check.current,
       max: check.max,
@@ -1812,13 +1842,15 @@ export class AgentServiceImpl implements AgentService {
     if (parentQueue.closing) return;
 
     if (conversationId !== undefined && !this.externalOwners.has(parent.id)) {
-      const check = this.checkDelivery(parent, member.id, conversationId);
+      const teamId = this.resolveOriginTeam(member.id, parent);
+      const check = this.checkDelivery(parent, member.id, conversationId, teamId);
       if (!check.ok) {
         this.emitBudgetBlocked(parent, check, {
           conversation_id: conversationId,
           from: member.id,
           to: parent.id,
           phase: 'enqueue',
+          ...(teamId !== undefined ? { teamId } : {}),
         });
         return;
       }

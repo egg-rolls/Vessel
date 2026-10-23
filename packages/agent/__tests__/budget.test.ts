@@ -417,6 +417,7 @@ describe('conversation origin', () => {
     const check = harness.budget.checkDelivery({
       conversation_id: first.conversation_id,
       team_id: 'beta',
+      origin_explicit: true,
       from: 'human',
       to: worker.id,
     });

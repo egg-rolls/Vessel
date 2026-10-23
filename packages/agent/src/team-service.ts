@@ -169,6 +169,16 @@ export class DefaultTeamService implements AgentTeamService {
       throw new TeamError('team_not_found', 'budget unavailable');
     }
     const result = await this.agent.budget(input);
+    if (
+      result.action === 'status' &&
+      input.conversation_id !== undefined &&
+      result.conversations.length === 0
+    ) {
+      throw new TeamError(
+        'team_conversation_not_found',
+        `conversation_not_found: ${input.conversation_id}`,
+      );
+    }
     if (result.action === 'override') {
       // override 审计：只写 system 日志，绝不 dispatch。
       const messageId = this.newId();
@@ -314,7 +324,7 @@ export class DefaultTeamService implements AgentTeamService {
       slots.map((slot) =>
         slot.targetId === undefined
           ? Promise.resolve(undefined)
-          : this.dispatchMention(slot.targetId, content, from, conversationId),
+          : this.dispatchMention(slot.targetId, content, from, conversationId, input.team_id),
       ),
     );
     const delivered: TeamDelivery[] = [];
@@ -663,6 +673,7 @@ export class DefaultTeamService implements AgentTeamService {
     content: string,
     from: string,
     conversationId: string,
+    originTeamId?: string,
   ): Promise<TeamDelivery> {
     try {
       const result = await this.agent.dispatch({
@@ -670,6 +681,7 @@ export class DefaultTeamService implements AgentTeamService {
         content,
         from,
         conversation_id: conversationId,
+        ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
       });
       if (result.status === 'queued') {
         return {

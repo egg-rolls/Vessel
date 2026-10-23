@@ -107,7 +107,11 @@ function mapTeamError(error: unknown): never {
       : undefined;
   const message = error instanceof Error ? error.message : String(error);
   if (code === undefined) throw new RpcError('internal', message);
-  if (code === 'team_not_found' || code === 'unknown_member') {
+  if (
+    code === 'team_not_found' ||
+    code === 'team_conversation_not_found' ||
+    code === 'unknown_member'
+  ) {
     throw new RpcError('not_found', message);
   }
   if (code === 'team_log_write_failed') throw new RpcError('internal', message);

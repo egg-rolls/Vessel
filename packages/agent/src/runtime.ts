@@ -10,6 +10,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import type { TeamPermissionPolicy } from '@vessel-agent/config';
 import {
   AgentRuntime,
   type AgentRuntimeOptions,
@@ -69,12 +70,6 @@ const PERMISSION_RESPONSE_EVENTS: ReadonlySet<string> = new Set([
   'ask.user.answered',
 ]);
 
-/** team policy 的无人值守权限配置（与 config 同形，避免 agent 反向依赖 config） */
-export interface MemberPermissionPolicy {
-  unattended?: 'hold' | 'deny-after';
-  denyAfterSeconds?: number;
-}
-
 /** bridge 内待答请求；deny-after 只挂在有 parentEvents 的桥上 */
 interface PendingBridgeRequest {
   kind: 'permission' | 'ask';
@@ -106,7 +101,7 @@ export interface InProcessMemberRuntimeOptions {
    */
   forceBridgeForTeams?: boolean;
   /** 按成员所属 team 解析无人值守策略；只影响 bridge 内的 deny-after 定时器 */
-  permissionPolicy?: (teamId: string | undefined) => MemberPermissionPolicy | undefined;
+  permissionPolicy?: (teamId: string | undefined) => TeamPermissionPolicy | undefined;
   /** allow / bridge 模式的权限配置（autoApprove / default / timeoutMs） */
   permission?: RuntimePermissionConfig;
   /**
@@ -267,7 +262,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly forceBridgeForTeams: boolean;
   private readonly permissionPolicy?: (
     teamId: string | undefined,
-  ) => MemberPermissionPolicy | undefined;
+  ) => TeamPermissionPolicy | undefined;
   private readonly permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
   private readonly onPermissionState?: (

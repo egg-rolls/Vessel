@@ -28,6 +28,24 @@ import type { TeamBinder, TeamDeclaration, TeamLogEntry, TeamRecord, TeamStore }
 /** `ensureForWorkspace` 入参（与 TeamBinder 端口一致） */
 export type EnsureWorkspaceInput = Parameters<TeamBinder['ensureForWorkspace']>[0];
 
+/** 非法 policy 的子树 salvage：坏 budget 不连带关掉有效 permission */
+function salvageTeamPolicy(policy: Record<string, unknown>): TeamPolicy | undefined {
+  const salvaged: TeamPolicy = {};
+  for (const [key, value] of Object.entries(policy)) {
+    if (key !== 'permission' && key !== 'budget') {
+      salvaged[key] = value;
+      continue;
+    }
+    try {
+      const parsed = parseTeamPolicy({ [key]: value });
+      if (parsed[key] !== undefined) salvaged[key] = parsed[key];
+    } catch {
+      // 丢掉该子树，保留其它有效策略
+    }
+  }
+  return Object.keys(salvaged).length > 0 ? salvaged : undefined;
+}
+
 /** 构造选项 */
 export interface FileTeamStoreOptions {
   /** dataDir 根（与 Agent 快照同级） */
@@ -236,7 +254,10 @@ export class FileTeamStore implements TeamStore {
     return record ? cloneRecord(record) : undefined;
   }
 
-  /** 0.19 S4：手改非法 policy 只 warning + 返回 undefined，Team 仍可用。 */
+  /**
+   * 0.19 S4：手改非法 policy 只 warning；按子树 salvage，避免一个坏 key
+   * 同时关掉另一条有效策略（如 budget 拼错导致 deny-after 失效）。
+   */
   policy(teamId: string): TeamPolicy | undefined {
     const record = this.teams.get(teamId);
     if (!record) return undefined;
@@ -247,7 +268,7 @@ export class FileTeamStore implements TeamStore {
         team_id: teamId,
         error: errorMessage(error),
       });
-      return undefined;
+      return salvageTeamPolicy(record.policy);
     }
   }
 

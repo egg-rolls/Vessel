@@ -25,9 +25,11 @@ import {
   type BudgetOverrideInput,
   type BudgetOverrideResult,
   type BudgetStatusInput,
+  type BudgetTurnBlockedInput,
   type BudgetTurnFinishedInput,
   type BudgetTurnInput,
   type BudgetTurnStartedInput,
+  type BudgetWarning,
   type ConversationBudgetEdge,
   type ConversationBudgetPort,
   type ConversationBudgetStatus,
@@ -50,23 +52,6 @@ export function isValidConversationId(value: unknown): value is string {
 
 export function generateConversationId(newId: () => string): string {
   return `conv_${newId()}`;
-}
-
-/** 预算告警（service 负责附上成员归属并发布事件） */
-export interface BudgetWarning {
-  conversation_id: string;
-  team_id?: string;
-  dimension: Exclude<BudgetDimension, 'cycle'>;
-  current: number;
-  max: number;
-  threshold: number;
-}
-
-export interface TurnBlockedInput {
-  conversation_id: string;
-  team_id?: string;
-  dimension: BudgetDimension;
-  reason: BudgetBlockReason;
 }
 
 export interface ConversationBudgetOptions {
@@ -161,6 +146,7 @@ export class ConversationBudget implements ConversationBudgetPort {
     const now = this.now();
     const existing = this.store.get(input.conversation_id);
     if (
+      input.origin_explicit === true &&
       existing?.team_id !== undefined &&
       input.team_id !== undefined &&
       existing.team_id !== input.team_id
@@ -407,7 +393,7 @@ export class ConversationBudget implements ConversationBudgetPort {
   }
 
   /** 接收侧 turn 被挡：持久化 state.blocked（unavailable 时无状态可写） */
-  noteTurnBlocked(input: TurnBlockedInput): void {
+  noteTurnBlocked(input: BudgetTurnBlockedInput): void {
     if (!this.store.available || input.reason === 'budget_unavailable') return;
     const now = this.now();
     const conversation = this.store.ensure(input.conversation_id, input.team_id, now);
