@@ -3,7 +3,7 @@ adr: 93
 title: Hub 控制面（S5）
 status: accepted
 date: 2026-10-23
-related: [36, 49, 50, 51, 52, 53, 67, 91]
+related: [36, 49, 50, 51, 52, 53, 67, 91, 92]
 tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 ---
 
@@ -36,4 +36,15 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 
 - **后果**：hub 可以横向扩展为纯目录服务，节点断连不影响本机与浏览器直连；代价是客户端必须自行向节点拉取渲染数据，且指针只是提示而非可靠队列。配对与 token 生命周期独立于节点重启；吊销与 `hub_id` 绑定把“token 被另一个 hub 复用”变成显式失败。
 
-- **关联**：[ADR-036](ADR-036-gateway-protocol-v1.md)（gateway 控制面）、[ADR-049](ADR-049-multi-tenant-isolation.md)（tenant principal）、[ADR-050](ADR-050-yaml-first-config-and-secrets.md)（密钥分层）、[ADR-051](ADR-051-remote-control-plane.md)（远程控制面）、[ADR-052](ADR-052-cross-node-transport.md)（跨节点 transport）、[ADR-053](ADR-053-remote-security-baseline.md)（远程安全基线）、[ADR-067](ADR-067-cross-node-dedup-keys.md)（去重范围维度）、[ADR-091](ADR-091-agent-body-and-presence.md)（节点身份）。方向裁决见个人侧 DECISION-035 §6 / §13（S5）。
+- **关联**：[ADR-036](ADR-036-gateway-protocol-v1.md)（gateway 控制面）、[ADR-049](ADR-049-multi-tenant-isolation.md)（tenant principal）、[ADR-050](ADR-050-yaml-first-config-and-secrets.md)（密钥分层）、[ADR-051](ADR-051-remote-control-plane.md)（远程控制面）、[ADR-052](ADR-052-cross-node-transport.md)（跨节点 transport）、[ADR-053](ADR-053-remote-security-baseline.md)（远程安全基线）、[ADR-067](ADR-067-cross-node-dedup-keys.md)（去重范围维度）、[ADR-091](ADR-091-agent-body-and-presence.md)（节点身份 / Team / Body）、[ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)（rotate 与 epoch fencing）。方向裁决见个人侧 DECISION-035 §6 / §13（S5）。
+
+## Addendum（0.19 收口）
+
+> S5 合并进 `0.19-integration` 后的当前事实；只追加，不改写上面的 S5 结论。
+
+- **canonical 最终计数为 47**：0.18 移除 workflow（ADR-090）后基数为 40；S3 `teams.*`（+4）与 S5 `auth.*`（+3）合并后为 47。上文第 11 条的“本分支 48”是 S5 分支上的中间计数，“最终 52”在 0.18 合并后不再成立。
+- **control scope 白名单包含 `teams.post`**：`control` token 映射 `write`，允许 `teams.list` / `teams.get` / `teams.post` 与 events / interactions / permission / ask 白名单；`teams.members` 不在 control 白名单。上文第 4 条“teams 只读”应收窄为“teams 读 + post”，且 team 收窄仍只在节点侧执行。
+- **`SecretStore` 文件回退不自动启用**：Windows DPAPI / macOS Keychain / Linux libsecret 不可用时，只有 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器；否则 fail-closed（`secret_store_unavailable`）。上文第 5 条“不可用时才退到文件适配器”需以该显式开关为准。
+- **`POST /v1/hub/data-token` 与 `vessel hub data-token` 已实现**：hub 用该 pairing 的 `exchange` token 向节点换短期 `control` token 并只返回给调用方；hub 不持久化短期 token。浏览器端（sessionStorage / Web 消费）仍未实现；Web 当前直连节点，不消费 hub 目录或 data token。
+- **实现文件位置**：hub 进程与目录实现在 `src/hub/`；app 层装配（`HubControlLike` / `TeamScopeLike` / `NodeTokenControlLike` 投影）在 `src/hub-wiring.ts`，节点 token 表 / 配对在 `src/node-token-store.ts` / `src/node-token-control.ts` / `src/hub-pairing.ts`，均不在 `src/hub/` 内。上文第 1 条的文件清单应包含这些 app 层文件。
+- **node → hub 出站仍为 S5.1**：节点收到 `dialer !== 'hub'` 的帧以 4400 关闭；配置虽接受 `direction: node`，运行时拒绝。跨节点 A2A（S7）仍未实现。

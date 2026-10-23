@@ -796,7 +796,7 @@ serve:
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `agent` | `agent.enabled: true`；owner 动作 `new` / `send` / `close` / `list` / `rotate`（支持 batch；成员侧只暴露 `rotate`）；权限模式与成员配置见 `agent.*`（0.17；rotate 见 0.19） |
+| `agent` | `agent.enabled: true`；owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，`new` / `close` 只给 owner）；权限模式与成员配置见 `agent.*`（0.17；rotate 见 0.19 S2；Team 动作见 0.19 S3） |
 | `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭（0.14.1） |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
@@ -839,7 +839,12 @@ serve:
 | `src/plugin-loader.ts` | 插件发现（见 §8） |
 | `src/plugin-selection.ts` | bootstrap 与 `--tools` 共用的插件选择策略，避免默认集漂移 |
 | `src/agent-service-wiring.ts` / `src/agent-owner-injection.ts` | 0.17：把父 provider / PluginHost / 限额 / 事件流交给 AgentService；owner 队列经 `BeforeLlm` 注入 |
-| `src/agent-owner-server.ts` / `src/agent-owner-client.ts` | 0.17：REPL owner loopback 控制端点与 CLI attach |
+| `src/agent-owner-server.ts` / `src/agent-owner-client.ts` | 0.17：REPL owner loopback 控制端点与 CLI attach；0.19 S3 增加 `team.list|get|post|members` 私有方法 |
+| `src/team-command.ts` | 0.19 S3：`vessel team list|get|post|members [--json]` 的参数映射与渲染；成员名在 CLI 层解析为 agent id |
+| `src/hub-command.ts` | 0.19 S5：`vessel hub start|directory|watch|pair|node|token|data-token` 的参数映射与渲染 |
+| `src/hub/` | 0.19 S5：hub 独立前台进程（`runtime` / `server` / `registry` / `control-client` / `secret-store` / `token-broker` / `client-protocol` / `types`） |
+| `src/hub-wiring.ts` / `src/node-token-store.ts` / `src/node-token-control.ts` / `src/hub-pairing.ts` | 0.19 S5：`HubControlLike` / `TeamScopeLike` 投影、节点 token 表（只存 hash）、`auth.exchange|revoke|tokens` 与一次性配对码 |
+| `src/gateway-wiring.ts` | 0.15 / 0.19：`buildGatewayControlPlane` 透传 `teams` / `hubControl` / `teamScope` / `nodeTokens` |
 | `src/tenant-runtime-factory.ts` | 构造单个 tenant 的独立执行面（config / provider / session / run store / context / PluginHost / trace / writer lock）；runtime 共用同一份 resolved 权限 |
 | `src/session-factory.ts` | `session.backend` → sqlite / file / memory |
 | `src/run-store-factory.ts` | `durable.backend/path` → `FileRunStore` / `MemoryRunStore`；未启用返回 null。0.8：透传 `tenantId`（归属校验）与 `tenantRunsDir` |
@@ -2273,9 +2278,10 @@ interface LimitBlock {
 - canonical RPC 仍为 **44**，本版本不新增方法。
 - 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。
 
-## 39. 0.17.0 AgentService 与成员能力层（已实现；0.19 S1/S2 修订见 §40）
+## 39. 0.17.0 AgentService 与成员能力层（已实现；0.19 S1/S2 修订见 §40，S3 修订见 §41）
 
 > 状态：已合入 `release/0.17.0`（未发布）。决策见 [ADR-088](adr/ADR-088-agent-service-package.md)。
+> 本节描述 0.17 当时的行为；0.19 S3 起成员 `agent` 动作扩为 `rotate|post|send|list`、owner `send` 走 dispatch，以 §41 为准。
 
 ### 39.1 分层与包边界
 
@@ -2360,7 +2366,7 @@ interface LimitBlock {
 
 ## 40. 0.19.0 Agent / Body 内核（S1+S2，已实现）
 
-> 状态：S1 分支 `0.19-s1-agent-body`、S2 分支 `0.19-s2-rotate`，均未随版本发布。S1 决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)，S2 见 [ADR-092](adr/ADR-092-agent-rotate-and-epoch-fencing.md)。S3–S7（fork / Team / budget / hub / Web / 跨节点）**未实现**；rotate 已实现（§40.5）。
+> 状态：S1 分支 `0.19-s1-agent-body`、S2 分支 `0.19-s2-rotate`，均未随版本发布。S1 决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)，S2 见 [ADR-092](adr/ADR-092-agent-rotate-and-epoch-fencing.md)。rotate 已实现（§40.5）；Team / hub / Web Team 分别见 §41 / §42 / §43。**未实现**：fork、S4 权限 only-human 与 budget / `conversation_id`、S5.1 node → hub 出站、S7 跨节点 A2A。
 
 ### 40.1 节点身份
 
@@ -2380,13 +2386,13 @@ interface LimitBlock {
 
 | 层 | 值 | 写入者 | 持久化 |
 |---|---|---|---|
-| membership | `present` / `left` | `new` / `close`（S1；S3 后改为 Team roster） | 是 |
+| membership | `present` / `left` | `new` / `close`；0.19 S3 起 Team roster 的 `members add/remove` 也写入（`reinstate` / `close`） | 是 |
 | presence | `live` / `gone` | spawn / 重启加载 / close / dispose | 否 |
 | engine | `created` / `idle` / `running` / `waiting_permission` / `completed` / `failed` / `cancelled` / `closed` | AgentService + engine | 加载时重置 |
 
 - 派生不存储：`canAccept = present && live && stable`、`needsResume = present && gone`、`rotating = present && rotation === 'rotating'`。
 - 重启规则：`left` / `closed` → `closed + left + gone`；其余 → `idle + present + gone`。`stale` 不再写入。
-- `attachOwner` 是唯一 `left → present` 例外，完整恢复 `live + idle` 并补齐 `current_body`。
+- `attachOwner` 与 0.19 S3 的 `AgentService.reinstate`（roster add 专用，保留当前 Body、`presence='gone'`、不 spawn）是仅有的两条 `left → present` 人力路径；`closed → idle` 不得走普通 `setState`。
 - `rotation` 由 `AgentService.rotate` 写入：切换期间为 `rotating`，所有出口恢复 `stable`；`pump` 在 rotating 时不启动新 run，`dispatch` / `send` 入队等待。
 
 ### 40.4 Body 存储与 dispatch
@@ -2394,7 +2400,7 @@ interface LimitBlock {
 - 成员 engine 注入 tenant `SessionBackend` 与 `eventLog`（`packages/agent/src/runtime.ts` → `src/agent-service-wiring.ts` → `src/bootstrap.ts`）；同一 `session_id` 跨进程续接历史。S1 不做 `AgentSessionScope`，成员会话会出现在 `sessions.list`。
 - `dispatch({to, content, from?})` 的 `to` 解析 id → session_id → 唯一 name；同名多个 present 返回 `invalid_input`。
 - 分支：`left` / `closed` / closing → `rejected agent_left`；`rotating` → 入队 `rotating`；`live` → 入队 `live`；`gone` → single-flight resume 后入队 `resumed`；resume 失败 `resume_failed`；不可见 `not_visible`。
-- strict `send` 不 resume：`left` → `member_closed`，`gone` → `member_stale`。`agent` 工具的 `send` 在 S1/S2 仍走 strict send；切到 dispatch 留到 S3。
+- strict `send` 不 resume：`left` → `member_closed`，`gone` → `member_stale`。0.19 S3 起 `agent` 工具的 `send` 走 dispatch（成员走 `TeamService.send`）；strict `service.send` 只保留给 owner 端点 / CLI。
 
 ### 40.5 rotate 与 epoch fencing
 
@@ -2405,5 +2411,75 @@ interface LimitBlock {
 - **排队**：rotating 期间 `dispatch` / `send` 入队；切换后顺序为启动嘱托 → rotate 前队列 → rotating 期间新队列，全部由新 Body 处理。
 - **epoch fencing**：`pump` 捕获 `activeBodySession`；旧轮结束后若不再是当前 Body，发带 `stale: true` 的配对 `agent.turn.*`、`agent.reply.stale`，dispose 旧 engine、发 `agent.retired`；不写 Agent state / usage，不 `deliverToParent`。
 - **寻址与快照**：`entries` 按 `session_id` 键；`bySession` 跟随 `current_body`；`MemberStatus.session_id` / 默认事件 session 报当前 Body；`body_history` 有界持久化，快照仍 v2。
-- **成员工具**：`agent` 在成员默认工具白名单内，但 schema 只暴露 `rotate`（只能自换）；成员 `permission.autoApprove` 追加 `agent`，service 的 `from_session_id` 比较是最终闸门。
+- **成员工具**：`agent` 在成员默认工具白名单内，schema 暴露 `rotate` / `post` / `send` / `list`（0.19 S3；`rotate` 只能自换，`new` / `close` 只给 owner）；成员 `permission.autoApprove` 追加 `agent`，service 的 `from_session_id` 比较是 rotate 的最终闸门。
 - **预警与权限**：`agent.limit.warning` 经 `onMemberEvent` 回到 service，按当前 Body session 去重后作为下一轮系统消息；`notePermissionState` / `requestPermission` 按当前运行 Body session fencing。
+
+## 41. 0.19.0 Team（S3，已实现）
+
+> 状态：分支 `0.19-s3-team`，未随版本发布。决策与 Addendum 见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)。
+
+### 41.1 存储与数据模型
+
+- 实现位于 `packages/agent`：`team-store.ts`（元数据）、`team-log.ts`（只追加日志）、`team-slug.ts`（workspace 归一化 / slug）、`team-service.ts`（编排）。
+- `<dataDir>/teams/<tenant>/<team_id>/team.json`：`{v:1, team_id, name, tenant_id, workspace, handoff_path?, policy, created_at}`，`atomicWrite` 0600。`team_id` 由 workspace 目录名生成 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。
+- `<dataDir>/teams/<tenant>/<team_id>/log.ndjson`：每行一条 `TeamLogEntry`（`message_id` / `team_id` / `from` / `to[]` / `mentions[]` / `content` / `ts` / `kind` / `system_event?`），串行只追加、有界读（尾部窗口）、坏行跳过；**不是消息队列**。
+- `team_id` 在 Agent 记录上 additive 持久化；roster 不单独落盘，由 `team_id + membership === 'present'` 从 Agent 记录派生。`online_count` 由 `present && presence === 'live'` 派生；`body_history` 直接透传 Agent 记录（≤20）。
+- 绑定：显式 `--workspace` 或配置 `teams:` 声明（归一化后精确匹配）才会绑定；默认绑定只对带 `name` 的 Agent 生效。绑定后未显式指定时 visibility 缺省 `team`；unbound 保持 `private`。Agent 不支持跨 Team 迁移。
+
+### 41.2 消息与投递
+
+- **无 `@` 的 post / reply / system 绝不产生 run**：TeamService 不持有 AgentService 队列，`pump` 仍是唯一 run 起点。
+- `@` 使用结构化 `mentions: string[]`（agent id），不从正文解析；先写日志再逐条 `dispatch`，日志写失败不产生任何 run。逐条结果以 `delivered[]` 返回（`queued` / `rejected` / `error`），一条失败不影响其它条目，也不回滚日志。
+- 系统消息 `join` / `leave` / `archive` / `rotate` 由 TeamService 订阅 `agent.*` 写入；TeamService 是唯一写入点。`TeamService.subscribe` 只对外发 `{team_id, kind, message_id?}`，**不含正文**（供 hub 投影指针）。
+- 成员完成一轮、有最终文本且 `team_id` 非空时，AgentService 发 `agent.reply.posted`；TeamService 追加 `kind:'reply'` 日志（≤64 KiB，超限截断标记），**不 dispatch**；`message_id` 与事件一致。`agent.turn.completed` 仍不带正文。
+
+### 41.3 生命周期、可见性与 RPC
+
+- `teams.members action=add` 调用 `AgentService.reinstate`：`left` / `closed` → `present + idle + gone`，保留 `current_body` / `body_history` / 原 session，不 spawn；下一次 dispatch 才 resume。`action=remove` 复用 `close`：dispose 当前 Body、保留 session 与历史（归档不删）。
+- private 成员 fail-closed：`onAgentEvent` 只接受 `visibility === 'team' | 'tenant'`；private 成员的 id / 名字 / 回复不写日志、不可被 `@`（owner 路径 `team_private_member`，canonical 路径 `unknown_member`）。根 owner（`owner === id`）例外。
+- canonical `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write）由 `TeamControlLike` 结构化注入；`packages/serve` 不依赖 `@vessel-agent/agent`。未注入 / tenant 不匹配返回 `not_found`；0.19 S3 只有 default tenant 的 AgentService 注入 `teams.*`，其他 tenant 返回 `not_found`。canonical 是复数 `teams.*`，与 legacy `/v1/team/*`（单数前缀）无关。
+- `vessel team list|get|post|members [--json]` 经 owner 端点；owner 端点是 `from = ownerId`、`viewer = ownerId`（private 可见），canonical 为 `from = 'human'`、无 viewer。
+
+## 42. 0.19.0 Hub 控制面（S5，已实现；S5.1 未实现）
+
+> 状态：分支 `0.19-s5-hub`，未随版本发布。决策见 [ADR-093](adr/ADR-093-hub-control-plane.md)。
+
+### 42.1 形态与协议
+
+- hub 是 app 层独立前台进程：`vessel hub start [--host] [--port] [--data-dir] [--allow-remote] [--tls-cert/--tls-key]`，实现位于 `src/hub/`，不新增 package、不启动 runtime / AgentService / TenantEventHub。
+- 节点侧：`POST /v1/hub/pair`（一次性配对码）与 WSS `/v1/hub/control`（协议 `vessel.hub/1`）。帧统一带 `dialer: 'hub' | 'node'`；**S5 只实现 hub → node 拨号**，节点收到 `dialer !== 'hub'` 以 4400 关闭。node → hub 出站 / NAT 是 S5.1，未实现。
+- hub 侧：`GET /health`、`GET /v1/hub/directory`、`GET|DELETE /v1/hub/nodes/:pairing_id`、`POST /v1/hub/nodes`（配对 / 移除节点只接受回环 peer）、`GET /v1/hub/events`（WS：`hello` / `snapshot` / `pointer` / `ping`）、`POST /v1/hub/data-token`。
+- hub 与节点必须使用不同 `data_dir`，相同则 `hub_data_dir_conflict`。
+
+### 42.2 目录、指针与不代理正文
+
+- 目录持久化 `<hubDataDir>/registry.json`（0600 原子写、250ms debounce），主键 `pairing_id = node_id:tenant_id`；记录 `status`（`connecting|healthy|unreachable|incompatible|unauthorized`）、`last_seen`、`incarnation` / `revision`、计数与 Team / Agent 元数据。上限 500 teams / 2000 agents，超限置 `truncated: true`。
+- 指针固定 `{node_id, team_id, request_id?, reason, ts}`；只在线推送、不持久化、不排队，消费方按 `ts` 超过 60 秒丢弃。客户端收到指针后**直连节点**拉取正文。
+- hub **不代理、不落盘**消息正文 / transcript / system prompt / workspace / session 内容 / 事件 payload / tool 结果。`HubControlLike.snapshot` 只返回白名单投影；`TeamService.subscribe` 只带 id。
+- 快照按 `(incarnation, revision)` 比较：incarnation 变化无条件接受并重置 revision；同一 incarnation 下旧 revision 丢弃。
+
+### 42.3 配对、scope 与密钥
+
+- 一次性配对码只存 `sha256`、默认 300 秒、消费时先原子写 `used_at`；配对签发 `view` + `exchange` 两枚 token（默认 30 天、可吊销）。节点侧 `<dataDir>/hub-tokens.json` 只存 `sha256(token)` 与元数据，明文只在签发响应出现一次。
+- scope 为 `view | exchange | control | admin`，映射既有 `read / write / admin` rank，不新增 role。`view` 只读目录 / 健康；`exchange` 只能调用 `auth.exchange`；`control` 走节点控制面白名单（events / interactions / permission / ask / teams read + post）；`admin` 走既有 admin 面。
+- token 记录绑定 `hub_id`；`/v1/hub/control` 首帧 `hub_id` 必须与记录一致。吊销 `auth.revoke` 关闭匹配 `token_id` 的已建 WS，新 HTTP 请求重新鉴权。
+- hub 的 `view` / `exchange` token 走 `SecretStore`（Windows DPAPI / macOS Keychain / Linux libsecret）；仅当 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器，否则 fail-closed。不写明文 YAML / `registry.json`。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后 40，S3 + S5 合并后 canonical 总数 **47**。
+
+### 42.4 team-scoped token 收窄
+
+- `control` token 的 `team_id` 由 principal 携带；`teams.*` handler 在调用前比对，不匹配一律 `not_found`（不泄漏跨 team 存在性）。
+- `teams.list` 只返回 token 自己的 team；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`，只保留展示元数据。`teams.get` 的 `members` / `messages` 属 data plane，不脱敏。
+- 事件订阅按 session → team 映射过滤；无法判定归属的事件丢弃（fail closed）。
+
+## 43. 0.19.0 Web Team 群聊（S6，已实现）
+
+> 状态：分支 `0.19-s6-web-team`，未随版本发布。只改 `apps/web/**`，消费 S3 / S5 契约。
+
+- 路由：`#/team`（列表）、`#/team/<teamId>`（群聊 + 成员侧栏）、`#/team/<teamId>/members/<memberId>`（成员详情 / Body 历史）、`?body=<sessionId>`（旧 Body 只读 transcript）。
+- 数据源：`teams.list` / `teams.get` / `teams.post`（HTTP RPC）；`teams.get` 只有 `limit`（默认 100、最大 1000），没有游标；Web 通过增大 `limit` “加载更早”，并明确显示截断上限。
+- 群聊：`post` / `mention` / `system` / `reply` 四类；系统消息按 `system_event` 渲染灰条；`kind:'reply'` 与轮询结果按 `message_id` 去重，事件只做即时插入 / 刷新，轮询仍是权威源。
+- `@` 补全只从当前 Team `present` roster 取，提交结构化 `mentions: [agent_id]`；正文里的 `@` 不解析。private 成员不在 canonical roster 中，不可 `@`。
+- 成员侧栏 / 详情：`presence`（`live|gone`）、engine state（`waiting_permission` 映射为「等批准」）、epoch、当前 Body 与 `body_history`。Body 历史优先消费服务端 `body_history`；字段缺失才回退事件观察并标注“本次页面会话”。
+- `TeamSummary.online_count` 直接用服务端派生字段；缺失显示 `—`，不客户端反推。attention 只做权限 / ask 计数与跳转，权限卡片仍在所属 `RunCard`，不恢复全局遮罩。
+- Web 只暴露 `teams.list|get|post`；`teams.members` add / remove 仍走 CLI / owner 端点。Web 当前不消费 hub 目录 / data token，跨节点 Team 属 S7。

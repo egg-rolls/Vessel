@@ -178,8 +178,29 @@ vessel gateway install-service       # systemd user / LaunchAgent / Windows 登�
 
 - **权限等待默认不超时**：远程客户端不点击时权限请求会一直保留，直到应答、取消或 run abort；不要用固定超时清理 pending。`expired` 只在请求确已过期时返回，`run_ended` 表示 run 已结束或记录已 `orphaned`。
 - **持久化**：gateway 在 `<dataDir>/interactions-<tenant>.json` 记录 `pending` / `answered` / `orphaned`（`0600` 原子写）。重启后旧 `pending` 转 `orphaned`，迟到应答返回 `run_ended`；重复应答幂等，不同决定返回 `conflict`。多端连接同一 gateway 时共享这份状态。
-- **独立前端**：权限卡片内联在所属 run，跨 session 的待处理请求在顶部条提示；其他端应答 / 过期 / run 终态会自动收起卡片。`ask_user` 仍是全局弹窗。
+- **独立前端**：权限卡片内联在所属 run，跨 session 的待处理请求在顶部条提示；其他端应答 / 过期 / run 终态会自动收起卡片。`ask_user` 同样内联在所属 run，默认无限等待，由应答 / abort / run 终态收口。
 - **TUI 状态栏**：`Ctrl+T` / `Ctrl+G` 切换上 / 下栏，`Ctrl+R` 打开 `/resume`；显隐写回用户配置 `ui.statusBars`（YAML `status_bars`）。`VESSEL_STATUS_BARS` 只作启动初值，不随远程连接或手动切换改变。终端 `<40` 列不渲染下栏，`<18` 行默认隐藏。
+
+### 3.6 Hub 控制面（0.19 S5）
+
+hub 是**独立前台目录进程**，不是新的消息通道；节点执行与浏览器直连不受它影响。
+
+```bash
+# 节点侧（gateway 所在机器）：生成一次性配对码
+vessel hub pair --tenant default
+
+# hub 侧（独立 data_dir，必须与节点 data_dir 不同）
+vessel hub start --host 127.0.0.1 --port 8643
+vessel hub node add https://node-b.example.com:8642 --code <CODE>
+vessel hub directory --json
+vessel hub token exchange https://node-b.example.com:8642 --team <team_id> --json
+```
+
+- 节点必须能被 hub 访问：S5 只实现 **hub → node** 拨号（`WSS /v1/hub/control`，协议 `vessel.hub/1`）。NAT / 家庭网络需要 S5.1 的 node → hub 出站，**当前未实现**。
+- hub 只维护目录并推送 `{node_id, team_id, request_id?, reason, ts}` 指针；消息、事件、工具结果与权限正文**始终由浏览器直连节点**，hub 不代理、不落盘。
+- 一次性配对码只存 hash、默认 300 秒；配对换 `view` + `exchange` token，节点只存 `sha256`，可吊销并绑定 `hub_id`。hub 侧 token 走 SecretStore（DPAPI / Keychain / libsecret）。
+- scope：`view` 只读目录；`exchange` 只能换短期 `control`；`control` 受节点白名单与 team 收窄（只能访问自己的 team，不匹配 `not_found`）；`admin` 走既有 admin 面。
+- 完整配置见 [CONFIG.md](CONFIG.md) §2.13。
 
 ## 4. 独立前端部署
 
@@ -229,6 +250,7 @@ gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由 gateway 按
 - `request_id` 去重是进程内 Map，不跨重启；同 key 不同参数返回首次结果。
 - 保留的 team 传输（`/v1/team/*`）在 0.17 没有生产装配，也没有模型工具入口；原 spawn / status / inbox 语义与重试规则留待 Phase B。
 - `transport.nodes[]` 是静态表；0.6 不做自动发现。
+- Hub 只做目录与指针：S5 不支持 node → hub 出站（NAT，S5.1）、跨节点 A2A（S7）、多 hub 联邦、远程管理 hub、hub daemon / 系统服务注册。
 - 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
 - 监听 `0.0.0.0` 时 banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；实际访问需换成真实 IP / 域名（并匹配证书 SAN）。
 - `--connect-token` 会出现在进程参数列表中；生产优先用 env 或文件权限受控的 config。

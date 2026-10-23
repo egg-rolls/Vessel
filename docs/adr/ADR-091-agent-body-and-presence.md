@@ -85,3 +85,14 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   - `TeamLogEntry.kind` 增加 `'reply'`；成员一轮 `outcome === 'completed'`、有最终文本且 `team_id` 非空时，AgentService 只发 `agent.reply.posted {message_id, agent_id, session_id, team_id, content, ts}`（content ≤64 KiB，超限截断加标记），TeamService 是唯一日志写入点，追加 `kind:'reply'` 且**不 dispatch**；`message_id` 与事件一致，供 Web 合并。`agent.turn.completed` 仍不带正文。
 - **private 成员不写 Team 日志**：Team 日志对 team 可见。`onAgentEvent` fail closed，只接受 `visibility === 'team'` 或 `'tenant'`；`private` / `undefined` / 未知值一律不写。`visibility === 'private'` 且 `owner !== id` 的 roster 成员，其 `agent.spawned/rejoined/closed/rotated/retired` 系统消息与 `agent.reply.posted` 回复一律不写；id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`。private mention 在 owner 可见路径返回 `team_private_member`、canonical 不可见路径返回 `unknown_member`，两种都不入日志；private 成员作为 `send` 调用者时不写 mention 日志（消息仍可 dispatch）。根 owner（`owner === id`）例外。
 - **未实现**：fork、自动 archive、budget / `conversation_id`、hub、Web、跨节点、权限审批人、Team rename / delete / Agent 跨 Team 迁移；legacy `/v1/team/*` 保持无生产装配，且与 canonical `teams.*` 无关。
+
+## Addendum（0.19 S5 / S6 收口）
+
+> S5 Hub 与 S6 Web Team 已分别落地。本节只追加当前事实，不改写上面 S1 / S2 / S3 当时的结论。
+
+- **canonical 最终为 47**：0.18 移除 workflow 的 5 个方法（ADR-090）后基数为 40；S3 `teams.*`（+4）与 S5 `auth.exchange` / `auth.revoke` / `auth.tokens`（+3）合并后，canonical 方法总数 47（46 个 domain 方法 + `events.subscribe`）。上面 S3 Addendum 的“45 → 49”与 S5 Addendum 的“48”都是分支上的中间计数。
+- **`teams.*` 只注入 default tenant**：0.19 S3 只有 default tenant 的 AgentService / TeamService 注入 `TeamControlLike`；非 default tenant 调用返回 `not_found`。上面 S3 Addendum 的“tenant 作用域沿用 `resolveTenantScope`”不应被读成 per-tenant Team 已实现。
+- **hub 已实现**（S5）：app 层 `vessel hub start`、节点 `/v1/hub/pair` 与 `/v1/hub/control`、目录 / 指针 / 配对 / scoped token / SecretStore 均已落地；决策见 [ADR-093](ADR-093-hub-control-plane.md)。S5 只实现 hub → node 拨号；node → hub 出站（S5.1）与跨节点 A2A（S7）仍未实现。
+- **Web Team 已实现**（S6）：`apps/web` 的 `team` 域消费 `teams.list|get|post`、`agent.reply.posted`、`online_count` 与 `body_history`；`waiting_permission` 映射为「等批准」；Web 不消费 hub 目录 / data token。
+- **仍未实现**：fork、S4 权限 only-human / budget / `conversation_id`、S5.1、S7、Team rename / delete / 跨 Team 迁移、自动 archive。
+- **cross-ref**：hub 见 [ADR-093](ADR-093-hub-control-plane.md)，rotate / epoch fencing 见 [ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)。

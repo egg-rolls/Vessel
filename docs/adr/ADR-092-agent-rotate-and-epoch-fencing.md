@@ -61,4 +61,6 @@ tags: [agent, body, rotate, epoch, fencing, snapshot, session, permission, cli]
   - 重启后 `presence = gone`，`dispatch` 返回 `resumed` 且新 session 历史连续；`body_history` ≤ 20。
   - 事件顺序 `agent.rotating` → `agent.rotated` →（旧轮结束或立即）`agent.retired`。
 
-- **关联**：[ADR-088](ADR-088-agent-service-package.md)（AgentService 分层与唯一 schema）、[ADR-091](ADR-091-agent-body-and-presence.md)（Agent / Body 内核、快照 v2、dispatch）。方向裁决见个人侧 DECISION-035 §4.6 / §14.1。
+- **关联**：[ADR-088](ADR-088-agent-service-package.md)（AgentService 分层与唯一 schema）、[ADR-091](ADR-091-agent-body-and-presence.md)（Agent / Body 内核、快照 v2、dispatch）、[ADR-093](ADR-093-hub-control-plane.md)（S5 hub 控制面）。方向裁决见个人侧 DECISION-035 §4.6 / §14.1。
+
+- **后续切片**：S3 Team 在 [ADR-091](ADR-091-agent-body-and-presence.md) 追加 S3 Addendum；S5 Hub 见 [ADR-093](ADR-093-hub-control-plane.md)。rotate 的入口、epoch fencing 与快照契约不变。
