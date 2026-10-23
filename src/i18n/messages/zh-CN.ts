@@ -249,6 +249,21 @@ export const zhCN = {
   'hub.joinCode.code': '加入码：{code}',
   'hub.joinCode.expiresAt': '过期时间：{at}',
 
+  // ── federation（0.20 S7.1）──
+  'federation.error.invalidFromTeam': '无效的 --from-team：{id}',
+  'federation.error.teamNotFound': '本机 Team 不存在：{team}（{path}）',
+  'federation.post.delivered': '已投递 {messageId} 到 {peer}（hop {hop}）',
+  'federation.post.deduplicated': '对端已去重 {messageId} 到 {peer}（hop {hop}）',
+  'federation.post.rejected': '投递被拒绝：{code}: {reason}',
+  'federation.peers.title': 'Federation（{state}）',
+  'federation.peers.enabled': '已启用',
+  'federation.peers.disabled': '已关闭',
+  'federation.peers.empty': '没有配置 peer。',
+  'federation.peers.row':
+    '  {node}  {team}  direction={direction}  token_env={tokenEnv}  token={token}',
+  'federation.peers.tokenSet': '已设置',
+  'federation.peers.tokenUnset': '未设置',
+
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': '未知 shell "{shell}"。',
