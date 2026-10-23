@@ -90,11 +90,11 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 
 > S5 Hub 与 S6 Web Team 已分别落地。本节只追加当前事实，不改写上面 S1 / S2 / S3 当时的结论。
 
-- **canonical 最终为 47**：0.18 移除 workflow 的 5 个方法（ADR-090）后基数为 40；S3 `teams.*`（+4）与 S5 `auth.exchange` / `auth.revoke` / `auth.tokens`（+3）合并后，canonical 方法总数 47（46 个 domain 方法 + `events.subscribe`）。上面 S3 Addendum 的“45 → 49”与 S5 Addendum 的“48”都是分支上的中间计数。
+- **canonical 在 S4 之前为 47**：0.18 移除 workflow 的 5 个方法（ADR-090）后基数为 40；S3 `teams.*`（+4）与 S5 `auth.exchange` / `auth.revoke` / `auth.tokens`（+3）合并后，canonical 方法总数 47（46 个 domain 方法 + `events.subscribe`）。上面 S3 Addendum 的“45 → 49”与 S5 Addendum 的“48”都是分支上的中间计数；S4 的 `teams.budget` 加入后为 48（见下方 S4 Addendum）。
 - **`teams.*` 只注入 default tenant**：0.19 S3 只有 default tenant 的 AgentService / TeamService 注入 `TeamControlLike`；非 default tenant 调用返回 `not_found`。上面 S3 Addendum 的“tenant 作用域沿用 `resolveTenantScope`”不应被读成 per-tenant Team 已实现。
-- **hub 已实现**（S5）：app 层 `vessel hub start`、节点 `/v1/hub/pair` 与 `/v1/hub/control`、目录 / 指针 / 配对 / scoped token / SecretStore 均已落地；决策见 [ADR-093](ADR-093-hub-control-plane.md)。S5 只实现 hub → node 拨号；node → hub 出站（S5.1）与跨节点 A2A（S7）仍未实现。
+- **hub 已实现**（S5 / S5.1）：app 层 `vessel hub start`、节点 `/v1/hub/pair` 与 `/v1/hub/control`、目录 / 指针 / 配对 / scoped token / SecretStore 均已落地；S5.1 补齐 node → hub 出站（NAT）：hub 生成 join code、节点 `/v1/hub/node-control` 出站、hub 签发 hash-only node token；决策见 [ADR-093](ADR-093-hub-control-plane.md)。跨节点 A2A（S7）仍未实现。
 - **Web Team 已实现**（S6）：`apps/web` 的 `team` 域消费 `teams.list|get|post`、`agent.reply.posted`、`online_count` 与 `body_history`；`waiting_permission` 映射为「等批准」；Web 不消费 hub 目录 / data token。
-- **仍未实现**：fork、S5.1、S7、Team rename / delete / 跨 Team 迁移、自动 archive。
+- **仍未实现**：fork、S7、Team rename / delete / 跨 Team 迁移、自动 archive。
 - **cross-ref**：hub 见 [ADR-093](ADR-093-hub-control-plane.md)，rotate / epoch fencing 见 [ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)。
 
 ## Addendum（0.19 S4，权限 only-human 与 conversation 预算）

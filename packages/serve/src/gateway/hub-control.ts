@@ -14,22 +14,19 @@
  */
 
 import { ClientBackpressure } from '../backpressure.js';
-import type {
-  HubAgentMeta,
-  HubControlLike,
-  HubNodeSnapshotInput,
-  HubTeamMeta,
-} from '../hub-control.js';
+import type { HubControlLike, HubNodeSnapshotInput } from '../hub-control.js';
 import {
-  HUB_PROTOCOL,
+  buildHubHelloFrame,
+  buildHubPingFrame,
+  buildHubPointerFrame,
+  buildHubSnapshotFrame,
+} from '../hub-frames.js';
+import {
   type HubHelloFrame,
   type HubPointerFrame,
   type HubSnapshotFrame,
   isHubDialer,
   isHubProtocol,
-  parseHubAgentMeta,
-  parseHubPointerReason,
-  parseHubTeamMeta,
 } from '../hub-protocol.js';
 import { type GatewayAuthLike, resolvePrincipal } from '../tenant.js';
 
@@ -116,10 +113,6 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-function countOf(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function jsonResponse(status: number, body: unknown, extra: Record<string, string>): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -162,17 +155,14 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
   }
 
   function helloFrame(state: HubControlConnectionState): HubHelloFrame {
-    return {
-      v: 1,
-      kind: 'hello',
-      protocol: HUB_PROTOCOL,
+    return buildHubHelloFrame({
       dialer: 'hub',
-      node_id: deps.nodeId,
-      hub_id: state.hubId ?? '',
+      hubId: state.hubId ?? '',
+      nodeId: deps.nodeId,
       incarnation: deps.incarnation,
       revision: state.revision,
-      tenant_id: state.tenantId,
-    };
+      tenantId: state.tenantId,
+    });
   }
 
   /** 只白名单构造 snapshot；provider 附带的字段一律不透传。 */
@@ -180,57 +170,24 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
     input: HubNodeSnapshotInput,
     state: HubControlConnectionState,
   ): HubSnapshotFrame {
-    const teams: HubTeamMeta[] = [];
-    for (const item of Array.isArray(input.teams) ? input.teams : []) {
-      const team = parseHubTeamMeta(item);
-      if (team !== null) teams.push(team);
-    }
-    const agents: HubAgentMeta[] = [];
-    for (const item of Array.isArray(input.agents) ? input.agents : []) {
-      const agent = parseHubAgentMeta(item);
-      if (agent !== null) agents.push(agent);
-    }
-    return {
-      v: 1,
-      kind: 'snapshot',
-      protocol: HUB_PROTOCOL,
+    return buildHubSnapshotFrame(input, {
       dialer: 'hub',
-      node_id: deps.nodeId,
-      hub_id: state.hubId ?? '',
+      nodeId: deps.nodeId,
+      hubId: state.hubId ?? '',
       incarnation: deps.incarnation,
       revision: state.revision,
-      observed_at: Date.now(),
-      truncated: input.truncated === true,
-      counts: {
-        teams: countOf(input.counts?.teams),
-        agents: countOf(input.counts?.agents),
-        live_agents: countOf(input.counts?.live_agents),
-      },
-      teams,
-      agents,
-    };
+      observedAt: Date.now(),
+    });
   }
 
   /** 只白名单构造 pointer；未知 reason / 空 team_id 丢弃。 */
   function pointerFrame(pointer: unknown, hubId: string): HubPointerFrame | null {
-    if (!isRecord(pointer)) return null;
-    if (!nonEmptyString(pointer.team_id)) return null;
-    const reason = parseHubPointerReason(pointer.reason);
-    if (reason === null) return null;
-    const ts =
-      typeof pointer.ts === 'number' && Number.isFinite(pointer.ts) ? pointer.ts : Date.now();
-    return {
-      v: 1,
-      kind: 'pointer',
-      protocol: HUB_PROTOCOL,
+    return buildHubPointerFrame(pointer, {
       dialer: 'hub',
-      node_id: deps.nodeId,
-      hub_id: hubId,
-      team_id: pointer.team_id,
-      ...(nonEmptyString(pointer.request_id) ? { request_id: pointer.request_id } : {}),
-      reason,
-      ts,
-    };
+      nodeId: deps.nodeId,
+      hubId,
+      now: Date.now(),
+    });
   }
 
   function sendPointer(ws: HubControlWs, state: HubControlConnectionState, raw: unknown): void {
@@ -279,13 +236,7 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
         return;
       }
       state.alive = false;
-      sendFrame(ws, {
-        v: 1,
-        kind: 'ping',
-        protocol: HUB_PROTOCOL,
-        dialer: 'hub',
-        ts: Date.now(),
-      });
+      sendFrame(ws, buildHubPingFrame({ dialer: 'hub', ts: Date.now() }));
     }, pingIntervalMs);
     (state.heartbeat as { unref?: () => void }).unref?.();
   }

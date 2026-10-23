@@ -2367,7 +2367,7 @@ interface LimitBlock {
 
 ## 40. 0.19.0 Agent / Body 内核（S1+S2，已实现）
 
-> 状态：S1 分支 `0.19-s1-agent-body`、S2 分支 `0.19-s2-rotate`，均未随版本发布。S1 决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)，S2 见 [ADR-092](adr/ADR-092-agent-rotate-and-epoch-fencing.md)。rotate 已实现（§40.5）；Team / hub / Web Team / S4 权限与预算分别见 §41 / §42 / §43 / §44。**未实现**：fork、S5.1 node → hub 出站、S7 跨节点 A2A。
+> 状态：S1 分支 `0.19-s1-agent-body`、S2 分支 `0.19-s2-rotate`，均未随版本发布。S1 决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)，S2 见 [ADR-092](adr/ADR-092-agent-rotate-and-epoch-fencing.md)。rotate 已实现（§40.5）；Team / hub / Web Team / S4 权限与预算 / S5.1 出站分别见 §41 / §42 / §43 / §44 / §42.3。**未实现**：fork、S7 跨节点 A2A。
 
 ### 40.1 节点身份
 
@@ -2441,23 +2441,27 @@ interface LimitBlock {
 - canonical `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write）由 `TeamControlLike` 结构化注入；`packages/serve` 不依赖 `@vessel-agent/agent`。未注入 / tenant 不匹配返回 `not_found`；0.19 S3 只有 default tenant 的 AgentService 注入 `teams.*`，其他 tenant 返回 `not_found`。canonical 是复数 `teams.*`，与 legacy `/v1/team/*`（单数前缀）无关。
 - `vessel team list|get|post|members [--json]` 经 owner 端点；owner 端点是 `from = ownerId`、`viewer = ownerId`（private 可见），canonical 为 `from = 'human'`、无 viewer。
 
-## 42. 0.19.0 Hub 控制面（S5，已实现；S5.1 未实现）
+## 42. 0.19.0 Hub 控制面（S5 / S5.1，已实现）
 
-> 状态：分支 `0.19-s5-hub`，未随版本发布。决策见 [ADR-093](adr/ADR-093-hub-control-plane.md)。
+> 状态：S5 分支 `0.19-s5-hub`、S5.1 分支 `0.19-s5.1-node-outbound`，均未随版本发布。决策见 [ADR-093](adr/ADR-093-hub-control-plane.md)。
 
 ### 42.1 形态与协议
 
 - hub 是 app 层独立前台进程：`vessel hub start [--host] [--port] [--data-dir] [--allow-remote] [--tls-cert/--tls-key]`，实现位于 `src/hub/`，不新增 package、不启动 runtime / AgentService / TenantEventHub。
-- 节点侧：`POST /v1/hub/pair`（一次性配对码）与 WSS `/v1/hub/control`（协议 `vessel.hub/1`）。帧统一带 `dialer: 'hub' | 'node'`；**S5 只实现 hub → node 拨号**，节点收到 `dialer !== 'hub'` 以 4400 关闭。node → hub 出站 / NAT 是 S5.1，未实现。
-- hub 侧：`GET /health`、`GET /v1/hub/directory`、`GET|DELETE /v1/hub/nodes/:pairing_id`、`POST /v1/hub/nodes`（配对 / 移除节点只接受回环 peer）、`GET /v1/hub/events`（WS：`hello` / `snapshot` / `pointer` / `ping`）、`POST /v1/hub/data-token`。
-- hub 与节点必须使用不同 `data_dir`，相同则 `hub_data_dir_conflict`。
+- 两个方向共存，共用同一套 `vessel.hub/1` 帧；帧统一带 `dialer: 'hub' | 'node'`，表示**连接发起方**：
+  - **hub → node（S5）**：节点侧 `POST /v1/hub/pair`（一次性配对码）与 WSS `/v1/hub/control`；节点收到 `dialer !== 'hub'` 以 4400 关闭。
+  - **node → hub（S5.1）**：节点 gateway 配置 `hub.direction: node` 后主动拨号 `${hub.url}/v1/hub/node-control`；hub 作为 acceptor，只接受 `dialer: 'node'`（错配 4400）。节点无需开放入站端口，可只监听回环。
+- hub 侧：`GET /health`、`GET /v1/hub/directory`、`GET|DELETE /v1/hub/nodes/:pairing_id`、`POST /v1/hub/nodes`（配对 / 移除节点只接受回环 peer）、`POST /v1/hub/join`（node 用一次性 join code 换 `scope:'node'` token）、WSS `GET /v1/hub/node-control`、`GET /v1/hub/events`（WS：`hello` / `snapshot` / `pointer` / `ping`）、`POST /v1/hub/data-token`。
+- 节点侧状态：`<gatewayDataDir>/hub-node.json`（URL / `hub_id` / `node_id` / `tenant_id` / `pairing_id` / `token_id` 等非秘密状态）与 `<gatewayDataDir>/hub-node-status.json`（运行状态）。hub 侧 `<hubDataDir>/hub-join.json` 只存 join code 的 `sha256`，`<hubDataDir>/node-tokens.json` 只存 node token 的 `sha256` 与绑定元数据。
+- hub 与节点必须使用不同 `data_dir`，相同则 `hub_data_dir_conflict`；该检查只适用于 hub 进程，node 状态位于 gateway 的 data dir。
 
 ### 42.2 目录、指针与不代理正文
 
-- 目录持久化 `<hubDataDir>/registry.json`（0600 原子写、250ms debounce），主键 `pairing_id = node_id:tenant_id`；记录 `status`（`connecting|healthy|unreachable|incompatible|unauthorized`）、`last_seen`、`incarnation` / `revision`、计数与 Team / Agent 元数据。上限 500 teams / 2000 agents，超限置 `truncated: true`。
+- 目录持久化 `<hubDataDir>/registry.json`（0600 原子写、250ms debounce），主键 `pairing_id = node_id:tenant_id`；记录 `status`（`connecting|healthy|unreachable|incompatible|unauthorized`）、`last_seen`、`incarnation` / `revision`、计数与 Team / Agent 元数据。上限 500 teams / 2000 agents，超限置 `truncated: true`。记录另补 `direction`（旧文件缺省按 `hub` 读）、`public_url?` 与 `data_plane`。
+- `data_plane: 'direct' | 'unreachable'` 由 `public_url ?? url` 派生，只描述正文可达性，不影响控制面 `status`。NAT 节点没有浏览器可达地址时，聊天 / 事件 / 权限正文需要用户提供隧道或反向代理；hub 不做正文中继。
 - 指针固定 `{node_id, team_id, request_id?, reason, ts}`；只在线推送、不持久化、不排队，消费方按 `ts` 超过 60 秒丢弃。客户端收到指针后**直连节点**拉取正文。
 - hub **不代理、不落盘**消息正文 / transcript / system prompt / workspace / session 内容 / 事件 payload / tool 结果。`HubControlLike.snapshot` 只返回白名单投影；`TeamService.subscribe` 只带 id。
-- 快照按 `(incarnation, revision)` 比较：incarnation 变化无条件接受并重置 revision；同一 incarnation 下旧 revision 丢弃。
+- 快照按 `(incarnation, revision)` 比较：incarnation 变化无条件接受并重置 revision；同一 incarnation 下旧 revision 丢弃。node → hub 方向沿用同一判定；同一 pairing 只保留一条活动连接，新连接接管，旧连接的 close 不覆盖新状态。
 
 ### 42.3 配对、scope 与密钥
 
@@ -2465,7 +2469,8 @@ interface LimitBlock {
 - scope 为 `view | exchange | control | admin`，映射既有 `read / write / admin` rank，不新增 role。`view` 只读目录 / 健康；`exchange` 只能调用 `auth.exchange`；`control` 走节点控制面白名单（events / interactions / permission / ask / teams read + post）；`admin` 走既有 admin 面。
 - token 记录绑定 `hub_id`；`/v1/hub/control` 首帧 `hub_id` 必须与记录一致。吊销 `auth.revoke` 关闭匹配 `token_id` 的已建 WS，新 HTTP 请求重新鉴权。
 - hub 的 `view` / `exchange` token 走 `SecretStore`（Windows DPAPI / macOS Keychain / Linux libsecret）；仅当 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器，否则 fail-closed。不写明文 YAML / `registry.json`。
-- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后 40，S3 + S5 + S4（`teams.budget`）合并后 canonical 总数 **48**。
+- S5.1 join：hub 生成一次性 join code（`vessel hub join-code`，只存 `sha256`、默认 300 秒），node 用 `vessel hub join <hub-url> --code` 经 `POST /v1/hub/join` 换取 hub 签发的 `scope: 'node'` token（默认 30 天）。hub 只存 token 的 `sha256`，node 把明文存 SecretStore；token 绑定 `hub_id` / `node_id` / `tenant_id`，任一不匹配 4401，且只被 `/v1/hub/node-control` 接受（不进 `PrincipalScope` / canonical RPC）。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后 40，S3 + S5 + S4（`teams.budget`）合并后 canonical 总数 **48**；S5.1 不新增 canonical。
 
 ### 42.4 team-scoped token 收窄
 

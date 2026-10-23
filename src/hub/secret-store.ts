@@ -45,6 +45,11 @@ export interface CreateSecretStoreOptions {
   platform?: NodeJS.Platform | 'memory';
   dataDir: string;
   allowFileSecrets?: boolean;
+  /**
+   * darwin / linux 的平台密钥库 service 名；缺省 `vessel-hub`（S5 旧行为）。
+   * 节点出站凭据使用独立命名空间 `vessel-node`。
+   */
+  keychainService?: string;
   runCommand?: RunCommand;
   logger?: Logger;
 }
@@ -387,22 +392,15 @@ function createDpapiSecretStore(dataDir: string, run: RunCommand): SecretStore {
   };
 }
 
-const KEYCHAIN_SERVICE = 'vessel-hub';
+const DEFAULT_KEYCHAIN_SERVICE = 'vessel-hub';
 
 /** darwin：security generic-password。 */
-function createDarwinSecretStore(run: RunCommand): SecretStore {
+function createDarwinSecretStore(run: RunCommand, service = DEFAULT_KEYCHAIN_SERVICE): SecretStore {
   return {
     async get(key) {
       let result: RunCommandResult;
       try {
-        result = await run('security', [
-          'find-generic-password',
-          '-s',
-          KEYCHAIN_SERVICE,
-          '-a',
-          key,
-          '-w',
-        ]);
+        result = await run('security', ['find-generic-password', '-s', service, '-a', key, '-w']);
       } catch (error) {
         throw commandError('security', error);
       }
@@ -417,7 +415,7 @@ function createDarwinSecretStore(run: RunCommand): SecretStore {
           'add-generic-password',
           '-U',
           '-s',
-          KEYCHAIN_SERVICE,
+          service,
           '-a',
           key,
           '-w',
@@ -431,13 +429,7 @@ function createDarwinSecretStore(run: RunCommand): SecretStore {
     async delete(key) {
       let result: RunCommandResult;
       try {
-        result = await run('security', [
-          'delete-generic-password',
-          '-s',
-          KEYCHAIN_SERVICE,
-          '-a',
-          key,
-        ]);
+        result = await run('security', ['delete-generic-password', '-s', service, '-a', key]);
       } catch (error) {
         throw commandError('security', error);
       }
@@ -459,8 +451,8 @@ function secretToolUnavailable(stderr: string): boolean {
 }
 
 /** linux：secret-tool（libsecret）。 */
-function createSecretToolStore(run: RunCommand): SecretStore {
-  const attrs = ['service', KEYCHAIN_SERVICE];
+function createSecretToolStore(run: RunCommand, service = DEFAULT_KEYCHAIN_SERVICE): SecretStore {
+  const attrs = ['service', service];
   return {
     async get(key) {
       let result: RunCommandResult;
@@ -478,11 +470,9 @@ function createSecretToolStore(run: RunCommand): SecretStore {
     async set(key, value) {
       let result: RunCommandResult;
       try {
-        result = await run(
-          'secret-tool',
-          ['store', '--label', KEYCHAIN_SERVICE, ...attrs, 'key', key],
-          { input: value },
-        );
+        result = await run('secret-tool', ['store', '--label', service, ...attrs, 'key', key], {
+          input: value,
+        });
       } catch (error) {
         throw commandError('secret-tool', error);
       }
@@ -553,6 +543,7 @@ export function createSecretStore(options: CreateSecretStoreOptions): SecretStor
   if (platform === 'memory') return createMemorySecretStore();
 
   const run = options.runCommand ?? defaultRunCommand;
+  const keychainService = options.keychainService ?? DEFAULT_KEYCHAIN_SERVICE;
   const fallback =
     options.allowFileSecrets === true
       ? createFileSecretStore({ dataDir: options.dataDir })
@@ -564,10 +555,10 @@ export function createSecretStore(options: CreateSecretStoreOptions): SecretStor
       primary = createDpapiSecretStore(options.dataDir, run);
       break;
     case 'darwin':
-      primary = createDarwinSecretStore(run);
+      primary = createDarwinSecretStore(run, keychainService);
       break;
     case 'linux':
-      primary = createSecretToolStore(run);
+      primary = createSecretToolStore(run, keychainService);
       break;
     default:
       if (fallback) return fallback;

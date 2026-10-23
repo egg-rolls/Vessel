@@ -71,6 +71,7 @@ import { createGatewayConfigSet } from './gateway-config-control';
 import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
 import { buildGatewayControlPlane } from './gateway-wiring';
 import { runHeadless } from './headless-runner';
+import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
 import { createCliLogger } from './logging';
@@ -151,6 +152,11 @@ function printHelp(): void {
     ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
     ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
     ['vessel hub pair [--tenant ID] [--ttl N]', t('help.cmd.hubPair')],
+    [
+      'vessel hub join-code [--data-dir DIR] [--tenant ID] [--ttl N] [--json]',
+      t('help.cmd.hubJoinCode'),
+    ],
+    ['vessel hub join [<hub-url>] --code <CODE> [--data-dir DIR]', t('help.cmd.hubJoin')],
     ['vessel hub node add <url> --code <CODE>', t('help.cmd.hubNodeAdd')],
     ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
     ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
@@ -645,6 +651,8 @@ async function runWithConfig(result: BootstrapResult) {
 
   // HTTP/WS gateway（--serve）：Web 控制台后端。SSE/WS 广播事件流，/sessions /run 提供控制。
   let gateway: Gateway | null = null;
+  /** S5.1：node → hub 出站；仅在 `hub.direction: node` 时启动。 */
+  let hubNodeOutbound: StartedHubNodeOutbound | undefined;
   /** A-6：--serve 时除 bootstrap 默认 tenant 外的执行面 */
   let tenantFactory: TenantRuntimeFactory | undefined;
   /** 0.18：tenant 事件流的唯一扇入面（shared 流已删除）。 */
@@ -991,6 +999,35 @@ async function runWithConfig(result: BootstrapResult) {
       }
       console.warn(`⚠ ${message}`);
     }
+
+    // S5.1：node → hub 出站。gateway 已在监听；出站只拨号，不新开入站端口。
+    if (config.hub?.direction === 'node') {
+      if (result.agent?.hubControl === undefined) {
+        logger.warn('hub.node.no_agent_projection', { node_id: result.nodeId });
+      } else {
+        try {
+          hubNodeOutbound = await startHubNodeOutbound({
+            config,
+            dataDir,
+            nodeId: result.nodeId,
+            tenantId: result.tenantId,
+            hubControl: result.agent.hubControl,
+            logger,
+          });
+          if (hubNodeOutbound.status === 'skipped') {
+            logger.warn('hub.node.outbound_skipped', {
+              node_id: result.nodeId,
+              reason: hubNodeOutbound.reason ?? 'unknown',
+            });
+          }
+        } catch (error) {
+          logger.warn('hub.node.outbound_start_failed', {
+            node_id: result.nodeId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
   }
 
   if (gateway) {
@@ -1000,6 +1037,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 未捕获异常时的清理入口：停 gateway / 关闭额外 tenant / 释放默认 tenant。
   // gateway.stop() 自带 interrupt('shutdown') + 5s drain，后续关闭传 drain:false。
   activeCleanup = async () => {
+    // 先停出站，避免 gateway drain 期间继续重连。
+    await hubNodeOutbound?.close();
+    hubNodeOutbound = undefined;
     await shutdownServeStack({
       gateway,
       closeTenants: async (options) => {
@@ -1061,6 +1101,9 @@ async function runWithConfig(result: BootstrapResult) {
   // 固定顺序：await gateway.stop()（自带 interrupt + 5s drain）
   // → closeAll → shutdown；后两步 drain:false，避免重复限时等待。
   const finish = async (beforeClose?: () => Promise<void>): Promise<void> => {
+    // 先停出站，避免 gateway drain 期间继续重连。
+    await hubNodeOutbound?.close();
+    hubNodeOutbound = undefined;
     await shutdownServeStack({
       gateway,
       closeTransport: async () => {},

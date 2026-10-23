@@ -425,15 +425,22 @@ export interface HubListenConfig {
 }
 
 /**
- * S5：hub 控制面配置。
+ * S5 / S5.1：hub 控制面配置。
  *
  * - `dataDir` 必须与 gateway 的 `dataDir` 不同；
- * - `direction` 当前只支持 `'hub'`（node → hub 是 S5.1）；
+ * - `direction: 'hub'` = hub 进程（拨号 node）；`'node'` = gateway 出站加入 hub；
+ * - `url` / `caFile` / `joinCodeEnv` 只在 node 角色使用；
  * - `token` 明文不接受，只允许 `tokenEnv` / SecretStore。
  */
 export interface HubConfig {
   dataDir?: string;
   direction?: 'hub' | 'node';
+  /** node → hub 出站：hub 基址（join 的缺省 URL）。 */
+  url?: string;
+  /** node → hub 出站：hub TLS CA 路径。 */
+  caFile?: string;
+  /** `vessel hub join` 缺 `--code` 时读取的 env 名。 */
+  joinCodeEnv?: string;
   listen?: HubListenConfig;
   allowRemote?: boolean;
   tls?: HubTlsConfig;

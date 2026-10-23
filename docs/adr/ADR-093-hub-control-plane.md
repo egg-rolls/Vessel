@@ -48,4 +48,18 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 - **`SecretStore` 文件回退不自动启用**：Windows DPAPI / macOS Keychain / Linux libsecret 不可用时，只有 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器；否则 fail-closed（`secret_store_unavailable`）。上文第 5 条“不可用时才退到文件适配器”需以该显式开关为准。
 - **`POST /v1/hub/data-token` 与 `vessel hub data-token` 已实现**：hub 用该 pairing 的 `exchange` token 向节点换短期 `control` token 并只返回给调用方；hub 不持久化短期 token。浏览器端（sessionStorage / Web 消费）仍未实现；Web 当前直连节点，不消费 hub 目录或 data token。
 - **实现文件位置**：hub 进程与目录实现在 `src/hub/`；app 层装配（`HubControlLike` / `TeamScopeLike` / `NodeTokenControlLike` 投影）在 `src/hub-wiring.ts`，节点 token 表 / 配对在 `src/node-token-store.ts` / `src/node-token-control.ts` / `src/hub-pairing.ts`，均不在 `src/hub/` 内。上文第 1 条的文件清单应包含这些 app 层文件。
-- **node → hub 出站仍为 S5.1**：节点收到 `dialer !== 'hub'` 的帧以 4400 关闭；配置虽接受 `direction: node`，运行时拒绝。跨节点 A2A（S7）仍未实现。
+- **node → hub 出站仍为 S5.1**（**已被下方 S5.1 Addendum 取代**）：节点收到 `dialer !== 'hub'` 的帧以 4400 关闭；配置虽接受 `direction: node`，运行时拒绝。跨节点 A2A（S7）仍未实现。
+
+## Addendum（S5.1）
+
+> node → hub 出站（NAT）已在 `0.19-s5.1-node-outbound` 分支实现；只追加，不改写上文 S5 结论与 S5 的 hub → node 行为。
+
+- **方向翻转，协议不变**：仍使用同一套 `vessel.hub/1` 帧，帧内 `dialer: 'node'` 表示连接发起方是节点；hub 作为 WS acceptor，只接受 `dialer === 'node'`（错配 4400）。节点 gateway 主动拨号 `${hub.url}/v1/hub/node-control`，因此节点可以只监听回环，无需开放入站端口。`auth` + `pong` 由 dialer（节点）发，`hello` + `ping` 由 acceptor（hub）发，`snapshot` + `pointer` 仍只由元数据生产者节点发。
+- **join code 方向为 hub 生成、node 消费**：`vessel hub join-code` 在 hub 侧生成一次性码（默认 300 秒、只存 `sha256`）；`vessel hub join <hub-url> --code` 在节点侧换取凭据。这与 S5 的“节点生成、hub 消费”互为镜像，两条流程并存。
+- **node token 由 hub 签发**：join 成功后 hub 签发 `scope: 'node'` token（默认 30 天），只持久化 `sha256` 到 `<hubDataDir>/node-tokens.json`；节点把明文 token 存 SecretStore，非秘密状态（URL / `hub_id` / `node_id` / `tenant_id` / `pairing_id` / `token_id`）写 gateway data dir 的 `hub-node.json`。node token 绑定 `hub_id` / `node_id` / `tenant_id`，任一不匹配返回 4401；它不是 `PrincipalScope`，不进入 canonical RPC。
+- **端点与可见性**：hub 新增 `POST /v1/hub/join`（code 换 token）与 WSS `GET /v1/hub/node-control`（节点出站连接的 acceptor）。node-dial 记录不进入 hub 的 `token-broker` / `control-client` 拨号路径；目录响应补 `direction` / `public_url?` / `data_plane`。
+- **陈旧快照仍按 `(incarnation, revision)`**：重连后节点以新 `incarnation` 或更高 `revision` 对齐；同一 pairing 只保留一条活动连接，新连接接管，旧连接的 close 不得覆盖新状态。hub 重启时 node-dial 记录不拨号，等待节点重连。
+- **数据面归属**：`data_plane: 'direct' | 'unreachable'` 由 `public_url ?? url` 派生，客户端据此区分“控制面健康”与“正文可达”。NAT 节点若没有 `public_url`（隧道 / 反向代理），浏览器无法直连拉取正文；hub 仍不代理、不落盘任何正文。
+- **单 hub 限制**：一个 node 进程 / data dir 只加入一个 hub（单份 `hub-node.json`）；多 hub 需要多个 data dir / 进程。S5.1 不做自动发现、多 hub 联邦、token 自动刷新或 mTLS。
+- **收口**：canonical 仍为 **47**，不新增 RPC 方法、不改任何 manifest、版本线仍 0.19；既有 hub → node（`vessel hub pair` / `vessel hub node add` / `/v1/hub/control`）行为不变。
+- **上文 S5 Addendum 的“node → hub 出站仍为 S5.1、运行时拒绝 `direction: node`”已被本节取代**：`vessel hub start` 仍只接受 `direction: hub`（hub 进程不扮演 node），而 gateway 的 `hub.direction: node` 现在启动节点出站。该历史句子只描述 S5 当时的状态。

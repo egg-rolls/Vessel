@@ -320,8 +320,11 @@ teams:
 
 ```yaml
 hub:
-  data_dir: ~/.vessel/hub        # 必须与全局 data_dir 不同
-  direction: hub                 # 当前只支持 hub；node 是 S5.1（未实现）
+  data_dir: ~/.vessel/hub        # hub 进程使用；必须与全局 data_dir 不同
+  direction: hub                 # hub | node；node 为 gateway 主动出站加入远端 hub（S5.1）
+  url: https://hub.example:8643  # node 角色：hub 基址（join 缺省 URL；运行时 state 优先）
+  ca_file: /etc/vessel/hub-ca.pem      # node 角色：hub TLS CA（可选）
+  join_code_env: VESSEL_HUB_JOIN_CODE  # node 角色：join 缺 --code 时读取（可选）
   listen: { hostname: 127.0.0.1, port: 8643 }
   allow_remote: false
   tls: { cert_file: ..., key_file: ... }   # 非回环必填，且 cert/key 成对
@@ -332,14 +335,17 @@ hub:
 ```
 
 - `hub` 是 **全局块**；tenant overlay 不允许。`hub.data_dir` 与全局 `data_dir` 相同 → validation error `hub_data_dir_conflict`。
-- `direction` 只支持 `hub`（hub 主动拨号节点）；`node`（node → hub 出站 / NAT）是 **S5.1，未实现**，运行时会拒绝。
+- `direction: hub`（默认）= hub 进程主动拨号节点；`direction: node` = gateway 出站加入远端 hub（S5.1），节点无需开放入站端口。hub 进程本身仍拒绝 `direction: node`。
+- `url` / `ca_file` / `join_code_env` 只在 node 角色使用：`url` 必须是绝对 `http(s)`、无 userinfo / path / query / hash，非回环必须 `https`；`join_code_env` 只在 `vessel hub join` 缺 `--code` 时读取。node token 明文**只走 SecretStore**。
+- `hub.data_dir` 冲突检查只适用于 **hub 进程**；node 侧状态在 gateway 的 `data_dir`（`hub-node.json` / `hub-node-status.json`），不写 `hub.data_dir`。
 - 非回环 `hub.listen.hostname` 必须 `allow_remote: true` + TLS cert/key + 非空 `token_env`；不提供 `--insecure`。
 - `hub` 不接受明文 `token`，只允许 `token_env`（hub 自己的读 token）。节点 control token **只走 SecretStore**，不写 YAML / `registry.json`。
 - `allow_file_secrets`（默认 `false`）：平台 SecretStore（DPAPI / Keychain / libsecret）不可用时，只有显式 `true` 才退到 AES-256-GCM 文件；否则 fail-closed。
 - `pairing_ttl_seconds`（默认 300，范围 60–3600）：一次性配对码有效期；码只存 hash、先烧后用。
-- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后总数为 **48**（47 个 domain 方法 + `events.subscribe`）。
+- canonical 新增 `auth.exchange`（write）/ `auth.revoke` / `auth.tokens`（admin）；workflow 移除后为 40，S3 + S5 + S4 合并后总数为 **48**（47 个 domain 方法 + `events.subscribe`）；S5.1 不新增 canonical。
 - **team-scoped control token**：只能访问自己的 `team_id`，不匹配返回 `not_found`；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**。
-- **已知限制**：S5 只做 hub → node 拨号；node → hub 出站（NAT）为 S5.1，跨节点 A2A 为 S7，均未实现。hub 只前台运行，不做 daemon / 系统服务注册；Web 当前不消费 hub 目录 / data token。
+- **NAT 数据面**：`direction: node` 只保证元数据 / 指针可达；没有浏览器可达地址的节点（NAT / 家庭网络）需要用户提供隧道 / 反向代理，并可用可选 `public_url` 声明节点 origin。目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生，只表示正文可达性；hub 不做正文中继。
+- **已知限制**：S5.1 已实现 node → hub 出站；跨节点 A2A（S7）、多 hub 联邦、hub daemon / 系统服务注册仍未实现。一个 node 进程 / data dir 只加入一个 hub。Web 当前不消费 hub 目录 / data token。
 
 ## 3. 密钥与 `_env`
 
@@ -394,6 +400,8 @@ vessel hub start [--host <h>] [--port <p>] [--data-dir <hubDir>] [--allow-remote
 vessel hub directory [--hub-url <url>] [--json]
 vessel hub watch [--hub-url <url>]
 vessel hub pair [--tenant <id>] [--ttl <s>]
+vessel hub join-code [--tenant <id>] [--ttl <s>] [--json]
+vessel hub join <hub-url> --code <CODE> [--tenant <id>] [--public-url <url>] [--ca <file>] [--json]
 vessel hub node add <url> --code <CODE> [--alias <name>]
 vessel hub node list [--json]
 vessel hub node remove <pairing_id>
@@ -404,7 +412,7 @@ vessel hub data-token <pairing_id> --team <team_id> [--json]
 ```
 
 - `vessel team ...` 经 owner 端点（`from = ownerId`、viewer 可见 private）；`team post` 的 `--mention` 先在同 Team roster 内解析为 agent id，日志写成功但任一投递失败时退出 1。
-- `vessel hub ...` 管理与探针命令直连 hub / 节点；`hub pair` 在节点侧生成一次性码，`hub node add` 在 hub 侧纳入节点；token 明文只在 `token exchange` 的响中出现一次，不写日志。
+- `vessel hub ...` 管理与探针命令直连 hub / 节点；`hub pair` 在节点侧生成一次性码、`hub node add` 在 hub 侧纳入节点（hub → node）；S5.1 的 `hub join-code` 在 hub 侧生成一次性码、`hub join` 在节点侧消费（node → hub）。token 明文只在 `token exchange` / `hub join` 的响中出现一次，不写日志。
 
 - `vessel agent ...` 经 `<dataDir>/agent-owner.json` attach 到交互 REPL 的 owner；没有 owner 时 `agent_owner_unavailable`，`--tenant` 与 owner 不一致时 `agent_owner_tenant_mismatch`。命令只做参数映射，生命周期全在 owner。
 
