@@ -37,9 +37,13 @@ import {
   type AttachOwnerInput,
   type BatchItemResult,
   type BatchResult,
+  type BudgetOverrideInput,
+  type BudgetOverview,
+  type BudgetStatusInput,
   type CloseBatchInput,
   type CloseInput,
   type CloseResult,
+  type ConversationBudgetPort,
   DEFAULT_OWNER,
   type DispatchInput,
   type DispatchResult,
@@ -53,8 +57,6 @@ import {
   type MemberVisibility,
   type NewBatchInput,
   type NewMemberInput,
-  type PermissionDecision,
-  type PermissionRequestInput,
   type PersistedAgentRecord,
   type ReinstateInput,
   type ReplyResult,
@@ -74,6 +76,8 @@ interface MemberQueue {
   turnActive: boolean;
   /** 本轮实际运行的 Body（pump 时捕获） */
   activeBodySession?: string;
+  /** 本轮 conversation（0.19 S4；系统消息也继承） */
+  activeConversationId?: string;
   repliedThisTurn: boolean;
   closing: boolean;
   /** `${session_id}|${key}`；rotate 成功 / close 时清空 */
@@ -163,7 +167,6 @@ export class AgentServiceImpl implements AgentService {
   private readonly now: () => number;
   private readonly newId: () => string;
   private readonly logger: Logger;
-  private readonly permissionBridge: AgentServiceOptions['permissionBridge'];
   private readonly snapshot: AgentSnapshotStore | undefined;
   private readonly queues = new Map<string, MemberQueue>();
   /** gone 成员的 single-flight resume；同一 id 并发 dispatch 只 spawn 一次 */
@@ -179,6 +182,7 @@ export class AgentServiceImpl implements AgentService {
   /** `new` 未显式传 workspace 时的默认 workspace；无配置声明时为 undefined */
   private readonly defaultWorkspace: string | undefined;
   private readonly teamBinder: TeamBinder | undefined;
+  private readonly budgetPort: ConversationBudgetPort | undefined;
   private readonly ready: Promise<void>;
 
   constructor(options: AgentServiceOptions) {
@@ -195,7 +199,6 @@ export class AgentServiceImpl implements AgentService {
     this.now = options.now ?? Date.now;
     this.newId = options.newId ?? randomUUID;
     this.logger = options.logger ?? noopLogger;
-    this.permissionBridge = options.permissionBridge;
     this.tenantId = options.tenantId;
     this.eventStream = options.events;
     this.defaultModel = options.defaultModel;
@@ -203,6 +206,7 @@ export class AgentServiceImpl implements AgentService {
       ? options.defaultWorkspace
       : undefined;
     this.teamBinder = options.teamBinder;
+    this.budgetPort = options.budget;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -1172,54 +1176,24 @@ export class AgentServiceImpl implements AgentService {
     return false;
   }
 
-  async requestPermission(
-    memberId: string,
-    sessionId: string,
-    request: PermissionRequestInput,
-  ): Promise<PermissionDecision> {
+  currentConversation(agentId: string): string | undefined {
+    return this.queues.get(agentId)?.activeConversationId;
+  }
+
+  async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
     await this.ready;
-    const member = this.requireMember(memberId);
-    const queue = this.queueFor(memberId);
-    if (!queue.turnActive || queue.activeBodySession !== sessionId) {
-      return { decision: 'deny', reason: `body_not_active: ${sessionId}` };
+    if (!this.budgetPort) {
+      throw new AgentError('budget_unavailable', 'budget_unavailable');
     }
-    if (member.state !== 'running' && member.state !== 'waiting_permission') {
-      return { decision: 'deny', reason: `member_not_running: ${member.state}` };
+    if ('dimension' in input) {
+      const result = this.budgetPort.override(input);
+      return { action: 'override', team_id: input.team_id, ...result };
     }
-
-    this.registry.setState(member.id, 'waiting_permission', request.tool);
-    this.emitForSession('agent.permission.requested', member, sessionId, {
-      state: 'waiting_permission',
-      tool: request.tool,
-      ...(request.requestId !== undefined ? { request_id: request.requestId } : {}),
-    });
-    this.scheduleSnapshot();
-
-    let decision: PermissionDecision;
-    try {
-      decision = this.permissionBridge
-        ? await this.permissionBridge.request(toRuntimeMember(member), request)
-        : { decision: 'deny', reason: 'no_permission_bridge' };
-    } catch (error) {
-      decision = { decision: 'deny', reason: errorText(error) };
-    }
-
-    // close / stale 优先于应答：不得把已关闭成员拉回 running
-    const current = this.registry.get(member.id);
-    if (current && current.state === 'waiting_permission') {
-      this.registry.setState(member.id, 'running');
-      this.scheduleSnapshot();
-    }
-    if (current) {
-      this.emitForSession('agent.permission.responded', current, sessionId, {
-        state: current.state,
-        tool: request.tool,
-        decision: decision.decision,
-        ...(decision.reason !== undefined ? { reason: decision.reason } : {}),
-        ...(request.requestId !== undefined ? { request_id: request.requestId } : {}),
-      });
-    }
-    return decision;
+    return {
+      action: 'status',
+      team_id: input.team_id,
+      conversations: this.budgetPort.status(input),
+    };
   }
 
   async flushSnapshot(): Promise<boolean> {
@@ -1366,6 +1340,7 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(memberId, 'running');
     queue.turnActive = true;
     queue.repliedThisTurn = false;
+    queue.activeConversationId = message.conversation_id;
     // 起轮时捕获 Body 身份：轮末指针可能已被 rotate 切走。
     const runtimeMember = toRuntimeMember(member);
     const capturedEpoch = member.currentBody?.epoch ?? 0;
@@ -1404,6 +1379,7 @@ export class AgentServiceImpl implements AgentService {
       }
     }
     queue.turnActive = false;
+    queue.activeConversationId = undefined;
 
     const current = this.registry.get(member.id);
     // 旧 Body：指针已切走。成对发终态（stale），但不写 registry / usage，也不投递父队列。

@@ -58,6 +58,8 @@ export interface TeamMessageLike {
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
   system_event?: 'join' | 'leave' | 'rotate' | 'archive';
+  /** 0.19 S4 会话分组；旧日志缺省 */
+  conversation_id?: string;
 }
 
 /** teams.get 的完整视图。 */
@@ -85,6 +87,42 @@ export interface TeamPostResultLike {
   mentions: string[];
   delivered: TeamDeliveryLike[];
   ts: number;
+  /** 0.19 S4 会话分组 */
+  conversation_id?: string;
+}
+
+/** 预算维度（0.19 S4）。 */
+export type BudgetDimensionLike = 'hops' | 'turns' | 'tokens' | 'wall_clock' | 'cycle';
+
+/** conversation 预算视图；不含正文。 */
+export interface ConversationBudgetStatusLike {
+  conversation_id: string;
+  team_id?: string;
+  created_at: number;
+  last_activity: number;
+  hops: number;
+  turns: number;
+  total_tokens: number;
+  wall_clock_ms: number;
+  edges: Array<{
+    from: string;
+    to: string;
+    count: number;
+    last_ts: number;
+    blocked_until?: number;
+  }>;
+  overrides: Record<string, { max: number; by: 'human'; via: 'cli' | 'api'; at: number }>;
+  blocked?: { dimension: BudgetDimensionLike; reason: string; at: number };
+}
+
+/** teams.budget 结果（status / override）。 */
+export interface TeamBudgetResultLike {
+  team_id: string;
+  action: 'status' | 'override';
+  conversation_id?: string;
+  conversations?: ConversationBudgetStatusLike[];
+  previous_max?: number | null;
+  max?: number | null;
 }
 
 /** teams.members 结果。 */
@@ -111,6 +149,7 @@ export interface TeamControlLike {
     content: string;
     mentions?: string[];
     from?: string;
+    conversation_id?: string;
   }): Promise<TeamPostResultLike>;
   members(input: {
     team_id: string;
@@ -118,4 +157,12 @@ export interface TeamControlLike {
     member: string;
     from?: string;
   }): Promise<TeamMembersResultLike | undefined>;
+  /** 0.19 S4：预算状态 / 人工 override；可选，未注入时 teams.budget 返回 not_found。 */
+  budget?(input: {
+    team_id: string;
+    action: 'status' | 'override';
+    conversation_id?: string;
+    dimension?: BudgetDimensionLike;
+    max?: number | null;
+  }): Promise<TeamBudgetResultLike | undefined>;
 }

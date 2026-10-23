@@ -18,6 +18,9 @@ import {
   type AgentEvent,
   type AgentService,
   type AgentTeamService,
+  type BudgetOverrideInput,
+  type BudgetOverview,
+  type BudgetStatusInput,
   DEFAULT_OWNER,
   MAX_MESSAGE_BYTES,
   type MemberStatus,
@@ -154,6 +157,16 @@ export class DefaultTeamService implements AgentTeamService {
   async identify(sessionId: string): Promise<TeamMemberSummary | undefined> {
     const status = await this.agent.identify(sessionId);
     return status === undefined ? undefined : toMemberSummary(status);
+  }
+
+  async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
+    if (this.store.get(input.team_id) === undefined) {
+      throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
+    }
+    if (!this.agent.budget) {
+      throw new TeamError('team_not_found', 'budget unavailable');
+    }
+    return this.agent.budget(input);
   }
 
   async post(input: TeamPostInput): Promise<TeamPostResult> {

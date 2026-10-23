@@ -7,6 +7,7 @@
  * @module @vessel-agent/agent
  */
 
+import type { TeamPolicy } from '@vessel-agent/config';
 import type { EventStream, Logger, RunEvent, Usage } from '@vessel-agent/core';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
@@ -109,6 +110,8 @@ export interface AgentMessage {
   to: string;
   content: string;
   ts: number;
+  /** 会话分组（0.19 S4）；系统提示也继承当前会话 */
+  conversation_id?: string;
   /** 系统提示类别；rotate 成功时移除 limit_warning，避免旧 Body 的预警发给新 Body */
   kind?: 'limit_warning';
 }
@@ -121,6 +124,8 @@ export interface MemberRuntimeMember {
   parent_id?: string;
   owner: string;
   visibility: MemberVisibility;
+  /** 所属 Team（0.19 S4：权限策略 / bridge 归属） */
+  team_id?: string;
   model?: string;
   system_prompt?: string;
 }
@@ -162,12 +167,120 @@ export interface PermissionDecision {
 /** bridge 模式下成员处于/离开权限等待的阶段（执行内核回调 AgentService 用） */
 export type MemberPermissionState = 'waiting' | 'running';
 
-/** 权限 bridge 端口；由 owner 入口实现（UI / 端点），A1 不实现传输 */
-export interface PermissionBridge {
-  request(
-    member: MemberRuntimeMember,
-    request: PermissionRequestInput,
-  ): Promise<PermissionDecision>;
+// ─── Conversation budget（0.19 S4）──────────────────────────────
+
+export type BudgetDimension = 'hops' | 'turns' | 'tokens' | 'wall_clock' | 'cycle';
+
+export type BudgetBlockReason = 'budget_exceeded' | 'cycle_detected' | 'budget_unavailable';
+
+/** 有向边计数（环检测用；最多 32 条，按 last_ts 淘汰） */
+export interface ConversationBudgetEdge {
+  from: string;
+  to: string;
+  count: number;
+  last_ts: number;
+  /** 冷却截止时间；未触发时缺省 */
+  blocked_until?: number;
+}
+
+/** 一条 conversation 的预算视图；不含正文 */
+export interface ConversationBudgetStatus {
+  conversation_id: string;
+  team_id?: string;
+  created_at: number;
+  last_activity: number;
+  hops: number;
+  turns: number;
+  total_tokens: number;
+  wall_clock_ms: number;
+  edges: ConversationBudgetEdge[];
+  overrides: Partial<
+    Record<BudgetDimension, { max: number; by: 'human'; via: 'cli' | 'api'; at: number }>
+  >;
+  blocked?: { dimension: BudgetDimension; reason: BudgetBlockReason; at: number };
+}
+
+/** 投递 / turn 的预算判定结果 */
+export type BudgetCheckResult =
+  | { ok: true }
+  | {
+      ok: false;
+      dimension: BudgetDimension;
+      reason: BudgetBlockReason;
+      current: number;
+      max: number | null;
+      retry_after_ts?: number;
+    };
+
+export interface BudgetDeliveryInput {
+  conversation_id: string;
+  team_id?: string;
+  from: string;
+  to: string;
+  message_id?: string;
+}
+
+export interface BudgetTurnInput {
+  conversation_id: string;
+  team_id?: string;
+  agent_id: string;
+  session_id: string;
+  message_id: string;
+}
+
+export interface BudgetTurnStartedInput {
+  conversation_id: string;
+  team_id?: string;
+  agent_id: string;
+  message_id: string;
+}
+
+export interface BudgetTurnFinishedInput {
+  conversation_id: string;
+  team_id?: string;
+  agent_id: string;
+  message_id: string;
+  usage?: Usage;
+}
+
+export interface BudgetStatusInput {
+  team_id: string;
+  conversation_id?: string;
+}
+
+export interface BudgetOverrideInput {
+  team_id: string;
+  conversation_id: string;
+  dimension: BudgetDimension;
+  /** null = 清除人工 override，回到 team policy */
+  max: number | null;
+  via: 'cli' | 'api';
+}
+
+export interface BudgetOverrideResult {
+  conversation_id: string;
+  dimension: BudgetDimension;
+  previous_max: number | null;
+  max: number | null;
+  status: ConversationBudgetStatus;
+}
+
+/** AgentService.budget 的统一返回；按 action 区分 */
+export type BudgetOverview =
+  | { action: 'status'; team_id: string; conversations: ConversationBudgetStatus[] }
+  | ({ action: 'override'; team_id: string } & BudgetOverrideResult);
+
+/** 预算状态存储 / 判定端口；文件实现由 wiring 构造 */
+export interface ConversationBudgetPort {
+  checkDelivery(input: BudgetDeliveryInput): BudgetCheckResult;
+  canStartTurn(input: BudgetTurnInput): BudgetCheckResult;
+  noteTurnStarted(input: BudgetTurnStartedInput): void;
+  noteTurnFinished(input: BudgetTurnFinishedInput): void;
+  status(input: BudgetStatusInput): ConversationBudgetStatus[];
+  override(input: BudgetOverrideInput): BudgetOverrideResult;
+  /** 清除该会话的接收侧 hold；返回需要重新 pump 的 agent id */
+  release(conversationId: string): string[];
+  flush(): Promise<void>;
 }
 
 /** 成员创建参数 */
@@ -207,6 +320,8 @@ export interface SendInput {
   content: string;
   /** 发送者；缺省 DEFAULT_OWNER，private 成员只有 owner 能寻址 */
   from?: string;
+  /** 会话分组；缺省由入口生成（0.19 S4） */
+  conversation_id?: string;
 }
 
 /** 批量发送 */
@@ -222,6 +337,8 @@ export interface DispatchInput {
   to: string;
   content: string;
   from?: string;
+  /** 会话分组；缺省生成（0.19 S4） */
+  conversation_id?: string;
 }
 
 /** dispatch 结果：queued 表示已入队；rejected 是明确的业务拒绝 */
@@ -231,10 +348,17 @@ export type DispatchResult =
       message_id: string;
       resolved_to: string;
       resolution: 'live' | 'resumed' | 'rotating';
+      /** 0.19 S4；实现始终返回，类型保持 additive */
+      conversation_id?: string;
     }
   | {
       status: 'rejected';
-      code: 'agent_left' | 'resume_failed' | 'not_visible';
+      code:
+        | 'agent_left'
+        | 'resume_failed'
+        | 'not_visible'
+        | 'budget_exceeded'
+        | 'budget_unavailable';
       reason: string;
     };
 
@@ -359,6 +483,8 @@ export interface AgentEvent {
   name?: string;
   /** 所属 Team（0.19 S3；unbound / system 事件可能缺省） */
   team_id?: string;
+  /** 会话分组（0.19 S4；system 事件可能缺省） */
+  conversation_id?: string;
   /** 本轮 usage（turn.completed 有则带） */
   usage?: Usage;
   /** 仅在 `agent.reply.posted` 携带本轮最终文本（≤64 KiB，超限截断） */
@@ -403,7 +529,6 @@ export interface AgentServiceOptions {
   newId?: () => string;
   logger?: Logger;
   snapshot?: AgentSnapshotOptions;
-  permissionBridge?: PermissionBridge;
   /** 可选的进程内事件流出口；同时仍可 subscribe */
   events?: EventStream;
   /** 创建成员未显式指定 model 时使用的“有效 model”（落库，供 resume 使用） */
@@ -415,6 +540,10 @@ export interface AgentServiceOptions {
   defaultWorkspace?: string;
   /** 0.19 S3：Team 绑定端口；缺失时 `new` 永远 unbound */
   teamBinder?: TeamBinder;
+  /** 0.19 S4：按 team_id 读取解析后的 policy；缺失 = 无 team policy */
+  teamPolicy?: (teamId: string) => TeamPolicy | undefined;
+  /** 0.19 S4：conversation 预算端口；缺失 = 不执行预算（测试 / 纯内存） */
+  budget?: ConversationBudgetPort;
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */
@@ -426,7 +555,9 @@ export type AgentErrorCode =
   | 'member_not_visible'
   | 'no_parent'
   | 'spawn_failed'
-  | 'invalid_state_transition';
+  | 'invalid_state_transition'
+  | 'budget_exceeded'
+  | 'budget_unavailable';
 
 /** AgentService 错误；code 稳定，message 供人读 */
 export class AgentError extends Error {
@@ -492,12 +623,10 @@ export interface AgentService {
    * 已退役 Body 或 rotate 目标 Body 都算。owner 的 Body 不算。
    */
   isMemberBody(sessionId: string): boolean;
-  /** 权限等待：waiting_permission ↔ running；无 bridge 时 deny；只接受当前运行 Body */
-  requestPermission(
-    memberId: string,
-    sessionId: string,
-    request: PermissionRequestInput,
-  ): Promise<PermissionDecision>;
+  /** 当前 turn 的 conversation_id；无在跑轮次或缺省时 undefined（TeamService 用） */
+  currentConversation(agentId: string): string | undefined;
+  /** conversation 预算状态 / 人工 override（只由人力入口调用） */
+  budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview>;
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
   /** 订阅成员事件；返回取消函数 */
@@ -545,6 +674,8 @@ export interface TeamLogEntry {
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
   system_event?: TeamSystemEvent;
+  /** 会话分组（0.19 S4；系统消息缺省） */
+  conversation_id?: string;
 }
 
 /** roster 条目（由 Agent 记录派生，不单独持久化） */
@@ -597,6 +728,8 @@ export interface TeamPostInput {
   /** 结构化 agent id；不从正文解析 */
   mentions?: string[];
   from?: string;
+  /** 会话分组；缺省生成，所有 mention 共用（0.19 S4） */
+  conversation_id?: string;
 }
 
 export interface TeamPostResult {
@@ -606,6 +739,8 @@ export interface TeamPostResult {
   mentions: string[];
   delivered: TeamDelivery[];
   ts: number;
+  /** 本条 post 的会话分组（0.19 S4） */
+  conversation_id?: string;
 }
 
 export interface TeamMembersInput {
@@ -641,6 +776,8 @@ export interface TeamAgentSendInput {
   from_session_id: string;
   to: string;
   content: string;
+  /** 会话分组；缺省继承调用者当前 turn（0.19 S4） */
+  conversation_id?: string;
 }
 
 export interface TeamAgentSendResult {
@@ -652,6 +789,8 @@ export interface TeamAgentSendResult {
   reason?: string;
   /** 是否写入了同 Team 的 mention 日志 */
   logged: boolean;
+  /** 本次 send 的会话分组（0.19 S4） */
+  conversation_id?: string;
 }
 
 /** Team 元数据 + 只追加日志的存储端口（文件实现见 team-store.ts） */
@@ -696,10 +835,12 @@ export interface AgentTeamService {
   members(input: TeamMembersInput): Promise<TeamMembersResult | undefined>;
   /** 成员 Body 的 A2A send */
   send(input: TeamAgentSendInput): Promise<TeamAgentSendResult>;
-  /** 成员 Body 的 list：有 Team 只返回同 Team roster；无 Team 返回自己的可见成员 */
+  /** 成员 Body 的 list：有 Team 只返回同 Team  roster；无 Team 返回自己的可见成员 */
   listForCaller(sessionId: string): Promise<TeamMemberSummary[]>;
   /** body session -> 成员（含 team_id） */
   identify(sessionId: string): Promise<TeamMemberSummary | undefined>;
+  /** conversation 预算状态 / 人工 override（0.19 S4；只由人力入口调用） */
+  budget?(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview>;
   /** 订阅日志写入 / roster 变更事件（只带指针，不含正文）；返回取消函数 */
   subscribe(listener: (event: TeamServiceEvent) => void): () => void;
   dispose(): void;

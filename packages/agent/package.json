@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@vessel-agent/config": "0.18.0",
     "@vessel-agent/core": "0.18.0"
   },
   "devDependencies": {

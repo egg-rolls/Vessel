@@ -375,8 +375,41 @@ export interface TeamConfigInput {
   workspace: string;
   /** 启动嘱托 / handoff 文件路径（可选） */
   handoffPath?: string;
-  /** Team 策略；原样保留，由消费方解释 */
+  /** Team 策略；顶层键开放，`permission` / `budget` 由 `parseTeamPolicy` 校验 */
   policy?: Record<string, unknown>;
+}
+
+/** 无人值守权限策略；缺省 hold。没有 allow-after。 */
+export interface TeamPermissionPolicy {
+  unattended?: 'hold' | 'deny-after';
+  /** deny-after 必填；1..86400 秒 */
+  denyAfterSeconds?: number;
+}
+
+/** 环检测参数；不可关闭，只能调阈值。 */
+export interface TeamBudgetCyclePolicy {
+  /** 同一有向边允许的次数；缺省 2，>= 1 */
+  maxRepeats?: number;
+  /** 触发后的冷却秒数；缺省 60，>= 0 */
+  cooldownSeconds?: number;
+}
+
+/** 预算限额；缺省 = 不限。 */
+export interface TeamBudgetPolicy {
+  maxHops?: number;
+  maxTurns?: number;
+  maxTokens?: number;
+  maxWallClockSeconds?: number;
+  /** 0 < x < 1；缺省 0.8 */
+  warningThreshold?: number;
+  cycle?: TeamBudgetCyclePolicy;
+}
+
+/** 解析后的 Team policy 视图；`policy` 顶层仍允许其它键。 */
+export interface TeamPolicy {
+  permission?: TeamPermissionPolicy;
+  budget?: TeamBudgetPolicy;
+  [key: string]: unknown;
 }
 
 /** S5：hub TLS 配置；cert/key 必须成对 */

@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemoryEventStream } from '@vessel-agent/core';
-import type { AgentEvent, MemberTurnResult, PermissionDecision } from '../src/index.js';
+import type { AgentEvent, MemberTurnResult } from '../src/index.js';
 import { deferred, makeService, settle } from './helpers.js';
 
 const tempDirs: string[] = [];
@@ -136,39 +136,6 @@ describe('AgentService events', () => {
     await service.new({ visibility: 'team' });
 
     expect(spawned).toBe(1);
-  });
-
-  it('permission request and response events carry tool, request_id and decision', async () => {
-    const decision = deferred<PermissionDecision>();
-    const { service, runtime } = makeService({
-      permissionBridge: { request: () => decision.promise },
-    });
-    const seen: AgentEvent[] = [];
-    service.subscribe((event) => seen.push(event));
-    const gate = deferred<MemberTurnResult>();
-    runtime.handler = () => gate.promise;
-    const member = await service.new({ visibility: 'team' });
-    await service.send({ to: member.id, content: 'work' });
-
-    const pending = service.requestPermission(member.id, member.session_id, {
-      requestId: 'req-1',
-      tool: 'bash',
-    });
-    await settle();
-    const requested = seen.find((event) => event.type === 'agent.permission.requested');
-    expect(requested?.tool).toBe('bash');
-    expect(requested?.request_id).toBe('req-1');
-    expect(requested?.state).toBe('waiting_permission');
-
-    decision.resolve({ decision: 'allow' });
-    expect(await pending).toEqual({ decision: 'allow' });
-    const responded = seen.find((event) => event.type === 'agent.permission.responded');
-    expect(responded?.decision).toBe('allow');
-    expect(responded?.request_id).toBe('req-1');
-    expect(responded?.state).toBe('running');
-
-    gate.resolve({});
-    await settle();
   });
 
   it('events option receives RunEvent with member id as run_id and snake_case data', async () => {
