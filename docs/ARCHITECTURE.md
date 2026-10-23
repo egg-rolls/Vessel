@@ -799,7 +799,7 @@ serve:
 
 | 接缝 / 可选工具 | 注册条件 |
 |---|---|
-| `agent` | `agent.enabled: true`；动作 `new` / `send` / `close` / `list`（支持 batch）；权限模式与成员配置见 `agent.*`（0.17） |
+| `agent` | `agent.enabled: true`；owner 动作 `new` / `send` / `close` / `list` / `rotate`（支持 batch；成员侧只暴露 `rotate`）；权限模式与成员配置见 `agent.*`（0.17；rotate 见 0.19） |
 | `ask_user` | 交互 REPL（stdin 是 TTY）或 `gateway start` / `--serve`；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭（0.14.1） |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功后注册；数量随 server 动态变化（ADR-039） |
 
@@ -2334,7 +2334,7 @@ interface LimitBlock {
 - canonical RPC 仍为 **44**，本版本不新增方法。
 - 已知限制：跨节点 `close` 不支持；`stale` 未自动产生；`followReplies` 不自动续跑父 turn；`allow` 模式是整工具放行，不是白名单逐项判定。
 
-## 39. 0.17.0 AgentService 与成员能力层（已实现；0.19 S1 修订见 §40）
+## 39. 0.17.0 AgentService 与成员能力层（已实现；0.19 S1/S2 修订见 §40）
 
 > 状态：已合入 `release/0.17.0`（未发布）。决策见 [ADR-088](adr/ADR-088-agent-service-package.md)。
 
@@ -2351,18 +2351,18 @@ interface LimitBlock {
 - `packages/core` 仍是领域无关执行内核，不知道 member / owner / visibility；成员执行经 `MemberRuntimePort` 注入。
 - 入口只做输入解析、AgentService 调用与事件渲染；不得复制 registry 或另写生命周期。
 - 依赖方向：入口 → agent → core；插件 → core / agent；core 不依赖 agent 或入口。`packages/agent` 只依赖 `@vessel-agent/core` 的公开入口。
-- `InProcessMemberRuntime` 是 Phase A 的执行内核适配：每个成员独占 `AgentRuntime` / `Context` / `EventStream`，工具从父 `PluginHost` 按白名单复制（默认 `bash` / `read` / `edit`），hooks / guardrails 一并继承；`agent`、`delegate_task` 与 `team_*` 永久排除，成员不能再分派。
+- `InProcessMemberRuntime` 是 Phase A 的执行内核适配：每个 **Body** 独占 `AgentRuntime` / `Context` / `EventStream`（entries 以 `session_id` 为键；rotate 窗口内同一成员可暂时同时存在旧 / 新两个 Body runtime，但不并发 run），工具从父 `PluginHost` 按白名单复制（默认 `bash` / `read` / `edit` / `agent`），hooks / guardrails 一并继承；成员侧 `agent` schema 只保留 `rotate`（只能 rotate 自己），`delegate_task` 与 `team_*` 永久排除，成员不能 spawn / send / dispatch。
 
 ### 39.2 契约与 session 即成员
 
-- `AgentService`：`new` / `send` / `dispatch` / `close` / `list`；另有 `subscribe`、`reply`、`takeMessages`、`notePermissionState`、`requestPermission`、`flushSnapshot` 供入口与执行内核使用。`dispatch` 是统一投递入口（0.19，见 §40.4）。
+- `AgentService`：`new` / `send` / `dispatch` / `rotate` / `close` / `list`；另有 `subscribe`、`reply`、`takeMessages`、`notePermissionState`、`noteMemberEvent`、`isMemberBody`、`requestPermission`、`flushSnapshot` 供入口与执行内核使用。`dispatch` 是统一投递入口（0.19，见 §40.4）；`rotate` 见 §40.5。
 - `MemberStatus`（snake_case）：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `presence?` / `membership?` / `epoch?` / `current_tool?` / `last_seen?` / `usage?`。
-- `new` 创建的成员与 session 1:1（`session_id === id`）；`send.to`、`close.member` 可用成员 id 或 session id。未注册 session 不是成员。名字只由 `membership === 'present'` 的成员占用，`left` 后可复用（0.19）。
+- `new` 创建的成员**初始**与 session 1:1（`session_id === id`）；rotate 后 `MemberStatus.session_id` 为当前 Body 的 session，旧 Body 保留在 `body_history`。`send.to`、`close.member` 可用成员 id 或**当前 Body** 的 session；退役 Body 的 session 不再作为投递目标。未注册 session 不是成员。名字只由 `membership === 'present'` 的成员占用，`left` 后可复用（0.19）。
 - `send` 入队即返回 `{queued: true, message_id, state}`，不等待一轮结束；同一成员同时只有一轮在跑，其余消息 FIFO 排队。strict `send` 对 `presence === 'gone'` 返回 `member_stale`，不自动 resume。
 - 消息内容上限 64 KiB（UTF-8）；空 `to` / 空 `content` / 未知成员 / 已关闭 / gone / 不可见成员返回错误码或错误文本。
 - `close` 幂等：先取消当前轮，再释放执行内核；session 数据保留，后到的 run 终态不得覆盖 `closed`。
 - `visibility`：`private`（默认，仅 owner）/ `team` / `tenant`；跨 tenant 不可寻址。
-- 内置 `agent` 工具是唯一模型 schema，动作 `new` / `send` / `close` / `list`；`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回逐条结果，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。
+- 内置 `agent` 工具是唯一模型 schema，owner 动作 `new` / `send` / `close` / `list` / `rotate`；成员侧只暴露 `rotate`，且只能 rotate 自己。`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回逐条结果，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。
 
 ### 39.3 状态机、队列与快照
 
@@ -2377,16 +2377,16 @@ interface LimitBlock {
 | `stale` | 仅旧数据只读兼容，0.19 起不再写入；只允许 `stale → closed` |
 
 - 消息队列只在内存；状态变化经节流合并原子写入 `<dataDir>/agents/<tenant>.json`（`0600`，0.19 起写 `version: 2`）。
-- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
+- 快照形状（v2）`{version: 2, tenant_id, updated_at, members: PersistedAgentRecord[]}`；持久化 `membership` / `model` / `system_prompt` / `current_body` / `body_history`（≤20，只记已退役 Body）/ `forked_from`，不存 `presence` / `rotation` / 消息队列。读取兼容 v1，首次写 v2 前备份 `<tenant>.json.v1.bak`，备份失败则放弃写。未知版本 / 损坏 / 单条非法不阻塞启动，非法条目跳过并记录。
 - 重启后非 `left` 成员统一 `state='idle'` + `presence='gone'`；`left` / `closed` 成员保持 `closed + left + gone`。未处理消息丢失。
-- 成员事件为开放字符串：`agent.spawned`、`agent.resumed`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`；`agent.stale` 仅作兼容事件（payload `{state:'idle', presence:'gone'}`）。事件 `agent_id` 为成员 id。
+- 成员事件为开放字符串：`agent.spawned`、`agent.resumed`、`agent.message.queued`、`agent.turn.started` / `completed` / `failed` / `cancelled`、`agent.permission.requested` / `responded`、`agent.closed`、`agent.rotating` / `agent.rotated` / `agent.rotate.failed`、`agent.retired`、`agent.reply.stale`；`agent.stale` 仅作兼容事件（payload `{state:'idle', presence:'gone'}`）。事件 `agent_id` 为成员 id。rotate 后的旧 Body 终态是配对的 `agent.turn.*`，带 `stale: true`，不写 Agent state / usage，也不投递父队列。
 
 ### 39.4 owner、外部队列与 CLI
 
 - REPL 启动 AgentService 后监听 `127.0.0.1:0` 的最小 HTTP 控制端点；记录原子写入 `<dataDir>/agent-owner.json`（`0600`）：`{pid, host, port, token, started_at, tenant_id}`。
-- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
+- 端点只接受 loopback Host（防 DNS rebinding）与 Bearer token；方法固定 `agent.new` / `agent.send` / `agent.dispatch` / `agent.rotate` / `agent.close` / `agent.list`，全部委托同一 AgentService。端点只是传输，不是第二套实现。
 - 同一 `dataDir` 已有 owner 时，第二个 REPL 仍可用进程内工具；CLI attach 保持原 owner。owner 记录按 pid / token 清理，避免误删后继 owner。
-- `vessel agent new|send|dispatch|close|list [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。`dispatch <to> <content...>` 输出 `DispatchResult`，`queued` 退出 0、`rejected` 退出 1。
+- `vessel agent new|send|dispatch|close|list|rotate [--json]` 读取 owner 记录并连接；无 owner 返回 `agent_owner_unavailable`，tenant 不一致返回 `agent_owner_tenant_mismatch`。`dispatch <to> <content...>` 输出 `DispatchResult`，`queued` 退出 0、`rejected` 退出 1；`rotate <to> --startup <text> [--handoff <path>]` 输出 `RotateResult`，`rotated` 退出 0、`failed` 退出 1。
 - REPL 主 agent 通过 `attachOwner` 注册为 **external owner**：它的队列只由父 turn 的 `BeforeLlm` 调 `takeMessages(ownerId)` 排空，`pump` 永不执行 owner 队列；成员 runtime 也不得消费。注入消息固定 `role: 'user'`、`name: 'agent:<id>'`、`timestamp` 取原消息时间，内容原样。
 
 ### 39.5 权限 bridge
@@ -2395,7 +2395,7 @@ interface LimitBlock {
 - `bridge`：成员的 `tool.permission.request` / `ask.user.requested` 补 `request_id` / `agent_id` / `session_id` / `parent_session_id` / `delegate_path` 后转发到父事件流；父窗口用既有 `PermissionCard` / `AskCard` 应答（`permission.respond` / `ask.respond`），应答回灌成员事件流，成员回到 `running`。
 - 没有 `parentEvents` 时 bridge 退化为 `ask → deny`，不会永久等待无人应答的请求。
 - `allow`：成员复制到的工具一律放行。`deny`：只保留 `readOnlyTools`（默认 `['read']`）。
-- `waiting_permission` 由执行内核回调 `notePermissionState` 维护；`closed` / `presence === 'gone'` 上的迟到回调被忽略。
+- `waiting_permission` 由执行内核回调 `notePermissionState` 维护；AgentService 只接受**当前运行 Body**（`queue.activeBodySession === session_id`）的回调，旧 Body 的迟到回调以及 `closed` / `presence === 'gone'` 上的回调都会被忽略；`requestPermission` 对非当前 Body 直接返回 deny（`body_not_active`）。
 
 ### 39.6 入口适配
 
@@ -2419,9 +2419,9 @@ interface LimitBlock {
 - 工具数：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4；交互 REPL / serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
 - 已知限制：Phase B 未做 Gateway attach / Web 跨 owner 代理 / durable outbox / 跨节点写路径；CLI 依赖本机 REPL owner；消息队列只在内存；`presence === 'gone'` 的成员不能严格 `send`（`member_stale`），但 dispatch 会先 resume；`followReplies` 不自动开启新的父 turn；`close` 只支持本机成员。
 
-## 40. 0.19.0 Agent / Body 内核（S1，已实现）
+## 40. 0.19.0 Agent / Body 内核（S1+S2，已实现）
 
-> 状态：分支 `0.19-s1-agent-body`，未随版本发布。决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)。S2–S7（rotate / fork / Team / budget / hub / Web / 跨节点）**未实现**。
+> 状态：S1 分支 `0.19-s1-agent-body`、S2 分支 `0.19-s2-rotate`，均未随版本发布。S1 决策见 [ADR-091](adr/ADR-091-agent-body-and-presence.md)，S2 见 [ADR-092](adr/ADR-092-agent-rotate-and-epoch-fencing.md)。S3–S7（fork / Team / budget / hub / Web / 跨节点）**未实现**；rotate 已实现（§40.5）。
 
 ### 40.1 节点身份
 
@@ -2432,7 +2432,7 @@ interface LimitBlock {
 
 ### 40.2 Agent 记录与快照 v2
 
-- 持久化记录 `PersistedAgentRecord`：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `membership` / `model?` / `system_prompt?` / `current_body?` / `forked_from?` / `current_tool?` / `last_seen?` / `usage?`。
+- 持久化记录 `PersistedAgentRecord`：`id` / `session_id` / `name?` / `parent_id?` / `owner` / `visibility` / `state` / `membership` / `model?` / `system_prompt?` / `current_body?` / `body_history?` / `forked_from?` / `current_tool?` / `last_seen?` / `usage?`。`session_id` 仍是第一具 Body 的兼容字段，当前 Body 看 `current_body.session_id`。
 - `body_id ≡ session_id`；`epoch` 只在 `current_body` 内，DTO 的 `epoch` 由它派生。首具 Body `epoch = 0`。
 - 写 `version: 2`；读 v1 / v2。v1 缺省 `membership = state === 'closed' ? 'left' : 'present'`，`current_body` 由 service 补齐。首次写 v2 前备份 `<tenant>.json.v1.bak`。
 - `presence` / `rotation` 不持久化；消息队列只在内存。
@@ -2448,10 +2448,23 @@ interface LimitBlock {
 - 派生不存储：`canAccept = present && live && stable`、`needsResume = present && gone`、`rotating = present && rotation === 'rotating'`。
 - 重启规则：`left` / `closed` → `closed + left + gone`；其余 → `idle + present + gone`。`stale` 不再写入。
 - `attachOwner` 是唯一 `left → present` 例外，完整恢复 `live + idle` 并补齐 `current_body`。
+- `rotation` 由 `AgentService.rotate` 写入：切换期间为 `rotating`，所有出口恢复 `stable`；`pump` 在 rotating 时不启动新 run，`dispatch` / `send` 入队等待。
 
 ### 40.4 Body 存储与 dispatch
 
 - 成员 engine 注入 tenant `SessionBackend` 与 `eventLog`（`packages/agent/src/runtime.ts` → `src/agent-service-wiring.ts` → `src/bootstrap.ts`）；同一 `session_id` 跨进程续接历史。S1 不做 `AgentSessionScope`，成员会话会出现在 `sessions.list`。
 - `dispatch({to, content, from?})` 的 `to` 解析 id → session_id → 唯一 name；同名多个 present 返回 `invalid_input`。
 - 分支：`left` / `closed` / closing → `rejected agent_left`；`rotating` → 入队 `rotating`；`live` → 入队 `live`；`gone` → single-flight resume 后入队 `resumed`；resume 失败 `resume_failed`；不可见 `not_visible`。
-- strict `send` 不 resume：`left` → `member_closed`，`gone` → `member_stale`。`agent` 工具的 `send` 在 S1 仍走 strict send。
+- strict `send` 不 resume：`left` → `member_closed`，`gone` → `member_stale`。`agent` 工具的 `send` 在 S1/S2 仍走 strict send；切到 dispatch 留到 S3。
+
+### 40.5 rotate 与 epoch fencing
+
+- **入口**：`AgentService.rotate`；owner 端点 `agent.rotate`；CLI `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`；`agent` 工具 `action: rotate`（成员只能自换）。canonical RPC 方法表不变（仍 45）。
+- **前置**：只换活身体（`presence !== 'live'` → `body_not_live`）；`left` / `closed` / closing → `agent_left`；并发 rotate → `rotating`；external owner → `owner_not_rotatable`；工具路径 `from_session_id` 必须等于当前 Body session，否则 `not_current_body`。
+- **切换**：新 Body 新 `session_id`、`epoch + 1`，按 Agent 配置 spawn。顺序：spawn → 旧指针进 `body_history`（≤20）→ `setCurrentBody` → `scheduleSnapshot()` → `await flushSnapshot()`（返回 boolean，无 snapshot 时 `true`）→ 启动嘱托 `unshift` → `rotated` → `rotation = stable` → `pump`。
+- **失败**：spawn 失败 / 快照写失败 → 指针与 `body_history` 回滚、dispose 新 engine、`rotation` 回 `stable`、不插入启动嘱托、返回 `rotate_failed`；不 fork、不自动重试。flush 已提交后的 close 竞态不回滚指针。
+- **排队**：rotating 期间 `dispatch` / `send` 入队；切换后顺序为启动嘱托 → rotate 前队列 → rotating 期间新队列，全部由新 Body 处理。
+- **epoch fencing**：`pump` 捕获 `activeBodySession`；旧轮结束后若不再是当前 Body，发带 `stale: true` 的配对 `agent.turn.*`、`agent.reply.stale`，dispose 旧 engine、发 `agent.retired`；不写 Agent state / usage，不 `deliverToParent`。
+- **寻址与快照**：`entries` 按 `session_id` 键；`bySession` 跟随 `current_body`；`MemberStatus.session_id` / 默认事件 session 报当前 Body；`body_history` 有界持久化，快照仍 v2。
+- **成员工具**：`agent` 在成员默认工具白名单内，但 schema 只暴露 `rotate`（只能自换）；成员 `permission.autoApprove` 追加 `agent`，service 的 `from_session_id` 比较是最终闸门。
+- **预警与权限**：`agent.limit.warning` 经 `onMemberEvent` 回到 service，按当前 Body session 去重后作为下一轮系统消息；`notePermissionState` / `requestPermission` 按当前运行 Body session fencing。

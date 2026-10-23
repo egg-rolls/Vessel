@@ -52,3 +52,17 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   - 手写 v1 快照可加载并升级为 v2，首次写前生成 `.v1.bak`。
 
 - **关联**：[ADR-049](ADR-049-multi-tenant-isolation.md)（tenant 存储与隔离）、[ADR-067](ADR-067-cross-node-dedup-keys.md)（`node` / `incarnation` 去重维度）、[ADR-088](ADR-088-agent-service-package.md)（AgentService 分层；本条修订其状态、快照与投递契约）。
+
+## Addendum（0.19 S2，ADR-092）
+
+> 0.19 S2 实现了 rotate。以下追加只说明 S2 之后的当前事实，不回写上文 S1 当时的结论。
+
+- **rotate 已实现**：`AgentService.rotate`、owner 端点 `agent.rotate`、CLI `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`、`agent` 工具 `action: rotate` 均已接线。上文“S2–S7 未实现”、非目标与已知限制中关于 rotate / 启动嘱托 / epoch fencing 的部分由本 Addendum 与 [ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md) 取代。
+- **`rotation` 有了写入者**：上文“`rotation` 字段由 S2 使用，S1 无写入者，恒为 `stable`”在 S2 起不再成立；rotate 期间为 `rotating`，所有出口恢复 `stable`，`pump` 在 rotating 时不起轮。
+- **成员侧 `agent` schema 收窄**：成员 runtime 现在可见 `agent` 工具，但 schema 只暴露 `rotate`（只能 rotate 自己）；owner 看到 `new|send|close|list|rotate`。上文“`agent` 工具动作仍只有 `new` / `send` / `close` / `list`”不再成立。
+- **持久化新增 `body_history`**：`PersistedAgentRecord.body_history?` 只追加、≤20 条，当前 Body 不在其中；快照仍 `version: 2`。
+- **权限回调带 session**：`notePermissionState` / `requestPermission` 以当前运行 Body 的 session 为闸门；旧 Body 的迟到回调与请求被忽略或 deny（`body_not_active`）。
+- **stale 轮成对终态**：旧 Body 的迟到轮发带 `stale: true` 的 `agent.turn.*`，不写 Agent state / usage、不 `deliverToParent`；另有 `agent.reply.stale` / `agent.retired` 事件。
+- **strict `send` 仍未切换**：S2 的 `agent` 工具 `send` 仍走 strict send；切到 dispatch 留到 S3。
+- **`agent.stale` 未删除**：S2 仍只在快照加载时发布，删除留到后续切片。
+- **修正**：上文入口段落写的 CLI `vessel agent dispatch ... [--from]` 中 `--from` 从未实现；CLI 只接受 `--json`，`from` 固定为 owner。

@@ -255,7 +255,7 @@ termination:
 - **端口占用**：`gateway start` 捕获 `EADDRINUSE` 后以 `port_in_use` 退出 1，不写 PID 文件。换 `--port` 或 `--instance`，或先停掉占用端口的进程。
 - **已知限制**：shared 锁不阻止两个进程写同一 tenant 的不同 session；跨主机 stale 判定依赖 24h 阈值与主机名，不保证时钟同步。
 
-### 2.11 AgentService 与成员（0.17，ADR-088）
+### 2.11 AgentService 与成员（0.17，ADR-088；0.19 S1/S2 修订见 ADR-091 / ADR-092）
 
 ```yaml
 agent:
@@ -269,7 +269,7 @@ agent:
   # limits / termination 缺省继承顶层；cwd 见 §2.4
 ```
 
-- **`agent.enabled`**（默认 `false`）：唯一开关。启用后注册内置 `agent` 工具（`new` / `send` / `close` / `list`，支持 batch），启动 AgentService，并在交互 REPL 中尝试启动 loopback owner 端点。
+- **`agent.enabled`**（默认 `false`）：唯一开关。启用后注册内置 `agent` 工具（owner 动作 `new` / `send` / `close` / `list` / `rotate`，支持 batch；成员侧只暴露 `rotate`，且只能 rotate 自己），启动 AgentService，并在交互 REPL 中尝试启动 loopback owner 端点。
 - **`agent.owner_id`**（默认 `main`）：root owner（REPL 主 agent）的成员 id；owner 队列由父 turn 的 `BeforeLlm` 排空，不再另起 pump。
 - **`agent.default_visibility`**（默认 `private`）：`new` 未显式传 `visibility` 时的成员可见性。`private` 仅 owner 可寻址；`team` / `tenant` 在本机同一 tenant 内等价，跨 tenant 不可寻址。
 - **`agent.permission_mode`**（缺省交互 `bridge`、headless `allow`）：`bridge` 把成员权限 / ask 弹到父窗口；`allow` 对成员复制到的工具一律放行；`deny` 只复制 `agent.read_only_tools`（默认 `['read']`）。无父事件流时 bridge 退化为 deny，不死等。
@@ -277,7 +277,8 @@ agent:
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
 - **工具数（实测）**：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4（+`agent`）；真交互 REPL（TTY）或 gateway/serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
-- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|dispatch|close|list [--json]` 经该记录 attach。
+- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|dispatch|close|list|rotate [--json]` 经该记录 attach。
+- **rotate（0.19，ADR-092）**：成员可调用 `agent.rotate` 换一具新 Body（新 `session_id`、`epoch + 1`）；人用 owner 端点 `agent.rotate` 或 `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`。`--startup` 必填且非空；`rotated` 退出 0、`failed` 退出 1。失败保持旧身体，不自动 fork / 重试；`rotating` 期间消息排队。
 - **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 仍为 45。
 
 ## 3. 密钥与 `_env`
@@ -321,7 +322,8 @@ vessel doctor [--deep] [--json]
 vessel logs tail [--json] [--lines N] [--instance <name>]
 vessel agent new [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
 vessel agent send <member> <content...> [--json]
-vessel agent dispatch <to> <content...> [--from <sender>] [--json]
+vessel agent dispatch <to> <content...> [--json]
+vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]
 vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 ```

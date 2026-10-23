@@ -105,6 +105,7 @@
 | 088 | 0.17.0 AgentService 独立成包与执行内核分层 | accepted | 2026-10-21 | agent, service, package, lifecycle, queue, snapshot, owner, permission, cli | [ADR-088-agent-service-package.md](ADR-088-agent-service-package.md) |
 | 089 | 0.18.0 tenant 事件流是唯一事件面（TenantEventHub） | accepted | 2026-10-21 | event, gateway, tenant, multi-tenant, hub, breaking | [ADR-089-tenant-event-hub.md](ADR-089-tenant-event-hub.md) |
 | 091 | 0.19.0 Agent / Body 内核（S1）：节点身份、presence 与 dispatch | accepted | 2026-10-23 | agent, body, presence, membership, dispatch, snapshot, node-identity, session, tenancy | [ADR-091-agent-body-and-presence.md](ADR-091-agent-body-and-presence.md) |
+| 092 | 0.19.0 Agent rotate 与 epoch fencing（S2） | accepted | 2026-10-23 | agent, body, rotate, epoch, fencing, snapshot, session, permission, cli | [ADR-092-agent-rotate-and-epoch-fencing.md](ADR-092-agent-rotate-and-epoch-fencing.md) |
 
 ## 编写约定
 

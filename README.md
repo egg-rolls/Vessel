@@ -159,7 +159,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 | 工具 | 何时注册 | 干什么 |
 |---|---|---|
-| `agent` | `agent.enabled: true` | 成员生命周期：`new` / `send` / `close` / `list`（支持 batch）；`send` 入队即返回，不等待结果 |
+| `agent` | `agent.enabled: true` | 成员生命周期：owner 动作 `new` / `send` / `close` / `list` / `rotate`（支持 batch；成员侧只暴露 `rotate`）；`send` 入队即返回，不等待结果 |
 | `ask_user` | 交互 REPL（TTY）或 gateway/serve；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 | 向用户提问，经事件流暂停等待回答 |
 | `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功 | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化 |
 
