@@ -135,7 +135,9 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--team',
   '--ttl',
   '--code',
+  '--code-env',
   '--alias',
+  '--public-url',
   '--token-id',
   '--admin-token-env',
 ];
@@ -269,6 +271,11 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
       { name: 'watch', flags: ['--hub-url', '--token-env'] },
       { name: 'pair', flags: ['--data-dir', '--tenant', '--ttl'] },
+      { name: 'join-code', flags: ['--data-dir', '--tenant', '--ttl', '--json'] },
+      {
+        name: 'join',
+        flags: ['--code', '--code-env', '--tenant', '--public-url', '--ca', '--data-dir', '--json'],
+      },
       {
         name: 'node',
         flags: ['--code', '--alias', '--ca', '--hub-url', '--json'],

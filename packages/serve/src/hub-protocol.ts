@@ -14,6 +14,9 @@ import type { HubAgentMeta, HubPointerReason, HubTeamMeta } from './hub-control.
 
 export const HUB_PROTOCOL = 'vessel.hub/1' as const;
 
+/** 节点出站（S5.1）的入站端点。 */
+export const HUB_NODE_CONTROL_PATH = '/v1/hub/node-control' as const;
+
 export type HubDialer = 'hub' | 'node';
 
 /** client → server */
@@ -24,6 +27,12 @@ export interface HubAuthFrame {
   dialer: HubDialer;
   token: string;
   hub_id: string;
+  /** dialer === 'node' 时必填；hub dialer 保持缺省。 */
+  node_id?: string;
+  /** dialer === 'node' 时必填。 */
+  tenant_id?: string;
+  /** dialer === 'node' 时必填；节点进程代际。 */
+  incarnation?: string;
 }
 
 export interface HubPongFrame {
@@ -35,18 +44,20 @@ export interface HubPongFrame {
 
 export type HubClientFrame = HubAuthFrame | HubPongFrame;
 
-/** server → client */
+/** server → client（acceptor 的身份回执） */
 export interface HubHelloFrame {
   v: 1;
   kind: 'hello';
   protocol: typeof HUB_PROTOCOL;
   dialer: HubDialer;
-  node_id: string;
+  /** hub 作为 acceptor 时回显 node；node 作为 acceptor 时必填。 */
+  node_id?: string;
   hub_id: string;
-  /** 节点进程代际；变化时 hub 重置 revision 比较。 */
-  incarnation: string;
-  revision: number;
-  tenant_id: string;
+  /** node 进程代际；仅 node acceptor 提供。 */
+  incarnation?: string;
+  /** node 目录 revision；仅 node acceptor 提供。 */
+  revision?: number;
+  tenant_id?: string;
 }
 
 export interface HubSnapshotFrame {

@@ -630,6 +630,26 @@ function nodeUrlError(value: string): string | null {
   return null;
 }
 
+/** S5.1：校验 node 侧 hub URL（绝对 http(s)、无 userinfo / path / query / hash、非回环须 https）。 */
+function hubUrlError(value: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return 'must be an absolute http(s) URL';
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    return 'must use http or https';
+  }
+  if (url.username !== '' || url.password !== '') return 'must not contain userinfo';
+  if (url.pathname !== '/' && url.pathname !== '') return 'must not contain a path';
+  if (url.search !== '' || url.hash !== '') return 'must not contain query or hash';
+  if (!isLoopbackHostname(url.hostname) && url.protocol !== 'https:') {
+    return 'non-loopback hubs must use https';
+  }
+  return null;
+}
+
 /**
  * 校验 serve 块（schema 层；文件存在性由启动前检查）。
  * 非回环必须 `allowRemote: true`；TLS 必须 cert/key 成对。
@@ -846,8 +866,9 @@ function isNonEmptyStringValue(value: unknown): value is string {
 /**
  * 校验 hub 块（S5；schema 层，文件存在性由启动前检查）。
  *
- * hub 只支持 `direction: 'hub'`；node → hub 在 S5.1。非回环必须同时满足
- * `allowRemote=true`、TLS cert/key 成对、非空 `tokenEnv`（fail-closed）。
+ * `direction: 'hub'` 为 hub 进程（拨号节点）；`direction: 'node'` 为 gateway 出站加入
+ * hub（S5.1）。非回环必须同时满足 `allowRemote=true`、TLS cert/key 成对、非空
+ * `tokenEnv`（fail-closed）。node 角色的 `url` / `caFile` / `joinCodeEnv` 只在出现时校验。
  */
 export function validateHubSettings(
   hub: HubConfig,
@@ -857,6 +878,9 @@ export function validateHubSettings(
   const {
     dataDir,
     direction,
+    url,
+    caFile,
+    joinCodeEnv,
     listen,
     allowRemote,
     tls,
@@ -892,6 +916,46 @@ export function validateHubSettings(
       message: 'hub.direction must be "hub" or "node"',
       value: direction,
     });
+  }
+
+  // S5.1 node 角色：url 只在出现时校验形状；join 前 state 也可提供，故不强制。
+  if (url !== undefined) {
+    if (typeof url !== 'string' || url.trim() === '') {
+      errors.push({
+        path: 'hub.url',
+        message: 'hub.url must be a non-empty string',
+        value: url,
+      });
+    } else if (url.includes('\0')) {
+      errors.push({ path: 'hub.url', message: 'hub.url must not contain NUL' });
+    } else {
+      const message = hubUrlError(url);
+      if (message !== null) {
+        errors.push({ path: 'hub.url', message: `hub.url ${message}`, value: url });
+      }
+    }
+  }
+
+  if (caFile !== undefined) {
+    if (!isNonEmptyStringValue(caFile)) {
+      errors.push({
+        path: 'hub.caFile',
+        message: 'hub.caFile must be a non-empty string',
+        value: caFile,
+      });
+    } else if (caFile.includes('\0')) {
+      errors.push({ path: 'hub.caFile', message: 'hub.caFile must not contain NUL' });
+    }
+  }
+
+  if (joinCodeEnv !== undefined && typeof joinCodeEnv !== 'string') {
+    errors.push({
+      path: 'hub.joinCodeEnv',
+      message: 'hub.joinCodeEnv must be a string',
+      value: joinCodeEnv,
+    });
+  } else {
+    validateEnvName('hub.joinCodeEnv', joinCodeEnv, errors);
   }
 
   let listenHostname: unknown;
@@ -2159,6 +2223,9 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
   hub: [
     'dataDir',
     'direction',
+    'url',
+    'caFile',
+    'joinCodeEnv',
     'listen',
     'allowRemote',
     'tls',

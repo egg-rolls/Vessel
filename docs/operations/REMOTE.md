@@ -196,11 +196,31 @@ vessel hub directory --json
 vessel hub token exchange https://node-b.example.com:8642 --team <team_id> --json
 ```
 
-- 节点必须能被 hub 访问：S5 只实现 **hub → node** 拨号（`WSS /v1/hub/control`，协议 `vessel.hub/1`）。NAT / 家庭网络需要 S5.1 的 node → hub 出站，**当前未实现**。
+- 节点必须能被 hub 访问：S5 只实现 **hub → node** 拨号（`WSS /v1/hub/control`，协议 `vessel.hub/1`）。NAT / 家庭网络改用 S5.1 的 **node → hub 出站**（见 §3.7），节点不需要开放入站端口。
 - hub 只维护目录并推送 `{node_id, team_id, request_id?, reason, ts}` 指针；消息、事件、工具结果与权限正文**始终由浏览器直连节点**，hub 不代理、不落盘。
 - 一次性配对码只存 hash、默认 300 秒；配对换 `view` + `exchange` token，节点只存 `sha256`，可吊销并绑定 `hub_id`。hub 侧 token 走 SecretStore（DPAPI / Keychain / libsecret）。
 - scope：`view` 只读目录；`exchange` 只能换短期 `control`；`control` 受节点白名单与 team 收窄（只能访问自己的 team，不匹配 `not_found`）；`admin` 走既有 admin 面。
 - 完整配置见 [CONFIG.md](CONFIG.md) §2.13。
+
+### 3.7 Hub 出站加入（0.19 S5.1）
+
+节点在 NAT / 家庭网络时不能等 hub 拨号；S5.1 让 **节点主动拨号 hub**，协议仍是 `vessel.hub/1`，只把发起方换成节点（`dialer: 'node'`）。
+
+```bash
+# hub 侧：生成一次性 join code（默认 300 秒、一次性、只存 hash）
+vessel hub join-code [--tenant <id>] [--ttl <s>] [--json]
+
+# node 侧：用 code 换 node token，并写入本地状态
+vessel hub join https://hub.example:8643 --code <CODE> \
+  [--tenant <id>] [--public-url <url>] [--ca <file>] [--json]
+```
+
+- node 侧非秘密状态（`hub_url` / `hub_id` / `node_id` / `tenant_id` / `pairing_id` / `token_id` / `expires_at`）写 gateway data dir 的 `hub-node.json`（0600），运行状态写 `hub-node-status.json`；**明文 node token 只进 SecretStore**，不写 YAML / JSON / 日志。hub 侧 `<hubDataDir>/hub-join.json` 与 `<hubDataDir>/node-tokens.json` 都只存 `sha256`。
+- node token 由 hub 签发（`scope: 'node'`，默认 30 天），只用于 WSS `/v1/hub/node-control`，绑定 `hub_id` / `node_id` / `tenant_id`；不进入 canonical RPC 或 `PrincipalScope`。
+- **一个 node 进程 / data dir 只加入一个 hub**；多 hub 需要多个 data dir / 进程。离开 = 删除 `hub-node.json`（及 SecretStore 条目）或把 `hub.direction` 改回 `hub`。
+- **NAT 数据面**：出站只保证控制面元数据 / 指针。除非节点有浏览器可达地址（隧道 / 反向代理）并声明 `public_url`，否则正文（聊天、事件、工具结果、权限）不可达；目录的 `data_plane: direct|unreachable` 由 `public_url ?? url` 派生。hub 不中继正文。
+- 吊销：`vessel hub node remove <pairing_id>` 会关闭该节点的入站 WS、吊销 token hash、删目录记录；旧 token 重连返回 4401，节点需重新 `hub join`。
+- hub 进程仍拒绝 `hub.direction: node`；现有 `hub pair` / `hub node add`（hub → node）行为不变，两种方向可同时存在。
 
 ## 4. 独立前端部署
 
@@ -250,7 +270,7 @@ gateway 同源托管 `dist` 时不需要 `allowed_origins`，CSP 由 gateway 按
 - `request_id` 去重是进程内 Map，不跨重启；同 key 不同参数返回首次结果。
 - 保留的 team 传输（`/v1/team/*`）在 0.17 没有生产装配，也没有模型工具入口；原 spawn / status / inbox 语义与重试规则留待 Phase B。
 - `transport.nodes[]` 是静态表；0.6 不做自动发现。
-- Hub 只做目录与指针：S5 不支持 node → hub 出站（NAT，S5.1）、跨节点 A2A（S7）、多 hub 联邦、远程管理 hub、hub daemon / 系统服务注册。
+- Hub 只做目录与指针：S5.1 已支持 node → hub 出站（NAT），但跨节点 A2A（S7）、多 hub 联邦、远程管理 hub、hub daemon / 系统服务注册仍未实现；NAT 正文数据面需隧道 / 反向代理。
 - 远端事件缺 `tenant_id` 时回灌按 default 归属，需 gateway 保证租户字段。
 - 监听 `0.0.0.0` 时 banner / `hello.node.endpoint` 仍显示 `http://0.0.0.0:<port>`；实际访问需换成真实 IP / 域名（并匹配证书 SAN）。
 - `--connect-token` 会出现在进程参数列表中；生产优先用 env 或文件权限受控的 config。

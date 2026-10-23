@@ -6,6 +6,7 @@
  * - 文件缺失 = 空目录；损坏 / `v !== 1` / 字段非法 → `hub_registry_corrupt`
  *   fail-closed，不静默覆盖；
  * - 主键 `pairing_id = node_id:tenant_id`，同一 node 可有多个 pairing；
+ * - `direction` 缺省按 `'hub'` 读；`data_plane` 由 `public_url ?? url` 派生；
  * - 只存元数据（teams / agents 白名单），禁止字段不会落盘；
  * - 写前强制 `HUB_MAX_TEAMS` / `HUB_MAX_AGENTS` 上限并置 `truncated`。
  *
@@ -27,6 +28,8 @@ import {
   parseHubTeamMeta,
 } from '@vessel-agent/serve';
 import {
+  type HubDataPlane,
+  type HubNodeDirection,
   type HubNodeRecord,
   type HubNodeStatus,
   type HubRegistryFile,
@@ -101,6 +104,15 @@ const STATUSES = new Set<HubNodeStatus>([
   'identity_mismatch',
 ]);
 
+const DIRECTIONS = new Set<HubNodeDirection>(['hub', 'node']);
+
+const DATA_PLANES = new Set<HubDataPlane>(['direct', 'unreachable']);
+
+/** 数据面可达性只看是否存在浏览器可达 origin（`public_url` 优先，其次 `url`）。 */
+function deriveDataPlane(url: string | undefined, publicUrl: string | undefined): HubDataPlane {
+  return publicUrl !== undefined || url !== undefined ? 'direct' : 'unreachable';
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -137,9 +149,47 @@ function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
   }
   if (pairingId !== pairingIdFor(nodeId, tenantId)) return undefined;
 
-  const url = value.url;
+  // 旧文件缺 `direction` 按 hub 读；写时总是写入。
+  let direction: HubNodeDirection = 'hub';
+  if (value.direction !== undefined) {
+    if (
+      typeof value.direction !== 'string' ||
+      !DIRECTIONS.has(value.direction as HubNodeDirection)
+    ) {
+      return undefined;
+    }
+    direction = value.direction as HubNodeDirection;
+  }
+
+  let url: string | undefined;
+  if (value.url !== undefined) {
+    if (!isNonEmptyString(value.url)) return undefined;
+    url = value.url;
+  } else if (direction === 'hub') {
+    // hub 拨号必须有可连接的 url；node 拨号允许缺失（NAT）。
+    return undefined;
+  }
+
+  let publicUrl: string | undefined;
+  if (value.public_url !== undefined) {
+    if (!isNonEmptyString(value.public_url)) return undefined;
+    publicUrl = value.public_url;
+  }
+
+  let dataPlane: HubDataPlane;
+  if (value.data_plane !== undefined) {
+    if (
+      typeof value.data_plane !== 'string' ||
+      !DATA_PLANES.has(value.data_plane as HubDataPlane)
+    ) {
+      return undefined;
+    }
+    dataPlane = value.data_plane as HubDataPlane;
+  } else {
+    dataPlane = deriveDataPlane(url, publicUrl);
+  }
+
   const status = value.status;
-  if (!isNonEmptyString(url)) return undefined;
   if (typeof status !== 'string' || !STATUSES.has(status as HubNodeStatus)) return undefined;
   if (typeof value.truncated !== 'boolean') return undefined;
 
@@ -170,7 +220,8 @@ function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
     pairing_id: pairingId,
     node_id: nodeId,
     tenant_id: tenantId,
-    url,
+    direction,
+    data_plane: dataPlane,
     status: status as HubNodeStatus,
     truncated: value.truncated,
     counts: { teams: teamsCount, agents: agentsCount, live_agents: liveAgentsCount },
@@ -178,6 +229,12 @@ function parseNodeRecord(value: unknown): HubNodeRecord | undefined {
     agents,
   };
 
+  if (url !== undefined) record.url = url;
+  if (publicUrl !== undefined) record.public_url = publicUrl;
+  if (value.node_token_id !== undefined) {
+    if (!isNonEmptyString(value.node_token_id)) return undefined;
+    record.node_token_id = value.node_token_id;
+  }
   if (value.alias !== undefined) {
     if (!isNonEmptyString(value.alias)) return undefined;
     record.alias = value.alias;
@@ -346,6 +403,11 @@ class HubRegistryImpl implements HubRegistry {
     merged.pairing_id = existing.pairing_id;
     merged.node_id = existing.node_id;
     merged.tenant_id = existing.tenant_id;
+
+    // url / public_url 变化时重新派生 data_plane；显式提供的 data_plane 优先。
+    const patchHasDataPlane = patch.data_plane !== undefined;
+    const patchTouchesUrls = patch.url !== undefined || patch.public_url !== undefined;
+    if (patchTouchesUrls && !patchHasDataPlane) delete merged.data_plane;
 
     const parsed = parseNodeRecord(merged);
     if (!parsed) {

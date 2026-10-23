@@ -150,6 +150,8 @@ describe('completion scripts - 覆盖范围', () => {
       'directory',
       'watch',
       'pair',
+      'join-code',
+      'join',
       'node',
       'token',
       'data-token',
@@ -165,8 +167,10 @@ describe('completion scripts - 覆盖范围', () => {
       '--token-id',
       '--team',
       '--code',
+      '--code-env',
       '--alias',
       '--ttl',
+      '--public-url',
     ]) {
       expect({ flag, covered: flags.has(flag) }).toEqual({ flag, covered: true });
     }
