@@ -577,11 +577,11 @@ export class DefaultTeamService implements AgentTeamService {
 
   /** system 消息：只写日志、不 dispatch；失败只 warning（不改变生命周期） */
   private onAgentEvent(event: AgentEvent): void {
-    if (event.team_id === undefined || event.team_id.length === 0) return;
+    // Team log is team-visible. Private members (internal workers) must not leak
+    // id / name / reply into the team log. Fail closed for unknown visibility.
+    if (event.visibility !== 'team' && event.visibility !== 'tenant') return;
 
-    // Team 日志对 team 可见：private 成员永不写入（join / leave / archive / rotate /
-    // reply 全部拦在这里）。真实 AgentService 事件始终携带 visibility；缺省按不可见处理。
-    if (event.visibility === undefined || event.visibility === 'private') return;
+    if (event.team_id === undefined || event.team_id.length === 0) return;
 
     // 0.19 S6：成员完成一轮的最终文本。AgentService 只发事件；TeamService 是
     // 唯一日志写入点，且**不 dispatch / 不唤醒任何人**。message_id 与事件一致，
