@@ -58,8 +58,13 @@ import {
   resultFrame,
   eventSourceNodeId as sourceNodeId,
 } from './gateway/frames.js';
+import { createHubControlRoute, type HubControlConnectionState } from './gateway/hub-control.js';
+import { createHubPairingRoute } from './gateway/hub-pairing.js';
 import { createAdminMethods, type GatewayReloadResult } from './gateway/methods/admin.js';
 import { createAgentMethods } from './gateway/methods/agents.js';
+import { createAuthMethods } from './gateway/methods/auth.js';
+import type { HubControlLike, HubTeamScopeLike } from './hub-control.js';
+import type { NodeTokenControlLike } from './node-token-control.js';
 
 export type { GatewayReloadResult } from './gateway/methods/admin.js';
 
@@ -111,6 +116,7 @@ import {
   createRpcDispatcher,
   defineMethods,
   hasPermission,
+  isTeamScopedPrincipal,
   type RpcDispatcher,
   RpcError,
   type RpcErrorBody,
@@ -180,6 +186,18 @@ export interface GatewayOptions {
    * 序号 / 缓冲 / 广播 / registry 都从 hub 读取；`maxHistory` 在 hub 上配置。
    */
   hub: TenantEventHub;
+  /**
+   * S5：hub 控制面投影；缺省 = `/v1/hub/control` 返回 404。
+   * 投影只含白名单元数据，不承载 RunEvent / 正文 / session_id。
+   */
+  hubControl?: HubControlLike;
+  /** S5：节点 scoped token 控制面（auth.* / `/v1/hub/pair`）；缺省端点关闭。 */
+  nodeTokens?: NodeTokenControlLike;
+  /**
+   * S5：control token 的 session → team 归属映射。
+   * 缺失或无法判定时，team-scoped 的交互 / 事件访问 fail-closed。
+   */
+  hubTeamScope?: HubTeamScopeLike;
   /** 会话后端（可选）——/v1/sessions 数据源 */
   session?: SessionBackend;
   /** 运行时（可选）——运行控制端点；结构类型 RunnableAgent（A10），不要断言成 AgentRuntime */
@@ -356,6 +374,11 @@ export interface Gateway {
    */
   reconfigure(options: GatewayReconfigureOptions): void;
   /**
+   * S5：关闭持有该 token_id 的 WS（事件连接 + hub control）；返回关闭数。
+   * HTTP 每请求重新鉴权，吊销后自然失效；该方法是 live WS 的收口。
+   */
+  closeByTokenId(tokenId: string): number;
+  /**
    * 进程内 dispatcher（与 asm `RpcDispatcher` 结构一致）。
    * asm 用它构造 `LocalRpcClient`；principal 缺省为本地 default/admin。
    */
@@ -388,6 +411,11 @@ interface WsData {
   /** events.subscribe 过滤 */
   runId?: string;
   types?: string[];
+  /**
+   * S5：`/v1/hub/control` 连接状态。存在时该 WS **不是**事件连接，
+   * 不进入 `wsClients`，因此不会收到 RunEvent。
+   */
+  hubControl?: HubControlConnectionState;
 }
 
 type Ws = import('bun').ServerWebSocket<WsData>;
@@ -602,6 +630,20 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.evals !== undefined && typeof opts.evals.latest !== 'function') {
     throw new Error('evals.latest must be a function.');
   }
+  if (opts.hubControl !== undefined) {
+    if (
+      typeof opts.hubControl.snapshot !== 'function' ||
+      typeof opts.hubControl.subscribe !== 'function'
+    ) {
+      throw new Error('hubControl must provide snapshot() and subscribe().');
+    }
+  }
+  if (opts.nodeTokens !== undefined && typeof opts.nodeTokens.mintPairingTokens !== 'function') {
+    throw new Error('nodeTokens.mintPairingTokens must be a function.');
+  }
+  if (opts.hubTeamScope !== undefined && typeof opts.hubTeamScope.teamForSession !== 'function') {
+    throw new Error('hubTeamScope.teamForSession must be a function.');
+  }
 
   const features = [...BASE_FEATURES];
   if (opts.durable?.store && opts.durable.resume) features.push('durable-resume');
@@ -624,6 +666,22 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const nodeId = opts.nodeId ?? opts.team?.nodeId ?? randomUUID();
   /** 0.9 事务代际：进程启动时生成一次，随 hello / peer 记录传播（重启即变化）。 */
   const incarnation = randomUUID().replace(/-/g, '').slice(0, 12);
+  /**
+   * S5：hub control / pairing 路由。hub control 连接独立于 `wsClients`，
+   * 由路由自己的心跳与订阅管理；未注入时端点返回 404。
+   */
+  const hubControlRoute = createHubControlRoute({
+    ...(opts.hubControl !== undefined ? { hubControl: opts.hubControl } : {}),
+    ...(opts.auth !== undefined ? { auth: opts.auth } : {}),
+    legacyToken: token,
+    nodeId,
+    incarnation,
+    defaultTenantId,
+    ...(opts.authTimeoutMs !== undefined ? { authTimeoutMs: opts.authTimeoutMs } : {}),
+  });
+  const hubPairingRoute = createHubPairingRoute({
+    ...(opts.nodeTokens !== undefined ? { nodeTokens: opts.nodeTokens } : {}),
+  });
   const startedAt = Date.now();
   const maxBodyBytes = opts.maxBodyBytes ?? DEFAULT_MAX_BODY;
   const maxQueue = opts.maxQueue ?? MAX_QUEUE;
@@ -634,6 +692,30 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
+
+  /** S5：token 吊销时关闭 live WS；HTTP 请求不缓存 principal，无需处理。 */
+  function closeByTokenId(tokenId: string): number {
+    let closed = 0;
+    for (const ws of [...wsClients]) {
+      if (ws.data.principal?.token_id !== tokenId) continue;
+      try {
+        ws.close(4401, 'token revoked');
+      } catch {
+        // best-effort
+      }
+      wsClients.delete(ws);
+      closed += 1;
+    }
+    closed += hubControlRoute.closeByTokenId(tokenId);
+    return closed;
+  }
+
+  const unsubscribeTokenRevoke =
+    opts.nodeTokens !== undefined && typeof opts.nodeTokens.onRevoke === 'function'
+      ? opts.nodeTokens.onRevoke((tokenId) => {
+          closeByTokenId(tokenId);
+        })
+      : undefined;
 
   // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）。
   // 0.18：engine 只拿 per-tenant 流；hub 负责把 tenant 事件扇入到这里。
@@ -808,7 +890,29 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (!eventVisible(event, ws.data.tenantId, ws.data.allTenants)) return false;
     if (ws.data.runId !== undefined && event.run_id !== ws.data.runId) return false;
     if (ws.data.types !== undefined && !ws.data.types.includes(event.type)) return false;
+    // S5：control token 只接收映射到本 team 的事件；无法判定 → 丢弃。
+    const principal = ws.data.principal;
+    if (principal !== undefined && isTeamScopedPrincipal(principal)) {
+      const sessionId = eventSessionId(event);
+      if (sessionId === undefined) return false;
+      if (opts.hubTeamScope?.teamForSession(sessionId) !== principal.team_id) return false;
+    }
     return true;
+  }
+
+  /**
+   * 事件所属 session：优先读 `event.session_id`（S5 契约），
+   * 缺省回落到 `event.data.session_id`。两者都没有 → undefined（fail-closed）。
+   */
+  function eventSessionId(event: RunEvent): string | undefined {
+    const direct = (event as { session_id?: unknown }).session_id;
+    if (typeof direct === 'string' && direct.length > 0) return direct;
+    const data = event.data;
+    if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+      const nested = (data as Record<string, unknown>).session_id;
+      if (typeof nested === 'string' && nested.length > 0) return nested;
+    }
+    return undefined;
   }
 
   function sendEventToWs(ws: Ws, item: SeqEvent): void {
@@ -1126,6 +1230,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
         pendingPermissions: engine.pendingPermissions,
         pendingAsks: engine.pendingAsks,
       },
+      ...(opts.hubTeamScope !== undefined ? { teamScope: opts.hubTeamScope } : {}),
     }),
     ...createWorkflowMethods({
       requireWorkflows,
@@ -1146,6 +1251,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }),
     // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
     ...createTeamMethods({ teams: opts.teams }),
+    // 0.19 S5：auth.exchange / auth.revoke / auth.tokens（additive，排在表尾）。
+    ...createAuthMethods({
+      ...(opts.nodeTokens !== undefined ? { nodeTokens: opts.nodeTokens } : {}),
+    }),
   ];
 
   methodTable = defineMethods(rpcMethods);
@@ -2925,7 +3034,21 @@ export function startGateway(opts: GatewayOptions): Gateway {
         );
       }
 
+      // S5：hub 配对。一次性 code 即凭据，在 Bearer 校验之前处理。
+      const hubPairingResponse = await hubPairingRoute.handle(
+        req,
+        url,
+        extra,
+        srv.requestIP(req)?.address,
+      );
+      if (hubPairingResponse !== undefined) return hubPairingResponse;
+
       const isWebSocket = (req.headers.get('upgrade') ?? '').toLowerCase() === 'websocket';
+
+      // S5：hub control WS（独立订阅；不进入 wsClients）。
+      const hubControlResult = hubControlRoute.handle(req, url, srv, extra);
+      if (hubControlResult === 'upgraded') return;
+      if (hubControlResult !== undefined) return hubControlResult;
 
       // WS：/v1/events（/ws 为 0.1.0 兼容别名）。
       // ADR-053：token 不进 URL/query，只接受首帧 `{kind:'auth',token,since}`。
@@ -3256,6 +3379,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     websocket: {
       data: {} as WsData,
       open(ws) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.open(ws);
+          return;
+        }
         ws.data.alive = true;
         if (ws.data.authed) {
           replayTo(ws);
@@ -3268,13 +3395,25 @@ export function startGateway(opts: GatewayOptions): Gateway {
         timer.unref?.();
       },
       message(ws, message) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.message(ws, message);
+          return;
+        }
         void handleWsMessage(ws, message);
       },
       close(ws) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.close(ws);
+          return;
+        }
         if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
         wsClients.delete(ws);
       },
       pong(ws) {
+        if (ws.data.hubControl !== undefined) {
+          hubControlRoute.pong(ws);
+          return;
+        }
         ws.data.alive = true;
       },
     },
@@ -3429,7 +3568,9 @@ export function startGateway(opts: GatewayOptions): Gateway {
       reportStopError('unsubscribe engine events', error);
     }
 
+    unsubscribeTokenRevoke?.();
     closeWsClients();
+    hubControlRoute.stop();
     closeSseClients(sseClients);
     closeSseClients(teamClients);
     knownPeers.clear();
@@ -3454,6 +3595,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     tls: tlsMaterial !== undefined,
     attachTeam,
     reconfigure,
+    closeByTokenId,
     rpc: dispatcher.dispatch,
     manifest,
     stop() {

@@ -106,6 +106,7 @@
 | 089 | 0.18.0 tenant 事件流是唯一事件面（TenantEventHub） | accepted | 2026-10-21 | event, gateway, tenant, multi-tenant, hub, breaking | [ADR-089-tenant-event-hub.md](ADR-089-tenant-event-hub.md) |
 | 091 | 0.19.0 Agent / Body 内核（S1）：节点身份、presence 与 dispatch | accepted | 2026-10-23 | agent, body, presence, membership, dispatch, snapshot, node-identity, session, tenancy | [ADR-091-agent-body-and-presence.md](ADR-091-agent-body-and-presence.md) |
 | 092 | 0.19.0 Agent rotate 与 epoch fencing（S2） | accepted | 2026-10-23 | agent, body, rotate, epoch, fencing, snapshot, session, permission, cli | [ADR-092-agent-rotate-and-epoch-fencing.md](ADR-092-agent-rotate-and-epoch-fencing.md) |
+| 093 | Hub 控制面（S5） | accepted | 2026-10-23 | hub, control-plane, directory, pairing, scoped-token, secret-store | [ADR-093-hub-control-plane.md](ADR-093-hub-control-plane.md) |
 
 ## 编写约定
 

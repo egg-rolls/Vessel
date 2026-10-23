@@ -135,6 +135,19 @@ function printHelp(): void {
     ['vessel gateway install-service', t('help.cmd.gatewayInstall')],
     ['vessel gateway uninstall-service', t('help.cmd.gatewayUninstall')],
   ];
+  const hub: Array<[string, string]> = [
+    ['vessel hub start [--host H] [--port N] [--allow-remote]', t('help.cmd.hubStart')],
+    ['vessel hub directory [--hub-url URL] [--json]', t('help.cmd.hubDirectory')],
+    ['vessel hub watch [--hub-url URL]', t('help.cmd.hubWatch')],
+    ['vessel hub pair [--tenant ID] [--ttl N]', t('help.cmd.hubPair')],
+    ['vessel hub node add <url> --code <CODE>', t('help.cmd.hubNodeAdd')],
+    ['vessel hub node list [--json]', t('help.cmd.hubNodeList')],
+    ['vessel hub node remove <pairing_id>', t('help.cmd.hubNodeRemove')],
+    ['vessel hub token exchange <node-url> --team <id>', t('help.cmd.hubTokenExchange')],
+    ['vessel hub token revoke <node-url> --token-id <id>', t('help.cmd.hubTokenRevoke')],
+    ['vessel hub token list <node-url>', t('help.cmd.hubTokenList')],
+    ['vessel hub data-token <pairing_id> --team <id>', t('help.cmd.hubDataToken')],
+  ];
   const capability: Array<[string, string]> = [
     ['vessel workflow list', t('help.cmd.workflowList')],
     ['vessel workflow run <name>', t('help.cmd.workflowRun')],
@@ -190,6 +203,7 @@ function printHelp(): void {
       ...session,
       ...headless,
       ...gateway,
+      ...hub,
       ...capability,
       ...config,
       ...tenant,
@@ -216,6 +230,9 @@ function printHelp(): void {
       '',
       `  ${ui.section(t('help.section.gateway'))}`,
       align(gateway, width),
+      '',
+      `  ${ui.section(t('help.section.hub'))}`,
+      align(hub, width),
       '',
       `  ${ui.section(t('help.section.capability'))}`,
       align(capability, width),
@@ -641,6 +658,7 @@ async function runWithConfig(result: BootstrapResult) {
     const authResult = resolveGatewayAuth(config, {
       hostname: resolved.options.hostname,
       allowRemote: resolved.options.allowRemote,
+      ...(result.agent?.nodeTokens !== undefined ? { tokenStore: result.agent.nodeTokens } : {}),
     });
     if (!authResult.ok) {
       console.error(authResult.error);
@@ -876,6 +894,10 @@ async function runWithConfig(result: BootstrapResult) {
       ...(result.feishu ? { feishu: result.feishu } : {}),
       // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。
       ...(result.agent?.team ? { teams: result.agent.team } : {}),
+      // S5：hub 目录投影 / 动态 token / session→team 归属。
+      ...(result.agent?.hubControl ? { hubControl: result.agent.hubControl } : {}),
+      ...(result.agent?.nodeTokens ? { nodeTokens: result.agent.nodeTokens } : {}),
+      ...(result.agent?.teamScope ? { teamScope: result.agent.teamScope } : {}),
       // 0.5.4 P2-1：非 default tenant 使用自己的 workflow / feishu 实例。
       // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
       ...(tenantFactory

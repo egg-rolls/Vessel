@@ -43,12 +43,49 @@ export {
   normalizeFeishuStatus,
 } from './feishu.js';
 export {
+  corsHeaders,
+  hostAllowed,
+  isWildcardHostname,
+  loadTlsMaterial,
+  normalizeAllowedOrigins,
+  originAllowed,
+} from './gateway/auth.js';
+export {
   type GatewayReloadResult,
   RELOAD_SCOPES,
   type ReloadScope,
 } from './gateway/methods/admin.js';
 export type { Gateway, GatewayOptions, GatewayReconfigureOptions } from './gateway.js';
 export { isLoopbackHostname, startGateway } from './gateway.js';
+export {
+  HUB_MAX_AGENTS,
+  HUB_MAX_TEAMS,
+  type HubAgentMeta,
+  type HubControlChange,
+  type HubControlLike,
+  type HubNodeSnapshotInput,
+  type HubPointerInput,
+  type HubPointerReason,
+  type HubTeamMeta,
+  type HubTeamScopeLike,
+} from './hub-control.js';
+export {
+  HUB_PROTOCOL,
+  type HubAuthFrame,
+  type HubClientFrame,
+  type HubDialer,
+  type HubHelloFrame,
+  type HubPingFrame,
+  type HubPointerFrame,
+  type HubPongFrame,
+  type HubServerFrame,
+  type HubSnapshotFrame,
+  isHubDialer,
+  isHubProtocol,
+  parseHubAgentMeta,
+  parseHubPointerReason,
+  parseHubTeamMeta,
+} from './hub-protocol.js';
 export {
   createLocalRpcDispatcher,
   type LocalRpcDispatcher,
@@ -67,6 +104,20 @@ export {
   type MetricsSnapshot,
   normalizeMetricsSnapshot,
 } from './metrics.js';
+export {
+  CONTROL_TOKEN_DEFAULT_TTL_S,
+  CONTROL_TOKEN_MAX_TTL_S,
+  type ExchangeTokenInput,
+  type IssuedNodeToken,
+  type MintPairingTokensInput,
+  type NodeTokenAuthenticator,
+  type NodeTokenControlLike,
+  type NodeTokenMeta,
+  type NodeTokenScope,
+  PAIRING_TOKEN_TTL_MS,
+  type PairingTokenPair,
+  type RevokeTokenResult,
+} from './node-token-control.js';
 export {
   type ClientFrame,
   type NodeInfo,

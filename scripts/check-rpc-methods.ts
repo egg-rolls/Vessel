@@ -78,6 +78,10 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'teams.get': 'read',
   'teams.post': 'write',
   'teams.members': 'write',
+  // 0.19 S5：hub 控制面。exchange 换短期 control token；revoke / list 只允许 admin。
+  'auth.exchange': 'write',
+  'auth.revoke': 'admin',
+  'auth.tokens': 'admin',
 };
 
 const LEGACY_PREFIXES = ['team.', 'durable.'] as const;

@@ -213,6 +213,28 @@ export const zhCN = {
   'errors.empty': '没有最近的错误。',
   'errors.recent': '最近错误（{count}）',
 
+  // ── hub（S5）──
+  'help.section.hub': 'Hub 控制面（S5）',
+  'help.cmd.hubStart': '前台启动 hub；--allow-remote 需要 TLS 与 tokenEnv',
+  'help.cmd.hubDirectory': '读取 hub 目录（配对节点与状态）',
+  'help.cmd.hubWatch': '订阅 hub 目录与指针事件（Ctrl+C 退出）',
+  'help.cmd.hubPair': '生成节点侧一次性配对码',
+  'help.cmd.hubNodeAdd': '用一次性码向 hub 注册节点',
+  'help.cmd.hubNodeList': '列出 hub 已配对节点',
+  'help.cmd.hubNodeRemove': '从 hub 移除配对',
+  'help.cmd.hubTokenExchange': '直连节点换取 team 短期 control token',
+  'help.cmd.hubTokenRevoke': '吊销节点 token',
+  'help.cmd.hubTokenList': '列出节点 token 元数据',
+  'help.cmd.hubDataToken': '经 hub 为 team 换取短期 control token',
+  'hub.error.envMissing': '环境变量 {env} 未设置。',
+  'hub.error.invalidUrl': '无效的 URL。',
+  'hub.error.invalidResponse': '服务返回了无法识别的响应。',
+  'hub.error.requestFailed': '请求失败：{detail}',
+  'hub.error.timeout': '请求超时（{ms}ms）。',
+  'hub.empty.nodes': '没有已配对节点。',
+  'hub.empty.tokens': '没有 token。',
+  'hub.watch.closed': 'hub watch 连接已关闭。',
+
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': '未知 shell "{shell}"。',

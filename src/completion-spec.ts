@@ -130,6 +130,14 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--from',
   '--to',
   '--source',
+  '--hub-url',
+  '--token-env',
+  '--team',
+  '--ttl',
+  '--code',
+  '--alias',
+  '--token-id',
+  '--admin-token-env',
 ];
 
 /** 值可省略的 flag（`--resume` 无 id = 列出会话） */
@@ -272,6 +280,28 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
       { name: 'install-service', flags: ['--systemd', '--launchd', '--schtasks'] },
       { name: 'uninstall-service' },
+    ],
+  },
+  {
+    token: 'hub',
+    registryName: 'hub',
+    subcommands: [
+      {
+        name: 'start',
+        flags: ['--host', '--port', '--data-dir', '--allow-remote', '--tls-cert', '--tls-key'],
+      },
+      { name: 'directory', flags: ['--hub-url', '--token-env', '--json'] },
+      { name: 'watch', flags: ['--hub-url', '--token-env'] },
+      { name: 'pair', flags: ['--data-dir', '--tenant', '--ttl'] },
+      {
+        name: 'node',
+        flags: ['--code', '--alias', '--ca', '--hub-url', '--json'],
+      },
+      {
+        name: 'token',
+        flags: ['--team', '--ttl', '--admin-token-env', '--token-id', '--json'],
+      },
+      { name: 'data-token', flags: ['--team', '--hub-url', '--token-env', '--ttl'] },
     ],
   },
   { token: 'status', registryName: 'status', flags: ['--json'] },

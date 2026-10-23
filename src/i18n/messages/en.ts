@@ -222,6 +222,28 @@ export const en: Record<MessageKey, string> = {
   'errors.empty': 'No recent errors.',
   'errors.recent': 'Recent errors ({count})',
 
+  // ── hub (S5) ──
+  'help.section.hub': 'Hub control plane (S5)',
+  'help.cmd.hubStart': 'start the hub in the foreground; --allow-remote needs TLS and tokenEnv',
+  'help.cmd.hubDirectory': 'read the hub directory (paired nodes and status)',
+  'help.cmd.hubWatch': 'subscribe to hub directory and pointer events (Ctrl+C exits)',
+  'help.cmd.hubPair': 'generate a one-time pairing code for a node',
+  'help.cmd.hubNodeAdd': 'register a node with the hub using a one-time code',
+  'help.cmd.hubNodeList': 'list nodes paired with the hub',
+  'help.cmd.hubNodeRemove': 'remove a pairing from the hub',
+  'help.cmd.hubTokenExchange': 'exchange a short-lived team control token directly with a node',
+  'help.cmd.hubTokenRevoke': 'revoke a node token',
+  'help.cmd.hubTokenList': 'list node token metadata',
+  'help.cmd.hubDataToken': 'exchange a short-lived team control token through the hub',
+  'hub.error.envMissing': 'Environment variable {env} is not set.',
+  'hub.error.invalidUrl': 'Invalid URL.',
+  'hub.error.invalidResponse': 'The service returned an unrecognized response.',
+  'hub.error.requestFailed': 'Request failed: {detail}',
+  'hub.error.timeout': 'Request timed out ({ms}ms).',
+  'hub.empty.nodes': 'No paired nodes.',
+  'hub.empty.tokens': 'No tokens.',
+  'hub.watch.closed': 'hub watch connection closed.',
+
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',
   'completion.unknownShell': 'Unknown shell "{shell}".',

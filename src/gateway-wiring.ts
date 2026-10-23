@@ -6,7 +6,12 @@
  */
 
 import type { VesselConfig } from '../packages/config/src/index';
-import type { TeamControlLike } from '../packages/serve/src/index';
+import type {
+  HubControlLike,
+  HubTeamScopeLike,
+  NodeTokenControlLike,
+  TeamControlLike,
+} from '../packages/serve/src/index';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -51,6 +56,12 @@ export interface GatewayControlPlaneOptions {
   evalsEnabled?: boolean;
   /** 测试注入口 */
   loader?: PluginLoader;
+  /** S5：hub 目录投影（gateway `hubControl` 选项）。 */
+  hubControl?: HubControlLike;
+  /** S5：节点动态 token 认证面（gateway `nodeTokens` 选项）。 */
+  nodeTokens?: NodeTokenControlLike;
+  /** S5：session → team 归属（gateway `hubTeamScope` 选项）。 */
+  teamScope?: HubTeamScopeLike;
 }
 
 /**
@@ -100,6 +111,11 @@ export function buildGatewayControlPlane(
   // 0.5.4 P2-1：per-tenant 控制面；旧 `workflows` / `feishu` 保持 default 行为不变。
   if (options.workflowsFor) controlPlane.workflowsFor = options.workflowsFor;
   if (options.feishuFor) controlPlane.feishuFor = options.feishuFor;
+
+  // S5：未提供时不出现在返回对象里（与 metrics / workflows 一致）。
+  if (options.hubControl) controlPlane.hubControl = options.hubControl;
+  if (options.nodeTokens) controlPlane.nodeTokens = options.nodeTokens;
+  if (options.teamScope) controlPlane.hubTeamScope = options.teamScope;
 
   const evalsEnabled = options.evalsEnabled ?? options.config.evals?.enabled === true;
   if (evalsEnabled) {

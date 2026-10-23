@@ -45,7 +45,10 @@ import {
   type ConfigSnapshotLike,
   createGatewayEventHub,
   createLocalRpcDispatcher,
+  type HubControlLike,
+  type HubTeamScopeLike,
   type LocalRpcDispatcher,
+  type NodeTokenControlLike,
 } from '../packages/serve/src/index';
 import type { ReplContext } from '../packages/tui/src/index';
 import { type AgentOwnerServer, startAgentOwnerServer } from './agent-owner-server';
@@ -73,6 +76,7 @@ import {
   resumeError,
   routeResume,
 } from './durable-wiring';
+import { createHubRuntime } from './hub-wiring';
 import { t } from './i18n';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
@@ -249,6 +253,12 @@ export interface BootstrapResult {
     owner: MemberStatus;
     ownerId: string;
     ownerServer?: AgentOwnerServer;
+    /** S5：hub 目录投影（未启用 agent 时为 undefined）。 */
+    hubControl?: HubControlLike;
+    /** S5：team-scoped token 的 session 归属。 */
+    teamScope?: HubTeamScopeLike;
+    /** S5：节点 token 控制面（同时供 resolveGatewayAuth 使用）。 */
+    nodeTokens?: NodeTokenControlLike;
     dispose: () => Promise<void>;
   };
   /** 0.5：trace 控制面（disabled/off 或 connect 模式为 undefined） */
@@ -1103,6 +1113,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
   // ── AgentService + REPL owner 端点（0.17 Phase A）──
   let agentControl: BootstrapResult['agent'];
+  // S5：节点 token 控制面在 agent 未启用时保持 undefined（行为不变）。
+  let nodeTokens: NodeTokenControlLike | undefined;
   if (agentServiceEnabled) {
     // A3c：交互入口成员 ask 经父事件流弹现有权限卡片；headless 直接 allow。
     const memberPermissionMode: MemberPermissionMode = agentPlan.permissionMode;
@@ -1150,6 +1162,16 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     });
     finalPluginHost.registerTool(wiring.tool);
 
+    // S5：hub 目录投影 + team 归属 + 节点 token 控制面。
+    const hubRuntime = await createHubRuntime({
+      service: wiring.service,
+      dataDir,
+      tenantId,
+      nodeId,
+      logger,
+    });
+    nodeTokens = hubRuntime.nodeTokens;
+
     let ownerServer: AgentOwnerServer | undefined;
     try {
       ownerServer = await startAgentOwnerServer({
@@ -1175,6 +1197,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       owner: wiring.owner,
       ownerId: wiring.ownerId,
       ...(ownerServer !== undefined ? { ownerServer } : {}),
+      hubControl: hubRuntime.hubControl,
+      teamScope: hubRuntime.teamScope,
+      nodeTokens: hubRuntime.nodeTokens,
       dispose: async () => {
         // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
         wiring.injector.dispose();
@@ -1329,6 +1354,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     hostname: '127.0.0.1',
     allowRemote: false,
     env: process.env,
+    // S5：静态 token 未命中时再查节点动态 token；未启用 agent 时无动态面。
+    ...(nodeTokens !== undefined ? { tokenStore: nodeTokens } : {}),
   });
   // 0.18：本地模式只有一个 tenant 流；dispatcher 与 gateway 共用同一个 hub。
   const localEventHub = createGatewayEventHub({

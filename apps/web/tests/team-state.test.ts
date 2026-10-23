@@ -4,10 +4,8 @@ import type { TeamEventLike } from '../src/state/teams';
 import {
   applyTeamEvent,
   createTeamEventState,
-  latestRotateFailure,
   mergeMessages,
   observedBodyHistory,
-  preferBodyHistory,
   serverBodyHistory,
   sortMessages,
 } from '../src/state/teams';
