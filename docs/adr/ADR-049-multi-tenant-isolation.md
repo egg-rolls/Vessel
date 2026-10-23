@@ -24,3 +24,10 @@ tags: [tenancy, isolation, gateway]
 - **备选**：(a) 单进程单 tenant，靠多进程隔离——与“一个 gateway 服务 N tenant”的目标冲突；(b) tenant 通过路径前缀隐式推导——无法覆盖配置、工具、quota 与 RPC 鉴权；(c) 允许 tenant overlay 覆盖 `data_dir` / `serve`——会产生跨 tenant 路径与安全风险。均不取。
 - **后果**：tenant 边界成为全链路不变量；多租户部署优先使用 `serve.tokens` 发放 tenant token，`serve.token` 仅保留 0.4 兼容语义。非 default tenant 需要显式工厂，未配置时 fail-closed。0.5 不做跨机器远程（F5 在 0.6），也不做 tenant 物理删除。
 - **关联**：ADR-001 / ADR-002（分层）、ADR-005（配置分层）、ADR-036（gateway）、ADR-046（存储）、ADR-050（配置与密钥）；DECISION-010 §2.5；Addendum A-3 §10.4–§10.7；A-4 §11.1 / §11.4 / §11.7。
+
+## Addendum（0.19 / S5 hub 控制面）
+
+- **`Principal` additive 字段**：`RpcMethodContext.principal` 增加可选 `scope?` / `team_id?` / `token_id?` / `hub_id?`。静态 token 不写这些字段；既有 `{ tenant_id, role }` 的解析、优先级与鉴权语义不变。
+- **scope 映射既有 role**：`view | exchange | control | admin` 只映射到既有 `read / write / admin` rank 与各 scope 的方法白名单；不新增 role 字符串，也不改 `ROLE_RANK`。tenant principal 的冻结语义（§3 / §6）不变。
+- **hub 不建模 tenant**：hub 的目录记录以 `pairing_id = node_id:tenant_id` 标识一个配对，但 hub 自身不是 tenant principal，不持有 tenant 身份，也不代理跨 tenant 正文。team 收窄仍在节点侧强制。
+- 以上均为 additive，不改变 ADR-049 §1–§10 的 tenant 隔离结论。

@@ -72,6 +72,11 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'feishu.status': 'read',
   // 0.12（DECISION-023 §2.3）：热重载，admin-only。
   'gateway.reload': 'admin',
+  // S5 hub 控制面：exchange 换短期 control token；revoke / list 只允许 admin。
+  // 本分支 canonical 合计 45 + 3 = 48；S3 的 teams.*（+4）合入后由集成 N 改为 52。
+  'auth.exchange': 'write',
+  'auth.revoke': 'admin',
+  'auth.tokens': 'admin',
 };
 
 const LEGACY_PREFIXES = ['team.', 'durable.'] as const;

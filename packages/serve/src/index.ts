@@ -43,6 +43,14 @@ export {
   normalizeFeishuStatus,
 } from './feishu.js';
 export {
+  corsHeaders,
+  hostAllowed,
+  isWildcardHostname,
+  loadTlsMaterial,
+  normalizeAllowedOrigins,
+  originAllowed,
+} from './gateway/auth.js';
+export {
   type GatewayReloadResult,
   RELOAD_SCOPES,
   type ReloadScope,

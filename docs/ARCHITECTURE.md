@@ -999,7 +999,7 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 ### 13.7 统一 RPC 方法表（0.5）
 
 - **信封**：请求 `{ v: 1, id, method, params? }`；成功 `{ v: 1, id, ok: true, result }`；失败 `{ v: 1, id, ok: false, error: { code, message, details? } }`。HTTP 入口 `POST /v1/rpc`；WS 复用 `req` / `res`。
-- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）。
+- **canonical 方法（v1.1）**：`health.get`；`capabilities.list`；`config.get` / `config.sources` / `config.set`（0.15，write）；`sessions.list|get|search|delete|rename`；`runs.list|get|start|cancel|resume`；`agents.list|get`（0.14，read）/ `agents.tree`（0.15，read）；`tasks.list|get`（0.15，read）；`events.list|subscribe`；`tools.list`；`plugins.list`；`metrics.get`（`source: live|trace`）/ `metrics.reset`；`trace.prune`；`tenants.list|get|create|update`；`permission.respond` / `ask.respond`；`interactions.list`（0.18，read）；`workflow.list|start|get|resume|cancel`；`evals.run|latest`；`feishu.status`；`mcp.list|reconnect`；`gateway.reload`（0.12，admin-only，缺省 `not_supported`）；`auth.exchange` / `auth.revoke` / `auth.tokens`（S5 hub 控制面）。
 
 <!-- rpc-methods:begin -->
 | 方法 | permission |
@@ -1049,9 +1049,12 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `evals.run` | write |
 | `feishu.status` | read |
 | `gateway.reload` | admin |
+| `auth.exchange` | write |
+| `auth.revoke` | admin |
+| `auth.tokens` | admin |
 <!-- rpc-methods:end -->
 
-0.18 起 canonical 方法总数 **45**（44 个 domain 方法 + `events.subscribe`）；0.18 新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
+0.18 起 canonical 方法总数 **45**（44 个 domain 方法 + `events.subscribe`）；0.18 新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。S5 新增 `auth.exchange` / `auth.revoke` / `auth.tokens`（+3），本分支 canonical 合计 **48**；S3 的 `teams.*`（+4）与 S5 的 `auth.*`（+3）合并后最终 52，本分支只声明 48。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。
@@ -2459,7 +2462,7 @@ interface LimitBlock {
 
 ### 40.5 rotate 与 epoch fencing
 
-- **入口**：`AgentService.rotate`；owner 端点 `agent.rotate`；CLI `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`；`agent` 工具 `action: rotate`（成员只能自换）。canonical RPC 方法表不变（仍 45）。
+- **入口**：`AgentService.rotate`；owner 端点 `agent.rotate`；CLI `vessel agent rotate <to> --startup <text> [--handoff <path>] [--json]`；`agent` 工具 `action: rotate`（成员只能自换）。S2 不新增 canonical 方法；当前方法表见 §13.7。
 - **前置**：只换活身体（`presence !== 'live'` → `body_not_live`）；`left` / `closed` / closing → `agent_left`；并发 rotate → `rotating`；external owner → `owner_not_rotatable`；工具路径 `from_session_id` 必须等于当前 Body session，否则 `not_current_body`。
 - **切换**：新 Body 新 `session_id`、`epoch + 1`，按 Agent 配置 spawn。顺序：spawn → 旧指针进 `body_history`（≤20）→ `setCurrentBody` → `scheduleSnapshot()` → `await flushSnapshot()`（返回 boolean，无 snapshot 时 `true`）→ 启动嘱托 `unshift` → `rotated` → `rotation = stable` → `pump`。
 - **失败**：spawn 失败 / 快照写失败 → 指针与 `body_history` 回滚、dispose 新 engine、`rotation` 回 `stable`、不插入启动嘱托、返回 `rotate_failed`；不 fork、不自动重试。flush 已提交后的 close 竞态不回滚指针。

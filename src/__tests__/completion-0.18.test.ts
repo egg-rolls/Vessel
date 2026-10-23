@@ -142,6 +142,47 @@ describe('completion scripts - 覆盖范围', () => {
     }
   });
 
+  it('hub 子命令与 flags 被收录', () => {
+    const hub = COMPLETION_COMMANDS.find((command) => command.token === 'hub');
+    expect(hub?.registryName).toBe('hub');
+    expect(hub?.subcommands?.map((sub) => sub.name)).toEqual([
+      'start',
+      'directory',
+      'watch',
+      'pair',
+      'node',
+      'token',
+      'data-token',
+    ]);
+    const flags = new Set<string>();
+    for (const sub of hub?.subcommands ?? []) {
+      for (const flag of sub.flags ?? []) flags.add(flag);
+    }
+    for (const flag of [
+      '--hub-url',
+      '--token-env',
+      '--admin-token-env',
+      '--token-id',
+      '--team',
+      '--code',
+      '--alias',
+      '--ttl',
+    ]) {
+      expect({ flag, covered: flags.has(flag) }).toEqual({ flag, covered: true });
+    }
+    for (const shell of COMPLETION_SHELLS) {
+      const script = renderCompletionScript(shell);
+      for (const flag of ['--hub-url', '--admin-token-env', '--token-id']) {
+        const needle = shell === 'fish' ? fishFlagForm(flag) : flag;
+        expect({ shell, flag, found: script.includes(needle) }).toEqual({
+          shell,
+          flag,
+          found: true,
+        });
+      }
+    }
+  });
+
   it('常用 flags 与静态候选值被收录', () => {
     const common = [
       '--json',

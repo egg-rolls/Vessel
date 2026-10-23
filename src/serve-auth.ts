@@ -23,6 +23,7 @@ import {
   type PrincipalRole,
   type VesselConfig,
 } from '../packages/config/src/index';
+import type { NodeTokenAuthenticator } from '../packages/serve/src/index';
 
 type EnvMap = Record<string, string | undefined>;
 
@@ -42,6 +43,11 @@ export interface ResolveGatewayAuthOptions {
   hostname: string;
   allowRemote: boolean;
   env?: EnvMap;
+  /**
+   * 节点动态 token 认证面（S5）。null / 空 token 仍走 anonymous；
+   * 静态候选优先，未命中再查动态 store。
+   */
+  tokenStore?: NodeTokenAuthenticator;
 }
 
 /** 解析结果 */
@@ -117,7 +123,8 @@ export function resolveGatewayAuth(
     });
   }
 
-  const configured = candidates.length > 0;
+  const tokenStore = options.tokenStore;
+  const configured = candidates.length > 0 || tokenStore?.hasTokens?.() === true;
   const loopback = isLoopbackHostname(options.hostname);
   const hasGatewayToken = legacyToken !== undefined || adminToken !== undefined;
 
@@ -158,6 +165,9 @@ export function resolveGatewayAuth(
         if (safeTokenEqual(token, candidate.token)) {
           return candidate.principal;
         }
+      }
+      if (tokenStore !== undefined) {
+        return tokenStore.authenticate(token);
       }
       return null;
     },

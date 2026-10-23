@@ -88,5 +88,6 @@ export interface HubTokenBrokerLike {
     url: string;
     team_id: string;
     ttl_s?: number;
+    ca_file?: string;
   }): Promise<HubDataToken>;
 }

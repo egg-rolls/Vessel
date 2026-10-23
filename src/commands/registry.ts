@@ -6,7 +6,7 @@
  * 主 REPL / serve / headless 路径不经过这里。
  */
 
-import { loadConfig } from '../../packages/config/src/index';
+import { loadConfig, type VesselConfig } from '../../packages/config/src/index';
 import { runAgentCommand } from '../agent-command';
 import { agentsCommand } from '../agents-command';
 import type { CliArgs } from '../cli-args';
@@ -23,6 +23,7 @@ import { doctorCommand } from '../doctor-command';
 import { errorsCommand } from '../errors-command';
 import { runEvalCommand } from '../eval-command';
 import { isForegroundGatewayCommand, runGatewayCommand } from '../gateway-command';
+import { runHubCommand } from '../hub-command';
 import { applyLocale } from '../i18n';
 import { logsCommand } from '../logs-command';
 import { migrateCommand } from '../migrate-command';
@@ -43,6 +44,8 @@ import { runWorkflowCommand } from '../workflow-command';
 export interface CliCommandContext {
   /** `VESSEL_MOCK=1|true` */
   useMock: boolean;
+  /** 已解析配置（入口可注入；hub 等命令缺省自行 loadConfig）。 */
+  config?: VesselConfig;
 }
 
 export interface CliCommand {
@@ -269,6 +272,17 @@ export const cliCommands: readonly CliCommand[] = [
       const command = args.gateway;
       if (command === null) return 1;
       return runGatewayCommand(command, { exclusive: args.exclusive });
+    },
+  },
+  {
+    name: 'hub',
+    match: (args) => args.hubCommand !== null && args.hubCommand !== undefined,
+    run: async (args, ctx) => {
+      const command = args.hubCommand;
+      if (command === null || command === undefined) return 1;
+      return runHubCommand(command, {
+        ...(ctx.config !== undefined ? { config: ctx.config } : {}),
+      });
     },
   },
   {

@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it, spyOn } from 'bun:test';
 import { MemoryEventStream, MemorySessionBackend, type RunEvent } from '@vessel-agent/core';
 import type { Gateway } from '../src/gateway';
 import { PROTOCOL_VERSION } from '../src/protocol';
-import { createRpcDispatcher, defineMethods, RPC_VERSION, type RpcMethodContext } from '../src/rpc';
+import {
+  createRpcDispatcher,
+  defineMethods,
+  RPC_VERSION,
+  type RpcMethodContext,
+  validateResult,
+} from '../src/rpc';
 import { createGateway } from './helpers';
 
 const gateways: Gateway[] = [];
@@ -61,12 +67,61 @@ function testDispatcher(onResultInvalid?: (violation: { method: string; path: st
 }
 
 describe('rpc result_schema', () => {
-  it('declares result_schema for all 45 canonical methods', () => {
+  it('declares result_schema for all 48 canonical methods', () => {
     const gw = createGateway({ events: new MemoryEventStream() });
     gateways.push(gw);
     const methods = gw.manifest().methods;
-    expect(methods).toHaveLength(45);
+    expect(methods).toHaveLength(48);
     expect(methods.filter((method) => method.result_schema === undefined)).toEqual([]);
+  });
+
+  it('declares validatable result_schema for the three S5 auth methods', () => {
+    const gw = createGateway({ events: new MemoryEventStream() });
+    gateways.push(gw);
+    const byName = new Map(gw.manifest().methods.map((method) => [method.name, method]));
+
+    const exchange = byName.get('auth.exchange');
+    const exchangeSchema = exchange?.result_schema as Record<string, unknown> | undefined;
+    expect(exchangeSchema).toBeDefined();
+    expect(
+      validateResult(exchangeSchema, {
+        token: 'tok-1',
+        token_id: 'token-1',
+        scope: 'control',
+        tenant_id: 'default',
+        team_id: 'team-1',
+        node_id: 'node-1',
+        hub_id: 'hub-1',
+        pairing_id: 'node-1:default',
+        expires_at: 1,
+      }),
+    ).toBeNull();
+    expect(validateResult(exchangeSchema, { token: 'tok-1', scope: 'control' })).not.toBeNull();
+
+    const revoke = byName.get('auth.revoke');
+    const revokeSchema = revoke?.result_schema as Record<string, unknown> | undefined;
+    expect(revokeSchema).toBeDefined();
+    expect(validateResult(revokeSchema, { token_id: 'token-1', revoked_at: 1 })).toBeNull();
+    expect(validateResult(revokeSchema, { token_id: 'token-1' })).not.toBeNull();
+
+    const tokens = byName.get('auth.tokens');
+    const tokensSchema = tokens?.result_schema as Record<string, unknown> | undefined;
+    expect(tokensSchema).toBeDefined();
+    expect(
+      validateResult(tokensSchema, {
+        tokens: [
+          {
+            token_id: 'token-1',
+            scope: 'view',
+            tenant_id: 'default',
+            issued_by: 'pairing',
+            created_at: 1,
+            expires_at: 2,
+          },
+        ],
+      }),
+    ).toBeNull();
+    expect(validateResult(tokensSchema, { tokens: [{ token_id: 'token-1' }] })).not.toBeNull();
   });
 
   it('keeps a single protocol version source', () => {

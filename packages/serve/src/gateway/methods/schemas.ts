@@ -229,6 +229,49 @@ export const runtimeSnapshotSchema = {
   },
 };
 
+/** S5：节点签发的一次性 token（auth.exchange 结果）。明文只在本次响应中出现。 */
+export const issuedNodeTokenSchema = {
+  type: 'object',
+  required: ['token', 'token_id', 'scope', 'tenant_id', 'node_id', 'expires_at'],
+  properties: {
+    token: { type: 'string' },
+    token_id: { type: 'string' },
+    scope: { type: 'string', enum: ['view', 'exchange', 'control', 'admin'] },
+    tenant_id: { type: 'string' },
+    node_id: { type: 'string' },
+    team_id: { type: 'string' },
+    hub_id: { type: 'string' },
+    pairing_id: { type: 'string' },
+    expires_at: { type: 'number' },
+  },
+};
+
+/** S5：token 元数据；永不含 token / hash。 */
+export const nodeTokenMetaSchema = {
+  type: 'object',
+  required: ['token_id', 'scope', 'tenant_id', 'issued_by', 'created_at', 'expires_at'],
+  properties: {
+    token_id: { type: 'string' },
+    scope: { type: 'string', enum: ['view', 'exchange', 'control', 'admin'] },
+    tenant_id: { type: 'string' },
+    hub_id: { type: 'string' },
+    team_id: { type: 'string' },
+    issued_by: { type: 'string' },
+    created_at: { type: 'number' },
+    expires_at: { type: 'number' },
+    revoked_at: { type: 'number' },
+  },
+};
+
+/** S5：auth.tokens 结果。 */
+export const nodeTokenMetaListSchema = {
+  type: 'object',
+  required: ['tokens'],
+  properties: {
+    tokens: { type: 'array', items: nodeTokenMetaSchema },
+  },
+};
+
 export const tenantInfoSchema = {
   type: 'object',
   required: ['tenant_id', 'status', 'created_at'],

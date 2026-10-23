@@ -72,5 +72,6 @@ export {
   TENANT_OVERLAY_FORBIDDEN_KEYS,
   type UnknownNestedKey,
   validateConfig,
+  validateHubSettings,
   validateServeSettings,
 } from './validator.js';
