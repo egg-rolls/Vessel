@@ -292,6 +292,9 @@ export class AgentServiceImpl implements AgentService {
         throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
       }
       this.registry.updateIdentity(id, { sessionId, visibility });
+      // 唯一的 left→present 例外：root owner 由人显式重新附着，必须完整复活。
+      // S3 roster 落地后重新审视是否仍需该例外。
+      if (existing.state === 'closed' || existing.state === 'stale') existing.state = 'idle';
       existing.membership = 'present';
       this.registry.setPresence(id, 'live');
       if (existing.currentBody?.session_id !== sessionId) {
@@ -334,8 +337,11 @@ export class AgentServiceImpl implements AgentService {
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
 
     const name = optionalString(input.name);
-    // 名称 tenant 内唯一：检查与 add 之间不得有 await（避免并发 new 同时通过）
-    if (name !== undefined && this.registry.findByName(name).length > 0) {
+    // 名称只由 present 成员占用：left 的名字可复用；检查与 add 之间不得有 await。
+    if (
+      name !== undefined &&
+      this.registry.findByName(name).some((record) => record.membership === 'present')
+    ) {
       throw new AgentError('invalid_input', `duplicate member name: ${name}`);
     }
 
@@ -470,6 +476,10 @@ export class AgentServiceImpl implements AgentService {
     if (target.membership === 'left' || target.state === 'closed') {
       return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
     }
+    // close 已置 closing 但尚未清空队列：不再入队，避免返回 queued 后消息被丢弃。
+    if (this.queueFor(target.id).closing) {
+      return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
+    }
     if (target.rotation === 'rotating') {
       const result = this.enqueueMessage(target, content, from);
       return {
@@ -525,7 +535,10 @@ export class AgentServiceImpl implements AgentService {
     if (matches.length === 0) {
       throw new AgentError('unknown_member', `unknown_member: ${to}`);
     }
-    const visible = matches.filter((record) => this.registry.canView(record, from));
+    // present 优先；只有 left 匹配时选中它，由 dispatch 返回 agent_left。
+    const present = matches.filter((record) => record.membership === 'present');
+    const pool = present.length > 0 ? present : matches;
+    const visible = pool.filter((record) => this.registry.canView(record, from));
     if (visible.length === 0) return undefined;
     if (visible.length > 1) {
       const candidates = visible.map((record) => record.id).join(', ');

@@ -61,4 +61,46 @@ describe('AgentService.dispatch', () => {
       expect(result.code).toBe('agent_left');
     }
   });
+
+  it('allows reusing the name of a left member and resolves the present one', async () => {
+    const { service } = makeService();
+    const first = await service.new({ name: 'reuse', visibility: 'team' });
+    await service.close({ member: first.id });
+
+    const again = await service.new({ name: 'reuse', visibility: 'team' });
+    expect(again.name).toBe('reuse');
+
+    const result = await service.dispatch({ to: 'reuse', content: 'x' });
+    expect(result.status).toBe('queued');
+    if (result.status === 'queued') expect(result.resolved_to).toBe(again.id);
+  });
+
+  it('does not report queued when close races dispatch', async () => {
+    const { service } = makeService();
+    const member = await service.new({ name: 'closing', visibility: 'team' });
+
+    const closing = service.close({ member: member.id });
+    const result = await service.dispatch({ to: member.id, content: 'x' });
+    await closing;
+
+    expect(result.status).toBe('rejected');
+    if (result.status === 'rejected') expect(result.code).toBe('agent_left');
+  });
+
+  it('fully revives a closed root owner on attachOwner', async () => {
+    const dataDir = await tempDir();
+    const first = makeService({ dataDir });
+    await first.service.attachOwner({ id: 'main' });
+    await first.service.close({ member: 'main' });
+    await first.service.flushSnapshot();
+
+    const second = makeService({ dataDir });
+    const revived = await second.service.attachOwner({ id: 'main' });
+
+    expect(revived.state).toBe('idle');
+    expect(revived.presence).toBe('live');
+    expect(revived.membership).toBe('present');
+    const sent = await second.service.send({ to: 'main', content: 'x' });
+    expect(sent.queued).toBe(true);
+  });
 });
