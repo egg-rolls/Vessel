@@ -238,6 +238,88 @@ describe('AgentService replies', () => {
   });
 });
 
+describe('AgentService conversation propagation', () => {
+  it('generates an id at the human entry and carries it into queued / turn events', async () => {
+    const { service, runtime } = makeService();
+    const events: AgentEvent[] = [];
+    service.subscribe((event) => events.push(event));
+    const member = await service.new({ visibility: 'team' });
+
+    const dispatched = await service.dispatch({ to: member.id, content: 'hi' });
+    expect(dispatched.status).toBe('queued');
+    const conversationId = dispatched.status === 'queued' ? dispatched.conversation_id : undefined;
+    expect(conversationId).toMatch(/^conv_/);
+    expect(events.find((event) => event.type === 'agent.message.queued')?.conversation_id).toBe(
+      conversationId,
+    );
+    expect(events.find((event) => event.type === 'agent.turn.started')?.conversation_id).toBe(
+      conversationId,
+    );
+    await settle();
+    expect(runtime.turns[0]?.message.conversation_id).toBe(conversationId);
+  });
+
+  it('rejects an invalid explicit conversation id', async () => {
+    const { service } = makeService();
+    const member = await service.new({ visibility: 'team' });
+
+    await expect(
+      service.send({ to: member.id, content: 'x', conversation_id: 'bad id' }),
+    ).rejects.toMatchObject({ code: 'invalid_input' });
+  });
+
+  it('reply inherits the running turn conversation', async () => {
+    const { service, runtime } = makeService();
+    const parent = await service.new({ visibility: 'team' });
+    const child = await service.new({ visibility: 'team', parentId: parent.id });
+    runtime.handler = async (current) => {
+      if (current.id === child.id) {
+        await service.reply(child.id, 'explicit');
+        return {};
+      }
+      return {};
+    };
+
+    await service.send({
+      to: child.id,
+      content: 'work',
+      conversation_id: 'conv_reply',
+    });
+    await settle();
+
+    const parentTurn = runtime.turns.find((entry) => entry.member.id === parent.id);
+    expect(parentTurn?.message.conversation_id).toBe('conv_reply');
+  });
+
+  it('rotate startup inherits the triggering turn conversation', async () => {
+    const { service, runtime } = makeService();
+    const member = await service.new({ visibility: 'team' });
+    let rotated = false;
+    runtime.handler = async (current) => {
+      if (current.id === member.id && !rotated) {
+        rotated = true;
+        await service.rotate({
+          to: member.id,
+          startup_prompt: 'fresh',
+          from_session_id: current.session_id,
+        });
+      }
+      return {};
+    };
+
+    await service.send({
+      to: member.id,
+      content: 'work',
+      conversation_id: 'conv_rotate',
+    });
+    await settle();
+
+    const startupTurn = runtime.turns.find((entry) => entry.message.content.startsWith('fresh'));
+    expect(startupTurn).toBeDefined();
+    expect(startupTurn?.message.conversation_id).toBe('conv_rotate');
+  });
+});
+
 describe('AgentService owner inbox', () => {
   it('takeMessages drains queued messages in order without starting a turn or repeating', async () => {
     const { service, runtime } = makeService();

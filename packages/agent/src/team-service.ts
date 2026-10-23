@@ -14,10 +14,14 @@
 
 import { randomUUID } from 'node:crypto';
 import type { Logger } from '@vessel-agent/core';
+import { generateConversationId, isValidConversationId } from './conversation-budget.js';
 import {
   type AgentEvent,
   type AgentService,
   type AgentTeamService,
+  type BudgetOverrideInput,
+  type BudgetOverview,
+  type BudgetStatusInput,
   DEFAULT_OWNER,
   MAX_MESSAGE_BYTES,
   type MemberStatus,
@@ -58,6 +62,7 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   leave: 'agent left team',
   archive: 'agent archived',
   rotate: 'agent rotated body',
+  budget_override: 'budget limit overridden',
 };
 
 const NOOP_LOGGER: Logger = {
@@ -156,6 +161,49 @@ export class DefaultTeamService implements AgentTeamService {
     return status === undefined ? undefined : toMemberSummary(status);
   }
 
+  async budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview> {
+    if (this.store.get(input.team_id) === undefined) {
+      throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
+    }
+    if (!this.agent.budget) {
+      throw new TeamError('team_not_found', 'budget unavailable');
+    }
+    const result = await this.agent.budget(input);
+    if (
+      result.action === 'status' &&
+      input.conversation_id !== undefined &&
+      result.conversations.length === 0
+    ) {
+      throw new TeamError(
+        'team_conversation_not_found',
+        `conversation_not_found: ${input.conversation_id}`,
+      );
+    }
+    if (result.action === 'override') {
+      // override 审计：只写 system 日志，绝不 dispatch。
+      const messageId = this.newId();
+      const entry: TeamLogEntry = {
+        message_id: messageId,
+        team_id: input.team_id,
+        from: 'human',
+        to: [],
+        mentions: [],
+        content: `budget override ${result.conversation_id} ${result.dimension} ${result.previous_max} -> ${result.max}`,
+        ts: this.now(),
+        kind: 'system',
+        system_event: 'budget_override',
+        conversation_id: result.conversation_id,
+      };
+      try {
+        await this.store.appendLog(entry);
+      } catch (error) {
+        throw new TeamError('team_log_write_failed', errorText(error));
+      }
+      this.emit({ team_id: input.team_id, kind: 'system', message_id: messageId });
+    }
+    return result;
+  }
+
   async post(input: TeamPostInput): Promise<TeamPostResult> {
     if (this.store.get(input.team_id) === undefined) {
       throw new TeamError('team_not_found', `team_not_found: ${input.team_id}`);
@@ -163,6 +211,8 @@ export class DefaultTeamService implements AgentTeamService {
     const content = readContent(input.content);
     const from = input.from ?? DEFAULT_OWNER;
     const mentions = dedupe(input.mentions ?? []);
+    // 一次生成、所有 mention 共用；显式 id 先校验。
+    const conversationId = this.resolveConversationId(input.conversation_id);
 
     // Team 日志对 team 可见：private roster 成员不能作为 post 的 actor。
     // 根 owner 的 `owner === id`，不属 roster，仍允许（见 isPrivateRosterMember）。
@@ -260,6 +310,7 @@ export class DefaultTeamService implements AgentTeamService {
       content,
       ts,
       kind,
+      conversation_id: conversationId,
     };
     try {
       await this.store.appendLog(entry);
@@ -273,7 +324,7 @@ export class DefaultTeamService implements AgentTeamService {
       slots.map((slot) =>
         slot.targetId === undefined
           ? Promise.resolve(undefined)
-          : this.dispatchMention(slot.targetId, content, from),
+          : this.dispatchMention(slot.targetId, content, from, conversationId, input.team_id),
       ),
     );
     const delivered: TeamDelivery[] = [];
@@ -289,6 +340,7 @@ export class DefaultTeamService implements AgentTeamService {
       mentions: resolved,
       delivered,
       ts,
+      conversation_id: conversationId,
     };
   }
 
@@ -381,6 +433,19 @@ export class DefaultTeamService implements AgentTeamService {
       };
     }
 
+    let conversationId: string;
+    try {
+      // 缺省继承调用者当前 turn；没有则生成。
+      conversationId = this.resolveConversationId(input.conversation_id, caller.id);
+    } catch (error) {
+      return {
+        status: 'error',
+        code: errorCode(error) ?? 'invalid_input',
+        reason: errorText(error),
+        logged: false,
+      };
+    }
+
     const visible = await this.listVisible(caller.id);
     if (!visible.some((status) => status.id === caller.id)) visible.push(caller);
     const resolved = await this.resolveSendTarget(caller, input.to, visible);
@@ -396,6 +461,7 @@ export class DefaultTeamService implements AgentTeamService {
         code: 'team_private_member',
         reason: `team_private_member: ${targetStatus.id}`,
         logged: false,
+        conversation_id: conversationId,
       };
     }
 
@@ -407,6 +473,7 @@ export class DefaultTeamService implements AgentTeamService {
         code: 'unknown_member',
         reason: `unknown_member: ${input.to}`,
         logged: false,
+        conversation_id: conversationId,
       };
     }
 
@@ -427,6 +494,7 @@ export class DefaultTeamService implements AgentTeamService {
         content,
         ts: this.now(),
         kind: 'mention',
+        conversation_id: conversationId,
       };
       try {
         await this.store.appendLog(entry);
@@ -436,6 +504,7 @@ export class DefaultTeamService implements AgentTeamService {
           code: 'team_log_write_failed',
           reason: errorText(error),
           logged: false,
+          conversation_id: conversationId,
         };
       }
       logged = true;
@@ -446,6 +515,7 @@ export class DefaultTeamService implements AgentTeamService {
         to: target?.agent_id ?? input.to,
         content,
         from: caller.id,
+        conversation_id: conversationId,
       });
       if (result.status === 'queued') {
         return {
@@ -454,6 +524,7 @@ export class DefaultTeamService implements AgentTeamService {
           message_id: result.message_id,
           resolution: result.resolution,
           logged,
+          conversation_id: conversationId,
         };
       }
       return {
@@ -462,6 +533,7 @@ export class DefaultTeamService implements AgentTeamService {
         code: result.code,
         reason: result.reason,
         logged,
+        conversation_id: conversationId,
       };
     } catch (error) {
       return {
@@ -470,6 +542,7 @@ export class DefaultTeamService implements AgentTeamService {
         code: errorCode(error) ?? 'invalid_input',
         reason: errorText(error),
         logged,
+        conversation_id: conversationId,
       };
     }
   }
@@ -510,6 +583,23 @@ export class DefaultTeamService implements AgentTeamService {
 
   private async listVisible(viewer?: string): Promise<MemberStatus[]> {
     return viewer === undefined ? this.agent.list() : this.agent.list({ viewer });
+  }
+
+  /**
+   * 显式 id 先校验；缺省优先继承当前 turn（成员 send），否则生成。
+   */
+  private resolveConversationId(value: string | undefined, inheritFrom?: string): string {
+    if (value !== undefined) {
+      if (!isValidConversationId(value)) {
+        throw new TeamError('invalid_input', 'invalid conversation_id');
+      }
+      return value;
+    }
+    if (inheritFrom !== undefined) {
+      const inherited = this.agent.currentConversation(inheritFrom);
+      if (inherited !== undefined) return inherited;
+    }
+    return generateConversationId(this.newId);
   }
 
   private async rosterFor(teamId: string, viewer?: string): Promise<TeamMemberSummary[]> {
@@ -582,9 +672,17 @@ export class DefaultTeamService implements AgentTeamService {
     targetId: string,
     content: string,
     from: string,
+    conversationId: string,
+    originTeamId?: string,
   ): Promise<TeamDelivery> {
     try {
-      const result = await this.agent.dispatch({ to: targetId, content, from });
+      const result = await this.agent.dispatch({
+        to: targetId,
+        content,
+        from,
+        conversation_id: conversationId,
+        ...(originTeamId !== undefined ? { origin_team_id: originTeamId } : {}),
+      });
       if (result.status === 'queued') {
         return {
           agent_id: targetId,

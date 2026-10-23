@@ -30,7 +30,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 **2026-10-22：workflow 插件与产品面已移除**（[ADR-090](docs/adr/ADR-090-remove-workflow-plugin.md)，取代 ADR-042）：`plugins/workflow/**`、`workflow.*` RPC、`workflow` 配置、CLI `vessel workflow`、TUI `/workflows`、Web workflow 页面全部删除；canonical RPC 45 → 40。历史 ADR 与 CHANGELOG 旧条目保留。
 
-**0.19 状态（当前开发线）**：Agent / Body 内核 S1（节点身份、`presence`、`dispatch`）、S2（rotate + epoch fencing）、S3（Team：workspace 分组、只写日志、结构化 `@`、canonical `teams.*`）、S5（Hub：目录、配对、scoped token、只推指针）与 S6（Web Team 群聊）已在分支上实现，未随版本发布。canonical RPC 为 **47**（workflow 移除后 40；S3 +4、S5 +3）。**未实现**：fork、S4 权限 only-human / budget、S5.1 node → hub 出站、S7 跨节点 A2A。
+**0.19 状态（当前开发线）**：Agent / Body 内核 S1（节点身份、`presence`、`dispatch`）、S2（rotate + epoch fencing）、S3（Team：workspace 分组、只写日志、结构化 `@`、canonical `teams.*`）、S5（Hub：目录、配对、scoped token、只推指针）、S5.1（node → hub 出站 / NAT：join code、node token、`/v1/hub/node-control`）与 S6（Web Team 群聊）已在分支上实现，未随版本发布。canonical RPC 为 **47**（workflow 移除后 40；S3 +4、S5 +3）。**未实现**：fork、S4 权限 only-human / budget、S7 跨节点 A2A。
 
 **包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.19`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
 
@@ -385,7 +385,7 @@ transport:
 - **CA**：私有 CA / 自签证书用 `--ca <pem>` 或 `connect.ca_file` 显式提供；未提供时用运行时默认信任库。浏览器不能按连接指定 CA，必须把 CA 装进系统 / 浏览器信任库。
 - **服务端**：`serve.allowed_origins` 或重复 `--allowed-origin` 配置独立前端 Origin；只接受显式 http(s) origin，禁止 `*`、path、query。allowlist 命中时返回对应 CORS 头并带 `Vary: Origin`；CSP 的 `connect-src` 由 Host 与 allowlist 动态生成。
 - **跨节点 team**：`/v1/team/*` 传输协议与 gateway 方法在 0.17 保留，但**没有生产装配、也没有模型工具入口**（`team_*` / `delegate_task` 已删除）；节点地址 / 远端成员语义留待 Phase B 复用。0.19 S3 的 canonical `teams.*` 是本地 Team，与 legacy `/v1/team/*` 无关。
-- **Hub 目录（0.19 S5）**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。S5 只支持 hub → node 拨号；node → hub 出站（NAT，S5.1）与跨节点 A2A（S7）未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
+- **Hub 目录（0.19 S5 / S5.1）**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。S5 支持 hub → node 拨号；S5.1 支持 node → hub 出站（NAT）：hub `vessel hub join-code`、节点 `vessel hub join <hub-url> --code`。跨节点 A2A（S7）未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
 - **tenant 边界**：远端 tenant 由 token principal 派生；admin 可用 `--tenant` 覆盖，非 admin 指定其它 tenant 返回 `forbidden` / WS 4403。
 - **安全收紧**：durable 端点按 principal 的 tenant 过滤并校验角色；保留的 team REST 复用 `ROLE_RANK`（GET 允许 `read`，写操作要求 `write` / `admin`）；双向 / 网状节点丢弃 `event.node_id === 本机` 的回灌帧。
 - **已知限制**：跨节点无全局事件序，seq 按 `(node_id, run_id)` 解释；事件回灌按 `node:incarnation:run_id:seq` 去重（无 `run_id` 写 `-`；对端 `incarnation` 变化或 seq 回退只清该来源节点的键），消息键为 `from:id`、gateway 入站再补 tenant（`tenant:from:id`）。去重集合只在进程内，不持久化，**不宣称跨重启 exactly-once**。`request_id` 去重是进程内 Map（上限 1000、不跨重启）。没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable。

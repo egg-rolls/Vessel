@@ -68,7 +68,7 @@ describe('MemberRegistry state machine', () => {
 });
 
 describe('MemberRegistry team fields', () => {
-  it('passes team_id through status / persisted records only, and ignores unknown ids', () => {
+  it('passes team_id through status / persisted / runtime member, and ignores unknown ids', () => {
     const registry = new MemberRegistry(() => 1);
     registry.add(record());
 
@@ -78,7 +78,7 @@ describe('MemberRegistry team fields', () => {
     if (stored === undefined) throw new Error('member missing');
     expect(toMemberStatus(stored).team_id).toBe('team-alpha');
     expect(toPersistedRecord(stored).team_id).toBe('team-alpha');
-    expect(toRuntimeMember(stored)).not.toHaveProperty('team_id');
+    expect(toRuntimeMember(stored).team_id).toBe('team-alpha');
 
     registry.setMembership('m1', 'left');
     expect(registry.get('m1')?.membership).toBe('left');

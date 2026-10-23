@@ -78,6 +78,8 @@ export const zhCN = {
   'help.cmd.teamGet': '查看 Team 成员与最近消息',
   'help.cmd.teamPost': '发一条团队消息（无 @ 时只记日志，不唤醒 Agent）',
   'help.cmd.teamMembers': '添加 / 移除 Team 成员',
+  'help.cmd.teamBudget': '查看 conversation 预算与阻塞状态',
+  'help.cmd.teamBudgetOverride': '人工抬高 / 清除某条 conversation 的预算上限',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──
@@ -218,6 +220,8 @@ export const zhCN = {
   'help.cmd.hubDirectory': '读取 hub 目录（配对节点与状态）',
   'help.cmd.hubWatch': '订阅 hub 目录与指针事件（Ctrl+C 退出）',
   'help.cmd.hubPair': '生成节点侧一次性配对码',
+  'help.cmd.hubJoinCode': '生成一次性加入码，供节点主动拨号本 hub',
+  'help.cmd.hubJoin': '用一次性加入码从本节点加入 hub',
   'help.cmd.hubNodeAdd': '用一次性码向 hub 注册节点',
   'help.cmd.hubNodeList': '列出 hub 已配对节点',
   'help.cmd.hubNodeRemove': '从 hub 移除配对',
@@ -233,6 +237,17 @@ export const zhCN = {
   'hub.empty.nodes': '没有已配对节点。',
   'hub.empty.tokens': '没有 token。',
   'hub.watch.closed': 'hub watch 连接已关闭。',
+  'hub.error.joinCodeMissing': '请提供 --code、--code-env，或设置 hub.joinCodeEnv。',
+  'hub.error.invalidCa': '无法读取 CA 文件：{path}',
+  'hub.error.hubUrlMissing': '请指定 hub URL 或设置 hub.url。',
+  'hub.error.httpsRequired': '非回环 hub URL 必须使用 https。',
+  'hub.error.invalidPublicUrl': '无效的 public URL。',
+  'hub.error.tenantMismatch': 'hub 为其它 tenant 签发了 token。',
+  'hub.join.joined': '已加入 {hub}（{pairing}）',
+  'hub.join.saved': '已保存；gateway 将在下次启动时连接',
+  'hub.join.lastStatus': '状态：{status}',
+  'hub.joinCode.code': '加入码：{code}',
+  'hub.joinCode.expiresAt': '过期时间：{at}',
 
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',

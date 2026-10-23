@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { parseTeamPolicy, TeamPolicyError, validateTeamPolicy } from '../src/team-policy';
 import type { VesselConfig } from '../src/types';
 import { validateConfig } from '../src/validator';
 
@@ -9,6 +10,172 @@ function pathsOf(config: VesselConfig): string[] {
 function errorsOf(config: VesselConfig) {
   return validateConfig(config).errors;
 }
+
+describe('0.19 S4 team policy parsing', () => {
+  it('normalizes camelCase and snake_case input to the same policy', () => {
+    const camel = parseTeamPolicy({
+      permission: { unattended: 'deny-after', denyAfterSeconds: 300 },
+      budget: {
+        maxHops: 4,
+        maxTurns: 10,
+        maxTokens: 1000,
+        maxWallClockSeconds: 60,
+        warningThreshold: 0.5,
+        cycle: { maxRepeats: 3, cooldownSeconds: 5 },
+      },
+    });
+    const snake = parseTeamPolicy({
+      permission: { unattended: 'deny-after', deny_after_seconds: 300 },
+      budget: {
+        max_hops: 4,
+        max_turns: 10,
+        max_tokens: 1000,
+        max_wall_clock_seconds: 60,
+        warning_threshold: 0.5,
+        cycle: { max_repeats: 3, cooldown_seconds: 5 },
+      },
+    });
+
+    expect(snake).toEqual(camel);
+    expect(camel).toEqual({
+      permission: { unattended: 'deny-after', denyAfterSeconds: 300 },
+      budget: {
+        maxHops: 4,
+        maxTurns: 10,
+        maxTokens: 1000,
+        maxWallClockSeconds: 60,
+        warningThreshold: 0.5,
+        cycle: { maxRepeats: 3, cooldownSeconds: 5 },
+      },
+    });
+  });
+
+  it('keeps hold as the default and rejects deny_after_seconds with hold', () => {
+    expect(parseTeamPolicy({ permission: { unattended: 'hold' } })).toEqual({
+      permission: { unattended: 'hold' },
+    });
+    // unattended 缺省即 hold；此时 deny_after_seconds 不允许出现
+    expect(() => parseTeamPolicy({ permission: { deny_after_seconds: 10 } })).toThrow(
+      TeamPolicyError,
+    );
+    expect(() => parseTeamPolicy({ permission: { denyAfterSeconds: 10 } })).toThrow(
+      /only allowed when unattended/,
+    );
+  });
+
+  it('rejects allow_after and maxCost explicitly', () => {
+    expect(() => parseTeamPolicy({ permission: { allow_after: 30 } })).toThrow(
+      /allow-after is not supported; use hold or deny-after/,
+    );
+    expect(() => parseTeamPolicy({ permission: { allowAfter: 30 } })).toThrow(
+      /allow-after is not supported; use hold or deny-after/,
+    );
+    expect(() => parseTeamPolicy({ budget: { maxCost: 5 } })).toThrow(
+      /policy\.budget\.maxCost is not supported/,
+    );
+    expect(() => parseTeamPolicy({ budget: { max_cost: 5 } })).toThrow(
+      /policy\.budget\.maxCost is not supported/,
+    );
+  });
+
+  it('requires denyAfterSeconds for deny-after', () => {
+    expect(() => parseTeamPolicy({ permission: { unattended: 'deny-after' } })).toThrow(
+      /denyAfterSeconds is required/,
+    );
+  });
+
+  it('rejects out-of-range values', () => {
+    const invalid = [
+      { permission: { unattended: 'deny-after', denyAfterSeconds: 0 } },
+      { permission: { unattended: 'deny-after', denyAfterSeconds: 86401 } },
+      { permission: { unattended: 'deny-after', denyAfterSeconds: 1.5 } },
+      { budget: { maxHops: 0 } },
+      { budget: { maxTurns: 1.5 } },
+      { budget: { maxTokens: -1 } },
+      { budget: { maxWallClockSeconds: 0 } },
+      { budget: { warningThreshold: 1 } },
+      { budget: { warningThreshold: 0 } },
+      { budget: { cycle: { maxRepeats: 0 } } },
+      { budget: { cycle: { cooldownSeconds: -1 } } },
+    ];
+    for (const policy of invalid) {
+      expect(() => parseTeamPolicy(policy)).toThrow(TeamPolicyError);
+    }
+  });
+
+  it('rejects unknown keys inside permission / budget but preserves top-level keys', () => {
+    expect(() => parseTeamPolicy({ permission: { timeout: 1 } })).toThrow(/not a valid key/);
+    expect(() => parseTeamPolicy({ budget: { maxFuel: 1 } })).toThrow(/not a valid key/);
+    expect(() => parseTeamPolicy({ budget: { cycle: { maxLoops: 1 } } })).toThrow(
+      /not a valid key/,
+    );
+    expect(parseTeamPolicy({ future: { enabled: true } })).toEqual({ future: { enabled: true } });
+  });
+
+  it('rejects conflicting camelCase / snake_case aliases', () => {
+    expect(() => parseTeamPolicy({ budget: { max_hops: 1, maxHops: 2 } })).toThrow(
+      /different values/,
+    );
+  });
+
+  it('validateTeamPolicy collects issues without throwing', () => {
+    const issues = validateTeamPolicy({ budget: { maxCost: 1, maxHops: 0 } });
+    expect(issues.map((issue) => issue.field)).toEqual(['budget.maxCost', 'budget.maxHops']);
+  });
+});
+
+describe('0.19 S4 team policy validation', () => {
+  function teamConfig(policy: Record<string, unknown>): VesselConfig {
+    return { teams: [{ workspace: '/tmp/vessel-team-policy', policy }] };
+  }
+
+  it('accepts valid camelCase and snake_case policies', () => {
+    expect(
+      pathsOf(
+        teamConfig({
+          permission: { unattended: 'deny-after', deny_after_seconds: 300 },
+          budget: { maxHops: 2, max_wall_clock_seconds: 60 },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('surfaces allow_after / maxCost / range errors', () => {
+    const errors = errorsOf(
+      teamConfig({
+        permission: { allow_after: 30 },
+        budget: { maxCost: 1, maxHops: 0 },
+      }),
+    );
+    const paths = errors.map((error) => error.path);
+    expect(paths).toContain('teams[0].policy.permission.allow_after');
+    expect(paths).toContain('teams[0].policy.budget.maxCost');
+    expect(paths).toContain('teams[0].policy.budget.maxHops');
+    expect(errors.some((error) => error.message === 'policy.budget.maxCost is not supported')).toBe(
+      true,
+    );
+    expect(errors.some((error) => error.message.includes('allow-after is not supported'))).toBe(
+      true,
+    );
+  });
+
+  it('requires deny_after_seconds when unattended is deny-after', () => {
+    expect(pathsOf(teamConfig({ permission: { unattended: 'deny-after' } }))).toContain(
+      'teams[0].policy.permission.denyAfterSeconds',
+    );
+  });
+
+  it('keeps top-level unknown keys and the default hold', () => {
+    expect(pathsOf(teamConfig({ future: true, permission: { unattended: 'hold' } }))).toEqual([]);
+  });
+
+  it('still rejects a non-object policy', () => {
+    const config = {
+      teams: [{ workspace: '/tmp/vessel-team-policy', policy: 'hold' }],
+    } as unknown as VesselConfig;
+    expect(pathsOf(config)).toContain('teams[0].policy');
+  });
+});
 
 describe('S5 hub config', () => {
   it('accepts a complete loopback hub block', () => {
@@ -99,6 +266,70 @@ describe('S5 hub config', () => {
     expect(
       errors.some((error) => error.message === '"hub" is not allowed in a tenant config overlay'),
     ).toBe(true);
+  });
+
+  it('accepts a node-mode hub block with url, caFile and joinCodeEnv', () => {
+    const config: VesselConfig = {
+      dataDir: '/tmp/vessel',
+      hub: {
+        direction: 'node',
+        url: 'https://hub.example.com:8643',
+        caFile: '/etc/vessel/hub-ca.pem',
+        joinCodeEnv: 'VESSEL_HUB_JOIN_CODE',
+      },
+    };
+    expect(pathsOf(config)).toEqual([]);
+  });
+
+  it('accepts a loopback http hub url in node mode', () => {
+    const config: VesselConfig = {
+      dataDir: '/tmp/vessel',
+      hub: { direction: 'node', url: 'http://127.0.0.1:8643' },
+    };
+    expect(pathsOf(config)).toEqual([]);
+  });
+
+  it('rejects invalid hub.url shapes', () => {
+    const urls = [
+      'ftp://hub.example.com',
+      'https://hub.example.com/path',
+      'https://hub.example.com?tenant=default',
+      'https://user:pass@hub.example.com',
+      'http://hub.example.com',
+    ];
+    for (const url of urls) {
+      const config: VesselConfig = {
+        dataDir: '/tmp/vessel',
+        hub: { direction: 'node', url },
+      };
+      expect(pathsOf(config), url).toContain('hub.url');
+    }
+  });
+
+  it('rejects empty or NUL hub.caFile', () => {
+    for (const caFile of ['', '/etc/vessel/ca\0.pem']) {
+      const config: VesselConfig = {
+        dataDir: '/tmp/vessel',
+        hub: { direction: 'node', caFile },
+      };
+      expect(pathsOf(config), JSON.stringify(caFile)).toContain('hub.caFile');
+    }
+  });
+
+  it('rejects an invalid hub.joinCodeEnv', () => {
+    const config: VesselConfig = {
+      dataDir: '/tmp/vessel',
+      hub: { direction: 'node', joinCodeEnv: 'not a valid env name' },
+    };
+    expect(pathsOf(config)).toContain('hub.joinCodeEnv');
+  });
+
+  it('still rejects unknown hub keys', () => {
+    const config = {
+      dataDir: '/tmp/vessel',
+      hub: { direction: 'node', hubToken: 'secret' },
+    } as unknown as VesselConfig;
+    expect(pathsOf(config)).toContain('hub.hubToken');
   });
 
   it('validates direction, pairing TTL and allowFileSecrets', () => {

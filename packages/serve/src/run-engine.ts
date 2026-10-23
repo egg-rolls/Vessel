@@ -12,6 +12,7 @@ import type { ContextManager, EventStream, RunEvent, RunnableAgent } from '@vess
 import {
   InteractionsStore,
   type StoredInteraction,
+  type StoredInteractionAnswer,
   type StoredInteractionStatus,
 } from './interactions-store.js';
 import type { RunStatus } from './protocol.js';
@@ -61,6 +62,12 @@ export interface PendingPermission {
   source?: string;
 }
 
+/** 应答者归属；agent 不是合法值（only-human）。 */
+export interface InteractionActor {
+  answered_by: 'human' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'policy';
+}
+
 /** `permission.respond` 的结果（additive）。 */
 export interface PermissionRespondResult {
   ok: true;
@@ -68,9 +75,23 @@ export interface PermissionRespondResult {
   scope: PermissionScope;
   /** 重复应答：沿用第一次的结果，不再发布事件。 */
   duplicate?: true;
+  answered_by?: 'human' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'policy';
+  latency_ms?: number;
+  team_id?: string;
 }
 
-/** 待答 ask 请求 */
+/** `ask.respond` 的结果（0.19 S4：与权限同一套幂等语义）。 */
+export interface AskRespondResult {
+  ok: true;
+  duplicate?: true;
+  answered_by: 'human' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'policy';
+  latency_ms?: number;
+  team_id?: string;
+}
+
+/** 待答 ask 请求（legacy 只读视图，由 interactionRecords 派生） */
 export interface PendingAsk {
   run_id: string;
   /** 请求产生时绑定的 tenant；应答必须来自同一 tenant（P0-1） */
@@ -111,6 +132,7 @@ export interface RunEngine {
   readonly queue: RunRecord[];
   readonly coreToJob: Map<string, string>;
   readonly pendingPermissions: Map<string, PendingPermission>;
+  /** pending ask 的 legacy 只读视图；真相源是 `interactionRecords`。 */
   readonly pendingAsks: Map<string, PendingAsk>;
   /** requestId → 持久化交互记录（pending / answered / orphaned）。 */
   readonly interactionRecords: Map<string, StoredInteraction>;
@@ -136,8 +158,14 @@ export interface RunEngine {
     remember: boolean,
     tenantId?: string,
     scope?: PermissionScope,
+    actor?: InteractionActor,
   ): PermissionRespondResult;
-  respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
+  respondAsk(
+    requestId: string,
+    answers: unknown[],
+    tenantId?: string,
+    actor?: InteractionActor,
+  ): AskRespondResult;
   reserveResume(runId: string): boolean;
   releaseResume(runId: string): void;
 }
@@ -179,6 +207,42 @@ export function errorMetaOf(data: unknown): RunErrorMeta | undefined {
   return Object.keys(meta).length > 0 ? meta : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function eventTs(event: RunEvent): number {
+  return typeof event.ts === 'number' && Number.isFinite(event.ts) && event.ts > 0
+    ? event.ts
+    : Date.now();
+}
+
+/** answers 是模型 / UI 产出的任意 JSON；按结构比较，不按 key 顺序。 */
+function jsonEqual(left: unknown, right: unknown): boolean {
+  if (left === right) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return (
+      left.length === right.length && left.every((item, index) => jsonEqual(item, right[index]))
+    );
+  }
+  if (isRecord(left) && isRecord(right)) {
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.hasOwn(right, key) && jsonEqual(left[key], right[key]));
+  }
+  return false;
+}
+
+function readAnsweredBy(value: unknown): 'human' | 'policy' | undefined {
+  if (value === undefined) return 'human';
+  return value === 'human' || value === 'policy' ? value : undefined;
+}
+
 export function createRunEngine(options: RunEngineOptions): RunEngine {
   const {
     runtime,
@@ -197,7 +261,6 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
   const queue: RunRecord[] = [];
   const coreToJob = new Map<string, string>();
   const pendingPermissions = new Map<string, PendingPermission>();
-  const pendingAsks = new Map<string, PendingAsk>();
   /** requestId → 持久化交互记录（唯一事实源，pending 表只是索引）。 */
   const interactionRecords = new Map<string, StoredInteraction>();
   const interactionsStore =
@@ -448,6 +511,65 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
 
   hydrateInteractions();
 
+  /** 直接发布到流上的应答（TUI / policy 定时器）也要落审计；不重新发布。 */
+  function recordStreamResponse(event: RunEvent): void {
+    const data = isRecord(event.data) ? event.data : {};
+    const requestId = nonEmptyString(data.requestId);
+    if (requestId === undefined) return;
+    const record = interactionRecords.get(requestId);
+    if (record === undefined || record.status !== 'pending') return;
+    const isAsk = event.type === 'ask.user.answered';
+    if (((record.kind ?? 'permission') === 'ask') !== isAsk) return;
+    const answeredBy = readAnsweredBy(data.answered_by);
+    // 非法归属（含伪造的 agent）不得写进审计。
+    if (answeredBy === undefined) return;
+    const answers = Array.isArray(data.answers) ? data.answers : undefined;
+    const decision =
+      data.decision === 'allow' || data.decision === 'deny' ? data.decision : undefined;
+    if (isAsk) {
+      if (answers === undefined) return;
+    } else if (decision === undefined) {
+      return;
+    }
+
+    const answeredAt = eventTs(event);
+    const rawScope = data.scope;
+    const scope: PermissionScope =
+      rawScope === 'once' || rawScope === 'session' || rawScope === 'always' ? rawScope : 'once';
+    const answeredVia =
+      data.answered_via === 'tui' || data.answered_via === 'rpc' || data.answered_via === 'policy'
+        ? data.answered_via
+        : undefined;
+    const policy =
+      data.policy === 'deny_after' || data.policy === 'auto_allow' ? data.policy : undefined;
+    const answer: StoredInteractionAnswer = {
+      answered_at: answeredAt,
+      answered_by: answeredBy,
+      latency_ms: Math.max(0, answeredAt - record.created_at),
+      ...(answeredVia !== undefined ? { answered_via: answeredVia } : {}),
+      ...(policy !== undefined ? { policy } : {}),
+      ...(isAsk
+        ? { answers: answers as unknown[] }
+        : { decision: decision as 'allow' | 'deny', scope }),
+    };
+    pendingPermissions.delete(requestId);
+    rememberRecord({ ...record, status: 'answered' as const, answer });
+    persistTenant(record.tenant_id);
+  }
+
+  /** 成员 turn / close 终态：按 agent_id + session_id 清理；不按 run_id（F11）。 */
+  function orphanPendingForMember(agentId: string, sessionId: string): void {
+    const tenants = new Set<string>();
+    for (const [id, record] of interactionRecords) {
+      if (record.status !== 'pending') continue;
+      if (record.agent_id !== agentId || record.session_id !== sessionId) continue;
+      pendingPermissions.delete(id);
+      rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
+      tenants.add(record.tenant_id);
+    }
+    persistTenants(tenants);
+  }
+
   function handleEvent(event: RunEvent): void {
     if (event.type === 'run.started' && active && !active.core_run_id) {
       active.core_run_id = event.run_id;
@@ -457,11 +579,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       const data = event.data as Record<string, unknown>;
       const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
       if (requestId) {
-        const now = Date.now();
-        const eventTs =
-          typeof event.ts === 'number' && Number.isFinite(event.ts) && event.ts > 0
-            ? event.ts
-            : now;
+        const requestTs = eventTs(event);
         const tenantId = eventTenantId(event);
         const tool = typeof data.tool === 'string' ? data.tool : 'tool';
         const sessionId =
@@ -472,10 +590,9 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           typeof data.tool_call_id === 'string' && data.tool_call_id.length > 0
             ? data.tool_call_id
             : undefined;
-        const parentSessionId =
-          typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
-            ? data.parent_session_id
-            : undefined;
+        const parentSessionId = nonEmptyString(data.parent_session_id);
+        const agentId = nonEmptyString(data.agent_id);
+        const teamId = nonEmptyString(data.team_id);
         const deadlineAt =
           typeof data.deadline_at === 'number' &&
           Number.isFinite(data.deadline_at) &&
@@ -487,7 +604,7 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           tenant_id: tenantId,
           tool,
           input: data.input,
-          ts: eventTs,
+          ts: requestTs,
           ...(deadlineAt !== undefined ? { deadline_at: deadlineAt } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
@@ -500,37 +617,62 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           requestId,
           run_id: event.run_id,
           tenant_id: tenantId,
+          kind: 'permission',
+          ...(agentId !== undefined ? { agent_id: agentId } : {}),
+          ...(teamId !== undefined ? { team_id: teamId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
           ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
           tool,
           input: data.input,
-          created_at: eventTs,
+          created_at: requestTs,
           status: 'pending',
         });
         persistTenant(tenantId);
       }
     }
     if (event.type === 'ask.user.requested') {
-      const data = event.data as Record<string, unknown>;
-      const requestId = typeof data.requestId === 'string' ? data.requestId : undefined;
-      if (requestId) {
-        const sessionId =
-          typeof data.session_id === 'string' && data.session_id.length > 0
-            ? data.session_id
-            : undefined;
-        const parentSessionId =
-          typeof data.parent_session_id === 'string' && data.parent_session_id.length > 0
-            ? data.parent_session_id
-            : undefined;
-        pendingAsks.set(requestId, {
+      const data = isRecord(event.data) ? event.data : {};
+      const requestId = nonEmptyString(data.requestId);
+      if (requestId !== undefined) {
+        const tenantId = eventTenantId(event);
+        const sessionId = nonEmptyString(data.session_id);
+        const parentSessionId = nonEmptyString(data.parent_session_id);
+        const agentId = nonEmptyString(data.agent_id);
+        const teamId = nonEmptyString(data.team_id);
+        const toolCallId = nonEmptyString(data.tool_call_id);
+        rememberRecord({
+          requestId,
           run_id: event.run_id,
-          tenant_id: eventTenantId(event),
-          ts: Date.now(),
+          tenant_id: tenantId,
+          kind: 'ask',
+          ...(agentId !== undefined ? { agent_id: agentId } : {}),
+          ...(teamId !== undefined ? { team_id: teamId } : {}),
           ...(sessionId !== undefined ? { session_id: sessionId } : {}),
           ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
-          ...(data.questions !== undefined ? { questions: data.questions } : {}),
+          ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
+          tool: typeof data.tool === 'string' && data.tool.length > 0 ? data.tool : 'ask_user',
+          input: data.questions,
+          created_at: eventTs(event),
+          status: 'pending',
         });
+        persistTenant(tenantId);
+      }
+    }
+    if (event.type === 'tool.permission.response' || event.type === 'ask.user.answered') {
+      recordStreamResponse(event);
+    }
+    if (
+      event.type === 'agent.turn.completed' ||
+      event.type === 'agent.turn.failed' ||
+      event.type === 'agent.turn.cancelled' ||
+      event.type === 'agent.closed'
+    ) {
+      const data = isRecord(event.data) ? event.data : {};
+      const agentId = nonEmptyString(data.agent_id);
+      const sessionId = nonEmptyString(data.session_id);
+      if (agentId !== undefined && sessionId !== undefined) {
+        orphanPendingForMember(agentId, sessionId);
       }
     }
     if (
@@ -548,22 +690,16 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           if (meta) active.error_meta = meta;
         }
       }
-      // run 终态：pending 全部清掉（不只 asks），持久化为 orphaned；
+      // run 终态：pending（permission + ask）全部转 orphaned；
       // 迟到应答返回 run_ended，不再假装可以继续（Addendum A §2）。
       const terminalTenants = new Set<string>();
-      for (const [id, pending] of pendingPermissions) {
-        if (pending.run_id !== event.run_id) continue;
+      for (const [id, record] of interactionRecords) {
+        if (record.status !== 'pending' || record.run_id !== event.run_id) continue;
         pendingPermissions.delete(id);
-        const record = interactionRecords.get(id);
-        if (record) {
-          rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
-          terminalTenants.add(record.tenant_id);
-        }
+        rememberRecord({ ...record, status: 'orphaned' as StoredInteractionStatus });
+        terminalTenants.add(record.tenant_id);
       }
       persistTenants(terminalTenants);
-      for (const [id, pending] of pendingAsks) {
-        if (pending.run_id === event.run_id) pendingAsks.delete(id);
-      }
     }
     // 注意：终态事件本身仍要带 job_id 出站（gateway 在 handleEvent 之后构造帧），
     // 所以映射在 execute 的 finally（run 真正收尾）与 trimRuns 里清理。
@@ -575,16 +711,20 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     remember: boolean,
     tenantId?: string,
     scope?: PermissionScope,
+    actor?: InteractionActor,
   ): PermissionRespondResult {
     // scope 优先；remember 是旧客户端的兼容写法（等价 always）。
     const resolvedScope: PermissionScope = scope ?? (remember ? 'always' : 'once');
+    const attribution: InteractionActor = actor ?? { answered_by: 'human' };
     const pending = pendingPermissions.get(requestId);
     if (pending) {
       // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
       if (tenantId !== undefined && pending.tenant_id !== tenantId) {
         throw new RpcError('not_found', `Permission request not found: ${requestId}`);
       }
+      const record = interactionRecords.get(requestId);
       const now = Date.now();
+      const latency = Math.max(0, now - (record?.created_at ?? pending.ts));
       answerStreamFor(pending.tenant_id).publish({
         type: 'tool.permission.response',
         run_id: pending.run_id,
@@ -594,26 +734,55 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
           scope: resolvedScope,
           ...(resolvedScope === 'always' ? { remember: true } : {}),
           ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
+          answered_by: attribution.answered_by,
+          ...(attribution.answered_via !== undefined
+            ? { answered_via: attribution.answered_via }
+            : {}),
+          latency_ms: latency,
+          ...(record?.team_id !== undefined ? { team_id: record.team_id } : {}),
         },
         ts: now,
         tenant_id: pending.tenant_id,
       });
       pendingPermissions.delete(requestId);
-      const record = interactionRecords.get(requestId);
       rememberRecord({
         ...(record ?? {
           requestId,
           run_id: pending.run_id,
           tenant_id: pending.tenant_id,
+          kind: 'permission' as const,
           tool: pending.tool,
           input: pending.input,
           created_at: pending.ts,
         }),
         status: 'answered',
-        answer: { decision, scope: resolvedScope, answered_at: now },
+        answer: {
+          decision,
+          scope: resolvedScope,
+          answered_at: now,
+          answered_by: attribution.answered_by,
+          ...(attribution.answered_via !== undefined
+            ? { answered_via: attribution.answered_via }
+            : {}),
+          latency_ms: latency,
+        },
       });
       persistTenant(pending.tenant_id);
-      return { ok: true, decision, scope: resolvedScope };
+      return {
+        ok: true,
+        decision,
+        scope: resolvedScope,
+        ...(actor !== undefined
+          ? {
+              answered_by: attribution.answered_by,
+              ...(attribution.answered_via !== undefined
+                ? { answered_via: attribution.answered_via }
+                : {}),
+              latency_ms: latency,
+              ...(record?.team_id !== undefined ? { team_id: record.team_id } : {}),
+            }
+          : {}),
+      };
     }
 
     // 幂等：首次应答生效，重复应答返回上次结果（不发布新事件）。
@@ -632,8 +801,20 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
         return {
           ok: true,
           decision,
-          scope: record.answer.scope,
+          scope: record.answer.scope ?? 'once',
           duplicate: true,
+          ...(actor !== undefined
+            ? {
+                answered_by: record.answer.answered_by ?? 'human',
+                ...(record.answer.answered_via !== undefined
+                  ? { answered_via: record.answer.answered_via }
+                  : {}),
+                ...(record.answer.latency_ms !== undefined
+                  ? { latency_ms: record.answer.latency_ms }
+                  : {}),
+                ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+              }
+            : {}),
         };
       }
       // run 已终止 / 进程重启后找不到 run：明确告知，不伪装成 not_found。
@@ -651,27 +832,91 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
     throw new RpcError('not_found', `Permission request not found: ${requestId}`);
   }
 
-  function respondAsk(requestId: string, answers: unknown[], tenantId?: string): void {
-    const pending = pendingAsks.get(requestId);
-    if (!pending) throw new RpcError('not_found', `Ask request not found: ${requestId}`);
-    // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
-    if (tenantId !== undefined && pending.tenant_id !== tenantId) {
+  function respondAsk(
+    requestId: string,
+    answers: unknown[],
+    tenantId?: string,
+    actor?: InteractionActor,
+  ): AskRespondResult {
+    const attribution: InteractionActor = actor ?? { answered_by: 'human' };
+    const record = interactionRecords.get(requestId);
+    if (record === undefined || (record.kind ?? 'permission') !== 'ask') {
       throw new RpcError('not_found', `Ask request not found: ${requestId}`);
     }
-    // 0.18：直接投递到该 tenant 的运行时流（ask_user 工具在那里等待）；
-    // tenant 流经既有桥转发到 shared，Web 仍能收到。不存在的 tenant 回退共享流。
-    answerStreamFor(pending.tenant_id).publish({
-      type: 'ask.user.answered',
-      run_id: pending.run_id,
-      data: {
-        requestId,
-        answers,
-        ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
-      },
-      ts: Date.now(),
-      tenant_id: pending.tenant_id,
+    // P0-1：应答必须与请求产生时的 tenant 一致；不查 runs（run 可能已被 trim）。
+    if (tenantId !== undefined && record.tenant_id !== tenantId) {
+      throw new RpcError('not_found', `Ask request not found: ${requestId}`);
+    }
+    if (record.status === 'pending') {
+      const now = Date.now();
+      const latency = Math.max(0, now - record.created_at);
+      // 0.18：直接投递到该 tenant 的运行时流（ask_user 工具在那里等待）。
+      answerStreamFor(record.tenant_id).publish({
+        type: 'ask.user.answered',
+        run_id: record.run_id,
+        data: {
+          requestId,
+          answers,
+          ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
+          answered_by: attribution.answered_by,
+          ...(attribution.answered_via !== undefined
+            ? { answered_via: attribution.answered_via }
+            : {}),
+          latency_ms: latency,
+          ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+        },
+        ts: now,
+        tenant_id: record.tenant_id,
+      });
+      rememberRecord({
+        ...record,
+        status: 'answered',
+        answer: {
+          answers,
+          answered_at: now,
+          answered_by: attribution.answered_by,
+          ...(attribution.answered_via !== undefined
+            ? { answered_via: attribution.answered_via }
+            : {}),
+          latency_ms: latency,
+        },
+      });
+      persistTenant(record.tenant_id);
+      return {
+        ok: true,
+        answered_by: attribution.answered_by,
+        ...(attribution.answered_via !== undefined
+          ? { answered_via: attribution.answered_via }
+          : {}),
+        latency_ms: latency,
+        ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+      };
+    }
+    if (record.status === 'answered') {
+      if (record.answer !== undefined && jsonEqual(record.answer.answers ?? [], answers)) {
+        return {
+          ok: true,
+          duplicate: true,
+          answered_by: record.answer.answered_by ?? 'human',
+          ...(record.answer.answered_via !== undefined
+            ? { answered_via: record.answer.answered_via }
+            : {}),
+          ...(record.answer.latency_ms !== undefined
+            ? { latency_ms: record.answer.latency_ms }
+            : {}),
+          ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
+        };
+      }
+      throw new RpcError(
+        'conflict',
+        `Ask request already answered with different answers: ${requestId}`,
+      );
+    }
+    throw new RpcError('run_ended', `Run has ended; ask request is no longer valid: ${requestId}`, {
+      status: record.status,
+      run_id: record.run_id,
+      requestId,
     });
-    pendingAsks.delete(requestId);
   }
 
   /** 在途占位；同一 id 并发只允许一个通过 */
@@ -702,12 +947,33 @@ export function createRunEngine(options: RunEngineOptions): RunEngine {
       .map(publicStatus);
   }
 
+  /** pending ask 只读视图：从 interactionRecords 派生，不维护第二份状态。 */
+  function pendingAskView(): Map<string, PendingAsk> {
+    const view = new Map<string, PendingAsk>();
+    for (const [requestId, record] of interactionRecords) {
+      if ((record.kind ?? 'permission') !== 'ask' || record.status !== 'pending') continue;
+      view.set(requestId, {
+        run_id: record.run_id,
+        tenant_id: record.tenant_id,
+        ts: record.created_at,
+        ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
+        ...(record.parent_session_id !== undefined
+          ? { parent_session_id: record.parent_session_id }
+          : {}),
+        ...(record.input !== undefined ? { questions: record.input } : {}),
+      });
+    }
+    return view;
+  }
+
   return {
     runs,
     queue,
     coreToJob,
     pendingPermissions,
-    pendingAsks,
+    get pendingAsks() {
+      return pendingAskView();
+    },
     interactionRecords,
     resumedRuns,
     get active() {

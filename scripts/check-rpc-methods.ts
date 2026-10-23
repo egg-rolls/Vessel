@@ -73,6 +73,8 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'teams.get': 'read',
   'teams.post': 'write',
   'teams.members': 'write',
+  // 0.19 S4：人工预算 status / override（不进 control scope 白名单）。
+  'teams.budget': 'write',
   // 0.19 S5：hub 控制面。exchange 换短期 control token；revoke / list 只允许 admin。
   'auth.exchange': 'write',
   'auth.revoke': 'admin',

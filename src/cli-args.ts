@@ -168,7 +168,10 @@ export type AgentCommand =
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
 
-/** `vessel team ...` 子命令（0.19 S3；owner 私有端点） */
+/** 预算维度（与 `teams.budget` 契约一致） */
+export type TeamBudgetDimension = 'hops' | 'turns' | 'tokens' | 'wall_clock' | 'cycle';
+
+/** `vessel team ...` 子命令（0.19 S3；S4 增加 budget） */
 export type TeamCommand =
   | { kind: 'list'; json: boolean }
   | { kind: 'get'; teamId: string; limit?: number; json: boolean }
@@ -178,6 +181,15 @@ export type TeamCommand =
       teamId: string;
       action: 'add' | 'remove';
       member: string;
+      json: boolean;
+    }
+  | { kind: 'budget-status'; teamId: string; conversationId?: string; json: boolean }
+  | {
+      kind: 'budget-override';
+      teamId: string;
+      conversationId: string;
+      dimension: TeamBudgetDimension;
+      max: number | null;
       json: boolean;
     };
 
@@ -195,6 +207,18 @@ export type HubCommand =
   | { kind: 'directory'; hubUrl?: string; tokenEnv?: string; json: boolean }
   | { kind: 'watch'; hubUrl?: string; tokenEnv?: string }
   | { kind: 'pair'; dataDir?: string; tenant?: string; ttl?: number }
+  | { kind: 'join-code'; dataDir?: string; tenant?: string; ttl?: number; json: boolean }
+  | {
+      kind: 'join';
+      hubUrl?: string;
+      code?: string;
+      codeEnv?: string;
+      tenant?: string;
+      publicUrl?: string;
+      caFile?: string;
+      dataDir?: string;
+      json: boolean;
+    }
   | {
       kind: 'node-add';
       url: string;
@@ -2033,8 +2057,118 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: false, error: `Unknown agent subcommand: ${sub}` };
 }
 
+/** `team budget [override] <team_id> ...`（0.19 S4） */
+function parseTeamBudget(tail: string[], args: CliArgs): ParseResult {
+  const isOverride = tail[0] === 'override';
+  const tokens = isOverride ? tail.slice(1) : tail;
+  const errorPrefix = isOverride ? 'team budget override' : 'team budget';
+  let json = false;
+  let conversationId: string | undefined;
+  let dimension: TeamBudgetDimension | undefined;
+  let max: number | null | undefined;
+  let maxSeen = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const a = tokens[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--conversation') {
+      const value = readFlagValue(tokens, i, '--conversation');
+      if (!value.ok) return value;
+      conversationId = value.value;
+      i = value.next;
+      continue;
+    }
+    if (isOverride && a === '--dimension') {
+      const value = readFlagValue(tokens, i, '--dimension');
+      if (!value.ok) return value;
+      if (
+        value.value !== 'hops' &&
+        value.value !== 'turns' &&
+        value.value !== 'tokens' &&
+        value.value !== 'wall_clock' &&
+        value.value !== 'cycle'
+      ) {
+        return {
+          ok: false,
+          error: `Invalid --dimension: ${value.value} (expected hops|turns|tokens|wall_clock|cycle)`,
+        };
+      }
+      dimension = value.value;
+      i = value.next;
+      continue;
+    }
+    if (isOverride && a === '--max') {
+      const value = readFlagValue(tokens, i, '--max');
+      if (!value.ok) return value;
+      if (value.value === 'unlimited') {
+        max = null;
+      } else if (/^\d+$/.test(value.value)) {
+        max = Number.parseInt(value.value, 10);
+      } else {
+        return {
+          ok: false,
+          error: `Invalid --max: ${value.value} (expected a non-negative integer or unlimited)`,
+        };
+      }
+      maxSeen = true;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for ${errorPrefix}: ${a}` };
+    }
+    positional.push(a);
+  }
+
+  if (args.help) return { ok: true, args };
+  const [teamId, extra] = positional;
+  if (teamId === undefined || teamId === '') {
+    return { ok: false, error: `${errorPrefix} requires <team_id>` };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for ${errorPrefix}: ${extra}` };
+  }
+
+  if (!isOverride) {
+    args.teamCommand = {
+      kind: 'budget-status',
+      teamId,
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (conversationId === undefined) {
+    return { ok: false, error: 'team budget override requires --conversation <id>' };
+  }
+  if (dimension === undefined) {
+    return { ok: false, error: 'team budget override requires --dimension <d>' };
+  }
+  if (!maxSeen) {
+    return { ok: false, error: 'team budget override requires --max <n|unlimited>' };
+  }
+  args.teamCommand = {
+    kind: 'budget-override',
+    teamId,
+    conversationId,
+    dimension,
+    max: max ?? null,
+    json,
+  };
+  return { ok: true, args };
+}
+
 /**
- * `team list|get|post|members`（0.19 S3）。
+ * `team list|get|post|members|budget`（0.19 S3 / S4）。
  * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
  */
 function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
@@ -2181,6 +2315,10 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
     }
     args.teamCommand = { kind: 'members', teamId, action, member, json };
     return { ok: true, args };
+  }
+
+  if (sub === 'budget') {
+    return parseTeamBudget(tail, args);
   }
 
   return { ok: false, error: `Unknown team subcommand: ${sub}` };
@@ -2361,6 +2499,122 @@ function parseHubPair(rest: string[], args: CliArgs): ParseResult {
     ...(dataDir !== undefined ? { dataDir } : {}),
     ...(tenant !== undefined ? { tenant } : {}),
     ...(ttl !== undefined ? { ttl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub join-code [--tenant] [--ttl] [--json]`（hub 侧，S5.1） */
+function parseHubJoinCode(rest: string[], args: CliArgs): ParseResult {
+  let dataDir: string | undefined;
+  let tenant: string | undefined;
+  let ttl: number | undefined;
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--data-dir' || a === '--tenant' || a === '--ttl') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--data-dir') dataDir = value.value;
+      else if (a === '--tenant') tenant = value.value;
+      else {
+        const parsed = parseHubTtl(value.value, 60, 3600);
+        if (parsed === null) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (60-3600 seconds)` };
+        }
+        ttl = parsed;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub join-code: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.hubCommand = {
+    kind: 'join-code',
+    json,
+    ...(dataDir !== undefined ? { dataDir } : {}),
+    ...(tenant !== undefined ? { tenant } : {}),
+    ...(ttl !== undefined ? { ttl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub join [hub-url] --code <CODE> | --code-env <ENV> [...]`（node 侧，S5.1） */
+function parseHubJoin(rest: string[], args: CliArgs): ParseResult {
+  let code: string | undefined;
+  let codeEnv: string | undefined;
+  let tenant: string | undefined;
+  let publicUrl: string | undefined;
+  let caFile: string | undefined;
+  let dataDir: string | undefined;
+  let json = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (
+      a === '--code' ||
+      a === '--code-env' ||
+      a === '--tenant' ||
+      a === '--public-url' ||
+      a === '--ca' ||
+      a === '--data-dir'
+    ) {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--code') code = value.value;
+      else if (a === '--code-env') {
+        const envName = parseHubEnvName(value.value, '--code-env');
+        if (!envName.ok) return envName;
+        codeEnv = envName.value;
+      } else if (a === '--tenant') tenant = value.value;
+      else if (a === '--public-url') publicUrl = value.value;
+      else if (a === '--ca') caFile = value.value;
+      else dataDir = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub join: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+
+  const [hubUrl, extra] = positional;
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub join: ${extra}` };
+  }
+  if (code !== undefined && codeEnv !== undefined) {
+    return { ok: false, error: 'hub join accepts only one of --code and --code-env' };
+  }
+
+  args.hubCommand = {
+    kind: 'join',
+    json,
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+    ...(code !== undefined ? { code } : {}),
+    ...(codeEnv !== undefined ? { codeEnv } : {}),
+    ...(tenant !== undefined ? { tenant } : {}),
+    ...(publicUrl !== undefined ? { publicUrl } : {}),
+    ...(caFile !== undefined ? { caFile } : {}),
+    ...(dataDir !== undefined ? { dataDir } : {}),
   };
   return { ok: true, args };
 }
@@ -2749,7 +3003,9 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === undefined) {
     return {
       ok: false,
-      error: 'Missing hub subcommand (start|directory|watch|pair|node|token|data-token)',
+      error:
+        'Missing hub subcommand ' +
+        '(start|directory|watch|pair|join-code|join|node|token|data-token)',
     };
   }
   const tail = rest.slice(1);
@@ -2762,6 +3018,10 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
       return parseHubWatch(tail, args);
     case 'pair':
       return parseHubPair(tail, args);
+    case 'join-code':
+      return parseHubJoinCode(tail, args);
+    case 'join':
+      return parseHubJoin(tail, args);
     case 'node':
       return parseHubNodeArgs(tail, args);
     case 'token':

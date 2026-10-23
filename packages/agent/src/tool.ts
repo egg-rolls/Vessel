@@ -335,10 +335,12 @@ export function createAgentTool(
           const teamId = caller.team_id ?? (await service.identify(sessionId))?.team_id;
           if (teamId === undefined) throw invalid('post requires a team');
           // 永不传 mentions：post 只写日志，不产生任何 run。
+          const conversationId = service.currentConversation?.(caller.agent_id);
           const result = await team.post({
             team_id: teamId,
             content: record.content as string,
             from: caller.agent_id,
+            ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
           });
           return JSON.stringify(result);
         }

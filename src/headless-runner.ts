@@ -48,7 +48,13 @@ export async function runHeadless(
       runtime.events.publish({
         type: 'tool.permission.response',
         run_id: event.run_id,
-        data: { requestId: event.data.requestId, decision: 'allow' },
+        data: {
+          requestId: event.data.requestId,
+          decision: 'allow',
+          answered_by: 'policy',
+          answered_via: 'policy',
+          policy: 'auto_allow',
+        },
         ts: Date.now(),
       });
     }

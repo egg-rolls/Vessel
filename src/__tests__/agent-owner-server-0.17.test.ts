@@ -47,10 +47,12 @@ interface Calls {
   close: unknown[];
   list: unknown[];
   rotate: unknown[];
+  dispatch: unknown[];
   teamList: unknown[];
   teamGet: unknown[];
   teamPost: unknown[];
   teamMembers: unknown[];
+  teamBudget: unknown[];
 }
 
 function fakeService(calls: Calls): AgentService {
@@ -79,6 +81,10 @@ function fakeService(calls: Calls): AgentService {
       calls.list.push(filter);
       return [status('m1')];
     },
+    dispatch: async (input: unknown) => {
+      calls.dispatch.push(input);
+      return { status: 'queued', message_id: 'msg1', resolved_to: 'm1', resolution: 'live' };
+    },
     rotate: async (input: unknown) => {
       calls.rotate.push(input);
       return {
@@ -95,7 +101,6 @@ function fakeService(calls: Calls): AgentService {
       calls.new.push(input);
       return status('m1');
     },
-    requestPermission: async () => ({ decision: 'deny' }),
     flushSnapshot: async () => {},
     subscribe: () => () => {},
   } as unknown as AgentService;
@@ -128,6 +133,22 @@ function fakeTeam(calls: Calls, overrides: Record<string, unknown> = {}): AgentT
       calls.teamMembers.push(input);
       return { team_id: 'alpha', action: 'add', agent_id: 'm1', membership: 'present' };
     },
+    budget: async (input: unknown) => {
+      calls.teamBudget.push(input);
+      const entry = input as Record<string, unknown>;
+      if (entry.dimension !== undefined) {
+        return {
+          action: 'override',
+          team_id: 'alpha',
+          conversation_id: entry.conversation_id,
+          dimension: entry.dimension,
+          previous_max: 2,
+          max: entry.max,
+          status: { conversation_id: entry.conversation_id },
+        };
+      }
+      return { action: 'status', team_id: 'alpha', conversations: [] };
+    },
     send: async () => ({ status: 'error', logged: false }),
     listForCaller: async () => [],
     identify: async () => undefined,
@@ -144,10 +165,12 @@ function emptyCalls(): Calls {
     close: [],
     list: [],
     rotate: [],
+    dispatch: [],
     teamList: [],
     teamGet: [],
     teamPost: [],
     teamMembers: [],
+    teamBudget: [],
   };
 }
 
@@ -403,6 +426,194 @@ describe('agent owner server', () => {
 
     expect(calls.teamMembers).toHaveLength(0);
     expect(calls.teamGet).toHaveLength(0);
+  });
+
+  it('maps team.budget status and override with via cli', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    await post(server, {
+      method: 'team.budget',
+      params: { team_id: 'alpha', action: 'status' },
+    });
+    await post(server, {
+      method: 'team.budget',
+      params: { team_id: 'alpha', action: 'status', conversation_id: 'conv_1' },
+    });
+    await post(server, {
+      method: 'team.budget',
+      params: {
+        team_id: 'alpha',
+        action: 'override',
+        conversation_id: 'conv_1',
+        dimension: 'turns',
+        max: 5,
+      },
+    });
+    await post(server, {
+      method: 'team.budget',
+      params: {
+        team_id: 'alpha',
+        action: 'override',
+        conversation_id: 'conv_1',
+        dimension: 'tokens',
+        max: null,
+      },
+    });
+
+    expect(calls.teamBudget[0]).toEqual({ team_id: 'alpha' });
+    expect(calls.teamBudget[1]).toEqual({ team_id: 'alpha', conversation_id: 'conv_1' });
+    expect(calls.teamBudget[2]).toEqual({
+      team_id: 'alpha',
+      conversation_id: 'conv_1',
+      dimension: 'turns',
+      max: 5,
+      via: 'cli',
+    });
+    expect(calls.teamBudget[3]).toEqual({
+      team_id: 'alpha',
+      conversation_id: 'conv_1',
+      dimension: 'tokens',
+      max: null,
+      via: 'cli',
+    });
+  });
+
+  it('rejects invalid team.budget params with 400', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    const invalid = await post(server, {
+      method: 'team.budget',
+      params: { team_id: 'alpha', action: 'reset' },
+    });
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toMatchObject({ ok: false, error: { code: 'invalid_input' } });
+
+    const missingConversation = await post(server, {
+      method: 'team.budget',
+      params: { team_id: 'alpha', action: 'override', dimension: 'turns', max: 5 },
+    });
+    expect(missingConversation.status).toBe(400);
+
+    const badDimension = await post(server, {
+      method: 'team.budget',
+      params: {
+        team_id: 'alpha',
+        action: 'override',
+        conversation_id: 'conv_1',
+        dimension: 'cost',
+        max: 5,
+      },
+    });
+    expect(badDimension.status).toBe(400);
+
+    const missingMax = await post(server, {
+      method: 'team.budget',
+      params: {
+        team_id: 'alpha',
+        action: 'override',
+        conversation_id: 'conv_1',
+        dimension: 'turns',
+      },
+    });
+    expect(missingMax.status).toBe(400);
+
+    const badMax = await post(server, {
+      method: 'team.budget',
+      params: {
+        team_id: 'alpha',
+        action: 'override',
+        conversation_id: 'conv_1',
+        dimension: 'turns',
+        max: '5',
+      },
+    });
+    expect(badMax.status).toBe(400);
+
+    expect(calls.teamBudget).toHaveLength(0);
+  });
+
+  it('returns 404 when team budget is unavailable', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls, { budget: undefined }),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    const response = await post(server, {
+      method: 'team.budget',
+      params: { team_id: 'alpha', action: 'status' },
+    });
+    expect(response.status).toBe(404);
+    expect(response.body).toMatchObject({ ok: false, error: { code: 'team_not_found' } });
+  });
+
+  it('passes conversation_id through send, dispatch and team.post', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      team: fakeTeam(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    await post(server, {
+      method: 'agent.send',
+      params: { to: 'm1', content: 'hi', conversation_id: 'conv_1' },
+    });
+    await post(server, {
+      method: 'agent.send',
+      params: {
+        messages: [
+          { to: 'm1', content: 'a', conversation_id: 'conv_2' },
+          { to: 'm1', content: 'b' },
+        ],
+      },
+    });
+    await post(server, {
+      method: 'agent.dispatch',
+      params: { to: 'm1', content: 'go', conversation_id: 'conv_3' },
+    });
+    await post(server, {
+      method: 'team.post',
+      params: {
+        team_id: 'alpha',
+        content: 'hello',
+        conversation_id: 'conv_4',
+      },
+    });
+
+    expect(calls.send[0]).toMatchObject({ conversation_id: 'conv_1' });
+    expect(calls.send[1]).toEqual({
+      messages: [
+        { to: 'm1', content: 'a', conversation_id: 'conv_2', from: 'main' },
+        { to: 'm1', content: 'b', from: 'main' },
+      ],
+    });
+    expect(calls.dispatch[0]).toEqual({
+      to: 'm1',
+      content: 'go',
+      conversation_id: 'conv_3',
+      from: 'main',
+    });
+    expect(calls.teamPost[0]).toMatchObject({ conversation_id: 'conv_4' });
   });
 
   it('accepts only loopback Host headers (DNS rebinding)', () => {

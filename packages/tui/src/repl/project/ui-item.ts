@@ -21,6 +21,7 @@ import {
   type TuiEvent,
   type TuiUnknownEvent,
 } from '../../types/events.js';
+import { shortSessionId } from '../../utils/display-labels.js';
 import { sanitizeTerminalText } from '../../utils/sanitize-terminal-text.js';
 
 export type ToolCallStatus = 'running' | 'completed' | 'failed';
@@ -316,6 +317,57 @@ function findRunningToolId(state: UiProjectionState, toolName: string): string |
     }
   }
   return undefined;
+}
+
+/** budget 数值：显式 null 表示不限，缺失记 `?` */
+function budgetLimit(value: unknown): number | string {
+  if (value === null) return t('item.budgetUnlimited');
+  return typeof value === 'number' && Number.isFinite(value) ? value : '?';
+}
+
+/** team.budget.* 未进 `TuiEvent` union，按原始 eventType 投影为 notice */
+function budgetNotice(
+  event: TuiUnknownEvent,
+): Pick<Extract<UiItem, { kind: 'notice' }>, 'level' | 'text'> | undefined {
+  const data = event.data;
+  const conversation = shortSessionId(safe(readString(data, 'conversation_id') ?? ''), 12);
+  const dimension = safe(data.dimension) || '?';
+  const current = readNumber(data, 'current') ?? '?';
+  switch (event.eventType) {
+    case 'team.budget.warning':
+      return {
+        level: 'warn',
+        text: t('item.budgetWarning', {
+          dimension,
+          current,
+          max: budgetLimit(data.max),
+          conversation,
+        }),
+      };
+    case 'team.budget.blocked':
+      return {
+        level: 'danger',
+        text: t('item.budgetBlocked', {
+          dimension,
+          current,
+          max: budgetLimit(data.max),
+          reason: safe(data.reason) || '?',
+          conversation,
+        }),
+      };
+    case 'team.budget.override':
+      return {
+        level: 'info',
+        text: t('item.budgetOverride', {
+          dimension,
+          previous_max: budgetLimit(data.previous_max),
+          max: budgetLimit(data.max),
+          conversation,
+        }),
+      };
+    default:
+      return undefined;
+  }
 }
 
 /** 纯 reducer：折叠单个事件（不可变） */
@@ -860,8 +912,14 @@ export function reduceUiProjection(
 
     case 'update.available':
     case 'ask.user.answered':
-    case 'unknown':
       return state;
+
+    case 'unknown': {
+      const notice = budgetNotice(event);
+      if (notice === undefined) return state;
+      const { id, seq } = nextId(state, 'notice');
+      return { ...state, seq, items: [...state.items, { kind: 'notice', id, ...notice }] };
+    }
   }
 }
 

@@ -470,7 +470,13 @@ export const teamMessageSchema = {
     content: { type: 'string' },
     ts: { type: 'number' },
     kind: { type: 'string', enum: ['post', 'mention', 'system', 'reply'] },
-    system_event: { type: 'string', enum: ['join', 'leave', 'rotate', 'archive'] },
+    // 0.19 S4：人工预算 override 的系统记录。
+    system_event: {
+      type: 'string',
+      enum: ['join', 'leave', 'rotate', 'archive', 'budget_override'],
+    },
+    // 0.19 S4：会话分组；旧日志缺省。
+    conversation_id: { type: 'string' },
   },
 };
 
@@ -499,6 +505,8 @@ export const teamPostResultSchema = {
     mentions: stringListSchema,
     delivered: { type: 'array', items: teamDeliverySchema },
     ts: { type: 'number' },
+    // 0.19 S4：本次 post 的会话分组；新实现总是返回。
+    conversation_id: { type: 'string' },
   },
 };
 
@@ -511,6 +519,100 @@ export const teamMembersResultSchema = {
     action: { type: 'string', enum: ['add', 'remove'] },
     agent_id: { type: 'string' },
     membership: { type: 'string', enum: ['present', 'left'] },
+  },
+};
+
+// ── 0.19 S4：conversation 预算（teams.budget） ──
+
+const budgetOverrideEntrySchema = {
+  type: 'object',
+  required: ['max', 'by', 'via', 'at'],
+  properties: {
+    max: { type: 'integer' },
+    by: { type: 'string', enum: ['human'] },
+    via: { type: 'string', enum: ['cli', 'api'] },
+    at: { type: 'number' },
+  },
+};
+
+/** ConversationBudgetStatus；不含消息正文。 */
+export const conversationBudgetStatusSchema = {
+  type: 'object',
+  required: [
+    'conversation_id',
+    'created_at',
+    'last_activity',
+    'hops',
+    'turns',
+    'total_tokens',
+    'wall_clock_ms',
+    'edges',
+    'overrides',
+  ],
+  properties: {
+    conversation_id: { type: 'string' },
+    team_id: { type: 'string' },
+    created_at: { type: 'number' },
+    last_activity: { type: 'number' },
+    hops: { type: 'integer', minimum: 0 },
+    turns: { type: 'integer', minimum: 0 },
+    total_tokens: { type: 'integer', minimum: 0 },
+    wall_clock_ms: { type: 'number', minimum: 0 },
+    edges: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['from', 'to', 'count', 'last_ts'],
+        properties: {
+          from: { type: 'string' },
+          to: { type: 'string' },
+          count: { type: 'integer', minimum: 0 },
+          last_ts: { type: 'number' },
+          blocked_until: { type: 'number' },
+        },
+      },
+    },
+    overrides: {
+      type: 'object',
+      properties: {
+        hops: budgetOverrideEntrySchema,
+        turns: budgetOverrideEntrySchema,
+        tokens: budgetOverrideEntrySchema,
+        wall_clock: budgetOverrideEntrySchema,
+        cycle: budgetOverrideEntrySchema,
+      },
+    },
+    blocked: {
+      type: 'object',
+      required: ['dimension', 'reason', 'at'],
+      properties: {
+        dimension: {
+          type: 'string',
+          enum: ['hops', 'turns', 'tokens', 'wall_clock', 'cycle'],
+        },
+        reason: { type: 'string' },
+        at: { type: 'number' },
+      },
+    },
+  },
+};
+
+/**
+ * teams.budget 结果（status / override）。
+ * `previous_max` / `max` 允许 null，而校验器子集没有 union / nullable；
+ * 这里不声明 type（任意值通过），nullable 语义由注入的 Team 控制面保证。
+ */
+export const teamBudgetResultSchema = {
+  type: 'object',
+  required: ['team_id', 'action'],
+  properties: {
+    team_id: { type: 'string' },
+    action: { type: 'string', enum: ['status', 'override'] },
+    conversation_id: { type: 'string' },
+    status: conversationBudgetStatusSchema,
+    conversations: { type: 'array', items: conversationBudgetStatusSchema },
+    previous_max: {},
+    max: {},
   },
 };
 

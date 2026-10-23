@@ -5,7 +5,7 @@
  *   `{pid, host, port, token, started_at, tenant_id}`，原子写 0600；
  * - 只监听 127.0.0.1（缺省 :0），校验 Host 防 DNS rebinding；
  * - 端点只是传输：`agent.new/send/close/list/dispatch/rotate` 委托 AgentService，
- *   `team.list/get/post/members` 委托 TeamService（0.19 S3）。
+ *   `team.list/get/post/members/budget` 委托 TeamService（0.19 S3 / S4）。
  *
  * @module vessel/agent-owner-server
  */
@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import type {
   AgentService,
   AgentTeamService,
+  BudgetDimension,
   DispatchInput,
   NewBatchInput,
   NewMemberInput,
@@ -45,7 +46,8 @@ export type AgentOwnerMethod =
   | 'team.list'
   | 'team.get'
   | 'team.post'
-  | 'team.members';
+  | 'team.members'
+  | 'team.budget';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {
@@ -246,6 +248,22 @@ function requireString(method: string, params: Record<string, unknown>, key: str
   return value;
 }
 
+/** 可选非空字符串；缺省返回 undefined */
+function optionalString(
+  method: string,
+  params: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = params[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string' || value === '') {
+    throw invalidInput(method, `${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+const BUDGET_DIMENSIONS = new Set<string>(['hops', 'turns', 'tokens', 'wall_clock', 'cycle']);
+
 function readMentions(method: string, params: Record<string, unknown>): string[] | undefined {
   const mentions = params.mentions;
   if (mentions === undefined) return undefined;
@@ -290,10 +308,12 @@ async function dispatchTeam(
       const teamId = requireString(method, params, 'team_id');
       const content = requireString(method, params, 'content');
       const mentions = readMentions(method, params);
+      const conversationId = optionalString(method, params, 'conversation_id');
       return team.post({
         team_id: teamId,
         content,
         ...(mentions !== undefined ? { mentions } : {}),
+        ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
         from: ownerId,
       } satisfies TeamPostInput);
     }
@@ -315,10 +335,48 @@ async function dispatchTeam(
       }
       return result;
     }
+    case 'team.budget': {
+      if (typeof team.budget !== 'function') {
+        throw new AgentOwnerError('team_not_found', 'budget unavailable', 404);
+      }
+      const teamId = requireString(method, params, 'team_id');
+      const action = params.action;
+      if (action !== 'status' && action !== 'override') {
+        throw invalidInput(method, 'action must be status or override');
+      }
+      const conversationId = optionalString(method, params, 'conversation_id');
+      if (action === 'status') {
+        return team.budget({
+          team_id: teamId,
+          ...(conversationId !== undefined ? { conversation_id: conversationId } : {}),
+        });
+      }
+      if (conversationId === undefined) {
+        throw invalidInput(method, 'conversation_id is required for override');
+      }
+      const dimension = params.dimension;
+      if (typeof dimension !== 'string' || !BUDGET_DIMENSIONS.has(dimension)) {
+        throw invalidInput(method, 'dimension must be hops, turns, tokens, wall_clock or cycle');
+      }
+      if (!Object.hasOwn(params, 'max')) {
+        throw invalidInput(method, 'max is required for override');
+      }
+      const max = params.max;
+      if (max !== null && (typeof max !== 'number' || !Number.isInteger(max) || max < 0)) {
+        throw invalidInput(method, 'max must be a non-negative integer or null');
+      }
+      return team.budget({
+        team_id: teamId,
+        conversation_id: conversationId,
+        dimension: dimension as BudgetDimension,
+        max: max as number | null,
+        via: 'cli',
+      });
+    }
     default:
       throw new AgentOwnerError(
         'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.post|team.members)`,
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate|team.list|team.get|team.post|team.members|team.budget)`,
         404,
       );
   }
@@ -347,6 +405,7 @@ function mapSendBatch(params: Record<string, unknown>, ownerId: string): SendInp
       return {
         ...(entry.to !== undefined ? { to: entry.to } : {}),
         ...(entry.content !== undefined ? { content: entry.content } : {}),
+        ...(entry.conversation_id !== undefined ? { conversation_id: entry.conversation_id } : {}),
         from: ownerId,
       };
     }),
@@ -373,6 +432,9 @@ async function dispatch(
       return service.send({
         ...(params.to !== undefined ? { to: params.to } : {}),
         ...(params.content !== undefined ? { content: params.content } : {}),
+        ...(params.conversation_id !== undefined
+          ? { conversation_id: params.conversation_id }
+          : {}),
         from: ownerId,
       } as unknown as SendInput);
     case 'agent.close':
@@ -393,6 +455,9 @@ async function dispatch(
       return service.dispatch({
         ...(params.to !== undefined ? { to: params.to } : {}),
         ...(params.content !== undefined ? { content: params.content } : {}),
+        ...(params.conversation_id !== undefined
+          ? { conversation_id: params.conversation_id }
+          : {}),
         from: ownerId,
       } as DispatchInput);
     case 'agent.rotate':

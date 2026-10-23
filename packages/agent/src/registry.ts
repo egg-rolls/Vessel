@@ -132,6 +132,7 @@ export function toRuntimeMember(record: MemberRecord): MemberRuntimeMember {
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     owner: record.owner,
     visibility: record.visibility,
+    ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     ...(record.model !== undefined ? { model: record.model } : {}),
     ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
   };

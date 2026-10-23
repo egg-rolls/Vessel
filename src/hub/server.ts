@@ -19,6 +19,7 @@ import type { HubConfig } from '@vessel-agent/config';
 import type { Logger } from '@vessel-agent/core';
 import {
   corsHeaders,
+  HUB_NODE_CONTROL_PATH,
   HUB_PROTOCOL,
   type HubPingFrame,
   type HubPointerFrame,
@@ -32,10 +33,17 @@ import {
 } from '@vessel-agent/serve';
 import { normalizeNodeUrl } from '../node-registry.js';
 import type { HubClientHelloFrame, HubDirectoryFrame } from './client-protocol.js';
+import {
+  createHubNodeInbound,
+  type HubNodeInbound,
+  type HubNodeInboundConnection,
+} from './inbound-control.js';
 import type { HubRegistry } from './registry.js';
 import {
+  type HubNodeInboundDeps,
   type HubNodeRecord,
   type HubTokenBrokerLike,
+  type IssuedHubNodeToken,
   pairingIdFor,
   pairingSecretKey,
   type SecretStore,
@@ -56,6 +64,9 @@ const WS_AUTH_TIMEOUT_MS = 5_000;
 const PAIRING_REQUEST_TIMEOUT_MS = 10_000;
 /** 目录变化广播 debounce（与 registry 写合并节奏一致）。 */
 const DIRECTORY_BROADCAST_DEBOUNCE_MS = 250;
+/** join 失败限流：每个 IP 每分钟允许的失败次数（与 hub-pairing 一致）。 */
+const JOIN_RATE_LIMIT_WINDOW_MS = 60_000;
+const JOIN_RATE_LIMIT_MAX_FAILURES = 5;
 
 export interface HubNodeConnection {
   close(): void | Promise<void>;
@@ -81,6 +92,8 @@ export interface CreateHubServerOptions {
   secretStore: SecretStore;
   tokenBroker?: HubTokenBrokerLike;
   connectNode?: HubConnectNode;
+  /** 提供时启用 `POST /v1/hub/join` 与 `GET /v1/hub/node-control`；缺省 404。 */
+  nodeControl?: HubNodeInboundDeps;
   logger?: Logger;
   now?: () => number;
 }
@@ -99,13 +112,23 @@ export interface HubServer {
   stop(): Promise<void>;
 }
 
-interface HubWsData {
+/** `/v1/hub/events` 目录客户端。 */
+interface DirectoryWsData {
+  kind: 'directory';
   authed: boolean;
   alive: boolean;
   /** upgrade 时由 requestIP 判定；回环客户端可匿名。 */
   local: boolean;
   authTimer?: ReturnType<typeof setTimeout>;
 }
+
+/** `/v1/hub/node-control` 的 node 入站连接；状态机由 inbound-control 持有。 */
+interface NodeWsData {
+  kind: 'node';
+  inbound?: HubNodeInboundConnection;
+}
+
+type HubWsData = DirectoryWsData | NodeWsData;
 
 type Ws = import('bun').ServerWebSocket<HubWsData>;
 
@@ -139,6 +162,58 @@ function errorResponse(
   extra: Record<string, string>,
 ): Response {
   return jsonResponse(status, { ok: false, error: { code, message } }, extra);
+}
+
+/** join store 错误码 → HTTP 状态；未知一律 500。 */
+function joinStatus(code: unknown): number {
+  switch (code) {
+    case 'pairing_not_found':
+      return 404;
+    case 'pairing_invalid':
+      return 401;
+    case 'pairing_expired':
+    case 'pairing_used':
+      return 410;
+    case 'tenant_mismatch':
+      return 400;
+    default:
+      return 500;
+  }
+}
+
+/** 只放行稳定错误码；其余折叠成 `internal`，不泄漏实现细节。 */
+function joinErrorCode(code: unknown): string {
+  switch (code) {
+    case 'pairing_not_found':
+    case 'pairing_invalid':
+    case 'pairing_expired':
+    case 'pairing_used':
+    case 'tenant_mismatch':
+    case 'hub_join_corrupt':
+      return code;
+    default:
+      return 'internal';
+  }
+}
+
+/** 对外文案；不包含文件路径或 code 明文。 */
+function joinMessage(code: string): string {
+  switch (code) {
+    case 'pairing_not_found':
+      return 'Join code not found';
+    case 'pairing_invalid':
+      return 'Invalid join code';
+    case 'pairing_expired':
+      return 'Join code expired';
+    case 'pairing_used':
+      return 'Join code already used';
+    case 'tenant_mismatch':
+      return 'tenant_id does not match the join code';
+    case 'hub_join_corrupt':
+      return 'Hub join state is unavailable';
+    default:
+      return 'Join failed';
+  }
 }
 
 type BodyResult = { ok: true; value: unknown } | { ok: false; response: Response };
@@ -236,6 +311,16 @@ function parsePairingResponse(value: unknown): ParsedPairing | undefined {
 /** 创建 hub 服务；配置非法时同步抛错（fail-closed）。 */
 export function createHubServer(options: CreateHubServerOptions): HubServer {
   const { config, hubId, registry, secretStore, tokenBroker, connectNode, logger } = options;
+  const nodeControl = options.nodeControl;
+  const inbound: HubNodeInbound | undefined =
+    nodeControl !== undefined ? createHubNodeInbound(nodeControl) : undefined;
+  // 吊销 token 时立即关闭持有它的入站 WS（remove / re-join 都走这里）。
+  const unsubscribeRevoke =
+    nodeControl !== undefined
+      ? nodeControl.credentials.onRevoke((tokenId) => {
+          inbound?.closeByTokenId(tokenId);
+        })
+      : undefined;
   const clock = options.now ?? Date.now;
 
   if (config.direction !== undefined && config.direction !== 'hub') {
@@ -292,7 +377,10 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
   const allowedOrigins = normalizeAllowedOrigins(config.allowedOrigins);
 
   const wsClients = new Set<Ws>();
+  const nodeClients = new Set<Ws>();
   const connections = new Map<string, HubNodeConnection>();
+  /** join 端点每 IP 失败窗口；单进程内存，不做持久化。 */
+  const joinFailures = new Map<string, { count: number; resetAt: number }>();
   let directoryRevision = 0;
   let directoryTimer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
@@ -305,6 +393,27 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       ? info.address.slice('::ffff:'.length)
       : info.address;
     return isLoopbackHostname(address);
+  }
+
+  /** 对端地址（join 限流用）；无法判定时落到 `unknown`。 */
+  function peerAddress(srv: import('bun').Server<HubWsData>, request: Request): string {
+    return srv.requestIP(request)?.address ?? 'unknown';
+  }
+
+  function joinRetryAfter(ip: string, now: number): number | undefined {
+    const window = joinFailures.get(ip);
+    if (window === undefined || now >= window.resetAt) return undefined;
+    if (window.count < JOIN_RATE_LIMIT_MAX_FAILURES) return undefined;
+    return Math.max(1, Math.ceil((window.resetAt - now) / 1000));
+  }
+
+  function recordJoinFailure(ip: string, now: number): void {
+    const existing = joinFailures.get(ip);
+    if (existing === undefined || now >= existing.resetAt) {
+      joinFailures.set(ip, { count: 1, resetAt: now + JOIN_RATE_LIMIT_WINDOW_MS });
+      return;
+    }
+    existing.count += 1;
   }
 
   function readAuthorized(srv: import('bun').Server<HubWsData>, request: Request): boolean {
@@ -352,7 +461,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
   function broadcastFrame(frame: unknown): void {
     for (const ws of [...wsClients]) {
-      if (ws.data.authed) send(ws, frame);
+      if (ws.data.kind === 'directory' && ws.data.authed) send(ws, frame);
     }
   }
 
@@ -500,6 +609,17 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       return errorResponse('pairing_failed', 'invalid pairing response', 502, extra);
     }
 
+    // 同一 pairing 不能同时有两种方向；node-dial 记录必须先 remove。
+    const existing = registry.get(pairing.pairing_id);
+    if (existing !== undefined && (existing.direction ?? 'hub') !== 'hub') {
+      return errorResponse(
+        'pairing_exists_other_direction',
+        'pairing already exists with direction "node"',
+        409,
+        extra,
+      );
+    }
+
     await secretStore.set(pairingSecretKey(pairing.pairing_id, 'view'), pairing.view_token);
     await secretStore.set(pairingSecretKey(pairing.pairing_id, 'exchange'), pairing.exchange_token);
 
@@ -553,6 +673,23 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     }
     const existing = registry.get(pairingId);
     if (!existing) return errorResponse('not_found', 'pairing not found', 404, extra);
+
+    // node-dial：先关闭入站 WS、吊销 hub 签发的 node token，再走通用清理。
+    if ((existing.direction ?? 'hub') === 'node') {
+      inbound?.closeByPairing(pairingId);
+      if (nodeControl !== undefined) {
+        try {
+          await nodeControl.credentials.revokePairing(pairingId);
+        } catch (error) {
+          // 吊销失败不得删目录：token 仍有效，节点可能重新连回来。
+          logger?.warn('hub.server.revoke_failed', {
+            pairing_id: pairingId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return errorResponse('revoke_failed', 'failed to revoke node token', 500, extra);
+        }
+      }
+    }
 
     const connection = connections.get(pairingId);
     connections.delete(pairingId);
@@ -609,11 +746,22 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     const record = registry.get(pairingId);
     if (!record) return errorResponse('not_found', 'pairing not found', 404, extra);
 
+    // node-dial 且没有可达 URL 时，数据面不可达；不要尝试拨号。
+    const nodeUrl = record.public_url ?? record.url;
+    if (nodeUrl === undefined) {
+      return errorResponse(
+        'data_plane_unreachable',
+        'node has no browser-reachable url; configure a tunnel or public_url',
+        409,
+        extra,
+      );
+    }
+
     try {
       const token = await tokenBroker.exchangeForTeam({
         pairing_id: record.pairing_id,
         node_id: record.node_id,
-        url: record.url,
+        url: nodeUrl,
         team_id: teamId,
         ...(ttl !== undefined ? { ttl_s: ttl } : {}),
         ...(record.ca_file !== undefined ? { ca_file: record.ca_file } : {}),
@@ -626,6 +774,170 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
       });
       return errorResponse('exchange_failed', 'token exchange failed', 502, extra);
     }
+  }
+
+  /**
+   * `POST /v1/hub/join`（S5.1）：node 用 hub 生成的一次性 code 换 node token。
+   * 只返回白名单字段；token 明文只出现一次。错误文案不泄漏实现细节。
+   */
+  async function handleJoin(request: Request, extra: Record<string, string>): Promise<Response> {
+    if (nodeControl === undefined) {
+      return errorResponse('not_found', 'not found', 404, extra);
+    }
+
+    const body = await readJsonBody(request, extra);
+    if (!body.ok) return body.response;
+    if (!isRecord(body.value)) {
+      return errorResponse('invalid_request', 'body must be an object', 400, extra);
+    }
+    if (body.value.protocol !== HUB_PROTOCOL) {
+      return errorResponse('unsupported_protocol', `protocol must be ${HUB_PROTOCOL}`, 426, extra);
+    }
+
+    const code = body.value.code;
+    const nodeId = body.value.node_id;
+    const tenantId = body.value.tenant_id;
+    if (!isNonEmptyString(code) || !isNonEmptyString(nodeId) || !isNonEmptyString(tenantId)) {
+      return errorResponse(
+        'invalid_request',
+        'code, node_id and tenant_id are required',
+        400,
+        extra,
+      );
+    }
+    const alias = body.value.alias;
+    if (alias !== undefined && !isNonEmptyString(alias)) {
+      return errorResponse('invalid_request', 'alias must be a non-empty string', 400, extra);
+    }
+    const rawPublicUrl = body.value.public_url;
+    if (rawPublicUrl !== undefined && !isNonEmptyString(rawPublicUrl)) {
+      return errorResponse('invalid_request', 'public_url must be a non-empty string', 400, extra);
+    }
+    let publicUrl: string | undefined;
+    if (rawPublicUrl !== undefined) {
+      try {
+        publicUrl = normalizeNodeUrl(rawPublicUrl);
+      } catch (error) {
+        return errorResponse(
+          'invalid_request',
+          error instanceof Error ? error.message : 'invalid public_url',
+          400,
+          extra,
+        );
+      }
+    }
+
+    const pairingId = pairingIdFor(nodeId, tenantId);
+    const existing = registry.get(pairingId);
+    if (existing !== undefined && (existing.direction ?? 'hub') !== 'node') {
+      return errorResponse(
+        'pairing_exists_other_direction',
+        'pairing already exists with direction "hub"',
+        409,
+        extra,
+      );
+    }
+
+    try {
+      await nodeControl.joinStore.consume({
+        code,
+        hub_id: hubId,
+        node_id: nodeId,
+        tenant_id: tenantId,
+      });
+    } catch (error) {
+      const raw = isRecord(error) ? error.code : undefined;
+      const mapped = joinErrorCode(raw);
+      return errorResponse(mapped, joinMessage(mapped), joinStatus(raw), extra);
+    }
+
+    let issued: IssuedHubNodeToken;
+    try {
+      issued = await nodeControl.credentials.issue({
+        hub_id: hubId,
+        node_id: nodeId,
+        tenant_id: tenantId,
+        pairing_id: pairingId,
+      });
+    } catch (error) {
+      logger?.warn('hub.server.join_issue_failed', {
+        pairing_id: pairingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return errorResponse('internal', 'Join failed', 500, extra);
+    }
+
+    // 重新 join：保留刚签发的 token，吊销该 pairing 的旧 token（并关闭旧连接）。
+    try {
+      await nodeControl.credentials.revokePairing(pairingId, issued.token_id);
+    } catch (error) {
+      logger?.warn('hub.server.revoke_previous_failed', {
+        pairing_id: pairingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    try {
+      await nodeControl.hooks.onJoined({
+        pairing_id: pairingId,
+        node_id: nodeId,
+        tenant_id: tenantId,
+        node_token_id: issued.token_id,
+        ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
+        ...(alias !== undefined ? { alias } : {}),
+      });
+    } catch (error) {
+      // 目录落盘失败：撤销刚签发的 token，避免“有凭据没目录”的半成品。
+      logger?.warn('hub.server.join_hook_failed', {
+        pairing_id: pairingId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      try {
+        await nodeControl.credentials.revoke(issued.token_id);
+      } catch {
+        // best-effort：token 仍会在 TTL 后过期
+      }
+      return errorResponse('join_failed', 'Join failed', 500, extra);
+    }
+
+    return jsonResponse(
+      200,
+      {
+        hub_id: hubId,
+        node_id: nodeId,
+        tenant_id: tenantId,
+        pairing_id: pairingId,
+        token: issued.token,
+        token_id: issued.token_id,
+        scope: 'node',
+        expires_at: issued.expires_at,
+      },
+      extra,
+    );
+  }
+
+  /** `POST /v1/hub/join` 的限流包装：失败计数，成功清空窗口。 */
+  async function routeJoin(
+    srv: import('bun').Server<HubWsData>,
+    request: Request,
+    extra: Record<string, string>,
+  ): Promise<Response> {
+    if (nodeControl === undefined) {
+      return errorResponse('not_found', 'not found', 404, extra);
+    }
+    const ip = peerAddress(srv, request);
+    const retryAfter = joinRetryAfter(ip, clock());
+    if (retryAfter !== undefined) {
+      return jsonResponse(
+        429,
+        { ok: false, error: { code: 'too_many_requests', message: 'Too many join failures' } },
+        { ...extra, 'Retry-After': String(retryAfter) },
+      );
+    }
+    const response = await handleJoin(request, extra);
+    if (response.status >= 400) recordJoinFailure(ip, clock());
+    else joinFailures.delete(ip);
+    return response;
   }
 
   const server = Bun.serve<HubWsData>({
@@ -667,13 +979,49 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
         if (path === '/v1/hub/events' && request.method === 'GET') {
           const local = isLoopbackPeer(srv, request);
-          const upgraded = srv.upgrade(request, {
-            data: { authed: false, alive: true, local },
-          });
+          const data: DirectoryWsData = { kind: 'directory', authed: false, alive: true, local };
+          const upgraded = srv.upgrade(request, { data });
           if (!upgraded) {
             return errorResponse('upgrade_failed', 'websocket upgrade failed', 400, extra);
           }
           return undefined;
+        }
+
+        if (path === HUB_NODE_CONTROL_PATH) {
+          if (nodeControl === undefined) {
+            return errorResponse('not_found', 'not found', 404, extra);
+          }
+          if (request.method !== 'GET') {
+            return errorResponse('method_not_allowed', 'method not allowed', 405, extra);
+          }
+          if ((request.headers.get('upgrade') ?? '').toLowerCase() !== 'websocket') {
+            return errorResponse('upgrade_required', 'WebSocket upgrade required', 400, extra);
+          }
+          // token 只走首帧，不接受 URL / query。
+          if (url.searchParams.has('token')) {
+            return errorResponse(
+              'invalid_request',
+              'WebSocket auth must use the first auth frame; token in query is not supported',
+              400,
+              extra,
+            );
+          }
+          const data: NodeWsData = { kind: 'node' };
+          const upgraded = srv.upgrade(request, { data });
+          if (!upgraded) {
+            return errorResponse('upgrade_failed', 'websocket upgrade failed', 400, extra);
+          }
+          return undefined;
+        }
+
+        if (path === '/v1/hub/join') {
+          if (nodeControl === undefined) {
+            return errorResponse('not_found', 'not found', 404, extra);
+          }
+          if (request.method !== 'POST') {
+            return errorResponse('method_not_allowed', 'method not allowed', 405, extra);
+          }
+          return routeJoin(srv, request, extra);
         }
 
         if (path === '/v1/hub/directory' && request.method === 'GET') {
@@ -727,14 +1075,33 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     },
     websocket: {
       open(ws) {
+        if (ws.data.kind === 'node') {
+          nodeClients.add(ws);
+          if (inbound === undefined) {
+            try {
+              ws.close(1011, 'node control unavailable');
+            } catch {
+              // best-effort
+            }
+            return;
+          }
+          ws.data.inbound = inbound.open(ws);
+          return;
+        }
+        const data = ws.data;
         wsClients.add(ws);
-        ws.data.alive = true;
-        ws.data.authTimer = setTimeout(() => {
-          if (!ws.data.authed) ws.close(4401, 'auth timeout');
+        data.alive = true;
+        data.authTimer = setTimeout(() => {
+          if (!data.authed) ws.close(4401, 'auth timeout');
         }, WS_AUTH_TIMEOUT_MS);
-        (ws.data.authTimer as { unref?: () => void }).unref?.();
+        (data.authTimer as { unref?: () => void }).unref?.();
       },
       message(ws, message) {
+        if (ws.data.kind === 'node') {
+          const conn = ws.data.inbound;
+          if (conn !== undefined && inbound !== undefined) inbound.message(conn, message);
+          return;
+        }
         if (ws.data.authed) {
           if (typeof message !== 'string') return;
           try {
@@ -782,11 +1149,22 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         sendDirectory(ws);
       },
       close(ws) {
+        if (ws.data.kind === 'node') {
+          nodeClients.delete(ws);
+          const conn = ws.data.inbound;
+          if (conn !== undefined && inbound !== undefined) inbound.close(conn);
+          return;
+        }
         if (ws.data.authTimer) clearTimeout(ws.data.authTimer);
         ws.data.authTimer = undefined;
         wsClients.delete(ws);
       },
       pong(ws) {
+        if (ws.data.kind === 'node') {
+          const conn = ws.data.inbound;
+          if (conn !== undefined && inbound !== undefined) inbound.pong(conn);
+          return;
+        }
         ws.data.alive = true;
       },
     },
@@ -794,7 +1172,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
 
   const pingTimer = setInterval(() => {
     for (const ws of [...wsClients]) {
-      if (!ws.data.authed) continue;
+      if (ws.data.kind !== 'directory' || !ws.data.authed) continue;
       if (!ws.data.alive) {
         ws.close(1001, 'heartbeat timeout');
         wsClients.delete(ws);
@@ -832,6 +1210,7 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         directoryTimer = undefined;
       }
       unsubscribe();
+      unsubscribeRevoke?.();
       for (const ws of [...wsClients]) {
         try {
           ws.close(1001, 'hub stopping');
@@ -840,6 +1219,17 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
         }
       }
       wsClients.clear();
+      // node 入站：先标记停止（避免 onStatus），再关闭套接字。
+      inbound?.stop();
+      for (const ws of [...nodeClients]) {
+        try {
+          ws.close(1001, 'hub stopping');
+        } catch {
+          // best-effort
+        }
+      }
+      nodeClients.clear();
+      joinFailures.clear();
       for (const connection of connections.values()) {
         try {
           await connection.close();

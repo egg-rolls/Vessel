@@ -63,12 +63,17 @@ function parseEntry(line: string): TeamLogEntry | null {
       ts: parsed.ts,
       kind,
     };
+    // 旧行没有 conversation_id → 读成 undefined，不报错。
+    if (typeof parsed.conversation_id === 'string' && parsed.conversation_id !== '') {
+      entry.conversation_id = parsed.conversation_id;
+    }
     const systemEvent = parsed.system_event;
     if (
       systemEvent === 'join' ||
       systemEvent === 'leave' ||
       systemEvent === 'rotate' ||
-      systemEvent === 'archive'
+      systemEvent === 'archive' ||
+      systemEvent === 'budget_override'
     ) {
       entry.system_event = systemEvent;
     }

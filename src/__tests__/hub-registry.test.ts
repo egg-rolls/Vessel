@@ -25,7 +25,9 @@ function makeRecord(overrides: Partial<HubNodeRecord> = {}): HubNodeRecord {
     pairing_id: 'node-1:tenant-1',
     node_id: 'node-1',
     tenant_id: 'tenant-1',
+    direction: 'hub',
     url: 'http://127.0.0.1:8642',
+    data_plane: 'direct',
     status: 'connecting',
     truncated: false,
     counts: { teams: 0, agents: 0, live_agents: 0 },
@@ -91,6 +93,135 @@ describe('createHubRegistry', () => {
     const reloaded = createHubRegistry({ dataDir: dir, hubId: HUB_ID });
     await reloaded.load();
     expect(reloaded.get(record.pairing_id)).toEqual(record);
+  });
+
+  it('round-trips node-dial fields (direction / public_url / data_plane / node_token_id)', async () => {
+    const dir = await tempDataDir();
+    const registry = createHubRegistry({ dataDir: dir, hubId: HUB_ID, now: () => 2000 });
+    await registry.load();
+
+    const record: HubNodeRecord = {
+      pairing_id: 'node-2:tenant-1',
+      node_id: 'node-2',
+      tenant_id: 'tenant-1',
+      direction: 'node',
+      public_url: 'https://edge.example:8642',
+      node_token_id: 'token-1',
+      status: 'healthy',
+      truncated: false,
+      counts: { teams: 0, agents: 0, live_agents: 0 },
+      teams: [],
+      agents: [],
+    };
+    const expected: HubNodeRecord = { ...record, data_plane: 'direct' };
+    expect(registry.upsert(record)).toEqual(expected);
+    await registry.flush();
+
+    const reloaded = createHubRegistry({ dataDir: dir, hubId: HUB_ID });
+    await reloaded.load();
+    expect(reloaded.get(record.pairing_id)).toEqual(expected);
+  });
+
+  it('reads legacy records without direction as hub and writes direction back', async () => {
+    const dir = await tempDataDir();
+    const legacy = {
+      pairing_id: 'node-1:tenant-1',
+      node_id: 'node-1',
+      tenant_id: 'tenant-1',
+      url: 'http://127.0.0.1:8642',
+      status: 'healthy',
+      truncated: false,
+      counts: { teams: 0, agents: 0, live_agents: 0 },
+      teams: [],
+      agents: [],
+    };
+    await writeFile(
+      registryFile(dir),
+      JSON.stringify({ v: 1, hub_id: HUB_ID, updated_at: 5, nodes: [legacy] }),
+    );
+
+    const registry = createHubRegistry({ dataDir: dir, hubId: HUB_ID });
+    await registry.load();
+    const record = registry.get(legacy.pairing_id);
+    expect(record?.direction).toBe('hub');
+    expect(record?.data_plane).toBe('direct');
+    expect(record?.url).toBe(legacy.url);
+    expect(record?.public_url).toBeUndefined();
+
+    await registry.flush();
+    const raw = JSON.parse(await readFile(registryFile(dir), 'utf8')) as {
+      nodes: Array<Record<string, unknown>>;
+    };
+    expect(raw.nodes[0]?.direction).toBe('hub');
+    expect(raw.nodes[0]?.data_plane).toBe('direct');
+  });
+
+  it('accepts node-dial records without url but still requires url for hub records', async () => {
+    const dir = await tempDataDir();
+    const registry = createHubRegistry({ dataDir: dir, hubId: HUB_ID });
+    await registry.load();
+
+    const stored = registry.upsert(
+      makeRecord({
+        pairing_id: 'node-2:tenant-1',
+        node_id: 'node-2',
+        direction: 'node',
+        url: undefined,
+        data_plane: undefined,
+      }),
+    );
+    expect(stored.url).toBeUndefined();
+    expect(stored.public_url).toBeUndefined();
+    expect(stored.data_plane).toBe('unreachable');
+
+    const noUrl = { ...makeRecord({ direction: 'hub' }) } as Record<string, unknown>;
+    delete noUrl.url;
+    expect(() => registry.upsert(noUrl as unknown as HubNodeRecord)).toThrow(
+      'hub_registry_invalid_record',
+    );
+  });
+
+  it('derives data_plane from public_url ?? url and re-derives on patch', async () => {
+    const dir = await tempDataDir();
+    const registry = createHubRegistry({ dataDir: dir, hubId: HUB_ID });
+    await registry.load();
+
+    registry.upsert(makeRecord({ direction: 'node', url: undefined, data_plane: undefined }));
+    expect(registry.get('node-1:tenant-1')?.data_plane).toBe('unreachable');
+
+    registry.patch('node-1:tenant-1', { public_url: 'https://edge.example' });
+    expect(registry.get('node-1:tenant-1')?.data_plane).toBe('direct');
+
+    registry.patch('node-1:tenant-1', { url: 'http://127.0.0.1:9999' });
+    expect(registry.get('node-1:tenant-1')?.data_plane).toBe('direct');
+
+    // 显式 data_plane 优先于 url 派生。
+    registry.patch('node-1:tenant-1', {
+      url: 'http://127.0.0.1:9998',
+      data_plane: 'unreachable',
+    });
+    expect(registry.get('node-1:tenant-1')?.data_plane).toBe('unreachable');
+  });
+
+  it('fails closed on an unknown direction or a hub record without url', async () => {
+    const dirA = await tempDataDir();
+    await expectCorrupt(
+      dirA,
+      JSON.stringify({
+        v: 1,
+        hub_id: HUB_ID,
+        updated_at: 1,
+        nodes: [{ ...makeRecord(), direction: 'sideways' }],
+      }),
+    );
+
+    const dirB = await tempDataDir();
+    const noUrl = { ...makeRecord() } as Record<string, unknown>;
+    delete noUrl.url;
+    await expectCorrupt(
+      dirB,
+      JSON.stringify({ v: 1, hub_id: HUB_ID, updated_at: 1, nodes: [noUrl] }),
+    );
   });
 
   it('keeps multiple tenants on the same node as separate pairings', async () => {

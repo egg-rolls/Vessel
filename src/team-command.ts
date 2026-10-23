@@ -1,5 +1,5 @@
 /**
- * `vessel team list|get|post|members`（0.19 S3）。
+ * `vessel team list|get|post|members|budget`（0.19 S3 / S4）。
  *
  * 只做参数映射、roster 名字解析、渲染与 exit code；
  * Team 数据与投递全部在 REPL owner 的 TeamService。
@@ -201,6 +201,64 @@ function formatMembersResult(result: unknown): string {
   ].join('\n');
 }
 
+function numeric(value: unknown): string {
+  return typeof value === 'number' && Number.isFinite(value) ? String(value) : '-';
+}
+
+function budgetConversations(result: unknown): Record<string, unknown>[] {
+  if (!isRecord(result) || !Array.isArray(result.conversations)) return [];
+  return result.conversations.filter(isRecord);
+}
+
+function formatBudgetStatus(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const lines: string[] = [ui.section(`Team ${asString(result.team_id)}`)];
+  const conversations = budgetConversations(result);
+  if (conversations.length === 0) {
+    lines.push(`  ${ui.dim('No conversations.')}`);
+    return lines.join('\n');
+  }
+  for (const conversation of conversations) {
+    lines.push(`  ${asString(conversation.conversation_id)}`);
+    lines.push(
+      `    hops ${numeric(conversation.hops)}  turns ${numeric(conversation.turns)}  tokens ${numeric(conversation.total_tokens)}  wall_clock_ms ${numeric(conversation.wall_clock_ms)}`,
+    );
+    const blocked = conversation.blocked;
+    lines.push(
+      isRecord(blocked)
+        ? `    blocked ${asString(blocked.dimension)} ${asString(blocked.reason)}`
+        : '    blocked -',
+    );
+    const overrides = isRecord(conversation.overrides) ? conversation.overrides : {};
+    const entries = Object.entries(overrides).filter(
+      (entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]),
+    );
+    if (entries.length === 0) {
+      lines.push('    overrides -');
+      continue;
+    }
+    for (const [dimension, override] of entries) {
+      lines.push(
+        `    overrides ${dimension}=${numeric(override.max)} (${asString(override.by)} via ${asString(override.via)})`,
+      );
+    }
+  }
+  return lines.join('\n');
+}
+
+function formatBudgetOverride(result: unknown): string {
+  if (!isRecord(result)) return JSON.stringify(result, null, 2);
+  const previous = result.previous_max === null ? 'policy' : numeric(result.previous_max);
+  const max = result.max === null ? 'unlimited' : numeric(result.max);
+  return [
+    `${ui.symbol('ok')} budget override ${asString(result.conversation_id)}`,
+    ui.kv('team_id', asString(result.team_id)),
+    ui.kv('dimension', asString(result.dimension)),
+    ui.kv('previous', previous),
+    ui.kv('max', max),
+  ].join('\n');
+}
+
 /**
  * 把 `--mention` 的 name|id 解析为 agent id：
  * 精确 agent_id / session_id 优先，其次 Team 内唯一 name。
@@ -320,6 +378,38 @@ async function execute(
       fetchOptions,
     );
     return { ok: true, value, text: formatMembersResult(value) };
+  }
+
+  if (command.kind === 'budget-status') {
+    const value = await callAgentOwner(
+      record,
+      'team.budget',
+      {
+        team_id: command.teamId,
+        action: 'status',
+        ...(command.conversationId !== undefined
+          ? { conversation_id: command.conversationId }
+          : {}),
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatBudgetStatus(value) };
+  }
+
+  if (command.kind === 'budget-override') {
+    const value = await callAgentOwner(
+      record,
+      'team.budget',
+      {
+        team_id: command.teamId,
+        action: 'override',
+        conversation_id: command.conversationId,
+        dimension: command.dimension,
+        max: command.max,
+      },
+      fetchOptions,
+    );
+    return { ok: true, value, text: formatBudgetOverride(value) };
   }
 
   // post：有 --mention 时先用 team.get 的 roster 解析为 agent id。

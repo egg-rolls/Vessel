@@ -71,6 +71,28 @@ export {
   type HubTeamScopeLike,
 } from './hub-control.js';
 export {
+  buildHubAuthFrame,
+  buildHubHelloFrame,
+  buildHubPingFrame,
+  buildHubPointerFrame,
+  buildHubPongFrame,
+  buildHubSnapshotFrame,
+  decodeHubFrame,
+  type HubEnvelope,
+  type HubEnvelopeResult,
+  type HubFrameIdentity,
+  type HubFrameParse,
+  parseHubAuthFrame,
+  parseHubCounts,
+  parseHubHelloFrame,
+  parseHubPingFrame,
+  parseHubPointerFrame,
+  parseHubPongFrame,
+  parseHubSnapshotFrame,
+  readHubEnvelope,
+} from './hub-frames.js';
+export {
+  HUB_NODE_CONTROL_PATH,
   HUB_PROTOCOL,
   type HubAuthFrame,
   type HubClientFrame,
@@ -178,6 +200,9 @@ export {
   type WirePeerInfo,
 } from './team.js';
 export type {
+  BudgetDimensionLike,
+  ConversationBudgetStatusLike,
+  TeamBudgetResultLike,
   TeamControlLike,
   TeamDeliveryLike,
   TeamDetailLike,

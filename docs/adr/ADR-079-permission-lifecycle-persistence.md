@@ -30,3 +30,13 @@ tags: [permission, interaction, persistence, gateway, web, tui, lifecycle]
 
 - **应答投递**：`respondPermission` / `respondAsk` 必须发布到**所属 tenant 的运行时事件流**（gateway 新增 `tenantEventsFor` 注入），只有拿不到 tenant 流时才回退 gateway 共享流；不得双发（tenant→shared 桥会转发给 Web）。
 - **`ask_user` 去超时**：默认无限等待，`waitFor` 传 `ctx.signal`，abort 返回明确的取消文案而不是超时；Web / TUI 提问卡不再倒计时 / 过期，Web 的 `expiresAt` 固定为 `Infinity`。
+
+## Addendum（2026-10-23，0.19 S4 权限 only-human / 审计 / hold）
+
+> S4 只追加当前事实，不改写上面 0.13 / 0.18 的结论；默认无限等待仍是基线。
+
+- **only-human**：权限 / 提问的应答只来自 human（TUI / Web / RPC）或 team 显式 `deny-after` 的 policy。没有 agent 审批人；agent 工具、TeamService、owner 端点都没有应答入口。`answered_by` 只允许 `human | policy`；`answered_via` 取 `tui | rpc | policy`；policy 应答额外带 `policy: 'deny_after' | 'auto_allow'`。
+- **应答审计**：interaction 记录写入 `answered_by` / `answered_via?` / `latency_ms = max(0, answered_at - created_at)` / `team_id?` / `agent_id?`；RPC handler 强制 `answered_by: 'human'`、`answered_via: 'rpc'`，客户端不能自报。
+- **ask 与权限同一生命周期**：ask 也持久化到 interaction store（`kind: 'ask'` + `answers`），不再使用内存 `pendingAsks`。重复应答返回 `duplicate: true`，不同答案返回 `conflict`，已 orphaned / 重启后返回 `run_ended`，未知 requestId 仍是 `not_found`。
+- **成员 pending 的终态清理**：`agent.turn.completed|failed|cancelled` 与 `agent.closed` 按 `agent_id + session_id` 把该成员 pending（permission + ask）转为 `orphaned` 并持久化；不按成员事件的 `run_id` 匹配（成员 ID 与 core run id 不同源）。root run 终态仍按 `run_id` 清理，两套匹配键并存。
+- **hold / deny-after**：默认 `hold`，不建定时器；pending 在 gateway 持久化，重启后 `orphaned`，迟到应答 `run_ended`。只有 team policy 显式 `permission.unattended: 'deny-after'` + 必填 `deny_after_seconds` 才在该成员的 bridge 内建一次性 deadline；到期以 `answered_by: 'policy'` / `answered_via: 'policy'` / `policy: 'deny_after'` 应答（permission deny，ask 空 answers）。**没有 allow-after，也没有全局 TTL**；core `timeoutMs` 仍为 undefined，ADR-079 的默认无限等待不变。没有 `parentEvents`（无人端）的 team 成员走既有 ask → deny，不挂起、不创建 deadline。
