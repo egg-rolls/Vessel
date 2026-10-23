@@ -28,6 +28,7 @@ const summary: TeamSummaryLike = {
   name: 'Alpha',
   tenant_id: 'default',
   workspace: '/tmp/alpha',
+  handoff_path: '/tmp/alpha/handoff.md',
   policy: { allowFork: false },
   member_count: 1,
   online_count: 1,
@@ -39,6 +40,7 @@ const bravoSummary: TeamSummaryLike = {
   name: 'Bravo',
   tenant_id: 'default',
   workspace: '/tmp/bravo',
+  handoff_path: '/tmp/bravo/handoff.md',
   policy: { allowFork: true },
   member_count: 0,
   online_count: 0,
@@ -538,15 +540,19 @@ describe('teams.* with a team-scoped control token', () => {
     for (const payload of [scopedList.result, allowedGet.result]) {
       const serialized = JSON.stringify(payload);
       expect(serialized).not.toContain('workspace');
+      expect(serialized).not.toContain('handoff_path');
       expect(serialized).not.toContain('policy');
       expect(serialized).not.toContain('/tmp/alpha');
+      expect(serialized).not.toContain('/tmp/alpha/handoff.md');
       expect(serialized).not.toContain('allowFork');
     }
 
     const adminSerialized = JSON.stringify(adminList.result);
     expect(adminSerialized).toContain('workspace');
+    expect(adminSerialized).toContain('handoff_path');
     expect(adminSerialized).toContain('policy');
     expect(adminSerialized).toContain('/tmp/alpha');
+    expect(adminSerialized).toContain('/tmp/alpha/handoff.md');
     expect(adminSerialized).toContain('allowFork');
   });
 

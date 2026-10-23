@@ -59,7 +59,8 @@ function assertTeamScope(scope: string | undefined, teamId: string): void {
 }
 
 /**
- * team-scoped token 的元数据白名单：去掉 `workspace` / `policy`。
+ * team-scoped token 的元数据白名单：去掉主机路径与策略
+ * （`workspace` / `handoff_path` / `policy`）。
  * 只用于 `teams.list` / `teams.get.team`；`members` / `messages` 属于 data plane，不脱敏。
  */
 function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
@@ -67,7 +68,6 @@ function redactTeamSummary(team: TeamSummaryLike): TeamSummaryLike {
     team_id: team.team_id,
     name: team.name,
     tenant_id: team.tenant_id,
-    ...(team.handoff_path !== undefined ? { handoff_path: team.handoff_path } : {}),
     member_count: team.member_count,
     online_count: team.online_count,
     created_at: team.created_at,
