@@ -221,6 +221,85 @@ export interface AgentsTreeResponse {
   as_of: number;
 }
 
+// ── Team（0.19 S6，node-local） ─────────────────────
+// 契约来自个人侧 PLAN-0.19-s3-team 与 S6 R1；字段只增不改。
+
+/** 已退役 Body；S3 `TeamMember.body_history?`。 */
+export interface TeamBodyHistoryEntry {
+  session_id: string;
+  epoch: number;
+  started_at: number;
+  retired_at: number;
+}
+
+/** teams.list 元素 / teams.get.team。 */
+export interface TeamSummary {
+  team_id: string;
+  name: string;
+  tenant_id: string;
+  workspace: string;
+  member_count: number;
+  /** S3 R1：present && live；缺失时显示 —。 */
+  online_count?: number;
+  handoff_path?: string;
+  policy?: Record<string, unknown>;
+  created_at: number;
+}
+
+/** teams.get.members 元素。 */
+export interface TeamMember {
+  agent_id: string;
+  name?: string;
+  session_id?: string;
+  membership: 'present' | 'left';
+  presence: 'live' | 'gone';
+  visibility: 'private' | 'team' | 'tenant';
+  state?: string;
+  epoch?: number;
+  /** S3 R1：已退役 Body，≤20；缺失时回退到事件累积。 */
+  body_history?: TeamBodyHistoryEntry[];
+}
+
+/** Team 日志条目；kind:'reply' 由 S3 R1 新增。 */
+export interface TeamMessage {
+  message_id: string;
+  team_id: string;
+  from: string;
+  to: string[];
+  mentions: string[];
+  content: string;
+  ts: number;
+  kind: 'post' | 'mention' | 'system' | 'reply';
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive';
+}
+
+/** teams.post 的逐条投递结果。 */
+export interface TeamDelivery {
+  agent_id: string;
+  status: 'queued' | 'rejected' | 'error';
+  message_id?: string;
+  resolution?: 'live' | 'resumed' | 'rotating';
+  code?: string;
+  reason?: string;
+}
+
+/** teams.post 结果（不包裹）。 */
+export interface TeamPostResult {
+  message_id: string;
+  team_id: string;
+  kind: 'post' | 'mention' | 'system';
+  mentions: string[];
+  delivered: TeamDelivery[];
+  ts: number;
+}
+
+/** teams.get 结果。 */
+export interface TeamDetail {
+  team: TeamSummary;
+  members: TeamMember[];
+  messages: TeamMessage[];
+}
+
 /** tasks.list / tasks.get 条目（只读派生）。 */
 export interface TaskEntry {
   id: string;

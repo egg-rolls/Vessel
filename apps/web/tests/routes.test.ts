@@ -12,6 +12,10 @@ const ROUTES: Route[] = [
   { domain: 'chat', sessionId: 'new' },
   { domain: 'chat', sessionId: 'session-1' },
   { domain: 'chat', sessionId: 'session-1', agent: 'delegate-1' },
+  { domain: 'team' },
+  { domain: 'team', teamId: 'team-1' },
+  { domain: 'team', teamId: 'team-1', memberId: 'agent-1' },
+  { domain: 'team', teamId: 'team-1', memberId: 'agent-1', bodyId: 'session-1' },
   { domain: 'runs', tab: 'live' },
   { domain: 'runs', tab: 'durable', runId: 'run 1', sessionId: 's/2' },
   { domain: 'workflows' },
@@ -81,6 +85,24 @@ describe('parseRoute / formatRoute', () => {
   test('decodes ids and preserves ids that cannot be decoded', () => {
     expect(parseRoute('#/chat/a%20b')).toEqual({ domain: 'chat', sessionId: 'a b' });
     expect(parseRoute('#/chat/%E0%A4%A')).toEqual({ domain: 'chat', sessionId: '%E0%A4%A' });
+  });
+
+  test('drops member / body segments that cannot attach to a team', () => {
+    // 空 teamId 段不能被 filter(Boolean) 吞掉，否则会误解析成 teamId='members'。
+    expect(parseRoute('#/team//members/x')).toEqual({ domain: 'team' });
+    expect(parseRoute('#/team')).toEqual({ domain: 'team' });
+    // ?body= 没有 memberId 时被丢弃。
+    expect(parseRoute('#/team/team-1?body=session-1')).toEqual({
+      domain: 'team',
+      teamId: 'team-1',
+    });
+    // 有 memberId 时才保留 ?body=。
+    expect(parseRoute('#/team/team-1/members/agent-1?body=session-1')).toEqual({
+      domain: 'team',
+      teamId: 'team-1',
+      memberId: 'agent-1',
+      bodyId: 'session-1',
+    });
   });
 
   test('sameRoute compares canonical hashes', () => {

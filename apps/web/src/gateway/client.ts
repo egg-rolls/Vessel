@@ -51,7 +51,10 @@ import type {
   TaskResponse,
   TasksResponse,
   TeamAgentsResponse,
+  TeamDetail,
   TeamPeersResponse,
+  TeamPostResult,
+  TeamSummary,
   TenantInfo,
   TenantResponse,
   ToolInfo,
@@ -780,6 +783,29 @@ export class GatewayClient {
 
   listTeamAgents(): Promise<TeamAgentsResponse> {
     return this.httpJson<TeamAgentsResponse>('/v1/team/agents');
+  }
+
+  // ── Team（0.19 S6，node-local；canonical `teams.*`）──
+  // 只走 HTTP rpc()，不做 legacy `/v1/team/*` 回退；`teams.*` 不依赖 WS 在线。
+
+  async listTeams(): Promise<TeamSummary[]> {
+    const body = await this.rpc<{ teams?: TeamSummary[] }>('teams.list');
+    return body.teams ?? [];
+  }
+
+  getTeam(teamId: string, opts?: { limit?: number }): Promise<TeamDetail> {
+    return this.rpc<TeamDetail>('teams.get', {
+      team_id: teamId,
+      ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
+    });
+  }
+
+  postTeam(input: {
+    team_id: string;
+    content: string;
+    mentions?: string[];
+  }): Promise<TeamPostResult> {
+    return this.rpc<TeamPostResult>('teams.post', input);
   }
 
   // ── 0.3 REST（durable / MCP）──────────────────

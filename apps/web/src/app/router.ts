@@ -14,6 +14,8 @@ export type Route =
       tab: 'tools' | 'mcp' | 'channels';
     }
   | { domain: 'observe'; tab: 'metrics' | 'evals' | 'diagnostics' | 'tasks' }
+  | { domain: 'team' }
+  | { domain: 'team'; teamId: string; memberId?: string; bodyId?: string }
   | {
       domain: 'settings';
       tab:
@@ -65,7 +67,8 @@ export function parseRoute(hash: string): Route {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash;
   const withoutSlash = raw.startsWith('/') ? raw.slice(1) : raw;
   const [pathPart = '', queryPart = ''] = withoutSlash.split('?', 2);
-  const segments = pathPart.split('/').filter(Boolean);
+  const rawSegments = pathPart.split('/');
+  const segments = rawSegments.filter(Boolean);
   const query = new URLSearchParams(queryPart);
   const domain = segments[0];
 
@@ -113,6 +116,27 @@ export function parseRoute(hash: string): Route {
       );
       return { domain: 'observe', tab };
     }
+    case 'team': {
+      // `#/team//members/x` 的空 teamId 段不能被 filter(Boolean) 吞掉，
+      // 否则会误解析成 teamId='members' 并请求不存在的 Team。
+      if (rawSegments[1] === '') return { domain: 'team' };
+      const teamId = segments[1] !== undefined ? decodeSegment(segments[1]) : undefined;
+      if (!teamId) return { domain: 'team' };
+      const memberId =
+        segments[2] === 'members' && segments[3] !== undefined
+          ? decodeSegment(segments[3])
+          : undefined;
+      const bodyId =
+        memberId && query.get('body') !== null
+          ? decodeSegment(query.get('body') ?? '')
+          : undefined;
+      return {
+        domain: 'team',
+        teamId,
+        ...(memberId ? { memberId } : {}),
+        ...(bodyId ? { bodyId } : {}),
+      };
+    }
     case 'settings': {
       const tab = pick<
         'connection' | 'nodes' | 'config' | 'capabilities' | 'tenants' | 'appearance' | 'display'
@@ -148,6 +172,14 @@ export function formatRoute(route: Route): string {
       return `#/integrations/${route.tab}`;
     case 'observe':
       return `#/observe/${route.tab}`;
+    case 'team': {
+      if (!('teamId' in route) || !route.teamId) return '#/team';
+      const base = `#/team/${encodeURIComponent(route.teamId)}`;
+      if (!('memberId' in route) || !route.memberId) return base;
+      const memberBase = `${base}/members/${encodeURIComponent(route.memberId)}`;
+      if (!('bodyId' in route) || !route.bodyId) return memberBase;
+      return `${memberBase}?${new URLSearchParams({ body: route.bodyId }).toString()}`;
+    }
     case 'settings':
       return `#/settings/${route.tab}`;
   }

@@ -15,6 +15,7 @@ import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
+import { TeamView } from '../domains/team/TeamView';
 import { WorkflowsView } from '../domains/workflows/WorkflowsView';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
@@ -557,6 +558,7 @@ export function AppShell() {
                 onCloseSessions={closeSessions}
               />
             )}
+            {route.domain === 'team' && <TeamView route={route} navigate={navigate} />}
             {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
             {route.domain === 'workflows' && <WorkflowsView route={route} navigate={navigate} />}
             {route.domain === 'integrations' && (

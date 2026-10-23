@@ -17,6 +17,8 @@ export function primaryRoute(domain: Exclude<Domain, 'settings'>): Route {
   switch (domain) {
     case 'chat':
       return { domain: 'chat' };
+    case 'team':
+      return { domain: 'team' };
     case 'runs':
       return { domain: 'runs', tab: 'live' };
     case 'workflows':

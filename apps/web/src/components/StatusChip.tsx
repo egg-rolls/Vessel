@@ -31,6 +31,7 @@ const ALIASES: Record<string, StatusKind> = {
   pass: 'completed',
   ok: 'completed',
   active: 'running',
+  waiting_permission: 'waiting',
   idle: 'pending',
   on: 'connected',
   off: 'disabled',

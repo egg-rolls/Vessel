@@ -22,6 +22,15 @@ export function DomainIcon({ domain }: { domain: Domain }) {
           <path d="M3.5 4.5h13v9h-7l-4 3v-3h-2z" />
         </svg>
       );
+    case 'team':
+      return (
+        <svg {...common}>
+          <circle cx="7.5" cy="7" r="2.6" />
+          <path d="M3.2 16.2c0-2.4 1.9-4.2 4.3-4.2s4.3 1.8 4.3 4.2" />
+          <circle cx="14.2" cy="8" r="1.9" />
+          <path d="M12.8 12.5c1.9.3 3.3 1.8 3.3 3.7" />
+        </svg>
+      );
     case 'runs':
       return (
         <svg {...common}>
