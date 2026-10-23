@@ -3,6 +3,48 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.19.0] - 2026-10-23
+
+> 0.19.0（基于 `main`，**未发布**）：0.18 累积线（session liveness、workflow 移除、Web 设计系统、dev DX、update、interaction delivery）与 0.19 的 Agent/Body、Team、Hub、Web Team、权限/预算合并。未 tag、未 `npm publish`。
+
+### Added
+
+- **Agent / Body（S1）**：`<dataDir>/node.json` 持久化节点身份；成员快照 v2（配置 / `current_body` / `body_history`，读兼容 v1 + `.v1.bak`）；`membership` / `presence` / engine 三层状态；成员 engine 注入 tenant `SessionBackend` / `eventLog`；`AgentService.dispatch` 统一投递 + single-flight resume。
+- **rotate（S2）**：新 Body 新 session + `epoch + 1`；spawn 成功后原子切 `current_body` 并 `flushSnapshot`，失败保持旧身体；旧轮 epoch fencing、`agent.retired`、80% 预警、权限按 Body session fencing。
+- **Team（S3）**：按 workspace 分组的 Team、只写日志、`@` 定向投递、成员 A2A `send|list`、`post`、reply 日志、private 过滤、`reinstate`；canonical `teams.list/get/post/members`；成员侧 `agent` schema 扩为 `rotate|post|send|list`。
+- **Hub（S5）**：app 层 `vessel hub start`；`/v1/hub/control` 目录 / 指针控制面；一次性配对与 `view/exchange/control/admin` scoped token；SecretStore；hub 不代理正文。
+- **node → hub 出站（S5.1）**：`hub.direction: node`、`vessel hub join-code` / `vessel hub join`；hub 签发 `scope:'node'` token；`/v1/hub/node-control` 入站 + 节点出站 supervisor；双模共存；NAT 节点仅需出站。
+- **Web Team（S6）**：独立 `team` 域、群聊、结构化 `@` 补全、成员侧栏、系统消息、`body_history`、`kind:'reply'` 内联、`online_count`。
+- **权限 only-human + 预算（S4）**：删除死桥；`attachBridge` 是唯一活路径；`answered_by(human|policy)` 审计；ask 统一持久化并支持 duplicate/conflict/run_ended；默认 `hold`，team 可显式 `deny-after`；`conversation_id` 贯穿 dispatch / send / Team post / A2A / reply / rotate；team policy 上的 hops / turns / tokens / wall_clock 预算、双端检查、环检测、持久化 conversation 状态；canonical `teams.budget`。
+
+### Changed
+
+- **BREAKING（嵌入方）**：移除 workflow 产品面（插件 / CLI / TUI / Web / serve 方法 / 配置 / `/v1/workflows*`），canonical 减少 5 个 `workflow.*` 方法。
+- **BREAKING（嵌入方）**：删除 `AgentService.requestPermission` / `AgentServiceOptions.permissionBridge` / `PermissionBridge`；唯一活路径是 `InProcessMemberRuntime.attachBridge` + `notePermissionState`。
+- `agent` 工具的 `send` 切到统一 `dispatch`；成员动作变为 `rotate|post|send|list`，`new/close` 仍 owner-only。
+- 成员快照写 v2；旧二进制不可读 v2（首次写前有 `<tenant>.json.v1.bak`）。
+- 绑定 Team 且有名字的 Agent 默认 visibility 从 `private` 变为 `team`。
+- canonical 方法表 **48**（40 + S3 4 + S5 3 + S4 1）；`teams.budget` 不进 team-scoped control scope。
+- team-scoped control token 只能操作自己的 team；scoped `teams.list/get` 剔除 `workspace` / `handoff_path` / `policy`。
+- `ask.respond` 的重复应答从 `not_found` 改为 duplicate / conflict / run_ended；权限/ask pending 在成员 turn 终态 / close 时转 orphaned。
+- `vessel hub` 新增 `join-code` / `join`；`vessel team` 新增 `budget`；`hub.direction: node` 解锁出站。
+
+### Fixed
+
+- 0.18 累积修复：session liveness 崩溃后 stale running 对账；interaction 应答投递到 tenant runtime 流；Web 投影去重 / truncation / 断点增量；dev DX `bun run dev:web`；自更新通道与 beta 检查；Web 设计系统重做。
+- P0：team-scoped token 跨 team 越权（`teams.get/post/members` mismatch → `not_found`，`teams.list` 只返回 own team）。
+- Hub：吊销关闭 live WS、`incarnation`/`revision` 单调、`hub_id` 绑定、join 端点限流。
+
+### Known limitations
+
+- S7 跨节点 team ↔ team A2A / allowlist / hop budget；fork / `forked_from` 写入者：未实现。
+- Web 预算 UI：S4 只提供事件 / RPC / CLI，Web 未渲染；TUI 只显示 notice。
+- NAT 节点没有 `public_url` 时 `data_plane: unreachable`，正文需要隧道 / 反代；hub 不做中继。
+- 一个 node 进程 / data dir 只加入一个 hub；node token 30 天过期后需要重新 join（无自动 refresh）。
+- 重启保留预算计数 / override / blocked，但未消费消息队列仍只在内存；崩溃可能丢最后一个 debounce 窗口的 hop。
+- only-human 是协议 / 工具面不变量，不是 OS 沙箱；同用户 shell 仍可能读本地 token。
+- PR #133 的 Offline Integration 曾因 CI 引用已删除的 `plugins/workflow/engine` 而红，已由 #134 修复。
+
 ## [0.18.0] - 2026-10-21
 
 > 0.18.0（基于 `release/0.18.0`，未发布）：会话事件日志成为唯一真相源；TUI 历史结构化并从事件日志恢复；Web 会话流扁平化、权限 / ask 内联到 Composer；新增 `vessel completion` 与只读 RPC `interactions.list`。未 tag、未 `npm publish`。
