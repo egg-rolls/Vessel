@@ -3,7 +3,8 @@
  *
  * - 独立 peer bearer：gateway 用户 token 与 peer token 命名空间不交叉；
  * - 严格解析 wire envelope：未知 / 缺失字段一律 `federation_invalid`；
- * - 只写接收侧 Team 日志（`TeamControlLike.post`），不 dispatch、不产生 run；
+ * - 默认只写接收侧 Team 日志；接收 Team 显式 `federation.accept: 'members'` 时
+ *   按 present 非 private 成员 fan-out（S7.2，opt-in；缺省 / 非法值一律 log）；
  * - 拒绝无副作用：不写日志、不 dispatch、只发一次 `federation.rejected`。
  *
  * 路由必须在 gateway `principalForRequest` 之前处理（同 hub 路由位置）。
@@ -12,7 +13,12 @@
  */
 
 import { timingSafeEqual } from 'node:crypto';
-import type { TeamControlLike, TeamDetailLike } from './team-control.js';
+import type {
+  TeamControlLike,
+  TeamDetailLike,
+  TeamMemberLike,
+  TeamPostResultLike,
+} from './team-control.js';
 
 export const FEDERATION_PROTOCOL = 'vessel.federation/1';
 export const FEDERATION_MESSAGES_PATH = '/v1/federation/messages';
@@ -294,6 +300,31 @@ function errorCode(error: unknown): unknown {
   return isRecord(error) ? error.code : undefined;
 }
 
+type FederationAcceptMode = 'log' | 'members';
+
+/**
+ * 接收侧同意策略（S7.2）：只有 `federation.accept === 'members'` 才 fan-out；
+ * 缺失 / 非法 / policy 被脱敏一律回退 `log`（fail safe，不唤醒成员）。
+ */
+function acceptModeOf(team: TeamDetailLike): FederationAcceptMode {
+  const policy = team.team.policy;
+  if (!isRecord(policy)) return 'log';
+  const federation = policy.federation;
+  if (!isRecord(federation)) return 'log';
+  return federation.accept === 'members' ? 'members' : 'log';
+}
+
+/** present 且非 private 的成员 id；按首次出现去重，保持 roster 顺序。 */
+function presentMemberIds(members: readonly TeamMemberLike[]): string[] {
+  const ids = new Set<string>();
+  for (const member of members) {
+    if (member.membership !== 'present') continue;
+    if (member.visibility === 'private') continue;
+    ids.add(member.agent_id);
+  }
+  return [...ids];
+}
+
 /** 创建入站路由；gateway 在 `principalForRequest` 之前调用 `handle()`。 */
 export function createFederationRoute(options: FederationRouteOptions): FederationRoute {
   const dedupe = new ReceivedCache(DEDUPE_LIMIT);
@@ -474,7 +505,11 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         return errorJson('team_not_found', 'Team not found', 404, extra);
       }
 
-      // 9. 去重：重复不写日志，返回首次本地 id / cursor。
+      // 9. S7.2：接收 Team 显式 opt-in 才 fan-out；其它一律只写日志。
+      const mode = acceptModeOf(team);
+      const mentions = mode === 'members' ? presentMemberIds(team.members) : [];
+
+      // 10. 去重：重复不写日志，返回首次本地 id / cursor。
       const key = dedupeKey(message);
       const seen = dedupe.get(key);
       if (seen) {
@@ -491,14 +526,15 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         );
       }
 
-      // 10. 唯一写入点：Team 日志。失败不返回 202，不重试。
-      let written: { message_id: string };
+      // 11. 唯一写入点：Team 日志（members 模式下 TeamService 逐人 dispatch）。
+      // 失败不返回 202，不重试。
+      let written: TeamPostResultLike;
       try {
         written = await teams.post({
           team_id: localTeamId,
           content: message.content,
           from: `federation:${message.from.node_id}:${message.from.team_id}`,
-          mentions: [],
+          mentions,
           conversation_id: message.conversation_id,
         });
       } catch (error) {
@@ -528,6 +564,8 @@ export function createFederationRoute(options: FederationRouteOptions): Federati
         from_team: message.from.team_id,
         team_id: localTeamId,
         hop: message.hop,
+        mode,
+        delivered: written.delivered.filter((entry) => entry.status === 'queued').length,
       });
       return json(
         {

@@ -13,6 +13,7 @@ import { startGateway } from '../src/gateway';
 import type {
   TeamControlLike,
   TeamDetailLike,
+  TeamMemberLike,
   TeamPostResultLike,
   TeamSummaryLike,
 } from '../src/team-control';
@@ -28,6 +29,9 @@ class FakeTeams implements TeamControlLike {
   readonly posts: Array<Parameters<TeamControlLike['post']>[0]> = [];
   failPost = false;
   readonly known = new Set([TEAM]);
+  /** S7.2：可配置 roster 与 Team policy（`team.team.policy`）。 */
+  roster: TeamMemberLike[] = [];
+  policy?: Record<string, unknown>;
 
   constructor(tenantId = 'default') {
     this.tenantId = tenantId;
@@ -44,11 +48,12 @@ class FakeTeams implements TeamControlLike {
         team_id: teamId,
         name: teamId,
         tenant_id: this.tenantId,
-        member_count: 0,
+        member_count: this.roster.length,
         online_count: 0,
         created_at: 0,
+        ...(this.policy !== undefined ? { policy: this.policy } : {}),
       },
-      members: [],
+      members: this.roster,
       messages: [],
     };
   }
@@ -58,12 +63,13 @@ class FakeTeams implements TeamControlLike {
       throw Object.assign(new Error('disk full'), { code: 'io_error' });
     }
     this.posts.push(input);
+    const mentions = input.mentions ?? [];
     return {
       message_id: `local-${this.posts.length}`,
       team_id: input.team_id,
-      kind: 'post',
-      mentions: [],
-      delivered: [],
+      kind: mentions.length > 0 ? 'mention' : 'post',
+      mentions,
+      delivered: mentions.map((agent_id) => ({ agent_id, status: 'queued' as const })),
       ts: 1,
       ...(input.conversation_id !== undefined ? { conversation_id: input.conversation_id } : {}),
     };
@@ -300,6 +306,8 @@ describe('federation inbound route (S7.1)', () => {
       from_team: TEAM,
       team_id: TEAM,
       hop: 1,
+      mode: 'log',
+      delivered: 0,
     });
     const serialized = JSON.stringify(received);
     expect(serialized).not.toContain('hello');
@@ -377,6 +385,83 @@ describe('federation inbound route (S7.1)', () => {
       code: 'team_log_write_failed',
       peer_node: REMOTE_NODE,
       peer_team: TEAM,
+    });
+  });
+});
+
+describe('federation inbound route (S7.2 accept policy)', () => {
+  function member(agentId: string, overrides: Partial<TeamMemberLike> = {}): TeamMemberLike {
+    return {
+      agent_id: agentId,
+      session_id: `${agentId}-session`,
+      membership: 'present',
+      presence: 'gone',
+      visibility: 'team',
+      state: 'idle',
+      epoch: 0,
+      ...overrides,
+    };
+  }
+
+  it('fans out once to present non-private members when accept is "members"', async () => {
+    const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'members' } };
+    teams.roster = [
+      member('agent-a'),
+      member('agent-private', { visibility: 'private' }),
+      member('agent-left', { membership: 'left' }),
+      member('agent-b', { visibility: 'tenant' }),
+      member('agent-a'),
+    ];
+    const { gateway, hub } = start({ federation: federationOptions(), teams });
+
+    const response = await post(gateway, envelope());
+    expect(response.status).toBe(202);
+    expect(teams.posts).toHaveLength(1);
+    expect(teams.posts[0]).toMatchObject({
+      team_id: TEAM,
+      from: `federation:${REMOTE_NODE}:${TEAM}`,
+      mentions: ['agent-a', 'agent-b'],
+    });
+
+    const received = eventsOf(hub, 'federation.received');
+    expect(received).toHaveLength(1);
+    expect(received[0]?.data).toMatchObject({ mode: 'members', delivered: 2 });
+    const serialized = JSON.stringify(received);
+    expect(serialized).not.toContain('hello');
+    expect(serialized).not.toContain(PEER_TOKEN);
+  });
+
+  it('falls back to log for an invalid accept value (fail safe)', async () => {
+    const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'all' } };
+    teams.roster = [member('agent-a')];
+    const { gateway, hub } = start({ federation: federationOptions(), teams });
+
+    expect((await post(gateway, envelope())).status).toBe(202);
+    expect(teams.posts).toHaveLength(1);
+    expect(teams.posts[0]?.mentions).toEqual([]);
+    expect(eventsOf(hub, 'federation.received')[0]?.data).toMatchObject({
+      mode: 'log',
+      delivered: 0,
+    });
+  });
+
+  it('sends an empty mentions list when the roster has no eligible members', async () => {
+    const teams = new FakeTeams();
+    teams.policy = { federation: { accept: 'members' } };
+    teams.roster = [
+      member('agent-private', { visibility: 'private' }),
+      member('agent-left', { membership: 'left' }),
+    ];
+    const { gateway, hub } = start({ federation: federationOptions(), teams });
+
+    expect((await post(gateway, envelope())).status).toBe(202);
+    expect(teams.posts).toHaveLength(1);
+    expect(teams.posts[0]?.mentions).toEqual([]);
+    expect(eventsOf(hub, 'federation.received')[0]?.data).toMatchObject({
+      mode: 'members',
+      delivered: 0,
     });
   });
 });

@@ -430,10 +430,21 @@ export interface TeamBudgetPolicy {
   cycle?: TeamBudgetCyclePolicy;
 }
 
+/** S7.2：接收侧对跨节点入站报文的同意策略。 */
+export interface TeamFederationPolicy {
+  /**
+   * `log` = 只写 Team 日志（缺省）；`members` = 向 present 且非 private 成员
+   * fan-out 一次 mention 投递。缺省不写字段，消费方按 `log` 处理。
+   */
+  accept?: 'log' | 'members';
+}
+
 /** 解析后的 Team policy 视图；`policy` 顶层仍允许其它键。 */
 export interface TeamPolicy {
   permission?: TeamPermissionPolicy;
   budget?: TeamBudgetPolicy;
+  /** S7.2：跨节点接收策略；缺省 log。 */
+  federation?: TeamFederationPolicy;
   [key: string]: unknown;
 }
 
