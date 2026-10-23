@@ -47,7 +47,7 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 - **`SecretStore` 文件回退不自动启用**：Windows DPAPI / macOS Keychain / Linux libsecret 不可用时，只有 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器；否则 fail-closed（`secret_store_unavailable`）。上文第 5 条“不可用时才退到文件适配器”需以该显式开关为准。
 - **`POST /v1/hub/data-token` 与 `vessel hub data-token` 已实现**：hub 用该 pairing 的 `exchange` token 向节点换短期 `control` token 并只返回给调用方；hub 不持久化短期 token。浏览器端（sessionStorage / Web 消费）仍未实现；Web 当前直连节点，不消费 hub 目录或 data token。
 - **实现文件位置**：hub 进程与目录实现在 `src/hub/`；app 层装配（`HubControlLike` / `TeamScopeLike` / `NodeTokenControlLike` 投影）在 `src/hub-wiring.ts`，节点 token 表 / 配对在 `src/node-token-store.ts` / `src/node-token-control.ts` / `src/hub-pairing.ts`，均不在 `src/hub/` 内。上文第 1 条的文件清单应包含这些 app 层文件。
-- **node → hub 出站仍为 S5.1**：节点收到 `dialer !== 'hub'` 的帧以 4400 关闭；配置虽接受 `direction: node`，运行时拒绝。跨节点 A2A（S7）仍未实现。
+- **node → hub 出站仍为 S5.1**（**已被下方 S5.1 Addendum 取代**）：节点收到 `dialer !== 'hub'` 的帧以 4400 关闭；配置虽接受 `direction: node`，运行时拒绝。跨节点 A2A（S7）仍未实现。
 
 ## Addendum（S5.1）
 
