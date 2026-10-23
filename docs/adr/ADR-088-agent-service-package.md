@@ -12,7 +12,7 @@ tags: [agent, service, package, lifecycle, queue, snapshot, owner, permission, c
 - **上下文**：0.16 的成员能力仍寄居在 `team` 插件里：`agent` 工具、注册表、生命周期和 team transport 混在同一个包，`delegate` 与 `team` 各有一套装配和配置；模型工具面同时保留 `agent`、`delegate_task` 与 `team_*`，靠 `team.legacyTools` 与入口默认值收敛。这样做有两个结构性代价：一是成员生命周期没有独立边界，入口（REPL / CLI / Gateway）无法共用同一个实现；二是删除旧工具时必须留下兼容开关，配置面继续同时存在 `team.*` 与 `delegate.*`。0.17 的目标是把“成员能力层”从插件里抽出，按“能力层 / 执行内核 / 入口”三层重新划界，并删除重复工具。
 
 - **决策**：
-  1. **AgentService 独立成包**：新增 `packages/agent`，唯一实现 `new` / `send` / `close` / `list` 并暴露 `subscribe`、`reply`、`takeMessages`、`requestPermission`、`flushSnapshot`。registry、状态机、消息队列、可见性、回复投递、权限 bridge 与快照全部在这个包内；不得在入口或插件里复制第二套成员生命周期。
+  1. **AgentService 独立成包**：新增 `packages/agent`，唯一实现 `new` / `send` / `close` / `list` 并暴露 `subscribe`、`reply`、`takeMessages`、`flushSnapshot`。权限的活路径是 `InProcessMemberRuntime.attachBridge`（0.19 S4：`AgentService.requestPermission` / `PermissionBridge` 已删除，`notePermissionState` 保留）。registry、状态机、消息队列、可见性、回复投递、权限 bridge 与快照全部在这个包内；不得在入口或插件里复制第二套成员生命周期。
   2. **分层固定为“入口 → 能力层 → 执行内核”**：`packages/core` 仍是领域无关的执行内核（单 agent loop / Host / Scheduler / Context / ToolPipeline / Permission / 事件），不知道 member / owner / visibility；`packages/agent` 只做成员能力层，通过 `MemberRuntimePort` 调执行内核；`packages/tui`、`src/`、`packages/serve`、`apps/web` 是入口，只解析输入、调用 AgentService、渲染事件。扩展层（`plugins/**`）依赖 core 与 agent，不依赖入口。
   3. **session 即成员**：`new` 创建成员时 `session_id === id`，`send.to` 与 `close.member` 都可用成员 id 或 session id。注册表只存身份与状态，不持有 runtime 对象；未注册 session 不是成员，不能经 AgentService 寻址。
   4. **内置 `agent` 工具**：动作固定 `new` / `send` / `close` / `list`；`new` / `close` 接受 `members`、`send` 接受 `messages` 批处理，条目并行、按输入顺序返回 `{results:[...]}`，单条失败不影响其它条目。工具调用者的 owner / parent 固定为 owner，模型不能伪造。**不提供** `wait` / `inbox` / `status` / `cancel` 模型工具：等待的语义是结束这一轮，回复作为新 turn 到达；roster 读取用 `list`，取消属于控制面。
@@ -71,3 +71,8 @@ tags: [agent, service, package, lifecycle, queue, snapshot, owner, permission, c
 - **Body 存储**：成员 engine 注入 tenant `SessionBackend` 与 `eventLog`，同一 `session_id` 可跨进程续接历史。S1 不使用 `AgentSessionScope`，成员会话会出现在 `sessions.list`。
 - **入口**：owner 端点新增 `agent.dispatch`，CLI 新增 `vessel agent dispatch`；canonical RPC 方法表不变（仍 45）。
 - **未变更**：`packages/agent` 仍是唯一成员能力实现；`packages/core` 仍不知道 member / owner / visibility；owner 外部队列、权限 bridge、`private` 可见性规则与 `/v1/team/*` 无生产装配的结论不变。
+
+## Addendum（0.19 S4，权限 only-human 与 conversation 预算）
+
+- **权限 bridge**：唯一活路径是 `InProcessMemberRuntime.attachBridge`；`AgentServiceOptions.permissionBridge` / `PermissionBridge` / `AgentService.requestPermission` 已删除。`notePermissionState` 仍用于当前 Body 的 `waiting_permission` 状态回调。Team 成员强制 bridge，只有 human 或 team policy 的 `deny-after` 能应答。
+- **S4 additive**：`conversation_id` 贯穿 `dispatch` / `send` / Team `post` / 成员 send / `reply` / rotate；预算状态由 `ConversationBudget` 写入 `<dataDir>/conversations/<tenant>.json`；Team 预算来自 `teams[].policy.budget`。canonical 新增 `teams.budget`（write，不进 control scope），总数为 48。详见 [ADR-079](ADR-079-permission-lifecycle-persistence.md) 与 [ADR-091](ADR-091-agent-body-and-presence.md) 的 S4 Addendum。

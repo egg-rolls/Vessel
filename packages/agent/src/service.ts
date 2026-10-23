@@ -600,9 +600,7 @@ export class AgentServiceImpl implements AgentService {
 
     const conversationId = this.resolveConversationId(input.conversation_id);
     const originTeamId =
-      raw.origin_team_id === undefined
-        ? undefined
-        : readRequiredString(raw, 'origin_team_id');
+      raw.origin_team_id === undefined ? undefined : readRequiredString(raw, 'origin_team_id');
     if (target.rotation === 'rotating') {
       const rejected = this.budgetBeforeEnqueue(target, from, conversationId, originTeamId);
       if (rejected !== undefined) return rejected;

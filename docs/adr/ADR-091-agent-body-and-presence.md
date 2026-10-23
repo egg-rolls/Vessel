@@ -61,7 +61,7 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 - **`rotation` 有了写入者**：上文“`rotation` 字段由 S2 使用，S1 无写入者，恒为 `stable`”在 S2 起不再成立；rotate 期间为 `rotating`，所有出口恢复 `stable`，`pump` 在 rotating 时不起轮。
 - **成员侧 `agent` schema 收窄**：成员 runtime 现在可见 `agent` 工具，但 schema 只暴露 `rotate`（只能 rotate 自己）；owner 看到 `new|send|close|list|rotate`。上文“`agent` 工具动作仍只有 `new` / `send` / `close` / `list`”不再成立。
 - **持久化新增 `body_history`**：`PersistedAgentRecord.body_history?` 只追加、≤20 条，当前 Body 不在其中；快照仍 `version: 2`。
-- **权限回调带 session**：`notePermissionState` / `requestPermission` 以当前运行 Body 的 session 为闸门；旧 Body 的迟到回调与请求被忽略或 deny（`body_not_active`）。
+- **权限回调带 session**：`notePermissionState` 以当前运行 Body 的 session 为闸门；权限请求经 `InProcessMemberRuntime.attachBridge` 的每成员 pending 集合（0.19 S4 起 `AgentService.requestPermission` 已删除）。旧 Body 的迟到回调与请求不会把 Agent 拉回 `waiting_permission`。
 - **stale 轮成对终态**：旧 Body 的迟到轮发带 `stale: true` 的 `agent.turn.*`，不写 Agent state / usage、不 `deliverToParent`；另有 `agent.reply.stale` / `agent.retired` 事件。
 - **strict `send` 仍未切换**：S2 的 `agent` 工具 `send` 仍走 strict send；切到 dispatch 留到 S3。
 - **`agent.stale` 未删除**：S2 仍只在快照加载时发布，删除留到后续切片。
@@ -94,5 +94,18 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 - **`teams.*` 只注入 default tenant**：0.19 S3 只有 default tenant 的 AgentService / TeamService 注入 `TeamControlLike`；非 default tenant 调用返回 `not_found`。上面 S3 Addendum 的“tenant 作用域沿用 `resolveTenantScope`”不应被读成 per-tenant Team 已实现。
 - **hub 已实现**（S5）：app 层 `vessel hub start`、节点 `/v1/hub/pair` 与 `/v1/hub/control`、目录 / 指针 / 配对 / scoped token / SecretStore 均已落地；决策见 [ADR-093](ADR-093-hub-control-plane.md)。S5 只实现 hub → node 拨号；node → hub 出站（S5.1）与跨节点 A2A（S7）仍未实现。
 - **Web Team 已实现**（S6）：`apps/web` 的 `team` 域消费 `teams.list|get|post`、`agent.reply.posted`、`online_count` 与 `body_history`；`waiting_permission` 映射为「等批准」；Web 不消费 hub 目录 / data token。
-- **仍未实现**：fork、S4 权限 only-human / budget / `conversation_id`、S5.1、S7、Team rename / delete / 跨 Team 迁移、自动 archive。
+- **仍未实现**：fork、S5.1、S7、Team rename / delete / 跨 Team 迁移、自动 archive。
 - **cross-ref**：hub 见 [ADR-093](ADR-093-hub-control-plane.md)，rotate / epoch fencing 见 [ADR-092](ADR-092-agent-rotate-and-epoch-fencing.md)。
+
+## Addendum（0.19 S4，权限 only-human 与 conversation 预算）
+
+> S4 只追加当前事实，不改写上面 S1 / S2 / S3 / S5/S6 当时的结论。
+
+- **权限 bridge 的唯一活路径**：`InProcessMemberRuntime.attachBridge`（成员事件流 ↔ 父 `parentEvents`）。`AgentService.requestPermission`、`AgentServiceOptions.permissionBridge`、`PermissionBridge` 已删除；`notePermissionState` 保留，仍按当前运行 Body session fencing。bridge 请求补 `team_id`（来自 `MemberRuntimeMember.team_id`）；应答只回灌该成员挂起过的 `requestId`。
+- **Team 成员强制 bridge**：有非空 `team_id` 的成员忽略全局 `agent.permissionMode: 'allow'`，按 bridge 处理；显式 `deny` 保持只读工具，不放宽。没有 `parentEvents` 时 fail-closed，走既有 `permission_ask_denied` → deny，不挂起、不自动 allow；无人值守只能由 team 显式 `deny-after` 开启。
+- **`conversation_id` additive 贯穿**：`dispatch` / strict `send` / Team `post` / 成员 `send`（本机 A2A）/ `reply` / `deliverToParent` / rotate startup / limit warning 都携带 `conversation_id`；Team log parser 与 `teams.get` 的 message schema 也保留该字段。人类入口无 id 时生成 `conv_<uuid>`；Team post 一次生成、所有 mention 共用；成员 send / reply / rotate 继承当前 turn。不按名字或正文分组；跨 Team 复用已属于另一 team 的 conversation 会被拒绝（`conversation_team_mismatch`）。
+- **预算挂在 Team policy，不复用 `limits.*`**：`teams[].policy.budget` 的维度是 `max_hops` / `max_turns` / `max_tokens` / `max_wall_clock_seconds`，另有 `warning_threshold`（默认 0.8）与 `cycle`（`max_repeats` 默认 2、`cooldown_seconds` 默认 60）。`max_cost` 不实现（`Usage` 没有 cost 字段），validator 显式拒绝。预算只对配置了 policy 的 Team 生效；未配置时只有默认环检测。发送侧入队前检查 hops / cycle / wall-clock / 已耗尽 turns、tokens；接收侧 turn 开始前再查一次，被挡的消息留在队列（hold），由人工 override 或新会话解除。
+- **预算状态持久化**：`<dataDir>/conversations/<tenant>.json`（v1，0600 原子写，debounce；turn 完成 / blocked / override 强制落盘），有界（1000 条按 `last_activity` 淘汰；带 override / blocked 的额外保留 ≤50）。损坏时 fail-closed：该 tenant 预算进入 `budget_unavailable`，不静默重置、不覆盖文件。重启保留计数 / override / blocked，丢失未消费的消息队列；进行中的 turn 崩溃可能少记一次 tokens / 完成计数（不宣称精确）。
+- **事件**：`team.budget.warning`（`team_id` / `conversation_id` / `dimension` / `current` / `max` / `threshold` / `phase`）、`team.budget.blocked`（再加 `reason` / `retry_after_ts?`）、`team.budget.override`（`dimension` / `previous_max` / `max` / `by: 'human'` / `via`）。所有事件必带 `team_id`；不带正文 / tool input / prompt。
+- **`teams.budget` canonical（48）**：`permission: 'write'`，`status | override`，由 `TeamControlLike.budget` 注入；未注入返回 `not_found`。**不进** `CONTROL_SCOPE_METHODS`，team-scoped control token 调用返回 `forbidden`。override 只能抬高当前限额或 `null` 清除，只对已存在的 conversation 生效；审计写 Team 日志 system 记录（`budget_override`）并发布 `team.budget.override`。owner 端点 `team.budget` 与 CLI `vessel team budget` 同步实现。S4 合并后 canonical 为 **48**；上面 S5/S6 Addendum 的 47 是 S4 之前的计数。
+- **未实现**：billing / 价格表 / `max_cost` 执行、agent 审批人、`allow-after`、跨节点 hop / 预算（S7）、hub 预算投影、Web 预算 UI（S6）、持久化消息队列、unbound / root turn 预算。

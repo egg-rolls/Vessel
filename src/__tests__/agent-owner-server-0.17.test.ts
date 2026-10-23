@@ -101,7 +101,6 @@ function fakeService(calls: Calls): AgentService {
       calls.new.push(input);
       return status('m1');
     },
-    requestPermission: async () => ({ decision: 'deny' }),
     flushSnapshot: async () => {},
     subscribe: () => () => {},
   } as unknown as AgentService;
