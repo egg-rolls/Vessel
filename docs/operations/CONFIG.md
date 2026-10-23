@@ -277,8 +277,8 @@ agent:
 - **`agent.model` / `agent.limits` / `agent.termination`**：成员默认模型与限额；`limits` / `termination` 缺省继承顶层，不放大。
 - **删除的键**：`team.*`、`delegate.*` 与 `team_*` / `delegate_task` 旧配置名已在 0.17 删除；tenant overlay 不再接受 `team` / `delegate` 块。
 - **工具数（实测）**：默认 3（`bash` / `read` / `edit`）；`agent.enabled: true` 4（+`agent`）；真交互 REPL（TTY）或 gateway/serve 默认 4（+`ask_user`）；交互 + `agent.enabled: true` 5。
-- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|close|list [--json]` 经该记录 attach。
-- **已知限制**：消息队列只在内存，重启丢失未处理消息，非终态成员恢复为 `stale`；`close` 只支持本机成员；canonical RPC 仍为 44。
+- **owner 端点**：交互 REPL 监听 `127.0.0.1:0`，记录写 `<data_dir>/agent-owner.json`（`0600`，含 `pid` / `host` / `port` / `token` / `started_at` / `tenant_id`）；只接受 loopback 与 Bearer token。`vessel agent new|send|dispatch|close|list [--json]` 经该记录 attach。
+- **已知限制**：消息队列只在内存，重启丢失未处理消息；重启后非 `left` 成员为 `state: idle` + `presence: gone`（strict `send` 返回 `member_stale`，`dispatch` 会先 resume）；`close` 只支持本机成员；canonical RPC 仍为 45。
 
 ## 3. 密钥与 `_env`
 
@@ -321,6 +321,7 @@ vessel doctor [--deep] [--json]
 vessel logs tail [--json] [--lines N] [--instance <name>]
 vessel agent new [--name <n>] [--model <m>] [--visibility private|team|tenant] [--system-prompt <s>] [--json]
 vessel agent send <member> <content...> [--json]
+vessel agent dispatch <to> <content...> [--from <sender>] [--json]
 vessel agent close <member...> [--json]
 vessel agent list [--state <state>] [--visibility private|team|tenant] [--json]
 ```
