@@ -13,6 +13,8 @@ import {
   type AgentMessage,
   type AgentService,
   type AgentTeamService,
+  ConversationBudget,
+  ConversationStore,
   createAgentService,
   createAgentTool,
   createInProcessMemberRuntime,
@@ -100,6 +102,10 @@ export interface AgentServiceWiring {
   team: AgentTeamService;
   /** Team 文件存储；dispose 时需 flush（内部字段） */
   teamStore: TeamStore;
+  /** 0.19 S4：conversation 预算（有 dataDir 时构造） */
+  budget?: ConversationBudget;
+  /** 0.19 S4：预算状态文件存储；dispose 时需 flush */
+  conversationStore?: ConversationStore;
   /** 父 turn 的 owner 队列注入；关闭时停止 hook（PluginHost 无反注册） */
   injector: AgentOwnerInjector;
 }
@@ -109,6 +115,7 @@ export function buildMemberRuntimeOptions(
   options: AgentServiceWiringOptions,
   onPermissionState?: (memberId: string, sessionId: string, state: MemberPermissionState) => void,
   onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
+  teamPolicy?: InProcessMemberRuntimeOptions['permissionPolicy'],
 ): InProcessMemberRuntimeOptions {
   // 成员 Body 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
   // 因此 member runtime 免确认该工具；owner 侧权限不变。
@@ -130,6 +137,9 @@ export function buildMemberRuntimeOptions(
       : {}),
     ...(permission !== undefined ? { permission } : {}),
     ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
+    // 0.19 S4：Team 成员强制 bridge；无人值守策略按成员所属 Team 解析。
+    forceBridgeForTeams: true,
+    ...(teamPolicy !== undefined ? { permissionPolicy: teamPolicy } : {}),
     ...(options.readOnlyTools !== undefined ? { readOnlyTools: options.readOnlyTools } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。
@@ -178,6 +188,17 @@ export async function createAgentServiceWiring(
   options: AgentServiceWiringOptions,
 ): Promise<AgentServiceWiring> {
   const ownerId = options.ownerId ?? DEFAULT_OWNER;
+
+  // Team 元数据必须先于成员 runtime 与 AgentService 就绪：`new` 的 ensure / seed
+  // 都经 TeamBinder，成员的 unmanned 权限策略也从同一 store 解析。
+  const teamStore = new FileTeamStore({
+    dataDir: options.dataDir,
+    tenantId: options.tenantId,
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+  });
+  await teamStore.ready();
+  await teamStore.seed(options.teamDeclarations ?? []);
+
   // 成员 bridge 进入/离开权限等待时回调 AgentService；service 在 runtime 之后构造，
   // 用晚绑定避免循环依赖。
   let serviceRef: AgentService | undefined;
@@ -186,18 +207,28 @@ export async function createAgentServiceWiring(
       options,
       (memberId, sessionId, state) => serviceRef?.notePermissionState(memberId, sessionId, state),
       (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
+      (teamId) => (teamId === undefined ? undefined : teamStore.policy(teamId)?.permission),
     ),
   );
   const runtime = new OwnerAwareMemberRuntime(innerRuntime, ownerId);
 
-  // Team 元数据必须先于 AgentService 就绪：`new` 的 ensure / seed 都经 TeamBinder。
-  const teamStore = new FileTeamStore({
-    dataDir: options.dataDir,
-    tenantId: options.tenantId,
-    ...(options.logger !== undefined ? { logger: options.logger } : {}),
-  });
-  await teamStore.ready();
-  await teamStore.seed(options.teamDeclarations ?? []);
+  // 0.19 S4：有 dataDir 才落 conversation 预算；否则保持纯内存。
+  const conversationStore =
+    options.dataDir !== undefined
+      ? new ConversationStore({
+          dataDir: options.dataDir,
+          tenantId: options.tenantId,
+          ...(options.logger !== undefined ? { logger: options.logger } : {}),
+        })
+      : undefined;
+  const budget =
+    conversationStore !== undefined
+      ? new ConversationBudget({
+          store: conversationStore,
+          policyFor: (teamId) => (teamId === undefined ? undefined : teamStore.policy(teamId)),
+          ...(options.logger !== undefined ? { logger: options.logger } : {}),
+        })
+      : undefined;
 
   const service = createAgentService({
     tenantId: options.tenantId,
@@ -211,6 +242,8 @@ export async function createAgentServiceWiring(
       ? { defaultWorkspace: options.defaultWorkspace }
       : {}),
     teamBinder: teamStore,
+    teamPolicy: (teamId) => teamStore.policy(teamId),
+    ...(budget !== undefined ? { budget } : {}),
     snapshot: { enabled: true },
   });
   serviceRef = service;
@@ -245,6 +278,8 @@ export async function createAgentServiceWiring(
     ownerId,
     team,
     teamStore,
+    ...(budget !== undefined ? { budget } : {}),
+    ...(conversationStore !== undefined ? { conversationStore } : {}),
     injector,
   };
 }

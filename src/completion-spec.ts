@@ -138,7 +138,13 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--alias',
   '--token-id',
   '--admin-token-env',
+  '--conversation',
+  '--dimension',
+  '--max',
 ];
+
+/** 预算维度（teams.budget / `vessel team budget`） */
+const BUDGET_DIMENSIONS: readonly string[] = ['hops', 'turns', 'tokens', 'wall_clock', 'cycle'];
 
 /** 值可省略的 flag（`--resume` 无 id = 列出会话） */
 export const OPTIONAL_VALUE_FLAGS: readonly string[] = [
@@ -310,6 +316,11 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       { name: 'get', flags: ['--json', '--limit', '--help'] },
       { name: 'post', flags: ['--json', '--mention', '--help'] },
       { name: 'members', flags: ['--json', '--help'] },
+      {
+        name: 'budget',
+        flags: ['--json', '--conversation', '--dimension', '--max', '--help'],
+        flagValues: { '--dimension': BUDGET_DIMENSIONS, '--max': ['unlimited'] },
+      },
     ],
   },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },

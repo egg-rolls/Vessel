@@ -78,6 +78,8 @@ export const zhCN = {
   'help.cmd.teamGet': '查看 Team 成员与最近消息',
   'help.cmd.teamPost': '发一条团队消息（无 @ 时只记日志，不唤醒 Agent）',
   'help.cmd.teamMembers': '添加 / 移除 Team 成员',
+  'help.cmd.teamBudget': '查看 conversation 预算与阻塞状态',
+  'help.cmd.teamBudgetOverride': '人工抬高 / 清除某条 conversation 的预算上限',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──

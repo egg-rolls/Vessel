@@ -357,7 +357,7 @@ export class ConversationBudget implements ConversationBudgetPort {
       conversation.overrides[input.dimension] = {
         max: input.max,
         by: 'human',
-        via: input.via,
+        via: input.via ?? 'api',
         at: now,
       };
       if (conversation.blocked?.dimension === input.dimension) delete conversation.blocked;

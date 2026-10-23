@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { t } from '../src/i18n/index.js';
 import {
   createUiProjection,
   fullTextOfItem,
@@ -276,6 +277,70 @@ describe('reduceUiProjection：notice / error / run', () => {
   it('run.cancelled 生成 cancelled run 摘要', () => {
     const state = fold([event('run.cancelled', { run_id: 'r1', error: '', duration_ms: 30 })]);
     expect(state.items[0]).toMatchObject({ kind: 'run', status: 'cancelled', durationMs: 30 });
+  });
+});
+
+describe('reduceUiProjection：team.budget.*', () => {
+  it('warning / blocked / override 投影为 notice，缺字段不崩', () => {
+    const conversation = 'conv_0123456789abcdef';
+    const state = fold([
+      event('team.budget.warning', {
+        team_id: 't1',
+        conversation_id: conversation,
+        dimension: 'tokens',
+        current: 80,
+        max: 100,
+        threshold: 0.8,
+        phase: 'enqueue',
+        ts: 1,
+      }),
+      event('team.budget.blocked', {
+        team_id: 't1',
+        conversation_id: conversation,
+        dimension: 'cycle',
+        current: 3,
+        max: null,
+        reason: 'cycle_detected',
+        phase: 'turn_start',
+        ts: 2,
+      }),
+      event('team.budget.override', {
+        team_id: 't1',
+        conversation_id: conversation,
+        dimension: 'turns',
+        previous_max: null,
+        max: 10,
+        by: 'human',
+        via: 'cli',
+        ts: 3,
+      }),
+      event('team.budget.warning', {}),
+    ]);
+    expect(state.items.map((item) => item.kind)).toEqual(['notice', 'notice', 'notice', 'notice']);
+    expect(state.items.map((item) => (item.kind === 'notice' ? item.level : undefined))).toEqual([
+      'warn',
+      'danger',
+      'info',
+      'warn',
+    ]);
+
+    const [warning, blocked, override, missing] = state.items;
+    if (
+      warning?.kind !== 'notice' ||
+      blocked?.kind !== 'notice' ||
+      override?.kind !== 'notice' ||
+      missing?.kind !== 'notice'
+    ) {
+      throw new Error('expected notices');
+    }
+    expect(warning.text).toContain('tokens');
+    expect(warning.text).toContain('80/100');
+    expect(warning.text).toContain('conv_0123456');
+    expect(blocked.text).toContain('cycle_detected');
+    expect(blocked.text).toContain(t('item.budgetUnlimited'));
+    expect(override.text).toContain(t('item.budgetUnlimited'));
+    expect(override.text).toContain('10');
+    expect(missing.text).toContain('?');
   });
 });
 

@@ -276,7 +276,8 @@ export interface BudgetOverrideInput {
   dimension: BudgetDimension;
   /** null = 清除人工 override，回到 team policy */
   max: number | null;
-  via: 'cli' | 'api';
+  /** 审计来源；缺省 api（canonical 入口），owner / CLI 传 cli */
+  via?: 'cli' | 'api';
 }
 
 export interface BudgetOverrideResult {

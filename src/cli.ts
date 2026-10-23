@@ -131,6 +131,11 @@ function printHelp(): void {
     ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
     ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],
     ['vessel team members <team_id> add|remove <member>', t('help.cmd.teamMembers')],
+    ['vessel team budget <team_id> [--conversation <id>] [--json]', t('help.cmd.teamBudget')],
+    [
+      'vessel team budget override <team_id> --conversation <id> --dimension <d> --max <n|unlimited>',
+      t('help.cmd.teamBudgetOverride'),
+    ],
     ['vessel errors [--json]', t('help.cmd.errors')],
     ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
     ['vessel gateway list [--json]', t('help.cmd.gatewayList')],

@@ -203,6 +203,106 @@ describe('vessel team command', () => {
     expect(calls.map((call) => call.method)).toEqual(['team.list', 'team.get', 'team.members']);
   });
 
+  it('maps team budget status and renders counters', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const result = await runTeamCommand(
+      { kind: 'budget-status', teamId: 'alpha', conversationId: 'conv_1', json: false },
+      options(
+        dir,
+        fakeFetch((body) => {
+          calls.push(body);
+          return {
+            action: 'status',
+            team_id: 'alpha',
+            conversations: [
+              {
+                conversation_id: 'conv_1',
+                created_at: 1,
+                last_activity: 2,
+                hops: 3,
+                turns: 2,
+                total_tokens: 42,
+                wall_clock_ms: 1500,
+                edges: [],
+                overrides: { turns: { max: 9, by: 'human', via: 'cli', at: 3 } },
+              },
+            ],
+          };
+        }),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]).toEqual({
+      method: 'team.budget',
+      params: { team_id: 'alpha', action: 'status', conversation_id: 'conv_1' },
+    });
+    expect(result.stdout).toContain('conv_1');
+    expect(result.stdout).toContain('hops 3');
+    expect(result.stdout).toContain('turns 2');
+    expect(result.stdout).toContain('tokens 42');
+    expect(result.stdout).toContain('wall_clock_ms 1500');
+    expect(result.stdout).toContain('turns=9');
+    expect(result.stdout).toContain('blocked -');
+  });
+
+  it('maps team budget override and keeps --json raw', async () => {
+    const dir = await setup();
+    const calls: RpcBody[] = [];
+    const result = await runTeamCommand(
+      {
+        kind: 'budget-override',
+        teamId: 'alpha',
+        conversationId: 'conv_1',
+        dimension: 'turns',
+        max: null,
+        json: true,
+      },
+      options(
+        dir,
+        fakeFetch((body) => {
+          calls.push(body);
+          return {
+            action: 'override',
+            team_id: 'alpha',
+            conversation_id: 'conv_1',
+            dimension: 'turns',
+            previous_max: 5,
+            max: null,
+            status: { conversation_id: 'conv_1' },
+          };
+        }),
+      ),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]).toEqual({
+      method: 'team.budget',
+      params: {
+        team_id: 'alpha',
+        action: 'override',
+        conversation_id: 'conv_1',
+        dimension: 'turns',
+        max: null,
+      },
+    });
+    expect(JSON.parse(result.stdout).max).toBeNull();
+  });
+
+  it('exits 1 when team budget is unavailable', async () => {
+    const dir = await setup();
+    const fetchImpl = (async () =>
+      new Response(JSON.stringify({ ok: false, error: { code: 'team_not_found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })) as unknown as typeof fetch;
+    const result = await runTeamCommand(
+      { kind: 'budget-status', teamId: 'missing', json: false },
+      options(dir, fetchImpl),
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('team_not_found');
+  });
+
   it('keeps exit 1 with --json when a delivery failed', async () => {
     const dir = await setup();
     const result = await runTeamCommand(
