@@ -84,6 +84,9 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.teamMembers': 'add or remove a team member',
   'help.cmd.teamBudget': 'show conversation budget and blocked state',
   'help.cmd.teamBudgetOverride': 'raise or clear the budget limit of one conversation',
+  'help.cmd.federationPost':
+    'deliver a message to an allowlisted remote team (log-only by default)',
+  'help.cmd.federationPeers': 'list federation peers and whether their tokens are set',
   'help.cmd.help': 'show this help',
 
   // ── common ──

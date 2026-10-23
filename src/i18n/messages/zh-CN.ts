@@ -80,6 +80,8 @@ export const zhCN = {
   'help.cmd.teamMembers': '添加 / 移除 Team 成员',
   'help.cmd.teamBudget': '查看 conversation 预算与阻塞状态',
   'help.cmd.teamBudgetOverride': '人工抬高 / 清除某条 conversation 的预算上限',
+  'help.cmd.federationPost': '跨节点向已 allowlist 的 Team 投递一条消息（默认只写日志）',
+  'help.cmd.federationPeers': '列出 federation peer 与 token 是否已设置',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──
