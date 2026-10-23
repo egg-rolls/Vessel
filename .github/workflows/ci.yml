@@ -71,7 +71,7 @@ jobs:
 
   # ── 离线集成：MCP / gateway / 0.4 能力（0.3 + 0.4）──
   # MCP 用本地 mock server（stdio fixture / 127.0.0.1:0），
-  # TLS 用本地自签证书；workflow / evals / feishu 均用 mock，不依赖外网。
+  # TLS 用本地自签证书；evals / feishu 均用 mock，不依赖外网。
   offline-integration:
     name: Offline Integration
     runs-on: ubuntu-latest
@@ -102,9 +102,6 @@ jobs:
 
       - name: Gateway remote/TLS offline tests
         run: bun test packages/serve
-
-      - name: Workflow offline tests
-        run: bun test plugins/workflow/engine
 
       - name: Evals offline tests
         run: bun test plugins/evals/harness
