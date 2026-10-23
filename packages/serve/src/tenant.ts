@@ -7,16 +7,21 @@
  * @module @vessel-agent/serve/tenant
  */
 
+import type { PrincipalScope } from '@vessel-agent/config';
 import type { RunEvent } from '@vessel-agent/core';
 import { RpcError } from './rpc.js';
 
 /** 角色（A-3 冻结） */
 export type TenantRole = 'read' | 'write' | 'admin';
 
-/** token → principal（与 asm `Principal` 结构一致） */
+/** token → principal（与 asm `Principal` 结构一致；S5 additive scope） */
 export interface TenantPrincipal {
   tenant_id: string;
   role: TenantRole;
+  scope?: PrincipalScope;
+  team_id?: string;
+  token_id?: string;
+  hub_id?: string;
 }
 
 /**
@@ -182,7 +187,8 @@ export function resolvePrincipal(
   if (auth) {
     const principal = auth.authenticate(token);
     if (principal !== null) {
-      return { tenant_id: principal.tenant_id, role: principal.role };
+      // S5：保留 additive scope / team_id / token_id / hub_id，不在这里丢掉。
+      return { ...principal };
     }
     // 0.4 兼容：gateway 自动生成/本地 token 仍按 default/admin 接受；
     // asm 未把生成值写回 auth 时不能回归。
@@ -202,7 +208,7 @@ export function resolveLocalPrincipal(
   legacyToken: string,
 ): TenantPrincipal {
   const fromAuth = auth?.anonymous ?? auth?.authenticate(auth.legacyToken ?? legacyToken);
-  if (fromAuth) return { tenant_id: fromAuth.tenant_id, role: fromAuth.role };
+  if (fromAuth) return { ...fromAuth };
   return { tenant_id: DEFAULT_TENANT_ID, role: 'admin' };
 }
 

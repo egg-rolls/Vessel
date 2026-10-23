@@ -245,10 +245,21 @@ export interface ServeTlsConfig {
 /** gateway principal 角色 */
 export type PrincipalRole = 'read' | 'write' | 'admin';
 
+/** S5：节点动态 token 的 scope（additive；静态 token 缺省） */
+export type PrincipalScope = 'view' | 'exchange' | 'control' | 'admin';
+
 /** 由 token 解析出的 principal（A-3 §10.4 冻结：snake_case tenant_id） */
 export interface Principal {
   tenant_id: string;
   role: PrincipalRole;
+  /** S5：动态 token 的 scope；静态 token 缺省 */
+  scope?: PrincipalScope;
+  /** S5：control token 的 team 限制 */
+  team_id?: string;
+  /** S5：吊销 / 关闭 WS 用 */
+  token_id?: string;
+  /** S5：token 绑定的 hub */
+  hub_id?: string;
 }
 
 /** serve token 条目（A-3 §10.4；键为原始 token，永不打印） */
@@ -360,6 +371,37 @@ export interface ConnectConfig {
   tokenEnv?: string;
   /** 自签/私有 CA 文件（PEM） */
   caFile?: string;
+}
+
+/** S5：hub TLS 配置；cert/key 必须成对 */
+export interface HubTlsConfig {
+  certFile?: string;
+  keyFile?: string;
+}
+
+/** S5：hub 监听地址 */
+export interface HubListenConfig {
+  hostname?: string;
+  port?: number;
+}
+
+/**
+ * S5：hub 控制面配置。
+ *
+ * - `dataDir` 必须与 gateway 的 `dataDir` 不同；
+ * - `direction` 当前只支持 `'hub'`（node → hub 是 S5.1）；
+ * - `token` 明文不接受，只允许 `tokenEnv` / SecretStore。
+ */
+export interface HubConfig {
+  dataDir?: string;
+  direction?: 'hub' | 'node';
+  listen?: HubListenConfig;
+  allowRemote?: boolean;
+  tls?: HubTlsConfig;
+  allowedOrigins?: string[];
+  tokenEnv?: string;
+  allowFileSecrets?: boolean;
+  pairingTtlSeconds?: number;
 }
 
 /** 配置来源（叶子级追踪） */
@@ -483,6 +525,8 @@ export interface VesselConfig {
   durable?: DurableConfig;
   /** 0.3：gateway 监听与 TLS */
   serve?: ServeConfig;
+  /** S5：hub 控制面 */
+  hub?: HubConfig;
   /** 0.4：声明式 workflow 编排 */
   workflow?: WorkflowConfig;
   /** 0.4：eval harness */

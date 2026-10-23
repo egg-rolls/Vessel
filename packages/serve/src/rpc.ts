@@ -7,6 +7,7 @@
  * @module @vessel-agent/serve/rpc
  */
 
+import type { PrincipalScope } from '@vessel-agent/config';
 import type { RunEvent } from '@vessel-agent/core';
 import { PROTOCOL_VERSION } from './protocol.js';
 
@@ -85,7 +86,18 @@ export class RpcError extends Error {
 /** 单次分发的上下文 */
 export interface RpcMethodContext {
   /** 由 token 解析出的 principal；tenant_id 可为 '*'（admin token） */
-  principal: { tenant_id: string; role: MethodPermission };
+  principal: {
+    tenant_id: string;
+    role: MethodPermission;
+    /** S5：动态 token 的 scope；静态 token 缺省 */
+    scope?: PrincipalScope;
+    /** S5：control token 的 team 限制 */
+    team_id?: string;
+    /** S5：吊销 / 关闭 WS 用 */
+    token_id?: string;
+    /** S5：token 绑定的 hub */
+    hub_id?: string;
+  };
   /** 本次请求实际作用的目标 tenant（admin 可显式指定） */
   tenantId: string;
   isAdmin: boolean;
