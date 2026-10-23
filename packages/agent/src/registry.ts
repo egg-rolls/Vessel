@@ -91,6 +91,7 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     membership: record.membership,
     ...(record.teamId !== undefined ? { team_id: record.teamId } : {}),
     epoch: record.currentBody?.epoch ?? 0,
+    ...(record.bodyHistory.length > 0 ? { body_history: record.bodyHistory } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
     ...(record.usage !== undefined ? { usage: record.usage } : {}),

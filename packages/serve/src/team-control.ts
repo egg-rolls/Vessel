@@ -17,7 +17,17 @@ export interface TeamSummaryLike {
   handoff_path?: string;
   policy: Record<string, unknown>;
   member_count: number;
+  /** present && presence === 'live'；从 roster 派生，不持久化 */
+  online_count: number;
   created_at: number;
+}
+
+/** 已退役 Body（0.19 S6 additive）。 */
+export interface AgentBodyHistoryEntryLike {
+  session_id: string;
+  epoch: number;
+  started_at: number;
+  retired_at: number;
 }
 
 /** roster 条目（由 Agent 记录派生，不单独持久化）。 */
@@ -31,6 +41,8 @@ export interface TeamMemberLike {
   visibility: 'private' | 'team' | 'tenant';
   state: string;
   epoch: number;
+  /** 已退役 Body 历史（可选；旧数据缺失不报错） */
+  body_history?: AgentBodyHistoryEntryLike[];
 }
 
 /** 只追加团队日志的一条记录。 */
@@ -42,7 +54,7 @@ export interface TeamMessageLike {
   mentions: string[];
   content: string;
   ts: number;
-  kind: 'post' | 'mention' | 'system';
+  kind: 'post' | 'mention' | 'system' | 'reply';
   system_event?: 'join' | 'leave' | 'rotate' | 'archive';
 }
 

@@ -111,6 +111,7 @@ export function makeMember(overrides: Partial<MemberStatus> & { id: string }): M
     ...(overrides.name !== undefined ? { name: overrides.name } : {}),
     ...(overrides.parent_id !== undefined ? { parent_id: overrides.parent_id } : {}),
     ...(overrides.team_id !== undefined ? { team_id: overrides.team_id } : {}),
+    ...(overrides.body_history !== undefined ? { body_history: overrides.body_history } : {}),
   };
 }
 

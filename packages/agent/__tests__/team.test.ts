@@ -220,3 +220,95 @@ describe('TeamService log write failure', () => {
     expect(agent.dispatches).toHaveLength(0);
   });
 });
+
+describe('TeamService roster projections and agent replies', () => {
+  it('derives online_count from present live members', async () => {
+    const { service } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'a', team_id: 'alpha', presence: 'live' }),
+        makeMember({ id: 'b', team_id: 'alpha', presence: 'gone' }),
+        makeMember({
+          id: 'c',
+          team_id: 'alpha',
+          membership: 'left',
+          presence: 'gone',
+          state: 'closed',
+        }),
+        makeMember({ id: 'd', team_id: 'beta', presence: 'live' }),
+      ],
+    });
+
+    const teams = await service.list();
+    expect(teams.find((team) => team.team_id === 'alpha')).toMatchObject({
+      member_count: 2,
+      online_count: 1,
+    });
+    expect(teams.find((team) => team.team_id === 'beta')).toMatchObject({
+      member_count: 1,
+      online_count: 1,
+    });
+
+    const detail = await service.get('alpha');
+    expect(detail?.team).toMatchObject({ member_count: 2, online_count: 1 });
+  });
+
+  it('passes body_history through to team members', async () => {
+    const history = [{ session_id: 'old-body', epoch: 0, started_at: 1, retired_at: 2 }];
+    const { service } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha', body_history: history })],
+    });
+
+    const detail = await service.get('alpha');
+    expect(detail?.members[0]?.body_history).toEqual(history);
+  });
+
+  it('appends an agent reply log without dispatching and keeps the event message_id', async () => {
+    const { agent, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      session_id: 'a',
+      team_id: 'alpha',
+      message_id: 'reply-1',
+      content: 'final answer',
+      ts: 10,
+    });
+    await settle();
+
+    expect(agent.dispatches).toHaveLength(0);
+    const reply = store.logs.find((entry) => entry.kind === 'reply');
+    expect(reply).toMatchObject({
+      message_id: 'reply-1',
+      team_id: 'alpha',
+      from: 'a',
+      to: [],
+      mentions: [],
+      content: 'final answer',
+    });
+  });
+
+  it('truncates oversized reply content with a marker instead of dropping it', async () => {
+    const { agent, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+
+    agent.emit({
+      type: 'agent.reply.posted',
+      agent_id: 'a',
+      session_id: 'a',
+      team_id: 'alpha',
+      message_id: 'reply-big',
+      content: 'x'.repeat(70 * 1024),
+      ts: 11,
+    });
+    await settle();
+
+    const reply = store.logs.find((entry) => entry.kind === 'reply');
+    expect(reply).toBeDefined();
+    expect(Buffer.byteLength(reply?.content ?? '', 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(reply?.content.endsWith('[truncated]')).toBe(true);
+  });
+});

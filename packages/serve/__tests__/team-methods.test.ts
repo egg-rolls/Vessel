@@ -29,6 +29,7 @@ const summary: TeamSummaryLike = {
   workspace: '/tmp/alpha',
   policy: { allowFork: false },
   member_count: 1,
+  online_count: 1,
   created_at: 1000,
 };
 
@@ -42,6 +43,7 @@ const member: TeamMemberLike = {
   visibility: 'team',
   state: 'idle',
   epoch: 1,
+  body_history: [{ session_id: 'sess-0', epoch: 0, started_at: 900, retired_at: 950 }],
 };
 
 const message: TeamMessageLike = {
@@ -55,7 +57,22 @@ const message: TeamMessageLike = {
   kind: 'post',
 };
 
-const detail: TeamDetailLike = { team: summary, members: [member], messages: [message] };
+const reply: TeamMessageLike = {
+  message_id: 'msg-2',
+  team_id: 'team-alpha',
+  from: 'agent-1',
+  to: [],
+  mentions: [],
+  content: 'done',
+  ts: 2100,
+  kind: 'reply',
+};
+
+const detail: TeamDetailLike = {
+  team: summary,
+  members: [member],
+  messages: [message, reply],
+};
 
 class FakeTeamControl implements TeamControlLike {
   readonly tenantId: string;

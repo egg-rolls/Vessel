@@ -68,6 +68,8 @@ export interface MemberStatus {
   epoch?: number;
   /** 所属 Team（0.19 S3；unbound 时缺省） */
   team_id?: string;
+  /** 已退役 Body 历史（0.19 S6 additive；≤20，当前 Body 不在其中） */
+  body_history?: AgentBodyHistoryEntry[];
 }
 
 /**
@@ -359,6 +361,8 @@ export interface AgentEvent {
   team_id?: string;
   /** 本轮 usage（turn.completed 有则带） */
   usage?: Usage;
+  /** 仅在 `agent.reply.posted` 携带本轮最终文本（≤64 KiB，超限截断） */
+  content?: string;
   state?: MemberState;
   /** 进程内 presence（agent.stale / agent.resumed 等生命周期事件） */
   presence?: MemberPresence;
@@ -534,7 +538,7 @@ export interface TeamLogEntry {
   mentions: string[];
   content: string;
   ts: number;
-  kind: 'post' | 'mention' | 'system';
+  kind: 'post' | 'mention' | 'system' | 'reply';
   system_event?: TeamSystemEvent;
 }
 
@@ -550,6 +554,8 @@ export interface TeamMemberSummary {
   visibility: MemberVisibility;
   state: MemberState;
   epoch: number;
+  /** 已退役 Body 历史（0.19 S6 additive；可选，旧数据缺失不报错） */
+  body_history?: AgentBodyHistoryEntry[];
 }
 
 export interface TeamSummary {
@@ -560,6 +566,8 @@ export interface TeamSummary {
   handoff_path?: string;
   policy: Record<string, unknown>;
   member_count: number;
+  /** present && presence === 'live' 的成员数；从 roster 派生，不持久化 */
+  online_count: number;
   created_at: number;
 }
 

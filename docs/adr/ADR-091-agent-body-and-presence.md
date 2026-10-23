@@ -79,4 +79,8 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 - **生命周期**：`teams.members remove` 复用 `close`（membership left、dispose 当前 Body、保留 session / `body_history`）；`add` 调用 `reinstate`，保留 current_body / body_history、不 spawn，`presence='gone'`，下一次 dispatch 才 resume。
 - **`reinstate` 是第二条人力 `left → present` 路径**（与 `attachOwner` 并列）：只由 roster add 调用；`closed → idle` 不得走普通 `setState`（转移表 `closed: []`），使用专用路径并注释；engine 不得复活成员。
 - **成员 `agent` 工具**：动作从 `rotate` 扩为 `rotate|post|send|list`；`send` 走统一 `dispatch`（成员 `from` = 调用者 agent id，name 只在同 Team roster 内解析），`post` 永不 dispatch，`new` / `close` 仍只给 owner。owner 的 `send` 也切到 dispatch；strict `service.send` 保留给 owner 端点 / CLI。
+- **S6 additive（已冻结）**：
+  - `TeamSummary.online_count` = `present && presence === 'live'`，从 roster 派生，不持久化；`teams.list` / `teams.get.team` 返回。
+  - `TeamMemberSummary.body_history?` 直接透传 Agent 记录的 `body_history`（≤20）；旧数据缺失不报错。
+  - `TeamLogEntry.kind` 增加 `'reply'`；成员一轮 `outcome === 'completed'`、有最终文本且 `team_id` 非空时，AgentService 只发 `agent.reply.posted {message_id, agent_id, session_id, team_id, content, ts}`（content ≤64 KiB，超限截断加标记），TeamService 是唯一日志写入点，追加 `kind:'reply'` 且**不 dispatch**；`message_id` 与事件一致，供 Web 合并。`agent.turn.completed` 仍不带正文。
 - **未实现**：fork、自动 archive、budget / `conversation_id`、hub、Web、跨节点、权限审批人、Team rename / delete / Agent 跨 Team 迁移；legacy `/v1/team/*` 保持无生产装配，且与 canonical `teams.*` 无关。

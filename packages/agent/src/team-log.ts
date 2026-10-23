@@ -52,7 +52,7 @@ function parseEntry(line: string): TeamLogEntry | null {
     if (typeof parsed.content !== 'string') return null;
     if (typeof parsed.ts !== 'number' || !Number.isFinite(parsed.ts)) return null;
     const kind = parsed.kind;
-    if (kind !== 'post' && kind !== 'mention' && kind !== 'system') return null;
+    if (kind !== 'post' && kind !== 'mention' && kind !== 'system' && kind !== 'reply') return null;
     const entry: TeamLogEntry = {
       message_id: parsed.message_id,
       team_id: parsed.team_id,

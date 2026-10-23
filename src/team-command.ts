@@ -52,6 +52,7 @@ interface TeamSummaryView {
   team_id?: string;
   name?: string;
   member_count?: number;
+  online_count?: number;
   workspace?: string;
 }
 
@@ -113,7 +114,7 @@ function formatTeamList(result: unknown): string {
   const lines = [ui.section(`Teams (${teams.length}):`)];
   for (const team of teams) {
     lines.push(
-      `  ${asString(team.team_id)}  ${asString(team.name)}  ${String(team.member_count ?? 0)}  ${asString(team.workspace)}`,
+      `  ${asString(team.team_id)}  ${asString(team.name)}  ${String(team.member_count ?? 0)} members  ${String(team.online_count ?? 0)} online  ${asString(team.workspace)}`,
     );
   }
   return lines.join('\n');
@@ -131,6 +132,7 @@ function formatTeamGet(result: unknown): string {
     ui.kv('name', asString(team.name)),
     ui.kv('workspace', asString(team.workspace)),
     ui.kv('members', String(team.member_count ?? members.length)),
+    ui.kv('online', String(team.online_count ?? 0)),
   ];
   lines.push('', ui.section(`Members (${members.length}):`));
   if (members.length === 0) {

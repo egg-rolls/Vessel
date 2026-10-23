@@ -1493,6 +1493,15 @@ export class AgentServiceImpl implements AgentService {
       },
     );
 
+    // 0.19 S6：Team 成员的最终文本只发事件，由 TeamService 写日志；
+    // AgentService 不直接写 Team 日志，避免双写。agent.turn.completed 仍不带正文。
+    if (outcome === 'completed' && nonEmpty(result?.content) && current.teamId !== undefined) {
+      this.emit('agent.reply.posted', current, {
+        message_id: this.newId(),
+        content: truncateMessageContent(result.content as string),
+      });
+    }
+
     if (outcome === 'completed' && !queue.repliedThisTurn && nonEmpty(result?.content)) {
       this.deliverToParent(current, result.content as string);
     }
@@ -1560,6 +1569,25 @@ function readContent(record: Record<string, unknown>, key: string): string {
     throw new AgentError('invalid_input', `content exceeds ${MAX_MESSAGE_BYTES} bytes`);
   }
   return value;
+}
+
+/**
+ * `agent.reply.posted` 的正文上限：超限按 UTF-8 字节截断并加标记，
+ * 不静默丢整条回复。事件与 Team 日志使用同一段截断后的文本。
+ */
+function truncateMessageContent(content: string): string {
+  if (Buffer.byteLength(content, 'utf8') <= MAX_MESSAGE_BYTES) return content;
+  const marker = '\n[truncated]';
+  const budget = MAX_MESSAGE_BYTES - Buffer.byteLength(marker, 'utf8');
+  let used = 0;
+  let out = '';
+  for (const char of content) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (used + size > budget) break;
+    out += char;
+    used += size;
+  }
+  return out + marker;
 }
 
 function optionalString(value: unknown): string | undefined {

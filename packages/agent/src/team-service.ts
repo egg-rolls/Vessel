@@ -112,11 +112,17 @@ export class DefaultTeamService implements AgentTeamService {
   async list(options: TeamListOptions = {}): Promise<TeamSummary[]> {
     const records = this.store.list();
     const counts = new Map<string, number>();
+    const online = new Map<string, number>();
     for (const status of await this.listVisible(options.viewer)) {
       if (status.team_id === undefined || status.membership !== 'present') continue;
       counts.set(status.team_id, (counts.get(status.team_id) ?? 0) + 1);
+      if (status.presence === 'live') {
+        online.set(status.team_id, (online.get(status.team_id) ?? 0) + 1);
+      }
     }
-    return records.map((record) => toTeamSummary(record, counts.get(record.team_id) ?? 0));
+    return records.map((record) =>
+      toTeamSummary(record, counts.get(record.team_id) ?? 0, online.get(record.team_id) ?? 0),
+    );
   }
 
   async get(teamId: string, options: TeamGetOptions = {}): Promise<TeamDetail | undefined> {
@@ -128,7 +134,11 @@ export class DefaultTeamService implements AgentTeamService {
         ? await this.store.readLog(teamId)
         : await this.store.readLog(teamId, { limit: options.limit });
     return {
-      team: toTeamSummary(record, members.length),
+      team: toTeamSummary(
+        record,
+        members.length,
+        members.filter((member) => member.presence === 'live').length,
+      ),
       members,
       messages,
     };
@@ -529,6 +539,32 @@ export class DefaultTeamService implements AgentTeamService {
   /** system 消息：只写日志、不 dispatch；失败只 warning（不改变生命周期） */
   private onAgentEvent(event: AgentEvent): void {
     if (event.team_id === undefined || event.team_id.length === 0) return;
+
+    // 0.19 S6：成员完成一轮的最终文本。AgentService 只发事件；TeamService 是
+    // 唯一日志写入点，且**不 dispatch / 不唤醒任何人**。message_id 与事件一致，
+    // 供 Web 按 id 合并。
+    if (event.type === 'agent.reply.posted') {
+      if (typeof event.content !== 'string' || event.content.length === 0) return;
+      const entry: TeamLogEntry = {
+        message_id: event.message_id ?? this.newId(),
+        team_id: event.team_id,
+        from: event.agent_id,
+        to: [],
+        mentions: [],
+        content: truncateReplyContent(event.content),
+        ts: event.ts,
+        kind: 'reply',
+      };
+      this.store.appendLog(entry).catch((error: unknown) => {
+        this.logger.warn('team.reply_message.failed', {
+          team_id: event.team_id,
+          agent_id: event.agent_id,
+          error: errorText(error),
+        });
+      });
+      return;
+    }
+
     const systemEvent = this.systemEventFor(event);
     if (systemEvent === undefined) return;
     const entry: TeamLogEntry = {
@@ -572,7 +608,7 @@ export function createTeamService(options: TeamServiceOptions): DefaultTeamServi
   return new DefaultTeamService(options);
 }
 
-function toTeamSummary(record: TeamRecord, memberCount: number): TeamSummary {
+function toTeamSummary(record: TeamRecord, memberCount: number, onlineCount: number): TeamSummary {
   return {
     team_id: record.team_id,
     name: record.name,
@@ -581,6 +617,7 @@ function toTeamSummary(record: TeamRecord, memberCount: number): TeamSummary {
     ...(record.handoff_path !== undefined ? { handoff_path: record.handoff_path } : {}),
     policy: record.policy,
     member_count: memberCount,
+    online_count: onlineCount,
     created_at: record.created_at,
   };
 }
@@ -596,7 +633,26 @@ function toMemberSummary(status: MemberStatus): TeamMemberSummary {
     visibility: status.visibility,
     state: status.state,
     epoch: status.epoch ?? 0,
+    ...(status.body_history !== undefined && status.body_history.length > 0
+      ? { body_history: status.body_history }
+      : {}),
   };
+}
+
+/** Team 回复日志上限：与 AgentService 一致，超限截断并加标记 */
+function truncateReplyContent(content: string): string {
+  if (Buffer.byteLength(content, 'utf8') <= MAX_MESSAGE_BYTES) return content;
+  const marker = '\n[truncated]';
+  const budget = MAX_MESSAGE_BYTES - Buffer.byteLength(marker, 'utf8');
+  let used = 0;
+  let out = '';
+  for (const char of content) {
+    const size = Buffer.byteLength(char, 'utf8');
+    if (used + size > budget) break;
+    out += char;
+    used += size;
+  }
+  return out + marker;
 }
 
 /** 按首次出现顺序去重 */

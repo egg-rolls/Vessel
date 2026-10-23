@@ -251,4 +251,57 @@ describe('AgentService team binding', () => {
     expect((await service.identify(secondBody))?.id).toBe(member.id);
     expect(await service.identify('not-a-member')).toBeUndefined();
   });
+
+  it('emits agent.reply.posted for a completed team turn and keeps turn.completed content-free', async () => {
+    const binder = new FakeTeamBinder();
+    const { service, runtime } = makeService({
+      teamBinder: binder,
+      defaultWorkspace: '/work/alpha',
+    });
+    const events: AgentEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    const member = await service.new({ name: 'replier' });
+    runtime.handler = async () => ({ content: 'final answer', outcome: 'completed' });
+
+    await service.dispatch({ to: member.id, content: 'go' });
+    await settle();
+
+    const reply = events.find((event) => event.type === 'agent.reply.posted');
+    expect(reply).toMatchObject({
+      agent_id: member.id,
+      team_id: 'team-alpha',
+      content: 'final answer',
+    });
+    expect(typeof reply?.message_id).toBe('string');
+    expect((reply?.message_id ?? '').length).toBeGreaterThan(0);
+
+    // 正文只进 agent.reply.posted，不能塞进 turn.completed。
+    const completed = events.find((event) => event.type === 'agent.turn.completed');
+    expect(completed?.content).toBeUndefined();
+  });
+
+  it('truncates oversized agent.reply.posted content with a marker', async () => {
+    const binder = new FakeTeamBinder();
+    const { service, runtime } = makeService({
+      teamBinder: binder,
+      defaultWorkspace: '/work/alpha',
+    });
+    const events: AgentEvent[] = [];
+    service.subscribe((event) => events.push(event));
+
+    const member = await service.new({ name: 'big-replier' });
+    runtime.handler = async () => ({
+      content: 'x'.repeat(70 * 1024),
+      outcome: 'completed',
+    });
+
+    await service.dispatch({ to: member.id, content: 'go' });
+    await settle();
+
+    const reply = events.find((event) => event.type === 'agent.reply.posted');
+    expect(reply).toBeDefined();
+    expect(Buffer.byteLength(reply?.content ?? '', 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect((reply?.content ?? '').endsWith('[truncated]')).toBe(true);
+  });
 });

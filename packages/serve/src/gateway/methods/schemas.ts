@@ -446,7 +446,15 @@ export const workflowDetailSchema = {
 /** teams.list / teams.get 的 `team`（TeamSummary）。 */
 export const teamSummarySchema = {
   type: 'object',
-  required: ['team_id', 'name', 'tenant_id', 'workspace', 'member_count', 'created_at'],
+  required: [
+    'team_id',
+    'name',
+    'tenant_id',
+    'workspace',
+    'member_count',
+    'online_count',
+    'created_at',
+  ],
   properties: {
     team_id: { type: 'string' },
     name: { type: 'string' },
@@ -455,11 +463,24 @@ export const teamSummarySchema = {
     handoff_path: { type: 'string' },
     policy: { type: 'object' },
     member_count: { type: 'integer', minimum: 0 },
+    online_count: { type: 'integer', minimum: 0 },
     created_at: { type: 'number' },
   },
 };
 
-/** teams.get 的 roster 条目（TeamMemberSummary）；name 可缺失。 */
+/** 已退役 Body（0.19 S6 additive）。 */
+export const agentBodyHistoryEntrySchema = {
+  type: 'object',
+  required: ['session_id', 'epoch', 'started_at', 'retired_at'],
+  properties: {
+    session_id: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
+    started_at: { type: 'number' },
+    retired_at: { type: 'number' },
+  },
+};
+
+/** teams.get 的 roster 条目（TeamMemberSummary）；name / body_history 可缺失。 */
 export const teamMemberSchema = {
   type: 'object',
   required: ['agent_id', 'session_id', 'membership', 'presence', 'visibility', 'state', 'epoch'],
@@ -473,6 +494,7 @@ export const teamMemberSchema = {
     visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
     state: { type: 'string' },
     epoch: { type: 'integer', minimum: 0 },
+    body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
   },
 };
 
@@ -488,7 +510,7 @@ export const teamMessageSchema = {
     mentions: stringListSchema,
     content: { type: 'string' },
     ts: { type: 'number' },
-    kind: { type: 'string', enum: ['post', 'mention', 'system'] },
+    kind: { type: 'string', enum: ['post', 'mention', 'system', 'reply'] },
     system_event: { type: 'string', enum: ['join', 'leave', 'rotate', 'archive'] },
   },
 };
