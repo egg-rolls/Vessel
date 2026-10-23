@@ -169,6 +169,8 @@ export type AgentCommand =
       model?: string;
       visibility?: AgentVisibilityArg;
       systemPrompt?: string;
+      /** 0.19 S3：显式 workspace → 隐式建 / 复用 Team 并绑定 */
+      workspace?: string;
     }
   | { kind: 'send'; json: boolean; member: string; content: string }
   | { kind: 'dispatch'; json: boolean; to: string; content: string }
@@ -181,6 +183,19 @@ export type AgentCommand =
     }
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
+
+/** `vessel team ...` 子命令（0.19 S3；owner 私有端点） */
+export type TeamCommand =
+  | { kind: 'list'; json: boolean }
+  | { kind: 'get'; teamId: string; limit?: number; json: boolean }
+  | { kind: 'post'; teamId: string; content: string; mentions: string[]; json: boolean }
+  | {
+      kind: 'members';
+      teamId: string;
+      action: 'add' | 'remove';
+      member: string;
+      json: boolean;
+    };
 
 export interface CliArgs {
   /** `vessel demo`：无 Key 交互演示（mock + tools 场景） */
@@ -251,6 +266,8 @@ export interface CliArgs {
   agentsCommand: { json: boolean } | null;
   /** 0.17：`vessel agent new|send|close|list|dispatch|rotate` */
   agentCommand: AgentCommand | null;
+  /** 0.19 S3：`vessel team list|get|post|members` */
+  teamCommand: TeamCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
   /** 0.18：`vessel completion <bash|zsh|fish|powershell>` */
@@ -315,6 +332,7 @@ export function parseArgs(argv: string[]): ParseResult {
     statusCommand: null,
     agentsCommand: null,
     agentCommand: null,
+    teamCommand: null,
     errorsCommand: null,
     completionCommand: null,
   };
@@ -365,6 +383,9 @@ export function parseArgs(argv: string[]): ParseResult {
     }
     if (a === 'agent' && i === 0) {
       return parseAgentArgs(argv.slice(1), args);
+    }
+    if (a === 'team' && i === 0) {
+      return parseTeamArgs(argv.slice(1), args);
     }
     if (a === 'errors' && i === 0) {
       return parseErrorsArgs(argv.slice(1), args);
@@ -1926,6 +1947,7 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
     let model: string | undefined;
     let visibility: AgentVisibilityArg | undefined;
     let systemPrompt: string | undefined;
+    let workspace: string | undefined;
     for (let i = 0; i < tail.length; i++) {
       const a = tail[i] ?? '';
       if (a === '--help' || a === '-h') {
@@ -1936,13 +1958,20 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
         json = true;
         continue;
       }
-      if (a === '--name' || a === '--model' || a === '--visibility' || a === '--system-prompt') {
+      if (
+        a === '--name' ||
+        a === '--model' ||
+        a === '--visibility' ||
+        a === '--system-prompt' ||
+        a === '--workspace'
+      ) {
         const value = readFlagValue(tail, i, a);
         if (!value.ok) return value;
         if (value.value === '') return { ok: false, error: `Invalid ${a}: empty value` };
         if (a === '--name') name = value.value;
         else if (a === '--model') model = value.value;
         else if (a === '--system-prompt') systemPrompt = value.value;
+        else if (a === '--workspace') workspace = value.value;
         else {
           if (value.value !== 'private' && value.value !== 'team' && value.value !== 'tenant') {
             return {
@@ -1965,6 +1994,7 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       ...(model !== undefined ? { model } : {}),
       ...(visibility !== undefined ? { visibility } : {}),
       ...(systemPrompt !== undefined ? { systemPrompt } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
     };
     return { ok: true, args };
   }
@@ -2155,6 +2185,159 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   }
 
   return { ok: false, error: `Unknown agent subcommand: ${sub}` };
+}
+
+/**
+ * `team list|get|post|members`（0.19 S3）。
+ * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
+ */
+function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
+  const sub = rest[0];
+  if (sub === undefined || sub === '--help' || sub === '-h') {
+    args.help = true;
+    return { ok: true, args };
+  }
+  const tail = rest.slice(1);
+
+  if (sub === 'list') {
+    let json = false;
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for team list: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    args.teamCommand = { kind: 'list', json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'get') {
+    let json = false;
+    let limit: number | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--limit') {
+        const value = readFlagValue(tail, i, '--limit');
+        if (!value.ok) return value;
+        if (!/^\d+$/.test(value.value) || Number.parseInt(value.value, 10) <= 0) {
+          return { ok: false, error: `Invalid --limit: ${value.value}` };
+        }
+        limit = Number.parseInt(value.value, 10);
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for team get: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, extra] = positional;
+    if (teamId === undefined || teamId === '') {
+      return { ok: false, error: 'team get requires <team_id>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team get: ${extra}` };
+    }
+    args.teamCommand = {
+      kind: 'get',
+      teamId,
+      ...(limit !== undefined ? { limit } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (sub === 'post') {
+    let json = false;
+    const mentions: string[] = [];
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--mention') {
+        const value = readFlagValue(tail, i, '--mention');
+        if (!value.ok) return value;
+        if (value.value === '') {
+          return { ok: false, error: 'Invalid --mention: empty value' };
+        }
+        mentions.push(value.value);
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for team post: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, ...contentParts] = positional;
+    const content = contentParts.join(' ');
+    if (teamId === undefined || teamId === '' || content === '') {
+      return { ok: false, error: 'team post requires <team_id> <content...>' };
+    }
+    args.teamCommand = { kind: 'post', teamId, content, mentions, json };
+    return { ok: true, args };
+  }
+
+  if (sub === 'members') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for team members: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [teamId, action, member, extra] = positional;
+    if (teamId === undefined || action === undefined || member === undefined) {
+      return { ok: false, error: 'team members requires <team_id> add|remove <member>' };
+    }
+    if (action !== 'add' && action !== 'remove') {
+      return {
+        ok: false,
+        error: `Invalid team members action: ${action} (expected add|remove)`,
+      };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for team members: ${extra}` };
+    }
+    args.teamCommand = { kind: 'members', teamId, action, member, json };
+    return { ok: true, args };
+  }
+
+  return { ok: false, error: `Unknown team subcommand: ${sub}` };
 }
 
 /** `errors [--json] [--limit N]` */

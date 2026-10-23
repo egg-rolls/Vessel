@@ -121,6 +121,10 @@ function printHelp(): void {
   const gateway: Array<[string, string]> = [
     ['vessel status [--json]', t('help.cmd.status')],
     ['vessel agents [--json]', t('help.cmd.agents')],
+    ['vessel team list [--json]', t('help.cmd.teamList')],
+    ['vessel team get <team_id> [--limit N]', t('help.cmd.teamGet')],
+    ['vessel team post <team_id> <content...> [--mention <name|id>]', t('help.cmd.teamPost')],
+    ['vessel team members <team_id> add|remove <member>', t('help.cmd.teamMembers')],
     ['vessel errors [--json]', t('help.cmd.errors')],
     ['vessel gateway start [--daemon] [--instance <name>]', t('help.cmd.gatewayStart')],
     ['vessel gateway list [--json]', t('help.cmd.gatewayList')],
@@ -870,6 +874,8 @@ async function runWithConfig(result: BootstrapResult) {
       ...(result.metrics ? { metrics: result.metrics } : {}),
       ...(result.workflows ? { workflows: result.workflows } : {}),
       ...(result.feishu ? { feishu: result.feishu } : {}),
+      // 0.19 S3：canonical teams.* 只在默认 tenant 的 AgentService 存在时注入。
+      ...(result.agent?.team ? { teams: result.agent.team } : {}),
       // 0.5.4 P2-1：非 default tenant 使用自己的 workflow / feishu 实例。
       // 只对工厂已构造 bundle 的 tenant 返回；未配置 / 未启用 → undefined。
       ...(tenantFactory

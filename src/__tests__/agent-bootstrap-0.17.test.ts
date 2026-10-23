@@ -91,6 +91,8 @@ describe('agent bootstrap 0.17', () => {
 
     expect(result.agent).toBeDefined();
     expect(result.agent?.owner.id).toBe('main');
+    expect(result.agent?.team).toBeDefined();
+    expect(await result.agent?.team.list()).toEqual([]);
     const owner = await result.agent?.service.list({ viewer: 'main' });
     expect(owner?.map((member) => member.id)).toContain('main');
 
@@ -191,6 +193,21 @@ describe('agent bootstrap 0.17', () => {
     });
     expect(result.agent).toBeDefined();
     expect(toolNames(result)).toContain('agent');
+  });
+
+  it('agent dispose tears down the team subscription and log chain without throwing', async () => {
+    const { result } = await boot({
+      headless: false,
+      interactive: true,
+      config: 'agent:\n  enabled: true\n',
+    });
+    const agent = result.agent;
+    if (!agent) throw new Error('agent control missing');
+
+    await expect(agent.dispose()).resolves.toBeUndefined();
+    // dispose 后 store 仍可读；再次 dispose 也必须幂等。
+    expect(await agent.team.list()).toEqual([]);
+    await expect(agent.dispose()).resolves.toBeUndefined();
   });
 
   it('shutdown stops the owner endpoint and removes the token file', async () => {

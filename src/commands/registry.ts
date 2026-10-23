@@ -29,6 +29,7 @@ import { migrateCommand } from '../migrate-command';
 import { runPluginCommand } from '../plugin-command';
 import { runResumeList } from '../resume-command';
 import { statusCommand } from '../status-command';
+import { runTeamCommand } from '../team-command';
 import {
   tenantCreateCommand,
   tenantGetCommand,
@@ -295,6 +296,20 @@ export const cliCommands: readonly CliCommand[] = [
       if (command === null) return 1;
       return printCommandResult(
         await runAgentCommand(command, {
+          dataDir: await resolveCommandDataDir(),
+          ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
+        }),
+      );
+    },
+  },
+  {
+    name: 'team',
+    match: (args) => args.teamCommand !== null,
+    run: async (args) => {
+      const command = args.teamCommand;
+      if (command === null) return 1;
+      return printCommandResult(
+        await runTeamCommand(command, {
           dataDir: await resolveCommandDataDir(),
           ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
         }),

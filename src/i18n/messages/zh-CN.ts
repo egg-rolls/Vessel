@@ -78,6 +78,11 @@ export const zhCN = {
   'help.cmd.version': '显示版本',
   'help.cmd.tools': '列出已注册工具（不需要 API Key）',
   'help.cmd.completion': '打印 shell 补全脚本（bash / zsh / fish / powershell）',
+  'help.cmd.team': '团队消息与成员（owner）',
+  'help.cmd.teamList': '列出 Team',
+  'help.cmd.teamGet': '查看 Team 成员与最近消息',
+  'help.cmd.teamPost': '发一条团队消息（无 @ 时只记日志，不唤醒 Agent）',
+  'help.cmd.teamMembers': '添加 / 移除 Team 成员',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──

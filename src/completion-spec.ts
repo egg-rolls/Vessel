@@ -125,6 +125,8 @@ export const DYNAMIC_VALUE_FLAGS: readonly string[] = [
   '--name',
   '--model',
   '--system-prompt',
+  '--workspace',
+  '--mention',
   '--from',
   '--to',
   '--source',
@@ -280,7 +282,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'new',
-        flags: ['--json', '--name', '--model', '--visibility', '--system-prompt'],
+        flags: ['--json', '--name', '--model', '--visibility', '--system-prompt', '--workspace'],
         flagValues: { '--visibility': AGENT_VISIBILITIES },
       },
       { name: 'send', flags: ['--json'] },
@@ -292,6 +294,16 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         flags: ['--json', '--visibility', '--state'],
         flagValues: { '--visibility': AGENT_VISIBILITIES, '--state': AGENT_STATES },
       },
+    ],
+  },
+  {
+    token: 'team',
+    registryName: 'team',
+    subcommands: [
+      { name: 'list', flags: ['--json', '--help'] },
+      { name: 'get', flags: ['--json', '--limit', '--help'] },
+      { name: 'post', flags: ['--json', '--mention', '--help'] },
+      { name: 'members', flags: ['--json', '--help'] },
     ],
   },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },

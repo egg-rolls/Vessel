@@ -57,6 +57,7 @@ describe('parseArgs - 默认与 REPL', () => {
       statusCommand: null,
       agentsCommand: null,
       agentCommand: null,
+      teamCommand: null,
       errorsCommand: null,
       completionCommand: null,
     });
@@ -544,6 +545,112 @@ describe('parseArgs - plugin / doctor（0.6.1）', () => {
     expect(ok(['doctor']).doctorCommand).toEqual({ json: false });
     expect(ok(['doctor', '--json']).doctorCommand).toEqual({ json: true });
     expect(err(['doctor', '--bogus'])).toContain('Unknown argument');
+  });
+});
+
+describe('parseArgs - team (0.19 S3)', () => {
+  it('team 无子命令 / --help 走主帮助', () => {
+    expect(ok(['team']).help).toBe(true);
+    expect(ok(['team', '--help']).help).toBe(true);
+    expect(ok(['team', 'post', '--help']).help).toBe(true);
+    expect(ok(['team', '--help']).teamCommand).toBeNull();
+  });
+
+  it('team list [--json]', () => {
+    expect(ok(['team', 'list']).teamCommand).toEqual({ kind: 'list', json: false });
+    expect(ok(['team', 'list', '--json']).teamCommand).toEqual({ kind: 'list', json: true });
+  });
+
+  it('team get <team_id> [--limit N] [--json]', () => {
+    expect(ok(['team', 'get', 'alpha']).teamCommand).toEqual({
+      kind: 'get',
+      teamId: 'alpha',
+      json: false,
+    });
+    expect(ok(['team', 'get', 'alpha', '--limit', '5', '--json']).teamCommand).toEqual({
+      kind: 'get',
+      teamId: 'alpha',
+      limit: 5,
+      json: true,
+    });
+  });
+
+  it('team post 合并正文并收集多个 --mention', () => {
+    expect(
+      ok(['team', 'post', 'alpha', 'hello', 'team', '--mention', 'a1', '--mention', 'a2'])
+        .teamCommand,
+    ).toEqual({
+      kind: 'post',
+      teamId: 'alpha',
+      content: 'hello team',
+      mentions: ['a1', 'a2'],
+      json: false,
+    });
+    expect(ok(['team', 'post', 'alpha', 'status']).teamCommand).toEqual({
+      kind: 'post',
+      teamId: 'alpha',
+      content: 'status',
+      mentions: [],
+      json: false,
+    });
+  });
+
+  it('team members <team_id> add|remove <member> [--json]', () => {
+    expect(ok(['team', 'members', 'alpha', 'add', 'a1']).teamCommand).toEqual({
+      kind: 'members',
+      teamId: 'alpha',
+      action: 'add',
+      member: 'a1',
+      json: false,
+    });
+    expect(ok(['team', 'members', 'alpha', 'remove', 'a1', '--json']).teamCommand).toEqual({
+      kind: 'members',
+      teamId: 'alpha',
+      action: 'remove',
+      member: 'a1',
+      json: true,
+    });
+  });
+
+  it('team 非法参数报错', () => {
+    expect(err(['team', 'bogus'])).toContain('Unknown team subcommand');
+    expect(err(['team', 'list', '--bogus'])).toContain('Unknown argument');
+    expect(err(['team', 'get'])).toContain('team get requires <team_id>');
+    expect(err(['team', 'get', 'a', 'b'])).toContain('Unknown argument');
+    expect(err(['team', 'get', 'alpha', '--limit', '0'])).toContain('Invalid --limit');
+    expect(err(['team', 'get', 'alpha', '--limit', 'abc'])).toContain('Invalid --limit');
+    expect(err(['team', 'get', 'alpha', '--limit'])).toContain('Missing value for --limit');
+    expect(err(['team', 'post', 'alpha'])).toContain('team post requires');
+    expect(err(['team', 'post', 'alpha', 'hi', '--mention'])).toContain(
+      'Missing value for --mention',
+    );
+    expect(err(['team', 'members', 'alpha', 'add'])).toContain('team members requires');
+    expect(err(['team', 'members', 'alpha', 'bogus', 'a1'])).toContain(
+      'Invalid team members action',
+    );
+    expect(err(['team', 'members', 'alpha', 'add', 'a1', 'extra'])).toContain('Unknown argument');
+  });
+});
+
+describe('parseArgs - agent new workspace (0.19 S3)', () => {
+  it('--workspace 进入 new 变体', () => {
+    expect(ok(['agent', 'new', '--workspace', '/tmp/alpha']).agentCommand).toEqual({
+      kind: 'new',
+      json: false,
+      workspace: '/tmp/alpha',
+    });
+    expect(
+      ok(['agent', 'new', '--name', 'a1', '--workspace', '/tmp/alpha', '--json']).agentCommand,
+    ).toEqual({
+      kind: 'new',
+      json: true,
+      name: 'a1',
+      workspace: '/tmp/alpha',
+    });
+  });
+
+  it('--workspace 缺值报错', () => {
+    expect(err(['agent', 'new', '--workspace'])).toContain('Missing value for --workspace');
   });
 });
 

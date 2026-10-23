@@ -72,6 +72,12 @@ export const EXPECTED_METHODS: Readonly<Record<string, Permission>> = {
   'feishu.status': 'read',
   // 0.12（DECISION-023 §2.3）：热重载，admin-only。
   'gateway.reload': 'admin',
+  // 0.19 S3：本地 Team 控制面。canonical 是复数 `teams.*`；
+  // legacy `team.*`（单数）前缀仍视为 legacy-only，两者无关。
+  'teams.list': 'read',
+  'teams.get': 'read',
+  'teams.post': 'write',
+  'teams.members': 'write',
 };
 
 const LEGACY_PREFIXES = ['team.', 'durable.'] as const;

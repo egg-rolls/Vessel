@@ -1049,9 +1049,13 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 | `evals.run` | write |
 | `feishu.status` | read |
 | `gateway.reload` | admin |
+| `teams.list` | read |
+| `teams.get` | read |
+| `teams.post` | write |
+| `teams.members` | write |
 <!-- rpc-methods:end -->
 
-0.18 起 canonical 方法总数 **45**（44 个 domain 方法 + `events.subscribe`）；0.18 新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
+0.19 S3 起 canonical 方法总数 **49**（48 个 domain 方法 + `events.subscribe`）；0.19 S3 新增 `teams.list` / `teams.get`（`read`）与 `teams.post` / `teams.members`（`write`，`add|remove`），由结构化 `TeamControlLike` 注入，未注入时返回 `not_found`；canonical 是复数 `teams.*`，与 legacy `team.*`（单数前缀）无关。0.18 新增只读 `interactions.list`（`read`，tenant 作用域，返回 pending / answered / orphaned 权限与内存 pending ask）。0.15 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（0.14 时为 40；0.15 起为 44）。
 
 - **legacy-only（不进 manifest）**：`team.*`、`durable.*`、WS `run.submit|get|cancel`。
 - **HTTP 语义**：信封合法时方法成功或方法级失败都返回 200（失败体 `ok:false`）；400 `invalid_params`（旧路径 `invalid_request`）；401 `unauthorized`；403 `forbidden`；413 体过大；未知方法 200 `not_found`（`details.method`）；500 `internal`。旧 REST 适配器保留 0.4 路径、请求/响应体、状态码与错误码。

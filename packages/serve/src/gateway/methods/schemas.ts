@@ -439,3 +439,107 @@ export const workflowDetailSchema = {
     steps: { type: 'array', items: workflowStepSchema },
   },
 };
+
+// ── 0.19 S3：本地 Team 控制面（canonical teams.*） ──
+// 未列入 required 的字段（name / team_id / handoff_path / system_event）都是可选的。
+
+/** teams.list / teams.get 的 `team`（TeamSummary）。 */
+export const teamSummarySchema = {
+  type: 'object',
+  required: ['team_id', 'name', 'tenant_id', 'workspace', 'member_count', 'created_at'],
+  properties: {
+    team_id: { type: 'string' },
+    name: { type: 'string' },
+    tenant_id: { type: 'string' },
+    workspace: { type: 'string' },
+    handoff_path: { type: 'string' },
+    policy: { type: 'object' },
+    member_count: { type: 'integer', minimum: 0 },
+    created_at: { type: 'number' },
+  },
+};
+
+/** teams.get 的 roster 条目（TeamMemberSummary）；name 可缺失。 */
+export const teamMemberSchema = {
+  type: 'object',
+  required: ['agent_id', 'session_id', 'membership', 'presence', 'visibility', 'state', 'epoch'],
+  properties: {
+    agent_id: { type: 'string' },
+    name: { type: 'string' },
+    session_id: { type: 'string' },
+    team_id: { type: 'string' },
+    membership: { type: 'string', enum: ['present', 'left'] },
+    presence: { type: 'string', enum: ['live', 'gone'] },
+    visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
+    state: { type: 'string' },
+    epoch: { type: 'integer', minimum: 0 },
+  },
+};
+
+/** teams.get 的最近消息（TeamLogEntry）。 */
+export const teamMessageSchema = {
+  type: 'object',
+  required: ['message_id', 'team_id', 'from', 'to', 'mentions', 'content', 'ts', 'kind'],
+  properties: {
+    message_id: { type: 'string' },
+    team_id: { type: 'string' },
+    from: { type: 'string' },
+    to: stringListSchema,
+    mentions: stringListSchema,
+    content: { type: 'string' },
+    ts: { type: 'number' },
+    kind: { type: 'string', enum: ['post', 'mention', 'system'] },
+    system_event: { type: 'string', enum: ['join', 'leave', 'rotate', 'archive'] },
+  },
+};
+
+/** teams.post 的逐条投递结果（TeamDelivery）。 */
+export const teamDeliverySchema = {
+  type: 'object',
+  required: ['agent_id', 'status'],
+  properties: {
+    agent_id: { type: 'string' },
+    status: { type: 'string', enum: ['queued', 'rejected', 'error'] },
+    message_id: { type: 'string' },
+    resolution: { type: 'string', enum: ['live', 'resumed', 'rotating'] },
+    code: { type: 'string' },
+    reason: { type: 'string' },
+  },
+};
+
+/** teams.post 结果（TeamPostResult）。 */
+export const teamPostResultSchema = {
+  type: 'object',
+  required: ['message_id', 'team_id', 'kind', 'mentions', 'delivered', 'ts'],
+  properties: {
+    message_id: { type: 'string' },
+    team_id: { type: 'string' },
+    kind: { type: 'string', enum: ['post', 'mention', 'system'] },
+    mentions: stringListSchema,
+    delivered: { type: 'array', items: teamDeliverySchema },
+    ts: { type: 'number' },
+  },
+};
+
+/** teams.members 结果（TeamMembersResult）。 */
+export const teamMembersResultSchema = {
+  type: 'object',
+  required: ['team_id', 'action', 'agent_id', 'membership'],
+  properties: {
+    team_id: { type: 'string' },
+    action: { type: 'string', enum: ['add', 'remove'] },
+    agent_id: { type: 'string' },
+    membership: { type: 'string', enum: ['present', 'left'] },
+  },
+};
+
+/** teams.get 结果（TeamDetail）。 */
+export const teamDetailSchema = {
+  type: 'object',
+  required: ['team', 'members', 'messages'],
+  properties: {
+    team: teamSummarySchema,
+    members: { type: 'array', items: teamMemberSchema },
+    messages: { type: 'array', items: teamMessageSchema },
+  },
+};

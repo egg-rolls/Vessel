@@ -66,3 +66,17 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
 - **strict `send` 仍未切换**：S2 的 `agent` 工具 `send` 仍走 strict send；切到 dispatch 留到 S3。
 - **`agent.stale` 未删除**：S2 仍只在快照加载时发布，删除留到后续切片。
 - **修正**：上文入口段落写的 CLI `vessel agent dispatch ... [--from]` 中 `--from` 从未实现；CLI 只接受 `--json`，`from` 固定为 owner。
+
+## Addendum（0.19 S3，Team 基础）
+
+> 0.19 S3 实现了 Team。以下只说明 S3 之后的当前事实；方向裁决见个人侧 DECISION-035。
+
+- **canonical RPC 45 → 49**：新增 `teams.list` / `teams.get`（read）与 `teams.post` / `teams.members`（write，`action: add|remove`）。serve 通过结构化 `TeamControlLike` 注入，不依赖 `@vessel-agent/agent`；未注入时 4 个方法仍在 manifest，handler 返回 `not_found`。tenant 作用域沿用 `resolveTenantScope`。
+- **Team 存储**：`<dataDir>/teams/<tenant>/<team_id>/team.json`（`atomicWrite` 0600）与 `log.ndjson`（串行只追加、有界读、坏行跳过；不是队列）。`team_id` = workspace 目录名 slug，创建后不可变；同 slug 不同 workspace 追加 hash 后缀。
+- **roster 派生**：Agent 记录 additive 增加 `team_id`；roster = `team_id + membership=present`，不单独持久化。绑定后的 Agent 默认 visibility 为 `team`；unbound 保持 `private`。默认绑定只对带 `name` 的 Agent 生效，且 workspace 须精确匹配配置声明。
+- **只写日志**：无 `@` 的 post 只 append 日志，绝不 dispatch / pump；`@` 用结构化 agent id，先写日志再逐条 dispatch；日志写失败不产生任何 run。成员 `send` 同 Team 时先写 `kind:'mention'` 日志，跨 Team / 无 Team 直接 dispatch 不写日志。
+- **系统消息**：`agent.spawned` / `agent.rejoined` → join，`agent.closed` → leave（roster remove 标记为 archive），`agent.rotated` → rotate；只写 `team_id` 非空 Agent 的日志，不 dispatch。
+- **生命周期**：`teams.members remove` 复用 `close`（membership left、dispose 当前 Body、保留 session / `body_history`）；`add` 调用 `reinstate`，保留 current_body / body_history、不 spawn，`presence='gone'`，下一次 dispatch 才 resume。
+- **`reinstate` 是第二条人力 `left → present` 路径**（与 `attachOwner` 并列）：只由 roster add 调用；`closed → idle` 不得走普通 `setState`（转移表 `closed: []`），使用专用路径并注释；engine 不得复活成员。
+- **成员 `agent` 工具**：动作从 `rotate` 扩为 `rotate|post|send|list`；`send` 走统一 `dispatch`（成员 `from` = 调用者 agent id，name 只在同 Team roster 内解析），`post` 永不 dispatch，`new` / `close` 仍只给 owner。owner 的 `send` 也切到 dispatch；strict `service.send` 保留给 owner 端点 / CLI。
+- **未实现**：fork、自动 archive、budget / `conversation_id`、hub、Web、跨节点、权限审批人、Team rename / delete / Agent 跨 Team 迁移；legacy `/v1/team/*` 保持无生产装配，且与 canonical `teams.*` 无关。

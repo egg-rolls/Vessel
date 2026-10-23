@@ -95,6 +95,7 @@ function methodParams(command: AgentCommand): {
         ...(command.model !== undefined ? { model: command.model } : {}),
         ...(command.visibility !== undefined ? { visibility: command.visibility } : {}),
         ...(command.systemPrompt !== undefined ? { system_prompt: command.systemPrompt } : {}),
+        ...(command.workspace !== undefined ? { workspace: command.workspace } : {}),
       },
     };
   }

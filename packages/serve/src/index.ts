@@ -125,6 +125,16 @@ export {
   type WireAgentStatus,
   type WirePeerInfo,
 } from './team.js';
+export type {
+  TeamControlLike,
+  TeamDeliveryLike,
+  TeamDetailLike,
+  TeamMemberLike,
+  TeamMembersResultLike,
+  TeamMessageLike,
+  TeamPostResultLike,
+  TeamSummaryLike,
+} from './team-control.js';
 export {
   type ConfigGatewayOptionsLike,
   type ConfigSnapshotLike,

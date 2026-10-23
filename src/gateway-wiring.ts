@@ -6,6 +6,7 @@
  */
 
 import type { VesselConfig } from '../packages/config/src/index';
+import type { TeamControlLike } from '../packages/serve/src/index';
 import type {
   FeishuChannelLike,
   MetricsControlLike,
@@ -35,6 +36,11 @@ export interface GatewayControlPlaneOptions {
   metrics?: MetricsControlLike;
   workflows?: WorkflowEngineLike;
   feishu?: FeishuChannelLike;
+  /**
+   * 0.19 S3：canonical `teams.*` 注入面（结构化接口，serve 不依赖 agent）。
+   * 未提供时方法仍在 manifest 中，handler 返回 not_found。
+   */
+  teams?: TeamControlLike;
   /**
    * 0.5.4 P2-1：按请求 tenant 解析控制面。
    * 仅返回已构造 bundle 的 tenant；未配置 / 未启用时返回 undefined。
@@ -87,6 +93,9 @@ export function buildGatewayControlPlane(
     const feishu = options.feishu;
     controlPlane.feishu = { status: () => feishu.status() };
   }
+
+  // 0.19 S3：`teams.*` 与 legacy `/v1/team/*` 无关；只透传 TeamControlLike。
+  if (options.teams) controlPlane.teams = options.teams;
 
   // 0.5.4 P2-1：per-tenant 控制面；旧 `workflows` / `feishu` 保持 default 行为不变。
   if (options.workflowsFor) controlPlane.workflowsFor = options.workflowsFor;

@@ -12,10 +12,13 @@
 import {
   type AgentMessage,
   type AgentService,
+  type AgentTeamService,
   createAgentService,
   createAgentTool,
   createInProcessMemberRuntime,
+  createTeamService,
   DEFAULT_OWNER,
+  FileTeamStore,
   type InProcessMemberRuntimeOptions,
   type MemberPermissionState,
   type MemberRunnableAgent,
@@ -24,6 +27,8 @@ import {
   type MemberRuntimePort,
   type MemberStatus,
   type MemberTurnResult,
+  type TeamDeclaration,
+  type TeamStore,
 } from '@vessel-agent/agent';
 import type {
   AgentRuntimeOptions,
@@ -77,6 +82,13 @@ export interface AgentServiceWiringOptions {
    * bridge / owner 队列的端到端测试用 fake runtime，不调真实 provider。
    */
   runtimeFactory?: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
+  /** 0.19 S3：全局配置声明的 Team；只补写缺失的 team.json */
+  teamDeclarations?: readonly TeamDeclaration[];
+  /**
+   * 0.19 S3：`new` 未显式传 workspace 时的默认 Team workspace。
+   * 仅当声明与 `agent.cwd` 归一化后精确相等时提供。
+   */
+  defaultWorkspace?: string;
 }
 
 export interface AgentServiceWiring {
@@ -84,6 +96,10 @@ export interface AgentServiceWiring {
   tool: ToolDefinition;
   owner: MemberStatus;
   ownerId: string;
+  /** 0.19 S3：Team 能力层（owner 端点 / gateway 注入 / agent 工具共用） */
+  team: AgentTeamService;
+  /** Team 文件存储；dispose 时需 flush（内部字段） */
+  teamStore: TeamStore;
   /** 父 turn 的 owner 队列注入；关闭时停止 hook（PluginHost 无反注册） */
   injector: AgentOwnerInjector;
 }
@@ -174,6 +190,15 @@ export async function createAgentServiceWiring(
   );
   const runtime = new OwnerAwareMemberRuntime(innerRuntime, ownerId);
 
+  // Team 元数据必须先于 AgentService 就绪：`new` 的 ensure / seed 都经 TeamBinder。
+  const teamStore = new FileTeamStore({
+    dataDir: options.dataDir,
+    tenantId: options.tenantId,
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+  });
+  await teamStore.ready();
+  await teamStore.seed(options.teamDeclarations ?? []);
+
   const service = createAgentService({
     tenantId: options.tenantId,
     dataDir: options.dataDir,
@@ -182,10 +207,20 @@ export async function createAgentServiceWiring(
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
+    ...(options.defaultWorkspace !== undefined
+      ? { defaultWorkspace: options.defaultWorkspace }
+      : {}),
+    teamBinder: teamStore,
     snapshot: { enabled: true },
   });
   serviceRef = service;
   const owner = await service.attachOwner({ id: ownerId, sessionId: options.sessionId });
+  const team = createTeamService({
+    tenantId: options.tenantId,
+    agent: service,
+    store: teamStore,
+    ...(options.logger !== undefined ? { logger: options.logger } : {}),
+  });
 
   // 成员 runtime 复制父 PluginHost 的 hooks；只有父 turn 才能排空 owner 队列。
   const injector = createAgentOwnerInjector({
@@ -205,9 +240,11 @@ export async function createAgentServiceWiring(
 
   return {
     service,
-    tool: createAgentTool(service, { ownerId, ownerSessionId: options.sessionId }),
+    tool: createAgentTool(service, { ownerId, ownerSessionId: options.sessionId, team }),
     owner,
     ownerId,
+    team,
+    teamStore,
     injector,
   };
 }

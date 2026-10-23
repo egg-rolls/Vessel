@@ -82,6 +82,11 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.version': 'print version',
   'help.cmd.tools': 'list registered tools (no API key needed)',
   'help.cmd.completion': 'print a shell completion script (bash / zsh / fish / powershell)',
+  'help.cmd.team': 'team messages and members (owner)',
+  'help.cmd.teamList': 'list teams',
+  'help.cmd.teamGet': 'show team members and recent messages',
+  'help.cmd.teamPost': 'post a team message (without mentions it is logged only)',
+  'help.cmd.teamMembers': 'add or remove a team member',
   'help.cmd.help': 'show this help',
 
   // ── common ──

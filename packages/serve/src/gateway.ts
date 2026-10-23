@@ -80,6 +80,7 @@ import {
 } from './gateway/methods/observability.js';
 import { createRunMethods } from './gateway/methods/runs.js';
 import { createSessionMethods } from './gateway/methods/sessions.js';
+import { createTeamMethods } from './gateway/methods/teams.js';
 import { createTenantMethods } from './gateway/methods/tenants.js';
 import { createWorkflowMethods, parseWorkflowInputs } from './gateway/methods/workflow.js';
 import {
@@ -135,6 +136,7 @@ import {
   toWirePeer,
   type WireAgentStatus,
 } from './team.js';
+import type { TeamControlLike } from './team-control.js';
 import {
   type ConfigGatewayOptionsLike,
   DEFAULT_TENANT_ID,
@@ -266,6 +268,11 @@ export interface GatewayOptions {
   config?: ConfigGatewayOptionsLike;
   /** tenant registry / quota（asm 注入） */
   tenants?: TenantControlLike;
+  /**
+   * 0.19 S3：本地 Team 控制面（app 注入 AgentTeamService）。
+   * 缺省 = `teams.*` 仍进 manifest，但 handler 返回 `not_found`。
+   */
+  teams?: TeamControlLike;
   /** plugins.list 数据源（全局） */
   plugins?: () => Array<{ name: string; enabled: boolean }>;
   /** 0.5 A-6.3：per-tenant plugins.list / capabilities.list；缺省回退 `plugins` */
@@ -1137,6 +1144,8 @@ export function startGateway(opts: GatewayOptions): Gateway {
       queue: () => queue,
       defaultTenantId,
     }),
+    // 0.19 S3：本地 Team 控制面（canonical teams.*；additive，排在表尾）。
+    ...createTeamMethods({ teams: opts.teams }),
   ];
 
   methodTable = defineMethods(rpcMethods);

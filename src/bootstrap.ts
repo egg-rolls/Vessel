@@ -6,7 +6,14 @@
  */
 
 import * as path from 'node:path';
-import type { AgentService, MemberStatus } from '@vessel-agent/agent';
+import {
+  type AgentService,
+  type AgentTeamService,
+  type MemberStatus,
+  normalizeWorkspace,
+  type TeamDeclaration,
+  workspaceKey,
+} from '@vessel-agent/agent';
 import {
   buildConfigSnapshot,
   DEFAULT_CONFIG,
@@ -72,7 +79,7 @@ import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { resolveNodeId } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
-import { resolveWorkflowDefPathSync } from './path-resolution';
+import { resolveAgentCwd, resolveWorkflowDefPathSync } from './path-resolution';
 import {
   addAutoApproveRule,
   listAutoApproveRules,
@@ -237,6 +244,8 @@ export interface BootstrapResult {
    */
   agent?: {
     service: AgentService;
+    /** 0.19 S3：Team 能力层（gateway `teams.*` 与 owner 端点共用） */
+    team: AgentTeamService;
     owner: MemberStatus;
     ownerId: string;
     ownerServer?: AgentOwnerServer;
@@ -809,6 +818,42 @@ async function bootstrapConnect(input: {
 }
 
 /**
+ * 0.19 S3：配置声明 → `new` 的默认 Team workspace。
+ *
+ * 只做**归一化后的精确相等**匹配（不是前缀 / 祖先）；没有 `agent.cwd` 时用进程 cwd。
+ * 0 个命中 → undefined；多个命中 → warning + undefined；恰好 1 个 → 归一化 workspace。
+ */
+export function resolveDefaultTeamWorkspace(
+  config: VesselConfig,
+  declarations: readonly TeamDeclaration[],
+  logger?: Logger,
+): string | undefined {
+  let cwdKey: string;
+  try {
+    cwdKey = workspaceKey(normalizeWorkspace(resolveAgentCwd(config) ?? process.cwd()));
+  } catch (error) {
+    logger?.warn('team.declaration.invalid', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+
+  const matches = declarations.filter((declaration) => {
+    try {
+      return workspaceKey(normalizeWorkspace(declaration.workspace)) === cwdKey;
+    } catch {
+      return false;
+    }
+  });
+  if (matches.length > 1) {
+    logger?.warn('team.declaration.ambiguous_default', { count: matches.length });
+    return undefined;
+  }
+  const match = matches[0];
+  return match === undefined ? undefined : normalizeWorkspace(match.workspace);
+}
+
+/**
  * 引导应用启动
  */
 export async function bootstrap(options: BootstrapOptions = {}): Promise<BootstrapResult> {
@@ -1069,6 +1114,14 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
               agentPlan.termination.maxRuntimeSeconds ?? termination.maxRuntimeSeconds,
           }
         : termination;
+    // 0.19 S3：配置声明（camelCase → TeamDeclaration 的 snake_case）+ 默认 workspace。
+    const teamDeclarations: TeamDeclaration[] = (config.teams ?? []).map((team) => ({
+      ...(team.name !== undefined ? { name: team.name } : {}),
+      workspace: team.workspace,
+      ...(team.handoffPath !== undefined ? { handoff_path: team.handoffPath } : {}),
+      ...(team.policy !== undefined ? { policy: team.policy } : {}),
+    }));
+    const defaultWorkspace = resolveDefaultTeamWorkspace(config, teamDeclarations, logger);
     const wiring = await createAgentServiceWiring({
       tenantId,
       dataDir,
@@ -1092,6 +1145,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       // 成员 Body 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
       session,
       ...(eventLog !== undefined ? { eventLog } : {}),
+      teamDeclarations,
+      ...(defaultWorkspace !== undefined ? { defaultWorkspace } : {}),
     });
     finalPluginHost.registerTool(wiring.tool);
 
@@ -1099,6 +1154,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     try {
       ownerServer = await startAgentOwnerServer({
         service: wiring.service,
+        team: wiring.team,
         dataDir,
         tenantId,
         logger,
@@ -1115,6 +1171,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
 
     agentControl = {
       service: wiring.service,
+      team: wiring.team,
       owner: wiring.owner,
       ownerId: wiring.ownerId,
       ...(ownerServer !== undefined ? { ownerServer } : {}),
@@ -1122,6 +1179,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         // 先停注入，避免关闭过程中父 turn 再排空 owner 队列。
         wiring.injector.dispose();
         await ownerServer?.stop();
+        // Team 退订后再 flush 日志写链，避免关闭期间又追加系统消息。
+        wiring.team.dispose();
+        await wiring.teamStore.flush();
         await wiring.service.flushSnapshot();
       },
     };
