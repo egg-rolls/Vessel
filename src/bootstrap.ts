@@ -1196,6 +1196,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         // Team 退订后再 flush 日志写链，避免关闭期间又追加系统消息。
         wiring.team.dispose();
         await wiring.teamStore.flush();
+        await wiring.conversationStore?.flush();
         await wiring.service.flushSnapshot();
       },
     };

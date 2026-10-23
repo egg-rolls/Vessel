@@ -257,6 +257,70 @@ describe('FileTeamStore.ready', () => {
   });
 });
 
+describe('FileTeamStore.policy', () => {
+  it('parses stored camelCase / snake_case policy into one normalized view', async () => {
+    const dataDir = await tempDir();
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    const team = await store.ensureForWorkspace({
+      workspace: join(dataDir, 'policy', 'alpha'),
+      policy: {
+        permission: { unattended: 'deny-after', deny_after_seconds: 300 },
+        budget: { max_hops: 2, cycle: { max_repeats: 3 } },
+      },
+    });
+
+    expect(store.policy(team.team_id)).toEqual({
+      permission: { unattended: 'deny-after', denyAfterSeconds: 300 },
+      budget: { maxHops: 2, cycle: { maxRepeats: 3 } },
+    });
+    // 只读取，不回写 team.json（原始 snake_case 仍在磁盘上）
+    const raw = await readFile(teamMetadataPath(dataDir, 'default', team.team_id), 'utf8');
+    expect(JSON.parse(raw).policy.budget.max_hops).toBe(2);
+  });
+
+  it('warns and returns undefined for invalid policy while the team stays usable', async () => {
+    const dataDir = await tempDir();
+    const capture = captureLogger();
+    const tenantDir = teamsDirPath(dataDir, 'default');
+    const workspace = join(dataDir, 'bad-policy');
+    await mkdir(join(tenantDir, 'bad-policy'), { recursive: true });
+    await writeFile(
+      join(tenantDir, 'bad-policy', 'team.json'),
+      JSON.stringify({
+        v: 1,
+        team_id: 'bad-policy',
+        name: 'Bad Policy',
+        tenant_id: 'default',
+        workspace,
+        policy: { budget: { maxCost: 10 } },
+        created_at: 1,
+      }),
+    );
+
+    const store = new FileTeamStore({
+      dataDir,
+      tenantId: 'default',
+      durable: false,
+      logger: capture.logger,
+    });
+    await store.ready();
+
+    expect(store.get('bad-policy')?.name).toBe('Bad Policy');
+    expect(store.policy('bad-policy')).toBeUndefined();
+    expect(capture.warnings).toContain('team.policy.invalid');
+    expect(store.list().length).toBe(1);
+
+    const again = await store.ensureForWorkspace({ workspace });
+    expect(again.team_id).toBe('bad-policy');
+  });
+
+  it('returns undefined for an unknown team', async () => {
+    const dataDir = await tempDir();
+    const store = new FileTeamStore({ dataDir, tenantId: 'default', durable: false });
+    expect(store.policy('missing')).toBeUndefined();
+  });
+});
+
 describe('FileTeamStore log', () => {
   it('preserves append order, skips bad and truncated lines, and bounds the limit', async () => {
     const dataDir = await tempDir();

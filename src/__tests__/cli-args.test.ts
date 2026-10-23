@@ -534,6 +534,121 @@ describe('parseArgs - team (0.19 S3)', () => {
   });
 });
 
+describe('parseArgs - team budget (0.19 S4)', () => {
+  it('team budget <team_id> [--conversation <id>] [--json]', () => {
+    expect(ok(['team', 'budget', 'alpha']).teamCommand).toEqual({
+      kind: 'budget-status',
+      teamId: 'alpha',
+      json: false,
+    });
+    expect(
+      ok(['team', 'budget', 'alpha', '--conversation', 'conv_1', '--json']).teamCommand,
+    ).toEqual({
+      kind: 'budget-status',
+      teamId: 'alpha',
+      conversationId: 'conv_1',
+      json: true,
+    });
+  });
+
+  it('team budget override maps --max and unlimited to null', () => {
+    expect(
+      ok([
+        'team',
+        'budget',
+        'override',
+        'alpha',
+        '--conversation',
+        'conv_1',
+        '--dimension',
+        'turns',
+        '--max',
+        '5',
+      ]).teamCommand,
+    ).toEqual({
+      kind: 'budget-override',
+      teamId: 'alpha',
+      conversationId: 'conv_1',
+      dimension: 'turns',
+      max: 5,
+      json: false,
+    });
+    expect(
+      ok([
+        'team',
+        'budget',
+        'override',
+        'alpha',
+        '--conversation',
+        'conv_1',
+        '--dimension',
+        'cycle',
+        '--max',
+        'unlimited',
+        '--json',
+      ]).teamCommand,
+    ).toEqual({
+      kind: 'budget-override',
+      teamId: 'alpha',
+      conversationId: 'conv_1',
+      dimension: 'cycle',
+      max: null,
+      json: true,
+    });
+  });
+
+  it('team budget rejects invalid args', () => {
+    expect(ok(['team', 'budget', '--help']).help).toBe(true);
+    expect(err(['team', 'budget'])).toContain('team budget requires <team_id>');
+    expect(err(['team', 'budget', 'alpha', 'extra'])).toContain('Unknown argument');
+    expect(err(['team', 'budget', 'alpha', '--bogus'])).toContain('Unknown argument');
+    expect(err(['team', 'budget', 'override', 'alpha'])).toContain('requires --conversation <id>');
+    expect(
+      err(['team', 'budget', 'override', 'alpha', '--conversation', 'conv_1', '--max', '5']),
+    ).toContain('requires --dimension <d>');
+    expect(
+      err([
+        'team',
+        'budget',
+        'override',
+        'alpha',
+        '--conversation',
+        'conv_1',
+        '--dimension',
+        'cost',
+        '--max',
+        '5',
+      ]),
+    ).toContain('Invalid --dimension');
+    expect(
+      err([
+        'team',
+        'budget',
+        'override',
+        'alpha',
+        '--conversation',
+        'conv_1',
+        '--dimension',
+        'turns',
+      ]),
+    ).toContain('requires --max <n|unlimited>');
+    expect(
+      err([
+        'team',
+        'budget',
+        'override',
+        'alpha',
+        '--conversation',
+        'conv_1',
+        '--dimension',
+        'turns',
+        '--max',
+        'abc',
+      ]),
+    ).toContain('Invalid --max');
+  });
+});
+
 describe('parseArgs - agent new workspace (0.19 S3)', () => {
   it('--workspace 进入 new 变体', () => {
     expect(ok(['agent', 'new', '--workspace', '/tmp/alpha']).agentCommand).toEqual({

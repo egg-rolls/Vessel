@@ -168,7 +168,10 @@ export type AgentCommand =
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
 
-/** `vessel team ...` 子命令（0.19 S3；owner 私有端点） */
+/** 预算维度（与 `teams.budget` 契约一致） */
+export type TeamBudgetDimension = 'hops' | 'turns' | 'tokens' | 'wall_clock' | 'cycle';
+
+/** `vessel team ...` 子命令（0.19 S3；S4 增加 budget） */
 export type TeamCommand =
   | { kind: 'list'; json: boolean }
   | { kind: 'get'; teamId: string; limit?: number; json: boolean }
@@ -178,6 +181,15 @@ export type TeamCommand =
       teamId: string;
       action: 'add' | 'remove';
       member: string;
+      json: boolean;
+    }
+  | { kind: 'budget-status'; teamId: string; conversationId?: string; json: boolean }
+  | {
+      kind: 'budget-override';
+      teamId: string;
+      conversationId: string;
+      dimension: TeamBudgetDimension;
+      max: number | null;
       json: boolean;
     };
 
@@ -2045,8 +2057,118 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: false, error: `Unknown agent subcommand: ${sub}` };
 }
 
+/** `team budget [override] <team_id> ...`（0.19 S4） */
+function parseTeamBudget(tail: string[], args: CliArgs): ParseResult {
+  const isOverride = tail[0] === 'override';
+  const tokens = isOverride ? tail.slice(1) : tail;
+  const errorPrefix = isOverride ? 'team budget override' : 'team budget';
+  let json = false;
+  let conversationId: string | undefined;
+  let dimension: TeamBudgetDimension | undefined;
+  let max: number | null | undefined;
+  let maxSeen = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < tokens.length; i++) {
+    const a = tokens[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--conversation') {
+      const value = readFlagValue(tokens, i, '--conversation');
+      if (!value.ok) return value;
+      conversationId = value.value;
+      i = value.next;
+      continue;
+    }
+    if (isOverride && a === '--dimension') {
+      const value = readFlagValue(tokens, i, '--dimension');
+      if (!value.ok) return value;
+      if (
+        value.value !== 'hops' &&
+        value.value !== 'turns' &&
+        value.value !== 'tokens' &&
+        value.value !== 'wall_clock' &&
+        value.value !== 'cycle'
+      ) {
+        return {
+          ok: false,
+          error: `Invalid --dimension: ${value.value} (expected hops|turns|tokens|wall_clock|cycle)`,
+        };
+      }
+      dimension = value.value;
+      i = value.next;
+      continue;
+    }
+    if (isOverride && a === '--max') {
+      const value = readFlagValue(tokens, i, '--max');
+      if (!value.ok) return value;
+      if (value.value === 'unlimited') {
+        max = null;
+      } else if (/^\d+$/.test(value.value)) {
+        max = Number.parseInt(value.value, 10);
+      } else {
+        return {
+          ok: false,
+          error: `Invalid --max: ${value.value} (expected a non-negative integer or unlimited)`,
+        };
+      }
+      maxSeen = true;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for ${errorPrefix}: ${a}` };
+    }
+    positional.push(a);
+  }
+
+  if (args.help) return { ok: true, args };
+  const [teamId, extra] = positional;
+  if (teamId === undefined || teamId === '') {
+    return { ok: false, error: `${errorPrefix} requires <team_id>` };
+  }
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for ${errorPrefix}: ${extra}` };
+  }
+
+  if (!isOverride) {
+    args.teamCommand = {
+      kind: 'budget-status',
+      teamId,
+      ...(conversationId !== undefined ? { conversationId } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
+  if (conversationId === undefined) {
+    return { ok: false, error: 'team budget override requires --conversation <id>' };
+  }
+  if (dimension === undefined) {
+    return { ok: false, error: 'team budget override requires --dimension <d>' };
+  }
+  if (!maxSeen) {
+    return { ok: false, error: 'team budget override requires --max <n|unlimited>' };
+  }
+  args.teamCommand = {
+    kind: 'budget-override',
+    teamId,
+    conversationId,
+    dimension,
+    max: max ?? null,
+    json,
+  };
+  return { ok: true, args };
+}
+
 /**
- * `team list|get|post|members`（0.19 S3）。
+ * `team list|get|post|members|budget`（0.19 S3 / S4）。
  * 只做语法；workspace / roster 解析在 `src/team-command.ts`。
  */
 function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
@@ -2193,6 +2315,10 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
     }
     args.teamCommand = { kind: 'members', teamId, action, member, json };
     return { ok: true, args };
+  }
+
+  if (sub === 'budget') {
+    return parseTeamBudget(tail, args);
   }
 
   return { ok: false, error: `Unknown team subcommand: ${sub}` };

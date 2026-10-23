@@ -35,7 +35,7 @@ export interface InteractionSources {
   readonly interactionRecords: ReadonlyMap<string, StoredInteraction>;
   /** 内存 pending 权限索引；记录缺失时兜底补齐（正常情况下记录必然存在）。 */
   readonly pendingPermissions: ReadonlyMap<string, PendingPermission>;
-  /** 内存 pending ask；ask 不持久化，重启后消失。 */
+  /** legacy pending ask 读取面；0.19 S4 起运行时由 interactionRecords 派生。 */
   readonly pendingAsks: ReadonlyMap<string, PendingAsk>;
 }
 
@@ -46,8 +46,14 @@ export interface InteractionMethodsDeps {
     remember: boolean,
     tenantId?: string,
     scope?: PermissionScope,
+    actor?: { answered_by: 'human' | 'policy'; answered_via?: 'tui' | 'rpc' | 'policy' },
   ): PermissionRespondResult;
-  respondAsk(requestId: string, answers: unknown[], tenantId?: string): void;
+  respondAsk(
+    requestId: string,
+    answers: unknown[],
+    tenantId?: string,
+    actor?: { answered_by: 'human' | 'policy'; answered_via?: 'tui' | 'rpc' | 'policy' },
+  ): unknown;
   interactions: InteractionSources;
   /**
    * S5：control token 的 session → team 归属映射。
@@ -61,6 +67,8 @@ export interface ListedInteraction {
   kind: 'permission' | 'ask';
   request_id: string;
   run_id: string;
+  agent_id?: string;
+  team_id?: string;
   session_id?: string;
   /** 成员 bridge 请求的父会话（additive，缺失时不输出该 key）。 */
   parent_session_id?: string;
@@ -89,6 +97,8 @@ const interactionItemSchema = {
     kind: { type: 'string', enum: ['permission', 'ask'] },
     request_id: { type: 'string' },
     run_id: { type: 'string' },
+    agent_id: { type: 'string' },
+    team_id: { type: 'string' },
     session_id: { type: 'string' },
     parent_session_id: { type: 'string' },
     tool_call_id: { type: 'string' },
@@ -100,11 +110,16 @@ const interactionItemSchema = {
     status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
     answer: {
       type: 'object',
-      required: ['decision', 'scope', 'answered_at'],
+      required: ['answered_at'],
       properties: {
         decision: { type: 'string', enum: ['allow', 'deny'] },
         scope: { type: 'string', enum: ['once', 'session', 'always'] },
+        answers: { type: 'array' },
         answered_at: { type: 'number' },
+        answered_by: { type: 'string', enum: ['human', 'policy'] },
+        answered_via: { type: 'string', enum: ['tui', 'rpc', 'policy'] },
+        policy: { type: 'string', enum: ['deny_after', 'auto_allow'] },
+        latency_ms: { type: 'number' },
       },
     },
   },
@@ -120,17 +135,20 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
   const merged = new Map<string, ListedInteraction>();
   for (const record of sources.interactionRecords.values()) {
     if (record.tenant_id !== tenantId) continue;
+    const kind = record.kind ?? 'permission';
     merged.set(record.requestId, {
-      kind: 'permission',
+      kind,
       request_id: record.requestId,
       run_id: record.run_id,
+      ...(record.agent_id !== undefined ? { agent_id: record.agent_id } : {}),
+      ...(record.team_id !== undefined ? { team_id: record.team_id } : {}),
       ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
       ...(record.parent_session_id !== undefined
         ? { parent_session_id: record.parent_session_id }
         : {}),
       ...(record.tool_call_id !== undefined ? { tool_call_id: record.tool_call_id } : {}),
       tool: record.tool,
-      input: record.input,
+      ...(kind === 'ask' ? { questions: record.input } : { input: record.input }),
       created_at: record.created_at,
       status: record.status,
       ...(record.answer !== undefined ? { answer: record.answer } : {}),
@@ -199,16 +217,28 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
     return undefined;
   }
 
+  /** 请求的 team 归属：记录自描述优先，缺失才回退 session 映射。 */
+  function teamIdForRequest(requestId: string): string | undefined {
+    const record = interactions.interactionRecords.get(requestId);
+    if (record?.team_id !== undefined) return record.team_id;
+    const sessionId = sessionForRequest(requestId);
+    return sessionId === undefined ? undefined : teamScope?.teamForSession(sessionId);
+  }
+
+  /** 单个 item 的 team 归属：team_id 优先，缺失回退 session 映射。 */
+  function itemTeamId(item: ListedInteraction): string | undefined {
+    if (item.team_id !== undefined) return item.team_id;
+    return item.session_id === undefined ? undefined : teamScope?.teamForSession(item.session_id);
+  }
+
   /**
    * team-scoped control token 的请求归属检查。
-   * 找不到记录 / 无 session / 映射不可用 / 不属于该 team 一律 `forbidden`，
+   * 找不到记录 / 无 team 归属 / 不属于该 team 一律 `forbidden`，
    * 不区分 `not_found`，避免泄漏请求存在性。
    */
   function assertTeamAccess(requestId: string, principal: RpcMethodContext['principal']): void {
     if (!isTeamScopedPrincipal(principal)) return;
-    const sessionId = sessionForRequest(requestId);
-    const team = sessionId === undefined ? undefined : teamScope?.teamForSession(sessionId);
-    if (team === undefined || team !== principal.team_id) {
+    if (teamIdForRequest(requestId) !== principal.team_id) {
       throw new RpcError('forbidden', 'Request is not accessible to this team');
     }
   }
@@ -238,6 +268,10 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           decision: { type: 'string', enum: ['allow', 'deny'] },
           scope: { type: 'string', enum: ['once', 'session', 'always'] },
           duplicate: { type: 'boolean' },
+          answered_by: { type: 'string', enum: ['human', 'policy'] },
+          answered_via: { type: 'string', enum: ['tui', 'rpc', 'policy'] },
+          latency_ms: { type: 'number' },
+          team_id: { type: 'string' },
         },
       },
       handler: (params, ctx) => {
@@ -260,6 +294,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
           params.remember === true,
           ctx.tenantId,
           rawScope as PermissionScope | undefined,
+          { answered_by: 'human', answered_via: 'rpc' },
         );
       },
     },
@@ -278,7 +313,14 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
       result_schema: {
         type: 'object',
         required: ['ok'],
-        properties: { ok: { type: 'boolean' } },
+        properties: {
+          ok: { type: 'boolean' },
+          duplicate: { type: 'boolean' },
+          answered_by: { type: 'string', enum: ['human', 'policy'] },
+          answered_via: { type: 'string', enum: ['tui', 'rpc', 'policy'] },
+          latency_ms: { type: 'number' },
+          team_id: { type: 'string' },
+        },
       },
       handler: (params, ctx) => {
         const answers = params.answers;
@@ -287,8 +329,10 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         }
         const requestId = stringParam(params, 'request_id');
         assertTeamAccess(requestId, ctx.principal);
-        respondAsk(requestId, answers, ctx.tenantId);
-        return { ok: true };
+        return respondAsk(requestId, answers, ctx.tenantId, {
+          answered_by: 'human',
+          answered_via: 'rpc',
+        });
       },
     },
     {
@@ -299,6 +343,7 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
         properties: {
           session_id: { type: 'string' },
           run_id: { type: 'string' },
+          team_id: { type: 'string' },
           status: { type: 'string', enum: ['pending', 'answered', 'orphaned'] },
           limit: { type: 'integer', minimum: 1, maximum: MAX_LIST_LIMIT },
           tenant_id: { type: 'string' },
@@ -335,14 +380,17 @@ export function createInteractionMethods(deps: InteractionMethodsDeps): RpcMetho
             (sessionId === undefined || item.session_id === sessionId) &&
             (runId === undefined || item.run_id === runId),
         );
-        if (isTeamScopedPrincipal(ctx.principal)) {
-          // 映射缺失 / 无法判定 → 空列表（fail-closed）。
-          const teamId = ctx.principal.team_id;
-          items = items.filter(
-            (item) =>
-              item.session_id !== undefined &&
-              teamScope?.teamForSession(item.session_id) === teamId,
-          );
+        // team-scoped token 强制自己的 team；普通 token 按参数过滤。
+        // 归属判定 team_id 优先，缺失才回退 session 映射（无法判定 → 过滤掉）。
+        const requestedTeam =
+          typeof params.team_id === 'string' && params.team_id.length > 0
+            ? params.team_id
+            : undefined;
+        const teamFilter = isTeamScopedPrincipal(ctx.principal)
+          ? ctx.principal.team_id
+          : requestedTeam;
+        if (teamFilter !== undefined) {
+          items = items.filter((item) => itemTeamId(item) === teamFilter);
         }
         // 最新在前；同时间戳按 request_id 稳定排序。
         items.sort((a, b) =>

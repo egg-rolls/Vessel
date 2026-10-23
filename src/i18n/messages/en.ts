@@ -82,6 +82,8 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.teamGet': 'show team members and recent messages',
   'help.cmd.teamPost': 'post a team message (without mentions it is logged only)',
   'help.cmd.teamMembers': 'add or remove a team member',
+  'help.cmd.teamBudget': 'show conversation budget and blocked state',
+  'help.cmd.teamBudgetOverride': 'raise or clear the budget limit of one conversation',
   'help.cmd.help': 'show this help',
 
   // ── common ──

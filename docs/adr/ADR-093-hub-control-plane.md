@@ -43,6 +43,7 @@ tags: [hub, control-plane, directory, pairing, scoped-token, secret-store]
 > S5 合并进 `0.19-integration` 后的当前事实；只追加，不改写上面的 S5 结论。
 
 - **canonical 最终计数为 47**：0.18 移除 workflow（ADR-090）后基数为 40；S3 `teams.*`（+4）与 S5 `auth.*`（+3）合并后为 47。上文第 11 条的“本分支 48”是 S5 分支上的中间计数，“最终 52”在 0.18 合并后不再成立。
+- **S4 后 canonical 为 48**：0.19 S4 新增 `teams.budget`（`write`，`status|override`，不进 control scope）。本 Addendum 第一条的“最终计数为 47”是 S4 合并前的计数。
 - **control scope 白名单包含 `teams.post`**：`control` token 映射 `write`，允许 `teams.list` / `teams.get` / `teams.post` 与 events / interactions / permission / ask 白名单；`teams.members` 不在 control 白名单。上文第 4 条“teams 只读”应收窄为“teams 读 + post”，且 team 收窄仍只在节点侧执行。
 - **`SecretStore` 文件回退不自动启用**：Windows DPAPI / macOS Keychain / Linux libsecret 不可用时，只有 `hub.allow_file_secrets: true` 才退到 AES-256-GCM 文件适配器；否则 fail-closed（`secret_store_unavailable`）。上文第 5 条“不可用时才退到文件适配器”需以该显式开关为准。
 - **`POST /v1/hub/data-token` 与 `vessel hub data-token` 已实现**：hub 用该 pairing 的 `exchange` token 向节点换短期 `control` token 并只返回给调用方；hub 不持久化短期 token。浏览器端（sessionStorage / Web 消费）仍未实现；Web 当前直连节点，不消费 hub 目录或 data token。

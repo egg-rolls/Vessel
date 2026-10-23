@@ -335,6 +335,118 @@ describe('TeamService.send / listForCaller', () => {
   });
 });
 
+describe('TeamService conversation propagation', () => {
+  it('generates one conversation per post, shared by every mention and the log', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'a', name: 'a', team_id: 'alpha' }),
+        makeMember({ id: 'b', name: 'b', team_id: 'alpha' }),
+      ],
+    });
+
+    const result = await service.post({
+      team_id: 'alpha',
+      content: 'go',
+      mentions: ['a', 'b'],
+      from: 'main',
+    });
+
+    expect(result.conversation_id).toMatch(/^conv_/);
+    expect(agent.dispatches.map((dispatch) => dispatch.conversation_id)).toEqual([
+      result.conversation_id,
+      result.conversation_id,
+    ]);
+    expect(store.logs[0]?.conversation_id).toBe(result.conversation_id);
+  });
+
+  it('member send inherits the caller current conversation and logs it', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'a', name: 'alice', team_id: 'alpha', session_id: 'session-a' }),
+        makeMember({ id: 'b', name: 'bob', team_id: 'alpha', session_id: 'session-b' }),
+      ],
+    });
+    agent.currentConversations.set('a', 'conv_running');
+
+    const sent = await service.send({
+      from_session_id: 'session-a',
+      to: 'bob',
+      content: 'hi bob',
+    });
+
+    expect(sent.status).toBe('queued');
+    expect(sent.conversation_id).toBe('conv_running');
+    expect(agent.dispatches[0]?.conversation_id).toBe('conv_running');
+    expect(store.logs[0]?.conversation_id).toBe('conv_running');
+  });
+
+  it('budget override writes a system log entry and never dispatches', async () => {
+    const { service, agent, store } = makeTeamHarness({
+      members: [makeMember({ id: 'a', team_id: 'alpha' })],
+    });
+    agent.budgetImpl = async (input) => {
+      const override = input as {
+        conversation_id: string;
+        dimension: 'turns';
+        via: 'cli';
+        max: number;
+      };
+      return {
+        action: 'override',
+        team_id: 'alpha',
+        conversation_id: override.conversation_id,
+        dimension: override.dimension,
+        previous_max: null,
+        max: override.max,
+        status: {
+          conversation_id: override.conversation_id,
+          team_id: 'alpha',
+          created_at: 1,
+          last_activity: 2,
+          hops: 1,
+          turns: 1,
+          total_tokens: 0,
+          wall_clock_ms: 1,
+          edges: [],
+          overrides: {},
+        },
+      };
+    };
+
+    const result = await service.budget({
+      team_id: 'alpha',
+      conversation_id: 'conv_budget',
+      dimension: 'turns',
+      max: 5,
+      via: 'cli',
+    });
+
+    expect(result.action).toBe('override');
+    expect(agent.dispatches).toHaveLength(0);
+    const entry = store.logs.find((log) => log.system_event === 'budget_override');
+    expect(entry).toMatchObject({
+      kind: 'system',
+      from: 'human',
+      to: [],
+      mentions: [],
+      conversation_id: 'conv_budget',
+      content: 'budget override conv_budget turns null -> 5',
+    });
+  });
+
+  it('budget status for an unknown conversation is not_found', async () => {
+    const { service, agent } = makeTeamHarness();
+    agent.budgetImpl = async () => ({
+      action: 'status',
+      team_id: 'alpha',
+      conversations: [],
+    });
+    await expect(
+      service.budget({ team_id: 'alpha', conversation_id: 'conv_missing' }),
+    ).rejects.toMatchObject({ code: 'team_conversation_not_found' });
+  });
+});
+
 describe('TeamService log write failure', () => {
   it('fails post and send with zero dispatch calls when appendLog throws', async () => {
     const { service, agent, store } = makeTeamHarness({

@@ -12,6 +12,7 @@ import {
   type TeamRecord,
   type TeamStore,
 } from '@vessel-agent/agent';
+import type { TeamPolicy } from '@vessel-agent/config';
 import {
   HUB_MAX_AGENTS,
   HUB_MAX_TEAMS,
@@ -326,6 +327,9 @@ describe('createHubControl with a real TeamService', () => {
       async seed() {},
       get(teamId: string) {
         return teamId === 'alpha' ? record : undefined;
+      },
+      policy(teamId: string): TeamPolicy | undefined {
+        return teamId === 'alpha' ? (record.policy as TeamPolicy) : undefined;
       },
       list() {
         return [record];

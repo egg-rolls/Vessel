@@ -6,6 +6,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { DEFAULT_TRANSPORT_OPTIONS } from './defaults.js';
+import { validateTeamPolicy } from './team-policy.js';
 import type {
   ConfigValidationError,
   ConfigValidationResult,
@@ -206,12 +207,22 @@ function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
         value: team.handoffPath,
       });
     }
-    if (team.policy !== undefined && !isPlainObject(team.policy)) {
-      errors.push({
-        path: `${prefix}.policy`,
-        message: 'team policy must be an object',
-        value: team.policy,
-      });
+    if (team.policy !== undefined) {
+      if (!isPlainObject(team.policy)) {
+        errors.push({
+          path: `${prefix}.policy`,
+          message: 'team policy must be an object',
+          value: team.policy,
+        });
+      } else {
+        for (const issue of validateTeamPolicy(team.policy)) {
+          errors.push({
+            path:
+              issue.field === undefined ? `${prefix}.policy` : `${prefix}.policy.${issue.field}`,
+            message: issue.message,
+          });
+        }
+      }
     }
   });
 }

@@ -453,7 +453,7 @@ describe('interactions.list', () => {
     });
   });
 
-  it('lists pending ask requests from memory with their questions', async () => {
+  it('lists pending asks and keeps answered asks with their answers', async () => {
     const events = new MemoryEventStream();
     const pluginHost = new MemoryPluginHost();
     pluginHost.registerTool({
@@ -507,10 +507,20 @@ describe('interactions.list', () => {
     });
     await client.nextEvent('run.completed');
 
-    // ask 不持久化：应答后不再出现在列表里（只有权限记录保留 answered）。
+    // 0.19 S4：ask 与权限共享持久化生命周期；应答后保留 answered 与回答。
     const after = (await client.request('interactions.list', {})) as {
       interactions: ListedInteraction[];
     };
-    expect(after.interactions.filter((item) => item.kind === 'ask')).toEqual([]);
+    const answered = after.interactions.filter((item) => item.kind === 'ask');
+    expect(answered).toHaveLength(1);
+    expect(answered[0]).toMatchObject({
+      request_id: request.requestId as string,
+      status: 'answered',
+      answer: {
+        answered_by: 'human',
+        answered_via: 'rpc',
+        answers: [{ header: 'Q', question: 'value?', answer: '42' }],
+      },
+    });
   });
 });

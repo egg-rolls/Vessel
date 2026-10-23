@@ -15,11 +15,23 @@ import { atomicWrite } from '@vessel-agent/core';
 /** 持久化状态；`orphaned` = run 已终止/进程重启后找不到 run。 */
 export type StoredInteractionStatus = 'pending' | 'answered' | 'orphaned';
 
-/** 已应答结果（幂等重放）。 */
+/** 交互类别；旧文件没有该字段时读成 `permission`。 */
+export type StoredInteractionKind = 'permission' | 'ask';
+
+/** 已应答结果（幂等重放）；`answered_at` 是唯一通用必填字段。 */
 export interface StoredInteractionAnswer {
-  decision: 'allow' | 'deny';
-  scope: 'once' | 'session' | 'always';
+  /** permission 专用 */
+  decision?: 'allow' | 'deny';
+  /** permission 专用 */
+  scope?: 'once' | 'session' | 'always';
+  /** ask 专用 */
+  answers?: unknown[];
   answered_at: number;
+  answered_by?: 'human' | 'policy';
+  answered_via?: 'tui' | 'rpc' | 'policy';
+  /** policy 专用：deny_after | auto_allow */
+  policy?: 'deny_after' | 'auto_allow';
+  latency_ms?: number;
 }
 
 /** 单条持久化交互记录。 */
@@ -27,6 +39,9 @@ export interface StoredInteraction {
   requestId: string;
   run_id: string;
   tenant_id: string;
+  kind?: StoredInteractionKind;
+  agent_id?: string;
+  team_id?: string;
   session_id?: string;
   /** 成员 bridge 请求的父会话（additive；旧文件缺失时继续可读）。 */
   parent_session_id?: string;
@@ -46,12 +61,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function parseAnswer(value: unknown): StoredInteractionAnswer | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.answered_at !== 'number' || !Number.isFinite(value.answered_at)) {
+    return undefined;
+  }
+  const answer: StoredInteractionAnswer = { answered_at: value.answered_at };
+  if (value.decision === 'allow' || value.decision === 'deny') answer.decision = value.decision;
+  if (value.scope === 'once' || value.scope === 'session' || value.scope === 'always') {
+    answer.scope = value.scope;
+  }
+  if (Array.isArray(value.answers)) answer.answers = value.answers;
+  if (value.answered_by === 'human' || value.answered_by === 'policy') {
+    answer.answered_by = value.answered_by;
+  }
+  if (
+    value.answered_via === 'tui' ||
+    value.answered_via === 'rpc' ||
+    value.answered_via === 'policy'
+  ) {
+    answer.answered_via = value.answered_via;
+  }
+  if (value.policy === 'deny_after' || value.policy === 'auto_allow') answer.policy = value.policy;
+  if (typeof value.latency_ms === 'number' && Number.isFinite(value.latency_ms)) {
+    answer.latency_ms = value.latency_ms;
+  }
+  return answer;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 function parseRecord(value: unknown): StoredInteraction | null {
   if (!isRecord(value)) return null;
   const {
     requestId,
     run_id,
     tenant_id,
+    kind,
+    agent_id,
+    team_id,
     session_id,
     parent_session_id,
     tool_call_id,
@@ -59,7 +109,6 @@ function parseRecord(value: unknown): StoredInteraction | null {
     input,
     created_at,
     status,
-    answer,
   } = value;
   if (
     typeof requestId !== 'string' ||
@@ -73,26 +122,22 @@ function parseRecord(value: unknown): StoredInteraction | null {
     return null;
   }
   if (status !== 'pending' && status !== 'answered' && status !== 'orphaned') return null;
-  const parsedAnswer: StoredInteractionAnswer | undefined =
-    isRecord(answer) &&
-    (answer.decision === 'allow' || answer.decision === 'deny') &&
-    (answer.scope === 'once' || answer.scope === 'session' || answer.scope === 'always') &&
-    typeof answer.answered_at === 'number'
-      ? {
-          decision: answer.decision as StoredInteractionAnswer['decision'],
-          scope: answer.scope as StoredInteractionAnswer['scope'],
-          answered_at: answer.answered_at,
-        }
-      : undefined;
+  const parsedAnswer = parseAnswer(value.answer);
+  const agentId = nonEmptyString(agent_id);
+  const teamId = nonEmptyString(team_id);
+  const sessionId = nonEmptyString(session_id);
+  const parentSessionId = nonEmptyString(parent_session_id);
+  const toolCallId = nonEmptyString(tool_call_id);
   return {
     requestId,
     run_id,
     tenant_id,
-    ...(typeof session_id === 'string' && session_id.length > 0 ? { session_id } : {}),
-    ...(typeof parent_session_id === 'string' && parent_session_id.length > 0
-      ? { parent_session_id }
-      : {}),
-    ...(typeof tool_call_id === 'string' && tool_call_id.length > 0 ? { tool_call_id } : {}),
+    kind: kind === 'ask' ? 'ask' : 'permission',
+    ...(agentId !== undefined ? { agent_id: agentId } : {}),
+    ...(teamId !== undefined ? { team_id: teamId } : {}),
+    ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+    ...(parentSessionId !== undefined ? { parent_session_id: parentSessionId } : {}),
+    ...(toolCallId !== undefined ? { tool_call_id: toolCallId } : {}),
     tool,
     input,
     created_at,

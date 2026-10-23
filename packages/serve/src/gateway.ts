@@ -849,11 +849,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
     if (ws.data.runId !== undefined && event.run_id !== ws.data.runId) return false;
     if (ws.data.types !== undefined && !ws.data.types.includes(event.type)) return false;
     // S5：control token 只接收映射到本 team 的事件；无法判定 → 丢弃。
+    // 0.19 S4：没有 session 的 team 事件（如 team.budget.*）按 data.team_id 归属。
     const principal = ws.data.principal;
     if (principal !== undefined && isTeamScopedPrincipal(principal)) {
       const sessionId = eventSessionId(event);
-      if (sessionId === undefined) return false;
-      if (opts.hubTeamScope?.teamForSession(sessionId) !== principal.team_id) return false;
+      if (sessionId !== undefined) {
+        if (opts.hubTeamScope?.teamForSession(sessionId) !== principal.team_id) return false;
+      } else {
+        const teamId = eventDataTeamId(event);
+        if (teamId === undefined || teamId !== principal.team_id) return false;
+      }
     }
     return true;
   }
@@ -868,6 +873,16 @@ export function startGateway(opts: GatewayOptions): Gateway {
     const data = event.data;
     if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
       const nested = (data as Record<string, unknown>).session_id;
+      if (typeof nested === 'string' && nested.length > 0) return nested;
+    }
+    return undefined;
+  }
+
+  /** 事件的 `data.team_id`（0.19 S4）；缺失 → undefined。 */
+  function eventDataTeamId(event: RunEvent): string | undefined {
+    const data = event.data;
+    if (typeof data === 'object' && data !== null && !Array.isArray(data)) {
+      const nested = (data as Record<string, unknown>).team_id;
       if (typeof nested === 'string' && nested.length > 0) return nested;
     }
     return undefined;
