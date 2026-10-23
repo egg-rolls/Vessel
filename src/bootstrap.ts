@@ -62,11 +62,7 @@ import {
   waitForConnectedResumeTerminal,
   waitForConnectedRun,
 } from './connect-run-wait';
-import type {
-  FeishuChannelLike,
-  MetricsControlLike,
-  WorkflowEngineLike,
-} from './control-plane-types';
+import type { FeishuChannelLike, MetricsControlLike } from './control-plane-types';
 import { resolveDataDir } from './data-paths';
 import {
   type DurableRunHandleLike,
@@ -83,7 +79,7 @@ import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
 import { resolveNodeId } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
-import { resolveAgentCwd, resolveWorkflowDefPathSync } from './path-resolution';
+import { resolveAgentCwd } from './path-resolution';
 import {
   addAutoApproveRule,
   listAutoApproveRules,
@@ -117,7 +113,6 @@ import { pruneTenantTrace, type TraceControl, type TraceRecorderFactory } from '
 import { resolveConnectToken } from './transport-factory';
 import { createReplSettings, type ReplSettingsControlLike } from './ui-settings';
 import { readPackageVersion } from './version';
-import { adaptWorkflowsControl } from './workflow-wiring';
 
 /**
  * tui 0.6.1 冻结的权限控制面（本 worktree 的 tui 尚未导出该类型）。
@@ -210,8 +205,7 @@ export interface BootstrapOptions {
   }) => RpcClient & { close(): Promise<void> };
   /** 测试注入口：MCP 模块加载器；缺省用 PluginLoader 动态 import */
   loadMcpModule?: () => Promise<unknown | null>;
-  /** 0.4 测试注入口：workflow / feishu 模块加载器 */
-  loadWorkflowModule?: () => Promise<unknown | null>;
+  /** 0.4 测试注入口：feishu 模块加载器 */
   loadFeishuModule?: () => Promise<unknown | null>;
   /** 0.4 测试/示例注入口：飞书 mock transport */
   feishuTransport?: unknown;
@@ -275,14 +269,10 @@ export interface BootstrapResult {
   runStore?: RunStore;
   /** 0.3 durable：TUI `/runs` 控制面（durable 关闭时为 undefined） */
   runs?: DurableRunsControlLike;
-  /** 0.4：workflow 引擎（路径版 controls + close/interruptAll）；未启用为 undefined */
-  workflows?: WorkflowEngineLike;
   /** 0.4：飞书渠道（enabled 时构造，不自动 start）；未启用为 undefined */
   feishu?: FeishuChannelLike;
   /** 0.4：metrics 控制面；observability 块缺省或 metrics:false 时为 undefined */
   metrics?: MetricsControlLike;
-  /** 0.4：SIGINT/SIGTERM 时调用 workflow.interruptAll()（落 interrupted） */
-  interruptWorkflows: () => Promise<void>;
   /**
    * 恢复一次 run 并等待完成（CLI `--resume-run` 使用）。
    * 失败抛带稳定 code 的错误：run_not_found / run_not_resumable /
@@ -775,7 +765,6 @@ async function bootstrapConnect(input: {
     ...(remote !== undefined ? { remote } : {}),
     tenantPaths: input.tenantPaths,
     nodeId: input.nodeId,
-    interruptWorkflows: async () => {},
     resumeRun: async (runId, opts) => {
       const outcome = await waitForConnectedResumeTerminal({
         events,
@@ -1064,7 +1053,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(options.redactor ? { redactor: options.redactor } : {}),
     ...(options.clock ? { clock: options.clock } : {}),
     ...(options.loadMcpModule ? { loadMcpModule: options.loadMcpModule } : {}),
-    ...(options.loadWorkflowModule ? { loadWorkflowModule: options.loadWorkflowModule } : {}),
     ...(options.loadFeishuModule ? { loadFeishuModule: options.loadFeishuModule } : {}),
     ...(options.feishuTransport !== undefined ? { feishuTransport: options.feishuTransport } : {}),
   }).catch((error: unknown) => {
@@ -1089,7 +1077,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     metrics,
     runStore,
     eventLog,
-    workflows: workflowEngine,
     feishu: feishuChannel,
   } = bundle;
 
@@ -1482,19 +1469,11 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
         }
       : {}),
     ...(mcpControl ? { mcp: { listServers: () => mcpControl.list() } } : {}),
-    ...(workflowEngine
-      ? {
-          workflows: {
-            ...adaptWorkflowsControl(workflowEngine, config),
-            resolveDefinition: (name: string) => resolveWorkflowDefPathSync(config, name),
-          },
-        }
-      : {}),
     ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
   });
-  // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume` 与
-  // `/workflows run|resume` 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时
-  // 订阅是 no-op，命令会一直挂起。通知只再分发，不写回事件流。
+  // A1：本地 RPC ← runtimeEvents 的只读桥接。TUI 的 `/runs resume`
+  // 只靠 `rpc.subscribe` 等待终态；缺少 onEvent 时订阅是 no-op，命令会一直挂起。
+  // 通知只再分发，不写回事件流。
   const localRpcClient = createLocalRpcClient({
     dispatch: localDispatcher.dispatch,
     onEvent: (handler) =>
@@ -1561,16 +1540,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   // ── 关闭 ────────────────────────────────────────
   let shuttingDown = false;
 
-  /** SIGINT/SIGTERM：workflow 在跑 run 落 interrupted（不是用户 cancel） */
-  const interruptWorkflows = async (): Promise<void> => {
-    if (!workflowEngine) return;
-    try {
-      await workflowEngine.interruptAll();
-    } catch (e) {
-      console.warn(`⚠ Failed to interrupt workflows: ${e instanceof Error ? e.message : e}`);
-    }
-  };
-
   const shutdown = async (shutdownOptions: { drain?: boolean } = {}): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
@@ -1632,7 +1601,7 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       });
     }
 
-    // bundle 关闭顺序：feishu → workflow → metrics → MCP → host/runtime
+    // bundle 关闭顺序：feishu → metrics → MCP → host/runtime
     // → trace → runStore → session；锁由 bootstrap 在最后释放。
     await bundle.close(shutdownOptions);
 
@@ -1699,7 +1668,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ...(mcpControl ? { mcp: mcpControl } : {}),
     ...(runs ? { runs } : {}),
     // 0.4 注入面：未启用时保持 undefined。
-    ...(workflowEngine ? { workflows: adaptWorkflowsControl(workflowEngine, config) } : {}),
     ...(metrics ? { metrics: () => metrics.snapshot() } : {}),
     ...(feishuChannel ? { feishu: { status: () => feishuChannel.status() } } : {}),
     newSessionId,
@@ -1724,10 +1692,8 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     mcp: mcpControl,
     runStore,
     runs,
-    workflows: workflowEngine,
     feishu: feishuChannel,
     metrics,
-    interruptWorkflows,
     resumeRun,
     shutdown,
     cleanup: () => {

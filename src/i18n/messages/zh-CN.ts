@@ -41,11 +41,6 @@ export const zhCN = {
   'help.cmd.gatewayReload': '热重载 config / plugins，不重启进程',
   'help.cmd.gatewayInstall': '注册登录自启（systemd / launchd / schtasks）',
   'help.cmd.gatewayUninstall': '移除系统服务注册',
-  'help.cmd.workflowList': '列出 workflow runs',
-  'help.cmd.workflowRun': '启动 workflow（workflow.dir 下解析）',
-  'help.cmd.workflowShow': '查看步骤状态',
-  'help.cmd.workflowResume': '恢复 interrupted/failed/running',
-  'help.cmd.workflowCancel': '取消同进程 run',
   'help.cmd.eval': '离线评测',
   'help.cmd.evalOut': '评测输出 JSON / 指定报告',
   'help.cmd.feishu': '附加飞书渠道（可与 gateway start / REPL 同用）',
@@ -159,6 +154,10 @@ export const zhCN = {
   'gateway.startFailed': 'Gateway 启动失败：{detail}',
   'gateway.started': 'Gateway 已启动（pid {pid}）：{url}',
   'gateway.logPath': '日志：{path}',
+  'gateway.webDistMissing':
+    'Web 控制台静态资源缺失：{path}。开发用 `bun run dev:web`；或构建 `cd apps/web && npm run build`。',
+  'gateway.webDistStale':
+    'Web 控制台静态资源可能已过期：{index} 旧于 {source}。用 `bun run build:web:watch` 或重新构建。',
   'gateway.noToken':
     '未配置 gateway token（serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN），无法调用本地 RPC。',
   'gateway.reloadNoGateway': 'Gateway 未运行；先执行 `vessel gateway start`。',

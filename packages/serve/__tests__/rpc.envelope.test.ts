@@ -158,7 +158,6 @@ describe('capabilities manifest', () => {
       'mcp.reconnect',
       'trace.prune',
       'tenants.list',
-      'workflow.get',
       'evals.latest',
       'permission.respond',
       'ask.respond',

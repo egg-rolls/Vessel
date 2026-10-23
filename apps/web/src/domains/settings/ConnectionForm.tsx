@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { displayGatewayUrl } from '../../gateway/url';
+import { t, useLocale } from '../../i18n';
 
 const STATE_LABELS: Record<string, string> = {
   idle: '未连接',
@@ -14,9 +15,11 @@ const STATE_LABELS: Record<string, string> = {
 
 /** Settings → Connection：gateway URL / token 唯一入口（顶栏不再放表单）。 */
 export function ConnectionForm() {
+  useLocale();
   const {
     gatewayUrl,
     token,
+    devProxyAuth,
     gatewayError,
     tokenError,
     lastError,
@@ -57,23 +60,29 @@ export function ConnectionForm() {
       <section className="panel">
         <h2 className="section-title">连接 gateway</h2>
         <p className="section-desc">
-          token 只保存在 sessionStorage；URL 保存在 localStorage。非回环地址必须使用 HTTPS。
+          {devProxyAuth
+            ? t('settings.connection.devProxyNotice')
+            : 'token 只保存在 sessionStorage；URL 保存在 localStorage。非回环地址必须使用 HTTPS。'}
         </p>
         <div className="form-grid">
           <label className="field">
             <span className="field-label">Gateway URL</span>
             <input
-              className={`input ${urlError ? 'invalid' : ''}`.trim()}
-              value={urlDraft}
+              className={`input ${!devProxyAuth && urlError ? 'invalid' : ''}`.trim()}
+              value={
+                devProxyAuth ? displayGatewayUrl(gatewayUrl, window.location.origin) : urlDraft
+              }
               onChange={(event) => {
+                if (devProxyAuth) return;
                 setUrlDraft(event.target.value);
                 clearTokenError();
               }}
+              readOnly={devProxyAuth}
               placeholder="留空 = 同源（推荐）"
               spellCheck={false}
               autoComplete="off"
-              aria-invalid={urlError ? true : undefined}
-              aria-describedby={urlError ? 'connection-url-error' : undefined}
+              aria-invalid={!devProxyAuth && urlError ? true : undefined}
+              aria-describedby={!devProxyAuth && urlError ? 'connection-url-error' : undefined}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   event.preventDefault();
@@ -81,7 +90,7 @@ export function ConnectionForm() {
                 }
               }}
             />
-            {urlError && (
+            {!devProxyAuth && urlError && (
               <span className="field-error" id="connection-url-error" role="alert">
                 {urlError}
               </span>
@@ -91,40 +100,44 @@ export function ConnectionForm() {
             </span>
           </label>
 
-          <label className="field">
-            <span className="field-label">Token</span>
-            <input
-              className={`input ${tokenError ? 'invalid' : ''}`.trim()}
-              type="password"
-              value={tokenDraft}
-              onChange={(event) => {
-                setTokenDraft(event.target.value);
-                clearTokenError();
-              }}
-              placeholder="gateway token（或通过 #token=… 打开）"
-              spellCheck={false}
-              autoComplete="off"
-              aria-invalid={tokenError ? true : undefined}
-              aria-describedby={tokenError ? 'connection-token-error' : undefined}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault();
-                  submit();
-                }
-              }}
-            />
-            {tokenError && (
-              <span className="field-error" id="connection-token-error" role="alert">
-                {tokenError}
-              </span>
-            )}
-          </label>
+          {!devProxyAuth && (
+            <label className="field">
+              <span className="field-label">Token</span>
+              <input
+                className={`input ${tokenError ? 'invalid' : ''}`.trim()}
+                type="password"
+                value={tokenDraft}
+                onChange={(event) => {
+                  setTokenDraft(event.target.value);
+                  clearTokenError();
+                }}
+                placeholder="gateway token（或通过 #token=… 打开）"
+                spellCheck={false}
+                autoComplete="off"
+                aria-invalid={tokenError ? true : undefined}
+                aria-describedby={tokenError ? 'connection-token-error' : undefined}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    submit();
+                  }
+                }}
+              />
+              {tokenError && (
+                <span className="field-error" id="connection-token-error" role="alert">
+                  {tokenError}
+                </span>
+              )}
+            </label>
+          )}
         </div>
 
         <div className="form-actions">
-          <button type="button" className="btn btn-primary" onClick={submit}>
-            {connectionState === 'open' ? '重新连接' : '连接'}
-          </button>
+          {!devProxyAuth && (
+            <button type="button" className="btn btn-primary" onClick={submit}>
+              {connectionState === 'open' ? '重新连接' : '连接'}
+            </button>
+          )}
           <button
             type="button"
             className="btn"
@@ -133,18 +146,20 @@ export function ConnectionForm() {
           >
             立即重试
           </button>
-          <button
-            type="button"
-            className="btn btn-danger-ghost"
-            onClick={() => {
-              disconnect();
-              setTokenDraft('');
-              toast.info('已断开并清除 token');
-            }}
-            disabled={!token.trim()}
-          >
-            断开并清除 token
-          </button>
+          {!devProxyAuth && (
+            <button
+              type="button"
+              className="btn btn-danger-ghost"
+              onClick={() => {
+                disconnect();
+                setTokenDraft('');
+                toast.info('已断开并清除 token');
+              }}
+              disabled={!token.trim()}
+            >
+              断开并清除 token
+            </button>
+          )}
         </div>
 
         {lastError && (

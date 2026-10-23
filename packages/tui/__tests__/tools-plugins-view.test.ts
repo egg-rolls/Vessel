@@ -100,15 +100,15 @@ describe('/tools view mapping', () => {
 
 describe('/plugins view mapping', () => {
   it('列表项带 plugin 标记', () => {
-    const view = buildPluginsListView(['workflow', 'feishu']);
+    const view = buildPluginsListView(['demo', 'feishu']);
     expect(view.kind).toBe('list');
-    expect(view.items.map((item) => item.label)).toEqual(['workflow', 'feishu']);
+    expect(view.items.map((item) => item.label)).toEqual(['demo', 'feishu']);
     expect(view.items[0]?.badge).toBe('plugin');
     expect(buildPluginsListView([]).emptyText).toBe('No plugins loaded.');
   });
 
   it('命令仍输出原文并返回视图', async () => {
-    const ctx = makeCtx({ plugins: ['workflow', 'feishu'] });
+    const ctx = makeCtx({ plugins: ['demo', 'feishu'] });
     const result = await createCommands().execute('plugins', ctx, makeState(ctx.currentSessionId));
     expect(result.output).toContain('Loaded plugins (2)');
     expect(result.view?.source).toBe('plugins');

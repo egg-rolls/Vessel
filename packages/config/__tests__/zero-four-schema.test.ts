@@ -6,7 +6,6 @@ import {
   DEFAULT_EVALS_OPTIONS,
   DEFAULT_FEISHU_OPTIONS,
   DEFAULT_OBSERVABILITY_OPTIONS,
-  DEFAULT_WORKFLOW_OPTIONS,
 } from '../src/defaults';
 import { loadConfig, loadConfigFromEnv, snakeToCamel } from '../src/loader';
 import type { VesselConfig } from '../src/types';
@@ -51,13 +50,6 @@ function pathsOf(config: VesselConfig): string[] {
 
 describe('0.4 defaults', () => {
   it('exports the frozen default values', () => {
-    expect(DEFAULT_WORKFLOW_OPTIONS).toEqual({
-      enabled: false,
-      dir: './workflows',
-      path: '~/.vessel/workflows',
-      maxParallel: 2,
-      stepTimeoutMs: 300000,
-    });
     expect(DEFAULT_EVALS_OPTIONS).toEqual({
       enabled: false,
       dir: './evals',
@@ -86,7 +78,6 @@ describe('0.4 defaults', () => {
   it('absent blocks keep 0.3 behavior (undefined, zero errors)', () => {
     const config: VesselConfig = {};
     expect(validateConfig(config).errors).toEqual([]);
-    expect(config.workflow).toBeUndefined();
     expect(config.evals).toBeUndefined();
     expect(config.feishu).toBeUndefined();
     expect(config.observability).toBeUndefined();
@@ -96,7 +87,6 @@ describe('0.4 defaults', () => {
 describe('0.4 snake_case to camelCase', () => {
   it('maps every new key', () => {
     const parsed = snakeToCamel<Record<string, unknown>>({
-      workflow: { max_parallel: 3, step_timeout_ms: 1000 },
       evals: { out_dir: '/tmp/out', allow_network: true },
       feishu: {
         app_id: 'cli_xxx',
@@ -111,7 +101,6 @@ describe('0.4 snake_case to camelCase', () => {
     });
 
     expect(parsed).toEqual({
-      workflow: { maxParallel: 3, stepTimeoutMs: 1000 },
       evals: { outDir: '/tmp/out', allowNetwork: true },
       feishu: {
         appId: 'cli_xxx',
@@ -124,42 +113,6 @@ describe('0.4 snake_case to camelCase', () => {
       },
       observability: { eventHistory: 5, metrics: false },
     });
-  });
-});
-
-describe('0.4 workflow validation', () => {
-  it('accepts boundaries 1..8 and 1..86400000', () => {
-    expect(
-      pathsOf({
-        workflow: { maxParallel: 1, stepTimeoutMs: 1 },
-      }),
-    ).toEqual([]);
-    expect(
-      pathsOf({
-        workflow: { maxParallel: 8, stepTimeoutMs: 86400000 },
-      }),
-    ).toEqual([]);
-  });
-
-  it('rejects wrong types and out-of-range values', () => {
-    const paths = pathsOf({
-      workflow: {
-        enabled: 'yes' as unknown as boolean,
-        dir: '',
-        path: '   ',
-        maxParallel: 9,
-        stepTimeoutMs: 0,
-      },
-    });
-    expect(paths).toContain('workflow.enabled');
-    expect(paths).toContain('workflow.dir');
-    expect(paths).toContain('workflow.path');
-    expect(paths).toContain('workflow.maxParallel');
-    expect(paths).toContain('workflow.stepTimeoutMs');
-
-    expect(pathsOf({ workflow: { maxParallel: 0 } })).toContain('workflow.maxParallel');
-    expect(pathsOf({ workflow: { maxParallel: 1.5 } })).toContain('workflow.maxParallel');
-    expect(pathsOf({ workflow: { stepTimeoutMs: 86400001 } })).toContain('workflow.stepTimeoutMs');
   });
 });
 
@@ -307,13 +260,11 @@ describe('0.4 observability validation', () => {
 describe('0.4 unknown keys', () => {
   it('reports a nested typo with a full path', () => {
     const unknown = findUnknownNestedKeys({
-      workflow: { maxParallels: 2 },
       evals: { outDirr: '/tmp' },
       feishu: { maxMemberss: 2 },
       observability: { eventHistoryy: 1 },
     });
     expect(unknown.map((u) => u.path)).toEqual([
-      'workflow.maxParallels',
       'evals.outDirr',
       'feishu.maxMemberss',
       'observability.eventHistoryy',

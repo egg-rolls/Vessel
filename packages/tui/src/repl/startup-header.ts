@@ -37,7 +37,6 @@ export interface SessionSummaryFacts {
   tenantId?: string;
   mcpCount?: number;
   interruptedRuns?: number;
-  interruptedWorkflows?: number;
   feishuConnected?: boolean;
 }
 
@@ -66,9 +65,6 @@ export function buildSessionSummary(facts: SessionSummaryFacts, columns: number)
   }
   if (facts.interruptedRuns && facts.interruptedRuns > 0) {
     parts.push(t('startup.summary.runs', { count: facts.interruptedRuns }));
-  }
-  if (facts.interruptedWorkflows && facts.interruptedWorkflows > 0) {
-    parts.push(t('startup.summary.wf', { count: facts.interruptedWorkflows }));
   }
   if (facts.feishuConnected) parts.push(t('startup.summary.feishu'));
   if (parts.length === 0) return null;

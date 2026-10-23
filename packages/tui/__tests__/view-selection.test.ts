@@ -28,9 +28,9 @@ const list: ListView = {
 
 const detail: DetailView = {
   kind: 'detail',
-  title: 'Workflow run wf_1',
+  title: 'Run detail r1',
   sections: [],
-  key: 'wf_1',
+  key: 'r1',
 };
 
 describe('viewSelectionRow', () => {
@@ -55,7 +55,7 @@ describe('viewSelectionRow', () => {
   });
 
   it('detail 用 view.key 合成行（无 key 时为 null）', () => {
-    expect(detailRow(detail)).toEqual({ key: 'wf_1', cells: { title: 'Workflow run wf_1' } });
+    expect(detailRow(detail)).toEqual({ key: 'r1', cells: { title: 'Run detail r1' } });
     expect(detailRow({ ...detail, key: undefined })).toBeNull();
   });
 
@@ -80,7 +80,7 @@ describe('viewSelectionKey / viewContextKey', () => {
   it('上下文 key 覆盖 table/list/detail，confirm/form 为空', () => {
     expect(viewContextKey(table)).toBe('table-context');
     expect(viewContextKey(list)).toBe('list-context');
-    expect(viewContextKey(detail)).toBe('wf_1');
+    expect(viewContextKey(detail)).toBe('r1');
     expect(
       viewContextKey({
         kind: 'form',

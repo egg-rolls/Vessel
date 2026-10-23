@@ -1,6 +1,39 @@
 /* ── Bottom dock（0.18） ─────────────────────────────────
    槽位底边距固定，内容高度自适应并向上生长；令牌见 tokens.css。 */
 
+/* ── Draft 欢迎页（0.18） ────────────────────────────────
+   背景式居中 hero：无边框 / 背景 / 阴影 / 圆角，只在消息流内占据剩余高度。 */
+.chat-welcome {
+  flex: 1 0 auto;
+  display: grid;
+  place-items: center;
+  padding-block: 24px;
+  text-align: center;
+}
+
+.chat-welcome-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-welcome-brand {
+  font-family: var(--font-serif);
+  font-size: clamp(38px, 9vw, 64px);
+  line-height: 1.05;
+  color: var(--ink);
+  margin: 0;
+}
+
+.chat-welcome-question {
+  font-size: clamp(15px, 4vw, 22px);
+  color: var(--muted);
+  margin: 0;
+  max-width: 30ch;
+  overflow-wrap: anywhere;
+}
+
 .composer-area {
   padding-bottom: calc(var(--dock-gap) + var(--dock-safe-bottom));
 }

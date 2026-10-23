@@ -166,6 +166,12 @@ export class MemberRegistry {
     return this.byId.get(id);
   }
 
+  /** 只按 session id 直查，不走 id 兜底 */
+  getBySession(sessionId: string): MemberRecord | undefined {
+    const id = this.bySession.get(sessionId);
+    return id !== undefined ? this.byId.get(id) : undefined;
+  }
+
   remove(id: string): void {
     const record = this.byId.get(id);
     if (!record) return;

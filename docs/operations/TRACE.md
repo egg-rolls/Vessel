@@ -106,7 +106,7 @@ POSIX 下文件权限 best-effort 0600；不是强制访问控制。需要更强
 |---|---|
 | core | `session.saved` / `session.deleted`、`hook.*`、`run.cancelled`、`installPlugin` 的 `plugin.*` |
 | asm | `config.loaded`、`PluginLoader` 的 `plugin.loaded` / `plugin.failed` |
-| ext | `workflow.*` / `eval.*` / `feishu.*` / `mcp.*` / `subagent.*` |
+| ext | `eval.*` / `feishu.*` / `mcp.*` / `subagent.*` |
 
 事件名仍是开放字符串；新增事件不需要改 core 类型。所有事件应带 `tenant_id`。
 
@@ -116,7 +116,7 @@ POSIX 下文件权限 best-effort 0600；不是强制访问控制。需要更强
 - trace recorder 只订阅本 tenant 的流，写入 `<data_dir>/tenants/<tenant_id>/events`；metrics collector 同样按 tenant 隔离。
 - gateway 为每个 active tenant 持有 writer lock；启动失败回滚、shutdown 释放；冲突 `tenant_locked`；disabled / 未配置 tenant → `forbidden`。
 - **状态**：插件侧 tenant 行为、web A-6.3 的 `trace.readEvents(filter, tenantId)` / `sessionData.deleteSessionData(sessionId, tenantId)` 与 asm 的 per-tenant 执行接线（独立 EventStream、trace 写入路由、writer lock）**均已实现**。两 tenant 的 trace / events / metrics 互不可见是 qa 验收项。
-- **已知限制**：gateway 的 workflow / 飞书控制面仍只走 default tenant；其事件仍带 `tenant_id` 并进入对应 tenant 的 trace。
+- **已知限制**：gateway 的飞书控制面仍只走 default tenant；其事件仍带 `tenant_id` 并进入对应 tenant 的 trace。
 
 ## 11. 运维建议
 

@@ -87,7 +87,6 @@ import { createRunMethods } from './gateway/methods/runs.js';
 import { createSessionMethods } from './gateway/methods/sessions.js';
 import { createTeamMethods } from './gateway/methods/teams.js';
 import { createTenantMethods } from './gateway/methods/tenants.js';
-import { createWorkflowMethods, parseWorkflowInputs } from './gateway/methods/workflow.js';
 import {
   flushSseGap,
   pumpSseReplay,
@@ -157,18 +156,6 @@ import {
   type TenantPrincipal,
 } from './tenant.js';
 import type { TenantEventHub } from './tenant-event-hub.js';
-import {
-  dedupeWorkflowSummaries,
-  isSafeWorkflowName,
-  MAX_WORKFLOW_LIMIT,
-  parseWorkflowLimit,
-  parseWorkflowStatus,
-  sortWorkflowSummaries,
-  toWireWorkflowDetail,
-  toWireWorkflowSummary,
-  type WorkflowGatewayOptions,
-  type WorkflowRunStatus,
-} from './workflow.js';
 
 // 公开导出保持不变：这些辅助函数仍可从 `@vessel-agent/serve/gateway` 导入。
 export {
@@ -257,14 +244,6 @@ export interface GatewayOptions {
   durableFor?: (tenantId: string) => DurableGatewayOptions | undefined;
   /** MCP server 状态注入；缺省 = MCP 端点关闭 */
   mcp?: McpGatewayOptions;
-  /** workflow 控制面注入；缺省 = `/v1/workflows*` 返回 workflow_disabled */
-  workflows?: WorkflowGatewayOptions;
-  /**
-   * 0.5.4：per-tenant workflow 控制面。
-   * default tenant 先用 `workflows`，再 fallback 本工厂；
-   * 非 default tenant 只走本工厂，绝不回退全局实例。
-   */
-  workflowsFor?: (tenantId: string) => WorkflowGatewayOptions | undefined;
   /** metrics 快照注入；缺省 = `/v1/metrics` 返回 metrics_disabled */
   metrics?: MetricsProvider;
   /** 飞书渠道状态注入；缺省 = `/v1/channels/feishu` 返回 channel_disabled */
@@ -600,24 +579,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.mcp !== undefined && typeof opts.mcp.listServers !== 'function') {
     throw new Error('mcp.listServers must be a function.');
   }
-  if (opts.workflows !== undefined) {
-    const required = [
-      'listRuns',
-      'getRun',
-      'start',
-      'resume',
-      'cancel',
-      'resolveDefinition',
-    ] as const;
-    for (const key of required) {
-      if (typeof opts.workflows[key] !== 'function') {
-        throw new Error(`workflows.${key} must be a function.`);
-      }
-    }
-  }
-  if (opts.workflowsFor !== undefined && typeof opts.workflowsFor !== 'function') {
-    throw new Error('workflowsFor must be a function.');
-  }
   if (opts.metrics !== undefined && typeof opts.metrics !== 'function') {
     throw new Error('metrics must be a function.');
   }
@@ -649,7 +610,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   if (opts.durable?.store && opts.durable.resume) features.push('durable-resume');
   if (opts.mcp) features.push('mcp-status');
   if (tlsMaterial) features.push('tls');
-  if (opts.workflows || opts.workflowsFor) features.push('workflow');
   if (opts.evals) features.push('evals');
   if (opts.feishu || opts.feishuFor) features.push('feishu');
   if (opts.metrics) features.push('metrics');
@@ -752,8 +712,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
    * Addendum A §2：首个调用成功，后续（含重复）一律 run_already_running。
    */
   const resumedRuns = new Set<string>();
-  /** workflow resume 在途占位（同一 run 只允许一个），LRU 上限 1000 */
-  const resumedWorkflows = new Set<string>();
 
   /** R3 team 状态（默认关闭） */
   let team: TeamGatewayOptions | undefined = opts.team;
@@ -1160,7 +1118,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
   const rpcMethods: RpcMethodDefinition[] = [
     // 顺序与拆分前一致：health → capabilities → config → sessions → runs →
     // events.list → events.subscribe → tools/plugins → metrics → mcp → trace →
-    // tenants → interactions → workflow → evals → feishu → gateway。
+    // tenants → interactions → evals → feishu → gateway。
     ...createConfigMethods(configMethodsDeps),
     ...createSessionMethods({ defaultTenantId, sessionFor, sessionData: opts.sessionData }),
     ...createRunMethods({
@@ -1231,11 +1189,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
         pendingAsks: engine.pendingAsks,
       },
       ...(opts.hubTeamScope !== undefined ? { teamScope: opts.hubTeamScope } : {}),
-    }),
-    ...createWorkflowMethods({
-      requireWorkflows,
-      reserveWorkflowResume,
-      releaseWorkflowResume,
     }),
     ...createEvalMethods({ evals: opts.evals }),
     ...createFeishuMethods({ requireFeishu }),
@@ -1528,14 +1481,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     return opts.pluginHostFor?.(tenantId);
   }
 
-  /** per-tenant workflow 控制面；非 default 绝不回退全局实例 */
-  function workflowsForTenant(tenantId: string): WorkflowGatewayOptions | undefined {
-    if (tenantId === defaultTenantId) {
-      return opts.workflows ?? opts.workflowsFor?.(tenantId);
-    }
-    return opts.workflowsFor?.(tenantId);
-  }
-
   /** per-tenant 飞书渠道；非 default 绝不回退全局实例 */
   function feishuForTenant(tenantId: string): FeishuGatewayOptions | undefined {
     if (tenantId === defaultTenantId) {
@@ -1578,16 +1523,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
     const requested = queryTenant ?? headerTenant;
     return restTenantScope(principal, requested === null ? {} : { tenant_id: requested }, extra);
-  }
-
-  /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
-  function requireWorkflows(tenantId: string): WorkflowGatewayOptions {
-    const resolved = workflowsForTenant(tenantId);
-    if (resolved !== undefined) return resolved;
-    if (tenantId !== defaultTenantId) {
-      throw new RpcError('forbidden', `Workflow control is not configured for tenant: ${tenantId}`);
-    }
-    throw new RpcError('not_found', 'Workflow control is not enabled');
   }
 
   /** 非 default tenant 未配置 → forbidden；default 保持 0.4 not_found */
@@ -2378,62 +2313,10 @@ export function startGateway(opts: GatewayOptions): Gateway {
     }
   }
 
-  // ── 0.4 workflow / metrics / feishu / evals 端点 ──
+  // ── 0.4 metrics / feishu / evals 端点 ──
 
   const methodNotAllowed = (extra: Record<string, string>): Response =>
     errorJson('method_not_allowed', 'Method not allowed', 405, extra);
-
-  /** workflow 控制面错误 → HTTP；未知 code 一律 500，不泄露内部堆栈 */
-  function workflowErrorResponse(error: unknown, extra: Record<string, string>): Response {
-    const code = (error as { code?: unknown }).code;
-    const message = error instanceof Error ? error.message : String(error);
-    switch (code) {
-      case 'workflow_not_found':
-        return errorJson('workflow_not_found', message, 404, extra);
-      case 'workflow_invalid':
-        return errorJson('workflow_invalid', message, 400, extra);
-      case 'workflow_already_running':
-        return errorJson('workflow_already_running', message, 409, extra);
-      case 'workflow_not_resumable':
-        return errorJson('workflow_not_resumable', message, 409, extra);
-      case 'workflow_cancelled':
-        // 不新增协议码（DECISION-009 §10.3.7）
-        return errorJson('workflow_invalid', message, 409, extra);
-      case 'workflow_disabled':
-        return errorJson('workflow_disabled', message, 503, extra);
-      case 'forbidden':
-        return errorJson('forbidden', message, 403, extra);
-      default:
-        return errorJson('internal', 'Workflow operation failed', 500, extra);
-    }
-  }
-
-  /** 原子占位：同一 workflow run 同时只允许一个 resume */
-  function reserveWorkflowResume(runId: string): boolean {
-    if (resumedWorkflows.has(runId)) return false;
-    resumedWorkflows.add(runId);
-    while (resumedWorkflows.size > 1000) {
-      const first = resumedWorkflows.keys().next();
-      if (first.done) break;
-      if (first.value === runId) break;
-      resumedWorkflows.delete(first.value);
-    }
-    return true;
-  }
-
-  function releaseWorkflowResume(runId: string): void {
-    resumedWorkflows.delete(runId);
-  }
-
-  function decodeWorkflowId(raw: string): string | null {
-    let id: string;
-    try {
-      id = decodeURIComponent(raw);
-    } catch {
-      return null;
-    }
-    return id.length > 0 && id.length <= 256 ? id : null;
-  }
 
   /** REST 适配：解析 query/body 的 tenant_id；错误转 HTTP */
   function restTenantScope(
@@ -2459,240 +2342,6 @@ export function startGateway(opts: GatewayOptions): Gateway {
   function tenantQuery(url: URL): Record<string, unknown> {
     const raw = url.searchParams.get('tenant_id');
     return raw === null ? {} : { tenant_id: raw };
-  }
-
-  /** 非 default tenant 未配置 → 403；default 保持 0.4 workflow_disabled */
-  function workflowUnavailable(tenantId: string, extra: Record<string, string>): Response {
-    if (tenantId !== defaultTenantId) {
-      return errorJson(
-        'forbidden',
-        `Workflow control is not configured for tenant: ${tenantId}`,
-        403,
-        extra,
-      );
-    }
-    return errorJson('workflow_disabled', 'Workflow control is not enabled', 503, extra);
-  }
-
-  /** `/v1/workflows*`：列表 / 详情 / 启动 / 恢复 / 取消 */
-  async function handleWorkflows(
-    req: Request,
-    url: URL,
-    path: string,
-    extra: Record<string, string>,
-    principal: TenantPrincipal,
-  ): Promise<Response | null> {
-    if (path !== '/v1/workflows' && !path.startsWith('/v1/workflows/')) return null;
-
-    if (path === '/v1/workflows') {
-      if (req.method !== 'GET') return methodNotAllowed(extra);
-      const scope = restTenantScope(principal, tenantQuery(url), extra);
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      const rawStatus = url.searchParams.get('status');
-      const status: WorkflowRunStatus | null = parseWorkflowStatus(rawStatus);
-      if (rawStatus !== null && status === null) {
-        return errorJson('invalid_request', 'Invalid workflow status filter', 400, extra);
-      }
-      const limit = parseWorkflowLimit(url.searchParams.get('limit'));
-      if (limit === null) {
-        return errorJson(
-          'invalid_request',
-          `limit must be an integer between 1 and ${MAX_WORKFLOW_LIMIT}`,
-          400,
-          extra,
-        );
-      }
-      try {
-        const runs = await workflows.listRuns({
-          ...(status !== null ? { status } : {}),
-          limit,
-        });
-        const summaries = runs
-          .map((run) => toWireWorkflowSummary(run))
-          .filter((run): run is NonNullable<typeof run> => run !== null);
-        return json(
-          {
-            workflows: sortWorkflowSummaries(dedupeWorkflowSummaries(summaries)).slice(0, limit),
-          },
-          200,
-          extra,
-        );
-      } catch (error) {
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    if (path === '/v1/workflows/run') {
-      if (req.method !== 'POST') return methodNotAllowed(extra);
-      const body = await readJsonBody(req, maxBodyBytes, extra);
-      if (body instanceof Response) return body;
-      const scope = restTenantScope(
-        principal,
-        body.tenant_id === undefined ? {} : { tenant_id: body.tenant_id },
-        extra,
-      );
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      const rawName = body.name;
-      if (typeof rawName !== 'string' || rawName.trim().length === 0) {
-        return errorJson('invalid_request', 'name is required', 400, extra);
-      }
-      const name = rawName.trim();
-      if (!isSafeWorkflowName(name)) {
-        return errorJson('workflow_invalid', 'Invalid workflow name', 400, extra);
-      }
-      const inputs = parseWorkflowInputs(body.inputs);
-      if (inputs === null) {
-        return errorJson(
-          'invalid_request',
-          'inputs must be a flat string map (max 64 entries)',
-          400,
-          extra,
-        );
-      }
-      let definitionPath: string | undefined;
-      try {
-        definitionPath = workflows.resolveDefinition(name);
-      } catch {
-        return errorJson('internal', 'Failed to resolve workflow definition', 500, extra);
-      }
-      if (definitionPath === undefined) {
-        return errorJson('workflow_not_found', `Workflow not found: ${name}`, 404, extra);
-      }
-      try {
-        const started = await workflows.start(definitionPath, {
-          ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
-        });
-        return json({ workflow_run_id: started.workflowRunId, status: 'queued' }, 202, extra);
-      } catch (error) {
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    const match = path.match(/^\/v1\/workflows\/([^/]+)(?:\/(resume|cancel))?$/);
-    if (!match) return errorJson('not_found', `Not found: ${path}`, 404, extra);
-    const workflowRunId = decodeWorkflowId(match[1] ?? '');
-    if (workflowRunId === null) {
-      return errorJson('invalid_request', 'Invalid workflow run id', 400, extra);
-    }
-    const action = match[2];
-
-    if (action === 'resume') {
-      if (req.method !== 'POST') return methodNotAllowed(extra);
-      const scope = restTenantScope(principal, tenantQuery(url), extra);
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      // 占位必须在任何 await 之前，保证并发 resume 只有一个通过。
-      if (!reserveWorkflowResume(workflowRunId)) {
-        return errorJson(
-          'workflow_already_running',
-          `Workflow run is already resuming: ${workflowRunId}`,
-          409,
-          extra,
-        );
-      }
-      try {
-        const run = await workflows.getRun(workflowRunId);
-        if (!run) {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson(
-            'workflow_not_found',
-            `Workflow run not found: ${workflowRunId}`,
-            404,
-            extra,
-          );
-        }
-        const summary = toWireWorkflowSummary(run);
-        if (!summary) {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson('internal', 'Invalid workflow run payload', 500, extra);
-        }
-        if (summary.status === 'running') {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson(
-            'workflow_already_running',
-            `Workflow run is already running: ${workflowRunId}`,
-            409,
-            extra,
-          );
-        }
-        if (summary.status === 'completed' || summary.status === 'cancelled') {
-          releaseWorkflowResume(workflowRunId);
-          return errorJson(
-            'workflow_not_resumable',
-            `Workflow run is not resumable: ${workflowRunId}`,
-            409,
-            extra,
-          );
-        }
-        const resumed = await workflows.resume(workflowRunId);
-        // done 恰好 resolve 一次；不阻塞 HTTP 响应。
-        void resumed.done
-          .finally(() => releaseWorkflowResume(workflowRunId))
-          .catch(() => undefined);
-        return json({ workflow_run_id: resumed.workflowRunId, status: 'queued' }, 202, extra);
-      } catch (error) {
-        releaseWorkflowResume(workflowRunId);
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    if (action === 'cancel') {
-      if (req.method !== 'POST') return methodNotAllowed(extra);
-      const scope = restTenantScope(principal, tenantQuery(url), extra);
-      if (scope instanceof Response) return scope;
-      const workflows = workflowsForTenant(scope.tenantId);
-      if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-      try {
-        const run = await workflows.getRun(workflowRunId);
-        if (!run) {
-          return errorJson(
-            'workflow_not_found',
-            `Workflow run not found: ${workflowRunId}`,
-            404,
-            extra,
-          );
-        }
-        const summary = toWireWorkflowSummary(run);
-        if (!summary) return errorJson('internal', 'Invalid workflow run payload', 500, extra);
-        if (summary.status === 'cancelled') {
-          return json({ workflow_run_id: workflowRunId, status: 'cancelled' }, 202, extra);
-        }
-        if (summary.status === 'completed' || summary.status === 'failed') {
-          return errorJson('workflow_invalid', 'Run is not cancellable', 409, extra);
-        }
-        await workflows.cancel(workflowRunId);
-        return json({ workflow_run_id: workflowRunId, status: 'cancelled' }, 202, extra);
-      } catch (error) {
-        return workflowErrorResponse(error, extra);
-      }
-    }
-
-    if (req.method !== 'GET') return methodNotAllowed(extra);
-    const scope = restTenantScope(principal, tenantQuery(url), extra);
-    if (scope instanceof Response) return scope;
-    const workflows = workflowsForTenant(scope.tenantId);
-    if (!workflows) return workflowUnavailable(scope.tenantId, extra);
-    try {
-      const run = await workflows.getRun(workflowRunId);
-      if (!run) {
-        return errorJson(
-          'workflow_not_found',
-          `Workflow run not found: ${workflowRunId}`,
-          404,
-          extra,
-        );
-      }
-      const detail = toWireWorkflowDetail(run);
-      if (!detail) return errorJson('internal', 'Invalid workflow run payload', 500, extra);
-      return json({ workflow: detail }, 200, extra);
-    } catch (error) {
-      return workflowErrorResponse(error, extra);
-    }
   }
 
   /** `/v1/metrics`：只读快照 */
@@ -2788,15 +2437,12 @@ export function startGateway(opts: GatewayOptions): Gateway {
         return 403;
       case 'not_found':
       case 'run_not_found':
-      case 'workflow_not_found':
       case 'eval_not_found':
         return 404;
       case 'method_not_allowed':
         return 405;
       case 'conflict':
       case 'run_already_running':
-      case 'workflow_already_running':
-      case 'workflow_not_resumable':
       case 'tenant_locked':
         return 409;
       case 'busy':
@@ -3136,9 +2782,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       const mcpResponse = await handleMcp(req, path, extra, principal);
       if (mcpResponse) return mcpResponse;
 
-      // 0.4：workflow / metrics / feishu / evals（未注入 → 稳定错误码）
-      const workflowsResponse = await handleWorkflows(req, url, path, extra, principal);
-      if (workflowsResponse) return workflowsResponse;
+      // 0.4：metrics / feishu / evals（未注入 → 稳定错误码）
       const metricsResponse = await handleMetrics(req, path, extra, principal);
       if (metricsResponse) return metricsResponse;
       const feishuResponse = await handleFeishu(req, url, path, extra, principal);

@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { Tooltip } from './Tooltip';
 
 export interface ActionMenuItem {
   id: string;
@@ -74,19 +75,21 @@ export function ActionMenu({
 
   return (
     <span className="action-menu">
-      <button
-        ref={buttonRef}
-        type="button"
-        className="icon-btn"
-        aria-label={label}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        aria-controls={open ? menuId : undefined}
-        disabled={disabled}
-        onClick={() => setOpen((value) => !value)}
-      >
-        <span aria-hidden="true">⋯</span>
-      </button>
+      <Tooltip label={label}>
+        <button
+          ref={buttonRef}
+          type="button"
+          className="icon-btn"
+          aria-label={label}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
+          disabled={disabled}
+          onClick={() => setOpen((value) => !value)}
+        >
+          <span aria-hidden="true">⋯</span>
+        </button>
+      </Tooltip>
       {open && (
         <div ref={menuRef} id={menuId} className="menu" role="menu" aria-label={label}>
           {items.map((item) => (

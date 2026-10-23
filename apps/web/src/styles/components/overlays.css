@@ -1,0 +1,134 @@
+/* ── 弹窗 / 菜单 ──────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--scrim);
+  animation: fade-in 0.16s var(--ease);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+.modal {
+  position: relative;
+  width: min(620px, 100%);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 22px;
+  border: 0;
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-4);
+  animation: rise-in 0.2s var(--ease);
+  /* 关闭按钮定位在本层，不随内容滚动。 */
+  overflow: hidden;
+}
+
+.modal-body-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.modal-title {
+  font-family: var(--font-serif);
+  font-size: 19px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--ink);
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+
+/* title → body 8；actions 内按钮 10；body → actions 12（8 + 4）。 */
+.modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+
+.modal:has(.modal-close) .modal-title {
+  padding-right: 32px;
+}
+
+.confirm-dialog {
+  width: min(480px, 100%);
+}
+
+/* ── Tooltip ─────────────────────────────────────────── */
+
+.tooltip {
+  position: fixed;
+  z-index: var(--z-tooltip);
+  max-width: 240px;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
+  color: var(--ink);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: normal;
+  pointer-events: none;
+  animation: tooltip-in 0.12s var(--ease);
+}
+
+.tooltip-arrow {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: var(--surface-raised);
+  box-shadow: none;
+  transform: translateX(-50%) rotate(45deg);
+}
+
+.tooltip[data-placement="top"] .tooltip-arrow {
+  bottom: -3px;
+}
+
+.tooltip[data-placement="bottom"] .tooltip-arrow {
+  top: -3px;
+}
+
+@keyframes tooltip-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip {
+    animation: none;
+  }
+}

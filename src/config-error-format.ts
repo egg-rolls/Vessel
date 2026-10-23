@@ -1,7 +1,7 @@
 /**
  * 配置校验错误统一格式化（DECISION-020 §R1.7）。
  *
- * bootstrap / eval / resume / workflow / `config show` 共用同一输出：
+ * bootstrap / eval / resume / `config show` 共用同一输出：
  * 每条错误 `${path}: ${message}`，附配置文件路径与 `vessel doctor` 下一步。
  *
  * @module vessel/config-error-format

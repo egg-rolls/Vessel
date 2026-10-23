@@ -320,6 +320,18 @@ describe('AgentService owner inbox', () => {
     ]);
   });
 
+  it('hasMember is true for private member sessions and false for the external owner session', async () => {
+    const { service } = makeService();
+    const member = await service.new({ visibility: 'private' });
+
+    expect(await service.hasMember(member.session_id)).toBe(true);
+
+    await service.attachOwner({ id: 'main', sessionId: 'session-parent' });
+    expect(await service.hasMember('session-parent')).toBe(false);
+    expect(await service.hasMember('main')).toBe(false);
+    expect(await service.hasMember('missing')).toBe(false);
+  });
+
   it('notePermissionState moves running -> waiting_permission -> running and ignores late states', async () => {
     const { service, runtime } = makeService();
     const gate = deferred<MemberTurnResult>();

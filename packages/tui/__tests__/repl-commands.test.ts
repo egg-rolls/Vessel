@@ -27,7 +27,7 @@ function runState(sessionId: string, messages: Message[]): RunState {
 }
 
 describe('CommandRegistry 扁平命令', () => {
-  it('createCommands 注册 31 个扁平命令（含 0.3 / 0.4 / 0.5 / 0.6.1 / 0.7 / 0.11 / 0.14 命令）', () => {
+  it('createCommands 注册 30 个扁平命令（含 0.3 / 0.4 / 0.5 / 0.6.1 / 0.7 / 0.11 / 0.14 命令）', () => {
     const reg = createCommands();
     const names = reg.list().map((e) => e.name);
     expect(names).toContain('tools');
@@ -35,7 +35,6 @@ describe('CommandRegistry 扁平命令', () => {
     expect(names).toContain('resume');
     expect(names).toContain('mcp');
     expect(names).toContain('runs');
-    expect(names).toContain('workflows');
     expect(names).toContain('metrics');
     expect(names).toContain('feishu');
     expect(names).toContain('capabilities');
@@ -67,10 +66,10 @@ describe('CommandRegistry 扁平命令', () => {
     // 已删命令（/skills、/assets）仍不注册
     expect(names).not.toContain('skills');
     expect(names).not.toContain('assets');
-    expect(names.length).toBe(31);
+    expect(names.length).toBe(30);
     // /sessions 保留为 hidden deprecated alias：注册但不出现在 help/autocomplete
     expect(reg.list().find((e) => e.name === 'sessions')?.hidden).toBe(true);
-    expect(reg.visibleList()).toHaveLength(30);
+    expect(reg.visibleList()).toHaveLength(29);
     expect(reg.visibleList().map((e) => e.name)).not.toContain('sessions');
     // /resume 仍是会话恢复，usage 扩展为 delete/rename 子命令
     expect(reg.list().find((e) => e.name === 'resume')?.usage).toBe(
@@ -86,7 +85,6 @@ describe('CommandRegistry 扁平命令', () => {
     const output = (await reg.execute('help', ctx, state)).output ?? '';
     expect(output).toContain('/mcp [reconnect <name>]');
     expect(output).toContain('/runs [resume <runId>]');
-    expect(output).toContain('/workflows [list|run|show|resume|cancel]');
     expect(output).toContain('/metrics');
     expect(output).toContain('/feishu');
     // 分组标题
@@ -185,13 +183,13 @@ describe('CommandRegistry 扁平命令', () => {
       rpc: {
         async request<T = unknown>(method: string): Promise<T> {
           expect(method).toBe('plugins.list');
-          return { plugins: [{ name: 'workflow', enabled: true }, 'feishu'] } as T;
+          return { plugins: [{ name: 'demo', enabled: true }, 'feishu'] } as T;
         },
         subscribe: () => () => undefined,
       },
     });
     const result = await reg.execute('plugins', ctx, makeState(ctx.currentSessionId));
-    expect(result.output ?? '').toContain('workflow');
+    expect(result.output ?? '').toContain('demo');
     expect(result.output ?? '').toContain('feishu');
   });
 });

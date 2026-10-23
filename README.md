@@ -28,7 +28,9 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 **alpha。当前开发线 `release/0.17.0`（基线 `release/0.16.0`），未发布。** 0.1 ~ 0.17 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.17.0 把成员能力层拆成 `packages/agent`（AgentService 唯一实现，`new` / `send` / `close` / `list` + batch），REPL 作为 owner 暴露 loopback 控制端点并新增 `vessel agent new|send|close|list` CLI；内置 `agent` 工具是唯一模型 schema，`team_*` / `delegate_task` 工具、`team` / `delegate-task` 插件与 `team.*` / `delegate.*` 配置已删除，`/v1/team/*` 传输协议文件保留但无生产装配。0.16.0 统一 agent 工具（Phase A）：模型工具面收敛到唯一 `agent`（`spawn` / `send` / `close`，`send` 入队即返回，不提供 `wait` / `inbox` / `status` / `cancel`），session 即成员并带完整状态机，成员回复经 `BeforeLlm` 注入父 turn，成员权限 `bridge` / `allow` / `deny` 弹到父窗口；`team.legacyTools` 默认保留一个版本，`delegate_task` 旧配置名映射为 `agent`，canonical RPC 仍为 44。0.15.1 是 Web 性能补丁：移除全屏遮罩与应用栏的 `backdrop-filter` 模糊，遮罩改为更实的半透明底色、应用栏改为不透明，避免 Edge / Chromium 在滚动和流式文本时掉帧。0.15.0 补透明化与多实例安全：core 发布 `context.compacted`（`auto|overflow|manual`）、`agent.limit.warning`（80%，每 run 每 key 一次）与 `agent.queue.entered/left`，`AgentSnapshot` / `SchedulerSnapshot` 补队列等待原因与上下文用量，Self Card（≤400 tokens）注入 systemPrompt；delegate 事件补 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path` 与 `result_ref`，孙 agent 经 `delegate.allow_nested`（默认 false）/ `delegate.max_descendants`（默认 16）显式开启；`edit` 纳入路径边界，`bash` 命令文本同时匹配自定义 `deny_paths`；tenant 双层锁（file 默认 shared、sqlite / `--exclusive` 走 `.lock`）与 session/run 写锁（`conflict` + `session_locked`）让同 dataDir 多实例不再互相覆盖、同 session 不并发写；canonical RPC 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（40 → 44），Web 增加 Diagnostics / Tasks / Display 页，TUI 增加 `/agents tree`、`/status` 队列与预警、`/settings errorLevel|verbosity`。0.14.4 硬化上下文压缩质量：保留区改按 `context.maxTokens × 0.3` 的 token 预算从最新消息向前累计，同时受 `maxMessages` 条数上限约束，token 或条数任一超限都触发摘要，保留边界不切断 `assistant(tool_calls)` / `tool` 配对；摘要 transcript 渲染 `[tool_call:<name>] <arguments>` 与 `[tool:<id>] <content>`、单条 12,000 字符截断、按 `min(48_000, max(2_000, floor(maxTokens / 8)))` 分块，块失败只影响该块。0.14.3 让限额命中可见：使用量上限命中时发布一次 `limit.blocked`，`run.failed` 附结构化 `limit_blocked` 与完整 `details`；默认 `limits.inputTokensLimit` 提高到 1,000,000、`termination.maxIterations` 提高到 50；provider 非 2xx 改抛 `ProviderHttpError`（`status` / `body` / `retryAfterMs`），重试在 429 读 `Retry-After`、402 不重试。0.14.2 修复 thinking 模型压缩后请求 400（压缩摘要改为 `role: 'system'`，Anthropic 合并全部 system 消息）与 bash 命令文本绕过内置凭据 denylist（best-effort，不是沙箱）。0.14.1 已实现结构化错误 envelope、可见性配置、`vessel status|agents|errors` 只读控制面、gateway 多实例 A、Host 对等与可序列化快照、`ToolDefinition.display`、gateway/serve 的 `ask_user` 注册，以及 Web 的 Codex 式工具卡 / 思考气泡 / 内联提问与三级可见性；0.14.0 不单独 bump，内容合并记录在 0.14.1。0.13 的双状态栏与权限生命周期继续有效。本文只写已合入当前分支的行为。
 
-**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / workflow / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.17.0`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
+**2026-10-22：workflow 插件与产品面已移除**（[ADR-090](docs/adr/ADR-090-remove-workflow-plugin.md)，取代 ADR-042）：`plugins/workflow/**`、`workflow.*` RPC、`workflow` 配置、CLI `vessel workflow`、TUI `/workflows`、Web workflow 页面全部删除；canonical RPC 45 → 40。历史 ADR 与 CHANGELOG 旧条目保留。
+
+**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.17.0`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
 
 **语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 内可直接 `/settings language <zh-CN|en>` 切换并写回用户配置（`VESSEL_LANG` 仍最高）；TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 控制台的壳层与 Settings 已支持 zh-CN / en（语言选择在 Settings → Appearance，存 `localStorage['vessel.ui.language']`，初始跟随 `navigator.language`）；未覆盖的功能页回退中文。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
@@ -96,8 +98,6 @@ vessel --connect https://gateway.example.com:8642 \
   --connect-token "$VESSEL_CONNECT_TOKEN" --ca ./ca.pem --run "..."  # 远程客户端
 vessel --resume-run                  # 列出 interrupted durable run
 vessel --resume-run <runId>          # 恢复并继续
-vessel workflow run release-check    # 跑 workflow（定义在 workflow.dir）
-vessel workflow list                 # 列出 workflow run
 vessel eval smoke                    # 跑 eval suite（默认离线）
 vessel --feishu                      # 前台运行飞书渠道（需 enabled + 凭据）
 vessel --version                     # 显示版本（读根 package.json）
@@ -122,7 +122,7 @@ vessel --connect http://127.0.0.1:8642 --run "..."  # 走 gateway RPC（回环�
 bun test                             # 在源码仓库内跑测试
 ```
 
-REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/workflows` `/metrics` `/feishu` `/setup` `/settings` `/reload` `/clear` `/exit`）。
+REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/metrics` `/feishu` `/setup` `/settings` `/reload` `/clear` `/exit`）。
 
 - `/clear` 清屏，**不清空会话上下文**；需要新会话用 `/new`。
 - `/settings language <zh-CN|en>` 切换界面语言并写回用户配置 `ui.language`，立即重渲染；`VESSEL_LANG` 显式设置时仍以环境变量为准。
@@ -224,50 +224,6 @@ durable:
 - resume 并发守卫是 per-Host / per-store-instance；多 Host 共享同一 `FileRunStore` 或跨进程同时恢复同一 run 属部署错误。
 - 已知错误码：`run_not_found` / `run_not_resumable` / `run_already_running` / `run_store_required` / `agent_not_found`。
 - `/v1/durable/*` 接收 token principal；list 按 tenant 过滤（非 default tenant 无独立 store → `forbidden`）；resume 要求 `write` 及以上角色。
-
-## Workflow 怎么用
-
-Workflow 是**插件**（`@vessel-agent/workflow`），默认关闭。打开后在 `workflow.dir` 下放 YAML/JSON 定义：
-
-```yaml
-name: release-check
-defaults:
-  max_parallel: 2
-steps:
-  - id: plan
-    type: agent
-    agent: owner
-    prompt: "分析仓库并输出计划"
-  - id: check
-    type: tool
-    tool: read
-    args:
-      path: "{{steps.plan.output}}"
-    depends_on: [plan]
-```
-
-```yaml
-workflow:
-  enabled: true
-  dir: ./workflows
-  path: ~/.vessel/workflows
-  max_parallel: 2
-  step_timeout_ms: 300000
-```
-
-```bash
-vessel workflow run release-check --input repo=vessel
-vessel workflow list --status failed
-vessel workflow show <workflowRunId>
-vessel workflow resume <workflowRunId>
-vessel workflow cancel <workflowRunId>
-```
-
-- 入口只有 CLI / TUI `/workflows` / gateway；**不注册模型工具**，模型不能触发任意路径的定义。
-- `resume` 会重跑 `running` / `pending` / `failed` 步骤，**不保证幂等**，重跑可能重复副作用。
-- 0.8.2 起 `type: tool` 走统一的工具执行管道（guardrail / hook / 权限 / timeout），与 runtime 语义一致（ADR-058）。
-- `cancel` 只支持同进程；跨进程 run 返回 `workflow_not_found`。
-- 已知错误码：`workflow_not_found` / `workflow_invalid` / `workflow_already_running` / `workflow_not_resumable` / `workflow_cancelled` / `workflow_disabled`。
 
 ## Evals 怎么用
 
@@ -377,10 +333,10 @@ cd apps/web && npm ci && npm run build           # 生产：gateway 同源托管
 
 - 打开控制台后把终端里的 token 粘到 URL fragment（`#token=...`）；token 随后转入 `sessionStorage`，不写 `localStorage`、不进 URL query。
 - 可用 `VESSEL_GATEWAY_TOKEN` 固定 token；优先级：`config > VESSEL_GATEWAY_TOKEN > gateway 自动生成`。未设置时每次启动自动生成。
-- 功能：运行提交/取消、事件时间线、会话列表、工具列表、run 内联权限卡片、ask_user 表单；按 `hello.features` 显示 MCP server / interrupted run / workflow / metrics / 飞书面板。
+- 功能：运行提交/取消、事件时间线、会话列表、工具列表、run 内联权限卡片、ask_user 表单；按 `hello.features` 显示 MCP server / interrupted run / metrics / 飞书面板。
 - 权限卡片内联在所属 run 卡片中，跨 session 的待处理请求由顶部条提示；其他端应答 / 过期 / run 结束会自动收起。权限等待默认不超时，应答返回 `expired` 表示已过期，`run_ended` 表示 run 已结束；`not_found` 仅表示请求从未存在。`ask_user` 内联在所属 run 卡片中，按事件时间计算 120s 有效期；跨 session 的待处理条同时汇总权限与提问。工具卡与思考气泡按 Codex 式分区展示，`ui.verbosity: minimal|normal|debug` 控制信息层级（默认 `normal`）。`ui.showReasoning: true` 时思考过程折叠显示（默认关闭）。
 - 助手文本 Markdown 渲染（代码块 / 列表 / 表格 / 链接）；`sessions.search` 服务端全文检索（返回 snippet，前端 150ms 防抖并保留本地过滤兜底）；`tool.call.started` 带 `args`、`tool.call.completed` 带 `result`（上限 8 KiB，超出截断标记），事件卡可折叠、失败默认展开。
-- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/workflows*`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/team/*`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13 / §15 / §16。
+- 协议：WS `/v1/events?since=`（`seq` 续订 / `gap`）；REST `/v1/runs`、`/v1/sessions`、`/v1/tools`、`/v1/permissions/:id`、`/v1/ask/:id`、`/v1/durable/runs`、`/v1/durable/runs/:id/resume`、`/v1/mcp/servers`、`/v1/metrics`、`/v1/channels/feishu`、`/v1/evals/latest`、`/v1/team/*`。详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §13 / §15 / §16。
 - 安全默认：只绑 `127.0.0.1`，Host/Origin 校验，首帧鉴权，1 MiB 请求体上限。
 - 远程 / TLS（显式 opt-in）：`--serve-host` + `--allow-remote` + `--tls-cert`/`--tls-key`，或 `serve.*` 配置；**非回环必须 token + HTTPS/WSS**，cert/key 必须成对。只做 HTTP/1.1。
 - 独立前端：页面运行时可切换 gateway 地址，优先级 `localStorage['vessel.gateway-url']` > `VITE_GATEWAY_URL` > 同源；只接受 http(s)/ws(s) origin，非回环必须 https，HTTPS 页面拒绝 http（mixed content）。跨 Origin 部署需在服务端配置 `serve.allowed_origins`（或重复使用 `--allowed-origin`），且浏览器必须信任证书。详见 [REMOTE.md](docs/operations/REMOTE.md)。
@@ -448,8 +404,6 @@ transport:
 以下能力**尚未实现**，明确不在本期范围：
 
 - **远程 mesh / 节点自动发现 / mTLS** —— 未实现；0.6 只支持静态节点表 + Bearer token + TLS，不做 mDNS / 服务网格 / 客户端证书。
-- **跨节点 durable / 全局事件序 / 分布式锁** —— 未实现；无全局 seq、无跨机 durable、无分布式锁；workflow 仍只做本机编排。
-- **workflow 可视化编辑器 / 跨机器编排** —— 未实现；workflow 定义是 YAML/JSON 文件。
 - **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；只做文本、单 chat 单 session。
 - **微信（公众号 / 企业微信）** —— **不做**；个人微信无官方 API。
 - **per-tenant 跨节点 team** —— 未实现；跨节点 team 控制面为 default/admin-only。

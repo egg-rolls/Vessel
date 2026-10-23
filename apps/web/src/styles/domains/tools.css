@@ -1,0 +1,71 @@
+/* ── tool call 折叠行 ─────────────────────────────────── */
+
+.tool-call {
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  margin: 4px 0;
+}
+
+.tool-call-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.tool-call-head:hover {
+  background: var(--hover-tint);
+}
+
+.tool-call-name {
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.tool-call-toggle {
+  margin-left: auto;
+}
+
+.tool-call-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px 10px 20px;
+}
+
+.tool-call-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tool-call-field .json-body {
+  margin: 0;
+  border-radius: var(--radius-sm);
+  background: var(--surface-deep);
+  max-height: 240px;
+}
+
+.tool-schema {
+  margin-top: 4px;
+}
+
+.tool-schema summary {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .tool-card-header {
+    min-height: var(--touch-target);
+  }
+}

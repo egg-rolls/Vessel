@@ -62,6 +62,8 @@ export interface ListedInteraction {
   request_id: string;
   run_id: string;
   session_id?: string;
+  /** 成员 bridge 请求的父会话（additive，缺失时不输出该 key）。 */
+  parent_session_id?: string;
   tool_call_id?: string;
   tool?: string;
   input?: unknown;
@@ -88,6 +90,7 @@ const interactionItemSchema = {
     request_id: { type: 'string' },
     run_id: { type: 'string' },
     session_id: { type: 'string' },
+    parent_session_id: { type: 'string' },
     tool_call_id: { type: 'string' },
     tool: { type: 'string' },
     // input / questions 是模型给出的任意 JSON；校验器不支持 arbitrary，留空即可。
@@ -122,6 +125,9 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
       request_id: record.requestId,
       run_id: record.run_id,
       ...(record.session_id !== undefined ? { session_id: record.session_id } : {}),
+      ...(record.parent_session_id !== undefined
+        ? { parent_session_id: record.parent_session_id }
+        : {}),
       ...(record.tool_call_id !== undefined ? { tool_call_id: record.tool_call_id } : {}),
       tool: record.tool,
       input: record.input,
@@ -137,6 +143,9 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
       request_id: requestId,
       run_id: pending.run_id,
       ...(pending.session_id !== undefined ? { session_id: pending.session_id } : {}),
+      ...(pending.parent_session_id !== undefined
+        ? { parent_session_id: pending.parent_session_id }
+        : {}),
       ...(pending.tool_call_id !== undefined ? { tool_call_id: pending.tool_call_id } : {}),
       tool: pending.tool,
       input: pending.input,
@@ -151,6 +160,7 @@ function collectInteractions(sources: InteractionSources, tenantId: string): Lis
       request_id: requestId,
       run_id: ask.run_id,
       ...(ask.session_id !== undefined ? { session_id: ask.session_id } : {}),
+      ...(ask.parent_session_id !== undefined ? { parent_session_id: ask.parent_session_id } : {}),
       ...(ask.questions !== undefined ? { questions: ask.questions } : {}),
       created_at: ask.ts,
       status: 'pending',

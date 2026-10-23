@@ -1,5 +1,5 @@
 /**
- * 真实 ext 包集成测试：workflow / evals / feishu。
+ * 真实 ext 包集成测试：evals / feishu。
  *
  * 这些测试直接 import 三个包的公开导出，验证 asm 的结构类型与真实接口一致；
  * 全部离线，不访问网络。
@@ -16,17 +16,14 @@ import {
   MemoryLLMProvider,
   MemoryPluginHost,
   MemorySessionBackend,
-  type RunnableAgent,
   resolveTenantPaths,
 } from '../../packages/core/src/index';
 import * as evalsModule from '../../plugins/evals/harness/src/index';
 import * as feishuModule from '../../plugins/im/feishu/src/index';
 import { maskAppId as extMaskAppId } from '../../plugins/im/feishu/src/index';
-import * as workflowModule from '../../plugins/workflow/engine/src/index';
 import { executeEvalSuite } from '../eval-wiring';
 import { createFeishuFromConfig, maskAppId } from '../feishu-wiring';
 import { installTrace } from '../trace-wiring';
-import { createWorkflowFromConfig } from '../workflow-wiring';
 
 const dirs: string[] = [];
 
@@ -47,66 +44,6 @@ function write(filePath: string, content: string): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, content, 'utf-8');
 }
-
-describe('real @vessel-agent/workflow', () => {
-  it('constructs the engine and runs an agent step with workflow:<run_id> session', async () => {
-    const base = tmpDir('vessel-04-real-wf-');
-    const defs = path.join(base, 'defs');
-    const store = path.join(base, 'runs');
-    const definition = path.join(defs, 'demo.yaml');
-    write(
-      definition,
-      [
-        'name: demo',
-        'version: 1',
-        'steps:',
-        '  - id: only',
-        '    type: agent',
-        '    agent: owner',
-        '    prompt: hello',
-      ].join('\n'),
-    );
-
-    const events = new MemoryEventStream();
-    const pluginHost = new MemoryPluginHost();
-    const sessionIds: Array<string | undefined> = [];
-    const runtime = {
-      events,
-      pluginHost,
-      run: async (_input: unknown, sessionId?: string) => {
-        sessionIds.push(sessionId);
-        return 'ok';
-      },
-      dispose: () => {},
-    } as unknown as RunnableAgent;
-
-    const config: VesselConfig = {
-      workflow: { enabled: true, dir: defs, path: store, maxParallel: 1 },
-    };
-
-    const engine = await createWorkflowFromConfig({
-      config,
-      events,
-      pluginHost,
-      runtime,
-      loadModule: async () => workflowModule,
-    });
-    expect(engine).toBeDefined();
-
-    const started = await engine?.start(definition);
-    const runId = started?.workflowRunId;
-    expect(runId).toBeDefined();
-
-    const outcome = await started?.done;
-    expect(outcome?.status).toBe('completed');
-    expect(sessionIds[0]).toBe(`workflow:${runId}`);
-
-    const runs = await engine?.listRuns();
-    expect(runs?.map((run) => run.workflow_run_id)).toEqual([runId as string]);
-
-    await engine?.close();
-  });
-});
 
 describe('real @vessel-agent/evals', () => {
   it('runs a suite offline and writes the report via ext report.ts', async () => {

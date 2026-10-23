@@ -4,16 +4,9 @@
  * 只生成 action 组；破坏性动作带 `danger` + `confirm`，由 AppShell 弹确认框。
  * 数量有上限，避免 recent 列表把面板撑爆。
  */
-import type {
-  DurableRunSummary,
-  McpServerStatus,
-  RunStatus,
-  TenantInfo,
-  WorkflowRunSummary,
-} from '../gateway/types';
+import type { DurableRunSummary, McpServerStatus, RunStatus, TenantInfo } from '../gateway/types';
 import type { PaletteItem } from './palette';
 import { isCancellableRun, isResumableRun } from './runs';
-import { workflowStatusResumable } from './workflows';
 
 export const PALETTE_ACTION_LIMIT = 5;
 
@@ -91,70 +84,6 @@ export function buildRunPaletteActions({
     });
   }
   return items;
-}
-
-export interface WorkflowPaletteActionsOptions {
-  workflows: readonly WorkflowRunSummary[];
-  open: (workflowId: string) => void;
-  resume: (workflowId: string) => void;
-  cancel: (workflowId: string) => void;
-  limit?: number;
-}
-
-export function buildWorkflowPaletteActions({
-  workflows,
-  open,
-  resume,
-  cancel,
-  limit = PALETTE_ACTION_LIMIT,
-}: WorkflowPaletteActionsOptions): PaletteItem[] {
-  const items: PaletteItem[] = [];
-  for (const run of workflows.slice(0, limit)) {
-    items.push({
-      id: `workflow-open-${run.workflow_run_id}`,
-      group: 'action',
-      label: `打开工作流 ${run.workflow_name}`,
-      keywords: ['workflow', 'open', run.workflow_run_id, run.status],
-      hint: '工作流',
-      run: () => open(run.workflow_run_id),
-    });
-  }
-  for (const run of workflows
-    .filter((entry) => workflowStatusResumable(entry.status))
-    .slice(0, limit)) {
-    items.push({
-      id: `workflow-resume-${run.workflow_run_id}`,
-      group: 'action',
-      label: `恢复工作流 ${run.workflow_name}`,
-      keywords: ['workflow', 'resume', run.workflow_run_id, run.status],
-      hint: '恢复',
-      run: () => resume(run.workflow_run_id),
-    });
-  }
-  for (const run of workflows
-    .filter((entry) => workflowStatusActive(entry.status))
-    .slice(0, limit)) {
-    items.push({
-      id: `workflow-cancel-${run.workflow_run_id}`,
-      group: 'action',
-      label: `取消工作流 ${run.workflow_name}`,
-      keywords: ['workflow', 'cancel', run.workflow_run_id, run.status],
-      hint: '取消',
-      danger: true,
-      confirm: {
-        title: '取消工作流运行？',
-        body: '已完成步骤会保留；取消后无法继续执行该运行。',
-        confirmLabel: '取消运行',
-      },
-      run: () => cancel(run.workflow_run_id),
-    });
-  }
-  return items;
-}
-
-/** 与 shell 的判定一致：non-terminal 才可取消。 */
-export function workflowStatusActive(status: WorkflowRunSummary['status']): boolean {
-  return status !== 'completed' && status !== 'failed' && status !== 'cancelled';
 }
 
 export interface McpPaletteActionsOptions {

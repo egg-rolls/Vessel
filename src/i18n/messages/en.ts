@@ -44,11 +44,6 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.gatewayReload': 'hot-reload config/plugins without restarting',
   'help.cmd.gatewayInstall': 'register login autostart (systemd / launchd / schtasks)',
   'help.cmd.gatewayUninstall': 'remove the system service registration',
-  'help.cmd.workflowList': 'list workflow runs',
-  'help.cmd.workflowRun': 'start a workflow (resolved under workflow.dir)',
-  'help.cmd.workflowShow': 'show step status',
-  'help.cmd.workflowResume': 'resume interrupted/failed/running',
-  'help.cmd.workflowCancel': 'cancel an in-process run',
   'help.cmd.eval': 'offline evaluation',
   'help.cmd.evalOut': 'write evaluation JSON / choose the report path',
   'help.cmd.feishu': 'attach the Feishu channel (usable with gateway start / REPL)',
@@ -167,6 +162,10 @@ export const en: Record<MessageKey, string> = {
   'gateway.startFailed': 'Gateway failed to start: {detail}',
   'gateway.started': 'Gateway started (pid {pid}): {url}',
   'gateway.logPath': 'Log: {path}',
+  'gateway.webDistMissing':
+    'Web console assets are missing at {path}; run `bun run dev:web` for Vite dev, or build with `cd apps/web && npm run build`.',
+  'gateway.webDistStale':
+    'Web console assets may be stale: {index} is older than {source}; run `bun run build:web:watch` or rebuild.',
   'gateway.noToken':
     'No gateway token configured (serve.token / serve.admin_token / VESSEL_GATEWAY_TOKEN); cannot call the local RPC.',
   'gateway.reloadNoGateway': 'Gateway is not running; run `vessel gateway start` first.',

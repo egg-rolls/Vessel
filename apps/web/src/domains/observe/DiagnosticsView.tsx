@@ -98,7 +98,7 @@ export function DiagnosticsView() {
         ) : queue.length === 0 ? (
           <EmptyState title={t('observe.diagnostics.queueEmpty')} />
         ) : (
-          <table className="table">
+          <table className="data-table">
             <thead>
               <tr>
                 <th>run</th>

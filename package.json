@@ -37,7 +37,10 @@
   "scripts": {
     "start": "bun run src/cli.ts",
     "demo": "bun run examples/demo.ts",
+    "dev:web": "bun run scripts/dev-web.ts",
+    "build:web:watch": "bun run --cwd apps/web build:watch",
     "test": "bun test",
+    "test:web": "bun test apps/web/tests",
     "build": "bun run scripts/build.ts",
     "lint": "bunx @biomejs/biome ci .",
     "typecheck": "tsc --noEmit && tsc -p examples --noEmit",

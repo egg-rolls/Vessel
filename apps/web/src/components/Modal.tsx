@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useRef } from 'react';
+import { IconButton } from './Tooltip';
 
 const FOCUSABLE =
   'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -61,6 +62,7 @@ export function ModalShell({
   describedBy,
   onClose,
   closeOnBackdrop = true,
+  closeLabel,
   className = '',
   children,
 }: {
@@ -68,6 +70,8 @@ export function ModalShell({
   describedBy?: string;
   onClose: () => void;
   closeOnBackdrop?: boolean;
+  /** 提供时在右上角渲染关闭按钮；不传则保持原有布局。 */
+  closeLabel?: string;
   className?: string;
   children: ReactNode;
 }) {
@@ -88,7 +92,12 @@ export function ModalShell({
         aria-label={label}
         aria-describedby={describedBy}
       >
-        {children}
+        <div className="modal-body-scroll">{children}</div>
+        {closeLabel ? (
+          <IconButton className="modal-close" label={closeLabel} onClick={onClose}>
+            ×
+          </IconButton>
+        ) : null}
       </div>
     </div>
   );

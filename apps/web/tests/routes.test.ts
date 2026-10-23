@@ -18,8 +18,6 @@ const ROUTES: Route[] = [
   { domain: 'team', teamId: 'team-1', memberId: 'agent-1', bodyId: 'session-1' },
   { domain: 'runs', tab: 'live' },
   { domain: 'runs', tab: 'durable', runId: 'run 1', sessionId: 's/2' },
-  { domain: 'workflows' },
-  { domain: 'workflows', workflowId: 'wf_1' },
   { domain: 'integrations', tab: 'tools' },
   { domain: 'integrations', tab: 'mcp' },
   { domain: 'integrations', tab: 'channels' },
@@ -59,6 +57,8 @@ describe('parseRoute / formatRoute', () => {
       expect(parseRoute(hash).domain).toBe('chat');
     }
     expect(parseRoute('')).toEqual({ domain: 'chat' });
+    expect(parseRoute('#/workflows')).toEqual({ domain: 'chat' });
+    expect(parseRoute('#/workflows/wf_1')).toEqual({ domain: 'chat' });
   });
 
   test('keeps unknown tab values away from the Route union', () => {

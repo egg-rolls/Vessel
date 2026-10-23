@@ -16,6 +16,19 @@ export function payloadText(value: unknown): string {
   }
 }
 
+/**
+ * `llm.request` 的消息条数（0.18）：服务端可能已把请求摘要化，
+ * 只保留 `message_count` 而不再下发 `messages`。
+ *
+ * 优先用 `message_count`；否则用 `messages.length`；两者都没有时返回 null，
+ * 调用方不渲染任何 msgs 数字（不能伪造成 0）。
+ */
+export function messageCountOf(data: Record<string, unknown>): number | null {
+  if (typeof data.message_count === 'number') return data.message_count;
+  if (Array.isArray(data.messages)) return data.messages.length;
+  return null;
+}
+
 function ToolPayload({ label, value, open }: { label: string; value: unknown; open?: boolean }) {
   const text = payloadText(value);
   if (!text) return null;
@@ -101,12 +114,13 @@ function renderEventBody(event: RunEvent) {
       );
     }
     case 'llm.request': {
-      const d = event.data as { messages?: unknown[]; tools?: unknown[] };
-      return (
-        <span className="dim">
-          {d.messages?.length ?? 0} msgs{d.tools?.length ? ` · ${d.tools.length} tools` : ''}
-        </span>
-      );
+      const d = event.data as { messages?: unknown; message_count?: unknown; tools?: unknown };
+      const messages = messageCountOf(event.data);
+      const tools = Array.isArray(d.tools) ? d.tools.length : 0;
+      const parts: string[] = [];
+      if (messages !== null) parts.push(`${messages} msgs`);
+      if (tools > 0) parts.push(`${tools} tools`);
+      return <span className="dim">{parts.join(' · ')}</span>;
     }
     case 'llm.response': {
       const d = event.data as { finish_reason?: string; usage?: { total_tokens?: number } };

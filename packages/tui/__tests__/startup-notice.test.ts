@@ -7,8 +7,6 @@ import type {
   FeishuStatusLike,
   McpControl,
   McpServerSummary,
-  WorkflowRunSummaryLike,
-  WorkflowsControl,
 } from '../src/repl-context.js';
 import { makeCtx } from './helpers.js';
 
@@ -22,16 +20,6 @@ const interruptedRun = (id: string): DurableRunSummary => ({
   run_id: id,
   session_id: 'session',
   status: 'interrupted',
-  updated_at: 1,
-});
-
-const interruptedWorkflow = (id: string): WorkflowRunSummaryLike => ({
-  workflow_run_id: id,
-  workflow_name: 'wf',
-  status: 'interrupted',
-  step_count: 2,
-  completed_steps: 1,
-  started_at: 1,
   updated_at: 1,
 });
 
@@ -116,46 +104,15 @@ describe('loadStartupNotice', () => {
     expect(await loadStartupNotice(ctx)).toBe('ℹ 1 interrupted run — /runs');
   });
 
-  it('读取 interrupted workflow 与飞书状态', async () => {
+  it('读取飞书状态', async () => {
     const ctx = makeCtx();
-    let listOpts: unknown;
-    ctx.workflows = {
-      listRuns: async (opts) => {
-        listOpts = opts;
-        return [interruptedWorkflow('wf_1')];
-      },
-      getRun: async () => null,
-      start: async () => {
-        throw new Error('not used');
-      },
-      resume: async () => {
-        throw new Error('not used');
-      },
-      cancel: async () => undefined,
-    } satisfies WorkflowsControl;
     ctx.feishu = { status: () => connectedFeishu } satisfies FeishuControlLike;
 
-    expect(await loadStartupNotice(ctx)).toBe(
-      'ℹ 1 interrupted workflow run · Feishu connected — /workflows · /feishu',
-    );
-    expect(listOpts).toEqual({ status: 'interrupted', limit: 20 });
+    expect(await loadStartupNotice(ctx)).toBe('ℹ Feishu connected — /feishu');
   });
 
-  it('workflow 查询失败与 feishu status 抛错都静默降级', async () => {
+  it('feishu status 抛错静默降级', async () => {
     const ctx = makeCtx();
-    ctx.workflows = {
-      listRuns: async () => {
-        throw new Error('boom');
-      },
-      getRun: async () => null,
-      start: async () => {
-        throw new Error('not used');
-      },
-      resume: async () => {
-        throw new Error('not used');
-      },
-      cancel: async () => undefined,
-    } satisfies WorkflowsControl;
     ctx.feishu = {
       status: () => {
         throw new Error('boom');

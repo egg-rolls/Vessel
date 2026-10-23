@@ -30,6 +30,7 @@ select {
 }
 
 button {
+  border: 0;
   cursor: pointer;
 }
 
@@ -77,7 +78,7 @@ fieldset {
 ::-webkit-scrollbar-thumb {
   background: var(--line-strong);
   border: 3px solid transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background-clip: padding-box;
 }
 
@@ -121,9 +122,9 @@ fieldset {
   left: 8px;
   z-index: 100;
   padding: 8px 14px;
-  border: 1px solid var(--accent-line);
   border-radius: var(--radius-sm);
-  background: var(--surface);
+  background: var(--surface-raised);
+  box-shadow: var(--elev-2);
   color: var(--ink);
   font-size: 12px;
   transform: translateY(-160%);
@@ -142,13 +143,44 @@ kbd,
 .kbd {
   display: inline-block;
   padding: 1px 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
+  border-radius: var(--radius-xs);
+  background: var(--surface-sunken);
+  box-shadow: var(--elev-inset);
   font-family: var(--font-mono);
   font-size: 10.5px;
   line-height: 1.6;
   color: var(--muted);
+}
+
+@media (forced-colors: active) {
+  .card,
+  .modal,
+  .menu,
+  .palette,
+  .ask-card,
+  .composer,
+  .panel,
+  .stat,
+  .state-empty,
+  .state-loading,
+  .state-error,
+  .state-not-enabled,
+  .toast,
+  .prompt-slot,
+  .pending-permissions-bar,
+  .bottom-nav,
+  .tool-card,
+  .event-list,
+  .btn,
+  .input,
+  .status-chip {
+    border: 1px solid CanvasText;
+  }
+
+  *:focus-visible {
+    outline: 2px solid CanvasText;
+    box-shadow: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

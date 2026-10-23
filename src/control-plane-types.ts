@@ -2,7 +2,7 @@
  * 0.4 控制面结构类型（asm 侧）。
  *
  * 这些类型与 ext / tui / web 冻结的公开形状结构性兼容；asm 不静态 import
- * `@vessel-agent/workflow` / `@vessel-agent/evals` / `@vessel-agent/feishu` 的实现，避免并行分支
+ * `@vessel-agent/evals` / `@vessel-agent/feishu` 的实现，避免并行分支
  * 在包尚未合入时 typecheck 失败。
  */
 
@@ -12,115 +12,9 @@ import type {
   LLMProvider,
   Plugin,
   PluginHost,
-  RunnableAgent,
   RunStore,
-  RuntimeHost,
   SessionBackend,
-  ToolPipeline,
 } from '../packages/core/src/index';
-
-// ── workflow ────────────────────────────────────
-
-export type WorkflowRunStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'cancelled'
-  | 'interrupted';
-
-export type WorkflowStepStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'skipped'
-  | 'cancelled';
-
-export interface WorkflowRunSummary {
-  workflow_run_id: string;
-  workflow_name: string;
-  status: WorkflowRunStatus;
-  step_count: number;
-  completed_steps: number;
-  started_at: number;
-  updated_at: number;
-  error?: string;
-}
-
-export interface WorkflowStepSummary {
-  id: string;
-  type: 'agent' | 'tool';
-  status: WorkflowStepStatus;
-  attempts: number;
-  started_at?: number;
-  finished_at?: number;
-  error?: string;
-  output_preview?: string;
-}
-
-export interface WorkflowRunDetail extends WorkflowRunSummary {
-  definition_path: string;
-  inputs: Record<string, string>;
-  steps: WorkflowStepSummary[];
-}
-
-export interface WorkflowOutcome {
-  workflow_run_id: string;
-  status: WorkflowRunStatus;
-  error?: string;
-}
-
-export interface WorkflowStartResult {
-  workflowRunId: string;
-  done: Promise<WorkflowOutcome>;
-}
-
-/** 引擎路径接口（gateway / CLI 使用） */
-export interface WorkflowControlsLike {
-  listRuns(opts?: { status?: WorkflowRunStatus; limit?: number }): Promise<WorkflowRunSummary[]>;
-  getRun(workflowRunId: string): Promise<WorkflowRunDetail | null>;
-  start(
-    definitionPath: string,
-    opts?: { inputs?: Record<string, string> },
-  ): Promise<WorkflowStartResult>;
-  resume(workflowRunId: string): Promise<WorkflowStartResult>;
-  cancel(workflowRunId: string): Promise<void>;
-}
-
-export interface WorkflowEngineLike extends Plugin, WorkflowControlsLike {
-  close(): Promise<void>;
-  interruptAll(reason?: string): Promise<void>;
-}
-
-export interface ResolvedWorkflowConfigLike {
-  enabled: boolean;
-  /** 定义目录（绝对路径） */
-  dir: string;
-  /** run 记录目录（绝对路径） */
-  path: string;
-  maxParallel: number;
-  stepTimeoutMs: number;
-}
-
-export interface WorkflowEngineOptionsLike {
-  host?: RuntimeHost;
-  runtime?: RunnableAgent;
-  pluginHost: PluginHost;
-  config: ResolvedWorkflowConfigLike;
-  events: EventStream;
-  /** 0.5：tenant 作用域（A-6 §13.4）；缺省不写 tenant_id（0.4 兼容）。 */
-  tenantId?: string;
-  /**
-   * 0.8.2 Wave 2B1：统一工具执行管道（权限 / guardrail / hook）。
-   * 注入后 `type: tool` 步骤走同一套语义；ext 未识别时忽略该字段（旧路径）。
-   */
-  toolPipeline?: ToolPipeline;
-}
-
-export interface WorkflowModuleLike {
-  createWorkflowEngine(options: WorkflowEngineOptionsLike): WorkflowEngineLike;
-}
 
 // ── evals ───────────────────────────────────────
 

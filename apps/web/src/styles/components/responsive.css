@@ -1,0 +1,49 @@
+/* ── 小屏表格降列 ─────────────────────────────────────── */
+
+@media (max-width: 680px) {
+  .form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .data-table .col-session,
+  .data-table .col-meta,
+  .data-table .col-optional {
+    display: none;
+  }
+
+  .data-table th,
+  .data-table td {
+    padding: 7px 6px;
+  }
+
+  .modal-backdrop {
+    padding: 12px;
+  }
+
+  .modal {
+    padding: 18px;
+  }
+
+  .toast-region {
+    right: 12px;
+    bottom: calc(70px + env(safe-area-inset-bottom));
+    width: calc(100vw - 24px);
+  }
+}
+
+/* ── 触控目标 ≥ 44px（不改桌面尺寸） ─────────────────── */
+
+@media (pointer: coarse) {
+  .btn,
+  .icon-btn,
+  .input,
+  .segment,
+  .filter-chip,
+  .palette-option {
+    min-height: var(--touch-target);
+  }
+
+  .icon-btn {
+    min-width: var(--touch-target);
+  }
+}

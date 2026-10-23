@@ -457,7 +457,7 @@ export function RunsView({
                 }
               />
             ) : route.tab === 'live' ? (
-              <table className="data-table runs-table">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th scope="col">状态</th>
@@ -539,7 +539,7 @@ export function RunsView({
                 </tbody>
               </table>
             ) : (
-              <table className="data-table runs-table">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th scope="col">状态</th>

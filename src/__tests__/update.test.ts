@@ -86,8 +86,20 @@ describe('manifest', () => {
     expect(resolveManifestUrl('https://mirror.example/latest.json', 'beta')).toBe(
       'https://mirror.example/latest.json',
     );
+    expect(resolveManifestUrl('https://mirror.example/latest.json', 'latest')).toBe(
+      'https://mirror.example/latest.json',
+    );
     expect(resolveManifestUrl('https://github.com/o/r/', 'beta')).toBe(
-      'https://github.com/o/r/releases?per_page=20',
+      'https://api.github.com/repos/o/r/releases',
+    );
+    expect(resolveManifestUrl('https://github.com/o/r.git', 'beta')).toBe(
+      'https://api.github.com/repos/o/r/releases',
+    );
+    expect(resolveManifestUrl('https://www.github.com/o/r', 'beta')).toBe(
+      'https://api.github.com/repos/o/r/releases',
+    );
+    expect(resolveManifestUrl('https://mirror.example/repo', 'beta')).toBe(
+      'https://mirror.example/repo/releases?per_page=20',
     );
   });
 
@@ -136,7 +148,7 @@ describe('checkForUpdate', () => {
     });
     expect(result.upToDate).toBe(false);
     expect(result.latest).toBe('0.2.0');
-    expect(result.installHint).toContain('vessel@0.2.0');
+    expect(result.installHint).toContain('vessel-agent@0.2.0');
   });
 
   it('已是最新', async () => {
@@ -162,6 +174,89 @@ describe('checkForUpdate', () => {
       checkForUpdate({ currentVersion: '0.1.0', channel: 'latest', source }),
     ).rejects.toThrow('HTTP 404');
   });
+
+  it('beta 通道先调 releases API，再取预发布资产的清单', async () => {
+    const calls: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = String(input);
+      calls.push(url);
+      if (calls.length === 1) {
+        return Response.json([
+          {
+            prerelease: true,
+            assets: [
+              {
+                name: 'latest.json',
+                browser_download_url: 'https://example.com/beta/latest.json',
+              },
+            ],
+          },
+        ]);
+      }
+      return Response.json({ version: '0.2.0-beta.1', channel: 'beta' });
+    }) as unknown as typeof fetch;
+
+    const result = await checkForUpdate({
+      currentVersion: '0.1.0',
+      channel: 'beta',
+      source: 'https://github.com/o/r',
+      fetchImpl,
+    });
+
+    expect(calls[0]).toBe('https://api.github.com/repos/o/r/releases');
+    expect(calls[1]).toBe('https://example.com/beta/latest.json');
+    expect(result.latest).toBe('0.2.0-beta.1');
+    expect(result.channel).toBe('beta');
+    expect(result.upToDate).toBe(false);
+  });
+
+  it('beta 列表返回 500 时报 HTTP 状态，而不是 SyntaxError', async () => {
+    const fetchImpl = (async () =>
+      new Response('server error', { status: 500 })) as unknown as typeof fetch;
+
+    await expect(
+      checkForUpdate({
+        currentVersion: '0.1.0',
+        channel: 'beta',
+        source: 'https://github.com/o/r',
+        fetchImpl,
+      }),
+    ).rejects.toThrow('HTTP 500');
+  });
+
+  it('beta 列表是 HTML 时给出 Invalid JSON，而不是 SyntaxError', async () => {
+    const fetchImpl = (async () =>
+      new Response('<html>not json</html>', {
+        status: 200,
+        headers: { 'content-type': 'text/html' },
+      })) as unknown as typeof fetch;
+
+    await expect(
+      checkForUpdate({
+        currentVersion: '0.1.0',
+        channel: 'beta',
+        source: 'https://github.com/o/r',
+        fetchImpl,
+      }),
+    ).rejects.toThrow('Invalid JSON');
+  });
+
+  it('GitHub 限流 403 时提示 rate limit', async () => {
+    const fetchImpl = (async () =>
+      new Response('{"message":"API rate limit exceeded"}', {
+        status: 403,
+        headers: { 'x-ratelimit-remaining': '0' },
+      })) as unknown as typeof fetch;
+
+    await expect(
+      checkForUpdate({
+        currentVersion: '0.1.0',
+        channel: 'beta',
+        source: 'https://github.com/o/r',
+        fetchImpl,
+      }),
+    ).rejects.toThrow('rate limit');
+  });
 });
 
 describe('cache', () => {
@@ -181,7 +276,7 @@ describe('cache', () => {
 
 describe('installHint', () => {
   it('给出包管理器命令，不做自替换', () => {
-    expect(installHint('0.2.0')).toContain('bun add -g vessel@0.2.0');
-    expect(installHint('0.2.0')).toContain('npm i -g vessel@0.2.0');
+    expect(installHint('0.2.0')).toContain('bun add -g vessel-agent@0.2.0');
+    expect(installHint('0.2.0')).toContain('npm i -g vessel-agent@0.2.0');
   });
 });

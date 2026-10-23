@@ -7,10 +7,10 @@ import { primaryRoute } from './DomainNav';
 import { domainLabel, isDomainActive, type PrimaryDomain } from './nav';
 import type { Route } from './router';
 
-/** 移动端常驻 4 项；Team 放进 More sheet，避免出现第 6 个常驻按钮。 */
-const BOTTOM_DOMAINS: readonly PrimaryDomain[] = ['chat', 'runs', 'workflows', 'integrations'];
+/** 移动端常驻 3 项；Team 放进 More sheet，避免出现第 6 个常驻按钮。 */
+const BOTTOM_DOMAINS: readonly PrimaryDomain[] = ['chat', 'runs', 'integrations'];
 
-/** <680px：底部 4 个主域 + More sheet（可观测 / 设置 / 连接身份）。 */
+/** <680px：底部 3 个主域 + More sheet（可观测 / 设置 / 连接身份）。 */
 export function BottomNav({ route, navigate }: { route: Route; navigate: (route: Route) => void }) {
   useLocale();
   const [moreOpen, setMoreOpen] = useState(false);

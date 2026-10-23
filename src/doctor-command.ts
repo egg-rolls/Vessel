@@ -320,7 +320,6 @@ export async function doctorCommand(options: DoctorOptions): Promise<DoctorComma
     config.host?.enabled === true ? 'host' : null,
     config.agent?.enabled === true ? 'agent' : null,
     config.durable?.enabled === true ? 'durable' : null,
-    config.workflow?.enabled === true ? 'workflow' : null,
     config.evals?.enabled === true ? 'evals' : null,
     config.feishu?.enabled === true ? 'feishu' : null,
   ].filter((value): value is string => value !== null);

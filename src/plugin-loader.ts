@@ -36,12 +36,7 @@ const NON_PLUGIN_PACKAGES: ReadonlySet<string> = new Set([
  * 默认导出是**工厂函数**而非 Plugin 实例的插件——它们需要装配层注入运行时依赖，
  * 由 bootstrap 自行构造。
  */
-export const FACTORY_PLUGINS: ReadonlySet<string> = new Set([
-  'mcp-client',
-  'workflow',
-  'evals',
-  'feishu',
-]);
+export const FACTORY_PLUGINS: ReadonlySet<string> = new Set(['mcp-client', 'evals', 'feishu']);
 
 /** 插件来源 */
 export type PluginSource = 'repo' | 'user' | 'project' | 'node_modules';

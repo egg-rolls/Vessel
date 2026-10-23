@@ -14,15 +14,12 @@ export const en: Record<MessageKey, string> = {
   'startup.summary.tenant': 'tenant {id}',
   'startup.summary.mcp': 'MCP {count}',
   'startup.summary.runs': 'runs {count}',
-  'startup.summary.wf': 'wf {count}',
   'startup.summary.feishu': 'feishu',
   'startup.notice.tenant': 'Tenant: {id}',
   'startup.notice.mcpOne': 'MCP: {count} server',
   'startup.notice.mcpOther': 'MCP: {count} servers',
   'startup.notice.runOne': '{count} interrupted run',
   'startup.notice.runOther': '{count} interrupted runs',
-  'startup.notice.workflowOne': '{count} interrupted workflow run',
-  'startup.notice.workflowOther': '{count} interrupted workflow runs',
   'startup.notice.feishu': 'Feishu connected',
 
   // ── status / layout ──
@@ -290,14 +287,6 @@ export const en: Record<MessageKey, string> = {
   'error.hint.durableDisabled': 'durable.enabled is off; check config and restart.',
   'error.hint.mcpDisabled':
     'mcp_servers is not configured or this server is disabled; check config and restart.',
-  'error.hint.workflowNotFound': 'Target not found; use /workflows to list workflow runs.',
-  'error.hint.workflowInvalid':
-    'Invalid workflow definition; check YAML/JSON, workflow.dir and template variables.',
-  'error.hint.workflowAlreadyRunning':
-    'This workflow run is already executing; wait for it to finish or run /workflows show.',
-  'error.hint.workflowNotResumable':
-    'This run is cancelled (or already terminated); cancelled runs cannot be resumed.',
-  'error.hint.workflowDisabled': 'workflow.enabled is off; check config and restart.',
   'error.hint.channelDisabled': 'feishu.enabled is off; check config and restart.',
   'error.hint.channelNotConnected':
     'Feishu channel is not connected; check the last error in /feishu.',
@@ -307,8 +296,7 @@ export const en: Record<MessageKey, string> = {
     'Tenant isolation or role permission denied; verify tenant and permissions, then retry.',
   'error.hint.invalidParams':
     'Invalid command arguments; use /help or the command usage for the expected format.',
-  'error.hint.genericNotFound':
-    'Target not found; use /runs, /sessions or /workflows to list available items.',
+  'error.hint.genericNotFound': 'Target not found; use /runs or /sessions to list available items.',
   'error.hint.tenantLocked':
     'Another writer holds this tenant; connect to the gateway with --connect <url>, or stop the other process.',
   'error.hint.quotaExceeded':
@@ -519,7 +507,6 @@ export const en: Record<MessageKey, string> = {
   'command.sessions.description': 'Deprecated: use /resume',
   'command.tenant.description': 'Show current tenant, list tenants, or print restart guidance',
   'command.trace.description': 'Show run events from trace (replay)',
-  'command.workflows.description': 'Workflows: list / run / show / resume / cancel',
   'command.agents.description': 'Subagents: list / inspect (from the event stream)',
   'command.status.description':
     'Read-only status snapshot (run / session / provider / context / queue)',

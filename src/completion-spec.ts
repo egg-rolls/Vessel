@@ -151,15 +151,6 @@ export const OPTIONAL_VALUE_FLAGS: readonly string[] = [
   '--serve',
 ];
 
-const WORKFLOW_STATUSES: readonly string[] = [
-  'pending',
-  'running',
-  'completed',
-  'failed',
-  'cancelled',
-  'interrupted',
-];
-
 const AGENT_STATES: readonly string[] = [
   'created',
   'idle',
@@ -190,21 +181,6 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     registryName: 'update',
     flags: ['--check', '--channel', '--json', '--force', '--yes', '-y'],
     flagValues: { '--channel': ['latest', 'beta'] },
-  },
-  {
-    token: 'workflow',
-    registryName: 'workflow',
-    subcommands: [
-      { name: 'run', flags: ['--input'] },
-      {
-        name: 'list',
-        flags: ['--status', '--limit'],
-        flagValues: { '--status': WORKFLOW_STATUSES },
-      },
-      { name: 'show' },
-      { name: 'resume' },
-      { name: 'cancel' },
-    ],
   },
   {
     token: 'eval',

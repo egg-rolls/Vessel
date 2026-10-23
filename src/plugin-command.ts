@@ -145,7 +145,6 @@ async function readEnabledNames(options: PluginCommandOptions): Promise<{
   if (Object.values(config.mcpServers ?? {}).some((server) => server.enabled !== false)) {
     names.add('mcp-client');
   }
-  if (config.workflow?.enabled === true) names.add('workflow');
   if (config.evals?.enabled === true) names.add('evals');
   if (config.feishu?.enabled === true) names.add('feishu');
   if (config.provider?.name) names.add(`provider-${config.provider.name}`);

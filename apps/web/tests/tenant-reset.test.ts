@@ -7,7 +7,6 @@ describe('tenantResetPlan', () => {
     expect(plan.route).toEqual({ domain: 'chat' });
     expect('sessionId' in plan.route).toBe(false);
     expect('runId' in plan.route).toBe(false);
-    expect('workflowId' in plan.route).toBe(false);
   });
 
   test('clears shell caches and transient overlays', () => {

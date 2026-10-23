@@ -1,5 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  addDismissedId,
+  buildHydrationSnapshot,
+  DISMISSED_KEY_PREFIX,
+  type DismissedStorage,
+  emptyInteractionState,
+  interactionReducer,
+  type ListedInteraction,
+  readDismissedIds,
+} from '../src/gateway/interaction-hydration';
+import {
   askFromEvent,
   enqueueInteraction,
   enqueuePermission,
@@ -12,7 +22,7 @@ import {
   removeInteraction,
   SubmitGuard,
 } from '../src/gateway/interactions';
-import type { RunEvent } from '../src/gateway/types';
+import type { PermissionRequest, RunEvent } from '../src/gateway/types';
 
 interface Item {
   requestId: string;
@@ -81,14 +91,14 @@ describe('permissionFromEvent (0.13)', () => {
         tool: 'bash',
         session_id: 'session-9',
         tool_call_id: 'call-3',
-        source: 'workflow',
+        source: 'member',
         deadline_at: 7_500,
       }),
     );
     expect(item).toMatchObject({
       sessionId: 'session-9',
       toolCallId: 'call-3',
-      source: 'workflow',
+      source: 'member',
     });
   });
 
@@ -123,6 +133,22 @@ describe('permissionFromEvent (0.13)', () => {
     );
     expect(permissionFromEvent(event({ requestId: 'perm-4' }))).not.toHaveProperty('agentId');
   });
+
+  test('keeps session_id and parent_session_id for member bridge requests', () => {
+    const item = permissionFromEvent(
+      event({
+        requestId: 'perm-1',
+        session_id: 'member-1',
+        parent_session_id: 'chat-1',
+      }),
+    );
+    expect(item).toMatchObject({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+
+    // 旧事件没有 parent_session_id：不得凭空生成该属性。
+    const legacy = permissionFromEvent(event({ requestId: 'perm-2', session_id: 'member-2' }));
+    expect(legacy?.sessionId).toBe('member-2');
+    expect(legacy).not.toHaveProperty('parentSessionId');
+  });
 });
 
 describe('askFromEvent (0.17)', () => {
@@ -139,8 +165,8 @@ describe('askFromEvent (0.17)', () => {
         requestId: 'ask-1',
         questions: [{ header: 'Pick', question: 'Which?' }],
         delegate_id: 'delegate-9',
+        session_id: 'session-1',
       }),
-      'session-1',
     );
     expect(item).toMatchObject({
       requestId: 'ask-1',
@@ -159,7 +185,6 @@ describe('askFromEvent (0.17)', () => {
         ts: 0,
         data: { requestId: 'ask-2', questions: [{ question: 'Q' }] },
       },
-      undefined,
       5_000,
     );
     expect(item?.requestedAt).toBe(5_000);
@@ -168,13 +193,50 @@ describe('askFromEvent (0.17)', () => {
   test('keeps old streams working and rejects malformed payloads', () => {
     const legacy = askFromEvent(
       event({ request_id: 'ask-legacy', questions: [{ question: 'Q' }] }),
-      undefined,
     );
     expect(legacy?.requestId).toBe('ask-legacy');
     expect(legacy).not.toHaveProperty('sessionId');
     expect(legacy).not.toHaveProperty('agentId');
     expect(askFromEvent(event({ questions: [{ question: 'Q' }] }))).toBeNull();
     expect(askFromEvent(event({ requestId: 'ask-3', questions: [] }))).toBeNull();
+  });
+
+  test('maps session_id and parent_session_id from the event', () => {
+    const item = askFromEvent(
+      event({
+        requestId: 'ask-1',
+        questions: [{ question: 'Q' }],
+        session_id: 'member-1',
+        parent_session_id: 'chat-1',
+      }),
+    );
+    expect(item).toMatchObject({ sessionId: 'member-1', parentSessionId: 'chat-1' });
+
+    const legacy = askFromEvent(event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }));
+    expect(legacy).not.toHaveProperty('sessionId');
+    expect(legacy).not.toHaveProperty('parentSessionId');
+  });
+});
+
+describe('askFromEvent session_id (event self-description)', () => {
+  const event = (data: Record<string, unknown>, ts = 1_000): RunEvent => ({
+    type: 'ask.user.requested',
+    run_id: 'run-1',
+    ts,
+    data,
+  });
+
+  test('reads session_id from the event payload', () => {
+    const request = askFromEvent(
+      event({ requestId: 'ask-1', questions: [{ question: 'Q' }], session_id: 'session-event' }),
+    );
+    expect(request?.sessionId).toBe('session-event');
+  });
+
+  test('leaves session_id empty when the event omits it', () => {
+    const request = askFromEvent(event({ requestId: 'ask-2', questions: [{ question: 'Q' }] }));
+    expect(request).not.toHaveProperty('sessionId');
+    // 纯映射没有 RPC / 反查入口：不会调用 runs.get 或 runs.list。
   });
 });
 
@@ -233,5 +295,177 @@ describe('SubmitGuard', () => {
   test('rejects an empty requestId', () => {
     const guard = new SubmitGuard();
     expect(guard.begin('')).toBe(false);
+  });
+});
+
+function listedPermission(overrides: Partial<ListedInteraction> = {}): ListedInteraction {
+  return {
+    kind: 'permission',
+    request_id: 'perm-1',
+    run_id: 'run-1',
+    session_id: 'session-1',
+    tool: 'bash',
+    input: { cmd: 'ls' },
+    created_at: 1_000,
+    status: 'pending',
+    ...overrides,
+  };
+}
+
+function memoryStorage(): DismissedStorage {
+  const data = new Map<string, string>();
+  return {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => {
+      data.set(key, value);
+    },
+  };
+}
+
+describe('interaction hydration', () => {
+  test('hydrated permission keeps session_id and created_at', () => {
+    const snapshot = buildHydrationSnapshot({
+      pending: [
+        listedPermission({
+          request_id: 'perm-1',
+          run_id: 'run-1',
+          session_id: 'session-1',
+          created_at: 1_700_000_000_000,
+        }),
+      ],
+      orphaned: [],
+    });
+
+    expect(snapshot.permissions).toHaveLength(1);
+    expect(snapshot.permissions[0]).toMatchObject({
+      requestId: 'perm-1',
+      runId: 'run-1',
+      sessionId: 'session-1',
+      requestedAt: 1_700_000_000_000,
+    });
+  });
+
+  test('hydrated ask keeps its own session_id and stays unresolved without it', () => {
+    const withSession = buildHydrationSnapshot({
+      pending: [
+        {
+          kind: 'ask',
+          request_id: 'ask-1',
+          run_id: 'core-run-1',
+          session_id: 'session-1',
+          questions: [{ header: 'Pick', question: 'Which?' }],
+          created_at: 2_000,
+          status: 'pending',
+        },
+      ],
+      orphaned: [],
+    });
+    expect(withSession.asks[0]?.sessionId).toBe('session-1');
+
+    const withoutSession = buildHydrationSnapshot({
+      pending: [
+        {
+          kind: 'ask',
+          request_id: 'ask-2',
+          run_id: 'core-run-2',
+          questions: [{ header: 'Pick', question: 'Which?' }],
+          created_at: 3_000,
+          status: 'pending',
+        },
+      ],
+      orphaned: [],
+    });
+    expect(withoutSession.asks[0]?.sessionId).toBeUndefined();
+  });
+
+  test('list result does not resurrect a request settled after the snapshot', () => {
+    const snapshot = buildHydrationSnapshot({
+      pending: [listedPermission()],
+      orphaned: [],
+    });
+    const request = snapshot.permissions[0];
+    expect(request).toBeDefined();
+    if (!request) return;
+
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request,
+    });
+    state = interactionReducer(state, { type: 'settle', requestId: 'perm-1' });
+    // 快照在结算前生成（settled 为空），应用时本端已结算：不能复活卡片。
+    state = interactionReducer(state, {
+      type: 'hydrate',
+      snapshot,
+      settled: new Set(['perm-1']),
+    });
+
+    expect(state.permissions).toHaveLength(0);
+  });
+
+  test('event and list with the same request_id render one card', () => {
+    const fromEvent: PermissionRequest = {
+      requestId: 'perm-1',
+      tool: 'bash',
+      input: { cmd: 'ls' },
+      runId: 'run-1',
+      sessionId: 'session-1',
+      requestedAt: 500,
+    };
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request: fromEvent,
+    });
+    const snapshot = buildHydrationSnapshot({
+      pending: [listedPermission({ created_at: 9_999 })],
+      orphaned: [],
+    });
+
+    state = interactionReducer(state, { type: 'hydrate', snapshot });
+
+    expect(state.permissions).toHaveLength(1);
+    // 事件先到：保留事件对象（含 agentId 等 list 没有的字段）。
+    expect(state.permissions[0]).toBe(fromEvent);
+  });
+
+  test('orphaned status removes the stale pending card', () => {
+    const request: PermissionRequest = {
+      requestId: 'perm-1',
+      tool: 'bash',
+      input: { cmd: 'ls' },
+      runId: 'run-1',
+      sessionId: 'session-1',
+      requestedAt: 500,
+    };
+    let state = interactionReducer(emptyInteractionState, {
+      type: 'permission-request',
+      request,
+    });
+    const snapshot = buildHydrationSnapshot({
+      pending: [],
+      orphaned: [listedPermission({ status: 'orphaned', created_at: 100 })],
+    });
+
+    state = interactionReducer(state, { type: 'hydrate', snapshot });
+
+    expect(state.permissions).toHaveLength(0);
+    expect(state.orphaned).toHaveLength(1);
+    expect(state.orphaned[0]?.requestId).toBe('perm-1');
+  });
+
+  test('dismissed orphaned id is filtered on the next hydration', () => {
+    const storage = memoryStorage();
+    addDismissedId(storage, 'tenant-a', 'perm-1');
+
+    expect(storage.getItem(`${DISMISSED_KEY_PREFIX}tenant-a`)).toBe('["perm-1"]');
+    const dismissed = readDismissedIds(storage, 'tenant-a');
+    const snapshot = buildHydrationSnapshot({
+      pending: [],
+      orphaned: [listedPermission({ status: 'orphaned' })],
+      dismissed,
+    });
+
+    expect(snapshot.orphaned).toHaveLength(0);
+    // dismiss 按 tenant 隔离：另一个 tenant 仍会看到该提示。
+    expect(readDismissedIds(storage, 'tenant-b').has('perm-1')).toBe(false);
   });
 });

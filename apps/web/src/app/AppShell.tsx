@@ -1,29 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { CommandPalette } from '../components/CommandPalette';
 import { ConfirmDialog } from '../components/ConfirmDialog';
 import { ModalShell } from '../components/Modal';
 import { PaletteEntitiesProvider } from '../components/PaletteEntities';
 import { PendingPermissionsBar } from '../components/PendingPermissionsBar';
-import { PendingRequestsPanel } from '../components/PendingRequests';
 import { useToast } from '../components/ToastProvider';
 import { ChatView } from '../domains/chat/ChatView';
 import {
+  orphanedDismissIds,
   pendingPermissionsOutsideView,
-  pendingPermissionTarget,
 } from '../domains/chat/pending-permissions';
+import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { ObserveView } from '../domains/observe/ObserveView';
 import { RunsView } from '../domains/runs/RunsView';
 import { SettingsView } from '../domains/settings/SettingsView';
 import { TeamView } from '../domains/team/TeamView';
-import { WorkflowsView } from '../domains/workflows/WorkflowsView';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import type { PaletteItem } from '../state/palette';
 import { AppBar } from './AppBar';
 import { BottomNav } from './BottomNav';
 import { DomainNav, primaryRoute } from './DomainNav';
-import { requestStartWorkflow } from './intents';
 import { defaultNavCollapsed, navModeForWidth, parseNavCollapsed } from './layout';
 import { DOMAINS, domainLabel, routeBreadcrumb, settingsTabLabel } from './nav';
 import { requestRefresh } from './refresh';
@@ -32,6 +30,7 @@ import { isPaletteShortcut, isSlashPaletteShortcut } from './shortcuts';
 import { tenantResetPlan } from './tenant-reset';
 import { useDrawerA11y } from './useDrawerA11y';
 import { useHashRoute } from './useHashRoute';
+import { paneCssVars, usePaneResize } from './usePaneResize';
 import { useViewportWidth } from './useViewportWidth';
 
 type SettingsTab = Extract<Route, { domain: 'settings' }>['tab'];
@@ -71,6 +70,7 @@ export function AppShell() {
   const {
     connectionState,
     hasToken,
+    tenantId,
     tenantEpoch,
     eventStore,
     lastError,
@@ -80,9 +80,8 @@ export function AppShell() {
     stale,
     permissions,
     asks,
-    responding,
-    respondPermission,
-    respondAsk,
+    orphaned,
+    dismissOrphaned,
     retry,
     dismissError,
     dismissGap,
@@ -103,7 +102,6 @@ export function AppShell() {
   const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [announcement, setAnnouncement] = useState('');
   const [pendingAction, setPendingAction] = useState<PaletteItem | null>(null);
-  const [pendingPanelOpen, setPendingPanelOpen] = useState(false);
   const mainRef = useRef<HTMLElement | null>(null);
   const firstRoute = useRef(true);
   const routeKey = formatRoute(route);
@@ -116,26 +114,20 @@ export function AppShell() {
     [permissions, route],
   );
   const otherAsks = useMemo(() => pendingPermissionsOutsideView(asks, route), [asks, route]);
-  const openPending = useCallback(
-    (request: (typeof otherPending)[number]) => navigate(pendingPermissionTarget(request)),
+  const otherOrphans = useMemo(
+    () => pendingPermissionsOutsideView(orphaned, route),
+    [orphaned, route],
+  );
+  // compact bar 只跳会话；应答仍在目标会话的 Composer 槽位完成。
+  const openPendingSession = useCallback(
+    (sessionId: string) => navigate({ domain: 'chat', sessionId }),
     [navigate],
   );
-  const openAsk = useCallback(
-    (request: (typeof otherAsks)[number]) => navigate(pendingPermissionTarget(request)),
-    [navigate],
-  );
-  // 没有 sessionId 的请求无法通过跳转落到任何会话，面板直接展开。
-  // 其他会话的请求保留顶部条，用户可展开非模态面板操作，不打断当前会话。
-  const pendingNeedsDirectAction =
-    otherPending.some((item) => !item.sessionId) || otherAsks.some((item) => !item.sessionId);
-  useEffect(() => {
-    if (otherPending.length === 0 && otherAsks.length === 0) {
-      setPendingPanelOpen(false);
-      return;
-    }
-    if (pendingNeedsDirectAction) setPendingPanelOpen(true);
-  }, [otherPending.length, otherAsks.length, pendingNeedsDirectAction]);
+  const dismissPendingOrphans = useCallback(() => {
+    for (const requestId of orphanedDismissIds(otherOrphans)) dismissOrphaned(requestId);
+  }, [dismissOrphaned, otherOrphans]);
   const viewportWidth = useViewportWidth();
+  const panes = usePaneResize();
   const navMode = navModeForWidth(viewportWidth, navCollapsed);
   const navDrawerRef = useDrawerA11y({
     open: navDrawerOpen,
@@ -144,6 +136,7 @@ export function AppShell() {
     returnFocusId: 'nav-toggle',
   });
   const tenantEpochRef = useRef(tenantEpoch);
+  const tenantClearEpochRef = useRef(tenantEpoch);
 
   const registerEntities = useCallback((source: string, items: readonly PaletteItem[]) => {
     setEntityMap((prev) => {
@@ -160,6 +153,14 @@ export function AppShell() {
   }, []);
   const entities = useMemo(() => [...entityMap.values()].flat(), [entityMap]);
 
+  // layout effect 先于 ChatView 的 passive 记录 effect：避免旧会话写进新 tenant key。
+  useLayoutEffect(() => {
+    if (tenantEpoch === tenantClearEpochRef.current) return;
+    tenantClearEpochRef.current = tenantEpoch;
+    // 新 tenant 不自动恢复旧选择；存储 key 本身也按 tenant 隔离。
+    clearLastSession(browserSessionStorage(), tenantId);
+  }, [tenantEpoch, tenantId]);
+
   // 切 tenant：清空选择后回到 Chat 空态（事件缓冲已在 ConnectionProvider 重置）。
   useEffect(() => {
     if (tenantEpoch === tenantEpochRef.current) return;
@@ -168,7 +169,7 @@ export function AppShell() {
     if (plan.closeSessionsDrawer) setChatSessionsOpen(false);
     if (plan.clearPendingAction) setPendingAction(null);
     if (plan.closePalette) setPaletteOpen(false);
-    // 旧租户的实体（会话/run/workflow/MCP）不能留在命令面板里。
+    // 旧租户的实体（会话/run/MCP）不能留在命令面板里。
     if (plan.clearPaletteEntities) setEntityMap(new Map());
     navigate(plan.route);
     toast.info('已切换租户；当前选择与事件缓冲已清空');
@@ -282,17 +283,6 @@ export function AppShell() {
           // 先回到 Chat 再进入 new，确保已在 new 时也会生成新的草稿 id。
           navigate({ domain: 'chat' });
           window.setTimeout(() => navigate({ domain: 'chat', sessionId: 'new' }), 0);
-        },
-      },
-      {
-        id: 'action-start-workflow',
-        group: 'action',
-        label: '启动 workflow',
-        keywords: ['workflow', 'start', '工作流'],
-        hint: '动作',
-        run: () => {
-          navigate({ domain: 'workflows' });
-          requestStartWorkflow();
         },
       },
       {
@@ -414,7 +404,11 @@ export function AppShell() {
 
   return (
     <PaletteEntitiesProvider register={registerEntities}>
-      <div className={`app-shell nav-${navMode}`}>
+      <div
+        className={`app-shell nav-${navMode}`}
+        ref={panes.shellRef}
+        style={paneCssVars(panes.layout)}
+      >
         <button
           type="button"
           className="skip-link"
@@ -501,33 +495,13 @@ export function AppShell() {
           </div>
         )}
 
-        {(otherPending.length > 0 || otherAsks.length > 0) && (
+        {(otherPending.length > 0 || otherAsks.length > 0 || otherOrphans.length > 0) && (
           <PendingPermissionsBar
             requests={otherPending}
             asks={otherAsks}
-            onOpen={openPending}
-            onOpenAsk={openAsk}
-            panelOpen={pendingPanelOpen}
-            onTogglePanel={() => setPendingPanelOpen((value) => !value)}
-          />
-        )}
-
-        {pendingPanelOpen && (otherPending.length > 0 || otherAsks.length > 0) && (
-          <PendingRequestsPanel
-            id="pending-requests-panel"
-            className="pending-panel"
-            title={t('pending.panel.title')}
-            description={t('pending.panel.desc')}
-            permissions={otherPending}
-            asks={otherAsks}
-            responding={responding}
-            showSession
-            onDecidePermission={(requestId, decision, scope) => {
-              void respondPermission(requestId, decision, scope);
-            }}
-            onRespondAsk={(requestId, answers) => {
-              void respondAsk(requestId, answers);
-            }}
+            orphaned={otherOrphans}
+            onOpenSession={openPendingSession}
+            onDismissOrphans={dismissPendingOrphans}
           />
         )}
 
@@ -540,6 +514,7 @@ export function AppShell() {
             onClose={() => setNavDrawerOpen(false)}
             onToggleCollapsed={toggleNavCollapsed}
             navRef={navDrawerRef}
+            panes={panes}
           />
           {/* tenant 变化时整块重挂载：旧租户的 resource 缓存、会话副本与选中项全部丢弃。 */}
           <main
@@ -556,11 +531,11 @@ export function AppShell() {
                 navigate={navigate}
                 sessionsOpen={chatSessionsOpen}
                 onCloseSessions={closeSessions}
+                panes={panes}
               />
             )}
             {route.domain === 'team' && <TeamView route={route} navigate={navigate} />}
             {route.domain === 'runs' && <RunsView route={route} navigate={navigate} />}
-            {route.domain === 'workflows' && <WorkflowsView route={route} navigate={navigate} />}
             {route.domain === 'integrations' && (
               <IntegrationsView route={route} navigate={navigate} />
             )}

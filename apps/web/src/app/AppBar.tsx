@@ -1,3 +1,4 @@
+import { Tooltip } from '../components/Tooltip';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
 import { routeBreadcrumb } from './nav';
@@ -61,17 +62,19 @@ export function AppBar({
   return (
     <header className="appbar">
       {drawerToggle && (
-        <button
-          id={drawerToggle.id}
-          type="button"
-          className="appbar-icon"
-          aria-label={drawerToggle.label}
-          aria-expanded={drawerToggle.open}
-          aria-controls={drawerToggle.controls}
-          onClick={drawerToggle.onClick}
-        >
-          <span aria-hidden="true">☰</span>
-        </button>
+        <Tooltip label={drawerToggle.label}>
+          <button
+            id={drawerToggle.id}
+            type="button"
+            className="appbar-icon"
+            aria-label={drawerToggle.label}
+            aria-expanded={drawerToggle.open}
+            aria-controls={drawerToggle.controls}
+            onClick={drawerToggle.onClick}
+          >
+            <span aria-hidden="true">☰</span>
+          </button>
+        </Tooltip>
       )}
       <span className="brand">Vessel</span>
       <span className="appbar-path" aria-live="polite">
@@ -80,37 +83,41 @@ export function AppBar({
 
       <div className="appbar-spacer" />
 
-      <button
-        type="button"
-        className="palette-trigger"
-        onClick={onOpenPalette}
-        aria-keyshortcuts="Control+K Meta+K"
-      >
-        <span className="palette-trigger-icon" aria-hidden="true">
-          ⌕
-        </span>
-        <span className="palette-trigger-text">{t('nav.searchOrCommand')}</span>
-        <kbd className="kbd">⌘K</kbd>
-      </button>
+      <Tooltip label="Ctrl/Cmd+K">
+        <button
+          type="button"
+          className="palette-trigger"
+          onClick={onOpenPalette}
+          aria-keyshortcuts="Control+K Meta+K"
+        >
+          <span className="palette-trigger-icon" aria-hidden="true">
+            ⌕
+          </span>
+          <span className="palette-trigger-text">{t('nav.searchOrCommand')}</span>
+          <kbd className="kbd">⌘K</kbd>
+        </button>
+      </Tooltip>
 
-      <button
-        type="button"
-        className={`conn conn-${hasToken ? connectionState : 'idle'}`}
-        onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
-        title={t('nav.connStatusTitle')}
-      >
-        <span className="conn-dot" aria-hidden="true" />
-        <span>{connLabel}</span>
-      </button>
+      <Tooltip label={t('nav.connStatusTitle')}>
+        <button
+          type="button"
+          className={`conn conn-${hasToken ? connectionState : 'idle'}`}
+          onClick={() => navigate({ domain: 'settings', tab: 'connection' })}
+        >
+          <span className="conn-dot" aria-hidden="true" />
+          <span>{connLabel}</span>
+        </button>
+      </Tooltip>
 
-      <button
-        type="button"
-        className="tenant-chip"
-        onClick={() => navigate({ domain: 'settings', tab: 'tenants' })}
-        title={t('nav.tenantChipTitle')}
-      >
-        {t('nav.tenant')} <span className="mono">{tenantId ?? '—'}</span>
-      </button>
+      <Tooltip label={t('nav.tenantChipTitle')}>
+        <button
+          type="button"
+          className="tenant-chip"
+          onClick={() => navigate({ domain: 'settings', tab: 'tenants' })}
+        >
+          {t('nav.tenant')} <span className="mono">{tenantId ?? '—'}</span>
+        </button>
+      </Tooltip>
     </header>
   );
 }

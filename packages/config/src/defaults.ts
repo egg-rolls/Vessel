@@ -14,7 +14,6 @@ import type {
   TraceConfig,
   TransportConfig,
   VesselConfig,
-  WorkflowConfig,
 } from './types.js';
 
 /**
@@ -91,18 +90,6 @@ export const DEFAULT_SERVE_OPTIONS: Required<
   hostname: '127.0.0.1',
   port: 8642,
   allowRemote: false,
-};
-
-/**
- * 0.4 workflow 默认值。
- * 不写入 DEFAULT_CONFIG：默认关闭，关闭时不加载引擎、0.3 行为不变。
- */
-export const DEFAULT_WORKFLOW_OPTIONS: Required<WorkflowConfig> = {
-  enabled: false,
-  dir: './workflows',
-  path: '~/.vessel/workflows',
-  maxParallel: 2,
-  stepTimeoutMs: 300000,
 };
 
 /**

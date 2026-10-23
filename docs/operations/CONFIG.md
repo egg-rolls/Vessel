@@ -70,7 +70,7 @@ serve:
 ```
 
 tenant overlay 允许的顶层块：`provider / agent / context / limits / termination /
-session / plugins / workflow / evals / feishu / tools / mcp_servers /
+session / plugins / evals / feishu / tools / mcp_servers /
 host / scheduler / transport / quota`。禁止 `data_dir / trace / serve /
 tenant / update`；未知块直接报错。合并规则：对象深合并、数组整体替换、map
 （`mcp_servers`）按 key 合并、`null` 拒绝。`plugins` 是**数组**，按整层替换，
@@ -393,9 +393,9 @@ plugin host + plugins / trace recorder / metrics collector / redactor / sessionC
 - 每个 active tenant 持有自己的租约：file / memory 后端为 shared `.members/` 租约（多进程共存），sqlite / `--exclusive` 为 exclusive `.lock`。启动失败必须回滚已获取的锁，shutdown 全部释放；exclusive 冲突返回 `tenant_locked`，session / run 写冲突返回 `conflict` + `session_locked` / `run_locked`。
 - `disabled` / 未配置 tenant → `forbidden`，不得创建半成品。
 - 本地 REPL / headless 仍一次只跑一个 tenant（`--tenant` 选择）；`--connect` 由远端 gateway 决定 tenant。
-- 每个 tenant bundle 还构建 workflow / feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。
+- 每个 tenant bundle 还构建 feishu / MCP；插件配置按 tenant 合并，飞书 `app_id` 跨 tenant 重复会在装配期拒绝启动。
 - **状态**：ext 插件 tenant 行为、web A-6.3 接口增量（`pluginsFor`、per-tenant `capabilities.list` / `plugins.list`、`trace.readEvents(filter, tenantId)`、`sessionData.deleteSessionData(sessionId, tenantId)`）与 asm 的 per-tenant 执行接线**均已实现**。
-- **已知限制**：gateway 的 workflow / 飞书控制面仍只走 default tenant（A-6 §13.3 方法表未包含 per-tenant 变体）。
+- **已知限制**：gateway 的飞书控制面仍只走 default tenant（A-6 §13.3 方法表未包含 per-tenant 变体）。
 
 ## 7. 示例：多租户部署
 
