@@ -25,6 +25,7 @@ import {
   parseHubTeamMeta,
 } from '@vessel-agent/serve';
 import type { WebSocketFactory, WebSocketLike } from '../rpc/index.js';
+import { createHubSnapshotPolicy } from './snapshot-policy.js';
 import type { HubNodeRecord, HubNodeStatus } from './types.js';
 
 /** 状态子集：control 客户端自己会报告的状态。 */
@@ -169,9 +170,10 @@ export function createHubControlClient(options: HubControlClientOptions): HubCon
   let lastSeenAt: number | undefined;
   let starting = false;
 
-  let currentIncarnation = record.incarnation;
-  let lastRevision = record.revision ?? -1;
-  let forceAcceptNext = false;
+  const snapshotPolicy = createHubSnapshotPolicy({
+    ...(record.incarnation !== undefined ? { incarnation: record.incarnation } : {}),
+    ...(record.revision !== undefined ? { revision: record.revision } : {}),
+  });
 
   function setStatus(next: HubControlStatus): void {
     if (status === next) return;
@@ -263,12 +265,8 @@ export function createHubControlClient(options: HubControlClientOptions): HubCon
       return;
     }
     attempt = 0;
-    const incarnation = typeof frame.incarnation === 'string' ? frame.incarnation : '';
-    if (incarnation !== currentIncarnation) {
-      // 节点重启：下一个 snapshot 无条件接受，并重置 revision 比较。
-      currentIncarnation = incarnation;
-      forceAcceptNext = true;
-    }
+    // 节点重启：下一个 snapshot 无条件接受，并重置 revision 比较。
+    snapshotPolicy.observeHello(frame.incarnation);
     setStatus('healthy');
     resetIdleTimer(current);
   }
@@ -286,19 +284,14 @@ export function createHubControlClient(options: HubControlClientOptions): HubCon
     if (typeof frame.truncated !== 'boolean') return;
 
     const incarnation = typeof frame.incarnation === 'string' ? frame.incarnation : '';
-    const changed = forceAcceptNext || (incarnation !== '' && incarnation !== currentIncarnation);
-    if (!changed && revision <= lastRevision) {
+    if (!snapshotPolicy.accept(incarnation, revision)) {
       logger?.debug?.('hub.control.stale_snapshot', {
         node_id: record.node_id,
         revision,
-        last_revision: lastRevision,
+        last_revision: snapshotPolicy.lastRevision(),
       });
       return;
     }
-
-    forceAcceptNext = false;
-    if (incarnation !== '') currentIncarnation = incarnation;
-    lastRevision = revision;
 
     const teams: HubTeamMeta[] = [];
     if (Array.isArray(frame.teams)) {
@@ -454,6 +447,12 @@ export function createHubControlClient(options: HubControlClientOptions): HubCon
 
   function startConnect(): void {
     if (closed || halted || socket !== undefined || starting) return;
+    // node-dial pairing 不应创建 hub 拨号 client；缺 url 直接判为不兼容。
+    if (record.url === undefined) {
+      logger?.warn('hub.control.missing_url', { pairing_id: record.pairing_id });
+      halt('incompatible');
+      return;
+    }
     const url = controlUrl(record.url);
 
     if (record.ca_file === undefined) {

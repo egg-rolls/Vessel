@@ -609,11 +609,22 @@ export function createHubServer(options: CreateHubServerOptions): HubServer {
     const record = registry.get(pairingId);
     if (!record) return errorResponse('not_found', 'pairing not found', 404, extra);
 
+    // node-dial 且没有可达 URL 时，数据面不可达；不要尝试拨号。
+    const nodeUrl = record.public_url ?? record.url;
+    if (nodeUrl === undefined) {
+      return errorResponse(
+        'data_plane_unreachable',
+        'node has no browser-reachable url; configure a tunnel or public_url',
+        409,
+        extra,
+      );
+    }
+
     try {
       const token = await tokenBroker.exchangeForTeam({
         pairing_id: record.pairing_id,
         node_id: record.node_id,
-        url: record.url,
+        url: nodeUrl,
         team_id: teamId,
         ...(ttl !== undefined ? { ttl_s: ttl } : {}),
         ...(record.ca_file !== undefined ? { ca_file: record.ca_file } : {}),
