@@ -195,6 +195,18 @@ export type HubCommand =
   | { kind: 'directory'; hubUrl?: string; tokenEnv?: string; json: boolean }
   | { kind: 'watch'; hubUrl?: string; tokenEnv?: string }
   | { kind: 'pair'; dataDir?: string; tenant?: string; ttl?: number }
+  | { kind: 'join-code'; tenant?: string; ttl?: number; json: boolean }
+  | {
+      kind: 'join';
+      hubUrl?: string;
+      code?: string;
+      codeEnv?: string;
+      tenant?: string;
+      publicUrl?: string;
+      caFile?: string;
+      dataDir?: string;
+      json: boolean;
+    }
   | {
       kind: 'node-add';
       url: string;
@@ -2365,6 +2377,119 @@ function parseHubPair(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
+/** `hub join-code [--tenant] [--ttl] [--json]`（hub 侧，S5.1） */
+function parseHubJoinCode(rest: string[], args: CliArgs): ParseResult {
+  let tenant: string | undefined;
+  let ttl: number | undefined;
+  let json = false;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (a === '--tenant' || a === '--ttl') {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--tenant') tenant = value.value;
+      else {
+        const parsed = parseHubTtl(value.value, 60, 3600);
+        if (parsed === null) {
+          return { ok: false, error: `Invalid --ttl: ${value.value} (60-3600 seconds)` };
+        }
+        ttl = parsed;
+      }
+      i = value.next;
+      continue;
+    }
+    return { ok: false, error: `Unknown argument for hub join-code: ${a}` };
+  }
+  if (args.help) return { ok: true, args };
+  args.hubCommand = {
+    kind: 'join-code',
+    json,
+    ...(tenant !== undefined ? { tenant } : {}),
+    ...(ttl !== undefined ? { ttl } : {}),
+  };
+  return { ok: true, args };
+}
+
+/** `hub join [hub-url] --code <CODE> | --code-env <ENV> [...]`（node 侧，S5.1） */
+function parseHubJoin(rest: string[], args: CliArgs): ParseResult {
+  let code: string | undefined;
+  let codeEnv: string | undefined;
+  let tenant: string | undefined;
+  let publicUrl: string | undefined;
+  let caFile: string | undefined;
+  let dataDir: string | undefined;
+  let json = false;
+  const positional: string[] = [];
+
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i] ?? '';
+    if (a === '--help' || a === '-h') {
+      args.help = true;
+      continue;
+    }
+    if (a === '--json') {
+      json = true;
+      continue;
+    }
+    if (
+      a === '--code' ||
+      a === '--code-env' ||
+      a === '--tenant' ||
+      a === '--public-url' ||
+      a === '--ca' ||
+      a === '--data-dir'
+    ) {
+      const value = readFlagValue(rest, i, a);
+      if (!value.ok) return value;
+      if (a === '--code') code = value.value;
+      else if (a === '--code-env') {
+        const envName = parseHubEnvName(value.value, '--code-env');
+        if (!envName.ok) return envName;
+        codeEnv = envName.value;
+      } else if (a === '--tenant') tenant = value.value;
+      else if (a === '--public-url') publicUrl = value.value;
+      else if (a === '--ca') caFile = value.value;
+      else dataDir = value.value;
+      i = value.next;
+      continue;
+    }
+    if (a.startsWith('-')) {
+      return { ok: false, error: `Unknown argument for hub join: ${a}` };
+    }
+    positional.push(a);
+  }
+  if (args.help) return { ok: true, args };
+
+  const [hubUrl, extra] = positional;
+  if (extra !== undefined) {
+    return { ok: false, error: `Unknown argument for hub join: ${extra}` };
+  }
+  if (code !== undefined && codeEnv !== undefined) {
+    return { ok: false, error: 'hub join accepts only one of --code and --code-env' };
+  }
+
+  args.hubCommand = {
+    kind: 'join',
+    json,
+    ...(hubUrl !== undefined ? { hubUrl } : {}),
+    ...(code !== undefined ? { code } : {}),
+    ...(codeEnv !== undefined ? { codeEnv } : {}),
+    ...(tenant !== undefined ? { tenant } : {}),
+    ...(publicUrl !== undefined ? { publicUrl } : {}),
+    ...(caFile !== undefined ? { caFile } : {}),
+    ...(dataDir !== undefined ? { dataDir } : {}),
+  };
+  return { ok: true, args };
+}
+
 /** `hub node add <url> --code <CODE> [--alias] [--ca] [--hub-url]` */
 function parseHubNodeAdd(rest: string[], args: CliArgs): ParseResult {
   let code: string | undefined;
@@ -2749,7 +2874,9 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === undefined) {
     return {
       ok: false,
-      error: 'Missing hub subcommand (start|directory|watch|pair|node|token|data-token)',
+      error:
+        'Missing hub subcommand ' +
+        '(start|directory|watch|pair|join-code|join|node|token|data-token)',
     };
   }
   const tail = rest.slice(1);
@@ -2762,6 +2889,10 @@ function parseHubArgs(rest: string[], args: CliArgs): ParseResult {
       return parseHubWatch(tail, args);
     case 'pair':
       return parseHubPair(tail, args);
+    case 'join-code':
+      return parseHubJoinCode(tail, args);
+    case 'join':
+      return parseHubJoin(tail, args);
     case 'node':
       return parseHubNodeArgs(tail, args);
     case 'token':

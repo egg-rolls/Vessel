@@ -101,6 +101,70 @@ describe('S5 hub config', () => {
     ).toBe(true);
   });
 
+  it('accepts a node-mode hub block with url, caFile and joinCodeEnv', () => {
+    const config: VesselConfig = {
+      dataDir: '/tmp/vessel',
+      hub: {
+        direction: 'node',
+        url: 'https://hub.example.com:8643',
+        caFile: '/etc/vessel/hub-ca.pem',
+        joinCodeEnv: 'VESSEL_HUB_JOIN_CODE',
+      },
+    };
+    expect(pathsOf(config)).toEqual([]);
+  });
+
+  it('accepts a loopback http hub url in node mode', () => {
+    const config: VesselConfig = {
+      dataDir: '/tmp/vessel',
+      hub: { direction: 'node', url: 'http://127.0.0.1:8643' },
+    };
+    expect(pathsOf(config)).toEqual([]);
+  });
+
+  it('rejects invalid hub.url shapes', () => {
+    const urls = [
+      'ftp://hub.example.com',
+      'https://hub.example.com/path',
+      'https://hub.example.com?tenant=default',
+      'https://user:pass@hub.example.com',
+      'http://hub.example.com',
+    ];
+    for (const url of urls) {
+      const config: VesselConfig = {
+        dataDir: '/tmp/vessel',
+        hub: { direction: 'node', url },
+      };
+      expect(pathsOf(config), url).toContain('hub.url');
+    }
+  });
+
+  it('rejects empty or NUL hub.caFile', () => {
+    for (const caFile of ['', '/etc/vessel/ca\0.pem']) {
+      const config: VesselConfig = {
+        dataDir: '/tmp/vessel',
+        hub: { direction: 'node', caFile },
+      };
+      expect(pathsOf(config), JSON.stringify(caFile)).toContain('hub.caFile');
+    }
+  });
+
+  it('rejects an invalid hub.joinCodeEnv', () => {
+    const config: VesselConfig = {
+      dataDir: '/tmp/vessel',
+      hub: { direction: 'node', joinCodeEnv: 'not a valid env name' },
+    };
+    expect(pathsOf(config)).toContain('hub.joinCodeEnv');
+  });
+
+  it('still rejects unknown hub keys', () => {
+    const config = {
+      dataDir: '/tmp/vessel',
+      hub: { direction: 'node', hubToken: 'secret' },
+    } as unknown as VesselConfig;
+    expect(pathsOf(config)).toContain('hub.hubToken');
+  });
+
   it('validates direction, pairing TTL and allowFileSecrets', () => {
     const config = {
       dataDir: '/tmp/vessel',

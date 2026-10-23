@@ -27,6 +27,8 @@ import {
   type HubControlSnapshot,
   type HubControlStatus,
 } from './control-client';
+import { createHubJoinStore } from './join-store';
+import { createHubNodeCredentialStore } from './node-credential-store';
 import {
   type CreateHubRegistryOptions,
   createHubRegistry,
@@ -363,20 +365,23 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     };
   };
 
-  // 只有两个端口都注入时才启用 node 入站；否则 join 端点保持 404。
-  let nodeControl: HubNodeInboundDeps | undefined;
-  if (factories.createJoinStore !== undefined && factories.createNodeCredentials !== undefined) {
-    const joinStore = factories.createJoinStore();
-    const credentials = await factories.createNodeCredentials();
-    nodeControl = {
-      hubId,
-      joinStore,
-      credentials,
-      hooks: inboundHooks,
-      ...(logger ? { logger } : {}),
-      now: clock,
-    };
-  }
+  // 默认装配真实 join / credential 端口；测试可注入 fake。
+  const createJoinStore =
+    factories.createJoinStore ?? (() => createHubJoinStore({ dataDir, hubId, now: clock }));
+  const createNodeCredentials =
+    factories.createNodeCredentials ??
+    (() => createHubNodeCredentialStore({ dataDir, now: clock }));
+
+  const joinStore = createJoinStore();
+  const credentials = await createNodeCredentials();
+  const nodeControl: HubNodeInboundDeps = {
+    hubId,
+    joinStore,
+    credentials,
+    hooks: inboundHooks,
+    ...(logger ? { logger } : {}),
+    now: clock,
+  };
 
   const createServer = factories.createServer ?? createHubServer;
   // `nodeControl` 由 M-I2 的 server 路由消费；此处按扩展选项传递，缺省为 undefined。

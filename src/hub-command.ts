@@ -11,7 +11,23 @@ import * as path from 'node:path';
 import { isLoopbackHostname, loadConfig, type VesselConfig } from '../packages/config/src/index';
 import type { HubCommand } from './cli-args';
 import { expandHome, resolveDataDir } from './data-paths';
-import { type HubRuntime, type StartHubRuntimeOptions, startHubRuntime } from './hub/runtime';
+import { readGatewayPidState } from './gateway/pid';
+import { createHubJoinStore } from './hub/join-store';
+import {
+  HUB_NODE_STATE_FILE,
+  type HubNodeStatusFile,
+  readHubNodeStatus,
+  writeHubNodeState,
+} from './hub/node-state';
+import { hubNodeTokenSecretKey } from './hub/outbound-wiring';
+import {
+  DEFAULT_HUB_DATA_DIR,
+  type HubRuntime,
+  type StartHubRuntimeOptions,
+  startHubRuntime,
+} from './hub/runtime';
+import { type CreateSecretStoreOptions, createSecretStore } from './hub/secret-store';
+import type { HubNodeState, SecretStore } from './hub/types';
 import {
   PAIRING_DEFAULT_TTL_S,
   PAIRING_MAX_TTL_S,
@@ -19,11 +35,17 @@ import {
   writePairingFile,
 } from './hub-pairing';
 import { t } from './i18n';
+import { resolveNodeId } from './node-identity';
 import { ui } from './ui-style';
 
 const DEFAULT_HUB_PORT = 8643;
 const REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_ADMIN_TOKEN_ENV = 'VESSEL_ADMIN_TOKEN';
+/** `hub join` 等首个 healthy 状态的上限（R1 裁决）。 */
+const JOIN_STATUS_TIMEOUT_MS = 10_000;
+const JOIN_STATUS_POLL_MS = 250;
+/** 节点凭据的 keychain service；与 hub 的 `vessel-hub` 隔离。 */
+const NODE_KEYCHAIN_SERVICE = 'vessel-node';
 
 export interface HubCommandDeps {
   config?: VesselConfig;
@@ -36,6 +58,12 @@ export interface HubCommandDeps {
   fetchImpl?: typeof fetch;
   wsFactory?: (url: string) => WebSocket;
   startRuntime?: (options: StartHubRuntimeOptions) => Promise<HubRuntime>;
+  /** 测试注入节点凭据存储；缺省 `createSecretStore`。 */
+  createSecretStore?: (options: CreateSecretStoreOptions) => SecretStore;
+  /** 测试注入 gateway 存活探测；缺省读 `<dataDir>/gateway.pid`。 */
+  gatewayStatus?: () => Promise<{ running: boolean }>;
+  /** 测试注入 `hub-node-status.json` 读取；缺省 `readHubNodeStatus`。 */
+  readNodeStatus?: (dataDir: string) => Promise<HubNodeStatusFile | undefined>;
   /** 测试 / 宿主停止信号；缺省等 SIGINT / SIGTERM。 */
   signal?: AbortSignal;
 }
@@ -106,6 +134,42 @@ function normalizeNodeUrl(raw: string): string {
     );
   }
   return base;
+}
+
+/** `hub join` 的 hub origin：与 `normalizeNodeUrl` 同规则（非回环必须 https）。 */
+function normalizeJoinHubUrl(raw: string): string {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new HubCommandFailure('invalid_hub_url', t('hub.error.invalidUrl'));
+  }
+  const invalid = (): HubCommandFailure =>
+    new HubCommandFailure('invalid_hub_url', t('hub.error.invalidUrl'));
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw invalid();
+  if (url.username !== '' || url.password !== '') throw invalid();
+  if (url.pathname !== '/' && url.pathname !== '') throw invalid();
+  if (url.search !== '' || url.hash !== '') throw invalid();
+  if (!isLoopbackHostname(url.hostname) && url.protocol !== 'https:') {
+    throw new HubCommandFailure('invalid_hub_url', t('hub.error.httpsRequired'));
+  }
+  return url.origin;
+}
+
+function normalizeJoinPublicUrl(raw: string): string {
+  try {
+    return normalizeNodeUrl(raw);
+  } catch {
+    throw new HubCommandFailure('invalid_public_url', t('hub.error.invalidPublicUrl'));
+  }
+}
+
+function invalidResponse(): HubCommandFailure {
+  return new HubCommandFailure('invalid_response', t('hub.error.invalidResponse'));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 function resolveHubUrl(explicit: string | undefined, config: VesselConfig): string {
@@ -522,6 +586,272 @@ async function pairCommand(
   return 0;
 }
 
+/** hub 侧 data dir：`config.hub.dataDir`（展开）否则 `~/.vessel/hub`。 */
+function hubJoinCodeDataDir(config: VesselConfig): string {
+  const configured = config.hub?.dataDir ?? DEFAULT_HUB_DATA_DIR;
+  return path.resolve(expandHome(configured));
+}
+
+async function joinCodeCommand(
+  command: Extract<HubCommand, { kind: 'join-code' }>,
+  deps: HubCommandDeps,
+  config: VesselConfig,
+): Promise<number> {
+  const dataDir = hubJoinCodeDataDir(config);
+  const hubId = await resolveNodeId({ dataDir });
+  const tenantId = command.tenant ?? config.tenant?.default ?? 'default';
+  const ttl = command.ttl ?? config.hub?.pairingTtlSeconds;
+  const store = createHubJoinStore({ dataDir, hubId });
+  const issued = await store.issue({
+    tenant_id: tenantId,
+    ...(ttl !== undefined ? { ttl_s: ttl } : {}),
+  });
+
+  if (command.json) {
+    output(
+      deps,
+      JSON.stringify(
+        {
+          code: issued.code,
+          expires_at: issued.expires_at,
+          hub_id: hubId,
+          tenant_id: tenantId,
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+
+  output(deps, ui.ok(t('hub.joinCode.code', { code: issued.code })));
+  output(deps, t('hub.joinCode.expiresAt', { at: new Date(issued.expires_at).toISOString() }));
+  return 0;
+}
+
+function joinNodeDataDir(
+  command: Extract<HubCommand, { kind: 'join' }>,
+  deps: HubCommandDeps,
+  config: VesselConfig,
+): string {
+  if (command.dataDir !== undefined) return path.resolve(expandHome(command.dataDir));
+  if (deps.dataDir !== undefined) return path.resolve(deps.dataDir);
+  return resolveDataDir(config, deps.env ?? process.env);
+}
+
+/** `--code` > `--code-env` > `config.hub.joinCodeEnv`；缺失是稳定错误。 */
+function resolveJoinCode(
+  command: Extract<HubCommand, { kind: 'join' }>,
+  deps: HubCommandDeps,
+  config: VesselConfig,
+): string {
+  if (command.code !== undefined) return command.code;
+  const envName = command.codeEnv ?? config.hub?.joinCodeEnv;
+  if (envName === undefined) {
+    throw new HubCommandFailure('hub_join_code_missing', t('hub.error.joinCodeMissing'));
+  }
+  const env = deps.env ?? process.env;
+  const value = env[envName];
+  if (typeof value !== 'string' || value === '') {
+    throw new HubCommandFailure('hub_join_code_missing', t('hub.error.joinCodeMissing'));
+  }
+  return value;
+}
+
+interface JoinResponse {
+  hub_id: string;
+  node_id: string;
+  tenant_id: string;
+  pairing_id: string;
+  token: string;
+  token_id: string;
+  expires_at: number;
+}
+
+/** 校验 join 响应白名单字段；tenant 不匹配单独报 `tenant_mismatch`。 */
+function parseJoinResponse(body: unknown, nodeId: string, tenantId: string): JoinResponse {
+  if (!isRecord(body) || body.scope !== 'node') throw invalidResponse();
+  const hubId = body.hub_id;
+  const responseTenant = body.tenant_id;
+  const pairingId = body.pairing_id;
+  const token = body.token;
+  const tokenId = body.token_id;
+  const expiresAt = body.expires_at;
+  if (typeof hubId !== 'string' || hubId === '') throw invalidResponse();
+  if (typeof responseTenant !== 'string' || responseTenant === '') throw invalidResponse();
+  if (responseTenant !== tenantId) {
+    throw new HubCommandFailure('tenant_mismatch', t('hub.error.tenantMismatch'));
+  }
+  if (pairingId !== `${nodeId}:${tenantId}`) throw invalidResponse();
+  if (typeof token !== 'string' || token === '') throw invalidResponse();
+  if (typeof tokenId !== 'string' || tokenId === '') throw invalidResponse();
+  if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) throw invalidResponse();
+  return {
+    hub_id: hubId,
+    node_id: nodeId,
+    tenant_id: responseTenant,
+    pairing_id: pairingId,
+    token,
+    token_id: tokenId,
+    expires_at: expiresAt,
+  };
+}
+
+async function readNodeStatusSafe(
+  readStatus: (dataDir: string) => Promise<HubNodeStatusFile | undefined>,
+  dataDir: string,
+): Promise<HubNodeStatusFile | undefined> {
+  try {
+    return await readStatus(dataDir);
+  } catch {
+    return undefined;
+  }
+}
+
+function withStatus(
+  joined: boolean,
+  status: HubNodeStatusFile | undefined,
+): { joined: boolean; status?: HubNodeStatusFile } {
+  return status !== undefined ? { joined, status } : { joined };
+}
+
+/**
+ * R1 成功语义：只有运行中的 gateway 报 healthy 才算 `joined`；
+ * 否则明确是 `saved`，不能把「写了文件」说成「已连通」。
+ */
+async function waitForJoinStatus(
+  dataDir: string,
+  readStatus: (dataDir: string) => Promise<HubNodeStatusFile | undefined>,
+  deps: HubCommandDeps,
+): Promise<{ joined: boolean; status?: HubNodeStatusFile }> {
+  let running = false;
+  try {
+    if (deps.gatewayStatus !== undefined) {
+      running = (await deps.gatewayStatus()).running;
+    } else {
+      running = (await readGatewayPidState(dataDir)).kind === 'running';
+    }
+  } catch {
+    running = false;
+  }
+
+  let status = await readNodeStatusSafe(readStatus, dataDir);
+  // gateway 不在运行时，状态文件可能是上一次运行留下的；不要据此声称已连通。
+  if (!running) return withStatus(false, undefined);
+
+  const deadline = Date.now() + JOIN_STATUS_TIMEOUT_MS;
+  while (status?.status !== 'healthy') {
+    if (Date.now() >= deadline) break;
+    await delay(Math.min(JOIN_STATUS_POLL_MS, Math.max(0, deadline - Date.now())));
+    status = await readNodeStatusSafe(readStatus, dataDir);
+  }
+  return withStatus(status?.status === 'healthy', status);
+}
+
+async function joinCommand(
+  command: Extract<HubCommand, { kind: 'join' }>,
+  deps: HubCommandDeps,
+  config: VesselConfig,
+): Promise<number> {
+  const rawHubUrl = command.hubUrl ?? config.hub?.url;
+  if (rawHubUrl === undefined || rawHubUrl.trim() === '') {
+    throw new HubCommandFailure('invalid_hub_url', t('hub.error.hubUrlMissing'));
+  }
+  const hubUrl = normalizeJoinHubUrl(rawHubUrl);
+  const code = resolveJoinCode(command, deps, config);
+  const dataDir = joinNodeDataDir(command, deps, config);
+  const nodeId = await resolveNodeId({
+    ...(typeof config.host?.nodeId === 'string' && config.host.nodeId !== ''
+      ? { configNodeId: config.host.nodeId }
+      : {}),
+    dataDir,
+  });
+  const tenantId = command.tenant ?? config.tenant?.default ?? 'default';
+  const publicUrl =
+    command.publicUrl !== undefined ? normalizeJoinPublicUrl(command.publicUrl) : undefined;
+
+  const body = await requestJson(deps, `${hubUrl}/v1/hub/join`, {
+    method: 'POST',
+    body: {
+      protocol: 'vessel.hub/1',
+      code,
+      node_id: nodeId,
+      tenant_id: tenantId,
+      ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
+    },
+  });
+  const joined = parseJoinResponse(body, nodeId, tenantId);
+
+  // R1 写入顺序：先写 SecretStore token，再写 hub-node.json；state 失败删除 token。
+  const createSecrets = deps.createSecretStore ?? createSecretStore;
+  const secrets = createSecrets({
+    dataDir: path.join(dataDir, 'hub-node'),
+    allowFileSecrets: config.hub?.allowFileSecrets === true,
+    keychainService: NODE_KEYCHAIN_SERVICE,
+  });
+  const tokenKey = hubNodeTokenSecretKey(joined.hub_id);
+  await secrets.set(tokenKey, joined.token);
+
+  const state: HubNodeState = {
+    v: 1,
+    hub_url: hubUrl,
+    hub_id: joined.hub_id,
+    node_id: nodeId,
+    tenant_id: tenantId,
+    pairing_id: joined.pairing_id,
+    token_id: joined.token_id,
+    expires_at: joined.expires_at,
+    joined_at: (deps.now ?? Date.now)(),
+    ...(command.caFile !== undefined ? { ca_file: command.caFile } : {}),
+    ...(publicUrl !== undefined ? { public_url: publicUrl } : {}),
+  };
+  try {
+    await writeHubNodeState(dataDir, state);
+  } catch (error) {
+    try {
+      await secrets.delete(tokenKey);
+    } catch {
+      // best-effort：token 仍会在 TTL 后过期
+    }
+    throw error;
+  }
+
+  const readStatus = deps.readNodeStatus ?? readHubNodeStatus;
+  const outcome = await waitForJoinStatus(dataDir, readStatus, deps);
+  const stateFile = path.join(dataDir, HUB_NODE_STATE_FILE);
+
+  if (command.json) {
+    output(
+      deps,
+      JSON.stringify(
+        {
+          ok: true,
+          joined: outcome.joined,
+          hub_id: joined.hub_id,
+          pairing_id: joined.pairing_id,
+          node_id: nodeId,
+          tenant_id: tenantId,
+          state_file: stateFile,
+          ...(outcome.status !== undefined ? { status: outcome.status.status } : {}),
+        },
+        null,
+        2,
+      ),
+    );
+    return 0;
+  }
+
+  if (outcome.joined) {
+    output(deps, ui.ok(t('hub.join.joined', { hub: joined.hub_id, pairing: joined.pairing_id })));
+  } else {
+    output(deps, ui.info(t('hub.join.saved')));
+    if (outcome.status !== undefined) {
+      output(deps, t('hub.join.lastStatus', { status: outcome.status.status }));
+    }
+  }
+  return 0;
+}
+
 async function nodeAddCommand(
   command: Extract<HubCommand, { kind: 'node-add' }>,
   deps: HubCommandDeps,
@@ -685,6 +1015,10 @@ export async function runHubCommand(
         return await watchCommand(command, deps, config);
       case 'pair':
         return await pairCommand(command, deps, config);
+      case 'join-code':
+        return await joinCodeCommand(command, deps, config);
+      case 'join':
+        return await joinCommand(command, deps, config);
       case 'node-add':
         return await nodeAddCommand(command, deps, config);
       case 'node-list':

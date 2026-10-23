@@ -256,7 +256,7 @@ describe('startHubRuntime startup', () => {
     }
   });
 
-  it('leaves nodeControl undefined when inbound factories are missing', async () => {
+  it('wires default inbound stores when factories are missing', async () => {
     const hubDir = await tempDataDir();
     const gatewayDir = await tempDataDir();
     const harness = createHarness();
@@ -269,7 +269,10 @@ describe('startHubRuntime startup', () => {
     });
 
     try {
-      expect(harness.inbound()).toBeUndefined();
+      const inbound = harness.inbound();
+      expect(inbound).toBeDefined();
+      expect(inbound?.joinStore).toBeDefined();
+      expect(inbound?.credentials).toBeDefined();
     } finally {
       await runtime.stop();
     }
