@@ -463,6 +463,68 @@ describe('TeamService private members', () => {
     expect(store.logs.some((entry) => entry.message_id === 'reply-p')).toBe(false);
   });
 
+  it('logs team and tenant visibility but not private for system and reply events', async () => {
+    const { agent, store } = makeTeamHarness({
+      members: [
+        makeMember({ id: 'p', team_id: 'alpha', visibility: 'private' }),
+        makeMember({ id: 'a', team_id: 'alpha', visibility: 'team' }),
+        makeMember({ id: 't', team_id: 'alpha', visibility: 'tenant' }),
+      ],
+    });
+
+    const members = [
+      { id: 'p', visibility: 'private' as const },
+      { id: 'a', visibility: 'team' as const },
+      { id: 't', visibility: 'tenant' as const },
+    ];
+    let ts = 1;
+    for (const member of members) {
+      agent.emit({
+        type: 'agent.spawned',
+        agent_id: member.id,
+        team_id: 'alpha',
+        visibility: member.visibility,
+        ts: ts++,
+      });
+      agent.emit({
+        type: 'agent.rotated',
+        agent_id: member.id,
+        team_id: 'alpha',
+        visibility: member.visibility,
+        ts: ts++,
+      });
+      agent.emit({
+        type: 'agent.reply.posted',
+        agent_id: member.id,
+        session_id: member.id,
+        team_id: 'alpha',
+        visibility: member.visibility,
+        message_id: `reply-${member.id}`,
+        content: `reply-${member.id}`,
+        ts: ts++,
+      });
+    }
+    await settle();
+
+    // team 与 tenant 都写 join / rotate；private 一条都不写。
+    const system = store.logs.filter((entry) => entry.kind === 'system');
+    expect(system.map((entry) => `${entry.to[0]}:${entry.system_event}`)).toEqual([
+      'a:join',
+      'a:rotate',
+      't:join',
+      't:rotate',
+    ]);
+
+    const replies = store.logs.filter((entry) => entry.kind === 'reply');
+    expect(replies.map((entry) => entry.message_id)).toEqual(['reply-a', 'reply-t']);
+    expect(replies.map((entry) => entry.content)).toEqual(['reply-a', 'reply-t']);
+
+    // private 成员 id 不得出现在 Team 日志的 from / to / mentions。
+    expect(store.logs.every((entry) => entry.from !== 'p')).toBe(true);
+    expect(store.logs.every((entry) => !entry.to.includes('p'))).toBe(true);
+    expect(store.logs.every((entry) => !entry.mentions.includes('p'))).toBe(true);
+  });
+
   it('rejects a private mention and excludes it from the log', async () => {
     const { service, agent, store } = makeTeamHarness({
       members: [
