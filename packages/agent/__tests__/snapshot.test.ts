@@ -5,8 +5,12 @@ import { dirname, join } from 'node:path';
 import type { Logger } from '@vessel-agent/core';
 import {
   AGENT_SNAPSHOT_VERSION,
+  type AgentBodyHistoryEntry,
   type AgentError,
+  AgentSnapshotStore,
+  MAX_BODY_HISTORY,
   type MemberTurnResult,
+  type PersistedAgentRecord,
   snapshotPath,
 } from '../src/index.js';
 import { deferred, makeService, settle } from './helpers.js';
@@ -24,6 +28,18 @@ afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+function baseRecord(overrides: Partial<PersistedAgentRecord> = {}): PersistedAgentRecord {
+  return {
+    id: 'member',
+    session_id: 'member',
+    owner: 'main',
+    visibility: 'team',
+    state: 'idle',
+    membership: 'present',
+    ...overrides,
+  };
+}
 
 function recordingLogger(): { logger: Logger; errors: string[] } {
   const errors: string[] = [];
@@ -196,5 +212,111 @@ describe('Agent snapshot', () => {
     const disposed = second.runtime.disposed.length;
     await second.service.close({ member: running.id });
     expect(second.runtime.disposed.length).toBe(disposed);
+  });
+
+  it('round-trips body_history through write and load', async () => {
+    const dataDir = await tempDir();
+    const store = new AgentSnapshotStore(snapshotPath(dataDir, 'default'), 'default');
+    const bodyHistory: AgentBodyHistoryEntry[] = [
+      { session_id: 'body-1', epoch: 0, started_at: 10, retired_at: 20 },
+      { session_id: 'body-2', epoch: 1, started_at: 30, retired_at: 40 },
+    ];
+
+    const written = await store.write([
+      baseRecord({
+        current_body: { session_id: 'body-current', epoch: 2, started_at: 50 },
+        body_history: bodyHistory,
+      }),
+    ]);
+    expect(written).toBe(true);
+
+    const [record] = await store.load();
+    expect(record?.current_body).toEqual({ session_id: 'body-current', epoch: 2, started_at: 50 });
+    expect(record?.body_history).toEqual(bodyHistory);
+  });
+
+  it('skips invalid body_history entries individually and keeps the valid ones', async () => {
+    const dataDir = await tempDir();
+    const path = snapshotPath(dataDir, 'default');
+    await mkdir(dirname(path), { recursive: true });
+    const valid: AgentBodyHistoryEntry = {
+      session_id: 'body-ok',
+      epoch: 3,
+      started_at: 30,
+      retired_at: 40,
+    };
+    const snapshot = {
+      version: AGENT_SNAPSHOT_VERSION,
+      tenant_id: 'default',
+      updated_at: 1,
+      members: [
+        {
+          ...baseRecord({ id: 'mixed', session_id: 'mixed' }),
+          body_history: [
+            { session_id: '', epoch: 0, started_at: 1, retired_at: 2 },
+            { session_id: 'negative-epoch', epoch: -1, started_at: 1, retired_at: 2 },
+            { session_id: 'bad-started-at', epoch: 0, started_at: null, retired_at: 2 },
+            { session_id: 'missing-retired-at', epoch: 0, started_at: 1 },
+            { session_id: 'bad-retired-at', epoch: 0, started_at: 1, retired_at: null },
+            valid,
+          ],
+        },
+        baseRecord({ id: 'absent', session_id: 'absent' }),
+        { ...baseRecord({ id: 'empty', session_id: 'empty' }), body_history: [] },
+        { ...baseRecord({ id: 'not-array', session_id: 'not-array' }), body_history: 'nope' },
+      ],
+    };
+    await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`);
+
+    const loaded = await new AgentSnapshotStore(path, 'default').load();
+    const byId = new Map(loaded.map((record) => [record.id, record]));
+    expect(byId.get('mixed')?.body_history).toEqual([valid]);
+    expect(byId.get('absent')?.body_history).toBeUndefined();
+    expect(byId.get('empty')?.body_history).toBeUndefined();
+    expect(byId.get('not-array')?.body_history).toBeUndefined();
+  });
+
+  it('trims body_history to the last MAX_BODY_HISTORY entries', async () => {
+    const dataDir = await tempDir();
+    const path = snapshotPath(dataDir, 'default');
+    await mkdir(dirname(path), { recursive: true });
+    const entries: AgentBodyHistoryEntry[] = Array.from(
+      { length: MAX_BODY_HISTORY + 5 },
+      (_, index) => ({
+        session_id: `body-${index}`,
+        epoch: index,
+        started_at: index,
+        retired_at: index + 1,
+      }),
+    );
+    const snapshot = {
+      version: AGENT_SNAPSHOT_VERSION,
+      tenant_id: 'default',
+      updated_at: 1,
+      members: [{ ...baseRecord(), body_history: entries }],
+    };
+    await writeFile(path, `${JSON.stringify(snapshot, null, 2)}\n`);
+
+    const [record] = await new AgentSnapshotStore(path, 'default').load();
+    expect(record?.body_history).toHaveLength(MAX_BODY_HISTORY);
+    expect(record?.body_history?.[0]?.session_id).toBe('body-5');
+    expect(record?.body_history?.at(-1)?.session_id).toBe(`body-${MAX_BODY_HISTORY + 4}`);
+  });
+
+  it('flush with no pending write returns true', async () => {
+    const dataDir = await tempDir();
+    const store = new AgentSnapshotStore(snapshotPath(dataDir, 'default'), 'default');
+
+    expect(await store.flush()).toBe(true);
+  });
+
+  it('flush returns false when the write fails and true when nothing is pending', async () => {
+    const dataDir = await tempDir();
+    await writeFile(join(dataDir, 'agents'), 'not a directory');
+    const store = new AgentSnapshotStore(snapshotPath(dataDir, 'default'), 'default');
+
+    store.schedule(() => [baseRecord()]);
+    expect(await store.flush()).toBe(false);
+    expect(await store.flush()).toBe(true);
   });
 });

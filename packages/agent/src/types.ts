@@ -7,7 +7,7 @@
  * @module @vessel-agent/agent
  */
 
-import type { EventStream, Logger, Usage } from '@vessel-agent/core';
+import type { EventStream, Logger, RunEvent, Usage } from '@vessel-agent/core';
 
 /** 成员状态（终态：completed / failed / cancelled / closed） */
 export type MemberState =
@@ -38,6 +38,14 @@ export interface AgentBodyPointer {
   session_id: string;
   epoch: number;
   started_at: number;
+}
+
+/** body_history 上限；超出时丢弃最旧条目 */
+export const MAX_BODY_HISTORY = 20;
+
+/** 已退役 Body 的历史条目；只追加，有界（最多 20 条） */
+export interface AgentBodyHistoryEntry extends AgentBodyPointer {
+  retired_at: number;
 }
 
 /** 成员对外状态（E1 冻结形状；新字段 additive） */
@@ -80,6 +88,8 @@ export interface PersistedAgentRecord {
   model?: string;
   system_prompt?: string;
   current_body?: AgentBodyPointer;
+  /** 已退役 Body 的历史（只追加，最多 20 条；当前 Body 不在其中） */
+  body_history?: AgentBodyHistoryEntry[];
   forked_from?: string;
   current_tool?: string;
   last_seen?: number;
@@ -215,6 +225,43 @@ export type DispatchResult =
       reason: string;
     };
 
+/**
+ * rotate：Agent 换一具新 Body；id / name / owner / 配置不变。
+ * startup_prompt 必填，作为新 Body 的第一条消息；handoff_path 可选。
+ */
+export interface RotateInput {
+  /** agent id | 当前 Body 的 session_id | 唯一 name */
+  to: string;
+  startup_prompt: string;
+  /** 追加到第一条消息末尾，并进 rotate 事件 payload */
+  handoff_path?: string;
+  /** 调用者当前 Body 的 session；agent 工具路径必填，CLI / owner 路径缺省 */
+  from_session_id?: string;
+  /** 可见性判定；缺省 DEFAULT_OWNER */
+  from?: string;
+}
+
+/** rotate 结果：failed 表示旧指针保持不变 */
+export type RotateResult =
+  | {
+      status: 'rotated';
+      agent_id: string;
+      from_session_id: string;
+      to_session_id: string;
+      epoch: number;
+    }
+  | {
+      status: 'failed';
+      code:
+        | 'rotate_failed'
+        | 'agent_left'
+        | 'not_current_body'
+        | 'body_not_live'
+        | 'rotating'
+        | 'not_visible';
+      reason: string;
+    };
+
 /** 关闭参数 */
 export interface CloseInput {
   member?: string;
@@ -290,6 +337,15 @@ export interface AgentEvent {
   presence?: MemberPresence;
   /** 当前 Body epoch（agent.resumed） */
   epoch?: number;
+  /** rotate：旧 / 新 Body 的 session */
+  from_session_id?: string;
+  to_session_id?: string;
+  /** 事件所属 Body（旧轮终态 / retired / reply.stale） */
+  body_id?: string;
+  /** rotate 的 handoff 路径 */
+  handoff?: string;
+  /** 旧 Body 轮末终态标记 */
+  stale?: boolean;
   message_id?: string;
   /** 消息来源（queued 事件） */
   from?: string;
@@ -359,6 +415,11 @@ export interface AgentService {
    * rotating 入队等待；left / resume 失败返回 rejected。
    */
   dispatch(input: DispatchInput): Promise<DispatchResult>;
+  /**
+   * 换一具新 Body：旧 Body 跑完当前轮后退役，新 Body 以 startup_prompt 开始。
+   * 失败保持旧指针，不自动 fork / 重试。
+   */
+  rotate(input: RotateInput): Promise<RotateResult>;
   close(input: CloseInput): Promise<CloseResult>;
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;
@@ -371,10 +432,17 @@ export interface AgentService {
   takeMessages(memberId: string, limit?: number): Promise<AgentMessage[]>;
   /** 执行内核 bridge 上报的权限等待/恢复；只推进 waiting_permission ↔ running */
   notePermissionState(memberId: string, state: MemberPermissionState): void;
+  /** 成员引擎事件回流（装配用）；当前只处理当前 Body 的 agent.limit.warning */
+  noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void;
+  /**
+   * 该 session 是否属于某个非 owner 成员的 Body：当前 Body、正在跑的旧 Body、
+   * 已退役 Body 或 rotate 目标 Body 都算。owner 的 Body 不算。
+   */
+  isMemberBody(sessionId: string): boolean;
   /** 权限等待：waiting_permission ↔ running；无 bridge 时 deny */
   requestPermission(memberId: string, request: PermissionRequestInput): Promise<PermissionDecision>;
-  /** 立即落盘待写快照（close 已自动等待；测试 / 收口用） */
-  flushSnapshot(): Promise<void>;
+  /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
+  flushSnapshot(): Promise<boolean>;
   /** 订阅成员事件；返回取消函数 */
   subscribe(listener: AgentEventListener): () => void;
 }

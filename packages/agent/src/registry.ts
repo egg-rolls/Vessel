@@ -9,9 +9,11 @@
 
 import type { Usage } from '@vessel-agent/core';
 import {
+  type AgentBodyHistoryEntry,
   type AgentBodyPointer,
   AgentError,
   type ListFilter,
+  MAX_BODY_HISTORY,
   type MemberMembership,
   type MemberPresence,
   type MemberRotation,
@@ -27,6 +29,8 @@ export interface MemberRecord {
   id: string;
   /** 第一具 Body 的 session（currentBody 存在时其 session_id 才是当前 Body） */
   sessionId: string;
+  /** 已退役 Body 的历史；只追加，最多 MAX_BODY_HISTORY 条 */
+  bodyHistory: AgentBodyHistoryEntry[];
   name?: string;
   parentId?: string;
   owner: string;
@@ -66,11 +70,16 @@ export function canTransition(from: MemberState, to: MemberState): boolean {
   return TRANSITIONS[from].includes(to);
 }
 
+/** 参与 session 寻址的 Body session：当前 Body 优先，否则第一具 Body */
+function currentBodySession(record: MemberRecord): string {
+  return record.currentBody?.session_id ?? record.sessionId;
+}
+
 /** 注册表记录 → 对外状态 */
 export function toMemberStatus(record: MemberRecord): MemberStatus {
   return {
     id: record.id,
-    session_id: record.sessionId,
+    session_id: currentBodySession(record),
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     owner: record.owner,
@@ -99,6 +108,9 @@ export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
     ...(record.model !== undefined ? { model: record.model } : {}),
     ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
     ...(record.currentBody !== undefined ? { current_body: record.currentBody } : {}),
+    ...(record.bodyHistory.length > 0
+      ? { body_history: record.bodyHistory.slice(-MAX_BODY_HISTORY) }
+      : {}),
     ...(record.forkedFrom !== undefined ? { forked_from: record.forkedFrom } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
@@ -127,13 +139,14 @@ export class MemberRegistry {
 
   constructor(private readonly now: () => number = Date.now) {}
 
-  /** 新增；id / session_id 重复直接拒绝，不覆盖旧记录 */
+  /** 新增；id / 当前 Body session 重复直接拒绝，不覆盖旧记录 */
   add(record: MemberRecord): void {
-    if (this.byId.has(record.id) || this.bySession.has(record.sessionId)) {
+    const sessionKey = currentBodySession(record);
+    if (this.byId.has(record.id) || this.bySession.has(sessionKey)) {
       throw new AgentError('invalid_input', `duplicate member id: ${record.id}`);
     }
     this.byId.set(record.id, record);
-    this.bySession.set(record.sessionId, record.id);
+    this.bySession.set(sessionKey, record.id);
   }
 
   /** 成员 id 或 session_id 寻址 */
@@ -151,8 +164,9 @@ export class MemberRegistry {
   remove(id: string): void {
     const record = this.byId.get(id);
     if (!record) return;
+    const sessionKey = currentBodySession(record);
     this.byId.delete(id);
-    this.bySession.delete(record.sessionId);
+    if (this.bySession.get(sessionKey) === id) this.bySession.delete(sessionKey);
   }
 
   /** 状态转移；非法转移抛 invalid_state_transition，缺失成员抛 unknown_member */
@@ -193,9 +207,11 @@ export class MemberRegistry {
       if (owner !== undefined && owner !== id) {
         throw new AgentError('invalid_input', `duplicate session id: ${updates.sessionId}`);
       }
-      this.bySession.delete(record.sessionId);
+      const oldKey = currentBodySession(record);
+      if (this.bySession.get(oldKey) === id) this.bySession.delete(oldKey);
       record.sessionId = updates.sessionId;
-      this.bySession.set(updates.sessionId, id);
+      // 有当前 Body 时，寻址键仍是当前 Body，不是第一具 Body
+      this.bySession.set(currentBodySession(record), id);
     }
     if (updates.visibility !== undefined) record.visibility = updates.visibility;
     record.lastSeen = this.now();
@@ -219,10 +235,36 @@ export class MemberRegistry {
     if (record) record.presence = presence;
   }
 
-  /** 当前 Body 指针；不改变第一具 Body 的 sessionId */
+  /** 当前 Body 指针；不改变第一具 Body 的 sessionId，但迁移 session 寻址键 */
   setCurrentBody(id: string, body: AgentBodyPointer): void {
     const record = this.byId.get(id);
-    if (record) record.currentBody = body;
+    if (!record) return;
+    const oldKey = currentBodySession(record);
+    if (this.bySession.get(oldKey) === id) this.bySession.delete(oldKey);
+    record.currentBody = body;
+    this.bySession.set(body.session_id, id);
+  }
+
+  /** Body 轮换相位（进程内，不持久化） */
+  setRotation(id: string, rotation: MemberRotation): void {
+    const record = this.byId.get(id);
+    if (record) record.rotation = rotation;
+  }
+
+  /** 追加退役 Body；超过 MAX_BODY_HISTORY 时丢弃最旧条目 */
+  pushBodyHistory(id: string, entry: AgentBodyHistoryEntry): void {
+    const record = this.byId.get(id);
+    if (!record) return;
+    record.bodyHistory.push(entry);
+    if (record.bodyHistory.length > MAX_BODY_HISTORY) {
+      record.bodyHistory.splice(0, record.bodyHistory.length - MAX_BODY_HISTORY);
+    }
+  }
+
+  /** 整组覆盖 body history（rotate 失败回滚用） */
+  setBodyHistory(id: string, entries: readonly AgentBodyHistoryEntry[]): void {
+    const record = this.byId.get(id);
+    if (record) record.bodyHistory = [...entries];
   }
 
   /** 按 name 查找（tenant 内可能重名：旧快照容忍重名，new 强制唯一） */

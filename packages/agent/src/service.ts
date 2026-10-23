@@ -11,7 +11,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { assertTenantId, type EventStream, type Logger, noopLogger } from '@vessel-agent/core';
+import {
+  assertTenantId,
+  type EventStream,
+  type Logger,
+  noopLogger,
+  type RunEvent,
+} from '@vessel-agent/core';
 import {
   type MemberRecord,
   MemberRegistry,
@@ -21,6 +27,7 @@ import {
 } from './registry.js';
 import { AgentSnapshotStore, snapshotPath } from './snapshot.js';
 import {
+  type AgentBodyPointer,
   AgentError,
   type AgentEvent,
   type AgentEventListener,
@@ -39,6 +46,7 @@ import {
   type ListFilter,
   MAX_MESSAGE_BYTES,
   type MemberPermissionState,
+  type MemberRuntimeMember,
   type MemberState,
   type MemberStatus,
   type MemberTurnResult,
@@ -49,6 +57,8 @@ import {
   type PermissionRequestInput,
   type PersistedAgentRecord,
   type ReplyResult,
+  type RotateInput,
+  type RotateResult,
   type SendBatchInput,
   type SendInput,
   type SendResult,
@@ -56,12 +66,24 @@ import {
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 
-/** 单成员运行态（不落 snapshot） */
+/** 单成员运行态（不落 snapshot）；队列 per-agent，不 per-body */
 interface MemberQueue {
   pending: AgentMessage[];
   turnActive: boolean;
+  /** 本轮实际运行的 Body（pump 时捕获） */
+  activeBodySession?: string;
   repliedThisTurn: boolean;
   closing: boolean;
+  /** `${session_id}|${key}`；rotate 成功 / close 时清空 */
+  warnedSignals: Set<string>;
+}
+
+/** rotate 窗口内的旧 / 新 Body 身份（agentId → state） */
+interface RotationState {
+  fromSessionId: string;
+  fromEpoch: number;
+  toSessionId: string;
+  toEpoch: number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -121,6 +143,7 @@ function recordFromStatus(status: PersistedAgentRecord, now: number): MemberReco
     membership: status.membership,
     rotation: 'stable',
     currentBody,
+    bodyHistory: status.body_history ?? [],
     ...(status.model !== undefined ? { model: status.model } : {}),
     ...(status.system_prompt !== undefined ? { systemPrompt: status.system_prompt } : {}),
     ...(status.forked_from !== undefined ? { forkedFrom: status.forked_from } : {}),
@@ -142,6 +165,8 @@ export class AgentServiceImpl implements AgentService {
   private readonly queues = new Map<string, MemberQueue>();
   /** gone 成员的 single-flight resume；同一 id 并发 dispatch 只 spawn 一次 */
   private readonly resuming = new Map<string, Promise<void>>();
+  /** 进行中的 rotate（agentId → 旧 / 新 Body）；只在内存 */
+  private readonly rotations = new Map<string, RotationState>();
   /** external owner（REPL 主 agent）：队列由 takeMessages 消费，pump 永不执行 */
   private readonly externalOwners = new Set<string>();
   private readonly listeners = new Set<AgentEventListener>();
@@ -322,6 +347,7 @@ export class AgentServiceImpl implements AgentService {
       membership: 'present',
       rotation: 'stable',
       currentBody: { session_id: sessionId, epoch: 0, started_at: this.now() },
+      bodyHistory: [],
     };
     this.registry.add(record);
     this.queueFor(id);
@@ -356,6 +382,7 @@ export class AgentServiceImpl implements AgentService {
       membership: 'present',
       rotation: 'stable',
       currentBody: { session_id: id, epoch: 0, started_at: this.now() },
+      bodyHistory: [],
     };
     if (name !== undefined) record.name = name;
     const parentId = optionalString(input.parentId);
@@ -588,6 +615,205 @@ export class AgentServiceImpl implements AgentService {
     });
   }
 
+  /**
+   * 换一具新 Body：新 session + epoch + 1，spawn 成功后原子切指针并落盘。
+   * 失败保持旧指针、不自动 fork / 重试 / 限流；启动嘱托只在成功后入队。
+   */
+  async rotate(input: RotateInput): Promise<RotateResult> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const to = readRequiredString(raw, 'to');
+    const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+
+    const target = this.resolveDispatchTarget(to, from);
+    if (target === undefined || !this.registry.canView(target, from)) {
+      return { status: 'failed', code: 'not_visible', reason: `not_visible: ${to}` };
+    }
+    const queue = this.queueFor(target.id);
+    if (target.membership === 'left' || target.state === 'closed' || queue.closing) {
+      return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
+    }
+    if (this.rotations.has(target.id) || target.rotation === 'rotating') {
+      return { status: 'failed', code: 'rotating', reason: `rotating: ${target.id}` };
+    }
+    if (target.presence !== 'live') {
+      return { status: 'failed', code: 'body_not_live', reason: `body_not_live: ${target.id}` };
+    }
+    if (this.externalOwners.has(target.id)) {
+      return { status: 'failed', code: 'rotate_failed', reason: 'owner_not_rotatable' };
+    }
+
+    // 最终 self-only 闸门：调用者 session 必须就是 target 的当前 Body。
+    const callerSession = input.from_session_id;
+    if (callerSession !== undefined) {
+      const caller = this.registry.resolve(callerSession);
+      if (caller !== target || target.currentBody?.session_id !== callerSession) {
+        return {
+          status: 'failed',
+          code: 'not_current_body',
+          reason: `not_current_body: ${callerSession}`,
+        };
+      }
+    }
+
+    const startupPrompt = readContent(raw, 'startup_prompt');
+    const handoffPath = optionalString(input.handoff_path);
+
+    // 指针切换前捕获旧 Body 身份与可回滚状态。
+    const oldPointer: AgentBodyPointer = target.currentBody ?? {
+      session_id: target.sessionId,
+      epoch: 0,
+      started_at: this.now(),
+    };
+    const fromSessionId = oldPointer.session_id;
+    const fromEpoch = oldPointer.epoch;
+    const oldBodyHistory = [...target.bodyHistory];
+    const oldMember = toRuntimeMember(target);
+
+    const toSessionId = this.newId();
+    if (!nonEmpty(toSessionId) || this.registry.resolve(toSessionId) !== undefined) {
+      this.emitForSession('agent.rotate.failed', target, fromSessionId, {
+        from_session_id: fromSessionId,
+        ...(nonEmpty(toSessionId) ? { to_session_id: toSessionId } : {}),
+        reason: 'session_id_collision',
+      });
+      return { status: 'failed', code: 'rotate_failed', reason: 'session_id_collision' };
+    }
+    const toEpoch = fromEpoch + 1;
+    const newMember: MemberRuntimeMember = { ...oldMember, session_id: toSessionId };
+
+    const isAborted = (): boolean => {
+      const current = this.registry.get(target.id);
+      return (
+        current === undefined ||
+        current.membership === 'left' ||
+        current.state === 'closed' ||
+        this.queueFor(target.id).closing
+      );
+    };
+
+    this.registry.setRotation(target.id, 'rotating');
+    this.rotations.set(target.id, { fromSessionId, fromEpoch, toSessionId, toEpoch });
+    this.emitForSession('agent.rotating', target, fromSessionId, {
+      from_session_id: fromSessionId,
+      to_session_id: toSessionId,
+      epoch: toEpoch,
+      ...(handoffPath !== undefined ? { handoff: handoffPath } : {}),
+    });
+
+    try {
+      try {
+        await this.runtime.spawn(newMember);
+      } catch (error) {
+        this.registry.setRotation(target.id, 'stable');
+        this.rotations.delete(target.id);
+        this.emitForSession('agent.rotate.failed', target, fromSessionId, {
+          from_session_id: fromSessionId,
+          to_session_id: toSessionId,
+          reason: errorText(error),
+        });
+        this.pump(target.id);
+        return { status: 'failed', code: 'rotate_failed', reason: errorText(error) };
+      }
+
+      // spawn 之后可能已 close：dispose 新 engine，不切换指针。
+      if (isAborted()) {
+        this.registry.setRotation(target.id, 'stable');
+        this.rotations.delete(target.id);
+        await this.disposeBody(newMember);
+        this.emitForSession('agent.rotate.failed', target, fromSessionId, {
+          from_session_id: fromSessionId,
+          to_session_id: toSessionId,
+          reason: 'agent_left',
+        });
+        return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
+      }
+
+      this.registry.pushBodyHistory(target.id, { ...oldPointer, retired_at: this.now() });
+      this.registry.setCurrentBody(target.id, {
+        session_id: toSessionId,
+        epoch: toEpoch,
+        started_at: this.now(),
+      });
+      this.scheduleSnapshot();
+      let ok = false;
+      try {
+        ok = await this.flushSnapshot();
+      } catch {
+        ok = false;
+      }
+
+      // flush 之后才 close：指针已提交，不再回滚；新 engine 由 close / 本分支回收。
+      if (isAborted()) {
+        this.registry.setRotation(target.id, 'stable');
+        this.rotations.delete(target.id);
+        await this.disposeBody(newMember);
+        this.emitForSession('agent.rotate.failed', target, fromSessionId, {
+          from_session_id: fromSessionId,
+          to_session_id: toSessionId,
+          reason: 'agent_left',
+        });
+        return { status: 'failed', code: 'agent_left', reason: `agent_left: ${target.id}` };
+      }
+
+      if (!ok) {
+        this.registry.setCurrentBody(target.id, oldPointer);
+        this.registry.setBodyHistory(target.id, oldBodyHistory);
+        this.registry.setRotation(target.id, 'stable');
+        this.rotations.delete(target.id);
+        await this.disposeBody(newMember);
+        this.emitForSession('agent.rotate.failed', target, fromSessionId, {
+          from_session_id: fromSessionId,
+          to_session_id: toSessionId,
+          reason: 'snapshot_write_failed',
+        });
+        this.pump(target.id);
+        return { status: 'failed', code: 'rotate_failed', reason: 'snapshot_write_failed' };
+      }
+
+      queue.pending.unshift({
+        id: this.newId(),
+        from: 'system',
+        to: target.id,
+        content: startupPrompt + (handoffPath !== undefined ? `\n\n[handoff: ${handoffPath}]` : ''),
+        ts: this.now(),
+      });
+      queue.warnedSignals.clear();
+      this.emitForSession('agent.rotated', target, toSessionId, {
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch: toEpoch,
+      });
+      this.scheduleSnapshot();
+      this.registry.setRotation(target.id, 'stable');
+      this.rotations.delete(target.id);
+
+      // 没有在跑的旧轮才立即退役；否则交给 executeTurn 的 stale 分支。
+      if (!queue.turnActive) {
+        const disposed = await this.disposeBody(oldMember);
+        this.emitForSession('agent.retired', target, fromSessionId, {
+          body_id: fromSessionId,
+          epoch: fromEpoch,
+          reason: disposed ? 'rotation' : 'dispose_failed',
+        });
+      }
+
+      this.pump(target.id);
+      return {
+        status: 'rotated',
+        agent_id: target.id,
+        from_session_id: fromSessionId,
+        to_session_id: toSessionId,
+        epoch: toEpoch,
+      };
+    } finally {
+      // 任何出口都不得留下 rotating 相位或残留的 rotation state。
+      this.rotations.delete(target.id);
+      const current = this.registry.get(target.id);
+      if (current?.rotation === 'rotating') this.registry.setRotation(target.id, 'stable');
+    }
+  }
+
   async close(input: CloseInput): Promise<CloseResult>;
   async close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   async close(
@@ -631,10 +857,15 @@ export class AgentServiceImpl implements AgentService {
     const queue = this.queueFor(member.id);
     queue.closing = true;
     queue.pending.length = 0;
+    queue.warnedSignals.clear();
 
+    const activeSession = queue.activeBodySession;
+    const currentSession = member.currentBody?.session_id ?? member.sessionId;
     if (queue.turnActive) {
       try {
-        await this.runtime.cancel(toRuntimeMember(member));
+        await this.runtime.cancel(
+          this.runtimeMemberForSession(member, activeSession ?? currentSession),
+        );
       } catch (error) {
         this.logger.warn('agent.cancel.failed', {
           member_id: member.id,
@@ -651,14 +882,17 @@ export class AgentServiceImpl implements AgentService {
     this.emit('agent.closed', member, { state: 'closed', presence: 'gone' });
     this.scheduleSnapshot();
 
-    try {
-      await this.runtime.dispose(toRuntimeMember(member));
-    } catch (error) {
-      this.logger.warn('agent.dispose.failed', {
-        member_id: member.id,
-        error: errorText(error),
-      });
+    // 旧 / 新 / 正在 rotate 的目标 Body 全部回收（dispose 按 session 幂等）。
+    const sessions = new Set<string>();
+    if (activeSession !== undefined) sessions.add(activeSession);
+    sessions.add(currentSession);
+    sessions.add(member.sessionId);
+    const rotating = this.rotations.get(member.id);
+    if (rotating !== undefined) sessions.add(rotating.toSessionId);
+    for (const sessionId of sessions) {
+      await this.disposeBody(this.runtimeMemberForSession(member, sessionId));
     }
+    queue.activeBodySession = undefined;
 
     await this.flushSnapshot();
     return { state: 'closed' };
@@ -765,6 +999,59 @@ export class AgentServiceImpl implements AgentService {
     this.scheduleSnapshot();
   }
 
+  /**
+   * 成员引擎事件回流：只处理**当前** Body 的 `agent.limit.warning`，
+   * 按 `${sessionId}|${key}` 去重后作为系统提示排进该 Agent 的下一轮。
+   * 旧 Body 的预警丢弃，避免换身体后串台。
+   */
+  noteMemberEvent(memberId: string, sessionId: string, event: RunEvent): void {
+    if (event.type !== 'agent.limit.warning') return;
+    const record = this.registry.get(memberId);
+    if (!record) return;
+    if (record.membership === 'left' || record.state === 'closed') return;
+    const queue = this.queueFor(memberId);
+    if (queue.closing) return;
+    if (record.currentBody?.session_id !== sessionId) return;
+
+    const data = isRecord(event.data) ? event.data : undefined;
+    if (!data) return;
+    const key = data.key;
+    const current = data.current;
+    const max = data.max;
+    if (!nonEmpty(key)) return;
+    if (typeof current !== 'number' || !Number.isFinite(current)) return;
+    if (typeof max !== 'number' || !Number.isFinite(max)) return;
+    const threshold =
+      typeof data.threshold === 'number' && Number.isFinite(data.threshold) ? data.threshold : 0.8;
+
+    const dedupeKey = `${sessionId}|${key}`;
+    if (queue.warnedSignals.has(dedupeKey)) return;
+    queue.warnedSignals.add(dedupeKey);
+
+    const text =
+      `[system] Context/usage limit warning: ${key} is at ${current}/${max} (>= ${threshold}). ` +
+      'If your context is nearly full, write a handoff and call agent.rotate with ' +
+      'startup_prompt (and handoff_path if you wrote one) to continue in a fresh body.';
+    this.enqueueMessage(record, text, 'system');
+  }
+
+  /** 该 session 是否属于某个非 owner 成员的 Body（当前 / 在跑 / 已退役 / rotate 目标）。 */
+  isMemberBody(sessionId: string): boolean {
+    if (!nonEmpty(sessionId)) return false;
+    for (const record of this.registry.all()) {
+      if (this.externalOwners.has(record.id)) continue;
+      if (record.currentBody?.session_id === sessionId) return true;
+      if (record.bodyHistory.some((entry) => entry.session_id === sessionId)) return true;
+    }
+    for (const queue of this.queues.values()) {
+      if (queue.activeBodySession === sessionId) return true;
+    }
+    for (const rotation of this.rotations.values()) {
+      if (rotation.fromSessionId === sessionId || rotation.toSessionId === sessionId) return true;
+    }
+    return false;
+  }
+
   async requestPermission(
     memberId: string,
     request: PermissionRequestInput,
@@ -810,9 +1097,10 @@ export class AgentServiceImpl implements AgentService {
     return decision;
   }
 
-  async flushSnapshot(): Promise<void> {
+  async flushSnapshot(): Promise<boolean> {
     await this.ready;
-    await this.snapshot?.flush();
+    if (!this.snapshot) return true;
+    return this.snapshot.flush();
   }
 
   subscribe(listener: AgentEventListener): () => void {
@@ -828,16 +1116,29 @@ export class AgentServiceImpl implements AgentService {
     };
   }
 
-  /** 发成员事件；监听器与 EventStream 异常都隔离，不影响服务行为 */
+  /** 发成员事件（默认用当前 Body 的 session）；监听器与 EventStream 异常都隔离 */
   private emit(
     type: string,
     member: MemberRecord,
     extra: Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> = {},
   ): void {
+    this.emitForSession(type, member, member.currentBody?.session_id ?? member.sessionId, extra);
+  }
+
+  /**
+   * 指定 Body 的事件出口：旧轮的 turn / reply.stale / retired 必须带旧 session，
+   * rotate 事件带显式 from / to。`run_id` 始终是成员 id。
+   */
+  private emitForSession(
+    type: string,
+    member: MemberRecord,
+    sessionId: string,
+    extra: Omit<Partial<AgentEvent>, 'type' | 'agent_id' | 'session_id' | 'ts'> = {},
+  ): void {
     if (this.listeners.size === 0 && this.eventStream === undefined) return;
     const data: Omit<AgentEvent, 'type'> = {
       agent_id: member.id,
-      session_id: member.sessionId,
+      session_id: sessionId,
       ...(member.parentId !== undefined ? { parent_id: member.parentId } : {}),
       visibility: member.visibility,
       ...(member.name !== undefined ? { name: member.name } : {}),
@@ -877,10 +1178,36 @@ export class AgentServiceImpl implements AgentService {
   private queueFor(memberId: string): MemberQueue {
     let queue = this.queues.get(memberId);
     if (!queue) {
-      queue = { pending: [], turnActive: false, repliedThisTurn: false, closing: false };
+      queue = {
+        pending: [],
+        turnActive: false,
+        repliedThisTurn: false,
+        closing: false,
+        warnedSignals: new Set(),
+      };
       this.queues.set(memberId, queue);
     }
     return queue;
+  }
+
+  /** 按指定 Body session 构造执行内核身份（close / 延迟退役用） */
+  private runtimeMemberForSession(record: MemberRecord, sessionId: string): MemberRuntimeMember {
+    return { ...toRuntimeMember(record), session_id: sessionId };
+  }
+
+  /** best-effort dispose；runtime 按 session 幂等，失败只记日志 */
+  private async disposeBody(member: MemberRuntimeMember): Promise<boolean> {
+    try {
+      await this.runtime.dispose(member);
+      return true;
+    } catch (error) {
+      this.logger.warn('agent.dispose.failed', {
+        member_id: member.id,
+        session_id: member.session_id,
+        error: errorText(error),
+      });
+      return false;
+    }
   }
 
   private requireMember(ref: string): MemberRecord {
@@ -912,18 +1239,31 @@ export class AgentServiceImpl implements AgentService {
     this.registry.setState(memberId, 'running');
     queue.turnActive = true;
     queue.repliedThisTurn = false;
+    // 起轮时捕获 Body 身份：轮末指针可能已被 rotate 切走。
+    const runtimeMember = toRuntimeMember(member);
+    const capturedEpoch = member.currentBody?.epoch ?? 0;
+    queue.activeBodySession = runtimeMember.session_id;
     this.emit('agent.turn.started', member, { state: 'running', message_id: message.id });
     this.scheduleSnapshot();
-    void this.executeTurn(member, message);
+    void this.executeTurn(member, message, runtimeMember, capturedEpoch);
   }
 
-  /** 执行一轮；任何异常都收口为 failed，不让后台任务产生未处理 rejection */
-  private async executeTurn(member: MemberRecord, message: AgentMessage): Promise<void> {
+  /**
+   * 执行一轮；任何异常都收口为 failed，不让后台任务产生未处理 rejection。
+   * `runtimeMember` / `capturedEpoch` 是起轮时捕获的 Body 身份；轮末指针已切换
+   * 则按 epoch fencing 丢弃本轮的 state / usage / 自动回复。
+   */
+  private async executeTurn(
+    member: MemberRecord,
+    message: AgentMessage,
+    runtimeMember: MemberRuntimeMember,
+    capturedEpoch: number,
+  ): Promise<void> {
     const queue = this.queueFor(member.id);
     let result: MemberTurnResult | undefined;
     let failure: string | undefined;
     try {
-      result = await this.runtime.runTurn(toRuntimeMember(member), message);
+      result = await this.runtime.runTurn(runtimeMember, message);
     } catch (error) {
       failure = errorText(error);
       // close 主动取消不是失败；按 error 记录会把正常关闭刷成告警
@@ -939,7 +1279,51 @@ export class AgentServiceImpl implements AgentService {
     queue.turnActive = false;
 
     const current = this.registry.get(member.id);
-    if (!current) return;
+    // 旧 Body：指针已切走。成对发终态（stale），但不写 registry / usage，也不投递父队列。
+    if (current?.currentBody?.session_id !== runtimeMember.session_id) {
+      if (current !== undefined) {
+        const outcome = failure !== undefined ? 'failed' : (result?.outcome ?? 'completed');
+        const state: MemberState =
+          outcome === 'failed' ? 'failed' : outcome === 'cancelled' ? 'cancelled' : 'completed';
+        this.emitForSession(
+          outcome === 'failed'
+            ? 'agent.turn.failed'
+            : outcome === 'cancelled'
+              ? 'agent.turn.cancelled'
+              : 'agent.turn.completed',
+          current,
+          runtimeMember.session_id,
+          {
+            state,
+            outcome,
+            message_id: message.id,
+            body_id: runtimeMember.session_id,
+            stale: true,
+            ...(failure !== undefined ? { reason: failure } : {}),
+          },
+        );
+        this.emitForSession('agent.reply.stale', current, runtimeMember.session_id, {
+          body_id: runtimeMember.session_id,
+          epoch: capturedEpoch,
+          message_id: message.id,
+          reason: 'epoch_fenced',
+        });
+      }
+      const disposed = await this.disposeBody(runtimeMember);
+      if (current !== undefined) {
+        this.emitForSession('agent.retired', current, runtimeMember.session_id, {
+          body_id: runtimeMember.session_id,
+          epoch: capturedEpoch,
+          reason: disposed ? 'rotation' : 'dispose_failed',
+        });
+      }
+      if (queue.activeBodySession === runtimeMember.session_id) queue.activeBodySession = undefined;
+      this.pump(member.id);
+      return;
+    }
+
+    if (current === undefined) return;
+    if (queue.activeBodySession === runtimeMember.session_id) queue.activeBodySession = undefined;
     // close 已发生（或成员已被关闭）：后到的终态不得覆盖 closed
     if (queue.closing || current.state === 'closed' || current.presence === 'gone') {
       if (queue.closing) {

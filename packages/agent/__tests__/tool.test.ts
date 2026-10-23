@@ -8,12 +8,21 @@ import {
 } from '../src/index.js';
 import { makeService, settle } from './helpers.js';
 
-function makeContext(): ToolContext {
-  return { run_id: 'tool-test', messages: [], events: new MemoryEventStream() };
+function makeContext(sessionId?: string): ToolContext {
+  return {
+    run_id: 'tool-test',
+    messages: [],
+    events: new MemoryEventStream(),
+    ...(sessionId !== undefined ? { session_id: sessionId } : {}),
+  };
 }
 
 async function call(tool: ToolDefinition, args: unknown): Promise<string> {
   return tool.handler(args, makeContext());
+}
+
+async function callAs(tool: ToolDefinition, args: unknown, sessionId: string): Promise<string> {
+  return tool.handler(args, makeContext(sessionId));
 }
 
 function parse<T>(text: string): T {
@@ -237,7 +246,7 @@ describe('agent tool', () => {
     );
   });
 
-  it('schema exposes only new/send/close/list lifecycle actions', async () => {
+  it('schema exposes the lifecycle actions plus rotate', async () => {
     const made = makeService();
     const tool = createAgentTool(made.service);
     const schema = tool.inputSchema as {
@@ -252,16 +261,19 @@ describe('agent tool', () => {
       'send',
       'close',
       'list',
+      'rotate',
     ]);
     expect(Object.keys(schema.properties).sort()).toEqual([
       'action',
       'content',
+      'handoff_path',
       'member',
       'members',
       'messages',
       'model',
       'name',
       'parent_id',
+      'startup_prompt',
       'state',
       'system_prompt',
       'to',
@@ -270,5 +282,58 @@ describe('agent tool', () => {
     expect(`${tool.description} ${JSON.stringify(schema)}`).not.toMatch(
       /\b(wait|inbox|status|cancel)\b/i,
     );
+  });
+
+  it('member body callers can only rotate; the owner keeps new/send/close/list', async () => {
+    const made = makeService();
+    await made.service.attachOwner({ id: 'main', sessionId: 'owner-session' });
+    const tool = createAgentTool(made.service, {
+      ownerId: 'main',
+      ownerSessionId: 'owner-session',
+    });
+
+    const member = parse<MemberStatus>(
+      await callAs(tool, { action: 'new', name: 'worker' }, 'owner-session'),
+    );
+
+    // 成员 Body：rotate 自己成功，其它动作一律拒绝。
+    const rotated = await callAs(
+      tool,
+      { action: 'rotate', startup_prompt: 'continue' },
+      member.session_id,
+    );
+    expect(rotated).toContain('"status":"rotated"');
+    expect(rotated).toContain('rotation committed; finish the current turn');
+    expect(rotated).not.toContain('continue"');
+
+    for (const args of [
+      { action: 'new', name: 'nope' },
+      { action: 'send', to: member.id, content: 'x' },
+      { action: 'close', member: member.id },
+      { action: 'list' },
+    ]) {
+      expect(await callAs(tool, args, member.session_id)).toMatch(
+        /^Error: invalid_input: agent bodies may only use action=rotate$/,
+      );
+    }
+
+    // root owner 的四个生命周期动作保持可用。
+    const created = parse<MemberStatus>(
+      await callAs(tool, { action: 'new', name: 'plain' }, 'owner-session'),
+    );
+    expect(created.owner).toBe('main');
+    expect(
+      parse<SendResult>(
+        await callAs(tool, { action: 'send', to: created.id, content: 'work' }, 'owner-session'),
+      ).queued,
+    ).toBe(true);
+    expect(
+      parse(await callAs(tool, { action: 'close', member: created.id }, 'owner-session')),
+    ).toEqual({ state: 'closed' });
+    expect(
+      parse<MemberStatus[]>(await callAs(tool, { action: 'list' }, 'owner-session')).map(
+        (entry) => entry.id,
+      ),
+    ).toContain(created.id);
   });
 });

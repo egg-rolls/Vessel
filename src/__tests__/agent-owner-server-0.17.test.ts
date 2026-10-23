@@ -46,6 +46,7 @@ interface Calls {
   send: unknown[];
   close: unknown[];
   list: unknown[];
+  rotate: unknown[];
 }
 
 function fakeService(calls: Calls): AgentService {
@@ -74,6 +75,16 @@ function fakeService(calls: Calls): AgentService {
       calls.list.push(filter);
       return [status('m1')];
     },
+    rotate: async (input: unknown) => {
+      calls.rotate.push(input);
+      return {
+        status: 'rotated',
+        agent_id: 'm1',
+        from_session_id: 'old-session',
+        to_session_id: 'new-session',
+        epoch: 2,
+      };
+    },
     reply: async () => ({ queued: true, message_id: 'r1', to: 'main' }),
     requestPermission: async () => ({ decision: 'deny' }),
     flushSnapshot: async () => {},
@@ -82,7 +93,7 @@ function fakeService(calls: Calls): AgentService {
 }
 
 function emptyCalls(): Calls {
-  return { new: [], send: [], close: [], list: [] };
+  return { new: [], send: [], close: [], list: [], rotate: [] };
 }
 
 async function post(
@@ -150,6 +161,34 @@ describe('agent owner server', () => {
     expect(calls.send[0]).toMatchObject({ to: 'm1', content: 'hi', from: 'main' });
     expect(calls.close[0]).toEqual({ members: ['m1'] });
     expect(calls.list[0]).toEqual({ viewer: 'main', visibility: 'private' });
+  });
+
+  it('maps agent.rotate to owner-scoped service.rotate without from_session_id', async () => {
+    const calls = emptyCalls();
+    const server = await startAgentOwnerServer({
+      service: fakeService(calls),
+      dataDir: tmpDir(),
+      tenantId: 'default',
+    });
+    servers.push(server);
+
+    await post(server, {
+      method: 'agent.rotate',
+      params: { to: 'worker', startup_prompt: 'go', handoff_path: 'h.md' },
+    });
+    await post(server, {
+      method: 'agent.rotate',
+      params: { to: 'worker', startup_prompt: 'go' },
+    });
+
+    expect(calls.rotate[0]).toEqual({
+      to: 'worker',
+      startup_prompt: 'go',
+      handoff_path: 'h.md',
+      from: 'main',
+    });
+    expect(calls.rotate[0]).not.toHaveProperty('from_session_id');
+    expect(calls.rotate[1]).toEqual({ to: 'worker', startup_prompt: 'go', from: 'main' });
   });
 
   it('rejects a body above the payload limit before dispatch', async () => {

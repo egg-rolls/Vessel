@@ -10,12 +10,14 @@
 import { access, copyFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
-import type {
-  AgentBodyPointer,
-  MemberMembership,
-  MemberState,
-  MemberVisibility,
-  PersistedAgentRecord,
+import {
+  type AgentBodyHistoryEntry,
+  type AgentBodyPointer,
+  MAX_BODY_HISTORY,
+  type MemberMembership,
+  type MemberState,
+  type MemberVisibility,
+  type PersistedAgentRecord,
 } from './types.js';
 
 /** 快照文件版本；当前写入 2，读取兼容 1 */
@@ -84,6 +86,24 @@ function parseBody(value: unknown): AgentBodyPointer | undefined {
 }
 
 /**
+ * body_history：逐条校验（Body 指针 + 有限 retired_at），非法条目单独跳过；
+ * 最多保留最后 MAX_BODY_HISTORY 条。无有效条目返回 undefined。
+ */
+function parseBodyHistory(value: unknown): AgentBodyHistoryEntry[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const entries: AgentBodyHistoryEntry[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) continue;
+    const body = parseBody(item);
+    if (body === undefined) continue;
+    if (typeof item.retired_at !== 'number' || !Number.isFinite(item.retired_at)) continue;
+    entries.push({ ...body, retired_at: item.retired_at });
+  }
+  if (entries.length === 0) return undefined;
+  return entries.slice(-MAX_BODY_HISTORY);
+}
+
+/**
  * 单条成员校验；字段非法返回 undefined（整条丢弃）。
  * v1 / v2 共用：membership 缺省按 state === 'closed' 推断；presence / rotation 不读。
  */
@@ -121,6 +141,8 @@ function parseMember(value: unknown): PersistedAgentRecord | undefined {
   if (systemPrompt !== undefined) record.system_prompt = systemPrompt;
   const currentBody = parseBody(value.current_body);
   if (currentBody !== undefined) record.current_body = currentBody;
+  const bodyHistory = parseBodyHistory(value.body_history);
+  if (bodyHistory !== undefined) record.body_history = bodyHistory;
   const forkedFrom = optionalString(value.forked_from);
   if (forkedFrom !== undefined) record.forked_from = forkedFrom;
   const currentTool = optionalString(value.current_tool);
@@ -140,7 +162,8 @@ export class AgentSnapshotStore {
   private readonly now: () => number;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pending: (() => PersistedAgentRecord[]) | undefined;
-  private chain: Promise<void> = Promise.resolve();
+  /** 写入串行链；值表示该次 write 是否成功 */
+  private chain: Promise<boolean> = Promise.resolve(true);
   /** 读到 v1 且尚未成功备份时置位；write 前必须补做，否则放弃写入（避免无回滚） */
   private backupPending = false;
 
@@ -287,8 +310,11 @@ export class AgentSnapshotStore {
     this.timer.unref?.();
   }
 
-  /** 立即写入待写快照；写入串行，失败不抛 */
-  async flush(): Promise<void> {
+  /**
+   * 立即写入待写快照；写入串行，失败不抛。
+   * 无待写时返回 true（不返回上一次写入的结果），有待写时返回本次 write 的结果。
+   */
+  async flush(): Promise<boolean> {
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
       this.timer = undefined;
@@ -297,13 +323,12 @@ export class AgentSnapshotStore {
     this.pending = undefined;
     if (getMembers === undefined) {
       await this.chain;
-      return;
+      return true;
     }
     const members = getMembers();
-    this.chain = this.chain.then(async () => {
-      await this.write(members);
-    });
-    await this.chain;
+    const write = this.chain.then(() => this.write(members));
+    this.chain = write;
+    return write;
   }
 
   /** 取消待写快照（进程退出用；不落盘） */

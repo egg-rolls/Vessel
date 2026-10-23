@@ -172,6 +172,13 @@ export type AgentCommand =
     }
   | { kind: 'send'; json: boolean; member: string; content: string }
   | { kind: 'dispatch'; json: boolean; to: string; content: string }
+  | {
+      kind: 'rotate';
+      json: boolean;
+      to: string;
+      startupPrompt: string;
+      handoffPath?: string;
+    }
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
 
@@ -242,7 +249,7 @@ export interface CliArgs {
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
-  /** 0.17：`vessel agent new|send|close|list|dispatch` */
+  /** 0.17：`vessel agent new|send|close|list|dispatch|rotate` */
   agentCommand: AgentCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
@@ -1904,7 +1911,7 @@ function parseAgentsArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `agent new|send|close|list|dispatch`（0.17 Phase A；0.19 dispatch） */
+/** `agent new|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -2013,6 +2020,55 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: 'agent dispatch requires <to> <content...>' };
     }
     args.agentCommand = { kind: 'dispatch', json, to, content };
+    return { ok: true, args };
+  }
+
+  if (sub === 'rotate') {
+    let json = false;
+    let startupPrompt: string | undefined;
+    let handoffPath: string | undefined;
+    const positional: string[] = [];
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--startup' || a === '--handoff') {
+        const value = readFlagValue(tail, i, a);
+        if (!value.ok) return value;
+        if (a === '--startup') startupPrompt = value.value;
+        else handoffPath = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent rotate: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [to, extra] = positional;
+    if (to === undefined || to === '') {
+      return { ok: false, error: 'agent rotate requires <to>' };
+    }
+    if (extra !== undefined) {
+      return { ok: false, error: `Unknown argument for agent rotate: ${extra}` };
+    }
+    if (startupPrompt === undefined || startupPrompt === '') {
+      return { ok: false, error: 'agent rotate requires non-empty --startup <text>' };
+    }
+    args.agentCommand = {
+      kind: 'rotate',
+      json,
+      to,
+      startupPrompt,
+      ...(handoffPath !== undefined ? { handoffPath } : {}),
+    };
     return { ok: true, args };
   }
 

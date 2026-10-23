@@ -35,6 +35,7 @@ import {
   buildMemberRuntimeOptions,
   createAgentServiceWiring,
 } from '../agent-service-wiring';
+import { parseArgs } from '../cli-args';
 
 function message(overrides: Partial<OwnerQueueMessage> = {}): OwnerQueueMessage {
   return {
@@ -181,20 +182,26 @@ describe('agent owner injection 0.17', () => {
     expect(published.map((event) => event.type)).toContain('agent.reply.inject_failed');
   });
 
-  it('member sessions do not drain the owner queue', async () => {
+  it('member sessions (including retired bodies) do not drain the owner queue', async () => {
     let called = 0;
+    const fakeService = {
+      takeMessages() {
+        called += 1;
+        return [message()];
+      },
+      // wiring 直接委托 service.isMemberBody；已退役 Body 也必须算成员 Body。
+      isMemberBody(sessionId: string) {
+        return sessionId === 'retired-body';
+      },
+    };
     const injector = createAgentOwnerInjector({
       ownerId: 'main',
-      source: {
-        takeMessages() {
-          called += 1;
-          return [message()];
-        },
-      },
-      isMemberSession: (sessionId) => sessionId === 'member-session',
+      source: fakeService,
+      isMemberSession: (sessionId) =>
+        sessionId !== undefined && fakeService.isMemberBody(sessionId),
     });
 
-    const ctx = hookContext({ session_id: 'member-session' });
+    const ctx = hookContext({ session_id: 'retired-body' });
     await injector.hook.run(ctx);
 
     expect(called).toBe(0);
@@ -244,6 +251,30 @@ describe('agent owner injection 0.17', () => {
     expect(headless.permissionMode).toBe('allow');
     expect('parentEvents' in headless).toBe(false);
     expect('onPermissionState' in headless).toBe(false);
+    expect('onMemberEvent' in headless).toBe(false);
+    expect('permission' in headless).toBe(false);
+  });
+
+  it('member permission auto-approves agent (deduped) and forwards onMemberEvent', () => {
+    const pluginHost = new MemoryPluginHost();
+    const memberEvents: string[] = [];
+    const built = buildMemberRuntimeOptions(
+      wiringOptions(pluginHost, '/tmp/unused', {
+        permission: { default: 'ask', autoApprove: ['read', 'agent'] },
+      }),
+      undefined,
+      (memberId, sessionId, event) => {
+        memberEvents.push(`${memberId}:${sessionId}:${event.type}`);
+      },
+    );
+    expect(built.permission?.autoApprove).toEqual(['read', 'agent']);
+    built.onMemberEvent?.('m1', 'm1', {
+      type: 'agent.limit.warning',
+      run_id: 'r1',
+      data: {},
+      ts: 1,
+    });
+    expect(memberEvents).toEqual(['m1:m1:agent.limit.warning']);
   });
 
   it('registers the hook once per host and stops it on wiring dispose', async () => {
@@ -480,5 +511,49 @@ describe('agent owner injection 0.17', () => {
     expect(additive.session_id).toBe('member-1');
     expect(additive.tool_call_id).toBe('call-1');
     expect(additive.delegate_path).toEqual(['main', 'member-1']);
+  });
+});
+
+describe('agent rotate CLI parsing 0.19', () => {
+  function parsed(argv: string[]) {
+    const result = parseArgs(argv);
+    if (!result.ok) throw new Error(`expected ok, got: ${result.error}`);
+    return result.args;
+  }
+
+  function error(argv: string[]): string {
+    const result = parseArgs(argv);
+    if (result.ok) throw new Error('expected parse failure');
+    return result.error;
+  }
+
+  it('parses <to>, --startup, optional --handoff and --json', () => {
+    expect(
+      parsed([
+        'agent',
+        'rotate',
+        'worker',
+        '--startup',
+        'take over',
+        '--handoff',
+        'handoff.md',
+        '--json',
+      ]).agentCommand,
+    ).toEqual({
+      kind: 'rotate',
+      json: true,
+      to: 'worker',
+      startupPrompt: 'take over',
+      handoffPath: 'handoff.md',
+    });
+  });
+
+  it('requires <to> and non-empty --startup, rejects unknown flags', () => {
+    expect(error(['agent', 'rotate', '--startup', 'x'])).toContain('requires <to>');
+    expect(error(['agent', 'rotate', 'worker'])).toContain('--startup');
+    expect(error(['agent', 'rotate', 'worker', '--startup', ''])).toContain('--startup');
+    expect(error(['agent', 'rotate', 'worker', '--startup', 'x', '--bogus'])).toContain(
+      'Unknown argument',
+    );
   });
 });

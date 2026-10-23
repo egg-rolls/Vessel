@@ -46,7 +46,20 @@ function statusBody(id: string) {
   };
 }
 
-async function mockOwner(): Promise<{ dataDir: string; calls: RecordedCall[] }> {
+function rotatedBody() {
+  return {
+    status: 'rotated',
+    agent_id: 'worker',
+    from_session_id: 'old-session',
+    to_session_id: 'new-session',
+    epoch: 1,
+  };
+}
+
+async function mockOwner(rotateResult: unknown = rotatedBody()): Promise<{
+  dataDir: string;
+  calls: RecordedCall[];
+}> {
   const dataDir = tmpDir();
   const calls: RecordedCall[] = [];
   const server = Bun.serve({
@@ -75,6 +88,9 @@ async function mockOwner(): Promise<{ dataDir: string; calls: RecordedCall[] }> 
       }
       if (body.method === 'agent.list') {
         return Response.json({ ok: true, result: [statusBody('m1')] });
+      }
+      if (body.method === 'agent.rotate') {
+        return Response.json({ ok: true, result: rotateResult });
       }
       return Response.json(
         { ok: false, error: { code: 'agent_owner_unknown_method', message: 'unknown' } },
@@ -197,6 +213,68 @@ describe('vessel agent CLI', () => {
     const result = await runAgentCommand(parse(['agent', 'list']), { dataDir });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('agent_owner_unavailable');
+  });
+
+  it('rotate posts snake_case params and renders the rotated line', async () => {
+    const { dataDir, calls } = await mockOwner();
+    const result = await runAgentCommand(
+      {
+        kind: 'rotate',
+        json: false,
+        to: 'worker',
+        startupPrompt: 'go',
+        handoffPath: 'h.md',
+      },
+      { dataDir },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]?.method).toBe('agent.rotate');
+    expect(calls[0]?.params).toEqual({
+      to: 'worker',
+      startup_prompt: 'go',
+      handoff_path: 'h.md',
+    });
+    expect(result.stdout).toContain('rotated');
+    expect(result.stdout).toContain('epoch 1');
+    expect(result.stdout).toContain('->');
+  });
+
+  it('rotate failure exits 1 and prints the code', async () => {
+    const { dataDir } = await mockOwner({
+      status: 'failed',
+      code: 'rotate_failed',
+      reason: 'x',
+    });
+    const result = await runAgentCommand(
+      { kind: 'rotate', json: false, to: 'worker', startupPrompt: 'go' },
+      { dataDir },
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain('rotate_failed');
+  });
+
+  it('rotate --json prints the raw result with matching exit codes', async () => {
+    const ok = await mockOwner();
+    const rotated = await runAgentCommand(
+      { kind: 'rotate', json: true, to: 'worker', startupPrompt: 'go' },
+      { dataDir: ok.dataDir },
+    );
+    expect(rotated.exitCode).toBe(0);
+    expect(JSON.parse(rotated.stdout)).toEqual(rotatedBody());
+    // 无 --handoff 时 params 不带 handoff_path
+    expect(ok.calls[0]?.params).toEqual({ to: 'worker', startup_prompt: 'go' });
+
+    const failedBody = { status: 'failed', code: 'rotate_failed', reason: 'x' };
+    const failed = await mockOwner(failedBody);
+    const rejected = await runAgentCommand(
+      { kind: 'rotate', json: true, to: 'worker', startupPrompt: 'go' },
+      { dataDir: failed.dataDir },
+    );
+    expect(rejected.exitCode).toBe(1);
+    expect(JSON.parse(rejected.stdout)).toEqual(failedBody);
+    expect(rejected.stderr).toBe('');
   });
 
   it('surfaces endpoint error codes', async () => {

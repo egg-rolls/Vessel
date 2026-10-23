@@ -5,6 +5,7 @@ function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
   return {
     id: 'm1',
     sessionId: 'm1',
+    bodyHistory: [],
     owner: 'main',
     visibility: 'private',
     state: 'idle',

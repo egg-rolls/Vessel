@@ -20,7 +20,7 @@ import {
   type SendInput,
 } from './types.js';
 
-const ACTIONS = ['new', 'send', 'close', 'list'] as const;
+const ACTIONS = ['new', 'send', 'close', 'list', 'rotate'] as const;
 
 const VISIBILITIES: readonly MemberVisibility[] = ['private', 'team', 'tenant'];
 
@@ -130,6 +130,8 @@ function readState(value: unknown): MemberState {
 export interface AgentToolOptions {
   /** 调用者（root owner）id；成员 owner / parent 与 list viewer 都用它 */
   ownerId?: string;
+  /** root owner 自己的 session；用于区分 owner 调用与成员 Body 调用 */
+  ownerSessionId?: string;
 }
 
 /** 构造内置 `agent` 工具；生命周期全部委托给 AgentService */
@@ -145,7 +147,10 @@ export function createAgentTool(
       'Long-lived member lifecycle tool for this agent. ' +
       'action=new creates member(s) that keep their own session and returns the created member; ' +
       'action=send queues a message to a member and returns immediately; ' +
-      'action=close releases member(s) (idempotent); action=list returns the roster. ' +
+      'action=close releases member(s) (idempotent); action=list returns the roster; ' +
+      'action=rotate moves an agent into a fresh body (new session, epoch + 1) with ' +
+      'startup_prompt as the first message and optional handoff_path appended to it. ' +
+      'A body may only rotate itself; startup_prompt is required. ' +
       'Batch: new/close accept `members` and send accepts `messages`; entries run in ' +
       'parallel and return {results:[...]} in input order, each entry either its result ' +
       'or an error. ' +
@@ -156,7 +161,7 @@ export function createAgentTool(
         action: {
           type: 'string',
           enum: [...ACTIONS],
-          description: 'new | send | close | list',
+          description: 'new | send | close | list | rotate',
         },
         name: { type: 'string', description: 'new: display name' },
         model: { type: 'string', description: 'new: model override' },
@@ -171,10 +176,18 @@ export function createAgentTool(
           description:
             'new: [{name?, model?, system_prompt?, visibility?}]; close: [member id or session id]',
         },
-        to: { type: 'string', description: 'send: member id or session id' },
+        to: { type: 'string', description: 'send: member id or session id; rotate: target agent' },
         content: { type: 'string', description: 'send: message text' },
         messages: { type: 'array', description: 'send: [{to, content}]' },
         member: { type: 'string', description: 'close: member id or session id' },
+        startup_prompt: {
+          type: 'string',
+          description: 'rotate: required first message for the new body',
+        },
+        handoff_path: {
+          type: 'string',
+          description: 'rotate: optional handoff path appended to the first message',
+        },
         state: {
           type: 'string',
           enum: [...MEMBER_STATES],
@@ -184,10 +197,38 @@ export function createAgentTool(
       },
       required: ['action'],
     },
-    handler: async (args: unknown): Promise<string> => {
+    handler: async (args: unknown, ctx): Promise<string> => {
       try {
         const record = isRecord(args) ? args : {};
         const action = record.action;
+        const callerSession = ctx?.session_id;
+        // 成员 Body 调用（有 session 且不是 root owner 的 session）只能 rotate 自己。
+        const isOwnerCaller =
+          callerSession === undefined ||
+          options.ownerSessionId === undefined ||
+          callerSession === options.ownerSessionId;
+
+        if (action === 'rotate') {
+          if (callerSession === undefined) {
+            throw invalid('rotate requires a calling body');
+          }
+          const result = await service.rotate({
+            to: (record.to ?? callerSession) as string,
+            startup_prompt: record.startup_prompt as string,
+            ...(record.handoff_path !== undefined
+              ? { handoff_path: record.handoff_path as string }
+              : {}),
+            from_session_id: callerSession,
+            from: ownerId,
+          });
+          return result.status === 'rotated'
+            ? `${JSON.stringify(result)}\nrotation committed; finish the current turn`
+            : JSON.stringify(result);
+        }
+
+        if (!isOwnerCaller) {
+          throw invalid('agent bodies may only use action=rotate');
+        }
 
         if (action === 'new') {
           if (record.members !== undefined) {

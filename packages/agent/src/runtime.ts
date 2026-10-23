@@ -39,14 +39,14 @@ import type {
   MemberTurnResult,
 } from './types.js';
 
-/** 成员默认工具白名单 */
-const DEFAULT_ALLOWED_TOOLS = ['bash', 'read', 'edit'] as const;
+/** 成员默认工具白名单（agent 支持成员换 Body） */
+const DEFAULT_ALLOWED_TOOLS = ['bash', 'read', 'edit', 'agent'] as const;
 
 /** deny 模式保留的只读工具（与 delegate 语义一致） */
 const DEFAULT_READ_ONLY_TOOLS = ['read'] as const;
 
-/** 成员永远拿不到的工具：生命周期工具、team 工具、递归分派 */
-const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['agent', 'delegate_task']);
+/** 成员永远拿不到的工具：team 工具、递归分派 */
+const EXCLUDED_TOOL_NAMES: ReadonlySet<string> = new Set(['delegate_task']);
 
 /** 缺省终止策略（与 delegate 子 agent 一致） */
 const DEFAULT_TERMINATION: TerminationPolicy = { maxIterations: 10, maxRuntimeSeconds: 60 };
@@ -98,6 +98,8 @@ export interface InProcessMemberRuntimeOptions {
   parentEvents?: EventStream;
   /** bridge 模式下成员进入/离开权限等待时回调（入口层接 AgentService 状态） */
   onPermissionState?: (memberId: string, state: MemberPermissionState) => void;
+  /** 成员引擎事件回流（当前只转发 agent.limit.warning） */
+  onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void;
   limits?: UsageLimits;
   termination?: TerminationPolicy;
   /** 上下文预算；同时写入 Self Card 的 context.max */
@@ -175,6 +177,46 @@ function isExcludedTool(name: string): boolean {
   return EXCLUDED_TOOL_NAMES.has(name) || name.startsWith('team_');
 }
 
+/** 成员侧 agent 工具只保留的 rotate 参数 */
+const MEMBER_AGENT_PROPERTIES: Readonly<Record<string, Record<string, unknown>>> = {
+  action: { type: 'string', enum: ['rotate'], description: 'rotate' },
+  to: { type: 'string', description: 'rotate: member id or current body session id' },
+  startup_prompt: {
+    type: 'string',
+    description: 'rotate: required first message for the new body',
+  },
+  handoff_path: {
+    type: 'string',
+    description: 'rotate: optional handoff path appended to the first message',
+  },
+};
+
+/** 同一个 agent 工具，按成员能力收窄 schema（handler / checkPermission 原样保留） */
+function restrictAgentTool(tool: ToolDefinition): ToolDefinition {
+  const schema = isRecord(tool.inputSchema) ? tool.inputSchema : {};
+  const source = isRecord(schema.properties) ? schema.properties : {};
+  // 无论父级 schema 有几种 action，成员侧只暴露 rotate
+  const properties: Record<string, unknown> = {
+    action: isRecord(source.action)
+      ? { ...source.action, enum: ['rotate'] }
+      : MEMBER_AGENT_PROPERTIES.action,
+  };
+  for (const [key, fallback] of Object.entries(MEMBER_AGENT_PROPERTIES)) {
+    if (key !== 'action') properties[key] = source[key] ?? fallback;
+  }
+  return {
+    ...tool,
+    description:
+      'Rotate your own body. A body may only rotate itself; startup_prompt is required ' +
+      '(the first message for the new body) and handoff_path is optional.',
+    inputSchema: {
+      ...schema,
+      properties,
+      required: ['action', 'startup_prompt'],
+    },
+  };
+}
+
 /** 进程内成员执行内核 */
 export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly providerFactory: () => LLMProvider;
@@ -186,6 +228,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly permission?: RuntimePermissionConfig;
   private readonly parentEvents?: EventStream;
   private readonly onPermissionState?: (memberId: string, state: MemberPermissionState) => void;
+  private readonly onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void;
   private readonly limits: UsageLimits;
   private readonly termination: TerminationPolicy;
   private readonly contextMaxTokens: number;
@@ -208,6 +251,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.permission = options.permission;
     this.parentEvents = options.parentEvents;
     this.onPermissionState = options.onPermissionState;
+    this.onMemberEvent = options.onMemberEvent;
     this.limits = options.limits ?? {};
     this.termination = options.termination ?? DEFAULT_TERMINATION;
     this.contextMaxTokens = options.contextMaxTokens ?? DEFAULT_CONTEXT_MAX_TOKENS;
@@ -227,8 +271,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   async spawn(member: MemberRuntimeMember): Promise<void> {
-    if (this.entries.has(member.id)) {
-      throw new Error(`member runtime already spawned: ${member.id}`);
+    if (this.entries.has(member.session_id)) {
+      throw new Error(`member runtime already spawned: ${member.session_id}`);
     }
     const model = member.model ?? this.model;
     if (!model) {
@@ -271,7 +315,24 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       pendingPermissions: new Set(),
       waiting: false,
     };
-    this.entries.set(member.id, entry);
+    this.entries.set(member.session_id, entry);
+    if (this.onMemberEvent !== undefined) {
+      const onMemberEvent = this.onMemberEvent;
+      entry.unsubscribers.push(
+        entry.events.subscribe((event: RunEvent) => {
+          if (event.type !== 'agent.limit.warning') return;
+          try {
+            onMemberEvent(member.id, member.session_id, event);
+          } catch (error) {
+            this.logger.warn('agent.member.event_callback_failed', {
+              member_id: member.id,
+              session_id: member.session_id,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
+      );
+    }
     if (this.permissionMode === 'bridge' && this.parentEvents !== undefined) {
       this.attachBridge(member, entry);
     }
@@ -318,14 +379,14 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   cancel(member: MemberRuntimeMember): void {
-    this.entries.get(member.id)?.runtime.interrupt?.('user');
+    this.entries.get(member.session_id)?.runtime.interrupt?.('user');
   }
 
   async dispose(member: MemberRuntimeMember): Promise<void> {
-    const entry = this.entries.get(member.id);
+    const entry = this.entries.get(member.session_id);
     if (!entry) return;
     // 先移除，避免 dispose 期间 / 之后又有 runTurn 走进已释放的 runtime
-    this.entries.delete(member.id);
+    this.entries.delete(member.session_id);
     for (const unsubscribe of entry.unsubscribers) unsubscribe();
     entry.unsubscribers.length = 0;
     entry.pendingPermissions.clear();
@@ -343,7 +404,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     entry.unsubscribers.push(
       entry.events.subscribe((event: RunEvent) => {
         if (!PERMISSION_REQUEST_EVENTS.has(event.type)) return;
-        if (this.entries.get(member.id) !== entry) return;
+        if (this.entries.get(member.session_id) !== entry) return;
 
         const requestId = readRequestId(event.data);
         if (requestId !== undefined) entry.pendingPermissions.add(requestId);
@@ -365,7 +426,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     entry.unsubscribers.push(
       parentEvents.subscribe((event: RunEvent) => {
         if (!PERMISSION_RESPONSE_EVENTS.has(event.type)) return;
-        if (this.entries.get(member.id) !== entry) return;
+        if (this.entries.get(member.session_id) !== entry) return;
 
         const requestId = readRequestId(event.data);
         if (requestId === undefined || !entry.pendingPermissions.delete(requestId)) return;
@@ -403,7 +464,7 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       } else if (!this.allowedTools.has(tool.name)) {
         continue;
       }
-      selected.push(tool);
+      selected.push(tool.name === 'agent' ? restrictAgentTool(tool) : tool);
     }
     return selected;
   }
@@ -465,8 +526,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   }
 
   private requireEntry(member: MemberRuntimeMember): MemberRuntimeEntry {
-    const entry = this.entries.get(member.id);
-    if (!entry) throw new Error(`member runtime not spawned: ${member.id}`);
+    const entry = this.entries.get(member.session_id);
+    if (!entry) throw new Error(`member runtime not spawned: ${member.session_id}`);
     return entry;
   }
 }

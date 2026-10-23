@@ -18,6 +18,7 @@ import type {
   DispatchInput,
   NewBatchInput,
   NewMemberInput,
+  RotateInput,
   SendInput,
 } from '@vessel-agent/agent';
 import type { Logger } from '@vessel-agent/core';
@@ -35,7 +36,8 @@ export type AgentOwnerMethod =
   | 'agent.send'
   | 'agent.close'
   | 'agent.list'
-  | 'agent.dispatch';
+  | 'agent.dispatch'
+  | 'agent.rotate';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {
@@ -286,10 +288,18 @@ async function dispatch(
         ...(params.content !== undefined ? { content: params.content } : {}),
         from: ownerId,
       } as DispatchInput);
+    case 'agent.rotate':
+      // 人类路径不带 from_session_id：CLI / owner 端点可换任意可见 Agent。
+      return service.rotate({
+        ...(params.to !== undefined ? { to: params.to } : {}),
+        ...(params.startup_prompt !== undefined ? { startup_prompt: params.startup_prompt } : {}),
+        ...(params.handoff_path !== undefined ? { handoff_path: params.handoff_path } : {}),
+        from: ownerId,
+      } as RotateInput);
     default:
       throw new AgentOwnerError(
         'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch)`,
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch|agent.rotate)`,
         404,
       );
   }

@@ -30,6 +30,7 @@ export {
 } from './snapshot.js';
 export { type AgentToolOptions, createAgentTool } from './tool.js';
 export {
+  type AgentBodyHistoryEntry,
   type AgentBodyPointer,
   AgentError,
   type AgentErrorCode,
@@ -49,6 +50,7 @@ export {
   type DispatchInput,
   type DispatchResult,
   type ListFilter,
+  MAX_BODY_HISTORY,
   MAX_MESSAGE_BYTES,
   type MemberMembership,
   type MemberPermissionState,
@@ -67,6 +69,8 @@ export {
   type PermissionRequestInput,
   type PersistedAgentRecord,
   type ReplyResult,
+  type RotateInput,
+  type RotateResult,
   type SendBatchInput,
   type SendInput,
   type SendResult,

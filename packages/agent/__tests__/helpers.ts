@@ -34,8 +34,12 @@ export async function settle(): Promise<void> {
 /** 记录调用的假执行内核；不联网、不启子进程 */
 export class FakeRuntime implements MemberRuntimePort {
   readonly spawned: MemberRuntimeMember[] = [];
+  /** spawn 过的 Body session（rotate 断言用；与 spawned 同序） */
+  readonly spawnedSessions: string[] = [];
   readonly cancelled: string[] = [];
+  readonly cancelledSessions: string[] = [];
   readonly disposed: string[] = [];
+  readonly disposedSessions: string[] = [];
   readonly turns: { member: MemberRuntimeMember; message: AgentMessage }[] = [];
   spawnError: Error | undefined;
   handler: (member: MemberRuntimeMember, message: AgentMessage) => Promise<MemberTurnResult> =
@@ -44,6 +48,7 @@ export class FakeRuntime implements MemberRuntimePort {
   async spawn(member: MemberRuntimeMember): Promise<void> {
     if (this.spawnError) throw this.spawnError;
     this.spawned.push(member);
+    this.spawnedSessions.push(member.session_id);
   }
 
   async runTurn(member: MemberRuntimeMember, message: AgentMessage): Promise<MemberTurnResult> {
@@ -53,10 +58,13 @@ export class FakeRuntime implements MemberRuntimePort {
 
   cancel(member: MemberRuntimeMember): void {
     this.cancelled.push(member.id);
+    this.cancelledSessions.push(member.session_id);
   }
 
   dispose(member: MemberRuntimeMember): void {
+    // 仍按 id 记录（兼容既有断言），另记 session 供 rotate / close 断言
     this.disposed.push(member.id);
+    this.disposedSessions.push(member.session_id);
   }
 }
 

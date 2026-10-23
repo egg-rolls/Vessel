@@ -31,6 +31,7 @@ import type {
   LLMProvider,
   Logger,
   PluginHost,
+  RunEvent,
   RuntimePermissionConfig,
   TerminationPolicy,
   ToolDefinition,
@@ -91,7 +92,17 @@ export interface AgentServiceWiring {
 export function buildMemberRuntimeOptions(
   options: AgentServiceWiringOptions,
   onPermissionState?: (memberId: string, state: MemberPermissionState) => void,
+  onMemberEvent?: (memberId: string, sessionId: string, event: RunEvent) => void,
 ): InProcessMemberRuntimeOptions {
+  // 成员 Body 只能通过 `agent` 工具 rotate 自己（tool handler 收紧），
+  // 因此 member runtime 免确认该工具；owner 侧权限不变。
+  const permission =
+    options.permission !== undefined
+      ? {
+          ...options.permission,
+          autoApprove: [...new Set([...(options.permission.autoApprove ?? []), 'agent'])],
+        }
+      : undefined;
   return {
     providerFactory: options.providerFactory,
     model: options.model,
@@ -101,13 +112,14 @@ export function buildMemberRuntimeOptions(
     ...(options.contextMaxTokens !== undefined
       ? { contextMaxTokens: options.contextMaxTokens }
       : {}),
-    ...(options.permission !== undefined ? { permission: options.permission } : {}),
+    ...(permission !== undefined ? { permission } : {}),
     ...(options.permissionMode !== undefined ? { permissionMode: options.permissionMode } : {}),
     ...(options.readOnlyTools !== undefined ? { readOnlyTools: options.readOnlyTools } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),
     // A3c：bridge 权限事件与父入口同源；未提供时成员保持无父流。
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),
     ...(onPermissionState !== undefined ? { onPermissionState } : {}),
+    ...(onMemberEvent !== undefined ? { onMemberEvent } : {}),
     ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
     ...(options.session !== undefined ? { session: options.session } : {}),
     ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
@@ -154,8 +166,10 @@ export async function createAgentServiceWiring(
   // 用晚绑定避免循环依赖。
   let serviceRef: AgentService | undefined;
   const innerRuntime = createInProcessMemberRuntime(
-    buildMemberRuntimeOptions(options, (memberId, state) =>
-      serviceRef?.notePermissionState(memberId, state),
+    buildMemberRuntimeOptions(
+      options,
+      (memberId, state) => serviceRef?.notePermissionState(memberId, state),
+      (memberId, sessionId, event) => serviceRef?.noteMemberEvent(memberId, sessionId, event),
     ),
   );
   const runtime = new OwnerAwareMemberRuntime(innerRuntime, ownerId);
@@ -178,11 +192,9 @@ export async function createAgentServiceWiring(
     // owner 是 external owner：pump 不消费，只能由父 turn 排空。
     source: service,
     ownerId,
-    isMemberSession: async (sessionId) => {
-      if (sessionId === undefined) return false;
-      const members = await service.list();
-      return members.some((member) => member.id !== ownerId && member.session_id === sessionId);
-    },
+    // 当前 Body、正在跑的旧 Body、已退役 Body 与 rotate 目标都算成员 Body；
+    // 由 service 统一判定，owner 的 Body 不算。
+    isMemberSession: (sessionId) => sessionId !== undefined && service.isMemberBody(sessionId),
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     tenantId: options.tenantId,
   });
@@ -193,7 +205,7 @@ export async function createAgentServiceWiring(
 
   return {
     service,
-    tool: createAgentTool(service, { ownerId }),
+    tool: createAgentTool(service, { ownerId, ownerSessionId: options.sessionId }),
     owner,
     ownerId,
     injector,

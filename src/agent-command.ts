@@ -1,5 +1,5 @@
 /**
- * `vessel agent new|send|close|list|dispatch`（0.17 Phase A；0.19 dispatch）。
+ * `vessel agent new|send|close|list|dispatch|rotate`（0.17 Phase A；0.19 dispatch / rotate）。
  *
  * 只做参数映射与渲染；生命周期全部在 REPL owner 的 AgentService。
  * `--json` 原样输出端点结果，人类输出走 ui-style，错误码进 stderr。
@@ -107,6 +107,16 @@ function methodParams(command: AgentCommand): {
       params: { to: command.to, content: command.content },
     };
   }
+  if (command.kind === 'rotate') {
+    return {
+      method: 'agent.rotate',
+      params: {
+        to: command.to,
+        startup_prompt: command.startupPrompt,
+        ...(command.handoffPath !== undefined ? { handoff_path: command.handoffPath } : {}),
+      },
+    };
+  }
   if (command.kind === 'close') {
     return { method: 'agent.close', params: { members: command.members } };
   }
@@ -135,6 +145,15 @@ function humanOutput(command: AgentCommand, result: unknown): string {
       return `queued ${result.message_id} -> ${String(result.resolved_to)} (${String(result.resolution)})`;
     }
     if (isRecord(result) && result.status === 'rejected') {
+      return `${String(result.code)}: ${String(result.reason)}`;
+    }
+    return JSON.stringify(result, null, 2);
+  }
+  if (command.kind === 'rotate') {
+    if (isRecord(result) && result.status === 'rotated') {
+      return `rotated ${String(result.agent_id)} epoch ${String(result.epoch)} ${String(result.from_session_id)} -> ${String(result.to_session_id)}`;
+    }
+    if (isRecord(result) && result.status === 'failed') {
       return `${String(result.code)}: ${String(result.reason)}`;
     }
     return JSON.stringify(result, null, 2);
@@ -174,7 +193,8 @@ export async function runAgentCommand(
     });
     const stdout = command.json ? JSON.stringify(result, null, 2) : humanOutput(command, result);
     const rejected =
-      command.kind === 'dispatch' && isRecord(result) && result.status === 'rejected';
+      (command.kind === 'dispatch' && isRecord(result) && result.status === 'rejected') ||
+      (command.kind === 'rotate' && isRecord(result) && result.status === 'failed');
     return { exitCode: rejected ? 1 : 0, stdout, stderr: '' };
   } catch (error) {
     return failure(error);
