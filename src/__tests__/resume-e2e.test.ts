@@ -20,6 +20,8 @@ async function runCli(
   const proc = Bun.spawn([process.execPath, cliPath, ...args], {
     cwd: tmpDir,
     env: { ...process.env, ...env, USERPROFILE: tmpDir, HOME: tmpDir },
+    // 固定非 TTY：headless 判定依赖 stdin.isTTY，交互终端下不能继承。
+    stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -87,6 +89,24 @@ it('--resume-run <id> 单 agent 恢复并打印结果', async () => {
     const { stdout, stderr, exitCode } = await runCli(['--resume-run', 'resume-1'], tmpDir);
     expect(exitCode).toBe(0);
     expect(stdout.trim()).toBe('Echo: hello-resume');
+    expect(stderr).not.toContain('resume_failed');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+it('--resume-run headless：权限请求自动允许，工具调用不挂起', async () => {
+  const { tmpDir, store } = await durableDir();
+  try {
+    await store.save(checkpoint({ run_id: 'resume-tool', session_id: 'session-tool' }));
+    // tools 场景首轮发 bash 调用；bash 的 checkPermission 会发 tool.permission.request
+    // 并等待应答。headless（非 TTY）必须自动允许，否则 policy 无限等待、进程挂起。
+    const { stdout, stderr, exitCode } = await runCli(['--resume-run', 'resume-tool'], tmpDir, {
+      VESSEL_MOCK: '1',
+      VESSEL_MOCK_SCENARIO: 'tools',
+    });
+    expect({ exitCode, stderr }).toMatchObject({ exitCode: 0 });
+    expect(stdout).toContain('Tool call finished');
     expect(stderr).not.toContain('resume_failed');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

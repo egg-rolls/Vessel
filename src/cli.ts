@@ -70,7 +70,7 @@ import {
 import { createGatewayConfigSet } from './gateway-config-control';
 import { createGatewayReload, type GatewayReconfigureTarget } from './gateway-reload-wiring';
 import { buildGatewayControlPlane } from './gateway-wiring';
-import { runHeadless } from './headless-runner';
+import { installHeadlessPermissionAutoAllow, runHeadless } from './headless-runner';
 import { type StartedHubNodeOutbound, startHubNodeOutbound } from './hub/outbound-wiring';
 import { applyLocale, resolveLocale, setLocale, t } from './i18n';
 import { ensureInteractionsDir } from './interactions-dir';
@@ -620,6 +620,12 @@ async function runWithConfig(result: BootstrapResult) {
   // --resume-run 与 --serve/--run 互斥（cli-args 已保证），这里直接恢复后分流。
   if (resumeRunId !== null) {
     let exitCode = 0;
+    // headless resume 没有 TUI 订阅者，与 --run 一致自动允许权限请求（ADR-029），
+    // 否则 permission policy 会无限等待 tool.permission.response。
+    // TTY resume（headless === false）进 REPL，由用户应答，不得自动 allow。
+    const uninstallPermissionAutoAllow = headless
+      ? installHeadlessPermissionAutoAllow(ctx.events)
+      : undefined;
     try {
       const outcome = await result.resumeRun(resumeRunId);
       console.log(outcome.result);
@@ -630,6 +636,7 @@ async function runWithConfig(result: BootstrapResult) {
       console.error(formatResumeError(error));
       exitCode = 1;
     } finally {
+      uninstallPermissionAutoAllow?.();
       await result.shutdown();
     }
     process.exit(exitCode);

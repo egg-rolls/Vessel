@@ -5,7 +5,13 @@
  * 从 cli.ts 中提取，解决 #16 issue
  */
 
-import type { Message, RunnableAgent, SessionBackend } from '../packages/core/src/index';
+import type {
+  EventStream,
+  Message,
+  RunnableAgent,
+  SessionBackend,
+  Unsubscribe,
+} from '../packages/core/src/index';
 import { asTuiEvent } from '../packages/tui/src/types/events.js';
 import { getCurrentGitBranch } from '../packages/tui/src/utils/git.js';
 import { t } from './i18n';
@@ -30,22 +36,15 @@ class CliError extends Error {
 }
 
 /**
- * 运行 headless 模式。
- * @returns 退出码（0 成功 / 1 失败）；清理与 process.exit 由 cli 统一处理。
+ * headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
+ * 避免 permission policy 无限等待。返回退订函数（runHeadless 进程内可忽略，
+ * `--resume-run` 等需要显式收口订阅的入口必须调用）。
  */
-export async function runHeadless(
-  runtime: RunnableAgent,
-  session: SessionBackend,
-  options: HeadlessOptions,
-): Promise<number> {
-  const { sessionId, provider } = options;
-
-  // headless 应答策略（ADR-029）：无 TUI 订阅者时，权限请求自动允许，
-  // 避免 waitFor 超时挂起；ask_user 在 headless 下不注册（见 bootstrap），靠超时返回错误兜底。
-  runtime.events.subscribe((rawEvent) => {
+export function installHeadlessPermissionAutoAllow(events: EventStream): Unsubscribe {
+  return events.subscribe((rawEvent) => {
     const event = asTuiEvent(rawEvent);
     if (event.type === 'tool.permission.request') {
-      runtime.events.publish({
+      events.publish({
         type: 'tool.permission.response',
         run_id: event.run_id,
         data: {
@@ -59,6 +58,22 @@ export async function runHeadless(
       });
     }
   });
+}
+
+/**
+ * 运行 headless 模式。
+ * @returns 退出码（0 成功 / 1 失败）；清理与 process.exit 由 cli 统一处理。
+ */
+export async function runHeadless(
+  runtime: RunnableAgent,
+  session: SessionBackend,
+  options: HeadlessOptions,
+): Promise<number> {
+  const { sessionId, provider } = options;
+
+  // headless 无 TUI 订阅者：权限请求自动允许；ask_user 在 headless 下不注册
+  // （见 bootstrap），靠超时返回错误兜底。
+  installHeadlessPermissionAutoAllow(runtime.events);
 
   try {
     const input = (await readInput(options, session)).trim();
