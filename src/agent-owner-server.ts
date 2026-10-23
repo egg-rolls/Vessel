@@ -4,7 +4,7 @@
  * - 文件：`<dataDir>/agent-owner.json`，JSON
  *   `{pid, host, port, token, started_at, tenant_id}`，原子写 0600；
  * - 只监听 127.0.0.1（缺省 :0），校验 Host 防 DNS rebinding；
- * - 端点只是传输：`agent.new/send/close/list` 全部委托 AgentService。
+ * - 端点只是传输：`agent.new/send/close/list/dispatch` 全部委托 AgentService。
  *
  * @module vessel/agent-owner-server
  */
@@ -13,7 +13,13 @@ import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import type { AgentService, NewBatchInput, NewMemberInput, SendInput } from '@vessel-agent/agent';
+import type {
+  AgentService,
+  DispatchInput,
+  NewBatchInput,
+  NewMemberInput,
+  SendInput,
+} from '@vessel-agent/agent';
 import type { Logger } from '@vessel-agent/core';
 import { isProcessAlive } from './gateway/pid';
 
@@ -24,7 +30,12 @@ export const AGENT_OWNER_FILE = 'agent-owner.json';
 export const AGENT_OWNER_MAX_BODY_BYTES = 1024 * 1024;
 
 /** 端点方法名（冻结形状） */
-export type AgentOwnerMethod = 'agent.new' | 'agent.send' | 'agent.close' | 'agent.list';
+export type AgentOwnerMethod =
+  | 'agent.new'
+  | 'agent.send'
+  | 'agent.close'
+  | 'agent.list'
+  | 'agent.dispatch';
 
 /** owner 记录（E3 冻结字段） */
 export interface AgentOwnerRecord {
@@ -269,10 +280,16 @@ async function dispatch(
       if (params.parent_id !== undefined) filter.parentId = params.parent_id;
       return service.list(filter as Parameters<AgentService['list']>[0]);
     }
+    case 'agent.dispatch':
+      return service.dispatch({
+        ...(params.to !== undefined ? { to: params.to } : {}),
+        ...(params.content !== undefined ? { content: params.content } : {}),
+        from: ownerId,
+      } as DispatchInput);
     default:
       throw new AgentOwnerError(
         'agent_owner_unknown_method',
-        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list)`,
+        `unknown method: ${method} (expected agent.new|agent.send|agent.close|agent.list|agent.dispatch)`,
         404,
       );
   }

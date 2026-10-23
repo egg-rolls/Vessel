@@ -284,6 +284,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
         flagValues: { '--visibility': AGENT_VISIBILITIES },
       },
       { name: 'send', flags: ['--json'] },
+      { name: 'dispatch', flags: ['--json'] },
       { name: 'close', flags: ['--json'] },
       {
         name: 'list',

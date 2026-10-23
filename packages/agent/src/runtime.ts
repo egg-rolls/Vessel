@@ -107,6 +107,10 @@ export interface InProcessMemberRuntimeOptions {
   logger?: Logger;
   tenantId?: string;
   includeReasoning?: boolean;
+  /** tenant SessionBackend；同 session_id 可跨进程续接历史 */
+  session?: AgentRuntimeOptions['session'];
+  /** tenant 会话事件日志（唯一真相源；存在时成员事件同样落盘） */
+  eventLog?: AgentRuntimeOptions['eventLog'];
   /** 覆盖 runtime 构造（测试捕获 options） */
   runtimeFactory?: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
 }
@@ -189,6 +193,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
   private readonly logger: Logger;
   private readonly tenantId?: string;
   private readonly includeReasoning?: boolean;
+  private readonly session?: AgentRuntimeOptions['session'];
+  private readonly eventLog?: AgentRuntimeOptions['eventLog'];
   private readonly runtimeFactory: (options: AgentRuntimeOptions) => Promise<MemberRunnableAgent>;
   private readonly entries = new Map<string, MemberRuntimeEntry>();
 
@@ -209,6 +215,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
     this.logger = options.logger ?? noopLogger;
     this.tenantId = options.tenantId;
     this.includeReasoning = options.includeReasoning;
+    this.session = options.session;
+    this.eventLog = options.eventLog;
     this.runtimeFactory =
       options.runtimeFactory ?? ((runtimeOptions) => AgentRuntime.create(runtimeOptions));
     if (this.permissionMode === 'bridge' && this.parentEvents === undefined) {
@@ -253,6 +261,8 @@ export class InProcessMemberRuntime implements MemberRuntimePort {
       ...(member.system_prompt !== undefined ? { systemPrompt: member.system_prompt } : {}),
       ...(this.tenantId !== undefined ? { tenantId: this.tenantId } : {}),
       ...(this.includeReasoning !== undefined ? { includeReasoning: this.includeReasoning } : {}),
+      ...(this.session !== undefined ? { session: this.session } : {}),
+      ...(this.eventLog !== undefined ? { eventLog: this.eventLog } : {}),
     });
     const entry: MemberRuntimeEntry = {
       runtime,

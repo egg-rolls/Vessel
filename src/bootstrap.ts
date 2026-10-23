@@ -70,6 +70,7 @@ import { t } from './i18n';
 import { createCliLogger } from './logging';
 import type { McpControl } from './mcp-wiring';
 import type { MockScenarioName } from './mock/scenarios';
+import { resolveNodeId } from './node-identity';
 import { createEventStream, type MetricsFactory } from './observability-wiring';
 import { resolveWorkflowDefPathSync } from './path-resolution';
 import {
@@ -837,10 +838,6 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
   });
   const { config, validation, tenantId, paths: configPaths } = loaded;
 
-  // nodeId 唯一来源（U3）：host.node_id，缺省进程内生成；transport / PeerInfo 共用。
-  const nodeId =
-    config.host?.nodeId ?? `vessel-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`;
-
   if (!useMock && validation.errors.length > 0) {
     console.error(formatConfigErrors(validation.errors, { paths: configPaths }));
     process.exit(configErrorExitCode);
@@ -861,6 +858,13 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
     ? path.join(resolvedDataDir, options.dataDirSubdir)
     : resolvedDataDir;
   const tenantPaths = resolveTenantPaths(dataDir, tenantId);
+
+  // nodeId 唯一来源（U3）：host.node_id > <dataDir>/node.json > 首次生成；transport / PeerInfo 共用。
+  const nodeId = await resolveNodeId({
+    ...(config.host?.nodeId !== undefined ? { configNodeId: config.host.nodeId } : {}),
+    dataDir,
+    logger,
+  });
   const connectUrl = options.connect ?? process.env.VESSEL_CONNECT;
   const connectMode = typeof connectUrl === 'string' && connectUrl.trim() !== '';
 
@@ -1085,13 +1089,9 @@ export async function bootstrap(options: BootstrapOptions = {}): Promise<Bootstr
       parentEvents: runtimeEvents,
       ...(config.agent?.ownerId !== undefined ? { ownerId: config.agent.ownerId } : {}),
       logger,
-      // 0.18：成员 run 与父级共用同一事件日志（唯一真相源）。
-      ...(eventLog
-        ? {
-            runtimeFactory: (runtimeOptions: Parameters<typeof AgentRuntime.create>[0]) =>
-              AgentRuntime.create({ ...runtimeOptions, eventLog }),
-          }
-        : {}),
+      // 成员 Body 与父级共用 tenant 存储：同 session_id 可在新进程恢复历史。
+      session,
+      ...(eventLog !== undefined ? { eventLog } : {}),
     });
     finalPluginHost.registerTool(wiring.tool);
 

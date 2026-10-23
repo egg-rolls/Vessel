@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import {
-  AgentError,
-  canTransition,
-  isTerminalState,
-  type MemberRecord,
-  MemberRegistry,
-} from '../src/index.js';
+import { AgentError, canTransition, type MemberRecord, MemberRegistry } from '../src/index.js';
 
 function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
   return {
@@ -14,6 +8,9 @@ function record(overrides: Partial<MemberRecord> = {}): MemberRecord {
     owner: 'main',
     visibility: 'private',
     state: 'idle',
+    presence: 'live',
+    membership: 'present',
+    rotation: 'stable',
     ...overrides,
   };
 }
@@ -58,13 +55,5 @@ describe('MemberRegistry state machine', () => {
       /duplicate member id/,
     );
     expect(registry.get('m1')?.id).toBe('m1');
-  });
-
-  it('treats only completed / failed / cancelled / closed as terminal', () => {
-    expect(isTerminalState('running')).toBe(false);
-    expect(isTerminalState('waiting_permission')).toBe(false);
-    expect(isTerminalState('stale')).toBe(false);
-    expect(isTerminalState('completed')).toBe(true);
-    expect(isTerminalState('closed')).toBe(true);
   });
 });

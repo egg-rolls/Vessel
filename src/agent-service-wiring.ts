@@ -67,6 +67,10 @@ export interface AgentServiceWiringOptions {
   parentEvents?: EventStream;
   /** 成员权限模式：交互 bridge、headless allow（缺省沿用 agent 包缺省 allow） */
   permissionMode?: MemberRuntimePermissionMode;
+  /** tenant SessionBackend；成员 Body 用同一份存储按 session_id 续接历史 */
+  session?: AgentRuntimeOptions['session'];
+  /** tenant SessionEventLog；与父入口同源（缺省不落 trace） */
+  eventLog?: AgentRuntimeOptions['eventLog'];
   /**
    * 测试接缝：覆盖成员 AgentRuntime 构造。缺省 `AgentRuntime.create`；
    * bridge / owner 队列的端到端测试用 fake runtime，不调真实 provider。
@@ -105,6 +109,8 @@ export function buildMemberRuntimeOptions(
     ...(options.parentEvents !== undefined ? { parentEvents: options.parentEvents } : {}),
     ...(onPermissionState !== undefined ? { onPermissionState } : {}),
     ...(options.runtimeFactory !== undefined ? { runtimeFactory: options.runtimeFactory } : {}),
+    ...(options.session !== undefined ? { session: options.session } : {}),
+    ...(options.eventLog !== undefined ? { eventLog: options.eventLog } : {}),
     tenantId: options.tenantId,
   };
 }
@@ -158,6 +164,7 @@ export async function createAgentServiceWiring(
     tenantId: options.tenantId,
     dataDir: options.dataDir,
     runtime,
+    defaultModel: options.model,
     // 成员生命周期事件与父入口同源；缺省时只有 subscribe，不进入父流。
     ...(options.parentEvents !== undefined ? { events: options.parentEvents } : {}),
     ...(options.logger !== undefined ? { logger: options.logger } : {}),

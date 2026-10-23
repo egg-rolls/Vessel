@@ -13,10 +13,10 @@
 import { randomUUID } from 'node:crypto';
 import { assertTenantId, type EventStream, type Logger, noopLogger } from '@vessel-agent/core';
 import {
-  isTerminalState,
   type MemberRecord,
   MemberRegistry,
   toMemberStatus,
+  toPersistedRecord,
   toRuntimeMember,
 } from './registry.js';
 import { AgentSnapshotStore, snapshotPath } from './snapshot.js';
@@ -34,6 +34,8 @@ import {
   type CloseInput,
   type CloseResult,
   DEFAULT_OWNER,
+  type DispatchInput,
+  type DispatchResult,
   type ListFilter,
   MAX_MESSAGE_BYTES,
   type MemberPermissionState,
@@ -45,6 +47,7 @@ import {
   type NewMemberInput,
   type PermissionDecision,
   type PermissionRequestInput,
+  type PersistedAgentRecord,
   type ReplyResult,
   type SendBatchInput,
   type SendInput,
@@ -97,8 +100,15 @@ function resolveVisibility(value: unknown, fallback: MemberVisibility): MemberVi
   return value as MemberVisibility;
 }
 
-/** 从快照恢复记录；非终态在 loadSnapshot 里统一标 stale */
-function recordFromStatus(status: MemberStatus): MemberRecord {
+/** 从快照恢复记录：engine 状态是进程内易失，重启后非 left 一律 idle + gone */
+function recordFromStatus(status: PersistedAgentRecord, now: number): MemberRecord {
+  const state: MemberState =
+    status.membership === 'left' || status.state === 'closed' ? 'closed' : 'idle';
+  const currentBody = status.current_body ?? {
+    session_id: status.session_id,
+    epoch: 0,
+    started_at: status.last_seen ?? now,
+  };
   return {
     id: status.id,
     sessionId: status.session_id,
@@ -106,7 +116,14 @@ function recordFromStatus(status: MemberStatus): MemberRecord {
     ...(status.parent_id !== undefined ? { parentId: status.parent_id } : {}),
     owner: status.owner,
     visibility: status.visibility,
-    state: status.state,
+    state,
+    presence: 'gone',
+    membership: status.membership,
+    rotation: 'stable',
+    currentBody,
+    ...(status.model !== undefined ? { model: status.model } : {}),
+    ...(status.system_prompt !== undefined ? { systemPrompt: status.system_prompt } : {}),
+    ...(status.forked_from !== undefined ? { forkedFrom: status.forked_from } : {}),
     ...(status.current_tool !== undefined ? { currentTool: status.current_tool } : {}),
     ...(status.last_seen !== undefined ? { lastSeen: status.last_seen } : {}),
     ...(status.usage !== undefined ? { usage: status.usage } : {}),
@@ -123,11 +140,14 @@ export class AgentServiceImpl implements AgentService {
   private readonly permissionBridge: AgentServiceOptions['permissionBridge'];
   private readonly snapshot: AgentSnapshotStore | undefined;
   private readonly queues = new Map<string, MemberQueue>();
+  /** gone 成员的 single-flight resume；同一 id 并发 dispatch 只 spawn 一次 */
+  private readonly resuming = new Map<string, Promise<void>>();
   /** external owner（REPL 主 agent）：队列由 takeMessages 消费，pump 永不执行 */
   private readonly externalOwners = new Set<string>();
   private readonly listeners = new Set<AgentEventListener>();
   private readonly tenantId: string;
   private readonly eventStream: EventStream | undefined;
+  private readonly defaultModel: string | undefined;
   private readonly ready: Promise<void>;
 
   constructor(options: AgentServiceOptions) {
@@ -147,6 +167,7 @@ export class AgentServiceImpl implements AgentService {
     this.permissionBridge = options.permissionBridge;
     this.tenantId = options.tenantId;
     this.eventStream = options.events;
+    this.defaultModel = options.defaultModel;
 
     const dataDir = options.dataDir;
     const snapshotEnabled = dataDir !== undefined && options.snapshot?.enabled !== false;
@@ -164,10 +185,13 @@ export class AgentServiceImpl implements AgentService {
     this.ready = this.loadSnapshot();
   }
 
-  /** 重启恢复：非终态成员一律 stale（执行内核未恢复，不能静默接受新消息） */
+  /**
+   * 重启恢复：非 left 成员一律 idle + gone（engine 状态是进程内易失）。
+   * 旧快照里的重名容忍加载并 warning（new 才会强制唯一）。
+   */
   private async loadSnapshot(): Promise<void> {
     if (!this.snapshot) return;
-    let members: MemberStatus[] = [];
+    let members: PersistedAgentRecord[] = [];
     try {
       members = await this.snapshot.load();
     } catch (error) {
@@ -175,11 +199,10 @@ export class AgentServiceImpl implements AgentService {
       this.logger.error('agent.snapshot.load_failed', { error: errorText(error) });
       return;
     }
+    const idsByName = new Map<string, string[]>();
     let restored = 0;
     for (const status of members) {
-      const record = recordFromStatus(status);
-      const wasStale = !isTerminalState(record.state);
-      if (wasStale) record.state = 'stale';
+      const record = recordFromStatus(status, this.now());
       try {
         this.registry.add(record);
         restored += 1;
@@ -190,7 +213,20 @@ export class AgentServiceImpl implements AgentService {
         });
         continue;
       }
-      if (wasStale) this.emit('agent.stale', record, { state: 'stale' });
+      if (record.name !== undefined) {
+        const ids = idsByName.get(record.name);
+        if (ids === undefined) idsByName.set(record.name, [record.id]);
+        else ids.push(record.id);
+      }
+      if (record.membership === 'present') {
+        // 兼容事件：payload 用新语义（gone / idle），事件名仅为 wire 兼容保留
+        this.emit('agent.stale', record, { state: 'idle', presence: 'gone' });
+      }
+    }
+    for (const [name, ids] of idsByName) {
+      if (ids.length > 1) {
+        this.logger.warn('agent.snapshot.duplicate_name', { name, ids });
+      }
     }
     if (restored > 0) this.scheduleSnapshot();
   }
@@ -237,7 +273,7 @@ export class AgentServiceImpl implements AgentService {
 
   /**
    * 注册 root owner（REPL 主 agent）。
-   * 不调用 runtime.spawn；stale 记录（快照恢复）回到 idle，closed 保持关闭。
+   * 不调用 runtime.spawn；恢复的记录置 live / present，并补齐 current_body。
    */
   async attachOwner(input: AttachOwnerInput): Promise<MemberStatus> {
     await this.ready;
@@ -256,7 +292,15 @@ export class AgentServiceImpl implements AgentService {
         throw new AgentError('invalid_input', `duplicate session id: ${sessionId}`);
       }
       this.registry.updateIdentity(id, { sessionId, visibility });
-      if (existing.state === 'stale') this.registry.setState(id, 'idle');
+      existing.membership = 'present';
+      this.registry.setPresence(id, 'live');
+      if (existing.currentBody?.session_id !== sessionId) {
+        this.registry.setCurrentBody(id, {
+          session_id: sessionId,
+          epoch: existing.currentBody?.epoch ?? 0,
+          started_at: this.now(),
+        });
+      }
       this.externalOwners.add(id);
       this.scheduleSnapshot();
       return toMemberStatus(existing);
@@ -271,6 +315,10 @@ export class AgentServiceImpl implements AgentService {
       owner: id,
       visibility,
       state: 'idle',
+      presence: 'live',
+      membership: 'present',
+      rotation: 'stable',
+      currentBody: { session_id: sessionId, epoch: 0, started_at: this.now() },
     };
     this.registry.add(record);
     this.queueFor(id);
@@ -285,6 +333,12 @@ export class AgentServiceImpl implements AgentService {
     const id = this.newId();
     if (!nonEmpty(id)) throw new AgentError('invalid_input', 'id generator returned an empty id');
 
+    const name = optionalString(input.name);
+    // 名称 tenant 内唯一：检查与 add 之间不得有 await（避免并发 new 同时通过）
+    if (name !== undefined && this.registry.findByName(name).length > 0) {
+      throw new AgentError('invalid_input', `duplicate member name: ${name}`);
+    }
+
     const record: MemberRecord = {
       id,
       // session 即成员：两者同值，消息可用任一寻址
@@ -292,12 +346,16 @@ export class AgentServiceImpl implements AgentService {
       owner,
       visibility,
       state: 'created',
+      presence: 'gone',
+      membership: 'present',
+      rotation: 'stable',
+      currentBody: { session_id: id, epoch: 0, started_at: this.now() },
     };
-    const name = optionalString(input.name);
     if (name !== undefined) record.name = name;
     const parentId = optionalString(input.parentId);
     if (parentId !== undefined) record.parentId = parentId;
-    const model = optionalString(input.model);
+    // 落“有效 model”：未显式指定时用 wiring 默认值，resume 才不会回流到空
+    const model = optionalString(input.model) ?? this.defaultModel;
     if (model !== undefined) record.model = model;
     const systemPrompt = optionalString(input.systemPrompt);
     if (systemPrompt !== undefined) record.systemPrompt = systemPrompt;
@@ -311,7 +369,8 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('spawn_failed', `spawn_failed: ${errorText(error)}`);
     }
     this.registry.setState(id, 'idle');
-    this.emit('agent.spawned', record, { state: 'idle' });
+    this.registry.setPresence(id, 'live');
+    this.emit('agent.spawned', record, { state: 'idle', presence: 'live' });
     this.scheduleSnapshot();
     return toMemberStatus(record);
   }
@@ -347,17 +406,17 @@ export class AgentServiceImpl implements AgentService {
     return this.enqueue(record);
   }
 
-  /** 入队（同步推进，不等待 runTurn）；async 只为把校验异常转成逐条 rejection */
+  /** strict send 入队（不 resume）；async 只为把校验异常转成逐条 rejection */
   private async enqueue(input: Record<string, unknown>): Promise<SendResult> {
     const to = readRequiredString(input, 'to');
     const content = readContent(input, 'content');
     const from = input.from === undefined ? DEFAULT_OWNER : readRequiredString(input, 'from');
 
     const target = this.requireMember(to);
-    if (target.state === 'closed') {
+    if (target.membership === 'left' || target.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${to}`);
     }
-    if (target.state === 'stale') {
+    if (target.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${to}`);
     }
     if (this.queueFor(target.id).closing) {
@@ -367,6 +426,11 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('member_not_visible', `member_not_visible: ${to}`);
     }
 
+    return this.enqueueMessage(target, content, from);
+  }
+
+  /** 唯一入队实现：send / dispatch / reply 之外的入队路径都走这里 */
+  private enqueueMessage(target: MemberRecord, content: string, from: string): SendResult {
     const message: AgentMessage = {
       id: this.newId(),
       from,
@@ -385,6 +449,130 @@ export class AgentServiceImpl implements AgentService {
     this.scheduleSnapshot();
     this.pump(target.id);
     return { queued: true, message_id: message.id, state: target.state };
+  }
+
+  /**
+   * dispatch：统一投递入口。
+   * `to` 解析顺序 id/session → 唯一 name；gone 走 single-flight resume。
+   */
+  async dispatch(input: DispatchInput): Promise<DispatchResult> {
+    await this.ready;
+    const raw = input as unknown as Record<string, unknown>;
+    const to = readRequiredString(raw, 'to');
+    const content = readContent(raw, 'content');
+    const from = raw.from === undefined ? DEFAULT_OWNER : readRequiredString(raw, 'from');
+
+    const target = this.resolveDispatchTarget(to, from);
+    if (target === undefined || !this.registry.canView(target, from)) {
+      return { status: 'rejected', code: 'not_visible', reason: `not_visible: ${to}` };
+    }
+
+    if (target.membership === 'left' || target.state === 'closed') {
+      return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
+    }
+    if (target.rotation === 'rotating') {
+      const result = this.enqueueMessage(target, content, from);
+      return {
+        status: 'queued',
+        message_id: result.message_id,
+        resolved_to: target.id,
+        resolution: 'rotating',
+      };
+    }
+    if (target.presence === 'live') {
+      const result = this.enqueueMessage(target, content, from);
+      return {
+        status: 'queued',
+        message_id: result.message_id,
+        resolved_to: target.id,
+        resolution: 'live',
+      };
+    }
+
+    try {
+      await this.ensureResumed(target.id);
+    } catch (error) {
+      return { status: 'rejected', code: 'resume_failed', reason: errorText(error) };
+    }
+    // resume 期间成员可能已被 close：复查后拒绝，不把消息投进已关闭成员
+    const current = this.registry.get(target.id);
+    if (
+      current === undefined ||
+      current.membership === 'left' ||
+      current.state === 'closed' ||
+      current.presence === 'gone'
+    ) {
+      return { status: 'rejected', code: 'agent_left', reason: `agent_left: ${target.id}` };
+    }
+    const result = this.enqueueMessage(current, content, from);
+    return {
+      status: 'queued',
+      message_id: result.message_id,
+      resolved_to: current.id,
+      resolution: 'resumed',
+    };
+  }
+
+  /**
+   * dispatch 的 to 解析：id/session 直取；name 需唯一且对 from 可见。
+   * 返回 undefined 表示 name 存在但全部不可见（调用方返回 rejected not_visible）。
+   */
+  private resolveDispatchTarget(to: string, from: string): MemberRecord | undefined {
+    const direct = this.registry.resolve(to);
+    if (direct) return direct;
+
+    const matches = this.registry.findByName(to);
+    if (matches.length === 0) {
+      throw new AgentError('unknown_member', `unknown_member: ${to}`);
+    }
+    const visible = matches.filter((record) => this.registry.canView(record, from));
+    if (visible.length === 0) return undefined;
+    if (visible.length > 1) {
+      const candidates = visible.map((record) => record.id).join(', ');
+      throw new AgentError('invalid_input', `ambiguous name: ${to} candidates: ${candidates}`);
+    }
+    return visible[0];
+  }
+
+  /**
+   * single-flight resume：同一成员并发 dispatch 只 spawn 一次。
+   * spawn 成功后复查 membership（close 可能在等待期间发生）。
+   */
+  private async ensureResumed(id: string): Promise<void> {
+    const inflight = this.resuming.get(id);
+    if (inflight) return inflight;
+    const promise = this.resumeOne(id);
+    this.resuming.set(id, promise);
+    try {
+      await promise;
+    } finally {
+      if (this.resuming.get(id) === promise) this.resuming.delete(id);
+    }
+  }
+
+  private async resumeOne(id: string): Promise<void> {
+    const record = this.registry.get(id);
+    if (!record) throw new AgentError('unknown_member', `unknown_member: ${id}`);
+    await this.runtime.spawn(toRuntimeMember(record));
+
+    const current = this.registry.get(id);
+    if (!current || current.membership === 'left' || current.state === 'closed') {
+      if (current) {
+        try {
+          await this.runtime.dispose(toRuntimeMember(current));
+        } catch (error) {
+          this.logger.warn('agent.dispose.failed', { member_id: id, error: errorText(error) });
+        }
+        this.registry.setPresence(id, 'gone');
+      }
+      throw new AgentError('member_closed', `agent_left: ${id}`);
+    }
+    this.registry.setPresence(id, 'live');
+    this.emit('agent.resumed', current, {
+      presence: 'live',
+      state: current.state,
+      epoch: current.currentBody?.epoch ?? 0,
+    });
   }
 
   async close(input: CloseInput): Promise<CloseResult>;
@@ -425,20 +613,11 @@ export class AgentServiceImpl implements AgentService {
 
   private async closeOne(ref: string): Promise<CloseResult> {
     const member = this.requireMember(ref);
-    if (member.state === 'closed') return { state: 'closed' };
+    if (member.membership === 'left' || member.state === 'closed') return { state: 'closed' };
 
     const queue = this.queueFor(member.id);
     queue.closing = true;
     queue.pending.length = 0;
-
-    // stale 成员没有可释放的运行时对象；直接关闭，避免对恢复成员调 dispose
-    if (member.state === 'stale') {
-      this.registry.setState(member.id, 'closed');
-      this.emit('agent.closed', member, { state: 'closed' });
-      this.scheduleSnapshot();
-      await this.flushSnapshot();
-      return { state: 'closed' };
-    }
 
     if (queue.turnActive) {
       try {
@@ -453,8 +632,10 @@ export class AgentServiceImpl implements AgentService {
 
     // cancel 期间执行内核仍可能完成本轮；closing 已置位，executeTurn 不会覆盖 closed
     this.registry.setState(member.id, 'closed');
+    member.membership = 'left';
+    this.registry.setPresence(member.id, 'gone');
     queue.pending.length = 0;
-    this.emit('agent.closed', member, { state: 'closed' });
+    this.emit('agent.closed', member, { state: 'closed', presence: 'gone' });
     this.scheduleSnapshot();
 
     try {
@@ -479,20 +660,24 @@ export class AgentServiceImpl implements AgentService {
     await this.ready;
     const text = readContent({ content }, 'content');
     const member = this.requireMember(memberId);
-    if (member.state === 'closed') {
+    if (member.membership === 'left' || member.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${memberId}`);
     }
-    if (member.state === 'stale') {
+    if (member.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${memberId}`);
     }
     if (!nonEmpty(member.parentId)) {
       throw new AgentError('no_parent', `member has no parent: ${memberId}`);
     }
     const parent = this.requireMember(member.parentId);
-    if (parent.state === 'closed' || this.queueFor(parent.id).closing) {
+    if (
+      parent.membership === 'left' ||
+      parent.state === 'closed' ||
+      this.queueFor(parent.id).closing
+    ) {
       throw new AgentError('member_closed', `member_closed: ${parent.id}`);
     }
-    if (parent.state === 'stale') {
+    if (parent.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${parent.id}`);
     }
 
@@ -527,10 +712,10 @@ export class AgentServiceImpl implements AgentService {
       throw new AgentError('invalid_input', 'limit must be a positive integer');
     }
     const member = this.requireMember(memberId);
-    if (member.state === 'closed') {
+    if (member.membership === 'left' || member.state === 'closed') {
       throw new AgentError('member_closed', `member_closed: ${memberId}`);
     }
-    if (member.state === 'stale') {
+    if (member.presence === 'gone') {
       throw new AgentError('member_stale', `member_stale: ${memberId}`);
     }
     const queue = this.queueFor(member.id);
@@ -544,10 +729,10 @@ export class AgentServiceImpl implements AgentService {
     return taken;
   }
 
-  /** bridge 执行内核上报的等待/恢复；closed / stale 与非法转移一律忽略，不抛错 */
+  /** bridge 执行内核上报的等待/恢复；closed / gone 与非法转移一律忽略，不抛错 */
   notePermissionState(memberId: string, state: MemberPermissionState): void {
     const member = this.registry.get(memberId);
-    if (!member || member.state === 'closed' || member.state === 'stale') return;
+    if (!member || member.state === 'closed' || member.presence === 'gone') return;
     try {
       if (state === 'waiting') {
         if (member.state !== 'running') return;
@@ -698,10 +883,12 @@ export class AgentServiceImpl implements AgentService {
   private pump(memberId: string): void {
     const member = this.registry.get(memberId);
     if (!member) return;
+    // gone（需 resume）或 rotating（S2 轮换中）都不推进队列
+    if (member.presence === 'gone' || member.rotation === 'rotating') return;
     if (this.externalOwners.has(memberId)) return;
     const queue = this.queueFor(memberId);
     if (queue.turnActive || queue.closing) return;
-    if (member.state === 'created' || member.state === 'closed' || member.state === 'stale') return;
+    if (member.state === 'created' || member.state === 'closed') return;
     if (member.state === 'waiting_permission') return;
     const message = queue.pending.shift();
     if (!message) return;
@@ -741,7 +928,7 @@ export class AgentServiceImpl implements AgentService {
     const current = this.registry.get(member.id);
     if (!current) return;
     // close 已发生（或成员已被关闭）：后到的终态不得覆盖 closed
-    if (queue.closing || current.state === 'closed' || current.state === 'stale') {
+    if (queue.closing || current.state === 'closed' || current.presence === 'gone') {
       if (queue.closing) {
         this.emit('agent.turn.cancelled', current, {
           state: current.state,
@@ -789,7 +976,14 @@ export class AgentServiceImpl implements AgentService {
   private deliverToParent(member: MemberRecord, content: string): void {
     if (!nonEmpty(member.parentId)) return;
     const parent = this.registry.resolve(member.parentId);
-    if (!parent || parent.state === 'closed' || parent.state === 'stale') return;
+    if (
+      !parent ||
+      parent.membership === 'left' ||
+      parent.state === 'closed' ||
+      parent.presence === 'gone'
+    ) {
+      return;
+    }
     const parentQueue = this.queueFor(parent.id);
     if (parentQueue.closing) return;
 
@@ -812,7 +1006,7 @@ export class AgentServiceImpl implements AgentService {
   }
 
   private scheduleSnapshot(): void {
-    this.snapshot?.schedule(() => this.registry.all().map(toMemberStatus));
+    this.snapshot?.schedule(() => this.registry.all().map(toPersistedRecord));
   }
 }
 

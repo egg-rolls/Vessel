@@ -171,6 +171,7 @@ export type AgentCommand =
       systemPrompt?: string;
     }
   | { kind: 'send'; json: boolean; member: string; content: string }
+  | { kind: 'dispatch'; json: boolean; to: string; content: string }
   | { kind: 'close'; json: boolean; members: string[] }
   | { kind: 'list'; json: boolean; visibility?: AgentVisibilityArg; state?: AgentStateArg };
 
@@ -241,7 +242,7 @@ export interface CliArgs {
   statusCommand: { json: boolean } | null;
   /** 0.14：`vessel agents [--json]` */
   agentsCommand: { json: boolean } | null;
-  /** 0.17：`vessel agent new|send|close|list` */
+  /** 0.17：`vessel agent new|send|close|list|dispatch` */
   agentCommand: AgentCommand | null;
   /** 0.14：`vessel errors [--json] [--limit N]` */
   errorsCommand: { json: boolean; limit?: number } | null;
@@ -1903,7 +1904,7 @@ function parseAgentsArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: true, args };
 }
 
-/** `agent new|send|close|list`（0.17 Phase A） */
+/** `agent new|send|close|list|dispatch`（0.17 Phase A；0.19 dispatch） */
 function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -1985,6 +1986,33 @@ function parseAgentArgs(rest: string[], args: CliArgs): ParseResult {
       return { ok: false, error: 'agent send requires non-empty <content...>' };
     }
     args.agentCommand = { kind: 'send', json, member, content };
+    return { ok: true, args };
+  }
+
+  if (sub === 'dispatch') {
+    let json = false;
+    const positional: string[] = [];
+    for (const a of tail) {
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a.startsWith('-')) {
+        return { ok: false, error: `Unknown argument for agent dispatch: ${a}` };
+      }
+      positional.push(a);
+    }
+    if (args.help) return { ok: true, args };
+    const [to, ...contentParts] = positional;
+    const content = contentParts.join(' ');
+    if (to === undefined || to === '' || content === '') {
+      return { ok: false, error: 'agent dispatch requires <to> <content...>' };
+    }
+    args.agentCommand = { kind: 'dispatch', json, to, content };
     return { ok: true, args };
   }
 

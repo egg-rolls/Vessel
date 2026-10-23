@@ -199,6 +199,7 @@ describe('AgentService events', () => {
     const stale = stream.getHistory().find((event) => event.type === 'agent.stale');
     expect(stale?.run_id).toBe('main');
     const data = stale?.data as Record<string, unknown> | undefined;
-    expect(data?.state).toBe('stale');
+    expect(data?.state).toBe('idle');
+    expect(data?.presence).toBe('gone');
   });
 });

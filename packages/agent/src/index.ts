@@ -8,10 +8,10 @@
 
 export {
   canTransition,
-  isTerminalState,
   type MemberRecord,
   MemberRegistry,
   toMemberStatus,
+  toPersistedRecord,
   toRuntimeMember,
 } from './registry.js';
 export {
@@ -30,6 +30,7 @@ export {
 } from './snapshot.js';
 export { type AgentToolOptions, createAgentTool } from './tool.js';
 export {
+  type AgentBodyPointer,
   AgentError,
   type AgentErrorCode,
   type AgentEvent,
@@ -45,9 +46,14 @@ export {
   type CloseInput,
   type CloseResult,
   DEFAULT_OWNER,
+  type DispatchInput,
+  type DispatchResult,
   type ListFilter,
   MAX_MESSAGE_BYTES,
+  type MemberMembership,
   type MemberPermissionState,
+  type MemberPresence,
+  type MemberRotation,
   type MemberRuntimeMember,
   type MemberRuntimePort,
   type MemberState,
@@ -59,6 +65,7 @@ export {
   type PermissionBridge,
   type PermissionDecision,
   type PermissionRequestInput,
+  type PersistedAgentRecord,
   type ReplyResult,
   type SendBatchInput,
   type SendInput,

@@ -24,7 +24,23 @@ export type MemberState =
 /** 成员可见性；private 仅 owner 可见 */
 export type MemberVisibility = 'private' | 'team' | 'tenant';
 
-/** 成员对外状态（E1 冻结形状） */
+/** 进程内存在性：live 表示 engine 在当前进程可用，gone 表示需要 resume（不持久化） */
+export type MemberPresence = 'live' | 'gone';
+
+/** 成员归属：present 在册，left 已关闭（持久化） */
+export type MemberMembership = 'present' | 'left';
+
+/** Body 轮换相位（不持久化；S2 rotate 使用） */
+export type MemberRotation = 'stable' | 'rotating';
+
+/** Body 指针：body_id ≡ session_id，epoch 由 current_body 派生 */
+export interface AgentBodyPointer {
+  session_id: string;
+  epoch: number;
+  started_at: number;
+}
+
+/** 成员对外状态（E1 冻结形状；新字段 additive） */
 export interface MemberStatus {
   id: string;
   session_id: string;
@@ -33,6 +49,38 @@ export interface MemberStatus {
   owner: string;
   visibility: MemberVisibility;
   state: MemberState;
+  current_tool?: string;
+  last_seen?: number;
+  usage?: Usage;
+  /** 进程内 presence（DTO 派生，不落盘） */
+  presence?: MemberPresence;
+  /** 归属（DTO 派生，持久化在 PersistedAgentRecord） */
+  membership?: MemberMembership;
+  /** 当前 Body 的 epoch（由 current_body 派生） */
+  epoch?: number;
+}
+
+/**
+ * 快照持久化记录（v2）。
+ *
+ * 与 MemberStatus 分离：不把 model / system_prompt 等配置泄漏进对外 DTO。
+ * presence / rotation 不持久化（进程内可重建）。
+ */
+export interface PersistedAgentRecord {
+  id: string;
+  /** 第一具 Body 的 session（兼容旧数据） */
+  session_id: string;
+  name?: string;
+  parent_id?: string;
+  owner: string;
+  visibility: MemberVisibility;
+  /** 最后已知 engine 状态（重启后按 membership 重置） */
+  state: MemberState;
+  membership: MemberMembership;
+  model?: string;
+  system_prompt?: string;
+  current_body?: AgentBodyPointer;
+  forked_from?: string;
   current_tool?: string;
   last_seen?: number;
   usage?: Usage;
@@ -143,6 +191,30 @@ export interface SendBatchInput {
   messages: SendInput[];
 }
 
+/**
+ * dispatch：统一入口。`to` 可为 id / session_id / 唯一 name。
+ * 与 strict `send` 的区别：gone 成员会先 resume，rotating 成员先排队。
+ */
+export interface DispatchInput {
+  to: string;
+  content: string;
+  from?: string;
+}
+
+/** dispatch 结果：queued 表示已入队；rejected 是明确的业务拒绝 */
+export type DispatchResult =
+  | {
+      status: 'queued';
+      message_id: string;
+      resolved_to: string;
+      resolution: 'live' | 'resumed' | 'rotating';
+    }
+  | {
+      status: 'rejected';
+      code: 'agent_left' | 'resume_failed' | 'not_visible';
+      reason: string;
+    };
+
 /** 关闭参数 */
 export interface CloseInput {
   member?: string;
@@ -214,6 +286,10 @@ export interface AgentEvent {
   /** 本轮 usage（turn.completed 有则带） */
   usage?: Usage;
   state?: MemberState;
+  /** 进程内 presence（agent.stale / agent.resumed 等生命周期事件） */
+  presence?: MemberPresence;
+  /** 当前 Body epoch（agent.resumed） */
+  epoch?: number;
   message_id?: string;
   /** 消息来源（queued 事件） */
   from?: string;
@@ -243,6 +319,8 @@ export interface AgentServiceOptions {
   permissionBridge?: PermissionBridge;
   /** 可选的进程内事件流出口；同时仍可 subscribe */
   events?: EventStream;
+  /** 创建成员未显式指定 model 时使用的“有效 model”（落库，供 resume 使用） */
+  defaultModel?: string;
 }
 
 /** 稳定错误码（入口层据此映射 RPC / CLI 错误） */
@@ -276,6 +354,11 @@ export interface AgentService {
   attachOwner(input: AttachOwnerInput): Promise<MemberStatus>;
   send(input: SendInput): Promise<SendResult>;
   send(input: SendBatchInput): Promise<BatchResult<SendResult>>;
+  /**
+   * 统一投递入口：live 直接入队；gone 先 single-flight resume；
+   * rotating 入队等待；left / resume 失败返回 rejected。
+   */
+  dispatch(input: DispatchInput): Promise<DispatchResult>;
   close(input: CloseInput): Promise<CloseResult>;
   close(input: CloseBatchInput): Promise<BatchResult<CloseResult>>;
   list(filter?: ListFilter): Promise<MemberStatus[]>;

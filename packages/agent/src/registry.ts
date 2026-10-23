@@ -9,17 +9,23 @@
 
 import type { Usage } from '@vessel-agent/core';
 import {
+  type AgentBodyPointer,
   AgentError,
   type ListFilter,
+  type MemberMembership,
+  type MemberPresence,
+  type MemberRotation,
   type MemberRuntimeMember,
   type MemberState,
   type MemberStatus,
   type MemberVisibility,
+  type PersistedAgentRecord,
 } from './types.js';
 
 /** 注册表内部记录（camelCase；对外经 toMemberStatus 转 snake_case） */
 export interface MemberRecord {
   id: string;
+  /** 第一具 Body 的 session（currentBody 存在时其 session_id 才是当前 Body） */
   sessionId: string;
   name?: string;
   parentId?: string;
@@ -28,32 +34,32 @@ export interface MemberRecord {
   model?: string;
   systemPrompt?: string;
   state: MemberState;
+  /** 进程内 presence；不持久化 */
+  presence: MemberPresence;
+  /** 归属；持久化 */
+  membership: MemberMembership;
+  /** Body 轮换相位；不持久化 */
+  rotation: MemberRotation;
+  currentBody?: AgentBodyPointer;
+  forkedFrom?: string;
   currentTool?: string;
   lastSeen?: number;
   usage?: Usage;
 }
 
-/** 终态：终态可回到 idle 接受下一轮，但不会自动继续 */
-const TERMINAL_STATES: readonly MemberState[] = ['completed', 'failed', 'cancelled', 'closed'];
-
-/** 允许的状态转移；close 从任意非 closed 进入，重启恢复只进 stale */
+/** 允许的状态转移；stale 不再写入（仅保留 read-only legacy 键以维持类型完整性） */
 const TRANSITIONS: Readonly<Record<MemberState, readonly MemberState[]>> = {
-  created: ['idle', 'closed', 'stale'],
-  idle: ['running', 'closed', 'stale'],
-  running: ['waiting_permission', 'completed', 'failed', 'cancelled', 'idle', 'closed', 'stale'],
-  waiting_permission: ['running', 'failed', 'cancelled', 'closed', 'stale'],
-  completed: ['idle', 'closed', 'stale'],
-  failed: ['idle', 'closed', 'stale'],
-  cancelled: ['idle', 'closed', 'stale'],
+  created: ['idle', 'closed'],
+  idle: ['running', 'closed'],
+  running: ['waiting_permission', 'completed', 'failed', 'cancelled', 'idle', 'closed'],
+  waiting_permission: ['running', 'failed', 'cancelled', 'closed'],
+  completed: ['idle', 'closed'],
+  failed: ['idle', 'closed'],
+  cancelled: ['idle', 'closed'],
   closed: [],
-  // stale → idle 只由 attachOwner 显式复活 root owner；成员仍拒绝 send
-  stale: ['idle', 'closed'],
+  // legacy read-only：旧数据里可能仍有 stale 状态；不再有写入者，只允许 close
+  stale: ['closed'],
 };
-
-/** 是否为终态 */
-export function isTerminalState(state: MemberState): boolean {
-  return TERMINAL_STATES.includes(state);
-}
 
 /** 状态转移是否合法 */
 export function canTransition(from: MemberState, to: MemberState): boolean {
@@ -70,6 +76,30 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
     owner: record.owner,
     visibility: record.visibility,
     state: record.state,
+    presence: record.presence,
+    membership: record.membership,
+    epoch: record.currentBody?.epoch ?? 0,
+    ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
+    ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
+    ...(record.usage !== undefined ? { usage: record.usage } : {}),
+  };
+}
+
+/** 注册表记录 → 快照持久化记录（不落 presence / rotation） */
+export function toPersistedRecord(record: MemberRecord): PersistedAgentRecord {
+  return {
+    id: record.id,
+    session_id: record.sessionId,
+    owner: record.owner,
+    visibility: record.visibility,
+    state: record.state,
+    membership: record.membership,
+    ...(record.name !== undefined ? { name: record.name } : {}),
+    ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
+    ...(record.model !== undefined ? { model: record.model } : {}),
+    ...(record.systemPrompt !== undefined ? { system_prompt: record.systemPrompt } : {}),
+    ...(record.currentBody !== undefined ? { current_body: record.currentBody } : {}),
+    ...(record.forkedFrom !== undefined ? { forked_from: record.forkedFrom } : {}),
     ...(record.currentTool !== undefined ? { current_tool: record.currentTool } : {}),
     ...(record.lastSeen !== undefined ? { last_seen: record.lastSeen } : {}),
     ...(record.usage !== undefined ? { usage: record.usage } : {}),
@@ -80,7 +110,7 @@ export function toMemberStatus(record: MemberRecord): MemberStatus {
 export function toRuntimeMember(record: MemberRecord): MemberRuntimeMember {
   return {
     id: record.id,
-    session_id: record.sessionId,
+    session_id: record.currentBody?.session_id ?? record.sessionId,
     ...(record.name !== undefined ? { name: record.name } : {}),
     ...(record.parentId !== undefined ? { parent_id: record.parentId } : {}),
     owner: record.owner,
@@ -181,6 +211,27 @@ export class MemberRegistry {
   setUsage(id: string, usage: Usage): void {
     const record = this.byId.get(id);
     if (record) record.usage = usage;
+  }
+
+  /** 进程内 presence；缺失成员静默忽略（close 与 dispose 可能竞争） */
+  setPresence(id: string, presence: MemberPresence): void {
+    const record = this.byId.get(id);
+    if (record) record.presence = presence;
+  }
+
+  /** 当前 Body 指针；不改变第一具 Body 的 sessionId */
+  setCurrentBody(id: string, body: AgentBodyPointer): void {
+    const record = this.byId.get(id);
+    if (record) record.currentBody = body;
+  }
+
+  /** 按 name 查找（tenant 内可能重名：旧快照容忍重名，new 强制唯一） */
+  findByName(name: string): MemberRecord[] {
+    const matches: MemberRecord[] = [];
+    for (const record of this.byId.values()) {
+      if (record.name === name) matches.push(record);
+    }
+    return matches;
   }
 
   /** private 仅 owner；team / tenant 对同 tenant 的任何查看者可见 */
