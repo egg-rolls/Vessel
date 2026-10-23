@@ -1,3 +1,4 @@
+import type { TeamPolicy } from '@vessel-agent/config';
 import {
   type AgentEvent,
   type AgentEventListener,
@@ -253,6 +254,11 @@ export class MemoryTeamStore implements TeamStore {
 
   get(teamId: string): TeamRecord | undefined {
     return this.records.find((record) => record.team_id === teamId);
+  }
+
+  policy(teamId: string): TeamPolicy | undefined {
+    const record = this.get(teamId);
+    return record === undefined ? undefined : (record.policy as TeamPolicy);
   }
 
   list(): TeamRecord[] {

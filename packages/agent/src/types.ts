@@ -658,7 +658,7 @@ export interface TeamDeclaration {
   policy?: Record<string, unknown>;
 }
 
-export type TeamSystemEvent = 'join' | 'leave' | 'rotate' | 'archive';
+export type TeamSystemEvent = 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override';
 
 /** 只追加团队日志的一行 */
 export interface TeamLogEntry {
@@ -807,6 +807,8 @@ export interface TeamStore extends TeamBinder {
   /** 配置声明：只补写缺失的 team.json，不创建 Agent、不覆盖已有字段 */
   seed(declarations: readonly TeamDeclaration[]): Promise<void>;
   get(teamId: string): TeamRecord | undefined;
+  /** 解析后的 policy；手改非法预算 warning + 忽略，返回 undefined / 去掉非法子结构 */
+  policy(teamId: string): TeamPolicy | undefined;
   list(): TeamRecord[];
   readLog(teamId: string, options?: { limit?: number }): Promise<TeamLogEntry[]>;
   /** 串行追加；失败抛出 */

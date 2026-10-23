@@ -57,7 +57,7 @@ export interface TeamMessageLike {
   content: string;
   ts: number;
   kind: 'post' | 'mention' | 'system' | 'reply';
-  system_event?: 'join' | 'leave' | 'rotate' | 'archive';
+  system_event?: 'join' | 'leave' | 'rotate' | 'archive' | 'budget_override';
   /** 0.19 S4 会话分组；旧日志缺省 */
   conversation_id?: string;
 }

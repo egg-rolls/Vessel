@@ -61,6 +61,7 @@ const SYSTEM_CONTENT: Record<TeamSystemEvent, string> = {
   leave: 'agent left team',
   archive: 'agent archived',
   rotate: 'agent rotated body',
+  budget_override: 'budget limit overridden',
 };
 
 const NOOP_LOGGER: Logger = {
