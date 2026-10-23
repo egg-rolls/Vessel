@@ -210,6 +210,8 @@ describe('createHubRegistry', () => {
       token_hash: 'hash',
       handoff_path: '/tmp/handoff',
       policy: 'allow',
+      body_history: [{ session_id: 'session-1', content: 'secret body' }],
+      reply: { content: 'secret body' },
     } as unknown as HubNodeRecord;
 
     registry.upsert(polluted);
@@ -231,6 +233,8 @@ describe('createHubRegistry', () => {
       'token_hash',
       'handoff_path',
       'policy',
+      'body_history',
+      'reply',
     ]) {
       expect(text).not.toContain(`"${key}"`);
     }

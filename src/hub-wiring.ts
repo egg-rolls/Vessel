@@ -131,6 +131,7 @@ function projectTeam(entry: unknown, lastActive: number | undefined): HubTeamMet
     name?: unknown;
     member_count?: unknown;
     agent_count?: unknown;
+    online_count?: unknown;
   };
   const teamId = readString(record.team_id);
   if (teamId === undefined) return undefined;
@@ -140,6 +141,10 @@ function projectTeam(entry: unknown, lastActive: number | undefined): HubTeamMet
     member_count: readCount(record.member_count),
     agent_count: readCount(record.agent_count),
   };
+  const online = readCount(record.online_count);
+  if (typeof record.online_count === 'number' && Number.isFinite(record.online_count)) {
+    team.online_count = online;
+  }
   if (lastActive !== undefined) team.last_active = lastActive;
   return team;
 }
@@ -201,10 +206,21 @@ export function createHubControl(options: CreateHubControlOptions): HubControlLi
       agents.push(projectAgent(member, teamId));
     }
     const teams = await listTeams();
-    const liveAgents = agents.filter((agent) => agent.presence === 'live').length;
+    const onlineByTeam = new Map<string, number>();
+    let liveAgents = 0;
+    for (const agent of agents) {
+      if (agent.presence !== 'live') continue;
+      liveAgents += 1;
+      if (agent.membership !== 'present') continue;
+      onlineByTeam.set(agent.team_id, (onlineByTeam.get(agent.team_id) ?? 0) + 1);
+    }
+    const teamsWithOnline = teams.map((team) => {
+      const online = onlineByTeam.get(team.team_id);
+      return online === undefined ? team : { ...team, online_count: online };
+    });
     return {
       counts: { teams: teams.length, agents: agents.length, live_agents: liveAgents },
-      teams: teams.slice(0, HUB_MAX_TEAMS),
+      teams: teamsWithOnline.slice(0, HUB_MAX_TEAMS),
       agents: agents.slice(0, HUB_MAX_AGENTS),
       truncated: teams.length > HUB_MAX_TEAMS || agents.length > HUB_MAX_AGENTS,
     };
@@ -282,7 +298,18 @@ export function createHubControl(options: CreateHubControlOptions): HubControlLi
           if (teamId !== undefined) {
             const ts = clock();
             lastActive.set(teamId, ts);
-            const pointer: HubPointerInput = { team_id: teamId, reason, ts };
+            // team.message 只带 message_id 作为 request_id；绝不带正文。
+            const requestId =
+              reason === 'team.message'
+                ? (readString((record as { message_id?: unknown }).message_id) ??
+                  readString((record as { request_id?: unknown }).request_id))
+                : undefined;
+            const pointer: HubPointerInput = {
+              team_id: teamId,
+              reason,
+              ts,
+              ...(requestId !== undefined ? { request_id: requestId } : {}),
+            };
             change.pointers = [pointer];
           }
           if (change.directoryChanged === true || change.pointers !== undefined) {

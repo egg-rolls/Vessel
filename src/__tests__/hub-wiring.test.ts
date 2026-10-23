@@ -171,9 +171,52 @@ describe('createHubControl.snapshot', () => {
     await flushMicrotasks();
     teamListener?.({ type: 'team.message', team_id: 't1' });
 
-    expect(changes).toEqual([{ pointers: [{ team_id: 't1', reason: 'team.message', ts: 1234 }] }]);
+    // message_id 作为 request_id；正文 / body_history 绝不进入指针。
+    teamListener?.({
+      type: 'team.message',
+      team_id: 't1',
+      message_id: 'm1',
+      content: 'secret-body',
+      body_history: [{ session_id: 's1', content: 'secret-body' }],
+    });
+    expect(changes.at(-1)).toEqual({
+      pointers: [{ team_id: 't1', reason: 'team.message', ts: 1234, request_id: 'm1' }],
+    });
+    expect(JSON.stringify(changes)).not.toContain('secret-body');
     const after = await hub.snapshot('tenant-a');
     expect(after.teams[0]?.last_active).toBe(1234);
+  });
+
+  it('passes through online_count and computes it from present + live agents', async () => {
+    const teamSource: HubTeamSourceLike = {
+      list: async () => [
+        {
+          team_id: 't1',
+          name: 'Team One',
+          member_count: 3,
+          agent_count: 2,
+          online_count: 7,
+        },
+        {
+          team_id: 't2',
+          name: 'Team Two',
+          member_count: 2,
+          agent_count: 1,
+          online_count: 5,
+        },
+      ],
+    };
+    const { service } = createFakeService([
+      { id: 'a1', session_id: 's1', team_id: 't1', membership: 'present', presence: 'live' },
+      { id: 'a2', session_id: 's2', team_id: 't1', membership: 'left', presence: 'live' },
+    ]);
+    const hub = createHubControl({ service, teamSource });
+
+    const snapshot = await hub.snapshot('tenant-a');
+    const t1 = snapshot.teams.find((team) => team.team_id === 't1');
+    const t2 = snapshot.teams.find((team) => team.team_id === 't2');
+    expect(t1?.online_count).toBe(1);
+    expect(t2?.online_count).toBe(5);
   });
 });
 

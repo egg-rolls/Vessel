@@ -302,10 +302,13 @@ describe('hub control WS', () => {
       name: 'Team One',
       member_count: 2,
       agent_count: 1,
+      online_count: 1,
       content: 'secret-content',
       session_id: 'secret-session',
       system_prompt: 'secret-prompt',
       event: { type: 'secret-event' },
+      body_history: [{ session_id: 'secret-session', content: 'secret-body-history' }],
+      reply: { content: 'secret-reply' },
     } as unknown as HubTeamMeta;
     const noisyAgent = {
       agent_id: 'agent-1',
@@ -317,6 +320,8 @@ describe('hub control WS', () => {
       session_id: 'secret-session',
       system_prompt: 'secret-prompt',
       event: { type: 'secret-event' },
+      body_history: [{ session_id: 'secret-session', content: 'secret-body-history' }],
+      reply: { content: 'secret-reply' },
     } as unknown as HubAgentMeta;
     const harness = makeHubControl({
       counts: { teams: 1, agents: 1, live_agents: 1 },
@@ -331,14 +336,21 @@ describe('hub control WS', () => {
     await client.next((frame) => frame.kind === 'hello');
     const snapshot = await client.next((frame) => frame.kind === 'snapshot');
     const encoded = JSON.stringify(snapshot);
-    for (const leak of ['secret-content', 'secret-session', 'secret-prompt', 'secret-event']) {
+    for (const leak of [
+      'secret-content',
+      'secret-session',
+      'secret-prompt',
+      'secret-event',
+      'secret-body-history',
+      'secret-reply',
+    ]) {
       expect(encoded.includes(leak)).toBe(false);
     }
     const team = (snapshot.teams as Frame[])[0];
     const agent = (snapshot.agents as Frame[])[0];
     if (team === undefined || agent === undefined) throw new Error('missing snapshot entries');
     expect(Object.keys(team).sort()).toEqual(
-      ['agent_count', 'member_count', 'name', 'team_id'].sort(),
+      ['agent_count', 'member_count', 'name', 'online_count', 'team_id'].sort(),
     );
     expect(Object.keys(agent).sort()).toEqual(
       ['agent_id', 'membership', 'name', 'presence', 'team_id'].sort(),

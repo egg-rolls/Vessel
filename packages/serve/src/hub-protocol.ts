@@ -128,6 +128,9 @@ export function parseHubTeamMeta(value: unknown): HubTeamMeta | null {
     name: value.name,
     member_count: Math.floor(value.member_count),
     agent_count: Math.floor(value.agent_count),
+    ...(finiteNumber(value.online_count) && value.online_count >= 0
+      ? { online_count: Math.floor(value.online_count) }
+      : {}),
     ...(finiteNumber(value.last_active) ? { last_active: value.last_active } : {}),
   };
 }

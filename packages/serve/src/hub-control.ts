@@ -28,6 +28,8 @@ export interface HubTeamMeta {
   name: string;
   member_count: number;
   agent_count: number;
+  /** present && live 的 Agent 数；缺失 = 节点未提供（S3 可选字段）。 */
+  online_count?: number;
   /** 该 team 最近一次指针的 ts；不是消息时间线。 */
   last_active?: number;
 }
