@@ -13,6 +13,7 @@ import {
 } from '../src/gateway/methods/interactions';
 import type { HubTeamScopeLike } from '../src/hub-control';
 import type { StoredInteraction } from '../src/interactions-store';
+import type { NodeTokenControlLike } from '../src/node-token-control';
 import {
   createRpcDispatcher,
   defineMethods,
@@ -407,5 +408,55 @@ describe('control token event broadcast', () => {
         100,
       ),
     ).rejects.toThrow();
+  });
+
+  it('closes a live WS when its token_id is revoked', async () => {
+    let onRevoke: ((tokenId: string) => void) | undefined;
+    const nodeTokens = {
+      authenticate: () => null,
+      hasTokens: () => true,
+      mintPairingTokens: async () => {
+        throw new Error('not used');
+      },
+      exchange: async () => {
+        throw new Error('not used');
+      },
+      revoke: async () => {
+        throw new Error('not used');
+      },
+      list: async () => [],
+      onRevoke(listener: (tokenId: string) => void) {
+        onRevoke = listener;
+        return () => {
+          onRevoke = undefined;
+        };
+      },
+    } satisfies NodeTokenControlLike;
+
+    const gateway = createGateway({
+      auth: {
+        configured: true,
+        authenticate(token) {
+          return token === 'revoke-token'
+            ? {
+                tenant_id: 'default',
+                role: 'write',
+                scope: 'control',
+                team_id: 'team-1',
+                token_id: 't1',
+              }
+            : null;
+        },
+      },
+      nodeTokens,
+    });
+    gateways.push(gateway);
+    const client = await TestWs.connect(gateway, { token: 'revoke-token' });
+    clients.push(client);
+    // 等 auth 处理完（hello）后再吊销；否则 principal 尚未写入 ws.data。
+    await client.next((frame) => frame.kind === 'hello');
+    if (onRevoke === undefined) throw new Error('onRevoke was not registered');
+    onRevoke('t1');
+    expect(await client.closed(2000)).toBe(4401);
   });
 });

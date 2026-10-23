@@ -251,8 +251,12 @@ export async function startHubRuntime(options: StartHubRuntimeOptions): Promise<
     now: clock,
   });
 
-  // 启动恢复：目录里的每条记录读取 view token；缺失时标 unauthorized。
+  // 启动恢复：上次的 healthy 不可信，先全部标 unreachable；再逐条读 view token。
   let directoryChanged = false;
+  for (const record of registry.list()) {
+    patchRecord(record.pairing_id, { status: 'unreachable', last_error: 'reconnecting' });
+    directoryChanged = true;
+  }
   for (const record of registry.list()) {
     let viewToken: string | undefined;
     try {

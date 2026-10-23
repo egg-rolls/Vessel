@@ -379,6 +379,25 @@ describe('hub control WS', () => {
     expect(harness.snapshotCount()).toBe(2);
   });
 
+  it('keeps snapshot revisions monotonic across reconnects', async () => {
+    const gateway = startTestGateway(makeHubControl().control);
+
+    const first = await HubWsClient.connect(gateway);
+    first.auth('view-token');
+    await first.next((frame) => frame.kind === 'hello');
+    const firstSnapshot = await first.next((frame) => frame.kind === 'snapshot');
+    first.close();
+    await first.closed(2000).catch(() => undefined);
+
+    const second = await HubWsClient.connect(gateway);
+    second.auth('view-token');
+    const secondHello = await second.next((frame) => frame.kind === 'hello');
+    const secondSnapshot = await second.next((frame) => frame.kind === 'snapshot');
+
+    expect(Number(secondHello.revision)).toBeGreaterThanOrEqual(Number(firstSnapshot.revision));
+    expect(Number(secondSnapshot.revision)).toBeGreaterThan(Number(firstSnapshot.revision));
+  });
+
   it('closes with 4400 on an unsupported protocol or dialer', async () => {
     const gateway = startTestGateway(makeHubControl().control);
 

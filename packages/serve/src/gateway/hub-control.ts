@@ -52,6 +52,8 @@ export interface HubControlConnectionState {
   revision: number;
   tenantId: string;
   hubId?: string;
+  /** 吊销时按该 id 关闭连接。 */
+  tokenId?: string;
   authTimer?: ReturnType<typeof setTimeout>;
   heartbeat?: ReturnType<typeof setInterval>;
   debounce?: ReturnType<typeof setTimeout>;
@@ -102,6 +104,8 @@ export interface HubControlRoute {
   pong(ws: HubControlWs): void;
   /** 关闭全部连接并退订（gateway stop 调用）。 */
   stop(): void;
+  /** 关闭持有该 token_id 的 hub control 连接；返回关闭数。 */
+  closeByTokenId(tokenId: string): number;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -142,6 +146,8 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
   const authTimeoutMs = deps.authTimeoutMs ?? DEFAULT_AUTH_TIMEOUT_MS;
   const pingIntervalMs = deps.pingIntervalMs ?? DEFAULT_PING_INTERVAL_MS;
   const clients = new Set<HubControlWs>();
+  /** 进程内单调；跨连接共享，重连后的首帧 snapshot 必须大于 hub 已见 revision。 */
+  let nextRevision = 0;
 
   function sendFrame(ws: HubControlWs, frame: unknown): boolean {
     const state = ws.data.hubControl;
@@ -244,7 +250,8 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
           return;
         }
         if (state.closed || !state.authed) return;
-        state.revision += 1;
+        nextRevision += 1;
+        state.revision = nextRevision;
         sendFrame(ws, snapshotFrame(input, state));
       })
       .catch(() => undefined);
@@ -361,6 +368,7 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
 
     state.authed = true;
     state.hubId = hubId;
+    state.tokenId = principal.token_id;
     state.tenantId = principal.tenant_id === '*' ? deps.defaultTenantId : principal.tenant_id;
     if (state.authTimer !== undefined) {
       clearTimeout(state.authTimer);
@@ -449,7 +457,7 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
         authed: false,
         alive: true,
         closed: false,
-        revision: 0,
+        revision: nextRevision,
         tenantId: deps.defaultTenantId,
         snapshotChain: Promise.resolve(),
       };
@@ -506,6 +514,21 @@ export function createHubControlRoute(deps: HubControlRouteDeps): HubControlRout
         }
       }
       clients.clear();
+    },
+
+    closeByTokenId(tokenId: string): number {
+      let closed = 0;
+      for (const ws of [...clients]) {
+        if (ws.data.hubControl?.tokenId !== tokenId) continue;
+        finish(ws);
+        try {
+          ws.close(4401, 'token revoked');
+        } catch {
+          // best-effort
+        }
+        closed += 1;
+      }
+      return closed;
     },
   };
 }

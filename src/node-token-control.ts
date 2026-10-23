@@ -138,7 +138,8 @@ export async function createNodeTokenControl(
     },
 
     async exchange(principal: Principal, input: ExchangeTokenInput): Promise<IssuedNodeToken> {
-      if (principal.scope !== 'exchange' && principal.scope !== 'admin') {
+      // 静态 admin token（serve.token / admin_token）没有 scope；与 handler 放行规则一致。
+      if (principal.scope !== 'exchange' && !isAdmin(principal)) {
         throw controlError('forbidden', 'exchange requires exchange or admin scope');
       }
       const tenant = principal.tenant_id;

@@ -136,6 +136,7 @@ function toPairingResponse(pair: PairingTokenPair): Record<string, unknown> | nu
 function pairingStatus(code: unknown): number {
   switch (code) {
     case 'pairing_not_found':
+      return 404;
     case 'pairing_invalid':
       return 401;
     case 'pairing_expired':

@@ -367,6 +367,11 @@ export interface Gateway {
    */
   reconfigure(options: GatewayReconfigureOptions): void;
   /**
+   * S5：关闭持有该 token_id 的 WS（事件连接 + hub control）；返回关闭数。
+   * HTTP 每请求重新鉴权，吊销后自然失效；该方法是 live WS 的收口。
+   */
+  closeByTokenId(tokenId: string): number;
+  /**
    * 进程内 dispatcher（与 asm `RpcDispatcher` 结构一致）。
    * asm 用它构造 `LocalRpcClient`；principal 缺省为本地 default/admin。
    */
@@ -680,6 +685,30 @@ export function startGateway(opts: GatewayOptions): Gateway {
 
   const sseClients = new Map<SseController, SseClientState>();
   const wsClients = new Set<Ws>();
+
+  /** S5：token 吊销时关闭 live WS；HTTP 请求不缓存 principal，无需处理。 */
+  function closeByTokenId(tokenId: string): number {
+    let closed = 0;
+    for (const ws of [...wsClients]) {
+      if (ws.data.principal?.token_id !== tokenId) continue;
+      try {
+        ws.close(4401, 'token revoked');
+      } catch {
+        // best-effort
+      }
+      wsClients.delete(ws);
+      closed += 1;
+    }
+    closed += hubControlRoute.closeByTokenId(tokenId);
+    return closed;
+  }
+
+  const unsubscribeTokenRevoke =
+    opts.nodeTokens !== undefined && typeof opts.nodeTokens.onRevoke === 'function'
+      ? opts.nodeTokens.onRevoke((tokenId) => {
+          closeByTokenId(tokenId);
+        })
+      : undefined;
 
   // 共享运行引擎（gateway 与 createLocalRpcDispatcher 同一套实现，A-5 §12.1）。
   // 0.18：engine 只拿 per-tenant 流；hub 负责把 tenant 事件扇入到这里。
@@ -3530,6 +3559,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
       reportStopError('unsubscribe engine events', error);
     }
 
+    unsubscribeTokenRevoke?.();
     closeWsClients();
     hubControlRoute.stop();
     closeSseClients(sseClients);
@@ -3556,6 +3586,7 @@ export function startGateway(opts: GatewayOptions): Gateway {
     tls: tlsMaterial !== undefined,
     attachTeam,
     reconfigure,
+    closeByTokenId,
     rpc: dispatcher.dispatch,
     manifest,
     stop() {

@@ -360,6 +360,18 @@ describe('createNodeTokenControl', () => {
     });
   });
 
+  it('allows a static admin principal without scope to exchange', async () => {
+    const { dataDir, control } = await setupControl();
+    await mintPair(control, dataDir);
+
+    // serve.token / admin_token 解析出的静态 admin 没有 scope。
+    const staticAdmin = { tenant_id: 'tenant-a', role: 'admin' } as const;
+    const issued = await control.exchange(staticAdmin, { team_id: 'team-1' });
+    expect(issued.scope).toBe('control');
+    expect(issued.tenant_id).toBe('tenant-a');
+    expect(issued.team_id).toBe('team-1');
+  });
+
   it('revoke is admin-only, idempotent and fires onRevoke once', async () => {
     const { dataDir, control, admin } = await setupControl();
     const pair = await mintPair(control, dataDir);
