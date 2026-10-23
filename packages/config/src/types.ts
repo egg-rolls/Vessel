@@ -379,6 +379,31 @@ export interface TeamConfigInput {
   policy?: Record<string, unknown>;
 }
 
+/**
+ * S7：跨节点 team ↔ team 的 peer 声明（全局配置）。
+ *
+ * - `node_id` / `team_id` 是对端身份；`localTeamId` 只用于入站映射。
+ * - `tokenEnv` 必填；明文 token 不接受。
+ * - `url` 在 `direction` 含 `out` 时必填；非回环必须 https。
+ */
+export interface FederationPeerConfig {
+  node_id: string;
+  team_id: string;
+  url?: string;
+  tokenEnv: string;
+  caFile?: string;
+  direction?: 'in' | 'out' | 'both';
+  localTeamId?: string;
+}
+
+/** S7：跨节点 federation（缺省关闭；不做自动发现）。 */
+export interface FederationConfig {
+  enabled?: boolean;
+  /** 节点间跨越次数上界；缺省 4，1..16 */
+  maxHops?: number;
+  peers?: FederationPeerConfig[];
+}
+
 /** 无人值守权限策略；缺省 hold。没有 allow-after。 */
 export interface TeamPermissionPolicy {
   unattended?: 'hold' | 'deny-after';
@@ -583,6 +608,8 @@ export interface VesselConfig {
   ui?: UiConfig;
   /** 0.19 S3：全局 Team 声明；tenant overlay 不允许覆盖 */
   teams?: TeamConfigInput[];
+  /** S7：跨节点 team ↔ team；全局配置，tenant overlay 不允许 */
+  federation?: FederationConfig;
 }
 
 /** 配置加载选项 */
