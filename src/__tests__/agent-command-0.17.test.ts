@@ -92,6 +92,17 @@ async function mockOwner(rotateResult: unknown = rotatedBody()): Promise<{
       if (body.method === 'agent.rotate') {
         return Response.json({ ok: true, result: rotateResult });
       }
+      if (body.method === 'agent.dispatch') {
+        return Response.json({
+          ok: true,
+          result: {
+            status: 'queued',
+            message_id: 'msg1',
+            resolved_to: 'm2',
+            resolution: 'forked',
+          },
+        });
+      }
       return Response.json(
         { ok: false, error: { code: 'agent_owner_unknown_method', message: 'unknown' } },
         { status: 404 },
@@ -160,6 +171,20 @@ describe('vessel agent CLI', () => {
     expect(result.stdout).toContain('m1');
     expect(result.stdout).toContain('msg1');
     expect(calls[0]?.params).toEqual({ to: 'm1', content: 'hello agent world' });
+  });
+
+  it('dispatch --allow-fork forwards allow_fork (a dropped override silently disables manual fork)', async () => {
+    const { dataDir, calls } = await mockOwner();
+    const result = await runAgentCommand(
+      parse(['agent', 'dispatch', 'm1', 'hello', '--allow-fork']),
+      {
+        dataDir,
+      },
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(calls[0]?.method).toBe('agent.dispatch');
+    expect(calls[0]?.params).toEqual({ to: 'm1', content: 'hello', allow_fork: true });
   });
 
   it('close --json prints the batch result', async () => {
