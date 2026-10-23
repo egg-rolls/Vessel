@@ -330,6 +330,17 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
       },
     ],
   },
+  {
+    token: 'federation',
+    registryName: 'federation',
+    subcommands: [
+      {
+        name: 'post',
+        flags: ['--json', '--from-team', '--conversation-id', '--help'],
+      },
+      { name: 'peers', flags: ['--json', '--help'] },
+    ],
+  },
   { token: 'errors', registryName: 'errors', flags: ['--json', '--limit'] },
   { token: '--help', registryName: null },
   { token: '--version', registryName: null },

@@ -40,6 +40,7 @@ import {
 import { listTools } from '../tools-list';
 import { tracePruneCommand } from '../trace-command';
 import { ui } from '../ui-style';
+import { runFederationCommand } from './federation';
 
 export interface CliCommandContext {
   /** `VESSEL_MOCK=1|true` */
@@ -79,6 +80,12 @@ export async function applyCommandLocale(): Promise<void> {
 async function resolveCommandDataDir(): Promise<string> {
   const { config } = await loadConfig();
   return resolveDataDir(config);
+}
+
+/** federation 等本地命令需要同时拿到 dataDir 与已解析配置 */
+async function resolveCommandContext(): Promise<{ dataDir: string; config: VesselConfig }> {
+  const { config } = await loadConfig();
+  return { dataDir: resolveDataDir(config), config };
 }
 
 /** `--tools`：列出当前配置下的工具（headless 口径，不需要 Key） */
@@ -315,6 +322,15 @@ export const cliCommands: readonly CliCommand[] = [
           ...(args.tenantArg !== null ? { tenantId: args.tenantArg } : {}),
         }),
       );
+    },
+  },
+  {
+    name: 'federation',
+    match: (args) => args.federationCommand !== null && args.federationCommand !== undefined,
+    run: async (args) => {
+      const command = args.federationCommand;
+      if (command === null || command === undefined) return 1;
+      return printCommandResult(await runFederationCommand(command, await resolveCommandContext()));
     },
   },
   {

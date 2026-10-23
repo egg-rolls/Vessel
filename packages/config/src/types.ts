@@ -379,6 +379,32 @@ export interface TeamConfigInput {
   policy?: Record<string, unknown>;
 }
 
+/**
+ * S7：跨节点 team ↔ team 的 peer 声明（全局配置）。
+ *
+ * - `nodeId` / `teamId` 是对端身份；`localTeamId` 只用于入站映射。
+ * - `tokenEnv` 必填；明文 token 不接受。
+ * - `url` 在 `direction` 含 `out` 时必填；非回环必须 https。
+ * - YAML 写 `node_id` / `team_id` / `local_team_id`，loader 递归转 camelCase。
+ */
+export interface FederationPeerConfig {
+  nodeId: string;
+  teamId: string;
+  url?: string;
+  tokenEnv: string;
+  caFile?: string;
+  direction?: 'in' | 'out' | 'both';
+  localTeamId?: string;
+}
+
+/** S7：跨节点 federation（缺省关闭；不做自动发现）。 */
+export interface FederationConfig {
+  enabled?: boolean;
+  /** 节点间跨越次数上界；缺省 4，1..16 */
+  maxHops?: number;
+  peers?: FederationPeerConfig[];
+}
+
 /** 无人值守权限策略；缺省 hold。没有 allow-after。 */
 export interface TeamPermissionPolicy {
   unattended?: 'hold' | 'deny-after';
@@ -405,12 +431,23 @@ export interface TeamBudgetPolicy {
   cycle?: TeamBudgetCyclePolicy;
 }
 
+/** S7.2：接收侧对跨节点入站报文的同意策略。 */
+export interface TeamFederationPolicy {
+  /**
+   * `log` = 只写 Team 日志（缺省）；`members` = 向 present 且非 private 成员
+   * fan-out 一次 mention 投递。缺省不写字段，消费方按 `log` 处理。
+   */
+  accept?: 'log' | 'members';
+}
+
 /** 解析后的 Team policy 视图；`policy` 顶层仍允许其它键。 */
 export interface TeamPolicy {
   permission?: TeamPermissionPolicy;
   budget?: TeamBudgetPolicy;
   /** 0.20：dispatch 在 resume 失败后是否允许 fork；缺省 false（手改别名 `allow_fork`） */
   allowFork?: boolean;
+  /** S7.2：跨节点接收策略；缺省 log。 */
+  federation?: TeamFederationPolicy;
   [key: string]: unknown;
 }
 
@@ -585,6 +622,8 @@ export interface VesselConfig {
   ui?: UiConfig;
   /** 0.19 S3：全局 Team 声明；tenant overlay 不允许覆盖 */
   teams?: TeamConfigInput[];
+  /** S7：跨节点 team ↔ team；全局配置，tenant overlay 不允许 */
+  federation?: FederationConfig;
 }
 
 /** 配置加载选项 */
