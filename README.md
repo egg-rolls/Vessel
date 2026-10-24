@@ -9,12 +9,12 @@
 
 Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（单 agent loop + 9 接口 + 2 插槽），TUI / CLI / Web / Gateway 是参考 harness 外壳。它不是给你 50 个工具的 Agent，而是一个**只给最必要工具、其余能力由模型自己组合出来**的 Agent。
 
-| | 传统 Agent 工具 | Vessel |
-|---|---------------|--------|
-| **能力从哪来** | 给你 50 个工具，自己挑 | 给最必要的三个能力工具，剩下的由模型用它们组合 |
-| **绑谁** | 绑一个 LLM 厂商 | 填 Key 即跑，Provider 无关，高频迭代切便宜模型 |
-| **范式** | 做一个场景 | 一个 while 循环兜住 Harness / Loop Engineering |
-| **核心** | 框架式大 core | 9 个接口、2 个插槽、1 个循环。MIT 开源，core 可嵌入任何应用 |
+|                | 传统 Agent 工具        | Vessel                                                      |
+| -------------- | ---------------------- | ----------------------------------------------------------- |
+| **能力从哪来** | 给你 50 个工具，自己挑 | 给最必要的三个能力工具，剩下的由模型用它们组合              |
+| **绑谁**       | 绑一个 LLM 厂商        | 填 Key 即跑，Provider 无关，高频迭代切便宜模型              |
+| **范式**       | 做一个场景             | 一个 while 循环兜住 Harness / Loop Engineering              |
+| **核心**       | 框架式大 core          | 9 个接口、2 个插槽、1 个循环。MIT 开源，core 可嵌入任何应用 |
 
 三层架构：`@vessel-agent/core`（运行时，可独立嵌入）+ `@vessel-agent/config`（声明式配置）+ `@vessel-agent/tui`（Claude-Code 式终端）。形态上参考 Claude Code，但 Provider 无关、范式无关、开源。
 
@@ -26,13 +26,9 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：核心保持极简（
 
 ## 状态
 
-**alpha。当前开发线 0.19（集成分支 `0.19-integration`），未发布。** 0.1 ~ 0.19 都只在分支上收口：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。0.17.0 把成员能力层拆成 `packages/agent`（AgentService 唯一实现，`new` / `send` / `close` / `list` + batch），REPL 作为 owner 暴露 loopback 控制端点并新增 `vessel agent new|send|close|list` CLI；内置 `agent` 工具是唯一模型 schema，`team_*` / `delegate_task` 工具、`team` / `delegate-task` 插件与 `team.*` / `delegate.*` 配置已删除，legacy `/v1/team/*` 与 remote / loopback transport 已于 0.22.1 删除。0.16.0 统一 agent 工具（Phase A）：模型工具面收敛到唯一 `agent`（`spawn` / `send` / `close`，`send` 入队即返回，不提供 `wait` / `inbox` / `status` / `cancel`），session 即成员并带完整状态机，成员回复经 `BeforeLlm` 注入父 turn，成员权限 `bridge` / `allow` / `deny` 弹到父窗口；`team.legacyTools` 默认保留一个版本，`delegate_task` 旧配置名映射为 `agent`，canonical RPC 仍为 44。0.15.1 是 Web 性能补丁：移除全屏遮罩与应用栏的 `backdrop-filter` 模糊，遮罩改为更实的半透明底色、应用栏改为不透明，避免 Edge / Chromium 在滚动和流式文本时掉帧。0.15.0 补透明化与多实例安全：core 发布 `context.compacted`（`auto|overflow|manual`）、`agent.limit.warning`（80%，每 run 每 key 一次）与 `agent.queue.entered/left`，`AgentSnapshot` / `SchedulerSnapshot` 补队列等待原因与上下文用量，Self Card（≤400 tokens）注入 systemPrompt；delegate 事件补 `tool_call_id` / `parent_session_id` / `parent_delegate_id` / `delegate_path` 与 `result_ref`，孙 agent 经 `delegate.allow_nested`（默认 false）/ `delegate.max_descendants`（默认 16）显式开启；`edit` 纳入路径边界，`bash` 命令文本同时匹配自定义 `deny_paths`；tenant 双层锁（file 默认 shared、sqlite / `--exclusive` 走 `.lock`）与 session/run 写锁（`conflict` + `session_locked`）让同 dataDir 多实例不再互相覆盖、同 session 不并发写；canonical RPC 新增 `agents.tree` / `tasks.list` / `tasks.get` / `config.set`（40 → 44），Web 增加 Diagnostics / Tasks / Display 页，TUI 增加 `/agents tree`、`/status` 队列与预警、`/settings errorLevel|verbosity`。0.14.4 硬化上下文压缩质量：保留区改按 `context.maxTokens × 0.3` 的 token 预算从最新消息向前累计，同时受 `maxMessages` 条数上限约束，token 或条数任一超限都触发摘要，保留边界不切断 `assistant(tool_calls)` / `tool` 配对；摘要 transcript 渲染 `[tool_call:<name>] <arguments>` 与 `[tool:<id>] <content>`、单条 12,000 字符截断、按 `min(48_000, max(2_000, floor(maxTokens / 8)))` 分块，块失败只影响该块。0.14.3 让限额命中可见：使用量上限命中时发布一次 `limit.blocked`，`run.failed` 附结构化 `limit_blocked` 与完整 `details`；默认 `limits.inputTokensLimit` 提高到 1,000,000、`termination.maxIterations` 提高到 50；provider 非 2xx 改抛 `ProviderHttpError`（`status` / `body` / `retryAfterMs`），重试在 429 读 `Retry-After`、402 不重试。0.14.2 修复 thinking 模型压缩后请求 400（压缩摘要改为 `role: 'system'`，Anthropic 合并全部 system 消息）与 bash 命令文本绕过内置凭据 denylist（best-effort，不是沙箱）。0.14.1 已实现结构化错误 envelope、可见性配置、`vessel status|agents|errors` 只读控制面、gateway 多实例 A、Host 对等与可序列化快照、`ToolDefinition.display`、gateway/serve 的 `ask_user` 注册，以及 Web 的 Codex 式工具卡 / 思考气泡 / 内联提问与三级可见性；0.14.0 不单独 bump，内容合并记录在 0.14.1。0.13 的双状态栏与权限生命周期继续有效。本文只写已合入当前分支的行为。
+**alpha。** 1.0 前不发布：没有 tag、没有 `npm publish`、没有合并 `main`，也没有独立二进制。当前版本、已合入能力与下一步见 [docs/versions/CURRENT.md](docs/versions/CURRENT.md)，历史版本索引见 [docs/versions/INDEX.md](docs/versions/INDEX.md)。本文只写已合入当前分支的行为。
 
-**2026-10-22：workflow 插件与产品面已移除**（[ADR-090](docs/adr/ADR-090-remove-workflow-plugin.md)，取代 ADR-042）：`plugins/workflow/**`、`workflow.*` RPC、`workflow` 配置、CLI `vessel workflow`、TUI `/workflows`、Web workflow 页面全部删除；canonical RPC 45 → 40。历史 ADR 与 CHANGELOG 旧条目保留。
-
-**0.19 状态（当前开发线）**：Agent / Body 内核 S1（节点身份、`presence`、`dispatch`）、S2（rotate + epoch fencing）、S3（Team：workspace 分组、只写日志、结构化 `@`、canonical `teams.*`）、S5（Hub：目录、配对、scoped token、只推指针）、S5.1（node → hub 出站 / NAT：join code、node token、`/v1/hub/node-control`）与 S6（Web Team 群聊）已在分支上实现，未随版本发布。canonical RPC 为 **47**（workflow 移除后 40；S3 +4、S5 +3）。**未实现**：fork、S4 权限 only-human / budget、S7 跨节点 A2A。
-
-**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`）；当前开发线为 `0.19`，manifest 版本由 1 在收口时统一写入，不在文档里维护副本。
+**包结构**（bun workspaces monorepo）：`@vessel-agent/core`（运行时，零 UI 依赖、可独立嵌入）、`@vessel-agent/agent`（AgentService 成员能力层）、`@vessel-agent/config`、`@vessel-agent/permission`、`@vessel-agent/tui`、`@vessel-agent/serve`，`plugins/` 下的 MCP / evals / 飞书插件，以及 `apps/web` 浏览器控制台。`@vessel-agent/core` 的 `dependencies` 保持为空。版本号以根 `package.json` 为唯一来源（`vessel --version`），文档不维护副本。
 
 **语言**：默认 zh-CN。`VESSEL_LANG=en`（或 `ui.language: en`）切换英文；优先级 `VESSEL_LANG > ui.language > LANG > LC_ALL > zh-CN`。TUI 内可直接 `/settings language <zh-CN|en>` 切换并写回用户配置（`VESSEL_LANG` 仍最高）；TUI 界面文案走 `t()`（`packages/tui/src/i18n/`），CLI 的 `--help` / 一次性命令错误 / 默认空状态 / demo banner 也跟随同一 locale（`src/i18n/`，zh-CN / en 各 85 个 key）；技术词、命令名、错误码与命令的数据输出不翻译。Web 控制台的壳层与 Settings 已支持 zh-CN / en（语言选择在 Settings → Appearance，存 `localStorage['vessel.ui.language']`，初始跟随 `navigator.language`）；未覆盖的功能页回退中文。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 
@@ -48,7 +44,7 @@ bun link            # 把根包的 bin 注册为全局 `vessel`
 vessel --version    # 读根 package.json
 ```
 
-之后本文统一用 `vessel`。不想全局链接时，在仓库根用 `bun run src/cli.ts`，参数完全相同。发布名为 `vessel-agent`（bin 仍是 `vessel`），16 个可发布子包使用 `@vessel-agent/*`；打包形态与安装解析 smoke 已在 0.10 / 0.11 实现，但**尚未发布**。
+之后本文统一用 `vessel`。不想全局链接时，在仓库根用 `bun run src/cli.ts`，参数完全相同。发布名为 `vessel-agent`（bin 仍是 `vessel`），16 个可发布子包使用 `@vessel-agent/*`；打包形态与安装解析 smoke 已实现，但**尚未发布**。
 
 ### ① 先跑起来看看（**不需要 API Key**）
 
@@ -125,7 +121,6 @@ bun test                             # 在源码仓库内跑测试
 ```
 
 REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools` `/plugins` `/mcp` `/runs` `/metrics` `/feishu` `/setup` `/settings` `/reload` `/clear` `/exit`）。
-
 - `/clear` 清屏，**不清空会话上下文**；需要新会话用 `/new`。
 - `/settings language <zh-CN|en>` 切换界面语言并写回用户配置 `ui.language`，立即重渲染；`VESSEL_LANG` 显式设置时仍以环境变量为准。
 - `/reload` 重新加载配置文件并刷新 provider 信息；**不重扫插件目录**，新增插件需重启进程。
@@ -138,8 +133,7 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 **语言空间是唯一的执行面。** Vessel 做两件事：把世界折成语言（system prompt + 消息 + 工具 schema），把语言折回世界（解析 tool_calls → 执行 → 结果折回消息）。
 
-> 0.2 的 Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）已实现、未随版本发布，见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14；本小节只描述**当前已实现**的 0.1 行为。
-
+> Kernel / Modules 分层（`Contracts ← Kernel ← Modules ← SDK ← Shells`）见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) §14；本小节只描述**当前已实现**的单 agent 行为。
 - **9 个接口 + 1 个循环 + 2 个插槽**：`LLMProvider` / `ContextManager` / `EventStream` / `ToolDefinition` / `SessionBackend` / `LimitChecker` / `Guardrail` / `Hook` / `Plugin` + `PluginHost`。两个插槽是**工具**（`PluginHost` 是唯一的工具注册表）与**知识**（`ContextManager`）。
 - **core 不认识业务概念**：不认 skills、不认记忆、不认资产。任何要进语言空间的文本都经 `RunOptions.messages` 注入，core 只负责按序放进消息数组。
 
@@ -147,32 +141,31 @@ REPL 内用 `/help` 看全部 slash 命令（`/resume` `/new` `/history` `/tools
 
 ## 工具集
 
-默认运行期 **4 个**工具：三个来自 `plugins/tools/basic-tools` 的**能力工具**，加上 `packages/agent` 的内置 `agent`（0.24 起默认注册；显式 `agent.enabled: false` 关闭）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已在 0.17 删除。
+默认运行期 **4 个**工具：三个来自 `plugins/tools/basic-tools` 的**能力工具**，加上 `packages/agent` 的内置 `agent`（默认注册；显式 `agent.enabled: false` 关闭）。`ask_user` 在交互 REPL（TTY）或 gateway/serve 注册，`--run` / headless / 管道不注册（`ui.askUser: false` 可关闭）。`team_*` / `delegate_task` 已删除。
 
 **能力工具（3）—— 模型干活就靠这三个：**
 
-| 工具 | 干什么 |
-|---|---|
+| 工具   | 干什么                                                                    |
+| ------ | ------------------------------------------------------------------------- |
 | `bash` | 执行命令。grep / cat / ls / python / mkdir / curl / git —— 一切命令行操作 |
-| `read` | 读文件，带行号，支持 `offset` / `limit` |
-| `edit` | 精确字符串替换写文件，`old_string` 必须唯一匹配 |
+| `read` | 读文件，带行号，支持 `offset` / `limit`                                   |
+| `edit` | 精确字符串替换写文件，`old_string` 必须唯一匹配                           |
 
 **接缝工具 / 可选工具——装配层注册，不是能力：**
 
-| 工具 | 何时注册 | 干什么 |
-|---|---|---|
-| `agent` | `agent.enabled: true` | 成员生命周期：owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，不能 `new` / `close`）；`send` 走统一 dispatch，入队即返回，不等待结果；`post` 只写 Team 日志，不通知任何 Agent |
-| `ask_user` | 交互 REPL（TTY）或 gateway/serve；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 | 向用户提问，经事件流暂停等待回答 |
-| `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功 | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化 |
+| 工具                    | 何时注册                                                                                      | 干什么                                                                                                                                                                                                                                                        |
+| ----------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent`                 | 默认注册；`agent.enabled: false` 关闭                                                         | 成员生命周期：owner 动作 `new` / `send` / `close` / `list` / `rotate` / `post`（支持 batch；成员侧只暴露 `rotate` / `post` / `send` / `list`，不能 `new` / `close`）；`send` 走统一 dispatch，入队即返回，不等待结果；`post` 只写 Team 日志，不通知任何 Agent |
+| `ask_user`              | 交互 REPL（TTY）或 gateway/serve；`--run` / headless / 管道不注册；`ui.askUser: false` 可关闭 | 向用户提问，经事件流暂停等待回答                                                                                                                                                                                                                              |
+| `mcp__<server>__<tool>` | 配置 `mcp_servers` 且 server 连接成功                                                         | 外部 MCP 工具经 `PluginHost` 注册，数量随 server 动态变化                                                                                                                                                                                                     |
 
-口径：默认 **3**；`agent.enabled: true` 为 **4**；交互 REPL 或 gateway/serve 默认 **4**（+`ask_user`）；交互 + `agent.enabled: true` 为 **5**；配置 MCP 后为 **3 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
+口径：默认 **4**（3 个能力工具 + `agent`）；显式 `agent.enabled: false` 为 **3**；交互 REPL 或 gateway/serve 默认 **5**（+`ask_user`）；交互 + `agent.enabled: false` 为 **4**；配置 MCP 后为 **3 + N 个 MCP 工具**。`--tools` 一次性命令按 headless 口径列出，并注明 `ask_user (interactive REPL / gateway only)`；**`--tools` 不连接 MCP，因此不列出 MCP 工具**——需要实际运行/连接后，在 REPL 用 `/mcp` 或经 gateway `GET /v1/mcp/servers` 查看。
 
 **为什么这么少？** 这是刻意的。没有 `grep` 工具、没有 file-ops——**能被 bash 组合出来的能力，就不再单开一个工具**。MCP 不是能力工具，而是把外部工具接进 `PluginHost` 的插件（ADR-039）。工具越多，模型的选错空间越大、核心越难保持小。真正的通用原语只有一个：执行命令。其余都是它的特化。
 
 ## Skills 怎么用
 
 **skills 就是文件，不是一条加载通道。** harness 不扫描、不解析、不注入 skills —— 它只认消息。
-
 - REPL 输入里的 `@路径` 会在发送前被展开：文件内容作为一条注入消息进本轮请求，界面上显示为引用块。用户原文保持不变。
 - 技能就是 markdown 文件，放两个位置：仓库 [`skills/`](skills/)（**项目级**，随仓库提交、团队共享）与 `~/.vessel/skills/`（**用户级**，跨项目复用）。这是**约定**——代码里没有任何地方硬编码这两个路径。
 - 引用方式：`@skills/code-writing.md`。
@@ -199,7 +192,7 @@ mcp_servers:
     transport: http
     url: https://example.com/mcp
     headers:
-      Authorization_env: MCP_AUTH_TOKEN   # 读环境变量 MCP_AUTH_TOKEN 作为 Authorization 头
+      Authorization_env: MCP_AUTH_TOKEN # 读环境变量 MCP_AUTH_TOKEN 作为 Authorization 头
 ```
 
 - **配置层不做 `${VAR}` 字符串插值**。密钥 / 头统一用 `<NAME>_env`（`env` 与 `headers` 都支持）：`<NAME>_env: ENV_VAR` 解析为 `<NAME>`，值取 `ENV_VAR`，`_env` 键不会进入最终配置；同层显式 `<NAME>` 优先。需要 `Bearer` 前缀时，把完整值（`Bearer <token>`）放进环境变量。
@@ -215,7 +208,7 @@ mcp_servers:
 ```yaml
 durable:
   enabled: true
-  backend: file          # file | memory
+  backend: file # file | memory
   path: ~/.vessel/runs
   checkpoint_every: iteration
 ```
@@ -278,9 +271,9 @@ vessel eval smoke --allow-network   # 还需 evals.allowNetwork: true
 ```yaml
 feishu:
   enabled: true
-  app_id: ""                 # 或 VESSEL_FEISHU_APP_ID
-  app_secret: ""             # 或 VESSEL_FEISHU_APP_SECRET
-  domain: feishu             # feishu | lark
+  app_id: "" # 或 VESSEL_FEISHU_APP_ID
+  app_secret: "" # 或 VESSEL_FEISHU_APP_SECRET
+  domain: feishu # feishu | lark
   allowed_chat_ids: []
   session_prefix: feishu
   reply_timeout_ms: 300000
@@ -302,8 +295,8 @@ vessel --serve --feishu    # gateway + 渠道
 
 ```yaml
 observability:
-  event_history: 1000        # 缺省 1000；显式 0 = 不限制；>0 = 环形缓冲
-  metrics: true              # 块存在时才注入 metrics
+  event_history: 1000 # 缺省 1000；显式 0 = 不限制；>0 = 环形缓冲
+  metrics: true # 块存在时才注入 metrics
 ```
 
 - `MetricsCollector` 聚合 `runs` / `tool_calls` / `llm` / `duration_ms`；进程内、不持久化。
@@ -317,13 +310,13 @@ observability:
 - 默认数据根 `~/.vessel/data`（`VESSEL_DATA_DIR` 覆盖）；每个 tenant 在 `tenants/<id>/` 下独立存放 `sessions/`、`runs/`、`events/` 与 `tenant.json`。gateway 的权限交互记录写在数据根下的 `interactions-<tenant>.json`（`0600` 原子写，含 `pending` / `answered` / `orphaned`）。
 - 默认 `session.backend: file`；sqlite 仍可用。旧 `.vessel/sessions.db` 不会自动迁移：先跑 `vessel migrate --from sqlite --to file-v2`（默认 dry-run），确认后加 `--apply`。详见 [MIGRATION.md](docs/operations/MIGRATION.md)。
 - trace 默认开启 `full`，按 30 天 / 1000 runs / 1 GiB prune；`metadata` 只留计数与状态。详见 [TRACE.md](docs/operations/TRACE.md)。
-- tenant 解析：`--tenant` > `VESSEL_TENANT` > `tenant.default` > `default`；gateway 用 `serve.tokens` 发放 tenant token，`serve.token` 仅 0.4 兼容。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。
+- tenant 解析：`--tenant` > `VESSEL_TENANT` > `tenant.default` > `default`；gateway 用 `serve.tokens` 发放 tenant token，`serve.token` 仅作旧配置兼容。隔离覆盖存储、配置、工具、权限、quota、trace 与 RPC。
 - 配置：`config path|init|show`；优先级 `CLI > env > tenant overlay > project > user > default`。详见 [CONFIG.md](docs/operations/CONFIG.md)。
 - run checkpoint / eval 报告 / 飞书回复不做脱敏；redactor 只降低泄漏面。
 
 ## Web 控制台
 
-`--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。0.12 起常驻部署统一走 `vessel gateway`；`--serve` 保留为前台别名。
+`--serve` 启动本地 gateway（默认端口 8642），浏览器控制台通过 `vessel.gateway/1` 连接。常驻部署统一走 `vessel gateway`；`--serve` 保留为前台别名。
 
 ```bash
 VESSEL_MOCK=1 vessel --serve 8642   # 终端打印 token（前台）
@@ -379,18 +372,18 @@ transport:
 - **token**：优先级 `--connect-token` > env（`VESSEL_CONNECT_TOKEN` 或 `connect.token_env`）> `connect.token`。token 不进 WS URL；WS 首帧发送 `{ kind: 'auth', token, since? }`。
 - **CA**：私有 CA / 自签证书用 `--ca <pem>` 或 `connect.ca_file` 显式提供；未提供时用运行时默认信任库。浏览器不能按连接指定 CA，必须把 CA 装进系统 / 浏览器信任库。
 - **服务端**：`serve.allowed_origins` 或重复 `--allowed-origin` 配置独立前端 Origin；只接受显式 http(s) origin，禁止 `*`、path、query。allowlist 命中时返回对应 CORS 头并带 `Vary: Origin`；CSP 的 `connect-src` 由 Host 与 allowlist 动态生成。
-- **跨节点 team**：legacy `/v1/team/*` / `RemoteTransport` / `NodeRegistry` / `LoopbackTransport` 已于 0.22.1 删除；跨节点投递只走 federation（`POST /v1/federation/messages`）。0.19 S3 的 canonical `teams.*` 是本地 Team。
-- **Hub 目录（0.19 S5 / S5.1）**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。S5 支持 hub → node 拨号；S5.1 支持 node → hub 出站（NAT）：hub `vessel hub join-code`、节点 `vessel hub join <hub-url> --code`。跨节点 A2A（S7）未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
+- **跨节点 team**：legacy `/v1/team/*` / `RemoteTransport` / `NodeRegistry` / `LoopbackTransport` 已删除；跨节点投递只走 federation（`POST /v1/federation/messages`）。canonical `teams.*` 是本地 Team。
+- **Hub 目录**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。支持 hub → node 拨号与 node → hub 出站（NAT）：hub `vessel hub join-code`、节点 `vessel hub join <hub-url> --code`。跨节点 A2A 未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
 - **tenant 边界**：远端 tenant 由 token principal 派生；admin 可用 `--tenant` 覆盖，非 admin 指定其它 tenant 返回 `forbidden` / WS 4403。
 - **安全收紧**：durable 端点按 principal 的 tenant 过滤并校验角色。
-- **已知限制**：跨节点 agent transport 已于 0.22.1 删除，跨节点投递只有 federation；没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable。
+- **已知限制**：跨节点 agent transport 已删除，跨节点投递只有 federation；没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable。
 - 完整证书、两机配置、独立前端部署与故障排查见 [docs/operations/REMOTE.md](docs/operations/REMOTE.md)。
 
 ## 发布与更新
 
-- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。0.1 ~ 0.19 均未发布，1.0 前不发布。
-- 当前 0.19 线只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
-- npm 分发名为 **`vessel-agent`**（bin 仍是 `vessel`），16 个可发布子包使用 **`@vessel-agent/*`** scope；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）。子包带 `files: ["src"]` 与 `license` / `repository` / `engines`，根包排除 `node_modules` 并包含 `apps/web/dist`；tarball 安装 smoke 已在 0.10 实现，0.11 起按 `@vessel-agent/*` 覆盖安装（POSIX / Node 22，Windows 跳过）。
+- 发布由 tag `v*` 触发、不由分支名触发；流程见 [docs/operations/RELEASE.md](docs/operations/RELEASE.md)。1.0 前不发布：当前所有版本都只在分支上收口。
+- 当前版本只做发布干跑：`bun run scripts/release-dry-run.ts`，并跑安装解析 smoke：`bun run scripts/smoke-install.ts`。**不 tag、不 push tag、不 `npm publish`、不合并 `main`**。
+- npm 分发名为 **`vessel-agent`**（bin 仍是 `vessel`），16 个可发布子包使用 **`@vessel-agent/*`** scope；**尚未发布**，因此 `npm i -g vessel-agent`、`npx vessel`、`npx vessel-agent` 当前都不可用。发布前请用 `bun link`（见快速开始）。子包带 `files: ["src"]` 与 `license` / `repository` / `engines`，根包排除 `node_modules` 并包含 `apps/web/dist`；tarball 安装 smoke 按 `@vessel-agent/*` 覆盖安装（POSIX / Node 22，Windows 跳过）。
 - **不提供独立二进制**（ADR-006）。
 - `vessel update --check` 读取 Release 的 `latest.json`，只提示版本与安装命令；当前仓库不生成 `latest.json`。
 - `vessel update`（不带 `--check`）按安装形态自更新：npm 全局 `npm i -g vessel-agent@latest`，bun 全局 `bun add -g vessel-agent@latest`；源码 / 开发模式只提示 `git pull && bun install`，不改工作区。默认确认，`--yes` 跳过；非 TTY 且无 `--yes` 直接失败。
@@ -400,31 +393,30 @@ transport:
 ## 延后项
 
 以下能力**尚未实现**，明确不在本期范围：
-
-- **远程 mesh / 节点自动发现 / mTLS** —— 未实现；0.6 只支持静态节点表 + Bearer token + TLS，不做 mDNS / 服务网格 / 客户端证书。
+- **远程 mesh / 节点自动发现 / mTLS** —— 未实现；只支持静态节点表 + Bearer token + TLS，不做 mDNS / 服务网格 / 客户端证书。
 - **飞书富媒体 / 卡片 / 多机器人 / OAuth** —— 未实现；只做文本、单 chat 单 session。
 - **微信（公众号 / 企业微信）** —— **不做**；个人微信无官方 API。
 - **per-tenant 跨节点 team** —— 未实现；跨节点 team 控制面为 default/admin-only。
-- **npm 分发** —— 根包名 `vessel-agent`，子包 scope `@vessel-agent/*`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已在 0.10 实现、0.11 按新 scope 验证，但发布决定在 1。
-- **独立二进制 / 二进制自替换更新** —— 不做（ADR-006 继续有效）；0.12 的 `vessel update` 只对 npm / bun 全局安装执行包级更新，不下载或替换二进制，也不改源码工作区。
+- **npm 分发** —— 根包名 `vessel-agent`，子包 scope `@vessel-agent/*`，尚未 publish；未发布前 `npx vessel` / `npm i -g vessel-agent` 不可用。打包与安装 smoke 已按新 scope 验证，但发布决定在 1。
+- **独立二进制 / 二进制自替换更新** —— 不做（ADR-006 继续有效）；`vessel update` 只对 npm / bun 全局安装执行包级更新，不下载或替换二进制，也不改源码工作区。
 - **Web 全量本地化** —— Web 壳层（导航 / 面包屑 / Settings / Appearance / 通用按钮）已支持 zh-CN / en；功能页未覆盖文案回退中文，命令数据输出保持英文，不能宣称全量本地化。
-- **版本发布** —— 0.1 ~ 0.19 均未发布；发布决定在 1。
+- **版本发布** —— 所有版本均未发布；发布决定在 1。
 
 ## 文档索引
 
-| 文档 | 作用 | 给谁看 |
-|------|------|--------|
-| [README.md](README.md) | 是什么 / 怎么跑 / 延后项 | 所有人，先看 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术架构：分层、循环、两个插槽、扩展模型、接口签名、事件名 | 开发者 / AI |
-| [docs/adr/README.md](docs/adr/README.md) | 架构决策记录索引：每个关键选择的「为什么」（一条一文件，只追加） | 开发者 / AI |
-| [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md) | 文件放哪里、路径归属、分支与发布规则 | 贡献者 / AI |
-| [docs/operations/RELEASE.md](docs/operations/RELEASE.md) | 怎么发版 | 维护者 |
-| [docs/operations/CI-CD.md](docs/operations/CI-CD.md) | CI / CD / 自动更新怎么跑 | 维护者 |
-| [docs/operations/CONFIG.md](docs/operations/CONFIG.md) | 配置位置、优先级、tenant overlay 与密钥 | 部署者 / 维护者 |
-| [docs/operations/MIGRATION.md](docs/operations/MIGRATION.md) | sqlite / file-v1 → file-v2 迁移 | 升级用户 |
-| [docs/operations/TRACE.md](docs/operations/TRACE.md) | trace 留存、脱敏与重放 | 部署者 / 维护者 |
-| [docs/operations/REMOTE.md](docs/operations/REMOTE.md) | 跨机器远程：证书 / CA、两机配置、独立前端、故障排查 | 部署者 / 维护者 |
-| [AGENTS.md](AGENTS.md) | AI 行为约定：风格、硬规矩、怎么跑、红线 | AI 代理必读 |
+| 文档                                                         | 作用                                                             | 给谁看          |
+| ------------------------------------------------------------ | ---------------------------------------------------------------- | --------------- |
+| [README.md](README.md)                                       | 是什么 / 怎么跑 / 延后项                                         | 所有人，先看    |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)                 | 技术架构：分层、循环、两个插槽、扩展模型、接口签名、事件名       | 开发者 / AI     |
+| [docs/adr/README.md](docs/adr/README.md)                     | 架构决策记录索引：每个关键选择的「为什么」（一条一文件，只追加） | 开发者 / AI     |
+| [docs/FILE-MANAGEMENT.md](docs/FILE-MANAGEMENT.md)           | 文件放哪里、路径归属、分支与发布规则                             | 贡献者 / AI     |
+| [docs/operations/RELEASE.md](docs/operations/RELEASE.md)     | 怎么发版                                                         | 维护者          |
+| [docs/operations/CI-CD.md](docs/operations/CI-CD.md)         | CI / CD / 自动更新怎么跑                                         | 维护者          |
+| [docs/operations/CONFIG.md](docs/operations/CONFIG.md)       | 配置位置、优先级、tenant overlay 与密钥                          | 部署者 / 维护者 |
+| [docs/operations/MIGRATION.md](docs/operations/MIGRATION.md) | sqlite / file-v1 → file-v2 迁移                                  | 升级用户        |
+| [docs/operations/TRACE.md](docs/operations/TRACE.md)         | trace 留存、脱敏与重放                                           | 部署者 / 维护者 |
+| [docs/operations/REMOTE.md](docs/operations/REMOTE.md)       | 跨机器远程：证书 / CA、两机配置、独立前端、故障排查              | 部署者 / 维护者 |
+| [AGENTS.md](AGENTS.md)                                       | AI 行为约定：风格、硬规矩、怎么跑、红线                          | AI 代理必读     |
 
 ## 贡献
 

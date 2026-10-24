@@ -1,6 +1,8 @@
 # 文件管理守则
 
 > 本文件规定 Vessel 工作区内「什么内容放哪里、谁能改、怎样进入共享侧」。
+> 文档分类、O(1) 当前态 / O(n) 历史记录、索引要求、临时产物保质期与代码注释规则见
+> [DOC-MANAGEMENT.md](DOC-MANAGEMENT.md)；本文只管路径、归属、分支与发布。
 > `AGENTS.md` 只引用本文件，不重复细节。任何新文件落盘前，先按本守则选位置。
 
 ## 0. 一句话原则
@@ -11,13 +13,13 @@
 
 ## 1. 两侧边界
 
-| | 个人侧（personal） | 共享侧（shared） |
-|---|---|---|
-| 物理路径 | 工作区根（本仓库的上一级，非 git） | 本仓库根（`Vessel/`） |
-| 是否 git 仓库 | 否 | 是 |
-| 放什么 | handoff / plan / report / decision / worktree / 临时文件 / 私有笔记 | 源码 / 测试 / 公开文档 / CI / 发布配置 |
-| 谁能写 | 1 与各 N 均可 | 各 N 只能写自己独占路径，经 1 合并 |
-| 审查 | 不需要 | 必须：三件套 + 路径归属 + 内容审查 |
+|               | 个人侧（personal）                                                  | 共享侧（shared）                       |
+| ------------- | ------------------------------------------------------------------- | -------------------------------------- |
+| 物理路径      | 工作区根（本仓库的上一级，非 git）                                  | 本仓库根（`Vessel/`）                  |
+| 是否 git 仓库 | 否                                                                  | 是                                     |
+| 放什么        | handoff / plan / report / decision / worktree / 临时文件 / 私有笔记 | 源码 / 测试 / 公开文档 / CI / 发布配置 |
+| 谁能写        | 1 与各 N 均可                                                       | 各 N 只能写自己独占路径，经 1 合并     |
+| 审查          | 不需要                                                              | 必须：三件套 + 路径归属 + 内容审查     |
 
 > 判断口诀：**「删掉它会不会影响别人使用或理解项目？」**
 > 会 → 共享侧；不会 → 个人侧。
@@ -55,7 +57,6 @@
 ```
 
 约定：
-
 - **一个角色一个 worktree**，worktree 路径固定为 `worktrees/<version>-<role>`，分支同名。
 - **个人产物永不提交到共享侧**。共享侧 `.gitignore` 已忽略 `.claude/`、`.vessel/`、`.codegraph/`、`.env`、`node_modules/`、`dist/`。
 - 临时脚本放个人侧 `docs/tmp/`（需要时自建），不要放共享侧 `scripts/`。
@@ -70,7 +71,7 @@ Vessel\                                    # 共享侧（git）
 ├── CLAUDE.md                              # 仅一行：@AGENTS.md
 ├── CONTRIBUTING.md                        # 贡献流程
 ├── SECURITY.md / CODE_OF_CONDUCT.md       # 社区规范
-├── CHANGELOG.md                           # 版本变更
+├── CHANGELOG.md                           # 当前版本变更（历史在 docs/versions/）
 ├── LICENSE
 ├── docs\
 │   ├── ARCHITECTURE.md                    # 架构：怎么做的
@@ -79,6 +80,12 @@ Vessel\                                    # 共享侧（git）
 │   │   ├── README.md                      # 索引 + 编写约定
 │   │   └── ADR-<NNN>-<slug>.md            # ADR-001 ... ADR-045+
 │   ├── FILE-MANAGEMENT.md                 # 本文件：文件放哪里
+│   ├── DOC-MANAGEMENT.md                  # 文档分类、生命周期与索引
+│   ├── WEB-UI.md                          # Web 组件与视觉约定
+│   ├── versions\                          # 版本历史（O(n)，只追加）
+│   │   ├── CURRENT.md                     # 当前态（O(1)）
+│   │   ├── INDEX.md                       # 版本索引
+│   │   └── <version>.md                   # 一版本一文件
 │   └── operations\                        # 运维/发布类文档（按需新增）
 │       ├── RELEASE.md                     # 发布流程
 │       └── CI-CD.md                       # CI / 用户侧 CD / 自动更新
@@ -107,7 +114,7 @@ Vessel\                                    # 共享侧（git）
 
 ### 3.1 根目录
 
-只允许以下文件：`README.md`、`AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore`、`.env.example`、构建/工具配置（`package.json`、`bun.lock`、`tsconfig.json`、`biome.json`）。
+只允许以下文件：`README.md`、`AGENTS.md`、`CLAUDE.md`、`CONTRIBUTING.md`、`SECURITY.md`、`CODE_OF_CONDUCT.md`、`CHANGELOG.md`、`LICENSE`、`.gitignore`、构建/工具配置（`package.json`、`bun.lock`、`tsconfig.json`、`biome.json`）。
 
 **禁止**：`HANDOFF-*.md`、`PLAN-*.md`、`REPORT-*.md`、`TODO.md`、`NOTES.md`、草稿文件、个人目录。
 
@@ -115,18 +122,23 @@ Vessel\                                    # 共享侧（git）
 
 只放**长期有效**的知识，按「问题类型」分类，不按日期、不按人名：
 
-| 目录/文件 | 回答的问题 | 维护者 |
-|---|---|---|
-| `ARCHITECTURE.md` | 系统怎么工作 | core 主笔，各 N 补充 |
-| `adr/README.md` | ADR 索引与编写约定 | gov |
-| `adr/ADR-<NNN>-<slug>.md` | 为什么做这个选择（只追加，一条一文件） | gov |
-| `ADR.md` | 兼容 stub，指向 `adr/README.md` | gov |
-| `FILE-MANAGEMENT.md` | 文件放哪里 | gov |
-| `operations/RELEASE.md` | 怎么发版 | gov |
-| `operations/CI-CD.md` | CI / CD / 自动更新怎么跑 | gov |
-| `operations/CONFIG.md` | 配置位置、优先级、tenant overlay、密钥 | gov |
-| `operations/MIGRATION.md` | sqlite / file-v1 → file-v2 | gov |
-| `operations/TRACE.md` | trace 留存、脱敏与重放 | gov |
+| 目录/文件                 | 回答的问题                             | 维护者               |
+| ------------------------- | -------------------------------------- | -------------------- |
+| `ARCHITECTURE.md`         | 系统怎么工作                           | core 主笔，各 N 补充 |
+| `DOC-MANAGEMENT.md`       | 文档分类、生命周期、索引与注释规则     | gov                  |
+| `adr/README.md`           | ADR 索引与编写约定                     | gov                  |
+| `adr/ADR-<NNN>-<slug>.md` | 为什么做这个选择（只追加，一条一文件） | gov                  |
+| `ADR.md`                  | 兼容 stub，指向 `adr/README.md`        | gov                  |
+| `FILE-MANAGEMENT.md`      | 文件放哪里                             | gov                  |
+| `versions/CURRENT.md`     | 当前版本、已合入能力、下一步（O(1)）   | 版本收口人           |
+| `versions/INDEX.md`       | 版本索引（O(n)，新的在前）             | 版本收口人           |
+| `versions/<version>.md`   | 某个版本落了什么（O(n)，一版本一文件） | 版本收口人           |
+| `WEB-UI.md`               | Web 组件与视觉约定                     | web 主笔，gov 维护   |
+| `operations/RELEASE.md`   | 怎么发版                               | gov                  |
+| `operations/CI-CD.md`     | CI / CD / 自动更新怎么跑               | gov                  |
+| `operations/CONFIG.md`    | 配置位置、优先级、tenant overlay、密钥 | gov                  |
+| `operations/MIGRATION.md` | sqlite / file-v1 → file-v2             | gov                  |
+| `operations/TRACE.md`     | trace 留存、脱敏与重放                 | gov                  |
 
 **禁止**：handoff、计划、报告、验收过程表、日期命名的文档、截图、数据库、日志。
 
@@ -149,36 +161,35 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 
 ### 4.1 角色名（短英文，固定）
 
-| 代号 | 事业部 | 独占路径 |
-|---|---|---|
-| `main` | 总协调（1），不是事业部 | 无独占代码路径；管 handoff / 合并 / 裁决 |
-| `core` | D1 内核 | `packages/core/**` |
-| `agent` | D1/D3 成员能力层 | `packages/agent/**` |
-| `ext` | D2 能力生态 | `plugins/**` |
-| `asm` | D3 装配与配置 | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json` |
-| `tui` | D4 终端产品 | `packages/tui/**` |
-| `web` | D5 远程控制面 | `packages/serve/**`、`apps/web/**` |
-| `gov` | D6 工程治理 | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`build.ts` 除外）、`.gitignore`、`.env.example` |
-| `qa` | 质量与交叉验证（staff，不是事业部） | 无独占写路径；只读审查、跑测试、写个人侧报告 |
+| 代号    | 事业部                              | 独占路径                                                                                                                                      |
+| ------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main`  | 总协调（1），不是事业部             | 无独占代码路径；管 handoff / 合并 / 裁决                                                                                                      |
+| `core`  | D1 内核                             | `packages/core/**`                                                                                                                            |
+| `agent` | D1/D3 成员能力层                    | `packages/agent/**`                                                                                                                           |
+| `ext`   | D2 能力生态                         | `plugins/**`                                                                                                                                  |
+| `asm`   | D3 装配与配置                       | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json`                                |
+| `tui`   | D4 终端产品                         | `packages/tui/**`                                                                                                                             |
+| `web`   | D5 远程控制面                       | `packages/serve/**`、`apps/web/**`                                                                                                            |
+| `gov`   | D6 工程治理                         | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`build.ts` 除外）、`.gitignore` |
+| `qa`    | 质量与交叉验证（staff，不是事业部） | 无独占写路径；只读审查、跑测试、写个人侧报告                                                                                                  |
 
 ### 4.2 版本、分支、worktree
 
 采用业界常用的 **trunk-based + release branch** 混合模型：`main` 常绿，`release/x.y` 维护一条版本线，角色分支只活一个版本周期。**发布由 tag 触发，不由分支名触发。**
 
-| 分支 | 用途 | 谁写 | 生命周期 |
-|---|---|---|---|
-| `main` | 稳定主干，始终可发布 | 只有 1 合并 `release/*` / `hotfix/*` | 永久 |
-| `release/0.17.0` | 0.17.x 集成分支（当前开发基线） | 1 | 该 minor 线存续 |
-| `0.17-<role>` | 角色长期分支，对应一个 worktree | 该角色 N | 一个版本周期 |
-| `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N | 合并后删除 |
-| `hotfix/<slug>` | 线上紧急修复，从 `main` 拉出 | 1 指派 | 合并后删除 |
-
-- **版本周期**：目标版本 `0.17.0` → 集成分支 `release/0.17.0`（从 `release/0.16.0` 拉出）→ 角色分支 `0.17-<role>` → worktree `worktrees/0.17-<role>`。
-- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/1.0`；补丁周期用 `release/0.17.x` + `0.17-<role>`。
+| 分支                 | 用途                             | 谁写                                 | 生命周期        |
+| -------------------- | -------------------------------- | ------------------------------------ | --------------- |
+| `main`               | 稳定主干，始终可发布             | 只有 1 合并 `release/*` / `hotfix/*` | 永久            |
+| `release/<version>`  | `<version>` 集成分支             | 1                                    | 该 minor 线存续 |
+| `<version>-<role>`   | 角色长期分支，对应一个 worktree  | 该角色 N                             | 一个版本周期    |
+| `feat/<role>-<slug>` | 单个任务分支（可选，风险大时用） | 该角色 N                             | 合并后删除      |
+| `hotfix/<slug>`      | 线上紧急修复，从 `main` 拉出     | 1 指派                               | 合并后删除      |
+- **版本周期**：目标版本 `<version>` → 集成分支 `release/<version>`（从上一版本线或 `main` 拉出）→ 角色分支 `<version>-<role>` → worktree `worktrees/<version>-<role>`。当前版本见 [versions/CURRENT.md](versions/CURRENT.md)。
+- **下一周期**：从当前 `release/<x.y>` 或 `main`（由 1 决定）新建下一条 `release/<version>`；补丁周期用 `release/<x.y.x>` + `<x.y>-<role>`。
 - **任务分支**：`<type>/<role>-<slug>`，`type` 取 `feat|fix|refactor|chore|docs|test|ci|perf|build`。
 - **提交信息**：Conventional Commits，scope 用角色代号，如 `feat(core): ...`、`fix(tui): ...`。
-- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v0.17.0-beta.1`。tag 与分支分离，不建 `v1.2.3` 分支。
-- **基线**：`release/0.17.0` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（0.17.0 只干跑，不打 tag）。
+- **tag**：只在发布时创建，`v<major>.<minor>.<patch>`；预发布 `v<version>-beta.1`。tag 与分支分离，不建 `v<version>` 分支。
+- **基线**：`release/<version>` 分支即版本基线；tag 在该周期验收通过后由 1 决定是否打（1.0 前只干跑，不打 tag）。
 
 ### 4.3 文件命名
 
@@ -192,18 +203,17 @@ CI、release、labels、PR 模板、CODEOWNERS。任何改动都会影响所有�
 
 ## 5. 角色与路径独占
 
-| 角色 | 可写路径 | 只读但可提需求 |
-|---|---|---|
-| `core` | `packages/core/**` | 全部下游 |
-| `ext` | `plugins/**` | `packages/core/**` 的公开接口 |
-| `asm` | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json` | 所有上游包的公开导出 |
-| `tui` | `packages/tui/**` | `packages/core`、`packages/config` 的公开接口 |
-| `web` | `packages/serve/**`、`apps/web/**` | `packages/core` 的公开接口 |
-| `gov` | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`scripts/build.ts` 除外）、`.gitignore`、`.env.example` | 全部（只读审查，不改业务代码） |
-| `qa` | 无（只读） | 全部；输出到个人侧 reports / decisions |
+| 角色   | 可写路径                                                                                                                                              | 只读但可提需求                                |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `core` | `packages/core/**`                                                                                                                                    | 全部下游                                      |
+| `ext`  | `plugins/**`                                                                                                                                          | `packages/core/**` 的公开接口                 |
+| `asm`  | `src/**`、`packages/config/**`、`packages/permission/**`、`scripts/build.ts`、`examples/**`、根 `package.json`                                        | 所有上游包的公开导出                          |
+| `tui`  | `packages/tui/**`                                                                                                                                     | `packages/core`、`packages/config` 的公开接口 |
+| `web`  | `packages/serve/**`、`apps/web/**`                                                                                                                    | `packages/core` 的公开接口                    |
+| `gov`  | `docs/**`、根 `*.md`、`.github/**`、`tsconfig.json`、`biome.json`、`skills/**`、`scripts/**`（`scripts/build.ts` 除外）、`.gitignore` | 全部（只读审查，不改业务代码）                |
+| `qa`   | 无（只读）                                                                                                                                            | 全部；输出到个人侧 reports / decisions        |
 
 规则：
-
 - **跨路径改动只能提 PR 或消息协商，不能直接改。**
 - `scripts/version.ts` 的写模式**只在发布收口由 1 执行**，机械改写各包 `package.json`；不属于日常跨路径改动，N 不运行写模式。
 - `packages/core/src/types/**` 的接口主权归 `core`；任何接口变更必须同步 `docs/ARCHITECTURE.md` + 对应的 `docs/adr/ADR-*.md`（或新增 ADR），并通知全部 N。
@@ -248,34 +258,27 @@ N 在自己的分支提交（只含共享侧成品）
 
 ### 7.2 合并流程
 
-1. N 在 `0.13-<role>` 完成一个任务，跑三件套，提交。
-2. N 在 `REPORT-*` / `HANDOFF-*` 写清：改了什么、影响哪些路径、需要谁复核。
-3. 1 审查 diff，决定目标版本（通常 `release/0.13.0`）。
+1. N 在 `<version>-<role>` 完成一个任务，跑三件套，提交。
+2. N 在个人侧 `REPORT-*` / `HANDOFF-*` 写清：改了什么、影响哪些路径、需要谁复核。
+3. 1 审查 diff，决定目标版本（通常 `release/<version>`）。
 4. 冲突：1 召集相关 N，双方给出理由，1 裁决；裁决写入个人侧 `docs/decisions/`。
-5. 1 合并到 `release/0.13.0`。
-6. 版本收口：1 把 `release/0.13.0` 合并到 `main` 并打 tag，触发 release workflow。**0.13.0 只干跑：不合并 `main`、不打 tag、不 publish。**
+5. 1 合并到 `release/<version>`。
+6. 版本收口：1 把 `release/<version>` 合并到 `main` 并打 tag，触发 release workflow。**1.0 前只干跑：不合并 `main`、不打 tag、不 publish。**
 
 ### 7.3 发布
 
 - **触发**：push tag `v*`（稳定版）或 `v*-beta.*`（预发布）。不用分支名触发发布——分支管开发，tag 管发布。
 - **发布前检查**：tag 在 `main` 上；tag 与所有 package 版本一致；CI 全绿；`CHANGELOG.md` 已更新。
-- **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。先发 17 个子包（core → permission → config → agent → serve → tui → plugins），最后发根包 `vessel-agent`；0.11 起子包 scope 为 `@vessel-agent/*`，发布账号需对该组织有写权限。
-- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；0.13.0 无二进制与 sha256（且 0.13 不触发发布）。
+- **npm**：稳定 tag → `latest`；预发布 → `beta` / `next`；带 `--provenance --access public`。先发 17 个子包（core → permission → config → agent → serve → tui → plugins），最后发根包 `vessel-agent`；子包 scope 为 `@vessel-agent/*`，发布账号需对该组织有写权限。
+- **GitHub Release**：自动生成 notes，附 `latest.json` 更新清单；不构建二进制与 sha256（ADR-006）。
 - **回滚**：不删 tag、不 force-push；发新 patch，或用 revert commit 回退 `main`。
 - **共享侧工作树**：除当前任务改动外，`git status` 必须干净，无未跟踪垃圾。
 
 ## 8. 迁移记录（已完成）
 
-| 项 | 结果 |
-|---|---|
-| `HANDOFF-MAIN.md` | 已移到个人侧 `docs/handoff/HANDOFF-main.md`，从 git 移除 |
-| `.claude/plans/streaming-core.md` | 已从 git 移除（`.claude/` 本身被忽略） |
-| `.codegraph/` | 已移入 `Vessel/.codegraph/`，保持被忽略 |
-| `.vessel/sessions.db` | 保持忽略，只属个人运行数据 |
-| `.env.example` | 保留（模板，不含密钥） |
-| 版本基线 | `release/0.1` 已建立（基线 `81970bf`）；`v0.1.0` tag 留到发布时 |
-| 角色分支 | 6 条 `0.1.0-<role>` 分支与 worktree 已建立 |
-| 个人产物 | `git ls-files` 未发现 handoff / plan / report / `.claude` / `.vessel` 残留 |
+个人侧产物（handoff / plan / report / 临时脚本）与 worktree 已从共享侧移出；
+`.codegraph/`、`.vessel/`、`.env`、`node_modules/`、`dist/` 保持忽略，只属本地运行数据。
+`git ls-files` 不应再出现过程产物。
 
 ## 9. CI / CD 与发布
 
@@ -283,29 +286,27 @@ N 在自己的分支提交（只含共享侧成品）
 
 触发：`pull_request` / `push` 到 `main`、`release/**`，以及 `workflow_dispatch`。
 
-| Job | 内容 |
-|---|---|
-| `quality`（ubuntu） | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test`（`VESSEL_VALIDATE_RESULTS=1`）→ `bun run build` |
-| `architecture`（ubuntu） | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check` |
-| `offline-integration`（ubuntu） | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网 |
-| `release-dry-run`（ubuntu） | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag |
-| `install-smoke`（ubuntu） | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；17 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
-| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵 |
-| `web` | `apps/web`：`npm ci` → `npm run build` |
-| `examples` | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供） |
-| `smoke` | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock） |
-
+| Job                                                  | 内容                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `quality`（ubuntu）                                  | 复用 `.github/actions/quality`：`bun install --frozen-lockfile` → `bun run lint` → `bun run typecheck` → `bun test`（`VESSEL_VALIDATE_RESULTS=1`）→ `bun run build`                                                                                                                                                             |
+| `architecture`（ubuntu）                             | `scripts/check-deps.ts` → `scripts/smoke-subpaths.ts` → `scripts/check-docs.ts` → `scripts/check-rpc-methods.ts` → `scripts/version.ts --check`                                                                                                                                                                                 |
+| `offline-integration`（ubuntu）                      | MCP / gateway + 0.4/0.5 能力：`bun test plugins/mcp/client` → `bun test packages/serve` → `bun test plugins/evals/harness` → `bun test plugins/im/feishu` → `bun test packages/core` → `scripts/check-config-sources.ts` → `scripts/check-trace.ts`；全部使用 mock 或临时目录，不依赖外网                                       |
+| `release-dry-run`（ubuntu）                          | 仅 PR + `release/**` push：`bun run scripts/release-dry-run.ts`；打包到 OS 临时目录，不上传、不 publish、不 tag                                                                                                                                                                                                                 |
+| `install-smoke`（ubuntu）                            | 仅 PR + `release/**` push：Node 22 + `apps/web` 的 `npm ci` / `npm run build`，再 `bun run scripts/smoke-install.ts`；17 个子包 + 根 tarball 的 `npm pack` 与 `file:` overrides 安装解析，运行 `vessel --version` / `--tools`（mock），并断言根 tarball 含 `apps/web/dist/index.html`；不上传、不 publish、不 tag；Windows 跳过 |
+| `cross-platform`（matrix：ubuntu / windows / macos） | `bun run typecheck` + `bun test`（`VESSEL_VALIDATE_RESULTS=1`）；PR 只跑 ubuntu，`main` / `release/**` 跑全矩阵                                                                                                                                                                                                                 |
+| `web`                                                | `apps/web`：`npm ci` → `npm run build`                                                                                                                                                                                                                                                                                          |
+| `examples`                                           | `bunx tsc -p examples/tsconfig.json --noEmit` → `bun run demo`（`examples/tsconfig.json` 随仓库提供）                                                                                                                                                                                                                           |
+| `smoke`                                              | 仅 `main` / `release/**` push：headless 文本、stdin、`@file`、`/help`、`/exit`（mock）                                                                                                                                                                                                                                          |
 - 同一 ref 的旧 run 自动取消；缓存 Bun / npm。
 - 三件套任何一项红，禁止合并。
 
 ### 9.2 Release（`.github/workflows/release.yml`）
 
-触发：push tag `v*`（含预发布）。**0.12 不触发本流程。**
-
+触发：push tag `v*`（含预发布）。**1.0 前不触发本流程。**
 1. 校验 tag 在 `main` 上，且所有可发布 workspace `package.json` 版本一致、`CHANGELOG.md` 含该版本；`verify` 跑 `release-dry-run` 与 `smoke-install`，任一失败则不进入发布。
 2. 复跑 quality（发布前再验一次）。
 3. `npm publish` 所有公开包：稳定版 `latest`，预发布 `beta`；`--provenance --access public`。先发 17 个 `@vessel-agent/*` 子包，最后发根 CLI `vessel-agent`（bin 仍是 `vessel`）。
-4. 创建 GitHub Release：自动 notes + `latest.json`（0.11.0 的 `assets` 为空）。
+4. 创建 GitHub Release：自动 notes + `latest.json`（当前 `assets` 为空）。
 5. **不构建二进制**（ADR-006 继续有效）；后续再评估。
 6. 发布失败不自动重试；修版本后重新打 tag（旧 tag 保留，不覆盖）。
 
@@ -316,35 +317,19 @@ N 在自己的分支提交（只含共享侧成品）
 - REPL 启动时后台检查（24h 节流、失败静默、可配置关闭），只提示、不打断。
 - **不提供独立二进制，也不做二进制自更新**；后续再评估。
 - 预发布通道：`--channel beta` 或 `VESSEL_CHANNEL=beta`。
-- `latest.json` 由 release workflow 生成；0.4.0 只含 `version` / `channel` / `released_at` / `assets: {}`（0.4 不生成、不发布）。
+- `latest.json` 由 release workflow 生成，当前只含 `version` / `channel` / `released_at` / `assets: {}`。
 
 ### 9.4 版本与变更日志
 
-- **Phase 1（当前）**：Conventional Commits + 1 定版本 + tag 驱动发布；`CHANGELOG.md` 由 release 汇总。
+- **Phase 1（当前）**：Conventional Commits + 1 定版本 + tag 驱动发布；日常只跑 `version --check`。
 - **Phase 2（包可发布后）**：引入 Changesets 或 Release Please 管理多包版本与 changelog，减少手工。
 - **0.x 语义**：breaking → minor，feature → minor，fix → patch；预发布加 `-beta.N`。
-- **0.12.0 收口**：`CHANGELOG.md` 的 `## [0.12.0]` 同时记录 0.11.1 修复（0.11.1 不单独发布）；运行形态变化（`vessel gateway`、服务注册、`gateway.reload`、`vessel update`、CLI 样式）与配置项（`ui.showReasoning`、`agent.cwd`）一并写入；ADR-074 ~ 077 已登记索引。
-
-### 9.5 0.12 运行形态与文档同步
-
-- **gateway 生命周期**：文档统一写 `vessel gateway start|stop|status|restart|reload|install-service|uninstall-service`；`--serve` 只作前台别名，不再教授 `nohup` / `&`。
-- **服务注册**：只说明当前平台的用户级服务（systemd user / LaunchAgent / Windows 登录计划任务），不宣称 root 服务或跨平台注册；daemon 自身不做崩溃重启。
-- **热重载**：只承诺 plugins 扫描缓存与 `serve.allowed_origins`；其它字段必须写 `requires_restart`，文档不得把 reload 描述成全量热更新。
-- **CLI 样式**：人类输出走 `src/ui-style.ts`；`--json` 与数据行无 ANSI。
-- **新增配置**：`ui.showReasoning`（默认 `false`）与 `agent.cwd`（优先级 `工具参数 cwd > agent.cwd > process.cwd()`）写入 CONFIG / AGENTS / README；0.11.1 权限 TTL 与超时语义同步。
-
-### 9.6 0.13 状态栏与权限生命周期文档同步
-
-- **0.13.0 收口**：`CHANGELOG.md` 的 `## [0.13.0]` 同时记录 0.12.1 TUI 小修（0.12.1 不单独发布）；双状态栏、权限生命周期与持久化、Web 内联权限一并写入；ADR-078 / 079 已登记索引。
-- **权限语义**：文档统一写“默认不超时，只有显式正数 `timeoutMs` 才超时”；不得再描述 120s 自动失败或权限 TTL sweep。`ask_user` 仍按事件时间 120s，明确区分。
-- **持久化文件**：只写 `<dataDir>/interactions-<tenant>.json` 的 `pending` / `answered` / `orphaned` 与 `0600`；不得宣称跨重启恢复 pending 或新增 `interactions.pending` RPC。
-- **Web 权限**：权限卡片在 run 内联，`ask_user` 仍全局；不得恢复全局权限遮罩。
-- **状态栏**：字段、宽度分级、丢弃顺序与 `Ctrl+T` / `Ctrl+G` / `Ctrl+R` 写入 README / CONFIG / ARCHITECTURE §32；配置键统一 `ui.statusBars`，YAML 为 `status_bars`。
+- **版本号单源**：根 `package.json` 是唯一版本来源；`scripts/version.ts` 写模式只在收口由 1 执行。
+- **变更记录**：`CHANGELOG.md` 只保留当前版本摘要；每个版本的完整记录写 `docs/versions/<version>.md` 并登记 `docs/versions/INDEX.md`；当前态见 `docs/versions/CURRENT.md`。分类、索引与生命周期规则见 [DOC-MANAGEMENT.md](DOC-MANAGEMENT.md)。
 
 ## 10. 违规判定
 
 出现以下任一情况即视为违规，由 `gov` 记录、`1` 要求整改：
-
 - 共享侧出现 handoff / plan / report / 临时脚本 / 个人目录。
 - 代码改到别人独占路径而未协商。
 - 提交里含密钥、会话库、日志、构建产物。
