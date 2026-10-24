@@ -1,26 +1,197 @@
-/* 样式入口：保持 Linen 视觉语言，按职责拆分，禁止再堆回单文件。 */
-@import "./styles/tokens.css";
-@import "./styles/base.css";
-@import "./styles/layout.css";
-@import "./styles/components/controls.css";
-@import "./styles/components/surfaces.css";
-@import "./styles/components/feedback.css";
-@import "./styles/components/overlays.css";
-@import "./styles/components/prompts.css";
-@import "./styles/components/palette.css";
-@import "./styles/components/json.css";
-@import "./styles/components/responsive.css";
-@import "./styles/domains/chat.css";
-@import "./styles/domains/runs.css";
-@import "./styles/domains/tools.css";
-@import "./styles/domains/runs-detail.css";
-@import "./styles/domains/markdown.css";
-@import "./styles/domains/subagent.css";
-@import "./styles/chat-dock.css";
-@import "./styles/prompt-dock.css";
-@import "./styles/team.css";
-@import "./styles/domains/attention.css";
-@import "./styles/domains/hub.css";
-@import "./styles/domains/nodes.css";
-@import "./styles/domains/teams.css";
-@import "./styles/domains/agents.css";
+/*
+ * Web 样式入口。
+ *
+ * 分层：L1 tokens → L2 ui 组件 → L3 业务页面。
+ * Tailwind 只引入 theme + utilities：
+ *   - 不引入 preflight，避免重置已有 Linen 视觉（body / 标题 / 表单默认样式由
+ *     styles/base.css 继续负责）。
+ *   - legacy CSS 统一放进 `legacy` layer：Tailwind utilities 优先级更高，
+ *     迁移中的组件可以逐步去掉 legacy class，未迁移页面保持原样。
+ *   - 值仍然只写在 styles/tokens.css；@theme inline 只做别名映射，
+ *     因此暗色主题（tokens 里的 var 覆盖）继续生效。
+ */
+@layer theme, base, legacy, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@import "./styles/tokens.css" layer(legacy);
+@import "./styles/base.css" layer(legacy);
+@import "./styles/layout.css" layer(legacy);
+@import "./styles/components/controls.css" layer(legacy);
+@import "./styles/components/surfaces.css" layer(legacy);
+@import "./styles/components/feedback.css" layer(legacy);
+@import "./styles/components/overlays.css" layer(legacy);
+@import "./styles/components/prompts.css" layer(legacy);
+@import "./styles/components/palette.css" layer(legacy);
+@import "./styles/components/json.css" layer(legacy);
+@import "./styles/components/responsive.css" layer(legacy);
+@import "./styles/domains/chat.css" layer(legacy);
+@import "./styles/domains/runs.css" layer(legacy);
+@import "./styles/domains/tools.css" layer(legacy);
+@import "./styles/domains/runs-detail.css" layer(legacy);
+@import "./styles/domains/markdown.css" layer(legacy);
+@import "./styles/domains/subagent.css" layer(legacy);
+@import "./styles/chat-dock.css" layer(legacy);
+@import "./styles/prompt-dock.css" layer(legacy);
+@import "./styles/team.css" layer(legacy);
+@import "./styles/domains/attention.css" layer(legacy);
+@import "./styles/domains/hub.css" layer(legacy);
+@import "./styles/domains/nodes.css" layer(legacy);
+@import "./styles/domains/teams.css" layer(legacy);
+@import "./styles/domains/agents.css" layer(legacy);
+
+/*
+ * L1：Tailwind theme aliases。
+ * `inline` 让 utility 直接引用 tokens.css 的变量（例如 bg-surface →
+ * background-color: var(--surface)），暗色覆盖无需再声明一套 Tailwind 变量。
+ */
+@theme inline {
+  /* 间距：tokens 的 4px 基准；p-1 = 4px，p-4 = 16px。 */
+  --spacing: var(--space-1);
+  --spacing-control: var(--control-h);
+  --spacing-touch: var(--touch-target);
+
+  /* 颜色 */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-raised: var(--surface-raised);
+  --color-sunken: var(--surface-sunken);
+  --color-deep: var(--surface-deep);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-success: var(--ok);
+  --color-success-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-hover: var(--hover-tint);
+  --color-press: var(--press-tint);
+  --color-scrim: var(--scrim);
+
+  /* 圆角：values 仍来自 tokens.css（--shape-* 为原值）。 */
+  --radius-xs: var(--shape-xs);
+  --radius-sm: var(--shape-sm);
+  --radius-md: var(--shape-md);
+  --radius-lg: var(--shape-lg);
+  --radius-xl: var(--shape-xl);
+
+  /* 字号：values 仍来自 tokens.css（--size-* 为原值）。 */
+  --text-2xs: var(--size-2xs);
+  --text-2xs--line-height: 1.5;
+  --text-xs: var(--size-xs);
+  --text-xs--line-height: 1.45;
+  --text-sm: var(--size-sm);
+  --text-sm--line-height: 1.5;
+  --text-md: var(--size-md);
+  --text-md--line-height: 1.5;
+  --text-base: var(--size-base);
+  --text-base--line-height: 1.6;
+  --text-lg: var(--size-lg);
+  --text-lg--line-height: 1.4;
+  --text-xl: var(--size-xl);
+  --text-xl--line-height: 1.35;
+  --text-2xl: var(--size-2xl);
+  --text-2xl--line-height: 1.3;
+  --text-body: var(--size-base);
+  --text-body--line-height: 1.6;
+  --text-title: var(--size-2xl);
+  --text-title--line-height: 1.3;
+
+  /* 字体族：沿用 tokens 的 --font-* 变量（同名，不需要再映射）。 */
+
+  /* 阴影 / 焦点环 */
+  --shadow-elev-1: var(--elev-1);
+  --shadow-elev-2: var(--elev-2);
+  --shadow-elev-3: var(--elev-3);
+  --shadow-elev-4: var(--elev-4);
+  --shadow-elev-inset: var(--elev-inset);
+  --shadow-focus: var(--focus-ring);
+
+  /* 断点：与 legacy 的 680px 小屏断点对齐。 */
+  --breakpoint-compact: 680px;
+
+  /* 语义宽度 */
+  --container-search: var(--search-max-w);
+  --container-prose: 72ch;
+  --container-palette: var(--palette-w);
+  --container-modal-sm: var(--modal-w-sm);
+  --container-modal-md: var(--modal-w-md);
+  --container-modal-lg: var(--modal-w-lg);
+
+  /* 层级 */
+  --z-index-drawer: var(--z-drawer);
+  --z-index-modal: var(--z-modal);
+  --z-index-palette: var(--z-palette);
+  --z-index-toast: var(--z-toast);
+  --z-index-tooltip: var(--z-tooltip);
+}
+
+/*
+ * L1 工具类：hover/press 用 translucent overlay 叠在既有背景上
+ * （等价于 legacy 的 linear-gradient(var(--hover-tint), ...)）。
+ */
+@utility tint-hover {
+  &:hover:not(:disabled) {
+    background-image: linear-gradient(var(--hover-tint), var(--hover-tint));
+  }
+}
+
+@utility tint-press {
+  &:active:not(:disabled) {
+    background-image: linear-gradient(var(--press-tint), var(--press-tint));
+  }
+}
+
+/* 异步状态的脉冲 / 骨架动画沿用 legacy keyframes。 */
+@utility pulse-soft {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+@utility skeleton-pulse {
+  animation: skeleton 1.4s ease-in-out infinite;
+}
+
+/* 弹窗遮罩：保留 safe-area 内衬；小屏沿用 legacy 的 12px。 */
+@utility modal-pad {
+  padding: calc(var(--space-4) + env(safe-area-inset-top))
+    calc(var(--space-4) + env(safe-area-inset-right))
+    calc(var(--space-4) + env(safe-area-inset-bottom))
+    calc(var(--space-4) + env(safe-area-inset-left));
+
+  /* 与 --breakpoint-compact (680px) 对齐；utility 内的 @variant 是 min-width，
+     这里需要 max-width 语义，所以直接写媒体查询。 */
+  @media (width < 680px) {
+    padding: var(--space-3);
+  }
+}
+
+@utility modal-fade {
+  animation: fade-in 0.16s var(--ease);
+}
+
+@utility modal-rise {
+  animation: rise-in 0.2s var(--ease);
+}
+
+/* 底部导航 sheet：小屏额外给 safe-area 留白。 */
+@utility sheet-bottom-pad {
+  padding-bottom: calc(var(--space-6) - 2px + env(safe-area-inset-bottom));
+}
+
+@utility tooltip-fade {
+  animation: tooltip-in 0.12s var(--ease);
+
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
