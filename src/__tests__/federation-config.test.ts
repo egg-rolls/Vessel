@@ -131,6 +131,34 @@ describe('resolveFederationOptions', () => {
     ]);
   });
 
+  it('drops two peers that reuse the same tokenEnv', () => {
+    const { options, issues } = resolveFederationOptions({
+      federation: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'research',
+            url: 'https://node-b.example',
+            tokenEnv: 'PEER_TOKEN',
+          },
+          {
+            nodeId: 'node-c',
+            teamId: 'lab',
+            url: 'https://node-c.example',
+            tokenEnv: 'PEER_TOKEN',
+          },
+        ],
+      }),
+      nodeId: 'node-a',
+      env,
+    });
+    expect(options.peers).toEqual([]);
+    expect(issues).toEqual([
+      { peer: 'node-b:research', reason: 'duplicate_token' },
+      { peer: 'node-c:lab', reason: 'duplicate_token' },
+    ]);
+  });
+
   it('preserves localTeamId and an inbound-only peer without url', () => {
     const { options, issues } = resolveFederationOptions({
       federation: config({

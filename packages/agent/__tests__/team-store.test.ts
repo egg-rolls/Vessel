@@ -221,7 +221,7 @@ describe('FileTeamStore.seed', () => {
 });
 
 describe('FileTeamStore.ready', () => {
-  it('skips corrupt metadata without throwing and keeps serving new teams', async () => {
+  it('keeps serving other teams without touching a corrupt team.json', async () => {
     const dataDir = await tempDir();
     const capture = captureLogger();
     const tenantDir = teamsDirPath(dataDir, 'default');
@@ -256,6 +256,8 @@ describe('FileTeamStore.ready', () => {
 
     const team = await store.ensureForWorkspace({ workspace: join(dataDir, 'fresh') });
     expect(store.get(team.team_id)?.team_id).toBe(team.team_id);
+    // 损坏文件保持原样，不被当作用空元数据补齐的对象。
+    expect(await readFile(join(tenantDir, 'broken', 'team.json'), 'utf8')).toBe('{ nope');
   });
 
   it('does not rebuild a corrupt team.json in place', async () => {

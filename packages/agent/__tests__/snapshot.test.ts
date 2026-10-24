@@ -166,15 +166,21 @@ describe('Agent snapshot', () => {
     expect(await readFile(`${path}.v1.bak`, 'utf8')).toBe(rawV1);
   });
 
-  it('loads a corrupt snapshot as an empty registry instead of throwing', async () => {
+  it('quarantines a corrupt snapshot at startup instead of serving it as empty recoverable state', async () => {
     const dataDir = await tempDir();
     const path = snapshotPath(dataDir, 'default');
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, '{broken json');
+    const corrupt = '{broken json';
+    await writeFile(path, corrupt);
 
     const { service } = makeService({ dataDir });
 
     expect(await service.list({ viewer: 'main' })).toEqual([]);
+    const quarantined = (await readdir(dirname(path))).filter((name) =>
+      name.startsWith('default.json.corrupt-'),
+    );
+    expect(quarantined).toHaveLength(1);
+    expect(await readFile(join(dirname(path), quarantined[0] as string), 'utf8')).toBe(corrupt);
   });
 
   it('snapshot write failure is logged but does not reject service calls', async () => {
