@@ -1,6 +1,6 @@
 {
   "name": "@vessel-agent/tui",
-  "version": "0.26.1",
+  "version": "0.26.2",
   "license": "MIT",
   "type": "module",
   "main": "src/index.ts",
@@ -25,8 +25,8 @@
   },
   "dependencies": {
     "@types/react": "^19.2.17",
-    "@vessel-agent/config": "0.26.1",
-    "@vessel-agent/core": "0.26.1",
+    "@vessel-agent/config": "0.26.2",
+    "@vessel-agent/core": "0.26.2",
     "ink": "^7.1.1",
     "ink-markdown": "^1.0.4",
     "ink-select-input": "^6.2.0",

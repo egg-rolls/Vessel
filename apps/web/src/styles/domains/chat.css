@@ -605,6 +605,11 @@
   font-size: 10px;
 }
 
+.ask-answer-required {
+  margin-top: var(--space-2);
+  font-size: var(--text-sm);
+}
+
 .ask-card-actions {
   display: flex;
   justify-content: flex-end;

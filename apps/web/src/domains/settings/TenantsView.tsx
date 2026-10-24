@@ -122,11 +122,7 @@ function TenantCreateDialog({
   };
 
   return (
-    <ModalShell
-      label={t('settings.tenants.createTitle')}
-      onClose={onClose}
-      className="tenant-dialog"
-    >
+    <ModalShell label={t('settings.tenants.createTitle')} onClose={onClose}>
       <h2 className="modal-title">{t('settings.tenants.createTitle')}</h2>
       <label className="field">
         <span className="field-label">{t('settings.tenants.tenantId')}</span>
@@ -245,7 +241,7 @@ function TenantEditDialog({
   };
 
   return (
-    <ModalShell label={t('settings.tenants.editTitle')} onClose={onClose} className="tenant-dialog">
+    <ModalShell label={t('settings.tenants.editTitle')} onClose={onClose}>
       <h2 className="modal-title">{t('settings.tenants.editTitle')}</h2>
       <p className="section-desc mono">{tenant.tenant_id}</p>
       <label className="field">

@@ -580,11 +580,7 @@ export function AppShell() {
         )}
 
         {helpOpen && (
-          <ModalShell
-            label={t('app.help.title')}
-            onClose={() => setHelpOpen(false)}
-            className="help-dialog"
-          >
+          <ModalShell label={t('app.help.title')} onClose={() => setHelpOpen(false)}>
             <h2 className="modal-title">{t('app.help.title')}</h2>
             <dl className="shortcut-list">
               <dt>

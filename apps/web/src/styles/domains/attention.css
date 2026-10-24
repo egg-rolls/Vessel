@@ -5,7 +5,7 @@
 
 .attention-list {
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -23,7 +23,7 @@
 
 .attention-head {
   color: var(--faint);
-  background: var(--surface-2);
+  background: var(--surface-sunken);
   border-bottom: 1px solid var(--line);
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -43,7 +43,7 @@
   width: 100%;
   border: 0;
   background: transparent;
-  color: var(--text);
+  color: var(--ink);
   text-align: left;
 }
 
@@ -52,10 +52,12 @@
 }
 
 .attention-row-open:hover {
-  background: var(--surface-2);
+  background: var(--hover-tint);
 }
 
-.attention-request {
+.attention-request,
+.attention-kind,
+.attention-cell {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -146,7 +148,7 @@
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-md);
 }
 
 .multi-node-head {

@@ -9,32 +9,24 @@
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 > 管理规则见 [`docs/DOC-MANAGEMENT.md`](docs/DOC-MANAGEMENT.md)。
 
-## [0.26.1] - 2026-10-24
+## [0.26.2] - 2026-10-24
 
-> 0.26.1（基于 0.26.0，未发布）：Web UI 结构收敛与完整本地化。未 tag、未 publish。
+> 0.26.2（基于 0.26.1，未发布）：补齐 Web 样式缺口。未 tag、未 publish。
 
 ### Fixed
 
-- **弹窗**：`ModalShell` / `ConfirmDialog` 改为 portal 到 `body`；遮罩覆盖完整视觉视口
-  （`100vw` + `100dvh`、安全区 padding），打开时锁定背景滚动；尺寸改
-  `sm | md | lg` tokens，不再写死 620px。
-- **尺寸**：palette / drawer / modal / search / select / team 的语义宽度改为 tokens；
-  去掉相关魔法数。
-- **裁切**：修正弹窗关闭按钮 / focus ring、`.net-*` / `.teams-*` 卡片的误裁切。
-- **中文化**：壳层、共享组件、chat / runs / observe / integrations / settings /
-  gateway 连接层里的硬编码中文全部走 `t()`；两份 catalog 同步；zh 里仍是英文的
-  UI 标签改为中文（技术词 / 错误码不译）。
-- **节点显示名**：新增 `useNodeNames`，所有展示位优先 `health.get.node.name`，
-  按 nodeKey 缓存；不再把 UUID / IP 形状的标签当展示名，原始 node_id 只在
-  节点详情的高级信息出现。
-- **工具目录**：每个工具收敛为一张紧凑卡片（名称 + 需确认 + MCP 徽标），
-  点击展开描述与 input schema。
-
-### Changed
-
-- 新增共享 `SearchInput` 组件，替换 Nodes / Teams / Agents / Runs / Sessions /
-  Integrations / Capabilities / Config 的重复搜索框；`docs/WEB-UI.md` 同步。
+- **`<select>` 原生浮层**：`option` 使用 `--surface-raised` / `--ink` 配色，
+  暗色主题下下拉列表不再回到系统默认样式。
+- **无 CSS 的 className**：审计出 25 个 TSX 使用但 CSS 未定义的类；
+  补齐真实缺口（`ask-answer-required`、`attention-cell`、`attention-kind`、
+  `diag-errors`、`display-setting-row`），删除 3 个已由 `ModalShell size` 取代的
+  弹窗宽度类，其余 17 个确认为语义钩子并保留。
+- **旧 token 失效**：`team.css` / `attention.css` 仍引用已删除的
+  `--surface-2` / `--surface-3` / `--text` / `--text-list` / `--radius` /
+  `--shadow` / `--accent-line`，浏览器会丢弃这些声明；统一替换为现行 tokens
+  （`--hover-tint` / `--surface-sunken` / `--text-sm` / `--radius-md` /
+  `--elev-2` / `--line-strong` / `--ink`）。
 
 ### Not building
 
-- 不做视觉重设计；不改业务逻辑 / RPC 契约。
+- 不做视觉重设计；不改组件结构。
