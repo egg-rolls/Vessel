@@ -3,6 +3,7 @@ import { useToast } from '../../components/ToastProvider';
 import { useConnection } from '../../gateway/ConnectionProvider';
 import { displayGatewayUrl } from '../../gateway/url';
 import { t, useLocale } from '../../i18n';
+import { MultiNodePanel } from './MultiNodePanel';
 
 const STATE_LABELS: Record<string, string> = {
   idle: '未连接',
@@ -211,6 +212,8 @@ export function ConnectionForm() {
           </p>
         )}
       </section>
+
+      <MultiNodePanel />
 
       <p className="sr-only" aria-live="polite">
         {epoch > 0 && connectionState === 'open' ? '已连接 gateway' : ''}

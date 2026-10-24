@@ -76,6 +76,37 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'settings.connection.devProxyNotice':
     'Dev proxy auth is enabled: connecting to the same-origin gateway forwarded by the Vite dev server. No token is stored in the browser.',
 
+  // Multi-node（S9.4）
+  'settings.multinode.title': 'Multi-node (read-only)',
+  'settings.multinode.desc':
+    'Store a separate human token (gateway / team token) per node and aggregate attention and Teams read-only. Peer tokens cannot read attention.',
+  'settings.multinode.name': 'Name',
+  'settings.multinode.namePlaceholder': 'e.g. office-gw',
+  'settings.multinode.url': 'Gateway URL',
+  'settings.multinode.urlPlaceholder': 'https://gw.example.com:8642',
+  'settings.multinode.token': 'Token',
+  'settings.multinode.tokenPlaceholder': 'gateway / team token',
+  'settings.multinode.add': 'Add node',
+  'settings.multinode.added': 'Added node {name}',
+  'settings.multinode.remove': 'Remove',
+  'settings.multinode.current': 'Current connection',
+  'settings.multinode.healthOk': 'Online',
+  'settings.multinode.healthError': 'Status unavailable',
+  'settings.multinode.healthLoading': 'Loading status…',
+  'settings.multinode.loadTeams': 'Load Teams',
+  'settings.multinode.teamsLoading': 'Loading Teams…',
+  'settings.multinode.teamsEmpty': 'No Teams',
+  'settings.multinode.teamsError': 'Failed to load Teams',
+  'settings.multinode.noNodes': 'No extra nodes yet.',
+  'settings.multinode.storageHint':
+    'Name, URL and token are kept in sessionStorage only; tokens are never echoed after adding.',
+  'settings.multinode.hubHint':
+    'Hub is for discovery only; this view never consumes the hub directory or proxies data through it.',
+  'settings.multinode.error.name_required': 'Enter a node name',
+  'settings.multinode.error.name_duplicate': 'A node with this name already exists',
+  'settings.multinode.error.url_invalid': 'Enter a valid gateway URL',
+  'settings.multinode.error.token_required': 'Enter a token',
+
   // Appearance
   'appearance.theme.title': 'Theme',
   'appearance.theme.desc':
@@ -263,6 +294,12 @@ export const messages: Record<keyof typeof zhMessages, string> = {
   'observe.attention.col.agent': 'Agent',
   'observe.attention.col.team': 'Team',
   'observe.attention.col.time': 'Created',
+  'observe.attention.nodesHint':
+    'Grouped by node, read-only. A failing node only affects its own group.',
+  'observe.attention.currentNode': 'Current',
+  'observe.attention.remoteReadonly':
+    'Read-only aggregate; only sessions on the current node can be opened.',
+  'observe.attention.remoteRowHint': 'This request belongs to another node; read-only here.',
   'observe.diagnostics.noToken': 'Not connected',
   'observe.diagnostics.noTokenReason': 'Connect to read runtime state and diagnostic events.',
   'observe.diagnostics.disconnected': 'Disconnected; showing the last snapshot.',

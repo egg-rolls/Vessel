@@ -75,6 +75,36 @@ export const messages = {
   'settings.connection.devProxyNotice':
     '开发代理鉴权已启用：连接同源 gateway（由 Vite 开发服务器转发），前端不保存 token。',
 
+  // Multi-node（S9.4）
+  'settings.multinode.title': '多节点（只读）',
+  'settings.multinode.desc':
+    '为每个节点保存独立的人类 token（gateway / team token），按节点只读聚合 attention 与 Team。peer token 不能读取 attention。',
+  'settings.multinode.name': '名称',
+  'settings.multinode.namePlaceholder': '如 office-gw',
+  'settings.multinode.url': 'Gateway URL',
+  'settings.multinode.urlPlaceholder': 'https://gw.example.com:8642',
+  'settings.multinode.token': 'Token',
+  'settings.multinode.tokenPlaceholder': 'gateway / team token',
+  'settings.multinode.add': '添加节点',
+  'settings.multinode.added': '已添加节点 {name}',
+  'settings.multinode.remove': '移除',
+  'settings.multinode.current': '当前连接',
+  'settings.multinode.healthOk': '在线',
+  'settings.multinode.healthError': '状态读取失败',
+  'settings.multinode.healthLoading': '正在读取状态…',
+  'settings.multinode.loadTeams': '读取 Team',
+  'settings.multinode.teamsLoading': '正在读取 Team…',
+  'settings.multinode.teamsEmpty': '没有 Team',
+  'settings.multinode.teamsError': 'Team 读取失败',
+  'settings.multinode.noNodes': '还没有额外节点。',
+  'settings.multinode.storageHint':
+    '名称、URL 与 token 只保存在 sessionStorage；token 添加后不回显。',
+  'settings.multinode.hubHint': 'hub 只用于节点发现；这里不消费 hub 目录，也不经 hub 代理数据。',
+  'settings.multinode.error.name_required': '请输入节点名称',
+  'settings.multinode.error.name_duplicate': '节点名称已存在',
+  'settings.multinode.error.url_invalid': '请输入有效的 gateway 地址',
+  'settings.multinode.error.token_required': '请输入 token',
+
   // Appearance
   'appearance.theme.title': '主题',
   'appearance.theme.desc':
@@ -257,6 +287,10 @@ export const messages = {
   'observe.attention.col.agent': 'Agent',
   'observe.attention.col.team': 'Team',
   'observe.attention.col.time': '创建时间',
+  'observe.attention.nodesHint': '按节点只读聚合；某个节点失败只影响它自己的分组。',
+  'observe.attention.currentNode': '当前',
+  'observe.attention.remoteReadonly': '只读聚合；只有当前节点的会话可以打开。',
+  'observe.attention.remoteRowHint': '该请求属于其它节点；此处只读。',
   'observe.diagnostics.noToken': '未连接 gateway',
   'observe.diagnostics.noTokenReason': '连接后才能读取 runtime 与诊断事件。',
   'observe.diagnostics.disconnected': '连接已断开；显示最近一次读取的快照。',

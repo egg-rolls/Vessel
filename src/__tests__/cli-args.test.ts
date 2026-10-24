@@ -725,6 +725,7 @@ describe('parseArgs - attention (0.22 S9.1)', () => {
       json: false,
       interactive: false,
       all: false,
+      allNodes: false,
       remember: false,
       yes: false,
     });
@@ -780,12 +781,58 @@ describe('parseArgs - attention (0.22 S9.1)', () => {
     expect(err(['attention', '--ca', 'ca.pem'])).toContain('requires --connect');
   });
 
+  it('--node / --all-nodes select configured nodes and cannot cross connection flags', () => {
+    expect(ok(['attention', '--node', 'alpha', '--json']).attentionCommand).toMatchObject({
+      kind: 'list',
+      node: 'alpha',
+      allNodes: false,
+      json: true,
+    });
+    expect(ok(['attention', '--all-nodes']).attentionCommand).toMatchObject({ allNodes: true });
+
+    expect(err(['attention', 'respond', '--all-nodes', '--allow'])).toContain(
+      '--all-nodes is only valid',
+    );
+    expect(err(['attention', '--all-nodes', '--node', 'alpha'])).toContain(
+      'cannot be combined with --node',
+    );
+    expect(err(['attention', '--all-nodes', '--connect', 'https://a.example'])).toContain(
+      'cannot be combined with --connect',
+    );
+    expect(err(['attention', '--all-nodes', '--to', 'human@node-a:alpha'])).toContain(
+      'cannot be combined with --to',
+    );
+    expect(err(['attention', '--all-nodes', '--interactive'])).toContain(
+      'cannot be combined with --interactive',
+    );
+    expect(err(['attention', '--node', 'alpha', '--connect', 'https://a.example'])).toContain(
+      '--node cannot be combined with --connect',
+    );
+    expect(err(['attention', '--node', 'alpha', '--connect-token', 't'])).toContain('token_env');
+  });
+
   it('--limit / --order / --status / --cursor enums', () => {
     expect(err(['attention', '--limit', '0'])).toContain('Invalid --limit');
     expect(err(['attention', '--limit', '501'])).toContain('Invalid --limit');
     expect(err(['attention', '--order', 'random'])).toContain('--order');
     expect(err(['attention', '--status', 'answered'])).toContain('--status');
     expect(err(['attention', '--cursor'])).toContain('Missing value for --cursor');
+  });
+
+  it('--interactive --json is rejected instead of silently ignoring --json', () => {
+    expect(err(['attention', '--interactive', '--json'])).toContain(
+      '--interactive cannot be combined with --json',
+    );
+  });
+
+  it('respond rejects --status orphaned so indexes cannot come from a different list', () => {
+    expect(
+      err(['attention', 'respond', '--select', '1', '--allow', '--yes', '--status', 'orphaned']),
+    ).toContain('only supports --status pending');
+    expect(
+      ok(['attention', 'respond', '--select', '1', '--allow', '--yes', '--status', 'pending'])
+        .attentionCommand,
+    ).toMatchObject({ status: 'pending' });
   });
 
   it('--all requires --yes', () => {

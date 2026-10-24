@@ -2621,6 +2621,10 @@ interface LimitBlock {
   不一致返回 `federation_target_mismatch`，零应答；principal 不参与列表过滤。
 - 批量：默认逐条确认；`--select` 只作用于当前页；`--all` 处理所有可见页（上限 200）
   且必须 `--yes`；逐条输出成功 / 失败，部分失败不中止。
+- 应答只接受 `--status pending`；`--status orphaned` 在解析与运行两层都拒绝，
+  避免拿 orphaned 列表的编号去批准一条未看到的 pending。
+- `--agent <id>` 作为纯 id 直接下发，不调用 `agents.list`；roster 查询的 403 不按
+  鉴权失败处理（只有 401 才提示人类 token）。`--interactive --json` 显式报错。
 - 无 token / 无 scope → 401/403，不显示列表内容；`not_found` / `run_ended` / `conflict`
   原样透传；不自动重试。
 
@@ -2649,6 +2653,42 @@ interface LimitBlock {
 
 - Web 已实现：attention 收件箱（单节点、跨 team）、Team `description` /
   `default_principal`、`showing N of M` / 加载更多、`interactions.list` 分页。
-- **未实现（S9.4 延期）**：Web 多节点连接管理（每节点显式人类 token）；
-  hub 只提供目录，不代答、不代理正文。
+- 多节点在 0.23 S9.4 落地（§48）：每节点显式人类 token；hub 只提供目录，
+  不代答、不代理正文。
 - 不新增 canonical 方法（仍 48）；不引入 `vessel rpc` 泛化命令。
+
+## 48. 0.23.0 S9.4 多节点 attention（已实现，未发布）
+
+### 48.1 配置与凭据
+
+- 全局 YAML `attention.nodes[]`：`{ name, url, tokenEnv, nodeId?, caFile? }`。
+  `name` 唯一，`url` 走绝对 http(s) / 非回环 HTTPS 规则。
+- **不接受内联 token**：`token` 是未知键，validator 直接报错；
+  token 只从该节点的 `tokenEnv` 读取，不回退 `connect.token` / `serve.token` /
+  `VESSEL_CONNECT_TOKEN`。每节点独立凭据，跨节点串用会在测试中被拦截。
+- `nodeId` 可选；配置后每次使用前用 `health.get` 校验，不一致返回
+  `attention node "<name>" reports node_id ...`。
+
+### 48.2 CLI
+
+- `vessel attention --node <name>`：使用该配置节点（独立 token），输出形状与
+  `--connect` 单节点一致。
+- `vessel attention --all-nodes`：逐节点并发拉取，输出 `{ nodes: [...] }`（JSON）
+  或按节点分组的人类输出；某节点 401 / 网络失败 / token_env 缺失只影响自己的分组，
+  其它节点照常输出，任一失败 → exit 1。`--all-nodes` 只用于列表，
+  不能与 `respond` / `--node` / `--connect` / `--to` / `--cursor` / `--interactive` 组合。
+- `--to <principal>@<node>:<team>` 在未显式 `--connect` 时，按配置节点的
+  `nodeId` / `name` 选中唯一节点；无匹配回退本机，多个匹配要求显式 `--node`。
+- 应答仍必须落到单个节点（`--node` / `--connect` / `--to`）；不跨节点批量应答。
+
+### 48.3 Web
+
+- 连接管理器：当前 WS 连接节点 + sessionStorage 中的额外节点（`name` / `url` /
+  `nodeId`），token 逐节点存独立 sessionStorage key，**不写 localStorage / URL /
+  日志 / React 返回值**。
+- Observe → Attention 在有额外节点时按节点分组，独立分页、独立失败；
+  只有当前节点的行可跳转会话，其它节点只读。
+- Settings → Connection 的“多节点（只读）”：添加 / 移除节点、`health.get` 状态、
+  按需 `teams.list`（人类 token；不用 federation team-info）。
+- hub 目录只用于发现；Web 不消费 hub 数据面，也不经 hub 代理正文。
+- canonical 仍 **48**；不新增远程 agent 生命周期。

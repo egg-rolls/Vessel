@@ -123,54 +123,42 @@ export async function healthNodeId(target: ControlPlaneTarget): Promise<string |
   return optionalString(result.node, 'node_id');
 }
 
+/** 只有 401 是“凭据不可用”；403 是 scope 不足，不得误报成 peer token。 */
 function isAuthRpcError(error: unknown): boolean {
   return (
-    error instanceof RpcClientError &&
-    (error.httpStatus === 401 ||
-      error.httpStatus === 403 ||
-      error.code === 'unauthorized' ||
-      error.code === 'forbidden')
+    error instanceof RpcClientError && (error.httpStatus === 401 || error.code === 'unauthorized')
   );
 }
 
 /**
  * `--agent <id|name>` → agent_id。
  *
- * team roster 的 present 成员可把 name 解析成 id；否则用 `agents.list` 确认 id；
- * 都解析不到时按输入原样当 id（服务端过滤对未知 id 返回空集）。认证失败必须上抛。
+ * 纯 id 直接下发，不查 `agents.list`（team token 的 control scope 对它返回 403）。
+ * 只有带 `--team` 时才查 roster，把 present 成员的 name 解析成 id；
+ * 401 上抛，403 / 其它失败按输入原样当 id（服务端过滤对未知 id 返回空集）。
  */
 export async function resolveAgentFilter(input: {
   target: ControlPlaneTarget;
   agent: string;
   teamId?: string;
 }): Promise<string> {
-  if (input.teamId !== undefined) {
-    try {
-      const result = await input.target.request('teams.get', {
-        team_id: input.teamId,
-        members_limit: 100,
-      });
-      const members = isRecord(result) && Array.isArray(result.members) ? result.members : [];
-      let byName: string | undefined;
-      for (const member of members) {
-        if (!isRecord(member) || member.membership !== 'present') continue;
-        const id = optionalString(member, 'agent_id');
-        if (id === undefined) continue;
-        if (id === input.agent) return id;
-        if (byName === undefined && optionalString(member, 'name') === input.agent) byName = id;
-      }
-      if (byName !== undefined) return byName;
-    } catch (error) {
-      if (isAuthRpcError(error)) throw error;
-    }
-  }
+  if (input.teamId === undefined) return input.agent;
 
   try {
-    const result = await input.target.request('agents.list', {});
-    const agents = isRecord(result) && Array.isArray(result.agents) ? result.agents : [];
-    for (const agent of agents) {
-      if (isRecord(agent) && agent.id === input.agent) return input.agent;
+    const result = await input.target.request('teams.get', {
+      team_id: input.teamId,
+      members_limit: 100,
+    });
+    const members = isRecord(result) && Array.isArray(result.members) ? result.members : [];
+    let byName: string | undefined;
+    for (const member of members) {
+      if (!isRecord(member) || member.membership !== 'present') continue;
+      const id = optionalString(member, 'agent_id');
+      if (id === undefined) continue;
+      if (id === input.agent) return id;
+      if (byName === undefined && optionalString(member, 'name') === input.agent) byName = id;
     }
+    if (byName !== undefined) return byName;
   } catch (error) {
     if (isAuthRpcError(error)) throw error;
   }

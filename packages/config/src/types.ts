@@ -336,6 +336,30 @@ export interface ConnectConfig {
 }
 
 /**
+ * 多节点 attention 的节点（S9.4）。
+ *
+ * token 只从 `tokenEnv` 指向的环境变量读取，**不接受内联 token**；
+ * 每节点独立凭据，不与 `connect` / `serve` 的 token 互相回退。
+ */
+export interface AttentionNodeConfig {
+  /** `--node <name>` 选择器；同一配置内唯一 */
+  name: string;
+  /** 节点 gateway URL（非回环必须 https） */
+  url: string;
+  /** 人类 token（gateway / team token）所在环境变量名 */
+  tokenEnv?: string;
+  /** 期望的 node_id；配置后使用前用 `health.get` 校验 */
+  nodeId?: string;
+  /** 自签/私有 CA 文件（PEM） */
+  caFile?: string;
+}
+
+/** 多节点 attention 配置（S9.4） */
+export interface AttentionConfig {
+  nodes?: AttentionNodeConfig[];
+}
+
+/**
  * Team 声明（0.19 S3）。
  *
  * 全局配置；tenant overlay 不允许声明 `teams`。
@@ -591,6 +615,8 @@ export interface VesselConfig {
   transport?: TransportConfig;
   /** 0.6：`--connect` 客户端 token/CA */
   connect?: ConnectConfig;
+  /** S9.4：多节点 attention（每节点独立人类 token，只从 env 读取） */
+  attention?: AttentionConfig;
   /** 0.3：MCP servers，键为 server 名 */
   mcpServers?: Record<string, McpServerConfig>;
   /** 0.3：durable run（checkpoint / resume） */

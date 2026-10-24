@@ -190,6 +190,93 @@ describe('vessel attention --agent', () => {
   });
 });
 
+describe('vessel attention respond status', () => {
+  it('refuses orphaned status instead of answering a pending row by index', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'interactions.list') return page([interaction({ request_id: 'p1' })]);
+      if (method === 'permission.respond') return { ok: true };
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({
+        kind: 'respond',
+        status: 'orphaned',
+        select: [1],
+        decision: 'allow',
+        yes: true,
+        json: false,
+      }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('pending');
+    // 不得发任何 RPC：否则 orphaned 列表的第 1 条会批准另一条 pending。
+    expect(target.calls).toEqual([]);
+  });
+});
+
+describe('vessel attention agent resolution', () => {
+  it('never calls agents.list for a pure id under a team token', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'teams.get') {
+        return { members: [{ agent_id: 'agent-1', name: 'worker', membership: 'present' }] };
+      }
+      if (method === 'interactions.list') return page([], 0);
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({ agent: 'agent-1', teamId: 'alpha', json: true }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(target.calls.some((call) => call.method === 'agents.list')).toBe(false);
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('agent-1');
+  });
+
+  it('a 403 roster lookup falls back to the pure id instead of a token error', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'teams.get') {
+        throw new RpcClientError('forbidden', 'insufficient scope', { httpStatus: 403 });
+      }
+      if (method === 'interactions.list') return page([], 0);
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({ agent: 'agent-1', teamId: 'alpha', json: true }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    const listCall = target.calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { agent_id?: string } | undefined)?.agent_id).toBe('agent-1');
+  });
+
+  it('a 401 roster lookup still stops as an auth failure', async () => {
+    const target = fakeTarget((method) => {
+      if (method === 'teams.get') {
+        throw new RpcClientError('unauthorized', 'bad token', { httpStatus: 401 });
+      }
+      throw new Error(`unexpected ${method}`);
+    });
+
+    const result = await attentionCommand(
+      command({ agent: 'agent-1', teamId: 'alpha', json: true }),
+      options(target),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('human control token');
+    expect(target.calls.some((call) => call.method === 'interactions.list')).toBe(false);
+  });
+});
+
 describe('vessel attention respond', () => {
   it('continues after a failing item and exits 1 when any item fails', async () => {
     const target = fakeTarget((method, params) => {
@@ -330,6 +417,214 @@ describe('vessel attention respond', () => {
       ),
     ).toBe(false);
     expect(result.stderr).toContain('200');
+  });
+});
+
+interface NodeSpec {
+  name: string;
+  url: string;
+  tokenEnv?: string;
+  nodeId?: string;
+}
+
+function multiNodeOptions(input: {
+  nodes: NodeSpec[];
+  env: Record<string, string | undefined>;
+  factory: (node: NodeSpec, token: string) => FakeTarget;
+}) {
+  return {
+    config: { dataDir: '.', attention: { nodes: input.nodes } },
+    env: input.env,
+    dataDir: '.',
+    tenantId: 'default',
+    isTTY: false,
+    nodeTargetFactory: (node: NodeSpec, token: string) => input.factory(node, token),
+  };
+}
+
+describe('vessel attention multi-node', () => {
+  it('keeps the healthy node and its own token when another node returns 401', async () => {
+    const factoryTokens: Record<string, string> = {};
+    const factory = (node: NodeSpec, token: string) => {
+      factoryTokens[node.name] = token;
+      return fakeTarget((method) => {
+        if (method !== 'interactions.list') throw new Error(`unexpected ${method}`);
+        if (node.name === 'beta') {
+          throw new RpcClientError('unauthorized', 'invalid gateway token', { httpStatus: 401 });
+        }
+        return page([interaction({ request_id: 'r-alpha' })], 1);
+      });
+    };
+
+    const result = await attentionCommand(
+      command({ allNodes: true, json: true }),
+      multiNodeOptions({
+        nodes: [
+          { name: 'alpha', url: 'https://alpha.example', tokenEnv: 'ALPHA_TOKEN' },
+          { name: 'beta', url: 'https://beta.example', tokenEnv: 'BETA_TOKEN' },
+        ],
+        env: { ALPHA_TOKEN: 'token-alpha', BETA_TOKEN: 'token-beta' },
+        factory,
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    const payload = JSON.parse(result.stdout) as {
+      nodes: Array<{
+        name: string;
+        ok: boolean;
+        interactions?: Array<{ request_id: string }>;
+        total?: number;
+        error?: string;
+      }>;
+    };
+    expect(payload.nodes.map((entry) => entry.name)).toEqual(['alpha', 'beta']);
+    expect(payload.nodes[0]?.ok).toBe(true);
+    expect(payload.nodes[0]?.interactions?.map((item) => item.request_id)).toEqual(['r-alpha']);
+    expect(payload.nodes[0]?.total).toBe(1);
+    // beta 的 401 只属于 beta 分组。
+    expect(payload.nodes[1]?.ok).toBe(false);
+    expect(payload.nodes[1]?.error).toContain('unauthorized');
+    // 每节点只用自己的 token。
+    expect(factoryTokens).toEqual({ alpha: 'token-alpha', beta: 'token-beta' });
+    expect(result.stdout).not.toContain('token-alpha');
+    expect(result.stdout).not.toContain('token-beta');
+  });
+
+  it('reports a missing token env for one node without blocking the other', async () => {
+    const calls: string[] = [];
+    const factory = (node: NodeSpec) => {
+      calls.push(node.name);
+      return fakeTarget((method) => {
+        if (method === 'interactions.list') {
+          return page([interaction({ request_id: 'r-alpha' })], 1);
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+    };
+
+    const result = await attentionCommand(
+      command({ allNodes: true, json: true }),
+      multiNodeOptions({
+        nodes: [
+          { name: 'alpha', url: 'https://alpha.example', tokenEnv: 'ALPHA_TOKEN' },
+          { name: 'beta', url: 'https://beta.example', tokenEnv: 'BETA_TOKEN' },
+        ],
+        env: { ALPHA_TOKEN: 'token-alpha' },
+        factory,
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    // token 缺失的节点不发任何 RPC。
+    expect(calls).toEqual(['alpha']);
+    const payload = JSON.parse(result.stdout) as {
+      nodes: Array<{ name: string; ok: boolean; error?: string }>;
+    };
+    expect(payload.nodes[0]?.ok).toBe(true);
+    expect(payload.nodes[1]?.ok).toBe(false);
+    expect(payload.nodes[1]?.error).toContain('BETA_TOKEN');
+  });
+
+  it('uses --to to select a configured node by node_id and keeps the address team', async () => {
+    const calls: Call[] = [];
+    const factory = () =>
+      fakeTarget((method, params) => {
+        calls.push({ method, ...(params !== undefined ? { params } : {}) });
+        if (method === 'health.get') return { node: { node_id: 'node-a' } };
+        if (method === 'interactions.list') {
+          return page([interaction({ request_id: 'r-alpha', team_id: 'alpha' })], 1);
+        }
+        throw new Error(`unexpected ${method}`);
+      });
+
+    const result = await attentionCommand(
+      command({ to: 'human@node-a:alpha', json: true }),
+      multiNodeOptions({
+        nodes: [
+          {
+            name: 'alpha',
+            url: 'https://alpha.example',
+            tokenEnv: 'ALPHA_TOKEN',
+            nodeId: 'node-a',
+          },
+        ],
+        env: { ALPHA_TOKEN: 'token-alpha' },
+        factory,
+      }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    const methods = calls.map((call) => call.method);
+    expect(methods).toContain('health.get');
+    const listCall = calls.find((call) => call.method === 'interactions.list');
+    expect((listCall?.params as { team_id?: string } | undefined)?.team_id).toBe('alpha');
+  });
+
+  it('refuses a configured node whose node_id does not match before listing', async () => {
+    const methods: string[] = [];
+    const factory = () =>
+      fakeTarget((method) => {
+        methods.push(method);
+        if (method === 'health.get') return { node: { node_id: 'node-b' } };
+        throw new Error(`unexpected ${method}`);
+      });
+
+    const result = await attentionCommand(
+      command({ to: 'human@node-a:alpha', json: true }),
+      multiNodeOptions({
+        nodes: [
+          {
+            name: 'alpha',
+            url: 'https://alpha.example',
+            tokenEnv: 'ALPHA_TOKEN',
+            nodeId: 'node-a',
+          },
+        ],
+        env: { ALPHA_TOKEN: 'token-alpha' },
+        factory,
+      }),
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('node-b');
+    expect(result.stderr).toContain('node-a');
+    expect(methods).not.toContain('interactions.list');
+  });
+
+  it('answers through --node without consulting other node tokens', async () => {
+    const calls: string[] = [];
+    const factory = (node: NodeSpec) => {
+      calls.push(node.name);
+      return fakeTarget((method, params) => {
+        if (method === 'interactions.list') return page([interaction({ request_id: 'r1' })]);
+        if (method === 'permission.respond') return { ok: true };
+        throw new Error(`unexpected ${method} ${JSON.stringify(params)}`);
+      });
+    };
+
+    const result = await attentionCommand(
+      command({
+        kind: 'respond',
+        node: 'alpha',
+        requestId: 'r1',
+        decision: 'allow',
+        json: false,
+      }),
+      multiNodeOptions({
+        nodes: [
+          { name: 'alpha', url: 'https://alpha.example', tokenEnv: 'ALPHA_TOKEN' },
+          { name: 'beta', url: 'https://beta.example', tokenEnv: 'BETA_TOKEN' },
+        ],
+        env: { ALPHA_TOKEN: 'token-alpha', BETA_TOKEN: 'token-beta' },
+        factory,
+      }),
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('OK r1 allow');
+    expect(calls).toEqual(['alpha']);
   });
 });
 
