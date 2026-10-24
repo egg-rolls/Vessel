@@ -8,15 +8,24 @@ function pathsOf(config: VesselConfig): string[] {
 }
 
 function teamConfig(policy: Record<string, unknown>): VesselConfig {
-  return { teams: [{ workspace: '/tmp/vessel-team-federation', policy }] };
+  return { teams: [{ workspace: '/tmp/vessel-team-federation-0-21', policy }] };
 }
 
-describe('S7.2 team policy federation.accept', () => {
-  it("accepts 'log' and 'members'", () => {
-    for (const accept of ['log', 'members'] as const) {
+describe('0.21 team policy federation.accept', () => {
+  it("accepts 'principal' and 'log'", () => {
+    for (const accept of ['principal', 'log'] as const) {
       expect(pathsOf(teamConfig({ federation: { accept } }))).toEqual([]);
       expect(parseTeamPolicy({ federation: { accept } })).toEqual({ federation: { accept } });
     }
+  });
+
+  it("turns the removed 'members' value into an explicit error with the migration hint", () => {
+    const config = teamConfig({ federation: { accept: 'members' } });
+    const errors = validateConfig(config).errors;
+    const error = errors.find((item) => item.path === 'teams[0].policy.federation.accept');
+    expect(error).toBeDefined();
+    expect(error?.message).toContain('use "principal"');
+    expect(() => parseTeamPolicy({ federation: { accept: 'members' } })).toThrow(TeamPolicyError);
   });
 
   it('defaults by omission: no field is written', () => {
@@ -26,7 +35,7 @@ describe('S7.2 team policy federation.accept', () => {
     expect(parseTeamPolicy({ federation: {} })).toEqual({ federation: {} });
   });
 
-  it('rejects values other than log / members', () => {
+  it('rejects values other than principal / log', () => {
     for (const accept of ['all', 'fanout', true, 1, null]) {
       expect(pathsOf(teamConfig({ federation: { accept } }))).toContain(
         'teams[0].policy.federation.accept',
@@ -43,7 +52,9 @@ describe('S7.2 team policy federation.accept', () => {
   });
 
   it('rejects a non-object federation block', () => {
-    expect(pathsOf(teamConfig({ federation: 'members' }))).toContain('teams[0].policy.federation');
-    expect(() => parseTeamPolicy({ federation: 'members' })).toThrow(TeamPolicyError);
+    expect(pathsOf(teamConfig({ federation: 'principal' }))).toContain(
+      'teams[0].policy.federation',
+    );
+    expect(() => parseTeamPolicy({ federation: 'principal' })).toThrow(TeamPolicyError);
   });
 });
