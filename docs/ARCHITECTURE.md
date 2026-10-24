@@ -1737,7 +1737,7 @@ Tool trail 详细程度，默认 `collapsed`；实现在
 - **overflow 重试**：provider 返回 400 且命中 context-overflow 模式时，强制压缩一次并重试一次；压缩失败不覆盖 provider 原始错误。
 - **interrupt 原因**：`AgentRuntime.interrupt(reason?: 'shutdown' | 'timeout' | 'user')`，与 `RunOptions.signal` 合并为同一取消信号；`shutdown` / `timeout` 落 `interrupted` checkpoint 并可 `--resume-run`，`user` 保持 `cancelled`。
 - **网关关闭**：`gateway.stop()` 幂等；先 `interrupt('shutdown')`，最多 5s 等 active run，再关 WS / HTTP。
-- **关闭顺序**：`await gateway.stop() → 取消共享流订阅 / 关闭 transport → beforeClose → closeAll → shutdown`；后两步传 `{ drain: false }`，serve 路径不重复 drain。顺序抽为 `shutdownServeStack()`（`src/shutdown-sequence.ts`）；无 gateway 的 headless / REPL 由 bundle 自己 drain。
+- **关闭顺序**：`await gateway.stop() → 取消共享流订阅 / 关闭 transport → beforeClose → closeAll → shutdown`；后两步传 `{ drain: false }`，serve 路径不重复 drain。顺序抽为 `shutdownServeStack()`（`src/shutdown-sequence.ts`）；无 gateway 的 headless / REPL 由 bundle 自己 drain。AgentService 在 `agentControl.dispose()` 里先 `drain({ timeoutMs: 5000 })`（中断并等待成员轮，含成员 Body 共用 tenant `eventLog` 的写入），再关 tenant eventLog；否则成员尾部 `tool.call.*` / `llm.response` / `run.completed` 会因 `session_event_log_closed` 落盘失败。drain 之后不再从成员队列起新轮。
 
 ### 29.3 日志与可观测
 

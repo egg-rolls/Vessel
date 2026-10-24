@@ -151,6 +151,16 @@ export interface MemberRuntimePort {
   dispose(member: MemberRuntimeMember): Promise<void> | void;
 }
 
+/** `AgentService.drain` 结果：无在跑轮 / 已中断收口 / 超时 */
+export type AgentDrainOutcome = 'idle' | 'interrupted' | 'timeout';
+
+export interface AgentDrainOptions {
+  timeoutMs?: number;
+  /** 测试注入：等待下一次轮询 */
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+}
+
 /** 权限请求（传输由入口层实现；A1 只定义形状与状态等待） */
 export interface PermissionRequestInput {
   requestId?: string;
@@ -672,6 +682,11 @@ export interface AgentService {
   currentConversation(agentId: string): string | undefined;
   /** conversation 预算状态 / 人工 override（只由人力入口调用） */
   budget(input: BudgetStatusInput | BudgetOverrideInput): Promise<BudgetOverview>;
+  /**
+   * 关闭前中断并等待成员轮收口（含成员 Body 共享的 eventLog 写入）。
+   * 只影响在跑轮：不改 registry 状态 / membership，也不启动队列里的后续消息。
+   */
+  drain(options?: AgentDrainOptions): Promise<AgentDrainOutcome>;
   /** 立即落盘待写快照；无 snapshot 或写入成功返回 true，写入失败返回 false */
   flushSnapshot(): Promise<boolean>;
   /** 订阅成员事件；返回取消函数 */
