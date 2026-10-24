@@ -103,6 +103,34 @@ describe('resolveFederationOptions', () => {
     expect(issues).toEqual([{ peer: 'node-a:lab', reason: 'self_peer' }]);
   });
 
+  it('drops every peer that resolves to the same token', () => {
+    const { options, issues } = resolveFederationOptions({
+      federation: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'research',
+            url: 'https://node-b.example',
+            tokenEnv: 'PEER_TOKEN',
+          },
+          {
+            nodeId: 'node-c',
+            teamId: 'lab',
+            url: 'https://node-c.example',
+            tokenEnv: 'PEER_TOKEN_2',
+          },
+        ],
+      }),
+      nodeId: 'node-a',
+      env: { PEER_TOKEN: 'same-secret', PEER_TOKEN_2: 'same-secret' },
+    });
+    expect(options.peers).toEqual([]);
+    expect(issues).toEqual([
+      { peer: 'node-b:research', reason: 'duplicate_token' },
+      { peer: 'node-c:lab', reason: 'duplicate_token' },
+    ]);
+  });
+
   it('preserves localTeamId and an inbound-only peer without url', () => {
     const { options, issues } = resolveFederationOptions({
       federation: config({
