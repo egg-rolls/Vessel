@@ -174,7 +174,7 @@ export type TeamBudgetDimension = 'hops' | 'turns' | 'tokens' | 'wall_clock' | '
 /** `vessel team ...` 子命令（0.19 S3；S4 增加 budget） */
 export type TeamCommand =
   | { kind: 'list'; json: boolean }
-  | { kind: 'get'; teamId: string; limit?: number; json: boolean }
+  | { kind: 'get'; teamId: string; limit?: number; members?: number; json: boolean }
   | { kind: 'post'; teamId: string; content: string; mentions: string[]; json: boolean }
   | {
       kind: 'members';
@@ -193,15 +193,23 @@ export type TeamCommand =
       json: boolean;
     };
 
-/** `vessel federation ...` 子命令（S7.1） */
+/** `vessel federation ...` 子命令（S7.1；0.21 地址寻址） */
 export type FederationCommand =
   | {
       kind: 'post';
-      nodeId: string;
-      teamId: string;
+      /** `<principal>@<node_id>:<team_id>`；命令层解析与本地预校验 */
+      to: string;
+      /** `<principal>@<node_id>:<team_id>`；必须是本机节点 */
+      from: string;
       content: string;
-      fromTeam: string;
       conversationId?: string;
+      json: boolean;
+    }
+  | {
+      kind: 'team-info';
+      /** `<principal>@<node_id>:<team_id>`；principal 不参与查询 */
+      to: string;
+      members?: number;
       json: boolean;
     }
   | { kind: 'peers'; json: boolean };
@@ -2229,6 +2237,7 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
   if (sub === 'get') {
     let json = false;
     let limit: number | undefined;
+    let members: number | undefined;
     const positional: string[] = [];
     for (let i = 0; i < tail.length; i++) {
       const a = tail[i] ?? '';
@@ -2250,6 +2259,20 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
         i = value.next;
         continue;
       }
+      if (a === '--members') {
+        const value = readFlagValue(tail, i, '--members');
+        if (!value.ok) return value;
+        if (!/^\d+$/.test(value.value)) {
+          return { ok: false, error: `Invalid --members: ${value.value} (expected 1..100)` };
+        }
+        const parsed = Number.parseInt(value.value, 10);
+        if (parsed < 1 || parsed > 100) {
+          return { ok: false, error: `Invalid --members: ${value.value} (expected 1..100)` };
+        }
+        members = parsed;
+        i = value.next;
+        continue;
+      }
       if (a.startsWith('-')) {
         return { ok: false, error: `Unknown argument for team get: ${a}` };
       }
@@ -2267,6 +2290,7 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
       kind: 'get',
       teamId,
       ...(limit !== undefined ? { limit } : {}),
+      ...(members !== undefined ? { members } : {}),
       json,
     };
     return { ok: true, args };
@@ -2353,7 +2377,12 @@ function parseTeamArgs(rest: string[], args: CliArgs): ParseResult {
   return { ok: false, error: `Unknown team subcommand: ${sub}` };
 }
 
-/** `federation post <node>:<team> <content...> --from-team <id>` / `federation peers`（S7.1） */
+/**
+ * `federation post --to <addr> --from <addr> <content...>` / `federation peers`
+ * （S7.1；0.21 地址寻址）。
+ *
+ * 解析层只做语法与必填；地址形状与本地 roster 预校验在 `commands/federation.ts`。
+ */
 function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
   const sub = rest[0];
   if (sub === undefined || sub === '--help' || sub === '-h') {
@@ -2380,10 +2409,67 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
     return { ok: true, args };
   }
 
+  if (sub === 'team-info') {
+    let json = false;
+    let to: string | undefined;
+    let members: number | undefined;
+    for (let i = 0; i < tail.length; i++) {
+      const a = tail[i] ?? '';
+      if (a === '--help' || a === '-h') {
+        args.help = true;
+        continue;
+      }
+      if (a === '--json') {
+        json = true;
+        continue;
+      }
+      if (a === '--to') {
+        const value = readFlagValue(tail, i, '--to');
+        if (!value.ok) return value;
+        to = value.value;
+        i = value.next;
+        continue;
+      }
+      if (a === '--members') {
+        const value = readFlagValue(tail, i, '--members');
+        if (!value.ok) return value;
+        if (!/^\d+$/.test(value.value)) {
+          return {
+            ok: false,
+            error: `Invalid --members: ${value.value} (expected 1..100)`,
+          };
+        }
+        const parsed = Number.parseInt(value.value, 10);
+        if (parsed < 1 || parsed > 100) {
+          return {
+            ok: false,
+            error: `Invalid --members: ${value.value} (expected 1..100)`,
+          };
+        }
+        members = parsed;
+        i = value.next;
+        continue;
+      }
+      return { ok: false, error: `Unknown argument for federation team-info: ${a}` };
+    }
+    if (args.help) return { ok: true, args };
+    if (to === undefined) {
+      return { ok: false, error: 'federation team-info requires --to <principal@node:team>' };
+    }
+    args.federationCommand = {
+      kind: 'team-info',
+      to,
+      ...(members !== undefined ? { members } : {}),
+      json,
+    };
+    return { ok: true, args };
+  }
+
   if (sub !== 'post') return { ok: false, error: `Unknown federation subcommand: ${sub}` };
 
   let json = false;
-  let fromTeam: string | undefined;
+  let to: string | undefined;
+  let from: string | undefined;
   let conversationId: string | undefined;
   const positional: string[] = [];
   for (let i = 0; i < tail.length; i++) {
@@ -2396,10 +2482,11 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
       json = true;
       continue;
     }
-    if (a === '--from-team' || a === '--conversation-id') {
+    if (a === '--to' || a === '--from' || a === '--conversation-id') {
       const value = readFlagValue(tail, i, a);
       if (!value.ok) return value;
-      if (a === '--from-team') fromTeam = value.value;
+      if (a === '--to') to = value.value;
+      else if (a === '--from') from = value.value;
       else conversationId = value.value;
       i = value.next;
       continue;
@@ -2411,27 +2498,22 @@ function parseFederationArgs(rest: string[], args: CliArgs): ParseResult {
   }
   if (args.help) return { ok: true, args };
 
-  const [target, ...contentParts] = positional;
-  const content = contentParts.join(' ');
-  if (target === undefined || target === '' || content === '') {
-    return { ok: false, error: 'federation post requires <node>:<team> <content...>' };
+  const content = positional.join(' ');
+  if (to === undefined) {
+    return { ok: false, error: 'federation post requires --to <principal@node:team>' };
   }
-  const separator = target.indexOf(':');
-  const nodeId = separator > 0 ? target.slice(0, separator) : '';
-  const teamId = separator > 0 ? target.slice(separator + 1) : '';
-  if (nodeId === '' || teamId === '') {
-    return { ok: false, error: 'federation post target must be <node>:<team>' };
+  if (from === undefined) {
+    return { ok: false, error: 'federation post requires --from <principal@node:team>' };
   }
-  if (fromTeam === undefined) {
-    return { ok: false, error: 'federation post requires --from-team <local_team_id>' };
+  if (content === '') {
+    return { ok: false, error: 'federation post requires <content...>' };
   }
 
   args.federationCommand = {
     kind: 'post',
-    nodeId,
-    teamId,
+    to,
+    from,
     content,
-    fromTeam,
     ...(conversationId !== undefined ? { conversationId } : {}),
     json,
   };

@@ -320,7 +320,7 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     registryName: 'team',
     subcommands: [
       { name: 'list', flags: ['--json', '--help'] },
-      { name: 'get', flags: ['--json', '--limit', '--help'] },
+      { name: 'get', flags: ['--json', '--limit', '--members', '--help'] },
       { name: 'post', flags: ['--json', '--mention', '--help'] },
       { name: 'members', flags: ['--json', '--help'] },
       {
@@ -336,8 +336,9 @@ export const COMPLETION_COMMANDS: readonly CompletionCommand[] = [
     subcommands: [
       {
         name: 'post',
-        flags: ['--json', '--from-team', '--conversation-id', '--help'],
+        flags: ['--json', '--to', '--from', '--conversation-id', '--help'],
       },
+      { name: 'team-info', flags: ['--json', '--to', '--members', '--help'] },
       { name: 'peers', flags: ['--json', '--help'] },
     ],
   },

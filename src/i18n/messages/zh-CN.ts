@@ -80,8 +80,9 @@ export const zhCN = {
   'help.cmd.teamMembers': '添加 / 移除 Team 成员',
   'help.cmd.teamBudget': '查看 conversation 预算与阻塞状态',
   'help.cmd.teamBudgetOverride': '人工抬高 / 清除某条 conversation 的预算上限',
-  'help.cmd.federationPost': '跨节点向已 allowlist 的 Team 投递一条消息（默认只写日志）',
+  'help.cmd.federationPost': '向已 allowlist 的对端成员地址投递一条消息（principal@node:team）',
   'help.cmd.federationPeers': '列出 federation peer 与 token 是否已设置',
+  'help.cmd.federationTeamInfo': '查询已 allowlist 的对端 Team 目录（需对端开启 allowDirectory）',
   'help.cmd.help': '显示本帮助',
 
   // ── common ──
@@ -251,9 +252,13 @@ export const zhCN = {
   'hub.joinCode.code': '加入码：{code}',
   'hub.joinCode.expiresAt': '过期时间：{at}',
 
-  // ── federation（0.20 S7.1）──
-  'federation.error.invalidFromTeam': '无效的 --from-team：{id}',
+  // ── federation（0.20 S7.1；0.21 地址寻址）──
+  'federation.error.invalidAddress': '{flag} 的 federation 地址无效：{message}',
+  'federation.error.fromNodeMismatch': '--from 的节点 "{node}" 与本机节点 "{local}" 不一致',
   'federation.error.teamNotFound': '本机 Team 不存在：{team}（{path}）',
+  'federation.error.rosterUnavailable': '无法读取本机成员快照：{path}',
+  'federation.error.unknownPrincipal':
+    '--from 的 principal "{principal}" 不是 Team "{team}" 的 present 非 private 成员',
   'federation.post.delivered': '已投递 {messageId} 到 {peer}（hop {hop}）',
   'federation.post.deduplicated': '对端已去重 {messageId} 到 {peer}（hop {hop}）',
   'federation.post.rejected': '投递被拒绝：{code}: {reason}',
@@ -261,10 +266,18 @@ export const zhCN = {
   'federation.peers.enabled': '已启用',
   'federation.peers.disabled': '已关闭',
   'federation.peers.empty': '没有配置 peer。',
+  'federation.peers.rateLimitDisabled': 'federation.rateLimitPerMinute 为 0：入站限流已关闭',
   'federation.peers.row':
-    '  {node}  {team}  direction={direction}  token_env={tokenEnv}  token={token}',
+    '  {node}  {team}  direction={direction}  allow_directory={allowDir}  ' +
+    'token_env={tokenEnv}  token={token}',
   'federation.peers.tokenSet': '已设置',
   'federation.peers.tokenUnset': '未设置',
+  'federation.teamInfo.title': 'Team {teamId}',
+  'federation.teamInfo.online': '在线 {online} / {total}',
+  'federation.teamInfo.members': '成员（{count}）：',
+  'federation.teamInfo.memberRow': '  {name}  {presence}  {lastSeen}',
+  'federation.teamInfo.empty': '没有成员。',
+  'federation.teamInfo.rejected': 'team-info 被拒绝：{code}：{reason}',
 
   // ── completion（0.18）──
   'completion.usage': '用法：vessel completion <bash|zsh|fish|powershell>',

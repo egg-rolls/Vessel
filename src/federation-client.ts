@@ -11,6 +11,11 @@
  */
 
 import { readFile } from 'node:fs/promises';
+import {
+  type FederationAddress,
+  formatFederationAddress,
+  parseFederationAddress,
+} from './federation-address';
 import type { FederationRuntimeOptions, FederationRuntimePeer } from './federation-config';
 
 /** wire 协议版本（DECISION-036 §3.2） */
@@ -18,6 +23,13 @@ export const FEDERATION_PROTOCOL = 'vessel.federation/1';
 
 /** 对端入站端点（DECISION-036 §4） */
 export const FEDERATION_MESSAGES_PATH = '/v1/federation/messages';
+
+/** 对端成员目录端点（0.21，DECISION-037 §7.2） */
+export const FEDERATION_TEAM_INFO_PATH = '/v1/federation/team-info';
+
+/** team-info `members_limit` 范围（与接收侧一致）。 */
+export const FEDERATION_TEAM_INFO_DEFAULT_LIMIT = 20;
+export const FEDERATION_TEAM_INFO_MAX_LIMIT = 100;
 
 /** `message_id` / `conversation_id` / `request_id` 共用形状 */
 const FEDERATION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -31,8 +43,8 @@ export interface FederationMessage {
   protocol: 'vessel.federation/1';
   message_id: string;
   conversation_id: string;
-  from: { node_id: string; team_id: string };
-  to: { node_id: string; team_id: string };
+  from: FederationAddress;
+  to: FederationAddress;
   content: string;
   ts: number;
   hop: number;
@@ -40,10 +52,10 @@ export interface FederationMessage {
 }
 
 export interface FederationPostInput {
-  /** 目标 peer 身份（必须命中 allowlist 且方向含 out） */
-  to: { node_id: string; team_id: string };
-  /** 本机发起 Team（节点身份来自 options.nodeId） */
-  fromTeamId: string;
+  /** 本机发起地址；`from.node_id` 必须等于 `options.nodeId` */
+  from: FederationAddress;
+  /** 目标地址（其 `(node_id, team_id)` 必须命中 allowlist 且方向含 out） */
+  to: FederationAddress;
   content: string;
   conversation_id?: string;
   request_id?: string;
@@ -67,6 +79,34 @@ export type FederationPostResult =
       reason: string;
       remote_code?: string;
     };
+
+/** team-info 成员条目（脱敏后的 wire 形状）。 */
+export interface FederationTeamInfoMember {
+  name: string;
+  presence: 'live' | 'gone';
+  last_seen?: number;
+}
+
+/** team-info 结果（DECISION-037 §7.2）。 */
+export interface FederationTeamInfo {
+  team_id: string;
+  name: string;
+  description?: string;
+  default_principal?: string;
+  member_count: number;
+  online_count: number;
+  members: FederationTeamInfoMember[];
+}
+
+export interface FederationTeamInfoInput {
+  /** 目标 Team 地址；`principal` 不参与目录查询。 */
+  to: FederationAddress;
+  members_limit?: number;
+}
+
+export type FederationTeamInfoResult =
+  | { status: 'ok'; team: FederationTeamInfo }
+  | { status: 'rejected'; code: string; reason: string; remote_code?: string };
 
 /**
  * 本地配置 / 调用方输入错误（不是对端拒绝）。
@@ -104,7 +144,7 @@ function validId(value: string): boolean {
 /** 找 allowlist peer；未知 / 方向不符返回 undefined（fail closed） */
 function findOutboundPeer(
   options: FederationRuntimeOptions,
-  to: { node_id: string; team_id: string },
+  to: Pick<FederationAddress, 'node_id' | 'team_id'>,
 ): FederationRuntimePeer | undefined {
   return options.peers.find(
     (peer) =>
@@ -115,7 +155,10 @@ function findOutboundPeer(
 }
 
 /** peer.url 缺失 / 非 http(s) 属于配置错误 */
-function resolveEndpoint(peer: FederationRuntimePeer): string {
+function resolveEndpoint(
+  peer: FederationRuntimePeer,
+  path: string = FEDERATION_MESSAGES_PATH,
+): string {
   if (peer.url === undefined || peer.url === '') {
     throw new FederationClientError(
       'federation_invalid_config',
@@ -137,7 +180,15 @@ function resolveEndpoint(peer: FederationRuntimePeer): string {
       `federation peer ${peer.nodeId}:${peer.teamId} url must be http(s)`,
     );
   }
-  return `${peer.url}${FEDERATION_MESSAGES_PATH}`;
+  return `${peer.url}${path}`;
+}
+
+/** 三段地址必须已通过 parser；不合法的对象在发请求前拒绝。 */
+function requireValidAddress(label: 'from' | 'to', address: FederationAddress): void {
+  const parsed = parseFederationAddress(formatFederationAddress(address));
+  if (!parsed.ok) {
+    throw new FederationClientError('federation_invalid', `federation ${label} address is invalid`);
+  }
 }
 
 /** 校验调用方输入并生成 wire 消息（hop 恒为 1） */
@@ -153,11 +204,14 @@ export function buildFederationMessage(
       `federation content must be 1..${FEDERATION_MAX_CONTENT_BYTES} UTF-8 bytes`,
     );
   }
-  if (input.fromTeamId === '') {
-    throw new FederationClientError('federation_invalid', 'federation fromTeamId is required');
-  }
-  if (input.to.node_id === '' || input.to.team_id === '') {
-    throw new FederationClientError('federation_invalid', 'federation target is required');
+  requireValidAddress('from', input.from);
+  requireValidAddress('to', input.to);
+  // 本机身份只由 options.nodeId 决定；调用方不能声明别的节点。
+  if (input.from.node_id !== options.nodeId) {
+    throw new FederationClientError(
+      'federation_invalid',
+      'federation from node_id does not match this node',
+    );
   }
   const conversationId = input.conversation_id ?? (io.generateId ?? randomId)();
   if (!validId(conversationId)) {
@@ -181,8 +235,8 @@ export function buildFederationMessage(
     protocol: FEDERATION_PROTOCOL,
     message_id: messageId,
     conversation_id: conversationId,
-    from: { node_id: options.nodeId, team_id: input.fromTeamId },
-    to: { node_id: input.to.node_id, team_id: input.to.team_id },
+    from: input.from,
+    to: input.to,
     content: input.content,
     ts: (io.now ?? Date.now)(),
     hop: 1,
@@ -306,4 +360,159 @@ export async function postFederation(
     hop: message.hop,
     cursor: body.cursor,
   };
+}
+
+function isCount(value: unknown): value is number {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * 严格解析对端目录响应并重建脱敏对象：只保留名字 / 活跃度 / 描述，
+ * 即使对端多返回 agent_id / workspace / policy 也不会进入结果。
+ */
+function parseTeamInfoBody(body: unknown): FederationTeamInfo | undefined {
+  if (!isRecord(body)) return undefined;
+  if (body.protocol !== FEDERATION_PROTOCOL) return undefined;
+  if (typeof body.team_id !== 'string' || body.team_id === '') return undefined;
+  if (typeof body.name !== 'string') return undefined;
+  if (!isCount(body.member_count) || !isCount(body.online_count)) return undefined;
+  if (!Array.isArray(body.members)) return undefined;
+
+  const members: FederationTeamInfoMember[] = [];
+  for (const raw of body.members) {
+    if (!isRecord(raw)) return undefined;
+    if (typeof raw.name !== 'string' || raw.name === '') return undefined;
+    if (raw.presence !== 'live' && raw.presence !== 'gone') return undefined;
+    const entry: FederationTeamInfoMember = { name: raw.name, presence: raw.presence };
+    if (raw.last_seen !== undefined) {
+      if (typeof raw.last_seen !== 'number' || !Number.isFinite(raw.last_seen)) return undefined;
+      entry.last_seen = raw.last_seen;
+    }
+    members.push(entry);
+  }
+
+  const team: FederationTeamInfo = {
+    team_id: body.team_id,
+    name: body.name,
+    member_count: body.member_count,
+    online_count: body.online_count,
+    members,
+  };
+  if (body.description !== undefined) {
+    if (typeof body.description !== 'string') return undefined;
+    team.description = body.description;
+  }
+  if (body.default_principal !== undefined) {
+    if (typeof body.default_principal !== 'string') return undefined;
+    team.default_principal = body.default_principal;
+  }
+  return team;
+}
+
+/**
+ * 查询 allowlist peer 的 Team 目录（0.21，DECISION-037 §7.2）。
+ *
+ * 禁用 / 未命中 allowlist 在构造请求前返回 rejected，不产生网络请求。
+ * 配置错误抛 `FederationClientError`；网络 / TLS / 超时不重试；token 不进入结果。
+ */
+export async function postFederationTeamInfo(
+  options: FederationRuntimeOptions,
+  input: FederationTeamInfoInput,
+  io: FederationClientIo = {},
+): Promise<FederationTeamInfoResult> {
+  if (options.enabled !== true) {
+    return {
+      status: 'rejected',
+      code: 'federation_disabled',
+      reason: 'federation is disabled on this node',
+    };
+  }
+
+  const peer = findOutboundPeer(options, input.to);
+  if (peer === undefined) {
+    return {
+      status: 'rejected',
+      code: 'federation_not_allowed',
+      reason: `no outbound federation peer for ${input.to.node_id}:${input.to.team_id}`,
+    };
+  }
+
+  requireValidAddress('to', input.to);
+  if (input.members_limit !== undefined) {
+    if (
+      typeof input.members_limit !== 'number' ||
+      !Number.isInteger(input.members_limit) ||
+      input.members_limit < 1 ||
+      input.members_limit > FEDERATION_TEAM_INFO_MAX_LIMIT
+    ) {
+      throw new FederationClientError(
+        'federation_invalid',
+        `members_limit must be an integer between 1 and ${FEDERATION_TEAM_INFO_MAX_LIMIT}`,
+      );
+    }
+  }
+
+  const endpoint = resolveEndpoint(peer, FEDERATION_TEAM_INFO_PATH);
+  const payload = {
+    protocol: FEDERATION_PROTOCOL,
+    team_id: input.to.team_id,
+    ...(input.members_limit !== undefined ? { members_limit: input.members_limit } : {}),
+  };
+
+  const init: FetchInit = {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${peer.token}`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(io.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+  };
+  if (peer.caFile !== undefined) {
+    let ca: string;
+    try {
+      ca = await readFile(peer.caFile, 'utf8');
+    } catch {
+      throw new FederationClientError(
+        'federation_invalid_config',
+        `cannot read CA file for ${peer.nodeId}:${peer.teamId}`,
+      );
+    }
+    init.tls = { ca };
+  }
+
+  const fetchImpl = io.fetchImpl ?? fetch;
+  let response: Response;
+  try {
+    response = await fetchImpl(endpoint, init);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return {
+      status: 'rejected',
+      code: 'federation_peer_unreachable',
+      reason: `cannot reach federation peer ${peer.nodeId}:${peer.teamId}: ${detail}`,
+    };
+  }
+
+  const body = await readJson(response);
+  if (!response.ok) {
+    const detail = errorDetail(body);
+    const result: FederationTeamInfoResult = {
+      status: 'rejected',
+      code: 'federation_peer_error',
+      reason: detail.message ?? `peer returned HTTP ${response.status}`,
+    };
+    if (detail.code !== undefined) result.remote_code = detail.code;
+    return result;
+  }
+
+  const team = parseTeamInfoBody(body);
+  if (team === undefined) {
+    return {
+      status: 'rejected',
+      code: 'federation_peer_error',
+      reason: 'peer returned an invalid federation team-info response',
+    };
+  }
+  return { status: 'ok', team };
 }

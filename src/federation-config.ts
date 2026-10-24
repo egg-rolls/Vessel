@@ -23,12 +23,16 @@ export interface FederationRuntimePeer {
   tokenEnv: string;
   /** 解析后的内存值；只用于出站 / 入站比较，不序列化。 */
   token: string;
+  /** 入站 team-info 目录查询开关；只有显式 `true` 才开启。 */
+  allowDirectory: boolean;
 }
 
 export interface FederationRuntimeOptions {
   enabled: boolean;
   nodeId: string;
   maxHops: number;
+  /** 每 peer 入站速率上限；0 = 不限制（`issues` 里记录 `rate_limit_disabled`）。 */
+  rateLimitPerMinute: number;
   /** 已解析 token 的 peer；缺失 token 的条目不在其中。 */
   peers: FederationRuntimePeer[];
 }
@@ -36,9 +40,31 @@ export interface FederationRuntimeOptions {
 export type FederationResolutionIssue =
   | { peer: string; reason: 'missing_token' }
   | { peer: string; reason: 'self_peer' }
-  | { peer: string; reason: 'invalid_config' };
+  | { peer: string; reason: 'invalid_config' }
+  | { reason: 'rate_limit_disabled' };
 
 const DEFAULT_MAX_HOPS = 4;
+
+/** 缺省每 peer 每分钟入站上限；0 合法但不限制。 */
+const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
+const MAX_RATE_LIMIT_PER_MINUTE = 600;
+
+/** 归一化 `rateLimitPerMinute`：0 合法，非法 / 缺失回缺省。 */
+function resolveRateLimit(value: unknown): {
+  rateLimitPerMinute: number;
+  disabled: boolean;
+} {
+  if (value === 0) return { rateLimitPerMinute: 0, disabled: true };
+  if (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_RATE_LIMIT_PER_MINUTE
+  ) {
+    return { rateLimitPerMinute: value, disabled: false };
+  }
+  return { rateLimitPerMinute: DEFAULT_RATE_LIMIT_PER_MINUTE, disabled: false };
+}
 
 function peerLabel(peer: FederationPeerConfig, index: number): string {
   const node = typeof peer.nodeId === 'string' ? peer.nodeId : `#${index}`;
@@ -98,6 +124,7 @@ export function resolveFederationOptions(input: {
       direction,
       tokenEnv: peer.tokenEnv,
       token,
+      allowDirectory: peer.allowDirectory === true,
     };
     if (typeof peer.localTeamId === 'string' && peer.localTeamId !== '') {
       resolved.localTeamId = peer.localTeamId;
@@ -119,11 +146,15 @@ export function resolveFederationOptions(input: {
       ? federation.maxHops
       : DEFAULT_MAX_HOPS;
 
+  const rateLimit = resolveRateLimit(federation?.rateLimitPerMinute);
+  if (rateLimit.disabled) issues.push({ reason: 'rate_limit_disabled' });
+
   return {
     options: {
       enabled: federation?.enabled === true,
       nodeId: input.nodeId,
       maxHops,
+      rateLimitPerMinute: rateLimit.rateLimitPerMinute,
       peers,
     },
     issues,

@@ -85,8 +85,10 @@ export const en: Record<MessageKey, string> = {
   'help.cmd.teamBudget': 'show conversation budget and blocked state',
   'help.cmd.teamBudgetOverride': 'raise or clear the budget limit of one conversation',
   'help.cmd.federationPost':
-    'deliver a message to an allowlisted remote team (log-only by default)',
+    'deliver a message to one member address on an allowlisted peer (principal@node:team)',
   'help.cmd.federationPeers': 'list federation peers and whether their tokens are set',
+  'help.cmd.federationTeamInfo':
+    'query an allowlisted peer team directory (requires allowDirectory)',
   'help.cmd.help': 'show this help',
 
   // ── common ──
@@ -261,9 +263,13 @@ export const en: Record<MessageKey, string> = {
   'hub.joinCode.code': 'join code: {code}',
   'hub.joinCode.expiresAt': 'expires at: {at}',
 
-  // ── federation (0.20 S7.1) ──
-  'federation.error.invalidFromTeam': 'Invalid --from-team: {id}',
+  // ── federation (0.20 S7.1；0.21 地址寻址) ──
+  'federation.error.invalidAddress': 'Invalid federation address for {flag}: {message}',
+  'federation.error.fromNodeMismatch': '--from node "{node}" does not match this node "{local}"',
   'federation.error.teamNotFound': 'Local Team not found: {team} ({path})',
+  'federation.error.rosterUnavailable': 'Cannot read the local member snapshot: {path}',
+  'federation.error.unknownPrincipal':
+    '--from principal "{principal}" is not a present, non-private member of Team "{team}"',
   'federation.post.delivered': 'delivered {messageId} to {peer} (hop {hop})',
   'federation.post.deduplicated': 'peer deduplicated {messageId} to {peer} (hop {hop})',
   'federation.post.rejected': 'delivery rejected: {code}: {reason}',
@@ -271,10 +277,19 @@ export const en: Record<MessageKey, string> = {
   'federation.peers.enabled': 'enabled',
   'federation.peers.disabled': 'disabled',
   'federation.peers.empty': 'No peers configured.',
+  'federation.peers.rateLimitDisabled':
+    'federation.rateLimitPerMinute is 0: inbound rate limiting is disabled',
   'federation.peers.row':
-    '  {node}  {team}  direction={direction}  token_env={tokenEnv}  token={token}',
+    '  {node}  {team}  direction={direction}  allow_directory={allowDir}  ' +
+    'token_env={tokenEnv}  token={token}',
   'federation.peers.tokenSet': 'set',
   'federation.peers.tokenUnset': 'missing',
+  'federation.teamInfo.title': 'Team {teamId}',
+  'federation.teamInfo.online': 'online {online} / {total}',
+  'federation.teamInfo.members': 'Members ({count}):',
+  'federation.teamInfo.memberRow': '  {name}  {presence}  {lastSeen}',
+  'federation.teamInfo.empty': 'No members.',
+  'federation.teamInfo.rejected': 'team-info rejected: {code}: {reason}',
 
   // ── completion (0.18) ──
   'completion.usage': 'Usage: vessel completion <bash|zsh|fish|powershell>',

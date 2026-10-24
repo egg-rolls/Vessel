@@ -48,6 +48,7 @@ function peer(overrides: Partial<FederationRuntimePeer> = {}): FederationRuntime
     direction: 'out',
     tokenEnv: 'PEER_TOKEN',
     token: 'secret-token-value',
+    allowDirectory: false,
     ...overrides,
   };
 }
@@ -57,14 +58,15 @@ function options(overrides: Partial<FederationRuntimeOptions> = {}): FederationR
     enabled: true,
     nodeId: 'node-a',
     maxHops: 4,
+    rateLimitPerMinute: 60,
     peers: [peer()],
     ...overrides,
   };
 }
 
 const input = {
-  to: { node_id: 'node-b', team_id: 'beta' },
-  fromTeamId: 'alpha',
+  from: { principal: 'alice', node_id: 'node-a', team_id: 'alpha' },
+  to: { principal: 'eggrolls', node_id: 'node-b', team_id: 'beta' },
   content: 'hello from alpha',
 };
 
@@ -123,7 +125,7 @@ describe('postFederation', () => {
       options({
         peers: [peer({ url: `http://127.0.0.1:${server.port}` })],
       }),
-      { ...input, to: { node_id: 'node-x', team_id: 'beta' } },
+      { ...input, to: { ...input.to, node_id: 'node-x' } },
     );
     expect(result.status).toBe('rejected');
     if (result.status !== 'rejected') return;
@@ -176,8 +178,8 @@ describe('postFederation', () => {
       protocol: 'vessel.federation/1',
       message_id: expect.stringMatching(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
       conversation_id: expect.stringMatching(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
-      from: { node_id: 'node-a', team_id: 'alpha' },
-      to: { node_id: 'node-b', team_id: 'beta' },
+      from: { principal: 'alice', node_id: 'node-a', team_id: 'alpha' },
+      to: { principal: 'eggrolls', node_id: 'node-b', team_id: 'beta' },
       content: 'hello from alpha',
       ts: 1_700_000_000_000,
       hop: 1,
@@ -260,6 +262,38 @@ describe('postFederation', () => {
     await expect(
       postFederation(options(), { ...input, conversation_id: 'bad id with spaces' }),
     ).rejects.toMatchObject({ code: 'federation_invalid' });
+  });
+
+  it('rejects a from node that is not this node without calling fetch', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return success();
+    }) as unknown as typeof fetch;
+    await expect(
+      postFederation(
+        options({ peers: [peer({ url: 'http://127.0.0.1:1' })] }),
+        { ...input, from: { ...input.from, node_id: 'node-x' } },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ code: 'federation_invalid' });
+    expect(calls).toBe(0);
+  });
+
+  it('rejects an invalid address segment without calling fetch', async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return success();
+    }) as unknown as typeof fetch;
+    await expect(
+      postFederation(
+        options({ peers: [peer({ url: 'http://127.0.0.1:1' })] }),
+        { ...input, to: { ...input.to, principal: 'bad.principal' } },
+        { fetchImpl },
+      ),
+    ).rejects.toMatchObject({ code: 'federation_invalid' });
+    expect(calls).toBe(0);
   });
 
   it('builds hop=1 and generates ids in the frozen pattern', () => {

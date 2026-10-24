@@ -138,8 +138,12 @@ function printHelp(): void {
       t('help.cmd.teamBudgetOverride'),
     ],
     [
-      'vessel federation post <node>:<team> <content...> --from-team <team_id>',
+      'vessel federation post --to <principal@node:team> --from <principal@node:team> <content...>',
       t('help.cmd.federationPost'),
+    ],
+    [
+      'vessel federation team-info --to <principal@node:team> [--members N] [--json]',
+      t('help.cmd.federationTeamInfo'),
     ],
     ['vessel federation peers [--json]', t('help.cmd.federationPeers')],
     ['vessel errors [--json]', t('help.cmd.errors')],
