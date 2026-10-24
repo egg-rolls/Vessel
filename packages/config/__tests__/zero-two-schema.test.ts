@@ -133,6 +133,20 @@ describe('transport', () => {
     }
   });
 
+  it('rejects removed loopback / remote keys', () => {
+    const removed: Record<string, unknown> = {
+      nodes: [],
+      hostname: '127.0.0.1',
+      peersDir: '/tmp/peers',
+      heartbeatMs: 1000,
+      peerTtlMs: 3000,
+    };
+    for (const [key, value] of Object.entries(removed)) {
+      const config = { transport: { [key]: value } } as unknown as VesselConfig;
+      expect(errorsOf(config).map((e) => e.path)).toContain(`transport.${key}`);
+    }
+  });
+
   it('token 必须非空', () => {
     expect(errorsOf({ transport: { token: ' ' } }).map((e) => e.path)).toContain('transport.token');
   });

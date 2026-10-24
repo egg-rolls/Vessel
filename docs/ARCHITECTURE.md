@@ -1063,8 +1063,9 @@ WS 方法：`run.submit` / `run.cancel` / `run.get` / `sessions.list` / `tools.l
 
 **跨节点 Agent 传输（0.6，0.22.1 删除）**
 
-- 删除 `src/node-registry.ts`、`src/remote-transport.ts`、`src/deferred-transport.ts`、
-  `transport.kind: loopback|remote` 及其 `transport.nodes[]` 配置。
+- 删除 `src/node-registry.ts`、`src/remote-transport.ts`、`src/deferred-transport.ts`。
+- 现状：`transport.kind` 只接受 `in-process`；`loopback` / `remote` 与
+  `transport.nodes[]` 都是显式 validation error。
 - 现状：跨节点能力只有 federation 平面（`POST /v1/federation/messages`，§45）；
   `--connect` 客户端连远端 gateway 的能力不变。
 
@@ -2341,7 +2342,7 @@ interface LimitBlock {
 - 删除 `plugins/tools/team`、`plugins/tools/delegate-task` 及 `team_*`（spawn / send / inbox / status / cancel）与 `delegate_task` 模型工具。
 - 删除 `TeamConfig` / `DelegateConfig`、`team.*` / `delegate.*` 配置键、team / delegate 装配、`team-wiring` 与 `team.legacyTools` 兼容开关；tenant overlay 不再接受 `team` / `delegate` 块。
 - 删除旧 owner inbox 轮询路径；owner 回复统一经 `takeMessages` + `BeforeLlm` 注入。
-- `/v1/team/*` 传输协议文件与 gateway 方法保留，但 0.17 没有生产装配，也没有模型工具入口；Phase B 可复用。
+- `/v1/team/*` 传输协议与 gateway 方法保留到 0.22.1；0.22.1 起已删除（legacy 跨节点 Agent 面不再存在）。
 - canonical RPC 仍为 **44**，本版本不新增方法；owner 端点是本地控制传输，不进入 RPC 方法表。
 
 ### 39.8 配置与限制

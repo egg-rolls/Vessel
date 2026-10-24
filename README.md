@@ -368,16 +368,11 @@ connect:
   token_env: VESSEL_CONNECT_TOKEN
   ca_file: /etc/vessel/ca.pem
 
-# node-a（父端）：静态节点表
+# node-a（父端）：节点身份；transport.kind 只剩 in-process
 host:
   node_id: node-a
 transport:
-  kind: remote
-  nodes:
-    - id: node-b
-      url: https://node-b.example.com:8642
-      token_env: NODE_B_TOKEN
-      ca_file: /etc/vessel/node-b-ca.pem
+  kind: in-process
 ```
 
 - **远程客户端**：`--connect <http(s)://origin>`（或 `VESSEL_CONNECT`）连接远端 gateway。回环允许明文；**非回环必须 HTTPS + token**。URL 只接受 origin，不能带 path/query/内嵌 token。
@@ -387,8 +382,8 @@ transport:
 - **跨节点 team**：legacy `/v1/team/*` / `RemoteTransport` / `NodeRegistry` / `LoopbackTransport` 已于 0.22.1 删除；跨节点投递只走 federation（`POST /v1/federation/messages`）。0.19 S3 的 canonical `teams.*` 是本地 Team。
 - **Hub 目录（0.19 S5 / S5.1）**：`vessel hub start` 启动独立前台目录进程；节点用 `vessel hub pair` 生成一次性配对码，hub 用 `vessel hub node add <url> --code <CODE>` 纳入。hub 只推 `{node_id, team_id, request_id?, reason, ts}` 指针，**不代理正文**；浏览器仍需直连节点。S5 支持 hub → node 拨号；S5.1 支持 node → hub 出站（NAT）：hub `vessel hub join-code`、节点 `vessel hub join <hub-url> --code`。跨节点 A2A（S7）未实现。配置见 [CONFIG.md](docs/operations/CONFIG.md) §2.13。
 - **tenant 边界**：远端 tenant 由 token principal 派生；admin 可用 `--tenant` 覆盖，非 admin 指定其它 tenant 返回 `forbidden` / WS 4403。
-- **安全收紧**：durable 端点按 principal 的 tenant 过滤并校验角色；保留的 team REST 复用 `ROLE_RANK`（GET 允许 `read`，写操作要求 `write` / `admin`）；双向 / 网状节点丢弃 `event.node_id === 本机` 的回灌帧。
-- **已知限制**：跨节点无全局事件序，seq 按 `(node_id, run_id)` 解释；事件回灌按 `node:incarnation:run_id:seq` 去重（无 `run_id` 写 `-`；对端 `incarnation` 变化或 seq 回退只清该来源节点的键），消息键为 `from:id`、gateway 入站再补 tenant（`tenant:from:id`）。去重集合只在进程内，不持久化，**不宣称跨重启 exactly-once**。`request_id` 去重是进程内 Map（上限 1000、不跨重启）。没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable。
+- **安全收紧**：durable 端点按 principal 的 tenant 过滤并校验角色。
+- **已知限制**：跨节点 agent transport 已于 0.22.1 删除，跨节点投递只有 federation；没有 mDNS / 服务网格 / 自动发现 / mTLS / 全局 durable。
 - 完整证书、两机配置、独立前端部署与故障排查见 [docs/operations/REMOTE.md](docs/operations/REMOTE.md)。
 
 ## 发布与更新
