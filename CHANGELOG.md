@@ -25,6 +25,15 @@
   失败，仅当前节点可跳转；Settings → Connection 提供添加 / 移除、`health.get` 状态与
   按需 `teams.list`（人类 token，不用 federation team-info）。
 
+### Fixed
+
+- **Q-001**：`attention respond --select/--all` 只接受 `--status pending`；
+  `--status orphaned` 在解析与运行两层都拒绝，索引不会再落到未看到的 pending。
+- **Q-002**：`--agent <id>` 作为纯 id 直接下发，不再调用 `agents.list`；
+  roster 查询的 403 不再被误报成 peer token 拒绝（只有 401 按鉴权失败处理）。
+- **Q-008**：Web Attention 手动 Refresh 同时清空追加页与 cursor，已答行不再残留。
+- **Q-009**：`attention --interactive --json` 显式报错，不再静默忽略 `--json`。
+
 ### Changed
 
 - hub 目录只用于发现；Web 不消费 hub 数据面，也不经 hub 代理正文。

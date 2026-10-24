@@ -2630,6 +2630,10 @@ interface LimitBlock {
   不一致返回 `federation_target_mismatch`，零应答；principal 不参与列表过滤。
 - 批量：默认逐条确认；`--select` 只作用于当前页；`--all` 处理所有可见页（上限 200）
   且必须 `--yes`；逐条输出成功 / 失败，部分失败不中止。
+- 应答只接受 `--status pending`；`--status orphaned` 在解析与运行两层都拒绝，
+  避免拿 orphaned 列表的编号去批准一条未看到的 pending。
+- `--agent <id>` 作为纯 id 直接下发，不调用 `agents.list`；roster 查询的 403 不按
+  鉴权失败处理（只有 401 才提示人类 token）。`--interactive --json` 显式报错。
 - 无 token / 无 scope → 401/403，不显示列表内容；`not_found` / `run_ended` / `conflict`
   原样透传；不自动重试。
 
