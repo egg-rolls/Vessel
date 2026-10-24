@@ -18,6 +18,7 @@ import { useConnection } from '../../gateway/ConnectionProvider';
 import type { EvalReport } from '../../gateway/types';
 import { t, useLocale } from '../../i18n';
 import { resourceData, useResource } from '../../state/useResource';
+import { AttentionPanel } from './AttentionPanel';
 import { DiagnosticsView } from './DiagnosticsView';
 import { TasksView } from './TasksView';
 
@@ -30,6 +31,7 @@ function observeTabs(): readonly { id: Tab; label: string }[] {
     { id: 'evals', label: t('observe.tab.evals') },
     { id: 'diagnostics', label: t('observe.tab.diagnostics') },
     { id: 'tasks', label: t('observe.tab.tasks') },
+    { id: 'attention', label: t('observe.tab.attention') },
   ];
 }
 
@@ -79,6 +81,7 @@ export function ObserveView({
         {route.tab === 'evals' && <EvalsPanel />}
         {route.tab === 'diagnostics' && <DiagnosticsView />}
         {route.tab === 'tasks' && <TasksView />}
+        {route.tab === 'attention' && <AttentionPanel navigate={navigate} />}
       </div>
     </div>
   );

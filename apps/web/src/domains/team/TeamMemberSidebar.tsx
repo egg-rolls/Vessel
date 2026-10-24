@@ -1,7 +1,8 @@
 /**
  * Team 成员侧栏：presence / engine state / attention / Body 入口。
  *
- * 排序固定：present 优先、live 优先，再按 running → waiting_permission → idle；
+ * 顺序唯一来源是服务端 `teams.get` 的 `members` 窗口（DECISION-038 §2.3：
+ * live → last_seen desc → name），这里**不得重新排序**。
  * `left` 成员整行降透明度，只保留查看动作。
  */
 import { ActionMenu } from '../../components/ActionMenu';
@@ -9,27 +10,7 @@ import { StatusChip } from '../../components/StatusChip';
 import type { AskUserRequest, PermissionRequest, TeamMember } from '../../gateway/types';
 import { t } from '../../i18n';
 import { memberStatus } from './member-status';
-import { memberDisplayName, shortAgentId } from './mention';
-
-function stateRank(member: TeamMember): number {
-  const raw = (member.state ?? '').toLowerCase();
-  if (raw === 'running') return 0;
-  if (raw === 'waiting_permission') return 1;
-  return 2;
-}
-
-export function sortMembers(members: readonly TeamMember[]): TeamMember[] {
-  return [...members].sort((a, b) => {
-    if (a.membership !== b.membership) return a.membership === 'present' ? -1 : 1;
-    if (a.presence !== b.presence) return a.presence === 'live' ? -1 : 1;
-    const rank = stateRank(a) - stateRank(b);
-    if (rank !== 0) return rank;
-    const left = memberDisplayName(a);
-    const right = memberDisplayName(b);
-    if (left === right) return a.agent_id < b.agent_id ? -1 : 1;
-    return left < right ? -1 : 1;
-  });
-}
+import { shortAgentId } from './mention';
 
 export function attentionCount(
   member: TeamMember,
@@ -49,6 +30,8 @@ function copyAgentId(agentId: string): void {
 
 export interface TeamMemberSidebarProps {
   members: readonly TeamMember[];
+  /** `team.member_count`（完整 present 总数）；缺失时退化为当前窗口长度。 */
+  total?: number;
   permissions: readonly PermissionRequest[];
   asks: readonly AskUserRequest[];
   activeMemberId?: string;
@@ -59,6 +42,7 @@ export interface TeamMemberSidebarProps {
 
 export function TeamMemberSidebar({
   members,
+  total,
   permissions,
   asks,
   activeMemberId,
@@ -66,13 +50,15 @@ export function TeamMemberSidebar({
   onOpenSession,
   onClose,
 }: TeamMemberSidebarProps) {
-  const sorted = sortMembers(members);
+  const totalCount = total ?? members.length;
 
   return (
     <div className="team-members">
       <div className="column-header team-members-head">
         <span className="column-title">{t('team.chat.members')}</span>
-        <span className="team-members-count dim mono">{members.length}</span>
+        <span className="team-members-count dim mono">
+          {members.length} / {totalCount}
+        </span>
         {onClose && (
           <button
             type="button"
@@ -86,7 +72,7 @@ export function TeamMemberSidebar({
       </div>
 
       <ul className="team-members-scroll" aria-label={t('team.a11y.memberList')}>
-        {sorted.map((member) => {
+        {members.map((member) => {
           const status = memberStatus(member);
           const sessionId = member.session_id;
           const attention = attentionCount(member, permissions, asks);

@@ -1,8 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_LIMIT,
+  DEFAULT_MEMBERS_LIMIT,
   MAX_LIMIT,
+  MAX_MEMBERS_LIMIT,
+  memberWindowFlags,
   nextLimitFor,
+  nextMembersLimitFor,
   teamWindowFlags,
 } from '../src/domains/team/team-window';
 
@@ -15,6 +19,17 @@ describe('team message window', () => {
     expect(nextLimitFor(1000)).toBe(MAX_LIMIT);
     // 反例：不能跳过 200 / 500 直接到 1000。
     expect(nextLimitFor(100)).not.toBe(1000);
+  });
+
+  test('member window grows by 80 to the hard cap of 100', () => {
+    expect(nextMembersLimitFor(DEFAULT_MEMBERS_LIMIT)).toBe(MAX_MEMBERS_LIMIT);
+    // 已到上限不能再加，也不能越过服务端 100 的最大值。
+    expect(nextMembersLimitFor(MAX_MEMBERS_LIMIT)).toBe(MAX_MEMBERS_LIMIT);
+
+    expect(memberWindowFlags(20, 50, 20)).toEqual({ canLoadMore: true, capped: false });
+    expect(memberWindowFlags(50, 50, 100)).toEqual({ canLoadMore: false, capped: false });
+    // 到 100 仍不足：只能提示“仅显示前 100”，不能再发请求。
+    expect(memberWindowFlags(100, 150, 100)).toEqual({ canLoadMore: false, capped: true });
   });
 
   test('reports truncation honestly without a has_more cursor', () => {

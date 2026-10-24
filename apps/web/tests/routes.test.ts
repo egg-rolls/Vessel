@@ -23,6 +23,8 @@ const ROUTES: Route[] = [
   { domain: 'integrations', tab: 'channels' },
   { domain: 'observe', tab: 'metrics' },
   { domain: 'observe', tab: 'evals' },
+  { domain: 'observe', tab: 'tasks' },
+  { domain: 'observe', tab: 'attention' },
   { domain: 'settings', tab: 'connection' },
   { domain: 'settings', tab: 'nodes' },
   { domain: 'settings', tab: 'config' },

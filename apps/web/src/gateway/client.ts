@@ -10,7 +10,7 @@
  * （见 gatewayUrl.ts）。跨 Origin 时 gateway 必须配置 `serve.allowed_origins`。
  */
 
-import type { ListedInteraction } from './interaction-hydration';
+import type { ListedInteraction, ListedInteractionPage } from './interaction-hydration';
 import { permissionRespondParams } from './interactions';
 import type {
   AgentsTreeResponse,
@@ -506,7 +506,10 @@ export class GatewayClient {
     return body.runs ?? [];
   }
 
-  /** 0.18：读取 pending / answered / orphaned 交互（旧 gateway 无此方法时由调用方处理）。 */
+  /**
+   * 0.18：读取 pending / answered / orphaned 交互（旧 gateway 无此方法时由调用方处理）。
+   * 只是分页版本的兼容包装：返回数组，不改变 hydration 的调用契约。
+   */
   async listInteractions(
     params: {
       session_id?: string;
@@ -516,11 +519,39 @@ export class GatewayClient {
       tenant_id?: string;
     } = {},
   ): Promise<ListedInteraction[]> {
-    const body = await this.rpc<{ interactions?: ListedInteraction[] }>(
-      'interactions.list',
-      params,
-    );
-    return body.interactions ?? [];
+    const page = await this.listInteractionsPage(params);
+    return page.interactions;
+  }
+
+  /**
+   * DECISION-038 §2.2：`interactions.list` 分页（order / cursor / total additive）。
+   * 旧 gateway 忽略未知参数；返回形状缺失时按空页处理。
+   */
+  async listInteractionsPage(
+    params: {
+      session_id?: string;
+      run_id?: string;
+      team_id?: string;
+      status?: 'pending' | 'answered' | 'orphaned';
+      limit?: number;
+      order?: 'oldest' | 'newest';
+      cursor?: string;
+      tenant_id?: string;
+    } = {},
+  ): Promise<ListedInteractionPage> {
+    const body = await this.rpc<{
+      interactions?: ListedInteraction[];
+      total?: number;
+      next_cursor?: string;
+    }>('interactions.list', params);
+    const interactions = body.interactions ?? [];
+    return {
+      interactions,
+      total: typeof body.total === 'number' ? body.total : interactions.length,
+      ...(typeof body.next_cursor === 'string' && body.next_cursor.length > 0
+        ? { next_cursor: body.next_cursor }
+        : {}),
+    };
   }
 
   /** canonical runs.get；失败时回退 legacy WS run.get（旧 gateway）。 */
@@ -772,10 +803,11 @@ export class GatewayClient {
     return body.teams ?? [];
   }
 
-  getTeam(teamId: string, opts?: { limit?: number }): Promise<TeamDetail> {
+  getTeam(teamId: string, opts?: { limit?: number; members_limit?: number }): Promise<TeamDetail> {
     return this.rpc<TeamDetail>('teams.get', {
       team_id: teamId,
       ...(opts?.limit !== undefined ? { limit: opts.limit } : {}),
+      ...(opts?.members_limit !== undefined ? { members_limit: opts.members_limit } : {}),
     });
   }
 

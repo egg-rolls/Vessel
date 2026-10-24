@@ -6,6 +6,7 @@
  */
 import { Markdown } from '../../components/Markdown';
 import { StatusChip } from '../../components/StatusChip';
+import { useOptionalToast } from '../../components/ToastProvider';
 import { formatClock } from '../../format';
 import type { TeamDelivery, TeamMessage } from '../../gateway/types';
 import { t } from '../../i18n';
@@ -110,9 +111,23 @@ export function TeamMessageRow({
   onViewSession?: () => void;
   onRetry?: () => void;
 }) {
+  // 钩子必须在 system 早退之前调用，保证同一实例的 hook 顺序稳定。
+  const toast = useOptionalToast();
+
   if (message.kind === 'system') {
     return <SystemNotice message={message} senderLabel={senderLabel} />;
   }
+
+  const federationFrom = message.federation?.from_addr;
+  const copyFederationAddress = () => {
+    if (!federationFrom) return;
+    try {
+      void navigator.clipboard?.writeText(federationFrom).catch(() => undefined);
+    } catch {
+      // clipboard 不可用（非安全上下文 / 权限拒绝）：仍给出回复指引。
+    }
+    toast?.info(t('team.federation.replyHint', { addr: federationFrom }));
+  };
 
   const isReply = message.kind === 'reply';
   // 只有 canonical Web 记录固定 `from='human'`。不能按 roster 反推 human：
@@ -137,6 +152,11 @@ export function TeamMessageRow({
         </span>
         {isAgent && <span className="team-message-tag">{t('team.message.agentTag')}</span>}
         {isReply && <span className="team-message-tag">{t('team.message.replyTag')}</span>}
+        {federationFrom && (
+          <span className="team-message-federation mono" title={federationFrom}>
+            {t('team.federation.from')} {federationFrom}
+          </span>
+        )}
         <MessageTime ts={message.ts} />
         {message.sendStatus === 'sending' && (
           <span className="team-message-sending dim">{t('team.composer.sending')}</span>
@@ -150,6 +170,16 @@ export function TeamMessageRow({
       {(isReply || isAgent) && canViewSession && onViewSession && (
         <button type="button" className="link-btn team-message-view-body" onClick={onViewSession}>
           {t('team.message.viewBody')}
+        </button>
+      )}
+
+      {federationFrom && (
+        <button
+          type="button"
+          className="link-btn team-message-reply-address"
+          onClick={copyFederationAddress}
+        >
+          {t('team.federation.reply')}
         </button>
       )}
 
