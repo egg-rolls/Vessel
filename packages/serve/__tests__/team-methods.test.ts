@@ -193,6 +193,13 @@ class FakeTeamControl implements TeamControlLike {
     return undefined;
   }
 
+  async roster(teamId: string): Promise<TeamDetailLike['members']> {
+    this.maybeFail();
+    if (teamId === summary.team_id) return detail.members;
+    if (teamId === bravoSummary.team_id) return bravoDetail.members;
+    return [];
+  }
+
   async post(input: PostInput): Promise<TeamPostResultLike> {
     this.calls.post.push(input);
     this.maybeFail();

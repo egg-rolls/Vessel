@@ -75,3 +75,29 @@ tags: [federation, cross-node, team, allowlist, hop, tls, token]
   [ADR-067](ADR-067-cross-node-dedup-keys.md)（去重键）、
   [ADR-091](ADR-091-agent-body-and-presence.md)（Team / Agent）、
   [ADR-093](ADR-093-hub-control-plane.md)（hub 只做目录，不做数据面）。
+
+## Addendum（0.21 成员寻址）
+
+> 0.21 把 S7 的 team ↔ team 投递改为**按成员寻址**。本节只追加当前事实；
+> 上面“wire 不出现 agent 标识 / worker 不可跨节点寻址”的不变量由本节取代。
+
+- **地址**：`<principal>@<node_id>:<team_id>`；`principal` 是目标 Team 的 present 成员名，
+  或保留字 `human`。三段字符集互斥；principal 是名字，不是 agent id。
+- **wire**：`from` / `to` 为 `{ node_id, team_id, principal }`；严格解析不变，
+  缺 `to.principal` 返回 `federation_principal_required`。
+- **单点投递**：入站最多 1 个 run。`human` 只写日志；其他名字必须命中唯一
+  present 非 private 成员，否则 404 且零写入；private / left / closed / 重名同样 404。
+  解析使用完整 roster，不受 `teams.get` 的展示窗口影响。
+- **删除 fan-out**：`accept` 只有 `'principal'`（缺省）与 `'log'`；
+  `'members'` 在配置、team.json 与运行时都是显式错误；未知值 fail-safe 为 `log`，绝不唤醒成员。
+- **回复**：`agent` 工具的 `send` 接受地址形状，运行时填 `from`（模型不能伪造）；
+  人类 owner 走 `vessel federation post --from human@<node>:<team>`。
+- **Team 信息**：`description?` / `default_principal?`；`teams.get` 的 `members_limit`
+  （缺省 20，最大 100，活跃优先）；opt-in `POST /v1/federation/team-info`
+  （peer `allowDirectory`，缺省 false），只返回名字 / presence / `last_seen` / desc，
+  不含 agent id / workspace / policy / private。
+- **信任边界**：peer token 认证节点，principal 由发送节点自证；不是用户级密码学身份。
+  unknown principal 与 unknown team 统一 404，不泄漏存在性。
+- **限流**：`federation.rateLimitPerMinute` 1..600（缺省 60），超限 429，零写入。
+- **不变**：hub 不参与数据面；hop = 1；无中继 / 离线队列 / 跨重启 exactly-once；
+  canonical 仍 48；v1 固定 default tenant。

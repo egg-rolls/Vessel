@@ -2558,12 +2558,13 @@ interface LimitBlock {
 
 ### 45.2 跨节点 federation（team ↔ team）
 
-- 默认关闭；全局 `federation.peers[]` 显式 allowlist，wire 只含 `(node_id, team_id)`。
+- 默认关闭；全局 `federation.peers[]` 显式 allowlist。
   入站 `POST /v1/federation/messages`，出站 `vessel federation post|peers`；
   hub 不在数据面。详见 [ADR-094](adr/ADR-094-federation-team-to-team.md)。
 - 严格解析、peer bearer（`tokenEnv`）、非回环 https、hop 上界、自指环拒绝、进程内去重。
-- 入站默认只写 Team 日志（0 run）；`teams[].policy.federation.accept = 'members'`
-  才对本机 present 非 private 成员 fan-out。
+- **0.21 起改为按成员寻址**（见 §46）：wire 的 `from/to` 带 `principal`；
+  入站按名字单点投递，最多 1 个 run；`teams[].policy.federation.accept = 'members'`
+  是 validation error，不再有全员 fan-out。
 - v1 固定 default tenant；不新增 canonical RPC；legacy `/v1/team/*` / `RemoteTransport` /
   `NodeRegistry` 冻结，禁止新增调用方。
 
@@ -2572,3 +2573,36 @@ interface LimitBlock {
 - 0.20 新增 fork 与 federation 传输面，但**不新增 canonical 方法**，方法表仍 **48**
   （47 个 domain 方法 + `events.subscribe`）。
 - `packages/serve` 仍不依赖 `@vessel-agent/agent`；`packages/core` 不出现 Team / federation 概念。
+
+## 46. 0.21.0 跨节点成员寻址（S8，已实现）
+
+### 46.1 地址与 wire
+
+- 地址 `<principal>@<node_id>:<team_id>`；`principal` 是目标 Team 的 present 成员名，
+  或保留字 `human`。三段字符集互斥，按最后一个 `@` 与其中唯一 `:` 解析。
+- wire 的 `from` / `to` 为 `{ node_id, team_id, principal }`；principal 是名字，不是 agent id。
+- `vessel federation post --to <addr> --from <addr> <content>`；不再有 `--from-team`。
+- `agent` 工具的 `send` 接受同一地址形状；运行时按调用者填
+  `from = <name>@<local node>:<team>`，模型不能伪造。无 Team 的 root owner 走 CLI。
+
+### 46.2 接收与策略
+
+- 入站按 `to.principal` 单点解析：`human` → 日志 + owner，0 run；其他名字 →
+  present 非 private 成员，先写 mention 日志再 dispatch 给**一个人**。
+- 解析使用**完整 roster**（不是 `teams.get` 的展示窗口）；private / left / closed /
+  不存在 / 重名 → 404，零写入。
+- `accept` 只有 `'principal'`（缺省）与 `'log'`；`'members'` 在任何入口都是显式错误。
+  非法值运行时 fail-safe 为 `log`（0 run），绝不唤醒成员。
+- 每 peer 入站限流 `federation.rateLimitPerMinute`（1..600，缺省 60）；超限 429。
+- hop = 1、无中继、无离线队列、无跨重启 exactly-once。
+
+### 46.3 Team 信息与回复
+
+- `TeamRecord` additive：`description?` / `default_principal?`；`TeamSummary` 透传。
+- `teams.get` 的 `members_limit`（缺省 20，最大 100）；排序 live → `last_seen` 降序 → name；
+  `TeamMemberSummary.last_seen?`。
+- opt-in `POST /v1/federation/team-info`（peer `allowDirectory`，缺省 false）：
+  只返回 desc / 默认接头人 / present 成员 top N，无 agent id / workspace / policy / private。
+- 入站日志 `from` 为 `federation:<principal>@<node>:<team>`；`TeamLogEntry.federation?`
+  带结构化的 from / to / conversation_id / hop。派发给成员的正文前置回信抬头。
+- 不新增 canonical RPC（仍 48）；详见 [ADR-094 Addendum](adr/ADR-094-federation-team-to-team.md)。

@@ -39,13 +39,20 @@ export { type EventGap, type SeqEvent, SeqEventBuffer } from './event-buffer.js'
 export { BROADCAST_PREVIEW_LIMIT, summarizeBroadcastEvent } from './event-summary.js';
 export {
   createFederationRoute,
+  FEDERATION_DEFAULT_MEMBERS_LIMIT,
+  FEDERATION_DEFAULT_RATE_LIMIT,
+  FEDERATION_MEMBERS_LIMIT_MAX,
   FEDERATION_MESSAGES_PATH,
   FEDERATION_PROTOCOL,
+  FEDERATION_TEAM_INFO_PATH,
   type FederationDirection,
   type FederationGatewayOptions,
   type FederationGatewayPeer,
+  type FederationResolution,
   type FederationRoute,
   type FederationRouteOptions,
+  type FederationTeamInfo,
+  type FederationTeamInfoMember,
 } from './federation.js';
 export {
   type FeishuGatewayOptions,

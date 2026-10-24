@@ -51,6 +51,8 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 
 - **0.20.0 状态**：fork 与跨节点 federation（基于 `main` 0.19.1，未随版本发布）：`dispatch` 在 `gone + resume` 失败后按 `teams[].policy.allowFork`（缺省 false）或 owner / CLI 显式 `allow_fork` fork 新 Agent（新 id / name / session、`epoch=0`、不带历史、prompt 带绝对 handoff）；private / 无 Team / 无 handoff / `already_forked` 零写入；`agent.forked` + `system_event:'fork'`；父 gone 的回复发 `agent.reply.dropped`。跨节点 `federation.enabled` 默认关闭、显式 peer allowlist，wire 只含 `(node_id,team_id)`；入站 `POST /v1/federation/messages` 默认只写 Team 日志，`teams[].policy.federation.accept: 'members'` 才 fan-out；hop 仅防御上界；v1 固定 default tenant。canonical 仍 **48**。决策见 [ADR-091 Addendum](docs/adr/ADR-091-agent-body-and-presence.md) / [ADR-094](docs/adr/ADR-094-federation-team-to-team.md)。
 
+- **0.21.0 状态**：跨节点成员寻址（S8）：地址 `principal@node:team`；wire 的 `from/to` 带 `principal`；入站按名字单点投递（`human` / `principal` / `log`），最多 1 个 run；**删除** `teams[].policy.federation.accept = 'members'` 与全员 fan-out（现在写 `'members'` 是显式错误）；`agent` 工具的 `send` 接受地址形状回信（运行时填 `from`）；`teams.get` 的 `members_limit` 缺省 20 / 最大 100、活跃优先、`last_seen`；opt-in `POST /v1/federation/team-info`（peer `allowDirectory`）；`federation.rateLimitPerMinute` 1..600。canonical 仍 **48**。决策见 [ADR-094 Addendum](docs/adr/ADR-094-federation-team-to-team.md)。
+
 ## 代码风格与硬规矩
 
 - 不引入 LangChain / LangGraph。
@@ -129,6 +131,7 @@ Vessel 是一个**可嵌入的多 agent 平台 runtime**：极简核心（稳定
 - **Team 日志不是队列**（0.19 S3，ADR-091 Addendum）：无 `@` 的 post / reply / system **绝不产生 run**；`@` 必须先写日志再 dispatch，日志写失败不得 dispatch；`mentions` 只收结构化 agent id，不从正文解析。`TeamService` 是唯一 Team 日志写入点；`packages/serve` 通过结构化 `TeamControlLike` 注入，不依赖 `@vessel-agent/agent`。`teams.members remove` 复用 `close`（归档不删历史），`add` 只走 `AgentService.reinstate`；`closed → idle` 不得走普通 `setState`。
 - **Team 可见性 fail closed**（0.19 S3）：Team 日志对 team 可见，private 成员的 id / 名字 / 回复不得进入 `from` / `to` / `mentions` / `content`；`onAgentEvent` 只接受 `visibility === 'team' | 'tenant'`。private mention 在 owner 路径返回 `team_private_member`、canonical 路径返回 `unknown_member`，两种都不入日志。`reinstate` 是 roster add 专用的人力 `left → present` 路径（与 `attachOwner` 并列），不 spawn、不新建 session。
 - **team-scoped token 在节点侧收窄**（0.19 S5，ADR-093）：`control` token 只能访问 token 自己的 `team_id`，不匹配一律 `not_found`（不泄漏存在性）；`teams.list` / `teams.get.team` 的 scoped 响应剔除 `workspace` / `handoff_path` / `policy`。scope 白名单在 `rpc.ts` 单点执行，不新增 role 字符串；`auth.exchange` 只签 `control`，`exchange` / `control` / `view` 不能互签。
+- **federation 按成员寻址，不做广播**（0.21，ADR-094 Addendum）：wire 的 `principal` 是名字不是 agent id；入站最多 1 个 run；`accept:'members'` 在配置 / team.json / 运行时都必须显式报错，未知值 fail-safe 为 `log`；principal 解析必须用完整 roster，不能受 `teams.get` 展示窗口影响；`team-info` 必须 opt-in 且不返回 agent id / workspace / policy / private；peer token 只认证节点，不构成用户级身份证明。
 - **hub 不代理正文**（0.19 S5，ADR-093）：hub 只持有目录与指针（`{node_id, team_id, request_id?, reason, ts}`），不得转发或持久化消息 / 事件 / 工具结果 / 权限正文；`TeamService.subscribe` 只带 `team_id` / `kind` / `message_id`，供 hub 投影指针，绝不带正文。S5 实现 hub → node 拨号、S5.1 实现 node → hub 出站；跨节点 A2A（S7）仍未实现，不得写进当前态。
 - **BeforeLlm 注入只增不改**（0.16，ADR-087）：`HookContext.messages` 是 additive 注入位；runtime 只写入一次，按 `name` / `timestamp` 稳定键或对象引用去重，每个 run 重置；未写时不改变请求形状。`agent.followReplies` 目前只作为配置 / 事件字段，不得实现成阻塞等待或隐藏的 `wait`。
 - **测试隔离**（0.8.2）：不要用 `mock.module`（Bun 进程级污染，会串到其他测试文件）；改用依赖注入、纯函数与工厂。成员接线测试必须可独立运行。

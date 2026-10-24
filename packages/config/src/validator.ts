@@ -30,6 +30,9 @@ import type {
 /** Agent/Node ID 字符集（DECISION-005 U1：不含 `:`） */
 const NODE_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
+/** principal 名字形状（DECISION-037 §2；`human` 也在字符集内） */
+const PRINCIPAL_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
 /** tenant id 字符集（DECISION-010 §2.5） */
 const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -208,6 +211,25 @@ function validateTeams(teams: unknown, errors: ConfigValidationError[]): void {
         value: team.handoffPath,
       });
     }
+    if (
+      team.description !== undefined &&
+      (typeof team.description !== 'string' || team.description.trim() === '')
+    ) {
+      errors.push({
+        path: `${prefix}.description`,
+        message: 'team description must be a non-empty string',
+        value: team.description,
+      });
+    }
+    if (team.defaultPrincipal !== undefined) {
+      if (typeof team.defaultPrincipal !== 'string' || !PRINCIPAL_RE.test(team.defaultPrincipal)) {
+        errors.push({
+          path: `${prefix}.defaultPrincipal`,
+          message: `team defaultPrincipal must match ${PRINCIPAL_RE.source}`,
+          value: team.defaultPrincipal,
+        });
+      }
+    }
     if (team.policy !== undefined) {
       if (!isPlainObject(team.policy)) {
         errors.push({
@@ -240,6 +262,7 @@ const FEDERATION_PEER_KEYS = new Set([
   'caFile',
   'direction',
   'localTeamId',
+  'allowDirectory',
   'token',
 ]);
 
@@ -257,7 +280,7 @@ function validateFederation(
     errors.push({ path: 'federation', message: 'federation must be an object' });
     return;
   }
-  const { enabled, maxHops, peers } = federation as Partial<FederationConfig>;
+  const { enabled, maxHops, rateLimitPerMinute, peers } = federation as Partial<FederationConfig>;
 
   if (enabled !== undefined && typeof enabled !== 'boolean') {
     errors.push({
@@ -274,6 +297,19 @@ function validateFederation(
       path: 'federation.maxHops',
       message: 'federation.maxHops must be an integer between 1 and 16',
       value: maxHops,
+    });
+  }
+  if (
+    rateLimitPerMinute !== undefined &&
+    (typeof rateLimitPerMinute !== 'number' ||
+      !Number.isInteger(rateLimitPerMinute) ||
+      rateLimitPerMinute < 1 ||
+      rateLimitPerMinute > 600)
+  ) {
+    errors.push({
+      path: 'federation.rateLimitPerMinute',
+      message: 'federation.rateLimitPerMinute must be an integer between 1 and 600',
+      value: rateLimitPerMinute,
     });
   }
   if (peers === undefined) return;
@@ -380,6 +416,14 @@ function validateFederation(
       (typeof peer.caFile !== 'string' || peer.caFile.trim() === '')
     ) {
       errors.push({ path: `${base}.caFile`, message: `${base}.caFile must be a non-empty string` });
+    }
+
+    if (peer.allowDirectory !== undefined && typeof peer.allowDirectory !== 'boolean') {
+      errors.push({
+        path: `${base}.allowDirectory`,
+        message: `${base}.allow_directory must be a boolean`,
+        value: peer.allowDirectory,
+      });
     }
 
     if (nodeId !== undefined && teamId !== undefined) {
@@ -2429,7 +2473,7 @@ export const KNOWN_BLOCK_KEYS: Readonly<Record<string, readonly string[]>> = {
     'allowFileSecrets',
     'pairingTtlSeconds',
   ],
-  federation: ['enabled', 'maxHops', 'peers'],
+  federation: ['enabled', 'maxHops', 'rateLimitPerMinute', 'peers'],
   evals: ['enabled', 'dir', 'outDir', 'allowNetwork'],
   feishu: [
     'enabled',

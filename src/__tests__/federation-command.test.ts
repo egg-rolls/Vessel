@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { FederationPeerConfig, VesselConfig } from '../../packages/config/src/index';
@@ -27,7 +27,21 @@ function parsed(args: string[]) {
   return result.args;
 }
 
-async function makeDataDir(teams: string[] = ['demo']): Promise<string> {
+interface SeedMember {
+  name?: string;
+  team_id?: string;
+  membership?: string;
+  visibility?: string;
+}
+
+const DEFAULT_MEMBERS: SeedMember[] = [
+  { name: 'alice', team_id: 'demo', membership: 'present', visibility: 'team' },
+  { name: 'hidden', team_id: 'demo', membership: 'present', visibility: 'private' },
+  { name: 'lefty', team_id: 'demo', membership: 'left', visibility: 'team' },
+  { name: 'bob', team_id: 'other', membership: 'present', visibility: 'team' },
+];
+
+async function makeDataDir(teams: string[] = ['demo'], members = DEFAULT_MEMBERS): Promise<string> {
   const dir = await mkdtemp(path.join(os.tmpdir(), 'vessel-federation-'));
   tempDirs.push(dir);
   for (const team of teams) {
@@ -35,6 +49,16 @@ async function makeDataDir(teams: string[] = ['demo']): Promise<string> {
     await mkdir(teamDir, { recursive: true });
     await writeFile(path.join(teamDir, 'team.json'), '{"v":1}\n');
   }
+  await mkdir(path.join(dir, 'agents'), { recursive: true });
+  await writeFile(
+    path.join(dir, 'agents', 'default.json'),
+    JSON.stringify({
+      version: 2,
+      tenant_id: 'default',
+      updated_at: 1,
+      members,
+    }),
+  );
   return dir;
 }
 
@@ -61,18 +85,25 @@ function config(
 function startServer(handler: () => Response | Promise<Response>): {
   url: string;
   requests: () => number;
+  bodies: () => Array<Record<string, unknown>>;
 } {
   let requests = 0;
+  const bodies: Array<Record<string, unknown>> = [];
   const server = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    async fetch() {
+    async fetch(request) {
       requests++;
+      bodies.push((await request.json()) as Record<string, unknown>);
       return handler();
     },
   });
   servers.push(server);
-  return { url: `http://127.0.0.1:${server.port}`, requests: () => requests };
+  return {
+    url: `http://127.0.0.1:${server.port}`,
+    requests: () => requests,
+    bodies: () => bodies,
+  };
 }
 
 function success(): Response {
@@ -82,40 +113,81 @@ function success(): Response {
   );
 }
 
+function postCommand(
+  overrides: { to?: string; from?: string; content?: string; json?: boolean } = {},
+): {
+  kind: 'post';
+  to: string;
+  from: string;
+  content: string;
+  json: boolean;
+} {
+  return {
+    kind: 'post',
+    to: overrides.to ?? 'eggrolls@node-b:beta',
+    from: overrides.from ?? 'alice@node-a:demo',
+    content: overrides.content ?? 'hello',
+    json: overrides.json ?? false,
+  };
+}
+
 describe('parseFederationArgs', () => {
-  it('parses post flags and content', () => {
+  it('parses --to / --from, joins positional content, and keeps --conversation-id', () => {
     const args = parsed([
       'federation',
       'post',
-      'node-b:beta',
+      '--to',
+      'eggrolls@node-b:beta',
+      '--from',
+      'alice@node-a:demo',
       'hello',
       'world',
-      '--from-team',
-      'demo',
       '--conversation-id',
       'conv-1',
       '--json',
     ]);
     expect(args.federationCommand).toEqual({
       kind: 'post',
-      nodeId: 'node-b',
-      teamId: 'beta',
+      to: 'eggrolls@node-b:beta',
+      from: 'alice@node-a:demo',
       content: 'hello world',
-      fromTeam: 'demo',
       conversationId: 'conv-1',
       json: true,
     });
   });
 
-  it('requires a target, content, and --from-team', () => {
-    const missingTarget = parseArgs(['federation', 'post', '--from-team', 'demo']);
-    expect(missingTarget.ok).toBe(false);
-    const missingFrom = parseArgs(['federation', 'post', 'node-b:beta', 'hi']);
+  it('rejects missing --to, missing --from, and empty content', () => {
+    const missingTo = parseArgs(['federation', 'post', '--from', 'alice@node-a:demo', 'hi']);
+    expect(missingTo.ok).toBe(false);
+    if (!missingTo.ok) expect(missingTo.error).toContain('--to');
+
+    const missingFrom = parseArgs(['federation', 'post', '--to', 'eggrolls@node-b:beta', 'hi']);
     expect(missingFrom.ok).toBe(false);
-    if (missingFrom.ok) return;
-    expect(missingFrom.error).toContain('--from-team');
-    const badTarget = parseArgs(['federation', 'post', 'node-b', 'hi', '--from-team', 'demo']);
-    expect(badTarget.ok).toBe(false);
+    if (!missingFrom.ok) expect(missingFrom.error).toContain('--from');
+
+    const emptyContent = parseArgs([
+      'federation',
+      'post',
+      '--to',
+      'eggrolls@node-b:beta',
+      '--from',
+      'alice@node-a:demo',
+    ]);
+    expect(emptyContent.ok).toBe(false);
+  });
+
+  it('no longer accepts the removed --from-team flag', () => {
+    const result = parseArgs([
+      'federation',
+      'post',
+      '--to',
+      'eggrolls@node-b:beta',
+      'hi',
+      '--from-team',
+      'demo',
+    ]);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('--from-team');
   });
 
   it('parses peers and registers the command', () => {
@@ -140,6 +212,7 @@ describe('runFederationCommand', () => {
               url: 'http://127.0.0.1:1',
               tokenEnv: 'PEER_TOKEN',
               direction: 'out',
+              allowDirectory: true,
             },
             { nodeId: 'node-c', teamId: 'gamma', tokenEnv: 'MISSING_TOKEN', direction: 'in' },
           ],
@@ -154,6 +227,7 @@ describe('runFederationCommand', () => {
     expect(body.enabled).toBe(true);
     expect(body.node_id).toBe('node-a');
     expect(body.max_hops).toBe(4);
+    expect(body.rate_limit_per_minute).toBe(60);
     expect(body.peers).toEqual([
       {
         node_id: 'node-b',
@@ -161,6 +235,7 @@ describe('runFederationCommand', () => {
         direction: 'out',
         token_env: 'PEER_TOKEN',
         token_set: true,
+        allow_directory: true,
       },
       {
         node_id: 'node-c',
@@ -168,6 +243,7 @@ describe('runFederationCommand', () => {
         direction: 'in',
         token_env: 'MISSING_TOKEN',
         token_set: false,
+        allow_directory: false,
       },
     ]);
   });
@@ -181,37 +257,28 @@ describe('runFederationCommand', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('PEER_TOKEN');
     expect(result.stdout).toContain('node-b');
+    expect(result.stdout).toContain('allow_directory=false');
     expect(result.stdout).not.toContain(SEA_TOKEN);
   });
 
-  it('posts successfully and prints JSON only', async () => {
+  it('posts both principals on the wire and prints JSON only', async () => {
     const mock = startServer(success);
     const dataDir = await makeDataDir();
-    const result = await runFederationCommand(
-      {
-        kind: 'post',
-        nodeId: 'node-b',
-        teamId: 'beta',
-        content: 'hello',
-        fromTeam: 'demo',
-        json: true,
-      },
-      {
-        dataDir,
-        config: config({
-          peers: [
-            {
-              nodeId: 'node-b',
-              teamId: 'beta',
-              url: mock.url,
-              tokenEnv: 'PEER_TOKEN',
-              direction: 'out',
-            },
-          ],
-        }),
-        env: { PEER_TOKEN: SEA_TOKEN },
-      },
-    );
+    const result = await runFederationCommand(postCommand({ json: true }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe('');
     expect(JSON.parse(result.stdout)).toEqual({
@@ -221,88 +288,188 @@ describe('runFederationCommand', () => {
       cursor: 'cursor-1',
     });
     expect(mock.requests()).toBe(1);
+    expect(mock.bodies()[0]).toMatchObject({
+      from: { principal: 'alice', node_id: 'node-a', team_id: 'demo' },
+      to: { principal: 'eggrolls', node_id: 'node-b', team_id: 'beta' },
+    });
+  });
+
+  it('accepts owner as the local principal without roster lookup', async () => {
+    const mock = startServer(success);
+    const dataDir = await makeDataDir();
+    const result = await runFederationCommand(postCommand({ from: 'human@node-a:demo' }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(mock.requests()).toBe(1);
   });
 
   it('rejects before any request when the target is not allowlisted', async () => {
     const mock = startServer(success);
     const dataDir = await makeDataDir();
-    const result = await runFederationCommand(
-      {
-        kind: 'post',
-        nodeId: 'node-x',
-        teamId: 'beta',
-        content: 'hello',
-        fromTeam: 'demo',
-        json: false,
-      },
-      {
-        dataDir,
-        config: config({
-          peers: [
-            {
-              nodeId: 'node-b',
-              teamId: 'beta',
-              url: mock.url,
-              tokenEnv: 'PEER_TOKEN',
-              direction: 'out',
-            },
-          ],
-        }),
-        env: { PEER_TOKEN: SEA_TOKEN },
-      },
-    );
+    const result = await runFederationCommand(postCommand({ to: 'eggrolls@node-x:beta' }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('federation_not_allowed');
     expect(mock.requests()).toBe(0);
   });
 
-  it('fails with team_not_found when the local Team is missing', async () => {
-    const dataDir = await makeDataDir(['demo']);
-    const result = await runFederationCommand(
-      {
-        kind: 'post',
-        nodeId: 'node-b',
-        teamId: 'beta',
-        content: 'hello',
-        fromTeam: 'missing',
-        json: false,
-      },
-      { dataDir, config: config(), env: { PEER_TOKEN: SEA_TOKEN } },
-    );
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toStartWith('team_not_found:');
+  it('exits 2 without a request when an address is malformed', async () => {
+    const mock = startServer(success);
+    const dataDir = await makeDataDir();
+    const result = await runFederationCommand(postCommand({ from: '../escape@node-a:demo' }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toStartWith('federation_invalid_address:');
+    expect(mock.requests()).toBe(0);
   });
 
-  it('treats an invalid --from-team as a usage error', async () => {
+  it('exits 2 without a request when --from points at another node', async () => {
+    const mock = startServer(success);
     const dataDir = await makeDataDir();
-    const result = await runFederationCommand(
-      {
-        kind: 'post',
-        nodeId: 'node-b',
-        teamId: 'beta',
-        content: 'hello',
-        fromTeam: '../escape',
-        json: false,
-      },
-      { dataDir, config: config(), env: { PEER_TOKEN: SEA_TOKEN } },
-    );
+    const result = await runFederationCommand(postCommand({ from: 'alice@node-z:demo' }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
     expect(result.exitCode).toBe(2);
-    expect(result.stderr).toStartWith('federation_invalid:');
+    expect(result.stderr).toStartWith('federation_invalid_from:');
+    expect(mock.requests()).toBe(0);
+  });
+
+  it('exits 2 without a request when the local Team is missing', async () => {
+    const mock = startServer(success);
+    const dataDir = await makeDataDir(['demo']);
+    const result = await runFederationCommand(postCommand({ from: 'alice@node-a:missing' }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toStartWith('team_not_found:');
+    expect(mock.requests()).toBe(0);
+  });
+
+  it('exits 2 without a request when the local principal is private, left, or unknown', async () => {
+    const mock = startServer(success);
+    const dataDir = await makeDataDir();
+    const runtimeConfig = config({
+      peers: [
+        {
+          nodeId: 'node-b',
+          teamId: 'beta',
+          url: mock.url,
+          tokenEnv: 'PEER_TOKEN',
+          direction: 'out',
+        },
+      ],
+    });
+    for (const from of [
+      'hidden@node-a:demo',
+      'lefty@node-a:demo',
+      'ghost@node-a:demo',
+      'bob@node-a:demo',
+    ]) {
+      const result = await runFederationCommand(postCommand({ from }), {
+        dataDir,
+        config: runtimeConfig,
+        env: { PEER_TOKEN: SEA_TOKEN },
+      });
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toStartWith('federation_invalid_from:');
+    }
+    expect(mock.requests()).toBe(0);
+  });
+
+  it('exits 2 without a request when the local member snapshot is missing', async () => {
+    const mock = startServer(success);
+    const dataDir = await makeDataDir();
+    await unlink(path.join(dataDir, 'agents', 'default.json'));
+    const result = await runFederationCommand(postCommand(), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toStartWith('federation_invalid_from:');
+    expect(mock.requests()).toBe(0);
   });
 
   it('reports federation_disabled for post and peers', async () => {
     const dataDir = await makeDataDir();
-    const post = await runFederationCommand(
-      {
-        kind: 'post',
-        nodeId: 'node-b',
-        teamId: 'beta',
-        content: 'hello',
-        fromTeam: 'demo',
-        json: true,
-      },
-      { dataDir, config: config({ enabled: false }), env: { PEER_TOKEN: SEA_TOKEN } },
-    );
+    const post = await runFederationCommand(postCommand({ json: true }), {
+      dataDir,
+      config: config({ enabled: false }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
     expect(post.exitCode).toBe(1);
     expect(JSON.parse(post.stdout)).toMatchObject({
       status: 'rejected',
@@ -326,31 +493,21 @@ describe('runFederationCommand', () => {
         ),
     );
     const dataDir = await makeDataDir();
-    const result = await runFederationCommand(
-      {
-        kind: 'post',
-        nodeId: 'node-b',
-        teamId: 'beta',
-        content: 'hello',
-        fromTeam: 'demo',
-        json: true,
-      },
-      {
-        dataDir,
-        config: config({
-          peers: [
-            {
-              nodeId: 'node-b',
-              teamId: 'beta',
-              url: mock.url,
-              tokenEnv: 'PEER_TOKEN',
-              direction: 'out',
-            },
-          ],
-        }),
-        env: { PEER_TOKEN: SEA_TOKEN },
-      },
-    );
+    const result = await runFederationCommand(postCommand({ json: true }), {
+      dataDir,
+      config: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'beta',
+            url: mock.url,
+            tokenEnv: 'PEER_TOKEN',
+            direction: 'out',
+          },
+        ],
+      }),
+      env: { PEER_TOKEN: SEA_TOKEN },
+    });
     expect(result.exitCode).toBe(1);
     expect(JSON.parse(result.stdout)).toEqual({
       status: 'rejected',

@@ -29,6 +29,7 @@ describe('resolveFederationOptions', () => {
     expect(issues).toEqual([]);
     expect(options.enabled).toBe(true);
     expect(options.maxHops).toBe(4);
+    expect(options.rateLimitPerMinute).toBe(60);
     expect(options.peers).toEqual([
       {
         nodeId: 'node-b',
@@ -36,9 +37,41 @@ describe('resolveFederationOptions', () => {
         direction: 'both',
         tokenEnv: 'PEER_TOKEN',
         token: 'secret-token',
+        allowDirectory: false,
         url: 'https://node-b.example',
       },
     ]);
+  });
+
+  it('falls back to 60 for 0 / illegal rateLimitPerMinute; there is no unlimited value', () => {
+    for (const value of [0, 601, -1, 1.5, Number.NaN]) {
+      const { options, issues } = resolveFederationOptions({
+        federation: config({ rateLimitPerMinute: value }),
+        nodeId: 'node-a',
+        env,
+      });
+      expect(options.rateLimitPerMinute).toBe(60);
+      expect(issues).toEqual([]);
+    }
+  });
+
+  it('enables allowDirectory only on an explicit true', () => {
+    const { options } = resolveFederationOptions({
+      federation: config({
+        peers: [
+          {
+            nodeId: 'node-b',
+            teamId: 'research',
+            url: 'https://node-b.example',
+            tokenEnv: 'PEER_TOKEN',
+            allowDirectory: true,
+          },
+        ],
+      }),
+      nodeId: 'node-a',
+      env,
+    });
+    expect(options.peers[0]?.allowDirectory).toBe(true);
   });
 
   it('drops a peer whose token env is missing instead of sending an empty bearer', () => {

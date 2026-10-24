@@ -3,6 +3,53 @@
 > 版本历史。遵循 [Keep a Changelog](https://keepachangelog.com/)。
 > 0.x 阶段：breaking 变更走 minor，新功能走 minor，修复走 patch。
 
+## [0.21.0] - 2026-10-24
+
+> 0.21.0（基于 `main` 0.20.0，未发布）：跨节点按成员寻址，删除全员 fan-out。
+> 未 tag、未 `npm publish`。
+
+### Added
+
+- **地址 `<principal>@<node_id>:<team_id>`**：principal 是目标 Team 的 present 成员名，或保留字 `human`。
+  `vessel federation post --to <addr> --from <addr> <content>`；`agent` 工具的 `send`
+  接受同一地址形状，运行时按调用者填 `from`，模型不能伪造。
+- **单点投递**：入站按 principal 解析到**一个** present 非 private 成员；`human` 只写日志；
+  `accept:'log'` 显式邮箱模式。解析使用完整 roster，不受展示窗口影响。
+- **Team 信息**：`description?` / `default_principal?`；`teams.get` 的 `members_limit`
+  （缺省 20，最大 100，live 优先、`last_seen` 降序）；`TeamMemberSummary.last_seen?`。
+- **opt-in `POST /v1/federation/team-info`**：peer `allowDirectory`（缺省 false），
+  只返回 desc / 默认接头人 / present 成员 top N，无 agent id / workspace / policy / private。
+- **每 peer 入站限流** `federation.rateLimitPerMinute`（1..600，缺省 60）；超限 429。
+- **回复抬头**：入站日志 `from = federation:<principal>@<node>:<team>`；
+  `TeamLogEntry.federation?` 带结构化 from / to / conversation_id / hop；
+  派发给成员的正文前置回信地址与 `agent(send, to=...)` 提示。
+
+### Changed
+
+- wire 的 `from` / `to` 增加 `principal`（名字，不是 agent id）；严格解析不变。
+- fork 与 federation 都不新增 canonical RPC，方法表仍 **48**。
+- Team 日志 `to` 在 `human` 模式使用保留标记；`mentions` 仍只放 agent id。
+
+### Removed
+
+- **删除 `teams[].policy.federation.accept = 'members'` 与全员 fan-out**；
+  配置 / team.json / 运行时遇到 `'members'` 都是显式错误，未知值 fail-safe 为 `log`（0 run）。
+- **删除 `vessel federation post --from-team`**，由 `--from <addr>` 取代（0.20 未发布，无兼容别名）。
+
+### Fixed
+
+- team-info 的 `member_count` 曾被 `teams.get` 的 20 人窗口截断；现用完整 roster 计数，
+  窗口只裁剪返回列表。
+- 入站 principal 解析不再受 `teams.get` 默认窗口影响，第 21+ 名成员可正常寻址。
+
+### Known limitations
+
+- root owner 不是 Team 成员，`agent` 工具的地址形式返回 `no_team`；人类 owner 走
+  `vessel federation post --from human@<node>:<team>`。
+- peer token 认证节点，不认证 principal；恶意 peer 可冒充自己节点内的任意名字。
+- v1 固定 default tenant；无中继 / 离线队列 / 跨重启 exactly-once；未做 mTLS。
+- Web 不展示新增的 desc / 默认接头人 / team-info（本版本只做 CLI + agent 工具）。
+
 ## [0.20.0] - 2026-10-23
 
 > 0.20.0（基于 `main` 0.19.1，未发布）：fork 与跨节点 team ↔ team federation。未 tag、未 `npm publish`。

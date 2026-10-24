@@ -375,6 +375,10 @@ export interface TeamConfigInput {
   workspace: string;
   /** 启动嘱托 / handoff 文件路径（可选） */
   handoffPath?: string;
+  /** 自由文本：这个 Team 是什么、找谁、怎么用（0.21 additive） */
+  description?: string;
+  /** 缺省接头人：present 成员名或 `owner`（0.21 additive；只展示，不自动改投） */
+  defaultPrincipal?: string;
   /** Team 策略；顶层键开放，`permission` / `budget` 由 `parseTeamPolicy` 校验 */
   policy?: Record<string, unknown>;
 }
@@ -395,6 +399,8 @@ export interface FederationPeerConfig {
   caFile?: string;
   direction?: 'in' | 'out' | 'both';
   localTeamId?: string;
+  /** 入站 team-info 目录查询开关（0.21 additive；缺省 false） */
+  allowDirectory?: boolean;
 }
 
 /** S7：跨节点 federation（缺省关闭；不做自动发现）。 */
@@ -402,6 +408,11 @@ export interface FederationConfig {
   enabled?: boolean;
   /** 节点间跨越次数上界；缺省 4，1..16 */
   maxHops?: number;
+  /**
+   * 每 peer 入站速率上限（0.21 additive）。
+   * 缺省 60；合法范围 1..600（无“不限制”值）。
+   */
+  rateLimitPerMinute?: number;
   peers?: FederationPeerConfig[];
 }
 
@@ -431,13 +442,13 @@ export interface TeamBudgetPolicy {
   cycle?: TeamBudgetCyclePolicy;
 }
 
-/** S7.2：接收侧对跨节点入站报文的同意策略。 */
+/** 接收侧对跨节点入站报文的同意策略（0.21 起无全员 fan-out）。 */
 export interface TeamFederationPolicy {
   /**
-   * `log` = 只写 Team 日志（缺省）；`members` = 向 present 且非 private 成员
-   * fan-out 一次 mention 投递。缺省不写字段，消费方按 `log` 处理。
+   * `principal` = 按地址投递给单个 present 成员（缺省）；
+   * `log` = 只写 Team 日志，忽略 principal。
    */
-  accept?: 'log' | 'members';
+  accept?: 'principal' | 'log';
 }
 
 /** 解析后的 Team policy 视图；`policy` 顶层仍允许其它键。 */

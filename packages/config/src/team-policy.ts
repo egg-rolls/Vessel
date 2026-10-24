@@ -24,11 +24,14 @@ export interface TeamPolicyIssue {
 /** 非法 Team policy；调用方对 `team.json` 是 catch 后 warning + 忽略。 */
 export class TeamPolicyError extends Error {
   readonly field?: string;
+  /** 稳定错误码（如 `members_not_supported`）；配置校验错误缺省。 */
+  readonly code?: string;
 
-  constructor(message: string, field?: string) {
+  constructor(message: string, field?: string, code?: string) {
     super(message);
     this.name = 'TeamPolicyError';
     if (field !== undefined) this.field = field;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -314,7 +317,10 @@ function normalizeBudget(
 
 const FEDERATION_KEYS = new Set(['accept']);
 
-/** S7.2：只接受 `accept`，缺省不写（消费方按 `log` 处理）。 */
+/**
+ * 0.21：只接受 `accept`，缺省不写（消费方按 `principal` 处理）。
+ * `'members'` 是 0.20 的全员 fan-out，已删除，必须明确失败并提示迁移。
+ */
 function normalizeFederation(
   input: Record<string, unknown>,
   issues: TeamPolicyIssue[],
@@ -331,12 +337,18 @@ function normalizeFederation(
   if (!Object.hasOwn(input, 'accept')) return result;
 
   const accept = input.accept;
-  if (accept === 'log' || accept === 'members') {
+  if (accept === 'log' || accept === 'principal') {
     result.accept = accept;
+  } else if (accept === 'members') {
+    issues.push({
+      field: 'federation.accept',
+      message:
+        'policy.federation.accept "members" was removed; use "principal" for single-member delivery or "log" for log-only',
+    });
   } else {
     issues.push({
       field: 'federation.accept',
-      message: 'policy.federation.accept must be "log" or "members"',
+      message: 'policy.federation.accept must be "principal" or "log"',
     });
   }
   return result;

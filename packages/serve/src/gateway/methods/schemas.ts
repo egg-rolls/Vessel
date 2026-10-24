@@ -421,6 +421,9 @@ export const teamSummarySchema = {
     workspace: { type: 'string' },
     handoff_path: { type: 'string' },
     policy: { type: 'object' },
+    // 0.21：Team 描述与默认接头人（additive）。
+    description: { type: 'string' },
+    default_principal: { type: 'string' },
     member_count: { type: 'integer', minimum: 0 },
     online_count: { type: 'integer', minimum: 0 },
     created_at: { type: 'number' },
@@ -453,6 +456,8 @@ export const teamMemberSchema = {
     visibility: { type: 'string', enum: ['private', 'team', 'tenant'] },
     state: { type: 'string' },
     epoch: { type: 'integer', minimum: 0 },
+    // 0.21：epoch ms；旧数据 / 从未活跃时缺失。
+    last_seen: { type: 'number' },
     body_history: { type: 'array', items: agentBodyHistoryEntrySchema },
   },
 };
@@ -477,6 +482,17 @@ export const teamMessageSchema = {
     },
     // 0.19 S4：会话分组；旧日志缺省。
     conversation_id: { type: 'string' },
+    // 0.21：跨节点报文元数据（additive；同机消息缺失）。
+    federation: {
+      type: 'object',
+      required: ['from_addr', 'to_addr', 'conversation_id', 'hop'],
+      properties: {
+        from_addr: { type: 'string' },
+        to_addr: { type: 'string' },
+        conversation_id: { type: 'string' },
+        hop: { type: 'integer', minimum: 1 },
+      },
+    },
   },
 };
 

@@ -23,12 +23,16 @@ export interface FederationRuntimePeer {
   tokenEnv: string;
   /** 解析后的内存值；只用于出站 / 入站比较，不序列化。 */
   token: string;
+  /** 入站 team-info 目录查询开关；只有显式 `true` 才开启。 */
+  allowDirectory: boolean;
 }
 
 export interface FederationRuntimeOptions {
   enabled: boolean;
   nodeId: string;
   maxHops: number;
+  /** 每 peer 入站速率上限；合法范围 1..600（DECISION-037 §9，无“不限制”值）。 */
+  rateLimitPerMinute: number;
   /** 已解析 token 的 peer；缺失 token 的条目不在其中。 */
   peers: FederationRuntimePeer[];
 }
@@ -39,6 +43,23 @@ export type FederationResolutionIssue =
   | { peer: string; reason: 'invalid_config' };
 
 const DEFAULT_MAX_HOPS = 4;
+
+/** 缺省每 peer 每分钟入站上限；合法范围 1..600。 */
+const DEFAULT_RATE_LIMIT_PER_MINUTE = 60;
+const MAX_RATE_LIMIT_PER_MINUTE = 600;
+
+/** 归一化 `rateLimitPerMinute`：1..600 采用；缺失 / 越界回缺省。 */
+function resolveRateLimit(value: unknown): number {
+  if (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= MAX_RATE_LIMIT_PER_MINUTE
+  ) {
+    return value;
+  }
+  return DEFAULT_RATE_LIMIT_PER_MINUTE;
+}
 
 function peerLabel(peer: FederationPeerConfig, index: number): string {
   const node = typeof peer.nodeId === 'string' ? peer.nodeId : `#${index}`;
@@ -98,6 +119,7 @@ export function resolveFederationOptions(input: {
       direction,
       tokenEnv: peer.tokenEnv,
       token,
+      allowDirectory: peer.allowDirectory === true,
     };
     if (typeof peer.localTeamId === 'string' && peer.localTeamId !== '') {
       resolved.localTeamId = peer.localTeamId;
@@ -119,11 +141,14 @@ export function resolveFederationOptions(input: {
       ? federation.maxHops
       : DEFAULT_MAX_HOPS;
 
+  const rateLimitPerMinute = resolveRateLimit(federation?.rateLimitPerMinute);
+
   return {
     options: {
       enabled: federation?.enabled === true,
       nodeId: input.nodeId,
       maxHops,
+      rateLimitPerMinute,
       peers,
     },
     issues,

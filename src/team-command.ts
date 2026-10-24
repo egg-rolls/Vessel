@@ -36,6 +36,8 @@ interface TeamMemberView {
   membership?: string;
   presence?: string;
   visibility?: string;
+  /** 0.21：epoch ms；旧数据缺失 */
+  last_seen?: number;
 }
 
 /** get 返回的消息条目（只读子集） */
@@ -54,6 +56,8 @@ interface TeamSummaryView {
   member_count?: number;
   online_count?: number;
   workspace?: string;
+  description?: string;
+  default_principal?: string;
 }
 
 /** post 返回的逐条投递结果（只读子集） */
@@ -130,6 +134,8 @@ function formatTeamGet(result: unknown): string {
   const lines: string[] = [
     ui.section(`Team ${asString(team.team_id)}`),
     ui.kv('name', asString(team.name)),
+    ui.kv('description', asString(team.description, '')),
+    ui.kv('default_principal', asString(team.default_principal, '')),
     ui.kv('workspace', asString(team.workspace)),
     ui.kv('members', String(team.member_count ?? members.length)),
     ui.kv('online', String(team.online_count ?? 0)),
@@ -139,8 +145,10 @@ function formatTeamGet(result: unknown): string {
     lines.push(`  ${ui.dim('No members.')}`);
   } else {
     for (const member of members) {
+      const lastSeen =
+        member.last_seen !== undefined ? new Date(member.last_seen).toISOString() : '';
       lines.push(
-        `  ${asString(member.agent_id)}  ${asString(member.membership)}  ${asString(member.presence)}  ${asString(member.visibility)}  ${asString(member.name, '-')}`,
+        `  ${asString(member.agent_id)}  ${asString(member.membership)}  ${asString(member.presence)}  ${asString(member.visibility)}  ${asString(member.name, '-')}  ${lastSeen}`,
       );
     }
   }
@@ -364,6 +372,7 @@ async function execute(
       {
         team_id: command.teamId,
         ...(command.limit !== undefined ? { limit: command.limit } : {}),
+        ...(command.members !== undefined ? { members_limit: command.members } : {}),
       },
       fetchOptions,
     );

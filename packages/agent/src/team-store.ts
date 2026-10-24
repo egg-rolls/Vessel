@@ -19,7 +19,7 @@
 import type { Dirent } from 'node:fs';
 import { mkdir, readdir, readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { parseTeamPolicy, type TeamPolicy } from '@vessel-agent/config';
+import { parseTeamPolicy, type TeamPolicy, TeamPolicyError } from '@vessel-agent/config';
 import { atomicWrite, type Logger, noopLogger } from '@vessel-agent/core';
 import { TeamLogWriter } from './team-log.js';
 import { normalizeWorkspace, teamIdForWorkspace, workspaceKey } from './team-slug.js';
@@ -89,6 +89,21 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * 0.21 已删除全员 fan-out；手改 team.json 的 `'members'` 必须明确失败，
+ * 不能 salvage 成 principal 后静默继续（DECISION-037 §5.1）。
+ */
+function assertSupportedFederationPolicy(record: TeamRecord): void {
+  const federation = record.policy.federation;
+  if (typeof federation !== 'object' || federation === null || Array.isArray(federation)) return;
+  if ((federation as Record<string, unknown>).accept !== 'members') return;
+  throw new TeamPolicyError(
+    'members_not_supported: policy.federation.accept "members" was removed in 0.21; use "principal" or "log"',
+    'federation.accept',
+    'members_not_supported',
+  );
+}
+
 function cloneRecord(record: TeamRecord): TeamRecord {
   return { ...record, policy: { ...record.policy } };
 }
@@ -121,6 +136,13 @@ function parseTeamRecord(raw: string, dirName: string, tenantId: string): TeamRe
       created_at: parsed.created_at,
     };
     if (typeof parsed.handoff_path === 'string') record.handoff_path = parsed.handoff_path;
+    // 0.21 additive：可选字段只接受非空 string；手改非法值忽略该字段，不让整个 Team 失效。
+    if (typeof parsed.description === 'string' && parsed.description !== '') {
+      record.description = parsed.description;
+    }
+    if (typeof parsed.default_principal === 'string' && parsed.default_principal !== '') {
+      record.default_principal = parsed.default_principal;
+    }
     return record;
   } catch {
     return null;
@@ -220,6 +242,8 @@ export class FileTeamStore implements TeamStore {
           workspace,
           name: declaration.name,
           handoff_path: declaration.handoff_path,
+          description: declaration.description,
+          default_principal: declaration.default_principal,
           policy: declaration.policy,
         });
         await this.persist(record);
@@ -261,6 +285,8 @@ export class FileTeamStore implements TeamStore {
   policy(teamId: string): TeamPolicy | undefined {
     const record = this.teams.get(teamId);
     if (!record) return undefined;
+    // 删除的语义不是“可选坏子树”：必须让读取方看到确定错误。
+    assertSupportedFederationPolicy(record);
     try {
       return parseTeamPolicy(record.policy);
     } catch (error) {
@@ -367,6 +393,12 @@ export class FileTeamStore implements TeamStore {
     };
     if (input.handoff_path !== undefined && input.handoff_path !== '') {
       record.handoff_path = input.handoff_path;
+    }
+    if (input.description !== undefined && input.description !== '') {
+      record.description = input.description;
+    }
+    if (input.default_principal !== undefined && input.default_principal !== '') {
+      record.default_principal = input.default_principal;
     }
     return record;
   }
