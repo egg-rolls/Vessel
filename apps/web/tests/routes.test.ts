@@ -13,6 +13,7 @@ const ROUTES: Route[] = [
   { domain: 'chat', sessionId: 'session-1' },
   { domain: 'chat', sessionId: 'session-1', agent: 'delegate-1' },
   { domain: 'hub' },
+  { domain: 'gateway' },
   { domain: 'nodes' },
   { domain: 'nodes', nodeKey: 'node-1' },
   { domain: 'teams' },
@@ -62,6 +63,9 @@ describe('parseRoute / formatRoute', () => {
       domain: 'settings',
       tab: 'tenants',
     });
+    expect(parseRoute('#/gateway')).toEqual({ domain: 'gateway' });
+    expect(parseRoute('#/gateway/extra')).toEqual({ domain: 'gateway' });
+    expect(formatRoute({ domain: 'gateway' })).toBe('#/gateway');
   });
 
   test('falls back to chat for unknown or empty routes', () => {

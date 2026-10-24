@@ -7,16 +7,17 @@ import { primaryRoute } from './DomainNav';
 import { domainLabel, isDomainActive, type PrimaryDomain } from './nav';
 import type { Route } from './router';
 
-/** 移动端常驻 3 项；Network / Observe / Settings 放进 More sheet。 */
+/** 移动端常驻 3 项；编排 / Status / Observe / Settings 放进 More sheet。 */
 const BOTTOM_DOMAINS: readonly PrimaryDomain[] = ['chat', 'runs', 'integrations'];
 
-/** <680px：底部 3 个主域 + More sheet（Network / 可观测 / 设置 / 连接身份）。 */
+/** <680px：底部 3 个主域 + More sheet（编排 / Status / 可观测 / 设置 / 连接身份）。 */
 export function BottomNav({ route, navigate }: { route: Route; navigate: (route: Route) => void }) {
   useLocale();
   const [moreOpen, setMoreOpen] = useState(false);
   const { tenantId, connectionState, hasToken } = useConnection();
   const moreActive =
     route.domain === 'hub' ||
+    route.domain === 'gateway' ||
     route.domain === 'nodes' ||
     route.domain === 'teams' ||
     route.domain === 'agents' ||
@@ -77,6 +78,16 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               className="more-item"
               onClick={() => {
                 setMoreOpen(false);
+                navigate(primaryRoute('agents'));
+              }}
+            >
+              <DomainIcon domain="agents" /> {domainLabel('agents')}
+            </button>
+            <button
+              type="button"
+              className="more-item"
+              onClick={() => {
+                setMoreOpen(false);
                 navigate(primaryRoute('teams'));
               }}
             >
@@ -87,10 +98,10 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               className="more-item"
               onClick={() => {
                 setMoreOpen(false);
-                navigate(primaryRoute('agents'));
+                navigate(primaryRoute('nodes'));
               }}
             >
-              <DomainIcon domain="agents" /> {domainLabel('agents')}
+              <DomainIcon domain="nodes" /> {domainLabel('nodes')}
             </button>
             <button
               type="button"
@@ -107,10 +118,10 @@ export function BottomNav({ route, navigate }: { route: Route; navigate: (route:
               className="more-item"
               onClick={() => {
                 setMoreOpen(false);
-                navigate(primaryRoute('nodes'));
+                navigate(primaryRoute('gateway'));
               }}
             >
-              <DomainIcon domain="nodes" /> {domainLabel('nodes')}
+              <DomainIcon domain="gateway" /> {domainLabel('gateway')}
             </button>
             <button
               type="button"

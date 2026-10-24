@@ -12,6 +12,7 @@ import {
   pendingPermissionsOutsideView,
 } from '../domains/chat/pending-permissions';
 import { browserSessionStorage, clearLastSession } from '../domains/chat/session-selection';
+import { GatewayView } from '../domains/gateway/GatewayView';
 import { HubView } from '../domains/hub/HubView';
 import { IntegrationsView } from '../domains/integrations/IntegrationsView';
 import { NodePanelView } from '../domains/nodes/NodePanelView';
@@ -536,7 +537,8 @@ export function AppShell() {
                 panes={panes}
               />
             )}
-            {route.domain === 'hub' && <HubView route={route} navigate={navigate} />}
+            {route.domain === 'hub' && <HubView />}
+            {route.domain === 'gateway' && <GatewayView />}
             {route.domain === 'nodes' && <NodePanelView route={route} navigate={navigate} />}
             {route.domain === 'teams' && <TeamsView route={route} navigate={navigate} />}
             {route.domain === 'agents' && <AgentsView route={route} navigate={navigate} />}

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { domainLabel, routeBreadcrumb, settingsTabLabel } from '../src/app/nav';
+import { domainLabel, navGroupLabel, routeBreadcrumb, settingsTabLabel } from '../src/app/nav';
 import { AppearanceView } from '../src/domains/settings/AppearanceView';
 import { getLocale, setLocale, useLocale } from '../src/i18n';
 
@@ -12,6 +12,14 @@ function ShellProbe() {
       <span>{domainLabel('chat')}</span>
       <span>{domainLabel('runs')}</span>
       <span>{domainLabel('settings')}</span>
+      <span>{domainLabel('agents')}</span>
+      <span>{domainLabel('teams')}</span>
+      <span>{domainLabel('nodes')}</span>
+      <span>{domainLabel('hub')}</span>
+      <span>{domainLabel('gateway')}</span>
+      <span>{navGroupLabel('network')}</span>
+      <span>{navGroupLabel('status')}</span>
+      <span>{routeBreadcrumb({ domain: 'gateway' })}</span>
       <span>{routeBreadcrumb({ domain: 'settings', tab: 'appearance' })}</span>
       <span>{routeBreadcrumb({ domain: 'runs', tab: 'durable', runId: 'r1' })}</span>
       <span>{settingsTabLabel('capabilities')}</span>
@@ -47,6 +55,12 @@ describe('shell labels follow the selected locale', () => {
     expect(markup).toContain('设置 › 外观');
     expect(markup).toContain('运行 › 可恢复 › 详情');
     expect(markup).toContain('能力清单');
+    expect(markup).toContain('智能体编排');
+    expect(markup).toContain('状态');
+    expect(markup).toContain('智能体');
+    expect(markup).toContain('团队');
+    expect(markup).toContain('面板核心');
+    expect(markup).toContain('网关');
   });
 
   test('switching to en re-renders navigation and breadcrumb', () => {
@@ -58,7 +72,15 @@ describe('shell labels follow the selected locale', () => {
     expect(markup).toContain('Settings › Appearance');
     expect(markup).toContain('Runs › Recoverable › Details');
     expect(markup).toContain('Capabilities');
+    expect(markup).toContain('ORCHESTRATION');
+    expect(markup).toContain('STATUS');
+    expect(markup).toContain('Agents');
+    expect(markup).toContain('Teams');
+    expect(markup).toContain('Nodes');
+    expect(markup).toContain('Hub');
+    expect(markup).toContain('Gateway');
     expect(markup).not.toContain('设置 › 外观');
+    expect(markup).not.toContain('智能体编排');
   });
 });
 

@@ -556,6 +556,11 @@ export interface ConfigResponse {
   paths: { user: string; project: string };
   tenant_id: string;
   tenant_overlay_keys?: string[];
+  /**
+   * 0.25 additive：进程版本。旧 gateway 不返回该字段，UI 必须按可选处理
+   * （Hub / Gateway 状态页显示 `—`），不得用协议版本冒充。
+   */
+  version?: string;
 }
 
 export interface EvalRunResponse {
@@ -582,6 +587,7 @@ export interface ProtocolInfo {
 /** 节点公开信息 */
 export interface NodeInfo {
   node_id: string;
+  /** 0.25 additive：可读显示名；旧 gateway 缺失时回退 node_id。 */
   name?: string;
   pid: number;
   started_at: number;
