@@ -12,7 +12,9 @@ import {
   navGroupLabel,
   type PrimaryDomain,
 } from './nav';
+import type { NavStatuses } from './nav-status';
 import type { Domain, Route } from './router';
+import { useNavStatus } from './useNavStatus';
 import type { PaneResizeApi } from './usePaneResize';
 
 export function primaryRoute(domain: Exclude<Domain, 'settings'>): Route {
@@ -21,6 +23,8 @@ export function primaryRoute(domain: Exclude<Domain, 'settings'>): Route {
       return { domain: 'chat' };
     case 'hub':
       return { domain: 'hub' };
+    case 'gateway':
+      return { domain: 'gateway' };
     case 'nodes':
       return { domain: 'nodes' };
     case 'teams':
@@ -40,6 +44,12 @@ function domainDef(id: PrimaryDomain) {
   const entry = DOMAINS.find((domain) => domain.id === id);
   if (!entry) throw new Error(`unknown domain: ${id}`);
   return entry;
+}
+
+function statusOf(domain: PrimaryDomain, statuses: NavStatuses) {
+  if (domain === 'hub') return statuses.hub;
+  if (domain === 'gateway') return statuses.gateway;
+  return null;
 }
 
 /** 展开 256px / 折叠 56px / 平板 64px rail / 移动抽屉。设置固定在底部。 */
@@ -63,6 +73,7 @@ export function DomainNav({
   panes: PaneResizeApi;
 }) {
   useLocale();
+  const statuses = useNavStatus();
   const drawer = mode === 'drawer';
   const collapsed = mode === 'collapsed' || mode === 'rail';
   const showLabels = !collapsed;
@@ -129,11 +140,15 @@ export function DomainNav({
               const domain = domainDef(domainId);
               const active = isDomainActive(route, domain.id);
               const label = domainLabel(domain.id);
+              const status = statusOf(domain.id, statuses);
+              const statusText = status ? t(status.labelKey) : '';
+              const versionText = status?.version ? `v${status.version}` : '—';
+              const tooltip = status ? `${label} · ${statusText} · ${versionText}` : label;
               const button = (
                 <button
                   key={domain.id}
                   type="button"
-                  className={`nav-item ${active ? 'active' : ''}`.trim()}
+                  className={`nav-item ${status ? 'nav-item-status' : ''} ${active ? 'active' : ''}`.trim()}
                   aria-current={active ? 'page' : undefined}
                   aria-label={label}
                   onClick={() => navigate(primaryRoute(domain.id))}
@@ -142,10 +157,21 @@ export function DomainNav({
                     <DomainIcon domain={domain.id} />
                   </span>
                   <span className="nav-label">{label}</span>
+                  {status && (
+                    <>
+                      <span
+                        className={`nav-status-dot tone-${status.tone}`}
+                        role="img"
+                        aria-label={statusText}
+                        title={statusText}
+                      />
+                      <span className="nav-status-version mono">{versionText}</span>
+                    </>
+                  )}
                 </button>
               );
               return collapsed ? (
-                <Tooltip key={domain.id} label={label}>
+                <Tooltip key={domain.id} label={tooltip}>
                   {button}
                 </Tooltip>
               ) : (

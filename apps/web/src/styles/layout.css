@@ -60,6 +60,15 @@
   background: var(--hover-tint);
 }
 
+.appbar-lang {
+  flex: none;
+  min-width: 40px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+
 .palette-trigger {
   display: inline-flex;
   align-items: center;
@@ -304,10 +313,51 @@
   color: var(--accent-ink);
 }
 
+.nav-item-status .nav-label {
+  flex: 1;
+}
+
+.nav-status-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.nav-status-dot.tone-ok {
+  background: var(--ok);
+}
+
+.nav-status-dot.tone-warn {
+  background: var(--warn);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.nav-status-dot.tone-danger {
+  background: var(--danger);
+}
+
+.nav-status-dot.tone-muted {
+  background: var(--faint);
+}
+
+.nav-status-version {
+  flex: none;
+  color: var(--faint);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
 .app-shell.nav-collapsed .nav-label,
 .app-shell.nav-rail .nav-label,
 .app-shell.nav-collapsed .nav-group-title,
-.app-shell.nav-rail .nav-group-title {
+.app-shell.nav-rail .nav-group-title,
+.app-shell.nav-collapsed .nav-status-dot,
+.app-shell.nav-rail .nav-status-dot,
+.app-shell.nav-collapsed .nav-status-version,
+.app-shell.nav-rail .nav-status-version {
   display: none;
 }
 
@@ -784,6 +834,7 @@
   }
 
   .palette-trigger,
+  .appbar-lang,
   .conn,
   .tenant-chip {
     min-height: var(--touch-target);

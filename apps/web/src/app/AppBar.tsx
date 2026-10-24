@@ -1,25 +1,10 @@
 import { Tooltip } from '../components/Tooltip';
 import { useConnection } from '../gateway/ConnectionProvider';
 import { t, useLocale } from '../i18n';
+import { connectionLabel } from './connection-label';
+import { LanguageToggle } from './LanguageToggle';
 import { routeBreadcrumb } from './nav';
 import type { Route } from './router';
-
-function connectionLabel(state: string): string {
-  switch (state) {
-    case 'open':
-      return t('nav.conn.online');
-    case 'connecting':
-      return t('nav.conn.connecting');
-    case 'reconnecting':
-      return t('nav.conn.reconnecting');
-    case 'closed':
-      return t('nav.conn.closed');
-    case 'error':
-      return t('nav.conn.error');
-    default:
-      return t('nav.conn.idle');
-  }
-}
 
 export function AppBar({
   route,
@@ -82,6 +67,8 @@ export function AppBar({
       </span>
 
       <div className="appbar-spacer" />
+
+      <LanguageToggle />
 
       <Tooltip label="Ctrl/Cmd+K">
         <button
