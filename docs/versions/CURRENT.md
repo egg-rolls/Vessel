@@ -9,8 +9,10 @@
 
 ## 已合入
 
-- **单一 RPC 契约**：canonical `agents.create` / `agents.update` / `agents.close`
-  与 `teams.create` / `teams.update` / `teams.archive` 统一为批量契约，方法表 54。
+- **单一 RPC 契约**：canonical `agents.create` / `agents.update` / `agents.close` /
+  `agents.send` / `agents.dispatch` / `agents.rotate` 与 `teams.*` 统一为批量契约，
+  方法表 57；loopback owner 端点用合成 principal 分发同一方法表，`agent.*` / `team.*`
+  wire 名已删除。
 - **Web 易用性**：Agents → Teams → Nodes 编排顺序、Hub / Gateway 状态页、
   对象页 CRUD、列表搜索与语言切换。
 - **节点显示名**：`node.json` 的 `name` additive 暴露；`node_id` 仍是唯一寻址键。
@@ -20,7 +22,7 @@
 
 ## 下一步
 
-- owner 端点收口到与 canonical `agents.*` 相同的契约；远程 agent 生命周期仍未开放。
+- 远程 agent 生命周期仍未开放。
 
 ## 入口
 

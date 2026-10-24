@@ -164,3 +164,51 @@ tags: [agent, body, presence, membership, dispatch, snapshot, node-identity, ses
   WS 连接 / `ctx.reply`，后续 loopback owner 端点可用合成 principal
   `{ kind: 'owner', tenant_id, scope: 'admin' }` 复用同一套 handler。
 - **未实现**：owner 端点收口（本切片不建新传输）；Web UI 的创建 / 编辑 / 关闭入口。
+
+## Addendum（0.26 canonical owner 传输）
+
+> canonical RPC 是唯一契约；loopback owner 端点改为同一方法表的传输。本节只追加当前事实，
+> 不改写上面 S1 ~ S4 / fork / 0.25 当时的结论。
+
+- **canonical 54 → 57**：新增 `agents.send` / `agents.dispatch` / `agents.rotate`
+  （permission `write`）。三者都是批量契约，形状与 `agents.create|update|close` 一致：
+  `agents.send` / `agents.dispatch` 参数 `{ messages: [...] }`，`agents.rotate` 参数
+  `{ agents: [...] }`；成功与失败统一 `{ results: [...] }`，与输入同序、单条失败隔离。
+  - `send` 成功条目 `{ ok: true, queued: true, message_id, state }`（strict send，不 resume）；
+  - `dispatch` 成功条目 `{ ok: true, status: 'queued', message_id, resolved_to, resolution,
+    conversation_id? }`；业务拒绝（`agent_left` / `resume_failed` / `fork_failed` /
+    `not_visible` / `budget_*` / `conversation_team_mismatch`）为 `{ ok: false, code, error }`；
+  - `rotate` 成功条目 `{ ok: true, status: 'rotated', agent_id, from_session_id,
+    to_session_id, epoch }`；失败为 `{ ok: false, code, error }`。
+- **principal 身份 additive**：`RpcMethodContext.principal.agent_id?` 只由合成 owner 传输
+  填入 root owner id。handler 用 `agent_id ?? 'human'` 作为 `from` / `viewer`：
+  `agents.send|dispatch|rotate` 的 sender、`agents.list` 的 viewer、`teams.post|members`
+  的 from、`teams.list|get` 的 viewer。gateway / team token 无 `agent_id`，行为不变。
+- **team-scoped token 收窄**：`agents.send|dispatch|rotate` 进入 control scope 白名单，
+  但逐条解析目标并按 `team_id` 校验；不匹配逐条 `not_found`（不泄漏存在性）。
+  `agents.create` 仍禁止 team-scoped token。
+- **owner 端点 = 传输**：`src/agent-owner-server.ts` 用 `defineMethods` 组装
+  `createAgentMethods` + `createTeamMethods`，通过 `createRpcDispatcher` 以合成 principal
+  `{ tenant_id, role: 'admin', scope: 'admin', agent_id: ownerId }` 分发；不保留第二套
+  action 列表 / 参数映射 / 批量合并 / 错误映射。HTTP 状态只由 canonical 错误码映射。
+- **wire 方法名迁移（pre-1.0，无别名）**：`agent.new` → `agents.create`、
+  `agent.send` → `agents.send`、`agent.dispatch` → `agents.dispatch`、
+  `agent.close` → `agents.close`、`agent.list` → `agents.list`、
+  `agent.rotate` → `agents.rotate`；`team.*` → `teams.*`。`team.roster` 不再存在：
+  mention 名字解析改用 `agents.list` 的完整成员视图（按 `team_id` 过滤），
+  不依赖展示窗口。
+- **owner 语义保留**：owner principal 的 sender / viewer 是 owner agent id；create 的
+  owner / parent 由该身份填入，`workspace` 字段只对合成 owner 传输开放（gateway / Web
+  仍只走 `team_id` 绑定已存在 Team）。private 成员对 owner 可见性、Team post 的 from、
+  budget override 的审计语义与收口前一致（override 的 `via` 由 TeamService 缺省决定）。
+- **`agents.list` viewer**：注入 `AgentControlLike` 且 principal 带 `agent_id` 时从
+  AgentService 列成员（private 按 viewer 过滤）；条目 additive 增加 `name` / `owner` /
+  `visibility` / `presence` / `membership` / `team_id` / `epoch` / `last_seen`。
+  其它 principal 保持注册表派生视图。
+- **Delete / Downgrade**：删除 owner 端点的 `dispatch` / `dispatchTeam` / 参数校验副本与
+  `agent.*` / `team.*` wire 名；不新增 legacy 别名。CLI 用户语法不变，只消费 canonical
+  结果形状。
+- **验证**：owner 传输与 gateway handler 对同一混合批次返回相同逐条形状；team-scoped
+  token 只能 send / dispatch / rotate 同 team 成员；owner send 的 `from` 是 owner id，
+  canonical Web send 是 `human`；`bun test` / `typecheck` / `biome ci` / `check-deps` /
+  `check-rpc-methods` / `check-docs` 通过。
